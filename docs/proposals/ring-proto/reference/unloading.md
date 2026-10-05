@@ -134,21 +134,26 @@ An envelope for an address that is not resident can be an `h2c.event`,
 mail from a local session, or a resident session's timer that fell due. It
 does not fail. It **waits in the pool**:
 
-1. Core puts the envelope on the address's waiting list, and writes
-   `c2h.load_needed {address, waiting: 1}`. The record is written once per
-   address until it is answered. Its header `seq` identifies this load
-   request, including when the address has been requested before.
-2. More envelopes for the same address join the list, in order. Core
-   writes nothing more.
+1. Core takes a **waiting entry** for the address, copies the address
+   into the name area once, puts the envelope on the entry's waiting list,
+   and writes `c2h.load_needed {address, waiting: 1}` from the entry's
+   text ([envelope.md](envelope.md#the-waiting-entry-one-copy-of-the-address)).
+   The record is written once per address until it is answered. Its
+   header `seq` identifies this load request, including when the address
+   has been requested before. The entry keeps it as `request_seq`.
+2. More envelopes for the same address find the entry and join its list,
+   in order. Core copies no address and writes nothing more.
 3. The host answers in one of three ways:
    - [`h2c.load`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload) with the
      image and `request_seq` equal to the request's `seq`. The waiting
      envelopes become runnable, in order, before anything sent to the
-     session later. Core writes `c2h.loaded`.
+     session later, and each names the session in `target`. Core retires
+     the waiting entry and writes `c2h.loaded`.
    - [`h2c.spawn`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cspawn) at the
      address, for a virtual family where the first message creates the
      actor (napi ADR 0020, the loader's `{ spawn }` result), with the same
-     `request_seq`. The waiting envelopes go to the new session.
+     `request_seq`. The waiting envelopes go to the new session, and core
+     retires the waiting entry.
    - [`h2c.load_failed`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload_failed)
      with a reason and the same `request_seq`, for an address the host
      does not know or an image it cannot read. The waiting envelopes are
@@ -171,8 +176,9 @@ active request and therefore cannot use zero.
 `h2c.load_failed` can take several bounded batches of refusal reports
 and recycled envelopes. Core retains the command until all of them are
 complete, yielding for c2h drains as needed, and then writes
-`c2h.load_result` with its `cause_seq` and `request_seq`. Only that record
-acknowledges the load failure. Neither the h2c read position nor a single
+`c2h.load_result` with its `cause_seq` and `request_seq`, and frees the
+waiting entry and its copy of the address. Only that record acknowledges
+the load failure. Neither the h2c read position nor a single
 `c2h.input_refused` acknowledges all waiting inputs. While this recycling
 cursor is active, core consumes no later h2c command and runs no session,
 so a newly submitted event cannot join the failed attempt's sealed
@@ -188,14 +194,15 @@ waiting envelope becomes runnable until restoration can commit in full.
 
 On success, core publishes the actor, attaches its timers, moves its
 waiting envelopes to the run queue in order, retires the matching load
-request and writes `c2h.loaded`. Restored timers retain their stored due
+request and its waiting entry, and writes `c2h.loaded`. Restored timers retain their stored due
 times; the following `h2c.time` processes any that are due.
 
 If the pool, name area or allocator cannot satisfy restoration, core
 releases all staged resources and writes `c2h.bounced` with reason `pool`,
 `names` or `allocation`. An invalid image bounces as invalid. The actor
-remains unloaded, its image remains the host's, and the waiting list,
-active request, directory and clock remain unchanged. Refusal does not
+remains unloaded, its image remains the host's, and the waiting entry,
+its list and active request, the directory and the clock remain
+unchanged. Refusal does not
 implicitly become `load_failed`. The host can unload another eligible
 actor and retry, or explicitly fail the active request. A missing c2h
 reserve only yields to the host; it does not partially restore the actor.
@@ -203,16 +210,24 @@ reserve only yields to the host; it does not partially restore the actor.
 ### Waiting envelopes count against the pool
 
 The waiting list is threaded through envelopes in the pool, as the run
-queue is ([envelope.md](envelope.md#the-lists-an-envelope-can-be-on)). So a load that takes long
-holds pool capacity, and the pool's limits apply to waiting mail as to
-any other:
+queue is ([envelope.md](envelope.md#the-lists-an-envelope-can-be-on)). Its
+head and tail, and the one copy of the address, are in the address's
+waiting entry, an item of a small pool whose ceiling is `poolEnvelopes`
+([envelope.md](envelope.md#the-waiting-entry-one-copy-of-the-address)).
+So a load that takes long holds pool capacity, one entry, and the
+address's chunks once, however many envelopes wait. The pool's limits
+apply to waiting mail as to any other:
 
 - admission from h2c stops when the pool reaches `admissionWatermark`
   ([BEHAVIORS.md](../BEHAVIORS.md#parameters)), and the host refuses at its edge.
   Already-posted events that cannot be admitted are consumed and bounced;
   they do not prevent a later load answer or clock update from being read;
 - a local `<send>` to the waiting address fails as
-  `error.execution.capacity.pool` once the pool is full.
+  `error.execution.capacity.pool` once the pool is full;
+- a local `<send>` to an address that has no entry yet fails as
+  `error.execution.capacity.pool` when no entry is free, or `.names` when
+  the address does not fit in the name area. An `h2c.event` in the same
+  case is bounced with reason `pool` or `names`.
 
 The pool is the only bound on how many envelopes wait; no limit applies
 per address. The host bounds how long they wait: it answers
@@ -238,15 +253,20 @@ Each waiting envelope is handled in place, with no new memory:
 | an `h2c.event` | dropped, and its vref released. `c2h.input_refused` identifies its `source_seq` and the delivery failure; a `tel.trace` of kind `DEAD_LETTER` also describes it. |
 | a timer that fell due | a resident sender's timer can target a different, unloaded actor. It becomes `error.communication` for its sender in the same envelope, just like local mail. An unloaded sender's own pending timers remain in its image. |
 
+Recycling needs no address: each error goes to its sender by session.
+The waiting entry's cursor keeps recycling's place across c2h drains, and
+the entry and its address are freed with `c2h.load_result`.
 [`c2h.destroyed`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hdestroyed) recycles
-a destroyed session's waiting envelopes the same way.
+a destroyed session's waiting envelopes the same way, and frees their
+entry.
 
 ### Mail for a session that has gone
 
 Mail a chart sends to a session ID (not an address) that is not resident
-waits like any other envelope. Its target is the session's text in the
-name area ([names.md](names.md)), and `c2h.load_needed.address` carries
-it. The host's index maps that text to an image. This is the load keyed by
+waits like any other envelope. Its target is the session's text, held
+once in its waiting entry
+([envelope.md](envelope.md#the-waiting-entry-one-copy-of-the-address)),
+and `c2h.load_needed.address` carries it. The host's index maps that text to an image. This is the load keyed by
 the session's text that napi ADR 0032 section 2 makes today
 (`TAH_LOAD_WHY_SESSION`).
 

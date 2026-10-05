@@ -23,13 +23,16 @@ This replaces several structures in core today:
 | An actor's event block and its cache (core ADRs 0069, 0093) | the taken envelope, retained through startup and internal follow-up until input completion |
 | The internal queue lent to a running actor (core ADR 0064) | not the pool: an ordinary quota and a compiler-sized mandatory floor per interpreter ([below](#the-internal-queue-is-not-in-the-pool)) |
 | Delayed sends living with their owner (core ADR 0054) and the global deadline index | envelopes with a due time, in the pool's deadline index |
-| Waiting mail for unloaded actors (kernel `loads.h`) | envelopes on a waiting list per address |
+| Waiting mail for unloaded actors (kernel `loads.h`) | envelopes on the waiting list of one [waiting entry](#the-waiting-entry-one-copy-of-the-address) per address |
 
 ## The envelope
 
 It has a fixed size, so the pool is an array. The variable parts (an event
-name, an origin URI, an unresolved address) are bytes in the name area
-([names.md](names.md)), and the envelope points at them.
+name, an origin URI, a delayed send's target) are bytes in the name area
+([names.md](names.md)), and the envelope points at them. The address of a
+target that is not resident is not among them: it is in the address's
+[waiting entry](#the-waiting-entry-one-copy-of-the-address), once per
+address.
 
 | Field | Bytes | Meaning |
 |---|---|---|
@@ -37,8 +40,8 @@ name, an origin URI, an unresolved address) are bytes in the name area
 | `owner_next` | 4 | the next pending delayed send of the same sender (for `<cancel>` and unloading) |
 | `heap_index` | 4 | while a timer, where it sits in the deadline index; while runnable, its arrival number ([below](#mail-for-an-active-session)) |
 | `state` | 1 | free, outgoing, runnable, waiting, taken, timer, invocation token, child stop |
-| `type`, `source`, `flags` | 3 | `_event.type`; where it came from (`input_source` in the catalog); recorded/replaying flags and original invocation report kind/ends bits |
-| `target` | 8 | the target session, or 0 while the target is an address in the name area |
+| `type`, `source`, `flags` | 3 | `_event.type`; where it came from (`input_source` in the catalog); recorded/replaying flags, original invocation report kind/ends bits, and whether `target` names a waiting entry |
+| `target` | 8 | the target session. While the envelope is `waiting`, the index of its address's [waiting entry](#the-waiting-entry-one-copy-of-the-address) instead, and the same for outgoing mail whose target is not resident at its `<send>` (a flag says which). A timer for an I/O processor holds 0: its target is text. |
 | `from` | 8 | the sending session, or 0 for external input |
 | `due` | 8 | timer deadline, or replay input header `at` to apply when taken |
 | `data` | 8 | `_event.data`, a vref the envelope holds a reference to |
@@ -46,7 +49,7 @@ name, an origin URI, an unresolved address) are bytes in the name area
 | `invoke_instance` | 8 | the invocation-instance token for a child event, completion or stop, or 0 |
 | `send_id` | 8 | a local send's `ta_send_id` for owner-list cancellation; external send ID bytes are in `text` |
 | `source_seq` | 8 | the h2c seq it was admitted from, or 0 |
-| `text` | 8 | its text in the name area: the first chunk and total length ([names.md](names.md#the-name-area)). It holds the name, origin, origintype, invokeid, target address, I/O processor type and arbitrary external send ID, each prefixed by a `u16` length. Invocation reports also preserve their original report invokeid and reason. A traced envelope adds its [trace parent](#the-trace-parent) as the last field. |
+| `text` | 8 | its text in the name area: the first chunk and total length ([names.md](names.md#the-name-area)). It holds the name, origin, origintype, invokeid, a delayed send's target (an I/O processor's target, or the local address it was sent to, which travels in its owner's image), I/O processor type and arbitrary external send ID, each prefixed by a `u16` length. Mail and admitted input do not hold their target address here: a resident target is a session in `target`, and an address that is not resident is in its waiting entry. Invocation reports also preserve their original report invokeid and reason. A traced envelope adds its [trace parent](#the-trace-parent) as the last field. |
 | | **88** | **estimate**, on a 64-bit host |
 
 ### The trace parent
@@ -111,6 +114,8 @@ measurements:
 |---|---|
 | One envelope | 88 bytes, plus 4 for its slot in the deadline index |
 | Default pool, 4,096 envelopes | about 368 KiB |
+| One [waiting entry](#the-waiting-entry-one-copy-of-the-address) | about 40 bytes, plus the address's text in the name area: list head and tail 8, text reference 8, hash 4, `request_seq` 8, recycle cursor, flags and count about 12. Taken only while an address has envelopes or an outstanding load request. |
+| The waiting-entry table | a fixed B3 table that holds `poolEnvelopes` keys at three-quarters load: 8 bytes per slot, 8,192 slots and 64 KiB at the default pool, allocated with the system |
 | Default name area | 256 KiB (`nameAreaBytes`, 262,144): one 64-byte chunk per envelope ([BEHAVIORS.md](../BEHAVIORS.md#nameareabytes)) |
 | A traced envelope | 40 more bytes of name area, usually a second 64-byte chunk; a traced system sets about 128 bytes of name area per envelope |
 | Default ordinary internal quota, 256 entries of about 48 bytes | about 12 KiB (`internalQueueEvents`), plus the compiler-sized mandatory floor |
@@ -128,7 +133,7 @@ needed, as with ADR 0093 today.
 | **Invocation token** | one envelope held by each live local invocation, converted to completion mail or a child stop when needed | not queued until converted | local invocation |
 | **Outgoing list** | mail the running macrostep sent, until its macrostep end | send order | active slot |
 | **Deferred list** | runnable envelopes for a session that is active, met while filling a slot | arrival | active session |
-| **Waiting list** | envelopes for an address that is not resident | arrival | address being loaded |
+| **Waiting list** | envelopes for an address that is not resident; its head and tail are in the address's [waiting entry](#the-waiting-entry-one-copy-of-the-address) | arrival | waiting entry |
 | **Owner list** | a session's pending delayed sends | send order | session |
 | **Free list** | free envelopes | – | system |
 | Deadline index | pending delayed sends, as a binary heap of envelope indexes ordered by (due, `send_id`), its positions in a paged array that grows and trims with the pool | – | system |
@@ -220,8 +225,10 @@ The rest of the pool is kept free for what sessions send each other.
 
 - **Below the watermark,** core takes the next h2c event, takes an
   envelope, copies the record's text into the name area, takes over its
-  vref, and appends the envelope to the run queue (or to a waiting list, see
-  below). The h2c bytes are then released.
+  vref, and appends the envelope to the run queue (or to its target
+  address's waiting list, whose
+  [waiting entry](#the-waiting-entry-one-copy-of-the-address) holds the
+  target address once). The h2c bytes are then released.
 - **At or above it,** core sets `admitting` to false. The host can refuse new
   events at its edge. For an event already posted, core reserves a bounded
   `c2h.bounced`, consumes the event and releases its transferred references.
@@ -270,13 +277,17 @@ system, `#_parent`, `#_<invokeid>`) doesn't go to c2h:
 1. Core takes a free envelope. Tokens already held by local invocations are
    unavailable to ordinary sends ([Local invocation tokens](#local-invocation-tokens)).
 2. It fills the envelope from the evaluated send, takes a reference to its
-   data vref, and puts the text in the name area.
+   data vref, and puts the text in the name area. A resident target is a
+   session in `target`. A target that is not resident names its address's
+   waiting entry, found or taken at the `<send>`
+   ([below](#the-waiting-entry-one-copy-of-the-address)); the address is
+   not copied into the envelope.
 3. It keeps the envelope on the running macrostep's **outgoing list**, in
    send order. The envelope is on no queue yet, so nothing can take it.
 4. At the macrostep's [`c2h.macrostep_ended`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hmacrostep_ended),
    core moves the outgoing list, in order, to the end of the run queue. The
    macrostep end's `mail` field counts them. An envelope whose target address isn't
-   resident goes to that address's waiting list instead, and core writes
+   resident goes to its waiting entry's list instead, and core writes
    [`c2h.load_needed`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hload_needed)
    after the macrostep end ([below](#envelopes-for-an-address-that-isnt-resident)).
 
@@ -385,12 +396,15 @@ resident session, can't run yet:
 
 1. Core puts it on that address's waiting list: an admitted h2c record at
    admission, mail at its sender's macrostep end (never before, so a macrostep that
-   doesn't commit asks for no load). The address bytes are its key, in the
-   name area.
+   doesn't commit asks for no load), a timer when it falls due. The list
+   belongs to the address's
+   [waiting entry](#the-waiting-entry-one-copy-of-the-address), which holds
+   the address bytes once. The envelope holds the entry's index in
+   `target`.
 2. The first time an address gets a waiting list, core writes
    [`c2h.load_needed`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hload_needed).
   It writes it once until the host answers. Until that notification commits,
-  a flag and cursor on the existing waiting list retain the obligation;
+  a flag and cursor on the waiting entry retain the obligation;
   c2h exhaustion returns to the host for a drain, without dropping mail or
   attempting to undo its sender's completed macrostep.
 3. **[`h2c.load`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload)** loads the
@@ -404,6 +418,129 @@ an actor that is slow to load can refuse to post more at its edge. The
 `pool.waiting` counter in the control block tells it when.
 
 [unloading.md](unloading.md) covers how sessions leave and return.
+
+### The waiting entry: one copy of the address
+
+**Why.** Core ADR 0065 makes a named address a shared, counted handle,
+because at four million named actors (one per websocket connection)
+copying address strings for each message, and hashing and comparing them
+for each directory operation, costs too much. The ring protocol keeps that
+for resident targets. Mail to a resident session carries only the session
+in `target`. A literal target resolves to a handle at registration. A
+computed target costs one lookup: a hash and a compare, with no copy and no
+insert. There is no directory vtable to call. Copying the address into
+each waiting envelope would bring the per-message copy back, for exactly
+the actors a large host keeps unloaded: a burst of N messages to one
+unloaded actor would copy its address N times and use N name-area chunks.
+So the address of a target that is not resident is stored once per
+address, in a waiting entry, and every envelope for it names the entry.
+
+**What it is.** A waiting entry exists for each address that has waiting
+envelopes or an outstanding `c2h.load_needed`. Entries are items of a small
+index pool (A5) of fixed-size items, beside the envelope pool. Its ceiling
+is `poolEnvelopes`: no more addresses can wait than there are envelopes. It
+fills on demand at safe points, with the envelope pool, and core keeps free
+entries there as it keeps free envelopes. An entry holds:
+
+| Field | Bytes | Meaning |
+|---|---|---|
+| `head`, `tail` | 8 | the waiting list (B1), threaded through the envelopes' `next` |
+| `text` | 8 | the address's text in the name area: first chunk and length. Copied once, when the entry is taken. |
+| `hash` | 4 | the address's hash, the entry's key in the waiting-entry table |
+| `request_seq` | 8 | the `seq` of its `c2h.load_needed`, or 0 before that record commits |
+| `cursor`, `flags`, `count` | about 12 | the recycling cursor of an `h2c.load_failed` in progress; whether `c2h.load_needed` is owed or written, and whether recycling is active; the number of envelopes that name the entry |
+| | **about 40** | **estimate**, on a 64-bit host |
+
+**Finding it.** The waiting-entry table is a B3 table in growing mode
+that grows with the pool: the pool's refill, at the same safe point,
+reserves room in it for one key per envelope the pool holds, up to
+`poolEnvelopes`. An insert therefore never allocates, and a quiet system
+pays for the table its peak needed, not for the bound: at the largest
+pool, a table sized for the bound at creation would take about 256 MiB.
+It maps the address's hash to the entry's index. A lookup
+compares the candidate entry's stored address bytes. This is the table the
+building blocks call "waiting lists by address"
+([building-blocks.md](building-blocks.md#assembly-each-proposal-structure-from-blocks));
+its value is the entry, which owns the list head and the address bytes.
+[`h2c.load`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload),
+[`h2c.spawn`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cspawn) and
+[`h2c.load_failed`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload_failed)
+find the entry by their `address` the same way, then check `request_seq`.
+
+**An envelope for an address that is not resident** (local mail, an
+admitted `h2c.event` naming a target address, a timer that fell due):
+
+- **The entry exists:** the envelope names it and, when it is routed,
+  joins its list. No copy, no allocation.
+- **No entry exists:** core takes a free entry, copies the address into the
+  name area once, inserts the entry into the table, and the envelope names
+  it. Core writes `c2h.load_needed` once per address (step 2 above).
+- **Inside a macrostep** the entry and its chunks come from what is already
+  free, like every envelope and chunk. A `<send>` that finds no free entry
+  fails as `error.execution.capacity.pool`, and one that finds no chunk for
+  the address fails as `error.execution.capacity.names`, as for any send.
+  The entry is taken when the `<send>` runs, so the failure is the chart's
+  ([Running out](#running-out)). The mail joins the list at its sender's
+  macrostep end. If a load made the address resident meanwhile, routing
+  finds the session instead and the mail goes to the run queue.
+- **At admission** the same capacity answers apply: an `h2c.event` that
+  finds no entry or no chunk is bounced with reason `pool` or `names`.
+- **A timer that falls due** does so while core applies `h2c.time`, a safe
+  point, where core refills entries first. A due timer that still finds no
+  entry or no chunk cannot be delivered, and is recycled as
+  `error.communication` for its sender
+  ([Recycling](#recycling-an-envelope-that-cant-be-delivered-becomes-its-own-error)),
+  as when a load fails. It does not stay due: the chunks it would wait for
+  may be held by other timers that cannot run.
+- **A delayed send keeps its own target text** for as long as it is a
+  timer, because it travels in its owner's image. When it falls due for an
+  address that is not resident, it names the entry like any other
+  envelope.
+
+**The envelope's fields.** A waiting envelope holds its entry's index in
+`target`. Its `text` holds its own event name, origin and the rest, but not
+the target address.
+
+**When the load succeeds** (`h2c.load`, or `h2c.spawn` answering the
+request): the waiting envelopes move to the run queue in order, and each
+`target` becomes the session. Core **retires** the entry: it removes it
+from the table, so later mail finds the resident session, and frees it and
+its address chunks. Outgoing mail of a slot that has not reached its
+macrostep end can still name a retired entry; then the entry is freed when
+the last such envelope is routed, which finds the address resident.
+
+**When it fails** (`h2c.load_failed`): recycling proceeds as
+[unloading.md](unloading.md#recycling-on-h2cload_failed) describes, and
+the entry's cursor holds its place across c2h drains. Each recycled
+envelope's `target` becomes its sender. The entry and its address chunks
+are freed when recycling completes, with `c2h.load_result`.
+[`c2h.destroyed`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hdestroyed) frees
+the entry of a destroyed session's waiting envelopes the same way.
+
+**Withdrawal** of the last waiting envelope leaves the entry in place, with
+its outstanding load request
+([below](#withdrawing-an-admitted-input)). It is freed when the host
+answers. An entry whose envelopes all leave before any load request is
+owed (the outgoing list of an abandoned macrostep) is freed with the last
+of them.
+
+**What reads the address text:**
+
+| Reader | Reads it from |
+|---|---|
+| [`c2h.load_needed`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hload_needed) `address`, once per address | the entry's text |
+| `h2c.load`, `h2c.spawn`, `h2c.load_failed` matching their `address` | the entry's hash and text |
+| a `DEAD_LETTER` [`tel.trace`](../../../../tinyactors-core/src/generated/MESSAGES.md#teltrace) for an external event dropped while waiting | the entry's text, for the target it names |
+| `error.communication` recycling | nothing: the error goes to the sender, by session |
+| [`c2h.input`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hinput) of a recorded session | nothing: it is written when the envelope is taken, when its target is a resident session, and the record carries no target address |
+
+**Bounds.** Entries are bounded by `poolEnvelopes`. Their address chunks
+count against `nameAreaBytes` like any text. Nothing grows without bound,
+and nothing is interned into the atom table, so the rule that only
+authored names are interned holds ([names.md](names.md#the-split)). Per
+message to an unloaded actor, the name area holds the event's own text,
+not the address and the text. Per waiting address, it holds one copy of
+the address.
 
 ## Recycling: an envelope that can't be delivered becomes its own error
 
@@ -458,8 +595,10 @@ withdrawal behind it. A host that must know before posting more waits for
 the terminal record.
 
 **An input waiting for a load.** Withdrawing the last envelope on an
-address's waiting list leaves the outstanding `c2h.load_needed` in place.
-The host's answer is still valid; the load then has nothing to deliver.
+address's waiting list leaves its
+[waiting entry](#the-waiting-entry-one-copy-of-the-address) and the
+outstanding `c2h.load_needed` in place. The host's answer is still valid;
+the load then has nothing to deliver, and the answer frees the entry.
 
 **Invocation reports.** An `h2c.invoke_report` can be withdrawn the same
 way. A withdrawn `done` or an `ends` error leaves the invocation active, so
@@ -573,7 +712,10 @@ There are two kinds of exhaustion, and the chart sees only one of them
 ([macrostep.md](macrostep.md#two-kinds-of-exhaustion)).
 
 **A `<send>` or delayed send that finds no free envelope, or no name-area
-room for its text, fails as `error.execution.capacity.pool` or `.names`. A
+room for its text, fails as `error.execution.capacity.pool` or `.names`.
+So does a `<send>` to an address that is not resident and has no waiting
+entry, when it finds no free entry or no room for the address
+([above](#the-waiting-entry-one-copy-of-the-address)). A
 `<raise>` that finds the internal queue full fails as
 `error.execution.capacity.internal`.** It is an execution error and not a
 communication error, deliberately:

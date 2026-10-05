@@ -142,6 +142,12 @@ because a full one fails the chart's action.
   sessions, and envelopes waiting for a load
   ([envelope.md](reference/envelope.md)). Unit: envelopes, about 88 bytes
   each plus 4 for the deadline index.
+- **It also bounds waiting entries:** one per address that has envelopes
+  waiting for a load, about 40 bytes each, filled on demand with the pool.
+  No more addresses can wait than there are envelopes, so `poolEnvelopes`
+  is their ceiling, and the fixed table that finds them holds that many
+  (64 KiB at the default)
+  ([envelope.md](reference/envelope.md#the-waiting-entry-one-copy-of-the-address)).
 - **Default 4,096, about 368 KiB including the deadline index.** napi resumes up to 1,024 actors per turn
   today (`resumesPerTurn`, and `eventBlockCache` 1,024). Four times that
   lets each of them hold its input and have a few mail messages or timers
@@ -158,7 +164,9 @@ because a full one fails the chart's action.
 - **How it surfaces:**
   - **chart:** a `<send>` to a local session, a delayed `<send>`, or an
     `<invoke>` of a local child that finds no envelope fails as
-    `error.execution.capacity.pool` ([S02](scenarios/S02-full-pool.md));
+    `error.execution.capacity.pool` ([S02](scenarios/S02-full-pool.md)),
+    and so does a `<send>` to an address that is not resident and finds
+    no free waiting entry;
   - **host:** `pool.free` and `pool.high_water` in the control block, and
     `admitting` turns false;
   - **client:** h2c fills, and the host answers 503.
@@ -166,8 +174,9 @@ because a full one fails the chart's action.
 ### `nameAreaBytes`
 
 - **What it bounds:** the bytes for text that has no ID: event names,
-  origins, unresolved addresses, invocation error reasons, and the trace
-  parent of a traced envelope
+  origins, delayed sends' targets, the addresses that envelopes wait for
+  (one copy per waiting address, not per envelope), invocation error
+  reasons, and the trace parent of a traced envelope
   ([names.md](reference/names.md#the-name-area)). It is made of 64-byte
   chunks, 60 of them text.
 - **Default 262,144 (256 KiB), one chunk per envelope at the default pool.**
@@ -175,6 +184,12 @@ because a full one fails the chart's action.
   chunk. An area smaller than `poolEnvelopes` × 64 would run out before the
   pool does, and charts would see `.names` where `.pool` is the real limit.
   Raise it when external input carries long origins or names.
+- **Long addresses cost little while their actors are unloaded.** Mail to
+  an unloaded actor holds only its own text. The address is held once, in
+  the address's waiting entry, however many envelopes wait for it. A burst
+  of mail to one unloaded actor costs name area like the same burst to a
+  resident one, plus one copy of the address
+  ([envelope.md](reference/envelope.md#the-waiting-entry-one-copy-of-the-address)).
 - **A traced system needs more.** An envelope with a trace context holds
   its trace parent as one more text field of 40 bytes
   ([envelope.md](reference/envelope.md#the-trace-parent)). With a short name it

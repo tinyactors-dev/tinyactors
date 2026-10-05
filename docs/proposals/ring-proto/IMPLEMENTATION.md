@@ -110,14 +110,16 @@ tinyactors-core/
     ├── trie.c / trie.h         ~   263  D7 trie of atoms, on B3; event names are one user (1.6)
     ├── names.c / names.h       +        D4 resolver (bytes → atoms, UNKNOWN); envelope text layout (2.6, 4.2)
     ├── type_registry.c / .h    +        B7, created twice: I/O processor and invoker types (2.7, 5.2)
-    ├── address.c / address.h   ~   296  on A5 + B3; no run-time interning from targetexpr
-    ├── session.c / session.h   ~   270  on A5 + B3
+    ├── address.c / address.h   ~   296  keeps its linear hash table (ADR 0065 decision 6); no run-time
+    │                                    interning from targetexpr
+    ├── session.c / session.h   =   270  keeps its linear hash table (ADR 0065 decision 6)
     ├── scxml_uri.c / .h        ~   414  parses and formats; looks up, never interns at run time
     ├── routing.c / routing.h   ~    77  keeps the actor_ref helpers; the router comment and boundary go
     │
     │   ── the queue: inputs core has not run yet ───────────────────────────────────────
     ├── envelope.c / .h         +        the pool (A5), its lists (B1), recycling, withdrawal; the trace parent
-    │                                    in the envelope's text when traced (4.2)
+    │                                    in the envelope's text when traced (4.2); waiting entries (A5), one per
+    │                                    address with the address once, found through a fixed B3 table (5.3)
     ├── name_area.c / .h        +        an A5 + A6 instance with 64-byte chunks, plus its quota (4.2)
     ├── admission.c / .h        +        reads h2c: admit, bounce, apply controls, fairness (4.2, 5.1)
     ├── deadline.c / .h         +        delayed sends: B2 over envelopes, owner lists, exact <cancel> (4.3)
@@ -439,8 +441,8 @@ gets its own test program in `tinyactors-core/tests/`.
 | 1.2 | E1 generation handles | The hand-packed definition IDs (`system.c:456`), and `ta_actor_id_make` as the only shared helper | |
 | 1.3 | E2 failing, counting test allocator | The hand-rolled copies in core's tests (36) | It lives with the tests and is never amalgamated into the library. |
 | 1.4 | A2 layout builder | Six layout calculators | Checked arithmetic. Phase 4's workspace sizing depends on it. |
-| 1.5 | A5 index pool | The actor table's paged directory (the address and session tables keep only hash buckets and separate records, which 1.6 takes) | Not the timer heap or `io_origin`: they are deleted later. A5 needs `refill(min_free)` and a ceiling from the start, even though only the pool uses the ceiling. |
-| 1.6 | B3 hash table, D7 trie of atoms | The atom table, the event-name trie, and the address and session tables | Two modes: fixed, and growing on an explicit call. The trie becomes a named block on B3. |
+| 1.5 | A5 index pool | The actor table's paged directory (the address and session tables keep their bucket pages: they are linear hash tables, which stay, see 1.6) | Not the timer heap or `io_origin`: they are deleted later. A5 needs `refill(min_free)` and a ceiling from the start, even though only the pool uses the ceiling. |
+| 1.6 | B3 hash table, D7 trie of atoms | The atom table and the event-name trie | Done. Two modes: fixed, and growing on an explicit call. The trie becomes a named block on B3 (`trie.c`; `event_name.c` renamed). The address and session tables keep linear hashing: B3 grows only in an explicit reserve that rehashes the whole table at once, and ADR 0065 decision 6 requires them to grow without copying the whole table in one step ([building blocks](reference/building-blocks.md#b-containers-over-indexes)). |
 | 1.7 | B6 | Hand-rolled doubling arrays that survive: the invoke table and export blocks | Skip the timer lists and the event-block queue. |
 | 1.8 | – | Dead code: `fault.h`'s undefined declarations, unused `ta_configuration` kinds, stale comments (`interpreter.h:143`, `actor.h:287`) | |
 
@@ -521,7 +523,7 @@ on its scenarios check the protocol directly.
 |---|---|---|---|
 | 5.1 | **h2c and c2h for inputs.** The ring records reach hosts through `tinyactors.h`, a public API change the maintainer reviews: napi's generated bindings follow. How the build puts them there is described in `docs/build/`. `h2c.event`, `h2c.time`, `h2c.spawn`, `h2c.destroy` and `h2c.withdraw`. On c2h, `c2h.bounced`, `c2h.input_refused`, `c2h.input_completed` (with `ignored`), `c2h.spawned`, `c2h.macrostep_ended`, `c2h.wake`, `c2h.finished` and `c2h.destroyed`. `h2c.event`, `h2c.spawn` and `h2c.invoke_report` carry a trace parent that a host fills from an incoming `traceparent`. Core reserves room for mandatory records, one pad per record, before taking an input, and takes it only if 2 × `maxRecordBytes` of headroom stays unreserved ([ring](reference/ring.md#the-c2h-reserve)). **The test host becomes a ring driver**: `hosted.post`, `hosted.turn`, `hosted.batches`, decoded with `messages.json`. Add the E3 ring script driver to core's tests. | `ta_actor_deliver`, the native spawn, time and destroy entry points; the kernel's admission code | three rings |
 | 5.2 | **Effects on c2h.** `c2h.send`, `c2h.invoke`, `c2h.invoke_cancel`, `c2h.invoke_forward`, `c2h.log`, and `h2c.invoke_report` coming back. An action that may write c2h checks for room before it evaluates anything; without room its slot parks before the action, and the action runs once, after a drain; `ta_run` answers `TA_RUN_C2H_FULL` when nothing else can run ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)). `c2h.send`, `c2h.invoke`, `c2h.invoke_forward` and `c2h.log` carry the step's trace ID, flags and span ID, so a processor writes `traceparent` without calling into core. Two B7 registries, filled by `h2c.type_declare`. Bindings render `_ioprocessors` locations themselves, and origins are text. | The I/O, invoker and log vtables; `ta_system_register_io`, `ta_system_find_io`, `ta_system_register_invoker`; `io.c`, `io_origin.c`, the scope API, `TA_DM_TEXT_IO_*`; the kernel's adapters and effects queue | type registries through h2c |
-| 5.3 | **Unloading and loading.** Waiting lists keyed by address (B3 fixed → B1), `c2h.load_needed`, `h2c.load`, `h2c.load_failed`, `c2h.load_result`, `h2c.unload`, `c2h.unloaded`, `c2h.loaded`. Images go through D1 and D2 into host blobs. | The directory vtable; the kernel's loads, offloads and directory | – (refines 0037) |
+| 5.3 | **Unloading and loading.** Waiting entries (A5), one per waiting address, each holding the address's text once and its waiting list (B1), found through a fixed B3 table keyed by the address's hash ([envelope](reference/envelope.md#the-waiting-entry-one-copy-of-the-address)), `c2h.load_needed`, `h2c.load`, `h2c.load_failed`, `c2h.load_result`, `h2c.unload`, `c2h.unloaded`, `c2h.loaded`. Images go through D1 and D2 into host blobs. | The directory vtable; the kernel's loads, offloads and directory | – (refines 0037) |
 | 5.4 | **Definitions through h2c.** `h2c.definition_register`, `h2c.definition_release`, `h2c.definition_retire`, `c2h.definition_result`, with bounded diagnostics. The request carries a native spec handle built with `tree.c`'s builder; core writes the native compile-error struct into host memory, or answers `capacity` if it does not fit ([definitions.md](reference/definitions.md#a-native-spec-handle-not-a-byte-layout)). | The native definition-management entry points that bindings do not need; `ta_definition_sink` if nothing uses it | – (refines 0058, 0077, 0079) |
 | 5.5 | **Recording and replay.** The `recorded` bit, `c2h.input` with the input's trace parent, `h2c.spawn` with the replaying flag, `h2c.publish`, `h2c.checkpoint`, `c2h.state`. | Held effects (`ta_activation_effects`, about 300 lines); the kernel's recorder and replay | input observations on c2h |
 
@@ -586,7 +588,7 @@ other lanes to have its inputs ready before it needs them.
 | When | Lane | Steps | Waits for | Touches |
 |---|---|---|---|---|
 | first, alone | foundation | 1.0 | – | every module's includes, `internal.h`; nothing else can land cleanly beside it |
-| Phase 1 | tables | 1.5 → 1.6 | 1.0 | actor, address, session, atom, trie |
+| Phase 1 | tables | 1.5 → 1.6 | 1.0 | actor, atom, trie; the address and session tables keep linear hashing |
 | Phase 1 | helpers | 1.1, 1.2, 1.4, then 1.7 | 1.0 | hash and format helpers, handles, layouts, invoke and export arrays; 1.1 also edits `session.c`, so it lands before 1.5 or rebases onto it |
 | Phase 1 | tests and dead code | 1.3, 1.8 | 1.0 | core's tests, `fault.h`, `configuration` |
 | with Phase 1 | free blocks | 2.1, 2.2, 2.3, 2.8, 2.10 | 1.0 | new units only |

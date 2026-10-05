@@ -60,7 +60,7 @@ This causes two problems.
 | A generated invocation ID `<stateid>.<platformid>` | run time | a state ID and a counter, rendered to text on demand like `#_send.<n>` |
 | An invocation error's reason (ADR 0081) | run time | bytes |
 | The address of a resident session | run time, but bounded by residents | a counted handle (ADR 0065), taken at spawn or load, outside any macrostep |
-| The address of a session that is not resident | run time | bytes in the name area, on the waiting envelope ([envelope.md](envelope.md)) |
+| The address of a session that is not resident | run time | bytes in the name area, copied once per waiting entry, not once per envelope ([envelope.md](envelope.md#the-waiting-entry-one-copy-of-the-address)) |
 
 So the atom tables grow only at system creation and when a definition is
 registered. Run-time names never reach them.
@@ -150,11 +150,13 @@ leaves no memory behind once its envelope is freed.
 ## The name area
 
 The name area is a bounded region, `nameAreaBytes`, created with the pool.
-It holds the text of every envelope:
+It holds the text of every envelope, and of every waiting entry:
 
 - the event name;
 - the origin, origintype and invokeid of external input;
-- an unresolved target address;
+- a delayed send's target;
+- the address of a target that is not resident, once per waiting entry
+  ([envelope.md](envelope.md#the-waiting-entry-one-copy-of-the-address));
 - a send ID that came from outside;
 - an invocation error's reason;
 - the trace parent of a traced envelope, 40 bytes
@@ -256,10 +258,16 @@ so it is `error.execution`, as SCXML says. Nothing is interned.
   resolved by lookup. Taking a reference to the handle for the envelope is
   a count, not an allocation.
 - **The address of a session that isn't resident** (unloaded, or never
-  spawned in a family that has a loader) has no handle. The envelope keeps
-  the bytes, the waiting list is keyed by them, and
+  spawned in a family that has a loader) has no handle. Its waiting entry
+  keeps the bytes once, however many envelopes wait for it; each waiting
+  envelope names the entry, the waiting-entry table is keyed by the
+  bytes' hash, and
   [`c2h.load_needed`](../../../../tinyactors-core/src/generated/MESSAGES.md#c2hload_needed)
-  carries them. The handle is created at
+  carries them
+  ([envelope.md](envelope.md#the-waiting-entry-one-copy-of-the-address)).
+  This extends ADR 0065's reason for handles, no copy of the address per
+  message, to addresses that are not resident. The bytes are never
+  interned. The handle is created at
   [`h2c.load`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cload), outside a
   macrostep ([unloading.md](unloading.md)).
 

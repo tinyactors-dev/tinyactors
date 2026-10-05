@@ -119,7 +119,7 @@ changes automatically.
 | Gain | Reference |
 |---|---|
 | The three rings, their records, and a reader/writer API for each | [ring.md](ring.md), [MESSAGES.md](../../../../tinyactors-core/src/generated/MESSAGES.md) |
-| The envelope pool: one run queue, waiting lists per address, admission watermark, fairness, delayed sends as envelopes with a deadline index, recycling | [envelope.md](envelope.md) |
+| The envelope pool: one run queue, a waiting entry and list per address, admission watermark, fairness, delayed sends as envelopes with a deadline index, recycling | [envelope.md](envelope.md) |
 | The name area, and matching of run-time names that looks names up and never inserts | [names.md](names.md) |
 | `ta_run(budget)`: one call that admits, runs to completion and writes records | [macrostep.md](macrostep.md) |
 | `error.execution.capacity` and compiler-sized mandatory internal storage | [macrostep.md](macrostep.md) |
@@ -164,6 +164,7 @@ The data model vtable stays ([data-model.md](data-model.md)).
 | 0055 Deliver is the admission test | `TA_ERR_BUSY` | **superseded**: admission is the move from h2c into the pool; mail for an active session waits on its deferred list in core, so the host never sees busy |
 | 0061 A run can pause between units of executable content | the paused state moves into a continuation the actor owns | **refined**: it moves into the session's macrostep slot, and slots take turns between units |
 | 0064 An internal queue is lent to a running actor | lent, can grow | **superseded**: one live queue in the running workspace, parked slots' entries in the park area, an ordinary quota plus a compiler-sized mandatory floor of one round of every phase, allocated outside macrosteps; mandatory events beyond the floor use free ordinary entries, and an overflow is a runaway ([macrostep.md](macrostep.md#sizing-mandatory-storage)) |
+| 0065 Named addresses are shared, reference-counted handles | an interned, counted handle per named address; the address table grows by linear hashing, one bucket split per insert | **kept, and extended**: resident targets are session handles, literal targets resolve at registration, and the address and session tables keep linear hashing (decision 6). An address that is not resident is held once, in its waiting entry, not copied into each waiting envelope ([envelope.md](envelope.md#the-waiting-entry-one-copy-of-the-address)) |
 | 0067 Core traces to a host sink | sink vtable | **refined**: the `tel` ring. Trace parents and step keys are **kept**: trace context travels on records (`h2c.event`, `c2h.send`, `c2h.input` and their kin) and, for local mail, in the envelope ([telemetry.md](telemetry.md#trace-context-across-the-rings)) |
 | 0068 Core owns the I/O processor registry; every origin can be answered | a registry of (type, adapter) with a `text` callback; COMPUTED, SCOPED and MESSAGE origins | **refined**: the registry becomes a set of type atoms, declared by `h2c.type_declare` (registry `io`), so an unsupported `<send type>` still raises `error.execution` in the sender's block. `send` becomes `c2h.send`. The binding renders `_ioprocessors.<type>.location`, so `text` and its templates go. Origins are text in `h2c.event`; COMPUTED and SCOPED go, and the processor decides which reply targets are live ([S12](../scenarios/S12-http-request.md), [S13](../scenarios/S13-webhook-callback.md), [building blocks](building-blocks.md#io-origins-adr-0068-one-class-remains)) |
 | 0069 An idle actor carries no event | event blocks | **refined**: the taken event stays in its envelope; no blocks |
@@ -269,6 +270,14 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
    - **No cap per address.** The pool is the only bound on envelopes that
      wait for a load; the host bounds how long they wait
      ([unloading.md](unloading.md#waiting-envelopes-count-against-the-pool)).
+   - **One waiting entry per address.** Extends ADR 0065's handles to
+     addresses that are not resident. Envelopes that wait for an address
+     name its waiting entry, an item of a small index pool whose ceiling
+     is `poolEnvelopes`, found through a fixed hash table keyed by the
+     address's hash. The entry holds the address's text once, the waiting
+     list and the load request. A burst of mail to an unloaded actor copies
+     its address once, not once per message, and nothing is interned
+     ([envelope.md](envelope.md#the-waiting-entry-one-copy-of-the-address)).
    - **Withdrawal is a new record.** Committed records never change.
      [`h2c.withdraw`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cwithdraw) names
      an admitted input by its h2c seq. If it has not been taken, core
