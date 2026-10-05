@@ -989,6 +989,73 @@ static sjs_result set_output(sjs_vm *vm, vm_frame *frame, sjs_value v) {
     return SJS_OK;
 }
 
+/* ------------------------------------------------------------------------
+ * Shapes: a C path for a callback (docs/matcher.md, section 7). The matcher
+ * tagged the callback's function with what it computes; while a step's
+ * preconditions hold, the loop does that in C, and otherwise calls the
+ * bytecode, which gives the value or the fault. Either way the same value,
+ * the same fault, and no more fuel.
+ */
+
+/* The most a C path's bytecode pushes above the callback's slots: `a.k` and
+ * `b.k` for a comparator, `x.k` for a pluck. A C step needs that much room,
+ * so that it succeeds only where the bytecode would not run out of
+ * max_stack. More would only fall back more often; less would be wrong. */
+#define PLUCK_STACK 1u
+#define COMPARE_STACK 2u
+
+/* Note the callback's shape when this built-in runs it in C: a closure the
+ * matcher tagged PLUCK, for map, or COMPARE_BY_KEY, for toSorted. */
+static void shape_start(vm_frame *frame, sjs_value callback) {
+    uint8_t wanted = frame->builtin == SJS_METHOD_ARRAY_MAP         ? (uint8_t)SJS_SHAPE_PLUCK
+                     : frame->builtin == SJS_METHOD_ARRAY_TO_SORTED ? (uint8_t)SJS_SHAPE_COMPARE_BY_KEY
+                                                                    : (uint8_t)SJS_SHAPE_NONE;
+    frame->shape = SJS_SHAPE_NONE;
+    if (wanted == SJS_SHAPE_NONE || callback.as.heap->type != SJS_HEAP_CLOSURE) return;
+    const sjs_closure *closure = SJS_AS_CLOSURE(callback);
+    const sjs_function_info *fn = &closure->program->functions[closure->function];
+    if (fn->shape != wanted) return;
+    const sjs_string *key = SJS_AS_STRING(closure->program->constants[fn->shape_args[0]]);
+    frame->shape = wanted;
+    frame->shape_key = key;
+    frame->shape_guess = 0;
+    if (wanted == SJS_SHAPE_PLUCK) {
+        /* A key an object lacks reads as undefined, unless JavaScript would
+         * find it on Object.prototype, where staticjs faults. */
+        const sjs_name *n = sjs_name_of(key);
+        frame->shape_flag = n != NULL && (n->flags & SJS_NAME_OBJECT) != 0;
+    } else {
+        frame->shape_flag = fn->shape_args[1] != 0;
+    }
+}
+
+/* The entry an object holds for the shape's key, found as GET_MEMBER finds
+ * it: where the last object had it, then through the index or a scan,
+ * comparing pointers before bytes. NULL when it has none. */
+static const sjs_entry *own_entry(vm_frame *frame, const sjs_object *o) {
+    const sjs_string *key = frame->shape_key;
+    sjs_str name = sjs_string_view(key);
+    uint32_t guess = frame->shape_guess;
+    if (guess < o->count) {
+        const sjs_string *k = o->entries[guess].key;
+        if (k == key || sjs_str_equal(sjs_string_view(k), name)) return &o->entries[guess];
+    }
+    const sjs_entry *e = NULL;
+    if (o->index != NULL) {
+        e = sjs_object_find(o, name);
+    } else {
+        for (uint32_t i = 0; i < o->count; i++) {
+            const sjs_string *k = o->entries[i].key;
+            if (k == key || sjs_str_equal(sjs_string_view(k), name)) {
+                e = &o->entries[i];
+                break;
+            }
+        }
+    }
+    if (e != NULL) frame->shape_guess = (uint32_t)(e - o->entries);
+    return e;
+}
+
 sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
     sjs_value callback = *slot(vm, frame, LOOP_CALLBACK);
     const sjs_array *a = receiver(vm, frame);
@@ -1002,6 +1069,7 @@ sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
         return sjs_vm_fault(vm, "the callback is not a function");
     }
     frame->entered = false;
+    shape_start(frame, callback);
     switch (frame->builtin) {
     case SJS_METHOD_ARRAY_MAP:
     case SJS_METHOD_ARRAY_FILTER:
@@ -1068,6 +1136,60 @@ static loop_step done(sjs_vm *vm, vm_frame *frame, sjs_value result) {
     return LOOP_DONE;
 }
 
+/* map's step for a PLUCK callback, `x => x.key`: an object's own property,
+ * or undefined for a key it lacks that is not on Object.prototype, as
+ * TAKE_LOCAL, GET_MEMBER and RETURN would give it, for one unit of fuel
+ * where they cost three. Anything else calls the bytecode. */
+static loop_step pluck_step(sjs_vm *vm, vm_frame *frame) {
+    if (!frame->entered && !sjs_vm_enter_callback(vm, frame)) return LOOP_FAULT;
+    sjs_value x = receiver(vm, frame)->items[frame->index];
+    if (x.kind == SJS_OBJECT && vm->stack_capacity - vm->sp >= PLUCK_STACK) {
+        const sjs_entry *e = own_entry(frame, SJS_AS_OBJECT(x));
+        if (e != NULL || !frame->shape_flag) {
+            sjs_value v = e != NULL ? e->value : (sjs_value){ .kind = SJS_UNDEFINED };
+            sjs_ref(v);
+            sjs_array *out = SJS_AS_ARRAY(*slot(vm, frame, LOOP_OUTPUT));
+            out->items[out->length++] = v;
+            frame->index++;
+            vm->fuel_used += 1;
+            return LOOP_AGAIN;
+        }
+    }
+    return call_element(vm, frame, frame->index);
+}
+
+/* Merge toSorted's next element: from the right run when the comparator
+ * gave more than 0, else from the left (NaN and 0 included), which keeps
+ * the sort stable. The bytecode's answer and the C path's go through here
+ * alike. */
+static void sort_take(vm_frame *frame, double d) {
+    uint32_t n = frame->length;
+    sjs_value *src = frame->scratch + (frame->index ? n : 0);
+    sjs_value *dst = frame->scratch + (frame->index ? 0 : n);
+    if (d > 0) dst[frame->k++] = src[frame->j++];
+    else dst[frame->k++] = src[frame->i++];
+}
+
+/* toSorted's comparison for a COMPARE_BY_KEY callback, `(a, b) => a.key -
+ * b.key` or `b.key - a.key`, in C: when both elements are objects that
+ * hold the key, and both values are numbers, the difference is the double
+ * the bytecode's subtraction gives, with the same operands in the same
+ * order. Two units of fuel, where the bytecode costs six. False when a
+ * precondition fails: the bytecode compares, and faults where it does. */
+static bool sort_by_key(sjs_vm *vm, vm_frame *frame, const sjs_value *pair) {
+    if (pair[0].kind != SJS_OBJECT || pair[1].kind != SJS_OBJECT) return false;
+    if (vm->stack_capacity - vm->sp < COMPARE_STACK) return false;
+    const sjs_entry *a = own_entry(frame, SJS_AS_OBJECT(pair[0]));
+    if (a == NULL || a->value.kind != SJS_NUMBER) return false;
+    const sjs_entry *b = own_entry(frame, SJS_AS_OBJECT(pair[1]));
+    if (b == NULL || b->value.kind != SJS_NUMBER) return false;
+    double x = a->value.as.number;
+    double y = b->value.as.number;
+    sort_take(frame, frame->shape_flag ? y - x : x - y);
+    vm->fuel_used += 2;
+    return true;
+}
+
 static loop_step sort_step(sjs_vm *vm, vm_frame *frame) {
     uint32_t n = frame->length;
     for (;;) {
@@ -1080,8 +1202,7 @@ static loop_step sort_step(sjs_vm *vm, vm_frame *frame) {
             sjs_result ok = sjs_vm_to_number(vm, r, &d);
             sjs_vm_release(vm, r);
             if (ok != SJS_OK) return LOOP_FAULT;
-            if (d > 0) dst[frame->k++] = src[frame->j++];
-            else dst[frame->k++] = src[frame->i++];
+            sort_take(frame, d);
             frame->phase = 2;
         }
         if (frame->phase == 2) {
@@ -1099,6 +1220,12 @@ static loop_step sort_step(sjs_vm *vm, vm_frame *frame) {
                     continue;
                 }
                 sjs_value args[2] = { x, y };
+                if (frame->shape == SJS_SHAPE_COMPARE_BY_KEY) {
+                    /* Entered where the bytecode's first call would enter
+                     * it; one comparison per step, so fuel still pauses. */
+                    if (!frame->entered && !sjs_vm_enter_callback(vm, frame)) return LOOP_FAULT;
+                    if (sort_by_key(vm, frame, args)) return LOOP_AGAIN;
+                }
                 return call_back(vm, frame, (sjs_values){ args, 2 });
             }
             while (frame->i < frame->mid) dst[frame->k++] = src[frame->i++];
@@ -1242,6 +1369,7 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
         sjs_vm_release(vm, acc);
         return step;
     }
+    if (frame->shape == SJS_SHAPE_PLUCK) return pluck_step(vm, frame);
     uint32_t element = frame->builtin == SJS_METHOD_ARRAY_FIND_LAST ? frame->length - 1u - frame->index : frame->index;
     return call_element(vm, frame, element);
 }

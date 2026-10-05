@@ -49,8 +49,9 @@ For a loop built-in:
   (section 4).
 - **Size the output when the loop starts,** as `map` does with `new_array(vm,
   a->length, …)`. `filter` cannot know its size, so it grows from 4.
-- **The recursion check is already done once per loop** (`enter_callback`,
-  on the first call). Do not add a check per element.
+- **The recursion check is already done once per loop**
+  (`sjs_vm_enter_callback`, on the first call). Do not add a check per
+  element.
 
 ## 2. Register it
 
@@ -201,6 +202,43 @@ callback's own instructions.
    allocation of every spec case, which is where a missed
    `call->result` update shows up as a leak.
 
+## 9. Shapes: a C path for a callback
+
+The compiler tags a function whose body has a known shape
+(`docs/matcher.md`): `x => x.key` is PLUCK, `(a, b) => a.key - b.key` is
+COMPARE_BY_KEY. A loop built-in may run such a callback in C, as `map` does
+with PLUCK and `toSorted` with COMPARE_BY_KEY (`pluck_step` and
+`sort_by_key` in `src/builtins.c`). The tag only says what the bytecode
+computes; the bytecode is still there, and the C path must give exactly
+what it gives.
+
+- **Set it up once per loop.** `shape_start` (from `sjs_loop_start`) notes
+  the shape, its key and its flag in the loop frame when the callback is a
+  closure tagged with the shape this built-in runs.
+- **Enter the callback where the bytecode would.** At the step that would
+  make the first call, call `sjs_vm_enter_callback` first, C path or not.
+  A closure already running, a full frame stack or no room for its slots
+  then fault at the same place on both paths.
+- **Check every precondition, every step,** and call back (`call_element`,
+  `call_back`) when one fails. The bytecode then gives the value, or
+  faults with its own message, position and subject. Only what the C path
+  can prove takes it: an object's own property (no prototype, no `length`
+  of an array or a string), a number for arithmetic.
+- **Room on the stack.** A C step requires as much room above the
+  callback's slots as its bytecode pushes (`PLUCK_STACK`,
+  `COMPARE_STACK`), so it succeeds only where the bytecode would not run
+  out of `max_stack`. More only falls back; less is wrong.
+- **One unit of work per step,** returning `LOOP_AGAIN`, so a paused
+  evaluation still pauses within the loop.
+- **Charge the lookups** (one unit each) on top of the step's own unit.
+  That is less than the instructions it replaces, which is the point; pin
+  both figures in `api_test` (`test_shape_paths`).
+- **Test both ways.** Spec cases with `@shapes` for every precondition's
+  edge (a missing key, a key on Object.prototype, non-objects, non-numbers,
+  NaN, -0, ties), and api_test's limit edges, where the C path and the
+  bytecode must fault alike. `spec_test` runs every case with shapes and
+  without and compares the outcomes and the fuel.
+
 ## Checklist
 
 - [ ] A leaf unless JavaScript calls back; a loop calls back once per element.
@@ -211,3 +249,4 @@ callback's own instructions.
 - [ ] `cost` charges the work done, in 64 bits; pinned in `api_test` if exact fuel matters.
 - [ ] Spec cases written first; `diff-node` agrees.
 - [ ] Bench case if it walks data; `bench-compare` rows and machine hash in the commit; `test --full` passes.
+- [ ] A C path for a shaped callback: entered where the bytecode would be, every precondition checked each step, stack room, falls back to the bytecode, cases with `@shapes` at each edge, fuel pinned both ways.

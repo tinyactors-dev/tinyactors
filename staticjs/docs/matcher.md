@@ -1,11 +1,12 @@
 # Shapes: a tree-pattern matcher on the event stream
 
-Status: option A. Sections 1 to 6 and 8 are implemented: node identity in
-the events ([nodes]), then the rules, their generator, the matcher, the
-compiler's recording, the off switch and the differential test
-([matcher]). Section 7, the first consumers, is not yet. Section 9 lists the
-commits, each with its tests; where the implementation proved the first
-draft wrong in a detail, the sections say what changed and why.
+Status: option A, implemented. Node identity in the events ([nodes]); the
+rules, their generator, the matcher, the compiler's recording, the off
+switch and the differential test ([matcher]); and the first consumers,
+`toSorted` and `map` running tagged callbacks in C ([consumers], section
+7). Section 9 lists the commits, each with its tests; where the
+implementation proved the first draft wrong in a detail, the sections say
+what changed and why. Section 10 is what may come next.
 
 The compiler keeps reinventing small pattern matchers over the events it
 receives: OBJECT_LITERAL gathers static keys until a property breaks the
@@ -1082,11 +1083,19 @@ Both fast paths sit in `src/builtins.c`, in the loop built-ins' steps.
 
 ### 7.1 Common rules
 
-- **Set up once per loop.** In `sjs_loop_start`, if the callback is a
-  closure whose function has the shape this built-in uses (COMPARE_BY_KEY
-  for TO_SORTED, PLUCK for MAP), the frame records it. `vm_frame` gains
-  `uint8_t shape`, `uint8_t shape_flag` (descending, or "the key is on
-  Object.prototype" for PLUCK) and `const sjs_string *shape_key`.
+- **Set up once per loop.** In `sjs_loop_start` (`shape_start`), if the
+  callback is a closure whose function has the shape this built-in uses
+  (COMPARE_BY_KEY for TO_SORTED, PLUCK for MAP), the frame records it.
+  `vm_frame` gains `uint8_t shape`, `uint8_t shape_flag` (descending, or
+  "the key is on Object.prototype" for PLUCK), `const sjs_string
+  *shape_key` and `uint32_t shape_guess` (where the last object had the
+  key). **Changed from the first draft:** none of them grows the frame.
+  `shape` and `shape_flag` sit in the padding after `entered`,
+  `shape_guess` in the padding at the end, and `shape_key` shares its
+  storage with `closure` (an anonymous union), which only code frames use.
+  A frame stays 112 bytes, so a vm's frames (`max_frames` of them, 256 by
+  default) take no more memory; a 120-byte frame would have added 2 KiB
+  to every vm.
 - **Enter the callback exactly where the bytecode would.** `enter_callback`
   becomes `sjs_vm_enter_callback(vm, loop)` in `vm.h`, and
   `sjs_vm_call_back` calls it as before. Before the first fast step, the
@@ -1107,14 +1116,20 @@ Both fast paths sit in `src/builtins.c`, in the loop built-ins' steps.
   work and returns the new `LOOP_AGAIN` ("the loop is still on top; step it
   again"). `sjs_vm_run` needs no change for it: it finishes a loop only on
   LOOP_DONE. So the evaluator still pauses within a sort or a map on any
-  amount of fuel, and a step's work stays constant.
+  amount of fuel, and a step's work stays constant. A step that takes the
+  bytecode's answer for one element goes on to the next element as before,
+  which may then be a fast one.
 - **Fallback is the bytecode, unchanged.** When a precondition fails, the
   step calls back exactly as today (`call_back`). The bytecode then gives
   the value, or faults with its own message, position and subject.
 - **Fuel.** A fast step charges what it looked up, one unit per lookup,
   which docs/builtins.md asks for. With the run loop's unit for the step,
   that is less than the bytecode it replaces. The figures below are today's
-  bytecode, and `api_test` pins both sides exactly.
+  bytecode, and `api_test` pins both sides exactly. The lookups are charged
+  with the step's unit, as a built-in's cost is with its call's, so a run
+  on one unit of fuel at a time can use three in one fast comparison: such
+  a run pauses once per fast step, where the bytecode paused once per
+  instruction.
 
 ### 7.2 `toSorted` with COMPARE_BY_KEY
 
@@ -1398,10 +1413,19 @@ Merged into [matcher] (section 8).
 
 ### 4. [consumers] `perf(staticjs): sort by a key and pluck a key in C when the callback's shape allows`
 
+Landed as planned, but for the frame layout (7.1). What the tests pin:
+5 comparisons of `[{k:3},{k:1},{k:2},{k:0}]` cost 54 units in bytecode and
+34 in C; a map of 4 plucked elements 34 and 26. The `max_stack` edges are
+where the bytecode cannot enter the callback, cannot push `a.k`, and
+cannot push `b.k` (`x.k` for a pluck), and the C path faults at each of
+them with the bytecode's own message and position. "A key that is an
+array index" has no case of its own beyond `x => x[0]`, which is an INDEX,
+not a MEMBER, so no rule matches it: a MEMBER's key is always a name.
+
 Changes:
 
-- `src/vm.h`: `vm_frame.shape`, `shape_flag` and `shape_key`; `LOOP_AGAIN`;
-  `sjs_vm_enter_callback`.
+- `src/vm.h`: `vm_frame.shape`, `shape_flag`, `shape_key` (in a union
+  with `closure`) and `shape_guess`; `LOOP_AGAIN`; `sjs_vm_enter_callback`.
 - `src/vm.c`: `enter_callback` made shared.
 - `src/builtins.c`: the two fast paths, and the merge decision helper.
 - `bench/bench.c`: two cases.

@@ -34,12 +34,21 @@ typedef struct {
                            * kept callback frame leaves its own slots */
     uint32_t function;
     sjs_program *program;
-    sjs_closure *closure; /* NULL for a program's main function */
+    union {
+        sjs_closure *closure;        /* code frames: NULL for a program's main function */
+        const sjs_string *shape_key; /* loop frames with a shape: its key (fn->shape_args[0]) */
+    };
     sjs_position at;      /* loop frames: where the call was */
     uint32_t index;
     uint32_t length;
     uint32_t argc;        /* loop frames: the arguments the built-in was called with */
     bool entered;         /* loop frames: the callback is a closure, and its frame is kept */
+    /* Loop frames: the callback's sjs_shape when this built-in has a C path
+     * for it (docs/matcher.md, section 7), or SJS_SHAPE_NONE; and its flag:
+     * COMPARE_BY_KEY's descending, or for PLUCK, the key is on
+     * Object.prototype. */
+    uint8_t shape;
+    uint8_t shape_flag;
     /* toSorted: a bottom-up merge sort over two scratch arrays. */
     uint32_t width;
     uint32_t left;
@@ -50,7 +59,12 @@ typedef struct {
     uint32_t k;
     sjs_value *scratch;
     uint32_t scratch_count;
+    uint32_t shape_guess;  /* loop frames with a shape: where the last object had the key */
 } vm_frame;
+
+/* The shape fields sit in padding and share the closure's word: a frame is
+ * 112 bytes on a 64-bit target, as it was before the shapes. */
+_Static_assert(sizeof(vm_frame) <= 112, "vm_frame grew: check its field order");
 
 #define VM_MEMBER_GUESSES 256u
 
@@ -122,7 +136,9 @@ typedef struct {
 
 sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 
-typedef enum { LOOP_CALL = 0, LOOP_DONE, LOOP_FAULT } loop_step;
+/* LOOP_AGAIN: the loop did a unit of work itself, without calling back
+ * (a shape's C path), and stays on top to be stepped again. */
+typedef enum { LOOP_CALL = 0, LOOP_DONE, LOOP_FAULT, LOOP_AGAIN } loop_step;
 
 /* Start a loop frame whose slots are in place. */
 sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame);
@@ -143,6 +159,11 @@ typedef struct {
  * built-in or a native is called as any call is, its result on top. False on
  * a fault. */
 bool sjs_vm_call_back(sjs_vm *vm, vm_frame *loop, sjs_values args);
+/* Keep a frame for the loop's closure callback, as its first call does:
+ * a shape's C path enters it at the step the bytecode would first have
+ * called it, so that a running closure, a full frame stack or no room for its
+ * slots faults there, alike. False on a fault. */
+bool sjs_vm_enter_callback(sjs_vm *vm, vm_frame *loop);
 
 /* A property of a value: `object.key`. */
 typedef struct {

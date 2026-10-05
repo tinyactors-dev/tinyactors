@@ -275,3 +275,258 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 [{k: 1}].map(x => y => x.k).map(f => f())
 --- value
 [1]
+
+# ---------------------------------------------------------------------------
+# The fast paths (docs/matcher.md, section 7): toSorted runs a COMPARE_BY_KEY
+# comparator and map a PLUCK callback in C while their preconditions hold,
+# and calls the bytecode otherwise. Every case runs with and without shapes
+# (spec_test) and must give the same value, or the same fault at the same
+# place, with no more fuel. The bytes and chunks runs pause on every unit and
+# every 13, inside the loops.
+
+# toSorted: values
+
+=== sort by a key: equal keys keep their order, ascending
+@shapes COMPARE_BY_KEY(k, false) PLUCK(i)
+[{k: 1, i: 0}, {k: 0, i: 1}, {k: 1, i: 2}, {k: 0, i: 3}, {k: 1, i: 4}].toSorted((a, b) => a.k - b.k).map(r => r.i)
+--- value
+[1,3,0,2,4]
+
+=== sort by a key: equal keys keep their order, descending
+@shapes COMPARE_BY_KEY(k, true) PLUCK(i)
+[{k: 1, i: 0}, {k: 0, i: 1}, {k: 1, i: 2}, {k: 0, i: 3}, {k: 1, i: 4}].toSorted((a, b) => b.k - a.k).map(r => r.i)
+--- value
+[0,2,4,1,3]
+
+=== sort by a key: 0 and -0 are equal keys, and keep their order
+@shapes COMPARE_BY_KEY(k, false) PLUCK(i)
+[{k: 0, i: 0}, {k: -0, i: 1}, {k: 0, i: 2}, {k: -0, i: 3}].toSorted((a, b) => a.k - b.k).map(r => r.i)
+--- value
+[0,1,2,3]
+
+=== sort by a key: -0 and 0, descending
+@shapes COMPARE_BY_KEY(k, true) PLUCK(i)
+[{k: -0, i: 0}, {k: 0, i: 1}, {k: -1, i: 2}, {k: -0, i: 3}].toSorted((a, b) => b.k - a.k).map(r => r.i)
+--- value
+[0,1,3,2]
+
+=== sort by a key: -0 survives as the key's value
+@shapes COMPARE_BY_KEY(k, false) PLUCK(k)
+[{k: 1}, {k: -0}].toSorted((a, b) => a.k - b.k).map(r => r.k)
+--- value
+[-0,1]
+
+=== sort by a key: Infinity, -Infinity, and two Infinity keys, whose difference is NaN
+@shapes COMPARE_BY_KEY(k, false) PLUCK(i)
+[{k: Infinity, i: 0}, {k: 1, i: 1}, {k: -Infinity, i: 2}, {k: Infinity, i: 3}, {k: -Infinity, i: 4}].toSorted((a, b) => a.k - b.k).map(r => r.i)
+--- value
+[2,4,1,0,3]
+
+=== sort by a key: a single NaN key
+@shapes COMPARE_BY_KEY(k, false) PLUCK(k)
+[{k: NaN}, {k: 2}, {k: 1}].toSorted((a, b) => a.k - b.k).map(r => r.k)
+--- value
+[NaN,1,2]
+
+=== sort by a key: fractions and large numbers
+@shapes COMPARE_BY_KEY(k, false) PLUCK(k)
+[{k: 0.3}, {k: 1e21}, {k: 0.1 + 0.2}, {k: -0.5}, {k: 0.7 - 0.4}].toSorted((a, b) => a.k - b.k).map(r => r.k)
+--- value
+[-0.5,0.29999999999999993,0.3,0.30000000000000004,1e+21]
+
+=== sort by a key: objects with the key at different places, and with many keys
+@shapes COMPARE_BY_KEY(k, false) PLUCK(i)
+[{a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, k: 3, i: 0}, {k: 1, i: 1}, {i: 2, k: 2}, {x: 0, i: 3, k: 0}].toSorted((a, b) => a.k - b.k).map(r => r.i)
+--- value
+[3,1,2,0]
+
+=== sort by a key: the elements are objects the result shares
+@shapes - COMPARE_BY_KEY(k, false) -
+(xs => [xs.toSorted((a, b) => a.k - b.k), xs].map(ys => ys[0].v))([{k: 2, v: [2]}, {k: 1, v: [1]}])
+--- value
+[[1],[2]]
+
+=== sort by a key: an empty array, and one element, never compare
+@shapes COMPARE_BY_KEY(k, false) COMPARE_BY_KEY(k, false)
+[[].toSorted((a, b) => a.k - b.k), [{k: "a"}].toSorted((a, b) => a.k - b.k)]
+--- value
+[[],[{"k":"a"}]]
+
+=== sort by a key: undefined elements go last and are never compared
+@shapes COMPARE_BY_KEY(k, false)
+[undefined, {k: 2}, undefined, {k: 1}].toSorted((a, b) => a.k - b.k)
+--- value
+[{"k":1},{"k":2},undefined,undefined]
+
+=== sort by a key named toString that the objects hold
+@shapes COMPARE_BY_KEY(toString, false) PLUCK(toString)
+[{toString: 2}, {toString: 1}].toSorted((a, b) => a.toString - b.toString).map(r => r.toString)
+--- value
+[1,2]
+
+=== sort arrays and strings by length: the bytecode reads it
+@shapes COMPARE_BY_KEY(length, false)
+[[1, 2, 3], "ab", [], "x"].toSorted((a, b) => a.length - b.length)
+--- value
+[[],"x","ab",[1,2,3]]
+
+=== sort sets by size: the bytecode reads it
+@shapes COMPARE_BY_KEY(size, true)
+[new Set([1]), new Set([1, 2, 3]), new Set()].toSorted((a, b) => b.size - a.size)
+--- value
+[new Set([1,2,3]),new Set([1]),new Set([])]
+
+=== sort mixed elements: objects in C, arrays and strings in bytecode
+@shapes COMPARE_BY_KEY(length, false)
+[[1, 2, 3], {length: 2}, "a", {length: 0}, [1, 2, 3, 4]].toSorted((a, b) => a.length - b.length)
+--- value
+[{"length":0},"a",{"length":2},[1,2,3],[1,2,3,4]]
+
+=== sort a large array by a key
+@shapes - COMPARE_BY_KEY(k, true) PLUCK(k)
+[3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3].map((n, i) => ({k: n, i})).toSorted((a, b) => b.k - a.k).map(r => r.k)
+--- value
+[9,9,9,8,8,7,6,6,6,5,5,5,4,4,4,3,3,3,3,3,2,2,2,1,1]
+
+# toSorted: faults, each the bytecode's own
+
+=== sort by a key: a missing key faults
+@shapes COMPARE_BY_KEY(k, false)
+[{k: 1}, {j: 2}].toSorted((a, b) => a.k - b.k)
+--- fault arithmetic in staticjs is on numbers
+
+=== sort by a key: an undefined key faults
+@shapes COMPARE_BY_KEY(k, false)
+[{k: 1}, {k: undefined}].toSorted((a, b) => a.k - b.k)
+--- fault arithmetic in staticjs is on numbers
+
+=== sort by a key: a string key faults
+@shapes COMPARE_BY_KEY(k, true)
+[{k: 1}, {k: "2"}].toSorted((a, b) => b.k - a.k)
+--- fault arithmetic in staticjs is on numbers
+
+=== sort by a key: a null or boolean key faults
+@shapes COMPARE_BY_KEY(k, false)
+[{k: null}, {k: true}].toSorted((a, b) => a.k - b.k)
+--- fault arithmetic in staticjs is on numbers
+
+=== sort by a key found only on Object.prototype faults
+@shapes COMPARE_BY_KEY(toString, false)
+[{k: 1}, {k: 2}].toSorted((a, b) => a.toString - b.toString)
+--- fault staticjs objects have no prototype
+
+=== sort by a key: a null element faults
+@shapes COMPARE_BY_KEY(k, false)
+[{k: 1}, null].toSorted((a, b) => a.k - b.k)
+--- fault cannot read a property of null
+
+=== sort by a key: number elements fault
+@shapes COMPARE_BY_KEY(k, false)
+[2, 1].toSorted((a, b) => a.k - b.k)
+--- fault staticjs reads properties of objects, arrays, strings and sets
+
+=== sort by a key: the one bad pair faults where the bytecode does, after fast pairs
+@shapes COMPARE_BY_KEY(k, false)
+[{k: 4}, {k: 3}, {k: 2}, {k: 1}, {k: 6}, {k: 5}, {k: 8}, {j: 7}].toSorted((a, b) =>
+  a.k -
+  b.k)
+--- fault arithmetic in staticjs is on numbers
+
+=== sort by a key: a key of an array that is not length reads as undefined, and faults
+@shapes COMPARE_BY_KEY(k, false)
+[[1], [2]].toSorted((a, b) => a.k - b.k)
+--- fault arithmetic in staticjs is on numbers
+
+# map: values
+
+=== pluck: present and missing keys
+@shapes PLUCK(k)
+[{k: 1}, {}, {j: 1, k: 2}, {k: undefined}].map(x => x.k)
+--- value
+[1,undefined,2,undefined]
+
+=== pluck: the values keep -0, NaN and Infinity
+@shapes PLUCK(k) -
+[{k: -0}, {k: NaN}, {k: -Infinity}, {k: 0}].map(x => x.k).map(v => 1 / v)
+--- value
+[-Infinity,NaN,-0,Infinity]
+
+=== pluck: values that are objects, arrays and functions
+@shapes - PLUCK(k) -
+[{k: {a: 1}}, {k: [1, 2]}, {k: () => 3}, {k: null}].map(x => x.k).map(v => typeof v === "function" ? v() : v)
+--- value
+[{"a":1},[1,2],3,null]
+
+=== pluck: a value the result shares with its object
+@shapes - PLUCK(v) -
+(rows => [rows.map(r => r.v), rows].map(xs => xs[0]))([{v: [1]}])
+--- value
+[[1],{"v":[1]}]
+
+=== pluck: an own key named toString
+@shapes PLUCK(toString)
+[{toString: 1}, {toString: "a"}].map(x => x.toString)
+--- value
+[1,"a"]
+
+=== pluck: objects with many keys, and the key at different places
+@shapes PLUCK(k)
+[{a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, k: 10}, {k: 1}, {a: 0, k: 2}, {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9}].map(x => x.k)
+--- value
+[10,1,2,undefined]
+
+=== pluck: strings, arrays and sets by length or size, in bytecode
+@shapes PLUCK(length) PLUCK(size)
+[["ab", [1, 2, 3], {length: 7}, "été", {}].map(s => s.length), [new Set([1, 2]), {size: 5}, {}].map(s => s.size)]
+--- value
+[[2,3,7,3,undefined],[2,5,undefined]]
+
+=== pluck: a key that is an array index is not a pluck
+@shapes -
+[[5, 6], [7]].map(x => x[0])
+--- value
+[5,7]
+
+=== pluck: an empty array
+@shapes PLUCK(k)
+[].map(x => x.k).length
+--- value
+0
+
+=== pluck: a large array
+@shapes - PLUCK(k)
+[3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3].map(n => ({k: n * 2})).map(x => x.k)
+--- value
+[6,2,8,2,10,18,4,12,10,6,10,16,18,14,18,6,4,6,16,8,12,4,12,8,6]
+
+# map: faults, each the bytecode's own
+
+=== pluck: a key found only on Object.prototype faults
+@shapes PLUCK(toString)
+[{toString: 1}, {k: 2}].map(x => x.toString)
+--- fault staticjs objects have no prototype
+
+=== pluck: constructor, on Object.prototype, faults
+@shapes PLUCK(constructor)
+[{}].map(x => x.constructor)
+--- fault staticjs objects have no prototype
+
+=== pluck: an undefined element faults
+@shapes PLUCK(k)
+[{k: 1}, undefined].map(x => x.k)
+--- fault cannot read a property of undefined
+
+=== pluck: a number element faults
+@shapes PLUCK(k)
+[{k: 1}, 2].map(x => x.k)
+--- fault staticjs reads properties of objects, arrays, strings and sets
+
+=== pluck: a boolean element faults
+@shapes PLUCK(k)
+[true].map(x => x.k)
+--- fault staticjs reads properties of objects, arrays, strings and sets
+
+=== pluck: a method name on an array faults
+@shapes PLUCK(map)
+[{map: 1}, [1]].map(x => x.map)
+--- fault staticjs calls methods
