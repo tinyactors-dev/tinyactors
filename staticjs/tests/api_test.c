@@ -683,6 +683,37 @@ static void test_writer_resumes(void) {
     sjs_context_destroy(context);
 }
 
+/* The fuel an evaluation costs is part of the API: an embedder's pause
+ * points depend on it. This one calls closures, a looping built-in, a
+ * built-in that does not call back, and concatenates; its cost is pinned, so
+ * a change to how the evaluator dispatches cannot move it. */
+static void test_fuel_pinned(sjs_context *context) {
+    const char *source = "[1, 2, 3, 4].map(x => [x, x * 2]).map(([a, b]) => `${a}:${b}`)"
+                         ".reduce((s, t) => s + t + Math.max(t.length, 3), '') + ((f) => f(f(2)))(y => y * 3)";
+    sjs_program *program;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL } },
+                                  { source, (uint32_t)strlen(source) }, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    sjs_vm *vm;
+    sjs_vm_config config = { context };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    sjs_run_params run = { program, NULL, 0 };
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
+    CHECK(sjs_vm_fuel_used(vm) == 194);
+    sjs_value v;
+    CHECK(sjs_vm_take_result(vm, &v) == SJS_OK && v.kind == SJS_STRING);
+    sjs_release(context, v);
+    /* Paused after every unit, it pauses as often and costs the same. */
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    sjs_run status;
+    uint64_t pauses = 0;
+    while ((status = sjs_vm_run(vm, 1)) == SJS_RUN_PAUSED) pauses++;
+    CHECK(status == SJS_RUN_DONE && pauses == 185 && sjs_vm_fuel_used(vm) == 194);
+    sjs_vm_destroy(vm);
+    sjs_program_release(program);
+}
+
 static void test_fuel_and_reset(void) {
     counting c = { 0 };
     sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
@@ -713,6 +744,7 @@ static void test_fuel_and_reset(void) {
     CHECK(status == SJS_RUN_DONE && (uint64_t)steps + 1 >= total && sjs_vm_fuel_used(vm) == total);
     sjs_vm_destroy(vm);
     sjs_program_release(program);
+    test_fuel_pinned(context);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
 }
