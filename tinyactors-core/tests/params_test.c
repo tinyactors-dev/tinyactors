@@ -249,6 +249,72 @@ static void test_creation_out_of_memory(void) {
 }
 
 /* ------------------------------------------------------------------------
+ * The envelope pool's parameters (ADR 0099 section 9): rows, the pair bound
+ * with the macrostep reserve, and a pool that costs nothing until it is used
+ */
+
+static ta_result create_with(ta_param param, uint64_t value, ta_param *rejected);
+
+static void test_pool_params(void) {
+    ta_param_info info = {0};
+    CHECK(ta_param_info_of(TA_PARAM_POOL_ENVELOPES, &info) == TA_OK);
+    CHECK(info.name.len == 13 && memcmp(info.name.ptr, "poolEnvelopes", 13) == 0);
+    CHECK(info.default_value == 4096 && info.min == 8 && info.max == 16777216u);
+    CHECK(ta_param_info_of(TA_PARAM_ADMISSION_WATERMARK, &info) == TA_OK);
+    CHECK(info.name.len == 18 && memcmp(info.name.ptr, "admissionWatermark", 18) == 0);
+    CHECK(info.default_value == 50 && info.min == 1 && info.max == 99);
+    CHECK(ta_param_info_of(TA_PARAM_MACROSTEP_RESERVE, &info) == TA_OK);
+    CHECK(info.name.len == 16 && memcmp(info.name.ptr, "macrostepReserve", 16) == 0);
+    CHECK(info.default_value == 1024 && info.min == 1);
+
+    ta_param rejected;
+    CHECK(create_with(TA_PARAM_POOL_ENVELOPES, 7, &rejected) == TA_ERR_INVALID && rejected == TA_PARAM_POOL_ENVELOPES);
+    CHECK(create_with(TA_PARAM_POOL_ENVELOPES, 16777217u, &rejected) == TA_ERR_INVALID &&
+          rejected == TA_PARAM_POOL_ENVELOPES);
+    CHECK(create_with(TA_PARAM_ADMISSION_WATERMARK, 0, &rejected) == TA_ERR_INVALID &&
+          rejected == TA_PARAM_ADMISSION_WATERMARK);
+    CHECK(create_with(TA_PARAM_ADMISSION_WATERMARK, 100, &rejected) == TA_ERR_INVALID &&
+          rejected == TA_PARAM_ADMISSION_WATERMARK);
+    CHECK(create_with(TA_PARAM_MACROSTEP_RESERVE, 0, &rejected) == TA_ERR_INVALID &&
+          rejected == TA_PARAM_MACROSTEP_RESERVE);
+
+    /* The reserve is at most the pool. A default reserve follows a small pool; a reserve that was asked for does not. */
+    uint64_t value = 0;
+    ta_param_value small[] = { { TA_PARAM_POOL_ENVELOPES, 64 } };
+    ta_system *system = create(small, 1);
+    CHECK(system != NULL);
+    CHECK(ta_system_param(system, TA_PARAM_MACROSTEP_RESERVE, &value) == TA_OK && value == 64);
+    ta_system_destroy(system);
+    CHECK(create_with(TA_PARAM_MACROSTEP_RESERVE, 4097, &rejected) == TA_ERR_INVALID &&
+          rejected == TA_PARAM_MACROSTEP_RESERVE);
+    ta_param_value exact[] = { { TA_PARAM_POOL_ENVELOPES, 100 }, { TA_PARAM_MACROSTEP_RESERVE, 100 } };
+    system = create(exact, 2);
+    CHECK(system != NULL);
+    ta_system_destroy(system);
+    ta_param_value over[] = { { TA_PARAM_POOL_ENVELOPES, 100 }, { TA_PARAM_MACROSTEP_RESERVE, 101 } };
+    rejected = TA_PARAM_COUNT;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = over, .param_count = 2,
+                                                .rejected = &rejected },
+                           &system) == TA_ERR_INVALID);
+    CHECK(rejected == TA_PARAM_MACROSTEP_RESERVE);
+
+    /* The pool is empty at creation: the biggest bound allocates exactly what the smallest does. */
+    ta_param_value tiny[] = { { TA_PARAM_POOL_ENVELOPES, 8 } };
+    ta_param_value huge[] = { { TA_PARAM_POOL_ENVELOPES, 16777216u } };
+    ta_test_allocator_reset_counts(&heap);
+    system = create(tiny, 1);
+    CHECK(system != NULL);
+    uint64_t tiny_allocations = heap.stats.allocations;
+    uint64_t tiny_bytes = heap.stats.live_bytes;
+    ta_system_destroy(system);
+    ta_test_allocator_reset_counts(&heap);
+    system = create(huge, 1);
+    CHECK(system != NULL);
+    CHECK(heap.stats.allocations == tiny_allocations && heap.stats.live_bytes == tiny_bytes);
+    ta_system_destroy(system);
+}
+
+/* ------------------------------------------------------------------------
  * Charts
  */
 
@@ -837,6 +903,7 @@ static void test_telemetry_params(void) {
 int main(void) {
     test_validation();
     test_telemetry_params();
+    test_pool_params();
     test_creation_out_of_memory();
     test_ordinary_run_allocates_nothing();
     test_block_cache_on_demand();

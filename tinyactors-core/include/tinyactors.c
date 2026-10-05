@@ -10093,6 +10093,14 @@ struct ta_system {
 
     ta_timer_heap timers;
 
+    /*
+     * Pending inputs (ADR 0099): the envelope pool, the run queue and the
+     * waiting lists. Lifetime: system. Empty at creation, filled at safe
+     * points up to poolEnvelopes; destroyed after the actors and before the
+     * address and origin tables, whose references its envelopes hold.
+     */
+    ta_envelopes envelopes;
+
     /* The I/O processor registry (ADR 0068): registry index i is element i - 1; 0 is SCXML. */
     ta_vec io_processors; /* ta_io_registration */
     /* Invokers, whose element index is their registry index. */
@@ -29405,6 +29413,10 @@ typedef struct {
  * other code checks a parameter again. */
 static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_MICROSTEP_LIMIT] = { "microstepLimit", "microsteps", TA_PARAM_DEFAULT_MICROSTEP_LIMIT, 0, 2147483647u },
+    /* The envelope pool (ADR 0099 section 9). The pool is empty at creation, so the bound costs nothing until used. */
+    [TA_PARAM_POOL_ENVELOPES] = { "poolEnvelopes", "envelopes", TA_PARAM_DEFAULT_POOL_ENVELOPES, 8, 16777216u },
+    [TA_PARAM_ADMISSION_WATERMARK] = { "admissionWatermark", "percent", TA_PARAM_DEFAULT_ADMISSION_WATERMARK, 1, 99u },
+    [TA_PARAM_MACROSTEP_RESERVE] = { "macrostepReserve", "envelopes", TA_PARAM_DEFAULT_MACROSTEP_RESERVE, 1, 16777216u },
     [TA_PARAM_EVENT_BLOCK_CACHE] = { "eventBlockCache", "blocks", TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, 0, 65536u },
     [TA_PARAM_EVENT_NAME_DEPTH] = { "eventNameDepth", "segments", TA_PARAM_DEFAULT_EVENT_NAME_DEPTH, 8,
                                     TA_EVENT_NAME_MAX_DEPTH },
@@ -29455,7 +29467,8 @@ TA_API ta_result ta_system_param(const ta_system *system, ta_param param, uint64
  * ta_params_check_pairs checks the bounds that relate parameters (ADR 0098
  * section 6), once, after every row has passed its own: the ring's units are
  * multiples of 8; a record fits its ring; a value's text leaves room for the
- * rest of the record. The parameter at fault is the later one of the pair
+ * rest of the record; one input's macrostep reserve fits the envelope pool
+ * (ADR 0099). The parameter at fault is the later one of the pair
  * the caller gave (or the only one it gave); a pair of defaults cannot fail,
  * as the info table's tests pin.
  */
@@ -29464,7 +29477,10 @@ static ta_result ta_params_check_pairs(const uint32_t values[TA_PARAM_COUNT], co
     ta_param fault = TA_PARAM_COUNT;
     uint32_t ring = values[TA_PARAM_TEL_BYTES];
     uint32_t record = values[TA_PARAM_MAX_RECORD_BYTES];
-    if (ring % 8u != 0) {
+    if (values[TA_PARAM_MACROSTEP_RESERVE] > values[TA_PARAM_POOL_ENVELOPES]) {
+        /* ta_params_resolve clamps a reserve nobody asked for, so this one was given. */
+        fault = TA_PARAM_MACROSTEP_RESERVE;
+    } else if (ring % 8u != 0) {
         fault = TA_PARAM_TEL_BYTES;
     } else if (record % 8u != 0) {
         fault = TA_PARAM_MAX_RECORD_BYTES;
@@ -29508,6 +29524,10 @@ static ta_result ta_params_resolve(const ta_system_config *config, uint32_t valu
         }
         given[param] = true;
         values[param] = (uint32_t)value->value;
+    }
+    if (!given[TA_PARAM_MACROSTEP_RESERVE] && values[TA_PARAM_MACROSTEP_RESERVE] > values[TA_PARAM_POOL_ENVELOPES]) {
+        /* A small pool with the default reserve is fine: the reserve is what the pool allows (ADR 0099 section 9). */
+        values[TA_PARAM_MACROSTEP_RESERVE] = values[TA_PARAM_POOL_ENVELOPES];
     }
     return ta_params_check_pairs(values, given, config->rejected);
 }
@@ -29819,6 +29839,13 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     }
     result = ta_event_name_table_init(&system->event_names, config->allocator, &system->atoms);
     if (result == TA_OK) {
+        /* Allocates nothing: the pool fills at the first admission (ADR 0099 section 2). */
+        result = ta_envelopes_init(&system->envelopes, config->allocator,
+                                   &(ta_envelope_limits){ .pool_envelopes = params[TA_PARAM_POOL_ENVELOPES],
+                                                          .admission_watermark = params[TA_PARAM_ADMISSION_WATERMARK],
+                                                          .macrostep_reserve = params[TA_PARAM_MACROSTEP_RESERVE] });
+    }
+    if (result == TA_OK) {
         system->event_names.trie.max_depth = params[TA_PARAM_EVENT_NAME_DEPTH];
         result = ta_timer_heap_init(&system->timers, config->allocator);
     }
@@ -29874,6 +29901,8 @@ TA_API void ta_system_destroy(ta_system *system) {
     ta_pool_destroy(&system->definitions);
     ta_timer_heap_destroy(&system->timers);
     ta_pool_destroy(&system->actors);
+    /* After the actors, before the origin tables and the addresses: an envelope in use holds references to both. */
+    ta_envelopes_destroy(&system->envelopes);
     /* After the actors: their held events released their MESSAGE origins. */
     ta_io_origin_table_destroy(&system->io_scopes);
     ta_io_origin_table_destroy(&system->io_messages);

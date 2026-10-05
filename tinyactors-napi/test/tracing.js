@@ -654,11 +654,11 @@ function defaultsVersion() {
   const { DEFAULTS_VERSION, parameterInfo } = require('../lib/params');
   const versions = {
     v1: {
-      actionBudget: 1024, compileMessageBytes: 256, compileNearestBytes: 128, compileTextBytes: 1024,
+      actionBudget: 1024, admissionWatermark: 50, compileMessageBytes: 256, compileNearestBytes: 128, compileTextBytes: 1024,
       datamodelNameBytes: 32, dueBudget: 1024, eventBlockCache: 1024, eventNameDepth: 64,
       interpreterBytes: 65536, interpreterNesting: 4, maxActors: 2147483647, maxDefinitions: 2147483647,
-      maxPendingSends: 2147483647, maxQueuedMessages: 0, maxRecordBytes: 4096, maxRetainedBytes: 0,
-      messageBudget: 1024, microstepLimit: 100000, registeredDatamodels: 8, renderBytes: 16384,
+      macrostepReserve: 1024, maxPendingSends: 2147483647, maxQueuedMessages: 0, maxRecordBytes: 4096,
+      maxRetainedBytes: 0, messageBudget: 1024, microstepLimit: 100000, poolEnvelopes: 4096, registeredDatamodels: 8, renderBytes: 16384,
       resumeBudget: 64, resumesPerTurn: 1024, telBytes: 65536, telemetryValueBytes: 1024,
       traceStagingBytes: 1048576,
     },

@@ -13170,92 +13170,110 @@
           "doc": "microsteps per macrostep before a runaway (ADR 0075); 0: none"
         },
         {
-          "name": "TA_PARAM_EVENT_BLOCK_CACHE",
+          "name": "TA_PARAM_POOL_ENVELOPES",
           "value": 1,
+          "symbol": "pool_envelopes",
+          "doc": "envelopes the pool may hold: the bound on pending inputs (ADR 0099), rounded down to whole pages"
+        },
+        {
+          "name": "TA_PARAM_ADMISSION_WATERMARK",
+          "value": 2,
+          "symbol": "admission_watermark",
+          "doc": "percent of poolEnvelopes in use above which host input is refused (ADR 0099)"
+        },
+        {
+          "name": "TA_PARAM_MACROSTEP_RESERVE",
+          "value": 3,
+          "symbol": "macrostep_reserve",
+          "doc": "envelopes one input's execution may take for the mail it sends, at most poolEnvelopes (ADR 0099)"
+        },
+        {
+          "name": "TA_PARAM_EVENT_BLOCK_CACHE",
+          "value": 4,
           "symbol": "event_block_cache",
           "doc": "empty event blocks kept for reuse (ADR 0069), made on demand (ADR 0093)"
         },
         {
           "name": "TA_PARAM_EVENT_NAME_DEPTH",
-          "value": 2,
+          "value": 5,
           "symbol": "event_name_depth",
           "doc": "segments an event name may have; at most 64"
         },
         {
           "name": "TA_PARAM_COMPILE_MESSAGE_BYTES",
-          "value": 3,
+          "value": 6,
           "symbol": "compile_message_bytes",
           "doc": "bytes kept of a data model's rejection message (ADR 0058)"
         },
         {
           "name": "TA_PARAM_COMPILE_TEXT_BYTES",
-          "value": 4,
+          "value": 7,
           "symbol": "compile_text_bytes",
           "doc": "bytes of a compile error formatted as a line (ta_compile_error_format)"
         },
         {
           "name": "TA_PARAM_COMPILE_NEAREST_BYTES",
-          "value": 5,
+          "value": 8,
           "symbol": "compile_nearest_bytes",
           "doc": "longest unknown target that gets a nearest-name suggestion"
         },
         {
           "name": "TA_PARAM_INTERPRETER_BYTES",
-          "value": 6,
+          "value": 9,
           "symbol": "interpreter_bytes",
           "doc": "one interpreter's frames and sets, what a chart's structure needs"
         },
         {
           "name": "TA_PARAM_RENDER_BYTES",
-          "value": 7,
+          "value": 10,
           "symbol": "render_bytes",
           "doc": "one interpreter's temporaries whose size depends on content (ADR 0068)"
         },
         {
           "name": "TA_PARAM_INTERPRETER_NESTING",
-          "value": 8,
+          "value": 11,
           "symbol": "interpreter_nesting",
           "doc": "interpreters that may run inside one another (ADR 0060)"
         },
         {
           "name": "TA_PARAM_MAX_ACTORS",
-          "value": 9,
+          "value": 12,
           "symbol": "max_actors",
           "doc": "quota: live actors"
         },
         {
           "name": "TA_PARAM_MAX_PENDING_SENDS",
-          "value": 10,
+          "value": 13,
           "symbol": "max_pending_sends",
           "doc": "quota: pending delayed sends of one actor"
         },
         {
           "name": "TA_PARAM_MAX_DEFINITIONS",
-          "value": 11,
+          "value": 14,
           "symbol": "max_definitions",
           "doc": "quota: live definitions"
         },
         {
           "name": "TA_PARAM_TEL_BYTES",
-          "value": 12,
+          "value": 15,
           "symbol": "tel_bytes",
           "doc": "the telemetry ring, in bytes: a multiple of 8, at least maxRecordBytes (ADR 0098)"
         },
         {
           "name": "TA_PARAM_MAX_RECORD_BYTES",
-          "value": 13,
+          "value": 16,
           "symbol": "max_record_bytes",
           "doc": "the largest record on any ring, a multiple of 8, 512 to telBytes (ADR 0098)"
         },
         {
           "name": "TA_PARAM_TELEMETRY_VALUE_BYTES",
-          "value": 14,
+          "value": 17,
           "symbol": "telemetry_value_bytes",
           "doc": "bytes kept of one value rendered into a tel record, at most maxRecordBytes - 512"
         },
         {
           "name": "TA_PARAM_COUNT",
-          "value": 15,
+          "value": 18,
           "symbol": "count"
         }
       ],
@@ -13281,6 +13299,21 @@
           "name": "TA_PARAM_DEFAULT_MICROSTEP_LIMIT",
           "value": 100000,
           "symbol": "microstep_limit"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_POOL_ENVELOPES",
+          "value": 4096,
+          "symbol": "pool_envelopes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_ADMISSION_WATERMARK",
+          "value": 50,
+          "symbol": "admission_watermark"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_MACROSTEP_RESERVE",
+          "value": 1024,
+          "symbol": "macrostep_reserve"
         },
         {
           "name": "TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE",

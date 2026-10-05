@@ -219,6 +219,26 @@ export interface SystemParameters {
    */
   microstepLimit?: number;
   /**
+   * Envelopes the pool of pending inputs may hold (core ADR 0099): the bound
+   * on admitted host input, mail between sessions and bootstraps waiting to
+   * run. The pool is empty at creation and fills on demand up to this bound,
+   * in pages of 256 (a bound is rounded down to whole pages); default 4096,
+   * from 8 to 16777216. Each envelope is 168 bytes.
+   */
+  poolEnvelopes?: number;
+  /**
+   * The share of `poolEnvelopes`, in percent, above which core refuses host
+   * input; the rest is headroom for mail sessions send each other (core ADR
+   * 0099). Default 50, from 1 to 99.
+   */
+  admissionWatermark?: number;
+  /**
+   * Envelopes one input's execution may take for the mail it sends, reserved
+   * before it starts (core ADR 0099); default 1024, from 1 to
+   * `poolEnvelopes` (a default larger than a small pool is cut to the pool).
+   */
+  macrostepReserve?: number;
+  /**
    * Event blocks core keeps for reuse (core ADR 0069): none at creation, one
    * made when a delivery finds none, kept when released while fewer than
    * this many are kept (core ADR 0093); default 1024, at most 65536. A warm

@@ -6,6 +6,7 @@
 #include "arena.h"
 #include "atom.h"
 #include "builder.h"
+#include "envelope.h"
 #include "event_name.h"
 #include "io.h"
 #include "io_origin.h"
@@ -67,6 +68,14 @@ struct ta_system {
     ta_pool actors;
 
     ta_timer_heap timers;
+
+    /*
+     * Pending inputs (ADR 0099): the envelope pool, the run queue and the
+     * waiting lists. Lifetime: system. Empty at creation, filled at safe
+     * points up to poolEnvelopes; destroyed after the actors and before the
+     * address and origin tables, whose references its envelopes hold.
+     */
+    ta_envelopes envelopes;
 
     /* The I/O processor registry (ADR 0068): registry index i is element i - 1; 0 is SCXML. */
     ta_vec io_processors; /* ta_io_registration */
