@@ -1507,7 +1507,7 @@ typedef struct ta_record_reader_params {
     uint32_t max_record_bytes; /* a multiple of 8, at least TA_RECORD_HEADER_BYTES; the ring's own maximum */
 } ta_record_reader_params;
 
-/* A reader: the table, the ring it serves and the seq it expects next. Owns nothing; system lifetime; zeroed is unusable. */
+/* A reader: the table, the ring it serves and the seq it expects next. Owns nothing; system lifetime; a zeroed one is unusable: ta_record_check refuses every input with TA_RECORD_KIND. */
 typedef struct ta_record_reader {
     const ta_record_table *table;
     ta_ring_id ring;
@@ -1600,16 +1600,28 @@ TA_PRIVATE bool ta_record_in_domain(uint64_t allowed, uint32_t value);
 TA_PRIVATE bool ta_record_bytes_ok(ta_bytes bytes);
 
 /*
+ * ta_record_tail is the writer's cursor over the variable part of one record
+ * being filled in a reservation: `record` is the reservation's first byte and
+ * `at` the offset of the next free tail byte, starting at the fixed size. It
+ * lives on the writer's stack for one call of a generated writer, and holds
+ * no ownership: the reservation is the ring's, valid until commit.
+ */
+typedef struct ta_record_tail {
+    unsigned char *record;
+    uint32_t at;
+} ta_record_tail;
+
+/*
  * ta_record_put_span is the writer's half of a span field. It copies bytes to
- * record + tail (nothing when empty), stores the span that names them in
- * *span ((0, 0) when empty: the canonical empty span), and returns the tail
- * position after them. The caller has already measured the whole record with
- * a ta_layout, so tail + bytes.len is inside the reservation and cannot wrap;
- * this function does no bounds check of its own and must not be called
+ * tail->record + tail->at (nothing when empty), stores the span that names
+ * them in *span ((0, 0) when empty: the canonical empty span), and advances
+ * tail->at past them. The caller has already measured the whole record with
+ * a ta_layout, so tail->at + bytes.len is inside the reservation and cannot
+ * wrap; this function does no bounds check of its own and must not be called
  * without that measurement. `bytes` must not overlap the record. Never
  * allocates.
  */
-TA_PRIVATE uint32_t ta_record_put_span(ta_span32 *span, unsigned char *record, uint32_t tail, ta_bytes bytes);
+TA_PRIVATE void ta_record_put_span(ta_record_tail *tail, ta_span32 *span, ta_bytes bytes);
 
 /*
  * GENERATED FILE. Do not edit.
@@ -10693,6 +10705,9 @@ static bool seq_check(const ta_record_reader *reader, uint64_t seq, uint64_t *ga
 /* ta_record_check: see record.h for the contract and its order. Every decision after the copy is made on out->fixed. */
 TA_PRIVATE ta_record_fault ta_record_check(ta_record_reader *reader, const ta_record_input *input, ta_record *out) {
     const unsigned char *bytes = input->bytes;
+    if (reader->table == NULL) {
+        return TA_RECORD_KIND; /* a zeroed, never initialised reader knows no kind */
+    }
     if (bytes == NULL || input->length < TA_RECORD_HEADER_BYTES) {
         return TA_RECORD_TRUNCATED;
     }
@@ -10833,14 +10848,14 @@ TA_PRIVATE bool ta_record_bytes_ok(ta_bytes bytes) {
     return bytes.len == 0 || bytes.ptr != NULL;
 }
 
-TA_PRIVATE uint32_t ta_record_put_span(ta_span32 *span, unsigned char *record, uint32_t tail, ta_bytes bytes) {
+TA_PRIVATE void ta_record_put_span(ta_record_tail *tail, ta_span32 *span, ta_bytes bytes) {
     if (bytes.len == 0) {
         *span = (ta_span32){ .offset = 0, .length = 0 };
-        return tail;
+        return;
     }
-    ta_mem_copy(record + tail, bytes.ptr, bytes.len);
-    *span = (ta_span32){ .offset = tail, .length = bytes.len };
-    return tail + bytes.len;
+    ta_mem_copy(tail->record + tail->at, bytes.ptr, bytes.len);
+    *span = (ta_span32){ .offset = tail->at, .length = bytes.len };
+    tail->at += bytes.len;
 }
 
 /*
@@ -10862,7 +10877,7 @@ TA_PRIVATE ta_result ta_msg_h2c_time_size(const ta_msg_h2c_time *data, uint32_t 
 TA_PRIVATE ta_result ta_msg_h2c_time_write(const ta_msg_h2c_time *data, const ta_ring_reservation *to) {
     ta_msg_h2c_time_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_time_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -10876,7 +10891,7 @@ TA_PRIVATE ta_result ta_msg_h2c_time_write(const ta_msg_h2c_time *data, const ta
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_H2C_TIME, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -10931,7 +10946,7 @@ TA_PRIVATE ta_result ta_msg_h2c_event_size(const ta_msg_h2c_event *data, uint32_
 TA_PRIVATE ta_result ta_msg_h2c_event_write(const ta_msg_h2c_event *data, const ta_ring_reservation *to) {
     ta_msg_h2c_event_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_event_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -10943,19 +10958,19 @@ TA_PRIVATE ta_result ta_msg_h2c_event_write(const ta_msg_h2c_event *data, const 
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.target, to->bytes, tail, data->target);
-    tail = ta_record_put_span(&wire.name, to->bytes, tail, data->name);
-    tail = ta_record_put_span(&wire.sendid, to->bytes, tail, data->sendid);
-    tail = ta_record_put_span(&wire.origin, to->bytes, tail, data->origin);
-    tail = ta_record_put_span(&wire.origin_type, to->bytes, tail, data->origin_type);
-    tail = ta_record_put_span(&wire.invokeid, to->bytes, tail, data->invokeid);
+    ta_record_put_span(&tail, &wire.target, data->target);
+    ta_record_put_span(&tail, &wire.name, data->name);
+    ta_record_put_span(&tail, &wire.sendid, data->sendid);
+    ta_record_put_span(&tail, &wire.origin, data->origin);
+    ta_record_put_span(&tail, &wire.origin_type, data->origin_type);
+    ta_record_put_span(&tail, &wire.invokeid, data->invokeid);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_H2C_EVENT, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.invocation_seq = data->invocation_seq;
     wire.data = data->data;
     wire.type = data->type;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11011,7 +11026,7 @@ TA_PRIVATE ta_result ta_msg_h2c_spawn_size(const ta_msg_h2c_spawn *data, uint32_
 TA_PRIVATE ta_result ta_msg_h2c_spawn_write(const ta_msg_h2c_spawn *data, const ta_ring_reservation *to) {
     ta_msg_h2c_spawn_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_spawn_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11022,8 +11037,8 @@ TA_PRIVATE ta_result ta_msg_h2c_spawn_write(const ta_msg_h2c_spawn *data, const 
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
-    tail = ta_record_put_span(&wire.revision, to->bytes, tail, data->revision);
+    ta_record_put_span(&tail, &wire.address, data->address);
+    ta_record_put_span(&tail, &wire.revision, data->revision);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_H2C_SPAWN, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.data = data->data;
@@ -11031,7 +11046,7 @@ TA_PRIVATE ta_result ta_msg_h2c_spawn_write(const ta_msg_h2c_spawn *data, const 
     wire.state = data->state;
     wire.request_seq = data->request_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11082,7 +11097,7 @@ TA_PRIVATE ta_result ta_msg_h2c_publish_size(const ta_msg_h2c_publish *data, uin
 TA_PRIVATE ta_result ta_msg_h2c_publish_write(const ta_msg_h2c_publish *data, const ta_ring_reservation *to) {
     ta_msg_h2c_publish_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_publish_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11093,12 +11108,12 @@ TA_PRIVATE ta_result ta_msg_h2c_publish_write(const ta_msg_h2c_publish *data, co
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
+    ta_record_put_span(&tail, &wire.address, data->address);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_H2C_PUBLISH, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.at = data->at;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11145,7 +11160,7 @@ TA_PRIVATE ta_result ta_msg_h2c_load_size(const ta_msg_h2c_load *data, uint32_t 
 TA_PRIVATE ta_result ta_msg_h2c_load_write(const ta_msg_h2c_load *data, const ta_ring_reservation *to) {
     ta_msg_h2c_load_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_load_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11156,13 +11171,13 @@ TA_PRIVATE ta_result ta_msg_h2c_load_write(const ta_msg_h2c_load *data, const ta
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
+    ta_record_put_span(&tail, &wire.address, data->address);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_H2C_LOAD, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.image = data->image;
     wire.request_seq = data->request_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11212,7 +11227,7 @@ TA_PRIVATE ta_result ta_msg_h2c_load_failed_size(const ta_msg_h2c_load_failed *d
 TA_PRIVATE ta_result ta_msg_h2c_load_failed_write(const ta_msg_h2c_load_failed *data, const ta_ring_reservation *to) {
     ta_msg_h2c_load_failed_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_load_failed_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11223,13 +11238,13 @@ TA_PRIVATE ta_result ta_msg_h2c_load_failed_write(const ta_msg_h2c_load_failed *
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
-    tail = ta_record_put_span(&wire.reason, to->bytes, tail, data->reason);
+    ta_record_put_span(&tail, &wire.address, data->address);
+    ta_record_put_span(&tail, &wire.reason, data->reason);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_H2C_LOAD_FAILED, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.request_seq = data->request_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11277,7 +11292,7 @@ TA_PRIVATE ta_result ta_msg_h2c_unload_size(const ta_msg_h2c_unload *data, uint3
 TA_PRIVATE ta_result ta_msg_h2c_unload_write(const ta_msg_h2c_unload *data, const ta_ring_reservation *to) {
     ta_msg_h2c_unload_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_unload_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11288,12 +11303,12 @@ TA_PRIVATE ta_result ta_msg_h2c_unload_write(const ta_msg_h2c_unload *data, cons
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
+    ta_record_put_span(&tail, &wire.address, data->address);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_H2C_UNLOAD, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.image = data->image;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11340,7 +11355,7 @@ TA_PRIVATE ta_result ta_msg_h2c_checkpoint_size(const ta_msg_h2c_checkpoint *dat
 TA_PRIVATE ta_result ta_msg_h2c_checkpoint_write(const ta_msg_h2c_checkpoint *data, const ta_ring_reservation *to) {
     ta_msg_h2c_checkpoint_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_checkpoint_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11351,12 +11366,12 @@ TA_PRIVATE ta_result ta_msg_h2c_checkpoint_write(const ta_msg_h2c_checkpoint *da
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
+    ta_record_put_span(&tail, &wire.address, data->address);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_H2C_CHECKPOINT, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.image = data->image;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11405,7 +11420,7 @@ TA_PRIVATE ta_result ta_msg_h2c_invoke_report_size(const ta_msg_h2c_invoke_repor
 TA_PRIVATE ta_result ta_msg_h2c_invoke_report_write(const ta_msg_h2c_invoke_report *data, const ta_ring_reservation *to) {
     ta_msg_h2c_invoke_report_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_invoke_report_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11418,8 +11433,8 @@ TA_PRIVATE ta_result ta_msg_h2c_invoke_report_write(const ta_msg_h2c_invoke_repo
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.invokeid, to->bytes, tail, data->invokeid);
-    tail = ta_record_put_span(&wire.reason, to->bytes, tail, data->reason);
+    ta_record_put_span(&tail, &wire.invokeid, data->invokeid);
+    ta_record_put_span(&tail, &wire.reason, data->reason);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_H2C_INVOKE_REPORT, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.invocation_seq = data->invocation_seq;
@@ -11427,7 +11442,7 @@ TA_PRIVATE ta_result ta_msg_h2c_invoke_report_write(const ta_msg_h2c_invoke_repo
     wire.kind = data->kind;
     wire.ends = data->ends;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11478,7 +11493,7 @@ TA_PRIVATE ta_result ta_msg_h2c_destroy_size(const ta_msg_h2c_destroy *data, uin
 TA_PRIVATE ta_result ta_msg_h2c_destroy_write(const ta_msg_h2c_destroy *data, const ta_ring_reservation *to) {
     ta_msg_h2c_destroy_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_destroy_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11489,11 +11504,11 @@ TA_PRIVATE ta_result ta_msg_h2c_destroy_write(const ta_msg_h2c_destroy *data, co
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
+    ta_record_put_span(&tail, &wire.address, data->address);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_H2C_DESTROY, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11523,7 +11538,7 @@ TA_PRIVATE ta_result ta_msg_h2c_definition_register_size(const ta_msg_h2c_defini
 TA_PRIVATE ta_result ta_msg_h2c_definition_register_write(const ta_msg_h2c_definition_register *data, const ta_ring_reservation *to) {
     ta_msg_h2c_definition_register_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_definition_register_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11540,7 +11555,7 @@ TA_PRIVATE ta_result ta_msg_h2c_definition_register_write(const ta_msg_h2c_defin
     wire.datamodel = data->datamodel;
     wire.diagnostic = data->diagnostic;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11572,7 +11587,7 @@ TA_PRIVATE ta_result ta_msg_h2c_definition_release_size(const ta_msg_h2c_definit
 TA_PRIVATE ta_result ta_msg_h2c_definition_release_write(const ta_msg_h2c_definition_release *data, const ta_ring_reservation *to) {
     ta_msg_h2c_definition_release_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_definition_release_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11587,7 +11602,7 @@ TA_PRIVATE ta_result ta_msg_h2c_definition_release_write(const ta_msg_h2c_defini
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.definition = data->definition;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11617,7 +11632,7 @@ TA_PRIVATE ta_result ta_msg_h2c_definition_retire_size(const ta_msg_h2c_definiti
 TA_PRIVATE ta_result ta_msg_h2c_definition_retire_write(const ta_msg_h2c_definition_retire *data, const ta_ring_reservation *to) {
     ta_msg_h2c_definition_retire_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_definition_retire_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11632,7 +11647,7 @@ TA_PRIVATE ta_result ta_msg_h2c_definition_retire_write(const ta_msg_h2c_definit
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.definition = data->definition;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11662,7 +11677,7 @@ TA_PRIVATE ta_result ta_msg_h2c_withdraw_size(const ta_msg_h2c_withdraw *data, u
 TA_PRIVATE ta_result ta_msg_h2c_withdraw_write(const ta_msg_h2c_withdraw *data, const ta_ring_reservation *to) {
     ta_msg_h2c_withdraw_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_withdraw_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11677,7 +11692,7 @@ TA_PRIVATE ta_result ta_msg_h2c_withdraw_write(const ta_msg_h2c_withdraw *data, 
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.target_seq = data->target_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11723,7 +11738,7 @@ TA_PRIVATE ta_result ta_msg_h2c_type_declare_size(const ta_msg_h2c_type_declare 
 TA_PRIVATE ta_result ta_msg_h2c_type_declare_write(const ta_msg_h2c_type_declare *data, const ta_ring_reservation *to) {
     ta_msg_h2c_type_declare_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_h2c_type_declare_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11735,12 +11750,12 @@ TA_PRIVATE ta_result ta_msg_h2c_type_declare_write(const ta_msg_h2c_type_declare
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.type, to->bytes, tail, data->type);
+    ta_record_put_span(&tail, &wire.type, data->type);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_H2C_TYPE_DECLARE, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.registry = data->registry;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11789,7 +11804,7 @@ TA_PRIVATE ta_result ta_msg_c2h_spawned_size(const ta_msg_c2h_spawned *data, uin
 TA_PRIVATE ta_result ta_msg_c2h_spawned_write(const ta_msg_c2h_spawned *data, const ta_ring_reservation *to) {
     ta_msg_c2h_spawned_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_spawned_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11800,14 +11815,14 @@ TA_PRIVATE ta_result ta_msg_c2h_spawned_write(const ta_msg_c2h_spawned *data, co
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
-    tail = ta_record_put_span(&wire.revision, to->bytes, tail, data->revision);
+    ta_record_put_span(&tail, &wire.address, data->address);
+    ta_record_put_span(&tail, &wire.revision, data->revision);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_SPAWNED, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.parent = data->parent;
     wire.cause_seq = data->cause_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11868,7 +11883,7 @@ TA_PRIVATE ta_result ta_msg_c2h_input_size(const ta_msg_c2h_input *data, uint32_
 TA_PRIVATE ta_result ta_msg_c2h_input_write(const ta_msg_c2h_input *data, const ta_ring_reservation *to) {
     ta_msg_c2h_input_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_input_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11883,13 +11898,13 @@ TA_PRIVATE ta_result ta_msg_c2h_input_write(const ta_msg_c2h_input *data, const 
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.name, to->bytes, tail, data->name);
-    tail = ta_record_put_span(&wire.sendid, to->bytes, tail, data->sendid);
-    tail = ta_record_put_span(&wire.origin, to->bytes, tail, data->origin);
-    tail = ta_record_put_span(&wire.origin_type, to->bytes, tail, data->origin_type);
-    tail = ta_record_put_span(&wire.invokeid, to->bytes, tail, data->invokeid);
-    tail = ta_record_put_span(&wire.report_invokeid, to->bytes, tail, data->report_invokeid);
-    tail = ta_record_put_span(&wire.report_reason, to->bytes, tail, data->report_reason);
+    ta_record_put_span(&tail, &wire.name, data->name);
+    ta_record_put_span(&tail, &wire.sendid, data->sendid);
+    ta_record_put_span(&tail, &wire.origin, data->origin);
+    ta_record_put_span(&tail, &wire.origin_type, data->origin_type);
+    ta_record_put_span(&tail, &wire.invokeid, data->invokeid);
+    ta_record_put_span(&tail, &wire.report_invokeid, data->report_invokeid);
+    ta_record_put_span(&tail, &wire.report_reason, data->report_reason);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_INPUT, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.macrostep = data->macrostep;
@@ -11901,7 +11916,7 @@ TA_PRIVATE ta_result ta_msg_c2h_input_write(const ta_msg_c2h_input *data, const 
     wire.report_kind = data->report_kind;
     wire.report_ends = data->report_ends;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -11967,7 +11982,7 @@ TA_PRIVATE ta_result ta_msg_c2h_send_size(const ta_msg_c2h_send *data, uint32_t 
 TA_PRIVATE ta_result ta_msg_c2h_send_write(const ta_msg_c2h_send *data, const ta_ring_reservation *to) {
     ta_msg_c2h_send_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_send_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -11978,17 +11993,17 @@ TA_PRIVATE ta_result ta_msg_c2h_send_write(const ta_msg_c2h_send *data, const ta
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.sendid, to->bytes, tail, data->sendid);
-    tail = ta_record_put_span(&wire.io_type, to->bytes, tail, data->io_type);
-    tail = ta_record_put_span(&wire.target, to->bytes, tail, data->target);
-    tail = ta_record_put_span(&wire.name, to->bytes, tail, data->name);
+    ta_record_put_span(&tail, &wire.sendid, data->sendid);
+    ta_record_put_span(&tail, &wire.io_type, data->io_type);
+    ta_record_put_span(&tail, &wire.target, data->target);
+    ta_record_put_span(&tail, &wire.name, data->name);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_SEND, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.macrostep = data->macrostep;
     wire.data = data->data;
     wire.content = data->content;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12044,7 +12059,7 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_size(const ta_msg_c2h_invoke *data, uint3
 TA_PRIVATE ta_result ta_msg_c2h_invoke_write(const ta_msg_c2h_invoke *data, const ta_ring_reservation *to) {
     ta_msg_c2h_invoke_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_invoke_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12056,9 +12071,9 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_write(const ta_msg_c2h_invoke *data, cons
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.invokeid, to->bytes, tail, data->invokeid);
-    tail = ta_record_put_span(&wire.type, to->bytes, tail, data->type);
-    tail = ta_record_put_span(&wire.src, to->bytes, tail, data->src);
+    ta_record_put_span(&tail, &wire.invokeid, data->invokeid);
+    ta_record_put_span(&tail, &wire.type, data->type);
+    ta_record_put_span(&tail, &wire.src, data->src);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_INVOKE, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.macrostep = data->macrostep;
@@ -12066,7 +12081,7 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_write(const ta_msg_c2h_invoke *data, cons
     wire.content = data->content;
     wire.autoforward = data->autoforward;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12118,7 +12133,7 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_cancel_size(const ta_msg_c2h_invoke_cance
 TA_PRIVATE ta_result ta_msg_c2h_invoke_cancel_write(const ta_msg_c2h_invoke_cancel *data, const ta_ring_reservation *to) {
     ta_msg_c2h_invoke_cancel_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_invoke_cancel_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12129,13 +12144,13 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_cancel_write(const ta_msg_c2h_invoke_canc
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.invokeid, to->bytes, tail, data->invokeid);
+    ta_record_put_span(&tail, &wire.invokeid, data->invokeid);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_INVOKE_CANCEL, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.macrostep = data->macrostep;
     wire.invocation_seq = data->invocation_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12193,7 +12208,7 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_forward_size(const ta_msg_c2h_invoke_forw
 TA_PRIVATE ta_result ta_msg_c2h_invoke_forward_write(const ta_msg_c2h_invoke_forward *data, const ta_ring_reservation *to) {
     ta_msg_c2h_invoke_forward_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_invoke_forward_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12205,12 +12220,12 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_forward_write(const ta_msg_c2h_invoke_for
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.invokeid, to->bytes, tail, data->invokeid);
-    tail = ta_record_put_span(&wire.name, to->bytes, tail, data->name);
-    tail = ta_record_put_span(&wire.sendid, to->bytes, tail, data->sendid);
-    tail = ta_record_put_span(&wire.origin, to->bytes, tail, data->origin);
-    tail = ta_record_put_span(&wire.origin_type, to->bytes, tail, data->origin_type);
-    tail = ta_record_put_span(&wire.event_invokeid, to->bytes, tail, data->event_invokeid);
+    ta_record_put_span(&tail, &wire.invokeid, data->invokeid);
+    ta_record_put_span(&tail, &wire.name, data->name);
+    ta_record_put_span(&tail, &wire.sendid, data->sendid);
+    ta_record_put_span(&tail, &wire.origin, data->origin);
+    ta_record_put_span(&tail, &wire.origin_type, data->origin_type);
+    ta_record_put_span(&tail, &wire.event_invokeid, data->event_invokeid);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_INVOKE_FORWARD, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.macrostep = data->macrostep;
@@ -12218,7 +12233,7 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_forward_write(const ta_msg_c2h_invoke_for
     wire.data = data->data;
     wire.type = data->type;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12273,7 +12288,7 @@ TA_PRIVATE ta_result ta_msg_c2h_log_size(const ta_msg_c2h_log *data, uint32_t *s
 TA_PRIVATE ta_result ta_msg_c2h_log_write(const ta_msg_c2h_log *data, const ta_ring_reservation *to) {
     ta_msg_c2h_log_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_log_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12284,13 +12299,13 @@ TA_PRIVATE ta_result ta_msg_c2h_log_write(const ta_msg_c2h_log *data, const ta_r
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.label, to->bytes, tail, data->label);
+    ta_record_put_span(&tail, &wire.label, data->label);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_LOG, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.macrostep = data->macrostep;
     wire.value = data->value;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12322,7 +12337,7 @@ TA_PRIVATE ta_result ta_msg_c2h_macrostep_ended_size(const ta_msg_c2h_macrostep_
 TA_PRIVATE ta_result ta_msg_c2h_macrostep_ended_write(const ta_msg_c2h_macrostep_ended *data, const ta_ring_reservation *to) {
     ta_msg_c2h_macrostep_ended_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_macrostep_ended_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12344,7 +12359,7 @@ TA_PRIVATE ta_result ta_msg_c2h_macrostep_ended_write(const ta_msg_c2h_macrostep
     wire.mail = data->mail;
     wire.status = data->status;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12379,7 +12394,7 @@ TA_PRIVATE ta_result ta_msg_c2h_wake_size(const ta_msg_c2h_wake *data, uint32_t 
 TA_PRIVATE ta_result ta_msg_c2h_wake_write(const ta_msg_c2h_wake *data, const ta_ring_reservation *to) {
     ta_msg_c2h_wake_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_wake_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12394,7 +12409,7 @@ TA_PRIVATE ta_result ta_msg_c2h_wake_write(const ta_msg_c2h_wake *data, const ta
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.due = data->due;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12440,7 +12455,7 @@ TA_PRIVATE ta_result ta_msg_c2h_bounced_size(const ta_msg_c2h_bounced *data, uin
 TA_PRIVATE ta_result ta_msg_c2h_bounced_write(const ta_msg_c2h_bounced *data, const ta_ring_reservation *to) {
     ta_msg_c2h_bounced_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_bounced_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12452,13 +12467,13 @@ TA_PRIVATE ta_result ta_msg_c2h_bounced_write(const ta_msg_c2h_bounced *data, co
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.detail, to->bytes, tail, data->detail);
+    ta_record_put_span(&tail, &wire.detail, data->detail);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_BOUNCED, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.source_seq = data->source_seq;
     wire.reason = data->reason;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12506,7 +12521,7 @@ TA_PRIVATE ta_result ta_msg_c2h_load_needed_size(const ta_msg_c2h_load_needed *d
 TA_PRIVATE ta_result ta_msg_c2h_load_needed_write(const ta_msg_c2h_load_needed *data, const ta_ring_reservation *to) {
     ta_msg_c2h_load_needed_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_load_needed_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12517,12 +12532,12 @@ TA_PRIVATE ta_result ta_msg_c2h_load_needed_write(const ta_msg_c2h_load_needed *
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
+    ta_record_put_span(&tail, &wire.address, data->address);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_LOAD_NEEDED, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.waiting = data->waiting;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12569,7 +12584,7 @@ TA_PRIVATE ta_result ta_msg_c2h_loaded_size(const ta_msg_c2h_loaded *data, uint3
 TA_PRIVATE ta_result ta_msg_c2h_loaded_write(const ta_msg_c2h_loaded *data, const ta_ring_reservation *to) {
     ta_msg_c2h_loaded_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_loaded_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12580,12 +12595,12 @@ TA_PRIVATE ta_result ta_msg_c2h_loaded_write(const ta_msg_c2h_loaded *data, cons
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
+    ta_record_put_span(&tail, &wire.address, data->address);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_LOADED, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.cause_seq = data->cause_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12632,7 +12647,7 @@ TA_PRIVATE ta_result ta_msg_c2h_unloaded_size(const ta_msg_c2h_unloaded *data, u
 TA_PRIVATE ta_result ta_msg_c2h_unloaded_write(const ta_msg_c2h_unloaded *data, const ta_ring_reservation *to) {
     ta_msg_c2h_unloaded_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_unloaded_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12643,7 +12658,7 @@ TA_PRIVATE ta_result ta_msg_c2h_unloaded_write(const ta_msg_c2h_unloaded *data, 
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
+    ta_record_put_span(&tail, &wire.address, data->address);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_UNLOADED, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.cause_seq = data->cause_seq;
@@ -12651,7 +12666,7 @@ TA_PRIVATE ta_result ta_msg_c2h_unloaded_write(const ta_msg_c2h_unloaded *data, 
     wire.image_bytes = data->image_bytes;
     wire.wake_at = data->wake_at;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12701,7 +12716,7 @@ TA_PRIVATE ta_result ta_msg_c2h_state_size(const ta_msg_c2h_state *data, uint32_
 TA_PRIVATE ta_result ta_msg_c2h_state_write(const ta_msg_c2h_state *data, const ta_ring_reservation *to) {
     ta_msg_c2h_state_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_state_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12712,7 +12727,7 @@ TA_PRIVATE ta_result ta_msg_c2h_state_write(const ta_msg_c2h_state *data, const 
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
+    ta_record_put_span(&tail, &wire.address, data->address);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_STATE, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.cause_seq = data->cause_seq;
@@ -12720,7 +12735,7 @@ TA_PRIVATE ta_result ta_msg_c2h_state_write(const ta_msg_c2h_state *data, const 
     wire.image_bytes = data->image_bytes;
     wire.input_seq = data->input_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12770,7 +12785,7 @@ TA_PRIVATE ta_result ta_msg_c2h_published_size(const ta_msg_c2h_published *data,
 TA_PRIVATE ta_result ta_msg_c2h_published_write(const ta_msg_c2h_published *data, const ta_ring_reservation *to) {
     ta_msg_c2h_published_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_published_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12781,7 +12796,7 @@ TA_PRIVATE ta_result ta_msg_c2h_published_write(const ta_msg_c2h_published *data
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
+    ta_record_put_span(&tail, &wire.address, data->address);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_PUBLISHED, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.cause_seq = data->cause_seq;
@@ -12789,7 +12804,7 @@ TA_PRIVATE ta_result ta_msg_c2h_published_write(const ta_msg_c2h_published *data
     wire.dropped_timers = data->dropped_timers;
     wire.retired_invokes = data->retired_invokes;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12823,7 +12838,7 @@ TA_PRIVATE ta_result ta_msg_c2h_finished_size(const ta_msg_c2h_finished *data, u
 TA_PRIVATE ta_result ta_msg_c2h_finished_write(const ta_msg_c2h_finished *data, const ta_ring_reservation *to) {
     ta_msg_c2h_finished_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_finished_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12839,7 +12854,7 @@ TA_PRIVATE ta_result ta_msg_c2h_finished_write(const ta_msg_c2h_finished *data, 
     wire.macrostep = data->macrostep;
     wire.donedata = data->donedata;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12886,7 +12901,7 @@ TA_PRIVATE ta_result ta_msg_c2h_destroyed_size(const ta_msg_c2h_destroyed *data,
 TA_PRIVATE ta_result ta_msg_c2h_destroyed_write(const ta_msg_c2h_destroyed *data, const ta_ring_reservation *to) {
     ta_msg_c2h_destroyed_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_destroyed_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12898,13 +12913,13 @@ TA_PRIVATE ta_result ta_msg_c2h_destroyed_write(const ta_msg_c2h_destroyed *data
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.address, to->bytes, tail, data->address);
+    ta_record_put_span(&tail, &wire.address, data->address);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_C2H_DESTROYED, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.cause_seq = data->cause_seq;
     wire.reason = data->reason;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12936,7 +12951,7 @@ TA_PRIVATE ta_result ta_msg_c2h_definition_result_size(const ta_msg_c2h_definiti
 TA_PRIVATE ta_result ta_msg_c2h_definition_result_write(const ta_msg_c2h_definition_result *data, const ta_ring_reservation *to) {
     ta_msg_c2h_definition_result_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_definition_result_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -12955,7 +12970,7 @@ TA_PRIVATE ta_result ta_msg_c2h_definition_result_write(const ta_msg_c2h_definit
     wire.diagnostic_bytes = data->diagnostic_bytes;
     wire.status = data->status;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -12988,7 +13003,7 @@ TA_PRIVATE ta_result ta_msg_c2h_input_refused_size(const ta_msg_c2h_input_refuse
 TA_PRIVATE ta_result ta_msg_c2h_input_refused_write(const ta_msg_c2h_input_refused *data, const ta_ring_reservation *to) {
     ta_msg_c2h_input_refused_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_input_refused_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -13005,7 +13020,7 @@ TA_PRIVATE ta_result ta_msg_c2h_input_refused_write(const ta_msg_c2h_input_refus
     wire.source_seq = data->source_seq;
     wire.reason = data->reason;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -13036,7 +13051,7 @@ TA_PRIVATE ta_result ta_msg_c2h_input_completed_size(const ta_msg_c2h_input_comp
 TA_PRIVATE ta_result ta_msg_c2h_input_completed_write(const ta_msg_c2h_input_completed *data, const ta_ring_reservation *to) {
     ta_msg_c2h_input_completed_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_input_completed_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -13054,7 +13069,7 @@ TA_PRIVATE ta_result ta_msg_c2h_input_completed_write(const ta_msg_c2h_input_com
     wire.macrostep = data->macrostep;
     wire.status = data->status;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -13086,7 +13101,7 @@ TA_PRIVATE ta_result ta_msg_c2h_load_result_size(const ta_msg_c2h_load_result *d
 TA_PRIVATE ta_result ta_msg_c2h_load_result_write(const ta_msg_c2h_load_result *data, const ta_ring_reservation *to) {
     ta_msg_c2h_load_result_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_c2h_load_result_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -13102,7 +13117,7 @@ TA_PRIVATE ta_result ta_msg_c2h_load_result_write(const ta_msg_c2h_load_result *
     wire.cause_seq = data->cause_seq;
     wire.request_seq = data->request_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -13153,7 +13168,7 @@ TA_PRIVATE ta_result ta_msg_tel_trace_size(const ta_msg_tel_trace *data, uint32_
 TA_PRIVATE ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const ta_ring_reservation *to) {
     ta_msg_tel_trace_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_tel_trace_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -13165,9 +13180,9 @@ TA_PRIVATE ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const 
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
-    tail = ta_record_put_span(&wire.name, to->bytes, tail, data->name);
-    tail = ta_record_put_span(&wire.value_text, to->bytes, tail, data->value_text);
-    tail = ta_record_put_span(&wire.states, to->bytes, tail, data->states);
+    ta_record_put_span(&tail, &wire.name, data->name);
+    ta_record_put_span(&tail, &wire.value_text, data->value_text);
+    ta_record_put_span(&tail, &wire.states, data->states);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_TEL_TRACE, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
     wire.macrostep = data->macrostep;
@@ -13184,7 +13199,7 @@ TA_PRIVATE ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const 
     wire.position = data->position;
     wire.result = data->result;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 
@@ -13229,7 +13244,7 @@ TA_PRIVATE ta_result ta_msg_tel_dropped_size(const ta_msg_tel_dropped *data, uin
 TA_PRIVATE ta_result ta_msg_tel_dropped_write(const ta_msg_tel_dropped *data, const ta_ring_reservation *to) {
     ta_msg_tel_dropped_wire wire;
     uint32_t size = 0;
-    uint32_t tail = (uint32_t)sizeof wire;
+    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };
     ta_result result = ta_msg_tel_dropped_size(data, &size);
     if (result != TA_OK) {
         return result;
@@ -13245,7 +13260,7 @@ TA_PRIVATE ta_result ta_msg_tel_dropped_write(const ta_msg_tel_dropped *data, co
     wire.count = data->count;
     wire.first_seq = data->first_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
-    ta_mem_zero(to->bytes + tail, size - tail);
+    ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
 }
 

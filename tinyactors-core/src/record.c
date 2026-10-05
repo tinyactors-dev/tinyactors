@@ -131,6 +131,9 @@ static bool seq_check(const ta_record_reader *reader, uint64_t seq, uint64_t *ga
 /* ta_record_check: see record.h for the contract and its order. Every decision after the copy is made on out->fixed. */
 ta_record_fault ta_record_check(ta_record_reader *reader, const ta_record_input *input, ta_record *out) {
     const unsigned char *bytes = input->bytes;
+    if (reader->table == NULL) {
+        return TA_RECORD_KIND; /* a zeroed, never initialised reader knows no kind */
+    }
     if (bytes == NULL || input->length < TA_RECORD_HEADER_BYTES) {
         return TA_RECORD_TRUNCATED;
     }
@@ -271,12 +274,12 @@ bool ta_record_bytes_ok(ta_bytes bytes) {
     return bytes.len == 0 || bytes.ptr != NULL;
 }
 
-uint32_t ta_record_put_span(ta_span32 *span, unsigned char *record, uint32_t tail, ta_bytes bytes) {
+void ta_record_put_span(ta_record_tail *tail, ta_span32 *span, ta_bytes bytes) {
     if (bytes.len == 0) {
         *span = (ta_span32){ .offset = 0, .length = 0 };
-        return tail;
+        return;
     }
-    ta_mem_copy(record + tail, bytes.ptr, bytes.len);
-    *span = (ta_span32){ .offset = tail, .length = bytes.len };
-    return tail + bytes.len;
+    ta_mem_copy(tail->record + tail->at, bytes.ptr, bytes.len);
+    *span = (ta_span32){ .offset = tail->at, .length = bytes.len };
+    tail->at += bytes.len;
 }

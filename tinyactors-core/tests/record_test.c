@@ -465,10 +465,11 @@ static void test_snapshot(void) {
     ta_mem_zero(into, sizeof into);
     ta_span32 put = { 99, 99 };
     const unsigned char text[3] = { 'a', 'b', 'c' };
-    uint32_t tail = ta_record_put_span(&put, into, 8, (ta_bytes){ text, 3 });
-    CHECK(tail == 11 && put.offset == 8 && put.length == 3 && into[8] == 'a' && into[10] == 'c' && into[11] == 0 && into[7] == 0);
-    tail = ta_record_put_span(&put, into, tail, (ta_bytes){ NULL, 0 });
-    CHECK(tail == 11 && put.offset == 0 && put.length == 0);
+    ta_record_tail tail = { into, 8 };
+    ta_record_put_span(&tail, &put, (ta_bytes){ text, 3 });
+    CHECK(tail.at == 11 && put.offset == 8 && put.length == 3 && into[8] == 'a' && into[10] == 'c' && into[11] == 0 && into[7] == 0);
+    ta_record_put_span(&tail, &put, (ta_bytes){ NULL, 0 });
+    CHECK(tail.at == 11 && put.offset == 0 && put.length == 0);
     CHECK(ta_record_bytes_ok((ta_bytes){ NULL, 0 }) && ta_record_bytes_ok((ta_bytes){ text, 3 }) && !ta_record_bytes_ok((ta_bytes){ NULL, 1 }));
 }
 

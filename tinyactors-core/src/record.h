@@ -184,7 +184,7 @@ typedef struct ta_record_reader_params {
     uint32_t max_record_bytes; /* a multiple of 8, at least TA_RECORD_HEADER_BYTES; the ring's own maximum */
 } ta_record_reader_params;
 
-/* A reader: the table, the ring it serves and the seq it expects next. Owns nothing; system lifetime; zeroed is unusable. */
+/* A reader: the table, the ring it serves and the seq it expects next. Owns nothing; system lifetime; a zeroed one is unusable: ta_record_check refuses every input with TA_RECORD_KIND. */
 typedef struct ta_record_reader {
     const ta_record_table *table;
     ta_ring_id ring;
@@ -277,13 +277,25 @@ bool ta_record_in_domain(uint64_t allowed, uint32_t value);
 bool ta_record_bytes_ok(ta_bytes bytes);
 
 /*
+ * ta_record_tail is the writer's cursor over the variable part of one record
+ * being filled in a reservation: `record` is the reservation's first byte and
+ * `at` the offset of the next free tail byte, starting at the fixed size. It
+ * lives on the writer's stack for one call of a generated writer, and holds
+ * no ownership: the reservation is the ring's, valid until commit.
+ */
+typedef struct ta_record_tail {
+    unsigned char *record;
+    uint32_t at;
+} ta_record_tail;
+
+/*
  * ta_record_put_span is the writer's half of a span field. It copies bytes to
- * record + tail (nothing when empty), stores the span that names them in
- * *span ((0, 0) when empty: the canonical empty span), and returns the tail
- * position after them. The caller has already measured the whole record with
- * a ta_layout, so tail + bytes.len is inside the reservation and cannot wrap;
- * this function does no bounds check of its own and must not be called
+ * tail->record + tail->at (nothing when empty), stores the span that names
+ * them in *span ((0, 0) when empty: the canonical empty span), and advances
+ * tail->at past them. The caller has already measured the whole record with
+ * a ta_layout, so tail->at + bytes.len is inside the reservation and cannot
+ * wrap; this function does no bounds check of its own and must not be called
  * without that measurement. `bytes` must not overlap the record. Never
  * allocates.
  */
-uint32_t ta_record_put_span(ta_span32 *span, unsigned char *record, uint32_t tail, ta_bytes bytes);
+void ta_record_put_span(ta_record_tail *tail, ta_span32 *span, ta_bytes bytes);

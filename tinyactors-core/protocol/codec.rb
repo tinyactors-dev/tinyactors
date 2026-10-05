@@ -373,7 +373,7 @@ module RingProto
     def write_function(info)
       out = +"/* #{info.type}_write: see ring_proto.h. */\n"
       out << "ta_result #{info.type}_write(const #{info.type} *data, const ta_ring_reservation *to) {\n"
-      out << "    #{info.wire} wire;\n    uint32_t size = 0;\n    uint32_t tail = (uint32_t)sizeof wire;\n"
+      out << "    #{info.wire} wire;\n    uint32_t size = 0;\n    ta_record_tail tail = { to->bytes, (uint32_t)sizeof wire };\n"
       out << "    ta_result result = #{info.type}_size(data, &size);\n"
       out << "    if (result != TA_OK) {\n        return result;\n    }\n"
       conditions = ['to->bytes == NULL', 'to->size != size',
@@ -381,12 +381,12 @@ module RingProto
       info.domains.each { |f| conditions << format('!ta_record_in_domain(0x%Xull, data->%s)', f.mask, f.name) }
       out << "    if (#{conditions.join(" ||\n        ")}) {\n        return TA_ERR_INVALID;\n    }\n"
       out << "    ta_mem_zero(&wire, sizeof wire);\n"
-      info.spans.each { |f| out << "    tail = ta_record_put_span(&wire.#{f.name}, to->bytes, tail, data->#{f.name});\n" }
+      info.spans.each { |f| out << "    ta_record_put_span(&tail, &wire.#{f.name}, data->#{f.name});\n" }
       out << "    wire.header = (ta_msg_wire_header){ .kind = #{info.kind_const}, .flags = data->head.flags, .size = size,\n"
       out << "                                        .seq = to->seq, .session = data->head.session, .at = data->head.at };\n"
       info.fields.reject(&:span?).each { |f| out << "    wire.#{f.name} = data->#{f.name};\n" }
       out << "    ta_mem_copy(to->bytes, &wire, sizeof wire);\n"
-      out << "    ta_mem_zero(to->bytes + tail, size - tail);\n    return TA_OK;\n}\n\n"
+      out << "    ta_mem_zero(to->bytes + tail.at, size - tail.at);\n    return TA_OK;\n}\n\n"
     end
 
     # ------------------------------------------------------------ get
