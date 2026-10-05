@@ -43,7 +43,8 @@
  *   eval.call.waterFill                 waterFill(capacity, demand), n ports {3, 30, 300}
  *
  * eval (unit element): eval.array.map, .filter, .reduce, .pipeline,
- * .toSorted, .toSorted.rows, eval.string.join (L); eval.object.spread-reduce
+ * .toSorted, .toSorted.rows, .toSorted.rows.desc ((a, b) => b.kwh - a.kwh),
+ * .map.pluck (r => r.kwh), eval.string.join (L); eval.object.spread-reduce
  * (C); eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
  * place and quadratic before, eval.object.fromEntries, eval.set.new, .has,
@@ -283,6 +284,18 @@ static const uint32_t SIZES_100000[] = { 100000, 0 };
     "{\"id\":\"r000008\",\"kwh\":29.6,\"priority\":0,\"tags\":[\"a\",\"b\"]},"                              \
     "{\"id\":\"r000009\",\"kwh\":33.3,\"priority\":1,\"tags\":[\"a\",\"b\"]}]"
 
+#define ROWS_VALUE_DESC                                                                                     \
+    "[{\"id\":\"r000009\",\"kwh\":33.3,\"priority\":1,\"tags\":[\"a\",\"b\"]},"                               \
+    "{\"id\":\"r000008\",\"kwh\":29.6,\"priority\":0,\"tags\":[\"a\",\"b\"]},"                                \
+    "{\"id\":\"r000007\",\"kwh\":25.9,\"priority\":3,\"tags\":[\"a\",\"b\"]},"                                \
+    "{\"id\":\"r000006\",\"kwh\":22.2,\"priority\":2,\"tags\":[\"a\",\"b\"]},"                                \
+    "{\"id\":\"r000005\",\"kwh\":18.5,\"priority\":1,\"tags\":[\"a\",\"b\"]},"                                \
+    "{\"id\":\"r000004\",\"kwh\":14.8,\"priority\":0,\"tags\":[\"a\",\"b\"]},"                                \
+    "{\"id\":\"r000003\",\"kwh\":11.1,\"priority\":3,\"tags\":[\"a\",\"b\"]},"                                \
+    "{\"id\":\"r000002\",\"kwh\":7.4,\"priority\":2,\"tags\":[\"a\",\"b\"]},"                                 \
+    "{\"id\":\"r000001\",\"kwh\":3.7,\"priority\":1,\"tags\":[\"a\",\"b\"]},"                                 \
+    "{\"id\":\"r000000\",\"kwh\":0,\"priority\":0,\"tags\":[\"a\",\"b\"]}]"
+
 static const bench_case cases[] = {
     /* compile */
     { .name = "parse.module.power.whole", .unit = UNIT_BYTE, .op = OP_PARSE, .text = TEXT_POWER,
@@ -356,6 +369,12 @@ static const bench_case cases[] = {
     { .name = "eval.array.toSorted.rows", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.toSorted((a, b) => a.kwh - b.kwh)", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = ROWS_VALUE, .check = CHECK_ARRAY_N },
+    { .name = "eval.array.toSorted.rows.desc", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.toSorted((a, b) => b.kwh - a.kwh)", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = ROWS_VALUE_DESC, .check = CHECK_ARRAY_N },
+    { .name = "eval.array.map.pluck", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.map(r => r.kwh)", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = "[0,3.7,7.4,11.1,14.8,18.5,22.2,25.9,29.6,33.3]", .check = CHECK_ARRAY_N },
     { .name = "eval.string.join", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.map(r => r.id).join(\",\")", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "\"r000000,r000001,r000002,r000003,r000004,r000005,r000006,r000007,r000008,r000009\"",

@@ -554,7 +554,9 @@ SJS_API void sjs_program_release(sjs_program *program);
  * Evaluator
  *
  * Runs a program in steps on pushed fuel: one unit per instruction, and per
- * element for the built-ins that loop. A callback of map() or reduce() is a
+ * element for the built-ins that loop. A built-in's C path for a callback's
+ * shape charges what the callback would have used in one step, so a run can
+ * use up to 2 units more than the fuel pushed. A callback of map() or reduce() is a
  * frame on the evaluator's own stack, so an evaluation can stop and resume
  * anywhere, a callback included.
  */

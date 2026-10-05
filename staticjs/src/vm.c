@@ -789,7 +789,7 @@ static bool call(sjs_vm *vm, uint32_t argc, uint8_t flags) {
  * the loop frame (vm.h). The closure is checked once per loop: neither it
  * nor the frames below the loop change while the loop runs. LOOP_CALLBACK
  * keeps the closure alive, and the body cannot reach that slot. */
-static bool enter_callback(sjs_vm *vm, vm_frame *loop) {
+bool sjs_vm_enter_callback(sjs_vm *vm, vm_frame *loop) {
     sjs_closure *closure = SJS_AS_CLOSURE(vm->stack[loop->base + LOOP_CALLBACK]);
     if (closure_running(vm, closure)) return false;
     if (frames_full(vm)) return false;
@@ -827,7 +827,7 @@ bool sjs_vm_call_back(sjs_vm *vm, vm_frame *loop, sjs_values args) {
         }
         return call(vm, args.count, 0);
     }
-    if (!loop->entered && !enter_callback(vm, loop)) return false;
+    if (!loop->entered && !sjs_vm_enter_callback(vm, loop)) return false;
     vm_frame *callee = &vm->frames[vm->frame_count];
     const sjs_function_info *fn = &callee->program->functions[callee->function];
     sjs_value *slots = &vm->stack[callee->base];

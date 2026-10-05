@@ -1393,6 +1393,135 @@ static void test_no_shapes(void) {
     CHECK(by_default.allocations == with.allocations);
 }
 
+/* The shapes' C paths (docs/matcher.md, section 7): toSorted with a
+ * COMPARE_BY_KEY comparator and map with a PLUCK callback. A run of one
+ * source, with shapes or without, whole and then one unit of fuel at a time:
+ * its value or its fault ("fault LINE:COLUMN message"), the fuel it used and
+ * how often it paused. */
+typedef struct {
+    char out[256];
+    uint64_t fuel;
+    uint64_t pauses;
+} shaped_run;
+
+typedef struct {
+    const char *source;
+    bool no_shapes;
+    sjs_limits limits;
+} shaped_source;
+
+static shaped_run run_shaped(shaped_source s) {
+    shaped_run result = { "", 0, 0 };
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, s.limits);
+    sjs_program *program;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, s.no_shapes },
+                                  { s.source, (uint32_t)strlen(s.source) }, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    loop_run l = { context, program, NULL };
+    sjs_vm_config config = { context };
+    CHECK(sjs_vm_init(&l.vm, &config) == SJS_OK);
+    loop_finish(&l, UINT64_MAX, result.out);
+    result.fuel = sjs_vm_fuel_used(l.vm);
+    /* Paused after every unit: the same answer for the same fuel. */
+    char again[4096];
+    sjs_run_params run = { program, NULL, 0 };
+    CHECK(sjs_vm_start(l.vm, &run) == SJS_OK);
+    sjs_run status;
+    while ((status = sjs_vm_run(l.vm, 1)) == SJS_RUN_PAUSED) result.pauses++;
+    if (status == SJS_RUN_DONE) {
+        sjs_value v;
+        CHECK(sjs_vm_take_result(l.vm, &v) == SJS_OK);
+        write_text(context, v, again, sizeof again);
+        sjs_release(context, v);
+        CHECK(strcmp(again, result.out) == 0);
+    }
+    CHECK(sjs_vm_fuel_used(l.vm) == result.fuel);
+    loop_close(&l);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+    return result;
+}
+
+/* The same source with shapes and without: the same value or fault. */
+static void expect_same_both_ways(const char *source, sjs_limits limits, const char *want) {
+    shaped_run on = run_shaped((shaped_source){ source, false, limits });
+    shaped_run off = run_shaped((shaped_source){ source, true, limits });
+    if (strcmp(on.out, off.out) != 0 || strcmp(on.out, want) != 0 || on.fuel > off.fuel) {
+        fprintf(stderr, "%s\n  with shapes:    %s (fuel %llu)\n  without shapes: %s (fuel %llu)\n  expected:       %s\n",
+                source, on.out, (unsigned long long)on.fuel, off.out, (unsigned long long)off.fuel, want);
+        failures++;
+    }
+}
+
+static void test_shape_paths(void) {
+    /* Fuel, pinned. Five comparisons: 7 units each in bytecode (the step,
+     * TAKE_LOCAL, GET_MEMBER, TAKE_LOCAL, GET_MEMBER, BINARY, RETURN), 3 in
+     * C (the step and two lookups). */
+    const char *sort = "[{k: 3}, {k: 1}, {k: 2}, {k: 0}].toSorted((a, b) => a.k - b.k)";
+    shaped_run on = run_shaped((shaped_source){ sort, false, SJS_LIMITS_DEFAULT });
+    shaped_run off = run_shaped((shaped_source){ sort, true, SJS_LIMITS_DEFAULT });
+    CHECK(strcmp(on.out, "[{\"k\":0},{\"k\":1},{\"k\":2},{\"k\":3}]") == 0 && strcmp(off.out, on.out) == 0);
+    CHECK(off.fuel == 54 && on.fuel == 34 && off.fuel - on.fuel == 5 * (7 - 3));
+    /* A C step charges its lookups with its unit, as a built-in charges its
+     * cost: on one unit per run, each comparison in C is one pause. */
+    CHECK(off.pauses == 53 && on.pauses == 53 - 5 * 6);
+    /* Four elements: 4 units each in bytecode (the step, TAKE_LOCAL,
+     * GET_MEMBER, RETURN), 2 in C. */
+    const char *map = "[{k: 3}, {k: 1}, {}, {k: 0}].map(x => x.k)";
+    on = run_shaped((shaped_source){ map, false, SJS_LIMITS_DEFAULT });
+    off = run_shaped((shaped_source){ map, true, SJS_LIMITS_DEFAULT });
+    CHECK(strcmp(on.out, "[3,1,undefined,0]") == 0 && strcmp(off.out, on.out) == 0);
+    CHECK(off.fuel == 34 && on.fuel == 26 && off.fuel - on.fuel == 4 * (4 - 2));
+    CHECK(off.pauses == 33 && on.pauses == 33 - 4 * 3);
+    /* A fault after C steps: where the bytecode faults, for less fuel. */
+    expect_same_both_ways("[{k: 2}, {k: 1}, {k: 4},\n {j: 3}].toSorted((a, b) =>\n a.k - b.k)", SJS_LIMITS_DEFAULT,
+                          "fault 3:6 arithmetic in staticjs is on numbers");
+    expect_same_both_ways("[{k: 2}, {k: 1}, null].map(x =>\n x.k)", SJS_LIMITS_DEFAULT,
+                          "fault 2:4 cannot read a property of null");
+
+    /* max_stack: a C step succeeds only where the bytecode has room for
+     * what it pushes. The comparator's frame sits on the loop's five slots
+     * and has two of its own: a.k is the eighth value and b.k the ninth.
+     * With 6 the frame cannot be entered, with 7 a.k does not fit, with 8
+     * b.k does not, and each faults there on both paths. */
+    static const char *const sort_stack[] = {
+        "fault 1:26 the evaluation needs more than max_stack values",
+        "fault 1:37 the evaluation needs more than max_stack values",
+        "fault 1:43 the evaluation needs more than max_stack values",
+        "[{\"k\":1},{\"k\":2}]",
+        "[{\"k\":1},{\"k\":2}]",
+    };
+    sjs_limits limits = SJS_LIMITS_DEFAULT;
+    for (uint32_t max_stack = 6; max_stack <= 10; max_stack++) {
+        limits.max_stack = max_stack;
+        expect_same_both_ways("[{k: 2}, {k: 1}].toSorted((a, b) => a.k - b.k)", limits, sort_stack[max_stack - 6]);
+    }
+    /* A pluck's frame has one slot, and x.k is the seventh value. */
+    static const char *const map_stack[] = {
+        "fault 1:21 the evaluation needs more than max_stack values",
+        "fault 1:27 the evaluation needs more than max_stack values",
+        "[2,1]",
+        "[2,1]",
+    };
+    for (uint32_t max_stack = 5; max_stack <= 8; max_stack++) {
+        limits.max_stack = max_stack;
+        expect_same_both_ways("[{k: 2}, {k: 1}].map(x => x.k)", limits, map_stack[max_stack - 5]);
+    }
+    /* max_frames: the program, the loop, and the callback the C path
+     * enters as the bytecode's first call would. */
+    limits = SJS_LIMITS_DEFAULT;
+    for (uint32_t max_frames = 2; max_frames <= 3; max_frames++) {
+        limits.max_frames = max_frames;
+        expect_same_both_ways("[{k: 2}, {k: 1}].toSorted((a, b) => a.k - b.k)", limits,
+                              max_frames < 3 ? "fault 1:26 the evaluation needs more than max_frames frames"
+                                             : "[{\"k\":1},{\"k\":2}]");
+        expect_same_both_ways("[{k: 2}, {k: 1}].map(x => x.k)", limits,
+                              max_frames < 3 ? "fault 1:21 the evaluation needs more than max_frames frames" : "[2,1]");
+    }
+}
+
 /* Fail every allocation in turn: each run ends with an error, never a
  * crash, and frees all it took. */
 static void test_out_of_memory(const char *source, sjs_goal goal) {
@@ -1447,6 +1576,7 @@ int main(int argc, char **argv) {
     test_loop_callbacks();
     test_reuse_leaves_others_alone();
     test_no_shapes();
+    test_shape_paths();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */

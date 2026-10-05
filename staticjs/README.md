@@ -48,6 +48,14 @@ too; and 100,000 doubles must format as `String(x)` does.
   copied. No program can tell the difference, and fuel can only go down:
   `{...acc, [k]: v}` in a `reduce` no longer copies the accumulator at each
   step.
+- **Shapes change speed and fuel, never a value or a fault.** `toSorted`
+  with a comparator `(a, b) => a.key - b.key` (or `b.key - a.key`) and
+  `map` with `x => x.key` run the callback in C while each step's
+  preconditions hold: objects that hold the key, numbers for a comparator.
+  Any other step calls the callback's bytecode, which gives its value or
+  faults where it faults. A comparison costs 3 units of fuel instead of 7,
+  an element of a pluck 2 instead of 4. The spec runs whole with shapes and
+  without, and both must agree (`docs/matcher.md`, section 8).
 
 ## Push and stream
 
@@ -95,8 +103,8 @@ the compiler's shape matcher does.
 (`docs/matcher.md`): a bottom-up tree automaton, built from the rules in
 `src/shapes.rules`, that recognises functions of a known shape, such as
 `x => x.key` or `(a, b) => a.key - b.key`, and tags them. A tag never
-changes the code a function compiles to; a built-in may later use it to
-run a callback in C, giving the same values and faults on less fuel.
+changes the code a function compiles to; `map` and `toSorted` use it to
+run such a callback in C, giving the same values and faults on less fuel.
 `sjs_compiler_config.no_shapes` turns the matcher off.
 
 ## The language
