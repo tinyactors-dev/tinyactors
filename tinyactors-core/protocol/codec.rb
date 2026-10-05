@@ -264,11 +264,40 @@ module RingProto
     end
 
     def descriptor_table(infos)
-      out = +"/* The descriptor of every message, sorted by kind: what ta_record_check interprets. System lifetime. */\n"
-      out << "static const ta_record_table ta_msg_table_value = { NULL, 0 };\n\n"
+      sorted = infos.sort_by { |i| i.msg.code }
+      out = +"/* The descriptors: what ta_record_check interprets. The arrays are static const data, system lifetime. */\n\n"
+      sorted.each { |info| out << message_descriptor_arrays(info) }
+      out << "/* One descriptor per message, sorted by kind (ta_record_reader_init checks it). */\n"
+      out << "static const ta_record_descriptor ta_msg_descriptors[] = {\n"
+      sorted.each { |info| out << descriptor_entry(info) }
+      out << "};\n"
+      out << "_Static_assert(sizeof ta_msg_descriptors / sizeof ta_msg_descriptors[0] == #{infos.size}, \"every message has a descriptor\");\n\n"
+      out << "static const ta_record_table ta_msg_table_value = { ta_msg_descriptors, #{infos.size} };\n\n"
       out << "/* ta_msg_table returns the table of all #{infos.size} messages. It is static const data and outlives every reader. */\n"
       out << "const ta_record_table *ta_msg_table(void) {\n    return &ta_msg_table_value;\n}\n"
       out
+    end
+
+    # The span offsets and the enum and bool domains of one message, as arrays (none when it has none).
+    def message_descriptor_arrays(info)
+      out = +''
+      unless info.spans.empty?
+        out << "static const ta_record_span_at #{info.type}_spans[] = { #{info.spans.map { |f| "{ #{f.offset} }" }.join(', ')} };\n"
+      end
+      unless info.domains.empty?
+        out << "static const ta_record_domain #{info.type}_domains[] = { " \
+               "#{info.domains.map { |f| format('{ %d, 0x%Xull }', f.offset, f.mask) }.join(', ')} };\n"
+      end
+      out
+    end
+
+    def descriptor_entry(info)
+      msg = info.msg
+      spans = info.spans.empty? ? 'NULL' : "#{info.type}_spans"
+      domains = info.domains.empty? ? 'NULL' : "#{info.type}_domains"
+      "    { .kind = #{info.kind_const}, .ring = TA_RING_#{msg.ring.to_s.upcase}, .span_count = #{info.spans.size}, " \
+        "#{'.domain_count = %d, ' % info.domains.size}.fixed_size = #{msg.fixed_size}, " \
+        "#{format('.flags_allowed = 0x%04X, ', info.flags_allowed)}.spans = #{spans}, .domains = #{domains} },\n"
     end
 
     # ------------------------------------------------------- per message

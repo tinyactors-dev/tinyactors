@@ -7,8 +7,90 @@
  */
 #include "ring_proto.h"
 
-/* The descriptor of every message, sorted by kind: what ta_record_check interprets. System lifetime. */
-static const ta_record_table ta_msg_table_value = { NULL, 0 };
+/* The descriptors: what ta_record_check interprets. The arrays are static const data, system lifetime. */
+
+static const ta_record_span_at ta_msg_h2c_event_spans[] = { { 32 }, { 40 }, { 48 }, { 56 }, { 64 }, { 72 } };
+static const ta_record_domain ta_msg_h2c_event_domains[] = { { 96, 0x7ull } };
+static const ta_record_span_at ta_msg_h2c_spawn_spans[] = { { 32 }, { 40 } };
+static const ta_record_span_at ta_msg_h2c_publish_spans[] = { { 32 } };
+static const ta_record_span_at ta_msg_h2c_load_spans[] = { { 32 } };
+static const ta_record_span_at ta_msg_h2c_load_failed_spans[] = { { 32 }, { 40 } };
+static const ta_record_span_at ta_msg_h2c_unload_spans[] = { { 32 } };
+static const ta_record_span_at ta_msg_h2c_checkpoint_spans[] = { { 32 } };
+static const ta_record_span_at ta_msg_h2c_invoke_report_spans[] = { { 32 }, { 48 } };
+static const ta_record_domain ta_msg_h2c_invoke_report_domains[] = { { 64, 0x3ull }, { 65, 0x3ull } };
+static const ta_record_span_at ta_msg_h2c_destroy_spans[] = { { 32 } };
+static const ta_record_span_at ta_msg_h2c_type_declare_spans[] = { { 36 } };
+static const ta_record_domain ta_msg_h2c_type_declare_domains[] = { { 32, 0x6ull } };
+static const ta_record_span_at ta_msg_c2h_spawned_spans[] = { { 32 }, { 40 } };
+static const ta_record_span_at ta_msg_c2h_input_spans[] = { { 56 }, { 64 }, { 72 }, { 80 }, { 88 }, { 108 }, { 116 } };
+static const ta_record_domain ta_msg_c2h_input_domains[] = { { 104, 0x1Full }, { 105, 0x7ull }, { 124, 0x3ull }, { 125, 0x3ull } };
+static const ta_record_span_at ta_msg_c2h_send_spans[] = { { 40 }, { 48 }, { 56 }, { 64 } };
+static const ta_record_span_at ta_msg_c2h_invoke_spans[] = { { 40 }, { 48 }, { 56 } };
+static const ta_record_domain ta_msg_c2h_invoke_domains[] = { { 80, 0x3ull } };
+static const ta_record_span_at ta_msg_c2h_invoke_cancel_spans[] = { { 40 } };
+static const ta_record_span_at ta_msg_c2h_invoke_forward_spans[] = { { 40 }, { 56 }, { 64 }, { 72 }, { 80 }, { 88 } };
+static const ta_record_domain ta_msg_c2h_invoke_forward_domains[] = { { 104, 0x7ull } };
+static const ta_record_span_at ta_msg_c2h_log_spans[] = { { 40 } };
+static const ta_record_domain ta_msg_c2h_macrostep_ended_domains[] = { { 40, 0x1Full }, { 64, 0xFull } };
+static const ta_record_span_at ta_msg_c2h_bounced_spans[] = { { 40 } };
+static const ta_record_domain ta_msg_c2h_bounced_domains[] = { { 48, 0xFFFEull } };
+static const ta_record_span_at ta_msg_c2h_load_needed_spans[] = { { 32 } };
+static const ta_record_span_at ta_msg_c2h_loaded_spans[] = { { 32 } };
+static const ta_record_span_at ta_msg_c2h_unloaded_spans[] = { { 32 } };
+static const ta_record_span_at ta_msg_c2h_state_spans[] = { { 32 } };
+static const ta_record_span_at ta_msg_c2h_published_spans[] = { { 32 } };
+static const ta_record_span_at ta_msg_c2h_destroyed_spans[] = { { 32 } };
+static const ta_record_domain ta_msg_c2h_destroyed_domains[] = { { 48, 0x7ull } };
+static const ta_record_domain ta_msg_c2h_definition_result_domains[] = { { 52, 0x3Full } };
+static const ta_record_domain ta_msg_c2h_input_refused_domains[] = { { 40, 0x7Eull } };
+static const ta_record_domain ta_msg_c2h_input_completed_domains[] = { { 48, 0xFull } };
+static const ta_record_span_at ta_msg_tel_trace_spans[] = { { 96 }, { 104 }, { 112 } };
+static const ta_record_domain ta_msg_tel_trace_domains[] = { { 95, 0x3ull } };
+/* One descriptor per message, sorted by kind (ta_record_reader_init checks it). */
+static const ta_record_descriptor ta_msg_descriptors[] = {
+    { .kind = TA_MSG_H2C_TIME, .ring = TA_RING_H2C, .span_count = 0, .domain_count = 0, .fixed_size = 32, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
+    { .kind = TA_MSG_H2C_EVENT, .ring = TA_RING_H2C, .span_count = 6, .domain_count = 1, .fixed_size = 104, .flags_allowed = 0x0300, .spans = ta_msg_h2c_event_spans, .domains = ta_msg_h2c_event_domains },
+    { .kind = TA_MSG_H2C_SPAWN, .ring = TA_RING_H2C, .span_count = 2, .domain_count = 0, .fixed_size = 80, .flags_allowed = 0x0301, .spans = ta_msg_h2c_spawn_spans, .domains = NULL },
+    { .kind = TA_MSG_H2C_PUBLISH, .ring = TA_RING_H2C, .span_count = 1, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = ta_msg_h2c_publish_spans, .domains = NULL },
+    { .kind = TA_MSG_H2C_LOAD, .ring = TA_RING_H2C, .span_count = 1, .domain_count = 0, .fixed_size = 56, .flags_allowed = 0x0300, .spans = ta_msg_h2c_load_spans, .domains = NULL },
+    { .kind = TA_MSG_H2C_LOAD_FAILED, .ring = TA_RING_H2C, .span_count = 2, .domain_count = 0, .fixed_size = 56, .flags_allowed = 0x0300, .spans = ta_msg_h2c_load_failed_spans, .domains = NULL },
+    { .kind = TA_MSG_H2C_UNLOAD, .ring = TA_RING_H2C, .span_count = 1, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = ta_msg_h2c_unload_spans, .domains = NULL },
+    { .kind = TA_MSG_H2C_CHECKPOINT, .ring = TA_RING_H2C, .span_count = 1, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = ta_msg_h2c_checkpoint_spans, .domains = NULL },
+    { .kind = TA_MSG_H2C_INVOKE_REPORT, .ring = TA_RING_H2C, .span_count = 2, .domain_count = 2, .fixed_size = 72, .flags_allowed = 0x0300, .spans = ta_msg_h2c_invoke_report_spans, .domains = ta_msg_h2c_invoke_report_domains },
+    { .kind = TA_MSG_H2C_DESTROY, .ring = TA_RING_H2C, .span_count = 1, .domain_count = 0, .fixed_size = 40, .flags_allowed = 0x0300, .spans = ta_msg_h2c_destroy_spans, .domains = NULL },
+    { .kind = TA_MSG_H2C_DEFINITION_REGISTER, .ring = TA_RING_H2C, .span_count = 0, .domain_count = 0, .fixed_size = 56, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
+    { .kind = TA_MSG_H2C_DEFINITION_RELEASE, .ring = TA_RING_H2C, .span_count = 0, .domain_count = 0, .fixed_size = 40, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
+    { .kind = TA_MSG_H2C_DEFINITION_RETIRE, .ring = TA_RING_H2C, .span_count = 0, .domain_count = 0, .fixed_size = 40, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
+    { .kind = TA_MSG_H2C_WITHDRAW, .ring = TA_RING_H2C, .span_count = 0, .domain_count = 0, .fixed_size = 40, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
+    { .kind = TA_MSG_H2C_TYPE_DECLARE, .ring = TA_RING_H2C, .span_count = 1, .domain_count = 1, .fixed_size = 48, .flags_allowed = 0x0300, .spans = ta_msg_h2c_type_declare_spans, .domains = ta_msg_h2c_type_declare_domains },
+    { .kind = TA_MSG_C2H_SPAWNED, .ring = TA_RING_C2H, .span_count = 2, .domain_count = 0, .fixed_size = 64, .flags_allowed = 0x0300, .spans = ta_msg_c2h_spawned_spans, .domains = NULL },
+    { .kind = TA_MSG_C2H_INPUT, .ring = TA_RING_C2H, .span_count = 7, .domain_count = 4, .fixed_size = 128, .flags_allowed = 0x0300, .spans = ta_msg_c2h_input_spans, .domains = ta_msg_c2h_input_domains },
+    { .kind = TA_MSG_C2H_SEND, .ring = TA_RING_C2H, .span_count = 4, .domain_count = 0, .fixed_size = 88, .flags_allowed = 0x0300, .spans = ta_msg_c2h_send_spans, .domains = NULL },
+    { .kind = TA_MSG_C2H_INVOKE, .ring = TA_RING_C2H, .span_count = 3, .domain_count = 1, .fixed_size = 88, .flags_allowed = 0x0300, .spans = ta_msg_c2h_invoke_spans, .domains = ta_msg_c2h_invoke_domains },
+    { .kind = TA_MSG_C2H_INVOKE_CANCEL, .ring = TA_RING_C2H, .span_count = 1, .domain_count = 0, .fixed_size = 56, .flags_allowed = 0x0300, .spans = ta_msg_c2h_invoke_cancel_spans, .domains = NULL },
+    { .kind = TA_MSG_C2H_INVOKE_FORWARD, .ring = TA_RING_C2H, .span_count = 6, .domain_count = 1, .fixed_size = 112, .flags_allowed = 0x0300, .spans = ta_msg_c2h_invoke_forward_spans, .domains = ta_msg_c2h_invoke_forward_domains },
+    { .kind = TA_MSG_C2H_LOG, .ring = TA_RING_C2H, .span_count = 1, .domain_count = 0, .fixed_size = 56, .flags_allowed = 0x0300, .spans = ta_msg_c2h_log_spans, .domains = NULL },
+    { .kind = TA_MSG_C2H_MACROSTEP_ENDED, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 2, .fixed_size = 72, .flags_allowed = 0x0300, .spans = NULL, .domains = ta_msg_c2h_macrostep_ended_domains },
+    { .kind = TA_MSG_C2H_WAKE, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 0, .fixed_size = 40, .flags_allowed = 0x0301, .spans = NULL, .domains = NULL },
+    { .kind = TA_MSG_C2H_BOUNCED, .ring = TA_RING_C2H, .span_count = 1, .domain_count = 1, .fixed_size = 56, .flags_allowed = 0x0300, .spans = ta_msg_c2h_bounced_spans, .domains = ta_msg_c2h_bounced_domains },
+    { .kind = TA_MSG_C2H_LOAD_NEEDED, .ring = TA_RING_C2H, .span_count = 1, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = ta_msg_c2h_load_needed_spans, .domains = NULL },
+    { .kind = TA_MSG_C2H_LOADED, .ring = TA_RING_C2H, .span_count = 1, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = ta_msg_c2h_loaded_spans, .domains = NULL },
+    { .kind = TA_MSG_C2H_UNLOADED, .ring = TA_RING_C2H, .span_count = 1, .domain_count = 0, .fixed_size = 72, .flags_allowed = 0x0301, .spans = ta_msg_c2h_unloaded_spans, .domains = NULL },
+    { .kind = TA_MSG_C2H_STATE, .ring = TA_RING_C2H, .span_count = 1, .domain_count = 0, .fixed_size = 72, .flags_allowed = 0x0300, .spans = ta_msg_c2h_state_spans, .domains = NULL },
+    { .kind = TA_MSG_C2H_PUBLISHED, .ring = TA_RING_C2H, .span_count = 1, .domain_count = 0, .fixed_size = 72, .flags_allowed = 0x0300, .spans = ta_msg_c2h_published_spans, .domains = NULL },
+    { .kind = TA_MSG_C2H_FINISHED, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
+    { .kind = TA_MSG_C2H_DESTROYED, .ring = TA_RING_C2H, .span_count = 1, .domain_count = 1, .fixed_size = 56, .flags_allowed = 0x0300, .spans = ta_msg_c2h_destroyed_spans, .domains = ta_msg_c2h_destroyed_domains },
+    { .kind = TA_MSG_C2H_DEFINITION_RESULT, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 1, .fixed_size = 56, .flags_allowed = 0x0300, .spans = NULL, .domains = ta_msg_c2h_definition_result_domains },
+    { .kind = TA_MSG_C2H_INPUT_REFUSED, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 1, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = ta_msg_c2h_input_refused_domains },
+    { .kind = TA_MSG_C2H_INPUT_COMPLETED, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 1, .fixed_size = 56, .flags_allowed = 0x0301, .spans = NULL, .domains = ta_msg_c2h_input_completed_domains },
+    { .kind = TA_MSG_C2H_LOAD_RESULT, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
+    { .kind = TA_MSG_TEL_TRACE, .ring = TA_RING_TEL, .span_count = 3, .domain_count = 1, .fixed_size = 120, .flags_allowed = 0x0303, .spans = ta_msg_tel_trace_spans, .domains = ta_msg_tel_trace_domains },
+    { .kind = TA_MSG_TEL_DROPPED, .ring = TA_RING_TEL, .span_count = 0, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
+};
+_Static_assert(sizeof ta_msg_descriptors / sizeof ta_msg_descriptors[0] == 38, "every message has a descriptor");
+
+static const ta_record_table ta_msg_table_value = { ta_msg_descriptors, 38 };
 
 /* ta_msg_table returns the table of all 38 messages. It is static const data and outlives every reader. */
 const ta_record_table *ta_msg_table(void) {
