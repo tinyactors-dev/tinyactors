@@ -7696,8 +7696,10 @@ TA_PRIVATE ta_result ta_event_name_intern_dotted(ta_event_name_table *table, ta_
  *   - The name bytes: envelope (or call, for a literal). Read during the
  *     call, never copied, retained or pointed into afterwards.
  *   - The atom table: system. Borrowed through a const pointer for the call.
- *   - `out`: macrostep/unit scratch, owned by the caller (Phase 3.1: one
- *     buffer per interpreter, it->event_atoms, eventNameDepth entries). The atoms in it are indexes into the
+ *   - `out`: macrostep/unit scratch, owned by the caller (from Phase 4.2 one
+ *     buffer per interpreter, it->event_atoms, eventNameDepth entries; in
+ *     3.1 that buffer is filled from the trie and this function is not yet
+ *     called by the interpreter). The atoms in it are indexes into the
  *     atom table, which never moves or removes one, so they stay meaningful
  *     for as long as the system lives; UNKNOWN entries refer to nothing.
  *   - The parameter struct: call, on the caller's stack, not stored.

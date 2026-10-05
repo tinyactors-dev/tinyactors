@@ -157,21 +157,18 @@ the test host and napi still pass.
   generated (searched `src/`).
 - `ta_event_pattern_matches` takes the resolved atoms (`ta_event_atoms`). The
   interpreter resolves once per taken event in `ta_interpreter_resolve_event`
-  (the one function 4.2 changes): until the name area exists there are no
-  bytes, so it renders the interned name into the render arena and resolves
-  it with D4. That is a render and a re-lookup for names whose atoms are
-  known. What it saves today is one trie walk per descriptor per candidate
-  transition.
+  (the one function 4.2 changes). Until the name area exists there are no
+  name bytes, so it takes the atoms from the trie node's own path
+  (`ta_trie_segments`) and does not call D4: **core does not exercise
+  `ta_name_resolve` in 3.1** (only `name_resolver_test` and
+  `event_match_test` do). Rendering and re-splitting would break invoke IDs
+  such as `s3.7`, one atom that contains a dot. 4.2 swaps the source for the
+  envelope's bytes and `ta_name_resolve`. What 3.1 saves today is one trie
+  walk per descriptor per candidate transition.
 - Scratch: `ta_interpreter.event_atoms` holds eventNameDepth atoms, taken in
   `ta_interpreter_init` and counted by `ta_interpreter_scratch_need` in the
   same position. Every chart's scratch need grows by 4 * eventNameDepth bytes
   (256 at the default); `layout_test`'s golden figures moved by that.
-- A name whose text does not fit renderBytes (256 at least) has zero atoms and
-  matches nothing, so a take never stalls. This is the one new answer.
-- An interned segment whose text contains a dot (an `<invoke id="a.b">`),
-  rendered and resolved, splits into two segments. This is how the bytes
-  design reads such a name; today the trie keeps it one segment. Open for the
-  maintainer; no test in the suites uses it.
 - Tests: `tests/event_match_test.c` (new), `event_pattern_test.c` migrated.
   `mise run asan` in tinyactors-core: 39 programs pass. Test host scenarios
   (`--fast`): 449 passed. napi IRP on Node: 176 run, 176 passed. Bun does not
