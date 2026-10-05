@@ -524,16 +524,15 @@ TA_API void ta_event_release(TA_INOUT ta_event *event) TA_ANY_VALUE_MODEL;
 
 /*
  * A host's policy for tracing the inputs of the sessions it watches. Mail
- * between sessions never passes through the host (ADR 0099 section 4), so
- * the host cannot mark the trace parent of an input it did not admit. Core
- * calls `mark` instead, as it takes an input that came from another session
- * (mail, or the error.communication a failed send became): `trace` is the
- * parent the input's macrostep will run under, and `mark` may change it, for
- * example to start a sampled trace for a watched session
- * (TA_TRACE_DETAIL_WATCHED). It is called inside ta_run() at the point where
- * an input is taken: it must not call a function that changes the system, and
- * it must be quick. Inputs the host admitted itself (ta_actor_deliver()) are
- * the host's to mark before it admits them, and are not offered.
+ * between sessions never passes through the host (ADR 0099 section 4), and a
+ * host input waits in core until it is taken, so core asks the host at the
+ * point where it takes an input (a host input, mail, an error report, or the
+ * error.communication a failed send became; not an operator's transition,
+ * which the host marks as it admits it): `trace` is the parent the input's
+ * macrostep will run under, and `mark` may change it, for example to start a
+ * sampled trace for a watched session (TA_TRACE_DETAIL_WATCHED). It is called
+ * inside ta_run() at the point where an input is taken: it must not call a
+ * function that changes the system, and it must be quick.
  */
 typedef struct ta_input_watch_vtable {
     void (*mark)(void *self, ta_actor_id actor, TA_INOUT ta_trace_parent *trace);
@@ -2806,7 +2805,9 @@ typedef struct {
      * LOAD_NEEDED: the address whose waiting list began, borrowed until the
      * next ta_run(), ta_actor_publish(), ta_actor_load(), ta_actor_spawn() or
      * ta_address_load_failed(), whichever comes first. Retain it
-     * (ta_address_retain()) to keep it longer.
+     * (ta_address_retain()) to keep it longer. REFUSED: when the input was
+     * waiting for an address and ta_address_load_failed() refused it, that
+     * address, borrowed until the next ta_run(); null for every other refusal.
      */
     TA_OPTIONAL const ta_address *address;
     /* LOAD_NEEDED: the trace parent of the first input that waits, for the load's own record. */

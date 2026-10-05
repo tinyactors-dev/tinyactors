@@ -388,13 +388,19 @@ ta_actor *ta_mail_resident_at(const ta_system *system, ta_address *address) {
 }
 
 /*
- * ta_mail_unwait takes a WAITING envelope off its address: the reference it
- * held goes back and it is RUNNABLE again, on no list, ready to be pushed on
- * the run queue or recycled. The list it was on has been taken by the caller.
+ * ta_mail_unwait takes a WAITING envelope off its address: it is RUNNABLE
+ * again, on no list, ready to be pushed on the run queue or recycled. The
+ * list it was on has been taken by the caller. The reference to the address
+ * goes back, except for a host input of a list that failed to load
+ * (`refusing`): it keeps the reference, and the REFUSED notice that ta_run
+ * writes for it names the address the host posted to. The reference is given
+ * back with the envelope.
  */
-static void ta_mail_unwait(ta_envelope *envelope) {
-    ta_address_release(envelope->payload.address);
-    envelope->payload.address = NULL;
+static void ta_mail_unwait(ta_envelope *envelope, bool refusing) {
+    if (!refusing || envelope->source != TA_SOURCE_HOST) {
+        ta_address_release(envelope->payload.address);
+        envelope->payload.address = NULL;
+    }
     envelope->state = TA_ENVELOPE_RUNNABLE;
     envelope->flags = (uint16_t)(envelope->flags & (TA_ENVELOPE_WITHDRAWN | TA_ENVELOPE_REPORT | TA_ENVELOPE_REPORT_ENDS));
     envelope->next = 0;
@@ -436,7 +442,7 @@ void ta_mail_address_resident(ta_system *system, const ta_address *address, ta_a
         uint32_t next = ta_ilist_next(link, index); /* read before the push rewrites the link */
         ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
         bool withdrawn = (envelope->flags & TA_ENVELOPE_WITHDRAWN) != 0;
-        ta_mail_unwait(envelope);
+        ta_mail_unwait(envelope, false);
         if (withdrawn) {
             ta_envelope_release(&system->envelopes, index);
         } else if (actor == NULL) {
@@ -489,7 +495,7 @@ ta_result ta_address_load_failed(ta_system *system, const ta_address_load_failed
     const ta_ilink *link = ta_envelopes_link(&system->envelopes);
     while (index != 0) {
         uint32_t next = ta_ilist_next(link, index);
-        ta_mail_unwait(ta_envelope_at(&system->envelopes, index));
+        ta_mail_unwait(ta_envelope_at(&system->envelopes, index), true);
         ta_mail_recycle(system, index, params->reason);
         index = next;
     }

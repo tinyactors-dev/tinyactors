@@ -203,7 +203,8 @@ void ta_envelope_release(ta_envelopes *envelopes, uint32_t index) {
         return;
     }
     ta_event_release(&envelope->event);
-    if (envelope->state == TA_ENVELOPE_WAITING) {
+    if (envelope->payload.address != NULL) {
+        /* A waiting envelope's reference, or the one a refused host input keeps for its notice. */
         ta_address_release(envelope->payload.address);
     }
     *envelope = (ta_envelope){0}; /* state FREE; the free link is written by give */

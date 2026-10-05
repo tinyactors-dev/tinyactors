@@ -575,8 +575,8 @@ static ta_result ta_run_take(ta_system *system, uint32_t index, const ta_run_tak
         return result;
     }
     actor->queued -= 1u;
-    if ((envelope->source == TA_SOURCE_MAIL || envelope->source == TA_SOURCE_ERROR) && system->input_watch.v != NULL) {
-        /* The host never saw this input, so it marks its trace parent here (tinyactors.h, ta_input_watch). */
+    if (envelope->source != TA_SOURCE_TRANSITION && system->input_watch.v != NULL) {
+        /* The watcher marks the trace parent of every input that is taken (tinyactors.h, ta_input_watch). */
         system->input_watch.v->mark(system->input_watch.self, actor->record.id, &envelope->trace);
     }
     ta_run_install(actor, envelope, NULL);
@@ -781,7 +781,8 @@ static bool ta_run_report_cues(ta_system *system, ta_run_notices *out) {
                                                  .input = envelope->input,
                                                  .source = (ta_input_source)envelope->source,
                                                  .reason = (ta_refusal_reason)envelope->flags,
-                                                 .event = &envelope->event });
+                                                 .event = &envelope->event,
+                                                 .address = envelope->payload.address });
         ta_ilist_push_back(&runner->lent, link, index);
     }
     return false;

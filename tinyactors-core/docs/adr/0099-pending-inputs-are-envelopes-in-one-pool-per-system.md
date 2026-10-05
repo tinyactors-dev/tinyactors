@@ -595,9 +595,14 @@ in the kernel's ADRs and napi's ADR 0041). Four additions, all in
   order they will be taken, into the caller's array (no allocation; the cost is
   the run queue up to the capacity-th match). A TAKEN notice carries the
   input's `time`.
-- **Not done in core's commits:** `ta_input_watch.mark` still marks only mail
-  and errors; the kernel marks the host inputs it admits itself until it
-  admits them straight into core.
+- **The input watch and the refusal's address.** `ta_input_watch.mark` is
+  called for every input `ta_run` takes except an operator's transition (host
+  inputs and error reports included), because a host input now waits in core
+  and the host cannot mark it before it is taken. A host input that waited
+  for an address and was refused by `ta_address_load_failed` keeps its
+  reference to the address in `payload.address`, and the REFUSED notice names
+  it (`ta_run_notice.address`), so a host can tell the application which
+  address a dead letter was for.
 - **Tests:** `tests/input_test.c` (withdrawal in every state, the gauge,
   admission and withdrawal inside a macrostep, an abandoned and a runaway
   macrostep, error reports, `ta_actor_pending`, the notice time) and

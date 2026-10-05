@@ -24,6 +24,7 @@
  *      TA_INVOKE_REPORT_ERROR is an input of source ERROR; it never answers
  *      TA_ERR_BUSY, runs in the order of admission, and is applied (and the
  *      invocation retired when it ends it) only when ta_run takes it.
+ *   6. The input watch offers every taken input, host inputs included.
  *   5. Inspection: ta_actor_pending lists a session's waiting inputs in run
  *      order without allocating; a TAKEN notice carries the input's time.
  *
@@ -380,6 +381,12 @@ static void test_withdraw_a_waiting_input(void) {
     CHECK(run(&w, false, &r) == TA_OK);
     CHECK(count_token(&r, TA_NOTICE_INPUT_REFUSED, second) == 1u);
     CHECK(count_token(&r, TA_NOTICE_INPUT_REFUSED, first) == 0u);
+    for (uint32_t index = 0; index < r.count; index += 1u) {
+        if (r.notices[index].kind == TA_NOTICE_INPUT_REFUSED) {
+            CHECK(r.notices[index].address == address); /* the refusal names the address the input waited for */
+            CHECK(r.notices[index].reason == TA_REFUSED_LOAD_NOT_FOUND);
+        }
+    }
     CHECK(gauge(&w) == 0u);
     settle(&w);
     quiescent(&w);
@@ -409,6 +416,26 @@ static void test_withdraw_a_whole_waiting_list(void) {
     settle(&w);
     quiescent(&w);
     ta_address_release(address);
+    world_close(&w);
+}
+
+/* A refused input that did not wait for an address names none. */
+static void test_refusal_without_an_address(void) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_actor_id doomed = spawn(&w, w.chain);
+    settle(&w);
+    uint64_t token = 0;
+    CHECK(post(&w, doomed, w.e1, &token) == TA_OK);
+    CHECK(ta_actor_destroy(w.system, doomed) == TA_OK);
+    report r;
+    CHECK(run(&w, false, &r) == TA_OK);
+    CHECK(count_token(&r, TA_NOTICE_INPUT_REFUSED, token) == 1u);
+    for (uint32_t index = 0; index < r.count; index += 1u) {
+        CHECK(r.notices[index].kind != TA_NOTICE_INPUT_REFUSED || r.notices[index].address == NULL);
+    }
+    settle(&w);
+    quiescent(&w);
     world_close(&w);
 }
 
@@ -1089,6 +1116,42 @@ static void test_taken_notice_carries_the_input_time(void) {
     world_close(&w);
 }
 
+/* ------------------------------------------------------------------------
+ * 6. The input watch
+ */
+
+typedef struct {
+    uint32_t marks;
+    ta_actor_id last;
+} watch_record;
+
+static void watch_mark(void *self, ta_actor_id actor, ta_trace_parent *trace) {
+    watch_record *record = self;
+    (void)trace;
+    record->marks += 1u;
+    record->last = actor;
+}
+
+static const ta_input_watch_vtable watch_vtable = { .mark = watch_mark };
+
+/* Core offers every taken input to the watch: host inputs as well as mail. */
+static void test_watch_marks_host_inputs(void) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_actor_id actor = spawn(&w, w.chain);
+    settle(&w);
+    watch_record record = {0};
+    CHECK(ta_system_set_input_watch(w.system, (ta_input_watch){ .self = &record, .v = &watch_vtable }) == TA_OK);
+    uint64_t token = 0;
+    CHECK(post(&w, actor, w.e1, &token) == TA_OK);
+    CHECK(record.marks == 0u); /* admission does not offer it: taking does */
+    settle(&w);
+    CHECK(record.marks == 1u && record.last == actor);
+    CHECK(ta_system_set_input_watch(w.system, (ta_input_watch){0}) == TA_OK);
+    quiescent(&w);
+    world_close(&w);
+}
+
 int main(void) {
     test_withdraw_a_queued_input();
     test_withdraw_answers_not_found();
@@ -1097,6 +1160,7 @@ int main(void) {
     test_withdraw_a_refused_input();
     test_withdraw_a_waiting_input();
     test_withdraw_a_whole_waiting_list();
+    test_refusal_without_an_address();
     test_gauge_follows_every_end();
     test_post_inside_a_macrostep();
     test_withdraw_inside_a_macrostep();
@@ -1110,6 +1174,7 @@ int main(void) {
     test_pending_lists_in_run_order();
     test_pending_lists_reports_and_not_waiting_inputs();
     test_taken_notice_carries_the_input_time();
+    test_watch_marks_host_inputs();
     if (failures != 0) {
         fprintf(stderr, "input_test: %d checks failed\n", failures);
         return 1;

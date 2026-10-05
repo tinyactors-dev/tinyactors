@@ -18981,7 +18981,8 @@ TA_PRIVATE void ta_envelope_release(ta_envelopes *envelopes, uint32_t index) {
         return;
     }
     ta_event_release(&envelope->event);
-    if (envelope->state == TA_ENVELOPE_WAITING) {
+    if (envelope->payload.address != NULL) {
+        /* A waiting envelope's reference, or the one a refused host input keeps for its notice. */
         ta_address_release(envelope->payload.address);
     }
     *envelope = (ta_envelope){0}; /* state FREE; the free link is written by give */
@@ -19703,8 +19704,8 @@ static ta_result ta_run_take(ta_system *system, uint32_t index, const ta_run_tak
         return result;
     }
     actor->queued -= 1u;
-    if ((envelope->source == TA_SOURCE_MAIL || envelope->source == TA_SOURCE_ERROR) && system->input_watch.v != NULL) {
-        /* The host never saw this input, so it marks its trace parent here (tinyactors.h, ta_input_watch). */
+    if (envelope->source != TA_SOURCE_TRANSITION && system->input_watch.v != NULL) {
+        /* The watcher marks the trace parent of every input that is taken (tinyactors.h, ta_input_watch). */
         system->input_watch.v->mark(system->input_watch.self, actor->record.id, &envelope->trace);
     }
     ta_run_install(actor, envelope, NULL);
@@ -19909,7 +19910,8 @@ static bool ta_run_report_cues(ta_system *system, ta_run_notices *out) {
                                                  .input = envelope->input,
                                                  .source = (ta_input_source)envelope->source,
                                                  .reason = (ta_refusal_reason)envelope->flags,
-                                                 .event = &envelope->event });
+                                                 .event = &envelope->event,
+                                                 .address = envelope->payload.address });
         ta_ilist_push_back(&runner->lent, link, index);
     }
     return false;
@@ -32672,13 +32674,19 @@ TA_PRIVATE ta_actor *ta_mail_resident_at(const ta_system *system, ta_address *ad
 }
 
 /*
- * ta_mail_unwait takes a WAITING envelope off its address: the reference it
- * held goes back and it is RUNNABLE again, on no list, ready to be pushed on
- * the run queue or recycled. The list it was on has been taken by the caller.
+ * ta_mail_unwait takes a WAITING envelope off its address: it is RUNNABLE
+ * again, on no list, ready to be pushed on the run queue or recycled. The
+ * list it was on has been taken by the caller. The reference to the address
+ * goes back, except for a host input of a list that failed to load
+ * (`refusing`): it keeps the reference, and the REFUSED notice that ta_run
+ * writes for it names the address the host posted to. The reference is given
+ * back with the envelope.
  */
-static void ta_mail_unwait(ta_envelope *envelope) {
-    ta_address_release(envelope->payload.address);
-    envelope->payload.address = NULL;
+static void ta_mail_unwait(ta_envelope *envelope, bool refusing) {
+    if (!refusing || envelope->source != TA_SOURCE_HOST) {
+        ta_address_release(envelope->payload.address);
+        envelope->payload.address = NULL;
+    }
     envelope->state = TA_ENVELOPE_RUNNABLE;
     envelope->flags = (uint16_t)(envelope->flags & (TA_ENVELOPE_WITHDRAWN | TA_ENVELOPE_REPORT | TA_ENVELOPE_REPORT_ENDS));
     envelope->next = 0;
@@ -32720,7 +32728,7 @@ TA_PRIVATE void ta_mail_address_resident(ta_system *system, const ta_address *ad
         uint32_t next = ta_ilist_next(link, index); /* read before the push rewrites the link */
         ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
         bool withdrawn = (envelope->flags & TA_ENVELOPE_WITHDRAWN) != 0;
-        ta_mail_unwait(envelope);
+        ta_mail_unwait(envelope, false);
         if (withdrawn) {
             ta_envelope_release(&system->envelopes, index);
         } else if (actor == NULL) {
@@ -32773,7 +32781,7 @@ TA_API ta_result ta_address_load_failed(ta_system *system, const ta_address_load
     const ta_ilink *link = ta_envelopes_link(&system->envelopes);
     while (index != 0) {
         uint32_t next = ta_ilist_next(link, index);
-        ta_mail_unwait(ta_envelope_at(&system->envelopes, index));
+        ta_mail_unwait(ta_envelope_at(&system->envelopes, index), true);
         ta_mail_recycle(system, index, params->reason);
         index = next;
     }
