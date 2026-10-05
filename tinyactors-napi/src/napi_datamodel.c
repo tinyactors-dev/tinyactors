@@ -1507,6 +1507,64 @@ static ta_op_status tna_dm_value_text(void *self, const ta_datamodel_value_text_
     return status;
 }
 
+static void tna_clear_exception(napi_env env);
+
+/*
+ * A value's text for telemetry (core ADR 0098 section 4): its JSON, or, for a
+ * thrown Error, "Error: message" (JSON.stringify gives "{}" for one), cut at
+ * the limit on a character boundary. The text goes to the system's trace
+ * buffer, which stays valid until the next call, as the op promises.
+ * JSON.stringify runs no chart code but a toJSON, and one that calls into
+ * the system meets the reentrancy guard, as in any other op. Failing, or an
+ * exception, gives the record no value text and changes nothing else.
+ */
+static ta_op_status tna_dm_value_trace_text(void *self, const ta_datamodel_value_trace_text_params *params) {
+    tna_js_datamodel *dm = tna_dm_of(self);
+    if (!tna_value_ours(params->value)) {
+        *params->fault = (ta_fault){ .code = TA_ERR_UNSUPPORTED,
+                                     .message = { "javascript: not a JavaScript value", 34 } };
+        return TA_OP_ERROR;
+    }
+    tna_frame frame;
+    if (!tah_begin(&frame, dm, params->instance, params->host, params->fault)) {
+        return TA_OP_ERROR;
+    }
+    napi_env env = dm->env;
+    char *buffer = dm->wrapper->trace_value;
+    size_t capacity = dm->wrapper->value_bytes < params->limit ? dm->wrapper->value_bytes : params->limit;
+    bool ok = false;
+    napi_value js = NULL;
+    napi_value text = NULL;
+    napi_valuetype type = napi_undefined;
+    bool error = false;
+    bool got = tna_value_get(env, params->value, &js);
+    if (got && napi_is_error(env, js, &error) == napi_ok && error) {
+        got = napi_coerce_to_string(env, js, &text) == napi_ok;
+    } else if (got) {
+        napi_value global = NULL;
+        napi_value json = NULL;
+        napi_value stringify = NULL;
+        got = napi_get_global(env, &global) == napi_ok &&
+              napi_get_named_property(env, global, "JSON", &json) == napi_ok &&
+              napi_get_named_property(env, json, "stringify", &stringify) == napi_ok &&
+              napi_call_function(env, json, stringify, 1, &js, &text) == napi_ok;
+    }
+    if (got && napi_typeof(env, text, &type) == napi_ok && type == napi_string) {
+        size_t full = 0;
+        size_t written = 0;
+        if (napi_get_value_string_utf8(env, text, NULL, 0, &full) == napi_ok &&
+            napi_get_value_string_utf8(env, text, buffer, capacity + 1u, &written) == napi_ok) {
+            *params->out = (ta_str){ buffer, (uint32_t)written };
+            *params->cut = written < full;
+            ok = true;
+        }
+    }
+    tna_clear_exception(env);
+    ta_op_status status = ok ? TA_OP_OK : tna_fail(&frame, "javascript: value has no trace text");
+    tah_end(&frame);
+    return status;
+}
+
 static ta_op_status tna_dm_text_value(void *self, const ta_datamodel_text_value_params *params) {
     tna_frame frame;
     if (!tah_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
@@ -1754,6 +1812,7 @@ static const ta_datamodel_vtable tna_dm_vtable = {
     .value_write = tna_dm_value_write,
     .value_read = tna_dm_value_read,
     .copy_out = tna_dm_copy_out,
+    .value_trace_text = tna_dm_value_trace_text,
 };
 
 /* ------------------------------------------------------------------------

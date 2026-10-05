@@ -150,6 +150,33 @@ int main(void) {
     ta_value_release(&first);
     ta_value_release(&second);
 
+    /* A value's trace text (core ADR 0098): its JSON, cut at the limit on a
+     * character boundary, with `cut` set, and kept until the next call. */
+    {
+        static const char whole[] = "{\"a\":\"\xc3\xa9\xe2\x82\xac" "x\",\"b\":[1,2]}"; /* e-acute, euro sign */
+        ta_value traced = {0};
+        require(tat_json_value_parse(&context, whole, &traced) == TA_OK, "trace value");
+        ta_str out = {0};
+        bool cut = true;
+        ta_datamodel_value_trace_text_params call = { .shared = shared, .instance = instance, .value = &traced,
+                                                      .limit = 1000, .out = &out, .cut = &cut, .fault = &fault };
+        require(model.v->value_trace_text(model.self, &call) == TA_OP_OK && !cut && out.len == sizeof whole - 1u &&
+                    memcmp(out.ptr, whole, out.len) == 0,
+                "value_trace_text renders the JSON");
+        call.limit = 10; /* inside the euro sign, which starts at byte 8 */
+        require(model.v->value_trace_text(model.self, &call) == TA_OP_OK && cut && out.len == 8u &&
+                    memcmp(out.ptr, whole, 8u) == 0,
+                "value_trace_text cuts on a character boundary");
+        call.limit = 11; /* exactly after the euro sign */
+        require(model.v->value_trace_text(model.self, &call) == TA_OP_OK && cut && out.len == 11u,
+                "value_trace_text keeps a whole character");
+        ta_value foreign = {0};
+        call.value = &foreign;
+        require(model.v->value_trace_text(model.self, &call) == TA_OP_ERROR && fault.message.len != 0,
+                "value_trace_text refuses a value of another data model");
+        ta_value_release(&traced);
+    }
+
     model.v->destroy_instance(model.self, shared, instance);
     model.v->destroy_definition(model.self, shared, tat_libc_allocator());
     /* A value as bytes (core ADR 0090): its JSON text, durable or not,

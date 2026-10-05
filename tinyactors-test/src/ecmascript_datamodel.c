@@ -27,6 +27,8 @@ struct tat_js_state {
     uint64_t interrupt_budget;
     uint64_t interrupt_count;
     bool trace;
+    /* value_trace_text(): the last text it rendered, a QuickJS C string kept until its next call (core ADR 0098). */
+    const char *trace_text;
 };
 
 /*
@@ -284,6 +286,9 @@ void tat_js_datamodel_context_destroy(tat_js_datamodel_context *context) {
                 JS_FreeCStringRT(state->runtime, value->text);
             }
             JS_FreeValueRT(state->runtime, value->value);
+        }
+        if (state->trace_text != NULL) {
+            JS_FreeCStringRT(state->runtime, state->trace_text);
         }
         JS_FreeValue(state->utility, state->replacer);
         JS_FreeContext(state->utility);
@@ -1233,6 +1238,37 @@ static ta_op_status tat_js_value_text(void *self, const ta_datamodel_value_text_
 }
 
 /*
+ * A value's JSON text for telemetry (core ADR 0098 section 4), cut at `limit`
+ * bytes on a UTF-8 character boundary: the text the RPC codec journals
+ * (tat_js_value_to_json), kept in the state until the next call.
+ */
+static ta_op_status tat_js_value_trace_text(void *self, const ta_datamodel_value_trace_text_params *params) {
+    (void)self;
+    tat_js_value *wrapped = tat_js_unwrap(params->value);
+    tat_js_json json;
+    ta_result result = wrapped == NULL ? TA_ERR_UNSUPPORTED : tat_js_value_to_json(params->value, &json);
+    if (result != TA_OK) {
+        tat_js_fault(params->fault, result, "ecmascript: value has no trace text");
+        return result == TA_ERR_NOMEM ? TA_OP_NOMEM : TA_OP_ERROR;
+    }
+    tat_js_state *state = wrapped->state;
+    if (state->trace_text != NULL) {
+        JS_FreeCStringRT(state->runtime, state->trace_text);
+        state->trace_text = NULL;
+    }
+    if (json.owner != NULL) {
+        state->trace_text = json.ptr; /* the state owns the C string now */
+    }
+    size_t keep = json.len <= params->limit ? json.len : params->limit;
+    while (keep < json.len && keep > 0 && ((unsigned char)json.ptr[keep] & 0xC0u) == 0x80u) {
+        keep -= 1u;
+    }
+    *params->out = (ta_str){.ptr = json.ptr, .len = (uint32_t)keep};
+    *params->cut = keep < json.len;
+    return TA_OP_OK;
+}
+
+/*
  * A value as bytes (core ADR 0090, and ADR 0074's offload). The first byte is
  * the wrapper's `wire` flag. After it:
  * - durable=false (offload): QuickJS's structured serialization
@@ -1576,6 +1612,7 @@ static const ta_datamodel_vtable TAT_JS_DATAMODEL_VTABLE = {
     .make_params = tat_js_make_params,
     .inspect = tat_js_inspect,
     .value_text = tat_js_value_text,
+    .value_trace_text = tat_js_value_trace_text,
     .text_value = tat_js_text_value,
     .import_content = tat_js_import_content,
     .foreach_snapshot = tat_js_foreach_snapshot,

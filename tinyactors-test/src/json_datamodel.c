@@ -26,6 +26,8 @@ typedef struct {
     tat_json_datamodel_context *context;
     const tat_json_shared *shared;
     jv root;
+    /* value_trace_text(): the last text it rendered, kept until its next call (core ADR 0098). */
+    jv trace_text;
 } tat_json_instance;
 
 static void tat_json_retain(void *self);
@@ -482,6 +484,7 @@ static ta_result tat_json_init(void *self, const ta_datamodel_init_instance_para
     tat_json_instance *instance = params->instance;
     instance->context = self;
     instance->shared = params->shared;
+    instance->trace_text = jv_invalid();
     if (params->binding == NULL) {
         instance->root = jv_object();
         return TA_OK;
@@ -497,6 +500,7 @@ static void tat_json_destroy_instance(void *self, void *shared, void *instance) 
     (void)shared;
     tat_json_instance *json = instance;
     jv_free(json->root);
+    jv_free(json->trace_text);
     *json = (tat_json_instance){0};
 }
 
@@ -690,6 +694,37 @@ static ta_op_status tat_json_value_text(void *self, const ta_datamodel_value_tex
     }
     *params->out = (ta_str){.ptr = jv_string_value(wrapped->text),
                             .len = (uint32_t)jv_string_length_bytes(jv_copy(wrapped->text))};
+    return TA_OP_OK;
+}
+
+/*
+ * A value's JSON text for telemetry, cut at `limit` bytes on a UTF-8 character
+ * boundary. The text is kept in the instance until the next call, which is
+ * all core asks of it (ADR 0098 section 4).
+ */
+static ta_op_status tat_json_value_trace_text(void *self, const ta_datamodel_value_trace_text_params *params) {
+    (void)self;
+    tat_json_instance *instance = params->instance;
+    jv value;
+    if (instance == NULL || !tat_json_unwrap(params->value, &value)) {
+        tat_json_fault(params->fault, TA_ERR_INVALID, "value is not a JSON value");
+        return TA_OP_ERROR;
+    }
+    jv_free(instance->trace_text);
+    instance->trace_text = jv_dump_string(value, 0); /* consumes value */
+    if (!jv_is_valid(instance->trace_text)) {
+        instance->trace_text = jv_invalid();
+        tat_json_fault(params->fault, TA_ERR_INVALID, "value has no JSON text");
+        return TA_OP_ERROR;
+    }
+    const char *text = jv_string_value(instance->trace_text);
+    size_t length = (size_t)jv_string_length_bytes(jv_copy(instance->trace_text));
+    size_t keep = length <= params->limit ? length : params->limit;
+    while (keep < length && keep > 0 && ((unsigned char)text[keep] & 0xC0u) == 0x80u) {
+        keep -= 1u; /* do not end in the middle of a character */
+    }
+    *params->out = (ta_str){.ptr = text, .len = (uint32_t)keep};
+    *params->cut = keep < length;
     return TA_OP_OK;
 }
 
@@ -1120,6 +1155,7 @@ static const ta_datamodel_vtable TAT_JSON_DATAMODEL_VTABLE = {
     .make_params = tat_json_make_params,
     .inspect = tat_json_inspect,
     .value_text = tat_json_value_text,
+    .value_trace_text = tat_json_value_trace_text,
     .text_value = tat_json_text_value,
     .import_content = tat_json_import_content,
     .foreach_snapshot = tat_json_foreach_snapshot,

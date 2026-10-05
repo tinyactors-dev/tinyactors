@@ -7186,6 +7186,125 @@
         }
       }
     },
+    "ta_datamodel_value_trace_text_params": {
+      "kind": "struct",
+      "doc": "A value as text for telemetry (ADR 0098 section 4): what a tel.trace record carries for an assigned value, event data or a fault's data. value_trace_text renders `value` in at most `limit` bytes (telemetryValueBytes), cutting at a character boundary where it can and setting `*cut` when it cut. The text is the data model's own memory, valid until the data model's next call of any kind, and core copies it at once; core allocates nothing for it. It is not value_text: that is a coercion (`String(x)`) a chart's expressions rely on; this is a rendering for people and tools, JSON for a data model of JSON values, and it must not run chart code that changes the session (a toJSON that calls back meets the data model's own reentrancy guard). Core calls it only for records its mask enables, and only with a value (never one with a null vtable) and a nonzero limit.\n\nTA_OP_ERROR (with `fault`) means the value has no text, and the record carries none; TA_OP_NOMEM likewise: telemetry never fails a step, so neither changes what the macrostep does. Null means the data model has no trace text: records carry no values.",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "type": "ta_value",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host",
+              "const": true
+            }
+          },
+          "shape": "view",
+          "direction": "in"
+        },
+        {
+          "name": "limit",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "call"
+        },
+        {
+          "name": "cut",
+          "type": {
+            "pointer": {
+              "builtin": "bool"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "TA_OP_ERROR",
+          "lifetime": "call"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "shared": 0,
+            "instance": 8,
+            "value": 16,
+            "host": 24,
+            "limit": 32,
+            "out": 40,
+            "cut": 48,
+            "fault": 56
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 4,
+          "offsets": {
+            "shared": 0,
+            "instance": 4,
+            "value": 8,
+            "host": 12,
+            "limit": 16,
+            "out": 20,
+            "cut": 24,
+            "fault": 28
+          }
+        }
+      }
+    },
     "ta_datamodel_value_write_params": {
       "kind": "struct",
       "doc": "A value as bytes (ADR 0090 section 2, replacing ADR 0074's arena pair). value_write writes one value to `sink` in pieces, by calls to write only; value_read makes a value from `source`, which holds exactly the bytes one value_write wrote, and reads it in pieces. Neither may hold the whole encoding: a data model whose values are trees writes them as it walks them, without recursion (ADR 0060).\n\n`durable` asks for bytes that outlive the process: no handles and no process-local identifiers, so another process running the same data model reads them. A value with no durable form answers TA_OP_ERROR. durable=false is offload's (ADR 0074): the bytes stay in this process and system, and may be a handle to a value the data model keeps alive.\n\nTA_OP_NOMEM means nothing changed (ADR 0070): the data model could not get memory, or the sink refused. TA_OP_ERROR means the value has no byte form of that kind, the sink failed, or the bytes are no value; `fault` says which. Either operation may be null: the data model then has no byte form for any value, and an actor holding one of its values does not offload.",
@@ -8202,11 +8321,52 @@
           "shape": "callback",
           "direction": "in",
           "optional": true
+        },
+        {
+          "name": "value_trace_text",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_op_status"
+                  },
+                  "success": "TA_OP_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "params",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_datamodel_value_trace_text_params",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in",
+          "optional": true
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 200,
+          "size": 208,
           "align": 8,
           "offsets": {
             "name": 0,
@@ -8232,11 +8392,12 @@
             "foreach_bind": 168,
             "value_write": 176,
             "value_read": 184,
-            "copy_out": 192
+            "copy_out": 192,
+            "value_trace_text": 200
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 100,
+          "size": 104,
           "align": 4,
           "offsets": {
             "name": 0,
@@ -8262,7 +8423,8 @@
             "foreach_bind": 84,
             "value_write": 88,
             "value_read": 92,
-            "copy_out": 96
+            "copy_out": 96,
+            "value_trace_text": 100
           }
         }
       }

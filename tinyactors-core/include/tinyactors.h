@@ -916,6 +916,26 @@ typedef struct { void *shared; void *instance; TA_IN const ta_value *snapshot; u
  * runs again (ADR 0070); TA_OP_ERROR is error.execution with `fault`.
  */
 typedef struct { void *shared; void *instance; TA_IN const ta_value *value; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_copy_out_params;
+/*
+ * A value as text for telemetry (ADR 0098 section 4): what a tel.trace
+ * record carries for an assigned value, event data or a fault's data.
+ * value_trace_text renders `value` in at most `limit` bytes (telemetryValueBytes),
+ * cutting at a character boundary where it can and setting `*cut` when it
+ * cut. The text is the data model's own memory, valid until the data
+ * model's next call of any kind, and core copies it at once; core allocates
+ * nothing for it. It is not value_text: that is a coercion (`String(x)`) a
+ * chart's expressions rely on; this is a rendering for people and tools, JSON
+ * for a data model of JSON values, and it must not run chart code that
+ * changes the session (a toJSON that calls back meets the data model's own
+ * reentrancy guard). Core calls it only for records its mask enables, and
+ * only with a value (never one with a null vtable) and a nonzero limit.
+ *
+ * TA_OP_ERROR (with `fault`) means the value has no text, and the record
+ * carries none; TA_OP_NOMEM likewise: telemetry never fails a step, so
+ * neither changes what the macrostep does. Null means the data model has no
+ * trace text: records carry no values.
+ */
+typedef struct { void *shared; void *instance; TA_IN const ta_value *value; const ta_dm_host *host; uint32_t limit; TA_OUT TA_LIFETIME(call) ta_str *out; TA_OUT bool *cut; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_value_trace_text_params;
 typedef struct ta_datamodel_vtable {
     /*
      * The SCXML data-model name this adapter implements, e.g. "null" or
@@ -945,6 +965,7 @@ typedef struct ta_datamodel_vtable {
     TA_OPTIONAL ta_op_status (*value_write)(void *self, TA_IN const ta_datamodel_value_write_params *params);
     TA_OPTIONAL ta_op_status (*value_read)(void *self, TA_IN const ta_datamodel_value_read_params *params);
     TA_OPTIONAL ta_op_status (*copy_out)(void *self, TA_IN const ta_datamodel_copy_out_params *params);
+    TA_OPTIONAL ta_op_status (*value_trace_text)(void *self, TA_IN const ta_datamodel_value_trace_text_params *params);
 } ta_datamodel_vtable TA_VTABLE;
 typedef struct { void *self; const ta_datamodel_vtable *v; } ta_datamodel TA_ADAPTER;
 

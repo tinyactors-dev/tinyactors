@@ -386,6 +386,23 @@ static void test_operations(tat_js_datamodel_context *context) {
               json_is(&params, "{\"a\":3,\"b\":2}"),
           "make_params");
     check(text_is(&s, &values[0], "1") && text_is(&s, &params, "[object Object]"), "value_text is ToString");
+    {
+        /* value_trace_text is the JSON the journal shows, cut at the limit on a character boundary (core ADR 0098). */
+        ta_str out = {0};
+        bool cut = true;
+        ta_datamodel_value_trace_text_params call = { .shared = s.shared, .instance = s.instance, .value = &params,
+                                                      .limit = 100, .out = &out, .cut = &cut, .fault = &fault };
+        check(s.model.v->value_trace_text(s.model.self, &call) == TA_OP_OK && !cut && out.len == 13 &&
+                  memcmp(out.ptr, "{\"a\":3,\"b\":2}", 13) == 0,
+              "value_trace_text renders JSON");
+        call.limit = 6;
+        check(s.model.v->value_trace_text(s.model.self, &call) == TA_OP_OK && cut && out.len == 6 &&
+                  memcmp(out.ptr, "{\"a\":3", 6) == 0,
+              "value_trace_text cuts at the limit");
+        ta_value alien = {.self = &alien, .v = &FOREIGN};
+        call.value = &alien;
+        check(s.model.v->value_trace_text(s.model.self, &call) == TA_OP_ERROR, "value_trace_text rejects a foreign value");
+    }
     ta_value_release(&params);
     for (size_t index = 0; index < 3; index += 1) {
         ta_value_release(&values[index]);
