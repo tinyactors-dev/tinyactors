@@ -119,6 +119,51 @@
 --- fault arithmetic in staticjs is on numbers
 
 # ---------------------------------------------------------------------------
+# COMPARE_NUMERIC: (a, b) => a - b, ascending; b - a, descending
+
+=== sort numbers, ascending
+@shapes COMPARE_NUMERIC(false)
+[3, 1, 2].toSorted((a, b) => a - b)
+--- value
+[1,2,3]
+
+=== sort numbers, descending
+@shapes COMPARE_NUMERIC(true)
+[3, 1, 2].toSorted((a, b) => b - a)
+--- value
+[3,2,1]
+
+=== sort numbers in a block body, ascending
+@shapes COMPARE_NUMERIC(false)
+[2, 1].toSorted((a, b) => { return a - b; })
+--- value
+[1,2]
+
+=== sort numbers in a block body, descending
+@shapes COMPARE_NUMERIC(true)
+[1, 2].toSorted((a, b) => { return b - a; })
+--- value
+[2,1]
+
+=== sort numbers: the parameters' positions decide the direction, not their names
+@shapes COMPARE_NUMERIC(true)
+[1, 3, 2].toSorted((b, a) => a - b)
+--- value
+[3,2,1]
+
+=== sort numbers with the body in parentheses
+@shapes COMPARE_NUMERIC(false)
+[2, 1].toSorted((a, b) => (a - b))
+--- value
+[1,2]
+
+=== sort numbers: a comparator that is never called is tagged all the same
+@shapes COMPARE_NUMERIC(false)
+[].toSorted((p, q) => p - q)
+--- value
+[]
+
+# ---------------------------------------------------------------------------
 # Functions inside functions, and functions in defaults and patterns
 
 === an outer function untagged, the function inside it tagged
@@ -275,6 +320,88 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 [{k: 1}].map(x => y => x.k).map(f => f())
 --- value
 [1]
+
+=== numbers: the first parameter on both sides
+@shapes -
+[3, 1, 2].toSorted((a, b) => a - a)
+--- value
+[3,1,2]
+
+=== numbers: the second parameter on both sides
+@shapes -
+[3, 1, 2].toSorted((a, b) => b - b)
+--- value
+[3,1,2]
+
+=== numbers: an addition, not a subtraction
+@shapes -
+[0, -0, 0].toSorted((a, b) => a + b)
+--- value
+[0,-0,0]
+
+=== numbers: a subtraction of a subtraction
+@shapes -
+[3, 1, 2].toSorted((a, b) => a - b - 0)
+--- value
+[1,2,3]
+
+=== numbers: a subtraction from a negation
+@shapes -
+[1, -1].toSorted((a, b) => -a - b)
+--- value
+[1,-1]
+
+=== numbers: a key on one side only
+@shapes -
+[{k: 1}, {k: 2}].toSorted((a, b) => a.k - b)
+--- fault arithmetic in staticjs is on numbers
+
+=== numbers: a third parameter
+@shapes -
+[3, 1, 2].toSorted((a, b, c) => a - b)
+--- value
+[1,2,3]
+
+=== numbers: a rest parameter
+@shapes -
+[3, 1, 2].toSorted((a, ...b) => a - b)
+--- fault arithmetic in staticjs is on numbers
+
+=== numbers: a rest parameter, never called
+@shapes -
+[1].toSorted((a, ...b) => a - b)
+--- value
+[1]
+
+=== numbers: a parameter with a default
+@shapes -
+[3, 1, 2].toSorted((a = 0, b) => a - b)
+--- value
+[1,2,3]
+
+=== numbers: a captured name on one side
+@shapes - -
+(c => [0, -0, 0].toSorted((a, b) => a - c))(0)
+--- value
+[0,-0,0]
+
+=== numbers: one parameter
+@shapes -
+[3, 1, 2].map(a => a - 1)
+--- value
+[2,0,1]
+
+=== numbers: a const before the return
+@shapes -
+[3, 1, 2].toSorted((a, b) => { const d = a - b; return d; })
+--- value
+[1,2,3]
+
+=== numbers: a comparison, not a subtraction
+@shapes -
+[3, 1, 2].toSorted((a, b) => a > b ? 1 : -1)
+--- value
+[1,2,3]
 
 # ---------------------------------------------------------------------------
 # The fast paths (docs/matcher.md, section 7): toSorted runs a COMPARE_BY_KEY
@@ -435,6 +562,144 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 === sort by a key: a key of an array that is not length reads as undefined, and faults
 @shapes COMPARE_BY_KEY(k, false)
 [[1], [2]].toSorted((a, b) => a.k - b.k)
+--- fault arithmetic in staticjs is on numbers
+
+# toSorted with COMPARE_NUMERIC (docs/matcher.md, 11.6): pairs of numbers in
+# C, anything else in bytecode, which faults on it.
+
+=== sort numbers: equal numbers, and a larger array both ways
+@shapes COMPARE_NUMERIC(false) COMPARE_NUMERIC(true)
+[[3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3].toSorted((a, b) => a - b),
+ [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3].toSorted((a, b) => b - a)]
+--- value
+[[1,1,2,2,2,3,3,3,3,3,4,4,4,5,5,5,6,6,6,7,8,8,9,9,9],[9,9,9,8,8,7,6,6,6,5,5,5,4,4,4,3,3,3,3,3,2,2,2,1,1]]
+
+=== sort numbers: 0 and -0 are equal, and keep their order, ascending
+@shapes COMPARE_NUMERIC(false)
+[0, -0, 0, -0, -1, 1].toSorted((a, b) => a - b)
+--- value
+[-1,0,-0,0,-0,1]
+
+=== sort numbers: -0 and 0 are equal, and keep their order, descending
+@shapes COMPARE_NUMERIC(true)
+[-0, 0, -1, -0, 1, 0].toSorted((a, b) => b - a)
+--- value
+[1,-0,0,-0,0,-1]
+
+=== sort numbers: a single NaN
+@shapes COMPARE_NUMERIC(false)
+[NaN, 2, 1].toSorted((a, b) => a - b)
+--- value
+[NaN,1,2]
+
+=== sort numbers: a NaN difference keeps the pair's order
+@shapes COMPARE_NUMERIC(false)
+[2, NaN].toSorted((a, b) => a - b)
+--- value
+[2,NaN]
+
+=== sort numbers: Infinity, -Infinity, and two Infinities, whose difference is NaN
+@shapes COMPARE_NUMERIC(false) COMPARE_NUMERIC(true)
+[[Infinity, 1, -Infinity, Infinity, -Infinity].toSorted((a, b) => a - b),
+ [Infinity, 1, -Infinity, Infinity, -Infinity].toSorted((a, b) => b - a)]
+--- value
+[[-Infinity,-Infinity,1,Infinity,Infinity],[Infinity,Infinity,1,-Infinity,-Infinity]]
+
+=== sort numbers: fractions, large and small numbers
+@shapes COMPARE_NUMERIC(false)
+[0.3, 1e21, 0.1 + 0.2, -0.5, 0.7 - 0.4, 1 / 1e22 / 1e22, -1e22 * 1e22, 1e22 * 1e22].toSorted((a, b) => a - b)
+--- value
+[-1e+44,-0.5,1.0000000000000001e-44,0.29999999999999993,0.3,0.30000000000000004,1e+21,1e+44]
+
+=== sort numbers: a difference that overflows to Infinity
+@shapes - COMPARE_NUMERIC(false)
+(h => [h, -h, h * 1.7, -h * 1.7].toSorted((a, b) => a - b))(1e22 * 1e22 * 1e22 * 1e22 * 1e22 * 1e22 * 1e22 * 1e22 * 1e22 * 1e22 * 1e22 * 1e22 * 1e22 * 1e22)
+--- value
+[-1.7000000000000003e+308,-1.0000000000000002e+308,1.0000000000000002e+308,1.7000000000000003e+308]
+
+=== sort numbers: undefined elements go last and are never compared
+@shapes COMPARE_NUMERIC(false)
+[undefined, 2, undefined, 1].toSorted((a, b) => a - b)
+--- value
+[1,2,undefined,undefined]
+
+=== sort numbers: undefined among strings is never compared, so nothing faults
+@shapes COMPARE_NUMERIC(true)
+[undefined, "a"].toSorted((a, b) => b - a)
+--- value
+["a",undefined]
+
+=== sort numbers: an empty array, and one element of any kind, never compare
+@shapes COMPARE_NUMERIC(false) COMPARE_NUMERIC(false)
+[[].toSorted((a, b) => a - b), ["a"].toSorted((a, b) => a - b)]
+--- value
+[[],["a"]]
+
+=== sort numbers: the receiver nothing else holds takes the order
+@shapes - COMPARE_NUMERIC(true)
+[1, 2, 3].map(x => x).toSorted((a, b) => b - a)
+--- value
+[3,2,1]
+
+=== sort numbers: the array is not changed
+@shapes - COMPARE_NUMERIC(false)
+(xs => [xs.toSorted((a, b) => a - b), xs])([2, 3, 1])
+--- value
+[[1,2,3],[2,3,1]]
+
+=== sort numbers: a tagged comparator in reduce runs its bytecode
+@shapes COMPARE_NUMERIC(false)
+[1, 2, 3].reduce((a, b) => a - b)
+--- value
+-4
+
+=== sort numbers: a tagged comparator in map runs its bytecode
+@shapes COMPARE_NUMERIC(false)
+[5, 7].map((a, b) => a - b)
+--- value
+[5,6]
+
+=== sort numbers: the comparator called directly
+@shapes COMPARE_NUMERIC(true)
+((a, b) => b - a)(1, 3)
+--- value
+2
+
+# toSorted with COMPARE_NUMERIC: faults, each the bytecode's own
+
+=== sort numbers: two strings fault
+@shapes COMPARE_NUMERIC(false)
+["b", "a"].toSorted((a, b) => a - b)
+--- fault arithmetic in staticjs is on numbers
+
+=== sort numbers: a string among numbers faults, after pairs in C
+@shapes COMPARE_NUMERIC(false)
+[4, 3, 2, 1, 6, 5, 8, "7"].toSorted((a, b) => a - b)
+--- fault arithmetic in staticjs is on numbers
+
+=== sort numbers: a string first faults, descending
+@shapes COMPARE_NUMERIC(true)
+["1", 2, 3].toSorted((a, b) => b - a)
+--- fault arithmetic in staticjs is on numbers
+
+=== sort numbers: null faults
+@shapes COMPARE_NUMERIC(false)
+[1, null].toSorted((a, b) => a - b)
+--- fault arithmetic in staticjs is on numbers
+
+=== sort numbers: a boolean faults
+@shapes COMPARE_NUMERIC(false)
+[true, 1].toSorted((a, b) => a - b)
+--- fault arithmetic in staticjs is on numbers
+
+=== sort numbers: objects and arrays fault
+@shapes COMPARE_NUMERIC(false) COMPARE_NUMERIC(false)
+[[[2], [1]].toSorted((a, b) => a - b), [{}, 1].toSorted((a, b) => a - b)]
+--- fault arithmetic in staticjs is on numbers
+
+=== sort numbers: functions fault
+@shapes - - COMPARE_NUMERIC(false)
+[() => 1, () => 2].toSorted((a, b) => a - b)
 --- fault arithmetic in staticjs is on numbers
 
 # map: values

@@ -43,9 +43,10 @@
  *   eval.call.waterFill                 waterFill(capacity, demand), n ports {3, 30, 300}
  *
  * eval (unit element): eval.array.map, .filter, .reduce, .pipeline,
- * .toSorted, .toSorted.rows, .toSorted.rows.desc ((a, b) => b.kwh - a.kwh),
- * .map.pluck (r => r.kwh), eval.string.join (L); eval.object.spread-reduce
- * (C); eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
+ * .toSorted, .toSorted.desc ((a, b) => b - a), .toSorted.rows,
+ * .toSorted.rows.desc ((a, b) => b.kwh - a.kwh), .map.pluck (r => r.kwh),
+ * eval.string.join (L); eval.object.spread-reduce (C);
+ * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
  * place and quadratic before, eval.object.fromEntries, eval.set.new, .has,
  * .union, .intersection, .difference (Q).
@@ -222,6 +223,7 @@ typedef enum {
     CHECK_SUM_XS,
     CHECK_PIPELINE,
     CHECK_SORTED,
+    CHECK_SORTED_DESC,
     CHECK_JOIN,
     CHECK_OBJECT_N,
     CHECK_SET_N,
@@ -366,6 +368,9 @@ static const bench_case cases[] = {
     { .name = "eval.array.toSorted", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "xs.toSorted((a, b) => a - b)", .globals = { { "xs", FIX_XS, NULL } },
       .expect = "[0,0.5,1,1.5,2,2.5,3,3.5,4,4.5]", .check = CHECK_SORTED },
+    { .name = "eval.array.toSorted.desc", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "xs.toSorted((a, b) => b - a)", .globals = { { "xs", FIX_XS, NULL } },
+      .expect = "[4.5,4,3.5,3,2.5,2,1.5,1,0.5,0]", .check = CHECK_SORTED_DESC },
     { .name = "eval.array.toSorted.rows", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.toSorted((a, b) => a.kwh - b.kwh)", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = ROWS_VALUE, .check = CHECK_ARRAY_N },
@@ -937,6 +942,12 @@ static bool check_value(bench_run *run, sjs_value value) {
         if (!expect_shape(run, value, (bench_shape){ SJS_ARRAY, n })) return false;
         for (uint32_t i = 0; i < n; i++) {
             if (sjs_array_at(value, i).as.number != i * 0.5) return fail(run, "toSorted: not in order");
+        }
+        return true;
+    case CHECK_SORTED_DESC:
+        if (!expect_shape(run, value, (bench_shape){ SJS_ARRAY, n })) return false;
+        for (uint32_t i = 0; i < n; i++) {
+            if (sjs_array_at(value, i).as.number != (n - 1u - i) * 0.5) return fail(run, "toSorted: not in order");
         }
         return true;
     case CHECK_JOIN:

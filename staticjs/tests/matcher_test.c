@@ -187,6 +187,8 @@ static void test_reports(void) {
     expect_reports("(row) => { return row.name; }", SJS_GOAL_EXPRESSION, "PLUCK#1@0(name)");
     expect_reports("(a, b) => a.score - b.score", SJS_GOAL_EXPRESSION, "COMPARE_BY_KEY#1@0(score, false)");
     expect_reports("(a, b) => { return b.score - a.score; }", SJS_GOAL_EXPRESSION, "COMPARE_BY_KEY#1@0(score, true)");
+    expect_reports("(a, b) => a - b", SJS_GOAL_EXPRESSION, "COMPARE_NUMERIC#1@0(false)");
+    expect_reports("(a, b) => { return b - a; }", SJS_GOAL_EXPRESSION, "COMPARE_NUMERIC#1@0(true)");
     /* An arrow's node and start in a call: the call is node 3, the arrow 4. */
     expect_reports("[].map(x => x.k)", SJS_GOAL_EXPRESSION, "PLUCK#4@7(k)");
     expect_reports("[].map(xs => xs.map(x => x.k))", SJS_GOAL_EXPRESSION, "PLUCK#9@20(k)");
@@ -198,6 +200,9 @@ static void test_reports(void) {
     /* Near misses report nothing. */
     expect_reports("y => [x => y.k]", SJS_GOAL_EXPRESSION, "");
     expect_reports("(a, b) => a.k - b.j", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, b) => a - a", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, b) => a.k - b", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, ...b) => a - b", SJS_GOAL_EXPRESSION, "");
     expect_reports("x => { const y = x; return y.k; }", SJS_GOAL_EXPRESSION, "");
     expect_reports("x => x?.k", SJS_GOAL_EXPRESSION, "");
 }

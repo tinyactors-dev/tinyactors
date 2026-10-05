@@ -1393,8 +1393,9 @@ static void test_no_shapes(void) {
     CHECK(by_default.allocations == with.allocations);
 }
 
-/* The shapes' C paths (docs/matcher.md, section 7): toSorted with a
- * COMPARE_BY_KEY comparator and map with a PLUCK callback. A run of one
+/* The shapes' C paths (docs/matcher.md, sections 7 and 11): toSorted with
+ * a COMPARE_BY_KEY or a COMPARE_NUMERIC comparator, and map with a PLUCK
+ * callback. A run of one
  * source, with shapes or without, whole and then one unit of fuel at a time:
  * its value or its fault ("fault LINE:COLUMN message"), the fuel it used and
  * how often it paused. */
@@ -1475,11 +1476,21 @@ static void test_shape_paths(void) {
     CHECK(strcmp(on.out, "[3,1,undefined,0]") == 0 && strcmp(off.out, on.out) == 0);
     CHECK(off.fuel == 34 && on.fuel == 26 && off.fuel - on.fuel == 4 * (4 - 2));
     CHECK(off.pauses == 33 && on.pauses == 33 - 4 * 3);
+    /* Five comparisons of numbers: 5 units each in bytecode (the step,
+     * TAKE_LOCAL, TAKE_LOCAL, BINARY, RETURN), 1 in C (the step). */
+    const char *numbers = "[3, 1, 2, 0].toSorted((a, b) => a - b)";
+    on = run_shaped((shaped_source){ numbers, false, SJS_LIMITS_DEFAULT });
+    off = run_shaped((shaped_source){ numbers, true, SJS_LIMITS_DEFAULT });
+    CHECK(strcmp(on.out, "[0,1,2,3]") == 0 && strcmp(off.out, on.out) == 0);
+    CHECK(off.fuel == 40 && on.fuel == 20 && off.fuel - on.fuel == 5 * (5 - 1));
+    CHECK(off.pauses == 39 && on.pauses == 39 - 5 * 4);
     /* A fault after C steps: where the bytecode faults, for less fuel. */
     expect_same_both_ways("[{k: 2}, {k: 1}, {k: 4},\n {j: 3}].toSorted((a, b) =>\n a.k - b.k)", SJS_LIMITS_DEFAULT,
                           "fault 3:6 arithmetic in staticjs is on numbers");
     expect_same_both_ways("[{k: 2}, {k: 1}, null].map(x =>\n x.k)", SJS_LIMITS_DEFAULT,
                           "fault 2:4 cannot read a property of null");
+    expect_same_both_ways("[4, 3, 2, 1,\n \"0\"].toSorted((a, b) =>\n a - b)", SJS_LIMITS_DEFAULT,
+                          "fault 3:4 arithmetic in staticjs is on numbers");
 
     /* max_stack: a C step succeeds only where the bytecode has room for
      * what it pushes. The comparator's frame sits on the loop's five slots
@@ -1497,6 +1508,19 @@ static void test_shape_paths(void) {
     for (uint32_t max_stack = 6; max_stack <= 10; max_stack++) {
         limits.max_stack = max_stack;
         expect_same_both_ways("[{k: 2}, {k: 1}].toSorted((a, b) => a.k - b.k)", limits, sort_stack[max_stack - 6]);
+    }
+    /* A numeric comparator pushes a and b: the eighth and the ninth value
+     * again. */
+    static const char *const numbers_stack[] = {
+        "fault 1:16 the evaluation needs more than max_stack values",
+        "fault 1:27 the evaluation needs more than max_stack values",
+        "fault 1:31 the evaluation needs more than max_stack values",
+        "[1,2]",
+        "[1,2]",
+    };
+    for (uint32_t max_stack = 6; max_stack <= 10; max_stack++) {
+        limits.max_stack = max_stack;
+        expect_same_both_ways("[2, 1].toSorted((a, b) => a - b)", limits, numbers_stack[max_stack - 6]);
     }
     /* A pluck's frame has one slot, and x.k is the seventh value. */
     static const char *const map_stack[] = {
@@ -1517,6 +1541,8 @@ static void test_shape_paths(void) {
         expect_same_both_ways("[{k: 2}, {k: 1}].toSorted((a, b) => a.k - b.k)", limits,
                               max_frames < 3 ? "fault 1:26 the evaluation needs more than max_frames frames"
                                              : "[{\"k\":1},{\"k\":2}]");
+        expect_same_both_ways("[2, 1].toSorted((a, b) => a - b)", limits,
+                              max_frames < 3 ? "fault 1:16 the evaluation needs more than max_frames frames" : "[1,2]");
         expect_same_both_ways("[{k: 2}, {k: 1}].map(x => x.k)", limits,
                               max_frames < 3 ? "fault 1:21 the evaluation needs more than max_frames frames" : "[2,1]");
     }
