@@ -201,6 +201,54 @@ static void test_values(void) {
     CHECK(c.live == 0);
 }
 
+/* Keys put through the API are interned per context: objects with the same
+ * key share one string, which leaves the table when the last object holding
+ * it goes, and a key put again after that is made anew. */
+static void test_interned_keys(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    enum { KEYS = 300, OBJECTS = 7 };
+    sjs_value objects[OBJECTS];
+    char name[8];
+    for (int o = 0; o < OBJECTS; o++) {
+        CHECK(sjs_object_new(context, 0, &objects[o]) == SJS_OK);
+        /* Each object holds a different part of the keys, so that releasing
+         * them frees the strings in an order the table did not put them in. */
+        for (int k = o; k < KEYS; k += o + 1) {
+            int n = snprintf(name, sizeof name, "k%d", k);
+            sjs_property p = { (sjs_str){ name, (uint32_t)n }, sjs_number(k) };
+            CHECK(sjs_object_put(context, &objects[o], &p) == SJS_OK);
+        }
+    }
+    sjs_property a, b;
+    CHECK(sjs_object_at(objects[0], 5, &a) == SJS_OK && sjs_object_at(objects[1], 2, &b) == SJS_OK);
+    CHECK(a.key.length == 2 && memcmp(a.key.ptr, "k5", 2) == 0 && a.key.ptr == b.key.ptr);
+    int order[OBJECTS] = { 3, 0, 5, 1, 6, 2, 4 };
+    for (int i = 0; i < OBJECTS; i++) {
+        sjs_release(context, objects[order[i]]);
+        objects[order[i]] = sjs_undefined();
+        /* What the others hold is still found, and still shared. */
+        for (int o = 0; o < OBJECTS; o++) {
+            if (objects[o].kind != SJS_OBJECT) continue;
+            for (int k = o; k < KEYS; k += o + 1) {
+                int n = snprintf(name, sizeof name, "k%d", k);
+                sjs_value got;
+                CHECK(sjs_object_get(objects[o], (sjs_str){ name, (uint32_t)n }, &got) == SJS_OK && got.as.number == k);
+            }
+        }
+        sjs_value probe;
+        CHECK(sjs_object_new(context, 0, &probe) == SJS_OK);
+        sjs_property p = { SJS_STR("k0"), sjs_null() };
+        CHECK(sjs_object_put(context, &probe, &p) == SJS_OK);
+        CHECK(sjs_object_at(probe, 0, &a) == SJS_OK);
+        if (objects[0].kind == SJS_OBJECT) CHECK(sjs_object_at(objects[0], 0, &b) == SJS_OK && a.key.ptr == b.key.ptr);
+        sjs_release(context, probe);
+    }
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
 /* SCXML's In(): a native that answers from the embedder's state. */
 static sjs_result in_state(void *self, sjs_native_call *call) {
     const char *active = self;
@@ -1053,6 +1101,7 @@ static void test_out_of_memory(const char *source, sjs_goal goal) {
 int main(int argc, char **argv) {
     bool full = argc > 1 && strcmp(argv[1], "--full") == 0;
     test_values();
+    test_interned_keys();
     test_natives_and_globals();
     test_unbound_where_it_never_runs();
     test_modules();

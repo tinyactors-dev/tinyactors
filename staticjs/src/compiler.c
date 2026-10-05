@@ -487,7 +487,7 @@ static sjs_result string_constant(sjs_compiler *c, const sjs_event *e, uint32_t 
     sjs_position at = e->at;
     if (index_find(&c->string_index, text, index)) return SJS_OK;
     sjs_string *s;
-    sjs_result r = sjs_string_make(c->context, text, &s);
+    sjs_result r = sjs_string_intern(c->context, text, &s);
     if (r == SJS_OK) {
         /* A key constant knows its prototype names and methods from now. */
         s->h.flags |= SJS_STRING_NAMED;
