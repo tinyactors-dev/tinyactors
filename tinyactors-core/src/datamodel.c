@@ -8,7 +8,7 @@
 #include "text_writer.h"
 #include "../include/tinyactors.h"
 #include "atom.h"
-#include "event_name.h"
+#include "trie.h"
 #include "io.h"
 
 bool ta_dm_host_in_state(const ta_dm_host *host, ta_state_id state) {
@@ -79,8 +79,8 @@ static bool ta_dm_write_field(const void *context, ta_text_writer *writer) {
         ta_send_id_write(system, event->send_id, writer);
         return true;
     }
-    ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_event_name_segments(&system->event_names, event->name, segments);
+    ta_atom segments[TA_TRIE_MAX_DEPTH];
+    uint32_t count = ta_trie_path(&system->event_names, event->name, segments);
     for (uint32_t index = 0; index < count; index += 1) {
         if (index != 0) {
             ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });

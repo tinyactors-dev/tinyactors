@@ -32,7 +32,7 @@ Definition-local compact state identity. Human state names/IDs are definition me
 
 ## Event name
 
-Structured token path managed by `event_name.h`, distinct from ordinary atoms.
+Structured token path managed by `trie.h`, distinct from ordinary atoms.
 
 ## Invocation/send/timer IDs
 

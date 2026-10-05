@@ -7,7 +7,7 @@
 #include "span.h"
 #include "arena.h"
 #include "atom.h"
-#include "event_name.h"
+#include "trie.h"
 
 void ta_definition_destroy(ta_definition *definition) {
     if (definition == NULL) {
@@ -115,8 +115,8 @@ static bool ta_pattern_match_run(const ta_pattern_match *match) {
 bool ta_event_pattern_matches(const ta_definition *definition,
                               const ta_event_pattern *pattern,
                               ta_event_name_id event) {
-    ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_event_name_segments(&definition->system->event_names, event, segments);
+    ta_atom segments[TA_TRIE_MAX_DEPTH];
+    uint32_t count = ta_trie_path(&definition->system->event_names, event, segments);
     if (count == 0) {
         return false;
     }

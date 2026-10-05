@@ -6,8 +6,8 @@
  * `ta_atom_table` interns ordinary strings, such as definition, state and
  * type names, and gives each distinct text one `ta_atom`: a compact,
  * process-local index into the table. Atoms and structured event names
- * are distinct: an event name is a path of atom segments linked through
- * the event-name table.
+ * are distinct: an event name is a path of atom segments in the trie of
+ * atoms (`trie.h`).
  *
  * ## Contract and invariants
  *
@@ -60,8 +60,8 @@
  *
  * ## Users
  *
- * The system's names and types, the event-name table and the name
- * resolver, the builder and compiled definitions, the interpreter and
+ * The system's names and types, the trie of atoms behind event names
+ * and the name resolver, the builder and compiled definitions, the interpreter and
  * invocations, the data model, SCXML URIs and the session image.
  */
 #pragma once

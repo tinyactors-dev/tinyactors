@@ -19,7 +19,7 @@ are private and hold layouts and internal functions.
 | `index_pool.h` | fixed-size items addressed by `u32` index in pages that never move: take, give, refill up to a ceiling, trim |
 | `table.h` | open-addressing hash table of `u32` values, keys hashed and compared by the owner; fixed, or growing only on an explicit reserve |
 | `atom.h` | ordinary string interning, on a `table.h` hash table |
-| `event_name.h` | structured dot-token event-name interning/matching |
+| `trie.h` | trie of atoms: paths of atoms interned as nodes keyed by (parent, segment), on a `table.h` hash table; event names are one user |
 | `value.h` | host value ownership helpers |
 | `event.h` | event envelope and queued-event ownership |
 | `fault.h` | plugin fault -> SCXML error event mapping |

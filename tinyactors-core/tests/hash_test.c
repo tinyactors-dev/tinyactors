@@ -160,9 +160,9 @@ static void test_derived_values(void) {
     ta_actor_address address = { .family = { .name = S("orders") }, .name = S("o-17") };
     CHECK(ta_address_hash(&address) == 0x96e2dfd2u);
 
-    /* The event-name table: (parent, segment) from a seeded basis. */
-    CHECK(ta_event_name_hash(0, 0) == 0xed6e77fcu);
-    CHECK(ta_event_name_hash(3, 7) == 0xd45cdbe8u);
+    /* The trie of atoms behind event names: (parent, segment) from a seeded basis. */
+    CHECK(ta_trie_hash(0, 0) == 0xed6e77fcu);
+    CHECK(ta_trie_hash(3, 7) == 0xd45cdbe8u);
 
     /* The atom table: FNV-1a 32 of the text, kept in the entry. */
     ta_atom_table atoms;

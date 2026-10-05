@@ -12,7 +12,7 @@
 #include "address.h"
 #include "io_origin.h"
 #include "session.h"
-#include "event_name.h"
+#include "trie.h"
 #include "clock.h"
 #include "timer.h"
 #include "datamodel.h"
@@ -232,6 +232,23 @@ bool ta_system_quota_actor(ta_system *system) {
     return true;
 }
 
+/* Makes the event-name trie, `depth` segments deep, and adds the built-in
+ * names in the order of the TA_EVENT_NAME_* constants. */
+static ta_result ta_system_event_names_init(ta_system *system, ta_allocator allocator, uint32_t depth) {
+    static const char *const builtins[] = {
+        "error", "error.execution", "error.communication", "error.platform",
+        "done", "done.state", "done.invoke",
+    };
+    ta_result result = ta_trie_init(&system->event_names, &(ta_trie_params){ .allocator = allocator,
+                                                                              .atoms = &system->atoms,
+                                                                              .max_depth = depth });
+    for (uint32_t index = 0; result == TA_OK && index < TA_ARRAY_COUNT(builtins); index += 1) {
+        ta_event_name_id name = 0;
+        result = ta_trie_intern_dotted(&system->event_names, ta_str_from_cstr(builtins[index]), &name);
+    }
+    return result;
+}
+
 ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     if (config == NULL || out == NULL || config->allocator.v == NULL ||
         config->allocator.v->alloc == NULL || config->allocator.v->free == NULL) {
@@ -274,9 +291,8 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
                     &(ta_allocator_free_params){ .size = sizeof(ta_system), .alignment = _Alignof(ta_system) });
         return result;
     }
-    result = ta_event_name_table_init(&system->event_names, config->allocator, &system->atoms);
+    result = ta_system_event_names_init(system, config->allocator, params[TA_PARAM_EVENT_NAME_DEPTH]);
     if (result == TA_OK) {
-        system->event_names.max_depth = params[TA_PARAM_EVENT_NAME_DEPTH];
         result = ta_timer_heap_init(&system->timers, config->allocator);
     }
     if (result == TA_OK) {
@@ -341,7 +357,7 @@ void ta_system_destroy(ta_system *system) {
     ta_session_table_destroy(&system->sessions);
     /* Last: everything above gave its addresses back. */
     ta_address_table_destroy(&system->addresses);
-    ta_event_name_table_destroy(&system->event_names);
+    ta_trie_destroy(&system->event_names);
     ta_atom_table_destroy(&system->atoms);
     ta_allocator allocator = system->allocator;
     ta_mem_free(allocator, system,
@@ -859,20 +875,20 @@ ta_result ta_event_name_intern(ta_system *system, const ta_atom_list *segments, 
     if (system == NULL || out == NULL) {
         return TA_ERR_INVALID;
     }
-    return ta_event_name_intern_atoms_internal(&system->event_names, segments, out);
+    return ta_trie_intern_path(&system->event_names, segments, out);
 }
 
 bool ta_event_name_matches(const ta_system *system, ta_event_name_id event, ta_event_name_id prefix) {
-    return system != NULL && ta_event_name_matches_internal(&system->event_names, event, prefix);
+    return system != NULL && ta_trie_has_prefix(&system->event_names, event, prefix);
 }
 
 ta_result ta_event_name_format(const ta_system *system, const ta_event_name_format_params *params) {
     if (system == NULL || params == NULL || params->needed == NULL ||
-        !ta_event_name_valid(&system->event_names, params->name)) {
+        !ta_trie_valid(&system->event_names, params->name)) {
         return TA_ERR_INVALID;
     }
-    ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_event_name_segments(&system->event_names, params->name, segments);
+    ta_atom segments[TA_TRIE_MAX_DEPTH];
+    uint32_t count = ta_trie_path(&system->event_names, params->name, segments);
     uint32_t length = 0;
     for (uint32_t index = 0; index < count; index += 1) {
         length += ta_atom_text(&system->atoms, segments[index]).len + (index == 0 ? 0u : 1u);

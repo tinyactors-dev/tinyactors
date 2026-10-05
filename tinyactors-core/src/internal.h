@@ -27,7 +27,7 @@
 #include "address.h"
 #include "io_origin.h"
 #include "session.h"
-#include "event_name.h"
+#include "trie.h"
 #include "event.h"
 #include "trace.h"
 #include "fault.h"

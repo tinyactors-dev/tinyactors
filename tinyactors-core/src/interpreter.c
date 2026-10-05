@@ -9,7 +9,7 @@
 #include "text_writer.h"
 #include "atom.h"
 #include "session.h"
-#include "event_name.h"
+#include "trie.h"
 #include "trace.h"
 #include "routing.h"
 #include "configuration.h"
@@ -421,11 +421,11 @@ static void ta_trace_fault(ta_trace_record *record, const ta_fault *fault) {
 
 /* Counts one error event by its kind (ADR 0072); other events count nothing. */
 static void ta_count_error(ta_system *system, const ta_actor *actor, ta_event_name_id name) {
-    if (ta_event_name_matches_internal(&system->event_names, name, TA_EVENT_NAME_ERROR_EXECUTION)) {
+    if (ta_trie_has_prefix(&system->event_names, name, TA_EVENT_NAME_ERROR_EXECUTION)) {
         TA_COUNT(system, actor->definition, errors_execution);
-    } else if (ta_event_name_matches_internal(&system->event_names, name, TA_EVENT_NAME_ERROR_COMMUNICATION)) {
+    } else if (ta_trie_has_prefix(&system->event_names, name, TA_EVENT_NAME_ERROR_COMMUNICATION)) {
         TA_COUNT(system, actor->definition, errors_communication);
-    } else if (ta_event_name_matches_internal(&system->event_names, name, TA_EVENT_NAME_ERROR_PLATFORM)) {
+    } else if (ta_trie_has_prefix(&system->event_names, name, TA_EVENT_NAME_ERROR_PLATFORM)) {
         TA_COUNT(system, actor->definition, errors_platform);
     }
 }
@@ -1871,8 +1871,8 @@ static ta_result ta_send_event_name(ta_interpreter *it, const ta_send_action *se
                                                      }));
     if (result == TA_OK) {
         result = ta_core_fault(fault, &(ta_core_fault_params){
-                                          .result = ta_core_result(ta_event_name_intern_dotted(&it->system->event_names,
-                                                                                               text, out)),
+                                          .result = ta_core_result(ta_trie_intern_dotted(&it->system->event_names,
+                                                                                         text, out)),
                                           .code = TA_ERR_INVALID,
                                           .message = "the <send> eventexpr is not a dotted event name" });
     }

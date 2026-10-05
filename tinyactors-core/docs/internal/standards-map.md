@@ -9,7 +9,7 @@ Tinyactors intentionally separates SCXML semantics from SCXML XML syntax.
 | parallel states | `configuration`, `interpreter` |
 | final states | `interpreter`, structured `done.state.*` events |
 | shallow/deep history | `history`, `interpreter` |
-| event descriptors | `event_name`, transition patterns |
+| event descriptors | `trie`, transition patterns |
 | transition conditions | `datamodel`, `interpreter` |
 | transition conflict/priority | `interpreter` |
 | onentry/onexit/executable content | compiled action IR + `interpreter` |
@@ -20,7 +20,7 @@ Tinyactors intentionally separates SCXML semantics from SCXML XML syntax.
 | SCXML Event I/O Processor / special targets | built-in `io`, `datamodel` target decoding, `routing` |
 | cancel | `timer` ownership index |
 | invoke/autoforward/finalize | `invoke`, `interpreter` |
-| `done.invoke.*` | `invoke`, `event_name`, `routing` |
+| `done.invoke.*` | `invoke`, `trie`, `routing` |
 | `error.execution` | `fault`, `interpreter` |
 | `error.communication` | `fault`, `io`, `invoke` |
 | platform errors | `fault`, structured `error.platform.*` |

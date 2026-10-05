@@ -16,7 +16,7 @@ The current umbrella order is:
 
 ```text
 memory/str/vec/bitset/span/text_writer/hash/handle
-      -> arena/atom -> event_name/value/event/fault/routing/clock
+      -> arena/table/atom -> trie/value/event/fault/routing/clock
       -> configuration/history/continuation/timer
       -> datamodel/io/invoke
       -> definition/builder/actor/session_image/store/system/interpreter

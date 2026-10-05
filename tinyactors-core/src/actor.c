@@ -10,7 +10,7 @@
 #include "vec.h"
 #include "atom.h"
 #include "session.h"
-#include "event_name.h"
+#include "trie.h"
 #include "trace.h"
 #include "routing.h"
 #include "clock.h"
@@ -540,7 +540,7 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
     const ta_definition *definition = actor->definition;
     for (uint32_t index = 0; index < count; index += 1) {
         const ta_delayed_send_info *info = &params->pending_sends[index];
-        if (!ta_event_name_valid(&system->event_names, info->event) ||
+        if (!ta_trie_valid(&system->event_names, info->event) ||
             (info->has_content && info->content >= definition->content_count) ||
             (info->has_target_text && info->target_text >= definition->content_count) ||
             (info->destination.kind == TA_ACTOR_REF_RUNTIME &&
@@ -802,7 +802,7 @@ static ta_result ta_actor_state_check(const ta_system *system, const ta_definiti
         if (info->submitted) {
             continue;
         }
-        if (!ta_event_name_valid(&system->event_names, info->event) || !ta_atom_valid(&system->atoms, info->io_type) ||
+        if (!ta_trie_valid(&system->event_names, info->event) || !ta_atom_valid(&system->atoms, info->io_type) ||
             (info->has_content && info->content >= definition->content_count) ||
             (info->has_target_text && info->target_text >= definition->content_count)) {
             return TA_ERR_INVALID;
@@ -1298,7 +1298,7 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
         return TA_ERR_NOT_FOUND;
     }
     const ta_operator_transition *transition = params->transition;
-    if (!ta_event_name_valid(&system->event_names, event->name) || event->name == TA_EVENT_NAME_ROOT ||
+    if (!ta_trie_valid(&system->event_names, event->name) || event->name == TA_TRIE_ROOT ||
         (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition)) ||
         !ta_actor_input_time_valid(system, actor, params->time)) {
         return TA_ERR_INVALID;

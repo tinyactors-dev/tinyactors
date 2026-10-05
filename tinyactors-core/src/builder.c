@@ -11,7 +11,7 @@
 #include "hash.h"
 #include "arena.h"
 #include "atom.h"
-#include "event_name.h"
+#include "trie.h"
 #include "configuration.h"
 #include "history.h"
 #include "definition.h"
@@ -559,7 +559,7 @@ static ta_result ta_compiler_event_name(ta_compiler *compiler, ta_str text, ta_e
         return result;
     }
     ta_compiler_hash_str(compiler, text);
-    result = ta_event_name_intern_dotted(&compiler->system->event_names, text, out);
+    result = ta_trie_intern_dotted(&compiler->system->event_names, text, out);
     if (result == TA_ERR_INVALID) {
         return text.len == 0
                    ? ta_compiler_fail(compiler, TA_COMPILE_ERROR_MISSING_VALUE, text, TA_PHRASE("an event name is required"))
@@ -1829,8 +1829,9 @@ static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id
     }
     if (result == TA_OK) {
         ta_atom segment = state.name;
-        result = ta_event_name_child(&compiler->system->event_names, TA_EVENT_NAME_DONE_STATE, segment,
-                                     &state.done_event);
+        result = ta_trie_child(&compiler->system->event_names,
+                               (ta_trie_edge){ .parent = TA_EVENT_NAME_DONE_STATE, .segment = segment },
+                               &state.done_event);
     }
     if (result == TA_OK) {
         *ta_compiler_state(compiler, id) = state;

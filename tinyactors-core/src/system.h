@@ -83,7 +83,7 @@
 #include "arena.h"
 #include "atom.h"
 #include "builder.h"
-#include "event_name.h"
+#include "trie.h"
 #include "io.h"
 #include "io_origin.h"
 #include "invoke.h"
@@ -94,6 +94,25 @@
 #include "../include/tinyactors.h"
 #include "clock.h"
 #include "continuation.h"
+
+/**
+ * The event names system creation adds to `event_names`, in this order, so
+ * their IDs are fixed: `error`, `error.execution`, `error.communication`,
+ * `error.platform`, `done`, `done.state`, `done.invoke`. Core names the
+ * events it raises below them.
+ */
+enum {
+    TA_EVENT_NAME_ERROR = 1u,
+    TA_EVENT_NAME_ERROR_EXECUTION = 2u,
+    TA_EVENT_NAME_ERROR_COMMUNICATION = 3u,
+    TA_EVENT_NAME_ERROR_PLATFORM = 4u,
+    TA_EVENT_NAME_DONE = 5u,
+    TA_EVENT_NAME_DONE_STATE = 6u,
+    TA_EVENT_NAME_DONE_INVOKE = 7u
+};
+
+/** The ceiling of `eventNameDepth` (ADR 0092): the deepest a trie goes. */
+#define TA_EVENT_NAME_MAX_DEPTH TA_TRIE_MAX_DEPTH
 
 /*
  * A nested interpreter's memory (ADR 0092 section 3): its structural region
@@ -122,7 +141,8 @@ struct ta_system {
     ta_address_table addresses;
     /* Reloaded and unloaded sessions, by session ID (ADR 0066). */
     ta_session_table sessions;
-    ta_event_name_table event_names;
+    /* Event names: a trie of atoms, holding the built-in names below. */
+    ta_trie event_names;
 
     /*
      * ta_definition_slot; a definition ID is (generation << 32) | slot, as

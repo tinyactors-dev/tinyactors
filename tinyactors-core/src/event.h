@@ -1,6 +1,6 @@
 #pragma once
 
-#include "event_name.h"
+#include "trie.h"
 #include "io_origin.h"
 
 /* Events, faults, and queued events are fully public. */

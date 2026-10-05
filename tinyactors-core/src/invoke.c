@@ -7,7 +7,7 @@
 #include "text_writer.h"
 #include "../include/tinyactors.h"
 #include "atom.h"
-#include "event_name.h"
+#include "trie.h"
 #include "routing.h"
 #include "clock.h"
 #include "timer.h"
@@ -83,7 +83,7 @@ static ta_result ta_invoke_done_name(ta_system *system, ta_invoke_id invoke, ta_
             ta_result result = ta_atom_intern(&system->atoms,
                                               (ta_str){ .ptr = text.ptr + start, .len = index - start }, &atom);
             if (result == TA_OK) {
-                result = ta_event_name_child(&system->event_names, name, atom, &name);
+                result = ta_trie_child(&system->event_names, (ta_trie_edge){ .parent = name, .segment = atom }, &name);
             }
             if (result != TA_OK) {
                 return result;
@@ -965,7 +965,9 @@ static ta_result ta_invoke_error_name(ta_system *system, ta_invoke_id invoke, ta
         result = ta_atom_intern(&system->atoms, reason, &reason_atom);
     }
     if (result == TA_OK) {
-        result = ta_event_name_child(&system->event_names, TA_EVENT_NAME_ERROR_COMMUNICATION, invoke_atom, &name);
+        result = ta_trie_child(&system->event_names,
+                               (ta_trie_edge){ .parent = TA_EVENT_NAME_ERROR_COMMUNICATION, .segment = invoke_atom },
+                               &name);
     }
     ta_str text = ta_invoke_id_text(system, invoke);
     ta_atom id_atom = 0;
@@ -973,10 +975,10 @@ static ta_result ta_invoke_error_name(ta_system *system, ta_invoke_id invoke, ta
         result = ta_atom_intern(&system->atoms, text, &id_atom);
     }
     if (result == TA_OK) {
-        result = ta_event_name_child(&system->event_names, name, id_atom, &name);
+        result = ta_trie_child(&system->event_names, (ta_trie_edge){ .parent = name, .segment = id_atom }, &name);
     }
     if (result == TA_OK) {
-        result = ta_event_name_child(&system->event_names, name, reason_atom, &name);
+        result = ta_trie_child(&system->event_names, (ta_trie_edge){ .parent = name, .segment = reason_atom }, &name);
     }
     *out = name;
     return result;
