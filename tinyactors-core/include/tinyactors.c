@@ -1034,7 +1034,8 @@ TA_PRIVATE uint32_t ta_fifo_capacity(const ta_fifo *fifo);
  *
  * Names. These are the handle-level calls, on a ta_ring. The system's
  * public pair, ta_ring_peek and ta_ring_release (include/tinyactors.h), take
- * a ta_system and a ta_ring_id and call these two; the names differ because
+ * a ta_system and a ta_ring_id and call the handle-level ta_ring_read and
+ * ta_ring_advance (the consumer's pair); the names differ because
  * the amalgamation is one translation unit and C has no overloading.
  *
  * An absent ring. A ring whose capacity (and max_record_bytes) is 0 does not
@@ -17681,25 +17682,31 @@ static bool tel_stage_send_id(const ta_system *system, ta_send_id send, tel_stag
 /*
  * tel_stage_value asks the data model for `value`'s text and copies it into
  * the staging area at once, since the data model's memory is only good until
- * its next call. The limit is telemetryValueBytes or the room staging has
- * left, whichever is smaller; a text the data model returns longer than the
+ * its next call. The limit is telemetryValueBytes or `1/share` of the room
+ * staging has left, whichever is smaller (`share` is how many value texts,
+ * this one included, still have to be staged, so the first cannot take the
+ * room the others need); a text the data model returns longer than the
  * limit is cut here, too. `cut_flag` is set in *flags when anything was cut. False, with *out
  * empty, when the value cannot be rendered: no data model running, a data
  * model without the op, a null value, a zero limit, or the op failing. A
  * failing op's fault is released and forgotten: telemetry never fails a step.
  */
 static bool tel_stage_value(const ta_system *system, const ta_tel_values *values, const ta_value *value,
-                            tel_stage *stage, ta_bytes *out, uint16_t *flags, uint16_t cut_flag) {
+                            tel_stage *stage, uint32_t share, ta_bytes *out, uint16_t *flags, uint16_t cut_flag) {
     *out = (ta_bytes){ 0 };
     if (values == NULL || values->datamodel == NULL || values->datamodel->v == NULL ||
         values->datamodel->v->value_trace_text == NULL || value->v == NULL) {
         return false;
     }
     uint32_t limit = system->params[TA_PARAM_TELEMETRY_VALUE_BYTES];
-    if (limit > tel_stage_room(stage)) {
-        limit = tel_stage_room(stage);
+    uint32_t room = tel_stage_room(stage) / (share == 0 ? 1u : share);
+    if (limit > room) {
+        limit = room;
     }
     if (limit == 0) {
+        if (system->params[TA_PARAM_TELEMETRY_VALUE_BYTES] != 0) {
+            *flags |= cut_flag; /* there was a value and no room left for any of it */
+        }
         return false;
     }
     ta_str text = { 0 };
@@ -17814,6 +17821,10 @@ static bool tel_build(const ta_system *system, const ta_trace_record *record, co
     ta_msg_tel_trace built = { 0 };
     const ta_event *event = record->event;
     ta_bytes event_name = { 0 };
+    /*
+     * First the texts that are never cut (names and IDs), so that the values,
+     * which are cut, only get what they leave of the staging area.
+     */
     if (event != NULL) {
         flags |= TA_MSG_TEL_TRACE_HAS_EVENT;
         built.event_type = (uint8_t)event->type;
@@ -17827,32 +17838,44 @@ static bool tel_build(const ta_system *system, const ta_trace_record *record, co
             ta_system_invoke_id_text(system, event->invoke_id, &invoke) == TA_OK) {
             built.event_invoke_id = tel_ta_bytes(invoke); /* borrowed from the system's atoms: system lifetime */
         }
-        /* An event's data is rendered when values are asked for, and always for an error: the reason is what an operator needs. */
-        if (system->trace_masks.values || (record->kind == TA_TRACE_RAISED && tel_starts_with(event_name, "error."))) {
-            (void)tel_stage_value(system, values, &event->data, stage, &built.event_data, &flags,
-                                  TA_MSG_TEL_TRACE_EVENT_DATA_TRUNCATED);
-        }
     }
-    if (record->has_value && system->trace_masks.values &&
-        tel_stage_value(system, values, &record->value, stage, &built.value, &flags, TA_MSG_TEL_TRACE_TRUNCATED)) {
-        flags |= TA_MSG_TEL_TRACE_HAS_VALUE;
+    if (record->has_fault && record->fault.detail != 0 &&
+        !tel_stage_event_name(system, record->fault.detail, stage, &built.fault_detail)) {
+        return false;
+    }
+    if (!tel_stage_send_id(system, record->send, stage, &built.send)) {
+        return false;
+    }
+    /* Then the values, each with an equal share of what is left. */
+    bool event_data = event != NULL && (system->trace_masks.values ||
+                                        (record->kind == TA_TRACE_RAISED && tel_starts_with(event_name, "error.")));
+    bool record_value = record->has_value && system->trace_masks.values;
+    uint32_t share = (event_data ? 1u : 0u) + (record_value ? 1u : 0u) + (record->has_fault ? 1u : 0u);
+    /* An event's data is rendered when values are asked for, and always for an error: the reason is what an operator needs. */
+    if (event_data) {
+        (void)tel_stage_value(system, values, &event->data, stage, share, &built.event_data, &flags,
+                              TA_MSG_TEL_TRACE_EVENT_DATA_TRUNCATED);
+        share -= 1u;
+    }
+    if (record_value) {
+        if (tel_stage_value(system, values, &record->value, stage, share, &built.value, &flags,
+                            TA_MSG_TEL_TRACE_TRUNCATED)) {
+            flags |= TA_MSG_TEL_TRACE_HAS_VALUE;
+        }
+        share -= 1u;
     }
     if (record->has_fault) {
         flags |= TA_MSG_TEL_TRACE_HAS_FAULT;
         built.fault_code = (uint32_t)record->fault.code;
         built.fault_message = tel_ta_bytes(record->fault.message);
-        if (record->fault.detail != 0 && !tel_stage_event_name(system, record->fault.detail, stage, &built.fault_detail)) {
-            return false;
-        }
-        (void)tel_stage_value(system, values, &record->fault.data, stage, &built.fault_data, &flags,
+        (void)tel_stage_value(system, values, &record->fault.data, stage, share, &built.fault_data, &flags,
                               TA_MSG_TEL_TRACE_FAULT_DATA_TRUNCATED);
     }
     ta_str invoke = { 0 };
     if (record->invoke != TA_INVOKE_ID_NONE && ta_system_invoke_id_text(system, record->invoke, &invoke) == TA_OK) {
         built.invoke = tel_ta_bytes(invoke);
     }
-    if (!tel_stage_send_id(system, record->send, stage, &built.send) ||
-        !tel_u32s(record->transitions, record->transition_count, &built.transitions) ||
+    if (!tel_u32s(record->transitions, record->transition_count, &built.transitions) ||
         !tel_u32s(record->exited, record->exited_count, &built.exited) ||
         !tel_u32s(record->entered, record->entered_count, &built.entered) ||
         !tel_u32s(record->history, record->history_count, &built.history) ||
@@ -28981,10 +29004,22 @@ static void ta_system_rings_close(ta_system *system) {
     system->tel_staging_bytes = 0;
 }
 
+/*
+ * ta_system_control_block returns the control block of the system's rings
+ * (system lifetime: valid until ta_system_destroy), or NULL for a NULL system.
+ * It reads, allocates and changes nothing.
+ */
 TA_API const ta_ring_control *ta_system_control_block(const ta_system *system) {
     return system == NULL ? NULL : system->rings.control;
 }
 
+/*
+ * ta_ring_peek shows the oldest committed record of `ring` in place through
+ * the handle-level ta_ring_read. TA_ERR_INVALID for a NULL system or out, or
+ * an unknown ring; TA_ERR_NOT_FOUND when the ring is empty or does not exist;
+ * TA_ERR_CORRUPT when the framing is broken. It never allocates, and on any
+ * error *out is not valid. The record lives until ta_ring_release.
+ */
 TA_API ta_result ta_ring_peek(ta_system *system, ta_ring_id ring, ta_ring_record *out) {
     if (system == NULL || out == NULL || (uint32_t)ring >= (uint32_t)TA_RING_COUNT) {
         return TA_ERR_INVALID;
@@ -28999,6 +29034,13 @@ TA_API ta_result ta_ring_peek(ta_system *system, ta_ring_id ring, ta_ring_record
     }
 }
 
+/*
+ * ta_ring_release releases the record ta_ring_peek last returned for `ring`,
+ * advancing the consumer tail (ta_ring_advance) so its bytes can be reused;
+ * every view into it dies here. `size` must be the peeked record's size; with
+ * an invalid system or ring, no peeked record, or another size, it does
+ * nothing. It never allocates.
+ */
 TA_API void ta_ring_release(ta_system *system, ta_ring_id ring, uint32_t size) {
     if (system == NULL || (uint32_t)ring >= (uint32_t)TA_RING_COUNT || system->rings.control == NULL ||
         system->rings.ring[ring].peeked_size != size) {

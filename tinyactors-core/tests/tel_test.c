@@ -830,6 +830,46 @@ static void test_record_over_the_maximum(void) {
     finish_clean();
 }
 
+/*
+ * Values are cut, names and send IDs are not: with telemetryValueBytes at its
+ * largest, a record with event data, a value and send IDs is written whole
+ * in its names, and the values share what the names leave.
+ */
+static void test_values_leave_room_for_names(void) {
+    ta_param_value params[] = { { TA_PARAM_TEL_BYTES, 16384 }, { TA_PARAM_MAX_RECORD_BYTES, 4096 },
+                                { TA_PARAM_TELEMETRY_VALUE_BYTES, 4096 - 512 } };
+    ta_system *system = create_with(params, 3);
+    CHECK(system != NULL);
+    ta_system_set_trace_masks(system, &(ta_trace_masks){ .values = true });
+    char text[3000];
+    memset(text, 'x', sizeof text);
+    fake_text long_text = { text, sizeof text };
+    fake_state state = { 0 };
+    ta_datamodel dm = { .self = &state, .v = &fake_vtable };
+    ta_tel_values values = { .datamodel = &dm };
+    ta_send_id send = 0;
+    CHECK(ta_send_id_intern(system, (ta_str){ "send-1", 6 }, &send) == TA_OK);
+    ta_event event = { .name = name_of(system, "ping"), .type = TA_EVENT_EXTERNAL, .send_id = send,
+                       .data = fake_value(&long_text) };
+    ta_trace_record record = record_of(TA_TRACE_RAISED, 1);
+    record.event = &event;
+    record.send = send;
+    record.has_value = true;
+    record.value = fake_value(&long_text);
+    ta_tel_write_trace(system, &record, &values);
+    const ta_ring_shared *cell = &ta_system_control_block(system)->tel;
+    CHECK(cell->dropped == 0);
+    ta_ring_record raw;
+    ta_tel_entry entry;
+    CHECK(ta_ring_peek(system, TA_RING_TEL, &raw) == TA_OK && ta_tel_decode(&raw, &entry) == TA_OK);
+    CHECK(entry.trace.event_send_id.len == 6 && entry.trace.send.len == 6);
+    CHECK(entry.trace.event_data.len > 0 && entry.trace.event_data_truncated);
+    CHECK(entry.trace.has_value && entry.trace.value.len > 0 && entry.trace.truncated);
+    ta_ring_release(system, TA_RING_TEL, raw.size);
+    ta_system_destroy(system);
+    finish_clean();
+}
+
 /* ------------------------------------------------------------------------
  * Allocation, and a consumer that lies
  */
@@ -888,6 +928,7 @@ int main(void) {
     test_wrap_variable_records();
     test_values();
     test_record_over_the_maximum();
+    test_values_leave_room_for_names();
     test_writing_never_allocates();
     test_corrupt_consumer_tail();
     if (failures != 0) {
