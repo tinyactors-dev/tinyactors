@@ -181,6 +181,31 @@ new Set([1, 2, 3, 4]).intersection(new Set([4, 3]))
 --- value
 new Set([4,3])
 
+=== a large set finds its elements by SameValueZero
+(s => [s.size, s.has(NaN), s.has(-0), s.has(0), s.has("7"), s.has(7), s.has(true), s.has(false), s.has(null), s.has(undefined), s.has(99), s.has("a"), s.has("b")])(new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, NaN, 0, -0, NaN, "7", true, null, undefined, "a", "a"]))
+--- value
+[17,true,true,true,true,true,true,false,true,true,false,true,false]
+
+=== set methods on large sets
+(a => [a.intersection(new Set([19, 3, 40, 0, 5, 6, 7, 8, 9, 10])), a.difference(new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])), a.isSubsetOf(a.union(new Set(["x"]))), a.union(new Set([-0, 25, 3])).size, a.symmetricDifference(new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 30]))])(new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]))
+--- value
+[new Set([19,3,0,5,6,7,8,9,10]),new Set([19]),true,21,new Set([9,10,11,12,13,14,15,16,17,18,19,30])]
+
+=== a large object finds its keys, and keeps index keys first
+(o => [o.k1, o.k3, o.k10, o.k11, o[2], o[5], o[9], "k12" in o, "k11" in o, o.k99, Object.keys(o)])({k1: 1, k2: 2, k3: 3, k4: 4, k5: 5, k6: 6, k7: 7, k8: 8, k9: 9, k10: 10, 5: "a", 2: "b", k3: "again", 9: "c", k11: 11})
+--- value
+[1,"again",10,11,"b","a","c",false,true,undefined,["2","5","9","k1","k2","k3","k4","k5","k6","k7","k8","k9","k10","k11"]]
+
+=== a large object from entries, spread and added to
+(o => ({...o, k2: "x", k20: 20}))(Object.fromEntries([["k1", 1], ["k2", 2], ["k3", 3], ["k4", 4], ["k5", 5], ["k6", 6], ["k7", 7], ["k8", 8], ["k9", 9], ["k10", 10], ["k1", "dup"]]))
+--- value
+{"k1":"dup","k2":"x","k3":3,"k4":4,"k5":5,"k6":6,"k7":7,"k8":8,"k9":9,"k10":10,"k20":20}
+
+=== a large object built by spreading in reduce
+(o => [o.a, o.m, o.t, o.z, Object.keys(o).length])(["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "a"].reduce((acc, k, i) => ({...acc, [k]: i}), {}))
+--- value
+[20,12,19,undefined,20]
+
 === Math
 [Math.max(1, 5, 3), Math.min(), Math.max(), Math.abs(-2), Math.floor(-1.5), Math.ceil(-1.5), Math.round(2.5), Math.round(-2.5), Math.round(-0.4), Math.trunc(-1.7), Math.sign(-3), Math.max(1, NaN)]
 --- value

@@ -58,6 +58,14 @@ static void drop_program(sjs_heap **work, sjs_program *program) {
     sjs_mem_free(&program->context->counting, program, program->size);
 }
 
+static size_t lookup_size(uint32_t mask) {
+    return sizeof(sjs_index) + ((size_t)mask + 1u) * sizeof(uint32_t);
+}
+
+static void lookup_free(sjs_context *context, sjs_index *index) {
+    if (index != NULL) sjs_mem_free(&context->counting, index, lookup_size(index->mask));
+}
+
 /* Free everything on the worklist, and what it alone held. */
 static void drain(sjs_context *context, sjs_heap *work) {
     while (work != NULL) {
@@ -68,6 +76,7 @@ static void drain(sjs_context *context, sjs_heap *work) {
         case SJS_HEAP_SET: {
             sjs_array *a = (sjs_array *)(void *)h;
             for (uint32_t i = 0; i < a->length; i++) drop(&work, a->items[i]);
+            lookup_free(context, a->index);
             break;
         }
         case SJS_HEAP_OBJECT: {
@@ -76,6 +85,7 @@ static void drain(sjs_context *context, sjs_heap *work) {
                 drop_heap(&work, &o->entries[i].key->h);
                 drop(&work, o->entries[i].value);
             }
+            lookup_free(context, o->index);
             break;
         }
         case SJS_HEAP_CLOSURE: {
@@ -178,6 +188,116 @@ sjs_result sjs_string_from_number(sjs_context *context, double value, sjs_string
 }
 
 /* ------------------------------------------------------------------------
+ * Hash indexes of sets and objects
+ */
+
+static uint32_t hash_bytes(sjs_str text) {
+    uint32_t h = 2166136261u;   /* FNV-1a */
+    for (uint32_t i = 0; i < text.length; i++) h = (h ^ (uint8_t)text.ptr[i]) * 16777619u;
+    return h;
+}
+
+/* Equal under SameValueZero, equal hashes: every NaN hashes alike, and -0
+ * as 0. */
+static uint32_t hash_value(sjs_value v) {
+    switch (v.kind) {
+    case SJS_NUMBER: {
+        union {
+            double d;
+            uint64_t u;
+        } bits;
+        bits.d = v.as.number;
+        if (sjs_number_is_nan(bits.d)) return 0x7ff80000u;
+        if (bits.d == 0) bits.u = 0;
+        uint64_t u = bits.u;
+        u ^= u >> 33;
+        u *= 0xff51afd7ed558ccdull;
+        u ^= u >> 33;
+        return (uint32_t)u;
+    }
+    case SJS_STRING:
+        if (v.internal != SJS_INTERNAL_NONE) return 0;
+        return hash_bytes(sjs_string_view(SJS_AS_STRING(v)));
+    case SJS_BOOLEAN:
+        return 2u + (v.boolean != 0);
+    default:
+        return v.kind;
+    }
+}
+
+static sjs_index **lookup_field(sjs_heap *h) {
+    if (h->type == SJS_HEAP_OBJECT) return &((sjs_object *)(void *)h)->index;
+    return &((sjs_array *)(void *)h)->index;
+}
+
+static uint32_t item_count(const sjs_heap *h) {
+    if (h->type == SJS_HEAP_OBJECT) return ((const sjs_object *)(const void *)h)->count;
+    return ((const sjs_array *)(const void *)h)->length;
+}
+
+static uint32_t item_hash(const sjs_heap *h, uint32_t i) {
+    if (h->type == SJS_HEAP_OBJECT) {
+        return hash_bytes(sjs_string_view(((const sjs_object *)(const void *)h)->entries[i].key));
+    }
+    return hash_value(((const sjs_array *)(const void *)h)->items[i]);
+}
+
+static void lookup_put(sjs_index *index, uint32_t hash, uint32_t position) {
+    uint32_t i = hash & index->mask;
+    while (index->slots[i] != 0) i = (i + 1u) & index->mask;
+    index->slots[i] = position + 1u;
+}
+
+/* Index every item of the container, in a table at most a quarter full.
+ * When the table cannot be allocated, the container goes without one. */
+static void lookup_build(sjs_context *context, sjs_heap *h) {
+    sjs_index **field = lookup_field(h);
+    uint32_t count = item_count(h);
+    sjs_index *index = *field;
+    uint32_t slots = 16u;
+    while (slots / 4u < count && slots < 0x40000000u) slots *= 2u;
+    if (slots / 2u < count) {
+        /* More items than any table here holds at half load: scan. */
+        lookup_free(context, index);
+        *field = NULL;
+        h->flags |= SJS_CONTAINER_UNINDEXED;
+        return;
+    }
+    if (index == NULL || index->mask != slots - 1u) {
+        lookup_free(context, index);
+        *field = NULL;
+        /* Only reachable where size_t is 32 bits (wasm32): there a large
+           table's size could wrap. */
+        index = (uint64_t)slots * sizeof(uint32_t) + sizeof(sjs_index) > (size_t)-1
+                    ? NULL
+                    : sjs_mem_alloc(&context->counting, lookup_size(slots - 1u));
+        if (index == NULL) {
+            h->flags |= SJS_CONTAINER_UNINDEXED;
+            return;
+        }
+        index->mask = slots - 1u;
+        *field = index;
+    }
+    sjs_zero(index->slots, (size_t)slots * sizeof(uint32_t));
+    for (uint32_t i = 0; i < count; i++) lookup_put(index, item_hash(h, i), i);
+}
+
+/* The container's last item has just gone in at the end. */
+static void lookup_appended(sjs_context *context, sjs_heap *h) {
+    uint32_t count = item_count(h);
+    sjs_index *index = *lookup_field(h);
+    if (index == NULL) {
+        if (count >= SJS_INDEX_FROM && (h->flags & SJS_CONTAINER_UNINDEXED) == 0) lookup_build(context, h);
+        return;
+    }
+    if ((uint64_t)count * 2u > (uint64_t)index->mask + 1u) {
+        lookup_build(context, h);
+        return;
+    }
+    lookup_put(index, item_hash(h, count - 1u), count - 1u);
+}
+
+/* ------------------------------------------------------------------------
  * Arrays and sets
  */
 
@@ -194,6 +314,7 @@ static sjs_result array_alloc(sjs_context *context, shape s, sjs_array **out) {
     if (a == NULL) return SJS_ERR_NOMEM;
     a->length = 0;
     a->capacity = capacity;
+    a->index = NULL;
     *out = a;
     return SJS_OK;
 }
@@ -216,6 +337,7 @@ sjs_result sjs_array_grow(sjs_context *context, sjs_array **array, uint32_t extr
     grown->length = a->length;
     sjs_copy(grown->items, a->items, (size_t)a->length * sizeof(sjs_value));
     grown->h.flags = a->h.flags;
+    grown->index = a->index;
     sjs_mem_free(&context->counting, a, a->h.size);
     *array = grown;
     return SJS_OK;
@@ -243,6 +365,13 @@ sjs_result sjs_array_append(sjs_context *context, sjs_value *array, sjs_value el
 }
 
 bool sjs_set_contains(const sjs_array *set, sjs_value element) {
+    const sjs_index *index = set->index;
+    if (index != NULL) {
+        for (uint32_t i = hash_value(element) & index->mask; index->slots[i] != 0; i = (i + 1u) & index->mask) {
+            if (sjs_same_value_zero(set->items[index->slots[i] - 1u], element)) return true;
+        }
+        return false;
+    }
     for (uint32_t i = 0; i < set->length; i++) {
         if (sjs_same_value_zero(set->items[i], element)) return true;
     }
@@ -259,6 +388,7 @@ sjs_result sjs_set_insert(sjs_context *context, sjs_array **set, sjs_value eleme
     sjs_result r = sjs_array_grow(context, set, 1);
     if (r != SJS_OK) return r;
     (*set)->items[(*set)->length++] = element;
+    lookup_appended(context, &(*set)->h);
     return SJS_OK;
 }
 
@@ -291,6 +421,7 @@ static sjs_result object_alloc(sjs_context *context, uint32_t capacity, sjs_obje
     if (o == NULL) return SJS_ERR_NOMEM;
     o->count = 0;
     o->capacity = capacity;
+    o->index = NULL;
     *out = o;
     return SJS_OK;
 }
@@ -311,6 +442,8 @@ sjs_result sjs_object_grow(sjs_context *context, sjs_object **object, uint32_t e
     sjs_result r = object_alloc(context, capacity, &grown);
     if (r != SJS_OK) return r;
     grown->count = o->count;
+    grown->index = o->index;
+    grown->h.flags = o->h.flags;
     sjs_copy(grown->entries, o->entries, (size_t)o->count * sizeof(sjs_entry));
     sjs_mem_free(&context->counting, o, o->h.size);
     *object = grown;
@@ -318,6 +451,14 @@ sjs_result sjs_object_grow(sjs_context *context, sjs_object **object, uint32_t e
 }
 
 const sjs_entry *sjs_object_find(const sjs_object *object, sjs_str key) {
+    const sjs_index *index = object->index;
+    if (index != NULL) {
+        for (uint32_t i = hash_bytes(key) & index->mask; index->slots[i] != 0; i = (i + 1u) & index->mask) {
+            const sjs_entry *e = &object->entries[index->slots[i] - 1u];
+            if (sjs_str_equal(sjs_string_view(e->key), key)) return e;
+        }
+        return NULL;
+    }
     for (uint32_t i = 0; i < object->count; i++) {
         if (sjs_str_equal(sjs_string_view(object->entries[i].key), key)) return &object->entries[i];
     }
@@ -326,15 +467,13 @@ const sjs_entry *sjs_object_find(const sjs_object *object, sjs_str key) {
 
 sjs_result sjs_object_put_key(sjs_context *context, sjs_object **object, sjs_put put) {
     sjs_object *o = *object;
-    sjs_str key = sjs_string_view(put.key);
-    for (uint32_t i = 0; i < o->count; i++) {
-        if (sjs_str_equal(sjs_string_view(o->entries[i].key), key)) {
-            sjs_value old = o->entries[i].value;
-            o->entries[i].value = put.value;
-            sjs_release(context, old);
-            sjs_release(context, sjs_heap_value(SJS_STRING, &put.key->h));
-            return SJS_OK;
-        }
+    sjs_entry *found = (sjs_entry *)sjs_object_find(o, sjs_string_view(put.key));
+    if (found != NULL) {
+        sjs_value old = found->value;
+        found->value = put.value;
+        sjs_release(context, old);
+        sjs_release(context, sjs_heap_value(SJS_STRING, &put.key->h));
+        return SJS_OK;
     }
     sjs_result r = sjs_object_grow(context, object, 1);
     if (r != SJS_OK) return r;
@@ -352,6 +491,11 @@ sjs_result sjs_object_put_key(sjs_context *context, sjs_object **object, sjs_put
     o->entries[at].key = put.key;
     o->entries[at].value = put.value;
     o->count++;
+    if (at == o->count - 1u) {
+        lookup_appended(context, &o->h);
+    } else if (o->index != NULL) {
+        lookup_build(context, &o->h);   /* the entries after `at` moved */
+    }
     return SJS_OK;
 }
 

@@ -1038,18 +1038,28 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
         const sjs_string *key = SJS_AS_STRING(f->program->constants[sjs_read32(code + pc)]);
         sjs_value *top = stack_top(vm);
         if (top->kind == SJS_OBJECT && top->internal == SJS_INTERNAL_NONE) {
-            /* The common case inline: a property the object has. */
+            /* The common case inline: a property the object has. A small
+             * object is scanned here; a large one has an index. */
             const sjs_object *o = SJS_AS_OBJECT(*top);
             sjs_str name = sjs_string_view(key);
-            for (uint32_t i = 0; i < o->count; i++) {
-                const sjs_string *k = o->entries[i].key;
-                if (k == key || sjs_str_equal(sjs_string_view(k), name)) {
-                    sjs_value v = o->entries[i].value;
-                    sjs_ref(v);
-                    sjs_unref(vm->context, *top);
-                    *top = v;
-                    return;
+            const sjs_entry *e = NULL;
+            if (o->index != NULL) {
+                e = sjs_object_find(o, name);
+            } else {
+                for (uint32_t i = 0; i < o->count; i++) {
+                    const sjs_string *k = o->entries[i].key;
+                    if (k == key || sjs_str_equal(sjs_string_view(k), name)) {
+                        e = &o->entries[i];
+                        break;
+                    }
                 }
+            }
+            if (e != NULL) {
+                sjs_value v = e->value;
+                sjs_ref(v);
+                sjs_unref(vm->context, *top);
+                *top = v;
+                return;
             }
         }
         if (sjs_property_get(vm, (sjs_member){ *stack_top(vm), key }, &result) != SJS_OK) return;
