@@ -40,8 +40,9 @@
  * entry. Its LOAD_NEEDED notice says so, and starts a load with `why` =
  * session. Mail for the same session while the load is in flight joins the
  * same list. A session this system cannot name (another incarnation's, or
- * another family holding its ID: core gives it session 0) is undeliverable:
- * its sender hears error.communication at once.
+ * another family holding its ID: core gives it session 0) waits on the key
+ * '<incarnation>.0.<family>' like any other; only a session ID with no
+ * family is undeliverable, and its sender hears error.communication at once.
  *
  * Every record and heap entry holds one reference to its address, given back
  * when it goes; tah_loads_close() gives back all of them while core is alive.

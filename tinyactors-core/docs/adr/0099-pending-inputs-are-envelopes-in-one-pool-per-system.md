@@ -523,3 +523,15 @@ beyond it:
   external event is still copied into its slots from the envelope; moving them
   to a start record in the sparse state and reading the envelope in place
   changes the session-image format and is left for a later unit.
+
+**Mail sent outside the sender's own macrostep (review fix, 4.2d).** An
+invoked child's `<onexit>` runs when the host destroys, frees or tears down
+its parent, which is a host call, not a macrostep. `ta_send_commit` pays for a
+send from the running input's claim only when the slot is occupied by the
+sender itself; otherwise it makes room with `ta_mail_prepare` (a safe point,
+best effort) and posts the envelope straight to the run queue from the pool,
+as a due send is. The mail is therefore delivered whether the slot is empty or
+held by another session's paused macrostep, and it is not lost when that other
+macrostep is abandoned. If the pool has no envelope, the sender hears
+`error.communication`, not the quota-refusal `error.execution`. Covered by
+`tests/mail_test.c` (`test_exit_mail_outside_a_macrostep`).

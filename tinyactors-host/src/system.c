@@ -541,7 +541,7 @@ static void tah_quarantine_reports_make(tah_system *system) {
 /*
  * Dispatches the sends due now, up to the due budget. A due send to a
  * resident session is an envelope core made itself (core ADR 0099 section 4);
- * the rest go through the router into mailboxes (ADR 0006). What core placed
+ * the rest are sends to host I/O processors, which leave core here. What core placed
  * is reported in `fired`, and recorded here: its lateness, and the sender's
  * wake, which moves because its timer was consumed. What was delivered runs
  * in a later turn. A pool at its bound, a full `fired` array, a refusal (a

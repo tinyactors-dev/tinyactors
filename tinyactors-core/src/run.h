@@ -202,7 +202,7 @@ void ta_runner_destroy(ta_runner *runner);
  * allocator refuses. It allocates only while the pool needs a page.
  *
  * Known exception to "allocation only at safe points": ta_communication_error
- * (a failed delayed send, a router callback) can reach it from inside another
+ * (a failed delayed send, a host I/O processor) can reach it from inside another
  * actor's macrostep. The path allocated before this unit too (the queue growth
  * of ta_raise_error); it goes with the other mid-macrostep allocations in
  * step 4.4, when the cell is reserved at ta_run's take.

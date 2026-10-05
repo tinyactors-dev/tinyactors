@@ -380,7 +380,7 @@ void tah_sched_bury_waiting(tah_sched *sched, tah_mailbox *box, tah_dead_reason 
  * 0005 point 11). False, changing nothing, when `box` does not hold it.
  */
 bool tah_sched_withdraw_waiting(tah_sched *sched, tah_mailbox *box, uint32_t index);
-/* The envelope at `index` (for tests and the router), or NULL. */
+/* The envelope at `index` (for tests), or NULL. */
 tah_envelope *tah_sched_envelope(const tah_sched *sched, uint32_t index);
 /*
  * Takes `actor` out of scheduling as a fault does (ADR 0008), for a fault

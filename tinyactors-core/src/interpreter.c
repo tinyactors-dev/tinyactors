@@ -743,6 +743,13 @@ static ta_event_block *ta_block_take(ta_system *system, uint32_t capacity) {
     return block;
 }
 
+/*
+ * ta_interpreter_hold_block lends the actor an event block if it holds none:
+ * a cached one, else a header only, because a delivered event needs no queue
+ * room and the block grows when the first internal event is queued. It
+ * allocates only when the cache is empty. TA_ERR_NOMEM leaves the actor as it
+ * was (ADR 0069); the block belongs to the actor until its input ends.
+ */
 ta_result ta_interpreter_hold_block(ta_system *system, ta_actor *actor) {
     if (actor->event_block == NULL) {
         /* A delivered event needs no queue room: a new block is a header
@@ -2076,7 +2083,15 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         return raised == TA_EXEC_FAILED ? TA_OK : raised;
     }
     if (state->delay == 0) {
-        ta_dispatch dispatch = { .in_run = true };
+        /* The macrostep's claim pays for this mail only while the sender's own input holds the slot. A send made
+         * outside it (a host call that destroys the session and runs an invoked child's <onexit>) is posted at
+         * this safe point instead, from the pool, as a due send is (mail.h). The pool is grown if it can be; if
+         * not, mail finds no envelope and the sender hears error.communication. */
+        bool own_run = system->runner.slot.occupied && system->runner.slot.actor == actor->record.id;
+        if (!own_run) {
+            (void)ta_mail_prepare(system, 1u);
+        }
+        ta_dispatch dispatch = { .in_run = own_run };
         ta_interpreter_dispatch_delayed(system, &record, &dispatch);
         state->sent = dispatch.sent;
         return TA_OK;

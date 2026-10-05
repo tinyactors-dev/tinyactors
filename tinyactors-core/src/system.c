@@ -235,7 +235,7 @@ ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *s
 /*
  * The memory every run needs, allocated once (ADR 0092 section 3):
  * interpreter region 0 with its render area, then the table of nested
- * regions; and the event-block cache, filled to its parameter.
+ * regions, and the event-block cache.
  */
 static ta_result ta_system_arena_open(ta_system *system) {
     ta_region_layout layout;

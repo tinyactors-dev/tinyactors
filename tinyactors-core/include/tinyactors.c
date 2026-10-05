@@ -8600,7 +8600,7 @@ TA_PRIVATE void ta_runner_destroy(ta_runner *runner);
  * allocator refuses. It allocates only while the pool needs a page.
  *
  * Known exception to "allocation only at safe points": ta_communication_error
- * (a failed delayed send, a router callback) can reach it from inside another
+ * (a failed delayed send, a host I/O processor) can reach it from inside another
  * actor's macrostep. The path allocated before this unit too (the queue growth
  * of ta_raise_error); it goes with the other mid-macrostep allocations in
  * step 4.4, when the cell is reserved at ta_run's take.
@@ -8828,7 +8828,7 @@ TA_PRIVATE void ta_session_ref_write(const ta_system *system, ta_text_writer *wr
 
 
 
-/* External delivery and the router boundary are fully public. */
+/* External delivery is fully public. */
 
 /*
  * A named ta_actor_ref is a reference to an interned address (ADR 0065).
@@ -10688,8 +10688,8 @@ typedef struct ta_mail_params {
  *     TA_MAIL_WAITING, on a key address made from the family and the
  *     session's text. The key is made when the mail is placed (the end of the
  *     macrostep, or at once at a safe point).
- *   - A name that a finished session holds, a session ID with no family, or
- *     session 0 (a session core cannot name): TA_MAIL_UNDELIVERABLE, and the
+ *   - A name that a finished session holds, or a session ID with no family
+ *     (session 0 with a family waits on a key, above): TA_MAIL_UNDELIVERABLE, and the
  *     caller raises error.communication in the sender's own queue, in this
  *     macrostep, as SCXML 6.2.4 asks. Mail that waits and finds its receiver
  *     gone or finished when it is taken is recycled instead (ta_mail_recycle).
@@ -30899,7 +30899,7 @@ TA_PRIVATE ta_result ta_system_nested_region(ta_system *system, uint32_t depth, 
 /*
  * The memory every run needs, allocated once (ADR 0092 section 3):
  * interpreter region 0 with its render area, then the table of nested
- * regions; and the event-block cache, filled to its parameter.
+ * regions, and the event-block cache.
  */
 static ta_result ta_system_arena_open(ta_system *system) {
     ta_region_layout layout;
@@ -33167,6 +33167,13 @@ static ta_event_block *ta_block_take(ta_system *system, uint32_t capacity) {
     return block;
 }
 
+/*
+ * ta_interpreter_hold_block lends the actor an event block if it holds none:
+ * a cached one, else a header only, because a delivered event needs no queue
+ * room and the block grows when the first internal event is queued. It
+ * allocates only when the cache is empty. TA_ERR_NOMEM leaves the actor as it
+ * was (ADR 0069); the block belongs to the actor until its input ends.
+ */
 TA_PRIVATE ta_result ta_interpreter_hold_block(ta_system *system, ta_actor *actor) {
     if (actor->event_block == NULL) {
         /* A delivered event needs no queue room: a new block is a header
@@ -34500,7 +34507,15 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         return raised == TA_EXEC_FAILED ? TA_OK : raised;
     }
     if (state->delay == 0) {
-        ta_dispatch dispatch = { .in_run = true };
+        /* The macrostep's claim pays for this mail only while the sender's own input holds the slot. A send made
+         * outside it (a host call that destroys the session and runs an invoked child's <onexit>) is posted at
+         * this safe point instead, from the pool, as a due send is (mail.h). The pool is grown if it can be; if
+         * not, mail finds no envelope and the sender hears error.communication. */
+        bool own_run = system->runner.slot.occupied && system->runner.slot.actor == actor->record.id;
+        if (!own_run) {
+            (void)ta_mail_prepare(system, 1u);
+        }
+        ta_dispatch dispatch = { .in_run = own_run };
         ta_interpreter_dispatch_delayed(system, &record, &dispatch);
         state->sent = dispatch.sent;
         return TA_OK;

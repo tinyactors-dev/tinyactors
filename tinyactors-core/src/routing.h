@@ -3,7 +3,7 @@
 #include "address.h"
 #include "event.h"
 
-/* External delivery and the router boundary are fully public. */
+/* External delivery is fully public. */
 
 /*
  * A named ta_actor_ref is a reference to an interned address (ADR 0065).

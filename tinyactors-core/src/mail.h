@@ -211,8 +211,8 @@ typedef struct ta_mail_params {
  *     TA_MAIL_WAITING, on a key address made from the family and the
  *     session's text. The key is made when the mail is placed (the end of the
  *     macrostep, or at once at a safe point).
- *   - A name that a finished session holds, a session ID with no family, or
- *     session 0 (a session core cannot name): TA_MAIL_UNDELIVERABLE, and the
+ *   - A name that a finished session holds, or a session ID with no family
+ *     (session 0 with a family waits on a key, above): TA_MAIL_UNDELIVERABLE, and the
  *     caller raises error.communication in the sender's own queue, in this
  *     macrostep, as SCXML 6.2.4 asks. Mail that waits and finds its receiver
  *     gone or finished when it is taken is recycled instead (ta_mail_recycle).
