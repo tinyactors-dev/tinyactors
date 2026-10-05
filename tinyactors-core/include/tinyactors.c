@@ -623,12 +623,13 @@ TA_PRIVATE inline uint64_t ta_hash_mix64(uint64_t value) {
  *   slot's current one.
  * - A handle is a fixed-width integer, never a pointer, so it stays
  *   meaningful while the table it indexes grows or moves.
- * - The owning table keeps each slot's generation and advances it when
- *   the slot's object is freed, so every handle to the old object goes
- *   stale. How it advances is the table's rule, not this unit's: the actor
- *   table skips 0 when the generation wraps from `UINT32_MAX`, so it never
- *   issues 0 (ADR 0059); the definition table adds one, so only a slot
- *   freed 2^32 times would come back to generation 0.
+ * - The owning table keeps each slot's generation and advances it with
+ *   `ta_handle_next_generation` when the slot's object is freed, so every
+ *   handle to the old object goes stale. The next generation skips 0: a
+ *   wrap from `UINT32_MAX` goes to 1, so no table ever issues generation 0
+ *   (ADR 0059), however often a slot is reused. After a wrap, a stale
+ *   handle names the slot's object again only once the slot has been
+ *   freed `UINT32_MAX` times more.
  * - Handles are process-local. What a durable or portable encoding
  *   records about identity is described in
  *   `docs/internal/memory-model.md` ("Handles and run-time IDs").
@@ -653,7 +654,8 @@ TA_PRIVATE inline uint64_t ta_hash_mix64(uint64_t value) {
  * The actor table, for `ta_actor_id` (ADR 0059, which also makes the
  * slot and generation public through `ta_actor_id_make`,
  * `ta_actor_id_slot` and `ta_actor_id_generation`), and the definition
- * table, for `ta_definition_id` (ADR 0043). Both public types are
+ * table, for `ta_definition_id` (ADR 0043). Both advance a freed slot
+ * with `ta_handle_next_generation`. Both public types are
  * `uint64_t`, the type of a handle. Run-time IDs are compact handles, and
  * persistence resolves logical identity instead (ADR 0028).
  */
@@ -698,6 +700,16 @@ TA_PRIVATE inline uint32_t ta_handle_generation(ta_handle handle) {
  */
 TA_PRIVATE inline bool ta_handle_valid(ta_handle handle) {
     return ta_handle_generation(handle) != 0u;
+}
+
+/**
+ * The generation a slot gets after its object at `generation` is freed:
+ * `generation + 1`, except that `UINT32_MAX` wraps to 1, never to 0, so a
+ * table never issues a handle that names nothing. Never allocates; may run
+ * inside a macrostep. Does not fail.
+ */
+TA_PRIVATE inline uint32_t ta_handle_next_generation(uint32_t generation) {
+    return generation == UINT32_MAX ? 1u : generation + 1u;
 }
 
 /**
@@ -20550,7 +20562,7 @@ TA_PRIVATE void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
     uint32_t slot = ta_handle_slot(id);
     ta_actor_slot *entry = ta_actor_slot_at(system, slot);
     entry->actor = NULL;
-    entry->generation = entry->generation == UINT32_MAX ? 1u : entry->generation + 1u;
+    entry->generation = ta_handle_next_generation(entry->generation);
     ta_index_pool_give(&system->actors.slots, slot + 1u);
 }
 
@@ -24091,10 +24103,11 @@ TA_PRIVATE void ta_system_settle_definition(ta_system *system, ta_definition *de
         ta_system_tell_definition(system, freeing, TA_DEFINITION_EVENT_FREED);
         uint32_t slot = ta_handle_slot(freeing->id);
         ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
-        /* The slot's next occupant gets a new generation, so this ID goes stale. */
+        /* The slot's next occupant gets a new generation, so this ID goes
+         * stale. Generation 0 is never issued: a wrap from UINT32_MAX goes to 1. */
         entry->definition = NULL;
         system->live_definitions -= 1u;
-        entry->generation += 1u;
+        entry->generation = ta_handle_next_generation(entry->generation);
         entry->next_free = system->free_definition_slot;
         system->free_definition_slot = slot;
         ta_definition_destroy(freeing);

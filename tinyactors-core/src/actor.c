@@ -348,7 +348,7 @@ void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
     uint32_t slot = ta_handle_slot(id);
     ta_actor_slot *entry = ta_actor_slot_at(system, slot);
     entry->actor = NULL;
-    entry->generation = entry->generation == UINT32_MAX ? 1u : entry->generation + 1u;
+    entry->generation = ta_handle_next_generation(entry->generation);
     ta_index_pool_give(&system->actors.slots, slot + 1u);
 }
 

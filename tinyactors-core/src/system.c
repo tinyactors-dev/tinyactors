@@ -653,10 +653,11 @@ void ta_system_settle_definition(ta_system *system, ta_definition *definition) {
         ta_system_tell_definition(system, freeing, TA_DEFINITION_EVENT_FREED);
         uint32_t slot = ta_handle_slot(freeing->id);
         ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
-        /* The slot's next occupant gets a new generation, so this ID goes stale. */
+        /* The slot's next occupant gets a new generation, so this ID goes
+         * stale. Generation 0 is never issued: a wrap from UINT32_MAX goes to 1. */
         entry->definition = NULL;
         system->live_definitions -= 1u;
-        entry->generation += 1u;
+        entry->generation = ta_handle_next_generation(entry->generation);
         entry->next_free = system->free_definition_slot;
         system->free_definition_slot = slot;
         ta_definition_destroy(freeing);

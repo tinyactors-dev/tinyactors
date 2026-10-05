@@ -18,7 +18,13 @@
  * 5. a system issues the pinned IDs: the first definitions and actors get
  *    generation 1 in slots 0 and 1, a reused slot's next ID has generation
  *    2, and retiring a definition ID treats an older generation of a slot
- *    as freed but a handle with generation 0 as never issued.
+ *    as freed but a handle with generation 0 as never issued;
+ * 6. the next generation is one more, except that UINT32_MAX wraps to 1,
+ *    never to 0;
+ * 7. a definition slot whose generation is UINT32_MAX is reused with
+ *    generation 1, not 0: the new ID is valid and names the new
+ *    definition, and the old ID is stale. The slot's generation is set
+ *    directly instead of reusing the slot four billion times.
  *
  * The test includes the amalgamation so it can reach the private units; it
  * uses the C library, the core does not.
@@ -169,12 +175,55 @@ static void test_system_issues_pinned_ids(void) {
     ta_system_destroy(system);
 }
 
+/* Claim 6. */
+static void test_next_generation(void) {
+    CHECK(ta_handle_next_generation(0u) == 1u);
+    CHECK(ta_handle_next_generation(1u) == 2u);
+    CHECK(ta_handle_next_generation(0x7fffffffu) == 0x80000000u);
+    CHECK(ta_handle_next_generation(UINT32_MAX - 1u) == UINT32_MAX);
+    CHECK(ta_handle_next_generation(UINT32_MAX) == 1u);
+}
+
+/* Claim 7. */
+static void test_definition_generation_wraps_past_zero(void) {
+    ta_system *system = NULL;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
+
+    ta_definition_id first = register_chart(system, S("first"));
+    CHECK(ta_handle_slot(first) == 0u);
+    ta_definition_slot *entry = ta_vec_at(&system->definitions, 0u);
+    /* The slot's generation at its last value before the wrap. */
+    entry->generation = UINT32_MAX;
+    ta_definition *definition = entry->definition;
+    definition->id = ta_handle_make(0u, UINT32_MAX);
+    ta_definition_id last = definition->id;
+    CHECK(ta_system_definition(system, last) == definition);
+
+    /* Freed, the slot wraps to 1, not 0. */
+    CHECK(ta_system_release_definition(system, last) == TA_OK);
+    CHECK(entry->generation == 1u);
+    ta_definition_id wrapped = register_chart(system, S("wrapped"));
+    CHECK(wrapped == 0x0000000100000000ull);
+    CHECK(ta_handle_slot(wrapped) == 0u);
+    CHECK(ta_handle_generation(wrapped) == 1u);
+    CHECK(ta_handle_valid(wrapped));
+    ta_definition *now = ta_system_definition(system, wrapped);
+    CHECK(now != NULL && now->id == wrapped);
+    CHECK(ta_system_definition(system, last) == NULL);
+    CHECK(ta_system_definition(system, ta_handle_make(0u, 0u)) == NULL);
+    CHECK(ta_system_release_definition(system, wrapped) == TA_OK);
+
+    ta_system_destroy(system);
+}
+
 int main(void) {
     test_round_trip();
     test_packing_is_pinned();
     test_valid();
     test_public_actor_ids_agree();
     test_system_issues_pinned_ids();
+    test_next_generation();
+    test_definition_generation_wraps_past_zero();
     CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "handle_test: %d check(s) failed\n", failures);
