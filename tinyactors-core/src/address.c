@@ -43,11 +43,8 @@ static uint32_t ta_address_hash(const ta_actor_address *address) {
     return ta_fnv1a32(hash, address->name.ptr, address->name.len);
 }
 
-/*
- * The same hash from a record's text, which already holds the separator
- * (the NUL after the family): one pass over family, NUL and name.
- */
-static uint32_t ta_address_record_hash(const ta_address *record) {
+/* ta_address_record_hash: see address.h. */
+uint32_t ta_address_record_hash(const ta_address *record) {
     return ta_fnv1a32(TA_FNV1A32_BASIS, record->text, (size_t)record->family_len + 1u + record->name_len);
 }
 

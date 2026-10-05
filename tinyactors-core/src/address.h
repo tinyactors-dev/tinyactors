@@ -195,5 +195,14 @@ void ta_address_detached_init(ta_address *copy);
  */
 ta_result ta_address_detach(ta_arena *arena, const ta_address *address, ta_address **out);
 
+/*
+ * ta_address_record_hash answers the 32-bit hash the table keys `address` by,
+ * computed from the record's text (which already holds the NUL after the
+ * family) in one pass. It never allocates and keeps nothing; O(text). Other
+ * tables that are keyed by an interned address (the envelope pool's waiting
+ * lists) use it, so one address has one hash everywhere.
+ */
+uint32_t ta_address_record_hash(const ta_address *address);
+
 /* ta_address_in answers whether `address` is an interned record of `table` (not NULL, not a detached copy). */
 bool ta_address_in(const ta_address *address, const ta_address_table *table);
