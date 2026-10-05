@@ -89,10 +89,12 @@ event END close;                        # closes the program (node 0)
 
 # ---------------------------------------------------------------------------
 # Callback shapes. The compiler records a shape on the function it matched
-# (docs/matcher.md, section 6); nothing reads one yet.
+# (docs/matcher.md, section 6); map and toSorted run a tagged callback in C
+# (sections 7 and 11).
 
 shape PLUCK(key: text);                              # x => x.key
 shape COMPARE_BY_KEY(key: text, descending: flag);   # (a, b) => a.key - b.key, or b.key - a.key
+shape COMPARE_NUMERIC(descending: flag);             # (a, b) => a - b, or b - a
 
 nonterminal key_of(object: read, key: text);         # object.key, the object a name
 
@@ -117,3 +119,17 @@ COMPARE_BY_KEY(k, false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a
 COMPARE_BY_KEY(k, true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
                                                   PARAM{index: 1}, BIND{name: b}, PARAMS_END,
                                                   BLOCK_BEGIN, RETURN(BINARY{op: SUBTRACT}(key_of(b, k), key_of(a, k))), BLOCK_END);
+
+# (a, b) => a - b ascending; (a, b) => b - a descending. Both names are the parameters.
+COMPARE_NUMERIC(false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
+                                                 PARAM{index: 1}, BIND{name: b}, PARAMS_END,
+                                                 BINARY{op: SUBTRACT}(NAME{name: a}, NAME{name: b}));
+COMPARE_NUMERIC(true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
+                                                PARAM{index: 1}, BIND{name: b}, PARAMS_END,
+                                                BINARY{op: SUBTRACT}(NAME{name: b}, NAME{name: a}));
+COMPARE_NUMERIC(false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
+                                                 PARAM{index: 1}, BIND{name: b}, PARAMS_END,
+                                                 BLOCK_BEGIN, RETURN(BINARY{op: SUBTRACT}(NAME{name: a}, NAME{name: b})), BLOCK_END);
+COMPARE_NUMERIC(true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
+                                                PARAM{index: 1}, BIND{name: b}, PARAMS_END,
+                                                BLOCK_BEGIN, RETURN(BINARY{op: SUBTRACT}(NAME{name: b}, NAME{name: a})), BLOCK_END);

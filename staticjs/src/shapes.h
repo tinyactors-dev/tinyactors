@@ -9,8 +9,9 @@
 
 typedef enum {
     SJS_SHAPE_NONE = 0,
-    SJS_SHAPE_PLUCK,          /* key: text */
-    SJS_SHAPE_COMPARE_BY_KEY, /* key: text, descending: flag */
+    SJS_SHAPE_PLUCK,           /* key: text */
+    SJS_SHAPE_COMPARE_BY_KEY,  /* key: text, descending: flag */
+    SJS_SHAPE_COMPARE_NUMERIC, /* descending: flag */
     SJS_SHAPE_COUNT
 } sjs_shape;
 
@@ -32,6 +33,10 @@ static inline uint8_t sjs_shape_arg_kind(uint32_t shape, uint32_t i) {
         static const uint8_t kinds[] = { SJS_SHAPE_ARG_TEXT, SJS_SHAPE_ARG_FLAG };
         return i < 2u ? kinds[i] : (uint8_t)SJS_SHAPE_ARG_NONE;
     }
+    case SJS_SHAPE_COMPARE_NUMERIC: {
+        static const uint8_t kinds[] = { SJS_SHAPE_ARG_FLAG };
+        return i < 1u ? kinds[i] : (uint8_t)SJS_SHAPE_ARG_NONE;
+    }
     default: return SJS_SHAPE_ARG_NONE;
     }
 }
@@ -41,6 +46,7 @@ static inline const char *sjs_shape_name(uint32_t shape) {
     switch (shape) {
     case SJS_SHAPE_PLUCK: return "PLUCK";
     case SJS_SHAPE_COMPARE_BY_KEY: return "COMPARE_BY_KEY";
+    case SJS_SHAPE_COMPARE_NUMERIC: return "COMPARE_NUMERIC";
     default: return "NONE";
     }
 }

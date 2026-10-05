@@ -6,7 +6,9 @@ switch and the differential test ([matcher]); and the first consumers,
 `toSorted` and `map` running tagged callbacks in C ([consumers], section
 7). Section 9 lists the commits, each with its tests; where the
 implementation proved the first draft wrong in a detail, the sections say
-what changed and why. Section 10 is what may come next.
+what changed and why. Section 10 is what may come next. Section 11 adds
+numeric sorts (implemented), predicates against a literal and sums
+(designed), and designs set membership through a captured name.
 
 The compiler keeps reinventing small pattern matchers over the events it
 receives: OBJECT_LITERAL gathers static keys until a property breaks the
@@ -499,7 +501,9 @@ KEY_EQUALS(k, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAM
 `NAME undefined` and `NaN` are not literals here, because a module can
 rebind `undefined`, and `-0` is a UNARY. This shape lands with its first
 consumer, not before. Nothing in the commits of section 9 uses it, and the
-repository removes what nothing uses.
+repository removes what nothing uses. Section 11 designs it as KEY_COMPARE
+and ELEMENT_COMPARE, with every comparison operator and the type named
+`operand`.
 
 ---
 
@@ -1483,7 +1487,8 @@ Tests:
 These come after the commits of section 9, in the order a profile asks for
 them.
 
-- **KEY_EQUALS** (3.3) for `filter`, `find`, `findIndex`, `some`, `every`.
+- **KEY_EQUALS** (3.3) for `filter`, `find`, `findIndex`, `some`, `every`:
+  designed in section 11 as KEY_COMPARE and ELEMENT_COMPARE.
 - **The compiler's own peepholes as rules,** once a non-arrow node can
   carry a report: OBJECT_LITERAL's gathered prefix (an `OBJECT_BEGIN` hedge
   of static KEYs), and `call_begin`'s METHOD_MEMBER rewrite (a `CALL_BEGIN`
@@ -1498,6 +1503,859 @@ them.
 - **Rules on brackets that take the nodes before them** (a call, `&&`,
   `?:`, an if), which the generator refuses today (4.3): the matcher would
   have to keep the cells before such an open even in a dead region.
+  Section 11.9.2 designs this for a bracket that can still match, where
+  the cells are kept already.
 - **Key caching in the sort** (each element's key read once). It is not in
   the first commit, because it would charge fuel for keys of elements that
   are never compared.
+
+---
+
+## 11. The second rule set: numeric sorts, predicates and sums
+
+Status: item 1, the numeric sort, is implemented (11.6); items 2 and 3
+are designed, not implemented. Items 1 to 3 are one commit each (11.11);
+item 4, set membership through a captured name, is a design only (11.9),
+for the reasons given there.
+
+### 11.1 Why
+
+A comparison with QuickJS and Node `--jitless` (outside the repository)
+found staticjs at about half of Ignition's speed on callback loops. Entering
+and leaving a callback costs about 200 machine instructions per element,
+against about 64 per bytecode instruction, and `toSorted((a, b) => a - b)`
+is slower than QuickJS. A shape removes the callback from the loop: the
+element is decided in C, and the callback's frame is never run. Section 7
+did this for `map` with PLUCK and `toSorted` with COMPARE_BY_KEY. This
+section adds the other callbacks that the benchmarks and `bench/modules`
+use most:
+
+| item | shape | matches | consumer | fuel per element or comparison: bytecode, C |
+|---|---|---|---|---|
+| 1 | COMPARE_NUMERIC(descending) | `(a, b) => a - b`, `(a, b) => b - a` | `toSorted` | 5, 1 |
+| 2 | KEY_COMPARE(key, op, value) | `x => x.k OP c`, `x => c OP x.k` | `filter`, `find`, `findIndex`, `findLast`, `some`, `every` | 6, 2 |
+| 2 | ELEMENT_COMPARE(op, value) | `x => x OP c`, `x => c OP x` | the same | 5, 1 |
+| 3 | SUM(element_first) | `(a, x) => a + x`, `(a, x) => x + a` | `reduce` | 5, 1 |
+| 3 | SUM_KEY(key, element_first) | `(a, x) => a + x.k`, `(a, x) => x.k + a` | `reduce` | 6, 2 |
+| 4 | SET_HAS, SET_HAS_KEY, SET_HAS_BOTH (11.9) | `x => s.has(x.k)`, `x => s.has(x.k) && !t.has(x.k)`, ... | the predicate loops | design only |
+
+OP is `===`, `!==`, `<`, `<=`, `>` or `>=`, and `c` a literal: a number, a
+string, `true`, `false` or `null`. Every shape also matches its block form,
+`x => { return ...; }`, as PLUCK and COMPARE_BY_KEY do. The bytecode column
+is the loop's step plus the callback's instructions (each one unit), so
+`x => x.k === 2` is the step, TAKE_LOCAL, GET_MEMBER, NUMBER_, BINARY and
+RETURN. The C column is the step plus one unit per property looked up
+(7.1).
+
+### 11.2 Two new types in the rule language
+
+Item 1 and item 3 need nothing new. Item 2 needs two types, which land in
+its commit.
+
+- **`operator` as a shape parameter.** A shape records the operator of its
+  comparison: `shape KEY_COMPARE(key: text, op: operator, value: operand)`.
+  Nonterminal attributes can already be operators, and a head can already
+  give an operator constant; only `PARAM_TYPES` lacks it. Its argument kind
+  is the new `SJS_SHAPE_ARG_OPERATOR`, stored as the `sjs_operator`'s
+  number, like a count. It has its own kind so that `spec_test` and
+  `matcher_test` print it by name: `KEY_COMPARE(priority, STRICT_EQUAL, 2)`.
+- **`operand`: a value fixed before the callback runs.** In this item, a
+  literal: a number, a string, `true`, `false` or `null`. Item 4 would add
+  a name read from outside the function (11.9), which is why the type is
+  not called `literal`. Section 3.3 sketched it as one nonterminal over five
+  leaf kinds. It is a field type, an attribute type and a parameter type:
+
+  ```
+  event NUMBER leaf value: number, operand: operand;
+  event STRING leaf value: text, operand: operand;   # a template's pieces are the template's own events
+  event TRUE leaf operand: operand;
+  event FALSE leaf operand: operand;
+  event NULL leaf operand: operand;
+  ```
+
+  The field reads the event as a value. NUMBER gives its number, STRING
+  its text, and TRUE, FALSE and NULL only their kind. The generator allows
+  an `operand` field only on a `leaf` event, and the matcher's field reader
+  fails the test on any kind but these five, so a declaration on another
+  leaf matches nothing. An operand has no constant syntax: a test or a
+  head that gives one is refused ("an operand comes from its pattern,
+  never a constant"). An operand variable agrees only with operands. A
+  template's STRING pieces are separators of their template (section 2),
+  so `` `a` `` is never an operand.
+
+**In the matcher**, an operand is captured into the text stack, so every
+path that keeps, moves and drops text keeps, moves and drops operands too,
+unchanged:
+
+- Its bytes are a kind byte (`SJS_OPERAND_NUMBER`, `_TEXT`, `_TRUE`,
+  `_FALSE`, `_NULL`, in `src/internal.h`), then the payload: the double's 8
+  bytes for a number, the string's bytes for a text, nothing for the
+  others. The slot is a text slot (`offset`, `length` with the kind byte).
+- `matcher_field` builds the bytes in the step (`matcher_step.operand[1 +
+  SHAPE_TEXT_MAX]`), with a third sentinel offset, `SHAPE_TEXT_OPERAND`,
+  beside `SHAPE_TEXT_EVENT`. `matcher_text` and both settle paths read the
+  step's bytes for that sentinel, as they read the event's text for the
+  other. One event can need both, when one rule tests a STRING's `value`
+  and another its `operand`.
+- `matcher_text_slots` counts `SHAPE_FIELD_OPERAND` slots as text.
+  `matcher_use` compares two operands by their bytes. For numbers, equal
+  bits is `==`, because a NUMBER event's value is never NaN or -0: `NaN` is
+  a NAME, and `-0` is a UNARY over 0. A string longer than `SHAPE_TEXT_MAX`
+  fails its test, as a long key does, and only loses the fast path.
+- The report's `sjs_shape_value` gains `uint8_t operand` (the kind). It
+  fills `number` (copied out of the bytes with `sjs_copy`) or `text`.
+
+**In the compiler**, `on_shape` stores an operand in one `uint32_t`
+`shape_args` entry: `kind | index << 4`, through
+`sjs_shape_operand(kind, index)`, `sjs_shape_operand_kind(arg)` and
+`sjs_shape_operand_index(arg)` in `src/internal.h`. Four bits leave room
+for item 4's kinds. A number's index is `number_index`'s and a text's is
+`string_constant`'s. Both find the constant the literal's own NUMBER_ or
+CONSTANT instruction already made, because the body is compiled before its
+ARROW_END reaches the matcher, so no constant is added, and the
+differential test's program hash checks that. True, false and null have
+index 0. An index of 2^28 or more is not recorded: `on_shape` leaves the
+function untagged.
+
+With three parameters (KEY_COMPARE), `SJS_SHAPE_ARGS` becomes 3, and
+`sjs_function_info` grows from 24 to 28 bytes. Item 4's SET_HAS_BOTH would
+make it 4, and 32 bytes.
+
+### 11.3 The rules
+
+These are appended to `src/shapes.rules`, after COMPARE_BY_KEY, with the
+five event declarations of 11.2 changed in place. The three items' rules
+were run through the generator, with `number` standing in for `operand`
+and `operator` added to its parameter types. They generate, and pass every
+check of 4.3, the closure check included.
+
+```
+# ---- 1. Numbers in toSorted ------------------------------------------------
+
+shape COMPARE_NUMERIC(descending: flag);               # (a, b) => a - b, or b - a
+
+# (a, b) => a - b ascending; (a, b) => b - a descending. Both names are the parameters.
+COMPARE_NUMERIC(false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
+                                                 PARAM{index: 1}, BIND{name: b}, PARAMS_END,
+                                                 BINARY{op: SUBTRACT}(NAME{name: a}, NAME{name: b}));
+COMPARE_NUMERIC(true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
+                                                PARAM{index: 1}, BIND{name: b}, PARAMS_END,
+                                                BINARY{op: SUBTRACT}(NAME{name: b}, NAME{name: a}));
+COMPARE_NUMERIC(false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
+                                                 PARAM{index: 1}, BIND{name: b}, PARAMS_END,
+                                                 BLOCK_BEGIN, RETURN(BINARY{op: SUBTRACT}(NAME{name: a}, NAME{name: b})), BLOCK_END);
+COMPARE_NUMERIC(true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
+                                                PARAM{index: 1}, BIND{name: b}, PARAMS_END,
+                                                BLOCK_BEGIN, RETURN(BINARY{op: SUBTRACT}(NAME{name: b}, NAME{name: a})), BLOCK_END);
+
+# ---- 2. Predicates against a literal ----------------------------------------
+
+shape KEY_COMPARE(key: text, op: operator, value: operand);   # x => x.key OP c, or c OP x.key
+shape ELEMENT_COMPARE(op: operator, value: operand);          # x => x OP c, or c OP x
+
+nonterminal fixed(value: operand);       # a value fixed before the callback runs: here, a literal
+nonterminal key_test(object: read, key: text, op: operator, value: operand);
+nonterminal element_test(element: read, op: operator, value: operand);
+
+fixed(c) <- NUMBER{operand: c};
+fixed(c) <- STRING{operand: c};
+fixed(c) <- TRUE{operand: c};
+fixed(c) <- FALSE{operand: c};
+fixed(c) <- NULL{operand: c};
+
+# x.key OP c. One rule per operator: no other operator may match.
+key_test(x, k, STRICT_EQUAL, c)     <- BINARY{op: STRICT_EQUAL}(key_of(x, k), fixed(c));
+key_test(x, k, STRICT_NOT_EQUAL, c) <- BINARY{op: STRICT_NOT_EQUAL}(key_of(x, k), fixed(c));
+key_test(x, k, LESS, c)             <- BINARY{op: LESS}(key_of(x, k), fixed(c));
+key_test(x, k, LESS_EQUAL, c)       <- BINARY{op: LESS_EQUAL}(key_of(x, k), fixed(c));
+key_test(x, k, GREATER, c)          <- BINARY{op: GREATER}(key_of(x, k), fixed(c));
+key_test(x, k, GREATER_EQUAL, c)    <- BINARY{op: GREATER_EQUAL}(key_of(x, k), fixed(c));
+# c OP x.key, recorded as x.key OP' c: the operator mirrored (11.7.2 says why that is exact).
+key_test(x, k, STRICT_EQUAL, c)     <- BINARY{op: STRICT_EQUAL}(fixed(c), key_of(x, k));
+key_test(x, k, STRICT_NOT_EQUAL, c) <- BINARY{op: STRICT_NOT_EQUAL}(fixed(c), key_of(x, k));
+key_test(x, k, GREATER, c)          <- BINARY{op: LESS}(fixed(c), key_of(x, k));
+key_test(x, k, GREATER_EQUAL, c)    <- BINARY{op: LESS_EQUAL}(fixed(c), key_of(x, k));
+key_test(x, k, LESS, c)             <- BINARY{op: GREATER}(fixed(c), key_of(x, k));
+key_test(x, k, LESS_EQUAL, c)       <- BINARY{op: GREATER_EQUAL}(fixed(c), key_of(x, k));
+
+# x OP c, and c OP x mirrored.
+element_test(x, STRICT_EQUAL, c)     <- BINARY{op: STRICT_EQUAL}(NAME{name: x}, fixed(c));
+element_test(x, STRICT_NOT_EQUAL, c) <- BINARY{op: STRICT_NOT_EQUAL}(NAME{name: x}, fixed(c));
+element_test(x, LESS, c)             <- BINARY{op: LESS}(NAME{name: x}, fixed(c));
+element_test(x, LESS_EQUAL, c)       <- BINARY{op: LESS_EQUAL}(NAME{name: x}, fixed(c));
+element_test(x, GREATER, c)          <- BINARY{op: GREATER}(NAME{name: x}, fixed(c));
+element_test(x, GREATER_EQUAL, c)    <- BINARY{op: GREATER_EQUAL}(NAME{name: x}, fixed(c));
+element_test(x, STRICT_EQUAL, c)     <- BINARY{op: STRICT_EQUAL}(fixed(c), NAME{name: x});
+element_test(x, STRICT_NOT_EQUAL, c) <- BINARY{op: STRICT_NOT_EQUAL}(fixed(c), NAME{name: x});
+element_test(x, GREATER, c)          <- BINARY{op: LESS}(fixed(c), NAME{name: x});
+element_test(x, GREATER_EQUAL, c)    <- BINARY{op: LESS_EQUAL}(fixed(c), NAME{name: x});
+element_test(x, LESS, c)             <- BINARY{op: GREATER}(fixed(c), NAME{name: x});
+element_test(x, LESS_EQUAL, c)       <- BINARY{op: GREATER_EQUAL}(fixed(c), NAME{name: x});
+
+# x is parameter 0, the only one, a plain name.
+KEY_COMPARE(k, o, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
+                                               key_test(x, k, o, c));
+KEY_COMPARE(k, o, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
+                                               BLOCK_BEGIN, RETURN(key_test(x, k, o, c)), BLOCK_END);
+ELEMENT_COMPARE(o, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
+                                                element_test(x, o, c));
+ELEMENT_COMPARE(o, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
+                                                BLOCK_BEGIN, RETURN(element_test(x, o, c)), BLOCK_END);
+
+# ---- 3. Sums in reduce ---------------------------------------------------------
+
+shape SUM(element_first: flag);                        # (a, x) => a + x, or x + a
+shape SUM_KEY(key: text, element_first: flag);         # (a, x) => a + x.key, or x.key + a
+
+SUM(false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                     BINARY{op: ADD}(NAME{name: a}, NAME{name: x}));
+SUM(true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                    BINARY{op: ADD}(NAME{name: x}, NAME{name: a}));
+SUM(false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                     BLOCK_BEGIN, RETURN(BINARY{op: ADD}(NAME{name: a}, NAME{name: x})), BLOCK_END);
+SUM(true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                    BLOCK_BEGIN, RETURN(BINARY{op: ADD}(NAME{name: x}, NAME{name: a})), BLOCK_END);
+SUM_KEY(k, false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                            BINARY{op: ADD}(NAME{name: a}, key_of(x, k)));
+SUM_KEY(k, true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                           BINARY{op: ADD}(key_of(x, k), NAME{name: a}));
+SUM_KEY(k, false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                            BLOCK_BEGIN, RETURN(BINARY{op: ADD}(NAME{name: a}, key_of(x, k))), BLOCK_END);
+SUM_KEY(k, true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                           BLOCK_BEGIN, RETURN(BINARY{op: ADD}(key_of(x, k), NAME{name: a})), BLOCK_END);
+```
+
+Why these rules are sound, beyond 3.2 (exact hedges, no shadowing, no
+hidden behaviour):
+
+- **One rule per operator.** A pattern cannot test an operator against a
+  set, and `BINARY{op: o}` would also match `x.k + 1`, `x.k - 1` and `"k"
+  in x`, so each comparison operator has its own rule and the head gives
+  the operator. That is 24 postfix rules on BINARY. They cost a test of
+  `op` each, and only for a BINARY in a bracket that can still match
+  (5.3). The rest of the program is a dead region.
+- **Mirroring.** `c < x.k` is recorded as `x.k > c`, so a consumer handles
+  one orientation. 11.7.2 shows that the answer and the faults are the
+  same. Strict equality is symmetric and keeps its operator.
+- **The literal side is never a name** in this item, so no BINARY can
+  derive `key_test` or `element_test` both ways. Item 4 changes that
+  (11.9.3).
+- **Which names are which.** COMPARE_NUMERIC's and SUM's patterns tie each
+  NAME to a BIND by position. `(a, b) => a - a`, `(a, b) => b - b` and
+  `(a, x) => a + a` derive the BINARY's nonterminal, but the arrow rule's
+  second binding (`b` or `x`) differs from the name read, so nothing
+  matches. Duplicate parameters do not compile (3.2).
+- **Order matters for sums.** SUM records which operand the element is,
+  because the C path adds in the bytecode's order (11.8). Addition of two
+  doubles is commutative, NaN payloads aside, but there is no reason to
+  rely on that.
+
+Each shape is reported for a closing ARROW_END, so the compiler's recording
+(6.2) is unchanged, but for the operand and operator conversions of 11.2.
+
+### 11.4 The generated tables, and what they cost the matcher
+
+The draft rules, run through the generator (with the stand-in types):
+
+| after | nonterminals | rules | ARROW_BEGIN bracket rules | `SHAPE_SLOTS` | `SHAPE_COSTS` | record (x86_64) |
+|---|---|---|---|---|---|---|
+| today | 9 | 12 | 6 | 16 | 9 | 184 bytes |
+| item 1 | 12 | 18 | 10 | 24 | 12 | 248 bytes |
+| item 2 | 19 | 53 | 14 | 40 | 19 | 392 bytes |
+| item 3 | 27 | 67 | 22 | 59 | 27 | 560 bytes |
+
+All of these are within the generator's limits (63 nonterminals, 32 bracket
+rules per open kind). A record's stride grows for two reasons (4.5). A
+cell has a slot for every attribute of every nonterminal, 59 after item 3.
+A marker has a slot for every variable of every bracket rule of its kind:
+the arrow's 22 rules hold 58, and 38 of them are the parameters' names,
+which every rule binds again. Fewer records fit in the first 1 KiB (one at
+560 bytes, against five today), so a compile with nested arrows that a
+rule can match allocates more often. A cell copy (`made` in `matcher_node`)
+moves more bytes. Every one-parameter arrow keeps 6 rules alive until its
+body (PLUCK, KEY_COMPARE, ELEMENT_COMPARE, two forms each), where today it
+keeps 2.
+
+So each item's commit quotes `mise run bench-compare <the commit before it>
+compile --quick`, and then the full run, for `compile.guard.*`,
+`compile.module.*` and the parser-only rows. Item 3's commit also adds
+`_Static_assert(MATCHER_FIRST_RECORDS >= 1, ...)` to `matcher.c`: past 1 KiB
+per record, today's formula gives 0 and the first allocation would hold no
+record.
+
+**[slots], if a commit's table flags compile time.** The generator can
+share slots in both kinds of record, and only the generator and the
+matcher's slot indexing change:
+
+- **Cells, by event kind.** A cell is made by one event kind: a leaf's, a
+  postfix's, or a bracket's open. Two nonterminals that no single kind can
+  derive can share slots. Each nonterminal's kinds are those its rules are
+  rooted at, plus, through chain rules, those of the nonterminals it is
+  chained from. A shared slot is sound because a cell writes and reads only
+  the slots of nonterminals it derives (`matcher_accept`,
+  `matcher_text_slots`).
+- **Markers, by binding site.** A variable's first occurrence is at a child
+  position, as an attribute of the nonterminal derived there (or a field
+  of the separator there). Two rules that bind at the same site bind the
+  same value, because a cell keeps one derivation per nonterminal. So each
+  site gets one slot, and each rule gets a table from its variables to
+  slots, `shape_variable_slot[first_variable + v]`, in place of
+  `first_slot + v`, which `matcher_tests`, `matcher_links`, `matcher_accept`
+  and `matcher_text_slots` read through. All parameter names then share 2
+  slots.
+
+Counted by hand for the three items, that is about 25 slots, not 59, and a
+record of about 290 bytes. [slots] lands before the item whose commit shows
+the regression, or before item 4 regardless, whose rules would take the
+record past 800 bytes. Its tests are `shapes-test`'s table fixture, which
+shows the sharing, and `matcher_test`'s reports, which must stay
+identical.
+
+### 11.5 Consumers: what all of them share
+
+Section 7.1's rules hold for each consumer: the loop's frame records the
+shape once, the callback is entered where the bytecode would first enter
+it, every precondition is checked on every step, the stack must have room,
+there is one unit of work per step (returning LOOP_AGAIN), and the lookups
+are charged. The changes common to all three items:
+
+- **`shape_start` takes a table** from built-in to the shapes it runs.
+  MAP runs PLUCK; TO_SORTED runs COMPARE_BY_KEY and COMPARE_NUMERIC;
+  FILTER, FIND, FIND_INDEX, FIND_LAST, SOME and EVERY run KEY_COMPARE and
+  ELEMENT_COMPARE; REDUCE runs SUM and SUM_KEY. The table replaces the
+  conditional chain, which three more cases would make unreadable.
+  **Implemented with item 1** as `shape_runners`, rows of `{ builtin,
+  shape }` that `shape_start` scans; a switch on the shape then reads its
+  key (PLUCK, COMPARE_BY_KEY) and its flag. COMPARE_NUMERIC has no key, so
+  its loop frame leaves `shape_key` (the code frame's `closure`) alone.
+  `shape_flag` means, by shape: PLUCK and KEY_COMPARE, "the key is on
+  Object.prototype"; COMPARE_BY_KEY and COMPARE_NUMERIC, descending; SUM
+  and SUM_KEY, the element is the left operand.
+- **The frame stays 112 bytes.** Measured with `offsetof` on x86_64 at
+  23e85a1: bytes 64 to 66 are `entered`, `shape` and `shape_flag`, 67 is
+  padding, and toSorted's fields, then `shape_guess`, run from 68 to 112.
+  The new `uint8_t shape_op` (KEY_COMPARE's and ELEMENT_COMPARE's
+  operator) takes byte 67.
+  The operand, an `sjs_value shape_value` (16 bytes, 8-aligned), shares
+  storage with toSorted's merge state. `shape_guess` moves to 68, and an
+  anonymous union at 72 holds either `{ width, left, mid, right, i, j, k,
+  scratch_count }` (32 bytes) or `shape_value`. `scratch` stays at 104,
+  outside the union, because `sjs_loop_free` reads it on every loop.
+  `scratch_count` is read only when `scratch` is set, which only toSorted
+  does. The static assert keeps the 112.
+- **The operand is borrowed.** `shape_start` makes `shape_value` from the
+  function's argument: `sjs_num(program->numbers[i])`, the string
+  constant `program->constants[i]`, or true, false or null, with no
+  reference taken. The closure in LOOP_CALLBACK holds its program, and the
+  program holds its constants, until the loop frame is gone. That is the
+  same argument as for `shape_key`.
+- **Shared answers.** The bytecode's answer and the C path's go through
+  the same helpers, as `sort_take` does for the sort. `predicate_answer(vm,
+  frame, truthy)` decides the element at `frame->index`: keep it (filter),
+  or finish with true, false, the element, or its index (some, every,
+  find, findLast, findIndex), or go on. `sjs_loop_step`'s phase-1 switch
+  calls it too, so the two paths cannot drift. It returns LOOP_DONE,
+  LOOP_FAULT (filter's `array_add` failing), or LOOP_AGAIN for "go on",
+  which phase 1 reads as "carry on in this step".
+- **Where the C step runs.** The C step is in `sjs_loop_step`, after the
+  end-of-array check and before `call_element`, as PLUCK's is. reduce's
+  sits before its own `call_back`. A loop whose last element took the C
+  path finishes on the next step, exactly as one whose last element took
+  the bytecode: the bytecode's next step reads the answer and finds the
+  end, so the counts of steps are equal.
+
+### 11.6 Item 1: toSorted with COMPARE_NUMERIC
+
+In `sort_step`'s phase 2, beside COMPARE_BY_KEY's branch, where `x` and `y`
+are the pair (never undefined; those are placed without a comparison):
+
+1. `frame->shape == SJS_SHAPE_COMPARE_NUMERIC`.
+2. The callback is entered.
+3. The stack has room for `COMPARE_STACK` (2): `a` and `b`.
+4. `x.kind == SJS_NUMBER` and `y.kind == SJS_NUMBER`.
+
+Then `sort_take(frame, descending ? y - x : x - y)`. That is the double
+`apply_binary` returns for `a - b` (or `b - a`), with `a` as `x`, and it
+goes through the helper the bytecode's answer goes through. The step
+charges nothing beyond its own unit and returns LOOP_AGAIN. Otherwise it
+calls back.
+
+- **Value.** As in 7.2: the same double, so the same decision. A NaN
+  difference (a NaN element, or `Infinity - Infinity`) is not `> 0`, so
+  the left element is kept. That is how JavaScript reads a NaN comparator
+  result: as +0. 0 and -0 compare equal and keep their order.
+- **Faults.** Strings, null, booleans, objects and arrays fall back. The
+  bytecode faults ("arithmetic in staticjs is on numbers") for the first
+  pair that has one, in the merge's order, on both paths.
+- **Fuel.** 5 per comparison in bytecode (the step, TAKE_LOCAL,
+  TAKE_LOCAL, BINARY, RETURN), 1 in C.
+
+**Implemented** as `sort_numbers` in `src/builtins.c`, beside
+`sort_by_key`: one branch in `sort_step` enters the callback for either
+comparator shape, then calls the one the frame recorded. The generated
+tables are item 1's row of 11.4 (12 nonterminals, 18 rules, 24 slots, 12
+costs). `api_test` pins the fuel: `[3, 1, 2, 0].toSorted((a, b) => a - b)`
+costs 40 without shapes and 20 with them, 5 × 4 apart, and pauses 39 and
+19 times on one unit per run; `max_stack` from 6 to 10 and `max_frames` 2
+and 3 give the same faults at the same places both ways. Compiling
+`power.js` and the synthetic module takes one more allocation and 1,024
+more bytes at the peak (the matcher's second block of records, now that a
+record is larger); the guards' compiles are unchanged. At 8 runs no
+`compile.*` row is flagged, but every module row reads 3 to 5% slower,
+within the runs' noise: [slots] (11.4) is the first thing to measure if
+item 2's commit moves them further.
+
+### 11.7 Item 2: the predicate loops
+
+#### 11.7.1 Preconditions and the C step
+
+In `predicate_step(vm, frame)`, for element `e` (`frame->index`, or
+`length - 1 - index` for findLast):
+
+1. `frame->shape` is KEY_COMPARE or ELEMENT_COMPARE (set at the start).
+   For `<`, `<=`, `>` and `>=` with an operand that is `true`, `false` or
+   `null`, `shape_start` sets no shape. Every such comparison faults in
+   staticjs ("staticjs compares two numbers or two strings"), so the
+   bytecode runs the whole loop and faults at the first element.
+2. The callback is entered (`sjs_vm_enter_callback`, on the first step).
+3. The stack has room for `PREDICATE_STACK` (2): the bytecode pushes `x`
+   (then `x.k` in its place) and `c`, in either order.
+4. **The value `v`.** For ELEMENT_COMPARE, `v` is the element, whatever it
+   is. For KEY_COMPARE, the element must be `SJS_OBJECT`. `v` is its own
+   property's value (`own_entry`, as for PLUCK), or undefined when it has
+   none and the key is not on Object.prototype (`shape_flag`). Any other
+   element (null, undefined, a number, a boolean, an array, a string, a
+   set, a function), and a missing key that is on Object.prototype, call
+   the bytecode for that element.
+5. **The answer**, `compare_operand(frame, v)`: true, false, or "the
+   bytecode decides":
+   - `===` and `!==`: if `v` is a primitive (`sjs_is_primitive`), `equal =
+     sjs_strict_equal_primitive(v, c)`, the function `apply_binary` calls.
+     Otherwise `equal` is false, as `apply_binary` gives for a primitive
+     against an object. `c` is a literal, so it is always a primitive, and
+     `===` never faults here. `!==` is `!equal`.
+   - `<`, `<=`, `>`, `>=`: both numbers, compared as C doubles with the
+     operator's own C operator; or both strings, by
+     `sjs_utf16_compare(v, c)` against 0. Anything else is decided by the
+     bytecode, which faults.
+6. With the answer, `predicate_answer`; then `frame->index++` unless it
+   finished. The step charges 1 lookup for KEY_COMPARE and none for
+   ELEMENT_COMPARE, and returns LOOP_AGAIN, or what `predicate_answer`
+   returned.
+
+When the bytecode decides, the step calls `call_element` exactly as today.
+
+#### 11.7.2 Why the result is identical
+
+- **Value.** `v` is what TAKE_LOCAL (and GET_MEMBER) leave on the stack,
+  and `c` is what NUMBER_, CONSTANT, TRUE_, FALSE_ or NULL_ push: the same
+  number by its index, or the same interned string. The comparison is
+  `apply_binary`'s own expression for the same operator and operand types.
+  That covers NaN (every relational answer false, `NaN === NaN` false,
+  `NaN !== c` true), `-0 === 0` (true, `==` on doubles), `-0 < 0` (false)
+  and `-0 <= 0` (true), Infinity, strings compared by bytes for equality,
+  and by UTF-16 code units for order. The last is not code-point order:
+  `"\u{1F600}" < "\uFFFF"` holds, because U+D83D comes before U+FFFF.
+- **Mirroring.** For `c OP x.k`, the bytecode computes `c OP v` and the C
+  path `v OP' c`. For numbers, `c < v` and `v > c` are the same IEEE
+  comparison, NaN included. For strings, `sjs_utf16_compare` (src/text.c)
+  is antisymmetric: swapping its operands swaps every `-1` and `1` it can
+  return, and keeps 0. So `cmp(c, v) < 0` holds exactly when `cmp(v, c) >
+  0`. For mixed types both orientations fault, and the C path does not
+  decide those; the bytecode runs in its own orientation and gives its own
+  fault, position and subject.
+- **Faults.** The C path never faults. Each fault the bytecode can raise
+  for these bodies is a case the C path leaves to it: a property of a
+  non-object (`x.k` on null, a number), a key on Object.prototype, and a
+  relational comparison of mixed types. So the fault comes from the same
+  instruction for the same element. Identity comparison of two objects
+  cannot arise, because `c` is a literal.
+- **Short-circuit.** some, every, find, findIndex and findLast stop at the
+  element where `predicate_answer` finishes. That is the element where the
+  bytecode's phase 1 finishes, because both read the same truthiness of
+  the same answer. Elements after it are never read, on either path, so a
+  faulting element past the answer does not fault.
+- **Filter's output** grows through the same `array_add` with the same
+  reference taken, so with `spec_test --full` the same allocation fails at
+  the same element. The C path itself allocates nothing.
+- **Fuel.** Bytecode: KEY_COMPARE costs 6 per element (the step, TAKE_LOCAL,
+  GET_MEMBER, a literal instruction, BINARY, RETURN), ELEMENT_COMPARE 5.
+  C: 2 and 1. A string comparison costs no fuel per byte in either, as
+  `apply_binary` charges none.
+
+### 11.8 Item 3: reduce with SUM and SUM_KEY
+
+In REDUCE's branch of `sjs_loop_step`, before it moves the accumulator into
+the call. With `acc` the value in LOOP_OUTPUT and `e` the element at
+`frame->index`, the C step applies when all of these hold:
+
+1. `frame->shape` is SUM or SUM_KEY.
+2. The callback is entered: on the first step that would call it, which is
+   index 0 with an initial value, or 1 without one. A reduce without an
+   initial value over an empty array faults in `sjs_loop_start`, before
+   any of this, as today. Over one element, no step calls back, so nothing
+   is entered on either path.
+3. The stack has room for `SUM_STACK` (2): `a` and `x` (then `x.k`).
+4. `acc.kind == SJS_NUMBER`.
+5. SUM: `e.kind == SJS_NUMBER`. SUM_KEY: `e` is an object with an own
+   property `key` whose value is a number. A missing key falls back
+   whether or not the key is on Object.prototype: `acc + undefined` faults
+   either way.
+
+Then `acc` becomes `element_first ? v + acc : acc + v`, with C's double
+addition and the operands in the bytecode's order (`add` in vm.c computes
+`a.as.number + b.as.number`, left operand first). It is written into
+LOOP_OUTPUT in place: a number holds no reference. Then `frame->index++`,
+1 lookup is charged for SUM_KEY (none for SUM), and the step returns
+LOOP_AGAIN. Otherwise the bytecode runs, for this element only.
+
+- **Value.** The same doubles, added in the same order, element by
+  element. Each step adds one element to the result of the step before,
+  on either path, so the rounding is the bytecode's
+  (`[0.1, 0.2, 0.3].reduce((a, x) => a + x, 0)` is
+  0.6000000000000001 both ways). -0 survives where it does in the bytecode
+  (`-0 + -0` is -0, `-0 + 0` is 0), and NaN and `Infinity + -Infinity`
+  are C's.
+- **Strings and mixed types** fall back per element. Once the accumulator
+  is a string (an initial `""`, or a string element), every later step
+  falls back, because `acc` is no longer a number. The bytecode then
+  concatenates, or faults. `[1, 2, "3", 4]` gives `"334"`, with the first
+  two additions in C. `[1, true]` faults at `true` with the bytecode's
+  "staticjs adds two numbers, or a string and a primitive".
+- **Fuel.** Bytecode: 5 per element for SUM (the step, TAKE_LOCAL,
+  TAKE_LOCAL, BINARY, RETURN), 6 for SUM_KEY. C: 1 and 2.
+- **The accumulator's reference.** The bytecode path moves `acc` out of
+  LOOP_OUTPUT into the call. The C path leaves it there, as a number,
+  which nothing can observe.
+
+### 11.9 Item 4, design only: captured names, set membership and conjunctions
+
+`campaign.js`'s `unsent` is `batch.filter(n => pending.has(n.id) &&
+!sent.has(n.id))`, and the `eval.guard.window` and `eval.set.has` benches
+are `n => pending.has(n.id)` and `id => pending.has(id)`. A C path for them
+needs three things the matcher lacks, so it is designed here and not
+implemented with items 1 to 3.
+
+#### 11.9.1 Why it is not one commit
+
+1. **Rules on brackets that take the nodes before them.** `s.has(x)` is a
+   CALL_BEGIN (`open 1`: the callee `s.has` is its first child), and `p &&
+   q` is a LOGICAL (`open 1`). The generator refuses rules on both (4.3),
+   because the matcher keeps no cells in a dead region (5.3). This changes
+   one of the matcher's invariants, with its own generator check, and the
+   bound and width tests of `matcher_test`. It should land and be reviewed
+   alone.
+2. **A free name as an operand**, resolved by the compiler, which needs
+   `read_name` split into a lookup and an emit (11.9.3).
+3. **The consumers**: three shapes, with set lookups and their fuel, and
+   `SJS_SHAPE_ARGS` at 4.
+
+Each of these is about as large as one of items 1 to 3, and the second and
+third build on the first. So item 4 is three commits ([brackets],
+[names], [members]), after [slots] (11.4).
+
+#### 11.9.2 [brackets]: rules on `open N` events
+
+- **Generator.** Drop the refusal of 4.3. Keep `N <= 1` as a check (every
+  `open N` kind has N = 1 today), so the matcher moves at most one record.
+  In a pattern, the N first children of the bracket are its first N
+  patterns, as CALL_BEGIN's declaration already says ("the callee is its
+  first child").
+- **Matcher.** In `matcher_open`, when the innermost bracket can still
+  match and the event has rules and N = 1, the last cell (its callee, or
+  its left operand) is the bracket's first child. The matcher copies it
+  aside, writes the new marker at its index, with the cell's `text_base`
+  (its text stays where it is and is now the marker's), and folds the copy
+  into the marker as child 0. A marker no rule survives dooms the bracket
+  around it, as today. In a dead region nothing changes: the cell was
+  never kept, and a bracket there can be no rule's child.
+- **Bound.** The open replaces one cell by one marker, so 5.6's bound
+  holds.
+- **Tests.** `matcher_test`'s never-stops sweep and bound checks for every
+  nesting kind, with calls and logical operators that rules look at;
+  `shapes-test`'s fixture with a rule on an `open 1` kind; and the out of
+  memory sweep.
+
+#### 11.9.3 [names]: a name from outside as an operand
+
+- **Rules.** `event NAME leaf name: read, operand: operand;`, and the
+  operand kind `SJS_OPERAND_NAME` (the name's text). An operand is not a
+  `read`, so the closure check (4.3) is unchanged: a rule may read a name
+  as an operand without binding it. The compiler then decides what the
+  name is.
+- **Compiler.** `on_shape` resolves a NAME operand as `read_name` would,
+  through a lookup split out of `read_name`. The lookup emits nothing and
+  notes no read, and `read_name` calls it, so the two cannot disagree.
+  - a capture of the closing function becomes `SJS_OPERAND_CAPTURE`, its
+    index in the function's captures. The body read the name, so the
+    capture is already in `pending_captures`.
+  - a B_CONSTANT binding (an import) becomes `SJS_OPERAND_CONSTANT`.
+  - a global becomes `SJS_OPERAND_GLOBAL`.
+  - `undefined` becomes `SJS_OPERAND_UNDEFINED`, and `NaN` and `Infinity`
+    become `SJS_OPERAND_NUMBER`, with the index `read_name` made.
+  - A local of the closing function (its parameter: `x => x.has(x)` binds
+    the set's name to `x`), a namespace or a built-in function: the report
+    is ignored and the function stays untagged.
+- **Loop start.** `shape_start` reads the operand once:
+  `closure->captures[i]`, `program->constants[i]`, `vm->globals[i]`, or
+  undefined. Every binding is const and globals are fixed for an
+  evaluation (`sjs_run_params`), so the value cannot change while the loop
+  runs. It is borrowed, from the closure in LOOP_CALLBACK, its program, or
+  the embedder.
+- **KEY_COMPARE and ELEMENT_COMPARE with a name.** The rule `fixed(c) <-
+  NAME{operand: c};` gives them `x.k === limit` and `x.k !== undefined`.
+  The operand can now be an object, so `compare_operand` decides `===`
+  only when `v` or `c` is a primitive. With two objects the bytecode
+  faults ("=== on two objects compares identity"). The relational
+  operators already leave mixed types to the bytecode. A relational
+  operator with an operand of the wrong kind falls back per element, since
+  `shape_start` cannot refuse it from the source alone.
+- **The one ambiguity.** With `fixed` on NAME, `y === x` derives
+  `element_test` twice: as `x := y, c := x` from the direct rule, and as
+  `c := y, x := x` from the mirrored one. A cell keeps one derivation per
+  nonterminal, and on a tie the first (5.3), so the mirrored one is lost
+  and `x => y === x` would never match. The mirrored element rules
+  therefore derive a nonterminal of their own, `element_test_mirrored`,
+  with two ELEMENT_COMPARE arrow rules of their own. Key tests are not
+  affected, because `key_of` is never a NAME.
+
+#### 11.9.4 [members]: SET_HAS, SET_HAS_KEY and SET_HAS_BOTH
+
+```
+shape SET_HAS(set: operand, negated: flag);                   # x => s.has(x), x => !s.has(x)
+shape SET_HAS_KEY(set: operand, key: text, negated: flag);    # x => s.has(x.k), x => !s.has(x.k)
+shape SET_HAS_BOTH(first: operand, second: operand, key: text, negated: count);
+                                                    # x => [!]s.has(x.k) && [!]t.has(x.k); bit 0 the first, bit 1 the second
+
+nonterminal has_of(set: operand);                              # s.has, s a name
+nonterminal member(element: read, set: operand, negated: flag);
+nonterminal key_member(object: read, key: text, set: operand, negated: flag);
+nonterminal both(object: read, key: text, first: operand, second: operand, negated: count);
+
+has_of(s) <- MEMBER{key: "has"}(NAME{operand: s});
+member(x, s, false) <- CALL_BEGIN(has_of(s), NAME{name: x}, ARGUMENT);
+member(x, s, true) <- UNARY{op: NOT}(member(x, s, false));
+key_member(x, k, s, false) <- CALL_BEGIN(has_of(s), key_of(x, k), ARGUMENT);
+key_member(x, k, s, true) <- UNARY{op: NOT}(key_member(x, k, s, false));
+both(x, k, s, t, 0) <- LOGICAL{op: AND}(key_member(x, k, s, false), key_member(x, k, t, false));
+both(x, k, s, t, 1) <- LOGICAL{op: AND}(key_member(x, k, s, true), key_member(x, k, t, false));
+both(x, k, s, t, 2) <- LOGICAL{op: AND}(key_member(x, k, s, false), key_member(x, k, t, true));
+both(x, k, s, t, 3) <- LOGICAL{op: AND}(key_member(x, k, s, true), key_member(x, k, t, true));
+# and the six arrow rules, each in both body forms, as KEY_COMPARE's
+```
+
+The events are `NAME s, MEMBER has, CALL_BEGIN, <argument>, ARGUMENT,
+CALL_END` (an ARGUMENT follows each argument) and `<left>, LOGICAL,
+<right>, LOGICAL_END`. One key on both sides is required by the shared
+`k`. Different keys, `||`, and a third conjunct do not match.
+
+The consumers are the six predicate loops. At loop start, each set operand
+must be an `SJS_SET`; otherwise no shape is set. Per element, the value is
+the element (SET_HAS), or the object's own property or undefined, as in
+11.7.1 (one lookup, even for SET_HAS_BOTH, whose bytecode looks the key up
+twice). The answer is `sjs_set_contains(set, v) != negated`, the leaf's own
+call, which takes any value (an object is never a member). For
+SET_HAS_BOTH the second set is consulted only when the first answer is
+true, as `&&` does. Fuel: the step, the key lookup, and `lookup_cost(set)`
+for each `has` made. That is what each CALL charges, so it is less than
+the bytecode's ten-plus instructions. The stack room is the compiled
+body's peak, pinned in `api_test`: CAPTURE, then METHOD_MEMBER's receiver
+and method, then the argument.
+
+The benches: `eval.set.has` and `eval.guard.window` (globals) take the
+path. A new `eval.array.filter.unsent`, `batch.filter(n => pending.has(n.id)
+&& !sent.has(n.id))` with global sets (L sizes), covers SET_HAS_BOTH.
+`bench/modules/campaign.js` covers captures through `compile.*` and the
+module's spec case.
+
+### 11.10 Tests and benchmarks
+
+Every case goes in `tests/spec/shapes.spec` with `@shapes`, its value or
+fault checked against Node by `mise run diff-node`, and is run both ways by
+the differential test (8.2). The bytes and chunks runs pause at every unit
+and every 13, so they resume each C loop mid-way. `spec_test` prints the
+new argument kinds: an operator by its `sjs_operator` name, an operand as
+JavaScript (`2`, `"open"`, `true`, `null`).
+
+**Item 1 (COMPARE_NUMERIC)**
+
+- **Positives:** ascending and descending, in both body forms;
+  `(b, a) => a - b` (descending: positions decide); `(a, b) => (a - b)`
+  (parentheses send nothing).
+- **Near-misses, each untagged:** `(a, b) => a - a`, `(a, b) => b - b`,
+  `(a, b) => a + b`, `(a, b) => a - b - 0`, `(a, b) => -a - b`,
+  `(a, b) => a.k - b`, `(a, b, c) => a - b`, `(a = 0, b) => a - b`,
+  `(a, b) => a - c` (a capture), `a => a - 1`, and
+  `(a, b) => { const d = a - b; return d; }`.
+- **Edges:** NaN (a single NaN element, the twin of COMPARE_BY_KEY's
+  single NaN key; if Node's order for an inconsistent comparator ever
+  differs, keep it to two elements); `Infinity` and `-Infinity`, with a
+  NaN from `Infinity - Infinity`; 0 and -0 in both orders (stable; the
+  writer prints `-0`); equal numbers; undefined elements (last, never compared);
+  a string pair (fault), a string among numbers (fault at the first such
+  pair), null and booleans (fault); empty and one-element arrays.
+- **Shape and consumer:** `[1, 2, 3].reduce((a, b) => a - b)` is tagged
+  COMPARE_NUMERIC, and reduce runs its bytecode.
+
+**Item 2 (KEY_COMPARE, ELEMENT_COMPARE)**
+
+- **Positives:** each of the six operators in both orientations, for a
+  key and for the element; each operand kind (an integer, `1.5`, `1e999`
+  as Infinity, `0x10`, `""`, a non-ASCII string, a string of 64 bytes,
+  `true`, `false`, `null`); the block form.
+- **Near-misses:** `x => x.k === y` (a capture, until item 4);
+  `x => x.k === undefined` and `x => x === NaN` (names, until item 4);
+  `x => x.k === -1` (a UNARY); `x => x.k === "a" + "b"`;
+  `` x => x.k === `a` `` (a template); a string literal of 65 bytes;
+  `x => x.k + 1` and `x => x.k - 1` (not comparisons); `x => "k" in x`;
+  `x => x.k.j === 1`; `x => x?.k === 1`; `x => x["k"] === 1`;
+  `(x, i) => x.k === 1`; `x => 1 === 2`; `x => x.k === x.j`;
+  `x => x === x`; `x => !(x.k === 1)`; `x => (x.k === 1) === true`;
+  `x => x.k === 1 && true`; `({k}) => k === 1`;
+  `x => { const y = 1; return x.k === y; }`.
+- **NaN:** `{k: NaN}` against `=== 1`, `!== 0`, `< 1`, `>= 0`; and NaN
+  elements against `> 0`.
+- **-0:** `{k: -0}` against `=== 0`; `[-0].find(x => x >= 0)` gives `-0`;
+  `-0 < 0` and `-0 <= 0`.
+- **undefined and missing keys:** `[{}, {k: 1}].filter(x => x.k === 1)`;
+  `[{}].filter(x => x.k !== null)` (true); `[{}].some(x => x.k < 1)`
+  (fault: undefined against a number); `[undefined, 1].filter(x => x === 1)`;
+  a key on Object.prototype (`x.toString === 1`: fault); an own `toString`
+  holding 1 (works).
+- **Mixed types and strings against numbers:** `[1, "1", true, null,
+  {}].filter(x => x === 1)` and `... x === "1"` (no fault); `["10",
+  "9"].filter(x => x < "9")`; `[1, "a"].filter(x => x < 2)` (fault at
+  element 1, where JavaScript would give false); `"\u{1F600}"` against
+  `"\uFFFF"` in both orientations (UTF-16 order); `[1].filter(x => x <
+  true)` (no C path; fault); a property holding an object or an array
+  against `===` (false) and `<` (fault).
+- **Non-object elements for a key:** null and numbers (faults); arrays and
+  strings by `length`, sets by `size` (bytecode, works).
+- **Objects with an index:** an object of 9 keys, past `SJS_INDEX_FROM`,
+  so `own_entry` goes through `sjs_object_find`.
+- **Empty arrays:** each of the six methods.
+- **Short-circuit at the right element:**
+  `[{k: 1}, {k: 2}, null].find(x => x.k === 2)` (no fault),
+  `findIndex` (1), `[null, {k: 2}, {k: 3}].findLast(x => x.k === 2)`,
+  `some` before a faulting element, `every` stopping at its first false.
+  And faults at the right element, told apart by their messages:
+  `[{k: 1}, {k: "a"}, null].some(x => x.k > 5)` faults with "staticjs
+  compares two numbers or two strings", not with null's property fault;
+  `[{k: 1}, null, {k: "a"}]` gives the other fault; findLast gives the
+  same faults from the end.
+- **Shape and consumer:** `xs.map(x => x.k > 1)` is tagged, and map runs
+  its bytecode.
+
+**Item 3 (SUM, SUM_KEY)**
+
+- **Positives:** both orders, both forms, for each shape.
+- **Near-misses:** `(a, x) => a + a`, `(a, x) => a - x` (that is
+  COMPARE_NUMERIC), `(a, x) => a + x + 0`, `(a, x, i) => a + x`,
+  `(a, x) => a + x.k.j`, `(a, x) => a + x[0]`, `(a, x) => a.k + x`.
+- **Edges:** with and without an initial value; one element and no
+  initial value (no call); an empty array with and without one (0, and
+  the fault); `[0.1, 0.2, 0.3]` (rounding order); -0 with an initial -0
+  and with 0; NaN; `Infinity` with `-Infinity`; an initial `""`, string
+  elements in both orders (`["a", "b"].reduce((a, x) => x + a, "")` is
+  `"ba"`); `[1, 2, "3", 4]` (`"334"`); `[1, true]`, `[1, null]` and
+  `[1, undefined]` (faults at that element); `[1, "x", true]` (`"1xtrue"`);
+  for SUM_KEY, a missing key (fault), a key on Object.prototype (fault),
+  arrays by `length` (bytecode, works), string values (concatenation).
+
+**`api_test`** (`test_shape_paths`), for each new shape:
+
+- **Fuel, pinned both ways,** with the difference checked exactly.
+  `[3, 1, 2, 0].toSorted((a, b) => a - b)` makes 5 comparisons, so shapes
+  on is 5 × 4 = 20 units below off. A filter of 4 objects by `x.k > 2`:
+  16. `[1, 2, 3, 4].some(x => x === 3)`: 3 elements, 12. The two reduces
+  over 4 elements: 16 each. The pauses at 1 unit per run are counted, as
+  [consumers] does (section 9).
+- **Limit edges, identical both ways:** `max_stack` where the body's second
+  push does not fit (C must fault as the bytecode does), and one larger
+  (both succeed), for each of COMPARE_STACK, PREDICATE_STACK and
+  SUM_STACK; `max_frames` exactly full when each loop would enter its
+  callback.
+
+**`matcher_test`:** exact reports for one source per new shape, with
+operator and operand arguments; a string operand that outgrows the
+matcher's 64 inline bytes of text, for the out of memory sweep; the
+never-stops sweep and the record bound hold over the new spec sources.
+
+**`shapes-test`:** the small rules file gains an `operand` field and an
+`operator` parameter, and the table fixture shows them. New error
+snippets: an `operand` field on a non-leaf event; an operand constant in a
+test and in a head; an operand variable compared with a number.
+
+**`bench/bench.c`.** Cases already on these paths: `eval.array.toSorted`
+(COMPARE_NUMERIC ascending), `eval.array.filter` (`r.priority === 2`,
+KEY_COMPARE), `eval.array.reduce` (`(a, x) => a + x`, SUM) and
+`eval.array.pipeline` (KEY_COMPARE `>`, PLUCK, SUM). New cases, unit
+element, L sizes, smoke size 10:
+
+| case | source | smoke value | larger sizes |
+|---|---|---|---|
+| `eval.array.toSorted.desc` (item 1) | `xs.toSorted((a, b) => b - a)` | `[4.5,4,3.5,3,2.5,2,1.5,1,0.5,0]` | new CHECK_SORTED_DESC |
+| `eval.array.every` (item 2, ELEMENT_COMPARE) | `xs.every(x => x >= 0)` | `true` | new CHECK_SAME: the smoke value at every size |
+| `eval.array.some` (item 2, KEY_COMPARE `<`) | `rows.some(r => r.kwh < 0)` | `false` | CHECK_SAME |
+| `eval.array.findIndex` (item 2, a string `===`) | `rows.findIndex(r => r.id === "none")` | `-1` | CHECK_SAME |
+| `eval.array.reduce.key` (item 3, SUM_KEY) | `rows.reduce((a, r) => a + r.kwh, 0)` | `166.5` (Node gives the same) | new CHECK_SUM_KWH: `row_kwh(i)` summed in order |
+
+The predicate cases scan every element and find nothing, so they measure
+the loop and not where an answer happens to be. Each commit lists its cases
+in the header comment of `bench.c`, runs `bench --smoke`, and quotes `mise
+run bench-compare <the commit before it>` for its cases, for
+`eval.array.*`, for `eval.guard.*` (placement, docs/builtins.md 8.3), and
+for `compile.*` (11.4), with the machine hash. The fuel column shows the
+drop. Claim only what the table flags.
+
+### 11.11 Commits
+
+Each commit passes `mise run test` and `mise run test --full` (its body
+says so), and touches `vm.c`, `builtins.c` or the matcher, so each quotes
+`bench-compare` (11.10). Each updates `docs/builtins.md` section 9 (the
+shapes and their consumers, the checklist line unchanged) and this
+section's status.
+
+0. **[doc]** `docs(staticjs): design the numeric sort, predicate and sum
+   shapes`: this section, and the pointers to it from the status line,
+   3.3 and 10.
+
+1. **[numeric]** `perf(staticjs): sort numbers in C when the comparator is
+   (a, b) => a - b or b - a`.
+   - `src/shapes.rules`, `src/shapes.h` and `src/shapes_table.h`
+     regenerated.
+   - `src/builtins.c`: the `shape_start` table (11.5) and the comparison
+     (11.6).
+   - Tests as in 11.10, item 1; `eval.array.toSorted.desc`.
+   - No generator, matcher or compiler change.
+
+2. **[predicates]** `perf(staticjs): decide x.key OP literal and x OP
+   literal in C in filter, find, findIndex, findLast, some and every`.
+   - `mise/shapes.rb`: the `operand` and `operator` types, with
+     `mise/shapes-test/` (11.2).
+   - `src/matcher.c` and `src/matcher.h`: operand slots and reports.
+   - `src/compiler.c`: `on_shape`'s operand and operator arguments.
+   - `src/internal.h`: the operand kinds and their encoding.
+   - `src/vm.h`: `shape_op`, and `shape_value` in its union (11.5).
+   - `src/builtins.c`: `predicate_answer`, `compare_operand` and
+     `predicate_step`.
+   - `tests/spec_test.c` and `tests/matcher_test.c`: printing the new
+     arguments.
+   - Tests as in 11.10, item 2; three bench cases.
+   - This is the largest commit. The generator and matcher change cannot
+     land before the shapes that use it, because the repository keeps
+     nothing that nothing uses.
+
+3. **[sums]** `perf(staticjs): sum numbers and a key's numbers in C in
+   reduce`.
+   - Rules and headers; `src/builtins.c`, the reduce step (11.8).
+   - `_Static_assert` on `MATCHER_FIRST_RECORDS` (11.4).
+   - Tests as in 11.10, item 3; `eval.array.reduce.key`.
+
+- **[slots]**, conditional: before whichever commit's `compile.*` rows
+  regress, and in any case before item 4 (11.4).
+
+4. **Design only (11.9):** [brackets], then [names], then [members], each
+   its own commit with its own tests, after [slots]. The next session that
+   takes item 4 starts from 11.9 and updates it with what the
+   implementation finds.

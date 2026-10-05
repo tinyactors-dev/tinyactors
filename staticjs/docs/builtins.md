@@ -206,15 +206,17 @@ callback's own instructions.
 
 The compiler tags a function whose body has a known shape
 (`docs/matcher.md`): `x => x.key` is PLUCK, `(a, b) => a.key - b.key` is
-COMPARE_BY_KEY. A loop built-in may run such a callback in C, as `map` does
-with PLUCK and `toSorted` with COMPARE_BY_KEY (`pluck_step` and
-`sort_by_key` in `src/builtins.c`). The tag only says what the bytecode
+COMPARE_BY_KEY, `(a, b) => a - b` is COMPARE_NUMERIC. A loop built-in may
+run such a callback in C, as `map` does with PLUCK and `toSorted` with
+COMPARE_BY_KEY and COMPARE_NUMERIC (`pluck_step`, `sort_by_key` and
+`sort_numbers` in `src/builtins.c`). The tag only says what the bytecode
 computes; the bytecode is still there, and the C path must give exactly
 what it gives.
 
 - **Set it up once per loop.** `shape_start` (from `sjs_loop_start`) notes
   the shape, its key and its flag in the loop frame when the callback is a
-  closure tagged with the shape this built-in runs.
+  closure tagged with a shape that `shape_runners` pairs with this
+  built-in. A new consumer is a row there.
 - **Enter the callback where the bytecode would.** At the step that would
   make the first call, call `sjs_vm_enter_callback` first, C path or not.
   A closure already running, a full frame stack or no room for its slots
