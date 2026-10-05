@@ -1,6 +1,6 @@
 # ADR 0103: Inputs run in macrostep slots that take turns, and a runaway input is abandoned
 
-**Status:** Accepted (2026-10-04); implementation pending (ring-proto Phase 4.5). Refines ADR 0055 (mail for an active session waits on its deferred list), ADR 0061 (a paused run stays in the running workspace or is parked, not moved into the actor) and ADR 0075 (the limit counts an input's whole chain, cannot be turned off, and abandons the input). Records the removal of napi's quarantine (napi ADRs 0008 point 1 and 0025).
+**Status:** Accepted (2026-10-04); implementation pending (ring-proto Phase 4.5), except that the abandon of a runaway input (section 4's end of an input at the limit, with status `runaway`) is implemented in 4.2a on the one slot, without the chain limit's widening, without refusing a limit of 0 or `TA_MICROSTEP_LIMIT_NONE`, and without removing napi's quarantine (the kernel reports a runaway to the `fault` hook, section 8, but quarantines nothing). Refines ADR 0055 (mail for an active session waits on its deferred list), ADR 0061 (a paused run stays in the running workspace or is parked, not moved into the actor) and ADR 0075 (the limit counts an input's whole chain, cannot be turned off, and abandons the input). Records the removal of napi's quarantine (napi ADRs 0008 point 1 and 0025).
 **Date:** 2026-10-04
 
 ## Context

@@ -1,6 +1,6 @@
 # ADR 0099: Pending inputs are envelopes in one pool per system
 
-**Status:** Accepted (2026-10-04); implementation pending (ring-proto Phase 4.2). Supersedes ADR 0011, ADR 0029, ADR 0040, ADR 0055, ADR 0064, ADR 0069, ADR 0093 and ADR 0095, each in the part section 10 names; the rest of each stays. Run-time names in the name area are ADR 0100; delayed sends join the pool in ADR 0101; slots and the chain limit are ADR 0103.
+**Status:** Accepted (2026-10-04); sections 1 to 5, 7 and 8 implemented in ring-proto step 4.2a (see the implementation notes at the end), the rest pending (4.2b, 4.2c). Supersedes ADR 0011, ADR 0029, ADR 0040, ADR 0055, ADR 0064, ADR 0069, ADR 0093 and ADR 0095, each in the part section 10 names; the rest of each stays. Run-time names in the name area are ADR 0100; delayed sends join the pool in ADR 0101; slots and the chain limit are ADR 0103.
 **Date:** 2026-10-04
 
 ## Context
@@ -398,3 +398,68 @@ pool to its bound.
 - **Forward references.** `h2c.withdraw`, the bounce of an input the pool
   cannot admit, and `fairnessRatio` arrive with the rings (Phase 5.1);
   waiting lists answer `c2h.load_needed` from Phase 5.3.
+
+## Implementation notes (ring-proto step 4.2a)
+
+Step 4.2a implements sections 1 to 5, 7 and 8 on one running slot, in
+`src/envelope.{h,c}` (the pool, the quotas, the run queue and the waiting
+table) and `src/run.{h,c}` (`ta_run`, admission, the started queue and the
+abandoned and lent lists). Where the code differs from the text, or goes
+beyond it:
+
+- **The started inputs are a queue of sessions, not envelopes.** An input
+  that has begun a macrostep (a bootstrap, a taken event, a paused run) is
+  recorded in `ta_runner`'s queue of started sessions by actor ID (16-byte
+  cells of a small index pool, in pages of 1,024, so that no block grows
+  with the number of sessions spawned before the first `ta_run`), and the
+  session holds its own event; the envelope of a taken event stays on the lent list
+  until the input ends (section 8). `ta_actor` gains `started` and `queued`
+  in the padding before `sparse`. A session started by `ta_actor_spawn`,
+  `ta_actor_prepare` or a reconstruction needs a vector slot, reserved
+  first, and no envelope, so the number of sessions does not depend on the
+  pool bound.
+- **The pool is bounded by whole pages.** `poolEnvelopes` is rounded down to
+  pages of at most 256 envelopes. `ta_envelopes_refill`, called only by
+  admission (`ta_run_fill`), builds the waiting table first and then grows
+  the pool, so a refill that fails changes nothing.
+- **`TAKEN` notices are for events only.** A bootstrap has no event, so it
+  produces a `COMPLETED` notice and no `TAKEN` one.
+- **A budget that ends inside the last microstep.** The call's budget is
+  spent on the microstep, and the end of the macrostep is noticed by the next
+  call: a call of budget 1 answers `PAUSED` for an input that ends in the
+  following call.
+- **`ta_actor_deliver` and `ta_actor_transition` gain an `input` output**
+  that returns the token the notices name. `ta_actor_abandon` and
+  `ta_actor_destroy` end an input with `TA_INPUT_ABANDONED`, reported by the
+  next `ta_run`.
+- **`TA_ERR_BUSY` remains** for `ta_actor_transition`, unload, capture
+  (`ta_actor_export`), `ta_actor_publish`, `ta_actor_abandon` inside a
+  microstep, and the error report of `ta_actor_report_invoke`, while the
+  session is inside a macrostep or has an admitted input waiting
+  (`queued != 0`). `TA_ERR_RUNAWAY` and `ta_actor_resume_params` are gone;
+  the runaway abandon of ADR 0103 section 4 is implemented here (see that
+  ADR's status line).
+- **Not yet done, for 4.2b and 4.2c:** local mail between actors still goes
+  through the external event router and arrives by `ta_actor_deliver`, so
+  section 4's rule that a macrostep's mail becomes visible at its end is
+  not yet in force; recycling (section 6) and `ta_address_load_failed`; the
+  name area; the event blocks and their cache stay, so
+  `TA_PARAM_EVENT_BLOCK_CACHE` and `ta_system_set_event_block_cache` are
+  still there.
+- **Callers.** The kernel's scheduler runs `ta_run` and settles the notices
+  (`tah_sched_run`); a turn bounds the inputs it completes by `resumes`, and
+  ends when a budget stops an input inside its macrostep, so a paused input
+  holds the one slot and other actors' inputs wait behind it until slots
+  take turns (ADR 0103). The test host's Ruby scheduler calls `ta.run` once
+  per round. Napi's call sites are `src/gen` (regenerated), `src/pump.c` (a
+  runaway settles a `send()` with code `runaway`), `src/napi_system.c` (the
+  fault count) and `bindings.rb`.
+- **Costs.** An envelope is 168 bytes (`sizeof(ta_envelope)`). The macrostep
+  reserve at its default of 1,024 envelopes is 172,032 bytes, taken from the
+  pool on the first input and not again. `scale_test` reports 329 bytes per
+  actor at 50,000 and at 200,000 actors (ADR 0103 gives 332 as today's
+  figure; the two were not measured in one session). The batched-delivery
+  check of `scale_test` sees 0.00 allocator calls per event with an
+  event-block cache of 4 as well as with the default, where it saw one per
+  event with a cache of 4 before: the inputs of a batch wait as envelopes in
+  the pool and run one at a time.

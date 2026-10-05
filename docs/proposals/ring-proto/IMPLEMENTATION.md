@@ -199,6 +199,32 @@ ones; run `mise run test:full` before each commit.
 | 4.4 | **No allocation in a macrostep.** The internal queue becomes B4 with an ordinary and a mandatory quota (C3). The compiler sizes mandatory storage. Invocation startup moves after the macrostep, with the local child's lifetime token. Capacity failures become `error.execution.capacity.<resource>`. Data models answer `TA_OP_ERROR` instead of `TA_OP_NOMEM`, which changes the test host's jq and quickjs data models and napi's data model. A core test asserts that an allocator which refuses every request after a macrostep starts never sees a call. | The out-of-memory stop machinery: the NOMEM branch, `ta_reserve_stop` / `ta_stop*` where only out-of-memory uses them, the spare continuation and spare sparse state, queue mark/truncate, `TA_OP_NOMEM` | no allocation in a macrostep |
 | 4.5 | **Macrostep slots.** Slot records (A5), deferred lists (B1), `slotSlice`, the chain limit, and parking into the park area (A5 + A6 + D1 + D2). Start with parking disabled (`parkAreaBytes` 0, plain run to completion), then enable it in its own commit. | napi's quarantine, `release()` and the `.quarantined` event (napi call sites only) | macrostep slots |
 
+**Done in 4.2a (branch `wip/ring-proto/4.2a`).** Step 4.2 is split in three:
+4.2a (this note), 4.2b (the name area and the end of run-time interning) and
+4.2c (recycling, local mail as envelopes, and the removal of the router
+vtable and the event blocks).
+
+- Core: `src/envelope.{h,c}` (the pool of 168-byte envelopes, the run queue,
+  the quotas and the waiting table) and `src/run.{h,c}` (`ta_run`, admission,
+  the started queue). `ta_actor_deliver` is admission; `ta_actor_transition`
+  splits out the operator's event; `ta_run` replaces `ta_actor_resume`;
+  `TA_ERR_FULL` is new; `TA_ERR_RUNAWAY` and `ta_actor_resume_params` are
+  gone; a runaway input is abandoned with status `runaway` (ADR 0103
+  section 4). Parameters `poolEnvelopes`, `admissionWatermark` and
+  `macrostepReserve`. Tests: `envelope_test`, `run_test`, and the other
+  core programs through `tests/run_support.h`.
+- Callers changed in the same commits: the kernel (`tah_sched_run`, the
+  notices, the turn bounded by inputs), the test host (Ruby scheduler,
+  scenarios), and napi's call sites. With one slot a paused input holds the
+  slot and other actors' inputs wait behind it, so two napi tests and the
+  test host scenarios that assumed interleaving were rewritten for it;
+  interleaving returns with slots in 4.5.
+- Not done in 4.2a: local mail as envelopes (the mail of a macrostep still
+  reaches `ta_actor_deliver` through the external event router), recycling
+  and `ta_address_load_failed`, the name area, the event blocks and their
+  cache, the router vtable, and `bench-compare` against the commit before
+  4.2 (it belongs in the 4.5 commit).
+
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
   input.
