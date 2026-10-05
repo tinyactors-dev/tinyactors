@@ -96,10 +96,6 @@ sjs_result sjs_context_init(sjs_context **out, const sjs_context_config *config)
 
 void sjs_context_destroy(sjs_context *context) {
     if (context == NULL) return;
-    /* Only strings the embedder still holds keep the table. */
-    if (context->interned != NULL) {
-        sjs_mem_free(&context->counting, context->interned, ((size_t)context->intern_mask + 1u) * sizeof(sjs_intern_slot));
-    }
     sjs_allocator backing = context->backing;
     sjs_mem_free(&backing, context, sizeof *context);
 }
