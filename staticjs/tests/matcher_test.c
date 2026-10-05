@@ -91,6 +91,20 @@ static sjs_result tee_report(void *self, const sjs_shape_match *match) {
             used += (size_t)snprintf(t->text + used, sizeof t->text - used, "%s%.*s", comma, (int)arg->text.length, arg->text.ptr);
         } else if (arg->kind == SJS_SHAPE_ARG_FLAG) {
             used += (size_t)snprintf(t->text + used, sizeof t->text - used, "%s%s", comma, arg->count ? "true" : "false");
+        } else if (arg->kind == SJS_SHAPE_ARG_OPERATOR) {
+            used += (size_t)snprintf(t->text + used, sizeof t->text - used, "%s%s", comma, sjs_shape_operator_name(arg->count));
+        } else if (arg->kind == SJS_SHAPE_ARG_OPERAND) {
+            static const char *const literals[] = { "", "", "", "true", "false", "null" };
+            if (arg->operand == SJS_OPERAND_NUMBER) {
+                char number[32];
+                number[sjs_number_format(arg->number, number)] = '\0';
+                used += (size_t)snprintf(t->text + used, sizeof t->text - used, "%s%s", comma, number);
+            } else if (arg->operand == SJS_OPERAND_TEXT) {
+                used += (size_t)snprintf(t->text + used, sizeof t->text - used, "%s\"%.*s\"", comma, (int)arg->text.length,
+                                         arg->text.ptr);
+            } else {
+                used += (size_t)snprintf(t->text + used, sizeof t->text - used, "%s%s", comma, literals[arg->operand]);
+            }
         } else {
             used += (size_t)snprintf(t->text + used, sizeof t->text - used, "%s%u", comma, arg->count);
         }
@@ -189,6 +203,17 @@ static void test_reports(void) {
     expect_reports("(a, b) => { return b.score - a.score; }", SJS_GOAL_EXPRESSION, "COMPARE_BY_KEY#1@0(score, true)");
     expect_reports("(a, b) => a - b", SJS_GOAL_EXPRESSION, "COMPARE_NUMERIC#1@0(false)");
     expect_reports("(a, b) => { return b - a; }", SJS_GOAL_EXPRESSION, "COMPARE_NUMERIC#1@0(true)");
+    /* Predicates: the operator, mirrored for a literal on the left, and the
+     * literal of each kind. */
+    expect_reports("x => x.priority === 2", SJS_GOAL_EXPRESSION, "KEY_COMPARE#1@0(priority, STRICT_EQUAL, 2)");
+    expect_reports("x => 1.5 < x.kwh", SJS_GOAL_EXPRESSION, "KEY_COMPARE#1@0(kwh, GREATER, 1.5)");
+    expect_reports("x => { return \"open\" !== x.state; }", SJS_GOAL_EXPRESSION,
+                   "KEY_COMPARE#1@0(state, STRICT_NOT_EQUAL, \"open\")");
+    expect_reports("x => x >= 0", SJS_GOAL_EXPRESSION, "ELEMENT_COMPARE#1@0(GREATER_EQUAL, 0)");
+    expect_reports("x => \"m\" >= x", SJS_GOAL_EXPRESSION, "ELEMENT_COMPARE#1@0(LESS_EQUAL, \"m\")");
+    expect_reports("[x => x === true, x => false !== x, x => x.k === null, x => x <= 1e21]", SJS_GOAL_EXPRESSION,
+                   "ELEMENT_COMPARE#2@1(STRICT_EQUAL, true) ELEMENT_COMPARE#7@18(STRICT_NOT_EQUAL, false) "
+                   "KEY_COMPARE#12@36(k, STRICT_EQUAL, null) ELEMENT_COMPARE#18@55(LESS_EQUAL, 1e+21)");
     /* An arrow's node and start in a call: the call is node 3, the arrow 4. */
     expect_reports("[].map(x => x.k)", SJS_GOAL_EXPRESSION, "PLUCK#4@7(k)");
     expect_reports("[].map(xs => xs.map(x => x.k))", SJS_GOAL_EXPRESSION, "PLUCK#9@20(k)");
@@ -205,6 +230,14 @@ static void test_reports(void) {
     expect_reports("(a, ...b) => a - b", SJS_GOAL_EXPRESSION, "");
     expect_reports("x => { const y = x; return y.k; }", SJS_GOAL_EXPRESSION, "");
     expect_reports("x => x?.k", SJS_GOAL_EXPRESSION, "");
+    expect_reports("y => [x => x.k === y]", SJS_GOAL_EXPRESSION, "");
+    expect_reports("x => x === -1", SJS_GOAL_EXPRESSION, "");
+    expect_reports("x => x.k === `a${1}`", SJS_GOAL_EXPRESSION, "");
+    expect_reports("x => x.k + 1", SJS_GOAL_EXPRESSION, "");
+    expect_reports("x => \"k\" in x", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(x, i) => x === 1", SJS_GOAL_EXPRESSION, "");
+    expect_reports("x => 1 === 2", SJS_GOAL_EXPRESSION, "");
+    expect_reports("x => x === x", SJS_GOAL_EXPRESSION, "");
 }
 
 /* ------------------------------------------------------------------------
@@ -495,11 +528,10 @@ static void test_unreadable(void) {
  * Out of memory
  */
 
-static void test_out_of_memory(void) {
-    /* Names long enough that the text outgrows the matcher's own bytes. */
-    const char *source = "[{a_rather_long_name_for_a_key: \"a\", k: 1}]"
-                         ".map(each_row_of_the_whole_table => each_row_of_the_whole_table.a_rather_long_name_for_a_key)"
-                         ".concat([(left_hand_row, right_hand_row) => right_hand_row.k - left_hand_row.k, x => { return x.k; }])";
+/* Fail each of the matcher's allocations of `source` in turn: each run
+ * ends with SJS_ERR_NOMEM and frees what it took, until one gives
+ * `reports`. Answers the allocations. */
+static int sweep_out_of_memory(const char *source, int reports) {
     static tee t;
     int runs = 0;
     for (long fail_at = 1;; fail_at++) {
@@ -511,15 +543,29 @@ static void test_out_of_memory(void) {
         CHECK(c.live == 0);
         runs++;
         if (r == SJS_OK) {
-            CHECK(t.reports == 3);
+            CHECK(t.reports == reports);
             break;
         }
         CHECK(t.result == SJS_ERR_NOMEM);
         if (t.result != SJS_ERR_NOMEM || runs > 100) break;
     }
-    /* The records, and the text past the matcher's own bytes. */
-    CHECK(runs == 3);
-    printf("matcher_test: the matcher's %d allocation(s) each failed in turn\n", runs - 1);
+    return runs - 1;
+}
+
+static void test_out_of_memory(void) {
+    /* Names long enough that the text outgrows the matcher's own bytes. */
+    const char *names = "[{a_rather_long_name_for_a_key: \"a\", k: 1}]"
+                        ".map(each_row_of_the_whole_table => each_row_of_the_whole_table.a_rather_long_name_for_a_key)"
+                        ".concat([(left_hand_row, right_hand_row) => right_hand_row.k - left_hand_row.k, x => { return x.k; }])";
+    /* The records, their growth, and the text past the matcher's own bytes. */
+    CHECK(sweep_out_of_memory(names, 3) == 3);
+    /* A string of 64 bytes, and its kind: an operand that outgrows them
+     * alone. The records, their growth, and the text; a short string needs
+     * no text of its own. */
+    const char *operand = "x => x === \"a string literal of sixty-four bytes: with its kind, 65 bytes!!!\"";
+    CHECK(sweep_out_of_memory(operand, 1) == 3);
+    CHECK(sweep_out_of_memory("x => x === \"short\"", 1) == 2);
+    printf("matcher_test: the matcher's allocations each failed in turn\n");
 }
 
 int main(int argc, char **argv) {

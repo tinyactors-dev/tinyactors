@@ -164,6 +164,149 @@
 []
 
 # ---------------------------------------------------------------------------
+# KEY_COMPARE: x => x.key OP c, and c OP x.key recorded with OP mirrored;
+# ELEMENT_COMPARE: x => x OP c, and c OP x. OP is ===, !==, <, <=, > or >=,
+# and c a literal: a number, a string, true, false or null.
+
+=== a key equal to a number
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 2)
+[{k: 1}, {k: 2}, {k: 3}].filter(x => x.k === 2)
+--- value
+[{"k":2}]
+
+=== a number equal to a key keeps ===
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 2)
+[{k: 1}, {k: 2}, {k: 3}].filter(x => 2 === x.k)
+--- value
+[{"k":2}]
+
+=== a key not equal to a number, both ways
+@shapes KEY_COMPARE(k, STRICT_NOT_EQUAL, 2) KEY_COMPARE(k, STRICT_NOT_EQUAL, 2)
+[[{k: 1}, {k: 2}, {k: 3}].filter(x => x.k !== 2), [{k: 1}, {k: 2}, {k: 3}].filter(x => 2 !== x.k)]
+--- value
+[[{"k":1},{"k":3}],[{"k":1},{"k":3}]]
+
+=== a key less than a number, and a number greater than a key
+@shapes KEY_COMPARE(k, LESS, 2) KEY_COMPARE(k, LESS, 2)
+[[{k: 1}, {k: 2}, {k: 3}].filter(x => x.k < 2), [{k: 1}, {k: 2}, {k: 3}].filter(x => 2 > x.k)]
+--- value
+[[{"k":1}],[{"k":1}]]
+
+=== a key at most a number, and a number at least a key
+@shapes KEY_COMPARE(k, LESS_EQUAL, 2) KEY_COMPARE(k, LESS_EQUAL, 2)
+[[{k: 1}, {k: 2}, {k: 3}].filter(x => x.k <= 2), [{k: 1}, {k: 2}, {k: 3}].filter(x => 2 >= x.k)]
+--- value
+[[{"k":1},{"k":2}],[{"k":1},{"k":2}]]
+
+=== a key greater than a number, and a number less than a key
+@shapes KEY_COMPARE(k, GREATER, 2) KEY_COMPARE(k, GREATER, 2)
+[[{k: 1}, {k: 2}, {k: 3}].filter(x => x.k > 2), [{k: 1}, {k: 2}, {k: 3}].filter(x => 2 < x.k)]
+--- value
+[[{"k":3}],[{"k":3}]]
+
+=== a key at least a number, and a number at most a key
+@shapes KEY_COMPARE(k, GREATER_EQUAL, 2) KEY_COMPARE(k, GREATER_EQUAL, 2)
+[[{k: 1}, {k: 2}, {k: 3}].filter(x => x.k >= 2), [{k: 1}, {k: 2}, {k: 3}].filter(x => 2 <= x.k)]
+--- value
+[[{"k":2},{"k":3}],[{"k":2},{"k":3}]]
+
+=== an element equal to a number, both ways
+@shapes ELEMENT_COMPARE(STRICT_EQUAL, 2) ELEMENT_COMPARE(STRICT_EQUAL, 2)
+[[1, 2, 3].filter(x => x === 2), [1, 2, 3].filter(x => 2 === x)]
+--- value
+[[2],[2]]
+
+=== an element not equal to a number, both ways
+@shapes ELEMENT_COMPARE(STRICT_NOT_EQUAL, 2) ELEMENT_COMPARE(STRICT_NOT_EQUAL, 2)
+[[1, 2, 3].filter(x => x !== 2), [1, 2, 3].filter(x => 2 !== x)]
+--- value
+[[1,3],[1,3]]
+
+=== an element less than a number, and a number greater than an element
+@shapes ELEMENT_COMPARE(LESS, 2) ELEMENT_COMPARE(LESS, 2)
+[[1, 2, 3].filter(x => x < 2), [1, 2, 3].filter(x => 2 > x)]
+--- value
+[[1],[1]]
+
+=== an element at most a number, and a number at least an element
+@shapes ELEMENT_COMPARE(LESS_EQUAL, 2) ELEMENT_COMPARE(LESS_EQUAL, 2)
+[[1, 2, 3].filter(x => x <= 2), [1, 2, 3].filter(x => 2 >= x)]
+--- value
+[[1,2],[1,2]]
+
+=== an element greater than a number, and a number less than an element
+@shapes ELEMENT_COMPARE(GREATER, 2) ELEMENT_COMPARE(GREATER, 2)
+[[1, 2, 3].filter(x => x > 2), [1, 2, 3].filter(x => 2 < x)]
+--- value
+[[3],[3]]
+
+=== an element at least a number, and a number at most an element
+@shapes ELEMENT_COMPARE(GREATER_EQUAL, 2) ELEMENT_COMPARE(GREATER_EQUAL, 2)
+[[1, 2, 3].filter(x => x >= 2), [1, 2, 3].filter(x => 2 <= x)]
+--- value
+[[2,3],[2,3]]
+
+=== predicates in a block body
+@shapes KEY_COMPARE(k, LESS, 2) ELEMENT_COMPARE(GREATER, 1)
+[[{k: 1}, {k: 2}].filter(x => { return x.k < 2; }), [1, 2].filter(x => { return 1 < x; })]
+--- value
+[[{"k":1}],[2]]
+
+=== predicates with the body in parentheses
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 1) ELEMENT_COMPARE(STRICT_EQUAL, 1)
+[[{k: 1}].filter(x => (x.k === 1)), [1].filter((x) => (1 === x))]
+--- value
+[[{"k":1}],[1]]
+
+=== operands: a fraction, an exponent, a hexadecimal number
+@shapes ELEMENT_COMPARE(LESS, 1.5) ELEMENT_COMPARE(LESS, 1e+21) KEY_COMPARE(k, STRICT_EQUAL, 16)
+[[1, 1.5, 2].filter(x => x < 1.5), [1, Infinity].filter(x => x < 1e21), [{k: 16}, {k: 10}].filter(x => x.k === 0x10)]
+--- value
+[[1],[1],[{"k":16}]]
+
+=== operands: strings, an empty one and one that is not ASCII
+@shapes KEY_COMPARE(s, STRICT_EQUAL, "open") ELEMENT_COMPARE(STRICT_NOT_EQUAL, "") ELEMENT_COMPARE(STRICT_EQUAL, "été")
+[[{s: "open"}, {s: "closed"}].filter(x => x.s === "open"), ["", "a"].filter(x => x !== ""), ["ete", "été"].findIndex(x => "été" === x)]
+--- value
+[[{"s":"open"}],["a"],1]
+
+=== operands: a string of 64 bytes is captured
+@shapes ELEMENT_COMPARE(STRICT_EQUAL, "k234567890123456789012345678901234567890123456789012345678901234")
+["k234567890123456789012345678901234567890123456789012345678901234", "k"].findIndex(x => x === "k234567890123456789012345678901234567890123456789012345678901234")
+--- value
+0
+
+=== operands: true, false and null
+@shapes ELEMENT_COMPARE(STRICT_EQUAL, true) KEY_COMPARE(k, STRICT_EQUAL, false) ELEMENT_COMPARE(STRICT_NOT_EQUAL, null) KEY_COMPARE(k, STRICT_EQUAL, null)
+[[true, false, 1, "true"].filter(x => x === true), [{k: false}, {k: 0}, {k: ""}].filter(x => false === x.k), [null, undefined, 0].filter(x => x !== null), [{k: null}, {}].filter(x => x.k === null)]
+--- value
+[[true],[{"k":false}],[undefined,0],[{"k":null}]]
+
+=== strings compared with strings, both ways
+@shapes ELEMENT_COMPARE(LESS, "b") KEY_COMPARE(s, GREATER_EQUAL, "b")
+[["a", "b", "c"].filter(x => x < "b"), [{s: "a"}, {s: "b"}, {s: "c"}].filter(x => "b" <= x.s)]
+--- value
+[["a"],[{"s":"b"},{"s":"c"}]]
+
+=== each method with a predicate
+@shapes KEY_COMPARE(k, GREATER, 1) KEY_COMPARE(k, GREATER, 1) KEY_COMPARE(k, GREATER, 1) KEY_COMPARE(k, GREATER, 1) KEY_COMPARE(k, GREATER, 1) KEY_COMPARE(k, GREATER, 1)
+[[{k: 1}, {k: 2}, {k: 3}].filter(x => x.k > 1), [{k: 1}, {k: 2}, {k: 3}].find(x => x.k > 1), [{k: 1}, {k: 2}, {k: 3}].findIndex(x => x.k > 1), [{k: 1}, {k: 2}, {k: 3}].findLast(x => x.k > 1), [{k: 1}, {k: 2}, {k: 3}].some(x => x.k > 1), [{k: 1}, {k: 2}, {k: 3}].every(x => x.k > 1)]
+--- value
+[[{"k":2},{"k":3}],{"k":2},1,{"k":3},true,false]
+
+=== a template without a substitution is a string literal: the parser sends a STRING
+@shapes KEY_COMPARE(k, STRICT_EQUAL, "a") ELEMENT_COMPARE(STRICT_EQUAL, "b")
+[[{k: "a"}, {k: "b"}].filter(x => x.k === `a`), ["a", "b"].filter(x => `b` === x)]
+--- value
+[[{"k":"a"}],["b"]]
+
+=== a predicate that is never called is tagged all the same
+@shapes ELEMENT_COMPARE(STRICT_EQUAL, 1)
+[].some(x => x === 1)
+--- value
+false
+
+# ---------------------------------------------------------------------------
 # Functions inside functions, and functions in defaults and patterns
 
 === an outer function untagged, the function inside it tagged
@@ -402,6 +545,137 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 [3, 1, 2].toSorted((a, b) => a > b ? 1 : -1)
 --- value
 [1,2,3]
+
+=== predicates: a captured name, not a literal
+@global y = 1
+@shapes -
+[{k: 1}, {k: 2}].filter(x => x.k === y)
+--- value
+[{"k":1}]
+
+=== predicates: undefined, NaN and Infinity are names, not literals
+@shapes - - -
+[[{k: 1}, {}].filter(x => x.k === undefined), [NaN, 1].filter(x => x === NaN), [1, Infinity].filter(x => x < Infinity)]
+--- value
+[[{}],[],[1]]
+
+=== predicates: a negative number is a negation of a literal
+@shapes - -
+[[{k: -1}, {k: 1}].filter(x => x.k === -1), [-1, 1].filter(x => -1 < x)]
+--- value
+[[{"k":-1}],[1]]
+
+=== predicates: a sum of literals
+@shapes -
+[{k: "ab"}, {k: "a"}].filter(x => x.k === "a" + "b")
+--- value
+[{"k":"ab"}]
+
+=== predicates: a template with a substitution is not a literal
+@shapes - -
+[[{k: "a1"}, {k: "b"}].filter(x => x.k === `a${1}`), ["a", "1b"].filter(x => `${1}b` === x)]
+--- value
+[[{"k":"a1"}],["1b"]]
+
+=== predicates: a string of 65 bytes is not captured
+@shapes -
+["k2345678901234567890123456789012345678901234567890123456789012345", "k"].findIndex(x => x === "k2345678901234567890123456789012345678901234567890123456789012345")
+--- value
+0
+
+=== predicates: arithmetic, not a comparison
+@shapes - - - -
+[[{k: 1}].map(x => x.k + 1), [{k: 1}].map(x => x.k - 1), [1].map(x => x * 2), [1].map(x => 2 % x)]
+--- value
+[[2],[0],[2],[0]]
+
+=== predicates: in is not a comparison
+@shapes -
+[{k: 1}, {}].filter(x => "k" in x)
+--- value
+[{"k":1}]
+
+=== predicates: a key of a key
+@shapes -
+[{k: {j: 1}}, {k: {j: 2}}].filter(x => x.k.j === 1)
+--- value
+[{"k":{"j":1}}]
+
+=== predicates: an optional chain
+@shapes -
+[{k: 1}, null].filter(x => x?.k === 1)
+--- value
+[{"k":1}]
+
+=== predicates: a computed key
+@shapes -
+[{k: 1}, {k: 2}].filter(x => x["k"] === 1)
+--- value
+[{"k":1}]
+
+=== predicates: a second parameter
+@shapes -
+[{k: 1}, {k: 2}].filter((x, i) => x.k === 1)
+--- value
+[{"k":1}]
+
+=== predicates: a parameter with a default, a rest parameter
+@shapes - -
+[[1, 2].filter((x = 0) => x === 1), [1, 2].filter((...x) => x.length === 3)]
+--- value
+[[1],[1,2]]
+
+=== predicates: two literals
+@shapes -
+[1, 2].filter(x => 1 === 2)
+--- value
+[]
+
+=== predicates: two keys, and the element on both sides
+@shapes - -
+[[{k: 1, j: 1}, {k: 1, j: 2}].filter(x => x.k === x.j), [1, NaN].filter(x => x === x)]
+--- value
+[[{"k":1,"j":1}],[1]]
+
+=== predicates: a negation of a comparison
+@shapes -
+[{k: 1}, {k: 2}].filter(x => !(x.k === 1))
+--- value
+[{"k":2}]
+
+=== predicates: a comparison compared with true
+@shapes -
+[{k: 1}, {k: 2}].filter(x => (x.k === 1) === true)
+--- value
+[{"k":1}]
+
+=== predicates: a comparison in a conjunction
+@shapes -
+[{k: 1}, {k: 2}].filter(x => x.k === 1 && true)
+--- value
+[{"k":1}]
+
+=== predicates: a parameter that is a pattern
+@shapes -
+[{k: 1}, {k: 2}].filter(({k}) => k === 1)
+--- value
+[{"k":1}]
+
+=== predicates: a const before the return
+@shapes -
+[{k: 1}, {k: 2}].filter(x => { const y = 1; return x.k === y; })
+--- value
+[{"k":1}]
+
+=== predicates: a key compared with a literal of a captured object
+@shapes - -
+(y => [{k: 1}, {k: 2}].filter(x => y.k === 1))({k: 1})
+--- value
+[{"k":1},{"k":2}]
+
+=== predicates: equality that JavaScript has and staticjs leaves out
+[1, 2].filter(x => x == 1)
+--- error unsupported
 
 # ---------------------------------------------------------------------------
 # The fast paths (docs/matcher.md, section 7): toSorted runs a COMPARE_BY_KEY
@@ -795,3 +1069,271 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 @shapes PLUCK(map)
 [{map: 1}, [1]].map(x => x.map)
 --- fault staticjs calls methods
+
+# The predicate loops with KEY_COMPARE and ELEMENT_COMPARE (docs/matcher.md,
+# 11.7): filter, find, findIndex, findLast, some and every decide an
+# element in C while its preconditions hold, and call the bytecode for it
+# otherwise, which gives the answer or the fault.
+
+# predicates: NaN, -0 and Infinity
+
+=== predicates: a NaN key against each operator
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 1) KEY_COMPARE(k, STRICT_NOT_EQUAL, 0) KEY_COMPARE(k, LESS, 1) KEY_COMPARE(k, GREATER_EQUAL, 0) KEY_COMPARE(k, GREATER, 1)
+[[{k: NaN}].some(x => x.k === 1), [{k: NaN}].some(x => x.k !== 0), [{k: NaN}].some(x => x.k < 1), [{k: NaN}].some(x => x.k >= 0), [{k: NaN}].some(x => 1 < x.k)]
+--- value
+[false,true,false,false,false]
+
+=== predicates: NaN elements are never greater
+@shapes ELEMENT_COMPARE(GREATER, 0) ELEMENT_COMPARE(LESS_EQUAL, 0)
+[[NaN, 1, NaN, 2].filter(x => x > 0), [NaN, 0].filter(x => 0 >= x)]
+--- value
+[[1,2],[0]]
+
+=== predicates: -0 equals 0
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 0) ELEMENT_COMPARE(STRICT_EQUAL, 0)
+[[{k: -0}, {k: 1}].filter(x => x.k === 0), [-0].filter(x => 0 === x)]
+--- value
+[[{"k":-0}],[-0]]
+
+=== predicates: find gives -0 itself
+@shapes ELEMENT_COMPARE(GREATER_EQUAL, 0)
+[-1, -0, 0].find(x => x >= 0)
+--- value
+-0
+
+=== predicates: -0 is not less than 0, and is at most 0
+@shapes ELEMENT_COMPARE(LESS, 0) ELEMENT_COMPARE(LESS_EQUAL, 0) ELEMENT_COMPARE(LESS, 0)
+[[-0].some(x => x < 0), [-0].some(x => x <= 0), [-0].some(x => 0 > x)]
+--- value
+[false,true,false]
+
+=== predicates: Infinity against numbers; a negative bound is a negation, not a literal
+@shapes ELEMENT_COMPARE(GREATER, 1000000) -
+[[-Infinity, 1, Infinity].filter(x => x > 1e6), [Infinity, -Infinity].findIndex(x => x < -1e21)]
+--- value
+[[Infinity],1]
+
+# predicates: undefined and missing keys
+
+=== predicates: a missing key reads as undefined
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 1) KEY_COMPARE(k, STRICT_NOT_EQUAL, null)
+[[{}, {k: 1}].filter(x => x.k === 1), [{}, {k: null}].filter(x => x.k !== null)]
+--- value
+[[{"k":1}],[{}]]
+
+=== predicates: a missing key against a number faults
+@shapes KEY_COMPARE(k, LESS, 1)
+[{k: 0}, {}].some(x => x.k < 1)
+--- value
+true
+
+=== predicates: a missing key against a number faults when it is reached
+@shapes KEY_COMPARE(k, LESS, 1)
+[{k: 2}, {}].some(x => x.k < 1)
+--- fault staticjs compares two numbers or two strings
+
+=== predicates: undefined elements
+@shapes ELEMENT_COMPARE(STRICT_EQUAL, 1) ELEMENT_COMPARE(STRICT_NOT_EQUAL, 1)
+[[undefined, 1].filter(x => x === 1), [undefined, 1].filter(x => x !== 1)]
+--- value
+[[1],[undefined]]
+
+=== predicates: undefined against a number faults
+@shapes ELEMENT_COMPARE(GREATER, 0)
+[1, undefined].filter(x => x > 0)
+--- fault staticjs compares two numbers or two strings
+
+=== predicates: a key on Object.prototype faults
+@shapes KEY_COMPARE(toString, STRICT_EQUAL, 1)
+[{toString: 1}, {}].filter(x => x.toString === 1)
+--- fault staticjs objects have no prototype
+
+=== predicates: an own key named as one on Object.prototype
+@shapes KEY_COMPARE(toString, STRICT_EQUAL, 1)
+[{toString: 1}, {toString: 2}].filter(x => x.toString === 1)
+--- value
+[{"toString":1}]
+
+# predicates: mixed types, and strings against numbers
+
+=== predicates: strict equality of mixed types never faults
+@shapes ELEMENT_COMPARE(STRICT_EQUAL, 1) ELEMENT_COMPARE(STRICT_EQUAL, "1") ELEMENT_COMPARE(STRICT_NOT_EQUAL, null)
+[[1, "1", true, null, {}, [1], undefined].filter(x => x === 1), [1, "1", true, null, {}, [1]].filter(x => x === "1"), [1, "1", null, {}, [1], new Set([1])].filter(x => null !== x).length]
+--- value
+[[1],["1"],5]
+
+=== predicates: a key holding an object or an array is equal to no literal
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 1) KEY_COMPARE(k, STRICT_NOT_EQUAL, "a")
+[[{k: {}}, {k: [1]}, {k: 1}].filter(x => x.k === 1), [{k: {}}, {k: [1]}, {k: "a"}].filter(x => x.k !== "a")]
+--- value
+[[{"k":1}],[{"k":{}},{"k":[1]}]]
+
+=== predicates: a key holding an array is not ordered
+@shapes KEY_COMPARE(k, LESS, 1)
+[{k: 0}, {k: [1]}].some(x => x.k < 1)
+--- value
+true
+
+=== predicates: a key holding an array faults when it is compared
+@shapes KEY_COMPARE(k, LESS, 1)
+[{k: 2}, {k: [1]}].some(x => x.k < 1)
+--- fault staticjs compares two numbers or two strings
+
+=== predicates: strings order by code units, not as numbers
+@shapes ELEMENT_COMPARE(LESS, "9") ELEMENT_COMPARE(LESS, "9")
+[["10", "9", "8"].filter(x => x < "9"), ["10", "9", "80"].filter(x => "9" > x)]
+--- value
+[["10","8"],["10","80"]]
+
+=== predicates: a string against a number faults where JavaScript would compare
+@shapes ELEMENT_COMPARE(LESS, 2)
+[1, "a", 3].filter(x => x < 2)
+--- fault staticjs compares two numbers or two strings
+
+=== predicates: a number against a string faults
+@shapes KEY_COMPARE(k, GREATER_EQUAL, "a")
+[{k: "b"}, {k: 1}].filter(x => "a" <= x.k)
+--- fault staticjs compares two numbers or two strings
+
+=== predicates: strings order by UTF-16 code units, not by code points, both ways
+@shapes ELEMENT_COMPARE(GREATER, "😀") ELEMENT_COMPARE(GREATER, "😀") KEY_COMPARE(s, LESS, "😀")
+[["\u{1F600}", "\uFFFF"].findIndex(x => x > "\u{1F600}"), ["\u{1F600}", "\uFFFF"].findIndex(x => "\u{1F600}" < x), [{s: "\uFFFF"}, {s: "a"}].findIndex(x => x.s < "\u{1F600}")]
+--- value
+[1,1,1]
+
+=== predicates: a boolean operand of an order runs the bytecode, which faults
+@shapes ELEMENT_COMPARE(LESS, true)
+[1].filter(x => x < true)
+--- fault staticjs compares two numbers or two strings
+
+=== predicates: a null operand of an order runs the bytecode, which faults
+@shapes KEY_COMPARE(k, GREATER_EQUAL, null)
+[{k: 1}].some(x => null <= x.k)
+--- fault staticjs compares two numbers or two strings
+
+=== predicates: an order on an empty array never compares
+@shapes ELEMENT_COMPARE(LESS, false)
+[].every(x => x < false)
+--- value
+true
+
+# predicates: elements that are not objects, for a key
+
+=== predicates: a null element faults
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 1)
+[{k: 2}, null].filter(x => x.k === 1)
+--- fault cannot read a property of null
+
+=== predicates: a number element faults
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 1)
+[{k: 2}, 3].find(x => x.k === 1)
+--- fault staticjs reads properties of objects, arrays, strings and sets
+
+=== predicates: arrays and strings by length, sets by size, in bytecode
+@shapes KEY_COMPARE(length, STRICT_EQUAL, 3) KEY_COMPARE(size, GREATER, 0)
+[[[1, 2], "abc", {length: 3}, [1, 2, 3]].filter(x => x.length === 3), [new Set([1]), {size: 0}, new Set([]), {size: 2}].filter(x => x.size > 0)]
+--- value
+[["abc",{"length":3},[1,2,3]],[new Set([1]),{"size":2}]]
+
+=== predicates: objects with an index
+@shapes KEY_COMPARE(k, STRICT_NOT_EQUAL, 1)
+[{a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, k: 10}, {k: 1}, {a: 0, k: 2}, {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9}, {k: 1, a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9}].filter(x => x.k !== 1).length
+--- value
+3
+
+# predicates: empty arrays
+
+=== predicates: each method on an empty array
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 1) KEY_COMPARE(k, STRICT_EQUAL, 1) ELEMENT_COMPARE(STRICT_EQUAL, 1) ELEMENT_COMPARE(GREATER, 1) KEY_COMPARE(k, LESS, 1) ELEMENT_COMPARE(GREATER_EQUAL, 1)
+[[].filter(x => x.k === 1), [].find(x => x.k === 1), [].findIndex(x => x === 1), [].findLast(x => x > 1), [].some(x => x.k < 1), [].every(x => x >= 1)]
+--- value
+[[],undefined,-1,undefined,false,true]
+
+# predicates: where they stop, and where they fault
+
+=== predicates: find stops at its element, before a null
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 2)
+[{k: 1}, {k: 2}, null].find(x => x.k === 2)
+--- value
+{"k":2}
+
+=== predicates: findIndex stops at its element, before a null
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 2)
+[{k: 1}, {k: 2}, null].findIndex(x => x.k === 2)
+--- value
+1
+
+=== predicates: findLast stops at its element, from the end
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 2)
+[null, {k: 2, i: 0}, {k: 2, i: 1}, {k: 3}].findLast(x => x.k === 2)
+--- value
+{"k":2,"i":1}
+
+=== predicates: findLast gives undefined when nothing matches
+@shapes ELEMENT_COMPARE(GREATER, 5)
+[1, 2, 3].findLast(x => x > 5)
+--- value
+undefined
+
+=== predicates: some stops before a faulting element
+@shapes ELEMENT_COMPARE(GREATER, 1)
+[1, 2, "a"].some(x => x > 1)
+--- value
+true
+
+=== predicates: every stops at its first false
+@shapes KEY_COMPARE(k, GREATER, 0)
+[{k: 1}, {k: 0}, null].every(x => x.k > 0)
+--- value
+false
+
+=== predicates: every is true when each element passes
+@shapes ELEMENT_COMPARE(STRICT_NOT_EQUAL, "x")
+["a", 1, null, undefined, {}].every(x => x !== "x")
+--- value
+true
+
+=== predicates: some faults at a mixed comparison before a null
+@shapes KEY_COMPARE(k, GREATER, 5)
+[{k: 1}, {k: "a"}, null].some(x => x.k > 5)
+--- fault staticjs compares two numbers or two strings
+
+=== predicates: some faults at a null before a mixed comparison
+@shapes KEY_COMPARE(k, GREATER, 5)
+[{k: 1}, null, {k: "a"}].some(x => x.k > 5)
+--- fault cannot read a property of null
+
+=== predicates: findLast faults at a mixed comparison first, from the end
+@shapes KEY_COMPARE(k, GREATER, 5)
+[null, {k: "a"}, {k: 1}].findLast(x => x.k > 5)
+--- fault staticjs compares two numbers or two strings
+
+=== predicates: findLast faults at a null first, from the end
+@shapes KEY_COMPARE(k, GREATER, 5)
+[{k: "a"}, null, {k: 1}].findLast(x => x.k > 5)
+--- fault cannot read a property of null
+
+=== predicates: filter faults at the element, after keeping some
+@shapes ELEMENT_COMPARE(GREATER_EQUAL, 2)
+[3, 1, 2, null, 4].filter(x => x >= 2)
+--- fault staticjs compares two numbers or two strings
+
+=== predicates: a large array
+@shapes - KEY_COMPARE(k, GREATER, 8) PLUCK(k)
+[3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3].map(n => ({k: n * 2})).filter(x => x.k > 8).map(x => x.k)
+--- value
+[10,18,12,10,10,16,18,14,18,16,12,12]
+
+# predicates: the shape is a tag, and other methods run its bytecode
+
+=== predicates: map runs a tagged predicate as bytecode
+@shapes KEY_COMPARE(k, GREATER, 1) ELEMENT_COMPARE(STRICT_EQUAL, 1)
+[[{k: 1}, {k: 2}].map(x => x.k > 1), [1, 2].map(x => x === 1)]
+--- value
+[[false,true],[true,false]]
+
+=== predicates: a tagged predicate called directly
+@shapes ELEMENT_COMPARE(LESS, 3)
+(x => x < 3)(2)
+--- value
+true

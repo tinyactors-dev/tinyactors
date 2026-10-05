@@ -19,11 +19,11 @@
 # that bracket, whatever is declared here: a template's STRING pieces and an
 # else-if's second IF are separators.
 
-event NUMBER leaf value: number;
-event STRING leaf value: text;          # a template's pieces are the template's own events
-event TRUE leaf;
-event FALSE leaf;
-event NULL leaf;
+event NUMBER leaf value: number, operand: operand;
+event STRING leaf value: text, operand: operand;   # a template's pieces are the template's own events
+event TRUE leaf operand: operand;
+event FALSE leaf operand: operand;
+event NULL leaf operand: operand;
 event NAME leaf name: read;
 event TEMPLATE_BEGIN open 0 TEMPLATE_END;
 event TEMPLATE_END close parts: count;
@@ -89,14 +89,19 @@ event END close;                        # closes the program (node 0)
 
 # ---------------------------------------------------------------------------
 # Callback shapes. The compiler records a shape on the function it matched
-# (docs/matcher.md, section 6); map and toSorted run a tagged callback in C
-# (sections 7 and 11).
+# (docs/matcher.md, section 6); map, toSorted and the predicate loops run a
+# tagged callback in C (sections 7 and 11).
 
 shape PLUCK(key: text);                              # x => x.key
 shape COMPARE_BY_KEY(key: text, descending: flag);   # (a, b) => a.key - b.key, or b.key - a.key
 shape COMPARE_NUMERIC(descending: flag);             # (a, b) => a - b, or b - a
+shape KEY_COMPARE(key: text, op: operator, value: operand);   # x => x.key OP c, or c OP x.key
+shape ELEMENT_COMPARE(op: operator, value: operand);          # x => x OP c, or c OP x
 
 nonterminal key_of(object: read, key: text);         # object.key, the object a name
+nonterminal fixed(value: operand);       # a value fixed before the callback runs: here, a literal
+nonterminal key_test(object: read, key: text, op: operator, value: operand);
+nonterminal element_test(element: read, op: operator, value: operand);
 
 key_of(x, k) <- MEMBER{key: k}(NAME{name: x});
 
@@ -133,3 +138,51 @@ COMPARE_NUMERIC(false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
 COMPARE_NUMERIC(true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a},
                                                 PARAM{index: 1}, BIND{name: b}, PARAMS_END,
                                                 BLOCK_BEGIN, RETURN(BINARY{op: SUBTRACT}(NAME{name: b}, NAME{name: a})), BLOCK_END);
+
+# A literal: a number, a string, true, false or null. A template's pieces
+# are its separators, and -1, NaN and undefined are not literals.
+fixed(c) <- NUMBER{operand: c};
+fixed(c) <- STRING{operand: c};
+fixed(c) <- TRUE{operand: c};
+fixed(c) <- FALSE{operand: c};
+fixed(c) <- NULL{operand: c};
+
+# x.key OP c. One rule per operator: no other operator may match.
+key_test(x, k, STRICT_EQUAL, c)     <- BINARY{op: STRICT_EQUAL}(key_of(x, k), fixed(c));
+key_test(x, k, STRICT_NOT_EQUAL, c) <- BINARY{op: STRICT_NOT_EQUAL}(key_of(x, k), fixed(c));
+key_test(x, k, LESS, c)             <- BINARY{op: LESS}(key_of(x, k), fixed(c));
+key_test(x, k, LESS_EQUAL, c)       <- BINARY{op: LESS_EQUAL}(key_of(x, k), fixed(c));
+key_test(x, k, GREATER, c)          <- BINARY{op: GREATER}(key_of(x, k), fixed(c));
+key_test(x, k, GREATER_EQUAL, c)    <- BINARY{op: GREATER_EQUAL}(key_of(x, k), fixed(c));
+# c OP x.key, recorded as x.key OP' c: the operator mirrored (docs/matcher.md, 11.7.2).
+key_test(x, k, STRICT_EQUAL, c)     <- BINARY{op: STRICT_EQUAL}(fixed(c), key_of(x, k));
+key_test(x, k, STRICT_NOT_EQUAL, c) <- BINARY{op: STRICT_NOT_EQUAL}(fixed(c), key_of(x, k));
+key_test(x, k, GREATER, c)          <- BINARY{op: LESS}(fixed(c), key_of(x, k));
+key_test(x, k, GREATER_EQUAL, c)    <- BINARY{op: LESS_EQUAL}(fixed(c), key_of(x, k));
+key_test(x, k, LESS, c)             <- BINARY{op: GREATER}(fixed(c), key_of(x, k));
+key_test(x, k, LESS_EQUAL, c)       <- BINARY{op: GREATER_EQUAL}(fixed(c), key_of(x, k));
+
+# x OP c, and c OP x mirrored.
+element_test(x, STRICT_EQUAL, c)     <- BINARY{op: STRICT_EQUAL}(NAME{name: x}, fixed(c));
+element_test(x, STRICT_NOT_EQUAL, c) <- BINARY{op: STRICT_NOT_EQUAL}(NAME{name: x}, fixed(c));
+element_test(x, LESS, c)             <- BINARY{op: LESS}(NAME{name: x}, fixed(c));
+element_test(x, LESS_EQUAL, c)       <- BINARY{op: LESS_EQUAL}(NAME{name: x}, fixed(c));
+element_test(x, GREATER, c)          <- BINARY{op: GREATER}(NAME{name: x}, fixed(c));
+element_test(x, GREATER_EQUAL, c)    <- BINARY{op: GREATER_EQUAL}(NAME{name: x}, fixed(c));
+element_test(x, STRICT_EQUAL, c)     <- BINARY{op: STRICT_EQUAL}(fixed(c), NAME{name: x});
+element_test(x, STRICT_NOT_EQUAL, c) <- BINARY{op: STRICT_NOT_EQUAL}(fixed(c), NAME{name: x});
+element_test(x, GREATER, c)          <- BINARY{op: LESS}(fixed(c), NAME{name: x});
+element_test(x, GREATER_EQUAL, c)    <- BINARY{op: LESS_EQUAL}(fixed(c), NAME{name: x});
+element_test(x, LESS, c)             <- BINARY{op: GREATER}(fixed(c), NAME{name: x});
+element_test(x, LESS_EQUAL, c)       <- BINARY{op: GREATER_EQUAL}(fixed(c), NAME{name: x});
+
+# x => x.k OP c, x => x OP c, and their block forms: x is parameter 0, the
+# only one, a plain name.
+KEY_COMPARE(k, o, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
+                                               key_test(x, k, o, c));
+KEY_COMPARE(k, o, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
+                                               BLOCK_BEGIN, RETURN(key_test(x, k, o, c)), BLOCK_END);
+ELEMENT_COMPARE(o, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
+                                                element_test(x, o, c));
+ELEMENT_COMPARE(o, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
+                                                BLOCK_BEGIN, RETURN(element_test(x, o, c)), BLOCK_END);

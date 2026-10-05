@@ -35,7 +35,7 @@ check.call('two generations give the same bytes', Shapes.generate(small, header)
 
 # Every check fails with its message, at its line.
 EVENTS = <<~RULES
-  event NUMBER leaf value: number;
+  event NUMBER leaf value: number, operand: operand;
   event NAME leaf name: read;
   event MEMBER postfix 1 key: text;
   event BINARY postfix 2 op: operator;
@@ -82,7 +82,17 @@ errors = [
    replace.call('ARROW_BEGIN', 'event ARROW_BEGIN open 1 ARROW_END params: count;'), BASE.lines.size + 2,
    'ARROW_BEGIN takes the 1 node(s) before it as its first children, which the matcher does not keep'],
   ['an unknown action', "#{EVENTS}event FOO sideways;\n", 11, 'unknown action "sideways"'],
-  ['an unknown type', "#{EVENTS}shape BAD(key: string);\n", 11, '"string" is not one of text, flag, count, number'],
+  ['an unknown type', "#{EVENTS}shape BAD(key: string);\n", 11, '"string" is not one of text, flag, count, number, operator, operand'],
+  ['an operand field on an event that is not a leaf',
+   replace.call('MEMBER', 'event MEMBER postfix 1 key: text, value: operand;'), event_line.call('MEMBER'),
+   "MEMBER's value is an operand, which only a leaf event has"],
+  ['an operand constant in a test', "#{BASE}nonterminal fixed(value: operand);\nfixed(c) <- NUMBER{operand: 1};\n",
+   rule_line + 1, 'an operand comes from its pattern, never a constant'],
+  ['an operand constant in a head', "#{BASE}nonterminal fixed(value: operand);\nfixed(1) <- NUMBER{operand: c};\n",
+   rule_line + 1, 'an operand comes from its pattern, never a constant'],
+  ['an operand variable compared with a number',
+   "#{BASE}nonterminal fixed(value: operand);\nfixed(c) <- NUMBER{value: c, operand: c};\n", rule_line + 1,
+   'c is an operand here and a number at line'],
   ['a missing semicolon', "#{BASE}#{KEY_OF.delete_suffix(';')}\n#{GET}\n", rule_line + 1, 'expected ";", found "GET"'],
   ['an unknown event in a pattern', "#{BASE}key_of(x, k) <- FOO(NAME{name: x});\n", rule_line, 'FOO is not an event kind'],
   ['too many operands', "#{BASE}key_of(x, k) <- MEMBER{key: k}(NAME{name: x}, NAME{name: x});\n", rule_line,

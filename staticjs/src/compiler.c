@@ -2038,6 +2038,16 @@ static sjs_result on_event(void *self, const sjs_event *e) {
 
 static const sjs_sink_vtable sink_vtable = { on_event };
 
+/* A text a shape records, as an event string_constant finds its constant
+ * by: the one the body's GET_MEMBER or CONSTANT already uses. */
+static sjs_event shape_text(const sjs_shape_match *match, sjs_str text) {
+    sjs_event e = { 0 };
+    e.kind = SJS_EV_STRING;
+    e.text = text;
+    e.at = match->start;
+    return e;
+}
+
 /* The matcher found that the innermost function computes a shape: record
  * it, with its arguments, on the function's info. A report for any other
  * node is ignored; the parser's ids make that never happen. */
@@ -2048,23 +2058,35 @@ static sjs_result on_shape(void *self, const sjs_shape_match *match) {
     uint32_t function = function_scope(c)->function;
     uint32_t args[SJS_SHAPE_ARGS] = { 0 };
     for (uint32_t i = 0; i < SJS_SHAPE_ARGS; i++) {
+        const sjs_shape_value *arg = &match->args[i];
+        sjs_event text = shape_text(match, arg->text);
         switch (sjs_shape_arg_kind(match->shape, i)) {
-        case SJS_SHAPE_ARG_TEXT: {
+        case SJS_SHAPE_ARG_TEXT:
             /* The key's string constant: the one GET_MEMBER reads it with. */
-            sjs_event key = { 0 };
-            key.kind = SJS_EV_MEMBER;
-            key.text = match->args[i].text;
-            key.at = match->start;
-            if (string_constant(c, &key, &args[i]) != SJS_OK) return SJS_ERR_PROGRAM;
+            if (string_constant(c, &text, &args[i]) != SJS_OK) return SJS_ERR_PROGRAM;
             break;
-        }
         case SJS_SHAPE_ARG_NUMBER: {
-            sjs_result r = number_index(c, match->args[i].number, &args[i]);
+            sjs_result r = number_index(c, arg->number, &args[i]);
             if (r != SJS_OK) return fail_result(c, r, match->start);
             break;
         }
+        case SJS_SHAPE_ARG_OPERAND: {
+            /* The constant the literal's own NUMBER_ or CONSTANT pushes: the
+             * body is compiled, so it is found, not made. */
+            uint32_t index = 0;
+            if (arg->operand == SJS_OPERAND_NUMBER) {
+                sjs_result r = number_index(c, arg->number, &index);
+                if (r != SJS_OK) return fail_result(c, r, match->start);
+            } else if (arg->operand == SJS_OPERAND_TEXT && string_constant(c, &text, &index) != SJS_OK) {
+                return SJS_ERR_PROGRAM;
+            }
+            /* Too many constants to say which: the function stays untagged. */
+            if (index >= SJS_SHAPE_OPERAND_INDICES) return SJS_OK;
+            args[i] = sjs_shape_operand(arg->operand, index);
+            break;
+        }
         default:
-            args[i] = match->args[i].count;
+            args[i] = arg->count;
             break;
         }
     }

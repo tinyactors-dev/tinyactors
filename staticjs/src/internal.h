@@ -491,9 +491,27 @@ typedef struct {
     uint8_t shape;
     /* The shape's arguments, by sjs_shape_arg_kind(shape, i): a text's string
      * constant (an index into the program's constants: interned, NAMED, the
-     * same constant GET_MEMBER reads that key with), a flag, a count. */
+     * same constant GET_MEMBER reads that key with), a flag, a count, an
+     * sjs_operator, or an operand (sjs_shape_operand). */
     uint32_t shape_args[SJS_SHAPE_ARGS];
 } sjs_function_info;
+
+/* A shape's operand (docs/matcher.md, 11.2): a literal the callback compares
+ * with, which the loop knows before it starts. The matcher keeps its kind
+ * byte before the value; a function's shape_args keeps the kind in the low
+ * 4 bits and, for a number or a string, the index of the constant the
+ * literal's own instruction pushes (program->numbers or ->constants). */
+enum { SJS_OPERAND_NUMBER = 1, SJS_OPERAND_TEXT, SJS_OPERAND_TRUE, SJS_OPERAND_FALSE, SJS_OPERAND_NULL };
+#define SJS_SHAPE_OPERAND_INDICES (1u << 28)  /* an index at or past this is not recorded */
+static inline uint32_t sjs_shape_operand(uint32_t kind, uint32_t index) {
+    return kind | index << 4;
+}
+static inline uint32_t sjs_shape_operand_kind(uint32_t arg) {
+    return arg & 15u;
+}
+static inline uint32_t sjs_shape_operand_index(uint32_t arg) {
+    return arg >> 4;
+}
 
 typedef struct {
     uint16_t from_capture;  /* 0: the creator's local slot; 1: its capture */

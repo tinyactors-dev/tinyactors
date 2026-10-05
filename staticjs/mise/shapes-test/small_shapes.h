@@ -11,15 +11,20 @@ typedef enum {
     SJS_SHAPE_NONE = 0,
     SJS_SHAPE_GET,   /* key: text */
     SJS_SHAPE_TWICE, /* key: text, wide: flag */
+    SJS_SHAPE_BOUND, /* key: text, op: operator, limit: operand */
     SJS_SHAPE_COUNT
 } sjs_shape;
 
 /* The most arguments a shape has. */
-#define SJS_SHAPE_ARGS 2u
+#define SJS_SHAPE_ARGS 3u
 
 /* What a shape's argument is: a text (recorded as a string constant), a
- * flag (0 or 1), a count, or a number (a number constant). */
-enum { SJS_SHAPE_ARG_NONE = 0, SJS_SHAPE_ARG_TEXT, SJS_SHAPE_ARG_FLAG, SJS_SHAPE_ARG_COUNT, SJS_SHAPE_ARG_NUMBER };
+ * flag (0 or 1), a count, a number (a number constant), an operator (an
+ * sjs_operator), or an operand (a literal's value: sjs_shape_operand). */
+enum {
+    SJS_SHAPE_ARG_NONE = 0, SJS_SHAPE_ARG_TEXT, SJS_SHAPE_ARG_FLAG, SJS_SHAPE_ARG_COUNT, SJS_SHAPE_ARG_NUMBER,
+    SJS_SHAPE_ARG_OPERATOR, SJS_SHAPE_ARG_OPERAND
+};
 
 /* Argument `i` of `shape`: SJS_SHAPE_ARG_NONE past its last. */
 static inline uint8_t sjs_shape_arg_kind(uint32_t shape, uint32_t i) {
@@ -32,6 +37,10 @@ static inline uint8_t sjs_shape_arg_kind(uint32_t shape, uint32_t i) {
         static const uint8_t kinds[] = { SJS_SHAPE_ARG_TEXT, SJS_SHAPE_ARG_FLAG };
         return i < 2u ? kinds[i] : (uint8_t)SJS_SHAPE_ARG_NONE;
     }
+    case SJS_SHAPE_BOUND: {
+        static const uint8_t kinds[] = { SJS_SHAPE_ARG_TEXT, SJS_SHAPE_ARG_OPERATOR, SJS_SHAPE_ARG_OPERAND };
+        return i < 3u ? kinds[i] : (uint8_t)SJS_SHAPE_ARG_NONE;
+    }
     default: return SJS_SHAPE_ARG_NONE;
     }
 }
@@ -41,6 +50,17 @@ static inline const char *sjs_shape_name(uint32_t shape) {
     switch (shape) {
     case SJS_SHAPE_GET: return "GET";
     case SJS_SHAPE_TWICE: return "TWICE";
+    case SJS_SHAPE_BOUND: return "BOUND";
+    default: return "NONE";
+    }
+}
+
+/* "STRICT_EQUAL" and the like, for an operator argument: for tests and
+ * messages. */
+static inline const char *sjs_shape_operator_name(uint32_t op) {
+    switch (op) {
+    case SJS_OP_ADD: return "ADD";
+    case SJS_OP_SUBTRACT: return "SUBTRACT";
     default: return "NONE";
     }
 }

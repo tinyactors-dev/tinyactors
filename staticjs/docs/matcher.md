@@ -7,7 +7,7 @@ switch and the differential test ([matcher]); and the first consumers,
 7). Section 9 lists the commits, each with its tests; where the
 implementation proved the first draft wrong in a detail, the sections say
 what changed and why. Section 10 is what may come next. Section 11 adds
-numeric sorts (implemented), predicates against a literal and sums
+numeric sorts and predicates against a literal (implemented), sums
 (designed), and designs set membership through a captured name.
 
 The compiler keeps reinventing small pattern matchers over the events it
@@ -503,7 +503,7 @@ rebind `undefined`, and `-0` is a UNARY. This shape lands with its first
 consumer, not before. Nothing in the commits of section 9 uses it, and the
 repository removes what nothing uses. Section 11 designs it as KEY_COMPARE
 and ELEMENT_COMPARE, with every comparison operator and the type named
-`operand`.
+`operand`, and 11.7.3 implements it.
 
 ---
 
@@ -1488,7 +1488,7 @@ These come after the commits of section 9, in the order a profile asks for
 them.
 
 - **KEY_EQUALS** (3.3) for `filter`, `find`, `findIndex`, `some`, `every`:
-  designed in section 11 as KEY_COMPARE and ELEMENT_COMPARE.
+  implemented in section 11 as KEY_COMPARE and ELEMENT_COMPARE.
 - **The compiler's own peepholes as rules,** once a non-arrow node can
   carry a report: OBJECT_LITERAL's gathered prefix (an `OBJECT_BEGIN` hedge
   of static KEYs), and `call_begin`'s METHOD_MEMBER rewrite (a `CALL_BEGIN`
@@ -1513,8 +1513,9 @@ them.
 
 ## 11. The second rule set: numeric sorts, predicates and sums
 
-Status: item 1, the numeric sort, is implemented (11.6); items 2 and 3
-are designed, not implemented. Items 1 to 3 are one commit each (11.11);
+Status: item 1, the numeric sort, is implemented (11.6), and item 2, the
+predicates (11.7.3); item 3 is designed, not implemented. Items 1 to 3 are
+one commit each (11.11);
 item 4, set membership through a captured name, is a design only (11.9),
 for the reasons given there.
 
@@ -1581,7 +1582,10 @@ its commit.
   head that gives one is refused ("an operand comes from its pattern,
   never a constant"). An operand variable agrees only with operands. A
   template's STRING pieces are separators of their template (section 2),
-  so `` `a` `` is never an operand.
+  so `` `a${b}` `` gives no operand. A template without a substitution is
+  a single STRING event, as the parser sends a string literal, so
+  `` `a` `` is the operand `"a"`: the same value, compiled to the same
+  CONSTANT (found when 11.7 was implemented; `shapes.spec` has it).
 
 **In the matcher**, an operand is captured into the text stack, so every
 path that keeps, moves and drops text keeps, moves and drops operands too,
@@ -1862,7 +1866,10 @@ are charged. The changes common to all three items:
   sits before its own `call_back`. A loop whose last element took the C
   path finishes on the next step, exactly as one whose last element took
   the bytecode: the bytecode's next step reads the answer and finds the
-  end, so the counts of steps are equal.
+  end, so the counts of steps are equal. A predicate that answers early
+  (some, every, the finds) is one step cheaper in C: the C step finishes
+  in the step that decides, where the bytecode reads the answer in a step
+  of its own.
 
 ### 11.6 Item 1: toSorted with COMPARE_NUMERIC
 
@@ -1982,6 +1989,74 @@ When the bytecode decides, the step calls `call_element` exactly as today.
   GET_MEMBER, a literal instruction, BINARY, RETURN), ELEMENT_COMPARE 5.
   C: 2 and 1. A string comparison costs no fuel per byte in either, as
   `apply_binary` charges none.
+
+#### 11.7.3 Implemented
+
+As designed above, with these details and findings:
+
+- **Generator.** `operand` is a field, attribute and parameter type (class
+  `:operand`, field `SHAPE_FIELD_OPERAND`), `operator` a parameter type.
+  The checks of 11.2 are in: an operand field on an event that is not a
+  leaf, an operand constant in a test or a head, and an operand variable
+  compared with another type each fail at their line (`shapes-test`, whose
+  small rules file now reads an operand beside a number of the same event
+  and has a shape with an operator and an operand parameter). A message
+  now says "an operand", not "a operand". When a shape has an operator
+  parameter, `src/shapes.h` also gets `sjs_shape_operator_name`, for the
+  tests' printing. The tables are 11.4's item 2 row: 19 nonterminals, 53
+  rules, 40 slots, 19 costs; a record is 392 bytes, so the first 1 KiB
+  holds 2.
+- **Matcher.** `matcher_operand` reads the event into the step's
+  `operand` bytes; the slot points at them with `SHAPE_TEXT_OPERAND`, and
+  `matcher_settle_event` (now given the sentinel to copy) and
+  `matcher_settle` copy them as they copy the event's text.
+  `matcher_report_operand` fills `sjs_shape_value.operand`, `number` and
+  `text`. `matcher_test`'s out of memory sweep runs a 64-byte string
+  operand, which alone outgrows the matcher's 64 bytes (three allocations:
+  the records, their growth, the text), and a short one (two).
+- **Compiler.** `on_shape` records an operand as `sjs_shape_operand(kind,
+  index)`; `shape_text` builds the event `string_constant` finds a key's
+  or a string's constant by. The differential test's program hash shows
+  no constant is added.
+- **Evaluator.** `apply_binary`'s strict equality and order are now
+  `sjs_vm_strict_equal` and `sjs_vm_order` (`src/vm.c`, declared in
+  `src/vm.h`), which `predicate_compare` calls too: one comparison for
+  both paths, `SJS_VM_UNDECIDED` where the bytecode faults.
+- **Consumers.** `predicate_start` (from `shape_start`) leaves an order
+  against true, false or null untagged; `predicate_step`,
+  `predicate_compare` and `predicate_answer` in `src/builtins.c`, which
+  `sjs_loop_step`'s phase 1 shares for every predicate loop. The frame
+  stays 112 bytes, with `shape_op` at 67, `shape_guess` at 68, the union
+  at 72 and `scratch` at 104.
+- **Templates.** A template without a substitution is one STRING event, so
+  `` x => x.k === `a` `` is KEY_COMPARE with the operand `"a"`; the same
+  value and the same CONSTANT, so it is a positive case, not a near-miss.
+  `1e999` is refused as unsupported, so the spec uses `1e21`.
+- **Fuel.** As 11.7.2 says per element. A loop that answers early (some,
+  every, the finds) saves one step more: the bytecode reads the answer that
+  finishes it in a step of its own (`api_test`:
+  `[1, 2, 3, 4].some(x => x === 3)` is 30 units without shapes and 17 with,
+  3 × 4 + 1 apart).
+- **Allocations.** One more record growth where a matched arrow holds a
+  third record: `test_no_shapes` now counts two matcher allocations, and
+  compiling `power.js` one more (116 to 117 allocations, peak 20,846 to
+  21,142 bytes). A function's info is 28 bytes, from 24.
+
+`bench-compare 0f7f013 --quick`, machine 172a3dd3bd74 (Xeon 2.10GHz, 4
+cores, a noisy VM), medians of 4 alternating runs. The unflagged rows:
+
+| case | n | before | after | change | fuel per op |
+|---|---|---|---|---|---|
+| eval.array.pipeline | 10,000 | 12.92 M elem/s | 20.02 M elem/s | +55.0% | 95,018 -> 55,018 |
+| eval.array.findIndex | 1,000 | 21.99 M elem/s | 55.34 M elem/s | +151.7% | 6,007 -> 2,007 |
+
+Flagged noisy but consistent with the fuel: eval.array.filter +132% to
++136% (60,007 -> 20,007 at 10,000), .every +165% to +176% (50,007 ->
+10,007), .some +174% to +189%, .findIndex at 10,000 +155%,
+.pipeline at 1,000 +68%. The other eval.array rows, eval.guard.* and
+compile.* are within the noise; no compile row is flagged slower, so
+[slots] (11.4) is still not needed. compile.* hold 8 to 1,120 more bytes
+(the larger function info, and power.js's extra growth).
 
 ### 11.8 Item 3: reduce with SUM and SUM_KEY
 
@@ -2200,13 +2275,16 @@ JavaScript (`2`, `"open"`, `true`, `null`).
 **Item 2 (KEY_COMPARE, ELEMENT_COMPARE)**
 
 - **Positives:** each of the six operators in both orientations, for a
-  key and for the element; each operand kind (an integer, `1.5`, `1e999`
-  as Infinity, `0x10`, `""`, a non-ASCII string, a string of 64 bytes,
-  `true`, `false`, `null`); the block form.
+  key and for the element; each operand kind (an integer, `1.5`, `1e21`,
+  `0x10`, `""`, a non-ASCII string, a string of 64 bytes, `true`,
+  `false`, `null`); the block form. (`1e999` is refused as unsupported,
+  "this number needs more precision than staticjs reads", so Infinity is
+  only the name `Infinity`, a near-miss until item 4.)
 - **Near-misses:** `x => x.k === y` (a capture, until item 4);
   `x => x.k === undefined` and `x => x === NaN` (names, until item 4);
   `x => x.k === -1` (a UNARY); `x => x.k === "a" + "b"`;
-  `` x => x.k === `a` `` (a template); a string literal of 65 bytes;
+  `` x => x.k === `a${1}` `` (a template with a substitution: `` `a` ``
+  alone is a STRING, and matches); a string literal of 65 bytes;
   `x => x.k + 1` and `x => x.k - 1` (not comparisons); `x => "k" in x`;
   `x => x.k.j === 1`; `x => x?.k === 1`; `x => x["k"] === 1`;
   `(x, i) => x.k === 1`; `x => 1 === 2`; `x => x.k === x.j`;
@@ -2267,7 +2345,9 @@ JavaScript (`2`, `"open"`, `true`, `null`).
 - **Fuel, pinned both ways,** with the difference checked exactly.
   `[3, 1, 2, 0].toSorted((a, b) => a - b)` makes 5 comparisons, so shapes
   on is 5 × 4 = 20 units below off. A filter of 4 objects by `x.k > 2`:
-  16. `[1, 2, 3, 4].some(x => x === 3)`: 3 elements, 12. The two reduces
+  16. `[1, 2, 3, 4].some(x => x === 3)`: 3 elements, 13, not 12: the
+  bytecode reads the answer that finishes the loop in a step of its own,
+  where the C step finishes in the step that decides. The two reduces
   over 4 elements: 16 each. The pauses at 1 unit per run are counted, as
   [consumers] does (section 9).
 - **Limit edges, identical both ways:** `max_stack` where the body's second
