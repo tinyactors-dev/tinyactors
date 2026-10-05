@@ -148,6 +148,46 @@ area, so it lands in 4.2.
 **Exit:** matching gives the same answers through lookup. The IRP tests in
 the test host and napi still pass.
 
+**Done in 3.1 and 3.2 (branch `wip/ring-proto/3.1`).**
+
+- The generated prefixes were already atoms: `ta_event_name_table_init`
+  interns `error`, `execution`, `communication`, `platform`, `done`, `state`
+  and `invoke`. The table now keeps the `invoke` atom (`invoke_segment`) and
+  `invoke.c` reads it instead of interning the literal. No other prefix is
+  generated (searched `src/`).
+- `ta_event_pattern_matches` takes the resolved atoms (`ta_event_atoms`). The
+  interpreter resolves once per taken event in `ta_interpreter_resolve_event`
+  (the one function 4.2 changes): until the name area exists there are no
+  bytes, so it renders the interned name into the render arena and resolves
+  it with D4. That is a render and a re-lookup for names whose atoms are
+  known. What it saves today is one trie walk per descriptor per candidate
+  transition.
+- Scratch: `ta_interpreter.event_atoms` holds eventNameDepth atoms, taken in
+  `ta_interpreter_init` and counted by `ta_interpreter_scratch_need` in the
+  same position. Every chart's scratch need grows by 4 * eventNameDepth bytes
+  (256 at the default); `layout_test`'s golden figures moved by that.
+- A name whose text does not fit renderBytes (256 at least) has zero atoms and
+  matches nothing, so a take never stalls. This is the one new answer.
+- An interned segment whose text contains a dot (an `<invoke id="a.b">`),
+  rendered and resolved, splits into two segments. This is how the bytes
+  design reads such a name; today the trie keeps it one segment. Open for the
+  maintainer; no test in the suites uses it.
+- Tests: `tests/event_match_test.c` (new), `event_pattern_test.c` migrated.
+  `mise run asan` in tinyactors-core: 39 programs pass. Test host scenarios
+  (`--fast`): 449 passed. napi IRP on Node: 176 run, 176 passed. Bun does not
+  get the addon's native surface in this container (`native.parameterTable` is
+  undefined in `lib/params.js`), before any core code runs.
+- Core size (`cat tinyactors-core/src/*.c tinyactors-core/src/*.h | wc -l`):
+  26672 before, 26771 after.
+- Per-event cost, `mise run bench-compare ring-proto --runtimes=node --runs=3`
+  (machine 61a66aecf132, medians of 3 alternating runs). The A/A run on one
+  commit moved between -10.9 and +6.9 percent. Untraced 1,413 to 1,479 ns
+  (+4.6), summary 2,490 to 2,587 (+3.9), send data without data 2,608 to
+  2,894 (+11.0; the A/A runs of that bench read 2,902 and 2,837, so the old
+  run was the fast one), number +5.5, object -1.2. Per-actor memory (core,
+  native, heap B/actor) is unchanged in every variant. Nothing here is
+  outside the noise.
+
 ## Phase 4: core gains its queue
 
 The kernel stays and keeps napi and the test host working. It is changed

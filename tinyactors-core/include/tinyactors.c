@@ -7697,7 +7697,7 @@ TA_PRIVATE ta_result ta_event_name_intern_dotted(ta_event_name_table *table, ta_
  *     call, never copied, retained or pointed into afterwards.
  *   - The atom table: system. Borrowed through a const pointer for the call.
  *   - `out`: macrostep/unit scratch, owned by the caller (Phase 3.1: one
- *     buffer for the whole system). The atoms in it are indexes into the
+ *     buffer per interpreter, it->event_atoms, eventNameDepth entries). The atoms in it are indexes into the
  *     atom table, which never moves or removes one, so they stay meaningful
  *     for as long as the system lives; UNKNOWN entries refer to nothing.
  *   - The parameter struct: call, on the caller's stack, not stored.
@@ -7725,7 +7725,7 @@ TA_PRIVATE ta_result ta_event_name_intern_dotted(ta_event_name_table *table, ta_
  *     uint32_t count = 0;
  *     ta_result result = ta_name_resolve(&(ta_name_resolve_params){
  *         .atoms = &system->atoms, .name = envelope_name,
- *         .out = segments, .capacity = system->event_name_depth, .count = &count });
+ *         .out = segments, .capacity = system->event_names.trie.max_depth, .count = &count });
  *     // then ta_pattern_match_run over segments[0..count)
  */
 
