@@ -280,13 +280,15 @@ static void turn_work_is_bounded(void) {
     tah_system_turn(system);
     tah_system_end_turn(system);
     CHECK(settled_count(system, actors, COUNT) == 9);
-    /* Nothing was rotated: only the paused tenth input's actor was requeued. */
-    CHECK(tah_ring_count(&system->sched.runnable) >= COUNT - 1u);
+    /* The turn popped the entry it ran and the few it settled, not the 2000 behind them. */
+    CHECK(system->sched.turn_visited <= 2u * system->budgets.resumes);
+    CHECK(tah_ring_count(&system->sched.runnable) >= COUNT - 2u * system->budgets.resumes);
     uint32_t turns = 1;
     while (!tah_system_quiet(system) && turns < COUNT / 8u + 8u) {
         tah_system_turn(system);
         tah_system_end_turn(system);
         turns += 1u;
+        CHECK(system->sched.turn_visited <= 2u * system->budgets.resumes);
         CHECK(tah_ring_count(&system->sched.runnable) <= COUNT);
     }
     CHECK(tah_system_quiet(system));

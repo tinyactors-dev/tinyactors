@@ -224,6 +224,21 @@ vtable and the event blocks).
   and `ta_address_load_failed`, the name area, the event blocks and their
   cache, the router vtable, and `bench-compare` against the commit before
   4.2 (it belongs in the 4.5 commit).
+- Regression found by `test:full` and fixed in unit P2: after `resumes`
+  inputs a kernel turn popped every remaining entry of the runnable ring and
+  pushed the unsettled ones back, so a turn cost the queue's length and
+  bootstrapping n actors cost n^2 / 1024 pops (napi `scale.js`, Node, plain,
+  bootstrap us/actor at 50k / 200k / 1M: 0.93 / 2.44 / 10.3; before 4.2a
+  0.44 / 0.54 / 0.33). The turn now drops only the stale entries at the front
+  of the ring and stops at the first live one (`sched.turn_visited` counts the
+  pops, bounded in `scheduler_test`); the ring keeps two spare chunks, because
+  the leftover entry made a burst of exactly one chunk (1024 actors) need two
+  and `scale.js`'s zero-allocation check saw an allocation per round. After:
+  0.46 / 0.56 / 0.49 (plain), 2.2 / 2.5 / 2.9 (data), 2.8 / 3.7 / 8.0 (ws, to
+  be looked at: its bootstrap includes the outbound writes). `bench-compare
+  6803c44` (node, 200k actors, 3 alternating runs each, machine 61a66aecf132):
+  throughput within the noise floor (+9% untraced, -9% to +5% elsewhere),
+  bytes per actor unchanged (core 273, native 321). Core is untouched.
 
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits

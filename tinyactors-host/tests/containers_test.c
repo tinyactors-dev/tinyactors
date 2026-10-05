@@ -81,6 +81,30 @@ static void ring_reuses_its_spare_chunk(void) {
     CHECK(tah_allocator_total(&allocator).bytes_in_use == 0);
 }
 
+static void ring_reuses_two_spare_chunks(void) {
+    tah_ring ring;
+    tah_ring_init(&ring, other(), (tah_ring_shape){ .layout = TAH_LAYOUT(uint32_t), .chunk_capacity = 8 });
+    uint32_t value = 7;
+    /* Fills a chunk exactly and takes one entry more, then drains: two chunks at the peak. After the first cycle
+     * both are spares, and the cycles that follow allocate nothing. */
+    for (uint32_t i = 0; i < 9; i += 1) {
+        CHECK(tah_ring_push(&ring, &i) == TA_OK);
+    }
+    while (tah_ring_pop(&ring, &value)) {
+    }
+    uint64_t before = tah_allocator_calls(&allocator);
+    for (int round = 0; round < 100; round += 1) {
+        for (uint32_t i = 0; i < 9; i += 1) {
+            CHECK(tah_ring_push(&ring, &i) == TA_OK);
+        }
+        while (tah_ring_pop(&ring, &value)) {
+        }
+    }
+    CHECK(tah_allocator_calls(&allocator) == before);
+    tah_ring_destroy(&ring);
+    CHECK(tah_allocator_total(&allocator).bytes_in_use == 0);
+}
+
 static void map_deletes_with_tombstones(void) {
     tah_map map;
     tah_map_init(&map, other());
@@ -202,6 +226,7 @@ int main(void) {
     vec_grows();
     ring_keeps_fifo_order_across_chunks();
     ring_reuses_its_spare_chunk();
+    ring_reuses_two_spare_chunks();
     map_deletes_with_tombstones();
     free_list_reuses_records();
     free_list_allocates_in_chunks();

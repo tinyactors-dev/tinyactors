@@ -7,8 +7,8 @@
  * - vec: a growable array. It doubles, so it is for small or bounded things;
  *   a queue that can hold millions of entries is a ring.
  * - ring: a FIFO of fixed-size chunks. Growing never copies the queue, and an
- *   empty ring keeps one spare chunk so a queue that fills and drains does
- *   not allocate each time.
+ *   empty ring keeps up to two spare chunks so a queue that fills and drains
+ *   (even by a chunk and one entry) does not allocate each time.
  * - map: open addressing, uint64_t keys and values, linear probing, deletion
  *   by tombstone.
  * - slice: a pointer and a length.
@@ -59,12 +59,15 @@ typedef struct {
     uint32_t chunk_capacity; /* elements per chunk */
 } tah_ring_shape;
 
+enum { TAH_RING_SPARES = 2 };
+
 typedef struct {
     ta_allocator allocator;
     tah_ring_shape shape;
     tah_ring_chunk *head;
     tah_ring_chunk *tail;
-    tah_ring_chunk *spare;
+    tah_ring_chunk *spare; /* a list through `next`, at most TAH_RING_SPARES long */
+    uint32_t spares;
     uint32_t head_index; /* the first element's index in the head chunk */
     uint32_t tail_index; /* elements used in the tail chunk */
     uint32_t count;

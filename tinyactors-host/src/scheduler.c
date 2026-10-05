@@ -142,8 +142,7 @@ void tah_sched_init(tah_sched *sched, ta_allocator allocator, ta_allocator envel
     tah_vec_init(&sched->pages, allocator, TAH_LAYOUT(tah_sched_entry *));
     tah_ring_shape shape = { .layout = TAH_LAYOUT(ta_actor_id), .chunk_capacity = TAH_QUEUE_CHUNK };
     tah_ring_init(&sched->runnable, allocator, shape);
-    tah_ring_init(&sched->ready, allocator, shape);
-    tah_ring_init(&sched->room, allocator, shape);
+    tah_ring_init(&sched->ready, allocator, shape);    tah_ring_init(&sched->room, allocator, shape);
     tah_envelopes_init(&sched->envelopes, envelopes);
     tah_free_list_init(&sched->traces, envelopes, TAH_LAYOUT(ta_trace_parent));
     tah_vec_init(&sched->waiters, envelopes, TAH_LAYOUT(tah_waiter));
@@ -1535,16 +1534,27 @@ void tah_sched_turn(tah_sched *sched, const tah_turn_params *params) {
      * every actor whose input is next, and the entries it settled are dropped when they come up. */
     sched->turn_left = params->budgets.resumes;
     sched->turn_bounded = true;
+    sched->turn_visited = 0;
     for (uint32_t index = 0; index < pending; index += 1) {
         if (sched->turn_left == 0) {
-            /* The turn's inputs are used. The entries not reached stay where they are, in order: the next turn
-             * starts with them, and one that a call settled meanwhile is dropped in O(1) when it comes up. Walking
-             * them here would make every turn cost the length of the queue. */
-            break;
+            /* The turn's inputs are used. Entries of actors a call already settled are dropped, which leaves the
+             * ring free of duplicates (a ring that kept them would grow by a round of deliveries each turn and
+             * allocate chunks); the first entry that still needs a call stays where it is, and so does everything
+             * behind it, in order. Each entry is popped once per push, and the walk ends at the first live one,
+             * so a turn costs its inputs plus the entries they settled, never the length of the queue. */
+            const ta_actor_id *front = tah_ring_front(&sched->runnable);
+            tah_sched_entry *waiting = front == NULL ? NULL : tah_sched_lookup(sched, *front);
+            if (waiting != NULL && waiting->state == TAH_SCHED_RUNNABLE) {
+                break;
+            }
         }
         ta_actor_id actor = 0;
         if (!tah_ring_pop(&sched->runnable, &actor)) {
             break;
+        }
+        sched->turn_visited += 1u;
+        if (sched->turn_left == 0) {
+            continue; /* the stale entry the check above looked at */
         }
         tah_sched_resume_one(sched, params, actor);
         if (params->stop != NULL && params->stop(params->stop_context)) {

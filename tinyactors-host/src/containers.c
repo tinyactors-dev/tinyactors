@@ -119,7 +119,8 @@ void tah_ring_init(tah_ring *ring, ta_allocator allocator, tah_ring_shape shape)
 static tah_ring_chunk *tah_ring_take_chunk(tah_ring *ring) {
     tah_ring_chunk *chunk = ring->spare;
     if (chunk != NULL) {
-        ring->spare = NULL;
+        ring->spare = chunk->next;
+        ring->spares -= 1u;
     } else {
         tah_layout layout = tah_ring_chunk_layout(ring);
         chunk = tah_alloc(ring->allocator, layout.size, layout.alignment);
@@ -131,10 +132,14 @@ static tah_ring_chunk *tah_ring_take_chunk(tah_ring *ring) {
     return chunk;
 }
 
-/* Keeps the first chunk that empties as the spare and frees the rest. */
+/* Keeps the first TAH_RING_SPARES chunks that empty as spares and frees the rest. Two, because a queue that
+ * fills one chunk exactly and then takes one entry more needs two chunks at its peak, and a single spare would be
+ * freed and allocated again on every such cycle. */
 static void tah_ring_drop_chunk(tah_ring *ring, tah_ring_chunk *chunk) {
-    if (ring->spare == NULL) {
+    if (ring->spares < TAH_RING_SPARES) {
+        chunk->next = ring->spare;
         ring->spare = chunk;
+        ring->spares += 1u;
         return;
     }
     tah_release(ring->allocator, chunk, tah_ring_chunk_layout(ring));
@@ -204,8 +209,10 @@ void tah_ring_destroy(tah_ring *ring) {
         tah_release(ring->allocator, chunk, layout);
         chunk = next;
     }
-    if (ring->spare != NULL) {
+    while (ring->spare != NULL) {
+        tah_ring_chunk *next = ring->spare->next;
         tah_release(ring->allocator, ring->spare, layout);
+        ring->spare = next;
     }
     tah_ring_init(ring, ring->allocator, ring->shape);
 }
