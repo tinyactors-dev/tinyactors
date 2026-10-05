@@ -259,6 +259,7 @@ module RingProto
       infos = infos(model)
       check_model!(model, infos)
       out = +"/*\n#{wrap(GENERATED.rstrip)}\n */\n#include \"ring_proto.h\"\n\n"
+      infos.each { |info| out << size_function(info) }
       out << descriptor_table(infos)
       out
     end
@@ -300,12 +301,58 @@ module RingProto
         "#{format('.flags_allowed = 0x%04X, ', info.flags_allowed)}.spans = #{spans}, .domains = #{domains} },\n"
     end
 
+    # ---------------------------------------------------------- size
+
+    def size_prototype(info)
+      spans = info.spans
+      text = +"#{info.type}_size sets *size to the exact size in bytes of the #{info.msg.id} record that\n"
+      text << "#{info.type}_write stores for data: #{info.msg.fixed_size} fixed bytes"
+      text << if spans.empty?
+                ', so always that many'
+              else
+                " and the #{spans.size} spans' bytes (#{spans.map(&:name).join(', ')}), rounded up to a multiple of 8"
+              end
+      text << '. It never allocates. '
+      text << if spans.empty?
+                'It cannot fail. '
+              else
+                'TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is untouched. ' \
+                'TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size is untouched. '
+              end
+      text << 'data and size must not be NULL.'
+      "#{comment(text)}ta_result #{info.type}_size(const #{info.type} *data, uint32_t *size);\n\n"
+    end
+
+    # The size is the fixed part, then each span's bytes at alignment 1, then a
+    # round up to 8, measured by a ta_layout so that no length can wrap.
+    def size_function(info)
+      out = +"/* #{info.type}_size: see ring_proto.h. */\n"
+      out << "ta_result #{info.type}_size(const #{info.type} *data, uint32_t *size) {\n"
+      if info.spans.empty?
+        out << "    (void)data;\n    *size = #{info.msg.fixed_size};\n    return TA_OK;\n}\n\n"
+        return out
+      end
+      out << "    ta_layout layout;\n    size_t bytes = 0;\n    ta_result result;\n"
+      out << "    if (#{info.spans.map { |f| "!ta_record_bytes_ok(data->#{f.name})" }.join(" ||\n        ")}) {\n"
+      out << "        return TA_ERR_INVALID;\n    }\n"
+      out << "    ta_layout_init(&layout, 0);\n"
+      out << "    ta_layout_add(&layout, &(ta_layout_entry){ .size = #{info.msg.fixed_size}, .alignment = 8, .count = 1 });\n"
+      info.spans.each do |f|
+        out << "    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->#{f.name}.len });\n"
+      end
+      out << "    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */\n"
+      out << "    result = ta_layout_finish(&layout, &bytes, NULL);\n    if (result != TA_OK) {\n        return result;\n    }\n"
+      out << "    if ((uint64_t)bytes > UINT32_MAX) {\n        return TA_ERR_NOMEM;\n    }\n"
+      out << "    *size = (uint32_t)bytes;\n    return TA_OK;\n}\n\n"
+    end
+
     # ------------------------------------------------------- per message
 
     def message_header(_model, info)
       out = +message_comment(info)
       out << wire_struct(info)
       out << data_struct(info)
+      out << size_prototype(info)
       out
     end
 

@@ -84,9 +84,58 @@ static void test_every_kind_accepts_its_minimal_record(void) {
     }
 }
 
+static uint32_t round8(uint32_t n) { return (n + 7u) & ~7u; }
+
+/* A ta_bytes of `length` bytes that the size function only counts: the pointer is never read. */
+static ta_bytes claim(uint32_t length) { return (ta_bytes){ (const uint8_t *)"x", length }; }
+
+static void test_size(void) {
+    uint32_t size = 7;
+    ta_msg_h2c_time time = { .head = { 0 } };
+    CHECK(ta_msg_h2c_time_size(&time, &size) == TA_OK && size == 32);
+
+    /* One span: the fixed part, the bytes, a round up to 8. */
+    const uint8_t text[] = "abcdefghijklmnopqrstuvwxyz";
+    for (uint32_t length = 0; length < 20; length += 1) {
+        ta_msg_c2h_log log = { .label = { text, length } };
+        CHECK(ta_msg_c2h_log_size(&log, &size) == TA_OK);
+        CHECK(size == round8((uint32_t)sizeof(ta_msg_c2h_log_wire) + length) && size % 8 == 0);
+    }
+
+    /* Six spans add up; empty ones take nothing. */
+    ta_msg_h2c_event event = { .target = claim(3), .name = claim(9), .invokeid = claim(1) };
+    CHECK(ta_msg_h2c_event_size(&event, &size) == TA_OK);
+    CHECK(size == round8((uint32_t)sizeof(ta_msg_h2c_event_wire) + 13));
+
+    /* Lengths that wrap a u32 sum are an overflow, not a small size, and *size is left alone. */
+    size = 12345;
+    event = (ta_msg_h2c_event){ .target = claim(0x40000000u), .name = claim(0x40000000u), .sendid = claim(0x40000000u),
+                                .origin = claim(0x40000000u) };
+    CHECK(ta_msg_h2c_event_size(&event, &size) == TA_ERR_NOMEM && size == 12345);
+    event = (ta_msg_h2c_event){ .target = claim(0xFFFFFFFFu) };
+    CHECK(ta_msg_h2c_event_size(&event, &size) == TA_ERR_NOMEM && size == 12345);
+    event = (ta_msg_h2c_event){ .target = claim(0xFFFFFFFFu), .name = claim(0xFFFFFFFFu), .sendid = claim(0xFFFFFFFFu),
+                                .origin = claim(0xFFFFFFFFu), .origin_type = claim(0xFFFFFFFFu), .invokeid = claim(0xFFFFFFFFu) };
+    CHECK(ta_msg_h2c_event_size(&event, &size) == TA_ERR_NOMEM && size == 12345);
+    /* The largest record that still fits a u32 and is a multiple of 8, and one byte more. */
+    uint32_t fixed = (uint32_t)sizeof(ta_msg_h2c_event_wire);
+    event = (ta_msg_h2c_event){ .target = claim(0xFFFFFFF8u - fixed) };
+    CHECK(ta_msg_h2c_event_size(&event, &size) == TA_OK && size == 0xFFFFFFF8u);
+    event = (ta_msg_h2c_event){ .target = claim(0xFFFFFFF8u - fixed + 1u) };
+    size = 12345;
+    CHECK(ta_msg_h2c_event_size(&event, &size) == TA_ERR_NOMEM && size == 12345);
+
+    /* A view with a length and no pointer cannot be measured, wherever it is. */
+    event = (ta_msg_h2c_event){ .invokeid = { NULL, 1 } };
+    CHECK(ta_msg_h2c_event_size(&event, &size) == TA_ERR_INVALID && size == 12345);
+    event = (ta_msg_h2c_event){ .target = { NULL, 0 } };
+    CHECK(ta_msg_h2c_event_size(&event, &size) == TA_OK && size == fixed);
+}
+
 int main(void) {
     test_table();
     test_every_kind_accepts_its_minimal_record();
+    test_size();
     if (failures != 0) {
         fprintf(stderr, "ring_proto_test: %d failure(s)\n", failures);
         return 1;

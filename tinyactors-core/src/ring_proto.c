@@ -7,6 +7,726 @@
  */
 #include "ring_proto.h"
 
+/* ta_msg_h2c_time_size: see ring_proto.h. */
+ta_result ta_msg_h2c_time_size(const ta_msg_h2c_time *data, uint32_t *size) {
+    (void)data;
+    *size = 32;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_event_size: see ring_proto.h. */
+ta_result ta_msg_h2c_event_size(const ta_msg_h2c_event *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->target) ||
+        !ta_record_bytes_ok(data->name) ||
+        !ta_record_bytes_ok(data->sendid) ||
+        !ta_record_bytes_ok(data->origin) ||
+        !ta_record_bytes_ok(data->origin_type) ||
+        !ta_record_bytes_ok(data->invokeid)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 104, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->target.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->name.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->sendid.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->origin.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->origin_type.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->invokeid.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_spawn_size: see ring_proto.h. */
+ta_result ta_msg_h2c_spawn_size(const ta_msg_h2c_spawn *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address) ||
+        !ta_record_bytes_ok(data->revision)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 80, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->revision.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_publish_size: see ring_proto.h. */
+ta_result ta_msg_h2c_publish_size(const ta_msg_h2c_publish *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 48, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_load_size: see ring_proto.h. */
+ta_result ta_msg_h2c_load_size(const ta_msg_h2c_load *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 56, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_load_failed_size: see ring_proto.h. */
+ta_result ta_msg_h2c_load_failed_size(const ta_msg_h2c_load_failed *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address) ||
+        !ta_record_bytes_ok(data->reason)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 56, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->reason.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_unload_size: see ring_proto.h. */
+ta_result ta_msg_h2c_unload_size(const ta_msg_h2c_unload *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 48, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_checkpoint_size: see ring_proto.h. */
+ta_result ta_msg_h2c_checkpoint_size(const ta_msg_h2c_checkpoint *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 48, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_invoke_report_size: see ring_proto.h. */
+ta_result ta_msg_h2c_invoke_report_size(const ta_msg_h2c_invoke_report *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->invokeid) ||
+        !ta_record_bytes_ok(data->reason)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 72, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->invokeid.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->reason.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_destroy_size: see ring_proto.h. */
+ta_result ta_msg_h2c_destroy_size(const ta_msg_h2c_destroy *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 40, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_definition_register_size: see ring_proto.h. */
+ta_result ta_msg_h2c_definition_register_size(const ta_msg_h2c_definition_register *data, uint32_t *size) {
+    (void)data;
+    *size = 56;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_definition_release_size: see ring_proto.h. */
+ta_result ta_msg_h2c_definition_release_size(const ta_msg_h2c_definition_release *data, uint32_t *size) {
+    (void)data;
+    *size = 40;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_definition_retire_size: see ring_proto.h. */
+ta_result ta_msg_h2c_definition_retire_size(const ta_msg_h2c_definition_retire *data, uint32_t *size) {
+    (void)data;
+    *size = 40;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_withdraw_size: see ring_proto.h. */
+ta_result ta_msg_h2c_withdraw_size(const ta_msg_h2c_withdraw *data, uint32_t *size) {
+    (void)data;
+    *size = 40;
+    return TA_OK;
+}
+
+/* ta_msg_h2c_type_declare_size: see ring_proto.h. */
+ta_result ta_msg_h2c_type_declare_size(const ta_msg_h2c_type_declare *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->type)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 48, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->type.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_spawned_size: see ring_proto.h. */
+ta_result ta_msg_c2h_spawned_size(const ta_msg_c2h_spawned *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address) ||
+        !ta_record_bytes_ok(data->revision)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 64, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->revision.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_input_size: see ring_proto.h. */
+ta_result ta_msg_c2h_input_size(const ta_msg_c2h_input *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->name) ||
+        !ta_record_bytes_ok(data->sendid) ||
+        !ta_record_bytes_ok(data->origin) ||
+        !ta_record_bytes_ok(data->origin_type) ||
+        !ta_record_bytes_ok(data->invokeid) ||
+        !ta_record_bytes_ok(data->report_invokeid) ||
+        !ta_record_bytes_ok(data->report_reason)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 128, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->name.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->sendid.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->origin.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->origin_type.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->invokeid.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->report_invokeid.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->report_reason.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_send_size: see ring_proto.h. */
+ta_result ta_msg_c2h_send_size(const ta_msg_c2h_send *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->sendid) ||
+        !ta_record_bytes_ok(data->io_type) ||
+        !ta_record_bytes_ok(data->target) ||
+        !ta_record_bytes_ok(data->name)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 88, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->sendid.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->io_type.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->target.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->name.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_invoke_size: see ring_proto.h. */
+ta_result ta_msg_c2h_invoke_size(const ta_msg_c2h_invoke *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->invokeid) ||
+        !ta_record_bytes_ok(data->type) ||
+        !ta_record_bytes_ok(data->src)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 88, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->invokeid.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->type.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->src.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_invoke_cancel_size: see ring_proto.h. */
+ta_result ta_msg_c2h_invoke_cancel_size(const ta_msg_c2h_invoke_cancel *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->invokeid)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 56, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->invokeid.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_invoke_forward_size: see ring_proto.h. */
+ta_result ta_msg_c2h_invoke_forward_size(const ta_msg_c2h_invoke_forward *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->invokeid) ||
+        !ta_record_bytes_ok(data->name) ||
+        !ta_record_bytes_ok(data->sendid) ||
+        !ta_record_bytes_ok(data->origin) ||
+        !ta_record_bytes_ok(data->origin_type) ||
+        !ta_record_bytes_ok(data->event_invokeid)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 112, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->invokeid.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->name.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->sendid.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->origin.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->origin_type.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->event_invokeid.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_log_size: see ring_proto.h. */
+ta_result ta_msg_c2h_log_size(const ta_msg_c2h_log *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->label)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 56, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->label.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_macrostep_ended_size: see ring_proto.h. */
+ta_result ta_msg_c2h_macrostep_ended_size(const ta_msg_c2h_macrostep_ended *data, uint32_t *size) {
+    (void)data;
+    *size = 72;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_wake_size: see ring_proto.h. */
+ta_result ta_msg_c2h_wake_size(const ta_msg_c2h_wake *data, uint32_t *size) {
+    (void)data;
+    *size = 40;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_bounced_size: see ring_proto.h. */
+ta_result ta_msg_c2h_bounced_size(const ta_msg_c2h_bounced *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->detail)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 56, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->detail.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_load_needed_size: see ring_proto.h. */
+ta_result ta_msg_c2h_load_needed_size(const ta_msg_c2h_load_needed *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 48, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_loaded_size: see ring_proto.h. */
+ta_result ta_msg_c2h_loaded_size(const ta_msg_c2h_loaded *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 48, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_unloaded_size: see ring_proto.h. */
+ta_result ta_msg_c2h_unloaded_size(const ta_msg_c2h_unloaded *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 72, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_state_size: see ring_proto.h. */
+ta_result ta_msg_c2h_state_size(const ta_msg_c2h_state *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 72, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_published_size: see ring_proto.h. */
+ta_result ta_msg_c2h_published_size(const ta_msg_c2h_published *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 72, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_finished_size: see ring_proto.h. */
+ta_result ta_msg_c2h_finished_size(const ta_msg_c2h_finished *data, uint32_t *size) {
+    (void)data;
+    *size = 48;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_destroyed_size: see ring_proto.h. */
+ta_result ta_msg_c2h_destroyed_size(const ta_msg_c2h_destroyed *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->address)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 56, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->address.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_definition_result_size: see ring_proto.h. */
+ta_result ta_msg_c2h_definition_result_size(const ta_msg_c2h_definition_result *data, uint32_t *size) {
+    (void)data;
+    *size = 56;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_input_refused_size: see ring_proto.h. */
+ta_result ta_msg_c2h_input_refused_size(const ta_msg_c2h_input_refused *data, uint32_t *size) {
+    (void)data;
+    *size = 48;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_input_completed_size: see ring_proto.h. */
+ta_result ta_msg_c2h_input_completed_size(const ta_msg_c2h_input_completed *data, uint32_t *size) {
+    (void)data;
+    *size = 56;
+    return TA_OK;
+}
+
+/* ta_msg_c2h_load_result_size: see ring_proto.h. */
+ta_result ta_msg_c2h_load_result_size(const ta_msg_c2h_load_result *data, uint32_t *size) {
+    (void)data;
+    *size = 48;
+    return TA_OK;
+}
+
+/* ta_msg_tel_trace_size: see ring_proto.h. */
+ta_result ta_msg_tel_trace_size(const ta_msg_tel_trace *data, uint32_t *size) {
+    ta_layout layout;
+    size_t bytes = 0;
+    ta_result result;
+    if (!ta_record_bytes_ok(data->name) ||
+        !ta_record_bytes_ok(data->value_text) ||
+        !ta_record_bytes_ok(data->states)) {
+        return TA_ERR_INVALID;
+    }
+    ta_layout_init(&layout, 0);
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 120, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->name.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->value_text.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->states.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
+    result = ta_layout_finish(&layout, &bytes, NULL);
+    if (result != TA_OK) {
+        return result;
+    }
+    if ((uint64_t)bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    *size = (uint32_t)bytes;
+    return TA_OK;
+}
+
+/* ta_msg_tel_dropped_size: see ring_proto.h. */
+ta_result ta_msg_tel_dropped_size(const ta_msg_tel_dropped *data, uint32_t *size) {
+    (void)data;
+    *size = 48;
+    return TA_OK;
+}
+
 /* The descriptors: what ta_record_check interprets. The arrays are static const data, system lifetime. */
 
 static const ta_record_span_at ta_msg_h2c_event_spans[] = { { 32 }, { 40 }, { 48 }, { 56 }, { 64 }, { 72 } };

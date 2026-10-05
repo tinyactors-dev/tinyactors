@@ -300,6 +300,14 @@ typedef struct ta_msg_h2c_time {
 } ta_msg_h2c_time;
 
 /*
+ * ta_msg_h2c_time_size sets *size to the exact size in bytes of the h2c.time
+ * record that
+ * ta_msg_h2c_time_write stores for data: 32 fixed bytes, so always that many.
+ * It never allocates. It cannot fail. data and size must not be NULL.
+ */
+ta_result ta_msg_h2c_time_size(const ta_msg_h2c_time *data, uint32_t *size);
+
+/*
  * h2c.event: An external event for a session.
  *
  * Header `session` names a resident session, or is 0 and `target` gives an
@@ -368,6 +376,18 @@ typedef struct ta_msg_h2c_event {
 } ta_msg_h2c_event;
 
 /*
+ * ta_msg_h2c_event_size sets *size to the exact size in bytes of the h2c.event
+ * record that
+ * ta_msg_h2c_event_write stores for data: 104 fixed bytes and the 6 spans'
+ * bytes (target, name, sendid, origin, origin_type, invokeid), rounded up to a
+ * multiple of 8. It never allocates. TA_ERR_NOMEM: the total does not fit a
+ * u32 (or size_t), and *size is untouched. TA_ERR_INVALID: a ta_bytes has a
+ * length and no pointer, and *size is untouched. data and size must not be
+ * NULL.
+ */
+ta_result ta_msg_h2c_event_size(const ta_msg_h2c_event *data, uint32_t *size);
+
+/*
  * h2c.spawn: Create a session.
  *
  * With the replaying flag the session is prepared to replay (core ADR 0089):
@@ -423,6 +443,17 @@ typedef struct ta_msg_h2c_spawn {
 } ta_msg_h2c_spawn;
 
 /*
+ * ta_msg_h2c_spawn_size sets *size to the exact size in bytes of the h2c.spawn
+ * record that
+ * ta_msg_h2c_spawn_write stores for data: 80 fixed bytes and the 2 spans'
+ * bytes (address, revision), rounded up to a multiple of 8. It never
+ * allocates. TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size
+ * is untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and
+ * *size is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_h2c_spawn_size(const ta_msg_h2c_spawn *data, uint32_t *size);
+
+/*
  * h2c.publish: End a replay and put the session on the route.
  *
  * Held delayed sends due by `at` are dropped; the rest stay in the pool under
@@ -458,6 +489,17 @@ typedef struct ta_msg_h2c_publish {
     ta_bytes address;
     uint64_t at;
 } ta_msg_h2c_publish;
+
+/*
+ * ta_msg_h2c_publish_size sets *size to the exact size in bytes of the
+ * h2c.publish record that
+ * ta_msg_h2c_publish_write stores for data: 48 fixed bytes and the 1 spans'
+ * bytes (address), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_h2c_publish_size(const ta_msg_h2c_publish *data, uint32_t *size);
 
 /*
  * h2c.load: Bring an unloaded session back.
@@ -503,6 +545,17 @@ typedef struct ta_msg_h2c_load {
 } ta_msg_h2c_load;
 
 /*
+ * ta_msg_h2c_load_size sets *size to the exact size in bytes of the h2c.load
+ * record that
+ * ta_msg_h2c_load_write stores for data: 56 fixed bytes and the 1 spans' bytes
+ * (address), rounded up to a multiple of 8. It never allocates. TA_ERR_NOMEM:
+ * the total does not fit a u32 (or size_t), and *size is untouched.
+ * TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size is
+ * untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_h2c_load_size(const ta_msg_h2c_load *data, uint32_t *size);
+
+/*
  * h2c.load_failed: The session cannot be loaded.
  *
  * Every envelope waiting for the address is recycled: mail becomes
@@ -539,6 +592,17 @@ typedef struct ta_msg_h2c_load_failed {
 } ta_msg_h2c_load_failed;
 
 /*
+ * ta_msg_h2c_load_failed_size sets *size to the exact size in bytes of the
+ * h2c.load_failed record that
+ * ta_msg_h2c_load_failed_write stores for data: 56 fixed bytes and the 2
+ * spans' bytes (address, reason), rounded up to a multiple of 8. It never
+ * allocates. TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size
+ * is untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and
+ * *size is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_h2c_load_failed_size(const ta_msg_h2c_load_failed *data, uint32_t *size);
+
+/*
  * h2c.unload: Page a stable session out.
  *
  * Refuses an owner of an active local invocation and an active locally invoked
@@ -570,6 +634,17 @@ typedef struct ta_msg_h2c_unload {
 } ta_msg_h2c_unload;
 
 /*
+ * ta_msg_h2c_unload_size sets *size to the exact size in bytes of the
+ * h2c.unload record that
+ * ta_msg_h2c_unload_write stores for data: 48 fixed bytes and the 1 spans'
+ * bytes (address), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_h2c_unload_size(const ta_msg_h2c_unload *data, uint32_t *size);
+
+/*
  * h2c.checkpoint: Ask for a recorded session's state.
  *
  * Ring h2c, kind 0x0108, 48 fixed bytes, 1 spans. Replied to by c2h.state,
@@ -593,6 +668,17 @@ typedef struct ta_msg_h2c_checkpoint {
     ta_bytes address;
     uint64_t image;
 } ta_msg_h2c_checkpoint;
+
+/*
+ * ta_msg_h2c_checkpoint_size sets *size to the exact size in bytes of the
+ * h2c.checkpoint record that
+ * ta_msg_h2c_checkpoint_write stores for data: 48 fixed bytes and the 1 spans'
+ * bytes (address), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_h2c_checkpoint_size(const ta_msg_h2c_checkpoint *data, uint32_t *size);
 
 /*
  * h2c.invoke_report: An invoked service finished or failed.
@@ -645,6 +731,17 @@ typedef struct ta_msg_h2c_invoke_report {
 } ta_msg_h2c_invoke_report;
 
 /*
+ * ta_msg_h2c_invoke_report_size sets *size to the exact size in bytes of the
+ * h2c.invoke_report record that
+ * ta_msg_h2c_invoke_report_write stores for data: 72 fixed bytes and the 2
+ * spans' bytes (invokeid, reason), rounded up to a multiple of 8. It never
+ * allocates. TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size
+ * is untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and
+ * *size is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_h2c_invoke_report_size(const ta_msg_h2c_invoke_report *data, uint32_t *size);
+
+/*
  * h2c.destroy: End a session now.
  *
  * A session that holds a macrostep slot, running or parked, has its execution
@@ -668,6 +765,17 @@ typedef struct ta_msg_h2c_destroy {
     ta_msg_head head;
     ta_bytes address;
 } ta_msg_h2c_destroy;
+
+/*
+ * ta_msg_h2c_destroy_size sets *size to the exact size in bytes of the
+ * h2c.destroy record that
+ * ta_msg_h2c_destroy_write stores for data: 40 fixed bytes and the 1 spans'
+ * bytes (address), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_h2c_destroy_size(const ta_msg_h2c_destroy *data, uint32_t *size);
 
 /*
  * h2c.definition_register: Compile and register a complete definition.
@@ -711,6 +819,15 @@ typedef struct ta_msg_h2c_definition_register {
 } ta_msg_h2c_definition_register;
 
 /*
+ * ta_msg_h2c_definition_register_size sets *size to the exact size in bytes of
+ * the h2c.definition_register record that
+ * ta_msg_h2c_definition_register_write stores for data: 56 fixed bytes, so
+ * always that many. It never allocates. It cannot fail. data and size must not
+ * be NULL.
+ */
+ta_result ta_msg_h2c_definition_register_size(const ta_msg_h2c_definition_register *data, uint32_t *size);
+
+/*
  * h2c.definition_release: Release one registration hold.
  *
  * Core ADR 0077 semantics: an unused definition is freed when its last hold,
@@ -733,6 +850,15 @@ typedef struct ta_msg_h2c_definition_release {
     ta_msg_head head;
     uint64_t definition;
 } ta_msg_h2c_definition_release;
+
+/*
+ * ta_msg_h2c_definition_release_size sets *size to the exact size in bytes of
+ * the h2c.definition_release record that
+ * ta_msg_h2c_definition_release_write stores for data: 40 fixed bytes, so
+ * always that many. It never allocates. It cannot fail. data and size must not
+ * be NULL.
+ */
+ta_result ta_msg_h2c_definition_release_size(const ta_msg_h2c_definition_release *data, uint32_t *size);
 
 /*
  * h2c.definition_retire: End a definition's availability.
@@ -758,6 +884,15 @@ typedef struct ta_msg_h2c_definition_retire {
     ta_msg_head head;
     uint64_t definition;
 } ta_msg_h2c_definition_retire;
+
+/*
+ * ta_msg_h2c_definition_retire_size sets *size to the exact size in bytes of
+ * the h2c.definition_retire record that
+ * ta_msg_h2c_definition_retire_write stores for data: 40 fixed bytes, so
+ * always that many. It never allocates. It cannot fail. data and size must not
+ * be NULL.
+ */
+ta_result ta_msg_h2c_definition_retire_size(const ta_msg_h2c_definition_retire *data, uint32_t *size);
 
 /*
  * h2c.withdraw: Take back an admitted input that has not been taken.
@@ -794,6 +929,14 @@ typedef struct ta_msg_h2c_withdraw {
     ta_msg_head head;
     uint64_t target_seq;
 } ta_msg_h2c_withdraw;
+
+/*
+ * ta_msg_h2c_withdraw_size sets *size to the exact size in bytes of the
+ * h2c.withdraw record that
+ * ta_msg_h2c_withdraw_write stores for data: 40 fixed bytes, so always that
+ * many. It never allocates. It cannot fail. data and size must not be NULL.
+ */
+ta_result ta_msg_h2c_withdraw_size(const ta_msg_h2c_withdraw *data, uint32_t *size);
 
 /*
  * h2c.type_declare: Declare an I/O processor or invoker type.
@@ -835,6 +978,17 @@ typedef struct ta_msg_h2c_type_declare {
 } ta_msg_h2c_type_declare;
 
 /*
+ * ta_msg_h2c_type_declare_size sets *size to the exact size in bytes of the
+ * h2c.type_declare record that
+ * ta_msg_h2c_type_declare_write stores for data: 48 fixed bytes and the 1
+ * spans' bytes (type), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_h2c_type_declare_size(const ta_msg_h2c_type_declare *data, uint32_t *size);
+
+/*
  * c2h.spawned: A session exists.
  *
  * For a recorded session this is the first record of its log.
@@ -870,6 +1024,17 @@ typedef struct ta_msg_c2h_spawned {
     uint64_t parent;
     uint64_t cause_seq;
 } ta_msg_c2h_spawned;
+
+/*
+ * ta_msg_c2h_spawned_size sets *size to the exact size in bytes of the
+ * c2h.spawned record that
+ * ta_msg_c2h_spawned_write stores for data: 64 fixed bytes and the 2 spans'
+ * bytes (address, revision), rounded up to a multiple of 8. It never
+ * allocates. TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size
+ * is untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and
+ * *size is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_spawned_size(const ta_msg_c2h_spawned *data, uint32_t *size);
 
 /*
  * c2h.input: A recorded session took an input.
@@ -965,6 +1130,18 @@ typedef struct ta_msg_c2h_input {
 } ta_msg_c2h_input;
 
 /*
+ * ta_msg_c2h_input_size sets *size to the exact size in bytes of the c2h.input
+ * record that
+ * ta_msg_c2h_input_write stores for data: 128 fixed bytes and the 7 spans'
+ * bytes (name, sendid, origin, origin_type, invokeid, report_invokeid,
+ * report_reason), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_input_size(const ta_msg_c2h_input *data, uint32_t *size);
+
+/*
  * c2h.send: A send for an I/O processor.
  *
  * Mail to a local session never appears here: it is an envelope
@@ -1021,6 +1198,17 @@ typedef struct ta_msg_c2h_send {
 } ta_msg_c2h_send;
 
 /*
+ * ta_msg_c2h_send_size sets *size to the exact size in bytes of the c2h.send
+ * record that
+ * ta_msg_c2h_send_write stores for data: 88 fixed bytes and the 4 spans' bytes
+ * (sendid, io_type, target, name), rounded up to a multiple of 8. It never
+ * allocates. TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size
+ * is untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and
+ * *size is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_send_size(const ta_msg_c2h_send *data, uint32_t *size);
+
+/*
  * c2h.invoke: Start an invocation.
  *
  * Written in the post-macrostep startup phase. This record seq is the live
@@ -1071,6 +1259,17 @@ typedef struct ta_msg_c2h_invoke {
 } ta_msg_c2h_invoke;
 
 /*
+ * ta_msg_c2h_invoke_size sets *size to the exact size in bytes of the
+ * c2h.invoke record that
+ * ta_msg_c2h_invoke_write stores for data: 88 fixed bytes and the 3 spans'
+ * bytes (invokeid, type, src), rounded up to a multiple of 8. It never
+ * allocates. TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size
+ * is untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and
+ * *size is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_invoke_size(const ta_msg_c2h_invoke *data, uint32_t *size);
+
+/*
  * c2h.invoke_cancel: Cancel an invocation.
  *
  * Mandatory state-exit output, reserved before execution. The host invalidates
@@ -1100,6 +1299,17 @@ typedef struct ta_msg_c2h_invoke_cancel {
     ta_bytes invokeid;
     uint64_t invocation_seq;
 } ta_msg_c2h_invoke_cancel;
+
+/*
+ * ta_msg_c2h_invoke_cancel_size sets *size to the exact size in bytes of the
+ * c2h.invoke_cancel record that
+ * ta_msg_c2h_invoke_cancel_write stores for data: 56 fixed bytes and the 1
+ * spans' bytes (invokeid), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_invoke_cancel_size(const ta_msg_c2h_invoke_cancel *data, uint32_t *size);
 
 /*
  * c2h.invoke_forward: Autoforward an event to an invocation.
@@ -1164,6 +1374,18 @@ typedef struct ta_msg_c2h_invoke_forward {
 } ta_msg_c2h_invoke_forward;
 
 /*
+ * ta_msg_c2h_invoke_forward_size sets *size to the exact size in bytes of the
+ * c2h.invoke_forward record that
+ * ta_msg_c2h_invoke_forward_write stores for data: 112 fixed bytes and the 6
+ * spans' bytes (invokeid, name, sendid, origin, origin_type, event_invokeid),
+ * rounded up to a multiple of 8. It never allocates. TA_ERR_NOMEM: the total
+ * does not fit a u32 (or size_t), and *size is untouched. TA_ERR_INVALID: a
+ * ta_bytes has a length and no pointer, and *size is untouched. data and size
+ * must not be NULL.
+ */
+ta_result ta_msg_c2h_invoke_forward_size(const ta_msg_c2h_invoke_forward *data, uint32_t *size);
+
+/*
  * c2h.log: A <log>.
  *
  * Ring c2h, kind 0x0207, 56 fixed bytes, 1 spans.
@@ -1190,6 +1412,17 @@ typedef struct ta_msg_c2h_log {
     ta_bytes label;
     uint64_t value;
 } ta_msg_c2h_log;
+
+/*
+ * ta_msg_c2h_log_size sets *size to the exact size in bytes of the c2h.log
+ * record that
+ * ta_msg_c2h_log_write stores for data: 56 fixed bytes and the 1 spans' bytes
+ * (label), rounded up to a multiple of 8. It never allocates. TA_ERR_NOMEM:
+ * the total does not fit a u32 (or size_t), and *size is untouched.
+ * TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size is
+ * untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_log_size(const ta_msg_c2h_log *data, uint32_t *size);
 
 /*
  * c2h.macrostep_ended: A macrostep ended.
@@ -1242,6 +1475,15 @@ typedef struct ta_msg_c2h_macrostep_ended {
 } ta_msg_c2h_macrostep_ended;
 
 /*
+ * ta_msg_c2h_macrostep_ended_size sets *size to the exact size in bytes of the
+ * c2h.macrostep_ended record that
+ * ta_msg_c2h_macrostep_ended_write stores for data: 72 fixed bytes, so always
+ * that many. It never allocates. It cannot fail. data and size must not be
+ * NULL.
+ */
+ta_result ta_msg_c2h_macrostep_ended_size(const ta_msg_c2h_macrostep_ended *data, uint32_t *size);
+
+/*
  * c2h.wake: Call core back at this time.
  *
  * The earliest due delayed send in the pool changed. One timer in the host's
@@ -1264,6 +1506,14 @@ typedef struct ta_msg_c2h_wake {
     ta_msg_head head;
     uint64_t due;
 } ta_msg_c2h_wake;
+
+/*
+ * ta_msg_c2h_wake_size sets *size to the exact size in bytes of the c2h.wake
+ * record that
+ * ta_msg_c2h_wake_write stores for data: 40 fixed bytes, so always that many.
+ * It never allocates. It cannot fail. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_wake_size(const ta_msg_c2h_wake *data, uint32_t *size);
 
 /*
  * c2h.bounced: An h2c record was not run.
@@ -1300,6 +1550,17 @@ typedef struct ta_msg_c2h_bounced {
 } ta_msg_c2h_bounced;
 
 /*
+ * ta_msg_c2h_bounced_size sets *size to the exact size in bytes of the
+ * c2h.bounced record that
+ * ta_msg_c2h_bounced_write stores for data: 56 fixed bytes and the 1 spans'
+ * bytes (detail), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_bounced_size(const ta_msg_c2h_bounced *data, uint32_t *size);
+
+/*
  * c2h.load_needed: Envelopes wait for an unloaded address.
  *
  * Written once per address until h2c.load or h2c.load_failed answers it.
@@ -1330,6 +1591,17 @@ typedef struct ta_msg_c2h_load_needed {
 } ta_msg_c2h_load_needed;
 
 /*
+ * ta_msg_c2h_load_needed_size sets *size to the exact size in bytes of the
+ * c2h.load_needed record that
+ * ta_msg_c2h_load_needed_write stores for data: 48 fixed bytes and the 1
+ * spans' bytes (address), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_load_needed_size(const ta_msg_c2h_load_needed *data, uint32_t *size);
+
+/*
  * c2h.loaded: A session is resident again.
  *
  * Ring c2h, kind 0x020C, 48 fixed bytes, 1 spans.
@@ -1352,6 +1624,17 @@ typedef struct ta_msg_c2h_loaded {
     ta_bytes address;
     uint64_t cause_seq;
 } ta_msg_c2h_loaded;
+
+/*
+ * ta_msg_c2h_loaded_size sets *size to the exact size in bytes of the
+ * c2h.loaded record that
+ * ta_msg_c2h_loaded_write stores for data: 48 fixed bytes and the 1 spans'
+ * bytes (address), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_loaded_size(const ta_msg_c2h_loaded *data, uint32_t *size);
 
 /*
  * c2h.unloaded: A session left memory.
@@ -1398,6 +1681,17 @@ typedef struct ta_msg_c2h_unloaded {
 } ta_msg_c2h_unloaded;
 
 /*
+ * ta_msg_c2h_unloaded_size sets *size to the exact size in bytes of the
+ * c2h.unloaded record that
+ * ta_msg_c2h_unloaded_write stores for data: 72 fixed bytes and the 1 spans'
+ * bytes (address), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_unloaded_size(const ta_msg_c2h_unloaded *data, uint32_t *size);
+
+/*
  * c2h.state: A recorded session's state at a point of its log.
  *
  * A checkpoint (core ADR 0091). Its delayed sends are inside the image, so it
@@ -1442,6 +1736,17 @@ typedef struct ta_msg_c2h_state {
 } ta_msg_c2h_state;
 
 /*
+ * ta_msg_c2h_state_size sets *size to the exact size in bytes of the c2h.state
+ * record that
+ * ta_msg_c2h_state_write stores for data: 72 fixed bytes and the 1 spans'
+ * bytes (address), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_state_size(const ta_msg_c2h_state *data, uint32_t *size);
+
+/*
  * c2h.published: A replayed session is live.
  *
  * For an empty-address publication, one session-0 result summarizes the atomic
@@ -1481,6 +1786,17 @@ typedef struct ta_msg_c2h_published {
 } ta_msg_c2h_published;
 
 /*
+ * ta_msg_c2h_published_size sets *size to the exact size in bytes of the
+ * c2h.published record that
+ * ta_msg_c2h_published_write stores for data: 72 fixed bytes and the 1 spans'
+ * bytes (address), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_published_size(const ta_msg_c2h_published *data, uint32_t *size);
+
+/*
  * c2h.finished: A session reached a top-level final state.
  *
  * Mail to a local parent (done.invoke) is an envelope; this record is for the
@@ -1506,6 +1822,14 @@ typedef struct ta_msg_c2h_finished {
     uint64_t macrostep;
     uint64_t donedata;
 } ta_msg_c2h_finished;
+
+/*
+ * ta_msg_c2h_finished_size sets *size to the exact size in bytes of the
+ * c2h.finished record that
+ * ta_msg_c2h_finished_write stores for data: 48 fixed bytes, so always that
+ * many. It never allocates. It cannot fail. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_finished_size(const ta_msg_c2h_finished *data, uint32_t *size);
 
 /*
  * c2h.destroyed: A session is gone.
@@ -1537,6 +1861,17 @@ typedef struct ta_msg_c2h_destroyed {
     uint64_t cause_seq;
     uint8_t reason; /* ta_msg_destroy_reason */
 } ta_msg_c2h_destroyed;
+
+/*
+ * ta_msg_c2h_destroyed_size sets *size to the exact size in bytes of the
+ * c2h.destroyed record that
+ * ta_msg_c2h_destroyed_write stores for data: 56 fixed bytes and the 1 spans'
+ * bytes (address), rounded up to a multiple of 8. It never allocates.
+ * TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size is
+ * untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and *size
+ * is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_destroyed_size(const ta_msg_c2h_destroyed *data, uint32_t *size);
 
 /*
  * c2h.definition_result: A definition request completed.
@@ -1582,6 +1917,15 @@ typedef struct ta_msg_c2h_definition_result {
 } ta_msg_c2h_definition_result;
 
 /*
+ * ta_msg_c2h_definition_result_size sets *size to the exact size in bytes of
+ * the c2h.definition_result record that
+ * ta_msg_c2h_definition_result_write stores for data: 56 fixed bytes, so
+ * always that many. It never allocates. It cannot fail. data and size must not
+ * be NULL.
+ */
+ta_result ta_msg_c2h_definition_result_size(const ta_msg_c2h_definition_result *data, uint32_t *size);
+
+/*
  * c2h.input_refused: An admitted host input was not taken.
  *
  * Exactly one terminal refusal for an admitted h2c.event or invoke_report
@@ -1610,6 +1954,15 @@ typedef struct ta_msg_c2h_input_refused {
     uint64_t source_seq;
     uint8_t reason; /* ta_msg_input_refusal_reason */
 } ta_msg_c2h_input_refused;
+
+/*
+ * ta_msg_c2h_input_refused_size sets *size to the exact size in bytes of the
+ * c2h.input_refused record that
+ * ta_msg_c2h_input_refused_write stores for data: 48 fixed bytes, so always
+ * that many. It never allocates. It cannot fail. data and size must not be
+ * NULL.
+ */
+ta_result ta_msg_c2h_input_refused_size(const ta_msg_c2h_input_refused *data, uint32_t *size);
 
 /*
  * c2h.input_completed: A host input and its startup follow-up settled.
@@ -1651,6 +2004,15 @@ typedef struct ta_msg_c2h_input_completed {
 } ta_msg_c2h_input_completed;
 
 /*
+ * ta_msg_c2h_input_completed_size sets *size to the exact size in bytes of the
+ * c2h.input_completed record that
+ * ta_msg_c2h_input_completed_write stores for data: 56 fixed bytes, so always
+ * that many. It never allocates. It cannot fail. data and size must not be
+ * NULL.
+ */
+ta_result ta_msg_c2h_input_completed_size(const ta_msg_c2h_input_completed *data, uint32_t *size);
+
+/*
  * c2h.load_result: A load-failure response finished recycling waiting inputs.
  *
  * Acknowledges h2c.load_failed after all waiting envelopes were recycled or
@@ -1678,6 +2040,14 @@ typedef struct ta_msg_c2h_load_result {
     uint64_t cause_seq;
     uint64_t request_seq;
 } ta_msg_c2h_load_result;
+
+/*
+ * ta_msg_c2h_load_result_size sets *size to the exact size in bytes of the
+ * c2h.load_result record that
+ * ta_msg_c2h_load_result_write stores for data: 48 fixed bytes, so always that
+ * many. It never allocates. It cannot fail. data and size must not be NULL.
+ */
+ta_result ta_msg_c2h_load_result_size(const ta_msg_c2h_load_result *data, uint32_t *size);
 
 /*
  * tel.trace: One trace record (core ADR 0067).
@@ -1767,6 +2137,17 @@ typedef struct ta_msg_tel_trace {
 } ta_msg_tel_trace;
 
 /*
+ * ta_msg_tel_trace_size sets *size to the exact size in bytes of the tel.trace
+ * record that
+ * ta_msg_tel_trace_write stores for data: 120 fixed bytes and the 3 spans'
+ * bytes (name, value_text, states), rounded up to a multiple of 8. It never
+ * allocates. TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size
+ * is untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and
+ * *size is untouched. data and size must not be NULL.
+ */
+ta_result ta_msg_tel_trace_size(const ta_msg_tel_trace *data, uint32_t *size);
+
+/*
  * tel.dropped: Telemetry records were dropped.
  *
  * Ring tel, kind 0x0302, 48 fixed bytes, 0 spans.
@@ -1789,6 +2170,14 @@ typedef struct ta_msg_tel_dropped {
     uint64_t count;
     uint64_t first_seq;
 } ta_msg_tel_dropped;
+
+/*
+ * ta_msg_tel_dropped_size sets *size to the exact size in bytes of the
+ * tel.dropped record that
+ * ta_msg_tel_dropped_write stores for data: 48 fixed bytes, so always that
+ * many. It never allocates. It cannot fail. data and size must not be NULL.
+ */
+ta_result ta_msg_tel_dropped_size(const ta_msg_tel_dropped *data, uint32_t *size);
 
 /*
  * ta_msg_table returns the descriptors of every message in this build, sorted by
