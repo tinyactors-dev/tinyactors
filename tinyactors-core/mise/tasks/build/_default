@@ -41,7 +41,7 @@ TINYACTORS_OBJECT = OBJECTS.join('tinyactors.o')
 # Tests that link the amalgamation object in alongside their own; the rest
 # (just export_test today) are self-contained.
 TESTS_WITH_RUNTIME = %w[address_test io_origin_test session_image_test deep_test delayed_send_test null_datamodel_test pause_test microstep_start_test operator_test trace_test inspection_test retirement_test replay_test params_test copy_test scxml_uri_test send_id_test tree_test version_test].freeze
-STANDALONE_TESTS = %w[actor_id_test session_id_test offload_test export_test span_test layout_test list_test index_pool_test paged_array_test heap_test table_test trie_test fifo_test quota_test bytes_test names_test ring_test ring_codec_test hash_test handle_test text_writer_test codec_test compile_error_test compile_sizes_test event_pattern_test test_allocator_test].freeze
+STANDALONE_TESTS = %w[actor_id_test session_id_test offload_test export_test span_test layout_test list_test index_pool_test chunks_test paged_array_test heap_test table_test trie_test fifo_test quota_test bytes_test names_test ring_test ring_codec_test hash_test handle_test text_writer_test codec_test compile_error_test compile_sizes_test event_pattern_test test_allocator_test].freeze
 
 FileUtils.mkdir_p(BUILD)
 

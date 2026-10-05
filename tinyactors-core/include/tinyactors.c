@@ -1441,6 +1441,252 @@ TA_PRIVATE inline ta_list_links ta_index_pool_links(ta_index_pool *pool, size_t 
 }
 
 /**
+ * @file chunks.h
+ *
+ * # Chunk chains
+ *
+ * `ta_chunks` stores byte streams, *chains*, in fixed-size chunks taken
+ * from an index pool (`index_pool.h`) it embeds. Each chunk holds a
+ * `uint32_t` link to the next chunk of its chain (0 at the last) and then
+ * its payload, `chunk_size - 4` bytes of the stream. One `ta_chunks`
+ * serves every chain of one area; the chunk size is its parameter, so one
+ * unit gives the name area (64-byte chunks, 60 bytes of text each) and the
+ * park area (256-byte chunks).
+ *
+ * A chain is what its owner stores: `ta_chunk_chain`, the index of its
+ * first chunk and its length in bytes, 8 bytes in all. An empty chain is
+ * `{0, 0}` and holds no chunk, as index 0 names no item of the pool.
+ *
+ * - `ta_chunks_need` gives the chunks a write of `n` more bytes takes, for
+ *   preflight;
+ * - a `ta_chunk_writer` appends bytes to a chain;
+ * - a `ta_chunk_reader` hands a chain back as spans, one chunk's payload
+ *   (or part of it) at a time;
+ * - `ta_chunks_free` returns every chunk of a chain to the pool.
+ *
+ * ## Contract and invariants
+ *
+ * - A chain of `length` bytes holds exactly `ceil(length / payload)`
+ *   chunks, linked in order from `first`; byte `i` of the stream is byte
+ *   `i % payload` of the payload of chunk `i / payload`. Every chunk but
+ *   the last is full; the last chunk's link is 0. Only the bytes up to
+ *   `length` are the stream; the rest of the last chunk is unspecified.
+ * - **One owner per chain**: an envelope, a waiting entry or a parked
+ *   slot. Its chunks belong to no other chain. Whoever holds the
+ *   `ta_chunk_chain` frees it, once; a copy of the struct is not a second
+ *   chain.
+ * - **`ta_chunks_need` only counts; it reserves nothing.** It answers how
+ *   many chunks a write of `n` bytes onto a chain of `length` bytes takes:
+ *   `ceil((length + n) / payload) - ceil(length / payload)`. The space
+ *   left in the last chunk is used first, so a write that fits there needs
+ *   0. A write fails only when its need passes the pool's free count
+ *   (`chunks.pool.free`), so a write made after `need <= free`, with no
+ *   chunk taken from the pool in between, cannot fail. A caller that
+ *   checks the total of several writes onto one chain, and then makes
+ *   them, has the same guarantee: the needs add up.
+ * - A chain holds at most `UINT32_MAX` bytes. For a write that would pass
+ *   it, `ta_chunks_need` answers `UINT32_MAX`, more than the pool can
+ *   ever have free (the ceiling is below `UINT32_MAX`), so the write
+ *   answers `TA_ERR_FULL` like any other that does not fit.
+ * - A writer borrows its chain from the owner while it writes, and the
+ *   owner takes the chain back from `writer.chain` when it is done. A
+ *   reader copies the chain's first index and length and never changes
+ *   the chain; it stays valid while the chain is neither written nor
+ *   freed.
+ *
+ * ## Memory
+ *
+ * The chunks live in the embedded `ta_index_pool`, whose pages come from
+ * the `ta_allocator` given to `ta_chunks_init`, borrowed and outliving the
+ * area. The area owns the pool; each chain's chunks belong to the chain's
+ * owner until it frees them.
+ *
+ * - Taking chunks never allocates: `ta_chunks_write` takes only chunks
+ *   already on the pool's free list. Every function here except
+ *   `ta_chunks_destroy` allocates nothing and may run inside a macrostep.
+ * - The area grows only when its user calls
+ *   `ta_index_pool_refill(&chunks->pool, min_free)` at a safe point,
+ *   typically with a count `ta_chunks_need` gave, and gives free pages
+ *   back only by `ta_index_pool_trim(&chunks->pool, keep)` when the host
+ *   asks core to give memory back. Chunks never move, so trim frees only
+ *   pages whose chunks are all free.
+ * - A span a reader answers points into a chunk. It is valid until the
+ *   chain is freed; read it at once and keep the reader, not the span.
+ *
+ * ## Complexity
+ *
+ * `payload` is `chunk_size - 4`.
+ *
+ * | Operation | Cost |
+ * |---|---|
+ * | `ta_chunks_init`, `ta_chunks_need`, `ta_chunk_writer_new`, `ta_chunk_reader_of` | O(1) |
+ * | `ta_chunk_writer_open` on a chain of `k` chunks | O(k): walks to the last chunk |
+ * | `ta_chunks_write` of `n` bytes | O(n), one pool take per new chunk; the last chunk is the writer's, so appending never walks the chain |
+ * | `ta_chunks_read` | O(1) to find the span, plus the caller's use of it |
+ * | `ta_chunks_free` of a chain of `k` chunks | O(k): walks the chain, one pool give per chunk |
+ * | `ta_chunks_destroy` | the pool's destroy: one free per page |
+ *
+ * ## Failure
+ *
+ * - `ta_chunks_init` answers `TA_ERR_INVALID` for parameters that break a
+ *   rule of `ta_chunks_params`, leaving `*chunks` untouched.
+ * - `ta_chunks_write` answers `TA_ERR_FULL` when the pool has fewer free
+ *   chunks than the write needs, or the chain would pass `UINT32_MAX`
+ *   bytes; it changes nothing: no chunk taken, no byte written, the
+ *   writer as it was. The user refills at its next safe point, or answers
+ *   for the area that is full.
+ * - Nothing else fails. Writing to or freeing a chain that is not this
+ *   area's, freeing one twice, or reading a chain after it was freed are
+ *   programmer errors, not checked.
+ *
+ * ## Users
+ *
+ * The **name area** keeps the length-prefixed text fields of an envelope,
+ * and the address of a target that is not resident once per waiting
+ * entry, in 64-byte chunks. The **park area** keeps a parked execution
+ * (its continuation and pending internal events) in 256-byte chunks,
+ * written through the chunk-chain byte sink and read back through the
+ * chunk-chain byte source (`bytes.h`).
+ */
+
+
+/** Bytes of a chunk's link, at the start of every chunk. */
+#define TA_CHUNKS_LINK_BYTES 4u
+
+/** What `ta_chunks_init` needs. */
+typedef struct {
+    /** Where the pool's pages come from; borrowed, and must outlive the area. */
+    ta_allocator allocator;
+    /** Bytes per chunk, link included: a multiple of 4, at least 8. */
+    uint32_t chunk_size;
+    /** Each pool page holds `1 << page_shift` chunks; as for `ta_index_pool_params`. */
+    uint32_t page_shift;
+    /** The most chunks the area may hold: from 1 to `UINT32_MAX - 1`. */
+    uint32_t ceiling;
+} ta_chunks_params;
+
+/**
+ * An area of chunks for chains; see the file comment. `pool` is refilled
+ * and trimmed by the area's user; `payload` is for reading only.
+ */
+typedef struct {
+    /** The chunks: items of `chunk_size` bytes, linked through their first 4 bytes. */
+    ta_index_pool pool;
+    /** Stream bytes per chunk: `chunk_size - 4`. */
+    uint32_t payload;
+} ta_chunks;
+
+/** A chain as its owner stores it: its first chunk (0 when empty) and its length in bytes. */
+typedef struct {
+    uint32_t first;
+    uint32_t length;
+} ta_chunk_chain;
+
+/** Appends to one chain; see `ta_chunk_writer_new` and `ta_chunk_writer_open`. */
+typedef struct {
+    /** The chain written so far; the owner takes it back from here. */
+    ta_chunk_chain chain;
+    /** The chain's last chunk, 0 while it is empty. */
+    uint32_t last;
+} ta_chunk_writer;
+
+/** Hands a chain out as spans; see `ta_chunk_reader_of`. */
+typedef struct {
+    /** The chunk the next span starts in; meaningless once `remaining` is 0. */
+    uint32_t chunk;
+    /** Where in that chunk's payload the next span starts. */
+    uint32_t offset;
+    /** Stream bytes not yet handed out. */
+    uint32_t remaining;
+} ta_chunk_reader;
+
+/**
+ * Sets up an area with no chunk yet, over an index pool of `chunk_size`
+ * items linked through their first 4 bytes. Allocates nothing; may run
+ * anywhere. Answers `TA_ERR_INVALID`, leaving `*chunks` untouched, when
+ * `chunk_size` is not a multiple of 4 or is below 8, the ceiling is 0 or
+ * `UINT32_MAX`, or the pool refuses the page shift.
+ */
+TA_PRIVATE ta_result ta_chunks_init(ta_chunks *chunks, const ta_chunks_params *params);
+
+/**
+ * Frees every page of the area and leaves it empty; every chain in it is
+ * gone, freed or not. Only frees; never fails. Runs where the area's
+ * owner is torn down, never inside a macrostep.
+ */
+TA_PRIVATE void ta_chunks_destroy(ta_chunks *chunks);
+
+/**
+ * The chunks a write of `n` bytes onto a chain of `length` bytes takes:
+ * `ceil((length + n) / payload) - ceil(length / payload)`, or `UINT32_MAX`
+ * when `length + n` would pass `UINT32_MAX`. Pass 0 for a new chain. Only
+ * counts and reserves nothing; a write after `need <= chunks->pool.free`,
+ * with no chunk taken in between, cannot fail. O(1). Never allocates; may
+ * run inside a macrostep. Never fails.
+ */
+TA_PRIVATE uint32_t ta_chunks_need(const ta_chunks *chunks, uint32_t length, uint32_t n);
+
+/**
+ * A writer of a new, empty chain. O(1); allocates nothing and takes no
+ * chunk; may run inside a macrostep.
+ */
+TA_PRIVATE inline ta_chunk_writer ta_chunk_writer_new(void) {
+    return (ta_chunk_writer){ .chain = { 0u, 0u }, .last = 0u };
+}
+
+/**
+ * A writer that appends to `chain`, which it borrows until the owner
+ * takes it back from `writer.chain`. Walks the chain to its last chunk:
+ * O(chunks of the chain). Allocates nothing; may run inside a macrostep.
+ * Never fails.
+ */
+TA_PRIVATE ta_chunk_writer ta_chunk_writer_open(const ta_chunks *chunks, ta_chunk_chain chain);
+
+/**
+ * Appends `bytes` (borrowed for the call, and copied) to the writer's
+ * chain: it fills the space left in the last chunk, then takes the chunks
+ * `ta_chunks_need` counts from the pool's free list and links them in
+ * order. A write of no bytes changes nothing.
+ *
+ * Never allocates; may run inside a macrostep. Answers `TA_ERR_FULL` when
+ * fewer chunks are free than the write needs, or the chain would pass
+ * `UINT32_MAX` bytes; the pool, the chain and the writer are then exactly
+ * as before.
+ */
+TA_PRIVATE ta_result ta_chunks_write(ta_chunks *chunks, ta_chunk_writer *writer, ta_bytes bytes);
+
+/**
+ * A reader positioned at the first byte of `chain`. It copies what it
+ * needs from the chain and borrows nothing. O(1); allocates nothing; may
+ * run inside a macrostep.
+ */
+TA_PRIVATE inline ta_chunk_reader ta_chunk_reader_of(ta_chunk_chain chain) {
+    return (ta_chunk_reader){ .chunk = chain.length == 0u ? 0u : chain.first, .offset = 0u, .remaining = chain.length };
+}
+
+/**
+ * The next span of the reader's chain, at most `max` bytes, all within one
+ * chunk: from the reader's position to the end of that chunk's payload or
+ * of the chain, whichever comes first, cut to `max`. Moves the reader past
+ * it, to the next chunk when it reached the end of this one. Answers a
+ * span of length 0 when the chain has been read to its end, and every
+ * later call answers the same; `max` 0 answers length 0 and does not move.
+ * Pass `UINT32_MAX` to get each chunk's payload whole. The span points
+ * into the chunk and is valid until the chain is freed.
+ *
+ * O(1). Allocates nothing; may run inside a macrostep. Never fails.
+ */
+TA_PRIVATE ta_bytes ta_chunks_read(const ta_chunks *chunks, ta_chunk_reader *reader, uint32_t max);
+
+/**
+ * Returns every chunk of `*chain` to the pool's free list and sets
+ * `*chain` to the empty chain. Freeing an empty chain does nothing. Walks
+ * the chain: O(its chunks). Never allocates; may run inside a macrostep.
+ * Never fails.
+ */
+TA_PRIVATE void ta_chunks_free(ta_chunks *chunks, ta_chunk_chain *chain);
+
+/**
  * @file paged_array.h
  *
  * # Paged array
@@ -2584,12 +2830,16 @@ TA_PRIVATE inline ta_result ta_quota_release(ta_quota *quota, uint32_t amount) {
  * - `ta_arena_sink`, a sink that gathers one unit's pieces into one
  *   contiguous run of an arena;
  * - `ta_memory_source`, a source over the bytes of one unit already in
- *   memory, handed out in the reader's pieces.
+ *   memory, handed out in the reader's pieces;
+ * - `ta_chunk_sink`, a sink that writes one unit into a new chunk chain
+ *   (`chunks.h`);
+ * - `ta_chunk_source`, a source over the bytes of one chunk chain.
  *
  * Each is a small state struct the caller embeds (usually on its stack)
- * and an adapter, `ta_arena_sink_as_byte_sink` or
- * `ta_memory_source_as_byte_source`, that hands it to a data model as the
- * public `ta_byte_sink` or `ta_byte_source`.
+ * and an adapter, `ta_arena_sink_as_byte_sink`,
+ * `ta_memory_source_as_byte_source`, `ta_chunk_sink_as_byte_sink` or
+ * `ta_chunk_source_as_byte_source`, that hands it to a data model or a
+ * serializer as the public `ta_byte_sink` or `ta_byte_source`.
  *
  * ## Contract and invariants
  *
@@ -2614,6 +2864,19 @@ TA_PRIVATE inline ta_result ta_quota_release(ta_quota *quota, uint32_t amount) {
  * Memory source invariant: `at <= bytes.len`; the bytes not yet read are
  * `bytes.ptr[at .. bytes.len)`.
  *
+ * Chunk sink invariants: between `begin` and `end`, `writer.chain` is the
+ * unit written so far, a chain the sink owns. `begin` starts a new, empty
+ * chain and leaves alone the chain of the unit before it, which belongs to
+ * whoever took it. After `end(keep=true)` the unit is `writer.chain`, and
+ * the caller takes it over from the struct's fields: from then on the
+ * caller owns the chain and frees it with `ta_chunks_free`.
+ * `end(keep=false)` returns every chunk of the unit to the pool and leaves
+ * an empty chain.
+ *
+ * Chunk source invariant: `reader` is positioned at the first byte not
+ * yet handed out. The source reads the chain without changing it; the
+ * chain's owner frees it when the source is done.
+ *
  * ## Memory
  *
  * - The arena sink owns nothing. It borrows the `ta_arena` given to
@@ -2630,8 +2893,17 @@ TA_PRIVATE inline ta_result ta_quota_release(ta_quota *quota, uint32_t amount) {
  *   bytes given to `ta_memory_source_init`, which must stay valid and
  *   unchanged until the reader is done with it. It may run inside a
  *   macrostep.
- * - The adapters and `ta_arena_sink_init` / `ta_memory_source_init`
- *   allocate nothing. An adapter points at the state struct, so the
+ * - The chunk sink and the chunk source borrow the `ta_chunks` area given
+ *   to their init, which must outlive them, and never allocate: the sink
+ *   takes only chunks already free in the area's pool, so it may run
+ *   inside a macrostep, and the area's user refills the pool at a safe
+ *   point before (with a count `ta_chunks_need` gave for the unit's
+ *   size). The sink owns the unit's chain until `end`: kept, it passes to
+ *   the caller; discarded, its chunks go back to the pool. The source
+ *   borrows the chain, which must not be written or freed until the
+ *   reader is done with it; it may run inside a macrostep.
+ * - The adapters and `ta_arena_sink_init` / `ta_memory_source_init` /
+ *   `ta_chunk_sink_init` / `ta_chunk_source_init` allocate nothing. An adapter points at the state struct, so the
  *   struct must not move or end while the adapter is in use.
  *
  * ## Complexity
@@ -2642,6 +2914,11 @@ TA_PRIVATE inline ta_result ta_quota_release(ta_quota *quota, uint32_t amount) {
  * | arena sink `begin`, `end` | O(1) |
  * | arena sink `write` of n bytes | O(n), plus, when it grows, one arena allocation and a copy of the unit so far; doubling makes the copies O(1) amortized per byte |
  * | memory source `read` of up to n bytes | O(n) |
+ * | `ta_chunk_sink_init`, `ta_chunk_source_init` | O(1) |
+ * | chunk sink `begin`, `end(keep=true)` | O(1) |
+ * | chunk sink `end(keep=false)` | O(chunks of the unit): returns each to the pool |
+ * | chunk sink `write` of n bytes | O(n), one pool take per new chunk; appending never walks the chain |
+ * | chunk source `read` of up to n bytes | O(n), one step per chunk crossed |
  *
  * ## Failure
  *
@@ -2651,12 +2928,23 @@ TA_PRIVATE inline ta_result ta_quota_release(ta_quota *quota, uint32_t amount) {
  *   the bytes written before it remain. The writer then calls
  *   `end(keep=false)`, as the contract asks. `begin` and `end` never fail.
  * - The memory source never fails.
+ * - The chunk sink's `write` answers `TA_OP_NOMEM` when the area's pool
+ *   has fewer free chunks than the piece needs (`ta_chunks_write`
+ *   answered `TA_ERR_FULL`). A failed write changes nothing: no chunk
+ *   taken, and the unit written before it remains. The writer then calls
+ *   `end(keep=false)`, which returns the unit's chunks. `begin` and `end`
+ *   never fail.
+ * - The chunk source never fails.
  *
  * ## Users
  *
  * Unloading a session into an image writes each data value through an
  * arena sink into the image's arena, and loading reads each one back
  * through a memory source over its stored bytes (ADR 0090).
+ *
+ * Parking writes a slot's parked execution through a chunk sink into the
+ * park area, inside a macrostep and so without allocating, and resuming
+ * reads it back through a chunk source.
  */
 
 
@@ -2709,6 +2997,53 @@ TA_PRIVATE void ta_memory_source_init(ta_memory_source *source, ta_bytes bytes);
  * `read` never allocates and never fails, and may run inside a macrostep.
  */
 TA_PRIVATE ta_byte_source ta_memory_source_as_byte_source(ta_memory_source *source);
+
+/** A sink that writes one unit into a new chunk chain; see the file
+ * comment. Take `writer.chain` after `end(keep=true)`. */
+typedef struct {
+    /** Where chunks come from; borrowed. */
+    ta_chunks *chunks;
+    /** The unit's chain and its last chunk. */
+    ta_chunk_writer writer;
+} ta_chunk_sink;
+
+/** A source over the bytes of one chunk chain; see the file comment. */
+typedef struct {
+    /** The area the chain is in; borrowed. */
+    const ta_chunks *chunks;
+    /** The position of the next byte to hand out. */
+    ta_chunk_reader reader;
+} ta_chunk_source;
+
+/**
+ * Starts a chunk sink over `chunks`, with an empty chain. Borrows
+ * `chunks`, which must outlive the sink. Allocates nothing and never
+ * fails.
+ */
+TA_PRIVATE void ta_chunk_sink_init(ta_chunk_sink *sink, ta_chunks *chunks);
+
+/**
+ * The public `ta_byte_sink` over `sink`. Borrows `sink` for as long as the
+ * answer is used. Its `write` never allocates, so it may run inside a
+ * macrostep, and answers `TA_OP_NOMEM`, changing nothing, when the area
+ * has too few free chunks for the piece. This call itself allocates
+ * nothing.
+ */
+TA_PRIVATE ta_byte_sink ta_chunk_sink_as_byte_sink(ta_chunk_sink *sink);
+
+/**
+ * Starts a chunk source over `chain` in `chunks`, positioned at its first
+ * byte. Borrows both: the chain must not be written or freed until the
+ * reader is done. Allocates nothing and never fails.
+ */
+TA_PRIVATE void ta_chunk_source_init(ta_chunk_source *source, const ta_chunks *chunks, ta_chunk_chain chain);
+
+/**
+ * The public `ta_byte_source` over `source`. Borrows `source` for as long
+ * as the answer is used. Its `read` never allocates and never fails, and
+ * may run inside a macrostep.
+ */
+TA_PRIVATE ta_byte_source ta_chunk_source_as_byte_source(ta_chunk_source *source);
 
 /**
  * @file ring.h
@@ -9588,6 +9923,143 @@ TA_PRIVATE void ta_index_pool_trim(ta_index_pool *pool, uint32_t keep) {
 }
 
 
+/* The chunk at `index`, which the pool holds: its link, then its payload. */
+static uint8_t *ta_chunks_at(const ta_chunks *chunks, uint32_t index) {
+    return ta_index_pool_at(&chunks->pool, index);
+}
+
+static uint32_t ta_chunks_link(const ta_chunks *chunks, uint32_t index) {
+    uint32_t link;
+    ta_mem_copy(&link, ta_chunks_at(chunks, index), sizeof(link));
+    return link;
+}
+
+static void ta_chunks_set_link(ta_chunks *chunks, uint32_t index, uint32_t link) {
+    ta_mem_copy(ta_chunks_at(chunks, index), &link, sizeof(link));
+}
+
+static uint8_t *ta_chunks_payload(const ta_chunks *chunks, uint32_t index) {
+    return ta_chunks_at(chunks, index) + TA_CHUNKS_LINK_BYTES;
+}
+
+/* Chunks a chain of `length` bytes holds. */
+static uint64_t ta_chunks_count(const ta_chunks *chunks, uint64_t length) {
+    return (length + chunks->payload - 1u) / chunks->payload;
+}
+
+TA_PRIVATE ta_result ta_chunks_init(ta_chunks *chunks, const ta_chunks_params *params) {
+    if (params->chunk_size % TA_CHUNKS_LINK_BYTES != 0 || params->chunk_size < 2u * TA_CHUNKS_LINK_BYTES ||
+        params->ceiling == UINT32_MAX) {
+        return TA_ERR_INVALID;
+    }
+    ta_index_pool pool;
+    ta_result result = ta_index_pool_init(&pool, &(ta_index_pool_params){
+                                                     .allocator = params->allocator,
+                                                     .item_size = params->chunk_size,
+                                                     .item_alignment = _Alignof(uint32_t),
+                                                     .link_offset = 0,
+                                                     .page_shift = params->page_shift,
+                                                     .ceiling = params->ceiling,
+                                                 });
+    if (result != TA_OK) {
+        return result;
+    }
+    *chunks = (ta_chunks){ .pool = pool, .payload = params->chunk_size - TA_CHUNKS_LINK_BYTES };
+    return TA_OK;
+}
+
+TA_PRIVATE void ta_chunks_destroy(ta_chunks *chunks) {
+    ta_index_pool_destroy(&chunks->pool);
+}
+
+TA_PRIVATE uint32_t ta_chunks_need(const ta_chunks *chunks, uint32_t length, uint32_t n) {
+    uint64_t total = (uint64_t)length + n;
+    if (total > UINT32_MAX) {
+        return UINT32_MAX;
+    }
+    return (uint32_t)(ta_chunks_count(chunks, total) - ta_chunks_count(chunks, length));
+}
+
+TA_PRIVATE ta_chunk_writer ta_chunk_writer_open(const ta_chunks *chunks, ta_chunk_chain chain) {
+    ta_chunk_writer writer = { .chain = chain, .last = 0u };
+    if (chain.length == 0u) {
+        writer.chain.first = 0u;
+        return writer;
+    }
+    uint32_t last = chain.first;
+    for (uint64_t left = ta_chunks_count(chunks, chain.length); left > 1u; left -= 1u) {
+        last = ta_chunks_link(chunks, last);
+    }
+    writer.last = last;
+    return writer;
+}
+
+TA_PRIVATE ta_result ta_chunks_write(ta_chunks *chunks, ta_chunk_writer *writer, ta_bytes bytes) {
+    if (bytes.len == 0u) {
+        return TA_OK;
+    }
+    uint32_t length = writer->chain.length;
+    uint32_t need = ta_chunks_need(chunks, length, bytes.len);
+    if (need > chunks->pool.free) {
+        return TA_ERR_FULL;
+    }
+    const uint8_t *from = bytes.ptr;
+    uint32_t left = bytes.len;
+    /* The space left in the last chunk: none when the chain is empty or its last chunk is full. */
+    uint32_t used = length % chunks->payload;
+    if (length != 0u && used != 0u) {
+        uint32_t room = chunks->payload - used;
+        uint32_t count = left < room ? left : room;
+        ta_mem_copy(ta_chunks_payload(chunks, writer->last) + used, from, count);
+        from += count;
+        left -= count;
+    }
+    for (uint32_t taken = 0; taken < need; taken += 1u) {
+        uint32_t chunk = 0;
+        (void)ta_index_pool_take(&chunks->pool, &chunk); /* cannot fail: `need` chunks are free */
+        if (writer->last == 0u) {
+            writer->chain.first = chunk;
+        } else {
+            ta_chunks_set_link(chunks, writer->last, chunk);
+        }
+        writer->last = chunk;
+        uint32_t count = left < chunks->payload ? left : chunks->payload;
+        ta_mem_copy(ta_chunks_payload(chunks, chunk), from, count);
+        from += count;
+        left -= count;
+    }
+    writer->chain.length = length + bytes.len;
+    return TA_OK;
+}
+
+TA_PRIVATE ta_bytes ta_chunks_read(const ta_chunks *chunks, ta_chunk_reader *reader, uint32_t max) {
+    if (reader->remaining == 0u || max == 0u) {
+        return (ta_bytes){ .ptr = NULL, .len = 0u };
+    }
+    uint32_t in_chunk = chunks->payload - reader->offset;
+    uint32_t count = in_chunk < reader->remaining ? in_chunk : reader->remaining;
+    count = count < max ? count : max;
+    ta_bytes span = { .ptr = ta_chunks_payload(chunks, reader->chunk) + reader->offset, .len = count };
+    reader->remaining -= count;
+    reader->offset += count;
+    if (reader->offset == chunks->payload) {
+        reader->chunk = reader->remaining == 0u ? 0u : ta_chunks_link(chunks, reader->chunk);
+        reader->offset = 0u;
+    }
+    return span;
+}
+
+TA_PRIVATE void ta_chunks_free(ta_chunks *chunks, ta_chunk_chain *chain) {
+    uint32_t chunk = chain->length == 0u ? 0u : chain->first;
+    for (uint64_t left = ta_chunks_count(chunks, chain->length); left > 0u; left -= 1u) {
+        uint32_t next = ta_chunks_link(chunks, chunk);
+        ta_index_pool_give(&chunks->pool, chunk);
+        chunk = next;
+    }
+    *chain = (ta_chunk_chain){ 0u, 0u };
+}
+
+
 static size_t ta_paged_array_page_bytes(const ta_paged_array *array) {
     return array->entry_size << array->page_shift;
 }
@@ -10197,6 +10669,63 @@ TA_PRIVATE void ta_memory_source_init(ta_memory_source *source, ta_bytes bytes) 
 
 TA_PRIVATE ta_byte_source ta_memory_source_as_byte_source(ta_memory_source *source) {
     return (ta_byte_source){ .self = source, .v = &ta_memory_source_vtable };
+}
+
+static ta_op_status ta_chunk_sink_begin(void *self) {
+    ((ta_chunk_sink *)self)->writer = ta_chunk_writer_new();
+    return TA_OP_OK;
+}
+
+static ta_op_status ta_chunk_sink_write(void *self, ta_bytes bytes) {
+    ta_chunk_sink *sink = self;
+    return ta_chunks_write(sink->chunks, &sink->writer, bytes) == TA_OK ? TA_OP_OK : TA_OP_NOMEM;
+}
+
+static void ta_chunk_sink_end(void *self, bool keep) {
+    ta_chunk_sink *sink = self;
+    if (!keep) {
+        ta_chunks_free(sink->chunks, &sink->writer.chain);
+        sink->writer = ta_chunk_writer_new();
+    }
+}
+
+static const ta_byte_sink_vtable ta_chunk_sink_vtable = {
+    .begin = ta_chunk_sink_begin,
+    .write = ta_chunk_sink_write,
+    .end = ta_chunk_sink_end,
+};
+
+TA_PRIVATE void ta_chunk_sink_init(ta_chunk_sink *sink, ta_chunks *chunks) {
+    *sink = (ta_chunk_sink){ .chunks = chunks, .writer = ta_chunk_writer_new() };
+}
+
+TA_PRIVATE ta_byte_sink ta_chunk_sink_as_byte_sink(ta_chunk_sink *sink) {
+    return (ta_byte_sink){ .self = sink, .v = &ta_chunk_sink_vtable };
+}
+
+static ta_op_status ta_chunk_source_read(void *self, const ta_byte_read_params *params) {
+    ta_chunk_source *source = self;
+    uint32_t got = 0;
+    while (got < params->capacity) {
+        ta_bytes span = ta_chunks_read(source->chunks, &source->reader, params->capacity - got);
+        if (span.len == 0u) {
+            break;
+        }
+        ta_mem_copy(params->buffer + got, span.ptr, span.len);
+        got += span.len;
+    }
+    *params->got = got;
+    return TA_OP_OK;
+}
+
+static const ta_byte_source_vtable ta_chunk_source_vtable = { .read = ta_chunk_source_read };
+
+TA_PRIVATE void ta_chunk_source_init(ta_chunk_source *source, const ta_chunks *chunks, ta_chunk_chain chain) {
+    *source = (ta_chunk_source){ .chunks = chunks, .reader = ta_chunk_reader_of(chain) };
+}
+
+TA_PRIVATE ta_byte_source ta_chunk_source_as_byte_source(ta_chunk_source *source) {
+    return (ta_byte_source){ .self = source, .v = &ta_chunk_source_vtable };
 }
 
 

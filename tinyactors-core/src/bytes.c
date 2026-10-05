@@ -1,4 +1,5 @@
 #include "bytes.h"
+#include "chunks.h"
 #include "memory.h"
 #include "../include/tinyactors.h"
 
@@ -87,4 +88,61 @@ void ta_memory_source_init(ta_memory_source *source, ta_bytes bytes) {
 
 ta_byte_source ta_memory_source_as_byte_source(ta_memory_source *source) {
     return (ta_byte_source){ .self = source, .v = &ta_memory_source_vtable };
+}
+
+static ta_op_status ta_chunk_sink_begin(void *self) {
+    ((ta_chunk_sink *)self)->writer = ta_chunk_writer_new();
+    return TA_OP_OK;
+}
+
+static ta_op_status ta_chunk_sink_write(void *self, ta_bytes bytes) {
+    ta_chunk_sink *sink = self;
+    return ta_chunks_write(sink->chunks, &sink->writer, bytes) == TA_OK ? TA_OP_OK : TA_OP_NOMEM;
+}
+
+static void ta_chunk_sink_end(void *self, bool keep) {
+    ta_chunk_sink *sink = self;
+    if (!keep) {
+        ta_chunks_free(sink->chunks, &sink->writer.chain);
+        sink->writer = ta_chunk_writer_new();
+    }
+}
+
+static const ta_byte_sink_vtable ta_chunk_sink_vtable = {
+    .begin = ta_chunk_sink_begin,
+    .write = ta_chunk_sink_write,
+    .end = ta_chunk_sink_end,
+};
+
+void ta_chunk_sink_init(ta_chunk_sink *sink, ta_chunks *chunks) {
+    *sink = (ta_chunk_sink){ .chunks = chunks, .writer = ta_chunk_writer_new() };
+}
+
+ta_byte_sink ta_chunk_sink_as_byte_sink(ta_chunk_sink *sink) {
+    return (ta_byte_sink){ .self = sink, .v = &ta_chunk_sink_vtable };
+}
+
+static ta_op_status ta_chunk_source_read(void *self, const ta_byte_read_params *params) {
+    ta_chunk_source *source = self;
+    uint32_t got = 0;
+    while (got < params->capacity) {
+        ta_bytes span = ta_chunks_read(source->chunks, &source->reader, params->capacity - got);
+        if (span.len == 0u) {
+            break;
+        }
+        ta_mem_copy(params->buffer + got, span.ptr, span.len);
+        got += span.len;
+    }
+    *params->got = got;
+    return TA_OP_OK;
+}
+
+static const ta_byte_source_vtable ta_chunk_source_vtable = { .read = ta_chunk_source_read };
+
+void ta_chunk_source_init(ta_chunk_source *source, const ta_chunks *chunks, ta_chunk_chain chain) {
+    *source = (ta_chunk_source){ .chunks = chunks, .reader = ta_chunk_reader_of(chain) };
+}
+
+ta_byte_source ta_chunk_source_as_byte_source(ta_chunk_source *source) {
+    return (ta_byte_source){ .self = source, .v = &ta_chunk_source_vtable };
 }

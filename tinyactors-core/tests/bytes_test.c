@@ -1,7 +1,9 @@
 /*
- * ta_arena_sink and ta_memory_source: the byte sink and the byte source
- * core provides itself (src/bytes.h). A data model writes a value into
- * the sink and reads it back from the source.
+ * ta_arena_sink and ta_memory_source, ta_chunk_sink and ta_chunk_source:
+ * the byte sinks and sources core provides itself (src/bytes.h). A data
+ * model writes a value into a sink and reads it back from a source;
+ * parking writes a parked execution into a chunk chain and resuming reads
+ * it back.
  *
  * The test includes the amalgamation so it reaches the private unit; it
  * uses the C library, the core does not. Memory comes from the test
@@ -37,7 +39,24 @@
  *    from its first read; reads never allocate;
  * 8. a unit written through an arena sink and read back through a memory
  *    source over its bytes is the same unit, through the public adapters
- *    a data model is given.
+ *    a data model is given;
+ * 9. a chunk sink writes one unit into a new chain, for both chunk sizes
+ *    (64 and 256 bytes): an empty unit holds no chunk, pieces of every
+ *    size near a chunk's payload land in order, and after
+ *    end(keep=true) the chain is the caller's, which the next begin
+ *    leaves alone; it never allocates;
+ * 10. a chunk sink write that needs more chunks than are free answers
+ *    TA_OP_NOMEM and changes nothing: the same chain, the same free
+ *    chunks; end(keep=false) then returns every chunk of the unit to the
+ *    pool;
+ * 11. a chunk source hands a chain out in the reader's pieces, in order,
+ *    across chunk boundaries, at every piece size from 1 to past two
+ *    chunks, then answers *got == 0 on every later read; a read of
+ *    capacity 0 hands out nothing; an empty chain has ended from its
+ *    first read; reading never allocates and leaves the chain as it was;
+ * 12. a unit written through a chunk sink and read back through a chunk
+ *    source is the same unit, at every length near a chunk boundary and
+ *    for both chunk sizes, through the public adapters.
  */
 #include "../include/tinyactors.c"
 #include "test_allocator.h"
@@ -403,6 +422,223 @@ static void test_round_trip(void) {
     CHECK(test_allocator_finish(&heap) == 0);
 }
 
+/* An area of `chunk_size` chunks over `heap`, with `free_chunks` free. */
+static ta_chunks chunk_area(test_allocator *heap, uint32_t chunk_size, uint32_t free_chunks) {
+    ta_chunks chunks;
+    CHECK(ta_chunks_init(&chunks, &(ta_chunks_params){ .allocator = test_allocator_of(heap),
+                                                       .chunk_size = chunk_size,
+                                                       .page_shift = 2u,
+                                                       .ceiling = 1024u }) == TA_OK);
+    CHECK(ta_index_pool_refill(&chunks.pool, free_chunks) == TA_OK);
+    return chunks;
+}
+
+/* Reads the whole chain through a chunk source in pieces of `piece` bytes into `out`. */
+static uint32_t read_chain(const ta_chunks *chunks, ta_chunk_chain chain, uint32_t piece, uint8_t *out) {
+    ta_chunk_source state;
+    ta_chunk_source_init(&state, chunks, chain);
+    ta_byte_source source = ta_chunk_source_as_byte_source(&state);
+    CHECK(source.self == &state && source.v != NULL);
+    uint32_t total = 0;
+    for (;;) {
+        uint32_t got = 0xFFFFFFFFu;
+        CHECK(source.v->read(source.self, &(ta_byte_read_params){ .buffer = out + total, .capacity = piece, .got = &got }) ==
+              TA_OP_OK);
+        if (got == 0) {
+            break;
+        }
+        uint32_t left = chain.length - total;
+        CHECK(got == (left < piece ? left : piece));
+        total += got;
+        if (total > chain.length) {
+            break;
+        }
+    }
+    for (int round = 0; round < 2; round += 1) {
+        uint32_t got = 0xFFFFFFFFu;
+        CHECK(source.v->read(source.self, &(ta_byte_read_params){ .buffer = out, .capacity = piece, .got = &got }) ==
+              TA_OP_OK);
+        CHECK(got == 0);
+    }
+    return total;
+}
+
+/* The two chunk sizes core uses: the name area's and the park area's. */
+static const uint32_t chunk_sizes[] = { 64u, 256u };
+
+/* ------------------------------------------------------------------------
+ * Claim 9: a chunk sink writes one unit into a new chain.
+ */
+static void test_chunk_sink(void) {
+    for (size_t size = 0; size < sizeof chunk_sizes / sizeof chunk_sizes[0]; size += 1u) {
+        test_allocator heap = {0};
+        ta_chunks chunks = chunk_area(&heap, chunk_sizes[size], 16u);
+        uint32_t payload = chunks.payload;
+        uint32_t attempts = heap.attempts;
+        ta_chunk_sink state;
+        ta_chunk_sink_init(&state, &chunks);
+        CHECK(state.chunks == &chunks && state.writer.chain.first == 0 && state.writer.chain.length == 0);
+        ta_byte_sink sink = ta_chunk_sink_as_byte_sink(&state);
+        CHECK(sink.self == &state && sink.v != NULL);
+
+        /* An empty unit holds no chunk. */
+        CHECK(sink.v->begin(sink.self) == TA_OP_OK);
+        CHECK(sink.v->write(sink.self, (ta_bytes){0}) == TA_OP_OK);
+        sink.v->end(sink.self, true);
+        CHECK(state.writer.chain.first == 0 && state.writer.chain.length == 0 && chunks.pool.used == 0);
+
+        /* Pieces of every size near a payload land in order. */
+        CHECK(sink.v->begin(sink.self) == TA_OP_OK);
+        uint32_t sizes[] = { 1u, payload - 1u, payload, payload + 1u, 2u, payload - 2u };
+        size_t at = 0;
+        for (size_t index = 0; index < sizeof sizes / sizeof sizes[0]; index += 1u) {
+            CHECK(write_pattern(sink, sizes[index], at) == TA_OP_OK);
+            at += sizes[index];
+        }
+        sink.v->end(sink.self, true);
+        ta_chunk_chain first = state.writer.chain;
+        CHECK(first.length == at);
+        uint8_t out[1024];
+        CHECK(read_chain(&chunks, first, 1024u, out) == at && holds_pattern(out, at));
+        uint32_t used = chunks.pool.used;
+        CHECK(used == (uint32_t)((at + payload - 1u) / payload));
+
+        /* The kept chain is the caller's: the next unit leaves it alone. */
+        CHECK(sink.v->begin(sink.self) == TA_OP_OK);
+        CHECK(state.writer.chain.first == 0 && state.writer.chain.length == 0);
+        CHECK(write_pattern(sink, 5, 0) == TA_OP_OK);
+        sink.v->end(sink.self, true);
+        ta_chunk_chain second = state.writer.chain;
+        CHECK(second.length == 5 && second.first != first.first && chunks.pool.used == used + 1u);
+        CHECK(read_chain(&chunks, first, 7u, out) == at && holds_pattern(out, at));
+        CHECK(read_chain(&chunks, second, 7u, out) == 5u && holds_pattern(out, 5u));
+        CHECK(heap.attempts == attempts);
+
+        ta_chunks_free(&chunks, &first);
+        ta_chunks_free(&chunks, &second);
+        CHECK(chunks.pool.used == 0);
+        ta_chunks_destroy(&chunks);
+        CHECK(test_allocator_finish(&heap) == 0);
+    }
+}
+
+/* ------------------------------------------------------------------------
+ * Claim 10: a chunk sink write that does not fit changes nothing.
+ */
+static void test_chunk_sink_full(void) {
+    test_allocator heap = {0};
+    ta_chunks chunks = chunk_area(&heap, 64u, 4u);
+    CHECK(chunks.pool.free == 4u);
+    ta_chunk_sink state;
+    ta_chunk_sink_init(&state, &chunks);
+    ta_byte_sink sink = ta_chunk_sink_as_byte_sink(&state);
+
+    CHECK(sink.v->begin(sink.self) == TA_OP_OK);
+    CHECK(write_pattern(sink, 100, 0) == TA_OP_OK); /* 2 chunks, 20 bytes of room left */
+    ta_chunk_writer before = state.writer;
+    CHECK(write_pattern(sink, 20u + 2u * 60u + 1u, 100) == TA_OP_NOMEM); /* needs 3, 2 free */
+    CHECK(memcmp(&state.writer, &before, sizeof before) == 0 && chunks.pool.free == 2u && chunks.pool.used == 2u);
+    uint8_t out[512];
+    CHECK(read_chain(&chunks, state.writer.chain, 64u, out) == 100u && holds_pattern(out, 100u));
+    /* Exactly what is free still fits. */
+    CHECK(write_pattern(sink, 20u + 2u * 60u, 100) == TA_OP_OK);
+    CHECK(chunks.pool.free == 0 && state.writer.chain.length == 240u);
+    CHECK(write_pattern(sink, 1, 240) == TA_OP_NOMEM);
+    CHECK(state.writer.chain.length == 240u);
+
+    /* Discarding returns every chunk of the unit. */
+    sink.v->end(sink.self, false);
+    CHECK(state.writer.chain.first == 0 && state.writer.chain.length == 0);
+    CHECK(chunks.pool.used == 0 && chunks.pool.free == 4u);
+
+    /* A unit refused at its first chunk holds none, and discarding it changes nothing. */
+    ta_chunk_writer keep = ta_chunk_writer_new();
+    CHECK(ta_chunks_write(&chunks, &keep, (ta_bytes){ .ptr = out, .len = 4u * 60u }) == TA_OK);
+    CHECK(sink.v->begin(sink.self) == TA_OP_OK);
+    CHECK(write_pattern(sink, 1, 0) == TA_OP_NOMEM);
+    sink.v->end(sink.self, false);
+    CHECK(chunks.pool.used == 4u && keep.chain.length == 240u);
+    ta_chunks_free(&chunks, &keep.chain);
+    ta_chunks_destroy(&chunks);
+    CHECK(test_allocator_finish(&heap) == 0);
+}
+
+/* ------------------------------------------------------------------------
+ * Claim 11: a chunk source hands a chain out in the reader's pieces.
+ */
+static void test_chunk_source(void) {
+    test_allocator heap = {0};
+    ta_chunks chunks = chunk_area(&heap, 64u, 8u);
+    uint8_t unit[150];
+    fill(unit, sizeof unit, 0);
+    ta_chunk_writer writer = ta_chunk_writer_new();
+    CHECK(ta_chunks_write(&chunks, &writer, (ta_bytes){ .ptr = unit, .len = sizeof unit }) == TA_OK);
+    ta_chunk_chain chain = writer.chain;
+    uint32_t attempts = heap.attempts;
+    for (uint32_t piece = 1; piece <= 2u * chunks.payload + 3u; piece += 1u) {
+        uint8_t out[256];
+        memset(out, 0, sizeof out);
+        CHECK(read_chain(&chunks, chain, piece, out) == sizeof unit);
+        CHECK(memcmp(out, unit, sizeof unit) == 0);
+    }
+    CHECK(chain.first == writer.chain.first && chain.length == sizeof unit && chunks.pool.used == 3u);
+
+    /* Capacity 0 hands out nothing and does not advance. */
+    ta_chunk_source state;
+    ta_chunk_source_init(&state, &chunks, chain);
+    ta_byte_source source = ta_chunk_source_as_byte_source(&state);
+    ta_chunk_reader start = state.reader;
+    uint32_t got = 0xFFFFFFFFu;
+    CHECK(source.v->read(source.self, &(ta_byte_read_params){ .buffer = NULL, .capacity = 0, .got = &got }) ==
+          TA_OP_OK);
+    CHECK(got == 0 && memcmp(&state.reader, &start, sizeof start) == 0);
+    uint8_t one = 0;
+    CHECK(source.v->read(source.self, &(ta_byte_read_params){ .buffer = &one, .capacity = 1, .got = &got }) ==
+          TA_OP_OK);
+    CHECK(got == 1 && one == pattern(0));
+
+    /* An empty chain has ended from its first read. */
+    uint8_t nothing[4];
+    CHECK(read_chain(&chunks, (ta_chunk_chain){ 0u, 0u }, 4u, nothing) == 0);
+    CHECK(heap.attempts == attempts);
+    ta_chunks_free(&chunks, &chain);
+    ta_chunks_destroy(&chunks);
+    CHECK(test_allocator_finish(&heap) == 0);
+}
+
+/* ------------------------------------------------------------------------
+ * Claim 12: a unit round-trips from a chunk sink through a chunk source.
+ */
+static void test_chunk_round_trip(void) {
+    for (size_t size = 0; size < sizeof chunk_sizes / sizeof chunk_sizes[0]; size += 1u) {
+        test_allocator heap = {0};
+        ta_chunks chunks = chunk_area(&heap, chunk_sizes[size], 8u);
+        uint32_t payload = chunks.payload;
+        ta_chunk_sink written;
+        ta_chunk_sink_init(&written, &chunks);
+        ta_byte_sink sink = ta_chunk_sink_as_byte_sink(&written);
+        for (uint32_t length = 0; length <= 3u * payload + 2u; length += 1u) {
+            uint32_t within = length % payload;
+            if (within > 2u && within < payload - 2u) {
+                continue;
+            }
+            CHECK(sink.v->begin(sink.self) == TA_OP_OK);
+            for (uint32_t at = 0; at < length; at += 13u) {
+                CHECK(write_pattern(sink, length - at < 13u ? length - at : 13u, at) == TA_OP_OK);
+            }
+            sink.v->end(sink.self, true);
+            ta_chunk_chain chain = written.writer.chain;
+            CHECK(chain.length == length);
+            uint8_t out[1024];
+            CHECK(read_chain(&chunks, chain, 50u, out) == length && holds_pattern(out, length));
+            ta_chunks_free(&chunks, &chain);
+            CHECK(chunks.pool.used == 0);
+        }
+        ta_chunks_destroy(&chunks);
+        CHECK(test_allocator_finish(&heap) == 0);
+    }
+}
+
 int main(void) {
     test_empty_sink();
     test_pieces_in_order();
@@ -412,6 +648,10 @@ int main(void) {
     test_size_overflow();
     test_memory_source();
     test_round_trip();
+    test_chunk_sink();
+    test_chunk_sink_full();
+    test_chunk_source();
+    test_chunk_round_trip();
     if (failures != 0) {
         fprintf(stderr, "bytes_test: %d checks failed\n", failures);
         return 1;

@@ -47,6 +47,7 @@
 #include "arena.h"
 #include "list.h"
 #include "index_pool.h"
+#include "chunks.h"
 #include "paged_array.h"
 #include "heap.h"
 #include "table.h"
