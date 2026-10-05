@@ -13060,8 +13060,26 @@
           "doc": "quota: live definitions"
         },
         {
-          "name": "TA_PARAM_COUNT",
+          "name": "TA_PARAM_TEL_BYTES",
           "value": 12,
+          "symbol": "tel_bytes",
+          "doc": "the telemetry ring, in bytes: a multiple of 8, at least maxRecordBytes (ADR 0098)"
+        },
+        {
+          "name": "TA_PARAM_MAX_RECORD_BYTES",
+          "value": 13,
+          "symbol": "max_record_bytes",
+          "doc": "the largest record on any ring, a multiple of 8, 256 to telBytes (ADR 0098)"
+        },
+        {
+          "name": "TA_PARAM_TELEMETRY_VALUE_BYTES",
+          "value": 14,
+          "symbol": "telemetry_value_bytes",
+          "doc": "bytes kept of one value rendered into a tel record, at most maxRecordBytes - 256"
+        },
+        {
+          "name": "TA_PARAM_COUNT",
+          "value": 15,
           "symbol": "count"
         }
       ],
@@ -13142,6 +13160,21 @@
           "name": "TA_PARAM_DEFAULT_MAX_DEFINITIONS",
           "value": 2147483647,
           "symbol": "max_definitions"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_TEL_BYTES",
+          "value": 65536,
+          "symbol": "tel_bytes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_MAX_RECORD_BYTES",
+          "value": 4096,
+          "symbol": "max_record_bytes"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES",
+          "value": 1024,
+          "symbol": "telemetry_value_bytes"
         }
       ],
       "doc": "The built-in defaults (ADR 0092 rule 4); ta_param_info_of() reports them too.",
@@ -16447,7 +16480,7 @@
     },
     "ta_system_config": {
       "kind": "struct",
-      "doc": "`incarnation` (ADR 0088) tells this system's session IDs from those of the systems and processes before it: a host chooses a distinct value for each system, from random bytes or a restart counter; tests use 0. It is the first part of every session ID's text.\n\n`params` sets system parameters (ADR 0092); the rest keep their defaults. A value outside its bounds, an unknown parameter, or one listed twice is TA_ERR_INVALID, with `rejected` naming it when given, and nothing is created. TA_ERR_NOMEM: the buffers the parameters size could not be allocated.",
+      "doc": "`incarnation` (ADR 0088) tells this system's session IDs from those of the systems and processes before it: a host chooses a distinct value for each system, from random bytes or a restart counter; tests use 0. It is the first part of every session ID's text.\n\n`params` sets system parameters (ADR 0092); the rest keep their defaults. A value outside its bounds, an unknown parameter, or one listed twice is TA_ERR_INVALID, with `rejected` naming it when given, and nothing is created. Three parameters also bound one another (ADR 0098 section 6): telBytes and maxRecordBytes are multiples of 8 (the ring's unit), maxRecordBytes is at most telBytes, and telemetryValueBytes is at most maxRecordBytes - 256. A pair that breaks one of these is refused the same way, `rejected` naming the later parameter of the pair in the order above when the caller set both, and the one it set otherwise. TA_ERR_NOMEM: the buffers the parameters size could not be allocated.",
       "fields": [
         {
           "name": "allocator",

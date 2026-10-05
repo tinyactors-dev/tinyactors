@@ -10,6 +10,16 @@
  * System parameters (ADR 0092)
  */
 
+/*
+ * The largest ring and record: the biggest multiple of 8 below 2 GiB, so a
+ * ring's sizes stay u32 (ring.h) and its layout cannot overflow. Every
+ * record carries at least TA_PARAM_RECORD_HEADROOM bytes that are not value
+ * text (its fixed part and the other texts), which is what
+ * telemetryValueBytes may not take from maxRecordBytes (ADR 0098 section 6).
+ */
+#define TA_PARAM_RING_BYTES_MAX 2147483640u
+#define TA_PARAM_RECORD_HEADROOM 256u
+
 typedef struct {
     const char *name;
     const char *unit;
@@ -38,6 +48,13 @@ static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_MAX_ACTORS] = { "maxActors", "actors", TA_PARAM_DEFAULT_MAX_ACTORS, 1, 2147483647u },
     [TA_PARAM_MAX_PENDING_SENDS] = { "maxPendingSends", "sends", TA_PARAM_DEFAULT_MAX_PENDING_SENDS, 1, 2147483647u },
     [TA_PARAM_MAX_DEFINITIONS] = { "maxDefinitions", "definitions", TA_PARAM_DEFAULT_MAX_DEFINITIONS, 1, 2147483647u },
+    /* The three ADR 0098 parameters. Their static bounds are the widest any
+     * pair allows; ta_params_resolve checks the pairs. */
+    [TA_PARAM_TEL_BYTES] = { "telBytes", "bytes", TA_PARAM_DEFAULT_TEL_BYTES, 256, TA_PARAM_RING_BYTES_MAX },
+    [TA_PARAM_MAX_RECORD_BYTES] = { "maxRecordBytes", "bytes", TA_PARAM_DEFAULT_MAX_RECORD_BYTES, 256,
+                                    TA_PARAM_RING_BYTES_MAX },
+    [TA_PARAM_TELEMETRY_VALUE_BYTES] = { "telemetryValueBytes", "bytes", TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES, 0,
+                                         TA_PARAM_RING_BYTES_MAX - TA_PARAM_RECORD_HEADROOM },
 };
 
 ta_result ta_param_info_of(ta_param param, ta_param_info *out) {
@@ -61,8 +78,40 @@ ta_result ta_system_param(const ta_system *system, ta_param param, uint64_t *out
     return TA_OK;
 }
 
+/*
+ * ta_params_check_pairs checks the bounds that relate parameters (ADR 0098
+ * section 6), once, after every row has passed its own: the ring's units are
+ * multiples of 8; a record fits its ring; a value's text leaves room for the
+ * rest of the record. The parameter at fault is the later one of the pair
+ * the caller gave (or the only one it gave); a pair of defaults cannot fail,
+ * as the info table's tests pin.
+ */
+static ta_result ta_params_check_pairs(const uint32_t values[TA_PARAM_COUNT], const bool given[TA_PARAM_COUNT],
+                                       ta_param *rejected) {
+    ta_param fault = TA_PARAM_COUNT;
+    uint32_t ring = values[TA_PARAM_TEL_BYTES];
+    uint32_t record = values[TA_PARAM_MAX_RECORD_BYTES];
+    if (ring % 8u != 0) {
+        fault = TA_PARAM_TEL_BYTES;
+    } else if (record % 8u != 0) {
+        fault = TA_PARAM_MAX_RECORD_BYTES;
+    } else if (record > ring) {
+        fault = given[TA_PARAM_MAX_RECORD_BYTES] ? TA_PARAM_MAX_RECORD_BYTES : TA_PARAM_TEL_BYTES;
+    } else if (values[TA_PARAM_TELEMETRY_VALUE_BYTES] > record - TA_PARAM_RECORD_HEADROOM) {
+        fault = given[TA_PARAM_TELEMETRY_VALUE_BYTES] ? TA_PARAM_TELEMETRY_VALUE_BYTES : TA_PARAM_MAX_RECORD_BYTES;
+    }
+    if (fault == TA_PARAM_COUNT) {
+        return TA_OK;
+    }
+    if (rejected != NULL) {
+        *rejected = fault;
+    }
+    return TA_ERR_INVALID;
+}
+
 /* Every parameter's value: the defaults, then the config's, each checked
- * against its bounds once. TA_ERR_INVALID names the parameter at fault. */
+ * against its bounds once, then the bounds between parameters.
+ * TA_ERR_INVALID names the parameter at fault. */
 static ta_result ta_params_resolve(const ta_system_config *config, uint32_t values[TA_PARAM_COUNT]) {
     bool given[TA_PARAM_COUNT] = { false };
     for (uint32_t index = 0; index < (uint32_t)TA_PARAM_COUNT; index += 1u) {
@@ -87,7 +136,7 @@ static ta_result ta_params_resolve(const ta_system_config *config, uint32_t valu
         given[param] = true;
         values[param] = (uint32_t)value->value;
     }
-    return TA_OK;
+    return ta_params_check_pairs(values, given, config->rejected);
 }
 
 /*

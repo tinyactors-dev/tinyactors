@@ -759,8 +759,89 @@ static void test_scratch_need_exact(void) {
     ta_system_destroy(system);
 }
 
+/* ------------------------------------------------------------------------
+ * The telemetry parameters (ADR 0098 section 6): their rows, and the bounds
+ * that relate them
+ */
+
+static ta_result create_with(ta_param param, uint64_t value, ta_param *rejected) {
+    ta_param_value set[] = { { param, value } };
+    ta_system *system = NULL;
+    *rejected = TA_PARAM_COUNT;
+    ta_result result = ta_system_create(&(ta_system_config){ .allocator = allocator, .params = set, .param_count = 1,
+                                                             .rejected = rejected },
+                                        &system);
+    if (result == TA_OK) {
+        ta_system_destroy(system);
+    } else {
+        CHECK(system == NULL);
+    }
+    return result;
+}
+
+static void test_telemetry_params(void) {
+    ta_param_info info = {0};
+    CHECK(ta_param_info_of(TA_PARAM_TEL_BYTES, &info) == TA_OK);
+    CHECK(info.name.len == 8 && memcmp(info.name.ptr, "telBytes", 8) == 0);
+    CHECK(info.default_value == 65536 && info.default_value == TA_PARAM_DEFAULT_TEL_BYTES);
+    CHECK(ta_param_info_of(TA_PARAM_MAX_RECORD_BYTES, &info) == TA_OK);
+    CHECK(info.name.len == 14 && memcmp(info.name.ptr, "maxRecordBytes", 14) == 0);
+    CHECK(info.default_value == 4096 && info.min == 256);
+    CHECK(ta_param_info_of(TA_PARAM_TELEMETRY_VALUE_BYTES, &info) == TA_OK);
+    CHECK(info.name.len == 19 && memcmp(info.name.ptr, "telemetryValueBytes", 19) == 0);
+    CHECK(info.default_value == 1024 && info.min == 0);
+
+    /* Accepted: the smallest ring is one record, and a value may take all that is left. */
+    ta_param_value tight[] = { { TA_PARAM_MAX_RECORD_BYTES, 256 }, { TA_PARAM_TEL_BYTES, 256 },
+                               { TA_PARAM_TELEMETRY_VALUE_BYTES, 0 } };
+    ta_system *system = create(tight, 3);
+    CHECK(system != NULL);
+    uint64_t value = 0;
+    CHECK(ta_system_param(system, TA_PARAM_TEL_BYTES, &value) == TA_OK && value == 256);
+    ta_system_destroy(system);
+    ta_param_value roomy[] = { { TA_PARAM_TEL_BYTES, 1u << 20 }, { TA_PARAM_MAX_RECORD_BYTES, 8192 },
+                               { TA_PARAM_TELEMETRY_VALUE_BYTES, 8192 - 256 } };
+    system = create(roomy, 3);
+    CHECK(system != NULL);
+    CHECK(ta_system_param(system, TA_PARAM_TELEMETRY_VALUE_BYTES, &value) == TA_OK && value == 8192 - 256);
+    ta_system_destroy(system);
+
+    /* Refused by a row. */
+    ta_param rejected;
+    CHECK(create_with(TA_PARAM_TEL_BYTES, 128, &rejected) == TA_ERR_INVALID && rejected == TA_PARAM_TEL_BYTES);
+    CHECK(create_with(TA_PARAM_MAX_RECORD_BYTES, 128, &rejected) == TA_ERR_INVALID &&
+          rejected == TA_PARAM_MAX_RECORD_BYTES);
+    CHECK(create_with(TA_PARAM_TEL_BYTES, 2147483648u, &rejected) == TA_ERR_INVALID && rejected == TA_PARAM_TEL_BYTES);
+
+    /* Refused by a relation: not a multiple of 8. */
+    CHECK(create_with(TA_PARAM_TEL_BYTES, 65537, &rejected) == TA_ERR_INVALID && rejected == TA_PARAM_TEL_BYTES);
+    CHECK(create_with(TA_PARAM_MAX_RECORD_BYTES, 4100, &rejected) == TA_ERR_INVALID &&
+          rejected == TA_PARAM_MAX_RECORD_BYTES);
+
+    /* A ring smaller than the default record, set alone: telBytes is the one given. */
+    CHECK(create_with(TA_PARAM_TEL_BYTES, 2048, &rejected) == TA_ERR_INVALID && rejected == TA_PARAM_TEL_BYTES);
+    /* A record bigger than the default ring, set alone, and with both given: the record is at fault. */
+    CHECK(create_with(TA_PARAM_MAX_RECORD_BYTES, 65544, &rejected) == TA_ERR_INVALID &&
+          rejected == TA_PARAM_MAX_RECORD_BYTES);
+    ta_param_value both[] = { { TA_PARAM_TEL_BYTES, 1024 }, { TA_PARAM_MAX_RECORD_BYTES, 2048 } };
+    ta_system *none = NULL;
+    rejected = TA_PARAM_COUNT;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = both, .param_count = 2,
+                                                .rejected = &rejected },
+                           &none) == TA_ERR_INVALID);
+    CHECK(none == NULL && rejected == TA_PARAM_MAX_RECORD_BYTES);
+
+    /* A value that leaves the record under 256 bytes for the rest: the value, when given; else the record. */
+    CHECK(create_with(TA_PARAM_TELEMETRY_VALUE_BYTES, 4096 - 255, &rejected) == TA_ERR_INVALID &&
+          rejected == TA_PARAM_TELEMETRY_VALUE_BYTES);
+    CHECK(create_with(TA_PARAM_TELEMETRY_VALUE_BYTES, 4096 - 256, &rejected) == TA_OK);
+    CHECK(create_with(TA_PARAM_MAX_RECORD_BYTES, 1024, &rejected) == TA_ERR_INVALID &&
+          rejected == TA_PARAM_MAX_RECORD_BYTES); /* the default 1024-byte value no longer fits */
+}
+
 int main(void) {
     test_validation();
+    test_telemetry_params();
     test_creation_out_of_memory();
     test_ordinary_run_allocates_nothing();
     test_block_cache_on_demand();

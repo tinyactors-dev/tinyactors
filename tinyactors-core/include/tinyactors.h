@@ -3752,6 +3752,9 @@ typedef enum {
     TA_PARAM_MAX_ACTORS,           /* quota: live actors */
     TA_PARAM_MAX_PENDING_SENDS,    /* quota: pending delayed sends of one actor */
     TA_PARAM_MAX_DEFINITIONS,      /* quota: live definitions */
+    TA_PARAM_TEL_BYTES,            /* the telemetry ring, in bytes: a multiple of 8, at least maxRecordBytes (ADR 0098) */
+    TA_PARAM_MAX_RECORD_BYTES,     /* the largest record on any ring, a multiple of 8, 256 to telBytes (ADR 0098) */
+    TA_PARAM_TELEMETRY_VALUE_BYTES,/* bytes kept of one value rendered into a tel record, at most maxRecordBytes - 256 */
     TA_PARAM_COUNT
 } ta_param TA_SYMBOLS("TA_PARAM_");
 
@@ -3769,7 +3772,10 @@ enum TA_CONSTANTS_OF(ta_param_default, "TA_PARAM_DEFAULT_") {
     TA_PARAM_DEFAULT_INTERPRETER_NESTING = 4,
     TA_PARAM_DEFAULT_MAX_ACTORS = 2147483647,
     TA_PARAM_DEFAULT_MAX_PENDING_SENDS = 2147483647,
-    TA_PARAM_DEFAULT_MAX_DEFINITIONS = 2147483647
+    TA_PARAM_DEFAULT_MAX_DEFINITIONS = 2147483647,
+    TA_PARAM_DEFAULT_TEL_BYTES = 65536,
+    TA_PARAM_DEFAULT_MAX_RECORD_BYTES = 4096,
+    TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES = 1024
 };
 
 typedef struct { ta_param param; uint64_t value; } ta_param_value;
@@ -3795,7 +3801,12 @@ TA_API ta_result ta_param_info_of(ta_param param, TA_OUT TA_LIFETIME(call) ta_pa
  * `params` sets system parameters (ADR 0092); the rest keep their defaults.
  * A value outside its bounds, an unknown parameter, or one listed twice is
  * TA_ERR_INVALID, with `rejected` naming it when given, and nothing is
- * created. TA_ERR_NOMEM: the buffers the parameters size could not be
+ * created. Three parameters also bound one another (ADR 0098 section 6):
+ * telBytes and maxRecordBytes are multiples of 8 (the ring's unit),
+ * maxRecordBytes is at most telBytes, and telemetryValueBytes is at most
+ * maxRecordBytes - 256. A pair that breaks one of these is refused the same
+ * way, `rejected` naming the later parameter of the pair in the order above
+ * when the caller set both, and the one it set otherwise. TA_ERR_NOMEM: the buffers the parameters size could not be
  * allocated.
  */
 typedef struct {
