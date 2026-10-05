@@ -1,5 +1,6 @@
 #include "interpreter.h"
 #include "layout.h"
+#include "name_resolver.h"
 
 /*
  * SCXML execution following the W3C algorithm (Appendix D). The actor's
@@ -2752,16 +2753,58 @@ static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *t
     return false;
 }
 
+/*
+ * ta_interpreter_resolve_event turns the name of the event just taken into
+ * atoms in it->event_atoms, once, so that selection compares atoms and never
+ * walks the trie per descriptor (names.md, "Matching without interning"). It
+ * is the one place that knows where the name's bytes come from. Until the
+ * name area (Phase 4.2) they do not exist: an event carries a trie ID, so the
+ * name is rendered to dotted text in the render arena and resolved back with
+ * ta_name_resolve. 4.2 swaps that source for the envelope's own bytes and
+ * nothing else changes.
+ *
+ * Needs: the interpreter initialised (event_atoms has eventNameDepth room)
+ * and no live data in system->render, which holds nothing across a take
+ * (ta_unit_reserve resets it for each unit). Guarantees: it never interns,
+ * never grows an atom table or the trie and never allocates beyond the
+ * render arena, which it resets before it returns, so it may run inside a
+ * macrostep. The dotted text has call lifetime. Failure: none is reported.
+ * If the text does not fit renderBytes, or the name cannot be resolved, the
+ * event has zero atoms and matches no descriptor, as if it were unnamed. It
+ * is not given back as TA_ERR_NOMEM: a name that never fits would be taken
+ * again forever and stall the actor.
+ */
+static void ta_interpreter_resolve_event(ta_interpreter *it, const ta_event *event) {
+    ta_system *system = it->system;
+    it->event_atom_count = 0;
+    uint32_t needed = 0;
+    (void)ta_event_name_format(system, &(ta_event_name_format_params){ .name = event->name, .needed = &needed });
+    if (needed == 0) {
+        return; /* not a name of this system */
+    }
+    char *text = ta_arena_alloc(&system->render, needed, 1u);
+    if (text != NULL &&
+        ta_event_name_format(system, &(ta_event_name_format_params){ .name = event->name, .buffer = text,
+                                                                     .capacity = needed, .needed = &needed }) == TA_OK) {
+        uint32_t count = 0;
+        if (ta_name_resolve(&(ta_name_resolve_params){ .atoms = &system->atoms, .name = { .ptr = text, .len = needed - 1u },
+                                                       .out = it->event_atoms, .capacity = it->event_atom_capacity,
+                                                       .count = &count }) == TA_OK) {
+            it->event_atom_count = count;
+        }
+    }
+    ta_arena_reset(&system->render);
+}
+
 /* Selects the optimal enabled transition set; event is null for eventless selection. */
 static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event) {
     const ta_definition *definition = it->definition;
     it->enabled_count = 0;
     it->condition_count = 0;
-    ta_event_atoms atoms = { .atoms = it->event_atoms };
     if (event != NULL) {
-        atoms.count = ta_trie_segments(&definition->system->event_names.trie, event->name, it->event_atoms);
-        it->event_atom_count = atoms.count;
+        ta_interpreter_resolve_event(it, event);
     }
+    ta_event_atoms atoms = { .atoms = it->event_atoms, .count = it->event_atom_count };
     for (ta_state_id atomic = 0; atomic < definition->state_count; atomic += 1) {
         if (!ta_bits_get(it->active, atomic) || !ta_definition_is_atomic(definition, atomic)) {
             continue;
