@@ -114,7 +114,7 @@ struct tah_sched {
      * in a replay's own calls, which no turn limit bounds. */
     uint32_t turn_left;
     bool turn_bounded;
-    /* Count of entries the last turn's first phase popped from the runnable queue. It is bounded by the resume
+    /* Count of entries the most recent turn's first phase popped from the runnable queue. It is bounded by the resume
      * limit, so tests can check that a turn's work does not grow with the queue's length. */
     uint32_t turn_visited;
     uint32_t known;         /* entries not in state NONE */

@@ -67,7 +67,7 @@ typedef struct {
     tah_ring_chunk *head;
     tah_ring_chunk *tail;
     tah_ring_chunk *spare; /* a list through `next`, at most TAH_RING_SPARES long */
-    uint32_t spares;
+    uint32_t spares;     /* chunks in the spare list */
     uint32_t head_index; /* the first element's index in the head chunk */
     uint32_t tail_index; /* elements used in the tail chunk */
     uint32_t count;
