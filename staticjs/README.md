@@ -37,6 +37,17 @@ too; and 100,000 doubles must format as `String(x)` does.
   `map` or `reduce` is a frame on the evaluator's own stack, not a C call.
 - **No C library, no I/O.** Memory comes from the embedder's allocator.
   Every unbounded construct has a limit in `sjs_limits`.
+- **A value nothing else holds is updated in place.** Values are counted
+  references without cycles, so a value with one reference is visible only
+  to what holds it. The last read of a local moves its value instead of
+  copying it, `reduce` moves its accumulator into the callback and back, a
+  literal that begins with a spread (`{...acc, [k]: v}`, `[...xs, x]`)
+  takes over a source nothing else holds, and `concat`, `with` and
+  `toSorted` take over such a receiver. A closure, a global, a module's
+  export or a value a native keeps is always another holder, so it is
+  copied. No program can tell the difference, and fuel can only go down:
+  `{...acc, [k]: v}` in a `reduce` no longer copies the accumulator at each
+  step.
 
 ## Push and stream
 
@@ -219,9 +230,9 @@ export.
 ## Status
 
 The first stage of the proposal: the language. Not done yet, in the
-proposal's order: the data model (`tinyactors-staticjs`); updating a value in
-place when it has one reference; a hash index for large objects and sets;
-a static cost estimate; `Map`; number literals beyond the fast path.
+proposal's order: the data model (`tinyactors-staticjs`); a hash index for
+large objects and sets; a static cost estimate; `Map`; number literals
+beyond the fast path.
 
 ## Tasks
 

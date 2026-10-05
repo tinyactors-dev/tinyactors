@@ -46,6 +46,21 @@
  * needs no work of its own: a body's const cannot share a parameter's name
  * (declared twice), and a closure in a default captures parameters by
  * value, which every binding being const makes the same as a reference.
+ *
+ * The last read of a slot moves its value instead of copying it: a LOCAL
+ * becomes a TAKE_LOCAL, which leaves the slot undefined, so that a value the
+ * slot alone held reaches what reads it with one reference and can be
+ * updated in place (sjs_value_unique). Every jump goes forward and a
+ * function's body runs at most once per frame, so on any path through a
+ * frame instructions run in increasing pc order: a read with no access to
+ * its slot at a later pc is the last on every path. The compiler keeps, per
+ * slot of each open function, the pc of its latest LOCAL (c->last_reads),
+ * and turns it into a TAKE_LOCAL when nothing can follow it: when the block
+ * whose slot it is ends (the slot is written before it is read again) and
+ * when the function ends. A read that does not copy the value out cancels
+ * the move: a closure capturing the slot (its CLOSURE runs after every LOCAL
+ * so far), a parameter's DEFAULT_LOCAL, and a write. A module's exports are
+ * reads at its end, so a const it exports is never moved before then.
  */
 #include "internal.h"
 
@@ -98,6 +113,7 @@ typedef struct {
     uint32_t early_read_length;
     sjs_position early_read_at;
     uint8_t block;         /* SC_FUNCTION: its body is a block */
+    uint32_t reads_base;   /* SC_FUNCTION: its slots' entries in c->last_reads */
     sjs_position at;
     name_index names;      /* its bindings, by name */
     name_index read;       /* names read in it, or in a function it holds, that it did not bind then */
@@ -200,6 +216,9 @@ struct sjs_compiler {
     sjs_buf bindings;
     sjs_buf names;
     sjs_buf pending_captures;
+    /* For each slot of each open function, from its reads_base: the pc of
+     * the LOCAL that is its last read so far, plus one; 0 for none. */
+    sjs_buf last_reads;
     /* Constants already made: numbers by their bits, strings by their text. */
     name_index number_index;
     name_index string_index;
@@ -500,6 +519,7 @@ static sjs_result open_function_scope(sjs_compiler *c, sjs_position at) {
     s.function_scope = scope_count(c);
     s.function = SJS_BUF_COUNT(c->functions, sjs_function_info);
     s.bindings_base = SJS_BUF_COUNT(c->bindings, binding);
+    s.reads_base = SJS_BUF_COUNT(c->last_reads, uint32_t);
     s.at = at;
     s.names = index_over(&c->names);
     s.read = index_over(&c->names);
@@ -524,12 +544,71 @@ static sjs_result open_block_scope(sjs_compiler *c, sjs_position at) {
     return r == SJS_OK ? SJS_OK : fail_result(c, r, at);
 }
 
+/* ------------------------------------------------------------------------
+ * Last reads: the last LOCAL of a slot becomes a TAKE_LOCAL, which moves
+ * the value out instead of copying it (see the header).
+ */
+
+/* Room in c->last_reads for the current function's slots below `slots`. */
+static sjs_result reserve_reads(sjs_compiler *c, uint32_t slots, sjs_position at) {
+    uint32_t want = function_scope(c)->reads_base + slots;
+    uint32_t have = SJS_BUF_COUNT(c->last_reads, uint32_t);
+    if (want <= have) return SJS_OK;
+    uint32_t extra = (want - have) * (uint32_t)sizeof(uint32_t);
+    sjs_result r = sjs_buf_reserve(alloc(c), &c->last_reads, extra);
+    if (r != SJS_OK) return fail_result(c, r, at);
+    sjs_zero(c->last_reads.ptr + c->last_reads.length, extra);
+    c->last_reads.length += extra;
+    return SJS_OK;
+}
+
+static uint32_t *last_read(sjs_compiler *c, uint32_t function_scope_index, uint32_t slot) {
+    return &SJS_BUF_AT(c->last_reads, uint32_t, SJS_BUF_AT(c->scopes, scope, function_scope_index).reads_base + slot);
+}
+
+/* Read a slot of the current function: a LOCAL, the slot's last read so far. */
+static sjs_result read_slot(sjs_compiler *c, uint32_t slot, sjs_position at) {
+    if (op16(c, ins(SJS_OP_LOCAL, slot, at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    *last_read(c, current(c)->function_scope, slot) = c->last_op + 1u;
+    return SJS_OK;
+}
+
+/* Something else reads the slot after its last LOCAL so far (a closure
+ * capturing it, a DEFAULT_LOCAL), or writes it: that LOCAL stays a copy. */
+static void forget_read(sjs_compiler *c, uint32_t function_scope_index, uint32_t slot) {
+    *last_read(c, function_scope_index, slot) = 0;
+}
+
+/* Slots of one function, from `from` up to `to`. */
+typedef struct {
+    uint32_t function_scope;
+    uint32_t from;
+    uint32_t to;
+} slot_range;
+
+/* The slots are not read again: each one's last LOCAL moves its value. */
+static void settle_reads(sjs_compiler *c, slot_range range) {
+    for (uint32_t slot = range.from; slot < range.to; slot++) {
+        uint32_t *entry = last_read(c, range.function_scope, slot);
+        if (*entry != 0 && c->code.ptr[*entry - 1u] == SJS_OP_LOCAL) c->code.ptr[*entry - 1u] = SJS_OP_TAKE_LOCAL;
+        *entry = 0;
+    }
+}
+
+/* SET_LOCAL or PATTERN_COMPUTED: a write of a slot of the current function. */
+static sjs_result write_slot(sjs_compiler *c, instruction i) {
+    forget_read(c, current(c)->function_scope, i.operand);
+    return op16(c, i);
+}
+
 /* The block ends: its names go, and its slots are free for what follows.
  * The names read in it stay noted in the scopes around it, as a function's
  * do. No pending capture refers to its bindings: a capture is taken by a
  * function inside the block, which has ended before it. */
 static void close_block_scope(sjs_compiler *c) {
     scope s = *current(c);
+    /* Its slots are written before they are read again. */
+    settle_reads(c, (slot_range){ s.function_scope, s.slot_base, function_scope(c)->slots });
     c->bindings.length = s.bindings_base * (uint32_t)sizeof(binding);
     index_free(c, &current(c)->names);
     index_free(c, &current(c)->read);
@@ -625,7 +704,7 @@ static sjs_result new_slot(sjs_compiler *c, sjs_position at, uint32_t *slot) {
     if (s->slots == UINT16_MAX) return compile_fail(c, at, (sjs_problem){ SJS_ERROR_LIMIT, "a function has more than 65535 names" });
     *slot = s->slots++;
     if (s->slots > s->slot_high) s->slot_high = s->slots;
-    return SJS_OK;
+    return reserve_reads(c, s->slots, at);
 }
 
 /* `e->text` was read in scope `scope_index`, or a function it holds, and
@@ -670,10 +749,12 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
         if (index_find(&SJS_BUF_AT(c->scopes, scope, s).names, e->text, &i)) {
             binding *b = &SJS_BUF_AT(c->bindings, binding, i);
             if (b->kind == B_CONSTANT) return op32(c, ins(SJS_OP_CONSTANT, b->index, e->at));
-            if (SJS_BUF_AT(c->scopes, scope, s).function_scope == current(c)->function_scope) {
-                return op16(c, ins(SJS_OP_LOCAL, b->index, e->at));
-            }
-            /* Captured: through every function between. */
+            uint32_t owner = SJS_BUF_AT(c->scopes, scope, s).function_scope;
+            if (owner == current(c)->function_scope) return read_slot(c, b->index, e->at);
+            /* Captured: through every function between. The CLOSURE that
+             * makes the outermost of them reads the slot, after any LOCAL of
+             * it emitted so far, as its function emits nothing until then. */
+            forget_read(c, owner, b->index);
             uint16_t from_capture = 0;
             uint32_t index = b->index;
             for (uint32_t t = s + 1; t <= inner; t++) {
@@ -809,13 +890,16 @@ static sjs_result begin_function(sjs_compiler *c, const sjs_event *e) {
     s->slots = (uint16_t)e->count;
     s->slot_high = (uint16_t)e->count;
     s->params_open = 1;
-    return SJS_OK;
+    return reserve_reads(c, e->count, at);
 }
 
 /* Close the innermost function: its captures go to the program's table. */
 static sjs_result close_function_scope(sjs_compiler *c, sjs_position at) {
     scope s = *current(c);
     uint32_t scope_index = scope_count(c) - 1;
+    /* The function's code is complete: each slot's last LOCAL moves. */
+    settle_reads(c, (slot_range){ scope_index, 0, s.slot_high });
+    c->last_reads.length = s.reads_base * (uint32_t)sizeof(uint32_t);
     sjs_function_info *info = &SJS_BUF_AT(c->functions, sjs_function_info, s.function);
     info->params = s.params;
     info->locals = s.slot_high;
@@ -913,6 +997,11 @@ static sjs_result default_begin(sjs_compiler *c, const sjs_event *e) {
     if (c->param_pending) {
         c->param_pending = false;
         k.param = c->param_index + 1u;
+        /* A guard, unreachable today: nothing reads a parameter before its
+         * default, as a read there of the parameter itself, or of a later
+         * one, is refused (patterns.spec, "before its declaration"). It
+         * keeps a LOCAL of the slot from moving should that change. */
+        forget_read(c, current(c)->function_scope, c->param_index);
         if (op16(c, ins(SJS_OP_DEFAULT_LOCAL, c->param_index, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
         k.jump = here(c);
         if (u32(c, 0) != SJS_OK) return SJS_ERR_PROGRAM;
@@ -925,7 +1014,7 @@ static sjs_result default_begin(sjs_compiler *c, const sjs_event *e) {
 static sjs_result default_end(sjs_compiler *c, const sjs_event *e) {
     if (expect_construct(c, K_DEFAULT, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
     construct k = pop_construct(c);
-    if (k.param != 0 && op16(c, ins(SJS_OP_SET_LOCAL, k.param - 1u, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (k.param != 0 && write_slot(c, ins(SJS_OP_SET_LOCAL, k.param - 1u, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
     land(c, k.jump);
     if (k.param != 0) {
         /* The parameter's pattern follows. */
@@ -939,7 +1028,7 @@ static sjs_result default_end(sjs_compiler *c, const sjs_event *e) {
 static sjs_result take_param(sjs_compiler *c, sjs_position at) {
     if (!c->param_pending) return SJS_OK;
     c->param_pending = false;
-    return op16(c, ins(SJS_OP_LOCAL, c->param_index, at));
+    return read_slot(c, c->param_index, at);
 }
 
 static pattern_frame *top_pattern(sjs_compiler *c) {
@@ -988,7 +1077,7 @@ static sjs_result pattern_computed_key(sjs_compiler *c, const sjs_event *e) {
     if (new_slot(c, e->at, &slot) != SJS_OK) return SJS_ERR_PROGRAM;
     sjs_result r = buf_add(c, &c->pattern_slots, bytes_of(&slot, sizeof slot));
     if (r != SJS_OK) return fail_result(c, r, e->at);
-    return op16(c, ins(SJS_OP_PATTERN_COMPUTED, slot, e->at));
+    return write_slot(c, ins(SJS_OP_PATTERN_COMPUTED, slot, e->at));
 }
 
 /* The static keys of the innermost object pattern, as one array constant. */
@@ -1017,7 +1106,7 @@ static sjs_result pattern_rest(sjs_compiler *c, const sjs_event *e) {
     uint32_t computed = SJS_BUF_COUNT(c->pattern_slots, uint32_t) - frame.slots_base;
     if (computed > UINT16_MAX) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_LIMIT, "a pattern has too many computed keys" });
     for (uint32_t i = 0; i < computed; i++) {
-        if (op16(c, ins(SJS_OP_LOCAL, SJS_BUF_AT(c->pattern_slots, uint32_t, frame.slots_base + i), e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (read_slot(c, SJS_BUF_AT(c->pattern_slots, uint32_t, frame.slots_base + i), e->at) != SJS_OK) return SJS_ERR_PROGRAM;
     }
     uint32_t keys;
     sjs_result r = static_keys(c, &frame, &keys);
@@ -1039,7 +1128,7 @@ static sjs_result pattern_event(sjs_compiler *c, const sjs_event *e) {
         }
         uint32_t slot;
         if (new_slot(c, e->at, &slot) != SJS_OK) return SJS_ERR_PROGRAM;
-        if (op16(c, ins(SJS_OP_SET_LOCAL, slot, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (write_slot(c, ins(SJS_OP_SET_LOCAL, slot, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
         return declare(c, e, (target){ B_LOCAL, slot });
     }
     case SJS_EV_ARRAY_PATTERN_BEGIN:
@@ -1289,7 +1378,7 @@ static sjs_result export_default(sjs_compiler *c, const sjs_event *e) {
     x.kind = B_LOCAL;
     x.at = e->at;
     if (new_slot(c, e->at, &x.index) != SJS_OK) return SJS_ERR_PROGRAM;
-    if (op16(c, ins(SJS_OP_SET_LOCAL, x.index, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (write_slot(c, ins(SJS_OP_SET_LOCAL, x.index, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
     return add_export(c, &x, SJS_STR("default"));
 }
 
@@ -1399,7 +1488,7 @@ static sjs_result export_value(sjs_compiler *c, const sort_item *item, sjs_posit
     }
     const export_entry *x = export_at(c, item->index);
     if (x->kind == B_CONSTANT) return op32(c, ins(SJS_OP_CONSTANT, x->index, at));
-    return op16(c, ins(SJS_OP_LOCAL, x->index, at));
+    return read_slot(c, x->index, at);
 }
 
 /* A module's value: its namespace. Syntax errors come first, as JavaScript
@@ -1949,7 +2038,7 @@ void sjs_compiler_destroy(sjs_compiler *compiler) {
     name_index *indices[] = { &c->number_index, &c->string_index, &c->global_index, &c->export_names, &c->star_modules, &c->namespaces };
     for (uint32_t i = 0; i < sizeof indices / sizeof indices[0]; i++) index_free(c, indices[i]);
     sjs_buf *bufs[] = { &c->code, &c->numbers, &c->constants, &c->functions, &c->captures, &c->lines,
-                        &c->scopes, &c->bindings, &c->names, &c->pending_captures, &c->string_text, &c->global_text,
+                        &c->scopes, &c->bindings, &c->names, &c->pending_captures, &c->last_reads, &c->string_text, &c->global_text,
                         &c->constructs, &c->jumps, &c->patterns, &c->pattern_keys, &c->pattern_slots, &c->exports,
                         &c->stars, &c->sorting };
     for (uint32_t i = 0; i < sizeof bufs / sizeof bufs[0]; i++) sjs_buf_free(a, bufs[i]);

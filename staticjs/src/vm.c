@@ -472,7 +472,9 @@ static sjs_result object_put(sjs_vm *vm, sjs_value *object, sjs_put property) {
     return SJS_OK;
 }
 
-static sjs_result object_spread(sjs_vm *vm, sjs_value *object, sjs_value source) {
+/* Put each own enumerable property of `source` into the object being built
+ * at `*object`. Borrows `source`. */
+static sjs_result spread_properties(sjs_vm *vm, sjs_value *object, sjs_value source) {
     if (source.kind == SJS_OBJECT) {
         const sjs_object *s = SJS_AS_OBJECT(source);
         for (uint32_t i = 0; i < s->count; i++) {
@@ -498,6 +500,54 @@ static sjs_result object_spread(sjs_vm *vm, sjs_value *object, sjs_value source)
     /* undefined, null, numbers, booleans, sets and functions have no own
      * enumerable properties. */
     return SJS_OK;
+}
+
+/* An empty object being built gets the properties of the object `source`
+ * in one step: its keys are distinct and in order already, so the entries
+ * go in as they are. Borrows `source`. */
+static sjs_result copy_properties(sjs_vm *vm, sjs_value *object, sjs_value source) {
+    const sjs_object *s = SJS_AS_OBJECT(source);
+    sjs_object *o = SJS_AS_OBJECT(*object);
+    sjs_result r = sjs_object_grow(vm->context, &o, s->count);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    object->as.heap = &o->h;
+    for (uint32_t i = 0; i < s->count; i++) {
+        sjs_retain(sjs_heap_value(SJS_STRING, &s->entries[i].key->h));
+        sjs_retain(s->entries[i].value);
+        o->entries[i] = s->entries[i];
+    }
+    o->count = s->count;
+    vm->fuel_used += s->count / 8u;
+    return SJS_OK;
+}
+
+/*
+ * `{...source}` in the object literal being built at `*object`, which
+ * nothing else holds. Takes over the reference to `source`. While the
+ * literal is still empty, an object nothing else holds becomes the literal
+ * itself (sjs_value_unique says why no program can tell), and the literal's
+ * later properties update it in place, as a put does: a key it has keeps its
+ * place, as in JavaScript, whose order the source has already. An object
+ * something else holds is copied in one step. Anything else is spread
+ * property by property. Neither the takeover nor the copy goes through
+ * object_put's check for __proto__: no object holds that key, as every
+ * way to make one refuses it (the parser, object_put, sjs_object_put and
+ * Object.fromEntries), and a module's namespace with it fails to compile.
+ */
+static sjs_result object_spread(sjs_vm *vm, sjs_value *object, sjs_value source) {
+    sjs_result r;
+    if (source.kind == SJS_OBJECT && SJS_AS_OBJECT(*object)->count == 0) {
+        if (sjs_value_unique(source)) {
+            sjs_release(vm->context, *object);
+            *object = source;
+            return SJS_OK;
+        }
+        r = copy_properties(vm, object, source);
+    } else {
+        r = spread_properties(vm, object, source);
+    }
+    sjs_vm_release(vm, source);
+    return r;
 }
 
 static sjs_result new_set(sjs_vm *vm, sjs_values args, sjs_value *out) {
@@ -712,6 +762,7 @@ static bool call(sjs_vm *vm, uint32_t argc, uint8_t flags) {
         sjs_builtin_id id = (sjs_builtin_id)f.boolean;
         if (sjs_builtin_loops(id)) return enter_loop(vm, id, (call_site){ callee, argc, bottom });
         leaf.receiver = vm->stack[callee - 1];
+        leaf.receiver_slot = &vm->stack[callee - 1];
         if (sjs_builtin_call(vm, id, &leaf) != SJS_OK) {
             sjs_vm_release(vm, leaf.result);
             return false;
@@ -912,7 +963,11 @@ static void jump_to(vm_frame *f, const uint8_t *code, uint32_t pc) {
     f->pc = sjs_read32(code + pc);
 }
 
-static void execute(sjs_vm *vm, vm_frame *f) {
+/* Inlined into sjs_vm_run's loop, its one caller, always: clang -O2 does
+ * that by itself only while the function stays under its size threshold,
+ * and a call per instruction costs 5 to 10% of every evaluation
+ * (eval.array.*, vm.fuel.*) when one more case tips it over. */
+__attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *f) {
     const uint8_t *code = f->program->code;
     uint32_t pc = f->pc;
     vm->op_pc = pc;
@@ -947,6 +1002,15 @@ static void execute(sjs_vm *vm, vm_frame *f) {
         f->pc = pc + 2;
         sjs_value v = vm->stack[f->base + sjs_read16(code + pc)];
         sjs_retain(v);
+        sjs_vm_push(vm, v);
+        return;
+    }
+    case SJS_OP_TAKE_LOCAL: {
+        /* The slot's last read (compiler.c): its reference moves to the stack. */
+        f->pc = pc + 2;
+        sjs_value *slot = &vm->stack[f->base + sjs_read16(code + pc)];
+        sjs_value v = *slot;
+        *slot = sjs_undefined();
         sjs_vm_push(vm, v);
         return;
     }
@@ -1127,7 +1191,15 @@ static void execute(sjs_vm *vm, vm_frame *f) {
     case SJS_OP_ARRAY_SPREAD: {
         f->pc = pc;
         sjs_value v = sjs_vm_pop(vm);
-        spread_into(vm, stack_top(vm), v);
+        sjs_value *array = stack_top(vm);
+        /* The literal is still empty and nothing else holds the array: the
+         * array becomes the literal, which appends what follows in place. */
+        if (v.kind == SJS_ARRAY && SJS_AS_ARRAY(*array)->length == 0 && sjs_value_unique(v)) {
+            sjs_release(vm->context, *array);
+            *array = v;
+            return;
+        }
+        spread_into(vm, array, v);
         sjs_vm_release(vm, v);
         return;
     }
@@ -1152,7 +1224,6 @@ static void execute(sjs_vm *vm, vm_frame *f) {
         f->pc = pc;
         sjs_value v = sjs_vm_pop(vm);
         object_spread(vm, stack_top(vm), v);
-        sjs_vm_release(vm, v);
         return;
     }
     case SJS_OP_TO_KEY: {

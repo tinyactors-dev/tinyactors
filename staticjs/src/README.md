@@ -11,7 +11,8 @@ Implementation modules. Headers here are private; the public API is
 - `parser.c`    tokens to syntax events, by operator precedence over explicit stacks;
                 statements by a frame per block and per if (an else-if chain is one frame)
 - `compiler.c`  syntax events to bytecode, as each arrives; scopes and captures;
-                block scopes inside function scopes, their slots reused
+                block scopes inside function scopes, their slots reused; the last
+                read of each slot moves its value (TAKE_LOCAL)
 - `vm.h`        the evaluator's state, shared with the built-ins
 - `vm.c`        the evaluator: one instruction per unit of fuel
 - `builtins.c`  built-in functions and methods; the ones that call back are frames

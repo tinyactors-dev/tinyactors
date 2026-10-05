@@ -11,9 +11,11 @@
  * A case is named group.subject[.variant] and has a unit: byte (MB/s), eval
  * (M eval/s), element (M elem/s) or op (M op/s). Sizes: L {1000, 10000,
  * 100000} for linear cases; Q {100, 1000, 10000} for cases that are
- * quadratic today, as objects and sets are searched in order; C {100, 300,
- * 1000} for eval.object.spread-reduce, which is cubic today (each spread
- * copies an object whose every put searches it). Inputs are deterministic
+ * quadratic today, as objects and sets are searched in order, or were at
+ * the commit bench-compare runs against; C {100, 300, 1000} for
+ * eval.object.spread-reduce, quadratic now that the accumulator is updated
+ * in place (each put searches the object in order) and cubic before (each
+ * spread copied it). Inputs are deterministic
  * (xorshift64 from 0x9E3779B97F4A7C15), built through the public API:
  *
  *   xs    the numbers 0 to n-1, shuffled, times 0.5
@@ -42,8 +44,10 @@
  *
  * eval (unit element): eval.array.map, .filter, .reduce, .pipeline,
  * .toSorted, .toSorted.rows, eval.string.join (L); eval.object.spread-reduce
- * (C); eval.object.fromEntries, eval.set.new, .has, .union, .intersection,
- * .difference (Q).
+ * (C); eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
+ * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
+ * place and quadratic before, eval.object.fromEntries, eval.set.new, .has,
+ * .union, .intersection, .difference (Q).
  *
  * write (unit byte): write.rows (n {1000, 10000}, 64 KiB buffer),
  * write.rows.buf64 (10000 rows, a 64-byte buffer), write.numbers (100000
@@ -361,6 +365,14 @@ static const bench_case cases[] = {
       .expect = "{\"r000000\":0,\"r000001\":3.7,\"r000002\":7.4,\"r000003\":11.1,\"r000004\":14.8,\"r000005\":18.5,"
                 "\"r000006\":22.2,\"r000007\":25.9,\"r000008\":29.6,\"r000009\":33.3}",
       .check = CHECK_OBJECT_N },
+    { .name = "eval.array.spread-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_Q, .smoke = 10,
+      .source = "rows.reduce((acc, r) => [...acc, r.id], [])", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = "[\"r000000\",\"r000001\",\"r000002\",\"r000003\",\"r000004\",\"r000005\",\"r000006\",\"r000007\","
+                "\"r000008\",\"r000009\"]",
+      .check = CHECK_ARRAY_N },
+    { .name = "eval.array.concat-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_Q, .smoke = 10,
+      .source = "rows.reduce((acc, r) => acc.concat([r.kwh]), [])", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = "[0,3.7,7.4,11.1,14.8,18.5,22.2,25.9,29.6,33.3]", .check = CHECK_ARRAY_N },
     { .name = "eval.object.fromEntries", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_Q, .smoke = 10,
       .source = "Object.fromEntries(rows.map(r => [r.id, r.kwh]))", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "{\"r000000\":0,\"r000001\":3.7,\"r000002\":7.4,\"r000003\":11.1,\"r000004\":14.8,\"r000005\":18.5,"

@@ -259,7 +259,7 @@ SJS_API sjs_result sjs_object_get(sjs_value object, sjs_str key, sjs_value *out)
  */
 typedef struct {
     sjs_context *context;
-    const sjs_value *arguments; /* borrowed */
+    const sjs_value *arguments; /* borrowed: never to be added to, even one with a single reference */
     uint32_t count;
     sjs_value result;           /* set by the native; the program takes its reference */
     sjs_str fault;              /* set by a native that returns SJS_ERR_PROGRAM */
