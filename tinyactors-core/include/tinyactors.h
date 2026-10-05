@@ -1430,6 +1430,12 @@ typedef struct {
     ta_trace_parent trace;
     /* The report's logical time, as ta_actor_deliver_params.time (ADR 0094). */
     ta_time time;
+    /*
+     * The token ta_run() reports an EVENT or DONE report by (a COMPLETED or
+     * REFUSED notice), or null. An ERROR report is not queued as an input
+     * and has no token: *input is left alone.
+     */
+    TA_OUT TA_OPTIONAL uint64_t *input;
     union {
         TA_WHEN(TA_INVOKE_REPORT_EVENT) TA_IN const ta_event *event;
         TA_WHEN(TA_INVOKE_REPORT_DONE) TA_IN TA_OPTIONAL const ta_value *done_data;

@@ -261,8 +261,13 @@ static uint32_t ta_waiting_find(const ta_envelopes *envelopes, const ta_address 
 }
 
 /* ta_waiting_insert: see envelope.h. */
-ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, ta_address *address, bool *first) {
+ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, const ta_waiting_put *put) {
     ta_envelope *envelope = ta_envelope_at(envelopes, index);
+    if (put == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_address *address = put->address;
+    bool *first = put->first;
     if (envelope == NULL || address == NULL || first == NULL || envelope->state == TA_ENVELOPE_FREE ||
         envelope->state == TA_ENVELOPE_WAITING) {
         return TA_ERR_INVALID;

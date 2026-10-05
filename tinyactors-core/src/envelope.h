@@ -305,15 +305,25 @@ void ta_envelopes_run_splice(ta_envelopes *envelopes, ta_ilist *outgoing);
 const ta_ilink *ta_envelopes_link(const ta_envelopes *envelopes);
 
 /*
+ * ta_waiting_put is what ta_waiting_insert needs besides the envelope: the
+ * address it waits for (a block of the caller, which only lends it for the
+ * call) and where to say whether the envelope began the list.
+ */
+typedef struct {
+    ta_address *address;
+    bool *first;
+} ta_waiting_put;
+
+/*
  * ta_waiting_insert puts the made envelope `index` at the end of the waiting
- * list of `address`, marks it WAITING and gives it its own reference to the
- * address. *first is set to true when the list was empty, which is when the
- * owner reports that a load is needed. It never allocates and, after a
+ * list of `put->address`, marks it WAITING and gives it its own reference to
+ * the address. *put->first is set to true when the list was empty, which is
+ * when the owner reports that a load is needed. It never allocates and, after a
  * refill, cannot fail (I4); TA_ERR_INVALID is a caller bug (a null address or
  * an index that is not a made envelope). Nothing changes on failure. O(1)
  * expected.
  */
-ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, ta_address *address, bool *first);
+ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, const ta_waiting_put *put);
 
 /*
  * ta_waiting_take_list removes the whole waiting list of `address` and

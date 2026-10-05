@@ -8354,15 +8354,25 @@ TA_PRIVATE void ta_envelopes_run_splice(ta_envelopes *envelopes, ta_ilist *outgo
 TA_PRIVATE const ta_ilink *ta_envelopes_link(const ta_envelopes *envelopes);
 
 /*
+ * ta_waiting_put is what ta_waiting_insert needs besides the envelope: the
+ * address it waits for (a block of the caller, which only lends it for the
+ * call) and where to say whether the envelope began the list.
+ */
+typedef struct {
+    ta_address *address;
+    bool *first;
+} ta_waiting_put;
+
+/*
  * ta_waiting_insert puts the made envelope `index` at the end of the waiting
- * list of `address`, marks it WAITING and gives it its own reference to the
- * address. *first is set to true when the list was empty, which is when the
- * owner reports that a load is needed. It never allocates and, after a
+ * list of `put->address`, marks it WAITING and gives it its own reference to
+ * the address. *put->first is set to true when the list was empty, which is
+ * when the owner reports that a load is needed. It never allocates and, after a
  * refill, cannot fail (I4); TA_ERR_INVALID is a caller bug (a null address or
  * an index that is not a made envelope). Nothing changes on failure. O(1)
  * expected.
  */
-TA_PRIVATE ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, ta_address *address, bool *first);
+TA_PRIVATE ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, const ta_waiting_put *put);
 
 /*
  * ta_waiting_take_list removes the whole waiting list of `address` and
@@ -8514,6 +8524,12 @@ TA_PRIVATE void ta_runner_destroy(ta_runner *runner);
  * safe point before the step that will call ta_run_start, so that ta_run_start
  * cannot fail: it answers TA_ERR_NOMEM, with nothing changed, when the
  * allocator refuses. It allocates only while the pool needs a page.
+ *
+ * Known exception to "allocation only at safe points": ta_communication_error
+ * (a failed delayed send, a router callback) can reach it from inside another
+ * actor's macrostep. The path allocated before this unit too (the queue growth
+ * of ta_raise_error); it goes with the other mid-macrostep allocations in
+ * step 4.4, when the cell is reserved at ta_run's take.
  */
 TA_PRIVATE ta_result ta_run_reserve_start(ta_system *system);
 
@@ -18428,8 +18444,13 @@ static uint32_t ta_waiting_find(const ta_envelopes *envelopes, const ta_address 
 }
 
 /* ta_waiting_insert: see envelope.h. */
-TA_PRIVATE ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, ta_address *address, bool *first) {
+TA_PRIVATE ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, const ta_waiting_put *put) {
     ta_envelope *envelope = ta_envelope_at(envelopes, index);
+    if (put == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_address *address = put->address;
+    bool *first = put->first;
     if (envelope == NULL || address == NULL || first == NULL || envelope->state == TA_ENVELOPE_FREE ||
         envelope->state == TA_ENVELOPE_WAITING) {
         return TA_ERR_INVALID;
@@ -18971,20 +18992,40 @@ static void ta_run_free_lent(ta_system *system) {
  * answer. A macrostep that ran its microstep limit is abandoned here, as
  * ta_actor_abandon would (ADR 0082, ADR 0099 section 7): the session keeps the
  * configuration after its last completed microstep and the next input runs.
+ *
+ * The abandon allocates (it builds an interpreter on scratch memory), so it can
+ * fail with TA_ERR_NOMEM. Then nothing has changed: the session is still in its
+ * macrostep, stopped between two microsteps, and the input stays in the slot.
+ * The result is the abandon's, *ended is false, and the caller stops ta_run;
+ * the next call runs the session again, reaches the limit at once and retries
+ * the abandon. (A bootstrap cannot be here: the limit is only checked once
+ * the session is bootstrapped.)
+ *
+ * In practice the abandon rebuilds the interpreter in the scratch arena that
+ * ta_interpreter_run_input has just sized for the same session, so it takes no
+ * new memory and a test allocator cannot refuse it; the check is here so that
+ * a future change to the arena cannot turn a refusal into a stuck session.
  */
-static ta_input_status ta_run_end_status(ta_system *system, ta_actor *actor, ta_step_status step) {
+static ta_result ta_run_end_status(ta_system *system, ta_actor *actor, ta_step_status step, ta_input_status *status) {
     switch (step) {
     case TA_STEP_DONE:
-        return TA_INPUT_DONE;
-    case TA_STEP_RUNAWAY:
-        /* A bootstrap that has not completed its first microstep cannot be abandoned (ADR 0082): it ends as it is. */
-        (void)ta_interpreter_abandon(system, actor);
-        return TA_INPUT_RUNAWAY;
+        *status = TA_INPUT_DONE;
+        break;
+    case TA_STEP_RUNAWAY: {
+        ta_result result = ta_interpreter_abandon(system, actor);
+        if (result != TA_OK) {
+            return result;
+        }
+        *status = TA_INPUT_RUNAWAY;
+        break;
+    }
     case TA_STEP_PAUSED:
     case TA_STEP_STABLE:
     default:
-        return TA_INPUT_STABLE;
+        *status = TA_INPUT_STABLE;
+        break;
     }
+    return TA_OK;
 }
 
 /* ------------------------------------------------------------------------
@@ -19080,7 +19121,13 @@ TA_API ta_result ta_run(ta_system *system, const ta_run_params *params) {
             break;
         }
         bool lend = params->report_taken && runner->slot.envelope != 0;
-        ta_run_complete(system, ta_run_end_status(system, actor, stepped.status), stepped.ignored, &out, lend);
+        ta_input_status ended = TA_INPUT_STABLE;
+        result = ta_run_end_status(system, actor, stepped.status, &ended);
+        if (result != TA_OK) {
+            status = TA_RUN_PAUSED; /* the input stays in the slot; the next call retries the abandon */
+            break;
+        }
+        ta_run_complete(system, ended, stepped.ignored, &out, lend);
     }
     *params->status = status;
     *params->notice_count = out.count;
@@ -22572,7 +22619,8 @@ TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_repor
             /* Core fills the origin of a service's own event, whatever the host passed (ADR 0068). */
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
-                                                                  .trace = params->trace, .time = params->time });
+                                                                  .trace = params->trace, .time = params->time,
+                                                                  .input = params->input });
         case TA_INVOKE_REPORT_DONE: {
             ta_result result = ta_invoke_done_name(system, params->invoke_id, &event.name);
             if (result != TA_OK) {
@@ -22583,7 +22631,8 @@ TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_repor
             }
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
-                                                                  .trace = params->trace, .time = params->time });
+                                                                  .trace = params->trace, .time = params->time,
+                                                                  .input = params->input });
         }
         case TA_INVOKE_REPORT_ERROR:
             return ta_invoke_error_report(system, actor, params);

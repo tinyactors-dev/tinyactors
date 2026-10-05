@@ -1142,7 +1142,8 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
             /* Core fills the origin of a service's own event, whatever the host passed (ADR 0068). */
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
-                                                                  .trace = params->trace, .time = params->time });
+                                                                  .trace = params->trace, .time = params->time,
+                                                                  .input = params->input });
         case TA_INVOKE_REPORT_DONE: {
             ta_result result = ta_invoke_done_name(system, params->invoke_id, &event.name);
             if (result != TA_OK) {
@@ -1153,7 +1154,8 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
             }
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
-                                                                  .trace = params->trace, .time = params->time });
+                                                                  .trace = params->trace, .time = params->time,
+                                                                  .input = params->input });
         }
         case TA_INVOKE_REPORT_ERROR:
             return ta_invoke_error_report(system, actor, params);

@@ -324,7 +324,7 @@ static bool find_collision(name *left, name *right) {
 static uint32_t wait_on(ta_envelopes *envelopes, ta_address *address, bool *first) {
     uint32_t index = ta_envelope_make(envelopes, NULL, TA_ENVELOPE_RUNNABLE);
     CHECK(index != 0);
-    CHECK(ta_waiting_insert(envelopes, index, address, first) == TA_OK);
+    CHECK(ta_waiting_insert(envelopes, index, &(ta_waiting_put){ .address = address, .first = first }) == TA_OK);
     return index;
 }
 
@@ -391,8 +391,8 @@ static void test_waiting(void) {
     ta_envelope_release(&envelopes, b1);
     /* Invalid inserts change nothing. */
     uint32_t spare = ta_envelope_make(&envelopes, NULL, TA_ENVELOPE_RUNNABLE);
-    CHECK(ta_waiting_insert(&envelopes, spare, NULL, &first) == TA_ERR_INVALID);
-    CHECK(ta_waiting_insert(&envelopes, 0, c, &first) == TA_ERR_INVALID);
+    CHECK(ta_waiting_insert(&envelopes, spare, &(ta_waiting_put){ .address = NULL, .first = &first }) == TA_ERR_INVALID);
+    CHECK(ta_waiting_insert(&envelopes, 0, &(ta_waiting_put){ .address = c, .first = &first }) == TA_ERR_INVALID);
     CHECK(ta_envelope_at(&envelopes, spare)->state == TA_ENVELOPE_RUNNABLE);
     ta_envelope_release(&envelopes, spare);
 

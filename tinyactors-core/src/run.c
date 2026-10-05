@@ -497,20 +497,40 @@ static void ta_run_free_lent(ta_system *system) {
  * answer. A macrostep that ran its microstep limit is abandoned here, as
  * ta_actor_abandon would (ADR 0082, ADR 0099 section 7): the session keeps the
  * configuration after its last completed microstep and the next input runs.
+ *
+ * The abandon allocates (it builds an interpreter on scratch memory), so it can
+ * fail with TA_ERR_NOMEM. Then nothing has changed: the session is still in its
+ * macrostep, stopped between two microsteps, and the input stays in the slot.
+ * The result is the abandon's, *ended is false, and the caller stops ta_run;
+ * the next call runs the session again, reaches the limit at once and retries
+ * the abandon. (A bootstrap cannot be here: the limit is only checked once
+ * the session is bootstrapped.)
+ *
+ * In practice the abandon rebuilds the interpreter in the scratch arena that
+ * ta_interpreter_run_input has just sized for the same session, so it takes no
+ * new memory and a test allocator cannot refuse it; the check is here so that
+ * a future change to the arena cannot turn a refusal into a stuck session.
  */
-static ta_input_status ta_run_end_status(ta_system *system, ta_actor *actor, ta_step_status step) {
+static ta_result ta_run_end_status(ta_system *system, ta_actor *actor, ta_step_status step, ta_input_status *status) {
     switch (step) {
     case TA_STEP_DONE:
-        return TA_INPUT_DONE;
-    case TA_STEP_RUNAWAY:
-        /* A bootstrap that has not completed its first microstep cannot be abandoned (ADR 0082): it ends as it is. */
-        (void)ta_interpreter_abandon(system, actor);
-        return TA_INPUT_RUNAWAY;
+        *status = TA_INPUT_DONE;
+        break;
+    case TA_STEP_RUNAWAY: {
+        ta_result result = ta_interpreter_abandon(system, actor);
+        if (result != TA_OK) {
+            return result;
+        }
+        *status = TA_INPUT_RUNAWAY;
+        break;
+    }
     case TA_STEP_PAUSED:
     case TA_STEP_STABLE:
     default:
-        return TA_INPUT_STABLE;
+        *status = TA_INPUT_STABLE;
+        break;
     }
+    return TA_OK;
 }
 
 /* ------------------------------------------------------------------------
@@ -606,7 +626,13 @@ ta_result ta_run(ta_system *system, const ta_run_params *params) {
             break;
         }
         bool lend = params->report_taken && runner->slot.envelope != 0;
-        ta_run_complete(system, ta_run_end_status(system, actor, stepped.status), stepped.ignored, &out, lend);
+        ta_input_status ended = TA_INPUT_STABLE;
+        result = ta_run_end_status(system, actor, stepped.status, &ended);
+        if (result != TA_OK) {
+            status = TA_RUN_PAUSED; /* the input stays in the slot; the next call retries the abandon */
+            break;
+        }
+        ta_run_complete(system, ended, stepped.ignored, &out, lend);
     }
     *params->status = status;
     *params->notice_count = out.count;

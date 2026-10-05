@@ -11519,6 +11519,19 @@
           "doc": "The report's logical time, as ta_actor_deliver_params.time (ADR 0094)."
         },
         {
+          "name": "input",
+          "type": {
+            "pointer": {
+              "builtin": "uint64_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success",
+          "doc": "The token ta_run() reports an EVENT or DONE report by (a COMPLETED or REFUSED notice), or null. An ERROR report is not queued as an input and has no token: *input is left alone."
+        },
+        {
           "name": "as",
           "type": {
             "record": {
@@ -11578,7 +11591,7 @@
       },
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 88,
+          "size": 96,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -11586,10 +11599,11 @@
             "kind": 16,
             "trace": 24,
             "time": 72,
-            "as": 80,
-            "as.event": 80,
-            "as.done_data": 80,
-            "as.error": 80
+            "input": 80,
+            "as": 88,
+            "as.event": 88,
+            "as.done_data": 88,
+            "as.error": 88
           }
         },
         "wasm32-unknown-unknown": {
@@ -11601,10 +11615,11 @@
             "kind": 16,
             "trace": 24,
             "time": 72,
-            "as": 80,
-            "as.event": 80,
-            "as.done_data": 80,
-            "as.error": 80
+            "input": 80,
+            "as": 84,
+            "as.event": 84,
+            "as.done_data": 84,
+            "as.error": 84
           }
         }
       }
