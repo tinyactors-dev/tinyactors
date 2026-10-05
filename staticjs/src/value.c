@@ -35,26 +35,30 @@ void sjs_retain(sjs_value value) {
     sjs_ref(value);
 }
 
-/* Drop one reference; a value whose last reference this was joins `work`. */
-static void drop(sjs_heap **work, sjs_value value) {
+static void intern_remove(sjs_context *context, const sjs_string *string);
+
+/* Drop one reference; a heap block whose last reference this was joins `work`.
+ * An interned string leaves its table first: it needs its h.link for that. */
+static void drop_heap(sjs_context *context, sjs_heap **work, sjs_heap *h) {
+    if (h == NULL || h->refs == SJS_IMMORTAL) return;
+    if (--h->refs != 0) return;
+    if (h->type == SJS_HEAP_STRING && (h->flags & SJS_STRING_INTERNED) != 0) {
+        intern_remove(context, (const sjs_string *)(const void *)h);
+    }
+    h->link = *work;
+    *work = h;
+}
+
+static void drop(sjs_context *context, sjs_heap **work, sjs_value value) {
     if (!sjs_is_heap(value)) return;
     sjs_heap *h = value.as.heap;
     if (h->refs == SJS_IMMORTAL) return;
-    if (--h->refs != 0) return;
-    h->link = *work;
-    *work = h;
+    drop_heap(context, work, h);
 }
 
-static void drop_heap(sjs_heap **work, sjs_heap *h) {
-    if (h == NULL || h->refs == SJS_IMMORTAL) return;
-    if (--h->refs != 0) return;
-    h->link = *work;
-    *work = h;
-}
-
-static void drop_program(sjs_heap **work, sjs_program *program) {
+static void drop_program(sjs_context *context, sjs_heap **work, sjs_program *program) {
     if (program == NULL || --program->refs != 0) return;
-    for (uint32_t i = 0; i < program->constant_count; i++) drop(work, program->constants[i]);
+    for (uint32_t i = 0; i < program->constant_count; i++) drop(context, work, program->constants[i]);
     sjs_mem_free(&program->context->counting, program, program->size);
 }
 
@@ -66,8 +70,6 @@ static void lookup_free(sjs_context *context, sjs_index *index) {
     if (index != NULL) sjs_mem_free(&context->counting, index, lookup_size(index->mask));
 }
 
-static void intern_remove(sjs_context *context, const sjs_string *string);
-
 /* Free everything on the worklist, and what it alone held. */
 static void drain(sjs_context *context, sjs_heap *work) {
     while (work != NULL) {
@@ -77,28 +79,25 @@ static void drain(sjs_context *context, sjs_heap *work) {
         case SJS_HEAP_ARRAY:
         case SJS_HEAP_SET: {
             sjs_array *a = (sjs_array *)(void *)h;
-            for (uint32_t i = 0; i < a->length; i++) drop(&work, a->items[i]);
+            for (uint32_t i = 0; i < a->length; i++) drop(context, &work, a->items[i]);
             lookup_free(context, a->index);
             break;
         }
         case SJS_HEAP_OBJECT: {
             sjs_object *o = (sjs_object *)(void *)h;
             for (uint32_t i = 0; i < o->count; i++) {
-                drop_heap(&work, &o->entries[i].key->h);
-                drop(&work, o->entries[i].value);
+                drop_heap(context, &work, &o->entries[i].key->h);
+                drop(context, &work, o->entries[i].value);
             }
             lookup_free(context, o->index);
             break;
         }
         case SJS_HEAP_CLOSURE: {
             sjs_closure *c = (sjs_closure *)(void *)h;
-            for (uint32_t i = 0; i < c->count; i++) drop(&work, c->captures[i]);
-            drop_program(&work, c->program);
+            for (uint32_t i = 0; i < c->count; i++) drop(context, &work, c->captures[i]);
+            drop_program(context, &work, c->program);
             break;
         }
-        case SJS_HEAP_STRING:
-            if ((h->flags & SJS_STRING_INTERNED) != 0) intern_remove(context, (const sjs_string *)(const void *)h);
-            break;
         default:
             break;
         }
@@ -108,7 +107,7 @@ static void drain(sjs_context *context, sjs_heap *work) {
 
 void sjs_release(sjs_context *context, sjs_value value) {
     sjs_heap *work = NULL;
-    drop(&work, value);
+    drop(context, &work, value);
     drain(context, work);
 }
 
@@ -120,7 +119,7 @@ void sjs_program_release(sjs_program *program) {
     if (program == NULL) return;
     sjs_context *context = program->context;
     sjs_heap *work = NULL;
-    drop_program(&work, program);
+    drop_program(context, &work, program);
     drain(context, work);
 }
 
@@ -206,80 +205,30 @@ static uint32_t hash_bytes(sjs_str text) {
  * Interned strings
  */
 
-#define INTERN_FIRST_SLOTS 64u
-
-static size_t intern_size(uint32_t mask) {
-    return ((size_t)mask + 1u) * sizeof(sjs_intern_slot);
-}
-
-static void intern_place(sjs_intern_slot *slots, uint32_t mask, sjs_intern_slot slot) {
-    uint32_t i = slot.hash & mask;
-    while (slots[i].string != NULL) i = (i + 1u) & mask;
-    slots[i] = slot;
-}
-
-/* Room for one more string, at most half the slots full; false when the
- * table cannot grow. */
-static bool intern_reserve(sjs_context *context) {
-    uint32_t slots = context->interned == NULL ? 0 : context->intern_mask + 1u;
-    if ((context->intern_count + 1u) * 2u <= slots) return true;
-    /* Twice the slots; 32-bit size_t (wasm32) needs the guard. */
-    uint32_t grown = slots == 0 ? INTERN_FIRST_SLOTS : slots * 2u;
-    if (grown == 0 || (size_t)grown > SIZE_MAX / sizeof(sjs_intern_slot)) return false;
-    sjs_intern_slot *table = sjs_mem_alloc(&context->counting, (size_t)grown * sizeof(sjs_intern_slot));
-    if (table == NULL) return false;
-    sjs_zero(table, (size_t)grown * sizeof(sjs_intern_slot));
-    for (uint32_t i = 0; i < slots; i++) {
-        if (context->interned[i].string != NULL) intern_place(table, grown - 1u, context->interned[i]);
-    }
-    if (context->interned != NULL) sjs_mem_free(&context->counting, context->interned, intern_size(context->intern_mask));
-    context->interned = table;
-    context->intern_mask = grown - 1u;
-    return true;
-}
-
 sjs_result sjs_string_intern(sjs_context *context, sjs_str text, sjs_string **out) {
-    uint32_t hash = hash_bytes(text);
-    if (context->interned != NULL) {
-        uint32_t mask = context->intern_mask;
-        for (uint32_t i = hash & mask; context->interned[i].string != NULL; i = (i + 1u) & mask) {
-            sjs_string *s = context->interned[i].string;
-            if (context->interned[i].hash == hash && sjs_str_equal(sjs_string_view(s), text)) {
-                if (s->h.refs != SJS_IMMORTAL) s->h.refs++;
-                *out = s;
-                return SJS_OK;
-            }
+    uint32_t bucket = hash_bytes(text) & (SJS_INTERN_BUCKETS - 1u);
+    uint32_t chain = 0;
+    for (sjs_string *s = context->interned[bucket]; s != NULL; s = (sjs_string *)(void *)s->h.link) {
+        if (sjs_str_equal(sjs_string_view(s), text)) {
+            if (s->h.refs != SJS_IMMORTAL) s->h.refs++;
+            *out = s;
+            return SJS_OK;
         }
+        chain++;
     }
     sjs_result r = sjs_string_make(context, text, out);
-    if (r != SJS_OK || !intern_reserve(context)) return r;
-    intern_place(context->interned, context->intern_mask, (sjs_intern_slot){ *out, hash });
-    context->intern_count++;
+    if (r != SJS_OK || chain >= SJS_INTERN_CHAIN_MAX) return r;
+    (*out)->h.link = (sjs_heap *)(void *)context->interned[bucket];
+    context->interned[bucket] = *out;
     (*out)->h.flags |= SJS_STRING_INTERNED;
     return SJS_OK;
 }
 
-/* Take a string being freed out of the table, shifting back the strings
- * after it that probed past its slot, so that no probe meets a gap early. */
+/* Take a string being freed out of its chain. */
 static void intern_remove(sjs_context *context, const sjs_string *string) {
-    sjs_intern_slot *slots = context->interned;
-    uint32_t mask = context->intern_mask;
-    uint32_t i = hash_bytes(sjs_string_view(string)) & mask;
-    while (slots[i].string != string) i = (i + 1u) & mask;
-    for (uint32_t j = (i + 1u) & mask; slots[j].string != NULL; j = (j + 1u) & mask) {
-        uint32_t home = slots[j].hash & mask;
-        /* Slot j's string may move to i when its home is not in (i, j]. */
-        bool stays = i <= j ? (home > i && home <= j) : (home > i || home <= j);
-        if (stays) continue;
-        slots[i] = slots[j];
-        i = j;
-    }
-    slots[i].string = NULL;
-    if (--context->intern_count == 0) {
-        sjs_mem_free(&context->counting, slots, intern_size(mask));
-        context->interned = NULL;
-        context->intern_mask = 0;
-    }
+    sjs_string **at = &context->interned[hash_bytes(sjs_string_view(string)) & (SJS_INTERN_BUCKETS - 1u)];
+    while (*at != string) at = (sjs_string **)(void *)&(*at)->h.link;
+    *at = (sjs_string *)(void *)string->h.link;
 }
 
 /* Equal under SameValueZero, equal hashes: every NaN hashes alike, and -0
