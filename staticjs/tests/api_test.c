@@ -1397,8 +1397,9 @@ static void test_no_shapes(void) {
 
 /* The shapes' C paths (docs/matcher.md, sections 7 and 11): toSorted with
  * a COMPARE_BY_KEY or a COMPARE_NUMERIC comparator, map with a PLUCK
- * callback, and the predicate loops with a KEY_COMPARE or an
- * ELEMENT_COMPARE callback. A run of one source, with shapes or without, whole and then one unit of fuel at a time:
+ * callback, the predicate loops with a KEY_COMPARE or an ELEMENT_COMPARE
+ * callback, and reduce with a SUM or a SUM_KEY callback. A run of one
+ * source, with shapes or without, whole and then one unit of fuel at a time:
  * its value or its fault ("fault LINE:COLUMN message"), the fuel it used and
  * how often it paused. */
 typedef struct {
@@ -1505,6 +1506,23 @@ static void test_shape_paths(void) {
     CHECK(strcmp(on.out, "true") == 0 && strcmp(off.out, on.out) == 0);
     CHECK(off.fuel == 30 && on.fuel == 17 && off.fuel - on.fuel == 3 * (5 - 1) + 1);
     CHECK(off.pauses == 29 && on.pauses == 29 - 3 * 4 - 1);
+    /* Four elements of a sum: 5 units each in bytecode (the step,
+     * TAKE_LOCAL, TAKE_LOCAL, BINARY, RETURN), 1 in C. */
+    const char *sum = "[1, 2, 3, 4].reduce((a, x) => a + x, 0.5)";
+    on = run_shaped((shaped_source){ sum, false, SJS_LIMITS_DEFAULT });
+    off = run_shaped((shaped_source){ sum, true, SJS_LIMITS_DEFAULT });
+    CHECK(strcmp(on.out, "10.5") == 0 && strcmp(off.out, on.out) == 0);
+    CHECK(off.fuel == 36 && on.fuel == 20 && off.fuel - on.fuel == 4 * (5 - 1));
+    CHECK(off.pauses == 35 && on.pauses == 35 - 4 * 4);
+    /* And of a key's sum: 6 units each in bytecode (the step, TAKE_LOCAL,
+     * TAKE_LOCAL, GET_MEMBER, BINARY, RETURN), 2 in C (the step and a
+     * lookup), which is one pause. */
+    const char *sum_key = "[{k: 1}, {k: 2}, {k: 3}, {k: 4}].reduce((a, x) => x.k + a, 0)";
+    on = run_shaped((shaped_source){ sum_key, false, SJS_LIMITS_DEFAULT });
+    off = run_shaped((shaped_source){ sum_key, true, SJS_LIMITS_DEFAULT });
+    CHECK(strcmp(on.out, "10") == 0 && strcmp(off.out, on.out) == 0);
+    CHECK(off.fuel == 44 && on.fuel == 28 && off.fuel - on.fuel == 4 * (6 - 2));
+    CHECK(off.pauses == 43 && on.pauses == 43 - 4 * 5);
     /* A fault after C steps: where the bytecode faults, for less fuel. */
     expect_same_both_ways("[{k: 2}, {k: 1}, {k: 4},\n {j: 3}].toSorted((a, b) =>\n a.k - b.k)", SJS_LIMITS_DEFAULT,
                           "fault 3:6 arithmetic in staticjs is on numbers");
@@ -1518,6 +1536,12 @@ static void test_shape_paths(void) {
                           "fault 2:4 staticjs compares two numbers or two strings");
     expect_same_both_ways("[{}, {toString: 2}].findLast(x =>\n x.toString === 1)", SJS_LIMITS_DEFAULT,
                           "fault 2:4 staticjs objects have no prototype");
+    expect_same_both_ways("[1, 2, 3,\n true].reduce((a, x) =>\n a + x)", SJS_LIMITS_DEFAULT,
+                          "fault 3:4 staticjs adds two numbers, or a string and a primitive");
+    expect_same_both_ways("[{k: 1}, {k: 2},\n {}].reduce((a, x) =>\n x.k + a, 0)", SJS_LIMITS_DEFAULT,
+                          "fault 3:6 staticjs adds two numbers, or a string and a primitive");
+    expect_same_both_ways("[{k: 1}, {k: 2},\n {}].reduce((a, x) =>\n a + x.toString, 0)", SJS_LIMITS_DEFAULT,
+                          "fault 3:8 staticjs objects have no prototype");
 
     /* max_stack: a C step succeeds only where the bytecode has room for
      * what it pushes. The comparator's frame sits on the loop's five slots
@@ -1591,6 +1615,41 @@ static void test_shape_paths(void) {
             expect_same_both_ways(predicate_stack[i].source, limits, predicate_stack[i].outcomes[max_stack - 5]);
         }
     }
+    /* A sum's frame has two slots; it pushes the accumulator and x (then
+     * x.k in its place), in either order: the eighth and the ninth value.
+     * With 5 and 6 the frame cannot be entered, with 7 the first push does
+     * not fit, with 8 the second does not. */
+    static const struct {
+        const char *source;
+        const char *outcomes[5];
+    } sum_stack[] = {
+        { "[2, 1].reduce((a, x) => a + x, 0)",
+          { "fault 1:14 the evaluation needs more than max_stack values",
+            "fault 1:14 the evaluation needs more than max_stack values",
+            "fault 1:25 the evaluation needs more than max_stack values",
+            "fault 1:29 the evaluation needs more than max_stack values", "3" } },
+        { "[2, 1].reduce((a, x) => x + a, 0)",
+          { "fault 1:14 the evaluation needs more than max_stack values",
+            "fault 1:14 the evaluation needs more than max_stack values",
+            "fault 1:25 the evaluation needs more than max_stack values",
+            "fault 1:29 the evaluation needs more than max_stack values", "3" } },
+        { "[{k: 2}, {k: 1}].reduce((a, x) => a + x.k, 0)",
+          { "fault 1:24 the evaluation needs more than max_stack values",
+            "fault 1:24 the evaluation needs more than max_stack values",
+            "fault 1:35 the evaluation needs more than max_stack values",
+            "fault 1:39 the evaluation needs more than max_stack values", "3" } },
+        { "[{k: 2}, {k: 1}].reduce((a, x) => x.k + a, 0)",
+          { "fault 1:24 the evaluation needs more than max_stack values",
+            "fault 1:24 the evaluation needs more than max_stack values",
+            "fault 1:35 the evaluation needs more than max_stack values",
+            "fault 1:41 the evaluation needs more than max_stack values", "3" } },
+    };
+    for (uint32_t i = 0; i < sizeof sum_stack / sizeof sum_stack[0]; i++) {
+        for (uint32_t max_stack = 5; max_stack <= 9; max_stack++) {
+            limits.max_stack = max_stack;
+            expect_same_both_ways(sum_stack[i].source, limits, sum_stack[i].outcomes[max_stack - 5]);
+        }
+    }
     /* max_frames: the program, the loop, and the callback the C path
      * enters as the bytecode's first call would. */
     limits = SJS_LIMITS_DEFAULT;
@@ -1608,6 +1667,15 @@ static void test_shape_paths(void) {
                                              : "[{\"k\":2}]");
         expect_same_both_ways("[2, 1].every(x => x >= 2)", limits,
                               max_frames < 3 ? "fault 1:13 the evaluation needs more than max_frames frames" : "false");
+        /* reduce enters its callback at its first element, or its second
+         * without an initial value; over one element and none, never. */
+        expect_same_both_ways("[2, 1].reduce((a, x) => a + x, 0)", limits,
+                              max_frames < 3 ? "fault 1:14 the evaluation needs more than max_frames frames" : "3");
+        expect_same_both_ways("[2, 1, 4].reduce((a, x) => a + x)", limits,
+                              max_frames < 3 ? "fault 1:17 the evaluation needs more than max_frames frames" : "7");
+        expect_same_both_ways("[{k: 2}].reduce((a, x) => a + x.k, 0)", limits,
+                              max_frames < 3 ? "fault 1:16 the evaluation needs more than max_frames frames" : "2");
+        expect_same_both_ways("[{k: 2}].reduce((a, x) => a + x.k)", limits, "{\"k\":2}");
     }
 }
 

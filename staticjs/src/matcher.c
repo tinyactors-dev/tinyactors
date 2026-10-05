@@ -79,6 +79,9 @@ typedef struct {
  * compile rarely outgrows (and which an allocator serves from its small
  * sizes). */
 #define MATCHER_FIRST_RECORDS (1024u / (uint32_t)sizeof(shape_record))
+/* Past 1 KiB a record, the first allocation would hold none: share slots
+ * (docs/matcher.md, 11.4, [slots]) before the rules grow that far. */
+_Static_assert(MATCHER_FIRST_RECORDS >= 1, "a shape_record outgrew the first 1 KiB of records");
 
 /* What one event's matching works with. */
 typedef struct {

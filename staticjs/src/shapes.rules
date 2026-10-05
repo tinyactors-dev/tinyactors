@@ -89,14 +89,16 @@ event END close;                        # closes the program (node 0)
 
 # ---------------------------------------------------------------------------
 # Callback shapes. The compiler records a shape on the function it matched
-# (docs/matcher.md, section 6); map, toSorted and the predicate loops run a
-# tagged callback in C (sections 7 and 11).
+# (docs/matcher.md, section 6); map, toSorted, the predicate loops and
+# reduce run a tagged callback in C (sections 7 and 11).
 
 shape PLUCK(key: text);                              # x => x.key
 shape COMPARE_BY_KEY(key: text, descending: flag);   # (a, b) => a.key - b.key, or b.key - a.key
 shape COMPARE_NUMERIC(descending: flag);             # (a, b) => a - b, or b - a
 shape KEY_COMPARE(key: text, op: operator, value: operand);   # x => x.key OP c, or c OP x.key
 shape ELEMENT_COMPARE(op: operator, value: operand);          # x => x OP c, or c OP x
+shape SUM(element_first: flag);                      # (a, x) => a + x, or x + a
+shape SUM_KEY(key: text, element_first: flag);       # (a, x) => a + x.key, or x.key + a
 
 nonterminal key_of(object: read, key: text);         # object.key, the object a name
 nonterminal fixed(value: operand);       # a value fixed before the callback runs: here, a literal
@@ -186,3 +188,25 @@ ELEMENT_COMPARE(o, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, 
                                                 element_test(x, o, c));
 ELEMENT_COMPARE(o, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
                                                 BLOCK_BEGIN, RETURN(element_test(x, o, c)), BLOCK_END);
+
+# (a, x) => a + x, and x + a: the accumulator a is parameter 0 and the
+# element x parameter 1, by position; the flag says the element is the left
+# operand, so that C adds in the bytecode's order.
+SUM(false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                     BINARY{op: ADD}(NAME{name: a}, NAME{name: x}));
+SUM(true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                    BINARY{op: ADD}(NAME{name: x}, NAME{name: a}));
+SUM(false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                     BLOCK_BEGIN, RETURN(BINARY{op: ADD}(NAME{name: a}, NAME{name: x})), BLOCK_END);
+SUM(true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                    BLOCK_BEGIN, RETURN(BINARY{op: ADD}(NAME{name: x}, NAME{name: a})), BLOCK_END);
+
+# (a, x) => a + x.k, and x.k + a.
+SUM_KEY(k, false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                            BINARY{op: ADD}(NAME{name: a}, key_of(x, k)));
+SUM_KEY(k, true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                           BINARY{op: ADD}(key_of(x, k), NAME{name: a}));
+SUM_KEY(k, false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                            BLOCK_BEGIN, RETURN(BINARY{op: ADD}(NAME{name: a}, key_of(x, k))), BLOCK_END);
+SUM_KEY(k, true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                           BLOCK_BEGIN, RETURN(BINARY{op: ADD}(key_of(x, k), NAME{name: a})), BLOCK_END);

@@ -999,13 +999,15 @@ static sjs_result set_output(sjs_vm *vm, vm_frame *frame, sjs_value v) {
 
 /* The most a C path's bytecode pushes above the callback's slots: `a.k` and
  * `b.k` (or `a` and `b`) for a comparator, `x.k` for a pluck, `x.k` (or
- * `x`) and the literal, in either order, for a predicate. A C step needs
+ * `x`) and the literal, in either order, for a predicate, and the
+ * accumulator and `x.k` (or `x`), in either order, for a sum. A C step needs
  * that much room, so that it succeeds only where the bytecode would not run
  * out of max_stack. More would only fall back more often; less would be
  * wrong. */
 #define PLUCK_STACK 1u
 #define COMPARE_STACK 2u
 #define PREDICATE_STACK 2u
+#define SUM_STACK 2u
 
 /* The shapes each loop built-in runs in C (docs/matcher.md, 7 and 11.5). */
 static const struct {
@@ -1027,6 +1029,8 @@ static const struct {
     { SJS_METHOD_ARRAY_SOME, SJS_SHAPE_ELEMENT_COMPARE },
     { SJS_METHOD_ARRAY_EVERY, SJS_SHAPE_KEY_COMPARE },
     { SJS_METHOD_ARRAY_EVERY, SJS_SHAPE_ELEMENT_COMPARE },
+    { SJS_METHOD_ARRAY_REDUCE, SJS_SHAPE_SUM },
+    { SJS_METHOD_ARRAY_REDUCE, SJS_SHAPE_SUM_KEY },
 };
 
 /* A key the C path reads as an object's own property: one an object lacks
@@ -1069,8 +1073,9 @@ static bool predicate_start(vm_frame *frame, const sjs_closure *closure, uint32_
 /* Note the callback's shape when this built-in runs it in C: a closure the
  * matcher tagged with a shape shape_runners pairs with the built-in. Its
  * key, for the shapes that have one; its flag: for PLUCK and KEY_COMPARE,
- * the key is on Object.prototype; for the comparators, descending; and a
- * predicate's operator and literal. */
+ * the key is on Object.prototype; for the comparators, descending; for the
+ * sums, the element is the left operand; and a predicate's operator and
+ * literal. */
 static void shape_start(vm_frame *frame, sjs_value callback) {
     frame->shape = SJS_SHAPE_NONE;
     if (callback.as.heap->type != SJS_HEAP_CLOSURE) return;
@@ -1094,10 +1099,11 @@ static void shape_start(vm_frame *frame, sjs_value callback) {
         if (!predicate_start(frame, closure, 0)) frame->shape = SJS_SHAPE_NONE;
         break;
     case SJS_SHAPE_COMPARE_BY_KEY:
+    case SJS_SHAPE_SUM_KEY:
         frame->shape_key = SJS_AS_STRING(closure->program->constants[fn->shape_args[0]]);
         frame->shape_flag = fn->shape_args[1] != 0;
         break;
-    default: /* SJS_SHAPE_COMPARE_NUMERIC */
+    default: /* SJS_SHAPE_COMPARE_NUMERIC, SJS_SHAPE_SUM */
         frame->shape_flag = fn->shape_args[0] != 0;
         break;
     }
@@ -1310,6 +1316,38 @@ static loop_step predicate_step(sjs_vm *vm, vm_frame *frame) {
     return predicate_answer(vm, frame, answer != 0);
 }
 
+/* reduce's step for a SUM callback, `(a, x) => a + x` or `x + a`, or a
+ * SUM_KEY, `(a, x) => a + x.key` or `x.key + a`, in C: when the accumulator
+ * is a number and so is the element, or the element's own property, the
+ * accumulator becomes the double the bytecode's addition gives, with the
+ * operands in its order, in place (a number holds no reference). One unit of
+ * fuel per key looked up beyond the step's, where the bytecode costs four
+ * or five. False otherwise: the bytecode adds this element, and
+ * concatenates or faults. */
+static bool sum_step(sjs_vm *vm, vm_frame *frame) {
+    sjs_value *output = slot(vm, frame, LOOP_OUTPUT);
+    if (output->kind != SJS_NUMBER) return false;
+    if (vm->stack_capacity - vm->sp < SUM_STACK) return false;
+    sjs_value v = receiver(vm, frame)->items[frame->index];
+    uint64_t lookups = 0;
+    if (frame->shape == SJS_SHAPE_SUM_KEY) {
+        if (v.kind != SJS_OBJECT) return false;
+        /* A missing key falls back whether or not it is on Object.prototype:
+         * the bytecode faults either way. */
+        const sjs_entry *e = own_entry(frame, SJS_AS_OBJECT(v));
+        if (e == NULL) return false;
+        v = e->value;
+        lookups = 1;
+    }
+    if (v.kind != SJS_NUMBER) return false;
+    double acc = output->as.number;
+    double x = v.as.number;
+    *output = sjs_num(frame->shape_flag ? x + acc : acc + x);
+    frame->index++;
+    vm->fuel_used += lookups;
+    return true;
+}
+
 /* Merge toSorted's next element: from the right run when the comparator
  * gave more than 0, else from the left (NaN and 0 included), which keeps
  * the sort stable. The bytecode's answer and the C path's go through here
@@ -1500,6 +1538,12 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
         }
     }
     if (frame->builtin == SJS_METHOD_ARRAY_REDUCE) {
+        if (frame->shape != SJS_SHAPE_NONE) {
+            /* Entered where the bytecode's first call would enter it; one
+             * element per step, so fuel still pauses. */
+            if (!frame->entered && !sjs_vm_enter_callback(vm, frame)) return LOOP_FAULT;
+            if (sum_step(vm, frame)) return LOOP_AGAIN;
+        }
         /* The accumulator moves into the call, so that the callback can hold
          * it alone; its result comes back into LOOP_OUTPUT. If the call
          * cannot be pushed, the release below frees it. */
