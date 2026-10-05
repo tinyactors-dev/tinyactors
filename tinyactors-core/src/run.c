@@ -118,6 +118,7 @@ static void ta_run_end_slot(ta_system *system) {
         ta_envelope *envelope = ta_envelope_at(&system->envelopes, slot->envelope);
         ta_event_release(&envelope->event);
         envelope->event = (ta_event){0};
+        ta_run_input_decided(system, envelope);
         ta_ilist_push_back(&system->runner.abandoned, ta_envelopes_link(&system->envelopes), slot->envelope);
     }
     *slot = (ta_run_slot){0};
@@ -181,10 +182,31 @@ void ta_run_abandoned(ta_system *system, const ta_actor *actor) {
  * Admission
  */
 
-/* ta_run_token issues the next token: never 0, never repeated. */
-static uint64_t ta_run_token(ta_system *system) {
-    system->runner.tokens += 1u;
-    return system->runner.tokens;
+/*
+ * ta_run_token issues the token of the input in envelope `index`: the next
+ * sequence number above the index, so that the index is read back from the
+ * token (ta_input_withdraw) and the sequence tells a token from the one an
+ * earlier input had in the same, reused envelope. The index fits
+ * TA_INPUT_INDEX_BITS because the pool's bound is at most 2^24 (poolEnvelopes
+ * maximum). A token is never 0, and not repeated for 2^39 inputs: the
+ * sequence then wraps and skips 0, which is far past any run of a process.
+ * It never allocates.
+ */
+static uint64_t ta_run_token(ta_system *system, uint32_t index) {
+    uint64_t sequence = (system->runner.tokens + 1u) & TA_INPUT_SEQUENCE_MASK;
+    if (sequence == 0) {
+        sequence = 1u;
+    }
+    system->runner.tokens = sequence;
+    return (sequence << TA_INPUT_INDEX_BITS) | index;
+}
+
+/* ta_run_input_decided: see run.h. */
+void ta_run_input_decided(ta_system *system, const ta_envelope *envelope) {
+    if ((envelope->source == TA_SOURCE_HOST || envelope->source == TA_SOURCE_TRANSITION) &&
+        system->counters.host_inputs != 0) {
+        system->counters.host_inputs -= 1u;
+    }
 }
 
 /*
@@ -285,7 +307,8 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
         return TA_ERR_NOMEM;
     }
     ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
-    envelope->input = ta_run_token(system);
+    envelope->input = ta_run_token(system, index);
+    system->counters.host_inputs += 1u;
     if (params->input != NULL) {
         *params->input = envelope->input;
     }
@@ -295,6 +318,39 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     } else {
         ta_mail_post_waiting(system, index, waits_for);
     }
+    return TA_OK;
+}
+
+/*
+ * ta_input_withdraw takes back a host input: see tinyactors.h. The envelope
+ * is found by the index in the token and must still carry exactly that
+ * token, so a token whose envelope was released and reused is NOT_FOUND. Only
+ * an envelope that waits can be withdrawn (RUNNABLE on the run queue or an
+ * outgoing list, WAITING on an address's list); a taken or decided one has
+ * left them. The envelope itself is not unlinked: it would need a search of
+ * its list. It is marked, and released where the list next reaches it (take,
+ * follow, address resident or failed, a discarded macrostep). Its session's
+ * `queued` goes down now, because an unload must not wait for an input that
+ * will never run; a waiting envelope counts for no session.
+ */
+ta_result ta_input_withdraw(ta_system *system, uint64_t input) {
+    if (system == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_envelope *envelope = ta_envelope_at(&system->envelopes, (uint32_t)(input & TA_INPUT_INDEX_MASK));
+    if (envelope == NULL || input == 0 || envelope->input != input || envelope->source != TA_SOURCE_HOST ||
+        (envelope->state != TA_ENVELOPE_RUNNABLE && envelope->state != TA_ENVELOPE_WAITING) ||
+        (envelope->flags & TA_ENVELOPE_WITHDRAWN) != 0) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (envelope->state == TA_ENVELOPE_RUNNABLE) {
+        ta_actor *actor = ta_actor_lookup(system, envelope->target);
+        if (actor != NULL && actor->queued != 0) {
+            actor->queued -= 1u;
+        }
+    }
+    envelope->flags = (uint16_t)(envelope->flags | TA_ENVELOPE_WITHDRAWN);
+    ta_run_input_decided(system, envelope);
     return TA_OK;
 }
 
@@ -341,6 +397,8 @@ static void ta_run_refuse(ta_system *system, uint32_t index, ta_refusal_reason r
                                              .source = (ta_input_source)envelope->source,
                                              .reason = reason,
                                              .event = &envelope->event });
+    envelope->state = TA_ENVELOPE_DECIDED;
+    ta_run_input_decided(system, envelope);
     ta_ilist_push_back(&system->runner.lent, ta_envelopes_link(&system->envelopes), index);
 }
 
@@ -352,8 +410,12 @@ static void ta_run_refuse(ta_system *system, uint32_t index, ta_refusal_reason r
  */
 static ta_result ta_run_take(ta_system *system, uint32_t index, ta_run_notices *out, bool *occupied) {
     ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
-    ta_actor *actor = ta_actor_lookup(system, envelope->target);
     *occupied = false;
+    if ((envelope->flags & TA_ENVELOPE_WITHDRAWN) != 0) {
+        ta_envelope_release(&system->envelopes, index); /* the host took it back; its counts went down then */
+        return TA_OK;
+    }
+    ta_actor *actor = ta_actor_lookup(system, envelope->target);
     if (actor == NULL && (envelope->source == TA_SOURCE_MAIL || envelope->source == TA_SOURCE_ERROR)) {
         /* Its session may have been unloaded and loaded again meanwhile, or be out: then the mail waits for its load. */
         switch (ta_mail_follow(system, index, &actor)) {
@@ -467,7 +529,8 @@ ta_result ta_actor_transition(ta_system *system, const ta_actor_transition_param
         return result;
     }
     ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
-    envelope->input = ta_run_token(system);
+    envelope->input = ta_run_token(system, index);
+    system->counters.host_inputs += 1u;
     envelope->state = TA_ENVELOPE_TAKEN;
     if (params->input != NULL) {
         *params->input = envelope->input;
@@ -631,6 +694,7 @@ static void ta_run_complete(ta_system *system, ta_input_status status, bool igno
         ta_mail_macrostep_ended(system);
     }
     if (index != 0) {
+        ta_run_input_decided(system, ta_envelope_at(&system->envelopes, index));
         if (lend) {
             ta_ilist_push_back(&system->runner.lent, ta_envelopes_link(&system->envelopes), index);
         } else {

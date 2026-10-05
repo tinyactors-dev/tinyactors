@@ -288,7 +288,11 @@ void ta_mail_macrostep_discarded(ta_system *system) {
     const ta_ilink *link = ta_envelopes_link(&system->envelopes);
     uint32_t index = 0;
     while ((index = ta_ilist_pop_front(&slot->outgoing, link)) != 0) {
-        ta_actor *receiver = ta_actor_lookup(system, ta_envelope_at(&system->envelopes, index)->target);
+        const ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+        /* A withdrawn input gave its place back when it was withdrawn. */
+        ta_actor *receiver = (envelope->flags & TA_ENVELOPE_WITHDRAWN) != 0
+                                 ? NULL
+                                 : ta_actor_lookup(system, envelope->target);
         if (receiver != NULL && receiver->queued != 0) {
             receiver->queued -= 1u;
         }
@@ -303,10 +307,16 @@ void ta_mail_macrostep_discarded(ta_system *system) {
 /* ta_mail_recycle: see mail.h. */
 void ta_mail_recycle(ta_system *system, uint32_t index, ta_refusal_reason reason) {
     ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+    if ((envelope->flags & TA_ENVELOPE_WITHDRAWN) != 0) {
+        ta_envelope_release(&system->envelopes, index); /* the host took it back: nobody to tell */
+        return;
+    }
     if (envelope->source == TA_SOURCE_HOST) {
         /* The host asked to be told: the reason rides in the flags until ta_run writes the notice. */
         envelope->flags = (uint16_t)reason;
         envelope->target = 0;
+        envelope->state = TA_ENVELOPE_DECIDED;
+        ta_run_input_decided(system, envelope);
         ta_ilist_push_back(&system->runner.refused, ta_envelopes_link(&system->envelopes), index);
         return;
     }
@@ -344,7 +354,7 @@ static void ta_mail_unwait(ta_envelope *envelope) {
     ta_address_release(envelope->payload.address);
     envelope->payload.address = NULL;
     envelope->state = TA_ENVELOPE_RUNNABLE;
-    envelope->flags = 0;
+    envelope->flags = (uint16_t)(envelope->flags & TA_ENVELOPE_WITHDRAWN);
     envelope->next = 0;
 }
 
@@ -383,8 +393,11 @@ void ta_mail_address_resident(ta_system *system, const ta_address *address, ta_a
     while (index != 0) {
         uint32_t next = ta_ilist_next(link, index); /* read before the push rewrites the link */
         ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+        bool withdrawn = (envelope->flags & TA_ENVELOPE_WITHDRAWN) != 0;
         ta_mail_unwait(envelope);
-        if (actor == NULL) {
+        if (withdrawn) {
+            ta_envelope_release(&system->envelopes, index);
+        } else if (actor == NULL) {
             ta_mail_recycle(system, index, TA_REFUSED_DESTROYED);
         } else if (actor->finished) {
             ta_mail_recycle(system, index, TA_REFUSED_DONE);
@@ -443,7 +456,7 @@ ta_result ta_address_load_failed(ta_system *system, const ta_address_load_failed
 
 /* ta_address_waiting: see tinyactors.h. */
 uint32_t ta_address_waiting(const ta_system *system, const ta_address *address) {
-    return system == NULL ? 0 : ta_waiting_length(&system->envelopes, address);
+    return system == NULL ? 0 : ta_waiting_pending(&system->envelopes, address);
 }
 
 /* ta_mail_retarget_step is what one pass of ta_mail_retarget_list needs. Lifetime: call. */
@@ -464,7 +477,7 @@ static uint32_t ta_mail_retarget_list(ta_system *system, uint32_t head, const ta
     uint32_t moved = 0;
     for (uint32_t index = head; index != 0 && moved < step->room; index = ta_ilist_next(link, index)) {
         ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
-        if (envelope->target == step->from &&
+        if (envelope->target == step->from && (envelope->flags & TA_ENVELOPE_WITHDRAWN) == 0 &&
             (envelope->source == TA_SOURCE_HOST || envelope->source == TA_SOURCE_MAIL)) {
             envelope->target = step->to;
             moved += 1u;
@@ -499,7 +512,8 @@ uint32_t ta_mail_outgoing_to(const ta_system *system, ta_actor_id actor) {
     }
     const ta_ilink *link = ta_envelopes_link(&system->envelopes);
     for (uint32_t index = slot->outgoing.head; index != 0; index = ta_ilist_next(link, index)) {
-        count += ta_envelope_at(&system->envelopes, index)->target == actor ? 1u : 0u;
+        const ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+        count += envelope->target == actor && (envelope->flags & TA_ENVELOPE_WITHDRAWN) == 0 ? 1u : 0u;
     }
     return count;
 }

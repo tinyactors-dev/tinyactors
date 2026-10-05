@@ -5508,11 +5508,18 @@
             "builtin": "uint64_t"
           },
           "doc": "a spawn, a delayed send or a registration a quota refused (ADR 0092)"
+        },
+        {
+          "name": "host_inputs",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "A gauge, not a count: the host inputs (ta_actor_deliver(), ta_actor_transition()) admitted and not yet decided. An input is decided when it completes, is refused, is abandoned or is withdrawn (ta_input_withdraw()), so the value is how many tokens the host still waits for, whatever the inputs' targets. It is zero in a definition's counters. The host bounds its own backlog with it (napi maxQueuedMessages)."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 192,
+          "size": 200,
           "align": 8,
           "offsets": {
             "spawned": 0,
@@ -5538,11 +5545,12 @@
             "runs_stopped": 160,
             "macrosteps_long": 168,
             "runaways": 176,
-            "quota_refusals": 184
+            "quota_refusals": 184,
+            "host_inputs": 192
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 192,
+          "size": 200,
           "align": 8,
           "offsets": {
             "spawned": 0,
@@ -5568,7 +5576,8 @@
             "runs_stopped": 160,
             "macrosteps_long": 168,
             "runaways": 176,
-            "quota_refusals": 184
+            "quota_refusals": 184,
+            "host_inputs": 192
           }
         }
       }
@@ -21236,6 +21245,37 @@
           "actor"
         ]
       }
+    },
+    {
+      "name": "ta_input_withdraw",
+      "doc": "Takes back a host input that has not been taken (ADR 0099 section 8): `input` is the token ta_actor_deliver() gave. The envelope is marked and released unseen when it reaches the head of the run queue, or when its waiting list moves, so nothing is searched: O(1). The session's queue count and ta_counters.host_inputs go down now, so a withdrawn input no longer keeps the session from unloading; no notice is written for it, because the host asked for the end. It never allocates and may be called wherever ta_actor_deliver() may. - TA_OK: withdrawn; the event will never run. - TA_ERR_NOT_FOUND: no such pending input: it was taken, completed, refused, abandoned or already withdrawn, or the token is stale (the envelope was reused for another input), or it is not a host input. - TA_ERR_INVALID: a null system.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "input",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        }
+      ]
     },
     {
       "name": "ta_address_load_failed",

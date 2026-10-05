@@ -137,8 +137,19 @@ typedef enum ta_envelope_state {
     TA_ENVELOPE_FREE = 0,     /* in the pool's free list; holds no reference */
     TA_ENVELOPE_RUNNABLE = 1, /* on the run queue or on a sender's outgoing list */
     TA_ENVELOPE_WAITING = 2,  /* on the waiting list of `payload.address` */
-    TA_ENVELOPE_TAKEN = 3     /* the input being run; on no list */
+    TA_ENVELOPE_TAKEN = 3,    /* the input being run; on no list */
+    TA_ENVELOPE_DECIDED = 4   /* a host input whose end is decided and waits for its notice, on the runner's refused list */
 } ta_envelope_state;
+
+/*
+ * TA_ENVELOPE_WITHDRAWN marks (in ta_envelope.flags) a host input the host took
+ * back with ta_input_withdraw while it waited on the run queue, an outgoing
+ * list or a waiting list. It is the top bit, so it cannot meet the bits
+ * package mail keeps in the same field (TA_MAIL_FLAG_*) or a refusal reason.
+ * A withdrawn envelope is released unseen where it is next met; the session's
+ * `queued` count and the host-input gauge were given back at the withdrawal.
+ */
+#define TA_ENVELOPE_WITHDRAWN 0x8000u
 
 /*
  * ta_input_source (tinyactors.h) says where an input came from, which decides
@@ -166,7 +177,7 @@ typedef struct ta_envelope {
     uint64_t target;       /* the target session ID, or 0 while the target is the address in `payload` */
     uint64_t from;         /* the sending session ID, or 0 for the host */
     ta_time due;           /* the input time ADR 0094 validates; after take, the macrostep's logical time */
-    uint64_t input;        /* the host's token for an admitted input, or 0 */
+    uint64_t input;        /* the host's token for an admitted input (run.h: sequence << 25 | index), or 0 */
     union {
         ta_address *address;
     } payload;
@@ -341,6 +352,16 @@ ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, const ta_wa
  * decisions on a hot path. It never allocates and changes nothing.
  */
 uint32_t ta_waiting_length(const ta_envelopes *envelopes, const ta_address *address);
+
+/*
+ * ta_waiting_pending answers how many inputs still wait for `address`:
+ * ta_waiting_length without the withdrawn ones (TA_ENVELOPE_WITHDRAWN), which
+ * stay on the list, holding its place and its load cue, until the list
+ * moves. It is what the host is told (ta_address_waiting); the owner decides
+ * whether a list needs serving with ta_waiting_length, which counts them.
+ * O(list). It never allocates and changes nothing.
+ */
+uint32_t ta_waiting_pending(const ta_envelopes *envelopes, const ta_address *address);
 
 /*
  * ta_waiting_take_list removes the whole waiting list of `address` and

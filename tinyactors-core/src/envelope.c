@@ -318,6 +318,22 @@ uint32_t ta_waiting_length(const ta_envelopes *envelopes, const ta_address *addr
     return length;
 }
 
+/* ta_waiting_pending: see envelope.h. */
+uint32_t ta_waiting_pending(const ta_envelopes *envelopes, const ta_address *address) {
+    if (address == NULL) {
+        return 0;
+    }
+    uint32_t count = 0;
+    uint32_t steps = 0;
+    uint32_t bound = ta_pool_extent(&envelopes->pool);
+    for (uint32_t index = ta_waiting_find(envelopes, address, ta_address_record_hash(address));
+         index != 0 && steps < bound; index = ta_ilist_next(&envelopes->link, index)) {
+        count += (ta_envelope_at(envelopes, index)->flags & TA_ENVELOPE_WITHDRAWN) == 0 ? 1u : 0u;
+        steps += 1u;
+    }
+    return count;
+}
+
 /* ta_waiting_take_list: see envelope.h. */
 uint32_t ta_waiting_take_list(ta_envelopes *envelopes, const ta_address *address) {
     if (address == NULL) {

@@ -45,7 +45,8 @@ typedef struct ta_actor ta_actor;
  * Lifetimes.
  *
  *   - system: the ta_runner control block (embedded in the system), its
- *     started cells, the token counter. The cell pool grows only through
+ *     started cells, the token sequence and the host-input gauge
+ *     (ta_counters.host_inputs, in the system's counters). The cell pool grows only through
  *     ta_run_reserve_start, a safe point, and is never needed to grow
  *     inside a macrostep.
  *   - input: the slot, from take until the input's COMPLETED notice. An
@@ -56,6 +57,11 @@ typedef struct ta_actor ta_actor;
  *     reserve is taken when the input is taken and given back when it ends,
  *     the list is spliced onto the run queue when it ends, or freed unseen
  *     when it is abandoned.
+ *   - token: from ta_actor_deliver (or ta_actor_transition) until the input's
+ *     terminal notice, or until ta_input_withdraw. It is
+ *     `sequence << TA_INPUT_INDEX_BITS | envelope index`, so a withdrawal finds
+ *     its envelope with no search, and the sequence makes a token that names a
+ *     reused envelope fail the check instead of reaching the new input.
  *   - call: the notice array the caller gives ta_run, and the events its
  *     notices borrow. An envelope whose event a notice lent goes on `lent`
  *     and is released at the start of the next ta_run (or at destroy).
@@ -87,6 +93,17 @@ typedef struct ta_actor ta_actor;
  *       list whose cue is pending; it is on `refused` only between
  *       ta_address_load_failed and the call that writes its notice. Both lists
  *       count as pending work for ta_run_pending.
+ *
+ *   I6: ta_counters.host_inputs is the number of HOST and TRANSITION
+ *       envelopes whose end is not decided: not yet completed, refused,
+ *       abandoned or withdrawn. It goes down at the moment the end is
+ *       decided (ta_run_input_decided), which is before the notice is
+ *       written, so a host that counts from it never counts an input twice.
+ *   I7: a withdrawn envelope (TA_ENVELOPE_WITHDRAWN) is on the run queue, an
+ *       outgoing list or a waiting list until the list reaches it; it holds
+ *       no place in any session's `queued` and is not in host_inputs. It is
+ *       released unseen, with no notice, wherever it is next met: ta_run's
+ *       take, a waiting list that moves or fails, a discarded macrostep.
  *
  * Failure. Admission changes nothing unless it answers TA_OK. ta_run answers
  * TA_ERR_NOMEM with the input in the slot (or at the head of the run queue),
@@ -187,6 +204,24 @@ typedef struct ta_runner {
      */
     bool executing;
 } ta_runner;
+
+/*
+ * A token is `sequence << TA_INPUT_INDEX_BITS | envelope index`. The index
+ * takes 25 bits because the envelope pool is bounded by 2^24 (index 2^24 is
+ * the last) and an index is never 0; the sequence has the other 39. Hosts
+ * treat a token as opaque; core reads the index back in ta_input_withdraw.
+ */
+#define TA_INPUT_INDEX_BITS 25u
+#define TA_INPUT_INDEX_MASK ((UINT64_C(1) << TA_INPUT_INDEX_BITS) - 1u)
+#define TA_INPUT_SEQUENCE_MASK ((UINT64_C(1) << (64u - TA_INPUT_INDEX_BITS)) - 1u)
+
+/*
+ * ta_run_input_decided counts a host input (HOST or TRANSITION envelope) as
+ * no longer pending: ta_counters.host_inputs goes down. Call it exactly once
+ * per such envelope, where its end becomes decided (completed, refused,
+ * abandoned, withdrawn); other sources do nothing. Never allocates. O(1).
+ */
+void ta_run_input_decided(ta_system *system, const ta_envelope *envelope);
 
 /*
  * ta_run_executing reports whether a macrostep is executing now, inside

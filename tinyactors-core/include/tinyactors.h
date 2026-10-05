@@ -3129,6 +3129,22 @@ typedef struct {
 TA_API ta_result ta_actor_deliver(ta_system *system, TA_IN const ta_actor_deliver_params *params)
     TA_VALUE_MODEL(actor, params.actor);
 /*
+ * Takes back a host input that has not been taken (ADR 0099 section 8):
+ * `input` is the token ta_actor_deliver() gave. The envelope is marked and
+ * released unseen when it reaches the head of the run queue, or when its
+ * waiting list moves, so nothing is searched: O(1). The session's queue count
+ * and ta_counters.host_inputs go down now, so a withdrawn input no longer
+ * keeps the session from unloading; no notice is written for it, because the
+ * host asked for the end. It never allocates and may be called wherever
+ * ta_actor_deliver() may.
+ * - TA_OK: withdrawn; the event will never run.
+ * - TA_ERR_NOT_FOUND: no such pending input: it was taken, completed,
+ *   refused, abandoned or already withdrawn, or the token is stale (the
+ *   envelope was reused for another input), or it is not a host input.
+ * - TA_ERR_INVALID: a null system.
+ */
+TA_API ta_result ta_input_withdraw(ta_system *system, uint64_t input);
+/*
  * The host's answer to a LOAD_NEEDED notice when it cannot make `address`
  * resident (ADR 0099 section 6). Everything that waits for the address leaves
  * its list, in arrival order: mail from a session becomes a data-free
@@ -4337,6 +4353,15 @@ typedef struct {
     uint64_t macrosteps_long;      /* a macrostep reached a tenth of its microstep limit (ADR 0075) */
     uint64_t runaways;             /* a macrostep reached its microstep limit (ADR 0075) */
     uint64_t quota_refusals;       /* a spawn, a delayed send or a registration a quota refused (ADR 0092) */
+    /*
+     * A gauge, not a count: the host inputs (ta_actor_deliver(), ta_actor_transition())
+     * admitted and not yet decided. An input is decided when it completes, is
+     * refused, is abandoned or is withdrawn (ta_input_withdraw()), so the value
+     * is how many tokens the host still waits for, whatever the inputs'
+     * targets. It is zero in a definition's counters. The host bounds its own
+     * backlog with it (napi maxQueuedMessages).
+     */
+    uint64_t host_inputs;
 } ta_counters;
 
 /*
