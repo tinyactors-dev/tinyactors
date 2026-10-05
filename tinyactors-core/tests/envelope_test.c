@@ -20,8 +20,9 @@
  *      step that keeps the order.
  *   7. Waiting lists: the first insert says "first", the next do not, a take
  *      returns the whole list in arrival order, two addresses with ONE 32-bit
- *      hash stay apart, and a refill that re-creates the table keeps every
- *      list.
+ *      hash stay apart, a list's length is counted by a walk, the owner's
+ *      second link (owner_next) carries a list of its own beside `next`, and a
+ *      refill that re-creates the table keeps every list.
  *   8. Failure: every allocation of a refill refused in turn leaves the pool,
  *      the table, the lists and the counters as they were, and the retry
  *      works (a strict allocator checks every free's size).
@@ -362,6 +363,18 @@ static void test_waiting(void) {
     CHECK(!first && ta_envelope_at(&envelopes, a1)->waiting_tail == a3);
     CHECK(ta_envelope_at(&envelopes, a2)->state == TA_ENVELOPE_WAITING && ta_envelope_at(&envelopes, a2)->payload.address == a);
     CHECK(ta_table_count(&envelopes.waiting) == 3u);
+    /* The length of a list is counted by walking it; an address with equal hash is not confused. */
+    CHECK(ta_waiting_length(&envelopes, a) == 3u && ta_waiting_length(&envelopes, b) == 1u &&
+          ta_waiting_length(&envelopes, c) == 1u && ta_waiting_length(&envelopes, NULL) == 0u);
+    /* The owner's second list runs through owner_next and leaves `next`, the waiting chain, alone. */
+    ta_ilist cues;
+    ta_ilist_init(&cues);
+    ta_ilist_push_back(&cues, ta_envelopes_owner_link(&envelopes), a1);
+    ta_ilist_push_back(&cues, ta_envelopes_owner_link(&envelopes), b1);
+    CHECK(ta_ilist_next(ta_envelopes_link(&envelopes), a1) == a2 &&
+          ta_ilist_next(ta_envelopes_owner_link(&envelopes), a1) == b1);
+    CHECK(ta_ilist_unlink(&cues, ta_envelopes_owner_link(&envelopes), a1) && ta_ilist_pop_front(&cues, ta_envelopes_owner_link(&envelopes)) == b1);
+    CHECK(ta_envelope_at(&envelopes, a1)->owner_next == 0 && ta_waiting_length(&envelopes, a) == 3u);
 
     /* A refill that grows the pool re-creates the table and every list survives. */
     ta_pool_counts before;

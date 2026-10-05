@@ -8207,7 +8207,7 @@ typedef enum ta_envelope_state {
  */
 typedef struct ta_envelope {
     uint32_t next;         /* the link of the one list that holds it; the pool's free link while free */
-    uint32_t owner_next;   /* reserved for the owner's second list (ADR 0101); the pool never writes it */
+    uint32_t owner_next;   /* the owner's second list: the runner's pending load cues (run.h) while WAITING; ADR 0101's pending sends otherwise; the pool never writes it */
     uint32_t waiting_tail; /* first envelope of a waiting list: the list's last; 0 on the others */
     uint8_t state;         /* ta_envelope_state */
     uint8_t source;        /* ta_input_source */
@@ -8244,6 +8244,7 @@ typedef struct ta_envelopes {
     ta_quota quota;        /* capacity == bound; used counts envelopes in use; reserved the live claims */
     ta_table waiting;      /* FIXED, hash of the address to the first envelope of its list; zeroed until the first refill */
     ta_ilink link;         /* the lists below, through ta_envelope.next */
+    ta_ilink owner_link;   /* the owner's second list, through ta_envelope.owner_next */
     ta_ilist run;          /* the run queue */
     uint32_t bound;        /* pool_envelopes rounded down to whole pages */
     uint32_t admission_watermark;
@@ -8354,6 +8355,15 @@ TA_PRIVATE void ta_envelopes_run_splice(ta_envelopes *envelopes, ta_ilist *outgo
 TA_PRIVATE const ta_ilink *ta_envelopes_link(const ta_envelopes *envelopes);
 
 /*
+ * ta_envelopes_owner_link answers the link descriptor of `owner_next`, for a
+ * second list over the same envelopes. An envelope may be on one list through
+ * `next` and one through `owner_next` at the same time; the owner says which
+ * states may do so (run.h: only the first envelope of a waiting list, while
+ * the cue to load its address is pending). Valid for the life of the block.
+ */
+TA_PRIVATE const ta_ilink *ta_envelopes_owner_link(const ta_envelopes *envelopes);
+
+/*
  * ta_waiting_put is what ta_waiting_insert needs besides the envelope: the
  * address it waits for (a block of the caller, which only lends it for the
  * call) and where to say whether the envelope began the list.
@@ -8373,6 +8383,13 @@ typedef struct {
  * expected.
  */
 TA_PRIVATE ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, const ta_waiting_put *put);
+
+/*
+ * ta_waiting_length answers how many envelopes wait for `address`, 0 for none.
+ * It walks the list: O(list), and the owner uses it for reports, not for
+ * decisions on a hot path. It never allocates and changes nothing.
+ */
+TA_PRIVATE uint32_t ta_waiting_length(const ta_envelopes *envelopes, const ta_address *address);
 
 /*
  * ta_waiting_take_list removes the whole waiting list of `address` and
@@ -8464,14 +8481,29 @@ typedef struct ta_actor ta_actor;
  *       its own paused macrostep sent itself is the one exception.
  *   I4: every notice ta_run writes is complete in the array; the count is
  *       set on every result.
+ *   I5: an envelope is on `loads` exactly when it is the first of a waiting
+ *       list whose cue is pending; it is on `refused` only between
+ *       ta_address_load_failed and the call that writes its notice. Both lists
+ *       count as pending work for ta_run_pending.
  *
  * Failure. Admission changes nothing unless it answers TA_OK. ta_run answers
  * TA_ERR_NOMEM with the input in the slot (or at the head of the run queue),
  * and the next call continues it.
  *
+ * Waiting for an address. An input for an address that has no resident
+ * session (ta_actor_deliver with `address`, or a mail envelope whose receiver
+ * was unloaded before it was taken) joins that address's waiting list
+ * (package envelope); the first one raises a cue, which ta_run writes as a
+ * LOAD_NEEDED notice. The list leaves in one piece: to the run queue when the
+ * address becomes resident (package mail, ta_mail_address_resident), or
+ * recycled when the host says the load failed (ta_address_load_failed).
+ * Waiting inputs hold an envelope each and count against the pool's bound, but
+ * not against any session's `queued`.
+ *
  * Complexity. Admission, take and completion are O(1). A destroyed target's
  * envelopes are not searched for: they are refused when they come to the
- * head.
+ * head. Removing a pending cue is O(cues pending), which are the lists that
+ * began since the last call.
  */
 
 /*
@@ -8525,6 +8557,18 @@ typedef struct ta_runner {
     uint32_t started_last;   /* the newest queued cell, 0 when none */
     ta_ilist lent;         /* envelopes whose events the last call's notices lent */
     ta_ilist abandoned;    /* inputs ended by ta_actor_abandon or by their session's end; reported by the next call */
+    /*
+     * Cues the next call reports first (ADR 0099 sections 6 and 7). `loads`
+     * holds the first envelope of every waiting list whose LOAD_NEEDED notice
+     * has not been written yet, linked through ta_envelope.owner_next;
+     * `refused` holds the host inputs that ta_address_load_failed discarded,
+     * linked through ta_envelope.next, with the reason in ta_envelope.flags.
+     * Both are written by ta_run before it takes anything, as far as the
+     * caller's array has room, and both are empty when the call is idle.
+     * Lifetime: system for the heads, envelope for membership.
+     */
+    ta_ilist loads;
+    ta_ilist refused;
     uint64_t tokens;       /* the last token issued; 0 is "no token" */
 } ta_runner;
 
@@ -10814,7 +10858,20 @@ typedef struct ta_actor ta_actor;
  *      unseen (ADR 0099 section 4; ADR 0082).
  *   3. ta_run takes the envelope like any input. A receiver that is gone or
  *      has finished does not get it: ta_mail_recycle turns the envelope into
- *      the data-free error.communication its sender takes (section 6).
+ *      the data-free error.communication its sender takes (section 6). A
+ *      receiver that is out (unloaded) makes the envelope wait for its
+ *      address instead (step 4).
+ *   4. Waiting for an address (section 4). An input whose target is a named
+ *      address with no resident session joins that address's waiting list
+ *      (ta_mail_post_waiting): host input from ta_actor_deliver with an
+ *      address, and mail whose receiver was unloaded before it was taken. The
+ *      first envelope of a list raises a cue, which ta_run writes as a
+ *      LOAD_NEEDED notice. The list then leaves in one piece, in arrival
+ *      order: to the run queue when a session becomes resident at the address
+ *      (ta_mail_address_resident, called by spawn, publish and load), or
+ *      recycled when the host answers ta_address_load_failed. A replacement
+ *      that takes over an address brings the incumbent's queued inputs with it
+ *      (ta_mail_retarget).
  *
  * Lifetimes. Each thing here has exactly one.
  *
@@ -10828,9 +10885,14 @@ typedef struct ta_actor ta_actor;
  *     envelope is the same envelope, now an error for the sender, and lives
  *     until the sender's input completes. Anything holding its index (the
  *     outgoing list, then the run queue, then the slot) drops it first.
- *   - system: nothing. This package keeps no state between calls.
+ *   - system: nothing of its own. The waiting lists, the table that finds
+ *     them and the cue lists are package envelope's and package run's; this
+ *     package decides when an envelope moves between them.
  *
- * When it allocates. Never. Every function here is allowed inside a
+ * When it allocates. Never. (ta_actor_deliver, the one caller that adds an
+ * envelope to a waiting list from outside a macrostep, refills the pool first,
+ * at its own safe point; a waiting list is found by a table that has a slot
+ * for every envelope, so joining it cannot fail.) Every function here is allowed inside a
  * macrostep: ta_mail_send takes an envelope that the pool already holds, under
  * the claim, and answers TA_MAIL_FULL when there is none (the claim is spent,
  * or the pool is at its bound). The pool grows only at the safe points the
@@ -10849,13 +10911,26 @@ typedef struct ta_actor ta_actor;
  *       zero, whichever way it completed.
  *   M4: the order of mail from one sender to one receiver is the order of the
  *       sends: lists are appended in send order and spliced in one piece.
+ *   M5: a WAITING envelope is on exactly one waiting list, holds a reference to
+ *       its address, has target 0 and is counted by no session's `queued`;
+ *       its list is on the cue list (`loads`) exactly while the LOAD_NEEDED
+ *       notice for it has not been written.
+ *   M6: a waiting list leaves whole and in order: every envelope goes to the
+ *       run queue (retargeted, counted in `queued`) or is recycled, and no
+ *       envelope of the list is left behind or reordered.
  *
  * Complexity. ta_mail_send is O(1) (a table lookup for a named destination).
  * ta_mail_macrostep_ended is O(1). ta_mail_macrostep_discarded is
- * O(outgoing envelopes), the cost of freeing them. ta_mail_recycle is O(1).
+ * O(outgoing envelopes), the cost of freeing them. ta_mail_recycle and
+ * ta_mail_post_waiting are O(1). ta_mail_address_resident and
+ * ta_address_load_failed are O(list moved) plus O(pending cues) to drop the
+ * list's cue. ta_mail_retarget is O(pending envelopes), and is for the rare,
+ * host-initiated replacement.
  *
  * Failure. ta_mail_send changes nothing unless it answers TA_MAIL_QUEUED.
- * No function here fails after it has begun to change something.
+ * No function here fails after it has begun to change something, and none of
+ * the recycling and waiting functions can fail at all: they only move
+ * envelopes the pool already holds.
  *
  * Transitional. Until the router is deleted (the rest of unit 4.2c), mail
  * whose receiver this package cannot place yet, a session that is not
@@ -10935,46 +11010,100 @@ TA_PRIVATE void ta_mail_macrostep_ended(ta_system *system);
 TA_PRIVATE void ta_mail_macrostep_discarded(ta_system *system);
 
 /*
- * ta_recycle_reason says why an envelope could not be delivered; it picks the
- * words of nothing yet (an error.communication is data-free) but keeps the
- * rows of ADR 0099 section 6 apart for the callers and the tests.
+ * ta_mail_recycle reports the undeliverable envelope `index`, which is on no
+ * list and not WAITING, as ADR 0099 section 6 says, for one of the
+ * TA_REFUSED_ reasons (the receiver was destroyed or finished, an input time
+ * is no longer valid, or the host's answer to a load was a failure).
+ *
+ *   - mail from a session (source MAIL or ERROR): the envelope becomes the
+ *     error. Its event is released and replaced by a data-free
+ *     error.communication carrying the send's ID, its target is the sender, and
+ *     it joins the end of the run queue. The sender is told the same whatever
+ *     the reason, because SCXML has one error for a message that did not
+ *     arrive; the reason is for host input only. When the sender has finished
+ *     or is gone, the envelope is freed instead.
+ *   - host input (source HOST): the envelope goes on the runner's `refused`
+ *     list with `reason` in its flags, and the next ta_run writes an
+ *     INPUT_REFUSED notice for it, lends its event, and releases it.
+ *
+ * Never allocates, never fails. O(1).
  */
-typedef enum ta_recycle_reason {
-    TA_RECYCLE_DESTROYED, /* the receiver was destroyed with the mail waiting */
-    TA_RECYCLE_DONE       /* the receiver finished while the mail waited */
-} ta_recycle_reason;
+TA_PRIVATE void ta_mail_recycle(ta_system *system, uint32_t index, ta_refusal_reason reason);
 
 /*
- * ta_mail_recycle reports the undeliverable mail envelope `index`, which is
- * on no list, to its sender (ADR 0099 section 6). The envelope becomes the
- * error: its event is released and replaced by a data-free
- * error.communication carrying the send's ID, its target is the sender, and it
- * joins the end of the run queue. When the sender has finished or is gone,
- * the envelope is freed instead. Never allocates, never fails. O(1).
+ * ta_mail_resident_at answers the session that the host's directory says is
+ * resident at `address`, or NULL when it says anything else (unloaded, no
+ * entry) or names an ID that is not a session of this system. The session may
+ * have finished. It never allocates and retains nothing. O(1) plus the
+ * directory's own cost.
  */
-TA_PRIVATE void ta_mail_recycle(ta_system *system, uint32_t index, ta_recycle_reason reason);
+TA_PRIVATE ta_actor *ta_mail_resident_at(const ta_system *system, ta_address *address);
+
+/*
+ * ta_mail_post_waiting puts the made envelope `index`, which is on no list,
+ * on the waiting list of `address`: it becomes WAITING with target 0 and its
+ * own reference to the address, and, when it starts the list, its cue joins
+ * the runner's `loads` list for the next ta_run to report. The caller has
+ * counted nothing in any session's `queued`. It never allocates and cannot
+ * fail after a pool refill (envelope.h I4); if the table refuses all the same
+ * (a caller bug) the envelope is recycled as TA_REFUSED_LOAD_FAILED so nothing
+ * is lost or leaked. O(1) expected.
+ */
+TA_PRIVATE void ta_mail_post_waiting(ta_system *system, uint32_t index, ta_address *address);
+
+/*
+ * ta_mail_address_resident tells the package that a session became resident
+ * at `address` (spawn with the address, ta_actor_publish, ta_actor_load): the
+ * address's waiting list, if any, moves in arrival order to the end of the run
+ * queue, retargeted to `actor` and counted in its `queued`, and the list's
+ * pending cue, if it has not been reported yet, is dropped. An envelope the
+ * session cannot take (it finished, or already has UINT16_MAX inputs queued)
+ * is recycled with TA_REFUSED_DONE or TA_REFUSED_INVALID instead. Nothing
+ * waits, so it does nothing, in O(1). Never allocates.
+ */
+TA_PRIVATE void ta_mail_address_resident(ta_system *system, const ta_address *address, ta_actor_id actor);
+
+/*
+ * ta_mail_retarget hands over the inputs queued for a replaced session
+ * (ta_actor_publish with an incumbent): every host input and mail envelope
+ * addressed to `from`, on the run queue or on the running input's outgoing
+ * list, now goes to `to`, in the same order, and the two sessions' `queued`
+ * counts follow. Errors that `from` is to hear stay with it: they report on
+ * what `from` sent. When `to` reaches UINT16_MAX inputs the rest stay with
+ * `from` and are refused when they come to the head. Never allocates. O(pending
+ * envelopes), because mail is addressed by session and not found by name.
+ */
+TA_PRIVATE void ta_mail_retarget(ta_system *system, ta_actor_id from, ta_actor_id to);
 
 /*
  * ta_mail_outgoing_to answers how many envelopes on the running input's
  * outgoing list are addressed to `actor`, when `actor` is the session running
  * that input; 0 otherwise. An unload of a session paused inside its macrostep
  * does not wait for the mail that macrostep sent to itself: the list is made
- * visible when the session leaves, and that mail finds its receiver gone and
- * comes back to its sender, who is the same session, so it is freed. It never
- * allocates. O(outgoing envelopes), and only for the session in the slot.
+ * visible when the session leaves, and that mail finds its receiver out and
+ * waits for its address (ta_mail_follow). It never allocates. O(outgoing envelopes), and only for the session in the slot.
  */
 TA_PRIVATE uint32_t ta_mail_outgoing_to(const ta_system *system, ta_actor_id actor);
 
+/* ta_mail_follow_status is the answer of ta_mail_follow. */
+typedef enum ta_mail_follow_status {
+    TA_MAIL_FOLLOWED = 0, /* the session is resident under another runtime ID: *out is it, and counts the envelope */
+    TA_MAIL_WAITS,        /* the session is out, with an address: the envelope now waits for it (consumed) */
+    TA_MAIL_GONE          /* the session is gone, or cannot take it: the caller recycles the envelope */
+} ta_mail_follow_status;
+
 /*
- * ta_mail_follow finds the session that holds the receiver's session now,
- * for an envelope whose target runtime ID names no resident session: a session
- * keeps its ID across unload and load (ADR 0066), so mail that waited while its
- * receiver was out and back in follows it to its new runtime ID. On success
- * the envelope's target is the new ID and the receiver's `queued` count
- * includes it. Answers NULL when the session is gone or not resident (the
- * caller recycles the envelope). It never allocates. O(1).
+ * ta_mail_follow finds where the envelope `index` goes now, for one whose
+ * target runtime ID names no resident session. A session keeps its ID across
+ * unload and load (ADR 0066), so mail that waited while its receiver was out
+ * and back in follows it to its new runtime ID (TA_MAIL_FOLLOWED: the
+ * envelope's target is the new ID and the receiver's `queued` count includes
+ * it). Mail that finds its receiver out waits for the receiver's address
+ * (TA_MAIL_WAITS, ta_mail_post_waiting: the first of a list raises LOAD_NEEDED).
+ * A session that is gone for good, or whose queue is full, is TA_MAIL_GONE and
+ * the envelope is untouched. It never allocates. O(1).
  */
-TA_PRIVATE ta_actor *ta_mail_follow(ta_system *system, uint32_t index);
+TA_PRIVATE ta_mail_follow_status ta_mail_follow(ta_system *system, uint32_t index, ta_actor **out);
 
 
 TA_API uint32_t ta_version(void) {
@@ -18484,6 +18613,9 @@ TA_PRIVATE ta_result ta_envelopes_init(ta_envelopes *envelopes, ta_allocator all
         return result;
     }
     result = ta_ilink_init(&envelopes->link, &envelopes->pool, offsetof(ta_envelope, next));
+    if (result == TA_OK) {
+        result = ta_ilink_init(&envelopes->owner_link, &envelopes->pool, offsetof(ta_envelope, owner_next));
+    }
     if (result != TA_OK) {
         ta_pool_destroy(&envelopes->pool);
         *envelopes = (ta_envelopes){0};
@@ -18657,6 +18789,11 @@ TA_PRIVATE const ta_ilink *ta_envelopes_link(const ta_envelopes *envelopes) {
     return &envelopes->link;
 }
 
+/* ta_envelopes_owner_link: see envelope.h. */
+TA_PRIVATE const ta_ilink *ta_envelopes_owner_link(const ta_envelopes *envelopes) {
+    return &envelopes->owner_link;
+}
+
 /*
  * ta_waiting_find answers the first envelope of the waiting list of `address`,
  * or 0. The table yields every entry with the address's hash; the interned
@@ -18709,6 +18846,20 @@ TA_PRIVATE ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, 
     first_envelope->waiting_tail = index;
     *first = false;
     return TA_OK;
+}
+
+/* ta_waiting_length: see envelope.h. */
+TA_PRIVATE uint32_t ta_waiting_length(const ta_envelopes *envelopes, const ta_address *address) {
+    if (address == NULL) {
+        return 0;
+    }
+    uint32_t length = 0;
+    uint32_t bound = ta_pool_extent(&envelopes->pool);
+    for (uint32_t index = ta_waiting_find(envelopes, address, ta_address_record_hash(address));
+         index != 0 && length < bound; index = ta_ilist_next(&envelopes->link, index)) {
+        length += 1u;
+    }
+    return length;
 }
 
 /* ta_waiting_take_list: see envelope.h. */
@@ -18794,6 +18945,8 @@ TA_PRIVATE ta_result ta_runner_init(ta_runner *runner, ta_allocator allocator) {
     }
     ta_ilist_init(&runner->lent);
     ta_ilist_init(&runner->abandoned);
+    ta_ilist_init(&runner->loads);
+    ta_ilist_init(&runner->refused);
     return TA_OK;
 }
 
@@ -18913,8 +19066,9 @@ static uint64_t ta_run_token(ta_system *system) {
  * operator's.
  */
 static bool ta_run_event_valid(const ta_system *system, const ta_actor *actor, const ta_event *event, ta_time time) {
-    return ta_trie_valid(&system->event_names.trie, event->name) && event->name != TA_EVENT_NAME_ROOT &&
-           ta_actor_input_time_valid(system, actor, time);
+    /* An input for an address no session holds has no clock of its own to check: it is for the system's now. */
+    bool timely = actor != NULL ? ta_actor_input_time_valid(system, actor, time) : time == ta_clock_now(&system->clock);
+    return ta_trie_valid(&system->event_names.trie, event->name) && event->name != TA_EVENT_NAME_ROOT && timely;
 }
 
 typedef struct ta_run_input {
@@ -18930,7 +19084,8 @@ typedef struct ta_run_input {
  * (retained: the envelope owns its references from here). It consumes one
  * unit of the pool's quota that nothing reserved. The envelope is not on a
  * list. Answers 0 when the pool cannot make one: the refill failed, or the
- * pool is at its bound.
+ * pool is at its bound. `actor` is NULL for an input that waits for an
+ * address: its target is then 0 until the address becomes resident.
  *
  * The refill leaves room for the envelope and for what the running input has
  * yet to claim: envelopes are interchangeable pool items, so one taken for
@@ -18948,7 +19103,7 @@ static uint32_t ta_run_fill(ta_system *system, ta_actor *actor, const ta_run_inp
     }
     ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
     envelope->source = (uint8_t)input->source;
-    envelope->target = actor->record.id;
+    envelope->target = actor != NULL ? actor->record.id : 0;
     envelope->due = input->time;
     envelope->trace = *input->trace;
     ta_event_retain(input->event, &envelope->event);
@@ -18964,18 +19119,28 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
     if (system == NULL || params == NULL || params->event == NULL) {
         return TA_ERR_INVALID;
     }
-    ta_actor *actor = ta_actor_lookup(system, params->actor);
-    if (actor == NULL) {
+    /* A session named by ID, else the one the directory says is resident at the address, else the address waits. */
+    ta_actor *actor = NULL;
+    ta_address *waits_for = NULL;
+    if (params->actor != 0) {
+        actor = ta_actor_lookup(system, params->actor);
+        if (actor == NULL) {
+            return TA_ERR_NOT_FOUND;
+        }
+    } else if (params->address != NULL) {
+        actor = ta_mail_resident_at(system, params->address);
+        waits_for = actor == NULL ? params->address : NULL;
+    } else {
         return TA_ERR_NOT_FOUND;
     }
     if (!ta_run_event_valid(system, actor, params->event, params->time)) {
         return TA_ERR_INVALID;
     }
     /* Before full: a finished actor never becomes free again (ADR 0055). */
-    if (actor->finished) {
+    if (actor != NULL && actor->finished) {
         return TA_ERR_DONE;
     }
-    if (!ta_envelopes_admissible(&system->envelopes) || actor->queued == UINT16_MAX) {
+    if (!ta_envelopes_admissible(&system->envelopes) || (actor != NULL && actor->queued == UINT16_MAX)) {
         return TA_ERR_FULL;
     }
     ta_event accepted = *params->event;
@@ -18996,8 +19161,12 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
     if (params->input != NULL) {
         *params->input = envelope->input;
     }
-    actor->queued += 1u;
-    ta_envelopes_run_push(&system->envelopes, index);
+    if (actor != NULL) {
+        actor->queued += 1u;
+        ta_envelopes_run_push(&system->envelopes, index);
+    } else {
+        ta_mail_post_waiting(system, index, waits_for);
+    }
     return TA_OK;
 }
 
@@ -19035,7 +19204,7 @@ static void ta_run_refuse(ta_system *system, uint32_t index, ta_refusal_reason r
     ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
     if (envelope->source != TA_SOURCE_HOST) {
         /* Mail comes back to its sender as an error; anything else nobody asked to hear about is freed. */
-        ta_mail_recycle(system, index, reason == TA_REFUSED_DONE ? TA_RECYCLE_DONE : TA_RECYCLE_DESTROYED);
+        ta_mail_recycle(system, index, reason);
         return;
     }
     ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_INPUT_REFUSED,
@@ -19058,7 +19227,17 @@ static ta_result ta_run_take(ta_system *system, uint32_t index, ta_run_notices *
     ta_actor *actor = ta_actor_lookup(system, envelope->target);
     *occupied = false;
     if (actor == NULL && (envelope->source == TA_SOURCE_MAIL || envelope->source == TA_SOURCE_ERROR)) {
-        actor = ta_mail_follow(system, index); /* its session may have been unloaded and loaded again meanwhile */
+        /* Its session may have been unloaded and loaded again meanwhile, or be out: then the mail waits for its load. */
+        switch (ta_mail_follow(system, index, &actor)) {
+        case TA_MAIL_FOLLOWED:
+            break;
+        case TA_MAIL_WAITS:
+            return TA_OK;
+        case TA_MAIL_GONE:
+        default:
+            actor = NULL;
+            break;
+        }
     }
     if (actor == NULL) {
         ta_run_refuse(system, index, TA_REFUSED_DESTROYED, out);
@@ -19252,6 +19431,45 @@ static bool ta_run_report_abandoned(ta_system *system, ta_run_notices *out) {
 }
 
 /*
+ * ta_run_report_cues writes the notices of the pending cues, as far as the
+ * array has room: one LOAD_NEEDED per waiting list that began since the last
+ * call, then one REFUSED per host input ta_address_load_failed discarded. A
+ * refused envelope lends its event to its notice and goes on `lent`, as an
+ * input refused at take does. Answers true when it stopped for lack of room
+ * with cues left. It never allocates.
+ */
+static bool ta_run_report_cues(ta_system *system, ta_run_notices *out) {
+    ta_runner *runner = &system->runner;
+    const ta_ilink *owner_link = ta_envelopes_owner_link(&system->envelopes);
+    const ta_ilink *link = ta_envelopes_link(&system->envelopes);
+    while (!ta_ilist_is_empty(&runner->loads)) {
+        if (ta_run_room(out) < 1u) {
+            return true;
+        }
+        uint32_t index = ta_ilist_pop_front(&runner->loads, owner_link);
+        const ta_envelope *first = ta_envelope_at(&system->envelopes, index);
+        ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_LOAD_NEEDED,
+                                                 .source = (ta_input_source)first->source,
+                                                 .address = first->payload.address,
+                                                 .trace = first->trace });
+    }
+    while (!ta_ilist_is_empty(&runner->refused)) {
+        if (ta_run_room(out) < 1u) {
+            return true;
+        }
+        uint32_t index = ta_ilist_pop_front(&runner->refused, link);
+        const ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+        ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_INPUT_REFUSED,
+                                                 .input = envelope->input,
+                                                 .source = (ta_input_source)envelope->source,
+                                                 .reason = (ta_refusal_reason)envelope->flags,
+                                                 .event = &envelope->event });
+        ta_ilist_push_back(&runner->lent, link, index);
+    }
+    return false;
+}
+
+/*
  * ta_run_complete writes the input's COMPLETED notice (and FINISHED when the
  * session finished), frees the slot and disposes of the envelope: it is lent
  * to the notices when `lend` (a TAKEN notice borrowed its event), else
@@ -19356,7 +19574,8 @@ static bool ta_run_check(const ta_system *system, const ta_run_params *params) {
 TA_API bool ta_run_pending(const ta_system *system) {
     const ta_runner *runner = &system->runner;
     return runner->slot.occupied || runner->started_first != 0 || !ta_ilist_is_empty(&system->envelopes.run) ||
-           !ta_ilist_is_empty(&runner->abandoned);
+           !ta_ilist_is_empty(&runner->abandoned) || !ta_ilist_is_empty(&runner->loads) ||
+           !ta_ilist_is_empty(&runner->refused);
 }
 
 TA_API ta_result ta_run(ta_system *system, const ta_run_params *params) {
@@ -19377,17 +19596,17 @@ TA_API ta_result ta_run(ta_system *system, const ta_run_params *params) {
     ta_run_status status = TA_RUN_IDLE;
     ta_run_free_lent(system);
     for (;;) {
-        if (ta_run_report_abandoned(system, &out)) {
+        if (ta_run_report_abandoned(system, &out) || ta_run_report_cues(system, &out)) {
             status = TA_RUN_NOTICES_FULL;
             break;
         }
         if (!runner->slot.occupied) {
-            if (ta_run_room(&out) < 3u) {
-                status = TA_RUN_NOTICES_FULL;
+            if (runner->started_first == 0 && ta_ilist_is_empty(queue)) {
+                status = TA_RUN_IDLE; /* nothing to take: a full array is no reason to ask for another call */
                 break;
             }
-            if (runner->started_first == 0 && ta_ilist_is_empty(queue)) {
-                status = TA_RUN_IDLE;
+            if (ta_run_room(&out) < 3u) {
+                status = TA_RUN_NOTICES_FULL;
                 break;
             }
             if (budget == 0) {
@@ -28054,6 +28273,10 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
     }
     ta_trace_lifecycle(system, actor, TA_TRACE_SPAWNED, &params->trace);
     ta_run_start(system, actor);
+    if (params->address != NULL) {
+        /* Inputs that waited for this address follow the bootstrap, in arrival order (mail.h). */
+        ta_mail_address_resident(system, actor->record.self.as.named, id);
+    }
     *params->out = id;
     return TA_OK;
 }
@@ -28584,6 +28807,10 @@ TA_API ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_para
     actor->replacement_of = 0;
     ta_actor_touch(actor);
     ta_actor_release_activation_effects(system, actor);
+    if (incumbent != NULL) {
+        ta_mail_retarget(system, incumbent->record.id, actor->record.id); /* its queued inputs follow the address */
+    }
+    ta_mail_address_resident(system, actor->record.self.as.named, actor->record.id);
     if (replaying) {
         /* Its services never started, and the world moved on while it was
          * away: each active invocation is reported lost, as after a load. */
@@ -28655,8 +28882,8 @@ TA_PRIVATE ta_result ta_actor_accept_origin(const ta_system *system, const ta_ac
         }
         return TA_OK;
     }
-    if (event->origin.kind != TA_ORIGIN_NONE || event->invoke_id == TA_INVOKE_ID_NONE) {
-        return TA_OK;
+    if (event->origin.kind != TA_ORIGIN_NONE || event->invoke_id == TA_INVOKE_ID_NONE || actor == NULL) {
+        return TA_OK; /* no session yet (an input that waits for an address) has no invocations to name */
     }
     (void)ta_invoke_origin_for(system, actor, event->invoke_id, &event->origin);
     return TA_OK;
@@ -29975,6 +30202,7 @@ static ta_result ta_image_load(ta_system *system, const ta_image_load_params *pa
     ta_address *address = loaded->record.self.as.named;
     ta_session_drop_unloaded(&system->sessions, address);
     ta_trace_lifecycle(system, loaded, TA_TRACE_LOADED, params->trace);
+    ta_mail_address_resident(system, address, id); /* inputs that waited for the load go to the session, in order */
     *params->out = id;
     return TA_OK;
 }
@@ -36638,9 +36866,16 @@ TA_PRIVATE void ta_mail_macrostep_discarded(ta_system *system) {
 }
 
 /* ta_mail_recycle: see mail.h. */
-TA_PRIVATE void ta_mail_recycle(ta_system *system, uint32_t index, ta_recycle_reason reason) {
-    (void)reason; /* an error.communication is data-free: every row of section 6 reads the same to the sender */
+TA_PRIVATE void ta_mail_recycle(ta_system *system, uint32_t index, ta_refusal_reason reason) {
     ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+    if (envelope->source == TA_SOURCE_HOST) {
+        /* The host asked to be told: the reason rides in the flags until ta_run writes the notice. */
+        envelope->flags = (uint16_t)reason;
+        envelope->target = 0;
+        ta_ilist_push_back(&system->runner.refused, ta_envelopes_link(&system->envelopes), index);
+        return;
+    }
+    /* An error.communication is data-free: every row of section 6 reads the same to the sender. */
     ta_actor *sender = envelope->source == TA_SOURCE_MAIL ? ta_actor_lookup(system, envelope->from) : NULL;
     if (sender == NULL || sender->finished || sender->queued == UINT16_MAX) {
         ta_envelope_release(&system->envelopes, index); /* nobody to tell */
@@ -36660,6 +36895,145 @@ TA_PRIVATE void ta_mail_recycle(ta_system *system, uint32_t index, ta_recycle_re
     ta_envelopes_run_push(&system->envelopes, index);
 }
 
+/* ta_mail_resident_at: see mail.h. */
+TA_PRIVATE ta_actor *ta_mail_resident_at(const ta_system *system, ta_address *address) {
+    return ta_mail_receiver(system, &(ta_actor_ref){ .kind = TA_ACTOR_REF_NAMED, .as.named = address });
+}
+
+/*
+ * ta_mail_unwait takes a WAITING envelope off its address: the reference it
+ * held goes back and it is RUNNABLE again, on no list, ready to be pushed on
+ * the run queue or recycled. The list it was on has been taken by the caller.
+ */
+static void ta_mail_unwait(ta_envelope *envelope) {
+    ta_address_release(envelope->payload.address);
+    envelope->payload.address = NULL;
+    envelope->state = TA_ENVELOPE_RUNNABLE;
+    envelope->next = 0;
+}
+
+/*
+ * ta_mail_drop_cue removes the pending LOAD_NEEDED cue of the list whose first
+ * envelope is `head`, if its notice has not been written yet. The cue list
+ * holds only the lists that began since the last ta_run, so the walk is short.
+ */
+static void ta_mail_drop_cue(ta_system *system, uint32_t head) {
+    (void)ta_ilist_unlink(&system->runner.loads, ta_envelopes_owner_link(&system->envelopes), head);
+}
+
+/* ta_mail_post_waiting: see mail.h. */
+TA_PRIVATE void ta_mail_post_waiting(ta_system *system, uint32_t index, ta_address *address) {
+    bool first = false;
+    ta_envelope_at(&system->envelopes, index)->target = 0;
+    if (ta_waiting_insert(&system->envelopes, index, &(ta_waiting_put){ .address = address, .first = &first }) !=
+        TA_OK) {
+        ta_mail_recycle(system, index, TA_REFUSED_LOAD_FAILED); /* unreachable after a refill (envelope.h I4) */
+        return;
+    }
+    if (first) {
+        ta_ilist_push_back(&system->runner.loads, ta_envelopes_owner_link(&system->envelopes), index);
+    }
+}
+
+/* ta_mail_address_resident: see mail.h. */
+TA_PRIVATE void ta_mail_address_resident(ta_system *system, const ta_address *address, ta_actor_id actor_id) {
+    uint32_t index = ta_waiting_take_list(&system->envelopes, address);
+    if (index == 0) {
+        return;
+    }
+    ta_mail_drop_cue(system, index);
+    ta_actor *actor = ta_actor_lookup(system, actor_id);
+    const ta_ilink *link = ta_envelopes_link(&system->envelopes);
+    while (index != 0) {
+        uint32_t next = ta_ilist_next(link, index); /* read before the push rewrites the link */
+        ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+        ta_mail_unwait(envelope);
+        if (actor == NULL) {
+            ta_mail_recycle(system, index, TA_REFUSED_DESTROYED);
+        } else if (actor->finished) {
+            ta_mail_recycle(system, index, TA_REFUSED_DONE);
+        } else if (actor->queued == UINT16_MAX) {
+            ta_mail_recycle(system, index, TA_REFUSED_INVALID);
+        } else {
+            envelope->target = actor_id;
+            actor->queued += 1u;
+            ta_envelopes_run_push(&system->envelopes, index);
+        }
+        index = next;
+    }
+}
+
+/* ta_address_load_failed: see tinyactors.h. */
+TA_API ta_result ta_address_load_failed(ta_system *system, const ta_address_load_failed_params *params) {
+    if (system == NULL || params == NULL || params->address == NULL ||
+        (uint32_t)params->reason < (uint32_t)TA_REFUSED_LOAD_NOT_FOUND ||
+        (uint32_t)params->reason > (uint32_t)TA_REFUSED_LOAD_UNLOADED) {
+        return TA_ERR_INVALID;
+    }
+    uint32_t index = ta_waiting_take_list(&system->envelopes, params->address);
+    if (index == 0) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_mail_drop_cue(system, index);
+    const ta_ilink *link = ta_envelopes_link(&system->envelopes);
+    while (index != 0) {
+        uint32_t next = ta_ilist_next(link, index);
+        ta_mail_unwait(ta_envelope_at(&system->envelopes, index));
+        ta_mail_recycle(system, index, params->reason);
+        index = next;
+    }
+    return TA_OK;
+}
+
+/* ta_address_waiting: see tinyactors.h. */
+TA_API uint32_t ta_address_waiting(const ta_system *system, const ta_address *address) {
+    return system == NULL ? 0 : ta_waiting_length(&system->envelopes, address);
+}
+
+/* ta_mail_retarget_step is what one pass of ta_mail_retarget_list needs. Lifetime: call. */
+typedef struct ta_mail_retarget_step {
+    ta_actor_id from;
+    ta_actor_id to;
+    uint32_t room; /* how many more the receiving session may be given */
+} ta_mail_retarget_step;
+
+/*
+ * ta_mail_retarget_list moves the envelopes of one list that go from `step->from`
+ * to `step->to`: host input and mail, not errors. It answers how many it moved,
+ * which is at most `step->room`, so the receiving session's `queued` cannot
+ * overflow.
+ */
+static uint32_t ta_mail_retarget_list(ta_system *system, uint32_t head, const ta_mail_retarget_step *step) {
+    const ta_ilink *link = ta_envelopes_link(&system->envelopes);
+    uint32_t moved = 0;
+    for (uint32_t index = head; index != 0 && moved < step->room; index = ta_ilist_next(link, index)) {
+        ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+        if (envelope->target == step->from &&
+            (envelope->source == TA_SOURCE_HOST || envelope->source == TA_SOURCE_MAIL)) {
+            envelope->target = step->to;
+            moved += 1u;
+        }
+    }
+    return moved;
+}
+
+/* ta_mail_retarget: see mail.h. */
+TA_PRIVATE void ta_mail_retarget(ta_system *system, ta_actor_id from, ta_actor_id to) {
+    ta_actor *source = ta_actor_lookup(system, from);
+    ta_actor *target = ta_actor_lookup(system, to);
+    if (source == NULL || target == NULL || from == to) {
+        return;
+    }
+    ta_mail_retarget_step step = { .from = from, .to = to, .room = (uint32_t)(UINT16_MAX - target->queued) };
+    uint32_t moved = ta_mail_retarget_list(system, system->envelopes.run.head, &step);
+    if (system->runner.slot.occupied) {
+        step.room -= moved;
+        moved += ta_mail_retarget_list(system, system->runner.slot.outgoing.head, &step);
+    }
+    target->queued = (uint16_t)(target->queued + moved);
+    source->queued = (uint16_t)(source->queued >= moved ? source->queued - moved : 0u);
+}
+
 /* ta_mail_outgoing_to: see mail.h. */
 TA_PRIVATE uint32_t ta_mail_outgoing_to(const ta_system *system, ta_actor_id actor) {
     const ta_run_slot *slot = &system->runner.slot;
@@ -36675,19 +37049,22 @@ TA_PRIVATE uint32_t ta_mail_outgoing_to(const ta_system *system, ta_actor_id act
 }
 
 /* ta_mail_follow: see mail.h. */
-TA_PRIVATE ta_actor *ta_mail_follow(ta_system *system, uint32_t index) {
+TA_PRIVATE ta_mail_follow_status ta_mail_follow(ta_system *system, uint32_t index, ta_actor **out) {
     ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
     ta_actor_ref routed;
     ta_actor_ref session = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = envelope->target };
     if (ta_session_route(system, &session, &routed)) {
-        ta_actor_ref_release(&routed); /* the session is out: a named address, which only a load answers */
-        return NULL;
+        /* The session is out: it has an address, which only a load answers. The envelope takes its own reference. */
+        ta_mail_post_waiting(system, index, routed.as.named);
+        ta_actor_ref_release(&routed);
+        return TA_MAIL_WAITS;
     }
     ta_actor *receiver = routed.kind == TA_ACTOR_REF_RUNTIME ? ta_actor_lookup(system, routed.as.runtime) : NULL;
     if (receiver == NULL || receiver->queued == UINT16_MAX) {
-        return NULL;
+        return TA_MAIL_GONE;
     }
     envelope->target = receiver->record.id;
     receiver->queued += 1u;
-    return receiver;
+    *out = receiver;
+    return TA_MAIL_FOLLOWED;
 }

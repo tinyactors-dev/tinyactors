@@ -62,7 +62,8 @@ module TinyactorsNapiBindings
     'ta_origin_release' => 'the plumbing releases the origins it makes (core ADR 0068)',
     'ta_io_scope_{open,close}' => 'scopes are opened and closed through hand-written System methods (core ADR 0068)',
     'ta_origin_text' => 'the ta_origin codec renders an origin into the call arena (core ADR 0068)',
-    'ta_actor_export_state' => 'the kernel exports an actor\'s state for its checkpoints (core ADR 0094, kernel ADR 0002)'
+    'ta_actor_export_state' => 'the kernel exports an actor\'s state for its checkpoints (core ADR 0094, kernel ADR 0002)',
+    'ta_address_{load_failed,waiting}' => 'the kernel answers a LOAD_NEEDED notice with them (core ADR 0099 section 6)'
   }.freeze
 
   OVERRIDE_FUNCTIONS = {}.freeze
@@ -108,6 +109,7 @@ module TinyactorsNapiBindings
     'ta_actor_visit_params' => 'enumeration is plumbing (ADR 0003)',
     'ta_run_{params,notice}' => 'the pump runs the system; the kernel reads the notices (ADR 0007, core ADR 0099)',
     'ta_due_dispatch_params' => 'the clock belongs to the pump (ADR 0007)',
+    'ta_address_load_failed_params' => 'argument of a plumbing-owned function (core ADR 0099 section 6)',
     'ta_external_{delivery,event_submit_params}' => 'router callback arguments (ADR 0006)',
     'ta_invoke_{request,report_params}' => 'invoker plumbing (step 13)',
     'ta_invoker_*_params' => 'invoker callback arguments (step 13)',

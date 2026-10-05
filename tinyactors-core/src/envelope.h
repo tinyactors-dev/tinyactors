@@ -158,7 +158,7 @@ typedef enum ta_envelope_state {
  */
 typedef struct ta_envelope {
     uint32_t next;         /* the link of the one list that holds it; the pool's free link while free */
-    uint32_t owner_next;   /* reserved for the owner's second list (ADR 0101); the pool never writes it */
+    uint32_t owner_next;   /* the owner's second list: the runner's pending load cues (run.h) while WAITING; ADR 0101's pending sends otherwise; the pool never writes it */
     uint32_t waiting_tail; /* first envelope of a waiting list: the list's last; 0 on the others */
     uint8_t state;         /* ta_envelope_state */
     uint8_t source;        /* ta_input_source */
@@ -195,6 +195,7 @@ typedef struct ta_envelopes {
     ta_quota quota;        /* capacity == bound; used counts envelopes in use; reserved the live claims */
     ta_table waiting;      /* FIXED, hash of the address to the first envelope of its list; zeroed until the first refill */
     ta_ilink link;         /* the lists below, through ta_envelope.next */
+    ta_ilink owner_link;   /* the owner's second list, through ta_envelope.owner_next */
     ta_ilist run;          /* the run queue */
     uint32_t bound;        /* pool_envelopes rounded down to whole pages */
     uint32_t admission_watermark;
@@ -305,6 +306,15 @@ void ta_envelopes_run_splice(ta_envelopes *envelopes, ta_ilist *outgoing);
 const ta_ilink *ta_envelopes_link(const ta_envelopes *envelopes);
 
 /*
+ * ta_envelopes_owner_link answers the link descriptor of `owner_next`, for a
+ * second list over the same envelopes. An envelope may be on one list through
+ * `next` and one through `owner_next` at the same time; the owner says which
+ * states may do so (run.h: only the first envelope of a waiting list, while
+ * the cue to load its address is pending). Valid for the life of the block.
+ */
+const ta_ilink *ta_envelopes_owner_link(const ta_envelopes *envelopes);
+
+/*
  * ta_waiting_put is what ta_waiting_insert needs besides the envelope: the
  * address it waits for (a block of the caller, which only lends it for the
  * call) and where to say whether the envelope began the list.
@@ -324,6 +334,13 @@ typedef struct {
  * expected.
  */
 ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, const ta_waiting_put *put);
+
+/*
+ * ta_waiting_length answers how many envelopes wait for `address`, 0 for none.
+ * It walks the list: O(list), and the owner uses it for reports, not for
+ * decisions on a hot path. It never allocates and changes nothing.
+ */
+uint32_t ta_waiting_length(const ta_envelopes *envelopes, const ta_address *address);
 
 /*
  * ta_waiting_take_list removes the whole waiting list of `address` and

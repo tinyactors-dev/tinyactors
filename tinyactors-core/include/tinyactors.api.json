@@ -714,7 +714,20 @@
           "name": "actor",
           "type": {
             "type": "ta_actor_id"
-          }
+          },
+          "doc": "A resident session, or 0 to name the target by `address`."
+        },
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_address"
+            }
+          },
+          "shape": "handle",
+          "direction": "in",
+          "optional": true,
+          "doc": "Used when `actor` is 0. An address the directory says is resident admits the event to that session. Any other address (unloaded, unknown, or being loaded) puts it on the address's waiting list, in arrival order: the first input for an address raises a LOAD_NEEDED notice (ta_run), and the list moves to the run queue when the address becomes resident (ta_actor_spawn(), ta_actor_publish(), ta_actor_load()), or is refused with a REFUSED notice when the host answers ta_address_load_failed()."
         },
         {
           "name": "event",
@@ -757,14 +770,15 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 80,
+          "size": 88,
           "align": 8,
           "offsets": {
             "actor": 0,
-            "event": 8,
-            "trace": 16,
-            "time": 64,
-            "input": 72
+            "address": 8,
+            "event": 16,
+            "trace": 24,
+            "time": 72,
+            "input": 80
           }
         },
         "wasm32-unknown-unknown": {
@@ -772,7 +786,8 @@
           "align": 8,
           "offsets": {
             "actor": 0,
-            "event": 8,
+            "address": 8,
+            "event": 12,
             "trace": 16,
             "time": 64,
             "input": 72
@@ -3089,6 +3104,48 @@
           ]
         }
       ]
+    },
+    "ta_address_load_failed_params": {
+      "kind": "struct",
+      "doc": "The host's answer to a LOAD_NEEDED notice when it cannot make `address` resident (ADR 0099 section 6). Everything that waits for the address leaves its list, in arrival order: mail from a session becomes a data-free error.communication for its sender, carrying the send's ID, and joins the end of the run queue; an input the host admitted is discarded with a REFUSED notice (the next ta_run()) carrying `reason`; anything whose sender is gone is freed. The pool is not asked for anything, so this never allocates and cannot run out of memory.",
+      "fields": [
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_address",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "reason",
+          "type": {
+            "type": "ta_refusal_reason"
+          },
+          "doc": "One of the TA_REFUSED_LOAD_ reasons."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "address": 0,
+            "reason": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "address": 0,
+            "reason": 4
+          }
+        }
+      }
     },
     "ta_allocator": {
       "kind": "struct",
@@ -13763,9 +13820,34 @@
           "name": "TA_REFUSED_INVALID",
           "value": 2,
           "symbol": "invalid"
+        },
+        {
+          "name": "TA_REFUSED_LOAD_NOT_FOUND",
+          "value": 3,
+          "symbol": "load_not_found"
+        },
+        {
+          "name": "TA_REFUSED_LOAD_REJECTED",
+          "value": 4,
+          "symbol": "load_rejected"
+        },
+        {
+          "name": "TA_REFUSED_LOAD_FAILED",
+          "value": 5,
+          "symbol": "load_failed"
+        },
+        {
+          "name": "TA_REFUSED_LOAD_TIMED_OUT",
+          "value": 6,
+          "symbol": "load_timed_out"
+        },
+        {
+          "name": "TA_REFUSED_LOAD_UNLOADED",
+          "value": 7,
+          "symbol": "load_unloaded"
         }
       ],
-      "doc": "Why an admitted input was discarded: the target no longer exists (DESTROYED, or unloaded), has finished (DONE), or a replaying actor's input time is no longer valid for it (INVALID).",
+      "doc": "Why an admitted input was discarded: the target no longer exists (DESTROYED, or unloaded), has finished (DONE), or a replaying actor's input time is no longer valid for it (INVALID). The LOAD_ reasons are the host's answer to a LOAD_NEEDED notice, from ta_address_load_failed(): the address names nothing (LOAD_NOT_FOUND), the loader refused it (LOAD_REJECTED), the load failed (LOAD_FAILED) or did not finish in time (LOAD_TIMED_OUT), or the address is unloaded and nothing would load it (LOAD_UNLOADED).",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -14190,11 +14272,31 @@
           "direction": "in",
           "optional": true,
           "doc": "TAKEN and REFUSED: the input's event, borrowed until the next ta_run() or until the input ends or is abandoned, whichever comes first."
+        },
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_address",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in",
+          "optional": true,
+          "doc": "LOAD_NEEDED: the address whose waiting list began, borrowed until the next ta_run(), ta_actor_publish(), ta_actor_load(), ta_actor_spawn() or ta_address_load_failed(), whichever comes first. Retain it (ta_address_retain()) to keep it longer."
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_trace_parent"
+          },
+          "doc": "LOAD_NEEDED: the trace parent of the first input that waits, for the load's own record."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 48,
+          "size": 104,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -14204,11 +14306,13 @@
             "status": 28,
             "ignored": 32,
             "reason": 36,
-            "event": 40
+            "event": 40,
+            "address": 48,
+            "trace": 56
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 48,
+          "size": 96,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -14218,7 +14322,9 @@
             "status": 28,
             "ignored": 32,
             "reason": 36,
-            "event": 40
+            "event": 40,
+            "address": 44,
+            "trace": 48
           }
         }
       }
@@ -14245,9 +14351,14 @@
           "name": "TA_NOTICE_FINISHED",
           "value": 3,
           "symbol": "finished"
+        },
+        {
+          "name": "TA_NOTICE_LOAD_NEEDED",
+          "value": 4,
+          "symbol": "load_needed"
         }
       ],
-      "doc": "What a notice reports. COMPLETED: an input ended (the token, status and `ignored`). REFUSED: an admitted input was discarded before it was taken, with its event and the reason. TAKEN: an input began, with its event; only when ta_run_params.report_taken asks. FINISHED: a session reached a top-level final state, once per session.",
+      "doc": "What a notice reports. COMPLETED: an input ended (the token, status and `ignored`). REFUSED: an admitted input was discarded before it was taken, with its event and the reason. TAKEN: an input began, with its event; only when ta_run_params.report_taken asks. FINISHED: a session reached a top-level final state, once per session. LOAD_NEEDED: the first input for `address` is waiting, and the host should load, spawn or reject it (ta_actor_publish(), ta_actor_load(), ta_actor_spawn() or ta_address_load_failed()); it is written once per waiting list, however many inputs join it.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -21265,7 +21376,7 @@
     },
     {
       "name": "ta_actor_deliver",
-      "doc": "Admits an external event for a resident actor (ADR 0099 section 5): the event becomes an envelope on the run queue, behind everything admitted before it, and ta_run() takes it when its turn comes. Nothing runs here, and the actor need not be idle: mail for a session inside a macrostep waits in core, so the host keeps no queue per actor. `input`, when given, receives the token ta_run() reports the input by. The results: - TA_OK: admitted; call ta_run(). - TA_ERR_FULL: the pool of pending inputs is at its admission watermark (TA_PARAM_ADMISSION_WATERMARK). Keep the message and offer it again after ta_run() has made room, or drop it. - TA_ERR_DONE: the actor has reached a top-level final state. Drop the message or route it to a dead-letter policy. - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or unloaded). The receiver is gone from here; drop or route the message. - TA_ERR_INVALID: a caller error only: a null event, an event name this system never issued, or the root name; or, for a replaying actor, a time outside its range. - TA_ERR_NOMEM: the pool could not grow (TA_PARAM_POOL_ENVELOPES is the bound; this is the allocator refusing). Keep the message and try again. On any result but TA_OK nothing is retained and the event is untouched. A malformed event is TA_ERR_INVALID whatever the actor's state. A finished actor is TA_ERR_DONE, never TA_ERR_FULL: finishing is permanent, so a host that kept a message would wait forever. A session that is destroyed or finishes after its input was admitted is reported by a REFUSED notice when the input would have been taken.",
+      "doc": "Admits an external event for a resident actor (ADR 0099 section 5): the event becomes an envelope on the run queue, behind everything admitted before it, and ta_run() takes it when its turn comes. Nothing runs here, and the actor need not be idle: mail for a session inside a macrostep waits in core, so the host keeps no queue per actor. `input`, when given, receives the token ta_run() reports the input by. The results: - TA_OK: admitted; call ta_run(). - TA_ERR_FULL: the pool of pending inputs is at its admission watermark (TA_PARAM_ADMISSION_WATERMARK). Keep the message and offer it again after ta_run() has made room, or drop it. - TA_ERR_DONE: the actor has reached a top-level final state. Drop the message or route it to a dead-letter policy. - TA_ERR_NOT_FOUND: `actor` names no resident session (unknown, stale or unloaded), or neither an actor nor an address was given. The receiver is gone from here; drop or route the message, or name it by address. - TA_ERR_INVALID: a caller error only: a null event, an event name this system never issued, or the root name; or, for a replaying actor, a time outside its range. - TA_ERR_NOMEM: the pool could not grow (TA_PARAM_POOL_ENVELOPES is the bound; this is the allocator refusing). Keep the message and try again. On any result but TA_OK nothing is retained and the event is untouched. A malformed event is TA_ERR_INVALID whatever the actor's state. An input that waits for an address counts against the pool like any other, and a session that becomes resident at the address takes its waiting inputs in the order they arrived. A finished actor is TA_ERR_DONE, never TA_ERR_FULL: finishing is permanent, so a host that kept a message would wait forever. A session that is destroyed or finishes after its input was admitted is reported by a REFUSED notice when the input would have been taken.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -21305,6 +21416,78 @@
           "actor"
         ]
       }
+    },
+    {
+      "name": "ta_address_load_failed",
+      "doc": "- TA_OK: the list was recycled. - TA_ERR_NOT_FOUND: nothing waits for the address: the answer is late or repeated, or the address became resident meanwhile. Harmless. - TA_ERR_INVALID: a null argument, or a reason that is not a TA_REFUSED_LOAD_ reason.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_address_load_failed_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_address_waiting",
+      "doc": "How many inputs wait for `address` to become resident; 0 for none. It walks the list (O(list)) and never allocates.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_address",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
     },
     {
       "name": "ta_actor_transition",
@@ -21387,7 +21570,7 @@
     },
     {
       "name": "ta_run_pending",
-      "doc": "Whether ta_run() has something to do: an input waits on the run queue (mail a macrostep sent included), a session has begun a macrostep that no input is running, an input is paused inside a macrostep, or an abandoned input waits to be reported. A host calls it to decide whether it is quiet and whether to call ta_run() again. It never allocates and costs O(1).",
+      "doc": "Whether ta_run() has something to do: an input waits on the run queue (mail a macrostep sent included), a session has begun a macrostep that no input is running, an input is paused inside a macrostep, an abandoned input waits to be reported, or a LOAD_NEEDED or REFUSED notice waits to be written. A host calls it to decide whether it is quiet and whether to call ta_run() again. It never allocates and costs O(1).",
       "public": true,
       "static_inline": false,
       "implemented": true,

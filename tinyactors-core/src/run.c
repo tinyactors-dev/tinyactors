@@ -67,6 +67,8 @@ ta_result ta_runner_init(ta_runner *runner, ta_allocator allocator) {
     }
     ta_ilist_init(&runner->lent);
     ta_ilist_init(&runner->abandoned);
+    ta_ilist_init(&runner->loads);
+    ta_ilist_init(&runner->refused);
     return TA_OK;
 }
 
@@ -186,8 +188,9 @@ static uint64_t ta_run_token(ta_system *system) {
  * operator's.
  */
 static bool ta_run_event_valid(const ta_system *system, const ta_actor *actor, const ta_event *event, ta_time time) {
-    return ta_trie_valid(&system->event_names.trie, event->name) && event->name != TA_EVENT_NAME_ROOT &&
-           ta_actor_input_time_valid(system, actor, time);
+    /* An input for an address no session holds has no clock of its own to check: it is for the system's now. */
+    bool timely = actor != NULL ? ta_actor_input_time_valid(system, actor, time) : time == ta_clock_now(&system->clock);
+    return ta_trie_valid(&system->event_names.trie, event->name) && event->name != TA_EVENT_NAME_ROOT && timely;
 }
 
 typedef struct ta_run_input {
@@ -203,7 +206,8 @@ typedef struct ta_run_input {
  * (retained: the envelope owns its references from here). It consumes one
  * unit of the pool's quota that nothing reserved. The envelope is not on a
  * list. Answers 0 when the pool cannot make one: the refill failed, or the
- * pool is at its bound.
+ * pool is at its bound. `actor` is NULL for an input that waits for an
+ * address: its target is then 0 until the address becomes resident.
  *
  * The refill leaves room for the envelope and for what the running input has
  * yet to claim: envelopes are interchangeable pool items, so one taken for
@@ -221,7 +225,7 @@ static uint32_t ta_run_fill(ta_system *system, ta_actor *actor, const ta_run_inp
     }
     ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
     envelope->source = (uint8_t)input->source;
-    envelope->target = actor->record.id;
+    envelope->target = actor != NULL ? actor->record.id : 0;
     envelope->due = input->time;
     envelope->trace = *input->trace;
     ta_event_retain(input->event, &envelope->event);
@@ -237,18 +241,28 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     if (system == NULL || params == NULL || params->event == NULL) {
         return TA_ERR_INVALID;
     }
-    ta_actor *actor = ta_actor_lookup(system, params->actor);
-    if (actor == NULL) {
+    /* A session named by ID, else the one the directory says is resident at the address, else the address waits. */
+    ta_actor *actor = NULL;
+    ta_address *waits_for = NULL;
+    if (params->actor != 0) {
+        actor = ta_actor_lookup(system, params->actor);
+        if (actor == NULL) {
+            return TA_ERR_NOT_FOUND;
+        }
+    } else if (params->address != NULL) {
+        actor = ta_mail_resident_at(system, params->address);
+        waits_for = actor == NULL ? params->address : NULL;
+    } else {
         return TA_ERR_NOT_FOUND;
     }
     if (!ta_run_event_valid(system, actor, params->event, params->time)) {
         return TA_ERR_INVALID;
     }
     /* Before full: a finished actor never becomes free again (ADR 0055). */
-    if (actor->finished) {
+    if (actor != NULL && actor->finished) {
         return TA_ERR_DONE;
     }
-    if (!ta_envelopes_admissible(&system->envelopes) || actor->queued == UINT16_MAX) {
+    if (!ta_envelopes_admissible(&system->envelopes) || (actor != NULL && actor->queued == UINT16_MAX)) {
         return TA_ERR_FULL;
     }
     ta_event accepted = *params->event;
@@ -269,8 +283,12 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     if (params->input != NULL) {
         *params->input = envelope->input;
     }
-    actor->queued += 1u;
-    ta_envelopes_run_push(&system->envelopes, index);
+    if (actor != NULL) {
+        actor->queued += 1u;
+        ta_envelopes_run_push(&system->envelopes, index);
+    } else {
+        ta_mail_post_waiting(system, index, waits_for);
+    }
     return TA_OK;
 }
 
@@ -308,7 +326,7 @@ static void ta_run_refuse(ta_system *system, uint32_t index, ta_refusal_reason r
     ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
     if (envelope->source != TA_SOURCE_HOST) {
         /* Mail comes back to its sender as an error; anything else nobody asked to hear about is freed. */
-        ta_mail_recycle(system, index, reason == TA_REFUSED_DONE ? TA_RECYCLE_DONE : TA_RECYCLE_DESTROYED);
+        ta_mail_recycle(system, index, reason);
         return;
     }
     ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_INPUT_REFUSED,
@@ -331,7 +349,17 @@ static ta_result ta_run_take(ta_system *system, uint32_t index, ta_run_notices *
     ta_actor *actor = ta_actor_lookup(system, envelope->target);
     *occupied = false;
     if (actor == NULL && (envelope->source == TA_SOURCE_MAIL || envelope->source == TA_SOURCE_ERROR)) {
-        actor = ta_mail_follow(system, index); /* its session may have been unloaded and loaded again meanwhile */
+        /* Its session may have been unloaded and loaded again meanwhile, or be out: then the mail waits for its load. */
+        switch (ta_mail_follow(system, index, &actor)) {
+        case TA_MAIL_FOLLOWED:
+            break;
+        case TA_MAIL_WAITS:
+            return TA_OK;
+        case TA_MAIL_GONE:
+        default:
+            actor = NULL;
+            break;
+        }
     }
     if (actor == NULL) {
         ta_run_refuse(system, index, TA_REFUSED_DESTROYED, out);
@@ -525,6 +553,45 @@ static bool ta_run_report_abandoned(ta_system *system, ta_run_notices *out) {
 }
 
 /*
+ * ta_run_report_cues writes the notices of the pending cues, as far as the
+ * array has room: one LOAD_NEEDED per waiting list that began since the last
+ * call, then one REFUSED per host input ta_address_load_failed discarded. A
+ * refused envelope lends its event to its notice and goes on `lent`, as an
+ * input refused at take does. Answers true when it stopped for lack of room
+ * with cues left. It never allocates.
+ */
+static bool ta_run_report_cues(ta_system *system, ta_run_notices *out) {
+    ta_runner *runner = &system->runner;
+    const ta_ilink *owner_link = ta_envelopes_owner_link(&system->envelopes);
+    const ta_ilink *link = ta_envelopes_link(&system->envelopes);
+    while (!ta_ilist_is_empty(&runner->loads)) {
+        if (ta_run_room(out) < 1u) {
+            return true;
+        }
+        uint32_t index = ta_ilist_pop_front(&runner->loads, owner_link);
+        const ta_envelope *first = ta_envelope_at(&system->envelopes, index);
+        ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_LOAD_NEEDED,
+                                                 .source = (ta_input_source)first->source,
+                                                 .address = first->payload.address,
+                                                 .trace = first->trace });
+    }
+    while (!ta_ilist_is_empty(&runner->refused)) {
+        if (ta_run_room(out) < 1u) {
+            return true;
+        }
+        uint32_t index = ta_ilist_pop_front(&runner->refused, link);
+        const ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
+        ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_INPUT_REFUSED,
+                                                 .input = envelope->input,
+                                                 .source = (ta_input_source)envelope->source,
+                                                 .reason = (ta_refusal_reason)envelope->flags,
+                                                 .event = &envelope->event });
+        ta_ilist_push_back(&runner->lent, link, index);
+    }
+    return false;
+}
+
+/*
  * ta_run_complete writes the input's COMPLETED notice (and FINISHED when the
  * session finished), frees the slot and disposes of the envelope: it is lent
  * to the notices when `lend` (a TAKEN notice borrowed its event), else
@@ -629,7 +696,8 @@ static bool ta_run_check(const ta_system *system, const ta_run_params *params) {
 bool ta_run_pending(const ta_system *system) {
     const ta_runner *runner = &system->runner;
     return runner->slot.occupied || runner->started_first != 0 || !ta_ilist_is_empty(&system->envelopes.run) ||
-           !ta_ilist_is_empty(&runner->abandoned);
+           !ta_ilist_is_empty(&runner->abandoned) || !ta_ilist_is_empty(&runner->loads) ||
+           !ta_ilist_is_empty(&runner->refused);
 }
 
 ta_result ta_run(ta_system *system, const ta_run_params *params) {
@@ -650,17 +718,17 @@ ta_result ta_run(ta_system *system, const ta_run_params *params) {
     ta_run_status status = TA_RUN_IDLE;
     ta_run_free_lent(system);
     for (;;) {
-        if (ta_run_report_abandoned(system, &out)) {
+        if (ta_run_report_abandoned(system, &out) || ta_run_report_cues(system, &out)) {
             status = TA_RUN_NOTICES_FULL;
             break;
         }
         if (!runner->slot.occupied) {
-            if (ta_run_room(&out) < 3u) {
-                status = TA_RUN_NOTICES_FULL;
+            if (runner->started_first == 0 && ta_ilist_is_empty(queue)) {
+                status = TA_RUN_IDLE; /* nothing to take: a full array is no reason to ask for another call */
                 break;
             }
-            if (runner->started_first == 0 && ta_ilist_is_empty(queue)) {
-                status = TA_RUN_IDLE;
+            if (ta_run_room(&out) < 3u) {
+                status = TA_RUN_NOTICES_FULL;
                 break;
             }
             if (budget == 0) {

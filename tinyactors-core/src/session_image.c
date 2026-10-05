@@ -947,6 +947,7 @@ static ta_result ta_image_load(ta_system *system, const ta_image_load_params *pa
     ta_address *address = loaded->record.self.as.named;
     ta_session_drop_unloaded(&system->sessions, address);
     ta_trace_lifecycle(system, loaded, TA_TRACE_LOADED, params->trace);
+    ta_mail_address_resident(system, address, id); /* inputs that waited for the load go to the session, in order */
     *params->out = id;
     return TA_OK;
 }

@@ -83,14 +83,29 @@ typedef struct ta_actor ta_actor;
  *       its own paused macrostep sent itself is the one exception.
  *   I4: every notice ta_run writes is complete in the array; the count is
  *       set on every result.
+ *   I5: an envelope is on `loads` exactly when it is the first of a waiting
+ *       list whose cue is pending; it is on `refused` only between
+ *       ta_address_load_failed and the call that writes its notice. Both lists
+ *       count as pending work for ta_run_pending.
  *
  * Failure. Admission changes nothing unless it answers TA_OK. ta_run answers
  * TA_ERR_NOMEM with the input in the slot (or at the head of the run queue),
  * and the next call continues it.
  *
+ * Waiting for an address. An input for an address that has no resident
+ * session (ta_actor_deliver with `address`, or a mail envelope whose receiver
+ * was unloaded before it was taken) joins that address's waiting list
+ * (package envelope); the first one raises a cue, which ta_run writes as a
+ * LOAD_NEEDED notice. The list leaves in one piece: to the run queue when the
+ * address becomes resident (package mail, ta_mail_address_resident), or
+ * recycled when the host says the load failed (ta_address_load_failed).
+ * Waiting inputs hold an envelope each and count against the pool's bound, but
+ * not against any session's `queued`.
+ *
  * Complexity. Admission, take and completion are O(1). A destroyed target's
  * envelopes are not searched for: they are refused when they come to the
- * head.
+ * head. Removing a pending cue is O(cues pending), which are the lists that
+ * began since the last call.
  */
 
 /*
@@ -144,6 +159,18 @@ typedef struct ta_runner {
     uint32_t started_last;   /* the newest queued cell, 0 when none */
     ta_ilist lent;         /* envelopes whose events the last call's notices lent */
     ta_ilist abandoned;    /* inputs ended by ta_actor_abandon or by their session's end; reported by the next call */
+    /*
+     * Cues the next call reports first (ADR 0099 sections 6 and 7). `loads`
+     * holds the first envelope of every waiting list whose LOAD_NEEDED notice
+     * has not been written yet, linked through ta_envelope.owner_next;
+     * `refused` holds the host inputs that ta_address_load_failed discarded,
+     * linked through ta_envelope.next, with the reason in ta_envelope.flags.
+     * Both are written by ta_run before it takes anything, as far as the
+     * caller's array has room, and both are empty when the call is idle.
+     * Lifetime: system for the heads, envelope for membership.
+     */
+    ta_ilist loads;
+    ta_ilist refused;
     uint64_t tokens;       /* the last token issued; 0 is "no token" */
 } ta_runner;
 

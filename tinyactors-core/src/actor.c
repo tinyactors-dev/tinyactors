@@ -1,6 +1,7 @@
 #include "handle.h"
 #include "actor.h"
 #include "interpreter.h"
+#include "mail.h"
 
 ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
     if (system == NULL) {
@@ -658,6 +659,10 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
     }
     ta_trace_lifecycle(system, actor, TA_TRACE_SPAWNED, &params->trace);
     ta_run_start(system, actor);
+    if (params->address != NULL) {
+        /* Inputs that waited for this address follow the bootstrap, in arrival order (mail.h). */
+        ta_mail_address_resident(system, actor->record.self.as.named, id);
+    }
     *params->out = id;
     return TA_OK;
 }
@@ -1188,6 +1193,10 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
     actor->replacement_of = 0;
     ta_actor_touch(actor);
     ta_actor_release_activation_effects(system, actor);
+    if (incumbent != NULL) {
+        ta_mail_retarget(system, incumbent->record.id, actor->record.id); /* its queued inputs follow the address */
+    }
+    ta_mail_address_resident(system, actor->record.self.as.named, actor->record.id);
     if (replaying) {
         /* Its services never started, and the world moved on while it was
          * away: each active invocation is reported lost, as after a load. */
@@ -1259,8 +1268,8 @@ ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor *actor,
         }
         return TA_OK;
     }
-    if (event->origin.kind != TA_ORIGIN_NONE || event->invoke_id == TA_INVOKE_ID_NONE) {
-        return TA_OK;
+    if (event->origin.kind != TA_ORIGIN_NONE || event->invoke_id == TA_INVOKE_ID_NONE || actor == NULL) {
+        return TA_OK; /* no session yet (an input that waits for an address) has no invocations to name */
     }
     (void)ta_invoke_origin_for(system, actor, event->invoke_id, &event->origin);
     return TA_OK;

@@ -69,6 +69,9 @@ ta_result ta_envelopes_init(ta_envelopes *envelopes, ta_allocator allocator, con
         return result;
     }
     result = ta_ilink_init(&envelopes->link, &envelopes->pool, offsetof(ta_envelope, next));
+    if (result == TA_OK) {
+        result = ta_ilink_init(&envelopes->owner_link, &envelopes->pool, offsetof(ta_envelope, owner_next));
+    }
     if (result != TA_OK) {
         ta_pool_destroy(&envelopes->pool);
         *envelopes = (ta_envelopes){0};
@@ -242,6 +245,11 @@ const ta_ilink *ta_envelopes_link(const ta_envelopes *envelopes) {
     return &envelopes->link;
 }
 
+/* ta_envelopes_owner_link: see envelope.h. */
+const ta_ilink *ta_envelopes_owner_link(const ta_envelopes *envelopes) {
+    return &envelopes->owner_link;
+}
+
 /*
  * ta_waiting_find answers the first envelope of the waiting list of `address`,
  * or 0. The table yields every entry with the address's hash; the interned
@@ -294,6 +302,20 @@ ta_result ta_waiting_insert(ta_envelopes *envelopes, uint32_t index, const ta_wa
     first_envelope->waiting_tail = index;
     *first = false;
     return TA_OK;
+}
+
+/* ta_waiting_length: see envelope.h. */
+uint32_t ta_waiting_length(const ta_envelopes *envelopes, const ta_address *address) {
+    if (address == NULL) {
+        return 0;
+    }
+    uint32_t length = 0;
+    uint32_t bound = ta_pool_extent(&envelopes->pool);
+    for (uint32_t index = ta_waiting_find(envelopes, address, ta_address_record_hash(address));
+         index != 0 && length < bound; index = ta_ilist_next(&envelopes->link, index)) {
+        length += 1u;
+    }
+    return length;
 }
 
 /* ta_waiting_take_list: see envelope.h. */

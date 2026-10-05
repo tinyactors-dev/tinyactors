@@ -2789,15 +2789,32 @@ typedef enum { TA_INPUT_STABLE = 0, TA_INPUT_DONE = 1, TA_INPUT_RUNAWAY = 2, TA_
  * `ignored`). REFUSED: an admitted input was discarded before it was taken,
  * with its event and the reason. TAKEN: an input began, with its event; only
  * when ta_run_params.report_taken asks. FINISHED: a session reached a
- * top-level final state, once per session.
+ * top-level final state, once per session. LOAD_NEEDED: the first input
+ * for `address` is waiting, and the host should load, spawn or reject it
+ * (ta_actor_publish(), ta_actor_load(), ta_actor_spawn() or
+ * ta_address_load_failed()); it is written once per waiting list, however
+ * many inputs join it.
  */
-typedef enum { TA_NOTICE_INPUT_COMPLETED = 0, TA_NOTICE_INPUT_REFUSED = 1, TA_NOTICE_INPUT_TAKEN = 2, TA_NOTICE_FINISHED = 3 } ta_run_notice_kind TA_SYMBOLS("TA_NOTICE_");
+typedef enum { TA_NOTICE_INPUT_COMPLETED = 0, TA_NOTICE_INPUT_REFUSED = 1, TA_NOTICE_INPUT_TAKEN = 2, TA_NOTICE_FINISHED = 3, TA_NOTICE_LOAD_NEEDED = 4 } ta_run_notice_kind TA_SYMBOLS("TA_NOTICE_");
 /*
  * Why an admitted input was discarded: the target no longer exists
  * (DESTROYED, or unloaded), has finished (DONE), or a replaying actor's input
- * time is no longer valid for it (INVALID).
+ * time is no longer valid for it (INVALID). The LOAD_ reasons are the host's
+ * answer to a LOAD_NEEDED notice, from ta_address_load_failed(): the address
+ * names nothing (LOAD_NOT_FOUND), the loader refused it (LOAD_REJECTED), the
+ * load failed (LOAD_FAILED) or did not finish in time (LOAD_TIMED_OUT), or the
+ * address is unloaded and nothing would load it (LOAD_UNLOADED).
  */
-typedef enum { TA_REFUSED_DESTROYED = 0, TA_REFUSED_DONE = 1, TA_REFUSED_INVALID = 2 } ta_refusal_reason TA_SYMBOLS("TA_REFUSED_");
+typedef enum {
+    TA_REFUSED_DESTROYED = 0,
+    TA_REFUSED_DONE = 1,
+    TA_REFUSED_INVALID = 2,
+    TA_REFUSED_LOAD_NOT_FOUND = 3,
+    TA_REFUSED_LOAD_REJECTED = 4,
+    TA_REFUSED_LOAD_FAILED = 5,
+    TA_REFUSED_LOAD_TIMED_OUT = 6,
+    TA_REFUSED_LOAD_UNLOADED = 7
+} ta_refusal_reason TA_SYMBOLS("TA_REFUSED_");
 /*
  * Where an input came from (ADR 0099 sections 1 and 7), so a host settles
  * only what it asked for and records what it must. HOST: ta_actor_deliver().
@@ -2829,6 +2846,15 @@ typedef struct {
     /* TAKEN and REFUSED: the input's event, borrowed until the next ta_run() or
      * until the input ends or is abandoned, whichever comes first. */
     TA_IN TA_OPTIONAL const ta_event *event;
+    /*
+     * LOAD_NEEDED: the address whose waiting list began, borrowed until the
+     * next ta_run(), ta_actor_publish(), ta_actor_load(), ta_actor_spawn() or
+     * ta_address_load_failed(), whichever comes first. Retain it
+     * (ta_address_retain()) to keep it longer.
+     */
+    TA_OPTIONAL const ta_address *address;
+    /* LOAD_NEEDED: the trace parent of the first input that waits, for the load's own record. */
+    ta_trace_parent trace;
 } ta_run_notice;
 /*
  * `budget` is the number of microsteps the whole call may run (ADR 0009),
@@ -3092,7 +3118,18 @@ typedef struct {
     uint32_t target_count;
 } ta_operator_transition;
 typedef struct {
+    /* A resident session, or 0 to name the target by `address`. */
     ta_actor_id actor;
+    /*
+     * Used when `actor` is 0. An address the directory says is resident admits
+     * the event to that session. Any other address (unloaded, unknown, or
+     * being loaded) puts it on the address's waiting list, in arrival order:
+     * the first input for an address raises a LOAD_NEEDED notice (ta_run), and
+     * the list moves to the run queue when the address becomes resident
+     * (ta_actor_spawn(), ta_actor_publish(), ta_actor_load()), or is refused
+     * with a REFUSED notice when the host answers ta_address_load_failed().
+     */
+    TA_OPTIONAL ta_address *address;
     TA_IN const ta_event *event;
     /* What the macrostep that takes the event runs under (ADR 0067); a
      * router passes ta_external_delivery.trace. All zero is none. */
@@ -3122,15 +3159,19 @@ typedef struct {
  *   ta_run() has made room, or drop it.
  * - TA_ERR_DONE: the actor has reached a top-level final state. Drop the
  *   message or route it to a dead-letter policy.
- * - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or
- *   unloaded). The receiver is gone from here; drop or route the message.
+ * - TA_ERR_NOT_FOUND: `actor` names no resident session (unknown, stale or
+ *   unloaded), or neither an actor nor an address was given. The receiver is
+ *   gone from here; drop or route the message, or name it by address.
  * - TA_ERR_INVALID: a caller error only: a null event, an event name this
  *   system never issued, or the root name; or, for a replaying actor, a time
  *   outside its range.
  * - TA_ERR_NOMEM: the pool could not grow (TA_PARAM_POOL_ENVELOPES is the
  *   bound; this is the allocator refusing). Keep the message and try again.
  * On any result but TA_OK nothing is retained and the event is untouched.
- * A malformed event is TA_ERR_INVALID whatever the actor's state. A finished
+ * A malformed event is TA_ERR_INVALID whatever the actor's state. An input
+ * that waits for an address counts against the pool like any other, and a
+ * session that becomes resident at the address takes its waiting inputs in the
+ * order they arrived. A finished
  * actor is TA_ERR_DONE, never TA_ERR_FULL: finishing is permanent, so a host
  * that kept a message would wait forever. A session that is destroyed or
  * finishes after its input was admitted is reported by a REFUSED notice
@@ -3138,6 +3179,34 @@ typedef struct {
  */
 TA_API ta_result ta_actor_deliver(ta_system *system, TA_IN const ta_actor_deliver_params *params)
     TA_VALUE_MODEL(actor, params.actor);
+/*
+ * The host's answer to a LOAD_NEEDED notice when it cannot make `address`
+ * resident (ADR 0099 section 6). Everything that waits for the address leaves
+ * its list, in arrival order: mail from a session becomes a data-free
+ * error.communication for its sender, carrying the send's ID, and joins the
+ * end of the run queue; an input the host admitted is discarded with a
+ * REFUSED notice (the next ta_run()) carrying `reason`; anything whose sender
+ * is gone is freed. The pool is not asked for anything, so this never
+ * allocates and cannot run out of memory.
+ */
+typedef struct {
+    const ta_address *address;
+    /* One of the TA_REFUSED_LOAD_ reasons. */
+    ta_refusal_reason reason;
+} ta_address_load_failed_params;
+/*
+ * - TA_OK: the list was recycled.
+ * - TA_ERR_NOT_FOUND: nothing waits for the address: the answer is late or
+ *   repeated, or the address became resident meanwhile. Harmless.
+ * - TA_ERR_INVALID: a null argument, or a reason that is not a TA_REFUSED_LOAD_
+ *   reason.
+ */
+TA_API ta_result ta_address_load_failed(ta_system *system, TA_IN const ta_address_load_failed_params *params);
+/*
+ * How many inputs wait for `address` to become resident; 0 for none. It
+ * walks the list (O(list)) and never allocates.
+ */
+TA_API uint32_t ta_address_waiting(const ta_system *system, const ta_address *address);
 /*
  * An operator's event with a transition (ADR 0082, ADR 0099 section 5): the
  * event is taken by `transition` instead of by transition selection. It is
@@ -3199,8 +3268,9 @@ TA_API ta_result ta_run(ta_system *system, TA_IN const ta_run_params *params);
 /*
  * Whether ta_run() has something to do: an input waits on the run queue
  * (mail a macrostep sent included), a session has begun a macrostep that no
- * input is running, an input is paused inside a macrostep, or an abandoned
- * input waits to be reported. A host calls it to decide whether it is quiet
+ * input is running, an input is paused inside a macrostep, an abandoned
+ * input waits to be reported, or a LOAD_NEEDED or REFUSED notice waits to be
+ * written. A host calls it to decide whether it is quiet
  * and whether to call ta_run() again. It never allocates and costs O(1).
  */
 TA_API bool ta_run_pending(const ta_system *system);
