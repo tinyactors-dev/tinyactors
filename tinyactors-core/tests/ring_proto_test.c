@@ -132,10 +132,197 @@ static void test_size(void) {
     CHECK(ta_msg_h2c_event_size(&event, &size) == TA_OK && size == fixed);
 }
 
+/* ---- writers ---- */
+
+#define CANARY 0xA5u
+#define SLACK 16u
+
+/* A plain buffer for one record: `size` bytes in the middle, SLACK canary bytes on each side, all 0xA5 to begin with. */
+typedef struct arena {
+    _Alignas(8) unsigned char bytes[MAX_RECORD + 2 * SLACK];
+    uint32_t size;
+} arena;
+
+static void arena_reset(arena *a, uint32_t size) {
+    for (size_t i = 0; i < sizeof a->bytes; i += 1) a->bytes[i] = CANARY;
+    a->size = size;
+}
+
+static unsigned char *arena_record(arena *a) { return a->bytes + SLACK; }
+
+/* No byte outside the record was written. */
+static bool canaries_intact(const arena *a) {
+    for (uint32_t i = 0; i < SLACK; i += 1) {
+        if (a->bytes[i] != CANARY || a->bytes[SLACK + a->size + i] != CANARY) return false;
+    }
+    return true;
+}
+
+static bool untouched(const arena *a) {
+    for (size_t i = 0; i < sizeof a->bytes; i += 1) {
+        if (a->bytes[i] != CANARY) return false;
+    }
+    return true;
+}
+
+static ta_record_fault check_arena(ta_record_reader *reader, arena *a, ta_record *out) {
+    return ta_record_check(reader, &(ta_record_input){ .bytes = arena_record(a), .length = a->size }, out);
+}
+
+static bool bytes_are(ta_bytes view, const char *expected, uint32_t length) {
+    if (view.len != length) return false;
+    for (uint32_t i = 0; i < length; i += 1) {
+        if (view.ptr[i] != (uint8_t)expected[i]) return false;
+    }
+    return true;
+}
+
+static void test_write_event(void) {
+    ta_msg_h2c_event event = { .head = { .flags = TA_MSG_FLAG_RECORDED, .session = 0x1122334455667788ull, .at = 99 },
+                               .target = { (const uint8_t *)"ab/c", 4 },
+                               .name = { (const uint8_t *)"go.now", 6 },
+                               .origin = { (const uint8_t *)"o", 1 },
+                               .invocation_seq = 42, .data = 0xDEADBEEFull, .type = TA_MSG_EVENT_TYPE_EXTERNAL };
+    uint32_t size = 0;
+    CHECK(ta_msg_h2c_event_size(&event, &size) == TA_OK);
+    arena a;
+    arena_reset(&a, size);
+    ta_ring_reservation to = { .bytes = arena_record(&a), .size = size, .seq = 1 };
+    CHECK(ta_msg_h2c_event_write(&event, &to) == TA_OK);
+    CHECK(canaries_intact(&a));
+
+    /* The reader accepts it and the header says what the writer was given. */
+    ta_record_reader reader = reader_for(TA_RING_H2C, TA_RING_LOSSLESS);
+    ta_record record;
+    CHECK(check_arena(&reader, &a, &record) == TA_RECORD_OK);
+    CHECK(record.kind == TA_MSG_H2C_EVENT && record.size == size && record.seq == 1);
+    CHECK(ta_record_u16(&record, TA_RECORD_AT_FLAGS) == TA_MSG_FLAG_RECORDED);
+    CHECK(ta_record_u64(&record, TA_RECORD_AT_SESSION) == 0x1122334455667788ull && ta_record_u64(&record, TA_RECORD_AT_TIME) == 99);
+    CHECK(bytes_are(ta_record_span(&record, offsetof(ta_msg_h2c_event_wire, target)), "ab/c", 4));
+    CHECK(bytes_are(ta_record_span(&record, offsetof(ta_msg_h2c_event_wire, name)), "go.now", 6));
+    CHECK(ta_record_span(&record, offsetof(ta_msg_h2c_event_wire, sendid)).len == 0);
+    CHECK(bytes_are(ta_record_span(&record, offsetof(ta_msg_h2c_event_wire, origin)), "o", 1));
+    CHECK(ta_record_u64(&record, offsetof(ta_msg_h2c_event_wire, invocation_seq)) == 42);
+    CHECK(ta_record_u64(&record, offsetof(ta_msg_h2c_event_wire, data)) == 0xDEADBEEFull);
+    CHECK(ta_record_u8(&record, offsetof(ta_msg_h2c_event_wire, type)) == TA_MSG_EVENT_TYPE_EXTERNAL);
+
+    /* Every pad and rounding byte is zero although the buffer was full of 0xA5: the fixed part's pad_end, and the tail's round up. */
+    const unsigned char *bytes = arena_record(&a);
+    for (uint32_t i = (uint32_t)offsetof(ta_msg_h2c_event_wire, type) + 1; i < sizeof(ta_msg_h2c_event_wire); i += 1) CHECK(bytes[i] == 0);
+    for (uint32_t i = (uint32_t)sizeof(ta_msg_h2c_event_wire) + 11; i < size; i += 1) CHECK(bytes[i] == 0);
+
+    /* The same data into a different buffer gives the same bytes (replay determinism), whatever was there. */
+    arena b;
+    arena_reset(&b, size);
+    for (uint32_t i = 0; i < size; i += 1) arena_record(&b)[i] = (unsigned char)(i * 37u + 1u);
+    ta_ring_reservation to_b = { .bytes = arena_record(&b), .size = size, .seq = 1 };
+    CHECK(ta_msg_h2c_event_write(&event, &to_b) == TA_OK);
+    for (uint32_t i = 0; i < size; i += 1) CHECK(arena_record(&a)[i] == arena_record(&b)[i]);
+}
+
+/* One refused write: the verdict, and the whole buffer, canaries included, as it was. */
+static void refused(const ta_msg_h2c_event *data, arena *a, uint32_t buffer_size, ta_result expected) {
+    arena_reset(a, buffer_size);
+    ta_ring_reservation to = { .bytes = arena_record(a), .size = buffer_size, .seq = 1 };
+    CHECK(ta_msg_h2c_event_write(data, &to) == expected);
+    CHECK(untouched(a));
+}
+
+static void test_write_refuses(void) {
+    ta_msg_h2c_event good = { .target = { (const uint8_t *)"ab", 2 }, .type = TA_MSG_EVENT_TYPE_EXTERNAL };
+    uint32_t size = 0;
+    CHECK(ta_msg_h2c_event_size(&good, &size) == TA_OK);
+    arena a;
+
+    refused(&good, &a, size - 1, TA_ERR_INVALID);
+    refused(&good, &a, size + 8, TA_ERR_INVALID);
+    arena_reset(&a, size);
+    ta_ring_reservation none = { .bytes = NULL, .size = size, .seq = 1 };
+    CHECK(ta_msg_h2c_event_write(&good, &none) == TA_ERR_INVALID);
+    CHECK(untouched(&a));
+
+    ta_msg_h2c_event bad = good;
+    bad.type = 3; /* the set is 0..2 */
+    refused(&bad, &a, size, TA_ERR_INVALID);
+    bad = good;
+    bad.head.flags = 0x0001; /* h2c.event defines no message flag bits */
+    refused(&bad, &a, size, TA_ERR_INVALID);
+    bad = good;
+    bad.head.flags = 0x0400; /* a common bit nobody defined */
+    refused(&bad, &a, size, TA_ERR_INVALID);
+    bad = good;
+    bad.name = (ta_bytes){ NULL, 5 };
+    refused(&bad, &a, size, TA_ERR_INVALID);
+    bad = good;
+    bad.target = (ta_bytes){ (const uint8_t *)"x", 0xFFFFFFFFu };
+    refused(&bad, &a, size, TA_ERR_NOMEM);
+
+    /* The same data is fine when the reservation is right. */
+    arena_reset(&a, size);
+    ta_ring_reservation to = { .bytes = arena_record(&a), .size = size, .seq = 1 };
+    CHECK(ta_msg_h2c_event_write(&good, &to) == TA_OK);
+    CHECK(canaries_intact(&a));
+}
+
+static void test_write_scalars_and_flags(void) {
+    arena a;
+    uint32_t size = 0;
+    ta_record record;
+
+    /* No fixed fields and no spans: the 32-byte header alone. */
+    ta_msg_h2c_time time = { .head = { .flags = TA_MSG_FLAG_REPLAYING, .at = 5000 } };
+    CHECK(ta_msg_h2c_time_size(&time, &size) == TA_OK && size == 32);
+    arena_reset(&a, size);
+    ta_ring_reservation to_time = { .bytes = arena_record(&a), .size = size, .seq = 7 };
+    CHECK(ta_msg_h2c_time_write(&time, &to_time) == TA_OK && canaries_intact(&a));
+    ta_record_reader reader = reader_for(TA_RING_H2C, TA_RING_LOSSLESS);
+    reader.next_seq = 7;
+    CHECK(check_arena(&reader, &a, &record) == TA_RECORD_OK && record.seq == 7 && ta_record_u64(&record, TA_RECORD_AT_TIME) == 5000);
+
+    /* Only scalars, with the extremes of the integer types. */
+    ta_msg_c2h_macrostep_ended ended = { .macrostep = 3, .source = TA_MSG_INPUT_SOURCE_INVOKE_REPORT, .source_seq = 0xFFFFFFFFFFFFFFFFull,
+                                         .effects = 0xFFFFFFFFu, .mail = 17, .status = TA_MSG_MACROSTEP_STATUS_ABANDONED };
+    CHECK(ta_msg_c2h_macrostep_ended_size(&ended, &size) == TA_OK && size == sizeof(ta_msg_c2h_macrostep_ended_wire));
+    arena_reset(&a, size);
+    ta_ring_reservation to_ended = { .bytes = arena_record(&a), .size = size, .seq = 1 };
+    CHECK(ta_msg_c2h_macrostep_ended_write(&ended, &to_ended) == TA_OK && canaries_intact(&a));
+    ta_record_reader c2h = reader_for(TA_RING_C2H, TA_RING_LOSSLESS);
+    CHECK(check_arena(&c2h, &a, &record) == TA_RECORD_OK);
+    CHECK(ta_record_u64(&record, offsetof(ta_msg_c2h_macrostep_ended_wire, source_seq)) == 0xFFFFFFFFFFFFFFFFull);
+    CHECK(ta_record_u32(&record, offsetof(ta_msg_c2h_macrostep_ended_wire, effects)) == 0xFFFFFFFFu);
+    CHECK(ta_record_u8(&record, offsetof(ta_msg_c2h_macrostep_ended_wire, status)) == TA_MSG_MACROSTEP_STATUS_ABANDONED);
+
+    /* tel.trace: two message flags of its own, three spans, on the lossy ring. */
+    const char states[] = "s1 s2";
+    ta_msg_tel_trace trace = { .head = { .flags = 0x0003 }, .microstep = 9, .trace_kind = 0x1234, .position = 2,
+                               .states = { (const uint8_t *)states, 5 } };
+    CHECK(ta_msg_tel_trace_size(&trace, &size) == TA_OK);
+    arena_reset(&a, size);
+    ta_ring_reservation to_trace = { .bytes = arena_record(&a), .size = size, .seq = 4 };
+    CHECK(ta_msg_tel_trace_write(&trace, &to_trace) == TA_OK && canaries_intact(&a));
+    ta_record_reader tel = reader_for(TA_RING_TEL, TA_RING_LOSSY);
+    CHECK(check_arena(&tel, &a, &record) == TA_RECORD_OK && record.seq == 4 && record.gap == 3);
+    CHECK(ta_record_u16(&record, TA_RECORD_AT_FLAGS) == 0x0003);
+    CHECK(ta_record_u16(&record, offsetof(ta_msg_tel_trace_wire, trace_kind)) == 0x1234);
+    CHECK(bytes_are(ta_record_span(&record, offsetof(ta_msg_tel_trace_wire, states)), states, 5));
+
+    /* h2c.invoke_report: a bool field refuses 2. */
+    ta_msg_h2c_invoke_report report = { .invokeid = { (const uint8_t *)"i", 1 }, .kind = TA_MSG_INVOKE_REPORT_KIND_ERROR, .ends = 2 };
+    CHECK(ta_msg_h2c_invoke_report_size(&report, &size) == TA_OK);
+    arena_reset(&a, size);
+    ta_ring_reservation to_report = { .bytes = arena_record(&a), .size = size, .seq = 1 };
+    CHECK(ta_msg_h2c_invoke_report_write(&report, &to_report) == TA_ERR_INVALID && untouched(&a));
+    report.ends = 1;
+    CHECK(ta_msg_h2c_invoke_report_write(&report, &to_report) == TA_OK && canaries_intact(&a));
+}
+
 int main(void) {
     test_table();
     test_every_kind_accepts_its_minimal_record();
     test_size();
+    test_write_event();
+    test_write_refuses();
+    test_write_scalars_and_flags();
     if (failures != 0) {
         fprintf(stderr, "ring_proto_test: %d failure(s)\n", failures);
         return 1;

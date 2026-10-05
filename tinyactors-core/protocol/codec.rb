@@ -259,7 +259,7 @@ module RingProto
       infos = infos(model)
       check_model!(model, infos)
       out = +"/*\n#{wrap(GENERATED.rstrip)}\n */\n#include \"ring_proto.h\"\n\n"
-      infos.each { |info| out << size_function(info) }
+      infos.each { |info| out << size_function(info) << write_function(info) }
       out << descriptor_table(infos)
       out
     end
@@ -346,6 +346,42 @@ module RingProto
       out << "    *size = (uint32_t)bytes;\n    return TA_OK;\n}\n\n"
     end
 
+    # ---------------------------------------------------------- write
+
+    def write_prototype(info)
+      text = +"#{info.type}_write fills the reservation `to` with the #{info.msg.id} record for data: the header "
+      text << "(kind #{hex(info.msg.code)}, the flags, session and at of data->head, the size, and the seq of the reservation), "
+      text << 'the fixed fields, the bytes of each span, and zero for every pad and rounding byte, so that all of to->size bytes are stored. '
+      text << "It needs a reservation of exactly the size #{info.type}_size answers (ring.h: ta_ring_reserve), "
+      text << 'and the ta_bytes of data must not overlap it. '
+      text << 'TA_ERR_INVALID, with nothing stored: no bytes, a size other than the measured one, a flag bit that '
+      text << "#{info.msg.id} does not define, "
+      text << 'an enum or bool field outside its set (the reader would refuse the record), or a ta_bytes with a length and no pointer. '
+      text << 'TA_ERR_NOMEM, with nothing stored: the size does not fit a u32. '
+      text << 'The caller then commits the reservation, or abandons it on an error. It never allocates, and the data may be freed when it returns.'
+      "#{comment(text)}ta_result #{info.type}_write(const #{info.type} *data, const ta_ring_reservation *to);\n\n"
+    end
+
+    # All checks come before the first store, so a refusal leaves the reservation as it was.
+    def write_function(info)
+      out = +"/* #{info.type}_write: see ring_proto.h. */\n"
+      out << "ta_result #{info.type}_write(const #{info.type} *data, const ta_ring_reservation *to) {\n"
+      out << "    #{info.wire} wire;\n    uint32_t size = 0;\n    uint32_t tail = (uint32_t)sizeof wire;\n"
+      out << "    ta_result result = #{info.type}_size(data, &size);\n"
+      out << "    if (result != TA_OK) {\n        return result;\n    }\n"
+      conditions = ['to->bytes == NULL', 'to->size != size',
+                    format('(data->head.flags & (uint16_t)~0x%04Xu) != 0', info.flags_allowed)]
+      info.domains.each { |f| conditions << format('!ta_record_in_domain(0x%Xull, data->%s)', f.mask, f.name) }
+      out << "    if (#{conditions.join(" ||\n        ")}) {\n        return TA_ERR_INVALID;\n    }\n"
+      out << "    ta_mem_zero(&wire, sizeof wire);\n"
+      info.spans.each { |f| out << "    tail = ta_record_put_span(&wire.#{f.name}, to->bytes, tail, data->#{f.name});\n" }
+      out << "    wire.header = (ta_msg_wire_header){ .kind = #{info.kind_const}, .flags = data->head.flags, .size = size,\n"
+      out << "                                        .seq = to->seq, .session = data->head.session, .at = data->head.at };\n"
+      info.fields.reject(&:span?).each { |f| out << "    wire.#{f.name} = data->#{f.name};\n" }
+      out << "    ta_mem_copy(to->bytes, &wire, sizeof wire);\n"
+      out << "    ta_mem_zero(to->bytes + tail, size - tail);\n    return TA_OK;\n}\n\n"
+    end
+
     # ------------------------------------------------------- per message
 
     def message_header(_model, info)
@@ -353,6 +389,7 @@ module RingProto
       out << wire_struct(info)
       out << data_struct(info)
       out << size_prototype(info)
+      out << write_prototype(info)
       out
     end
 

@@ -308,6 +308,23 @@ typedef struct ta_msg_h2c_time {
 ta_result ta_msg_h2c_time_size(const ta_msg_h2c_time *data, uint32_t *size);
 
 /*
+ * ta_msg_h2c_time_write fills the reservation `to` with the h2c.time record
+ * for data: the header (kind 0x0101, the flags, session and at of data->head,
+ * the size, and the seq of the reservation), the fixed fields, the bytes of
+ * each span, and zero for every pad and rounding byte, so that all of to->size
+ * bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_h2c_time_size answers (ring.h: ta_ring_reserve), and the ta_bytes of
+ * data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes, a
+ * size other than the measured one, a flag bit that h2c.time does not define,
+ * an enum or bool field outside its set (the reader would refuse the record),
+ * or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing
+ * stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_h2c_time_write(const ta_msg_h2c_time *data, const ta_ring_reservation *to);
+
+/*
  * h2c.event: An external event for a session.
  *
  * Header `session` names a resident session, or is 0 and `target` gives an
@@ -388,6 +405,23 @@ typedef struct ta_msg_h2c_event {
 ta_result ta_msg_h2c_event_size(const ta_msg_h2c_event *data, uint32_t *size);
 
 /*
+ * ta_msg_h2c_event_write fills the reservation `to` with the h2c.event record
+ * for data: the header (kind 0x0102, the flags, session and at of data->head,
+ * the size, and the seq of the reservation), the fixed fields, the bytes of
+ * each span, and zero for every pad and rounding byte, so that all of to->size
+ * bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_h2c_event_size answers (ring.h: ta_ring_reserve), and the ta_bytes of
+ * data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes, a
+ * size other than the measured one, a flag bit that h2c.event does not define,
+ * an enum or bool field outside its set (the reader would refuse the record),
+ * or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing
+ * stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_h2c_event_write(const ta_msg_h2c_event *data, const ta_ring_reservation *to);
+
+/*
  * h2c.spawn: Create a session.
  *
  * With the replaying flag the session is prepared to replay (core ADR 0089):
@@ -454,6 +488,23 @@ typedef struct ta_msg_h2c_spawn {
 ta_result ta_msg_h2c_spawn_size(const ta_msg_h2c_spawn *data, uint32_t *size);
 
 /*
+ * ta_msg_h2c_spawn_write fills the reservation `to` with the h2c.spawn record
+ * for data: the header (kind 0x0103, the flags, session and at of data->head,
+ * the size, and the seq of the reservation), the fixed fields, the bytes of
+ * each span, and zero for every pad and rounding byte, so that all of to->size
+ * bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_h2c_spawn_size answers (ring.h: ta_ring_reserve), and the ta_bytes of
+ * data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes, a
+ * size other than the measured one, a flag bit that h2c.spawn does not define,
+ * an enum or bool field outside its set (the reader would refuse the record),
+ * or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing
+ * stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_h2c_spawn_write(const ta_msg_h2c_spawn *data, const ta_ring_reservation *to);
+
+/*
  * h2c.publish: End a replay and put the session on the route.
  *
  * Held delayed sends due by `at` are dropped; the rest stay in the pool under
@@ -500,6 +551,23 @@ typedef struct ta_msg_h2c_publish {
  * is untouched. data and size must not be NULL.
  */
 ta_result ta_msg_h2c_publish_size(const ta_msg_h2c_publish *data, uint32_t *size);
+
+/*
+ * ta_msg_h2c_publish_write fills the reservation `to` with the h2c.publish
+ * record for data: the header (kind 0x0104, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_h2c_publish_size answers (ring.h: ta_ring_reserve), and the ta_bytes
+ * of data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes,
+ * a size other than the measured one, a flag bit that h2c.publish does not
+ * define, an enum or bool field outside its set (the reader would refuse the
+ * record), or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with
+ * nothing stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_h2c_publish_write(const ta_msg_h2c_publish *data, const ta_ring_reservation *to);
 
 /*
  * h2c.load: Bring an unloaded session back.
@@ -556,6 +624,23 @@ typedef struct ta_msg_h2c_load {
 ta_result ta_msg_h2c_load_size(const ta_msg_h2c_load *data, uint32_t *size);
 
 /*
+ * ta_msg_h2c_load_write fills the reservation `to` with the h2c.load record
+ * for data: the header (kind 0x0105, the flags, session and at of data->head,
+ * the size, and the seq of the reservation), the fixed fields, the bytes of
+ * each span, and zero for every pad and rounding byte, so that all of to->size
+ * bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_h2c_load_size answers (ring.h: ta_ring_reserve), and the ta_bytes of
+ * data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes, a
+ * size other than the measured one, a flag bit that h2c.load does not define,
+ * an enum or bool field outside its set (the reader would refuse the record),
+ * or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing
+ * stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_h2c_load_write(const ta_msg_h2c_load *data, const ta_ring_reservation *to);
+
+/*
  * h2c.load_failed: The session cannot be loaded.
  *
  * Every envelope waiting for the address is recycled: mail becomes
@@ -603,6 +688,23 @@ typedef struct ta_msg_h2c_load_failed {
 ta_result ta_msg_h2c_load_failed_size(const ta_msg_h2c_load_failed *data, uint32_t *size);
 
 /*
+ * ta_msg_h2c_load_failed_write fills the reservation `to` with the
+ * h2c.load_failed record for data: the header (kind 0x0106, the flags, session
+ * and at of data->head, the size, and the seq of the reservation), the fixed
+ * fields, the bytes of each span, and zero for every pad and rounding byte, so
+ * that all of to->size bytes are stored. It needs a reservation of exactly the
+ * size ta_msg_h2c_load_failed_size answers (ring.h: ta_ring_reserve), and the
+ * ta_bytes of data must not overlap it. TA_ERR_INVALID, with nothing stored:
+ * no bytes, a size other than the measured one, a flag bit that
+ * h2c.load_failed does not define, an enum or bool field outside its set (the
+ * reader would refuse the record), or a ta_bytes with a length and no pointer.
+ * TA_ERR_NOMEM, with nothing stored: the size does not fit a u32. The caller
+ * then commits the reservation, or abandons it on an error. It never
+ * allocates, and the data may be freed when it returns.
+ */
+ta_result ta_msg_h2c_load_failed_write(const ta_msg_h2c_load_failed *data, const ta_ring_reservation *to);
+
+/*
  * h2c.unload: Page a stable session out.
  *
  * Refuses an owner of an active local invocation and an active locally invoked
@@ -645,6 +747,23 @@ typedef struct ta_msg_h2c_unload {
 ta_result ta_msg_h2c_unload_size(const ta_msg_h2c_unload *data, uint32_t *size);
 
 /*
+ * ta_msg_h2c_unload_write fills the reservation `to` with the h2c.unload
+ * record for data: the header (kind 0x0107, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_h2c_unload_size answers (ring.h: ta_ring_reserve), and the ta_bytes
+ * of data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes,
+ * a size other than the measured one, a flag bit that h2c.unload does not
+ * define, an enum or bool field outside its set (the reader would refuse the
+ * record), or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with
+ * nothing stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_h2c_unload_write(const ta_msg_h2c_unload *data, const ta_ring_reservation *to);
+
+/*
  * h2c.checkpoint: Ask for a recorded session's state.
  *
  * Ring h2c, kind 0x0108, 48 fixed bytes, 1 spans. Replied to by c2h.state,
@@ -679,6 +798,23 @@ typedef struct ta_msg_h2c_checkpoint {
  * is untouched. data and size must not be NULL.
  */
 ta_result ta_msg_h2c_checkpoint_size(const ta_msg_h2c_checkpoint *data, uint32_t *size);
+
+/*
+ * ta_msg_h2c_checkpoint_write fills the reservation `to` with the
+ * h2c.checkpoint record for data: the header (kind 0x0108, the flags, session
+ * and at of data->head, the size, and the seq of the reservation), the fixed
+ * fields, the bytes of each span, and zero for every pad and rounding byte, so
+ * that all of to->size bytes are stored. It needs a reservation of exactly the
+ * size ta_msg_h2c_checkpoint_size answers (ring.h: ta_ring_reserve), and the
+ * ta_bytes of data must not overlap it. TA_ERR_INVALID, with nothing stored:
+ * no bytes, a size other than the measured one, a flag bit that h2c.checkpoint
+ * does not define, an enum or bool field outside its set (the reader would
+ * refuse the record), or a ta_bytes with a length and no pointer.
+ * TA_ERR_NOMEM, with nothing stored: the size does not fit a u32. The caller
+ * then commits the reservation, or abandons it on an error. It never
+ * allocates, and the data may be freed when it returns.
+ */
+ta_result ta_msg_h2c_checkpoint_write(const ta_msg_h2c_checkpoint *data, const ta_ring_reservation *to);
 
 /*
  * h2c.invoke_report: An invoked service finished or failed.
@@ -742,6 +878,24 @@ typedef struct ta_msg_h2c_invoke_report {
 ta_result ta_msg_h2c_invoke_report_size(const ta_msg_h2c_invoke_report *data, uint32_t *size);
 
 /*
+ * ta_msg_h2c_invoke_report_write fills the reservation `to` with the
+ * h2c.invoke_report record for data: the header (kind 0x0109, the flags,
+ * session and at of data->head, the size, and the seq of the reservation), the
+ * fixed fields, the bytes of each span, and zero for every pad and rounding
+ * byte, so that all of to->size bytes are stored. It needs a reservation of
+ * exactly the size ta_msg_h2c_invoke_report_size answers (ring.h:
+ * ta_ring_reserve), and the ta_bytes of data must not overlap it.
+ * TA_ERR_INVALID, with nothing stored: no bytes, a size other than the
+ * measured one, a flag bit that h2c.invoke_report does not define, an enum or
+ * bool field outside its set (the reader would refuse the record), or a
+ * ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing stored:
+ * the size does not fit a u32. The caller then commits the reservation, or
+ * abandons it on an error. It never allocates, and the data may be freed when
+ * it returns.
+ */
+ta_result ta_msg_h2c_invoke_report_write(const ta_msg_h2c_invoke_report *data, const ta_ring_reservation *to);
+
+/*
  * h2c.destroy: End a session now.
  *
  * A session that holds a macrostep slot, running or parked, has its execution
@@ -776,6 +930,23 @@ typedef struct ta_msg_h2c_destroy {
  * is untouched. data and size must not be NULL.
  */
 ta_result ta_msg_h2c_destroy_size(const ta_msg_h2c_destroy *data, uint32_t *size);
+
+/*
+ * ta_msg_h2c_destroy_write fills the reservation `to` with the h2c.destroy
+ * record for data: the header (kind 0x010A, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_h2c_destroy_size answers (ring.h: ta_ring_reserve), and the ta_bytes
+ * of data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes,
+ * a size other than the measured one, a flag bit that h2c.destroy does not
+ * define, an enum or bool field outside its set (the reader would refuse the
+ * record), or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with
+ * nothing stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_h2c_destroy_write(const ta_msg_h2c_destroy *data, const ta_ring_reservation *to);
 
 /*
  * h2c.definition_register: Compile and register a complete definition.
@@ -828,6 +999,24 @@ typedef struct ta_msg_h2c_definition_register {
 ta_result ta_msg_h2c_definition_register_size(const ta_msg_h2c_definition_register *data, uint32_t *size);
 
 /*
+ * ta_msg_h2c_definition_register_write fills the reservation `to` with the
+ * h2c.definition_register record for data: the header (kind 0x010B, the flags,
+ * session and at of data->head, the size, and the seq of the reservation), the
+ * fixed fields, the bytes of each span, and zero for every pad and rounding
+ * byte, so that all of to->size bytes are stored. It needs a reservation of
+ * exactly the size ta_msg_h2c_definition_register_size answers (ring.h:
+ * ta_ring_reserve), and the ta_bytes of data must not overlap it.
+ * TA_ERR_INVALID, with nothing stored: no bytes, a size other than the
+ * measured one, a flag bit that h2c.definition_register does not define, an
+ * enum or bool field outside its set (the reader would refuse the record), or
+ * a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing stored:
+ * the size does not fit a u32. The caller then commits the reservation, or
+ * abandons it on an error. It never allocates, and the data may be freed when
+ * it returns.
+ */
+ta_result ta_msg_h2c_definition_register_write(const ta_msg_h2c_definition_register *data, const ta_ring_reservation *to);
+
+/*
  * h2c.definition_release: Release one registration hold.
  *
  * Core ADR 0077 semantics: an unused definition is freed when its last hold,
@@ -859,6 +1048,24 @@ typedef struct ta_msg_h2c_definition_release {
  * be NULL.
  */
 ta_result ta_msg_h2c_definition_release_size(const ta_msg_h2c_definition_release *data, uint32_t *size);
+
+/*
+ * ta_msg_h2c_definition_release_write fills the reservation `to` with the
+ * h2c.definition_release record for data: the header (kind 0x010C, the flags,
+ * session and at of data->head, the size, and the seq of the reservation), the
+ * fixed fields, the bytes of each span, and zero for every pad and rounding
+ * byte, so that all of to->size bytes are stored. It needs a reservation of
+ * exactly the size ta_msg_h2c_definition_release_size answers (ring.h:
+ * ta_ring_reserve), and the ta_bytes of data must not overlap it.
+ * TA_ERR_INVALID, with nothing stored: no bytes, a size other than the
+ * measured one, a flag bit that h2c.definition_release does not define, an
+ * enum or bool field outside its set (the reader would refuse the record), or
+ * a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing stored:
+ * the size does not fit a u32. The caller then commits the reservation, or
+ * abandons it on an error. It never allocates, and the data may be freed when
+ * it returns.
+ */
+ta_result ta_msg_h2c_definition_release_write(const ta_msg_h2c_definition_release *data, const ta_ring_reservation *to);
 
 /*
  * h2c.definition_retire: End a definition's availability.
@@ -893,6 +1100,24 @@ typedef struct ta_msg_h2c_definition_retire {
  * be NULL.
  */
 ta_result ta_msg_h2c_definition_retire_size(const ta_msg_h2c_definition_retire *data, uint32_t *size);
+
+/*
+ * ta_msg_h2c_definition_retire_write fills the reservation `to` with the
+ * h2c.definition_retire record for data: the header (kind 0x010D, the flags,
+ * session and at of data->head, the size, and the seq of the reservation), the
+ * fixed fields, the bytes of each span, and zero for every pad and rounding
+ * byte, so that all of to->size bytes are stored. It needs a reservation of
+ * exactly the size ta_msg_h2c_definition_retire_size answers (ring.h:
+ * ta_ring_reserve), and the ta_bytes of data must not overlap it.
+ * TA_ERR_INVALID, with nothing stored: no bytes, a size other than the
+ * measured one, a flag bit that h2c.definition_retire does not define, an enum
+ * or bool field outside its set (the reader would refuse the record), or a
+ * ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing stored:
+ * the size does not fit a u32. The caller then commits the reservation, or
+ * abandons it on an error. It never allocates, and the data may be freed when
+ * it returns.
+ */
+ta_result ta_msg_h2c_definition_retire_write(const ta_msg_h2c_definition_retire *data, const ta_ring_reservation *to);
 
 /*
  * h2c.withdraw: Take back an admitted input that has not been taken.
@@ -937,6 +1162,23 @@ typedef struct ta_msg_h2c_withdraw {
  * many. It never allocates. It cannot fail. data and size must not be NULL.
  */
 ta_result ta_msg_h2c_withdraw_size(const ta_msg_h2c_withdraw *data, uint32_t *size);
+
+/*
+ * ta_msg_h2c_withdraw_write fills the reservation `to` with the h2c.withdraw
+ * record for data: the header (kind 0x010E, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_h2c_withdraw_size answers (ring.h: ta_ring_reserve), and the ta_bytes
+ * of data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes,
+ * a size other than the measured one, a flag bit that h2c.withdraw does not
+ * define, an enum or bool field outside its set (the reader would refuse the
+ * record), or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with
+ * nothing stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_h2c_withdraw_write(const ta_msg_h2c_withdraw *data, const ta_ring_reservation *to);
 
 /*
  * h2c.type_declare: Declare an I/O processor or invoker type.
@@ -989,6 +1231,24 @@ typedef struct ta_msg_h2c_type_declare {
 ta_result ta_msg_h2c_type_declare_size(const ta_msg_h2c_type_declare *data, uint32_t *size);
 
 /*
+ * ta_msg_h2c_type_declare_write fills the reservation `to` with the
+ * h2c.type_declare record for data: the header (kind 0x010F, the flags,
+ * session and at of data->head, the size, and the seq of the reservation), the
+ * fixed fields, the bytes of each span, and zero for every pad and rounding
+ * byte, so that all of to->size bytes are stored. It needs a reservation of
+ * exactly the size ta_msg_h2c_type_declare_size answers (ring.h:
+ * ta_ring_reserve), and the ta_bytes of data must not overlap it.
+ * TA_ERR_INVALID, with nothing stored: no bytes, a size other than the
+ * measured one, a flag bit that h2c.type_declare does not define, an enum or
+ * bool field outside its set (the reader would refuse the record), or a
+ * ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing stored:
+ * the size does not fit a u32. The caller then commits the reservation, or
+ * abandons it on an error. It never allocates, and the data may be freed when
+ * it returns.
+ */
+ta_result ta_msg_h2c_type_declare_write(const ta_msg_h2c_type_declare *data, const ta_ring_reservation *to);
+
+/*
  * c2h.spawned: A session exists.
  *
  * For a recorded session this is the first record of its log.
@@ -1035,6 +1295,23 @@ typedef struct ta_msg_c2h_spawned {
  * *size is untouched. data and size must not be NULL.
  */
 ta_result ta_msg_c2h_spawned_size(const ta_msg_c2h_spawned *data, uint32_t *size);
+
+/*
+ * ta_msg_c2h_spawned_write fills the reservation `to` with the c2h.spawned
+ * record for data: the header (kind 0x0201, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_spawned_size answers (ring.h: ta_ring_reserve), and the ta_bytes
+ * of data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes,
+ * a size other than the measured one, a flag bit that c2h.spawned does not
+ * define, an enum or bool field outside its set (the reader would refuse the
+ * record), or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with
+ * nothing stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_c2h_spawned_write(const ta_msg_c2h_spawned *data, const ta_ring_reservation *to);
 
 /*
  * c2h.input: A recorded session took an input.
@@ -1142,6 +1419,23 @@ typedef struct ta_msg_c2h_input {
 ta_result ta_msg_c2h_input_size(const ta_msg_c2h_input *data, uint32_t *size);
 
 /*
+ * ta_msg_c2h_input_write fills the reservation `to` with the c2h.input record
+ * for data: the header (kind 0x0202, the flags, session and at of data->head,
+ * the size, and the seq of the reservation), the fixed fields, the bytes of
+ * each span, and zero for every pad and rounding byte, so that all of to->size
+ * bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_input_size answers (ring.h: ta_ring_reserve), and the ta_bytes of
+ * data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes, a
+ * size other than the measured one, a flag bit that c2h.input does not define,
+ * an enum or bool field outside its set (the reader would refuse the record),
+ * or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing
+ * stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_c2h_input_write(const ta_msg_c2h_input *data, const ta_ring_reservation *to);
+
+/*
  * c2h.send: A send for an I/O processor.
  *
  * Mail to a local session never appears here: it is an envelope
@@ -1209,6 +1503,23 @@ typedef struct ta_msg_c2h_send {
 ta_result ta_msg_c2h_send_size(const ta_msg_c2h_send *data, uint32_t *size);
 
 /*
+ * ta_msg_c2h_send_write fills the reservation `to` with the c2h.send record
+ * for data: the header (kind 0x0203, the flags, session and at of data->head,
+ * the size, and the seq of the reservation), the fixed fields, the bytes of
+ * each span, and zero for every pad and rounding byte, so that all of to->size
+ * bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_send_size answers (ring.h: ta_ring_reserve), and the ta_bytes of
+ * data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes, a
+ * size other than the measured one, a flag bit that c2h.send does not define,
+ * an enum or bool field outside its set (the reader would refuse the record),
+ * or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing
+ * stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_c2h_send_write(const ta_msg_c2h_send *data, const ta_ring_reservation *to);
+
+/*
  * c2h.invoke: Start an invocation.
  *
  * Written in the post-macrostep startup phase. This record seq is the live
@@ -1270,6 +1581,23 @@ typedef struct ta_msg_c2h_invoke {
 ta_result ta_msg_c2h_invoke_size(const ta_msg_c2h_invoke *data, uint32_t *size);
 
 /*
+ * ta_msg_c2h_invoke_write fills the reservation `to` with the c2h.invoke
+ * record for data: the header (kind 0x0204, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_invoke_size answers (ring.h: ta_ring_reserve), and the ta_bytes
+ * of data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes,
+ * a size other than the measured one, a flag bit that c2h.invoke does not
+ * define, an enum or bool field outside its set (the reader would refuse the
+ * record), or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with
+ * nothing stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_c2h_invoke_write(const ta_msg_c2h_invoke *data, const ta_ring_reservation *to);
+
+/*
  * c2h.invoke_cancel: Cancel an invocation.
  *
  * Mandatory state-exit output, reserved before execution. The host invalidates
@@ -1310,6 +1638,24 @@ typedef struct ta_msg_c2h_invoke_cancel {
  * is untouched. data and size must not be NULL.
  */
 ta_result ta_msg_c2h_invoke_cancel_size(const ta_msg_c2h_invoke_cancel *data, uint32_t *size);
+
+/*
+ * ta_msg_c2h_invoke_cancel_write fills the reservation `to` with the
+ * c2h.invoke_cancel record for data: the header (kind 0x0205, the flags,
+ * session and at of data->head, the size, and the seq of the reservation), the
+ * fixed fields, the bytes of each span, and zero for every pad and rounding
+ * byte, so that all of to->size bytes are stored. It needs a reservation of
+ * exactly the size ta_msg_c2h_invoke_cancel_size answers (ring.h:
+ * ta_ring_reserve), and the ta_bytes of data must not overlap it.
+ * TA_ERR_INVALID, with nothing stored: no bytes, a size other than the
+ * measured one, a flag bit that c2h.invoke_cancel does not define, an enum or
+ * bool field outside its set (the reader would refuse the record), or a
+ * ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing stored:
+ * the size does not fit a u32. The caller then commits the reservation, or
+ * abandons it on an error. It never allocates, and the data may be freed when
+ * it returns.
+ */
+ta_result ta_msg_c2h_invoke_cancel_write(const ta_msg_c2h_invoke_cancel *data, const ta_ring_reservation *to);
 
 /*
  * c2h.invoke_forward: Autoforward an event to an invocation.
@@ -1386,6 +1732,24 @@ typedef struct ta_msg_c2h_invoke_forward {
 ta_result ta_msg_c2h_invoke_forward_size(const ta_msg_c2h_invoke_forward *data, uint32_t *size);
 
 /*
+ * ta_msg_c2h_invoke_forward_write fills the reservation `to` with the
+ * c2h.invoke_forward record for data: the header (kind 0x0206, the flags,
+ * session and at of data->head, the size, and the seq of the reservation), the
+ * fixed fields, the bytes of each span, and zero for every pad and rounding
+ * byte, so that all of to->size bytes are stored. It needs a reservation of
+ * exactly the size ta_msg_c2h_invoke_forward_size answers (ring.h:
+ * ta_ring_reserve), and the ta_bytes of data must not overlap it.
+ * TA_ERR_INVALID, with nothing stored: no bytes, a size other than the
+ * measured one, a flag bit that c2h.invoke_forward does not define, an enum or
+ * bool field outside its set (the reader would refuse the record), or a
+ * ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing stored:
+ * the size does not fit a u32. The caller then commits the reservation, or
+ * abandons it on an error. It never allocates, and the data may be freed when
+ * it returns.
+ */
+ta_result ta_msg_c2h_invoke_forward_write(const ta_msg_c2h_invoke_forward *data, const ta_ring_reservation *to);
+
+/*
  * c2h.log: A <log>.
  *
  * Ring c2h, kind 0x0207, 56 fixed bytes, 1 spans.
@@ -1423,6 +1787,23 @@ typedef struct ta_msg_c2h_log {
  * untouched. data and size must not be NULL.
  */
 ta_result ta_msg_c2h_log_size(const ta_msg_c2h_log *data, uint32_t *size);
+
+/*
+ * ta_msg_c2h_log_write fills the reservation `to` with the c2h.log record for
+ * data: the header (kind 0x0207, the flags, session and at of data->head, the
+ * size, and the seq of the reservation), the fixed fields, the bytes of each
+ * span, and zero for every pad and rounding byte, so that all of to->size
+ * bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_log_size answers (ring.h: ta_ring_reserve), and the ta_bytes of
+ * data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes, a
+ * size other than the measured one, a flag bit that c2h.log does not define,
+ * an enum or bool field outside its set (the reader would refuse the record),
+ * or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing
+ * stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_c2h_log_write(const ta_msg_c2h_log *data, const ta_ring_reservation *to);
 
 /*
  * c2h.macrostep_ended: A macrostep ended.
@@ -1484,6 +1865,24 @@ typedef struct ta_msg_c2h_macrostep_ended {
 ta_result ta_msg_c2h_macrostep_ended_size(const ta_msg_c2h_macrostep_ended *data, uint32_t *size);
 
 /*
+ * ta_msg_c2h_macrostep_ended_write fills the reservation `to` with the
+ * c2h.macrostep_ended record for data: the header (kind 0x0208, the flags,
+ * session and at of data->head, the size, and the seq of the reservation), the
+ * fixed fields, the bytes of each span, and zero for every pad and rounding
+ * byte, so that all of to->size bytes are stored. It needs a reservation of
+ * exactly the size ta_msg_c2h_macrostep_ended_size answers (ring.h:
+ * ta_ring_reserve), and the ta_bytes of data must not overlap it.
+ * TA_ERR_INVALID, with nothing stored: no bytes, a size other than the
+ * measured one, a flag bit that c2h.macrostep_ended does not define, an enum
+ * or bool field outside its set (the reader would refuse the record), or a
+ * ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing stored:
+ * the size does not fit a u32. The caller then commits the reservation, or
+ * abandons it on an error. It never allocates, and the data may be freed when
+ * it returns.
+ */
+ta_result ta_msg_c2h_macrostep_ended_write(const ta_msg_c2h_macrostep_ended *data, const ta_ring_reservation *to);
+
+/*
  * c2h.wake: Call core back at this time.
  *
  * The earliest due delayed send in the pool changed. One timer in the host's
@@ -1514,6 +1913,23 @@ typedef struct ta_msg_c2h_wake {
  * It never allocates. It cannot fail. data and size must not be NULL.
  */
 ta_result ta_msg_c2h_wake_size(const ta_msg_c2h_wake *data, uint32_t *size);
+
+/*
+ * ta_msg_c2h_wake_write fills the reservation `to` with the c2h.wake record
+ * for data: the header (kind 0x0209, the flags, session and at of data->head,
+ * the size, and the seq of the reservation), the fixed fields, the bytes of
+ * each span, and zero for every pad and rounding byte, so that all of to->size
+ * bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_wake_size answers (ring.h: ta_ring_reserve), and the ta_bytes of
+ * data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes, a
+ * size other than the measured one, a flag bit that c2h.wake does not define,
+ * an enum or bool field outside its set (the reader would refuse the record),
+ * or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing
+ * stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_c2h_wake_write(const ta_msg_c2h_wake *data, const ta_ring_reservation *to);
 
 /*
  * c2h.bounced: An h2c record was not run.
@@ -1561,6 +1977,23 @@ typedef struct ta_msg_c2h_bounced {
 ta_result ta_msg_c2h_bounced_size(const ta_msg_c2h_bounced *data, uint32_t *size);
 
 /*
+ * ta_msg_c2h_bounced_write fills the reservation `to` with the c2h.bounced
+ * record for data: the header (kind 0x020A, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_bounced_size answers (ring.h: ta_ring_reserve), and the ta_bytes
+ * of data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes,
+ * a size other than the measured one, a flag bit that c2h.bounced does not
+ * define, an enum or bool field outside its set (the reader would refuse the
+ * record), or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with
+ * nothing stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_c2h_bounced_write(const ta_msg_c2h_bounced *data, const ta_ring_reservation *to);
+
+/*
  * c2h.load_needed: Envelopes wait for an unloaded address.
  *
  * Written once per address until h2c.load or h2c.load_failed answers it.
@@ -1602,6 +2035,23 @@ typedef struct ta_msg_c2h_load_needed {
 ta_result ta_msg_c2h_load_needed_size(const ta_msg_c2h_load_needed *data, uint32_t *size);
 
 /*
+ * ta_msg_c2h_load_needed_write fills the reservation `to` with the
+ * c2h.load_needed record for data: the header (kind 0x020B, the flags, session
+ * and at of data->head, the size, and the seq of the reservation), the fixed
+ * fields, the bytes of each span, and zero for every pad and rounding byte, so
+ * that all of to->size bytes are stored. It needs a reservation of exactly the
+ * size ta_msg_c2h_load_needed_size answers (ring.h: ta_ring_reserve), and the
+ * ta_bytes of data must not overlap it. TA_ERR_INVALID, with nothing stored:
+ * no bytes, a size other than the measured one, a flag bit that
+ * c2h.load_needed does not define, an enum or bool field outside its set (the
+ * reader would refuse the record), or a ta_bytes with a length and no pointer.
+ * TA_ERR_NOMEM, with nothing stored: the size does not fit a u32. The caller
+ * then commits the reservation, or abandons it on an error. It never
+ * allocates, and the data may be freed when it returns.
+ */
+ta_result ta_msg_c2h_load_needed_write(const ta_msg_c2h_load_needed *data, const ta_ring_reservation *to);
+
+/*
  * c2h.loaded: A session is resident again.
  *
  * Ring c2h, kind 0x020C, 48 fixed bytes, 1 spans.
@@ -1635,6 +2085,23 @@ typedef struct ta_msg_c2h_loaded {
  * is untouched. data and size must not be NULL.
  */
 ta_result ta_msg_c2h_loaded_size(const ta_msg_c2h_loaded *data, uint32_t *size);
+
+/*
+ * ta_msg_c2h_loaded_write fills the reservation `to` with the c2h.loaded
+ * record for data: the header (kind 0x020C, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_loaded_size answers (ring.h: ta_ring_reserve), and the ta_bytes
+ * of data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes,
+ * a size other than the measured one, a flag bit that c2h.loaded does not
+ * define, an enum or bool field outside its set (the reader would refuse the
+ * record), or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with
+ * nothing stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_c2h_loaded_write(const ta_msg_c2h_loaded *data, const ta_ring_reservation *to);
 
 /*
  * c2h.unloaded: A session left memory.
@@ -1692,6 +2159,23 @@ typedef struct ta_msg_c2h_unloaded {
 ta_result ta_msg_c2h_unloaded_size(const ta_msg_c2h_unloaded *data, uint32_t *size);
 
 /*
+ * ta_msg_c2h_unloaded_write fills the reservation `to` with the c2h.unloaded
+ * record for data: the header (kind 0x020D, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_unloaded_size answers (ring.h: ta_ring_reserve), and the ta_bytes
+ * of data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes,
+ * a size other than the measured one, a flag bit that c2h.unloaded does not
+ * define, an enum or bool field outside its set (the reader would refuse the
+ * record), or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with
+ * nothing stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_c2h_unloaded_write(const ta_msg_c2h_unloaded *data, const ta_ring_reservation *to);
+
+/*
  * c2h.state: A recorded session's state at a point of its log.
  *
  * A checkpoint (core ADR 0091). Its delayed sends are inside the image, so it
@@ -1747,6 +2231,23 @@ typedef struct ta_msg_c2h_state {
 ta_result ta_msg_c2h_state_size(const ta_msg_c2h_state *data, uint32_t *size);
 
 /*
+ * ta_msg_c2h_state_write fills the reservation `to` with the c2h.state record
+ * for data: the header (kind 0x020E, the flags, session and at of data->head,
+ * the size, and the seq of the reservation), the fixed fields, the bytes of
+ * each span, and zero for every pad and rounding byte, so that all of to->size
+ * bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_state_size answers (ring.h: ta_ring_reserve), and the ta_bytes of
+ * data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes, a
+ * size other than the measured one, a flag bit that c2h.state does not define,
+ * an enum or bool field outside its set (the reader would refuse the record),
+ * or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing
+ * stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_c2h_state_write(const ta_msg_c2h_state *data, const ta_ring_reservation *to);
+
+/*
  * c2h.published: A replayed session is live.
  *
  * For an empty-address publication, one session-0 result summarizes the atomic
@@ -1797,6 +2298,23 @@ typedef struct ta_msg_c2h_published {
 ta_result ta_msg_c2h_published_size(const ta_msg_c2h_published *data, uint32_t *size);
 
 /*
+ * ta_msg_c2h_published_write fills the reservation `to` with the c2h.published
+ * record for data: the header (kind 0x020F, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_published_size answers (ring.h: ta_ring_reserve), and the
+ * ta_bytes of data must not overlap it. TA_ERR_INVALID, with nothing stored:
+ * no bytes, a size other than the measured one, a flag bit that c2h.published
+ * does not define, an enum or bool field outside its set (the reader would
+ * refuse the record), or a ta_bytes with a length and no pointer.
+ * TA_ERR_NOMEM, with nothing stored: the size does not fit a u32. The caller
+ * then commits the reservation, or abandons it on an error. It never
+ * allocates, and the data may be freed when it returns.
+ */
+ta_result ta_msg_c2h_published_write(const ta_msg_c2h_published *data, const ta_ring_reservation *to);
+
+/*
  * c2h.finished: A session reached a top-level final state.
  *
  * Mail to a local parent (done.invoke) is an envelope; this record is for the
@@ -1830,6 +2348,23 @@ typedef struct ta_msg_c2h_finished {
  * many. It never allocates. It cannot fail. data and size must not be NULL.
  */
 ta_result ta_msg_c2h_finished_size(const ta_msg_c2h_finished *data, uint32_t *size);
+
+/*
+ * ta_msg_c2h_finished_write fills the reservation `to` with the c2h.finished
+ * record for data: the header (kind 0x0210, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_finished_size answers (ring.h: ta_ring_reserve), and the ta_bytes
+ * of data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes,
+ * a size other than the measured one, a flag bit that c2h.finished does not
+ * define, an enum or bool field outside its set (the reader would refuse the
+ * record), or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with
+ * nothing stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_c2h_finished_write(const ta_msg_c2h_finished *data, const ta_ring_reservation *to);
 
 /*
  * c2h.destroyed: A session is gone.
@@ -1872,6 +2407,23 @@ typedef struct ta_msg_c2h_destroyed {
  * is untouched. data and size must not be NULL.
  */
 ta_result ta_msg_c2h_destroyed_size(const ta_msg_c2h_destroyed *data, uint32_t *size);
+
+/*
+ * ta_msg_c2h_destroyed_write fills the reservation `to` with the c2h.destroyed
+ * record for data: the header (kind 0x0211, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_c2h_destroyed_size answers (ring.h: ta_ring_reserve), and the
+ * ta_bytes of data must not overlap it. TA_ERR_INVALID, with nothing stored:
+ * no bytes, a size other than the measured one, a flag bit that c2h.destroyed
+ * does not define, an enum or bool field outside its set (the reader would
+ * refuse the record), or a ta_bytes with a length and no pointer.
+ * TA_ERR_NOMEM, with nothing stored: the size does not fit a u32. The caller
+ * then commits the reservation, or abandons it on an error. It never
+ * allocates, and the data may be freed when it returns.
+ */
+ta_result ta_msg_c2h_destroyed_write(const ta_msg_c2h_destroyed *data, const ta_ring_reservation *to);
 
 /*
  * c2h.definition_result: A definition request completed.
@@ -1926,6 +2478,24 @@ typedef struct ta_msg_c2h_definition_result {
 ta_result ta_msg_c2h_definition_result_size(const ta_msg_c2h_definition_result *data, uint32_t *size);
 
 /*
+ * ta_msg_c2h_definition_result_write fills the reservation `to` with the
+ * c2h.definition_result record for data: the header (kind 0x0212, the flags,
+ * session and at of data->head, the size, and the seq of the reservation), the
+ * fixed fields, the bytes of each span, and zero for every pad and rounding
+ * byte, so that all of to->size bytes are stored. It needs a reservation of
+ * exactly the size ta_msg_c2h_definition_result_size answers (ring.h:
+ * ta_ring_reserve), and the ta_bytes of data must not overlap it.
+ * TA_ERR_INVALID, with nothing stored: no bytes, a size other than the
+ * measured one, a flag bit that c2h.definition_result does not define, an enum
+ * or bool field outside its set (the reader would refuse the record), or a
+ * ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing stored:
+ * the size does not fit a u32. The caller then commits the reservation, or
+ * abandons it on an error. It never allocates, and the data may be freed when
+ * it returns.
+ */
+ta_result ta_msg_c2h_definition_result_write(const ta_msg_c2h_definition_result *data, const ta_ring_reservation *to);
+
+/*
  * c2h.input_refused: An admitted host input was not taken.
  *
  * Exactly one terminal refusal for an admitted h2c.event or invoke_report
@@ -1963,6 +2533,24 @@ typedef struct ta_msg_c2h_input_refused {
  * NULL.
  */
 ta_result ta_msg_c2h_input_refused_size(const ta_msg_c2h_input_refused *data, uint32_t *size);
+
+/*
+ * ta_msg_c2h_input_refused_write fills the reservation `to` with the
+ * c2h.input_refused record for data: the header (kind 0x0213, the flags,
+ * session and at of data->head, the size, and the seq of the reservation), the
+ * fixed fields, the bytes of each span, and zero for every pad and rounding
+ * byte, so that all of to->size bytes are stored. It needs a reservation of
+ * exactly the size ta_msg_c2h_input_refused_size answers (ring.h:
+ * ta_ring_reserve), and the ta_bytes of data must not overlap it.
+ * TA_ERR_INVALID, with nothing stored: no bytes, a size other than the
+ * measured one, a flag bit that c2h.input_refused does not define, an enum or
+ * bool field outside its set (the reader would refuse the record), or a
+ * ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing stored:
+ * the size does not fit a u32. The caller then commits the reservation, or
+ * abandons it on an error. It never allocates, and the data may be freed when
+ * it returns.
+ */
+ta_result ta_msg_c2h_input_refused_write(const ta_msg_c2h_input_refused *data, const ta_ring_reservation *to);
 
 /*
  * c2h.input_completed: A host input and its startup follow-up settled.
@@ -2013,6 +2601,24 @@ typedef struct ta_msg_c2h_input_completed {
 ta_result ta_msg_c2h_input_completed_size(const ta_msg_c2h_input_completed *data, uint32_t *size);
 
 /*
+ * ta_msg_c2h_input_completed_write fills the reservation `to` with the
+ * c2h.input_completed record for data: the header (kind 0x0214, the flags,
+ * session and at of data->head, the size, and the seq of the reservation), the
+ * fixed fields, the bytes of each span, and zero for every pad and rounding
+ * byte, so that all of to->size bytes are stored. It needs a reservation of
+ * exactly the size ta_msg_c2h_input_completed_size answers (ring.h:
+ * ta_ring_reserve), and the ta_bytes of data must not overlap it.
+ * TA_ERR_INVALID, with nothing stored: no bytes, a size other than the
+ * measured one, a flag bit that c2h.input_completed does not define, an enum
+ * or bool field outside its set (the reader would refuse the record), or a
+ * ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing stored:
+ * the size does not fit a u32. The caller then commits the reservation, or
+ * abandons it on an error. It never allocates, and the data may be freed when
+ * it returns.
+ */
+ta_result ta_msg_c2h_input_completed_write(const ta_msg_c2h_input_completed *data, const ta_ring_reservation *to);
+
+/*
  * c2h.load_result: A load-failure response finished recycling waiting inputs.
  *
  * Acknowledges h2c.load_failed after all waiting envelopes were recycled or
@@ -2048,6 +2654,23 @@ typedef struct ta_msg_c2h_load_result {
  * many. It never allocates. It cannot fail. data and size must not be NULL.
  */
 ta_result ta_msg_c2h_load_result_size(const ta_msg_c2h_load_result *data, uint32_t *size);
+
+/*
+ * ta_msg_c2h_load_result_write fills the reservation `to` with the
+ * c2h.load_result record for data: the header (kind 0x0215, the flags, session
+ * and at of data->head, the size, and the seq of the reservation), the fixed
+ * fields, the bytes of each span, and zero for every pad and rounding byte, so
+ * that all of to->size bytes are stored. It needs a reservation of exactly the
+ * size ta_msg_c2h_load_result_size answers (ring.h: ta_ring_reserve), and the
+ * ta_bytes of data must not overlap it. TA_ERR_INVALID, with nothing stored:
+ * no bytes, a size other than the measured one, a flag bit that
+ * c2h.load_result does not define, an enum or bool field outside its set (the
+ * reader would refuse the record), or a ta_bytes with a length and no pointer.
+ * TA_ERR_NOMEM, with nothing stored: the size does not fit a u32. The caller
+ * then commits the reservation, or abandons it on an error. It never
+ * allocates, and the data may be freed when it returns.
+ */
+ta_result ta_msg_c2h_load_result_write(const ta_msg_c2h_load_result *data, const ta_ring_reservation *to);
 
 /*
  * tel.trace: One trace record (core ADR 0067).
@@ -2148,6 +2771,23 @@ typedef struct ta_msg_tel_trace {
 ta_result ta_msg_tel_trace_size(const ta_msg_tel_trace *data, uint32_t *size);
 
 /*
+ * ta_msg_tel_trace_write fills the reservation `to` with the tel.trace record
+ * for data: the header (kind 0x0301, the flags, session and at of data->head,
+ * the size, and the seq of the reservation), the fixed fields, the bytes of
+ * each span, and zero for every pad and rounding byte, so that all of to->size
+ * bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_tel_trace_size answers (ring.h: ta_ring_reserve), and the ta_bytes of
+ * data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes, a
+ * size other than the measured one, a flag bit that tel.trace does not define,
+ * an enum or bool field outside its set (the reader would refuse the record),
+ * or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with nothing
+ * stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const ta_ring_reservation *to);
+
+/*
  * tel.dropped: Telemetry records were dropped.
  *
  * Ring tel, kind 0x0302, 48 fixed bytes, 0 spans.
@@ -2178,6 +2818,23 @@ typedef struct ta_msg_tel_dropped {
  * many. It never allocates. It cannot fail. data and size must not be NULL.
  */
 ta_result ta_msg_tel_dropped_size(const ta_msg_tel_dropped *data, uint32_t *size);
+
+/*
+ * ta_msg_tel_dropped_write fills the reservation `to` with the tel.dropped
+ * record for data: the header (kind 0x0302, the flags, session and at of
+ * data->head, the size, and the seq of the reservation), the fixed fields, the
+ * bytes of each span, and zero for every pad and rounding byte, so that all of
+ * to->size bytes are stored. It needs a reservation of exactly the size
+ * ta_msg_tel_dropped_size answers (ring.h: ta_ring_reserve), and the ta_bytes
+ * of data must not overlap it. TA_ERR_INVALID, with nothing stored: no bytes,
+ * a size other than the measured one, a flag bit that tel.dropped does not
+ * define, an enum or bool field outside its set (the reader would refuse the
+ * record), or a ta_bytes with a length and no pointer. TA_ERR_NOMEM, with
+ * nothing stored: the size does not fit a u32. The caller then commits the
+ * reservation, or abandons it on an error. It never allocates, and the data
+ * may be freed when it returns.
+ */
+ta_result ta_msg_tel_dropped_write(const ta_msg_tel_dropped *data, const ta_ring_reservation *to);
 
 /*
  * ta_msg_table returns the descriptors of every message in this build, sorted by
