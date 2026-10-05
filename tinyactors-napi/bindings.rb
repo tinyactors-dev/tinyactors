@@ -42,7 +42,7 @@ module TinyactorsNapiBindings
   }.freeze
 
   PLUMBING_FUNCTIONS = {
-    'ta_actor_{deliver,resume,publish_completion}' => 'the pump delivers and resumes (ADRs 0005, 0007)',
+    'ta_actor_{deliver,transition,resume,publish_completion}' => 'the pump delivers and resumes (ADRs 0005, 0007)',
     'ta_actor_{abandon,withdraw_send}' => "System#abandon and System#withdrawSend reach tah_system_abandon (which runs the abandoned hook) and tah_system_withdraw_send (which reports the address's wake to the recorder, kernel ADR 0006)",
     'ta_actor_offload' => 'unload() offloads into the native offload store, which owns the bytes (core ADR 0074)',
     'ta_system_{dispatch_due,set_time}' => 'the clock belongs to the pump (ADR 0007)',

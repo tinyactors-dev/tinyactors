@@ -322,11 +322,12 @@ static void deliver(run *r, const char *name, const char *target) {
     ta_event event = { .name = event_name(r->system, name), .type = TA_EVENT_EXTERNAL,
                        .invoke_id = TA_INVOKE_ID_NONE };
     ta_operator_transition transition = { .source = TA_STATE_NONE, .targets = targets, .target_count = 1 };
-    ta_actor_deliver_params params = { .actor = r->actor, .event = &event, .time = ta_system_time(r->system),
-                                       .transition = target == NULL ? NULL : &transition };
-    ta_result result = ta_actor_deliver(r->system, &params);
+    ta_actor_deliver_params params = { .actor = r->actor, .event = &event, .time = ta_system_time(r->system) };
+    ta_actor_transition_params jump = { .actor = r->actor, .event = &event, .time = ta_system_time(r->system),
+                                        .transition = &transition };
+    ta_result result = target == NULL ? ta_actor_deliver(r->system, &params) : ta_actor_transition(r->system, &jump);
     if (result == TA_ERR_NOMEM) {
-        result = ta_actor_deliver(r->system, &params);
+        result = target == NULL ? ta_actor_deliver(r->system, &params) : ta_actor_transition(r->system, &jump);
     }
     CHECK(result == TA_OK);
     flush(r->system);

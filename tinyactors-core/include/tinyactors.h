@@ -3002,10 +3002,6 @@ typedef struct {
     /* What the macrostep that takes the event runs under (ADR 0067); a
      * router passes ta_external_delivery.trace. All zero is none. */
     ta_trace_parent trace;
-    /* When present, the event is taken by this transition instead of by
-     * transition selection: no chart transition sees it, and neither
-     * <finalize> nor autoforwarding runs for it (ADR 0082). */
-    TA_IN TA_OPTIONAL const ta_operator_transition *transition;
     /*
      * The input's logical time (ADR 0094 section 1). For a published actor,
      * or one prepared without `at`, it is ta_system_time(). For a replaying
@@ -3029,21 +3025,47 @@ typedef struct {
  * - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or
  *   unloaded). The receiver is gone from here; drop or route the message.
  * - TA_ERR_INVALID: a caller error only: a null event, an event name this
- *   system never issued, or the root name; or an operator transition with
- *   no targets, an unknown state, targets that cannot form a legal
- *   configuration, or a source that is not active (ADR 0082).
+ *   system never issued, or the root name.
  * - TA_ERR_NOMEM: no memory for the event block the event would live in
- *   until its macrostep ends (ADR 0069), or for the operator transition.
+ *   until its macrostep ends (ADR 0069).
  *   Keep the message and try again later; TA_PARAM_EVENT_BLOCK_CACHE
  *   keeps blocks for reuse.
  * On any result but TA_OK nothing is retained and the event is untouched.
- * A malformed event or operator transition is TA_ERR_INVALID whatever the
- * actor's state, except that whether its source is active is asked only of
- * an actor that would otherwise accept it. A finished actor is TA_ERR_DONE,
+ * A malformed event is TA_ERR_INVALID whatever the actor's state. A finished actor is TA_ERR_DONE,
  * never TA_ERR_BUSY: finishing is permanent, so a host that kept a message
  * queued would wait forever.
  */
 TA_API ta_result ta_actor_deliver(ta_system *system, TA_IN const ta_actor_deliver_params *params)
+    TA_VALUE_MODEL(actor, params.actor);
+/*
+ * An operator's event with a transition (ADR 0082, ADR 0099 section 5): the
+ * event is taken by `transition` instead of by transition selection. It is
+ * not an input of the actor's own kind (no host sent it, nothing queues it
+ * behind others), so it has a call of its own and is not part of
+ * ta_actor_deliver_params. `event`, `trace` and `time` are as there.
+ */
+typedef struct {
+    ta_actor_id actor;
+    TA_IN const ta_event *event;
+    ta_trace_parent trace;
+    /* Required: the transition that takes the event. No chart transition
+     * sees it, and neither <finalize> nor autoforwarding runs for it. */
+    TA_IN const ta_operator_transition *transition;
+    ta_time time;
+} ta_actor_transition_params;
+/*
+ * Offers an operator's event and its transition to a resident actor that
+ * holds no input. The results are ta_actor_deliver()'s, and the actor is
+ * resumed the same way when TA_OK says it holds the event: TA_ERR_BUSY while
+ * it is inside a macrostep or holds an event, TA_ERR_DONE, TA_ERR_NOT_FOUND,
+ * TA_ERR_NOMEM, and TA_ERR_INVALID for a malformed event, a transition with
+ * no targets, an unknown state, targets that cannot form a legal
+ * configuration, a source that is not active, or a null transition. On any
+ * result but TA_OK nothing is retained. A malformed event or transition is
+ * TA_ERR_INVALID whatever the actor's state, except that whether the source
+ * is active is asked only of an actor that would otherwise accept it.
+ */
+TA_API ta_result ta_actor_transition(ta_system *system, TA_IN const ta_actor_transition_params *params)
     TA_VALUE_MODEL(actor, params.actor);
 TA_API ta_result ta_actor_resume(ta_system *system, TA_IN const ta_actor_resume_params *params);
 /*

@@ -85,7 +85,7 @@ typedef struct ta_operator_jump {
  * It answers TA_ERR_NOMEM and leaves `*bytes` untouched when the total does
  * not fit in a size_t or in the header's 32-bit `bytes` (a jump of a billion
  * targets is refused rather than stored truncated). It never allocates. It
- * is called only where a jump is allocated (ta_actor_deliver, and the
+ * is called only where a jump is allocated (ta_actor_transition, and the
  * restore of an image), which is a safe point that can fail cleanly; the
  * result is stored in `bytes` and read from there afterwards.
  */

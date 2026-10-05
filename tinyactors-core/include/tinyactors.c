@@ -9782,7 +9782,7 @@ typedef struct ta_operator_jump {
  * It answers TA_ERR_NOMEM and leaves `*bytes` untouched when the total does
  * not fit in a size_t or in the header's 32-bit `bytes` (a jump of a billion
  * targets is refused rather than stored truncated). It never allocates. It
- * is called only where a jump is allocated (ta_actor_deliver, and the
+ * is called only where a jump is allocated (ta_actor_transition, and the
  * restore of an image), which is a safe point that can fail cleanly; the
  * result is stored in `bytes` and read from there afterwards.
  */
@@ -27420,16 +27420,24 @@ TA_PRIVATE ta_result ta_operator_jump_bytes(uint32_t count, uint32_t *bytes) {
     return TA_OK;
 }
 
-TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *params) {
-    if (params == NULL || params->event == NULL) {
-        return TA_ERR_INVALID;
-    }
+/*
+ * ta_actor_offer is the admission test both ta_actor_deliver and
+ * ta_actor_transition apply (ADR 0055, ADR 0082): the checks in the order
+ * that makes the result alone the host's decision, then the steps that can
+ * fail (the operator transition's allocation and the event block), then the
+ * steps that cannot. `transition` is NULL for an ordinary delivery. It
+ * allocates only at this safe point and leaves nothing behind on any result
+ * but TA_OK. The event lives in the actor's event block until its macrostep
+ * ends (ADR 0069), and the jump, when there is one, in the same place until
+ * the macrostep takes the event.
+ */
+static ta_result ta_actor_offer(ta_system *system, const ta_actor_deliver_params *params,
+                                const ta_operator_transition *transition) {
     const ta_event *event = params->event;
     ta_actor *actor = ta_actor_lookup(system, params->actor);
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    const ta_operator_transition *transition = params->transition;
     if (!ta_trie_valid(&system->event_names.trie, event->name) || event->name == TA_EVENT_NAME_ROOT ||
         (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition)) ||
         !ta_actor_input_time_valid(system, actor, params->time)) {
@@ -27492,6 +27500,24 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
     ta_actor_touch(actor);
     actor->record.residency = TA_ACTOR_RUNNING;
     return TA_OK;
+}
+
+TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *params) {
+    if (params == NULL || params->event == NULL) {
+        return TA_ERR_INVALID;
+    }
+    return ta_actor_offer(system, params, NULL);
+}
+
+TA_API ta_result ta_actor_transition(ta_system *system, const ta_actor_transition_params *params) {
+    if (params == NULL || params->event == NULL || params->transition == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_actor_deliver_params offered = { .actor = params->actor,
+                                        .event = params->event,
+                                        .trace = params->trace,
+                                        .time = params->time };
+    return ta_actor_offer(system, &offered, params->transition);
 }
 
 TA_API ta_result ta_actor_resume(ta_system *system, const ta_actor_resume_params *params) {

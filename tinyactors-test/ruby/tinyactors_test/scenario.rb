@@ -283,8 +283,9 @@ module TinyactorsTest
       params[:data] = data unless data.nil?
       delivery = { system: @context.system_handle, actor: handle, event: params, time: time || @context.now }
       delivery[:trace] = trace unless trace.nil?
-      delivery[:transition] = transition unless transition.nil?
-      @context.ta.actor.deliver(**delivery)
+      return @context.ta.actor.deliver(**delivery) if transition.nil?
+
+      @context.ta.actor.transition(**delivery, transition: transition)
     end
 
     # A ta_operator_transition: state names become IDs, and no source is

@@ -1299,12 +1299,17 @@ static void tah_sched_deliver_one(tah_sched *sched, const tah_turn_params *param
     }
     tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_DELIVERING, .actor = actor, .envelope = head });
     *params->inside_core = true;
-    ta_result result = ta_actor_deliver(params->core, &(ta_actor_deliver_params){ .time = ta_system_time(params->core),
-                                                         .actor = actor,
-                                                         .event = &envelope->event,
-                                                         .trace = trace,
-                                                         .transition = transition,
-                                                     });
+    ta_result result =
+        transition == NULL
+            ? ta_actor_deliver(params->core, &(ta_actor_deliver_params){ .time = ta_system_time(params->core),
+                                                                         .actor = actor,
+                                                                         .event = &envelope->event,
+                                                                         .trace = trace })
+            : ta_actor_transition(params->core, &(ta_actor_transition_params){ .time = ta_system_time(params->core),
+                                                                                .actor = actor,
+                                                                                .event = &envelope->event,
+                                                                                .trace = trace,
+                                                                                .transition = transition });
     *params->inside_core = false;
     tah_sched_left_core(params);
     if (result != TA_OK) {
