@@ -23155,23 +23155,6 @@ TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_repor
     }
 }
 
-TA_API ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id id) {
-    ta_actor *actor = ta_actor_lookup(system, id);
-    if (actor == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    ta_actor_sparse_state *sparse = actor->sparse;
-    if (!actor->finished || sparse == NULL || !sparse->has_parent) {
-        return TA_ERR_INVALID;
-    }
-    ta_actor *parent = ta_actor_lookup(system, sparse->parent.actor);
-    if (parent == NULL || ta_invoke_find(parent, sparse->parent.invoke_id) < 0) {
-        return TA_ERR_NOT_FOUND; /* the invocation was cancelled: there is no done event to send */
-    }
-    /* The completion was sent as mail when the child finished; there is nothing held to send again. */
-    return TA_OK;
-}
-
 /* ------------------------------------------------------------------------
  * Nested definitions (ADR 0077)
  */
@@ -32081,13 +32064,14 @@ static void ta_mail_enter_resident(ta_system *system, uint32_t index, ta_actor *
  */
 static void ta_mail_place_waiting(ta_system *system, uint32_t index, const ta_mail_route *route) {
     ta_address *address = route->address;
+    bool keyed = false; /* the address is a made key: the flag is set only where the envelope waits */
     if (address != NULL) {
         ta_address_retain(address);
     } else if (ta_mail_key(system, route->session, route->family, &address) != TA_OK) {
         ta_mail_recycle(system, index, TA_REFUSED_LOAD_FAILED);
         return;
     } else {
-        ta_envelope_at(&system->envelopes, index)->flags = TA_MAIL_FLAG_KEY;
+        keyed = true;
     }
     ta_actor *holder = ta_mail_resident_at(system, address);
     if (holder != NULL && !holder->finished && holder->queued != UINT16_MAX) {
@@ -32095,6 +32079,9 @@ static void ta_mail_place_waiting(ta_system *system, uint32_t index, const ta_ma
     } else if (holder != NULL) {
         ta_mail_recycle(system, index, holder->finished ? TA_REFUSED_DONE : TA_REFUSED_INVALID);
     } else {
+        if (keyed) {
+            ta_envelope_at(&system->envelopes, index)->flags = TA_MAIL_FLAG_KEY;
+        }
         ta_mail_post_waiting(system, index, address);
     }
     ta_address_release(address); /* the waiting list took its own */
@@ -33901,7 +33888,7 @@ TA_PRIVATE void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor
 
 static ta_result ta_communication_error(ta_system *system, ta_actor *actor, const ta_error_params *params) {
     if (actor->finished) {
-        /* A send submitted before termination failed; the session can no longer observe it. */
+        /* A communication error for a finished session is dropped: it can no longer observe it. */
         if (params->fault != NULL) {
             ta_value_release(&params->fault->data);
             params->fault->data = (ta_value){0};
@@ -34438,8 +34425,8 @@ static ta_result ta_send_evaluate(ta_interpreter *it, const ta_send_action *send
 /*
  * Queues, dispatches, holds or stores an evaluated <send>, which owns the
  * state's values from here. It runs out of memory only where nothing is
- * visible yet: holding it for an unpublished actor, or keeping one the
- * router refused with RETRY, which accepted nothing (ADR 0040).
+ * visible yet: holding it for an unpublished actor, or when core has no
+ * envelope for the mail it sends (ADR 0099).
  */
 static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
     ta_system *system = it->system;
@@ -36156,7 +36143,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
         ta_store_active(it);
         it->at.stage = TA_FINISH_END;
     }
-    /* Sends the router already refused once stay queued: they were sent before termination. */
+    /* Every send still pending (a delayed one) is cancelled: the session ends here. */
     ta_timer_cancel_all(&it->system->timers, ta_actor_timers(it->actor));
     ta_note_ignored(it);
     ta_release_events(it->system, it->actor);

@@ -42,7 +42,7 @@ module TinyactorsNapiBindings
   }.freeze
 
   PLUMBING_FUNCTIONS = {
-    'ta_actor_{deliver,transition,publish_completion}' => 'the pump delivers (ADRs 0005, 0007)',
+    'ta_actor_{deliver,transition}' => 'the pump delivers (ADRs 0005, 0007)',
     'ta_run' => 'the pump runs the system through the kernel, which reads the notices (ADR 0007, core ADR 0099)',
     'ta_actor_{abandon,withdraw_send}' => "System#abandon and System#withdrawSend reach tah_system_abandon (which runs the abandoned hook) and tah_system_withdraw_send (which reports the address's wake to the recorder, kernel ADR 0006)",
     'ta_actor_offload' => 'unload() offloads into the native offload store, which owns the bytes (core ADR 0074)',

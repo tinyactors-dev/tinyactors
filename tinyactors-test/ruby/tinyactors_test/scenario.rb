@@ -1244,12 +1244,6 @@ module TinyactorsTest
       ta.system.scxml_io_type(system: system_handle).fetch(:value)
     end
 
-    # Retries an invoked child's completion; returns the result.
-    def publish_completion(actor)
-      id = actor.is_a?(Actor) ? actor.handle : actor
-      ta.actor.publish_completion(system: system_handle, actor: id)[:result]
-    end
-
     # Resident actors the scenario did not spawn itself: the children an
     # invoker started. They are Actors, so they can be inspected and resumed.
     def invoked_actors

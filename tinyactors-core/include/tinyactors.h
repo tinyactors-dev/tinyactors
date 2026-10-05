@@ -3290,15 +3290,6 @@ TA_API ta_result ta_actor_remove_unloaded(ta_system *system,
 TA_API ta_result ta_actor_get_completion(ta_system *system,
                                          ta_actor_id actor,
                                          TA_OUT ta_actor_completion *out);
-/*
- * Asks whether a finished invoked child's completion is still wanted. Core
- * sends done.invoke.<id> as mail when the child finishes, from the child's own
- * macrostep, and keeps nothing to send again: this answers TA_OK while the
- * parent's invocation is active (the completion is queued or taken), and
- * TA_ERR_NOT_FOUND when it was cancelled, so there is no done event to wait
- * for. TA_ERR_INVALID: the actor is not a finished invoked child.
- */
-TA_API ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id actor);
 TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
 
 

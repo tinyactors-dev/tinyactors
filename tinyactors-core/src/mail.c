@@ -164,13 +164,14 @@ static void ta_mail_enter_resident(ta_system *system, uint32_t index, ta_actor *
  */
 static void ta_mail_place_waiting(ta_system *system, uint32_t index, const ta_mail_route *route) {
     ta_address *address = route->address;
+    bool keyed = false; /* the address is a made key: the flag is set only where the envelope waits */
     if (address != NULL) {
         ta_address_retain(address);
     } else if (ta_mail_key(system, route->session, route->family, &address) != TA_OK) {
         ta_mail_recycle(system, index, TA_REFUSED_LOAD_FAILED);
         return;
     } else {
-        ta_envelope_at(&system->envelopes, index)->flags = TA_MAIL_FLAG_KEY;
+        keyed = true;
     }
     ta_actor *holder = ta_mail_resident_at(system, address);
     if (holder != NULL && !holder->finished && holder->queued != UINT16_MAX) {
@@ -178,6 +179,9 @@ static void ta_mail_place_waiting(ta_system *system, uint32_t index, const ta_ma
     } else if (holder != NULL) {
         ta_mail_recycle(system, index, holder->finished ? TA_REFUSED_DONE : TA_REFUSED_INVALID);
     } else {
+        if (keyed) {
+            ta_envelope_at(&system->envelopes, index)->flags = TA_MAIL_FLAG_KEY;
+        }
         ta_mail_post_waiting(system, index, address);
     }
     ta_address_release(address); /* the waiting list took its own */

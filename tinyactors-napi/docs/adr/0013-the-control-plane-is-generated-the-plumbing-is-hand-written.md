@@ -73,8 +73,7 @@ description, not a generator.
    - **plumbing-owned**: not callable from JavaScript, because calling it
      would bypass or break the scheduler. Each entry gives a reason. The
      initial list is:
-     - `ta_actor_deliver`, `ta_actor_resume` and `ta_actor_publish_completion`
-       (the pump);
+     - `ta_actor_deliver` and `ta_actor_resume` (the pump);
      - `ta_system_dispatch_due` and `ta_system_set_time` (the clock);
      - `ta_system_set_external_event_router` and
        `ta_system_set_actor_directory` (installed at creation);

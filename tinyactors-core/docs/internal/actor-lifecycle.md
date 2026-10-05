@@ -27,11 +27,9 @@ The terminal actor remains resident with `TA_ACTOR_DONE` residency.
 An invoked child retains a pending completion until its parent has taken
 `done.invoke.<id>` (core admits the event like any other, so a parent inside
 its own macrostep does not refuse it, ADR 0099);
-`ta_actor_publish_completion()` retries a publication the pool refused or
-that ran out of memory, and destruction is busy while the parent invocation
-remains active. If that invocation was cancelled,
-publication returns `TA_ERR_NOT_FOUND`, retires the pending completion, and
-allows reclamation without manufacturing a done event. This preserves the
+destruction is busy while the parent invocation remains active. If that
+invocation was cancelled, reclamation is allowed without manufacturing a done
+event. This preserves the
 SCXML distinction between normal completion and cancellation.
 
 Named replacement has a separate unpublished preparation phase. Preparation

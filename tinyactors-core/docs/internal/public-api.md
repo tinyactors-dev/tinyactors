@@ -116,9 +116,9 @@ invocation IDs needed for later reports.
 `ta_run` runs the admitted inputs in the order they were admitted, for a caller-supplied budget over the whole call, and reports idle/more/paused/notices-full, with a notice for each input that ended (stable, done, runaway or abandoned) or was refused (ADR 0099 section 7).
 
 A COMPLETED notice with `TA_INPUT_DONE` leaves the terminal actor resident. `ta_actor_get_completion`
-retains its optional final data. For an invoked child,
-`ta_actor_publish_completion` retries a `done.invoke.<id>` delivery that the
-pool refused or that ran out of memory. Explicit destruction is not normal
+retains its optional final data. For an invoked child, the
+`done.invoke.<id>` event is sent as mail from the child's own macrostep and
+nothing is held to send again. Explicit destruction is not normal
 completion and never generates that event.
 
 `ta_system_invoke_id_text` says which invocation a `ta_invoke_id` is — the author's `<invoke id>` or the generated `<stateid>.<platformid>` — so a host reading `ta_active_invoke.id` can name it (ADR 0049).

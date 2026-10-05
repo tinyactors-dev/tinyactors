@@ -7,11 +7,9 @@
 # event. `docs/internal/actor-lifecycle.md` describes the protocol:
 #
 #   "An invoked child retains a pending completion until the parent takes
-#   it; ta_actor_publish_completion() is harmless meanwhile, and
-#   destruction is busy while the parent invocation remains active. If that
-#   invocation was cancelled, publication returns TA_ERR_NOT_FOUND, retires
-#   the pending completion, and allows reclamation without manufacturing a
-#   done event."
+#   it; destruction is busy while the parent invocation remains active. If
+#   that invocation was cancelled, reclamation is allowed without
+#   manufacturing a done event."
 #
 # A scenario reaches that window by driving ta_run itself, one microstep at
 # a time: the parent takes `finish` (which forwards it to the child), then
@@ -50,32 +48,6 @@ TinyactorsTest.scenarios 'invoked completion' do
     run_system('let the parent take the completion')
     assert_equal ['progress 21', 'done 42'], parent.data('.log')
     assert_equal [], invoked_actors, 'the child is reclaimed once its parent has been told'
-  end
-
-  # Catches: a retry that delivers the completion twice, or that fails
-  # because the completion is already queued. Publishing again before the
-  # parent has taken it must be harmless.
-  scenario 'publishing again before the parent takes the completion is harmless' do
-    parent, child = InvokedCompletion.park(self)
-
-    assert_equal 'ok', publish_completion(child)
-    assert_equal 'ok', publish_completion(child), 'the retry is idempotent'
-    assert_equal [], Array(child.inspect_actor[:delayed_sends]), 'nothing is held'
-
-    run_system('let the parent take the completion')
-    assert_equal ['progress 21', 'done 42'], parent.data('.log'),
-                 'the parent was told once, however often the host retried'
-  end
-
-  # Catches: publication for an actor that is not a finished invoked child.
-  scenario 'only a finished invoked child has a completion to publish' do
-    parent, = InvokedCompletion.park(self)
-    assert_equal 'err_invalid', publish_completion(parent), 'the parent is nobody\'s invoked child'
-    run_system('settle')
-
-    lonely = spawn :traffic_light
-    assert_equal 'err_invalid', publish_completion(lonely), 'a running actor has no completion'
-    assert_equal 'err_not_found', publish_completion(999_999), 'an unknown ID names no actor'
   end
 
   # Catches: reclamation of a child whose parent still expects its

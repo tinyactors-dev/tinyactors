@@ -1138,23 +1138,6 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
     }
 }
 
-ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id id) {
-    ta_actor *actor = ta_actor_lookup(system, id);
-    if (actor == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    ta_actor_sparse_state *sparse = actor->sparse;
-    if (!actor->finished || sparse == NULL || !sparse->has_parent) {
-        return TA_ERR_INVALID;
-    }
-    ta_actor *parent = ta_actor_lookup(system, sparse->parent.actor);
-    if (parent == NULL || ta_invoke_find(parent, sparse->parent.invoke_id) < 0) {
-        return TA_ERR_NOT_FOUND; /* the invocation was cancelled: there is no done event to send */
-    }
-    /* The completion was sent as mail when the child finished; there is nothing held to send again. */
-    return TA_OK;
-}
-
 /* ------------------------------------------------------------------------
  * Nested definitions (ADR 0077)
  */

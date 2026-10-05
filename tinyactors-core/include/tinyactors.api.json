@@ -21680,37 +21680,6 @@
       ]
     },
     {
-      "name": "ta_actor_publish_completion",
-      "doc": "Asks whether a finished invoked child's completion is still wanted. Core sends done.invoke. <id > as mail when the child finishes, from the child's own macrostep, and keeps nothing to send again: this answers TA_OK while the parent's invocation is active (the completion is queued or taken), and TA_ERR_NOT_FOUND when it was cancelled, so there is no done event to wait for. TA_ERR_INVALID: the actor is not a finished invoked child.",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "type": "ta_result"
-        },
-        "success": "TA_OK"
-      },
-      "params": [
-        {
-          "name": "system",
-          "type": {
-            "pointer": {
-              "type": "ta_system"
-            }
-          },
-          "shape": "handle",
-          "direction": "in"
-        },
-        {
-          "name": "actor",
-          "type": {
-            "type": "ta_actor_id"
-          }
-        }
-      ]
-    },
-    {
       "name": "ta_actor_destroy",
       "public": true,
       "static_inline": false,

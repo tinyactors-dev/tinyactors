@@ -1464,7 +1464,7 @@ void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_
 
 static ta_result ta_communication_error(ta_system *system, ta_actor *actor, const ta_error_params *params) {
     if (actor->finished) {
-        /* A send submitted before termination failed; the session can no longer observe it. */
+        /* A communication error for a finished session is dropped: it can no longer observe it. */
         if (params->fault != NULL) {
             ta_value_release(&params->fault->data);
             params->fault->data = (ta_value){0};
@@ -2001,8 +2001,8 @@ static ta_result ta_send_evaluate(ta_interpreter *it, const ta_send_action *send
 /*
  * Queues, dispatches, holds or stores an evaluated <send>, which owns the
  * state's values from here. It runs out of memory only where nothing is
- * visible yet: holding it for an unpublished actor, or keeping one the
- * router refused with RETRY, which accepted nothing (ADR 0040).
+ * visible yet: holding it for an unpublished actor, or when core has no
+ * envelope for the mail it sends (ADR 0099).
  */
 static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
     ta_system *system = it->system;
@@ -3719,7 +3719,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
         ta_store_active(it);
         it->at.stage = TA_FINISH_END;
     }
-    /* Sends the router already refused once stay queued: they were sent before termination. */
+    /* Every send still pending (a delayed one) is cancelled: the session ends here. */
     ta_timer_cancel_all(&it->system->timers, ta_actor_timers(it->actor));
     ta_note_ignored(it);
     ta_release_events(it->system, it->actor);
