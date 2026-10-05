@@ -18,27 +18,33 @@
  * - An atom's text is a copy the table keeps in arena blocks, so the
  *   `ta_str` that `ta_atom_text` answers never moves while the table
  *   lives.
- * - Buckets are found with 32-bit FNV-1a over the text (`hash.h`), and
- *   the table doubles its buckets when it holds more atoms than buckets.
+ * - The atoms are found through a hash table (`table.h`) in growing
+ *   mode, keyed by the text's 32-bit FNV-1a hash (`hash.h`, from
+ *   `TA_HASH_FNV1A32_BASIS`), which each entry keeps too. Its values are
+ *   atoms plus one, because a table's value is never 0 and atom 0 exists;
+ *   it compares keys by looking the entry's text up. The table grows only
+ *   in `ta_atom_intern`, before it adds an atom.
  * - An atom is process-local. A portable durability encoding records the
  *   text (or another stable dictionary representation), never an atom's
  *   index; session images in-process may hold atoms.
  *
  * ## Memory
  *
- * The table owns its entries (a `ta_vec`), its buckets and the arena of
- * texts, all from the allocator given to `ta_atom_table_init`, until
+ * The table owns its entries (a `ta_vec`), its hash table and the arena
+ * of texts, all from the allocator given to `ta_atom_table_init`, until
  * `ta_atom_table_destroy`. Callers borrow the texts it answers for as long
  * as the table lives. `ta_atom_table_init` and `ta_atom_intern` allocate;
  * `ta_atom_find`, `ta_atom_text` and `ta_atom_valid` never allocate and
- * may run inside a macrostep.
+ * may run inside a macrostep. `ta_atom_intern` grows the hash table
+ * before it adds an atom, so whoever interns must be at a point where it
+ * may allocate.
  *
  * ## Complexity
  *
- * `ta_atom_intern` and `ta_atom_find` hash the text, O(length), then walk
- * one bucket's chain, expected O(1); an intern that doubles the buckets
- * rehashes every atom once, amortized O(1). `ta_atom_text` and
- * `ta_atom_valid` are O(1).
+ * `ta_atom_intern` and `ta_atom_find` hash the text, O(length), then probe
+ * the hash table, expected O(1), comparing texts only on equal hashes; an
+ * intern that grows the table moves every atom's slot once, amortized
+ * O(1). `ta_atom_text` and `ta_atom_valid` are O(1).
  *
  * ## Failure
  *
@@ -47,9 +53,8 @@
  * `TA_ERR_NOT_FOUND` for a text that is not an atom. `ta_atom_intern`
  * answers `TA_ERR_NOMEM` when the copy or the entry cannot be allocated,
  * or the table is full; the table then holds no new atom (the arena may
- * keep the copied bytes until the table is destroyed). A failed doubling
- * of the buckets is not a failure: the old buckets stay correct.
- * `ta_atom_table_init` answers `TA_ERR_NOMEM` and holds nothing.
+ * keep the copied bytes until the table is destroyed, and the hash table
+ * the room it grew). `ta_atom_table_init` answers `TA_ERR_NOMEM` and holds nothing.
  * `ta_atom_text` answers an empty text for an atom the table does not
  * hold.
  *
@@ -62,26 +67,27 @@
 #pragma once
 
 #include "arena.h"
+#include "table.h"
 #include "vec.h"
 #include "../include/tinyactors.h"
 
-/** One atom: its text's hash, the next atom in its bucket, and its text in arena blocks, which never moves. */
+/** One atom: its text's hash and its text in arena blocks, which never moves. */
 typedef struct {
     uint32_t hash;
-    uint32_t next;
     ta_str text;
 } ta_atom_entry;
 
 /** The atom table; see the file comment. */
 typedef struct {
     ta_allocator allocator;
+    /** One ta_atom_entry per atom, indexed by atom. */
     ta_vec entries;
-    uint32_t *buckets;
-    uint32_t bucket_count;
+    /** Text hash to atom plus one. */
+    ta_table index;
     ta_arena strings;
 } ta_atom_table;
 
-/** No atom; it also ends a bucket's chain. */
+/** No atom. */
 #define TA_ATOM_NONE UINT32_MAX
 
 /**

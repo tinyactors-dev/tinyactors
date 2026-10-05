@@ -1861,6 +1861,242 @@ TA_PRIVATE uint32_t ta_heap_pop(ta_heap *heap, const ta_heap_items *items);
 TA_PRIVATE ta_result ta_heap_remove(ta_heap *heap, const ta_heap_items *items, uint32_t item);
 
 /**
+ * @file table.h
+ *
+ * # Hash table
+ *
+ * `ta_table` maps keys to non-zero `uint32_t` values by open addressing.
+ * The table never sees a key: the caller hashes it and keeps it in its own
+ * storage, and the table keeps, per slot, the key's 32-bit hash and the
+ * value. A value is usually an index into the owner's records (0 meaning
+ * none), from which the owner reaches the key again.
+ *
+ * It has two modes, chosen once:
+ *
+ * - **fixed**: the most keys it holds is set when it is made, which is the
+ *   only time it allocates; insert never allocates and answers
+ *   `TA_ERR_FULL` once the table holds that many keys.
+ * - **growing**: insert never allocates either and answers `TA_ERR_FULL`
+ *   when the table is full; the owner makes room first with an explicit
+ *   `ta_table_reserve` at a safe point, which grows the slots when they
+ *   are needed.
+ *
+ * ## Keys and comparison
+ *
+ * A lookup is given a `ta_table_key`: the key's hash, and an `equal`
+ * callback with a context that the owner fills in, typically with the key
+ * it looks for and its own key storage. The table calls `equal(context,
+ * value)` only for slots whose stored hash equals the key's hash, and the
+ * callback answers whether the key stored under `value` is the key looked
+ * for. The callback must not allocate, change the table or call back into
+ * it; it is how the table compares keys that live with the owner, whatever
+ * their form (text, a pair of IDs, address bytes in pages).
+ *
+ * `ta_table_insert` takes only a hash and a value, no key: it does not
+ * look for the key first. The owner finds before it inserts, as it must
+ * anyway to answer "already there"; inserting a key the table holds
+ * already is a programmer error, not checked, and leaves two slots for the
+ * key, of which a lookup answers the one nearer the key's home.
+ *
+ * ## Layout and invariants
+ *
+ * - The slots are one array of `slot_count` `ta_table_slot`s: 0 before a
+ *   growing table first reserves, otherwise a power of two of at least
+ *   `TA_TABLE_MIN_SLOTS`. A slot whose value is 0 is empty; that is why a
+ *   value is never 0.
+ * - **Probe sequence: linear.** A key's home is `hash & (slot_count - 1)`;
+ *   a key lives in the first slot from its home, wrapping at the end,
+ *   that was empty when it was inserted. Every slot between a key's home
+ *   and its slot holds a key, so a lookup walks from the home and stops at
+ *   the first empty slot.
+ * - **Load factor: at most three quarters.** A table holds at most
+ *   `slot_count - slot_count / 4` keys, so at least a quarter of the slots
+ *   stay empty and every probe ends. `limit` is the most keys the table
+ *   holds now: that load for a growing table, and the capacity it was made
+ *   with for a fixed one. `count` is the keys it holds; insert answers
+ *   `TA_ERR_FULL` when `count == limit`.
+ * - **Delete by backward shift, no tombstones.** Removing a key empties
+ *   its slot and moves later keys of the same run back into the hole when
+ *   the hole lies between their home and their slot, so the invariant
+ *   above holds again and every remaining key stays reachable. A table's
+ *   probes never get longer from removals alone.
+ * - **Deterministic.** There is no seed and no randomness: the same
+ *   sequence of inserts, removals and reserves from the same empty table
+ *   gives the same slots, byte for byte, on every host and every run.
+ *   Growth reinserts the keys in the order of their old slots.
+ * - The table keeps no pointer into the owner's storage and the owner
+ *   keeps none into the table: the slots move when a growing table grows.
+ *
+ * ## Memory
+ *
+ * The table owns its slots, allocated from the `ta_allocator` given to
+ * `ta_table_init`, which it borrows and which must outlive it, until
+ * `ta_table_destroy`. The keys, and whatever the callback's context points
+ * at, belong to the owner. The `ta_table` itself is embedded where its
+ * owner likes.
+ *
+ * - `ta_table_init` allocates the slots for its capacity, if any; it runs
+ *   where the owner is made, at a safe point.
+ * - `ta_table_reserve` allocates only when a growing table needs more
+ *   slots. It runs only at a safe point, never inside a macrostep.
+ * - `ta_table_insert`, `ta_table_find` and `ta_table_remove` never
+ *   allocate and may run inside a macrostep.
+ * - `ta_table_destroy` only frees.
+ *
+ * ## Complexity
+ *
+ * | Operation | Cost |
+ * |---|---|
+ * | `ta_table_find`, `_insert`, `_remove` | expected O(1) at a load of at most three quarters: a walk of one run of occupied slots, calling `equal` only on equal hashes |
+ * | `ta_table_reserve` | O(1) when there is room; otherwise one allocation and one pass over the old slots, amortized O(1) per key as the slots at least double |
+ * | `ta_table_init` | O(1) for an empty growing table; otherwise one allocation and one zeroing pass |
+ * | `ta_table_destroy` | one free |
+ *
+ * ## Failure
+ *
+ * - `ta_table_init` answers `TA_ERR_INVALID` for an unknown mode or a
+ *   fixed table of capacity 0, `TA_ERR_FULL` for a capacity above
+ *   `TA_TABLE_MAX_KEYS`, and `TA_ERR_NOMEM` when the slots cannot be
+ *   allocated; it then leaves an empty table that holds nothing.
+ * - `ta_table_insert` answers `TA_ERR_FULL` when the table holds `limit`
+ *   keys, and `TA_ERR_INVALID` for a value of 0.
+ * - `ta_table_find` and `ta_table_remove` answer `TA_ERR_NOT_FOUND` for a
+ *   key the table does not hold.
+ * - `ta_table_reserve` answers `TA_ERR_FULL` when the room asked for would
+ *   pass a fixed table's capacity or `TA_TABLE_MAX_KEYS`, and
+ *   `TA_ERR_NOMEM` when the larger slots cannot be allocated.
+ * - A failed call changes nothing: the same slots, count and limit.
+ *
+ * ## Users
+ *
+ * The atom table, whose values are atoms plus one. The trie of atoms
+ * behind event names, keyed by (parent, segment); the address and session
+ * tables, for their resident handles; the waiting lists keyed by address
+ * bytes, in fixed mode, bounded by the envelope pool; and the index of open
+ * `source_seq`s for withdrawal.
+ */
+
+
+/** The fewest slots a table that has slots has. */
+#define TA_TABLE_MIN_SLOTS 8u
+/** The most slots a table has: 2^31. */
+#define TA_TABLE_MAX_SLOTS 0x80000000u
+/** The most keys a table holds: three quarters of `TA_TABLE_MAX_SLOTS`. */
+#define TA_TABLE_MAX_KEYS (TA_TABLE_MAX_SLOTS - TA_TABLE_MAX_SLOTS / 4u)
+
+/** How a table finds room for more keys. */
+typedef enum {
+    /** Its capacity is set by `ta_table_init`, which is all it allocates. */
+    TA_TABLE_FIXED = 1,
+    /** It grows its slots, but only in `ta_table_reserve`. */
+    TA_TABLE_GROWING = 2
+} ta_table_mode;
+
+/** What `ta_table_init` needs. */
+typedef struct {
+    /** Where the slots come from; borrowed, and must outlive the table. */
+    ta_allocator allocator;
+    ta_table_mode mode;
+    /**
+     * The keys the table holds without growing: for a fixed table, the
+     * most it ever holds (at least 1); for a growing table, the room made
+     * at once (0 allocates nothing). At most `TA_TABLE_MAX_KEYS`.
+     */
+    uint32_t capacity;
+} ta_table_params;
+
+/**
+ * Answers whether the key the owner stores under `value` is the key in
+ * `context`. Called only on slots whose hash equals the key's. Must not
+ * allocate, change the table or call into it.
+ */
+typedef bool (*ta_table_equal_fn)(const void *context, uint32_t value);
+
+/** A key to look up: its hash, and how to compare it with stored keys. */
+typedef struct {
+    uint32_t hash;
+    ta_table_equal_fn equal;
+    /** Passed to `equal`; borrowed for the call. */
+    const void *context;
+} ta_table_key;
+
+/** One slot: a key's hash and its value, 0 when the slot is empty. */
+typedef struct {
+    uint32_t hash;
+    uint32_t value;
+} ta_table_slot;
+
+/**
+ * A hash table; see the file comment. `count`, `limit` and `slot_count`
+ * are for reading only.
+ */
+typedef struct {
+    ta_allocator allocator;
+    ta_table_slot *slots;
+    /** 0, or a power of two from `TA_TABLE_MIN_SLOTS` to `TA_TABLE_MAX_SLOTS`. */
+    uint32_t slot_count;
+    /** Keys held. */
+    uint32_t count;
+    /** The most keys the table holds before it grows; insert answers
+     * `TA_ERR_FULL` at it. */
+    uint32_t limit;
+    ta_table_mode mode;
+} ta_table;
+
+/**
+ * Makes `*table` an empty table as `params` describes, allocating slots
+ * for `params->capacity` keys when it is not 0. Runs at a safe point.
+ * Answers `TA_ERR_INVALID` for an unknown mode or a fixed capacity of 0,
+ * `TA_ERR_FULL` for a capacity above `TA_TABLE_MAX_KEYS`, and
+ * `TA_ERR_NOMEM` when the slots cannot be allocated; on any failure
+ * `*table` is an empty table that holds nothing and may be destroyed.
+ */
+TA_PRIVATE ta_result ta_table_init(ta_table *table, const ta_table_params *params);
+
+/**
+ * Frees the slots and leaves an empty table with no room, which may be
+ * destroyed again. Only frees; never fails.
+ */
+TA_PRIVATE void ta_table_destroy(ta_table *table);
+
+/**
+ * Makes room for `more` keys beyond those held, so the next `more`
+ * inserts succeed without allocating. A growing table that lacks the room
+ * allocates the smallest power-of-two number of slots that has it, moves
+ * every key there and frees the old slots. May allocate: runs only at a
+ * safe point, never inside a macrostep. Answers `TA_ERR_FULL` when
+ * `count + more` passes a fixed table's capacity or `TA_TABLE_MAX_KEYS`,
+ * and `TA_ERR_NOMEM` when the slots cannot be allocated; either way it
+ * changes nothing.
+ */
+TA_PRIVATE ta_result ta_table_reserve(ta_table *table, uint32_t more);
+
+/**
+ * Stores `value` under a key whose hash is `hash`, in the first empty
+ * slot from the key's home. The key must not be held already (see the
+ * file comment). Never allocates; may run inside a macrostep. Answers
+ * `TA_ERR_FULL` when the table holds `limit` keys, and `TA_ERR_INVALID`
+ * for a value of 0, changing nothing.
+ */
+TA_PRIVATE ta_result ta_table_insert(ta_table *table, uint32_t hash, uint32_t value);
+
+/**
+ * Looks `key` up and stores its value in `*value`. Borrows `key` for the
+ * call. Never allocates; may run inside a macrostep. Answers
+ * `TA_ERR_NOT_FOUND`, leaving `*value` alone, when the table does not
+ * hold the key.
+ */
+TA_PRIVATE ta_result ta_table_find(const ta_table *table, const ta_table_key *key, uint32_t *value);
+
+/**
+ * Removes `key` by backward shift and stores the value it had in `*value`
+ * unless `value` is NULL. Borrows `key` for the call. Never allocates; may
+ * run inside a macrostep. Answers `TA_ERR_NOT_FOUND` when the table does
+ * not hold the key, changing nothing.
+ */
+TA_PRIVATE ta_result ta_table_remove(ta_table *table, const ta_table_key *key, uint32_t *value);
+
+/**
  * @file fifo.h
  *
  * # Fixed-entry FIFO
@@ -5663,27 +5899,33 @@ typedef struct {
  * - An atom's text is a copy the table keeps in arena blocks, so the
  *   `ta_str` that `ta_atom_text` answers never moves while the table
  *   lives.
- * - Buckets are found with 32-bit FNV-1a over the text (`hash.h`), and
- *   the table doubles its buckets when it holds more atoms than buckets.
+ * - The atoms are found through a hash table (`table.h`) in growing
+ *   mode, keyed by the text's 32-bit FNV-1a hash (`hash.h`, from
+ *   `TA_HASH_FNV1A32_BASIS`), which each entry keeps too. Its values are
+ *   atoms plus one, because a table's value is never 0 and atom 0 exists;
+ *   it compares keys by looking the entry's text up. The table grows only
+ *   in `ta_atom_intern`, before it adds an atom.
  * - An atom is process-local. A portable durability encoding records the
  *   text (or another stable dictionary representation), never an atom's
  *   index; session images in-process may hold atoms.
  *
  * ## Memory
  *
- * The table owns its entries (a `ta_vec`), its buckets and the arena of
- * texts, all from the allocator given to `ta_atom_table_init`, until
+ * The table owns its entries (a `ta_vec`), its hash table and the arena
+ * of texts, all from the allocator given to `ta_atom_table_init`, until
  * `ta_atom_table_destroy`. Callers borrow the texts it answers for as long
  * as the table lives. `ta_atom_table_init` and `ta_atom_intern` allocate;
  * `ta_atom_find`, `ta_atom_text` and `ta_atom_valid` never allocate and
- * may run inside a macrostep.
+ * may run inside a macrostep. `ta_atom_intern` grows the hash table
+ * before it adds an atom, so whoever interns must be at a point where it
+ * may allocate.
  *
  * ## Complexity
  *
- * `ta_atom_intern` and `ta_atom_find` hash the text, O(length), then walk
- * one bucket's chain, expected O(1); an intern that doubles the buckets
- * rehashes every atom once, amortized O(1). `ta_atom_text` and
- * `ta_atom_valid` are O(1).
+ * `ta_atom_intern` and `ta_atom_find` hash the text, O(length), then probe
+ * the hash table, expected O(1), comparing texts only on equal hashes; an
+ * intern that grows the table moves every atom's slot once, amortized
+ * O(1). `ta_atom_text` and `ta_atom_valid` are O(1).
  *
  * ## Failure
  *
@@ -5692,9 +5934,8 @@ typedef struct {
  * `TA_ERR_NOT_FOUND` for a text that is not an atom. `ta_atom_intern`
  * answers `TA_ERR_NOMEM` when the copy or the entry cannot be allocated,
  * or the table is full; the table then holds no new atom (the arena may
- * keep the copied bytes until the table is destroyed). A failed doubling
- * of the buckets is not a failure: the old buckets stay correct.
- * `ta_atom_table_init` answers `TA_ERR_NOMEM` and holds nothing.
+ * keep the copied bytes until the table is destroyed, and the hash table
+ * the room it grew). `ta_atom_table_init` answers `TA_ERR_NOMEM` and holds nothing.
  * `ta_atom_text` answers an empty text for an atom the table does not
  * hold.
  *
@@ -5706,23 +5947,23 @@ typedef struct {
  */
 
 
-/** One atom: its text's hash, the next atom in its bucket, and its text in arena blocks, which never moves. */
+/** One atom: its text's hash and its text in arena blocks, which never moves. */
 typedef struct {
     uint32_t hash;
-    uint32_t next;
     ta_str text;
 } ta_atom_entry;
 
 /** The atom table; see the file comment. */
 typedef struct {
     ta_allocator allocator;
+    /** One ta_atom_entry per atom, indexed by atom. */
     ta_vec entries;
-    uint32_t *buckets;
-    uint32_t bucket_count;
+    /** Text hash to atom plus one. */
+    ta_table index;
     ta_arena strings;
 } ta_atom_table;
 
-/** No atom; it also ends a bucket's chain. */
+/** No atom. */
 #define TA_ATOM_NONE UINT32_MAX
 
 /**
@@ -9277,6 +9518,168 @@ TA_PRIVATE ta_result ta_heap_remove(ta_heap *heap, const ta_heap_items *items, u
 }
 
 
+/* The most keys `slot_count` slots hold: three quarters of them. */
+static uint32_t ta_table_load(uint32_t slot_count) {
+    return slot_count - slot_count / 4u;
+}
+
+/* The fewest slots, a power of two of at least TA_TABLE_MIN_SLOTS, that
+ * hold `keys` keys; `keys` is at most TA_TABLE_MAX_KEYS. */
+static uint32_t ta_table_slots_for(uint32_t keys) {
+    uint32_t slot_count = TA_TABLE_MIN_SLOTS;
+    while (ta_table_load(slot_count) < keys) {
+        slot_count *= 2u;
+    }
+    return slot_count;
+}
+
+/* Allocates `slot_count` empty slots, or answers NULL. */
+static ta_table_slot *ta_table_slots_alloc(ta_allocator allocator, uint32_t slot_count) {
+    if ((size_t)slot_count > SIZE_MAX / sizeof(ta_table_slot)) {
+        return NULL;
+    }
+    size_t size = (size_t)slot_count * sizeof(ta_table_slot);
+    ta_table_slot *slots = ta_mem_alloc(allocator, size, _Alignof(ta_table_slot));
+    if (slots != NULL) {
+        ta_mem_zero(slots, size);
+    }
+    return slots;
+}
+
+static void ta_table_slots_free(ta_allocator allocator, ta_table_slot *slots, uint32_t slot_count) {
+    ta_mem_free(allocator, slots,
+                &(ta_allocator_free_params){ .size = (size_t)slot_count * sizeof(ta_table_slot),
+                                             .alignment = _Alignof(ta_table_slot) });
+}
+
+/* Puts (hash, value) in the first empty slot from its home; there is one. */
+static void ta_table_place(ta_table_slot *slots, uint32_t slot_count, uint32_t hash, uint32_t value) {
+    uint32_t mask = slot_count - 1u;
+    uint32_t slot = hash & mask;
+    while (slots[slot].value != 0) {
+        slot = (slot + 1u) & mask;
+    }
+    slots[slot] = (ta_table_slot){ .hash = hash, .value = value };
+}
+
+/* The slot holding `key`, or slot_count when the table does not hold it. */
+static uint32_t ta_table_slot_of(const ta_table *table, const ta_table_key *key) {
+    if (table->slot_count == 0) {
+        return 0;
+    }
+    uint32_t mask = table->slot_count - 1u;
+    for (uint32_t slot = key->hash & mask; table->slots[slot].value != 0; slot = (slot + 1u) & mask) {
+        const ta_table_slot *entry = &table->slots[slot];
+        if (entry->hash == key->hash && key->equal(key->context, entry->value)) {
+            return slot;
+        }
+    }
+    return table->slot_count;
+}
+
+TA_PRIVATE ta_result ta_table_init(ta_table *table, const ta_table_params *params) {
+    *table = (ta_table){ .allocator = params->allocator, .mode = params->mode };
+    if (params->mode != TA_TABLE_FIXED && params->mode != TA_TABLE_GROWING) {
+        return TA_ERR_INVALID;
+    }
+    if (params->mode == TA_TABLE_FIXED && params->capacity == 0) {
+        return TA_ERR_INVALID;
+    }
+    if (params->capacity > TA_TABLE_MAX_KEYS) {
+        return TA_ERR_FULL;
+    }
+    if (params->capacity == 0) {
+        return TA_OK;
+    }
+    uint32_t slot_count = ta_table_slots_for(params->capacity);
+    ta_table_slot *slots = ta_table_slots_alloc(params->allocator, slot_count);
+    if (slots == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    table->slots = slots;
+    table->slot_count = slot_count;
+    table->limit = params->mode == TA_TABLE_FIXED ? params->capacity : ta_table_load(slot_count);
+    return TA_OK;
+}
+
+TA_PRIVATE void ta_table_destroy(ta_table *table) {
+    ta_table_slots_free(table->allocator, table->slots, table->slot_count);
+    table->slots = NULL;
+    table->slot_count = 0;
+    table->count = 0;
+    table->limit = 0;
+}
+
+TA_PRIVATE ta_result ta_table_reserve(ta_table *table, uint32_t more) {
+    if (more <= table->limit - table->count) {
+        return TA_OK;
+    }
+    if (table->mode == TA_TABLE_FIXED || more > TA_TABLE_MAX_KEYS - table->count) {
+        return TA_ERR_FULL;
+    }
+    uint32_t slot_count = ta_table_slots_for(table->count + more);
+    ta_table_slot *slots = ta_table_slots_alloc(table->allocator, slot_count);
+    if (slots == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    for (uint32_t slot = 0; slot < table->slot_count; slot += 1u) {
+        const ta_table_slot *entry = &table->slots[slot];
+        if (entry->value != 0) {
+            ta_table_place(slots, slot_count, entry->hash, entry->value);
+        }
+    }
+    ta_table_slots_free(table->allocator, table->slots, table->slot_count);
+    table->slots = slots;
+    table->slot_count = slot_count;
+    table->limit = ta_table_load(slot_count);
+    return TA_OK;
+}
+
+TA_PRIVATE ta_result ta_table_insert(ta_table *table, uint32_t hash, uint32_t value) {
+    if (value == 0) {
+        return TA_ERR_INVALID;
+    }
+    if (table->count >= table->limit) {
+        return TA_ERR_FULL;
+    }
+    ta_table_place(table->slots, table->slot_count, hash, value);
+    table->count += 1u;
+    return TA_OK;
+}
+
+TA_PRIVATE ta_result ta_table_find(const ta_table *table, const ta_table_key *key, uint32_t *value) {
+    uint32_t slot = ta_table_slot_of(table, key);
+    if (slot == table->slot_count) {
+        return TA_ERR_NOT_FOUND;
+    }
+    *value = table->slots[slot].value;
+    return TA_OK;
+}
+
+TA_PRIVATE ta_result ta_table_remove(ta_table *table, const ta_table_key *key, uint32_t *value) {
+    uint32_t hole = ta_table_slot_of(table, key);
+    if (hole == table->slot_count) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (value != NULL) {
+        *value = table->slots[hole].value;
+    }
+    uint32_t mask = table->slot_count - 1u;
+    for (uint32_t next = (hole + 1u) & mask; table->slots[next].value != 0; next = (next + 1u) & mask) {
+        uint32_t home = table->slots[next].hash & mask;
+        /* The key at `next` may move into the hole when the hole lies
+         * between its home and its slot, cyclically. */
+        if (((next - home) & mask) >= ((next - hole) & mask)) {
+            table->slots[hole] = table->slots[next];
+            hole = next;
+        }
+    }
+    table->slots[hole] = (ta_table_slot){0};
+    table->count -= 1u;
+    return TA_OK;
+}
+
+
 static void ta_fifo_free_entries(ta_fifo *fifo) {
     if (fifo->entries == NULL) {
         return;
@@ -10906,35 +11309,42 @@ TA_API const void *ta_tree_close(ta_tree_list *list) {
 }
 
 
-static ta_result ta_atom_rehash(ta_atom_table *table, uint32_t bucket_count) {
-    uint32_t *buckets = ta_mem_alloc(table->allocator, bucket_count * sizeof(uint32_t),
-                                     _Alignof(uint32_t));
-    if (buckets == NULL) {
-        return TA_ERR_NOMEM;
+/* The atoms the hash table has room for when the table is made. */
+#define TA_ATOM_INITIAL_CAPACITY 48u
+
+/* What the hash table's comparison needs: the atoms and the text looked for. */
+typedef struct {
+    const ta_atom_table *table;
+    ta_str text;
+} ta_atom_key;
+
+/* Whether atom `value - 1` has the text in `context`, a ta_atom_key. */
+static bool ta_atom_key_equal(const void *context, uint32_t value) {
+    const ta_atom_key *key = context;
+    const ta_atom_entry *entry = ta_vec_at(&key->table->entries, value - 1u);
+    return ta_str_equal(entry->text, key->text);
+}
+
+/* Looks `text`, whose hash is `hash`, up in the hash table. */
+static ta_result ta_atom_lookup(const ta_atom_table *table, ta_atom_key key, uint32_t hash, ta_atom *out) {
+    uint32_t value = 0;
+    ta_result result = ta_table_find(&table->index,
+                                     &(ta_table_key){ .hash = hash, .equal = ta_atom_key_equal, .context = &key },
+                                     &value);
+    if (result == TA_OK) {
+        *out = value - 1u;
     }
-    for (uint32_t index = 0; index < bucket_count; index += 1) {
-        buckets[index] = TA_ATOM_NONE;
-    }
-    for (uint32_t atom = 0; atom < table->entries.count; atom += 1) {
-        ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
-        uint32_t bucket = entry->hash & (bucket_count - 1u);
-        entry->next = buckets[bucket];
-        buckets[bucket] = atom;
-    }
-    ta_mem_free(table->allocator, table->buckets,
-                &(ta_allocator_free_params){ .size = table->bucket_count * sizeof(uint32_t),
-                                             .alignment = _Alignof(uint32_t) });
-    table->buckets = buckets;
-    table->bucket_count = bucket_count;
-    return TA_OK;
+    return result;
 }
 
 TA_PRIVATE ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator allocator) {
     *table = (ta_atom_table){ .allocator = allocator };
     ta_vec_init(&table->entries, allocator, TA_VEC_LAYOUT(ta_atom_entry));
-    ta_result result = ta_arena_init(&table->strings, allocator, 4096);
+    ta_result result = ta_table_init(&table->index, &(ta_table_params){ .allocator = allocator,
+                                                                        .mode = TA_TABLE_GROWING,
+                                                                        .capacity = TA_ATOM_INITIAL_CAPACITY });
     if (result == TA_OK) {
-        result = ta_atom_rehash(table, 64);
+        result = ta_arena_init(&table->strings, allocator, 4096);
     }
     /* Atom 0 is the empty text, which no family is, so a zeroed family
      * atom names none (ADR 0088). */
@@ -10950,12 +11360,8 @@ TA_PRIVATE ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator alloc
 
 TA_PRIVATE void ta_atom_table_destroy(ta_atom_table *table) {
     ta_vec_destroy(&table->entries);
-    ta_mem_free(table->allocator, table->buckets,
-                &(ta_allocator_free_params){ .size = table->bucket_count * sizeof(uint32_t),
-                                             .alignment = _Alignof(uint32_t) });
+    ta_table_destroy(&table->index);
     ta_arena_destroy(&table->strings);
-    table->buckets = NULL;
-    table->bucket_count = 0;
 }
 
 TA_PRIVATE ta_result ta_atom_intern(ta_atom_table *table, ta_str text, ta_atom *out) {
@@ -10963,33 +11369,32 @@ TA_PRIVATE ta_result ta_atom_intern(ta_atom_table *table, ta_str text, ta_atom *
         return TA_ERR_INVALID;
     }
     uint32_t hash = ta_hash_fnv1a32(TA_HASH_FNV1A32_BASIS, text.ptr, text.len);
-    for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
-        const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
-        if (entry->hash == hash && ta_str_equal(entry->text, text)) {
-            *out = atom;
-            return TA_OK;
-        }
-        atom = entry->next;
+    if (ta_atom_lookup(table, (ta_atom_key){ .table = table, .text = text }, hash, out) == TA_OK) {
+        return TA_OK;
     }
     if (table->entries.count >= TA_ATOM_NONE - 1u) {
         return TA_ERR_NOMEM;
     }
+    /* Room in the hash table first, so the insert below cannot fail; a full
+     * table is out of memory to the atom table's callers. */
+    ta_result result = ta_table_reserve(&table->index, 1);
+    if (result != TA_OK) {
+        return TA_ERR_NOMEM;
+    }
     ta_atom_entry entry = { .hash = hash };
-    ta_result result = ta_arena_copy_str(&table->strings, text, &entry.text);
+    result = ta_arena_copy_str(&table->strings, text, &entry.text);
     if (result != TA_OK) {
         return result;
     }
     uint32_t atom = table->entries.count;
-    uint32_t bucket = hash & (table->bucket_count - 1u);
-    entry.next = table->buckets[bucket];
     result = ta_vec_push(&table->entries, &entry);
     if (result != TA_OK) {
         return result;
     }
-    table->buckets[bucket] = atom;
-    if (table->entries.count > table->bucket_count) {
-        /* A failed rehash leaves the old, still-correct buckets. */
-        (void)ta_atom_rehash(table, table->bucket_count * 2u);
+    result = ta_table_insert(&table->index, hash, atom + 1u);
+    if (result != TA_OK) {
+        table->entries.count -= 1u;
+        return TA_ERR_NOMEM;
     }
     *out = atom;
     return TA_OK;
@@ -11012,15 +11417,7 @@ TA_PRIVATE ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_at
         return TA_ERR_INVALID;
     }
     uint32_t hash = ta_hash_fnv1a32(TA_HASH_FNV1A32_BASIS, text.ptr, text.len);
-    for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
-        const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
-        if (entry->hash == hash && ta_str_equal(entry->text, text)) {
-            *out = atom;
-            return TA_OK;
-        }
-        atom = entry->next;
-    }
-    return TA_ERR_NOT_FOUND;
+    return ta_atom_lookup(table, (ta_atom_key){ .table = table, .text = text }, hash, out);
 }
 
 

@@ -14,6 +14,7 @@
 #include "index_pool.h"
 #include "paged_array.h"
 #include "heap.h"
+#include "table.h"
 #include "fifo.h"
 #include "quota.h"
 #include "bytes.h"

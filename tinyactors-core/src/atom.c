@@ -5,36 +5,44 @@
 #include "vec.h"
 #include "arena.h"
 #include "hash.h"
+#include "table.h"
 
-static ta_result ta_atom_rehash(ta_atom_table *table, uint32_t bucket_count) {
-    uint32_t *buckets = ta_mem_alloc(table->allocator, bucket_count * sizeof(uint32_t),
-                                     _Alignof(uint32_t));
-    if (buckets == NULL) {
-        return TA_ERR_NOMEM;
+/* The atoms the hash table has room for when the table is made. */
+#define TA_ATOM_INITIAL_CAPACITY 48u
+
+/* What the hash table's comparison needs: the atoms and the text looked for. */
+typedef struct {
+    const ta_atom_table *table;
+    ta_str text;
+} ta_atom_key;
+
+/* Whether atom `value - 1` has the text in `context`, a ta_atom_key. */
+static bool ta_atom_key_equal(const void *context, uint32_t value) {
+    const ta_atom_key *key = context;
+    const ta_atom_entry *entry = ta_vec_at(&key->table->entries, value - 1u);
+    return ta_str_equal(entry->text, key->text);
+}
+
+/* Looks `text`, whose hash is `hash`, up in the hash table. */
+static ta_result ta_atom_lookup(const ta_atom_table *table, ta_atom_key key, uint32_t hash, ta_atom *out) {
+    uint32_t value = 0;
+    ta_result result = ta_table_find(&table->index,
+                                     &(ta_table_key){ .hash = hash, .equal = ta_atom_key_equal, .context = &key },
+                                     &value);
+    if (result == TA_OK) {
+        *out = value - 1u;
     }
-    for (uint32_t index = 0; index < bucket_count; index += 1) {
-        buckets[index] = TA_ATOM_NONE;
-    }
-    for (uint32_t atom = 0; atom < table->entries.count; atom += 1) {
-        ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
-        uint32_t bucket = entry->hash & (bucket_count - 1u);
-        entry->next = buckets[bucket];
-        buckets[bucket] = atom;
-    }
-    ta_mem_free(table->allocator, table->buckets,
-                &(ta_allocator_free_params){ .size = table->bucket_count * sizeof(uint32_t),
-                                             .alignment = _Alignof(uint32_t) });
-    table->buckets = buckets;
-    table->bucket_count = bucket_count;
-    return TA_OK;
+    return result;
 }
 
 ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator allocator) {
     *table = (ta_atom_table){ .allocator = allocator };
     ta_vec_init(&table->entries, allocator, TA_VEC_LAYOUT(ta_atom_entry));
-    ta_result result = ta_arena_init(&table->strings, allocator, 4096);
+    ta_result result = ta_table_init(&table->index, &(ta_table_params){ .allocator = allocator,
+                                                                        .mode = TA_TABLE_GROWING,
+                                                                        .capacity = TA_ATOM_INITIAL_CAPACITY });
     if (result == TA_OK) {
-        result = ta_atom_rehash(table, 64);
+        result = ta_arena_init(&table->strings, allocator, 4096);
     }
     /* Atom 0 is the empty text, which no family is, so a zeroed family
      * atom names none (ADR 0088). */
@@ -50,12 +58,8 @@ ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator allocator) {
 
 void ta_atom_table_destroy(ta_atom_table *table) {
     ta_vec_destroy(&table->entries);
-    ta_mem_free(table->allocator, table->buckets,
-                &(ta_allocator_free_params){ .size = table->bucket_count * sizeof(uint32_t),
-                                             .alignment = _Alignof(uint32_t) });
+    ta_table_destroy(&table->index);
     ta_arena_destroy(&table->strings);
-    table->buckets = NULL;
-    table->bucket_count = 0;
 }
 
 ta_result ta_atom_intern(ta_atom_table *table, ta_str text, ta_atom *out) {
@@ -63,33 +67,32 @@ ta_result ta_atom_intern(ta_atom_table *table, ta_str text, ta_atom *out) {
         return TA_ERR_INVALID;
     }
     uint32_t hash = ta_hash_fnv1a32(TA_HASH_FNV1A32_BASIS, text.ptr, text.len);
-    for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
-        const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
-        if (entry->hash == hash && ta_str_equal(entry->text, text)) {
-            *out = atom;
-            return TA_OK;
-        }
-        atom = entry->next;
+    if (ta_atom_lookup(table, (ta_atom_key){ .table = table, .text = text }, hash, out) == TA_OK) {
+        return TA_OK;
     }
     if (table->entries.count >= TA_ATOM_NONE - 1u) {
         return TA_ERR_NOMEM;
     }
+    /* Room in the hash table first, so the insert below cannot fail; a full
+     * table is out of memory to the atom table's callers. */
+    ta_result result = ta_table_reserve(&table->index, 1);
+    if (result != TA_OK) {
+        return TA_ERR_NOMEM;
+    }
     ta_atom_entry entry = { .hash = hash };
-    ta_result result = ta_arena_copy_str(&table->strings, text, &entry.text);
+    result = ta_arena_copy_str(&table->strings, text, &entry.text);
     if (result != TA_OK) {
         return result;
     }
     uint32_t atom = table->entries.count;
-    uint32_t bucket = hash & (table->bucket_count - 1u);
-    entry.next = table->buckets[bucket];
     result = ta_vec_push(&table->entries, &entry);
     if (result != TA_OK) {
         return result;
     }
-    table->buckets[bucket] = atom;
-    if (table->entries.count > table->bucket_count) {
-        /* A failed rehash leaves the old, still-correct buckets. */
-        (void)ta_atom_rehash(table, table->bucket_count * 2u);
+    result = ta_table_insert(&table->index, hash, atom + 1u);
+    if (result != TA_OK) {
+        table->entries.count -= 1u;
+        return TA_ERR_NOMEM;
     }
     *out = atom;
     return TA_OK;
@@ -112,13 +115,5 @@ ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_atom *out) {
         return TA_ERR_INVALID;
     }
     uint32_t hash = ta_hash_fnv1a32(TA_HASH_FNV1A32_BASIS, text.ptr, text.len);
-    for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
-        const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
-        if (entry->hash == hash && ta_str_equal(entry->text, text)) {
-            *out = atom;
-            return TA_OK;
-        }
-        atom = entry->next;
-    }
-    return TA_ERR_NOT_FOUND;
+    return ta_atom_lookup(table, (ta_atom_key){ .table = table, .text = text }, hash, out);
 }

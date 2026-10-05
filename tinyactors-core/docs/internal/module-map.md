@@ -17,7 +17,8 @@ are private and hold layouts and internal functions.
 | `store.h` | empty compatibility boundary; durability is not a core store API |
 | `arena.h` | transient allocation |
 | `index_pool.h` | fixed-size items addressed by `u32` index in pages that never move: take, give, refill up to a ceiling, trim |
-| `atom.h` | ordinary string interning |
+| `table.h` | open-addressing hash table of `u32` values, keys hashed and compared by the owner; fixed, or growing only on an explicit reserve |
+| `atom.h` | ordinary string interning, on a `table.h` hash table |
 | `event_name.h` | structured dot-token event-name interning/matching |
 | `value.h` | host value ownership helpers |
 | `event.h` | event envelope and queued-event ownership |
