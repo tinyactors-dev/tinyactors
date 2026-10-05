@@ -118,7 +118,7 @@
 
 #define TA_RECORD_HEADER_BYTES 32u
 /* The largest fixed part (header included) of any message: the size of the snapshot in a ta_record. The generator checks the catalog against it. */
-#define TA_RECORD_FIXED_MAX 128u
+#define TA_RECORD_FIXED_MAX 320u
 /* An enum or bool field holds a value below this; its set of allowed values is a 64-bit mask. */
 #define TA_RECORD_DOMAIN_BITS 64u
 

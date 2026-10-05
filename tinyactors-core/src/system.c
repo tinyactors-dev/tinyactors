@@ -14,11 +14,13 @@
  * The largest ring and record: the biggest multiple of 8 below 2 GiB, so a
  * ring's sizes stay u32 (ring.h) and its layout cannot overflow. Every
  * record carries at least TA_PARAM_RECORD_HEADROOM bytes that are not value
- * text (its fixed part and the other texts), which is what
- * telemetryValueBytes may not take from maxRecordBytes (ADR 0098 section 6).
+ * text (its fixed part, 296 bytes for tel.trace, and the other texts), which
+ * is what telemetryValueBytes may not take from maxRecordBytes. ADR 0098
+ * section 6 says 256; the catalog's tel.trace needs more (see its
+ * implementation notes), so the smallest record is 512.
  */
 #define TA_PARAM_RING_BYTES_MAX 2147483640u
-#define TA_PARAM_RECORD_HEADROOM 256u
+#define TA_PARAM_RECORD_HEADROOM 512u
 
 typedef struct {
     const char *name;
@@ -50,8 +52,8 @@ static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_MAX_DEFINITIONS] = { "maxDefinitions", "definitions", TA_PARAM_DEFAULT_MAX_DEFINITIONS, 1, 2147483647u },
     /* The three ADR 0098 parameters. Their static bounds are the widest any
      * pair allows; ta_params_resolve checks the pairs. */
-    [TA_PARAM_TEL_BYTES] = { "telBytes", "bytes", TA_PARAM_DEFAULT_TEL_BYTES, 256, TA_PARAM_RING_BYTES_MAX },
-    [TA_PARAM_MAX_RECORD_BYTES] = { "maxRecordBytes", "bytes", TA_PARAM_DEFAULT_MAX_RECORD_BYTES, 256,
+    [TA_PARAM_TEL_BYTES] = { "telBytes", "bytes", TA_PARAM_DEFAULT_TEL_BYTES, 512, TA_PARAM_RING_BYTES_MAX },
+    [TA_PARAM_MAX_RECORD_BYTES] = { "maxRecordBytes", "bytes", TA_PARAM_DEFAULT_MAX_RECORD_BYTES, 512,
                                     TA_PARAM_RING_BYTES_MAX },
     [TA_PARAM_TELEMETRY_VALUE_BYTES] = { "telemetryValueBytes", "bytes", TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES, 0,
                                          TA_PARAM_RING_BYTES_MAX - TA_PARAM_RECORD_HEADROOM },

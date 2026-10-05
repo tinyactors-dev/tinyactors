@@ -2283,15 +2283,45 @@ ta_result ta_msg_tel_trace_size(const ta_msg_tel_trace *data, uint32_t *size) {
     ta_layout layout;
     size_t bytes = 0;
     ta_result result;
-    if (!ta_record_bytes_ok(data->name) ||
-        !ta_record_bytes_ok(data->value_text) ||
+    if (!ta_record_bytes_ok(data->event_name) ||
+        !ta_record_bytes_ok(data->event_send_id) ||
+        !ta_record_bytes_ok(data->event_invoke_id) ||
+        !ta_record_bytes_ok(data->event_data) ||
+        !ta_record_bytes_ok(data->name) ||
+        !ta_record_bytes_ok(data->send) ||
+        !ta_record_bytes_ok(data->invoke) ||
+        !ta_record_bytes_ok(data->value) ||
+        !ta_record_bytes_ok(data->fault_detail) ||
+        !ta_record_bytes_ok(data->fault_message) ||
+        !ta_record_bytes_ok(data->fault_data) ||
+        !ta_record_bytes_ok(data->identity_family) ||
+        !ta_record_bytes_ok(data->identity_revision) ||
+        !ta_record_bytes_ok(data->transitions) ||
+        !ta_record_bytes_ok(data->exited) ||
+        !ta_record_bytes_ok(data->entered) ||
+        !ta_record_bytes_ok(data->history) ||
         !ta_record_bytes_ok(data->states)) {
         return TA_ERR_INVALID;
     }
     ta_layout_init(&layout, 0);
-    ta_layout_add(&layout, &(ta_layout_entry){ .size = 120, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 296, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->event_name.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->event_send_id.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->event_invoke_id.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->event_data.len });
     ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->name.len });
-    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->value_text.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->send.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->invoke.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->value.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->fault_detail.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->fault_message.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->fault_data.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->identity_family.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->identity_revision.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->transitions.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->exited.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->entered.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->history.len });
     ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->states.len });
     ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
     result = ta_layout_finish(&layout, &bytes, NULL);
@@ -2316,13 +2346,28 @@ ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const ta_ring_res
     }
     if (to->bytes == NULL ||
         to->size != size ||
-        (data->head.flags & (uint16_t)~0x0303u) != 0 ||
+        (data->head.flags & (uint16_t)~0x031Fu) != 0 ||
         !ta_record_in_domain(0x3ull, data->result)) {
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
+    ta_record_put_span(&tail, &wire.event_name, data->event_name);
+    ta_record_put_span(&tail, &wire.event_send_id, data->event_send_id);
+    ta_record_put_span(&tail, &wire.event_invoke_id, data->event_invoke_id);
+    ta_record_put_span(&tail, &wire.event_data, data->event_data);
     ta_record_put_span(&tail, &wire.name, data->name);
-    ta_record_put_span(&tail, &wire.value_text, data->value_text);
+    ta_record_put_span(&tail, &wire.send, data->send);
+    ta_record_put_span(&tail, &wire.invoke, data->invoke);
+    ta_record_put_span(&tail, &wire.value, data->value);
+    ta_record_put_span(&tail, &wire.fault_detail, data->fault_detail);
+    ta_record_put_span(&tail, &wire.fault_message, data->fault_message);
+    ta_record_put_span(&tail, &wire.fault_data, data->fault_data);
+    ta_record_put_span(&tail, &wire.identity_family, data->identity_family);
+    ta_record_put_span(&tail, &wire.identity_revision, data->identity_revision);
+    ta_record_put_span(&tail, &wire.transitions, data->transitions);
+    ta_record_put_span(&tail, &wire.exited, data->exited);
+    ta_record_put_span(&tail, &wire.entered, data->entered);
+    ta_record_put_span(&tail, &wire.history, data->history);
     ta_record_put_span(&tail, &wire.states, data->states);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_TEL_TRACE, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
@@ -2331,14 +2376,28 @@ ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const ta_ring_res
     wire.trace_id_low = data->trace_id_low;
     wire.cause_session = data->cause_session;
     wire.cause_macrostep = data->cause_macrostep;
+    wire.actor = data->actor;
+    wire.definition = data->definition;
     wire.microstep = data->microstep;
+    wire.family = data->family;
+    wire.cause_microstep = data->cause_microstep;
+    wire.cause_family = data->cause_family;
+    wire.at_state = data->at_state;
+    wire.at_transition = data->at_transition;
+    wire.at_action = data->at_action;
+    wire.at_iteration = data->at_iteration;
     wire.state = data->state;
-    wire.transition = data->transition;
+    wire.expr = data->expr;
     wire.action = data->action;
     wire.iteration = data->iteration;
+    wire.dropped = data->dropped;
+    wire.fault_code = data->fault_code;
     wire.trace_kind = data->trace_kind;
     wire.position = data->position;
     wire.result = data->result;
+    wire.event_type = data->event_type;
+    wire.context_flags = data->context_flags;
+    wire.context_detail = data->context_detail;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
@@ -2359,17 +2418,46 @@ ta_result ta_msg_tel_trace_get(const ta_record *record, ta_msg_tel_trace *out) {
     value.trace_id_low = ta_record_u64(record, 48);
     value.cause_session = ta_record_u64(record, 56);
     value.cause_macrostep = ta_record_u64(record, 64);
-    value.microstep = ta_record_u32(record, 72);
-    value.state = ta_record_u32(record, 76);
-    value.transition = ta_record_u32(record, 80);
-    value.action = ta_record_u32(record, 84);
-    value.iteration = ta_record_u32(record, 88);
-    value.trace_kind = ta_record_u16(record, 92);
-    value.position = ta_record_u8(record, 94);
-    value.result = ta_record_u8(record, 95);
-    value.name = ta_record_span(record, 96);
-    value.value_text = ta_record_span(record, 104);
-    value.states = ta_record_span(record, 112);
+    value.actor = ta_record_u64(record, 72);
+    value.definition = ta_record_u64(record, 80);
+    value.microstep = ta_record_u32(record, 88);
+    value.family = ta_record_u32(record, 92);
+    value.cause_microstep = ta_record_u32(record, 96);
+    value.cause_family = ta_record_u32(record, 100);
+    value.at_state = ta_record_u32(record, 104);
+    value.at_transition = ta_record_u32(record, 108);
+    value.at_action = ta_record_u32(record, 112);
+    value.at_iteration = ta_record_u32(record, 116);
+    value.state = ta_record_u32(record, 120);
+    value.expr = ta_record_u32(record, 124);
+    value.action = ta_record_u32(record, 128);
+    value.iteration = ta_record_u32(record, 132);
+    value.dropped = ta_record_u32(record, 136);
+    value.fault_code = ta_record_u32(record, 140);
+    value.trace_kind = ta_record_u16(record, 144);
+    value.position = ta_record_u8(record, 146);
+    value.result = ta_record_u8(record, 147);
+    value.event_type = ta_record_u8(record, 148);
+    value.context_flags = ta_record_u8(record, 149);
+    value.context_detail = ta_record_u8(record, 150);
+    value.event_name = ta_record_span(record, 152);
+    value.event_send_id = ta_record_span(record, 160);
+    value.event_invoke_id = ta_record_span(record, 168);
+    value.event_data = ta_record_span(record, 176);
+    value.name = ta_record_span(record, 184);
+    value.send = ta_record_span(record, 192);
+    value.invoke = ta_record_span(record, 200);
+    value.value = ta_record_span(record, 208);
+    value.fault_detail = ta_record_span(record, 216);
+    value.fault_message = ta_record_span(record, 224);
+    value.fault_data = ta_record_span(record, 232);
+    value.identity_family = ta_record_span(record, 240);
+    value.identity_revision = ta_record_span(record, 248);
+    value.transitions = ta_record_span(record, 256);
+    value.exited = ta_record_span(record, 264);
+    value.entered = ta_record_span(record, 272);
+    value.history = ta_record_span(record, 280);
+    value.states = ta_record_span(record, 288);
     *out = value;
     return TA_OK;
 }
@@ -2459,8 +2547,8 @@ static const ta_record_domain ta_msg_c2h_destroyed_domains[] = { { 48, 0x7ull } 
 static const ta_record_domain ta_msg_c2h_definition_result_domains[] = { { 52, 0x3Full } };
 static const ta_record_domain ta_msg_c2h_input_refused_domains[] = { { 40, 0x7Eull } };
 static const ta_record_domain ta_msg_c2h_input_completed_domains[] = { { 48, 0xFull } };
-static const ta_record_span_at ta_msg_tel_trace_spans[] = { { 96 }, { 104 }, { 112 } };
-static const ta_record_domain ta_msg_tel_trace_domains[] = { { 95, 0x3ull } };
+static const ta_record_span_at ta_msg_tel_trace_spans[] = { { 152 }, { 160 }, { 168 }, { 176 }, { 184 }, { 192 }, { 200 }, { 208 }, { 216 }, { 224 }, { 232 }, { 240 }, { 248 }, { 256 }, { 264 }, { 272 }, { 280 }, { 288 } };
+static const ta_record_domain ta_msg_tel_trace_domains[] = { { 147, 0x3ull } };
 /* One descriptor per message, sorted by kind (ta_record_reader_init checks it). */
 static const ta_record_descriptor ta_msg_descriptors[] = {
     { .kind = TA_MSG_H2C_TIME, .ring = TA_RING_H2C, .span_count = 0, .domain_count = 0, .fixed_size = 32, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
@@ -2499,7 +2587,7 @@ static const ta_record_descriptor ta_msg_descriptors[] = {
     { .kind = TA_MSG_C2H_INPUT_REFUSED, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 1, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = ta_msg_c2h_input_refused_domains },
     { .kind = TA_MSG_C2H_INPUT_COMPLETED, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 1, .fixed_size = 56, .flags_allowed = 0x0301, .spans = NULL, .domains = ta_msg_c2h_input_completed_domains },
     { .kind = TA_MSG_C2H_LOAD_RESULT, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
-    { .kind = TA_MSG_TEL_TRACE, .ring = TA_RING_TEL, .span_count = 3, .domain_count = 1, .fixed_size = 120, .flags_allowed = 0x0303, .spans = ta_msg_tel_trace_spans, .domains = ta_msg_tel_trace_domains },
+    { .kind = TA_MSG_TEL_TRACE, .ring = TA_RING_TEL, .span_count = 18, .domain_count = 1, .fixed_size = 296, .flags_allowed = 0x031F, .spans = ta_msg_tel_trace_spans, .domains = ta_msg_tel_trace_domains },
     { .kind = TA_MSG_TEL_DROPPED, .ring = TA_RING_TEL, .span_count = 0, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
 };
 _Static_assert(sizeof ta_msg_descriptors / sizeof ta_msg_descriptors[0] == 38, "every message has a descriptor");

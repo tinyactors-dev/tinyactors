@@ -32,7 +32,7 @@ module RingProto
       time: 'uint64_t', seq: 'uint64_t', session: 'uint64_t', macrostep: 'uint64_t', vref: 'uint64_t', blob: 'uint64_t'
     }.freeze
     SPAN_TYPES = %i[span text bytes].freeze
-    MAX_SPANS = 7
+    MAX_SPANS = 20
     DOMAIN_BITS = 64
 
     ASCII = { '’' => "'", '‘' => "'", '“' => '"', '”' => '"', '→' => '->', '—' => '--', '–' => '-', '…' => '...',
@@ -144,7 +144,7 @@ module RingProto
     end
 
     # TA_RECORD_FIXED_MAX in src/record.h.
-    FIXED_MAX = 128
+    FIXED_MAX = 320
 
     def infos(model) = model.messages.map { |msg| classify(model, msg) }
 

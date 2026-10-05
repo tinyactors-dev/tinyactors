@@ -1905,18 +1905,18 @@
       "code": 769,
       "ring": "tel",
       "summary": "One trace record (core ADR 0067)",
-      "doc": "The fields of ta_trace_record that its kind names. Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring.",
+      "doc": "One ta_trace_record, with every field the OTLP encoder reads (core ADR 0098 section 3): the fields its kind names, and zero or NONE for the rest. The header carries the key (session) and the clock (at). Names and values are text, so the record needs no system to read: event names, send and invoke IDs, the data names, a fault’s detail, message and data, and every value, rendered by core when the record is written. A value is cut at the parameter telemetryValueBytes (truncated); vrefs never go on a lossy ring. IDs that name things in a definition (states, transitions, actions, expressions) are numbers: the definition they belong to is named by `definition`.\n\nA record that does not name an item has NONE (0xFFFFFFFF) in its ID fields (state, at_state, at_transition, at_action, action, expr) and 0 in the rest. `transitions`, `exited`, `entered`, `history` and `states` are lists of u32 IDs, little arrays in the tail: read each with memcpy, since their offsets are not aligned.",
       "fields": [
         {
           "name": "macrostep",
           "type": "macrostep",
-          "doc": "",
+          "doc": "the key: macrostep (its session is the header’s)",
           "offset": 32
         },
         {
           "name": "trace_id_high",
           "type": "u64",
-          "doc": "",
+          "doc": "the context: the trace ID",
           "offset": 40
         },
         {
@@ -1928,7 +1928,7 @@
         {
           "name": "cause_session",
           "type": "session",
-          "doc": "",
+          "doc": "the cause’s key; session 0 is the host’s, with its parent span ID as macrostep",
           "offset": 56
         },
         {
@@ -1938,86 +1938,275 @@
           "offset": 64
         },
         {
+          "name": "actor",
+          "type": "u64",
+          "doc": "ta_actor_id",
+          "offset": 72
+        },
+        {
+          "name": "definition",
+          "type": "u64",
+          "doc": "ta_definition_id",
+          "offset": 80
+        },
+        {
           "name": "microstep",
           "type": "u32",
+          "doc": "the key: microstep, 0 for the macrostep itself",
+          "offset": 88
+        },
+        {
+          "name": "family",
+          "type": "u32",
+          "doc": "the key: the session’s definition family, an atom (0: none)",
+          "offset": 92
+        },
+        {
+          "name": "cause_microstep",
+          "type": "u32",
           "doc": "",
-          "offset": 72
+          "offset": 96
+        },
+        {
+          "name": "cause_family",
+          "type": "u32",
+          "doc": "",
+          "offset": 100
+        },
+        {
+          "name": "at_state",
+          "type": "u32",
+          "doc": "where in the macrostep: the state",
+          "offset": 104
+        },
+        {
+          "name": "at_transition",
+          "type": "u32",
+          "doc": "where: the transition",
+          "offset": 108
+        },
+        {
+          "name": "at_action",
+          "type": "u32",
+          "doc": "where: the action",
+          "offset": 112
+        },
+        {
+          "name": "at_iteration",
+          "type": "u32",
+          "doc": "where: the innermost <foreach> iteration",
+          "offset": 116
         },
         {
           "name": "state",
           "type": "u32",
-          "doc": "",
-          "offset": 76
+          "doc": "the record’s own state (final_state of MACROSTEP_END’s FINISHED, ...)",
+          "offset": 120
         },
         {
-          "name": "transition",
+          "name": "expr",
           "type": "u32",
-          "doc": "",
-          "offset": 80
+          "doc": "the expression the record is about",
+          "offset": 124
         },
         {
           "name": "action",
           "type": "u32",
-          "doc": "",
-          "offset": 84
+          "doc": "the action the record is about",
+          "offset": 128
         },
         {
           "name": "iteration",
           "type": "u32",
           "doc": "",
-          "offset": 88
+          "offset": 132
+        },
+        {
+          "name": "dropped",
+          "type": "u32",
+          "doc": "ABANDONED: the internal events discarded",
+          "offset": 136
+        },
+        {
+          "name": "fault_code",
+          "type": "u32",
+          "doc": "the fault’s code (an int32_t), when has_fault",
+          "offset": 140
         },
         {
           "name": "trace_kind",
           "type": "u16",
           "doc": "ta_trace_kind",
-          "offset": 92
+          "offset": 144
         },
         {
           "name": "position",
           "type": "u8",
           "doc": "ta_trace_at",
-          "offset": 94
+          "offset": 146
         },
         {
           "name": "result",
           "type": "bool",
-          "doc": "",
-          "offset": 95
+          "doc": "CONDITION: the result",
+          "offset": 147
+        },
+        {
+          "name": "event_type",
+          "type": "u8",
+          "doc": "ta_event_type of the named event, when has_event",
+          "offset": 148
+        },
+        {
+          "name": "context_flags",
+          "type": "u8",
+          "doc": "the context: W3C trace flags",
+          "offset": 149
+        },
+        {
+          "name": "context_detail",
+          "type": "u8",
+          "doc": "the context: local detail (watched)",
+          "offset": 150
+        },
+        {
+          "name": "event_name",
+          "type": "text",
+          "doc": "the event’s dotted name",
+          "offset": 152
+        },
+        {
+          "name": "event_send_id",
+          "type": "text",
+          "doc": "_event.sendid, or empty",
+          "offset": 160
+        },
+        {
+          "name": "event_invoke_id",
+          "type": "text",
+          "doc": "_event.invokeid, or empty",
+          "offset": 168
+        },
+        {
+          "name": "event_data",
+          "type": "text",
+          "doc": "_event.data as text, or empty",
+          "offset": 176
         },
         {
           "name": "name",
           "type": "text",
-          "doc": "",
-          "offset": 96
+          "doc": "the data item’s name (DATA, ASSIGN), or empty",
+          "offset": 184
         },
         {
-          "name": "value_text",
+          "name": "send",
           "type": "text",
-          "doc": "",
-          "offset": 104
+          "doc": "the send ID of SENT, CANCEL and WITHDRAWN records, or empty",
+          "offset": 192
+        },
+        {
+          "name": "invoke",
+          "type": "text",
+          "doc": "the invoke ID of INVOKED, INVOKE_CANCEL and FORWARDED records, or empty",
+          "offset": 200
+        },
+        {
+          "name": "value",
+          "type": "text",
+          "doc": "the value as text, when has_value",
+          "offset": 208
+        },
+        {
+          "name": "fault_detail",
+          "type": "text",
+          "doc": "the fault’s detail event name",
+          "offset": 216
+        },
+        {
+          "name": "fault_message",
+          "type": "text",
+          "doc": "the fault’s message",
+          "offset": 224
+        },
+        {
+          "name": "fault_data",
+          "type": "text",
+          "doc": "the fault’s data as text, or empty",
+          "offset": 232
+        },
+        {
+          "name": "identity_family",
+          "type": "text",
+          "doc": "DEFINITION_* kinds: the definition’s family",
+          "offset": 240
+        },
+        {
+          "name": "identity_revision",
+          "type": "bytes",
+          "doc": "DEFINITION_* kinds: the definition’s revision",
+          "offset": 248
+        },
+        {
+          "name": "transitions",
+          "type": "bytes",
+          "doc": "u32 transition IDs",
+          "offset": 256
+        },
+        {
+          "name": "exited",
+          "type": "bytes",
+          "doc": "u32 state IDs",
+          "offset": 264
+        },
+        {
+          "name": "entered",
+          "type": "bytes",
+          "doc": "u32 state IDs",
+          "offset": 272
+        },
+        {
+          "name": "history",
+          "type": "bytes",
+          "doc": "u32 state IDs",
+          "offset": 280
         },
         {
           "name": "states",
           "type": "bytes",
-          "doc": "u32 state IDs: exited, entered, history, counted in the tail",
-          "offset": 112
+          "doc": "u32 state IDs",
+          "offset": 288
         }
       ],
       "flags": [
         {
           "name": "truncated",
           "bit": 0,
-          "doc": "value_text was cut"
+          "doc": "a value, event data or fault data was cut at telemetryValueBytes"
         },
         {
           "name": "suppressed",
           "bit": 1,
           "doc": "an effect a replaying session did not perform"
+        },
+        {
+          "name": "has_event",
+          "bit": 2,
+          "doc": "the record names an event: event_type and the event_* texts are meaningful"
+        },
+        {
+          "name": "has_value",
+          "bit": 3,
+          "doc": "the record carries a value: `value` is its text (empty when the data model has none)"
+        },
+        {
+          "name": "has_fault",
+          "bit": 4,
+          "doc": "the record carries a fault: fault_code and the fault_* texts are meaningful"
         }
       ],
       "replies": [],
-      "fixed_size": 120,
+      "fixed_size": 296,
       "see": []
     },
     {

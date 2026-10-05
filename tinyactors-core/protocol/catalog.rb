@@ -613,27 +613,72 @@ end
 # ---------------------------------------------------------------- tel
 
 message 'tel.trace', code: 0x0301, summary: 'One trace record (core ADR 0067)' do
-  doc 'The fields of ta_trace_record that its kind names. Values are ' \
-      'text the data model renders (value_text), cut at the parameter ' \
-      'telemetryValueBytes; vrefs never go on a lossy ring.'
-  flag :truncated, 0, 'value_text was cut'
+  doc 'One ta_trace_record, with every field the OTLP encoder reads (core ' \
+      'ADR 0098 section 3): the fields its kind names, and zero or NONE for ' \
+      'the rest. The header carries the key (session) and the clock (at). ' \
+      'Names and values are text, so the record needs no system to read: ' \
+      'event names, send and invoke IDs, the data names, a fault’s ' \
+      'detail, message and data, and every value, rendered by core when the ' \
+      'record is written. A value is cut at the parameter ' \
+      'telemetryValueBytes (truncated); vrefs never go on a lossy ring. IDs ' \
+      'that name things in a definition (states, transitions, actions, ' \
+      'expressions) are numbers: the definition they belong to is named by ' \
+      '`definition`.'
+  doc 'A record that does not name an item has NONE (0xFFFFFFFF) in its ID ' \
+      'fields (state, at_state, at_transition, at_action, action, expr) and ' \
+      '0 in the rest. `transitions`, `exited`, `entered`, `history` and ' \
+      '`states` are lists of u32 IDs, little arrays in the tail: read each ' \
+      'with memcpy, since their offsets are not aligned.'
+  flag :truncated, 0, 'a value, event data or fault data was cut at telemetryValueBytes'
   flag :suppressed, 1, 'an effect a replaying session did not perform'
-  field :macrostep, :macrostep
-  field :trace_id_high, :u64
+  flag :has_event, 2, 'the record names an event: event_type and the event_* texts are meaningful'
+  flag :has_value, 3, 'the record carries a value: `value` is its text (empty when the data model has none)'
+  flag :has_fault, 4, 'the record carries a fault: fault_code and the fault_* texts are meaningful'
+  field :macrostep, :macrostep, 'the key: macrostep (its session is the header’s)'
+  field :trace_id_high, :u64, 'the context: the trace ID'
   field :trace_id_low, :u64
-  field :cause_session, :session
+  field :cause_session, :session, 'the cause’s key; session 0 is the host’s, with its parent span ID as macrostep'
   field :cause_macrostep, :macrostep
-  field :microstep, :u32
-  field :state, :u32
-  field :transition, :u32
-  field :action, :u32
+  field :actor, :u64, 'ta_actor_id'
+  field :definition, :u64, 'ta_definition_id'
+  field :microstep, :u32, 'the key: microstep, 0 for the macrostep itself'
+  field :family, :u32, 'the key: the session’s definition family, an atom (0: none)'
+  field :cause_microstep, :u32
+  field :cause_family, :u32
+  field :at_state, :u32, 'where in the macrostep: the state'
+  field :at_transition, :u32, 'where: the transition'
+  field :at_action, :u32, 'where: the action'
+  field :at_iteration, :u32, 'where: the innermost <foreach> iteration'
+  field :state, :u32, 'the record’s own state (final_state of MACROSTEP_END’s FINISHED, ...)'
+  field :expr, :u32, 'the expression the record is about'
+  field :action, :u32, 'the action the record is about'
   field :iteration, :u32
+  field :dropped, :u32, 'ABANDONED: the internal events discarded'
+  field :fault_code, :u32, 'the fault’s code (an int32_t), when has_fault'
   field :trace_kind, :u16, 'ta_trace_kind'
   field :position, :u8, 'ta_trace_at'
-  field :result, :bool
-  field :name, :text
-  field :value_text, :text
-  field :states, :bytes, 'u32 state IDs: exited, entered, history, counted in the tail'
+  field :result, :bool, 'CONDITION: the result'
+  field :event_type, :u8, 'ta_event_type of the named event, when has_event'
+  field :context_flags, :u8, 'the context: W3C trace flags'
+  field :context_detail, :u8, 'the context: local detail (watched)'
+  field :event_name, :text, 'the event’s dotted name'
+  field :event_send_id, :text, '_event.sendid, or empty'
+  field :event_invoke_id, :text, '_event.invokeid, or empty'
+  field :event_data, :text, '_event.data as text, or empty'
+  field :name, :text, 'the data item’s name (DATA, ASSIGN), or empty'
+  field :send, :text, 'the send ID of SENT, CANCEL and WITHDRAWN records, or empty'
+  field :invoke, :text, 'the invoke ID of INVOKED, INVOKE_CANCEL and FORWARDED records, or empty'
+  field :value, :text, 'the value as text, when has_value'
+  field :fault_detail, :text, 'the fault’s detail event name'
+  field :fault_message, :text, 'the fault’s message'
+  field :fault_data, :text, 'the fault’s data as text, or empty'
+  field :identity_family, :text, 'DEFINITION_* kinds: the definition’s family'
+  field :identity_revision, :bytes, 'DEFINITION_* kinds: the definition’s revision'
+  field :transitions, :bytes, 'u32 transition IDs'
+  field :exited, :bytes, 'u32 state IDs'
+  field :entered, :bytes, 'u32 state IDs'
+  field :history, :bytes, 'u32 state IDs'
+  field :states, :bytes, 'u32 state IDs'
 end
 
 message 'tel.dropped', code: 0x0302, summary: 'Telemetry records were dropped' do

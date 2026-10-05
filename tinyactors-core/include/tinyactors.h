@@ -3820,8 +3820,8 @@ typedef enum {
     TA_PARAM_MAX_PENDING_SENDS,    /* quota: pending delayed sends of one actor */
     TA_PARAM_MAX_DEFINITIONS,      /* quota: live definitions */
     TA_PARAM_TEL_BYTES,            /* the telemetry ring, in bytes: a multiple of 8, at least maxRecordBytes (ADR 0098) */
-    TA_PARAM_MAX_RECORD_BYTES,     /* the largest record on any ring, a multiple of 8, 256 to telBytes (ADR 0098) */
-    TA_PARAM_TELEMETRY_VALUE_BYTES,/* bytes kept of one value rendered into a tel record, at most maxRecordBytes - 256 */
+    TA_PARAM_MAX_RECORD_BYTES,     /* the largest record on any ring, a multiple of 8, 512 to telBytes (ADR 0098) */
+    TA_PARAM_TELEMETRY_VALUE_BYTES,/* bytes kept of one value rendered into a tel record, at most maxRecordBytes - 512 */
     TA_PARAM_COUNT
 } ta_param TA_SYMBOLS("TA_PARAM_");
 
@@ -3871,7 +3871,8 @@ TA_API ta_result ta_param_info_of(ta_param param, TA_OUT TA_LIFETIME(call) ta_pa
  * created. Three parameters also bound one another (ADR 0098 section 6):
  * telBytes and maxRecordBytes are multiples of 8 (the ring's unit),
  * maxRecordBytes is at most telBytes, and telemetryValueBytes is at most
- * maxRecordBytes - 256. A pair that breaks one of these is refused the same
+ * maxRecordBytes - 512 (a tel.trace record's fixed part is 296 bytes, which the
+ * ADR's 256 did not leave room for). A pair that breaks one of these is refused the same
  * way, `rejected` naming the later parameter of the pair in the order above
  * when the caller set both, and the one it set otherwise. TA_ERR_NOMEM: the buffers the parameters size could not be
  * allocated.

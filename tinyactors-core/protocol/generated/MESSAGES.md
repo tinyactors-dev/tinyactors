@@ -55,7 +55,7 @@ Generated from [`catalog.rb`](../catalog.rb) by `mise run protocol` in tinyactor
 | `0x0213` | [`c2h.input_refused`](#c2hinput_refused) | An admitted host input was not taken | 48 |
 | `0x0214` | [`c2h.input_completed`](#c2hinput_completed) | A host input and its startup follow-up settled | 56 |
 | `0x0215` | [`c2h.load_result`](#c2hload_result) | A load-failure response finished recycling waiting inputs | 48 |
-| `0x0301` | [`tel.trace`](#teltrace) | One trace record (core ADR 0067) | 120 |
+| `0x0301` | [`tel.trace`](#teltrace) | One trace record (core ADR 0067) | 296 |
 | `0x0302` | [`tel.dropped`](#teldropped) | Telemetry records were dropped | 48 |
 
 ## Common header (32 bytes)
@@ -624,31 +624,65 @@ Acknowledges h2c.load_failed after all waiting envelopes were recycled or refuse
 
 ## tel.trace
 
-`0x0301` on `tel`, 120 fixed bytes. One trace record (core ADR 0067).
+`0x0301` on `tel`, 296 fixed bytes. One trace record (core ADR 0067).
 
-The fields of ta_trace_record that its kind names. Values are text the data model renders (value_text), cut at the parameter telemetryValueBytes; vrefs never go on a lossy ring.
+One ta_trace_record, with every field the OTLP encoder reads (core ADR 0098 section 3): the fields its kind names, and zero or NONE for the rest. The header carries the key (session) and the clock (at). Names and values are text, so the record needs no system to read: event names, send and invoke IDs, the data names, a fault’s detail, message and data, and every value, rendered by core when the record is written. A value is cut at the parameter telemetryValueBytes (truncated); vrefs never go on a lossy ring. IDs that name things in a definition (states, transitions, actions, expressions) are numbers: the definition they belong to is named by `definition`.
+
+A record that does not name an item has NONE (0xFFFFFFFF) in its ID fields (state, at_state, at_transition, at_action, action, expr) and 0 in the rest. `transitions`, `exited`, `entered`, `history` and `states` are lists of u32 IDs, little arrays in the tail: read each with memcpy, since their offsets are not aligned.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 32 | `macrostep` | macrostep |  |
-| 40 | `trace_id_high` | u64 |  |
+| 32 | `macrostep` | macrostep | the key: macrostep (its session is the header’s) |
+| 40 | `trace_id_high` | u64 | the context: the trace ID |
 | 48 | `trace_id_low` | u64 |  |
-| 56 | `cause_session` | session |  |
+| 56 | `cause_session` | session | the cause’s key; session 0 is the host’s, with its parent span ID as macrostep |
 | 64 | `cause_macrostep` | macrostep |  |
-| 72 | `microstep` | u32 |  |
-| 76 | `state` | u32 |  |
-| 80 | `transition` | u32 |  |
-| 84 | `action` | u32 |  |
-| 88 | `iteration` | u32 |  |
-| 92 | `trace_kind` | u16 | ta_trace_kind |
-| 94 | `position` | u8 | ta_trace_at |
-| 95 | `result` | bool |  |
-| 96 | `name` | text |  |
-| 104 | `value_text` | text |  |
-| 112 | `states` | bytes | u32 state IDs: exited, entered, history, counted in the tail |
+| 72 | `actor` | u64 | ta_actor_id |
+| 80 | `definition` | u64 | ta_definition_id |
+| 88 | `microstep` | u32 | the key: microstep, 0 for the macrostep itself |
+| 92 | `family` | u32 | the key: the session’s definition family, an atom (0: none) |
+| 96 | `cause_microstep` | u32 |  |
+| 100 | `cause_family` | u32 |  |
+| 104 | `at_state` | u32 | where in the macrostep: the state |
+| 108 | `at_transition` | u32 | where: the transition |
+| 112 | `at_action` | u32 | where: the action |
+| 116 | `at_iteration` | u32 | where: the innermost <foreach> iteration |
+| 120 | `state` | u32 | the record’s own state (final_state of MACROSTEP_END’s FINISHED, ...) |
+| 124 | `expr` | u32 | the expression the record is about |
+| 128 | `action` | u32 | the action the record is about |
+| 132 | `iteration` | u32 |  |
+| 136 | `dropped` | u32 | ABANDONED: the internal events discarded |
+| 140 | `fault_code` | u32 | the fault’s code (an int32_t), when has_fault |
+| 144 | `trace_kind` | u16 | ta_trace_kind |
+| 146 | `position` | u8 | ta_trace_at |
+| 147 | `result` | bool | CONDITION: the result |
+| 148 | `event_type` | u8 | ta_event_type of the named event, when has_event |
+| 149 | `context_flags` | u8 | the context: W3C trace flags |
+| 150 | `context_detail` | u8 | the context: local detail (watched) |
+| 152 | `event_name` | text | the event’s dotted name |
+| 160 | `event_send_id` | text | _event.sendid, or empty |
+| 168 | `event_invoke_id` | text | _event.invokeid, or empty |
+| 176 | `event_data` | text | _event.data as text, or empty |
+| 184 | `name` | text | the data item’s name (DATA, ASSIGN), or empty |
+| 192 | `send` | text | the send ID of SENT, CANCEL and WITHDRAWN records, or empty |
+| 200 | `invoke` | text | the invoke ID of INVOKED, INVOKE_CANCEL and FORWARDED records, or empty |
+| 208 | `value` | text | the value as text, when has_value |
+| 216 | `fault_detail` | text | the fault’s detail event name |
+| 224 | `fault_message` | text | the fault’s message |
+| 232 | `fault_data` | text | the fault’s data as text, or empty |
+| 240 | `identity_family` | text | DEFINITION_* kinds: the definition’s family |
+| 248 | `identity_revision` | bytes | DEFINITION_* kinds: the definition’s revision |
+| 256 | `transitions` | bytes | u32 transition IDs |
+| 264 | `exited` | bytes | u32 state IDs |
+| 272 | `entered` | bytes | u32 state IDs |
+| 280 | `history` | bytes | u32 state IDs |
+| 288 | `states` | bytes | u32 state IDs |
 
-- flag bit 0 `truncated`: value_text was cut
+- flag bit 0 `truncated`: a value, event data or fault data was cut at telemetryValueBytes
 - flag bit 1 `suppressed`: an effect a replaying session did not perform
+- flag bit 2 `has_event`: the record names an event: event_type and the event_* texts are meaningful
+- flag bit 3 `has_value`: the record carries a value: `value` is its text (empty when the data model has none)
+- flag bit 4 `has_fault`: the record carries a fault: fault_code and the fault_* texts are meaningful
 
 ## tel.dropped
 

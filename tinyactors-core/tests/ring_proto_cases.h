@@ -1087,7 +1087,7 @@ _Static_assert(sizeof(ta_msg_tel_trace) <= RING_PROTO_CASE_DATA_BYTES, "tel.trac
 static void case_tel_trace_fill(void *p, uint32_t seed, const uint8_t *pool) {
     ta_msg_tel_trace *d = p;
     ta_mem_zero(d, sizeof *d);
-    d->head.flags = (uint16_t)(ring_proto_mix(seed, 0) & 0x0303u);
+    d->head.flags = (uint16_t)(ring_proto_mix(seed, 0) & 0x031Fu);
     d->head.session = ring_proto_mix(seed, 1);
     d->head.at = ring_proto_mix(seed, 2);
     d->macrostep = (uint64_t)ring_proto_mix(seed, 3);
@@ -1095,17 +1095,46 @@ static void case_tel_trace_fill(void *p, uint32_t seed, const uint8_t *pool) {
     d->trace_id_low = (uint64_t)ring_proto_mix(seed, 5);
     d->cause_session = (uint64_t)ring_proto_mix(seed, 6);
     d->cause_macrostep = (uint64_t)ring_proto_mix(seed, 7);
-    d->microstep = (uint32_t)ring_proto_mix(seed, 8);
-    d->state = (uint32_t)ring_proto_mix(seed, 9);
-    d->transition = (uint32_t)ring_proto_mix(seed, 10);
-    d->action = (uint32_t)ring_proto_mix(seed, 11);
-    d->iteration = (uint32_t)ring_proto_mix(seed, 12);
-    d->trace_kind = (uint16_t)ring_proto_mix(seed, 13);
-    d->position = (uint8_t)ring_proto_mix(seed, 14);
-    d->result = (uint8_t)(ring_proto_mix(seed, 15) & 1u);
-    d->name = ring_proto_view(pool, ring_proto_mix(seed, 16));
-    d->value_text = ring_proto_view(pool, ring_proto_mix(seed, 17));
-    d->states = ring_proto_view(pool, ring_proto_mix(seed, 18));
+    d->actor = (uint64_t)ring_proto_mix(seed, 8);
+    d->definition = (uint64_t)ring_proto_mix(seed, 9);
+    d->microstep = (uint32_t)ring_proto_mix(seed, 10);
+    d->family = (uint32_t)ring_proto_mix(seed, 11);
+    d->cause_microstep = (uint32_t)ring_proto_mix(seed, 12);
+    d->cause_family = (uint32_t)ring_proto_mix(seed, 13);
+    d->at_state = (uint32_t)ring_proto_mix(seed, 14);
+    d->at_transition = (uint32_t)ring_proto_mix(seed, 15);
+    d->at_action = (uint32_t)ring_proto_mix(seed, 16);
+    d->at_iteration = (uint32_t)ring_proto_mix(seed, 17);
+    d->state = (uint32_t)ring_proto_mix(seed, 18);
+    d->expr = (uint32_t)ring_proto_mix(seed, 19);
+    d->action = (uint32_t)ring_proto_mix(seed, 20);
+    d->iteration = (uint32_t)ring_proto_mix(seed, 21);
+    d->dropped = (uint32_t)ring_proto_mix(seed, 22);
+    d->fault_code = (uint32_t)ring_proto_mix(seed, 23);
+    d->trace_kind = (uint16_t)ring_proto_mix(seed, 24);
+    d->position = (uint8_t)ring_proto_mix(seed, 25);
+    d->result = (uint8_t)(ring_proto_mix(seed, 26) & 1u);
+    d->event_type = (uint8_t)ring_proto_mix(seed, 27);
+    d->context_flags = (uint8_t)ring_proto_mix(seed, 28);
+    d->context_detail = (uint8_t)ring_proto_mix(seed, 29);
+    d->event_name = ring_proto_view(pool, ring_proto_mix(seed, 30));
+    d->event_send_id = ring_proto_view(pool, ring_proto_mix(seed, 31));
+    d->event_invoke_id = ring_proto_view(pool, ring_proto_mix(seed, 32));
+    d->event_data = ring_proto_view(pool, ring_proto_mix(seed, 33));
+    d->name = ring_proto_view(pool, ring_proto_mix(seed, 34));
+    d->send = ring_proto_view(pool, ring_proto_mix(seed, 35));
+    d->invoke = ring_proto_view(pool, ring_proto_mix(seed, 36));
+    d->value = ring_proto_view(pool, ring_proto_mix(seed, 37));
+    d->fault_detail = ring_proto_view(pool, ring_proto_mix(seed, 38));
+    d->fault_message = ring_proto_view(pool, ring_proto_mix(seed, 39));
+    d->fault_data = ring_proto_view(pool, ring_proto_mix(seed, 40));
+    d->identity_family = ring_proto_view(pool, ring_proto_mix(seed, 41));
+    d->identity_revision = ring_proto_view(pool, ring_proto_mix(seed, 42));
+    d->transitions = ring_proto_view(pool, ring_proto_mix(seed, 43));
+    d->exited = ring_proto_view(pool, ring_proto_mix(seed, 44));
+    d->entered = ring_proto_view(pool, ring_proto_mix(seed, 45));
+    d->history = ring_proto_view(pool, ring_proto_mix(seed, 46));
+    d->states = ring_proto_view(pool, ring_proto_mix(seed, 47));
     (void)pool;
 }
 static bool case_tel_trace_equal(const void *pa, const void *pb) {
@@ -1119,16 +1148,45 @@ static bool case_tel_trace_equal(const void *pa, const void *pb) {
            a->trace_id_low == b->trace_id_low &&
            a->cause_session == b->cause_session &&
            a->cause_macrostep == b->cause_macrostep &&
+           a->actor == b->actor &&
+           a->definition == b->definition &&
            a->microstep == b->microstep &&
+           a->family == b->family &&
+           a->cause_microstep == b->cause_microstep &&
+           a->cause_family == b->cause_family &&
+           a->at_state == b->at_state &&
+           a->at_transition == b->at_transition &&
+           a->at_action == b->at_action &&
+           a->at_iteration == b->at_iteration &&
            a->state == b->state &&
-           a->transition == b->transition &&
+           a->expr == b->expr &&
            a->action == b->action &&
            a->iteration == b->iteration &&
+           a->dropped == b->dropped &&
+           a->fault_code == b->fault_code &&
            a->trace_kind == b->trace_kind &&
            a->position == b->position &&
            a->result == b->result &&
+           a->event_type == b->event_type &&
+           a->context_flags == b->context_flags &&
+           a->context_detail == b->context_detail &&
+           ring_proto_same(a->event_name, b->event_name) &&
+           ring_proto_same(a->event_send_id, b->event_send_id) &&
+           ring_proto_same(a->event_invoke_id, b->event_invoke_id) &&
+           ring_proto_same(a->event_data, b->event_data) &&
            ring_proto_same(a->name, b->name) &&
-           ring_proto_same(a->value_text, b->value_text) &&
+           ring_proto_same(a->send, b->send) &&
+           ring_proto_same(a->invoke, b->invoke) &&
+           ring_proto_same(a->value, b->value) &&
+           ring_proto_same(a->fault_detail, b->fault_detail) &&
+           ring_proto_same(a->fault_message, b->fault_message) &&
+           ring_proto_same(a->fault_data, b->fault_data) &&
+           ring_proto_same(a->identity_family, b->identity_family) &&
+           ring_proto_same(a->identity_revision, b->identity_revision) &&
+           ring_proto_same(a->transitions, b->transitions) &&
+           ring_proto_same(a->exited, b->exited) &&
+           ring_proto_same(a->entered, b->entered) &&
+           ring_proto_same(a->history, b->history) &&
            ring_proto_same(a->states, b->states);
 }
 static ta_result case_tel_trace_size(const void *data, uint32_t *size) { return ta_msg_tel_trace_size(data, size); }
@@ -1233,7 +1291,7 @@ static const ring_proto_case ring_proto_cases[] = {
       case_c2h_input_completed_size, case_c2h_input_completed_write, case_c2h_input_completed_get },
     { "c2h.load_result", TA_MSG_C2H_LOAD_RESULT, 0, case_c2h_load_result_fill, case_c2h_load_result_equal,
       case_c2h_load_result_size, case_c2h_load_result_write, case_c2h_load_result_get },
-    { "tel.trace", TA_MSG_TEL_TRACE, 3, case_tel_trace_fill, case_tel_trace_equal,
+    { "tel.trace", TA_MSG_TEL_TRACE, 18, case_tel_trace_fill, case_tel_trace_equal,
       case_tel_trace_size, case_tel_trace_write, case_tel_trace_get },
     { "tel.dropped", TA_MSG_TEL_DROPPED, 0, case_tel_dropped_fill, case_tel_dropped_equal,
       case_tel_dropped_size, case_tel_dropped_write, case_tel_dropped_get },

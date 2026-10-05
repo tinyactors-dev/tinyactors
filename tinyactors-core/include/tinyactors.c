@@ -1444,7 +1444,7 @@ TA_PRIVATE void ta_ring_advance(ta_ring *ring);
 
 #define TA_RECORD_HEADER_BYTES 32u
 /* The largest fixed part (header included) of any message: the size of the snapshot in a ta_record. The generator checks the catalog against it. */
-#define TA_RECORD_FIXED_MAX 128u
+#define TA_RECORD_FIXED_MAX 320u
 /* An enum or bool field holds a value below this; its set of allowed values is a 64-bit mask. */
 #define TA_RECORD_DOMAIN_BITS 64u
 
@@ -1695,7 +1695,7 @@ TA_PRIVATE void ta_record_put_span(ta_record_tail *tail, ta_span32 *span, ta_byt
  * long as they exist, and text is not checked for UTF-8.
  *
  * Complexity. Every function is O(fixed fields + spans) plus the copy of the
- * span bytes, with no recursion and O(1) stack (the largest wire struct is 128
+ * span bytes, with no recursion and O(1) stack (the largest wire struct is 320
  * bytes).
  *
  * Example, writing and reading a c2h record:
@@ -1780,8 +1780,11 @@ typedef enum ta_msg_c2h_input_completed_flag {
 
 /* tel.trace's own flags: bits 0..7 of the header's flags. */
 typedef enum ta_msg_tel_trace_flag {
-    TA_MSG_TEL_TRACE_TRUNCATED = 1 << 0, /* value_text was cut */
+    TA_MSG_TEL_TRACE_TRUNCATED = 1 << 0, /* a value, event data or fault data was cut at telemetryValueBytes */
     TA_MSG_TEL_TRACE_SUPPRESSED = 1 << 1, /* an effect a replaying session did not perform */
+    TA_MSG_TEL_TRACE_HAS_EVENT = 1 << 2, /* the record names an event: event_type and the event_* texts are meaningful */
+    TA_MSG_TEL_TRACE_HAS_VALUE = 1 << 3, /* the record carries a value: `value` is its text (empty when the data model has none) */
+    TA_MSG_TEL_TRACE_HAS_FAULT = 1 << 4, /* the record carries a fault: fault_code and the fault_* texts are meaningful */
 } ta_msg_tel_trace_flag;
 
 /* What _event.type says (SCXML 5.10.1). Stored as uint8_t. */
@@ -4752,33 +4755,82 @@ TA_PRIVATE ta_result ta_msg_c2h_load_result_get(const ta_record *record, ta_msg_
 /*
  * tel.trace: One trace record (core ADR 0067).
  *
- * The fields of ta_trace_record that its kind names. Values are text the data
- * model renders (value_text), cut at the parameter telemetryValueBytes; vrefs
- * never go on a lossy ring.
+ * One ta_trace_record, with every field the OTLP encoder reads (core ADR 0098
+ * section 3): the fields its kind names, and zero or NONE for the rest. The
+ * header carries the key (session) and the clock (at). Names and values are
+ * text, so the record needs no system to read: event names, send and invoke
+ * IDs, the data names, a fault's detail, message and data, and every value,
+ * rendered by core when the record is written. A value is cut at the parameter
+ * telemetryValueBytes (truncated); vrefs never go on a lossy ring. IDs that
+ * name things in a definition (states, transitions, actions, expressions) are
+ * numbers: the definition they belong to is named by `definition`.
  *
- * Ring tel, kind 0x0301, 120 fixed bytes, 3 spans.
+ * A record that does not name an item has NONE (0xFFFFFFFF) in its ID fields
+ * (state, at_state, at_transition, at_action, action, expr) and 0 in the rest.
+ * `transitions`, `exited`, `entered`, `history` and `states` are lists of u32
+ * IDs, little arrays in the tail: read each with memcpy, since their offsets
+ * are not aligned.
+ *
+ * Ring tel, kind 0x0301, 296 fixed bytes, 18 spans.
  *
  * Fields:
- *   macrostep (macrostep): a macrostep's number within its session
- *   trace_id_high (u64): unsigned 64-bit integer
+ *   macrostep (macrostep): the key: macrostep (its session is the header's)
+ *   trace_id_high (u64): the context: the trace ID
  *   trace_id_low (u64): unsigned 64-bit integer
- *   cause_session (session): a session ID (core ADR 0066); 0 means the system
- *       itself
+ *   cause_session (session): the cause's key; session 0 is the host's, with
+ *       its parent span ID as macrostep
  *   cause_macrostep (macrostep): a macrostep's number within its session
- *   microstep (u32): unsigned 32-bit integer
- *   state (u32): unsigned 32-bit integer
- *   transition (u32): unsigned 32-bit integer
- *   action (u32): unsigned 32-bit integer
+ *   actor (u64): ta_actor_id
+ *   definition (u64): ta_definition_id
+ *   microstep (u32): the key: microstep, 0 for the macrostep itself
+ *   family (u32): the key: the session's definition family, an atom (0: none)
+ *   cause_microstep (u32): unsigned 32-bit integer
+ *   cause_family (u32): unsigned 32-bit integer
+ *   at_state (u32): where in the macrostep: the state
+ *   at_transition (u32): where: the transition
+ *   at_action (u32): where: the action
+ *   at_iteration (u32): where: the innermost <foreach> iteration
+ *   state (u32): the record's own state (final_state of MACROSTEP_END's
+ *       FINISHED, ...)
+ *   expr (u32): the expression the record is about
+ *   action (u32): the action the record is about
  *   iteration (u32): unsigned 32-bit integer
+ *   dropped (u32): ABANDONED: the internal events discarded
+ *   fault_code (u32): the fault's code (an int32_t), when has_fault
  *   trace_kind (u16): ta_trace_kind
  *   position (u8): ta_trace_at
- *   result (bool): 0 or 1
- *   name (text): a span of UTF-8 text in the tail
- *   value_text (text): a span of UTF-8 text in the tail
- *   states (bytes): u32 state IDs: exited, entered, history, counted in the
- *       tail
- *   flag truncated (bit 0): value_text was cut
+ *   result (bool): CONDITION: the result
+ *   event_type (u8): ta_event_type of the named event, when has_event
+ *   context_flags (u8): the context: W3C trace flags
+ *   context_detail (u8): the context: local detail (watched)
+ *   event_name (text): the event's dotted name
+ *   event_send_id (text): _event.sendid, or empty
+ *   event_invoke_id (text): _event.invokeid, or empty
+ *   event_data (text): _event.data as text, or empty
+ *   name (text): the data item's name (DATA, ASSIGN), or empty
+ *   send (text): the send ID of SENT, CANCEL and WITHDRAWN records, or empty
+ *   invoke (text): the invoke ID of INVOKED, INVOKE_CANCEL and FORWARDED
+ *       records, or empty
+ *   value (text): the value as text, when has_value
+ *   fault_detail (text): the fault's detail event name
+ *   fault_message (text): the fault's message
+ *   fault_data (text): the fault's data as text, or empty
+ *   identity_family (text): DEFINITION_* kinds: the definition's family
+ *   identity_revision (bytes): DEFINITION_* kinds: the definition's revision
+ *   transitions (bytes): u32 transition IDs
+ *   exited (bytes): u32 state IDs
+ *   entered (bytes): u32 state IDs
+ *   history (bytes): u32 state IDs
+ *   states (bytes): u32 state IDs
+ *   flag truncated (bit 0): a value, event data or fault data was cut at
+ *       telemetryValueBytes
  *   flag suppressed (bit 1): an effect a replaying session did not perform
+ *   flag has_event (bit 2): the record names an event: event_type and the
+ *       event_* texts are meaningful
+ *   flag has_value (bit 3): the record carries a value: `value` is its text
+ *       (empty when the data model has none)
+ *   flag has_fault (bit 4): the record carries a fault: fault_code and the
+ *       fault_* texts are meaningful
  */
 typedef struct ta_msg_tel_trace_wire {
     ta_msg_wire_header header;
@@ -4787,35 +4839,94 @@ typedef struct ta_msg_tel_trace_wire {
     uint64_t trace_id_low;
     uint64_t cause_session;
     uint64_t cause_macrostep;
+    uint64_t actor;
+    uint64_t definition;
     uint32_t microstep;
+    uint32_t family;
+    uint32_t cause_microstep;
+    uint32_t cause_family;
+    uint32_t at_state;
+    uint32_t at_transition;
+    uint32_t at_action;
+    uint32_t at_iteration;
     uint32_t state;
-    uint32_t transition;
+    uint32_t expr;
     uint32_t action;
     uint32_t iteration;
+    uint32_t dropped;
+    uint32_t fault_code;
     uint16_t trace_kind;
     uint8_t position;
     uint8_t result;
+    uint8_t event_type;
+    uint8_t context_flags;
+    uint8_t context_detail;
+    uint8_t pad27[1];
+    ta_span32 event_name;
+    ta_span32 event_send_id;
+    ta_span32 event_invoke_id;
+    ta_span32 event_data;
     ta_span32 name;
-    ta_span32 value_text;
+    ta_span32 send;
+    ta_span32 invoke;
+    ta_span32 value;
+    ta_span32 fault_detail;
+    ta_span32 fault_message;
+    ta_span32 fault_data;
+    ta_span32 identity_family;
+    ta_span32 identity_revision;
+    ta_span32 transitions;
+    ta_span32 exited;
+    ta_span32 entered;
+    ta_span32 history;
     ta_span32 states;
 } ta_msg_tel_trace_wire;
-_Static_assert(sizeof(ta_msg_tel_trace_wire) == 120, "tel.trace");
+_Static_assert(sizeof(ta_msg_tel_trace_wire) == 296, "tel.trace");
 _Static_assert(offsetof(ta_msg_tel_trace_wire, macrostep) == 32, "tel.trace.macrostep");
 _Static_assert(offsetof(ta_msg_tel_trace_wire, trace_id_high) == 40, "tel.trace.trace_id_high");
 _Static_assert(offsetof(ta_msg_tel_trace_wire, trace_id_low) == 48, "tel.trace.trace_id_low");
 _Static_assert(offsetof(ta_msg_tel_trace_wire, cause_session) == 56, "tel.trace.cause_session");
 _Static_assert(offsetof(ta_msg_tel_trace_wire, cause_macrostep) == 64, "tel.trace.cause_macrostep");
-_Static_assert(offsetof(ta_msg_tel_trace_wire, microstep) == 72, "tel.trace.microstep");
-_Static_assert(offsetof(ta_msg_tel_trace_wire, state) == 76, "tel.trace.state");
-_Static_assert(offsetof(ta_msg_tel_trace_wire, transition) == 80, "tel.trace.transition");
-_Static_assert(offsetof(ta_msg_tel_trace_wire, action) == 84, "tel.trace.action");
-_Static_assert(offsetof(ta_msg_tel_trace_wire, iteration) == 88, "tel.trace.iteration");
-_Static_assert(offsetof(ta_msg_tel_trace_wire, trace_kind) == 92, "tel.trace.trace_kind");
-_Static_assert(offsetof(ta_msg_tel_trace_wire, position) == 94, "tel.trace.position");
-_Static_assert(offsetof(ta_msg_tel_trace_wire, result) == 95, "tel.trace.result");
-_Static_assert(offsetof(ta_msg_tel_trace_wire, name) == 96, "tel.trace.name");
-_Static_assert(offsetof(ta_msg_tel_trace_wire, value_text) == 104, "tel.trace.value_text");
-_Static_assert(offsetof(ta_msg_tel_trace_wire, states) == 112, "tel.trace.states");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, actor) == 72, "tel.trace.actor");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, definition) == 80, "tel.trace.definition");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, microstep) == 88, "tel.trace.microstep");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, family) == 92, "tel.trace.family");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, cause_microstep) == 96, "tel.trace.cause_microstep");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, cause_family) == 100, "tel.trace.cause_family");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, at_state) == 104, "tel.trace.at_state");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, at_transition) == 108, "tel.trace.at_transition");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, at_action) == 112, "tel.trace.at_action");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, at_iteration) == 116, "tel.trace.at_iteration");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, state) == 120, "tel.trace.state");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, expr) == 124, "tel.trace.expr");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, action) == 128, "tel.trace.action");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, iteration) == 132, "tel.trace.iteration");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, dropped) == 136, "tel.trace.dropped");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, fault_code) == 140, "tel.trace.fault_code");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, trace_kind) == 144, "tel.trace.trace_kind");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, position) == 146, "tel.trace.position");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, result) == 147, "tel.trace.result");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, event_type) == 148, "tel.trace.event_type");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, context_flags) == 149, "tel.trace.context_flags");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, context_detail) == 150, "tel.trace.context_detail");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, event_name) == 152, "tel.trace.event_name");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, event_send_id) == 160, "tel.trace.event_send_id");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, event_invoke_id) == 168, "tel.trace.event_invoke_id");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, event_data) == 176, "tel.trace.event_data");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, name) == 184, "tel.trace.name");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, send) == 192, "tel.trace.send");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, invoke) == 200, "tel.trace.invoke");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, value) == 208, "tel.trace.value");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, fault_detail) == 216, "tel.trace.fault_detail");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, fault_message) == 224, "tel.trace.fault_message");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, fault_data) == 232, "tel.trace.fault_data");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, identity_family) == 240, "tel.trace.identity_family");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, identity_revision) == 248, "tel.trace.identity_revision");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, transitions) == 256, "tel.trace.transitions");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, exited) == 264, "tel.trace.exited");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, entered) == 272, "tel.trace.entered");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, history) == 280, "tel.trace.history");
+_Static_assert(offsetof(ta_msg_tel_trace_wire, states) == 288, "tel.trace.states");
 
 typedef struct ta_msg_tel_trace {
     ta_msg_head head;
@@ -4824,26 +4935,58 @@ typedef struct ta_msg_tel_trace {
     uint64_t trace_id_low;
     uint64_t cause_session;
     uint64_t cause_macrostep;
+    uint64_t actor;
+    uint64_t definition;
     uint32_t microstep;
+    uint32_t family;
+    uint32_t cause_microstep;
+    uint32_t cause_family;
+    uint32_t at_state;
+    uint32_t at_transition;
+    uint32_t at_action;
+    uint32_t at_iteration;
     uint32_t state;
-    uint32_t transition;
+    uint32_t expr;
     uint32_t action;
     uint32_t iteration;
+    uint32_t dropped;
+    uint32_t fault_code;
     uint16_t trace_kind;
     uint8_t position;
     uint8_t result;
+    uint8_t event_type;
+    uint8_t context_flags;
+    uint8_t context_detail;
+    ta_bytes event_name;
+    ta_bytes event_send_id;
+    ta_bytes event_invoke_id;
+    ta_bytes event_data;
     ta_bytes name;
-    ta_bytes value_text;
+    ta_bytes send;
+    ta_bytes invoke;
+    ta_bytes value;
+    ta_bytes fault_detail;
+    ta_bytes fault_message;
+    ta_bytes fault_data;
+    ta_bytes identity_family;
+    ta_bytes identity_revision;
+    ta_bytes transitions;
+    ta_bytes exited;
+    ta_bytes entered;
+    ta_bytes history;
     ta_bytes states;
 } ta_msg_tel_trace;
 
 /*
  * ta_msg_tel_trace_size sets *size to the exact size in bytes of the tel.trace
- * record that ta_msg_tel_trace_write stores for data: 120 fixed bytes and the
- * bytes of its 3 spans (name, value_text, states), rounded up to a multiple of
- * 8. It never allocates. TA_ERR_NOMEM: the total does not fit a u32 (or
- * size_t), and *size is untouched. TA_ERR_INVALID: a ta_bytes has a length and
- * no pointer, and *size is untouched. data and size must not be NULL.
+ * record that ta_msg_tel_trace_write stores for data: 296 fixed bytes and the
+ * bytes of its 18 spans (event_name, event_send_id, event_invoke_id,
+ * event_data, name, send, invoke, value, fault_detail, fault_message,
+ * fault_data, identity_family, identity_revision, transitions, exited,
+ * entered, history, states), rounded up to a multiple of 8. It never
+ * allocates. TA_ERR_NOMEM: the total does not fit a u32 (or size_t), and *size
+ * is untouched. TA_ERR_INVALID: a ta_bytes has a length and no pointer, and
+ * *size is untouched. data and size must not be NULL.
  */
 TA_PRIVATE ta_result ta_msg_tel_trace_size(const ta_msg_tel_trace *data, uint32_t *size);
 
@@ -13222,15 +13365,45 @@ TA_PRIVATE ta_result ta_msg_tel_trace_size(const ta_msg_tel_trace *data, uint32_
     ta_layout layout;
     size_t bytes = 0;
     ta_result result;
-    if (!ta_record_bytes_ok(data->name) ||
-        !ta_record_bytes_ok(data->value_text) ||
+    if (!ta_record_bytes_ok(data->event_name) ||
+        !ta_record_bytes_ok(data->event_send_id) ||
+        !ta_record_bytes_ok(data->event_invoke_id) ||
+        !ta_record_bytes_ok(data->event_data) ||
+        !ta_record_bytes_ok(data->name) ||
+        !ta_record_bytes_ok(data->send) ||
+        !ta_record_bytes_ok(data->invoke) ||
+        !ta_record_bytes_ok(data->value) ||
+        !ta_record_bytes_ok(data->fault_detail) ||
+        !ta_record_bytes_ok(data->fault_message) ||
+        !ta_record_bytes_ok(data->fault_data) ||
+        !ta_record_bytes_ok(data->identity_family) ||
+        !ta_record_bytes_ok(data->identity_revision) ||
+        !ta_record_bytes_ok(data->transitions) ||
+        !ta_record_bytes_ok(data->exited) ||
+        !ta_record_bytes_ok(data->entered) ||
+        !ta_record_bytes_ok(data->history) ||
         !ta_record_bytes_ok(data->states)) {
         return TA_ERR_INVALID;
     }
     ta_layout_init(&layout, 0);
-    ta_layout_add(&layout, &(ta_layout_entry){ .size = 120, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 296, .alignment = 8, .count = 1 });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->event_name.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->event_send_id.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->event_invoke_id.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->event_data.len });
     ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->name.len });
-    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->value_text.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->send.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->invoke.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->value.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->fault_detail.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->fault_message.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->fault_data.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->identity_family.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->identity_revision.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->transitions.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->exited.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->entered.len });
+    ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->history.len });
     ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 1, .count = data->states.len });
     ta_layout_add(&layout, &(ta_layout_entry){ .size = 1, .alignment = 8, .count = 0 }); /* round up to 8 */
     result = ta_layout_finish(&layout, &bytes, NULL);
@@ -13255,13 +13428,28 @@ TA_PRIVATE ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const 
     }
     if (to->bytes == NULL ||
         to->size != size ||
-        (data->head.flags & (uint16_t)~0x0303u) != 0 ||
+        (data->head.flags & (uint16_t)~0x031Fu) != 0 ||
         !ta_record_in_domain(0x3ull, data->result)) {
         return TA_ERR_INVALID;
     }
     ta_mem_zero(&wire, sizeof wire);
+    ta_record_put_span(&tail, &wire.event_name, data->event_name);
+    ta_record_put_span(&tail, &wire.event_send_id, data->event_send_id);
+    ta_record_put_span(&tail, &wire.event_invoke_id, data->event_invoke_id);
+    ta_record_put_span(&tail, &wire.event_data, data->event_data);
     ta_record_put_span(&tail, &wire.name, data->name);
-    ta_record_put_span(&tail, &wire.value_text, data->value_text);
+    ta_record_put_span(&tail, &wire.send, data->send);
+    ta_record_put_span(&tail, &wire.invoke, data->invoke);
+    ta_record_put_span(&tail, &wire.value, data->value);
+    ta_record_put_span(&tail, &wire.fault_detail, data->fault_detail);
+    ta_record_put_span(&tail, &wire.fault_message, data->fault_message);
+    ta_record_put_span(&tail, &wire.fault_data, data->fault_data);
+    ta_record_put_span(&tail, &wire.identity_family, data->identity_family);
+    ta_record_put_span(&tail, &wire.identity_revision, data->identity_revision);
+    ta_record_put_span(&tail, &wire.transitions, data->transitions);
+    ta_record_put_span(&tail, &wire.exited, data->exited);
+    ta_record_put_span(&tail, &wire.entered, data->entered);
+    ta_record_put_span(&tail, &wire.history, data->history);
     ta_record_put_span(&tail, &wire.states, data->states);
     wire.header = (ta_msg_wire_header){ .kind = TA_MSG_TEL_TRACE, .flags = data->head.flags, .size = size,
                                         .seq = to->seq, .session = data->head.session, .at = data->head.at };
@@ -13270,14 +13458,28 @@ TA_PRIVATE ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const 
     wire.trace_id_low = data->trace_id_low;
     wire.cause_session = data->cause_session;
     wire.cause_macrostep = data->cause_macrostep;
+    wire.actor = data->actor;
+    wire.definition = data->definition;
     wire.microstep = data->microstep;
+    wire.family = data->family;
+    wire.cause_microstep = data->cause_microstep;
+    wire.cause_family = data->cause_family;
+    wire.at_state = data->at_state;
+    wire.at_transition = data->at_transition;
+    wire.at_action = data->at_action;
+    wire.at_iteration = data->at_iteration;
     wire.state = data->state;
-    wire.transition = data->transition;
+    wire.expr = data->expr;
     wire.action = data->action;
     wire.iteration = data->iteration;
+    wire.dropped = data->dropped;
+    wire.fault_code = data->fault_code;
     wire.trace_kind = data->trace_kind;
     wire.position = data->position;
     wire.result = data->result;
+    wire.event_type = data->event_type;
+    wire.context_flags = data->context_flags;
+    wire.context_detail = data->context_detail;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail.at, size - tail.at);
     return TA_OK;
@@ -13298,17 +13500,46 @@ TA_PRIVATE ta_result ta_msg_tel_trace_get(const ta_record *record, ta_msg_tel_tr
     value.trace_id_low = ta_record_u64(record, 48);
     value.cause_session = ta_record_u64(record, 56);
     value.cause_macrostep = ta_record_u64(record, 64);
-    value.microstep = ta_record_u32(record, 72);
-    value.state = ta_record_u32(record, 76);
-    value.transition = ta_record_u32(record, 80);
-    value.action = ta_record_u32(record, 84);
-    value.iteration = ta_record_u32(record, 88);
-    value.trace_kind = ta_record_u16(record, 92);
-    value.position = ta_record_u8(record, 94);
-    value.result = ta_record_u8(record, 95);
-    value.name = ta_record_span(record, 96);
-    value.value_text = ta_record_span(record, 104);
-    value.states = ta_record_span(record, 112);
+    value.actor = ta_record_u64(record, 72);
+    value.definition = ta_record_u64(record, 80);
+    value.microstep = ta_record_u32(record, 88);
+    value.family = ta_record_u32(record, 92);
+    value.cause_microstep = ta_record_u32(record, 96);
+    value.cause_family = ta_record_u32(record, 100);
+    value.at_state = ta_record_u32(record, 104);
+    value.at_transition = ta_record_u32(record, 108);
+    value.at_action = ta_record_u32(record, 112);
+    value.at_iteration = ta_record_u32(record, 116);
+    value.state = ta_record_u32(record, 120);
+    value.expr = ta_record_u32(record, 124);
+    value.action = ta_record_u32(record, 128);
+    value.iteration = ta_record_u32(record, 132);
+    value.dropped = ta_record_u32(record, 136);
+    value.fault_code = ta_record_u32(record, 140);
+    value.trace_kind = ta_record_u16(record, 144);
+    value.position = ta_record_u8(record, 146);
+    value.result = ta_record_u8(record, 147);
+    value.event_type = ta_record_u8(record, 148);
+    value.context_flags = ta_record_u8(record, 149);
+    value.context_detail = ta_record_u8(record, 150);
+    value.event_name = ta_record_span(record, 152);
+    value.event_send_id = ta_record_span(record, 160);
+    value.event_invoke_id = ta_record_span(record, 168);
+    value.event_data = ta_record_span(record, 176);
+    value.name = ta_record_span(record, 184);
+    value.send = ta_record_span(record, 192);
+    value.invoke = ta_record_span(record, 200);
+    value.value = ta_record_span(record, 208);
+    value.fault_detail = ta_record_span(record, 216);
+    value.fault_message = ta_record_span(record, 224);
+    value.fault_data = ta_record_span(record, 232);
+    value.identity_family = ta_record_span(record, 240);
+    value.identity_revision = ta_record_span(record, 248);
+    value.transitions = ta_record_span(record, 256);
+    value.exited = ta_record_span(record, 264);
+    value.entered = ta_record_span(record, 272);
+    value.history = ta_record_span(record, 280);
+    value.states = ta_record_span(record, 288);
     *out = value;
     return TA_OK;
 }
@@ -13398,8 +13629,8 @@ static const ta_record_domain ta_msg_c2h_destroyed_domains[] = { { 48, 0x7ull } 
 static const ta_record_domain ta_msg_c2h_definition_result_domains[] = { { 52, 0x3Full } };
 static const ta_record_domain ta_msg_c2h_input_refused_domains[] = { { 40, 0x7Eull } };
 static const ta_record_domain ta_msg_c2h_input_completed_domains[] = { { 48, 0xFull } };
-static const ta_record_span_at ta_msg_tel_trace_spans[] = { { 96 }, { 104 }, { 112 } };
-static const ta_record_domain ta_msg_tel_trace_domains[] = { { 95, 0x3ull } };
+static const ta_record_span_at ta_msg_tel_trace_spans[] = { { 152 }, { 160 }, { 168 }, { 176 }, { 184 }, { 192 }, { 200 }, { 208 }, { 216 }, { 224 }, { 232 }, { 240 }, { 248 }, { 256 }, { 264 }, { 272 }, { 280 }, { 288 } };
+static const ta_record_domain ta_msg_tel_trace_domains[] = { { 147, 0x3ull } };
 /* One descriptor per message, sorted by kind (ta_record_reader_init checks it). */
 static const ta_record_descriptor ta_msg_descriptors[] = {
     { .kind = TA_MSG_H2C_TIME, .ring = TA_RING_H2C, .span_count = 0, .domain_count = 0, .fixed_size = 32, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
@@ -13438,7 +13669,7 @@ static const ta_record_descriptor ta_msg_descriptors[] = {
     { .kind = TA_MSG_C2H_INPUT_REFUSED, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 1, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = ta_msg_c2h_input_refused_domains },
     { .kind = TA_MSG_C2H_INPUT_COMPLETED, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 1, .fixed_size = 56, .flags_allowed = 0x0301, .spans = NULL, .domains = ta_msg_c2h_input_completed_domains },
     { .kind = TA_MSG_C2H_LOAD_RESULT, .ring = TA_RING_C2H, .span_count = 0, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
-    { .kind = TA_MSG_TEL_TRACE, .ring = TA_RING_TEL, .span_count = 3, .domain_count = 1, .fixed_size = 120, .flags_allowed = 0x0303, .spans = ta_msg_tel_trace_spans, .domains = ta_msg_tel_trace_domains },
+    { .kind = TA_MSG_TEL_TRACE, .ring = TA_RING_TEL, .span_count = 18, .domain_count = 1, .fixed_size = 296, .flags_allowed = 0x031F, .spans = ta_msg_tel_trace_spans, .domains = ta_msg_tel_trace_domains },
     { .kind = TA_MSG_TEL_DROPPED, .ring = TA_RING_TEL, .span_count = 0, .domain_count = 0, .fixed_size = 48, .flags_allowed = 0x0300, .spans = NULL, .domains = NULL },
 };
 _Static_assert(sizeof ta_msg_descriptors / sizeof ta_msg_descriptors[0] == 38, "every message has a descriptor");
@@ -27698,11 +27929,13 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
  * The largest ring and record: the biggest multiple of 8 below 2 GiB, so a
  * ring's sizes stay u32 (ring.h) and its layout cannot overflow. Every
  * record carries at least TA_PARAM_RECORD_HEADROOM bytes that are not value
- * text (its fixed part and the other texts), which is what
- * telemetryValueBytes may not take from maxRecordBytes (ADR 0098 section 6).
+ * text (its fixed part, 296 bytes for tel.trace, and the other texts), which
+ * is what telemetryValueBytes may not take from maxRecordBytes. ADR 0098
+ * section 6 says 256; the catalog's tel.trace needs more (see its
+ * implementation notes), so the smallest record is 512.
  */
 #define TA_PARAM_RING_BYTES_MAX 2147483640u
-#define TA_PARAM_RECORD_HEADROOM 256u
+#define TA_PARAM_RECORD_HEADROOM 512u
 
 typedef struct {
     const char *name;
@@ -27734,8 +27967,8 @@ static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_MAX_DEFINITIONS] = { "maxDefinitions", "definitions", TA_PARAM_DEFAULT_MAX_DEFINITIONS, 1, 2147483647u },
     /* The three ADR 0098 parameters. Their static bounds are the widest any
      * pair allows; ta_params_resolve checks the pairs. */
-    [TA_PARAM_TEL_BYTES] = { "telBytes", "bytes", TA_PARAM_DEFAULT_TEL_BYTES, 256, TA_PARAM_RING_BYTES_MAX },
-    [TA_PARAM_MAX_RECORD_BYTES] = { "maxRecordBytes", "bytes", TA_PARAM_DEFAULT_MAX_RECORD_BYTES, 256,
+    [TA_PARAM_TEL_BYTES] = { "telBytes", "bytes", TA_PARAM_DEFAULT_TEL_BYTES, 512, TA_PARAM_RING_BYTES_MAX },
+    [TA_PARAM_MAX_RECORD_BYTES] = { "maxRecordBytes", "bytes", TA_PARAM_DEFAULT_MAX_RECORD_BYTES, 512,
                                     TA_PARAM_RING_BYTES_MAX },
     [TA_PARAM_TELEMETRY_VALUE_BYTES] = { "telemetryValueBytes", "bytes", TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES, 0,
                                          TA_PARAM_RING_BYTES_MAX - TA_PARAM_RECORD_HEADROOM },
