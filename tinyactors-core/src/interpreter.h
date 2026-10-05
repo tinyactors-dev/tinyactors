@@ -2,6 +2,7 @@
 
 #include "system.h"
 #include "datamodel.h"
+#include "mail.h"
 
 /* A generated send ID (`#_send.<n>`, ADR 0048) is this bit and the session's counter n. */
 #define TA_GENERATED_SEND_ID_BIT ((ta_send_id)1u << 63)
@@ -161,14 +162,35 @@ ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor);
 void ta_interpreter_exit_invoked(ta_system *system, ta_actor_id id);
 /* Takes ownership of the event's data. */
 ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event);
-/* Dispatches a due delayed send; RETRY leaves the send owned by the caller. */
 /*
- * `in_run` says the sender's own run dispatches it (an immediate <send>):
- * a failure is then raised in that run, and the unit that sent it counts
- * and records it. Otherwise (a timer, a held send released) the failure is
- * raised outside a run, and counted and recorded here (ADR 0072).
+ * ta_dispatch is the request and the answer of ta_interpreter_dispatch_delayed.
+ * Lifetime: call.
  */
-ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, bool in_run);
+typedef struct ta_dispatch {
+    /*
+     * In: the sender's own run dispatches it (an immediate <send>): a failure
+     * is then raised in that run, and the unit that sent it counts and records
+     * it. Otherwise (a timer, a held send released) the failure is raised
+     * outside a run, and counted and recorded here (ADR 0072).
+     */
+    bool in_run;
+    bool mailed;    /* out: core placed the send as mail, or was told by mail that it cannot be placed */
+    bool delivered; /* out: with `mailed`, an envelope exists for it (it is queued or waits for an address) */
+    bool sent;      /* out: the send went out, or was dropped; false: the sender was told it failed */
+} ta_dispatch;
+
+/*
+ * ta_interpreter_dispatch_delayed dispatches one due or immediate send, whose
+ * values the call consumes: a send to the built-in SCXML processor becomes
+ * mail (package mail), one to a host processor is handed to it. A send whose
+ * sender is gone, or whose invoking parent cancelled it, is dropped. A send
+ * that fails is reported to its sender as error.communication; one for which
+ * mail found no envelope, inside the sender's run, as error.execution. Outside
+ * a run, mail to a resident or a waiting destination is made at once from the
+ * pool's free quota: the caller has called ta_mail_prepare for it (a safe
+ * point).
+ */
+void ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, ta_dispatch *dispatch);
 /*
  * A literal content as a host adapter receives it (ADR 0053): its media type
  * and its bytes. The bytes' pointer is non-null even for empty content, so an

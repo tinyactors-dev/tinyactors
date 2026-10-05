@@ -27,7 +27,6 @@
 
 typedef enum {
     TAT_INSTRUMENT_ALLOCATOR,
-    TAT_INSTRUMENT_ROUTER,
     TAT_INSTRUMENT_DIRECTORY,
     TAT_INSTRUMENT_INVOKER,
     TAT_INSTRUMENT_IO,
@@ -41,7 +40,7 @@ typedef enum {
 } tat_instrument_kind;
 
 static const char *const TAT_INSTRUMENT_KINDS[] = {
-    "allocator.counting", "router.recording", "directory.memory",
+    "allocator.counting", "directory.memory",
     "invoker.scripted",   "io.recording",     "log.recording",
     "inspector.recording", "io.peer",          "io.connection",
     "io.request",         "trace.recording",  "definition.recording",
@@ -80,21 +79,6 @@ typedef struct {
     uint64_t budget_bytes;
 } tat_allocator_state;
 
-/* router.recording: deliveries held back in "hold" mode. */
-typedef struct {
-    uint64_t id;
-    ta_external_delivery delivery;
-} tat_held_delivery;
-
-typedef struct {
-    bool hold;
-    tat_held_delivery *held;
-    size_t held_count;
-    size_t held_capacity;
-    uint64_t next_held;
-    /* Resolves named destinations, as a host's own routing does. */
-    struct tat_instrument *directory;
-} tat_router_state;
 
 typedef struct {
     /* "[family,name]" -> {"family", "name", "kind", "actor"}. */
@@ -146,7 +130,6 @@ typedef struct tat_instrument {
     /* Keeps the last injected fault message alive for the core call. */
     char *fault_message;
     tat_allocator_state allocator;
-    tat_router_state router;
     tat_directory_state directory;
     tat_invoker_state invoker;
     tat_inspector_state inspector;
@@ -602,183 +585,6 @@ static jv tat_allocator_stats(const tat_allocator_state *state) {
     return jv_object_set(stats, jv_string("failing"), jv_bool(state->fail_after >= 0));
 }
 
-/* ------------------------------------------------------------------------
- * router.recording
- *
- * Journals every submitted external delivery (op "submit": destination,
- * event, status). Mode "direct" (the default) hands it to
- * ta_actor_deliver() like router.direct. Mode "hold" clones it and answers
- * accepted; the scenario then releases held deliveries in any order, or
- * drops them. A "fail" on op "submit" answers "status": "retry" or "error"
- * (the default) without delivering. Config: {"name", "system", "mode"?}.
- */
-
-/*
- * Delivers to a runtime destination, or resolves a named one through the
- * router's directory instrument. Resolution goes through the directory's
- * `resolve` operation, the same one core calls (ADR 0037), so it is
- * journaled and a fault armed on `resolve` reaches routing too. A resident
- * entry is delivered; an unloaded one answers TA_ERR_UNLOADED, because this
- * router cannot load an actor (a host would); an unknown address answers
- * whatever resolve reported, TA_ERR_NOT_FOUND by default. Without a
- * directory, a named destination is unsupported. The resolved entry is
- * added to `entry`.
- */
-static ta_result tat_router_deliver(tat_instrument *instrument, const ta_external_delivery *delivery, jv *entry) {
-    ta_actor_id id;
-    if (delivery->destination.kind == TA_ACTOR_REF_RUNTIME) {
-        id = delivery->destination.as.runtime;
-    } else {
-        tat_instrument *directory = instrument->router.directory;
-        if (directory == NULL) {
-            return TA_ERR_UNSUPPORTED;
-        }
-        ta_actor_directory_entry resolved = {.kind = TA_ACTOR_DIRECTORY_NONE};
-        ta_result result = tat_directory_resolve(
-            directory, &(ta_actor_directory_resolve_params){.address = delivery->destination.as.named,
-                                                            .out = &resolved});
-        if (entry != NULL) {
-            *entry = jv_object_set(*entry, jv_string("resolved"), tat_entry_record(resolved));
-        }
-        if (result != TA_OK) {
-            return result;
-        }
-        if (resolved.kind == TA_ACTOR_DIRECTORY_UNLOADED) {
-            return TA_ERR_UNLOADED;
-        }
-        id = resolved.actor;
-    }
-    return ta_actor_deliver(instrument->system, &(ta_actor_deliver_params){ .time = ta_system_time(instrument->system), .actor = id, .event = &delivery->event, .trace = delivery->trace });
-}
-
-static ta_external_event_submit_status tat_recording_submit(void *self, const ta_external_event_submit_params *params) {
-    static const char not_delivered[] = "router.recording could not deliver the event";
-    tat_instrument *instrument = self;
-    tat_router_state *state = &instrument->router;
-    const ta_external_delivery *delivery = params->delivery;
-    jv entry = jv_object();
-    entry = jv_object_set(entry, jv_string("destination"), tat_encode_ta_actor_ref(instrument->bind, &delivery->destination));
-    entry = jv_object_set(entry, jv_string("event"), tat_event_record(instrument, &delivery->event));
-
-    jv spec;
-    if (tat_take_fault(instrument, "submit", &spec)) {
-        jv status = jv_object_get(jv_copy(spec), jv_string("status"));
-        bool retry = jv_get_kind(status) == JV_KIND_STRING && strcmp(jv_string_value(status), "retry") == 0;
-        jv_free(status);
-        if (!retry) {
-            tat_fault_fill(instrument, spec, TA_ERR_UNSUPPORTED, params->fault);
-        }
-        jv_free(spec);
-        entry = jv_object_set(entry, jv_string("status"), jv_string(retry ? "retry" : "error"));
-        tat_journal(instrument, "submit", tat_injected(entry));
-        return retry ? TA_EXTERNAL_EVENT_RETRY : TA_EXTERNAL_EVENT_ERROR;
-    }
-
-    if (state->hold) {
-        if (state->held_count == state->held_capacity) {
-            size_t capacity = state->held_capacity == 0 ? 8 : state->held_capacity * 2;
-            tat_held_delivery *grown = realloc(state->held, capacity * sizeof(*grown));
-            if (grown == NULL) {
-                tat_journal(instrument, "submit", jv_object_set(entry, jv_string("status"), jv_string("retry")));
-                return TA_EXTERNAL_EVENT_RETRY;
-            }
-            state->held = grown;
-            state->held_capacity = capacity;
-        }
-        tat_held_delivery *held = &state->held[state->held_count];
-        /* Retaining cannot fail and copies nothing (ADR 0065). */
-        ta_external_delivery_retain(delivery, &held->delivery);
-        held->id = ++state->next_held;
-        state->held_count += 1;
-        entry = jv_object_set(entry, jv_string("status"), jv_string("accepted"));
-        tat_journal(instrument, "submit", jv_object_set(entry, jv_string("held"), tat_u64(held->id)));
-        return TA_EXTERNAL_EVENT_ACCEPTED;
-    }
-
-    ta_result result = tat_router_deliver(instrument, delivery, &entry);
-    entry = jv_object_set(entry, jv_string("result"), tat_result_name(result));
-    if (result == TA_OK) {
-        tat_journal(instrument, "submit", jv_object_set(entry, jv_string("status"), jv_string("accepted")));
-        return TA_EXTERNAL_EVENT_ACCEPTED;
-    }
-    /* Like router.direct: a full pool, or a delivery out of memory, takes
-     * the event later (ADR 0070). */
-    if (result == TA_ERR_FULL || result == TA_ERR_NOMEM) {
-        tat_journal(instrument, "submit", jv_object_set(entry, jv_string("status"), jv_string("retry")));
-        return TA_EXTERNAL_EVENT_RETRY;
-    }
-    *params->fault = (ta_fault){.code = result, .message = {.ptr = not_delivered, .len = sizeof(not_delivered) - 1}};
-    tat_journal(instrument, "submit", jv_object_set(entry, jv_string("status"), jv_string("error")));
-    return TA_EXTERNAL_EVENT_ERROR;
-}
-
-static const ta_external_event_router_vtable TAT_RECORDING_ROUTER = {.submit = tat_recording_submit};
-
-static bool tat_router_set_mode(tat_bind *bind, tat_instrument *instrument, jv mode) {
-    if (jv_get_kind(mode) != JV_KIND_STRING ||
-        (strcmp(jv_string_value(mode), "direct") != 0 && strcmp(jv_string_value(mode), "hold") != 0)) {
-        return tat_fail(bind, "router.recording: mode is \"direct\" or \"hold\"");
-    }
-    instrument->router.hold = strcmp(jv_string_value(mode), "hold") == 0;
-    return true;
-}
-
-bool tat_make_recording_router(tat_bind *bind, jv config, void *out) {
-    static const char *const keys[] = {"mode", "directory", NULL};
-    bool created = false;
-    tat_instrument *instrument = tat_instrument_resolve(bind, config, TAT_INSTRUMENT_ROUTER, keys, true, &created);
-    if (instrument == NULL) {
-        return false;
-    }
-    if (created) {
-        jv mode = jv_object_get(jv_copy(config), jv_string("mode"));
-        bool ok = !jv_is_valid(mode) || jv_get_kind(mode) == JV_KIND_NULL || tat_router_set_mode(bind, instrument, mode);
-        jv_free(mode);
-        if (!ok) {
-            return false;
-        }
-        jv directory = jv_object_get(jv_copy(config), jv_string("directory"));
-        if (jv_get_kind(directory) == JV_KIND_STRING) {
-            tat_instrument *found = tat_instrument_find(jv_string_value(directory));
-            if (found == NULL || found->kind != TAT_INSTRUMENT_DIRECTORY) {
-                tat_fail(bind, "router.recording: config.directory names no directory.memory instrument");
-                jv_free(directory);
-                return false;
-            }
-            instrument->router.directory = found;
-        } else if (jv_is_valid(directory) && jv_get_kind(directory) != JV_KIND_NULL) {
-            tat_fail(bind, "router.recording: config.directory must be an instrument name");
-            jv_free(directory);
-            return false;
-        }
-        jv_free(directory);
-    }
-    *(ta_external_event_router *)out = (ta_external_event_router){.self = instrument, .v = &TAT_RECORDING_ROUTER};
-    return true;
-}
-
-static jv tat_held_record(tat_instrument *instrument, const tat_held_delivery *held) {
-    jv record = jv_object_set(jv_object(), jv_string("id"), tat_u64(held->id));
-    record = jv_object_set(record, jv_string("destination"),
-                           tat_encode_ta_actor_ref(instrument->bind, &held->delivery.destination));
-    return jv_object_set(record, jv_string("event"), tat_event_record(instrument, &held->delivery.event));
-}
-
-static tat_held_delivery *tat_held_find(tat_router_state *state, uint64_t id, size_t *index) {
-    for (size_t at = 0; at < state->held_count; at += 1) {
-        if (state->held[at].id == id) {
-            *index = at;
-            return &state->held[at];
-        }
-    }
-    return NULL;
-}
-
-static void tat_held_remove(tat_router_state *state, size_t index) {
-    ta_external_delivery_release(&state->held[index].delivery);
-    memmove(&state->held[index], &state->held[index + 1], (state->held_count - index - 1) * sizeof(*state->held));
-    state->held_count -= 1;
-}
 
 /* ------------------------------------------------------------------------
  * directory.memory
@@ -1636,55 +1442,6 @@ static jv tat_control_allocator(tat_instrument *instrument, const char *command,
                                  "budget {bytes}, clear_faults"));
 }
 
-static jv tat_control_router(tat_instrument *instrument, const char *command, jv args, int *error_code) {
-    static const char *const ops[] = {"submit", NULL};
-    tat_router_state *state = &instrument->router;
-    if (strcmp(command, "fail") == 0) {
-        return tat_arm_fault(instrument, ops, args, error_code);
-    }
-    if (strcmp(command, "mode") == 0) {
-        jv mode = jv_object_get(jv_copy(args), jv_string("mode"));
-        bool ok = tat_router_set_mode(instrument->bind, instrument, mode);
-        jv_free(mode);
-        return ok ? jv_string(state->hold ? "hold" : "direct") : tat_bind_take_error(instrument->bind, error_code);
-    }
-    if (strcmp(command, "held") == 0) {
-        jv list = jv_array();
-        for (size_t index = 0; index < state->held_count; index += 1) {
-            list = jv_array_append(list, tat_held_record(instrument, &state->held[index]));
-        }
-        return list;
-    }
-    if (strcmp(command, "release") == 0 || strcmp(command, "drop") == 0) {
-        uint64_t id = 0;
-        size_t index = 0;
-        if (!tat_arg_u64(instrument->bind, args, "id", &id) || tat_held_find(state, id, &index) == NULL) {
-            return tat_invalid(error_code, jv_string_fmt("router.recording %s: args.id names no held delivery", command));
-        }
-        jv entry = tat_held_record(instrument, &state->held[index]);
-        if (strcmp(command, "drop") == 0) {
-            tat_held_remove(state, index);
-            tat_journal(instrument, "drop", jv_copy(entry));
-            return entry;
-        }
-        ta_result result = tat_router_deliver(instrument, &state->held[index].delivery, &entry);
-        /* A full pool, or a delivery out of memory, keeps the delivery held;
-         * release it again later. */
-        if (result != TA_ERR_FULL && result != TA_ERR_NOMEM) {
-            tat_held_remove(state, index);
-        }
-        entry = jv_object_set(entry, jv_string("result"), tat_result_name(result));
-        tat_journal(instrument, "release", jv_copy(entry));
-        return entry;
-    }
-    if (strcmp(command, "clear_faults") == 0) {
-        jv_free(instrument->faults);
-        instrument->faults = jv_object();
-        return jv_object();
-    }
-    return tat_invalid(error_code,
-                       jv_string("router.recording commands: mode {mode}, held, release {id}, drop {id}, fail {op, ...}, clear_faults"));
-}
 
 static bool tat_arg_address(tat_bind *bind, jv args, ta_actor_address *out) {
     return tat_decode_ta_actor_address(bind, args, out);
@@ -2074,9 +1831,6 @@ jv tat_instrument_control_method(tat_bind *bind, jv params, int *error_code) {
     switch (instrument->kind) {
         case TAT_INSTRUMENT_ALLOCATOR:
             result = tat_control_allocator(instrument, jv_string_value(command), args, error_code);
-            break;
-        case TAT_INSTRUMENT_ROUTER:
-            result = tat_control_router(instrument, jv_string_value(command), args, error_code);
             break;
         case TAT_INSTRUMENT_DIRECTORY:
             result = tat_control_directory(instrument, jv_string_value(command), args, error_code);

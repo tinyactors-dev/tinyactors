@@ -463,3 +463,41 @@ beyond it:
   event-block cache of 4 as well as with the default, where it saw one per
   event with a cache of 4 before: the inputs of a batch wait as envelopes in
   the pool and run one at a time.
+
+### Implementation notes, 4.2c: mail, waiting lists and the router's end
+
+- **Mail is core's.** `src/mail.{h,c}` turns a send into an envelope. A
+  destination is classified without allocating: a resident session takes the
+  envelope on the running input's `outgoing` list, a name nobody holds or a
+  gone session of a family goes on `outgoing_waiting`, and a destination that
+  can never be reached (no family, a finished session, a malformed target)
+  is answered inside the sender's own macrostep with `error.communication`
+  (SCXML 6.2.4). At the end of the macrostep `outgoing` is spliced onto the
+  run queue in O(1) and `outgoing_waiting` is walked, each mail joining its
+  address's waiting list; an abandoned or runaway macrostep frees both lists
+  unseen, so its sends are dropped (`ta_actor_abandon` says so now). Due
+  delayed sends and activation sends are posted at a safe point after
+  `ta_mail_prepare` made room.
+- **Waiting and LOAD_NEEDED.** The first mail or host input for an address
+  that no session holds reports one `LOAD_NEEDED` notice (address, trace,
+  session); the rest wait behind it on the address's list in order.
+  `ta_address_load_failed` recycles the list: mail comes back to its sender as
+  a data-free `error.communication`, host input goes to the `refused` list
+  with the reason in `flags`. A session that loads at the address, or
+  `ta_address_loaded` for a gone session's key, moves the list to it. A key
+  is `{ family, "<incarnation>.<session>.<family>" }`; a session of another
+  incarnation parses as session 0 and has the key `<incarnation>.0.<family>`.
+  `ta_address_waiting` counts a list.
+- **Gone.** `ta_system_set_external_event_router`, `ta_external_delivery`,
+  `ta_external_event_submit_params`, the retry status and the delayed send's
+  `submitted` flag are deleted with every caller (kernel, test host, napi).
+  `ta_due_dispatch_params.fired` replaces the submit-and-retry loop of
+  `ta_system_dispatch_due`.
+- **Costs.** The pool and the 168-byte envelope are unchanged; a mail that
+  waits makes no allocator call, and the sweep `mail_sweep_test` fails every
+  allocation of a send, a placement and a recycle in turn.
+- **Not changed.** The kernel keeps the mailboxes of the host's own posts
+  (`tah_system_post_named`) until the scheduler step, and the `ta_input_watch`
+  hook stays an interim kernel hook that goes in Phase 6. `waiting-full`
+  (a family's `maxWaiting`) cannot apply to chart mail, which the pool bounds;
+  it still limits host posts.

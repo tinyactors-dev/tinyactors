@@ -7,15 +7,13 @@
  *   pending when it stopped, and a crash between two commits;
  * - a replay under the same revision reproduces the live run's
  *   configuration, history and pending sends;
- * - a replaying actor calls no router, invoker or log sink;
+ * - a replaying actor sends nothing, and calls no invoker or log sink;
  * - its invocations are active in core, events of the run being replayed
  *   reach their <finalize>, and publishing retires them as unavailable;
  * - the result codes of ta_actor_prepare(), ta_actor_publish() and
  *   a time on every input and publish's `at` (ADR 0094), and withdrawing a held send;
  * - publishing runs out of memory without changing anything, at every
- *   allocation it makes;
- * - a state reports a send the router refused, and a restore leaves it out
- *   (ADR 0094 section 3).
+ *   allocation it makes.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,24 +48,25 @@ static const ta_allocator allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
  * Adapters that count every call: a replaying actor must make none.
  */
 
-static int routed;
-static bool refusing; /* the router answers RETRY, and counts nothing */
 static int invoker_starts;
 static int invoker_cancels;
 static int invoker_forwards;
 static int logs_written;
 
-static ta_external_event_submit_status route(void *self, const ta_external_event_submit_params *params) {
-    (void)self;
-    (void)params;
-    if (refusing) {
-        return TA_EXTERNAL_EVENT_RETRY;
-    }
-    routed += 1;
-    return TA_EXTERNAL_EVENT_ACCEPTED;
+/*
+ * What the system has sent out so far: the delayed sends that fired, and the
+ * mail that waits for b (the peer the charts mail, which is not resident). A
+ * replaying actor adds nothing to either.
+ */
+static uint64_t sent_total(ta_system *system) {
+    ta_counters counters;
+    ta_system_counters(system, &counters);
+    ta_address *peer = NULL;
+    CHECK(ta_address_intern(system, &(ta_actor_address){ .family = { STR("b") }, .name = STR("one") }, &peer) == TA_OK);
+    uint64_t waiting = ta_address_waiting(system, peer);
+    ta_address_release(peer);
+    return counters.delayed_fired + waiting;
 }
-
-static const ta_external_event_router_vtable router_vtable = { .submit = route };
 
 static ta_op_status invoker_start(void *self, const ta_invoker_start_params *params) {
     (void)self;
@@ -295,14 +294,12 @@ static ta_definition_id define(ta_system *system, const char *family, const ta_s
 static ta_system *create_system(void) {
     ta_system *system = NULL;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
-    CHECK(ta_system_set_external_event_router(system,
-                                              (ta_external_event_router){ .v = &router_vtable }) == TA_OK);
     CHECK(ta_system_set_actor_directory(system, (ta_actor_directory){ .v = &dir_vtable }) == TA_OK);
     CHECK(ta_system_set_log_sink(system, (ta_log_sink){ .v = &log_vtable }) == TA_OK);
     ta_atom svc = 0;
     CHECK(ta_system_intern_atom(system, (ta_str)STR("svc"), &svc) == TA_OK);
     CHECK(ta_system_register_invoker(system, svc, (ta_invoker){ .v = &invoker_vtable }) == TA_OK);
-    routed = invoker_starts = invoker_cancels = invoker_forwards = logs_written = 0;
+    invoker_starts = invoker_cancels = invoker_forwards = logs_written = 0;
     return system;
 }
 
@@ -434,8 +431,8 @@ static void test_timeline_timeout_to_self(void) {
     ta_system *system = create_system();
     ta_definition_id definition = define(system, "timers", timers);
     ta_actor_id live = live_until_e1(system, definition);
-    int routed_live = routed;
-    CHECK(routed_live == 1 && logs_written == 1); /* the immediate reply, and the log */
+    uint64_t sent_live = sent_total(system);
+    CHECK(sent_live == 1 && logs_written == 1); /* the immediate reply, and the log */ /* the immediate reply, and the log */
     CHECK(ta_system_set_time(system, 6000) == TA_OK);
     CHECK(dispatch(system) == 2); /* t1 to itself, b1 to b */
     CHECK(ta_system_set_time(system, 6500) == TA_OK);
@@ -443,7 +440,7 @@ static void test_timeline_timeout_to_self(void) {
     CHECK(ta_system_set_time(system, 7000) == TA_OK);
     CHECK(ta_actor_destroy(system, live) == TA_OK); /* evicted @ 7000 */
 
-    int routed_before = routed;
+    uint64_t sent_before = sent_total(system);
     CHECK(ta_system_set_time(system, 7000 + 7u * 24u * 3600u * 1000u) == TA_OK); /* a week later */
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
     deliver_at(system, replay, "e1", 1000);
@@ -453,7 +450,7 @@ static void test_timeline_timeout_to_self(void) {
     CHECK(publish_at(system, replay, 7000) == TA_OK);
     ta_time deadline = 0;
     CHECK(ta_system_next_deadline(system, &deadline) == TA_ERR_NOT_FOUND);
-    CHECK(routed == routed_before && logs_written == 1 && invoker_starts == 0);
+    CHECK(sent_total(system) == sent_before && logs_written == 1 && invoker_starts == 0);
     destroy_system(system);
 }
 
@@ -467,12 +464,12 @@ static void test_timeline_fired_before_stop(void) {
     CHECK(ta_system_set_time(system, 7000) == TA_OK);
     CHECK(ta_actor_destroy(system, live) == TA_OK); /* evicted @ 7000, E >= d */
 
-    int routed_before = routed;
+    uint64_t sent_before = sent_total(system);
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
     deliver_at(system, replay, "e1", 1000);
     CHECK(publish_at(system, replay, 7000) == TA_OK);
     CHECK(pending_sends(system, replay) == 0);
-    CHECK(dispatch(system) == 0 && routed == routed_before);
+    CHECK(dispatch(system) == 0 && sent_total(system) == sent_before);
     destroy_system(system);
 }
 
@@ -486,7 +483,7 @@ static void test_timeline_pending_at_stop(void) {
     CHECK(ta_actor_destroy(system, live) == TA_OK); /* evicted @ 3000, E < d */
 
     CHECK(ta_system_set_time(system, 7u * 24u * 3600u * 1000u) == TA_OK); /* a week later */
-    int routed_before = routed;
+    uint64_t sent_before = sent_total(system);
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
     deliver_at(system, replay, "e1", 1000);
     CHECK(publish_at(system, replay, 3000) == TA_OK); /* d = 6000 > 3000: still held */
@@ -494,7 +491,7 @@ static void test_timeline_pending_at_stop(void) {
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, replay, &view) == TA_OK);
     CHECK(view.delayed_send_count == 2 && view.delayed_sends[0].due == 6000);
-    CHECK(dispatch(system) == 2 && routed == routed_before + 2);
+    CHECK(dispatch(system) == 2 && sent_total(system) - sent_before == 3); /* two fired, and b1 waits for b */
     CHECK(dispatch(system) == 0);
     destroy_system(system);
 }
@@ -510,11 +507,11 @@ static void test_timeline_crash_between_commits(void) {
     CHECK(dispatch(system) == 2); /* dispatched, then the crash */
     CHECK(ta_actor_destroy(system, live) == TA_OK);
 
-    int routed_before = routed;
+    uint64_t sent_before = sent_total(system);
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
     deliver_at(system, replay, "e1", 1000);
     CHECK(publish_at(system, replay, 3000) == TA_OK);
-    CHECK(dispatch(system) == 2 && routed == routed_before + 2); /* again */
+    CHECK(dispatch(system) == 2 && sent_total(system) - sent_before == 3); /* two fired, and b1 waits for b */ /* again */
     destroy_system(system);
 }
 
@@ -538,13 +535,13 @@ static void test_replay_matches_live_run(void) {
         CHECK(ta_system_set_time(system, inputs[index].at) == TA_OK);
         deliver(system, live, inputs[index].event);
     }
-    int routed_live = routed;
+    uint64_t sent_live = sent_total(system);
 
     ta_actor_id copy = prepare_replaying(system, definition, &copy_address, 0);
     for (size_t index = 0; index < sizeof inputs / sizeof inputs[0]; index += 1) {
         deliver_at(system, copy, inputs[index].event, inputs[index].at);
     }
-    CHECK(routed == routed_live);
+    CHECK(sent_total(system) == sent_live);
     CHECK(publish(system, copy) == TA_OK);
 
     ta_state_id live_states[8];
@@ -874,40 +871,6 @@ static void test_export_restores_invocations(void) {
     destroy_system(system);
 }
 
-/*
- * A send the router refused waits, submitted, and the state exported then
- * reports it; a restore does not hold it (ADR 0094 section 3; kernel ADR
- * 0003 removed ADR 0095's restore of it): only the unsubmitted sends come
- * back.
- */
-static void test_export_leaves_submitted(void) {
-    ta_system *system = create_system();
-    ta_definition_id definition = define(system, "timers", timers);
-    refusing = true;
-    ta_actor_id live = live_until_e1(system, definition); /* `now` to b is refused */
-    refusing = false;
-    exported out;
-    CHECK(export_into(system, live, &out) == TA_OK);
-    CHECK(out.state.send_count == 3);
-    uint32_t submitted = 0;
-    for (uint32_t index = 0; index < out.state.send_count; index += 1u) {
-        submitted += out.state.sends[index].submitted ? 1u : 0u;
-    }
-    CHECK(submitted == 1);
-    static const ta_actor_address copy_address = { .family = { .name = STR("timers") }, .name = STR("c") };
-    ta_result result = TA_OK;
-    ta_actor_id copy = prepare_from_state(system, definition, &copy_address, &out.state, &result);
-    CHECK(result == TA_OK);
-    CHECK(publish_at(system, copy, 1000) == TA_OK);
-    CHECK(pending_sends(system, copy) == 2); /* t1 and b1, due at 6000 */
-    ta_actor_inspection view;
-    CHECK(ta_actor_inspect(system, copy, &view) == TA_OK);
-    for (uint32_t index = 0; index < view.delayed_send_count; index += 1u) {
-        CHECK(!view.delayed_sends[index].submitted);
-    }
-    destroy_system(system);
-}
-
 static void test_export_result_codes(void) {
     ta_system *system = create_system();
     ta_definition_id definition = define(system, "timers", timers);
@@ -966,7 +929,6 @@ int main(void) {
     test_publish_out_of_memory();
     test_export_restores();
     test_export_restores_invocations();
-    test_export_leaves_submitted();
     test_export_result_codes();
     CHECK(heap.stats.live_blocks == 0);
     if (failures != 0) {

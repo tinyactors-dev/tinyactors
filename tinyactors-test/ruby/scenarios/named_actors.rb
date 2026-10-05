@@ -58,20 +58,19 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
                  directory.entries('resolve').map { |entry| [entry[:name], entry.dig(:out, :kind), entry.dig(:out, :actor)] }
   end
 
-  # The same routing without a routing instrument. router.direct resolves a
-  # named destination with ta_actor_find(), so the directory a named spawn
-  # already installs is enough for one actor to address another; a host only
-  # needs its own router when it owns location, not merely naming.
+  # The same routing with no host code. Core places mail for a resident
+  # named address itself, so a named spawn is enough for one actor to address
+  # another; a host only answers LOAD_NEEDED when the address is not resident.
   #
-  # Catches: the default router refusing a named destination, resolving it to
-  # the wrong actor, or reporting a resident address as missing.
-  scenario 'the default router resolves a logical address through the directory' do
+  # Catches: a named destination refused, resolved to the wrong actor, or a
+  # resident address reported as missing.
+  scenario 'core resolves a logical address to the resident actor' do
     sender = spawn :messenger, name: 'm1', binding: { peer: '#_actor_messenger/m2' }
     receiver = spawn :messenger, name: 'm2'
 
     sender.deliver 'greet'
     assert_equal [{ event: 'hello', from: '#_actor_messenger/m1' }], receiver.data('.inbox'),
-                 'router.direct resolved the named target'
+                 'core resolved the named target'
     assert_equal [{ event: 'ack', from: '#_actor_messenger/m2' }], sender.data('.inbox'),
                  'the reply went back to the named origin'
   end
@@ -99,7 +98,6 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
   # that fire while the actor is unloaded, are lost, or fire twice; load
   # that reuses the old runtime ID or restores a different configuration.
   scenario 'an unloaded actor keeps its address and its timer, and continues after load' do
-    router = recording_router
     light = spawn name: 'l1'
     old = light.handle
     advance_time 10_000
@@ -112,7 +110,7 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
     assert_equal nil, next_deadline, 'an unloaded actor has no timer in the resident heap'
     assert_equal 30_000, image_deadline(image), 'its timer is in the image'
     advance_time 30_000
-    assert_equal [], router.entries('submit'), 'nothing fires while the actor is unloaded'
+    assert_equal [], load_notices, 'nothing fires while the actor is unloaded'
 
     assert_equal 'ok', load(light, image, binding: binding)
     destroy_image(image)
@@ -120,8 +118,6 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
     assert light.handle != old, 'load gives the actor a new runtime ID'
     assert_equal ['ok', light.handle], find(light.address)
     assert_equal %i[operating green], light.active, 'the timer due while unloaded fires once, after load'
-    assert_equal [['timer', light.handle]],
-                 router.entries('submit').map { |entry| [entry.dig(:event, :name_text), entry.dig(:destination, :runtime)] }
     assert_equal [['claim', nil, 'resident', 'ok'], ['replace', 'resident', 'unloaded', 'ok'],
                   ['replace', 'unloaded', 'resident', 'ok']],
                  NamedActorScenarios.updates(instruments.fetch('directory'))
@@ -224,7 +220,6 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
   # delivered to a stale runtime ID instead of reaching the sender as a
   # communication error it can act on.
   scenario 'a send to an unloaded actor reaches the sender as a communication error' do
-    router = recording_router(directory: true)
     sender = spawn :messenger, name: 'm1', binding: { peer: '#_actor_messenger/m2' }
     receiver = spawn :messenger, name: 'm2'
     image = capture(receiver)
@@ -232,8 +227,8 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
     assert_equal 'ok', unload(receiver, image)
 
     sender.deliver 'greet'
-    assert_equal [['unloaded', 'error']],
-                 router.entries('submit').map { |entry| [entry.dig(:resolved, :kind), entry[:status]] }
+    assert_equal ['messenger/m2'], loaded_addresses,
+                 'core asked the host to load the address; the host cannot'
     reported = sender.data('.inbox')
     assert_equal 1, reported.size, "the sender was told once, got #{reported}"
     # ADR 0027: the name may carry a detail suffix under this prefix.
@@ -281,7 +276,6 @@ TinyactorsTest.scenarios 'replacement', chart: :counter_v1 do
   # of the incumbent's entry; an incumbent destroyed later that removes the
   # replacement's route; a replacement that does not keep the bound data.
   scenario 'a replacement takes over the address only when activated' do
-    router = recording_router
     incumbent = spawn name: 'c1'
     incumbent.deliver 'tick'
     incumbent.deliver 'tick'
@@ -292,7 +286,6 @@ TinyactorsTest.scenarios 'replacement', chart: :counter_v1 do
     assert_equal false, replacement.inspect_actor[:published]
     assert_equal 'err_busy', ta.actor.capture(system: system_handle, actor: replacement.handle)[:result]
     assert_equal ['ok', incumbent.handle], find(incumbent.address), 'the incumbent keeps the route'
-    assert_equal [], router.entries('submit'), 'the bootstrap `hello` is held until activation'
 
     assert_equal 'ok', publish(replacement, incumbent: incumbent)
     run_system('activate the replacement')
@@ -311,7 +304,6 @@ TinyactorsTest.scenarios 'replacement', chart: :counter_v1 do
   end
 
   scenario 'a refused activation leaves the incumbent routed and is retryable' do
-    router = recording_router
     incumbent = spawn name: 'c1'
     replacement = prepare(:counter_v2, incumbent: incumbent, binding: incumbent.data)
     directory = instruments.fetch('directory')
@@ -320,7 +312,6 @@ TinyactorsTest.scenarios 'replacement', chart: :counter_v1 do
     assert_equal 'err_stale', publish(replacement, incumbent: incumbent)
     assert_equal ['ok', incumbent.handle], find(incumbent.address)
     assert_equal false, replacement.inspect_actor[:published]
-    assert_equal [], router.entries('submit'), 'a refused swap releases no held send'
 
     assert_equal 'ok', publish(replacement, incumbent: incumbent)
     run_system('retry replacement activation')

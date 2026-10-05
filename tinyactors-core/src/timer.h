@@ -13,8 +13,9 @@
  * is the globally earliest send, so dispatch order is exactly (due, id).
  *
  * A list's address must stay stable while it holds sends: the heap points at
- * it. Actors keep theirs in their sparse state; the sends whose session is
- * gone live in the heap's own `orphans` list.
+ * it. Actors keep theirs in their sparse state. A send never outlives its
+ * owner: once it fires it is an envelope (package mail) or a call of a host
+ * I/O processor, and when the owner goes its sends go with it.
  */
 
 /*
@@ -48,14 +49,6 @@ typedef struct {
      */
     bool has_target_text;
     ta_content_id target_text;
-    /*
-     * Already sent: the router accepted nothing and the send waits here to be
-     * offered again. <cancel> and session termination leave it in place.
-     */
-    bool submitted;
-    /* Submitted sends only: the envelope, which outlives the sending session. */
-    ta_actor_ref origin;
-    ta_invoke_id invoke_id;
     /* The sending step (ADR 0067): a send that fires later still names it. */
     ta_trace_parent trace;
 } ta_delayed_send;
@@ -64,8 +57,6 @@ typedef struct {
 typedef struct {
     ta_timer_id id;
     ta_actor_id owner;
-    ta_actor_ref origin;
-    ta_invoke_id invoke_id;
 } ta_delayed_send_meta;
 
 /* One owner's pending sends, sorted by (due, id). Zero-initialized is empty. */
@@ -94,48 +85,33 @@ typedef struct {
     ta_vec pages; /* ta_timer_list **, one per page of owner slots */
     uint32_t count;
     ta_timer_id next_id;
-    /* Submitted sends whose sending session is gone (ADR 0054). */
-    ta_timer_list orphans;
-    /* Set while the system is destroyed: orphaning releases instead of keeping. */
-    bool closing;
 } ta_timer_heap;
 
 ta_result ta_timer_heap_init(ta_timer_heap *heap, ta_allocator allocator);
-/* Releases every send still indexed, the orphans included. */
+/* Releases every send still indexed. */
 void ta_timer_heap_destroy(ta_timer_heap *heap);
 /* Makes the next `additional` schedules into list allocation-free. */
 ta_result ta_timer_reserve(ta_timer_heap *heap, ta_timer_list *list, uint32_t additional);
 /* Takes ownership of the send's values on TA_OK; assigns send->id when it is zero. */
 ta_result ta_timer_schedule(ta_timer_heap *heap, ta_timer_list *list, const ta_delayed_send *send);
-/* Removes and releases every not yet submitted send in list with send_id. */
+/* Removes and releases every send in list with send_id (<cancel>, an operator's withdrawal). */
 ta_result ta_timer_cancel(ta_timer_heap *heap, ta_timer_list *list, ta_send_id send_id);
-/* Like ta_timer_cancel(), but also removes submitted sends. */
-ta_result ta_timer_withdraw(ta_timer_heap *heap, ta_timer_list *list, ta_send_id send_id);
-/* Removes and releases every not yet submitted send in list (session termination). */
-void ta_timer_cancel_unsubmitted(ta_timer_heap *heap, ta_timer_list *list);
 /*
- * Makes ta_timer_orphan(list) allocation-free: reserves room in the orphans
- * for the list's submitted sends.
+ * Removes and releases every send in list (the session ended, or unloaded:
+ * its sends travel in its image). Leaves the list empty and unindexed; its
+ * storage stays allocated. Never allocates.
  */
-ta_result ta_timer_reserve_orphans(ta_timer_heap *heap, const ta_timer_list *list);
-/*
- * The sending session is gone: releases the list's unsubmitted sends and
- * moves its submitted ones to the orphans. Call ta_timer_reserve_orphans()
- * first. Leaves the list empty and unindexed; its storage stays allocated.
- */
-void ta_timer_orphan(ta_timer_heap *heap, ta_timer_list *list);
+void ta_timer_cancel_all(ta_timer_heap *heap, ta_timer_list *list);
 /* Releases every send in list, unindexes it, and frees its storage. */
 void ta_timer_list_destroy(ta_timer_heap *heap, ta_timer_list *list);
 /* Bytes the list's storage occupies. */
 size_t ta_timer_list_bytes(const ta_timer_list *list);
 /*
- * Copies the list's not yet submitted sends in (due, id) order, and returns
- * how many there are; a null `out` only counts. These are the sends a
- * session belongs to — a submitted send outlives it and is the system's to
- * re-offer. The copies borrow their values; the caller takes its own
- * references.
+ * Copies the list's sends in (due, id) order, and returns how many there are;
+ * a null `out` only counts. The copies borrow their values; the caller takes
+ * its own references.
  */
-uint32_t ta_timer_copy_unsubmitted(const ta_timer_list *list, ta_delayed_send *out);
+uint32_t ta_timer_copy(const ta_timer_list *list, ta_delayed_send *out);
 /* The earliest due time of any indexed send; false when there is none. */
 bool ta_timer_next_due(const ta_timer_heap *heap, ta_time *out);
 /* Removes the earliest send and transfers ownership of its values to *out. */

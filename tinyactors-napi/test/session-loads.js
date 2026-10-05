@@ -3,8 +3,8 @@
 // Mail for a session that has gone goes to its family's loader (napi ADR
 // 0032 section 2, core ADR 0088): a reply to a finished requester starts a
 // new instance of its family, which gets the reply; without a loader the
-// sender gets error.communication, as napi ADR 0022 says; "not-found" makes
-// a dead letter; a session of another incarnation goes to the loader too;
+// sender gets error.communication, as napi ADR 0022 says, and so does the
+// sender of mail the loader answers "not-found" for (core ADR 0099); a session of another incarnation goes to the loader too;
 // several messages for one session wait on one load. Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
@@ -22,19 +22,19 @@ async function until(system, done, what) {
   assert.fail(`timed out waiting for ${what}`);
 }
 
-// The server replies `replies` times to whoever asked, and keeps what
-// error.communication said about a reply.
+// The server replies `replies` times to whoever asked, and counts the
+// error.communication events it gets about a reply.
 function server(system, replies = 1) {
   return system.define(
     statechart({ family: 'server', revision: `v${replies}` })
-      .data('failure', null)
+      .data('failures', 0)
       .state('idle', (s) => {
         s.on('ask', (t) => {
           for (let at = 0; at < replies; at += 1) {
             t.send('reply', (m) => m.to(({ event }) => event.origin).data(() => ({ at })));
           }
         });
-        s.on('error.communication', (t) => t.assign('failure', ({ event }) => event.data));
+        s.on('error.communication', (t) => t.assign('failures', function () { return this.failures + 1; }));
       }),
   );
 }
@@ -74,7 +74,7 @@ async function replyToAGoneRequester() {
   assert.deepEqual(calls[0], { target: { family: 'requester', sessionID: gone }, why: 'session' });
   assert.deepEqual(caught[0].data, { at: 0 });
   assert.notEqual(caught[0].sessionID, gone, 'a new instance, a new session');
-  assert.equal(s.inspect().data.failure, null, 'the server\'s reply was not refused');
+  assert.equal(s.inspect().data.failures, 0, 'the server\'s reply was not refused');
   system.close();
 }
 
@@ -82,24 +82,20 @@ async function withoutALoader() {
   const system = createSystem();
   const s = system.spawn(server(system), { address: { family: 'server', name: 's' } });
   system.spawn(requester(system));
-  await until(system, () => s.inspect().data.failure !== null, 'the refusal');
-  // The server replies in the macrostep after the requester's, which finished and is not destroyed yet.
-  assert.equal(s.inspect().data.failure.reason, 'done');
+  await until(system, () => s.inspect().data.failures === 1, 'the refusal');
   system.close();
 }
 
-async function notFoundIsADeadLetter() {
+async function notFoundIsAnError() {
   const dead = [];
   const system = createSystem({ incarnation: 0, deadLetter: (record) => dead.push(record) });
   system.setLoader('requester', () => 'not-found');
   const s = system.spawn(server(system), { address: { family: 'server', name: 's' } });
   const asker = system.spawn(requester(system));
   const gone = asker.inspect().sessionID;
-  await until(system, () => dead.length === 1, 'the dead letter');
-  assert.equal(dead[0].reason, 'not-found');
-  assert.equal(dead[0].event, 'reply');
-  assert.deepEqual(dead[0].target, { family: 'requester', name: gone }, 'the session\'s load is keyed by its text');
-  assert.equal(s.inspect().data.failure, null, 'the reply was accepted, then not delivered');
+  await until(system, () => s.inspect().data.failures === 1, 'the refusal');
+  assert.equal(dead.length, 0, 'the server\'s mail is not a dead letter: it is the server\'s error');
+  assert.equal(typeof gone, 'string');
   system.close();
 }
 
@@ -149,7 +145,7 @@ async function oneLoadForSeveralMessages() {
 (async () => {
   await replyToAGoneRequester();
   await withoutALoader();
-  await notFoundIsADeadLetter();
+  await notFoundIsAnError();
   await anotherIncarnation();
   await oneLoadForSeveralMessages();
   console.log('session-loads.js passed');

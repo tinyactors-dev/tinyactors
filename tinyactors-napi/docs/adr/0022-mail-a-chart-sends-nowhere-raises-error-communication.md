@@ -99,3 +99,13 @@ letter), a delayed send whose target was destroyed before it came due, and
 a resident target that still gets its mail. `test/route.js` and
 `test/datamodel.js` check the new rule where they checked the old one, and
 `test/native/router_test.c` checks it without JavaScript.
+
+## Amended by core ADR 0099 (4.2c)
+
+Core now answers mail that no one can serve, and its `error.communication`
+carries no data: the `{ reason, target }` object this ADR describes is gone,
+with `unreachable_data` and `tah_unreachable`. A chart still hears
+`error.communication` for the same cases, and also when a family's loader
+answers `not-found` for mail a chart sent (the load fails and core recycles
+the mail); that mail is no longer a dead letter. Mail posted from JavaScript
+stays a dead letter (ADR 0008).

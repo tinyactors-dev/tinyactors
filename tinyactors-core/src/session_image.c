@@ -208,7 +208,7 @@ static size_t ta_image_measure(const ta_actor *actor) {
         total += (size_t)sparse->invoke_count * sizeof(ta_active_invoke);
         total += (size_t)sparse->pending_invokes.count * sizeof(ta_state_id);
     }
-    total += (size_t)ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL) * sizeof(ta_delayed_send);
+    total += (size_t)ta_timer_copy(ta_actor_timers(actor), NULL) * sizeof(ta_delayed_send);
     if (sparse != NULL && sparse->paused != NULL) {
         total += sparse->paused->bytes + TA_CONTINUATION_ALIGN;
     }
@@ -304,21 +304,18 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         ta_mem_copy(image->paused, sparse->paused, sparse->paused->bytes);
     }
 
-    uint32_t sends = ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL);
+    uint32_t sends = ta_timer_copy(ta_actor_timers(actor), NULL);
     if (sends != 0) {
         image->delayed_sends = ta_arena_alloc(arena, (size_t)sends * sizeof(ta_delayed_send),
                                               _Alignof(ta_delayed_send));
         if (image->delayed_sends == NULL) {
             return TA_ERR_NOMEM;
         }
-        (void)ta_timer_copy_unsubmitted(ta_actor_timers(actor), image->delayed_sends);
+        (void)ta_timer_copy(ta_actor_timers(actor), image->delayed_sends);
         image->delayed_send_count = sends;
         for (uint32_t index = 0; index < sends; index += 1) {
             ta_delayed_send *send = &image->delayed_sends[index];
             result = ta_image_copy_address(arena, &send->destination);
-            if (result == TA_OK) {
-                result = ta_image_copy_address(arena, &send->origin);
-            }
             if (result != TA_OK) {
                 return result;
             }
@@ -503,17 +500,6 @@ ta_result ta_session_image_definition(const ta_system *system, const ta_session_
     return TA_ERR_NOT_FOUND;
 }
 
-/*
- * A runtime reference to the actor that was captured means "itself", and the
- * reconstructed session has a new runtime ID. Left alone, a self-addressed
- * delayed send would fire into the id of a session that no longer exists.
- */
-static void ta_image_rebind_self(ta_actor_ref *ref, ta_actor_id was, ta_actor_id now) {
-    if (ref->kind == TA_ACTOR_REF_RUNTIME && ref->as.runtime == was) {
-        ref->as.runtime = now;
-    }
-}
-
 /* Restores the queued events, invocation losses, and delayed sends. */
 static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *actor, ta_system *system) {
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
@@ -552,16 +538,10 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
         /* A fresh timer ID; the SCXML send ID that <cancel> names is kept. */
         send.id = 0;
         send.owner = actor->record.id;
-        /* A destination naming this session is its session ID and survives a
-         * reload as it is; only an unnamed actor's runtime origin moves. */
-        ta_image_rebind_self(&send.origin, image->source_actor, actor->record.id);
         ta_value_retain(&send.target);
         ta_value_retain(&send.data);
         /* The image's detached addresses become this system's handles. */
         ta_result result = ta_actor_ref_localize(system, &send.destination);
-        if (result == TA_OK) {
-            result = ta_actor_ref_localize(system, &send.origin);
-        }
         if (result == TA_OK) {
             result = ta_actor_schedule_send(system, actor, &send);
         }
@@ -569,7 +549,6 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
             ta_value_release(&send.target);
             ta_value_release(&send.data);
             ta_actor_ref_release(&send.destination);
-            ta_actor_ref_release(&send.origin);
             return result;
         }
     }
@@ -850,14 +829,9 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
     if (image->source_actor != actor->record.id || image->source_epoch != actor->session_epoch) {
         return TA_ERR_STALE;
     }
-    /* Room for the submitted sends to outlive the session, before anything changes. */
-    ta_result result = ta_timer_reserve_orphans(&system->timers, ta_actor_timers(actor));
-    if (result != TA_OK) {
-        return result;
-    }
-    /* And the entry that keeps the session findable while it is out (ADR 0066). */
+    /* The entry that keeps the session findable while it is out (ADR 0066). */
     uint32_t parked = 0;
-    result = ta_session_node_new(&system->sessions, &(ta_session_node_params){ .id = actor->session_id }, &parked);
+    ta_result result = ta_session_node_new(&system->sessions, &(ta_session_node_params){ .id = actor->session_id }, &parked);
     if (result != TA_OK) {
         return result;
     }
@@ -876,17 +850,16 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
     }
 
     /*
-     * The route is gone, so the session may go. Its not-yet-submitted sends
-     * live in the image now and must not also sit in the resident heap,
-     * where they would fire for an actor that is not there; a send already
-     * handed to the router is an envelope of its own and stays, exactly as
-     * it does when a session ends. One sent to this session names it by
-     * session ID, and the parked entry routes its retry by address to
-     * whatever session loads here next (ADR 0066).
+     * The route is gone, so the session may go. Its pending sends live in the
+     * image now and must not also sit in the resident heap, where they would
+     * fire for an actor that is not there; a send that already fired is an
+     * envelope of its own and stays, exactly as it does when a session ends.
+     * Mail sent to this session by session ID finds the parked entry and waits
+     * for its address, for whatever session loads there next (ADR 0066).
      */
     ta_address *address = actor->record.self.as.named;
     ta_session_park(&system->sessions, parked, address); /* retains the address past the actor's own reference */
-    ta_timer_orphan(&system->timers, ta_actor_timers(actor));
+    ta_timer_cancel_all(&system->timers, ta_actor_timers(actor));
     ta_trace_lifecycle(system, actor, TA_TRACE_UNLOADED, NULL);
     ta_run_unloaded(system, actor);
     ta_actor_release_slot(system, actor->record.id);
@@ -1103,7 +1076,6 @@ static size_t ta_offload_records_bytes(const ta_session_image *image) {
                    (size_t)image->delayed_send_count * sizeof(ta_delayed_send);
     for (uint32_t index = 0; index < image->delayed_send_count; index += 1) {
         total += ta_offload_ref_bytes(&image->delayed_sends[index].destination);
-        total += ta_offload_ref_bytes(&image->delayed_sends[index].origin);
     }
     return total;
 }
@@ -1120,7 +1092,6 @@ static uint8_t *ta_offload_put_records(uint8_t *at, const ta_session_image *imag
         const ta_delayed_send *send = &image->delayed_sends[index];
         at = ta_offload_put(at, send, sizeof *send);
         at = ta_offload_put_ref(at, &send->destination);
-        at = ta_offload_put_ref(at, &send->origin);
     }
     return at;
 }
@@ -1344,12 +1315,8 @@ static ta_result ta_offload_take_sends(ta_offload_reader *reader, uint32_t count
         /* From here on the values and refs are this image's own. */
         send->target = (ta_value){0};
         send->data = (ta_value){0};
-        send->origin = (ta_actor_ref){0};
         image->delayed_send_count = index + 1u;
         ta_result result = ta_offload_take_ref(reader, &image->arena, &send->destination);
-        if (result == TA_OK) {
-            result = ta_offload_take_ref(reader, &image->arena, &send->origin);
-        }
         if (result != TA_OK) {
             return result;
         }

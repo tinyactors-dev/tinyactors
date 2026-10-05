@@ -742,8 +742,8 @@ module TinyactorsTest
     #
     # Returns {runs:, unreported:, stops:}: how many runs failed an
     # allocation; the names of those whose resume never answered err_nomem,
-    # because the allocation that failed was a host operation's (a router
-    # delivering to another actor), which handled it itself; and every stop
+    # because the allocation that failed was a host operation's (a load
+    # answered for another actor), which handled it itself; and every stop
     # (#stops) of every run. Other options (`resume_action_budget:`, ...)
     # are the runs' Context options.
     def assert_allocation_failures_invisible(counts: [1], on_stop: nil, chart_errors: false, normalize: nil,
@@ -884,11 +884,12 @@ module TinyactorsTest
       @actors.find { |actor| actor.handle == id } || id
     end
 
-    # Creates the system on first use and installs the router.direct adapter,
-    # which hands external events (such as due delayed sends) straight to
-    # ta_actor_deliver, resolving a named destination through the system's
-    # actor directory first. Without a router, core reports external sends as
-    # error.communication (ADR 0040).
+    # Creates the system on first use. Mail between sessions is core's own
+    # (ADR 0099): it queues what a macrostep sends, and keeps what is sent to
+    # an address nobody holds until the host loads it or says it cannot (see
+    # #on_load_needed; by default the scenario's host has no loader, and
+    # answers every LOAD_NEEDED notice with load_not_found, so the sender
+    # hears error.communication).
     #
     # It also registers the invoker.scxml adapter for SCXML <invoke>. The
     # adapter runs an invoked machine as a child actor: the chart spec inline
@@ -909,9 +910,6 @@ module TinyactorsTest
                       ta.system.create(config: { allocator: allocator.adapter, initial_time: 0,
                                                  params: [{ param: 'tel_bytes', value: TEL_BYTES }] })).fetch(:out)
         @creating_system = false
-        router = { '$adapter' => 'router.direct', 'config' => { 'system' => system } }
-        core('ta_system_set_external_event_router',
-             ta.system.set_external_event_router(system: system, router: router))
         register_scxml_invoker(system)
         system
       end
@@ -927,23 +925,46 @@ module TinyactorsTest
       counting
     end
 
-    # Replaces router.direct with a router.recording instrument. Mode
-    # :direct delivers at once; :hold keeps deliveries until released. With
-    # `directory: true` the router resolves named destinations through the
-    # memory_directory instrument, as a host's own routing does.
-    def recording_router(mode: :direct, directory: false)
-      existing = @instruments['router']
-      if existing
-        existing.mode(mode)
-        return existing
-      end
+    # Sets what the host does when core says an address needs loading (a
+    # LOAD_NEEDED notice of ta_run): the block gets the context and the
+    # notice ({address:, trace:, session:, source:}) and answers core with
+    # #load_failed, #address_loaded or by making the address resident
+    # (spawn, publish, load). Without a handler every notice is answered with
+    # load_not_found at once, as a host with no loader would. The notices the
+    # scenario saw are in #load_notices.
+    def on_load_needed(&handler)
+      @load_handler = handler
+    end
 
-      config = { system: system_handle, mode: mode.to_s }
-      config[:directory] = memory_directory.name if directory
-      router = instrument('router', 'router.recording')
-      core('ta_system_set_external_event_router',
-           ta.system.set_external_event_router(system: system_handle, router: router.adapter(**config)))
-      router
+    def load_notices
+      @load_notices ||= []
+    end
+
+    # The addresses (family/name) of the LOAD_NEEDED notices seen so far.
+    def loaded_addresses
+      load_notices.map { |notice| "#{notice[:address].dig(:family, :name)}/#{notice[:address][:name]}" }
+    end
+
+    # Answers core's LOAD_NEEDED notices in one ta_run response (see
+    # #on_load_needed). True when there were any: what the answers released
+    # (mail recycled, mail moved to a resident actor) has not run yet.
+    def answer_loads(response)
+      needed = Array(response[:notices]).select { |notice| notice[:kind] == 'load_needed' }
+      needed.each do |notice|
+        load_notices << notice
+        @load_handler ? @load_handler.call(self, notice) : load_failed(notice[:address], 'load_not_found')
+      end
+      !needed.empty?
+    end
+
+    # How many inputs wait in core for `address` ({family:, name:}) to become resident.
+    def address_waiting(address)
+      ta.address.waiting(system: system_handle, address: address).fetch(:value)
+    end
+
+    # The host cannot load `address` (a notice's, or a handle): core recycles what waits for it.
+    def load_failed(address, reason = 'load_not_found')
+      core('ta_address_load_failed', ta.address.load_failed(system: system_handle, address: address, reason: reason))
     end
 
     # Registers an invoker.scripted instrument for invoke `type`.
@@ -1581,6 +1602,7 @@ module TinyactorsTest
     def run_once(budget:, action_budget: 0, pause_at_microstep_start: false)
       out = core('ta_run', ta.run(system: system_handle, budget: budget, action_budget: action_budget,
                                   pause_at_microstep_start: pause_at_microstep_start, notice_capacity: 16))
+      answer_loads(out)
       outcome(out)
     end
 

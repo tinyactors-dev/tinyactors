@@ -71,6 +71,8 @@ module VirtualActorPagingScenarios
       end
 
       evict_one while @resident.size >= @limit
+      return @actors.fetch(name) if @resident.include?(name) # a load answered while evicting brought it in
+
       if actor.nil?
         actor = @context.spawn(@chart, name: name)
         @actors[name] = actor
@@ -87,10 +89,15 @@ module VirtualActorPagingScenarios
       actor
     end
 
-    # Pages out one resident actor, chosen by the seeded random.
+    # Pages out one resident actor, chosen by the seeded random. Core refuses
+    # to unload an actor that has input queued (err_busy), as a host that
+    # pages out between turns does, so the system runs first: what is queued
+    # runs, and the loads it asks for are answered.
     def evict_one
+      @context.run_system('settle before paging out')
       name = @resident.delete_at(@random.rand(@resident.size))
       actor = @actors.fetch(name)
+      before_evict(actor)
       image = @context.capture(actor)
       binding = actor.data
       @context.core('ta_actor_unload', { result: @context.unload(actor, image) })
@@ -98,6 +105,9 @@ module VirtualActorPagingScenarios
       @page_outs += 1
       name
     end
+
+    # Called with the actor about to be paged out, while it is resident.
+    def before_evict(actor); end
 
     # The final data of every actor that received a message, paging each in.
     def final_states
@@ -261,14 +271,14 @@ end
 #   owner is out. The host indexes each held image's earliest deadline
 #   (ta_session_image_next_deadline) and, when logical time reaches it,
 #   pages the owner in and lets due sends go out (ta_system_dispatch_due);
-# - its target is paged out when it comes due: the router holds the named
-#   delivery, and the host pages the target in and releases it.
+# - its target is paged out when it comes due: core keeps the mail on the
+#   target's address and reports LOAD_NEEDED (ADR 0099); the host pages the
+#   target in, and core moves the mail to it.
 #
 # Sends between actors go to named addresses (#_actor_<family>/<name>),
 # which stay valid across a reload; a runtime ID does not. A send to self
-# (no target, or #_scxml_<_sessionid>) names the sender's runtime ID, and
-# an image rebinds it to the reloaded session (ta_image_rebind_self); one
-# the router refused names its owner's address once the owner unloads.
+# (no target, or #_scxml_<_sessionid>) names the sender's session, which an
+# image keeps (ta_image_rebind_self), so it finds its owner after a reload.
 module VirtualActorPagingScenarios
   # A Host that also indexes the deadlines of the images it holds.
   class TimedHost < Host
@@ -283,11 +293,16 @@ module VirtualActorPagingScenarios
 
     def owns?(name) = name.start_with?(@prefix) && name.delete_prefix(@prefix).match?(/\A\d+\z/)
 
+    # The earliest pending send of the actor about to be paged out: what its image must report.
+    def before_evict(actor)
+      @expected_deadline = Array(actor.inspect_actor[:delayed_sends]).map { |send| send[:due] }.min
+    end
+
     def evict_one
       name = super
       deadline = @context.image_deadline(@parked.fetch(name).first)
       deadline.nil? ? @deadlines.delete(name) : @deadlines[name] = deadline
-      @on_evict&.call(name, deadline)
+      @on_evict&.call(name, deadline, @expected_deadline)
       name
     end
 
@@ -312,92 +327,42 @@ module VirtualActorPagingScenarios
     end
   end
 
-  # What every delayed send must do: go out once, not before it is due.
+  # What every delayed send must do: go out exactly once. The ledger keeps,
+  # per target, how many sends were armed for it and the sum of their keys;
+  # the actor folds each tick it receives into the same two numbers (`t`,
+  # `s`), so a lost or repeated send shows in the final comparison. When a
+  # send goes out is core's timer, which the scenarios of delayed_sends.rb
+  # and the timer tests check; here it is the paging that is under test.
   class SendLedger
     attr_reader :sends
 
-    def initialize(context, label)
-      @context = context
+    def initialize(label)
       @label = label
-      @sends = {} # k => {owner:, target:, due:, delivered_at:}
+      @sends = {} # k => {owner:, target:}
     end
 
-    def armed(k, owner:, target:, due:, route: :named)
-      @sends[k] = { owner: owner, target: target, due: due, route: route, delivered_at: nil }
+    def armed(k, owner:, target:)
+      @sends[k] = { owner: owner, target: target }
     end
 
-    def delivered(k, target)
-      send = @sends.fetch(k) { raise TinyactorsTest::AssertionFailed, "#{@label}: delivery of unknown send #{k}" }
-      @context.assert send[:delivered_at].nil?, "#{@label}: send #{k} delivered twice"
-      @context.assert_equal send[:target], target, "#{@label}: send #{k} goes to its own target"
-      @context.assert @context.now >= send[:due],
-                      "#{@label}: send #{k} delivered at t=#{@context.now}ms, before it is due at #{send[:due]}ms"
-      # Across senders the host decides the order (docs/internal/concurrency.md);
-      # from one owner to one target by one route, it is (due, send).
-      earlier = @sends.select do |other_k, other|
-        other_k != k && other[:delivered_at].nil? && other.values_at(:owner, :target, :route) ==
-          send.values_at(:owner, :target, :route) && ([other[:due], other_k] <=> [send[:due], k]).negative?
-      end
-      @context.assert earlier.empty?, "#{@label}: send #{k} delivered before #{earlier.keys} of the same owner, target and route"
-      send[:delivered_at] = @context.now
+    # {target name => [ticks, sum of keys]} that every armed send adds up to.
+    def expected
+      @sends.group_by { |_, send| send[:target] }
+            .to_h { |name, pairs| [name, [pairs.size, pairs.sum { |k, _| k }]] }
     end
-
-    # The earliest due time of `owner`'s sends that are neither delivered nor
-    # held by the router: what the owner's image must report.
-    def owner_deadline(owner, held)
-      @sends.filter_map { |k, send| send[:due] if send[:owner] == owner && send[:delivered_at].nil? && !held.include?(k) }.min
-    end
-
-    def undelivered = @sends.reject { |_, send| send[:delivered_at] }.keys
   end
-
-  # Releases every delivery the router holds, paging each named destination
-  # in first; runs the system after each, which may hold more. Returns the
-  # number of releases that had to page their target in.
-  def self.pump(context, router, host, ledger)
-    target_page_ins = 0
-    loop do
-      held = router.held
-      break if held.empty?
-
-      # A send to self names its owner's runtime ID. Its owner was resident
-      # when it went out, so release it before a named delivery pages
-      # something in and perhaps evicts that owner.
-      delivery = held.find { |held_delivery| held_delivery.dig(:destination, :kind) == 'runtime' } || held.first
-      if delivery.dig(:destination, :kind) == 'runtime'
-        id = delivery.dig(:destination, :runtime)
-        name = host.name_of(id)
-        context.assert !name.nil? && host.resident?(name),
-                       "a send to self goes to its owner's current runtime ID, not a stale one (#{id})"
-      else
-        name = delivery.dig(:destination, :name)
-        context.assert host.owns?(name), "a held delivery for #{name.inspect} belongs to this run"
-        before = host.page_ins
-        host.page_in(name)
-        target_page_ins += 1 if host.page_ins > before
-      end
-      released = router.release(delivery.fetch(:id))
-      context.assert_equal 'ok', released[:result], "#{name}: a released delivery reaches the resident actor"
-      ledger.delivered(delivery.dig(:event, :data, :k), name)
-      context.run_system("pump #{name}")
-    end
-    target_page_ins
-  end
-
-  # The ks of the tick deliveries the router holds.
-  def self.held_ks(router) = router.held.map { |delivery| delivery.dig(:event, :data, :k) }
 
   # A seeded schedule of messages, delayed sends and time steps, run once
   # with at most `limit` resident and once with everything resident.
   # Messages fold into the state in order; delayed deliveries add up without
-  # order, because across senders the host decides it. The ledger checks
-  # the order that is specified: one owner to one target by one route.
+  # order, because across senders the host decides it. The host answers
+  # core's LOAD_NEEDED for a paged-out target by paging it in, as a host with
+  # a loader does, and the ledger checks that every send arrived once.
   #
   # With `self_sends:` the schedule also arms sends to self: with no target,
-  # or to #_scxml_<_sessionid>. Refused submissions are mixed in as for the
-  # other sends: a refused send to self whose owner pages out before the
-  # retry names its owner's address from then on (ADR 0054), so the retry
-  # pages the owner in like any send to a paged-out actor.
+  # or to #_scxml_<_sessionid>. A send to self whose owner paged out before
+  # it came due is in the owner's image; paging the owner in for its
+  # deadline sends it.
   def self.run_timed(context, population:, limit:, steps:, chart:, self_sends: false)
     seed = self.seed
     stream = Random.new(seed)
@@ -407,24 +372,30 @@ module VirtualActorPagingScenarios
         when 0..2 then [:msg, stream.rand(population), stream.rand(1_000)]
         when 3..4 then [:arm, stream.rand(population), stream.rand(population), 100 * (1 + stream.rand(40))]
         when 5..6 then [:self, stream.rand(population), stream.rand(2), 100 * (1 + stream.rand(40))]
-        else [:advance, 100 * (1 + stream.rand(20)), stream.rand(4).zero?]
+        else [:advance, 100 * (1 + stream.rand(20))]
         end
       else
         case stream.rand(10)
         when 0..3 then [:msg, stream.rand(population), stream.rand(1_000)]
         when 4..6 then [:arm, stream.rand(population), stream.rand(population), 100 * (1 + stream.rand(40))]
-        else [:advance, 100 * (1 + stream.rand(20)), stream.rand(4).zero?]
+        else [:advance, 100 * (1 + stream.rand(20))]
         end
       end
     end
-    router = context.recording_router(mode: :hold, directory: true)
     counter = ResidentCounter.new(context)
 
     execute = lambda do |host, ledger, label, bound|
-      counts = { owner_deadlines: 0, target_page_ins: 0, refused: 0 }
+      counts = { owner_deadlines: 0, target_page_ins: 0 }
       next_k = 0
+      # The host's loader: a paged-out target comes in when core asks for it.
+      context.on_load_needed do |_, notice|
+        name = notice[:address][:name]
+        context.assert host.owns?(name), "a LOAD_NEEDED for #{name.inspect} belongs to this run"
+        before = host.page_ins
+        host.page_in(name)
+        counts[:target_page_ins] += 1 if host.page_ins > before
+      end
       after = lambda do |at, what|
-        counts[:target_page_ins] += pump(context, router, host, ledger)
         resident = counter.count
         context.assert bound.nil? || resident <= bound,
                        "#{label}: seed #{seed}, step #{at} (#{what}): #{resident} actors resident, limit #{bound} " \
@@ -447,17 +418,13 @@ module VirtualActorPagingScenarios
           target = host.name(b)
           host.page_in(owner).deliver('arm', data: { to: "#_actor_#{context.family(chart)}/#{target}",
                                                      delay: "#{c}ms", k: next_k })
-          ledger.armed(next_k, owner: owner, target: target, due: context.now + c)
+          ledger.armed(next_k, owner: owner, target: target)
         when :self
           next_k += 1
           owner = host.name(a)
           host.page_in(owner).deliver(b.zero? ? 'self_arm' : 'session_arm', data: { delay: "#{c}ms", k: next_k })
-          ledger.armed(next_k, owner: owner, target: owner, due: context.now + c, route: :self)
+          ledger.armed(next_k, owner: owner, target: owner)
         when :advance
-          if b
-            router.arm_fault(:submit, status: 'retry', count: 1)
-            counts[:refused] += 1
-          end
           advance_to.call(context.now + a, at)
         end
         after.call(at, op)
@@ -470,15 +437,11 @@ module VirtualActorPagingScenarios
         advance_to.call([due, context.now].max, steps)
         after.call(steps, 'drain')
       end
-      router.clear_faults
-      context.assert_equal [], ledger.undelivered,
-                           "#{label}: seed #{seed}: every delayed send is delivered (replay with TAT_PAGING_SEED=#{seed})"
       counts
     end
 
-    ledger = SendLedger.new(context, 'paged')
-    on_evict = lambda do |name, deadline|
-      expected = ledger.owner_deadline(name, held_ks(router))
+    ledger = SendLedger.new('paged')
+    on_evict = lambda do |name, deadline, expected|
       context.assert_equal expected, deadline,
                            "seed #{seed}: #{name}'s image holds its pending sends (replay with TAT_PAGING_SEED=#{seed})"
     end
@@ -486,9 +449,14 @@ module VirtualActorPagingScenarios
                                    on_evict: on_evict)
     counts = execute.call(paged, ledger, 'paged', limit)
     got = paged.final_states.transform_keys { |name| name.delete_prefix('paged') }
+    ledger.expected.each do |name, (ticks, sum)|
+      state = got[name.delete_prefix('paged')]
+      context.assert_equal [ticks, sum], [state[:t], state[:s]],
+                           "seed #{seed}, actor #{name}: every send arrived once (replay with TAT_PAGING_SEED=#{seed})"
+    end
     paged.release_parked
 
-    reference_ledger = SendLedger.new(context, 'reference')
+    reference_ledger = SendLedger.new('reference')
     reference = TimedHost.new(context, limit: population * 2, random: Random.new(0), prefix: 'all', chart: chart)
     execute.call(reference, reference_ledger, 'reference', nil)
     want = reference.final_states.transform_keys { |name| name.delete_prefix('all') }
@@ -501,8 +469,7 @@ module VirtualActorPagingScenarios
                            "(replay with TAT_PAGING_SEED=#{seed})"
     end
     counts.merge(page_ins: paged.page_ins, page_outs: paged.page_outs, sends: ledger.sends.size,
-                 self_sends: ledger.sends.count { |_, send| send[:owner] == send[:target] },
-                 refusals: router.journal.count { |entry| entry[:op] == 'submit' && entry[:status] == 'retry' })
+                 self_sends: ledger.sends.count { |_, send| send[:owner] == send[:target] })
   end
 end
 
@@ -573,7 +540,6 @@ TinyactorsTest.scenarios 'virtual actor paging, delayed sends', chart: :timed_pa
                                                            chart: chart)
       warn "  #{counts}" if ENV['TAT_PAGING_VERBOSE']
       assert counts[:sends].positive?, "the schedule armed delayed sends: #{counts}"
-      assert counts[:refusals].positive?, "the router refused some submissions once: #{counts}"
       if limit >= population
         assert_equal 0, counts[:page_outs], 'with room for every actor nothing is evicted'
       else
@@ -596,35 +562,30 @@ TinyactorsTest.scenarios 'virtual actor paging, delayed sends', chart: :timed_pa
     end
   end
 
-  # ADR 0054's retry path for an unloaded target. The router refuses the
-  # due send once: it goes back to its owner, submitted, and stays due. The
-  # host pages the target in, evicting the owner; the owner's image does not
-  # hold the submitted send (it moved to the system), and the retry reaches
-  # the paged-in target exactly once.
-  scenario 'a send refused for an unloaded target is retried after the target pages in' do
-    router = recording_router(mode: :hold, directory: true)
+  # A due send to an unloaded target. Core keeps it on the target's address
+  # and tells the host (LOAD_NEEDED) once; the host here answers later. The
+  # send has left its owner: paging the owner out meanwhile leaves nothing
+  # of it in the owner's image. Paging the target in moves the mail, and it
+  # arrives exactly once.
+  scenario 'a send to an unloaded target waits in core until the target pages in' do
+    notices = []
+    on_load_needed { |_, notice| notices << notice }
     host = VirtualActorPagingScenarios::TimedHost.new(self, limit: 1, random: Random.new(0), prefix: 'r',
                                                             chart: :timed_pager)
     host.page_in('r1')
     owner = host.page_in('r0') # evicts r1: the target is unloaded
     owner.deliver('arm', data: { to: "#_actor_#{family(:timed_pager)}/r1", delay: '1000ms', k: 1 })
-    router.arm_fault(:submit, status: 'retry', count: 1)
-    set_time(now + 1_000)
-    due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 1))
-    assert_equal [0, true], due.values_at(:dispatched, :more_due), 'the router refused the due send'
-    pending = Array(owner.inspect_actor[:delayed_sends])
-    assert_equal [true], pending.map { |send| send[:submitted] }, 'the refused send is back with its owner, submitted'
+    advance_time(1_000)
+    assert_equal ['r1'], notices.map { |notice| notice[:address][:name] }, 'core asked the host once'
+    assert_equal 1, address_waiting(notices.first[:address]), 'the send waits on the target\'s address'
+    assert_equal [], Array(owner.inspect_actor[:delayed_sends]), 'it is not the owner\'s any more'
 
-    host.page_in('r1') # evicts the owner while its send is submitted
-    assert_equal nil, host.earliest_deadline, 'the owner\'s image holds no submitted send: it moved to the system'
-    run_system('retry the refused send')
-    assert_equal 1, router.held.size, 'the retry reached the router'
-    ledger = VirtualActorPagingScenarios::SendLedger.new(self, 'refused')
-    ledger.armed(1, owner: 'r0', target: 'r1', due: now)
-    VirtualActorPagingScenarios.pump(self, router, host, ledger)
+    host.page_in('r1') # evicts the owner while the send waits
+    assert_equal nil, host.earliest_deadline, 'the owner\'s image holds no send: it was sent'
+    run_system('the target is resident')
+    assert_equal 0, address_waiting(notices.first[:address]), 'core moved the mail when the target loaded'
     assert_equal 1, host.page_in('r1').data('.t'), 'the target received the send exactly once'
-    submits = router.journal.select { |entry| entry[:op] == 'submit' }.map { |entry| entry[:status] }
-    assert_equal %w[retry accepted], submits, 'refused once, then held for the host'
+    assert_equal ['r1'], notices.map { |notice| notice[:address][:name] }, 'and was asked about once'
     host.release_parked
   end
 end
@@ -634,10 +595,11 @@ end
 # residency: loading keeps it, so _sessionid is constant for the life of the
 # session. A send to self (no target) and a send to #_scxml_<_sessionid>
 # both name the session by that ID, which no reload changes. When the send
-# is submitted, core resolves a session ID that is not a resident runtime
-# ID through its session table: to the reloaded session's runtime ID, or,
-# while the session is unloaded, to its address, so the host pages it in.
-# A session that no longer exists stays unreachable: error.communication.
+# falls due, core resolves a session ID that is not a resident runtime ID
+# through its session table: to the reloaded session's runtime ID, or, while
+# the session is unloaded, to its address, so the host is asked to page it
+# in (LOAD_NEEDED). A session that no longer exists stays unreachable:
+# error.communication.
 TinyactorsTest.chart :self_pager do
   data t: 0
   data k: []
@@ -710,7 +672,6 @@ end
 TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pager do
   %i[self_pager self_pager_js].each do |chart|
     scenario "#{chart}: a send to self reaches its owner after three reloads" do
-      router = recording_router(mode: :direct, directory: true)
       owner = spawn chart, name: 'owner'
       owner.deliver 'self_arm', data: { delay: '1000ms', k: 1 }
       owner.deliver 'session_arm', data: { delay: '1000ms', k: 2 }
@@ -730,13 +691,12 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
       assert_equal [1, 2], owner.data('.k')
       assert_equal "#_actor_#{family(chart)}/owner", owner.data('.origin'),
                    'the origin is the owner\'s address'
-      assert_equal [], router.journal.select { |entry| entry[:result] == 'err_not_found' }, 'no delivery went stale'
+      assert_equal [], load_notices, 'no delivery went stale: core always found the owner'
     end
   end
 
   %i[self_pager self_pager_js].each do |chart|
     scenario "#{chart}: _sessionid is constant across reloads" do
-      recording_router(mode: :direct, directory: true)
       actor = spawn chart, name: 'a'
       first = actor.handle
       session = actor.inspect_actor[:session_id]
@@ -755,7 +715,6 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
   end
 
   scenario '_sessionid reads the same text before and after a reload' do
-    recording_router(mode: :direct, directory: true)
     actor = spawn :self_pager, name: 'a'
     actor.deliver 'remember'
     before = actor.data('.sid').to_s
@@ -775,7 +734,6 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
   end
 
   scenario 'a send to another session reaches it after it reloads' do
-    router = recording_router(mode: :direct, directory: true)
     sender = spawn :self_pager, name: 'sender'
     target = spawn :self_pager, name: 'target'
     session = target.inspect_actor[:session_id]
@@ -787,13 +745,12 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
     advance_time(100)
     assert_equal 1, target.data('.t'), 'the reloaded target session receives the send once'
     assert_equal [], sender.data('.errs')
-    submits = router.journal.select { |entry| entry[:op] == 'submit' }
-    assert_equal [{ kind: 'runtime', runtime: target.handle }], submits.map { |entry| entry[:destination] },
-                 'core resolved the session to its current runtime ID'
+    assert_equal [], load_notices, 'core resolved the session to its current runtime ID: no load was needed'
   end
 
   scenario 'a send to an unloaded session goes by its address, so the host pages it in' do
-    router = recording_router(mode: :hold, directory: true)
+    notices = []
+    on_load_needed { |_, notice| notices << notice }
     sender = spawn :self_pager, name: 'sender'
     target = spawn :self_pager, name: 'target'
     session = target.inspect_actor[:session_id]
@@ -801,21 +758,18 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
     image = capture(target)
     binding = target.data
     core('ta_actor_unload', { result: unload(target, image) })
-    set_time(now + 100)
-    core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 1))
-    submit = router.journal.find { |entry| entry[:op] == 'submit' }
-    assert_equal 'named', submit.dig(:destination, :kind), 'the unloaded session is addressed by name'
-    assert_equal 'target', submit.dig(:destination, :name)
+    advance_time(100)
+    assert_equal [['self_pager', 'target']], notices.map { |notice| [notice[:address].dig(:family, :name), notice[:address][:name]] },
+                 'the unloaded session is addressed by name, and the host is asked once'
+    assert_equal 1, address_waiting(notices.first[:address])
     core('ta_actor_load', { result: load(target, image, binding: binding) })
     destroy_image(image)
     assert_equal session, target.inspect_actor[:session_id], 'the paged-in actor continues the session'
-    router.held.each { |delivery| router.release(delivery.fetch(:id)) }
     run_system('after paging the target in')
     assert_equal [6], target.data('.k'), 'the paged-in session receives the send once'
   end
 
   scenario 'a send to a session that ended is error.communication' do
-    router = recording_router(mode: :direct, directory: true)
     sender = spawn :self_pager, name: 'sender'
     target = spawn :self_pager, name: 'target'
     session = target.inspect_actor[:session_id]
@@ -823,11 +777,10 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
     target.destroy
     advance_time(100)
     assert_equal ['error.communication'], sender.data('.errs'), 'the sender learns the session is gone'
-    assert_equal %w[err_not_found], router.journal.select { |entry| entry[:op] == 'submit' }.map { |entry| entry[:result] }
+    assert_equal [], Array(load_notices.reject { |notice| notice[:session] }), 'only the gone session\'s key was asked about'
   end
 
   scenario 'a send to self captured while paused mid-microstep reaches the reloaded actor' do
-    recording_router(mode: :direct, directory: true)
     actor = spawn :self_pager, name: 'a'
     assert_equal 'ok', actor.post('self_arm_then', data: { delay: '100ms', k: 5 })
     assert_equal 'paused', actor.resume(budget: 1000, action_budget: 1)
@@ -840,24 +793,5 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
     assert_equal 1, actor.data('.after'), 'the rest of the microstep ran once'
     advance_time(100)
     assert_equal [5], actor.data('.k'), 'the send to self is delivered once'
-  end
-
-  # A send to self that the router refuses is submitted: it stays with its
-  # owner, not in the owner's image (ADR 0054). When the owner pages out
-  # before the retry, the send moves to the system's list. It names the
-  # session by its session ID, so its retry reaches the reloaded owner
-  # (ADR 0066).
-  scenario 'a refused send to self survives its owner paging out' do
-    router = recording_router(mode: :hold, directory: true)
-    owner = spawn :self_pager, name: 'a'
-    owner.deliver 'self_arm', data: { delay: '100ms', k: 7 }
-    router.arm_fault(:submit, status: 'retry', count: 1)
-    set_time(now + 100)
-    core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 1))
-    cycle_residency(owner)
-    run_system('retry the refused send')
-    router.held.each { |delivery| router.release(delivery.fetch(:id)) }
-    run_system('after the retry')
-    assert_equal [7], owner.data('.k'), 'the reloaded owner receives its refused send to self'
   end
 end

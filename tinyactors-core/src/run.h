@@ -149,6 +149,13 @@ typedef struct ta_run_slot {
      * input. See mail.h.
      */
     ta_ilist outgoing;
+    /*
+     * The mail this macrostep has sent to destinations that are not resident,
+     * in send order: each waits for an address (package mail). Placed one by
+     * one when the macrostep ends, freed unseen when it is abandoned.
+     * Lifetime: input.
+     */
+    ta_ilist outgoing_waiting;
 } ta_run_slot;
 
 /* ta_runner is the control block (lifetime: system). Its fields are for run.c and the tests. */

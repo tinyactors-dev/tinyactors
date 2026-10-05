@@ -188,7 +188,8 @@ static napi_value tna_complete_load_inner(napi_env env, napi_callback_info info)
     if (load.address != NULL && (outcome == TAH_LOAD_FAILED || outcome == TAH_LOAD_TIMED_OUT)) {
         tna_load_log(system, &load, outcome, detail);
     }
-    ta_result result = tah_loads_finish(tah_system_loads(system), &(tah_load_finish){ .sched = tah_system_sched(system),
+    ta_result result = tah_loads_finish(tah_system_loads(system), &(tah_load_finish){ .core = tah_system_core(system),
+                                                                            .sched = tah_system_sched(system),
                                                                             .directory = tah_system_directory(system),
                                                                             .metrics = tah_system_metrics(system),
                                                                             .index = index,

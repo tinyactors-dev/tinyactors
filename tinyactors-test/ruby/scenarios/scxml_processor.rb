@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # The SCXML Event I/O Processor is built into core (ADR 0040): core resolves
-# its targets and envelopes and submits deliveries to the host's router,
+# its targets and envelopes and places the mail itself (ADR 0099),
 # rather than making every embedder reimplement SCXML's own processor.
 # `ta_system_scxml_io_type()` returns its reserved type atom, which
 # `ta_system_register_io` refuses to replace.

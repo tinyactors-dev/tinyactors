@@ -145,10 +145,6 @@ tah_load *tah_loads_find(const tah_loads *loads, uint32_t index, uint32_t genera
     return load->address != NULL && load->generation == generation ? load : NULL;
 }
 
-bool tah_loads_would_load(const tah_loads *loads, const ta_address *address) {
-    return tah_loads_limit(loads, address) != 0;
-}
-
 bool tah_loads_waiting(const tah_loads *loads, const ta_address *address) {
     uint64_t index = 0;
     return tah_map_count(&loads->by_address) != 0 &&
@@ -214,7 +210,6 @@ typedef struct {
     tah_load_why why;
     const ta_trace_parent *trace;
     uint64_t now_ns;
-    bool unkeyed; /* a session this system cannot name: kept out of `by_address` */
 } tah_load_start;
 
 static ta_result tah_loads_start(tah_loads *loads, const tah_load_start *start, uint32_t *out) {
@@ -223,7 +218,7 @@ static ta_result tah_loads_start(tah_loads *loads, const tah_load_start *start, 
         return TA_ERR_NOMEM;
     }
     if (tah_vec_reserve(&loads->requests, loads->requests.count + 1u) != TA_OK ||
-        (!start->unkeyed && tah_map_put(&loads->by_address, (uint64_t)(uintptr_t)start->address, index) != TA_OK)) {
+        tah_map_put(&loads->by_address, (uint64_t)(uintptr_t)start->address, index) != TA_OK) {
         tah_load *load = tah_vec_at(&loads->loads, index);
         load->next_free = loads->free_head;
         loads->free_head = index;
@@ -235,7 +230,6 @@ static ta_result tah_loads_start(tah_loads *loads, const tah_load_start *start, 
     load->address = start->address;
     load->max_waiting = start->max_waiting;
     load->why = (uint8_t)start->why;
-    load->keyed = !start->unkeyed;
     load->started_ns = start->now_ns;
     if (start->trace != NULL) {
         load->trace = *start->trace;
@@ -299,43 +293,23 @@ ta_result tah_loads_route(tah_loads *loads, const tah_load_route *route) {
     return result;
 }
 
-bool tah_loads_family_loads(const tah_loads *loads, ta_str family) {
-    const tah_loader_family *found = loads->families.count == 0 ? NULL : tah_loads_family_named(loads, family, NULL);
-    return found != NULL && found->max_waiting != 0;
-}
-
-ta_result tah_loads_route_session(tah_loads *loads, const tah_load_session_route *route) {
+ta_result tah_loads_wanted(tah_loads *loads, const tah_load_wanted *wanted) {
     uint64_t found = 0;
-    if (route->shared && tah_map_count(&loads->by_address) != 0 &&
-        tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)route->address, &found)) {
-        return tah_loads_append(loads, route->sched, tah_vec_at(&loads->loads, (uint32_t)found), route->message);
+    if (tah_map_count(&loads->by_address) != 0 &&
+        tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)wanted->address, &found)) {
+        return TA_OK; /* the load in flight serves this mail too */
     }
-    uint32_t limit = tah_loads_limit(loads, route->address);
+    uint32_t limit = tah_loads_limit(loads, wanted->address);
     if (limit == 0) {
         return TA_ERR_NOT_FOUND;
     }
     uint32_t index = 0;
-    ta_result result = tah_loads_start(loads, &(tah_load_start){ .address = route->address,
-                                                                  .max_waiting = limit,
-                                                                  .why = TAH_LOAD_WHY_SESSION,
-                                                                  .trace = route->message->trace,
-                                                                  .now_ns = route->now_ns,
-                                                                  .unkeyed = !route->shared },
-                                       &index);
-    if (result != TA_OK) {
-        return result;
-    }
-    tah_load *load = tah_vec_at(&loads->loads, index);
-    result = tah_loads_append(loads, route->sched, load, route->message);
-    if (result != TA_OK) {
-        loads->requests.count -= 1u;
-        if (route->shared) {
-            tah_map_remove(&loads->by_address, (uint64_t)(uintptr_t)route->address);
-        }
-        loads->in_flight -= 1u;
-        tah_loads_give(loads, index);
-    }
-    return result;
+    return tah_loads_start(loads, &(tah_load_start){ .address = wanted->address,
+                                                      .max_waiting = limit,
+                                                      .why = wanted->session ? TAH_LOAD_WHY_SESSION : TAH_LOAD_WHY_MAIL,
+                                                      .trace = wanted->trace,
+                                                      .now_ns = wanted->now_ns },
+                           &index);
 }
 
 bool tah_loads_next_request(tah_loads *loads, tah_load_request *out) {
@@ -355,6 +329,17 @@ bool tah_loads_next_request(tah_loads *loads, tah_load_request *out) {
         return true;
     }
     return false;
+}
+
+/* What core's list hears when a load ends without an actor: the TA_REFUSED_LOAD_ reason of the outcome. */
+static ta_refusal_reason tah_load_refusal(tah_load_outcome outcome) {
+    switch (outcome) {
+    case TAH_LOAD_NOT_FOUND:
+    case TAH_LOAD_DONE: return TA_REFUSED_LOAD_NOT_FOUND;
+    case TAH_LOAD_REJECTED: return TA_REFUSED_LOAD_REJECTED;
+    case TAH_LOAD_TIMED_OUT: return TA_REFUSED_LOAD_TIMED_OUT;
+    default: return TA_REFUSED_LOAD_FAILED;
+    }
 }
 
 static tah_dead_reason tah_load_dead_reason(tah_load_outcome outcome) {
@@ -398,15 +383,23 @@ ta_result tah_loads_finish(tah_loads *loads, const tah_load_finish *finish) {
     if (load->mail.first != 0) {
         tah_sched_bury_waiting(finish->sched, &load->mail, tah_load_dead_reason(outcome));
     }
+    /* Core's own list: a named address was served by the actor's becoming resident there; a session's key is named. */
+    if (outcome == TAH_LOAD_LOADED || outcome == TAH_LOAD_SPAWNED) {
+        if (session) {
+            (void)ta_address_loaded(finish->core, &(ta_address_loaded_params){ .address = load->address,
+                                                                              .actor = finish->actor });
+        }
+    } else {
+        (void)ta_address_load_failed(finish->core, &(ta_address_load_failed_params){ .address = load->address,
+                                                                                    .reason = tah_load_refusal(outcome) });
+    }
     loads->waiting -= waiting;
     loads->outcomes[outcome] += 1u;
     double seconds = finish->now_ns > load->started_ns ? (double)(finish->now_ns - load->started_ns) / 1e9 : 0.0;
     tah_exemplar exemplar =
         tah_exemplar_of(&load->trace.context, ta_step_key_span_id(load->trace.cause), finish->wall_ns);
     tah_histogram_record(&finish->metrics->load_seconds, seconds, &exemplar);
-    if (load->keyed) {
-        tah_map_remove(&loads->by_address, (uint64_t)(uintptr_t)load->address);
-    }
+    tah_map_remove(&loads->by_address, (uint64_t)(uintptr_t)load->address);
     loads->in_flight -= 1u;
     tah_loads_give(loads, finish->index);
     return result == TA_OK ? TA_OK : TA_ERR_NOMEM;

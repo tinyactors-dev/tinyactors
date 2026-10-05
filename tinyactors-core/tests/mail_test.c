@@ -105,8 +105,8 @@ static const ta_actor_directory_vtable dir_vtable = {
 typedef struct {
     ta_system *system;
     fixed_directory directory;
-    ta_definition_id talker, chain, finisher, spinner;
-    ta_event_name_id go, e1, e2, e3, end;
+    ta_definition_id talker, chain, finisher, spinner, timed;
+    ta_event_name_id go, e1, e2, e3, end, tick;
 } world;
 
 static ta_event_name_id event_name(ta_system *system, const char *text) {
@@ -171,6 +171,22 @@ static void world_init(world *w, const ta_param_value *params, uint32_t count) {
               { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = (const ta_str[]){ STR("x"), END } }, END } },
         END,
     };
+    /* Sends itself `tick` after a second and then goes to `ticked`: a due send that is mail to a resident session. */
+    ta_scxml_state_spec timed[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("waiting"),
+          .onentry = (const ta_scxml_handler_spec[]){
+              { .actions = (const ta_scxml_action_spec[]){
+                    { .kind = TA_SCXML_ACTION_SEND,
+                      .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR("tick") },
+                                   .delay = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("1s") } } },
+                    END } },
+              END },
+          .transitions = (const ta_scxml_transition_spec[]){ ON("tick", "ticked"), END } },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("ticked") },
+        END,
+    };
+    w->timed = define(w->system, &(ta_scxml_spec){ .name = STR("timed"), .states = timed });
+    w->tick = event_name(w->system, "tick");
     w->talker = define(w->system, &(ta_scxml_spec){ .name = STR("talker"), .states = talker });
     w->chain = define(w->system, &(ta_scxml_spec){ .name = STR("chain"), .states = chain });
     w->finisher = define(w->system, &(ta_scxml_spec){ .name = STR("finisher"), .states = finisher });
@@ -263,6 +279,7 @@ static ta_mail_status send_to(world *w, ta_actor_id sender, ta_actor_ref destina
         .destination = destination,
         .event = { .name = name, .type = TA_EVENT_EXTERNAL, .send_id = send_id, .invoke_id = TA_INVOKE_ID_NONE,
                    .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = from->record.self } },
+        .in_macrostep = true,
     };
     return ta_mail_send(w->system, &mail);
 }
@@ -282,6 +299,32 @@ static uint32_t queued_of(world *w, ta_actor_id id) {
     return actor == NULL ? 0xffffffffu : actor->queued;
 }
 
+/* Runs ta_run once with report_taken and `capacity` notices; answers the status. */
+static ta_run_status run_notices(world *w, ta_run_notice *notices, uint32_t capacity, uint32_t *count) {
+    ta_run_status status = TA_RUN_IDLE;
+    CHECK(ta_run(w->system, &(ta_run_params){ .budget = 1000, .report_taken = true, .status = &status,
+                                              .notices = notices, .notice_capacity = capacity,
+                                              .notice_count = count }) == TA_OK);
+    return status;
+}
+
+static uint32_t count_kind(const ta_run_notice *notices, uint32_t count, ta_run_notice_kind kind) {
+    uint32_t n = 0;
+    for (uint32_t index = 0; index < count; index += 1u) {
+        n += notices[index].kind == kind ? 1u : 0u;
+    }
+    return n;
+}
+
+static ta_address *intern_address(world *w, const char *family, const char *name) {
+    ta_address *address = NULL;
+    CHECK(ta_address_intern(w->system, &(ta_actor_address){ .family = { { .ptr = family, .len = (uint32_t)strlen(family) } },
+                                                            .name = { .ptr = name, .len = (uint32_t)strlen(name) } },
+                            &address) == TA_OK);
+    return address;
+}
+
+
 /* ------------------------------------------------------------------------
  * 1. Order and visibility
  */
@@ -294,8 +337,8 @@ static void test_order_and_visibility(void) {
     settle(&w);
     CHECK(in_state(&w, receiver, "s0"));
 
-    /* Nothing is sent outside a macrostep: no input runs, the answer is "not here". */
-    CHECK(send_to(&w, sender, runtime_ref(receiver), w.e1, 0) == TA_MAIL_ROUTER);
+    /* A macrostep's mail needs a macrostep to pay it: none runs, so there is no envelope for it. */
+    CHECK(send_to(&w, sender, runtime_ref(receiver), w.e1, 0) == TA_MAIL_FULL);
 
     pause_in_macrostep(&w, sender);
     CHECK(w.system->envelopes.quota.reserved > 0); /* the reserve is held by the running input */
@@ -336,19 +379,19 @@ static void test_destinations(void) {
     pause_in_macrostep(&w, sender);
     uint64_t used = w.system->envelopes.pool.used;
 
-    /* An ID no session has, the ID of a destroyed one and the ID of a finished one are not placed here. */
-    CHECK(send_to(&w, sender, runtime_ref(0), w.e1, 0) == TA_MAIL_ROUTER);
-    CHECK(send_to(&w, sender, runtime_ref(done), w.e1, 0) == TA_MAIL_ROUTER); /* its family may have a loader */
-    CHECK(send_to(&w, sender, runtime_ref(destroyed), w.e1, 0) == TA_MAIL_ROUTER);
+    /* An ID no session has, and the ID of a destroyed or a finished one, with no family to serve it, are undeliverable. */
+    CHECK(send_to(&w, sender, runtime_ref(0), w.e1, 0) == TA_MAIL_UNDELIVERABLE);
+    CHECK(send_to(&w, sender, runtime_ref(done), w.e1, 0) == TA_MAIL_UNDELIVERABLE);
+    CHECK(send_to(&w, sender, runtime_ref(destroyed), w.e1, 0) == TA_MAIL_UNDELIVERABLE);
     CHECK(w.system->envelopes.pool.used == used);
     CHECK(ta_ilist_is_empty(&w.system->runner.slot.outgoing));
+    CHECK(ta_ilist_is_empty(&w.system->runner.slot.outgoing_waiting));
 
     /* A named destination is the session the directory says is resident. */
     ta_address *address = NULL;
     CHECK(ta_address_intern(w.system, &(ta_actor_address){ .family = { STR("chain") }, .name = STR("n") }, &address) ==
           TA_OK);
     ta_actor_ref named = { .kind = TA_ACTOR_REF_NAMED, .as.named = address };
-    CHECK(send_to(&w, sender, named, w.e1, 0) == TA_MAIL_ROUTER); /* the directory knows no one yet */
     w.directory.resident = receiver;
     CHECK(send_to(&w, sender, named, w.e1, 0) == TA_MAIL_QUEUED);
     w.directory.resident = done; /* a name that a finished session holds is known to be undeliverable */
@@ -358,6 +401,155 @@ static void test_destinations(void) {
 
     CHECK(run_for(&w, 1000) == TA_RUN_IDLE);
     CHECK(in_state(&w, receiver, "s1"));
+    quiescent(&w);
+    world_close(&w);
+}
+
+
+/* ------------------------------------------------------------------------
+ * 2b. Destinations that wait: a name nobody holds, and a session that is gone
+ */
+
+static ta_actor_ref family_ref(world *w, ta_actor_id session, const char *family) {
+    ta_atom atom = 0;
+    CHECK(ta_system_intern_atom(w->system, (ta_str){ .ptr = family, .len = (uint32_t)strlen(family) }, &atom) == TA_OK);
+    return (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .family = atom, .as.runtime = session };
+}
+
+/* The key address of a gone session: its family, and the session's text as the name. */
+static ta_address *session_key(world *w, ta_actor_id session, const char *family) {
+    char text[96];
+    uint32_t needed = 0;
+    CHECK(ta_session_id_format(w->system, &(ta_session_id_format_params){ .session = session,
+                                                                         .family = { .ptr = family,
+                                                                                     .len = (uint32_t)strlen(family) },
+                                                                         .buffer = text, .capacity = sizeof text,
+                                                                         .needed = &needed }) == TA_OK);
+    ta_address *key = NULL;
+    CHECK(ta_address_intern(w->system,
+                            &(ta_actor_address){ .family = { { .ptr = family, .len = (uint32_t)strlen(family) } },
+                                                 .name = { .ptr = text, .len = needed - 1u } },
+                            &key) == TA_OK);
+    return key;
+}
+
+/*
+ * A name that nobody holds, a session that was destroyed and one that
+ * finished (both with a family that may serve them) wait for an address: the
+ * mail is on `outgoing_waiting` until the macrostep ends, then on the
+ * address's list, invisible to every session, and the host is asked once for
+ * each address. A failed load comes back to the sender as an error.
+ */
+static void test_waiting_destinations(void) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_actor_id sender = spawn(&w, w.talker);
+    ta_actor_id done = spawn(&w, w.finisher);
+    ta_actor_id destroyed = spawn(&w, w.chain);
+    settle(&w);
+    CHECK(post(&w, done, w.end) == TA_OK);
+    CHECK(ta_actor_destroy(w.system, destroyed) == TA_OK);
+    settle(&w);
+    ta_address *named = intern_address(&w, "chain", "n");
+    ta_address *key_gone = session_key(&w, destroyed, "chain");
+    ta_address *key_done = session_key(&w, done, "finisher");
+    CHECK(key_gone != key_done);
+
+    pause_in_macrostep(&w, sender);
+    uint64_t used = w.system->envelopes.pool.used;
+    ta_actor_ref by_name = { .kind = TA_ACTOR_REF_NAMED, .as.named = named };
+    CHECK(send_to(&w, sender, by_name, w.e1, 41) == TA_MAIL_WAITING);
+    CHECK(send_to(&w, sender, by_name, w.e2, 42) == TA_MAIL_WAITING);
+    CHECK(send_to(&w, sender, family_ref(&w, destroyed, "chain"), w.e1, 43) == TA_MAIL_WAITING);
+    CHECK(send_to(&w, sender, family_ref(&w, done, "finisher"), w.e1, 44) == TA_MAIL_WAITING);
+    CHECK(w.system->envelopes.pool.used == used + 4u);
+    CHECK(ta_ilist_is_empty(&w.system->runner.slot.outgoing) && !ta_ilist_is_empty(&w.system->runner.slot.outgoing_waiting));
+    CHECK(ta_address_waiting(w.system, named) == 0u); /* nothing is visible before the macrostep ends */
+    consistent(&w);
+
+    /* The macrostep ends: each mail joins its list, in order, and each list asks once. */
+    ta_run_notice notices[16];
+    uint32_t count = 0;
+    CHECK(run_notices(&w, notices, 16, &count) == TA_RUN_IDLE);
+    CHECK(ta_address_waiting(w.system, named) == 2u);
+    CHECK(ta_address_waiting(w.system, key_gone) == 1u && ta_address_waiting(w.system, key_done) == 1u);
+    CHECK(count_kind(notices, count, TA_NOTICE_LOAD_NEEDED) == 3u);
+    for (uint32_t index = 0; index < count; index += 1u) {
+        if (notices[index].kind != TA_NOTICE_LOAD_NEEDED) {
+            continue;
+        }
+        CHECK(notices[index].source == TA_SOURCE_MAIL);
+        CHECK(notices[index].session == (notices[index].address != named));
+    }
+    consistent(&w);
+
+    /* The host cannot load any of them: the sender hears an error for each mail, in the order sent. */
+    CHECK(ta_address_load_failed(w.system, &(ta_address_load_failed_params){ .address = named,
+                                                                            .reason = TA_REFUSED_LOAD_NOT_FOUND }) == TA_OK);
+    CHECK(ta_address_load_failed(w.system, &(ta_address_load_failed_params){ .address = key_gone,
+                                                                            .reason = TA_REFUSED_LOAD_NOT_FOUND }) == TA_OK);
+    CHECK(ta_address_load_failed(w.system, &(ta_address_load_failed_params){ .address = key_done,
+                                                                            .reason = TA_REFUSED_LOAD_NOT_FOUND }) == TA_OK);
+    CHECK(queued_of(&w, sender) == 4u);
+    settle(&w);
+    CHECK(in_state(&w, sender, "failed"));
+    ta_address_release(named);
+    ta_address_release(key_gone);
+    ta_address_release(key_done);
+    quiescent(&w);
+    world_close(&w);
+}
+
+/*
+ * A session of another incarnation parses as session 0 with its family
+ * (scxml_uri.c), and its family's loader may serve it: the mail waits under
+ * the key "<this incarnation>.0.<family>", and one failed load answers it.
+ */
+static void test_other_incarnation_session_waits(void) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_actor_id sender = spawn(&w, w.talker);
+    settle(&w);
+    char text[64];
+    int length = snprintf(text, sizeof text, "%llu.0.chain", (unsigned long long)ta_system_incarnation(w.system));
+    CHECK(length > 0 && (size_t)length < sizeof text);
+    ta_address *key = NULL;
+    CHECK(ta_address_intern(w.system,
+                            &(ta_actor_address){ .family = { { .ptr = "chain", .len = 5 } },
+                                                 .name = { .ptr = text, .len = (uint32_t)length } },
+                            &key) == TA_OK);
+    pause_in_macrostep(&w, sender);
+    CHECK(send_to(&w, sender, family_ref(&w, 0, "chain"), w.e1, 51) == TA_MAIL_WAITING);
+    ta_run_notice notices[8];
+    uint32_t count = 0;
+    CHECK(run_notices(&w, notices, 8, &count) == TA_RUN_IDLE);
+    CHECK(ta_address_waiting(w.system, key) == 1u);
+    CHECK(count_kind(notices, count, TA_NOTICE_LOAD_NEEDED) == 1u);
+    CHECK(ta_address_load_failed(w.system, &(ta_address_load_failed_params){ .address = key,
+                                                                            .reason = TA_REFUSED_LOAD_NOT_FOUND }) == TA_OK);
+    CHECK(queued_of(&w, sender) == 1u);
+    settle(&w);
+    CHECK(in_state(&w, sender, "failed"));
+    ta_address_release(key);
+    quiescent(&w);
+    world_close(&w);
+}
+
+/* A name that becomes resident during the sender's macrostep gets its mail at the end of it. */
+static void test_name_resident_by_the_end(void) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_actor_id sender = spawn(&w, w.talker);
+    ta_actor_id receiver = spawn(&w, w.chain);
+    settle(&w);
+    ta_address *named = intern_address(&w, "chain", "n");
+    pause_in_macrostep(&w, sender);
+    ta_actor_ref by_name = { .kind = TA_ACTOR_REF_NAMED, .as.named = named };
+    CHECK(send_to(&w, sender, by_name, w.e1, 0) == TA_MAIL_WAITING); /* nobody holds the name yet */
+    w.directory.resident = receiver;                                 /* and now somebody does */
+    CHECK(run_for(&w, 1000) == TA_RUN_IDLE);
+    CHECK(ta_address_waiting(w.system, named) == 0u && in_state(&w, receiver, "s1"));
+    ta_address_release(named);
     quiescent(&w);
     world_close(&w);
 }
@@ -712,31 +904,6 @@ static void test_finished_name(void) {
 /* ------------------------------------------------------------------------
  * 8. Waiting for an address (ADR 0099 sections 4 and 6)
  */
-
-/* Runs ta_run once with report_taken and `capacity` notices; answers the status. */
-static ta_run_status run_notices(world *w, ta_run_notice *notices, uint32_t capacity, uint32_t *count) {
-    ta_run_status status = TA_RUN_IDLE;
-    CHECK(ta_run(w->system, &(ta_run_params){ .budget = 1000, .report_taken = true, .status = &status,
-                                              .notices = notices, .notice_capacity = capacity,
-                                              .notice_count = count }) == TA_OK);
-    return status;
-}
-
-static uint32_t count_kind(const ta_run_notice *notices, uint32_t count, ta_run_notice_kind kind) {
-    uint32_t n = 0;
-    for (uint32_t index = 0; index < count; index += 1u) {
-        n += notices[index].kind == kind ? 1u : 0u;
-    }
-    return n;
-}
-
-static ta_address *intern_address(world *w, const char *family, const char *name) {
-    ta_address *address = NULL;
-    CHECK(ta_address_intern(w->system, &(ta_actor_address){ .family = { { .ptr = family, .len = (uint32_t)strlen(family) } },
-                                                            .name = { .ptr = name, .len = (uint32_t)strlen(name) } },
-                            &address) == TA_OK);
-    return address;
-}
 
 /* Spawns `definition` at `address`; the directory then says it is resident. */
 static ta_actor_id spawn_at(world *w, ta_definition_id definition, const char *family, const char *name) {
@@ -1132,12 +1299,175 @@ static void test_waiting_makes_no_allocator_call(void) {
     world_close(&w);
 }
 
+/* ------------------------------------------------------------------------
+ * 9. Safe-point mail (due sends, activation sends): the envelope is made from
+ * the pool's free quota and joins the run queue at once.
+ */
+
+/* Mail sent at a safe point is on the run queue in send order and the receiver runs it in that order. */
+static void test_safe_point_order(void) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_actor_id sender = spawn(&w, w.talker);
+    ta_actor_id receiver = spawn(&w, w.chain);
+    settle(&w);
+    ta_mail_params mail = { .sender = sender, .destination = runtime_ref(receiver),
+                            .event = { .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE } };
+    ta_event_name_id names[3] = { w.e1, w.e2, w.e3 };
+    CHECK(ta_mail_prepare(w.system, 3u) == TA_OK);
+    for (uint32_t index = 0; index < 3u; index += 1u) {
+        mail.event.name = names[index];
+        CHECK(ta_mail_send(w.system, &mail) == TA_MAIL_QUEUED);
+    }
+    consistent(&w);
+    CHECK(!ta_ilist_is_empty(&w.system->envelopes.run)); /* visible at once: no macrostep to wait for */
+    CHECK(queued_of(&w, receiver) == 3u);
+    CHECK(in_state(&w, receiver, "s0"));
+    settle(&w);
+    CHECK(in_state(&w, receiver, "s3"));
+    quiescent(&w);
+    world_close(&w);
+}
+
+/*
+ * A macrostep paused by a budget keeps the slot while safe points run. Mail
+ * made at a safe point then goes to the run queue and is paid from the free
+ * quota: the paused macrostep's outgoing list and claim are untouched by it,
+ * and its own mail still waits for its end, behind the safe-point mail.
+ */
+static void test_safe_point_while_paused(void) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_actor_id sender = spawn(&w, w.talker);
+    ta_actor_id receiver = spawn(&w, w.chain);
+    settle(&w);
+    pause_in_macrostep(&w, sender);
+    CHECK(send_to(&w, sender, runtime_ref(receiver), w.e2, 0) == TA_MAIL_QUEUED); /* the paused macrostep's own */
+    uint64_t held = w.system->runner.slot.claim.held;
+    uint32_t outgoing = w.system->runner.slot.outgoing.head;
+    ta_mail_params mail = { .sender = sender, .destination = runtime_ref(receiver),
+                            .event = { .name = w.e1, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE } };
+    CHECK(ta_mail_prepare(w.system, 1u) == TA_OK);
+    CHECK(ta_mail_send(w.system, &mail) == TA_MAIL_QUEUED);
+    CHECK(w.system->runner.slot.claim.held == held); /* the claim paid nothing for it */
+    CHECK(w.system->runner.slot.outgoing.head == outgoing && outgoing == w.system->runner.slot.outgoing.tail);
+    CHECK(!ta_ilist_is_empty(&w.system->envelopes.run));
+    consistent(&w);
+    /* e1 (safe point) reaches the receiver before e2 (sent by the macrostep that was paused). */
+    CHECK(run_for(&w, 1000) == TA_RUN_IDLE);
+    CHECK(in_state(&w, receiver, "s2"));
+    quiescent(&w);
+    world_close(&w);
+}
+
+/* ta_mail_prepare grows the pool at a safe point, answers FULL at the bound and changes nothing then. */
+static void test_prepare_bounds(void) {
+    ta_param_value params[] = { { TA_PARAM_POOL_ENVELOPES, 8 }, { TA_PARAM_MACROSTEP_RESERVE, 2 } };
+    world w;
+    world_init(&w, params, 2);
+    ta_actor_id receiver = spawn(&w, w.chain);
+    settle(&w);
+    uint32_t bound = w.system->envelopes.bound;
+    CHECK(bound == 8u);
+    CHECK(ta_mail_prepare(w.system, bound + 1u) == TA_ERR_FULL);
+    CHECK(ta_mail_prepare(w.system, bound) == TA_OK);
+    ta_mail_params mail = { .sender = 0, .destination = runtime_ref(receiver),
+                            .event = { .name = w.e1, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE } };
+    for (uint32_t index = 0; index < bound; index += 1u) {
+        CHECK(ta_mail_send(w.system, &mail) == TA_MAIL_QUEUED);
+    }
+    CHECK(ta_mail_send(w.system, &mail) == TA_MAIL_FULL); /* no envelope left, and nothing changed */
+    CHECK(queued_of(&w, receiver) == bound);
+    CHECK(ta_mail_prepare(w.system, 1u) == TA_ERR_FULL);
+    consistent(&w);
+    settle(&w);
+    quiescent(&w);
+    world_close(&w);
+}
+
+/* One ta_system_dispatch_due call; answers dispatched, and fills `fired` when it is not NULL. */
+static uint32_t dispatch(world *w, ta_due_fired *fired, uint32_t capacity, uint32_t *fired_count, bool *more) {
+    uint32_t dispatched = 0;
+    CHECK(ta_system_dispatch_due(w->system, &(ta_due_dispatch_params){ .budget = 100, .dispatched = &dispatched,
+                                                                      .more_due = more, .fired = fired,
+                                                                      .fired_capacity = capacity,
+                                                                      .fired_count = fired_count }) == TA_OK);
+    return dispatched;
+}
+
+/*
+ * A due send to a resident session is an envelope: dispatch reports it in
+ * `fired`, the macrostep paused meanwhile keeps its claim and outgoing list,
+ * and the receiver runs the mail.
+ */
+static void test_due_send_is_mail(void) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_actor_id timed = spawn(&w, w.timed);
+    ta_actor_id sender = spawn(&w, w.talker);
+    settle(&w);
+    CHECK(in_state(&w, timed, "waiting"));
+    pause_in_macrostep(&w, sender);
+    uint64_t held = w.system->runner.slot.claim.held;
+    CHECK(ta_system_set_time(w.system, 1000) == TA_OK);
+    ta_due_fired fired[4];
+    uint32_t fired_count = 99;
+    bool more = true;
+    CHECK(dispatch(&w, fired, 4, &fired_count, &more) == 1u);
+    CHECK(!more && fired_count == 1u && fired[0].delivered && fired[0].due == 1000);
+    CHECK(fired[0].sender.kind == TA_ACTOR_REF_RUNTIME && fired[0].sender.as.runtime == timed);
+    CHECK(w.system->runner.slot.claim.held == held && ta_ilist_is_empty(&w.system->runner.slot.outgoing));
+    CHECK(!ta_ilist_is_empty(&w.system->envelopes.run) && queued_of(&w, timed) == 1u);
+    consistent(&w);
+    CHECK(run_for(&w, 1000) == TA_RUN_IDLE);
+    CHECK(in_state(&w, timed, "ticked"));
+    quiescent(&w);
+    world_close(&w);
+}
+
+/*
+ * Dispatch stops, without losing a send, when the pool has no envelope left or
+ * the `fired` array is full, and goes on at the next call.
+ */
+static void test_due_dispatch_stops_when_full(void) {
+    ta_param_value params[] = { { TA_PARAM_POOL_ENVELOPES, 8 }, { TA_PARAM_MACROSTEP_RESERVE, 1 } };
+    world w;
+    world_init(&w, params, 2);
+    ta_actor_id actors[10];
+    for (uint32_t index = 0; index < 10u; index += 1u) {
+        actors[index] = spawn(&w, w.timed);
+    }
+    settle(&w);
+    CHECK(ta_system_set_time(w.system, 1000) == TA_OK);
+    ta_due_fired fired[2];
+    uint32_t fired_count = 0;
+    bool more = false;
+    CHECK(dispatch(&w, fired, 2, &fired_count, &more) == 2u && fired_count == 2u && more); /* the array was full */
+    uint32_t total = 2u;
+    /* Without a `fired` array the pool's bound (8 envelopes, two in use) stops it at six more. */
+    uint32_t next = dispatch(&w, NULL, 0, NULL, &more);
+    CHECK(next == 6u && more);
+    total += next;
+    settle(&w); /* the mail is taken, which frees its envelopes */
+    total += dispatch(&w, NULL, 0, NULL, &more);
+    CHECK(total == 10u && !more);
+    settle(&w);
+    for (uint32_t index = 0; index < 10u; index += 1u) {
+        CHECK(in_state(&w, actors[index], "ticked"));
+    }
+    quiescent(&w);
+    world_close(&w);
+}
+
 int main(void) {
     test_interpreter_mail();
     test_reserve_exhausted();
     test_finished_name();
     test_order_and_visibility();
     test_destinations();
+    test_waiting_destinations();
+    test_other_incarnation_session_waits();
+    test_name_resident_by_the_end();
     test_claim();
     test_abandon();
     test_runaway();
@@ -1155,6 +1485,11 @@ int main(void) {
     test_unloaded_receiver_is_waited_for();
     test_retarget_follows_the_address();
     test_waiting_makes_no_allocator_call();
+    test_safe_point_order();
+    test_safe_point_while_paused();
+    test_prepare_bounds();
+    test_due_send_is_mail();
+    test_due_dispatch_stops_when_full();
     CHECK(heap.stats.bad_frees == 0);
     CHECK(ta_test_allocator_finish(&heap) == 0);
     if (failures != 0) {

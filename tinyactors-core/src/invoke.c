@@ -686,18 +686,15 @@ typedef struct {
     ta_actor_ref destination;
     ta_event event;
     ta_trace_parent trace;
-    /* True inside the sender's macrostep, where mail may take an envelope from the running input's claim (mail.h). */
-    bool in_run;
 } ta_invoke_delivery;
 
 /*
- * Offers an event to another session. Inside the sender's macrostep it
- * becomes an envelope on the input's outgoing list when the destination is a
- * resident session (mail.h); a completion or a forwarded event is never
- * dropped for want of an envelope, so a refusal falls back to the router like
- * every other destination. When the router accepts nothing, the event waits
- * in the deadline index, due now, owned by the sender, so
- * ta_system_dispatch_due() offers it again.
+ * Sends an event to another session, from inside the sender's macrostep: a
+ * completion, or an event the child's parent forwards. It becomes mail
+ * (package mail) on the running input's outgoing list, paid from the input's
+ * claim. A completion or a forwarded event that finds no envelope is counted
+ * in quota_refusals and dropped: the sender is ending or forwarding, and
+ * nobody could hear an error for it (core ADR 0099 section 6).
  */
 static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *delivery) {
     const ta_actor_sparse_state *sender_sparse = delivery->sender->sparse;
@@ -712,51 +709,15 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
             return TA_OK;
         }
     }
-    if (delivery->in_run &&
-        ta_mail_send(system, &(ta_mail_params){ .sender = delivery->sender->record.id,
-                                                .destination = delivery->destination,
-                                                .event = delivery->event,
-                                                .trace = delivery->trace }) == TA_MAIL_QUEUED) {
-        return TA_OK;
+    ta_mail_status mailed = ta_mail_send(system, &(ta_mail_params){ .sender = delivery->sender->record.id,
+                                                                    .destination = delivery->destination,
+                                                                    .event = delivery->event,
+                                                                    .trace = delivery->trace,
+                                                                    .in_macrostep = true });
+    if (mailed == TA_MAIL_FULL) {
+        system->counters.quota_refusals += 1u;
     }
-    ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
-    ta_fault fault = {0};
-    if (system->external_events.v != NULL) {
-        ta_external_delivery external = { .destination = delivery->destination, .event = delivery->event,
-                                          .trace = delivery->trace };
-        status = system->external_events.v->submit(system->external_events.self,
-                                                   &(ta_external_event_submit_params){
-                                                       .delivery = &external, .fault = &fault });
-    }
-    ta_value_release(&fault.data);
-    if (status != TA_EXTERNAL_EVENT_RETRY) {
-        return TA_OK;
-    }
-    ta_delayed_send record = {
-        .owner = delivery->sender->record.id,
-        .send_id = delivery->event.send_id,
-        .due = ta_clock_now(&system->clock),
-        .event = delivery->event.name,
-        .io_type = system->scxml_io_type,
-        .destination = delivery->destination,
-        .submitted = true,
-        .origin = delivery->event.origin.kind == TA_ORIGIN_ACTOR ? delivery->event.origin.as.actor
-                                                                  : delivery->sender->record.self,
-        .invoke_id = delivery->event.invoke_id,
-        .trace = delivery->trace,
-    };
-    record.data = delivery->event.data;
-    ta_value_retain(&record.data);
-    /* The stored send owns its destination and origin references (ADR 0065). */
-    ta_actor_ref_retain(&record.destination);
-    ta_actor_ref_retain(&record.origin);
-    ta_result result = ta_actor_schedule_send(system, delivery->sender, &record);
-    if (result != TA_OK) {
-        ta_value_release(&record.data);
-        ta_actor_ref_release(&record.destination);
-        ta_actor_ref_release(&record.origin);
-    }
-    return result;
+    return TA_OK;
 }
 
 bool ta_invoke_is_active(const ta_actor *actor, ta_invoke_id invoke) {
@@ -835,7 +796,6 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
                                                   .destination = ta_actor_runtime_ref(it->system, meta.child),
                                                   .event = copy,
                                                   .trace = ta_interpreter_trace_here(it),
-                                                  .in_run = true,
                                               });
     } else {
         (void)meta.invoker.v->forward(meta.invoker.self, &(ta_invoker_forward_params){
@@ -903,15 +863,8 @@ ta_result ta_invoke_autoforward(ta_interpreter *it, const ta_event *event, uint3
     return TA_OK;
 }
 
-typedef struct {
-    ta_trace_parent trace;
-    bool in_run; /* inside the finishing session's macrostep */
-} ta_invoke_publish_params;
-
-/* Sends done.invoke.<id> with the completion data to the invoking parent,
- * under `trace`, the finishing step's, or none when the host publishes it
- * again after a refusal. */
-static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, const ta_invoke_publish_params *params) {
+/* Sends done.invoke.<id> with the completion data to the invoking parent, under `trace`, the finishing step's. */
+static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, const ta_trace_parent *trace) {
     ta_actor_sparse_state *sparse = actor->sparse;
     ta_event_name_id name = 0;
     ta_result result = ta_invoke_done_name(system, sparse->parent.invoke_id, &name);
@@ -930,8 +883,7 @@ static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, const ta_
                                         .sender = actor,
                                         .destination = ta_actor_runtime_ref(system, sparse->parent.actor),
                                         .event = event,
-                                        .trace = params->trace,
-                                        .in_run = params->in_run,
+                                        .trace = *trace,
                                     });
 }
 
@@ -949,8 +901,8 @@ ta_result ta_invoke_finished(ta_interpreter *it) {
         return TA_OK;
     }
     sparse->completion_pending = true;
-    return ta_invoke_publish(it->system, it->actor,
-                             &(ta_invoke_publish_params){ .trace = ta_interpreter_trace_here(it), .in_run = true });
+    ta_trace_parent trace = ta_interpreter_trace_here(it);
+    return ta_invoke_publish(it->system, it->actor, &trace);
 }
 
 void ta_invoke_release(ta_system *system, ta_actor *actor) {
@@ -1197,13 +1149,10 @@ ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id id) {
     }
     ta_actor *parent = ta_actor_lookup(system, sparse->parent.actor);
     if (parent == NULL || ta_invoke_find(parent, sparse->parent.invoke_id) < 0) {
-        (void)ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION);
-        return TA_ERR_NOT_FOUND;
+        return TA_ERR_NOT_FOUND; /* the invocation was cancelled: there is no done event to send */
     }
-    if (ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION) != TA_OK) {
-        return TA_OK; /* already delivered */
-    }
-    return ta_invoke_publish(system, actor, &(ta_invoke_publish_params){0});
+    /* The completion was sent as mail when the child finished; there is nothing held to send again. */
+    return TA_OK;
 }
 
 /* ------------------------------------------------------------------------

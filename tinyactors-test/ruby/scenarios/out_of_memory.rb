@@ -146,8 +146,8 @@ module OutOfMemory
     BODY
   end
 
-  # A <foreach> whose body assigns, raises, sends to itself through the
-  # router (busy, so the send waits, ADR 0040), and sends with a delay.
+  # A <foreach> whose body assigns, raises, sends to itself as mail
+  # (it waits for the macrostep to end, ADR 0099), and sends with a delay.
   def self.loops(datamodel)
     l = Language.new(datamodel)
     body = [log(l, l.to_text(l.at('i'))), %(<raise event="each"/>), %(<send event="self"/>),
@@ -240,8 +240,8 @@ module OutOfMemory
   end
 
   # A parent and the child it invokes, with the SCXML invoker: the child
-  # takes an autoforwarded event, sends three to its parent through the
-  # router, and ends with <donedata>, which its end reports to the parent
+  # takes an autoforwarded event, sends three to its parent as
+  # mail, and ends with <donedata>, which its end reports to the parent
   # as done.invoke.
   def self.family(datamodel)
     l = Language.new(datamodel)

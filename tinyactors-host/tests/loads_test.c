@@ -1,11 +1,15 @@
 /*
  * Loading unloaded actors on demand (napi ADR 0020), driven without
- * Node-API: mail for an unloaded name waits in its load's mailbox and moves,
- * in order, to the front of the loaded actor's mailbox; the per-address cap;
- * waiting mail counts against maxQueuedMessages; a failed load's mail
- * becomes dead letters that keep the name; a virtual family's unknown name
- * starts a load; an unloaded actor's own timer wakes it; and without a
- * loader nothing changes. Run under AddressSanitizer by test-native-asan.
+ * Node-API: the host's posts for an unloaded name wait in its load's mailbox
+ * and move, in order, to the front of the loaded actor's mailbox; the
+ * per-address cap; waiting posts count against maxQueuedMessages; a failed
+ * load's posts become dead letters that keep the name; a virtual family's
+ * unknown name starts a load; an unloaded actor's own timer wakes it; and
+ * without a loader nothing changes. Mail between sessions waits in core, and
+ * core's LOAD_NEEDED notice starts the same loads: a gone session of a family
+ * is served by a new instance, and a family without a loader answers at once
+ * with error.communication for the sender. Run under AddressSanitizer by
+ * test-native-asan.
  */
 #include "check.h"
 #include <string.h>
@@ -13,7 +17,6 @@
 #include "tinyactors_host/events.h"
 #include "tinyactors_host/hooks.h"
 #include "tinyactors_host/loads.h"
-#include "tinyactors_host/router.h"
 #include "tinyactors_host/scheduler.h"
 #include "tinyactors_host/system.h"
 #include "loads_private.h"
@@ -126,7 +129,7 @@ static ta_event_name_id event_name(tah_system *system, const char *text) {
 /* Posts an event named `text` to `address` as JavaScript's postNamed does. */
 static ta_result post(tah_system *system, ta_address *address, const char *text) {
     ta_event event = { .type = TA_EVENT_EXTERNAL, .name = event_name(system, text), .invoke_id = TA_INVOKE_ID_NONE };
-    return tah_router_post_named(system, address, &(tah_message){ .event = &event });
+    return tah_system_post_named(system, address, &(tah_message){ .event = &event });
 }
 
 static tah_load_request next_request(tah_system *system) {
@@ -136,13 +139,20 @@ static tah_load_request next_request(tah_system *system) {
 }
 
 static ta_result finish(tah_system *system, tah_load_request request, tah_load_outcome outcome, ta_actor_id actor) {
-    return tah_loads_finish(&system->loads, &(tah_load_finish){ .sched = &system->sched,
+    return tah_loads_finish(&system->loads, &(tah_load_finish){ .core = system->core,
+                                                                .sched = &system->sched,
                                                                 .directory = &system->directory,
                                                                 .metrics = &system->metrics,
                                                                 .index = request.index,
                                                                 .generation = request.generation,
                                                                 .outcome = outcome,
                                                                 .actor = actor });
+}
+
+/* One turn: the sender's bootstrap runs, its mail waits in core, and core's LOAD_NEEDED reaches the loads. */
+static void turn(tah_system *system) {
+    tah_system_turn(system);
+    tah_system_end_turn(system);
 }
 
 /* The event names in `actor`'s mailbox, in order, must be `expected`. */
@@ -369,54 +379,158 @@ static void a_waiting_message_can_be_withdrawn(void) {
     finish_system(system);
 }
 
-/* Posts an event named `text` for a gone session's key, as the router does (napi ADR 0032 section 2). */
-static ta_result post_session(tah_system *system, ta_address *key, bool shared, const char *text) {
-    ta_event event = { .type = TA_EVENT_EXTERNAL, .name = event_name(system, text), .invoke_id = TA_INVOKE_ID_NONE };
-    return tah_loads_route_session(&system->loads, &(tah_load_session_route){ .sched = &system->sched,
-                                                                             .address = key,
-                                                                             .message = &(tah_message){ .event = &event },
-                                                                             .shared = shared });
+/*
+ * A chart of family "s" that, on entry, sends `a` and then `b` to `target`, and
+ * counts nothing else: what the target's session hears is read from core's
+ * counters.
+ */
+static ta_definition_id define_sender(tah_system *system, const char *target) {
+    ta_scxml_action_spec actions[3];
+    memset(actions, 0, sizeof actions);
+    static const char *const names[2] = { "a", "b" };
+    for (uint32_t index = 0; index < 2u; index += 1u) {
+        actions[index] = (ta_scxml_action_spec){
+            .kind = TA_SCXML_ACTION_SEND,
+            .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = { .ptr = names[index], .len = 1 } },
+                         .target = { .kind = TA_SCXML_STRING_LITERAL,
+                                     .as.literal = { .ptr = target, .len = (uint32_t)strlen(target) } } },
+        };
+    }
+    ta_scxml_handler_spec onentry[] = { { .actions = actions }, { 0 } };
+    ta_scxml_state_spec states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("sent"), .onentry = onentry }, { 0 } };
+    ta_scxml_spec spec = { .name = S("s"), .states = states };
+    ta_definition *definition = NULL;
+    CHECK(ta_definition_compile_spec(system->core, &(ta_definition_compile_params){
+                                                       .spec = &spec,
+                                                       .datamodel = ta_null_datamodel(),
+                                                       .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
+                                                       .out = &definition,
+                                                   }) == TA_OK);
+    ta_definition_id id = 0;
+    CHECK(ta_system_register_definition(system->core, definition, &id) == TA_OK);
+    return id;
+}
+
+/* The `#_scxml_` target of the session `actor` is, as a chart writes it (core ADR 0088). */
+static void session_target(tah_system *system, ta_actor_id actor, char *out, size_t capacity) {
+    ta_actor_inspection view = {0};
+    CHECK(ta_actor_inspect(system->core, actor, &view) == TA_OK);
+    char text[96];
+    uint32_t needed = 0;
+    CHECK(ta_session_id_format(system->core, &(ta_session_id_format_params){ .session = view.session_id,
+                                                                            .family = S("r"), .buffer = text,
+                                                                            .capacity = sizeof text,
+                                                                            .needed = &needed }) == TA_OK);
+    CHECK((size_t)snprintf(out, capacity, "#_scxml_%s", text) < capacity);
 }
 
 /*
- * Mail for a gone session: messages for one session wait on one load, which
- * hands them, in order, to a new instance without a name; a session this
- * system cannot name gets a load per message; a family without a loader
- * starts none.
+ * Mail for a gone session of a family with a loader: core holds it on the
+ * session's key and reports LOAD_NEEDED, which starts one load (with `why` =
+ * session) however many messages wait; a new instance without a name serves
+ * it, and the messages reach that instance in order.
  */
 static void a_gone_session_loads_a_new_instance(void) {
     tah_system *system = make_system();
     ta_definition_id chart = define_receiver(system);
-    ta_actor_address session_key = { .family = { .name = S("r") }, .name = S("0.4294967297.r") };
-    ta_address *key = intern(system, &session_key);
-    CHECK(post_session(system, key, true, "a") == TA_ERR_NOT_FOUND); /* no loader */
+    ta_actor_id gone = spawn(system, chart, NULL);
+    CHECK(settle(system, NULL) == 0u);
+    char target[128];
+    session_target(system, gone, target, sizeof target);
+    CHECK(ta_actor_destroy(system->core, gone) == TA_OK);
+    CHECK(tah_hook_actor_removed(system, gone) == TA_OK);
     CHECK(tah_loads_set_family(&system->loads, S("r"), 10) == TA_OK);
-    CHECK(tah_loads_family_loads(&system->loads, S("r")) && !tah_loads_family_loads(&system->loads, S("x")));
-    CHECK(post_session(system, key, true, "a") == TA_OK);
-    CHECK(post_session(system, key, true, "b") == TA_OK);
+    ta_counters before;
+    ta_system_counters(system->core, &before);
+
+    (void)spawn(system, define_sender(system, target), NULL);
+    turn(system);
+    CHECK(system->loads.in_flight == 1u); /* two messages, one load */
     tah_load_request request = next_request(system);
     CHECK(request.why == TAH_LOAD_WHY_SESSION);
     CHECK(!tah_loads_next_request(&system->loads, &(tah_load_request){ 0 }));
+    CHECK(tah_loads_info(&system->loads, request.index, request.generation).address == request.address);
+    CHECK(ta_address_waiting(system->core, request.address) == 2u);
     CHECK(finish(system, request, TAH_LOAD_SPAWNED, ta_actor_id_make(99, 7)) == TA_ERR_NOT_FOUND);
     ta_actor_id spawned = spawn(system, chart, NULL);
+    ta_address *key = (ta_address *)request.address; /* the load's reference ends with the load; keep one to look afterwards */
+    ta_address_retain(key);
     CHECK(finish(system, request, TAH_LOAD_SPAWNED, spawned) == TA_OK);
-    mailbox_is(system, spawned, (const char *const[]){ "a", "b" }, 2u);
-    CHECK(settle(system, NULL) == 0u && system->sched.delivered == 2u);
-
-    ta_actor_address unknown_key = { .family = { .name = S("r") }, .name = S("0.0.r") };
-    ta_address *unknown = intern(system, &unknown_key);
-    CHECK(post_session(system, unknown, false, "c") == TA_OK);
-    CHECK(post_session(system, unknown, false, "d") == TA_OK);
-    tah_load_request first = next_request(system);
-    tah_load_request second = next_request(system);
-    CHECK(first.index != second.index && system->loads.in_flight == 2u);
-    CHECK(finish(system, first, TAH_LOAD_NOT_FOUND, 0) == TA_OK);
-    CHECK(finish(system, second, TAH_LOAD_NOT_FOUND, 0) == TA_OK);
-    tah_dead_reason reason = TAH_DEAD_DONE;
-    CHECK(settle(system, &reason) == 2u && reason == TAH_DEAD_NOT_FOUND);
-    ta_address_release(unknown);
+    CHECK(ta_address_waiting(system->core, key) == 0u);
     ta_address_release(key);
+    CHECK(settle(system, NULL) == 0u);
+    ta_counters after;
+    ta_system_counters(system->core, &after);
+    CHECK(after.events_taken - before.events_taken == 2u); /* a and b, which the new instance took */
+    CHECK(after.errors_communication == before.errors_communication);
     finish_system(system);
+}
+
+/*
+ * A family without a loader: nothing would bring the session back, so core's
+ * LOAD_NEEDED is answered in the same turn, and the sender hears
+ * error.communication for each message, and no load starts.
+ */
+static void a_gone_session_without_a_loader_is_an_error(void) {
+    tah_system *system = make_system();
+    ta_definition_id chart = define_receiver(system);
+    ta_actor_id gone = spawn(system, chart, NULL);
+    CHECK(settle(system, NULL) == 0u);
+    char target[128];
+    session_target(system, gone, target, sizeof target);
+    CHECK(ta_actor_destroy(system->core, gone) == TA_OK);
+    CHECK(tah_hook_actor_removed(system, gone) == TA_OK);
+    ta_counters before;
+    ta_system_counters(system->core, &before);
+
+    (void)spawn(system, define_sender(system, target), NULL);
+    turn(system);
+    CHECK(settle(system, NULL) == 0u);
+    ta_counters after;
+    ta_system_counters(system->core, &after);
+    CHECK(system->loads.in_flight == 0u);
+    CHECK(after.errors_communication - before.errors_communication == 2u);
+    finish_system(system);
+}
+
+/*
+ * Mail for an unloaded name of a family with a loader: core holds it and
+ * reports LOAD_NEEDED, which starts the load; the load's LOADED outcome
+ * leaves core's list to the actor's becoming resident (core moved it when the
+ * image loaded); a failed load recycles it, and the sender hears an error.
+ */
+static void chart_mail_for_an_unloaded_name(void) {
+    for (uint32_t failed = 0; failed < 2u; failed += 1u) {
+        tah_system *system = make_system();
+        ta_definition_id chart = define_receiver(system);
+        ta_actor_id first = spawn(system, chart, &recv_name);
+        CHECK(settle(system, NULL) == 0u);
+        ta_session_image *image = unload(system, first);
+        CHECK(tah_loads_set_family(&system->loads, S("r"), 10) == TA_OK);
+        ta_counters before;
+        ta_system_counters(system->core, &before);
+        (void)spawn(system, define_sender(system, "#_actor_r/recv"), NULL);
+        turn(system);
+        ta_address *address = intern(system, &recv_name);
+        CHECK(ta_address_waiting(system->core, address) == 2u);
+        tah_load_request request = next_request(system);
+        CHECK(request.why == TAH_LOAD_WHY_MAIL && request.address == address);
+        if (failed == 0u) {
+            ta_actor_id loaded = load(system, image);
+            CHECK(ta_address_waiting(system->core, address) == 0u); /* core moved it when the image loaded */
+            CHECK(finish(system, request, TAH_LOAD_LOADED, loaded) == TA_OK);
+        } else {
+            CHECK(finish(system, request, TAH_LOAD_REJECTED, 0) == TA_OK);
+            ta_session_image_destroy(image);
+        }
+        CHECK(settle(system, NULL) == 0u);
+        ta_counters after;
+        ta_system_counters(system->core, &after);
+        CHECK(after.events_taken - before.events_taken == 2u); /* a and b at the actor, or the errors at the sender */
+        CHECK(after.errors_communication - before.errors_communication == (failed == 0u ? 0u : 2u));
+        ta_address_release(address);
+        finish_system(system);
+    }
 }
 
 int main(void) {
@@ -427,6 +541,8 @@ int main(void) {
     a_virtual_family_spawns();
     a_wake_up_starts_a_load();
     a_gone_session_loads_a_new_instance();
+    a_gone_session_without_a_loader_is_an_error();
+    chart_mail_for_an_unloaded_name();
     puts("loads_test passed");
     return 0;
 }

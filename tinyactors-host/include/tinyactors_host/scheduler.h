@@ -295,6 +295,9 @@ typedef struct {
      * (a resume, a delivery, an invocation report): the kernel reads the tel
      * ring there (core ADR 0098). NULL: nothing. */
     void (*left_core)(void *context);
+    /* Called with stop_context for each LOAD_NEEDED notice of a ta_run() call, after the call returned (core ADR
+     * 0099 section 4): core is waiting for an address to become resident. NULL: such notices are ignored. */
+    void (*load_needed)(void *context, const ta_run_notice *notice);
 } tah_turn_params;
 
 /* `allocator` for the table and queues, `envelopes` for the envelope store. */

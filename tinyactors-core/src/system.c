@@ -502,8 +502,6 @@ void ta_system_destroy(ta_system *system) {
     if (system == NULL) {
         return;
     }
-    /* Teardown releases submitted sends instead of keeping them as orphans. */
-    system->timers.closing = true;
     for (uint32_t slot = 0; slot < ta_pool_extent(&system->actors); slot += 1) {
         ta_actor_slot *entry = ta_actor_slot_at(system, slot);
         if (entry->actor != NULL) {
@@ -625,14 +623,6 @@ ta_result ta_system_set_input_watch(ta_system *system, ta_input_watch watch) {
         return TA_ERR_INVALID;
     }
     system->input_watch = watch;
-    return TA_OK;
-}
-
-ta_result ta_system_set_external_event_router(ta_system *system, ta_external_event_router router) {
-    if (system == NULL || (router.v != NULL && router.v->submit == NULL)) {
-        return TA_ERR_INVALID;
-    }
-    system->external_events = router;
     return TA_OK;
 }
 
@@ -1132,15 +1122,34 @@ ta_result ta_system_next_deadline(const ta_system *system, ta_time *out) {
 
 ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params *params) {
     if (system == NULL || params == NULL || params->budget == 0 || params->dispatched == NULL ||
-        params->more_due == NULL) {
+        params->more_due == NULL || (params->fired != NULL && (params->fired_capacity == 0 || params->fired_count == NULL))) {
         return TA_ERR_INVALID;
     }
     uint32_t dispatched = 0;
-    bool retry = false;
+    uint32_t fired_count = 0;
+    bool stopped = false; /* the pool or the fired array has no room: what is due stays due */
+    ta_result outcome = TA_OK;
     ta_time now = ta_clock_now(&system->clock);
     while (dispatched < params->budget) {
         ta_time due = 0;
         if (!ta_timer_next_due(&system->timers, &due) || due > now) {
+            break;
+        }
+        if (params->fired != NULL && fired_count == params->fired_capacity) {
+            stopped = true;
+            break;
+        }
+        /*
+         * Safe point: the send about to fire may become an envelope, and the
+         * pool grows here, before anything is popped, so a refusal changes
+         * nothing and the send stays due. A pool at its bound stops the call
+         * (mail would find no envelope); an allocation failure is the call's
+         * answer when nothing fired yet, else the rest waits for the next call.
+         */
+        ta_result prepared = ta_mail_prepare(system, 1u);
+        if (prepared != TA_OK) {
+            stopped = true;
+            outcome = prepared == TA_ERR_NOMEM && dispatched == 0 ? TA_ERR_NOMEM : TA_OK;
             break;
         }
         ta_delayed_send send;
@@ -1149,44 +1158,37 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
         /*
          * A pending send leaves its owner's list as it fires, and an image
          * captures that list, so an image taken before no longer describes
-         * the owner (ADR 0014). A submitted send is in no image.
+         * the owner (ADR 0014).
          */
-        if (owner != NULL && !send.submitted) {
+        if (owner != NULL) {
             ta_actor_touch(owner);
         }
         const ta_definition *owner_definition = owner != NULL ? owner->definition : NULL;
-        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send, false);
-        if (fired != TA_EXTERNAL_EVENT_RETRY) {
-            if (owner_definition != NULL) {
-                TA_COUNT(system, owner_definition, delayed_fired);
-            } else {
-                system->counters.delayed_fired += 1u;
-            }
+        ta_actor_ref sender_ref = owner != NULL ? owner->record.self : (ta_actor_ref){0};
+        ta_trace_parent trace = send.trace;
+        ta_dispatch dispatch = {0};
+        ta_interpreter_dispatch_delayed(system, &send, &dispatch);
+        if (owner_definition != NULL) {
+            TA_COUNT(system, owner_definition, delayed_fired);
+        } else {
+            system->counters.delayed_fired += 1u;
         }
-        if (fired == TA_EXTERNAL_EVENT_RETRY) {
-            /*
-             * Rescheduling keeps its ID, and so its place in deadline order.
-             * The owner may be gone by now; its submitted sends are orphans.
-             */
-            ta_timer_list *home = NULL;
-            ta_result result = ta_actor_timer_home(system, send.owner, &home);
-            if (result == TA_OK) {
-                result = ta_timer_schedule(&system->timers, home, &send);
-            }
-            if (result != TA_OK) {
-                ta_value_release(&send.target);
-                ta_value_release(&send.data);
-                return result;
-            }
-            retry = true;
-            break;
+        if (params->fired != NULL && owner != NULL && dispatch.mailed) {
+            params->fired[fired_count] = (ta_due_fired){ .sender = sender_ref,
+                                                         .due = due,
+                                                         .trace = trace,
+                                                         .delivered = dispatch.delivered };
+            fired_count += 1u;
         }
         dispatched += 1;
     }
     ta_time next = 0;
     *params->dispatched = dispatched;
-    *params->more_due = retry || (ta_timer_next_due(&system->timers, &next) && next <= now);
-    return TA_OK;
+    if (params->fired_count != NULL) {
+        *params->fired_count = fired_count;
+    }
+    *params->more_due = stopped || (ta_timer_next_due(&system->timers, &next) && next <= now);
+    return outcome;
 }
 
 /* ------------------------------------------------------------------------

@@ -57,70 +57,6 @@ static bool tat_make_ecmascript_datamodel(tat_bind *bind, jv config, void *out) 
 }
 
 /*
- * router.direct: delivers each external event straight to a resident actor
- * with ta_actor_deliver(). A runtime destination is delivered by ID; a named
- * one is resolved first with ta_actor_find(), which goes through the system's
- * actor directory (ADR 0037), so a chart may address a peer as
- * `#_actor_<family>/<name>` without the host installing a routing instrument.
- * Resolution answers TA_ERR_UNSUPPORTED when no directory is installed,
- * TA_ERR_UNLOADED for an actor the directory holds but has not loaded (this
- * router cannot load one; a real host would), and TA_ERR_NOT_FOUND for an
- * address it does not know. A pool at its admission watermark (TA_ERR_FULL),
- * or a delivery that ran out of memory, makes the router answer RETRY, so
- * core keeps the event and offers it again on a later dispatch (an actor
- * inside a macrostep is not busy any more: core queues its mail, ADR 0099).
- * Config:
- * {"system": <system handle>}.
- */
-static ta_external_event_submit_status tat_direct_submit(void *self,
-                                                         const ta_external_event_submit_params *params) {
-    static const char unresolved[] = "router.direct: the destination address resolves to no resident actor";
-    static const char not_found[] = "router.direct: no resident actor at that destination";
-    const ta_external_delivery *delivery = params->delivery;
-    ta_actor_id id;
-    if (delivery->destination.kind == TA_ACTOR_REF_RUNTIME) {
-        id = delivery->destination.as.runtime;
-    } else {
-        ta_actor_address view = ta_address_view(delivery->destination.as.named);
-        ta_result found = ta_actor_find(self, &(ta_actor_find_params){.address = &view, .out = &id});
-        if (found != TA_OK) {
-            *params->fault =
-                (ta_fault){.code = found, .message = {.ptr = unresolved, .len = sizeof(unresolved) - 1}};
-            return TA_EXTERNAL_EVENT_ERROR;
-        }
-    }
-    ta_result result = ta_actor_deliver(self, &(ta_actor_deliver_params){ .time = ta_system_time(self), .actor = id, .event = &delivery->event, .trace = delivery->trace });
-    if (result == TA_OK) {
-        return TA_EXTERNAL_EVENT_ACCEPTED;
-    }
-    /* A full pool, or a delivery that could not take the event for lack of
-     * memory, takes it later: running out of memory is never an error the
-     * sender's chart sees (ADR 0047, ADR 0070). */
-    if (result == TA_ERR_FULL || result == TA_ERR_NOMEM) {
-        return TA_EXTERNAL_EVENT_RETRY;
-    }
-    *params->fault = (ta_fault){.code = result, .message = {.ptr = not_found, .len = sizeof(not_found) - 1}};
-    return TA_EXTERNAL_EVENT_ERROR;
-}
-
-static const ta_external_event_router_vtable TAT_DIRECT_ROUTER = {.submit = tat_direct_submit};
-
-static bool tat_make_direct_router(tat_bind *bind, jv config, void *out) {
-    jv system = jv_invalid();
-    if (jv_is_valid(config) && jv_get_kind(config) == JV_KIND_OBJECT) {
-        system = jv_object_get(jv_copy(config), jv_string("system"));
-    }
-    void *handle = NULL;
-    bool ok = jv_is_valid(system) && tat_handle_resolve(bind, system, "system", &handle);
-    jv_free(system);
-    if (!ok) {
-        return tat_fail(bind, "router.direct needs config {\"system\": <system handle>}");
-    }
-    *(ta_external_event_router *)out = (ta_external_event_router){.self = handle, .v = &TAT_DIRECT_ROUTER};
-    return true;
-}
-
-/*
  * codec.scxml: the SCXML XML codec (tinyactors-scxml, ADR 0053) as a
  * ta_chart_codec. Config: null for the default limits, or an object with any
  * of the fields of ta_scxml_codec_params ("max_depth": 32, ...). One codec
@@ -647,14 +583,11 @@ const tat_adapter TAT_ADAPTERS[] = {
     {"datamodel.jq", "ta_datamodel", sizeof(ta_datamodel), tat_make_jq_datamodel},
     {"datamodel.ecmascript", "ta_datamodel", sizeof(ta_datamodel), tat_make_ecmascript_datamodel},
     {"datamodel.null", "ta_datamodel", sizeof(ta_datamodel), tat_make_null_datamodel},
-    {"router.direct", "ta_external_event_router", sizeof(ta_external_event_router),
-     tat_make_direct_router},
     {"invoker.scxml", "ta_invoker", sizeof(ta_invoker), tat_make_scxml_invoker},
     {"codec.scxml", "ta_chart_codec", sizeof(ta_chart_codec), tat_make_scxml_codec},
     {"resolver.map", "ta_chart_src_resolver", sizeof(ta_chart_src_resolver), tat_make_map_resolver},
     /* Instrumented adapters: src/instruments.c. */
     {"allocator.counting", "ta_allocator", sizeof(ta_allocator), tat_make_counting_allocator},
-    {"router.recording", "ta_external_event_router", sizeof(ta_external_event_router), tat_make_recording_router},
     {"directory.memory", "ta_actor_directory", sizeof(ta_actor_directory), tat_make_memory_directory},
     {"invoker.scripted", "ta_invoker", sizeof(ta_invoker), tat_make_scripted_invoker},
     {"io.recording", "ta_io", sizeof(ta_io), tat_make_recording_io},

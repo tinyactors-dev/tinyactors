@@ -46,9 +46,9 @@ async function manualOrder() {
   const actor = system.spawn(system.define(orderChart(100)));
   await system.flush();
   const sends = actor.inspect().delayedSends;
-  assert.deepEqual(sends.map(({ id, due, event, submitted }) => ({ id, due, event, submitted })), [
-    { id: null, due: 1100, event: 'a', submitted: false },
-    { id: 'late', due: 1200, event: 'b', submitted: false },
+  assert.deepEqual(sends.map(({ id, due, event }) => ({ id, due, event })), [
+    { id: null, due: 1100, event: 'a' },
+    { id: 'late', due: 1200, event: 'b' },
   ]);
   assert.equal(sends[0].destination, 'self', 'a send to self names the actor itself');
   assert.equal(actor.inspect().delayedSendCount, 2);

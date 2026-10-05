@@ -32,21 +32,3 @@ ta_result ta_actor_ref_detach(ta_arena *arena, ta_actor_ref *ref) {
 ta_actor_ref *ta_event_origin_ref(ta_event *event) {
     return event->origin.kind == TA_ORIGIN_ACTOR ? &event->origin.as.actor : NULL;
 }
-
-void ta_external_delivery_retain(const ta_external_delivery *delivery, ta_external_delivery *out) {
-    if (delivery == NULL || out == NULL) {
-        return;
-    }
-    ta_external_delivery copy = *delivery;
-    ta_actor_ref_retain(&copy.destination);
-    ta_event_retain(&delivery->event, &copy.event);
-    *out = copy;
-}
-
-void ta_external_delivery_release(ta_external_delivery *delivery) {
-    if (delivery == NULL) {
-        return;
-    }
-    ta_actor_ref_release(&delivery->destination);
-    ta_event_release(&delivery->event);
-}

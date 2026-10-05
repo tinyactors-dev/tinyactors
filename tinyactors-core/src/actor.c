@@ -102,26 +102,11 @@ ta_result ta_actor_reserve_send(ta_system *system, ta_actor *actor) {
     return ta_timer_reserve(&system->timers, &sparse->timers, 1u);
 }
 
-ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out) {
-    ta_actor *actor = ta_actor_lookup(system, owner);
-    if (actor == NULL) {
-        *out = &system->timers.orphans;
-        return TA_OK;
-    }
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    *out = &sparse->timers;
-    return TA_OK;
-}
-
 static void ta_activation_effect_release(ta_activation_effect *effect) {
     if (effect->kind == TA_ACTIVATION_SEND) {
         ta_value_release(&effect->as.send.send.target);
         ta_value_release(&effect->as.send.send.data);
         ta_actor_ref_release(&effect->as.send.send.destination);
-        ta_actor_ref_release(&effect->as.send.send.origin);
     } else if (effect->kind == TA_ACTIVATION_LOG) {
         ta_value_release(&effect->as.log.value);
     }
@@ -531,7 +516,6 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
             .content = info->content,
             .has_target_text = info->has_target_text,
             .target_text = info->target_text,
-            .invoke_id = TA_INVOKE_ID_NONE,
             .trace = info->trace,
         };
         /* Runtime ID 0 names no actor, so as an SCXML send's destination it
@@ -772,9 +756,6 @@ static ta_result ta_actor_state_check(const ta_system *system, const ta_definiti
     }
     for (uint32_t index = 0; index < state->send_count; index += 1u) {
         const ta_delayed_send_info *info = &state->sends[index];
-        if (info->submitted) {
-            continue;
-        }
         if (!ta_trie_valid(&system->event_names.trie, info->event) || !ta_atom_valid(&system->atoms, info->io_type) ||
             (info->has_content && info->content >= definition->content_count) ||
             (info->has_target_text && info->target_text >= definition->content_count)) {
@@ -810,9 +791,6 @@ static ta_result ta_actor_state_restore(ta_system *system, ta_actor *actor, cons
     ta_result result = TA_OK;
     for (uint32_t index = 0; result == TA_OK && index < state->send_count; index += 1u) {
         const ta_delayed_send_info *info = &state->sends[index];
-        if (info->submitted) {
-            continue; /* it left the actor before the state was taken */
-        }
         ta_delayed_send send = { .owner = actor->record.id,
                                  .send_id = info->send_id,
                                  .due = info->due,
@@ -825,7 +803,6 @@ static ta_result ta_actor_state_restore(ta_system *system, ta_actor *actor, cons
                                  .content = info->content,
                                  .has_target_text = info->has_target_text,
                                  .target_text = info->target_text,
-                                 .invoke_id = TA_INVOKE_ID_NONE,
                                  .trace = info->trace };
         /* Runtime ID 0, as for ta_actor_spawn()'s pending sends, is the
          * actor itself: a host cannot know its new session in advance. */
@@ -1049,8 +1026,9 @@ ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *par
 }
 
 /* Held sends that publishing will schedule: all of them, or, with a clock
- * move to `*at`, those due after it. */
-static uint32_t ta_actor_activation_send_count(const ta_actor *actor, const ta_time *at) {
+ * move to `*at`, those due after it. With `immediate_only`, only those it
+ * will dispatch at once instead (they may become mail, which needs envelopes). */
+static uint32_t ta_actor_activation_send_count(const ta_actor *actor, const ta_time *at, bool immediate_only) {
     const ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse == NULL || sparse->activation_effects == NULL) {
         return 0;
@@ -1059,7 +1037,10 @@ static uint32_t ta_actor_activation_send_count(const ta_actor *actor, const ta_t
     const ta_vec *entries = &sparse->activation_effects->entries;
     for (uint32_t index = 0; index < entries->count; index += 1u) {
         const ta_activation_effect *effect = ta_vec_at(entries, index);
-        count += effect->kind == TA_ACTIVATION_SEND && (at == NULL || effect->as.send.send.due > *at) ? 1u : 0u;
+        count += effect->kind == TA_ACTIVATION_SEND && (!immediate_only || effect->as.send.immediate) &&
+                         (at == NULL || effect->as.send.send.due > *at)
+                     ? 1u
+                     : 0u;
     }
     return count;
 }
@@ -1097,11 +1078,9 @@ static void ta_actor_release_activation_effects(ta_system *system, ta_actor *act
         }
         ta_delayed_send *send = &effect->as.send.send;
         if (effect->as.send.immediate) {
-            ta_external_event_submit_status status = ta_interpreter_dispatch_delayed(system, send, false);
-            if (status != TA_EXTERNAL_EVENT_RETRY) {
-                continue;
-            }
-            /* Dispatch marked it submitted and took its origin and invoke ID. */
+            ta_dispatch dispatch = {0};
+            ta_interpreter_dispatch_delayed(system, send, &dispatch); /* consumes the send, mail or not */
+            continue;
         }
         /* Reserved by ta_actor_publish(), so this cannot fail. */
         (void)ta_timer_schedule(&system->timers, &sparse->timers, send);
@@ -1172,8 +1151,13 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
         return TA_ERR_INVALID;
     }
     /* Everything that can fail comes first, so a refusal changes nothing. */
-    uint32_t sends = ta_actor_activation_send_count(actor, at);
+    uint32_t sends = ta_actor_activation_send_count(actor, at, false);
+    uint32_t immediate = ta_actor_activation_send_count(actor, at, true);
     ta_result result = ta_run_reserve_start(system); /* a lost invocation or a pending start may begin a macrostep */
+    if (result == TA_OK && immediate != 0) {
+        /* Immediate sends to resident sessions become envelopes: the pool grows here, a safe point (mail.h). */
+        result = ta_mail_prepare(system, immediate);
+    }
     if (result == TA_OK && sends != 0) {
         result = ta_timer_reserve(&system->timers, &actor->sparse->timers, sends);
     }
@@ -1324,11 +1308,6 @@ static ta_result ta_actor_withdraw(ta_system *system, ta_actor *actor, ta_send_i
     /* A replaying actor's delayed sends are held, not pending (ADR 0089). */
     bool held = ta_actor_replaying(actor) && ta_actor_cancel_held_send(actor, send);
     if (ta_timer_cancel(&system->timers, list, send) != TA_OK && !held) {
-        for (uint32_t index = 0; index < list->count; index += 1u) {
-            if (list->sends[index].send_id == send) {
-                return TA_ERR_DONE; /* only submitted ones are left */
-            }
-        }
         return TA_ERR_NOT_FOUND;
     }
     ta_actor_touch(actor);
@@ -1372,12 +1351,8 @@ ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
             return TA_ERR_BUSY;
         }
     }
-    /* Sends already submitted stay queued for their receivers (ADR 0054). */
-    ta_result result = ta_timer_reserve_orphans(&system->timers, ta_actor_timers(actor));
-    if (result != TA_OK) {
-        return result;
-    }
-    ta_timer_orphan(&system->timers, ta_actor_timers(actor));
+    /* Its pending sends go with it; a send that fired is mail of its own (ADR 0099). */
+    ta_timer_cancel_all(&system->timers, ta_actor_timers(actor));
     ta_trace_lifecycle(system, actor, TA_TRACE_DESTROYED, NULL);
     ta_actor_release_address(system, actor);
     ta_actor_release_slot(system, id);

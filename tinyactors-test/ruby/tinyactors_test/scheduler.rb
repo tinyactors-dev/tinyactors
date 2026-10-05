@@ -47,11 +47,13 @@ module TinyactorsTest
 
     # One piece of work: one ta_run call, or one dispatch.
     def advance
-      status = @context.core('ta_run', @run.call(**@budgets)).fetch(:status)
+      response = @context.core('ta_run', @run.call(**@budgets))
+      answered = @context.answer_loads(response)
+      status = response.fetch(:status)
       case status
       when 'idle'
         @stops = 0
-        dispatch
+        answered ? :round : dispatch
       when 'paused'
         @stops += 1
         raise ScenarioError, "an input did not finish in #{MAX_ROUNDS} calls" if @stops >= MAX_ROUNDS

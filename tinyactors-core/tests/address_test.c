@@ -2,11 +2,10 @@
 /*
  * An event's named origin outlives the actor that sent it (ADR 0065). A
  * named sender is destroyed while one of its events is still held: by the
- * envelope of mail it sent that has not been taken yet (ADR 0099), by an
- * asynchronous router that kept the delivery of a send to a session core does
- * not place, as a submitted delayed send the router refused, and as the event
- * a host delivered and then let go of. The holder then reads the origin's
- * name. Built with
+ * envelope of mail it sent that has not been taken yet (ADR 0099), by the
+ * envelope of mail that waits on a list for an address nobody holds yet, and
+ * as the event a host delivered and then let go of. The holder then reads the
+ * origin's name. Built with
  * AddressSanitizer (mise run asan), reading freed memory fails the run; it
  * did, before addresses were shared handles.
  */
@@ -33,41 +32,6 @@ static int failures;
 
 static ta_test_allocator heap;
 static const ta_allocator allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
-
-/* ------------------------------------------------------------------------
- * A router that keeps what it accepts, as an asynchronous router would.
- */
-
-typedef struct {
-    ta_external_event_submit_status answer;
-    int accepted;
-    ta_external_delivery kept;
-    bool holding;
-} router_state;
-
-static ta_external_event_submit_status route(void *self, const ta_external_event_submit_params *params) {
-    router_state *router = self;
-    if (router->answer != TA_EXTERNAL_EVENT_ACCEPTED) {
-        return router->answer;
-    }
-    router->accepted += 1;
-    CHECK(!router->holding);
-    ta_external_delivery_retain(params->delivery, &router->kept);
-    router->holding = true;
-    return TA_EXTERNAL_EVENT_ACCEPTED;
-}
-
-static const ta_external_event_router_vtable router_vtable = { .submit = route };
-
-/* The name the kept delivery's origin carries, read the way a host reads it. */
-static bool kept_origin_is(router_state *router, const char *name) {
-    const ta_origin *origin = &router->kept.event.origin;
-    if (origin->kind != TA_ORIGIN_ACTOR || origin->as.actor.kind != TA_ACTOR_REF_NAMED) {
-        return false;
-    }
-    ta_str text = ta_address_view(origin->as.actor.as.named).name;
-    return text.len == strlen(name) && memcmp(text.ptr, name, text.len) == 0;
-}
 
 /* ------------------------------------------------------------------------
  * A two-address directory: the sender and the peer are the only named actors.
@@ -158,11 +122,9 @@ static const ta_scxml_state_spec sender_chart[] = {
     {0},
 };
 
-static ta_system *create_system(router_state *router, one_directory *dir) {
+static ta_system *create_system(one_directory *dir) {
     ta_system *system = NULL;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
-    CHECK(ta_system_set_external_event_router(
-              system, (ta_external_event_router){ .self = router, .v = &router_vtable }) == TA_OK);
     CHECK(ta_system_set_actor_directory(system, (ta_actor_directory){ .self = dir, .v = &dir_vtable }) == TA_OK);
     return system;
 }
@@ -221,15 +183,13 @@ static ta_actor_id spawn_sender(ta_system *system) {
  * sender's named origin, which the peer then reads.
  */
 static void test_queued_mail_outlives_its_sender(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
     one_directory dir = {0};
-    ta_system *system = create_system(&router, &dir);
+    ta_system *system = create_system(&dir);
     (void)spawn_named(system, &(named_chart){ "peer", "p", peer_chart });
     ta_actor_id sender = spawn_named(system, &(named_chart){ "sender", "sender1", sender_chart });
     /* Two inputs, one at a time: the peer's bootstrap, then the sender's, which mails the peer. */
     CHECK(test_run_input(system) == TA_OK);
     CHECK(test_run_input(system) == TA_OK);
-    CHECK(router.accepted == 0); /* core placed the mail itself */
     CHECK(ta_actor_destroy(system, sender) == TA_OK);
     ta_run_notice notices[8];
     uint32_t count = 0;
@@ -251,48 +211,47 @@ static void test_queued_mail_outlives_its_sender(void) {
     ta_system_destroy(system);
 }
 
-/* (a') A router kept the delivery of a send core does not place; the sender is destroyed; the router reads. */
-static void test_kept_delivery_outlives_its_sender(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
+/*
+ * (a') The sender mails a named peer that is not resident: the mail waits on the
+ * peer's address, holding the event and so the sender's named origin. The
+ * sender is destroyed; the peer then appears, takes the mail and reads the origin.
+ */
+static void test_waiting_mail_outlives_its_sender(void) {
     one_directory dir = {0};
-    ta_system *system = create_system(&router, &dir);
-    ta_actor_id sender = spawn_sender(system); /* the peer is not resident: the router gets the send */
-    CHECK(router.accepted == 1 && router.holding);
+    ta_system *system = create_system(&dir);
+    ta_actor_id sender = spawn_sender(system); /* the peer is not resident: the send waits for its address */
+    ta_address *peer = NULL;
+    CHECK(ta_address_intern(system, &(ta_actor_address){ .family = { STR("peer") }, .name = STR("p") }, &peer) == TA_OK);
+    CHECK(ta_address_waiting(system, peer) == 1u);
+    ta_address_release(peer);
     CHECK(ta_actor_destroy(system, sender) == TA_OK);
-    CHECK(kept_origin_is(&router, "sender1"));
-    ta_external_delivery_release(&router.kept);
-    ta_system_destroy(system);
-}
-
-/* (b) A refused send is kept as submitted; the sender is destroyed; the send
- * is dispatched later, and the router reads its origin. */
-static void test_submitted_send_outlives_its_sender(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_RETRY };
-    one_directory dir = {0};
-    ta_system *system = create_system(&router, &dir);
-    ta_actor_id sender = spawn_sender(system);
-    CHECK(router.accepted == 0);
-    CHECK(ta_actor_destroy(system, sender) == TA_OK);
-    router.answer = TA_EXTERNAL_EVENT_ACCEPTED;
-    uint32_t dispatched = 0;
-    bool more = true;
-    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
-                                                                    .more_due = &more }) == TA_OK);
-    CHECK(dispatched == 1 && router.holding);
-    CHECK(kept_origin_is(&router, "sender1"));
-    ta_external_delivery_release(&router.kept);
+    (void)spawn_named(system, &(named_chart){ "peer", "p", peer_chart }); /* the waiting mail moves to it */
+    ta_run_notice notices[8];
+    uint32_t count = 0;
+    ta_run_status stopped = TA_RUN_IDLE;
+    CHECK(ta_run(system, &(ta_run_params){ .budget = 100, .report_taken = true, .status = &stopped,
+                                           .notices = notices, .notice_capacity = 8, .notice_count = &count }) ==
+          TA_OK);
+    bool read = false;
+    for (uint32_t index = 0; index < count; index += 1u) {
+        if (notices[index].kind == TA_NOTICE_INPUT_TAKEN && notices[index].event != NULL &&
+            notices[index].event->origin.kind == TA_ORIGIN_ACTOR &&
+            notices[index].event->origin.as.actor.kind == TA_ACTOR_REF_NAMED) {
+            ta_str held = ta_address_view(notices[index].event->origin.as.actor.as.named).name;
+            CHECK(held.len == 7 && memcmp(held.ptr, "sender1", 7) == 0);
+            read = true;
+        }
+    }
+    CHECK(read);
     ta_system_destroy(system);
 }
 
 /* (c) A host interns an origin, delivers an event from it and lets go of its
  * own reference; the event the actor holds still reads the origin. */
 static void test_delivered_origin_outlives_the_host_reference(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
     one_directory dir = {0};
-    ta_system *system = create_system(&router, &dir);
+    ta_system *system = create_system(&dir);
     ta_actor_id actor = spawn_sender(system);
-    ta_external_delivery_release(&router.kept);
-    router.holding = false;
 
     char *family = malloc(5);
     char *name = malloc(8);
@@ -335,9 +294,8 @@ static void test_delivered_origin_outlives_the_host_reference(void) {
 
 /* Equal addresses are one handle, and the last release frees it. */
 static void test_equal_addresses_are_one_handle(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
     one_directory dir = {0};
-    ta_system *system = create_system(&router, &dir);
+    ta_system *system = create_system(&dir);
     size_t before = heap.stats.live_blocks;
     ta_actor_address text = { .family = { STR("f") }, .name = STR("n") };
     ta_address *first = NULL;
@@ -374,8 +332,7 @@ static void test_equal_addresses_are_one_handle(void) {
 
 int main(void) {
     test_queued_mail_outlives_its_sender();
-    test_kept_delivery_outlives_its_sender();
-    test_submitted_send_outlives_its_sender();
+    test_waiting_mail_outlives_its_sender();
     test_delivered_origin_outlives_the_host_reference();
     test_equal_addresses_are_one_handle();
     CHECK(heap.stats.live_blocks == 0);

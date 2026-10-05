@@ -2000,8 +2000,6 @@ export interface DelayedSendInspection {
   readonly destination: "self" | ActorAddress | ActorID | null;
   readonly target: unknown;
   readonly data: unknown;
-  /** The router refused this send once; it is waiting to be offered again. */
-  readonly submitted: boolean;
   /** A literal target's content ID in the definition, or null (core ADR 0074 section 8). */
   readonly targetContent: number | null;
   /** A literal <content>'s ID in the definition, or null. */

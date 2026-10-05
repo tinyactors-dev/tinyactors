@@ -689,16 +689,6 @@ static void test_span_ids(void) {
  * Trace parents on what an actor sends, through a session image
  */
 
-static ta_trace_parent delivered_trace;
-static long deliveries = 0;
-static ta_external_event_submit_status record_submit(void *self, const ta_external_event_submit_params *params) {
-    (void)self;
-    deliveries += 1;
-    delivered_trace = params->delivery->trace;
-    return TA_EXTERNAL_EVENT_ACCEPTED;
-}
-static const ta_external_event_router_vtable router_vtable = { .submit = record_submit };
-
 /* a --go--> b, which sends "later" to itself after 10 ms. */
 static const ta_scxml_action_spec later_actions[] = {
     { .kind = TA_SCXML_ACTION_SEND,
@@ -721,7 +711,6 @@ static const ta_scxml_spec sender_chart = { .name = STR("sender"), .states = sen
 static void test_counters_and_parents_survive_an_image(void) {
     ta_system *system = NULL;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
-    CHECK(ta_system_set_external_event_router(system, (ta_external_event_router){ .v = &router_vtable }) == TA_OK);
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){ .spec = &sender_chart,
                                                                               .datamodel = { .v = &dm_vtable },
@@ -746,25 +735,29 @@ static void test_counters_and_parents_survive_an_image(void) {
           TA_OK);
     ta_session_image_destroy(image);
 
-    /* The pending send kept the parent it was scheduled under. */
+    /* The pending send kept the parent it was scheduled under: the mail's macrostep runs under it. */
+    watch(system, (ta_trace_masks){ .kinds = TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN) }, context_visit);
+    seen_records = 0;
     CHECK(ta_system_set_time(system, 20) == TA_OK);
     uint32_t dispatched = 0;
     bool more = false;
     CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
                                                                     .more_due = &more }) == TA_OK);
-    CHECK(dispatched == 1 && deliveries == 1);
-    CHECK(delivered_trace.context.trace_id_high == 0xaa && delivered_trace.context.trace_id_low == 0xbb);
-    CHECK(delivered_trace.context.flags == TA_TRACE_FLAG_SAMPLED);
-    CHECK(delivered_trace.cause.session == before.session_id);
-    CHECK(delivered_trace.cause.macrostep == 2 && delivered_trace.cause.microstep == 1);
+    CHECK(dispatched == 1);
+    r.actor = restored;
+    settle(&r);
+    CHECK(seen_records == 1);
+    CHECK(seen_context.trace_id_high == 0xaa && seen_context.trace_id_low == 0xbb);
+    CHECK(seen_context.flags == TA_TRACE_FLAG_SAMPLED);
+    CHECK(seen_cause.session == before.session_id);
+    CHECK(seen_cause.macrostep == 2 && seen_cause.microstep == 1);
 
-    /* The counters go on: the next macrostep of the session is 3. */
+    /* The counters go on: the due send ran as macrostep 3, so the next is 4. */
     watch(system, (ta_trace_masks){ .kinds = TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN) }, record_visit);
     journal_reset();
-    r.actor = restored;
     deliver(&r, "go", (ta_trace_parent){0});
     settle(&r);
-    expect_journal("begin 3.0 go; ");
+    expect_journal("begin 4.0 go; "); /* 3 was the mail that fell due */
     ta_system_destroy(system);
 }
 

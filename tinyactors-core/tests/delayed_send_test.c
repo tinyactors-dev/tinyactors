@@ -3,8 +3,8 @@
  * Delayed sends live with their owner (ADR 0054), exercised through the
  * public header and the amalgamation only: inspection returns an actor's
  * pending sends as a sorted, borrowed array however many sends other actors
- * hold; cancelling an actor's earliest send moves the global deadline; a
- * submitted send outlives its destroyed sender; and an unloaded session
+ * hold; cancelling an actor's earliest send moves the global deadline; mail
+ * that waits for a name outlives its destroyed sender; and an unloaded session
  * takes its sends into the image and gets them back on load.
  */
 #include <stdio.h>
@@ -35,35 +35,6 @@ static int failures;
 
 static ta_test_allocator heap;
 static const ta_allocator allocator = TA_TEST_ALLOCATOR_STATIC(&heap);
-
-/* ------------------------------------------------------------------------
- * A router that accepts or refuses, and records what it accepted.
- */
-
-typedef struct {
-    ta_external_event_submit_status answer;
-    int accepted;
-    ta_event_name_id last_event;
-    ta_actor_ref last_origin;
-    ta_actor_ref last_destination;
-    ta_actor_address last_destination_address;
-} router_state;
-
-static ta_external_event_submit_status route(void *self, const ta_external_event_submit_params *params) {
-    router_state *router = self;
-    if (router->answer == TA_EXTERNAL_EVENT_ACCEPTED) {
-        router->accepted += 1;
-        router->last_event = params->delivery->event.name;
-        router->last_origin = params->delivery->event.origin.as.actor;
-        router->last_destination = params->delivery->destination;
-        if (params->delivery->destination.kind == TA_ACTOR_REF_NAMED) {
-            router->last_destination_address = ta_address_view(params->delivery->destination.as.named);
-        }
-    }
-    return router->answer;
-}
-
-static const ta_external_event_router_vtable router_vtable = { .submit = route };
 
 /* ------------------------------------------------------------------------
  * A one-address directory, enough for one named actor to unload and load.
@@ -179,10 +150,8 @@ ONE_SEND(timer_5s, "5s");
 ONE_SEND(timer_1s, "1s");
 
 /*
- * An immediate send to an address no session holds. Core does not place it
- * (mail to a resident session is an envelope, mail.h), so it goes to the
- * router; refused there, it becomes a submitted send. The router and the
- * submitted state go with the rest of unit 4.2c.
+ * An immediate send to an address no session holds. The mail waits for the
+ * address (mail.h), whatever becomes of its sender.
  */
 static const ta_scxml_state_spec immediate[] = {
     {
@@ -258,6 +227,32 @@ static void run(ta_system *system, ta_actor_id actor) {
     CHECK(status == TEST_RUN_STABLE);
 }
 
+/*
+ * Runs every admitted input to idle and answers how many of them were mail
+ * from another session (a due send to a resident session is an envelope, mail.h);
+ * `last` gets the event name of the last of them.
+ */
+static uint32_t run_mail(ta_system *system, ta_event_name_id *last) {
+    uint32_t mail = 0;
+    ta_run_status stopped = TA_RUN_MORE;
+    while (stopped != TA_RUN_IDLE) {
+        ta_run_notice notices[16];
+        uint32_t count = 0;
+        CHECK(ta_run(system, &(ta_run_params){ .budget = 100, .report_taken = true, .status = &stopped,
+                                               .notices = notices, .notice_capacity = 16,
+                                               .notice_count = &count }) == TA_OK);
+        for (uint32_t index = 0; index < count; index += 1u) {
+            if (notices[index].kind == TA_NOTICE_INPUT_TAKEN && notices[index].source == TA_SOURCE_MAIL) {
+                mail += 1u;
+                if (last != NULL) {
+                    *last = notices[index].event->name;
+                }
+            }
+        }
+    }
+    return mail;
+}
+
 static ta_actor_id spawn(ta_system *system, ta_definition_id definition, const ta_actor_address *address) {
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = address,
@@ -281,11 +276,9 @@ static void deliver(ta_system *system, ta_actor_id actor, const char *event) {
     run(system, actor);
 }
 
-static ta_system *create_system(router_state *router) {
+static ta_system *create_system(void) {
     ta_system *system = NULL;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
-    CHECK(ta_system_set_external_event_router(
-              system, (ta_external_event_router){ .self = router, .v = &router_vtable }) == TA_OK);
     return system;
 }
 
@@ -301,8 +294,7 @@ static ta_system *create_system(router_state *router) {
  * actor's, neither appear in the list nor change it.
  */
 static void test_inspection_lists_only_the_actors_sends(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
-    ta_system *system = create_system(&router);
+    ta_system *system = create_system();
     ta_definition_id many = define(system, "many", one_timer);
     ta_definition_id three = define(system, "three", three_timers);
 
@@ -324,9 +316,6 @@ static void test_inspection_lists_only_the_actors_sends(void) {
         CHECK(view.delayed_sends[0].due == 1000 && view.delayed_sends[0].event == event_name(system, "early"));
         CHECK(view.delayed_sends[1].due == 2000 && view.delayed_sends[1].event == event_name(system, "middle"));
         CHECK(view.delayed_sends[2].due == 3000 && view.delayed_sends[2].event == event_name(system, "late"));
-        for (uint32_t index = 0; index < 3; index += 1u) {
-            CHECK(!view.delayed_sends[index].submitted);
-        }
     }
 
     /* An actor of the population holds exactly its own send. */
@@ -346,8 +335,7 @@ static void test_inspection_lists_only_the_actors_sends(void) {
  * allocation is larger than one 64 KiB page, whatever the population.
  */
 static void test_owner_heap_spans_pages(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
-    ta_system *system = create_system(&router);
+    ta_system *system = create_system();
     const ta_scxml_state_spec *const charts[] = { timer_7s, timer_3s, timer_5s, timer_1s };
     ta_definition_id definitions[4];
     for (uint32_t index = 0; index < 4u; index += 1u) {
@@ -370,6 +358,7 @@ static void test_owner_heap_spans_pages(void) {
 
     ta_time previous = 0;
     uint32_t total = 0;
+    uint32_t mailed = 0;
     ta_time next = 0;
     while (ta_system_next_deadline(system, &next) == TA_OK) {
         CHECK(next >= previous);
@@ -386,16 +375,16 @@ static void test_owner_heap_spans_pages(void) {
         if (dispatched != 1) {
             break;
         }
+        mailed += run_mail(system, NULL); /* the pool of envelopes is bounded: let the mail go */
     }
     CHECK(total == live);
-    CHECK(router.accepted == (int)live);
+    CHECK(mailed == live);
     ta_system_destroy(system);
 }
 
 /* Cancelling an actor's earliest send moves the global deadline to its next. */
 static void test_cancelling_the_front_send(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
-    ta_system *system = create_system(&router);
+    ta_system *system = create_system();
     ta_definition_id many = define(system, "many", one_timer);
     ta_definition_id three = define(system, "three", three_timers);
     (void)spawn(system, many, NULL);
@@ -418,49 +407,47 @@ static void test_cancelling_the_front_send(void) {
     CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
                                                                     .more_due = &more }) == TA_OK);
     CHECK(dispatched == 3 && !more);
-    CHECK(router.accepted == 3 && router.last_event == event_name(system, "far"));
+    ta_event_name_id last = 0;
+    CHECK(run_mail(system, &last) == 3 && last == event_name(system, "far"));
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 0);
     CHECK(ta_system_next_deadline(system, &next) == TA_ERR_NOT_FOUND);
     ta_system_destroy(system);
 }
 
 /*
- * A send the router refused was already sent: destroying its sender keeps it
- * queued for the receiver, with its original envelope, until it is accepted.
+ * A send to an address nobody holds is mail already: it waits for the address
+ * in core and is not a pending send of its sender. Destroying the sender
+ * leaves it where it is, until the host says the address cannot be loaded and
+ * the mail, whose sender is gone, is freed.
  */
-static void test_submitted_send_outlives_its_sender(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_RETRY };
-    ta_system *system = create_system(&router);
+static void test_waiting_mail_outlives_its_sender(void) {
+    ta_system *system = create_system();
     ta_definition_id definition = define(system, "immediate", immediate);
     ta_actor_id sender = spawn(system, definition, NULL);
 
     ta_actor_inspection view;
-    CHECK(ta_actor_inspect(system, sender, &view) == TA_OK && view.delayed_send_count == 1);
-    if (view.delayed_send_count == 1) {
-        CHECK(view.delayed_sends[0].submitted);
-        CHECK(view.delayed_sends[0].event == event_name(system, "ping"));
-    }
+    CHECK(ta_actor_inspect(system, sender, &view) == TA_OK && view.delayed_send_count == 0);
+    ta_address *address = NULL;
+    CHECK(ta_address_intern(system, &(ta_actor_address){ .family = { STR("elsewhere") }, .name = STR("x") },
+                            &address) == TA_OK);
+    CHECK(ta_address_waiting(system, address) == 1u);
 
     CHECK(ta_actor_destroy(system, sender) == TA_OK);
     ta_time next = 0;
-    CHECK(ta_system_next_deadline(system, &next) == TA_OK && next == 0);
-
-    router.answer = TA_EXTERNAL_EVENT_ACCEPTED;
-    uint32_t dispatched = 0;
-    bool more = true;
-    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
-                                                                    .more_due = &more }) == TA_OK);
-    CHECK(dispatched == 1 && router.accepted == 1);
-    CHECK(router.last_event == event_name(system, "ping"));
-    CHECK(router.last_origin.kind == TA_ACTOR_REF_RUNTIME && router.last_origin.as.runtime == sender);
     CHECK(ta_system_next_deadline(system, &next) == TA_ERR_NOT_FOUND);
+    CHECK(ta_address_waiting(system, address) == 1u);
+
+    CHECK(ta_address_load_failed(system, &(ta_address_load_failed_params){ .address = address,
+                                                                          .reason = TA_REFUSED_LOAD_NOT_FOUND }) ==
+          TA_OK);
+    CHECK(ta_address_waiting(system, address) == 0u);
+    ta_address_release(address);
     ta_system_destroy(system);
 }
 
-/* An orphaned send still pending at teardown is released with the system. */
-static void test_teardown_releases_orphans(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_RETRY };
-    ta_system *system = create_system(&router);
+/* Mail still waiting at teardown is released with the system. */
+static void test_teardown_releases_waiting_mail(void) {
+    ta_system *system = create_system();
     ta_definition_id definition = define(system, "immediate", immediate);
     ta_actor_id first = spawn(system, definition, NULL);
     (void)spawn(system, definition, NULL);
@@ -470,8 +457,7 @@ static void test_teardown_releases_orphans(void) {
 
 /* Unloading takes the pending sends into the image; loading brings them back. */
 static void test_capture_and_load_keep_the_sends(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
-    ta_system *system = create_system(&router);
+    ta_system *system = create_system();
     one_directory dir = {0};
     CHECK(ta_system_set_actor_directory(system, (ta_actor_directory){ .self = &dir, .v = &dir_vtable }) == TA_OK);
     ta_definition_id three = define(system, "three", three_timers);
@@ -558,8 +544,7 @@ static uint64_t cancelled_count(ta_system *system) {
  * the named actor's sends can be withdrawn (ADR 0012).
  */
 static void test_withdrawing_one_send(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
-    ta_system *system = create_system(&router);
+    ta_system *system = create_system();
     ta_definition_id many = define(system, "many", one_timer);
     ta_definition_id three = define(system, "three", three_timers);
     ta_actor_id neighbour = spawn(system, many, NULL);
@@ -613,7 +598,7 @@ static void test_withdrawing_one_send(void) {
     bool more = true;
     CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
                                                                     .more_due = &more }) == TA_OK);
-    CHECK(dispatched == 3 && router.accepted == 3);
+    CHECK(dispatched == 3 && run_mail(system, NULL) == 3);
 
     /* A destroyed actor's ID names nothing. */
     CHECK(ta_actor_destroy(system, actor) == TA_OK);
@@ -623,39 +608,12 @@ static void test_withdrawing_one_send(void) {
 
 /* Every pending send with the ID goes, as a <cancel> of it would; the rest stay. */
 static void test_withdrawing_a_repeated_id(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
-    ta_system *system = create_system(&router);
+    ta_system *system = create_system();
     ta_actor_id actor = spawn(system, define(system, "twins", twins), NULL);
     CHECK(ta_actor_withdraw_send(system, actor, send_id(system, "dup")) == TA_OK);
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 1);
     CHECK(view.delayed_send_count != 1 || view.delayed_sends[0].event == event_name(system, "third"));
-    ta_system_destroy(system);
-}
-
-/*
- * A submitted send was sent: the router refused it once and it waits for its
- * receiver (ADR 0054). It is not withdrawn, and it is delivered later.
- */
-static void test_a_submitted_send_is_not_withdrawn(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_RETRY };
-    ta_system *system = create_system(&router);
-    ta_actor_id sender = spawn(system, define(system, "immediate", immediate), NULL);
-    watch_withdrawals(system);
-    uint64_t cancelled = cancelled_count(system);
-    CHECK(ta_actor_withdraw_send(system, sender, send_id(system, "now")) == TA_ERR_DONE);
-    seen_flush(system);
-    CHECK(seen_count == 0 && cancelled_count(system) == cancelled);
-    ta_actor_inspection view;
-    CHECK(ta_actor_inspect(system, sender, &view) == TA_OK && view.delayed_send_count == 1);
-
-    router.answer = TA_EXTERNAL_EVENT_ACCEPTED;
-    uint32_t dispatched = 0;
-    bool more = true;
-    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
-                                                                    .more_due = &more }) == TA_OK);
-    CHECK(dispatched == 1 && router.accepted == 1);
-    CHECK(ta_actor_withdraw_send(system, sender, send_id(system, "now")) == TA_ERR_NOT_FOUND);
     ta_system_destroy(system);
 }
 
@@ -666,8 +624,7 @@ static void test_a_submitted_send_is_not_withdrawn(void) {
  * the macrostep, between its CANCELLED record's neighbours.
  */
 static void test_withdrawing_inside_a_paused_macrostep(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
-    ta_system *system = create_system(&router);
+    ta_system *system = create_system();
     ta_actor_id actor = spawn(system, define(system, "stepper", send_then_cancel), NULL);
     watch_withdrawals(system);
     ta_event go = { .name = event_name(system, "go"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
@@ -705,8 +662,7 @@ static void test_withdrawing_inside_a_paused_macrostep(void) {
  * it. An image captured after it does not hold the send.
  */
 static void test_an_image_from_before_a_withdrawal_is_stale(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
-    ta_system *system = create_system(&router);
+    ta_system *system = create_system();
     one_directory dir = {0};
     CHECK(ta_system_set_actor_directory(system, (ta_actor_directory){ .self = &dir, .v = &dir_vtable }) == TA_OK);
     ta_definition_id three = define(system, "three", three_timers);
@@ -744,12 +700,11 @@ static void dispatch(ta_system *system) {
  * A delayed send that fires leaves its owner's pending sends, and so changes
  * the owner as a withdrawal does: an image captured before it fired still
  * holds the send, and unloading with it would bring the send back to fire a
- * second time. The image is stale, whether the router takes the send or
- * refuses it and keeps it as a submitted one.
+ * second time. The image is stale once the send has fired and its mail has
+ * been taken (until then the session is busy).
  */
 static void test_an_image_from_before_a_send_fired_is_stale(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
-    ta_system *system = create_system(&router);
+    ta_system *system = create_system();
     one_directory dir = {0};
     CHECK(ta_system_set_actor_directory(system, (ta_actor_directory){ .self = &dir, .v = &dir_vtable }) == TA_OK);
     ta_definition_id three = define(system, "three", three_timers);
@@ -760,21 +715,20 @@ static void test_an_image_from_before_a_send_fired_is_stale(void) {
     CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &before }) == TA_OK);
     CHECK(ta_system_set_time(system, 1000) == TA_OK);
     dispatch(system);
-    CHECK(router.accepted == 1 && router.last_event == event_name(system, "early"));
+    ta_event_name_id last = 0;
+    CHECK(run_mail(system, &last) == 1 && last == event_name(system, "early"));
     CHECK(ta_actor_unload(system, &(ta_actor_unload_params){ .actor = actor, .image = before }) == TA_ERR_STALE);
     ta_session_image_destroy(before);
 
-    /* Refused, the send stays with its owner as a submitted one, which no
-     * image holds: an image from before still holds it as pending. */
+    /* Again for the next send: an image from before still holds it as pending. */
     CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &before }) == TA_OK);
-    router.answer = TA_EXTERNAL_EVENT_RETRY;
     CHECK(ta_system_set_time(system, 2000) == TA_OK);
     dispatch(system);
+    CHECK(run_mail(system, &last) == 1 && last == event_name(system, "middle"));
     CHECK(ta_actor_unload(system, &(ta_actor_unload_params){ .actor = actor, .image = before }) == TA_ERR_STALE);
     ta_session_image_destroy(before);
 
     /* An image from after holds only the send still pending. */
-    router.answer = TA_EXTERNAL_EVENT_ACCEPTED;
     ta_session_image *after = NULL;
     CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &after }) == TA_OK);
     ta_time image_next = 0;
@@ -793,12 +747,11 @@ int main(void) {
     test_inspection_lists_only_the_actors_sends();
     test_cancelling_the_front_send();
     test_owner_heap_spans_pages();
-    test_submitted_send_outlives_its_sender();
-    test_teardown_releases_orphans();
+    test_waiting_mail_outlives_its_sender();
+    test_teardown_releases_waiting_mail();
     test_capture_and_load_keep_the_sends();
     test_withdrawing_one_send();
     test_withdrawing_a_repeated_id();
-    test_a_submitted_send_is_not_withdrawn();
     test_withdrawing_inside_a_paused_macrostep();
     test_an_image_from_before_a_withdrawal_is_stale();
     test_an_image_from_before_a_send_fired_is_stale();

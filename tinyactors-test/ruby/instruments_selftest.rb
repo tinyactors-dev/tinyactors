@@ -13,8 +13,7 @@ Dir[root.join('ruby/charts/**/*.rb').to_s].sort.each { |file| require file }
 SERVICE = 'urn:tinyactors:test:service'
 IO_TYPE = 'urn:tinyactors:test:io'
 
-# Sends itself `ping` through the SCXML Event I/O Processor, which routes
-# external self-sends through the host's router.
+# Sends itself `ping` through the SCXML Event I/O Processor.
 TinyactorsTest.chart :harness_ping do
   data pings: 0
   data error: nil
@@ -36,7 +35,7 @@ end
 
 # Sends `ping` to an address no session holds. Core queues mail for a resident
 # session itself (core ADR 0099), so only a send it cannot place reaches the
-# router; this one does, and the router can only refuse it.
+# host, as a LOAD_NEEDED notice; this one does.
 TinyactorsTest.chart :harness_lost do
   data error: nil
 
@@ -177,30 +176,28 @@ inspector_group = TinyactorsTest.scenarios 'inspector' do
   end
 end
 
-router_group = TinyactorsTest.scenarios 'router' do
-  scenario 'the recording router journals the sends core did not place, and refuses them' do
-    router = recording_router
+loads_group = TinyactorsTest.scenarios 'load notices' do
+  scenario 'a send core did not place is a LOAD_NEEDED notice, which a host without a loader refuses' do
     actor = spawn :harness_lost
     actor.deliver 'go'
-    # Mail to a resident session is queued by core and never reaches the
-    # router; a send to an address nobody holds does, and router.direct cannot
-    # deliver it (the scenario installs no directory to resolve the name).
-    submits = router.entries('submit')
-    assert_equal [%w[error err_unsupported]], submits.map { |entry| entry.values_at(:status, :result) }
-    assert_equal %w[ping], submits.map { |entry| entry.dig(:event, :name_text) }
-    assert_equal({ kind: 'named', family: { name: 'nobody' }, name: 'n' }, submits[0][:destination])
-    assert_equal({ kind: 'actor', actor: { kind: 'runtime', runtime: actor.handle } }, submits[0].dig(:event, :origin))
+    assert_equal ['nobody/n'], loaded_addresses
+    notice = load_notices.first
+    assert_equal 'mail', notice[:source]
+    assert_equal false, notice[:session], 'a named address, not a gone session'
     assert_active actor, :failed
+    assert_equal 'error.communication', actor.data('.error')
   end
 
-  scenario 'an injected retry makes core offer the delivery again' do
-    router = recording_router
-    router.arm_fault(:submit, status: 'retry')
+  scenario 'a handler answers the notice with its own reason' do
+    seen = []
+    on_load_needed do |context, notice|
+      seen << notice[:address][:name]
+      context.load_failed(notice[:address], 'load_rejected')
+    end
     actor = spawn :harness_lost
     actor.deliver 'go'
-    assert_equal [%w[retry true], %w[error false]],
-                 router.entries('submit').map { |entry| [entry[:status], (entry[:injected] || false).to_s] }
-    assert_active actor, :failed
+    assert_equal ['n'], seen
+    assert_equal 'error.communication', actor.data('.error'), 'every refusal reaches the sender as a communication error'
   end
 
   scenario 'a named destination resolves through the directory, which can fail' do
@@ -216,15 +213,6 @@ router_group = TinyactorsTest.scenarios 'router' do
     # behind its back.
     assert_equal [['messenger', 'm2', 'ok']],
                  directory.entries('resolve').map { |entry| entry.values_at(:family, :name, :result) }
-  end
-
-  scenario 'an injected router error reaches the chart as error.communication' do
-    router = recording_router
-    router.arm_fault(:submit, message: 'link down')
-    actor = spawn :harness_lost
-    actor.deliver 'go'
-    assert_active actor, :failed
-    assert_equal 'error.communication', actor.data('.error')
   end
 end
 
@@ -349,12 +337,8 @@ equivalence_group = TinyactorsTest.scenarios 'equivalence', chart: :traffic_ligh
   end
 
   scenario 'an interruption that changes nothing observable passes at every step' do
-    reinstall = lambda do |context|
-      router = { '$adapter' => 'router.direct', 'config' => { 'system' => context.system_handle } }
-      context.core('ta_system_set_external_event_router',
-                   context.ta.system.set_external_event_router(system: context.system_handle, router: router))
-    end
-    assert_equivalent_runs(interruptions: { 'reinstall the router' => reinstall }, &LIGHT_BODY)
+    rerun = ->(context) { context.run_system('an extra run') }
+    assert_equivalent_runs(interruptions: { 'run the system again' => rerun }, &LIGHT_BODY)
   end
 
   scenario 'an interruption that changes behaviour is reported at the step it follows' do
@@ -364,16 +348,16 @@ equivalence_group = TinyactorsTest.scenarios 'equivalence', chart: :traffic_ligh
 
   scenario 'journals appear in the trace with actor labels instead of runtime IDs' do
     trace = assert_equivalent_runs(variants: { 'resume budget 1' => { resume_budget: 1 } }) do
-      recording_router
-      spawn(:harness_lost).deliver 'go'
+      scripted_invoker(SERVICE)
+      spawn(:harness_service)
     end
-    submit = trace.steps.last.state[:journals].fetch('router').first
-    assert_equal({ kind: 'actor', actor: { kind: 'runtime', runtime: 'harness_lost.1' } }, submit.dig(:event, :origin))
-    assert !submit.key?(:seq), 'journal seq numbers are not part of the trace'
+    start = trace.steps.last.state[:journals].fetch("invoker #{SERVICE}").first
+    assert_equal 'harness_service.1', start[:parent]
+    assert !start.key?(:seq), 'journal seq numbers are not part of the trace'
   end
 end
 
-groups = [allocator_group, inspector_group, router_group, invoker_group, io_group, log_group, directory_group, equivalence_group]
+groups = [allocator_group, inspector_group, loads_group, invoker_group, io_group, log_group, directory_group, equivalence_group]
 runner = TinyactorsTest::Runner.new(executable: root.join('build/tinyactors-test'), charts: TinyactorsTest.charts)
 results = runner.run(groups)
 failed = results.reject(&:ok?).map { |result| result.scenario.full_name }

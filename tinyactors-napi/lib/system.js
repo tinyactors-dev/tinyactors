@@ -1315,7 +1315,6 @@ class System {
         ? new TextDecoder().decode(readContent(this.#native, definitionID, send.target_text).bytes)
         : send.target,
       data: send.data,
-      submitted: send.submitted,
       // What a re-arm needs (core ADR 0074 section 8): the literal target's
       // and <content>'s IDs in the definition, and the sending step's trace.
       targetContent: send.has_target_text ? send.target_text : null,
@@ -1342,7 +1341,6 @@ class System {
         destination: this.#destinationRef(send.destination, index),
         target: send.targetContent === null || send.targetContent === undefined ? send.target : undefined,
         data: send.data,
-        submitted: false,
         has_target_text: send.targetContent !== null && send.targetContent !== undefined,
         target_text: send.targetContent ?? 0,
         has_content: send.content !== null && send.content !== undefined,

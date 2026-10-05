@@ -177,8 +177,8 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(hosted_system), 'with room, the same create works'
   end
 
-  # Catches: mail between actors that bypasses the kernel's mailboxes and
-  # router, or a turn that does not run what was posted.
+  # Catches: mail between actors that bypasses the kernel's mailboxes
+  # (or is not core's own mail), or a turn that does not run what was posted.
   scenario 'mail between two actors goes through the kernel' do
     hosted = hosted_system
     ping = hosted_spawn(hosted, hosted_define(hosted, :hosted_ping), family: 'hosted_ping', name: 'a')

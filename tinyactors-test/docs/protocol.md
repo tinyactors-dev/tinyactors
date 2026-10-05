@@ -332,23 +332,22 @@ that a handler's `actions` is `[]`; union kinds are always explicit.
 ### Adapters
 
 A vtable-bearing value (`ta_allocator`, `ta_datamodel`, `ta_actor_directory`,
-`ta_io`, `ta_invoker`, `ta_external_event_router`, `ta_actor_inspector`) is
+`ta_io`, `ta_invoker`, `ta_actor_inspector`) is
 `{"$adapter": "<name>", "config": {...}}`. Adapters are C factories registered
 in `src/adapters.c`. They run synchronously, so callbacks never become nested
 RPC conversations. The current adapters are `allocator.libc`,
 `datamodel.jq`, `datamodel.ecmascript` (SCXML B.2 on quickjs-ng),
 `datamodel.null` (SCXML B.1: `In(state)` conditions only, no data),
-`router.direct`, and `invoker.scxml`, plus the instruments
-`allocator.counting`, `router.recording`, `directory.memory`,
-`invoker.scripted`, `io.recording`, and `log.recording` (see [Instruments](#instruments)). `router.direct` takes
-`{"system": <system handle>}` and hands each external event to
-`ta_actor_deliver()`; a busy actor makes it answer retry, so core keeps the
-event for a later dispatch. A named destination is resolved first with
-`ta_actor_find()`, through whatever actor directory the system has, so a chart
-can address a peer as `#_actor_<family>/<name>` without the host installing a
-routing instrument. Resolution answers unsupported when no directory is
-installed, unloaded for an address the directory holds but has not loaded, and
-not-found for one it does not know.
+and `invoker.scxml`, plus the instruments
+`allocator.counting`, `directory.memory`,
+`invoker.scripted`, `io.recording`, and `log.recording` (see [Instruments](#instruments)).
+There is no router adapter: core places mail itself (core ADR 0099). A chart
+addresses a peer as `#_actor_<family>/<name>`; when the peer is resident core
+delivers at once, and when it is not core keeps the mail on the address and
+reports LOAD_NEEDED in the `ta.run` notices. The scenario host answers each
+notice (see `on_load_needed` in the README): by default with
+`ta.address.load_failed` and `load_not_found`, so the sender hears
+`error.communication`.
 
 An adapter in an output, such as `ta_definition_inspection.datamodel`, encodes
 as `{"$adapter": "<name>"}` when it matches a registered factory (same vtable)
@@ -408,7 +407,6 @@ them.
 | Kind | Config | Journal ops | Commands |
 |---|---|---|---|
 | `allocator.counting` | `name` | `alloc_failed`, `free_unknown`, `free_mismatch` | `stats`, `fail {after, count}`, `budget {bytes}`, `clear_faults` |
-| `router.recording` | `name`, `system`, `mode`?, `directory`? | `submit`, `release`, `drop` | `mode {mode}`, `held`, `release {id}`, `drop {id}`, `fail {op: "submit", status?}`, `clear_faults` |
 | `directory.memory` | `name` | `claim`, `resolve`, `replace`, `remove` | `entries`, `put {family, name, kind, actor?}`, `fail`, `clear_faults` |
 | `invoker.scripted` | `name`, `system` | `start`, `cancel`, `forward` | `services`, `fail`, `clear_faults` |
 | `io.recording` | `name`, `system` | `send` | `fail`, `clear_faults` |
@@ -426,23 +424,6 @@ them.
   push live bytes over `n` fails, and its `alloc_failed` entry carries
   `"reason": "budget"` (an armed one carries `"armed"`). `bytes: 0` and
   `clear_faults` lift it again.
-- **`router.recording`** journals every submitted delivery with its
-  `status` (`accepted`, `retry`, `error`). With `directory` (the name of a
-  `directory.memory` instrument) it resolves a named destination through
-  that directory's `resolve` operation, the one core calls (ADR 0037), so
-  the resolution is journaled by the directory and a fault armed on
-  `resolve` reaches routing too. The submission records the entry as
-  `resolved`: a resident entry is delivered, an unloaded one answers
-  `err_unloaded` (this router cannot load an actor; a host would), and an
-  unknown address answers what `resolve` reported, `err_not_found` by
-  default. Without a directory, a named destination is unsupported.
-  The host resolves a named destination because it owns location and
-  residency: the actor may be unloaded, or live in another process. In mode `direct` it delivers like
-  `router.direct`, and it also records the `ta_actor_deliver` result. In mode
-  `hold` it clones the delivery and answers accepted. `held` lists the held
-  deliveries. `release {id}` delivers one with `ta_actor_deliver`; a busy
-  actor keeps it held. `drop {id}` discards one. An injected `submit` fault
-  answers `status` `"retry"` or `"error"` (the default).
 - **`directory.memory`** is a compare-and-swap directory. `claim` fails with
   `err_stale` when the address has an entry. `replace` and `remove` fail with
   `err_stale` unless the current entry equals `expected`. `resolve` of an
@@ -503,7 +484,7 @@ maps onto the public C API:
 
 | Step | Calls |
 |---|---|
-| first use of the system | `ta.system.create` with `{"allocator": {"$adapter": "allocator.counting", "config": {"name": "<run>.allocator"}}, "initial_time": 0}`, then `ta.system.set_external_event_router` with `router.direct`, and `ta.system.register_invoker` with `invoker.scxml` (every defined chart as `charts`) for the atom of `http://www.w3.org/TR/scxml/` |
+| first use of the system | `ta.system.create` with `{"allocator": {"$adapter": "allocator.counting", "config": {"name": "<run>.allocator"}}, "initial_time": 0}`, then `ta.system.register_invoker` with `invoker.scxml` (every defined chart as `charts`) for the atom of `http://www.w3.org/TR/scxml/` |
 | first `spawn` of a chart | `ta.definition.compile_spec` (spec plus `{"$adapter": "datamodel.jq"}` and the run's counting allocator), then `ta.system.register_definition`, which takes ownership |
 | `spawn` | `ta.actor.spawn` |
 | `advance_time` | `ta.system.set_time` with absolute logical time |
@@ -610,9 +591,9 @@ Any other unknown target is invalid: `error.execution` (SCXML 6.2). There is
 no `#_self`; an absent target already sends to the actor itself, and
 `#_self` reads as the invocation named "self".
 
-Core hands a named destination to the external-event router, because the
-host owns location and residency: `router.recording` resolves it through
-its `directory` instrument.
+Core places a named destination itself when the address is resident. When
+it is not, the host owns location and residency: core reports LOAD_NEEDED and
+the scenario's `on_load_needed` handler pages the actor in, or fails the load.
 
 The spec carries only what an SCXML author writes, never runtime identifiers.
 Send IDs are the author's strings. I/O processors are names, and an absent

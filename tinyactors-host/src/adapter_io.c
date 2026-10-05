@@ -39,14 +39,13 @@ static ta_op_status tah_io_send(void *self, const ta_send *send, ta_fault *fault
     ta_value_retain(&effect.target);
     bool closing = system->effects.closed;
     if (!tah_system_effect(system, &effect)) {
-        tah_system_wake_sender(system, &send->source);
         if (closing) {
             static const char message[] = "the system is closing";
             *fault = (ta_fault){ .code = TA_ERR_INVALID, .message = { .ptr = message, .len = sizeof message - 1u } };
             return TA_OP_ERROR;
         }
-        /* Nothing was queued, which is running out of memory, not a failed
-         * send: core keeps the send and offers it again (core ADR 0070). */
+        /* Nothing was queued, which is running out of memory: nothing keeps the send for another try
+         * (core ADR 0099 section 6), so the sender hears error.communication. */
         return TA_OP_NOMEM;
     }
     if (system->dispatching_due) {

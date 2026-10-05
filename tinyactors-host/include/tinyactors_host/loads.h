@@ -7,18 +7,24 @@
  * A definition family can have a loader, registered here by name with its
  * `max_waiting`. Mail for a name in such a family that has no resident actor
  * (the directory's entry is unloaded, or there is none: the family is
- * virtual) starts a **load**: a record for the address with a mailbox of its
- * own (scheduler.h's tah_mailbox). Mail that arrives while the load is in
- * flight joins that mailbox, whether or not the actor has become resident
- * meanwhile, so it keeps its order; at most `max_waiting` messages wait, and
- * the rest are dead letters with reason `waiting-full`. There is one load
+ * virtual) starts a **load**: a record for the address. Two kinds of mail
+ * wait for it, in two places. The host's own posts (tah_system_post_named)
+ * wait in a mailbox of the load's own (scheduler.h's tah_mailbox) and join it
+ * while the load is in flight, whether or not the actor has become resident
+ * meanwhile, so they keep their order; at most `max_waiting` of them wait, and
+ * the rest are dead letters with reason `waiting-full`. Mail between sessions
+ * waits in core, on the address's waiting list (core ADR 0099 section 4); core
+ * reports the first of it with a LOAD_NEEDED notice, which starts the load
+ * here (tah_loads_wanted), unless one is in flight already. There is one load
  * per address at a time.
  *
  * Each new load is a **request** for JavaScript, which calls the loader
  * after the turn and finishes the load with its outcome: loaded or spawned
- * (the waiting mail moves to the front of the actor's mailbox), or not
- * found, rejected, failed or timed out (it becomes dead letters). The
- * record's generation guards against a stale finish.
+ * (the waiting posts move to the front of the actor's mailbox, and core moves
+ * its own list when the actor becomes resident), or not found, rejected,
+ * failed or timed out (the posts become dead letters, and core recycles its
+ * list: the senders hear error.communication). The record's generation
+ * guards against a stale finish.
  *
  * **Wake-ups.** An unloaded actor's delayed sends travel in its image, so a
  * host registers the image's next deadline for its address. When that time
@@ -28,13 +34,14 @@
  * entry in place, and it is skipped when it comes up.
  *
  * **Sessions** (napi ADR 0032 section 2). Mail a chart sends to a session
- * that has gone, of a family with a loader, starts a load with `why` =
- * session. Its address is the family and the session's text as the name,
+ * that has gone, of a family with a loader, waits in core on a key address
+ * made of the family and the session's text as the name,
  * `{ family, "<incarnation>.<session>.<family>" }`: a key, never a directory
- * entry. Mail for the same session while the load is in flight joins it. A
- * session this system cannot name (another incarnation's, or another family
- * holding its ID: core gives it session 0) starts a load of its own for each
- * message, since two such messages may be for different sessions.
+ * entry. Its LOAD_NEEDED notice says so, and starts a load with `why` =
+ * session. Mail for the same session while the load is in flight joins the
+ * same list. A session this system cannot name (another incarnation's, or
+ * another family holding its ID: core gives it session 0) is undeliverable:
+ * its sender hears error.communication at once.
  *
  * Every record and heap entry holds one reference to its address, given back
  * when it goes; tah_loads_close() gives back all of them while core is alive.
@@ -73,8 +80,8 @@ typedef struct tah_loads tah_loads;
 void tah_loads_init(tah_loads *loads, ta_allocator allocator);
 /*
  * Gives back every address reference and frees everything. The waiting
- * envelopes are the scheduler's: tah_sched_discard_mail() releases them.
- * Call it while core is alive.
+ * envelopes of the host's posts are the scheduler's: tah_sched_discard_mail()
+ * releases them. Core's lists are core's. Call it while core is alive.
  */
 void tah_loads_close(tah_loads *loads);
 
@@ -89,7 +96,7 @@ bool tah_loads_withdraw(tah_loads *loads, tah_sched *sched, uint32_t index);
 ta_result tah_loads_set_family(tah_loads *loads, ta_str family, uint32_t max_waiting);
 
 /*
- * Routes a message for the named `address` (router.h): into its load's
+ * Routes a message of the host for the named `address`: into its load's
  * mailbox when a load is in flight; otherwise, when it has no resident actor
  * and its family has a loader, a new load (and a request) with the message
  * as its first. TA_ERR_NOT_FOUND: neither, and the caller routes as before.
@@ -106,30 +113,25 @@ typedef struct {
 ta_result tah_loads_route(tah_loads *loads, const tah_load_route *route);
 
 /*
- * Routes a message for a gone session of a family with a loader (router.h):
- * into the load for `address` when one is in flight and `shared`, or into a
- * new load with `why` = session. `address` is the session's key (above);
- * `shared` is false for a session this system cannot name. TA_OK: accepted,
- * perhaps as a `waiting-full` dead letter. TA_ERR_NOT_FOUND: the family has
- * no loader. TA_ERR_BUSY and TA_ERR_NOMEM: nothing accepted.
+ * Core asked for `address` to be loaded: its first waiting input arrived (a
+ * LOAD_NEEDED notice, core ADR 0099 section 4). TA_OK: a load for it is in
+ * flight (this notice's or an earlier one's), and its request will reach
+ * JavaScript. TA_ERR_NOT_FOUND: the address's family has no loader, so nothing
+ * would bring it back and the caller answers core at once with
+ * ta_address_load_failed(). TA_ERR_NOMEM: the record could not be made, and
+ * the caller answers the same. `session` says the address is a session's key
+ * (the load's `why` is then session); `trace` is the first input's.
  */
 typedef struct {
-    tah_sched *sched;
     ta_address *address;
-    const tah_message *message;
-    bool shared;
+    const ta_trace_parent *trace;
+    bool session;
     uint64_t now_ns;
-} tah_load_session_route;
-ta_result tah_loads_route_session(tah_loads *loads, const tah_load_session_route *route);
-/* Whether `family` has a loader. */
-bool tah_loads_family_loads(const tah_loads *loads, ta_str family);
+} tah_load_wanted;
+ta_result tah_loads_wanted(tah_loads *loads, const tah_load_wanted *wanted);
 
 /* True when a load for `address` is in flight. */
 bool tah_loads_waiting(const tah_loads *loads, const ta_address *address);
-/* Whether mail for `address` would start a load: its family has a loader,
- * or actors of it were offloaded (napi ADR 0020, core ADR 0074). */
-bool tah_loads_would_load(const tah_loads *loads, const ta_address *address);
-
 /* A load JavaScript has not been told about, oldest first. */
 typedef struct {
     uint32_t index;
@@ -148,7 +150,7 @@ tah_load *tah_loads_find(const tah_loads *loads, uint32_t index, uint32_t genera
  * names none (it finished). Borrowed until the load finishes. */
 typedef struct {
     const ta_address *address;
-    uint32_t waiting;      /* messages in its mailbox */
+    uint32_t waiting;      /* posts in its mailbox (core's own list is counted by ta_address_waiting) */
     ta_trace_parent trace; /* the first message's trace parent, or all zero */
 } tah_load_info;
 tah_load_info tah_loads_info(const tah_loads *loads, uint32_t index, uint32_t generation);
@@ -156,7 +158,7 @@ tah_load_info tah_loads_info(const tah_loads *loads, uint32_t index, uint32_t ge
 /* The loads' counters (napi's metrics() and flush()). */
 typedef struct {
     uint32_t in_flight; /* loads started and not finished */
-    uint32_t waiting;   /* messages in every load's mailbox */
+    uint32_t waiting;   /* posts in every load's mailbox */
     uint64_t outcomes[TAH_LOAD_OUTCOMES];
 } tah_loads_stats;
 void tah_loads_read_stats(const tah_loads *loads, tah_loads_stats *out);
@@ -165,13 +167,17 @@ void tah_loads_read_stats(const tah_loads *loads, tah_loads_stats *out);
  * Finishes a load. LOADED and SPAWNED: `actor` must be the resident actor
  * at the address, or for a session's load any resident actor, which is the
  * new instance (TA_ERR_NOT_FOUND otherwise, and nothing changes); the
- * waiting mail moves to the front of its mailbox, and its wake-up goes.
- * Other outcomes: the waiting mail becomes dead letters. Records the outcome
+ * waiting posts move to the front of its mailbox, and its wake-up goes. Core
+ * has already moved its own list to an actor that holds the address; for a
+ * session's key, which no actor holds, this call names the instance to core
+ * (ta_address_loaded). Other outcomes: the waiting posts become dead letters,
+ * and core recycles its list (ta_address_load_failed). Records the outcome
  * and the load's duration in `metrics`. TA_ERR_STALE: the token names no
  * load in flight. TA_ERR_NOMEM: the hand-over could not reserve the actor's
- * ready-queue entry, so the mail became `load-failed` dead letters.
+ * ready-queue entry, so the posts became `load-failed` dead letters.
  */
 typedef struct {
+    ta_system *core;
     tah_sched *sched;
     const tah_directory *directory;
     tah_host_metrics *metrics;

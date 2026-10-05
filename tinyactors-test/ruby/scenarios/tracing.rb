@@ -248,28 +248,15 @@ TinyactorsTest.scenarios 'tracing' do
 
   # One delivery that causes sends across three actors and a delayed send;
   # every macrostep it caused carries its trace ID and a cause chain back
-  # to it. `hold` runs it through router.recording, which keeps deliveries
-  # and releases them later, newest first: another pump, another order.
-  causality = lambda do |hold|
+  # to it.
+  causality = lambda do
     c = spawn :trace_relay
     b = spawn :trace_relay, binding: { next: "#_scxml_#{c.inspect_actor[:session_id]}" }
     a = spawn :trace_relay, binding: { next: "#_scxml_#{b.inspect_actor[:session_id]}" }
-    router = hold ? recording_router(mode: :hold) : nil
     recording_trace
     request = TinyactorsTest.trace_parent(trace_id: Tracing::TRACE_ID, parent_span: 0xabc)
     a.deliver 'start', trace: request
-    release = lambda do
-      3.times do
-        held = router.held
-        break if held.empty?
-
-        held.reverse_each { |delivery| router.release(delivery[:id]) }
-        run_system('release held deliveries')
-      end
-    end
-    release.call if router
     advance_time 10
-    release.call if router
     records = trace_records
     begins = records.select { |record| record[:kind] == 'macrostep_begin' }
     sends = records.select { |record| record[:kind] == 'sent' }
@@ -291,11 +278,7 @@ TinyactorsTest.scenarios 'tracing' do
   end
 
   scenario 'one delivery\'s trace reaches three actors and a delayed send' do
-    instance_exec(false, &causality)
-  end
-
-  scenario 'one delivery\'s trace reaches three actors and a delayed send, through a holding router' do
-    instance_exec(true, &causality)
+    instance_exec(&causality)
   end
 
   # Every record is written once (ADR 0067 implementation notes): with each

@@ -17,7 +17,9 @@ static void use_public_types(void) {
     ta_actor_publish_params activate = {0};
     ta_actor_completion completion = {0};
     ta_due_dispatch_params due = {0};
-    ta_external_event_router router = {0};
+    ta_address_load_failed_params load_failed = {0};
+    ta_address_loaded_params loaded = {0};
+    ta_due_fired fired = {0};
     ta_scxml_target target = {0};
     ta_definition_compile_params compile = {0};
     ta_scxml_done_data_spec done_data = {0};
@@ -76,7 +78,9 @@ static void use_public_types(void) {
     (void)activate;
     (void)completion;
     (void)due;
-    (void)router;
+    (void)load_failed;
+    (void)loaded;
+    (void)fired;
     (void)target;
     (void)compile;
     (void)done_data;

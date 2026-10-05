@@ -6,7 +6,6 @@
 #include "tinyactors_host/adapter_io.h"
 #include "tinyactors_host/adapter_log.h"
 #include "tinyactors_host/hooks.h"
-#include "tinyactors_host/router.h"
 #include "system_private.h"
 
 /* Gives the record back to the platform's allocator it came from. */
@@ -98,7 +97,6 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
         return result;
     }
     (void)ta_system_set_actor_directory(system->core, tah_directory_adapter(&system->directory));
-    (void)ta_system_set_external_event_router(system->core, tah_router_adapter(system));
     (void)ta_system_set_input_watch(system->core, (ta_input_watch){ .self = system, .v = &tah_system_input_watch });
     result = tah_scxml_invoker_register(system);
     if (result != TA_OK) {
@@ -122,7 +120,6 @@ void tah_system_close(tah_system *system) {
      * reference the addon holds to a core object (a named origin in an
      * envelope, an address in the directory) goes back first (ADR 0012).
      */
-    (void)ta_system_set_external_event_router(system->core, (ta_external_event_router){0});
     (void)ta_system_set_input_watch(system->core, (ta_input_watch){0});
     (void)ta_system_set_actor_directory(system->core, (ta_actor_directory){0});
     /* A hook may close the system while the turn's records still own data. */
@@ -337,23 +334,6 @@ void tah_system_record_turn(tah_system *system, uint64_t started_ns) {
     tah_histogram_record(&system->metrics.turn_seconds, seconds, &exemplar);
 }
 
-void tah_system_wake_sender(tah_system *system, const ta_actor_ref *sender) {
-    if (!system->dispatching_due) {
-        return;
-    }
-    ta_actor_id actor = sender->as.runtime;
-    if (sender->kind == TA_ACTOR_REF_NAMED) {
-        ta_actor_directory_entry entry = tah_directory_find(&system->directory, sender->as.named);
-        if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT) {
-            return;
-        }
-        actor = entry.actor;
-    }
-    if (tah_sched_wake(&system->sched, actor) == TA_OK) {
-        tah_system_want_turn(system);
-    }
-}
-
 void tah_system_record_lateness(tah_system *system, ta_time due, const ta_trace_parent *trace) {
     ta_time now = ta_system_time(system->core);
     double seconds = now > due ? (double)(now - due) / 1000.0 : 0.0;
@@ -555,13 +535,20 @@ static void tah_quarantine_reports_make(tah_system *system) {
     }
 }
 
+/* Records one dispatch call keeps for the mail core placed (ta_due_fired); more are left due for the next call. */
+#define TAH_DUE_FIRED_BATCH 32u
+
 /*
- * Dispatches the sends due now, up to the due budget. Due sends go through
- * the router into mailboxes (ADR 0006), so what they deliver runs in a
- * later turn. A refusal (a full queue) or TA_ERR_NOMEM leaves the rest due,
- * so the system is not quiet and the next turn tries again. Returns true
- * when sends are still due. The turn calls it after its deliveries, and
- * evict() before it removes an actor (napi ADR 0032 section 8).
+ * Dispatches the sends due now, up to the due budget. A due send to a
+ * resident session is an envelope core made itself (core ADR 0099 section 4);
+ * the rest go through the router into mailboxes (ADR 0006). What core placed
+ * is reported in `fired`, and recorded here: its lateness, and the sender's
+ * wake, which moves because its timer was consumed. What was delivered runs
+ * in a later turn. A pool at its bound, a full `fired` array, a refusal (a
+ * full queue) or TA_ERR_NOMEM leaves the rest due, so the system is not quiet
+ * and the next turn tries again. Returns true when sends are still due. The
+ * turn calls it after its deliveries, and evict() before it removes an actor
+ * (napi ADR 0032 section 8).
  */
 bool tah_system_dispatch_due(tah_system *system) {
     ta_time core_deadline = 0;
@@ -571,16 +558,92 @@ bool tah_system_dispatch_due(tah_system *system) {
     }
     uint32_t dispatched = 0;
     bool more_due = false;
+    ta_due_fired fired[TAH_DUE_FIRED_BATCH];
+    uint32_t fired_count = 0;
     system->inside_core = true;
     system->dispatching_due = true;
-    (void)ta_system_dispatch_due(system->core, &(ta_due_dispatch_params){
-                                                   .budget = system->due_budget,
-                                                   .dispatched = &dispatched,
-                                                   .more_due = &more_due,
-                                               });
+    ta_result result = ta_system_dispatch_due(system->core, &(ta_due_dispatch_params){
+                                                                .budget = system->due_budget,
+                                                                .dispatched = &dispatched,
+                                                                .more_due = &more_due,
+                                                                .fired = fired,
+                                                                .fired_capacity = TAH_DUE_FIRED_BATCH,
+                                                                .fired_count = &fired_count,
+                                                            });
     system->dispatching_due = false;
     tah_system_leave_core(system);
-    return more_due;
+    for (uint32_t index = 0; index < fired_count; index += 1u) {
+        if (fired[index].delivered) {
+            tah_system_record_lateness(system, fired[index].due, &fired[index].trace);
+        }
+        tah_recorder_fired(system, &fired[index].sender); /* consumed: its wake moves */
+    }
+    return more_due || result != TA_OK;
+}
+
+ta_result tah_system_post_named(tah_system *system, ta_address *address, const tah_message *message) {
+    ta_actor_directory_entry entry = tah_directory_find(&system->directory, address);
+    bool resident = entry.kind == TA_ACTOR_DIRECTORY_RESIDENT;
+    if (!resident || tah_loads_waiting(&system->loads, address)) {
+        /* A load in flight holds the address's mail, or a loader starts one
+         * (napi ADR 0020); otherwise the mail goes where it went before. */
+        ta_result result = tah_loads_route(&system->loads, &(tah_load_route){ .sched = &system->sched,
+                                                                               .address = address,
+                                                                               .message = message,
+                                                                               .resident = resident,
+                                                                               .now_ns = tah_system_monotonic_ns(system) });
+        if (result != TA_ERR_NOT_FOUND) {
+            return result;
+        }
+    }
+    if (resident) {
+        tah_message resolved = *message;
+        resolved.target = entry.actor;
+        return tah_sched_post(&system->sched, &resolved);
+    }
+    ta_address_retain(address);
+    ta_result result = tah_sched_post_dead(&system->sched, &(tah_dead_post){
+                                                               .address = address,
+                                                               .message = message,
+                                                               .reason = entry.kind == TA_ACTOR_DIRECTORY_UNLOADED
+                                                                             ? TAH_DEAD_UNLOADED
+                                                                             : TAH_DEAD_NOT_FOUND,
+                                                           });
+    if (result != TA_OK) {
+        ta_address_release(address);
+    }
+    return result;
+}
+
+/*
+ * Core wants `notice->address` loaded: the first input for an address that no
+ * session holds is waiting (core ADR 0099 section 4). A load for it is
+ * requested of the host when its family has a loader, and joins the one in
+ * flight when there is one. Otherwise nothing would bring the address
+ * back, and the answer is at once: core recycles what waits (mail becomes
+ * error.communication for its sender, napi ADR 0022). Running out of memory
+ * for the load's record is a failed load. Called from the turn, after the
+ * call into core that wrote the notice has returned.
+ */
+static void tah_system_load_needed(void *context, const ta_run_notice *notice) {
+    tah_system *system = context;
+    ta_result result = tah_loads_wanted(&system->loads, &(tah_load_wanted){ .address = (ta_address *)notice->address,
+                                                                            .trace = &notice->trace,
+                                                                            .session = notice->session,
+                                                                            .now_ns = tah_system_monotonic_ns(system) });
+    if (result == TA_OK) {
+        return;
+    }
+    ta_refusal_reason reason = TA_REFUSED_LOAD_FAILED;
+    if (result == TA_ERR_NOT_FOUND) {
+        ta_actor_directory_entry entry = tah_directory_find(&system->directory, notice->address);
+        reason = !notice->session && entry.kind == TA_ACTOR_DIRECTORY_UNLOADED ? TA_REFUSED_LOAD_UNLOADED
+                                                                               : TA_REFUSED_LOAD_NOT_FOUND;
+    }
+    system->inside_core = true;
+    (void)ta_address_load_failed(system->core, &(ta_address_load_failed_params){ .address = notice->address,
+                                                                                .reason = reason });
+    tah_system_leave_core(system);
 }
 
 /*
@@ -611,6 +674,7 @@ tah_turn_params tah_system_turn_params(tah_system *system) {
         .stop = tah_system_staging_full,
         .stop_context = system,
         .left_core = tah_system_left_core,
+        .load_needed = tah_system_load_needed,
     };
 }
 

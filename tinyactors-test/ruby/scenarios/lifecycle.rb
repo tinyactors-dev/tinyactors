@@ -8,11 +8,10 @@
 # destroyed. The teardown leak check applies to every scenario here.
 TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
   # Catches: destroy leaving the actor's timer armed (its `timer` would be
-  # submitted to a dead ID when it falls due); destroy cancelling by send ID
+  # mailed to a dead ID when it falls due); destroy cancelling by send ID
   # instead of by owner (both lights use the ID `light`, so the survivor's
   # timer would vanish); a destroyed actor's ID answering again.
   scenario 'destroy cancels the actor\'s own delayed sends and no one else\'s' do
-    router = recording_router
     doomed = spawn
     advance_time 10_000
     survivor = spawn
@@ -26,8 +25,7 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
 
     advance_time 30_000
     assert_active survivor, :green
-    destinations = router.entries('submit').map { |entry| entry.dig(:destination, :runtime) }
-    assert_equal [survivor.handle], destinations.uniq, 'nothing was routed to the destroyed actor'
+    assert_equal [], load_notices, 'nothing was mailed to the destroyed actor'
   end
 
   # Catches: runtime IDs reused after destroy (ADR 0028): an event meant for

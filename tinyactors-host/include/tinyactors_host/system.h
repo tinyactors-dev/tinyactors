@@ -22,11 +22,13 @@
  * (pump.c) and native tests may set to anything; a flag coalesces the
  * requests until the turn runs.
  *
- * Routing (ADR 0006): the directory and the router are installed on core
- * when the system is created. Close uninstalls both, gives back the
- * directory's address references and the mailboxes' events, and only then
- * destroys core, because core frees its address records at the end of
- * ta_system_destroy().
+ * Routing (ADR 0006): the directory is installed on core when the system is
+ * created. Mail between sessions is core's own (core ADR 0099): it keeps what
+ * waits for an address that is not resident and tells the kernel with a
+ * LOAD_NEEDED notice, which the turn hands to loads.h. Close uninstalls the
+ * directory, gives back its address references and the mailboxes' events, and
+ * only then destroys core, because core frees its address records at the end
+ * of ta_system_destroy().
  *
  * Time (ADR 0007 point 3): core's clock is logical milliseconds that only
  * the host moves. With the manual clock only tah_system_advance_to() moves
@@ -112,15 +114,6 @@ typedef struct {
 } tah_child_params;
 
 /*
- * Mail a chart sent to a target that does not exist when it is sent (napi
- * ADR 0022): the sender gets error.communication instead of a dead letter.
- */
-typedef struct {
-    tah_dead_reason reason; /* TAH_DEAD_NOT_FOUND, TAH_DEAD_DONE or TAH_DEAD_UNLOADED */
-    const ta_actor_ref *destination;
-} tah_unreachable;
-
-/*
  * A quarantined invoked child's report to its parent (napi ADR 0025):
  * error.communication.invoke.<id>.quarantined, kept until it is queued in
  * the parent's mailbox (napi ADR 0032 section 3), so running out of memory
@@ -151,12 +144,6 @@ typedef struct {
      * NULL: the invoker refuses every invoke.
      */
     ta_op_status (*child_definition)(void *context, const tah_child_params *params);
-    /*
-     * The data of the error.communication a chart gets for mail to a target
-     * that does not exist (napi ADR 0022): napi makes { reason, target }.
-     * False leaves the event without data.
-     */
-    bool (*unreachable_data)(void *context, const tah_unreachable *unreachable, ta_value *out);
     /*
      * The data of the error a quarantined child's parent gets (napi ADR
      * 0025): napi makes { code, message }, as the fault hook sees them.
@@ -281,13 +268,18 @@ void tah_system_record_turn(tah_system *system, uint64_t started_ns);
 /* A delayed send due at `due` fired now: records how late (host_metrics.h). */
 void tah_system_record_lateness(tah_system *system, ta_time due, const ta_trace_parent *trace);
 /*
- * A send core dispatches outside its sender's run (a timer) failed: core
- * raises error.communication in the sender and starts a macrostep for it,
- * which the scheduler cannot see (napi ADR 0022). This makes the sender
- * runnable, and asks for a turn. Nothing happens inside a run, or for a
- * sender the table does not know.
+ * Accepts a message from the host for a named destination: the waiting
+ * mailbox of a load in flight for it, or of a new load when its family has a
+ * loader and it has no resident actor (napi ADR 0020); otherwise the resident
+ * actor's mailbox, or a dead letter when the name has none (not found, or
+ * unloaded). `message->target` is ignored. On TA_OK the system owns the
+ * event's references and the waiter; `address` stays the caller's.
+ * TA_ERR_BUSY: the queue is full and the message may not overflow
+ * (tah_message.may_overflow); TA_ERR_NOMEM: nothing accepted. The host's
+ * messages wait in the kernel's mailboxes (kernel ADR 0003) until the kernel
+ * hands the host's input to core; mail between sessions never does.
  */
-void tah_system_wake_sender(tah_system *system, const ta_actor_ref *sender);
+ta_result tah_system_post_named(tah_system *system, ta_address *address, const tah_message *message);
 /* Installs core's log sink when JavaScript or the trace encoder wants
  * <log> records (napi ADR 0017 section 7), and the null sink otherwise. */
 ta_result tah_system_refresh_log_sink(tah_system *system);

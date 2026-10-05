@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # One external event (`go`) starts a macrostep of many microsteps: the `go`
-# transition sends `ping` to itself through the router and raises the
+# transition sends `ping` to itself as mail and raises the
 # internal event `counted`; an eventless loop then counts `.n` to 5, one
 # microstep per increment, before `counted` is processed. Every handled
 # event is appended to `.log`, so processing order is observable:

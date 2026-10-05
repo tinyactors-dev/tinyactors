@@ -133,6 +133,7 @@ static void ta_run_end_slot(ta_system *system) {
 static void ta_run_slot_open(ta_system *system) {
     ta_run_slot *slot = &system->runner.slot;
     ta_ilist_init(&slot->outgoing);
+    ta_ilist_init(&slot->outgoing_waiting);
     slot->claim = (ta_quota_claim){0};
     (void)ta_envelopes_reserve(&system->envelopes, &slot->claim);
 }
@@ -573,7 +574,8 @@ static bool ta_run_report_cues(ta_system *system, ta_run_notices *out) {
         ta_run_notice_add(out, &(ta_run_notice){ .kind = TA_NOTICE_LOAD_NEEDED,
                                                  .source = (ta_input_source)first->source,
                                                  .address = first->payload.address,
-                                                 .trace = first->trace });
+                                                 .trace = first->trace,
+                                                 .session = (first->flags & TA_MAIL_FLAG_KEY) != 0 });
     }
     while (!ta_ilist_is_empty(&runner->refused)) {
         if (ta_run_room(out) < 1u) {

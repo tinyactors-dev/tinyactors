@@ -111,7 +111,7 @@ async function hostMetrics() {
   });
   const definition = system.define(
     statechart({ family: 'timers', revision: 'v1' })
-      // Mail between actors goes through the host's router, as a timer firing does.
+      // Mail between actors is core's, as a timer firing is.
       .state('idle', (s) => s.on('arm', (t) => t.target('armed').send('ring', (m) => m.to('#_actor_timers/clock').after(100))))
       .state('armed', (s) => s.on('ring', (t) => t.target('idle'))),
   );

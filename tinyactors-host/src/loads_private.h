@@ -17,7 +17,6 @@ struct tah_load {
     uint32_t generation;   /* half of the token JavaScript holds; never 0 */
     uint32_t next_free;
     uint8_t why;           /* tah_load_why */
-    bool keyed;            /* in `by_address`: later mail for the address joins it */
 };
 
 typedef struct tah_loader_family {
@@ -42,7 +41,7 @@ struct tah_loads {
     uint32_t requests_head;
     tah_vec wakes;      /* tah_wake: a min-heap by due */
     tah_map wake_due;   /* (uintptr_t)address -> the due time of its live wake-up */
-    uint32_t waiting;   /* messages in every load's mailbox */
+    uint32_t waiting;   /* posts in every load's mailbox */
     uint64_t outcomes[TAH_LOAD_OUTCOMES];
 };
 

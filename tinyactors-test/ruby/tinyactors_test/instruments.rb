@@ -4,7 +4,7 @@ module TinyactorsTest
   # One instrumented adapter in the host (src/instruments.c): a named
   # adapter instance that journals what core asks of it and answers with
   # faults armed beforehand. Scenarios get instruments from the Context
-  # (`allocator`, `recording_router`, `scripted_invoker`, `recording_io`,
+  # (`allocator`, `scripted_invoker`, `recording_io`,
   # `memory_directory`) rather than building them.
   class Instrument
     # `name` is unique in the host process; `label` is the name within one
@@ -63,12 +63,6 @@ module TinyactorsTest
     # an allocation that would push live bytes over `bytes` fails. `bytes:
     # 0`, like `clear_faults`, lifts the budget again.
     def budget(bytes) = control('budget', bytes: bytes)
-
-    # router.recording
-    def mode(mode) = control('mode', mode: mode.to_s)
-    def held = control('held')
-    def release(id) = control('release', id: id)
-    def drop(id) = control('drop', id: id)
 
     # invoker.scripted
     def services = control('services')

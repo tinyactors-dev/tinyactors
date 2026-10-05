@@ -8,7 +8,7 @@ module TinyactorsTest
   # Each step holds, for every resident actor (invoked children included):
   # the active configuration, residency, the data-model root, completion,
   # pending delayed sends, and invocations; plus the new journal entries of
-  # every recording instrument (router, invokers, I/O processors, directory).
+  # every recording instrument (invokers, I/O processors, directory).
   #
   # Runtime IDs differ between runs, so actors appear under labels: a
   # spawned actor as "<chart>.<n>", any other as "actor.<n>" in the order it

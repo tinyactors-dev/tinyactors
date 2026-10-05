@@ -89,7 +89,6 @@ struct ta_system {
     ta_io_origin_table io_messages;
 
     ta_actor_directory directory;
-    ta_external_event_router external_events;
     /* The host's policy for tracing the inputs it did not admit: mail (mail.h). Lifetime: system. */
     ta_input_watch input_watch;
     ta_log_sink log_sink;

@@ -1731,7 +1731,7 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
     }
     result = send && accepting.waiter == 0
                  ? TA_ERR_NOMEM
-                 : tah_router_post_named(system, address,
+                 : tah_system_post_named(system, address,
                                          &(tah_message){ .event = &event, .bytes = bytes, .waiter = accepting.waiter,
                                                          .trace = &trace });
     ta_address_release(address);

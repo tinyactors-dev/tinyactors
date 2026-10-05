@@ -296,12 +296,15 @@ an allocation is still live, or when core freed memory it was not given.
   first use. `spawn(chart, binding: {...})` gives the actor a host
   data-model binding, as an invoked child's `<param>`s would.
 - A chart sends to a logical address with the target
-  `#_actor_<family>/<name>`, which core parses (ADR 0044). The default
-  `router.direct` resolves such a destination with `ta_actor_find()`, so the
-  directory a named spawn already installs is enough for one actor to address
-  another. `recording_router(directory: true)` resolves them through the
-  directory instrument instead, which journals the resolution and can fault
-  it; a host needs its own router when it owns location, not merely naming.
+  `#_actor_<family>/<name>`, which core parses (ADR 0044). Core delivers to
+  a resident named actor itself, so a named spawn is enough for one actor to
+  address another. For an address that is not resident core keeps the mail
+  and reports LOAD_NEEDED (ADR 0099): `on_load_needed { |context, notice| ... }`
+  chooses what the scenario's host does (page the actor in, or
+  `load_failed(notice[:address], reason)`), `load_notices` lists what core
+  asked, and `address_waiting(address)` counts the mail waiting. Without a
+  handler every notice is answered with `load_not_found`, so the sender hears
+  `error.communication`.
 - `capture(actor)` returns an image handle. `image_deadline(image)` gives
   the image's earliest deadline, and `destroy_image(image)` frees it.
 - Reconstruction has no wrapper: a scenario calls
@@ -334,7 +337,6 @@ which journal every call core makes to them and fail on command (see
 "Instruments" in `docs/protocol.md`):
 
 ```ruby
-router  = recording_router(mode: :hold)   # replaces router.direct
 service = scripted_invoker('urn:example:service')
 io      = recording_io('urn:example:io')
 sink    = recording_log                    # what the charts <log>
@@ -342,8 +344,6 @@ walk    = recording_inspector              # the ta_actor_inspector of a walk
 dir     = memory_directory
 allocator                                  # the system's counting allocator
 
-router.held; router.release(id); router.drop(id)
-router.arm_fault(:submit, status: 'retry')
 report_invoke service.started.first, :event, event: 'reply', data: { value: 1 }
 report_invoke service.started.first, :error, reason: 'unavailable', ends: true
 allocator.arm_fault(after: 3, count: 1); allocator.stats
@@ -352,7 +352,6 @@ walk.arm_fault(after: 1, result: 'err_busy')
 io.entries('send')
 sink.logged                                # [[label, value], ...]
 
-router.mode(:direct)                       # change mode after installing it
 dir.put(family: 'light', name: 'l1', kind: :resident, actor: id)
 dir.directory_entries                      # what the directory holds
 any.journal(since: seq)                    # entries after one seq
@@ -371,7 +370,7 @@ instrument. The runs must produce the same trace as the baseline run, step by st
 ```ruby
 assert_equivalent_runs(
   variants:      { 'paused' => { resume_budget: 1 }, 'one send per dispatch' => { dispatch_budget: 1 } },
-  interruptions: { 'reinstall router' => ->(context) { ... } }  # tried after each baseline step
+  interruptions: { 'run again' => ->(context) { ... } }  # tried after each baseline step
 ) do
   light = spawn
   advance_time 30_000

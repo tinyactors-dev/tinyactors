@@ -215,7 +215,7 @@ jv tat_hosted_post_method(tat_bind *bind, jv params, int *error_code) {
         ta_address *address = NULL;
         result = ta_address_intern(tah_system_core(hosted->system), &text, &address);
         if (result == TA_OK) {
-            result = tah_router_post_named(hosted->system, address, &(tah_message){.event = &event});
+            result = tah_system_post_named(hosted->system, address, &(tah_message){.event = &event});
             ta_address_release(address);
         }
     } else if (result == TA_OK) {
@@ -715,6 +715,7 @@ jv tat_hosted_load_method(tat_bind *bind, jv params, int *error_code) {
     ta_result finished = result == TA_ERR_STALE
                              ? result
                              : tah_loads_finish(tah_system_loads(system), &(tah_load_finish){
+                                                                          .core = tah_system_core(system),
                                                                           .sched = tah_system_sched(system),
                                                                           .directory = tah_system_directory(system),
                                                                           .metrics = tah_system_metrics(system),

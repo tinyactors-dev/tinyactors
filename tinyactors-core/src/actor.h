@@ -319,8 +319,6 @@ ta_result ta_actor_schedule_send(ta_system *system, ta_actor *actor, const ta_de
 /* Makes room to store one more delayed send, so that storing it cannot fail
  * (ADR 0070). */
 ta_result ta_actor_reserve_send(ta_system *system, ta_actor *actor);
-/* The list a send owned by `owner` belongs in: the actor's, or the orphans when it is gone. */
-ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out);
 
 /* True for a replaying actor (ADR 0089): prepared with `at`, not yet published. */
 bool ta_actor_replaying(const ta_actor *actor);

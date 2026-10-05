@@ -1,20 +1,20 @@
 'use strict';
 
 // Mail a chart sends to a target that does not exist (napi ADR 0022): the
-// sender gets error.communication with { reason, target } (SCXML 6.2.4),
-// while mail posted from JavaScript stays a dead letter (ADR 0008), and a
-// family with a loader still loads. Runs on Node and Bun.
+// sender gets error.communication (SCXML 6.2.4), which core raises itself
+// when the host cannot load the address (core ADR 0099) and which carries no
+// data, while mail posted from JavaScript stays a dead letter (ADR 0008), and
+// a family with a loader still loads. Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
 const { createSystem, statechart } = require('..');
 
 // A chart that sends `ping` to `target` on `go` (after `delay` ms when given)
-// and keeps what error.communication said.
+// and counts the error.communication events it gets.
 function sender(system, family, target, delay) {
   return system.define(
     // Each target and delay is another chart, so another revision (core ADR 0087).
     statechart({ family, revision: `v1 ${target} ${delay}` })
-      .data('failure', null)
       .data('failures', 0)
       .state('idle', (s) => {
         s.on('go', (t) =>
@@ -24,9 +24,7 @@ function sender(system, family, target, delay) {
           }),
         );
         s.on('error.communication', (t) =>
-          t
-            .assign('failure', ({ event }) => event.data)
-            .assign('failures', function () { return this.failures + 1; }),
+          t.assign('failures', function () { return this.failures + 1; }),
         );
       }),
   );
@@ -56,7 +54,7 @@ async function unknownName() {
   await system.flush();
   actor.post('go');
   await system.flush();
-  assert.deepEqual(actor.inspect().data.failure, { reason: 'not-found', target: { family: 'nobody', name: 'here' } });
+  assert.equal(actor.inspect().data.failures, 1, 'the chart got error.communication once');
   assert.equal(dead.length, 0, 'the chart\'s mail is not a dead letter');
   assert.equal(system.metrics().system.errors_communication, 1);
   assert.equal(sum(system, 'tinyactors.messages.dead_lettered'), 0);
@@ -79,13 +77,14 @@ async function unknownSession() {
   await system.flush();
   actor.post('go');
   await system.flush();
-  assert.equal(actor.inspect().data.failure?.reason, 'not-found');
   assert.equal(actor.inspect().data.failures, 1);
   system.close();
 }
 
 // A family with a loader: an unknown name loads. The loader's "not-found"
-// comes after the mail was accepted, so it is a dead letter, not an error.
+// fails the load, and core recycles the mail the chart sent: the sender gets
+// error.communication, as for any address nobody can serve, and no dead
+// letter (those are mail posted from JavaScript).
 async function loaderFamily() {
   const dead = [];
   const system = createSystem({ deadLetter: (record) => dead.push(record) });
@@ -103,8 +102,8 @@ async function loaderFamily() {
   await system.flush();
   assert.deepEqual(loaded.sort(), ['known', 'unknown']);
   assert.equal(known.inspect().data.failures, 0);
-  assert.equal(unknown.inspect().data.failures, 0, 'a loader\'s answer is not the sender\'s error');
-  assert.equal(dead.find((record) => record.event === 'ping')?.reason, 'not-found');
+  assert.equal(unknown.inspect().data.failures, 1, 'a loader that cannot find the name is the sender\'s error');
+  assert.equal(dead.find((record) => record.event === 'ping'), undefined, 'the chart\'s mail is not a dead letter');
   system.close();
 }
 
@@ -121,7 +120,7 @@ async function delayedSendToADestroyedTarget() {
   await system.flush();
   assert.equal(actor.inspect().data.failures, 0, 'nothing is due yet');
   await system.advanceTo(system.time + 200);
-  assert.deepEqual(actor.inspect().data.failure, { reason: 'not-found', target: { family: 'receiver', name: 'r' } });
+  assert.equal(actor.inspect().data.failures, 1, 'the error reached the sender when the timer fired');
   system.close();
 }
 

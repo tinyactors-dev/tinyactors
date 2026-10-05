@@ -91,18 +91,13 @@ TinyactorsTest.scenarios 'send targets' do
   # heap long after the send ran, so core keeps the address valid by
   # retaining the value it parsed (ADR 0044).
   scenario 'a delayed send to a logical address still resolves when it falls due' do
-    directory = memory_directory
-    router = recording_router(directory: true)
-    receiver = spawn(SendTargets.chart(nil, :none))
-    directory.put(family: 'probe', name: 'late', kind: :resident, actor: receiver.handle)
+    receiver = spawn(SendTargets.chart(nil, :none), name: 'late')
     spawn(SendTargets.chart('#_actor_probe/late', :expr, 'jq', delay: '10s'))
 
     assert_equal nil, receiver.data('.outcome'), 'nothing arrives before the delay'
     advance_time 10_000
     assert_equal 'hit', receiver.data('.outcome'), 'the address outlived the value it was parsed from'
-    assert_equal [[{ kind: 'named', family: { name: 'probe' }, name: 'late' },
-                   { kind: 'resident', actor: receiver.handle }, 'accepted']],
-                 router.entries('submit').map { |entry| entry.values_at(:destination, :resolved, :status) }
+    assert_equal [], load_notices, 'core placed the mail itself: the address was resident'
   end
 
   # Catches: a session URI that stops resolving to its session.

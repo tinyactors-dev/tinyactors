@@ -614,7 +614,27 @@ static const char *tat_handle_text(jv value) {
     return result;
 }
 
+/*
+ * An address crosses as {"family": {"name": ...}, "name": ...}, as a named
+ * actor ref's fields do, not as a handle: core gives a LOAD_NEEDED notice its
+ * address borrowed (core ADR 0099), so no handle would outlive it. Decoding
+ * interns it into the request's system and releases it when the request ends.
+ */
+static bool tat_address_resolve(tat_bind *bind, jv value, void **out) {
+    ta_actor_ref ref;
+    jv named = jv_object_set(jv_copy(value), jv_string("kind"), jv_string("named"));
+    bool ok = tat_decode_ta_actor_ref(bind, named, &ref);
+    jv_free(named);
+    if (ok) {
+        *out = ref.as.named;
+    }
+    return ok;
+}
+
 bool tat_handle_resolve(tat_bind *bind, jv value, const char *type, void **out) {
+    if (strcmp(type, "address") == 0) {
+        return tat_address_resolve(bind, value, out);
+    }
     const char *text = tat_handle_text(value);
     if (text == NULL) {
         return tat_fail(bind, "expected a %s handle {\"$handle\": \"%s:<id>\"}", type, type);
@@ -689,6 +709,12 @@ jv tat_handle_register(tat_bind *bind, const char *type, void *ptr) {
 jv tat_handle_encode(tat_bind *bind, const char *type, const void *ptr) {
     if (ptr == NULL) {
         return jv_null();
+    }
+    if (strcmp(type, "address") == 0) {
+        ta_actor_address view = ta_address_view((ta_address *)ptr);
+        jv text = jv_object();
+        tat_put_fields_ta_actor_address(bind, &view, &text);
+        return text;
     }
     for (size_t index = bind->handle_count; index > 0; index -= 1) {
         const tat_handle *handle = &bind->handles[index - 1];

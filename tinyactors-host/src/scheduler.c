@@ -1176,6 +1176,12 @@ ta_result tah_sched_run(tah_sched *sched, const tah_turn_params *params, tah_run
         tah_sched_left_core(params);
         for (uint32_t index = 0; index < count; index += 1u) {
             const ta_run_notice *notice = &notices[index];
+            if (notice->kind == TA_NOTICE_LOAD_NEEDED) {
+                if (params->load_needed != NULL) {
+                    params->load_needed(params->stop_context, notice);
+                }
+                continue;
+            }
             if (notice->kind == TA_NOTICE_INPUT_COMPLETED && sched->turn_left > 0) {
                 sched->turn_left -= 1u;
             }

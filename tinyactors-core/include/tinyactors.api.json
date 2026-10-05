@@ -745,7 +745,7 @@
           "type": {
             "type": "ta_trace_parent"
           },
-          "doc": "What the macrostep that takes the event runs under (ADR 0067); a router passes ta_external_delivery.trace. All zero is none."
+          "doc": "What the macrostep that takes the event runs under (ADR 0067). All zero is none."
         },
         {
           "name": "time",
@@ -2348,7 +2348,7 @@
     },
     "ta_actor_ref": {
       "kind": "struct",
-      "doc": "`family` is the family atom of the actor a runtime reference names (ADR 0088), set on every runtime reference core makes for an actor: its self and the origins it writes. It outlives the actor, so a session URI can still be written, and a router can still find the family, once the actor is gone. 0 (the empty text, which no family is) means unknown: a reference a host built from a bare ID. A router delivers to a runtime destination only when a resident actor of that family holds the ID; core gives a destination whose ID is held by another family's actor ID 0. Ignored for named references, whose address names the family.",
+      "doc": "`family` is the family atom of the actor a runtime reference names (ADR 0088), set on every runtime reference core makes for an actor: its self and the origins it writes. It outlives the actor, so a session URI can still be written, and mail to a gone session can still name the family that may serve it, once the actor is gone. 0 (the empty text, which no family is) means unknown: a reference a host built from a bare ID. Mail to a runtime destination reaches it only when a resident actor of that family holds the ID; core gives a destination whose ID is held by another family's actor ID 0, which no family can serve. Ignored for named references, whose address names the family.",
       "fields": [
         {
           "name": "kind",
@@ -2593,7 +2593,7 @@
           "shape": "counted",
           "direction": "in",
           "optional": true,
-          "doc": "Delayed sends to re-arm in the new session before it bootstraps (ADR 0074 section 8): records a host read from ta_actor_inspect() of an earlier session of this actor and stored with its data. Each keeps its send ID, due time, event, destination, target, data, content and trace parent; a due time already past fires on the next dispatch. The session's generated-ID counter moves past every generated ID among them. Event names must be this system's and content IDs the definition's (TA_ERR_INVALID otherwise). `target` and `data` are retained. `submitted` and `destination` of a custom processor's send are ignored: every record is armed afresh. An SCXML send whose `destination` is runtime ID 0 goes to the new session itself, so a host re-arms a send to self without knowing the session's ID: an earlier session's runtime or session ID names another actor by then."
+          "doc": "Delayed sends to re-arm in the new session before it bootstraps (ADR 0074 section 8): records a host read from ta_actor_inspect() of an earlier session of this actor and stored with its data. Each keeps its send ID, due time, event, destination, target, data, content and trace parent; a due time already past fires on the next dispatch. The session's generated-ID counter moves past every generated ID among them. Event names must be this system's and content IDs the definition's (TA_ERR_INVALID otherwise). `target` and `data` are retained. `destination` of a custom processor's send is ignored: every record is armed afresh. An SCXML send whose `destination` is runtime ID 0 goes to the new session itself, so a host re-arms a send to self without knowing the session's ID: an earlier session's runtime or session ID names another actor by then."
         },
         {
           "name": "pending_send_count",
@@ -2636,7 +2636,7 @@
     },
     "ta_actor_state": {
       "kind": "struct",
-      "doc": "An idle actor's state (ADR 0094 section 3): what a checkpoint holds, as structure, for a host to encode. State IDs are the definition's own numbers, which its revision fixes (states are numbered in document order, ADR 0060), so a state restores only under the revision it came from. Pending sends are the actor's, as inspection reports them; a submitted one has left the actor and is not restored. `root` is the data model's root. What ta_actor_export_state() fills is borrowed from the actor and the caller's arrays, except `root`, which the caller releases with ta_value_release(); what ta_actor_prepare_params.state points at is borrowed for the call.",
+      "doc": "An idle actor's state (ADR 0094 section 3): what a checkpoint holds, as structure, for a host to encode. State IDs are the definition's own numbers, which its revision fixes (states are numbered in document order, ADR 0060), so a state restores only under the revision it came from. Pending sends are the actor's, as inspection reports them. `root` is the data model's root. What ta_actor_export_state() fills is borrowed from the actor and the caller's arrays, except `root`, which the caller releases with ta_value_release(); what ta_actor_prepare_params.state points at is borrowed for the call.",
       "fields": [
         {
           "name": "definition",
@@ -3143,6 +3143,47 @@
           "offsets": {
             "address": 0,
             "reason": 4
+          }
+        }
+      }
+    },
+    "ta_address_loaded_params": {
+      "kind": "struct",
+      "doc": "The host's answer to a LOAD_NEEDED notice when it served the address without a session that holds it: `actor` is a session it loaded or spawned for the waiting inputs (a new instance of a family, for the key of a gone session; the address is only a key and no directory entry). The inputs that wait move to `actor`'s queue in arrival order, as they do when a session becomes resident at a name. Nothing is allocated.",
+      "fields": [
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_address",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "address": 0,
+            "actor": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "address": 0,
+            "actor": 8
           }
         }
       }
@@ -9876,7 +9917,7 @@
     },
     "ta_delayed_send_info": {
       "kind": "struct",
-      "doc": "One pending delayed send owned by an actor (ADR 0054). `destination` is the resolved target for the built-in SCXML processor; custom processors receive `target`, or a literal target's text, and leave `destination` unused. `has_target_text` means the target is literal: `target` is absent, and `target_text` names the text in the owner's definition, which ta_definition_content() reads. `submitted` means the router refused the send once and it waits to be offered again (ADR 0026, ADR 0040). Everything is borrowed; retain `target` and `data` with ta_value_retain() to keep them past the synchronization window.\n\nThe same record re-arms a send when a host spawns an actor again from its stored data (ADR 0074 section 8): ta_actor_spawn_params.pending_sends.",
+      "doc": "One pending delayed send owned by an actor (ADR 0054). `destination` is the resolved target for the built-in SCXML processor; custom processors receive `target`, or a literal target's text, and leave `destination` unused. `has_target_text` means the target is literal: `target` is absent, and `target_text` names the text in the owner's definition, which ta_definition_content() reads. Everything is borrowed; retain `target` and `data` with ta_value_retain() to keep them past the synchronization window.\n\nThe same record re-arms a send when a host spawns an actor again from its stored data (ADR 0074 section 8): ta_actor_spawn_params.pending_sends.",
       "fields": [
         {
           "name": "send_id",
@@ -9918,12 +9959,6 @@
           "name": "data",
           "type": {
             "type": "ta_value"
-          }
-        },
-        {
-          "name": "submitted",
-          "type": {
-            "builtin": "bool"
           }
         },
         {
@@ -9971,8 +10006,7 @@
             "destination": 24,
             "target": 40,
             "data": 56,
-            "submitted": 72,
-            "has_target_text": 73,
+            "has_target_text": 72,
             "target_text": 76,
             "has_content": 80,
             "content": 84,
@@ -9990,8 +10024,7 @@
             "destination": 24,
             "target": 40,
             "data": 48,
-            "submitted": 56,
-            "has_target_text": 57,
+            "has_target_text": 56,
             "target_text": 60,
             "has_content": 64,
             "content": 68,
@@ -10147,7 +10180,7 @@
     },
     "ta_due_dispatch_params": {
       "kind": "struct",
-      "doc": "======================================================================== Delayed sends",
+      "doc": "`fired`, when not NULL, takes up to `fired_capacity` records and `fired_count` says how many were written; dispatch stops when the array is full, with *more_due set. Leave `fired` NULL to ask for no records.",
       "fields": [
         {
           "name": "budget",
@@ -10177,25 +10210,122 @@
           "shape": "single",
           "direction": "out",
           "valid_on": "success"
+        },
+        {
+          "name": "fired",
+          "type": {
+            "pointer": {
+              "type": "ta_due_fired"
+            }
+          },
+          "capacity": "fired_capacity",
+          "needed": "fired_count",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success",
+          "lifetime": "call"
+        },
+        {
+          "name": "fired_capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "fired"
+        },
+        {
+          "name": "fired_count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "always",
+          "needed_of": "fired"
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 24,
+          "size": 48,
           "align": 8,
           "offsets": {
             "budget": 0,
             "dispatched": 8,
-            "more_due": 16
+            "more_due": 16,
+            "fired": 24,
+            "fired_capacity": 32,
+            "fired_count": 40
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 12,
+          "size": 24,
           "align": 4,
           "offsets": {
             "budget": 0,
             "dispatched": 4,
-            "more_due": 8
+            "more_due": 8,
+            "fired": 12,
+            "fired_capacity": 16,
+            "fired_count": 20
+          }
+        }
+      }
+    },
+    "ta_due_fired": {
+      "kind": "struct",
+      "doc": "ta_due_fired is what ta_system_dispatch_due reports about one due send that core itself placed: mail to a resident session. The host records its lateness and wakes the recorded families that depend on the sender's timer (kernel ADR 0006). A send to a host I/O processor is the host's own business and is not reported.",
+      "fields": [
+        {
+          "name": "sender",
+          "type": {
+            "type": "ta_actor_ref"
+          },
+          "doc": "The sending session; not retained, valid until ta_system_dispatch_due returns."
+        },
+        {
+          "name": "due",
+          "type": {
+            "type": "ta_time"
+          },
+          "doc": "The time the send was due."
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_trace_parent"
+          },
+          "doc": "The sending step, which the receiver's macrostep runs under."
+        },
+        {
+          "name": "delivered",
+          "type": {
+            "builtin": "bool"
+          },
+          "doc": "True: an envelope for the receiver is on the run queue. False: the receiver cannot take it (a finished session holding the name) and error.communication was raised in the sender."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "sender": 0,
+            "due": 16,
+            "trace": 24,
+            "delivered": 72
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "sender": 0,
+            "due": 16,
+            "trace": 24,
+            "delivered": 72
           }
         }
       }
@@ -10813,248 +10943,6 @@
             "length": 8,
             "message": 12
           }
-        }
-      }
-    },
-    "ta_external_delivery": {
-      "kind": "struct",
-      "doc": "A fully normalized event destined for another SCXML external event queue, with the trace parent the receiver's macrostep runs under: the sending macrostep's context, and the key of the step that sent it (ADR 0067). A router passes `trace` on to ta_actor_deliver().",
-      "fields": [
-        {
-          "name": "destination",
-          "type": {
-            "type": "ta_actor_ref"
-          }
-        },
-        {
-          "name": "event",
-          "type": {
-            "type": "ta_event"
-          }
-        },
-        {
-          "name": "trace",
-          "type": {
-            "type": "ta_trace_parent"
-          }
-        },
-        {
-          "name": "due",
-          "type": {
-            "type": "ta_time"
-          },
-          "doc": "When the send was due (ADR 0072): the time it was sent for an immediate send, its deadline for a delayed one. A host subtracts it from its own clock to measure how late a timer fired."
-        }
-      ],
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 136,
-          "align": 8,
-          "offsets": {
-            "destination": 0,
-            "event": 16,
-            "trace": 80,
-            "due": 128
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 128,
-          "align": 8,
-          "offsets": {
-            "destination": 0,
-            "event": 16,
-            "trace": 72,
-            "due": 120
-          }
-        }
-      }
-    },
-    "ta_external_event_router": {
-      "kind": "struct",
-      "semantic": "adapter",
-      "fields": [
-        {
-          "name": "self",
-          "type": {
-            "pointer": {
-              "builtin": "void"
-            }
-          },
-          "shape": "raw",
-          "direction": "in"
-        },
-        {
-          "name": "v",
-          "type": {
-            "pointer": {
-              "type": "ta_external_event_router_vtable",
-              "const": true
-            }
-          },
-          "shape": "vtable",
-          "direction": "in",
-          "optional": true,
-          "doc": "Null uninstalls the router."
-        }
-      ],
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 16,
-          "align": 8,
-          "offsets": {
-            "self": 0,
-            "v": 8
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 8,
-          "align": 4,
-          "offsets": {
-            "self": 0,
-            "v": 4
-          }
-        }
-      }
-    },
-    "ta_external_event_router_vtable": {
-      "kind": "struct",
-      "semantic": "vtable",
-      "fields": [
-        {
-          "name": "submit",
-          "type": {
-            "pointer": {
-              "function": {
-                "returns": {
-                  "type": {
-                    "type": "ta_external_event_submit_status"
-                  },
-                  "success": "TA_EXTERNAL_EVENT_ACCEPTED"
-                },
-                "params": [
-                  {
-                    "name": "self",
-                    "type": {
-                      "pointer": {
-                        "builtin": "void"
-                      }
-                    },
-                    "shape": "raw",
-                    "direction": "in"
-                  },
-                  {
-                    "name": "params",
-                    "type": {
-                      "pointer": {
-                        "type": "ta_external_event_submit_params",
-                        "const": true
-                      }
-                    },
-                    "shape": "single",
-                    "direction": "in"
-                  }
-                ]
-              }
-            }
-          },
-          "shape": "callback",
-          "direction": "in"
-        }
-      ],
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 8,
-          "align": 8,
-          "offsets": {
-            "submit": 0
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 4,
-          "align": 4,
-          "offsets": {
-            "submit": 0
-          }
-        }
-      }
-    },
-    "ta_external_event_submit_params": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "delivery",
-          "type": {
-            "pointer": {
-              "type": "ta_external_delivery",
-              "const": true
-            }
-          },
-          "shape": "single",
-          "direction": "in"
-        },
-        {
-          "name": "fault",
-          "type": {
-            "pointer": {
-              "type": "ta_fault"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "TA_EXTERNAL_EVENT_ERROR",
-          "lifetime": "call"
-        }
-      ],
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 16,
-          "align": 8,
-          "offsets": {
-            "delivery": 0,
-            "fault": 8
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 8,
-          "align": 4,
-          "offsets": {
-            "delivery": 0,
-            "fault": 4
-          }
-        }
-      }
-    },
-    "ta_external_event_submit_status": {
-      "kind": "enum",
-      "constants": [
-        {
-          "name": "TA_EXTERNAL_EVENT_ACCEPTED",
-          "value": 0,
-          "symbol": "accepted",
-          "success": true,
-          "doc": "Delivery was accepted; an asynchronous router copied borrowed fields."
-        },
-        {
-          "name": "TA_EXTERNAL_EVENT_RETRY",
-          "value": 1,
-          "symbol": "retry",
-          "doc": "Nothing was accepted; core retains and retries the delivery."
-        },
-        {
-          "name": "TA_EXTERNAL_EVENT_ERROR",
-          "value": 2,
-          "symbol": "error",
-          "doc": "Nothing was accepted; fault describes a communication failure."
-        }
-      ],
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 4,
-          "align": 4
-        },
-        "wasm32-unknown-unknown": {
-          "size": 4,
-          "align": 4
         }
       }
     },
@@ -14292,11 +14180,18 @@
             "type": "ta_trace_parent"
           },
           "doc": "LOAD_NEEDED: the trace parent of the first input that waits, for the load's own record."
+        },
+        {
+          "name": "session",
+          "type": {
+            "builtin": "bool"
+          },
+          "doc": "LOAD_NEEDED: the address is the key of a session that is gone, made from its family and the session's text (ta_session_id_format), not a name in the directory (napi ADR 0032 section 2). The host serves it with a new instance of the family, which holds no address: ta_address_loaded() names it, and ta_actor_spawn() with an address would not."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 104,
+          "size": 112,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -14308,11 +14203,12 @@
             "reason": 36,
             "event": 40,
             "address": 48,
-            "trace": 56
+            "trace": 56,
+            "session": 104
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 96,
+          "size": 104,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -14324,7 +14220,8 @@
             "reason": 36,
             "event": 40,
             "address": 44,
-            "trace": 48
+            "trace": 48,
+            "session": 96
           }
         }
       }
@@ -19886,72 +19783,6 @@
       }
     },
     {
-      "name": "ta_external_delivery_retain",
-      "doc": "Keeps a delivery past the submit call: retains its destination, its origin and its data (ADR 0050, ADR 0065). It never allocates and cannot fail. Release gives all three back.",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "builtin": "void"
-        }
-      },
-      "params": [
-        {
-          "name": "delivery",
-          "type": {
-            "pointer": {
-              "type": "ta_external_delivery",
-              "const": true
-            }
-          },
-          "shape": "single",
-          "direction": "in"
-        },
-        {
-          "name": "out",
-          "type": {
-            "pointer": {
-              "type": "ta_external_delivery"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "always",
-          "release": "ta_external_delivery_release"
-        }
-      ],
-      "value_model": {
-        "kind": "any"
-      }
-    },
-    {
-      "name": "ta_external_delivery_release",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "builtin": "void"
-        }
-      },
-      "params": [
-        {
-          "name": "delivery",
-          "type": {
-            "pointer": {
-              "type": "ta_external_delivery"
-            }
-          },
-          "shape": "single",
-          "direction": "inout"
-        }
-      ],
-      "value_model": {
-        "kind": "any"
-      }
-    },
-    {
       "name": "ta_scxml_target_parse",
       "doc": "The SCXML Event I/O Processor target URIs (ADR 0044). Core owns the grammar, so a literal `target`, an evaluated `targetexpr`, and the text core writes for `$_event.origin` agree by construction:\n\n#_internal                 the sender's own internal queue #_parent                   the invoking parent session #_scxml_ <session >          a session by its session ID (ADR 0066) #_actor_ <family >/ <name >    a named actor by its logical address #_ <invokeid >               an invocation of the sending session\n\nIn `#_actor_ <family >/ <name >` each part is percent-encoded (ADR 0096): format writes every byte an RFC 3986 fragment may not hold, and '/' and '%', as %XX; parse decodes %XX and takes any other byte but '/' as it is, so a name holding '/' round-trips. A '%' not followed by two hex digits is an invalid target.\n\nA session URI whose text is not a session ID names no session: it parses as runtime actor 0, which never exists, so a send to it is inaccessible (SCXML C.1) rather than invalid. TA_ERR_INVALID means an invalid target, which a send reports as error.execution.\n\nA named actor target holds a reference to its interned address (ADR 0065); release the target with ta_scxml_target_release(). Interning a new address can fail with TA_ERR_NOMEM.",
       "public": true,
@@ -21270,7 +21101,7 @@
     },
     {
       "name": "ta_actor_publish",
-      "doc": "Publishes a prepared actor: one atomic directory call puts it on the route, replacing the incumbent's RESIDENT entry, or, with no incumbent, claiming an address with no entry or replacing an UNLOADED one (whose unloaded session ends). Then an actor prepared without `at` releases its held effects in SCXML order and starts its pending invocations; a replaying actor schedules its held delayed sends under their due times (one already due fires at the next ta_system_dispatch_due()) and retires each active invocation with error.communication.invoke. <id >.unavailable, as a load does (ADR 0038), which leaves it a macrostep to run. - TA_ERR_DONE: it reached a top-level final state before it was published. - TA_ERR_BUSY: it is inside a macrostep; or, with no incumbent, another actor is resident at the address. - TA_ERR_STALE: the directory no longer holds the incumbent's entry. - TA_ERR_INVALID: it is published, or was not prepared for `incumbent`. - TA_ERR_NOT_FOUND: no resident actor has either ID. - TA_ERR_NOMEM: nothing changed.",
+      "doc": "Publishes a prepared actor: one atomic directory call puts it on the route, replacing the incumbent's RESIDENT entry, or, with no incumbent, claiming an address with no entry or replacing an UNLOADED one (whose unloaded session ends). Then an actor prepared without `at` releases its held effects in SCXML order and starts its pending invocations; a replaying actor schedules its held delayed sends under their due times (one already due fires at the next ta_system_dispatch_due()) and retires each active invocation with error.communication.invoke. <id >.unavailable, as a load does (ADR 0038), which leaves it a macrostep to run. - TA_ERR_DONE: it reached a top-level final state before it was published. - TA_ERR_BUSY: it is inside a macrostep; or, with no incumbent, another actor is resident at the address. - TA_ERR_STALE: the directory no longer holds the incumbent's entry. - TA_ERR_INVALID: it is published, or was not prepared for `incumbent`. - TA_ERR_NOT_FOUND: no resident actor has either ID. - TA_ERR_NOMEM: nothing changed. - TA_ERR_FULL: the held effects send mail to resident sessions at once, and the pool of envelopes (TA_PARAM_POOL_ENVELOPES) has no room for it; nothing changed. Run ta_run to drain the pool, then publish again.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -21445,6 +21276,42 @@
           "type": {
             "pointer": {
               "type": "ta_address_load_failed_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_address_loaded",
+      "doc": "- TA_OK: the list moved. - TA_ERR_NOT_FOUND: nothing waits for the address (a late or repeated answer, or the address became resident meanwhile), or no resident session has the ID. Harmless. - TA_ERR_INVALID: a null argument.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_address_loaded_params",
               "const": true
             }
           },
@@ -21825,7 +21692,7 @@
     },
     {
       "name": "ta_actor_publish_completion",
-      "doc": "Retries an invoked child's completion that the pool refused (TA_ERR_FULL) or that ran out of memory (TA_ERR_NOMEM). Core admits it like any other event, so a parent inside its own macrostep does not refuse it. A completion already admitted is not sent twice. TA_ERR_NOT_FOUND retires it when the parent invocation was already cancelled.",
+      "doc": "Asks whether a finished invoked child's completion is still wanted. Core sends done.invoke. <id > as mail when the child finishes, from the child's own macrostep, and keeps nothing to send again: this answers TA_OK while the parent's invocation is active (the completion is queued or taken), and TA_ERR_NOT_FOUND when it was cancelled, so there is no done event to wait for. TA_ERR_INVALID: the actor is not a finished invoked child.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -21886,7 +21753,7 @@
     },
     {
       "name": "ta_actor_withdraw_send",
-      "doc": "Withdraws a pending delayed send of `actor` from outside the chart (ADR 0084), as a <cancel > of `send` in that actor would: every pending send of the actor with that ID that the router has not yet been offered is removed and released. `send` is the `send_id` that inspection's `delayed_sends` reports; ta_send_id_parse() turns the text a chart sees into one. Only the actor's own sends can be named (ADR 0012). It may be called between macrosteps or while one is paused, allocates nothing, and writes a WITHDRAWN trace record outside any macrostep. It also removes a replaying actor's held sends with that ID (ADR 0089 section 7).\n\n- TA_ERR_INVALID: `send` is 0, which names no send. - TA_ERR_NOT_FOUND: no resident actor has that ID, or it holds no pending send with that ID: never made, already dispatched, cancelled or withdrawn. - TA_ERR_DONE: its only sends with that ID are submitted: the router refused them once and they wait to be offered again. A submitted send has been sent and belongs to its receiver (ADR 0054), so it is not withdrawn.",
+      "doc": "Withdraws a pending delayed send of `actor` from outside the chart (ADR 0084), as a <cancel > of `send` in that actor would: every pending send of the actor with that ID is removed and released. `send` is the `send_id` that inspection's `delayed_sends` reports; ta_send_id_parse() turns the text a chart sees into one. Only the actor's own sends can be named (ADR 0012). It may be called between macrosteps or while one is paused, allocates nothing, and writes a WITHDRAWN trace record outside any macrostep. It also removes a replaying actor's held sends with that ID (ADR 0089 section 7).\n\n- TA_ERR_INVALID: `send` is 0, which names no send. - TA_ERR_NOT_FOUND: no resident actor has that ID, or it holds no pending send with that ID: never made, already dispatched (a send that fired is mail and belongs to its receiver, ADR 0054), cancelled or withdrawn.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -23072,7 +22939,7 @@
     },
     {
       "name": "ta_system_set_input_watch",
-      "doc": "Installs the scheduler for normalized external SCXML-session events.\n\nInstalls, replaces or removes (a null `v`) the host's watch of inputs from other sessions. TA_ERR_INVALID for a null system or a watch with no `mark`. It never allocates and may be called at any time but inside ta_run().",
+      "doc": "Installs, replaces or removes (a null `v`) the host's watch of inputs from other sessions. TA_ERR_INVALID for a null system or a watch with no `mark`. It never allocates and may be called at any time but inside ta_run().",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -23097,36 +22964,6 @@
           "name": "watch",
           "type": {
             "type": "ta_input_watch"
-          }
-        }
-      ]
-    },
-    {
-      "name": "ta_system_set_external_event_router",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "type": "ta_result"
-        },
-        "success": "TA_OK"
-      },
-      "params": [
-        {
-          "name": "system",
-          "type": {
-            "pointer": {
-              "type": "ta_system"
-            }
-          },
-          "shape": "handle",
-          "direction": "in"
-        },
-        {
-          "name": "router",
-          "type": {
-            "type": "ta_external_event_router"
           }
         }
       ]
@@ -24172,6 +24009,7 @@
     },
     {
       "name": "ta_system_dispatch_due",
+      "doc": "ta_system_dispatch_due fires the sends that are due now, at most `budget`. A send to a resident session becomes an envelope on the run queue, after everything already queued, and runs in a later ta_run; it is reported in `fired`. The pool of envelopes grows here, a safe point. The call stops, with *more_due set and the rest still due, when the pool is at its bound or `fired` is full; call it again after ta_run has taken the mail. - TA_ERR_NOMEM: the pool could not grow and nothing was fired. When something was fired first, the call answers TA_OK and stops with *more_due set.",
       "public": true,
       "static_inline": false,
       "implemented": true,

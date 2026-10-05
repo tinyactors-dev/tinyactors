@@ -184,6 +184,7 @@ async function loaderReplays() {
   const live = system();
   live.system.setRecorder(j.recorder, { families: ['counter'] });
   const c = live.system.spawn(live.counter, { name: 'c' });
+  live.system.spawn(live.peer, { name: 'p' }); // so that the counter's hello has somewhere to go
   await live.system.flush();
   await live.system.send(c, 'add', { by: 5 });
   await live.system.flush();
