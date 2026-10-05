@@ -325,6 +325,19 @@ ta_result ta_msg_h2c_time_size(const ta_msg_h2c_time *data, uint32_t *size);
 ta_result ta_msg_h2c_time_write(const ta_msg_h2c_time *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_time_get decodes the h2c.time record into *out. It needs a record
+ * that ta_record_check accepted, so every span is inside it and every enum and
+ * bool is in range. The scalars of *out are copies of the record's snapshot
+ * (not of the ring bytes, which a host may be rewriting) and may outlive the
+ * record. Each ta_bytes of *out points into the record and is valid only until
+ * ta_ring_release; its bytes are untrusted, and text is not checked for UTF-8.
+ * TA_ERR_INVALID: the record is of another kind, and *out is untouched. It
+ * never allocates and reads nothing outside record->fixed and the validated
+ * spans.
+ */
+ta_result ta_msg_h2c_time_get(const ta_record *record, ta_msg_h2c_time *out);
+
+/*
  * h2c.event: An external event for a session.
  *
  * Header `session` names a resident session, or is 0 and `target` gives an
@@ -422,6 +435,19 @@ ta_result ta_msg_h2c_event_size(const ta_msg_h2c_event *data, uint32_t *size);
 ta_result ta_msg_h2c_event_write(const ta_msg_h2c_event *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_event_get decodes the h2c.event record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_h2c_event_get(const ta_record *record, ta_msg_h2c_event *out);
+
+/*
  * h2c.spawn: Create a session.
  *
  * With the replaying flag the session is prepared to replay (core ADR 0089):
@@ -505,6 +531,19 @@ ta_result ta_msg_h2c_spawn_size(const ta_msg_h2c_spawn *data, uint32_t *size);
 ta_result ta_msg_h2c_spawn_write(const ta_msg_h2c_spawn *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_spawn_get decodes the h2c.spawn record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_h2c_spawn_get(const ta_record *record, ta_msg_h2c_spawn *out);
+
+/*
  * h2c.publish: End a replay and put the session on the route.
  *
  * Held delayed sends due by `at` are dropped; the rest stay in the pool under
@@ -568,6 +607,19 @@ ta_result ta_msg_h2c_publish_size(const ta_msg_h2c_publish *data, uint32_t *size
  * may be freed when it returns.
  */
 ta_result ta_msg_h2c_publish_write(const ta_msg_h2c_publish *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_h2c_publish_get decodes the h2c.publish record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_h2c_publish_get(const ta_record *record, ta_msg_h2c_publish *out);
 
 /*
  * h2c.load: Bring an unloaded session back.
@@ -641,6 +693,19 @@ ta_result ta_msg_h2c_load_size(const ta_msg_h2c_load *data, uint32_t *size);
 ta_result ta_msg_h2c_load_write(const ta_msg_h2c_load *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_load_get decodes the h2c.load record into *out. It needs a record
+ * that ta_record_check accepted, so every span is inside it and every enum and
+ * bool is in range. The scalars of *out are copies of the record's snapshot
+ * (not of the ring bytes, which a host may be rewriting) and may outlive the
+ * record. Each ta_bytes of *out points into the record and is valid only until
+ * ta_ring_release; its bytes are untrusted, and text is not checked for UTF-8.
+ * TA_ERR_INVALID: the record is of another kind, and *out is untouched. It
+ * never allocates and reads nothing outside record->fixed and the validated
+ * spans.
+ */
+ta_result ta_msg_h2c_load_get(const ta_record *record, ta_msg_h2c_load *out);
+
+/*
  * h2c.load_failed: The session cannot be loaded.
  *
  * Every envelope waiting for the address is recycled: mail becomes
@@ -705,6 +770,19 @@ ta_result ta_msg_h2c_load_failed_size(const ta_msg_h2c_load_failed *data, uint32
 ta_result ta_msg_h2c_load_failed_write(const ta_msg_h2c_load_failed *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_load_failed_get decodes the h2c.load_failed record into *out. It
+ * needs a record that ta_record_check accepted, so every span is inside it and
+ * every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_h2c_load_failed_get(const ta_record *record, ta_msg_h2c_load_failed *out);
+
+/*
  * h2c.unload: Page a stable session out.
  *
  * Refuses an owner of an active local invocation and an active locally invoked
@@ -764,6 +842,19 @@ ta_result ta_msg_h2c_unload_size(const ta_msg_h2c_unload *data, uint32_t *size);
 ta_result ta_msg_h2c_unload_write(const ta_msg_h2c_unload *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_unload_get decodes the h2c.unload record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_h2c_unload_get(const ta_record *record, ta_msg_h2c_unload *out);
+
+/*
  * h2c.checkpoint: Ask for a recorded session's state.
  *
  * Ring h2c, kind 0x0108, 48 fixed bytes, 1 spans. Replied to by c2h.state,
@@ -815,6 +906,19 @@ ta_result ta_msg_h2c_checkpoint_size(const ta_msg_h2c_checkpoint *data, uint32_t
  * allocates, and the data may be freed when it returns.
  */
 ta_result ta_msg_h2c_checkpoint_write(const ta_msg_h2c_checkpoint *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_h2c_checkpoint_get decodes the h2c.checkpoint record into *out. It
+ * needs a record that ta_record_check accepted, so every span is inside it and
+ * every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_h2c_checkpoint_get(const ta_record *record, ta_msg_h2c_checkpoint *out);
 
 /*
  * h2c.invoke_report: An invoked service finished or failed.
@@ -896,6 +1000,19 @@ ta_result ta_msg_h2c_invoke_report_size(const ta_msg_h2c_invoke_report *data, ui
 ta_result ta_msg_h2c_invoke_report_write(const ta_msg_h2c_invoke_report *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_invoke_report_get decodes the h2c.invoke_report record into *out.
+ * It needs a record that ta_record_check accepted, so every span is inside it
+ * and every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_h2c_invoke_report_get(const ta_record *record, ta_msg_h2c_invoke_report *out);
+
+/*
  * h2c.destroy: End a session now.
  *
  * A session that holds a macrostep slot, running or parked, has its execution
@@ -947,6 +1064,19 @@ ta_result ta_msg_h2c_destroy_size(const ta_msg_h2c_destroy *data, uint32_t *size
  * may be freed when it returns.
  */
 ta_result ta_msg_h2c_destroy_write(const ta_msg_h2c_destroy *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_h2c_destroy_get decodes the h2c.destroy record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_h2c_destroy_get(const ta_record *record, ta_msg_h2c_destroy *out);
 
 /*
  * h2c.definition_register: Compile and register a complete definition.
@@ -1017,6 +1147,19 @@ ta_result ta_msg_h2c_definition_register_size(const ta_msg_h2c_definition_regist
 ta_result ta_msg_h2c_definition_register_write(const ta_msg_h2c_definition_register *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_definition_register_get decodes the h2c.definition_register
+ * record into *out. It needs a record that ta_record_check accepted, so every
+ * span is inside it and every enum and bool is in range. The scalars of *out
+ * are copies of the record's snapshot (not of the ring bytes, which a host may
+ * be rewriting) and may outlive the record. Each ta_bytes of *out points into
+ * the record and is valid only until ta_ring_release; its bytes are untrusted,
+ * and text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+ta_result ta_msg_h2c_definition_register_get(const ta_record *record, ta_msg_h2c_definition_register *out);
+
+/*
  * h2c.definition_release: Release one registration hold.
  *
  * Core ADR 0077 semantics: an unused definition is freed when its last hold,
@@ -1066,6 +1209,19 @@ ta_result ta_msg_h2c_definition_release_size(const ta_msg_h2c_definition_release
  * it returns.
  */
 ta_result ta_msg_h2c_definition_release_write(const ta_msg_h2c_definition_release *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_h2c_definition_release_get decodes the h2c.definition_release record
+ * into *out. It needs a record that ta_record_check accepted, so every span is
+ * inside it and every enum and bool is in range. The scalars of *out are
+ * copies of the record's snapshot (not of the ring bytes, which a host may be
+ * rewriting) and may outlive the record. Each ta_bytes of *out points into the
+ * record and is valid only until ta_ring_release; its bytes are untrusted, and
+ * text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+ta_result ta_msg_h2c_definition_release_get(const ta_record *record, ta_msg_h2c_definition_release *out);
 
 /*
  * h2c.definition_retire: End a definition's availability.
@@ -1118,6 +1274,19 @@ ta_result ta_msg_h2c_definition_retire_size(const ta_msg_h2c_definition_retire *
  * it returns.
  */
 ta_result ta_msg_h2c_definition_retire_write(const ta_msg_h2c_definition_retire *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_h2c_definition_retire_get decodes the h2c.definition_retire record
+ * into *out. It needs a record that ta_record_check accepted, so every span is
+ * inside it and every enum and bool is in range. The scalars of *out are
+ * copies of the record's snapshot (not of the ring bytes, which a host may be
+ * rewriting) and may outlive the record. Each ta_bytes of *out points into the
+ * record and is valid only until ta_ring_release; its bytes are untrusted, and
+ * text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+ta_result ta_msg_h2c_definition_retire_get(const ta_record *record, ta_msg_h2c_definition_retire *out);
 
 /*
  * h2c.withdraw: Take back an admitted input that has not been taken.
@@ -1179,6 +1348,19 @@ ta_result ta_msg_h2c_withdraw_size(const ta_msg_h2c_withdraw *data, uint32_t *si
  * may be freed when it returns.
  */
 ta_result ta_msg_h2c_withdraw_write(const ta_msg_h2c_withdraw *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_h2c_withdraw_get decodes the h2c.withdraw record into *out. It needs
+ * a record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_h2c_withdraw_get(const ta_record *record, ta_msg_h2c_withdraw *out);
 
 /*
  * h2c.type_declare: Declare an I/O processor or invoker type.
@@ -1249,6 +1431,19 @@ ta_result ta_msg_h2c_type_declare_size(const ta_msg_h2c_type_declare *data, uint
 ta_result ta_msg_h2c_type_declare_write(const ta_msg_h2c_type_declare *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_type_declare_get decodes the h2c.type_declare record into *out.
+ * It needs a record that ta_record_check accepted, so every span is inside it
+ * and every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_h2c_type_declare_get(const ta_record *record, ta_msg_h2c_type_declare *out);
+
+/*
  * c2h.spawned: A session exists.
  *
  * For a recorded session this is the first record of its log.
@@ -1312,6 +1507,19 @@ ta_result ta_msg_c2h_spawned_size(const ta_msg_c2h_spawned *data, uint32_t *size
  * may be freed when it returns.
  */
 ta_result ta_msg_c2h_spawned_write(const ta_msg_c2h_spawned *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_spawned_get decodes the c2h.spawned record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_spawned_get(const ta_record *record, ta_msg_c2h_spawned *out);
 
 /*
  * c2h.input: A recorded session took an input.
@@ -1436,6 +1644,19 @@ ta_result ta_msg_c2h_input_size(const ta_msg_c2h_input *data, uint32_t *size);
 ta_result ta_msg_c2h_input_write(const ta_msg_c2h_input *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_input_get decodes the c2h.input record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_input_get(const ta_record *record, ta_msg_c2h_input *out);
+
+/*
  * c2h.send: A send for an I/O processor.
  *
  * Mail to a local session never appears here: it is an envelope
@@ -1520,6 +1741,19 @@ ta_result ta_msg_c2h_send_size(const ta_msg_c2h_send *data, uint32_t *size);
 ta_result ta_msg_c2h_send_write(const ta_msg_c2h_send *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_send_get decodes the c2h.send record into *out. It needs a record
+ * that ta_record_check accepted, so every span is inside it and every enum and
+ * bool is in range. The scalars of *out are copies of the record's snapshot
+ * (not of the ring bytes, which a host may be rewriting) and may outlive the
+ * record. Each ta_bytes of *out points into the record and is valid only until
+ * ta_ring_release; its bytes are untrusted, and text is not checked for UTF-8.
+ * TA_ERR_INVALID: the record is of another kind, and *out is untouched. It
+ * never allocates and reads nothing outside record->fixed and the validated
+ * spans.
+ */
+ta_result ta_msg_c2h_send_get(const ta_record *record, ta_msg_c2h_send *out);
+
+/*
  * c2h.invoke: Start an invocation.
  *
  * Written in the post-macrostep startup phase. This record seq is the live
@@ -1598,6 +1832,19 @@ ta_result ta_msg_c2h_invoke_size(const ta_msg_c2h_invoke *data, uint32_t *size);
 ta_result ta_msg_c2h_invoke_write(const ta_msg_c2h_invoke *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_invoke_get decodes the c2h.invoke record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_invoke_get(const ta_record *record, ta_msg_c2h_invoke *out);
+
+/*
  * c2h.invoke_cancel: Cancel an invocation.
  *
  * Mandatory state-exit output, reserved before execution. The host invalidates
@@ -1656,6 +1903,19 @@ ta_result ta_msg_c2h_invoke_cancel_size(const ta_msg_c2h_invoke_cancel *data, ui
  * it returns.
  */
 ta_result ta_msg_c2h_invoke_cancel_write(const ta_msg_c2h_invoke_cancel *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_invoke_cancel_get decodes the c2h.invoke_cancel record into *out.
+ * It needs a record that ta_record_check accepted, so every span is inside it
+ * and every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_invoke_cancel_get(const ta_record *record, ta_msg_c2h_invoke_cancel *out);
 
 /*
  * c2h.invoke_forward: Autoforward an event to an invocation.
@@ -1750,6 +2010,19 @@ ta_result ta_msg_c2h_invoke_forward_size(const ta_msg_c2h_invoke_forward *data, 
 ta_result ta_msg_c2h_invoke_forward_write(const ta_msg_c2h_invoke_forward *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_invoke_forward_get decodes the c2h.invoke_forward record into
+ * *out. It needs a record that ta_record_check accepted, so every span is
+ * inside it and every enum and bool is in range. The scalars of *out are
+ * copies of the record's snapshot (not of the ring bytes, which a host may be
+ * rewriting) and may outlive the record. Each ta_bytes of *out points into the
+ * record and is valid only until ta_ring_release; its bytes are untrusted, and
+ * text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+ta_result ta_msg_c2h_invoke_forward_get(const ta_record *record, ta_msg_c2h_invoke_forward *out);
+
+/*
  * c2h.log: A <log>.
  *
  * Ring c2h, kind 0x0207, 56 fixed bytes, 1 spans.
@@ -1804,6 +2077,19 @@ ta_result ta_msg_c2h_log_size(const ta_msg_c2h_log *data, uint32_t *size);
  * may be freed when it returns.
  */
 ta_result ta_msg_c2h_log_write(const ta_msg_c2h_log *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_log_get decodes the c2h.log record into *out. It needs a record
+ * that ta_record_check accepted, so every span is inside it and every enum and
+ * bool is in range. The scalars of *out are copies of the record's snapshot
+ * (not of the ring bytes, which a host may be rewriting) and may outlive the
+ * record. Each ta_bytes of *out points into the record and is valid only until
+ * ta_ring_release; its bytes are untrusted, and text is not checked for UTF-8.
+ * TA_ERR_INVALID: the record is of another kind, and *out is untouched. It
+ * never allocates and reads nothing outside record->fixed and the validated
+ * spans.
+ */
+ta_result ta_msg_c2h_log_get(const ta_record *record, ta_msg_c2h_log *out);
 
 /*
  * c2h.macrostep_ended: A macrostep ended.
@@ -1883,6 +2169,19 @@ ta_result ta_msg_c2h_macrostep_ended_size(const ta_msg_c2h_macrostep_ended *data
 ta_result ta_msg_c2h_macrostep_ended_write(const ta_msg_c2h_macrostep_ended *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_macrostep_ended_get decodes the c2h.macrostep_ended record into
+ * *out. It needs a record that ta_record_check accepted, so every span is
+ * inside it and every enum and bool is in range. The scalars of *out are
+ * copies of the record's snapshot (not of the ring bytes, which a host may be
+ * rewriting) and may outlive the record. Each ta_bytes of *out points into the
+ * record and is valid only until ta_ring_release; its bytes are untrusted, and
+ * text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+ta_result ta_msg_c2h_macrostep_ended_get(const ta_record *record, ta_msg_c2h_macrostep_ended *out);
+
+/*
  * c2h.wake: Call core back at this time.
  *
  * The earliest due delayed send in the pool changed. One timer in the host's
@@ -1930,6 +2229,19 @@ ta_result ta_msg_c2h_wake_size(const ta_msg_c2h_wake *data, uint32_t *size);
  * may be freed when it returns.
  */
 ta_result ta_msg_c2h_wake_write(const ta_msg_c2h_wake *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_wake_get decodes the c2h.wake record into *out. It needs a record
+ * that ta_record_check accepted, so every span is inside it and every enum and
+ * bool is in range. The scalars of *out are copies of the record's snapshot
+ * (not of the ring bytes, which a host may be rewriting) and may outlive the
+ * record. Each ta_bytes of *out points into the record and is valid only until
+ * ta_ring_release; its bytes are untrusted, and text is not checked for UTF-8.
+ * TA_ERR_INVALID: the record is of another kind, and *out is untouched. It
+ * never allocates and reads nothing outside record->fixed and the validated
+ * spans.
+ */
+ta_result ta_msg_c2h_wake_get(const ta_record *record, ta_msg_c2h_wake *out);
 
 /*
  * c2h.bounced: An h2c record was not run.
@@ -1994,6 +2306,19 @@ ta_result ta_msg_c2h_bounced_size(const ta_msg_c2h_bounced *data, uint32_t *size
 ta_result ta_msg_c2h_bounced_write(const ta_msg_c2h_bounced *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_bounced_get decodes the c2h.bounced record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_bounced_get(const ta_record *record, ta_msg_c2h_bounced *out);
+
+/*
  * c2h.load_needed: Envelopes wait for an unloaded address.
  *
  * Written once per address until h2c.load or h2c.load_failed answers it.
@@ -2052,6 +2377,19 @@ ta_result ta_msg_c2h_load_needed_size(const ta_msg_c2h_load_needed *data, uint32
 ta_result ta_msg_c2h_load_needed_write(const ta_msg_c2h_load_needed *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_load_needed_get decodes the c2h.load_needed record into *out. It
+ * needs a record that ta_record_check accepted, so every span is inside it and
+ * every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_load_needed_get(const ta_record *record, ta_msg_c2h_load_needed *out);
+
+/*
  * c2h.loaded: A session is resident again.
  *
  * Ring c2h, kind 0x020C, 48 fixed bytes, 1 spans.
@@ -2102,6 +2440,19 @@ ta_result ta_msg_c2h_loaded_size(const ta_msg_c2h_loaded *data, uint32_t *size);
  * may be freed when it returns.
  */
 ta_result ta_msg_c2h_loaded_write(const ta_msg_c2h_loaded *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_loaded_get decodes the c2h.loaded record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_loaded_get(const ta_record *record, ta_msg_c2h_loaded *out);
 
 /*
  * c2h.unloaded: A session left memory.
@@ -2176,6 +2527,19 @@ ta_result ta_msg_c2h_unloaded_size(const ta_msg_c2h_unloaded *data, uint32_t *si
 ta_result ta_msg_c2h_unloaded_write(const ta_msg_c2h_unloaded *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_unloaded_get decodes the c2h.unloaded record into *out. It needs
+ * a record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_unloaded_get(const ta_record *record, ta_msg_c2h_unloaded *out);
+
+/*
  * c2h.state: A recorded session's state at a point of its log.
  *
  * A checkpoint (core ADR 0091). Its delayed sends are inside the image, so it
@@ -2248,6 +2612,19 @@ ta_result ta_msg_c2h_state_size(const ta_msg_c2h_state *data, uint32_t *size);
 ta_result ta_msg_c2h_state_write(const ta_msg_c2h_state *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_state_get decodes the c2h.state record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_state_get(const ta_record *record, ta_msg_c2h_state *out);
+
+/*
  * c2h.published: A replayed session is live.
  *
  * For an empty-address publication, one session-0 result summarizes the atomic
@@ -2315,6 +2692,19 @@ ta_result ta_msg_c2h_published_size(const ta_msg_c2h_published *data, uint32_t *
 ta_result ta_msg_c2h_published_write(const ta_msg_c2h_published *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_published_get decodes the c2h.published record into *out. It
+ * needs a record that ta_record_check accepted, so every span is inside it and
+ * every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_published_get(const ta_record *record, ta_msg_c2h_published *out);
+
+/*
  * c2h.finished: A session reached a top-level final state.
  *
  * Mail to a local parent (done.invoke) is an envelope; this record is for the
@@ -2365,6 +2755,19 @@ ta_result ta_msg_c2h_finished_size(const ta_msg_c2h_finished *data, uint32_t *si
  * may be freed when it returns.
  */
 ta_result ta_msg_c2h_finished_write(const ta_msg_c2h_finished *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_finished_get decodes the c2h.finished record into *out. It needs
+ * a record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_finished_get(const ta_record *record, ta_msg_c2h_finished *out);
 
 /*
  * c2h.destroyed: A session is gone.
@@ -2424,6 +2827,19 @@ ta_result ta_msg_c2h_destroyed_size(const ta_msg_c2h_destroyed *data, uint32_t *
  * allocates, and the data may be freed when it returns.
  */
 ta_result ta_msg_c2h_destroyed_write(const ta_msg_c2h_destroyed *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_destroyed_get decodes the c2h.destroyed record into *out. It
+ * needs a record that ta_record_check accepted, so every span is inside it and
+ * every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_destroyed_get(const ta_record *record, ta_msg_c2h_destroyed *out);
 
 /*
  * c2h.definition_result: A definition request completed.
@@ -2496,6 +2912,19 @@ ta_result ta_msg_c2h_definition_result_size(const ta_msg_c2h_definition_result *
 ta_result ta_msg_c2h_definition_result_write(const ta_msg_c2h_definition_result *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_definition_result_get decodes the c2h.definition_result record
+ * into *out. It needs a record that ta_record_check accepted, so every span is
+ * inside it and every enum and bool is in range. The scalars of *out are
+ * copies of the record's snapshot (not of the ring bytes, which a host may be
+ * rewriting) and may outlive the record. Each ta_bytes of *out points into the
+ * record and is valid only until ta_ring_release; its bytes are untrusted, and
+ * text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+ta_result ta_msg_c2h_definition_result_get(const ta_record *record, ta_msg_c2h_definition_result *out);
+
+/*
  * c2h.input_refused: An admitted host input was not taken.
  *
  * Exactly one terminal refusal for an admitted h2c.event or invoke_report
@@ -2551,6 +2980,19 @@ ta_result ta_msg_c2h_input_refused_size(const ta_msg_c2h_input_refused *data, ui
  * it returns.
  */
 ta_result ta_msg_c2h_input_refused_write(const ta_msg_c2h_input_refused *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_input_refused_get decodes the c2h.input_refused record into *out.
+ * It needs a record that ta_record_check accepted, so every span is inside it
+ * and every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_input_refused_get(const ta_record *record, ta_msg_c2h_input_refused *out);
 
 /*
  * c2h.input_completed: A host input and its startup follow-up settled.
@@ -2619,6 +3061,19 @@ ta_result ta_msg_c2h_input_completed_size(const ta_msg_c2h_input_completed *data
 ta_result ta_msg_c2h_input_completed_write(const ta_msg_c2h_input_completed *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_input_completed_get decodes the c2h.input_completed record into
+ * *out. It needs a record that ta_record_check accepted, so every span is
+ * inside it and every enum and bool is in range. The scalars of *out are
+ * copies of the record's snapshot (not of the ring bytes, which a host may be
+ * rewriting) and may outlive the record. Each ta_bytes of *out points into the
+ * record and is valid only until ta_ring_release; its bytes are untrusted, and
+ * text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+ta_result ta_msg_c2h_input_completed_get(const ta_record *record, ta_msg_c2h_input_completed *out);
+
+/*
  * c2h.load_result: A load-failure response finished recycling waiting inputs.
  *
  * Acknowledges h2c.load_failed after all waiting envelopes were recycled or
@@ -2671,6 +3126,19 @@ ta_result ta_msg_c2h_load_result_size(const ta_msg_c2h_load_result *data, uint32
  * allocates, and the data may be freed when it returns.
  */
 ta_result ta_msg_c2h_load_result_write(const ta_msg_c2h_load_result *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_load_result_get decodes the c2h.load_result record into *out. It
+ * needs a record that ta_record_check accepted, so every span is inside it and
+ * every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_c2h_load_result_get(const ta_record *record, ta_msg_c2h_load_result *out);
 
 /*
  * tel.trace: One trace record (core ADR 0067).
@@ -2788,6 +3256,19 @@ ta_result ta_msg_tel_trace_size(const ta_msg_tel_trace *data, uint32_t *size);
 ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_tel_trace_get decodes the tel.trace record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_tel_trace_get(const ta_record *record, ta_msg_tel_trace *out);
+
+/*
  * tel.dropped: Telemetry records were dropped.
  *
  * Ring tel, kind 0x0302, 48 fixed bytes, 0 spans.
@@ -2835,6 +3316,19 @@ ta_result ta_msg_tel_dropped_size(const ta_msg_tel_dropped *data, uint32_t *size
  * may be freed when it returns.
  */
 ta_result ta_msg_tel_dropped_write(const ta_msg_tel_dropped *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_tel_dropped_get decodes the tel.dropped record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+ta_result ta_msg_tel_dropped_get(const ta_record *record, ta_msg_tel_dropped *out);
 
 /*
  * ta_msg_table returns the descriptors of every message in this build, sorted by

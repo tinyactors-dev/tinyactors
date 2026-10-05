@@ -1934,6 +1934,19 @@ TA_PRIVATE ta_result ta_msg_h2c_time_size(const ta_msg_h2c_time *data, uint32_t 
 TA_PRIVATE ta_result ta_msg_h2c_time_write(const ta_msg_h2c_time *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_time_get decodes the h2c.time record into *out. It needs a record
+ * that ta_record_check accepted, so every span is inside it and every enum and
+ * bool is in range. The scalars of *out are copies of the record's snapshot
+ * (not of the ring bytes, which a host may be rewriting) and may outlive the
+ * record. Each ta_bytes of *out points into the record and is valid only until
+ * ta_ring_release; its bytes are untrusted, and text is not checked for UTF-8.
+ * TA_ERR_INVALID: the record is of another kind, and *out is untouched. It
+ * never allocates and reads nothing outside record->fixed and the validated
+ * spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_time_get(const ta_record *record, ta_msg_h2c_time *out);
+
+/*
  * h2c.event: An external event for a session.
  *
  * Header `session` names a resident session, or is 0 and `target` gives an
@@ -2031,6 +2044,19 @@ TA_PRIVATE ta_result ta_msg_h2c_event_size(const ta_msg_h2c_event *data, uint32_
 TA_PRIVATE ta_result ta_msg_h2c_event_write(const ta_msg_h2c_event *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_event_get decodes the h2c.event record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_event_get(const ta_record *record, ta_msg_h2c_event *out);
+
+/*
  * h2c.spawn: Create a session.
  *
  * With the replaying flag the session is prepared to replay (core ADR 0089):
@@ -2114,6 +2140,19 @@ TA_PRIVATE ta_result ta_msg_h2c_spawn_size(const ta_msg_h2c_spawn *data, uint32_
 TA_PRIVATE ta_result ta_msg_h2c_spawn_write(const ta_msg_h2c_spawn *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_spawn_get decodes the h2c.spawn record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_spawn_get(const ta_record *record, ta_msg_h2c_spawn *out);
+
+/*
  * h2c.publish: End a replay and put the session on the route.
  *
  * Held delayed sends due by `at` are dropped; the rest stay in the pool under
@@ -2177,6 +2216,19 @@ TA_PRIVATE ta_result ta_msg_h2c_publish_size(const ta_msg_h2c_publish *data, uin
  * may be freed when it returns.
  */
 TA_PRIVATE ta_result ta_msg_h2c_publish_write(const ta_msg_h2c_publish *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_h2c_publish_get decodes the h2c.publish record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_publish_get(const ta_record *record, ta_msg_h2c_publish *out);
 
 /*
  * h2c.load: Bring an unloaded session back.
@@ -2250,6 +2302,19 @@ TA_PRIVATE ta_result ta_msg_h2c_load_size(const ta_msg_h2c_load *data, uint32_t 
 TA_PRIVATE ta_result ta_msg_h2c_load_write(const ta_msg_h2c_load *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_load_get decodes the h2c.load record into *out. It needs a record
+ * that ta_record_check accepted, so every span is inside it and every enum and
+ * bool is in range. The scalars of *out are copies of the record's snapshot
+ * (not of the ring bytes, which a host may be rewriting) and may outlive the
+ * record. Each ta_bytes of *out points into the record and is valid only until
+ * ta_ring_release; its bytes are untrusted, and text is not checked for UTF-8.
+ * TA_ERR_INVALID: the record is of another kind, and *out is untouched. It
+ * never allocates and reads nothing outside record->fixed and the validated
+ * spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_load_get(const ta_record *record, ta_msg_h2c_load *out);
+
+/*
  * h2c.load_failed: The session cannot be loaded.
  *
  * Every envelope waiting for the address is recycled: mail becomes
@@ -2314,6 +2379,19 @@ TA_PRIVATE ta_result ta_msg_h2c_load_failed_size(const ta_msg_h2c_load_failed *d
 TA_PRIVATE ta_result ta_msg_h2c_load_failed_write(const ta_msg_h2c_load_failed *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_load_failed_get decodes the h2c.load_failed record into *out. It
+ * needs a record that ta_record_check accepted, so every span is inside it and
+ * every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_load_failed_get(const ta_record *record, ta_msg_h2c_load_failed *out);
+
+/*
  * h2c.unload: Page a stable session out.
  *
  * Refuses an owner of an active local invocation and an active locally invoked
@@ -2373,6 +2451,19 @@ TA_PRIVATE ta_result ta_msg_h2c_unload_size(const ta_msg_h2c_unload *data, uint3
 TA_PRIVATE ta_result ta_msg_h2c_unload_write(const ta_msg_h2c_unload *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_unload_get decodes the h2c.unload record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_unload_get(const ta_record *record, ta_msg_h2c_unload *out);
+
+/*
  * h2c.checkpoint: Ask for a recorded session's state.
  *
  * Ring h2c, kind 0x0108, 48 fixed bytes, 1 spans. Replied to by c2h.state,
@@ -2424,6 +2515,19 @@ TA_PRIVATE ta_result ta_msg_h2c_checkpoint_size(const ta_msg_h2c_checkpoint *dat
  * allocates, and the data may be freed when it returns.
  */
 TA_PRIVATE ta_result ta_msg_h2c_checkpoint_write(const ta_msg_h2c_checkpoint *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_h2c_checkpoint_get decodes the h2c.checkpoint record into *out. It
+ * needs a record that ta_record_check accepted, so every span is inside it and
+ * every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_checkpoint_get(const ta_record *record, ta_msg_h2c_checkpoint *out);
 
 /*
  * h2c.invoke_report: An invoked service finished or failed.
@@ -2505,6 +2609,19 @@ TA_PRIVATE ta_result ta_msg_h2c_invoke_report_size(const ta_msg_h2c_invoke_repor
 TA_PRIVATE ta_result ta_msg_h2c_invoke_report_write(const ta_msg_h2c_invoke_report *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_invoke_report_get decodes the h2c.invoke_report record into *out.
+ * It needs a record that ta_record_check accepted, so every span is inside it
+ * and every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_invoke_report_get(const ta_record *record, ta_msg_h2c_invoke_report *out);
+
+/*
  * h2c.destroy: End a session now.
  *
  * A session that holds a macrostep slot, running or parked, has its execution
@@ -2556,6 +2673,19 @@ TA_PRIVATE ta_result ta_msg_h2c_destroy_size(const ta_msg_h2c_destroy *data, uin
  * may be freed when it returns.
  */
 TA_PRIVATE ta_result ta_msg_h2c_destroy_write(const ta_msg_h2c_destroy *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_h2c_destroy_get decodes the h2c.destroy record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_destroy_get(const ta_record *record, ta_msg_h2c_destroy *out);
 
 /*
  * h2c.definition_register: Compile and register a complete definition.
@@ -2626,6 +2756,19 @@ TA_PRIVATE ta_result ta_msg_h2c_definition_register_size(const ta_msg_h2c_defini
 TA_PRIVATE ta_result ta_msg_h2c_definition_register_write(const ta_msg_h2c_definition_register *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_definition_register_get decodes the h2c.definition_register
+ * record into *out. It needs a record that ta_record_check accepted, so every
+ * span is inside it and every enum and bool is in range. The scalars of *out
+ * are copies of the record's snapshot (not of the ring bytes, which a host may
+ * be rewriting) and may outlive the record. Each ta_bytes of *out points into
+ * the record and is valid only until ta_ring_release; its bytes are untrusted,
+ * and text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_definition_register_get(const ta_record *record, ta_msg_h2c_definition_register *out);
+
+/*
  * h2c.definition_release: Release one registration hold.
  *
  * Core ADR 0077 semantics: an unused definition is freed when its last hold,
@@ -2675,6 +2818,19 @@ TA_PRIVATE ta_result ta_msg_h2c_definition_release_size(const ta_msg_h2c_definit
  * it returns.
  */
 TA_PRIVATE ta_result ta_msg_h2c_definition_release_write(const ta_msg_h2c_definition_release *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_h2c_definition_release_get decodes the h2c.definition_release record
+ * into *out. It needs a record that ta_record_check accepted, so every span is
+ * inside it and every enum and bool is in range. The scalars of *out are
+ * copies of the record's snapshot (not of the ring bytes, which a host may be
+ * rewriting) and may outlive the record. Each ta_bytes of *out points into the
+ * record and is valid only until ta_ring_release; its bytes are untrusted, and
+ * text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_definition_release_get(const ta_record *record, ta_msg_h2c_definition_release *out);
 
 /*
  * h2c.definition_retire: End a definition's availability.
@@ -2727,6 +2883,19 @@ TA_PRIVATE ta_result ta_msg_h2c_definition_retire_size(const ta_msg_h2c_definiti
  * it returns.
  */
 TA_PRIVATE ta_result ta_msg_h2c_definition_retire_write(const ta_msg_h2c_definition_retire *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_h2c_definition_retire_get decodes the h2c.definition_retire record
+ * into *out. It needs a record that ta_record_check accepted, so every span is
+ * inside it and every enum and bool is in range. The scalars of *out are
+ * copies of the record's snapshot (not of the ring bytes, which a host may be
+ * rewriting) and may outlive the record. Each ta_bytes of *out points into the
+ * record and is valid only until ta_ring_release; its bytes are untrusted, and
+ * text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_definition_retire_get(const ta_record *record, ta_msg_h2c_definition_retire *out);
 
 /*
  * h2c.withdraw: Take back an admitted input that has not been taken.
@@ -2788,6 +2957,19 @@ TA_PRIVATE ta_result ta_msg_h2c_withdraw_size(const ta_msg_h2c_withdraw *data, u
  * may be freed when it returns.
  */
 TA_PRIVATE ta_result ta_msg_h2c_withdraw_write(const ta_msg_h2c_withdraw *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_h2c_withdraw_get decodes the h2c.withdraw record into *out. It needs
+ * a record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_withdraw_get(const ta_record *record, ta_msg_h2c_withdraw *out);
 
 /*
  * h2c.type_declare: Declare an I/O processor or invoker type.
@@ -2858,6 +3040,19 @@ TA_PRIVATE ta_result ta_msg_h2c_type_declare_size(const ta_msg_h2c_type_declare 
 TA_PRIVATE ta_result ta_msg_h2c_type_declare_write(const ta_msg_h2c_type_declare *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_h2c_type_declare_get decodes the h2c.type_declare record into *out.
+ * It needs a record that ta_record_check accepted, so every span is inside it
+ * and every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_h2c_type_declare_get(const ta_record *record, ta_msg_h2c_type_declare *out);
+
+/*
  * c2h.spawned: A session exists.
  *
  * For a recorded session this is the first record of its log.
@@ -2921,6 +3116,19 @@ TA_PRIVATE ta_result ta_msg_c2h_spawned_size(const ta_msg_c2h_spawned *data, uin
  * may be freed when it returns.
  */
 TA_PRIVATE ta_result ta_msg_c2h_spawned_write(const ta_msg_c2h_spawned *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_spawned_get decodes the c2h.spawned record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_spawned_get(const ta_record *record, ta_msg_c2h_spawned *out);
 
 /*
  * c2h.input: A recorded session took an input.
@@ -3045,6 +3253,19 @@ TA_PRIVATE ta_result ta_msg_c2h_input_size(const ta_msg_c2h_input *data, uint32_
 TA_PRIVATE ta_result ta_msg_c2h_input_write(const ta_msg_c2h_input *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_input_get decodes the c2h.input record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_input_get(const ta_record *record, ta_msg_c2h_input *out);
+
+/*
  * c2h.send: A send for an I/O processor.
  *
  * Mail to a local session never appears here: it is an envelope
@@ -3129,6 +3350,19 @@ TA_PRIVATE ta_result ta_msg_c2h_send_size(const ta_msg_c2h_send *data, uint32_t 
 TA_PRIVATE ta_result ta_msg_c2h_send_write(const ta_msg_c2h_send *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_send_get decodes the c2h.send record into *out. It needs a record
+ * that ta_record_check accepted, so every span is inside it and every enum and
+ * bool is in range. The scalars of *out are copies of the record's snapshot
+ * (not of the ring bytes, which a host may be rewriting) and may outlive the
+ * record. Each ta_bytes of *out points into the record and is valid only until
+ * ta_ring_release; its bytes are untrusted, and text is not checked for UTF-8.
+ * TA_ERR_INVALID: the record is of another kind, and *out is untouched. It
+ * never allocates and reads nothing outside record->fixed and the validated
+ * spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_send_get(const ta_record *record, ta_msg_c2h_send *out);
+
+/*
  * c2h.invoke: Start an invocation.
  *
  * Written in the post-macrostep startup phase. This record seq is the live
@@ -3207,6 +3441,19 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_size(const ta_msg_c2h_invoke *data, uint3
 TA_PRIVATE ta_result ta_msg_c2h_invoke_write(const ta_msg_c2h_invoke *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_invoke_get decodes the c2h.invoke record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_invoke_get(const ta_record *record, ta_msg_c2h_invoke *out);
+
+/*
  * c2h.invoke_cancel: Cancel an invocation.
  *
  * Mandatory state-exit output, reserved before execution. The host invalidates
@@ -3265,6 +3512,19 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_cancel_size(const ta_msg_c2h_invoke_cance
  * it returns.
  */
 TA_PRIVATE ta_result ta_msg_c2h_invoke_cancel_write(const ta_msg_c2h_invoke_cancel *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_invoke_cancel_get decodes the c2h.invoke_cancel record into *out.
+ * It needs a record that ta_record_check accepted, so every span is inside it
+ * and every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_invoke_cancel_get(const ta_record *record, ta_msg_c2h_invoke_cancel *out);
 
 /*
  * c2h.invoke_forward: Autoforward an event to an invocation.
@@ -3359,6 +3619,19 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_forward_size(const ta_msg_c2h_invoke_forw
 TA_PRIVATE ta_result ta_msg_c2h_invoke_forward_write(const ta_msg_c2h_invoke_forward *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_invoke_forward_get decodes the c2h.invoke_forward record into
+ * *out. It needs a record that ta_record_check accepted, so every span is
+ * inside it and every enum and bool is in range. The scalars of *out are
+ * copies of the record's snapshot (not of the ring bytes, which a host may be
+ * rewriting) and may outlive the record. Each ta_bytes of *out points into the
+ * record and is valid only until ta_ring_release; its bytes are untrusted, and
+ * text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_invoke_forward_get(const ta_record *record, ta_msg_c2h_invoke_forward *out);
+
+/*
  * c2h.log: A <log>.
  *
  * Ring c2h, kind 0x0207, 56 fixed bytes, 1 spans.
@@ -3413,6 +3686,19 @@ TA_PRIVATE ta_result ta_msg_c2h_log_size(const ta_msg_c2h_log *data, uint32_t *s
  * may be freed when it returns.
  */
 TA_PRIVATE ta_result ta_msg_c2h_log_write(const ta_msg_c2h_log *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_log_get decodes the c2h.log record into *out. It needs a record
+ * that ta_record_check accepted, so every span is inside it and every enum and
+ * bool is in range. The scalars of *out are copies of the record's snapshot
+ * (not of the ring bytes, which a host may be rewriting) and may outlive the
+ * record. Each ta_bytes of *out points into the record and is valid only until
+ * ta_ring_release; its bytes are untrusted, and text is not checked for UTF-8.
+ * TA_ERR_INVALID: the record is of another kind, and *out is untouched. It
+ * never allocates and reads nothing outside record->fixed and the validated
+ * spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_log_get(const ta_record *record, ta_msg_c2h_log *out);
 
 /*
  * c2h.macrostep_ended: A macrostep ended.
@@ -3492,6 +3778,19 @@ TA_PRIVATE ta_result ta_msg_c2h_macrostep_ended_size(const ta_msg_c2h_macrostep_
 TA_PRIVATE ta_result ta_msg_c2h_macrostep_ended_write(const ta_msg_c2h_macrostep_ended *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_macrostep_ended_get decodes the c2h.macrostep_ended record into
+ * *out. It needs a record that ta_record_check accepted, so every span is
+ * inside it and every enum and bool is in range. The scalars of *out are
+ * copies of the record's snapshot (not of the ring bytes, which a host may be
+ * rewriting) and may outlive the record. Each ta_bytes of *out points into the
+ * record and is valid only until ta_ring_release; its bytes are untrusted, and
+ * text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_macrostep_ended_get(const ta_record *record, ta_msg_c2h_macrostep_ended *out);
+
+/*
  * c2h.wake: Call core back at this time.
  *
  * The earliest due delayed send in the pool changed. One timer in the host's
@@ -3539,6 +3838,19 @@ TA_PRIVATE ta_result ta_msg_c2h_wake_size(const ta_msg_c2h_wake *data, uint32_t 
  * may be freed when it returns.
  */
 TA_PRIVATE ta_result ta_msg_c2h_wake_write(const ta_msg_c2h_wake *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_wake_get decodes the c2h.wake record into *out. It needs a record
+ * that ta_record_check accepted, so every span is inside it and every enum and
+ * bool is in range. The scalars of *out are copies of the record's snapshot
+ * (not of the ring bytes, which a host may be rewriting) and may outlive the
+ * record. Each ta_bytes of *out points into the record and is valid only until
+ * ta_ring_release; its bytes are untrusted, and text is not checked for UTF-8.
+ * TA_ERR_INVALID: the record is of another kind, and *out is untouched. It
+ * never allocates and reads nothing outside record->fixed and the validated
+ * spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_wake_get(const ta_record *record, ta_msg_c2h_wake *out);
 
 /*
  * c2h.bounced: An h2c record was not run.
@@ -3603,6 +3915,19 @@ TA_PRIVATE ta_result ta_msg_c2h_bounced_size(const ta_msg_c2h_bounced *data, uin
 TA_PRIVATE ta_result ta_msg_c2h_bounced_write(const ta_msg_c2h_bounced *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_bounced_get decodes the c2h.bounced record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_bounced_get(const ta_record *record, ta_msg_c2h_bounced *out);
+
+/*
  * c2h.load_needed: Envelopes wait for an unloaded address.
  *
  * Written once per address until h2c.load or h2c.load_failed answers it.
@@ -3661,6 +3986,19 @@ TA_PRIVATE ta_result ta_msg_c2h_load_needed_size(const ta_msg_c2h_load_needed *d
 TA_PRIVATE ta_result ta_msg_c2h_load_needed_write(const ta_msg_c2h_load_needed *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_load_needed_get decodes the c2h.load_needed record into *out. It
+ * needs a record that ta_record_check accepted, so every span is inside it and
+ * every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_load_needed_get(const ta_record *record, ta_msg_c2h_load_needed *out);
+
+/*
  * c2h.loaded: A session is resident again.
  *
  * Ring c2h, kind 0x020C, 48 fixed bytes, 1 spans.
@@ -3711,6 +4049,19 @@ TA_PRIVATE ta_result ta_msg_c2h_loaded_size(const ta_msg_c2h_loaded *data, uint3
  * may be freed when it returns.
  */
 TA_PRIVATE ta_result ta_msg_c2h_loaded_write(const ta_msg_c2h_loaded *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_loaded_get decodes the c2h.loaded record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_loaded_get(const ta_record *record, ta_msg_c2h_loaded *out);
 
 /*
  * c2h.unloaded: A session left memory.
@@ -3785,6 +4136,19 @@ TA_PRIVATE ta_result ta_msg_c2h_unloaded_size(const ta_msg_c2h_unloaded *data, u
 TA_PRIVATE ta_result ta_msg_c2h_unloaded_write(const ta_msg_c2h_unloaded *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_unloaded_get decodes the c2h.unloaded record into *out. It needs
+ * a record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_unloaded_get(const ta_record *record, ta_msg_c2h_unloaded *out);
+
+/*
  * c2h.state: A recorded session's state at a point of its log.
  *
  * A checkpoint (core ADR 0091). Its delayed sends are inside the image, so it
@@ -3857,6 +4221,19 @@ TA_PRIVATE ta_result ta_msg_c2h_state_size(const ta_msg_c2h_state *data, uint32_
 TA_PRIVATE ta_result ta_msg_c2h_state_write(const ta_msg_c2h_state *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_state_get decodes the c2h.state record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_state_get(const ta_record *record, ta_msg_c2h_state *out);
+
+/*
  * c2h.published: A replayed session is live.
  *
  * For an empty-address publication, one session-0 result summarizes the atomic
@@ -3924,6 +4301,19 @@ TA_PRIVATE ta_result ta_msg_c2h_published_size(const ta_msg_c2h_published *data,
 TA_PRIVATE ta_result ta_msg_c2h_published_write(const ta_msg_c2h_published *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_published_get decodes the c2h.published record into *out. It
+ * needs a record that ta_record_check accepted, so every span is inside it and
+ * every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_published_get(const ta_record *record, ta_msg_c2h_published *out);
+
+/*
  * c2h.finished: A session reached a top-level final state.
  *
  * Mail to a local parent (done.invoke) is an envelope; this record is for the
@@ -3974,6 +4364,19 @@ TA_PRIVATE ta_result ta_msg_c2h_finished_size(const ta_msg_c2h_finished *data, u
  * may be freed when it returns.
  */
 TA_PRIVATE ta_result ta_msg_c2h_finished_write(const ta_msg_c2h_finished *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_finished_get decodes the c2h.finished record into *out. It needs
+ * a record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_finished_get(const ta_record *record, ta_msg_c2h_finished *out);
 
 /*
  * c2h.destroyed: A session is gone.
@@ -4033,6 +4436,19 @@ TA_PRIVATE ta_result ta_msg_c2h_destroyed_size(const ta_msg_c2h_destroyed *data,
  * allocates, and the data may be freed when it returns.
  */
 TA_PRIVATE ta_result ta_msg_c2h_destroyed_write(const ta_msg_c2h_destroyed *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_destroyed_get decodes the c2h.destroyed record into *out. It
+ * needs a record that ta_record_check accepted, so every span is inside it and
+ * every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_destroyed_get(const ta_record *record, ta_msg_c2h_destroyed *out);
 
 /*
  * c2h.definition_result: A definition request completed.
@@ -4105,6 +4521,19 @@ TA_PRIVATE ta_result ta_msg_c2h_definition_result_size(const ta_msg_c2h_definiti
 TA_PRIVATE ta_result ta_msg_c2h_definition_result_write(const ta_msg_c2h_definition_result *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_definition_result_get decodes the c2h.definition_result record
+ * into *out. It needs a record that ta_record_check accepted, so every span is
+ * inside it and every enum and bool is in range. The scalars of *out are
+ * copies of the record's snapshot (not of the ring bytes, which a host may be
+ * rewriting) and may outlive the record. Each ta_bytes of *out points into the
+ * record and is valid only until ta_ring_release; its bytes are untrusted, and
+ * text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_definition_result_get(const ta_record *record, ta_msg_c2h_definition_result *out);
+
+/*
  * c2h.input_refused: An admitted host input was not taken.
  *
  * Exactly one terminal refusal for an admitted h2c.event or invoke_report
@@ -4160,6 +4589,19 @@ TA_PRIVATE ta_result ta_msg_c2h_input_refused_size(const ta_msg_c2h_input_refuse
  * it returns.
  */
 TA_PRIVATE ta_result ta_msg_c2h_input_refused_write(const ta_msg_c2h_input_refused *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_input_refused_get decodes the c2h.input_refused record into *out.
+ * It needs a record that ta_record_check accepted, so every span is inside it
+ * and every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_input_refused_get(const ta_record *record, ta_msg_c2h_input_refused *out);
 
 /*
  * c2h.input_completed: A host input and its startup follow-up settled.
@@ -4228,6 +4670,19 @@ TA_PRIVATE ta_result ta_msg_c2h_input_completed_size(const ta_msg_c2h_input_comp
 TA_PRIVATE ta_result ta_msg_c2h_input_completed_write(const ta_msg_c2h_input_completed *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_c2h_input_completed_get decodes the c2h.input_completed record into
+ * *out. It needs a record that ta_record_check accepted, so every span is
+ * inside it and every enum and bool is in range. The scalars of *out are
+ * copies of the record's snapshot (not of the ring bytes, which a host may be
+ * rewriting) and may outlive the record. Each ta_bytes of *out points into the
+ * record and is valid only until ta_ring_release; its bytes are untrusted, and
+ * text is not checked for UTF-8. TA_ERR_INVALID: the record is of another
+ * kind, and *out is untouched. It never allocates and reads nothing outside
+ * record->fixed and the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_input_completed_get(const ta_record *record, ta_msg_c2h_input_completed *out);
+
+/*
  * c2h.load_result: A load-failure response finished recycling waiting inputs.
  *
  * Acknowledges h2c.load_failed after all waiting envelopes were recycled or
@@ -4280,6 +4735,19 @@ TA_PRIVATE ta_result ta_msg_c2h_load_result_size(const ta_msg_c2h_load_result *d
  * allocates, and the data may be freed when it returns.
  */
 TA_PRIVATE ta_result ta_msg_c2h_load_result_write(const ta_msg_c2h_load_result *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_c2h_load_result_get decodes the c2h.load_result record into *out. It
+ * needs a record that ta_record_check accepted, so every span is inside it and
+ * every enum and bool is in range. The scalars of *out are copies of the
+ * record's snapshot (not of the ring bytes, which a host may be rewriting) and
+ * may outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_c2h_load_result_get(const ta_record *record, ta_msg_c2h_load_result *out);
 
 /*
  * tel.trace: One trace record (core ADR 0067).
@@ -4397,6 +4865,19 @@ TA_PRIVATE ta_result ta_msg_tel_trace_size(const ta_msg_tel_trace *data, uint32_
 TA_PRIVATE ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const ta_ring_reservation *to);
 
 /*
+ * ta_msg_tel_trace_get decodes the tel.trace record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_tel_trace_get(const ta_record *record, ta_msg_tel_trace *out);
+
+/*
  * tel.dropped: Telemetry records were dropped.
  *
  * Ring tel, kind 0x0302, 48 fixed bytes, 0 spans.
@@ -4444,6 +4925,19 @@ TA_PRIVATE ta_result ta_msg_tel_dropped_size(const ta_msg_tel_dropped *data, uin
  * may be freed when it returns.
  */
 TA_PRIVATE ta_result ta_msg_tel_dropped_write(const ta_msg_tel_dropped *data, const ta_ring_reservation *to);
+
+/*
+ * ta_msg_tel_dropped_get decodes the tel.dropped record into *out. It needs a
+ * record that ta_record_check accepted, so every span is inside it and every
+ * enum and bool is in range. The scalars of *out are copies of the record's
+ * snapshot (not of the ring bytes, which a host may be rewriting) and may
+ * outlive the record. Each ta_bytes of *out points into the record and is
+ * valid only until ta_ring_release; its bytes are untrusted, and text is not
+ * checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out
+ * is untouched. It never allocates and reads nothing outside record->fixed and
+ * the validated spans.
+ */
+TA_PRIVATE ta_result ta_msg_tel_dropped_get(const ta_record *record, ta_msg_tel_dropped *out);
 
 /*
  * ta_msg_table returns the descriptors of every message in this build, sorted by
@@ -10401,6 +10895,20 @@ TA_PRIVATE ta_result ta_msg_h2c_time_write(const ta_msg_h2c_time *data, const ta
     return TA_OK;
 }
 
+/* ta_msg_h2c_time_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_time_get(const ta_record *record, ta_msg_h2c_time *out) {
+    ta_msg_h2c_time value;
+    if (record->kind != TA_MSG_H2C_TIME) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_event_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_h2c_event_size(const ta_msg_h2c_event *data, uint32_t *size) {
     ta_layout layout;
@@ -10466,6 +10974,29 @@ TA_PRIVATE ta_result ta_msg_h2c_event_write(const ta_msg_h2c_event *data, const 
     return TA_OK;
 }
 
+/* ta_msg_h2c_event_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_event_get(const ta_record *record, ta_msg_h2c_event *out) {
+    ta_msg_h2c_event value;
+    if (record->kind != TA_MSG_H2C_EVENT) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.target = ta_record_span(record, 32);
+    value.name = ta_record_span(record, 40);
+    value.sendid = ta_record_span(record, 48);
+    value.origin = ta_record_span(record, 56);
+    value.origin_type = ta_record_span(record, 64);
+    value.invokeid = ta_record_span(record, 72);
+    value.invocation_seq = ta_record_u64(record, 80);
+    value.data = ta_record_u64(record, 88);
+    value.type = ta_record_u8(record, 96);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_spawn_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_h2c_spawn_size(const ta_msg_h2c_spawn *data, uint32_t *size) {
     ta_layout layout;
@@ -10519,6 +11050,26 @@ TA_PRIVATE ta_result ta_msg_h2c_spawn_write(const ta_msg_h2c_spawn *data, const 
     return TA_OK;
 }
 
+/* ta_msg_h2c_spawn_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_spawn_get(const ta_record *record, ta_msg_h2c_spawn *out) {
+    ta_msg_h2c_spawn value;
+    if (record->kind != TA_MSG_H2C_SPAWN) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.revision = ta_record_span(record, 40);
+    value.data = ta_record_u64(record, 48);
+    value.clock = ta_record_u64(record, 56);
+    value.state = ta_record_u64(record, 64);
+    value.request_seq = ta_record_u64(record, 72);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_publish_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_h2c_publish_size(const ta_msg_h2c_publish *data, uint32_t *size) {
     ta_layout layout;
@@ -10563,6 +11114,22 @@ TA_PRIVATE ta_result ta_msg_h2c_publish_write(const ta_msg_h2c_publish *data, co
     wire.at = data->at;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_h2c_publish_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_publish_get(const ta_record *record, ta_msg_h2c_publish *out) {
+    ta_msg_h2c_publish value;
+    if (record->kind != TA_MSG_H2C_PUBLISH) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.at = ta_record_u64(record, 40);
+    *out = value;
     return TA_OK;
 }
 
@@ -10611,6 +11178,23 @@ TA_PRIVATE ta_result ta_msg_h2c_load_write(const ta_msg_h2c_load *data, const ta
     wire.request_seq = data->request_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_h2c_load_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_load_get(const ta_record *record, ta_msg_h2c_load *out) {
+    ta_msg_h2c_load value;
+    if (record->kind != TA_MSG_H2C_LOAD) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.image = ta_record_u64(record, 40);
+    value.request_seq = ta_record_u64(record, 48);
+    *out = value;
     return TA_OK;
 }
 
@@ -10664,6 +11248,23 @@ TA_PRIVATE ta_result ta_msg_h2c_load_failed_write(const ta_msg_h2c_load_failed *
     return TA_OK;
 }
 
+/* ta_msg_h2c_load_failed_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_load_failed_get(const ta_record *record, ta_msg_h2c_load_failed *out) {
+    ta_msg_h2c_load_failed value;
+    if (record->kind != TA_MSG_H2C_LOAD_FAILED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.reason = ta_record_span(record, 40);
+    value.request_seq = ta_record_u64(record, 48);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_unload_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_h2c_unload_size(const ta_msg_h2c_unload *data, uint32_t *size) {
     ta_layout layout;
@@ -10711,6 +11312,22 @@ TA_PRIVATE ta_result ta_msg_h2c_unload_write(const ta_msg_h2c_unload *data, cons
     return TA_OK;
 }
 
+/* ta_msg_h2c_unload_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_unload_get(const ta_record *record, ta_msg_h2c_unload *out) {
+    ta_msg_h2c_unload value;
+    if (record->kind != TA_MSG_H2C_UNLOAD) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.image = ta_record_u64(record, 40);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_checkpoint_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_h2c_checkpoint_size(const ta_msg_h2c_checkpoint *data, uint32_t *size) {
     ta_layout layout;
@@ -10755,6 +11372,22 @@ TA_PRIVATE ta_result ta_msg_h2c_checkpoint_write(const ta_msg_h2c_checkpoint *da
     wire.image = data->image;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_h2c_checkpoint_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_checkpoint_get(const ta_record *record, ta_msg_h2c_checkpoint *out) {
+    ta_msg_h2c_checkpoint value;
+    if (record->kind != TA_MSG_H2C_CHECKPOINT) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.image = ta_record_u64(record, 40);
+    *out = value;
     return TA_OK;
 }
 
@@ -10813,6 +11446,26 @@ TA_PRIVATE ta_result ta_msg_h2c_invoke_report_write(const ta_msg_h2c_invoke_repo
     return TA_OK;
 }
 
+/* ta_msg_h2c_invoke_report_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_invoke_report_get(const ta_record *record, ta_msg_h2c_invoke_report *out) {
+    ta_msg_h2c_invoke_report value;
+    if (record->kind != TA_MSG_H2C_INVOKE_REPORT) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.invokeid = ta_record_span(record, 32);
+    value.invocation_seq = ta_record_u64(record, 40);
+    value.reason = ta_record_span(record, 48);
+    value.data = ta_record_u64(record, 56);
+    value.kind = ta_record_u8(record, 64);
+    value.ends = ta_record_u8(record, 65);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_destroy_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_h2c_destroy_size(const ta_msg_h2c_destroy *data, uint32_t *size) {
     ta_layout layout;
@@ -10859,6 +11512,21 @@ TA_PRIVATE ta_result ta_msg_h2c_destroy_write(const ta_msg_h2c_destroy *data, co
     return TA_OK;
 }
 
+/* ta_msg_h2c_destroy_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_destroy_get(const ta_record *record, ta_msg_h2c_destroy *out) {
+    ta_msg_h2c_destroy value;
+    if (record->kind != TA_MSG_H2C_DESTROY) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_definition_register_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_h2c_definition_register_size(const ta_msg_h2c_definition_register *data, uint32_t *size) {
     (void)data;
@@ -10888,6 +11556,23 @@ TA_PRIVATE ta_result ta_msg_h2c_definition_register_write(const ta_msg_h2c_defin
     wire.diagnostic = data->diagnostic;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_h2c_definition_register_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_definition_register_get(const ta_record *record, ta_msg_h2c_definition_register *out) {
+    ta_msg_h2c_definition_register value;
+    if (record->kind != TA_MSG_H2C_DEFINITION_REGISTER) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.spec = ta_record_u64(record, 32);
+    value.datamodel = ta_record_u64(record, 40);
+    value.diagnostic = ta_record_u64(record, 48);
+    *out = value;
     return TA_OK;
 }
 
@@ -10921,6 +11606,21 @@ TA_PRIVATE ta_result ta_msg_h2c_definition_release_write(const ta_msg_h2c_defini
     return TA_OK;
 }
 
+/* ta_msg_h2c_definition_release_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_definition_release_get(const ta_record *record, ta_msg_h2c_definition_release *out) {
+    ta_msg_h2c_definition_release value;
+    if (record->kind != TA_MSG_H2C_DEFINITION_RELEASE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.definition = ta_record_u64(record, 32);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_definition_retire_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_h2c_definition_retire_size(const ta_msg_h2c_definition_retire *data, uint32_t *size) {
     (void)data;
@@ -10951,6 +11651,21 @@ TA_PRIVATE ta_result ta_msg_h2c_definition_retire_write(const ta_msg_h2c_definit
     return TA_OK;
 }
 
+/* ta_msg_h2c_definition_retire_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_definition_retire_get(const ta_record *record, ta_msg_h2c_definition_retire *out) {
+    ta_msg_h2c_definition_retire value;
+    if (record->kind != TA_MSG_H2C_DEFINITION_RETIRE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.definition = ta_record_u64(record, 32);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_withdraw_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_h2c_withdraw_size(const ta_msg_h2c_withdraw *data, uint32_t *size) {
     (void)data;
@@ -10978,6 +11693,21 @@ TA_PRIVATE ta_result ta_msg_h2c_withdraw_write(const ta_msg_h2c_withdraw *data, 
     wire.target_seq = data->target_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_h2c_withdraw_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_withdraw_get(const ta_record *record, ta_msg_h2c_withdraw *out) {
+    ta_msg_h2c_withdraw value;
+    if (record->kind != TA_MSG_H2C_WITHDRAW) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.target_seq = ta_record_u64(record, 32);
+    *out = value;
     return TA_OK;
 }
 
@@ -11029,6 +11759,22 @@ TA_PRIVATE ta_result ta_msg_h2c_type_declare_write(const ta_msg_h2c_type_declare
     return TA_OK;
 }
 
+/* ta_msg_h2c_type_declare_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_h2c_type_declare_get(const ta_record *record, ta_msg_h2c_type_declare *out) {
+    ta_msg_h2c_type_declare value;
+    if (record->kind != TA_MSG_H2C_TYPE_DECLARE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.registry = ta_record_u8(record, 32);
+    value.type = ta_record_span(record, 36);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_spawned_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_spawned_size(const ta_msg_c2h_spawned *data, uint32_t *size) {
     ta_layout layout;
@@ -11077,6 +11823,24 @@ TA_PRIVATE ta_result ta_msg_c2h_spawned_write(const ta_msg_c2h_spawned *data, co
     wire.cause_seq = data->cause_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_spawned_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_spawned_get(const ta_record *record, ta_msg_c2h_spawned *out) {
+    ta_msg_c2h_spawned value;
+    if (record->kind != TA_MSG_C2H_SPAWNED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.revision = ta_record_span(record, 40);
+    value.parent = ta_record_u64(record, 48);
+    value.cause_seq = ta_record_u64(record, 56);
+    *out = value;
     return TA_OK;
 }
 
@@ -11156,6 +11920,35 @@ TA_PRIVATE ta_result ta_msg_c2h_input_write(const ta_msg_c2h_input *data, const 
     return TA_OK;
 }
 
+/* ta_msg_c2h_input_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_input_get(const ta_record *record, ta_msg_c2h_input *out) {
+    ta_msg_c2h_input value;
+    if (record->kind != TA_MSG_C2H_INPUT) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.source_seq = ta_record_u64(record, 40);
+    value.from_session = ta_record_u64(record, 48);
+    value.name = ta_record_span(record, 56);
+    value.sendid = ta_record_span(record, 64);
+    value.origin = ta_record_span(record, 72);
+    value.origin_type = ta_record_span(record, 80);
+    value.invokeid = ta_record_span(record, 88);
+    value.data = ta_record_u64(record, 96);
+    value.source = ta_record_u8(record, 104);
+    value.type = ta_record_u8(record, 105);
+    value.report_invokeid = ta_record_span(record, 108);
+    value.report_reason = ta_record_span(record, 116);
+    value.report_kind = ta_record_u8(record, 124);
+    value.report_ends = ta_record_u8(record, 125);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_send_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_send_size(const ta_msg_c2h_send *data, uint32_t *size) {
     ta_layout layout;
@@ -11211,6 +12004,27 @@ TA_PRIVATE ta_result ta_msg_c2h_send_write(const ta_msg_c2h_send *data, const ta
     wire.content = data->content;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_send_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_send_get(const ta_record *record, ta_msg_c2h_send *out) {
+    ta_msg_c2h_send value;
+    if (record->kind != TA_MSG_C2H_SEND) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.sendid = ta_record_span(record, 40);
+    value.io_type = ta_record_span(record, 48);
+    value.target = ta_record_span(record, 56);
+    value.name = ta_record_span(record, 64);
+    value.data = ta_record_u64(record, 72);
+    value.content = ta_record_u64(record, 80);
+    *out = value;
     return TA_OK;
 }
 
@@ -11271,6 +12085,27 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_write(const ta_msg_c2h_invoke *data, cons
     return TA_OK;
 }
 
+/* ta_msg_c2h_invoke_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_invoke_get(const ta_record *record, ta_msg_c2h_invoke *out) {
+    ta_msg_c2h_invoke value;
+    if (record->kind != TA_MSG_C2H_INVOKE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.invokeid = ta_record_span(record, 40);
+    value.type = ta_record_span(record, 48);
+    value.src = ta_record_span(record, 56);
+    value.data = ta_record_u64(record, 64);
+    value.content = ta_record_u64(record, 72);
+    value.autoforward = ta_record_u8(record, 80);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_invoke_cancel_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_invoke_cancel_size(const ta_msg_c2h_invoke_cancel *data, uint32_t *size) {
     ta_layout layout;
@@ -11316,6 +12151,23 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_cancel_write(const ta_msg_c2h_invoke_canc
     wire.invocation_seq = data->invocation_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_invoke_cancel_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_invoke_cancel_get(const ta_record *record, ta_msg_c2h_invoke_cancel *out) {
+    ta_msg_c2h_invoke_cancel value;
+    if (record->kind != TA_MSG_C2H_INVOKE_CANCEL) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.invokeid = ta_record_span(record, 40);
+    value.invocation_seq = ta_record_u64(record, 48);
+    *out = value;
     return TA_OK;
 }
 
@@ -11385,6 +12237,30 @@ TA_PRIVATE ta_result ta_msg_c2h_invoke_forward_write(const ta_msg_c2h_invoke_for
     return TA_OK;
 }
 
+/* ta_msg_c2h_invoke_forward_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_invoke_forward_get(const ta_record *record, ta_msg_c2h_invoke_forward *out) {
+    ta_msg_c2h_invoke_forward value;
+    if (record->kind != TA_MSG_C2H_INVOKE_FORWARD) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.invokeid = ta_record_span(record, 40);
+    value.invocation_seq = ta_record_u64(record, 48);
+    value.name = ta_record_span(record, 56);
+    value.sendid = ta_record_span(record, 64);
+    value.origin = ta_record_span(record, 72);
+    value.origin_type = ta_record_span(record, 80);
+    value.event_invokeid = ta_record_span(record, 88);
+    value.data = ta_record_u64(record, 96);
+    value.type = ta_record_u8(record, 104);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_log_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_log_size(const ta_msg_c2h_log *data, uint32_t *size) {
     ta_layout layout;
@@ -11433,6 +12309,23 @@ TA_PRIVATE ta_result ta_msg_c2h_log_write(const ta_msg_c2h_log *data, const ta_r
     return TA_OK;
 }
 
+/* ta_msg_c2h_log_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_log_get(const ta_record *record, ta_msg_c2h_log *out) {
+    ta_msg_c2h_log value;
+    if (record->kind != TA_MSG_C2H_LOG) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.label = ta_record_span(record, 40);
+    value.value = ta_record_u64(record, 48);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_macrostep_ended_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_macrostep_ended_size(const ta_msg_c2h_macrostep_ended *data, uint32_t *size) {
     (void)data;
@@ -11470,6 +12363,26 @@ TA_PRIVATE ta_result ta_msg_c2h_macrostep_ended_write(const ta_msg_c2h_macrostep
     return TA_OK;
 }
 
+/* ta_msg_c2h_macrostep_ended_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_macrostep_ended_get(const ta_record *record, ta_msg_c2h_macrostep_ended *out) {
+    ta_msg_c2h_macrostep_ended value;
+    if (record->kind != TA_MSG_C2H_MACROSTEP_ENDED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.source = ta_record_u8(record, 40);
+    value.source_seq = ta_record_u64(record, 48);
+    value.effects = ta_record_u32(record, 56);
+    value.mail = ta_record_u32(record, 60);
+    value.status = ta_record_u8(record, 64);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_wake_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_wake_size(const ta_msg_c2h_wake *data, uint32_t *size) {
     (void)data;
@@ -11497,6 +12410,21 @@ TA_PRIVATE ta_result ta_msg_c2h_wake_write(const ta_msg_c2h_wake *data, const ta
     wire.due = data->due;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_wake_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_wake_get(const ta_record *record, ta_msg_c2h_wake *out) {
+    ta_msg_c2h_wake value;
+    if (record->kind != TA_MSG_C2H_WAKE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.due = ta_record_u64(record, 32);
+    *out = value;
     return TA_OK;
 }
 
@@ -11549,6 +12477,23 @@ TA_PRIVATE ta_result ta_msg_c2h_bounced_write(const ta_msg_c2h_bounced *data, co
     return TA_OK;
 }
 
+/* ta_msg_c2h_bounced_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_bounced_get(const ta_record *record, ta_msg_c2h_bounced *out) {
+    ta_msg_c2h_bounced value;
+    if (record->kind != TA_MSG_C2H_BOUNCED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.source_seq = ta_record_u64(record, 32);
+    value.detail = ta_record_span(record, 40);
+    value.reason = ta_record_u8(record, 48);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_load_needed_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_load_needed_size(const ta_msg_c2h_load_needed *data, uint32_t *size) {
     ta_layout layout;
@@ -11596,6 +12541,22 @@ TA_PRIVATE ta_result ta_msg_c2h_load_needed_write(const ta_msg_c2h_load_needed *
     return TA_OK;
 }
 
+/* ta_msg_c2h_load_needed_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_load_needed_get(const ta_record *record, ta_msg_c2h_load_needed *out) {
+    ta_msg_c2h_load_needed value;
+    if (record->kind != TA_MSG_C2H_LOAD_NEEDED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.waiting = ta_record_u32(record, 40);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_loaded_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_loaded_size(const ta_msg_c2h_loaded *data, uint32_t *size) {
     ta_layout layout;
@@ -11640,6 +12601,22 @@ TA_PRIVATE ta_result ta_msg_c2h_loaded_write(const ta_msg_c2h_loaded *data, cons
     wire.cause_seq = data->cause_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_loaded_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_loaded_get(const ta_record *record, ta_msg_c2h_loaded *out) {
+    ta_msg_c2h_loaded value;
+    if (record->kind != TA_MSG_C2H_LOADED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.cause_seq = ta_record_u64(record, 40);
+    *out = value;
     return TA_OK;
 }
 
@@ -11693,6 +12670,25 @@ TA_PRIVATE ta_result ta_msg_c2h_unloaded_write(const ta_msg_c2h_unloaded *data, 
     return TA_OK;
 }
 
+/* ta_msg_c2h_unloaded_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_unloaded_get(const ta_record *record, ta_msg_c2h_unloaded *out) {
+    ta_msg_c2h_unloaded value;
+    if (record->kind != TA_MSG_C2H_UNLOADED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.cause_seq = ta_record_u64(record, 40);
+    value.image = ta_record_u64(record, 48);
+    value.image_bytes = ta_record_u64(record, 56);
+    value.wake_at = ta_record_u64(record, 64);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_state_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_state_size(const ta_msg_c2h_state *data, uint32_t *size) {
     ta_layout layout;
@@ -11740,6 +12736,25 @@ TA_PRIVATE ta_result ta_msg_c2h_state_write(const ta_msg_c2h_state *data, const 
     wire.input_seq = data->input_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_state_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_state_get(const ta_record *record, ta_msg_c2h_state *out) {
+    ta_msg_c2h_state value;
+    if (record->kind != TA_MSG_C2H_STATE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.cause_seq = ta_record_u64(record, 40);
+    value.image = ta_record_u64(record, 48);
+    value.image_bytes = ta_record_u64(record, 56);
+    value.input_seq = ta_record_u64(record, 64);
+    *out = value;
     return TA_OK;
 }
 
@@ -11793,6 +12808,25 @@ TA_PRIVATE ta_result ta_msg_c2h_published_write(const ta_msg_c2h_published *data
     return TA_OK;
 }
 
+/* ta_msg_c2h_published_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_published_get(const ta_record *record, ta_msg_c2h_published *out) {
+    ta_msg_c2h_published value;
+    if (record->kind != TA_MSG_C2H_PUBLISHED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.cause_seq = ta_record_u64(record, 40);
+    value.replayed = ta_record_u64(record, 48);
+    value.dropped_timers = ta_record_u64(record, 56);
+    value.retired_invokes = ta_record_u64(record, 64);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_finished_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_finished_size(const ta_msg_c2h_finished *data, uint32_t *size) {
     (void)data;
@@ -11821,6 +12855,22 @@ TA_PRIVATE ta_result ta_msg_c2h_finished_write(const ta_msg_c2h_finished *data, 
     wire.donedata = data->donedata;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_finished_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_finished_get(const ta_record *record, ta_msg_c2h_finished *out) {
+    ta_msg_c2h_finished value;
+    if (record->kind != TA_MSG_C2H_FINISHED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.donedata = ta_record_u64(record, 40);
+    *out = value;
     return TA_OK;
 }
 
@@ -11873,6 +12923,23 @@ TA_PRIVATE ta_result ta_msg_c2h_destroyed_write(const ta_msg_c2h_destroyed *data
     return TA_OK;
 }
 
+/* ta_msg_c2h_destroyed_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_destroyed_get(const ta_record *record, ta_msg_c2h_destroyed *out) {
+    ta_msg_c2h_destroyed value;
+    if (record->kind != TA_MSG_C2H_DESTROYED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.cause_seq = ta_record_u64(record, 40);
+    value.reason = ta_record_u8(record, 48);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_definition_result_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_definition_result_size(const ta_msg_c2h_definition_result *data, uint32_t *size) {
     (void)data;
@@ -11907,6 +12974,24 @@ TA_PRIVATE ta_result ta_msg_c2h_definition_result_write(const ta_msg_c2h_definit
     return TA_OK;
 }
 
+/* ta_msg_c2h_definition_result_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_definition_result_get(const ta_record *record, ta_msg_c2h_definition_result *out) {
+    ta_msg_c2h_definition_result value;
+    if (record->kind != TA_MSG_C2H_DEFINITION_RESULT) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.cause_seq = ta_record_u64(record, 32);
+    value.definition = ta_record_u64(record, 40);
+    value.diagnostic_bytes = ta_record_u32(record, 48);
+    value.status = ta_record_u8(record, 52);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_input_refused_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_input_refused_size(const ta_msg_c2h_input_refused *data, uint32_t *size) {
     (void)data;
@@ -11936,6 +13021,22 @@ TA_PRIVATE ta_result ta_msg_c2h_input_refused_write(const ta_msg_c2h_input_refus
     wire.reason = data->reason;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_input_refused_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_input_refused_get(const ta_record *record, ta_msg_c2h_input_refused *out) {
+    ta_msg_c2h_input_refused value;
+    if (record->kind != TA_MSG_C2H_INPUT_REFUSED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.source_seq = ta_record_u64(record, 32);
+    value.reason = ta_record_u8(record, 40);
+    *out = value;
     return TA_OK;
 }
 
@@ -11972,6 +13073,23 @@ TA_PRIVATE ta_result ta_msg_c2h_input_completed_write(const ta_msg_c2h_input_com
     return TA_OK;
 }
 
+/* ta_msg_c2h_input_completed_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_input_completed_get(const ta_record *record, ta_msg_c2h_input_completed *out) {
+    ta_msg_c2h_input_completed value;
+    if (record->kind != TA_MSG_C2H_INPUT_COMPLETED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.source_seq = ta_record_u64(record, 32);
+    value.macrostep = ta_record_u64(record, 40);
+    value.status = ta_record_u8(record, 48);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_load_result_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_c2h_load_result_size(const ta_msg_c2h_load_result *data, uint32_t *size) {
     (void)data;
@@ -12000,6 +13118,22 @@ TA_PRIVATE ta_result ta_msg_c2h_load_result_write(const ta_msg_c2h_load_result *
     wire.request_seq = data->request_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_load_result_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_c2h_load_result_get(const ta_record *record, ta_msg_c2h_load_result *out) {
+    ta_msg_c2h_load_result value;
+    if (record->kind != TA_MSG_C2H_LOAD_RESULT) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.cause_seq = ta_record_u64(record, 32);
+    value.request_seq = ta_record_u64(record, 40);
+    *out = value;
     return TA_OK;
 }
 
@@ -12069,6 +13203,36 @@ TA_PRIVATE ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const 
     return TA_OK;
 }
 
+/* ta_msg_tel_trace_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_tel_trace_get(const ta_record *record, ta_msg_tel_trace *out) {
+    ta_msg_tel_trace value;
+    if (record->kind != TA_MSG_TEL_TRACE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.trace_id_high = ta_record_u64(record, 40);
+    value.trace_id_low = ta_record_u64(record, 48);
+    value.cause_session = ta_record_u64(record, 56);
+    value.cause_macrostep = ta_record_u64(record, 64);
+    value.microstep = ta_record_u32(record, 72);
+    value.state = ta_record_u32(record, 76);
+    value.transition = ta_record_u32(record, 80);
+    value.action = ta_record_u32(record, 84);
+    value.iteration = ta_record_u32(record, 88);
+    value.trace_kind = ta_record_u16(record, 92);
+    value.position = ta_record_u8(record, 94);
+    value.result = ta_record_u8(record, 95);
+    value.name = ta_record_span(record, 96);
+    value.value_text = ta_record_span(record, 104);
+    value.states = ta_record_span(record, 112);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_tel_dropped_size: see ring_proto.h. */
 TA_PRIVATE ta_result ta_msg_tel_dropped_size(const ta_msg_tel_dropped *data, uint32_t *size) {
     (void)data;
@@ -12097,6 +13261,22 @@ TA_PRIVATE ta_result ta_msg_tel_dropped_write(const ta_msg_tel_dropped *data, co
     wire.first_seq = data->first_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_tel_dropped_get: see ring_proto.h. */
+TA_PRIVATE ta_result ta_msg_tel_dropped_get(const ta_record *record, ta_msg_tel_dropped *out) {
+    ta_msg_tel_dropped value;
+    if (record->kind != TA_MSG_TEL_DROPPED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.count = ta_record_u64(record, 32);
+    value.first_seq = ta_record_u64(record, 40);
+    *out = value;
     return TA_OK;
 }
 

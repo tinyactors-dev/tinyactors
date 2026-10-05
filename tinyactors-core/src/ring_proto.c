@@ -36,6 +36,20 @@ ta_result ta_msg_h2c_time_write(const ta_msg_h2c_time *data, const ta_ring_reser
     return TA_OK;
 }
 
+/* ta_msg_h2c_time_get: see ring_proto.h. */
+ta_result ta_msg_h2c_time_get(const ta_record *record, ta_msg_h2c_time *out) {
+    ta_msg_h2c_time value;
+    if (record->kind != TA_MSG_H2C_TIME) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_event_size: see ring_proto.h. */
 ta_result ta_msg_h2c_event_size(const ta_msg_h2c_event *data, uint32_t *size) {
     ta_layout layout;
@@ -101,6 +115,29 @@ ta_result ta_msg_h2c_event_write(const ta_msg_h2c_event *data, const ta_ring_res
     return TA_OK;
 }
 
+/* ta_msg_h2c_event_get: see ring_proto.h. */
+ta_result ta_msg_h2c_event_get(const ta_record *record, ta_msg_h2c_event *out) {
+    ta_msg_h2c_event value;
+    if (record->kind != TA_MSG_H2C_EVENT) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.target = ta_record_span(record, 32);
+    value.name = ta_record_span(record, 40);
+    value.sendid = ta_record_span(record, 48);
+    value.origin = ta_record_span(record, 56);
+    value.origin_type = ta_record_span(record, 64);
+    value.invokeid = ta_record_span(record, 72);
+    value.invocation_seq = ta_record_u64(record, 80);
+    value.data = ta_record_u64(record, 88);
+    value.type = ta_record_u8(record, 96);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_spawn_size: see ring_proto.h. */
 ta_result ta_msg_h2c_spawn_size(const ta_msg_h2c_spawn *data, uint32_t *size) {
     ta_layout layout;
@@ -154,6 +191,26 @@ ta_result ta_msg_h2c_spawn_write(const ta_msg_h2c_spawn *data, const ta_ring_res
     return TA_OK;
 }
 
+/* ta_msg_h2c_spawn_get: see ring_proto.h. */
+ta_result ta_msg_h2c_spawn_get(const ta_record *record, ta_msg_h2c_spawn *out) {
+    ta_msg_h2c_spawn value;
+    if (record->kind != TA_MSG_H2C_SPAWN) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.revision = ta_record_span(record, 40);
+    value.data = ta_record_u64(record, 48);
+    value.clock = ta_record_u64(record, 56);
+    value.state = ta_record_u64(record, 64);
+    value.request_seq = ta_record_u64(record, 72);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_publish_size: see ring_proto.h. */
 ta_result ta_msg_h2c_publish_size(const ta_msg_h2c_publish *data, uint32_t *size) {
     ta_layout layout;
@@ -198,6 +255,22 @@ ta_result ta_msg_h2c_publish_write(const ta_msg_h2c_publish *data, const ta_ring
     wire.at = data->at;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_h2c_publish_get: see ring_proto.h. */
+ta_result ta_msg_h2c_publish_get(const ta_record *record, ta_msg_h2c_publish *out) {
+    ta_msg_h2c_publish value;
+    if (record->kind != TA_MSG_H2C_PUBLISH) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.at = ta_record_u64(record, 40);
+    *out = value;
     return TA_OK;
 }
 
@@ -246,6 +319,23 @@ ta_result ta_msg_h2c_load_write(const ta_msg_h2c_load *data, const ta_ring_reser
     wire.request_seq = data->request_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_h2c_load_get: see ring_proto.h. */
+ta_result ta_msg_h2c_load_get(const ta_record *record, ta_msg_h2c_load *out) {
+    ta_msg_h2c_load value;
+    if (record->kind != TA_MSG_H2C_LOAD) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.image = ta_record_u64(record, 40);
+    value.request_seq = ta_record_u64(record, 48);
+    *out = value;
     return TA_OK;
 }
 
@@ -299,6 +389,23 @@ ta_result ta_msg_h2c_load_failed_write(const ta_msg_h2c_load_failed *data, const
     return TA_OK;
 }
 
+/* ta_msg_h2c_load_failed_get: see ring_proto.h. */
+ta_result ta_msg_h2c_load_failed_get(const ta_record *record, ta_msg_h2c_load_failed *out) {
+    ta_msg_h2c_load_failed value;
+    if (record->kind != TA_MSG_H2C_LOAD_FAILED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.reason = ta_record_span(record, 40);
+    value.request_seq = ta_record_u64(record, 48);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_unload_size: see ring_proto.h. */
 ta_result ta_msg_h2c_unload_size(const ta_msg_h2c_unload *data, uint32_t *size) {
     ta_layout layout;
@@ -346,6 +453,22 @@ ta_result ta_msg_h2c_unload_write(const ta_msg_h2c_unload *data, const ta_ring_r
     return TA_OK;
 }
 
+/* ta_msg_h2c_unload_get: see ring_proto.h. */
+ta_result ta_msg_h2c_unload_get(const ta_record *record, ta_msg_h2c_unload *out) {
+    ta_msg_h2c_unload value;
+    if (record->kind != TA_MSG_H2C_UNLOAD) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.image = ta_record_u64(record, 40);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_checkpoint_size: see ring_proto.h. */
 ta_result ta_msg_h2c_checkpoint_size(const ta_msg_h2c_checkpoint *data, uint32_t *size) {
     ta_layout layout;
@@ -390,6 +513,22 @@ ta_result ta_msg_h2c_checkpoint_write(const ta_msg_h2c_checkpoint *data, const t
     wire.image = data->image;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_h2c_checkpoint_get: see ring_proto.h. */
+ta_result ta_msg_h2c_checkpoint_get(const ta_record *record, ta_msg_h2c_checkpoint *out) {
+    ta_msg_h2c_checkpoint value;
+    if (record->kind != TA_MSG_H2C_CHECKPOINT) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.image = ta_record_u64(record, 40);
+    *out = value;
     return TA_OK;
 }
 
@@ -448,6 +587,26 @@ ta_result ta_msg_h2c_invoke_report_write(const ta_msg_h2c_invoke_report *data, c
     return TA_OK;
 }
 
+/* ta_msg_h2c_invoke_report_get: see ring_proto.h. */
+ta_result ta_msg_h2c_invoke_report_get(const ta_record *record, ta_msg_h2c_invoke_report *out) {
+    ta_msg_h2c_invoke_report value;
+    if (record->kind != TA_MSG_H2C_INVOKE_REPORT) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.invokeid = ta_record_span(record, 32);
+    value.invocation_seq = ta_record_u64(record, 40);
+    value.reason = ta_record_span(record, 48);
+    value.data = ta_record_u64(record, 56);
+    value.kind = ta_record_u8(record, 64);
+    value.ends = ta_record_u8(record, 65);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_destroy_size: see ring_proto.h. */
 ta_result ta_msg_h2c_destroy_size(const ta_msg_h2c_destroy *data, uint32_t *size) {
     ta_layout layout;
@@ -494,6 +653,21 @@ ta_result ta_msg_h2c_destroy_write(const ta_msg_h2c_destroy *data, const ta_ring
     return TA_OK;
 }
 
+/* ta_msg_h2c_destroy_get: see ring_proto.h. */
+ta_result ta_msg_h2c_destroy_get(const ta_record *record, ta_msg_h2c_destroy *out) {
+    ta_msg_h2c_destroy value;
+    if (record->kind != TA_MSG_H2C_DESTROY) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_definition_register_size: see ring_proto.h. */
 ta_result ta_msg_h2c_definition_register_size(const ta_msg_h2c_definition_register *data, uint32_t *size) {
     (void)data;
@@ -523,6 +697,23 @@ ta_result ta_msg_h2c_definition_register_write(const ta_msg_h2c_definition_regis
     wire.diagnostic = data->diagnostic;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_h2c_definition_register_get: see ring_proto.h. */
+ta_result ta_msg_h2c_definition_register_get(const ta_record *record, ta_msg_h2c_definition_register *out) {
+    ta_msg_h2c_definition_register value;
+    if (record->kind != TA_MSG_H2C_DEFINITION_REGISTER) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.spec = ta_record_u64(record, 32);
+    value.datamodel = ta_record_u64(record, 40);
+    value.diagnostic = ta_record_u64(record, 48);
+    *out = value;
     return TA_OK;
 }
 
@@ -556,6 +747,21 @@ ta_result ta_msg_h2c_definition_release_write(const ta_msg_h2c_definition_releas
     return TA_OK;
 }
 
+/* ta_msg_h2c_definition_release_get: see ring_proto.h. */
+ta_result ta_msg_h2c_definition_release_get(const ta_record *record, ta_msg_h2c_definition_release *out) {
+    ta_msg_h2c_definition_release value;
+    if (record->kind != TA_MSG_H2C_DEFINITION_RELEASE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.definition = ta_record_u64(record, 32);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_definition_retire_size: see ring_proto.h. */
 ta_result ta_msg_h2c_definition_retire_size(const ta_msg_h2c_definition_retire *data, uint32_t *size) {
     (void)data;
@@ -586,6 +792,21 @@ ta_result ta_msg_h2c_definition_retire_write(const ta_msg_h2c_definition_retire 
     return TA_OK;
 }
 
+/* ta_msg_h2c_definition_retire_get: see ring_proto.h. */
+ta_result ta_msg_h2c_definition_retire_get(const ta_record *record, ta_msg_h2c_definition_retire *out) {
+    ta_msg_h2c_definition_retire value;
+    if (record->kind != TA_MSG_H2C_DEFINITION_RETIRE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.definition = ta_record_u64(record, 32);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_h2c_withdraw_size: see ring_proto.h. */
 ta_result ta_msg_h2c_withdraw_size(const ta_msg_h2c_withdraw *data, uint32_t *size) {
     (void)data;
@@ -613,6 +834,21 @@ ta_result ta_msg_h2c_withdraw_write(const ta_msg_h2c_withdraw *data, const ta_ri
     wire.target_seq = data->target_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_h2c_withdraw_get: see ring_proto.h. */
+ta_result ta_msg_h2c_withdraw_get(const ta_record *record, ta_msg_h2c_withdraw *out) {
+    ta_msg_h2c_withdraw value;
+    if (record->kind != TA_MSG_H2C_WITHDRAW) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.target_seq = ta_record_u64(record, 32);
+    *out = value;
     return TA_OK;
 }
 
@@ -664,6 +900,22 @@ ta_result ta_msg_h2c_type_declare_write(const ta_msg_h2c_type_declare *data, con
     return TA_OK;
 }
 
+/* ta_msg_h2c_type_declare_get: see ring_proto.h. */
+ta_result ta_msg_h2c_type_declare_get(const ta_record *record, ta_msg_h2c_type_declare *out) {
+    ta_msg_h2c_type_declare value;
+    if (record->kind != TA_MSG_H2C_TYPE_DECLARE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.registry = ta_record_u8(record, 32);
+    value.type = ta_record_span(record, 36);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_spawned_size: see ring_proto.h. */
 ta_result ta_msg_c2h_spawned_size(const ta_msg_c2h_spawned *data, uint32_t *size) {
     ta_layout layout;
@@ -712,6 +964,24 @@ ta_result ta_msg_c2h_spawned_write(const ta_msg_c2h_spawned *data, const ta_ring
     wire.cause_seq = data->cause_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_spawned_get: see ring_proto.h. */
+ta_result ta_msg_c2h_spawned_get(const ta_record *record, ta_msg_c2h_spawned *out) {
+    ta_msg_c2h_spawned value;
+    if (record->kind != TA_MSG_C2H_SPAWNED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.revision = ta_record_span(record, 40);
+    value.parent = ta_record_u64(record, 48);
+    value.cause_seq = ta_record_u64(record, 56);
+    *out = value;
     return TA_OK;
 }
 
@@ -791,6 +1061,35 @@ ta_result ta_msg_c2h_input_write(const ta_msg_c2h_input *data, const ta_ring_res
     return TA_OK;
 }
 
+/* ta_msg_c2h_input_get: see ring_proto.h. */
+ta_result ta_msg_c2h_input_get(const ta_record *record, ta_msg_c2h_input *out) {
+    ta_msg_c2h_input value;
+    if (record->kind != TA_MSG_C2H_INPUT) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.source_seq = ta_record_u64(record, 40);
+    value.from_session = ta_record_u64(record, 48);
+    value.name = ta_record_span(record, 56);
+    value.sendid = ta_record_span(record, 64);
+    value.origin = ta_record_span(record, 72);
+    value.origin_type = ta_record_span(record, 80);
+    value.invokeid = ta_record_span(record, 88);
+    value.data = ta_record_u64(record, 96);
+    value.source = ta_record_u8(record, 104);
+    value.type = ta_record_u8(record, 105);
+    value.report_invokeid = ta_record_span(record, 108);
+    value.report_reason = ta_record_span(record, 116);
+    value.report_kind = ta_record_u8(record, 124);
+    value.report_ends = ta_record_u8(record, 125);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_send_size: see ring_proto.h. */
 ta_result ta_msg_c2h_send_size(const ta_msg_c2h_send *data, uint32_t *size) {
     ta_layout layout;
@@ -846,6 +1145,27 @@ ta_result ta_msg_c2h_send_write(const ta_msg_c2h_send *data, const ta_ring_reser
     wire.content = data->content;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_send_get: see ring_proto.h. */
+ta_result ta_msg_c2h_send_get(const ta_record *record, ta_msg_c2h_send *out) {
+    ta_msg_c2h_send value;
+    if (record->kind != TA_MSG_C2H_SEND) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.sendid = ta_record_span(record, 40);
+    value.io_type = ta_record_span(record, 48);
+    value.target = ta_record_span(record, 56);
+    value.name = ta_record_span(record, 64);
+    value.data = ta_record_u64(record, 72);
+    value.content = ta_record_u64(record, 80);
+    *out = value;
     return TA_OK;
 }
 
@@ -906,6 +1226,27 @@ ta_result ta_msg_c2h_invoke_write(const ta_msg_c2h_invoke *data, const ta_ring_r
     return TA_OK;
 }
 
+/* ta_msg_c2h_invoke_get: see ring_proto.h. */
+ta_result ta_msg_c2h_invoke_get(const ta_record *record, ta_msg_c2h_invoke *out) {
+    ta_msg_c2h_invoke value;
+    if (record->kind != TA_MSG_C2H_INVOKE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.invokeid = ta_record_span(record, 40);
+    value.type = ta_record_span(record, 48);
+    value.src = ta_record_span(record, 56);
+    value.data = ta_record_u64(record, 64);
+    value.content = ta_record_u64(record, 72);
+    value.autoforward = ta_record_u8(record, 80);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_invoke_cancel_size: see ring_proto.h. */
 ta_result ta_msg_c2h_invoke_cancel_size(const ta_msg_c2h_invoke_cancel *data, uint32_t *size) {
     ta_layout layout;
@@ -951,6 +1292,23 @@ ta_result ta_msg_c2h_invoke_cancel_write(const ta_msg_c2h_invoke_cancel *data, c
     wire.invocation_seq = data->invocation_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_invoke_cancel_get: see ring_proto.h. */
+ta_result ta_msg_c2h_invoke_cancel_get(const ta_record *record, ta_msg_c2h_invoke_cancel *out) {
+    ta_msg_c2h_invoke_cancel value;
+    if (record->kind != TA_MSG_C2H_INVOKE_CANCEL) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.invokeid = ta_record_span(record, 40);
+    value.invocation_seq = ta_record_u64(record, 48);
+    *out = value;
     return TA_OK;
 }
 
@@ -1020,6 +1378,30 @@ ta_result ta_msg_c2h_invoke_forward_write(const ta_msg_c2h_invoke_forward *data,
     return TA_OK;
 }
 
+/* ta_msg_c2h_invoke_forward_get: see ring_proto.h. */
+ta_result ta_msg_c2h_invoke_forward_get(const ta_record *record, ta_msg_c2h_invoke_forward *out) {
+    ta_msg_c2h_invoke_forward value;
+    if (record->kind != TA_MSG_C2H_INVOKE_FORWARD) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.invokeid = ta_record_span(record, 40);
+    value.invocation_seq = ta_record_u64(record, 48);
+    value.name = ta_record_span(record, 56);
+    value.sendid = ta_record_span(record, 64);
+    value.origin = ta_record_span(record, 72);
+    value.origin_type = ta_record_span(record, 80);
+    value.event_invokeid = ta_record_span(record, 88);
+    value.data = ta_record_u64(record, 96);
+    value.type = ta_record_u8(record, 104);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_log_size: see ring_proto.h. */
 ta_result ta_msg_c2h_log_size(const ta_msg_c2h_log *data, uint32_t *size) {
     ta_layout layout;
@@ -1068,6 +1450,23 @@ ta_result ta_msg_c2h_log_write(const ta_msg_c2h_log *data, const ta_ring_reserva
     return TA_OK;
 }
 
+/* ta_msg_c2h_log_get: see ring_proto.h. */
+ta_result ta_msg_c2h_log_get(const ta_record *record, ta_msg_c2h_log *out) {
+    ta_msg_c2h_log value;
+    if (record->kind != TA_MSG_C2H_LOG) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.label = ta_record_span(record, 40);
+    value.value = ta_record_u64(record, 48);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_macrostep_ended_size: see ring_proto.h. */
 ta_result ta_msg_c2h_macrostep_ended_size(const ta_msg_c2h_macrostep_ended *data, uint32_t *size) {
     (void)data;
@@ -1105,6 +1504,26 @@ ta_result ta_msg_c2h_macrostep_ended_write(const ta_msg_c2h_macrostep_ended *dat
     return TA_OK;
 }
 
+/* ta_msg_c2h_macrostep_ended_get: see ring_proto.h. */
+ta_result ta_msg_c2h_macrostep_ended_get(const ta_record *record, ta_msg_c2h_macrostep_ended *out) {
+    ta_msg_c2h_macrostep_ended value;
+    if (record->kind != TA_MSG_C2H_MACROSTEP_ENDED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.source = ta_record_u8(record, 40);
+    value.source_seq = ta_record_u64(record, 48);
+    value.effects = ta_record_u32(record, 56);
+    value.mail = ta_record_u32(record, 60);
+    value.status = ta_record_u8(record, 64);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_wake_size: see ring_proto.h. */
 ta_result ta_msg_c2h_wake_size(const ta_msg_c2h_wake *data, uint32_t *size) {
     (void)data;
@@ -1132,6 +1551,21 @@ ta_result ta_msg_c2h_wake_write(const ta_msg_c2h_wake *data, const ta_ring_reser
     wire.due = data->due;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_wake_get: see ring_proto.h. */
+ta_result ta_msg_c2h_wake_get(const ta_record *record, ta_msg_c2h_wake *out) {
+    ta_msg_c2h_wake value;
+    if (record->kind != TA_MSG_C2H_WAKE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.due = ta_record_u64(record, 32);
+    *out = value;
     return TA_OK;
 }
 
@@ -1184,6 +1618,23 @@ ta_result ta_msg_c2h_bounced_write(const ta_msg_c2h_bounced *data, const ta_ring
     return TA_OK;
 }
 
+/* ta_msg_c2h_bounced_get: see ring_proto.h. */
+ta_result ta_msg_c2h_bounced_get(const ta_record *record, ta_msg_c2h_bounced *out) {
+    ta_msg_c2h_bounced value;
+    if (record->kind != TA_MSG_C2H_BOUNCED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.source_seq = ta_record_u64(record, 32);
+    value.detail = ta_record_span(record, 40);
+    value.reason = ta_record_u8(record, 48);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_load_needed_size: see ring_proto.h. */
 ta_result ta_msg_c2h_load_needed_size(const ta_msg_c2h_load_needed *data, uint32_t *size) {
     ta_layout layout;
@@ -1231,6 +1682,22 @@ ta_result ta_msg_c2h_load_needed_write(const ta_msg_c2h_load_needed *data, const
     return TA_OK;
 }
 
+/* ta_msg_c2h_load_needed_get: see ring_proto.h. */
+ta_result ta_msg_c2h_load_needed_get(const ta_record *record, ta_msg_c2h_load_needed *out) {
+    ta_msg_c2h_load_needed value;
+    if (record->kind != TA_MSG_C2H_LOAD_NEEDED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.waiting = ta_record_u32(record, 40);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_loaded_size: see ring_proto.h. */
 ta_result ta_msg_c2h_loaded_size(const ta_msg_c2h_loaded *data, uint32_t *size) {
     ta_layout layout;
@@ -1275,6 +1742,22 @@ ta_result ta_msg_c2h_loaded_write(const ta_msg_c2h_loaded *data, const ta_ring_r
     wire.cause_seq = data->cause_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_loaded_get: see ring_proto.h. */
+ta_result ta_msg_c2h_loaded_get(const ta_record *record, ta_msg_c2h_loaded *out) {
+    ta_msg_c2h_loaded value;
+    if (record->kind != TA_MSG_C2H_LOADED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.cause_seq = ta_record_u64(record, 40);
+    *out = value;
     return TA_OK;
 }
 
@@ -1328,6 +1811,25 @@ ta_result ta_msg_c2h_unloaded_write(const ta_msg_c2h_unloaded *data, const ta_ri
     return TA_OK;
 }
 
+/* ta_msg_c2h_unloaded_get: see ring_proto.h. */
+ta_result ta_msg_c2h_unloaded_get(const ta_record *record, ta_msg_c2h_unloaded *out) {
+    ta_msg_c2h_unloaded value;
+    if (record->kind != TA_MSG_C2H_UNLOADED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.cause_seq = ta_record_u64(record, 40);
+    value.image = ta_record_u64(record, 48);
+    value.image_bytes = ta_record_u64(record, 56);
+    value.wake_at = ta_record_u64(record, 64);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_state_size: see ring_proto.h. */
 ta_result ta_msg_c2h_state_size(const ta_msg_c2h_state *data, uint32_t *size) {
     ta_layout layout;
@@ -1375,6 +1877,25 @@ ta_result ta_msg_c2h_state_write(const ta_msg_c2h_state *data, const ta_ring_res
     wire.input_seq = data->input_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_state_get: see ring_proto.h. */
+ta_result ta_msg_c2h_state_get(const ta_record *record, ta_msg_c2h_state *out) {
+    ta_msg_c2h_state value;
+    if (record->kind != TA_MSG_C2H_STATE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.cause_seq = ta_record_u64(record, 40);
+    value.image = ta_record_u64(record, 48);
+    value.image_bytes = ta_record_u64(record, 56);
+    value.input_seq = ta_record_u64(record, 64);
+    *out = value;
     return TA_OK;
 }
 
@@ -1428,6 +1949,25 @@ ta_result ta_msg_c2h_published_write(const ta_msg_c2h_published *data, const ta_
     return TA_OK;
 }
 
+/* ta_msg_c2h_published_get: see ring_proto.h. */
+ta_result ta_msg_c2h_published_get(const ta_record *record, ta_msg_c2h_published *out) {
+    ta_msg_c2h_published value;
+    if (record->kind != TA_MSG_C2H_PUBLISHED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.cause_seq = ta_record_u64(record, 40);
+    value.replayed = ta_record_u64(record, 48);
+    value.dropped_timers = ta_record_u64(record, 56);
+    value.retired_invokes = ta_record_u64(record, 64);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_finished_size: see ring_proto.h. */
 ta_result ta_msg_c2h_finished_size(const ta_msg_c2h_finished *data, uint32_t *size) {
     (void)data;
@@ -1456,6 +1996,22 @@ ta_result ta_msg_c2h_finished_write(const ta_msg_c2h_finished *data, const ta_ri
     wire.donedata = data->donedata;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_finished_get: see ring_proto.h. */
+ta_result ta_msg_c2h_finished_get(const ta_record *record, ta_msg_c2h_finished *out) {
+    ta_msg_c2h_finished value;
+    if (record->kind != TA_MSG_C2H_FINISHED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.donedata = ta_record_u64(record, 40);
+    *out = value;
     return TA_OK;
 }
 
@@ -1508,6 +2064,23 @@ ta_result ta_msg_c2h_destroyed_write(const ta_msg_c2h_destroyed *data, const ta_
     return TA_OK;
 }
 
+/* ta_msg_c2h_destroyed_get: see ring_proto.h. */
+ta_result ta_msg_c2h_destroyed_get(const ta_record *record, ta_msg_c2h_destroyed *out) {
+    ta_msg_c2h_destroyed value;
+    if (record->kind != TA_MSG_C2H_DESTROYED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.address = ta_record_span(record, 32);
+    value.cause_seq = ta_record_u64(record, 40);
+    value.reason = ta_record_u8(record, 48);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_definition_result_size: see ring_proto.h. */
 ta_result ta_msg_c2h_definition_result_size(const ta_msg_c2h_definition_result *data, uint32_t *size) {
     (void)data;
@@ -1542,6 +2115,24 @@ ta_result ta_msg_c2h_definition_result_write(const ta_msg_c2h_definition_result 
     return TA_OK;
 }
 
+/* ta_msg_c2h_definition_result_get: see ring_proto.h. */
+ta_result ta_msg_c2h_definition_result_get(const ta_record *record, ta_msg_c2h_definition_result *out) {
+    ta_msg_c2h_definition_result value;
+    if (record->kind != TA_MSG_C2H_DEFINITION_RESULT) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.cause_seq = ta_record_u64(record, 32);
+    value.definition = ta_record_u64(record, 40);
+    value.diagnostic_bytes = ta_record_u32(record, 48);
+    value.status = ta_record_u8(record, 52);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_input_refused_size: see ring_proto.h. */
 ta_result ta_msg_c2h_input_refused_size(const ta_msg_c2h_input_refused *data, uint32_t *size) {
     (void)data;
@@ -1571,6 +2162,22 @@ ta_result ta_msg_c2h_input_refused_write(const ta_msg_c2h_input_refused *data, c
     wire.reason = data->reason;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_input_refused_get: see ring_proto.h. */
+ta_result ta_msg_c2h_input_refused_get(const ta_record *record, ta_msg_c2h_input_refused *out) {
+    ta_msg_c2h_input_refused value;
+    if (record->kind != TA_MSG_C2H_INPUT_REFUSED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.source_seq = ta_record_u64(record, 32);
+    value.reason = ta_record_u8(record, 40);
+    *out = value;
     return TA_OK;
 }
 
@@ -1607,6 +2214,23 @@ ta_result ta_msg_c2h_input_completed_write(const ta_msg_c2h_input_completed *dat
     return TA_OK;
 }
 
+/* ta_msg_c2h_input_completed_get: see ring_proto.h. */
+ta_result ta_msg_c2h_input_completed_get(const ta_record *record, ta_msg_c2h_input_completed *out) {
+    ta_msg_c2h_input_completed value;
+    if (record->kind != TA_MSG_C2H_INPUT_COMPLETED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.source_seq = ta_record_u64(record, 32);
+    value.macrostep = ta_record_u64(record, 40);
+    value.status = ta_record_u8(record, 48);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_c2h_load_result_size: see ring_proto.h. */
 ta_result ta_msg_c2h_load_result_size(const ta_msg_c2h_load_result *data, uint32_t *size) {
     (void)data;
@@ -1635,6 +2259,22 @@ ta_result ta_msg_c2h_load_result_write(const ta_msg_c2h_load_result *data, const
     wire.request_seq = data->request_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_c2h_load_result_get: see ring_proto.h. */
+ta_result ta_msg_c2h_load_result_get(const ta_record *record, ta_msg_c2h_load_result *out) {
+    ta_msg_c2h_load_result value;
+    if (record->kind != TA_MSG_C2H_LOAD_RESULT) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.cause_seq = ta_record_u64(record, 32);
+    value.request_seq = ta_record_u64(record, 40);
+    *out = value;
     return TA_OK;
 }
 
@@ -1704,6 +2344,36 @@ ta_result ta_msg_tel_trace_write(const ta_msg_tel_trace *data, const ta_ring_res
     return TA_OK;
 }
 
+/* ta_msg_tel_trace_get: see ring_proto.h. */
+ta_result ta_msg_tel_trace_get(const ta_record *record, ta_msg_tel_trace *out) {
+    ta_msg_tel_trace value;
+    if (record->kind != TA_MSG_TEL_TRACE) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.macrostep = ta_record_u64(record, 32);
+    value.trace_id_high = ta_record_u64(record, 40);
+    value.trace_id_low = ta_record_u64(record, 48);
+    value.cause_session = ta_record_u64(record, 56);
+    value.cause_macrostep = ta_record_u64(record, 64);
+    value.microstep = ta_record_u32(record, 72);
+    value.state = ta_record_u32(record, 76);
+    value.transition = ta_record_u32(record, 80);
+    value.action = ta_record_u32(record, 84);
+    value.iteration = ta_record_u32(record, 88);
+    value.trace_kind = ta_record_u16(record, 92);
+    value.position = ta_record_u8(record, 94);
+    value.result = ta_record_u8(record, 95);
+    value.name = ta_record_span(record, 96);
+    value.value_text = ta_record_span(record, 104);
+    value.states = ta_record_span(record, 112);
+    *out = value;
+    return TA_OK;
+}
+
 /* ta_msg_tel_dropped_size: see ring_proto.h. */
 ta_result ta_msg_tel_dropped_size(const ta_msg_tel_dropped *data, uint32_t *size) {
     (void)data;
@@ -1732,6 +2402,22 @@ ta_result ta_msg_tel_dropped_write(const ta_msg_tel_dropped *data, const ta_ring
     wire.first_seq = data->first_seq;
     ta_mem_copy(to->bytes, &wire, sizeof wire);
     ta_mem_zero(to->bytes + tail, size - tail);
+    return TA_OK;
+}
+
+/* ta_msg_tel_dropped_get: see ring_proto.h. */
+ta_result ta_msg_tel_dropped_get(const ta_record *record, ta_msg_tel_dropped *out) {
+    ta_msg_tel_dropped value;
+    if (record->kind != TA_MSG_TEL_DROPPED) {
+        return TA_ERR_INVALID;
+    }
+    ta_mem_zero(&value, sizeof value);
+    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);
+    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);
+    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);
+    value.count = ta_record_u64(record, 32);
+    value.first_seq = ta_record_u64(record, 40);
+    *out = value;
     return TA_OK;
 }
 

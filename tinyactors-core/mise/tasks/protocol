@@ -4,7 +4,8 @@
 
 # The ring protocol's records are defined once, in protocol/catalog.rb. This task
 # renders them: protocol/generated/MESSAGES.md and messages.json for people and
-# tools, and the C codec, src/ring_proto.h and src/ring_proto.c (see protocol/codec.rb). The outputs
+# tools, and the C codec, src/ring_proto.h and src/ring_proto.c (see protocol/codec.rb), and
+# tests/ring_proto_cases.h, the test support that lets one loop cover every message. The outputs
 # are committed, like include/tinyactors.c.
 #
 #   mise run protocol           write the generated files
@@ -18,7 +19,7 @@ require_relative '../../protocol/codec'
 Cache.gate('protocol',
            inputs: Cache.files('protocol/*.rb', 'mise/tasks/protocol'),
            outputs: Dir[Cache::ROOT.join('protocol/generated/*').to_s].map { |path| Pathname.new(path) } +
-                    [Cache::ROOT.join('src/ring_proto.h'), Cache::ROOT.join('src/ring_proto.c')])
+                    [Cache::ROOT.join('src/ring_proto.h'), Cache::ROOT.join('src/ring_proto.c'), Cache::ROOT.join('tests/ring_proto_cases.h')])
 
 root = Pathname.new(__dir__).join('../..').expand_path
 model = RingProto.load(root.join('protocol/catalog.rb').to_s)
@@ -26,7 +27,8 @@ outputs = {
   root.join('protocol/generated/MESSAGES.md') => RingProto::Render.markdown(model),
   root.join('protocol/generated/messages.json') => RingProto::Render.json(model),
   root.join('src/ring_proto.h') => RingProto::Codec.header(model),
-  root.join('src/ring_proto.c') => RingProto::Codec.source(model)
+  root.join('src/ring_proto.c') => RingProto::Codec.source(model),
+  root.join('tests/ring_proto_cases.h') => RingProto::Codec.cases(model)
 }
 
 if ARGV == ['--check']

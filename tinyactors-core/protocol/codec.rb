@@ -259,7 +259,7 @@ module RingProto
       infos = infos(model)
       check_model!(model, infos)
       out = +"/*\n#{wrap(GENERATED.rstrip)}\n */\n#include \"ring_proto.h\"\n\n"
-      infos.each { |info| out << size_function(info) << write_function(info) }
+      infos.each { |info| out << size_function(info) << write_function(info) << get_function(info) }
       out << descriptor_table(infos)
       out
     end
@@ -382,6 +382,144 @@ module RingProto
       out << "    ta_mem_zero(to->bytes + tail, size - tail);\n    return TA_OK;\n}\n\n"
     end
 
+    # ------------------------------------------------------------ get
+
+    LOADER = { 'uint8_t' => 'ta_record_u8', 'uint16_t' => 'ta_record_u16', 'uint32_t' => 'ta_record_u32',
+               'uint64_t' => 'ta_record_u64' }.freeze
+
+    def get_prototype(info)
+      text = +"#{info.type}_get decodes the #{info.msg.id} record into *out. It needs a record that ta_record_check accepted, "
+      text << 'so every span is inside it and every enum and bool is in range. The scalars of *out are copies of the '
+      text << "record's snapshot (not of the ring bytes, which a host may be rewriting) and may outlive the record. "
+      text << 'Each ta_bytes of *out points into the record and is valid only until ta_ring_release; its bytes are '
+      text << "untrusted, and text is not checked for UTF-8. TA_ERR_INVALID: the record is of another kind, and *out is untouched. "
+      text << 'It never allocates and reads nothing outside record->fixed and the validated spans.'
+      "#{comment(text)}ta_result #{info.type}_get(const ta_record *record, #{info.type} *out);\n\n"
+    end
+
+    def get_function(info)
+      out = +"/* #{info.type}_get: see ring_proto.h. */\n"
+      out << "ta_result #{info.type}_get(const ta_record *record, #{info.type} *out) {\n    #{info.type} value;\n"
+      out << "    if (record->kind != #{info.kind_const}) {\n        return TA_ERR_INVALID;\n    }\n"
+      out << "    ta_mem_zero(&value, sizeof value);\n"
+      out << "    value.head.flags = ta_record_u16(record, TA_RECORD_AT_FLAGS);\n"
+      out << "    value.head.session = ta_record_u64(record, TA_RECORD_AT_SESSION);\n"
+      out << "    value.head.at = ta_record_u64(record, TA_RECORD_AT_TIME);\n"
+      info.fields.each do |f|
+        out << if f.span?
+                 "    value.#{f.name} = ta_record_span(record, #{f.offset});\n"
+               else
+                 "    value.#{f.name} = #{LOADER.fetch(f.ctype)}(record, #{f.offset});\n"
+               end
+      end
+      out << "    *out = value;\n    return TA_OK;\n}\n\n"
+    end
+
+    # ------------------------------------------------------ test support
+
+    # tests/ring_proto_cases.h: for every message, functions that fill a data
+    # struct with deterministic values (every field distinct, every enum value
+    # reachable, empty and non-empty spans), compare two data structs, and call
+    # size, write and get through void pointers. It lets one loop in the test
+    # cover all messages without a hand-written case for each.
+    def cases(model)
+      infos = infos(model)
+      out = +"/*\n#{wrap(GENERATED.rstrip)}\n * This file is test support: it is included by tests/ring_proto_test.c only.\n */\n"
+      out << "#pragma once\n\n#define RING_PROTO_CASE_DATA_BYTES 512u\n#define RING_PROTO_CASE_POOL_BYTES 256u\n\n"
+      out << CASES_PRELUDE
+      infos.each { |info| out << case_functions(info) }
+      out << "static const ring_proto_case ring_proto_cases[] = {\n"
+      infos.each { |info| out << case_entry(info) }
+      out << "};\n"
+      out
+    end
+
+    CASES_PRELUDE = <<~C
+      /* One message as the test loop sees it: functions over void pointers to its data struct. */
+      typedef struct ring_proto_case {
+          const char *id;
+          uint16_t kind;
+          uint32_t span_count;
+          void (*fill)(void *data, uint32_t seed, const uint8_t *pool);
+          bool (*equal)(const void *a, const void *b);
+          ta_result (*size)(const void *data, uint32_t *size);
+          ta_result (*write)(const void *data, const ta_ring_reservation *to);
+          ta_result (*get)(const ta_record *record, void *out);
+      } ring_proto_case;
+
+      /* mix is a deterministic 64-bit hash of (seed, salt): splitmix64 on their concatenation. */
+      static uint64_t ring_proto_mix(uint32_t seed, uint32_t salt) {
+          uint64_t x = (((uint64_t)seed << 32) | salt) + 0x9E3779B97F4A7C15ull;
+          x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+          x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+          return x ^ (x >> 31);
+      }
+
+      /* view picks a span of 0..13 bytes of the pool; an empty one sometimes has a pointer and sometimes not. */
+      static ta_bytes ring_proto_view(const uint8_t *pool, uint64_t x) {
+          uint32_t length = (uint32_t)(x % 14u);
+          uint32_t offset = (uint32_t)((x >> 8) % 200u);
+          if (length == 0 && (x & 1u) != 0) {
+              return (ta_bytes){ NULL, 0 };
+          }
+          return (ta_bytes){ pool + offset, length };
+      }
+
+      /* same says whether two views hold the same bytes; where they point does not matter. */
+      static bool ring_proto_same(ta_bytes a, ta_bytes b) {
+          if (a.len != b.len) {
+              return false;
+          }
+          for (uint32_t i = 0; i < a.len; i += 1) {
+              if (a.ptr[i] != b.ptr[i]) {
+                  return false;
+              }
+          }
+          return true;
+      }
+
+    C
+
+    def case_functions(info)
+      t = info.type
+      out = +"/* #{info.msg.id} */\n_Static_assert(sizeof(#{t}) <= RING_PROTO_CASE_DATA_BYTES, \"#{info.msg.id} data fits the test buffer\");\n"
+      out << "static void case_#{info.c}_fill(void *p, uint32_t seed, const uint8_t *pool) {\n    #{t} *d = p;\n"
+      out << "    ta_mem_zero(d, sizeof *d);\n"
+      out << format("    d->head.flags = (uint16_t)(ring_proto_mix(seed, 0) & 0x%04Xu);\n", info.flags_allowed)
+      out << "    d->head.session = ring_proto_mix(seed, 1);\n    d->head.at = ring_proto_mix(seed, 2);\n"
+      info.fields.each_with_index do |f, i|
+        salt = i + 3
+        out << "    d->#{f.name} = " << case_value(f, salt) << ";\n"
+      end
+      out << "    (void)pool;\n}\n"
+      out << "static bool case_#{info.c}_equal(const void *pa, const void *pb) {\n    const #{t} *a = pa;\n    const #{t} *b = pb;\n"
+      terms = ['a->head.flags == b->head.flags', 'a->head.session == b->head.session', 'a->head.at == b->head.at']
+      info.fields.each do |f|
+        terms << (f.span? ? "ring_proto_same(a->#{f.name}, b->#{f.name})" : "a->#{f.name} == b->#{f.name}")
+      end
+      out << "    return #{terms.join(" &&\n           ")};\n}\n"
+      out << "static ta_result case_#{info.c}_size(const void *data, uint32_t *size) { return #{t}_size(data, size); }\n"
+      out << "static ta_result case_#{info.c}_write(const void *data, const ta_ring_reservation *to) { return #{t}_write(data, to); }\n"
+      out << "static ta_result case_#{info.c}_get(const ta_record *record, void *out) { return #{t}_get(record, out); }\n\n"
+    end
+
+    def case_value(field, salt)
+      x = "ring_proto_mix(seed, #{salt})"
+      return "ring_proto_view(pool, #{x})" if field.span?
+      return "(uint8_t)(#{x} & 1u)" if field.kind == :bool
+
+      if field.kind == :enum
+        values = field.enum.values.map(&:value)
+        return "(const uint8_t[]){ #{values.join(', ')} }[#{x} % #{values.size}u]"
+      end
+      "(#{field.ctype})#{x}"
+    end
+
+    def case_entry(info)
+      "    { \"#{info.msg.id}\", #{info.kind_const}, #{info.spans.size}, case_#{info.c}_fill, case_#{info.c}_equal,\n" \
+        "      case_#{info.c}_size, case_#{info.c}_write, case_#{info.c}_get },\n"
+    end
+
     # ------------------------------------------------------- per message
 
     def message_header(_model, info)
@@ -390,6 +528,7 @@ module RingProto
       out << data_struct(info)
       out << size_prototype(info)
       out << write_prototype(info)
+      out << get_prototype(info)
       out
     end
 
