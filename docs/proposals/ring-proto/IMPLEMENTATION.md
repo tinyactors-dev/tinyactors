@@ -239,6 +239,37 @@ vtable and the event blocks).
   6803c44` (node, 200k actors, 3 alternating runs each, machine 61a66aecf132):
   throughput within the noise floor (+9% untraced, -9% to +5% elsewhere),
   bytes per actor unchanged (core 273, native 321). Core is untouched.
+- Follow-up P3 (the two regressions P2 left open at 1M actors): neither is
+  caused by 4.2a, and no library code changed. Plain post+delivery in
+  `scale.js` is bimodal, about 0.85 to 0.95 us/msg in a fast mode and 1.4 to
+  1.9 in a slow one, in both 6803c44 and ring-proto, at every population,
+  and the mode flips between populations of one process (not ASLR, not CPU
+  migration: pinned to one CPU and with `setarch -R` it still flips). A
+  ratio above 2 happens when a fast population sits next to a slow one, on
+  the old build as well. 5 alternating runs at 1M, old / new: 1.536, 1.486,
+  1.440, 1.661, 0.910 (median 1.486) / 1.011, 1.031, 1.407, 0.982, 1.560
+  (median 1.031); at 200k medians 1.42 / 0.93. ws bootstrap (spawn plus
+  bootstrap, 50k / 200k / 1M) is flat in both builds, 1M median 3.9 us/actor
+  bootstrap on each, so P2's 8.0 was noise; five more runs on ring-proto in
+  P3 give 4.5, 4.3, 4.9, 5.2, 5.0 us/actor at 1M beside 3.3 to 5.5 at 50k.
+  Steady-state allocator calls were 0 in every run. What P3 added: the
+  scheduler counts `ta_run` calls (`turn_run_calls`, `run_calls_total`),
+  `scheduler_test` checks that calls per bootstrapped actor (about 1.11) and
+  per delivered message (about 1.11) are the same at 512 and 2048 actors
+  (checked to fail when the count is inflated above 1000 actors), and
+  `run_test` checks that 1000 deliver-and-run rounds against 20 of 2000
+  actors make no allocator call. A harness change (3 warm-up rounds, the
+  best round for the post ratio) was tried and not committed: in 18 paired
+  runs at 200k and 1M neither the old nor the new `scale.js` failed, so it
+  showed no reduction in false failures to justify weakening the median
+  check. If the ratio check fails on a run, rerun it before suspecting the
+  library; compare the same run on 6803c44.
+  `bench-compare 6803c44` (node, machine 61a66aecf132, 2 alternating runs
+  each; the bun legs could not run the candidate and the run hit the time
+  limit before the end): bytes per actor equal in every scenario (core 274,
+  native 323 untraced), `ns/event` untraced +1.5%, and the scenarios flagged
+  over 5% went both ways (+39% and -5.6% on neighbouring `summary` rows) with
+  identical bytes, which two runs cannot separate from the noise.
 
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
