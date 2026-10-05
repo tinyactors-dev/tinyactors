@@ -503,11 +503,15 @@ chart of 100 states costs about 64 KiB of continuations, plus whatever
 internal events they had pending; the derived ceiling bounds the worst
 case.
 
-**The trade-off.** At their bounds, the defaults come to about 1.5 MiB,
-more than the roughly 1 MB per system that ADR 0093 judged too much for
-quiet systems and for test suites that create many. Most of it is c2h,
-and the pool and the name area at their bounds. Two things keep the
-figure a system actually pays small:
+**The trade-off.** At their bounds, the defaults come to about 1.5 MiB.
+An idle system pays the rings at creation, about 808 KiB, against about
+97 KB of native memory for an idle napi system today, which ADR 0093
+brought down from about 1 MB. That is the price of 64 slots by default:
+every slot can hold its c2h reserve, so a long or looping macrostep holds
+one slot of 64 and the rest of the system keeps running. A host that
+creates many quiet systems, such as a test suite, sets
+`maxConcurrentInputs` low and pays about 20 KiB of c2h with one slot.
+What a system pays beyond the rings stays small:
 
 - **The pool and the name area fill on demand, up to their bounds**
   (ADR 0093's shape). They grow only between macrosteps: at admission and
