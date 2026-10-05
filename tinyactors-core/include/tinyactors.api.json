@@ -14027,7 +14027,7 @@
           "shape": "single",
           "direction": "in",
           "optional": true,
-          "doc": "TAKEN and REFUSED: the input's event, borrowed until the next ta_run()."
+          "doc": "TAKEN and REFUSED: the input's event, borrowed until the next ta_run() or until the input ends or is abandoned, whichever comes first."
         }
       ],
       "layout": {
@@ -21144,7 +21144,7 @@
     },
     {
       "name": "ta_actor_transition",
-      "doc": "Starts an operator's event and its transition in the running slot of a resident actor that holds no input (ADR 0082, ADR 0099 section 5): the next ta_run() continues it before it takes anything from the run queue. The results: - TA_OK: started; call ta_run(). - TA_ERR_BUSY: the running slot is occupied (an input is paused inside a macrostep), or the actor itself is inside a macrostep or has admitted inputs waiting: the operator's event does not overtake them. Offer it again after ta_run() has finished them. - TA_ERR_DONE, TA_ERR_NOT_FOUND: as for ta_actor_deliver(). - TA_ERR_INVALID: a malformed event or transition (no targets, an unknown state, targets that cannot form a legal configuration, a null transition), or a source that is not active. - TA_ERR_NOMEM: no memory for the transition or the envelope. On any result but TA_OK nothing is retained. A malformed event or transition is TA_ERR_INVALID whatever the actor's state, except that whether the source is active is asked only of an actor that would otherwise accept it.",
+      "doc": "Starts an operator's event and its transition in the running slot of a resident actor that holds no input (ADR 0082, ADR 0099 section 5): the next ta_run() continues it before it takes anything from the run queue. The results: - TA_OK: started; call ta_run(). - TA_ERR_BUSY: the running slot is occupied (an input is paused inside a macrostep), or the actor itself is inside a macrostep or has admitted inputs waiting: the operator's event does not overtake them. Offer it again after ta_run() has finished them. - TA_ERR_DONE, TA_ERR_NOT_FOUND: as for ta_actor_deliver(). - TA_ERR_INVALID: a malformed event or transition (no targets, an unknown state, targets that cannot form a legal configuration, a null transition), or a source that is not active. - TA_ERR_FULL: the pool of envelopes is at its bound. - TA_ERR_NOMEM: no memory for the transition or the envelope. On any result but TA_OK nothing is retained. A malformed event or transition is TA_ERR_INVALID whatever the actor's state, except that whether the source is active is asked only of an actor that would otherwise accept it.",
       "public": true,
       "static_inline": false,
       "implemented": true,

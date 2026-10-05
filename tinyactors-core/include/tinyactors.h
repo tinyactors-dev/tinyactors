@@ -2787,7 +2787,8 @@ typedef struct {
     bool ignored;
     /* REFUSED. */
     ta_refusal_reason reason;
-    /* TAKEN and REFUSED: the input's event, borrowed until the next ta_run(). */
+    /* TAKEN and REFUSED: the input's event, borrowed until the next ta_run() or
+     * until the input ends or is abandoned, whichever comes first. */
     TA_IN TA_OPTIONAL const ta_event *event;
 } ta_run_notice;
 /*
@@ -3130,6 +3131,7 @@ typedef struct {
  * - TA_ERR_INVALID: a malformed event or transition (no targets, an unknown
  *   state, targets that cannot form a legal configuration, a null
  *   transition), or a source that is not active.
+ * - TA_ERR_FULL: the pool of envelopes is at its bound.
  * - TA_ERR_NOMEM: no memory for the transition or the envelope.
  * On any result but TA_OK nothing is retained. A malformed event or
  * transition is TA_ERR_INVALID whatever the actor's state, except that

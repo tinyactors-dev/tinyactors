@@ -18530,10 +18530,19 @@ typedef struct ta_run_notices {
     uint32_t count;
 } ta_run_notices;
 
+/*
+ * ta_run_room answers how many more notices fit in the caller's array. It
+ * never allocates and never fails.
+ */
 static uint32_t ta_run_room(const ta_run_notices *out) {
     return out->capacity - out->count;
 }
 
+/*
+ * ta_run_notice_add copies `notice` into the next free place of the array.
+ * It needs ta_run_room(out) > 0 (callers reserve room before they act) and
+ * never allocates; the notice's borrowed pointers are copied, not retained.
+ */
 static void ta_run_notice_add(ta_run_notices *out, const ta_run_notice *notice) {
     out->notices[out->count] = *notice;
     out->count += 1u;
@@ -18640,13 +18649,6 @@ static bool ta_run_event_valid(const ta_system *system, const ta_actor *actor, c
            ta_actor_input_time_valid(system, actor, time);
 }
 
-/*
- * ta_run_fill makes the envelope for an input and fills it from `event`
- * (retained: the envelope owns its references from here). It consumes one
- * unit of the pool's quota that nothing reserved. The envelope is not on a
- * list. Answers 0 when the pool cannot make one: the refill failed, or the
- * pool is at its bound.
- */
 typedef struct ta_run_input {
     const ta_event *event;
     const ta_trace_parent *trace;
@@ -18654,6 +18656,13 @@ typedef struct ta_run_input {
     ta_input_source source;
 } ta_run_input;
 
+/*
+ * ta_run_fill makes the envelope for an input and fills it from `event`
+ * (retained: the envelope owns its references from here). It consumes one
+ * unit of the pool's quota that nothing reserved. The envelope is not on a
+ * list. Answers 0 when the pool cannot make one: the refill failed, or the
+ * pool is at its bound.
+ */
 static uint32_t ta_run_fill(ta_system *system, ta_actor *actor, const ta_run_input *input) {
     if (ta_envelopes_refill(&system->envelopes, 1u) != TA_OK) {
         return 0;
@@ -18851,7 +18860,12 @@ TA_API ta_result ta_actor_transition(ta_system *system, const ta_actor_transitio
                                                                  .trace = &params->trace,
                                                                  .time = params->time,
                                                                  .source = TA_SOURCE_TRANSITION });
-    result = index == 0 ? TA_ERR_NOMEM : ta_interpreter_hold_block(system, actor);
+    if (index == 0) {
+        /* A pool at its bound is a capacity condition, not an allocation failure. */
+        result = system->envelopes.pool.used >= system->envelopes.bound ? TA_ERR_FULL : TA_ERR_NOMEM;
+    } else {
+        result = ta_interpreter_hold_block(system, actor);
+    }
     if (result != TA_OK) {
         ta_envelope_release(&system->envelopes, index);
         ta_mem_free(system->allocator, jump,
