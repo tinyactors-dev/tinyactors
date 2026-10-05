@@ -1974,6 +1974,23 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     return result;
 }
 
+/*
+ * The bytes of an actor's history storage: `slot_count` bitmaps of
+ * `slot_bytes` each, into *out. False, with *out untouched, when the
+ * actor's session storage, which is this and two more bitmaps of
+ * `slot_bytes` (the configuration and its late-binding bits), would exceed
+ * UINT32_MAX: slot offsets, the storage size and the session size are all
+ * kept in 32 bits. Computed in 64 bits, so no count wraps. Never allocates.
+ */
+static bool ta_history_storage_bytes(uint32_t slot_count, uint32_t slot_bytes, uint32_t *out) {
+    uint64_t session = ((uint64_t)slot_count + 2u) * slot_bytes;
+    if (session > UINT32_MAX) {
+        return false;
+    }
+    *out = slot_count * slot_bytes;
+    return true;
+}
+
 static ta_result ta_compiler_finish(ta_compiler *compiler) {
     ta_definition *definition = compiler->definition;
     const ta_compiler_seal_params seals[] = {
@@ -2038,11 +2055,17 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
         .alignment = (uint16_t)_Alignof(uint64_t),
         .atomic_state_count = definition->state_count,
     };
+    uint32_t storage_bytes = 0;
+    if (!ta_history_storage_bytes(definition->history.slot_count, words * 8u, &storage_bytes)) {
+        return ta_compiler_fail(compiler, TA_COMPILE_ERROR_LIMIT, (ta_str){0},
+                                TA_PHRASE("the chart has more history states than an actor's session can hold"));
+    }
+    /* Each offset is below storage_bytes, which fits: none of these wraps. */
     for (uint32_t slot = 0; slot < definition->history.slot_count; slot += 1) {
         definition->history.slots[slot] = (ta_history_slot){ .offset = slot * words * 8u,
                                                              .bytes = (uint16_t)(words * 8u) };
     }
-    definition->history.storage_bytes = definition->history.slot_count * words * 8u;
+    definition->history.storage_bytes = storage_bytes;
     return ta_compiler_identity(compiler);
 }
 
@@ -2051,7 +2074,8 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
  * (ADR 0058 section 2): the data-model requirement; pass one over every state
  * in document order (kind, ID, duplicates); the root's <data>; pass two for
  * each state in document order; the root <initial>; the root <script>; the
- * configuration limit and the family; then the data model's preparation.
+ * configuration and history-storage limits and the family; then the data
+ * model's preparation.
  */
 /* One history state on the walk below, and the next default target to follow. */
 typedef struct {

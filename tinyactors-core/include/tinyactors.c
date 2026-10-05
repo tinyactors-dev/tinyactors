@@ -263,7 +263,8 @@ TA_PRIVATE void *ta_vec_at(const ta_vec *vec, uint32_t index);
  *
  * ## Contract
  *
- * - `ta_bits_words(bits)` is the number of words that hold `bits` bits.
+ * - `ta_bits_words(bits)` is the number of words that hold `bits` bits,
+ *   for every `bits` up to `UINT32_MAX` (67108864 words); it does not wrap.
  * - `ta_bits_get` and `ta_bits_put` read and write one bit. The bit must
  *   lie within the words the caller has: that is a precondition, not
  *   checked.
@@ -291,8 +292,8 @@ TA_PRIVATE void *ta_vec_at(const ta_vec *vec, uint32_t index);
 #include <stdbool.h>
 #include <stdint.h>
 
-/** The number of 64-bit words that hold `bits` bits. */
-TA_PRIVATE inline uint32_t ta_bits_words(uint32_t bits) { return (bits + 63u) / 64u; }
+/** The number of 64-bit words that hold `bits` bits; does not wrap near `UINT32_MAX`. */
+TA_PRIVATE inline uint32_t ta_bits_words(uint32_t bits) { return bits / 64u + (bits % 64u != 0u ? 1u : 0u); }
 /** Whether bit `bit` of `words` is set. */
 TA_PRIVATE inline bool ta_bits_get(const uint64_t *words, uint32_t bit) {
     return (words[bit / 64u] >> (bit % 64u)) & 1u;
@@ -18338,6 +18339,23 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     return result;
 }
 
+/*
+ * The bytes of an actor's history storage: `slot_count` bitmaps of
+ * `slot_bytes` each, into *out. False, with *out untouched, when the
+ * actor's session storage, which is this and two more bitmaps of
+ * `slot_bytes` (the configuration and its late-binding bits), would exceed
+ * UINT32_MAX: slot offsets, the storage size and the session size are all
+ * kept in 32 bits. Computed in 64 bits, so no count wraps. Never allocates.
+ */
+static bool ta_history_storage_bytes(uint32_t slot_count, uint32_t slot_bytes, uint32_t *out) {
+    uint64_t session = ((uint64_t)slot_count + 2u) * slot_bytes;
+    if (session > UINT32_MAX) {
+        return false;
+    }
+    *out = slot_count * slot_bytes;
+    return true;
+}
+
 static ta_result ta_compiler_finish(ta_compiler *compiler) {
     ta_definition *definition = compiler->definition;
     const ta_compiler_seal_params seals[] = {
@@ -18402,11 +18420,17 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
         .alignment = (uint16_t)_Alignof(uint64_t),
         .atomic_state_count = definition->state_count,
     };
+    uint32_t storage_bytes = 0;
+    if (!ta_history_storage_bytes(definition->history.slot_count, words * 8u, &storage_bytes)) {
+        return ta_compiler_fail(compiler, TA_COMPILE_ERROR_LIMIT, (ta_str){0},
+                                TA_PHRASE("the chart has more history states than an actor's session can hold"));
+    }
+    /* Each offset is below storage_bytes, which fits: none of these wraps. */
     for (uint32_t slot = 0; slot < definition->history.slot_count; slot += 1) {
         definition->history.slots[slot] = (ta_history_slot){ .offset = slot * words * 8u,
                                                              .bytes = (uint16_t)(words * 8u) };
     }
-    definition->history.storage_bytes = definition->history.slot_count * words * 8u;
+    definition->history.storage_bytes = storage_bytes;
     return ta_compiler_identity(compiler);
 }
 
@@ -18415,7 +18439,8 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
  * (ADR 0058 section 2): the data-model requirement; pass one over every state
  * in document order (kind, ID, duplicates); the root's <data>; pass two for
  * each state in document order; the root <initial>; the root <script>; the
- * configuration limit and the family; then the data model's preparation.
+ * configuration and history-storage limits and the family; then the data
+ * model's preparation.
  */
 /* One history state on the walk below, and the next default target to follow. */
 typedef struct {
@@ -27353,9 +27378,12 @@ struct ta_entry_frame {
 };
 
 /* The frame capacity ta_interpreter_init reserves: three per level of
- * nesting and per history state, and room for the first frame. */
-static uint32_t ta_entry_capacity(const ta_definition *definition) {
-    return 3u * (definition->max_state_depth + definition->history.slot_count + 1u) + 1u;
+ * nesting and per history state, and room for the first frame. Computed in
+ * 64 bits, so no depth or count wraps it; the compiler's scratch check
+ * refuses a definition whose frames would not fit in interpreterBytes, so
+ * for a compiled definition it fits in 32 bits. */
+static uint64_t ta_entry_capacity(const ta_definition *definition) {
+    return 3u * ((uint64_t)definition->max_state_depth + definition->history.slot_count + 1u) + 1u;
 }
 
 static bool ta_entry_push(ta_interpreter *it, uint32_t *top, struct ta_entry_frame frame) {
@@ -28342,9 +28370,10 @@ static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
  */
 
 /* The executor's frames: an open block per level, and a <foreach> frame
- * under each body (ADR 0060). */
-static uint32_t ta_exec_capacity(const ta_definition *definition) {
-    return 2u * definition->max_action_depth + 1u;
+ * under each body (ADR 0060). Computed in 64 bits, as the entry frames are,
+ * and as bounded for a compiled definition. */
+static uint64_t ta_exec_capacity(const ta_definition *definition) {
+    return 2u * (uint64_t)definition->max_action_depth + 1u;
 }
 
 /* The words of a set over the definition's data declarations; never 0. */
@@ -28361,7 +28390,7 @@ static ta_result ta_continuation_capacity(const ta_definition *definition, size_
         .decl_words = ta_decl_words(definition),
         .state_count = definition->state_count,
         .enabled_count = definition->state_count + 1u,
-        .frame_count = ta_exec_capacity(definition),
+        .frame_count = (uint32_t)ta_exec_capacity(definition), /* bounded by the scratch check */
     };
     return ta_continuation_bytes(&shape, out);
 }
@@ -28524,6 +28553,14 @@ TA_PRIVATE ta_result ta_interpreter_scratch_need(const ta_definition *definition
     size_t start = offsetof(ta_arena_block, data);
     size_t words = ta_bits_words(definition->state_count);
     size_t capacity = (size_t)definition->state_count + 1u;
+    /* The counts that grow with nesting and guards, in 64 bits so none
+     * wraps; one a size_t cannot hold is a need no allocator can serve. */
+    uint64_t entry_frames = ta_entry_capacity(definition);
+    uint64_t exec_frames = ta_exec_capacity(definition);
+    uint64_t conditions = (uint64_t)ta_trace_guard_capacity(definition) + 1u;
+    if (entry_frames > SIZE_MAX || exec_frames > SIZE_MAX || conditions > SIZE_MAX) {
+        return TA_ERR_NOMEM;
+    }
     const ta_layout_entry takes[] = {
         { .size = start, .alignment = _Alignof(ta_arena_block), .count = 1 },
         /* the eleven state sets, one allocation each */
@@ -28543,15 +28580,15 @@ TA_PRIVATE ta_result ta_interpreter_scratch_need(const ta_definition *definition
         { .size = sizeof(ta_transition_id), .alignment = _Alignof(ta_transition_id), .count = capacity },
         { .size = sizeof(bool), .alignment = _Alignof(bool), .count = capacity },
         { .size = sizeof(struct ta_entry_frame), .alignment = _Alignof(struct ta_entry_frame),
-          .count = ta_entry_capacity(definition) },
+          .count = (size_t)entry_frames },
         { .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
           .count = (size_t)definition->history.slot_count + 1u },
-        { .size = sizeof(ta_exec_frame), .alignment = _Alignof(ta_exec_frame), .count = ta_exec_capacity(definition) },
+        { .size = sizeof(ta_exec_frame), .alignment = _Alignof(ta_exec_frame), .count = (size_t)exec_frames },
         { .size = sizeof(uint64_t), .alignment = _Alignof(uint64_t), .count = ta_decl_words(definition) },
         { .size = sizeof(ta_state_id), .alignment = _Alignof(ta_state_id),
           .count = 3u * (size_t)definition->state_count + 1u },
         { .size = sizeof(struct ta_trace_condition), .alignment = _Alignof(struct ta_trace_condition),
-          .count = (size_t)ta_trace_guard_capacity(definition) + 1u },
+          .count = (size_t)conditions },
     };
     ta_layout layout;
     ta_layout_init(&layout);
@@ -28591,13 +28628,14 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     if (it->default_history == NULL || it->enabled == NULL || it->filtered == NULL || it->remove == NULL) {
         return TA_ERR_NOMEM;
     }
-    it->entry_capacity = ta_entry_capacity(definition);
+    /* Both capacities fit in 32 bits: the compiler's scratch check bounds them. */
+    it->entry_capacity = (uint32_t)ta_entry_capacity(definition);
     it->entry_frames = ta_arena_alloc(&system->scratch, it->entry_capacity * sizeof(struct ta_entry_frame),
                                       _Alignof(struct ta_entry_frame));
     /* Each history state is expanded at most once. */
     it->history_stack = ta_arena_alloc(&system->scratch, (definition->history.slot_count + 1u) * sizeof(ta_state_id),
                                        _Alignof(ta_state_id));
-    it->exec_capacity = ta_exec_capacity(definition);
+    it->exec_capacity = (uint32_t)ta_exec_capacity(definition);
     it->exec_frames = ta_arena_alloc(&system->scratch, it->exec_capacity * sizeof(ta_exec_frame), _Alignof(ta_exec_frame));
     it->decl_words = ta_decl_words(definition);
     it->bound_decls = ta_arena_alloc(&system->scratch, (size_t)it->decl_words * sizeof(uint64_t), _Alignof(uint64_t));

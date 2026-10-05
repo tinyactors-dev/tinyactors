@@ -10,7 +10,8 @@
  *
  * ## Contract
  *
- * - `ta_bits_words(bits)` is the number of words that hold `bits` bits.
+ * - `ta_bits_words(bits)` is the number of words that hold `bits` bits,
+ *   for every `bits` up to `UINT32_MAX` (67108864 words); it does not wrap.
  * - `ta_bits_get` and `ta_bits_put` read and write one bit. The bit must
  *   lie within the words the caller has: that is a precondition, not
  *   checked.
@@ -39,8 +40,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/** The number of 64-bit words that hold `bits` bits. */
-static inline uint32_t ta_bits_words(uint32_t bits) { return (bits + 63u) / 64u; }
+/** The number of 64-bit words that hold `bits` bits; does not wrap near `UINT32_MAX`. */
+static inline uint32_t ta_bits_words(uint32_t bits) { return bits / 64u + (bits % 64u != 0u ? 1u : 0u); }
 /** Whether bit `bit` of `words` is set. */
 static inline bool ta_bits_get(const uint64_t *words, uint32_t bit) {
     return (words[bit / 64u] >> (bit % 64u)) & 1u;
