@@ -32,7 +32,7 @@ Every proposal starts with a status line:
 
 | Proposal | Status | Touches |
 |---|---|---|
-| [The ring protocol](ring-proto/README.md) | Sketch | tinyactors-core, tinyactors-host (deleted), tinyactors-napi, tinyactors-test |
+| [The ring protocol](ring-proto/README.md) | Adopted (core ADRs 0098 to 0105) | tinyactors-core, tinyactors-host (deleted), tinyactors-napi, tinyactors-test |
 | [SQLite host](sqlite-host.md) | Sketch | tinyactors-core, a new tinyactors-sqlite |
 | [PostgreSQL host](postgres-host.md) | Sketch | tinyactors-core, a new tinyactors-postgres |
 | [Host kernel](host-kernel.md) | Adopted → [kernel ADRs](../../tinyactors-host/docs/adr/README.md), [roadmap](../../ROADMAP.md) | tinyactors-napi, tinyactors-test, a new tinyactors-host |

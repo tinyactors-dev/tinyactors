@@ -5,6 +5,37 @@ own `ROADMAP.md` holds its detailed steps; ideas that are not decided yet
 are in [`docs/proposals/`](docs/proposals/README.md). How the layers divide
 the work is in the [README](README.md#layers-and-responsibilities).
 
+## The ring protocol
+
+Adopted 2026-10-05: core talks to its host through three rings, core
+holds its pending inputs in one pool, and the host kernel goes. The
+decisions are core ADRs 0098 to 0105, repository ADR 0003 and napi ADR
+0041; the plan, its rules and what runs where are in
+[IMPLEMENTATION.md](docs/proposals/ring-proto/IMPLEMENTATION.md).
+
+- [x] **Phase 1, the duplicates become blocks:** one unit per object
+  (1.0), hashes and formatters (1.1), generation handles (1.2), the test
+  allocator (1.3), the layout builder (1.4), the index pool under the
+  actor table (1.5), the hash table under atoms and the trie (1.6); 1.7
+  found nothing to fold, 1.8 removed dead code. Core and native bytes per
+  actor are unchanged (`bench-compare`, recorded in the plan).
+- [x] **Phase 2, the new blocks, no callers yet:** the intrusive list,
+  paged array, heap, FIFO, quota, byte ring, record codec and its
+  generator, byte sinks and sources, name resolver, chunk chain and type
+  registry. The claim set (2.10) waits for a user.
+- [x] **Phase 3, names are matched by lookup:** the matcher runs over a
+  name's atoms; `typeexpr` lookups no longer intern.
+- [ ] **Phase 4, core gains its queue:** `tel` and the host clock (4.1),
+  the pool and `ta_run` with one slot (4.2), delayed sends as envelopes
+  (4.3), no allocation in a macrostep (4.4), macrostep slots (4.5).
+- [ ] **Phase 5, rings replace the vtables:** inputs (5.1), effects (5.2),
+  unloading and loading (5.3), definitions (5.4), recording and replay
+  (5.5); the test host becomes a ring driver in 5.1.
+- [ ] **Phase 6, the kernel goes:** napi drives the rings (6.1),
+  `tinyactors-otlp` (6.2), `tinyactors-host` deleted (6.3).
+- [ ] **Phase 7, close:** the removal table walked, the final
+  `bench-compare`, and core smaller than before Phase 1.
+
 ## Done recently
 
 - **Actors record their events through the application (2026-10-01)**,

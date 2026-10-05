@@ -1,9 +1,9 @@
 # Implementation: replacing core's plumbing with building blocks
 
-**Status:** Sketch (2026-10-04), part of [the ring protocol proposal](README.md).
-This describes how the replacement would proceed *if* the proposal is
-adopted. It is not an instruction to start. Adoption comes first: see
-[Phase 0](#phase-0-adopt).
+**Status:** In progress (2026-10-05), part of [the ring protocol proposal](README.md),
+adopted as core ADRs 0098 to 0105, repository ADR 0003 and napi ADR 0041.
+Phases 0 to 3 are done; the root [ROADMAP](../../../ROADMAP.md#the-ring-protocol)
+tracks the phases.
 
 This plan replaces [migration.md's "rough order of
 work"](reference/migration.md#a-rough-order-of-work). Its block names
