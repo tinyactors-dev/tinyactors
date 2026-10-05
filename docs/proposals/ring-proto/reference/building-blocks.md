@@ -37,6 +37,16 @@ content. That is during admission, after a macrostep ends, or at
 registration, spawn or load. "A macrostep never allocates" means that only
 safe points may refill a block.
 
+One recorded exception (ring-proto 4.2d): `ta_mail_macrostep_ended` runs in
+`ta_run_complete`, after the unit has ended but before the input is
+completed, and for mail to a gone session it may allocate the session's key
+address (an intern, plus a text buffer when the key is over 160 bytes). It
+is a safe point by the definition above (no slot is inside executable
+content), and a failure recycles the mail to its sender with no partial
+state; but the "input" row's "never" holds only for the mail it places
+without a key. Interning the key at send time would allocate inside the unit,
+which is not allowed, so the allocation stays here.
+
 ## The catalog
 
 Verdicts:

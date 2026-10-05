@@ -1,6 +1,6 @@
 # ADR 0099: Pending inputs are envelopes in one pool per system
 
-**Status:** Accepted (2026-10-04); sections 1 to 5, 7 and 8 implemented in ring-proto step 4.2a (see the implementation notes at the end), the rest pending (4.2b, 4.2c). Supersedes ADR 0011, ADR 0029, ADR 0040, ADR 0055, ADR 0064, ADR 0069, ADR 0093 and ADR 0095, each in the part section 10 names; the rest of each stays. Run-time names in the name area are ADR 0100; delayed sends join the pool in ADR 0101; slots and the chain limit are ADR 0103.
+**Status:** Accepted (2026-10-04); sections 1 to 5, 7 and 8 implemented in ring-proto step 4.2a, and in 4.2d the mail, waiting lists, router deletion and the event-block cache (see the implementation notes at the end); partly implemented: the start record and kept event in sparse state, the kernel's admission-only scheduler (4.2d's remainder) and the name area (4.2b) are pending. Supersedes ADR 0011, ADR 0029, ADR 0040, ADR 0055, ADR 0064, ADR 0069, ADR 0093 and ADR 0095, each in the part section 10 names; the rest of each stays. Run-time names in the name area are ADR 0100; delayed sends join the pool in ADR 0101; slots and the chain limit are ADR 0103.
 **Date:** 2026-10-04
 
 ## Context
@@ -496,6 +496,12 @@ beyond it:
 - **Costs.** The pool and the 168-byte envelope are unchanged; a mail that
   waits makes no allocator call, and the sweep `mail_sweep_test` fails every
   allocation of a send, a placement and a recycle in turn.
+- **Ordering across sources.** Host posts to a non-resident named address
+  wait in the kernel's per-load mailbox and chart mail for it waits on core's
+  list; when the load ends core's list moves first and the kernel's mailbox
+  is handed over after it. Each source keeps its order; chart mail precedes
+  host posts to the address, whatever order they arrived in. This goes when
+  the kernel's mailboxes do.
 - **Not changed.** The kernel keeps the mailboxes of the host's own posts
   (`tah_system_post_named`) until the scheduler step, and the `ta_input_watch`
   hook stays an interim kernel hook that goes in Phase 6. `waiting-full`

@@ -305,6 +305,17 @@ left after 4.2a and the core's waiting machinery:
   letter; `system.stats().messages.overflow`, the metric
   `tinyactors.messages.overflow`, `eventBlockCache` and the delayed send's
   `submitted` are gone.
+- Ordering across sources (4.2d). The kernel still routes the host's own posts
+  to a non-resident named address through its per-load mailbox
+  (`tah_system_post_named`), while chart mail for the same address waits on
+  core's list. When the load ends, core's list moves to the run queue (in
+  `ta_actor_publish` or `ta_address_loaded`) and the kernel's mailbox is
+  handed over afterwards (`tah_loads_finish`), so chart mail for the address
+  precedes the host's posts to it whatever order they arrived in; each
+  source keeps its own order. The two halves merge when the mailboxes go
+  (the remainder below). `ta_actor_publish_completion` is deleted: the
+  completion is mail from the child's macrostep and nothing is held to send
+  again.
 - Measured on this machine (4 CPUs, Linux x86_64): `sizeof(ta_envelope)` is
   168, unchanged. `scale_test` bytes per actor 333.2 at 50,000 and 329.9 at
   200,000 (329 before; the 3 bytes at 50,000 are the fixed pool and reserve
@@ -327,10 +338,19 @@ left after 4.2a and the core's waiting machinery:
   back-pressure to the caller, changes what every napi user sees (queue-full
   versus pool full, dead-letter reasons, `mailbox()`, `maxQueuedMessages`)
   and needs a decision before it is built. (3) The name area and run-time
-  names as bytes are 4.2b's. (4) `mise run test:full` was not run; the
-  fast passes of core (with asan), the kernel (with asan), the test host and
-  napi on Node were. Bun does not load the addon in this environment, and the
-  `otel-metrics` and `otel-sdk` suites need packages that are not installed.
+  names as bytes are 4.2b's. (4) `mise run test:full` was run on the
+  tip of the review fixes: acronyms, changelog, portability, toolchain, core
+  (with asan and the exhaustive programs at `TA_TEST_FULL=1`), the kernel
+  (with asan), tinyxml, the SCXML codec and the test host (540 scenarios,
+  exhaustive ones included) passed. In napi, the binding check, build,
+  pack-check, API-status check, the IRP suite and every JS suite passed on
+  Node, and `scale.js` passed on Node up to a million actors. Not run here:
+  Bun (it does not load the addon in this environment), the `otel-metrics`
+  and `otel-sdk` suites (packages not installed), and `check-types` (the
+  Node type declarations are not installed, so it reports `AbortSignal`
+  unknown); the aggregate napi task therefore stops at `check-types`.
+  The full-pass run before these fixes found `bindings --check` stale after
+  `ta_actor_publish_completion` was deleted; the bindings were regenerated.
 
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
