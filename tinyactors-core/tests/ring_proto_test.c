@@ -651,6 +651,142 @@ static void test_malformed_every_message(void) {
     }
 }
 
+/* ---- fuzz ---- */
+
+/* xorshift64*: a fixed seed, so a failure is reproduced by the same run. */
+typedef struct rng {
+    uint64_t state;
+} rng;
+
+static uint64_t rng_next(rng *r) {
+    uint64_t x = r->state;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    r->state = x;
+    return x * 0x2545F4914F6CDD1Dull;
+}
+
+static uint32_t rng_below(rng *r, uint32_t bound) { return (uint32_t)(rng_next(r) % bound); }
+
+typedef struct fuzz_tally {
+    uint64_t runs;
+    uint64_t fault[8];
+} fuzz_tally;
+
+/* An input for the checker and the ring it was made for (TA_RING_COUNT: none, so a random one). */
+typedef struct fuzz_input {
+    const unsigned char *bytes;
+    size_t length;
+    uint32_t ring;
+} fuzz_input;
+
+/* One input through the checker, mostly from the ring it was made for, with a random expected seq. */
+static void fuzz_one(rng *r, const fuzz_input *input, fuzz_tally *tally) {
+    static const ta_ring_mode modes[TA_RING_COUNT] = { TA_RING_LOSSLESS, TA_RING_LOSSLESS, TA_RING_LOSSY };
+    const unsigned char *bytes = input->bytes;
+    size_t length = input->length;
+    uint32_t ring = input->ring < TA_RING_COUNT && rng_below(r, 8) != 0 ? input->ring : rng_below(r, TA_RING_COUNT);
+    uint64_t next_seq = rng_below(r, 4) == 0 ? rng_next(r) | 1u : 1u + rng_below(r, 8);
+    trial t = { (ta_ring_id)ring, modes[ring], next_seq };
+    ta_record record;
+    ta_record_fault fault = trial_check(&t, bytes, length, &record);
+    tally->runs += 1;
+    tally->fault[(unsigned)fault <= (unsigned)TA_RECORD_VALUE ? fault : 0] += 1;
+}
+
+/* A valid record of a random message, written with `seq`. Returns its size. */
+static uint32_t fuzz_valid(rng *r, unsigned char *out, uint64_t seq, uint16_t *kind) {
+    _Alignas(8) unsigned char data[RING_PROTO_CASE_DATA_BYTES];
+    static arena a;
+    const ring_proto_case *c = &ring_proto_cases[rng_below(r, TA_ARRAY_COUNT(ring_proto_cases))];
+    c->fill(data, (uint32_t)rng_next(r), pool);
+    uint32_t size = 0;
+    CHECK(c->size(data, &size) == TA_OK);
+    arena_reset(&a, size);
+    ta_ring_reservation to = { .bytes = arena_record(&a), .size = size, .seq = seq };
+    CHECK(c->write(data, &to) == TA_OK);
+    memcpy(out, arena_record(&a), size);
+    *kind = c->kind;
+    return size;
+}
+
+static void fuzz_random_bytes(rng *r, uint64_t iterations, fuzz_tally *tally) {
+    unsigned char bytes[304];
+    for (uint64_t i = 0; i < iterations; i += 1) {
+        uint32_t length = rng_below(r, 301);
+        for (uint32_t k = 0; k < length; k += 1) bytes[k] = (unsigned char)rng_next(r);
+        /* Pure noise is refused at the size field almost always; half of the inputs get a plausible header so that deeper checks run. */
+        if (length >= 32 && (i & 1u) != 0) {
+            poke32(bytes, TA_RECORD_AT_SIZE, length);
+            poke16(bytes, TA_RECORD_AT_KIND, (uint16_t)(0x0101 + rng_below(r, 3) * 0x100 + rng_below(r, 24)));
+            poke64(bytes, TA_RECORD_AT_SEQ, 1u + rng_below(r, 2));
+        }
+        fuzz_input input = { bytes, length, TA_RING_COUNT };
+        fuzz_one(r, &input, tally);
+    }
+}
+
+static void fuzz_mutations(rng *r, uint64_t iterations, fuzz_tally *tally) {
+    static const uint32_t extremes[] = { 0, 1, 7, 8, 0x7FFFFFFFu, 0x80000000u, 0xFFFFFFFFu, 0xFFFFFFF0u, 0xFFFFFFF8u, 0x100u };
+    unsigned char valid[1024];
+    unsigned char bytes[1100];
+    for (uint64_t i = 0; i < iterations; i += 1) {
+        uint16_t kind;
+        uint64_t seq = 1u + rng_below(r, 8);
+        uint32_t size = fuzz_valid(r, valid, seq, &kind);
+        memcpy(bytes, valid, size);
+        uint32_t length = size;
+        switch (rng_below(r, 5)) {
+        case 0: { /* flip one to four bytes */
+            uint32_t flips = 1u + rng_below(r, 4);
+            for (uint32_t k = 0; k < flips; k += 1) bytes[rng_below(r, size)] ^= (unsigned char)(1u << rng_below(r, 8));
+            break;
+        }
+        case 1: { /* overwrite a u32 in the header or fixed part with an extreme */
+            /* Half of them land on a span's offset or length, where the interesting checks are. */
+            const ta_record_descriptor *d = descriptor_of(kind);
+            uint32_t at = d->span_count > 0 && rng_below(r, 2) == 0 ? d->spans[rng_below(r, d->span_count)].at + 4u * rng_below(r, 2)
+                                                                    : 4u * rng_below(r, d->fixed_size / 4u);
+            uint32_t value = rng_below(r, 3) == 0 ? size + rng_below(r, 17) - 8u : extremes[rng_below(r, TA_ARRAY_COUNT(extremes))];
+            poke32(bytes, at, value);
+            break;
+        }
+        case 2: /* truncate */
+            length = rng_below(r, size);
+            break;
+        case 3: /* extend, size field untouched */
+            memset(bytes + size, 0, 16);
+            length = size + 1u + rng_below(r, 16);
+            break;
+        default: /* overwrite a byte with a random value */
+            bytes[rng_below(r, size)] = (unsigned char)rng_next(r);
+            break;
+        }
+        fuzz_input input = { bytes, length, descriptor_of(kind)->ring };
+        fuzz_one(r, &input, tally);
+    }
+}
+
+static void test_fuzz(uint64_t iterations) {
+    const uint64_t seed = 0x1234567890ABCDEFull;
+    rng r = { seed };
+    fuzz_tally tally;
+    memset(&tally, 0, sizeof tally);
+    fuzz_random_bytes(&r, iterations / 2, &tally);
+    fuzz_mutations(&r, iterations / 2, &tally);
+    CHECK(tally.runs == iterations / 2 * 2);
+    /* The fuzz reaches both outcomes, and the deep checks, or it proves little. */
+    CHECK(tally.fault[TA_RECORD_OK] > 0 && tally.fault[TA_RECORD_SIZE] > 0 && tally.fault[TA_RECORD_SPAN] > 0);
+    CHECK(tally.fault[TA_RECORD_SEQ] > 0 && tally.fault[TA_RECORD_VALUE] > 0 && tally.fault[TA_RECORD_KIND] > 0);
+    printf("ring_proto_test: fuzz %llu inputs: ok %llu, truncated %llu, size %llu, kind %llu, wrong ring %llu, seq %llu, span %llu, value %llu\n",
+           (unsigned long long)tally.runs, (unsigned long long)tally.fault[TA_RECORD_OK], (unsigned long long)tally.fault[TA_RECORD_TRUNCATED],
+           (unsigned long long)tally.fault[TA_RECORD_SIZE], (unsigned long long)tally.fault[TA_RECORD_KIND],
+           (unsigned long long)tally.fault[TA_RECORD_WRONG_RING], (unsigned long long)tally.fault[TA_RECORD_SEQ],
+           (unsigned long long)tally.fault[TA_RECORD_SPAN], (unsigned long long)tally.fault[TA_RECORD_VALUE]);
+    if (failures != 0) fprintf(stderr, "ring_proto_test: fuzz seed 0x%llX\n", (unsigned long long)seed);
+}
+
 int main(void) {
     const char *requested = getenv("TA_TEST_FULL");
     full_run = requested != NULL && requested[0] != '\0' && strcmp(requested, "0") != 0;
@@ -663,6 +799,8 @@ int main(void) {
     test_write_scalars_and_flags();
     test_round_trip_every_message((unsigned)pick(24, 400));
     test_malformed_every_message();
+    test_fuzz(pick(20000, 5000000));
+    CHECK(ta_test_allocator_finish(&heap) == 0 && heap.stats.bad_frees == 0);
     if (failures != 0) {
         fprintf(stderr, "ring_proto_test: %d failure(s)\n", failures);
         return 1;
