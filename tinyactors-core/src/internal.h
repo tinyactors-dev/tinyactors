@@ -6,6 +6,7 @@
 #include "format.h"
 #include "layout.h"
 #include "quota.h"
+#include "claim_set.h"
 #include "fifo.h"
 #include "ring.h"
 #include "vec.h"
