@@ -159,6 +159,19 @@ typedef struct {
     uint32_t slots_base;   /* in pattern_slots */
 } pattern_frame;
 
+/* An object literal being compiled. While `gathering`, its properties so
+ * far have static keys (their constants in literal_keys, from keys_base)
+ * and only their values are on the stack: OBJECT_LITERAL makes the object
+ * of them all at once, at the end or before the first property that needs
+ * the object to exist (a spread, a computed key, a key repeated or an array
+ * index, whose order a put settles). After that, each property is put. */
+#define LITERAL_GATHERED_MAX 32u   /* values held on the stack at most */
+
+typedef struct {
+    uint32_t keys_base;    /* in literal_keys */
+    bool gathering;
+} literal_frame;
+
 enum { NS_NONE = 0, NS_MATH, NS_OBJECT, NS_NUMBER, NS_ARRAY };
 
 /* An explicit export: resolved when it arrives, or at the end of the module. */
@@ -234,6 +247,9 @@ struct sjs_compiler {
     sjs_buf patterns;
     sjs_buf pattern_keys;
     sjs_buf pattern_slots;
+    /* Object literals open, and the constants of their gathered keys. */
+    sjs_buf literals;
+    sjs_buf literal_keys;
     /* Method calls: the last instruction, and the last jump target. */
     uint32_t last_op;
     bool last_op_valid;
@@ -1085,16 +1101,21 @@ static sjs_result pattern_computed_key(sjs_compiler *c, const sjs_event *e) {
     return write_slot(c, ins(SJS_OP_PATTERN_COMPUTED, slot, e->at));
 }
 
-/* The static keys of the innermost object pattern, as one array constant. */
-static sjs_result static_keys(sjs_compiler *c, const pattern_frame *f, uint32_t *index) {
-    uint32_t n = SJS_BUF_COUNT(c->pattern_keys, uint32_t) - f->keys_base;
+/* Constants `keys[base..]`, keys, as one array constant; UINT32_MAX for none. */
+typedef struct {
+    const sjs_buf *keys;
+    uint32_t base;
+} key_list;
+
+static sjs_result keys_constant(sjs_compiler *c, key_list list, uint32_t *index) {
+    uint32_t n = SJS_BUF_COUNT(*list.keys, uint32_t) - list.base;
     *index = UINT32_MAX;
     if (n == 0) return SJS_OK;
     sjs_array *keys;
     sjs_result r = sjs_array_make(c->context, n, &keys);
     if (r != SJS_OK) return r;
     for (uint32_t i = 0; i < n; i++) {
-        sjs_value key = SJS_BUF_AT(c->constants, sjs_value, SJS_BUF_AT(c->pattern_keys, uint32_t, f->keys_base + i));
+        sjs_value key = SJS_BUF_AT(c->constants, sjs_value, SJS_BUF_AT(*list.keys, uint32_t, list.base + i));
         sjs_retain(key);
         keys->items[keys->length++] = key;
     }
@@ -1114,7 +1135,7 @@ static sjs_result pattern_rest(sjs_compiler *c, const sjs_event *e) {
         if (read_slot(c, SJS_BUF_AT(c->pattern_slots, uint32_t, frame.slots_base + i), e->at) != SJS_OK) return SJS_ERR_PROGRAM;
     }
     uint32_t keys;
-    sjs_result r = static_keys(c, &frame, &keys);
+    sjs_result r = keys_constant(c, (key_list){ &c->pattern_keys, frame.keys_base }, &keys);
     if (r != SJS_OK) return fail_result(c, r, e->at);
     if (op32(c, ins(SJS_OP_PATTERN_REST_OBJECT, keys, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
     return u16(c, (uint16_t)computed);
@@ -1533,6 +1554,80 @@ static sjs_result module_end(sjs_compiler *c, sjs_position at) {
 }
 
 /* ------------------------------------------------------------------------
+ * Object literals
+ */
+
+static literal_frame *top_literal(sjs_compiler *c) {
+    uint32_t n = SJS_BUF_COUNT(c->literals, literal_frame);
+    return n == 0 ? NULL : &SJS_BUF_AT(c->literals, literal_frame, n - 1);
+}
+
+static sjs_result object_begin(sjs_compiler *c, const sjs_event *e) {
+    literal_frame f = { SJS_BUF_COUNT(c->literal_keys, uint32_t), true };
+    sjs_result r = buf_add(c, &c->literals, bytes_of(&f, sizeof f));
+    return r == SJS_OK ? SJS_OK : fail_result(c, r, e->at);
+}
+
+/* Make the object of the keys gathered so far (SJS_LITERAL_* flags), and
+ * put the literal's later properties. */
+static sjs_result object_make(sjs_compiler *c, sjs_position at, uint8_t flags) {
+    literal_frame *f = top_literal(c);
+    if (f == NULL) return out_of_order(c, at);
+    if (!f->gathering) return SJS_OK;
+    uint32_t keys;
+    sjs_result r = keys_constant(c, (key_list){ &c->literal_keys, f->keys_base }, &keys);
+    if (r != SJS_OK) return fail_result(c, r, at);
+    f->gathering = false;
+    c->literal_keys.length = f->keys_base * (uint32_t)sizeof(uint32_t);
+    if (op32(c, ins(SJS_OP_OBJECT_LITERAL, keys, at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    return u8(c, flags);
+}
+
+/* Can the key, a constant, join the keys gathered? */
+static bool gathers(sjs_compiler *c, const literal_frame *f, uint32_t index) {
+    uint32_t n = SJS_BUF_COUNT(c->literal_keys, uint32_t);
+    if (n - f->keys_base >= LITERAL_GATHERED_MAX) return false;
+    const sjs_string *key = SJS_AS_STRING(SJS_BUF_AT(c->constants, sjs_value, index));
+    /* An array index goes before the other keys, in order: a put places it. */
+    if ((key->h.flags & SJS_STRING_INDEX) != 0) return false;
+    /* The parser refuses this key; a put would fault on it. */
+    if (sjs_str_equal(sjs_string_view(key), SJS_STR("__proto__"))) return false;
+    /* Constants are one per text, so a repeated key has the same one. */
+    for (uint32_t i = f->keys_base; i < n; i++) {
+        if (SJS_BUF_AT(c->literal_keys, uint32_t, i) == index) return false;
+    }
+    return true;
+}
+
+static sjs_result object_key(sjs_compiler *c, const sjs_event *e) {
+    literal_frame *f = top_literal(c);
+    if (f == NULL) return out_of_order(c, e->at);
+    uint32_t index;
+    if (string_constant(c, e, &index) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (f->gathering && gathers(c, f, index)) {
+        sjs_result r = buf_add(c, &c->literal_keys, bytes_of(&index, sizeof index));
+        return r == SJS_OK ? SJS_OK : fail_result(c, r, e->at);
+    }
+    if (object_make(c, e->at, SJS_LITERAL_OPEN) != SJS_OK) return SJS_ERR_PROGRAM;
+    return op32(c, ins(SJS_OP_CONSTANT, index, e->at));
+}
+
+static sjs_result object_property(sjs_compiler *c, const sjs_event *e) {
+    literal_frame *f = top_literal(c);
+    if (f == NULL) return out_of_order(c, e->at);
+    /* A gathered value stays on the stack until the object is made. */
+    if (f->gathering) return SJS_OK;
+    return op(c, SJS_OP_OBJECT_PUT, e->at);
+}
+
+static sjs_result object_end(sjs_compiler *c, const sjs_event *e) {
+    if (object_make(c, e->at, 0) != SJS_OK) return SJS_ERR_PROGRAM;
+    c->literals.length -= (uint32_t)sizeof(literal_frame);
+    c->last_op_valid = false;
+    return SJS_OK;
+}
+
+/* ------------------------------------------------------------------------
  * Events
  */
 
@@ -1788,21 +1883,22 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
     case SJS_EV_SPREAD_ELEMENT:
         return op(c, SJS_OP_ARRAY_SPREAD, e->at);
     case SJS_EV_ARRAY_END:
-    case SJS_EV_OBJECT_END:
         c->last_op_valid = false;
         return SJS_OK;
+    case SJS_EV_OBJECT_END:
+        return object_end(c, e);
     case SJS_EV_OBJECT_BEGIN:
-        return op(c, SJS_OP_OBJECT_NEW, e->at);
-    case SJS_EV_KEY: {
-        uint32_t index;
-        if (string_constant(c, e, &index) != SJS_OK) return SJS_ERR_PROGRAM;
-        return op32(c, ins(SJS_OP_CONSTANT, index, e->at));
-    }
+        return object_begin(c, e);
+    case SJS_EV_KEY:
+        return object_key(c, e);
     case SJS_EV_COMPUTED_KEY:
+        /* The key is on the stack, above the values gathered. */
+        if (object_make(c, e->at, SJS_LITERAL_ABOVE | SJS_LITERAL_OPEN) != SJS_OK) return SJS_ERR_PROGRAM;
         return op(c, SJS_OP_TO_KEY, e->at);
     case SJS_EV_PROPERTY:
-        return op(c, SJS_OP_OBJECT_PUT, e->at);
+        return object_property(c, e);
     case SJS_EV_SPREAD_PROPERTY:
+        if (object_make(c, e->at, SJS_LITERAL_ABOVE | SJS_LITERAL_OPEN) != SJS_OK) return SJS_ERR_PROGRAM;
         return op(c, SJS_OP_OBJECT_SPREAD, e->at);
     case SJS_EV_MEMBER: {
         if (c->space != NS_NONE) return read_space_member(c, e);
@@ -2044,7 +2140,7 @@ void sjs_compiler_destroy(sjs_compiler *compiler) {
     for (uint32_t i = 0; i < sizeof indices / sizeof indices[0]; i++) index_free(c, indices[i]);
     sjs_buf *bufs[] = { &c->code, &c->numbers, &c->constants, &c->functions, &c->captures, &c->lines,
                         &c->scopes, &c->bindings, &c->names, &c->pending_captures, &c->last_reads, &c->string_text, &c->global_text,
-                        &c->constructs, &c->jumps, &c->patterns, &c->pattern_keys, &c->pattern_slots, &c->exports,
+                        &c->constructs, &c->jumps, &c->patterns, &c->pattern_keys, &c->pattern_slots, &c->literals, &c->literal_keys, &c->exports,
                         &c->stars, &c->sorting };
     for (uint32_t i = 0; i < sizeof bufs / sizeof bufs[0]; i++) sjs_buf_free(a, bufs[i]);
     sjs_mem_free(a, c, sizeof *c);

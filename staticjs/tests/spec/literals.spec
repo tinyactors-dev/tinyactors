@@ -181,6 +181,36 @@ two`
 --- value
 {"a":1}
 
+=== static keys, then a computed key, a spread and more static keys
+((x) => ({a: 1, b: x, ["c"]: 3, d: 4, ...{e: 5, a: 6}, f: 7, b: 8}))(2)
+--- value
+{"a":6,"b":8,"c":3,"d":4,"e":5,"f":7}
+
+=== an index key after static keys goes first
+({b: 1, a: 2, "1": "one", c: 3, 0: "zero"})
+--- value
+{"0":"zero","1":"one","b":1,"a":2,"c":3}
+
+=== a repeated key after static keys keeps its first place
+({a: 1, b: 2, c: 3, b: 4, d: 5})
+--- value
+{"a":1,"b":4,"c":3,"d":5}
+
+=== object literals nested in object literals and arrays
+[{a: {b: 1, c: [{d: 2}, {}]}, e: {...{f: 3}}}, {g: 4}]
+--- value
+[{"a":{"b":1,"c":[{"d":2},{}]},"e":{"f":3}},{"g":4}]
+
+=== a spread first, then static keys
+((o) => [{...o, c: 3}, o])({a: 1, b: 2})
+--- value
+[{"a":1,"b":2,"c":3},{"a":1,"b":2}]
+
+=== an object literal with many keys, read by key
+((o) => [o, o.k0, o.k20, o.k39, o.k40])({k0: 0, k1: 1, k2: 2, k3: 3, k4: 4, k5: 5, k6: 6, k7: 7, k8: 8, k9: 9, k10: 10, k11: 11, k12: 12, k13: 13, k14: 14, k15: 15, k16: 16, k17: 17, k18: 18, k19: 19, k20: 20, k21: 21, k22: 22, k23: 23, k24: 24, k25: 25, k26: 26, k27: 27, k28: 28, k29: 29, k30: 30, k31: 31, k32: 32, k33: 33, k34: 34, k35: 35, k36: 36, k37: 37, k38: 38, k39: 39})
+--- value
+[{"k0":0,"k1":1,"k2":2,"k3":3,"k4":4,"k5":5,"k6":6,"k7":7,"k8":8,"k9":9,"k10":10,"k11":11,"k12":12,"k13":13,"k14":14,"k15":15,"k16":16,"k17":17,"k18":18,"k19":19,"k20":20,"k21":21,"k22":22,"k23":23,"k24":24,"k25":25,"k26":26,"k27":27,"k28":28,"k29":29,"k30":30,"k31":31,"k32":32,"k33":33,"k34":34,"k35":35,"k36":36,"k37":37,"k38":38,"k39":39},0,20,39,undefined]
+
 === a set
 new Set([1, "1", 1, NaN, NaN, 0, -0])
 --- value

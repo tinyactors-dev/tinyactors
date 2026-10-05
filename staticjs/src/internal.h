@@ -278,6 +278,15 @@ typedef struct {
     sjs_value value;
 } sjs_put;
 sjs_result sjs_object_put_key(sjs_context *context, sjs_object **object, sjs_put put);
+/* An object literal whose keys are known when it compiles: distinct, none
+ * an array index, so they go in in order. Takes over the values'
+ * references when it succeeds. */
+typedef struct {
+    const sjs_array *keys;  /* NULL for none */
+    const sjs_value *values;
+    uint32_t capacity;      /* at least the keys' count */
+} sjs_literal;
+sjs_result sjs_object_literal(sjs_context *context, sjs_literal literal, sjs_value *out);
 /* The entry of `key`, or NULL. */
 const sjs_entry *sjs_object_find(const sjs_object *object, sjs_str key);
 /* Add to a set the caller holds alone; takes over the element's reference. */
@@ -440,6 +449,8 @@ typedef enum {
     SJS_OP_OBJECT_NEW,
     SJS_OP_OBJECT_PUT,
     SJS_OP_OBJECT_SPREAD,
+    SJS_OP_OBJECT_LITERAL, /* u32 constant (array of keys, or UINT32_MAX), u8 SJS_LITERAL_*:
+                            * [n values, above] -> [object, above], n the keys' count */
     SJS_OP_TO_KEY,
     SJS_OP_CLOSURE,        /* u32 function */
     SJS_OP_RETURN,
@@ -458,6 +469,10 @@ typedef enum {
 /* SJS_OP_CALL flags. */
 #define SJS_CALL_METHOD 1u
 #define SJS_CALL_SPREAD 2u
+
+/* SJS_OP_OBJECT_LITERAL flags. */
+#define SJS_LITERAL_ABOVE 1u  /* one value is above the literal's values: a spread's source or a computed key */
+#define SJS_LITERAL_OPEN 2u   /* more properties follow, put one by one */
 
 /* sjs_function_info flags. */
 #define SJS_FUNCTION_REST 1u  /* the last parameter takes the rest of the arguments, as an array */

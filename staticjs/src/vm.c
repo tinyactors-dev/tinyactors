@@ -1241,6 +1241,35 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
         sjs_vm_push(vm, result);
         return;
     }
+    case SJS_OP_OBJECT_LITERAL: {
+        f->pc = pc + 5;
+        uint32_t index = sjs_read32(code + pc);
+        uint8_t flags = code[pc + 4];
+        uint32_t above = (flags & SJS_LITERAL_ABOVE) != 0 ? 1u : 0u;
+        const sjs_array *keys = index == UINT32_MAX ? NULL : SJS_AS_ARRAY(f->program->constants[index]);
+        uint32_t n = keys == NULL ? 0 : keys->length;
+        /* Exact when the literal is complete. With room for a few more, as
+         * OBJECT_NEW gives, when properties follow, and for `{}`, which
+         * often becomes an accumulator that a spread takes over and grows. */
+        uint32_t capacity = n < 4u && (n == 0 || (flags & SJS_LITERAL_OPEN) != 0) ? 4u : n;
+        uint32_t base = vm->sp - above - n;
+        if (n == 0 && vm->sp >= vm->stack_capacity) {
+            sjs_vm_stack_full(vm, sjs_undefined());
+            return;
+        }
+        sjs_result r = sjs_object_literal(vm->context, (sjs_literal){ keys, &vm->stack[base], capacity }, &result);
+        if (r != SJS_OK) {
+            sjs_vm_fail(vm, r);
+            return;
+        }
+        /* The object took the values over and goes in their place, under
+         * the one value above them, if any (a spread's source or a
+         * computed key). */
+        if (above != 0) vm->stack[base + 1u] = vm->stack[base + n];
+        vm->stack[base] = result;
+        vm->sp = base + 1u + above;
+        return;
+    }
     case SJS_OP_OBJECT_PUT: {
         f->pc = pc;
         sjs_value value = sjs_vm_pop(vm);
