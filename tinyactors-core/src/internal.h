@@ -13,6 +13,7 @@
 #include "pool.h"
 #include "ilist.h"
 #include "chain.h"
+#include "byte_io.h"
 #include "index_heap.h"
 #include "arena.h"
 #include "tree.h"

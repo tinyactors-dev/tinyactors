@@ -2227,6 +2227,100 @@ TA_PRIVATE uint32_t ta_chain_free(ta_pool *pool, ta_chain *chain);
 
 
 /*
+ * Package byte_io is the byte sinks and sources of core (building block D1 of
+ * docs/proposals/ring-proto; ADR 0090 for ta_byte_sink and ta_byte_source in
+ * include/tinyactors.h). Each type here adapts one kind of storage to the
+ * public interfaces, so that a data model writes or reads one unit of bytes
+ * without knowing where they go or come from.
+ *
+ * What it is for. A data model encodes a value by calling a sink in pieces
+ * and decodes one by asking a source for pieces. Core has three places that
+ * hold such bytes: an arena (an offload's encoded values), a caller's buffer
+ * (the bytes of an offloaded value being read back), and a chunk chain (A6:
+ * an envelope's name area, a parked continuation, later a host blob). This
+ * unit holds one adapter per place, so no caller writes its own.
+ *
+ * Lifetimes. Every adapter is call lifetime: a struct of a few stack lines in
+ * the caller, made for one write or read of one unit, dropped after. None of
+ * them owns the storage it works on; each says who does.
+ *
+ *	ta_arena_sink    the bytes belong to the arena, and live until the arena
+ *	                 is reset (the offload's lifetime). The sink frees nothing.
+ *	ta_memory_source the bytes belong to whoever lent them (the offload
+ *	                 buffer); they must outlive the read. Nothing is owned.
+ *
+ * When it allocates. Only ta_arena_sink, and only inside write when the
+ * current run is too small: it asks the arena it was given for a doubled run
+ * (at least 64 bytes), so it is used only where ta_arena_alloc is allowed.
+ * init, as, begin and end never allocate. The memory source never allocates.
+ *
+ * Failure. A sink answers TA_OP_NOMEM when its storage is full and changes
+ * nothing for the piece that failed. Pieces written before it stay until the
+ * writer calls end(keep=false), which discards the whole unit: that is how a
+ * unit is all or nothing (the writer must call end after a failed write, as
+ * ADR 0090 says). Size sums are checked: a unit whose size would overflow
+ * size_t answers TA_OP_NOMEM.
+ *
+ * Complexity. A write is O(piece), plus the copy of the unit so far when the
+ * arena sink grows (amortised O(1) per byte, as the run doubles). A read is
+ * O(piece).
+ *
+ * Usage, a unit through the arena and back:
+ *
+ *	ta_arena_sink state;
+ *	ta_arena_sink_init(&state, arena);
+ *	ta_byte_sink sink = ta_arena_sink_as(&state);
+ *	sink.v->begin(sink.self);
+ *	... datamodel->value_write(..., .sink = sink, ...);
+ *	sink.v->end(sink.self, status == TA_OP_OK);
+ *	ta_memory_source memory;
+ *	ta_memory_source_init(&memory, (ta_bytes){ state.ptr, state.len });
+ *	ta_byte_source source = ta_memory_source_as(&memory);
+ */
+
+/*
+ * ta_arena_sink gathers one unit into one run of an arena (ADR 0090). The
+ * run doubles as the unit grows; the arena keeps the runs it outgrew until it
+ * is reset. The fields are public because the caller reads ptr and len after
+ * end(keep=true); they are valid until the arena is reset.
+ */
+typedef struct ta_arena_sink {
+    ta_arena *arena;
+    uint8_t *ptr;
+    size_t len;
+    size_t cap;
+} ta_arena_sink;
+
+/* ta_arena_sink_init makes *sink an empty sink over `arena` (borrowed). It never allocates. */
+TA_PRIVATE void ta_arena_sink_init(ta_arena_sink *sink, ta_arena *arena);
+
+/*
+ * ta_arena_sink_as returns the ta_byte_sink that writes into *sink. The
+ * adapter borrows *sink, which must outlive it. begin starts a unit (len = 0,
+ * the run is reused); write appends and allocates only when the run is full;
+ * end(keep=false) sets len to 0 and frees nothing.
+ */
+TA_PRIVATE ta_byte_sink ta_arena_sink_as(ta_arena_sink *sink);
+
+/* ta_memory_source hands out the bytes of one unit in the reader's pieces. */
+typedef struct ta_memory_source {
+    ta_bytes bytes;
+    uint32_t at;
+} ta_memory_source;
+
+/* ta_memory_source_init makes *source read `bytes` (borrowed; they must outlive the read) from the start. */
+TA_PRIVATE void ta_memory_source_init(ta_memory_source *source, ta_bytes bytes);
+
+/*
+ * ta_memory_source_as returns the ta_byte_source that reads *source. read
+ * copies min(capacity, remaining) bytes and sets *got to the count; *got == 0
+ * means the unit has ended. It always answers TA_OP_OK and never allocates.
+ */
+TA_PRIVATE ta_byte_source ta_memory_source_as(ta_memory_source *source);
+
+
+
+/*
  * Package index_heap is the indexed min-heap (building block B2 of docs/
  * proposals/ring-proto): a priority queue of 32-bit item indices, ordered by
  * a key each item carries, in which any member can be removed in O(log n)
@@ -7577,6 +7671,86 @@ TA_PRIVATE uint32_t ta_chain_free(ta_pool *pool, ta_chain *chain) {
     }
     ta_mem_zero(chain, sizeof(*chain));
     return freed;
+}
+
+
+static ta_op_status ta_arena_sink_begin(void *self) {
+    ((ta_arena_sink *)self)->len = 0;
+    return TA_OP_OK;
+}
+
+static ta_op_status ta_arena_sink_write(void *self, ta_bytes bytes) {
+    ta_arena_sink *sink = self;
+    if (bytes.len == 0) {
+        return TA_OP_OK;
+    }
+    if ((size_t)bytes.len > sink->cap - sink->len) {
+        size_t need;
+        if (!ta_checked_add(sink->len, (size_t)bytes.len, &need)) {
+            return TA_OP_NOMEM;
+        }
+        size_t cap = sink->cap < 64u ? 64u : sink->cap;
+        while (cap < need) {
+            if (cap > SIZE_MAX / 2u) {
+                return TA_OP_NOMEM;
+            }
+            cap *= 2u;
+        }
+        uint8_t *grown = ta_arena_alloc(sink->arena, cap, _Alignof(uint64_t));
+        if (grown == NULL) {
+            return TA_OP_NOMEM;
+        }
+        if (sink->len != 0) {
+            ta_mem_copy(grown, sink->ptr, sink->len);
+        }
+        sink->ptr = grown;
+        sink->cap = cap;
+    }
+    ta_mem_copy(sink->ptr + sink->len, bytes.ptr, bytes.len);
+    sink->len += bytes.len;
+    return TA_OP_OK;
+}
+
+static void ta_arena_sink_end(void *self, bool keep) {
+    if (!keep) {
+        ((ta_arena_sink *)self)->len = 0;
+    }
+}
+
+static const ta_byte_sink_vtable ta_arena_sink_vtable = {
+    .begin = ta_arena_sink_begin,
+    .write = ta_arena_sink_write,
+    .end = ta_arena_sink_end,
+};
+
+TA_PRIVATE void ta_arena_sink_init(ta_arena_sink *sink, ta_arena *arena) {
+    *sink = (ta_arena_sink){ .arena = arena };
+}
+
+TA_PRIVATE ta_byte_sink ta_arena_sink_as(ta_arena_sink *sink) {
+    return (ta_byte_sink){ .self = sink, .v = &ta_arena_sink_vtable };
+}
+
+static ta_op_status ta_memory_source_read(void *self, const ta_byte_read_params *params) {
+    ta_memory_source *source = self;
+    uint32_t left = source->bytes.len - source->at;
+    uint32_t count = left < params->capacity ? left : params->capacity;
+    if (count != 0) {
+        ta_mem_copy(params->buffer, source->bytes.ptr + source->at, count);
+    }
+    source->at += count;
+    *params->got = count;
+    return TA_OP_OK;
+}
+
+static const ta_byte_source_vtable ta_memory_source_vtable = { .read = ta_memory_source_read };
+
+TA_PRIVATE void ta_memory_source_init(ta_memory_source *source, ta_bytes bytes) {
+    *source = (ta_memory_source){ .bytes = bytes };
+}
+
+TA_PRIVATE ta_byte_source ta_memory_source_as(ta_memory_source *source) {
+    return (ta_byte_source){ .self = source, .v = &ta_memory_source_vtable };
 }
 
 
@@ -20333,81 +20507,6 @@ static uint8_t *ta_offload_put_ref(uint8_t *at, const ta_actor_ref *ref) {
     return at;
 }
 
-/*
- * An arena sink (ADR 0090): one unit's pieces gathered into one run of the
- * arena, which doubles as the unit grows. The arena keeps the runs it
- * outgrew until it is reset, which is the offload's own lifetime.
- */
-typedef struct {
-    ta_arena *arena;
-    uint8_t *ptr;
-    size_t len;
-    size_t cap;
-} ta_arena_sink;
-
-static ta_op_status ta_arena_sink_begin(void *self) {
-    ((ta_arena_sink *)self)->len = 0;
-    return TA_OP_OK;
-}
-
-static ta_op_status ta_arena_sink_write(void *self, ta_bytes bytes) {
-    ta_arena_sink *sink = self;
-    if (bytes.len == 0) {
-        return TA_OP_OK;
-    }
-    if ((size_t)bytes.len > sink->cap - sink->len) {
-        size_t need = sink->len + (size_t)bytes.len;
-        size_t cap = sink->cap < 64u ? 64u : sink->cap;
-        while (cap < need) {
-            cap *= 2u;
-        }
-        uint8_t *grown = ta_arena_alloc(sink->arena, cap, _Alignof(uint64_t));
-        if (grown == NULL) {
-            return TA_OP_NOMEM;
-        }
-        if (sink->len != 0) {
-            ta_mem_copy(grown, sink->ptr, sink->len);
-        }
-        sink->ptr = grown;
-        sink->cap = cap;
-    }
-    ta_mem_copy(sink->ptr + sink->len, bytes.ptr, bytes.len);
-    sink->len += bytes.len;
-    return TA_OP_OK;
-}
-
-static void ta_arena_sink_end(void *self, bool keep) {
-    if (!keep) {
-        ((ta_arena_sink *)self)->len = 0;
-    }
-}
-
-static const ta_byte_sink_vtable ta_arena_sink_vtable = {
-    .begin = ta_arena_sink_begin,
-    .write = ta_arena_sink_write,
-    .end = ta_arena_sink_end,
-};
-
-/* A memory source: the bytes of one value, handed out in the reader's pieces. */
-typedef struct {
-    ta_bytes bytes;
-    uint32_t at;
-} ta_memory_source;
-
-static ta_op_status ta_memory_source_read(void *self, const ta_byte_read_params *params) {
-    ta_memory_source *source = self;
-    uint32_t left = source->bytes.len - source->at;
-    uint32_t count = left < params->capacity ? left : params->capacity;
-    if (count != 0) {
-        ta_mem_copy(params->buffer, source->bytes.ptr + source->at, count);
-    }
-    source->at += count;
-    *params->got = count;
-    return TA_OP_OK;
-}
-
-static const ta_byte_source_vtable ta_memory_source_vtable = { .read = ta_memory_source_read };
-
 /* One value through the data model; an absent value is stored as absent. */
 typedef struct {
     const ta_definition *definition;
@@ -20425,8 +20524,9 @@ static ta_result ta_offload_encode_value(const ta_offload_value_params *params) 
     if (datamodel->v->value_write == NULL) {
         return TA_ERR_UNSUPPORTED;
     }
-    ta_arena_sink state = { .arena = params->arena };
-    ta_byte_sink sink = { .self = &state, .v = &ta_arena_sink_vtable };
+    ta_arena_sink state;
+    ta_arena_sink_init(&state, params->arena);
+    ta_byte_sink sink = ta_arena_sink_as(&state);
     ta_fault fault = {0};
     (void)sink.v->begin(sink.self);
     ta_op_status status = datamodel->v->value_write(
@@ -20785,12 +20885,13 @@ static ta_result ta_offload_take_values(ta_offload_reader *reader, ta_system *sy
             return TA_ERR_UNSUPPORTED;
         }
         ta_value value = {0};
-        ta_memory_source memory = { .bytes = bytes };
+        ta_memory_source memory;
+        ta_memory_source_init(&memory, bytes);
         ta_fault fault = {0};
         ta_op_status status = datamodel->v->value_read(
             datamodel->self,
             &(ta_datamodel_value_read_params){ .shared = definition->datamodel_shared,
-                                               .source = { .self = &memory, .v = &ta_memory_source_vtable },
+                                               .source = ta_memory_source_as(&memory),
                                                .durable = false,
                                                .out = &value,
                                                .fault = &fault });
