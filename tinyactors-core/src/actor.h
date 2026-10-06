@@ -218,9 +218,17 @@ typedef struct ta_internal_queue {
     uint32_t count;
     uint32_t capacity;
     bool has_kept;
-    /* An event here, kept or queued, whose name core keeps only as text
-     * owns the envelope that holds it (`ta_run_release_name`). */
+    /* A queued event whose name core keeps only as text owns the envelope
+     * that holds it (`ta_run_release_name`). The kept event's name, when
+     * core keeps it as text, lives in `kept_text`, which the queue owns:
+     * its handle is `TA_RUN_NAME_KEPT` and the actor's slot (ADR 0100). */
     ta_event kept_event;
+    /* The kept event's name as text, `kept_len` bytes of `kept_capacity`;
+     * sized between inputs (ta_interpreter_keep_room), never in a
+     * macrostep. Null until a kept event first has a text name. */
+    char *kept_text;
+    uint32_t kept_len;
+    uint32_t kept_capacity;
     ta_queued_event events[];
 } ta_internal_queue;
 
@@ -333,6 +341,10 @@ typedef struct {
      * the generation already left, so the table costs no more per actor. */
     uint32_t link;
 } ta_actor_slot;
+
+/* The most actor slots a system issues: below 2^30, so a slot fits the
+ * kept-name handle (`TA_RUN_NAME_KEPT`, run.h). */
+#define TA_ACTOR_SLOTS_MAX ((uint32_t)1u << 30)
 
 /* Slots per page of the actor table, as a power of two: 4,096 slots, 64 KiB. */
 #define TA_ACTOR_PAGE_SHIFT 12u

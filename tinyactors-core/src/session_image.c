@@ -798,9 +798,9 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     }
     ta_event_name_id kept_name = image->events.kept_event.name;
     if (result == TA_OK && image->events.has_kept && image->events.kept_name.len != 0u) {
-        /* Its name, which core keeps only as text, gets an envelope of its
-         * own, as when the session kept the event (ADR 0100). */
-        result = ta_run_hold_name(system, image->events.kept_name, &kept_name);
+        /* Its name, which core keeps only as text, goes back into the
+         * queue's own storage, as when the session kept the event (ADR 0100). */
+        result = ta_interpreter_keep_name(system, actor, image->events.kept_name, &kept_name);
     }
     if (result == TA_OK && image->events.has_kept) {
         ta_event_retain(&image->events.kept_event, &actor->internal->kept_event);

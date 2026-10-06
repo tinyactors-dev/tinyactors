@@ -219,9 +219,10 @@ typedef enum {
     /** Held by a live local invoked child, on no list, for its completion
      * (`deadline.h`). */
     TA_ENVELOPE_INVOCATION_TOKEN = 6,
-    /** A completed input kept, on no list, only for the name its text
-     * holds: an invoked session's kept event names it (`run.h`). It holds
-     * no references. */
+    /** On no list, held only for the name its text holds: an internal
+     * event whose name core keeps as text, such as a `<send>` to
+     * #_internal or an invocation's error, names it (`ta_run_hold_name`).
+     * It holds no references. */
     TA_ENVELOPE_KEPT = 8
 } ta_envelope_state;
 
@@ -232,9 +233,6 @@ typedef enum {
 /** An input posted to an address whose load failed: refused when it is
  * reached, with the fault's code in `due` (`run.h`). */
 #define TA_ENVELOPE_FLAG_REFUSED ((uint8_t)0x04u)
-/** A taken input whose name an invoked session's kept event names: when it
- * completes it is kept (`TA_ENVELOPE_KEPT`), not given back. */
-#define TA_ENVELOPE_FLAG_KEEP ((uint8_t)0x08u)
 /** A timer offered once and refused, waiting to be offered again
  * (`deadline.h`): `<cancel>` and the end of its session leave it. */
 #define TA_ENVELOPE_FLAG_SUBMITTED ((uint8_t)0x10u)

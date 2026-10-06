@@ -668,6 +668,33 @@ static void test_publish_retires_invocations(void) {
     destroy_system(system);
 }
 
+/* A publish that fails after the names of the invocations it would retire
+ * are held gives them back: failing again and again on a small pool keeps
+ * the pool's room, and the session that failed is destroyed cleanly. */
+static void test_failed_publish_keeps_no_names(void) {
+    static const ta_param_value small[] = { { TA_PARAM_POOL_ENVELOPES, 8 } };
+    ta_system *system = create_system_with(small, 1);
+    ta_definition_id definition = define(system, "jobs", invoking);
+    ta_actor_id first = prepare_replaying(system, definition, &address_job, 0);
+    ta_actor_id second = prepare_replaying(system, definition, &address_job, 0);
+    (void)active_invoke(system, first);
+    (void)active_invoke(system, second);
+    CHECK(publish(system, first) == TA_OK);
+    CHECK(run(system, first) == TEST_DRIVE_STABLE);
+    for (int round = 0; round < 20; round += 1) {
+        /* The address is the first's: the second cannot be published. */
+        ta_result result = publish(system, second);
+        CHECK(result != TA_OK && result != TA_ERR_FULL);
+    }
+    CHECK(ta_actor_destroy(system, second) == TA_OK);
+    /* Every envelope the failed publishes held came back: the pool still
+     * admits up to its watermark. */
+    ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = first, .name = test_event_text(system, &e1),
+                                                               .event = &e1, .time = ta_system_time(system) }) == TA_OK);
+    destroy_system(system);
+}
+
 /* ------------------------------------------------------------------------
  * Result codes and withdrawal
  */
@@ -1038,6 +1065,7 @@ int main(void) {
     test_replay_matches_live_run();
     test_replayed_invocation_finalizes();
     test_publish_retires_invocations();
+    test_failed_publish_keeps_no_names();
     test_result_codes();
     test_publish_out_of_memory();
     test_export_restores();

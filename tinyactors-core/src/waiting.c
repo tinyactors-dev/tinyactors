@@ -98,6 +98,21 @@ static bool ta_waiting_shareable(const ta_actor_ref *destination) {
     return destination->kind == TA_ACTOR_REF_NAMED || destination->as.runtime != 0u;
 }
 
+bool ta_waiting_holds_mail(const ta_waiting *waiting, const ta_actor_ref *destination) {
+    if (!ta_waiting_shareable(destination) || waiting->table.count == 0u) {
+        return false;
+    }
+    ta_waiting_lookup lookup = { .waiting = (ta_waiting *)waiting, .destination = destination };
+    uint32_t found = 0u;
+    if (ta_table_find(&waiting->table,
+                      &(ta_table_key){ .hash = ta_waiting_hash(destination), .equal = ta_waiting_equal, .context = &lookup },
+                      &found) != TA_OK) {
+        return false;
+    }
+    const ta_waiting_entry *entry = ta_waiting_at(waiting, found);
+    return entry->count != 0u && (entry->flags & TA_WAITING_RETIRED) == 0u;
+}
+
 ta_result ta_waiting_take(ta_waiting *waiting, const ta_waiting_key *key, uint32_t *out) {
     const ta_actor_ref *destination = key->destination;
     bool shared = ta_waiting_shareable(destination);

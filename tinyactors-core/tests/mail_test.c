@@ -417,7 +417,9 @@ static void test_mail_waits_for_its_senders_macrostep(void) {
     CHECK(run_once(&f, f.sender, 1) == TA_OK && f.status == TA_RUN_PAUSED);
     CHECK(envelopes_in(&f, TA_ENVELOPE_OUTGOING) == 1);
     CHECK(f.system->run.pool.run_queue.head == 0u);
-    CHECK(!ta_run_has_mail(f.system, ta_actor_lookup(f.system, f.receiver)));
+    /* It names the receiver, which therefore cannot unload: an image could
+     * not take it, and the runtime ID it names would be gone. */
+    CHECK(ta_run_has_mail(f.system, ta_actor_lookup(f.system, f.receiver)));
     /* Parked with the sender's input while its macrostep waits. */
     const ta_actor *paused = ta_actor_lookup(f.system, f.sender);
     CHECK(ta_envelope_pool_at(&f.system->run.pool, paused->input)->owner_next != 0u);
@@ -577,7 +579,7 @@ static void test_an_abandoned_macrostep_gives_its_mail_back(void) {
     CHECK(f.count == 2 && f.outcomes[1].kind == TA_INPUT_FAULTED && f.outcomes[1].code == TA_ERR_RUNAWAY);
     parked = envelopes_in(&f, TA_ENVELOPE_OUTGOING);
     CHECK(parked >= 2u);
-    CHECK(!ta_run_has_mail(f.system, ta_actor_lookup(f.system, f.receiver)));
+    CHECK(ta_run_has_mail(f.system, ta_actor_lookup(f.system, f.receiver)));
     CHECK(f.system->run.pool.quota.used == parked + 1u);
     /* An image cannot carry the parked mail: the session does not unload. */
     CHECK(ta_run_has_unsent_mail(f.system, ta_actor_lookup(f.system, f.sender)));

@@ -115,6 +115,10 @@ typedef uint32_t ta_trie_id;
 /** The deepest any trie goes; it sizes the arrays `ta_trie_path` writes. */
 #define TA_TRIE_MAX_DEPTH 64u
 
+/** The most nodes a trie holds: below 2^31, so no trie ID has the bit that
+ * marks an event name core keeps as text (`TA_EVENT_NAME_TEXT`). */
+#define TA_TRIE_MAX_NODES ((uint32_t)0x7FFFFFFFu)
+
 /** One node: its parent, its last segment and its depth (the root's is 0). */
 typedef struct {
     ta_trie_id parent;

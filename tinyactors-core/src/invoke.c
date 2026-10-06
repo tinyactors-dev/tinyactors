@@ -1063,6 +1063,8 @@ void ta_invoke_release(ta_system *system, ta_actor *actor) {
     if (sparse == NULL) {
         return;
     }
+    /* Names held for retiring the invocations, if a publish left any. */
+    ta_invoke_cancel_retire(system, actor);
     while (sparse->invoke_count != 0) {
         ta_invoke_cancel_at(system, sparse, sparse->invoke_count - 1u);
     }

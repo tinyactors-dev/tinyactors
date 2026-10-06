@@ -3471,14 +3471,18 @@ TA_API ta_result ta_actor_deliver(ta_system *system, TA_IN const ta_actor_delive
  * filter with nothing queued). `*status` says how it ended.
  * - TA_OK: whatever the status. Faults are the inputs' own, in the outcomes.
  * - TA_ERR_INVALID: a null system, params, status, outcome count or
- *   outcomes, a budget of 0, or an outcome buffer with room for fewer
- *   outcomes than one input reports (one, or two with `report_taken`);
+ *   outcomes, a budget of 0, an outcome buffer with room for fewer
+ *   outcomes than one input reports (one, or two with `report_taken`), or
+ *   `report_taken` without `names` of at least TA_RUN_NAMES_MIN_BYTES;
  *   nothing ran.
  * - TA_ERR_BUSY: called from inside a ta_run() (a callback); nothing ran.
  * - TA_ERR_NOMEM: no memory to take the next input (room in its session's
- *   internal queue for a report's event, or the queue an invoked session
- *   keeps its last event in); the input waits at the head of the run
- *   queue, and what ran before is reported in the outcomes.
+ *   internal queue for a report's event, the queue an invoked session
+ *   keeps its last event and its name in, or a name buffer for a name core
+ *   keeps as text); the input waits at the head of the run queue, and what
+ *   ran before is reported in the outcomes.
+ * A call whose `names` buffer has no room for the next TAKEN name answers
+ * TA_OK with TA_RUN_MORE, as a full outcome buffer does.
  */
 TA_API ta_result ta_run(ta_system *system, TA_IN const ta_run_params *params);
 /*
@@ -4512,6 +4516,16 @@ TA_API ta_result ta_event_name_intern(ta_system *system,
                                       TA_IN const ta_atom_list *segments,
                                       TA_OUT ta_event_name_id *out);
 TA_API bool ta_event_name_matches(const ta_system *system, ta_event_name_id event, ta_event_name_id prefix);
+/*
+ * Writes event name `params->name` as dotted text into `buffer` (NUL
+ * included) and its length plus one in `*needed`: an interned name, or a
+ * name core keeps as text (`TA_EVENT_NAME_TEXT` set), which is valid only
+ * while the event that carries it is (an inspection's current_event until
+ * the next run or inspection, an event forwarded to a host invoker during
+ * that call). A buffer smaller than `*needed` gets nothing and answers
+ * TA_ERR_NOMEM; TA_ERR_INVALID for a null system, params or `needed`, or
+ * a name that names nothing (any more). Never allocates.
+ */
 TA_API ta_result ta_event_name_format(const ta_system *system,
                                       TA_IN const ta_event_name_format_params *params);
 TA_API ta_result ta_system_set_time(ta_system *system, ta_time now);

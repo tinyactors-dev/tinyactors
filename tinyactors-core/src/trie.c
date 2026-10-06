@@ -38,7 +38,7 @@ static ta_result ta_trie_check_edge(const ta_trie *trie, ta_trie_edge edge) {
 
 /* Makes room for `more` nodes, so as many adds that follow cannot fail. */
 static ta_result ta_trie_reserve(ta_trie *trie, uint32_t more) {
-    if (more > UINT32_MAX - trie->nodes.count) {
+    if (more > TA_TRIE_MAX_NODES - trie->nodes.count) {
         return TA_ERR_FULL;
     }
     ta_result result = ta_table_reserve(&trie->index, more);

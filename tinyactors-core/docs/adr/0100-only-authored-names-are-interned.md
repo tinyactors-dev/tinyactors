@@ -259,11 +259,20 @@ before it.
     while the event is valid: during the call, or until the next run or
     inspection. The kernel's JS invoker formats a forwarded name into its
     own table during the call, since it reads the event later.
-  - An invoked session's kept event keeps its input's envelope: when the
-    input completes, its references go and its text stays, in an envelope
-    on no list (`TA_ENVELOPE_KEPT`), until the kept event goes. A session
-    image copies the name's text into its arena, and a session restored
-    from it writes the text back into an envelope.
+  - An invoked session's kept event keeps its name's text in storage the
+    session owns, its internal queue (`kept_text`), sized when the input
+    is taken (`ta_interpreter_keep_room`, between inputs) and filled when
+    the macrostep ends, with no allocation there; its handle is
+    `TA_RUN_NAME_INPUT | TA_RUN_NAME_KEPT` and the actor's slot, so the
+    actor table holds at most 2^30 slots. Changed 2026-10-06 after review:
+    the first version kept the input's envelope (`TA_ENVELOPE_KEPT`), which
+    counted against `poolEnvelopes` and the admission watermark, so a
+    system with many invoked children stopped admitting input, and an
+    abandoned macrostep left the kept event naming an envelope already
+    given back. A session image copies the name's text into its arena, and
+    a session restored from it writes the text back into its queue
+    (`ta_interpreter_keep_name`). An event kept from the internal queue
+    keeps the envelope that holds its name, as a queued event does.
   - `ta_send_id_intern` is gone, and `ta_system_intern_invoke_id` became
     `ta_system_invoke_id_find`, a lookup: a replayed event's send ID is
     generated (it parses anywhere) or an authored literal of a registered

@@ -216,6 +216,14 @@ typedef struct {
 ta_result ta_waiting_take(ta_waiting *waiting, const ta_waiting_key *key, uint32_t *out);
 
 /**
+ * Whether mail waits on an entry for `destination` that its host has not
+ * answered yet: mail sent to it now joins that entry, behind the earlier
+ * mail, even when an actor is resident there already, so one sender's
+ * mail keeps its order across a load. O(1); never allocates.
+ */
+bool ta_waiting_holds_mail(const ta_waiting *waiting, const ta_actor_ref *destination);
+
+/**
  * Marks entry `index` owed, and appends it to the owed list, unless it is
  * owed, reported or retired already. O(1). Never allocates.
  */

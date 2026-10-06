@@ -23,6 +23,7 @@
 #include "invoke.h"
 #include "definition.h"
 #include "system.h"
+#include "waiting.h"
 
 ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
     if (system == NULL) {
@@ -48,7 +49,7 @@ ta_result ta_actor_table_init(ta_actor_table *table, ta_allocator allocator) {
                                                  .item_alignment = _Alignof(ta_actor_slot),
                                                  .link_offset = offsetof(ta_actor_slot, link),
                                                  .page_shift = TA_ACTOR_PAGE_SHIFT,
-                                                 .ceiling = UINT32_MAX,
+                                                 .ceiling = TA_ACTOR_SLOTS_MAX,
                                              });
 }
 
@@ -468,6 +469,15 @@ void ta_actor_mail_route(ta_system *system, const ta_actor_ref *destination, ta_
     if (target != NULL && target->finished) {
         out->hint = TA_ERR_DONE;
         return;
+    }
+    if (target != NULL && target->published && target->record.self.kind == TA_ACTOR_REF_NAMED &&
+        ta_waiting_holds_mail(&system->run.waiting, &target->record.self)) {
+        /* Earlier mail waits for the target's address to have its load
+         * answered: this mail, by address or by runtime ID, waits behind
+         * it, in order (ADR 0099). */
+        out->destination = target->record.self;
+        target = NULL;
+        out->hint = TA_ERR_UNLOADED;
     }
     out->actor = target;
     out->unreachable = target == NULL && routed.kind == TA_ACTOR_REF_RUNTIME && routed.family == 0;
@@ -1249,6 +1259,10 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
         }
     }
     if (result != TA_OK) {
+        if (replaying) {
+            /* The retired invocations' names held for this publish go back. */
+            ta_invoke_cancel_retire(system, actor);
+        }
         return result;
     }
     if (at != NULL) {
@@ -1388,7 +1402,23 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     }
     if (params->actor != 0 || params->address == NULL) {
         ta_actor *actor = ta_actor_lookup(system, params->actor);
-        return actor == NULL ? TA_ERR_NOT_FOUND : ta_actor_deliver_resident(system, actor, params);
+        if (actor == NULL) {
+            return TA_ERR_NOT_FOUND;
+        }
+        if (params->transition == NULL && actor->published && actor->record.self.kind == TA_ACTOR_REF_NAMED &&
+            ta_waiting_holds_mail(&system->run.waiting, &actor->record.self) &&
+            params->time == ta_clock_now(&system->clock)) {
+            /* Earlier mail for the actor's address waits for its load to be
+             * answered: this event waits behind it, in order (ADR 0099). A
+             * session not yet published (one replaying its journal) takes
+             * its own inputs first. */
+            ta_mail_route route = { .destination = actor->record.self, .hint = TA_ERR_UNLOADED };
+            return params->name.len > TA_NAME_AREA_FIELD_MAX ||
+                           ta_names_resolve(&system->names, params->name) != TA_OK
+                       ? TA_ERR_INVALID
+                       : ta_actor_deliver_waiting(system, params, &route);
+        }
+        return ta_actor_deliver_resident(system, actor, params);
     }
     /* By address, as h2c.event: resolved as a chart's <send> is. */
     const ta_actor_address *text = params->address;

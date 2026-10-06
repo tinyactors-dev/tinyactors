@@ -323,11 +323,20 @@ void ta_interpreter_render_fault(ta_fault *fault);
 void ta_interpreter_release_spares(ta_system *system);
 /*
  * Makes sure an invoked session has the internal queue its kept event
- * lives in, so that keeping the external event when its macrostep ends
- * never allocates (SCXML 6.4); any other session needs none. Called when
- * an input is taken, between inputs. TA_ERR_NOMEM changes nothing.
+ * lives in, and room in it for the name of input `input` when core keeps
+ * that name as text, so that keeping the external event when its
+ * macrostep ends never allocates (SCXML 6.4, ADR 0100); any other session
+ * needs none. Called when an input is taken, between inputs. TA_ERR_NOMEM
+ * changes nothing that matters: a queue grown stays.
  */
-ta_result ta_interpreter_keep_room(ta_system *system, ta_actor *actor);
+ta_result ta_interpreter_keep_room(ta_system *system, ta_actor *actor, uint32_t input);
+/*
+ * Copies `text` into the invoked session's own kept-name storage, growing
+ * it, and answers the name's handle in `*out` (`TA_RUN_NAME_KEPT`): for a
+ * kept event a session image restores. The actor has its queue. Allocates;
+ * never inside a macrostep. TA_ERR_NOMEM changes nothing.
+ */
+ta_result ta_interpreter_keep_name(ta_system *system, ta_actor *actor, ta_str text, ta_event_name_id *out);
 /* The bytes an internal queue with room for this many events takes. */
 size_t ta_internal_queue_bytes(uint32_t capacity);
 

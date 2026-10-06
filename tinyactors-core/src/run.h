@@ -21,9 +21,9 @@
  * event name's ID, the origin, whose references the envelope holds, the
  * input's time, the family of its trace parent's cause, and an operator
  * transition, owned, with the definition its states belong to); then, for
- * an event whose name core did not intern (an immediate `<send
- * eventexpr>`, ADR 0100), the **name** as text, with the record's name ID
- * 0; and, when its macrostep runs under a trace ID, the **trace parent**
+ * an event whose name core did not intern (ADR 0100: a host's event or
+ * report, mail, a `<send>` to #_internal, an invocation's done or error
+ * event), the **name** as text, with the record's name ID 0; and, when its macrostep runs under a trace ID, the **trace parent**
  * behind them as the text's last field (`name_area.h`), with
  * `TA_ENVELOPE_FLAG_TRACED` set. The field leaves the cause's family out;
  * the record keeps it, so the step key reads back whole. Its `source`
@@ -44,7 +44,7 @@
  * - **An invocation's error report** (`TA_RECORD_INPUT_SOURCE_INVOKE_REPORT`),
  *   admitted by `ta_actor_report_invoke()`: the invocation in
  *   `invoke_instance`, the report's data, and a record with the event name
- *   `error.communication.invoke.<id>.<reason>` (interned when admitted),
+ *   `error.communication.invoke.<id>.<reason>` (kept as text),
  *   whether it ends the invocation and the time, and the trace parent.
  * - **A wake** (`TA_RECORD_INPUT_SOURCE_PLATFORM`): core's own input for a
  *   session with a macrostep to run that no admitted input started, its
@@ -275,7 +275,7 @@
  * | `ta_system_load_needed()` | O(the waiting envelopes), to count them |
  * | `ta_system_load_settled()`, `ta_system_load_failed()` | O(the waiting envelopes) |
  * | `ta_run_session_gone` | O(its deferred envelopes), each returned in place |
- * | `ta_run_has_mail` | walks the run queue |
+ * | `ta_run_has_mail` | walks the run queue and the pool |
  * | `ta_run_has_unsent_mail` | O(1) |
  * | `ta_run_input_event`, `ta_run_input_jump`, `ta_run_session_trace`, `ta_run_macrostep_time` | O(1): one field of text |
  *
@@ -483,13 +483,22 @@ void ta_run_wake_cancel(ta_system *system, uint32_t wake);
  * 0100): this bit, or'ed with the input's envelope index. The name is the
  * text the envelope keeps; it lives as long as the input does, or, for an
  * invoked session's kept event, as long as that event is kept
- * (`ta_run_keep_input`), and no trie node has this bit. Core reads it with
+ * (`TA_RUN_NAME_KEPT`), and no trie node has this bit. Core reads it with
  * `ta_run_input_name`; a host reads it with `ta_event_name_format` while
  * the event is valid (`tinyactors.h`), a TAKEN outcome carries it as text,
  * and a session image copies the text. Only a record that holds names by
  * ID, a delayed send, gives it an interned ID (`ta_event_name_store`).
  */
 #define TA_RUN_NAME_INPUT TA_EVENT_NAME_TEXT
+
+/**
+ * With `TA_RUN_NAME_INPUT`, a kept event's name that core keeps as text in
+ * the invoked session's own internal queue (`kept_text`), not in an
+ * envelope: the handle is both bits and the actor's slot, below 2^30
+ * (`TA_ACTOR_SLOTS_MAX`). It lives as long as the event is kept, holds
+ * no pool envelope, and giving it up releases nothing (ADR 0100).
+ */
+#define TA_RUN_NAME_KEPT ((uint32_t)0x40000000)
 
 /** Whether `name` names an input's name kept as text (`TA_RUN_NAME_INPUT`). */
 static inline bool ta_run_name_is_input(ta_event_name_id name) {
@@ -499,19 +508,12 @@ static inline bool ta_run_name_is_input(ta_event_name_id name) {
 /**
  * The name input `name & ~TA_RUN_NAME_INPUT` keeps as text, read into the
  * run's name buffer: valid until the next call reads another name, or the
- * buffer grows. Empty when the input keeps none. Never allocates; may run
+ * buffer grows. A kept event's name (`TA_RUN_NAME_KEPT`) is read in place
+ * from the session's queue, valid while the event is kept. Empty when
+ * there is none. Never allocates; may run
  * inside a macrostep.
  */
 ta_str ta_run_input_name(const ta_system *system, ta_event_name_id name);
-
-/**
- * Keeps input `index`, which `actor`'s macrostep took and is ending, past
- * its completion for the name its text holds, which the invoked session's
- * kept event names (`TA_RUN_NAME_INPUT`): when the input completes, its
- * references go and its text stays, in an envelope on no list
- * (`TA_ENVELOPE_KEPT`). Never allocates; cannot fail.
- */
-void ta_run_keep_input(ta_system *system, uint32_t index);
 
 /**
  * Holds `name` as text in an envelope of its own (`TA_ENVELOPE_KEPT`), for
@@ -536,8 +538,8 @@ ta_result ta_run_hold_name(ta_system *system, ta_str name, ta_event_name_id *out
 ta_result ta_run_hold_copy(ta_system *system, ta_event_name_id name, ta_event_name_id *out);
 
 /** Gives back the envelope that holds `name` as text, when the event that
- * owns it goes: one `ta_run_keep_input` kept, or `ta_run_hold_name` made.
- * Nothing for an interned name. Never allocates. */
+ * owns it goes: one `ta_run_hold_name` made. Nothing for an interned name
+ * or a kept event's name (`TA_RUN_NAME_KEPT`). Never allocates. */
 void ta_run_release_name(ta_system *system, ta_event_name_id name);
 
 /** Mail for another session; see `ta_run_post_mail`. */
@@ -615,9 +617,11 @@ ta_trace_parent ta_run_session_trace(const ta_system *system, const struct ta_ac
 ta_time ta_run_macrostep_time(const ta_system *system, const struct ta_actor *actor);
 
 /**
- * Whether inputs admitted for `actor` wait to be taken: on the run queue or
- * on its deferred list. Its own taken input, queued again, and wakes do not
- * count. Walks the run queue, bounded by `poolEnvelopes`. Never allocates.
+ * Whether inputs admitted for `actor` wait to be taken: on the run queue,
+ * on its deferred list, or sent to its runtime ID by a paused or stopped
+ * macrostep and parked with that macrostep's input. Its own taken input,
+ * queued again, and wakes do not count. Walks the run queue and the pool,
+ * bounded by `poolEnvelopes`. Never allocates.
  */
 bool ta_run_has_mail(const ta_system *system, const struct ta_actor *actor);
 

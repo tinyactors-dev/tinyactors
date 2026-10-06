@@ -171,6 +171,15 @@ static ta_str ta_run_name_text(const ta_system *system, uint32_t index) {
 }
 
 ta_str ta_run_input_name(const ta_system *system, ta_event_name_id name) {
+    if ((name & TA_RUN_NAME_KEPT) != 0u && ta_run_name_is_input(name)) {
+        /* A kept event's name, in its session's own queue (ADR 0100). */
+        const ta_actor_slot *slot = ta_actor_slot_at(system, name & ~(TA_RUN_NAME_INPUT | TA_RUN_NAME_KEPT));
+        const ta_internal_queue *queue = slot == NULL || slot->actor == NULL ? NULL : slot->actor->internal;
+        if (queue == NULL || !queue->has_kept || queue->kept_text == NULL) {
+            return (ta_str){ 0 };
+        }
+        return (ta_str){ .ptr = queue->kept_text, .len = queue->kept_len };
+    }
     uint32_t index = name & ~TA_RUN_NAME_INPUT;
     if (!ta_run_name_is_input(name) || index == 0u || index > system->run.pool.items.high_water) {
         return (ta_str){ 0 };
@@ -238,7 +247,7 @@ static void ta_run_release_references(ta_system *system, uint32_t index) {
 static void ta_run_strip(ta_system *system, uint32_t index) {
     ta_run_release_references(system, index);
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
-    envelope->flags &= (uint8_t)~(TA_ENVELOPE_FLAG_TRACED | TA_ENVELOPE_FLAG_KEEP);
+    envelope->flags &= (uint8_t)~TA_ENVELOPE_FLAG_TRACED;
     ta_name_area_free(&system->run.names, &envelope->text);
 }
 
@@ -252,8 +261,6 @@ static void ta_run_discard(ta_system *system, uint32_t index) {
 /* ------------------------------------------------------------------------
  * The state
  */
-
-static ta_result ta_run_name_room(ta_system *system);
 
 ta_result ta_run_init(ta_system *system) {
     uint32_t bound = system->params[TA_PARAM_POOL_ENVELOPES];
@@ -504,7 +511,7 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
     /* Admission is a safe point: the name area makes room for a long name,
      * and the name buffer grows to take it, so taking the input never
      * needs to. */
-    if (admission->name_text.len != 0u) {
+    if (admission->name_text.len != 0u && !system->run.running) {
         uint32_t need = ta_name_area_field_need(&system->run.names, TA_NAME_AREA_PREFIX_BYTES + TA_RUN_RECORD_BYTES,
                                                 admission->name_text.len);
         refilled.names = ta_name_area_refill(&system->run.names, need);
@@ -700,10 +707,6 @@ void ta_run_wake_cancel(ta_system *system, uint32_t wake) {
  * Names a kept event holds (ADR 0100)
  */
 
-void ta_run_keep_input(ta_system *system, uint32_t index) {
-    ta_envelope_pool_at(&system->run.pool, index)->flags |= TA_ENVELOPE_FLAG_KEEP;
-}
-
 ta_result ta_run_hold_name(ta_system *system, ta_str name, ta_event_name_id *out) {
     uint32_t index = 0u;
     ta_result result = ta_run_wake_reserve(system, &(ta_run_wake){ .name_text = name }, &index);
@@ -736,7 +739,7 @@ ta_result ta_run_hold_copy(ta_system *system, ta_event_name_id name, ta_event_na
 }
 
 void ta_run_release_name(ta_system *system, ta_event_name_id name) {
-    if (ta_run_name_is_input(name)) {
+    if (ta_run_name_is_input(name) && (name & TA_RUN_NAME_KEPT) == 0u) {
         ta_run_discard(system, name & ~TA_RUN_NAME_INPUT);
     }
 }
@@ -1155,7 +1158,7 @@ static ta_result ta_run_bind_event(ta_system *system, ta_actor *actor, uint32_t 
          (record.jump->source != TA_STATE_NONE && !ta_actor_state_active(actor, record.jump->source)))) {
         return TA_ERR_INVALID;
     }
-    ta_result result = ta_interpreter_keep_room(system, actor);
+    ta_result result = ta_interpreter_keep_room(system, actor, index);
     if (result != TA_OK) {
         return result;
     }
@@ -1231,15 +1234,7 @@ static void ta_run_complete(ta_run_call *call, ta_actor *actor, ta_run_ended end
     if (system->run.slot == index) {
         system->run.slot = 0u;
     }
-    ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
-    if ((envelope->flags & TA_ENVELOPE_FLAG_KEEP) != 0u) {
-        /* The session's kept event names it: only its text stays. */
-        ta_run_release_references(system, index);
-        envelope->flags &= (uint8_t)~TA_ENVELOPE_FLAG_KEEP;
-        envelope->state = TA_ENVELOPE_KEPT;
-    } else {
-        ta_run_discard(system, index);
-    }
+    ta_run_discard(system, index);
     if (actor->input == index) {
         ta_run_forget_input(actor);
     }
@@ -1273,10 +1268,6 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
     if ((result != TA_OK && actor->macrostep) || (result == TA_OK && run.status == TA_MACROSTEP_PAUSED)) {
         /* It goes on later: its mail waits with its input, unseen. */
         ta_run_park(system, index);
-    } else {
-        /* The macrostep ended: its mail joins the run queue, in send order,
-         * or waits for its target's load. */
-        ta_run_deliver(system, &system->run.outgoing);
     }
     if (result != TA_OK && actor->macrostep) {
         /* Stopped where it stands: it keeps its input and holds no slot. */
@@ -1296,6 +1287,7 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
                         (ta_run_ended){ .index = index,
                                         .outcome = { .kind = actor->finished ? TA_INPUT_FINISHED : TA_INPUT_COMPLETED,
                                                      .code = result } });
+        ta_run_deliver(system, &system->run.outgoing);
         return;
     }
     if (run.status == TA_MACROSTEP_PAUSED) {
@@ -1313,6 +1305,11 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
                                  : run.ignored                       ? TA_INPUT_IGNORED
                                                                      : TA_INPUT_COMPLETED;
     ta_run_complete(call, actor, (ta_run_ended){ .index = index, .outcome = { .kind = kind } });
+    /* The macrostep ended, and the sender forgot its input first: its mail
+     * joins the run queue, in send order, or waits for its target's load;
+     * mail that comes back to the sender at once as error.communication
+     * starts a macrostep of its own. */
+    ta_run_deliver(system, &system->run.outgoing);
 }
 
 /* Whether envelope `index`'s TAKEN outcome carries its event: core made
@@ -1397,6 +1394,11 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
              * already, or waits for another wake. */
             ta_run_discard(system, index);
             return TA_OK;
+        }
+        if (ta_run_name_length(system, index) > system->run.name_capacity) {
+            /* A restored external event's name, kept as text, does not fit
+             * the name buffer the refill before it could not grow. */
+            return ta_run_put_back(call, index, TA_ERR_NOMEM);
         }
     } else if (actor->finished && !actor->macrostep) {
         ta_run_refuse(call, index, TA_ERR_DONE);
@@ -1527,6 +1529,15 @@ bool ta_run_has_mail(const ta_system *system, const ta_actor *actor) {
             return true;
         }
     }
+    /* Mail a paused or stopped macrostep sent it, parked with that
+     * macrostep's input and on no queue yet: it names this runtime ID. */
+    for (uint32_t index = 1u; index <= pool->items.high_water; index += 1u) {
+        const ta_envelope *envelope = ta_envelope_pool_at(pool, index);
+        if (envelope->state == TA_ENVELOPE_OUTGOING && envelope->target == actor->record.id &&
+            (envelope->flags & TA_ENVELOPE_FLAG_WAITING_TARGET) == 0u) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -1556,7 +1567,8 @@ ta_result ta_actor_release(ta_system *system, ta_actor_id id) {
 /*
  * The first input admitted with `correlation` and not taken yet: runnable,
  * on the run queue or a deferred list, by arrival; or else waiting for its
- * target's load. 0 when there is none. Scans the pool (ADR 0099 decision
+ * target's load, the one in the pool's lowest slot, since waiting inputs
+ * carry no arrival number. 0 when there is none. Scans the pool (ADR 0099 decision
  * 11), bounded by poolEnvelopes; allocates nothing.
  */
 static uint32_t ta_run_find_input(ta_system *system, uint64_t correlation) {
@@ -1700,8 +1712,13 @@ ta_result ta_system_load_failed(ta_system *system, const ta_load_failed_params *
     if (entry == 0u) {
         return TA_ERR_STALE;
     }
+    /* A failure the host gave no code is NOT_FOUND, for senders too. */
+    ta_fault fault = *params->fault;
+    if (fault.code == TA_OK) {
+        fault.code = TA_ERR_NOT_FOUND;
+    }
     ta_waiting *waiting = &system->run.waiting;
-    ta_waiting_retire(waiting, entry, 0u, params->fault->code == TA_OK ? TA_ERR_NOT_FOUND : params->fault->code);
+    ta_waiting_retire(waiting, entry, 0u, fault.code);
     ta_list_links links = ta_envelope_pool_links(&system->run.pool);
     ta_list list = ta_waiting_at(waiting, entry)->list;
     ta_waiting_at(waiting, entry)->list = TA_LIST_EMPTY;
@@ -1714,11 +1731,11 @@ ta_result ta_system_load_failed(ta_system *system, const ta_load_failed_params *
             envelope->flags = (uint8_t)((envelope->flags & ~TA_ENVELOPE_FLAG_WAITING_TARGET) |
                                         TA_ENVELOPE_FLAG_REFUSED);
             envelope->target = 0u;
-            envelope->due = (ta_time)(int64_t)(params->fault->code == TA_OK ? TA_ERR_NOT_FOUND : params->fault->code);
+            envelope->due = (ta_time)(int64_t)fault.code;
             ta_envelope_pool_enqueue(&system->run.pool, index);
             continue;
         }
-        ta_run_recycle(system, index, params->fault);
+        ta_run_recycle(system, index, &fault);
     }
     if (ta_waiting_at(waiting, entry)->count == 0u) {
         ta_waiting_free(waiting, entry);

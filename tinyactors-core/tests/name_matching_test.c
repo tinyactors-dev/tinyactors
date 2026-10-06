@@ -66,11 +66,14 @@
  *    table, the trie and the address table the same size: such a target
  *    is looked up, never interned. A session URI whose family no
  *    definition has still interns the family, for a host's loader.
- * 10. an invoked session keeps its last external event's name as text: one
- *    kept envelope holds it while the event is kept, the next event gives
- *    it back, a session image carries the name and restores it into a
- *    kept envelope of its own, and the parent's cancel lets it go; random
- *    names leave the atom table and the trie the same size.
+ * 10. an invoked session keeps its last external event's name as text in
+ *    its own queue, with no pool envelope: the kept name reads back as the
+ *    text sent, the pool holds no envelope for it and admits as before, a
+ *    session image carries the name and restores it into the restored
+ *    session's queue, abandoning a macrostep paused between microsteps
+ *    keeps the name and
+ *    leaves the run queue whole, and the parent's cancel lets it go;
+ *    random names leave the atom table and the trie the same size.
  *
  * Paths that still add a run-time name to the tables, and that claims 4,
  * 5, 8 and 9 therefore do not cover, because an event there carries its
@@ -790,7 +793,29 @@ static void test_names_reach_hosts_as_text(void) {
     fixture_close(&f);
 }
 
-/* The envelopes the pool keeps only for a kept event's name. */
+/* The kept event's name `actor` keeps as text, or empty. */
+static ta_str kept_name(const fixture *f, ta_actor_id id) {
+    const ta_actor *actor = ta_actor_lookup(f->system, id);
+    if (actor == NULL || actor->internal == NULL || !actor->internal->has_kept) {
+        return (ta_str){ 0 };
+    }
+    return ta_run_input_name(f->system, actor->internal->kept_event.name);
+}
+
+/* Whether every envelope on the run queue is runnable. */
+static bool run_queue_whole(const fixture *f) {
+    ta_envelope_pool *pool = (ta_envelope_pool *)&f->system->run.pool;
+    ta_list_links links = ta_envelope_pool_links(pool);
+    uint32_t seen = 0u;
+    for (uint32_t index = ta_list_head(&pool->run_queue); index != 0u; index = ta_list_next(&links, index)) {
+        if (ta_envelope_pool_at(pool, index)->state != TA_ENVELOPE_RUNNABLE || ++seen > pool->items.high_water) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* The envelopes the pool keeps only for a name held as text. */
 static uint32_t kept_envelopes(const fixture *f) {
     const ta_envelope_pool *pool = &f->system->run.pool;
     uint32_t count = 0;
@@ -846,11 +871,21 @@ static void test_kept_event_keeps_its_name(void) {
         {0},
     };
     static const ta_scxml_spec parent = { .name = STR("parent"), .states = parent_states };
+    /* c takes any event to d, and eventless transitions lead back to c:
+     * a macrostep of three microsteps, which a budget of 1 pauses between. */
+    static const ta_str to_d[] = { STR("d"), {0} };
+    static const ta_str to_e[] = { STR("e"), {0} };
+    static const ta_str to_c[] = { STR("c"), {0} };
     static const ta_scxml_transition_spec any[] = {
-        { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("*") }, {0}
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("*"), .targets = to_d }, {0}
     };
+    static const ta_scxml_transition_spec d_to_e[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = to_e }, {0} };
+    static const ta_scxml_transition_spec e_to_c[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = to_c }, {0} };
     static const ta_scxml_state_spec child_states[] = {
-        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("c"), .transitions = any }, {0}
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("c"), .transitions = any },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("d"), .transitions = d_to_e },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("e"), .transitions = e_to_c },
+        {0},
     };
     static const ta_scxml_spec child = { .name = STR("kid"), .states = child_states };
     fixture f;
@@ -877,7 +912,9 @@ static void test_kept_event_keeps_its_name(void) {
     CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = kept_child,
                                                                  .name = text("warm"), .event = &event }) == TA_OK);
     CHECK(test_drive_run(f.system, kept_child, &(test_drive_run_params){ .status = &status }) == TA_OK);
-    CHECK(kept_envelopes(&f) == 1u);
+    CHECK(kept_envelopes(&f) == 0u);
+    CHECK(ta_str_equal(kept_name(&f, kept_child), STR("warm")));
+    uint32_t used = f.system->run.pool.quota.used;
     uint32_t atoms = atom_count(&f);
     uint32_t nodes = node_count(&f);
     char buffer[TA_EVENT_NAME_MAX_DEPTH * 14u];
@@ -891,21 +928,49 @@ static void test_kept_event_keeps_its_name(void) {
                                                                      .event = &event }) == TA_OK);
         CHECK(test_drive_run(f.system, kept_child, &(test_drive_run_params){ .status = &status }) == TA_OK);
         CHECK(status == TEST_DRIVE_STABLE);
-        /* The new event's envelope is kept; the one before it went back. */
-        CHECK(kept_envelopes(&f) == 1u);
+        /* The new event's name is kept in the queue; no envelope holds it,
+         * so the pool uses what it used before. */
+        CHECK(kept_envelopes(&f) == 0u);
+        CHECK(ta_str_equal(kept_name(&f, kept_child), name));
+        CHECK(f.system->run.pool.quota.used == used);
     }
     CHECK(atom_count(&f) == atoms);
     CHECK(node_count(&f) == nodes);
     /* An image of the child carries the kept name, and a session restored
-     * from it keeps the name in an envelope of its own until it goes. */
+     * from it keeps the name in its own queue until it goes. */
+    ta_str last = kept_name(&f, kept_child);
+    char last_text[TA_EVENT_NAME_MAX_DEPTH * 14u];
+    memcpy(last_text, last.ptr, last.len);
+    last.ptr = last_text;
     ta_session_image *image = NULL;
     CHECK(ta_actor_capture(f.system, &(ta_actor_capture_params){ .actor = kept_child, .out = &image }) == TA_OK);
     ta_actor_id restored = 0;
     CHECK(ta_actor_reconstruct(f.system, &(ta_actor_reconstruct_params){ .image = image, .out = &restored }) == TA_OK);
-    CHECK(kept_envelopes(&f) == 2u);
+    CHECK(kept_envelopes(&f) == 0u);
+    CHECK(ta_str_equal(kept_name(&f, restored), last));
     ta_session_image_destroy(image);
     CHECK(ta_actor_destroy(f.system, restored) == TA_OK);
-    CHECK(kept_envelopes(&f) == 1u);
+    CHECK(kept_envelopes(&f) == 0u);
+    /* A macrostep paused at its first microstep, then abandoned, keeps its
+     * event's name in the queue, and its input goes back once: the pool's
+     * run queue stays whole as the envelope is used again. */
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = kept_child,
+                                                                 .name = text("halted"), .event = &event }) == TA_OK);
+    CHECK(test_drive_run(f.system, kept_child, &(test_drive_run_params){ .budget = 1, .status = &status }) == TA_OK);
+    CHECK(status == TEST_DRIVE_PAUSED);
+    CHECK(ta_actor_abandon(f.system, kept_child) == TA_OK);
+    CHECK(ta_str_equal(kept_name(&f, kept_child), STR("halted")));
+    CHECK(kept_envelopes(&f) == 0u);
+    CHECK(f.system->run.pool.quota.used == used);
+    for (uint32_t round = 0; round < 3u; round += 1u) {
+        CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system),
+                                                                     .actor = kept_child, .name = text("again"),
+                                                                     .event = &event }) == TA_OK);
+        CHECK(run_queue_whole(&f));
+        CHECK(test_drive_run(f.system, kept_child, &(test_drive_run_params){ .status = &status }) == TA_OK);
+        CHECK(ta_str_equal(kept_name(&f, kept_child), STR("again")));
+    }
+    CHECK(f.system->run.pool.quota.used == used);
     /* The parent's cancel ends the child, and the kept name goes with it. */
     CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = parent_actor,
                                                                  .name = text("stop"), .event = &event }) == TA_OK);

@@ -747,6 +747,10 @@ size_t ta_internal_queue_bytes(uint32_t capacity) {
 }
 
 static void ta_internal_queue_free(ta_system *system, ta_internal_queue *queue) {
+    if (queue->kept_text != NULL) {
+        ta_mem_free(system->allocator, queue->kept_text,
+                    &(ta_allocator_free_params){ .size = queue->kept_capacity, .alignment = 1u });
+    }
     ta_mem_free(system->allocator, queue,
                 &(ta_allocator_free_params){ .size = ta_internal_queue_bytes(queue->capacity),
                                              .alignment = _Alignof(ta_internal_queue) });
@@ -802,12 +806,62 @@ static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
     return ta_internal_queue_grow(system, actor, capacity);
 }
 
-ta_result ta_interpreter_keep_room(ta_system *system, ta_actor *actor) {
+/* Grows the queue's kept-name storage to `length` bytes, keeping the text
+ * it holds. A safe point only. TA_ERR_NOMEM changes nothing. */
+static ta_result ta_kept_text_room(ta_system *system, ta_internal_queue *queue, uint32_t length) {
+    if (queue->kept_capacity >= length) {
+        return TA_OK;
+    }
+    char *grown = ta_mem_alloc(system->allocator, length, 1u);
+    if (grown == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (queue->kept_text != NULL) {
+        ta_mem_copy(grown, queue->kept_text, queue->kept_len);
+        ta_mem_free(system->allocator, queue->kept_text,
+                    &(ta_allocator_free_params){ .size = queue->kept_capacity, .alignment = 1u });
+    }
+    queue->kept_text = grown;
+    queue->kept_capacity = length;
+    return TA_OK;
+}
+
+/* The handle of the kept event's name the actor's queue holds as text. */
+static ta_event_name_id ta_kept_name_handle(const ta_actor *actor) {
+    return TA_RUN_NAME_INPUT | TA_RUN_NAME_KEPT | ta_actor_id_slot(actor->record.id);
+}
+
+/* Copies `text` into the queue's kept-name storage, which has the room,
+ * and answers its handle. Never allocates. */
+static ta_event_name_id ta_kept_name_write(ta_actor *actor, ta_str text) {
+    ta_internal_queue *queue = actor->internal;
+    ta_mem_copy(queue->kept_text, text.ptr, text.len);
+    queue->kept_len = (uint32_t)text.len;
+    return ta_kept_name_handle(actor);
+}
+
+ta_result ta_interpreter_keep_room(ta_system *system, ta_actor *actor, uint32_t input) {
     if (actor->sparse == NULL || !actor->sparse->has_parent) {
         return TA_OK;
     }
     /* A queue of no events holds the kept event; the first internal event grows it. */
-    return ta_internal_queue_grow(system, actor, 0);
+    ta_result result = ta_internal_queue_grow(system, actor, 0);
+    if (result != TA_OK) {
+        return result;
+    }
+    /* The input's name, if core keeps it as text, may become the kept
+     * event's name when the macrostep ends, where nothing may allocate. */
+    uint32_t length = (uint32_t)ta_run_input_name(system, TA_RUN_NAME_INPUT | input).len;
+    return ta_kept_text_room(system, actor->internal, length);
+}
+
+ta_result ta_interpreter_keep_name(ta_system *system, ta_actor *actor, ta_str text, ta_event_name_id *out) {
+    ta_internal_queue *queue = actor->internal;
+    ta_result result = ta_kept_text_room(system, queue, (uint32_t)text.len);
+    if (result == TA_OK) {
+        *out = ta_kept_name_write(actor, text);
+    }
+    return result;
 }
 
 /*
@@ -883,7 +937,8 @@ static void ta_queue_truncate(ta_actor *actor, uint32_t mark) {
     }
 }
 
-/* Lets go of the kept event and of the kept envelope that holds its name. */
+/* Lets go of the kept event, and of the envelope that holds its name when
+ * it came from the queue; a name in the queue's own storage stays there. */
 static void ta_release_kept(ta_actor *actor) {
     ta_internal_queue *queue = actor->internal;
     ta_queued_release(actor->host_impl.system, &queue->kept_event);
@@ -979,11 +1034,12 @@ static void ta_end_macrostep_events(ta_system *system, ta_actor *actor) {
     } else if (actor->bound == TA_BOUND_EXTERNAL) {
         ta_event kept;
         ta_event_retain(ta_run_input_event(system, actor->input), &kept);
-        /* A name core keeps as text stays in the input's envelope, which the
-         * input keeps when it completes, for as long as the event is kept
-         * (ADR 0100). */
+        /* A name core keeps as text is copied into the queue's own storage,
+         * which taking the input sized (ta_interpreter_keep_room), so the
+         * input's envelope goes when it completes (ADR 0100). */
         if (ta_run_name_is_input(kept.name)) {
-            ta_run_keep_input(system, actor->input);
+            ta_str text = ta_run_input_name(system, kept.name);
+            kept.name = actor->internal->kept_capacity >= text.len ? ta_kept_name_write(actor, text) : 0u;
         }
         ta_keep_event(actor, &kept);
         actor->bound = TA_BOUND_KEPT;

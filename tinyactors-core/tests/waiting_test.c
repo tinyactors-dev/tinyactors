@@ -3,8 +3,8 @@
  * 0099): it waits in core on its destination's waiting entry, core asks
  * the host once per destination (ta_system_load_needed), and the host's
  * answer delivers it (ta_system_load_settled) or turns each message into
- * error.communication for its sender (ta_system_load_failed). Also the
- * index by correlation that ta_system_withdraw_input reads, and mail for a
+ * error.communication for its sender (ta_system_load_failed). Also how
+ * ta_system_withdraw_input finds an input by correlation, and mail for a
  * session that is not published.
  *
  * The test includes the amalgamation so it reaches the private units; it
@@ -51,6 +51,14 @@
  *    run reports it under its correlation; failing refuses it, and the next
  *    run reports it REFUSED with the fault's code; a waiting one can be
  *    withdrawn, leaving the request owed.
+ * 11. mail a paused macrostep sent to an address whose load has already
+ *    failed comes back to the sender as error.communication when its
+ *    macrostep ends, and the sender runs it: the error is not lost and the
+ *    session does not stay in a macrostep with no input.
+ * 12. mail for an address whose load the host has not answered waits behind
+ *    the mail before it even once an actor is resident there: posts by
+ *    address before and after the actor appears, and one by its runtime
+ *    ID, complete in the order they were posted.
  */
 #include "../include/tinyactors.c"
 #include "test_drive.h"
@@ -579,7 +587,7 @@ static void test_mail_for_an_unpublished_session_waits_for_its_publish(void) {
 }
 
 /* Claim 7. */
-static void test_withdrawal_reads_the_index(void) {
+static void test_withdrawal_finds_the_first(void) {
     fixture f = open_fixture();
     CHECK(deliver(&f, f.receiver, "e1", 7) == TA_OK);
     CHECK(deliver(&f, f.receiver, "e2", 7) == TA_OK);
@@ -686,6 +694,85 @@ static void test_posts_by_address_wait_like_mail(void) {
     close_fixture(&f);
 }
 
+/* A session that mails the gone address on entry to `a`, then goes on to
+ * `b` without an event, where it waits for the error. */
+static const ta_str to_pb[] = { STR("b"), END };
+static const ta_str to_caught[] = { STR("caught"), END };
+static const ta_str to_pa[] = { STR("a"), END };
+static const ta_scxml_handler_spec p_entry[] = { { .actions = one_mail }, END };
+static const ta_scxml_state_spec pauser_states[] = {
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle"),
+      .transitions = (const ta_scxml_transition_spec[]){
+          { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("go"), .targets = to_pa }, END } },
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("a"), .onentry = p_entry,
+      .transitions = (const ta_scxml_transition_spec[]){
+          { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = to_pb }, END } },
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("b"),
+      .transitions = (const ta_scxml_transition_spec[]){
+          { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("error.communication"), .targets = to_caught }, END } },
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("caught") },
+    END,
+};
+static const ta_scxml_spec pauser = { .name = STR("pauser"), .states = pauser_states };
+
+/* Claim 11. */
+static void test_mail_to_a_failed_address_comes_back_after_its_macrostep(void) {
+    fixture f = open_fixture();
+    ta_actor_id p = spawn_named(&f, define(f.system, &pauser, "paus"), "paus", "p");
+    run_all(&f, 0, NULL);
+    CHECK(deliver(&f, f.sender, "one", 0) == TA_OK);
+    run_all(&f, 0, NULL);
+    ta_load_request request = { 0 };
+    CHECK(ta_system_load_needed(f.system, &request) == TA_OK);
+    CHECK(deliver(&f, p, "go", 0) == TA_OK);
+    for (uint32_t index = 0; index < f.count; index += 1u) {
+        ta_event_release(&f.outcomes[index].event);
+    }
+    f.count = 0;
+    /* One microstep: the mail is sent and parked with the paused macrostep. */
+    CHECK(ta_run(f.system, &(ta_run_params){ .budget = 1, .session = p, .outcomes = f.outcomes,
+                                              .outcome_capacity = 2, .outcome_count = &f.count,
+                                              .status = &f.status }) == TA_OK);
+    CHECK(f.status == TA_RUN_PAUSED && envelopes_in(&f, TA_ENVELOPE_OUTGOING) == 1);
+    ta_fault fault = { .code = TA_ERR_NOT_FOUND };
+    CHECK(ta_system_load_failed(f.system, &(ta_load_failed_params){ .request = request.request, .fault = &fault }) ==
+          TA_OK);
+    run_all(&f, 0, NULL);
+    const ta_actor *actor = ta_actor_lookup(f.system, p);
+    CHECK(in_state(&f, p, "caught"));
+    CHECK(actor != NULL && !actor->macrostep && actor->input == 0u);
+    close_fixture(&f);
+}
+
+/* Claim 12. */
+static void test_mail_keeps_its_order_across_a_load(void) {
+    fixture f = open_fixture();
+    CHECK(post_by_address(&f, "e1", 31) == TA_OK);
+    CHECK(post_by_address(&f, "e1", 32) == TA_OK);
+    ta_load_request request = { 0 };
+    CHECK(ta_system_load_needed(f.system, &request) == TA_OK);
+    /* The actor is resident before the host answers the request. */
+    ta_actor_id loaded = spawn_named(&f, f.receiver_definition, "gone", "g");
+    CHECK(post_by_address(&f, "e1", 33) == TA_OK);
+    CHECK(deliver(&f, loaded, "e1", 34) == TA_OK); /* by its runtime ID */
+    CHECK(envelopes_in(&f, TA_ENVELOPE_WAITING) == 4);
+    CHECK(ta_system_load_settled(f.system, &(ta_load_settled_params){ .request = request.request,
+                                                                       .actor = loaded }) == TA_OK);
+    uint64_t order[4] = { 0 };
+    uint32_t seen = 0u;
+    for (uint32_t call = 0; call < 100u && seen < 4u; call += 1u) {
+        CHECK(run_once(&f, 0) == TA_OK);
+        for (uint32_t at = 0; at < f.count; at += 1u) {
+            if (f.outcomes[at].kind != TA_INPUT_TAKEN && f.outcomes[at].correlation != 0u && seen < 4u) {
+                order[seen++] = f.outcomes[at].correlation;
+            }
+        }
+    }
+    CHECK(seen == 4u && order[0] == 31u && order[1] == 32u && order[2] == 33u && order[3] == 34u);
+    run_all(&f, 0, NULL);
+    close_fixture(&f);
+}
+
 int main(void) {
     test_mail_waits_on_one_entry_per_address();
     test_settling_delivers_the_mail_in_order();
@@ -693,10 +780,12 @@ int main(void) {
     test_an_abandoned_macrostep_asks_for_nothing();
     test_mail_whose_target_goes_is_an_error();
     test_mail_for_an_unpublished_session_waits_for_its_publish();
-    test_withdrawal_reads_the_index();
+    test_withdrawal_finds_the_first();
     test_teardown_releases_waiting_mail();
     test_a_send_no_host_can_answer_fails_at_once();
     test_posts_by_address_wait_like_mail();
+    test_mail_to_a_failed_address_comes_back_after_its_macrostep();
+    test_mail_keeps_its_order_across_a_load();
     if (failures != 0) {
         fprintf(stderr, "waiting_test: %d failures\n", failures);
         return 1;

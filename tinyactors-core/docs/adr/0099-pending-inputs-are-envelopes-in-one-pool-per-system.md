@@ -310,8 +310,16 @@ Step 4.2 of the ring protocol plan implements mail that waits for a target
 that is not resident (decisions 8 and 11) before the rings exist: the host
 reads load requests with `ta_system_load_needed()` and answers them with
 `ta_system_load_settled()` or `ta_system_load_failed()`, and posts by address
-through `ta_actor_deliver_params.address`. Three points differ from the
+through `ta_actor_deliver_params.address`. Four points differ from the
 reference documents:
+
+- **Mail waits behind earlier mail for its address until the host answers
+  the load.** An actor can be resident at an address while mail for it
+  still waits on the address's entry: the host loaded it but has not yet
+  settled the request. Mail sent to it then, by address or by its runtime
+  ID, joins that entry behind the earlier mail (`ta_waiting_holds_mail`),
+  so one sender's mail keeps its order across a load (decision 4). Found
+  by the step's review, 2026-10-06.
 
 - **A runtime ID no host could bring back fails at once.** A send to a
   runtime or session ID that no session holds, from a reference that names
