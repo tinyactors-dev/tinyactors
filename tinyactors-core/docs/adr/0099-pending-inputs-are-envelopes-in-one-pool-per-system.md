@@ -339,4 +339,40 @@ reference documents:
   failure for want of them. The text copy the reference documents describe
   comes when h2c carries addresses as text (step 5.1), since then no handle
   exists.
-
+- **The ring defaults, measured by proxy, 2026-10-06.** h2c and c2h do
+  not exist yet, so these are proxies, which 5.1 checks again on the real
+  rings. The counters live in the test host only (`TAT_RING_PROXIES`, in
+  `tinyactors-test/ruby`): each logical `ta_run` writes the host
+  admissions before it, the records `tel` dropped, and the largest batch
+  of c2h records one input's macrostep would write, from the records'
+  fixed sizes in MESSAGES.md, pads included (`c2h.input` 152,
+  `c2h.macrostep_ended` 72, `c2h.input_completed` 56, `c2h.send` 120 for
+  every SENT record, mail between sessions included, and `c2h.invoke`
+  112; variable text is not counted). Every test-host scenario ran, the
+  exhaustive ones and the 183 IRP scenarios included, with every trace kind
+  on and unsampled and `tel` at core's 16 KiB: 59,426 runs. (59 scenarios
+  fail in that mode, because they expect the larger `tel` ring or their
+  own trace kinds; their runs count all the same.)
+  - **h2c (16 KiB):** at most 5 host admissions between two runs (p99 1),
+    so at most 5 x 128 = 640 bytes of fixed `h2c.event` records: 16 KiB
+    holds about 128. The IRP scenarios admit nothing from the host. napi
+    was not measured: the kernel admits between turns and nothing outside
+    core can count that without a kernel counter. Its bound is the
+    kernel's `messageBudget` (1,024 messages a turn by default), up to
+    128 KiB of `h2c.event` records, so **16 KiB may be small for a host
+    that admits a whole turn's messages at once**; a full h2c bounces
+    (`c2h.bounced`), which loses nothing, and 5.1 measures it.
+  - **tel (16 KiB):** with every kind on and unsampled, 526 runs dropped
+    records, 14,199 in all, at most 232 in one run; untraced or sampled-out
+    runs write nothing. The kernel gives a traced system one call's worth
+    instead (`resumeBudget` microsteps of records, about 1 MiB), because
+    it reads `tel` only between calls. napi's suites and `scale.js` were
+    not measured: their drops reach only the OTLP encoder, as the
+    `tinyactors.telemetry.dropped` span attribute, which nothing counts
+    yet. 16 KiB stays the default for a system that does not trace
+    everything; 5.1 measures napi when it drives the rings.
+  - **c2hBytes (derived 794,624 at 64 slots):** the largest batch one
+    input's macrostep would write is 2,520 bytes of fixed-size records
+    (p99 640, median 0 for runs that ended no input), against the
+    per-slot reserve of 3 x `maxRecordBytes` = 12 KiB. The derived size
+    holds with room for the records' variable text.

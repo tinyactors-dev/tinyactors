@@ -27,7 +27,9 @@ decisions are core ADRs 0098 to 0105, repository ADR 0003 and napi ADR
   name's atoms; `typeexpr` lookups no longer intern.
 - [ ] **Phase 4, core gains its queue:** `tel` and the host clock (4.1, done:
   untraced cost unchanged, tracing +13 to 22% per event, ADR 0098's notes),
-  the pool and `ta_run` with one slot (4.2), delayed sends as envelopes
+  the pool and `ta_run` with one slot (4.2, done: hosts pass and read
+  names as text, the router is gone, the ring defaults measured by proxy in
+  ADR 0099's notes), delayed sends as envelopes
   (4.3), no allocation in a macrostep (4.4), macrostep slots (4.5).
 - [ ] **Phase 5, rings replace the vtables:** inputs (5.1), effects (5.2),
   unloading and loading (5.3), definitions (5.4), recording and replay

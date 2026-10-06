@@ -593,6 +593,23 @@ Decisions for these commits:
   live in the test host and the benchmarks, not in core. 5.1 checks the
   figures again on real rings.
 
+**Done (4.2).** The pool and `ta_run` with one slot landed as 4ca67840
+(the envelope pool and the name area), fe01185e (tests drive actors through
+one helper), 93c3d46a (admission and `ta_run`), 904b3353 (the taken input
+stays in its envelope), 19cd1813 (mail to resident sessions as envelopes),
+482417e2 and 6a6a1fac (mail for targets that are not resident waits in
+core; hosts post by address; the router goes), 3c7ebc7f (an immediate
+send's `eventexpr` name as bytes), 0bc6cfa9 and bb87794b (hosts pass and
+read names as text), 1d4f4588 (internal events and invocation names as
+text), 17ee9a94 (random target expressions) and the commit that measured
+the defaults. Commits 5 to 7 of the list above were split into those
+parts, and 7 landed before the rest of 6. The defaults, measured by proxy,
+are in ADR 0099's notes: h2c's 16 KiB may be small for a host that admits
+a whole turn's messages at once (5.1 measures it on the real ring);
+`tel`'s 16 KiB and the derived `c2hBytes` hold. A session-URI family no
+definition has is still interned (ADR 0100's notes), until waiting entries
+keep the address's bytes.
+
 Carried forward from commit 4 (19cd1813):
 
 - **The macrostep reserve is a fixed 64 envelopes**, and a macrostep

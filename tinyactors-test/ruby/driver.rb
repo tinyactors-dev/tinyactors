@@ -96,7 +96,15 @@ module TinyactorsTest
       @stderr_reader = Thread.new { @stderr.each_line { |line| @diagnostics << line } }
     end
 
+    # With TAT_RING_PROXIES set: host admissions (deliveries and invocation
+    # reports) since the last ta_run call, a proxy for what h2c would hold
+    # between two calls (core ADR 0099; measured in step 4.2).
+    attr_accessor :admissions_since_run
+
     def call(method, params = nil)
+      if ENV['TAT_RING_PROXIES']
+        @admissions_since_run = (@admissions_since_run || 0) + 1 if method.end_with?('actor.deliver', 'actor.report_invoke')
+      end
       @next_id += 1
       request = { jsonrpc: '2.0', id: @next_id, method: method }
       request[:params] = params unless params.nil?

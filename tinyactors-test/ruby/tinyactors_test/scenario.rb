@@ -1000,15 +1000,50 @@ module TinyactorsTest
         @creating_system = true
         # A tel ring large enough that one call's trace records never fill
         # it: a scenario that reads them compares every one (core ADR 0098).
-        params = [{ param: 'tel_bytes', value: TEL_BYTES }]
+        # Measuring ring proxies, the tel ring has core's default size.
+        params = ENV['TAT_RING_PROXIES'] ? [] : [{ param: 'tel_bytes', value: TEL_BYTES }]
         params += (@system_params || {}).map { |param, value| { param: param.to_s, value: value } }
         system = core('ta_system_create',
                       ta.system.create(config: { allocator: allocator.adapter, initial_time: 0,
                                                  params: params })).fetch(:out)
         @creating_system = false
         register_scxml_invoker(system)
+        @system = system
+        recording_trace(unsampled: true) if ENV['TAT_RING_PROXIES']
         system
       end
+    end
+
+    # Ring proxies (core ADR 0099, step 4.2), written as one JSON line per
+    # logical run to the file TAT_RING_PROXIES names: the host admissions
+    # before the run (h2c), the records tel dropped at its default size,
+    # and the largest c2h batch one input's macrostep would write, from the
+    # fixed sizes of its records (MESSAGES.md, pads included): c2h.input
+    # 152, c2h.macrostep_ended 72, c2h.input_completed 56, and per effect
+    # c2h.send 120 (every SENT record, mail between sessions included) and
+    # c2h.invoke 112. Measurement only: nothing checks the figures.
+    def note_ring_proxies
+      path = ENV['TAT_RING_PROXIES']
+      return unless path && @instruments['trace']
+
+      admissions = @driver.admissions_since_run || 0
+      @driver.admissions_since_run = 0
+      entries = @instruments['trace'].journal(since: @ring_proxy_seq)
+      @ring_proxy_seq = entries.last[:seq] unless entries.empty?
+      dropped = entries.select { |entry| entry[:op] == 'dropped' }.sum { |entry| Integer(entry.dig(:entry, :count) || entry[:count] || 0) }
+      batches = Hash.new(0)
+      entries.each do |entry|
+        next unless entry[:op] == 'trace'
+
+        record = entry[:entry] || entry
+        kind = record[:kind].to_s
+        key = [record[:actor], record.dig(:step, :macrostep) || record[:macrostep]]
+        batches[key] += 152 + 72 + 56 if kind == 'macrostep_begin'
+        batches[key] += 120 if kind == 'sent'
+        batches[key] += 112 if kind == 'invoked'
+      end
+      line = { admissions: admissions, dropped: dropped, batch: batches.values.max || 0 }
+      File.open(path, 'a') { |file| file.puts(JSON.generate(line)) }
     end
 
     # Withdraws the admitted input the host named `correlation` before a
@@ -1805,7 +1840,9 @@ module TinyactorsTest
         params = { system: system_handle, budget: budget, action_budget: action_budget,
                    pause_at_microstep_start: pause_at_microstep_start, outcome_capacity: capacity }
         params.merge!(report_taken: true, name_capacity: TAKEN_NAMES_BYTES) if @mail_taken
-        ta.run(**params)
+        response = ta.run(**params)
+        note_ring_proxies
+        response
       end
       index = @resume_index
       @resume_index += 1
