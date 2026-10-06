@@ -1849,6 +1849,9 @@ static handled end_item(sjs_parser *p, uint8_t plain, uint8_t spread) {
     frame *f = top_frame(p);
     uint8_t kind = f->spread ? spread : plain;
     f->spread = 0;
+    /* The next element or argument is an expression of its own: `??` there
+     * may follow `||` here. */
+    f->segment = 0;
     f->count++;
     return send_kind(p, kind, frame_place(f, f->at));
 }
@@ -2007,6 +2010,7 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
     case F_TEMPLATE:
         if (t->kind == SJS_TOKEN_TEMPLATE_MIDDLE) {
             f->count += 2;
+            f->segment = 0;
             p->expect = E_OPERAND;
             return send_event(p, texted(SJS_EV_STRING, token_text(p, t), frame_place(f, t->at)));
         }
@@ -2040,6 +2044,7 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
         if (!target) f->not_pattern = 1;
         uint8_t kind = f->spread ? SJS_EV_SPREAD_PROPERTY : SJS_EV_PROPERTY;
         f->spread = 0;
+        f->segment = 0;
         f->count++;
         if (send_kind(p, kind, frame_place(f, t->at)) == H_STOP) return H_STOP;
         if (is_punctuator(t, SJS_P_COMMA)) {
@@ -2062,6 +2067,7 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
         return end_initializer(p, t);
     case F_CONST:
         if (is_punctuator(t, SJS_P_SEMICOLON) || is_punctuator(t, SJS_P_COMMA)) {
+            f->segment = 0;
             /* MUTATION: whether a let's next declarator has a value. */
             uint8_t bare = 0;
             if (is_punctuator(t, SJS_P_COMMA) && f->declares_let) {
