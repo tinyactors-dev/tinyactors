@@ -188,11 +188,11 @@
 --- fault calls methods
 
 === reading a string method staticjs does not have
-"x".at
+"x".normalize
 --- fault calls methods
 
 === typeof a string method staticjs does not have
-typeof "x".padStart
+typeof "x".localeCompare
 --- fault calls methods
 
 === reading an array method staticjs does not have

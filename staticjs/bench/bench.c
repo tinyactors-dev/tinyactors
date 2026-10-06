@@ -21,6 +21,7 @@
  *   xs    the numbers 0 to n-1, shuffled, times 0.5
  *   rows  n objects {id: "r%06u", kwh: (i*37 % 1000)/10, priority: i%4, tags: ["a","b"]}
  *   ids   the row ids, with every fifth one twice
+ *   text  the row ids joined by commas: "r000000,r000001,...", 8n - 1 bytes
  *   a, b  string sets of n elements that overlap by half
  *
  * compile (unit byte; eventsPerOp): bytes pushed to sjs_parser_init ->
@@ -52,7 +53,10 @@
  * the length and sum checked against the removed part: [3,6] at every size), eval.string.join (L);
  * eval.string.concat-reduce (acc + r.id + ",", which + extends in place:
  * STRING_APPEND, L); eval.string.append-let (let s = acc; s += r.id;
- * s += ",": each += moves the let to +, MUTATION, L); eval.object.spread-reduce (C);
+ * s += ",": each += moves the let to +, MUTATION, L); eval.string.padStart (text, the
+ * row ids joined by commas, padded to twice its length with "ab") and
+ * eval.string.repeat ("r000000,".repeat(n)), each checked by its length and
+ * its ends (L); eval.object.spread-reduce (C);
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
  * place and quadratic before, eval.object.fromEntries, eval.set.new, .has,
@@ -228,6 +232,7 @@ typedef enum {
     FIX_PENDING_HALF,  /* the ids of the even rows */
     FIX_NUMBERS,
     FIX_STRINGS,
+    FIX_TEXT,          /* the row ids joined by commas, 8n - 1 bytes */
     FIX_WATERFILL,     /* the function from power's namespace */
     FIX_CAPACITY,
     FIX_DEMAND
@@ -455,6 +460,15 @@ static const bench_case cases[] = {
       .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "\"r000000,r000001,r000002,r000003,r000004,r000005,r000006,r000007,r000008,r000009,\"",
       .check = CHECK_IDS_JOINED },
+    /* A string built by a method: padded to twice its length, or repeated
+     * n times. */
+    { .name = "eval.string.padStart", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "(p => [p.length - 2 * text.length, p.startsWith(\"abab\"), p.endsWith(text)])"
+                "(text.padStart(2 * text.length, \"ab\"))",
+      .globals = { { "text", FIX_TEXT, NULL } }, .expect = "[0,true,true]", .check = CHECK_SAME },
+    { .name = "eval.string.repeat", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "(r => [r.length - 8 * xs.length, r.endsWith(\"r000000,r000000,\")])(\"r000000,\".repeat(xs.length))",
+      .globals = { { "xs", FIX_XS, NULL } }, .expect = "[0,true]", .check = CHECK_SAME },
     { .name = "eval.object.spread-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_C, .smoke = 10,
       .source = "rows.reduce((acc, r) => ({ ...acc, [r.id]: r.kwh }), {})", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "{\"r000000\":0,\"r000001\":3.7,\"r000002\":7.4,\"r000003\":11.1,\"r000004\":14.8,\"r000005\":18.5,"
@@ -917,6 +931,18 @@ static bool make_strings(bench_run *run, sjs_value *out) {
     return true;
 }
 
+/* The row ids joined by commas: "r000000,r000001,...". */
+static bool make_text(bench_run *run, sjs_value *out) {
+    size_t length = (size_t)run->n * 8u - 1u;
+    char *text = malloc(length + 1u);
+    if (text == NULL) return fail(run, "out of memory");
+    memcpy(text, run->ids, length);
+    for (uint32_t i = 1; i < run->n; i++) text[(size_t)i * 8u - 1u] = ',';
+    bool ok = sjs_string_new(run->context, (sjs_str){ text, (uint32_t)length }, out) == SJS_OK;
+    free(text);
+    return ok ? true : fail(run, "sjs_string_new failed");
+}
+
 /* {p000: {want_kw, priority}, ...}: n ports in three priorities. */
 static bool make_demand(bench_run *run, sjs_value *out) {
     if (sjs_object_new(run->context, run->n, out) != SJS_OK) return fail(run, "sjs_object_new failed");
@@ -947,6 +973,7 @@ static bool make_global(bench_run *run, const bench_global *global, sjs_value *o
     case FIX_PENDING_HALF: return make_pending_half(run, out);
     case FIX_NUMBERS: return make_numbers(run, out);
     case FIX_STRINGS: return make_strings(run, out);
+    case FIX_TEXT: return make_text(run, out);
     case FIX_CAPACITY: *out = sjs_number(6.0 * run->n); return true;
     case FIX_DEMAND: return make_demand(run, out);
     case FIX_WATERFILL:
@@ -1296,7 +1323,7 @@ static bool needs_ids(const bench_case *c) {
     if (c->op == OP_VALUES_ROWS) return true;
     for (uint32_t i = 0; i < MAX_GLOBALS; i++) {
         bench_fixture f = c->globals[i].fixture;
-        if (f == FIX_ROWS || f == FIX_IDS || f == FIX_PENDING_HALF) return true;
+        if (f == FIX_ROWS || f == FIX_IDS || f == FIX_PENDING_HALF || f == FIX_TEXT) return true;
     }
     return false;
 }

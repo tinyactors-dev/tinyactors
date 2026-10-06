@@ -145,6 +145,9 @@ typedef struct {
 } sjs_leaf_call;
 
 sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+/* STRING_APPEND: the text of a primitive as String gives it: a string's own,
+ * or written into `room` (32 bytes). Not for an object (sjs_is_primitive). */
+sjs_str sjs_primitive_text(sjs_value v, char *room);
 /* MUTATION: a method that changes its receiver, but sort (a loop): the
  * receiver is the value of the variable at `receiver_slot`, which holds it
  * alone; the method updates the slot when the value moves. */

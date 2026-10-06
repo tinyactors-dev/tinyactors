@@ -191,3 +191,122 @@ Array.from({length: 1000}, (_, i) => i % 10).reduce((acc, x) => acc + x, "").len
 (() => { const s = Array.from({length: 300}, (_, i) => ["é", "😀"][i % 2]).reduce((acc, x) => `${acc}${x}`, ""); return [s.length, s.slice(0, 4)]; })()
 --- value
 [450,"é😀é"]
+
+# padStart, padEnd and repeat. Lengths and counts are in UTF-16 code units;
+# a pad string converts with String's rules (an object faults), and padding
+# that would end in half of a character outside the BMP faults, as staticjs
+# strings cannot hold a lone surrogate. Every expected value was generated
+# by running the case in Node 22.
+
+=== padStart and padEnd
+["abc".padStart(6), "abc".padEnd(6), "abc".padStart(6, "12"), "abc".padEnd(8, "12"), "abc".padStart(2), "abc".padEnd(3, "x"), "abc".padStart(6, ""), "abc".padEnd(6, "")]
+--- value
+["   abc","abc   ","121abc","abc12121","abc","abc","abc","abc"]
+
+=== padStart and padEnd of an empty string
+["".padStart(3, "ab"), "".padEnd(5, "ab"), "".padStart(0), "".padEnd(2)]
+--- value
+["aba","ababa","","  "]
+
+=== padStart and padEnd count UTF-16 code units
+["é".padStart(3, "日本"), "日本".padEnd(5, "é"), "😀".padStart(4, "x"), "x".padStart(5, "😀"), "x".padEnd(3, "😀"), "😀".padEnd(2, "x"), "é😀".padStart(5, "ab")]
+--- value
+["日本é","日本ééé","xx😀","😀😀x","x😀","😀","abé😀"]
+
+=== padStart faults where the padding would end in half of a pair
+"x".padStart(4, "😀")
+--- fault lone surrogate
+
+=== padEnd faults where the padding would end in half of a pair
+"x".padEnd(2, "😀")
+--- fault lone surrogate
+
+=== padStart and padEnd convert lengths as ToLength does
+["a".padStart(3.9, "-"), "a".padEnd(-5, "-"), "a".padStart(NaN, "-"), "a".padEnd(undefined, "-"), "a".padStart(null, "-"), "a".padEnd(true, "-"), "a".padStart(-0, "-"), "a".padEnd(-Infinity, "-"), "a".padStart(Infinity, "")]
+--- value
+["--a","a","a","a","a","a","a","a","a"]
+
+=== padStart and padEnd convert a primitive pad string as String does
+["5".padStart(3, 0), "a".padEnd(4, true), "a".padStart(5, null), "a".padEnd(3, undefined), "a".padStart(4, 1.5), "a".padEnd(4, -0), "a".padStart(3)]
+--- value
+["005","atru","nulla","a  ","1.5a","a000","  a"]
+
+=== padStart faults on an object as the pad string
+"a".padStart(3, {})
+--- fault primitives
+
+=== padEnd faults on an array as the pad string
+"a".padEnd(3, [1])
+--- fault primitives
+
+=== padStart faults on a function as the pad string
+"a".padStart(3, x => x)
+--- fault primitives
+
+=== padEnd faults on a set as the pad string
+"a".padEnd(3, new Set([1]))
+--- fault primitives
+
+=== padStart and padEnd convert no pad string when there is nothing to pad
+["abc".padStart(2, {}), "abc".padEnd(3, [1]), "".padStart(0, x => x)]
+--- value
+["abc","abc",""]
+
+=== padStart faults on a length that is a string
+"a".padStart("3")
+--- fault numbers
+
+=== padEnd faults on a length that is an object
+"a".padEnd({}, "x")
+--- fault numbers
+
+=== padStart past the limit
+"a".padStart(Infinity)
+--- fault limit
+
+=== padEnd past the limit
+"ab".padEnd(1e9, "x")
+--- fault limit
+
+=== repeat
+["ab".repeat(3), "ab".repeat(0), "".repeat(5), "é😀".repeat(2), "x".repeat(1), "日本".repeat(3)]
+--- value
+["ababab","","","é😀é😀","x","日本日本日本"]
+
+=== repeat converts its count as ToIntegerOrInfinity does
+["x".repeat(2.9), "x".repeat(NaN), "x".repeat(), "x".repeat(undefined), "x".repeat(null), "x".repeat(true), "x".repeat(false), "x".repeat(-0), "x".repeat(-0.5), "".repeat(1e9)]
+--- value
+["xx","","","","","x","","","",""]
+
+=== repeat faults on a negative count
+"x".repeat(-1)
+--- fault count
+
+=== repeat faults on an infinite count
+"x".repeat(Infinity)
+--- fault count
+
+=== repeat faults on an infinite count of an empty string
+"".repeat(Infinity)
+--- fault count
+
+=== repeat faults on a negative count of an empty string
+"".repeat(-Infinity)
+--- fault count
+
+=== repeat faults on a count that is a string
+"x".repeat("2")
+--- fault numbers
+
+=== repeat faults on a count that is an array
+"x".repeat([2])
+--- fault numbers
+
+=== repeat past the limit
+"abc".repeat(1e9)
+--- fault limit
+
+=== a padded and a repeated string join with +
+(s => s + s.padEnd(4, "-") + s.repeat(2))("ab")
+--- value
+"abab--abab"
