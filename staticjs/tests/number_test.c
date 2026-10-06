@@ -15,6 +15,12 @@
  *                               prefix, Infinity or junk around them
  *     I <radix> <bits> <text>   COUNT strings read: parseInt(text, radix), in
  *                               every radix, with up to 400 digits
+ *     S <x> <sqrt> <fround>     COUNT doubles: Math.sqrt(x), Math.fround(x); any
+ *                               bits, and float32 midpoints and their neighbours
+ *     H <hypot> <x>...          COUNT argument lists: Math.hypot(...x); up to 8
+ *                               arguments, of any bits, of near magnitudes,
+ *                               integers, zeros, Infinity and NaN
+ *     C <a> <b> <clz32> <imul>  COUNT pairs: Math.clz32(a), Math.imul(a, b)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -301,11 +307,105 @@ static void print_integers(long count) {
     }
 }
 
+/* A double of any bits, NaN and the infinities included. */
+static double any_double(void) {
+    switch (next() % 16) {
+    case 0: return 0.0 / 0.0;
+    case 1: return next() % 2 == 0 ? 1.0 / 0.0 : -1.0 / 0.0;
+    case 2: return next() % 2 == 0 ? 0.0 : -0.0;
+    case 3: return from_bits(next() & 0x800FFFFFFFFFFFFFull); /* subnormal */
+    default: return from_bits(next());
+    }
+}
+
+static void print_roots(long count) {
+    for (long i = 0; i < count; i++) {
+        double x = any_double();
+        if (i % 2 == 1) {
+            /* Halfway between two floats, or a double on either side of it. */
+            uint32_t f = (uint32_t)next() & 0x7F7FFFFFu;
+            float low;
+            float high;
+            uint32_t g = f + 1u;
+            memcpy(&low, &f, sizeof low);
+            memcpy(&high, &g, sizeof high);
+            x = ((double)low + (double)high) / 2;
+            if (i % 6 == 3) x = from_bits(to_bits(x) + 1u);
+            if (i % 6 == 5) x = from_bits(to_bits(x) - 1u);
+            if (next() % 2 == 0) x = -x;
+        }
+        printf("S %016llx %016llx %016llx\n", (unsigned long long)to_bits(x),
+               (unsigned long long)to_bits(sjs_number_sqrt(x)), (unsigned long long)to_bits(sjs_number_fround(x)));
+    }
+}
+
+static void print_hypots(long count) {
+    double args[8];
+    for (long i = 0; i < count; i++) {
+        uint32_t n = (uint32_t)(next() % 9);
+        if (i % 4 != 0 && n < 2) n += 2;
+        int base = (int)(next() % 2046) + 1; /* a field for numbers of near magnitude */
+        for (uint32_t k = 0; k < n; k++) {
+            switch ((i + k) % 5) {
+            case 0:
+                args[k] = next() % 64 == 0 ? any_double() : from_bits(next());
+                break;
+            case 1: case 2: {
+                int field = base + (int)(next() % 7) - 3;
+                if (field < 1) field = 1;
+                if (field > 2046) field = 2046;
+                args[k] = from_bits(((uint64_t)field << 52) | (next() & 0x800FFFFFFFFFFFFFull));
+                break;
+            }
+            case 3:
+                args[k] = (double)(int64_t)(next() % 2001) - 1000.0;
+                break;
+            default:
+                args[k] = next() % 16 == 0 ? any_double() : (double)(next() % 100000) / 1000.0;
+                break;
+            }
+        }
+        sjs_hypot h = { 0, 0, 0, false };
+        for (uint32_t k = 0; k < n; k++) sjs_hypot_see(&h, args[k]);
+        double result;
+        if (!sjs_hypot_settled(&h, &result)) {
+            for (uint32_t k = 0; k < n; k++) sjs_hypot_add(&h, args[k]);
+            result = sjs_hypot_end(&h);
+        }
+        printf("H %016llx", (unsigned long long)to_bits(result));
+        for (uint32_t k = 0; k < n; k++) printf(" %016llx", (unsigned long long)to_bits(args[k]));
+        printf("\n");
+    }
+}
+
+static double any_integer(void) {
+    switch (next() % 4) {
+    case 0: return any_double();
+    case 1: return (double)(int32_t)next();
+    case 2: return (double)(uint32_t)next() + (double)(next() % 4) * 4294967296.0 + (next() % 2 == 0 ? 0.5 : 0);
+    default: return -(double)(next() % 100000) / 7.0;
+    }
+}
+
+static void print_integer_ops(long count) {
+    for (long i = 0; i < count; i++) {
+        double a = any_integer();
+        double b = any_integer();
+        uint32_t bits = sjs_number_to_uint32(a);
+        uint32_t product = bits * sjs_number_to_uint32(b);
+        printf("C %016llx %016llx %d %d\n", (unsigned long long)to_bits(a), (unsigned long long)to_bits(b),
+               bits == 0 ? 32 : __builtin_clz(bits), product >= 0x80000000u ? (int)(product - 0x80000000u) - 0x7FFFFFFF - 1 : (int)product);
+    }
+}
+
 static int print(long count) {
     print_formats(count);
     print_decimals(count);
     print_strings(count);
     print_integers(count);
+    print_roots(count);
+    print_hypots(count);
+    print_integer_ops(count);
     return 0;
 }
 
