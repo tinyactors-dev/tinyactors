@@ -502,14 +502,24 @@ typedef enum {
     SJS_OP_MUTATE,         /* u16 argc, u8 flags (SPREAD, CHAIN): call it, the slot's value
                             * held by the slot alone; a method that returns its receiver
                             * gives a copy of it, or with CHAIN the reference again */
-    SJS_OP_SORTED          /* u16 slot, u8 flags (CHAIN): after a MUTATE of sort, whose
+    SJS_OP_SORTED,         /* u16 slot, u8 flags (CHAIN): after a MUTATE of sort, whose
                             * result it pops into the slot; then as MUTATE gives it */
+    /* MUTATION: assignment to a property or an element of a variable. */
+    SJS_OP_PATH            /* u16 n, u8 SJS_PATH_*: [reference, n keys] the place of the
+                            * variable's value they name, each a string: LOAD pushes its
+                            * value; STORE pops the value above them into it, and them;
+                            * DROP pops them and the value above them */
 } sjs_opcode;
 
 /* SJS_OP_CALL flags. */
 #define SJS_CALL_METHOD 1u
 #define SJS_CALL_SPREAD 2u
 #define SJS_CALL_CHAIN 4u   /* MUTATION: SJS_OP_MUTATE: the receiver goes on to the next mutation */
+
+/* MUTATION: SJS_OP_PATH modes. */
+#define SJS_PATH_LOAD 0u
+#define SJS_PATH_STORE 1u
+#define SJS_PATH_DROP 2u
 
 /* SJS_OP_OBJECT_LITERAL flags. */
 #define SJS_LITERAL_ABOVE 1u  /* one value is above the literal's values: a spread's source or a computed key */

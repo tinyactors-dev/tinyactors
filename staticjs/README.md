@@ -22,12 +22,14 @@ too; and 100,000 doubles must format as `String(x)` does.
 
 ## What it guarantees
 
-- **No side effects.** There is no assignment, no statements but `const`,
-  `if`, blocks, `return` and a call that changes a variable, and no way to
-  reach anything that is not passed in. Values are never changed once
-  shared: a function changes only a value that a variable of its own holds
-  alone, with one of its methods (`xs.push(x)`, `s.add(x)`), which no one
-  else can see ([docs/mutation.md](docs/mutation.md)).
+- **No side effects.** There are no statements but `const`, `if`, blocks,
+  `return`, a call that changes a variable and an assignment to its
+  properties or elements, and no way to reach anything that is not passed
+  in. Values are never changed once shared: a function changes only a value
+  that a variable of its own holds alone, with one of its methods
+  (`xs.push(x)`, `s.add(x)`) or by assigning into it (`o.k = v`,
+  `xs[i] += 1`), which no one else can see
+  ([docs/mutation.md](docs/mutation.md)).
 - **Every evaluation ends.** Loops are built-ins over collections that
   already exist; code jumps only forward. A function cannot refer to itself
   or to a later `const`
@@ -174,11 +176,14 @@ Built-ins:
 variable that the function owns: a parameter or a `const` of the function,
 never captured by an arrow function, and never copied, passed or stored
 before the call. Such a call, or a chain of them (`s.add(1).add(2)`), may
-also be a statement. The compiler refuses any other receiver it can see is
-shared, and the evaluator faults when the variable's value has another
-holder: a caller, the embedder, a module's export, or itself
-(`xs.push(xs)`). The rules, the check and how to roll it back are in
-[docs/mutation.md](docs/mutation.md).
+also be a statement. So may an assignment to a property or an element of
+such a variable, as deep as it goes (`acc[r.id] = r.kwh`, `o.a[i].n += 1`,
+`o.k ??= []`, `o.n++`), with JavaScript's evaluation order. The compiler
+refuses any other receiver or target it can see is shared, and the
+evaluator faults when the variable's value, or a container on the path,
+has another holder: a caller, the embedder, a module's export, another
+variable, or itself (`xs.push(xs)`, `o.self = o`). The rules, the check
+and how to roll it back are in [docs/mutation.md](docs/mutation.md).
 
 The embedder can add functions (`sjs_function_native`), such as SCXML's
 `In()`. They are the one way into a program from outside.
@@ -211,6 +216,13 @@ compare identities, or find something on a prototype.
   array, an argument that is the receiver), or on a receiver that is not a
   variable (`[1].push(2)`, `xs?.push(1)`). `sort()` without a compare
   function, as `toSorted()`.
+- An assignment through a container something else holds, or one that
+  would make a cycle (`o.self = o`); to an array's element past its end
+  (JavaScript leaves holes), to its `length` or to a key that is not an
+  index; to a property of a string, a set, a number or a function
+  (JavaScript ignores it, adds it or throws); to `__proto__` or a name
+  `Object.prototype` has, as reading it faults; `++` of anything but a
+  number, which JavaScript converts.
 - `toSorted()` without a compare function; `toLowerCase()` of a string
   that is not ASCII; slicing a string through the middle of a surrogate pair.
 - A number literal outside Clinger's fast path (digits worth more than
@@ -230,16 +242,18 @@ refused; and a name used before its import or declaration, even in an
 earlier function. A default value that reads a later parameter, its own
 parameter, or a name its function's body declares is refused too:
 JavaScript would throw, or would find another binding, as parameters have a
-scope of their own. Assigning is refused as unsupported where JavaScript
-can assign (`a.b = 1`, `[a] = xs`), and as a syntax error where it cannot
-(`1 = 2`, `a + b = 1`). In a script, which is sloppy, `eval`, `arguments` and the
+scope of their own. An assignment, `++` and `--` are refused as
+unsupported where JavaScript can assign but staticjs does not (anywhere
+but as a statement, `[a] = xs`, a target whose root is not a variable the
+function owns, `**=` and the bitwise forms: docs/mutation.md), and as a
+syntax error where JavaScript cannot (`1 = 2`, `a + b = 1`, `1++`). In a script, which is sloppy, `eval`, `arguments` and the
 words only strict code reserves (`yield`, `let`, ...) are names, which
 staticjs does not bind; in a module they are syntax errors.
 
 Among the statements: loops, `switch`, `throw`, `try`, `let` and `var`,
 labels, function and class declarations, and expression statements, which
 can have no effect, are unsupported, but for a call that changes a variable
-the function owns (and the mutation of a variable the function does not
+the function owns and an assignment (and the mutation of a variable the function does not
 own, or that was captured, copied, passed or stored before it, is
 unsupported too: docs/mutation.md); `break` and `continue` are syntax
 errors, as staticjs has no loop for them to leave, but for `break name`

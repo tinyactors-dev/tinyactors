@@ -84,6 +84,7 @@ typedef struct {
     uint32_t index;        /* local slot, or constant */
     uint8_t kind;
     uint8_t use;           /* MUTATION: USE_* */
+    uint32_t changed_at;   /* MUTATION: its last mutation's receiver's pc, plus one; 0 for none */
 } binding;
 
 /* An index from names to numbers: open addressing with linear probing. The
@@ -142,7 +143,8 @@ typedef struct {
 } capture;
 
 /* Open constructs. */
-enum { K_LOGICAL = 1, K_CONDITIONAL, K_CHAIN, K_CALL, K_NEW, K_FUNCTION, K_CONST, K_TEMPLATE, K_DEFAULT, K_IF, K_BLOCK };
+enum { K_LOGICAL = 1, K_CONDITIONAL, K_CHAIN, K_CALL, K_NEW, K_FUNCTION, K_CONST, K_TEMPLATE, K_DEFAULT, K_IF, K_BLOCK,
+       K_ASSIGN /* MUTATION */ };
 
 /* construct.branch of a K_IF: in which part of the if, or of its else-if
  * chain, the events are. KI_ELSE_IF waits for the next test's IF. */
@@ -165,6 +167,12 @@ typedef struct {
     uint8_t returns;
     uint8_t sorts;
     uint32_t receiver;
+    /* MUTATION: K_ASSIGN: its operator (0 for `=`), the binding at its
+     * target's root (`receiver`), its keys, the read of its root's pc, and
+     * for && || ?? the jump past the store (`jump`). */
+    uint8_t assign;
+    uint32_t keys;
+    uint32_t root_pc;
 } construct;
 
 /* An array or object pattern being compiled. An object pattern keeps its
@@ -237,6 +245,16 @@ typedef struct {
     uint32_t receiver;
     uint8_t returns;
 } mutation_site;
+
+/* MUTATION: a path, which an assignment's target is: a name read, and the
+ * members and indices read of it since (`a.b[i].c`), each a step: the pc
+ * of its GET_MEMBER or GET_INDEX, in c->path_steps from steps_base on.
+ * `end` is here() after its last instruction. */
+typedef struct {
+    name_read root;
+    uint32_t end;
+    uint32_t steps_base;
+} path;
 
 /* Names to sort as a namespace sorts its keys; rank and index break ties.
  * Rank 0: exports[index]. Rank 1: key `entry` of stars[index]'s module. */
@@ -326,6 +344,9 @@ struct sjs_compiler {
     uint32_t pending_read;
     bool refusing;
     sjs_error_slot refusal;
+    /* MUTATION: the paths an assignment could be to, innermost last. */
+    sjs_buf paths;
+    sjs_buf path_steps;
 };
 
 static const sjs_allocator *alloc(sjs_compiler *c) {
@@ -885,6 +906,7 @@ static void note_use(sjs_compiler *c, uint32_t kind) {
     case SJS_EV_LOGICAL_END:
     case SJS_EV_CONDITIONAL_ELSE:
     case SJS_EV_CONDITIONAL_END:
+    case SJS_EV_ASSIGN_END:
         b->use |= USE_COPIED;
         break;
     default:
@@ -895,6 +917,62 @@ static void note_use(sjs_compiler *c, uint32_t kind) {
 static void note_read(sjs_compiler *c, name_read read) {
     read.end = here(c);
     c->last_name = read;
+}
+
+/* Paths (the type's comment). The parser sends an assignment's target as
+ * it sends any read, and ASSIGN after it, so the compiler keeps the paths
+ * that could be one: a name read begins a path, a MEMBER or an INDEX of it
+ * goes on with it, and any other event whose node starts where the path
+ * does ends it, as that node holds the path (sjs_event.start: an
+ * operator's, a member's, an index's or a call's node starts with its first
+ * operand). The paths read in an index's key are inside it, and end with
+ * it. */
+static path *top_path(sjs_compiler *c) {
+    uint32_t n = SJS_BUF_COUNT(c->paths, path);
+    return n == 0 ? NULL : &SJS_BUF_AT(c->paths, path, n - 1u);
+}
+
+static void drop_paths(sjs_compiler *c, uint32_t from) {
+    if (from >= SJS_BUF_COUNT(c->paths, path)) return;
+    c->path_steps.length = SJS_BUF_AT(c->paths, path, from).steps_base * (uint32_t)sizeof(uint32_t);
+    c->paths.length = from * (uint32_t)sizeof(path);
+}
+
+/* The name read_name has just read begins a path. */
+static sjs_result path_begin(sjs_compiler *c) {
+    path p = { c->last_name, here(c), SJS_BUF_COUNT(c->path_steps, uint32_t) };
+    sjs_result r = buf_add(c, &c->paths, bytes_of(&p, sizeof p));
+    return r == SJS_OK ? SJS_OK : fail_result(c, r, p.root.at);
+}
+
+/* Before an event: the paths whose root is at or after where its node
+ * starts end, but one that a MEMBER or an INDEX goes on with. ASSIGN and
+ * UPDATE take theirs from the top. */
+static void paths_before(sjs_compiler *c, const sjs_event *e) {
+    if (e->kind == SJS_EV_ASSIGN || e->kind == SJS_EV_UPDATE) return;
+    bool goes_on = e->kind == SJS_EV_MEMBER || e->kind == SJS_EV_INDEX;
+    uint32_t n = SJS_BUF_COUNT(c->paths, path);
+    while (n > 0) {
+        uint32_t root = SJS_BUF_AT(c->paths, path, n - 1u).root.at.offset;
+        if (root < e->start.offset || (goes_on && root == e->start.offset)) break;
+        n--;
+    }
+    drop_paths(c, n);
+}
+
+/* The GET_MEMBER or GET_INDEX at `pc`, just compiled for `e`, is a step of
+ * the path on top if its node starts at the path's root; for a member, if
+ * nothing came between them either. Otherwise that path ends. */
+static sjs_result path_step(sjs_compiler *c, const sjs_event *e, uint32_t pc) {
+    path *p = top_path(c);
+    if (p == NULL || p->root.at.offset != e->start.offset) return SJS_OK;
+    if (e->kind == SJS_EV_MEMBER && p->end != pc) {
+        drop_paths(c, SJS_BUF_COUNT(c->paths, path) - 1u);
+        return SJS_OK;
+    }
+    p->end = here(c);
+    sjs_result r = buf_add(c, &c->path_steps, bytes_of(&pc, sizeof pc));
+    return r == SJS_OK ? SJS_OK : fail_result(c, r, e->at);
 }
 
 /* MUTATION ends. */
@@ -916,7 +994,7 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
                 if (op32(c, ins(SJS_OP_CONSTANT, b->index, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
                 read.kind = NR_IMPORT; /* MUTATION */
                 note_read(c, read);
-                return SJS_OK;
+                return path_begin(c);
             }
             uint32_t owner = SJS_BUF_AT(c->scopes, scope, s).function_scope;
             if (owner == current(c)->function_scope) {
@@ -925,7 +1003,7 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
                 read.kind = NR_OWN;
                 note_read(c, read);
                 c->pending_read = i + 1u;
-                return SJS_OK;
+                return path_begin(c);
             }
             /* MUTATION */
             if (note_capture(c, i, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
@@ -950,7 +1028,7 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
             }
             if (op16(c, ins(SJS_OP_CAPTURE, index, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
             note_read(c, read); /* MUTATION */
-            return SJS_OK;
+            return path_begin(c);
         }
         if (note_outer_ref(c, s, e) != SJS_OK) return SJS_ERR_PROGRAM;
     }
@@ -961,7 +1039,7 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
         read.kind = NR_GLOBAL;
         read.which = global;
         note_read(c, read);
-        return SJS_OK;
+        return path_begin(c);
     }
     if (sjs_str_equal(e->text, SJS_STR("undefined"))) return op(c, SJS_OP_UNDEFINED_, e->at);
     if (sjs_str_equal(e->text, SJS_STR("NaN"))) return number_constant(c, 0.0 / 0.0, e->at);
@@ -1830,6 +1908,7 @@ static bool mutation_begin(sjs_compiler *c, construct *k) {
             return false;
         }
         b->use |= USE_MUTATED;
+        b->changed_at = read->pc + 1u;
         c->code.ptr[read->pc] = SJS_OP_RECEIVER;
         k->receiver = read->which;
     } else if (chain->end == member && c->last_label <= chain->pc && chain->returns) {
@@ -2056,6 +2135,144 @@ static sjs_result compile_expression_statement(sjs_compiler *c, const sjs_event 
     return op(c, SJS_OP_POP, e->at);
 }
 
+/* MUTATION: assignment (docs/mutation.md, "Assignment"): a statement that
+ * stores into a property or an element of a variable the function owns.
+ * Its target's code is already there, as a read: the read of the root
+ * becomes a RECEIVER, a reference to its slot that holds nothing, and each
+ * step pushes its key, a GET_MEMBER's constant or a GET_INDEX's key made a
+ * string (TO_KEY). PATH then finds the place they name when it runs,
+ * through containers the place before holds alone. */
+enum { TARGET_TAKEN = 0, TARGET_REFUSED, TARGET_FAILED };
+
+static const char *const refused_target = "staticjs assigns only to a property or an element of a variable the function owns";
+static const char *const refused_changing = "staticjs does not change a variable with one of its methods while it assigns to it";
+
+static bool assign_operator(uint32_t op) {
+    return op == 0 || (op >= SJS_OP_ADD && op <= SJS_OP_REMAINDER) || op == SJS_OP_AND || op == SJS_OP_OR || op == SJS_OP_COALESCE;
+}
+
+static bool logical_operator(uint32_t op) {
+    return op == SJS_OP_AND || op == SJS_OP_OR || op == SJS_OP_COALESCE;
+}
+
+/* The target of an assignment or an update: the path on top, which ends
+ * here. Its root must be a variable the function owns, under the rules of a
+ * mutation; k takes the root's binding, its keys and the read's pc. */
+static uint8_t assign_target(sjs_compiler *c, const sjs_event *e, construct *k) {
+    path *p = top_path(c);
+    if (p == NULL || p->end != here(c)) {
+        refuse_later(c, e->start, (refusal){ refused_target, SJS_STR("") });
+        return TARGET_REFUSED;
+    }
+    name_read root = p->root;
+    uint32_t keys = SJS_BUF_COUNT(c->path_steps, uint32_t) - p->steps_base;
+    if (keys == 0) {
+        refuse_later(c, root.at, (refusal){ refused_target, SJS_STR("") });
+        return TARGET_REFUSED;
+    }
+    if (root.kind == NR_GLOBAL) {
+        refuse_later(c, root.at, (refusal){ "staticjs changes only a value a variable of the function holds, and this is a global", c->globals[root.which] });
+        return TARGET_REFUSED;
+    }
+    sjs_str name = binding_name(c, root.which);
+    if (root.kind == NR_IMPORT) {
+        refuse_later(c, root.at, (refusal){ "staticjs changes only a value a variable of the function holds, and this is an import", name });
+        return TARGET_REFUSED;
+    }
+    binding *b = &SJS_BUF_AT(c->bindings, binding, root.which);
+    const char *why = root.kind == NR_CAPTURE ? refused_captured : refused_use(b->use);
+    if (why == NULL && b->changed_at > root.pc + 1u) why = refused_changing;
+    if (why != NULL) {
+        refuse_later(c, root.at, (refusal){ why, name });
+        return TARGET_REFUSED;
+    }
+    if (keys > UINT16_MAX) {
+        compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_LIMIT, "an assignment's target has too many keys" });
+        return TARGET_FAILED;
+    }
+    b->use |= USE_MUTATED;
+    c->code.ptr[root.pc] = SJS_OP_RECEIVER;
+    for (uint32_t i = 0; i < keys; i++) {
+        uint8_t *step = c->code.ptr + SJS_BUF_AT(c->path_steps, uint32_t, p->steps_base + i);
+        *step = *step == SJS_OP_GET_MEMBER ? SJS_OP_CONSTANT : SJS_OP_TO_KEY;
+    }
+    forget_read(c, current(c)->function_scope, b->index);
+    drop_paths(c, SJS_BUF_COUNT(c->paths, path) - 1u);
+    c->last_op_valid = false;
+    k->receiver = root.which;
+    k->keys = keys;
+    k->root_pc = root.pc;
+    return TARGET_TAKEN;
+}
+
+/* PATH, over the target's keys; the instruction's operand is its mode. */
+static sjs_result emit_path(sjs_compiler *c, const construct *k, instruction mode) {
+    if (op(c, SJS_OP_PATH, mode.at) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (u16(c, (uint16_t)k->keys) != SJS_OK) return SJS_ERR_PROGRAM;
+    return u8(c, (uint8_t)mode.operand);
+}
+
+/* The value stored has been read, and nothing read the root's slot since
+ * that it moves (forget_read); a method may not have changed the variable
+ * meanwhile, as JavaScript holds the containers of the path from before. */
+static sjs_result assign_store(sjs_compiler *c, const construct *k, const sjs_event *e) {
+    binding *b = &SJS_BUF_AT(c->bindings, binding, k->receiver);
+    if (b->changed_at > k->root_pc + 1u) return refuse_later(c, e->start, (refusal){ refused_changing, binding_name(c, k->receiver) });
+    forget_read(c, current(c)->function_scope, b->index);
+    return emit_path(c, k, ins(SJS_OP_PATH, SJS_PATH_STORE, e->at));
+}
+
+/* ASSIGN: the target is compiled; the value follows. A compound
+ * assignment reads the target's value first; && || ?? skip the value and
+ * the store by its truth. */
+static sjs_result assign_begin(sjs_compiler *c, const sjs_event *e) {
+    if (!statement_level(c) || !assign_operator(e->count)) return out_of_order(c, e->at);
+    construct k = { 0 };
+    k.kind = K_ASSIGN;
+    k.assign = (uint8_t)e->count;
+    uint8_t taken = assign_target(c, e, &k);
+    if (taken != TARGET_TAKEN) return taken == TARGET_REFUSED ? SJS_OK : SJS_ERR_PROGRAM;
+    if (k.assign != 0 && emit_path(c, &k, ins(SJS_OP_PATH, SJS_PATH_LOAD, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (logical_operator(k.assign)) {
+        uint8_t opcode = k.assign == SJS_OP_AND ? SJS_OP_JUMP_FALSY_KEEP
+                       : (k.assign == SJS_OP_OR ? SJS_OP_JUMP_TRUTHY_KEEP : SJS_OP_JUMP_DEFINED_KEEP);
+        if (jump(c, ins(opcode, 0, e->at), &k.jump) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    return push_construct(c, k, e->at);
+}
+
+/* ASSIGN_END: the value is on the stack. */
+static sjs_result assign_end(sjs_compiler *c, const sjs_event *e) {
+    if (expect_construct(c, K_ASSIGN, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    construct k = pop_construct(c);
+    if (e->count != k.assign) return out_of_order(c, e->at);
+    if (k.assign != 0 && !logical_operator(k.assign)) {
+        if (op(c, SJS_OP_BINARY_, e->at) != SJS_OK || u8(c, k.assign) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    if (assign_store(c, &k, e) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (!logical_operator(k.assign)) return SJS_OK;
+    /* The target's value decided: it goes, with the path. */
+    uint32_t after;
+    if (jump(c, ins(SJS_OP_JUMP, 0, e->at), &after) != SJS_OK) return SJS_ERR_PROGRAM;
+    land(c, k.jump);
+    if (emit_path(c, &k, ins(SJS_OP_PATH, SJS_PATH_DROP, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    land(c, after);
+    return SJS_OK;
+}
+
+/* UPDATE: `t++` or `t--`, a statement. ++ subtracts -1, as JavaScript adds
+ * to a number only; staticjs's + would join a string. */
+static sjs_result compile_update(sjs_compiler *c, const sjs_event *e) {
+    if (!statement_level(c) || (e->count != SJS_OP_ADD && e->count != SJS_OP_SUBTRACT)) return out_of_order(c, e->at);
+    construct k = { 0 };
+    uint8_t taken = assign_target(c, e, &k);
+    if (taken != TARGET_TAKEN) return taken == TARGET_REFUSED ? SJS_OK : SJS_ERR_PROGRAM;
+    if (emit_path(c, &k, ins(SJS_OP_PATH, SJS_PATH_LOAD, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (number_constant(c, e->count == SJS_OP_ADD ? -1.0 : 1.0, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (op(c, SJS_OP_BINARY_, e->at) != SJS_OK || u8(c, SJS_OP_SUBTRACT) != SJS_OK) return SJS_ERR_PROGRAM;
+    return assign_store(c, &k, e);
+}
+
 /* BLOCK_END: falling off the end of a body returns undefined. */
 static sjs_result compile_body_end(sjs_compiler *c, const sjs_event *e) {
     if (expect_construct(c, K_FUNCTION, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
@@ -2103,6 +2320,7 @@ static sjs_result end(sjs_compiler *c, const sjs_event *e) {
 
 static sjs_result event(sjs_compiler *c, const sjs_event *e) {
     if (c->pending_read != 0) note_use(c, e->kind); /* MUTATION */
+    if (c->paths.length != 0) paths_before(c, e); /* MUTATION */
     if (c->space != NS_NONE && e->kind != SJS_EV_MEMBER) {
         return compile_fail(c, c->space_at, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "Math, Object, Number and Array are used only as Math.name" });
     }
@@ -2156,10 +2374,12 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
         if (c->space != NS_NONE) return read_space_member(c, e);
         uint32_t index;
         if (string_constant(c, e, &index) != SJS_OK) return SJS_ERR_PROGRAM;
-        return op32(c, ins(SJS_OP_GET_MEMBER, index, e->at));
+        if (op32(c, ins(SJS_OP_GET_MEMBER, index, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+        return path_step(c, e, c->last_op); /* MUTATION: restore returning the op32 */
     }
     case SJS_EV_INDEX:
-        return op(c, SJS_OP_GET_INDEX, e->at);
+        if (op(c, SJS_OP_GET_INDEX, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+        return path_step(c, e, c->last_op); /* MUTATION: restore returning the op */
     case SJS_EV_OPTIONAL:
         return compile_optional(c, e);
     case SJS_EV_CHAIN_END:
@@ -2239,6 +2459,12 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
         return compile_if_end(c, e);
     case SJS_EV_EXPRESSION_STATEMENT: /* MUTATION */
         return compile_expression_statement(c, e);
+    case SJS_EV_ASSIGN: /* MUTATION */
+        return assign_begin(c, e);
+    case SJS_EV_ASSIGN_END: /* MUTATION */
+        return assign_end(c, e);
+    case SJS_EV_UPDATE: /* MUTATION */
+        return compile_update(c, e);
     case SJS_EV_CONST_BEGIN:
         return compile_const_begin(c, e);
     case SJS_EV_CONST_END:
@@ -2474,7 +2700,7 @@ void sjs_compiler_destroy(sjs_compiler *compiler) {
     sjs_buf *bufs[] = { &c->code, &c->numbers, &c->constants, &c->functions, &c->captures, &c->lines,
                         &c->scopes, &c->bindings, &c->names, &c->pending_captures, &c->last_reads, &c->string_text, &c->global_text,
                         &c->constructs, &c->jumps, &c->patterns, &c->pattern_keys, &c->pattern_slots, &c->literals, &c->literal_keys, &c->exports,
-                        &c->stars, &c->sorting };
+                        &c->stars, &c->sorting, &c->paths, &c->path_steps /* MUTATION */ };
     for (uint32_t i = 0; i < sizeof bufs / sizeof bufs[0]; i++) sjs_buf_free(a, bufs[i]);
     if (c->matching) sjs_matcher_free(&c->matcher);
     sjs_mem_free(a, c, sizeof *c);

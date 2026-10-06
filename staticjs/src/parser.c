@@ -122,7 +122,9 @@ enum {
     /* F_IMPORT, F_EXPORT: `with { key: "value" }` after the module's name */
     WA_OPEN = 32, WA_KEY, WA_COLON, WA_VALUE, WA_AFTER, WA_END,
     /* F_NEW */
-    N_NAME = 0, N_OPEN
+    N_NAME = 0, N_OPEN,
+    /* MUTATION: F_EXPRESSION_STATEMENT: an expression, an assignment, `++x`, `x++` */
+    ES_EXPRESSION = 0, ES_ASSIGN, ES_PREFIX, ES_UPDATE
 };
 
 /* How the current expression frame expects its next token. */
@@ -174,8 +176,11 @@ typedef struct {
 
 /* Operators waiting for their right operand. */
 /* OP_ASSIGN is an assignment refused (refuse) and read on: its `op` is 1
- * when it can be a pattern's target with a default value. */
-enum { OP_UNARY = 1, OP_BINARY, OP_LOGICAL, OP_ARROW, OP_ELSE, OP_ASSIGN };
+ * when it can be a pattern's target with a default value. MUTATION:
+ * OP_STORE is an assignment statement's, whose `op` is its operator (0 for
+ * `=`), and OP_UPDATE a statement's prefix ++ or -- (SJS_OP_ADD or
+ * SJS_OP_SUBTRACT). */
+enum { OP_UNARY = 1, OP_BINARY, OP_LOGICAL, OP_ARROW, OP_ELSE, OP_ASSIGN, OP_STORE, OP_UPDATE };
 
 typedef struct {
     uint8_t kind;
@@ -264,6 +269,7 @@ struct sjs_parser {
     bool refusing;
     uint8_t skip;          /* SKIP_*: reading past a method staticjs refused */
     uint32_t skip_depth;   /* brackets open in that method */
+    bool statement_ends;   /* MUTATION: an expression statement's end closes its operators */
 };
 
 typedef enum { H_TAKEN = 0, H_AGAIN, H_WAIT, H_STOP } handled;
@@ -610,6 +616,8 @@ static pending_op *top_op(sjs_parser *p) {
     return &SJS_BUF_AT(p->ops, pending_op, n - 1);
 }
 
+static handled prefix_update(sjs_parser *p, const pending_op *op); /* MUTATION */
+
 /* Emit the event of the operator on top and pop it. */
 static handled pop_op(sjs_parser *p) {
     pending_op op = *top_op(p);
@@ -628,6 +636,11 @@ static handled pop_op(sjs_parser *p) {
         top_frame(p)->segment = op.saved_segment;
         p->last_operand = op.op ? LO_DEFAULTED : LO_OTHER;
         return H_TAKEN;
+    case OP_STORE: /* MUTATION: an assignment statement's value has ended */
+        top_frame(p)->segment = op.saved_segment;
+        return send_event(p, counted(SJS_EV_ASSIGN_END, op.op, op_place(&op)));
+    case OP_UPDATE: /* MUTATION */
+        return prefix_update(p, &op);
     default:
         top_frame(p)->segment = op.saved_segment;
         return send_kind(p, SJS_EV_CONDITIONAL_END, op_place(&op));
@@ -694,7 +707,8 @@ static sjs_str held_name(const sjs_parser *p) {
 
 /* Does the operator `op` wait for an assignment expression? */
 static bool takes_assignment(const pending_op *op) {
-    return op == NULL || op->kind == OP_ARROW || op->kind == OP_ELSE || op->kind == OP_ASSIGN;
+    return op == NULL || op->kind == OP_ARROW || op->kind == OP_ELSE || op->kind == OP_ASSIGN ||
+           op->kind == OP_STORE; /* MUTATION */
 }
 
 /* An arrow function may start only where an assignment expression may. */
@@ -1295,6 +1309,52 @@ static handled operand_name(sjs_parser *p, const queued_token *t) {
     return send_event(p, texted(SJS_EV_NAME, token_text(p, t), own_place(p, t->at))) == H_STOP ? H_STOP : H_TAKEN;
 }
 
+/* MUTATION: ++ and --, as statements of their own. */
+static const sjs_problem update_value = { SJS_ERROR_UNSUPPORTED, "staticjs has no ++ or -- as a value: each is a statement of its own" };
+static const sjs_problem update_target = { SJS_ERROR_UNSUPPORTED, "staticjs assigns only to a name, a property or an element" };
+static const sjs_problem update_syntax = { SJS_ERROR_SYNTAX, "the operand of ++ or -- cannot be assigned to" };
+
+/* JavaScript staticjs leaves out, at `at`, read on as refuse() does. */
+static handled refuse_at(sjs_parser *p, sjs_position at, sjs_problem problem) {
+    if (p->refusing) return H_TAKEN;
+    sjs_error_set(&p->refusal, at, problem);
+    p->refusing = true;
+    return H_TAKEN;
+}
+
+/* The prefix ++ or -- of a statement, popped: UPDATE, when the statement
+ * ends with its operand; anything after the operand makes it a value. */
+static handled prefix_update(sjs_parser *p, const pending_op *op) {
+    if (!p->statement_ends) return refuse_at(p, op->at, update_value);
+    if (p->last_operand == LO_CALL) return refuse_at(p, op->at, update_target);
+    if (p->last_operand != LO_SIMPLE) {
+        queued_token at = { 0 };
+        at.at = op->at;
+        return parse_fail(p, &at, update_syntax);
+    }
+    return send_event(p, counted(SJS_EV_UPDATE, op->op, op_place(op)));
+}
+
+/* `x++` or `x--`: UPDATE, when it is the whole statement. */
+static handled postfix_update(sjs_parser *p, const queued_token *t) {
+    frame *f = top_frame(p);
+    uint8_t left = p->last_operand;
+    if (left != LO_SIMPLE && left != LO_CALL) return parse_fail(p, t, update_syntax);
+    if (f->type != F_EXPRESSION_STATEMENT || f->state != ES_EXPRESSION || top_op(p) != NULL) return parse_fail(p, t, update_value);
+    const queued_token *next = peek(p, 1);
+    if (next == NULL) return H_WAIT;
+    bool ends = is_punctuator(next, SJS_P_SEMICOLON) || is_punctuator(next, SJS_P_RBRACE) || next->kind == SJS_TOKEN_END ||
+                next->newline_before;
+    p->expect = E_OPERATOR;
+    f->state = ES_UPDATE;
+    if (left == LO_CALL || !ends) {
+        p->last_operand = LO_OTHER;
+        return refuse(p, t, left == LO_CALL ? update_target : update_value);
+    }
+    uint8_t op = t->punctuator == SJS_P_PLUS_PLUS ? SJS_OP_ADD : SJS_OP_SUBTRACT;
+    return send_event(p, counted(SJS_EV_UPDATE, op, operand_place(p, t->at)));
+}
+
 static handled operand(sjs_parser *p, const queued_token *t) {
     frame *f = top_frame(p);
     switch (t->kind) {
@@ -1372,7 +1432,16 @@ static handled operand(sjs_parser *p, const queued_token *t) {
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression" });
     case SJS_P_PLUS_PLUS:
     case SJS_P_MINUS_MINUS:
-        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no ++ or --: values do not change" });
+        /* MUTATION: a statement's prefix ++ or --, which prefix_update sends
+         * when the statement ends. Restore the refusal alone, "staticjs has
+         * no ++ or --: values do not change". */
+        if (f->type == F_EXPRESSION_STATEMENT && f->state == ES_EXPRESSION && top_op(p) == NULL) {
+            pending_op update = unary(p, t->punctuator == SJS_P_PLUS_PLUS ? SJS_OP_ADD : SJS_OP_SUBTRACT, t->at);
+            update.kind = OP_UPDATE;
+            f->state = ES_PREFIX;
+            return push_op(p, update);
+        }
+        return parse_fail(p, t, update_value);
     case SJS_P_TILDE: {
         /* Refused, and read on as a unary operator. */
         if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no bitwise operators" }) == H_STOP) return H_STOP;
@@ -1507,6 +1576,40 @@ static handled close_object(sjs_parser *p, const queued_token *t) {
     return H_TAKEN;
 }
 
+/* MUTATION: `target = value`, or `target op= value`, as a statement: ASSIGN,
+ * whose count is the operator (0 for `=`), the value, and at the
+ * statement's end ASSIGN_END (pop_op). An operator staticjs does not have
+ * is refused (H_TAKEN), as its binary operator is; H_AGAIN: the caller
+ * refuses it. */
+static handled assignment_statement(sjs_parser *p, const queued_token *t) {
+    static const struct { const char *text; uint8_t op; } operators[] = {
+        { "=", 0 }, { "+=", SJS_OP_ADD }, { "-=", SJS_OP_SUBTRACT }, { "*=", SJS_OP_MULTIPLY },
+        { "/=", SJS_OP_DIVIDE }, { "%=", SJS_OP_REMAINDER }, { "&&=", SJS_OP_AND }, { "||=", SJS_OP_OR },
+        { "?\?=", SJS_OP_COALESCE },
+    };
+    sjs_str text = token_text(p, t);
+    if (t->punctuator == SJS_P_ASSIGN) text = SJS_STR("=");
+    uint8_t op = UINT8_MAX;
+    for (uint32_t i = 0; i < sizeof operators / sizeof operators[0]; i++) {
+        if (sjs_str_equal(text, sjs_cstr(operators[i].text))) op = operators[i].op;
+    }
+    if (op == UINT8_MAX) {
+        bool power = sjs_str_equal(text, SJS_STR("**="));
+        if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, power ? "staticjs has no ** operator" : "staticjs has no bitwise operators" }) == H_STOP) {
+            return H_STOP;
+        }
+        return H_AGAIN;
+    }
+    frame *f = top_frame(p);
+    event_place place = operand_place(p, t->at);
+    if (send_event(p, counted(SJS_EV_ASSIGN, op, place)) == H_STOP) return H_STOP;
+    pending_op store = { OP_STORE, op, PRECEDENCE_ELSE, f->segment, place.at, place.node, place.start };
+    f->segment = 0;
+    f->state = ES_ASSIGN;
+    p->expect = E_OPERAND;
+    return push_op(p, store);
+}
+
 /* `=` or an operator such as `+=` after an operand: JavaScript that staticjs
  * leaves out when the operand can be assigned to there, and not JavaScript
  * when it cannot. A refusal: the parser reads the value on, as an
@@ -1520,7 +1623,18 @@ static handled assignment(sjs_parser *p, const queued_token *t) {
     uint8_t left = p->last_operand;
     bool target = left == LO_SIMPLE || (left == LO_CALL && !logical) || (left == LO_PATTERN && plain);
     if (!position || !target) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "the left side of this assignment cannot be assigned to" });
-    if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no assignment: values do not change" }) == H_STOP) return H_STOP;
+    /* MUTATION: an assignment that is a statement of its own is sent; any
+     * other is refused. Restore the one refusal, "staticjs has no
+     * assignment: values do not change". */
+    bool statement = f->type == F_EXPRESSION_STATEMENT && f->state == ES_EXPRESSION && top_op(p) == NULL;
+    if (statement && left == LO_SIMPLE) {
+        handled h = assignment_statement(p, t);
+        if (h != H_AGAIN) return h;
+    }
+    const char *refused = statement ? "staticjs assigns only to a name, a property or an element"
+                                    : "staticjs has no assignment as a value: an assignment is a statement of its own";
+    if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, refused }) == H_STOP) return H_STOP;
+    if (statement) f->state = ES_ASSIGN; /* the statement's refusal is this one */
     uint8_t defaulted = plain && (left == LO_SIMPLE || left == LO_PATTERN) ? 1u : 0u;
     pending_op op = { OP_ASSIGN, defaulted, PRECEDENCE_ELSE, f->segment, t->at, 0, t->at };
     f->segment = 0;
@@ -1633,7 +1747,8 @@ static handled operator_token(sjs_parser *p, const queued_token *t) {
         return assignment(p, t);
     case SJS_P_PLUS_PLUS:
     case SJS_P_MINUS_MINUS:
-        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no ++ or --: values do not change" });
+        /* MUTATION: restore the refusal, "staticjs has no ++ or --: values do not change". */
+        return postfix_update(p, t);
     case SJS_P_STAR_STAR:
         return refused_binary(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no ** operator" });
     case SJS_P_SHIFT_LEFT:
@@ -1728,7 +1843,9 @@ static handled end_expression_statement(sjs_parser *p, const queued_token *t) {
     sjs_position at = f->at;
     bool refused_before = f->refused_before != 0;
     bool call = p->last_operand == LO_CALL;
+    uint8_t state = f->state;
     pop_frame(p);
+    if (state != ES_EXPRESSION) return H_TAKEN; /* an assignment or an update, sent already */
     if (call) return send_event(p, counted(SJS_EV_EXPRESSION_STATEMENT, 0, place));
     if (!refused_before) {
         sjs_error_set(&p->refusal, at, expression_statement);
@@ -1779,7 +1896,10 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
         if (t->kind == SJS_TOKEN_END) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "the source ends inside an expression" });
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression" });
     }
-    if (end_expression(p) == H_STOP) return H_STOP;
+    p->statement_ends = f->type == F_EXPRESSION_STATEMENT; /* MUTATION: prefix_update */
+    handled ended = end_expression(p);
+    p->statement_ends = false;
+    if (ended == H_STOP) return H_STOP;
     f = top_frame(p);
     /* Where JavaScript reads an Expression, not an AssignmentExpression. */
     bool sequence = f->type == F_EXPRESSION_GOAL || f->type == F_PAREN || f->type == F_INDEX || f->type == F_TEMPLATE ||

@@ -476,6 +476,7 @@ static const char *const event_names[SJS_EV_END + 1] = {
     [SJS_EV_RETURN] = "RETURN", [SJS_EV_BLOCK_END] = "BLOCK_END", [SJS_EV_BLOCK_STATEMENT_BEGIN] = "BLOCK_STATEMENT_BEGIN",
     [SJS_EV_BLOCK_STATEMENT_END] = "BLOCK_STATEMENT_END", [SJS_EV_IF] = "IF", [SJS_EV_ELSE] = "ELSE",
     [SJS_EV_IF_END] = "IF_END", [SJS_EV_EXPRESSION_STATEMENT] = "EXPRESSION_STATEMENT", /* MUTATION */
+    [SJS_EV_ASSIGN] = "ASSIGN", [SJS_EV_ASSIGN_END] = "ASSIGN_END", [SJS_EV_UPDATE] = "UPDATE", /* MUTATION */
     [SJS_EV_BIND] = "BIND", [SJS_EV_ARRAY_PATTERN_BEGIN] = "ARRAY_PATTERN_BEGIN",
     [SJS_EV_PATTERN_INDEX] = "PATTERN_INDEX", [SJS_EV_ARRAY_PATTERN_END] = "ARRAY_PATTERN_END",
     [SJS_EV_OBJECT_PATTERN_BEGIN] = "OBJECT_PATTERN_BEGIN", [SJS_EV_PATTERN_KEY] = "PATTERN_KEY",
@@ -1826,7 +1827,110 @@ static void test_mutation_fuel(void) {
     CHECK(c.live == 0);
 }
 
+/* An assignment's target comes first, then ASSIGN, the value and
+ * ASSIGN_END, a node that starts with the target; ++ and -- are UPDATE
+ * after their target, a node that starts with the target or, prefix, the
+ * operator. Neither sends EXPRESSION_STATEMENT. */
+static void test_mutation_assign_events(void) {
+    expect_nodes("o => { o.a[i] += 1; o.n++; --o.m; }", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "ARROW_BEGIN#1@0 PARAM#1@0 BIND#2@0 PARAMS_END#1@0 BLOCK_BEGIN#1@0 NAME#4@7 MEMBER#5@7 NAME#7@11 INDEX#6@7 "
+                 "ASSIGN#8@7 NUMBER#9@17 ASSIGN_END#8@7 NAME#11@20 MEMBER#12@20 UPDATE#13@20 NAME#16@29 MEMBER#17@29 "
+                 "UPDATE#15@27 BLOCK_END#1@0 ARROW_END#1@0 END#0@0");
+}
+
+/* Events in an order no parser sends: an assignment outside a statement,
+ * an ASSIGN_END with no ASSIGN or another operator, an UPDATE that neither
+ * adds nor subtracts. */
+static void test_mutation_assign_order(void) {
+    static const char *const out_of_order = "the events are out of order";
+    const sjs_event body[] = { { .kind = SJS_EV_ARROW_BEGIN, .count = 1 }, { .kind = SJS_EV_PARAM }, { .kind = SJS_EV_BIND, .text = SJS_STR("o") },
+                               { .kind = SJS_EV_PARAMS_END }, { .kind = SJS_EV_BLOCK_BEGIN } };
+    const sjs_event member[] = { { .kind = SJS_EV_NAME, .text = SJS_STR("o"), .at = { 7, 1, 8 }, .start = { 7, 1, 8 } },
+                                 { .kind = SJS_EV_MEMBER, .text = SJS_STR("k"), .at = { 9, 1, 10 }, .start = { 7, 1, 8 } } };
+    const sjs_event expression[] = { body[0], body[1], body[2], body[3], member[0], member[1], { .kind = SJS_EV_ASSIGN } };
+    compile_events(expression, 7, out_of_order);
+    const sjs_event no_assign[] = { body[0], body[1], body[2], body[3], body[4], { .kind = SJS_EV_TRUE }, { .kind = SJS_EV_ASSIGN_END } };
+    compile_events(no_assign, 7, out_of_order);
+    const sjs_event other[] = { body[0], body[1], body[2], body[3], body[4], member[0], member[1], { .kind = SJS_EV_ASSIGN },
+                                { .kind = SJS_EV_TRUE }, { .kind = SJS_EV_ASSIGN_END, .count = SJS_OP_ADD } };
+    compile_events(other, 10, out_of_order);
+    const sjs_event bitwise[] = { body[0], body[1], body[2], body[3], body[4], member[0], member[1],
+                                  { .kind = SJS_EV_ASSIGN, .count = SJS_OP_LESS } };
+    compile_events(bitwise, 8, out_of_order);
+    const sjs_event update[] = { body[0], body[1], body[2], body[3], body[4], member[0], member[1],
+                                 { .kind = SJS_EV_UPDATE, .count = SJS_OP_MULTIPLY } };
+    compile_events(update, 8, out_of_order);
+}
+
+/* A value a native gives and still holds is never assigned to; one it
+ * gives away is the function's. */
+static void test_mutation_assign_natives(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    char out[4096];
+    keeper k = { 0 };
+    k.held = number_array(context, (const double[]){ 1, 2 }, 2);
+    sjs_value natives[2];
+    CHECK(sjs_function_native(context, (sjs_native){ &k, &held_vtable }, &natives[0]) == SJS_OK);
+    CHECK(sjs_function_native(context, (sjs_native){ NULL, &fresh_vtable }, &natives[1]) == SJS_OK);
+    sjs_str names[2] = { SJS_STR("held"), SJS_STR("fresh") };
+    env e = { context, names, natives, 2, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    CHECK(evaluate(&e, "(() => { const xs = held(); xs[0] = 9; return xs; })()", out) == SJS_ERR_PROGRAM);
+    CHECK(strstr(out, "fault") == out && strstr(out, "held elsewhere") != NULL);
+    CHECK(evaluate(&e, "(() => { const o = {xs: held()}; o.xs[1] += 1; return o; })()", out) == SJS_ERR_PROGRAM);
+    CHECK(strstr(out, "held elsewhere") != NULL);
+    write_text(context, k.held, out, sizeof out);
+    CHECK(strcmp(out, "[1,2]") == 0);
+    CHECK(evaluate(&e, "(() => { const o = {xs: fresh()}; o.xs[0] = 1; o.xs[1] ?\?= 2; o.xs[0]++; return o; })()", out) == SJS_OK);
+    CHECK(strcmp(out, "{\"xs\":[2,2]}") == 0);
+    sjs_release(context, k.held);
+    for (int i = 0; i < 2; i++) sjs_release(context, natives[i]);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* A path costs a unit of fuel for each key after the first, besides its
+ * instructions: one per key pushed and the PATH. */
+static void test_mutation_assign_fuel(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    uint64_t one = fuel_of(context, "(() => { const o = {a: {b: {c: {}}}}; o.a = 1; return 0; })()");
+    uint64_t four = fuel_of(context, "(() => { const o = {a: {b: {c: {}}}}; o.a.b.c.d = 1; return 0; })()");
+    CHECK(four - one == 6);
+    uint64_t plain = fuel_of(context, "(() => { const o = {a: 1}; o.a = 2; return 0; })()");
+    uint64_t compound = fuel_of(context, "(() => { const o = {a: 1}; o.a += 2; return 0; })()");
+    uint64_t update = fuel_of(context, "(() => { const o = {a: 1}; o.a++; return 0; })()");
+    /* The LOAD and the BINARY. */
+    CHECK(compound - plain == 2);
+    CHECK(update == compound);
+    /* ??= of a defined value: the LOAD, the jump and the DROP, for the
+     * value and the STORE. */
+    uint64_t kept = fuel_of(context, "(() => { const o = {a: 1}; o.a ?\?= 2; return 0; })()");
+    CHECK(kept - plain == 1);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
 static void test_out_of_memory(const char *source, sjs_goal goal);
+
+/* Every allocation of a program that assigns, appending to arrays and to
+ * objects past the size that gives them an index, an integer key among
+ * them, fails in turn. */
+static void test_mutation_assign_out_of_memory(void) {
+    test_out_of_memory("(() => {\n"
+                       "  const o = [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\", \"g\", \"h\", \"i\"].reduce((acc, k) => { acc[k] = [k]; return acc; }, {});\n"
+                       "  o[3] = 0;\n"
+                       "  o.a[1] = 1;\n"
+                       "  o.b[0] += \"x\";\n"
+                       "  o.c[1] ?\?= [];\n"
+                       "  o.c[1][0] = 2;\n"
+                       "  o[3]++;\n"
+                       "  return o;\n"
+                       "})()",
+                       SJS_GOAL_EXPRESSION);
+}
 
 /* Every allocation of a program that grows arrays and a set in place,
  * past the size that gives the set an index, and sorts, fails in turn. */
@@ -1901,6 +2005,11 @@ int main(int argc, char **argv) {
     test_mutation_natives();
     test_mutation_fuel();
     test_mutation_out_of_memory();
+    test_mutation_assign_events();
+    test_mutation_assign_order();
+    test_mutation_assign_natives();
+    test_mutation_assign_fuel();
+    test_mutation_assign_out_of_memory();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */

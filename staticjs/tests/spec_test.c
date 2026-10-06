@@ -255,6 +255,7 @@ static node_role role_of(sjs_event_kind kind) {
     case SJS_EV_OBJECT_PATTERN_BEGIN:
     case SJS_EV_DEFAULT:
     case SJS_EV_CONST_BEGIN:
+    case SJS_EV_ASSIGN: /* MUTATION */
         return (node_role){ NODE_OPEN, 0, 0 };
     case SJS_EV_TEMPLATE_END: return (node_role){ NODE_CLOSE, SJS_EV_TEMPLATE_BEGIN, 0 };
     case SJS_EV_ELEMENT:
@@ -289,6 +290,7 @@ static node_role role_of(sjs_event_kind kind) {
     case SJS_EV_OBJECT_PATTERN_END: return (node_role){ NODE_CLOSE, SJS_EV_OBJECT_PATTERN_BEGIN, 0 };
     case SJS_EV_DEFAULT_END: return (node_role){ NODE_CLOSE, SJS_EV_DEFAULT, 0 };
     case SJS_EV_CONST_END: return (node_role){ NODE_CLOSE, SJS_EV_CONST_BEGIN, 0 };
+    case SJS_EV_ASSIGN_END: return (node_role){ NODE_CLOSE, SJS_EV_ASSIGN, 0 }; /* MUTATION */
     default: return (node_role){ NODE_OWN, 0, 0 };
     }
 }

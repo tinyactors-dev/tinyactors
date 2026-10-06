@@ -592,3 +592,760 @@ export default (a => { a.push(3); return a; })(xs);
 === a method that changes its receiver, not in staticjs
 (() => { const xs = [1, 2]; return xs.splice(0, 1); })()
 --- fault changes its receiver
+
+
+# Assignment (docs/mutation.md, "Assignment"): a statement that stores into
+# a property or an element of a variable the function owns.
+=== assign a new key
+(() => { const o = {a: 1}; o.b = 2; return o; })()
+--- value
+{"a":1,"b":2}
+
+=== assign an existing key keeps its place
+(() => { const o = {a: 1, b: 2, c: 3}; o.a = 9; return o; })()
+--- value
+{"a":9,"b":2,"c":3}
+
+=== assign keeps the order of keys in insertion
+(() => { const o = {}; o.z = 1; o.a = 2; o.m = 3; o.z = 4; return Object.keys(o); })()
+--- value
+["z","a","m"]
+
+=== assign integer-like keys sorts them first
+(() => { const o = {b: 1}; o[2] = "two"; o[1] = "one"; o.a = 0; o["10"] = "ten"; return o; })()
+--- value
+{"1":"one","2":"two","10":"ten","b":1,"a":0}
+
+=== assign a key that is not canonical stays a string key
+(() => { const o = {}; o["01"] = 1; o[1] = 2; o["1.5"] = 3; return Object.keys(o); })()
+--- value
+["1","01","1.5"]
+
+=== assign with a computed key
+(() => { const o = {}; const k = "x"; o[k] = 1; o[k + "y"] = 2; return o; })()
+--- value
+{"x":1,"xy":2}
+
+=== assign with a number key on an object
+(() => { const o = {}; o[1.5] = "a"; o[-0] = "z"; o[1e21] = "big"; return o; })()
+--- value
+{"0":"z","1.5":"a","1e+21":"big"}
+
+=== assign with a boolean and a null key
+(() => { const o = {}; o[true] = 1; o[null] = 2; o[undefined] = 3; return o; })()
+--- value
+{"true":1,"null":2,"undefined":3}
+
+=== assign through a nested path
+(() => { const o = {a: {b: {c: 1}}}; o.a.b.c = 2; o.a.b.d = 3; return o; })()
+--- value
+{"a":{"b":{"c":2,"d":3}}}
+
+=== assign through members and elements
+(() => { const o = {a: [{c: 1}, {c: 2}]}; o.a[1].c = 5; o.a[0].d = [0]; o.a[0].d[1] = 7; return o; })()
+--- value
+{"a":[{"c":1,"d":[0,7]},{"c":5}]}
+
+=== assign a parameter's property
+(o => { o.k = 1; return o; })({})
+--- value
+{"k":1}
+
+=== assign a parenthesized target
+(() => { const o = {}; (o.a) = 1; (o).b = 2; (o["c"]) = 3; return o; })()
+--- value
+{"a":1,"b":2,"c":3}
+
+=== assign an object built by a spread
+(() => { const o = {...{a: 1}}; o.a = 2; return o; })()
+--- value
+{"a":2}
+
+=== assign in an if and in a block
+(x => { const o = {}; if (x > 1) { o.big = true; } else o.small = true; { o.x = x; } return o; })(3)
+--- value
+{"big":true,"x":3}
+
+=== assign in both branches
+[1, 2].map(x => { const o = {}; if (x === 1) o.k = "one"; else if (x === 2) o.k = "two"; return o; })
+--- value
+[{"k":"one"},{"k":"two"}]
+
+=== assign a value that reads the target's variable
+(() => { const o = {n: 2}; o.m = o.n * 10; o[o.n] = o.m; return o; })()
+--- value
+{"2":20,"n":2,"m":20}
+
+=== assign the same key twice
+(() => { const o = {}; o.k = 1; o.k = 2; return o; })()
+--- value
+{"k":2}
+
+=== assign undefined keeps the key
+(() => { const o = {a: 1}; o.a = undefined; return [Object.keys(o), o.a]; })()
+--- value
+[["a"],undefined]
+
+=== assign a function
+(() => { const o = {}; o.f = x => x + 1; return o.f(1); })()
+--- value
+2
+
+=== assign a value with a block-bodied function
+(() => { const o = {}; o.f = x => { const y = x * 2; return y; }; return o.f(2); })()
+--- value
+4
+
+=== assign the value of another variable shares it
+(() => { const inner = [1]; const o = {}; o.a = inner; o.b = inner; return o; })()
+--- value
+{"a":[1],"b":[1]}
+
+=== assign a key named like a prototype method the object has
+(() => { const o = {toString: 1}; o.toString = 2; return o; })()
+--- value
+{"toString":2}
+
+=== assign many keys keeps the index current
+["a","b","c","d","e","f","g","h","i","j"].reduce((acc, k) => { acc[k] = k.length; return acc; }, {})
+--- value
+{"a":1,"b":1,"c":1,"d":1,"e":1,"f":1,"g":1,"h":1,"i":1,"j":1}
+
+=== replace values in an indexed object keeps them found
+(rows => rows.reduce((acc, r) => { acc[r] = (acc[r] ?? 0) + 1; return acc; }, {}))(["a","b","c","d","e","f","g","h","i","a","j","b","a"])
+--- value
+{"a":3,"b":2,"c":1,"d":1,"e":1,"f":1,"g":1,"h":1,"i":1,"j":1}
+
+=== an integer key into an indexed object
+(() => { const o = {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9}; o[3] = "x"; o.j = 10; o[1] = "y"; return [o[3], o.j, o[1], o.e, Object.keys(o)]; })()
+--- value
+["x",10,"y",5,["1","3","a","b","c","d","e","f","g","h","i","j"]]
+
+=== reduce into an object
+[{id: "a", kwh: 1}, {id: "b", kwh: 2}, {id: "a", kwh: 3}].reduce((acc, r) => { acc[r.id] = r.kwh; return acc; }, {})
+--- value
+{"a":3,"b":2}
+
+=== reduce sums into an object
+[{id: "a", kwh: 1}, {id: "b", kwh: 2}, {id: "a", kwh: 3}].reduce((acc, r) => { acc[r.id] = (acc[r.id] ?? 0) + r.kwh; return acc; }, {})
+--- value
+{"a":4,"b":2}
+
+=== reduce counts with ??= and ++
+["x", "y", "x"].reduce((acc, k) => { acc[k] ??= 0; acc[k]++; return acc; }, {})
+--- value
+{"x":2,"y":1}
+
+=== reduce groups into arrays with push
+[1, 2, 3, 4].reduce((acc, n) => { const k = n % 2 === 0 ? "even" : "odd"; acc[k] ??= []; acc[k][acc[k].length] = n; return acc; }, {})
+--- value
+{"odd":[1,3],"even":[2,4]}
+
+# Arrays.
+=== assign an element inside the array
+(() => { const xs = [1, 2, 3]; xs[1] = 9; return xs; })()
+--- value
+[1,9,3]
+
+=== assign an element at the length appends
+(() => { const xs = [1]; xs[1] = 2; xs[xs.length] = 3; return xs; })()
+--- value
+[1,2,3]
+
+=== assign an element of an empty array
+(() => { const xs = []; xs[0] = "a"; return xs; })()
+--- value
+["a"]
+
+=== assign an element by a string index
+(() => { const xs = [1, 2]; xs["1"] = 5; xs["2"] = 6; return xs; })()
+--- value
+[1,5,6]
+
+=== assign an element by an integral float
+(() => { const xs = [1, 2]; xs[1.0] = 5; xs[-0] = 7; return xs; })()
+--- value
+[7,5]
+
+=== assign an element of a nested array
+(() => { const m = [[0, 0], [0, 0]]; m[1][0] = 1; m[0][1] = 2; return m; })()
+--- value
+[[0,2],[1,0]]
+
+=== assign the elements of a mapped array
+(() => { const xs = [0, 0, 0].map(x => x); xs[2] = "c"; xs[0] = "a"; return xs; })()
+--- value
+["a",0,"c"]
+
+=== assign an element to an array built by push
+(() => { const xs = []; xs.push(1); xs[0] = 2; xs.push(3); return xs; })()
+--- value
+[2,3]
+
+=== push after assigning
+(() => { const xs = [1]; xs[1] = 2; xs.push(xs.length); return xs; })()
+--- value
+[1,2,2]
+
+# Compound assignment.
+=== compound operators
+(() => { const o = {a: 10, b: 10, c: 10, d: 10, e: 10}; o.a += 5; o.b -= 5; o.c *= 5; o.d /= 4; o.e %= 4; return o; })()
+--- value
+{"a":15,"b":5,"c":50,"d":2.5,"e":2}
+
+=== += joins strings
+(() => { const o = {s: "a"}; o.s += "b"; o.s += 1; return o; })()
+--- value
+{"s":"ab1"}
+
+=== += on a missing key with a string
+(() => { const o = {}; o.s += "x"; return o; })()
+--- value
+{"s":"undefinedx"}
+
+=== *= on a missing key faults where JavaScript gives NaN
+(() => { const o = {}; o.n *= 2; return o; })()
+--- fault arithmetic
+
+=== += on a missing key faults where staticjs refuses undefined + 1
+(() => { const o = {}; o.n += 1; return o; })()
+--- fault adds two numbers
+
+=== compound on an array element
+(() => { const xs = [1, 2]; xs[0] += 10; xs[1] *= xs[0]; return xs; })()
+--- value
+[11,22]
+
+=== compound at the array's length faults on undefined
+(() => { const xs = [1]; xs[1] += 1; return xs; })()
+--- fault adds two numbers
+
+=== compound with a nested path
+(() => { const o = {a: {b: [1, 2]}}; o.a.b[1] -= 3; return o; })()
+--- value
+{"a":{"b":[1,-1]}}
+
+=== compound reads the target before the value
+(() => { const o = {n: 1}; o.n += o.n * 10; return o; })()
+--- value
+{"n":11}
+
+=== /= by zero
+(() => { const o = {a: 1, b: -1, c: 0}; o.a /= 0; o.b /= 0; o.c /= 0; return [o.a, o.b, o.c]; })()
+--- value
+[Infinity,-Infinity,NaN]
+
+=== %= keeps the sign
+(() => { const o = {a: -7, b: 7}; o.a %= 3; o.b %= -3; return o; })()
+--- value
+{"a":-1,"b":1}
+
+# Logical assignment.
+=== ??= assigns a missing key
+(() => { const o = {}; o.a ??= 1; return o; })()
+--- value
+{"a":1}
+
+=== ??= assigns null and undefined
+(() => { const o = {a: null, b: undefined}; o.a ??= 1; o.b ??= 2; return o; })()
+--- value
+{"a":1,"b":2}
+
+=== ??= keeps a defined value
+(() => { const o = {a: 0, b: "", c: false}; o.a ??= 1; o.b ??= 2; o.c ??= 3; return o; })()
+--- value
+{"a":0,"b":"","c":false}
+
+=== ??= does not evaluate the value when defined
+(() => { const o = {a: 1}; o.a ??= o.missing.deeper; return o; })()
+--- value
+{"a":1}
+
+=== ??= does not add a key when defined
+(() => { const o = {a: 1}; o.a ??= 2; return Object.keys(o); })()
+--- value
+["a"]
+
+=== ||= assigns a falsy value
+(() => { const o = {a: 0, b: "", c: 5}; o.a ||= 1; o.b ||= "x"; o.c ||= 9; return o; })()
+--- value
+{"a":1,"b":"x","c":5}
+
+=== ||= does not evaluate the value when truthy
+(() => { const o = {a: 1}; o.a ||= o.nope.x; return o; })()
+--- value
+{"a":1}
+
+=== &&= assigns a truthy value
+(() => { const o = {a: 1, b: 0, c: "s"}; o.a &&= 2; o.b &&= 3; o.c &&= o.c + "!"; return o; })()
+--- value
+{"a":2,"b":0,"c":"s!"}
+
+=== &&= does not evaluate the value when falsy
+(() => { const o = {a: null}; o.a &&= o.nope.x; return o; })()
+--- value
+{"a":null}
+
+=== &&= on a missing key adds nothing
+(() => { const o = {}; o.a &&= 1; return Object.keys(o); })()
+--- value
+[]
+
+=== ??= on an array element at its length appends
+(() => { const xs = [1]; xs[1] ??= 2; xs[0] ??= 5; return xs; })()
+--- value
+[1,2]
+
+=== ??= past an array's length faults
+(() => { const xs = [1]; xs[3] ??= 2; return xs; })()
+--- fault no holes
+
+=== ??= of a nested default
+(() => { const o = {}; o.a ??= {}; o.a.b ??= []; o.a.b[0] ??= "x"; return o; })()
+--- value
+{"a":{"b":["x"]}}
+
+# ++ and --.
+=== ++ and -- on a property
+(() => { const o = {n: 1}; o.n++; o.n++; ++o.n; o.n--; --o.n; return o; })()
+--- value
+{"n":2}
+
+=== ++ on an element
+(() => { const xs = [0, 5]; xs[1]++; ++xs[0]; return xs; })()
+--- value
+[1,6]
+
+=== ++ of -0 and of a fraction
+(() => { const o = {a: -0, b: 0.5, c: -1}; o.a++; o.b--; o.c++; return [o.a, o.b, o.c]; })()
+--- value
+[1,-0.5,0]
+
+=== ++ of a string faults where JavaScript converts it
+(() => { const o = {s: "5"}; o.s++; return o; })()
+--- fault arithmetic
+
+=== ++ of a missing key faults where JavaScript gives NaN
+(() => { const o = {}; o.n++; return o; })()
+--- fault arithmetic
+
+=== ++ on a nested path
+(() => { const o = {a: {b: [0]}}; o.a.b[0]++; o.a.b[0]++; return o; })()
+--- value
+{"a":{"b":[2]}}
+
+=== ++ with a line break before the next statement
+(() => { const o = {n: 0}
+o.n++
+++o.n
+return o; })()
+--- value
+{"n":2}
+
+=== ++ on the next line is a prefix of the next statement
+(() => { const o = {n: 0}; const p = {n: 10}; o.n
+++p.n
+return [o, p]; })()
+--- error unsupported no effect
+=== the key is evaluated before the value
+(() => { const o = {}; const xs = []; o[xs.push("a")] = xs.length * 10; return [o, xs]; })()
+--- value
+[{"1":10},["a"]]
+
+=== keys come in order, before the value
+(() => { const o = {a: {}}; const xs = []; o[xs.push(0) === 1 ? "a" : "b"][xs.push(0)] = xs.length; return [o, xs]; })()
+--- value
+[{"a":{"2":2}},[0,0]]
+
+=== a compound assignment reads the target after its keys and before the value
+(() => { const o = {1: 5}; const xs = []; o[xs.push(1)] += xs.push(2) * 100; return [o, xs]; })()
+--- value
+[{"1":205},[1,2]]
+
+=== ??= evaluates nothing of the value when the target is defined
+(() => { const o = {a: 1}; const xs = []; o.a ??= xs.push(1); o.b ??= xs.push(2); return [o, xs]; })()
+--- value
+[{"a":1,"b":1},[2]]
+
+=== ||= and &&= evaluate the value only when they assign
+(() => { const o = {a: 1, b: 0}; const xs = []; o.a ||= xs.push(1); o.b ||= xs.push(2); o.a &&= xs.push(3); o.b &&= xs.push(4); return [o, xs]; })()
+--- value
+[{"a":2,"b":3},[2,3,4]]
+
+=== the value may push to another array
+(() => { const o = {}; const xs = []; o.n = xs.push(1); return [o, xs]; })()
+--- value
+[{"n":1},[1]]
+
+=== the value may not change the target's variable with a method
+(() => { const xs = [1, 2]; xs[0] = xs.push(3); return xs; })()
+--- error unsupported while it assigns
+
+=== a key may not change the target's variable
+(() => { const xs = [[1], [2]]; xs[xs.push([3]) - 1][0] = 9; return xs; })()
+--- error unsupported while it assigns
+
+=== a mutation of the target's variable before is fine
+(() => { const xs = [[1]]; xs.push([2]); xs[1][0] = 9; return xs; })()
+--- value
+[[1],[9]]
+
+# Faults when it runs.
+=== a container held by another variable
+(() => { const o = {items: [1]}; const y = o.items; o.items[1] = 2; return y; })()
+--- fault held elsewhere
+
+=== a method on a container held by another variable
+(() => { const o = {items: []}; const y = o.items; const n = o.items.push(1); return [o, y, n]; })()
+--- fault only on a variable
+
+=== a container held by another variable, through a parameter
+(o => { o.items[0] = 1; return o; })((() => { const items = [0]; return {items, again: items}; })())
+--- fault held elsewhere
+
+=== an inner object moved by its last read
+(() => { const inner = {a: 1}; const o = {x: inner}; o.x.a = 2; return o; })()
+--- value
+{"x":{"a":2}}
+
+=== an inner array a const holds
+(() => { const o = {items: []}; const y = o.items; o.items[0] = 1; return [o, y]; })()
+--- fault held elsewhere
+
+=== an inner object held by an array
+(() => { const inner = {a: 1}; const o = {x: inner}; o.x.a = 2; return [o, inner]; })()
+--- fault held elsewhere
+
+=== an element held by another array
+(() => { const a = [1]; const m = [a, a]; m[0][0] = 2; return m; })()
+--- fault held elsewhere
+
+=== a container replaced first is held alone
+(() => { const inner = {a: 1}; const o = {x: inner}; o.x = {a: 1}; o.x.a = 2; return [o, inner]; })()
+--- value
+[{"x":{"a":2}},{"a":1}]
+
+=== a cycle through a property
+(() => { const o = {}; o.self = o; return o; })()
+--- fault held elsewhere
+
+=== a cycle through a nested property
+(() => { const o = {a: {}}; o.a.b = o.a; return o; })()
+--- fault held elsewhere
+
+=== a cycle through an array literal
+(() => { const o = {a: {}}; o.a.b = [o]; return o; })()
+--- fault held elsewhere
+
+=== a cycle through an element
+(() => { const xs = [[]]; xs[0][0] = xs; return xs.length; })()
+--- fault held elsewhere
+
+=== a parameter its caller holds
+(() => { const o = {}; const f = p => { p.k = 1; return p; }; return [f(o), o]; })()
+--- fault held elsewhere
+
+=== a global, through a parameter
+@global g = {a: 1}
+(o => { o.a = 2; return o; })(g)
+--- fault held elsewhere
+
+=== a global's inner object, through a parameter
+@global g = {a: {b: 1}}
+(o => { o.b = 2; return o; })(g.a)
+--- fault held elsewhere
+
+=== an element of the array a callback walks
+[{n: 1}, {n: 2}].map(o => { o.n = 0; return o; })
+--- fault held elsewhere
+
+=== an initial value of reduce a variable still holds
+(() => { const init = {}; const r = [1].reduce((a, x) => { a[x] = x; return a; }, init); return [init, r]; })()
+--- fault held elsewhere
+
+=== an element past the length
+(() => { const xs = [1]; xs[2] = 3; return xs; })()
+--- fault no holes
+
+=== an element at a negative index
+(() => { const xs = [1]; xs[-1] = 3; return xs; })()
+--- fault by index
+
+=== an element at a fractional index
+(() => { const xs = [1]; xs[0.5] = 3; return xs; })()
+--- fault by index
+
+=== an array's length
+(() => { const xs = [1, 2]; xs.length = 1; return xs; })()
+--- fault length
+
+=== an array's length, compounded
+(() => { const xs = [1, 2]; xs.length += 1; return xs; })()
+--- fault length
+
+=== a key on an array that is not an index
+(() => { const xs = [1]; xs.name = "a"; return xs; })()
+--- fault by index
+
+=== a key on a string
+(() => { const o = {s: "ab"}; o.s.k = 1; return o; })()
+--- fault objects and elements
+
+=== an index of a string
+(() => { const o = {s: "ab"}; o.s[0] = "x"; return o; })()
+--- fault objects and elements
+
+=== a key on a set
+(() => { const s = new Set([1]); s.k = 1; return s; })()
+--- fault objects and elements
+
+=== a key on a number
+(() => { const o = {n: 1}; o.n.k = 1; return o; })()
+--- fault objects and elements
+
+=== a key on a function
+(() => { const f = x => x; f.k = 1; return f; })()
+--- fault objects and elements
+
+=== a key on undefined
+(() => { const o = {}; o.a.b = 1; return o; })()
+--- fault set a property of undefined
+
+=== a key on null
+(() => { const o = {a: null}; o.a.b = 1; return o; })()
+--- fault set a property of null
+
+=== a key on a variable that is undefined
+(x => { x.k = 1; return x; })(undefined)
+--- fault set a property of undefined
+
+=== a compound key on undefined
+(() => { const o = {}; o.a.b += 1; return o; })()
+--- fault read a property of undefined
+
+=== a key past an array's end
+(() => { const xs = [{}]; xs[1].k = 1; return xs; })()
+--- fault set a property of undefined
+
+=== a key through an array's length
+(() => { const xs = [1]; xs.length.k = 1; return xs; })()
+--- fault objects and elements
+
+=== __proto__
+(() => { const o = {}; o.__proto__ = {}; return o; })()
+--- fault no prototype
+
+=== __proto__ by a computed key
+(() => { const o = {}; o["__proto__"] = 1; return o; })()
+--- fault no prototype
+
+=== a prototype's name the object does not have
+(() => { const o = {}; o.toString = 1; return o; })()
+--- fault no prototype
+
+=== a prototype's name, compounded
+(() => { const o = {}; o.valueOf += 1; return o; })()
+--- fault no prototype
+
+=== a prototype's name on the way
+(() => { const o = {}; o.hasOwnProperty.x = 1; return o; })()
+--- fault no prototype
+
+=== a method's name on an array on the way
+(() => { const xs = [1]; xs.map.x = 1; return xs; })()
+--- fault calls methods
+
+=== an object as a key
+(() => { const o = {}; o[{}] = 1; return o; })()
+--- fault primitive
+
+=== the value's fault comes when it is evaluated
+(() => { const o = {}; o.k = o.a.b; return o; })()
+--- fault read a property of undefined
+
+# Refused when compiled.
+=== assign to a global's property
+@global g = {a: 1}
+(() => { g.a = 2; return g; })()
+--- error unsupported this is a global
+
+=== assign to a captured variable's property
+(() => { const o = {}; const f = () => { o.k = 1; return o; }; return f(); })()
+--- error unsupported captured this one
+
+=== assign to a variable captured after
+(() => { const o = {}; o.k = 1; const f = () => o; return f(); })()
+--- error unsupported captured this one
+
+=== assign to a variable copied before
+(() => { const o = {}; const p = o; o.k = 1; return p; })()
+--- error unsupported copied before
+
+=== assign to a variable passed before
+(() => { const o = {}; const n = Object.keys(o); o.k = n; return [o, n]; })()
+--- error unsupported passed to a function
+
+=== assign to a variable stored before
+(() => { const o = {}; const xs = [o]; o.k = 1; return xs; })()
+--- error unsupported stored in an array
+
+=== assign to a variable read for its property before
+(() => { const o = {a: 1}; const n = o.a; o.a = n + 1; return o; })()
+--- value
+{"a":2}
+
+=== assign to a variable read for a method before
+(() => { const o = [1]; const n = o.map(x => x); o[0] = 2; return [o, n]; })()
+--- value
+[[2],[1]]
+
+=== assign to a variable spread before
+(() => { const o = {a: 1}; const c = {...o}; o.a = 2; return [o, c]; })()
+--- value
+[{"a":2},{"a":1}]
+
+=== assign to a variable copied after the assignment
+(() => { const o = {}; o.k = 1; const p = o; return p; })()
+--- value
+{"k":1}
+
+=== assign to a call's property
+(() => { const f = () => ({}); f().k = 1; return 0; })()
+--- error unsupported a variable the function owns
+
+=== assign to a literal's element
+(() => { [1][0] = 2; return 0; })()
+--- error unsupported a variable the function owns
+
+=== assign to a conditional's property
+(x => { const a = {}; const b = {}; (x ? a : b).k = 1; return a; })(true)
+--- error unsupported a variable the function owns
+
+=== assign to a sum's property
+(x => { (x + 1).k = 1; return 0; })(1)
+--- error unsupported a variable the function owns
+
+=== assign to an element of a call of a member
+(() => { const o = {f: () => [0]}; o.f()[0] = 1; return 0; })()
+--- error unsupported a variable the function owns
+
+=== assign to a const
+(() => { const x = 1; x = 2; return x; })()
+--- error unsupported assigns only
+
+=== assign to a parameter
+(x => { x = 2; return x; })(1)
+--- error unsupported assigns only
+
+=== ++ of a const
+(() => { const x = 1; x++; return x; })()
+--- error unsupported assigns only
+
+=== ++ of a call
+(() => { const f = () => ({}); f()++; return 0; })()
+--- error unsupported assigns only to a name, a property or an element
+
+=== prefix ++ of a call
+(() => { const f = () => ({}); ++f(); return 0; })()
+--- error unsupported assigns only to a name, a property or an element
+
+=== assign to a call
+(() => { const f = () => ({}); f() = 1; return 0; })()
+--- error unsupported assigns only to a name, a property or an element
+
+=== assign to a pattern
+(() => { const o = {}; [o.a, o.b] = [1, 2]; return o; })()
+--- error unsupported assigns only to a name, a property or an element
+
+=== assign to an object pattern
+(() => { const o = {}; ({a: o.a} = {a: 1}); return o; })()
+--- error unsupported no effect
+
+=== an assignment as a value
+(() => { const o = {}; const v = (o.k = 1); return v; })()
+--- error unsupported no assignment as a value
+
+=== an assignment as an argument
+(() => { const o = {}; [1].forEach(x => o.k = x); return o; })()
+--- error unsupported no assignment as a value
+
+=== a chained assignment
+(() => { const o = {}; o.a = o.b = 1; return o; })()
+--- error unsupported no assignment as a value
+
+=== an assignment in a condition
+(() => { const o = {}; if (o.k = 1) return o; return 0; })()
+--- error unsupported no assignment as a value
+
+=== an assignment after a comma
+(() => { const o = {}; o.a = 1, o.b = 2; return o; })()
+--- error unsupported comma
+
+=== ++ as a value
+(() => { const o = {n: 1}; const v = o.n++; return v; })()
+--- error unsupported no ++ or -- as a value
+
+=== ++ inside an expression statement
+(() => { const o = {n: 1}; o.n++ + 1; return o; })()
+--- error unsupported no ++ or -- as a value
+
+=== prefix ++ inside an expression statement
+(() => { const o = {n: 1}; ++o.n * 2; return o; })()
+--- error unsupported no ++ or -- as a value
+
+=== prefix ++ before a conditional
+(() => { const o = {n: 1}; ++o.n ? 1 : 2; return o; })()
+--- error unsupported no ++ or -- as a value
+
+=== ++ of a number
+(() => { 1++; return 0; })()
+--- error syntax cannot be assigned to
+
+=== prefix ++ of a sum
+(x => { ++(x + 1); return 0; })(1)
+--- error syntax cannot be assigned to
+
+=== **=
+(() => { const o = {n: 2}; o.n **= 2; return o; })()
+--- error unsupported no ** operator
+
+=== <<=
+(() => { const o = {n: 2}; o.n <<= 1; return o; })()
+--- error unsupported no bitwise operators
+
+=== |=
+(() => { const o = {n: 2}; o.n |= 1; return o; })()
+--- error unsupported no bitwise operators
+
+=== an assignment to an optional member is not JavaScript
+(() => { const o = {}; o?.a = 1; return o; })()
+--- error syntax cannot be assigned to
+
+=== a syntax error after a refused assignment is still the program's
+(() => { const o = {}; f().k = 1; return o; })(
+--- error syntax
+
+=== an assignment at a module's top level
+@module assigning
+export const o = {};
+o.k = 1;
+--- error unsupported a staticjs module holds
+
+=== an assignment through a module's export
+@module exporting
+export const data = {a: 1};
+export const set = o => { o.a = 2; return o; };
+--- value
+{"data":{"a":1},"set":<function>}
+
+=== an assignment to an import
+@module importing
+import { data } from "exporting";
+export const f = () => { data.a = 3; return data; };
+--- error unsupported this is an import
+
+=== an assignment to a module's export, through a parameter
+@module importing
+import { data, set } from "exporting";
+export default set(data);
+--- fault held elsewhere
