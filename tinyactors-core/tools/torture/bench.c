@@ -26,6 +26,9 @@
  * the dashboard can switch the running scenario.
  */
 #define _POSIX_C_SOURCE 200809L
+/* macOS hides what POSIX does not define (INADDR_LOOPBACK,
+ * _SC_NPROCESSORS_ONLN, st_mtimespec) unless asked; Linux ignores this. */
+#define _DARWIN_C_SOURCE
 #include <dirent.h>
 #include <errno.h>
 #include <math.h>
@@ -1285,8 +1288,14 @@ static JSValue h_mtime(JSContext *context, JSValueConst this_value, int argc, JS
         char path[2048];
         struct stat sb_;
         snprintf(path, sizeof path, "%s/%s", B.directory, relative_path);
-        if (stat(path, &sb_) == 0)
-            ms = (double)sb_.st_mtim.tv_sec * 1e3 + (double)sb_.st_mtim.tv_nsec / 1e6;
+        if (stat(path, &sb_) == 0) {
+#ifdef __APPLE__
+            struct timespec modified = sb_.st_mtimespec;
+#else
+            struct timespec modified = sb_.st_mtim;
+#endif
+            ms = (double)modified.tv_sec * 1e3 + (double)modified.tv_nsec / 1e6;
+        }
     }
     JS_FreeCString(context, relative_path);
     return JS_NewFloat64(context, ms);

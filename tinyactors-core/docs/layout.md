@@ -214,7 +214,7 @@ implementation of that layer). Layer dependency rules are in
 | `mise run examples:test` | *test* · access reconciler (invariants), chess (rules + games over links), ui-elements |
 | `mise run check:wasm` | *test* · the test programs built for wasm32-wasi, run under wasmtime |
 | `mise run torture:test` | *full* · every torture scenario headless (postgres only when PostgreSQL answers), plus the dashboard server test |
-| `mise run check:cross` | *full* · every layer cross-compiled for each native release target |
+| `mise run check:cross` | *full* · every layer, test program and tool cross-compiled for each native release target (macOS included) |
 | `mise run torture` | the torture chamber with its live dashboard (release build) |
 | `mise run pg:build` / `pg:test` | the PostgreSQL extension: build, pg_regress + concurrency tests on a throwaway cluster |
 | `mise run pg:scale` | millions of actors on the `pg:start` instance: spawn rate, idle `run()`, hot/cold events, one hot actor, all timers due, backend memory (`TA_SCALE_N`) |

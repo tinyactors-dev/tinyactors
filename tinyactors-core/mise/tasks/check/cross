@@ -1,10 +1,12 @@
 #!/usr/bin/env ruby
-#MISE description="Cross-compile every layer for each native release target (Linux and macOS, x86_64 and arm64) with the pinned zig, and archive it"
+#MISE description="Cross-compile every layer, test program and tool for each native release target (Linux and macOS, x86_64 and arm64) with the pinned zig, and archive the layers"
 # vim:ft=ruby
 
 # What runs here is tested by `mise run test`; this proves the same sources
 # build, with -Werror, for the machines a release ships to
-# (Toolchain::Target.native_releases).
+# (Toolchain::Target.native_releases), and that the test programs and tools
+# use nothing one C library has and another lacks (macOS hides what POSIX
+# does not define).
 
 require_relative '../../core'
 
@@ -20,5 +22,14 @@ Core.in_parallel(Toolchain::Target.native_releases) do |target|
     end
   end
   target.archive(objects, into: Core.directory('cross').join(target.name, 'libtinyactors.a').to_s)
-  puts "ok   #{target.name}: #{objects.size} objects"
+  programs = (Core::PROGRAMS + Core::TOOLS).flat_map do |program|
+    defines = (program.defines || {}).map { |key, value| "-D#{key}=\"#{value == :scratch ? '.' : value}\"" }
+    language = program.cxx ? %w[-x c++ -std=c++17] : Core::C_WARNINGS
+    command = target.compile_command(*Core::WARNINGS, *language, *Core::INCLUDES, *defines)
+    program.sources.map do |source|
+      object = Core.directory('cross').join(target.name, 'programs', program.name, "#{File.basename(source)}.o")
+      Core.compile(command, source, object)
+    end
+  end
+  puts "ok   #{target.name}: #{objects.size} layer objects, #{programs.size} program sources"
 end

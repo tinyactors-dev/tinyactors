@@ -190,19 +190,27 @@ static void test_errors(void) {
         "<scxml><state id='a'><history id='h'/><state id='b'/></state></scxml>", "default"));
 }
 
+/* Copies `text` to `p` and answers the end, for documents sized up front. */
+static char *append(char *p, const char *text) {
+    size_t length = strlen(text);
+    memcpy(p, text, length);
+    return p + length;
+}
+
 /* A growable string for generated documents. */
 static char *repeat_document(const char *head, const char *unit, int n, const char *mid,
                              const char *unit2, int n2, const char *tail) {
     size_t length = strlen(head) + strlen(unit) * (size_t)n + strlen(mid) +
                     strlen(unit2) * (size_t)n2 + strlen(tail) + 1;
     char *d = (char *)malloc(length), *p = d;
-    p += sprintf(p, "%s", head);
+    p = append(p, head);
     for (int i = 0; i < n; i++)
-        p += sprintf(p, "%s", unit);
-    p += sprintf(p, "%s", mid);
+        p = append(p, unit);
+    p = append(p, mid);
     for (int i = 0; i < n2; i++)
-        p += sprintf(p, "%s", unit2);
-    sprintf(p, "%s", tail);
+        p = append(p, unit2);
+    p = append(p, tail);
+    *p = '\0';
     return d;
 }
 

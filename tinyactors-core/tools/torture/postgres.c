@@ -1,4 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+/* macOS hides what POSIX does not define (INADDR_LOOPBACK,
+ * _SC_NPROCESSORS_ONLN, st_mtimespec) unless asked; Linux ignores this. */
+#define _DARWIN_C_SOURCE
 #include "postgres.h"
 #include <arpa/inet.h>
 #include <errno.h>

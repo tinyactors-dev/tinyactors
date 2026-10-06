@@ -222,10 +222,10 @@ static void test_script_bad_opcode(void) {
  * stacks hold. It verifies like before, through the fallback. */
 static void test_deep_code(void) {
     char document[8192];
-    int k = sprintf(document, "<scxml><state id='a'><onentry>");
+    size_t k = (size_t)snprintf(document, sizeof document, "<scxml><state id='a'><onentry>");
     for (int i = 0; i < 300; i++)
-        k += sprintf(document + k, "<raise event='e'/>");
-    sprintf(document + k, "</onentry><transition cond='c' target='a'/></state></scxml>");
+        k += (size_t)snprintf(document + k, sizeof document - k, "<raise event='e'/>");
+    snprintf(document + k, sizeof document - k, "</onentry><transition cond='c' target='a'/></state></scxml>");
     size_t length;
     unsigned char *b = (unsigned char *)compile_chart("d.scxml", document, NULL, &length, 0);
     CHECK(b != NULL);
