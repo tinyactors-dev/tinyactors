@@ -145,9 +145,8 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
   #
   # The `ping` waits on the macrostep's outgoing list until the macrostep
   # ends (core ADR 0099), so it arrives after the event admitted while
-  # paused, and never reaches the router.
+  # paused, and the host never sees it.
   scenario 'a paused macrostep holds new events back and resumes one microstep at a time' do
-    router = recording_router
     relay = spawn
     assert_equal 'ok', relay.post('go')
     counts = []
@@ -172,7 +171,7 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     assert_equal ['go', 'n=5', 'counted'], relay.data('.log'), 'the macrostep ended without the held event'
     run_system('the held event, then the self-sent ping')
     assert_equal ['go', 'n=5', 'counted', 'extra', 'ping'], relay.data('.log')
-    assert_equal [], router.entries('submit'), 'the self-send stayed in core'
+    assert_equal [], load_requests, 'the self-send stayed in core'
   end
 
   # Catches: inspection that loses (or misreports) the macrostep's external
@@ -195,11 +194,10 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
   # Catches: an external self-send delivered into the sender's own
   # macrostep, ahead of the internal event raised after it (invariant 6).
   scenario 'an external self-send waits until the internal events are done' do
-    router = recording_router
     relay = spawn
     relay.deliver 'go'
     assert_equal ['go', 'n=5', 'counted', 'ping'], relay.data('.log')
-    assert_equal [], router.entries('submit'),
+    assert_equal [], load_requests,
                  'core queued the self-send itself, when the macrostep ended, and ran it after (core ADR 0099)'
   end
 
@@ -220,7 +218,6 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
       end
     end
     spawn filler
-    router = recording_router
     relay = spawn
     bystander = spawn
     assert_equal 'ok', relay.post('go')
@@ -235,7 +232,7 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     assert_equal ['error.execution.capacity.pool'], errors, 'the send failed once, in its sender'
     assert_equal ['go', 'n=5'], relay.data('.log'), 'the ping never arrived, and `counted` was never raised'
     assert_equal ['extra'], bystander.data('.log')
-    assert_equal [], router.entries('submit')
+    assert_equal [], load_requests
   end
 
   # Catches: interpreter state that lives on the C stack or in scratch

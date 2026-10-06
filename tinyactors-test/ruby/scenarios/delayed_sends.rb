@@ -118,7 +118,6 @@ TinyactorsTest.scenarios 'delayed sends at their owner' do
   # that leaves the heap keyed by the cancelled send (the owner's other send
   # would go out at the cancelled send's time).
   scenario 'due sends go out in one global order across owners, after a cancel too' do
-    router = recording_router
     receiver = spawn DelayedSendsAtOwner.receiver
     to = "#_scxml_#{receiver.handle}"
     a = spawn DelayedSendsAtOwner.sender(:a, [['tick.a1', '10s'], ['tick.a2', '40s']], to: to)
@@ -134,8 +133,8 @@ TinyactorsTest.scenarios 'delayed sends at their owner' do
     expected = %w[tick.b1 tick.c1 tick.b2 tick.a2 tick.c2]
     assert_equal expected, receiver.data('.inbox'),
                  'by due time, and b1 before c1 at 20s because it was sent first'
-    assert_equal [], router.entries('submit'),
-                 'sends to a resident actor never reach the router: core queues them in that order'
+    assert_equal [], load_requests,
+                 'sends to a resident actor ask the host for nothing: core queues them in that order'
     assert_equal nil, next_deadline, 'nothing is pending'
   end
 

@@ -27,6 +27,12 @@
  * min-heap by due time; replacing an address's wake-up leaves the old heap
  * entry in place, and it is skipped when it comes up.
  *
+ * **Mail from charts** waits in core (core ADR 0099), which asks the host to
+ * load its target once per destination: tah_loads_ask() starts a load for
+ * the request, or joins the one in flight, and the load answers core when
+ * it finishes (tah_system_finish_load()). Its mailbox holds only the mail
+ * JavaScript posted.
+ *
  * **Sessions** (napi ADR 0032 section 2). Mail a chart sends to a session
  * that has gone, of a family with a loader, starts a load with `why` =
  * session. Its address is the family and the session's text as the name,
@@ -34,7 +40,7 @@
  * entry. Mail for the same session while the load is in flight joins it. A
  * session this system cannot name (another incarnation's, or another family
  * holding its ID: core gives it session 0) starts a load of its own for each
- * message, since two such messages may be for different sessions.
+ * request, since two such messages may be for different sessions.
  *
  * Every record and heap entry holds one reference to its address, given back
  * when it goes; tah_loads_close() gives back all of them while core is alive.
@@ -65,6 +71,8 @@ typedef enum {
 
 /* The outcome's name for metrics ("loaded", "not_found", ...). */
 const char *tah_load_outcome_name(tah_load_outcome outcome);
+/* The dead-letter reason a load that ended with `outcome` gives its mail. */
+tah_dead_reason tah_load_dead_reason(tah_load_outcome outcome);
 
 typedef struct tah_load tah_load;
 
@@ -106,21 +114,25 @@ typedef struct {
 ta_result tah_loads_route(tah_loads *loads, const tah_load_route *route);
 
 /*
- * Routes a message for a gone session of a family with a loader (router.h):
- * into the load for `address` when one is in flight and `shared`, or into a
- * new load with `why` = session. `address` is the session's key (above);
- * `shared` is false for a session this system cannot name. TA_OK: accepted,
- * perhaps as a `waiting-full` dead letter. TA_ERR_NOT_FOUND: the family has
- * no loader. TA_ERR_NOMEM: nothing accepted.
+ * Starts a load for a load request core owes (ta_load_request, router.h),
+ * or joins the load in flight for `address` when `shared`: the load
+ * remembers the request, which tah_system_finish_load() answers. Mail core
+ * keeps waiting stays in core; `waiting` is how many, for the load's info.
+ * TA_ERR_NOT_FOUND: the family has no loader, and nothing changes;
+ * TA_ERR_NOMEM: nothing changes.
  */
 typedef struct {
-    tah_sched *sched;
-    ta_address *address;
-    const tah_message *message;
-    bool shared;
+    ta_address *address; /* borrowed; the load retains it */
+    tah_load_why why;
+    bool shared;         /* later mail for the address joins it; false for a session this system cannot name */
+    uint64_t request;
+    uint32_t waiting;
+    const ta_trace_parent *trace;
     uint64_t now_ns;
-} tah_load_session_route;
-ta_result tah_loads_route_session(tah_loads *loads, const tah_load_session_route *route);
+} tah_load_ask;
+ta_result tah_loads_ask(tah_loads *loads, const tah_load_ask *ask);
+/* The load request core owes that the load answers, or 0. */
+uint64_t tah_loads_core_request(const tah_loads *loads, uint32_t index, uint32_t generation);
 /* Whether `family` has a loader. */
 bool tah_loads_family_loads(const tah_loads *loads, ta_str family);
 
@@ -148,7 +160,7 @@ tah_load *tah_loads_find(const tah_loads *loads, uint32_t index, uint32_t genera
  * names none (it finished). Borrowed until the load finishes. */
 typedef struct {
     const ta_address *address;
-    uint32_t waiting;      /* messages in its mailbox */
+    uint32_t waiting;      /* messages in its mailbox, and those core keeps for it */
     ta_trace_parent trace; /* the first message's trace parent, or all zero */
 } tah_load_info;
 tah_load_info tah_loads_info(const tah_loads *loads, uint32_t index, uint32_t generation);

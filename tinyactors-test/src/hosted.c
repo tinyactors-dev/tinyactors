@@ -714,16 +714,10 @@ jv tat_hosted_load_method(tat_bind *bind, jv params, int *error_code) {
     }
     ta_result finished = result == TA_ERR_STALE
                              ? result
-                             : tah_loads_finish(tah_system_loads(system), &(tah_load_finish){
-                                                                          .sched = tah_system_sched(system),
-                                                                          .directory = tah_system_directory(system),
-                                                                          .metrics = tah_system_metrics(system),
-                                                                          .index = index,
-                                                                          .generation = generation,
-                                                                          .outcome = outcome,
-                                                                          .actor = actor,
-                                                                          .now_ns = tah_system_monotonic_ns(system),
-                                                                          .wall_ns = tah_system_wall_ns(system)});
+                             : tah_system_finish_load(system, &(tah_system_load_finish){ .index = index,
+                                                                                        .generation = generation,
+                                                                                        .outcome = outcome,
+                                                                                        .actor = actor });
     tah_system_want_turn(system);
     if (result == TA_OK) {
         result = finished;

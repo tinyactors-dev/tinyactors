@@ -120,14 +120,13 @@ TinyactorsTest.scenarios 'fault contexts' do
                  'the processor was asked once and refused'
   end
 
-  # Catches: the same confusion one layer out. A router that refuses a
-  # delivery is the host saying "undeliverable", which is test521's rule
-  # again, not an authoring mistake. The ping goes to an address no
-  # resident actor holds: mail to a resident one never reaches the router
-  # (core ADR 0099).
-  scenario 'a router that refuses a delivery is a communication error' do
-    router = recording_router
-    router.arm_fault(:submit, message: 'no route', count: 8)
+  # Catches: the same confusion one layer out. A host that answers a load
+  # request with "cannot be loaded" is saying "undeliverable", which is
+  # test521's rule again, not an authoring mistake. The ping goes to an
+  # address no resident actor holds, so it waits in core, which asks the
+  # host to load it (core ADR 0099).
+  scenario 'a host that cannot load the target is a communication error' do
+    on_load_needed { |_request| [:failed, 'err_not_found'] }
     pinger = TinyactorsTest::Chart.define(:pinger) do
       data outcome: nil
       state :ready do
@@ -142,6 +141,7 @@ TinyactorsTest.scenarios 'fault contexts' do
     end
 
     assert_equal 'error.communication', spawn(pinger).data('.outcome')
+    assert_equal 1, load_requests.size, 'core asked the host once'
   end
 
   # Catches: an invoker failure reported as a communication error. SCXML

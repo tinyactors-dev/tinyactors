@@ -48,7 +48,8 @@ module TinyactorsNapiBindings
     'ta_actor_{abandon,withdraw_send}' => "System#abandon and System#withdrawSend reach tah_system_abandon (which runs the abandoned hook) and tah_system_withdraw_send (which reports the address's wake to the recorder, kernel ADR 0006)",
     'ta_actor_offload' => 'unload() offloads into the native offload store, which owns the bytes (core ADR 0074)',
     'ta_system_{dispatch_due,set_time}' => 'the clock belongs to the pump (ADR 0007)',
-    'ta_system_set_{external_event_router,actor_directory}' => 'installed at system creation (ADR 0006)',
+    'ta_system_set_actor_directory' => 'installed at system creation (ADR 0006)',
+    'ta_system_load_{needed,settled,failed}' => "the kernel answers core's load requests with its loaders (ADR 0006, napi ADR 0020, core ADR 0099)",
     'ta_system_register_{io,invoker}' => 'reached through hand-written registration (step 13)',
     'ta_system_set_log_sink' => 'reached through hand-written registration (step 13)',
     'ta_system_set_trace_masks' => 'set by the tracing hook (setTraceSink, configureTraces), which hands the records to JavaScript as OTLP (core ADRs 0067, 0098)',
@@ -72,7 +73,7 @@ module TinyactorsNapiBindings
   SKIP_FUNCTIONS = {
     'ta_arena_*' => 'C memory utility; the call arena belongs to the runtime',
     'ta_tree_*' => 'C construction helper; specs decode straight into the call arena',
-    'ta_{value,event,external_delivery}_{retain,release}' => 'C lifetime helpers used by the plumbing',
+    'ta_{value,event}_{retain,release}' => 'C lifetime helpers used by the plumbing',
     'ta_scxml_target_release' => 'the generated binding releases what ta_scxml_target_parse returns',
     'ta_address_{intern,retain,release,view}' =>
       'named addresses cross as family and name text; the ta_actor_ref codec interns and views them (ADR 0006)',
@@ -102,7 +103,7 @@ module TinyactorsNapiBindings
 
   SKIP_TYPES = {
     '*_vtable' => 'adapter operations; adapters are hand-written plumbing',
-    'ta_{actor_directory,external_event_router,io,invoker,log_sink}' => 'adapters installed by the plumbing',
+    'ta_{actor_directory,io,invoker,log_sink}' => 'adapters installed by the plumbing',
     'ta_chart_{codec,lowering,src_resolver,expression_printer,span_sink}' => 'chart codec adapters; none is registered yet',
     'ta_actor_directory_*' => 'directory callback arguments (ADR 0006)',
     'ta_{io,invoke}_origin' => 'cross only inside ta_origin, whose hand-written codec renders them (core ADR 0068)',
@@ -111,7 +112,7 @@ module TinyactorsNapiBindings
     'ta_run_params' => 'the pump runs core (ADR 0007, core ADR 0103)',
     'ta_input_outcome' => "ta_run()'s outcomes: the kernel settles send() and the hooks from them (core ADR 0103)",
     'ta_due_dispatch_params' => 'the clock belongs to the pump (ADR 0007)',
-    'ta_external_{delivery,event_submit_params}' => 'router callback arguments (ADR 0006)',
+    'ta_load_{request,settled_params,failed_params}' => "the kernel answers core's load requests (ADR 0006, core ADR 0099)",
     'ta_invoke_{request,report_params}' => 'invoker plumbing (step 13)',
     'ta_invoker_*_params' => 'invoker callback arguments (step 13)',
     'ta_send' => 'I/O processor callback argument (step 13)',

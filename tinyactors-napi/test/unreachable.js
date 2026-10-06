@@ -84,8 +84,10 @@ async function unknownSession() {
   system.close();
 }
 
-// A family with a loader: an unknown name loads. The loader's "not-found"
-// comes after the mail was accepted, so it is a dead letter, not an error.
+// A family with a loader: an unknown name loads. The mail waited in core for
+// the load, so the loader's "not-found" becomes the sender's
+// error.communication, like a name no loader would bring back (core ADR
+// 0099), and no dead letter.
 async function loaderFamily() {
   const dead = [];
   const system = createSystem({ deadLetter: (record) => dead.push(record) });
@@ -103,8 +105,9 @@ async function loaderFamily() {
   await system.flush();
   assert.deepEqual(loaded.sort(), ['known', 'unknown']);
   assert.equal(known.inspect().data.failures, 0);
-  assert.equal(unknown.inspect().data.failures, 0, 'a loader\'s answer is not the sender\'s error');
-  assert.equal(dead.find((record) => record.event === 'ping')?.reason, 'not-found');
+  assert.equal(unknown.inspect().data.failures, 1, 'a failed load is the sender\'s error');
+  assert.equal(unknown.inspect().data.failure?.reason, 'not-found');
+  assert.equal(dead.find((record) => record.event === 'ping'), undefined, 'mail from a chart is never a dead letter');
   system.close();
 }
 

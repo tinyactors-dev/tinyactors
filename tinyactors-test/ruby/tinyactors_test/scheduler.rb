@@ -7,9 +7,11 @@ module TinyactorsTest
   #
   # Core holds every input it admitted on its run queue, invoked children's
   # included, and ta_run takes them in arrival order. The scheduler calls it
-  # until it answers idle; then it dispatches due delayed sends, and it is
-  # done when nothing was dispatched and nothing more is due at the current
-  # logical time.
+  # until it answers idle; then it dispatches due delayed sends and answers
+  # the load requests core owes for mail to targets that are not resident
+  # (Context#answer_loads), and it is done when nothing was dispatched,
+  # nothing more is due at the current logical time, and no request was
+  # owed.
   class Scheduler
     # Calls before a run is declared non-quiescent, and calls that leave one
     # macrostep paused before it is.
@@ -68,6 +70,7 @@ module TinyactorsTest
       due = @context.core('ta_system_dispatch_due',
                           @context.ta.system.dispatch_due(system: @context.system_handle, budget: @dispatch_budget))
       return :round if due.fetch(:dispatched).positive? || due.fetch(:more_due)
+      return :round if @context.answer_loads.positive?
 
       :quiescent
     end

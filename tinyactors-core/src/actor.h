@@ -371,15 +371,36 @@ ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot);
 ta_result ta_actor_layout(ta_definition *definition);
 
 ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
+/* Where mail for a destination goes; see ta_actor_mail_route. */
+typedef struct {
+    /* The actor that holds the target session: resident and not finished,
+     * published or not (mail for one that is not published waits until it
+     * is, run.h). Null when the mail waits for the host instead. */
+    ta_actor *actor;
+    /* With no actor: the destination to wait for, as a waiting entry keys
+     * it (a session that is not resident resolved to its address). */
+    ta_actor_ref destination;
+    /* `destination` is a reference the route holds: release it with
+     * ta_actor_ref_release() when done. */
+    bool held;
+    /* With no actor: what core knows, TA_ERR_UNLOADED, TA_ERR_DONE or
+     * TA_ERR_NOT_FOUND (waiting.h). */
+    ta_result hint;
+    /* With no actor: no host can bring the target back, since it names no
+     * address and no family (a runtime ID no session holds, from a
+     * reference that names no family, ADR 0088). The send fails at once, in
+     * the sending macrostep (SCXML 6.2.4), instead of waiting. */
+    bool unreachable;
+} ta_mail_route;
 /*
- * The session mail to `destination` is for when core queues it itself
- * (ADR 0099): resident in this system, published and not finished. A
- * runtime or session ID is resolved as ta_session_route() does, a named
- * address through the host's directory. Null when there is none, and the
- * mail goes through the host's router. Never allocates; may run inside a
- * macrostep.
+ * Where mail to `destination` goes (ADR 0099): to the actor that holds the
+ * session, when one is resident and has not finished; nowhere, when no host
+ * could bring it back (`unreachable`); or to a waiting entry for the
+ * destination, which asks the host. A runtime or session ID
+ * is resolved as ta_session_route() does, a named address through the
+ * host's directory. Never allocates; may run inside a macrostep.
  */
-ta_actor *ta_actor_mail_target(ta_system *system, const ta_actor_ref *destination);
+void ta_actor_mail_route(ta_system *system, const ta_actor_ref *destination, ta_mail_route *out);
 /* The family atom of the resident actor `id`, or 0 when there is none (ADR 0088). */
 ta_atom ta_actor_family_of(const ta_system *system, ta_actor_id id);
 /* A runtime reference to `id` that names its family (ADR 0088). */

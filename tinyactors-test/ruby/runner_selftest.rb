@@ -44,7 +44,8 @@ class FakeHost
 
     case method
     when 'ta.system.create' then ok(out: { '$handle': 'system:1' })
-    when 'ta.system.set_external_event_router', 'ta.system.register_invoker' then ok
+    when 'ta.system.register_invoker' then ok
+    when 'ta.system.load_needed' then { result: 'err_not_found', out: {} }
     when 'ta.definition.compile_spec' then ok(out: { '$handle': 'definition:2' })
     when 'ta.system.register_definition' then ok(out: 0)
     when 'ta.actor.spawn' then ok(out: 5)
@@ -89,17 +90,14 @@ context.instance_exec do
 end
 
 methods = host.calls.map(&:first)
-setup = %w[ta.system.create ta.system.set_external_event_router ta.system.intern_atom
+setup = %w[ta.system.create ta.system.intern_atom
            ta.system.register_invoker ta.definition.compile_spec ta.system.register_definition]
-check(methods.first(6) == setup, "setup sequence: #{methods.first(6)}")
+check(methods.first(5) == setup, "setup sequence: #{methods.first(5)}")
 invoker = host.calls.find { |method, _| method == 'ta.system.register_invoker' }.last
 check(invoker[:type] == 1 && invoker.dig(:invoker, '$adapter') == 'invoker.scxml' &&
         invoker.dig(:invoker, 'config', 'charts').key?('traffic_light'),
       'the SCXML invoker is registered with every chart')
-router = host.calls.find { |method, _| method == 'ta.system.set_external_event_router' }.last
-check(router == { system: { '$handle': 'system:1' },
-                  router: { '$adapter' => 'router.direct', 'config' => { 'system' => { '$handle': 'system:1' } } } },
-      "the direct router is installed on the scenario system: #{router}")
+check(methods.include?('ta.system.load_needed'), 'the scheduler asks core for the load requests it owes')
 compile = host.calls.find { |method, _| method == 'ta.definition.compile_spec' }.last
 check(compile[:spec][:datamodel] == 'jq', 'the chart spec carries its SCXML datamodel')
 check(compile[:datamodel] == { '$adapter' => 'datamodel.jq' }, 'the jq adapter implements it')

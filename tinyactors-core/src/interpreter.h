@@ -241,25 +241,58 @@ typedef struct {
     bool in_run;
     /* A delayed send that fell due, not mail sent now. */
     bool timer;
-    /* Set by the call: with `in_run`, the resource a resident target's
-     * envelope found no room in, and the answer is ERROR with the send
-     * released and nobody told; the caller raises
-     * error.execution.capacity.<resource>. 0 otherwise. */
+    /* Set by the call: with `in_run`, the resource the mail's envelope found
+     * no room in, and the answer is FAILED with the send released and
+     * nobody told; the caller raises error.execution.capacity.<resource>.
+     * 0 otherwise. */
     ta_record_capacity_resource short_of;
-    /* Set by the call: the answer is ACCEPTED, but the send went nowhere,
+    /* Set by the call: the answer is SENT, but the send went nowhere,
      * since its sender is gone or its parent cancelled it. */
     bool dropped;
 } ta_dispatch;
+/* What ta_interpreter_dispatch_delayed did with a send. */
+typedef enum {
+    /* It went: into the pool, to its I/O processor, or nowhere (`dropped`). */
+    TA_DISPATCH_SENT = 0,
+    /* Nothing took it; the caller keeps it, due now, and offers it again. */
+    TA_DISPATCH_RETRY,
+    /* It failed: the sender is told with error.communication, or, with
+     * `short_of`, the caller raises a capacity error. */
+    TA_DISPATCH_FAILED
+} ta_dispatch_status;
 /*
- * Dispatches a send now: to a resident session, into an envelope of the
- * pool (run.h); to any other SCXML target, through the host's router; to
- * another I/O processor, through it. RETRY leaves the send owned by the
- * caller: nothing accepted it, or, outside a run, the pool or the name area
- * had no room for a resident target's envelope. Never allocates inside a
- * macrostep.
+ * Dispatches a send now: to another SCXML session, into an envelope of the
+ * pool, for the actor that holds it or, when it is not resident, waiting
+ * for the host to load it (run.h); to another I/O processor, through it.
+ * RETRY leaves the send owned by the caller: outside a run, the pool or the
+ * name area had no room, or the processor ran out of memory. Never
+ * allocates inside a macrostep.
  */
-ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send,
-                                                                ta_dispatch *how);
+ta_dispatch_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, ta_dispatch *how);
+
+/** A send to another session that failed after it left its macrostep; see
+ * `ta_interpreter_send_failed`. */
+typedef struct {
+    ta_send_id send_id;
+    /* What the error carries; its data is taken over, and released when the
+     * error cannot be raised. */
+    ta_fault *fault;
+    /* Outside a run: the trace parent of the step that sent it, all zero
+     * when untraced, which the sender's macrostep runs under when the error
+     * starts it; the error is counted and recorded here. Null inside the
+     * sender's own run, whose unit counts and records it. */
+    const ta_trace_parent *trace;
+} ta_send_failure;
+/*
+ * Raises error.communication in `sender` for a send that could not be
+ * delivered (SCXML 6.2.4): mail whose target could not be loaded, or was
+ * gone or finished when the mail reached it, or that no host could bring
+ * back. An idle sender runs it in a macrostep a wake starts. It may take
+ * room in the sender's internal queue and, outside a macrostep, an
+ * envelope; with none, or when the sender has finished, the error is
+ * dropped.
+ */
+void ta_interpreter_send_failed(ta_system *system, ta_actor *sender, const ta_send_failure *failure);
 /*
  * A literal content as a host adapter receives it (ADR 0053): its media type
  * and its bytes. The bytes' pointer is non-null even for empty content, so an

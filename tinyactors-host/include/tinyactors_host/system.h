@@ -22,10 +22,11 @@
  * (pump.c) and native tests may set to anything; a flag coalesces the
  * requests until the turn runs.
  *
- * Routing (ADR 0006): the directory and the router are installed on core
- * when the system is created. Close uninstalls both, gives back the
- * directory's address references and the mailboxes' events, and only then
- * destroys core, because core frees its address records at the end of
+ * Routing (ADR 0006): the directory is installed on core when the system is
+ * created, and each turn answers the load requests core owes for mail to
+ * targets that are not resident (router.h). Close uninstalls the directory,
+ * gives back its address references and the mailboxes' events, and only
+ * then destroys core, because core frees its address records at the end of
  * ta_system_destroy().
  *
  * Time (ADR 0007 point 3): core's clock is logical milliseconds that only
@@ -339,6 +340,21 @@ bool tah_system_dispatch_due(tah_system *system);
  * the waiter was cancelled; the caller settles and gives it back.
  */
 bool tah_system_cancel(tah_system *system, uint32_t index);
+/*
+ * Finishes a load JavaScript ran (loads.h, tah_loads_finish()), and answers
+ * the load request core owes for it, when it has one (router.h): the mail
+ * core kept for the address goes to `actor` when the load succeeded, and
+ * otherwise becomes error.communication for each sender. TA_ERR_STALE: the
+ * token names no load in flight; TA_ERR_NOT_FOUND: `actor` is not the
+ * resident actor the load needs; TA_ERR_NOMEM as tah_loads_finish().
+ */
+typedef struct {
+    uint32_t index;
+    uint32_t generation;
+    tah_load_outcome outcome;
+    ta_actor_id actor;
+} tah_system_load_finish;
+ta_result tah_system_finish_load(tah_system *system, const tah_system_load_finish *finish);
 void tah_system_end_turn(tah_system *system);
 /*
  * No runnable or ready actors, no dead letters to report, no effects or load

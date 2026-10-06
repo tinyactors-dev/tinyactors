@@ -3,7 +3,7 @@
  * session resident in this system takes an envelope from the pool, waits on
  * the sending macrostep's outgoing list until that macrostep ends, and then
  * joins the run queue; a delayed send that falls due joins the run queue at
- * ta_system_dispatch_due(). Neither reaches the host's router.
+ * ta_system_dispatch_due(). Neither asks the host for anything.
  *
  * The test includes the amalgamation so it reaches the private units; it
  * uses the C library, the core does not. Memory comes from the test
@@ -15,7 +15,7 @@
  *    after its first <send>, the envelope is outgoing, parked with the
  *    sender's taken input, and the receiver has nothing to take; once the
  *    macrostep ends its mail joins the run queue in send order, the
- *    receiver takes it, and the router is never called;
+ *    receiver takes it, and no load request is made;
  * 2. order holds per sender and receiver across macrosteps: a receiver
  *    takes one sender's mail in the order it was sent, over several of
  *    the sender's macrosteps, and mail from senders whose macrosteps ended
@@ -45,7 +45,9 @@
  *    waits, submitted, more_due set, until a later dispatch delivers it;
  * 8. a TAKEN outcome carries the event of mail and of a due send,
  *    retained for the host, and none for an input the host admitted;
- * 9. mail to a session that is not resident still goes through the router.
+ * 9. mail to a session that is not resident does not join the run queue:
+ *    it waits for its destination, which asks the host for a load once
+ *    (waiting_test.c proves the rest).
  */
 #include "../include/tinyactors.c"
 #include "test_allocator.h"
@@ -70,7 +72,7 @@ static test_allocator heap;
 static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* ------------------------------------------------------------------------
- * A directory of a few named actors, and a router that counts
+ * A directory of a few named actors
  */
 
 enum { NAMES = 4 };
@@ -136,15 +138,15 @@ static const ta_actor_directory_vtable dir_vtable = {
     .claim = dir_claim, .resolve = dir_resolve, .replace = dir_replace, .remove = dir_remove,
 };
 
-static int routed = 0;
-
-static ta_external_event_submit_status route(void *self, const ta_external_event_submit_params *params) {
-    (void)self, (void)params;
-    routed += 1;
-    return TA_EXTERNAL_EVENT_ACCEPTED;
+/* The load requests core owes the host, read and left unanswered. */
+static uint32_t load_requests(ta_system *system) {
+    uint32_t count = 0;
+    ta_load_request request;
+    while (ta_system_load_needed(system, &request) == TA_OK) {
+        count += 1u;
+    }
+    return count;
 }
-
-static const ta_external_event_router_vtable router_vtable = { .submit = route };
 
 /* ------------------------------------------------------------------------
  * Charts
@@ -326,12 +328,9 @@ static ta_actor_id spawn_named(fixture *f, ta_definition_id definition, const ch
 static fixture open_with(const ta_param_value *params, uint32_t count, const ta_scxml_spec *sending) {
     fixture f = { 0 };
     directory = (small_directory){ 0 };
-    routed = 0;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = params, .param_count = count },
                            &f.system) == TA_OK);
     CHECK(ta_system_set_actor_directory(f.system, (ta_actor_directory){ .self = &directory, .v = &dir_vtable }) ==
-          TA_OK);
-    CHECK(ta_system_set_external_event_router(f.system, (ta_external_event_router){ .v = &router_vtable }) ==
           TA_OK);
     f.receiver = spawn_named(&f, define(f.system, &receiver, "recv"), "recv", "r");
     f.sender = spawn_named(&f, define(f.system, sending, "send"), "send", "s");
@@ -429,7 +428,7 @@ static void test_mail_waits_for_its_senders_macrostep(void) {
     run_all(&f, f.receiver, &taken);
     CHECK(taken.count == 2 && strcmp(taken.names[0], "e1") == 0 && strcmp(taken.names[1], "e2") == 0);
     CHECK(in_state(&f, f.receiver, "r2"));
-    CHECK(routed == 0);
+    CHECK(load_requests(f.system) == 0);
     close_fixture(&f);
 }
 
@@ -449,7 +448,7 @@ static void test_order_per_sender_and_receiver(void) {
     CHECK(taken.count == 4 && strcmp(taken.names[0], "e1") == 0 && strcmp(taken.names[1], "e2") == 0 &&
           strcmp(taken.names[2], "x") == 0 && strcmp(taken.names[3], "e3") == 0);
     CHECK(in_state(&f, f.receiver, "r3"));
-    CHECK(routed == 0);
+    CHECK(load_requests(f.system) == 0);
     close_fixture(&f);
 }
 
@@ -682,7 +681,7 @@ static void test_a_due_send_falls_into_the_pool(void) {
     taken_list taken = { 0 };
     run_all(&f, f.receiver, &taken);
     CHECK(taken.count == 1 && strcmp(taken.names[0], "e1") == 0 && in_state(&f, f.receiver, "r1"));
-    CHECK(routed == 0);
+    CHECK(load_requests(f.system) == 0);
     close_fixture(&f);
 
     /* A pool at its bound: the send waits, submitted, and goes later. */
@@ -734,11 +733,12 @@ static void test_taken_outcomes_carry_mail_events(void) {
 }
 
 /* Claim 9. */
-static void test_mail_to_a_session_that_is_not_resident_goes_to_the_router(void) {
+static void test_mail_to_a_session_that_is_not_resident_waits(void) {
     fixture f = open_with(NULL, 0, &sender);
     CHECK(deliver(&f, f.sender, "away") == TA_OK);
     run_all(&f, 0, NULL);
-    CHECK(routed == 1 && envelopes_in(&f, TA_ENVELOPE_RUNNABLE) == 0);
+    CHECK(envelopes_in(&f, TA_ENVELOPE_RUNNABLE) == 0 && envelopes_in(&f, TA_ENVELOPE_WAITING) == 1);
+    CHECK(load_requests(f.system) == 1);
     close_fixture(&f);
 }
 
@@ -751,7 +751,7 @@ int main(void) {
     test_a_traced_envelope_carries_its_senders_trace_parent();
     test_a_due_send_falls_into_the_pool();
     test_taken_outcomes_carry_mail_events();
-    test_mail_to_a_session_that_is_not_resident_goes_to_the_router();
+    test_mail_to_a_session_that_is_not_resident_waits();
     CHECK(test_allocator_finish(&heap) == 0);
     if (failures != 0) {
         fprintf(stderr, "mail_test: %d check(s) failed\n", failures);

@@ -1339,50 +1339,6 @@ ta_result ta_send_id_format(const ta_system *system, const ta_send_id_format_par
     return ta_text_finish(&writer, params->needed);
 }
 
-typedef struct {
-    ta_actor_ref origin;
-    ta_invoke_id invoke_id;
-    ta_actor_ref destination;
-    ta_event_name_id event;
-    ta_send_id send_id;
-    const ta_value *data;
-    ta_fault *fault;
-    ta_trace_parent trace;
-    ta_time due;
-} ta_submit_params;
-
-static ta_external_event_submit_status ta_submit_external(ta_system *system, const ta_submit_params *params) {
-    if (system->external_events.v == NULL) {
-        return TA_EXTERNAL_EVENT_ERROR;
-    }
-    /* A session ID that is not a resident runtime ID resolves here (ADR 0066). */
-    ta_actor_ref destination;
-    bool routed_by_name = ta_session_route(system, &params->destination, &destination);
-    ta_external_delivery delivery = {
-        .destination = destination,
-        .event = {
-            .name = params->event,
-            .type = TA_EVENT_EXTERNAL,
-            .send_id = params->send_id,
-            .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = params->origin },
-            .invoke_id = params->invoke_id,
-            .data = *params->data,
-        },
-        .trace = params->trace,
-        .due = params->due,
-    };
-    ta_external_event_submit_status status =
-        system->external_events.v->submit(system->external_events.self,
-                                          &(ta_external_event_submit_params){
-                                              .delivery = &delivery,
-                                              .fault = params->fault,
-                                          });
-    if (routed_by_name) {
-        ta_actor_ref_release(&destination);
-    }
-    return status;
-}
-
 void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_name_id name,
                                    const ta_trace_parent *parent) {
     ta_count_error(system, actor, name);
@@ -1449,6 +1405,12 @@ static ta_result ta_communication_error(ta_system *system, ta_actor *actor, cons
     return result;
 }
 
+void ta_interpreter_send_failed(ta_system *system, ta_actor *sender, const ta_send_failure *failure) {
+    (void)ta_communication_error(system, sender,
+                                 &(ta_error_params){ .send_id = failure->send_id, .fault = failure->fault,
+                                                     .trace = failure->trace });
+}
+
 void ta_interpreter_start_macrostep(ta_actor *actor) {
     if (actor->macrostep) {
         return;
@@ -1465,15 +1427,13 @@ void ta_interpreter_literal_content(const ta_definition *definition, ta_content_
     *bytes = def->bytes.ptr != NULL ? def->bytes : (ta_bytes){ .ptr = empty, .len = 0 };
 }
 
-ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send,
-                                                                ta_dispatch *how) {
+ta_dispatch_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, ta_dispatch *how) {
     bool in_run = how->in_run;
     how->short_of = (ta_record_capacity_resource)0;
     how->dropped = false;
     ta_actor *sender = ta_actor_lookup(system, send->owner);
     ta_fault fault = {0};
-    ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
-    ta_actor *target = NULL;
+    ta_dispatch_status status = TA_DISPATCH_FAILED;
     /*
      * A submitted send was already sent: it is logically in the receiver's
      * queue and keeps its envelope even when the sending session is gone.
@@ -1484,50 +1444,51 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
                                  ? send->invoke_id
                                  : ta_invoke_parent_id(sender, &send->destination);
     if (sender == NULL && !send->submitted) {
-        status = TA_EXTERNAL_EVENT_ACCEPTED; /* the sender's session is gone; drop the send */
+        status = TA_DISPATCH_SENT; /* the sender's session is gone; drop the send */
         how->dropped = true;
     } else if (!send->submitted && !ta_invoke_parent_accepts(system, sender, &send->destination)) {
         /* The parent already cancelled this invoked child. */
-        status = TA_EXTERNAL_EVENT_ACCEPTED;
+        status = TA_DISPATCH_SENT;
         how->dropped = true;
-    } else if (ta_system_is_scxml_io(system, send->io_type) &&
-               (target = ta_actor_mail_target(system, &send->destination)) != NULL) {
-        /* A resident session: core queues it itself, never the router. */
-        ta_event event = { .name = send->event,
-                           .type = TA_EVENT_EXTERNAL,
-                           .send_id = send->send_id,
-                           .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = origin },
-                           .invoke_id = invoke_id,
-                           .data = send->data };
-        ta_record_capacity_resource short_of = (ta_record_capacity_resource)0;
-        ta_result posted = ta_run_post_mail(
-            system,
-            &(ta_run_mail){ .target = target, .event = &event, .trace = &send->trace,
-                            .from = sender != NULL ? sender->session_id : 0u,
-                            .source = how->timer ? TA_RECORD_INPUT_SOURCE_TIMER : TA_RECORD_INPUT_SOURCE_MAIL },
-            &short_of);
-        if (posted == TA_OK) {
-            status = TA_EXTERNAL_EVENT_ACCEPTED;
-        } else if (in_run) {
-            /* The sending action fails, in its own macrostep (ADR 0099). */
-            how->short_of = short_of;
-        } else {
-            /* Nothing was free outside a macrostep: it waits, due now, and is
-             * offered again, as a router's RETRY would make it. */
-            status = TA_EXTERNAL_EVENT_RETRY;
-        }
     } else if (ta_system_is_scxml_io(system, send->io_type)) {
-        status = ta_submit_external(system, &(ta_submit_params){
-                                                .origin = origin,
-                                                .invoke_id = invoke_id,
-                                                .destination = send->destination,
-                                                .event = send->event,
-                                                .send_id = send->send_id,
-                                                .data = &send->data,
-                                                .fault = &fault,
-                                                .trace = send->trace,
-                                                .due = send->due,
-                                            });
+        /* Another session: core queues it itself, for the actor that holds
+         * it, or waiting for the host to load it (ADR 0099). */
+        ta_mail_route route;
+        ta_actor_mail_route(system, &send->destination, &route);
+        if (route.unreachable) {
+            /* No host could bring it back: the sender hears it now, in its
+             * own macrostep (SCXML 6.2.4). */
+            static const char gone[] = "no session has that ID";
+            fault = (ta_fault){ .code = TA_ERR_NOT_FOUND, .message = { .ptr = gone, .len = sizeof gone - 1u } };
+        } else {
+            ta_event event = { .name = send->event,
+                               .type = TA_EVENT_EXTERNAL,
+                               .send_id = send->send_id,
+                               .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = origin },
+                               .invoke_id = invoke_id,
+                               .data = send->data };
+            ta_waiting_key wait = { .destination = &route.destination, .hint = route.hint };
+            ta_record_capacity_resource short_of = (ta_record_capacity_resource)0;
+            ta_result posted = ta_run_post_mail(
+                system,
+                &(ta_run_mail){ .target = route.actor, .wait = &wait, .event = &event, .trace = &send->trace,
+                                .from = sender != NULL ? sender->session_id : 0u,
+                                .source = how->timer ? TA_RECORD_INPUT_SOURCE_TIMER : TA_RECORD_INPUT_SOURCE_MAIL },
+                &short_of);
+            if (posted == TA_OK) {
+                status = TA_DISPATCH_SENT;
+            } else if (in_run) {
+                /* The sending action fails, in its own macrostep (ADR 0099). */
+                how->short_of = short_of;
+            } else {
+                /* Nothing was free outside a macrostep: it waits, due now, and
+                 * is offered again. */
+                status = TA_DISPATCH_RETRY;
+            }
+        }
+        if (route.held) {
+            ta_actor_ref_release(&route.destination);
+        }
     } else {
         const ta_io *io = ta_system_io_of(system, send->io_type);
         ta_send request = {
@@ -1554,17 +1515,17 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
         }
         ta_op_status sent = io == NULL ? TA_OP_ERROR : io->v->send(io->self, &request, &fault);
         /* A processor that ran out of memory accepted nothing: the send
-         * waits, due now, like one a router answered RETRY for (ADR 0070). */
-        status = sent == TA_OP_OK      ? TA_EXTERNAL_EVENT_ACCEPTED
-                 : sent == TA_OP_NOMEM ? TA_EXTERNAL_EVENT_RETRY
-                                       : TA_EXTERNAL_EVENT_ERROR;
+         * waits, due now, and is offered again (ADR 0070). */
+        status = sent == TA_OP_OK      ? TA_DISPATCH_SENT
+                 : sent == TA_OP_NOMEM ? TA_DISPATCH_RETRY
+                                       : TA_DISPATCH_FAILED;
     }
-    if (status == TA_EXTERNAL_EVENT_RETRY) {
+    if (status == TA_DISPATCH_RETRY) {
         /*
-         * The router accepted nothing (ADR 0040). The send is due, so it is
-         * sent: it waits to be offered again with the envelope it has now,
-         * <cancel> no longer reaches it, and it outlives its sender
-         * (ADR 0054 D3, D5). The caller keeps it in the deadline index.
+         * Nothing accepted it (ADR 0040). The send is due, so it is sent: it
+         * waits to be offered again with the envelope it has now, <cancel>
+         * no longer reaches it, and it outlives its sender (ADR 0054 D3,
+         * D5). The caller keeps it in the deadline index.
          */
         if (!send->submitted) {
             /* The stored send now owns its envelope's origin (ADR 0065). */
@@ -1577,7 +1538,7 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
         ta_value_release(&fault.data);
         return status;
     }
-    if (status == TA_EXTERNAL_EVENT_ERROR && sender != NULL && how->short_of == 0) {
+    if (status == TA_DISPATCH_FAILED && sender != NULL && how->short_of == 0) {
         /*
          * An idle sender runs its error.communication in a macrostep a wake
          * starts. When the pool has no envelope for that wake (TA_ERR_FULL,
@@ -2048,7 +2009,7 @@ static ta_result ta_send_evaluate(ta_interpreter *it, const ta_send_action *send
  * envelope or no name-area room is error.execution.capacity.pool or
  * .names, raised here (ADR 0099). It runs out of memory only where
  * nothing is visible yet: holding it for an unpublished actor, or keeping
- * one the router refused with RETRY, which accepted nothing (ADR 0040).
+ * one an I/O processor refused, which accepted nothing (ADR 0040).
  */
 static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
     ta_system *system = it->system;
@@ -2123,19 +2084,19 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
     }
     if (state->delay == 0) {
         ta_dispatch how = { .in_run = true };
-        ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record, &how);
+        ta_dispatch_status submitted = ta_interpreter_dispatch_delayed(system, &record, &how);
         if (how.short_of != 0) {
             state->sent = false;
             return ta_send_capacity_error(it, state->send_id, how.short_of);
         }
-        if (submitted != TA_EXTERNAL_EVENT_RETRY) {
-            state->sent = submitted == TA_EXTERNAL_EVENT_ACCEPTED;
+        if (submitted != TA_DISPATCH_RETRY) {
+            state->sent = submitted == TA_DISPATCH_SENT;
             return TA_OK;
         }
         /*
-         * The router accepted nothing, for a session that is not resident.
-         * The send, now marked submitted, waits in the deadline index, due
-         * now, and keeps its order among later sends.
+         * Its I/O processor accepted nothing. The send, now marked
+         * submitted, waits in the deadline index, due now, and keeps its
+         * order among later sends.
          */
     }
     ta_result result = ta_actor_schedule_send(system, actor, &record);
@@ -3755,7 +3716,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
         ta_store_active(it);
         it->at.stage = TA_FINISH_END;
     }
-    /* Sends the router already refused once stay queued: they were sent before termination. */
+    /* Sends nothing accepted once stay queued: they were sent before termination. */
     ta_timer_cancel_unsubmitted(&it->system->timers, ta_actor_timers(it->actor));
     ta_note_ignored(it);
     ta_release_events(it->actor);

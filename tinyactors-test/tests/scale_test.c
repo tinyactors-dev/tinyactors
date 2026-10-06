@@ -1303,15 +1303,15 @@ static void check_io_origin_allocations(void) {
 }
 
 /* ------------------------------------------------------------------------
- * A router that keeps a delivery and releases it later (ADR 0065). The
- * delivery's named destination and origin are shared handles, so keeping
- * it retains three references and releasing it gives them back: once the
- * system is warm, neither calls the allocator. Before ADR 0065 keeping a
- * delivery copied its destination's strings, two allocations, and releasing
- * it freed them. The sender keeps a far delayed send, so its sparse state
- * stays (ADR 0064) and only the router's own work is counted. The address
- * it sends to has no resident actor, so its mail goes to the router: mail
- * to a resident one stays in core (core ADR 0099).
+ * Mail kept in core for a target that is not resident, and the host's
+ * answer (ADR 0065, core ADR 0099). The mail's named destination and origin
+ * are shared handles: the waiting entry holds the destination once, so
+ * keeping the mail and handing it to the actor the host names retain and
+ * release references, and once the system is warm neither calls the
+ * allocator. Before ADR 0065 keeping a delivery copied its destination's
+ * strings, two allocations, and releasing it freed them. The sender keeps a
+ * far delayed send, so its sparse state stays (ADR 0064) and only the
+ * waiting mail's own work is counted.
  */
 
 static const ta_scxml_state_spec STATES_PINGER[] = {
@@ -1348,22 +1348,21 @@ static const ta_scxml_state_spec STATES_PINGER[] = {
     {0},
 };
 
-typedef struct {
-    ta_external_delivery kept;
-    bool holding;
-    unsigned accepted;
-} keeping_router;
+/* A session that takes anything: the actor the host names for the mail. */
+static const ta_scxml_state_spec STATES_SINK[] = {
+    {.kind = TA_SCXML_STATE_ATOMIC, .id = STR("sink")},
+    {0},
+};
 
-static ta_external_event_submit_status keep_delivery(void *self, const ta_external_event_submit_params *params) {
-    keeping_router *router = self;
-    require(!router->holding, "the router holds one delivery at a time");
-    ta_external_delivery_retain(params->delivery, &router->kept);
-    router->holding = true;
-    router->accepted += 1u;
-    return TA_EXTERNAL_EVENT_ACCEPTED;
+/* Reads the one load request core owes, and answers it with `sink`. */
+static void answer_with(ta_system *system, ta_actor_id sink) {
+    ta_load_request request;
+    require(ta_system_load_needed(system, &request) == TA_OK && request.waiting == 1u,
+            "the mail waits, and core asks for its target's load");
+    require(ta_system_load_settled(system, &(ta_load_settled_params){.request = request.request, .actor = sink}) ==
+                TA_OK,
+            "the host answers with the sink");
 }
-
-static const ta_external_event_router_vtable KEEPING_ROUTER = {.submit = keep_delivery};
 
 static void check_kept_delivery_allocations(void) {
     counting_allocator counts = {.backing = tat_libc_allocator()};
@@ -1372,12 +1371,9 @@ static void check_kept_delivery_allocations(void) {
     require(ta_system_create(&(ta_system_config){.allocator = allocator}, &system) == TA_OK, "system creation");
     directory dir;
     directory_init(&dir, 16);
-    keeping_router router = {0};
     require(ta_system_set_actor_directory(system, (ta_actor_directory){.self = &dir, .v = &DIRECTORY_VTABLE}) ==
-                    TA_OK &&
-                ta_system_set_external_event_router(
-                    system, (ta_external_event_router){.self = &router, .v = &KEEPING_ROUTER}) == TA_OK,
-            "installing the directory and the router");
+                TA_OK,
+            "installing the directory");
     ta_definition_id pinger = register_revision(system, allocator, &(revision_spec){"pinger", "v1", STATES_PINGER});
     ta_actor_id sender = 0;
     require(ta_actor_spawn(system, &(ta_actor_spawn_params){
@@ -1386,8 +1382,13 @@ static void check_kept_delivery_allocations(void) {
                                        .out = &sender}) == TA_OK,
             "spawning the named sender");
     run_to_stable(system, sender);
-    /* The host keeps a handle to the address it routes to, as a loader keeps
-     * an unloaded actor's: each send finds it interned. */
+    ta_definition_id sink_chart = register_revision(system, allocator, &(revision_spec){"sink", "v1", STATES_SINK});
+    ta_actor_id sink = 0;
+    require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = sink_chart, .out = &sink}) == TA_OK,
+            "spawning the sink");
+    run_to_stable(system, sink);
+    /* The host keeps a handle to the address the mail waits for, as a loader
+     * keeps an unloaded actor's: each send finds it interned. */
     ta_address *unloaded = NULL;
     require(ta_address_intern(system, &(ta_actor_address){.family = {STR("peer")}, .name = STR("b")}, &unloaded) ==
                 TA_OK,
@@ -1395,28 +1396,26 @@ static void check_kept_delivery_allocations(void) {
     ta_event_name_id ping = intern_event(system, (ta_str)STR("ping"));
     /* Warm-up. */
     run_event(system, sender, ping);
-    require(router.holding, "the router kept the delivery");
-    ta_external_delivery_release(&router.kept);
-    router.holding = false;
+    answer_with(system, sink);
+    run_to_stable(system, sink);
 
     counts.alloc_calls = 0;
     counts.free_calls = 0;
     for (unsigned round = 0; round < EVENT_ROUNDS; round += 1u) {
         run_event(system, sender, ping);
-        ta_external_delivery_release(&router.kept);
-        router.holding = false;
+        answer_with(system, sink);
+        run_to_stable(system, sink);
     }
     double allocs = (double)counts.alloc_calls / EVENT_ROUNDS;
     double frees = (double)counts.free_calls / EVENT_ROUNDS;
-    printf("allocator calls per kept-then-released delivery after warm-up: %.2f allocations and %.2f frees\n",
+    printf("allocator calls per kept-then-delivered message after warm-up: %.2f allocations and %.2f frees\n",
            allocs, frees);
-    require(router.accepted == EVENT_ROUNDS + 1u, "every ping reached the router");
     ta_address_release(unloaded);
     directory_release(&dir);
     ta_system_destroy(system);
     directory_destroy(&dir);
-    require(counts.live_bytes == 0, "the router system returned every byte it was given");
-    require(allocs == 0.0 && frees == 0.0, "keeping and releasing a delivery calls the allocator (ADR 0065)");
+    require(counts.live_bytes == 0, "the system returned every byte it was given");
+    require(allocs == 0.0 && frees == 0.0, "keeping and delivering waiting mail calls the allocator (ADR 0065)");
 }
 
 int main(int argc, char **argv) {

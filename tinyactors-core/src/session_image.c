@@ -932,9 +932,9 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
     /*
      * The route is gone, so the session may go. Its not-yet-submitted sends
      * live in the image now and must not also sit in the resident heap,
-     * where they would fire for an actor that is not there; a send already
-     * handed to the router is an envelope of its own and stays, exactly as
-     * it does when a session ends. One sent to this session names it by
+     * where they would fire for an actor that is not there; a submitted
+     * send, which nothing accepted once, is an envelope of its own and
+     * stays, exactly as it does when a session ends. One sent to this session names it by
      * session ID, and the parked entry routes its retry by address to
      * whatever session loads here next (ADR 0066).
      */

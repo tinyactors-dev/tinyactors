@@ -191,9 +191,9 @@ typedef enum { TA_ACTOR_REF_RUNTIME = 0, TA_ACTOR_REF_NAMED = 1 } ta_actor_ref_k
  * `family` is the family atom of the actor a runtime reference names (ADR
  * 0088), set on every runtime reference core makes for an actor: its self
  * and the origins it writes. It outlives the actor, so a session URI can
- * still be written, and a router can still find the family, once the actor
+ * still be written, and a host can still find the family, once the actor
  * is gone. 0 (the empty text, which no family is) means unknown: a
- * reference a host built from a bare ID. A router delivers to a runtime
+ * reference a host built from a bare ID. Mail goes to a runtime
  * destination only when a resident actor of that family holds the ID; core
  * gives a destination whose ID is held by another family's actor ID 0.
  * Ignored for named references, whose address names the family.
@@ -530,63 +530,52 @@ TA_API void ta_event_retain(TA_IN const ta_event *event, TA_OUT TA_RELEASE(ta_ev
     TA_ANY_VALUE_MODEL;
 TA_API void ta_event_release(TA_INOUT ta_event *event) TA_ANY_VALUE_MODEL;
 /* ========================================================================
- * External SCXML event routing
+ * Mail for a target that is not resident
  */
-
 
 /*
- * A fully normalized event destined for an SCXML session that is not
- * resident in this system (mail to a resident one stays in core, ADR 0099),
- * with the trace parent the receiver's macrostep runs under: the sending
- * macrostep's context, and the key of the step that sent it (ADR 0067). A
- * router passes `trace` on to ta_actor_deliver().
+ * Mail a session sends to a target that is not resident in this system
+ * waits in core (ADR 0099): a named address with no resident actor, or a
+ * session with none (gone, finished, unloaded, or held by another family's
+ * actor). Only the host knows whether such a target can come back (its
+ * loaders, what it unloaded), so core asks it, once per destination, and
+ * keeps the mail meanwhile: ta_system_load_needed() reads the next request,
+ * and the host answers it with ta_system_load_settled(), when the target is
+ * resident now, or ta_system_load_failed(), when it cannot be.
+ *
+ * - `request` names the request in the answer; it is stale once answered.
+ * - `destination` is the target as the mail named it, borrowed until the
+ *   request is answered: a named address, or a runtime reference with its
+ *   family, whose ID is 0 when another family's actor holds it (ADR 0088);
+ *   such mail never shares a request, since two such messages may be for
+ *   different sessions.
+ * - `hint` is what core knew when the first message waited:
+ *   TA_ERR_UNLOADED (an unloaded session, or an address the directory
+ *   holds unloaded), TA_ERR_DONE (its actor had finished) or
+ *   TA_ERR_NOT_FOUND. The host decides.
+ * - `waiting` counts the messages waiting when it was read, and `trace` is
+ *   the first one's trace parent, all zero when it is untraced.
  */
 typedef struct {
+    uint64_t request;
     ta_actor_ref destination;
-    ta_event event;
+    ta_result hint;
+    uint32_t waiting;
     ta_trace_parent trace;
-    /* When the send was due (ADR 0072): the time it was sent for an
-     * immediate send, its deadline for a delayed one. A host subtracts it
-     * from its own clock to measure how late a timer fired. */
-    ta_time due;
-} ta_external_delivery;
-
-/*
- * Keeps a delivery past the submit call: retains its destination, its
- * origin and its data (ADR 0050, ADR 0065). It never allocates and cannot
- * fail. Release gives all three back.
- */
-TA_API void ta_external_delivery_retain(TA_IN const ta_external_delivery *delivery,
-                                        TA_OUT TA_RELEASE(ta_external_delivery_release) ta_external_delivery *out)
-    TA_ANY_VALUE_MODEL;
-TA_API void ta_external_delivery_release(TA_INOUT ta_external_delivery *delivery) TA_ANY_VALUE_MODEL;
+} ta_load_request;
 
 typedef struct {
-    TA_IN const ta_external_delivery *delivery;
-    TA_OUT TA_VALID_ON(TA_EXTERNAL_EVENT_ERROR) TA_LIFETIME(call) ta_fault *fault;
-} ta_external_event_submit_params;
-
-typedef enum {
-    /* Delivery was accepted; an asynchronous router copied borrowed fields. */
-    TA_EXTERNAL_EVENT_ACCEPTED TA_SUCCESS = 0,
-    /* Nothing was accepted; core retains and retries the delivery. */
-    TA_EXTERNAL_EVENT_RETRY,
-    /* Nothing was accepted; fault describes a communication failure. */
-    TA_EXTERNAL_EVENT_ERROR
-} ta_external_event_submit_status TA_SYMBOLS("TA_EXTERNAL_EVENT_");
-
-typedef struct ta_external_event_router_vtable {
-    ta_external_event_submit_status (*submit)(
-        void *self,
-        TA_IN const ta_external_event_submit_params *params);
-} ta_external_event_router_vtable TA_VTABLE;
+    uint64_t request;
+    /* The resident actor that holds the destination now. */
+    ta_actor_id actor;
+} ta_load_settled_params;
 
 typedef struct {
-    void *self;
-    /* Null uninstalls the router. */
-    TA_OPTIONAL const ta_external_event_router_vtable *v;
-} ta_external_event_router TA_ADAPTER;
-
+    uint64_t request;
+    /* What each waiting message's error.communication carries: the code,
+     * the message and the data, borrowed; each error retains the data. */
+    TA_IN const ta_fault *fault;
+} ta_load_failed_params;
 
 /* ========================================================================
  * Expressions and definition identity
@@ -2930,9 +2919,8 @@ typedef struct {
  * unused. `has_target_text` means the target is literal: `target` is absent,
  * and `target_text` names the text in the owner's definition, which
  * ta_definition_content() reads. `submitted` means
- * nothing accepted the send once, the router or, for a resident target,
- * core's pool (ADR 0099), and it waits to be offered again (ADR 0026,
- * ADR 0040).
+ * nothing accepted the send once, core's pool (ADR 0099) or its I/O
+ * processor, and it waits to be offered again (ADR 0026, ADR 0040).
  * Everything is borrowed; retain `target` and `data` with ta_value_retain()
  * to keep them past the synchronization window.
  *
@@ -3000,7 +2988,10 @@ typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_id *out;
  *   macrostep ends, or its macrostep is abandoned (ta_actor_abandon());
  *   that includes an input reported FAULTED whose session is then
  *   abandoned or destroyed instead of released;
- * - it is one of core's own that its session no longer needs.
+ * - it is one of core's own that its session no longer needs;
+ * - it is mail or a due send whose target is gone or has finished when it
+ *   is reached: it becomes error.communication for its sender instead, as
+ *   mail for a target that cannot be loaded does (ta_system_load_failed()).
  * The kinds:
  * - TAKEN: its macrostep began (only with `report_taken`).
  * - COMPLETED: its macrostep ended with the session stable; the event, if
@@ -3024,10 +3015,12 @@ typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_id *out;
  *   active, or the session now runs another definition).
  * Core's own inputs have correlation 0: a session's bootstrap, a
  * macrostep core started for work queued outside any run, mail one
- * resident session sent another, and a delayed send to a resident session
- * that fell due. Mail and due sends never reach the host's router: core
- * queues them itself, and a session's mail joins the queue only when the
- * macrostep that sent it ends (ADR 0099).
+ * session sent another, and a delayed send that fell due. Core queues mail
+ * and due sends itself: a session's mail joins the queue only when the
+ * macrostep that sent it ends, and mail for a target that is not resident
+ * waits for the host's answer to a load request (ta_system_load_needed(),
+ * ADR 0099). Mail for a session that is not published yet (prepared, or
+ * replaying) waits until it is published.
  */
 typedef enum {
     TA_INPUT_TAKEN = 0,
@@ -3356,8 +3349,8 @@ typedef struct {
 typedef struct {
     ta_actor_id actor;
     TA_IN const ta_event *event;
-    /* What the macrostep that takes the event runs under (ADR 0067); a
-     * router passes ta_external_delivery.trace. All zero is none. */
+    /* What the macrostep that takes the event runs under (ADR 0067). All
+     * zero is none. */
     ta_trace_parent trace;
     /* When present, the event is taken by this transition instead of by
      * transition selection: no chart transition sees it, and neither
@@ -3451,14 +3444,48 @@ TA_API ta_result ta_run(ta_system *system, TA_IN const ta_run_params *params);
 TA_API ta_result ta_actor_release(ta_system *system, ta_actor_id actor);
 /*
  * Withdraws an admitted input that ta_run() has not taken yet: the first
- * with `correlation` (ADR 0099 decision 11). Its references and text are
- * released, and it is never run nor reported. It looks through the pool,
- * bounded by poolEnvelopes, and allocates nothing. TA_ERR_INVALID for
+ * with `correlation` (ADR 0099 decision 11), runnable or waiting for its
+ * target's load. Its references and text are released, and it is never run
+ * nor reported. A load request it waited for stays until the host answers
+ * it. It looks through the pool, bounded by poolEnvelopes, and allocates
+ * nothing. TA_ERR_INVALID for
  * correlation 0, which names core's own inputs; TA_ERR_NOT_FOUND when no
  * input waiting to be taken has it: never admitted, already taken or
  * refused, or withdrawn.
  */
 TA_API ta_result ta_system_withdraw_input(ta_system *system, uint64_t correlation);
+/*
+ * Reads the next request for a target that is not resident (see
+ * ta_load_request), oldest first, and marks it asked: it is not read again
+ * until it is answered. Allocates nothing. TA_ERR_NOT_FOUND when no request
+ * is owed; TA_ERR_INVALID for a null system or out.
+ */
+TA_API ta_result ta_system_load_needed(ta_system *system, TA_OUT TA_LIFETIME(call) ta_load_request *out);
+/*
+ * Answers a load request: `actor` holds the destination now. The messages
+ * that waited for it join the run queue, in the order they waited, for
+ * `actor`; mail that names the destination and is still on its way (sent
+ * by a macrostep that has not ended) follows it there. Later mail for the
+ * destination finds `actor` again. Allocates nothing. TA_ERR_STALE when the
+ * request was answered already or never read; TA_ERR_NOT_FOUND when no
+ * actor has this ID; TA_ERR_BUSY inside a ta_run() callback;
+ * TA_ERR_INVALID for null arguments.
+ */
+TA_API ta_result ta_system_load_settled(ta_system *system, TA_IN const ta_load_settled_params *params);
+/*
+ * Answers a load request: the destination cannot come back. Each message
+ * that waited for it becomes error.communication for its sender, with the
+ * send's ID and the fault's code, message and data (SCXML 6.2.4); a message
+ * whose sender is gone is dropped. Mail still on its way to it fails the
+ * same way when it arrives. Between macrosteps, a safe point: raising each
+ * error may take room in its sender's internal queue and an envelope to
+ * start the sender's macrostep; when there is none, that sender's error is
+ * dropped and the call goes on. TA_ERR_STALE when the request was answered
+ * already or never read; TA_ERR_BUSY inside a ta_run() callback;
+ * TA_ERR_INVALID for null arguments.
+ */
+TA_API ta_result ta_system_load_failed(ta_system *system, TA_IN const ta_load_failed_params *params)
+    TA_ANY_VALUE_MODEL;
 /*
  * Abandons the actor's macrostep, one that may never end (ADR 0082): its
  * continuation, its internal queue and its external event are discarded,
@@ -4212,13 +4239,6 @@ TA_API ta_result ta_system_set_actor_directory(ta_system *system, ta_actor_direc
 /* A system parameter's value (ADR 0092); TA_ERR_INVALID for an unknown one. */
 TA_API ta_result ta_system_param(const ta_system *system, ta_param param, TA_OUT uint64_t *out);
 /*
- * Installs the host's router for normalized SCXML-session events whose
- * target is not resident in this system. Mail to a resident session never
- * reaches it: core queues it in its own pool (ADR 0099).
- */
-TA_API ta_result ta_system_set_external_event_router(ta_system *system,
-                                                      ta_external_event_router router);
-/*
  * Registers a compiled definition and takes a hold on it (ADR 0077).
  * Registration is idempotent by identity: when a registered, non-retired
  * definition has the same identity and was compiled against the same
@@ -4457,8 +4477,8 @@ typedef struct {
  * not null, is the caller's buffer of `fired_capacity` entries, at least
  * one, which the call fills with each send it fired, in order, and counts
  * in `fired_count`; the call fires no more than it has room for, so a full
- * buffer leaves the rest due (`more_due`). A send to a resident session is
- * queued in core and reaches no router (ADR 0099): a host that measures
+ * buffer leaves the rest due (`more_due`). A send to another session stays
+ * in core (ADR 0099), and no host call sees it: a host that measures
  * how late timers fire, or tracks its senders' next deadlines, reads them
  * here.
  */

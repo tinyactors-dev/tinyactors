@@ -248,28 +248,47 @@ TinyactorsTest.scenarios 'tracing' do
 
   # One delivery that causes sends across three actors and a delayed send;
   # every macrostep it caused carries its trace ID and a cause chain back
-  # to it. `hold` runs it through router.recording, which keeps deliveries
-  # and releases them later, newest first: another pump, another order.
+  # to it. With `hold`, b and c are unloaded first: each hop's mail waits in
+  # core, which asks this host to load its target, and the host loads it
+  # later, newest request first: another pump, another order. The trace
+  # parent travels in the waiting mail (core ADR 0099).
   causality = lambda do |hold|
-    c = spawn :trace_relay
-    b = spawn :trace_relay, binding: { next: "#_scxml_#{c.inspect_actor[:session_id]}" }
-    a = spawn :trace_relay, binding: { next: "#_scxml_#{b.inspect_actor[:session_id]}" }
-    router = hold ? recording_router(mode: :hold) : nil
+    c = spawn :trace_relay, name: 'c'
+    b_binding = { next: '#_actor_trace_relay/c' }
+    b = spawn :trace_relay, name: 'b', binding: b_binding
+    a = spawn :trace_relay, binding: { next: '#_actor_trace_relay/b' }
+    images = {}
+    if hold
+      on_load_needed { |_request| :hold }
+      { b => b_binding, c => nil }.each do |actor, binding|
+        image = capture(actor)
+        assert_equal 'ok', unload(actor, image)
+        images[actor] = [image, binding]
+      end
+    end
     recording_trace
     request = TinyactorsTest.trace_parent(trace_id: Tracing::TRACE_ID, parent_span: 0xabc)
     a.deliver 'start', trace: request
+    answered = []
     release = lambda do
       3.times do
-        held = router.held
+        held = load_requests.reject { |waiting| answered.include?(waiting[:request]) }
         break if held.empty?
 
-        held.reverse_each { |delivery| router.release(delivery[:id]) }
-        run_system('release held deliveries')
+        held.reverse_each do |waiting|
+          actor = waiting.dig(:destination, :name) == 'b' ? b : c
+          image, binding = images.fetch(actor)
+          assert_equal 'ok', load(actor, image, binding: binding)
+          destroy_image(image)
+          load_settled(waiting, actor)
+          answered << waiting[:request]
+        end
+        run_system('load the held targets')
       end
     end
-    release.call if router
+    release.call if hold
     advance_time 10
-    release.call if router
+    release.call if hold
     records = trace_records
     begins = records.select { |record| record[:kind] == 'macrostep_begin' }
     sends = records.select { |record| record[:kind] == 'sent' }
@@ -294,7 +313,7 @@ TinyactorsTest.scenarios 'tracing' do
     instance_exec(false, &causality)
   end
 
-  scenario 'one delivery\'s trace reaches three actors and a delayed send, through a holding router' do
+  scenario 'one delivery\'s trace reaches three actors and a delayed send, through loads the host holds' do
     instance_exec(true, &causality)
   end
 

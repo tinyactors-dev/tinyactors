@@ -101,18 +101,21 @@ async function withoutALoaderInOneTurn() {
   system.close();
 }
 
-async function notFoundIsADeadLetter() {
+// A loader that answers "not-found" for a gone session: the reply waited in
+// core for the session's load, and becomes the server's error.communication,
+// with the reason and the session's key as its target (core ADR 0099).
+async function notFoundIsTheSendersError() {
   const dead = [];
   const system = createSystem({ incarnation: 0, deadLetter: (record) => dead.push(record) });
   system.setLoader('requester', () => 'not-found');
   const s = system.spawn(server(system), { address: { family: 'server', name: 's' } });
   const asker = system.spawn(requester(system));
   const gone = asker.inspect().sessionID;
-  await until(system, () => dead.length === 1, 'the dead letter');
-  assert.equal(dead[0].reason, 'not-found');
-  assert.equal(dead[0].event, 'reply');
-  assert.deepEqual(dead[0].target, { family: 'requester', name: gone }, 'the session\'s load is keyed by its text');
-  assert.equal(s.inspect().data.failure, null, 'the reply was accepted, then not delivered');
+  await until(system, () => s.inspect().data.failure !== null, 'the server\'s error');
+  const failure = s.inspect().data.failure;
+  assert.equal(failure.reason, 'not-found');
+  assert.deepEqual(failure.target, { family: 'requester', name: gone }, 'the session\'s load is keyed by its text');
+  assert.deepEqual(dead, [], 'mail from a chart is never a dead letter');
   system.close();
 }
 
@@ -163,7 +166,7 @@ async function oneLoadForSeveralMessages() {
   await replyToAGoneRequester();
   await withoutALoader();
   await withoutALoaderInOneTurn();
-  await notFoundIsADeadLetter();
+  await notFoundIsTheSendersError();
   await anotherIncarnation();
   await oneLoadForSeveralMessages();
   console.log('session-loads.js passed');

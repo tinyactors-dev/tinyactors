@@ -1,13 +1,11 @@
 /**
  * @file routing.h
  *
- * # Actor references and external deliveries
+ * # Actor references
  *
  * The private helpers for a `ta_actor_ref`, the public reference to a
  * session: a runtime one (an actor ID) or a named one (an interned
- * address, ADR 0065). The unit also defines the public
- * `ta_external_delivery_retain` and `ta_external_delivery_release`, which
- * a router uses to keep a delivery past its callback.
+ * address, ADR 0065).
  *
  * ## Contract and memory
  *
@@ -18,21 +16,18 @@
  *   system's interned one, which may allocate in the address table and
  *   answers `TA_ERR_NOMEM` when it cannot; detaching copies the address
  *   into a caller's arena for an image.
- * - Retaining a delivery retains its destination and its event's data;
- *   releasing gives both back.
  *
  * ## Users
  *
- * The actor, session images, the interpreter's sends and the host's
- * router. The router contract is described in `docs/internal/routing.md`.
+ * The actor, session images, the interpreter's sends, and the waiting
+ * entries that hold the destination of mail for a target that is not
+ * resident (`waiting.h`).
  */
 #pragma once
 
 #include "address.h"
 #include "event.h"
 #include "../include/tinyactors.h"
-
-/* External delivery and the router boundary are fully public. */
 
 /*
  * A named ta_actor_ref is a reference to an interned address (ADR 0065).

@@ -455,8 +455,8 @@ module TinyactorsTest
     end
 
     # From now on, the runs report each input as it is taken, and keep what
-    # mail and due sends sessions took: they never reach the router, since
-    # core queues them itself (core ADR 0099).
+    # mail and due sends sessions took: core queues them itself, and no host
+    # call admits them (core ADR 0099).
     def watch_mail
       @mail_taken ||= []
     end
@@ -976,11 +976,9 @@ module TinyactorsTest
       @actors.find { |actor| actor.handle == id } || id
     end
 
-    # Creates the system on first use and installs the router.direct adapter,
-    # which hands external events (such as due delayed sends) straight to
-    # ta_actor_deliver, resolving a named destination through the system's
-    # actor directory first. Without a router, core reports external sends as
-    # error.communication (ADR 0040).
+    # Creates the system on first use. Mail between sessions stays in core
+    # (core ADR 0099); mail for a target that is not resident waits there
+    # until this host answers core's load request (#answer_loads).
     #
     # It also registers the invoker.scxml adapter for SCXML <invoke>. The
     # adapter runs an invoked machine as a child actor: the chart spec inline
@@ -1003,9 +1001,6 @@ module TinyactorsTest
                       ta.system.create(config: { allocator: allocator.adapter, initial_time: 0,
                                                  params: params })).fetch(:out)
         @creating_system = false
-        router = { '$adapter' => 'router.direct', 'config' => { 'system' => system } }
-        core('ta_system_set_external_event_router',
-             ta.system.set_external_event_router(system: system, router: router))
         register_scxml_invoker(system)
         system
       end
@@ -1036,23 +1031,75 @@ module TinyactorsTest
       counting
     end
 
-    # Replaces router.direct with a router.recording instrument. Mode
-    # :direct delivers at once; :hold keeps deliveries until released. With
-    # `directory: true` the router resolves named destinations through the
-    # memory_directory instrument, as a host's own routing does.
-    def recording_router(mode: :direct, directory: false)
-      existing = @instruments['router']
-      if existing
-        existing.mode(mode)
-        return existing
-      end
+    # Mail a chart sends to a target that is not resident waits in core,
+    # which asks the host for its load once per destination (core ADR 0099).
+    # The scheduler reads each request once the run queue is empty
+    # (#answer_loads), and this host answers it: by default the target
+    # cannot be loaded, so each waiting message becomes error.communication
+    # for its sender, as for a target no loader brings back. `on_load_needed`
+    # replaces that answer: its block gets the request (`{request:,
+    # destination:, hint:, waiting:, trace:}`, as ta_load_request encodes)
+    # and returns `[:settled, actor]`, `[:failed, code]` (a result name such
+    # as "err_not_found"), or `:hold`, to answer later with #load_settled or
+    # #load_failed.
+    def on_load_needed(&block)
+      @load_answer = block
+    end
 
-      config = { system: system_handle, mode: mode.to_s }
-      config[:directory] = memory_directory.name if directory
-      router = instrument('router', 'router.recording')
-      core('ta_system_set_external_event_router',
-           ta.system.set_external_event_router(system: system_handle, router: router.adapter(**config)))
-      router
+    # Every load request the scheduler read, oldest first.
+    def load_requests
+      @load_requests ||= []
+    end
+
+    # The load requests #on_load_needed held and nothing answered yet, oldest
+    # first.
+    def held_loads
+      @held_loads ||= []
+    end
+
+    # Reads the load requests core owes and answers each (#on_load_needed).
+    # Returns how many it read.
+    def answer_loads
+      count = 0
+      loop do
+        response = ta.system.load_needed(system: system_handle)
+        break if response[:result] == 'err_not_found'
+
+        request = core('ta_system_load_needed', response).fetch(:out)
+        load_requests << request
+        count += 1
+        answer = @load_answer ? @load_answer.call(request) : [:failed, request[:hint]]
+        if answer == :hold
+          held_loads << request
+          next
+        end
+
+        kind, value = answer
+        kind == :settled ? load_settled(request, value) : load_failed(request, value)
+      end
+      count
+    end
+
+    # Answers `request`: `actor` holds its destination now, and the mail that
+    # waited goes to it.
+    def load_settled(request, actor)
+      handle = actor.is_a?(Actor) ? actor.handle : Integer(actor)
+      held_loads.delete_if { |held| held[:request] == request[:request] }
+      core('ta_system_load_settled',
+           ta.system.load_settled(system: system_handle, request: request[:request], actor: handle))
+    end
+
+    # The fault codes a failed load gives each waiting message's
+    # error.communication.
+    FAULT_CODES = { 'err_not_found' => -3, 'err_unloaded' => -9, 'err_done' => -11 }.freeze
+
+    # Answers `request`: its destination cannot be loaded, and each message
+    # that waited becomes error.communication for its sender.
+    def load_failed(request, code = 'err_not_found', message: 'the target cannot be loaded')
+      held_loads.delete_if { |held| held[:request] == request[:request] }
+      core('ta_system_load_failed',
+           ta.system.load_failed(system: system_handle, request: request[:request],
+                                 fault: { code: FAULT_CODES.fetch(code.to_s), message: message }))
     end
 
     # Registers an invoker.scripted instrument for invoke `type`.

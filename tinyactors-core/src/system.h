@@ -9,8 +9,8 @@
  * immutable definitions, the resident actors and their runtime IDs, the
  * address and session tables, delayed-send state, the pool of pending
  * inputs with its name area and macrostep slot (`run.h`, ADR 0099, ADR
- * 0103), the built-in SCXML Event I/O Processor and its host event router,
- * the registered I/O processors and invokers, the host's actor directory
+ * 0103), the built-in SCXML Event I/O Processor, the waiting entries of
+ * mail for targets that are not resident (`waiting.h`), the registered I/O processors and invokers, the host's actor directory
  * and log sink, and the control block with its `tel` ring (ADR 0098, ADR
  * 0104).
  *
@@ -39,13 +39,11 @@
  * - **Actors** live in the actor table (`actor.h`), an index pool whose
  *   free list a spawn takes from, so a spawn costs the same against four
  *   million actors as against four (invariant 17).
- * - `ta_system_set_external_event_router` installs the host's router for
- *   normalized SCXML-session events; core's standard processor and an
- *   invoked child's completion submit through it what goes to a session
- *   that is not resident here. Mail to a resident session goes into the
- *   pool instead (`run.h`, ADR 0099). The SCXML I/O type
- *   atom is interned at creation, and registering an I/O processor cannot
- *   replace it.
+ * - **Mail between sessions** never leaves core (`run.h`, ADR 0099): mail
+ *   to a resident session goes into the pool, and mail to one that is not
+ *   resident waits there for the host's answer to a load request. The
+ *   SCXML I/O type atom is interned at creation, and registering an I/O
+ *   processor cannot replace it.
  * - **Generated names:** every prefix of a name core generates is an
  *   atom from creation on: the segments of the built-in event names below
  *   and `invoke`. Matching an event compares its segments as atoms
@@ -209,7 +207,6 @@ struct ta_system {
     ta_io_origin_table io_messages;
 
     ta_actor_directory directory;
-    ta_external_event_router external_events;
     ta_log_sink log_sink;
     /* What is traced and how records are built (trace.h, ADR 0098). */
     ta_tracer trace;

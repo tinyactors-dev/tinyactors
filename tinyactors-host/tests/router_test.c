@@ -1,16 +1,19 @@
 /*
  * The router (ADR 0006), driven without Node-API: a <send> to a resident
- * actor never reaches it, since core queues it itself (tinyactors-core ADR
- * 0099), and the recorder still sees the event the receiver takes; a name
- * with no actor is a dead letter that keeps the name; and a named origin
- * stays valid after its sender is destroyed (tinyactors-core ADR 0065) —
- * run under AddressSanitizer by test-native-asan.
+ * actor stays in core (tinyactors-core ADR 0099), and the recorder still
+ * sees the event the receiver takes; a chart's send to a name with no actor
+ * and no loader becomes error.communication for the sender; one to a name
+ * whose family has a loader waits in core while the loader runs, and goes
+ * to the loaded actor when the load finishes; and a named origin stays
+ * valid after its sender is destroyed (tinyactors-core ADR 0065) — run
+ * under AddressSanitizer by test-native-asan.
  */
 #include "check.h"
 #include <string.h>
 
 #include "tinyactors_host/events.h"
 #include "tinyactors_host/hooks.h"
+#include "tinyactors_host/loads.h"
 #include "tinyactors_host/recorder.h"
 #include "tinyactors_host/scheduler.h"
 #include "tinyactors_host/system.h"
@@ -245,10 +248,62 @@ static void named_target_follows_the_directory(void) {
     finish_system(system);
 }
 
+/* Runs turns until the system has a load request for JavaScript. */
+static void turns_until_a_load_request(tah_system *system) {
+    for (int guard = 0; tah_loads_pending_requests(&system->loads) == 0; guard += 1) {
+        CHECK(guard < 100);
+        if (guard >= 100) {
+            return;
+        }
+        tah_system_turn(system);
+        tah_system_end_turn(system);
+    }
+}
+
+/*
+ * A chart's send to a name whose family has a loader waits in core: the
+ * turn answers core's load request with a load, whose request JavaScript
+ * would run; finishing it with an actor spawned at the name delivers the
+ * mail to it, and failing it tells the sender.
+ */
+static void chart_mail_waits_for_a_load(void) {
+    tah_system *system = make_system();
+    CHECK(tah_loads_set_family(&system->loads, S("r"), 10) == TA_OK);
+    ta_definition_id receiver_chart = define_receiver(system);
+    (void)spawn(system, define_sender(system, S("#_actor_r/later")), NULL);
+    turns_until_a_load_request(system);
+    tah_load_request request;
+    CHECK(tah_loads_next_request(&system->loads, &request) && request.why == TAH_LOAD_WHY_MAIL);
+    tah_load_info info = tah_loads_info(&system->loads, request.index, request.generation);
+    CHECK(info.address != NULL && info.waiting == 1u);
+    ta_actor_address receiver_name = { .family = { .name = S("r") }, .name = S("later") };
+    ta_actor_id loaded = spawn(system, receiver_chart, &receiver_name);
+    CHECK(tah_system_finish_load(system, &(tah_system_load_finish){ .index = request.index,
+                                                                     .generation = request.generation,
+                                                                     .outcome = TAH_LOAD_SPAWNED,
+                                                                     .actor = loaded }) == TA_OK);
+    CHECK(settle(system) == 0u);
+    CHECK(in_state(system, loaded, "got"));
+
+    /* A load that fails tells the sender. */
+    ta_actor_address sender_name = { .family = { .name = S("snd") }, .name = S("s3") };
+    ta_actor_id sender = spawn(system, define_failing_sender(system, S("#_actor_r/never")), &sender_name);
+    turns_until_a_load_request(system);
+    CHECK(tah_loads_next_request(&system->loads, &request));
+    CHECK(in_state(system, sender, "a"));
+    CHECK(tah_system_finish_load(system, &(tah_system_load_finish){ .index = request.index,
+                                                                     .generation = request.generation,
+                                                                     .outcome = TAH_LOAD_NOT_FOUND }) == TA_OK);
+    CHECK(settle(system) == 0u);
+    CHECK(in_state(system, sender, "failed"));
+    finish_system(system);
+}
+
 int main(void) {
     named_origin_outlives_its_sender();
     unknown_name_raises_error_communication();
     named_target_follows_the_directory();
+    chart_mail_waits_for_a_load();
     puts("router_test passed");
     return 0;
 }

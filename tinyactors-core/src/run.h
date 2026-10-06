@@ -9,9 +9,10 @@
  * Everything that gives a session something to run admits it here as an
  * envelope on the run queue, and `ta_run()` takes the run queue's
  * envelopes in arrival order and runs each one's macrostep to its end.
- * Mail one resident session sends another is an envelope too, which
- * waits on the sending macrostep's outgoing list until that macrostep
- * ends.
+ * Mail one session sends another is an envelope too, which waits on the
+ * sending macrostep's outgoing list until that macrostep ends, and, when
+ * its target is not resident, on a waiting entry (`waiting.h`) until the
+ * host answers a load request.
  *
  * ## Inputs
  *
@@ -31,8 +32,8 @@
  *   its type, send ID and invocation in `type`, `send_id` and
  *   `invoke_instance`, the host's correlation in `source_seq`, and the
  *   text above.
- * - **Mail** (`TA_RECORD_INPUT_SOURCE_MAIL`): an event a session sent a
- *   resident session, a `<send>`, a child's event to its parent or its
+ * - **Mail** (`TA_RECORD_INPUT_SOURCE_MAIL`): an event a session sent
+ *   another, a `<send>`, a child's event to its parent or its
  *   `done.invoke`, an event autoforwarded to a child, or a send held for
  *   an unpublished session and released at its publish; and **a delayed
  *   send that fell due** (`TA_RECORD_INPUT_SOURCE_TIMER`). It holds what
@@ -65,10 +66,14 @@
  *
  * - an envelope whose session is gone is refused (`TA_ERR_NOT_FOUND`), and
  *   one whose session finished is refused (`TA_ERR_DONE`); a wake is
- *   dropped instead, unreported;
+ *   dropped instead, unreported; mail is **recycled** instead: it becomes
+ *   error.communication for its sender (see "Mail that waits");
  * - an event or report for a session in a macrostep (waiting to begin,
  *   paused, or stopped by a fault) moves to that session's **deferred
- *   list**, in arrival order, and the walk goes on;
+ *   list**, in arrival order, and the walk goes on; so does mail for a
+ *   session that is not published (prepared, or replaying), which returns
+ *   to the run queue when it is published (`ta_run_session_published`),
+ *   so a replay sees only its own inputs;
  * - otherwise it is **bound**: an event or mail becomes the session's
  *   external event, waiting (ADR 0069), a report queues its error event,
  *   and the wake the session names takes its pending macrostep; the
@@ -111,20 +116,21 @@
  * taken. Deferral serves a session whose macrostep waits for a wake behind
  * the input, one stopped by a fault, and one a filtered call paused.
  *
- * ## Mail between resident sessions
+ * ## Mail between sessions
  *
- * A `<send>` to a session resident in this system (published and not
- * finished; `ta_actor_mail_target()`), and an invocation's event or
- * completion to one, never reach the host's router (ADR 0099):
- * `ta_run_post_mail` takes an envelope, writes the record and the
- * sender's trace parent, when traced, into the name area, and retains the
- * event's data and origin.
+ * A `<send>` to another session, and an invocation's event or completion,
+ * never leave core (ADR 0099): `ta_actor_mail_route()` finds the actor that
+ * holds the target session, or the destination to wait for, and
+ * `ta_run_post_mail` takes an envelope, writes the record and the sender's
+ * trace parent, when traced, into the name area, and retains the event's
+ * data and origin.
  *
  * - **Inside a macrostep** it goes on that macrostep's **outgoing list**
  *   (`outgoing`), in send order, where nothing can take it. When the
  *   macrostep ends (stable, finished, or with a fault that leaves nothing
- *   to continue), `ta_envelope_pool_deliver` moves the whole list, in
- *   order, to the end of the run queue. So a receiver never sees mail
+ *   to continue), the whole list moves, in order, to the end of the run
+ *   queue, each envelope with the next arrival number, or, for a target
+ *   that is not resident, to its waiting entry. So a receiver never sees mail
  *   before its sender's macrostep ends, and one sender's mail to one
  *   receiver keeps its send order across macrosteps.
  * - **A macrostep that leaves `ta_run()` without ending** (a budget paused
@@ -137,16 +143,51 @@
  *   since an image cannot carry it.
  * - **Outside a macrostep** (a delayed send that fell due, at
  *   `ta_system_dispatch_due()`; a held send released at a publish; a
- *   completion published again) it joins the run queue at once.
+ *   completion published again) it joins the run queue, or its waiting
+ *   entry, at once.
  *
  * **Capacity.** Inside a macrostep there is no refill: mail takes only an
- * envelope and chunks that are free already. With none, the `<send>`
+ * envelope, chunks and, for a target that is not resident, a waiting
+ * entry that are free already. With none, the `<send>`
  * fails in the chart as `error.execution.capacity.pool` or `.names`, the
  * rest of its block does not run, so a fanout fails once, at the first
  * send that does not fit, and the sends before it stay on the outgoing
  * list. Outside a macrostep it refills first; a send that still finds no
  * room waits in the deadline index, submitted and due now, and is offered
- * again, as one a router refused.
+ * again.
+ *
+ * ## Mail that waits
+ *
+ * Mail for a target that is not resident (a named address with no
+ * resident actor, or a session with none) names its destination's
+ * **waiting entry** (`waiting.h`) in `target`, with
+ * `TA_ENVELOPE_FLAG_WAITING_TARGET`, and counts in the entry from the
+ * moment it is posted. It joins the entry's list, in state
+ * `TA_ENVELOPE_WAITING`, when it arrives: at its sender's macrostep end,
+ * or at once outside a macrostep; so a macrostep that does not end asks
+ * for no load. The entry is then owed a load request, which the host reads
+ * with `ta_system_load_needed()` and answers:
+ *
+ * - `ta_system_load_settled()`: the waiting envelopes join the run queue,
+ *   in the order they waited, for the actor that holds the destination
+ *   now; mail still on its way follows them when it arrives;
+ * - `ta_system_load_failed()`: each one is **recycled**: released and
+ *   given back first, and its sender, when it is still resident, gets
+ *   error.communication with the send's ID and the host's fault, so the
+ *   error needs no room the pool may not have; mail still on its way fails
+ *   the same way when it arrives.
+ *
+ * Mail whose target was resident when it was sent, but is gone or finished
+ * when it is taken, is recycled the same way, with core's own fault.
+ *
+ * ## Withdrawal
+ *
+ * `ta_system_withdraw_input()` scans the pool for the first input admitted
+ * with a correlation and not taken yet (ADR 0099 decision 11): runnable, by
+ * arrival, or else waiting for its target's load. It unlinks it from the
+ * run queue, a deferred list or a waiting entry's list; a waiting entry it
+ * leaves empty stays until the host answers its request. The scan is
+ * bounded by `poolEnvelopes` and allocates nothing.
  *
  * ## Invariants
  *
@@ -182,10 +223,12 @@
  *
  * - **Refills happen at safe points only:** at admission, at a wake's
  *   reservation and at mail outside any run, and in `ta_run()` before each
- *   input it takes or continues, never after the last one it runs. Inside
- *   a macrostep (a `<send>`, a router admitting mail, an invoker spawning
- *   a child) mail, an admission or a wake takes only envelopes and chunks
- *   that are free already, and answers `TA_ERR_FULL` when there are none.
+ *   input it takes or continues, never after the last one it runs. A
+ *   refill keeps free envelopes, chunks and waiting entries, and room in
+ *   the waiting entries' table. Inside a
+ *   macrostep (a `<send>`, an invoker spawning a child) mail, an admission
+ *   or a wake takes only envelopes, chunks and entries that are free
+ *   already, and answers `TA_ERR_FULL` when there are none.
  * - Binding an input may allocate, between inputs only: room in the
  *   session's internal queue for a report's event, or, for an invoked
  *   session, the queue storage that keeps its last event. Taking an input
@@ -209,7 +252,10 @@
  * | giving back parked mail | O(its mail) |
  * | taking an input | O(1); a filtered call walks the run queue to its session's first envelope |
  * | deferring, returning | O(1) at the tail; a walk to its place otherwise |
- * | `ta_system_withdraw_input()` | walks the pool, bounded by `poolEnvelopes` |
+ * | `ta_system_withdraw_input()` | walks the pool, bounded by `poolEnvelopes`, and a deferred or waiting list to unlink |
+ * | mail that arrives at its waiting entry | O(1) |
+ * | `ta_system_load_needed()` | O(the waiting envelopes), to count them |
+ * | `ta_system_load_settled()`, `ta_system_load_failed()` | O(the waiting envelopes) |
  * | `ta_run_session_gone` | O(its deferred envelopes), each returned in place |
  * | `ta_run_has_mail` | walks the run queue |
  * | `ta_run_has_unsent_mail` | O(1) |
@@ -233,7 +279,9 @@
  *   the name area had no room, and `TA_ERR_NOMEM` when only a failed
  *   refill left nothing free; it changes nothing.
  * - Mail whose session is gone or finished by the time it is reached is
- *   refused as an external event is, with correlation 0.
+ *   recycled into error.communication for its sender.
+ * - A load answer for a request that was answered already, or never read,
+ *   is `TA_ERR_STALE`, and changes nothing.
  *
  * ## Users
  *
@@ -243,8 +291,11 @@
  * reconstruction, publishing and a delayed send's failure reserve and
  * place wakes; the interpreter's `<send>`, an invocation's events and
  * completion, `ta_system_dispatch_due()` and a publish's held sends post
- * mail; destroying, unloading and abandoning tell it a session's input or
- * the session is gone. ADRs 0069, 0082, 0089, 0099, 0102, 0103.
+ * mail; publishing returns the mail that waited for it; destroying,
+ * unloading and abandoning tell it a session's input or the session is
+ * gone. `ta_system_load_needed()`, `ta_system_load_settled()` and
+ * `ta_system_load_failed()` live here too. ADRs 0069, 0082, 0089, 0099,
+ * 0102, 0103.
  */
 #pragma once
 
@@ -253,6 +304,7 @@
 #include "generated/ring_records.h"
 #include "list.h"
 #include "name_area.h"
+#include "waiting.h"
 
 struct ta_actor;
 struct ta_operator_jump;
@@ -266,6 +318,8 @@ typedef struct {
     ta_envelope_pool pool;
     /** The inputs' text. */
     ta_name_area names;
+    /** Mail for targets that are not resident, by destination. */
+    ta_waiting waiting;
     /** The taken input whose macrostep a budget paused in the slot, or 0. */
     uint32_t slot;
     /** The input whose macrostep runs inside `ta_run()`, or 0. */
@@ -387,10 +441,13 @@ void ta_run_wake_place(ta_system *system, struct ta_actor *actor, uint32_t wake)
  * text holds. Never allocates. */
 void ta_run_wake_cancel(ta_system *system, uint32_t wake);
 
-/** Mail for a resident session; see `ta_run_post_mail`. */
+/** Mail for another session; see `ta_run_post_mail`. */
 typedef struct {
-    /** The session it is for: resident, published and not finished. */
+    /** The actor that holds the session it is for (`ta_actor_mail_route`),
+     * or null when it waits for the host to load `wait`'s destination. */
     struct ta_actor *target;
+    /** With no target: the destination it waits for. */
+    const ta_waiting_key *wait;
     /** The event as the target takes it, borrowed; the envelope retains its
      * data and its origin. */
     const ta_event *event;
@@ -468,6 +525,13 @@ bool ta_run_has_mail(const ta_system *system, const struct ta_actor *actor);
  * macrostep ends. An image does not carry it. O(1); never allocates.
  */
 bool ta_run_has_unsent_mail(const ta_system *system, const struct ta_actor *actor);
+
+/**
+ * `actor` was published: the mail that waited for it on its deferred list
+ * (run.h, "Taking an input") returns to the run queue, each envelope at its
+ * arrival position. O(its deferred envelopes). Never allocates; cannot fail.
+ */
+void ta_run_session_published(ta_system *system, struct ta_actor *actor);
 
 /**
  * `actor` is going (destroyed, unloaded, or a construction undone): its

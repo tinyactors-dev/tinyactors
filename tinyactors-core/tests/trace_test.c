@@ -657,14 +657,6 @@ static void test_span_ids(void) {
  * Trace parents on what an actor sends, through a session image
  */
 
-static long deliveries = 0;
-static ta_external_event_submit_status record_submit(void *self, const ta_external_event_submit_params *params) {
-    (void)self, (void)params;
-    deliveries += 1;
-    return TA_EXTERNAL_EVENT_ACCEPTED;
-}
-static const ta_external_event_router_vtable router_vtable = { .submit = record_submit };
-
 /* What the last MACROSTEP_BEGIN ran under: its trace context and cause. */
 static ta_trace_context begin_context;
 static ta_step_key begin_cause;
@@ -699,7 +691,6 @@ static void test_counters_and_parents_survive_an_image(void) {
     ta_system *system = NULL;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
     traced_system = system;
-    CHECK(ta_system_set_external_event_router(system, (ta_external_event_router){ .v = &router_vtable }) == TA_OK);
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){ .spec = &sender_chart,
                                                                               .datamodel = { .v = &dm_vtable },
@@ -735,7 +726,8 @@ static void test_counters_and_parents_survive_an_image(void) {
     bool more = false;
     CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
                                                                     .more_due = &more }) == TA_OK);
-    CHECK(dispatched == 1 && deliveries == 0);
+    ta_load_request request;
+    CHECK(dispatched == 1 && ta_system_load_needed(system, &request) == TA_ERR_NOT_FOUND);
     r.actor = restored;
     settle(&r);
     CHECK(begin_context.trace_id_high == 0xaa && begin_context.trace_id_low == 0xbb);

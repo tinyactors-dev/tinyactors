@@ -717,13 +717,14 @@ typedef struct {
 } ta_invoke_delivery;
 
 /*
- * Offers an event to another session: to a resident one, into an envelope
- * of the pool, on the running macrostep's outgoing list or, outside one, on
- * the run queue (run.h); to any other, through the router. When nothing
- * accepts it (no room in the pool or the name area, or a router that
- * accepted nothing), the event waits in the deadline index, due now, owned
- * by the sender, so ta_system_dispatch_due() offers it again. Never
- * allocates inside a macrostep, but for that wait.
+ * Offers an event to another session, into an envelope of the pool: for
+ * the actor that holds it, on the running macrostep's outgoing list or,
+ * outside one, on the run queue; when it is not resident, waiting for the
+ * host to load it, and failing as error.communication for the sender when
+ * it cannot be (run.h). When the pool or the name area has no room, the
+ * event waits in the deadline index, due now, owned by the sender, so
+ * ta_system_dispatch_due() offers it again. Never allocates inside a
+ * macrostep, but for that wait.
  */
 static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *delivery) {
     const ta_actor_sparse_state *sender_sparse = delivery->sender->sparse;
@@ -738,29 +739,32 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
             return TA_OK;
         }
     }
-    ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
-    ta_fault fault = {0};
-    ta_actor *target = ta_actor_mail_target(system, &delivery->destination);
-    if (target != NULL) {
-        ta_record_capacity_resource short_of = (ta_record_capacity_resource)0;
-        status = ta_run_post_mail(system,
-                                  &(ta_run_mail){ .target = target,
-                                                  .event = &delivery->event,
-                                                  .trace = &delivery->trace,
-                                                  .from = delivery->sender->session_id,
-                                                  .source = TA_RECORD_INPUT_SOURCE_MAIL },
-                                  &short_of) == TA_OK
-                     ? TA_EXTERNAL_EVENT_ACCEPTED
-                     : TA_EXTERNAL_EVENT_RETRY;
-    } else if (system->external_events.v != NULL) {
-        ta_external_delivery external = { .destination = delivery->destination, .event = delivery->event,
-                                          .trace = delivery->trace };
-        status = system->external_events.v->submit(system->external_events.self,
-                                                   &(ta_external_event_submit_params){
-                                                       .delivery = &external, .fault = &fault });
+    ta_mail_route route;
+    ta_actor_mail_route(system, &delivery->destination, &route);
+    if (route.unreachable) {
+        /* No host could bring it back: the sender hears it now (SCXML 6.2.4). */
+        static const char gone[] = "no session has that ID";
+        ta_fault fault = { .code = TA_ERR_NOT_FOUND, .message = { .ptr = gone, .len = sizeof gone - 1u } };
+        ta_interpreter_send_failed(system, delivery->sender,
+                                   &(ta_send_failure){ .send_id = delivery->event.send_id,
+                                                       .fault = &fault,
+                                                       .trace = system->run.running ? NULL : &delivery->trace });
+        return TA_OK;
     }
-    ta_value_release(&fault.data);
-    if (status != TA_EXTERNAL_EVENT_RETRY) {
+    ta_waiting_key wait = { .destination = &route.destination, .hint = route.hint };
+    ta_record_capacity_resource short_of = (ta_record_capacity_resource)0;
+    ta_result posted = ta_run_post_mail(system,
+                                        &(ta_run_mail){ .target = route.actor,
+                                                        .wait = &wait,
+                                                        .event = &delivery->event,
+                                                        .trace = &delivery->trace,
+                                                        .from = delivery->sender->session_id,
+                                                        .source = TA_RECORD_INPUT_SOURCE_MAIL },
+                                        &short_of);
+    if (route.held) {
+        ta_actor_ref_release(&route.destination);
+    }
+    if (posted == TA_OK) {
         return TA_OK;
     }
     ta_delayed_send record = {

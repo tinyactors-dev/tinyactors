@@ -1,11 +1,11 @@
 /*
  * An event's named origin outlives the actor that sent it (ADR 0065). A
- * named sender is destroyed while one of its events is still held: by an
- * asynchronous router that kept the delivery, and as a submitted delayed
- * send the router refused, and as the event a host delivered and then let
- * go of. The holder then reads the origin's name. Built with
- * AddressSanitizer (mise run asan), reading freed memory fails the run; it
- * did, before addresses were shared handles.
+ * named sender is destroyed while one of its events is still held: by
+ * core, as mail waiting for a target that is not resident, and as a
+ * submitted delayed send no envelope was free for, and as the event a host
+ * delivered and then let go of. The holder then reads the origin's name.
+ * Built with AddressSanitizer (mise run asan), reading freed memory fails
+ * the run; it did, before addresses were shared handles.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,83 +32,103 @@ static test_allocator heap;
 static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtable };
 
 /* ------------------------------------------------------------------------
- * A router that keeps what it accepts, as an asynchronous router would.
+ * Runs, and the origin of the mail an actor takes
  */
 
-typedef struct {
-    ta_external_event_submit_status answer;
-    int accepted;
-    ta_external_delivery kept;
-    bool holding;
-} router_state;
-
-static ta_external_event_submit_status route(void *self, const ta_external_event_submit_params *params) {
-    router_state *router = self;
-    if (router->answer != TA_EXTERNAL_EVENT_ACCEPTED) {
-        return router->answer;
+/* Runs until idle; true when `actor` took mail whose origin is the named
+ * sender `name`, read from the TAKEN outcome the way a host reads it. */
+static bool took_mail_from(ta_system *system, ta_actor_id actor, const char *name) {
+    bool seen = false;
+    for (int call = 0; call < 100; call += 1) {
+        ta_input_outcome outcomes[2];
+        uint32_t count = 0;
+        ta_run_status status = TA_RUN_IDLE;
+        CHECK(ta_run(system, &(ta_run_params){ .budget = 100, .report_taken = true, .outcomes = outcomes,
+                                               .outcome_capacity = 2, .outcome_count = &count,
+                                               .status = &status }) == TA_OK);
+        for (uint32_t index = 0; index < count; index += 1u) {
+            const ta_origin *origin = &outcomes[index].event.origin;
+            if (outcomes[index].kind == TA_INPUT_TAKEN && outcomes[index].has_event &&
+                outcomes[index].actor == actor && origin->kind == TA_ORIGIN_ACTOR &&
+                origin->as.actor.kind == TA_ACTOR_REF_NAMED) {
+                ta_str text = ta_address_view(origin->as.actor.as.named).name;
+                seen = seen || (text.len == strlen(name) && memcmp(text.ptr, name, text.len) == 0);
+            }
+            ta_event_release(&outcomes[index].event);
+        }
+        if (status == TA_RUN_IDLE) {
+            break;
+        }
     }
-    router->accepted += 1;
-    CHECK(!router->holding);
-    ta_external_delivery_retain(params->delivery, &router->kept);
-    router->holding = true;
-    return TA_EXTERNAL_EVENT_ACCEPTED;
-}
-
-static const ta_external_event_router_vtable router_vtable = { .submit = route };
-
-/* The name the kept delivery's origin carries, read the way a host reads it. */
-static bool kept_origin_is(router_state *router, const char *name) {
-    const ta_origin *origin = &router->kept.event.origin;
-    if (origin->kind != TA_ORIGIN_ACTOR || origin->as.actor.kind != TA_ACTOR_REF_NAMED) {
-        return false;
-    }
-    ta_str text = ta_address_view(origin->as.actor.as.named).name;
-    return text.len == strlen(name) && memcmp(text.ptr, name, text.len) == 0;
+    return seen;
 }
 
 /* ------------------------------------------------------------------------
- * A one-address directory: the sender is the only named actor.
+ * A directory of a few named actors.
  */
 
+enum { NAMES = 4 };
+
 typedef struct {
-    bool used;
-    /* The claimed address: equal addresses are the same handle (ADR 0065). */
-    const ta_address *address;
-    ta_actor_directory_entry entry;
-} one_directory;
+    /* The claimed addresses: equal addresses are the same handle (ADR 0065). */
+    const ta_address *addresses[NAMES];
+    ta_actor_directory_entry entries[NAMES];
+    uint32_t count;
+} small_directory;
 
 static ta_result dir_claim(void *self, const ta_actor_directory_claim_params *params) {
-    one_directory *dir = self;
-    if (dir->used) {
-        return TA_ERR_STALE;
+    small_directory *dir = self;
+    for (uint32_t index = 0; index < dir->count; index += 1u) {
+        if (dir->addresses[index] == params->address) {
+            if (dir->entries[index].kind != TA_ACTOR_DIRECTORY_NONE) {
+                return TA_ERR_STALE;
+            }
+            dir->entries[index] = params->entry;
+            return TA_OK;
+        }
     }
-    dir->used = true;
-    dir->address = params->address;
-    dir->entry = params->entry;
+    if (dir->count == NAMES) {
+        return TA_ERR_NOMEM;
+    }
+    dir->addresses[dir->count] = params->address;
+    dir->entries[dir->count] = params->entry;
+    dir->count += 1u;
     return TA_OK;
 }
 
-/* Only the sender's address has an entry: the peer it mails is not resident,
- * so its mail goes through the router. */
+/* An address no actor claimed has no entry: mail to it waits in core for
+ * its load. */
 static ta_result dir_resolve(void *self, const ta_actor_directory_resolve_params *params) {
-    one_directory *dir = self;
-    *params->out = dir->used && params->address == dir->address
-                       ? dir->entry
-                       : (ta_actor_directory_entry){ .kind = TA_ACTOR_DIRECTORY_NONE };
+    small_directory *dir = self;
+    *params->out = (ta_actor_directory_entry){ .kind = TA_ACTOR_DIRECTORY_NONE };
+    for (uint32_t index = 0; index < dir->count; index += 1u) {
+        if (dir->addresses[index] == params->address) {
+            *params->out = dir->entries[index];
+        }
+    }
     return TA_OK;
 }
 
 static ta_result dir_replace(void *self, const ta_actor_directory_replace_params *params) {
-    one_directory *dir = self;
-    dir->entry = params->replacement;
-    return TA_OK;
+    small_directory *dir = self;
+    for (uint32_t index = 0; index < dir->count; index += 1u) {
+        if (dir->addresses[index] == params->address) {
+            dir->entries[index] = params->replacement;
+            return TA_OK;
+        }
+    }
+    return TA_ERR_STALE;
 }
 
 static ta_result dir_remove(void *self, const ta_actor_directory_remove_params *params) {
-    (void)params;
-    one_directory *dir = self;
-    dir->used = false;
-    return TA_OK;
+    small_directory *dir = self;
+    for (uint32_t index = 0; index < dir->count; index += 1u) {
+        if (dir->addresses[index] == params->address) {
+            dir->entries[index] = (ta_actor_directory_entry){ .kind = TA_ACTOR_DIRECTORY_NONE };
+            return TA_OK;
+        }
+    }
+    return TA_ERR_STALE;
 }
 
 static const ta_actor_directory_vtable dir_vtable = {
@@ -116,96 +136,154 @@ static const ta_actor_directory_vtable dir_vtable = {
 };
 
 /* ------------------------------------------------------------------------
- * The sender: on entry, one immediate send to another named actor.
+ * The charts: the sender, on entry, sends `ping` to peer/p at once, and
+ * `later` and `last` to it in a second; the spammer mails peer/p until the
+ * pool is full; the peer takes anything.
  */
+
+#define SEND_TO_PEER(event_text, delay_text)                                                        \
+    { .kind = TA_SCXML_ACTION_SEND,                                                                \
+      .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR(event_text) },           \
+                   .target = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("#_actor_peer/p") }, \
+                   .delay = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR(delay_text) } } }
 
 static const ta_scxml_state_spec sender_chart[] = {
     {
         .kind = TA_SCXML_STATE_ATOMIC,
         .id = STR("sent"),
         .onentry = (const ta_scxml_handler_spec[]){
-            { .actions = (const ta_scxml_action_spec[]){
-                  { .kind = TA_SCXML_ACTION_SEND,
-                    .as.send = { .id = { .kind = TA_SCXML_ID_LITERAL, .as.literal = STR("now") },
-                                 .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR("ping") },
-                                 .target = { .kind = TA_SCXML_STRING_LITERAL,
-                                             .as.literal = STR("#_actor_peer/p") },
-                                 .delay = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("0s") } } },
-                  {0} } },
+            { .actions = (const ta_scxml_action_spec[]){ SEND_TO_PEER("ping", "0s"), SEND_TO_PEER("later", "1s"),
+                                                         SEND_TO_PEER("last", "1s"), {0} } },
             {0},
         },
     },
     {0},
 };
 
-static ta_system *create_system(router_state *router, one_directory *dir) {
+static const ta_scxml_action_spec spam[] = {
+    SEND_TO_PEER("x", "0s"), SEND_TO_PEER("x", "0s"), SEND_TO_PEER("x", "0s"), SEND_TO_PEER("x", "0s"),
+    SEND_TO_PEER("x", "0s"), SEND_TO_PEER("x", "0s"), SEND_TO_PEER("x", "0s"), SEND_TO_PEER("x", "0s"),
+    {0},
+};
+static const ta_scxml_state_spec spammer_chart[] = {
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle"),
+      .transitions = (const ta_scxml_transition_spec[]){
+          { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("spam"), .actions = spam }, {0} } },
+    {0},
+};
+
+static const ta_scxml_state_spec peer_chart[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("p") }, {0} };
+
+static ta_system *create_system(small_directory *dir, const ta_param_value *params, uint32_t count) {
     ta_system *system = NULL;
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
-    CHECK(ta_system_set_external_event_router(
-              system, (ta_external_event_router){ .self = router, .v = &router_vtable }) == TA_OK);
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = params, .param_count = count },
+                           &system) == TA_OK);
     CHECK(ta_system_set_actor_directory(system, (ta_actor_directory){ .self = dir, .v = &dir_vtable }) == TA_OK);
     return system;
 }
 
-/* The sender's name lives in its own heap block, so nothing else keeps it. */
-static ta_actor_id spawn_sender(ta_system *system) {
+/* Spawns an actor of `chart` at `family`/`name`, whose name lives in its own
+ * heap block so nothing else keeps it, and runs its bootstrap. */
+static ta_actor_id spawn_at(ta_system *system, const ta_scxml_state_spec *chart, const char *family,
+                            const char *name) {
     ta_definition_identity identity = {
-        .family = { STR("sender") },
+        .family = { .name = { .ptr = family, .len = (uint32_t)strlen(family) } },
         .revision = { .ptr = (const uint8_t *)"v1", .len = 2 },
     };
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(
               system, &(ta_definition_compile_params){
                           .spec = &(ta_scxml_spec){ .datamodel = STR("null"), .identity = &identity,
-                                                    .states = sender_chart },
+                                                    .states = chart },
                           .datamodel = ta_null_datamodel(),
                           .allocator = allocator,
                           .out = &definition,
                       }) == TA_OK);
     ta_definition_id id = 0;
     CHECK(ta_system_register_definition(system, definition, &id) == TA_OK);
-    char *name = malloc(8);
-    memcpy(name, "sender1", 8);
-    ta_actor_address address = { .family = { STR("sender") }, .name = { .ptr = name, .len = 7 } };
+    size_t length = strlen(name);
+    char *copy = malloc(length + 1u);
+    memcpy(copy, name, length + 1u);
+    ta_actor_address address = { .family = { .name = { .ptr = family, .len = (uint32_t)strlen(family) } },
+                                 .name = { .ptr = copy, .len = (uint32_t)length } };
     ta_actor_id actor = 0;
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .address = &address,
                                                            .out = &actor }) == TA_OK);
-    free(name); /* core keeps its own copy of the address */
+    free(copy); /* core keeps its own copy of the address */
     test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     return actor;
 }
 
-/* (a) A router kept the delivery; the sender is destroyed; the router reads. */
-static void test_kept_delivery_outlives_its_sender(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
-    one_directory dir = {0};
-    ta_system *system = create_system(&router, &dir);
+static ta_actor_id spawn_sender(ta_system *system) {
+    return spawn_at(system, sender_chart, "sender", "sender1");
+}
+
+/* Reads the load request core owes for peer/p, spawns the peer and settles
+ * the request with it. */
+static ta_actor_id load_peer(ta_system *system) {
+    ta_load_request request = { 0 };
+    CHECK(ta_system_load_needed(system, &request) == TA_OK);
+    ta_actor_id peer = spawn_at(system, peer_chart, "peer", "p");
+    CHECK(ta_system_load_settled(system, &(ta_load_settled_params){ .request = request.request,
+                                                                     .actor = peer }) == TA_OK);
+    return peer;
+}
+
+/* (a) Mail waits in core for its target's load; the sender is destroyed;
+ * the peer, loaded, takes it and reads its origin. */
+static void test_waiting_mail_outlives_its_sender(void) {
+    small_directory dir = {0};
+    ta_system *system = create_system(&dir, NULL, 0);
     ta_actor_id sender = spawn_sender(system);
-    CHECK(router.accepted == 1 && router.holding);
     CHECK(ta_actor_destroy(system, sender) == TA_OK);
-    CHECK(kept_origin_is(&router, "sender1"));
-    ta_external_delivery_release(&router.kept);
+    ta_actor_id peer = load_peer(system);
+    CHECK(took_mail_from(system, peer, "sender1"));
     ta_system_destroy(system);
 }
 
-/* (b) A refused send is kept as submitted; the sender is destroyed; the send
- * is dispatched later, and the router reads its origin. */
+/* (b) A due send finds no free envelope and is kept as submitted; the sender
+ * is destroyed; the send is dispatched later, waits for the peer's load,
+ * and the peer reads its origin. */
 static void test_submitted_send_outlives_its_sender(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_RETRY };
-    one_directory dir = {0};
-    ta_system *system = create_system(&router, &dir);
+    small_directory dir = {0};
+    ta_param_value small_pool[] = { { TA_PARAM_POOL_ENVELOPES, 8 } };
+    ta_system *system = create_system(&dir, small_pool, 1);
     ta_actor_id sender = spawn_sender(system);
-    CHECK(router.accepted == 0);
-    CHECK(ta_actor_destroy(system, sender) == TA_OK);
-    router.answer = TA_EXTERNAL_EVENT_ACCEPTED;
+    /* The spammer's mail to peer/p waits, and fills the pool. */
+    ta_actor_id spammer = spawn_at(system, spammer_chart, "spammer", "s");
+    ta_atom atom = 0;
+    CHECK(ta_system_intern_atom(system, (ta_str)STR("spam"), &atom) == TA_OK);
+    ta_event_name_id name = 0;
+    CHECK(ta_event_name_intern(system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &name) == TA_OK);
+    ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    test_drive_status status = TEST_DRIVE_ERROR;
+    CHECK(test_drive_deliver(system,
+                             &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = spammer,
+                                                         .event = &event },
+                             &(test_drive_run_params){ .status = &status }) == TA_OK);
+    ta_load_request request = { 0 };
+    CHECK(ta_system_load_needed(system, &request) == TA_OK);
+    CHECK(ta_system_set_time(system, 1000) == TA_OK);
     uint32_t dispatched = 0;
-    bool more = true;
+    bool more = false;
     CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
                                                                     .more_due = &more }) == TA_OK);
-    CHECK(dispatched == 1 && router.holding);
-    CHECK(kept_origin_is(&router, "sender1"));
-    ta_external_delivery_release(&router.kept);
+    /* `later` takes the last free envelope, and `last` finds none: it is
+     * submitted, and waits, due now. */
+    CHECK(dispatched == 1 && more);
+    CHECK(ta_actor_destroy(system, sender) == TA_OK);
+    /* The load fails: the spammer's mail becomes its errors, and the pool
+     * has room again. */
+    ta_fault fault = { .code = TA_ERR_NOT_FOUND };
+    CHECK(ta_system_load_failed(system, &(ta_load_failed_params){ .request = request.request, .fault = &fault }) ==
+          TA_OK);
+    (void)took_mail_from(system, spammer, "sender1"); /* runs the spammer's errors */
+    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
+                                                                    .more_due = &more }) == TA_OK);
+    CHECK(dispatched == 1);
+    ta_actor_id peer = load_peer(system);
+    CHECK(took_mail_from(system, peer, "sender1"));
     ta_system_destroy(system);
 }
 
@@ -213,12 +291,9 @@ static void test_submitted_send_outlives_its_sender(void) {
  * own reference; the event the actor takes, and then holds, still reads the
  * origin. */
 static void test_delivered_origin_outlives_the_host_reference(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
-    one_directory dir = {0};
-    ta_system *system = create_system(&router, &dir);
+    small_directory dir = {0};
+    ta_system *system = create_system(&dir, NULL, 0);
     ta_actor_id actor = spawn_sender(system);
-    ta_external_delivery_release(&router.kept);
-    router.holding = false;
 
     char *family = malloc(5);
     char *name = malloc(8);
@@ -256,9 +331,8 @@ static void test_delivered_origin_outlives_the_host_reference(void) {
 
 /* Equal addresses are one handle, and the last release frees it. */
 static void test_equal_addresses_are_one_handle(void) {
-    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
-    one_directory dir = {0};
-    ta_system *system = create_system(&router, &dir);
+    small_directory dir = {0};
+    ta_system *system = create_system(&dir, NULL, 0);
     long before = heap.live;
     ta_actor_address text = { .family = { STR("f") }, .name = STR("n") };
     ta_address *first = NULL;
@@ -294,7 +368,7 @@ static void test_equal_addresses_are_one_handle(void) {
 }
 
 int main(void) {
-    test_kept_delivery_outlives_its_sender();
+    test_waiting_mail_outlives_its_sender();
     test_submitted_send_outlives_its_sender();
     test_delivered_origin_outlives_the_host_reference();
     test_equal_addresses_are_one_handle();

@@ -92,7 +92,6 @@ TinyactorsTest.scenarios 'send targets' do
   # retaining the value it parsed (ADR 0044).
   scenario 'a delayed send to a logical address still resolves when it falls due' do
     directory = memory_directory
-    router = recording_router(directory: true)
     receiver = spawn(SendTargets.chart(nil, :none))
     directory.put(family: 'probe', name: 'late', kind: :resident, actor: receiver.handle)
     spawn(SendTargets.chart('#_actor_probe/late', :expr, 'jq', delay: '10s'))
@@ -104,7 +103,7 @@ TinyactorsTest.scenarios 'send targets' do
     # due, and queued it for the resident receiver itself (core ADR 0099).
     resolved = directory.journal.select { |entry| entry[:op] == 'resolve' && entry[:name] == 'late' }
     assert_equal [{ kind: 'resident', actor: receiver.handle }], resolved.map { |entry| entry[:out] }.uniq
-    assert_equal [], router.entries('submit')
+    assert_equal [], load_requests
   end
 
   # Catches: a session URI that stops resolving to its session.

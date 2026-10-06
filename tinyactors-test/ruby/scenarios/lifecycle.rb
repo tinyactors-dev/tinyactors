@@ -12,7 +12,6 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
   # instead of by owner (both lights use the ID `light`, so the survivor's
   # timer would vanish); a destroyed actor's ID answering again.
   scenario 'destroy cancels the actor\'s own delayed sends and no one else\'s' do
-    router = recording_router
     doomed = spawn
     advance_time 10_000
     survivor = spawn
@@ -26,7 +25,7 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
 
     advance_time 30_000
     assert_active survivor, :green
-    assert_equal [], router.entries('submit'),
+    assert_equal [], load_requests,
                  'the survivor\'s timer reached it in core (core ADR 0099), and nothing went to the destroyed actor'
   end
 
@@ -87,7 +86,6 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
   # that macrostep on its outgoing list until it ends (core ADR 0099), or a
   # self-send that reaches the run queue though the macrostep never ended.
   scenario 'destroying a paused actor releases it and its unsent mail' do
-    router = recording_router
     relay = spawn :relay
     bystander = spawn :relay
     relay.post('go')
@@ -97,7 +95,7 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
     core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: relay.handle))
     forget(relay)
 
-    assert_equal [], router.entries('submit'), 'the self-send never reached the router'
+    assert_equal [], load_requests, 'the self-send asked the host for nothing'
     assert_equal [bystander.handle], rpc('system.actors', system: system_handle)
     # Running the system finds nothing: the self-send went with the
     # macrostep that sent it, which never ended.

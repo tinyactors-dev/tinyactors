@@ -3,7 +3,7 @@
 # Mail between resident sessions (core ADR 0099): a <send> to a session
 # resident in the system takes an envelope from core's pool and waits on the
 # sending macrostep's outgoing list until that macrostep ends, then joins the
-# run queue. It never reaches the host's router. A send that finds no free
+# run queue; the host never sees it. A send that finds no free
 # envelope fails in the chart as error.execution.capacity.pool, and SCXML
 # abandons the rest of its block, so a fanout fails once (S02).
 
@@ -49,14 +49,13 @@ TinyactorsTest.scenarios 'mail between resident sessions' do
   # block does not run.
   scenario 'a fanout fails once, at the first send without an envelope' do
     system_params(pool_envelopes: 8)
-    router = recording_router
     sink = spawn :mail_sink
     sender = spawn :mail_fanout, binding: { peer: sink.session_uri }
     sender.deliver 'go'
     assert_equal ['error.execution.capacity.pool'], sender.data('.capacity'), 'one capacity error'
     assert_equal false, sender.data('.after'), 'the rest of the block was abandoned'
     assert_equal [1, 2, 3, 4, 5, 6, 7], sink.data('.notes'), 'the sends before the failure arrived, in order'
-    assert_equal [], router.entries('submit'), 'mail to a resident session stays in core'
+    assert_equal [], load_requests, 'mail to a resident session stays in core'
   end
 
   # Catches: mail visible to its receiver while its sender's macrostep has

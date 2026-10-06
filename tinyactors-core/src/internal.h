@@ -72,6 +72,7 @@
 #include "routing.h"
 #include "envelope.h"
 #include "name_area.h"
+#include "waiting.h"
 #include "run.h"
 #include "clock.h"
 #include "configuration.h"

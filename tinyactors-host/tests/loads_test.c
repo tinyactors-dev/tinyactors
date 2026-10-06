@@ -1,11 +1,12 @@
 /*
  * Loading unloaded actors on demand (napi ADR 0020), driven without
- * Node-API: mail for an unloaded name waits in its load's mailbox and moves,
- * in order, to the front of the loaded actor's mailbox; the per-address cap;
- * waiting mail counts against maxQueuedMessages; a failed load's mail
- * becomes dead letters that keep the name; a virtual family's unknown name
- * starts a load; an unloaded actor's own timer wakes it; and without a
- * loader nothing changes. Run under AddressSanitizer by test-native-asan.
+ * Node-API: mail JavaScript posts for an unloaded name waits in its load's
+ * mailbox and moves, in order, to the front of the loaded actor's mailbox;
+ * the per-address cap; waiting mail counts against maxQueuedMessages; a
+ * failed load's mail becomes dead letters that keep the name; a virtual
+ * family's unknown name starts a load; an unloaded actor's own timer wakes
+ * it; load requests core owes for a gone session share a load; and without
+ * a loader nothing changes. Run under AddressSanitizer by test-native-asan.
  */
 #include "check.h"
 #include <string.h>
@@ -372,51 +373,53 @@ static void a_waiting_message_can_be_withdrawn(void) {
     finish_system(system);
 }
 
-/* Posts an event named `text` for a gone session's key, as the router does (napi ADR 0032 section 2). */
-static ta_result post_session(tah_system *system, ta_address *key, bool shared, const char *text) {
-    ta_event event = { .type = TA_EVENT_EXTERNAL, .name = event_name(system, text), .invoke_id = TA_INVOKE_ID_NONE };
-    return tah_loads_route_session(&system->loads, &(tah_load_session_route){ .sched = &system->sched,
-                                                                             .address = key,
-                                                                             .message = &(tah_message){ .event = &event },
-                                                                             .shared = shared });
+/* Asks for a load for a gone session's key, as the router does for a load
+ * request core owes (napi ADR 0032 section 2). */
+static ta_result ask_session(tah_system *system, ta_address *key, bool shared, uint64_t request) {
+    return tah_loads_ask(&system->loads, &(tah_load_ask){ .address = key,
+                                                          .why = TAH_LOAD_WHY_SESSION,
+                                                          .shared = shared,
+                                                          .request = request,
+                                                          .waiting = 1 });
 }
 
 /*
- * Mail for a gone session: messages for one session wait on one load, which
- * hands them, in order, to a new instance without a name; a session this
- * system cannot name gets a load per message; a family without a loader
- * starts none.
+ * Load requests for a gone session: requests for one session's key share
+ * one load, which a new instance without a name finishes; a session this
+ * system cannot name gets a load per request; a family without a loader
+ * starts none. The mail itself waits in core, which delivers it in order
+ * (core's waiting_test).
  */
 static void a_gone_session_loads_a_new_instance(void) {
     tah_system *system = make_system();
     ta_definition_id chart = define_receiver(system);
     ta_actor_address session_key = { .family = { .name = S("r") }, .name = S("0.4294967297.r") };
     ta_address *key = intern(system, &session_key);
-    CHECK(post_session(system, key, true, "a") == TA_ERR_NOT_FOUND); /* no loader */
+    CHECK(ask_session(system, key, true, 11) == TA_ERR_NOT_FOUND); /* no loader */
+    CHECK(system->loads.in_flight == 0u);
     CHECK(tah_loads_set_family(&system->loads, S("r"), 10) == TA_OK);
     CHECK(tah_loads_family_loads(&system->loads, S("r")) && !tah_loads_family_loads(&system->loads, S("x")));
-    CHECK(post_session(system, key, true, "a") == TA_OK);
-    CHECK(post_session(system, key, true, "b") == TA_OK);
+    CHECK(ask_session(system, key, true, 11) == TA_OK);
+    CHECK(ask_session(system, key, true, 12) == TA_OK); /* joins the load in flight */
     tah_load_request request = next_request(system);
-    CHECK(request.why == TAH_LOAD_WHY_SESSION);
+    CHECK(request.why == TAH_LOAD_WHY_SESSION && system->loads.in_flight == 1u);
+    CHECK(tah_loads_core_request(&system->loads, request.index, request.generation) == 12u);
     CHECK(!tah_loads_next_request(&system->loads, &(tah_load_request){ 0 }));
     CHECK(finish(system, request, TAH_LOAD_SPAWNED, ta_actor_id_make(99, 7)) == TA_ERR_NOT_FOUND);
     ta_actor_id spawned = spawn(system, chart, NULL);
     CHECK(finish(system, request, TAH_LOAD_SPAWNED, spawned) == TA_OK);
-    mailbox_is(system, spawned, (const char *const[]){ "a", "b" }, 2u);
-    CHECK(settle(system, NULL) == 0u && system->sched.delivered == 2u);
+    CHECK(system->loads.in_flight == 0u);
 
     ta_actor_address unknown_key = { .family = { .name = S("r") }, .name = S("0.0.r") };
     ta_address *unknown = intern(system, &unknown_key);
-    CHECK(post_session(system, unknown, false, "c") == TA_OK);
-    CHECK(post_session(system, unknown, false, "d") == TA_OK);
+    CHECK(ask_session(system, unknown, false, 13) == TA_OK);
+    CHECK(ask_session(system, unknown, false, 14) == TA_OK);
     tah_load_request first = next_request(system);
     tah_load_request second = next_request(system);
     CHECK(first.index != second.index && system->loads.in_flight == 2u);
     CHECK(finish(system, first, TAH_LOAD_NOT_FOUND, 0) == TA_OK);
     CHECK(finish(system, second, TAH_LOAD_NOT_FOUND, 0) == TA_OK);
-    tah_dead_reason reason = TAH_DEAD_DONE;
-    CHECK(settle(system, &reason) == 2u && reason == TAH_DEAD_NOT_FOUND);
+    CHECK(system->loads.in_flight == 0u);
     ta_address_release(unknown);
     ta_address_release(key);
     finish_system(system);

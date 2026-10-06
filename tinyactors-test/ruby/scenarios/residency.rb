@@ -18,7 +18,6 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
   # steals its address back from a replacement. A later send to the logical
   # address must still resolve to the replacement.
   scenario 'reconstructing a captured incumbent leaves its replacement routed' do
-    router = recording_router(directory: true)
     incumbent = spawn :freezer, name: 'x'
     incumbent.deliver 'arm'
     image = capture(incumbent)
@@ -53,7 +52,7 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
     resolved = directory.journal.drop(journal_before).select { |entry| entry[:op] == 'resolve' && entry[:name] == 'x' }
     assert_equal replacement_id, resolved.last&.dig(:out, :actor),
                  'a send to the logical address follows the replacement route'
-    assert_equal [], router.entries('submit'), 'and core queues it for the replacement itself (core ADR 0099)'
+    assert_equal [], load_requests, 'and core queues it for the replacement itself (core ADR 0099)'
 
     core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: reconstructed))
     destroy_image(image)

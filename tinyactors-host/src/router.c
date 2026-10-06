@@ -62,12 +62,13 @@ static bool tah_router_session_loads(tah_system *system, const ta_actor_ref *des
 }
 
 /*
- * Puts mail for a gone session into its load (loads.h): the load's key is
- * `{ family, <session text> }`. A session this system cannot name (0) is
- * `<incarnation>.0.<family>`, and gets a load of its own.
+ * The key of a load for a gone session (loads.h): `{ family, <session
+ * text> }`. A session this system cannot name (0) is
+ * `<incarnation>.0.<family>`, and gets a load of its own. One reference
+ * goes to `*out`.
  */
-static ta_result tah_router_post_session(tah_system *system, const ta_actor_ref *destination, ta_str family,
-                                         const tah_message *message) {
+static ta_result tah_router_session_key(tah_system *system, const ta_actor_ref *destination, ta_str family,
+                                        ta_address **out) {
     char small[256];
     char *text = small;
     size_t held = 0; /* bytes of `text` taken from the allocator, 0 for `small` */
@@ -112,23 +113,13 @@ static ta_result tah_router_post_session(tah_system *system, const ta_actor_ref 
         tah_mem_copy(text + length, family.ptr, family.len);
         length += family.len;
     }
-    ta_address *address = NULL;
     ta_result result = ta_address_intern(system->core,
                                          &(ta_actor_address){ .family = { .name = family },
                                                               .name = { .ptr = text, .len = length } },
-                                         &address);
+                                         out);
     if (held != 0) {
         allocator.v->free(allocator.self, &(ta_allocator_free_params){ .ptr = text, .size = held, .alignment = 1 });
     }
-    if (result != TA_OK) {
-        return result;
-    }
-    result = tah_loads_route_session(&system->loads, &(tah_load_session_route){ .sched = &system->sched,
-                                                                               .address = address,
-                                                                               .message = message,
-                                                                               .shared = session != 0,
-                                                                               .now_ns = tah_system_monotonic_ns(system) });
-    ta_address_release(address);
     return result;
 }
 
@@ -137,12 +128,12 @@ static ta_result tah_router_post_session(tah_system *system, const ta_actor_ref 
  * ADR 0022): a runtime ID with no actor, or one that finished, whose family
  * has no loader (napi ADR 0032 section 2); a name whose resident actor
  * finished, or with no resident actor, no load in flight, and no loader
- * that would start one.
- * Such mail is not accepted: core raises error.communication in the sender
- * (SCXML 6.2.4). Mail from JavaScript does not come here, and stays a dead
- * letter (ADR 0008).
+ * that would start one. `*resident` gets the resident actor of a name that
+ * is not finished, which takes the mail at once.
  */
-static bool tah_router_unreachable(tah_system *system, const ta_actor_ref *destination, tah_dead_reason *reason) {
+static bool tah_router_unreachable(tah_system *system, const ta_actor_ref *destination, tah_dead_reason *reason,
+                                   ta_actor_id *resident) {
+    *resident = 0;
     if (destination->kind == TA_ACTOR_REF_NAMED) {
         ta_address *address = destination->as.named;
         ta_actor_directory_entry entry = tah_directory_find(&system->directory, address);
@@ -151,6 +142,7 @@ static bool tah_router_unreachable(tah_system *system, const ta_actor_ref *desti
              * ID; its done hook has not destroyed it yet. */
             const tah_sched_entry *scheduled = tah_sched_lookup(&system->sched, entry.actor);
             if (scheduled == NULL || (scheduled->flags & TAH_SCHED_FINISHED) == 0) {
+                *resident = entry.actor;
                 return false;
             }
             *reason = TAH_DEAD_DONE;
@@ -163,9 +155,6 @@ static bool tah_router_unreachable(tah_system *system, const ta_actor_ref *desti
         return true;
     }
     const tah_sched_entry *entry = tah_sched_lookup(&system->sched, destination->as.runtime);
-    if (entry != NULL && (entry->flags & TAH_SCHED_FINISHED) == 0) {
-        return false;
-    }
     *reason = entry == NULL ? TAH_DEAD_NOT_FOUND : TAH_DEAD_DONE;
     return true;
 }
@@ -174,59 +163,69 @@ static const char *tah_router_unreachable_message(tah_dead_reason reason) {
     switch (reason) {
     case TAH_DEAD_DONE: return "the target session has finished";
     case TAH_DEAD_UNLOADED: return "the target is unloaded and no loader would bring it back";
+    case TAH_DEAD_REJECTED: return "the loader rejected the target";
+    case TAH_DEAD_LOAD_TIMEOUT: return "the target's load timed out";
+    case TAH_DEAD_LOAD_FAILED: return "the target could not be loaded";
     default: return "no session has that ID or name";
     }
 }
 
-static ta_external_event_submit_status tah_router_submit(void *self, const ta_external_event_submit_params *params) {
-    tah_system *system = self;
-    const ta_external_delivery *delivery = params->delivery;
-    tah_dead_reason reason = TAH_DEAD_NOT_FOUND;
-    ta_str family = { 0 };
-    bool to_loader = tah_router_session_loads(system, &delivery->destination, &family);
-    if (!to_loader && tah_router_unreachable(system, &delivery->destination, &reason)) {
-        const char *text = tah_router_unreachable_message(reason);
-        ta_fault fault = { .code = TA_ERR_NOT_FOUND, .message = { text, (uint32_t)tah_str_length(text) } };
-        if (system->callbacks.unreachable_data != NULL) {
-            (void)system->callbacks.unreachable_data(system->callbacks.context,
-                                           &(tah_unreachable){ .reason = reason, .destination = &delivery->destination },
-                                           &fault.data);
-        }
-        if (params->fault != NULL) {
-            *params->fault = fault;
-        } else {
-            ta_value_release(&fault.data);
-        }
-        if (delivery->event.origin.kind == TA_ORIGIN_ACTOR) {
-            tah_system_wake_sender(system, &delivery->event.origin.as.actor);
-        }
-        return TA_EXTERNAL_EVENT_ERROR;
+void tah_router_fail(tah_system *system, uint64_t request, const tah_router_failure *failure) {
+    const char *text = tah_router_unreachable_message(failure->reason);
+    ta_fault fault = { .code = TA_ERR_NOT_FOUND, .message = { text, (uint32_t)tah_str_length(text) } };
+    if (system->callbacks.unreachable_data != NULL) {
+        (void)system->callbacks.unreachable_data(
+            system->callbacks.context,
+            &(tah_unreachable){ .reason = failure->reason, .destination = failure->destination }, &fault.data);
     }
-    ta_event event;
-    ta_event_retain(&delivery->event, &event);
-    /* Mail between actors carries no retained-bytes estimate: its data is a
-     * value made inside a chart, and sizing it would mean calling JavaScript. */
-    /* Traced mail keeps the sending step as its parent (core ADR 0067). */
-    /* Past the queue's limits it waits in the receiver's overflow: a chart
-     * cannot retry, and a refused send is logged nowhere (kernel ADR 0003). */
-    tah_message message = { .target = delivery->destination.as.runtime,
-                            .event = &event,
-                            .trace = &delivery->trace,
-                            .may_overflow = true };
-    ta_result result = to_loader ? tah_router_post_session(system, &delivery->destination, family, &message)
-                       : delivery->destination.kind == TA_ACTOR_REF_NAMED
-                           ? tah_router_post_named(system, delivery->destination.as.named, &message)
-                           : tah_sched_post(&system->sched, &message);
-    if (result != TA_OK) {
-        ta_event_release(&event);
-        return TA_EXTERNAL_EVENT_RETRY; /* out of memory: core offers it again */
-    }
-    tah_system_want_turn(system);
-    return TA_EXTERNAL_EVENT_ACCEPTED;
+    (void)ta_system_load_failed(system->core, &(ta_load_failed_params){ .request = request, .fault = &fault });
+    ta_value_release(&fault.data);
 }
 
-static const ta_external_event_router_vtable tah_router_vtable = { .submit = tah_router_submit };
-
-ta_external_event_router tah_router_adapter(tah_system *system) {
-    return (ta_external_event_router){ .self = system, .v = &tah_router_vtable };
+void tah_router_answer(tah_system *system, const ta_load_request *request) {
+    const ta_actor_ref *destination = &request->destination;
+    tah_dead_reason reason = TAH_DEAD_NOT_FOUND;
+    ta_str family = { 0 };
+    ta_address *key = NULL;
+    ta_result result = TA_ERR_NOT_FOUND;
+    if (tah_router_session_loads(system, destination, &family)) {
+        result = tah_router_session_key(system, destination, family, &key);
+        if (result == TA_OK) {
+            result = tah_loads_ask(&system->loads, &(tah_load_ask){ .address = key,
+                                                                    .why = TAH_LOAD_WHY_SESSION,
+                                                                    .shared = destination->as.runtime != 0,
+                                                                    .request = request->request,
+                                                                    .waiting = request->waiting,
+                                                                    .trace = &request->trace,
+                                                                    .now_ns = tah_system_monotonic_ns(system) });
+            ta_address_release(key);
+        }
+    } else {
+        ta_actor_id resident = 0;
+        if (!tah_router_unreachable(system, destination, &reason, &resident)) {
+            if (resident != 0) {
+                /* Resident again since core asked: it takes the mail now. */
+                (void)ta_system_load_settled(system->core,
+                                             &(ta_load_settled_params){ .request = request->request, .actor = resident });
+                return;
+            }
+            result = tah_loads_ask(&system->loads, &(tah_load_ask){ .address = destination->as.named,
+                                                                    .why = TAH_LOAD_WHY_MAIL,
+                                                                    .shared = true,
+                                                                    .request = request->request,
+                                                                    .waiting = request->waiting,
+                                                                    .trace = &request->trace,
+                                                                    .now_ns = tah_system_monotonic_ns(system) });
+        }
+    }
+    if (result == TA_OK) {
+        tah_system_want_turn(system);
+        return;
+    }
+    /* Nowhere to go, or no memory to start the load: each message becomes
+     * error.communication for its sender (SCXML 6.2.4). */
+    tah_router_fail(system, request->request,
+                    &(tah_router_failure){ .reason = result == TA_ERR_NOMEM ? TAH_DEAD_LOAD_FAILED : reason,
+                                           .destination = destination });
+    tah_system_want_turn(system);
 }

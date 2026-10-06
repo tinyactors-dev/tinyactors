@@ -479,14 +479,6 @@ void ta_system_tell_definition(ta_system *system, const ta_definition *definitio
     system->definition_sink.v->notify(system->definition_sink.self, &event);
 }
 
-ta_result ta_system_set_external_event_router(ta_system *system, ta_external_event_router router) {
-    if (system == NULL || (router.v != NULL && router.v->submit == NULL)) {
-        return TA_ERR_INVALID;
-    }
-    system->external_events = router;
-    return TA_OK;
-}
-
 static bool ta_bytes_same(ta_bytes left, ta_bytes right);
 
 /* The newest registered, non-retired definition with this identity, or NULL. */
@@ -1016,15 +1008,15 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
         /* A send to a resident session goes into the pool here: outside any
          * macrostep, a safe point, so the pool may refill first. */
         ta_dispatch how = { .in_run = false, .timer = true };
-        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send, &how);
-        if (fired != TA_EXTERNAL_EVENT_RETRY) {
+        ta_dispatch_status fired = ta_interpreter_dispatch_delayed(system, &send, &how);
+        if (fired != TA_DISPATCH_RETRY) {
             if (owner_definition != NULL) {
                 TA_COUNT(system, owner_definition, delayed_fired);
             } else {
                 system->counters.delayed_fired += 1u;
             }
         }
-        if (fired == TA_EXTERNAL_EVENT_RETRY) {
+        if (fired == TA_DISPATCH_RETRY) {
             /*
              * Rescheduling keeps its ID, and so its place in deadline order.
              * The owner may be gone by now; its submitted sends are orphans.
@@ -1044,7 +1036,7 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
         }
         dispatched += 1;
         if (params->fired != NULL && !how.dropped) {
-            report.delivered = fired == TA_EXTERNAL_EVENT_ACCEPTED;
+            report.delivered = fired == TA_DISPATCH_SENT;
             params->fired[fired_count] = report;
             fired_count += 1;
         }

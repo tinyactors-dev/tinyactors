@@ -18,6 +18,11 @@ struct tah_load {
     uint32_t next_free;
     uint8_t why;           /* tah_load_why */
     bool keyed;            /* in `by_address`: later mail for the address joins it */
+    /* The load request core owes for the address (ta_load_request), answered
+     * when the load finishes; 0 when core asked for none. */
+    uint64_t core_request;
+    /* The messages core keeps waiting for the address, when it asked. */
+    uint32_t core_waiting;
 };
 
 typedef struct tah_loader_family {

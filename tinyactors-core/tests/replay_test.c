@@ -6,15 +6,16 @@
  *   pending when it stopped, and a crash between two commits;
  * - a replay under the same revision reproduces the live run's
  *   configuration, history and pending sends;
- * - a replaying actor calls no router, invoker or log sink;
+ * - a replaying actor sends nothing out: no mail to other sessions, no
+ *   invoker or log sink call;
  * - its invocations are active in core, events of the run being replayed
  *   reach their <finalize>, and publishing retires them as unavailable;
  * - the result codes of ta_actor_prepare(), ta_actor_publish() and
  *   a time on every input and publish's `at` (ADR 0094), and withdrawing a held send;
  * - publishing runs out of memory without changing anything, at every
  *   allocation it makes;
- * - a state reports a send the router refused, and a restore leaves it out
- *   (ADR 0094 section 3).
+ * - a state reports a send that found no room once, and a restore leaves it
+ *   out (ADR 0094 section 3).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,24 +50,15 @@ static const ta_allocator allocator = { .self = &heap, .v = &test_allocator_vtab
  * Adapters that count every call: a replaying actor must make none.
  */
 
+/* Mail to sessions that are not resident, counted as core asks the host to
+ * load them (routed_in). */
 static int routed;
-static bool refusing; /* the router answers RETRY, and counts nothing */
+/* The session routed_in loads for them, made on first use. */
+static ta_actor_id sink;
 static int invoker_starts;
 static int invoker_cancels;
 static int invoker_forwards;
 static int logs_written;
-
-static ta_external_event_submit_status route(void *self, const ta_external_event_submit_params *params) {
-    (void)self;
-    (void)params;
-    if (refusing) {
-        return TA_EXTERNAL_EVENT_RETRY;
-    }
-    routed += 1;
-    return TA_EXTERNAL_EVENT_ACCEPTED;
-}
-
-static const ta_external_event_router_vtable router_vtable = { .submit = route };
 
 static ta_op_status invoker_start(void *self, const ta_invoker_start_params *params) {
     (void)self;
@@ -291,18 +283,46 @@ static ta_definition_id define(ta_system *system, const char *family, const ta_s
     return id;
 }
 
-static ta_system *create_system(void) {
+static ta_system *create_system_with(const ta_param_value *params, uint32_t count) {
     ta_system *system = NULL;
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
-    CHECK(ta_system_set_external_event_router(system,
-                                              (ta_external_event_router){ .v = &router_vtable }) == TA_OK);
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = params, .param_count = count },
+                           &system) == TA_OK);
     CHECK(ta_system_set_actor_directory(system, (ta_actor_directory){ .v = &dir_vtable }) == TA_OK);
     CHECK(ta_system_set_log_sink(system, (ta_log_sink){ .v = &log_vtable }) == TA_OK);
     ta_atom svc = 0;
     CHECK(ta_system_intern_atom(system, (ta_str)STR("svc"), &svc) == TA_OK);
     CHECK(ta_system_register_invoker(system, svc, (ta_invoker){ .v = &invoker_vtable }) == TA_OK);
     routed = invoker_starts = invoker_cancels = invoker_forwards = logs_written = 0;
+    sink = 0;
     return system;
+}
+
+/* A session that takes anything: the actor the host loads for mail to a
+ * session that is not resident. */
+static const ta_scxml_state_spec sink_chart[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("sink") }, END };
+
+/*
+ * Reads the load requests core owes for mail to sessions that are not
+ * resident, counts the messages each one waits with into `routed`, and
+ * answers each with a sink session, which takes them, so the next mail asks
+ * again and no sender hears of it. Answers the count so far.
+ */
+static int routed_in(ta_system *system) {
+    ta_load_request request;
+    while (ta_system_load_needed(system, &request) == TA_OK) {
+        routed += (int)request.waiting;
+        if (sink == 0) {
+            CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = define(system, "sink", sink_chart),
+                                                                   .out = &sink }) == TA_OK);
+        }
+        CHECK(ta_system_load_settled(system, &(ta_load_settled_params){ .request = request.request,
+                                                                         .actor = sink }) == TA_OK);
+    }
+    return routed;
+}
+
+static ta_system *create_system(void) {
+    return create_system_with(NULL, 0);
 }
 
 static void destroy_system(ta_system *system) {
@@ -433,7 +453,7 @@ static void test_timeline_timeout_to_self(void) {
     ta_system *system = create_system();
     ta_definition_id definition = define(system, "timers", timers);
     ta_actor_id live = live_until_e1(system, definition);
-    int routed_live = routed;
+    int routed_live = routed_in(system);
     CHECK(routed_live == 1 && logs_written == 1); /* the immediate reply, and the log */
     CHECK(ta_system_set_time(system, 6000) == TA_OK);
     CHECK(dispatch(system) == 2); /* t1 to itself, b1 to b */
@@ -442,7 +462,7 @@ static void test_timeline_timeout_to_self(void) {
     CHECK(ta_system_set_time(system, 7000) == TA_OK);
     CHECK(ta_actor_destroy(system, live) == TA_OK); /* evicted @ 7000 */
 
-    int routed_before = routed;
+    int routed_before = routed_in(system);
     CHECK(ta_system_set_time(system, 7000 + 7u * 24u * 3600u * 1000u) == TA_OK); /* a week later */
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
     deliver_at(system, replay, "e1", 1000);
@@ -452,7 +472,7 @@ static void test_timeline_timeout_to_self(void) {
     CHECK(publish_at(system, replay, 7000) == TA_OK);
     ta_time deadline = 0;
     CHECK(ta_system_next_deadline(system, &deadline) == TA_ERR_NOT_FOUND);
-    CHECK(routed == routed_before && logs_written == 1 && invoker_starts == 0);
+    CHECK(routed_in(system) == routed_before && logs_written == 1 && invoker_starts == 0);
     destroy_system(system);
 }
 
@@ -466,12 +486,12 @@ static void test_timeline_fired_before_stop(void) {
     CHECK(ta_system_set_time(system, 7000) == TA_OK);
     CHECK(ta_actor_destroy(system, live) == TA_OK); /* evicted @ 7000, E >= d */
 
-    int routed_before = routed;
+    int routed_before = routed_in(system);
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
     deliver_at(system, replay, "e1", 1000);
     CHECK(publish_at(system, replay, 7000) == TA_OK);
     CHECK(pending_sends(system, replay) == 0);
-    CHECK(dispatch(system) == 0 && routed == routed_before);
+    CHECK(dispatch(system) == 0 && routed_in(system) == routed_before);
     destroy_system(system);
 }
 
@@ -485,7 +505,7 @@ static void test_timeline_pending_at_stop(void) {
     CHECK(ta_actor_destroy(system, live) == TA_OK); /* evicted @ 3000, E < d */
 
     CHECK(ta_system_set_time(system, 7u * 24u * 3600u * 1000u) == TA_OK); /* a week later */
-    int routed_before = routed;
+    int routed_before = routed_in(system);
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
     deliver_at(system, replay, "e1", 1000);
     CHECK(publish_at(system, replay, 3000) == TA_OK); /* d = 6000 > 3000: still held */
@@ -493,8 +513,8 @@ static void test_timeline_pending_at_stop(void) {
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, replay, &view) == TA_OK);
     CHECK(view.delayed_send_count == 2 && view.delayed_sends[0].due == 6000);
-    /* b1 goes through the router; t1, to the actor itself, in core. */
-    CHECK(dispatch(system) == 2 && routed == routed_before + 1);
+    /* b1 waits for b's load; t1, to the actor itself, goes to it. */
+    CHECK(dispatch(system) == 2 && routed_in(system) == routed_before + 1);
     CHECK(dispatch(system) == 0);
     CHECK(run(system, replay) == TEST_DRIVE_STABLE && in_state(system, replay, "timedout"));
     destroy_system(system);
@@ -511,12 +531,12 @@ static void test_timeline_crash_between_commits(void) {
     CHECK(dispatch(system) == 2); /* dispatched, then the crash */
     CHECK(ta_actor_destroy(system, live) == TA_OK);
 
-    int routed_before = routed;
+    int routed_before = routed_in(system);
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
     deliver_at(system, replay, "e1", 1000);
     CHECK(publish_at(system, replay, 3000) == TA_OK);
-    /* Again: b1 through the router, t1 to the actor itself in core. */
-    CHECK(dispatch(system) == 2 && routed == routed_before + 1);
+    /* Again: b1 waits for b's load, t1 goes to the actor itself. */
+    CHECK(dispatch(system) == 2 && routed_in(system) == routed_before + 1);
     CHECK(run(system, replay) == TEST_DRIVE_STABLE && in_state(system, replay, "timedout"));
     destroy_system(system);
 }
@@ -541,13 +561,13 @@ static void test_replay_matches_live_run(void) {
         CHECK(ta_system_set_time(system, inputs[index].at) == TA_OK);
         deliver(system, live, inputs[index].event);
     }
-    int routed_live = routed;
+    int routed_live = routed_in(system);
 
     ta_actor_id copy = prepare_replaying(system, definition, &copy_address, 0);
     for (size_t index = 0; index < sizeof inputs / sizeof inputs[0]; index += 1) {
         deliver_at(system, copy, inputs[index].event, inputs[index].at);
     }
-    CHECK(routed == routed_live);
+    CHECK(routed_in(system) == routed_live);
     CHECK(publish(system, copy) == TA_OK);
 
     ta_state_id live_states[8];
@@ -889,32 +909,57 @@ static void test_export_restores_invocations(void) {
     destroy_system(system);
 }
 
+/* Eight sends to itself at 5.5s: falling due, they fill a pool of eight. */
+static const ta_scxml_state_spec filler[] = {
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("filling"),
+      .onentry = (const ta_scxml_handler_spec[]){
+          { .actions = (const ta_scxml_action_spec[]){
+                SEND_SELF("f1", "f", "5500ms"), SEND_SELF("f2", "f", "5500ms"), SEND_SELF("f3", "f", "5500ms"),
+                SEND_SELF("f4", "f", "5500ms"), SEND_SELF("f5", "f", "5500ms"), SEND_SELF("f6", "f", "5500ms"),
+                SEND_SELF("f7", "f", "5500ms"), SEND_SELF("f8", "f", "5500ms"), END } },
+          END } },
+    END,
+};
+
 /*
- * A send the router refused waits, submitted, and the state exported then
- * reports it; a restore does not hold it (ADR 0094 section 3; kernel ADR
- * 0003 removed ADR 0095's restore of it): only the unsubmitted sends come
- * back.
+ * A send that found no room when it fell due waits, submitted, and the
+ * state exported then reports it; a restore does not hold it (ADR 0094
+ * section 3; kernel ADR 0003 removed ADR 0095's restore of it): only the
+ * unsubmitted sends come back. The filler's sends fill a pool of eight at
+ * 5.5s, so t1, due at 6s, finds none and is submitted, and the dispatch
+ * stops there, leaving b1 pending.
  */
 static void test_export_leaves_submitted(void) {
-    ta_system *system = create_system();
+    ta_param_value small_pool[] = { { TA_PARAM_POOL_ENVELOPES, 8 } };
+    ta_system *system = create_system_with(small_pool, 1);
     ta_definition_id definition = define(system, "timers", timers);
-    refusing = true;
-    ta_actor_id live = live_until_e1(system, definition); /* `now` to b is refused */
-    refusing = false;
+    ta_actor_id fill = 0;
+    CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = define(system, "filler", filler),
+                                                           .out = &fill }) == TA_OK);
+    CHECK(run(system, fill) == TEST_DRIVE_STABLE);
+    ta_actor_id live = live_until_e1(system, definition);
+    (void)routed_in(system); /* `now` to b goes to the sink, which starts, then takes it */
+    CHECK(run(system, sink) == TEST_DRIVE_STABLE && run(system, sink) == TEST_DRIVE_STABLE);
+    CHECK(ta_system_set_time(system, 6000) == TA_OK);
+    CHECK(dispatch(system) == 8);
     exported out;
     CHECK(export_into(system, live, &out) == TA_OK);
-    CHECK(out.state.send_count == 3);
+    CHECK(out.state.send_count == 2);
     uint32_t submitted = 0;
     for (uint32_t index = 0; index < out.state.send_count; index += 1u) {
         submitted += out.state.sends[index].submitted ? 1u : 0u;
     }
     CHECK(submitted == 1);
+    /* The filler takes its sends, which frees the pool for the copy. */
+    for (int round = 0; round < 8; round += 1) {
+        CHECK(run(system, fill) == TEST_DRIVE_STABLE);
+    }
     static const ta_actor_address copy_address = { .family = { .name = STR("timers") }, .name = STR("c") };
     ta_result result = TA_OK;
     ta_actor_id copy = prepare_from_state(system, definition, &copy_address, &out.state, &result);
     CHECK(result == TA_OK);
-    CHECK(publish_at(system, copy, 1000) == TA_OK);
-    CHECK(pending_sends(system, copy) == 2); /* t1 and b1, due at 6000 */
+    CHECK(publish(system, copy) == TA_OK); /* its clock is the state's, 6000 */
+    CHECK(pending_sends(system, copy) == 1); /* b1, due at 6000 */
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, copy, &view) == TA_OK);
     for (uint32_t index = 0; index < view.delayed_send_count; index += 1u) {

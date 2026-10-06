@@ -225,7 +225,6 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
                                                                 .watch = &system->trace_watch });
     (void)ta_system_set_wall_clock(system->core, (ta_wall_clock){ .self = system, .v = &tah_system_core_clock });
     (void)ta_system_set_actor_directory(system->core, tah_directory_adapter(&system->directory));
-    (void)ta_system_set_external_event_router(system->core, tah_router_adapter(system));
     result = tah_scxml_invoker_register(system);
     if (result != TA_OK) {
         ta_system_destroy(system->core);
@@ -248,7 +247,6 @@ void tah_system_close(tah_system *system) {
      * reference the addon holds to a core object (a named origin in an
      * envelope, an address in the directory) goes back first (ADR 0012).
      */
-    (void)ta_system_set_external_event_router(system->core, (ta_external_event_router){0});
     (void)ta_system_set_actor_directory(system->core, (ta_actor_directory){0});
     /* A hook may close the system while the turn's records still own data. */
     tah_sched_release_records(&system->sched);
@@ -689,13 +687,25 @@ static void tah_quarantine_reports_make(tah_system *system) {
     }
 }
 
+/* Answers every load request core owes (router.h): mail a chart sent to a
+ * target that is not resident waits in core until then. */
+static void tah_system_answer_loads(tah_system *system) {
+    ta_load_request request;
+    while (ta_system_load_needed(system->core, &request) == TA_OK) {
+        tah_router_answer(system, &request);
+        /* What core delivered or recycled runs at its next ta_run(). */
+        tah_sched_core_work(&system->sched);
+    }
+}
+
 /* Sends one ta_system_dispatch_due() call reports at most. */
 #define TAH_DUE_FIRED 64u
 
 /*
- * Dispatches the sends due now, up to the due budget. A send to a resident
- * actor goes into core's pool and runs at core's next ta_run(); any other
- * goes through the router, or to its I/O processor. For each send that
+ * Dispatches the sends due now, up to the due budget. A send to another
+ * session goes into core's pool and runs at core's next ta_run(), or waits
+ * there for its target's load, which this answers (router.h); any other
+ * goes to its I/O processor. For each send that
  * fired, its sender's wake is reported again (the recorder), and, when it
  * was delivered, how late it fired (the lateness histogram). A refusal (no
  * room, a full queue) or TA_ERR_NOMEM leaves the rest due, so the system is
@@ -744,6 +754,7 @@ bool tah_system_dispatch_due(tah_system *system) {
             break;
         }
     } while (left != 0 && more_due);
+    tah_system_answer_loads(system);
     tah_system_drain_telemetry(system);
     return more_due;
 }
@@ -772,6 +783,7 @@ void tah_system_turn(tah_system *system) {
                                        .stop = tah_system_staging_full,
                                        .stop_context = system,
                                    });
+    tah_system_answer_loads(system);
     tah_system_drain_telemetry(system);
     tah_quarantine_reports_retry(system);
     tah_quarantine_reports_make(system);
@@ -854,4 +866,41 @@ ta_result tah_system_abandon(tah_system *system, ta_actor_id actor) {
     system->inside_core = false;
     tah_system_drain_telemetry(system);
     return result == TA_OK ? tah_hook_actor_abandoned(system, actor) : result;
+}
+
+ta_result tah_system_finish_load(tah_system *system, const tah_system_load_finish *finish) {
+    uint64_t request = tah_loads_core_request(&system->loads, finish->index, finish->generation);
+    /* The load's address goes when it finishes: kept for the answer below. */
+    tah_load_info info = tah_loads_info(&system->loads, finish->index, finish->generation);
+    ta_address *address = (ta_address *)info.address;
+    if (address != NULL) {
+        ta_address_retain(address);
+    }
+    ta_result result = tah_loads_finish(&system->loads, &(tah_load_finish){ .sched = &system->sched,
+                                                                            .directory = &system->directory,
+                                                                            .metrics = &system->metrics,
+                                                                            .index = finish->index,
+                                                                            .generation = finish->generation,
+                                                                            .outcome = finish->outcome,
+                                                                            .actor = finish->actor,
+                                                                            .now_ns = tah_system_monotonic_ns(system),
+                                                                            .wall_ns = tah_system_wall_ns(system) });
+    if (result != TA_ERR_STALE && result != TA_ERR_NOT_FOUND && request != 0) {
+        /* The mail core kept for the load goes where the load's own went. */
+        if (result == TA_OK && (finish->outcome == TAH_LOAD_LOADED || finish->outcome == TAH_LOAD_SPAWNED)) {
+            (void)ta_system_load_settled(system->core,
+                                         &(ta_load_settled_params){ .request = request, .actor = finish->actor });
+        } else {
+            ta_actor_ref destination = { .kind = TA_ACTOR_REF_NAMED, .as.named = address };
+            tah_router_fail(system, request,
+                            &(tah_router_failure){ .reason = tah_load_dead_reason(finish->outcome),
+                                                   .destination = &destination });
+        }
+        tah_sched_core_work(&system->sched);
+        tah_system_want_turn(system);
+    }
+    if (address != NULL) {
+        ta_address_release(address);
+    }
+    return result;
 }

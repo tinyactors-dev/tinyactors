@@ -127,7 +127,8 @@ tah_load_info tah_loads_info(const tah_loads *loads, uint32_t index, uint32_t ge
     if (load == NULL) {
         return (tah_load_info){ 0 };
     }
-    return (tah_load_info){ .address = load->address, .waiting = load->mail.count, .trace = load->trace };
+    return (tah_load_info){ .address = load->address, .waiting = load->mail.count + load->core_waiting,
+                            .trace = load->trace };
 }
 
 void tah_loads_read_stats(const tah_loads *loads, tah_loads_stats *out) {
@@ -304,38 +305,39 @@ bool tah_loads_family_loads(const tah_loads *loads, ta_str family) {
     return found != NULL && found->max_waiting != 0;
 }
 
-ta_result tah_loads_route_session(tah_loads *loads, const tah_load_session_route *route) {
+ta_result tah_loads_ask(tah_loads *loads, const tah_load_ask *ask) {
     uint64_t found = 0;
-    if (route->shared && tah_map_count(&loads->by_address) != 0 &&
-        tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)route->address, &found)) {
-        return tah_loads_append(loads, route->sched, tah_vec_at(&loads->loads, (uint32_t)found), route->message);
+    if (ask->shared && tah_map_count(&loads->by_address) != 0 &&
+        tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)ask->address, &found)) {
+        tah_load *load = tah_vec_at(&loads->loads, (uint32_t)found);
+        load->core_request = ask->request;
+        load->core_waiting = ask->waiting;
+        return TA_OK;
     }
-    uint32_t limit = tah_loads_limit(loads, route->address);
+    uint32_t limit = tah_loads_limit(loads, ask->address);
     if (limit == 0) {
         return TA_ERR_NOT_FOUND;
     }
     uint32_t index = 0;
-    ta_result result = tah_loads_start(loads, &(tah_load_start){ .address = route->address,
+    ta_result result = tah_loads_start(loads, &(tah_load_start){ .address = ask->address,
                                                                   .max_waiting = limit,
-                                                                  .why = TAH_LOAD_WHY_SESSION,
-                                                                  .trace = route->message->trace,
-                                                                  .now_ns = route->now_ns,
-                                                                  .unkeyed = !route->shared },
+                                                                  .why = ask->why,
+                                                                  .trace = ask->trace,
+                                                                  .now_ns = ask->now_ns,
+                                                                  .unkeyed = !ask->shared },
                                        &index);
     if (result != TA_OK) {
         return result;
     }
     tah_load *load = tah_vec_at(&loads->loads, index);
-    result = tah_loads_append(loads, route->sched, load, route->message);
-    if (result != TA_OK) {
-        loads->requests.count -= 1u;
-        if (route->shared) {
-            tah_map_remove(&loads->by_address, (uint64_t)(uintptr_t)route->address);
-        }
-        loads->in_flight -= 1u;
-        tah_loads_give(loads, index);
-    }
-    return result;
+    load->core_request = ask->request;
+    load->core_waiting = ask->waiting;
+    return TA_OK;
+}
+
+uint64_t tah_loads_core_request(const tah_loads *loads, uint32_t index, uint32_t generation) {
+    const tah_load *load = tah_loads_find(loads, index, generation);
+    return load == NULL ? 0 : load->core_request;
 }
 
 bool tah_loads_next_request(tah_loads *loads, tah_load_request *out) {
@@ -357,7 +359,7 @@ bool tah_loads_next_request(tah_loads *loads, tah_load_request *out) {
     return false;
 }
 
-static tah_dead_reason tah_load_dead_reason(tah_load_outcome outcome) {
+tah_dead_reason tah_load_dead_reason(tah_load_outcome outcome) {
     switch (outcome) {
     case TAH_LOAD_NOT_FOUND: return TAH_DEAD_NOT_FOUND;
     case TAH_LOAD_REJECTED: return TAH_DEAD_REJECTED;
