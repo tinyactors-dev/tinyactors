@@ -2405,6 +2405,40 @@ static void test_string_append_interned(void) {
     CHECK(c.live == 0);
 }
 
+/* MUTATION: appending to a let (docs/mutation.md, "Appending to a let"):
+ * s += e, s = s + e1 + e2 and s = `${s}...` move the let's value to +, so
+ * a string built by them takes O(log n) allocations and holds at most twice
+ * its length. */
+static void test_mutation_append_memory(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    static const char *const bodies[] = {
+        "{ let s = acc; s += x; return s; }",
+        "{ let s = acc; s = s + x + \"\"; return s; }",
+        "{ let s = acc; s = `${s}${x}`; return s; }",
+        "{ let s = acc; if (x) { s += x; } return s; }",
+    };
+    static const int sizes[2] = { 1000, 100000 };
+    char source[256];
+    for (int f = 0; f < 4; f++) {
+        long allocations[2];
+        size_t live[2];
+        for (int i = 0; i < 2; i++) {
+            snprintf(source, sizeof source, "Array.from({length: %d}, () => \"x\").reduce((acc, x) => %s, \"\")", sizes[i], bodies[f]);
+            allocations[i] = allocations_of(&c, context, source);
+            live[i] = live_of(context, source);
+        }
+        if (getenv("SJS_TEST_VERBOSE") != NULL) {
+            printf("%s: allocations %ld -> %ld, live %zu -> %zu\n", bodies[f], allocations[0], allocations[1], live[0], live[1]);
+        }
+        CHECK(allocations[1] - allocations[0] <= 10);
+        CHECK(live[1] >= (size_t)sizes[1] && live[1] <= 2u * (size_t)sizes[1] + 256u);
+    }
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
 int main(int argc, char **argv) {
     bool full = argc > 1 && strcmp(argv[1], "--full") == 0;
     test_values();
@@ -2453,6 +2487,7 @@ int main(int argc, char **argv) {
     test_mutation_path_fuel();
     test_mutation_path_natives();
     test_mutation_path_out_of_memory();
+    test_mutation_append_memory();
     /* STRING_APPEND */
     test_string_append_memory();
     test_string_append_interned();

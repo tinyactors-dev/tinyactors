@@ -29,7 +29,9 @@ This is done in 3 steps:
 After the three steps, the methods above called on a path from such a
 variable (`o.items.push(x)`, `s.byID[k].tags.add(t)`), which the shape
 rules recognise and the compiler rewrites into the path machinery of step
-2 ("Methods through a path", below).
+2 ("Methods through a path", below); and appending to a `let` (`s += x`),
+whose value moves to the `+`, which extends a string nothing else holds
+("Appending to a let", below).
 
 ## The methods
 
@@ -278,6 +280,7 @@ statement there is: a module holds imports, `const` and exports.
   of the new value, which moves when nothing reads or writes the slot
   later, on any path. A plain assignment compiles no read of its target;
   a compound one reads it (`LOCAL`), then `SET_LOCAL` stores the result.
+  An append's read of its `let` moves instead ("Appending to a let").
 
 The events are CONST_BEGIN's: count 1 for `let`, 2 for a declarator
 without a value, which the parser tells from the token after its name
@@ -288,6 +291,64 @@ let p = v      CONST_BEGIN(1) <v> <p> CONST_END
 let x          CONST_BEGIN(2) BIND(x) CONST_END
 x op= v;       <x> ASSIGN(op) <v> ASSIGN_END(op)
 ```
+
+## Appending to a let
+
+Building a string is common: `let s = ""; s += x;`, `s = s + x`,
+`` s = `${s}...` ``. Each such statement used to copy the whole string, as
+the read of `s` on the right is a copy (the slot still holds the value), so
+`+` never saw a string nothing else holds. These forms, on a `let` the
+function owns, now move the variable's value to the `+` instead:
+
+- `s += e`;
+- `s = s + e1 + e2 + ...`, `+` left-associated with `s` the leftmost
+  operand;
+- `` s = `${s}...` ``, a template whose head is empty and whose first
+  substitution starts with `s`.
+
+**The move.** The read of `s` that starts the value (for `+=`, the
+target's own read) becomes a `TAKE_LOCAL`, which leaves the slot empty;
+the store at the statement's end puts the result back. Between the two,
+only the right-hand side runs, and the compiler moves the value only when
+that side reads `s` no other time (`binding.reads`): `s += s`,
+`s = s + "," + s` and `s += s.length` keep their copy, as such a read, or
+a method of `s`'s own, would find the slot empty. A `let` captured by a
+closure is refused, so nothing else can read the slot meanwhile. The store
+follows the whole value on every path, so the move is never seen; a fault
+ends the evaluation, as always.
+
+**The append.** `+` and the template's join then find, when `s` holds a
+string, a string with one holder, and extend it in place, with spare
+room growing geometrically (`STRING_APPEND`, README.md, "`+` and a template
+extend a string nothing else holds"): building is amortized linear. That
+part is not mutation, and serves `reduce((acc, x) => acc + x, "")` as
+well. A string another holder keeps (`const t = s`, an object's key, a
+set's member, an array's element, a program's constant, an interned
+string) is copied, as before, and the copy becomes the variable's,
+extended in place from the next statement on.
+
+**The semantics are `+`'s, operator by operator.** Nothing else changes:
+each `+` of `s + e1 + e2` runs in turn, with its own types. On a string it
+joins, as String converts the right operand; on two numbers it adds
+(`s + 1 + 2` on a number adds 3, on a string appends "1" then "2"); a
+string and a number join either way round; anything else faults, as
+`+` faults where JavaScript would coerce (an object, a boolean onto a
+number). A template's parts convert with String's rules, and an object in
+one faults. So the append is only a fast path for a string on the left.
+
+**The rules.** `s += e` and the spine of `+` are rewrites of the shape
+rules (`src/shapes.rules`, `APPEND` and `APPEND_SUM`; docs/matcher.md,
+section 12): the anchored lane reports APPEND at the end of an assignment
+whose operator is `+=` and whose target is a name, and APPEND_SUM at each
+`+` of a spine from a name. The compiler takes APPEND for its open
+assignment, and APPEND_SUM when the spine's outermost `+` is the last
+instruction of a plain assignment's value and its root is the first read
+of that value, of the same `let`. The template is a bracket over no node
+before it, which the lane does not anchor (docs/matcher.md, 12.7): the
+compiler finds it in its own code, a `CONSTANT ""` and a `LOCAL s` at the
+value's start and a `CONCAT` at its end. Then, in each case, it checks
+`binding.reads` and changes the read's opcode, at `ASSIGN_END`, before the
+operator and the store are emitted.
 
 ## delete
 
@@ -471,6 +532,12 @@ does not reallocate each time:
   arguments** (`o.a.push(o.b.pop())`): refused, even where the two paths
   part, as telling them apart needs the keys' values.
 - **`sort()` without a compare function**: faults, as `toSorted()` does.
+- **Appending, other forms**: `s = e + s` (a prepend), `s += e` where `e`
+  reads `s`, `s = s + e` of a `const` or a parameter (not assignable), a
+  property (`o.s += e`, whose value its object also holds), keep the
+  copy. A move at any assignment whose value
+  reads its `let` once would be as safe (the store comes after the whole
+  value); the rules name the three forms that build strings.
 
 ## Rolling it back
 
@@ -564,6 +631,19 @@ Step 3, `delete`:
 | `src/vm.c` | `path_into.mode` and `path_walk.mode` (restore `bool store`), and the delete messages in `path_container`; `SJS_PATH_DELETE` in `path_op` and `path_delete` before it |
 | `tests/api_test.c` | `DELETE` in `event_names`; the `test_mutation_delete_*` functions |
 | `bench/bench.c` | `eval.object.delete-reduce`, `eval.object.delete-reduce.last` |
+
+Appending to a let:
+
+| File | What is tagged |
+|---|---|
+| `src/shapes.rules` | `op: operator` on the `ASSIGN` event (restore it without); `APPEND`, `APPEND_SUM` and `summed` (`mise run shapes` rewrites `src/shapes.h` and `src/shapes_table.h`) |
+| `src/compiler.c` | the header's appends; `binding.reads`, counted in `read_name`; `construct.append` and `.reads`, and `k.node` and `k.reads` in `assign_begin`; `c->sum` and its start in `sjs_compiler_init`; `append_take` to `append_move`, and its line in `assign_end`; the two lines of `on_rewrite` |
+| `tests/matcher_test.c` | the appends' reports; `APPEND_SUM` in the reports of `a + ...` (restore: none) |
+| `tests/api_test.c` | `test_mutation_append_memory` |
+| `bench/bench.c` | `eval.string.append-let` |
+
+`STRING_APPEND`, which the appends rely on to be linear, is not mutation
+and stays (below).
 
 Methods through a path:
 

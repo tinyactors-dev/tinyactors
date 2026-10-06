@@ -3309,3 +3309,273 @@ export const f = () => { state.xs.push(3); return state; };
 (() => { const o = {h: {fill: x => x}}; o.h.fill(1).reverse(); return o; })()
 --- fault an array or a set
 
+
+# Appending to a let (docs/mutation.md, "Appending to a let"): s += e,
+# s = s + e1 + e2 and s = `${s}...` on a let the function owns move the
+# variable's value to +, which extends a string nothing else holds in
+# place; + keeps JavaScript's meaning, operator by operator.
+=== += of a string
+(() => { let s = "a"; s += "b"; s += "c"; return s; })()
+--- value
+"abc"
+
+=== += of every kind of primitive onto a string
+(() => { let s = ""; s += 1; s += true; s += null; s += undefined; s += -0; s += 1.5e-7; s += "é"; return s; })()
+--- value
+"1truenullundefined01.5e-7é"
+
+=== += of numbers adds
+(() => { let n = 1; n += 2; n += 0.5; return n; })()
+--- value
+3.5
+
+=== += of a string onto a number joins
+(() => { let n = 1; n += 2; n += "x"; n += 3; return n; })()
+--- value
+"3x3"
+
+=== += of a boolean onto a number faults
+(() => { let n = 1; n += true; return n; })()
+--- fault adds two numbers
+
+=== += of an object onto a string faults
+(() => { let s = "a"; s += {}; return s; })()
+--- fault adds two numbers
+
+=== += of an array onto a string faults
+(() => { let s = "a"; s += [1]; return s; })()
+--- fault adds two numbers
+
+=== += onto an array faults
+(() => { let s = [1]; s += "a"; return s; })()
+--- fault adds two numbers
+
+=== += onto undefined
+(() => { let s; s += "a"; return s; })()
+--- value
+"undefineda"
+
+=== += of the variable itself
+(() => { let s = "ab"; s += s; s += s; return s; })()
+--- value
+"abababab"
+
+=== += of the variable's length
+(() => { let s = "ab"; s += s.length; return s; })()
+--- value
+"ab2"
+
+=== += of a call that reads the variable
+(() => { let s = "ab"; const f = t => t + "!"; s += f(s); return s; })()
+--- value
+"abab!"
+
+=== += in a block and a branch
+((c) => { let s = "a"; if (c) { s += "b"; } else { s += "c"; } { s += "d"; } return s; })(true)
+--- value
+"abd"
+
+=== += after the value was kept by a const
+(() => { let s = "ab"; const t = s; s += "x"; return [s, t]; })()
+--- value
+["abx","ab"]
+
+=== += after the value was kept by a const, twice
+(() => { let s = "ab"; const t = s; s += "x"; const u = s; s += "y"; return [s, t, u]; })()
+--- value
+["abxy","ab","abx"]
+
+=== += after the value was kept in an array
+(() => { let s = "ab"; const xs = [s]; s += "x"; return [s, xs]; })()
+--- value
+["abx",["ab"]]
+
+=== += after the value became an object's key
+(() => { let s = "k"; const o = {[s]: 1}; s += "x"; return [s, o, o.k]; })()
+--- value
+["kx",{"k":1},1]
+
+=== += after the value became a set's member
+(() => { let s = "k"; const m = new Set([s]); s += "x"; return [s, m, m.has("k"), m.has("kx")]; })()
+--- value
+["kx",new Set(["k"]),true,false]
+
+=== += after the value was passed to a function that keeps it
+(() => { let s = "ab"; const keep = t => [t]; const kept = keep(s); s += "x"; return [s, kept]; })()
+--- value
+["abx",["ab"]]
+
+=== += of a parameter's value, which the caller holds
+((a) => { let s = a; s += "x"; return [s, a]; })("ab")
+--- value
+["abx","ab"]
+
+=== += onto a string constant
+(() => { const f = () => { let s = "k"; s += "x"; return s; }; return [f(), f(), "k"]; })()
+--- value
+["kx","kx","k"]
+
+=== += then the UTF-16 length and indexing
+(() => { let s = "a"; s += "é"; s += "😀"; s += "\u{10FFFF}"; s += "z"; return [s, s.length, s[0], s[1], s[6], s.slice(2, 4), s.indexOf("z"), s.endsWith("z")]; })()
+--- value
+["aé😀􏿿z",7,"a","é","z","😀",6,true]
+
+=== += then an array index
+(() => { let s = "1"; s += "2"; const xs = Array.from({length: 13}, (_, i) => i * 2); const a = xs[s]; s += "x"; return [a, xs[s], {[s]: 1}]; })()
+--- value
+[24,undefined,{"12x":1}]
+
+=== += then a method name
+(() => { let s = "pu"; s += "sh"; return [s, {[s]: 1}[s], s === "push"]; })()
+--- value
+["push",1,true]
+
+=== += of a string in reduce, through a let
+["a", "b", "c"].reduce((acc, x) => { let s = acc; s += x; s += ","; return s; }, "")
+--- value
+"a,b,c,"
+
+=== += of numbers in reduce, through a let
+[1, 2, 3].reduce((acc, x) => { let s = acc; s += x; return s; }, 10)
+--- value
+16
+
+=== += of a key in reduce, through a let
+[{id: "a"}, {id: 2}].reduce((acc, r) => { let s = acc; s += r.id; s += "|"; return s; }, "")
+--- value
+"a|2|"
+
+=== a long string by += in reduce
+Array.from({length: 2000}, (_, i) => i % 7).reduce((acc, x) => { let s = acc; s += x; return s; }, "").length
+--- value
+2000
+
+# s = s + e1 + e2: each + in turn, with its own types.
+=== s = s + e of a string
+(() => { let s = "a"; s = s + "b"; s = s + 1 + 2; return s; })()
+--- value
+"ab12"
+
+=== s = s + e1 + e2 of a number adds, then joins
+(() => { let s = 1; s = s + 1 + 2; s = s + 1 + "x" + 2; return s; })()
+--- value
+"5x2"
+
+=== s = s + e of every kind of primitive
+(() => { let s = ""; s = s + 1 + true + null + undefined + -0 + "é"; return s; })()
+--- value
+"1truenullundefined0é"
+
+=== s = s + e1 + e2 of a boolean onto a number faults
+(() => { let s = 1; s = s + 1 + false; return s; })()
+--- fault adds two numbers
+
+=== s = s + e of an object faults
+(() => { let s = "a"; s = s + "b" + {}; return s; })()
+--- fault adds two numbers
+
+=== s = s + e that reads the variable again
+(() => { let s = "ab"; s = s + "," + s; s = s + s.length; return s; })()
+--- value
+"ab,ab5"
+
+=== s = s + (e1 + e2)
+(() => { let s = 1; s = s + (1 + "x"); let t = "a"; t = t + (1 + 2); return [s, t]; })()
+--- value
+["11x","a3"]
+
+=== s = e + s
+(() => { let s = "b"; s = "a" + s; s = 1 + s + 2; return s; })()
+--- value
+"1ab2"
+
+=== s = s * 2 + e
+(() => { let s = 3; s = s * 2 + 1; return s; })()
+--- value
+7
+
+=== s = t + e, of another variable
+(() => { let s = "a"; const t = "b"; s = t + "c"; return [s, t]; })()
+--- value
+["bc","b"]
+
+=== s = s + e after the value was kept by a const
+(() => { let s = "ab"; const t = s; s = s + "x" + "y"; return [s, t]; })()
+--- value
+["abxy","ab"]
+
+=== s = s + e after the value became an object's key and a set's member
+(() => { let s = "k"; const o = {[s]: 1}; const m = new Set([s]); s = s + "x" + "y"; return [s, o, [...m]]; })()
+--- value
+["kxy",{"k":1},["k"]]
+
+=== s = s + e in reduce, through a let
+["a", "b"].reduce((acc, x) => { let s = acc; s = s + x + ";"; return s; }, ">")
+--- value
+">a;b;"
+
+=== s = s + e onto non-ASCII text
+(() => { let s = "é"; s = s + "😀" + "a"; return [s, s.length, s[0], s[3]]; })()
+--- value
+["é😀a",4,"é","a"]
+
+# s = `${s}...`: the template's parts convert as String does.
+=== s = `${s}...` of a string
+(() => { let s = "a"; s = `${s}b${1}`; s = `${s}`; s = `${s}-${true}-${null}-${undefined}-${-0}-${"é"}`; return s; })()
+--- value
+"ab1-true-null-undefined-0-é"
+
+=== s = `${s}...` of a number
+(() => { let s = 5; s = `${s}x`; return s; })()
+--- value
+"5x"
+
+=== s = `${s}...` of a boolean, null and undefined
+(() => { let a = true; a = `${a}!`; let b = null; b = `${b}!`; let c; c = `${c}!`; return [a, b, c]; })()
+--- value
+["true!","null!","undefined!"]
+
+=== s = `${s}...` of an object faults
+(() => { let s = {}; s = `${s}x`; return s; })()
+--- fault only primitives
+
+=== s = `${s}...` with an object in a later part faults
+(() => { let s = "a"; s = `${s}x${[1]}`; return s; })()
+--- fault only primitives
+
+=== s = `...${s}` with a head
+(() => { let s = "a"; s = `<${s}>`; return s; })()
+--- value
+"<a>"
+
+=== s = `${s}${s}`
+(() => { let s = "ab"; s = `${s}${s}`; return s; })()
+--- value
+"abab"
+
+=== s = `${s}...` after the value was kept by a const
+(() => { let s = "ab"; const t = s; s = `${s}x`; return [s, t]; })()
+--- value
+["abx","ab"]
+
+=== s = `${s}...` in reduce, through a let
+["a", "b"].reduce((acc, x) => { let s = acc; s = `${s}${x},`; return s; }, "")
+--- value
+"a,b,"
+
+=== s = `${s}...` onto surrogate pairs
+(() => { let s = "😀"; s = `${s}é${"\u{10FFFF}"}`; return [s, s.length, s.slice(0, 2), s[2]]; })()
+--- value
+["😀é􏿿",5,"😀","é"]
+
+# Not appends: other operators and targets are as they were.
+=== -= and *= of a let
+(() => { let s = 10; s -= 1; s *= 2; return s; })()
+--- value
+18
+
+=== += of a property
+(() => { const o = {s: "a"}; o.s += "b"; o.s = o.s + "c"; return o; })()
+--- value
+{"s":"abc"}
+

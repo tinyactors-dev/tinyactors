@@ -228,9 +228,9 @@ static void test_reports(void) {
                    "ELEMENT_COMPARE#2@1(STRICT_EQUAL, true) ELEMENT_COMPARE#7@18(STRICT_NOT_EQUAL, false) "
                    "KEY_COMPARE#12@36(k, STRICT_EQUAL, null) ELEMENT_COMPARE#18@55(LESS_EQUAL, 1e+21)");
     /* Sums: the flag says the element is the left operand. */
-    expect_reports("(a, x) => a + x", SJS_GOAL_EXPRESSION, "SUM#1@0(false)");
-    expect_reports("(t, n) => { return n + t; }", SJS_GOAL_EXPRESSION, "SUM#1@0(true)");
-    expect_reports("(a, r) => a + r.kwh", SJS_GOAL_EXPRESSION, "SUM_KEY#1@0(kwh, false)");
+    expect_reports("(a, x) => a + x", SJS_GOAL_EXPRESSION, "APPEND_SUM#5@10 SUM#1@0(false)"); /* MUTATION: APPEND_SUM, the rewrite's */
+    expect_reports("(t, n) => { return n + t; }", SJS_GOAL_EXPRESSION, "APPEND_SUM#6@19 SUM#1@0(true)");
+    expect_reports("(a, r) => a + r.kwh", SJS_GOAL_EXPRESSION, "APPEND_SUM#5@10 SUM_KEY#1@0(kwh, false)");
     expect_reports("(a, r) => { return r.kwh + a; }", SJS_GOAL_EXPRESSION, "SUM_KEY#1@0(kwh, true)");
     /* An arrow's node and start in a call: the call is node 3, the arrow 4. */
     expect_reports("[].map(x => x.k)", SJS_GOAL_EXPRESSION, "PLUCK#4@7(k)");
@@ -256,13 +256,13 @@ static void test_reports(void) {
     expect_reports("(x, i) => x === 1", SJS_GOAL_EXPRESSION, "");
     expect_reports("x => 1 === 2", SJS_GOAL_EXPRESSION, "");
     expect_reports("x => x === x", SJS_GOAL_EXPRESSION, "");
-    expect_reports("(a, x) => a + a", SJS_GOAL_EXPRESSION, "");
-    expect_reports("(a, x) => a + x + 0", SJS_GOAL_EXPRESSION, "");
-    expect_reports("(a, x, i) => a + x", SJS_GOAL_EXPRESSION, "");
-    expect_reports("(a, x) => a + x.k.j", SJS_GOAL_EXPRESSION, "");
-    expect_reports("(a, x) => a + x[0]", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => a + a", SJS_GOAL_EXPRESSION, "APPEND_SUM#5@10"); /* MUTATION: no shape, APPEND_SUM's spine */
+    expect_reports("(a, x) => a + x + 0", SJS_GOAL_EXPRESSION, "APPEND_SUM#5@10 APPEND_SUM#7@10");
+    expect_reports("(a, x, i) => a + x", SJS_GOAL_EXPRESSION, "APPEND_SUM#6@13");
+    expect_reports("(a, x) => a + x.k.j", SJS_GOAL_EXPRESSION, "APPEND_SUM#5@10");
+    expect_reports("(a, x) => a + x[0]", SJS_GOAL_EXPRESSION, "APPEND_SUM#5@10");
     expect_reports("(a, x) => a.k + x", SJS_GOAL_EXPRESSION, "");
-    expect_reports("(a, ...x) => a + x", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, ...x) => a + x", SJS_GOAL_EXPRESSION, "APPEND_SUM#5@13");
     /* MUTATION: rewrites, in the program's dead region and in an arrow;
      * each names its call's node, and starts where the path's root does. */
     expect_reports("(o => o.items.push(1))", SJS_GOAL_EXPRESSION, "MUTATE_PATH#6@6");
@@ -276,9 +276,18 @@ static void test_reports(void) {
     expect_reports("(o => o?.items.push(1))", SJS_GOAL_EXPRESSION, "");
     expect_reports("(o => o.items[\"push\"](1))", SJS_GOAL_EXPRESSION, "");
     expect_reports("(f => f().items.push(1))", SJS_GOAL_EXPRESSION, "");
-    expect_reports("((a, b) => (a + b).items.push(1))", SJS_GOAL_EXPRESSION, "");
+    expect_reports("((a, b) => (a + b).items.push(1))", SJS_GOAL_EXPRESSION, "APPEND_SUM#5@12");
     /* push gives a number: the second call is not one. */
     expect_reports("(o => o.items.push(1).push(2))", SJS_GOAL_EXPRESSION, "MUTATE_PATH#6@6");
+    /* MUTATION: appending to a let. APPEND names the assignment, `+=` on a
+     * name; APPEND_SUM each + of a spine from a name, which the compiler
+     * takes when its outermost is the value of an assignment to the name. */
+    expect_reports("x => { let s = x; s += 1; return s; }", SJS_GOAL_EXPRESSION, "APPEND#8@18");
+    expect_reports("x => { let s = x; s = s + 1 + x; return s; }", SJS_GOAL_EXPRESSION, "APPEND_SUM#10@22 APPEND_SUM#12@22");
+    expect_reports("(s => s + `${s}`)", SJS_GOAL_EXPRESSION, "APPEND_SUM#4@6");
+    /* Not an append: another operator, a path, or + not from a name. */
+    expect_reports("x => { let s = x; s -= 1; s.k += 1; s = 1 + s; s = s.k + s; return s; }", SJS_GOAL_EXPRESSION, "");
+    expect_reports("x => { let s = x; s = `${s}a`; return s; }", SJS_GOAL_EXPRESSION, "");
 }
 
 /* ------------------------------------------------------------------------

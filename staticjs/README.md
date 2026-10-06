@@ -201,7 +201,10 @@ of the function (`let n = 0; n += x;`), which no arrow function may capture;
 and `delete` of a property on such a path (`delete acc[k]`), which faults
 on an array, as it would leave a hole; and a method that changes its
 receiver called on such a path (`acc.byKey[x.k].push(x)`,
-`o.a.sort(f).reverse()`).
+`o.a.sort(f).reverse()`). Appending to a `let` (`s += x`, `s = s + x + y`,
+`` s = `${s}${x}` ``) moves its value to the `+`, which extends a string
+nothing else holds, so building a string with them is linear
+(docs/mutation.md, "Appending to a let").
 The compiler
 refuses any other receiver or target it can see is shared, and the
 evaluator faults when the variable's value, or a container on the path,
