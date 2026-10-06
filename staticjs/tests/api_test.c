@@ -2035,6 +2035,9 @@ static void test_mutation_shrink_array(void) {
     CHECK(full > 4000 * 16);
     CHECK(emptied < full / 50);
     CHECK(emptied <= small + 512);
+    snprintf(source, sizeof source, "%s[xs.splice(5, 3990).length, xs]; })()", build);
+    size_t spliced = live_of(context, source);
+    CHECK(spliced < full / 50);
     long alternations[2];
     long plain[2];
     static const int counts[2] = { 10, 2000 };
@@ -2053,6 +2056,39 @@ static void test_mutation_shrink_array(void) {
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
     CHECK(c.live == 0);
+}
+
+/* splice costs one unit per element it removes, moves or adds. */
+static void test_mutation_splice_fuel(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    char source[256];
+    uint64_t fuel[3];
+    static const char *const calls[3] = { "xs.splice(990, 10)", "xs.splice(500, 10)", "xs.splice(500, 10, 1, 2)" };
+    for (int i = 0; i < 3; i++) {
+        snprintf(source, sizeof source, "(() => { const xs = Array.from({length: 1000}, (_, i) => i); return %s.length; })()", calls[i]);
+        fuel[i] = fuel_of(context, source);
+    }
+    /* 490 more elements move down. */
+    CHECK(fuel[1] - fuel[0] == 490);
+    /* Two arguments more to push, two elements more to add. */
+    CHECK(fuel[2] - fuel[1] == 4);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* Every allocation of a program that splices, growing and shrinking an
+ * array in place, fails in turn. */
+static void test_mutation_splice_out_of_memory(void) {
+    test_out_of_memory("(() => {\n"
+                       "  const xs = Array.from({length: 40}, (_, i) => [i]);\n"
+                       "  const a = xs.splice(2, 30);\n"
+                       "  const b = xs.splice(1, 1, \"x\", \"y\", \"z\", ...a.slice(0, 5));\n"
+                       "  const c = xs.splice(-2);\n"
+                       "  return [xs, a.length, b, c];\n"
+                       "})()",
+                       SJS_GOAL_EXPRESSION);
 }
 
 /* A set that delete takes most members from, or clear empties, gives its
@@ -2171,6 +2207,8 @@ int main(int argc, char **argv) {
     test_mutation_shrink_array();
     test_mutation_set_removal();
     test_mutation_set_removal_out_of_memory();
+    test_mutation_splice_fuel();
+    test_mutation_splice_out_of_memory();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */

@@ -127,7 +127,7 @@ static const sjs_name NAMES[] = {
     NAME("small", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("some", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_SOME, 0, 0),
     NAME_MUTATION("sort", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_SORT), /* MUTATION */
-    NAME("splice", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_MUTATION("splice", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_SPLICE), /* MUTATION */
     NAME("split", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_SPLIT, 0),
     NAME("startsWith", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_STARTS_WITH, 0),
     NAME("strike", SJS_NAME_ON_STRING, 0, 0, 0),
@@ -647,6 +647,37 @@ static sjs_array *take_receiver(sjs_leaf_call *call) {
     return SJS_AS_ARRAY(call->receiver);
 }
 
+/* toSpliced's and splice's arguments (start, skipCount, ...items), over
+ * `length` elements: remove `skip` at `start` and insert the `added` items
+ * after them. start and skipCount are relative and clamped as slice takes
+ * them; with one argument everything from `start` goes, with none nothing.
+ * Inlined, so that toSpliced compiles as it did when it read them itself. */
+typedef struct {
+    uint32_t length;
+    uint32_t start;
+    uint32_t skip;
+    uint32_t added;
+} splice_range;
+
+__attribute__((always_inline)) static inline sjs_result splice_arguments(sjs_vm *vm, const sjs_leaf_call *call, splice_range *span) {
+    uint32_t n = span->length;
+    double rel = 0;
+    if (call->count > 0 && to_integer(vm, arg(call, 0), &rel) != SJS_OK) return SJS_ERR_PROGRAM;
+    uint32_t start = relative(rel, n);
+    uint32_t skip = n - start;
+    if (call->count == 0) {
+        skip = 0;
+    } else if (call->count > 1) {
+        double count;
+        if (to_integer(vm, arg(call, 1), &count) != SJS_OK) return SJS_ERR_PROGRAM;
+        skip = count <= 0 ? 0 : (count > (double)(n - start) ? n - start : (uint32_t)count);
+    }
+    span->start = start;
+    span->skip = skip;
+    span->added = call->count > 2 ? call->count - 2 : 0;
+    return SJS_OK;
+}
+
 static sjs_result array_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     const sjs_array *a = SJS_AS_ARRAY(call->receiver);
     uint32_t n = a->length;
@@ -764,20 +795,11 @@ static sjs_result array_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
         return array_slice(vm, call, (range){ relative(start, n), relative(end, n) });
     }
     case SJS_METHOD_ARRAY_TO_SPLICED: {
-        /* Remove `skip` elements at `start` and insert the rest of the arguments.
-         * With one argument everything from `start` goes; with none, nothing. */
-        double rel = 0;
-        if (call->count > 0 && to_integer(vm, arg(call, 0), &rel) != SJS_OK) return SJS_ERR_PROGRAM;
-        uint32_t start = relative(rel, n);
-        uint32_t skip = n - start;
-        if (call->count == 0) {
-            skip = 0;
-        } else if (call->count > 1) {
-            double count;
-            if (to_integer(vm, arg(call, 1), &count) != SJS_OK) return SJS_ERR_PROGRAM;
-            skip = count <= 0 ? 0 : (count > (double)(n - start) ? n - start : (uint32_t)count);
-        }
-        uint32_t added = call->count > 2 ? call->count - 2 : 0;
+        splice_range span = { n, 0, 0, 0 };
+        if (splice_arguments(vm, call, &span) != SJS_OK) return SJS_ERR_PROGRAM;
+        uint32_t start = span.start;
+        uint32_t skip = span.skip;
+        uint32_t added = span.added;
         uint32_t tail = n - start - skip;
         sjs_array *out;
         if (takes_receiver(call)) {
@@ -1916,6 +1938,42 @@ static sjs_result array_fill(sjs_vm *vm, sjs_leaf_call *call) {
     return SJS_OK;
 }
 
+/* splice(start, skipCount, ...items): toSpliced's arguments
+ * (splice_arguments), done in place; the elements removed are the result,
+ * a new array that their references move to. The array grows first, so
+ * that one it cannot grow is left as it was, and shrinks when it has
+ * become mostly empty. One unit per element removed, moved or added. */
+static sjs_result array_splice(sjs_vm *vm, sjs_leaf_call *call) {
+    uint32_t n = SJS_AS_ARRAY(*call->receiver_slot)->length;
+    splice_range span = { n, 0, 0, 0 };
+    if (splice_arguments(vm, call, &span) != SJS_OK) return SJS_ERR_PROGRAM;
+    uint32_t start = span.start;
+    uint32_t skip = span.skip;
+    uint32_t added = span.added;
+    uint32_t tail = n - start - skip;
+    sjs_array *removed;
+    if (new_array(vm, skip, &removed) != SJS_OK) return SJS_ERR_PROGRAM;
+    call->result = sjs_heap_value(SJS_ARRAY, &removed->h);
+    if (added > skip && receiver_grow(vm, call, added - skip) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_array *a = SJS_AS_ARRAY(*call->receiver_slot);
+    sjs_copy(removed->items, &a->items[start], (size_t)skip * sizeof(sjs_value));
+    removed->length = skip;
+    if (added < skip) {
+        for (uint32_t i = 0; i < tail; i++) a->items[start + added + i] = a->items[start + skip + i];
+    } else if (added > skip) {
+        for (uint32_t i = tail; i-- > 0;) a->items[start + added + i] = a->items[start + skip + i];
+    }
+    for (uint32_t i = 0; i < added; i++) {
+        sjs_ref(call->args[2 + i]);
+        a->items[start + i] = call->args[2 + i];
+    }
+    a->length = n - skip + added;
+    call->cost = (uint64_t)skip + tail + added;
+    sjs_array_shrink(vm->context, &a);
+    call->receiver_slot->as.heap = &a->h;
+    return SJS_OK;
+}
+
 /* delete(value): whether the set had it, which it no longer has; an
  * object is never a member, so it gives false. clear(): undefined, one
  * unit for each member released. The set shrinks as it empties. */
@@ -1977,6 +2035,8 @@ sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
     case SJS_METHOD_SET_CLEAR:
     case SJS_METHOD_SET_DELETE:
         return set_remove(vm, id, call);
+    case SJS_METHOD_ARRAY_SPLICE:
+        return array_splice(vm, call);
     default: { /* SET_ADD: appends, as a set keeps insertion order */
         sjs_value x = arg(call, 0);
         if (!sjs_is_primitive(x)) return sjs_vm_fault(vm, "staticjs sets hold primitives only");
