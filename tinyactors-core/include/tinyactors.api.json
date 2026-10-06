@@ -146,6 +146,13 @@
       "value": 4294967295
     },
     {
+      "name": "TA_EVENT_NAME_TEXT",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 2147483648
+    },
+    {
       "name": "TA_EXPR_ID_NONE",
       "type": {
         "type": "ta_expr_id"
@@ -179,6 +186,13 @@
         "builtin": "uint32_t"
       },
       "value": 4294967295
+    },
+    {
+      "name": "TA_RUN_NAMES_MIN_BYTES",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 65536
     },
     {
       "name": "TA_SPEC_INDEX_NONE",
@@ -1659,7 +1673,7 @@
           "shape": "single",
           "direction": "in",
           "optional": true,
-          "doc": "The external event of the macrostep in progress, or null: read from the pool envelope of the input it took, which holds it until the input completes. Borrowed, and valid until the next inspection or run reads another input's event, or the input completes."
+          "doc": "The external event of the macrostep in progress, or null: read from the pool envelope of the input it took, which holds it until the input completes. Borrowed, and valid until the next inspection or run reads another input's event, or the input completes; its name, when core keeps it only as text, is read with ta_event_name_format() in that time (ta_event)."
         },
         {
           "name": "internal_events",
@@ -10637,7 +10651,7 @@
     },
     "ta_fault": {
       "kind": "struct",
-      "doc": "invoke_id is TA_INVOKE_ID_NONE unless an invoked child generated the event. `name` names the event in an event core hands a host; the host reads its text with ta_event_name_format() while the event is valid (a run-time name is kept by the input that carries it, ADR 0100). A host passes a name as text (ta_actor_deliver_params.name) and leaves `name` 0.\n\nA receiver of a fault owns its data; the message is borrowed.",
+      "doc": "invoke_id is TA_INVOKE_ID_NONE unless an invoked child generated the event. `name` names the event in an event core hands a host. Core interns only authored names (ADR 0100): a run-time name is kept as text by the input that carries it, and `name` is then a handle to that text, which the host reads with ta_event_name_format() only while the event is valid: during the call that hands it over (an invoker's forward), or until the next ta_run() or inspection (an inspection's current_event). A host that keeps the event longer copies the text first. A TAKEN outcome gives the name as text (ta_input_outcome.name). A host passes a name as text (ta_actor_deliver_params.name) and leaves `name` 0.\n\nA receiver of a fault owns its data; the message is borrowed.",
       "fields": [
         {
           "name": "detail",
@@ -10918,10 +10932,30 @@
             "function": "ta_event_release",
             "flag": "has_event"
           }
+        },
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "With `has_event`: the event's name as text, in the caller's ta_run_params.names buffer, valid until the next ta_run() with that buffer; `event.name` is 0 when core keeps the name only as text (ADR 0100). Otherwise empty."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
+          "size": 112,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "code": 4,
+            "actor": 8,
+            "correlation": 16,
+            "has_event": 24,
+            "event": 32,
+            "name": 96
+          }
+        },
+        "wasm32-unknown-unknown": {
           "size": 96,
           "align": 8,
           "offsets": {
@@ -10930,19 +10964,8 @@
             "actor": 8,
             "correlation": 16,
             "has_event": 24,
-            "event": 32
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 88,
-          "align": 8,
-          "offsets": {
-            "kind": 0,
-            "code": 4,
-            "actor": 8,
-            "correlation": 16,
-            "has_event": 24,
-            "event": 32
+            "event": 32,
+            "name": 88
           }
         }
       }
@@ -11565,6 +11588,7 @@
     },
     "ta_invoker_forward_params": {
       "kind": "struct",
+      "doc": "`event` is borrowed for the call: an invoker that keeps it retains it and reads its name, when core keeps it only as text, during the call (ta_event).",
       "fields": [
         {
           "name": "service_handle",
@@ -13533,7 +13557,7 @@
     },
     "ta_run_params": {
       "kind": "struct",
-      "doc": "One call of ta_run(), with one macrostep slot (ADR 0103): it takes runnable inputs in the order they were admitted (ADR 0099), runs each one's macrostep to its end, and reports each input's outcome.\n\n`budget` is the number of microsteps the call may run, over all its inputs (ADR 0009); at least 1. `action_budget`, when not zero, is the number of units of executable content it may run before it pauses inside a microstep (ADR 0061): each action of a block, an <if > and a <foreach > included, and each <foreach > iteration. Either one reached answers TA_RUN_PAUSED inside a macrostep, which the next call continues before it takes anything else, or TA_RUN_MORE between inputs. `pause_at_microstep_start`, when true, also pauses at the start of every microstep this call begins (ADR 0086): after its transitions are selected, before its first unit and before any state is exited. A call that continues from such a start passes it. A bootstrap's microstep never pauses there.\n\n`outcomes` is the caller's buffer of `outcome_capacity` outcomes, which the call fills from the start and counts in `outcome_count`; it has room for at least what one input reports (one outcome, two with `report_taken`). The call takes an input only while the buffer has room for all it can report about it, so a full buffer answers TA_RUN_MORE and loses nothing. `report_taken` adds a TAKEN outcome for every input as its macrostep begins, for a host that records inputs when they are taken.\n\n`session`, when not 0, is the debugging exception (ADR 0103): the call runs only that session's inputs, the first one queued for it first, whatever arrived before, and leaves every other session's as they are, including a macrostep paused in the slot. Replay and a debugger use it to run one session; production hosts pass 0.",
+      "doc": "One call of ta_run(), with one macrostep slot (ADR 0103): it takes runnable inputs in the order they were admitted (ADR 0099), runs each one's macrostep to its end, and reports each input's outcome.\n\n`budget` is the number of microsteps the call may run, over all its inputs (ADR 0009); at least 1. `action_budget`, when not zero, is the number of units of executable content it may run before it pauses inside a microstep (ADR 0061): each action of a block, an <if > and a <foreach > included, and each <foreach > iteration. Either one reached answers TA_RUN_PAUSED inside a macrostep, which the next call continues before it takes anything else, or TA_RUN_MORE between inputs. `pause_at_microstep_start`, when true, also pauses at the start of every microstep this call begins (ADR 0086): after its transitions are selected, before its first unit and before any state is exited. A call that continues from such a start passes it. A bootstrap's microstep never pauses there.\n\n`outcomes` is the caller's buffer of `outcome_capacity` outcomes, which the call fills from the start and counts in `outcome_count`; it has room for at least what one input reports (one outcome, two with `report_taken`). The call takes an input only while the buffer has room for all it can report about it, so a full buffer answers TA_RUN_MORE and loses nothing. `report_taken` adds a TAKEN outcome for every input as its macrostep begins, for a host that records inputs when they are taken. It needs `names`, a buffer of `name_capacity` bytes, at least TA_RUN_NAMES_MIN_BYTES, for the names of the TAKEN events (ta_input_outcome.name), which the call fills from the start and counts in `name_used`. The call takes an input only while the buffer has room for its name, so a full buffer answers TA_RUN_MORE and loses nothing.\n\n`session`, when not 0, is the debugging exception (ADR 0103): the call runs only that session's inputs, the first one queued for it first, whatever arrived before, and leaves every other session's as they are, including a macrostep paused in the slot. Replay and a debugger use it to run one session; production hosts pass 0.",
       "fields": [
         {
           "name": "budget",
@@ -13576,7 +13600,8 @@
           "needed": "outcome_count",
           "shape": "buffer",
           "direction": "out",
-          "valid_on": "success"
+          "valid_on": "success",
+          "lifetime": "run"
         },
         {
           "name": "outcome_capacity",
@@ -13607,11 +13632,45 @@
           "shape": "single",
           "direction": "out",
           "valid_on": "success"
+        },
+        {
+          "name": "names",
+          "type": {
+            "pointer": {
+              "builtin": "char"
+            }
+          },
+          "capacity": "name_capacity",
+          "needed": "name_used",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "name_capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "names"
+        },
+        {
+          "name": "name_used",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success",
+          "needed_of": "names"
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 56,
+          "size": 80,
           "align": 8,
           "offsets": {
             "budget": 0,
@@ -13622,11 +13681,14 @@
             "outcomes": 24,
             "outcome_capacity": 32,
             "outcome_count": 40,
-            "status": 48
+            "status": 48,
+            "names": 56,
+            "name_capacity": 64,
+            "name_used": 72
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 40,
+          "size": 56,
           "align": 8,
           "offsets": {
             "budget": 0,
@@ -13637,7 +13699,10 @@
             "outcomes": 24,
             "outcome_capacity": 28,
             "outcome_count": 32,
-            "status": 36
+            "status": 36,
+            "names": 40,
+            "name_capacity": 44,
+            "name_used": 48
           }
         }
       }
@@ -19516,48 +19581,6 @@
       ]
     },
     {
-      "name": "ta_send_id_intern",
-      "doc": "Interns a send ID's text and answers its ID: ta_send_id_parse() for text this system may never have seen, such as a literal ID a log written by another process names (kernel ADR 0002). TA_ERR_INVALID for empty text; TA_ERR_NOMEM when a literal cannot be interned.",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "type": "ta_result"
-        },
-        "success": "TA_OK"
-      },
-      "params": [
-        {
-          "name": "system",
-          "type": {
-            "pointer": {
-              "type": "ta_system"
-            }
-          },
-          "shape": "handle",
-          "direction": "in"
-        },
-        {
-          "name": "text",
-          "type": {
-            "type": "ta_str"
-          }
-        },
-        {
-          "name": "out",
-          "type": {
-            "pointer": {
-              "type": "ta_send_id"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "success"
-        }
-      ]
-    },
-    {
       "name": "ta_send_id_format",
       "doc": "The text of a send ID, following the buffer convention: `*needed` receives the size including the terminating NUL, and a too-small buffer yields TA_ERR_NOMEM without writing, so a zero capacity is a size query. TA_ERR_NOT_FOUND when the send has no ID.",
       "public": true,
@@ -23180,8 +23203,8 @@
       ]
     },
     {
-      "name": "ta_system_intern_invoke_id",
-      "doc": "The invocation ID `text` names, interning it: the inverse of ta_system_invoke_id_text(), for a host that restores an invocation a log written by another process names (kernel ADR 0002). TA_ERR_INVALID for empty text; TA_ERR_NOMEM when it cannot be interned.",
+      "name": "ta_system_invoke_id_find",
+      "doc": "The invocation ID `text` names: the inverse of ta_system_invoke_id_text(), for a host that replays an event an invoked session sent, which a log written by another process names (kernel ADR 0002). It looks the text up and never interns it (ADR 0100): the replayed parent's invocation issued the ID again before its child's events are replayed. TA_ERR_INVALID for empty text; TA_ERR_NOT_FOUND for an ID this system has not issued.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -23196,7 +23219,8 @@
           "name": "system",
           "type": {
             "pointer": {
-              "type": "ta_system"
+              "type": "ta_system",
+              "const": true
             }
           },
           "shape": "handle",

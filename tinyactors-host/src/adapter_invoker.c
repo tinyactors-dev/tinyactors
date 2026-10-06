@@ -56,7 +56,14 @@ static ta_op_status tah_js_cancel(void *self, uint64_t service, ta_fault *fault)
 static ta_op_status tah_js_forward(void *self, const ta_invoker_forward_params *params) {
     tah_system *system = self;
     tah_effect effect = { .kind = TAH_EFFECT_INVOKE_FORWARD, .service = params->service_handle };
+    /* The event is read after the call: a name core keeps as text is
+     * formatted now, while it is valid, into the kernel's table. */
+    ta_event_name_id name = params->event->name;
+    if (tah_names_adopt(&system->sched.names, system->core, &name) != TA_OK) {
+        return TAH_FAULT(params->fault, TA_ERR_NOMEM, "the invoker could not keep the forwarded event's name");
+    }
     ta_event_retain(params->event, &effect.forwarded);
+    effect.forwarded.name = name;
     if (!tah_system_effect(system, &effect)) {
         return TAH_FAULT(params->fault, TA_ERR_NOMEM, "the invoker could not queue the forwarded event");
     }

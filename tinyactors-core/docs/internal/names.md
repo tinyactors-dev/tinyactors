@@ -34,7 +34,7 @@ Interned when a definition is compiled, or when the system is created:
 | `error.communication.invoke.<id>.<reason>` | the ID (one segment, dots and all) and the host's reason are interned, and the name becomes trie nodes |
 | `#_<invokeid>` targets, the family of a `#_scxml_` session URI | interned as atoms |
 | a named address in a `targetexpr` | a counted handle in the address table (ADR 0065), not an atom |
-| external input | the host interns it (`ta_system_intern_atom`, `ta_event_name_intern`, `ta_send_id_intern`, `ta_system_intern_invoke_id`) before core sees it |
+| external input | the host passes the name as text (`ta_actor_deliver_params.name`), which its envelope keeps; send and invocation IDs are parsed or looked up (`ta_send_id_parse`, `ta_system_invoke_id_find`); a host interns only the names of delayed sends it restores (`ta_event_name_intern`) |
 
 The interned run-time names exist because an event carries its name as a
 trie node (`ta_event.name`), and an invocation ID is an atom: the text has

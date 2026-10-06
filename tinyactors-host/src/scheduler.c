@@ -183,6 +183,7 @@ const char *tah_dead_reason_name(tah_dead_reason reason) {
 void tah_sched_init(tah_sched *sched, ta_allocator allocator, ta_allocator envelopes) {
     *sched = (tah_sched){ .allocator = allocator };
     tah_names_init(&sched->names, allocator, TA_PARAM_DEFAULT_EVENT_NAME_DEPTH);
+    tah_vec_init(&sched->taken_names, allocator, TAH_LAYOUT(char));
     tah_vec_init(&sched->pages, allocator, TAH_LAYOUT(tah_sched_entry *));
     tah_ring_shape shape = { .layout = TAH_LAYOUT(ta_actor_id), .chunk_capacity = TAH_QUEUE_CHUNK };
     tah_ring_init(&sched->held, allocator, shape);
@@ -228,6 +229,7 @@ void tah_sched_discard_mail(tah_sched *sched) {
 
 void tah_sched_destroy(tah_sched *sched) {
     tah_names_destroy(&sched->names);
+    tah_vec_destroy(&sched->taken_names);
     for (uint32_t page = 0; page < sched->pages.count; page += 1) {
         tah_sched_entry **entries = tah_vec_at(&sched->pages, page);
         if (*entries != NULL) {
@@ -1497,9 +1499,14 @@ static void tah_sched_outcome(tah_sched *sched, const tah_turn_params *params, c
         if (index != 0) {
             tah_sched_taken(sched, entry, actor, index);
         } else if (outcome->has_event) {
-            /* Mail between actors, which core queued itself (core ADR 0099). */
+            /* Mail between actors, which core queued itself (core ADR 0099):
+             * its name, given as text, is kept in the kernel's table. */
+            ta_event event = outcome->event;
+            if (outcome->name.len != 0u && tah_names_intern(&sched->names, outcome->name, &event.name) != TA_OK) {
+                event.name = 0u;
+            }
             tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_DELIVERED, .actor = actor,
-                                                       .event = &outcome->event });
+                                                       .event = &event });
         }
         if (entry != NULL && entry->state != TAH_SCHED_QUARANTINED) {
             tah_sched_set_state(sched, entry, TAH_SCHED_RUNNABLE);
@@ -1597,6 +1604,10 @@ static void tah_sched_take_pending_outcomes(tah_sched *sched, const tah_turn_par
  */
 static bool tah_sched_run_core(tah_sched *sched, const tah_turn_params *params) {
     ta_input_outcome outcomes[TAH_SCHED_OUTCOMES];
+    if (tah_vec_reserve(&sched->taken_names, TA_RUN_NAMES_MIN_BYTES) != TA_OK) {
+        /* No room for the names of the inputs core takes: the next turn. */
+        return true;
+    }
     for (uint32_t call = 0; call < params->budgets.resumes && sched->core_work; call += 1u) {
         uint32_t count = 0;
         ta_run_status status = TA_RUN_IDLE;
@@ -1607,7 +1618,9 @@ static bool tah_sched_run_core(tah_sched *sched, const tah_turn_params *params) 
                                                                  .outcomes = outcomes,
                                                                  .outcome_capacity = TAH_SCHED_OUTCOMES,
                                                                  .outcome_count = &count,
-                                                                 .status = &status });
+                                                                 .status = &status,
+                                                                 .names = sched->taken_names.items,
+                                                                 .name_capacity = TA_RUN_NAMES_MIN_BYTES });
         *sched->inside_core = false;
         /* The table is the addon's: core calls never move its pages. */
         for (uint32_t at = 0; at < count; at += 1u) {

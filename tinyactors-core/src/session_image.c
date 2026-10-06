@@ -33,6 +33,11 @@ typedef struct {
     bool has_kept;
     ta_event external_event;
     ta_event kept_event;
+    /* An event's name that core keeps only as text (ADR 0100), copied into
+     * the arena, its event's `name` then 0; empty when the name is
+     * interned. */
+    ta_str external_name;
+    ta_str kept_name;
     ta_trace_parent trace;
     ta_operator_jump *jump;
 } ta_image_events;
@@ -230,6 +235,36 @@ static const ta_operator_jump *ta_image_waiting_jump(const ta_actor *actor) {
     return ta_run_input_jump(system, actor->input);
 }
 
+/* The bytes of the names the actor's events keep only as text. */
+static size_t ta_image_name_bytes(const ta_actor *actor) {
+    const ta_system *system = actor->host_impl.system;
+    size_t total = 0u;
+    if (actor->external != TA_EXTERNAL_NONE) {
+        total += ta_run_input_name(system, ta_run_input_event_of(system, actor->input).name).len;
+    }
+    if (actor->internal != NULL && actor->internal->has_kept) {
+        total += ta_run_input_name(system, actor->internal->kept_event.name).len;
+    }
+    return total;
+}
+
+/* Copies the text of `event`'s name into the arena when core keeps it only
+ * as text, into `*name`, and leaves `event` naming none (ADR 0100). */
+static ta_result ta_image_copy_name(const ta_system *system, ta_arena *arena, ta_event *event, ta_str *name) {
+    ta_str text = ta_run_input_name(system, event->name);
+    if (text.len == 0u) {
+        return TA_OK;
+    }
+    char *copy = ta_arena_alloc(arena, text.len, 1u);
+    if (copy == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_mem_copy(copy, text.ptr, text.len);
+    *name = (ta_str){ .ptr = copy, .len = text.len };
+    event->name = 0u;
+    return TA_OK;
+}
+
 /* What the arena has to hold, so one block usually serves the whole image. */
 static size_t ta_image_measure(const ta_actor *actor) {
     const ta_actor_sparse_state *sparse = actor->sparse;
@@ -243,6 +278,7 @@ static size_t ta_image_measure(const ta_actor *actor) {
     if (actor->internal != NULL) {
         total += (size_t)actor->internal->count * sizeof(ta_queued_event);
     }
+    total += ta_image_name_bytes(actor);
     const ta_operator_jump *jump = ta_image_waiting_jump(actor);
     if (jump != NULL) {
         size_t bytes = 0;
@@ -282,6 +318,12 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     }
     if (result == TA_OK) {
         result = ta_image_copy_origin(system, arena, &image->events.kept_event);
+    }
+    if (result == TA_OK) {
+        result = ta_image_copy_name(system, arena, &image->events.external_event, &image->events.external_name);
+    }
+    if (result == TA_OK) {
+        result = ta_image_copy_name(system, arena, &image->events.kept_event, &image->events.kept_name);
     }
     if (result != TA_OK) {
         return result;
@@ -461,12 +503,7 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
         .completion = sparse != NULL ? sparse->completion : (ta_actor_completion){0},
         .final_state = sparse != NULL && actor->finished ? sparse->final_state : TA_STATE_NONE,
     };
-    /* An image names its events by ID: a name kept as text stays with the
-     * envelope that holds it. */
-    ta_result result = ta_event_name_for_host(system, &image->events.external_event);
-    if (result == TA_OK) {
-        result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
-    }
+    ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
     if (result == TA_OK) {
         result = ta_image_fill(image, actor);
     }
@@ -733,8 +770,16 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     if (image->events.has_kept || (image->events.external != TA_EXTERNAL_NONE && image->has_parent)) {
         result = ta_interpreter_queue_reserve(system, actor, 0);
     }
+    if (result == TA_OK && image->events.has_kept && image->events.kept_name.len != 0u) {
+        /* Its name, which core keeps only as text, gets an envelope of its
+         * own, as when the session kept the event (ADR 0100). */
+        result = ta_run_keep_name(system, image->events.kept_name, &actor->internal->kept_input);
+    }
     if (result == TA_OK && image->events.has_kept) {
         ta_event_retain(&image->events.kept_event, &actor->internal->kept_event);
+        if (actor->internal->kept_input != 0u) {
+            actor->internal->kept_event.name = TA_RUN_NAME_INPUT | actor->internal->kept_input;
+        }
         actor->internal->has_kept = true;
     }
     /*
@@ -808,7 +853,7 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
  */
 static ta_result ta_image_wake_reserve(ta_system *system, const ta_session_image *image, uint32_t *out) {
     const ta_image_events *events = &image->events;
-    ta_run_wake wake = { .admission = true, .trace = &events->trace };
+    ta_run_wake wake = { .admission = true, .trace = &events->trace, .name_text = events->external_name };
     if (events->external == TA_EXTERNAL_NONE) {
         return ta_run_wake_reserve(system, &wake, out);
     }

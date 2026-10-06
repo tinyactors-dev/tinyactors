@@ -450,7 +450,9 @@ module TinyactorsTest
         when 'faulted' then @stopped_sessions |= [outcome[:actor]]
         when 'completed', 'ignored', 'finished' then @stopped_sessions -= [outcome[:actor]]
         when 'taken'
-          @mail_taken << { actor: outcome[:actor], event: outcome[:event] } if @mail_taken && outcome[:has_event]
+          if @mail_taken && outcome[:has_event]
+            @mail_taken << { actor: outcome[:actor], event: outcome[:event], name: outcome[:name] }
+          end
         end
       end
     end
@@ -463,8 +465,10 @@ module TinyactorsTest
     end
 
     # The mail and due sends sessions took since the last call, oldest
-    # first: { actor:, event: } each, the event as the ta_event codec
-    # encodes it. Empties the list.
+    # first: { actor:, event:, name: } each, the event as the ta_event codec
+    # encodes it and its name as text: core keeps a run-time name only as
+    # text, and the event's name ID is then 0 (core ADR 0100). Empties the
+    # list.
     def taken_mail
       raise ScenarioError, 'taken_mail: call `watch_mail` before the steps that send' unless @mail_taken
 
@@ -1784,6 +1788,9 @@ module TinyactorsTest
 
     # Inputs one ta_run call may end when no allocation is counted or failed.
     RUN_OUTCOMES = 64
+    # The names buffer of a call that reports TAKEN outcomes: core's least
+    # (TA_RUN_NAMES_MIN_BYTES).
+    TAKEN_NAMES_BYTES = 65_536
 
     # One logical ta_run with the budgets the Scheduler chose. A run counting
     # allocations, or failing one, ends one input per call, so that each call
@@ -1797,7 +1804,7 @@ module TinyactorsTest
       run_once = lambda do
         params = { system: system_handle, budget: budget, action_budget: action_budget,
                    pause_at_microstep_start: pause_at_microstep_start, outcome_capacity: capacity }
-        params[:report_taken] = true if @mail_taken
+        params.merge!(report_taken: true, name_capacity: TAKEN_NAMES_BYTES) if @mail_taken
         ta.run(**params)
       end
       index = @resume_index

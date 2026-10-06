@@ -214,20 +214,30 @@ static void ta_run_jump_free(ta_system *system, ta_operator_jump *jump) {
  * where it stands: a bare envelope reads as a wake without an event. O(1)
  * in the envelopes; frees the text's chunks.
  */
-static void ta_run_strip(ta_system *system, uint32_t index) {
+/* Releases the references envelope `index` holds (its data and content,
+ * an event's origin and operator transition) and leaves its text. A kept
+ * envelope holds none: its record's were released when it was kept. */
+static void ta_run_release_references(ta_system *system, uint32_t index) {
     if (system->run.event_input == index) {
         system->run.event_input = 0u;
         system->run.event = (ta_event){ 0 };
     }
-    ta_run_record record = ta_run_record_of(system, index);
-    ta_origin_release(&record.origin);
-    ta_run_jump_free(system, record.jump);
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    if (envelope->state != TA_ENVELOPE_KEPT) {
+        ta_run_record record = ta_run_record_of(system, index);
+        ta_origin_release(&record.origin);
+        ta_run_jump_free(system, record.jump);
+    }
     ta_value_release(&envelope->data);
     ta_value_release(&envelope->content);
     envelope->data = (ta_value){ 0 };
     envelope->content = (ta_value){ 0 };
-    envelope->flags &= (uint8_t)~TA_ENVELOPE_FLAG_TRACED;
+}
+
+static void ta_run_strip(ta_system *system, uint32_t index) {
+    ta_run_release_references(system, index);
+    ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    envelope->flags &= (uint8_t)~(TA_ENVELOPE_FLAG_TRACED | TA_ENVELOPE_FLAG_KEEP);
     ta_name_area_free(&system->run.names, &envelope->text);
 }
 
@@ -621,10 +631,10 @@ ta_result ta_run_wake_reserve(ta_system *system, const ta_run_wake *wake, uint32
                                      wake->admission);
     }
     bool traced = wake->trace != NULL && !ta_trace_context_empty(&wake->trace->context);
-    if (traced || wake->event != NULL) {
+    if (traced || wake->event != NULL || wake->name_text.len != 0u) {
         ta_run_record record = { .origin = { .kind = TA_ORIGIN_NONE } };
         if (wake->event != NULL) {
-            record.name = wake->event->name;
+            record.name = wake->name_text.len != 0u ? 0u : wake->event->name;
             record.origin = wake->event->origin;
         }
         if (wake->jump != NULL) {
@@ -635,7 +645,8 @@ ta_result ta_run_wake_reserve(ta_system *system, const ta_run_wake *wake, uint32
                                                            .record = &record,
                                                            .trace = wake->trace,
                                                            .refilled = refilled,
-                                                           .admission = wake->admission });
+                                                           .admission = wake->admission,
+                                                           .name_text = wake->name_text });
         if (result != TA_OK) {
             ta_envelope_pool_give(&system->run.pool, index);
             return result;
@@ -676,6 +687,28 @@ void ta_run_wake_place(ta_system *system, ta_actor *actor, uint32_t wake) {
 
 void ta_run_wake_cancel(ta_system *system, uint32_t wake) {
     ta_run_discard(system, wake);
+}
+
+/* ------------------------------------------------------------------------
+ * Names a kept event holds (ADR 0100)
+ */
+
+void ta_run_keep_input(ta_system *system, uint32_t index) {
+    ta_envelope_pool_at(&system->run.pool, index)->flags |= TA_ENVELOPE_FLAG_KEEP;
+}
+
+ta_result ta_run_keep_name(ta_system *system, ta_str name, uint32_t *out) {
+    uint32_t index = 0u;
+    ta_result result = ta_run_wake_reserve(system, &(ta_run_wake){ .name_text = name }, &index);
+    if (result == TA_OK) {
+        ta_envelope_pool_at(&system->run.pool, index)->state = TA_ENVELOPE_KEPT;
+        *out = index;
+    }
+    return result;
+}
+
+void ta_run_release_kept(ta_system *system, uint32_t index) {
+    ta_run_discard(system, index);
 }
 
 /* ------------------------------------------------------------------------
@@ -1015,6 +1048,10 @@ typedef struct {
     uint32_t actions;
     uint32_t count;
     bool paused;
+    /* Bytes of `params->names` the TAKEN outcomes' names fill. */
+    uint32_t names_used;
+    /* The names buffer had no room for the next input's name. */
+    bool names_full;
 } ta_run_call;
 
 static void ta_run_outcome(ta_run_call *call, ta_input_outcome outcome) {
@@ -1162,7 +1199,15 @@ static void ta_run_complete(ta_run_call *call, ta_actor *actor, ta_run_ended end
     if (system->run.slot == index) {
         system->run.slot = 0u;
     }
-    ta_run_discard(system, index);
+    ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    if ((envelope->flags & TA_ENVELOPE_FLAG_KEEP) != 0u) {
+        /* The session's kept event names it: only its text stays. */
+        ta_run_release_references(system, index);
+        envelope->flags &= (uint8_t)~TA_ENVELOPE_FLAG_KEEP;
+        envelope->state = TA_ENVELOPE_KEPT;
+    } else {
+        ta_run_discard(system, index);
+    }
     if (actor->input == index) {
         ta_run_forget_input(actor);
     }
@@ -1238,6 +1283,50 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
     ta_run_complete(call, actor, (ta_run_ended){ .index = index, .outcome = { .kind = kind } });
 }
 
+/* Whether envelope `index`'s TAKEN outcome carries its event: core made
+ * it (mail, a delayed send that fell due), so no host call admitted it. */
+static bool ta_run_takes_event(const ta_envelope *envelope) {
+    return envelope->source == TA_RECORD_INPUT_SOURCE_MAIL || envelope->source == TA_RECORD_INPUT_SOURCE_TIMER;
+}
+
+/* The bytes, its NUL included, the name `name` takes in the names buffer:
+ * 0 for none, or for an interned name longer than the buffer can ever
+ * hold, which the outcome gives by ID only. Never allocates. */
+static uint32_t ta_run_name_bytes(const ta_system *system, ta_event_name_id name) {
+    uint32_t needed = 0u;
+    (void)ta_event_name_format(system, &(ta_event_name_format_params){ .name = name, .needed = &needed });
+    return needed > TA_RUN_NAMES_MIN_BYTES ? 0u : needed;
+}
+
+/* Whether the call's names buffer has room for the name envelope
+ * `index`'s TAKEN outcome gives. */
+static bool ta_run_names_room(const ta_run_call *call, uint32_t index) {
+    const ta_envelope *envelope = ta_envelope_pool_at(&call->system->run.pool, index);
+    if (!call->params->report_taken || !ta_run_takes_event(envelope)) {
+        return true;
+    }
+    ta_run_record record = ta_run_record_of(call->system, index);
+    ta_event_name_id name = (record.flags & TA_RUN_RECORD_NAME_TEXT) != 0u ? TA_RUN_NAME_INPUT | index : record.name;
+    return ta_run_name_bytes(call->system, name) <= call->params->name_capacity - call->names_used;
+}
+
+/* Writes `name`'s text into the call's names buffer, which
+ * ta_run_names_room found room in, and answers it; empty for none. */
+static ta_str ta_run_taken_name(ta_run_call *call, ta_event_name_id name) {
+    uint32_t bytes = ta_run_name_bytes(call->system, name);
+    uint32_t needed = 0u;
+    char *at = call->params->names + call->names_used;
+    if (bytes == 0u ||
+        ta_event_name_format(call->system, &(ta_event_name_format_params){ .name = name,
+                                                                           .buffer = at,
+                                                                           .capacity = bytes,
+                                                                           .needed = &needed }) != TA_OK) {
+        return (ta_str){ 0 };
+    }
+    call->names_used += bytes;
+    return (ta_str){ .ptr = at, .len = bytes - 1u };
+}
+
 /*
  * Takes envelope `index`, just off the run queue, and runs it when it is an
  * input to take: refused, dropped or deferred otherwise. TA_ERR_NOMEM when
@@ -1291,6 +1380,11 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
         /* Its name, kept as text, does not fit the name buffer the refill
          * before it could not grow. */
         return ta_run_put_back(call, index, TA_ERR_NOMEM);
+    } else if (!ta_run_names_room(call, index)) {
+        /* Its TAKEN outcome's name does not fit what is left of the names
+         * buffer: the next call takes it. */
+        call->names_full = true;
+        return ta_run_put_back(call, index, TA_OK);
     } else {
         ta_result result = envelope->source == TA_RECORD_INPUT_SOURCE_INVOKE_REPORT
                                ? ta_run_bind_report(system, actor, index)
@@ -1308,12 +1402,15 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
     ta_run_hold_input(system, actor, index);
     if (call->params->report_taken) {
         ta_input_outcome taken = { .kind = TA_INPUT_TAKEN };
-        if (envelope->source == TA_RECORD_INPUT_SOURCE_MAIL || envelope->source == TA_RECORD_INPUT_SOURCE_TIMER) {
-            /* Core made it: the host learns its event here, and releases it. */
+        if (ta_run_takes_event(envelope)) {
+            /* Core made it: the host learns its event here, and releases it,
+             * and its name as text in the call's names buffer. */
             ta_event event = ta_run_input_event_of(system, index);
             ta_event_retain(&event, &taken.event);
-            /* A host reads the name by ID; the text stays in the envelope. */
-            (void)ta_event_name_for_host(system, &taken.event);
+            taken.name = ta_run_taken_name(call, taken.event.name);
+            if (ta_run_name_is_input(taken.event.name)) {
+                taken.event.name = 0u;
+            }
             taken.has_event = true;
         }
         ta_run_report_input(call, index, taken);
@@ -1334,10 +1431,14 @@ static uint32_t ta_run_room(const ta_run_params *params) {
 
 ta_result ta_run(ta_system *system, const ta_run_params *params) {
     if (system == NULL || params == NULL || params->status == NULL || params->outcome_count == NULL ||
-        params->budget == 0u || params->outcomes == NULL || params->outcome_capacity < ta_run_room(params)) {
+        params->budget == 0u || params->outcomes == NULL || params->outcome_capacity < ta_run_room(params) ||
+        (params->report_taken && (params->names == NULL || params->name_capacity < TA_RUN_NAMES_MIN_BYTES))) {
         return TA_ERR_INVALID;
     }
     *params->outcome_count = 0u;
+    if (params->name_used != NULL) {
+        *params->name_used = 0u;
+    }
     if (system->run.running) {
         return TA_ERR_BUSY;
     }
@@ -1348,7 +1449,7 @@ ta_result ta_run(ta_system *system, const ta_run_params *params) {
     ta_run_status status = TA_RUN_IDLE;
     for (;;) {
         if (call.paused || call.budget == 0u || (params->action_budget != 0u && call.actions == 0u) ||
-            params->outcome_capacity - call.count < room) {
+            params->outcome_capacity - call.count < room || call.names_full) {
             status = ta_run_between(&call);
             break;
         }
@@ -1374,6 +1475,9 @@ ta_result ta_run(ta_system *system, const ta_run_params *params) {
         }
     }
     *params->outcome_count = call.count;
+    if (params->name_used != NULL) {
+        *params->name_used = call.names_used;
+    }
     *params->status = status;
     return result;
 }

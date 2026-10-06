@@ -857,17 +857,27 @@ static void ta_queue_truncate(ta_actor *actor, uint32_t mark) {
     }
 }
 
-/* Makes `event`, and its references, the kept event (ADR 0069); the queue
- * exists, since it held the event or was made for the kept one. */
-static void ta_keep_event(ta_actor *actor, const ta_event *event) {
+/* Lets go of the kept event and of the kept envelope that holds its name. */
+static void ta_release_kept(ta_actor *actor) {
+    ta_internal_queue *queue = actor->internal;
+    ta_event_release(&queue->kept_event);
+    if (queue->kept_input != 0u) {
+        ta_run_release_kept(actor->host_impl.system, queue->kept_input);
+        queue->kept_input = 0u;
+    }
+    queue->has_kept = false;
+}
+
+/* Makes `event`, and its references, the kept event (ADR 0069), with
+ * `kept_input`, the kept envelope that holds its name as text, or 0; the
+ * queue exists, since it held the event or was made for the kept one. */
+static void ta_keep_event(ta_actor *actor, const ta_event *event, uint32_t kept_input) {
     ta_internal_queue *queue = actor->internal;
     if (queue->has_kept) {
-        ta_event_release(&queue->kept_event);
+        ta_release_kept(actor);
     }
     queue->kept_event = *event;
-    /* Its envelope, which holds a name kept as text, goes with its input:
-     * the kept event names it by ID (ADR 0069). */
-    (void)ta_event_name_for_host(actor->host_impl.system, &queue->kept_event);
+    queue->kept_input = kept_input;
     queue->has_kept = true;
 }
 
@@ -879,7 +889,7 @@ static void ta_keep_event(ta_actor *actor, const ta_event *event) {
 static void ta_bind_event(ta_actor *actor, ta_event_binding taken) {
     if (actor->bound == TA_BOUND_INTERNAL) {
         ta_event head = ta_queue_pop(actor);
-        ta_keep_event(actor, &head);
+        ta_keep_event(actor, &head, 0u);
         actor->bound = TA_BOUND_KEPT;
     }
     actor->bound_before = actor->bound;
@@ -922,8 +932,7 @@ static void ta_release_events(ta_actor *actor) {
         ta_event_release(&event);
     }
     if (queue != NULL && queue->has_kept) {
-        ta_event_release(&queue->kept_event);
-        queue->has_kept = false;
+        ta_release_kept(actor);
     }
     ta_release_external(actor);
     actor->bound = TA_BOUND_NONE;
@@ -944,12 +953,20 @@ static void ta_end_macrostep_events(ta_system *system, ta_actor *actor) {
     }
     if (actor->bound == TA_BOUND_INTERNAL) {
         ta_event head = ta_queue_pop(actor);
-        ta_keep_event(actor, &head);
+        ta_keep_event(actor, &head, 0u);
         actor->bound = TA_BOUND_KEPT;
     } else if (actor->bound == TA_BOUND_EXTERNAL) {
         ta_event kept;
         ta_event_retain(ta_run_input_event(system, actor->input), &kept);
-        ta_keep_event(actor, &kept);
+        /* A name core keeps as text stays in the input's envelope, which the
+         * input keeps when it completes, for as long as the event is kept
+         * (ADR 0100). */
+        uint32_t kept_input = 0u;
+        if (ta_run_name_is_input(kept.name)) {
+            kept_input = actor->input;
+            ta_run_keep_input(system, kept_input);
+        }
+        ta_keep_event(actor, &kept, kept_input);
         actor->bound = TA_BOUND_KEPT;
     }
     ta_release_external(actor);
@@ -1304,26 +1321,6 @@ ta_result ta_send_id_parse(const ta_system *system, ta_str text, ta_send_id *out
     ta_send_id id = ta_send_id_from_text(system, text);
     if (id == 0) {
         return TA_ERR_NOT_FOUND;
-    }
-    *out = id;
-    return TA_OK;
-}
-
-ta_result ta_send_id_intern(ta_system *system, ta_str text, ta_send_id *out) {
-    if (system == NULL || out == NULL || text.ptr == NULL || text.len == 0) {
-        return TA_ERR_INVALID;
-    }
-    ta_send_id id = ta_send_id_from_text(system, text);
-    if (id == 0) {
-        ta_atom atom = 0;
-        ta_result result = ta_atom_intern(&system->atoms, text, &atom);
-        if (result != TA_OK) {
-            return result;
-        }
-        id = ta_send_id_from_text(system, text);
-    }
-    if (id == 0) {
-        return TA_ERR_INVALID;
     }
     *out = id;
     return TA_OK;

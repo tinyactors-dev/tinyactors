@@ -361,7 +361,7 @@ module VirtualActorPagingScenarios
   def self.note_taken(context, host, ledger)
     context.taken_mail.each do |taken|
       event = taken[:event]
-      next unless context.event_text(event[:name]) == 'tick'
+      next unless taken[:name] == 'tick'
 
       name = host.name_of(taken[:actor])
       context.assert !name.nil?, "a tick was taken by actor #{taken[:actor]}, which this run does not know"
@@ -799,7 +799,7 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
     advance_time(100)
     assert_equal 1, target.data('.t'), 'the reloaded target session receives the send once'
     assert_equal [], sender.data('.errs')
-    ticks = taken_mail.select { |taken| event_text(taken.dig(:event, :name)) == 'tick' }
+    ticks = taken_mail.select { |taken| taken[:name] == 'tick' }
     assert_equal [target.handle], ticks.map { |taken| taken[:actor] },
                  'core resolved the session to its current runtime ID, and queued it there itself'
     assert_equal [], load_requests, 'it asked the host for no load'

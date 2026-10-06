@@ -45,11 +45,16 @@ ta_result ta_invoke_id_from_text(ta_system *system, ta_str text, ta_invoke_id *o
     return result;
 }
 
-ta_result ta_system_intern_invoke_id(ta_system *system, ta_str text, ta_invoke_id *out) {
-    if (system == NULL || out == NULL) {
+ta_result ta_system_invoke_id_find(const ta_system *system, ta_str text, ta_invoke_id *out) {
+    if (system == NULL || out == NULL || text.ptr == NULL || text.len == 0) {
         return TA_ERR_INVALID;
     }
-    return ta_invoke_id_from_text(system, text, out);
+    ta_atom atom = 0;
+    if (ta_atom_find(&system->atoms, text, &atom) != TA_OK) {
+        return TA_ERR_NOT_FOUND;
+    }
+    *out = (ta_invoke_id)atom + 1u;
+    return TA_OK;
 }
 
 ta_str ta_invoke_id_text(const ta_system *system, ta_invoke_id invoke) {
@@ -769,7 +774,7 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     }
     /* A stored send names its event by ID. */
     ta_event named = delivery->event;
-    ta_result interned = ta_event_name_for_host(system, &named);
+    ta_result interned = ta_event_name_store(system, &named);
     if (interned != TA_OK) {
         return interned;
     }
@@ -878,12 +883,8 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
                                                   .trace = ta_interpreter_trace_here(it),
                                               });
     } else {
-        /* A host reads the name by ID. */
-        ta_result named = ta_event_name_for_host(it->system, &copy);
-        if (named != TA_OK) {
-            ta_value_release(&copy.data);
-            return named;
-        }
+        /* The invoker reads a name core keeps as text during the call
+         * (ta_invoker_forward_params). */
         (void)meta.invoker.v->forward(meta.invoker.self, &(ta_invoker_forward_params){
                                                               .service_handle = sparse->invokes[index].service_handle,
                                                               .event = &copy,

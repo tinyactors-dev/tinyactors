@@ -74,6 +74,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* The names of the TAKEN events of one ta_run() call (ta_run_params.names). */
+static char taken_names[TA_RUN_NAMES_MIN_BYTES];
+
 static int failures = 0;
 
 #define CHECK(condition)                                                                   \
@@ -266,7 +269,7 @@ static ta_result run_with(fixture *f, run_limits limits) {
     return ta_run(f->system, &(ta_run_params){ .budget = limits.budget != 0 ? limits.budget : 1000u,
                                                 .action_budget = limits.action_budget,
                                                 .session = limits.session,
-                                                .report_taken = limits.report_taken,
+                                                .report_taken = limits.report_taken, .names = taken_names, .name_capacity = sizeof taken_names,
                                                 .outcomes = f->outcomes,
                                                 .outcome_capacity = limits.capacity != 0 ? limits.capacity : 64u,
                                                 .outcome_count = &f->count,
@@ -477,6 +480,16 @@ static void test_outcomes_once(void) {
     CHECK(ta_run(f.system, &(ta_run_params){ .budget = 10, .outcome_count = &f.count, .status = &f.status }) ==
           TA_ERR_INVALID);
     CHECK(run_with(&f, (run_limits){ .capacity = 1, .report_taken = true }) == TA_ERR_INVALID);
+    CHECK(f.count == 0);
+    /* TAKEN outcomes need a names buffer that holds the longest name. */
+    ta_input_outcome two[2];
+    CHECK(ta_run(f.system, &(ta_run_params){ .budget = 10, .report_taken = true, .outcomes = two,
+                                             .outcome_capacity = 2, .outcome_count = &f.count,
+                                             .status = &f.status }) == TA_ERR_INVALID);
+    CHECK(ta_run(f.system, &(ta_run_params){ .budget = 10, .report_taken = true, .outcomes = two,
+                                             .outcome_capacity = 2, .outcome_count = &f.count, .status = &f.status,
+                                             .names = taken_names,
+                                             .name_capacity = TA_RUN_NAMES_MIN_BYTES - 1u }) == TA_ERR_INVALID);
     CHECK(f.count == 0);
     CHECK(run_all(&f) == TA_OK && f.count == 1 && outcome_is(&f, 0, TA_INPUT_IGNORED, a, 8));
     close_fixture(&f);

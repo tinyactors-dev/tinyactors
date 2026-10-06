@@ -244,3 +244,38 @@ before it.
     `tah_core_event_name`), until delayed sends are envelopes; and names
     core hands a host (a TAKEN outcome's event, inspection, images, a kept
     event), until those carry text.
+- **Hosts read names as text, 2026-10-06.** Core no longer interns a name
+  where it hands an event to a host.
+  - A TAKEN outcome gives its event's name as text
+    (`ta_input_outcome.name`) in a buffer the caller passes in
+    `ta_run_params.names`, of at least `TA_RUN_NAMES_MIN_BYTES` (64 KiB,
+    the longest name and its NUL); the name is valid until the next
+    `ta_run()` with that buffer, and the event's `name` is 0 when core
+    keeps the name only as text. A call that has no room left for the next
+    name answers `TA_RUN_MORE` and loses nothing.
+  - Inspection's `current_event` and an event forwarded to a host invoker
+    keep the name as a handle to the text
+    (`TA_RUN_NAME_INPUT`), which a host reads with `ta_event_name_format()`
+    while the event is valid: during the call, or until the next run or
+    inspection. The kernel's JS invoker formats a forwarded name into its
+    own table during the call, since it reads the event later.
+  - An invoked session's kept event keeps its input's envelope: when the
+    input completes, its references go and its text stays, in an envelope
+    on no list (`TA_ENVELOPE_KEPT`), until the kept event goes. A session
+    image copies the name's text into its arena, and a session restored
+    from it writes the text back into an envelope.
+  - `ta_send_id_intern` is gone, and `ta_system_intern_invoke_id` became
+    `ta_system_invoke_id_find`, a lookup: a replayed event's send ID is
+    generated (it parses anywhere) or an authored literal of a registered
+    definition, and its invocation ID was issued again by the replayed
+    parent before the child's events are replayed. Text the system never
+    issued answers `TA_ERR_NOT_FOUND`.
+  - Still interned: names a host gives for delayed sends it restores
+    (`ta_delayed_send_info.event`, through the kernel's
+    `tah_core_event_name`), with the public `ta_event_name_intern` and
+    `ta_system_intern_atom` kept for that caller until delayed sends are
+    envelopes; and names core stores by ID (`ta_event_name_store`): a
+    delayed send, a send held for an unpublished session, one for
+    `#_internal` or for an I/O processor.
+  - Tested in `tests/name_matching_test.c` (claims 9 and 10) and
+    `tests/run_test.c` (a names buffer is required for TAKEN outcomes).

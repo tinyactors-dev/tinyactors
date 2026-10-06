@@ -319,14 +319,15 @@ uint32_t ta_event_name_atoms(ta_system *system, const ta_event *event, ta_atom o
 bool ta_event_name_put(const ta_system *system, const ta_event *event, ta_text_writer *writer);
 
 /*
- * Gives `event` a name ID for a host, or for a record that keeps the event
- * after its input completes: a name its input keeps as text is interned
- * into the event-name trie, and `name` set. May
+ * Gives `event` a name ID for a record that holds names by ID and keeps the
+ * event after its input completes: a delayed send (timer.h). A name its
+ * input keeps as text is interned into the event-name trie, and `name`
+ * set. Nothing a host is handed goes through here (ADR 0100). May
  * allocate; TA_ERR_INVALID for a text that is not a valid event name,
  * TA_ERR_NOMEM or TA_ERR_FULL when the tables cannot grow, changing
  * nothing. An event that has an ID is left as it is.
  */
-ta_result ta_event_name_for_host(ta_system *system, ta_event *event);
+ta_result ta_event_name_store(ta_system *system, ta_event *event);
 
 /*
  * Counts one occurrence for `definition` and for the system (ADR 0072). A

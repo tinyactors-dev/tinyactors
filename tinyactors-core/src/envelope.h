@@ -219,7 +219,11 @@ typedef enum {
     /** Held by a live local invocation, on no list. */
     TA_ENVELOPE_INVOCATION_TOKEN = 6,
     /** An invocation token turned into the stop of a child session. */
-    TA_ENVELOPE_CHILD_STOP = 7
+    TA_ENVELOPE_CHILD_STOP = 7,
+    /** A completed input kept, on no list, only for the name its text
+     * holds: an invoked session's kept event names it (`run.h`). It holds
+     * no references. */
+    TA_ENVELOPE_KEPT = 8
 } ta_envelope_state;
 
 /** `target` is the index of a waiting entry, not a session. */
@@ -229,6 +233,9 @@ typedef enum {
 /** An input posted to an address whose load failed: refused when it is
  * reached, with the fault's code in `due` (`run.h`). */
 #define TA_ENVELOPE_FLAG_REFUSED ((uint8_t)0x04u)
+/** A taken input whose name an invoked session's kept event names: when it
+ * completes it is kept (`TA_ENVELOPE_KEPT`), not given back. */
+#define TA_ENVELOPE_FLAG_KEEP ((uint8_t)0x08u)
 
 /** One pending input; see the file comment. */
 typedef struct {

@@ -11,6 +11,17 @@
 #include "test_allocator.h"
 #include "test_drive.h"
 
+/* Whether `name`, as a host reads it (ta_event_name_format), is `text`. */
+static bool event_named(const ta_system *system, ta_event_name_id name, const char *text) {
+    char buffer[64];
+    uint32_t needed = 0;
+    return ta_event_name_format(system, &(ta_event_name_format_params){ .name = name, .buffer = buffer,
+                                                                        .capacity = sizeof buffer,
+                                                                        .needed = &needed }) == TA_OK &&
+           strcmp(buffer, text) == 0;
+}
+
+
 static int failures;
 
 #define CHECK(condition)                                                        \
@@ -397,7 +408,7 @@ static void test_current_event_from_the_input(ta_system *system, counting_model 
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK);
     CHECK(view.macrostep_in_progress && view.current_event != NULL);
     if (view.current_event != NULL) {
-        CHECK(view.current_event->name == go);
+        CHECK(event_named(system, view.current_event->name, "go"));
         CHECK(view.current_event->type == TA_EVENT_EXTERNAL);
         CHECK(view.current_event->send_id == 42u);
         CHECK(view.current_event->data.self == &data && view.current_event->data.v == &counted_vtable);

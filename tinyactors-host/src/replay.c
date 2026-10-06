@@ -72,6 +72,9 @@ static ta_result tah_replay_resume(tah_system *system, ta_actor_id actor, bool *
     uint32_t budget = system->budgets.microsteps != 0 ? system->budgets.microsteps : 64u;
     *ignored = false;
     *done = false;
+    if (tah_vec_reserve(&system->sched.taken_names, TA_RUN_NAMES_MIN_BYTES) != TA_OK) {
+        return TA_ERR_NOMEM;
+    }
     for (;;) {
         ta_input_outcome outcomes[2]; /* an input's TAKEN and its end */
         uint32_t count = 0;
@@ -84,7 +87,9 @@ static ta_result tah_replay_resume(tah_system *system, ta_actor_id actor, bool *
                                                                   .outcomes = outcomes,
                                                                   .outcome_capacity = 2,
                                                                   .outcome_count = &count,
-                                                                  .status = &status });
+                                                                  .status = &status,
+                                                                  .names = system->sched.taken_names.items,
+                                                                  .name_capacity = TA_RUN_NAMES_MIN_BYTES });
         system->inside_core = false;
         bool ended = false;
         ta_result answer = TA_OK;
@@ -179,10 +184,10 @@ static ta_result tah_replay_event_of(tah_system *system, const tah_replay_event_
     *out = (ta_event){ .type = params->type, .invoke_id = TA_INVOKE_ID_NONE };
     ta_result result = tah_event_name_intern(system, params->name, &out->name);
     if (result == TA_OK && params->send_id.len != 0) {
-        result = ta_send_id_intern(system->core, params->send_id, &out->send_id);
+        result = ta_send_id_parse(system->core, params->send_id, &out->send_id);
     }
     if (result == TA_OK && params->invoke_id.len != 0) {
-        result = ta_system_intern_invoke_id(system->core, params->invoke_id, &out->invoke_id);
+        result = ta_system_invoke_id_find(system->core, params->invoke_id, &out->invoke_id);
     }
     if (result == TA_OK && params->invoke_id.len == 0) {
         /* An invocation's event gets its origin from core when it is delivered (core ADR 0068). */

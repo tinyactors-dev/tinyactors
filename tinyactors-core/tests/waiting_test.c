@@ -59,6 +59,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* The names of the TAKEN events of one ta_run() call (ta_run_params.names). */
+static char taken_names[TA_RUN_NAMES_MIN_BYTES];
+
 static int failures = 0;
 
 #define CHECK(condition)                                                                   \
@@ -286,7 +289,7 @@ static ta_result run_once(fixture *f, uint32_t action_budget) {
     }
     f->count = 0;
     return ta_run(f->system, &(ta_run_params){ .budget = 1000, .action_budget = action_budget,
-                                               .report_taken = true, .outcomes = f->outcomes,
+                                               .report_taken = true, .names = taken_names, .name_capacity = sizeof taken_names, .outcomes = f->outcomes,
                                                .outcome_capacity = 2, .outcome_count = &f->count,
                                                .status = &f->status });
 }

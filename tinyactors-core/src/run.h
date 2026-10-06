@@ -445,6 +445,10 @@ typedef struct {
     /** The operator transition waiting with `event`, or null; taken over on
      * `TA_OK`. */
     struct ta_operator_jump *jump;
+    /** `event`'s name as text, written into the wake's text, when the event
+     * comes from a session image, which keeps names as text; empty to use
+     * `event->name`. */
+    ta_str name_text;
 } ta_run_wake;
 
 /**
@@ -476,12 +480,15 @@ void ta_run_wake_cancel(ta_system *system, uint32_t wake);
 /**
  * The name ID of an input's event whose name core did not intern (ADR
  * 0100): this bit, or'ed with the input's envelope index. The name is the
- * text the envelope keeps; it lives as long as the input does, and no trie
- * node has this bit. Core reads it with `ta_run_input_name`, and gives an
- * event a real ID (`ta_event_name_for_host`) before a host or a stored
- * record keeps it.
+ * text the envelope keeps; it lives as long as the input does, or, for an
+ * invoked session's kept event, as long as that event is kept
+ * (`ta_run_keep_input`), and no trie node has this bit. Core reads it with
+ * `ta_run_input_name`; a host reads it with `ta_event_name_format` while
+ * the event is valid (`tinyactors.h`), a TAKEN outcome carries it as text,
+ * and a session image copies the text. Only a record that holds names by
+ * ID, a delayed send, gives it an interned ID (`ta_event_name_store`).
  */
-#define TA_RUN_NAME_INPUT 0x80000000u
+#define TA_RUN_NAME_INPUT TA_EVENT_NAME_TEXT
 
 /** Whether `name` names an input's name kept as text (`TA_RUN_NAME_INPUT`). */
 static inline bool ta_run_name_is_input(ta_event_name_id name) {
@@ -495,6 +502,27 @@ static inline bool ta_run_name_is_input(ta_event_name_id name) {
  * inside a macrostep.
  */
 ta_str ta_run_input_name(const ta_system *system, ta_event_name_id name);
+
+/**
+ * Keeps input `index`, which `actor`'s macrostep took and is ending, past
+ * its completion for the name its text holds, which the invoked session's
+ * kept event names (`TA_RUN_NAME_INPUT`): when the input completes, its
+ * references go and its text stays, in an envelope on no list
+ * (`TA_ENVELOPE_KEPT`). Never allocates; cannot fail.
+ */
+void ta_run_keep_input(ta_system *system, uint32_t index);
+
+/**
+ * Reserves an envelope that only keeps `name` as text for a kept event a
+ * session image restores, as `ta_run_keep_input` leaves one: `*out` names
+ * it. A safe point: refills first. `TA_ERR_FULL` or `TA_ERR_NOMEM`,
+ * changing nothing.
+ */
+ta_result ta_run_keep_name(ta_system *system, ta_str name, uint32_t *out);
+
+/** Gives back a kept envelope (`ta_run_keep_input`, `ta_run_keep_name`)
+ * and its text, when the kept event that names it goes. Never allocates. */
+void ta_run_release_kept(ta_system *system, uint32_t index);
 
 /** Mail for another session; see `ta_run_post_mail`. */
 typedef struct {

@@ -321,7 +321,7 @@ bool ta_event_name_put(const ta_system *system, const ta_event *event, ta_text_w
     return count != 0;
 }
 
-ta_result ta_event_name_for_host(ta_system *system, ta_event *event) {
+ta_result ta_event_name_store(ta_system *system, ta_event *event) {
     if (!ta_run_name_is_input(event->name)) {
         return TA_OK;
     }

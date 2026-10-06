@@ -49,19 +49,28 @@
  *    session travel as text: each is taken and matched by `*` (resolved
  *    from the envelope's bytes), and the atom table and the trie keep
  *    their size.
+ * 9. names reach a host as text: random names a host posts, inspected
+ *    while their macrostep is paused and captured in a session image, and
+ *    random names a session mails itself, which a TAKEN outcome gives in
+ *    the caller's names buffer with no ID, read back as the text sent, and
+ *    the atom table and the trie keep their size; a call whose names
+ *    buffer has no room for the next name answers MORE and loses none.
+ * 10. an invoked session keeps its last external event's name as text: one
+ *    kept envelope holds it while the event is kept, the next event gives
+ *    it back, a session image carries the name and restores it into a
+ *    kept envelope of its own, and the parent's cancel lets it go; random
+ *    names leave the atom table and the trie the same size.
  *
  * Paths that still add a run-time name to the tables, and that claims 4,
- * 5 and 8 therefore do not cover, because an event there carries its name
- * as a trie node: the value of a `<send eventexpr>` that is stored (a
+ * 5, 8 and 9 therefore do not cover, because an event there carries its
+ * name as a trie node: the value of a `<send eventexpr>` that is stored (a
  * delayed send, one held for an unpublished session, one for #_internal or
- * for an I/O processor), or handed to a host (a TAKEN outcome's event,
- * inspection, a session image, an event forwarded to a host invoker, a
- * kept event); the generated invocation ID and the `done.invoke.<id>` and
- * `error.communication.invoke.<id>.<reason>` names built from it (the ID
- * and the reason, not the `invoke` segment); `#_<invokeid>` targets and
- * the family of a session URI in a `targetexpr`; and the public calls a
- * host uses to turn text into IDs (ta_system_intern_atom,
- * ta_event_name_intern, ta_send_id_intern, ta_system_intern_invoke_id).
+ * for an I/O processor); the generated invocation ID and the
+ * `done.invoke.<id>` and `error.communication.invoke.<id>.<reason>` names
+ * built from it (the ID and the reason, not the `invoke` segment);
+ * `#_<invokeid>` targets and the family of a session URI in a
+ * `targetexpr`; and the public calls a host uses to turn text into IDs
+ * (ta_system_intern_atom, ta_event_name_intern).
  */
 #include "../include/tinyactors.c"
 #include "test_allocator.h"
@@ -93,7 +102,7 @@ static ta_str text(const char *cstr) {
  * condition is false, and every assignment counts in `assigned`.
  */
 
-static char typed[64];
+static char typed[40000];
 static uint32_t typed_len = 0;
 static uint32_t assigned = 0;
 
@@ -645,6 +654,256 @@ static void test_eventexpr_travels_as_text(void) {
     fixture_close(&f);
 }
 
+/* Whether `name`, as a host reads it (ta_event_name_format), is `want`. */
+static bool reads_as(fixture *f, ta_event_name_id name, ta_str want) {
+    char buffer[TA_EVENT_NAME_MAX_DEPTH * 14u + 1u];
+    uint32_t needed = 0;
+    return ta_event_name_format(f->system, &(ta_event_name_format_params){ .name = name, .buffer = buffer,
+                                                                           .capacity = sizeof buffer,
+                                                                           .needed = &needed }) == TA_OK &&
+           needed == want.len + 1u && memcmp(buffer, want.ptr, want.len) == 0;
+}
+
+/* Claim 9. */
+static void test_names_reach_hosts_as_text(void) {
+    fixture f;
+    fixture_open(&f, eventexpr_chart());
+    ta_actor_id actor = 0;
+    CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = f.id, .out = &actor }) == TA_OK);
+    test_drive_status status = TEST_DRIVE_ERROR;
+    CHECK(test_drive_run(f.system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    ta_event_name_id send = event_name(&f, "send");
+    set_type("warm", 4);
+    deliver(&f, actor, send);
+    /* The warm-up's mail to itself is taken before the rounds start. */
+    CHECK(test_drive_run(f.system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    uint32_t atoms = atom_count(&f);
+    uint32_t nodes = node_count(&f);
+    static char names[TA_RUN_NAMES_MIN_BYTES];
+    char buffer[TA_EVENT_NAME_MAX_DEPTH * 14u];
+    uint32_t mailed = 0;
+    for (uint32_t round = 0; round < 2000u; round += 1u) {
+        ta_str name = random_name(buffer, f.names.capacity);
+        if (name.len > sizeof typed) {
+            name.len = sizeof typed;
+            while (name.len > 0 && buffer[name.len - 1u] == '.') {
+                name.len -= 1u;
+            }
+        }
+        if (name.len == 0 || (name.len == 4 && memcmp(name.ptr, "send", 4) == 0)) {
+            continue;
+        }
+        /* The session mails itself the name: its TAKEN outcome gives the
+         * name as text in the names buffer, and the event no ID. */
+        set_type(name.ptr, name.len);
+        ta_event event = { .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+        CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = actor,
+                                                                     .name = text("send"), .event = &event }) == TA_OK);
+        for (uint32_t call = 0; call < 8u; call += 1u) {
+            ta_input_outcome outcomes[2];
+            uint32_t count = 0;
+            uint32_t used = 0;
+            ta_run_status run = TA_RUN_IDLE;
+            CHECK(ta_run(f.system, &(ta_run_params){ .budget = 100, .report_taken = true, .outcomes = outcomes,
+                                                     .outcome_capacity = 2, .outcome_count = &count,
+                                                     .status = &run, .names = names,
+                                                     .name_capacity = sizeof names, .name_used = &used }) == TA_OK);
+            for (uint32_t at = 0; at < count; at += 1u) {
+                if (outcomes[at].has_event) {
+                    CHECK(outcomes[at].event.name == 0u);
+                    CHECK(outcomes[at].name.len == name.len && memcmp(outcomes[at].name.ptr, name.ptr, name.len) == 0);
+                    CHECK(used == name.len + 1u);
+                    mailed += 1u;
+                }
+                ta_event_release(&outcomes[at].event);
+            }
+            if (run == TA_RUN_IDLE) {
+                break;
+            }
+        }
+        /* A host posts the name: inspection reads it as text while its
+         * macrostep is paused, and a session image copies it. */
+        CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = actor,
+                                                                     .name = name, .event = &event }) == TA_OK);
+        CHECK(test_drive_run(f.system, actor, &(test_drive_run_params){ .pause_at_microstep_start = true,
+                                                                         .status = &status }) == TA_OK);
+        CHECK(status == TEST_DRIVE_PAUSED);
+        ta_actor_inspection view;
+        CHECK(ta_actor_inspect(f.system, actor, &view) == TA_OK && view.current_event != NULL &&
+              reads_as(&f, view.current_event->name, name));
+        ta_session_image *image = NULL;
+        CHECK(ta_actor_capture(f.system, &(ta_actor_capture_params){ .actor = actor, .out = &image }) == TA_OK);
+        ta_session_image_destroy(image);
+        CHECK(test_drive_run(f.system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+        CHECK(status == TEST_DRIVE_STABLE);
+    }
+    CHECK(mailed >= 1990u);
+    CHECK(atom_count(&f) == atoms);
+    CHECK(node_count(&f) == nodes);
+
+    /* More long names than the names buffer holds: the call that has no
+     * room for the next one answers MORE, and the next call gives it. */
+    static char long_name[3000];
+    memset(long_name, 'x', sizeof long_name);
+    set_type(long_name, sizeof long_name);
+    enum { LONG_MAILS = 30 };
+    for (uint32_t round = 0; round < LONG_MAILS; round += 1u) {
+        ta_event event = { .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+        CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = actor,
+                                                                     .name = text("send"), .event = &event }) == TA_OK);
+    }
+    uint32_t calls = 0;
+    uint32_t given = 0;
+    for (ta_run_status run = TA_RUN_MORE; run != TA_RUN_IDLE && calls < 8u; calls += 1u) {
+        static ta_input_outcome outcomes[256];
+        uint32_t count = 0;
+        uint32_t used = 0;
+        CHECK(ta_run(f.system, &(ta_run_params){ .budget = 10000, .report_taken = true, .outcomes = outcomes,
+                                                 .outcome_capacity = 256, .outcome_count = &count, .status = &run,
+                                                 .names = names, .name_capacity = sizeof names,
+                                                 .name_used = &used }) == TA_OK);
+        uint32_t taken = 0;
+        for (uint32_t at = 0; at < count; at += 1u) {
+            if (outcomes[at].has_event) {
+                CHECK(outcomes[at].name.len == sizeof long_name && outcomes[at].name.ptr[0] == 'x');
+                taken += 1u;
+            }
+            ta_event_release(&outcomes[at].event);
+        }
+        given += taken;
+        CHECK(used == taken * (sizeof long_name + 1u) && used <= sizeof names);
+        /* Stopped for want of room: one more name would not have fit. */
+        CHECK(given == LONG_MAILS || (run == TA_RUN_MORE && used + sizeof long_name + 1u > sizeof names));
+    }
+    CHECK(given == LONG_MAILS && calls == 2u);
+    fixture_close(&f);
+}
+
+/* The envelopes the pool keeps only for a kept event's name. */
+static uint32_t kept_envelopes(const fixture *f) {
+    const ta_envelope_pool *pool = &f->system->run.pool;
+    uint32_t count = 0;
+    for (uint32_t index = 1u; index <= pool->items.high_water; index += 1u) {
+        const ta_envelope *envelope = ta_envelope_pool_at(pool, index);
+        count += envelope != NULL && envelope->state == TA_ENVELOPE_KEPT ? 1u : 0u;
+    }
+    return count;
+}
+
+static ta_definition_id kept_child_definition = 0;
+static ta_actor_id kept_child = 0;
+
+static ta_op_status kid_start(void *self, const ta_invoker_start_params *params) {
+    (void)self;
+    ta_result spawned = ta_actor_spawn(params->request->system,
+                                       &(ta_actor_spawn_params){
+                                           .definition = kept_child_definition,
+                                           .parent = &(ta_actor_parent){ .actor = params->request->parent,
+                                                                         .invoke_id = params->request->invoke_id },
+                                           .out = &kept_child });
+    if (spawned != TA_OK) {
+        *params->fault = (ta_fault){ .code = spawned, .message = STR("no child") };
+        return TA_OP_ERROR;
+    }
+    *params->service_handle = kept_child;
+    return TA_OP_OK;
+}
+static ta_system *kept_system = NULL;
+static ta_op_status kid_cancel(void *self, uint64_t service, ta_fault *fault) {
+    (void)self, (void)fault;
+    (void)ta_actor_destroy(kept_system, service); /* as a host invoker ends its service */
+    return TA_OP_OK;
+}
+static ta_op_status kid_forward(void *self, const ta_invoker_forward_params *params) {
+    (void)self, (void)params;
+    return TA_OP_OK;
+}
+static const ta_invoker_vtable kid_vtable = { .start = kid_start, .cancel = kid_cancel, .forward = kid_forward };
+
+/* Claim 10. */
+static void test_kept_event_keeps_its_name(void) {
+    static const ta_scxml_invoke_spec invokes[] = {
+        { .kind = TA_SCXML_INVOKE, .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("kid") } }, {0}
+    };
+    static const ta_str to_idle[] = { STR("idle"), {0} };
+    static const ta_scxml_transition_spec working[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("stop"), .targets = to_idle }, {0}
+    };
+    static const ta_scxml_state_spec parent_states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("working"), .invokes = invokes, .transitions = working },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle") },
+        {0},
+    };
+    static const ta_scxml_spec parent = { .name = STR("parent"), .states = parent_states };
+    static const ta_scxml_transition_spec any[] = {
+        { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("*") }, {0}
+    };
+    static const ta_scxml_state_spec child_states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("c"), .transitions = any }, {0}
+    };
+    static const ta_scxml_spec child = { .name = STR("kid"), .states = child_states };
+    fixture f;
+    fixture_open(&f, &parent);
+    ta_definition *compiled = NULL;
+    CHECK(ta_definition_compile_spec(f.system, &(ta_definition_compile_params){
+                                                   .spec = &child,
+                                                   .datamodel = { .v = &dm_vtable },
+                                                   .allocator = test_allocator_of(&f.heap),
+                                                   .out = &compiled,
+                                               }) == TA_OK);
+    CHECK(ta_system_register_definition(f.system, compiled, &kept_child_definition) == TA_OK);
+    ta_atom kid = 0;
+    CHECK(ta_system_intern_atom(f.system, STR("kid"), &kid) == TA_OK);
+    CHECK(ta_system_register_invoker(f.system, kid, (ta_invoker){ .v = &kid_vtable }) == TA_OK);
+    kept_system = f.system;
+    ta_actor_id parent_actor = 0;
+    CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = f.id, .out = &parent_actor }) == TA_OK);
+    test_drive_status status = TEST_DRIVE_ERROR;
+    CHECK(test_drive_run(f.system, parent_actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    CHECK(kept_child != 0);
+    CHECK(test_drive_run(f.system, kept_child, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    ta_event event = { .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = kept_child,
+                                                                 .name = text("warm"), .event = &event }) == TA_OK);
+    CHECK(test_drive_run(f.system, kept_child, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    CHECK(kept_envelopes(&f) == 1u);
+    uint32_t atoms = atom_count(&f);
+    uint32_t nodes = node_count(&f);
+    char buffer[TA_EVENT_NAME_MAX_DEPTH * 14u];
+    for (uint32_t round = 0; round < 500u; round += 1u) {
+        ta_str name = random_name(buffer, f.names.capacity);
+        if (name.len == 0) {
+            continue;
+        }
+        CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system),
+                                                                     .actor = kept_child, .name = name,
+                                                                     .event = &event }) == TA_OK);
+        CHECK(test_drive_run(f.system, kept_child, &(test_drive_run_params){ .status = &status }) == TA_OK);
+        CHECK(status == TEST_DRIVE_STABLE);
+        /* The new event's envelope is kept; the one before it went back. */
+        CHECK(kept_envelopes(&f) == 1u);
+    }
+    CHECK(atom_count(&f) == atoms);
+    CHECK(node_count(&f) == nodes);
+    /* An image of the child carries the kept name, and a session restored
+     * from it keeps the name in an envelope of its own until it goes. */
+    ta_session_image *image = NULL;
+    CHECK(ta_actor_capture(f.system, &(ta_actor_capture_params){ .actor = kept_child, .out = &image }) == TA_OK);
+    ta_actor_id restored = 0;
+    CHECK(ta_actor_reconstruct(f.system, &(ta_actor_reconstruct_params){ .image = image, .out = &restored }) == TA_OK);
+    CHECK(kept_envelopes(&f) == 2u);
+    ta_session_image_destroy(image);
+    CHECK(ta_actor_destroy(f.system, restored) == TA_OK);
+    CHECK(kept_envelopes(&f) == 1u);
+    /* The parent's cancel ends the child, and the kept name goes with it. */
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = parent_actor,
+                                                                 .name = text("stop"), .event = &event }) == TA_OK);
+    CHECK(test_drive_run(f.system, parent_actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    CHECK(kept_envelopes(&f) == 0u);
+    CHECK(atom_count(&f) == atoms);
+    fixture_close(&f);
+}
+
 /* ------------------------------------------------------------------------
  * Invocation names
  */
@@ -954,6 +1213,8 @@ int main(void) {
     test_error_name_splits_the_id();
     test_too_deep_names();
     test_eventexpr_travels_as_text();
+    test_names_reach_hosts_as_text();
+    test_kept_event_keeps_its_name();
     if (failures != 0) {
         fprintf(stderr, "name_matching_test: %d failure(s)\n", failures);
         return 1;

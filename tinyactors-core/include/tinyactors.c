@@ -7870,7 +7870,11 @@ typedef enum {
     /** Held by a live local invocation, on no list. */
     TA_ENVELOPE_INVOCATION_TOKEN = 6,
     /** An invocation token turned into the stop of a child session. */
-    TA_ENVELOPE_CHILD_STOP = 7
+    TA_ENVELOPE_CHILD_STOP = 7,
+    /** A completed input kept, on no list, only for the name its text
+     * holds: an invoked session's kept event names it (`run.h`). It holds
+     * no references. */
+    TA_ENVELOPE_KEPT = 8
 } ta_envelope_state;
 
 /** `target` is the index of a waiting entry, not a session. */
@@ -7880,6 +7884,9 @@ typedef enum {
 /** An input posted to an address whose load failed: refused when it is
  * reached, with the fault's code in `due` (`run.h`). */
 #define TA_ENVELOPE_FLAG_REFUSED ((uint8_t)0x04u)
+/** A taken input whose name an invoked session's kept event names: when it
+ * completes it is kept (`TA_ENVELOPE_KEPT`), not given back. */
+#define TA_ENVELOPE_FLAG_KEEP ((uint8_t)0x08u)
 
 /** One pending input; see the file comment. */
 typedef struct {
@@ -9159,6 +9166,10 @@ typedef struct {
     /** The operator transition waiting with `event`, or null; taken over on
      * `TA_OK`. */
     struct ta_operator_jump *jump;
+    /** `event`'s name as text, written into the wake's text, when the event
+     * comes from a session image, which keeps names as text; empty to use
+     * `event->name`. */
+    ta_str name_text;
 } ta_run_wake;
 
 /**
@@ -9190,12 +9201,15 @@ TA_PRIVATE void ta_run_wake_cancel(ta_system *system, uint32_t wake);
 /**
  * The name ID of an input's event whose name core did not intern (ADR
  * 0100): this bit, or'ed with the input's envelope index. The name is the
- * text the envelope keeps; it lives as long as the input does, and no trie
- * node has this bit. Core reads it with `ta_run_input_name`, and gives an
- * event a real ID (`ta_event_name_for_host`) before a host or a stored
- * record keeps it.
+ * text the envelope keeps; it lives as long as the input does, or, for an
+ * invoked session's kept event, as long as that event is kept
+ * (`ta_run_keep_input`), and no trie node has this bit. Core reads it with
+ * `ta_run_input_name`; a host reads it with `ta_event_name_format` while
+ * the event is valid (`tinyactors.h`), a TAKEN outcome carries it as text,
+ * and a session image copies the text. Only a record that holds names by
+ * ID, a delayed send, gives it an interned ID (`ta_event_name_store`).
  */
-#define TA_RUN_NAME_INPUT 0x80000000u
+#define TA_RUN_NAME_INPUT TA_EVENT_NAME_TEXT
 
 /** Whether `name` names an input's name kept as text (`TA_RUN_NAME_INPUT`). */
 TA_PRIVATE inline bool ta_run_name_is_input(ta_event_name_id name) {
@@ -9209,6 +9223,27 @@ TA_PRIVATE inline bool ta_run_name_is_input(ta_event_name_id name) {
  * inside a macrostep.
  */
 TA_PRIVATE ta_str ta_run_input_name(const ta_system *system, ta_event_name_id name);
+
+/**
+ * Keeps input `index`, which `actor`'s macrostep took and is ending, past
+ * its completion for the name its text holds, which the invoked session's
+ * kept event names (`TA_RUN_NAME_INPUT`): when the input completes, its
+ * references go and its text stays, in an envelope on no list
+ * (`TA_ENVELOPE_KEPT`). Never allocates; cannot fail.
+ */
+TA_PRIVATE void ta_run_keep_input(ta_system *system, uint32_t index);
+
+/**
+ * Reserves an envelope that only keeps `name` as text for a kept event a
+ * session image restores, as `ta_run_keep_input` leaves one: `*out` names
+ * it. A safe point: refills first. `TA_ERR_FULL` or `TA_ERR_NOMEM`,
+ * changing nothing.
+ */
+TA_PRIVATE ta_result ta_run_keep_name(ta_system *system, ta_str name, uint32_t *out);
+
+/** Gives back a kept envelope (`ta_run_keep_input`, `ta_run_keep_name`)
+ * and its text, when the kept event that names it goes. Never allocates. */
+TA_PRIVATE void ta_run_release_kept(ta_system *system, uint32_t index);
 
 /** Mail for another session; see `ta_run_post_mail`. */
 typedef struct {
@@ -10956,6 +10991,9 @@ typedef struct ta_internal_queue {
     uint32_t count;
     uint32_t capacity;
     bool has_kept;
+    /* The kept envelope that holds the kept event's name as text
+     * (`ta_run_keep_input`), 0 when its name is interned. */
+    uint32_t kept_input;
     ta_event kept_event;
     ta_queued_event events[];
 } ta_internal_queue;
@@ -11517,14 +11555,15 @@ TA_PRIVATE uint32_t ta_event_name_atoms(ta_system *system, const ta_event *event
 TA_PRIVATE bool ta_event_name_put(const ta_system *system, const ta_event *event, ta_text_writer *writer);
 
 /*
- * Gives `event` a name ID for a host, or for a record that keeps the event
- * after its input completes: a name its input keeps as text is interned
- * into the event-name trie, and `name` set. May
+ * Gives `event` a name ID for a record that holds names by ID and keeps the
+ * event after its input completes: a delayed send (timer.h). A name its
+ * input keeps as text is interned into the event-name trie, and `name`
+ * set. Nothing a host is handed goes through here (ADR 0100). May
  * allocate; TA_ERR_INVALID for a text that is not a valid event name,
  * TA_ERR_NOMEM or TA_ERR_FULL when the tables cannot grow, changing
  * nothing. An event that has an ID is left as it is.
  */
-TA_PRIVATE ta_result ta_event_name_for_host(ta_system *system, ta_event *event);
+TA_PRIVATE ta_result ta_event_name_store(ta_system *system, ta_event *event);
 
 /*
  * Counts one occurrence for `definition` and for the system (ADR 0072). A
@@ -18850,20 +18889,30 @@ static void ta_run_jump_free(ta_system *system, ta_operator_jump *jump) {
  * where it stands: a bare envelope reads as a wake without an event. O(1)
  * in the envelopes; frees the text's chunks.
  */
-static void ta_run_strip(ta_system *system, uint32_t index) {
+/* Releases the references envelope `index` holds (its data and content,
+ * an event's origin and operator transition) and leaves its text. A kept
+ * envelope holds none: its record's were released when it was kept. */
+static void ta_run_release_references(ta_system *system, uint32_t index) {
     if (system->run.event_input == index) {
         system->run.event_input = 0u;
         system->run.event = (ta_event){ 0 };
     }
-    ta_run_record record = ta_run_record_of(system, index);
-    ta_origin_release(&record.origin);
-    ta_run_jump_free(system, record.jump);
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    if (envelope->state != TA_ENVELOPE_KEPT) {
+        ta_run_record record = ta_run_record_of(system, index);
+        ta_origin_release(&record.origin);
+        ta_run_jump_free(system, record.jump);
+    }
     ta_value_release(&envelope->data);
     ta_value_release(&envelope->content);
     envelope->data = (ta_value){ 0 };
     envelope->content = (ta_value){ 0 };
-    envelope->flags &= (uint8_t)~TA_ENVELOPE_FLAG_TRACED;
+}
+
+static void ta_run_strip(ta_system *system, uint32_t index) {
+    ta_run_release_references(system, index);
+    ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    envelope->flags &= (uint8_t)~(TA_ENVELOPE_FLAG_TRACED | TA_ENVELOPE_FLAG_KEEP);
     ta_name_area_free(&system->run.names, &envelope->text);
 }
 
@@ -19257,10 +19306,10 @@ TA_PRIVATE ta_result ta_run_wake_reserve(ta_system *system, const ta_run_wake *w
                                      wake->admission);
     }
     bool traced = wake->trace != NULL && !ta_trace_context_empty(&wake->trace->context);
-    if (traced || wake->event != NULL) {
+    if (traced || wake->event != NULL || wake->name_text.len != 0u) {
         ta_run_record record = { .origin = { .kind = TA_ORIGIN_NONE } };
         if (wake->event != NULL) {
-            record.name = wake->event->name;
+            record.name = wake->name_text.len != 0u ? 0u : wake->event->name;
             record.origin = wake->event->origin;
         }
         if (wake->jump != NULL) {
@@ -19271,7 +19320,8 @@ TA_PRIVATE ta_result ta_run_wake_reserve(ta_system *system, const ta_run_wake *w
                                                            .record = &record,
                                                            .trace = wake->trace,
                                                            .refilled = refilled,
-                                                           .admission = wake->admission });
+                                                           .admission = wake->admission,
+                                                           .name_text = wake->name_text });
         if (result != TA_OK) {
             ta_envelope_pool_give(&system->run.pool, index);
             return result;
@@ -19312,6 +19362,28 @@ TA_PRIVATE void ta_run_wake_place(ta_system *system, ta_actor *actor, uint32_t w
 
 TA_PRIVATE void ta_run_wake_cancel(ta_system *system, uint32_t wake) {
     ta_run_discard(system, wake);
+}
+
+/* ------------------------------------------------------------------------
+ * Names a kept event holds (ADR 0100)
+ */
+
+TA_PRIVATE void ta_run_keep_input(ta_system *system, uint32_t index) {
+    ta_envelope_pool_at(&system->run.pool, index)->flags |= TA_ENVELOPE_FLAG_KEEP;
+}
+
+TA_PRIVATE ta_result ta_run_keep_name(ta_system *system, ta_str name, uint32_t *out) {
+    uint32_t index = 0u;
+    ta_result result = ta_run_wake_reserve(system, &(ta_run_wake){ .name_text = name }, &index);
+    if (result == TA_OK) {
+        ta_envelope_pool_at(&system->run.pool, index)->state = TA_ENVELOPE_KEPT;
+        *out = index;
+    }
+    return result;
+}
+
+TA_PRIVATE void ta_run_release_kept(ta_system *system, uint32_t index) {
+    ta_run_discard(system, index);
 }
 
 /* ------------------------------------------------------------------------
@@ -19651,6 +19723,10 @@ typedef struct {
     uint32_t actions;
     uint32_t count;
     bool paused;
+    /* Bytes of `params->names` the TAKEN outcomes' names fill. */
+    uint32_t names_used;
+    /* The names buffer had no room for the next input's name. */
+    bool names_full;
 } ta_run_call;
 
 static void ta_run_outcome(ta_run_call *call, ta_input_outcome outcome) {
@@ -19798,7 +19874,15 @@ static void ta_run_complete(ta_run_call *call, ta_actor *actor, ta_run_ended end
     if (system->run.slot == index) {
         system->run.slot = 0u;
     }
-    ta_run_discard(system, index);
+    ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    if ((envelope->flags & TA_ENVELOPE_FLAG_KEEP) != 0u) {
+        /* The session's kept event names it: only its text stays. */
+        ta_run_release_references(system, index);
+        envelope->flags &= (uint8_t)~TA_ENVELOPE_FLAG_KEEP;
+        envelope->state = TA_ENVELOPE_KEPT;
+    } else {
+        ta_run_discard(system, index);
+    }
     if (actor->input == index) {
         ta_run_forget_input(actor);
     }
@@ -19874,6 +19958,50 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
     ta_run_complete(call, actor, (ta_run_ended){ .index = index, .outcome = { .kind = kind } });
 }
 
+/* Whether envelope `index`'s TAKEN outcome carries its event: core made
+ * it (mail, a delayed send that fell due), so no host call admitted it. */
+static bool ta_run_takes_event(const ta_envelope *envelope) {
+    return envelope->source == TA_RECORD_INPUT_SOURCE_MAIL || envelope->source == TA_RECORD_INPUT_SOURCE_TIMER;
+}
+
+/* The bytes, its NUL included, the name `name` takes in the names buffer:
+ * 0 for none, or for an interned name longer than the buffer can ever
+ * hold, which the outcome gives by ID only. Never allocates. */
+static uint32_t ta_run_name_bytes(const ta_system *system, ta_event_name_id name) {
+    uint32_t needed = 0u;
+    (void)ta_event_name_format(system, &(ta_event_name_format_params){ .name = name, .needed = &needed });
+    return needed > TA_RUN_NAMES_MIN_BYTES ? 0u : needed;
+}
+
+/* Whether the call's names buffer has room for the name envelope
+ * `index`'s TAKEN outcome gives. */
+static bool ta_run_names_room(const ta_run_call *call, uint32_t index) {
+    const ta_envelope *envelope = ta_envelope_pool_at(&call->system->run.pool, index);
+    if (!call->params->report_taken || !ta_run_takes_event(envelope)) {
+        return true;
+    }
+    ta_run_record record = ta_run_record_of(call->system, index);
+    ta_event_name_id name = (record.flags & TA_RUN_RECORD_NAME_TEXT) != 0u ? TA_RUN_NAME_INPUT | index : record.name;
+    return ta_run_name_bytes(call->system, name) <= call->params->name_capacity - call->names_used;
+}
+
+/* Writes `name`'s text into the call's names buffer, which
+ * ta_run_names_room found room in, and answers it; empty for none. */
+static ta_str ta_run_taken_name(ta_run_call *call, ta_event_name_id name) {
+    uint32_t bytes = ta_run_name_bytes(call->system, name);
+    uint32_t needed = 0u;
+    char *at = call->params->names + call->names_used;
+    if (bytes == 0u ||
+        ta_event_name_format(call->system, &(ta_event_name_format_params){ .name = name,
+                                                                           .buffer = at,
+                                                                           .capacity = bytes,
+                                                                           .needed = &needed }) != TA_OK) {
+        return (ta_str){ 0 };
+    }
+    call->names_used += bytes;
+    return (ta_str){ .ptr = at, .len = bytes - 1u };
+}
+
 /*
  * Takes envelope `index`, just off the run queue, and runs it when it is an
  * input to take: refused, dropped or deferred otherwise. TA_ERR_NOMEM when
@@ -19927,6 +20055,11 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
         /* Its name, kept as text, does not fit the name buffer the refill
          * before it could not grow. */
         return ta_run_put_back(call, index, TA_ERR_NOMEM);
+    } else if (!ta_run_names_room(call, index)) {
+        /* Its TAKEN outcome's name does not fit what is left of the names
+         * buffer: the next call takes it. */
+        call->names_full = true;
+        return ta_run_put_back(call, index, TA_OK);
     } else {
         ta_result result = envelope->source == TA_RECORD_INPUT_SOURCE_INVOKE_REPORT
                                ? ta_run_bind_report(system, actor, index)
@@ -19944,12 +20077,15 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
     ta_run_hold_input(system, actor, index);
     if (call->params->report_taken) {
         ta_input_outcome taken = { .kind = TA_INPUT_TAKEN };
-        if (envelope->source == TA_RECORD_INPUT_SOURCE_MAIL || envelope->source == TA_RECORD_INPUT_SOURCE_TIMER) {
-            /* Core made it: the host learns its event here, and releases it. */
+        if (ta_run_takes_event(envelope)) {
+            /* Core made it: the host learns its event here, and releases it,
+             * and its name as text in the call's names buffer. */
             ta_event event = ta_run_input_event_of(system, index);
             ta_event_retain(&event, &taken.event);
-            /* A host reads the name by ID; the text stays in the envelope. */
-            (void)ta_event_name_for_host(system, &taken.event);
+            taken.name = ta_run_taken_name(call, taken.event.name);
+            if (ta_run_name_is_input(taken.event.name)) {
+                taken.event.name = 0u;
+            }
             taken.has_event = true;
         }
         ta_run_report_input(call, index, taken);
@@ -19970,10 +20106,14 @@ static uint32_t ta_run_room(const ta_run_params *params) {
 
 TA_API ta_result ta_run(ta_system *system, const ta_run_params *params) {
     if (system == NULL || params == NULL || params->status == NULL || params->outcome_count == NULL ||
-        params->budget == 0u || params->outcomes == NULL || params->outcome_capacity < ta_run_room(params)) {
+        params->budget == 0u || params->outcomes == NULL || params->outcome_capacity < ta_run_room(params) ||
+        (params->report_taken && (params->names == NULL || params->name_capacity < TA_RUN_NAMES_MIN_BYTES))) {
         return TA_ERR_INVALID;
     }
     *params->outcome_count = 0u;
+    if (params->name_used != NULL) {
+        *params->name_used = 0u;
+    }
     if (system->run.running) {
         return TA_ERR_BUSY;
     }
@@ -19984,7 +20124,7 @@ TA_API ta_result ta_run(ta_system *system, const ta_run_params *params) {
     ta_run_status status = TA_RUN_IDLE;
     for (;;) {
         if (call.paused || call.budget == 0u || (params->action_budget != 0u && call.actions == 0u) ||
-            params->outcome_capacity - call.count < room) {
+            params->outcome_capacity - call.count < room || call.names_full) {
             status = ta_run_between(&call);
             break;
         }
@@ -20010,6 +20150,9 @@ TA_API ta_result ta_run(ta_system *system, const ta_run_params *params) {
         }
     }
     *params->outcome_count = call.count;
+    if (params->name_used != NULL) {
+        *params->name_used = call.names_used;
+    }
     *params->status = status;
     return result;
 }
@@ -21597,11 +21740,16 @@ TA_PRIVATE ta_result ta_invoke_id_from_text(ta_system *system, ta_str text, ta_i
     return result;
 }
 
-TA_API ta_result ta_system_intern_invoke_id(ta_system *system, ta_str text, ta_invoke_id *out) {
-    if (system == NULL || out == NULL) {
+TA_API ta_result ta_system_invoke_id_find(const ta_system *system, ta_str text, ta_invoke_id *out) {
+    if (system == NULL || out == NULL || text.ptr == NULL || text.len == 0) {
         return TA_ERR_INVALID;
     }
-    return ta_invoke_id_from_text(system, text, out);
+    ta_atom atom = 0;
+    if (ta_atom_find(&system->atoms, text, &atom) != TA_OK) {
+        return TA_ERR_NOT_FOUND;
+    }
+    *out = (ta_invoke_id)atom + 1u;
+    return TA_OK;
 }
 
 TA_PRIVATE ta_str ta_invoke_id_text(const ta_system *system, ta_invoke_id invoke) {
@@ -22321,7 +22469,7 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     }
     /* A stored send names its event by ID. */
     ta_event named = delivery->event;
-    ta_result interned = ta_event_name_for_host(system, &named);
+    ta_result interned = ta_event_name_store(system, &named);
     if (interned != TA_OK) {
         return interned;
     }
@@ -22430,12 +22578,8 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
                                                   .trace = ta_interpreter_trace_here(it),
                                               });
     } else {
-        /* A host reads the name by ID. */
-        ta_result named = ta_event_name_for_host(it->system, &copy);
-        if (named != TA_OK) {
-            ta_value_release(&copy.data);
-            return named;
-        }
+        /* The invoker reads a name core keeps as text during the call
+         * (ta_invoker_forward_params). */
         (void)meta.invoker.v->forward(meta.invoker.self, &(ta_invoker_forward_params){
                                                               .service_handle = sparse->invokes[index].service_handle,
                                                               .event = &copy,
@@ -28877,10 +29021,6 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
         .trace = { .context = ta_run_session_trace(system, actor).context,
                    .cause = ta_actor_step(actor) },
     };
-    if (out->current_event == &system->run.event) {
-        /* A host reads the name by ID (ta_event). */
-        (void)ta_event_name_for_host(system, &system->run.event);
-    }
     /* A taken head is `_event`, not work that waits. */
     uint32_t waiting = ta_actor_waiting_internal(actor);
     if (waiting != 0) {
@@ -29058,6 +29198,11 @@ typedef struct {
     bool has_kept;
     ta_event external_event;
     ta_event kept_event;
+    /* An event's name that core keeps only as text (ADR 0100), copied into
+     * the arena, its event's `name` then 0; empty when the name is
+     * interned. */
+    ta_str external_name;
+    ta_str kept_name;
     ta_trace_parent trace;
     ta_operator_jump *jump;
 } ta_image_events;
@@ -29255,6 +29400,36 @@ static const ta_operator_jump *ta_image_waiting_jump(const ta_actor *actor) {
     return ta_run_input_jump(system, actor->input);
 }
 
+/* The bytes of the names the actor's events keep only as text. */
+static size_t ta_image_name_bytes(const ta_actor *actor) {
+    const ta_system *system = actor->host_impl.system;
+    size_t total = 0u;
+    if (actor->external != TA_EXTERNAL_NONE) {
+        total += ta_run_input_name(system, ta_run_input_event_of(system, actor->input).name).len;
+    }
+    if (actor->internal != NULL && actor->internal->has_kept) {
+        total += ta_run_input_name(system, actor->internal->kept_event.name).len;
+    }
+    return total;
+}
+
+/* Copies the text of `event`'s name into the arena when core keeps it only
+ * as text, into `*name`, and leaves `event` naming none (ADR 0100). */
+static ta_result ta_image_copy_name(const ta_system *system, ta_arena *arena, ta_event *event, ta_str *name) {
+    ta_str text = ta_run_input_name(system, event->name);
+    if (text.len == 0u) {
+        return TA_OK;
+    }
+    char *copy = ta_arena_alloc(arena, text.len, 1u);
+    if (copy == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_mem_copy(copy, text.ptr, text.len);
+    *name = (ta_str){ .ptr = copy, .len = text.len };
+    event->name = 0u;
+    return TA_OK;
+}
+
 /* What the arena has to hold, so one block usually serves the whole image. */
 static size_t ta_image_measure(const ta_actor *actor) {
     const ta_actor_sparse_state *sparse = actor->sparse;
@@ -29268,6 +29443,7 @@ static size_t ta_image_measure(const ta_actor *actor) {
     if (actor->internal != NULL) {
         total += (size_t)actor->internal->count * sizeof(ta_queued_event);
     }
+    total += ta_image_name_bytes(actor);
     const ta_operator_jump *jump = ta_image_waiting_jump(actor);
     if (jump != NULL) {
         size_t bytes = 0;
@@ -29307,6 +29483,12 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     }
     if (result == TA_OK) {
         result = ta_image_copy_origin(system, arena, &image->events.kept_event);
+    }
+    if (result == TA_OK) {
+        result = ta_image_copy_name(system, arena, &image->events.external_event, &image->events.external_name);
+    }
+    if (result == TA_OK) {
+        result = ta_image_copy_name(system, arena, &image->events.kept_event, &image->events.kept_name);
     }
     if (result != TA_OK) {
         return result;
@@ -29486,12 +29668,7 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
         .completion = sparse != NULL ? sparse->completion : (ta_actor_completion){0},
         .final_state = sparse != NULL && actor->finished ? sparse->final_state : TA_STATE_NONE,
     };
-    /* An image names its events by ID: a name kept as text stays with the
-     * envelope that holds it. */
-    ta_result result = ta_event_name_for_host(system, &image->events.external_event);
-    if (result == TA_OK) {
-        result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
-    }
+    ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
     if (result == TA_OK) {
         result = ta_image_fill(image, actor);
     }
@@ -29758,8 +29935,16 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     if (image->events.has_kept || (image->events.external != TA_EXTERNAL_NONE && image->has_parent)) {
         result = ta_interpreter_queue_reserve(system, actor, 0);
     }
+    if (result == TA_OK && image->events.has_kept && image->events.kept_name.len != 0u) {
+        /* Its name, which core keeps only as text, gets an envelope of its
+         * own, as when the session kept the event (ADR 0100). */
+        result = ta_run_keep_name(system, image->events.kept_name, &actor->internal->kept_input);
+    }
     if (result == TA_OK && image->events.has_kept) {
         ta_event_retain(&image->events.kept_event, &actor->internal->kept_event);
+        if (actor->internal->kept_input != 0u) {
+            actor->internal->kept_event.name = TA_RUN_NAME_INPUT | actor->internal->kept_input;
+        }
         actor->internal->has_kept = true;
     }
     /*
@@ -29833,7 +30018,7 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
  */
 static ta_result ta_image_wake_reserve(ta_system *system, const ta_session_image *image, uint32_t *out) {
     const ta_image_events *events = &image->events;
-    ta_run_wake wake = { .admission = true, .trace = &events->trace };
+    ta_run_wake wake = { .admission = true, .trace = &events->trace, .name_text = events->external_name };
     if (events->external == TA_EXTERNAL_NONE) {
         return ta_run_wake_reserve(system, &wake, out);
     }
@@ -30967,7 +31152,7 @@ TA_PRIVATE bool ta_event_name_put(const ta_system *system, const ta_event *event
     return count != 0;
 }
 
-TA_PRIVATE ta_result ta_event_name_for_host(ta_system *system, ta_event *event) {
+TA_PRIVATE ta_result ta_event_name_store(ta_system *system, ta_event *event) {
     if (!ta_run_name_is_input(event->name)) {
         return TA_OK;
     }
@@ -32643,17 +32828,27 @@ static void ta_queue_truncate(ta_actor *actor, uint32_t mark) {
     }
 }
 
-/* Makes `event`, and its references, the kept event (ADR 0069); the queue
- * exists, since it held the event or was made for the kept one. */
-static void ta_keep_event(ta_actor *actor, const ta_event *event) {
+/* Lets go of the kept event and of the kept envelope that holds its name. */
+static void ta_release_kept(ta_actor *actor) {
+    ta_internal_queue *queue = actor->internal;
+    ta_event_release(&queue->kept_event);
+    if (queue->kept_input != 0u) {
+        ta_run_release_kept(actor->host_impl.system, queue->kept_input);
+        queue->kept_input = 0u;
+    }
+    queue->has_kept = false;
+}
+
+/* Makes `event`, and its references, the kept event (ADR 0069), with
+ * `kept_input`, the kept envelope that holds its name as text, or 0; the
+ * queue exists, since it held the event or was made for the kept one. */
+static void ta_keep_event(ta_actor *actor, const ta_event *event, uint32_t kept_input) {
     ta_internal_queue *queue = actor->internal;
     if (queue->has_kept) {
-        ta_event_release(&queue->kept_event);
+        ta_release_kept(actor);
     }
     queue->kept_event = *event;
-    /* Its envelope, which holds a name kept as text, goes with its input:
-     * the kept event names it by ID (ADR 0069). */
-    (void)ta_event_name_for_host(actor->host_impl.system, &queue->kept_event);
+    queue->kept_input = kept_input;
     queue->has_kept = true;
 }
 
@@ -32665,7 +32860,7 @@ static void ta_keep_event(ta_actor *actor, const ta_event *event) {
 static void ta_bind_event(ta_actor *actor, ta_event_binding taken) {
     if (actor->bound == TA_BOUND_INTERNAL) {
         ta_event head = ta_queue_pop(actor);
-        ta_keep_event(actor, &head);
+        ta_keep_event(actor, &head, 0u);
         actor->bound = TA_BOUND_KEPT;
     }
     actor->bound_before = actor->bound;
@@ -32708,8 +32903,7 @@ static void ta_release_events(ta_actor *actor) {
         ta_event_release(&event);
     }
     if (queue != NULL && queue->has_kept) {
-        ta_event_release(&queue->kept_event);
-        queue->has_kept = false;
+        ta_release_kept(actor);
     }
     ta_release_external(actor);
     actor->bound = TA_BOUND_NONE;
@@ -32730,12 +32924,20 @@ static void ta_end_macrostep_events(ta_system *system, ta_actor *actor) {
     }
     if (actor->bound == TA_BOUND_INTERNAL) {
         ta_event head = ta_queue_pop(actor);
-        ta_keep_event(actor, &head);
+        ta_keep_event(actor, &head, 0u);
         actor->bound = TA_BOUND_KEPT;
     } else if (actor->bound == TA_BOUND_EXTERNAL) {
         ta_event kept;
         ta_event_retain(ta_run_input_event(system, actor->input), &kept);
-        ta_keep_event(actor, &kept);
+        /* A name core keeps as text stays in the input's envelope, which the
+         * input keeps when it completes, for as long as the event is kept
+         * (ADR 0100). */
+        uint32_t kept_input = 0u;
+        if (ta_run_name_is_input(kept.name)) {
+            kept_input = actor->input;
+            ta_run_keep_input(system, kept_input);
+        }
+        ta_keep_event(actor, &kept, kept_input);
         actor->bound = TA_BOUND_KEPT;
     }
     ta_release_external(actor);
@@ -33090,26 +33292,6 @@ TA_API ta_result ta_send_id_parse(const ta_system *system, ta_str text, ta_send_
     ta_send_id id = ta_send_id_from_text(system, text);
     if (id == 0) {
         return TA_ERR_NOT_FOUND;
-    }
-    *out = id;
-    return TA_OK;
-}
-
-TA_API ta_result ta_send_id_intern(ta_system *system, ta_str text, ta_send_id *out) {
-    if (system == NULL || out == NULL || text.ptr == NULL || text.len == 0) {
-        return TA_ERR_INVALID;
-    }
-    ta_send_id id = ta_send_id_from_text(system, text);
-    if (id == 0) {
-        ta_atom atom = 0;
-        ta_result result = ta_atom_intern(&system->atoms, text, &atom);
-        if (result != TA_OK) {
-            return result;
-        }
-        id = ta_send_id_from_text(system, text);
-    }
-    if (id == 0) {
-        return TA_ERR_INVALID;
     }
     *out = id;
     return TA_OK;

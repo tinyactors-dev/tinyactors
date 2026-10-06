@@ -107,6 +107,7 @@ typedef struct {
 typedef struct {
     ta_actor_id actor;
     ta_event event;
+    char *name; /* the event's name as text, owned */
 } tat_held_event;
 
 typedef struct {
@@ -1643,60 +1644,38 @@ static jv tat_control_io(tat_instrument *instrument, const char *command, jv arg
     return tat_invalid(error_code, jv_string("io.recording commands: fail {op, ...}, clear_faults"));
 }
 
-/* The dotted text of an event name core gave, in `buffer`, for
- * ta_actor_deliver_params.name; empty when it does not fit. */
-static ta_str tat_name_text(const ta_system *system, ta_event_name_id name, char *buffer, uint32_t capacity) {
-    uint32_t needed = 0;
-    if (ta_event_name_format(system, &(ta_event_name_format_params){.name = name, .buffer = buffer,
-                                                                    .capacity = capacity, .needed = &needed}) != TA_OK) {
-        return (ta_str){0};
-    }
-    return (ta_str){.ptr = buffer, .len = needed - 1u};
-}
-
-/* The event name of dotted text, interned in the instrument's system. */
-static bool tat_endpoint_event_name(ta_system *system, const char *text, ta_event_name_id *out) {
-    ta_atom atoms[16];
-    uint32_t count = 0;
-    const char *start = text;
-    for (const char *at = text;; at += 1) {
-        if (*at == '.' || *at == '\0') {
-            if (count == sizeof(atoms) / sizeof(atoms[0]) ||
-                ta_system_intern_atom(system, (ta_str){.ptr = start, .len = (uint32_t)(at - start)}, &atoms[count]) !=
-                    TA_OK) {
-                return false;
-            }
-            count += 1;
-            if (*at == '\0') {
-                break;
-            }
-            start = at + 1;
-        }
-    }
-    return ta_event_name_intern(system, &(ta_atom_list){.atoms = atoms, .count = count}, out) == TA_OK;
-}
-
 static jv tat_endpoint_held_record(const tat_endpoint_state *state) {
     return jv_number((double)state->held_count);
 }
 
-/* Delivers one event with its origin; keeps it when core's pool is full and `hold` says so. */
-static jv tat_endpoint_deliver(tat_instrument *instrument, ta_actor_id actor, ta_event *event, bool hold) {
+/* Delivers one event named `name` with its origin; keeps it when core's
+ * pool is full and `hold` says so. */
+static jv tat_endpoint_deliver(tat_instrument *instrument, ta_actor_id actor, const char *name, ta_event *event,
+                               bool hold) {
     tat_endpoint_state *state = &instrument->endpoint;
-    char name[256];
-    ta_result result = ta_actor_deliver(instrument->system, &(ta_actor_deliver_params){ .time = ta_system_time(instrument->system), .actor = actor, .name = tat_name_text(instrument->system, event->name, name, sizeof name), .event = event });
+    ta_result result = ta_actor_deliver(instrument->system, &(ta_actor_deliver_params){
+                                                                .time = ta_system_time(instrument->system),
+                                                                .actor = actor,
+                                                                .name = {.ptr = name, .len = (uint32_t)strlen(name)},
+                                                                .event = event });
     if (result == TA_ERR_FULL && hold) {
+        char *kept = strdup(name);
+        if (kept == NULL) {
+            ta_event_release(event);
+            return jv_string("err_nomem");
+        }
         if (state->held_count == state->held_capacity) {
             size_t capacity = state->held_capacity == 0 ? 8 : state->held_capacity * 2;
             tat_held_event *grown = realloc(state->held, capacity * sizeof(*grown));
             if (grown == NULL) {
+                free(kept);
                 ta_event_release(event);
                 return jv_string("err_nomem");
             }
             state->held = grown;
             state->held_capacity = capacity;
         }
-        state->held[state->held_count++] = (tat_held_event){.actor = actor, .event = *event};
+        state->held[state->held_count++] = (tat_held_event){.actor = actor, .event = *event, .name = kept};
         return jv_string("held");
     }
     ta_event_release(event);
@@ -1713,12 +1692,11 @@ static jv tat_endpoint_receive(tat_instrument *instrument, jv args, int *error_c
         jv_free(event_name);
         return tat_invalid(error_code, jv_string("receive needs args.processor, args.actor and args.event"));
     }
-    ta_event event = {.type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
-    bool named = tat_endpoint_event_name(instrument->system, jv_string_value(event_name), &event.name);
+    /* Core checks the name when it admits the event. */
+    char name[512];
+    snprintf(name, sizeof name, "%s", jv_string_value(event_name));
     jv_free(event_name);
-    if (!named) {
-        return tat_invalid(error_code, jv_string("receive: args.event is not a valid event name"));
-    }
+    ta_event event = {.type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
     ta_io_origin_make_params origin = {.processor = (uint32_t)processor, .out = &event.origin};
     jv uri = jv_object_get(jv_copy(args), jv_string("uri"));
     switch (instrument->kind) {
@@ -1774,7 +1752,7 @@ static jv tat_endpoint_receive(tat_instrument *instrument, jv args, int *error_c
     jv hold = jv_object_get(jv_copy(args), jv_string("hold"));
     bool holding = jv_get_kind(hold) == JV_KIND_TRUE;
     jv_free(hold);
-    jv outcome = tat_endpoint_deliver(instrument, (ta_actor_id)actor, &event, holding);
+    jv outcome = tat_endpoint_deliver(instrument, (ta_actor_id)actor, name, &event, holding);
     jv record = jv_object_set(jv_object(), jv_string("result"), outcome);
     return jv_object_set(record, jv_string("held"), tat_endpoint_held_record(&instrument->endpoint));
 }
@@ -1786,12 +1764,17 @@ static jv tat_endpoint_flush(tat_instrument *instrument) {
     size_t taken = 0;
     while (taken < state->held_count) {
         tat_held_event *held = &state->held[taken];
-        char name[256];
-        ta_result result = ta_actor_deliver(instrument->system, &(ta_actor_deliver_params){ .time = ta_system_time(instrument->system), .actor = held->actor, .name = tat_name_text(instrument->system, held->event.name, name, sizeof name), .event = &held->event });
+        ta_result result = ta_actor_deliver(instrument->system, &(ta_actor_deliver_params){
+                                                                    .time = ta_system_time(instrument->system),
+                                                                    .actor = held->actor,
+                                                                    .name = {.ptr = held->name,
+                                                                             .len = (uint32_t)strlen(held->name)},
+                                                                    .event = &held->event });
         if (result == TA_ERR_FULL) {
             break;
         }
         ta_event_release(&held->event);
+        free(held->name);
         results = jv_array_append(results, tat_result_name(result));
         taken += 1;
     }
@@ -1806,6 +1789,7 @@ static jv tat_endpoint_drop(tat_instrument *instrument) {
     tat_endpoint_state *state = &instrument->endpoint;
     for (size_t index = 0; index < state->held_count; index += 1) {
         ta_event_release(&state->held[index].event);
+        free(state->held[index].name);
     }
     jv dropped = jv_number((double)state->held_count);
     state->held_count = 0;

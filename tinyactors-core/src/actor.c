@@ -1684,10 +1684,6 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         .trace = { .context = ta_run_session_trace(system, actor).context,
                    .cause = ta_actor_step(actor) },
     };
-    if (out->current_event == &system->run.event) {
-        /* A host reads the name by ID (ta_event). */
-        (void)ta_event_name_for_host(system, &system->run.event);
-    }
     /* A taken head is `_event`, not work that waits. */
     uint32_t waiting = ta_actor_waiting_internal(actor);
     if (waiting != 0) {

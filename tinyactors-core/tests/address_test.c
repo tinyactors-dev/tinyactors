@@ -15,6 +15,9 @@
 #include "test_allocator.h"
 #include "test_drive.h"
 
+/* The names of the TAKEN events of one ta_run() call (ta_run_params.names). */
+static char taken_names[TA_RUN_NAMES_MIN_BYTES];
+
 static int failures;
 
 #define CHECK(condition)                                                        \
@@ -43,7 +46,7 @@ static bool took_mail_from(ta_system *system, ta_actor_id actor, const char *nam
         ta_input_outcome outcomes[2];
         uint32_t count = 0;
         ta_run_status status = TA_RUN_IDLE;
-        CHECK(ta_run(system, &(ta_run_params){ .budget = 100, .report_taken = true, .outcomes = outcomes,
+        CHECK(ta_run(system, &(ta_run_params){ .budget = 100, .report_taken = true, .names = taken_names, .name_capacity = sizeof taken_names, .outcomes = outcomes,
                                                .outcome_capacity = 2, .outcome_count = &count,
                                                .status = &status }) == TA_OK);
         for (uint32_t index = 0; index < count; index += 1u) {

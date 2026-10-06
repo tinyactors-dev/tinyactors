@@ -349,11 +349,20 @@ typedef struct {
     } as;
 } ta_origin TA_TAGGED(kind, as);
 typedef struct { ta_event_name_id name; ta_event_type type; ta_send_id send_id; ta_origin origin; ta_invoke_id invoke_id; ta_value data; } ta_event;
+/* The bit of an event name ID that is a handle to text an input keeps,
+ * valid only while the event is (ta_event); an interned name never has it,
+ * so a host may cache the text of an ID without it. */
+#define TA_EVENT_NAME_TEXT ((uint32_t)0x80000000)
 /* invoke_id is TA_INVOKE_ID_NONE unless an invoked child generated the event.
- * `name` names the event in an event core hands a host; the host reads its
- * text with ta_event_name_format() while the event is valid (a run-time
- * name is kept by the input that carries it, ADR 0100). A host passes a
- * name as text (ta_actor_deliver_params.name) and leaves `name` 0. */
+ * `name` names the event in an event core hands a host. Core interns only
+ * authored names (ADR 0100): a run-time name is kept as text by the input
+ * that carries it, and `name` is then a handle to that text, which the host
+ * reads with ta_event_name_format() only while the event is valid: during
+ * the call that hands it over (an invoker's forward), or until the next
+ * ta_run() or inspection (an inspection's current_event). A host that
+ * keeps the event longer copies the text first. A TAKEN outcome gives the
+ * name as text (ta_input_outcome.name). A host passes a name as text
+ * (ta_actor_deliver_params.name) and leaves `name` 0. */
 /* A receiver of a fault owns its data; the message is borrowed. */
 typedef struct { ta_event_name_id detail; int32_t code; ta_str message; TA_RELEASE(ta_value_release) ta_value data; } ta_fault;
 /*
@@ -830,13 +839,6 @@ TA_API uint64_t ta_system_incarnation(const ta_system *system);
 TA_API ta_result ta_send_id_parse(const ta_system *system,
                                   ta_str text,
                                   TA_OUT ta_send_id *out);
-/*
- * Interns a send ID's text and answers its ID: ta_send_id_parse() for text
- * this system may never have seen, such as a literal ID a log written by
- * another process names (kernel ADR 0002). TA_ERR_INVALID for empty text;
- * TA_ERR_NOMEM when a literal cannot be interned.
- */
-TA_API ta_result ta_send_id_intern(ta_system *system, ta_str text, TA_OUT ta_send_id *out);
 
 typedef struct {
     ta_send_id send_id;
@@ -1631,6 +1633,9 @@ typedef struct { ta_system *system; ta_actor_id parent; ta_invoke_id invoke_id; 
                  ta_str src_text; ta_value data; ta_str content_type; ta_bytes content; ta_value params;
                  bool autoforward; ta_trace_parent trace; ta_definition_id definition; } ta_invoke_request;
 typedef struct { TA_IN const ta_invoke_request *request; TA_OUT uint64_t *service_handle; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_invoker_start_params;
+/* `event` is borrowed for the call: an invoker that keeps it retains it
+ * and reads its name, when core keeps it only as text, during the call
+ * (ta_event). */
 typedef struct { uint64_t service_handle; TA_IN const ta_event *event; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_invoker_forward_params;
 
 /*
@@ -3056,6 +3061,11 @@ typedef struct {
      * Otherwise false, and `event` all zero. */
     bool has_event;
     TA_RELEASE_IF(ta_event_release, has_event) ta_event event;
+    /* With `has_event`: the event's name as text, in the caller's
+     * ta_run_params.names buffer, valid until the next ta_run() with that
+     * buffer; `event.name` is 0 when core keeps the name only as text (ADR
+     * 0100). Otherwise empty. */
+    ta_str name;
 } ta_input_outcome;
 
 /*
@@ -3083,7 +3093,12 @@ typedef struct {
  * for all it can report about it, so a full buffer answers TA_RUN_MORE and
  * loses nothing.
  * `report_taken` adds a TAKEN outcome for every input as its macrostep
- * begins, for a host that records inputs when they are taken.
+ * begins, for a host that records inputs when they are taken. It needs
+ * `names`, a buffer of `name_capacity` bytes, at least
+ * TA_RUN_NAMES_MIN_BYTES, for the names of the TAKEN events
+ * (ta_input_outcome.name), which the call fills from the start and counts
+ * in `name_used`. The call takes an input only while the buffer has room
+ * for its name, so a full buffer answers TA_RUN_MORE and loses nothing.
  *
  * `session`, when not 0, is the debugging exception (ADR 0103): the call
  * runs only that session's inputs, the first one queued for it first,
@@ -3097,11 +3112,17 @@ typedef struct {
     bool pause_at_microstep_start;
     bool report_taken;
     ta_actor_id session;
-    TA_BUFFER(outcome_capacity, outcome_count) ta_input_outcome *outcomes;
+    TA_BUFFER(outcome_capacity, outcome_count) TA_LIFETIME(run) ta_input_outcome *outcomes;
     uint32_t outcome_capacity;
     TA_OUT TA_ALWAYS uint32_t *outcome_count;
     TA_OUT ta_run_status *status;
+    TA_BUFFER(name_capacity, name_used) TA_OPTIONAL char *names;
+    uint32_t name_capacity;
+    TA_OUT TA_OPTIONAL uint32_t *name_used;
 } ta_run_params;
+/* The least ta_run_params.name_capacity with `report_taken`: room for the
+ * longest name an input can carry (one name-area field) and its NUL. */
+#define TA_RUN_NAMES_MIN_BYTES ((uint32_t)65536)
 typedef struct {
     ta_actor_id actor;
     const ta_session_image *image;
@@ -3664,7 +3685,9 @@ typedef struct {
      * The external event of the macrostep in progress, or null: read from
      * the pool envelope of the input it took, which holds it until the
      * input completes. Borrowed, and valid until the next inspection or run
-     * reads another input's event, or the input completes.
+     * reads another input's event, or the input completes; its name, when
+     * core keeps it only as text, is read with ta_event_name_format() in
+     * that time (ta_event).
      */
     TA_IN TA_OPTIONAL const ta_event *current_event;
     TA_COUNTED_BY(internal_count) TA_OPTIONAL const ta_queued_event *internal_events;
@@ -4461,12 +4484,15 @@ TA_API ta_result ta_system_invoke_id_text(const ta_system *system,
                                           ta_invoke_id invoke,
                                           TA_OUT TA_LIFETIME(system) ta_str *out);
 /*
- * The invocation ID `text` names, interning it: the inverse of
- * ta_system_invoke_id_text(), for a host that restores an invocation a log
- * written by another process names (kernel ADR 0002). TA_ERR_INVALID for
- * empty text; TA_ERR_NOMEM when it cannot be interned.
+ * The invocation ID `text` names: the inverse of
+ * ta_system_invoke_id_text(), for a host that replays an event an invoked
+ * session sent, which a log written by another process names (kernel ADR
+ * 0002). It looks the text up and never interns it (ADR 0100): the
+ * replayed parent's invocation issued the ID again before its child's
+ * events are replayed. TA_ERR_INVALID for empty text; TA_ERR_NOT_FOUND for
+ * an ID this system has not issued.
  */
-TA_API ta_result ta_system_intern_invoke_id(ta_system *system, ta_str text, TA_OUT ta_invoke_id *out);
+TA_API ta_result ta_system_invoke_id_find(const ta_system *system, ta_str text, TA_OUT ta_invoke_id *out);
 TA_API ta_result ta_event_name_intern(ta_system *system,
                                       TA_IN const ta_atom_list *segments,
                                       TA_OUT ta_event_name_id *out);

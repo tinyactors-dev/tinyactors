@@ -97,6 +97,9 @@ struct tah_sched {
     ta_allocator allocator; /* the scheduling category */
     /* The names of the messages it holds, as text (events.h). */
     tah_names names;
+    /* The names of the TAKEN events of one ta_run() call, as text
+     * (ta_run_params.names), reserved before the first call. */
+    tah_vec taken_names;
     tah_vec pages;          /* tah_sched_entry *, one per page */
     /* The core whose pool admits the mail, the reentrancy flag set around
      * every call into it (ADR 0013 point 4), and the watched sessions whose
