@@ -621,6 +621,9 @@ static void test_system_regions(void) {
         if (shapes[index].nesting > 1u) {
             ta_arena scratch;
             ta_arena render;
+            /* A region opens only once a safe point reserved it. */
+            CHECK(ta_system_nested_region(system, 1, &scratch, &render) == TA_ERR_NOMEM);
+            CHECK(ta_system_nested_reserve(system) == TA_OK);
             CHECK(ta_system_nested_region(system, 1, &scratch, &render) == TA_OK);
             CHECK(system->nested[0].bytes == expected.region);
             CHECK((unsigned char *)scratch.head == system->nested[0].memory);

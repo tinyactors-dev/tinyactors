@@ -535,18 +535,23 @@ static void test_nested_regions(void) {
     CHECK(ta_system_param(system, TA_PARAM_INTERPRETER_BYTES, &interpreter_bytes) == TA_OK);
     heap.policy.large = (size_t)interpreter_bytes;
     spawned_count = 0;
+    /* The parent's first take, a safe point, allocates regions 1 and 2 and
+     * the frames that exit sessions in them, once (ADR 0102); a cancel
+     * inside a macrostep allocates none. */
+    unsigned long before = heap.large_allocations;
     ta_actor_id parent = spawn(system, parent_definition);
     CHECK(resume(system, parent) == TEST_DRIVE_STABLE); /* starts the child */
+    CHECK(heap.large_allocations - before == 3u);
     resume_spawned(system, 0);                      /* the child starts the grandchild */
     resume_spawned(system, 1);
     CHECK(spawned_count == 2 && last_spawn == TA_OK);
 
     /* The first cancel exits the child in region 1 and the grandchild in
-     * region 2, allocating each once. */
-    unsigned long before = heap.large_allocations;
+     * region 2, which are there already. */
+    before = heap.large_allocations;
     deliver(system, parent, "stop");
     CHECK(resume(system, parent) == TEST_DRIVE_STABLE);
-    CHECK(heap.large_allocations - before == 2u);
+    CHECK(heap.large_allocations == before);
 
     /* The second finds both regions kept. */
     uint32_t mark = spawned_count;

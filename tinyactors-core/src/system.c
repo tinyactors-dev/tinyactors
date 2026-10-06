@@ -180,6 +180,21 @@ static void ta_interpreter_region_open(const ta_interpreter_region *region, ta_a
     ta_arena_init_fixed(render, region->memory + region->render, region->bytes - region->render);
 }
 
+ta_result ta_system_nested_reserve(ta_system *system) {
+    ta_interpreter_region laid = { 0 };
+    ta_result result = ta_interpreter_region_lay_out(system->params, &laid);
+    for (uint32_t index = 0; result == TA_OK && index + 1u < system->params[TA_PARAM_INTERPRETER_NESTING];
+         index += 1u) {
+        ta_nested_region *region = &system->nested[index];
+        if (region->memory == NULL) {
+            region->memory = ta_mem_alloc(system->allocator, laid.bytes, _Alignof(ta_arena_block));
+            result = region->memory == NULL ? TA_ERR_NOMEM : TA_OK;
+            region->bytes = laid.bytes;
+        }
+    }
+    return result;
+}
+
 ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *scratch, ta_arena *render) {
     if (depth == 0 || depth >= system->params[TA_PARAM_INTERPRETER_NESTING]) {
         return TA_ERR_UNSUPPORTED;
@@ -191,11 +206,7 @@ ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *s
     }
     ta_nested_region *region = &system->nested[depth - 1u];
     if (region->memory == NULL) {
-        region->memory = ta_mem_alloc(system->allocator, laid.bytes, _Alignof(ta_arena_block));
-        if (region->memory == NULL) {
-            return TA_ERR_NOMEM;
-        }
-        region->bytes = laid.bytes;
+        return TA_ERR_NOMEM; /* reserved at a safe point; a macrostep never allocates */
     }
     laid.memory = region->memory;
     ta_interpreter_region_open(&laid, scratch, render);
@@ -452,6 +463,7 @@ void ta_system_destroy(ta_system *system) {
     ta_vec_destroy(&system->invokers);
     ta_system_arena_close(system);
     ta_interpreter_release_spares(system);
+    ta_interpreter_release_exit_frames(system);
     ta_trace_close(system);
     /* Unloaded sessions hold addresses; give them back before the table goes. */
     ta_session_table_destroy(&system->sessions);

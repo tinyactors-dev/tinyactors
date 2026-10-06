@@ -4540,6 +4540,13 @@ typedef struct {
     ta_invoke_taken taken;
 } ta_exit_frame;
 
+/* The sessions being exited, innermost last, in the system's frames. */
+typedef struct {
+    ta_exit_frame *items;
+    uint32_t count;
+    uint32_t capacity;
+} ta_exit_stack;
+
 /*
  * Starts exiting a session: a nested interpreter region of its own (ADR
  * 0092 section 3), region `frames->count + 1`, so the interpreter that
@@ -4548,13 +4555,14 @@ typedef struct {
  * happens when the session is gone or finished, when the depth passes
  * interpreterNesting, or when there is no memory for the region.
  */
-static void ta_exit_open(ta_system *system, ta_vec *frames, ta_actor_id id) {
+static void ta_exit_open(ta_system *system, ta_exit_stack *frames, ta_actor_id id) {
     ta_actor *actor = ta_actor_lookup(system, id);
     if (actor == NULL || actor->finished) {
         return;
     }
     ta_exit_frame frame = { .actor = actor, .exiting = TA_STATE_NONE };
-    if (ta_system_nested_region(system, frames->count + 1u, &frame.arena, &frame.render) != TA_OK) {
+    if (frames->count == frames->capacity ||
+        ta_system_nested_region(system, frames->count + 1u, &frame.arena, &frame.render) != TA_OK) {
         return;
     }
     ta_arena previous = system->scratch;
@@ -4569,7 +4577,8 @@ static void ta_exit_open(ta_system *system, ta_vec *frames, ta_actor_id id) {
     frame.render = system->render;
     frame.next = actor->definition->state_count;
     if (result == TA_OK) {
-        result = ta_vec_push(frames, &frame);
+        frames->items[frames->count] = frame;
+        frames->count += 1u;
     }
     if (result != TA_OK) {
         actor->live_active = NULL;
@@ -4583,8 +4592,8 @@ static void ta_exit_open(ta_system *system, ta_vec *frames, ta_actor_id id) {
  * next invocation, or finish. `system->scratch` is the session's arena while
  * it runs; a step that keeps the session saves the arena back to its frame.
  */
-static void ta_exit_step(ta_system *system, ta_vec *frames) {
-    ta_exit_frame *frame = ta_vec_at(frames, frames->count - 1u);
+static void ta_exit_step(ta_system *system, ta_exit_stack *frames) {
+    ta_exit_frame *frame = &frames->items[frames->count - 1u];
     ta_interpreter *it = &frame->it;
     if (frame->waiting) {
         frame->waiting = false;
@@ -4652,16 +4661,17 @@ void ta_interpreter_exit_invoked(ta_system *system, ta_actor_id id) {
      * every exited session gets its own scratch, and the parent's comes back. */
     ta_arena outer = system->scratch;
     ta_arena outer_render = system->render;
-    ta_vec frames;
-    ta_vec_init(&frames, system->allocator, TA_VEC_LAYOUT(ta_exit_frame));
+    ta_exit_stack frames = { .items = system->exit_frames,
+                             .capacity = system->exit_frames == NULL
+                                             ? 0u
+                                             : system->params[TA_PARAM_INTERPRETER_NESTING] - 1u };
     ta_exit_open(system, &frames, id);
     while (frames.count != 0) {
-        ta_exit_frame *frame = ta_vec_at(&frames, frames.count - 1u);
+        ta_exit_frame *frame = &frames.items[frames.count - 1u];
         system->scratch = frame->arena;
         system->render = frame->render;
         ta_exit_step(system, &frames);
     }
-    ta_vec_destroy(&frames);
     system->scratch = outer;
     system->render = outer_render;
 }
@@ -4807,6 +4817,29 @@ bool ta_interpreter_jump_valid(const ta_definition *definition, const ta_operato
     return true;
 }
 
+/* What exiting invoked sessions needs, allocated once, at a safe point:
+ * the nested regions and a frame for each. */
+static ta_result ta_exit_reserve(ta_system *system) {
+    ta_result result = ta_system_nested_reserve(system);
+    uint32_t depth = system->params[TA_PARAM_INTERPRETER_NESTING] - 1u;
+    if (result == TA_OK && system->exit_frames == NULL && depth != 0u) {
+        system->exit_frames = ta_mem_alloc(system->allocator, (size_t)depth * sizeof(ta_exit_frame),
+                                           _Alignof(ta_exit_frame));
+        result = system->exit_frames == NULL ? TA_ERR_NOMEM : TA_OK;
+    }
+    return result;
+}
+
+void ta_interpreter_release_exit_frames(ta_system *system) {
+    if (system->exit_frames != NULL) {
+        ta_mem_free(system->allocator, system->exit_frames,
+                    &(ta_allocator_free_params){
+                        .size = (size_t)(system->params[TA_PARAM_INTERPRETER_NESTING] - 1u) * sizeof(ta_exit_frame),
+                        .alignment = _Alignof(ta_exit_frame) });
+        system->exit_frames = NULL;
+    }
+}
+
 ta_result ta_interpreter_reserve(ta_system *system, ta_actor *actor) {
     ta_result result = ta_reserve_stop(system, actor);
     if (result == TA_OK) {
@@ -4814,6 +4847,9 @@ ta_result ta_interpreter_reserve(ta_system *system, ta_actor *actor) {
     }
     if (result == TA_OK) {
         result = ta_invoke_reserve(system, actor);
+    }
+    if (result == TA_OK && actor->definition->invoke_decl_count != 0u) {
+        result = ta_exit_reserve(system);
     }
     return result;
 }

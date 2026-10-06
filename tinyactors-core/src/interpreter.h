@@ -228,6 +228,9 @@ bool ta_interpreter_jump_valid(const ta_definition *definition, const ta_operato
  */
 ta_result ta_interpreter_reserve(ta_system *system, ta_actor *actor);
 
+/** Frees the frames exiting invoked sessions use; at system teardown. */
+void ta_interpreter_release_exit_frames(ta_system *system);
+
 /* ta_actor_abandon() for a resident actor (ADR 0082). */
 ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor);
 /*

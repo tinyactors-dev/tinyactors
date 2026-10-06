@@ -249,6 +249,9 @@ struct ta_system {
     size_t arena_bytes;
     ta_arena render;
     ta_nested_region *nested; /* interpreterNesting - 1 entries */
+    /* The frames exiting invoked sessions use, interpreterNesting - 1 of
+     * them, allocated with the nested regions; null until then. */
+    void *exit_frames;
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;
@@ -284,6 +287,14 @@ struct ta_system {
  * unknown or stale ID.
  */
 ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id);
+/**
+ * Allocates every nested interpreter region interpreterNesting allows, at
+ * a safe point, so exiting invoked sessions inside a macrostep allocates
+ * nothing (ADR 0102). Keeps what it had; TA_ERR_NOMEM leaves the regions
+ * made so far.
+ */
+ta_result ta_system_nested_reserve(ta_system *system);
+
 /*
  * A nested interpreter's two arenas (ADR 0092 section 3): region `depth`,
  * from 1, allocated the first time it is needed and kept. TA_ERR_UNSUPPORTED
