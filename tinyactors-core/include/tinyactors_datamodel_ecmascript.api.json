@@ -1,7 +1,7 @@
 {
   "format": "c-api/1",
   "header": "tinyactors_datamodel_ecmascript.h",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "targets": [
     "x86_64",
     "aarch64",
