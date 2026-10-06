@@ -816,6 +816,7 @@ It is also the first release built as three C libraries, released together (4bc7
 
 **Fixed**
 
+- release removes --skip-tests from its arguments when mise sets usage_skip_tests (8843f45)
 - set the size before asking for system stats when growing (28a9558)
 - build the test programs and tools on macOS (8067f29)
 - build the PostgreSQL extension with the pinned clang (1a880f4)
