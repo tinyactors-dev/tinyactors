@@ -22757,7 +22757,7 @@ static ta_op_status ta_invoke_value_text(ta_interpreter *it, ta_datamodel_value_
 #define TA_INVOKE_FAILED 1
 
 static ta_result ta_invoke_op(ta_op_status status) {
-    return status == TA_OP_OK ? TA_OK : TA_INVOKE_FAILED;
+    return status == TA_OP_OK ? TA_OK : status == TA_OP_NOMEM ? TA_ERR_NOMEM : TA_INVOKE_FAILED;
 }
 
 /*
@@ -23019,13 +23019,15 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
     if (found >= 0) {
         ta_invoke_remove_at(sparse, (uint32_t)found);
     }
-    /* An invoker that ran out of memory started nothing, and the chart
-     * sees error.execution (ADR 0102). A local child that found no envelope
-     * for its token fails as a capacity error. */
+    /* An invoker that ran out of memory started nothing: the invocation
+     * starts again when the host runs the session again. Starting a service
+     * still runs inside the macrostep that entered its state, so its
+     * out-of-memory is a stop, not an error the chart sees, until startup
+     * moves after the macrostep (ADR 0102 decision 6). A local child that
+     * found no envelope for its token fails as a capacity error. */
     if (status == TA_OP_NOMEM) {
-        static const char text[] = "the invoker ran out of memory";
         ta_value_release(&values->fault.data);
-        values->fault = (ta_fault){ .code = TA_ERR_NOMEM, .message = { .ptr = text, .len = sizeof text - 1u } };
+        return TA_ERR_NOMEM;
     }
     return values->fault.code == TA_ERR_FULL ? ta_interpreter_capacity_error(it, TA_RECORD_CAPACITY_RESOURCE_POOL)
                                              : ta_interpreter_execution_error(it, &values->fault);
@@ -33543,8 +33545,22 @@ static uint32_t ta_trace_guard_capacity(const ta_definition *definition) {
  * Events and errors
  */
 
+/*
+ * The actor's sparse state, made when it has none. Inside a macrostep it is
+ * the system's spare, which taking the input made sure of (ta_reserve_stop),
+ * so a session that finishes or stops there allocates nothing (ADR 0102);
+ * outside one it is allocated.
+ */
 static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
+    if (actor->sparse == NULL && system->run.running && system->spare_sparse != NULL) {
+        actor->sparse = system->spare_sparse;
+        system->spare_sparse = NULL;
+        *actor->sparse = (ta_actor_sparse_state){ .final_state = TA_STATE_NONE };
+    }
     if (actor->sparse == NULL) {
+        if (system->run.running) {
+            return NULL; /* never allocates inside a macrostep */
+        }
         actor->sparse = ta_mem_alloc(system->allocator, sizeof(ta_actor_sparse_state),
                                      _Alignof(ta_actor_sparse_state));
         if (actor->sparse == NULL) {
@@ -36473,10 +36489,15 @@ static void ta_compact_sparse(ta_interpreter *it) {
         return;
     }
     ta_invoke_release(it->system, it->actor);
+    it->actor->sparse = NULL;
+    if (it->system->spare_sparse == NULL) {
+        /* The system's spare again, for the next take that needs one. */
+        it->system->spare_sparse = sparse;
+        return;
+    }
     ta_mem_free(it->system->allocator, sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
                                              .alignment = _Alignof(ta_actor_sparse_state) });
-    it->actor->sparse = NULL;
 }
 
 /* ------------------------------------------------------------------------
@@ -37579,9 +37600,14 @@ TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *
     ta_continuation_free(system->allocator, &actor->sparse->paused);
     ta_queue_settle(system, actor); /* empty, and no longer paused */
     ta_value_release(&actor->sparse->completion.data);
-    ta_mem_free(system->allocator, actor->sparse,
-                &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
-                                             .alignment = _Alignof(ta_actor_sparse_state) });
+    if (system->spare_sparse == NULL) {
+        /* The system's spare again: a later take may need one. */
+        system->spare_sparse = actor->sparse;
+    } else {
+        ta_mem_free(system->allocator, actor->sparse,
+                    &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
+                                                 .alignment = _Alignof(ta_actor_sparse_state) });
+    }
     actor->sparse = NULL;
 }
 

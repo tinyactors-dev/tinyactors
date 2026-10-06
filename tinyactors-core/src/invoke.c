@@ -426,7 +426,7 @@ static ta_op_status ta_invoke_value_text(ta_interpreter *it, ta_datamodel_value_
 #define TA_INVOKE_FAILED 1
 
 static ta_result ta_invoke_op(ta_op_status status) {
-    return status == TA_OP_OK ? TA_OK : TA_INVOKE_FAILED;
+    return status == TA_OP_OK ? TA_OK : status == TA_OP_NOMEM ? TA_ERR_NOMEM : TA_INVOKE_FAILED;
 }
 
 /*
@@ -688,13 +688,15 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
     if (found >= 0) {
         ta_invoke_remove_at(sparse, (uint32_t)found);
     }
-    /* An invoker that ran out of memory started nothing, and the chart
-     * sees error.execution (ADR 0102). A local child that found no envelope
-     * for its token fails as a capacity error. */
+    /* An invoker that ran out of memory started nothing: the invocation
+     * starts again when the host runs the session again. Starting a service
+     * still runs inside the macrostep that entered its state, so its
+     * out-of-memory is a stop, not an error the chart sees, until startup
+     * moves after the macrostep (ADR 0102 decision 6). A local child that
+     * found no envelope for its token fails as a capacity error. */
     if (status == TA_OP_NOMEM) {
-        static const char text[] = "the invoker ran out of memory";
         ta_value_release(&values->fault.data);
-        values->fault = (ta_fault){ .code = TA_ERR_NOMEM, .message = { .ptr = text, .len = sizeof text - 1u } };
+        return TA_ERR_NOMEM;
     }
     return values->fault.code == TA_ERR_FULL ? ta_interpreter_capacity_error(it, TA_RECORD_CAPACITY_RESOURCE_POOL)
                                              : ta_interpreter_execution_error(it, &values->fault);

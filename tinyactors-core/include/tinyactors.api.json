@@ -11729,7 +11729,7 @@
           },
           "shape": "callback",
           "direction": "in",
-          "doc": "start arranges for the service to start and answers TA_OP_OK, or TA_OP_ERROR when it could not even arrange that, for want of memory too: the chart sees error.execution (ADR 0102). A service that then fails to start is reported with an ERROR report (ADR 0089 section 4), which reaches the session between macrosteps like any input. A start that still answers TA_OP_ERROR raises error.execution in the invoking macrostep, as before ADR 0089; that failure is in no host's log, so a replay of that session is not exact. start must not report reentrantly through ta_actor_report_invoke()."
+          "doc": "start arranges for the service to start and answers TA_OP_OK, or TA_OP_NOMEM when it could not even arrange that for want of memory: core stops the session and starts the invocation again when it runs the session again. A service that then fails to start is reported with an ERROR report (ADR 0089 section 4), which reaches the session between macrosteps like any input. A start that still answers TA_OP_ERROR raises error.execution in the invoking macrostep, as before ADR 0089; that failure is in no host's log, so a replay of that session is not exact. start must not report reentrantly through ta_actor_report_invoke()."
         },
         {
           "name": "cancel",
@@ -12823,7 +12823,7 @@
           "symbol": "nomem"
         }
       ],
-      "doc": "What a data-model, invoker or I/O-processor operation answers. ERROR is the chart's failure: core raises the event SCXML defines for it. A macrostep never stops for want of memory (ADR 0102): a data model or an invoker that runs out of its own memory answers ERROR, and the chart sees error.execution; core reads a NOMEM from them the same way. NOMEM is meaningful in two places only: an I/O processor's send, which then waits as a submitted send and is offered again (ADR 0040), and writing or reading a value's bytes for an image, outside any macrostep, where the operation that asked answers TA_ERR_NOMEM and changes nothing.",
+      "doc": "What a data-model, invoker or I/O-processor operation answers. ERROR is the chart's failure: core raises the event SCXML defines for it. A macrostep never stops for want of core memory (ADR 0102): a data model that runs out of its own memory answers ERROR, and the chart sees error.execution; core reads a NOMEM from it the same way. NOMEM is meaningful in three places: an I/O processor's send, which then waits as a submitted send and is offered again (ADR 0040); an invoker's start, which stops the session to start the invocation again later; and writing or reading a value's bytes for an image, outside any macrostep, where the operation that asked answers TA_ERR_NOMEM and changes nothing.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,

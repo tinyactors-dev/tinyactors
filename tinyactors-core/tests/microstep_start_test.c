@@ -620,8 +620,8 @@ static void test_capture_at_the_start(void) {
  * Every allocation of a run that pauses at each start and before each
  * unit fails in turn (ADR 0070): a resume that runs out of memory is
  * retried, and the run ends with the log and configurations of the run
- * that failed nothing. Only taking an input can run out of memory: a
- * resume of a paused macrostep never does (ADR 0102).
+ * that failed nothing. Only a safe point, a refill or a take, can run out
+ * of memory: a resume of a paused macrostep never does (ADR 0102).
  */
 static unsigned long resumes_out_of_memory = 0;
 static unsigned long pauses_out_of_memory = 0;
@@ -667,7 +667,9 @@ static void test_out_of_memory(void) {
     char baseline[sizeof(script_log)];
     memcpy(baseline, script_log, script_length + 1u);
     finish(&r);
-    CHECK(used >= CASE_COUNT);
+    /* A warm system's runs allocate only at safe points: the refills
+     * between inputs (ADR 0102). Each is failed in turn below. */
+    CHECK(used > 0);
 
     for (unsigned long failing = 1; failing <= used; failing += 1u) {
         start(&r);
@@ -682,10 +684,9 @@ static void test_out_of_memory(void) {
         }
         finish(&r);
     }
-    /* Runs that take an input may find no memory, at the take, a safe
-     * point; a paused macrostep never does, since a macrostep allocates
-     * nothing (ADR 0102). */
-    CHECK(resumes_out_of_memory > 0 && pauses_out_of_memory == 0);
+    /* A paused macrostep never runs out of memory, since a macrostep
+     * allocates nothing (ADR 0102); a take that does is run_test's claim 12. */
+    CHECK(pauses_out_of_memory == 0);
     printf("microstep start test: %lu allocations each failed in turn; %lu resumes ran out of memory, %lu of them "
            "from a pause\n",
            used, resumes_out_of_memory, pauses_out_of_memory);

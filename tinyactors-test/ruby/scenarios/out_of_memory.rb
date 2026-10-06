@@ -1,14 +1,15 @@
 # frozen_string_literal: true
 
-# Running out of memory inside a macrostep (ADR 0047, ADR 0070). Every
-# scenario here fails the allocations of every ta_run a run makes, one at a
-# time, and checks that the input faults with err_nomem (or that ta_run
-# answers it, keeping an input it could not take), that the stopped actor is
-# still in its macrostep, holds a new event back and queued no error event,
-# and that releasing it and running until it runs ends the run exactly as a
-# run without the failure does: configuration, data, queued events, delayed
-# sends, invocations, completion, and every instrument's journal (the
-# events it sent, in order, and what it logged).
+# Running out of memory (ADR 0102). Every scenario here fails the
+# allocations of every ta_run a run makes, one at a time. A macrostep
+# allocates nothing: what it needs is allocated when it takes its input, so
+# a failed allocation refuses the take. ta_run answers err_nomem, keeps the
+# input, and every actor is as it was; running again takes the input once
+# and ends the run exactly as a run without the failure does:
+# configuration, data, queued events, delayed sends, invocations,
+# completion, and every instrument's journal. Starting an invocation still
+# runs inside the macrostep that entered its state, so a failure there
+# stops the session, which is released and goes on (the family charts).
 module OutOfMemory
   # Expressions in each data model's language.
   class Language
@@ -45,23 +46,8 @@ module OutOfMemory
     text.to_s.gsub('&', '&amp;').gsub('"', '&quot;').gsub('<', '&lt;').gsub('>', '&gt;')
   end
 
-  # A trace without the directory's journal, where unloading and loading an
-  # actor shows.
+  # A trace without the directory's journal.
   WITHOUT_DIRECTORY = ->(state) { state.merge(journals: state[:journals].except('directory')) }
-
-  # The places a sweep must have stopped a chart, by what its log ended with
-  # when it stopped: the charts whose content grows storage in each phase.
-  PHASE_LOGS = { phases: %w[exit move enter] }.freeze
-
-  def self.check_stops(context, kind, stops)
-    labels = PHASE_LOGS.fetch(kind, [])
-    return if labels.empty?
-
-    ends = stops.map { |stop| Array(stop.dig(:data, :log)).last }
-    missing = labels.reject { |label| ends.include?(label) }
-    context.assert missing.empty?, "no allocation failed in the #{missing.join(', ')} phase"
-    context.assert stops.any? { |stop| stop[:microstep] }, 'no allocation failed inside a microstep'
-  end
 
   # An event whose name is longer than a block of core's scratch, so that
   # rendering `_event.name` for the data model allocates (ADR 0068).
@@ -455,27 +441,32 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
       label = kind.to_s.tr('_', ' ')
       errors = chart_errors.include?(kind)
 
+      # Catches: a failed allocation that a macrostep made (it must make
+      # none), and one at a take that changed anything: the trace would
+      # differ from the run without the failure.
       scenario "#{label}: each failed allocation is invisible (#{datamodel})" do
         result = assert_allocation_failures_invisible(chart_errors: errors) { instance_exec(chart, nil, &body) }
         warn "#{chart}: #{result.except(:stops).inspect}" if ENV['OOM_VERBOSE']
         assert result[:runs] >= 3, "only #{result[:runs]} allocations were failed"
-        assert_equal [], result[:unreported], 'every failed allocation is reported' if self_contained.include?(kind)
-        OutOfMemory.check_stops(self, kind, result[:stops])
+        if self_contained.include?(kind)
+          assert_equal [], result[:unreported], 'every failed allocation is reported'
+          assert_equal [], result[:stops], 'no macrostep stopped: every failure refused a take'
+        end
       end
 
       # Catches: a retry that runs out of memory again (the same allocation
-      # failing twice, then the one after it) and does not stop cleanly
-      # the second time, or continues from the wrong place.
+      # failing twice, then the one after it) and does not refuse cleanly
+      # the second time, or takes the input twice.
       scenario "#{label}: allocations failing three times in a row are invisible (#{datamodel})" do
         result = assert_allocation_failures_invisible(counts: [3], chart_errors: errors) do
           instance_exec(chart, nil, &body)
         end
-        assert result[:stops].size > result[:runs], 'retries ran out of memory again'
+        assert result[:stops].size + result[:refusals] > result[:runs], 'retries ran out of memory again'
       end
 
-      # Catches: a failed allocation right after a stop at a microstep's
+      # Catches: a failed allocation right after a pause at a microstep's
       # start (ADR 0086) that runs part of the microstep twice or not at
-      # all, or loses the stop.
+      # all, or loses the pause.
       if kind == :phases
         at_starts = "#{label}: each failed allocation is invisible when every microstep stops at its start"
         scenario "#{at_starts} (#{datamodel})" do
@@ -488,21 +479,20 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
         end
       end
 
-      # Catches: a stopped actor whose image (ADR 0038) loses where it
-      # stopped, so that the loaded actor redoes or skips a step. Loading
-      # does not bring invocations back (ADR 0038), so the charts with
-      # invocations take no part.
+      # Catches: a take refused for want of memory that half-began the
+      # macrostep: an actor whose residency, position, queue or data moved,
+      # which a capture would then carry. The charts with invocations, whose
+      # failures still stop a macrostep, take no part.
       next if %i[invokes family].include?(kind)
 
-      scenario "#{label}: an actor stopped by a failed allocation survives unload and load (#{datamodel})" do
+      scenario "#{label}: a take refused for want of memory leaves every actor as it was (#{datamodel})" do
         result = assert_allocation_failures_invisible(on_stop: :cycle, chart_errors: errors,
                                                       normalize: OutOfMemory::WITHOUT_DIRECTORY) do
           instance_exec(chart, 'subject', &body)
         end
         assert result[:runs] >= 3, "only #{result[:runs]} allocations were failed"
-        assert result[:cycles].positive?, 'a stopped actor was unloaded and loaded'
-        assert_equal result[:stops].size - result[:skipped], result[:cycles],
-                     'every stop not held by admitted mail was unloaded and loaded'
+        assert result[:refusals_checked].positive?, 'a refused take was checked'
+        assert_equal result[:refusals], result[:refusals_checked], 'every refused take was checked'
       end
     end
   end
@@ -510,106 +500,84 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
   %w[jq ecmascript].each do |datamodel|
     phases = :"oom_phases_#{datamodel}"
 
-    # Catches: an image of an actor stopped inside a microstep that loses
-    # where it stopped, so that the actor reconstructed from it (ADR 0038)
-    # redoes or skips content, or ends in no state.
-    scenario "an actor stopped inside a microstep continues from its image (#{datamodel})" do
+    # Catches: a take refused for want of memory that leaves a half-begun
+    # macrostep, so that an image of the actor carries it and the actor
+    # reconstructed from it (ADR 0038) redoes or skips content. A macrostep
+    # never stops for want of memory (ADR 0102): the actor stays idle where
+    # it was, and a copy made from its image ends as a reference run.
+    scenario "an actor whose take was refused continues from its image (#{datamodel})" do
       reference = spawn phases
       reference.deliver 'deeper'
       reference.deliver 'go'
 
       actor = spawn phases
       actor.deliver 'deeper'
-      recording_trace(kinds: %i[stopped])
+      before = [actor.inspect_actor.slice(:step, :position, :residency), actor.data('.log')]
       assert_equal 'ok', actor.post('go')
-      stopped = nil
-      stopped_at = nil
-      where = ->(inspection) { [inspection[:step].except(:session), inspection[:position]] }
+      refused = false
       20.times do
         allocator.budget(allocator.stats[:live_bytes] + 32)
         response = actor.run_once(budget: 1024)
         allocator.budget(0)
-        break unless response[:result] == 'err_nomem'
-
-        inspection = actor.inspect_actor
-        next unless inspection[:microstep_in_progress]
-
-        # It stands where its STOPPED record said (ADR 0083). A record
-        # carries no atom (core ADR 0098): its key's family is 0.
-        record = trace_records.last
-        assert_equal 'stopped', record[:kind]
-        assert_equal [record[:key].except(:family), record[:position]],
-                     [inspection[:step].except(:family), inspection[:position]]
-        stopped = actor.data('.log')
-        stopped_at = where.call(inspection)
+        if response[:result] == 'err_nomem'
+          refused = true
+          break
+        end
+        assert_equal 'ok', response[:result]
         break
       end
-      assert stopped, 'no failed allocation stopped the actor inside its microstep'
-
-      image = capture(actor)
-      copy_id = core('ta_actor_reconstruct',
-                     ta.actor.reconstruct(system: system_handle, image: image,
-                                          datamodel_binding: actor.data)).fetch(:out)
-      destroy_image(image)
-      # Without running the system, which would resume the copy.
-      core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: actor.handle))
-      forget(actor)
-      copy = TinyactorsTest::Actor.new(self, copy_id, phases, actor.definition)
-      assert copy.inspect_actor[:microstep_in_progress], 'the reconstructed actor is stopped where the original was'
-      # A reconstructed actor is a new session (ADR 0066); its steps and
-      # position are the captured one's.
-      assert_equal stopped_at, where.call(copy.inspect_actor)
-      assert_equal stopped, copy.data('.log')
-      status = 'paused'
-      20.times do
-        status = copy.resume(budget: 1024)
-        break unless status == 'paused'
+      inspection = actor.inspect_actor
+      assert !inspection[:macrostep_in_progress], 'no failed allocation left a macrostep begun'
+      if refused
+        assert_equal before, [inspection.slice(:step, :position, :residency), actor.data('.log')],
+                     'the refused take changed nothing'
+        image = capture(actor)
+        copy_id = core('ta_actor_reconstruct',
+                       ta.actor.reconstruct(system: system_handle, image: image,
+                                            datamodel_binding: actor.data)).fetch(:out)
+        destroy_image(image)
+        core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: actor.handle))
+        forget(actor)
+        actor = TinyactorsTest::Actor.new(self, copy_id, phases, actor.definition)
+        assert_equal before[1], actor.data('.log'), 'the copy holds what the actor held'
+        actor.deliver 'go'
+      else
+        actor.resume(budget: 1024)
       end
-      assert_equal 'stable', status
-      run_system('dispatch the reconstructed actor\'s effects')
-      assert_equal [reference.active, reference.data], [copy.active, copy.data],
-                   'the reconstructed actor ended where an uninterrupted one does'
+      run_system('dispatch the actor\'s effects')
+      assert_equal [reference.active, reference.data], [actor.active, actor.data],
+                   'the actor ended where an uninterrupted one does'
     end
 
-    # Catches: a second actor that finds no continuation to stop into after
-    # the first took the system's spare, or that changes before it has one.
-    # Taking an input allocates nothing, since its event stays in its
-    # envelope (core ADR 0099), and every run then reserves its continuation
-    # before it does anything (ADR 0070): so failing the second actor's
-    # first allocation, that reservation, stops it holding its event before
-    # anything of the macrostep ran.
-    scenario "an actor that stops takes the spare continuation, and the next one reserves its own (#{datamodel})" do
+    # Catches: a take that changes its actor before it has what its
+    # macrostep needs. While a first actor's macrostep is paused, holding
+    # its pause storage, a second actor's take must allocate its own (ADR
+    # 0102): failing that allocation refuses the take, which leaves the
+    # second actor idle and unchanged, and both later end as a reference run.
+    scenario "a take that cannot get its pause storage leaves its actor unchanged (#{datamodel})" do
       reference = spawn phases
       reference.deliver 'deeper'
       reference.deliver 'go'
       first = spawn phases
       second = spawn phases
-      # Posting runs nothing, so both are still to take `go`.
       [first, second].each { |actor| actor.deliver 'deeper' }
       [first, second].each { |actor| assert_equal 'ok', actor.post('go') }
 
-      20.times do
-        allocator.budget(allocator.stats[:live_bytes] + 32)
-        response = first.run_once(budget: 1024)
-        allocator.budget(0)
-        break if response[:result] == 'err_nomem' && first.inspect_actor[:microstep_in_progress]
-      end
-      assert first.inspect_actor[:microstep_in_progress], 'the first actor stopped inside its microstep'
+      assert_equal 'paused', first.resume(budget: 1), 'the first actor pauses inside its macrostep'
+      assert first.inspect_actor[:macrostep_in_progress]
 
-      before = [second.active, second.data]
+      before = [second.active, second.data, second.inspect_actor.slice(:step, :residency)]
       allocator.arm_fault(after: 0, count: 1)
       response = second.run_once(budget: 1024)
       allocator.clear_faults
-      assert_equal %w[err_nomem faulted], response.values_at(:result, :outcome),
-                   'the second actor could not reserve a continuation'
+      assert_equal 'err_nomem', response[:result], 'the second actor could not reserve its pause storage'
+      assert_equal nil, response[:outcome], 'nothing was taken'
       view = second.inspect_actor
-      assert view[:macrostep_in_progress], 'it still holds its event'
-      assert !view[:microstep_in_progress], 'it had not begun a microstep'
-      assert_equal 'go', event_text(view.dig(:current_event, :name))
-      assert_equal before, [second.active, second.data], 'nothing of its macrostep ran'
+      assert !view[:macrostep_in_progress], 'it began no macrostep'
+      assert_equal before, [second.active, second.data, view.slice(:step, :residency)], 'nothing of its macrostep ran'
 
-      assert_equal 'stable', second.resume(budget: 1024)
-      assert_equal 'stable', first.resume(budget: 1024)
+      20.times { break unless second.resume(budget: 1024) == 'paused' }
+      20.times { break unless first.resume(budget: 1024) == 'paused' }
       run_system('dispatch both actors\' effects')
       [first, second].each do |actor|
         assert_equal [reference.active, reference.data], [actor.active, actor.data], "#{actor} ended as a reference run"

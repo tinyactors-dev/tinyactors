@@ -368,13 +368,14 @@ typedef struct { ta_event_name_id detail; int32_t code; ta_str message; TA_RELEA
 /*
  * What a data-model, invoker or I/O-processor operation answers. ERROR is
  * the chart's failure: core raises the event SCXML defines for it. A
- * macrostep never stops for want of memory (ADR 0102): a data model or an
- * invoker that runs out of its own memory answers ERROR, and the chart
- * sees error.execution; core reads a NOMEM from them the same way. NOMEM
- * is meaningful in two places only: an I/O processor's send, which then
- * waits as a submitted send and is offered again (ADR 0040), and writing
- * or reading a value's bytes for an image, outside any macrostep, where
- * the operation that asked answers TA_ERR_NOMEM and changes nothing.
+ * macrostep never stops for want of core memory (ADR 0102): a data model
+ * that runs out of its own memory answers ERROR, and the chart sees
+ * error.execution; core reads a NOMEM from it the same way. NOMEM is
+ * meaningful in three places: an I/O processor's send, which then waits as
+ * a submitted send and is offered again (ADR 0040); an invoker's start,
+ * which stops the session to start the invocation again later; and
+ * writing or reading a value's bytes for an image, outside any macrostep,
+ * where the operation that asked answers TA_ERR_NOMEM and changes nothing.
  */
 typedef enum { TA_OP_OK TA_SUCCESS = 0, TA_OP_ERROR = 1, TA_OP_NOMEM = 2 } ta_op_status TA_SYMBOLS("TA_OP_");
 /*
@@ -1708,8 +1709,9 @@ typedef struct {
 typedef struct ta_invoker_vtable {
     /*
      * start arranges for the service to start and answers TA_OP_OK, or
-     * TA_OP_ERROR when it could not even arrange that, for want of memory
-     * too: the chart sees error.execution (ADR 0102). A service that then fails to start
+     * TA_OP_NOMEM when it could not even arrange that for want of memory:
+     * core stops the session and starts the invocation again when it runs
+     * the session again. A service that then fails to start
      * is reported with an ERROR report (ADR 0089 section 4), which reaches
      * the session between macrosteps like any input. A start that still
      * answers TA_OP_ERROR raises error.execution in the invoking macrostep,

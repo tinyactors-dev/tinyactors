@@ -385,6 +385,9 @@ module TinyactorsTest
     # and how many it released in place, because core held admitted mail
     # for them.
     attr_reader :cycles, :skipped
+    # How many refusals `on_stop: :cycle` checked left every actor as it
+    # was before the call (#check_refusal).
+    attr_reader :refusals_checked
 
     # `run` names this run; instrument names are prefixed with it, so
     # several runs can share one host process. `trace: true` records a Trace
@@ -432,6 +435,7 @@ module TinyactorsTest
       @refusals = []
       @cycles = 0
       @skipped = 0
+      @refusals_checked = 0
       @stopped_sessions = []
     end
 
@@ -656,13 +660,15 @@ module TinyactorsTest
     # before the fault is armed, and every allocation the sweep fails is one
     # the logical ta_run makes for what it runs.
     #
-    # Returns {runs:, unreported:, stops:, cycles:, skipped:}: how many runs
-    # failed an allocation; the names of those whose ta_run never answered
-    # err_nomem, because the allocation that failed was a host operation's
-    # (a router delivering to another actor), which handled it itself; every
-    # stop (#stops) of every run; how many stops `on_stop: :cycle` moved out
-    # of residency and back, and how many it released in place instead,
-    # because core held admitted mail for the actor. Other options
+    # Returns {runs:, unreported:, stops:, refusals:, cycles:, skipped:,
+    # refusals_checked:}: how many runs failed an allocation; the names of
+    # those whose ta_run never answered err_nomem, because the allocation
+    # that failed was a host operation's, which handled it itself; every stop
+    # (#stops) of every run; how many calls a failure refused at their take
+    # (#refusals), retries included; how many stops `on_stop: :cycle` moved
+    # out of residency and back, and how many it released in place instead,
+    # because core held admitted mail for the actor; and how many refusals it
+    # checked left every actor as it was (#check_refusal). Other options
     # (`resume_action_budget:`, ...) are the runs' Context options.
     def assert_allocation_failures_invisible(counts: [1], on_stop: nil, chart_errors: false, normalize: nil,
                                              **options, &body)
@@ -678,8 +684,10 @@ module TinyactorsTest
       end
       unreported = []
       stops = []
+      refusals = 0
       cycles = 0
       skipped = 0
+      checked = 0
       points.each do |fault|
         name = "allocation #{fault[:after] + 1} of resume #{fault[:resume]} failing #{fault[:count]}x"
         run = fresh_run(name, normalize, allocation_fault: fault, **options, &body)
@@ -689,10 +697,13 @@ module TinyactorsTest
         reported = run.stops.any? { |stop| stop[:resume] == fault[:resume] } || run.refusals.include?(fault[:resume])
         unreported << name unless reported
         stops.concat(run.stops)
+        refusals += run.refusals.size
         cycles += run.cycles
         skipped += run.skipped
+        checked += run.refusals_checked
       end
-      { runs: points.size, unreported: unreported, stops: stops, cycles: cycles, skipped: skipped }
+      { runs: points.size, unreported: unreported, stops: stops, refusals: refusals, cycles: cycles,
+        skipped: skipped, refusals_checked: checked }
     end
 
     # Runs one interruption after baseline step `at` and passes only when its
@@ -1679,13 +1690,17 @@ module TinyactorsTest
       fault = @allocation_fault if @allocation_fault && @allocation_fault[:resume] == index
       probe_event
       refill_outside_faults
+      seen = actors_as_they_are if fault && fault[:on_stop] == :cycle
       before = allocator.stats[:allocations]
       allocator.arm_fault(after: fault[:after], count: fault[:count]) if fault
       response = run_once.call
       note_outcomes(response)
       retries = 0
       while fault && (stops = nomem_stops(response))
-        @refusals << index if stops.empty?
+        if stops.empty?
+          @refusals << index
+          check_refusal(seen, index) if seen
+        end
         retries += 1
         raise ScenarioError, "run #{index}: still out of memory after #{retries} retries" if retries > fault[:count] + 1
 
@@ -1697,6 +1712,27 @@ module TinyactorsTest
       check_outcomes(response)
       @resume_costs << allocator.stats[:allocations] - before if @count_allocations
       response
+    end
+
+    # Every actor of the scenario as inspection and its data show it: what
+    # a refused take must leave unchanged.
+    def actors_as_they_are
+      @actors.to_h do |actor|
+        view = core('ta_actor_inspect', ta.actor.inspect(system: system_handle, actor: actor.handle)).fetch(:out)
+        [actor.handle, [view.slice(:residency, :macrostep_in_progress, :microstep_in_progress, :internal_count,
+                                   :active_state_count, :step, :position),
+                        ta.actor.datamodel_root(system: system_handle, actor: actor.handle).dig(:out, :out)]]
+      end
+    end
+
+    # A call a failed allocation refused at its take (ADR 0102) took
+    # nothing: every actor is as it was before the call.
+    def check_refusal(seen, index)
+      now = actors_as_they_are
+      changed = seen.keys.select { |handle| now[handle] != seen[handle] }
+      raise AssertionFailed, "run #{index}: a refused take changed #{changed.inspect}" unless changed.empty?
+
+      @refusals_checked += 1
     end
 
     # The actors a ta.run response says ran out of memory, or [] when the

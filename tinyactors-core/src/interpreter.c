@@ -723,8 +723,22 @@ static uint32_t ta_trace_guard_capacity(const ta_definition *definition) {
  * Events and errors
  */
 
+/*
+ * The actor's sparse state, made when it has none. Inside a macrostep it is
+ * the system's spare, which taking the input made sure of (ta_reserve_stop),
+ * so a session that finishes or stops there allocates nothing (ADR 0102);
+ * outside one it is allocated.
+ */
 static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
+    if (actor->sparse == NULL && system->run.running && system->spare_sparse != NULL) {
+        actor->sparse = system->spare_sparse;
+        system->spare_sparse = NULL;
+        *actor->sparse = (ta_actor_sparse_state){ .final_state = TA_STATE_NONE };
+    }
     if (actor->sparse == NULL) {
+        if (system->run.running) {
+            return NULL; /* never allocates inside a macrostep */
+        }
         actor->sparse = ta_mem_alloc(system->allocator, sizeof(ta_actor_sparse_state),
                                      _Alignof(ta_actor_sparse_state));
         if (actor->sparse == NULL) {
@@ -3653,10 +3667,15 @@ static void ta_compact_sparse(ta_interpreter *it) {
         return;
     }
     ta_invoke_release(it->system, it->actor);
+    it->actor->sparse = NULL;
+    if (it->system->spare_sparse == NULL) {
+        /* The system's spare again, for the next take that needs one. */
+        it->system->spare_sparse = sparse;
+        return;
+    }
     ta_mem_free(it->system->allocator, sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
                                              .alignment = _Alignof(ta_actor_sparse_state) });
-    it->actor->sparse = NULL;
 }
 
 /* ------------------------------------------------------------------------
@@ -4759,9 +4778,14 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
     ta_continuation_free(system->allocator, &actor->sparse->paused);
     ta_queue_settle(system, actor); /* empty, and no longer paused */
     ta_value_release(&actor->sparse->completion.data);
-    ta_mem_free(system->allocator, actor->sparse,
-                &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
-                                             .alignment = _Alignof(ta_actor_sparse_state) });
+    if (system->spare_sparse == NULL) {
+        /* The system's spare again: a later take may need one. */
+        system->spare_sparse = actor->sparse;
+    } else {
+        ta_mem_free(system->allocator, actor->sparse,
+                    &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
+                                                 .alignment = _Alignof(ta_actor_sparse_state) });
+    }
     actor->sparse = NULL;
 }
 
