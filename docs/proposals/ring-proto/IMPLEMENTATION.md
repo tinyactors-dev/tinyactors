@@ -305,7 +305,9 @@ left after 4.2a and the core's waiting machinery:
   letter; `system.stats().messages.overflow`, the metric
   `tinyactors.messages.overflow`, `eventBlockCache` and the delayed send's
   `submitted` are gone.
-- Ordering across sources (4.2d). The kernel still routes the host's own posts
+- Ordering across sources (4.2d; superseded by 4.2e, below: host posts and chart
+  mail for a non-resident name now share core's waiting list, in arrival order,
+  with no merge rule). The kernel still routed the host's own posts
   to a non-resident named address through its per-load mailbox
   (`tah_system_post_named`), while chart mail for the same address waits on
   core's list. When the load ends, core's list moves to the run queue (in
@@ -368,9 +370,51 @@ left after 4.2a and the core's waiting machinery:
   changed in place, not an unimplemented one, so they stay deleted; (4) D7,
   D10 and D11 of the 4.2d plan are accepted.
 
+**Done in 4.2e (branch `wip/ring-proto/4.2e`).** Host input goes straight into
+core, and the kernel's mailboxes are gone. The 4.2 exit criterion "the
+kernel's scheduler holds no mailboxes, only the code that admits input" is met.
+
+- Core (ADR 0099 notes, 4.2e): tokens carry their envelope and
+  `ta_input_withdraw` takes a host input back; `ta_counters.host_inputs` is the
+  gauge the kernel's limit reads; `ta_actor_deliver` and `ta_actor_report_invoke`
+  may be called inside a macrostep (paid from its claim, ordered with its mail,
+  refused with `TA_REFUSED_DISCARDED` if it is abandoned); an error report is an
+  input (never `TA_ERR_BUSY`); `ta_actor_pending` lists a session's inputs;
+  `ta_input_watch.mark` covers every input core takes; a refusal names its
+  address and carries its trace parent; `ta_run_executing` and `ta_input_slot`
+  are public.
+- Kernel: `scheduler.c` went from 1,607 lines to 805, with no mailbox,
+  ready or runnable queue, quarantine, envelope store or per-slot table. It
+  admits with `ta_actor_deliver`, follows the sends and retained bytes in a
+  table indexed by `ta_input_slot`, settles waiters and dead letters from
+  COMPLETED and REFUSED notices, and bounds a turn in inputs. Net change in
+  `tinyactors-host/src` and `include`: 915 insertions, 2,234 deletions.
+  Tests: `mailbox_test`, `send_test` and `quarantine_test` are deleted,
+  `admission_test` is new, and the scheduler, loads and debugging tests follow.
+- Test host and napi: `hosted.mailboxes` is `hosted.pending`; napi ADR 0041 has
+  the decisions and what an application sees (`queue-full` is core's, a
+  transition post is `busy` unless the actor is idle with nothing waiting, a
+  malformed event throws `invalid`, nothing is quarantined, `release()` is
+  partial, `resumesPerTurn` is deleted, `mailbox()` lists core's inputs).
+  `maxQueuedMessages` and `maxRetainedBytes` stay, enforced from core's gauge
+  and the follow table.
+- Measured on this machine (4 CPUs, Linux x86_64, Node 22), with the chunked
+  `scale.js` harness (commit `53748533`) on both sides. Before (the 4.2d kernel,
+  single runs): native bytes per actor 320.5 (plain) and 320.6 (data) at
+  1,000,000; ws 1,106 at 200,000; post+delivery 0.85 to 1.4 us (plain) and 3.9
+  to 4.7 us (data). After (three runs): 304.5 and 304.5 at 1,000,000 (the
+  kernel's per-slot table is gone, 16 bytes less); ws 1,090 at 200,000;
+  post+delivery 0.72 to 0.85 us (plain) and 3.1 to 4.4 us (data); steady-state
+  allocator calls 0 in the addon and in core. Core's `scale_test` 330 bytes per
+  actor (329.9 before). Lines of `tinyactors-core/src`: 37,471 before, 37,887
+  now (+416: withdrawal, admission inside a macrostep, error reports as inputs,
+  `ta_actor_pending`; the 4.2d line count was taken at the unit's start).
+- Not done: the event block (4.4), the name area (4.2b), and quarantine
+  (4.5). `release()` stays declared as partial until 4.5.
+
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
-  input.
+  input (met in 4.2e).
 - `mise run test:full` passes.
 - `bench-compare` against the commit before 4.2 is recorded in the 4.5
   commit or its ADR, including the per-actor bytes, before and after.
