@@ -567,7 +567,39 @@ static bool decimal_fast(const decimal *d, double *out) {
     return true;
 }
 
+/* big_quotient's long division for n < 2^64 over s = 10^p with p <= 18
+ * (s < 2^63), in two words: the remainder stays under s x 2^64, and twice
+ * it under 2^128. What a 17-digit decimal such as 0.30000000000000004
+ * needs, without the bignums. */
+static binary_value small_quotient(uint64_t n, uint64_t s) {
+    int32_t k = 63 - (int32_t)bit_length(n) + (int32_t)bit_length(s); /* at least 3 */
+    uint64_t high = k >= 64 ? n << (k - 64) : n >> (64 - k);
+    uint64_t low = k >= 64 ? 0 : n << k;
+    binary_value v = { 0, 0, false };
+    int32_t steps = 0;
+    while ((v.q >> 63) == 0) {
+        high = (high << 1) | (low >> 63);
+        low <<= 1;
+        v.q <<= 1;
+        if (high >= s) {
+            high -= s;
+            v.q |= 1u;
+        }
+        steps++;
+    }
+    v.e2 = 64 - steps - k;
+    v.sticky = (high | low) != 0;
+    return v;
+}
+
 static double decimal_slow(const decimal *d) {
+    if (d->count <= 19u && d->exponent < 0 && d->exponent >= -18) {
+        uint32_t at = d->first;
+        uint64_t n = decimal_chunk(d, &at, d->count);
+        uint64_t s = 1;
+        for (int64_t i = d->exponent; i < 0; i++) s *= 10u;
+        return round_binary(small_quotient(n, s));
+    }
     big n;
     big_set(&n, 0);
     uint32_t used = d->count > DECIMAL_DIGITS_MAX ? DECIMAL_DIGITS_MAX : d->count;
