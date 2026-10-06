@@ -28,7 +28,7 @@
 #endif
 
 #define SJS_VERSION_MAJOR 0
-#define SJS_VERSION_MINOR 3
+#define SJS_VERSION_MINOR 4
 #define SJS_VERSION_PATCH 0
 /* (major << 16) | (minor << 8) | patch; sjs_version() answers it for the library linked. */
 #define SJS_VERSION ((SJS_VERSION_MAJOR << 16) | (SJS_VERSION_MINOR << 8) | SJS_VERSION_PATCH)
@@ -138,6 +138,8 @@ typedef struct {
     uint32_t max_frames;        /* evaluator frames: calls and looping built-ins */
     uint32_t max_value_items;   /* elements of one array, object or set */
     uint32_t max_string_bytes;  /* bytes of one string value */
+    uint32_t max_bigint_bits;   /* bits of one BigInt's magnitude: 2^max_bigint_bits - 1 is the
+                                 * largest; an operation whose result is larger faults */
 } sjs_limits;
 
 #define SJS_LIMITS_DEFAULT                     \
@@ -150,7 +152,8 @@ typedef struct {
         .max_stack = 4096u,                    \
         .max_frames = 256u,                    \
         .max_value_items = 1024u * 1024u,      \
-        .max_string_bytes = 16u * 1024u * 1024u })
+        .max_string_bytes = 16u * 1024u * 1024u, \
+        .max_bigint_bits = 256u * 1024u })
 
 /* The library's version, SJS_VERSION of the header it was built from. */
 SJS_API uint32_t sjs_version(void);
@@ -182,6 +185,7 @@ typedef enum {
     SJS_BOOLEAN,
     SJS_NUMBER,
     SJS_STRING,
+    SJS_BIGINT,
     SJS_ARRAY,
     SJS_OBJECT,
     SJS_SET,
@@ -415,6 +419,8 @@ typedef enum {
     SJS_EV_EXPORT_DEFAULT,   /* after the value of `export default` */
     SJS_EV_EXPORT_NAME,      /* `export { alias as name }`; count: 1 when name was a string */
     SJS_EV_EXPORT_FROM,      /* a re-export; text: the module; count: an sjs_import_kind */
+    SJS_EV_BIGINT,           /* a BigInt literal; text: its digits, without a prefix, a
+                              * separator or the `n`; count: their radix, 2, 8, 10 or 16 */
     /* The end of the program. */
     SJS_EV_END
 } sjs_event_kind;
@@ -623,8 +629,9 @@ SJS_API void sjs_vm_destroy(sjs_vm *vm);
  * Writer
  *
  * Writes a value as JavaScript source that evaluates to an equal value:
- * JSON where JSON can say it, and `undefined`, `NaN`, `Infinity`, `-0` and
- * `new Set([...])` where it cannot. Resumes when the buffer is full.
+ * JSON where JSON can say it, and `undefined`, `NaN`, `Infinity`, `-0`, a
+ * BigInt's `10n` and `new Set([...])` where it cannot. Resumes when the buffer
+ * is full; a BigInt's digits are made first, through the context.
  */
 
 typedef struct sjs_writer sjs_writer;
@@ -649,6 +656,26 @@ SJS_API sjs_result sjs_writer_init(sjs_writer **out, const sjs_writer_config *co
  * when the config gives no function_text. */
 SJS_API sjs_result sjs_writer_write(sjs_writer *writer, sjs_buffer *buffer);
 SJS_API void sjs_writer_destroy(sjs_writer *writer);
+
+/* ========================================================================
+ * BigInts
+ *
+ * A BigInt is a heap value like a string: immutable, reference counted, its
+ * magnitude at most max_bigint_bits bits. The writer writes one as `10n`.
+ */
+
+/* A new BigInt from text as BigInt(text) reads it: white space around
+ * decimal digits with an optional sign, or 0x, 0o or 0b and digits; empty
+ * text is 0n. SJS_ERR_INVALID for any other text, SJS_ERR_LIMIT for one
+ * too large. */
+SJS_API sjs_result sjs_bigint_new(sjs_context *context, sjs_str text, sjs_value *out);
+/* Bytes the decimal text of a BigInt takes at most, its sign included. */
+SJS_API uint32_t sjs_bigint_text_bound(sjs_value bigint);
+/* The decimal text of a BigInt, as String(x) gives it ("-12", no `n`),
+ * written into `buffer` from buffer->length on. SJS_NEED_SPACE, writing
+ * nothing, when it does not fit; sjs_bigint_text_bound() bytes always do.
+ * Converting allocates scratch from the context. */
+SJS_API sjs_result sjs_bigint_text(sjs_context *context, sjs_value bigint, sjs_buffer *buffer);
 
 #ifdef __cplusplus
 }

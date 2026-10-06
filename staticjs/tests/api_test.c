@@ -484,7 +484,7 @@ static const char *const event_names[SJS_EV_END + 1] = {
     [SJS_EV_OBJECT_PATTERN_END] = "OBJECT_PATTERN_END", [SJS_EV_DEFAULT] = "DEFAULT", [SJS_EV_DEFAULT_END] = "DEFAULT_END",
     [SJS_EV_CONST_BEGIN] = "CONST_BEGIN", [SJS_EV_CONST_END] = "CONST_END", [SJS_EV_EXPORT] = "EXPORT",
     [SJS_EV_IMPORT] = "IMPORT", [SJS_EV_EXPORT_DEFAULT] = "EXPORT_DEFAULT", [SJS_EV_EXPORT_NAME] = "EXPORT_NAME",
-    [SJS_EV_EXPORT_FROM] = "EXPORT_FROM", [SJS_EV_END] = "END",
+    [SJS_EV_EXPORT_FROM] = "EXPORT_FROM", [SJS_EV_BIGINT] = "BIGINT", [SJS_EV_END] = "END",
 };
 
 static sjs_result log_event(void *self, const sjs_event *event) {
@@ -2441,6 +2441,89 @@ static void test_mutation_append_memory(void) {
     CHECK(c.live == 0);
 }
 
+/* ------------------------------------------------------------------------
+ * BigInts through the API: made from text, read as text, written, and the
+ * limit on their size. */
+
+static void test_bigint_api(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    sjs_value v;
+    CHECK(sjs_bigint_new(context, SJS_STR(" -123456789012345678901234567890\n"), &v) == SJS_OK);
+    CHECK(v.kind == SJS_BIGINT);
+    char text[64];
+    sjs_buffer b = { (uint8_t *)text, sizeof text, 0 };
+    CHECK(sjs_bigint_text_bound(v) >= 31u && sjs_bigint_text_bound(v) <= 34u);
+    CHECK(sjs_bigint_text(context, v, &b) == SJS_OK);
+    CHECK(b.length == 31u && memcmp(text, "-123456789012345678901234567890", 31) == 0);
+    sjs_buffer small = { (uint8_t *)text, 10, 0 };
+    CHECK(sjs_bigint_text(context, v, &small) == SJS_NEED_SPACE && small.length == 0);
+    char out[4096];
+    write_text(context, v, out, sizeof out);
+    CHECK(strcmp(out, "-123456789012345678901234567890n") == 0);
+    /* The writer resumes a BigInt's digits a byte at a time. */
+    sjs_writer *w;
+    CHECK(sjs_writer_init(&w, &(sjs_writer_config){ context, v, { 0 } }) == SJS_OK);
+    char one[64];
+    uint32_t got = 0;
+    sjs_result r;
+    do {
+        sjs_buffer tiny = { (uint8_t *)one + got, 1, 0 };
+        r = sjs_writer_write(w, &tiny);
+        got += tiny.length;
+    } while (r == SJS_NEED_SPACE && got < sizeof one - 1u);
+    CHECK(r == SJS_OK && got == 32u && memcmp(one, "-123456789012345678901234567890n", 32) == 0);
+    sjs_writer_destroy(w);
+    sjs_release(context, v);
+    CHECK(sjs_bigint_new(context, SJS_STR("0x"), &v) == SJS_ERR_INVALID);
+    CHECK(sjs_bigint_new(context, SJS_STR("-0x1"), &v) == SJS_ERR_INVALID);
+    CHECK(sjs_bigint_new(context, SJS_STR("1n"), &v) == SJS_ERR_INVALID);
+    CHECK(sjs_bigint_new(context, SJS_STR("  "), &v) == SJS_OK);
+    b.length = 0;
+    CHECK(sjs_bigint_text(context, v, &b) == SJS_OK && b.length == 1u && text[0] == '0');
+    sjs_release(context, v);
+    CHECK(sjs_bigint_text_bound(sjs_number(1)) == 0);
+    CHECK(sjs_bigint_text(context, sjs_number(1), &b) == SJS_ERR_INVALID);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+
+    /* max_bigint_bits: 2^64 - 1 fits 64 bits, 2^64 does not. */
+    sjs_limits limits = SJS_LIMITS_DEFAULT;
+    limits.max_bigint_bits = 64;
+    context = new_context(&c, limits);
+    CHECK(sjs_bigint_new(context, SJS_STR("18446744073709551615"), &v) == SJS_OK);
+    sjs_release(context, v);
+    CHECK(sjs_bigint_new(context, SJS_STR("0xffffffffffffffff"), &v) == SJS_OK);
+    sjs_release(context, v);
+    CHECK(sjs_bigint_new(context, SJS_STR("18446744073709551616"), &v) == SJS_ERR_LIMIT);
+    CHECK(sjs_bigint_new(context, SJS_STR("0x10000000000000000"), &v) == SJS_ERR_LIMIT);
+    env e = { context, NULL, NULL, 0, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    CHECK(evaluate(&e, "18446744073709551615n", out) == SJS_OK && strcmp(out, "18446744073709551615n") == 0);
+    CHECK(evaluate(&e, "18446744073709551616n", out) == SJS_ERR_PROGRAM && strncmp(out, "error 4", 7) == 0);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+
+    /* Running out of memory while writing one. */
+    for (long fail = 1; fail < 8; fail++) {
+        counting f = { 0 };
+        context = new_context(&f, SJS_LIMITS_DEFAULT);
+        f.fail_at = 0;
+        if (sjs_bigint_new(context, SJS_STR("123456789012345678901234567890"), &v) != SJS_OK) {
+            CHECK(false);
+            break;
+        }
+        f.fail_at = f.allocations + fail;
+        write_text(context, v, out, sizeof out);
+        b.length = 0;
+        (void)sjs_bigint_text(context, v, &b);
+        f.fail_at = 0;
+        sjs_release(context, v);
+        CHECK(sjs_context_live_bytes(context) == 0);
+        sjs_context_destroy(context);
+        CHECK(f.live == 0);
+    }
+}
+
 int main(int argc, char **argv) {
     bool full = argc > 1 && strcmp(argv[1], "--full") == 0;
     test_values();
@@ -2493,6 +2576,7 @@ int main(int argc, char **argv) {
     /* STRING_APPEND */
     test_string_append_memory();
     test_string_append_interned();
+    test_bigint_api();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */

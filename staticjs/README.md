@@ -141,7 +141,8 @@ which the compiler compiles as a path to the container it changes
 ## The language
 
 Expressions: numbers (read to the nearest double, ties to even, however
-many digits a literal has, in any radix), strings, template literals, `true`, `false`, `null`,
+many digits a literal has, in any radix), BigInts (`10n`, `0x1Fn`, `0o7n`,
+`0b1n`; see "BigInts" below), strings, template literals, `true`, `false`, `null`,
 `undefined`, `NaN`, `Infinity`, arrays and objects (spread, computed and
 shorthand keys), `new Set(...)`; `+ - * / %`, `< <= > >=`, `=== !==`,
 `&& || ??`, `?:`, `!`, unary `-` and `+`, `typeof`, `in`; members, calls
@@ -225,6 +226,19 @@ and how to roll it back are in [docs/mutation.md](docs/mutation.md).
 The embedder can add functions (`sjs_function_native`), such as SCXML's
 `In()`. They are the one way into a program from outside.
 
+## BigInts
+
+A BigInt is a heap value like a string: a sign and a magnitude in 32-bit
+limbs, immutable, reference counted, and at most `max_bigint_bits` bits
+(262,144 by default, about 79,000 decimal digits; a value of 2^n bits or
+more is a limit error, as V8 throws a RangeError past its own maximum).
+`typeof` is `"bigint"`; `===` and `!==` compare the value (`1n === 1` is
+false); `0n` is falsy; a set holds one BigInt once (SameValueZero, by
+value, through its index); a BigInt as a key is its decimal digits
+(`{[10n]: 1}` has the key `"10"`), as are `String(x)`, `"a" + x` and a
+template's `${x}`. The writer writes `10n`, and `sjs_bigint_text` gives an
+embedder the digits.
+
 ## Where it faults instead of following JavaScript
 
 These follow from the rule: staticjs stops where JavaScript would coerce,
@@ -277,7 +291,9 @@ compare identities, or find something on a prototype.
   cannot hold a lone surrogate.
   An object as a string method's argument that JavaScript turns into a
   string (a pad string, an argument of `concat`, the replacement of
-  `replaceAll`), as `+` faults on one; a search argument that is not a
+  `replaceAll`), as `+` faults on one, and a BigInt there too: staticjs
+  makes a BigInt's digits only for `String`, `toString`, `+` and a
+  template; a search argument that is not a
   string (`includes(1)`, `replaceAll(1, "x")`, `split(1)`); a function as
   `replaceAll`'s replacement.
 

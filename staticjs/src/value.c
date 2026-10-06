@@ -36,6 +36,7 @@ void sjs_retain(sjs_value value) {
 }
 
 static void intern_remove(sjs_context *context, const sjs_string *string);
+__attribute__((always_inline)) static inline bool same_value_zero(sjs_value a, sjs_value b);
 
 /* Drop one reference; a heap block whose last reference this was joins `work`.
  * An interned string leaves its table first: it needs its h.link for that. */
@@ -255,7 +256,8 @@ static uint32_t hash_value(sjs_value v) {
     case SJS_BOOLEAN:
         return 2u + (v.boolean != 0);
     default:
-        return v.kind;
+        /* A BigInt here, not as a case, keeps the switch as it was. */
+        return v.kind == SJS_BIGINT ? sjs_bigint_hash(SJS_AS_BIGINT(v)) : v.kind;
     }
 }
 
@@ -402,12 +404,12 @@ bool sjs_set_contains(const sjs_array *set, sjs_value element) {
     const sjs_index *index = set->index;
     if (index != NULL) {
         for (uint32_t i = hash_value(element) & index->mask; index->slots[i] != 0; i = (i + 1u) & index->mask) {
-            if (sjs_same_value_zero(set->items[index->slots[i] - 1u], element)) return true;
+            if (same_value_zero(set->items[index->slots[i] - 1u], element)) return true;
         }
         return false;
     }
     for (uint32_t i = 0; i < set->length; i++) {
-        if (sjs_same_value_zero(set->items[i], element)) return true;
+        if (same_value_zero(set->items[i], element)) return true;
     }
     return false;
 }
@@ -646,7 +648,7 @@ sjs_result sjs_function_native(sjs_context *context, sjs_native native, sjs_valu
  */
 
 bool sjs_is_primitive(sjs_value v) {
-    return v.kind <= SJS_STRING && v.internal == SJS_INTERNAL_NONE;
+    return v.kind <= SJS_BIGINT && v.internal == SJS_INTERNAL_NONE;
 }
 
 bool sjs_truthy(sjs_value v) {
@@ -660,12 +662,17 @@ bool sjs_truthy(sjs_value v) {
         return v.as.number != 0 && !sjs_number_is_nan(v.as.number);
     case SJS_STRING:
         return SJS_AS_STRING(v)->length != 0;
+    case SJS_BIGINT:
+        return SJS_AS_BIGINT(v)->length != 0;
     default:
         return true;
     }
 }
 
-bool sjs_strict_equal_primitive(sjs_value a, sjs_value b) {
+/* SameValueZero and strict equality, inlined where sets look an element up:
+ * a BigInt compares by value, through a call, so that the compiler still
+ * inlines the rest into the scans. */
+__attribute__((always_inline)) static inline bool equal_primitive(sjs_value a, sjs_value b) {
     if (a.kind != b.kind) return false;
     switch (a.kind) {
     case SJS_UNDEFINED:
@@ -678,16 +685,24 @@ bool sjs_strict_equal_primitive(sjs_value a, sjs_value b) {
     case SJS_STRING:
         return sjs_str_equal(sjs_string_view(SJS_AS_STRING(a)), sjs_string_view(SJS_AS_STRING(b)));
     default:
-        return false;
+        return a.kind == SJS_BIGINT && sjs_bigint_equal(SJS_AS_BIGINT(a), SJS_AS_BIGINT(b));
     }
 }
 
-bool sjs_same_value_zero(sjs_value a, sjs_value b) {
+__attribute__((always_inline)) static inline bool same_value_zero(sjs_value a, sjs_value b) {
     if (a.kind == SJS_NUMBER && b.kind == SJS_NUMBER && sjs_number_is_nan(a.as.number) &&
         sjs_number_is_nan(b.as.number)) {
         return true;
     }
-    return sjs_strict_equal_primitive(a, b);
+    return equal_primitive(a, b);
+}
+
+bool sjs_strict_equal_primitive(sjs_value a, sjs_value b) {
+    return equal_primitive(a, b);
+}
+
+bool sjs_same_value_zero(sjs_value a, sjs_value b) {
+    return same_value_zero(a, b);
 }
 
 sjs_str sjs_typeof(sjs_value v) {
@@ -700,6 +715,8 @@ sjs_str sjs_typeof(sjs_value v) {
         return SJS_STR("number");
     case SJS_STRING:
         return SJS_STR("string");
+    case SJS_BIGINT:
+        return SJS_STR("bigint");
     case SJS_FUNCTION:
         return SJS_STR("function");
     default:
@@ -721,6 +738,8 @@ sjs_result sjs_to_string(sjs_context *context, sjs_value v, sjs_string **out) {
         sjs_retain(v);
         *out = SJS_AS_STRING(v);
         return SJS_OK;
+    case SJS_BIGINT:
+        return sjs_bigint_to_string(context, (sjs_bigint_radix){ SJS_AS_BIGINT(v), 10u }, out);
     default:
         return SJS_ERR_PROGRAM;
     }
@@ -774,7 +793,7 @@ static lookup_hit set_hit(const sjs_array *set, sjs_value element) {
     const sjs_index *index = set->index;
     if (index != NULL) {
         for (uint32_t i = hash_value(element) & index->mask; index->slots[i] != 0; i = (i + 1u) & index->mask) {
-            if (sjs_same_value_zero(set->items[index->slots[i] - 1u], element)) {
+            if (same_value_zero(set->items[index->slots[i] - 1u], element)) {
                 hit.position = index->slots[i] - 1u;
                 hit.slot = i;
                 return hit;
@@ -783,7 +802,7 @@ static lookup_hit set_hit(const sjs_array *set, sjs_value element) {
         return hit;
     }
     for (uint32_t i = 0; i < set->length; i++) {
-        if (sjs_same_value_zero(set->items[i], element)) {
+        if (same_value_zero(set->items[i], element)) {
             hit.position = i;
             return hit;
         }

@@ -303,6 +303,15 @@ static sjs_value arg(const sjs_leaf_call *call, uint32_t i) {
     return i < call->count ? call->args[i] : sjs_undefined();
 }
 
+/* A primitive whose text sjs_primitive_text gives, for an argument a method
+ * turns into a string: a BigInt's digits are made only by String, toString,
+ * + and a template. */
+static sjs_result text_primitive(sjs_vm *vm, sjs_value v) {
+    if (!sjs_is_primitive(v)) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
+    if (v.kind == SJS_BIGINT) return sjs_vm_fault(vm, "staticjs turns a BigInt into a string only with String, toString, + or a template");
+    return SJS_OK;
+}
+
 static sjs_result new_string(sjs_vm *vm, sjs_str text, sjs_value *out) {
     sjs_string *s;
     sjs_result r = sjs_string_make(vm->context, text, &s);
@@ -2141,7 +2150,7 @@ static sjs_result string_pad(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
     char room[32];
     sjs_str filler = SJS_STR(" ");
     if (fill.kind != SJS_UNDEFINED) {
-        if (!sjs_is_primitive(fill)) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
+        if (text_primitive(vm, fill) != SJS_OK) return SJS_ERR_PROGRAM;
         filler = sjs_primitive_text(fill, room);
     }
     if (filler.length == 0) return same_string(call);
@@ -2269,7 +2278,7 @@ static sjs_result string_concat(sjs_vm *vm, sjs_leaf_call *call) {
     char room[32];
     uint64_t extra = 0;
     for (uint32_t i = 0; i < call->count; i++) {
-        if (!sjs_is_primitive(call->args[i])) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
+        if (text_primitive(vm, call->args[i]) != SJS_OK) return SJS_ERR_PROGRAM;
         extra += sjs_primitive_text(call->args[i], room).length;
     }
     if (s->length + extra > vm->context->limits.max_string_bytes) return sjs_vm_fail(vm, SJS_ERR_LIMIT);
@@ -2424,7 +2433,7 @@ static sjs_result string_replace_all(sjs_vm *vm, sjs_leaf_call *call) {
     if (string_arg(vm, arg(call, 0), &pattern) != SJS_OK) return SJS_ERR_PROGRAM;
     sjs_value with = arg(call, 1);
     if (with.kind == SJS_FUNCTION) return sjs_vm_fault(vm, "staticjs replaces with a string, not with a function's result");
-    if (!sjs_is_primitive(with)) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
+    if (text_primitive(vm, with) != SJS_OK) return SJS_ERR_PROGRAM;
     char room[32];
     replace_match m = { 0 };
     m.replacement = sjs_primitive_text(with, room);
@@ -2517,7 +2526,7 @@ static sjs_result number_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *
     if (id == SJS_BUILTIN_PARSE_INT || id == SJS_BUILTIN_PARSE_FLOAT) {
         /* The string they read: a primitive's as String gives it. An
          * object faults, as String does. */
-        if (!sjs_is_primitive(x)) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
+        if (text_primitive(vm, x) != SJS_OK) return SJS_ERR_PROGRAM;
         text = sjs_primitive_text(x, room);
         call->cost = text.length / 16u;
     }

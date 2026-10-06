@@ -234,16 +234,23 @@ static sjs_result key_of(sjs_vm *vm, sjs_value v, sjs_string **out) {
 /* STRING_APPEND: at the end of the file. */
 static uint32_t appendable_part(sjs_values parts);
 static sjs_result string_append(sjs_vm *vm, sjs_values parts, sjs_value *out);
+static sjs_result concat_copy(sjs_vm *vm, sjs_values parts, sjs_value *out);
 
 /* ToString of each part, joined. */
 static sjs_result concat(sjs_vm *vm, sjs_values parts, sjs_value *out) {
     if (appendable_part(parts) != 0) return string_append(vm, parts, out); /* STRING_APPEND */
+    return concat_copy(vm, parts, out);
+}
+
+/* The join, into a new string. A BigInt's digits cost fuel to make. */
+static sjs_result concat_copy(sjs_vm *vm, sjs_values parts, sjs_value *out) {
     uint32_t count = parts.count;
     const sjs_allocator *alloc = &vm->context->counting;
     sjs_buf text = { 0 };
     sjs_result r = SJS_OK;
     for (uint32_t i = 0; r == SJS_OK && i < count; i++) {
         sjs_string *s;
+        if (parts.ptr[i].kind == SJS_BIGINT) vm->fuel_used += sjs_bigint_text_cost(SJS_AS_BIGINT(parts.ptr[i])->length, 10u);
         r = sjs_to_string(vm->context, parts.ptr[i], &s);
         if (r != SJS_OK) break;
         if ((uint64_t)text.length + s->length > vm->context->limits.max_string_bytes) r = SJS_ERR_LIMIT;
@@ -2279,7 +2286,7 @@ static uint32_t appendable_part(sjs_values parts) {
 /* The text of a primitive, as String gives it: a string's own, or written
  * into `room` (32 bytes), so a number appended allocates nothing. The
  * string methods that convert an argument (padStart, concat, ...) use it
- * too. */
+ * too. Not for a BigInt, whose digits must be made (sjs_to_string). */
 sjs_str sjs_primitive_text(sjs_value v, char *room) {
     switch (v.kind) {
     case SJS_STRING:
@@ -2307,6 +2314,7 @@ __attribute__((noinline)) static sjs_result string_append(sjs_vm *vm, sjs_values
     uint64_t length = s->length;
     for (uint32_t i = first + 1u; i < parts.count; i++) {
         if (!sjs_is_primitive(parts.ptr[i])) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
+        if (parts.ptr[i].kind == SJS_BIGINT) return concat_copy(vm, parts, out); /* its digits are made */
         length += sjs_primitive_text(parts.ptr[i], room).length;
         if (length > vm->context->limits.max_string_bytes) return sjs_vm_fail(vm, SJS_ERR_LIMIT);
     }

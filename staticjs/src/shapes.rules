@@ -90,6 +90,7 @@ event IMPORT leaf item module: text;
 event EXPORT_DEFAULT postfix 1 item;
 event EXPORT_NAME leaf item;
 event EXPORT_FROM leaf item module: text;
+event BIGINT leaf;                      # a BigInt literal: not an operand a shape compares with
 event END close;                        # closes the program (node 0)
 
 # ---------------------------------------------------------------------------

@@ -25,6 +25,7 @@ struct sjs_writer {
     bool in_string;
     sjs_str string;
     uint32_t string_at;
+    sjs_buf digits;        /* a BigInt's, while they are written; its `n` follows */
     bool failed;
 };
 
@@ -52,6 +53,7 @@ void sjs_writer_destroy(sjs_writer *writer) {
     if (writer == NULL) return;
     const sjs_allocator *a = &writer->context->counting;
     sjs_buf_free(a, &writer->stack);
+    sjs_buf_free(a, &writer->digits);
     sjs_mem_free(a, writer, sizeof *writer);
 }
 
@@ -152,6 +154,13 @@ static sjs_result next(sjs_writer *w, bool *more) {
         case SJS_STRING:
             begin_string(w, sjs_string_view(SJS_AS_STRING(v)));
             break;
+        case SJS_BIGINT: {
+            sjs_result r = sjs_bigint_format(&w->context->counting, (sjs_bigint_radix){ SJS_AS_BIGINT(v), 10u }, &w->digits);
+            if (r != SJS_OK) return r;
+            w->pending = w->digits.ptr;
+            w->pending_length = w->digits.length;
+            break;
+        }
         case SJS_ARRAY:
             say(w, "[");
             f->phase = W_ITEM;
@@ -222,6 +231,11 @@ sjs_result sjs_writer_write(sjs_writer *writer, sjs_buffer *buffer) {
         }
         if (w->in_string) {
             string_piece(w);
+            continue;
+        }
+        if (w->digits.ptr != NULL) {
+            sjs_buf_free(&w->context->counting, &w->digits);
+            say(w, "n");
             continue;
         }
         bool more;

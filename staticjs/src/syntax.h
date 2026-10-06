@@ -51,6 +51,7 @@ typedef struct {
     uint8_t newline_before;
     uint8_t lone_surrogate; /* a string with a surrogate that has no partner; its text is not the string */
     uint8_t escaped;       /* a string with an escape: not a directive such as "use strict" */
+    uint8_t bigint;        /* a NUMBER that is a BigInt literal: its radix; its text its digits */
     sjs_position at;
     double number;
     sjs_str text;          /* the name, or the cooked string */
