@@ -780,6 +780,7 @@ It is also the first release built as three C libraries, released together (4bc7
 
 **Added**
 
+- release --skip-tests leaves out core's test task when it passed already (79d80fd)
 - ship the ECMAScript data model as libtinyactors_datamodel_ecmascript (c87a9ae)
 - release libtinyactors and libtinyactors_runtime as native libraries and wasm modules (b04ae6f)
 - two libraries, tinyactors and tinyactors_runtime, with amalgamations and API descriptions (4bc7560)
