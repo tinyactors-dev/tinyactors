@@ -69,7 +69,7 @@ napi_value tna_traceparent_value(napi_env env, const ta_trace_parent *parent) {
 }
 
 /* ------------------------------------------------------------------------
- * The encoder's host (otlp.h)
+ * The encoder's host (tinyactors_otlp.h)
  */
 
 static uint64_t tna_host_now(void *self) {
@@ -145,7 +145,7 @@ size_t tna_value_buffer_bytes(const tna_napi_system *wrapper) {
     return trace > wrapper->value_bytes ? trace : wrapper->value_bytes;
 }
 
-/* A <log> record's value for the encoder (otlp.h), cut at valueBytes. */
+/* A <log> record's value for the encoder (tinyactors_otlp.h), cut at valueBytes. */
 static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out, bool *cut) {
     tna_napi_system *wrapper = self;
     return tna_value_json(wrapper, value, wrapper->value_bytes, out, cut);
@@ -167,9 +167,9 @@ static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out, 
  * new ArrayBuffer when one is asked for, after which `data` is stale; a
  * request of up to 1,000 bytes written after that was lost (ADR 0026).
  */
-typedef size_t (*tna_put_request)(tah_otlp *otlp, uint8_t *out, size_t size);
+typedef size_t (*tna_put_request)(tao_encoder *otlp, uint8_t *out, size_t size);
 
-static napi_value tna_request_value(napi_env env, tah_otlp *otlp, size_t size, tna_put_request put) {
+static napi_value tna_request_value(napi_env env, tao_encoder *otlp, size_t size, tna_put_request put) {
     void *data = NULL;
     napi_value buffer = NULL;
     napi_value memory = NULL;
@@ -196,17 +196,20 @@ static napi_value tna_request_value(napi_env env, tah_otlp *otlp, size_t size, t
  */
 static napi_value tna_trace_bytes(napi_env env, tah_system *system) {
     tah_system_drain_telemetry(system); /* core's records not read yet (core ADR 0098) */
-    tah_otlp *otlp = tah_system_otlp(system);
-    size_t traces = tah_otlp_traces_size(otlp);
-    size_t logs = tah_otlp_logs_size(otlp);
-    if (!tah_system_tracing(system) || (traces == 0 && logs == 0)) {
+    tao_encoder *otlp = tah_system_otlp(system);
+    if (otlp == NULL) {
+        return NULL;
+    }
+    size_t traces = tao_traces_size(otlp);
+    size_t logs = tao_logs_size(otlp);
+    if (traces == 0 && logs == 0) {
         return NULL;
     }
     napi_value batch = NULL;
-    napi_value traces_value = tna_request_value(env, otlp, traces, tah_otlp_put_traces);
+    napi_value traces_value = tna_request_value(env, otlp, traces, tao_put_traces);
     napi_value logs_value = NULL;
     if (logs != 0) {
-        logs_value = tna_request_value(env, otlp, logs, tah_otlp_put_logs);
+        logs_value = tna_request_value(env, otlp, logs, tao_put_logs);
     } else {
         napi_get_undefined(env, &logs_value);
     }
@@ -224,8 +227,8 @@ void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
         return;
     }
     tah_system_drain_telemetry(system);
-    if (tah_otlp_staged_records(tah_system_otlp(system)) == 0) {
-        tah_otlp_end_turn(tah_system_otlp(system));
+    if (tao_staged_records(tah_system_otlp(system)) == 0) {
+        tao_end_turn(tah_system_otlp(system));
         return;
     }
     napi_handle_scope scope = NULL;
@@ -234,7 +237,7 @@ void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
     napi_value handler = NULL;
     napi_value argv[3] = { NULL, NULL, NULL };
     argv[2] = tna_trace_bytes(env, system);
-    tah_otlp_end_turn(tah_system_otlp(system)); /* before JavaScript runs: the sink may replace the sink */
+    tao_end_turn(tah_system_otlp(system)); /* before JavaScript runs: the sink may replace the sink */
     bool callable = argv[2] != NULL && data->effects_handler != NULL && wrapper->facade != NULL &&
                     napi_get_reference_value(env, data->effects_handler, &handler) == napi_ok && handler != NULL &&
                     napi_get_reference_value(env, wrapper->facade, &argv[0]) == napi_ok && argv[0] != NULL &&
@@ -265,8 +268,7 @@ bool tna_trace_flush_if_full(napi_env env, tna_napi_system *wrapper) {
         return true;
     }
     tah_system_drain_telemetry(system);
-    size_t staged = tah_otlp_traces_size(tah_system_otlp(system)) + tah_otlp_logs_size(tah_system_otlp(system));
-    if (staged < tah_system_params(system)->values[TAH_PARAM_TRACE_STAGING_BYTES]) {
+    if (!tao_staging_full(tah_system_otlp(system))) {
         return true;
     }
     napi_value first_error = NULL;
@@ -300,7 +302,7 @@ static bool tna_set_resource(napi_env env, tah_system *system, napi_value pairs)
         napi_get_array_length(env, pairs, &length) != napi_ok || length % 2u != 0 || length > 64u) {
         return false;
     }
-    tah_otlp_attribute attributes[32];
+    tao_attribute attributes[32];
     char text[4096];
     size_t used = 0;
     for (uint32_t at = 0; at < length; at += 1u) {
@@ -319,7 +321,7 @@ static bool tna_set_resource(napi_env env, tah_system *system, napi_value pairs)
         }
         used += written + 1u;
     }
-    return tah_otlp_set_resource(tah_system_otlp(system), attributes, length / 2u) == TA_OK;
+    return tao_set_resource(tah_system_otlp(system), attributes, length / 2u) == TA_OK;
 }
 
 /*
@@ -333,8 +335,8 @@ static bool tna_set_resource(napi_env env, tah_system *system, napi_value pairs)
  * which end a session's open span (the encoder writes their spans only
  * when they were asked for), and values only when the encoder puts them
  * in attributes (`values`); core keeps at most telemetryValueBytes. */
-static ta_trace_masks tna_trace_masks_asked(const ta_trace_masks *masks, const tah_otlp *otlp) {
-    bool logs = tah_otlp_logs_enabled(otlp);
+static ta_trace_masks tna_trace_masks_asked(const ta_trace_masks *masks, const tao_encoder *otlp) {
+    bool logs = tao_logs_enabled(otlp);
     uint32_t ending = TA_TRACE_BIT(TA_TRACE_UNLOADED) | TA_TRACE_BIT(TA_TRACE_DESTROYED);
     /* Logs need the failure records whatever the detail and the sampling
      * (core ADR 0072 section 2); the encoder turns them into spans only
@@ -346,7 +348,7 @@ static ta_trace_masks tna_trace_masks_asked(const ta_trace_masks *masks, const t
     return (ta_trace_masks){ .kinds = masks->kinds | ending | failures,
                              .watched_kinds = masks->watched_kinds | ending | failures,
                              .unsampled_kinds = masks->unsampled_kinds | failures,
-                             .value_bytes = tah_otlp_values(otlp) ? UINT32_MAX : 0u };
+                             .value_bytes = tao_values(otlp) ? UINT32_MAX : 0u };
 }
 
 /* The masks and the sample ratio (parts per 10^9) in argv[0..3]. */
@@ -399,43 +401,39 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
     napi_value remaining = NULL;
     if (tah_system_tracing(system)) {
         tah_system_drain_telemetry(system);
-        tah_otlp_end_all(tah_system_otlp(system));
+        tao_end_all(tah_system_otlp(system));
         remaining = tna_trace_bytes(env, system);
-        tah_otlp_destroy(tah_system_otlp(system));
-        tah_system_set_tracing(system, false);
+        tah_system_set_otlp(system, NULL);
     }
     ta_result result = ta_system_set_trace_masks(tah_system_core(system), &(ta_trace_masks){ 0 });
     if (result == TA_OK && installed && (masks.kinds | masks.watched_kinds | masks.unsampled_kinds) != 0) {
-        bool reserved = tah_otlp_init(tah_system_otlp(system),
-                      &(tah_otlp_config){
-                          .core = tah_system_core(system),
-                          .allocator = tah_allocator_for(tah_system_allocator(system), TAH_MEMORY_OTHER),
-                          .host = { .self = wrapper, .now = tna_host_now, .trace_id = tna_host_trace_id,
-                                    .value_text = tna_host_value_text },
-                          .log_limit = log_limit,
-                          .keep_bytes = (size_t)tah_system_params(system)->values[TAH_PARAM_TRACE_STAGING_BYTES],
-                          .link_parents = links,
-                          .values = values,
-                          .version = { TINYACTORS_NAPI_VERSION, (uint32_t)(sizeof TINYACTORS_NAPI_VERSION - 1u) },
-                      });
-        if (!reserved) {
-            tah_otlp_destroy(tah_system_otlp(system));
+        tao_encoder *encoder = NULL;
+        if (tao_create(&(tao_config){
+                           .core = tah_system_core(system),
+                           .allocator = tah_allocator_for(tah_system_allocator(system), TAH_MEMORY_OTHER),
+                           .host = { .self = wrapper, .now = tna_host_now, .trace_id = tna_host_trace_id,
+                                     .value_text = tna_host_value_text },
+                           .log_limit = log_limit,
+                           .staging_bytes = (size_t)wrapper->params.values[TNA_PARAM_TRACE_STAGING_BYTES],
+                           .link_parents = links,
+                           .values = values,
+                           .version = { TINYACTORS_NAPI_VERSION, (uint32_t)(sizeof TINYACTORS_NAPI_VERSION - 1u) },
+                       },
+                       &encoder) != TA_OK) {
             return tna_throw(env, "out-of-memory", "setTraceSink: cannot reserve the trace staging (traceStagingBytes)");
         }
-        tah_system_set_tracing(system, true);
+        tah_system_set_otlp(system, encoder);
         ta_system_seed_trace_ids(tah_system_core(system), seed_type != napi_undefined ? seed : tah_system_random_seed(system));
         if (!tna_set_resource(env, system, argv[7])) {
-            tah_otlp_destroy(tah_system_otlp(system));
-            tah_system_set_tracing(system, false);
+            tah_system_set_otlp(system, NULL);
             return tna_throw(env, "invalid", "setTraceSink: options.resource must map names to strings");
         }
-        tah_otlp_set_wanted(tah_system_otlp(system), &masks);
+        tao_set_wanted(tah_system_otlp(system), &masks);
         ta_system_set_trace_ratio(tah_system_core(system), parts, TNA_SAMPLE_WHOLE);
         ta_trace_masks asked = tna_trace_masks_asked(&masks, tah_system_otlp(system));
         result = ta_system_set_trace_masks(tah_system_core(system), &asked);
         if (result != TA_OK) {
-            tah_otlp_destroy(tah_system_otlp(system));
-            tah_system_set_tracing(system, false);
+            tah_system_set_otlp(system, NULL);
         }
     }
     if (result == TA_OK) {
@@ -476,7 +474,7 @@ napi_value tna_configure_traces_method(napi_env env, napi_callback_info info) {
     if (!tah_system_tracing(system)) {
         return undefined;
     }
-    tah_otlp_set_wanted(tah_system_otlp(system), &masks);
+    tao_set_wanted(tah_system_otlp(system), &masks);
     ta_system_set_trace_ratio(tah_system_core(system), parts, TNA_SAMPLE_WHOLE);
     ta_trace_masks asked = tna_trace_masks_asked(&masks, tah_system_otlp(system));
     (void)ta_system_set_trace_masks(tah_system_core(system), &asked);

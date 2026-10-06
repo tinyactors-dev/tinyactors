@@ -3,7 +3,8 @@
 # vim:ft=ruby
 
 # Each src/*.c is compiled freestanding into build/objects/ and archived
-# into build/libtinyactors_host.a; each tests/*_test.c links against it.
+# into build/libtinyactors_host.a; each tests/*_test.c links against it,
+# tinyactors-otlp's archive (built first) and core.
 # Objects are reused while their bytes and headers are unchanged
 # (mise/lib/cache.rb).
 
@@ -25,6 +26,8 @@ def compile(command, source, object)
   outcome
 end
 
+HostKernel.run('mise', 'run', 'build', chdir: HostKernel::OTLP)
+
 FileUtils.mkdir_p(HostKernel::OBJECTS)
 objects = HostKernel.sources.map do |source|
   object = HostKernel::OBJECTS.join("#{source.basename('.c')}.o")
@@ -39,6 +42,7 @@ compile(test_command, HostKernel::CORE_SOURCE, core_object)
 HostKernel.tests.each do |test|
   object = HostKernel::OBJECTS.join("#{test}.o")
   compile(test_command, Pathname.new("tests/#{test}.c"), object)
-  target.program([object.to_s, HostKernel.library.to_s, core_object.to_s], into: HostKernel::BUILD.join(test).to_s)
+  target.program([object.to_s, HostKernel.library.to_s, HostKernel::OTLP_LIBRARY.to_s, core_object.to_s],
+                 into: HostKernel::BUILD.join(test).to_s)
 end
 puts "build: the kernel (#{objects.size} objects) and #{HostKernel.tests.size} test program(s)"

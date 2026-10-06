@@ -58,10 +58,10 @@
 #include "effects.h"
 #include "loads.h"
 #include "offloads.h"
-#include "otlp.h"
 #include "params.h"
 #include "scheduler.h"
 #include "tinyactors.h"
+#include "tinyactors_otlp.h"
 #include "platform.h"
 
 typedef struct tah_system tah_system;
@@ -191,7 +191,7 @@ typedef struct {
     /* Set to the core parameter a TA_ERR_INVALID refers to; may be null. */
     ta_param *rejected;
     /*
-     * The binding may turn the trace encoder on (tah_system_set_tracing).
+     * The binding may install a trace encoder (tah_system_set_otlp).
      * The kernel reads core's tel ring only between ta_run() calls, and core sizes
      * the ring at creation, so the kernel then sizes it for one call's
      * records, unless the binding set telBytes (core ADR 0098). False keeps
@@ -216,11 +216,11 @@ tah_directory *tah_system_directory(tah_system *system);
 tah_loads *tah_system_loads(tah_system *system);
 tah_offloads *tah_system_offloads(tah_system *system);
 tah_effects *tah_system_effects(tah_system *system);
-tah_otlp *tah_system_otlp(tah_system *system);
+/* The installed trace encoder (tah_system_set_otlp), or NULL. */
+tao_encoder *tah_system_otlp(tah_system *system);
 tah_trace_watch *tah_system_trace_watch(tah_system *system);
 tah_definitions *tah_system_definitions(tah_system *system);
 tah_host_metrics *tah_system_metrics(tah_system *system);
-const tah_params *tah_system_params(const tah_system *system);
 
 /*
  * Around every core call the binding makes (ADR 0013 point 4): a binding
@@ -233,14 +233,17 @@ void tah_system_enter_core(tah_system *system);
 void tah_system_leave_core(tah_system *system);
 
 /*
- * The trace encoder is on (napi ADR 0016): the binding sets it up with
- * tah_otlp_init() on tah_system_otlp() and says so here, and says so again
- * after tah_otlp_destroy(). <log> records then go to it as well, and the
- * kernel reads core's tel ring into it (tah_system_drain_telemetry). The
- * binding sets the kind masks it asks core for with ta_system_set_trace_masks.
+ * Tracing is on while a trace encoder (tinyactors_otlp.h, napi ADR 0016) is
+ * installed: the binding creates one with tao_create() and installs it
+ * here, and the kernel owns it from then on. Installing another, or NULL,
+ * destroys the one before; close destroys the last. <log> records then go
+ * to it as well, the kernel has it read core's tel ring
+ * (tah_system_drain_telemetry), and a turn ends early once its staging is
+ * full (tao_staging_full). The binding sets the kind masks it asks core
+ * for with ta_system_set_trace_masks.
  */
 bool tah_system_tracing(const tah_system *system);
-void tah_system_set_tracing(tah_system *system, bool tracing);
+void tah_system_set_otlp(tah_system *system, tao_encoder *encoder);
 /* <log> records go to the binding's log sink as effects (setLogSink); call
  * tah_system_refresh_log_sink() after. */
 void tah_system_set_log_to_js(tah_system *system, bool log_to_js);

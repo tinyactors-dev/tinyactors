@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Build and test the tinyactors Node-API addon: binding staleness, native unit tests, the package contents, then the JS suites on Node.js and Bun (the scale test on Bun and at a million actors only with --full)"
-#MISE sources=["bindings.rb", "index.d.ts", "index.js", "package.json", "pnpm-lock.yaml", "lib/**/*", "src/**/*", "test/**/*", "tools/**/*", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-host/include/**/*", "../tinyactors-host/src/**/*", "../tinyxml/include/**/*", "../tinyactors-scxml/include/**/*", "../tinyactors-scxml/src/**/*", "../tinyactors-test/ruby/scxml_irp/**/*", "../tinyactors-test/vendor/scxml-irp/**/*", "../mise/lib/**/*", "../mise.toml"]
+#MISE sources=["bindings.rb", "index.d.ts", "index.js", "package.json", "pnpm-lock.yaml", "lib/**/*", "src/**/*", "test/**/*", "tools/**/*", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-host/include/**/*", "../tinyactors-host/src/**/*", "../tinyactors-otlp/include/**/*", "../tinyactors-otlp/src/**/*", "../tinyxml/include/**/*", "../tinyactors-scxml/include/**/*", "../tinyactors-scxml/src/**/*", "../tinyactors-test/ruby/scxml_irp/**/*", "../tinyactors-test/vendor/scxml-irp/**/*", "../mise/lib/**/*", "../mise.toml"]
 #MISE outputs={auto=true}
 #USAGE flag "--full" help="Also run the scale test on Bun and up to a million actors"
 # vim:ft=ruby

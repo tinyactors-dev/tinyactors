@@ -186,7 +186,7 @@ static void tna_definition_notify(void *self, const ta_definition_event *event) 
      * name the definition's scope, and the log follows them (core ADR 0098). */
     tah_system_drain_telemetry(wrapper->system);
     if (tah_system_tracing(wrapper->system)) {
-        tah_otlp_definition_log(tah_system_otlp(wrapper->system), &(tah_otlp_definition_log_params){
+        tao_definition_log(tah_system_otlp(wrapper->system), &(tao_definition_log_params){
                                                             .event = event,
                                                             .origin = { .ptr = tah_definition_origin_name(origin),
                                                                         .len = (uint32_t)strlen(tah_definition_origin_name(origin)) },
@@ -198,7 +198,7 @@ static void tna_definition_notify(void *self, const ta_definition_event *event) 
     tna_children_forget(wrapper, event->definition);
     tah_trace_watch_forget_definition(tah_system_trace_watch(wrapper->system), event->definition);
     if (tah_system_tracing(wrapper->system)) {
-        tah_otlp_forget_definition(tah_system_otlp(wrapper->system), event->definition);
+        tao_forget_definition(tah_system_otlp(wrapper->system), event->definition);
     }
 }
 

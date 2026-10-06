@@ -14,7 +14,6 @@
 typedef enum {
     TAH_PARAM_VALUE_BYTES,           /* bytes of a value's JSON in a trace attribute or a log record; core's
                                         telemetryValueBytes follows it unless set (core ADR 0098) */
-    TAH_PARAM_TRACE_STAGING_BYTES,   /* OTLP staging kept between turns; a turn past it ends early */
     TAH_PARAM_RESUME_BUDGET,         /* microsteps one ta_run() call may run (core's `budget`); core's
                                         telBytes holds one call's records unless set (core ADR 0098) */
     TAH_PARAM_ACTION_BUDGET,         /* units of executable content per ta_run() call; 0: no limit */
@@ -30,7 +29,6 @@ typedef enum {
 
 enum {
     TAH_PARAM_DEFAULT_VALUE_BYTES = 1024,
-    TAH_PARAM_DEFAULT_TRACE_STAGING_BYTES = 1048576,
     TAH_PARAM_DEFAULT_RESUME_BUDGET = 64,
     TAH_PARAM_DEFAULT_ACTION_BUDGET = 1024,
     TAH_PARAM_DEFAULT_RESUMES_PER_TURN = 1024,

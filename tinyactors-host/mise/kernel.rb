@@ -17,8 +17,14 @@ module HostKernel
   # it (compiled with the tests' command, not freestanding; core's own
   # build checks core).
   CORE_SOURCE = CORE_INCLUDE.join('tinyactors.c')
+  # tinyactors-otlp, the trace encoder the kernel feeds: its public header,
+  # its sources (for the sanitizer build) and the archive its build makes,
+  # which every test program links.
+  OTLP = ROOT.join('../tinyactors-otlp').expand_path
+  OTLP_INCLUDE = OTLP.join('include')
+  OTLP_LIBRARY = OTLP.join('build/libtinyactors_otlp.a')
   WARNINGS = %w[-std=c11 -Wall -Wextra -Werror -pedantic].freeze
-  INCLUDES = ["-I#{ROOT.join('include')}", "-I#{CORE_INCLUDE}", "-I#{ROOT.join('src')}"].freeze
+  INCLUDES = ["-I#{ROOT.join('include')}", "-I#{CORE_INCLUDE}", "-I#{OTLP_INCLUDE}", "-I#{ROOT.join('src')}"].freeze
   # The kernel's own sources are compiled freestanding, without the host's
   # C library headers (kernel ADR 0001, section 2): clang's own stdint.h,
   # stddef.h and stdbool.h remain, and anything else fails to compile, on
@@ -32,6 +38,8 @@ module HostKernel
   module_function
 
   def sources = PlatformFiles.sources(ROOT.join('src')).map { |path| Pathname.new(path) }
+
+  def otlp_sources = PlatformFiles.sources(OTLP.join('src')).map { |path| Pathname.new(path) }
 
   def tests = Dir[ROOT.join('tests/*_test.c').to_s].sort.map { |path| Pathname.new(path).basename('.c').to_s }
 

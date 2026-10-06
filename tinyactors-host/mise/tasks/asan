@@ -10,7 +10,7 @@ FileUtils.mkdir_p(build)
 cc = Toolchain::Target.host.compile_command
 flags = [*HostKernel::WARNINGS, *HostKernel::INCLUDES, '-g', '-O1', '-fno-omit-frame-pointer',
          '-fsanitize=address,undefined', '-fno-sanitize-recover=all']
-sources = HostKernel.sources.map(&:to_s) + [HostKernel::CORE_SOURCE.to_s]
+sources = (HostKernel.sources + HostKernel.otlp_sources).map(&:to_s) + [HostKernel::CORE_SOURCE.to_s]
 failed = HostKernel.tests.reject do |test|
   binary = build.join(test)
   system(*cc, *flags, HostKernel::ROOT.join("tests/#{test}.c").to_s, *sources, '-o', binary.to_s,

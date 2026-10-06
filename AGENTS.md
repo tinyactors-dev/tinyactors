@@ -24,7 +24,7 @@ and core does not handle bytes it has no use for.
 
 ## Releases and changelogs
 
-Each component (core, host, napi, scxml, tinyxml) has a `CHANGELOG.md` in
+Each component (core, host, napi, otlp, scxml, tinyxml) has a `CHANGELOG.md` in
 its directory, and a release of it needs a section there that passes
 `mise run changelog:check <component>`
 ([ADR 0002](docs/adr/0002-changelogs.md)). To prepare a release, use the
@@ -57,6 +57,7 @@ Do it at release time, not between releases.
   | You changed                         | These projects' tests run                |
   |-------------------------------------|------------------------------------------|
   | `tinyactors-core` code or tests     | all of them                              |
+  | `tinyactors-otlp` (the OTLP encoder) | otlp, the kernel, the test host, napi   |
   | `tinyactors-host` (the host kernel) | the kernel, the test host, napi          |
   | `tinyxml`, `tinyactors-scxml`       | that one, the scxml codec, test host, napi |
   | `tinyactors-test`                   | test host, and napi when the IRP importer changed |

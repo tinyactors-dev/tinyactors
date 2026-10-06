@@ -43,7 +43,7 @@ decisions do not pass through a layer that does not need them.
 | Layer | Its job, in one line | What it holds | Where |
 |---|---|---|---|
 | **Core** | Decides what an input *means*, and guarantees that the same inputs at the same times give the same state. | Statechart semantics: configuration, macrosteps, delayed sends, invocations; replaying actors, prepare and publish; the interfaces a host implements (data model, router, I/O processors, invokers, directory, allocator). No I/O, no threads, no queues, no log, no storage. | `tinyactors-core/` |
-| **Host kernel** | Decides how inputs are *queued, recorded and fed back*. | Everything a host that keeps actors in memory needs, free of any language's API: scheduling, mailboxes, the router, the directory, the turn logic, effects, the OTLP encoder, and the write-ahead log (message identity, records, batches, wakes, the write-ahead hold, replay and checkpoint encoding). | `tinyactors-host/` (being extracted, see the [roadmap](ROADMAP.md)) |
+| **Host kernel** | Decides how inputs are *queued, recorded and fed back*. | Everything a host that keeps actors in memory needs, free of any language's API: scheduling, mailboxes, the router, the directory, the turn logic, effects, feeding the OTLP encoder (`tinyactors-otlp/`, a library every binding links), and the write-ahead log (message identity, records, batches, wakes, the write-ahead hold, replay and checkpoint encoding). | `tinyactors-host/` (being extracted, see the [roadmap](ROADMAP.md)) |
 | **Language binding** | Decides how values *look* in its language and how they *become* bytes. | Value boxes; the data model and its durable codec (a data model encodes and decodes its own values); a pump driver on the language's event loop; the public API. | `tinyactors-napi/` (Node.js and Bun); the test host `tinyactors-test/` is a binding for testing |
 | **Application** | Decides where bytes *live*, and everything that is policy. | Storage for logs and checkpoints; eviction; loaders; several bindings sharing one system; deployment. | outside this repository |
 
@@ -63,6 +63,8 @@ Two rules follow from the table:
   production interpreter.
 - `tinyactors-host/` is the host kernel (being extracted from napi; see
   the roadmap).
+- `tinyactors-otlp/` is the OTLP encoder: a small C library that reads
+  core's `tel` ring and writes OTLP traces and logs.
 - `tinyactors-napi/` is the Node-API binding for Node.js 22 and Bun.
 - `tinyactors-test/` is the instrumentable JSON-RPC test host and its Ruby
   driver: a binding that exercises core, and the kernel, from scenarios.

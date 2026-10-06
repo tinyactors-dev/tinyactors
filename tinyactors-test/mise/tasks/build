@@ -46,6 +46,11 @@ CORE_DIST_LIBRARY = CORE.join('dist/lib/release/libtinyactors.a')
 KERNEL = WORKSPACE.join('tinyactors-host')
 KERNEL_INCLUDE = KERNEL.join('include')
 KERNEL_LIBRARY = KERNEL.join('build/libtinyactors_host.a')
+# tinyactors-otlp, the trace encoder the kernel links (the kernel's build
+# builds it): its public header, which the kernel's include, and its archive.
+OTLP = WORKSPACE.join('tinyactors-otlp')
+OTLP_INCLUDE = OTLP.join('include')
+OTLP_LIBRARY = OTLP.join('build/libtinyactors_otlp.a')
 # The SCXML codec (ADR 0053) is compiled from its sources into the host, and
 # links txml's published archive. See ../tinyactors-scxml/README.md.
 SCXML = WORKSPACE.join('tinyactors-scxml')
@@ -202,10 +207,12 @@ host_command = [
   "-I#{JQ_BUILD.join('src')}",
   "-I#{CORE_DIST_INCLUDE}",
   "-I#{KERNEL_INCLUDE}",
+  "-I#{OTLP_INCLUDE}",
   "-I#{SCXML.join('include')}",
   "-I#{XML_DIST_INCLUDE}",
   *host_sources.map(&:to_s),
   KERNEL_LIBRARY.to_s,
+  OTLP_LIBRARY.to_s,
   CORE_DIST_LIBRARY.to_s,
   XML_DIST_LIBRARY.to_s,
   libjq.to_s,
@@ -217,7 +224,8 @@ host_command = [
   host_binary.to_s
 ]
 link('tinyactors-test', host_binary, host_command,
-     [*host_sources, CORE_DIST_HEADER, CORE_DIST_LIBRARY, KERNEL_LIBRARY, *Dir[KERNEL_INCLUDE.join('**/*.h').to_s].sort.map { |p| Pathname.new(p) }, SCXML.join('include/ta_scxml.h'),
+     [*host_sources, CORE_DIST_HEADER, CORE_DIST_LIBRARY, KERNEL_LIBRARY, *Dir[KERNEL_INCLUDE.join('**/*.h').to_s].sort.map { |p| Pathname.new(p) },
+      OTLP_LIBRARY, OTLP_INCLUDE.join('tinyactors_otlp.h'), SCXML.join('include/ta_scxml.h'),
       XML_DIST_INCLUDE.join('txml.h'), XML_DIST_LIBRARY, libjq, libonig, libqjs], compiler_id)
 
 json_binary = BUILD.join('json_datamodel_test')

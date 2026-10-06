@@ -4,15 +4,20 @@
 /*
  * napi's own system parameters (napi ADR 0035), beside core's (core ADR
  * 0092) and the kernel's (tinyactors-host's params.h): the limits of napi's
- * data-model registry. Named, bounded, set once when the system is created;
- * parameterInfo() reports them beside the kernel's, with owner "napi"
- * (the kernel's have owner "kernel").
+ * data-model registry, and the trace staging napi gives tinyactors-otlp
+ * (its `staging_bytes`, bounded as tinyactors_otlp.h says). Named,
+ * bounded, set once when the system is created; parameterInfo() reports
+ * them beside the kernel's, with owner "napi" (the kernel's have owner
+ * "kernel").
  */
 #include <stdint.h>
+
+#include "tinyactors_otlp.h"
 
 typedef enum {
     TNA_PARAM_REGISTERED_DATAMODELS, /* data models registerDatamodel() may add */
     TNA_PARAM_DATAMODEL_NAME_BYTES,  /* longest registered data model name, in bytes */
+    TNA_PARAM_TRACE_STAGING_BYTES,   /* OTLP staging kept between turns; a turn past it ends early */
     TNA_PARAM_COUNT
 } tna_param;
 

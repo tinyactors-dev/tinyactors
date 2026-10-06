@@ -131,7 +131,7 @@ static void tna_load_log(tah_system *system, const tah_load_info *load, tah_load
                           (int)detail.len, detail.ptr);
     const char *event_name = outcome == TAH_LOAD_TIMED_OUT ? "tinyactors.load.timed_out" : "tinyactors.load.failed";
     tna_pump_host_log(system, 0,
-                      (tah_otlp_host_log_params){
+                      (tao_host_log_params){
                           .event_name = { event_name, (uint32_t)strlen(event_name) },
                           .body = { body, length > 0 ? (uint32_t)(length < (int)sizeof body ? length : (int)sizeof body - 1)
                                                      : 0u },

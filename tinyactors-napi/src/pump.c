@@ -370,7 +370,7 @@ static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tah_tu
 /* A WARN log about `actor` through the trace sink, when one wants logs
  * (napi ADR 0017 section 7): the actor's session and definition, if it is
  * still resident, name it. */
-void tna_pump_host_log(tah_system *system, ta_actor_id actor, tah_otlp_host_log_params log) {
+void tna_pump_host_log(tah_system *system, ta_actor_id actor, tao_host_log_params log) {
     if (!tah_system_tracing(system)) {
         return;
     }
@@ -379,7 +379,7 @@ void tna_pump_host_log(tah_system *system, ta_actor_id actor, tah_otlp_host_log_
         log.session = view.session_id;
         log.definition = view.definition_id;
     }
-    tah_otlp_host_log(tah_system_otlp(system), &log);
+    tao_host_log(tah_system_otlp(system), &log);
 }
 
 void tna_fault_message(const char *operation, ta_result code, char *buffer, size_t size) {
@@ -393,7 +393,7 @@ static void tna_fault_record(napi_env env, tna_napi_system *wrapper, const tah_t
     char body[200];
     int length = snprintf(body, sizeof body, "actor quarantined: %s", message);
     tna_pump_host_log(wrapper->system, record->actor,
-                 (tah_otlp_host_log_params){ .event_name = { "tinyactors.actor.quarantined", 28 },
+                 (tao_host_log_params){ .event_name = { "tinyactors.actor.quarantined", 28 },
                                       .body = { body, length > 0 ? (uint32_t)length : 0u },
                                       .key = { "tinyactors.fault.code", 21 },
                                       .value = { code, (uint32_t)strlen(code) } });
@@ -466,7 +466,7 @@ static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const
     char body[64];
     int length = snprintf(body, sizeof body, "dead-lettered: %s", reason_text);
     tna_pump_host_log(wrapper->system, record->actor,
-                 (tah_otlp_host_log_params){ .event_name = { "tinyactors.message.dead_lettered", 32 },
+                 (tao_host_log_params){ .event_name = { "tinyactors.message.dead_lettered", 32 },
                                       .body = { body, length > 0 ? (uint32_t)length : 0u },
                                       .has_event = true,
                                       .event = record->event,

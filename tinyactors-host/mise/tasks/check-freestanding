@@ -6,8 +6,9 @@
 # is compiled with the release's zig for wasm32-freestanding, which has no
 # C library at all: a libc header does not exist there, and a libc call
 # would stay undefined. What each object leaves undefined may be core's
-# public API (ta_*), the kernel's own functions (tah_*), and the memory
-# builtins the compiler emits (HostKernel::MEMORY), nothing else.
+# public API (ta_*), the kernel's own functions (tah_*), tinyactors-otlp's
+# (tao_*), and the memory builtins the compiler emits (HostKernel::MEMORY),
+# nothing else.
 
 require_relative '../kernel'
 require 'fileutils'
@@ -20,10 +21,10 @@ HostKernel.sources.each do |source|
   object = out.join("#{source.basename('.c')}.o")
   binary = target.compile(source.to_s, into: object.to_s,
                                        includes: [HostKernel::ROOT.join('include'), HostKernel::CORE_INCLUDE,
-                                                  HostKernel::ROOT.join('src')],
+                                                  HostKernel::OTLP_INCLUDE, HostKernel::ROOT.join('src')],
                                        flags: HostKernel::WARNINGS)
   foreign = (binary.undefined - binary.format.runtime_undefined).to_a.reject do |symbol|
-    symbol.start_with?('ta_', 'tah_') || HostKernel::MEMORY.include?(symbol)
+    symbol.start_with?('ta_', 'tah_', 'tao_') || HostKernel::MEMORY.include?(symbol)
   end
   bad << "#{source.basename}: #{foreign.join(', ')}" unless foreign.empty?
 end

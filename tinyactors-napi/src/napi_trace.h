@@ -3,7 +3,7 @@
  * The tracing hook (core ADR 0067, napi ADR 0016): the Node-API half.
  *
  * lib/system.js registers a JavaScript function with setTraceSink(); this
- * module installs the OTLP encoder (otlp.h) and the sink adapter
+ * module installs the OTLP encoder (tinyactors_otlp.h) and the sink adapter
  * (adapters/trace.h) with the mask JavaScript asked for, or core's null
  * sink when there is no function, so an untraced system builds no record.
  * At the end of each turn the pump calls tna_trace_dispatch(), which hands

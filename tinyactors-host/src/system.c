@@ -180,7 +180,6 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
         .due_budget = (uint32_t)napi.values[TAH_PARAM_DUE_BUDGET],
         .clock = { .kind = TAH_CLOCK_REALTIME, .now = platform->v->monotonic_ns, .now_context = platform->self },
         .platform = *platform,
-        .params = napi,
     };
     system->clock.origin = system->clock.now(system->clock.now_context);
     tah_allocator_init(&system->allocator, platform->allocator);
@@ -264,10 +263,8 @@ void tah_system_close(tah_system *system) {
     /* Records hold values; the log goes while core is alive. */
     system->sched.observer = (tah_sched_observer){ 0 };
     tah_recorder_destroy(&system->recorder);
-    if (system->tracing) {
-        tah_otlp_destroy(&system->otlp);
-        system->tracing = false;
-    }
+    tao_destroy(system->otlp);
+    system->otlp = NULL;
     ta_system_destroy(system->core);
     system->core = NULL;
     /* Core held the I/O processor records as adapters until now. */
@@ -320,8 +317,8 @@ tah_effects *tah_system_effects(tah_system *system) {
     return &system->effects;
 }
 
-tah_otlp *tah_system_otlp(tah_system *system) {
-    return &system->otlp;
+tao_encoder *tah_system_otlp(tah_system *system) {
+    return system->otlp;
 }
 
 tah_trace_watch *tah_system_trace_watch(tah_system *system) {
@@ -334,11 +331,6 @@ tah_definitions *tah_system_definitions(tah_system *system) {
 
 tah_host_metrics *tah_system_metrics(tah_system *system) {
     return &system->metrics;
-}
-
-
-const tah_params *tah_system_params(const tah_system *system) {
-    return &system->params;
 }
 
 bool tah_system_inside_core(const tah_system *system) {
@@ -355,11 +347,14 @@ void tah_system_leave_core(tah_system *system) {
 }
 
 bool tah_system_tracing(const tah_system *system) {
-    return system->tracing;
+    return system->otlp != NULL;
 }
 
-void tah_system_set_tracing(tah_system *system, bool tracing) {
-    system->tracing = tracing;
+void tah_system_set_otlp(tah_system *system, tao_encoder *encoder) {
+    if (system->otlp != encoder) {
+        tao_destroy(system->otlp);
+    }
+    system->otlp = encoder;
 }
 
 void tah_system_set_log_to_js(tah_system *system, bool log_to_js) {
@@ -429,25 +424,15 @@ bool tah_system_quiet(const tah_system *system) {
            system->recorder.records.count == 0 && system->recorder.touched.count == 0 &&
            system->quarantine_reports.count == 0 &&
            tah_loads_pending_requests(&system->loads) == 0 &&
-           (!system->tracing || (system->otlp.span_count == 0 && tah_system_tel_empty(system))) &&
+           (system->otlp == NULL || (tao_traces_size(system->otlp) == 0 && tah_system_tel_empty(system))) &&
            !tah_system_due_now(system);
 }
 
 void tah_system_drain_telemetry(tah_system *system) {
-    if (system == NULL || system->core == NULL || !system->tracing) {
+    if (system == NULL || system->core == NULL || system->otlp == NULL) {
         return;
     }
-    uint32_t before = system->otlp.span_count;
-    ta_tel_record record;
-    while (ta_system_tel_peek(system->core, &record) == TA_OK) {
-        if (record.kind == TA_TEL_TRACE) {
-            tah_otlp_write(&system->otlp, &record.trace);
-        } else {
-            tah_otlp_dropped(&system->otlp, record.dropped);
-        }
-        (void)ta_system_tel_release(system->core);
-    }
-    if (system->otlp.span_count != before) {
+    if (tao_read_tel(system->otlp, system->core) != 0) {
         tah_system_want_turn(system);
     }
 }
@@ -480,9 +465,9 @@ void tah_system_record_turn(tah_system *system, uint64_t started_ns) {
     uint64_t now = tah_system_monotonic_ns(system);
     double seconds = now > started_ns ? (double)(now - started_ns) / 1e9 : 0.0;
     tah_exemplar exemplar = { 0 };
-    if (system->tracing && system->otlp.last_macrostep.set) {
-        exemplar = system->otlp.last_macrostep;
-        system->otlp.last_macrostep.set = false;
+    tao_span_ref macrostep;
+    if (system->otlp != NULL && tao_take_last_macrostep(system->otlp, &macrostep)) {
+        exemplar = tah_exemplar_of(&macrostep.context, macrostep.span_id, macrostep.time_ns);
     }
     tah_histogram_record(&system->metrics.turn_seconds, seconds, &exemplar);
 }
@@ -514,7 +499,7 @@ void tah_system_record_lateness(tah_system *system, ta_time due, const ta_trace_
 }
 
 ta_result tah_system_refresh_log_sink(tah_system *system) {
-    bool wanted = system->log_to_js || (system->tracing && system->otlp.config.log_limit != 0);
+    bool wanted = system->log_to_js || (system->otlp != NULL && tao_logs_enabled(system->otlp));
     return ta_system_set_log_sink(system->core, wanted ? tah_log_sink_adapter(system) : (ta_log_sink){ 0 });
 }
 
@@ -523,7 +508,7 @@ uint64_t tah_system_random_seed(tah_system *system) {
 }
 
 void tah_system_start_trace(tah_system *system, ta_trace_context *context) {
-    if (!system->tracing || context->trace_id_high != 0 || context->trace_id_low != 0) {
+    if (system->otlp == NULL || context->trace_id_high != 0 || context->trace_id_low != 0) {
         return;
     }
     uint8_t detail = context->detail;
@@ -772,8 +757,7 @@ bool tah_system_dispatch_due(tah_system *system) {
 static bool tah_system_staging_full(void *context) {
     tah_system *system = context;
     tah_system_drain_telemetry(system); /* what the ta_run() before wrote */
-    return system->tracing && tah_otlp_traces_size(&system->otlp) + tah_otlp_logs_size(&system->otlp) >=
-                                  system->params.values[TAH_PARAM_TRACE_STAGING_BYTES];
+    return system->otlp != NULL && tao_staging_full(system->otlp);
 }
 
 void tah_system_turn(tah_system *system) {

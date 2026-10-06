@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test the host kernel: opaque public headers, no recursion, freestanding for wasm32, the tests under AddressSanitizer and UBSan, and every test program"
-#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../mise/lib/**/*", "../mise/ast-grep/rules/kernel-opaque-struct.yml", "../mise.toml"]
+#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-otlp/include/**/*", "../tinyactors-otlp/src/**/*", "../mise/lib/**/*", "../mise/ast-grep/rules/kernel-opaque-struct.yml", "../mise.toml"]
 #MISE outputs={auto=true}
 #MISE depends=["build"]
 # vim:ft=ruby

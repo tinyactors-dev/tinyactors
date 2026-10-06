@@ -34,6 +34,8 @@ module Changelog
                   api_files: %w[include/tinyactors_host.h include/tinyactors_host/*.h], api_ignore: VERSION_MACROS),
     Component.new(name: 'napi', dir: 'tinyactors-napi', scopes: %w[napi],
                   api_files: %w[index.d.ts], api_ignore: nil),
+    Component.new(name: 'otlp', dir: 'tinyactors-otlp', scopes: %w[otlp],
+                  api_files: %w[include/tinyactors_otlp.h], api_ignore: VERSION_MACROS),
     Component.new(name: 'scxml', dir: 'tinyactors-scxml', scopes: %w[scxml],
                   api_json: 'include/ta_scxml.api.json', api_ignore: VERSION_MACROS),
     Component.new(name: 'tinyxml', dir: 'tinyxml', scopes: %w[tinyxml txml],

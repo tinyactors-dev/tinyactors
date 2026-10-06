@@ -30,6 +30,7 @@ steps = [
   ['toolchain', ['mise', 'run', *(all ? ['--force'] : []), 'toolchain-test'], root],
   ['build', %w[mise run build], root],
   ['core', ['mise', 'run', *flags.call], root.join('tinyactors-core')],
+  ['otlp', ['mise', 'run', *flags.call], root.join('tinyactors-otlp')],
   # --full: replay's out-of-memory sweep at every allocation.
   ['host kernel', ['mise', 'run', *flags.call], root.join('tinyactors-host')],
   ['tinyxml', ['mise', 'run', *flags.call], root.join('tinyxml')],

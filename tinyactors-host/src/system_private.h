@@ -13,7 +13,6 @@
 #include "host_metrics_private.h"
 #include "loads_private.h"
 #include "offloads_private.h"
-#include "otlp_private.h"
 #include "recorder_private.h"
 #include "scheduler_private.h"
 #include "watch_private.h"
@@ -57,11 +56,11 @@ struct tah_system {
     tah_system_callbacks callbacks;
     /* Effects waiting for JavaScript (effects.h), in the turn arena. */
     tah_effects effects;
-    /* The trace encoder (otlp.h), while a sink is installed (napi ADR 0016):
-     * core's records become OTLP spans as they are written, and the pump
-     * hands the spans that ended to JavaScript as bytes, once per turn. */
-    tah_otlp otlp;
-    bool tracing;
+    /* The trace encoder (tinyactors_otlp.h), while a sink is installed
+     * (napi ADR 0016), or NULL: it reads core's tel ring between core
+     * calls, and the binding hands the spans that ended on as bytes, once
+     * per turn. The kernel owns it (tah_system_set_otlp). */
+    tao_encoder *otlp;
     /* <log> records go to JavaScript's log sink (setLogSink). */
     bool log_to_js;
     /* What is watched (napi ADR 0017). */
@@ -81,8 +80,6 @@ struct tah_system {
     bool dispatching_due;
     /* The recorder (recorder.h, kernel ADR 0006 section 2). */
     tah_recorder recorder;
-    /* The kernel's parameters, fixed at creation (params.h, napi ADR 0035). */
-    tah_params params;
 };
 
 /* Points the scheduler's observer at the recorder while it is on. */

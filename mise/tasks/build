@@ -33,6 +33,11 @@ end
 core = Project.new(ROOT.join('tinyactors-core'))
 core.run('build')
 
+# tinyactors-otlp, the trace encoder, builds against core's header; the
+# kernel links it.
+otlp = Project.new(ROOT.join('tinyactors-otlp'))
+otlp.run('build')
+
 # The host kernel builds against core's header; napi and the test host
 # link it (kernel ADR 0001).
 kernel = Project.new(ROOT.join('tinyactors-host'))

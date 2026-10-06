@@ -1,0 +1,21 @@
+#!/usr/bin/env ruby
+#MISE description="Build tinyactors-otlp's tests with AddressSanitizer and UndefinedBehaviorSanitizer and run them"
+# vim:ft=ruby
+
+require_relative '../otlp'
+require 'fileutils'
+
+build = OTLPLibrary::BUILD.join('asan')
+FileUtils.mkdir_p(build)
+cc = Toolchain::Target.host.compile_command
+flags = [*OTLPLibrary::WARNINGS, *OTLPLibrary::INCLUDES, '-g', '-O1', '-fno-omit-frame-pointer',
+         '-fsanitize=address,undefined', '-fno-sanitize-recover=all']
+sources = OTLPLibrary.sources.map(&:to_s) + [OTLPLibrary::CORE_SOURCE.to_s]
+failed = OTLPLibrary.tests.reject do |test|
+  binary = build.join(test)
+  system(*cc, *flags, OTLPLibrary::ROOT.join("tests/#{test}.c").to_s, *sources, '-o', binary.to_s,
+         chdir: OTLPLibrary::ROOT.to_s) &&
+    system(binary.to_s, chdir: OTLPLibrary::ROOT.to_s, out: File::NULL)
+end
+abort "asan: failed: #{failed.join(', ')}" unless failed.empty?
+puts "asan: #{OTLPLibrary.tests.size} tinyactors-otlp test(s) pass under AddressSanitizer and UBSan"
