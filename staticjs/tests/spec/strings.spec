@@ -570,3 +570,108 @@ Array.from({length: 1000}, (_, i) => i % 10).reduce((acc, x) => acc + x, "").len
 === replaceAll's $` past the limit
 "x".repeat(10000).replaceAll("x", "$`")
 --- fault limit
+
+# String.fromCharCode takes UTF-16 code units, each modulo 2^16, and
+# String.fromCodePoint code points. A pair of halves makes a character; a
+# half left alone faults, as staticjs strings cannot hold one. String is
+# still a function: String(x) and String.name(x) live side by side.
+
+=== String.fromCharCode
+[String.fromCharCode(), String.fromCharCode(104, 105), String.fromCharCode(233, 26085, 26412), String.fromCharCode(0xD83D, 0xDE00), String.fromCharCode(97, 0xD83D, 0xDE00, 98), String.fromCharCode(0)]
+--- value
+["","hi","é日本","😀","a😀b","\u0000"]
+
+=== String.fromCharCode takes each code modulo 2^16
+[String.fromCharCode(65 + 65536), String.fromCharCode(-65535), String.fromCharCode(65.9), String.fromCharCode(-0.5), String.fromCharCode(NaN), String.fromCharCode(Infinity), String.fromCharCode(-Infinity), String.fromCharCode(4294967361), String.fromCharCode(0xD83D + 65536, 0xDE00 - 65536)]
+--- value
+["A","\u0001","A","\u0000","\u0000","\u0000","\u0000","A","😀"]
+
+=== String.fromCharCode converts primitives as ToNumber does
+[String.fromCharCode(true, 97), String.fromCharCode(null), String.fromCharCode(undefined), String.fromCharCode(false)]
+--- value
+["\u0001a","\u0000","\u0000","\u0000"]
+
+=== String.fromCharCode faults on a lone first half
+String.fromCharCode(0xD83D)
+--- fault lone surrogate
+
+=== String.fromCharCode faults on a lone second half
+String.fromCharCode(97, 0xDE00)
+--- fault lone surrogate
+
+=== String.fromCharCode faults on halves in the wrong order
+String.fromCharCode(0xDE00, 0xD83D)
+--- fault lone surrogate
+
+=== String.fromCharCode faults on a first half before a character
+String.fromCharCode(0xD83D, 97)
+--- fault lone surrogate
+
+=== String.fromCharCode faults on a code that is a string
+String.fromCharCode("97")
+--- fault numbers
+
+=== String.fromCharCode faults on a code that is an array
+String.fromCharCode([97])
+--- fault numbers
+
+=== String.fromCodePoint
+[String.fromCodePoint(), String.fromCodePoint(104, 105), String.fromCodePoint(233, 26085), String.fromCodePoint(128512), String.fromCodePoint(0x10FFFF), String.fromCodePoint(0), String.fromCodePoint(-0), String.fromCodePoint(0xD83D, 0xDE00), String.fromCodePoint(65.0)]
+--- value
+["","hi","é日","😀","􏿿","\u0000","\u0000","😀","A"]
+
+=== String.fromCodePoint converts primitives as ToNumber does
+[String.fromCodePoint(true), String.fromCodePoint(null), String.fromCodePoint(false, 97)]
+--- value
+["\u0001","\u0000","\u0000a"]
+
+=== String.fromCodePoint faults on a fraction
+String.fromCodePoint(65.5)
+--- fault code point
+
+=== String.fromCodePoint faults past U+10FFFF
+String.fromCodePoint(0x110000)
+--- fault code point
+
+=== String.fromCodePoint faults on a negative point
+String.fromCodePoint(-1)
+--- fault code point
+
+=== String.fromCodePoint faults on NaN
+String.fromCodePoint(NaN)
+--- fault code point
+
+=== String.fromCodePoint faults on undefined
+String.fromCodePoint(undefined)
+--- fault code point
+
+=== String.fromCodePoint faults on Infinity
+String.fromCodePoint(Infinity)
+--- fault code point
+
+=== String.fromCodePoint faults on a lone surrogate
+String.fromCodePoint(0xDC00)
+--- fault lone surrogate
+
+=== String.fromCodePoint faults on a code point that is a string
+String.fromCodePoint("65")
+--- fault numbers
+
+=== String.fromCharCode in map, and String beside it
+[[104, 105].map(c => String.fromCharCode(c)).join(""), String(1), [1, 2].map(String), typeof String.fromCodePoint]
+--- value
+["hi","1",["1","2"],"function"]
+
+=== the code points of a string and back
+(s => String.fromCodePoint(...Array.from(s).map(c => c.codePointAt(0))))("é😀日")
+--- value
+"é😀日"
+
+=== String's other members are not built in
+String.raw
+--- error unsupported built-in
+
+=== String alone as a value
+(f => f(2))(String)
+--- value
+"2"

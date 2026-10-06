@@ -78,11 +78,14 @@ method lookup at run time is an index into `NAMES` plus a column. Never
 compare method names as strings at run time: the old `strlen` and `strcmp`
 lookup cost 17% of a guard.
 
-**A function** (`Math.x`, `Object.x`, `Number.x`, or a bare global name):
+**A function** (`Math.x`, `Object.x`, `Number.x`, `String.x`, or a bare global name):
 add an ID before `SJS_BUILTIN_FUNCTION_COUNT`, an entry in
 `FUNCTION_TABLE`, and an immortal value in `FUNCTIONS`. The compiler
 resolves the name when it compiles (`sjs_builtin_lookup`), so the linear
-table costs nothing at run time. A function value is immortal: its
+table costs nothing at run time. A namespace is a row of `spaces` in
+`read_name` and of `space_names` in `read_space_member` (`src/compiler.c`);
+`String` is one and a function too: `event()` reads it as the function
+when no member follows. A function value is immortal: its
 reference count is never written, which is why there is no global mutable
 state.
 
