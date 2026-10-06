@@ -281,6 +281,7 @@ static int grow(ta_system **system_slot, uint32_t pool) {
         break;
     default: {
         ta_system_stats stats;
+        stats.size = sizeof stats; /* how much of it to fill */
         ta_system_stats_get(system, &stats);
         int a = half_full(stats.actors, stats.actors_capacity),
             e = half_full(stats.events, stats.events_capacity),

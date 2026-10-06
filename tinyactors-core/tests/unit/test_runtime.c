@@ -135,6 +135,7 @@ static void test_limits_and_targeted_grow(void) {
     CHECK_EQUAL(status, TA_ERROR_NO_MEMORY); /* two actors fit */
     CHECK_EQUAL(ta_runtime_system_grow(&system), TA_OK);
     ta_system_stats stats;
+    stats.size = sizeof stats;
     ta_system_stats_get(system, &stats);
     CHECK_EQUAL(stats.actors_capacity, 4);  /* the full pool doubled ... */
     CHECK_EQUAL(stats.events_capacity, 64); /* ... the idle ones did not */

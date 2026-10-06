@@ -121,6 +121,7 @@ TEST_UNUSED static const char *tsys_config(test_system *t, uint32_t actor) {
     static char buffer[1024];
     uint32_t states[128];
     ta_actor_info info;
+    info.size = sizeof info;
     buffer[0] = 0;
     if (ta_actor_info_get(t->system, actor, &info) != TA_OK) return "<gone>";
     uint32_t n = ta_actor_config(t->system, actor, states, 128);
