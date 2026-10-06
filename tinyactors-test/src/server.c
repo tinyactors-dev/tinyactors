@@ -3,7 +3,6 @@
 #include <string.h>
 
 #include "binding.h"
-#include "hosted.h"
 #include "instruments.h"
 #include "jq.h"
 #include "rpc.h"
@@ -227,42 +226,6 @@ static const tat_method TAT_HOST_METHODS[] = {
      "\"args\":{\"type\":\"json\",\"required\":false}}}"},
     {"handle.fixture", tat_handle_fixture_method,
      "{\"host\":true,\"params\":{\"type\":{\"type\":\"string\",\"required\":true}}}"},
-    {"hosted.create", tat_hosted_create_method,
-     "{\"host\":true,\"params\":{\"incarnation\":{\"type\":\"u64\",\"required\":false},"
-     "\"allocator\":{\"type\":\"adapter:ta_allocator\",\"required\":false}}}"},
-    {"hosted.close", tat_hosted_close_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true}}}"},
-    {"hosted.spawn", tat_hosted_spawn_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"definition\":{\"type\":\"u64\",\"required\":true},"
-     "\"family\":{\"type\":\"string\",\"required\":false},\"name\":{\"type\":\"string\",\"required\":false}}}"},
-    {"hosted.post", tat_hosted_post_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actor\":{\"type\":\"u64\",\"required\":false},"
-     "\"family\":{\"type\":\"string\",\"required\":false},\"name\":{\"type\":\"string\",\"required\":false},"
-     "\"event\":{\"type\":\"string\",\"required\":true},\"data\":{\"type\":\"json\",\"required\":false}}}"},
-    {"hosted.turn", tat_hosted_turn_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"limit\":{\"type\":\"u64\",\"required\":false}}}"},
-    {"hosted.mailboxes", tat_hosted_mailboxes_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actors\":{\"type\":\"json\",\"required\":false}}}"},
-    {"hosted.advance", tat_hosted_advance_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"time\":{\"type\":\"u64\",\"required\":true}}}"},
-    {"hosted.set_loader", tat_hosted_set_loader_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"family\":{\"type\":\"string\",\"required\":true},"
-     "\"loader\":{\"type\":\"bool\",\"required\":false}}}"},
-    {"hosted.load", tat_hosted_load_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"index\":{\"type\":\"u64\",\"required\":true},"
-     "\"generation\":{\"type\":\"u64\",\"required\":true},\"outcome\":{\"type\":\"string\",\"required\":false},"
-     "\"definition\":{\"type\":\"u64\",\"required\":false},\"at\":{\"type\":\"u64\",\"required\":false},"
-     "\"journal\":{\"type\":\"json\",\"required\":false}}}"},
-    {"hosted.stats", tat_hosted_stats_method, "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true}}}"},
-    {"hosted.record", tat_hosted_record_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"families\":{\"type\":\"json\",\"required\":true}}}"},
-    {"hosted.records", tat_hosted_records_method, "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true}}}"},
-    {"hosted.evict", tat_hosted_evict_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actor\":{\"type\":\"u64\",\"required\":true}}}"},
-    {"hosted.restore", tat_hosted_restore_method,
-     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"definition\":{\"type\":\"u64\",\"required\":true},"
-     "\"family\":{\"type\":\"string\",\"required\":true},\"name\":{\"type\":\"string\",\"required\":true},"
-     "\"at\":{\"type\":\"u64\",\"required\":false},\"journal\":{\"type\":\"json\",\"required\":true}}}"},
 };
 
 static bool tat_register_methods(tat_server_impl *impl, ta_arena *arena) {

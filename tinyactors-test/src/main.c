@@ -6,7 +6,7 @@
 #include "allocator.h"
 #include "server.h"
 
-/* A hosted log travels as hex, twice its size: a 4 MiB value's log fits. */
+/* The largest request the server reads. */
 enum { TAT_MAX_REQUEST_BYTES = 16 * 1024 * 1024 };
 
 int main(void) {
