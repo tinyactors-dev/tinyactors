@@ -208,8 +208,9 @@ static ta_result tah_recorder_report_event(tah_system *system, const tah_envelop
     return result;
 }
 
-/* Core took a message or a report: its macrostep is open, and its event is
- * kept, at the time it was taken, until the macrostep ends. */
+/* Core took a message or a report, or mail between actors from its own
+ * queue: its macrostep is open, and its event is kept, at the time it was
+ * taken, until the macrostep ends. */
 static void tah_recorder_taken(tah_system *system, const tah_sched_note *note) {
     tah_recorder *recorder = &system->recorder;
     uint64_t session = 0;
@@ -217,7 +218,8 @@ static void tah_recorder_taken(tah_system *system, const tah_sched_note *note) {
     /* An operator's jump (core ADR 0082) is not an event the chart took by
      * its own transitions: replaying its event would take another path, so
      * it is not recorded (kernel ADR 0006 section 8, left open). */
-    if (address == NULL || note->message == NULL || note->message->has_jump) {
+    if (address == NULL || (note->message == NULL && note->event == NULL) ||
+        (note->message != NULL && note->message->has_jump)) {
         return;
     }
     tah_recorded recorded = { .actor = note->actor, .address = address, .at = ta_system_time(system->core),
@@ -228,7 +230,7 @@ static void tah_recorder_taken(tah_system *system, const tah_sched_note *note) {
             return;
         }
     } else {
-        ta_event_retain(&note->message->event, &recorded.event);
+        ta_event_retain(note->message != NULL ? &note->message->event : note->event, &recorded.event);
     }
     ta_address_retain(address);
     if (tah_vec_push(&recorder->open, &recorded) != TA_OK) {

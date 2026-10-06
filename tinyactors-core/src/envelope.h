@@ -28,7 +28,11 @@
  *   queue, a macrostep's outgoing list, a session's deferred list, an
  *   address's waiting list, or, while it is free, the pool's free list.
  * - `owner_next` links a pending delayed send on its sender's owner list,
- *   so `<cancel>` and unloading find a session's timers.
+ *   so `<cancel>` and unloading find a session's timers. A taken envelope
+ *   and an outgoing one are on no owner list, so while a macrostep waits
+ *   outside `ta_run()` its outgoing list is parked there: the taken
+ *   input's `owner_next` names the list's first envelope, and that
+ *   envelope's `owner_next` its last (`run.h`).
  * - `heap_index` is the envelope's place in the deadline index while it
  *   is a timer, and its **arrival number** while it is runnable. The two
  *   never overlap: a runnable envelope is not in the deadline index.
@@ -48,11 +52,12 @@
  *   between targets. `ta_envelope_pool_enqueue` appends one envelope;
  *   `ta_envelope_pool_dequeue` takes the head.
  * - **An outgoing list** belongs to a running macrostep. It holds, in send
- *   order, the mail the macrostep sent, on no queue yet, so nothing can
- *   take it before the macrostep ends; `ta_envelope_pool_post` appends to
- *   it. At the macrostep's end `ta_envelope_pool_deliver` moves the whole
- *   list, in order, to the end of the run queue. A macrostep that is
- *   abandoned frees its outgoing list instead, envelope by envelope.
+ *   order, the mail the macrostep sent to resident sessions, on no queue
+ *   yet, so nothing can take it before the macrostep ends;
+ *   `ta_envelope_pool_post` appends to it. At the macrostep's end
+ *   `ta_envelope_pool_deliver` moves the whole list, in order, to the end
+ *   of the run queue. A macrostep that is abandoned frees its outgoing
+ *   list instead, envelope by envelope.
  *
  * - **A deferred list** belongs to a session in a macrostep. An envelope
  *   the run queue holds for such a session moves there when it is reached,
@@ -226,7 +231,9 @@ typedef enum {
 typedef struct {
     /** The next envelope on the one list that holds it, 0 at the tail. */
     uint32_t next;
-    /** The next pending delayed send of the same sender, 0 at the tail. */
+    /** The next pending delayed send of the same sender, 0 at the tail;
+     * while taken or outgoing, a parked outgoing list's ends (file
+     * comment). */
     uint32_t owner_next;
     /** While a timer, its place in the deadline index; while runnable,
      * its arrival number. */
@@ -244,7 +251,8 @@ typedef struct {
      * address's waiting entry; 0 for a timer whose target is an I/O
      * processor's, kept as text. */
     uint64_t target;
-    /** The sending session's ID, or 0 for external input. */
+    /** The sending session's ID for mail, or 0: external input, a wake,
+     * or a sender that is gone. */
     uint64_t from;
     /** A timer's deadline; while taken, the logical time of the macrostep
      * it runs (`run.h`). */

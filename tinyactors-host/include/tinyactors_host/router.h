@@ -1,9 +1,10 @@
 #pragma once
 /*
  * The external-event router (ADR 0006), installed on every system when it is
- * created. Core hands it every event between sessions: every <send> to
- * another actor or to self, and later done.invoke and the like. This module
- * has no Node-API in it, so native tests drive it.
+ * created. Core hands it the events between sessions whose target is not
+ * resident: a session that is gone or unloaded, or an address with no
+ * resident actor. Mail to a resident actor stays in core (core ADR 0099).
+ * This module has no Node-API in it, so native tests drive it.
  *
  * submit() resolves the destination and puts the event in a mailbox
  * (ADR 0005). It never delivers directly, never calls back into the

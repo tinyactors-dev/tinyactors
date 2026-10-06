@@ -37,8 +37,9 @@ front is the globally earliest send, so dispatch order is exactly
 Every one of these costs O(k + log A): k sends of that owner, A owners with
 sends. Nothing scans the system.
 
-A send the router refuses when it falls due (`TA_EXTERNAL_EVENT_RETRY`,
-ADR 0040) is **submitted**: it is already sent, keeps its envelope, can no
+A send nothing accepts when it falls due (the router answers
+`TA_EXTERNAL_EVENT_RETRY`, ADR 0040, or a resident target's envelope finds no
+room in core's pool or name area, ADR 0099) is **submitted**: it is already sent, keeps its envelope, can no
 longer be cancelled, and waits to be offered again at its own place in the
 order. It goes back into its owner's list. Submitted sends of an actor that
 is destroyed or unloaded move to the system-owned `orphans` list, which

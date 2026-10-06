@@ -1,15 +1,17 @@
 /*
- * The router (ADR 0006), driven without Node-API: a <send> between actors
- * lands in the target's mailbox, a named target resolves through the
- * directory, a name with no actor is a dead letter that keeps the name, and
- * a named origin stays valid after its sender is destroyed (tinyactors-core
- * ADR 0065) — run under AddressSanitizer by test-native-asan.
+ * The router (ADR 0006), driven without Node-API: a <send> to a resident
+ * actor never reaches it, since core queues it itself (tinyactors-core ADR
+ * 0099), and the recorder still sees the event the receiver takes; a name
+ * with no actor is a dead letter that keeps the name; and a named origin
+ * stays valid after its sender is destroyed (tinyactors-core ADR 0065) —
+ * run under AddressSanitizer by test-native-asan.
  */
 #include "check.h"
 #include <string.h>
 
 #include "tinyactors_host/events.h"
 #include "tinyactors_host/hooks.h"
+#include "tinyactors_host/recorder.h"
 #include "tinyactors_host/scheduler.h"
 #include "tinyactors_host/system.h"
 #include "scheduler_private.h"
@@ -132,12 +134,15 @@ static bool in_state(tah_system *system, ta_actor_id actor, const char *id) {
 }
 
 /*
- * A named sender finishes and is destroyed while its message waits in the
- * receiver's mailbox: the envelope's origin is the sender's interned
- * address, and it stays readable (AddressSanitizer would catch a freed one).
+ * A named sender finishes and is destroyed while its message waits in
+ * core's queue, not in a mailbox here: the envelope's origin is the
+ * sender's interned address, and the receiver takes it readable, as the
+ * recorder sees it (AddressSanitizer would catch a freed one).
  */
 static void named_origin_outlives_its_sender(void) {
     tah_system *system = make_system();
+    ta_str families[] = { S("r") };
+    CHECK(tah_recorder_configure(system, families, 1) == TA_OK);
     ta_actor_address receiver_name = { .family = { .name = S("r") }, .name = S("recv") };
     ta_actor_address sender_name = { .family = { .name = S("snd") }, .name = S("s1") };
     ta_actor_id receiver = spawn(system, define_receiver(system), &receiver_name);
@@ -156,21 +161,36 @@ static void named_origin_outlives_its_sender(void) {
     CHECK(done);
     tah_system_end_turn(system);
     system->budgets = budgets;
-    CHECK(tah_sched_mailbox_count(&system->sched, receiver) == 1u);
+    CHECK(tah_sched_mailbox_count(&system->sched, receiver) == 0u);
+    CHECK(in_state(system, receiver, "wait"));
 
     destroy(system, sender); /* what finished: "destroy" does after the done hook */
 
-    const tah_sched_entry *entry = tah_sched_lookup(&system->sched, receiver);
-    const tah_envelope *envelope = tah_sched_envelope(&system->sched, entry->first);
-    CHECK(envelope->event.origin.kind == TA_ORIGIN_ACTOR);
-    CHECK(envelope->event.origin.as.actor.kind == TA_ACTOR_REF_NAMED);
-    ta_actor_address origin = ta_address_view(envelope->event.origin.as.actor.as.named);
-    CHECK(text_is(origin.family.name, "snd"));
-    CHECK(text_is(origin.name, "s1"));
-
-    CHECK(settle(system) == 0u);
+    /* One turn takes it; its record waits for the binding, so the system
+     * is not quiet until it is released. */
+    tah_system_turn(system);
+    for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+        CHECK(record->kind != TAH_RECORD_FAULT && record->kind != TAH_RECORD_DEAD_LETTER);
+    }
+    tah_system_end_turn(system);
     CHECK(in_state(system, receiver, "got"));
-    CHECK(system->sched.delivered == 1u);
+    CHECK(system->sched.delivered == 0u);
+    CHECK(tah_recorder_count(system) == 1u);
+    if (tah_recorder_count(system) == 1u) {
+        tah_record record = tah_recorder_record(system, 0);
+        CHECK(record.event->origin.kind == TA_ORIGIN_ACTOR);
+        CHECK(record.event->origin.as.actor.kind == TA_ACTOR_REF_NAMED);
+        if (record.event->origin.kind == TA_ORIGIN_ACTOR && record.event->origin.as.actor.kind == TA_ACTOR_REF_NAMED) {
+            ta_actor_address origin = ta_address_view(record.event->origin.as.actor.as.named);
+            CHECK(text_is(origin.family.name, "snd"));
+            CHECK(text_is(origin.name, "s1"));
+        }
+    }
+    uint32_t wakes = 0;
+    (void)tah_recorder_wakes(system, &wakes); /* the binding takes the turn's batch, then lets it go */
+    tah_recorder_release(system);
+    CHECK(tah_recorder_configure(system, NULL, 0) == TA_OK);
+    CHECK(settle(system) == 0u);
     finish_system(system);
 }
 

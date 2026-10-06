@@ -21,7 +21,7 @@ Residency states conceptually include:
 - running/paused: macrostep in progress;
 - done/terminated: statechart reached terminal state; final removal policy belongs to the host/system API.
 
-A resident actor owns configuration, history, continuation, data-model instance, internal events, and active invocation bookkeeping. Its pending delayed sends are stored with it, in its sparse state, sorted by due time; the system's deadline index orders owners by their earliest send, not individual sends (ADR 0054). A send the router already refused outlives a destroyed or unloaded sender in a system-owned list that takes part in the index like an owner.
+A resident actor owns configuration, history, continuation, data-model instance, internal events, and active invocation bookkeeping. Its pending delayed sends are stored with it, in its sparse state, sorted by due time; the system's deadline index orders owners by their earliest send, not individual sends (ADR 0054). A send that was refused once (by the router, or for want of room in the pool) outlives a destroyed or unloaded sender in a system-owned list that takes part in the index like an owner.
 
 Each semantic mutation advances the actor's session epoch. A captured image
 records that epoch. `ta_actor_unload()` accepts only a matching image, so a host

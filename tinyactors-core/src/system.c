@@ -273,6 +273,7 @@ static ta_result ta_system_event_names_init(ta_system *system, ta_allocator allo
     static const char *const builtins[] = {
         "error", "error.execution", "error.communication", "error.platform",
         "done", "done.state", "done.invoke",
+        "error.execution.capacity", "error.execution.capacity.pool", "error.execution.capacity.names",
     };
     ta_result result = ta_trie_init(&system->event_names, &(ta_trie_params){ .allocator = allocator,
                                                                               .atoms = &system->atoms,
@@ -985,13 +986,15 @@ ta_result ta_system_next_deadline(const ta_system *system, ta_time *out) {
 
 ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params *params) {
     if (system == NULL || params == NULL || params->budget == 0 || params->dispatched == NULL ||
-        params->more_due == NULL) {
+        params->more_due == NULL ||
+        (params->fired != NULL && (params->fired_capacity == 0 || params->fired_count == NULL))) {
         return TA_ERR_INVALID;
     }
     uint32_t dispatched = 0;
     bool retry = false;
     ta_time now = ta_clock_now(&system->clock);
-    while (dispatched < params->budget) {
+    uint32_t fired_count = 0;
+    while (dispatched < params->budget && (params->fired == NULL || fired_count < params->fired_capacity)) {
         ta_time due = 0;
         if (!ta_timer_next_due(&system->timers, &due) || due > now) {
             break;
@@ -1008,7 +1011,12 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
             ta_actor_touch(owner);
         }
         const ta_definition *owner_definition = owner != NULL ? owner->definition : NULL;
-        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send, false);
+        /* What the host reads of it, kept before dispatch gives its values away. */
+        ta_due_fired report = { .sender = send.owner, .due = send.due, .trace = send.trace };
+        /* A send to a resident session goes into the pool here: outside any
+         * macrostep, a safe point, so the pool may refill first. */
+        ta_dispatch how = { .in_run = false, .timer = true };
+        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send, &how);
         if (fired != TA_EXTERNAL_EVENT_RETRY) {
             if (owner_definition != NULL) {
                 TA_COUNT(system, owner_definition, delayed_fired);
@@ -1035,9 +1043,17 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
             break;
         }
         dispatched += 1;
+        if (params->fired != NULL && !how.dropped) {
+            report.delivered = fired == TA_EXTERNAL_EVENT_ACCEPTED;
+            params->fired[fired_count] = report;
+            fired_count += 1;
+        }
     }
     ta_time next = 0;
     *params->dispatched = dispatched;
+    if (params->fired != NULL) {
+        *params->fired_count = fired_count;
+    }
     *params->more_due = retry || (ta_timer_next_due(&system->timers, &next) && next <= now);
     return TA_OK;
 }

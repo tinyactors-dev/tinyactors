@@ -3,7 +3,6 @@
 #include "memory.h"
 
 
-#include "tinyactors_host/recorder.h"
 #include "tinyactors_host/system.h"
 #include "system_private.h"
 
@@ -200,9 +199,6 @@ static ta_external_event_submit_status tah_router_submit(void *self, const ta_ex
         }
         if (delivery->event.origin.kind == TA_ORIGIN_ACTOR) {
             tah_system_wake_sender(system, &delivery->event.origin.as.actor);
-            if (system->dispatching_due) {
-                tah_recorder_fired(system, &delivery->event.origin.as.actor); /* consumed: its wake moves */
-            }
         }
         return TA_EXTERNAL_EVENT_ERROR;
     }
@@ -224,12 +220,6 @@ static ta_external_event_submit_status tah_router_submit(void *self, const ta_ex
     if (result != TA_OK) {
         ta_event_release(&event);
         return TA_EXTERNAL_EVENT_RETRY; /* out of memory: core offers it again */
-    }
-    if (system->dispatching_due) {
-        tah_system_record_lateness(system, delivery->due, &delivery->trace);
-        if (delivery->event.origin.kind == TA_ORIGIN_ACTOR) {
-            tah_recorder_fired(system, &delivery->event.origin.as.actor);
-        }
     }
     tah_system_want_turn(system);
     return TA_EXTERNAL_EVENT_ACCEPTED;

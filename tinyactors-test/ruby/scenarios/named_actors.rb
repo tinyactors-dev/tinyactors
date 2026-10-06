@@ -33,12 +33,12 @@ end
 
 TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
   # A send to a logical address needs no named sender. Core parses the
-  # address and hands the destination to the external-event router, because
-  # the host owns location and residency; here that is the router instrument
-  # resolving it through the directory.
+  # address and resolves it through the host's directory, because the host
+  # owns location and residency; an address with a resident actor is mail
+  # core queues itself, which never reaches the router (core ADR 0099).
   #
   # Catches: a named target that is dropped, delivered to the wrong actor,
-  # or resolved by core instead of handed to the router.
+  # or resolved by core without asking the host's directory.
   scenario 'a send to a logical address is routed through the host directory' do
     directory = memory_directory
     router = recording_router(directory: true)
@@ -53,12 +53,12 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
     assert_equal [{ event: 'hello', from: sender.session_uri }], receiver.data('.inbox'),
                  'the named target is resolved and delivered'
     assert_equal [{ event: 'ack', from: receiver.session_uri }], sender.data('.inbox')
-    # The hello goes to the address, which the router resolves; the reply
-    # goes to the sender's session URI, which needs no resolution.
-    assert_equal [[{ kind: 'named', family: { name: 'messenger' }, name: 'm2' },
-                   { kind: 'resident', actor: receiver.handle }, 'accepted'],
-                  [{ kind: 'runtime', runtime: sender.handle }, nil, 'accepted']],
-                 router.entries('submit').map { |entry| entry.values_at(:destination, :resolved, :status) }
+    # The hello goes to the address, which the directory resolves; the
+    # reply goes to the sender's session URI, which needs no resolution.
+    assert_equal [[{ kind: 'resident', actor: receiver.handle }, 'ok']],
+                 directory.journal.select { |entry| entry[:op] == 'resolve' }
+                          .map { |entry| entry.values_at(:out, :result) }.uniq
+    assert_equal [], router.entries('submit'), 'mail between resident actors stays in core'
   end
 
   # The same routing without a routing instrument. router.direct resolves a
@@ -123,8 +123,7 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
     assert light.handle != old, 'load gives the actor a new runtime ID'
     assert_equal ['ok', light.handle], find(light.address)
     assert_equal %i[operating green], light.active, 'the timer due while unloaded fires once, after load'
-    assert_equal [['timer', light.handle]],
-                 router.entries('submit').map { |entry| [entry.dig(:event, :name_text), entry.dig(:destination, :runtime)] }
+    assert_equal [], router.entries('submit'), 'it reached the loaded actor in core (core ADR 0099)'
     assert_equal [['claim', nil, 'resident', 'ok'], ['replace', 'resident', 'unloaded', 'ok'],
                   ['replace', 'unloaded', 'resident', 'ok']],
                  NamedActorScenarios.updates(instruments.fetch('directory'))
@@ -219,11 +218,12 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
     assert_equal [{ event: 'hello', from: '#_actor_messenger/m1' }], receiver.data('.inbox')
     assert_equal [{ event: 'ack', from: '#_actor_messenger/m2' }], sender.data('.inbox'),
                  'the reply went to the address the hello came from'
-    assert_equal [[{ kind: 'named', family: { name: 'messenger' }, name: 'm2' },
-                   { kind: 'resident', actor: receiver.handle }, 'accepted'],
-                  [{ kind: 'named', family: { name: 'messenger' }, name: 'm1' },
-                   { kind: 'resident', actor: sender.handle }, 'accepted']],
-                 router.entries('submit').map { |entry| entry.values_at(:destination, :resolved, :status) }
+    # Both addresses resolve through the directory, to resident actors, so
+    # core queues both messages itself (core ADR 0099).
+    resolved = instruments.fetch('directory').journal.select { |entry| entry[:op] == 'resolve' }
+    assert_equal [['m2', { kind: 'resident', actor: receiver.handle }], ['m1', { kind: 'resident', actor: sender.handle }]],
+                 resolved.map { |entry| entry.values_at(:name, :out) }.uniq
+    assert_equal [], router.entries('submit'), 'mail between resident actors stays in core'
   end
 
   # Catches: a send to an unloaded actor that is silently dropped or

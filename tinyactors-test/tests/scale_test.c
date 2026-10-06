@@ -1309,7 +1309,9 @@ static void check_io_origin_allocations(void) {
  * system is warm, neither calls the allocator. Before ADR 0065 keeping a
  * delivery copied its destination's strings, two allocations, and releasing
  * it freed them. The sender keeps a far delayed send, so its sparse state
- * stays (ADR 0064) and only the router's own work is counted.
+ * stays (ADR 0064) and only the router's own work is counted. The address
+ * it sends to has no resident actor, so its mail goes to the router: mail
+ * to a resident one stays in core (core ADR 0099).
  */
 
 static const ta_scxml_state_spec STATES_PINGER[] = {
@@ -1377,20 +1379,19 @@ static void check_kept_delivery_allocations(void) {
                     system, (ta_external_event_router){.self = &router, .v = &KEEPING_ROUTER}) == TA_OK,
             "installing the directory and the router");
     ta_definition_id pinger = register_revision(system, allocator, &(revision_spec){"pinger", "v1", STATES_PINGER});
-    ta_definition_id peer = register_revision(system, allocator, &(revision_spec){"peer", "v1", STATES_V2});
     ta_actor_id sender = 0;
-    ta_actor_id receiver = 0;
     require(ta_actor_spawn(system, &(ta_actor_spawn_params){
                                        .definition = pinger,
                                        .address = &(ta_actor_address){.family = {STR("pinger")}, .name = STR("a")},
-                                       .out = &sender}) == TA_OK &&
-                ta_actor_spawn(system, &(ta_actor_spawn_params){
-                                           .definition = peer,
-                                           .address = &(ta_actor_address){.family = {STR("peer")}, .name = STR("b")},
-                                           .out = &receiver}) == TA_OK,
-            "spawning the named sender and receiver");
+                                       .out = &sender}) == TA_OK,
+            "spawning the named sender");
     run_to_stable(system, sender);
-    run_to_stable(system, receiver);
+    /* The host keeps a handle to the address it routes to, as a loader keeps
+     * an unloaded actor's: each send finds it interned. */
+    ta_address *unloaded = NULL;
+    require(ta_address_intern(system, &(ta_actor_address){.family = {STR("peer")}, .name = STR("b")}, &unloaded) ==
+                TA_OK,
+            "interning the address with no resident actor");
     ta_event_name_id ping = intern_event(system, (ta_str)STR("ping"));
     /* Warm-up. */
     run_event(system, sender, ping);
@@ -1410,6 +1411,7 @@ static void check_kept_delivery_allocations(void) {
     printf("allocator calls per kept-then-released delivery after warm-up: %.2f allocations and %.2f frees\n",
            allocs, frees);
     require(router.accepted == EVENT_ROUNDS + 1u, "every ping reached the router");
+    ta_address_release(unloaded);
     directory_release(&dir);
     ta_system_destroy(system);
     directory_destroy(&dir);

@@ -71,6 +71,7 @@
 #include "invoke.h"
 #include "definition.h"
 #include "actor.h"
+#include "generated/ring_records.h"
 
 /* A generated send ID (`#_send.<n>`, ADR 0048) is this bit and the session's counter n. */
 #define TA_GENERATED_SEND_ID_BIT ((ta_send_id)1u << 63)
@@ -229,14 +230,36 @@ ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor);
 void ta_interpreter_exit_invoked(ta_system *system, ta_actor_id id);
 /* Takes ownership of the event's data. */
 ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event);
-/* Dispatches a due delayed send; RETRY leaves the send owned by the caller. */
+/* How ta_interpreter_dispatch_delayed() dispatches a send. */
+typedef struct {
+    /*
+     * The sender's own run dispatches it (an immediate <send>): a failure
+     * is then raised in that run, and the unit that sent it counts and
+     * records it. Otherwise (a timer, a held send released) the failure is
+     * raised outside a run, and counted and recorded here (ADR 0072).
+     */
+    bool in_run;
+    /* A delayed send that fell due, not mail sent now. */
+    bool timer;
+    /* Set by the call: with `in_run`, the resource a resident target's
+     * envelope found no room in, and the answer is ERROR with the send
+     * released and nobody told; the caller raises
+     * error.execution.capacity.<resource>. 0 otherwise. */
+    ta_record_capacity_resource short_of;
+    /* Set by the call: the answer is ACCEPTED, but the send went nowhere,
+     * since its sender is gone or its parent cancelled it. */
+    bool dropped;
+} ta_dispatch;
 /*
- * `in_run` says the sender's own run dispatches it (an immediate <send>):
- * a failure is then raised in that run, and the unit that sent it counts
- * and records it. Otherwise (a timer, a held send released) the failure is
- * raised outside a run, and counted and recorded here (ADR 0072).
+ * Dispatches a send now: to a resident session, into an envelope of the
+ * pool (run.h); to any other SCXML target, through the host's router; to
+ * another I/O processor, through it. RETRY leaves the send owned by the
+ * caller: nothing accepted it, or, outside a run, the pool or the name area
+ * had no room for a resident target's envelope. Never allocates inside a
+ * macrostep.
  */
-ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, bool in_run);
+ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send,
+                                                                ta_dispatch *how);
 /*
  * A literal content as a host adapter receives it (ADR 0053): its media type
  * and its bytes. The bytes' pointer is non-null even for empty content, so an

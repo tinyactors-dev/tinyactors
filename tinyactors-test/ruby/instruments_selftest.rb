@@ -13,8 +13,8 @@ Dir[root.join('ruby/charts/**/*.rb').to_s].sort.each { |file| require file }
 SERVICE = 'urn:tinyactors:test:service'
 IO_TYPE = 'urn:tinyactors:test:io'
 
-# Sends itself `ping` through the SCXML Event I/O Processor, which routes
-# external self-sends through the host's router.
+# Sends itself `ping` through the SCXML Event I/O Processor. Mail to a
+# resident session, itself included, stays in core (core ADR 0099).
 TinyactorsTest.chart :harness_ping do
   data pings: 0
   data error: nil
@@ -22,6 +22,29 @@ TinyactorsTest.chart :harness_ping do
   state :ready do
     transition on: 'go', type: :internal do
       send_event 'ping'
+    end
+    transition on: 'ping', type: :internal do
+      assign '.pings', '.pings + 1'
+    end
+    transition on: 'error', target: :failed do
+      assign '.error', '$_event.name'
+    end
+  end
+
+  state :failed
+end
+
+# Sends `ping` to its `peer`. When the peer is not resident in the system
+# (unloaded, gone, or no actor at all), the send goes through the host's
+# router, which the router checks below exercise.
+TinyactorsTest.chart :harness_far do
+  data pings: 0
+  data error: nil
+  data peer: nil
+
+  state :ready do
+    transition on: 'go', type: :internal do
+      send_event 'ping', to_expr: '.peer'
     end
     transition on: 'ping', type: :internal do
       assign '.pings', '.pings + 1'
@@ -159,45 +182,76 @@ inspector_group = TinyactorsTest.scenarios 'inspector' do
   end
 end
 
+# The router sees only mail for sessions that are not resident (core ADR
+# 0099). These checks make one: an unloaded named actor, which the
+# scenario loads again before it releases what the router holds.
+module RouterSelftest
+  # [target, image, binding, sender]: harness_far/t unloaded, and a sender
+  # whose peer is its address.
+  def self.unloaded_peer(context)
+    context.instance_exec do
+      target = spawn :harness_far, name: 't'
+      image = capture(target)
+      binding = target.data
+      assert_equal 'ok', unload(target, image)
+      sender = spawn :harness_far, binding: { peer: "#_actor_#{family(:harness_far)}/t" }
+      [target, image, binding, sender]
+    end
+  end
+
+  def self.load_back(context, target, image, binding)
+    context.instance_exec do
+      assert_equal 'ok', load(target, image, binding: binding)
+      destroy_image(image)
+    end
+  end
+end
+
 router_group = TinyactorsTest.scenarios 'router' do
   scenario 'the recording router journals external sends and delivers them' do
-    router = recording_router
-    actor = spawn :harness_ping
-    actor.deliver 'go'
-    assert_equal 1, actor.data('.pings')
-    # The self-send is submitted while its sender is still in its macrostep:
-    # core admits it at once, and runs it after that macrostep ends.
+    router = recording_router(mode: :hold, directory: true)
+    target, image, binding, sender = RouterSelftest.unloaded_peer(self)
+    sender.deliver 'go'
     submits = router.entries('submit')
-    assert_equal [%w[accepted ok]], submits.map { |entry| entry.values_at(:status, :result) }
+    assert_equal %w[accepted], submits.map { |entry| entry[:status] }
     assert_equal %w[ping], submits.map { |entry| entry.dig(:event, :name_text) }
-    assert_equal({ kind: 'runtime', runtime: actor.handle }, submits[0][:destination])
-    assert_equal({ kind: 'actor', actor: { kind: 'runtime', runtime: actor.handle } }, submits[0].dig(:event, :origin))
+    assert_equal({ kind: 'named', family: { name: family(:harness_far) }, name: 't' }, submits[0][:destination])
+    assert_equal({ kind: 'actor', actor: { kind: 'runtime', runtime: sender.handle } }, submits[0].dig(:event, :origin))
+    RouterSelftest.load_back(self, target, image, binding)
+    router.mode(:direct)
+    assert_equal 'ok', router.release(router.held[0][:id])[:result]
+    run_system('the released ping')
+    assert_equal 1, target.data('.pings'), 'the released delivery reached the loaded actor'
   end
 
   scenario 'held deliveries arrive only when released, in the order chosen' do
-    router = recording_router(mode: :hold)
-    actor = spawn :harness_ping
-    actor.deliver 'go'
-    actor.deliver 'go'
-    assert_equal 0, actor.data('.pings')
+    router = recording_router(mode: :hold, directory: true)
+    target, image, binding, sender = RouterSelftest.unloaded_peer(self)
+    sender.deliver 'go'
+    sender.deliver 'go'
     held = router.held
     assert_equal 2, held.size
+    RouterSelftest.load_back(self, target, image, binding)
+    assert_equal 0, target.data('.pings')
     assert_equal 'ok', router.release(held[1][:id])[:result]
     run_system('release')
-    assert_equal 1, actor.data('.pings')
+    assert_equal 1, target.data('.pings')
     router.drop(held[0][:id])
     assert_equal [], router.held
-    assert_equal 1, actor.data('.pings')
+    assert_equal 1, target.data('.pings')
   end
 
   scenario 'an injected retry makes core offer the delivery again' do
-    router = recording_router
+    router = recording_router(mode: :hold, directory: true)
+    target, image, binding, sender = RouterSelftest.unloaded_peer(self)
     router.arm_fault(:submit, status: 'retry')
-    actor = spawn :harness_ping
-    actor.deliver 'go'
-    assert_equal 1, actor.data('.pings')
+    sender.deliver 'go'
     assert_equal [%w[retry true], %w[accepted false]],
                  router.entries('submit').map { |entry| [entry[:status], (entry[:injected] || false).to_s] }
+    RouterSelftest.load_back(self, target, image, binding)
+    assert_equal 'ok', router.release(router.held[0][:id])[:result]
+    run_system('the offered ping')
+    assert_equal 1, target.data('.pings')
   end
 
   scenario 'a named destination resolves through the directory, which can fail' do
@@ -209,24 +263,27 @@ router_group = TinyactorsTest.scenarios 'router' do
 
     sender.deliver 'greet'
     assert_equal [{ event: 'hello', from: sender.session_uri }], receiver.data('.inbox')
-    # The router resolves through the directory's own operation, so the
-    # directory journals it, rather than reading its entries behind its back.
+    # Core resolves through the directory's own operation, so the directory
+    # journals it, rather than reading its entries behind its back; the
+    # resident receiver gets the mail in core, without the router.
     assert_equal [['messenger', 'm2', 'ok']],
                  directory.entries('resolve').map { |entry| entry.values_at(:family, :name, :result) }
+    assert_equal [], router.entries('submit')
 
-    # A fault armed on resolve therefore reaches routing too.
-    directory.arm_fault(:resolve, result: 'err_stale')
+    # A fault armed on resolve reaches routing too: core finds no resident
+    # actor, so the router gets the mail, and resolves it in turn.
+    directory.arm_fault(:resolve, result: 'err_stale', count: 2)
     sender.deliver 'greet'
     assert_equal 'err_stale', router.entries('submit').last[:result]
     assert_equal 1, receiver.data('.inbox').size, 'nothing was delivered while resolve failed'
-    assert_equal %w[ok err_stale],
+    assert_equal %w[ok err_stale err_stale],
                  directory.entries('resolve').map { |entry| entry[:result] }
   end
 
   scenario 'an injected router error reaches the chart as error.communication' do
     router = recording_router
     router.arm_fault(:submit, message: 'link down')
-    actor = spawn :harness_ping
+    actor = spawn :harness_far, binding: { peer: "#_actor_#{family(:harness_far)}/nobody" }
     actor.deliver 'go'
     assert_active actor, :failed
     assert_equal 'error.communication', actor.data('.error')
@@ -370,10 +427,14 @@ equivalence_group = TinyactorsTest.scenarios 'equivalence', chart: :traffic_ligh
   scenario 'journals appear in the trace with actor labels instead of runtime IDs' do
     trace = assert_equivalent_runs(variants: { 'resume budget 1' => { resume_budget: 1 } }) do
       recording_router
-      spawn(:harness_ping).deliver 'go'
+      gone = spawn(:harness_far)
+      session = gone.session_uri
+      gone.destroy
+      # Mail to a session that is gone goes to the router (core ADR 0099).
+      spawn(:harness_far, binding: { peer: session }).deliver 'go'
     end
     submit = trace.steps.last.state[:journals].fetch('router').first
-    assert_equal({ kind: 'runtime', runtime: 'harness_ping.1' }, submit[:destination])
+    assert_equal({ kind: 'runtime', runtime: 'harness_far.1' }, submit[:destination])
     assert !submit.key?(:seq), 'journal seq numbers are not part of the trace'
   end
 end

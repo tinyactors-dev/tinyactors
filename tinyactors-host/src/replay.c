@@ -89,6 +89,9 @@ static ta_result tah_replay_resume(tah_system *system, ta_actor_id actor, bool *
         bool ended = false;
         ta_result answer = TA_OK;
         for (uint32_t at = 0; at < count; at += 1u) {
+            ta_event_release(&outcomes[at].event); /* a replay records nothing it takes */
+        }
+        for (uint32_t at = 0; at < count; at += 1u) {
             const ta_input_outcome *outcome = &outcomes[at];
             if (outcome->correlation != 0) {
                 tah_sched_outcome_outside(&system->sched, outcome);

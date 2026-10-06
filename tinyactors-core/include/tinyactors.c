@@ -7688,7 +7688,11 @@ TA_PRIVATE ta_actor_ref *ta_event_origin_ref(ta_event *event);
  *   queue, a macrostep's outgoing list, a session's deferred list, an
  *   address's waiting list, or, while it is free, the pool's free list.
  * - `owner_next` links a pending delayed send on its sender's owner list,
- *   so `<cancel>` and unloading find a session's timers.
+ *   so `<cancel>` and unloading find a session's timers. A taken envelope
+ *   and an outgoing one are on no owner list, so while a macrostep waits
+ *   outside `ta_run()` its outgoing list is parked there: the taken
+ *   input's `owner_next` names the list's first envelope, and that
+ *   envelope's `owner_next` its last (`run.h`).
  * - `heap_index` is the envelope's place in the deadline index while it
  *   is a timer, and its **arrival number** while it is runnable. The two
  *   never overlap: a runnable envelope is not in the deadline index.
@@ -7708,11 +7712,12 @@ TA_PRIVATE ta_actor_ref *ta_event_origin_ref(ta_event *event);
  *   between targets. `ta_envelope_pool_enqueue` appends one envelope;
  *   `ta_envelope_pool_dequeue` takes the head.
  * - **An outgoing list** belongs to a running macrostep. It holds, in send
- *   order, the mail the macrostep sent, on no queue yet, so nothing can
- *   take it before the macrostep ends; `ta_envelope_pool_post` appends to
- *   it. At the macrostep's end `ta_envelope_pool_deliver` moves the whole
- *   list, in order, to the end of the run queue. A macrostep that is
- *   abandoned frees its outgoing list instead, envelope by envelope.
+ *   order, the mail the macrostep sent to resident sessions, on no queue
+ *   yet, so nothing can take it before the macrostep ends;
+ *   `ta_envelope_pool_post` appends to it. At the macrostep's end
+ *   `ta_envelope_pool_deliver` moves the whole list, in order, to the end
+ *   of the run queue. A macrostep that is abandoned frees its outgoing
+ *   list instead, envelope by envelope.
  *
  * - **A deferred list** belongs to a session in a macrostep. An envelope
  *   the run queue holds for such a session moves there when it is reached,
@@ -7879,7 +7884,9 @@ typedef enum {
 typedef struct {
     /** The next envelope on the one list that holds it, 0 at the tail. */
     uint32_t next;
-    /** The next pending delayed send of the same sender, 0 at the tail. */
+    /** The next pending delayed send of the same sender, 0 at the tail;
+     * while taken or outgoing, a parked outgoing list's ends (file
+     * comment). */
     uint32_t owner_next;
     /** While a timer, its place in the deadline index; while runnable,
      * its arrival number. */
@@ -7897,7 +7904,8 @@ typedef struct {
      * address's waiting entry; 0 for a timer whose target is an I/O
      * processor's, kept as text. */
     uint64_t target;
-    /** The sending session's ID, or 0 for external input. */
+    /** The sending session's ID for mail, or 0: external input, a wake,
+     * or a sender that is gone. */
     uint64_t from;
     /** A timer's deadline; while taken, the logical time of the macrostep
      * it runs (`run.h`). */
@@ -8190,7 +8198,8 @@ TA_PRIVATE inline bool ta_envelope_arrived_before(uint32_t a, uint32_t b) {
  * | cause | 20 | the causing step's key: session (8), macrostep (8), microstep (4) |
  *
  * Every number is little-endian. The step key's `family` is not kept: a
- * trace parent read back has family 0. A short name plus the trace
+ * trace parent read back has family 0, and an envelope that needs it keeps
+ * it in a field of its own (`run.h`). A short name plus the trace
  * parent passes 60 bytes, so a traced envelope usually takes a second
  * chunk. The envelope's flag `TA_ENVELOPE_FLAG_TRACED` says whether its
  * text ends with one; the field's length alone cannot, since another
@@ -8468,33 +8477,48 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  * Everything that gives a session something to run admits it here as an
  * envelope on the run queue, and `ta_run()` takes the run queue's
  * envelopes in arrival order and runs each one's macrostep to its end.
+ * Mail one resident session sends another is an envelope too, which
+ * waits on the sending macrostep's outgoing list until that macrostep
+ * ends.
  *
  * ## Inputs
  *
  * An input is one envelope, from its admission until it completes, when
- * the macrostep it started ends. Its `source` says what it is:
+ * the macrostep it started ends. Its text is a binary **record** (the
+ * event name's ID, the origin, whose references the envelope holds, the
+ * input's time, the family of its trace parent's cause, and an operator
+ * transition, owned, with the definition its states belong to), and,
+ * when its macrostep runs under a trace ID, the **trace parent** behind
+ * it as the text's last field (`name_area.h`), with
+ * `TA_ENVELOPE_FLAG_TRACED` set. The field leaves the cause's family out;
+ * the record keeps it, so the step key reads back whole. Its `source`
+ * says what it is:
  *
  * - **An external event** (`TA_RECORD_INPUT_SOURCE_H2C`), admitted by
  *   `ta_actor_deliver()`. The envelope holds the event's data in `data`,
  *   its type, send ID and invocation in `type`, `send_id` and
- *   `invoke_instance`, the host's correlation in `source_seq`, and one
- *   binary field of text: the event name's ID, the origin (whose
- *   references the envelope holds), the input's time, the trace parent
- *   when there is one, and an operator transition (owned) with the
- *   definition its states belong to.
+ *   `invoke_instance`, the host's correlation in `source_seq`, and the
+ *   text above.
+ * - **Mail** (`TA_RECORD_INPUT_SOURCE_MAIL`): an event a session sent a
+ *   resident session, a `<send>`, a child's event to its parent or its
+ *   `done.invoke`, an event autoforwarded to a child, or a send held for
+ *   an unpublished session and released at its publish; and **a delayed
+ *   send that fell due** (`TA_RECORD_INPUT_SOURCE_TIMER`). It holds what
+ *   an external event holds, the sending session's ID in `from`, and
+ *   correlation 0; see "Mail between resident sessions".
  * - **An invocation's error report** (`TA_RECORD_INPUT_SOURCE_INVOKE_REPORT`),
  *   admitted by `ta_actor_report_invoke()`: the invocation in
- *   `invoke_instance`, the report's data, and a field with the event name
+ *   `invoke_instance`, the report's data, and a record with the event name
  *   `error.communication.invoke.<id>.<reason>` (interned when admitted),
- *   whether it ends the invocation, the time and the trace parent.
+ *   whether it ends the invocation and the time, and the trace parent.
  * - **A wake** (`TA_RECORD_INPUT_SOURCE_PLATFORM`): core's own input for a
  *   session with a macrostep to run that no admitted input started, its
  *   bootstrap after a spawn, a prepare, a load or a reconstruction, or work
  *   queued outside any run (a delayed send's failure, invocations retired
  *   at a load or a publish). It has correlation 0, and text only when its
- *   macrostep runs under a trace parent, or when a reconstruction restores
- *   a macrostep that holds an external event: then the field holds them as
- *   an event's does, and the envelope holds the event's data. A session
+ *   macrostep runs under a trace ID, or when a reconstruction restores a
+ *   macrostep that holds an external event: then the text holds them as an
+ *   event's does, and the envelope holds the event's data. A session
  *   may have more than one; the ones its macrostep does not need are
  *   dropped when they are reached. The bootstrap of an invoked child,
  *   which a macrostep spawns, takes the arrival number of that
@@ -8513,11 +8537,13 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  * - an event or report for a session in a macrostep (waiting to begin,
  *   paused, or stopped by a fault) moves to that session's **deferred
  *   list**, in arrival order, and the walk goes on;
- * - otherwise it is **bound**: an event becomes the session's external
- *   event, waiting (ADR 0069), a report queues its error event, and the
- *   wake the session names takes its pending macrostep; the envelope
- *   becomes `TA_ENVELOPE_TAKEN`, and the session names it as its taken
- *   `input`.
+ * - otherwise it is **bound**: an event or mail becomes the session's
+ *   external event, waiting (ADR 0069), a report queues its error event,
+ *   and the wake the session names takes its pending macrostep; the
+ *   envelope becomes `TA_ENVELOPE_TAKEN`, and the session names it as its
+ *   taken `input`. With `report_taken`, its TAKEN outcome carries, for
+ *   mail and a due send, the event retained for the host, which no host
+ *   call admitted and so no host has seen.
  *
  * ## The taken envelope stays put
  *
@@ -8553,6 +8579,43 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  * taken. Deferral serves a session whose macrostep waits for a wake behind
  * the input, one stopped by a fault, and one a filtered call paused.
  *
+ * ## Mail between resident sessions
+ *
+ * A `<send>` to a session resident in this system (published and not
+ * finished; `ta_actor_mail_target()`), and an invocation's event or
+ * completion to one, never reach the host's router (ADR 0099):
+ * `ta_run_post_mail` takes an envelope, writes the record and the
+ * sender's trace parent, when traced, into the name area, and retains the
+ * event's data and origin.
+ *
+ * - **Inside a macrostep** it goes on that macrostep's **outgoing list**
+ *   (`outgoing`), in send order, where nothing can take it. When the
+ *   macrostep ends (stable, finished, or with a fault that leaves nothing
+ *   to continue), `ta_envelope_pool_deliver` moves the whole list, in
+ *   order, to the end of the run queue. So a receiver never sees mail
+ *   before its sender's macrostep ends, and one sender's mail to one
+ *   receiver keeps its send order across macrosteps.
+ * - **A macrostep that leaves `ta_run()` without ending** (a budget paused
+ *   it, or a fault stopped it) **parks** its outgoing list with its taken
+ *   input, the input's `owner_next` naming the list's first envelope and
+ *   that envelope's `owner_next` its last, and takes it back when it runs
+ *   again, in O(1). A macrostep that is abandoned, and a session destroyed
+ *   while its macrostep waits, give their parked mail back unseen; a
+ *   session with parked mail does not unload (`ta_run_has_unsent_mail`),
+ *   since an image cannot carry it.
+ * - **Outside a macrostep** (a delayed send that fell due, at
+ *   `ta_system_dispatch_due()`; a held send released at a publish; a
+ *   completion published again) it joins the run queue at once.
+ *
+ * **Capacity.** Inside a macrostep there is no refill: mail takes only an
+ * envelope and chunks that are free already. With none, the `<send>`
+ * fails in the chart as `error.execution.capacity.pool` or `.names`, the
+ * rest of its block does not run, so a fanout fails once, at the first
+ * send that does not fit, and the sends before it stay on the outgoing
+ * list. Outside a macrostep it refills first; a send that still finds no
+ * room waits in the deadline index, submitted and due now, and is offered
+ * again, as one a router refused.
+ *
  * ## Invariants
  *
  * - A session has at most one taken input, the one it names as `input`;
@@ -8585,30 +8648,39 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  * which the run releases when the input completes, is refused, withdrawn,
  * abandoned, or discarded at teardown.
  *
- * - **Refills happen at safe points only:** at admission and at a wake's
- *   reservation outside any run, and in `ta_run()` before each input it
- *   takes or continues, never after the last one it runs. Inside
- *   a macrostep (a router admitting mail, an invoker spawning a child) an
- *   admission or a wake takes only envelopes and chunks that are free
- *   already, and answers `TA_ERR_FULL` when there are none.
+ * - **Refills happen at safe points only:** at admission, at a wake's
+ *   reservation and at mail outside any run, and in `ta_run()` before each
+ *   input it takes or continues, never after the last one it runs. Inside
+ *   a macrostep (a `<send>`, a router admitting mail, an invoker spawning
+ *   a child) mail, an admission or a wake takes only envelopes and chunks
+ *   that are free already, and answers `TA_ERR_FULL` when there are none.
  * - Binding an input may allocate, between inputs only: room in the
  *   session's internal queue for a report's event, or, for an invoked
  *   session, the queue storage that keeps its last event. Taking an input
  *   for any other session allocates nothing once the pool is warm.
  * - `ta_run_session_gone`, `ta_run_input_dropped`, `ta_run_wake_place`,
- *   `ta_run_wake_cancel`, the readers of a taken input and
- *   `ta_actor_release()` never allocate.
+ *   `ta_run_wake_cancel`, the readers of a taken input,
+ *   `ta_actor_release()`, and the outgoing list's delivery, parking and
+ *   giving back never allocate.
+ * - Mail's envelope and text are the pool's and the name area's; the
+ *   references it holds (data, origin) are released when it completes, is
+ *   refused, given back with an abandoned macrostep, or discarded at
+ *   teardown.
  *
  * ## Complexity
  *
  * | Operation | Cost |
  * |---|---|
- * | admission, a wake | O(1), plus a page when a refill adds one |
+ * | admission, a wake, mail | O(1), plus a page when a refill adds one |
+ * | a macrostep's end | O(its mail): each gets its arrival number |
+ * | parking and taking back an outgoing list | O(1) |
+ * | giving back parked mail | O(its mail) |
  * | taking an input | O(1); a filtered call walks the run queue to its session's first envelope |
  * | deferring, returning | O(1) at the tail; a walk to its place otherwise |
  * | `ta_system_withdraw_input()` | walks the pool, bounded by `poolEnvelopes` |
  * | `ta_run_session_gone` | O(its deferred envelopes), each returned in place |
  * | `ta_run_has_mail` | walks the run queue |
+ * | `ta_run_has_unsent_mail` | O(1) |
  * | `ta_run_input_event`, `ta_run_input_jump`, `ta_run_session_trace`, `ta_run_macrostep_time` | O(1): one field of text |
  *
  * ## Failure
@@ -8625,6 +8697,11 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  * - `ta_run()` answers `TA_ERR_NOMEM` when it cannot bind the next input
  *   (a report's queue room, or an invoked session's queue storage): that
  *   input goes back to the head of the run queue.
+ * - `ta_run_post_mail` answers `TA_ERR_FULL`, saying whether the pool or
+ *   the name area had no room, and `TA_ERR_NOMEM` when only a failed
+ *   refill left nothing free; it changes nothing.
+ * - Mail whose session is gone or finished by the time it is reached is
+ *   refused as an external event is, with correlation 0.
  *
  * ## Users
  *
@@ -8632,8 +8709,10 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  * `ta_system_withdraw_input()` live in this unit. `ta_actor_deliver()` and
  * `ta_actor_report_invoke()` admit through it; spawn, prepare, load,
  * reconstruction, publishing and a delayed send's failure reserve and
- * place wakes; destroying, unloading and abandoning tell it a session's
- * input or the session is gone. ADRs 0069, 0082, 0089, 0099, 0103.
+ * place wakes; the interpreter's `<send>`, an invocation's events and
+ * completion, `ta_system_dispatch_due()` and a publish's held sends post
+ * mail; destroying, unloading and abandoning tell it a session's input or
+ * the session is gone. ADRs 0069, 0082, 0089, 0099, 0102, 0103.
  */
 
 
@@ -8653,6 +8732,10 @@ typedef struct {
     uint32_t slot;
     /** The input whose macrostep runs inside `ta_run()`, or 0. */
     uint32_t current;
+    /** The outgoing list of the macrostep that runs inside `ta_run()`: the
+     * mail it sent to resident sessions, in send order, on no queue until
+     * the macrostep ends. Empty whenever no macrostep runs. */
+    ta_list outgoing;
     /** A macrostep runs inside `ta_run()`: no refill may allocate. */
     bool running;
     /** The input whose external event `event` holds, or 0. */
@@ -8766,6 +8849,38 @@ TA_PRIVATE void ta_run_wake_place(ta_system *system, struct ta_actor *actor, uin
  * text holds. Never allocates. */
 TA_PRIVATE void ta_run_wake_cancel(ta_system *system, uint32_t wake);
 
+/** Mail for a resident session; see `ta_run_post_mail`. */
+typedef struct {
+    /** The session it is for: resident, published and not finished. */
+    struct ta_actor *target;
+    /** The event as the target takes it, borrowed; the envelope retains its
+     * data and its origin. */
+    const ta_event *event;
+    /** The sending step's trace parent, copied into the envelope's text;
+     * null, or no trace ID, for none. */
+    const ta_trace_parent *trace;
+    /** The sending session's ID, or 0 when it is gone. */
+    uint64_t from;
+    /** `TA_RECORD_INPUT_SOURCE_MAIL`, or `TA_RECORD_INPUT_SOURCE_TIMER` for
+     * a delayed send that fell due. */
+    uint8_t source;
+} ta_run_mail;
+
+/**
+ * Puts mail for a resident session into an envelope of the pool. Inside a
+ * macrostep it goes on that macrostep's outgoing list, which joins the run
+ * queue only when the macrostep ends; outside one (a delayed send that fell
+ * due, a held send released at a publish) it joins the run queue at once.
+ * Outside a macrostep it refills first, a safe point; inside one it takes
+ * only an envelope and chunks that are free already, and never allocates.
+ * O(1) in the envelopes; the text costs one chunk per 60 bytes. Answers
+ * `TA_OK`; or `TA_ERR_FULL` with `*short_of` saying what had no room, the
+ * pool (`TA_RECORD_CAPACITY_RESOURCE_POOL`) or the name area
+ * (`TA_RECORD_CAPACITY_RESOURCE_NAMES`); or `TA_ERR_NOMEM` the same way
+ * when only a failed refill left nothing free. A failure changes nothing.
+ */
+TA_PRIVATE ta_result ta_run_post_mail(ta_system *system, const ta_run_mail *mail, ta_record_capacity_resource *short_of);
+
 /**
  * The external event of taken input `input`, decoded from its envelope
  * into the run state, or null for 0. Its references are the envelope's,
@@ -8810,19 +8925,29 @@ TA_PRIVATE ta_time ta_run_macrostep_time(const ta_system *system, const struct t
 TA_PRIVATE bool ta_run_has_mail(const ta_system *system, const struct ta_actor *actor);
 
 /**
+ * Whether `actor`'s macrostep, waiting outside `ta_run()` (paused or
+ * stopped), holds mail it sent, parked with its taken input until the
+ * macrostep ends. An image does not carry it. O(1); never allocates.
+ */
+TA_PRIVATE bool ta_run_has_unsent_mail(const ta_system *system, const struct ta_actor *actor);
+
+/**
  * `actor` is going (destroyed, unloaded, or a construction undone): its
- * taken input is given back, wherever it is, a wake it waits for is left
- * bare on the run queue, and its deferred envelopes return to the run
- * queue, where they are refused. Never allocates; cannot fail.
+ * taken input is given back, wherever it is, with the mail its macrostep
+ * parked there, unseen, a wake it waits for is left bare on the run queue,
+ * and its deferred envelopes return to the run queue, where they are
+ * refused. O(its deferred envelopes and parked mail). Never allocates;
+ * cannot fail.
  */
 TA_PRIVATE void ta_run_session_gone(ta_system *system, struct ta_actor *actor);
 
 /**
  * `actor`'s macrostep ended outside `ta_run()` (an operator abandoned it):
- * its taken input, if any, is released and given back unreported, a wake
- * it waits for is left bare on the run queue, and the session's first
- * deferred envelope returns to the run queue. Never allocates; cannot
- * fail.
+ * its taken input, if any, is released and given back unreported, with
+ * the mail the macrostep parked there, which nobody sees, a wake it waits
+ * for is left bare on the run queue, and the session's first deferred
+ * envelope returns to the run queue. O(its parked mail). Never allocates;
+ * cannot fail.
  */
 TA_PRIVATE void ta_run_input_dropped(ta_system *system, struct ta_actor *actor);
 
@@ -10610,6 +10735,15 @@ TA_PRIVATE ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slo
 TA_PRIVATE ta_result ta_actor_layout(ta_definition *definition);
 
 TA_PRIVATE ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
+/*
+ * The session mail to `destination` is for when core queues it itself
+ * (ADR 0099): resident in this system, published and not finished. A
+ * runtime or session ID is resolved as ta_session_route() does, a named
+ * address through the host's directory. Null when there is none, and the
+ * mail goes through the host's router. Never allocates; may run inside a
+ * macrostep.
+ */
+TA_PRIVATE ta_actor *ta_actor_mail_target(ta_system *system, const ta_actor_ref *destination);
 /* The family atom of the resident actor `id`, or 0 when there is none (ADR 0088). */
 TA_PRIVATE ta_atom ta_actor_family_of(const ta_system *system, ta_actor_id id);
 /* A runtime reference to `id` that names its family (ADR 0088). */
@@ -10732,7 +10866,9 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
  *   million actors as against four (invariant 17).
  * - `ta_system_set_external_event_router` installs the host's router for
  *   normalized SCXML-session events; core's standard processor and an
- *   invoked child's completion submit through it. The SCXML I/O type
+ *   invoked child's completion submit through it what goes to a session
+ *   that is not resident here. Mail to a resident session goes into the
+ *   pool instead (`run.h`, ADR 0099). The SCXML I/O type
  *   atom is interned at creation, and registering an I/O processor cannot
  *   replace it.
  * - **Generated names:** every prefix of a name core generates is an
@@ -10783,8 +10919,10 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
 /**
  * The event names system creation adds to `event_names`, in this order, so
  * their IDs are fixed: `error`, `error.execution`, `error.communication`,
- * `error.platform`, `done`, `done.state`, `done.invoke`. Core names the
- * events it raises below them. Creation also interns `invoke`, the third
+ * `error.platform`, `done`, `done.state`, `done.invoke`,
+ * `error.execution.capacity`, and below it `pool` and `names`, the
+ * resources a `<send>` to a resident session can find without room
+ * (ADR 0099, ADR 0102). Core names the events it raises below them. Creation also interns `invoke`, the third
  * segment of `error.communication.invoke.<id>.<reason>`, as
  * `invoke_segment`.
  */
@@ -10795,7 +10933,10 @@ enum {
     TA_EVENT_NAME_ERROR_PLATFORM = 4u,
     TA_EVENT_NAME_DONE = 5u,
     TA_EVENT_NAME_DONE_STATE = 6u,
-    TA_EVENT_NAME_DONE_INVOKE = 7u
+    TA_EVENT_NAME_DONE_INVOKE = 7u,
+    TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY = 8u,
+    TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_POOL = 9u,
+    TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_NAMES = 10u
 };
 
 /** The ceiling of `eventNameDepth` (ADR 0092): the deepest a trie goes. */
@@ -11194,14 +11335,36 @@ TA_PRIVATE ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor);
 TA_PRIVATE void ta_interpreter_exit_invoked(ta_system *system, ta_actor_id id);
 /* Takes ownership of the event's data. */
 TA_PRIVATE ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event);
-/* Dispatches a due delayed send; RETRY leaves the send owned by the caller. */
+/* How ta_interpreter_dispatch_delayed() dispatches a send. */
+typedef struct {
+    /*
+     * The sender's own run dispatches it (an immediate <send>): a failure
+     * is then raised in that run, and the unit that sent it counts and
+     * records it. Otherwise (a timer, a held send released) the failure is
+     * raised outside a run, and counted and recorded here (ADR 0072).
+     */
+    bool in_run;
+    /* A delayed send that fell due, not mail sent now. */
+    bool timer;
+    /* Set by the call: with `in_run`, the resource a resident target's
+     * envelope found no room in, and the answer is ERROR with the send
+     * released and nobody told; the caller raises
+     * error.execution.capacity.<resource>. 0 otherwise. */
+    ta_record_capacity_resource short_of;
+    /* Set by the call: the answer is ACCEPTED, but the send went nowhere,
+     * since its sender is gone or its parent cancelled it. */
+    bool dropped;
+} ta_dispatch;
 /*
- * `in_run` says the sender's own run dispatches it (an immediate <send>):
- * a failure is then raised in that run, and the unit that sent it counts
- * and records it. Otherwise (a timer, a held send released) the failure is
- * raised outside a run, and counted and recorded here (ADR 0072).
+ * Dispatches a send now: to a resident session, into an envelope of the
+ * pool (run.h); to any other SCXML target, through the host's router; to
+ * another I/O processor, through it. RETRY leaves the send owned by the
+ * caller: nothing accepted it, or, outside a run, the pool or the name area
+ * had no room for a resident target's envelope. Never allocates inside a
+ * macrostep.
  */
-TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, bool in_run);
+TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send,
+                                                                ta_dispatch *how);
 /*
  * A literal content as a host adapter receives it (ADR 0053): its media type
  * and its bytes. The bytes' pointer is non-null even for empty content, so an
@@ -17838,30 +18001,31 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
 
 
 /* ------------------------------------------------------------------------
- * An input's text: one binary field (see the file comment)
+ * An input's text: one binary field, and the trace parent behind it when
+ * the input is traced (see the file comment)
  */
 
-/* The field holds a trace parent. */
-#define TA_RUN_RECORD_TRACED 0x01u
 /* The field holds an operator transition and its definition. */
 #define TA_RUN_RECORD_JUMP 0x02u
 /* A report that retires its invocation. */
 #define TA_RUN_RECORD_ENDS 0x04u
 
-/* What an input keeps in its text, unpacked. */
+/* What an input keeps in its first field, unpacked. */
 typedef struct {
     ta_event_name_id name;
     uint8_t flags;
     ta_origin origin;
     ta_time time;
-    ta_trace_parent trace;
+    /* The family of the trace parent's cause, which the trace parent field
+     * leaves out (name_area.h); 0 when untraced. */
+    ta_atom cause_family;
     ta_operator_jump *jump;
     ta_definition_id jump_definition;
 } ta_run_record;
 
 /* The most bytes a packed record takes. */
 #define TA_RUN_RECORD_BYTES                                                                                     \
-    (sizeof(ta_event_name_id) + 1u + sizeof(ta_origin) + sizeof(ta_time) + sizeof(ta_trace_parent) +          \
+    (sizeof(ta_event_name_id) + 1u + sizeof(ta_origin) + sizeof(ta_time) + sizeof(ta_atom) +                  \
      sizeof(ta_operator_jump *) + sizeof(ta_definition_id))
 
 typedef struct {
@@ -17881,9 +18045,7 @@ static uint32_t ta_run_record_pack(const ta_run_record *record, uint8_t *bytes) 
     ta_run_pack(&packer, &record->flags, sizeof record->flags);
     ta_run_pack(&packer, &record->origin, sizeof record->origin);
     ta_run_pack(&packer, &record->time, sizeof record->time);
-    if ((record->flags & TA_RUN_RECORD_TRACED) != 0u) {
-        ta_run_pack(&packer, &record->trace, sizeof record->trace);
-    }
+    ta_run_pack(&packer, &record->cause_family, sizeof record->cause_family);
     if ((record->flags & TA_RUN_RECORD_JUMP) != 0u) {
         ta_run_pack(&packer, &record->jump, sizeof record->jump);
         ta_run_pack(&packer, &record->jump_definition, sizeof record->jump_definition);
@@ -17898,8 +18060,8 @@ static void ta_run_unpack(ta_run_packer *packer, void *value, uint32_t size) {
 
 /*
  * The record in envelope `index`'s text. An envelope without text (a wake)
- * reads as all zero. The text was written by ta_run_admit, so it holds one
- * field of a packed record.
+ * reads as all zero. The text was written by ta_run_write_text, so its
+ * first field is a packed record.
  */
 static ta_run_record ta_run_record_of(const ta_system *system, uint32_t index) {
     ta_run_record record = { .origin = { .kind = TA_ORIGIN_NONE } };
@@ -17924,14 +18086,24 @@ static ta_run_record ta_run_record_of(const ta_system *system, uint32_t index) {
     ta_run_unpack(&packer, &record.flags, sizeof record.flags);
     ta_run_unpack(&packer, &record.origin, sizeof record.origin);
     ta_run_unpack(&packer, &record.time, sizeof record.time);
-    if ((record.flags & TA_RUN_RECORD_TRACED) != 0u) {
-        ta_run_unpack(&packer, &record.trace, sizeof record.trace);
-    }
+    ta_run_unpack(&packer, &record.cause_family, sizeof record.cause_family);
     if ((record.flags & TA_RUN_RECORD_JUMP) != 0u) {
         ta_run_unpack(&packer, &record.jump, sizeof record.jump);
         ta_run_unpack(&packer, &record.jump_definition, sizeof record.jump_definition);
     }
     return record;
+}
+
+/* The trace parent envelope `index` carries at the end of its text, all
+ * zero for none (name_area.h), with its cause's family from the record. */
+static ta_trace_parent ta_run_trace_of(const ta_system *system, uint32_t index) {
+    const ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    ta_trace_parent parent = { 0 };
+    if ((envelope->flags & TA_ENVELOPE_FLAG_TRACED) != 0u &&
+        ta_name_area_trace_parent(&system->run.names, envelope->text, &parent) == TA_OK) {
+        parent.cause.family = ta_run_record_of(system, index).cause_family;
+    }
+    return parent;
 }
 
 /* Frees an operator transition an input carried. */
@@ -17964,6 +18136,7 @@ static void ta_run_strip(ta_system *system, uint32_t index) {
     ta_value_release(&envelope->content);
     envelope->data = (ta_value){ 0 };
     envelope->content = (ta_value){ 0 };
+    envelope->flags &= (uint8_t)~TA_ENVELOPE_FLAG_TRACED;
     ta_name_area_free(&system->run.names, &envelope->text);
 }
 
@@ -18004,10 +18177,12 @@ TA_PRIVATE void ta_run_destroy(ta_system *system) {
     ta_envelope_pool *pool = &system->run.pool;
     for (uint32_t index = 1u; index <= pool->items.high_water; index += 1u) {
         ta_envelope *envelope = ta_envelope_pool_at(pool, index);
-        /* Every session is gone, and gave its taken input back; a runnable
-         * envelope, or a taken one no session names, still holds its own. */
-        if (envelope != NULL &&
-            (envelope->state == TA_ENVELOPE_RUNNABLE || envelope->state == TA_ENVELOPE_TAKEN)) {
+        /* Every session is gone, and gave its taken input back with the
+         * mail its macrostep sent; a runnable envelope, a taken one no
+         * session names, or mail of a macrostep running at teardown, still
+         * holds its own. */
+        if (envelope != NULL && (envelope->state == TA_ENVELOPE_RUNNABLE || envelope->state == TA_ENVELOPE_TAKEN ||
+                                 envelope->state == TA_ENVELOPE_OUTGOING)) {
             ta_run_record record = ta_run_record_of(system, index);
             ta_origin_release(&record.origin);
             ta_run_jump_free(system, record.jump);
@@ -18019,6 +18194,7 @@ TA_PRIVATE void ta_run_destroy(ta_system *system) {
     ta_envelope_pool_destroy(pool);
     system->run.slot = 0u;
     system->run.event_input = 0u;
+    system->run.outgoing = TA_LIST_EMPTY;
 }
 
 /* What a refill answered, for the pool and for the name area. */
@@ -18059,14 +18235,13 @@ static ta_result ta_run_envelope_short(const ta_envelope_pool *pool, ta_run_refu
     return !admission || ta_envelope_pool_admitting(pool) ? TA_ERR_NOMEM : refusal.result;
 }
 
-/* As ta_run_envelope_short, for `length` bytes of admitted text `names`
+/* As ta_run_envelope_short, for admitted text of `need` chunks that `names`
  * refused. */
-static ta_result ta_run_names_short(const ta_name_area *names, ta_run_refusal refusal, uint32_t length) {
+static ta_result ta_run_names_short(const ta_name_area *names, ta_run_refusal refusal, uint32_t need) {
     if (refusal.result != TA_ERR_FULL || refusal.refill != TA_ERR_NOMEM) {
         return refusal.result;
     }
-    ta_quota_request request = { .amount = ta_name_area_field_need(names, 0u, length),
-                                 .keep = names->quota.capacity - names->watermark };
+    ta_quota_request request = { .amount = need, .keep = names->quota.capacity - names->watermark };
     return ta_quota_fits(&names->quota, request) ? TA_ERR_NOMEM : refusal.result;
 }
 
@@ -18083,27 +18258,70 @@ typedef struct {
     ta_invoke_id invoke;
     uint64_t correlation;
     const ta_run_record *record;
+    /* What its macrostep runs under, or null. */
+    const ta_trace_parent *trace;
 } ta_run_admission;
 
-/* Writes `record` as the one field of envelope `index`'s text, which has
- * none. TA_ERR_FULL or TA_ERR_NOMEM as the name area answers, changing
- * nothing; `admission` holds it to the watermark. */
-static ta_result ta_run_write_record(ta_system *system, uint32_t index, const ta_run_record *record,
-                                     ta_run_refilled refilled, bool admission) {
+/* The text ta_run_write_text writes into an envelope. */
+typedef struct {
+    /* The envelope, which has no text yet. */
+    uint32_t index;
+    /* Its first field. */
+    const ta_run_record *record;
+    /* The trace parent its macrostep runs under, written behind the record
+     * as the text's last field when it has a trace ID; null for none. */
+    const ta_trace_parent *trace;
+    /* What the refill before it answered. */
+    ta_run_refilled refilled;
+    /* Admitted input, held to the name area's watermark. */
+    bool admission;
+} ta_run_text;
+
+/*
+ * Writes the record, and the trace parent when there is one, as the text of
+ * envelope `text->index`, and marks it traced. All or nothing: TA_ERR_FULL,
+ * or TA_ERR_NOMEM when only a failed refill left too few chunks free,
+ * changing nothing. Never allocates.
+ */
+static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
+    ta_name_area *names = &system->run.names;
+    bool traced = text->trace != NULL && !ta_trace_context_empty(&text->trace->context);
+    ta_run_record record = *text->record;
+    record.cause_family = traced ? text->trace->cause.family : 0u;
     uint8_t bytes[TA_RUN_RECORD_BYTES];
-    uint32_t length = ta_run_record_pack(record, bytes);
+    uint32_t length = ta_run_record_pack(&record, bytes);
     ta_chunk_writer writer = ta_chunk_writer_new();
-    ta_result result = ta_name_area_write(&system->run.names, &(ta_name_area_write_params){
-                                                                   .writer = &writer,
-                                                                   .text = { .ptr = bytes, .len = length },
-                                                                   .admission = admission,
-                                                               });
-    if (result != TA_OK) {
-        return admission ? ta_run_names_short(&system->run.names,
-                                              (ta_run_refusal){ .refill = refilled.names, .result = result }, length)
-                         : result == TA_ERR_FULL && refilled.names == TA_ERR_NOMEM ? TA_ERR_NOMEM : result;
+    ta_result result = ta_name_area_write(names, &(ta_name_area_write_params){
+                                                     .writer = &writer,
+                                                     .text = { .ptr = bytes, .len = length },
+                                                     .admission = text->admission,
+                                                 });
+    if (result == TA_OK && traced) {
+        result = ta_name_area_write_trace_parent(names, &(ta_name_area_trace_params){
+                                                            .writer = &writer,
+                                                            .parent = text->trace,
+                                                            .admission = text->admission,
+                                                        });
+        if (result != TA_OK) {
+            ta_name_area_free(names, &writer.chain);
+        }
     }
-    ta_envelope_pool_at(&system->run.pool, index)->text = writer.chain;
+    if (result != TA_OK) {
+        uint32_t need = ta_name_area_field_need(names, 0u, length);
+        if (traced) {
+            need += ta_name_area_field_need(names, TA_NAME_AREA_PREFIX_BYTES + length,
+                                            TA_NAME_AREA_TRACE_PARENT_BYTES);
+        }
+        ta_run_refusal refusal = { .refill = text->refilled.names, .result = result };
+        return text->admission ? ta_run_names_short(names, refusal, need)
+               : result == TA_ERR_FULL && text->refilled.names == TA_ERR_NOMEM ? TA_ERR_NOMEM
+                                                                                : result;
+    }
+    ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, text->index);
+    envelope->text = writer.chain;
+    if (traced) {
+        envelope->flags |= TA_ENVELOPE_FLAG_TRACED;
+    }
     return TA_OK;
 }
 
@@ -18120,7 +18338,11 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
         return ta_run_envelope_short(&system->run.pool, (ta_run_refusal){ .refill = refilled.pool, .result = result },
                                      true);
     }
-    result = ta_run_write_record(system, index, admission->record, refilled, true);
+    result = ta_run_write_text(system, &(ta_run_text){ .index = index,
+                                                       .record = admission->record,
+                                                       .trace = admission->trace,
+                                                       .refilled = refilled,
+                                                       .admission = true });
     if (result != TA_OK) {
         ta_envelope_pool_give(&system->run.pool, index);
         return result;
@@ -18140,10 +18362,6 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
 TA_PRIVATE ta_result ta_run_admit_event(ta_system *system, const ta_run_event *input) {
     const ta_event *event = input->event;
     ta_run_record record = { .name = event->name, .origin = event->origin, .time = input->time };
-    if (input->trace != NULL && !ta_trace_parent_empty(input->trace)) {
-        record.flags |= TA_RUN_RECORD_TRACED;
-        record.trace = *input->trace;
-    }
     if (input->jump != NULL) {
         record.flags |= TA_RUN_RECORD_JUMP;
         record.jump = input->jump;
@@ -18156,7 +18374,8 @@ TA_PRIVATE ta_result ta_run_admit_event(ta_system *system, const ta_run_event *i
                                                                  .send_id = event->send_id,
                                                                  .invoke = event->invoke_id,
                                                                  .correlation = input->correlation,
-                                                                 .record = &record },
+                                                                 .record = &record,
+                                                                 .trace = input->trace },
                                     &index);
     if (result != TA_OK) {
         return result;
@@ -18173,17 +18392,14 @@ TA_PRIVATE ta_result ta_run_admit_event(ta_system *system, const ta_run_event *i
 TA_PRIVATE ta_result ta_run_admit_report(ta_system *system, const ta_run_report *report) {
     ta_run_record record = { .name = report->name, .origin = { .kind = TA_ORIGIN_NONE }, .time = report->time,
                              .flags = report->ends ? TA_RUN_RECORD_ENDS : 0u };
-    if (report->trace != NULL && !ta_trace_parent_empty(report->trace)) {
-        record.flags |= TA_RUN_RECORD_TRACED;
-        record.trace = *report->trace;
-    }
     uint32_t index = 0u;
     ta_result result = ta_run_admit(system, &(ta_run_admission){ .source = TA_RECORD_INPUT_SOURCE_INVOKE_REPORT,
                                                                  .type = (uint8_t)TA_EVENT_PLATFORM,
                                                                  .target = report->actor->record.id,
                                                                  .invoke = report->invoke,
                                                                  .correlation = report->correlation,
-                                                                 .record = &record },
+                                                                 .record = &record,
+                                                                 .trace = report->trace },
                                     &index);
     if (result != TA_OK) {
         return result;
@@ -18206,13 +18422,9 @@ TA_PRIVATE ta_result ta_run_wake_reserve(ta_system *system, const ta_run_wake *w
         return ta_run_envelope_short(&system->run.pool, (ta_run_refusal){ .refill = refilled.pool, .result = result },
                                      wake->admission);
     }
-    bool traced = wake->trace != NULL && !ta_trace_parent_empty(wake->trace);
+    bool traced = wake->trace != NULL && !ta_trace_context_empty(&wake->trace->context);
     if (traced || wake->event != NULL) {
         ta_run_record record = { .origin = { .kind = TA_ORIGIN_NONE } };
-        if (traced) {
-            record.flags |= TA_RUN_RECORD_TRACED;
-            record.trace = *wake->trace;
-        }
         if (wake->event != NULL) {
             record.name = wake->event->name;
             record.origin = wake->event->origin;
@@ -18221,7 +18433,11 @@ TA_PRIVATE ta_result ta_run_wake_reserve(ta_system *system, const ta_run_wake *w
             record.flags |= TA_RUN_RECORD_JUMP;
             record.jump = wake->jump;
         }
-        result = ta_run_write_record(system, index, &record, refilled, wake->admission);
+        result = ta_run_write_text(system, &(ta_run_text){ .index = index,
+                                                           .record = &record,
+                                                           .trace = wake->trace,
+                                                           .refilled = refilled,
+                                                           .admission = wake->admission });
         if (result != TA_OK) {
             ta_envelope_pool_give(&system->run.pool, index);
             return result;
@@ -18265,6 +18481,87 @@ TA_PRIVATE void ta_run_wake_cancel(ta_system *system, uint32_t wake) {
 }
 
 /* ------------------------------------------------------------------------
+ * Mail between resident sessions
+ */
+
+TA_PRIVATE ta_result ta_run_post_mail(ta_system *system, const ta_run_mail *mail, ta_record_capacity_resource *short_of) {
+    ta_run_refilled refilled = ta_run_refill(system);
+    uint32_t index = 0u;
+    ta_result result = ta_envelope_pool_take(&system->run.pool, &index);
+    if (result != TA_OK) {
+        *short_of = TA_RECORD_CAPACITY_RESOURCE_POOL;
+        return ta_run_envelope_short(&system->run.pool, (ta_run_refusal){ .refill = refilled.pool, .result = result },
+                                     false);
+    }
+    const ta_event *event = mail->event;
+    ta_run_record record = { .name = event->name, .origin = event->origin, .time = ta_clock_now(&system->clock) };
+    result = ta_run_write_text(system, &(ta_run_text){
+                                           .index = index, .record = &record, .trace = mail->trace,
+                                           .refilled = refilled });
+    if (result != TA_OK) {
+        ta_envelope_pool_give(&system->run.pool, index);
+        *short_of = TA_RECORD_CAPACITY_RESOURCE_NAMES;
+        return result;
+    }
+    /* The envelope holds the event's references from here on: the text
+     * holds the origin, `data` the data. */
+    ta_event held;
+    ta_event_retain(event, &held);
+    ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    envelope->source = mail->source;
+    envelope->type = (uint8_t)event->type;
+    envelope->target = mail->target->record.id;
+    envelope->from = mail->from;
+    envelope->send_id = event->send_id;
+    envelope->invoke_instance = event->invoke_id;
+    envelope->data = held.data;
+    if (system->run.running) {
+        ta_envelope_pool_post(&system->run.pool,
+                              (ta_envelope_post){ .outgoing = &system->run.outgoing, .index = index });
+    } else {
+        ta_envelope_pool_enqueue(&system->run.pool, index);
+    }
+    return TA_OK;
+}
+
+/* The outgoing list parked in taken input `input`, which no longer holds
+ * it: the head is the input's `owner_next`, the tail the head's. */
+static ta_list ta_run_unpark(ta_system *system, uint32_t input) {
+    ta_envelope *taken = ta_envelope_pool_at(&system->run.pool, input);
+    uint32_t head = taken->owner_next;
+    taken->owner_next = 0u;
+    if (head == 0u) {
+        return TA_LIST_EMPTY;
+    }
+    ta_envelope *first = ta_envelope_pool_at(&system->run.pool, head);
+    ta_list list = { .head = head, .tail = first->owner_next };
+    first->owner_next = 0u;
+    return list;
+}
+
+/* Parks the running macrostep's outgoing list in its taken input `input`,
+ * while the macrostep waits to go on, and leaves the run's list empty. */
+static void ta_run_park(ta_system *system, uint32_t input) {
+    ta_list *outgoing = &system->run.outgoing;
+    uint32_t head = ta_list_head(outgoing);
+    ta_envelope_pool_at(&system->run.pool, input)->owner_next = head;
+    if (head != 0u) {
+        ta_envelope_pool_at(&system->run.pool, head)->owner_next = ta_list_tail(outgoing);
+    }
+    *outgoing = TA_LIST_EMPTY;
+}
+
+/* Gives back the mail parked in taken input `input`, unseen: its macrostep
+ * will not end. */
+static void ta_run_drop_outgoing(ta_system *system, uint32_t input) {
+    ta_list list = ta_run_unpark(system, input);
+    ta_list_links links = ta_envelope_pool_links(&system->run.pool);
+    for (uint32_t index = ta_list_pop_front(&list, &links); index != 0u; index = ta_list_pop_front(&list, &links)) {
+        ta_run_discard(system, index);
+    }
+}
+
+/* ------------------------------------------------------------------------
  * A taken input
  */
 
@@ -18295,12 +18592,6 @@ TA_PRIVATE const ta_event *ta_run_input_event(ta_system *system, uint32_t input)
 
 const struct ta_operator_jump *ta_run_input_jump(const ta_system *system, uint32_t input) {
     return input == 0u ? NULL : ta_run_record_of(system, input).jump;
-}
-
-/* The trace parent envelope `index`'s text holds, all zero for none. */
-static ta_trace_parent ta_run_trace_of(const ta_system *system, uint32_t index) {
-    ta_run_record record = ta_run_record_of(system, index);
-    return (record.flags & TA_RUN_RECORD_TRACED) != 0u ? record.trace : (ta_trace_parent){ 0 };
 }
 
 TA_PRIVATE ta_trace_parent ta_run_session_trace(const ta_system *system, const ta_actor *actor) {
@@ -18366,6 +18657,7 @@ static void ta_run_drop_input(ta_system *system, ta_actor *actor) {
          * queue; stopped, it is on no list. */
         (void)ta_envelope_pool_unqueue(&system->run.pool, index);
     }
+    ta_run_drop_outgoing(system, index);
     ta_run_discard(system, index);
     ta_run_forget_input(actor);
 }
@@ -18488,7 +18780,7 @@ static ta_result ta_run_bind_event(ta_system *system, ta_actor *actor, uint32_t 
 static ta_result ta_run_bind_report(ta_system *system, ta_actor *actor, uint32_t index) {
     ta_run_record record = ta_run_record_of(system, index);
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
-    ta_trace_parent trace = (record.flags & TA_RUN_RECORD_TRACED) != 0u ? record.trace : (ta_trace_parent){ 0 };
+    ta_trace_parent trace = ta_run_trace_of(system, index);
     ta_result result = ta_invoke_take_report(system, actor, &(ta_invoke_report_take){
                                                                 .invoke = envelope->invoke_instance,
                                                                 .name = record.name,
@@ -18560,6 +18852,7 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
         .pause_at_microstep_start = call->params->pause_at_microstep_start,
         .unlimited = (actor->input_flags & TA_ACTOR_INPUT_UNLIMITED) != 0u,
     };
+    system->run.outgoing = ta_run_unpark(system, index);
     system->run.running = true;
     system->run.current = index;
     ta_result result = ta_interpreter_run(system, actor, &run);
@@ -18568,6 +18861,13 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
     call->budget -= run.steps < call->budget ? run.steps : call->budget;
     if (limited) {
         call->actions -= run.actions < call->actions ? run.actions : call->actions;
+    }
+    if ((result != TA_OK && actor->macrostep) || (result == TA_OK && run.status == TA_MACROSTEP_PAUSED)) {
+        /* It goes on later: its mail waits with its input, unseen. */
+        ta_run_park(system, index);
+    } else {
+        /* The macrostep ended: its mail joins the run queue, in send order. */
+        ta_envelope_pool_deliver(&system->run.pool, &system->run.outgoing);
     }
     if (result != TA_OK && actor->macrostep) {
         /* Stopped where it stands: it keeps its input and holds no slot. */
@@ -18656,7 +18956,14 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
     }
     ta_run_hold_input(system, actor, index);
     if (call->params->report_taken) {
-        ta_run_report_input(call, index, (ta_input_outcome){ .kind = TA_INPUT_TAKEN });
+        ta_input_outcome taken = { .kind = TA_INPUT_TAKEN };
+        if (envelope->source == TA_RECORD_INPUT_SOURCE_MAIL || envelope->source == TA_RECORD_INPUT_SOURCE_TIMER) {
+            /* Core made it: the host learns its event here, and releases it. */
+            ta_event event = ta_run_input_event_of(system, index);
+            ta_event_retain(&event, &taken.event);
+            taken.has_event = true;
+        }
+        ta_run_report_input(call, index, taken);
     }
     ta_run_input(call, actor, index);
     return TA_OK;
@@ -18732,6 +19039,11 @@ TA_PRIVATE bool ta_run_has_mail(const ta_system *system, const ta_actor *actor) 
         }
     }
     return false;
+}
+
+TA_PRIVATE bool ta_run_has_unsent_mail(const ta_system *system, const ta_actor *actor) {
+    return actor->input != 0u && (actor->input_flags & TA_ACTOR_INPUT_WAITING) == 0u &&
+           ta_envelope_pool_at(&system->run.pool, actor->input)->owner_next != 0u;
 }
 
 TA_API ta_result ta_actor_release(ta_system *system, ta_actor_id id) {
@@ -20833,9 +21145,13 @@ typedef struct {
 } ta_invoke_delivery;
 
 /*
- * Offers an event to another session through the router. When the router
- * accepts nothing, the event waits in the deadline index, due now, owned by
- * the sender, so ta_system_dispatch_due() offers it again.
+ * Offers an event to another session: to a resident one, into an envelope
+ * of the pool, on the running macrostep's outgoing list or, outside one, on
+ * the run queue (run.h); to any other, through the router. When nothing
+ * accepts it (no room in the pool or the name area, or a router that
+ * accepted nothing), the event waits in the deadline index, due now, owned
+ * by the sender, so ta_system_dispatch_due() offers it again. Never
+ * allocates inside a macrostep, but for that wait.
  */
 static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *delivery) {
     const ta_actor_sparse_state *sender_sparse = delivery->sender->sparse;
@@ -20852,7 +21168,19 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     }
     ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
     ta_fault fault = {0};
-    if (system->external_events.v != NULL) {
+    ta_actor *target = ta_actor_mail_target(system, &delivery->destination);
+    if (target != NULL) {
+        ta_record_capacity_resource short_of = (ta_record_capacity_resource)0;
+        status = ta_run_post_mail(system,
+                                  &(ta_run_mail){ .target = target,
+                                                  .event = &delivery->event,
+                                                  .trace = &delivery->trace,
+                                                  .from = delivery->sender->session_id,
+                                                  .source = TA_RECORD_INPUT_SOURCE_MAIL },
+                                  &short_of) == TA_OK
+                     ? TA_EXTERNAL_EVENT_ACCEPTED
+                     : TA_EXTERNAL_EVENT_RETRY;
+    } else if (system->external_events.v != NULL) {
         ta_external_delivery external = { .destination = delivery->destination, .event = delivery->event,
                                           .trace = delivery->trace };
         status = system->external_events.v->submit(system->external_events.self,
@@ -26183,6 +26511,29 @@ TA_API ta_result ta_actor_find(ta_system *system, const ta_actor_find_params *pa
     return entry.kind == TA_ACTOR_DIRECTORY_UNLOADED ? TA_ERR_UNLOADED : TA_ERR_NOT_FOUND;
 }
 
+TA_PRIVATE ta_actor *ta_actor_mail_target(ta_system *system, const ta_actor_ref *destination) {
+    ta_actor_ref routed;
+    if (ta_session_route(system, destination, &routed)) {
+        /* A session that is not resident: its address names it. */
+        ta_actor_ref_release(&routed);
+        return NULL;
+    }
+    ta_actor *target = NULL;
+    if (routed.kind == TA_ACTOR_REF_RUNTIME) {
+        target = ta_actor_lookup(system, routed.as.runtime);
+    } else if (routed.kind == TA_ACTOR_REF_NAMED && system->directory.v != NULL &&
+               system->directory.v->resolve != NULL) {
+        ta_actor_directory_entry entry = { .kind = TA_ACTOR_DIRECTORY_NONE };
+        ta_result result = system->directory.v->resolve(
+            system->directory.self,
+            &(ta_actor_directory_resolve_params){ .address = routed.as.named, .out = &entry });
+        if (result == TA_OK && entry.kind == TA_ACTOR_DIRECTORY_RESIDENT) {
+            target = ta_actor_lookup(system, entry.actor);
+        }
+    }
+    return target != NULL && target->published && !target->finished ? target : NULL;
+}
+
 /*
  * A blank actor of `definition`: session storage zeroed, a data-model
  * instance allocated but not initialized, a slot claimed, and a record that
@@ -26853,7 +27204,8 @@ static void ta_actor_release_activation_effects(ta_system *system, ta_actor *act
         }
         ta_delayed_send *send = &effect->as.send.send;
         if (effect->as.send.immediate) {
-            ta_external_event_submit_status status = ta_interpreter_dispatch_delayed(system, send, false);
+            ta_external_event_submit_status status =
+                ta_interpreter_dispatch_delayed(system, send, &(ta_dispatch){ .in_run = false });
             if (status != TA_EXTERNAL_EVENT_RETRY) {
                 continue;
             }
@@ -28347,8 +28699,9 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
     if (image->source_actor != actor->record.id || image->source_epoch != actor->session_epoch) {
         return TA_ERR_STALE;
     }
-    /* Admitted inputs name this runtime ID, which the loaded actor will not have. */
-    if (ta_run_has_mail(system, actor)) {
+    /* Admitted inputs name this runtime ID, which the loaded actor will not
+     * have; mail its waiting macrostep sent is in the pool, not the image. */
+    if (ta_run_has_mail(system, actor) || ta_run_has_unsent_mail(system, actor)) {
         return TA_ERR_BUSY;
     }
     /* Room for the submitted sends to outlive the session, before anything changes. */
@@ -29336,6 +29689,7 @@ static ta_result ta_system_event_names_init(ta_system *system, ta_allocator allo
     static const char *const builtins[] = {
         "error", "error.execution", "error.communication", "error.platform",
         "done", "done.state", "done.invoke",
+        "error.execution.capacity", "error.execution.capacity.pool", "error.execution.capacity.names",
     };
     ta_result result = ta_trie_init(&system->event_names, &(ta_trie_params){ .allocator = allocator,
                                                                               .atoms = &system->atoms,
@@ -30048,13 +30402,15 @@ TA_API ta_result ta_system_next_deadline(const ta_system *system, ta_time *out) 
 
 TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params *params) {
     if (system == NULL || params == NULL || params->budget == 0 || params->dispatched == NULL ||
-        params->more_due == NULL) {
+        params->more_due == NULL ||
+        (params->fired != NULL && (params->fired_capacity == 0 || params->fired_count == NULL))) {
         return TA_ERR_INVALID;
     }
     uint32_t dispatched = 0;
     bool retry = false;
     ta_time now = ta_clock_now(&system->clock);
-    while (dispatched < params->budget) {
+    uint32_t fired_count = 0;
+    while (dispatched < params->budget && (params->fired == NULL || fired_count < params->fired_capacity)) {
         ta_time due = 0;
         if (!ta_timer_next_due(&system->timers, &due) || due > now) {
             break;
@@ -30071,7 +30427,12 @@ TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch
             ta_actor_touch(owner);
         }
         const ta_definition *owner_definition = owner != NULL ? owner->definition : NULL;
-        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send, false);
+        /* What the host reads of it, kept before dispatch gives its values away. */
+        ta_due_fired report = { .sender = send.owner, .due = send.due, .trace = send.trace };
+        /* A send to a resident session goes into the pool here: outside any
+         * macrostep, a safe point, so the pool may refill first. */
+        ta_dispatch how = { .in_run = false, .timer = true };
+        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send, &how);
         if (fired != TA_EXTERNAL_EVENT_RETRY) {
             if (owner_definition != NULL) {
                 TA_COUNT(system, owner_definition, delayed_fired);
@@ -30098,9 +30459,17 @@ TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch
             break;
         }
         dispatched += 1;
+        if (params->fired != NULL && !how.dropped) {
+            report.delivered = fired == TA_EXTERNAL_EVENT_ACCEPTED;
+            params->fired[fired_count] = report;
+            fired_count += 1;
+        }
     }
     ta_time next = 0;
     *params->dispatched = dispatched;
+    if (params->fired != NULL) {
+        *params->fired_count = fired_count;
+    }
     *params->more_due = retry || (ta_timer_next_due(&system->timers, &next) && next <= now);
     return TA_OK;
 }
@@ -31593,10 +31962,15 @@ TA_PRIVATE void ta_interpreter_literal_content(const ta_definition *definition, 
     *bytes = def->bytes.ptr != NULL ? def->bytes : (ta_bytes){ .ptr = empty, .len = 0 };
 }
 
-TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, bool in_run) {
+TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send,
+                                                                ta_dispatch *how) {
+    bool in_run = how->in_run;
+    how->short_of = (ta_record_capacity_resource)0;
+    how->dropped = false;
     ta_actor *sender = ta_actor_lookup(system, send->owner);
     ta_fault fault = {0};
     ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
+    ta_actor *target = NULL;
     /*
      * A submitted send was already sent: it is logically in the receiver's
      * queue and keeps its envelope even when the sending session is gone.
@@ -31608,9 +31982,37 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
                                  : ta_invoke_parent_id(sender, &send->destination);
     if (sender == NULL && !send->submitted) {
         status = TA_EXTERNAL_EVENT_ACCEPTED; /* the sender's session is gone; drop the send */
+        how->dropped = true;
     } else if (!send->submitted && !ta_invoke_parent_accepts(system, sender, &send->destination)) {
         /* The parent already cancelled this invoked child. */
         status = TA_EXTERNAL_EVENT_ACCEPTED;
+        how->dropped = true;
+    } else if (ta_system_is_scxml_io(system, send->io_type) &&
+               (target = ta_actor_mail_target(system, &send->destination)) != NULL) {
+        /* A resident session: core queues it itself, never the router. */
+        ta_event event = { .name = send->event,
+                           .type = TA_EVENT_EXTERNAL,
+                           .send_id = send->send_id,
+                           .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = origin },
+                           .invoke_id = invoke_id,
+                           .data = send->data };
+        ta_record_capacity_resource short_of = (ta_record_capacity_resource)0;
+        ta_result posted = ta_run_post_mail(
+            system,
+            &(ta_run_mail){ .target = target, .event = &event, .trace = &send->trace,
+                            .from = sender != NULL ? sender->session_id : 0u,
+                            .source = how->timer ? TA_RECORD_INPUT_SOURCE_TIMER : TA_RECORD_INPUT_SOURCE_MAIL },
+            &short_of);
+        if (posted == TA_OK) {
+            status = TA_EXTERNAL_EVENT_ACCEPTED;
+        } else if (in_run) {
+            /* The sending action fails, in its own macrostep (ADR 0099). */
+            how->short_of = short_of;
+        } else {
+            /* Nothing was free outside a macrostep: it waits, due now, and is
+             * offered again, as a router's RETRY would make it. */
+            status = TA_EXTERNAL_EVENT_RETRY;
+        }
     } else if (ta_system_is_scxml_io(system, send->io_type)) {
         status = ta_submit_external(system, &(ta_submit_params){
                                                 .origin = origin,
@@ -31672,7 +32074,7 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
         ta_value_release(&fault.data);
         return status;
     }
-    if (status == TA_EXTERNAL_EVENT_ERROR && sender != NULL) {
+    if (status == TA_EXTERNAL_EVENT_ERROR && sender != NULL && how->short_of == 0) {
         /*
          * An idle sender runs its error.communication in a macrostep a wake
          * starts. When the pool has no envelope for that wake (TA_ERR_FULL,
@@ -32068,6 +32470,33 @@ static ta_result ta_send_execution_error(ta_interpreter *it, ta_send_id send_id,
     return result == TA_OK ? TA_EXEC_FAILED : result;
 }
 
+/*
+ * A <send> to a resident session found no free envelope, or no room in the
+ * name area for its text (ADR 0099): error.execution.capacity.pool or
+ * .names, with the send's ID, raised by the action, whose block is then
+ * abandoned, so a fanout fails once, at the first send that does not fit.
+ */
+static ta_result ta_send_capacity_error(ta_interpreter *it, ta_send_id send_id,
+                                        ta_record_capacity_resource resource) {
+    static const char pool[] = "no free envelope for the mail (poolEnvelopes)";
+    static const char names[] = "no room in the name area for the mail's text (nameAreaBytes)";
+    bool short_of_pool = resource == TA_RECORD_CAPACITY_RESOURCE_POOL;
+    ta_fault fault = { .code = TA_ERR_FULL,
+                       .message = short_of_pool ? (ta_str){ .ptr = pool, .len = (uint32_t)(sizeof pool - 1u) }
+                                                : (ta_str){ .ptr = names, .len = (uint32_t)(sizeof names - 1u) } };
+    ta_result result = ta_raise_error(it->system, it->actor,
+                                      &(ta_error_params){ .name = short_of_pool
+                                                                      ? TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_POOL
+                                                                      : TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_NAMES,
+                                                          .send_id = send_id,
+                                                          .fault = &fault });
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_trace_action_failed(it, &fault);
+    return TA_EXEC_FAILED;
+}
+
 /* Evaluates every attribute of a <send>, in the order SCXML 6.2 gives them. */
 static ta_result ta_send_evaluate(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                   ta_fault *fault) {
@@ -32111,9 +32540,12 @@ static ta_result ta_send_evaluate(ta_interpreter *it, const ta_send_action *send
 
 /*
  * Queues, dispatches, holds or stores an evaluated <send>, which owns the
- * state's values from here. It runs out of memory only where nothing is
- * visible yet: holding it for an unpublished actor, or keeping one the
- * router refused with RETRY, which accepted nothing (ADR 0040).
+ * state's values from here. An immediate send to a resident session goes
+ * on the running macrostep's outgoing list (run.h); one that finds no
+ * envelope or no name-area room is error.execution.capacity.pool or
+ * .names, raised here (ADR 0099). It runs out of memory only where
+ * nothing is visible yet: holding it for an unpublished actor, or keeping
+ * one the router refused with RETRY, which accepted nothing (ADR 0040).
  */
 static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
     ta_system *system = it->system;
@@ -32187,15 +32619,20 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         return raised == TA_EXEC_FAILED ? TA_OK : raised;
     }
     if (state->delay == 0) {
-        ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record, true);
+        ta_dispatch how = { .in_run = true };
+        ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record, &how);
+        if (how.short_of != 0) {
+            state->sent = false;
+            return ta_send_capacity_error(it, state->send_id, how.short_of);
+        }
         if (submitted != TA_EXTERNAL_EVENT_RETRY) {
             state->sent = submitted == TA_EXTERNAL_EVENT_ACCEPTED;
             return TA_OK;
         }
         /*
-         * The router accepted nothing, typically because the destination is
-         * this busy actor. The send, now marked submitted, waits in the
-         * deadline index, due now, and keeps its order among later sends.
+         * The router accepted nothing, for a session that is not resident.
+         * The send, now marked submitted, waits in the deadline index, due
+         * now, and keeps its order among later sends.
          */
     }
     ta_result result = ta_actor_schedule_send(system, actor, &record);

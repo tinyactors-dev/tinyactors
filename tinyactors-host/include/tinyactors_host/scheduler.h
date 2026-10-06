@@ -7,7 +7,10 @@
  * Core keeps the queue: every message the kernel accepts is admitted into
  * core's pool (ta_actor_deliver(), ta_actor_report_invoke()), and a turn
  * calls ta_run(), which takes the inputs in arrival order with one
- * macrostep slot and reports what became of each. The kernel keeps what
+ * macrostep slot and reports what became of each. Mail between resident
+ * actors never reaches the kernel: core queues it itself (core ADR 0099),
+ * and a TAKEN outcome carries its event, which the recorder keeps. Mail
+ * between actors that comes here is for an actor that is not resident. The kernel keeps what
  * core does not have: a send()'s waiter, the message's data for a dead
  * letter, the recorder's copy of an event, and the scheduling state a
  * binding shows.
@@ -30,10 +33,11 @@
  * Admission: a message is admitted into core's pool when it is posted.
  * Core answers TA_ERR_FULL at its admission watermark: a message the host
  * posted for an actor ID is then refused with TA_ERR_FULL, which a binding
- * reports as its queue-full; mail between actors and invocation reports
- * are held in the mailbox, and the actor joins the held queue. Mail between
- * actors is also held past the limits of ADR 0005 point 9, as overflow
- * (kernel ADR 0003), counted apart until it is moved in. Each turn admits
+ * reports as its queue-full; mail between actors (for an actor a load
+ * brought back) and invocation reports are held in the mailbox, and the
+ * actor joins the held queue. Mail between actors is also held past the
+ * limits of ADR 0005 point 9, as overflow (kernel ADR 0003), counted apart
+ * until it is moved in. Each turn admits
  * held mail first, the actors in the order they first held it, until core
  * is full again; an actor's later mail is held behind its held mail, so
  * one sender's mail stays in order.
@@ -239,8 +243,9 @@ typedef struct tah_turn_record {
 /*
  * What the recorder hears from the scheduler (kernel ADR 0006 section 2):
  * a message or report about to be offered to core, and whether core took
- * it; a macrostep that ended; an actor that settled or finished. `message`
- * is the envelope, borrowed for the call. The observer must not call back
+ * it, or mail between actors core took from its own queue; a macrostep
+ * that ended; an actor that settled or finished. `message` is the
+ * envelope, borrowed for the call. The observer must not call back
  * into the scheduler.
  */
 typedef enum {
@@ -257,6 +262,10 @@ typedef struct {
     ta_address *address;
     uint32_t envelope;
     const tah_envelope *message;
+    /* DELIVERED of mail core queued itself, which has no envelope here:
+     * the event core took (ta_input_outcome's), borrowed for the call;
+     * null otherwise. */
+    const ta_event *event;
 } tah_sched_note;
 
 typedef struct {
@@ -438,6 +447,12 @@ void tah_sched_read_stats(const tah_sched *sched, tah_sched_stats *out);
  * TA_ERR_NOT_FOUND for an actor the table does not know.
  */
 ta_result tah_sched_wake(tah_sched *sched, ta_actor_id actor);
+/*
+ * Core queued inputs itself outside a turn's ta_run() calls (delayed sends
+ * to resident actors that fell due, core ADR 0099): the next turn runs
+ * core. Never fails.
+ */
+void tah_sched_core_work(tah_sched *sched);
 /*
  * Lets a quarantined actor go on (ADR 0008): core continues the macrostep a
  * fault stopped (ta_actor_release(), without the microstep limit after a

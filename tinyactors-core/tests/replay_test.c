@@ -493,8 +493,10 @@ static void test_timeline_pending_at_stop(void) {
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, replay, &view) == TA_OK);
     CHECK(view.delayed_send_count == 2 && view.delayed_sends[0].due == 6000);
-    CHECK(dispatch(system) == 2 && routed == routed_before + 2);
+    /* b1 goes through the router; t1, to the actor itself, in core. */
+    CHECK(dispatch(system) == 2 && routed == routed_before + 1);
     CHECK(dispatch(system) == 0);
+    CHECK(run(system, replay) == TEST_DRIVE_STABLE && in_state(system, replay, "timedout"));
     destroy_system(system);
 }
 
@@ -513,7 +515,9 @@ static void test_timeline_crash_between_commits(void) {
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
     deliver_at(system, replay, "e1", 1000);
     CHECK(publish_at(system, replay, 3000) == TA_OK);
-    CHECK(dispatch(system) == 2 && routed == routed_before + 2); /* again */
+    /* Again: b1 through the router, t1 to the actor itself in core. */
+    CHECK(dispatch(system) == 2 && routed == routed_before + 1);
+    CHECK(run(system, replay) == TEST_DRIVE_STABLE && in_state(system, replay, "timedout"));
     destroy_system(system);
 }
 

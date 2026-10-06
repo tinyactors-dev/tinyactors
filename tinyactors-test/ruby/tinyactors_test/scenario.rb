@@ -441,14 +441,35 @@ module TinyactorsTest
 
     # Notes what a ta.run response says about stopped sessions: a FAULTED
     # outcome stops its session, and the end of its input (COMPLETED,
-    # IGNORED, FINISHED) lets it go.
+    # IGNORED, FINISHED) lets it go. With #watch_mail, it also keeps the
+    # mail and due sends sessions took, from their TAKEN outcomes.
     def note_outcomes(response)
       Array(response.dig(:out, :outcomes)).each do |outcome|
         case outcome[:kind]
         when 'faulted' then @stopped_sessions |= [outcome[:actor]]
         when 'completed', 'ignored', 'finished' then @stopped_sessions -= [outcome[:actor]]
+        when 'taken'
+          @mail_taken << { actor: outcome[:actor], event: outcome[:event] } if @mail_taken && outcome[:has_event]
         end
       end
+    end
+
+    # From now on, the runs report each input as it is taken, and keep what
+    # mail and due sends sessions took: they never reach the router, since
+    # core queues them itself (core ADR 0099).
+    def watch_mail
+      @mail_taken ||= []
+    end
+
+    # The mail and due sends sessions took since the last call, oldest
+    # first: { actor:, event: } each, the event as the ta_event codec
+    # encodes it. Empties the list.
+    def taken_mail
+      raise ScenarioError, 'taken_mail: call `watch_mail` before the steps that send' unless @mail_taken
+
+      taken = @mail_taken
+      @mail_taken = []
+      taken
     end
 
     # Spawns an actor of a chart, named by its registry name or given as a
@@ -1725,8 +1746,10 @@ module TinyactorsTest
     def run_logical(budget:, action_budget: 0, pause_at_microstep_start: false)
       capacity = @allocation_fault || @count_allocations ? 1 : RUN_OUTCOMES
       run_once = lambda do
-        ta.run(system: system_handle, budget: budget, action_budget: action_budget,
-               pause_at_microstep_start: pause_at_microstep_start, outcome_capacity: capacity)
+        params = { system: system_handle, budget: budget, action_budget: action_budget,
+                   pause_at_microstep_start: pause_at_microstep_start, outcome_capacity: capacity }
+        params[:report_taken] = true if @mail_taken
+        ta.run(**params)
       end
       index = @resume_index
       @resume_index += 1

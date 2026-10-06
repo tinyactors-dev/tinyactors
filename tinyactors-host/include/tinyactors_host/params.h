@@ -22,7 +22,8 @@ typedef enum {
     TAH_PARAM_DUE_BUDGET,            /* due sends dispatched in one turn */
     TAH_PARAM_MESSAGE_BUDGET,        /* actors whose held mail is admitted, and dead letters reported, in one turn */
     TAH_PARAM_MAX_QUEUED_MESSAGES,   /* accepted messages not yet taken past which mail between actors
-                                        waits as overflow; 0: no limit */
+                                        waits as overflow (mail the router gets: to an actor that is
+                                        not resident; core keeps the rest); 0: no limit */
     TAH_PARAM_MAX_RETAINED_BYTES,    /* their retained-bytes estimate, likewise; 0: no limit */
     TAH_PARAM_COUNT
 } tah_param;

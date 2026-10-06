@@ -704,13 +704,19 @@ static void tah_quarantine_reports_make(tah_system *system) {
     }
 }
 
+/* Sends one ta_system_dispatch_due() call reports at most. */
+#define TAH_DUE_FIRED 64u
+
 /*
- * Dispatches the sends due now, up to the due budget. Due sends go through
- * the router into mailboxes (ADR 0006), so what they deliver runs in a
- * later turn. A refusal (a full queue) or TA_ERR_NOMEM leaves the rest due,
- * so the system is not quiet and the next turn tries again. Returns true
- * when sends are still due. The turn calls it after its deliveries, and
- * evict() before it removes an actor (napi ADR 0032 section 8).
+ * Dispatches the sends due now, up to the due budget. A send to a resident
+ * actor goes into core's pool and runs at core's next ta_run(); any other
+ * goes through the router, or to its I/O processor. For each send that
+ * fired, its sender's wake is reported again (the recorder), and, when it
+ * was delivered, how late it fired (the lateness histogram). A refusal (no
+ * room, a full queue) or TA_ERR_NOMEM leaves the rest due, so the system is
+ * not quiet and the next turn tries again. Returns true when sends are
+ * still due. The turn calls it after its deliveries, and evict() before it
+ * removes an actor (napi ADR 0032 section 8).
  */
 bool tah_system_dispatch_due(tah_system *system) {
     ta_time core_deadline = 0;
@@ -718,17 +724,41 @@ bool tah_system_dispatch_due(tah_system *system) {
         core_deadline > ta_system_time(system->core)) {
         return false;
     }
-    uint32_t dispatched = 0;
     bool more_due = false;
-    system->inside_core = true;
-    system->dispatching_due = true;
-    (void)ta_system_dispatch_due(system->core, &(ta_due_dispatch_params){
-                                                   .budget = system->due_budget,
-                                                   .dispatched = &dispatched,
-                                                   .more_due = &more_due,
-                                               });
-    system->dispatching_due = false;
-    system->inside_core = false;
+    uint32_t left = system->due_budget;
+    do {
+        ta_due_fired fired[TAH_DUE_FIRED];
+        uint32_t fired_count = 0;
+        uint32_t dispatched = 0;
+        system->inside_core = true;
+        system->dispatching_due = true;
+        (void)ta_system_dispatch_due(system->core, &(ta_due_dispatch_params){
+                                                       .budget = left,
+                                                       .dispatched = &dispatched,
+                                                       .more_due = &more_due,
+                                                       .fired = fired,
+                                                       .fired_capacity = TAH_DUE_FIRED,
+                                                       .fired_count = &fired_count,
+                                                   });
+        system->dispatching_due = false;
+        system->inside_core = false;
+        for (uint32_t at = 0; at < fired_count; at += 1u) {
+            tah_recorder_fired(system, &(ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = fired[at].sender });
+            if (fired[at].delivered) {
+                tah_system_record_lateness(system, fired[at].due, &fired[at].trace);
+            }
+        }
+        if (dispatched != 0) {
+            /* What went into core's pool, or an error a sender is told of,
+             * runs at its next ta_run(). */
+            tah_sched_core_work(&system->sched);
+            tah_system_want_turn(system);
+        }
+        left -= dispatched < left ? dispatched : left;
+        if (dispatched == 0 || fired_count < TAH_DUE_FIRED) {
+            break;
+        }
+    } while (left != 0 && more_due);
     tah_system_drain_telemetry(system);
     return more_due;
 }

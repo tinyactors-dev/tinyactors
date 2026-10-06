@@ -4,10 +4,15 @@ The external-event router is the host scheduling boundary for fully normalized
 events addressed to SCXML sessions. It is intentionally not a generic byte,
 URI, socket, or message-broker transport.
 
-Core submits `ta_external_delivery` values from the built-in SCXML Event I/O
-Processor and from other standard parent/child completion paths. The destination
-is already a runtime or named `ta_actor_ref`; the event already has its SCXML
-name, type, origin, send ID, invocation metadata, and retained data.
+Mail to a session resident in this system never reaches the router: core takes
+an envelope from its pool and queues it itself, and a macrostep's mail joins
+the run queue when that macrostep ends (`run.h`, ADR 0099). Core submits
+`ta_external_delivery` values from the built-in SCXML Event I/O Processor and
+from the standard parent/child paths only for a target that is not resident:
+a session that is gone, unloaded, or held by another family, or an address
+with no resident actor. The destination is already a runtime or named
+`ta_actor_ref`; the event already has its SCXML name, type, origin, send ID,
+invocation metadata, and retained data.
 
 The callback may deliver synchronously when reentrancy and actor-busy rules
 permit, but most hosts enqueue or marshal the delivery. Callback arguments are
@@ -26,9 +31,9 @@ Typical implementations are:
 - a shard queue that loads `UNLOADED` actors;
 - a durable remote inbox in a distributed host.
 
-`TA_EXTERNAL_EVENT_RETRY` means the router accepted nothing. An executable
-`<send>` retains the normalized delivery in its continuation and pauses; a later
-resume retries without re-evaluating expressions. A pending invoked-child
+`TA_EXTERNAL_EVENT_RETRY` means the router accepted nothing. The send waits in
+the deadline index, due now, submitted, and is offered again without
+re-evaluating expressions. A pending invoked-child
 completion likewise remains attached to the child. `TA_EXTERNAL_EVENT_ERROR`
 with a fault causes an ordinary send to generate the required
 `error.communication` event. Queue capacity, retries, deduplication, loading,

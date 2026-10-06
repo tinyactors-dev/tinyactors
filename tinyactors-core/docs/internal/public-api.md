@@ -49,9 +49,10 @@ and text that is no send ID is `TA_ERR_INVALID`. Formatting follows the buffer
 convention and answers `TA_ERR_NOT_FOUND` for a send with no ID.
 
 `ta_system_set_external_event_router` installs the host scheduling boundary for
-normalized external SCXML-session events. Core provides the mandatory SCXML
-Event I/O Processor; it resolves standard targets and submits external delivery
-through this router. Accepted deliveries have been copied if retained; retry
+normalized SCXML-session events whose target is not resident in this system.
+Core provides the mandatory SCXML Event I/O Processor; it resolves standard
+targets, queues mail to a resident session in its own pool (ADR 0099), and
+submits any other delivery through this router. Accepted deliveries have been copied if retained; retry
 pauses and preserves the materialized delivery; error becomes statechart-visible
 communication failure. `ta_system_scxml_io_type` returns the processor's
 reserved type atom.

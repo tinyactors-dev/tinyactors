@@ -899,8 +899,9 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
     if (image->source_actor != actor->record.id || image->source_epoch != actor->session_epoch) {
         return TA_ERR_STALE;
     }
-    /* Admitted inputs name this runtime ID, which the loaded actor will not have. */
-    if (ta_run_has_mail(system, actor)) {
+    /* Admitted inputs name this runtime ID, which the loaded actor will not
+     * have; mail its waiting macrostep sent is in the pool, not the image. */
+    if (ta_run_has_mail(system, actor) || ta_run_has_unsent_mail(system, actor)) {
         return TA_ERR_BUSY;
     }
     /* Room for the submitted sends to outlive the session, before anything changes. */

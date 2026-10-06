@@ -141,12 +141,13 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
   # would finish in one resume); a paused actor whose macrostep takes a new
   # external event (invariant 2), or that changes when one is admitted; an
   # event admitted while paused and then processed before the internal
-  # `counted`.
+  # `counted`; a self-sent `ping` visible before its macrostep ends.
   #
-  # The router holds the self-sent `ping` until the scenario releases it, so
-  # that it arrives after the event admitted while paused.
+  # The `ping` waits on the macrostep's outgoing list until the macrostep
+  # ends (core ADR 0099), so it arrives after the event admitted while
+  # paused, and never reaches the router.
   scenario 'a paused macrostep holds new events back and resumes one microstep at a time' do
-    router = recording_router(mode: :hold)
+    router = recording_router
     relay = spawn
     assert_equal 'ok', relay.post('go')
     counts = []
@@ -169,11 +170,9 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     assert_equal [0, 1, 2, 3, 4, 5], counts.uniq, 'each resume runs one microstep of the counting loop'
 
     assert_equal ['go', 'n=5', 'counted'], relay.data('.log'), 'the macrostep ended without the held event'
-    pings = router.held
-    assert_equal ['ping'], pings.map { |delivery| delivery.dig(:event, :name_text) }
-    assert_equal 'ok', router.release(pings[0][:id])[:result]
     run_system('the held event, then the self-sent ping')
     assert_equal ['go', 'n=5', 'counted', 'extra', 'ping'], relay.data('.log')
+    assert_equal [], router.entries('submit'), 'the self-send stayed in core'
   end
 
   # Catches: inspection that loses (or misreports) the macrostep's external
@@ -200,28 +199,43 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     relay = spawn
     relay.deliver 'go'
     assert_equal ['go', 'n=5', 'counted', 'ping'], relay.data('.log')
-    assert_equal [%w[accepted ok]], router.entries('submit').map { |entry| entry.values_at(:status, :result) },
-                 'core admitted the self-send inside the macrostep, and ran it after'
+    assert_equal [], router.entries('submit'),
+                 'core queued the self-send itself, when the macrostep ended, and ran it after (core ADR 0099)'
   end
 
-  # Catches: a send between actors lost, or taken twice, when core's pool
-  # has no room for it. With 2 of 8 envelopes for admission (core ADR 0099),
-  # `go` and an event waiting for a bystander take both, so the self-send
-  # made while `go` runs is refused (TA_ERR_FULL): the router answers RETRY,
-  # core keeps the send, and offers it again once a run has made room.
-  scenario 'a send the pool has no room for is retried, and arrives once' do
-    system_params(pool_envelopes: 8, admission_watermark: 25)
+  # Catches: a send between actors lost silently, retried, or queued past
+  # core's pool when the pool has no room for it (core ADR 0099). In a pool
+  # of eight, `go`, an event waiting for a bystander and six of the
+  # filler's sends, fallen due, leave no envelope free: the self-send `go`
+  # makes fails in the sender as error.execution.capacity.pool, once, the
+  # rest of its block (raising `counted`) does not run, and the ping never
+  # arrives.
+  scenario 'a send the pool has no room for fails in its sender, and never arrives' do
+    system_params(pool_envelopes: 8)
+    filler = TinyactorsTest::Chart.define(:filler) do
+      state :filling do
+        on_entry do
+          (1..6).each { |index| send_event 'fill', delay: '1s', id: "f#{index}" }
+        end
+      end
+    end
+    spawn filler
     router = recording_router
     relay = spawn
     bystander = spawn
     assert_equal 'ok', relay.post('go')
     assert_equal 'ok', bystander.post('extra')
-    run_system('go, then extra, then the retried ping')
-    assert_equal [%w[retry err_full], %w[accepted ok]],
-                 router.entries('submit').map { |entry| entry.values_at(:status, :result) }
-    assert_equal %w[ping ping], router.entries('submit').map { |entry| entry.dig(:event, :name_text) }
-    assert_equal ['go', 'n=5', 'counted', 'ping'], relay.data('.log'), 'the ping arrived exactly once'
+    set_time(1000)
+    due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 100))
+    assert_equal [6, false], due.values_at(:dispatched, :more_due), 'the filler\'s sends fill the pool'
+    recording_trace
+    run_system('go, whose ping finds no room, then extra')
+    errors = trace_records.select { |record| record[:kind] == 'raised' }
+                          .map { |record| record.dig(:event, :name_text) }.grep(/\Aerror/)
+    assert_equal ['error.execution.capacity.pool'], errors, 'the send failed once, in its sender'
+    assert_equal ['go', 'n=5'], relay.data('.log'), 'the ping never arrived, and `counted` was never raised'
     assert_equal ['extra'], bystander.data('.log')
+    assert_equal [], router.entries('submit')
   end
 
   # Catches: interpreter state that lives on the C stack or in scratch

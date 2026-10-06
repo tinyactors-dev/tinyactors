@@ -184,10 +184,11 @@ async function backpressure() {
   system.close();
 }
 
-// maxRetainedBytes bounds mail between actors (kernel ADR 0003): the
-// application's data counts against it (strings 2 bytes per code unit,
-// other objects 64 or `bytes`), and above it a send between actors is held
-// back as overflow, not refused, until a flush finds room.
+// maxRetainedBytes bounds the application's mail (kernel ADR 0003): its
+// data counts against it (strings 2 bytes per code unit, other objects 64
+// or `bytes`). A send between resident actors stays in core, bounded by
+// core's pool (core ADR 0099): the limit never holds it back, so it is
+// taken at the next flush even while the application's mail is over it.
 async function retainedBytes() {
   const system = createSystem({ parameters: { maxRetainedBytes: 100 } });
   const holder = system.spawn(system.define(plain()));
@@ -206,12 +207,11 @@ async function retainedBytes() {
   holder.post('ping', 'x'.repeat(60)); // 120 bytes: the application's mail is accepted past the limit
   sender.post('ping');
   await system.flush();
-  assert.equal(system.stats().messages.overflow, 1, 'the send between actors is held back');
-  assert.equal(sink.inspect().activeStates.at(-1), 'idle');
-  system.release(holder); // its mail is taken, and makes room
+  assert.equal(system.stats().messages.overflow, 0, 'the send between actors is not held back');
+  assert.equal(sink.inspect().activeStates.at(-1), 'got', 'taken at the flush, once');
+  system.release(holder); // its mail is taken
   await system.flush();
   assert.equal(system.stats().messages.overflow, 0);
-  assert.equal(sink.inspect().activeStates.at(-1), 'got', 'admitted after a flush, once');
   system.close();
 }
 

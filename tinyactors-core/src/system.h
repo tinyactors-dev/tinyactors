@@ -41,7 +41,9 @@
  *   million actors as against four (invariant 17).
  * - `ta_system_set_external_event_router` installs the host's router for
  *   normalized SCXML-session events; core's standard processor and an
- *   invoked child's completion submit through it. The SCXML I/O type
+ *   invoked child's completion submit through it what goes to a session
+ *   that is not resident here. Mail to a resident session goes into the
+ *   pool instead (`run.h`, ADR 0099). The SCXML I/O type
  *   atom is interned at creation, and registering an I/O processor cannot
  *   replace it.
  * - **Generated names:** every prefix of a name core generates is an
@@ -112,8 +114,10 @@
 /**
  * The event names system creation adds to `event_names`, in this order, so
  * their IDs are fixed: `error`, `error.execution`, `error.communication`,
- * `error.platform`, `done`, `done.state`, `done.invoke`. Core names the
- * events it raises below them. Creation also interns `invoke`, the third
+ * `error.platform`, `done`, `done.state`, `done.invoke`,
+ * `error.execution.capacity`, and below it `pool` and `names`, the
+ * resources a `<send>` to a resident session can find without room
+ * (ADR 0099, ADR 0102). Core names the events it raises below them. Creation also interns `invoke`, the third
  * segment of `error.communication.invoke.<id>.<reason>`, as
  * `invoke_segment`.
  */
@@ -124,7 +128,10 @@ enum {
     TA_EVENT_NAME_ERROR_PLATFORM = 4u,
     TA_EVENT_NAME_DONE = 5u,
     TA_EVENT_NAME_DONE_STATE = 6u,
-    TA_EVENT_NAME_DONE_INVOKE = 7u
+    TA_EVENT_NAME_DONE_INVOKE = 7u,
+    TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY = 8u,
+    TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_POOL = 9u,
+    TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_NAMES = 10u
 };
 
 /** The ceiling of `eventNameDepth` (ADR 0092): the deepest a trie goes. */

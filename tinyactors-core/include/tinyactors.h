@@ -535,7 +535,8 @@ TA_API void ta_event_release(TA_INOUT ta_event *event) TA_ANY_VALUE_MODEL;
 
 
 /*
- * A fully normalized event destined for another SCXML external event queue,
+ * A fully normalized event destined for an SCXML session that is not
+ * resident in this system (mail to a resident one stays in core, ADR 0099),
  * with the trace parent the receiver's macrostep runs under: the sending
  * macrostep's context, and the key of the step that sent it (ADR 0067). A
  * router passes `trace` on to ta_actor_deliver().
@@ -2928,8 +2929,9 @@ typedef struct {
  * receive `target`, or a literal target's text, and leave `destination`
  * unused. `has_target_text` means the target is literal: `target` is absent,
  * and `target_text` names the text in the owner's definition, which
- * ta_definition_content() reads. `submitted` means the
- * router refused the send once and it waits to be offered again (ADR 0026,
+ * ta_definition_content() reads. `submitted` means
+ * nothing accepted the send once, the router or, for a resident target,
+ * core's pool (ADR 0099), and it waits to be offered again (ADR 0026,
  * ADR 0040).
  * Everything is borrowed; retain `target` and `data` with ta_value_retain()
  * to keep them past the synchronization window.
@@ -3020,8 +3022,12 @@ typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_id *out;
  *   TA_ERR_DONE when the session has finished; TA_ERR_INVALID when the
  *   operator transition it carries no longer applies (its source is not
  *   active, or the session now runs another definition).
- * Core's own inputs (a session's bootstrap, and a macrostep core started
- * for work queued outside any run) have correlation 0.
+ * Core's own inputs have correlation 0: a session's bootstrap, a
+ * macrostep core started for work queued outside any run, mail one
+ * resident session sent another, and a delayed send to a resident session
+ * that fell due. Mail and due sends never reach the host's router: core
+ * queues them itself, and a session's mail joins the queue only when the
+ * macrostep that sent it ends (ADR 0099).
  */
 typedef enum {
     TA_INPUT_TAKEN = 0,
@@ -3042,6 +3048,13 @@ typedef struct {
     /* The host's own name for the input, from ta_actor_deliver_params or
      * ta_invoke_report_params; 0 for core's own inputs. */
     uint64_t correlation;
+    /* TAKEN of mail or of a delayed send that fell due, which no host call
+     * admitted: `has_event`, and `event` is the event as the session takes
+     * it, retained for the caller, who releases it with ta_event_release(),
+     * so a host that records inputs when they are taken records these too.
+     * Otherwise false, and `event` all zero. */
+    bool has_event;
+    TA_RELEASE_IF(ta_event_release, has_event) ta_event event;
 } ta_input_outcome;
 
 /*
@@ -3472,8 +3485,10 @@ TA_API ta_result ta_actor_abandon(ta_system *system, ta_actor_id actor);
  * not persistence and is valid only in this process. The image must be a
  * fresh capture of actor; TA_ERR_STALE means the actor changed after capture.
  * TA_ERR_BUSY, changing nothing, when inputs core admitted for the actor
- * wait to be taken (they name its runtime ID, which a load does not keep):
- * run the system, or withdraw them, and capture again.
+ * wait to be taken (they name its runtime ID, which a load does not keep),
+ * or when its macrostep, paused or stopped, holds mail it sent that waits
+ * for the macrostep to end (an image does not carry it, ADR 0099): run the
+ * system, or withdraw them, and capture again.
  */
 TA_API ta_result ta_actor_unload(ta_system *system, TA_IN const ta_actor_unload_params *params);
 /*
@@ -3516,8 +3531,8 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
 /*
  * Withdraws a pending delayed send of `actor` from outside the chart
  * (ADR 0084), as a <cancel> of `send` in that actor would: every pending
- * send of the actor with that ID that the router has not yet been offered
- * is removed and released. `send` is the `send_id` that inspection's
+ * send of the actor with that ID that has not yet been offered is removed
+ * and released. `send` is the `send_id` that inspection's
  * `delayed_sends` reports; ta_send_id_parse() turns the text a chart sees
  * into one. Only the actor's own sends can be named (ADR 0012). It may be
  * called between macrosteps or while one is paused, allocates nothing, and
@@ -3528,8 +3543,8 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
  * - TA_ERR_NOT_FOUND: no resident actor has that ID, or it holds no pending
  *   send with that ID: never made, already dispatched, cancelled or
  *   withdrawn.
- * - TA_ERR_DONE: its only sends with that ID are submitted: the router
- *   refused them once and they wait to be offered again. A submitted send
+ * - TA_ERR_DONE: its only sends with that ID are submitted: they were
+ *   refused once and wait to be offered again. A submitted send
  *   has been sent and belongs to its receiver (ADR 0054), so it is not
  *   withdrawn.
  */
@@ -4196,7 +4211,11 @@ TA_API void ta_system_destroy(TA_DESTROYS ta_system *system);
 TA_API ta_result ta_system_set_actor_directory(ta_system *system, ta_actor_directory directory);
 /* A system parameter's value (ADR 0092); TA_ERR_INVALID for an unknown one. */
 TA_API ta_result ta_system_param(const ta_system *system, ta_param param, TA_OUT uint64_t *out);
-/* Installs the scheduler for normalized external SCXML-session events. */
+/*
+ * Installs the host's router for normalized SCXML-session events whose
+ * target is not resident in this system. Mail to a resident session never
+ * reaches it: core queues it in its own pool (ADR 0099).
+ */
 TA_API ta_result ta_system_set_external_event_router(ta_system *system,
                                                       ta_external_event_router router);
 /*
@@ -4416,11 +4435,41 @@ TA_API ta_atom ta_system_scxml_io_type(const ta_system *system);
  */
 
 
+/*
+ * One delayed send ta_system_dispatch_due() fired: sent, or failed with its
+ * sender told (error.communication). A send that found no room and waits to
+ * be offered again has not fired.
+ */
+typedef struct {
+    /* The runtime ID of the session that made it, which may be gone. */
+    ta_actor_id sender;
+    /* When it was due. */
+    ta_time due;
+    /* The sending step (ADR 0067). */
+    ta_trace_parent trace;
+    /* It reached its target or its I/O processor; false when it failed. */
+    bool delivered;
+} ta_due_fired;
+
+/*
+ * `dispatched` counts the sends the call took off the deadline index, a
+ * send whose session is gone, which goes nowhere, included. `fired`, when
+ * not null, is the caller's buffer of `fired_capacity` entries, at least
+ * one, which the call fills with each send it fired, in order, and counts
+ * in `fired_count`; the call fires no more than it has room for, so a full
+ * buffer leaves the rest due (`more_due`). A send to a resident session is
+ * queued in core and reaches no router (ADR 0099): a host that measures
+ * how late timers fire, or tracks its senders' next deadlines, reads them
+ * here.
+ */
 typedef struct {
     /* Must be nonzero; limits synchronous host callbacks in this call. */
     uint32_t budget;
     TA_OUT uint32_t *dispatched;
     TA_OUT bool *more_due;
+    TA_BUFFER(fired_capacity, fired_count) TA_OPTIONAL ta_due_fired *fired;
+    uint32_t fired_capacity;
+    TA_OUT TA_OPTIONAL uint32_t *fired_count;
 } ta_due_dispatch_params;
 
 /* TA_ERR_NOT_FOUND means that no resident delayed send is pending. */

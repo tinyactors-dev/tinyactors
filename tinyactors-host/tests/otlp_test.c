@@ -4,12 +4,15 @@
  * call, as a host does (core ADR 0098). A request is well-formed protobuf of
  * the right shape, a macrostep that pauses between turns stays open across
  * takes, lifecycle records are spans of their own, open spans end when the
- * sink goes or when core reports records it dropped, and the bytes of a
- * small request are fixed (golden). Every request is put into a heap block
+ * sink goes or when core reports records it dropped, the bytes of a
+ * small request are fixed (golden), and a macrostep that mail from another
+ * session started is in its sender's trace, the child of the step that
+ * sent it, though the mail stayed in core (core ADR 0099). Every request is put into a heap block
  * of exactly the size the encoder reported, so a write past it fails under
  * AddressSanitizer (napi ADR 0018).
  */
 #include "check.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -142,6 +145,7 @@ static bool well_formed(reader r) {
 
 typedef struct {
     char name[96];
+    uint8_t trace_id[16];
     uint64_t span_id;
     uint64_t parent_span_id;
     uint64_t start;
@@ -190,7 +194,10 @@ static uint32_t read_spans(ta_str bytes, span_view *out, uint32_t capacity) {
                 reader value = { 0 };
                 CHECK(read_field(&span, &field, &wire, &value, &scalar));
                 switch (field) {
-                    case 1: CHECK(value.end - value.at == 16); break;
+                    case 1:
+                        CHECK(value.end - value.at == 16);
+                        if (value.end - value.at == 16) memcpy(view.trace_id, value.at, 16);
+                        break;
                     case 2: CHECK(value.end - value.at == 8); view.span_id = id64(value); break;
                     case 4: CHECK(value.end - value.at == 8); view.parent_span_id = id64(value); break;
                     case 5: {
@@ -474,6 +481,109 @@ static void open_across_turns(void) {
     count = read_spans(take(&f.otlp), spans, 16);
     CHECK(count == 1 && named(spans, count, "scxml.destroyed") != NULL);
     CHECK(f.otlp.dropped == 0);
+    stop(&f);
+}
+
+/* Mail between sessions keeps its trace: a sender, under a host's trace
+ * parent, mails a receiver; the receiver's macrostep is in the same trace,
+ * and its parent is the sender's step that sent the mail. */
+/* The sender: idle --go--> idle, mailing hi to `target`. One at a time:
+ * the chart lives in static storage until it is compiled. */
+static const ta_scxml_spec *sender_chart(const char *target) {
+    static ta_scxml_action_spec actions[2];
+    static ta_scxml_transition_spec transitions[2];
+    static ta_scxml_state_spec states[2];
+    static ta_scxml_spec spec;
+    actions[0] = (ta_scxml_action_spec){ .kind = TA_SCXML_ACTION_SEND,
+                                         .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = S("hi") },
+                                                      .target = { .kind = TA_SCXML_STRING_LITERAL,
+                                                                  .as.literal = { .ptr = target,
+                                                                                  .len = (uint32_t)strlen(target) } } } };
+    actions[1] = (ta_scxml_action_spec)END;
+    transitions[0] = (ta_scxml_transition_spec){ .kind = TA_SCXML_TRANSITION_INTERNAL, .event = S("go"),
+                                                 .actions = actions };
+    transitions[1] = (ta_scxml_transition_spec)END;
+    states[0] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC, .id = S("idle"), .transitions = transitions };
+    states[1] = (ta_scxml_state_spec)END;
+    spec = (ta_scxml_spec){ .name = S("sender"), .states = states };
+    return &spec;
+}
+
+/* Compiles and registers `spec` in family `family`. */
+static ta_definition_id define_in(fixture *f, const ta_scxml_spec *spec, const char *family) {
+    ta_definition_identity identity = { .family = { .name = { .ptr = family, .len = (uint32_t)strlen(family) } },
+                                        .revision = { .ptr = (const uint8_t *)"v1", .len = 2 } };
+    ta_scxml_spec named_spec = *spec;
+    named_spec.identity = &identity;
+    ta_definition *definition = NULL;
+    CHECK(ta_definition_compile_spec(f->core, &(ta_definition_compile_params){
+                                                  .spec = &named_spec,
+                                                  .datamodel = ta_null_datamodel(),
+                                                  .allocator = tah_allocator_for(&f->allocator, TAH_MEMORY_CORE),
+                                                  .out = &definition }) == TA_OK);
+    ta_definition_id id = 0;
+    CHECK(ta_system_register_definition(f->core, definition, &id) == TA_OK);
+    return id;
+}
+
+static void linked_across_sessions(void) {
+    fixture f;
+    start(&f, true);
+    ta_actor_id receiver = 0;
+    spawn(&f, define_in(&f, &chart, "recv"), &receiver);
+    CHECK(check_run(f.core, receiver, 100) == CHECK_RUN_STABLE);
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(f.core, receiver, &view) == TA_OK);
+    char session[64];
+    uint32_t needed = 0;
+    CHECK(ta_session_id_format(f.core, &(ta_session_id_format_params){ .session = view.session_id,
+                                                                       .family = S("recv"),
+                                                                       .buffer = session,
+                                                                       .capacity = sizeof session,
+                                                                       .needed = &needed }) == TA_OK);
+    char target[80];
+    snprintf(target, sizeof target, "#_scxml_%s", session);
+    ta_definition_id sender_definition = define_in(&f, sender_chart(target), "send");
+    ta_actor_id sender = 0;
+    spawn(&f, sender_definition, &sender);
+    CHECK(check_run(f.core, sender, 100) == CHECK_RUN_STABLE);
+    drain(&f);
+    (void)take(&f.otlp);
+
+    ta_atom go = 0;
+    CHECK(ta_system_intern_atom(f.core, S("go"), &go) == TA_OK);
+    ta_event_name_id name = 0;
+    CHECK(ta_event_name_intern(f.core, &(ta_atom_list){ .atoms = &go, .count = 1 }, &name) == TA_OK);
+    ta_trace_parent request = { .context = { .trace_id_high = 0x4bf92f3577b34da6ull,
+                                             .trace_id_low = 0xa3ce929d0e0e4736ull,
+                                             .flags = TA_TRACE_FLAG_SAMPLED },
+                                .cause = { .session = 0, .macrostep = 0x00f067aa0ba902b7ull } };
+    CHECK(ta_actor_deliver(f.core, &(ta_actor_deliver_params){ .time = ta_system_time(f.core), .actor = sender,
+                                                               .event = &(ta_event){ .name = name },
+                                                               .trace = request }) == TA_OK);
+    CHECK(check_run(f.core, sender, 100) == CHECK_RUN_STABLE);
+    drain(&f);
+    CHECK(check_run(f.core, receiver, 100) == CHECK_RUN_STABLE);
+    drain(&f);
+
+    span_view spans[16];
+    uint32_t count = read_spans(take(&f.otlp), spans, 16);
+    const span_view *sent_by = named(spans, count, "scxml.microstep go");
+    const span_view *taken_by = named(spans, count, "scxml.macrostep hi");
+    CHECK(sent_by != NULL && taken_by != NULL);
+    if (sent_by != NULL && taken_by != NULL) {
+        CHECK(memcmp(sent_by->trace_id, taken_by->trace_id, 16) == 0);
+        CHECK(taken_by->trace_id[0] == 0x4b && taken_by->trace_id[15] == 0x36);
+        CHECK(taken_by->parent_span_id == sent_by->span_id);
+    }
+    ta_actor_inspection sending;
+    CHECK(ta_actor_inspect(f.core, sender, &sending) == TA_OK);
+    CHECK(sent_by == NULL ||
+          sent_by->span_id == ta_step_key_span_id((ta_step_key){ .session = sending.session_id, .macrostep = 2,
+                                                                 .microstep = 1 }));
+    destroy(&f, sender);
+    destroy(&f, receiver);
+    (void)take(&f.otlp);
     stop(&f);
 }
 
@@ -877,6 +987,7 @@ int main(void) {
     logs();
     many_open();
     open_across_turns();
+    linked_across_sessions();
     end_all();
     abandoned();
     dropped_records();

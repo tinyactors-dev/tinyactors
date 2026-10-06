@@ -26,8 +26,8 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
 
     advance_time 30_000
     assert_active survivor, :green
-    destinations = router.entries('submit').map { |entry| entry.dig(:destination, :runtime) }
-    assert_equal [survivor.handle], destinations.uniq, 'nothing was routed to the destroyed actor'
+    assert_equal [], router.entries('submit'),
+                 'the survivor\'s timer reached it in core (core ADR 0099), and nothing went to the destroyed actor'
   end
 
   # Catches: runtime IDs reused after destroy (ADR 0028): an event meant for
@@ -83,9 +83,10 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
   end
 
   # Catches: destroy of a busy actor that leaks its paused macrostep (the
-  # current event, the internal queue) or crashes when its self-send, already
-  # admitted behind that macrostep, is reached after the actor is gone.
-  scenario 'destroying a paused actor releases it and its admitted send fails cleanly' do
+  # current event, the internal queue) or its self-send, which waits with
+  # that macrostep on its outgoing list until it ends (core ADR 0099), or a
+  # self-send that reaches the run queue though the macrostep never ended.
+  scenario 'destroying a paused actor releases it and its unsent mail' do
     router = recording_router
     relay = spawn :relay
     bystander = spawn :relay
@@ -96,16 +97,13 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
     core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: relay.handle))
     forget(relay)
 
-    submits = router.entries('submit').map { |entry| entry.values_at(:status, :result) }
-    assert_equal [%w[accepted ok]], submits, 'the self-send was admitted while the macrostep ran'
+    assert_equal [], router.entries('submit'), 'the self-send never reached the router'
     assert_equal [bystander.handle], rpc('system.actors', system: system_handle)
-    # Running the system reaches the self-send, which core refuses: its
-    # session is gone.
+    # Running the system finds nothing: the self-send went with the
+    # macrostep that sent it, which never ended.
     response = ta.run(system: system_handle, budget: 64, outcome_capacity: 8)
     assert_equal 'ok', response[:result]
-    assert_equal [['refused', 'err_not_found', relay.handle]],
-                 Array(response.dig(:out, :outcomes)).map { |outcome| outcome.values_at(:kind, :code, :actor) },
-                 'the destroyed sender\'s send is refused, once'
+    assert_equal [], Array(response.dig(:out, :outcomes)), 'no mail of the destroyed sender is left to refuse'
     assert_equal 'idle', response.dig(:out, :status)
     bystander.deliver 'go'
     assert_equal ['go', 'n=5', 'counted', 'ping'], bystander.data('.log')

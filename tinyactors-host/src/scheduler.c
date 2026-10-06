@@ -805,6 +805,10 @@ ta_result tah_sched_wake(tah_sched *sched, ta_actor_id actor) {
     return TA_OK;
 }
 
+void tah_sched_core_work(tah_sched *sched) {
+    sched->core_work = true;
+}
+
 ta_result tah_sched_release(tah_sched *sched, ta_actor_id actor) {
     tah_sched_entry *entry = tah_sched_lookup(sched, actor);
     if (entry == NULL) {
@@ -1500,6 +1504,10 @@ static void tah_sched_outcome(tah_sched *sched, const tah_turn_params *params, c
     case TA_INPUT_TAKEN:
         if (index != 0) {
             tah_sched_taken(sched, entry, actor, index);
+        } else if (outcome->has_event) {
+            /* Mail between actors, which core queued itself (core ADR 0099). */
+            tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_DELIVERED, .actor = actor,
+                                                       .event = &outcome->event });
         }
         if (entry != NULL && entry->state != TAH_SCHED_QUARANTINED) {
             tah_sched_set_state(sched, entry, TAH_SCHED_RUNNABLE);
@@ -1612,6 +1620,7 @@ static bool tah_sched_run_core(tah_sched *sched, const tah_turn_params *params) 
         /* The table is the addon's: core calls never move its pages. */
         for (uint32_t at = 0; at < count; at += 1u) {
             tah_sched_outcome(sched, params, &outcomes[at]);
+            ta_event_release(&outcomes[at].event); /* the event of mail core took */
         }
         if (result != TA_OK) {
             /* No memory to take the next input: it waits for the next turn. */

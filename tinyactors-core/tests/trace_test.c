@@ -657,15 +657,24 @@ static void test_span_ids(void) {
  * Trace parents on what an actor sends, through a session image
  */
 
-static ta_trace_parent delivered_trace;
 static long deliveries = 0;
 static ta_external_event_submit_status record_submit(void *self, const ta_external_event_submit_params *params) {
-    (void)self;
+    (void)self, (void)params;
     deliveries += 1;
-    delivered_trace = params->delivery->trace;
     return TA_EXTERNAL_EVENT_ACCEPTED;
 }
 static const ta_external_event_router_vtable router_vtable = { .submit = record_submit };
+
+/* What the last MACROSTEP_BEGIN ran under: its trace context and cause. */
+static ta_trace_context begin_context;
+static ta_step_key begin_cause;
+static void begin_write(void *self, const ta_trace_record *record) {
+    if (record->kind == TA_TRACE_MACROSTEP_BEGIN) {
+        begin_context = record->context;
+        begin_cause = record->cause;
+    }
+    record_write(self, record);
+}
 
 /* a --go--> b, which sends "later" to itself after 10 ms. */
 static const ta_scxml_action_spec later_actions[] = {
@@ -714,25 +723,28 @@ static void test_counters_and_parents_survive_an_image(void) {
           TA_OK);
     ta_session_image_destroy(image);
 
-    /* The pending send kept the parent it was scheduled under. */
+    /* The pending send kept the parent it was scheduled under: it reaches the
+     * session in core, not the router, and the macrostep it starts runs in
+     * the request's trace, caused by the step that scheduled it. The
+     * counters go on: that macrostep is the session's third. */
+    CHECK(use(system, (sink){ .write = begin_write,
+                              .masks = { .kinds = TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN) } }) == TA_OK);
+    journal_reset();
     CHECK(ta_system_set_time(system, 20) == TA_OK);
     uint32_t dispatched = 0;
     bool more = false;
     CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
                                                                     .more_due = &more }) == TA_OK);
-    CHECK(dispatched == 1 && deliveries == 1);
-    CHECK(delivered_trace.context.trace_id_high == 0xaa && delivered_trace.context.trace_id_low == 0xbb);
-    CHECK(delivered_trace.context.flags == TA_TRACE_FLAG_SAMPLED);
-    CHECK(delivered_trace.cause.session == before.session_id);
-    CHECK(delivered_trace.cause.macrostep == 2 && delivered_trace.cause.microstep == 1);
-
-    /* The counters go on: the next macrostep of the session is 3. */
-    CHECK(use(system, recording_sink(TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN))) == TA_OK);
-    journal_reset();
+    CHECK(dispatched == 1 && deliveries == 0);
     r.actor = restored;
+    settle(&r);
+    CHECK(begin_context.trace_id_high == 0xaa && begin_context.trace_id_low == 0xbb);
+    CHECK(begin_context.flags == TA_TRACE_FLAG_SAMPLED);
+    CHECK(begin_cause.session == before.session_id);
+    CHECK(begin_cause.macrostep == 2 && begin_cause.microstep == 1);
     deliver(&r, "go", (ta_trace_parent){0});
     settle(&r);
-    expect_journal("begin 3.0 go; ");
+    expect_journal("begin 3.0 later; begin 4.0 go; ");
     current = (sink){ 0 };
     ta_system_destroy(system);
     traced_system = NULL;

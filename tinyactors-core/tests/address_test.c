@@ -72,6 +72,8 @@ static bool kept_origin_is(router_state *router, const char *name) {
 
 typedef struct {
     bool used;
+    /* The claimed address: equal addresses are the same handle (ADR 0065). */
+    const ta_address *address;
     ta_actor_directory_entry entry;
 } one_directory;
 
@@ -81,13 +83,18 @@ static ta_result dir_claim(void *self, const ta_actor_directory_claim_params *pa
         return TA_ERR_STALE;
     }
     dir->used = true;
+    dir->address = params->address;
     dir->entry = params->entry;
     return TA_OK;
 }
 
+/* Only the sender's address has an entry: the peer it mails is not resident,
+ * so its mail goes through the router. */
 static ta_result dir_resolve(void *self, const ta_actor_directory_resolve_params *params) {
     one_directory *dir = self;
-    *params->out = dir->used ? dir->entry : (ta_actor_directory_entry){ .kind = TA_ACTOR_DIRECTORY_NONE };
+    *params->out = dir->used && params->address == dir->address
+                       ? dir->entry
+                       : (ta_actor_directory_entry){ .kind = TA_ACTOR_DIRECTORY_NONE };
     return TA_OK;
 }
 

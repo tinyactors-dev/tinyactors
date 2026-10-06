@@ -124,10 +124,11 @@ module HostedRelay
 end
 
 module HostedOverflow
-  # hosted_ping/a sends `ping` to hosted_pong/p while the queue is full
-  # (maxQueuedMessages 1, taken by the application's `noise` for p): the
-  # router accepts it into p's overflow (kernel ADR 0003). The application's
-  # own mail is bounded by core's pool, not by this limit. Both families are
+  # hosted_ping/a sends `ping` to hosted_pong/p while the kernel's queue is
+  # full (maxQueuedMessages 1, taken by the application's `noise` for p).
+  # The limit bounds the application's mail only (kernel ADR 0003): mail
+  # between resident actors stays in core, bounded by core's pool (core
+  # ADR 0099), and nothing of it waits in the kernel. Both families are
   # recorded. Answers [hosted, ping, pong].
   def self.start(context, incarnation: 1)
     hosted = context.hosted_system(incarnation: incarnation, max_queued_messages: 1)
@@ -135,14 +136,31 @@ module HostedOverflow
     ping = context.hosted_spawn(hosted, context.hosted_define(hosted, :hosted_ping), family: 'hosted_ping', name: 'a')
     pong = context.hosted_spawn(hosted, context.hosted_define(hosted, :hosted_pong), family: 'hosted_pong', name: 'p')
     context.hosted_run(hosted)
-    context.hosted_post(hosted, ping, 'go')
-    context.hosted_run(hosted, limit: 1) # `go` delivered; a runs it next turn
     context.assert_equal 'ok', context.hosted_post(hosted, pong, 'noise')
-    context.hosted_run(hosted, limit: 1) # a sends `ping`; p takes `noise`
+    context.hosted_post(hosted, ping, 'go')
     boxes = context.hosted_mailboxes(hosted, pong)
-    context.assert_equal 1, boxes[:overflow]
-    context.assert_equal %w[ping], boxes[:mailboxes].first[:events]
+    context.assert_equal [0, %w[noise]], [boxes[:overflow], boxes[:mailboxes].first[:events]]
     [hosted, ping, pong]
+  end
+
+  # hosted_ping/a sends `ping` to hosted_pong/p, which is not resident: its
+  # family has a loader, so the ping waits in p's load, in the kernel, until
+  # the loader answers, which it has not when the process crashes. Answers
+  # the store the crash leaves.
+  def self.crash(context)
+    hosted = context.hosted_system(incarnation: 1)
+    context.hosted_record(hosted, 'hosted_ping', 'hosted_pong')
+    context.hosted_define(hosted, :hosted_pong)
+    ping = context.hosted_spawn(hosted, context.hosted_define(hosted, :hosted_ping), family: 'hosted_ping', name: 'a')
+    context.hosted_set_loader(hosted, 'hosted_pong')
+    context.hosted_run(hosted)
+    context.hosted_post(hosted, ping, 'go')
+    run = context.hosted_run(hosted)
+    context.assert_equal [{ family: 'hosted_pong', name: 'p', why: 'mail' }],
+                         run[:loads].map { |load| load.slice(:family, :name, :why) }
+    store = context.hosted_store(hosted)
+    context.close_hosted(hosted) # a crash: the load is never answered, and nothing more is recorded
+    store
   end
 end
 
@@ -176,17 +194,21 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(hosted_system), 'with room, the same create works'
   end
 
-  # Catches: mail between actors that bypasses the kernel's mailboxes and
-  # router, or a turn that does not run what was posted.
-  scenario 'mail between two actors goes through the kernel' do
+  # Catches: a turn that does not run what was posted, or mail between
+  # resident actors that a turn leaves untaken. That mail stays in core and
+  # reaches neither the router nor a mailbox (core ADR 0099): only the post
+  # is the kernel's delivery.
+  scenario 'mail between two actors goes through core' do
     hosted = hosted_system
     ping = hosted_spawn(hosted, hosted_define(hosted, :hosted_ping), family: 'hosted_ping', name: 'a')
     pong = hosted_spawn(hosted, hosted_define(hosted, :hosted_pong), family: 'hosted_pong', name: 'p')
     hosted_run(hosted)
     assert_equal 'ok', hosted_post(hosted, ping, 'go')
+    delivered = hosted_mailboxes(hosted)[:delivered]
     assert hosted_run(hosted)[:quiet], 'the system is quiet after the mail was delivered'
     assert_equal [:sent], hosted_states(hosted, ping)
     assert_equal [:pinged], hosted_states(hosted, pong)
+    assert_equal delivered + 1, hosted_mailboxes(hosted)[:delivered], 'the kernel delivered the post, not the mail'
     assert_equal 0, close_hosted(hosted)
   end
 
@@ -208,15 +230,18 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(hosted)
   end
 
-  # Catches: a full queue that refuses mail between actors (kernel ADR
-  # 0003); overflow that is delivered before there is room, or never.
-  scenario 'mail between actors waits in the overflow of a full queue, and is delivered once' do
+  # Catches: a full queue that holds back or refuses mail between resident
+  # actors: the limit bounds the application's mail (kernel ADR 0003), and
+  # mail between actors stays in core (core ADR 0099), taken once.
+  scenario 'mail between actors is not held by a full queue, and is taken once' do
     hosted, _ping, pong = HostedOverflow.start(self)
-    assert_equal [:waiting], hosted_states(hosted, pong)
     assert hosted_run(hosted)[:quiet]
     assert_equal [:pinged], hosted_states(hosted, pong)
     boxes = hosted_mailboxes(hosted, pong)
     assert_equal [0, 0], [boxes[:queued], boxes[:overflow]]
+    store = hosted_store(hosted)
+    assert_equal %w[noise ping], store.journals['hosted_pong/p'].map { |entry| entry[:event][:name] },
+                 'p took the ping once, behind the noise posted before it was sent'
     assert_equal 0, close_hosted(hosted)
   end
 
@@ -224,13 +249,10 @@ TinyactorsTest.scenarios 'hosted' do
   # not taken is in no journal, and a's rebuild does not send it again, so
   # delivery is at most once where nothing retries. Catches: a rebuild that
   # resends what a replayed macrostep sent.
-  scenario 'mail in the overflow at a crash is lost unless its sender retries' do
-    hosted, = HostedOverflow.start(self)
-    store = hosted_store(hosted)
-    close_hosted(hosted) # a crash: nothing more is recorded
+  scenario 'mail not taken at a crash is lost unless its sender retries' do
+    store = HostedOverflow.crash(self)
     assert_equal %w[go], store.journals['hosted_ping/a'].map { |entry| entry[:event][:name] }
-    assert_equal %w[noise], store.journals['hosted_pong/p'].map { |entry| entry[:event][:name] },
-                 "p's `noise` ran; the `ping` in its overflow was never taken"
+    assert_equal [], store.journals['hosted_pong/p'], "the `ping` waiting for p's load was never taken"
 
     again = hosted_system(incarnation: 2)
     ping = hosted_restore(again, hosted_define(again, :hosted_ping), 'hosted_ping', 'a', store.journals['hosted_ping/a'])

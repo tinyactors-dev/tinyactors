@@ -165,7 +165,7 @@ static const ta_datamodel_vtable copying = { .name = STR("copying"), DM_MEMBERS,
 static const ta_datamodel_vtable sharing = { .name = STR("sharing"), DM_MEMBERS };
 
 /* ------------------------------------------------------------------------
- * A router and an invoker that keep what reaches them
+ * The mail a session took, and an invoker, that keep what reaches them
  */
 
 enum { KEPT = 8 };
@@ -175,7 +175,7 @@ typedef struct {
     uint32_t count;
 } kept_values;
 
-static kept_values routed;    /* event data the router was offered */
+static kept_values mailed;    /* event data of mail its receiver took */
 static kept_values started;   /* an invocation's params, then its data */
 static kept_values forwarded; /* autoforwarded event data */
 
@@ -195,13 +195,6 @@ static void forget(kept_values *kept) {
     *kept = (kept_values){0};
 }
 
-static ta_external_event_submit_status route(void *self, const ta_external_event_submit_params *params) {
-    (void)self;
-    keep(&routed, &params->delivery->event.data);
-    return TA_EXTERNAL_EVENT_ACCEPTED;
-}
-
-static const ta_external_event_router_vtable router_vtable = { .submit = route };
 
 static ta_op_status invoker_start(void *self, const ta_invoker_start_params *params) {
     (void)self;
@@ -232,8 +225,6 @@ static const ta_invoker_vtable invoker_vtable = { .start = invoker_start, .cance
 static ta_system *create(void) {
     ta_system *system = NULL;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
-    CHECK(ta_system_set_external_event_router(system, (ta_external_event_router){ .v = &router_vtable }) ==
-          TA_OK);
     ta_atom type = 0;
     CHECK(ta_system_intern_atom(system, STR("svc"), &type) == TA_OK);
     CHECK(ta_system_register_invoker(system, type, (ta_invoker){ .v = &invoker_vtable }) == TA_OK);
@@ -255,6 +246,24 @@ static ta_actor_id start(ta_system *system, const ta_scxml_spec *spec, const ta_
 
 static ta_result resume(ta_system *system, ta_actor_id actor) {
     return test_drive_run(system, actor, &(test_drive_run_params){ .budget = 1000 });
+}
+
+/* Runs `actor`'s next input, as a host that records inputs when they are
+ * taken does, and keeps the data of the mail it took: a send to a resident
+ * session, itself included, is queued in core and reaches no router. */
+static void take_mail(ta_system *system, ta_actor_id actor) {
+    ta_input_outcome outcomes[2];
+    uint32_t count = 0;
+    ta_run_status status = TA_RUN_IDLE;
+    CHECK(ta_run(system, &(ta_run_params){ .budget = 1000, .session = actor, .report_taken = true,
+                                           .outcomes = outcomes, .outcome_capacity = 2, .outcome_count = &count,
+                                           .status = &status }) == TA_OK);
+    for (uint32_t index = 0; index < count; index += 1u) {
+        if (outcomes[index].has_event) {
+            keep(&mailed, &outcomes[index].event.data);
+            ta_event_release(&outcomes[index].event);
+        }
+    }
 }
 
 static bool in_state(ta_system *system, ta_actor_id actor, const char *id) {
@@ -285,7 +294,7 @@ static void reset(copy_mode next) {
 
 static void finish(ta_system *system) {
     ta_system_destroy(system);
-    forget(&routed);
+    forget(&mailed);
     forget(&started);
     forget(&forwarded);
     CHECK(live_boxes == 0);
@@ -331,8 +340,9 @@ static void test_send_copies(void) {
     CHECK(resume(system, actor) == TA_OK);
     /* the send to self was copied; the one to #_internal was not */
     CHECK(copies == 1);
-    CHECK(routed.count == 1);
-    box *sent = routed.count == 1 ? box_of(&routed.data[0]) : NULL;
+    take_mail(system, actor);
+    CHECK(mailed.count == 1);
+    box *sent = mailed.count == 1 ? box_of(&mailed.data[0]) : NULL;
     CHECK(sent != NULL && sent != held);
     /* a mutation in the sender does not show in what it sent */
     held->number = 99;
@@ -347,7 +357,8 @@ static void test_without_copy_out_values_are_shared(void) {
     ta_actor_id actor = start(system, &sender, &sharing);
     CHECK(resume(system, actor) == TA_OK);
     CHECK(copies == 0);
-    CHECK(routed.count == 1 && box_of(&routed.data[0]) == held);
+    take_mail(system, actor);
+    CHECK(mailed.count == 1 && box_of(&mailed.data[0]) == held);
     finish(system);
 }
 
@@ -357,7 +368,8 @@ static void test_refused_copy_is_an_execution_error(void) {
     ta_actor_id actor = start(system, &sender, &copying);
     CHECK(resume(system, actor) == TA_OK);
     CHECK(copies == 1);
-    CHECK(routed.count == 0);
+    take_mail(system, actor);
+    CHECK(mailed.count == 0);
     CHECK(in_state(system, actor, "failed"));
     finish(system);
 }
@@ -367,11 +379,13 @@ static void test_copy_out_of_memory_runs_again(void) {
     ta_system *system = create();
     ta_actor_id actor = start(system, &sender, &copying);
     CHECK(resume(system, actor) == TA_ERR_NOMEM);
-    CHECK(routed.count == 0);
+    take_mail(system, actor);
+    CHECK(mailed.count == 0);
     CHECK(ta_actor_release(system, actor) == TA_OK); /* the fault stopped it: it goes on */
     CHECK(resume(system, actor) == TA_OK);
     CHECK(copies == 2);
-    CHECK(routed.count == 1 && box_of(&routed.data[0]) != held);
+    take_mail(system, actor);
+    CHECK(mailed.count == 1 && box_of(&mailed.data[0]) != held);
     CHECK(in_state(system, actor, "start"));
     finish(system);
 }

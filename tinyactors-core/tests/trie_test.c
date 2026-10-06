@@ -460,9 +460,12 @@ static void test_system_event_names(void) {
         { "done", TA_EVENT_NAME_DONE },
         { "done.state", TA_EVENT_NAME_DONE_STATE },
         { "done.invoke", TA_EVENT_NAME_DONE_INVOKE },
+        { "error.execution.capacity", TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY },
+        { "error.execution.capacity.pool", TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_POOL },
+        { "error.execution.capacity.names", TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_NAMES },
     };
     uint32_t nodes = system->event_names.nodes.count;
-    CHECK(nodes == 8);
+    CHECK(nodes == 11);
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(builtins); index += 1u) {
         CHECK(builtins[index].id == index + 1u);
         ta_event_name_id id = 0;

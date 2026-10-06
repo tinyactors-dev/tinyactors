@@ -371,6 +371,15 @@ ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot);
 ta_result ta_actor_layout(ta_definition *definition);
 
 ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
+/*
+ * The session mail to `destination` is for when core queues it itself
+ * (ADR 0099): resident in this system, published and not finished. A
+ * runtime or session ID is resolved as ta_session_route() does, a named
+ * address through the host's directory. Null when there is none, and the
+ * mail goes through the host's router. Never allocates; may run inside a
+ * macrostep.
+ */
+ta_actor *ta_actor_mail_target(ta_system *system, const ta_actor_ref *destination);
 /* The family atom of the resident actor `id`, or 0 when there is none (ADR 0088). */
 ta_atom ta_actor_family_of(const ta_system *system, ta_actor_id id);
 /* A runtime reference to `id` that names its family (ADR 0088). */

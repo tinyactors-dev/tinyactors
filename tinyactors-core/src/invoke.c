@@ -16,6 +16,7 @@
 #include "actor.h"
 #include "system.h"
 #include "run.h"
+#include "generated/ring_records.h"
 
 /*
  * SCXML <invoke>: starting services at the end of a macrostep, cancelling
@@ -716,9 +717,13 @@ typedef struct {
 } ta_invoke_delivery;
 
 /*
- * Offers an event to another session through the router. When the router
- * accepts nothing, the event waits in the deadline index, due now, owned by
- * the sender, so ta_system_dispatch_due() offers it again.
+ * Offers an event to another session: to a resident one, into an envelope
+ * of the pool, on the running macrostep's outgoing list or, outside one, on
+ * the run queue (run.h); to any other, through the router. When nothing
+ * accepts it (no room in the pool or the name area, or a router that
+ * accepted nothing), the event waits in the deadline index, due now, owned
+ * by the sender, so ta_system_dispatch_due() offers it again. Never
+ * allocates inside a macrostep, but for that wait.
  */
 static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *delivery) {
     const ta_actor_sparse_state *sender_sparse = delivery->sender->sparse;
@@ -735,7 +740,19 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     }
     ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
     ta_fault fault = {0};
-    if (system->external_events.v != NULL) {
+    ta_actor *target = ta_actor_mail_target(system, &delivery->destination);
+    if (target != NULL) {
+        ta_record_capacity_resource short_of = (ta_record_capacity_resource)0;
+        status = ta_run_post_mail(system,
+                                  &(ta_run_mail){ .target = target,
+                                                  .event = &delivery->event,
+                                                  .trace = &delivery->trace,
+                                                  .from = delivery->sender->session_id,
+                                                  .source = TA_RECORD_INPUT_SOURCE_MAIL },
+                                  &short_of) == TA_OK
+                     ? TA_EXTERNAL_EVENT_ACCEPTED
+                     : TA_EXTERNAL_EVENT_RETRY;
+    } else if (system->external_events.v != NULL) {
         ta_external_delivery external = { .destination = delivery->destination, .event = delivery->event,
                                           .trace = delivery->trace };
         status = system->external_events.v->submit(system->external_events.self,

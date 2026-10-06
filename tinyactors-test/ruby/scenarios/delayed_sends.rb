@@ -7,9 +7,11 @@
 #
 # - inspection lists an actor's own sends, with where each one goes (D4, D5);
 # - due sends still go out in one global (due, send order), across owners,
-#   and cancelling an owner's front send re-keys it (D2);
-# - a send the router refuses goes back to its owner, marked submitted, and
-#   to a system-owned list when the owner is destroyed or unloaded (D3);
+#   and cancelling an owner's front send re-keys it (D2); one to a resident
+#   actor goes into core's pool, never to the router (core ADR 0099);
+# - a send that finds no room when it falls due (core's pool full) goes
+#   back to its owner, marked submitted, and to a system-owned list when
+#   the owner is destroyed or unloaded (D3);
 # - destroy and unload reserve that room first, so running out of memory
 #   leaves the actor exactly as it was (D3).
 module DelayedSendsAtOwner
@@ -42,18 +44,32 @@ module DelayedSendsAtOwner
     end
   end
 
-  # [receiver, sender] with the sender's one send refused once by the router
-  # at 10s: it is back in the sender's list, submitted, and still due.
+  # Eight sends to itself, due at 5s: falling due, they fill a pool of
+  # eight envelopes until it takes them.
+  def self.filler
+    TinyactorsTest::Chart.define(:filler) do
+      state :filling do
+        on_entry do
+          (1..8).each { |index| send_event 'fill', delay: '5s', id: "f#{index}" }
+        end
+      end
+    end
+  end
+
+  # [receiver, sender] with the sender's one send refused once at 10s, when
+  # it found core's pool of eight full of the filler's sends: it is back in
+  # the sender's list, submitted, and still due.
   def self.refused(context, name: nil)
     context.instance_exec do
-      router = recording_router
+      system_params(pool_envelopes: 8)
+      spawn DelayedSendsAtOwner.filler
       receiver = spawn DelayedSendsAtOwner.receiver
       chart = DelayedSendsAtOwner.sender(:refused, [['tick.one', '10s']], to: "#_scxml_#{receiver.handle}")
       sender = name ? spawn(chart, name: name) : spawn(chart)
-      router.arm_fault(:submit, status: 'retry', count: 1)
       core('ta_system_set_time', ta.system.set_time(system: system_handle, now: 10_000))
-      due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 1))
-      assert_equal [0, true], due.values_at(:dispatched, :more_due), 'the router refused the one due send'
+      due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 100))
+      assert_equal [8, true], due.values_at(:dispatched, :more_due),
+                   'the filler\'s sends filled the pool, and the one due send found no room'
       [receiver, sender]
     end
   end
@@ -118,9 +134,8 @@ TinyactorsTest.scenarios 'delayed sends at their owner' do
     expected = %w[tick.b1 tick.c1 tick.b2 tick.a2 tick.c2]
     assert_equal expected, receiver.data('.inbox'),
                  'by due time, and b1 before c1 at 20s because it was sent first'
-    accepted = router.entries('submit').select { |entry| entry[:status] == 'accepted' }
-    assert_equal expected, accepted.map { |entry| entry.dig(:event, :name_text) },
-                 'the router accepted them in the same order; a refused one kept its place'
+    assert_equal [], router.entries('submit'),
+                 'sends to a resident actor never reach the router: core queues them in that order'
     assert_equal nil, next_deadline, 'nothing is pending'
   end
 

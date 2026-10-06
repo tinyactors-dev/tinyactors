@@ -472,6 +472,29 @@ ta_result ta_actor_find(ta_system *system, const ta_actor_find_params *params) {
     return entry.kind == TA_ACTOR_DIRECTORY_UNLOADED ? TA_ERR_UNLOADED : TA_ERR_NOT_FOUND;
 }
 
+ta_actor *ta_actor_mail_target(ta_system *system, const ta_actor_ref *destination) {
+    ta_actor_ref routed;
+    if (ta_session_route(system, destination, &routed)) {
+        /* A session that is not resident: its address names it. */
+        ta_actor_ref_release(&routed);
+        return NULL;
+    }
+    ta_actor *target = NULL;
+    if (routed.kind == TA_ACTOR_REF_RUNTIME) {
+        target = ta_actor_lookup(system, routed.as.runtime);
+    } else if (routed.kind == TA_ACTOR_REF_NAMED && system->directory.v != NULL &&
+               system->directory.v->resolve != NULL) {
+        ta_actor_directory_entry entry = { .kind = TA_ACTOR_DIRECTORY_NONE };
+        ta_result result = system->directory.v->resolve(
+            system->directory.self,
+            &(ta_actor_directory_resolve_params){ .address = routed.as.named, .out = &entry });
+        if (result == TA_OK && entry.kind == TA_ACTOR_DIRECTORY_RESIDENT) {
+            target = ta_actor_lookup(system, entry.actor);
+        }
+    }
+    return target != NULL && target->published && !target->finished ? target : NULL;
+}
+
 /*
  * A blank actor of `definition`: session storage zeroed, a data-model
  * instance allocated but not initialized, a slot claimed, and a record that
@@ -1142,7 +1165,8 @@ static void ta_actor_release_activation_effects(ta_system *system, ta_actor *act
         }
         ta_delayed_send *send = &effect->as.send.send;
         if (effect->as.send.immediate) {
-            ta_external_event_submit_status status = ta_interpreter_dispatch_delayed(system, send, false);
+            ta_external_event_submit_status status =
+                ta_interpreter_dispatch_delayed(system, send, &(ta_dispatch){ .in_run = false });
             if (status != TA_EXTERNAL_EVENT_RETRY) {
                 continue;
             }

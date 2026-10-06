@@ -66,8 +66,10 @@ async function namedPingPong() {
 
   system.post({ family: 'pp', name: 'ping' }, 'ball');
   await system.flush();
-  // ping got n balls (one from here, n - 1 from pong); pong got n.
-  assert.equal(system.stats().messages.delivered, 2 * n);
+  // ping got n balls (one from here, n - 1 from pong) and finished; pong got
+  // n. Only the one from here went through the kernel: mail between
+  // resident actors stays in core (core ADR 0099).
+  assert.equal(system.stats().messages.delivered, 1);
   assert.equal(system.exists(ping), false, 'ping finished and was destroyed');
   assert.equal(system.findActor({ family: 'pp', name: 'ping' }), undefined);
   assert.deepEqual(hooks.map(([kind]) => kind), ['done']);
@@ -92,7 +94,8 @@ async function runtimeTargets() {
   sender.post('go');
   await system.flush();
   assert.equal(stateOf(receiver), 'got');
-  assert.equal(system.stats().messages.delivered, 2);
+  // Only the post went through the kernel: the send stayed in core (core ADR 0099).
+  assert.equal(system.stats().messages.delivered, 1);
   system.close();
 }
 
@@ -130,8 +133,9 @@ async function namesFollowTheDirectory() {
   system.close();
 }
 
-// An external send to self waits in the mailbox while its macrostep runs
-// and is delivered in a later macrostep, with no TA_ERR_BUSY.
+// An external send to self waits in core while its macrostep runs and is
+// taken in a later macrostep, with no TA_ERR_BUSY; it never reaches the
+// kernel's mailbox (core ADR 0099).
 async function sendToSelf() {
   const faults = [];
   const system = createSystem({ fault: (record) => faults.push(record) });
@@ -145,7 +149,8 @@ async function sendToSelf() {
   await system.flush();
   assert.deepEqual(faults, []);
   assert.equal(stateOf(actor), 'c');
-  assert.equal(system.stats().messages.delivered, 2);
+  assert.equal(system.metrics().system.events_taken, 2);
+  assert.equal(system.stats().messages.delivered, 0);
   system.close();
 }
 
@@ -161,13 +166,13 @@ async function steadyState() {
   system.post({ family: 'ss', name: 'ping' }, 'ball'); // warm-up
   await system.flush();
   const addon = addonCalls(system);
-  const delivered = system.stats().messages.delivered;
+  const taken = system.metrics().system.events_taken;
   for (let round = 0; round < 5; round += 1) {
     system.post({ family: 'ss', name: 'ping' }, 'ball');
     await system.flush();
   }
   // Each round: n balls to ping (one from here), n - 1 to pong.
-  assert.equal(system.stats().messages.delivered - delivered, 5 * (2 * n - 1));
+  assert.equal(system.metrics().system.events_taken - taken, 5 * (2 * n - 1));
   assert.equal(addonCalls(system), addon, 'no allocator call in the addon');
   system.close();
 }
@@ -194,7 +199,9 @@ async function namesCopyNothing() {
       sender.post('go');
       await system.flush();
     }
-    assert.equal(system.stats().messages.delivered, 2 * (rounds + 5));
+    // Each round: the post, through the kernel, and the send, in core.
+    assert.equal(system.stats().messages.delivered, rounds + 5);
+    assert.equal(system.metrics().system.events_taken, 2 * (rounds + 5));
     assert.equal(addonCalls(system), addon, 'no allocator call in the addon');
     const calls = (coreCalls(system) - core) / rounds;
     system.close();

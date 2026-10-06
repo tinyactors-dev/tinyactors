@@ -133,17 +133,20 @@ TinyactorsTest.scenarios 'invocation errors' do
   end
   # Catches: a report that, out of memory, retires the invocation or queues
   # half an event. Each allocation it makes is refused in turn; every
-  # refusal changes nothing, and the report then goes through.
+  # refusal changes nothing, and the report then goes through. Its reason
+  # is longer than a block of the atom table's text, so interning it
+  # allocates whatever the table holds already.
   scenario 'a report that runs out of memory changes nothing' do
     service = scripted_invoker(InvokeErrors::SERVICE)
     client = spawn :error_client
     start = service.started.first
+    reason = "crashed_#{'x' * 4200}"
     failures = 0
     result = nil
     32.times do |failing|
       allocator.arm_fault(after: failing, count: 1)
       report = ta.actor.report_invoke(system: system_handle, actor: start[:parent], invoke_id: start[:invoke_id],
-                                      kind: 'error', error: { reason: 'crashed', ends: true, data: { n: failing } })
+                                      kind: 'error', error: { reason: reason, ends: true, data: { n: failing } })
       allocator.clear_faults
       result = report[:result]
       break unless result == 'err_nomem'
@@ -155,7 +158,7 @@ TinyactorsTest.scenarios 'invocation errors' do
     assert_equal 'ok', result
     assert failures.positive?, 'the report allocates'
     run_system('after the report')
-    assert_equal ['error.communication.invoke.svc.crashed'], client.data('.errors')
+    assert_equal ["error.communication.invoke.svc.#{reason}"], client.data('.errors')
     assert_equal({ n: failures }, client.data('.error_data'))
     assert_equal [], client.observe[:invokes]
   end

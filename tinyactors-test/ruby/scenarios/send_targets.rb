@@ -100,9 +100,11 @@ TinyactorsTest.scenarios 'send targets' do
     assert_equal nil, receiver.data('.outcome'), 'nothing arrives before the delay'
     advance_time 10_000
     assert_equal 'hit', receiver.data('.outcome'), 'the address outlived the value it was parsed from'
-    assert_equal [[{ kind: 'named', family: { name: 'probe' }, name: 'late' },
-                   { kind: 'resident', actor: receiver.handle }, 'accepted']],
-                 router.entries('submit').map { |entry| entry.values_at(:destination, :resolved, :status) }
+    # Core resolved the address through the directory when the send fell
+    # due, and queued it for the resident receiver itself (core ADR 0099).
+    resolved = directory.journal.select { |entry| entry[:op] == 'resolve' && entry[:name] == 'late' }
+    assert_equal [{ kind: 'resident', actor: receiver.handle }], resolved.map { |entry| entry[:out] }.uniq
+    assert_equal [], router.entries('submit')
   end
 
   # Catches: a session URI that stops resolving to its session.

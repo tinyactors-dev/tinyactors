@@ -47,11 +47,13 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
                  'route-neutral reconstruction does not replace the current actor'
 
     sender = spawn :messenger, binding: { peer: '#_actor_freezer/x' }
-    submits_before = router.entries('submit').length
+    directory = instruments.fetch('directory')
+    journal_before = directory.journal.length
     sender.deliver 'greet'
-    submits = router.entries('submit').drop(submits_before)
-    assert_equal replacement_id, submits.last.dig(:resolved, :actor),
+    resolved = directory.journal.drop(journal_before).select { |entry| entry[:op] == 'resolve' && entry[:name] == 'x' }
+    assert_equal replacement_id, resolved.last&.dig(:out, :actor),
                  'a send to the logical address follows the replacement route'
+    assert_equal [], router.entries('submit'), 'and core queues it for the replacement itself (core ADR 0099)'
 
     core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: reconstructed))
     destroy_image(image)
@@ -74,34 +76,61 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
 
   # Catches: an image of a paused actor that loses the current external
   # event or the internal queue, so the macrostep restarts, repeats a
-  # microstep, or skips `counted`.
+  # microstep, or skips `counted`; or one of a paused actor whose macrostep
+  # has sent mail that waits for it to end.
   #
-  # The held `ping` is deliberately not asserted. The relay sends it to
-  # itself, which is a delivery to *this* session and so names a runtime ID
-  # (see ta_send_destination); the router accepted it before the capture, so
-  # it belongs to the host, and ADR 0014 makes fencing inbound events across
-  # a residency change the host's job — not core's, which cannot know what
-  # the host is holding. Hold mode keeps it out of the log so the assertions
-  # below see only what the residency change itself carries. A *delayed*
-  # self-send does survive, because the image carries it and load rebinds it;
-  # `named actors: an unloaded actor keeps its address and its timer` covers
-  # that. Do not re-add a release-and-assert tail here: it would be asserting
-  # that this router re-fences, which no contract asks of it.
+  # The relay sends itself `ping` in the macrostep's first microstep. That
+  # mail waits with the paused macrostep until it ends (core ADR 0099), and
+  # an image does not carry it, so the relay does not unload while it is
+  # paused. A copy of the relay that sends nothing is unloaded and loaded
+  # while paused, and continues where it paused.
   scenario 'a macrostep captured while paused continues where it paused' do
-    recording_router(mode: :hold)
     relay = spawn :relay, name: 'r1'
     relay.post('go')
     3.times { assert_equal 'paused', relay.resume(budget: 1) }
-    before = relay.observe
+    image = capture(relay)
+    assert_equal 'err_busy', unload(relay, image), 'its unsent ping waits in core, which no image carries'
+    destroy_image(image)
+    run_system('finish the relay\'s macrostep')
+    assert_equal ['go', 'n=5', 'counted', 'ping'], relay.data('.log')
+
+    counting = TinyactorsTest::Chart.define(:quiet_relay) do
+      data log: { expr: '[]' }
+      data n: 0
+
+      state :idle do
+        transition on: 'go', target: :counting do
+          assign '.log', '.log + ["go"]'
+          raise_event 'counted'
+        end
+      end
+      state :counting do
+        transition cond: '.n < 5', type: :internal do
+          assign '.n', '.n + 1'
+        end
+        transition cond: '.n >= 5', target: :reported do
+          assign '.log', '.log + ["n=\\(.n)"]'
+        end
+      end
+      state :reported do
+        transition on: 'counted', target: :idle do
+          assign '.log', '.log + ["counted"]'
+        end
+      end
+    end
+    paused = spawn counting, name: 'r2'
+    paused.post('go')
+    3.times { assert_equal 'paused', paused.resume(budget: 1) }
+    before = paused.observe
     assert_equal 2, before.dig(:data, :n)
 
-    cycle_residency(relay)
-    assert_equal before, relay.observe, 'the paused session is restored exactly'
-    assert_equal 'go', event_text(relay.inspect_actor.dig(:current_event, :name))
-    assert_equal 'paused', relay.resume(budget: 1)
-    assert_equal 3, relay.data('.n'), 'the next resume runs the next microstep'
+    cycle_residency(paused)
+    assert_equal before, paused.observe, 'the paused session is restored exactly'
+    assert_equal 'go', event_text(paused.inspect_actor.dig(:current_event, :name))
+    assert_equal 'paused', paused.resume(budget: 1)
+    assert_equal 3, paused.data('.n'), 'the next resume runs the next microstep'
     run_system('finish the macrostep')
-    assert_equal ['go', 'n=5', 'counted'], relay.data('.log')
+    assert_equal ['go', 'n=5', 'counted'], paused.data('.log')
   end
 
   # Catches: restoration that restarts invocations (a duplicate external

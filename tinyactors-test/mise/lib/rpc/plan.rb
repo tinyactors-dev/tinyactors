@@ -525,6 +525,7 @@ module RPC
         "if (#{capacity} != 0 && #{target} == NULL) return false;"
       ]
       condition = [valid(slot, result), "#{target} != NULL"].compact.join(' && ')
+      releases = []
       if element['builtin'] == 'char'
         encode = "tat_encode_buffer(#{target}, #{capacity})"
         schema = 'string'
@@ -533,8 +534,23 @@ module RPC
         count = "(*#{local}.#{slot['needed']} < #{capacity} ? *#{local}.#{slot['needed']} : #{capacity})"
         encode = "tat_encode_array_#{list.key}(b, #{target}, #{count})"
         schema = "#{ctype}[]"
+        releases = element_releases(element, target, count, condition)
       end
-      Output.new(key: slot['name'], setup: setup, encode: guarded(condition, encode), releases: [], schema: schema)
+      Output.new(key: slot['name'], setup: setup, encode: guarded(condition, encode), releases: releases,
+                 schema: schema)
+    end
+
+    # Releases for the owned members of each element a buffer output filled,
+    # once they are encoded (a ta_input_outcome's event, say).
+    def element_releases(element, target, count, condition)
+      members = owned_members(element, "#{target}[at]")
+      return [] if members.empty?
+
+      ["if (#{condition}) {",
+       "    for (uint32_t at = 0; at < #{count}; at += 1u) {",
+       *members.map { |line| "        #{line}" },
+       '    }',
+       '}']
     end
 
     def guarded(condition, expression)

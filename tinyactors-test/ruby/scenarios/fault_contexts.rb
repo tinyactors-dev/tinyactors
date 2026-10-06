@@ -122,14 +122,16 @@ TinyactorsTest.scenarios 'fault contexts' do
 
   # Catches: the same confusion one layer out. A router that refuses a
   # delivery is the host saying "undeliverable", which is test521's rule
-  # again, not an authoring mistake.
+  # again, not an authoring mistake. The ping goes to an address no
+  # resident actor holds: mail to a resident one never reaches the router
+  # (core ADR 0099).
   scenario 'a router that refuses a delivery is a communication error' do
     router = recording_router
     router.arm_fault(:submit, message: 'no route', count: 8)
     pinger = TinyactorsTest::Chart.define(:pinger) do
       data outcome: nil
       state :ready do
-        on_entry { send_event 'ping' }
+        on_entry { send_event 'ping', to: '#_actor_nowhere/n' }
         transition on: 'ping', type: :internal do
           assign '.outcome', '"ping"'
         end

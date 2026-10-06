@@ -41,7 +41,8 @@
  * | cause | 20 | the causing step's key: session (8), macrostep (8), microstep (4) |
  *
  * Every number is little-endian. The step key's `family` is not kept: a
- * trace parent read back has family 0. A short name plus the trace
+ * trace parent read back has family 0, and an envelope that needs it keeps
+ * it in a field of its own (`run.h`). A short name plus the trace
  * parent passes 60 bytes, so a traced envelope usually takes a second
  * chunk. The envelope's flag `TA_ENVELOPE_FLAG_TRACED` says whether its
  * text ends with one; the field's length alone cannot, since another

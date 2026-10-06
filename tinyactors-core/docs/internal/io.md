@@ -35,16 +35,20 @@ system's handle for it, not the text, and a router that keeps a delivery past
 the call retains it with `ta_external_delivery_retain()`, which copies no text
 and cannot fail.
 
-`#_internal` is appended directly to the sender's internal queue. Every external
-SCXML-session delivery becomes a normalized `ta_external_delivery` and is
-submitted to the system's `ta_external_event_router`. The router decides when
-and where to call `ta_actor_deliver()`, including queueing, thread marshalling,
-shard routing, and loading an unloaded named actor. It does not reinterpret
-SCXML target syntax or event metadata.
+`#_internal` is appended directly to the sender's internal queue. A delivery to
+a session resident in this system goes into an envelope of core's pool, on the
+sending macrostep's outgoing list until that macrostep ends, then on the run
+queue (`run.h`, ADR 0099); a send that finds no envelope or no name-area room
+fails as `error.execution.capacity.pool` or `.names`. Any other SCXML-session
+delivery becomes a normalized `ta_external_delivery` and is submitted to the
+system's `ta_external_event_router`. The router decides when and where to call
+`ta_actor_deliver()`, including queueing, thread marshalling, shard routing,
+and loading an unloaded named actor. It does not reinterpret SCXML target
+syntax or event metadata.
 
-Normal invoked-child completion and SCXML parent/child external messages use
-the same router boundary. This gives all core-generated external events one
-scheduling and residency policy without creating a core mailbox or event loop.
+Normal invoked-child completion and SCXML parent/child external messages
+follow the same rule: into the pool for a resident target, through the router
+otherwise.
 
 A delayed send copies the resolved I/O type atom, so it dispatches through the
 same built-in or custom processor after its delay, unload/reload, or persistence
