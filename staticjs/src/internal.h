@@ -136,6 +136,10 @@ bool sjs_hypot_settled(const sjs_hypot *h, double *out);
 void sjs_hypot_add(sjs_hypot *h, double x);
 double sjs_hypot_end(const sjs_hypot *h);
 
+/* JSON's escape of `"`, `\\` or a control character below U+0020 (writer.c),
+ * written to `out` (room for 6): its length. */
+uint32_t sjs_json_escape(uint8_t c, char *out);
+
 /* ========================================================================
  * Values
  */
@@ -557,6 +561,7 @@ typedef enum {
     SJS_BUILTIN_BIGINT_AS_INT_N,
     SJS_BUILTIN_BIGINT_AS_UINT_N,
     SJS_BUILTIN_MAP_GROUP_BY,
+    SJS_BUILTIN_JSON_STRINGIFY,
     SJS_BUILTIN_FUNCTION_COUNT,
     /* Methods, called on a receiver. */
     SJS_METHOD_FIRST = 64,

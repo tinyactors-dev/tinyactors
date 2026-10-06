@@ -60,6 +60,8 @@ JavaScript does, or a fault. Never a different value.
   headers it writes; `mise run test` fails while they are stale, and runs
   the generator's tests (`mise run shapes-test`).
 - `tests/number_test.c`: number formatting, remainder and rounding.
+- `tests/json_test.c`: `JSON.stringify` on random inputs;
+  `--print` gives `diff-node` the same inputs to compare with Node.
 - `mise run test --full` also fails every allocation of every spec case
   (`spec_test --full`), and of a larger program (`api_test --full`).
 

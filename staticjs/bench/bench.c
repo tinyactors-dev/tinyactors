@@ -86,7 +86,8 @@
  * (1n to n multiplied, n! of up to 118,000 bits: Q); eval.map.get (each row's
  * kwh looked up by its id in a map of every row's, built through the API: L)
  * and eval.map.groupBy (the rows by r => r.priority, the PLUCK path, as
- * eval.object.groupBy.pluck: L).
+ * eval.object.groupBy.pluck: L); eval.json.stringify (the rows written as
+ * text: L).
  *
  * write (unit byte): write.rows (n {1000, 10000}, 64 KiB buffer),
  * write.rows.buf64 (10000 rows, a 64-byte buffer), write.numbers (100000
@@ -279,7 +280,8 @@ typedef enum {
     CHECK_IDS_JOINED,   /* STRING_APPEND: every row's id and a comma, 8n bytes */
     CHECK_BIGINT_SUM,   /* n(n + 1) / 2 as a BigInt */
     CHECK_FACTORIAL,    /* n! as a BigInt: its digits, counted */
-    CHECK_MAP_N         /* MUTATION: a map of n entries */
+    CHECK_MAP_N,        /* MUTATION: a map of n entries */
+    CHECK_ROWS_JSON     /* the rows as JSON.stringify writes them */
 } bench_check;
 
 #define MAX_GLOBALS 4
@@ -333,6 +335,18 @@ static const uint32_t SIZES_100000[] = { 100000, 0 };
     "{\"id\":\"r000007\",\"kwh\":25.9,\"priority\":3,\"tags\":[\"a\",\"b\"]},"                              \
     "{\"id\":\"r000008\",\"kwh\":29.6,\"priority\":0,\"tags\":[\"a\",\"b\"]},"                              \
     "{\"id\":\"r000009\",\"kwh\":33.3,\"priority\":1,\"tags\":[\"a\",\"b\"]}]"
+
+#define ROWS_JSON_TEXT \
+    "\"[{\\\"id\\\":\\\"r000000\\\",\\\"kwh\\\":0,\\\"priority\\\":0,\\\"tags\\\":[\\\"a\\\",\\\"b\\\"]}," \
+    "{\\\"id\\\":\\\"r000001\\\",\\\"kwh\\\":3.7,\\\"priority\\\":1,\\\"tags\\\":[\\\"a\\\",\\\"b\\\"]}," \
+    "{\\\"id\\\":\\\"r000002\\\",\\\"kwh\\\":7.4,\\\"priority\\\":2,\\\"tags\\\":[\\\"a\\\",\\\"b\\\"]}," \
+    "{\\\"id\\\":\\\"r000003\\\",\\\"kwh\\\":11.1,\\\"priority\\\":3,\\\"tags\\\":[\\\"a\\\",\\\"b\\\"]}," \
+    "{\\\"id\\\":\\\"r000004\\\",\\\"kwh\\\":14.8,\\\"priority\\\":0,\\\"tags\\\":[\\\"a\\\",\\\"b\\\"]}," \
+    "{\\\"id\\\":\\\"r000005\\\",\\\"kwh\\\":18.5,\\\"priority\\\":1,\\\"tags\\\":[\\\"a\\\",\\\"b\\\"]}," \
+    "{\\\"id\\\":\\\"r000006\\\",\\\"kwh\\\":22.2,\\\"priority\\\":2,\\\"tags\\\":[\\\"a\\\",\\\"b\\\"]}," \
+    "{\\\"id\\\":\\\"r000007\\\",\\\"kwh\\\":25.9,\\\"priority\\\":3,\\\"tags\\\":[\\\"a\\\",\\\"b\\\"]}," \
+    "{\\\"id\\\":\\\"r000008\\\",\\\"kwh\\\":29.6,\\\"priority\\\":0,\\\"tags\\\":[\\\"a\\\",\\\"b\\\"]}," \
+    "{\\\"id\\\":\\\"r000009\\\",\\\"kwh\\\":33.3,\\\"priority\\\":1,\\\"tags\\\":[\\\"a\\\",\\\"b\\\"]}]\""
 
 #define ROWS_VALUE_DESC                                                                                     \
     "[{\"id\":\"r000009\",\"kwh\":33.3,\"priority\":1,\"tags\":[\"a\",\"b\"]},"                               \
@@ -625,6 +639,11 @@ static const bench_case cases[] = {
     { .name = "eval.bigint.factorial", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_Q, .smoke = 10,
       .source = "ns.reduce((a, x) => a * x, 1n)", .globals = { { "ns", FIX_BIGINTS, NULL } }, .expect = "3628800n",
       .check = CHECK_FACTORIAL },
+
+    /* JSON: the rows written as text (L). */
+    { .name = "eval.json.stringify", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "JSON.stringify(rows)", .globals = { { "rows", FIX_ROWS, NULL } }, .expect = ROWS_JSON_TEXT,
+      .check = CHECK_ROWS_JSON },
 
     /* write */
     { .name = "write.rows", .unit = UNIT_BYTE, .op = OP_WRITE, .sizes = SIZES_WRITE_ROWS, .smoke = 10,
@@ -1030,6 +1049,27 @@ static bool make_strings(bench_run *run, sjs_value *out) {
     return true;
 }
 
+/* The rows as JSON.stringify writes them, in a buffer the caller frees:
+ * kwh is a tenth of an integer below 1000, which Number::toString writes
+ * with one decimal at most. */
+static char *rows_json(bench_run *run, size_t *length) {
+    bench_text t = { 0 };
+    text_append(&t, "[", 1);
+    for (uint32_t i = 0; i < run->n; i++) {
+        uint32_t tenths = (uint32_t)((uint64_t)i * 37u % 1000u);
+        char row[96];
+        int n = tenths % 10u == 0
+                    ? snprintf(row, sizeof row, "%s{\"id\":\"%.7s\",\"kwh\":%u,\"priority\":%u,\"tags\":[\"a\",\"b\"]}",
+                               i == 0 ? "" : ",", row_id(run, i), tenths / 10u, i % 4u)
+                    : snprintf(row, sizeof row, "%s{\"id\":\"%.7s\",\"kwh\":%u.%u,\"priority\":%u,\"tags\":[\"a\",\"b\"]}",
+                               i == 0 ? "" : ",", row_id(run, i), tenths / 10u, tenths % 10u, i % 4u);
+        text_append(&t, row, (size_t)n);
+    }
+    text_append(&t, "]", 1);
+    *length = t.length;
+    return t.ptr;
+}
+
 /* The row ids joined by commas: "r000000,r000001,...". */
 static bool make_text(bench_run *run, sjs_value *out) {
     size_t length = (size_t)run->n * 8u - 1u;
@@ -1256,6 +1296,14 @@ static bool check_value(bench_run *run, sjs_value value) {
     case CHECK_INTERSECTION: return expect_shape(run, value, (bench_shape){ SJS_SET, n - half });
     case CHECK_DIFFERENCE: return expect_shape(run, value, (bench_shape){ SJS_SET, half });
     case CHECK_SYNTHETIC: return expect_shape(run, value, (bench_shape){ SJS_OBJECT, run->copies * 3u });
+    case CHECK_ROWS_JSON: {
+        size_t length;
+        char *want = rows_json(run, &length);
+        sjs_str got = sjs_string_text(value);
+        bool same = value.kind == SJS_STRING && got.length == length && memcmp(got.ptr, want, length) == 0;
+        free(want);
+        return same ? true : fail(run, "JSON.stringify: not the rows' text");
+    }
     case CHECK_IDS_JOINED:
         if (value.kind != SJS_STRING || sjs_string_text(value).length != n * 8u) return fail(run, "ids joined: not the expected length");
         return true;

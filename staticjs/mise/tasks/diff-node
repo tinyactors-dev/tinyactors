@@ -1,13 +1,14 @@
 #!/usr/bin/env ruby
-#MISE description="Check the spec against JavaScript itself: every expected value is Node's, every syntax error is one Node rejects, every unsupported case is valid JavaScript, every name error throws in Node; and numbers format and read as in Node (number_test --print)"
+#MISE description="Check the spec against JavaScript itself: every expected value is Node's, every syntax error is one Node rejects, every unsupported case is valid JavaScript, every name error throws in Node; and numbers format and read as in Node (number_test --print), and JSON.stringify writes as in Node (json_test --print)"
 #MISE depends=["build"]
 # vim:ft=ruby
 
 # The rule of staticjs (docs/proposals/staticjs.md): a program it accepts
 # gives the same result as JavaScript, or a fault. tests/diff-node.mjs
 # evaluates every case of tests/spec in Node, and compares what number_test
-# --print computes with what Node computes from the same inputs: 100,000
-# doubles formatted as String(x), 100,000 decimals read as Number(s), ...
+# --print and json_test --print compute with what Node computes from the
+# same inputs: 100,000 doubles formatted as String(x), 100,000 decimals read
+# as Number(s), ..., 100,000 JSON.stringify calls.
 
 require_relative '../staticjs'
 require 'tempfile'
@@ -17,6 +18,9 @@ begin
   printed = system(StaticJS::BUILD.join('number_test').to_s, '--print', '100000', out: numbers.path,
                                                                                   chdir: StaticJS::ROOT.to_s)
   abort 'diff-node: number_test --print failed' unless printed
+  printed = system(StaticJS::BUILD.join('json_test').to_s, '--print', '100000', out: [numbers.path, 'a'],
+                                                                                chdir: StaticJS::ROOT.to_s)
+  abort 'diff-node: json_test --print failed' unless printed
   StaticJS.run('node', '--no-warnings=ExperimentalWarning', '--experimental-vm-modules', 'tests/diff-node.mjs',
                'tests/spec', numbers.path)
 ensure

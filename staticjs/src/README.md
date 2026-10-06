@@ -29,4 +29,6 @@ Implementation modules. Headers here are private; the public API is
                 and `map` and `toSorted` run a callback the matcher tagged in C;
                 the methods that change a variable the function owns
                 (../docs/mutation.md)
-- `writer.c`    a value to JavaScript source, into a buffer of any size
+- `json.c`      JSON.stringify: a leaf over an explicit stack
+- `writer.c`    a value to JavaScript source, into a buffer of any size; JSON's
+                string escapes, which JSON.stringify shares
