@@ -4812,6 +4812,9 @@ ta_result ta_interpreter_reserve(ta_system *system, ta_actor *actor) {
     if (result == TA_OK) {
         result = ta_internal_queue_grow(system, actor, ta_queue_capacity(system, actor));
     }
+    if (result == TA_OK) {
+        result = ta_invoke_reserve(system, actor);
+    }
     return result;
 }
 

@@ -10326,7 +10326,16 @@ TA_PRIVATE ta_result ta_invoke_take_report(ta_system *system, ta_actor *actor, c
 /* The origin of an event from `invoke`: its ID and its invoker's registry index (ADR 0068). */
 TA_PRIVATE ta_origin ta_invoke_origin_of(const ta_system *system, const ta_active_invoke *invoke);
 /* The origin of an event from the actor's active invocation `invoke`; false when there is none. */
-TA_PRIVATE bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_invoke_id invoke, ta_origin *out);
+TA_PRIVATE bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_invoke_id invoke, ta_origin *out);/**
+ * Sizes, at the take, a safe point, what an actor's invocations need in a
+ * macrostep: its sparse state, an invoke table with a record per <invoke>
+ * of its definition, and room for that many pending invocations, so a
+ * macrostep that starts or retires them allocates nothing (ADR 0102).
+ * Allocates; TA_ERR_NOMEM changes nothing it had.
+ */
+TA_PRIVATE ta_result ta_invoke_reserve(struct ta_system *system, struct ta_actor *actor);
+
+
 
 /**
  * @file definition.h
@@ -22486,11 +22495,14 @@ static int64_t ta_invoke_find(const ta_actor *actor, ta_invoke_id invoke) {
     return -1;
 }
 
-static ta_result ta_invoke_grow(ta_system *system, ta_actor_sparse_state *sparse) {
-    if (sparse->invoke_count < sparse->invoke_capacity) {
+static ta_vec *ta_invoke_pending(ta_system *system, ta_actor_sparse_state *sparse);
+
+/* Gives the invoke table room for `capacity` records, keeping those it
+ * holds. Allocates: a safe point only. TA_ERR_NOMEM changes nothing. */
+static ta_result ta_invoke_grow_to(ta_system *system, ta_actor_sparse_state *sparse, uint32_t capacity) {
+    if (sparse->invoke_capacity >= capacity) {
         return TA_OK;
     }
-    uint32_t capacity = sparse->invoke_capacity == 0 ? 4u : sparse->invoke_capacity * 2u;
     ta_active_invoke *invokes = ta_mem_alloc(system->allocator, capacity * sizeof(ta_active_invoke),
                                              _Alignof(ta_active_invoke));
     ta_invoke_meta *meta = ta_mem_alloc(system->allocator, capacity * sizeof(ta_invoke_meta),
@@ -22518,6 +22530,36 @@ static ta_result ta_invoke_grow(ta_system *system, ta_actor_sparse_state *sparse
     sparse->invoke_meta = meta;
     sparse->invoke_capacity = capacity;
     return TA_OK;
+}
+
+/* Room for one more record: the table sized at the take has it, since a
+ * session has at most one invocation per <invoke> of its definition; a
+ * restore outside any macrostep doubles it otherwise. */
+static ta_result ta_invoke_grow(ta_system *system, ta_actor_sparse_state *sparse) {
+    if (sparse->invoke_count < sparse->invoke_capacity) {
+        return TA_OK;
+    }
+    if (system->run.running) {
+        return TA_ERR_NOMEM; /* never inside a macrostep (ADR 0102) */
+    }
+    return ta_invoke_grow_to(system, sparse, sparse->invoke_capacity == 0 ? 4u : sparse->invoke_capacity * 2u);
+}
+
+TA_PRIVATE ta_result ta_invoke_reserve(ta_system *system, ta_actor *actor) {
+    uint32_t decls = actor->definition->invoke_decl_count;
+    if (decls == 0u) {
+        return TA_OK;
+    }
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_result result = ta_invoke_grow_to(system, sparse, decls);
+    if (result == TA_OK) {
+        ta_vec *pending = ta_invoke_pending(system, sparse);
+        result = pending->capacity >= decls ? TA_OK : ta_vec_reserve(pending, decls);
+    }
+    return result;
 }
 
 static void ta_invoke_remove_at(ta_actor_sparse_state *sparse, uint32_t index) {
@@ -37560,6 +37602,9 @@ TA_PRIVATE ta_result ta_interpreter_reserve(ta_system *system, ta_actor *actor) 
     ta_result result = ta_reserve_stop(system, actor);
     if (result == TA_OK) {
         result = ta_internal_queue_grow(system, actor, ta_queue_capacity(system, actor));
+    }
+    if (result == TA_OK) {
+        result = ta_invoke_reserve(system, actor);
     }
     return result;
 }

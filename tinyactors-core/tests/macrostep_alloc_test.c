@@ -8,7 +8,9 @@
  *    the session itself and to #_internal, and a delayed send cancelled in
  *    the same macrostep make no request inside a macrostep;
  * 2. delayed sends that stay pending and fire later make none either;
- * 3. a <raise> beyond `internalQueueEvents` in one macrostep fails as
+ * 3. entering and leaving a state with an <invoke> of a host service, the
+ *    invocation started and cancelled each time, makes none either;
+ * 4. a <raise> beyond `internalQueueEvents` in one macrostep fails as
  *    error.execution.capacity.internal, and the chart goes on, still
  *    without a request inside a macrostep.
  *
@@ -154,6 +156,90 @@ static void test_macrosteps_never_allocate(void) {
     CHECK(test_allocator_finish(&heap) == 0);
 }
 
+static ta_op_status svc_start(void *self, const ta_invoker_start_params *params) {
+    (void)self;
+    *params->service_handle = 1u;
+    return TA_OP_OK;
+}
+
+static ta_op_status svc_cancel(void *self, uint64_t service_handle, ta_fault *fault) {
+    (void)self;
+    (void)service_handle;
+    (void)fault;
+    return TA_OP_OK;
+}
+
+static ta_op_status svc_forward(void *self, const ta_invoker_forward_params *params) {
+    (void)self;
+    (void)params;
+    return TA_OP_OK;
+}
+
+static const ta_invoker_vtable svc_vtable = { .start = svc_start, .cancel = svc_cancel, .forward = svc_forward };
+
+/* `idle --go--> busy`, which invokes a host service, and `busy --go-->
+ * idle`, which cancels it. */
+static const ta_scxml_spec *invoking_chart(void) {
+    static const ta_str to_busy[] = { STR("busy"), {0} };
+    static const ta_str to_idle[] = { STR("idle"), {0} };
+    static const ta_scxml_transition_spec idle[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("go"), .targets = to_busy },
+        {0},
+    };
+    static const ta_scxml_transition_spec busy[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("go"), .targets = to_idle },
+        {0},
+    };
+    static const ta_scxml_invoke_spec invokes[] = {
+        { .kind = TA_SCXML_INVOKE, .type = LIT("svc"), .src = LIT("service") },
+        {0},
+    };
+    static const ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle"), .transitions = idle },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("busy"), .transitions = busy, .invokes = invokes },
+        {0},
+    };
+    static const ta_scxml_spec spec = { .name = STR("invoking"), .datamodel = STR("null"), .states = states };
+    return &spec;
+}
+
+/* Claim 3. */
+static void test_invocations_never_allocate(void) {
+    heap = (test_allocator){ 0 };
+    inside = 0;
+    ta_allocator allocator = { .self = &heap, .v = &watch_vtable };
+    ta_system *system = NULL;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
+    watched = system;
+    ta_atom type = 0;
+    CHECK(ta_system_intern_atom(system, STR("svc"), &type) == TA_OK);
+    CHECK(ta_system_register_invoker(system, type, (ta_invoker){ .v = &svc_vtable }) == TA_OK);
+    ta_definition *compiled = NULL;
+    CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){ .spec = invoking_chart(),
+                                                                               .datamodel = ta_null_datamodel(),
+                                                                               .allocator = allocator,
+                                                                               .out = &compiled }) == TA_OK);
+    ta_definition_id id = 0;
+    CHECK(ta_system_register_definition(system, compiled, &id) == TA_OK);
+    enum { actors = 3 };
+    ta_actor_id actor[actors] = { 0 };
+    for (uint32_t index = 0; index < actors; index += 1u) {
+        CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .out = &actor[index] }) == TA_OK);
+    }
+    drain(system);
+    for (uint32_t round = 0; round < 6u; round += 1u) {
+        round_of(system, actor, actors);
+    }
+    if (inside != 0u) {
+        fprintf(stderr, "allocator requests inside a macrostep: %lu\n", inside);
+    }
+    CHECK(inside == 0u);
+    watched = NULL;
+    ta_system_destroy(system);
+    CHECK(heap.live == 0);
+    CHECK(test_allocator_finish(&heap) == 0);
+}
+
 /* `idle --go-->` raises six events; `error.execution.capacity.internal`
  * leads to `full`. */
 static const ta_scxml_spec *raising_chart(void) {
@@ -181,7 +267,7 @@ static const ta_scxml_spec *raising_chart(void) {
     return &spec;
 }
 
-/* Claim 3. */
+/* Claim 4. */
 static void test_raise_beyond_the_quota_fails(void) {
     heap = (test_allocator){ 0 };
     inside = 0;
@@ -216,6 +302,7 @@ static void test_raise_beyond_the_quota_fails(void) {
 
 int main(void) {
     test_macrosteps_never_allocate();
+    test_invocations_never_allocate();
     test_raise_beyond_the_quota_fails();
     if (failures != 0) {
         fprintf(stderr, "macrostep_alloc_test: %d failure(s)\n", failures);

@@ -150,4 +150,13 @@ ta_result ta_invoke_take_report(ta_system *system, ta_actor *actor, const ta_inv
 /* The origin of an event from `invoke`: its ID and its invoker's registry index (ADR 0068). */
 ta_origin ta_invoke_origin_of(const ta_system *system, const ta_active_invoke *invoke);
 /* The origin of an event from the actor's active invocation `invoke`; false when there is none. */
-bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_invoke_id invoke, ta_origin *out);
+bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_invoke_id invoke, ta_origin *out);/**
+ * Sizes, at the take, a safe point, what an actor's invocations need in a
+ * macrostep: its sparse state, an invoke table with a record per <invoke>
+ * of its definition, and room for that many pending invocations, so a
+ * macrostep that starts or retires them allocates nothing (ADR 0102).
+ * Allocates; TA_ERR_NOMEM changes nothing it had.
+ */
+ta_result ta_invoke_reserve(struct ta_system *system, struct ta_actor *actor);
+
+
