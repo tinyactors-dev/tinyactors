@@ -266,8 +266,6 @@ typedef struct {
     uint32_t token;
     bool has_parent;
     bool completion_pending;
-    /* A microstep paused inside executable content (ADR 0061), or null. */
-    ta_continuation *paused;
 } ta_actor_sparse_state;
 
 struct ta_actor {
@@ -310,6 +308,9 @@ struct ta_actor {
     bool published;
     /* TA_ACTOR_INPUT_*; fills padding. */
     uint8_t input_flags;
+    /* Its slot record (run.h, ta_run_slot), from its take until its input
+     * completes, or 0. Fills padding. */
+    uint16_t slot;
     /* Lifecycle records written for this session, from 1 (ADR 0067; napi
      * ADR 0016): a lifecycle record's key is (session, 0, this count), so
      * each has its own span ID. Sits in the padding after `published`. */

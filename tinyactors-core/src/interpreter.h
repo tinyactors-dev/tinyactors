@@ -137,9 +137,6 @@ typedef struct {
     bool pausable;
     bool in_microstep;
     bool pause_at_start;
-    /* The continuation this call resumed from, which the actor no longer
-     * holds: the run stops into it again, or gives it to the system. */
-    ta_continuation *resumed;
     /* The invocations of the macrostep's states just started: eventless
      * transitions are selected again only if that queued an internal event. */
     bool after_invokes;
@@ -407,7 +404,7 @@ ta_trace_parent ta_interpreter_trace_here(const ta_interpreter *it);
 ta_step_key ta_actor_step(const ta_actor *actor);
 /* Where the actor's stopped macrostep stands, as its last PAUSED or STOPPED
  * record said (ADR 0083); nowhere when no phase is open. */
-ta_trace_position ta_actor_position(const ta_actor *actor);
+ta_trace_position ta_actor_position(const ta_system *system, const ta_actor *actor);
 /* Adds the actor's active states to its definition's occupancy, or takes
  * them away (ADR 0072), when it becomes resident or stops being so. */
 void ta_interpreter_occupancy(ta_actor *actor, bool arrive);

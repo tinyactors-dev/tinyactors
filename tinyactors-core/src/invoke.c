@@ -324,11 +324,13 @@ ta_result ta_invoke_state_entered(ta_interpreter *it, ta_state_id state) {
     if (!has_invokes) {
         return TA_OK;
     }
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(it->system, it->actor);
-    if (sparse == NULL) {
+    /* The take made the sparse state and sized the pending list for every
+     * <invoke> (ta_invoke_reserve): entering a state allocates nothing. */
+    ta_actor_sparse_state *sparse = it->actor->sparse;
+    if (sparse == NULL || sparse->pending_invokes.element_size == 0) {
         return TA_ERR_NOMEM;
     }
-    ta_vec *pending = ta_invoke_pending(it->system, sparse);
+    ta_vec *pending = &sparse->pending_invokes;
     for (uint32_t index = 0; index < pending->count; index += 1) {
         if (*(ta_state_id *)ta_vec_at(pending, index) == state) {
             return TA_OK;

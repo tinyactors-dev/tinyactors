@@ -262,14 +262,6 @@ struct ta_system {
     ta_atom invoke_segment;
     ta_arena scratch;
     /*
-     * What a run that stops inside a phase takes (ADR 0070): a continuation
-     * at least as large as the running definition needs, and a sparse state
-     * for an actor that has none. ta_interpreter_resume reserves both before
-     * it runs anything, so stopping never allocates. Null when taken.
-     */
-    ta_continuation *spare_continuation;
-    ta_actor_sparse_state *spare_sparse;
-    /*
      * The internal queue the next macrostep that needs one takes (ADR
      * 0069): one an actor left empty, keeping no event, when its macrostep
      * ended, at its first capacity. One macrostep runs at a time, so one

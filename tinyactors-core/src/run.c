@@ -3,6 +3,7 @@
 #include "actor.h"
 #include "chunks.h"
 #include "clock.h"
+#include "continuation.h"
 #include "deadline.h"
 #include "envelope.h"
 #include "event.h"
@@ -281,6 +282,7 @@ ta_result ta_run_init(ta_system *system) {
     if (result != TA_OK) {
         return result;
     }
+    ta_vec_init(&system->run.slots, system->allocator, TA_VEC_LAYOUT(ta_run_slot));
     result = ta_waiting_init(&system->run.waiting,
                              &(ta_waiting_params){ .allocator = system->allocator,
                                                    .bound = bound,
@@ -316,6 +318,19 @@ void ta_run_destroy(ta_system *system) {
             ta_value_release(&envelope->content);
         }
     }
+    for (uint32_t index = 0; index < system->run.slots.count; index += 1u) {
+        ta_run_slot *record = ta_vec_at(&system->run.slots, index);
+        if (record->paused) {
+            ta_continuation_release(record->continuation);
+        }
+        if (record->continuation != NULL) {
+            ta_mem_free(system->allocator, record->continuation,
+                        &(ta_allocator_free_params){ .size = record->continuation->bytes,
+                                                     .alignment = TA_CONTINUATION_ALIGN });
+        }
+    }
+    ta_vec_destroy(&system->run.slots);
+    system->run.free_slot = 0u;
     ta_waiting_destroy(&system->run.waiting);
     ta_name_area_destroy(&system->run.names);
     ta_envelope_pool_destroy(pool);
@@ -333,6 +348,82 @@ void ta_run_destroy(ta_system *system) {
     system->run.slot = 0u;
     system->run.event_input = 0u;
     system->run.outgoing = TA_LIST_EMPTY;
+}
+
+/* The record `index` names, 1-based. */
+static ta_run_slot *ta_run_slot_at(const ta_system *system, uint32_t index) {
+    return ta_vec_at(&system->run.slots, index - 1u);
+}
+
+ta_result ta_run_slot_claim(ta_system *system, struct ta_actor *actor, size_t bytes) {
+    uint32_t index = actor->slot;
+    if (index == 0u && system->run.free_slot != 0u) {
+        index = system->run.free_slot;
+    }
+    if (index == 0u && system->run.slots.count >= TA_RUN_SLOTS_MAX) {
+        return TA_ERR_FULL;
+    }
+    ta_continuation *have = index != 0u ? ta_run_slot_at(system, index)->continuation : NULL;
+    ta_continuation *grown = NULL;
+    if (have == NULL || have->bytes < bytes) {
+        if (index != 0u && ta_run_slot_at(system, index)->paused) {
+            return TA_OK; /* stopped into a continuation its definition sized */
+        }
+        grown = ta_mem_alloc(system->allocator, bytes, TA_CONTINUATION_ALIGN);
+        if (grown == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        *grown = (ta_continuation){ .bytes = bytes };
+    }
+    if (index == 0u) {
+        ta_run_slot fresh = { 0 };
+        if (ta_vec_push(&system->run.slots, &fresh) != TA_OK) {
+            ta_mem_free(system->allocator, grown,
+                        &(ta_allocator_free_params){ .size = bytes, .alignment = TA_CONTINUATION_ALIGN });
+            return TA_ERR_NOMEM;
+        }
+        index = system->run.slots.count;
+    } else if (index == system->run.free_slot) {
+        system->run.free_slot = ta_run_slot_at(system, index)->next_free;
+    }
+    ta_run_slot *record = ta_run_slot_at(system, index);
+    if (grown != NULL) {
+        if (record->continuation != NULL) {
+            ta_mem_free(system->allocator, record->continuation,
+                        &(ta_allocator_free_params){ .size = record->continuation->bytes,
+                                                     .alignment = TA_CONTINUATION_ALIGN });
+        }
+        record->continuation = grown;
+    }
+    record->next_free = 0u;
+    actor->slot = (uint16_t)index;
+    return TA_OK;
+}
+
+struct ta_continuation *ta_run_slot_continuation(const ta_system *system, const struct ta_actor *actor) {
+    return actor->slot == 0u ? NULL : ta_run_slot_at(system, actor->slot)->continuation;
+}
+
+bool ta_run_slot_paused(const ta_system *system, const struct ta_actor *actor) {
+    return actor->slot != 0u && ta_run_slot_at(system, actor->slot)->paused;
+}
+
+void ta_run_slot_set_paused(ta_system *system, struct ta_actor *actor, bool paused) {
+    ta_run_slot_at(system, actor->slot)->paused = paused;
+}
+
+void ta_run_slot_release(ta_system *system, struct ta_actor *actor) {
+    if (actor->slot == 0u) {
+        return;
+    }
+    ta_run_slot *record = ta_run_slot_at(system, actor->slot);
+    if (record->paused) {
+        ta_continuation_release(record->continuation);
+        record->paused = false;
+    }
+    record->next_free = system->run.free_slot;
+    system->run.free_slot = actor->slot;
+    actor->slot = 0u;
 }
 
 /* What a refill answered, for the pool and for the name area. */
@@ -1069,11 +1160,13 @@ static void ta_run_drop_input(ta_system *system, ta_actor *actor) {
 
 void ta_run_session_gone(ta_system *system, ta_actor *actor) {
     ta_run_drop_input(system, actor);
+    ta_run_slot_release(system, actor);
     ta_run_return_deferred(system, actor, true);
 }
 
 void ta_run_input_dropped(ta_system *system, ta_actor *actor) {
     ta_run_drop_input(system, actor);
+    ta_run_slot_release(system, actor);
     ta_run_return_deferred(system, actor, false);
 }
 
@@ -1246,6 +1339,7 @@ static void ta_run_complete(ta_run_call *call, ta_actor *actor, ta_run_ended end
     if (actor->input == index) {
         ta_run_forget_input(actor);
     }
+    ta_run_slot_release(system, actor);
     ta_run_return_deferred(system, actor, actor->finished);
 }
 
@@ -1435,12 +1529,17 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
         return ta_run_put_back(call, index, TA_OK);
     } else if (ta_interpreter_reserve(system, actor) != TA_OK) {
         /* What a pause needs is allocated here, at a safe point, so the
-         * macrostep never allocates (ADR 0102). */
+         * macrostep never allocates (ADR 0102). The slot record it may have
+         * claimed goes back to the free list. */
+        ta_run_slot_release(system, actor);
         return ta_run_put_back(call, index, TA_ERR_NOMEM);
     } else {
         ta_result result = envelope->source == TA_RECORD_INPUT_SOURCE_INVOKE_REPORT
                                ? ta_run_bind_report(system, actor, index)
                                : ta_run_bind_event(system, actor, index);
+        if (result != TA_OK) {
+            ta_run_slot_release(system, actor);
+        }
         if (result == TA_ERR_NOMEM) {
             return ta_run_put_back(call, index, result);
         }

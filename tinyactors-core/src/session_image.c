@@ -296,8 +296,8 @@ static size_t ta_image_measure(const ta_system *system, const ta_actor *actor) {
         total += (size_t)sparse->pending_invokes.count * sizeof(ta_state_id);
     }
     total += (size_t)ta_deadline_copy(system, ta_actor_timers(actor), NULL) * sizeof(ta_delayed_send);
-    if (sparse != NULL && sparse->paused != NULL) {
-        total += sparse->paused->bytes + TA_CONTINUATION_ALIGN;
+    if (ta_run_slot_paused(system, actor)) {
+        total += ta_run_slot_continuation(system, actor)->bytes + TA_CONTINUATION_ALIGN;
     }
     return total;
 }
@@ -400,12 +400,13 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         image->pending_invoke_count = count;
     }
 
-    if (sparse != NULL && sparse->paused != NULL) {
-        image->paused = ta_arena_alloc(arena, sparse->paused->bytes, TA_CONTINUATION_ALIGN);
+    if (ta_run_slot_paused(system, actor)) {
+        const ta_continuation *paused = ta_run_slot_continuation(system, actor);
+        image->paused = ta_arena_alloc(arena, paused->bytes, TA_CONTINUATION_ALIGN);
         if (image->paused == NULL) {
             return TA_ERR_NOMEM;
         }
-        ta_mem_copy(image->paused, sparse->paused, sparse->paused->bytes);
+        ta_mem_copy(image->paused, paused, paused->bytes);
     }
 
     uint32_t sends = ta_deadline_copy(system, ta_actor_timers(actor), NULL);
@@ -718,22 +719,20 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
 }
 
 /*
- * Gives the actor its own copy of a microstep the image captured paused
- * inside executable content (ADR 0061 section 4); its snapshots are
- * retained again, so the image keeps its own.
+ * Puts a microstep the image captured paused inside executable content
+ * (ADR 0061 section 4) into a slot record the actor claims (ADR 0103), at
+ * this safe point; its snapshots are retained again, so the image keeps
+ * its own.
  */
 static ta_result ta_image_restore_pause(const ta_session_image *image, ta_actor *actor, ta_system *system) {
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
+    ta_result result = ta_run_slot_claim(system, actor, image->paused->bytes);
+    if (result != TA_OK) {
+        return result;
     }
-    ta_continuation *copy = ta_mem_alloc(system->allocator, image->paused->bytes, TA_CONTINUATION_ALIGN);
-    if (copy == NULL) {
-        return TA_ERR_NOMEM;
-    }
+    ta_continuation *copy = ta_run_slot_continuation(system, actor);
     ta_mem_copy(copy, image->paused, image->paused->bytes);
     ta_continuation_retain(copy);
-    sparse->paused = copy;
+    ta_run_slot_set_paused(system, actor, true);
     return TA_OK;
 }
 

@@ -63,17 +63,12 @@ ROOTS = {
 # runs.
 CUTS = {
   'ta_run_refill' => 'the refill between inputs (run.c): answers at once while system->run.running',
-  'ta_sparse' => 'takes the spare the take reserved while system->run.running, and allocates only outside a run',
   'ta_run_invokes' => 'invocation startup, after the macrostep: system->run.running is false while it runs (ADR 0102 decision 6)'
 }.freeze
 
 # Offenders older than the check, as 'function -> allocator function',
 # each with why it is there. Take an entry off when its call goes.
 ALLOWED = {
-  # ADR 0070's out-of-memory stop, which ADR 0102 decision 9 deletes. The
-  # take reserves both, so at run time these find them in place.
-  'ta_reserve_stop -> ta_mem_alloc' => 'the spare continuation and sparse state, at the start of ta_interpreter_run',
-  'ta_continuation_forget -> ta_mem_free' => 'ta_reserve_stop frees a spare continuation too small for this definition',
   # The internal queue: one per session, sized at the take (ADR 0102 notes),
   # not yet the workspace's fixed queue of decision 4.
   'ta_internal_queue_grow -> ta_mem_alloc' => 'ta_queue_room makes or doubles a queue the take did not size',

@@ -322,9 +322,11 @@
 #include "generated/ring_records.h"
 #include "list.h"
 #include "name_area.h"
+#include "vec.h"
 #include "waiting.h"
 
 struct ta_actor;
+struct ta_continuation;
 struct ta_operator_jump;
 
 /** The longest name the run's buffers hold from system creation: one
@@ -334,6 +336,28 @@ struct ta_operator_jump;
 
 /** Free envelopes, and free name-area chunks, a refill keeps: one page each. */
 #define TA_RUN_RESERVE 64u
+
+/**
+ * A macrostep slot's record (ADR 0103): the storage one session's
+ * execution of one input needs to pause, a continuation sized for its
+ * definition. A session holds one from the take until its input
+ * completes, or it goes; the record then goes back to the system's free
+ * list with its continuation, for the next take. Records are made, and
+ * their continuations grown, only at the take, a safe point; a running
+ * macrostep never calls the allocator for them (ADR 0102).
+ */
+typedef struct {
+    /** Its continuation, or null until the first take that needs one. */
+    struct ta_continuation *continuation;
+    /** The macrostep stopped into `continuation` and has not resumed. */
+    bool paused;
+    /** The next free record while this one is free, 0 for none. */
+    uint32_t next_free;
+} ta_run_slot;
+
+/** The most slot records a system makes: a session names its record in a
+ * 16-bit field. */
+#define TA_RUN_SLOTS_MAX 65535u
 
 /** A system's pool, name area and slot; see the file comment. */
 typedef struct {
@@ -345,6 +369,11 @@ typedef struct {
     ta_waiting waiting;
     /** The taken input whose macrostep a budget paused in the slot, or 0. */
     uint32_t slot;
+    /** The slot records (ta_run_slot), from index 1 = element 0; a session
+     * names its own in `ta_actor.slot`. */
+    ta_vec slots;
+    /** The first free slot record, 0 for none. */
+    uint32_t free_slot;
     /** The input whose macrostep runs inside `ta_run()`, or 0. */
     uint32_t current;
     /** The outgoing list of the macrostep that runs inside `ta_run()`: the
@@ -373,6 +402,30 @@ typedef struct {
      * so writing one never allocates (ADR 0102). Null until then. */
     char *invoke_names;
 } ta_run_state;
+
+/**
+ * Gives `actor` a slot record whose continuation holds `bytes`, its own if
+ * it holds one, a free one, or a new one. Takes a free record before
+ * making one, and grows a record's continuation only while it is not
+ * paused. A safe point only: never while a macrostep runs. Answers
+ * `TA_ERR_NOMEM`, changing nothing, when the allocator refuses, and
+ * `TA_ERR_FULL` past `TA_RUN_SLOTS_MAX` records.
+ */
+ta_result ta_run_slot_claim(ta_system *system, struct ta_actor *actor, size_t bytes);
+/** The continuation of `actor`'s slot record, or null when it holds none.
+ * O(1); allocates nothing. */
+struct ta_continuation *ta_run_slot_continuation(const ta_system *system, const struct ta_actor *actor);
+/** Whether `actor`'s macrostep is stopped in its slot record's
+ * continuation. O(1). */
+bool ta_run_slot_paused(const ta_system *system, const struct ta_actor *actor);
+/** Marks `actor`'s slot record paused or resumed; it must hold one. O(1). */
+void ta_run_slot_set_paused(ta_system *system, struct ta_actor *actor, bool paused);
+/**
+ * Gives `actor`'s slot record back to the free list, with its continuation,
+ * releasing the `<foreach>` snapshots a paused one holds. Does nothing for
+ * an actor that holds none. Never calls the allocator; may run anywhere.
+ */
+void ta_run_slot_release(ta_system *system, struct ta_actor *actor);
 
 /**
  * Sets up the system's empty pool and name area from its parameters.

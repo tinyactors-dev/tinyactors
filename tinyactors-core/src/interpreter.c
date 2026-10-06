@@ -366,8 +366,8 @@ static ta_run_view ta_interpreter_view(const ta_interpreter *it) {
                           .default_history = it->default_history };
 }
 
-ta_trace_position ta_actor_position(const ta_actor *actor) {
-    ta_continuation *saved = actor->sparse == NULL ? NULL : actor->sparse->paused;
+ta_trace_position ta_actor_position(const ta_system *system, const ta_actor *actor) {
+    ta_continuation *saved = ta_run_slot_paused(system, actor) ? ta_run_slot_continuation(system, actor) : NULL;
     if (!actor->macrostep || saved == NULL) {
         return ta_trace_nowhere();
     }
@@ -724,21 +724,11 @@ static uint32_t ta_trace_guard_capacity(const ta_definition *definition) {
  */
 
 /*
- * The actor's sparse state, made when it has none. Inside a macrostep it is
- * the system's spare, which taking the input made sure of (ta_reserve_stop),
- * so a session that finishes or stops there allocates nothing (ADR 0102);
- * outside one it is allocated.
+ * The actor's sparse state, made when it has none. A safe point only: what
+ * a macrostep needs from it is made when the input is taken (ADR 0102).
  */
 static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
-    if (actor->sparse == NULL && system->run.running && system->spare_sparse != NULL) {
-        actor->sparse = system->spare_sparse;
-        system->spare_sparse = NULL;
-        *actor->sparse = (ta_actor_sparse_state){0};
-    }
     if (actor->sparse == NULL) {
-        if (system->run.running) {
-            return NULL; /* never allocates inside a macrostep */
-        }
         actor->sparse = ta_mem_alloc(system->allocator, sizeof(ta_actor_sparse_state),
                                      _Alignof(ta_actor_sparse_state));
         if (actor->sparse == NULL) {
@@ -925,7 +915,7 @@ ta_result ta_interpreter_keep_name(ta_system *system, ta_actor *actor, ta_str te
 static void ta_queue_settle(ta_system *system, ta_actor *actor) {
     ta_internal_queue *queue = actor->internal;
     if (system->run.running || queue == NULL || queue->count != 0 || queue->has_kept ||
-        (actor->sparse != NULL && actor->sparse->paused != NULL) || actor->macrostep) {
+        ta_run_slot_paused(system, actor) || actor->macrostep) {
         return;
     }
     actor->internal = NULL;
@@ -3661,18 +3651,13 @@ static void ta_store_active(ta_interpreter *it) {
  * after its macrostep (ta_interpreter_settle). */
 static void ta_compact_sparse_of(ta_system *system, ta_actor *actor) {
     ta_actor_sparse_state *sparse = actor->sparse;
-    if (system->run.running || sparse == NULL || sparse->paused != NULL || sparse->invoke_count != 0 ||
+    if (system->run.running || sparse == NULL || sparse->invoke_count != 0 ||
         sparse->pending_invokes.count != 0 || sparse->activation_effects != NULL || sparse->has_parent ||
         sparse->completion_pending) {
         return;
     }
     ta_invoke_release(system, actor);
     actor->sparse = NULL;
-    if (system->spare_sparse == NULL) {
-        /* The system's spare again, for the next take that needs one. */
-        system->spare_sparse = sparse;
-        return;
-    }
     ta_mem_free(system->allocator, sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
                                              .alignment = _Alignof(ta_actor_sparse_state) });
@@ -4128,37 +4113,7 @@ static ta_result ta_continuation_capacity(const ta_definition *definition, size_
     return ta_continuation_bytes(&shape, out);
 }
 
-static void ta_continuation_forget(ta_system *system, ta_continuation *continuation) {
-    /* Its frames moved into scratch or were never there: nothing to release. */
-    ta_mem_free(system->allocator, continuation,
-                &(ta_allocator_free_params){ .size = continuation->bytes, .alignment = TA_CONTINUATION_ALIGN });
-}
-
-/* Gives a continuation whose frames moved back into scratch to the system
- * as its spare, keeping the larger of the two. */
-static void ta_continuation_recycle(ta_system *system, ta_continuation *continuation) {
-    ta_continuation *spare = system->spare_continuation;
-    if (spare != NULL && spare->bytes >= continuation->bytes) {
-        ta_continuation_forget(system, continuation);
-        return;
-    }
-    if (spare != NULL) {
-        ta_continuation_forget(system, spare);
-    }
-    system->spare_continuation = continuation;
-}
-
 void ta_interpreter_release_spares(ta_system *system) {
-    if (system->spare_continuation != NULL) {
-        ta_continuation_forget(system, system->spare_continuation);
-        system->spare_continuation = NULL;
-    }
-    if (system->spare_sparse != NULL) {
-        ta_mem_free(system->allocator, system->spare_sparse,
-                    &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
-                                                 .alignment = _Alignof(ta_actor_sparse_state) });
-        system->spare_sparse = NULL;
-    }
     while (system->spare_queue != NULL) {
         ta_internal_queue *spare = system->spare_queue;
         system->spare_queue = spare->next_spare;
@@ -4168,63 +4123,31 @@ void ta_interpreter_release_spares(ta_system *system) {
 }
 
 /*
- * Makes sure a run of the actor can stop anywhere without allocating
- * (ADR 0070): a continuation large enough for its definition and, for an
- * actor without one, a sparse state to hang it from. An actor that stopped
- * before stops into its own continuation again. TA_ERR_NOMEM here happens
- * before the run does anything.
+ * Makes sure a run of the actor can pause anywhere without allocating (ADR
+ * 0102): a slot record whose continuation is large enough for its
+ * definition (ADR 0103). A safe point only: the take calls it.
+ * TA_ERR_NOMEM, or TA_ERR_FULL past the slot records' bound, before the run
+ * does anything.
  */
 static ta_result ta_reserve_stop(ta_system *system, ta_actor *actor) {
-    if (actor->sparse != NULL && actor->sparse->paused != NULL) {
-        return TA_OK;
-    }
     size_t bytes = 0;
     ta_result result = ta_continuation_capacity(actor->definition, &bytes);
     if (result != TA_OK) {
         return result;
     }
-    ta_continuation *spare = system->spare_continuation;
-    if (spare == NULL || spare->bytes < bytes) {
-        ta_continuation *grown = ta_mem_alloc(system->allocator, bytes, TA_CONTINUATION_ALIGN);
-        if (grown == NULL) {
-            return TA_ERR_NOMEM;
-        }
-        *grown = (ta_continuation){ .bytes = bytes };
-        if (spare != NULL) {
-            ta_continuation_forget(system, spare);
-        }
-        system->spare_continuation = grown;
-    }
-    if (actor->sparse == NULL && system->spare_sparse == NULL) {
-        system->spare_sparse = ta_mem_alloc(system->allocator, sizeof(ta_actor_sparse_state),
-                                            _Alignof(ta_actor_sparse_state));
-        if (system->spare_sparse == NULL) {
-            return TA_ERR_NOMEM;
-        }
-    }
-    return TA_OK;
+    return ta_run_slot_claim(system, actor, bytes);
 }
 
 /*
  * Stops the run where `at` stands: the position, the sets and the frames
- * move out of scratch into a continuation the actor owns, the one it
- * resumed from or the system's spare, which ta_reserve_stop provided, so
- * stopping cannot fail. The frames' snapshots move with them.
+ * move out of scratch into the continuation of the actor's slot record,
+ * which the take sized, so stopping cannot fail. The frames' snapshots move
+ * with them.
  */
 static void ta_stop(ta_interpreter *it) {
     ta_system *system = it->system;
     ta_actor *actor = it->actor;
-    if (actor->sparse == NULL) {
-        actor->sparse = system->spare_sparse;
-        system->spare_sparse = NULL;
-        *actor->sparse = (ta_actor_sparse_state){0};
-    }
-    ta_continuation *saved = it->resumed;
-    it->resumed = NULL;
-    if (saved == NULL) {
-        saved = system->spare_continuation;
-        system->spare_continuation = NULL;
-    }
+    ta_continuation *saved = ta_run_slot_continuation(system, actor);
     *saved = (ta_continuation){ .bytes = saved->bytes, .at = it->at, .words = it->words,
                                 .decl_words = it->decl_words, .state_count = it->definition->state_count,
                                 .enabled_count = it->enabled_count, .frame_count = it->exec_count };
@@ -4238,15 +4161,15 @@ static void ta_stop(ta_interpreter *it) {
                 (size_t)saved->state_count * sizeof(ta_state_id));
     ta_mem_copy(ta_continuation_enabled(saved), it->enabled, (size_t)saved->enabled_count * sizeof(ta_transition_id));
     ta_mem_copy(ta_continuation_frames(saved), it->exec_frames, (size_t)saved->frame_count * sizeof(ta_exec_frame));
-    actor->sparse->paused = saved;
+    ta_run_slot_set_paused(system, actor, true);
     it->exec_count = 0;
     it->at = (ta_micro_position){0};
 }
 
-/* Moves a stopped run back into scratch. The actor no longer holds the
- * continuation; the run keeps it, to stop into again or to recycle. */
+/* Moves a stopped run back into scratch. The slot record keeps its
+ * continuation, to stop into again. */
 static void ta_stop_restore(ta_interpreter *it) {
-    ta_continuation *saved = it->actor->sparse->paused;
+    ta_continuation *saved = ta_run_slot_continuation(it->system, it->actor);
     const uint64_t *sets = ta_continuation_sets(saved);
     uint64_t *to[] = { it->active, it->to_exit, it->to_enter, it->default_entry };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(to); index += 1u) {
@@ -4259,12 +4182,10 @@ static void ta_stop_restore(ta_interpreter *it) {
     it->enabled_count = saved->enabled_count;
     it->exec_count = saved->frame_count;
     it->at = saved->at;
-    it->actor->sparse->paused = NULL;
-    it->resumed = saved;
+    ta_run_slot_set_paused(it->system, it->actor, false);
 }
 
-/* Drops a restored stop without finishing it: its snapshots are released,
- * and its continuation goes back to the system. */
+/* Drops a restored stop without finishing it: its snapshots are released. */
 static void ta_stop_drop(ta_interpreter *it) {
     while (it->exec_count > 0) {
         ta_exec_frame *frame = &it->exec_frames[--it->exec_count];
@@ -4273,10 +4194,6 @@ static void ta_stop_drop(ta_interpreter *it) {
         }
     }
     it->at = (ta_micro_position){0};
-    if (it->resumed != NULL) {
-        ta_continuation_recycle(it->system, it->resumed);
-        it->resumed = NULL;
-    }
 }
 
 /*
@@ -4408,7 +4325,7 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     }
     ta_bits_clear(it, it->history_busy);
     ta_load_active(it);
-    if (actor->sparse != NULL && actor->sparse->paused != NULL) {
+    if (ta_run_slot_paused(system, actor)) {
         ta_stop_restore(it); /* the live set, too, is the stopped run's */
     }
     actor->live_active = it->active;
@@ -4496,7 +4413,7 @@ ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, ta_interpreter_
     params->steps = 0;
     params->actions = 0;
     params->ignored = false;
-    if (actor->finished && (actor->sparse == NULL || actor->sparse->paused == NULL)) {
+    if (actor->finished && !ta_run_slot_paused(system, actor)) {
         params->status = TA_MACROSTEP_FINISHED;
         return TA_OK;
     }
@@ -4507,10 +4424,9 @@ ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, ta_interpreter_
     }
     ta_interpreter interpreter;
     ta_interpreter *it = &interpreter;
-    ta_result result = ta_reserve_stop(system, actor);
-    if (result == TA_OK) {
-        result = ta_interpreter_init(it, system, actor);
-    }
+    /* The take claimed its slot record, at a safe point (ta_interpreter_reserve). */
+    ta_result result = ta_run_slot_continuation(system, actor) == NULL ? TA_ERR_NOMEM
+                                                                       : ta_interpreter_init(it, system, actor);
     if (result != TA_OK) {
         return result;
     }
@@ -4540,9 +4456,6 @@ ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, ta_interpreter_
     }
     /* The live set lives in scratch memory; between calls In() derives from the configuration. */
     actor->live_active = NULL;
-    if (it->resumed != NULL) {
-        ta_continuation_recycle(system, it->resumed);
-    }
     /* An empty queue goes; queued or kept events, or a stopped run, keep it. */
     ta_queue_settle(system, actor);
     return result;
@@ -4792,16 +4705,11 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
         return;
     }
     ta_invoke_release(system, actor); /* Invoke: cancel services, free bookkeeping. */
-    ta_continuation_free(system->allocator, &actor->sparse->paused);
+    ta_run_slot_release(system, actor);
     ta_queue_settle(system, actor); /* empty, and no longer paused */
-    if (system->spare_sparse == NULL) {
-        /* The system's spare again: a later take may need one. */
-        system->spare_sparse = actor->sparse;
-    } else {
-        ta_mem_free(system->allocator, actor->sparse,
-                    &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
-                                                 .alignment = _Alignof(ta_actor_sparse_state) });
-    }
+    ta_mem_free(system->allocator, actor->sparse,
+                &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
+                                             .alignment = _Alignof(ta_actor_sparse_state) });
     actor->sparse = NULL;
 }
 
@@ -4903,7 +4811,7 @@ ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor) {
     }
     /* A run stopped inside a step, or a bootstrap whose microstep has not
      * completed, holds no configuration an idle actor could keep. */
-    if (!actor->bootstrapped || (actor->sparse != NULL && actor->sparse->paused != NULL)) {
+    if (!actor->bootstrapped || ta_run_slot_paused(system, actor)) {
         return TA_ERR_BUSY;
     }
     ta_interpreter interpreter;
