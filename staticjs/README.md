@@ -163,7 +163,7 @@ Built-ins:
 | arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
 | strings | `endsWith` `includes` `indexOf` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim`, `length`, indexing |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
-| functions | `String` `Boolean` `Array.isArray` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN` |
+| functions | `String` `Boolean` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN` |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign`, and its constants |
 
 The embedder can add functions (`sjs_function_native`), such as SCXML's

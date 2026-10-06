@@ -21,6 +21,7 @@ static const function_entry FUNCTION_TABLE[] = {
     { "", "String", SJS_BUILTIN_STRING },
     { "", "Boolean", SJS_BUILTIN_BOOLEAN },
     { "Array", "isArray", SJS_BUILTIN_ARRAY_IS_ARRAY },
+    { "Array", "of", SJS_BUILTIN_ARRAY_OF },
     { "Object", "keys", SJS_BUILTIN_OBJECT_KEYS },
     { "Object", "values", SJS_BUILTIN_OBJECT_VALUES },
     { "Object", "entries", SJS_BUILTIN_OBJECT_ENTRIES },
@@ -162,6 +163,7 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_STRING),
     FUNCTION_VALUE(SJS_BUILTIN_BOOLEAN),
     FUNCTION_VALUE(SJS_BUILTIN_ARRAY_IS_ARRAY),
+    FUNCTION_VALUE(SJS_BUILTIN_ARRAY_OF),
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_KEYS),
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_VALUES),
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_ENTRIES),
@@ -533,6 +535,18 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     case SJS_BUILTIN_ARRAY_IS_ARRAY:
         call->result = sjs_boolean(x.kind == SJS_ARRAY);
         return SJS_OK;
+    case SJS_BUILTIN_ARRAY_OF: {
+        sjs_array *a;
+        if (new_array(vm, call->count, &a) != SJS_OK) return SJS_ERR_PROGRAM;
+        call->result = sjs_heap_value(SJS_ARRAY, &a->h);
+        for (uint32_t i = 0; i < call->count; i++) {
+            sjs_ref(call->args[i]);
+            a->items[i] = call->args[i];
+            a->length = i + 1;
+        }
+        call->cost = call->count;
+        return SJS_OK;
+    }
     case SJS_BUILTIN_OBJECT_KEYS:
     case SJS_BUILTIN_OBJECT_VALUES:
     case SJS_BUILTIN_OBJECT_ENTRIES:
