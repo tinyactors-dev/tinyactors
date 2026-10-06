@@ -426,9 +426,13 @@ String`x`
 017
 --- error unsupported legacy octal
 
-=== a BigInt
-10n
---- error unsupported BigInt
+=== a legacy octal number as a BigInt
+01n
+--- error syntax cannot start with 0
+
+=== a numeric separator after a leading 0
+0_1
+--- error syntax separator
 
 === an unknown name
 nope + 1

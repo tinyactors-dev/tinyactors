@@ -139,7 +139,8 @@ enum {
     SJS_HEAP_SET,
     SJS_HEAP_CLOSURE,
     SJS_HEAP_NATIVE,
-    SJS_HEAP_BUILTIN
+    SJS_HEAP_BUILTIN,
+    SJS_HEAP_BIGINT
 };
 
 /* refs of a value that is never freed: built-in functions. */
@@ -362,6 +363,56 @@ sjs_str sjs_typeof(sjs_value v);
 sjs_result sjs_to_string(sjs_context *context, sjs_value v, sjs_string **out);
 /* ToPropertyKey for primitives. */
 sjs_result sjs_to_key(sjs_context *context, sjs_value v, sjs_string **out);
+
+/* ========================================================================
+ * BigInts (bigint.c)
+ */
+
+#define SJS_BIGINT_NEGATIVE 1u   /* h.flags of a BigInt below 0n */
+
+/* An integer of any size up to max_bigint_bits: a sign and a magnitude in
+ * 32-bit limbs, least significant first. Immutable once shared, as every
+ * value is; nothing else in it points anywhere, so releasing it frees it. */
+typedef struct {
+    sjs_heap h;
+    uint32_t length;    /* limbs in use; the top one is not 0; 0 for 0n, which is never negative */
+    uint32_t capacity;  /* limbs allocated */
+    uint32_t limbs[];
+} sjs_bigint;
+
+#define SJS_AS_BIGINT(v) ((sjs_bigint *)(void *)(v).as.heap)
+
+static inline bool sjs_bigint_negative(const sjs_bigint *b) {
+    return (b->h.flags & SJS_BIGINT_NEGATIVE) != 0;
+}
+
+/* Digits of a BigInt in a radix (2, 8, 10 or 16), each a digit of it,
+ * leading zeros allowed, and a sign. */
+typedef struct {
+    sjs_str digits;
+    uint32_t radix;
+    bool negative;
+} sjs_bigint_digits;
+
+/* StringToBigInt's syntax: white space around decimal digits with an
+ * optional sign, or 0x, 0o or 0b and digits; empty or white space alone is
+ * 0n. False for any other text (a SyntaxError in JavaScript). */
+bool sjs_bigint_parse(sjs_str text, sjs_bigint_digits *out);
+/* The BigInt of digits; SJS_ERR_LIMIT past max_bigint_bits. */
+sjs_result sjs_bigint_from_digits(sjs_context *context, sjs_bigint_digits digits, sjs_value *out);
+/* A BigInt's text in a radix from 2 to 36, as toString(radix) gives it. */
+typedef struct {
+    const sjs_bigint *value;
+    uint32_t radix;
+} sjs_bigint_radix;
+/* Append the text to `out`, allocating from `allocator`. */
+sjs_result sjs_bigint_format(const sjs_allocator *allocator, sjs_bigint_radix r, sjs_buf *out);
+sjs_result sjs_bigint_to_string(sjs_context *context, sjs_bigint_radix r, sjs_string **out);
+/* Fuel for reading or writing the text of a BigInt of `limbs` limbs in a
+ * radix: linear in a power of two, quadratic in any other. */
+uint64_t sjs_bigint_text_cost(uint64_t limbs, uint32_t radix);
+bool sjs_bigint_equal(const sjs_bigint *a, const sjs_bigint *b);
+uint32_t sjs_bigint_hash(const sjs_bigint *b);
 
 /* ========================================================================
  * Built-ins

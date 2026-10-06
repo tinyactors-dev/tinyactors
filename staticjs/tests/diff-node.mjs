@@ -24,6 +24,7 @@ function show(v) {
   if (v === null) return 'null';
   if (typeof v === 'boolean') return String(v);
   if (typeof v === 'number') return Object.is(v, -0) ? '-0' : String(v);
+  if (typeof v === 'bigint') return `${v}n`;
   if (typeof v === 'string') return JSON.stringify(v);
   if (typeof v === 'function') return '<function>';
   if (Array.isArray(v)) return '[' + v.map(show).join(',') + ']';

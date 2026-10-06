@@ -19,7 +19,7 @@ enum {
 };
 
 /* Substates of a number. */
-enum { N_ZERO = 0, N_INTEGER, N_FRACTION, N_EXPONENT_START, N_EXPONENT_SIGN, N_EXPONENT, N_RADIX };
+enum { N_ZERO = 0, N_INTEGER, N_FRACTION, N_EXPONENT_START, N_EXPONENT_SIGN, N_EXPONENT, N_RADIX, N_LEGACY, N_BIGINT };
 
 /* Substates of a string or template. */
 enum {
@@ -345,6 +345,23 @@ static step number_separator(sjs_lexer *lexer) {
     return TAKEN;
 }
 
+/* The `n` of a BigInt literal, after its digits (`zero`: the digit of
+ * `0n`, which the text does not hold yet). The literal ends at the next
+ * byte, which must not continue it. */
+static step start_bigint(sjs_lexer *lexer, const uint8_t *zero) {
+    lexer->substate = N_BIGINT;
+    if (zero != NULL) return text_append(lexer, zero, 1);
+    return TAKEN;
+}
+
+static step end_bigint(sjs_lexer *lexer) {
+    sjs_token token = { 0 };
+    token.kind = SJS_TOKEN_NUMBER;
+    token.bigint = (uint8_t)lexer->radix;
+    token.text = (sjs_str){ (const char *)lexer->text.ptr, lexer->text.length };
+    return emit(lexer, &token);
+}
+
 static step number_byte(sjs_lexer *lexer, uint8_t c) {
     switch (lexer->substate) {
     case N_ZERO:
@@ -354,8 +371,17 @@ static step number_byte(sjs_lexer *lexer, uint8_t c) {
             lexer->seen_digit = false;
             return TAKEN;
         }
-        if (is_digit(c) || c == '_') return lex_fail(lexer, SJS_ERROR_UNSUPPORTED, "staticjs does not read legacy octal numbers");
-        if (c == 'n') return lex_fail(lexer, SJS_ERROR_UNSUPPORTED, "staticjs has no BigInt");
+        if (c == '_') return lex_fail(lexer, SJS_ERROR_SYNTAX, "a numeric separator cannot follow a leading 0");
+        if (is_digit(c)) {
+            /* A legacy octal number, or `01n`, which is not JavaScript:
+             * which one, its last digit tells. */
+            lexer->substate = N_LEGACY;
+            return TAKEN;
+        }
+        if (c == 'n') {
+            uint8_t zero = '0';
+            return start_bigint(lexer, &zero);
+        }
         if (c == '.') {
             lexer->substate = N_FRACTION;
             lexer->seen_digit = false;
@@ -370,8 +396,8 @@ static step number_byte(sjs_lexer *lexer, uint8_t c) {
     case N_INTEGER:
         if (is_digit(c)) return number_digit(lexer, c);
         if (c == '_') return number_separator(lexer);
-        if (c == 'n') return lex_fail(lexer, SJS_ERROR_UNSUPPORTED, "staticjs has no BigInt");
         if (lexer->last_separator) return lex_fail(lexer, SJS_ERROR_SYNTAX, "a numeric separator must sit between digits");
+        if (c == 'n') return start_bigint(lexer, NULL);
         if (c == '.') {
             lexer->substate = N_FRACTION;
             lexer->seen_digit = false;
@@ -428,6 +454,15 @@ static step number_byte(sjs_lexer *lexer, uint8_t c) {
         }
         if (end_number(lexer, c, false) == STOP) return STOP;
         return AGAIN;
+    case N_LEGACY:
+        if (is_digit(c)) return TAKEN;
+        if (c == 'n') return lex_fail(lexer, SJS_ERROR_SYNTAX, "a BigInt literal cannot start with 0");
+        if (c == '_') return lex_fail(lexer, SJS_ERROR_SYNTAX, "a numeric separator cannot follow a leading 0");
+        return lex_fail(lexer, SJS_ERROR_UNSUPPORTED, "staticjs does not read legacy octal numbers");
+    case N_BIGINT:
+        if (is_name_part(c) || c == '\\') return lex_fail(lexer, SJS_ERROR_SYNTAX, "a number cannot be followed by a name or a digit");
+        if (end_bigint(lexer) == STOP) return STOP;
+        return AGAIN;
     default: { /* N_RADIX */
         int32_t v = hex_value(c);
         if (v >= 0 && (uint32_t)v < lexer->radix) {
@@ -436,9 +471,9 @@ static step number_byte(sjs_lexer *lexer, uint8_t c) {
             return text_append(lexer, &c, 1);
         }
         if (c == '_') return number_separator(lexer);
-        if (c == 'n') return lex_fail(lexer, SJS_ERROR_UNSUPPORTED, "staticjs has no BigInt");
         if (!lexer->seen_digit) return lex_fail(lexer, SJS_ERROR_SYNTAX, "a number needs digits after its prefix");
         if (lexer->last_separator) return lex_fail(lexer, SJS_ERROR_SYNTAX, "a numeric separator must sit between digits");
+        if (c == 'n') return start_bigint(lexer, NULL);
         if (is_name_part(c) || c == '\\') return lex_fail(lexer, SJS_ERROR_SYNTAX, "a number cannot be followed by a name or a digit");
         sjs_token token = { 0 };
         token.kind = SJS_TOKEN_NUMBER;
@@ -859,9 +894,11 @@ sjs_result sjs_lexer_finish(sjs_lexer *lexer) {
         s = end_name(lexer);
         break;
     case L_NUMBER:
-        if (lexer->substate == N_RADIX) {
+        if (lexer->substate == N_RADIX || lexer->substate == N_LEGACY) {
             /* A byte that cannot be a digit ends it. */
             s = number_byte(lexer, ' ');
+        } else if (lexer->substate == N_BIGINT) {
+            s = end_bigint(lexer);
         } else {
             if (lexer->substate == N_EXPONENT && lexer->exponent_digits > 0) {
                 lexer->exponent += lexer->exponent_sign * (int32_t)lexer->escape_value;

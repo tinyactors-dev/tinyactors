@@ -619,6 +619,17 @@ static sjs_result value_constant(sjs_compiler *c, sjs_value value, uint32_t *ind
     return r;
 }
 
+/* A BigInt literal, made once, as a constant of the program. */
+static sjs_result bigint_constant(sjs_compiler *c, const sjs_event *e) {
+    sjs_value value;
+    sjs_result r = sjs_bigint_from_digits(c->context, (sjs_bigint_digits){ e->text, e->count, false }, &value);
+    if (r == SJS_ERR_LIMIT) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_LIMIT, "a BigInt has more bits than max_bigint_bits" });
+    uint32_t index;
+    if (r == SJS_OK) r = value_constant(c, value, &index);
+    if (r != SJS_OK) return fail_result(c, r, e->at);
+    return op32(c, ins(SJS_OP_CONSTANT, index, e->at));
+}
+
 static sjs_result string_constant(sjs_compiler *c, const sjs_event *e, uint32_t *index) {
     sjs_str text = e->text;
     sjs_position at = e->at;
@@ -2671,6 +2682,8 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
     switch (e->kind) {
     case SJS_EV_NUMBER:
         return number_constant(c, e->number, e->at);
+    case SJS_EV_BIGINT:
+        return bigint_constant(c, e);
     case SJS_EV_STRING: {
         uint32_t index;
         if (string_constant(c, e, &index) != SJS_OK) return SJS_ERR_PROGRAM;

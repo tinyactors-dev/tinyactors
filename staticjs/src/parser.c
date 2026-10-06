@@ -62,6 +62,7 @@ typedef struct {
     uint8_t newline_before;
     uint8_t lone_surrogate;
     uint8_t escaped;
+    uint8_t bigint;
     sjs_position at;
     double number;
     uint32_t text_offset;
@@ -480,6 +481,18 @@ static sjs_event counted(uint8_t kind, uint32_t count, event_place place) {
 static sjs_event texted(uint8_t kind, sjs_str text, event_place place) {
     sjs_event e = counted(kind, 0, place);
     e.text = text;
+    return e;
+}
+
+/* A number literal's event: NUMBER, or BIGINT with its digits and radix. */
+static sjs_event number_event(const sjs_parser *p, const queued_token *t, event_place place) {
+    if (t->bigint != 0) {
+        sjs_event e = texted(SJS_EV_BIGINT, token_text(p, t), place);
+        e.count = t->bigint;
+        return e;
+    }
+    sjs_event e = counted(SJS_EV_NUMBER, 0, place);
+    e.number = t->number;
     return e;
 }
 
@@ -1412,8 +1425,7 @@ static handled operand(sjs_parser *p, const queued_token *t) {
     frame *f = top_frame(p);
     switch (t->kind) {
     case SJS_TOKEN_NUMBER: {
-        sjs_event e = counted(SJS_EV_NUMBER, 0, own_place(p, t->at));
-        e.number = t->number;
+        sjs_event e = number_event(p, t, own_place(p, t->at));
         p->expect = E_OPERATOR;
         return send(p, &e);
     }
@@ -2356,12 +2368,19 @@ static handled pattern_key_token(sjs_parser *p, const queued_token *t) {
         f->state = PO_KEY_NAME;
         return H_TAKEN;
     }
-    if (t->kind == SJS_TOKEN_NUMBER) {
+    if (t->kind == SJS_TOKEN_NUMBER && t->bigint == 0) {
         /* The key is the number's text: `{1.50: a}` reads "1.5". */
         char text[32];
         uint32_t length = sjs_number_format(t->number, text);
         f->state = PO_COLON;
         return send_event(p, texted(SJS_EV_PATTERN_KEY, (sjs_str){ text, length }, frame_place(f, t->at)));
+    }
+    if (t->kind == SJS_TOKEN_NUMBER) {
+        /* A decimal BigInt's digits are its key's text: `{10n: a}` reads
+         * "10" (a decimal literal has no leading 0). */
+        if (t->bigint != 10u) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs reads a BigInt key of a pattern in decimal only" });
+        f->state = PO_COLON;
+        return send_event(p, texted(SJS_EV_PATTERN_KEY, token_text(p, t), frame_place(f, t->at)));
     }
     if (is_punctuator(t, SJS_P_LBRACKET)) {
         if (push_frame(p, F_COMPUTED_KEY, no_node(t->at)) == H_STOP) return H_STOP;
@@ -2632,8 +2651,7 @@ static handled object_key_token(sjs_parser *p, const queued_token *t) {
             return send_event(p, texted(SJS_EV_KEY, token_text(p, t), frame_place(f, t->at)));
         }
         if (t->kind == SJS_TOKEN_NUMBER) {
-            sjs_event e = counted(SJS_EV_NUMBER, 0, own_place(p, t->at));
-            e.number = t->number;
+            sjs_event e = number_event(p, t, own_place(p, t->at));
             if (send(p, &e) == H_STOP) return H_STOP;
             f->state = O_COLON;
             return send_kind(p, SJS_EV_COMPUTED_KEY, frame_place(f, t->at));
@@ -3736,6 +3754,7 @@ static sjs_result on_token(void *self, const sjs_token *token) {
     q.newline_before = token->newline_before;
     q.lone_surrogate = token->lone_surrogate;
     q.escaped = token->escaped;
+    q.bigint = token->bigint;
     q.at = token->at;
     q.number = token->number;
     q.text_offset = p->queue_text.length;
