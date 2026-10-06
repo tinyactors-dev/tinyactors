@@ -2653,18 +2653,19 @@ static sjs_result end(sjs_compiler *c, const sjs_event *e) {
 }
 
 static sjs_result event(sjs_compiler *c, const sjs_event *e) {
-    /* `String` is a function as well as a namespace: unless a member
-     * follows, it is the function, read where the name was. */
-    if (c->space == NS_STRING && e->kind != SJS_EV_MEMBER) {
+    /* `String` and `Number` are functions as well as namespaces: unless a
+     * member follows, each is the function, read where the name was. */
+    if ((c->space == NS_STRING || c->space == NS_NUMBER) && e->kind != SJS_EV_MEMBER) {
+        sjs_builtin_id id = c->space == NS_STRING ? SJS_BUILTIN_STRING : SJS_BUILTIN_NUMBER;
         c->space = NS_NONE;
         uint32_t index;
-        if (value_constant(c, sjs_builtin_value(SJS_BUILTIN_STRING), &index) != SJS_OK) return compile_fail(c, c->space_at, (sjs_problem){ SJS_ERROR_MEMORY, "out of memory" });
+        if (value_constant(c, sjs_builtin_value(id), &index) != SJS_OK) return compile_fail(c, c->space_at, (sjs_problem){ SJS_ERROR_MEMORY, "out of memory" });
         if (op32(c, ins(SJS_OP_CONSTANT, index, c->space_at)) != SJS_OK) return SJS_ERR_PROGRAM;
     }
     if (c->pending_read != 0) note_use(c, e->kind); /* MUTATION */
     if (c->paths.length != 0) paths_before(c, e); /* MUTATION */
     if (c->space != NS_NONE && e->kind != SJS_EV_MEMBER) {
-        return compile_fail(c, c->space_at, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "Math, Object, Number and Array are used only as Math.name" });
+        return compile_fail(c, c->space_at, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "Math, Object and Array are used only as Math.name" });
     }
     if (is_pattern_event(e->kind)) return pattern_event(c, e);
     switch (e->kind) {

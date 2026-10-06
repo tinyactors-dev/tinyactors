@@ -177,6 +177,18 @@ const numberChecks = {
     const want = Number(rest.slice(space + 1));
     return sameDouble(rest.slice(0, space), want) ? null : `Number: staticjs ${rest.slice(0, space)}, JavaScript ${toHex(want)}`;
   },
+  N(rest) { // <bits> <bits> <text>: Number(text), parseFloat(text)
+    const [number, float] = rest.split(' ', 2);
+    const text = rest.slice(number.length + float.length + 2);
+    if (!sameDouble(number, Number(text))) return `Number: staticjs ${number}, JavaScript ${toHex(Number(text))}`;
+    if (!sameDouble(float, parseFloat(text))) return `parseFloat: staticjs ${float}, JavaScript ${toHex(parseFloat(text))}`;
+    return null;
+  },
+  I(rest) { // <radix> <bits> <text>: parseInt(text, radix)
+    const [radix, bits] = rest.split(' ', 2);
+    const want = parseInt(rest.slice(radix.length + bits.length + 2), Number(radix));
+    return sameDouble(bits, want) ? null : `parseInt: staticjs ${bits}, JavaScript ${toHex(want)}`;
+  },
 };
 if (numbers) {
   for (const line of readFileSync(numbers, 'utf8').split('\n')) {
@@ -191,6 +203,8 @@ if (numbers) {
 const numberSummary = [
   ['F', 'numbers format as String(x) does'],
   ['D', 'decimals read as Number(s) does'],
+  ['N', 'strings read as Number(s) and parseFloat(s) do'],
+  ['I', 'strings read as parseInt(s, radix) does'],
 ].filter(([tag]) => counts.has(tag)).map(([tag, what]) => `${counts.get(tag)} ${what}`).join(', ');
 
 if (failures.length > 0) {

@@ -9,6 +9,11 @@
  *                               random digits and exponents, long ones, and
  *                               the exact midpoints between two doubles, a
  *                               digit under and a digit over them
+ *     N <bits> <bits> <text>    COUNT strings read: Number(text), parseFloat(text);
+ *                               those decimals with white space, a sign, a
+ *                               prefix, Infinity or junk around them
+ *     I <radix> <bits> <text>   COUNT strings read: parseInt(text, radix), in
+ *                               every radix, with up to 400 digits
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -213,9 +218,88 @@ static void print_decimals(long count) {
     }
 }
 
+static void put_text(decimal_text *t, const char *text) {
+    for (size_t i = 0; text[i] != '\0'; i++) put(t, text[i]);
+}
+
+static const char *const SPACES[] = { " ", "\t", "\v", "\f", "\xc2\xa0", "\xe3\x80\x80", "\xef\xbb\xbf", "\xe2\x80\xa8", "\xe1\xa0\x8e" };
+static const char *const JUNK[] = { "x", "e", "e+", "e-", ".", "..", "_1", " 5", "abc", "Infinity", "0x1", "-", "1", "E5" };
+
+/* White space, from what JavaScript trims (and U+180E, which it does not). */
+static void put_spaces(decimal_text *t) {
+    for (uint64_t n = next() % 4; n > 0 && next() % 2 == 0; n--) put_text(t, SPACES[next() % (sizeof SPACES / sizeof SPACES[0])]);
+}
+
+static void put_radix_digits(decimal_text *t, uint32_t radix, size_t count) {
+    static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    for (size_t i = 0; i < count; i++) {
+        uint32_t d = (uint32_t)(next() % radix);
+        put(t, d >= 10 && next() % 2 == 0 ? digits[d + 26] : digits[d]);
+    }
+}
+
+static void print_strings(long count) {
+    static decimal_text body;
+    static decimal_text t;
+    for (long i = 0; i < count; i++) {
+        t.length = 0;
+        put_spaces(&t);
+        if (next() % 3 == 0) put(&t, next() % 2 == 0 ? '-' : '+');
+        switch (next() % 6) {
+        case 0: case 1: case 2:
+            random_decimal(&body, i);
+            put_text(&t, body.text);
+            break;
+        case 3: {
+            static const char *const prefixes[] = { "0x", "0X", "0o", "0O", "0b", "0B" };
+            static const uint32_t radixes[] = { 16, 16, 8, 8, 2, 2 };
+            uint32_t k = (uint32_t)(next() % 6);
+            put_text(&t, prefixes[k]);
+            put_radix_digits(&t, radixes[k], (size_t)(next() % (next() % 8 == 0 ? 300 : 24)));
+            break;
+        }
+        case 4:
+            put_text(&t, next() % 4 == 0 ? "infinity" : "Infinity");
+            break;
+        default:
+            put_text(&t, JUNK[next() % (sizeof JUNK / sizeof JUNK[0])]);
+            break;
+        }
+        if (next() % 4 == 0) put_text(&t, JUNK[next() % (sizeof JUNK / sizeof JUNK[0])]);
+        put_spaces(&t);
+        t.text[t.length] = '\0';
+        sjs_str text = { t.text, (uint32_t)t.length };
+        printf("N %016llx %016llx %s\n", (unsigned long long)to_bits(sjs_number_parse(text)),
+               (unsigned long long)to_bits(sjs_number_parse_float(text)), t.text);
+    }
+}
+
+static void print_integers(long count) {
+    static decimal_text t;
+    for (long i = 0; i < count; i++) {
+        t.length = 0;
+        int32_t radix = (int32_t)(next() % 40) - 1; /* -1 to 38: 0, 1 and 37 and up too */
+        uint32_t digits_radix = radix >= 2 && radix <= 36 ? (uint32_t)radix : 10u;
+        put_spaces(&t);
+        if (next() % 3 == 0) put(&t, next() % 2 == 0 ? '-' : '+');
+        if ((radix == 0 || radix == 16) && next() % 3 == 0) {
+            put_text(&t, next() % 2 == 0 ? "0x" : "0X");
+            digits_radix = 16;
+        }
+        if (next() % 4 == 0) put_radix_digits(&t, 1, (size_t)(next() % 30)); /* leading zeros */
+        put_radix_digits(&t, digits_radix, (size_t)(next() % (next() % 8 == 0 ? 400 : 40)));
+        if (next() % 4 == 0) put_text(&t, JUNK[next() % (sizeof JUNK / sizeof JUNK[0])]);
+        t.text[t.length] = '\0';
+        double x = sjs_number_parse_int((sjs_str){ t.text, (uint32_t)t.length }, radix);
+        printf("I %d %016llx %s\n", (int)radix, (unsigned long long)to_bits(x), t.text);
+    }
+}
+
 static int print(long count) {
     print_formats(count);
     print_decimals(count);
+    print_strings(count);
+    print_integers(count);
     return 0;
 }
 

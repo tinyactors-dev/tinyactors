@@ -191,7 +191,7 @@ Built-ins:
 | arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
 | strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `replaceAll` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
-| functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN` |
+| functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign`, and its constants |
 | changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear` |
 
@@ -227,6 +227,13 @@ compare identities, or find something on a prototype.
 
 - `===` on two objects (identity); `+` of a string and an object; arithmetic
   or `<` on values that are not both numbers (or, for `<`, both strings).
+- Converting an object to a number or a string where JavaScript would call
+  its methods: `Number([])`, `parseInt({})`, `parseFloat([1])`. A string
+  converted to a number on the way to something else: `isNaN("x")`,
+  `isFinite("1")`, `Math.abs("1")`, `parseInt("10", "16")`'s radix; `Number(s)`,
+  `parseInt(s)` and `parseFloat(s)` are the explicit conversions, and read
+  any string as JavaScript does (`parseInt` in a radix that is not 10 or a
+  power of two as V8 does, as the specification lets it approximate).
 - An object rest element of a string (`const {...r} = "ab"`), as with
   spreading a string into an object: JavaScript copies UTF-16 code units,
   which can split a character. An object pattern's key that indexes half of

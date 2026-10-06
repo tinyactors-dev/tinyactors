@@ -78,7 +78,9 @@
  * (acc.splice(i, 1, x * 2 + 1) over a copy of xs, as map);
  * eval.object.push-path-reduce (acc.groups[r.priority].push(r.kwh), the
  * rows grouped into arrays under the accumulator's keys: a method through a
- * path, MUTATION).
+ * path, MUTATION); eval.number.parse (texts.map(Number), FIX_NUMBERS's doubles
+ * as "%.15g", which Clinger's fast path reads) and .parse.17 (as "%.17g",
+ * which the bignum reads, back to the doubles themselves) (L).
  *
  * write (unit byte): write.rows (n {1000, 10000}, 64 KiB buffer),
  * write.rows.buf64 (10000 rows, a 64-byte buffer), write.numbers (100000
@@ -236,7 +238,9 @@ typedef enum {
     FIX_TEXT,          /* the row ids joined by commas, 8n - 1 bytes */
     FIX_WATERFILL,     /* the function from power's namespace */
     FIX_CAPACITY,
-    FIX_DEMAND
+    FIX_DEMAND,
+    FIX_NUMBER_TEXTS,    /* FIX_NUMBERS as "%.15g": Clinger's fast path reads each */
+    FIX_NUMBER_TEXTS_17  /* FIX_NUMBERS as "%.17g": each reads back as it was, past the fast path */
 } bench_fixture;
 
 typedef struct {
@@ -474,6 +478,17 @@ static const bench_case cases[] = {
       .source = "(r => [r.length - text.length - Math.floor(text.length / 8), r.startsWith(\"r000000;;r000001;;\")])"
                 "(text.replaceAll(\",\", \";;\"))",
       .globals = { { "text", FIX_TEXT, NULL } }, .expect = "[0,true]", .check = CHECK_SAME },
+    /* Strings read as numbers: 15 digits (Clinger's fast path), 17 (the bignum's). */
+    { .name = "eval.number.parse", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "texts.map(Number)", .globals = { { "texts", FIX_NUMBER_TEXTS, NULL } },
+      .expect = "[859.794120780817,394.301338356337,480.587874049492,188.949885827746,175.462179033066,"
+                "590.089667194192,604.780272776143,850.257467037368,865.879924430228,560.770620425737]",
+      .check = CHECK_ARRAY_N },
+    { .name = "eval.number.parse.17", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "texts.map(Number)", .globals = { { "texts", FIX_NUMBER_TEXTS_17, NULL } },
+      .expect = "[859.7941207808166,394.3013383563367,480.58787404949175,188.94988582774553,175.46217903306626,"
+                "590.0896671941921,604.7802727761426,850.2574670373677,865.8799244302276,560.7706204257373]",
+      .check = CHECK_ARRAY_N },
     { .name = "eval.object.spread-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_C, .smoke = 10,
       .source = "rows.reduce((acc, r) => ({ ...acc, [r.id]: r.kwh }), {})", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "{\"r000000\":0,\"r000001\":3.7,\"r000002\":7.4,\"r000003\":11.1,\"r000004\":14.8,\"r000005\":18.5,"
@@ -925,6 +940,20 @@ static bool make_numbers(bench_run *run, sjs_value *out) {
     return true;
 }
 
+/* FIX_NUMBERS's doubles as strings with `digits` significant digits. */
+static bool make_number_texts(bench_run *run, int digits, sjs_value *out) {
+    if (sjs_array_new(run->context, run->n, out) != SJS_OK) return fail(run, "sjs_array_new failed");
+    uint64_t state = BENCH_SEED;
+    for (uint32_t i = 0; i < run->n; i++) {
+        double x = (double)(xorshift(&state) >> 11) / 9007199254740992.0 * 1000.0;
+        char text[40];
+        snprintf(text, sizeof text, "%.*g", digits, x);
+        sjs_value s;
+        if (!string_value(run, text, &s) || !append(run, out, s)) return false;
+    }
+    return true;
+}
+
 static bool make_strings(bench_run *run, sjs_value *out) {
     if (sjs_array_new(run->context, run->n, out) != SJS_OK) return fail(run, "sjs_array_new failed");
     for (uint32_t i = 0; i < run->n; i++) {
@@ -978,6 +1007,8 @@ static bool make_global(bench_run *run, const bench_global *global, sjs_value *o
     case FIX_PENDING_HALF: return make_pending_half(run, out);
     case FIX_NUMBERS: return make_numbers(run, out);
     case FIX_STRINGS: return make_strings(run, out);
+    case FIX_NUMBER_TEXTS: return make_number_texts(run, 15, out);
+    case FIX_NUMBER_TEXTS_17: return make_number_texts(run, 17, out);
     case FIX_TEXT: return make_text(run, out);
     case FIX_CAPACITY: *out = sjs_number(6.0 * run->n); return true;
     case FIX_DEMAND: return make_demand(run, out);
