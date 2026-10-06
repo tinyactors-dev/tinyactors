@@ -200,3 +200,37 @@ isFinite("1")
 === isNaN of an object faults
 isNaN({})
 --- fault converts only numbers
+
+# The Number and Math constants are names the compiler turns into number
+# constants.
+=== the Number constants
+[Number.EPSILON, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER, Number.MAX_VALUE, Number.MIN_VALUE, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN]
+--- value
+[2.220446049250313e-16,9007199254740991,-9007199254740991,1.7976931348623157e+308,5e-324,Infinity,-Infinity,NaN]
+
+=== the Math constants
+[Math.PI, Math.E, Math.LN2, Math.LN10, Math.LOG2E, Math.LOG10E, Math.SQRT2, Math.SQRT1_2]
+--- value
+[3.141592653589793,2.718281828459045,0.6931471805599453,2.302585092994046,1.4426950408889634,0.4342944819032518,1.4142135623730951,0.7071067811865476]
+
+=== the constants in arithmetic
+[1 + Number.EPSILON > 1, 1 + Number.EPSILON / 2 === 1, Number.MAX_SAFE_INTEGER + 2, Number.MIN_VALUE / 2, Number.MAX_VALUE * 2, -Number.MIN_VALUE, Number.isNaN(Number.NaN), Math.PI * 2, Math.SQRT2 * Math.SQRT1_2, Math.LN2 * Math.LOG2E, Math.LN10 * Math.LOG10E]
+--- value
+[true,true,9007199254740992,0,Infinity,-5e-324,true,6.283185307179586,1.0000000000000002,1,1]
+
+=== the constants as callback results and keys
+[[1, 2].map(x => Math.PI * x), {[Number.MAX_SAFE_INTEGER]: 1}, [Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY].map(x => -x)]
+--- value
+[[3.141592653589793,6.283185307179586],{"9007199254740991":1},[Infinity,-Infinity]]
+
+=== an unknown Number member is refused
+Number.MAX_INTEGER
+--- error unsupported does not have this built-in
+
+=== an unknown Math member is refused
+Math.TAU
+--- error unsupported does not have this built-in
+
+=== a Number member staticjs leaves out is refused
+Number.prototype
+--- error unsupported does not have this built-in
