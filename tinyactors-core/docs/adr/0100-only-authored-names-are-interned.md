@@ -318,3 +318,15 @@ before it.
   - Tested in `tests/name_matching_test.c` (claims 6, 7 and 11) and the
     invoke-ID checks of `inspection_test`, `send_id_test` and
     `scxml_uri_test`.
+- **Targets in `targetexpr`, 2026-10-06.** A `#_<invokeid>` target is
+  looked up (since the previous note), and text that is no target fails
+  the send with nothing interned (`tests/name_matching_test.c`, claim 12).
+  The family of a `#_scxml_<session>` URI is looked up first, and an
+  authored family is an atom already. A family no definition of this
+  system has is still interned: a host's loader may bring such a session
+  in, and a waiting entry names its destination by the family atom.
+  Looking it up only made napi's `test/session-loads.js`
+  (`anotherIncarnation`) wait forever, since no load was asked for. It
+  stops when waiting entries keep the address's bytes (envelope.md), which
+  the native records of 5.1 and the images of 5.3 carry. A named address
+  in a target is a counted handle (ADR 0065), not an atom.

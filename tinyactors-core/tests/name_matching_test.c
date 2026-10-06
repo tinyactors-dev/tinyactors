@@ -61,6 +61,11 @@
  *    error.communication.invoke.<id>.<reason> for random reasons a host
  *    reports leave the atom table and the trie the same size, and every
  *    envelope that held such a name goes back.
+ * 12. random `targetexpr` values (`#_<invokeid>` texts no invocation has,
+ *    and text that is no target at all) fail the send and leave the atom
+ *    table, the trie and the address table the same size: such a target
+ *    is looked up, never interned. A session URI whose family no
+ *    definition has still interns the family, for a host's loader.
  * 10. an invoked session keeps its last external event's name as text: one
  *    kept envelope holds it while the event is kept, the next event gives
  *    it back, a session image carries the name and restores it into a
@@ -1261,6 +1266,77 @@ static void test_reported_errors_travel_as_text(void) {
     fixture_close(&f);
 }
 
+/* `idle` sends `ping` to the target `name` on `send`, and counts every
+ * other event its `*` transition takes: here, the send's failure. */
+static const ta_scxml_spec *targetexpr_chart(void) {
+    static const ta_scxml_action_spec send[] = {
+        { .kind = TA_SCXML_ACTION_SEND,
+          .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR("ping") },
+                       .target = { .kind = TA_SCXML_STRING_EXPR, .as.expr = EXPR("name") } } },
+        {0},
+    };
+    static const ta_scxml_action_spec count[] = {
+        { .kind = TA_SCXML_ACTION_ASSIGN,
+          .as.assign = { .location = EXPR("taken"),
+                         .value = { .kind = TA_SCXML_VALUE_EXPR, .as.expr = EXPR("taken + 1") } } },
+        {0},
+    };
+    static const ta_scxml_transition_spec idle[] = {
+        { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("send"), .actions = send },
+        { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("*"), .actions = count },
+        {0},
+    };
+    static const ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle"), .transitions = idle },
+        {0},
+    };
+    static const ta_scxml_spec spec = { .name = STR("targets"), .states = states };
+    return &spec;
+}
+
+/* Claim 12. */
+static void test_targetexpr_looks_up(void) {
+    fixture f;
+    fixture_open(&f, targetexpr_chart());
+    ta_actor_id actor = 0;
+    CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = f.id, .out = &actor }) == TA_OK);
+    test_drive_status status = TEST_DRIVE_ERROR;
+    CHECK(test_drive_run(f.system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    ta_event_name_id send = event_name(&f, "send");
+    set_type("#_scxml_0.1.warm", 16);
+    deliver(&f, actor, send);
+    uint32_t atoms = atom_count(&f);
+    uint32_t nodes = node_count(&f);
+    uint32_t addresses = f.system->addresses.count;
+    assigned = 0;
+    char token[24];
+    char target[64];
+    for (uint32_t round = 0; round < 3000u; round += 1u) {
+        uint32_t length = 1u + (uint32_t)(rand() % 16);
+        for (uint32_t at = 0; at < length; at += 1u) {
+            token[at] = (char)('a' + rand() % 26);
+        }
+        token[length] = '\0';
+        int written = 0;
+        switch (round % 2u) {
+        case 0: /* an invocation no session has */
+            written = snprintf(target, sizeof target, "#_%s.%u", token, 1u + round);
+            break;
+        default: /* text that is no target */
+            written = snprintf(target, sizeof target, "%s:%s", token, token);
+            break;
+        }
+        set_type(target, (uint32_t)written);
+        deliver(&f, actor, send);
+    }
+    /* Each send failed, and `*` counted its error. */
+    CHECK(assigned == 3000u);
+    CHECK(atom_count(&f) == atoms);
+    CHECK(node_count(&f) == nodes);
+    CHECK(f.system->addresses.count == addresses);
+    fixture_close(&f);
+}
+
 /* Claim 6. */
 static void test_error_name_splits_the_id(void) {
     fixture f;
@@ -1426,6 +1502,7 @@ int main(void) {
     test_internal_names_travel_as_text();
     test_invocation_names_travel_as_text();
     test_reported_errors_travel_as_text();
+    test_targetexpr_looks_up();
     if (failures != 0) {
         fprintf(stderr, "name_matching_test: %d failure(s)\n", failures);
         return 1;

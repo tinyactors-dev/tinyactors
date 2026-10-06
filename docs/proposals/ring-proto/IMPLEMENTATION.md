@@ -617,6 +617,15 @@ Carried forward from commit 4 (19cd1813):
   under `refuseAllocationsFrom`: its macrostep stays stopped after the
   refusal is lifted. It predates 4.2; 4.4 removes the out-of-memory stop
   machinery and checks the case.
+- **A session URI's family is still interned** when no definition of the
+  system has it (commit 6c), because a waiting entry names its
+  destination by the family atom. Waiting entries keep the address's
+  bytes with 5.1's records and 5.3's images; the interning goes then.
+- **`mise run build` can keep a stale amalgamation** after `git checkout`
+  restores a source ("amalgamate: cached"). A check that reverts a source
+  to prove a test catches something must run `mise run amalgamate`
+  itself. Fix the amalgamate task's cache key when a step next touches
+  the build.
 - **The kernel's overflow machinery is idle after commit 5**: no message
   is marked `may_overflow`, so napi's `maxQueuedMessages` and
   `maxRetainedBytes` act on nothing. They go with napi's parameter

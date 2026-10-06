@@ -307,8 +307,15 @@ ta_result ta_scxml_target_parse(ta_system *system, ta_str text, ta_scxml_target 
         ta_atom family = 0;
         ta_session_text parsed;
         if (ta_session_text_parse(rest, &parsed)) {
-            /* The family is interned as an address's would be (ADR 0065). */
-            ta_result result = ta_atom_intern(&system->atoms, parsed.family, &family);
+            /* A family a definition of this system has is an atom already.
+             * One it has not is interned (ADR 0065): a host's loader may
+             * still bring that session in (a waiting entry names its
+             * destination by the family atom), until waiting entries keep
+             * the address's bytes. */
+            ta_result result = ta_atom_find(&system->atoms, parsed.family, &family);
+            if (result != TA_OK) {
+                result = ta_atom_intern(&system->atoms, parsed.family, &family);
+            }
             if (result != TA_OK) {
                 return result;
             }
