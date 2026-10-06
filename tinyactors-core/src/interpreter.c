@@ -739,8 +739,32 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
  * The internal queue (ADR 0069)
  */
 
-/* The first capacity of an actor's internal queue. */
+/* The first capacity of a queue made outside a macrostep for a few events
+ * (a restored image's, an invoked session's kept event). */
 #define TA_INTERNAL_QUEUE_INITIAL 8u
+
+/* Queues the system keeps for later takes, as many as sessions that hold
+ * an input at once usually number: one per macrostep slot. */
+#define TA_INTERNAL_QUEUE_SPARES 64u
+
+/*
+ * The mandatory floor of a definition's internal queue (ADR 0102): one
+ * round of every phase, counted from the chart's shape. A bootstrap's
+ * data errors, one microstep's blocks (an entry and an exit block per
+ * state, a block per transition), one selection pass (a condition per
+ * transition), one invocation-startup pass and the completion of every
+ * state. An overestimate costs entries, never correctness.
+ */
+static uint32_t ta_queue_floor(const ta_definition *definition) {
+    uint64_t floor = 1u + (uint64_t)definition->data_decl_count + 3u * (uint64_t)definition->state_count +
+                     2u * (uint64_t)definition->transition_count + (uint64_t)definition->invoke_decl_count;
+    return floor > (1u << 24) ? (1u << 24) : (uint32_t)floor;
+}
+
+/* The fixed capacity of `actor`'s queue: the ordinary quota and the floor. */
+static uint32_t ta_queue_capacity(const ta_system *system, const ta_actor *actor) {
+    return system->params[TA_PARAM_INTERNAL_QUEUE_EVENTS] + ta_queue_floor(actor->definition);
+}
 
 size_t ta_internal_queue_bytes(uint32_t capacity) {
     return offsetof(ta_internal_queue, events) + (size_t)capacity * sizeof(ta_queued_event);
@@ -767,11 +791,18 @@ static ta_result ta_internal_queue_grow(ta_system *system, ta_actor *actor, uint
     if (queue != NULL && queue->capacity >= capacity) {
         return TA_OK;
     }
-    ta_internal_queue *spare = system->spare_queue;
-    if (queue == NULL && spare != NULL && spare->capacity >= capacity) {
-        system->spare_queue = NULL;
-        actor->internal = spare;
-        return TA_OK;
+    if (queue == NULL) {
+        /* The first spare large enough, from the system's short list. */
+        for (ta_internal_queue **link = &system->spare_queue; *link != NULL; link = &(*link)->next_spare) {
+            ta_internal_queue *spare = *link;
+            if (spare->capacity >= capacity) {
+                *link = spare->next_spare;
+                system->spare_queue_count -= 1u;
+                spare->next_spare = NULL;
+                actor->internal = spare;
+                return TA_OK;
+            }
+        }
     }
     ta_internal_queue *grown = ta_mem_alloc(system->allocator, ta_internal_queue_bytes(capacity),
                                             _Alignof(ta_internal_queue));
@@ -798,6 +829,13 @@ static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
     const ta_internal_queue *queue = actor->internal;
     if (queue != NULL && queue->count < queue->capacity) {
         return TA_OK;
+    }
+    if (system->run.running && actor->input == system->run.current) {
+        /* A macrostep never allocates (ADR 0102): its queue was sized when
+         * it took its input, and a full one stops it. A session that runs
+         * inside another's macrostep (an invoked child being stopped) still
+         * grows its own, until invocations start after the macrostep. */
+        return TA_ERR_NOMEM;
     }
     if (queue != NULL && queue->capacity > UINT32_MAX / 2u) {
         return TA_ERR_NOMEM;
@@ -877,8 +915,11 @@ static void ta_queue_settle(ta_system *system, ta_actor *actor) {
         return;
     }
     actor->internal = NULL;
-    if (system->spare_queue == NULL && queue->capacity == TA_INTERNAL_QUEUE_INITIAL) {
+    if (system->spare_queue_count < TA_INTERNAL_QUEUE_SPARES) {
+        queue->ordinary = 0u;
+        queue->next_spare = system->spare_queue;
         system->spare_queue = queue;
+        system->spare_queue_count += 1u;
         return;
     }
     ta_internal_queue_free(system, queue);
@@ -908,10 +949,35 @@ ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta
     return TA_OK;
 }
 
+/*
+ * Queues a chart's own internal event, a <raise> or a send to #_internal,
+ * against the ordinary quota (ADR 0102). TA_ERR_FULL, releasing `event`,
+ * when the quota is used up inside a macrostep; the caller raises
+ * error.execution.capacity.internal. Never allocates inside a macrostep.
+ */
+static ta_result ta_enqueue_ordinary(ta_system *system, ta_actor *actor, ta_event *event) {
+    const ta_internal_queue *queue = actor->internal;
+    if (system->run.running && queue != NULL &&
+        queue->ordinary >= system->params[TA_PARAM_INTERNAL_QUEUE_EVENTS]) {
+        ta_queued_release(system, event);
+        return TA_ERR_FULL;
+    }
+    ta_result result = ta_interpreter_enqueue_internal(system, actor, event);
+    if (result == TA_OK) {
+        ta_internal_queue *held = actor->internal;
+        held->events[held->count - 1u].flags |= TA_EVENT_FLAG_ORDINARY;
+        held->ordinary += 1u;
+    }
+    return result;
+}
+
 /* Removes the queue's head; its event is the caller's now. */
 static ta_event ta_queue_pop(ta_actor *actor) {
     ta_internal_queue *queue = actor->internal;
     ta_event head = queue->events[0].event;
+    if ((queue->events[0].flags & TA_EVENT_FLAG_ORDINARY) != 0u) {
+        queue->ordinary -= 1u;
+    }
     for (uint32_t index = 1; index < queue->count; index += 1) {
         queue->events[index - 1u] = queue->events[index];
     }
@@ -933,6 +999,9 @@ static void ta_queue_truncate(ta_actor *actor, uint32_t mark) {
     ta_internal_queue *queue = actor->internal;
     while (queue != NULL && queue->count > mark) {
         queue->count -= 1u;
+        if ((queue->events[queue->count].flags & TA_EVENT_FLAG_ORDINARY) != 0u) {
+            queue->ordinary -= 1u;
+        }
         ta_queued_release(actor->host_impl.system, &queue->events[queue->count].event);
     }
 }
@@ -2053,16 +2122,18 @@ static ta_result ta_send_capacity_error(ta_interpreter *it, ta_send_id send_id,
                                         ta_record_capacity_resource resource) {
     static const char pool[] = "no free envelope in the pool (poolEnvelopes)";
     static const char names[] = "no room in the name area (nameAreaBytes)";
-    bool short_of_pool = resource == TA_RECORD_CAPACITY_RESOURCE_POOL;
-    ta_fault fault = { .code = TA_ERR_FULL,
-                       .message = short_of_pool ? (ta_str){ .ptr = pool, .len = (uint32_t)(sizeof pool - 1u) }
-                                                : (ta_str){ .ptr = names, .len = (uint32_t)(sizeof names - 1u) } };
+    static const char internal[] = "the internal queue's ordinary quota is used up (internalQueueEvents)";
+    ta_str message = resource == TA_RECORD_CAPACITY_RESOURCE_POOL ? (ta_str){ .ptr = pool, .len = sizeof pool - 1u }
+                     : resource == TA_RECORD_CAPACITY_RESOURCE_INTERNAL
+                         ? (ta_str){ .ptr = internal, .len = sizeof internal - 1u }
+                         : (ta_str){ .ptr = names, .len = sizeof names - 1u };
+    ta_event_name_id name = resource == TA_RECORD_CAPACITY_RESOURCE_POOL ? TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_POOL
+                            : resource == TA_RECORD_CAPACITY_RESOURCE_INTERNAL
+                                ? TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_INTERNAL
+                                : TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_NAMES;
+    ta_fault fault = { .code = TA_ERR_FULL, .message = message };
     ta_result result = ta_raise_error(it->system, it->actor,
-                                      &(ta_error_params){ .name = short_of_pool
-                                                                      ? TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_POOL
-                                                                      : TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_NAMES,
-                                                          .send_id = send_id,
-                                                          .fault = &fault });
+                                      &(ta_error_params){ .name = name, .send_id = send_id, .fault = &fault });
     if (result != TA_OK) {
         return result;
     }
@@ -2157,7 +2228,12 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         };
         /* The queued event owns its origin reference (ADR 0065). */
         ta_actor_ref_retain(&event.origin.as.actor);
-        return ta_interpreter_enqueue_internal(system, actor, &event);
+        ta_result queued = ta_enqueue_ordinary(system, actor, &event);
+        if (queued == TA_ERR_FULL) {
+            state->sent = false;
+            return ta_send_capacity_error(it, state->send_id, TA_RECORD_CAPACITY_RESOURCE_INTERNAL);
+        }
+        return queued;
     }
     bool replaying = ta_actor_replaying(actor);
     if (replaying && state->delay == 0) {
@@ -2406,7 +2482,9 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                 .invoke_id = TA_INVOKE_ID_NONE,
                 .data = data,
             };
-            return ta_interpreter_enqueue_internal(it->system, it->actor, &event);
+            ta_result raised = ta_enqueue_ordinary(it->system, it->actor, &event);
+            return raised == TA_ERR_FULL ? ta_send_capacity_error(it, 0, TA_RECORD_CAPACITY_RESOURCE_INTERNAL)
+                                         : raised;
         }
         case TA_ACTION_SEND:
             return ta_exec_send(it, &action->as.send);
@@ -4055,10 +4133,12 @@ void ta_interpreter_release_spares(ta_system *system) {
                                                  .alignment = _Alignof(ta_actor_sparse_state) });
         system->spare_sparse = NULL;
     }
-    if (system->spare_queue != NULL) {
-        ta_internal_queue_free(system, system->spare_queue);
-        system->spare_queue = NULL;
+    while (system->spare_queue != NULL) {
+        ta_internal_queue *spare = system->spare_queue;
+        system->spare_queue = spare->next_spare;
+        ta_internal_queue_free(system, spare);
     }
+    system->spare_queue_count = 0u;
 }
 
 /*
@@ -4725,6 +4805,14 @@ bool ta_interpreter_jump_valid(const ta_definition *definition, const ta_operato
         }
     }
     return true;
+}
+
+ta_result ta_interpreter_reserve(ta_system *system, ta_actor *actor) {
+    ta_result result = ta_reserve_stop(system, actor);
+    if (result == TA_OK) {
+        result = ta_internal_queue_grow(system, actor, ta_queue_capacity(system, actor));
+    }
+    return result;
 }
 
 ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor) {

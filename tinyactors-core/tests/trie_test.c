@@ -463,9 +463,10 @@ static void test_system_event_names(void) {
         { "error.execution.capacity", TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY },
         { "error.execution.capacity.pool", TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_POOL },
         { "error.execution.capacity.names", TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_NAMES },
+        { "error.execution.capacity.internal", TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_INTERNAL },
     };
     uint32_t nodes = system->event_names.nodes.count;
-    CHECK(nodes == 11);
+    CHECK(nodes == 12);
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(builtins); index += 1u) {
         CHECK(builtins[index].id == index + 1u);
         ta_event_name_id id = 0;

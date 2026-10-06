@@ -217,6 +217,11 @@ ta_result ta_operator_jump_bytes(uint32_t count, size_t *out);
 typedef struct ta_internal_queue {
     uint32_t count;
     uint32_t capacity;
+    /** How many queued events count against the ordinary quota
+     * (`TA_EVENT_FLAG_ORDINARY`). */
+    uint32_t ordinary;
+    /** The next spare queue while this one is a system spare. */
+    struct ta_internal_queue *next_spare;
     bool has_kept;
     /* A queued event whose name core keeps only as text owns the envelope
      * that holds it (`ta_run_release_name`). The kept event's name, when

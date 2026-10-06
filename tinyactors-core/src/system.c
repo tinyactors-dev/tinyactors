@@ -70,6 +70,8 @@ static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_NAME_AREA_BYTES] = { "nameAreaBytes", "bytes", TA_PARAM_DEFAULT_NAME_AREA_BYTES, TA_NAME_AREA_MIN_BYTES,
                                    TA_NAME_AREA_MAX_BYTES },
     [TA_PARAM_ADMISSION_WATERMARK] = { "admissionWatermark", "percent", TA_PARAM_DEFAULT_ADMISSION_WATERMARK, 1, 99 },
+    [TA_PARAM_INTERNAL_QUEUE_EVENTS] = { "internalQueueEvents", "events", TA_PARAM_DEFAULT_INTERNAL_QUEUE_EVENTS, 1,
+                                         1048576u },
 };
 
 /* Rejects `param`: names it when the config asks. */
@@ -274,6 +276,7 @@ static ta_result ta_system_event_names_init(ta_system *system, ta_allocator allo
         "error", "error.execution", "error.communication", "error.platform",
         "done", "done.state", "done.invoke",
         "error.execution.capacity", "error.execution.capacity.pool", "error.execution.capacity.names",
+        "error.execution.capacity.internal",
     };
     ta_result result = ta_trie_init(&system->event_names, &(ta_trie_params){ .allocator = allocator,
                                                                               .atoms = &system->atoms,

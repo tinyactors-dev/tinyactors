@@ -131,7 +131,8 @@ enum {
     TA_EVENT_NAME_DONE_INVOKE = 7u,
     TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY = 8u,
     TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_POOL = 9u,
-    TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_NAMES = 10u
+    TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_NAMES = 10u,
+    TA_EVENT_NAME_ERROR_EXECUTION_CAPACITY_INTERNAL = 11u
 };
 
 /** The ceiling of `eventNameDepth` (ADR 0092): the deepest a trie goes. */
@@ -274,6 +275,8 @@ struct ta_system {
      * paused, or that keeps an event, keeps its own. Null when taken.
      */
     ta_internal_queue *spare_queue;
+    /** How many queues `spare_queue` lists, at most TA_INTERNAL_QUEUE_SPARES. */
+    uint32_t spare_queue_count;
 };
 
 /*

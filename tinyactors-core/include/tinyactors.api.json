@@ -298,6 +298,12 @@
           "name": "TA_EVENT_FLAG_GENERATED",
           "value": 2,
           "symbol": "generated"
+        },
+        {
+          "name": "TA_EVENT_FLAG_ORDINARY",
+          "value": 4,
+          "symbol": "ordinary",
+          "doc": "A chart's own <raise > or #_internal send, which counts against the internal queue's ordinary quota (internalQueueEvents, ADR 0102)."
         }
       ]
     }
@@ -13176,8 +13182,14 @@
           "doc": "percent of the pool and of the name area admission may fill (ADR 0099)"
         },
         {
-          "name": "TA_PARAM_COUNT",
+          "name": "TA_PARAM_INTERNAL_QUEUE_EVENTS",
           "value": 17,
+          "symbol": "internal_queue_events",
+          "doc": "internal events a chart may <raise > in one macrostep (ADR 0102); 1 to 2^20"
+        },
+        {
+          "name": "TA_PARAM_COUNT",
+          "value": 18,
           "symbol": "count"
         }
       ],
@@ -13283,6 +13295,11 @@
           "name": "TA_PARAM_DEFAULT_ADMISSION_WATERMARK",
           "value": 50,
           "symbol": "admission_watermark"
+        },
+        {
+          "name": "TA_PARAM_DEFAULT_INTERNAL_QUEUE_EVENTS",
+          "value": 256,
+          "symbol": "internal_queue_events"
         }
       ],
       "doc": "The built-in defaults (ADR 0092 rule 4); ta_param_info_of() reports them too.",

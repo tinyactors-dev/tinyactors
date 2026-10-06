@@ -530,7 +530,10 @@ typedef struct {
 
 enum TA_FLAG_SET(ta_event_flags, "TA_EVENT_FLAG_") {
     TA_EVENT_FLAG_OWNS_DATA = 1u << 0,
-    TA_EVENT_FLAG_GENERATED = 1u << 1
+    TA_EVENT_FLAG_GENERATED = 1u << 1,
+    /* A chart's own <raise> or #_internal send, which counts against the
+     * internal queue's ordinary quota (internalQueueEvents, ADR 0102). */
+    TA_EVENT_FLAG_ORDINARY = 1u << 2
 };
 
 /*
@@ -4243,6 +4246,7 @@ typedef enum {
     TA_PARAM_POOL_ENVELOPES,       /* pending inputs the pool holds (ADR 0099); 8 to 2^24 */
     TA_PARAM_NAME_AREA_BYTES,      /* the pool's text (ADR 0099), in 64-byte chunks; maxRecordBytes to 1 GiB */
     TA_PARAM_ADMISSION_WATERMARK,  /* percent of the pool and of the name area admission may fill (ADR 0099) */
+    TA_PARAM_INTERNAL_QUEUE_EVENTS,/* internal events a chart may <raise> in one macrostep (ADR 0102); 1 to 2^20 */
     TA_PARAM_COUNT
 } ta_param TA_SYMBOLS("TA_PARAM_");
 
@@ -4265,7 +4269,8 @@ enum TA_CONSTANTS_OF(ta_param_default, "TA_PARAM_DEFAULT_") {
     TA_PARAM_DEFAULT_TELEMETRY_VALUE_BYTES = 1024,
     TA_PARAM_DEFAULT_POOL_ENVELOPES = 4096,
     TA_PARAM_DEFAULT_NAME_AREA_BYTES = 262144,
-    TA_PARAM_DEFAULT_ADMISSION_WATERMARK = 50
+    TA_PARAM_DEFAULT_ADMISSION_WATERMARK = 50,
+    TA_PARAM_DEFAULT_INTERNAL_QUEUE_EVENTS = 256
 };
 
 typedef struct { ta_param param; uint64_t value; } ta_param_value;

@@ -237,10 +237,14 @@ typedef struct {
 } run;
 
 static ta_event_name_id event_name(ta_system *system, const char *name) {
+    /* The test's own interning is the host's, outside the sweep. */
+    unsigned long armed = heap.policy.fail_at;
+    heap.policy.fail_at = 0;
     ta_atom atom = 0;
     CHECK(ta_system_intern_atom(system, (ta_str){ .ptr = name, .len = (uint32_t)strlen(name) }, &atom) == TA_OK);
     ta_event_name_id id = 0;
     CHECK(ta_event_name_intern(system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &id) == TA_OK);
+    heap.policy.fail_at = armed;
     return id;
 }
 
@@ -616,7 +620,8 @@ static void test_capture_at_the_start(void) {
  * Every allocation of a run that pauses at each start and before each
  * unit fails in turn (ADR 0070): a resume that runs out of memory is
  * retried, and the run ends with the log and configurations of the run
- * that failed nothing.
+ * that failed nothing. Only taking an input can run out of memory: a
+ * resume of a paused macrostep never does (ADR 0102).
  */
 static unsigned long resumes_out_of_memory = 0;
 static unsigned long pauses_out_of_memory = 0;
@@ -677,7 +682,10 @@ static void test_out_of_memory(void) {
         }
         finish(&r);
     }
-    CHECK(resumes_out_of_memory > 0 && pauses_out_of_memory > 0);
+    /* Runs that take an input may find no memory, at the take, a safe
+     * point; a paused macrostep never does, since a macrostep allocates
+     * nothing (ADR 0102). */
+    CHECK(resumes_out_of_memory > 0 && pauses_out_of_memory == 0);
     printf("microstep start test: %lu allocations each failed in turn; %lu resumes ran out of memory, %lu of them "
            "from a pause\n",
            used, resumes_out_of_memory, pauses_out_of_memory);

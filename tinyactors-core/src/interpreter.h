@@ -220,6 +220,14 @@ ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, ta_interpreter_
  * legal configuration. Whether its source is active is the caller's check.
  */
 bool ta_interpreter_jump_valid(const ta_definition *definition, const ta_operator_transition *transition);
+/**
+ * Allocates, at a safe point before `actor` takes an input, what its
+ * macrostep needs to pause or stop without allocating: a continuation for
+ * its definition and a sparse state to hang it from (ADR 0070, ADR 0102).
+ * Does nothing when it has them. TA_ERR_NOMEM changes nothing.
+ */
+ta_result ta_interpreter_reserve(ta_system *system, ta_actor *actor);
+
 /* ta_actor_abandon() for a resident actor (ADR 0082). */
 ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor);
 /*

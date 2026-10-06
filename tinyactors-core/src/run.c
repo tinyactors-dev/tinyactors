@@ -1398,6 +1398,10 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
              * the name buffer the refill before it could not grow. */
             return ta_run_put_back(call, index, TA_ERR_NOMEM);
         }
+        if (ta_interpreter_reserve(system, actor) != TA_OK) {
+            /* The macrostep must be able to pause without allocating. */
+            return ta_run_put_back(call, index, TA_ERR_NOMEM);
+        }
     } else if (actor->finished && !actor->macrostep) {
         ta_run_refuse(call, index, TA_ERR_DONE);
         return TA_OK;
@@ -1417,6 +1421,10 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
          * buffer: the next call takes it. */
         call->names_full = true;
         return ta_run_put_back(call, index, TA_OK);
+    } else if (ta_interpreter_reserve(system, actor) != TA_OK) {
+        /* What a pause needs is allocated here, at a safe point, so the
+         * macrostep never allocates (ADR 0102). */
+        return ta_run_put_back(call, index, TA_ERR_NOMEM);
     } else {
         ta_result result = envelope->source == TA_RECORD_INPUT_SOURCE_INVOKE_REPORT
                                ? ta_run_bind_report(system, actor, index)

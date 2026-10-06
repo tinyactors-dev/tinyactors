@@ -851,8 +851,9 @@ static void test_out_of_memory(void) {
     heap.policy.refuse = false;
     close_fixture(&f);
 
-    /* A report's event needs room in its session's internal queue. While
-     * another session's paused macrostep holds the system's spare queue,
+    /* A report's event needs room in its session's internal queue, which
+     * the take provides, at a safe point. With no spare queue left (another
+     * session's paused macrostep holds one, and the spares are given back)
      * that room is allocated: without it the run takes nothing, and the
      * report waits at the head. */
     f = open_default();
@@ -867,6 +868,7 @@ static void test_out_of_memory(void) {
     CHECK(deliver(&f, c, "long", 1) == TA_OK);
     CHECK(run_with(&f, (run_limits){ .session = c, .budget = 2 }) == TA_OK && f.status == TA_RUN_PAUSED);
     CHECK(report(&f, actor, view.invokes[0].id, 2) == TA_OK);
+    ta_interpreter_release_spares(f.system);
     heap.policy.refuse = true;
     CHECK(run_with(&f, (run_limits){ .session = actor }) == TA_ERR_NOMEM);
     CHECK(f.count == 0 && f.status == TA_RUN_MORE && !in_state(&f, actor, "failed"));

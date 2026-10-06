@@ -110,47 +110,37 @@ TinyactorsTest.scenarios 'allocation failure', chart: :relay do
     assert_active bystander, :relay, :idle
   end
 
-  # An allocation failure inside a macrostep is a ta_result, so the host
-  # sees it (docs/internal/errors.md). ADR 0047 decides what happens to the
-  # macrostep that was half-way through: TA_ERR_NOMEM suspends it exactly as
-  # a pause does, and a later resume continues it to the outcome it would
-  # have had without the interruption. Memory pressure is the host's
-  # concern; the chart cannot observe that it happened.
+  # A macrostep never allocates core memory (ADR 0102): core allocates what
+  # a macrostep needs when it takes the input, a safe point. So a tight
+  # allocator either refuses the take, and the input waits untouched with
+  # no macrostep begun, or the macrostep runs to its end. Either way the
+  # actor ends where an uninterrupted run does once memory is back.
   #
-  # Catches: a failure reported once and then lost, and any
-  # retry that restarts the macrostep instead of continuing it, which the
-  # comparison with the uninterrupted run would show as a repeated effect.
-  scenario 'an allocation failure suspends a macrostep, and a later resume continues it' do
+  # Catches: a macrostep that allocates and stops half-way, a refused take
+  # that changes the actor, and a retry that repeats an effect, which the
+  # comparison with the uninterrupted run would show.
+  scenario 'running out of memory never interrupts a macrostep it took' do
     actor = spawn
     assert_equal 'ok', actor.post('go')
 
     AllocationFailure.tighten(self)
-    interrupted = actor.run_once(budget: 1024)
-    assert_equal 'err_nomem', interrupted[:result], 'the host is told the pool was full'
-    assert_equal nil, interrupted[:status]
+    tried = actor.run_once(budget: 1024)
+    assert %w[ok err_nomem].include?(tried[:result]), "only a take may run out of memory, got #{tried[:result]}"
     allocator.clear_faults
 
-    # Suspended, not finished.
     view = actor.inspect_actor
-    assert view[:macrostep_in_progress],
-           "#{actor} is not mid-macrostep after err_nomem: residency #{view[:residency]}, " \
-           "active #{actor.active.inspect}"
-    assert_equal 'ok', actor.post('interloper'), 'a suspended actor admits a new event'
-    assert_equal view, actor.inspect_actor, 'and holds it back: its macrostep does not take it'
+    if tried[:result] == 'err_nomem'
+      assert !view[:macrostep_in_progress], 'a refused take begins no macrostep'
+    end
 
-    # Resuming continues it, to the state the uninterrupted run reached.
     status = 'paused'
     20.times { status = actor.resume(budget: 1024); break unless status == 'paused' }
     assert_equal 'stable', status
-    run_system('dispatch effects after the resumed macrostep')
-    # The reference runs afterwards: the memory core keeps from one run would
-    # let the other's macrostep allocate nothing.
+    run_system('dispatch effects after the macrostep')
     reference = spawn
     reference.deliver 'go'
-    assert !actor.active.empty?,
-           "#{actor} is in no state at all after an interrupted macrostep: #{actor.data.inspect}"
     assert_equal [reference.active, reference.data], [actor.active, actor.data],
-                 'the interrupted macrostep ended where an uninterrupted one does'
+                 'the macrostep ended where an uninterrupted one does'
   end
 
   # Catches: an allocator fault that core turns into a statechart event
@@ -163,7 +153,7 @@ TinyactorsTest.scenarios 'allocation failure', chart: :relay do
     assert_equal 'ok', actor.post('go')
 
     AllocationFailure.tighten(self)
-    assert_equal 'err_nomem', actor.run_once(budget: 1024)[:result]
+    assert %w[ok err_nomem].include?(actor.run_once(budget: 1024)[:result])
     allocator.clear_faults
 
     assert_equal 0, actor.inspect_actor.fetch(:internal_events).to_a.size,
