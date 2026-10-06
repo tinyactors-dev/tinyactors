@@ -49,7 +49,9 @@
  * .every (x => x >= 0), .some (r => r.kwh < 0), .findIndex (r => r.id
  * === "none") and .findLastIndex (r => r.kwh < 0), which scan every element and find nothing, so they give
  * their smoke value at every size, and .lastIndexOf (xs.lastIndexOf(-1), likewise), .toSpliced (n / 4 elements at n / 2 replaced by 1, 2, 3, then
- * the length and sum checked against the removed part: [3,6] at every size), eval.string.join (L); eval.object.spread-reduce (C);
+ * the length and sum checked against the removed part: [3,6] at every size), eval.string.join (L);
+ * eval.string.concat-reduce (acc + r.id + ",", which + extends in place:
+ * STRING_APPEND, L); eval.object.spread-reduce (C);
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
  * place and quadratic before, eval.object.fromEntries, eval.set.new, .has,
@@ -254,7 +256,8 @@ typedef enum {
     CHECK_UNION,
     CHECK_INTERSECTION,
     CHECK_DIFFERENCE,
-    CHECK_SYNTHETIC
+    CHECK_SYNTHETIC,
+    CHECK_IDS_JOINED    /* STRING_APPEND: every row's id and a comma, 8n bytes */
 } bench_check;
 
 #define MAX_GLOBALS 4
@@ -440,6 +443,11 @@ static const bench_case cases[] = {
       .source = "rows.map(r => r.id).join(\",\")", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "\"r000000,r000001,r000002,r000003,r000004,r000005,r000006,r000007,r000008,r000009\"",
       .check = CHECK_JOIN },
+    /* STRING_APPEND: + extends the accumulator, which the callback holds alone. */
+    { .name = "eval.string.concat-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.reduce((acc, r) => acc + r.id + \",\", \"\")", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = "\"r000000,r000001,r000002,r000003,r000004,r000005,r000006,r000007,r000008,r000009,\"",
+      .check = CHECK_IDS_JOINED },
     { .name = "eval.object.spread-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_C, .smoke = 10,
       .source = "rows.reduce((acc, r) => ({ ...acc, [r.id]: r.kwh }), {})", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "{\"r000000\":0,\"r000001\":3.7,\"r000002\":7.4,\"r000003\":11.1,\"r000004\":14.8,\"r000005\":18.5,"
@@ -1088,6 +1096,9 @@ static bool check_value(bench_run *run, sjs_value value) {
     case CHECK_INTERSECTION: return expect_shape(run, value, (bench_shape){ SJS_SET, n - half });
     case CHECK_DIFFERENCE: return expect_shape(run, value, (bench_shape){ SJS_SET, half });
     case CHECK_SYNTHETIC: return expect_shape(run, value, (bench_shape){ SJS_OBJECT, run->copies * 3u });
+    case CHECK_IDS_JOINED:
+        if (value.kind != SJS_STRING || sjs_string_text(value).length != n * 8u) return fail(run, "ids joined: not the expected length");
+        return true;
     }
     return true;
 }

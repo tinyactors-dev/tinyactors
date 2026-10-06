@@ -231,8 +231,13 @@ static sjs_result key_of(sjs_vm *vm, sjs_value v, sjs_string **out) {
  * Operators
  */
 
+/* STRING_APPEND: at the end of the file. */
+static uint32_t appendable_part(sjs_values parts);
+static sjs_result string_append(sjs_vm *vm, sjs_values parts, sjs_value *out);
+
 /* ToString of each part, joined. */
 static sjs_result concat(sjs_vm *vm, sjs_values parts, sjs_value *out) {
+    if (appendable_part(parts) != 0) return string_append(vm, parts, out); /* STRING_APPEND */
     uint32_t count = parts.count;
     const sjs_allocator *alloc = &vm->context->counting;
     sjs_buf text = { 0 };
@@ -2247,4 +2252,69 @@ __attribute__((noinline)) static void path_sorted(sjs_vm *vm, uint32_t keys, uin
     bool chain = (flags & SJS_CALL_CHAIN) != 0;
     if (!chain) sjs_ref(sorted);
     path_give(vm, (path_result){ base, keys, chain }, sorted);
+}
+
+/* ------------------------------------------------------------------------
+ * STRING_APPEND: + and a template extend, in place, a string nothing else
+ * holds (README.md, "A value nothing else holds is updated in place"): the
+ * left operand that a last read moved out of its variable, or one just made,
+ * such as reduce's accumulator, so that building a string is amortized
+ * linear. Not mutation: nothing else sees the string, so no program can
+ * tell; rolling mutation back keeps it (docs/mutation.md). At the end of the
+ * file, so that the code before it is laid out as it was.
+ */
+
+/* The part a join extends, plus one, or 0 for none: the first part, or the
+ * second after an empty first one (a template's head, `${s}...`), when it is
+ * a string that nothing else holds and that is not interned (the context's
+ * table finds an interned string by its text, which must not change). */
+static uint32_t appendable_part(sjs_values parts) {
+    if (parts.count == 0) return 0;
+    uint32_t first = parts.count > 1u && parts.ptr[0].kind == SJS_STRING && SJS_AS_STRING(parts.ptr[0])->length == 0 ? 1u : 0u;
+    sjs_value v = parts.ptr[first];
+    if (v.kind != SJS_STRING || !sjs_value_unique(v) || (v.as.heap->flags & SJS_STRING_INTERNED) != 0) return 0;
+    return first + 1u;
+}
+
+/* The text of a primitive, as String gives it: a string's own, or written
+ * into `room` (32 bytes), so a number appended allocates nothing. */
+static sjs_str part_text(sjs_value v, char *room) {
+    switch (v.kind) {
+    case SJS_STRING:
+        return sjs_string_view(SJS_AS_STRING(v));
+    case SJS_NUMBER:
+        return (sjs_str){ room, sjs_number_format(v.as.number, room) };
+    case SJS_BOOLEAN:
+        return v.boolean ? SJS_STR("true") : SJS_STR("false");
+    case SJS_NULL:
+        return SJS_STR("null");
+    default:
+        return SJS_STR("undefined");
+    }
+}
+
+/* concat's join, with the part appendable_part names extended by the parts
+ * after it: the same text, faults and limit as concat, in its order. The
+ * parts are on the stack; the one extended leaves it for the result. Fuel:
+ * a unit per 64 bytes appended, the bytes this copies. */
+__attribute__((noinline)) static sjs_result string_append(sjs_vm *vm, sjs_values parts, sjs_value *out) {
+    uint32_t first = appendable_part(parts) - 1u;
+    uint32_t at = (uint32_t)(parts.ptr - vm->stack) + first;
+    sjs_string *s = SJS_AS_STRING(vm->stack[at]);
+    char room[32];
+    uint64_t length = s->length;
+    for (uint32_t i = first + 1u; i < parts.count; i++) {
+        if (!sjs_is_primitive(parts.ptr[i])) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
+        length += part_text(parts.ptr[i], room).length;
+        if (length > vm->context->limits.max_string_bytes) return sjs_vm_fail(vm, SJS_ERR_LIMIT);
+    }
+    uint32_t extra = (uint32_t)(length - s->length);
+    sjs_result r = sjs_string_reserve(vm->context, &s, extra);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    vm->stack[at].as.heap = &s->h;
+    for (uint32_t i = first + 1u; i < parts.count; i++) sjs_string_extend(s, part_text(parts.ptr[i], room));
+    vm->stack[at] = sjs_undefined();
+    vm->fuel_used += extra / 64u;
+    *out = sjs_heap_value(SJS_STRING, &s->h);
+    return SJS_OK;
 }

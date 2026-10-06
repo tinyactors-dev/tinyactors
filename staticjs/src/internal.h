@@ -272,6 +272,10 @@ sjs_result sjs_string_make(sjs_context *context, sjs_str text, sjs_string **out)
 sjs_result sjs_string_intern(sjs_context *context, sjs_str text, sjs_string **out);
 /* The string for an array index, a number's text or a boolean's. */
 sjs_result sjs_string_from_number(sjs_context *context, double value, sjs_string **out);
+/* STRING_APPEND: room for `extra` more bytes in a string the caller holds
+ * alone, not interned, which may move it; then `tail` appended in place. */
+sjs_result sjs_string_reserve(sjs_context *context, sjs_string **string, uint32_t extra);
+void sjs_string_extend(sjs_string *s, sjs_str tail);
 sjs_result sjs_array_make(sjs_context *context, uint32_t capacity, sjs_array **out);
 sjs_result sjs_object_make(sjs_context *context, uint32_t capacity, sjs_object **out);
 /* Grow a container the caller holds alone, which may move it. */
