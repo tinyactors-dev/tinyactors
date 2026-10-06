@@ -58,7 +58,8 @@
  * eval.array.sort and .sort.rows (a copy of xs or rows sorted in place, as
  * .toSorted and .toSorted.rows sort), eval.set.add-reduce (s.add(id));
  * eval.object.assign-reduce (acc[r.id] = r.kwh) and eval.array.assign-reduce
- * (acc[acc.length] = r.kwh), assignment into reduce's accumulator;
+ * (acc[acc.length] = r.kwh), assignment into reduce's accumulator, and
+ * eval.array.assign-index (acc[i] = x * 2 + 1 over a copy of xs, as map);
  * eval.let.counter (let n = a; n += r.kwh), eval.array.reduce.key with a let.
  *
  * write (unit byte): write.rows (n {1000, 10000}, 64 KiB buffer),
@@ -466,6 +467,9 @@ static const bench_case cases[] = {
     { .name = "eval.array.assign-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.reduce((acc, r) => { acc[acc.length] = r.kwh; return acc; }, [])", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "[0,3.7,7.4,11.1,14.8,18.5,22.2,25.9,29.6,33.3]", .check = CHECK_ARRAY_N },
+    { .name = "eval.array.assign-index", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "xs.reduce((acc, x, i) => { acc[i] = x * 2 + 1; return acc; }, [...xs])", .globals = { { "xs", FIX_XS, NULL } },
+      .expect = MAP_VALUE, .check = CHECK_ARRAY_N },
     /* MUTATION: let */
     { .name = "eval.let.counter", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.reduce((a, r) => { let n = a; n += r.kwh; return n; }, 0)", .globals = { { "rows", FIX_ROWS, NULL } },

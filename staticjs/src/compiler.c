@@ -2154,7 +2154,8 @@ static sjs_result compile_expression_statement(sjs_compiler *c, const sjs_event 
  * Its target's code is already there, as a read: the read of the root
  * becomes a RECEIVER, a reference to its slot that holds nothing, and each
  * step pushes its key, a GET_MEMBER's constant or a GET_INDEX's key made a
- * string (TO_KEY). PATH then finds the place they name when it runs,
+ * string, or kept a number for an array (PATH_INDEX). PATH then finds the
+ * place they name when it runs,
  * through containers the place before holds alone. */
 enum { TARGET_TAKEN = 0, TARGET_REFUSED, TARGET_FAILED };
 
@@ -2237,7 +2238,7 @@ static uint8_t assign_target(sjs_compiler *c, const sjs_event *e, construct *k) 
     c->code.ptr[root.pc] = SJS_OP_RECEIVER;
     for (uint32_t i = 0; i < keys; i++) {
         uint8_t *step = c->code.ptr + SJS_BUF_AT(c->path_steps, uint32_t, p->steps_base + i);
-        *step = *step == SJS_OP_GET_MEMBER ? SJS_OP_CONSTANT : SJS_OP_TO_KEY;
+        *step = *step == SJS_OP_GET_MEMBER ? SJS_OP_CONSTANT : SJS_OP_PATH_INDEX;
     }
     forget_read(c, current(c)->function_scope, b->index);
     drop_paths(c, SJS_BUF_COUNT(c->paths, path) - 1u);

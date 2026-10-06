@@ -167,8 +167,10 @@ forms are unsupported; a target that cannot be assigned to (`1++`,
 `o?.a = 1`) is a syntax error, as in JavaScript.
 
 **When it runs**, the root is a `RECEIVER`, a reference to its slot, and
-each member or index pushes its key as a string, so evaluating the target
-adds no holder. `PATH n, mode` then walks from the slot through the `n`
+each member or index pushes its key, so evaluating the target adds no
+holder: a member's as a string, an index's as a number when it is one
+(`PATH_INDEX`), which indexes an array without making a string, and a
+string otherwise (an object as a key faults, as `TO_KEY` does). `PATH n, mode` then walks from the slot through the `n`
 keys: `LOAD` pushes the value there (a compound assignment's, read as any
 property is read), `STORE` stores the value above the keys, and `DROP`
 drops them when `&&=`, `||=` or `??=` stores nothing. A store faults
@@ -209,7 +211,7 @@ code between them. Any other event whose node starts at the root holds the
 path as an operand (`(o.a + 1).k`, `o.f().k`) and ends it. At `ASSIGN`,
 the path that ends at the last instruction is the target: its read of the
 root becomes the `RECEIVER`, each `GET_MEMBER` a `CONSTANT` of its key and
-each `GET_INDEX` a `TO_KEY`. The events are
+each `GET_INDEX` a `PATH_INDEX`. The events are
 
 ```
 t op= v;       <t> ASSIGN(op) <v> ASSIGN_END(op)     (op 0 for =)
@@ -309,13 +311,13 @@ Step 2, assignment:
 |---|---|
 | `include/staticjs.h` | `SJS_EV_ASSIGN`, `SJS_EV_ASSIGN_END`, `SJS_EV_UPDATE`, and their lines in the event grammar |
 | `src/shapes.rules` | the `ASSIGN`, `ASSIGN_END` and `UPDATE` events (`mise run shapes` rewrites `src/shapes_table.h`) |
-| `src/internal.h` | `SJS_OP_PATH`, `SJS_PATH_LOAD`, `SJS_PATH_STORE`, `SJS_PATH_DROP` |
+| `src/internal.h` | `SJS_OP_PATH_INDEX`, `SJS_OP_PATH`, `SJS_PATH_LOAD`, `SJS_PATH_STORE`, `SJS_PATH_DROP` |
 | `src/parser.c` | the `ES_*` states of `F_EXPRESSION_STATEMENT`; `OP_STORE` and `OP_UPDATE`; `sjs_parser.statement_ends`, set in `terminator`; their cases in `pop_op`, and `prefix_update`'s declaration before it; `OP_STORE` in `takes_assignment`; the section from `update_value` to `postfix_update`, and the `++`/`--` cases of `operand` and `operator_token` (restore the refusal they name); `assignment_statement`, and its lines in `assignment` (restore the one refusal); the state in `end_expression_statement` |
 | `src/compiler.c` | `binding.changed_at`, set in `mutation_begin`; `K_ASSIGN` and `construct.assign`, `.keys`, `.root_pc`; the `path` type, `c->paths` and `c->path_steps` and their free; the paths, from `top_path` to `path_step`; `path_begin` in `read_name` (restore `return SJS_OK`); `paths_before` in `event()`, and `path_step` in its `MEMBER` and `INDEX` cases; `ASSIGN_END` in `note_use`; the assignment section, from `TARGET_TAKEN` to `compile_update`, and its three cases in `event()` |
-| `src/vm.c` | `SJS_OP_PATH` in `execute_other`, and `path_op`'s declaration before it; the assignment section at the end of the file |
+| `src/vm.c` | `SJS_OP_PATH_INDEX` and `SJS_OP_PATH` in `execute_other`, and `path_op`'s declaration before it; the assignment section at the end of the file |
 | `tests/spec_test.c` | `ASSIGN` and `ASSIGN_END` in `role_of` |
 | `tests/api_test.c` | `ASSIGN`, `ASSIGN_END` and `UPDATE` in `event_names`; the `test_mutation_assign_*` functions and their calls in `main` |
-| `bench/bench.c` | `eval.object.assign-reduce`, `eval.array.assign-reduce` |
+| `bench/bench.c` | `eval.object.assign-reduce`, `eval.array.assign-reduce`, `eval.array.assign-index` |
 
 Step 2, `let`:
 
