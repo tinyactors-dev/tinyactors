@@ -2277,8 +2277,10 @@ static uint32_t appendable_part(sjs_values parts) {
 }
 
 /* The text of a primitive, as String gives it: a string's own, or written
- * into `room` (32 bytes), so a number appended allocates nothing. */
-static sjs_str part_text(sjs_value v, char *room) {
+ * into `room` (32 bytes), so a number appended allocates nothing. The
+ * string methods that convert an argument (padStart, concat, ...) use it
+ * too. */
+sjs_str sjs_primitive_text(sjs_value v, char *room) {
     switch (v.kind) {
     case SJS_STRING:
         return sjs_string_view(SJS_AS_STRING(v));
@@ -2305,14 +2307,14 @@ __attribute__((noinline)) static sjs_result string_append(sjs_vm *vm, sjs_values
     uint64_t length = s->length;
     for (uint32_t i = first + 1u; i < parts.count; i++) {
         if (!sjs_is_primitive(parts.ptr[i])) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
-        length += part_text(parts.ptr[i], room).length;
+        length += sjs_primitive_text(parts.ptr[i], room).length;
         if (length > vm->context->limits.max_string_bytes) return sjs_vm_fail(vm, SJS_ERR_LIMIT);
     }
     uint32_t extra = (uint32_t)(length - s->length);
     sjs_result r = sjs_string_reserve(vm->context, &s, extra);
     if (r != SJS_OK) return sjs_vm_fail(vm, r);
     vm->stack[at].as.heap = &s->h;
-    for (uint32_t i = first + 1u; i < parts.count; i++) sjs_string_extend(s, part_text(parts.ptr[i], room));
+    for (uint32_t i = first + 1u; i < parts.count; i++) sjs_string_extend(s, sjs_primitive_text(parts.ptr[i], room));
     vm->stack[at] = sjs_undefined();
     vm->fuel_used += extra / 64u;
     *out = sjs_heap_value(SJS_STRING, &s->h);

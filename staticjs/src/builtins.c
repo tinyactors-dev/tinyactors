@@ -109,14 +109,14 @@ static const sjs_name NAMES[] = {
     NAME("match", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("matchAll", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("normalize", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("padEnd", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("padStart", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("padEnd", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_PAD_END, 0),
+    NAME("padStart", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_PAD_START, 0),
     NAME_MUTATION("pop", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_POP), /* MUTATION */
     NAME("propertyIsEnumerable", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
     NAME_MUTATION("push", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_PUSH), /* MUTATION */
     NAME("reduce", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_REDUCE, 0, 0),
     NAME("reduceRight", SJS_NAME_ON_ARRAY, 0, 0, 0),
-    NAME("repeat", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("repeat", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPEAT, 0),
     NAME("replace", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("replaceAll", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME_MUTATION("reverse", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_REVERSE), /* MUTATION */
@@ -920,10 +920,17 @@ static sjs_result string_split(sjs_vm *vm, sjs_str s, sjs_leaf_call *call) {
     }
 }
 
+/* The string methods added after these, at the end of the file. */
+static sjs_result string_method_tail(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+
 static sjs_result string_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_str s = sjs_string_view(SJS_AS_STRING(call->receiver));
     call->cost = s.length / 16u;
     switch (id) {
+    case SJS_METHOD_STRING_PAD_END:
+    case SJS_METHOD_STRING_PAD_START:
+    case SJS_METHOD_STRING_REPEAT:
+        return string_method_tail(vm, id, call);
     case SJS_METHOD_STRING_ENDS_WITH:
     case SJS_METHOD_STRING_STARTS_WITH:
     case SJS_METHOD_STRING_INCLUDES:
@@ -2046,5 +2053,108 @@ sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
         call->receiver_slot->as.heap = &set->h;
         return r;
     }
+    }
+}
+
+/* ------------------------------------------------------------------------
+ * String methods added later: at the end of the file, so that the code
+ * before them is laid out as it was (docs/builtins.md, section 8). None
+ * changes its receiver: JavaScript's strings are immutable.
+ */
+
+/* The receiver, as the result: a string is a value, so giving the same one
+ * back cannot be told from a copy. */
+static sjs_result same_string(sjs_leaf_call *call) {
+    sjs_ref(call->receiver);
+    call->result = call->receiver;
+    return SJS_OK;
+}
+
+/* An empty string with room for `bytes` bytes, as call->result: the text is
+ * appended with sjs_string_extend, which keeps what the string caches true.
+ * Charges a unit per 16 bytes, as the other string methods do. */
+static sjs_result string_with_room(sjs_vm *vm, sjs_leaf_call *call, uint64_t bytes) {
+    if (bytes > vm->context->limits.max_string_bytes) return sjs_vm_fail(vm, SJS_ERR_LIMIT);
+    sjs_string *s;
+    sjs_result r = sjs_string_make(vm->context, SJS_STR(""), &s);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    call->result = sjs_heap_value(SJS_STRING, &s->h);
+    call->cost += bytes / 16u;
+    r = sjs_string_reserve(vm->context, &s, (uint32_t)bytes);
+    call->result.as.heap = &s->h;
+    return r == SJS_OK ? SJS_OK : sjs_vm_fail(vm, r);
+}
+
+/* Append `times` copies of `piece` to a string with room for them, doubling
+ * what is appended, so that a short piece costs O(log times) calls. */
+static void append_copies(sjs_string *out, sjs_str piece, uint32_t times) {
+    if (times == 0 || piece.length == 0) return;
+    uint32_t start = out->length;
+    sjs_string_extend(out, piece);
+    uint32_t done = 1;
+    while (done < times) {
+        uint32_t more = done <= times - done ? done : times - done;
+        sjs_string_extend(out, (sjs_str){ out->bytes + start, more * piece.length });
+        done += more;
+    }
+}
+
+/* padStart and padEnd: the receiver filled to `targetLength` UTF-16 code
+ * units with copies of the pad string, the last one cut short. As in
+ * JavaScript, the pad string is converted only when there is padding to
+ * make; as String converts it, so an object faults. */
+static sjs_result string_pad(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    const sjs_string *s = SJS_AS_STRING(call->receiver);
+    double target;
+    if (to_integer(vm, arg(call, 0), &target) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (!(target > (double)s->utf16_length)) return same_string(call);
+    sjs_value fill = arg(call, 1);
+    char room[32];
+    sjs_str filler = SJS_STR(" ");
+    if (fill.kind != SJS_UNDEFINED) {
+        if (!sjs_is_primitive(fill)) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
+        filler = sjs_primitive_text(fill, room);
+    }
+    if (filler.length == 0) return same_string(call);
+    /* Each code unit takes at least a byte. */
+    double units = target - (double)s->utf16_length;
+    if (units > (double)vm->context->limits.max_string_bytes) return sjs_vm_fail(vm, SJS_ERR_LIMIT);
+    uint32_t filler_units = sjs_utf16_length(filler);
+    uint32_t whole = (uint32_t)units / filler_units;
+    uint32_t cut;
+    if (!utf16_to_byte(filler, (uint32_t)units % filler_units, &cut)) {
+        return sjs_vm_fault(vm, "staticjs strings cannot hold a lone surrogate");
+    }
+    uint64_t bytes = (uint64_t)whole * filler.length + cut + s->length;
+    if (string_with_room(vm, call, bytes) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_string *out = SJS_AS_STRING(call->result);
+    if (id == SJS_METHOD_STRING_PAD_END) sjs_string_extend(out, sjs_string_view(s));
+    append_copies(out, filler, whole);
+    sjs_string_extend(out, (sjs_str){ filler.ptr, cut });
+    if (id == SJS_METHOD_STRING_PAD_START) sjs_string_extend(out, sjs_string_view(s));
+    return SJS_OK;
+}
+
+static sjs_result string_repeat(sjs_vm *vm, sjs_leaf_call *call) {
+    const sjs_string *s = SJS_AS_STRING(call->receiver);
+    double count;
+    if (to_integer(vm, arg(call, 0), &count) != SJS_OK) return SJS_ERR_PROGRAM;
+    /* A RangeError in JavaScript. */
+    if (count < 0 || !sjs_number_is_finite(count)) return sjs_vm_fault(vm, "repeat takes a count that is finite and not negative");
+    if (s->length == 0) return same_string(call);
+    if (count * (double)s->length > (double)vm->context->limits.max_string_bytes) return sjs_vm_fail(vm, SJS_ERR_LIMIT);
+    uint32_t times = (uint32_t)count;
+    if (string_with_room(vm, call, (uint64_t)times * s->length) != SJS_OK) return SJS_ERR_PROGRAM;
+    append_copies(SJS_AS_STRING(call->result), sjs_string_view(s), times);
+    return SJS_OK;
+}
+
+__attribute__((noinline)) static sjs_result string_method_tail(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    switch (id) {
+    case SJS_METHOD_STRING_PAD_END:
+    case SJS_METHOD_STRING_PAD_START:
+        return string_pad(vm, id, call);
+    default: /* REPEAT */
+        return string_repeat(vm, call);
     }
 }
