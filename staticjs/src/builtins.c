@@ -25,6 +25,7 @@ static const function_entry FUNCTION_TABLE[] = {
     { "Object", "values", SJS_BUILTIN_OBJECT_VALUES },
     { "Object", "entries", SJS_BUILTIN_OBJECT_ENTRIES },
     { "Object", "fromEntries", SJS_BUILTIN_OBJECT_FROM_ENTRIES },
+    { "Object", "groupBy", SJS_BUILTIN_OBJECT_GROUP_BY },
     { "Number", "isInteger", SJS_BUILTIN_NUMBER_IS_INTEGER },
     { "Number", "isSafeInteger", SJS_BUILTIN_NUMBER_IS_SAFE_INTEGER },
     { "Number", "isFinite", SJS_BUILTIN_NUMBER_IS_FINITE },
@@ -165,6 +166,7 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_VALUES),
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_ENTRIES),
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_FROM_ENTRIES),
+    FUNCTION_VALUE(SJS_BUILTIN_OBJECT_GROUP_BY),
     FUNCTION_VALUE(SJS_BUILTIN_NUMBER_IS_INTEGER),
     FUNCTION_VALUE(SJS_BUILTIN_NUMBER_IS_SAFE_INTEGER),
     FUNCTION_VALUE(SJS_BUILTIN_NUMBER_IS_FINITE),
@@ -252,6 +254,7 @@ bool sjs_builtin_loops(sjs_builtin_id id) {
     case SJS_METHOD_ARRAY_REDUCE:
     case SJS_METHOD_ARRAY_SOME:
     case SJS_METHOD_ARRAY_TO_SORTED:
+    case SJS_BUILTIN_OBJECT_GROUP_BY:
         return true;
     default:
         return false;
@@ -978,8 +981,67 @@ static sjs_value *slot(sjs_vm *vm, const vm_frame *frame, uint32_t i) {
     return &vm->stack[frame->base + i];
 }
 
+/* The array a loop walks: the receiver of a method, and for Object.groupBy
+ * the first argument, which call() moved into the receiver's slot. */
 static const sjs_array *receiver(sjs_vm *vm, const vm_frame *frame) {
     return SJS_AS_ARRAY(*slot(vm, frame, LOOP_RECEIVER));
+}
+
+/* Object.groupBy's step for the key the callback gave for the element at
+ * `i`: ToPropertyKey of a primitive, and the element appended to the array
+ * the key holds in the output object, which is made when the key is first
+ * seen. The key is borrowed. The object holds each array alone, so it grows
+ * in place. One lookup, through the object's index when it has one. */
+static bool group_key_ok(sjs_value key) {
+    if (key.kind == SJS_STRING) return !sjs_str_equal(sjs_string_view(SJS_AS_STRING(key)), SJS_STR("__proto__"));
+    return key.kind == SJS_UNDEFINED || key.kind == SJS_NULL || key.kind == SJS_BOOLEAN || key.kind == SJS_NUMBER;
+}
+
+static bool group_add(sjs_vm *vm, vm_frame *frame, sjs_value key) {
+    sjs_string *k;
+    sjs_result r = sjs_to_key(vm->context, key, &k);
+    if (r == SJS_ERR_PROGRAM) {
+        sjs_vm_fault(vm, "a key must be a primitive");
+        return false;
+    }
+    if (r != SJS_OK) {
+        sjs_vm_fail(vm, r);
+        return false;
+    }
+    sjs_value *output = slot(vm, frame, LOOP_OUTPUT);
+    sjs_object *o = SJS_AS_OBJECT(*output);
+    sjs_value item = receiver(vm, frame)->items[frame->index];
+    if (sjs_str_equal(sjs_string_view(k), SJS_STR("__proto__"))) {
+        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+        sjs_vm_fault(vm, "staticjs objects have no prototype");
+        return false;
+    }
+    const sjs_entry *e = sjs_object_find(o, sjs_string_view(k));
+    if (e != NULL) {
+        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+        sjs_entry *entry = (sjs_entry *)(uintptr_t)e;
+        sjs_array *group = SJS_AS_ARRAY(entry->value);
+        sjs_ref(item);
+        if (array_add(vm, &group, item) != SJS_OK) return false;
+        entry->value.as.heap = &group->h;
+        return true;
+    }
+    sjs_array *group;
+    if (new_array(vm, 4, &group) != SJS_OK) {
+        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+        return false;
+    }
+    sjs_ref(item);
+    group->items[group->length++] = item;
+    r = sjs_object_put_key(vm->context, &o, (sjs_put){ k, sjs_heap_value(SJS_ARRAY, &group->h) });
+    output->as.heap = &o->h;
+    if (r != SJS_OK) {
+        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+        sjs_unref(vm->context, sjs_heap_value(SJS_ARRAY, &group->h));
+        sjs_vm_fail(vm, r);
+        return false;
+    }
+    return true;
 }
 
 static sjs_result set_output(sjs_vm *vm, vm_frame *frame, sjs_value v) {
@@ -1015,6 +1077,7 @@ static const struct {
     uint8_t shape;
 } shape_runners[] = {
     { SJS_METHOD_ARRAY_MAP, SJS_SHAPE_PLUCK },
+    { SJS_BUILTIN_OBJECT_GROUP_BY, SJS_SHAPE_PLUCK },
     { SJS_METHOD_ARRAY_TO_SORTED, SJS_SHAPE_COMPARE_BY_KEY },
     { SJS_METHOD_ARRAY_TO_SORTED, SJS_SHAPE_COMPARE_NUMERIC },
     { SJS_METHOD_ARRAY_FILTER, SJS_SHAPE_KEY_COMPARE },
@@ -1138,6 +1201,7 @@ static const sjs_entry *own_entry(vm_frame *frame, const sjs_object *o) {
 
 sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
     sjs_value callback = *slot(vm, frame, LOOP_CALLBACK);
+    if (slot(vm, frame, LOOP_RECEIVER)->kind != SJS_ARRAY) return sjs_vm_fault(vm, "Object.groupBy takes an array");
     const sjs_array *a = receiver(vm, frame);
     frame->index = 0;
     frame->length = a->length;
@@ -1157,6 +1221,12 @@ sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
         sjs_array *out;
         if (new_array(vm, frame->builtin == SJS_METHOD_ARRAY_MAP ? a->length : 4, &out) != SJS_OK) return SJS_ERR_PROGRAM;
         return set_output(vm, frame, sjs_heap_value(SJS_ARRAY, &out->h));
+    }
+    case SJS_BUILTIN_OBJECT_GROUP_BY: {
+        sjs_object *out;
+        sjs_result r = sjs_object_make(vm->context, 4, &out);
+        if (r != SJS_OK) return sjs_vm_fail(vm, r);
+        return set_output(vm, frame, sjs_heap_value(SJS_OBJECT, &out->h));
     }
     case SJS_METHOD_ARRAY_REDUCE:
         if (frame->argc >= 2) {
@@ -1208,7 +1278,8 @@ static loop_step call_back(sjs_vm *vm, vm_frame *frame, sjs_values values) {
 static loop_step call_element(sjs_vm *vm, vm_frame *frame, uint32_t i) {
     const sjs_array *a = receiver(vm, frame);
     sjs_value args[3] = { a->items[i], sjs_num((double)i), *slot(vm, frame, LOOP_RECEIVER) };
-    return call_back(vm, frame, (sjs_values){ args, 3 });
+    /* Object.groupBy calls back with the element and its index only. */
+    return call_back(vm, frame, (sjs_values){ args, frame->builtin == SJS_BUILTIN_OBJECT_GROUP_BY ? 2u : 3u });
 }
 
 static loop_step done(sjs_vm *vm, vm_frame *frame, sjs_value result) {
@@ -1227,6 +1298,15 @@ static loop_step pluck_step(sjs_vm *vm, vm_frame *frame) {
         const sjs_entry *e = own_entry(frame, SJS_AS_OBJECT(x));
         if (e != NULL || !frame->shape_flag) {
             sjs_value v = e != NULL ? e->value : (sjs_value){ .kind = SJS_UNDEFINED };
+            if (frame->builtin == SJS_BUILTIN_OBJECT_GROUP_BY) {
+                /* A key that faults (an object, or __proto__) runs in the
+                 * bytecode, so the fault has the callback's position. */
+                if (!group_key_ok(v)) return call_element(vm, frame, frame->index);
+                if (!group_add(vm, frame, v)) return LOOP_FAULT;
+                frame->index++;
+                vm->fuel_used += 1;
+                return LOOP_AGAIN;
+            }
             sjs_ref(v);
             sjs_array *out = SJS_AS_ARRAY(*slot(vm, frame, LOOP_OUTPUT));
             out->items[out->length++] = v;
@@ -1507,6 +1587,13 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
                 if (array_add(vm, &out, r) != SJS_OK) return LOOP_FAULT;
                 slot(vm, frame, LOOP_OUTPUT)->as.heap = &out->h;
             }
+            break;
+        }
+        case SJS_BUILTIN_OBJECT_GROUP_BY: {
+            bool added = group_add(vm, frame, r);
+            sjs_vm_release(vm, r);
+            if (!added) return LOOP_FAULT;
+            frame->index++;
             break;
         }
         case SJS_METHOD_ARRAY_REDUCE:

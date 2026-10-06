@@ -1221,6 +1221,21 @@ LOOP_AGAIN. Otherwise it calls back as today.
 path. The callback never reads the index or the array, and nothing else can
 observe them.
 
+### 7.3A `Object.groupBy` with PLUCK
+
+`Object.groupBy(items, x => x.k)` is a second consumer of PLUCK, with no new
+rule: the callback's shape is the same, and the call's extra argument (the
+index) is one a one-parameter arrow never reads. The preconditions are 7.3's
+(the loop is entered, the stack has room for 1, the element is an object, the
+key is its own property or absent and not on Object.prototype), with one
+more: the plucked value must be a primitive that ToPropertyKey accepts. An
+object, array or set key is not a precondition failure the C path may
+decide; it calls the bytecode, which gives the value, and the grouping step
+then faults on the non-primitive as it does for any callback. The C path
+takes the same group step as the bytecode path (one helper), so the key's
+text, the group's order and the faults cannot drift. Fuel: 2 per element
+against 4.
+
 ### 7.4 Measuring
 
 - The existing cases `eval.array.toSorted.rows` (`(a, b) => a.kwh - b.kwh`),
@@ -1826,7 +1841,7 @@ are charged. The changes common to all three items:
 - **`shape_start` takes a table** from built-in to the shapes it runs.
   MAP runs PLUCK; TO_SORTED runs COMPARE_BY_KEY and COMPARE_NUMERIC;
   FILTER, FIND, FIND_INDEX, FIND_LAST, SOME and EVERY run KEY_COMPARE and
-  ELEMENT_COMPARE; REDUCE runs SUM and SUM_KEY. The table replaces the
+  ELEMENT_COMPARE; REDUCE runs SUM and SUM_KEY. `Object.groupBy` runs PLUCK, as MAP does (7.3A). The table replaces the
   conditional chain, which three more cases would make unreadable.
   **Implemented with item 1** as `shape_runners`, rows of `{ builtin,
   shape }` that `shape_start` scans; a switch on the shape then reads its

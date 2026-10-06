@@ -285,3 +285,206 @@ Math
 (o => [o.toStrin, o["valueOf" + "f"], o.__proto, "concat" in {}, "a" in [1]])({ toStrin: 1, valueOff: 2, __proto: 3 })
 --- value
 [1,2,3,false,false]
+
+# Object.groupBy: a loop; keys are the callback's results through ToPropertyKey,
+# each holding its items in order. Node's result has a null prototype, and
+# staticjs objects have none.
+=== Object.groupBy groups by the callback's result
+Object.groupBy([1, 2, 3, 4, 5], x => x % 2 ? "odd" : "even")
+--- value
+{"odd":[1,3,5],"even":[2,4]}
+
+=== Object.groupBy on an empty array
+Object.groupBy([], x => x)
+--- value
+{}
+
+=== Object.groupBy keeps array-index keys first, in ascending order
+Object.groupBy(["b", "10", "a", "2", "01"], x => x)
+--- value
+{"2":["2"],"10":["10"],"b":["b"],"a":["a"],"01":["01"]}
+
+=== Object.groupBy turns primitive keys into property keys
+Object.groupBy([0, -0, 1, NaN, null, undefined, true, false, "1", 1.5], x => x === 0 ? -0 : x)
+--- value
+{"0":[0,-0],"1":[1,"1"],"NaN":[NaN],"null":[null],"undefined":[undefined],"true":[true],"false":[false],"1.5":[1.5]}
+
+=== Object.groupBy passes the element and its index
+Object.groupBy(["a", "b", "c", "d"], (x, i) => i % 2 ? "odd" : "even")
+--- value
+{"even":["a","c"],"odd":["b","d"]}
+
+=== Object.groupBy passes no third argument
+Object.groupBy([1, 2], (x, i, ...rest) => rest.length ? "extra" : "two")
+--- value
+{"two":[1,2]}
+
+=== Object.groupBy with an object key callback in C
+@shapes PLUCK(k)
+Object.groupBy([{k: "a", n: 1}, {k: "b", n: 2}, {k: "a", n: 3}, {n: 4}], x => x.k)
+--- value
+{"a":[{"k":"a","n":1},{"k":"a","n":3}],"b":[{"k":"b","n":2}],"undefined":[{"n":4}]}
+
+=== Object.groupBy with a number key callback in C
+@shapes PLUCK(k)
+Object.groupBy([{k: 2}, {k: 1}, {k: 2}, {k: 10}], x => x.k)
+--- value
+{"1":[{"k":1}],"2":[{"k":2},{"k":2}],"10":[{"k":10}]}
+
+=== Object.groupBy with a key callback on a number element
+@shapes PLUCK(k)
+Object.groupBy([{k: 1}, 5], x => x.k)
+--- fault reads properties
+
+=== Object.groupBy with a key callback on an element with no key to read
+@shapes PLUCK(k)
+Object.groupBy([{k: 1}, null], x => x.k)
+--- fault
+
+=== Object.groupBy with a key callback that reads a prototype name
+@shapes PLUCK(toString)
+Object.groupBy([{a: 1}], x => x.toString)
+--- fault no prototype
+
+=== Object.groupBy with a key callback that finds an object
+Object.groupBy([{k: {}}], x => x.k)
+--- fault primitive
+
+=== Object.groupBy with a key callback that finds an array
+Object.groupBy([[1]], x => x)
+--- fault primitive
+
+=== Object.groupBy faults on a callback result that is an object
+Object.groupBy([1], x => ({}))
+--- fault primitive
+
+=== Object.groupBy faults on a function result
+Object.groupBy([1], x => y => y)
+--- fault primitive
+
+=== Object.groupBy faults on the key __proto__
+Object.groupBy(["__proto__"], x => x)
+--- fault no prototype
+
+=== Object.groupBy with many keys
+(g => [Object.keys(g).length, g.k4])(Object.groupBy([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], x => "k" + String(x % 11)))
+--- value
+[11,[4,15]]
+
+=== Object.groupBy leaves its items alone
+(xs => [Object.groupBy(xs, x => x > 1), xs])([1, 2, 3])
+--- value
+[{"false":[1],"true":[2,3]},[1,2,3]]
+
+=== Object.groupBy results are objects with own properties
+(g => [g.odd, g.even, Object.keys(g), "odd" in g, Object.entries(g)])(Object.groupBy([1, 2, 3], x => x % 2 ? "odd" : "even"))
+--- value
+[[1,3],[2],["odd","even"],true,[["odd",[1,3]],["even",[2]]]]
+
+=== Object.groupBy results can be named after a prototype name
+Object.groupBy([1, 2], x => "toString").toString
+--- value
+[1,2]
+
+=== Object.groupBy results have no prototype to read
+Object.groupBy([1, 2], x => "a").toString
+--- fault no prototype
+
+=== Object.groupBy results have no prototype to test
+"constructor" in Object.groupBy([1], x => "a")
+--- fault no prototype
+
+=== Object.groupBy results spread into an object
+({...Object.groupBy([1, 2, 3], x => x % 2), z: 1})
+--- value
+{"0":[2],"1":[1,3],"z":1}
+
+=== Object.groupBy nests in itself
+Object.groupBy(Object.entries(Object.groupBy([1, 2, 3, 4], x => x % 2)), e => e[1].length)
+--- value
+{"2":[["0",[2,4]],["1",[1,3]]]}
+
+=== Object.groupBy faults on a string
+Object.groupBy("abc", x => x)
+--- fault takes an array
+
+=== Object.groupBy faults on a set
+Object.groupBy(new Set([1]), x => x)
+--- fault takes an array
+
+=== Object.groupBy faults on an object
+Object.groupBy({a: 1}, x => x)
+--- fault takes an array
+
+=== Object.groupBy faults on undefined
+Object.groupBy(undefined, x => x)
+--- fault takes an array
+
+=== Object.groupBy faults with no arguments
+Object.groupBy()
+--- fault Object.groupBy
+
+=== Object.groupBy faults with no callback
+Object.groupBy([1])
+--- fault not a function
+
+=== Object.groupBy faults on a callback that is not a function
+Object.groupBy([1], "a")
+--- fault not a function
+
+=== Object.groupBy faults on an empty array with no callback
+Object.groupBy([], 1)
+--- fault not a function
+
+=== Object.groupBy faults when the callback faults
+Object.groupBy([1], x => x.a.b)
+--- fault
+
+=== Object.groupBy ignores extra arguments
+Object.groupBy([1, 2], x => x, "extra", 3)
+--- value
+{"1":[1],"2":[2]}
+
+=== Object.groupBy as a value
+(f => f([1, 2, 3], x => x > 1))(Object.groupBy)
+--- value
+{"false":[1],"true":[2,3]}
+
+=== Object.groupBy with a native-style callback name
+Object.groupBy([1, 2, 3], Boolean)
+--- value
+{"true":[1,2,3]}
+
+=== Object.groupBy with a block-body key callback
+@shapes PLUCK(k)
+Object.groupBy([{k: "a"}, {k: "b"}, {k: "a"}], x => { return x.k; })
+--- value
+{"a":[{"k":"a"},{"k":"a"}],"b":[{"k":"b"}]}
+
+=== Object.groupBy with an index parameter is not a pluck
+@shapes -
+Object.groupBy([{k: 1}, {k: 2}, {k: 3}], (x, i) => i % 2)
+--- value
+{"0":[{"k":1},{"k":3}],"1":[{"k":2}]}
+
+=== Object.groupBy with a key callback that finds __proto__
+@shapes PLUCK(k)
+Object.groupBy([{k: "__proto__"}], x => x.k)
+--- fault no prototype
+
+=== Object.groupBy with a key callback that finds a function
+@shapes - PLUCK(k)
+Object.groupBy([{k: () => 1}], x => x.k)
+--- fault primitive
+
+=== Object.groupBy with a key callback on a string element
+@shapes PLUCK(length)
+Object.groupBy(["ab", "c", "de"], x => x.length)
+--- value
+{"1":["c"],"2":["ab","de"]}
+
+=== Object.groupBy with booleans from a key callback
+@shapes PLUCK(k)
+Object.groupBy([{k: true}, {k: false}, {k: null}, {k: true}], x => x.k)
+--- value
+{"true":[{"k":true},{"k":true}],"false":[{"k":false}],"null":[{"k":null}]}
