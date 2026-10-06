@@ -83,7 +83,9 @@
  * which the bignum reads, back to the doubles themselves) (L);
  * eval.bigint.sum-reduce (1n to n added in reduce: L) and eval.bigint.factorial
  * (1n to n multiplied, n! of up to 118,000 bits: Q); eval.map.get (each row's
- * kwh looked up by its id in a map of every row's, built through the API: L).
+ * kwh looked up by its id in a map of every row's, built through the API: L)
+ * and eval.map.groupBy (the rows by r => r.priority, the PLUCK path, as
+ * eval.object.groupBy.pluck: L).
  *
  * write (unit byte): write.rows (n {1000, 10000}, 64 KiB buffer),
  * write.rows.buf64 (10000 rows, a 64-byte buffer), write.numbers (100000
@@ -600,6 +602,10 @@ static const bench_case cases[] = {
     { .name = "eval.map.get", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.map(r => byID.get(r.id))", .globals = { { "rows", FIX_ROWS, NULL }, { "byID", FIX_ID_MAP, NULL } },
       .expect = "[0,3.7,7.4,11.1,14.8,18.5,22.2,25.9,29.6,33.3]", .check = CHECK_ARRAY_N },
+    /* The rows grouped by a pluck, as eval.object.groupBy.pluck (L). */
+    { .name = "eval.map.groupBy", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "[...Map.groupBy(rows, r => r.priority).keys()].join()", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = "\"0,1,2,3\"", .check = CHECK_SAME },
 
     /* BigInts: small ones added, which is most of what a data model does with
      * them (L), and a product that grows by a limb every ten elements or so,

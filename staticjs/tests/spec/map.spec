@@ -353,3 +353,340 @@ Map.prototype
 [new Map([[1, 2]]), new Map()].map(m => m.size)
 --- value
 [1,0]
+
+# Iteration: keys(), values() and entries() give iterators, which a spread,
+# Array.from, new Set, new Map, Object.fromEntries, an array pattern and
+# their own toArray, map, filter and reduce take. An iterator yields its
+# values once in JavaScript; staticjs reads one only where nothing else holds
+# it, so no program can read one twice, and it holds its map, which cannot
+# change while it lives. The writer writes one as `[...].values()`.
+
+=== keys, values and entries spread
+(() => { const m = new Map([[1, "a"], ["b", 2]]); return [[...m.keys()], [...m.values()], [...m.entries()]]; })()
+--- value
+[[1,"b"],["a",2],[[1,"a"],["b",2]]]
+
+=== an empty map's iterators
+[[...new Map().keys()], [...new Map().values()], [...new Map().entries()], new Map().keys().toArray()]
+--- value
+[[],[],[],[]]
+
+=== toArray
+(() => { const m = new Map([[1, "a"], [2, "b"]]); return [m.keys().toArray(), m.values().toArray(), m.entries().toArray()]; })()
+--- value
+[[1,2],["a","b"],[[1,"a"],[2,"b"]]]
+
+=== Array.from of an iterator
+Array.from(new Map([[1, "a"], [2, "b"]]).values())
+--- value
+["a","b"]
+
+=== Array.from of an iterator with a mapper
+Array.from(new Map([[1, "a"], [2, "b"]]).keys(), (k, i) => k * 10 + i)
+--- value
+[10,21]
+
+=== new Set of a map's keys
+new Set(new Map([[1, "a"], [2, "a"], [3, "b"]]).values())
+--- value
+new Set(["a","b"])
+
+=== new Map of a map's entries
+new Map(new Map([[1, "a"], [2, "b"]]).entries())
+--- value
+new Map([[1,"a"],[2,"b"]])
+
+=== new Map of a map's keys faults, as a key is not an entry
+new Map(new Map([[1, "a"]]).keys())
+--- fault an entry of new Map
+
+=== Object.fromEntries of a map's entries
+Object.fromEntries(new Map([["x", 1], ["y", 2]]).entries())
+--- value
+{"x":1,"y":2}
+
+=== Object.fromEntries of a map's values that are not entries faults
+Object.fromEntries(new Map([["x", 1]]).values())
+--- fault Object.fromEntries
+
+=== spread of an iterator into arguments
+Math.max(...new Map([["a", 3], ["b", 7], ["c", 5]]).values())
+--- value
+7
+
+=== an array pattern over an iterator
+(() => { const [first, ...rest] = new Map([[1, "a"], [2, "b"], [3, "c"]]).values(); return [first, rest]; })()
+--- value
+["a",["b","c"]]
+
+=== an array pattern over entries
+(() => { const [[k, v]] = new Map([["key", "value"]]).entries(); return [k, v]; })()
+--- value
+["key","value"]
+
+=== an iterator in a const, read once
+(() => { const m = new Map([[1, 2], [3, 4]]); const it = m.keys(); return [...it]; })()
+--- value
+[1,3]
+
+=== an iterator passed to a function that reads it once
+((it) => [...it])(new Map([["a", 1]]).entries())
+--- value
+[["a",1]]
+
+=== an iterator in an object, read once
+[...({ it: new Map([[1, 2]]).values() }).it]
+--- value
+[2]
+
+=== an iterator read twice faults, where JavaScript gives nothing the second time
+(() => { const it = new Map([[1, 2]]).keys(); return [[...it], [...it]]; })()
+--- fault once
+
+=== an iterator read twice in one array faults
+(() => { const it = new Map([[1, 2]]).values(); return [...it, ...it]; })()
+--- fault once
+
+=== an iterator a closure holds faults when read
+(() => { const it = new Map([[1, 2]]).keys(); return [1].map(() => [...it]); })()
+--- fault once
+
+=== an iterator destructured after a read faults
+(() => { const it = new Map([[1, 2], [3, 4]]).keys(); const [a] = it; const [b] = it; return [a, b]; })()
+--- fault once
+
+=== toArray of an iterator held elsewhere faults
+(() => { const it = new Map([[1, 2]]).keys(); const a = it.toArray(); return [a, it.toArray()]; })()
+--- fault once
+
+=== an iterator is an object
+(() => { const it = new Map().keys(); return [typeof it, Array.isArray(it), it ? 1 : 0]; })()
+--- value
+["object",false,1]
+
+=== the writer writes an iterator as an array's values
+new Map([[1, "a"], [2, "b"]]).keys()
+--- value
+[1,2].values()
+
+=== the writer writes values and entries
+[new Map([[1, "a"]]).values(), new Map([[1, "a"], [2, [3]]]).entries()]
+--- value
+[["a"].values(),[[1,"a"],[2,[3]]].values()]
+
+=== an iterator nested in a map, written
+new Map([["it", new Map([[1, 2]]).entries()]])
+--- value
+new Map([["it",[[1,2]].values()]])
+
+=== a property an iterator lacks is undefined
+new Map().keys().foo
+--- value
+undefined
+
+=== next is not staticjs's
+new Map([[1, 2]]).keys().next()
+--- fault does not have this method
+
+=== next read as a value faults
+new Map().keys().next
+--- fault does not read them
+
+=== a name of Object.prototype read on an iterator faults
+new Map().values().toString
+--- fault does not read them
+
+=== the helpers staticjs leaves out fault
+[new Map([[1, 2]]).keys().some(x => x > 1)]
+--- fault does not have this method
+
+=== drop and take fault
+new Map([[1, 2]]).keys().take(1).toArray()
+--- fault does not have this method
+
+=== an iterator's forEach faults
+new Map([[1, 2]]).keys().forEach(x => x)
+--- fault does not have this method
+
+=== an iterator's map
+@shapes - PLUCK(k)
+(() => { const m = new Map([[1, {k: "a"}], [2, {k: "b"}]]); return m.values().map(v => v.k).toArray(); })()
+--- value
+["a","b"]
+
+=== an iterator's map gives an iterator
+new Map([[1, 2], [3, 4]]).keys().map(k => k * 2)
+--- value
+[2,6].values()
+
+=== an iterator's map is called with the value and a counter only
+new Map([["a", 1], ["b", 2]]).keys().map((k, i, rest) => [k, i, rest]).toArray()
+--- value
+[["a",0,undefined],["b",1,undefined]]
+
+=== an iterator's filter
+@shapes ELEMENT_COMPARE(GREATER, 2)
+[...new Map([[1, 1], [2, 2], [3, 3], [4, 4]]).values().filter(v => v > 2)]
+--- value
+[3,4]
+
+=== an iterator's filter by a key
+@shapes KEY_COMPARE(n, STRICT_EQUAL, 1)
+[...new Map([["a", {n: 1}], ["b", {n: 2}], ["c", {n: 1}]]).values().filter(v => v.n === 1)]
+--- value
+[{"n":1},{"n":1}]
+
+=== an iterator's filter is called with the value and a counter only
+[...new Map([["a", 1], ["b", 2], ["c", 3]]).keys().filter((k, i, rest) => i !== 1 && rest === undefined)]
+--- value
+["a","c"]
+
+=== an iterator's reduce
+@shapes SUM(false)
+new Map([["a", 1], ["b", 2], ["c", 3]]).values().reduce((a, x) => a + x, 0)
+--- value
+6
+
+=== an iterator's reduce by a key
+@shapes SUM_KEY(kwh, false)
+new Map([["a", {kwh: 1.5}], ["b", {kwh: 2}]]).values().reduce((a, r) => a + r.kwh, 0)
+--- value
+3.5
+
+=== an iterator's reduce without an initial value
+new Map([["a", 1], ["b", 2], ["c", 3]]).values().reduce((a, x, i) => a * 10 + x + i)
+--- value
+135
+
+=== an iterator's reduce is called with the accumulator, the value and a counter only
+new Map([["a", 1], ["b", 2]]).keys().reduce((acc, k, i, rest) => [...acc, k, i, rest], [])
+--- value
+["a",0,undefined,"b",1,undefined]
+
+=== an iterator's reduce of nothing without an initial value faults
+new Map().keys().reduce((a, x) => a + x)
+--- fault initial value
+
+=== a chain of helpers
+new Map([[1, 10], [2, 20], [3, 30], [4, 40]]).values().filter(v => v !== 20).map(v => v / 10).reduce((a, x) => a + x, 0)
+--- value
+8
+
+=== a helper's result, written
+new Map([[1, 10], [2, 20]]).values().filter(v => v > 10)
+--- value
+[20].values()
+
+=== a helper's result read twice faults
+(() => { const it = new Map([[1, 2]]).keys().map(x => x); return [[...it], [...it]]; })()
+--- fault once
+
+=== a helper's callback that is not a function faults
+new Map([[1, 2]]).keys().map(5)
+--- fault not a function
+
+=== a helper of an iterator held elsewhere faults
+(() => { const it = new Map([[1, 2]]).keys(); const doubled = it.map(x => x * 2); return [[...it], [...doubled]]; })()
+--- fault once
+
+=== a helper's callback faults at its element
+new Map([[1, {k: 2}], [3, null]]).values().map(v => v.k).toArray()
+--- fault of null
+
+# forEach: a loop, whose callback gets (value, key, map) and whose result is
+# undefined; it cannot change anything outside, so it only faults or gives
+# undefined.
+
+=== forEach gives undefined
+new Map([[1, 2], [3, 4]]).forEach((v, k) => v + k)
+--- value
+undefined
+
+=== forEach of an empty map
+new Map().forEach(v => v)
+--- value
+undefined
+
+=== forEach's callback gets the value, the key and the map
+new Map([["k", 1]]).forEach((v, k, m) => { if (k !== "k" || v !== 1 || m.get(k) !== 1) return m.get("nothing").x; return 0; })
+--- value
+undefined
+
+=== forEach faults where its callback faults
+new Map([[1, {k: 2}], [3, null]]).forEach(v => v.k)
+--- fault of null
+
+=== forEach's callback must be a function
+new Map().forEach()
+--- fault not a function
+
+=== forEach of a large map runs every entry
+new Map(Array.from({ length: 30 }, (x, i) => [i, i === 29 ? null : i])).forEach((v, k) => k < 29 ? v : v.x)
+--- fault of null
+
+# Map.groupBy: as Object.groupBy, into a map whose keys are any primitive,
+# compared as SameValueZero, in the order first seen.
+
+=== Map.groupBy
+Map.groupBy([1, 2, 3, 4, 5], x => x % 2 === 0 ? "even" : "odd")
+--- value
+new Map([["odd",[1,3,5]],["even",[2,4]]])
+
+=== Map.groupBy keeps keys of every primitive kind apart
+Map.groupBy([1, "1", 1n, true, null, undefined, -0, 0, NaN], x => x)
+--- value
+new Map([[1,[1]],["1",["1"]],[1n,[1n]],[true,[true]],[null,[null]],[undefined,[undefined]],[0,[-0,0]],[NaN,[NaN]]])
+
+=== Map.groupBy by a key
+@shapes PLUCK(k)
+Map.groupBy([{k: 1, v: "a"}, {k: "x", v: "b"}, {k: 1, v: "c"}, {j: 2}], r => r.k)
+--- value
+new Map([[1,[{"k":1,"v":"a"},{"k":1,"v":"c"}]],["x",[{"k":"x","v":"b"}]],[undefined,[{"j":2}]]])
+
+=== Map.groupBy by a key of __proto__ and BigInt values
+@shapes PLUCK(k)
+Map.groupBy([{k: "__proto__"}, {k: 10n}, {k: "__proto__"}, {k: 10n}], r => r.k)
+--- value
+new Map([["__proto__",[{"k":"__proto__"},{"k":"__proto__"}]],[10n,[{"k":10n},{"k":10n}]]])
+
+=== Map.groupBy by a key on Object.prototype faults
+@shapes PLUCK(toString)
+Map.groupBy([{toString: 1}, {}], r => r.toString)
+--- fault no prototype
+
+=== Map.groupBy's callback gets the element and its index
+Map.groupBy(["a", "b", "c", "d"], (x, i, rest) => rest === undefined ? i % 2 : "three")
+--- value
+new Map([[0,["a","c"]],[1,["b","d"]]])
+
+=== Map.groupBy of nothing
+Map.groupBy([], x => x)
+--- value
+new Map([])
+
+=== Map.groupBy groups past the index threshold
+[...Map.groupBy(Array.from({ length: 60 }, (x, i) => i), x => x % 20).keys()].length
+--- value
+20
+
+=== Map.groupBy with an object key faults, where JavaScript keys it by identity
+Map.groupBy([1], x => ({}))
+--- fault identity
+
+=== Map.groupBy by a key that is an object faults
+@shapes PLUCK(k)
+Map.groupBy([{k: [1]}], r => r.k)
+--- fault identity
+
+=== Map.groupBy of a string faults, as Object.groupBy does
+Map.groupBy("abc", x => x)
+--- fault Map.groupBy takes an array
+
+=== Map.groupBy of a map faults
+Map.groupBy(new Map([[1, 2]]), x => x)
+--- fault Map.groupBy takes an array
+
+=== Map.groupBy's groups are arrays that a spread copies
+(() => { const g = Map.groupBy([{id: 1, t: "x"}, {id: 2, t: "x"}], r => r.t); return [g.get("x").map(r => r.id), g.size, [...g.keys()]]; })()
+--- value
+[[1,2],1,["x"]]

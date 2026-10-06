@@ -149,7 +149,8 @@ enum {
     SJS_HEAP_NATIVE,
     SJS_HEAP_BUILTIN,
     SJS_HEAP_BIGINT,
-    SJS_HEAP_MAP
+    SJS_HEAP_MAP,
+    SJS_HEAP_ITERATOR
 };
 
 /* refs of a value that is never freed: built-in functions. */
@@ -347,6 +348,37 @@ const sjs_entry *sjs_object_find(const sjs_object *object, sjs_str key);
 /* Add to a set the caller holds alone; takes over the element's reference. */
 sjs_result sjs_set_insert(sjs_context *context, sjs_array **set, sjs_value element);
 bool sjs_set_contains(const sjs_array *set, sjs_value element);
+/*
+ * An iterator (SJS_ITERATOR): a map's keys(), values() or entries(), which
+ * yields from the map, or what an iterator's map() or filter() gave, which
+ * yields `items`. It holds the map either way, so the map cannot change
+ * while it lives, as a JavaScript iterator would see the change. Immutable:
+ * a program reads one only where nothing else holds it (sjs_iterator_items),
+ * so no program can read one twice.
+ */
+#define SJS_ITERATE_KEYS 0u
+#define SJS_ITERATE_VALUES 1u
+#define SJS_ITERATE_ENTRIES 2u
+
+typedef struct {
+    sjs_heap h;           /* h.flags: SJS_ITERATE_*, for a map's own */
+    sjs_value source;     /* the map */
+    sjs_value items;      /* an array of what it yields, or undefined for a map's own */
+} sjs_iterator;
+
+#define SJS_AS_ITERATOR(v) ((sjs_iterator *)(void *)(v).as.heap)
+
+/* An iterator over `source`, a map, taking over the references to it and to
+ * `items` (undefined for a map's own, which yields as `mode` says). */
+typedef struct {
+    sjs_value source;
+    sjs_value items;
+    uint8_t mode;
+} sjs_iterator_spec;
+sjs_result sjs_iterator_make(sjs_context *context, sjs_iterator_spec spec, sjs_value *out);
+/* How many values an iterator yields. */
+uint32_t sjs_iterator_count(const sjs_iterator *it);
+
 /* A map with room for `entries` entries. */
 sjs_result sjs_map_make(sjs_context *context, uint32_t entries, sjs_array **out);
 /* The value of `key` in the map, or NULL: through the index, under
@@ -521,6 +553,7 @@ typedef enum {
     SJS_BUILTIN_BIGINT,
     SJS_BUILTIN_BIGINT_AS_INT_N,
     SJS_BUILTIN_BIGINT_AS_UINT_N,
+    SJS_BUILTIN_MAP_GROUP_BY,
     SJS_BUILTIN_FUNCTION_COUNT,
     /* Methods, called on a receiver. */
     SJS_METHOD_FIRST = 64,
@@ -580,6 +613,18 @@ typedef enum {
     /* Maps. */
     SJS_METHOD_MAP_GET,
     SJS_METHOD_MAP_HAS,
+    SJS_METHOD_MAP_KEYS,
+    SJS_METHOD_MAP_VALUES,
+    SJS_METHOD_MAP_ENTRIES,
+    /* Iterators. */
+    SJS_METHOD_ITERATOR_TO_ARRAY,
+    /* Loops over maps and iterators, which sjs_loop_start hands to
+     * late_start first: from SJS_METHOD_MAP_FOR_EACH to
+     * SJS_METHOD_ITERATOR_REDUCE. */
+    SJS_METHOD_MAP_FOR_EACH,
+    SJS_METHOD_ITERATOR_MAP,
+    SJS_METHOD_ITERATOR_FILTER,
+    SJS_METHOD_ITERATOR_REDUCE,
     /* MUTATION: methods that change their receiver, called only through a
      * reference to the variable that owns it (SJS_OP_MUTATE), never through
      * sjs_builtin_call. Arrays', then sets', then step 3's. */
@@ -614,11 +659,14 @@ sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name);
 #define SJS_NAME_OBJECT 8u     /* on Object.prototype, which staticjs objects lack */
 #define SJS_NAME_MUTATING 16u  /* a method that changes its receiver */
 #define SJS_NAME_ON_MAP 32u    /* on Map.prototype (or Object.prototype) */
+#define SJS_NAME_ON_ITERATOR 64u /* on a map's iterator's prototype or an iterator helper's, up to
+                                  * Iterator.prototype (or Object.prototype) */
 
 typedef struct {
     sjs_str name;
     uint8_t flags;      /* SJS_NAME_* */
-    uint8_t methods[5]; /* the staticjs method on an array, a string, a set, a BigInt, a map; 0 if none */
+    uint8_t methods[6]; /* the staticjs method on an array, a string, a set, a BigInt, a map, an
+                         * iterator; 0 if none */
     uint8_t mutation;   /* MUTATION: the method that changes its receiver, of the one kind
                          * that has it (SJS_METHOD_MUTATION_FIRST on); 0 if none */
 } sjs_name;
