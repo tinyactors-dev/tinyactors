@@ -698,8 +698,8 @@ tested it. `let` moved two cases from `tests/spec/statements.spec` to `mutation.
 "declares with const"). The README, `AGENTS.md`, `docs/builtins.md` and
 `docs/matcher.md` point here.
 
-**Not mutation: `STRING_APPEND`.** `+` and a template extend, in place, a
-string that nothing else holds (README.md, "`+` and a template extend a
+**Not mutation: `STRING_APPEND`.** `+`, a template and a string's `concat`
+extend, in place, a string that nothing else holds (README.md, "`+` and a template extend a
 string nothing else holds"). It is an optimization of immutable `+`, as
 reusing an accumulator nothing else holds is, and no program can tell it
 from a copy; it is tagged `STRING_APPEND` (`git grep -n STRING_APPEND --
