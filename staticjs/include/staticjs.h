@@ -318,11 +318,13 @@ SJS_API sjs_result sjs_function_native(sjs_context *context, sjs_native native, 
  * member or an index) first, then the value; ASSIGN's and ASSIGN_END's
  * count is the operator (an sjs_operator: ADD for `+=`, AND for `&&=`, ...),
  * 0 for `=`. ++ and -- are statements of their own, prefix or postfix,
- * UPDATE's count ADD for ++ and SUBTRACT for --. `let` is CONST_BEGIN with
+ * UPDATE's count ADD for ++ and SUBTRACT for --; delete is a statement of
+ * its own, its target a member or an index. `let` is CONST_BEGIN with
  * count 1, or 2 for a name without a value, which is undefined:
  *
  *   t op= v;                  <t> ASSIGN(op) <v> ASSIGN_END(op)
  *   t++;  ++t;                <t> UPDATE(ADD)
+ *   delete t;                 <t> DELETE
  *   let p = v                 CONST_BEGIN(1) <v> <p> CONST_END
  *   let x                     CONST_BEGIN(2) BIND(x) CONST_END
  */
@@ -387,6 +389,7 @@ typedef enum {
     SJS_EV_ASSIGN,           /* MUTATION: after an assignment's target; count: its operator, 0 for = */
     SJS_EV_ASSIGN_END,       /* MUTATION: after its value; count: as ASSIGN's */
     SJS_EV_UPDATE,           /* MUTATION: after the target of ++ (count ADD) or -- (SUBTRACT) */
+    SJS_EV_DELETE,           /* MUTATION: after the target of delete, a member or an index */
     /* Patterns: each one takes the value before it. A target's default
      * value comes before its pattern, as it is evaluated first. */
     SJS_EV_BIND,             /* text: the name bound */

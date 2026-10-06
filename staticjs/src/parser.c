@@ -123,8 +123,9 @@ enum {
     WA_OPEN = 32, WA_KEY, WA_COLON, WA_VALUE, WA_AFTER, WA_END,
     /* F_NEW */
     N_NAME = 0, N_OPEN,
-    /* MUTATION: F_EXPRESSION_STATEMENT: an expression, an assignment, `++x`, `x++` */
-    ES_EXPRESSION = 0, ES_ASSIGN, ES_PREFIX, ES_UPDATE
+    /* MUTATION: F_EXPRESSION_STATEMENT: an expression, an assignment, `++x`, `x++`,
+     * `delete x.k` */
+    ES_EXPRESSION = 0, ES_ASSIGN, ES_PREFIX, ES_UPDATE, ES_DELETE
 };
 
 /* How the current expression frame expects its next token. */
@@ -182,7 +183,8 @@ typedef struct {
  * OP_STORE is an assignment statement's, whose `op` is its operator (0 for
  * `=`), and OP_UPDATE a statement's prefix ++ or -- (SJS_OP_ADD or
  * SJS_OP_SUBTRACT). */
-enum { OP_UNARY = 1, OP_BINARY, OP_LOGICAL, OP_ARROW, OP_ELSE, OP_ASSIGN, OP_STORE, OP_UPDATE };
+enum { OP_UNARY = 1, OP_BINARY, OP_LOGICAL, OP_ARROW, OP_ELSE, OP_ASSIGN, OP_STORE, OP_UPDATE,
+       OP_DELETE /* MUTATION: `delete`; `op` is 1 for a statement's, 0 for one refused as a value */ };
 
 typedef struct {
     uint8_t kind;
@@ -272,6 +274,7 @@ struct sjs_parser {
     uint8_t skip;          /* SKIP_*: reading past a method staticjs refused */
     uint32_t skip_depth;   /* brackets open in that method */
     bool statement_ends;   /* MUTATION: an expression statement's end closes its operators */
+    bool last_name;        /* MUTATION: the last event sent was a NAME, for delete */
 };
 
 typedef enum { H_TAKEN = 0, H_AGAIN, H_WAIT, H_STOP } handled;
@@ -393,6 +396,7 @@ static handled hold_event(sjs_parser *p, const sjs_event *e) {
 
 static handled send(sjs_parser *p, const sjs_event *e) {
     bool chain = top_frame(p) != NULL && top_frame(p)->chain;
+    p->last_name = e->kind == SJS_EV_NAME; /* MUTATION */
     switch (e->kind) {
     case SJS_EV_NAME:
         p->last_operand = LO_SIMPLE;
@@ -619,6 +623,7 @@ static pending_op *top_op(sjs_parser *p) {
 }
 
 static handled prefix_update(sjs_parser *p, const pending_op *op); /* MUTATION */
+static handled delete_end(sjs_parser *p, const pending_op *op);    /* MUTATION */
 
 /* Emit the event of the operator on top and pop it. */
 static handled pop_op(sjs_parser *p) {
@@ -643,6 +648,8 @@ static handled pop_op(sjs_parser *p) {
         return send_event(p, counted(SJS_EV_ASSIGN_END, op.op, op_place(&op)));
     case OP_UPDATE: /* MUTATION */
         return prefix_update(p, &op);
+    case OP_DELETE: /* MUTATION */
+        return delete_end(p, &op);
     default:
         top_frame(p)->segment = op.saved_segment;
         return send_kind(p, SJS_EV_CONDITIONAL_END, op_place(&op));
@@ -1205,18 +1212,62 @@ static handled refuse_statement(sjs_parser *p, const queued_token *t, const char
     return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, message });
 }
 
+/* MUTATION: `delete`, a statement of its own (docs/mutation.md, "delete"):
+ * DELETE after its operand, a member or an index, when the statement ends
+ * with it. As a value it is refused, and read on as a unary operator. In
+ * strict code, a module, the operand may not be a name, even in
+ * parentheses, as in JavaScript. */
+static const sjs_problem delete_value = { SJS_ERROR_UNSUPPORTED, "staticjs has no delete as a value: delete is a statement of its own" };
+static const sjs_problem delete_target = { SJS_ERROR_UNSUPPORTED, "staticjs deletes only a property of an object, on a path from a variable" };
+static const sjs_problem delete_name = { SJS_ERROR_SYNTAX, "delete of a name is not allowed in strict mode" };
+
+static handled refuse_at(sjs_parser *p, sjs_position at, sjs_problem problem);
+
+static handled delete_word(sjs_parser *p, const queued_token *t) {
+    frame *f = top_frame(p);
+    bool statement = f->type == F_EXPRESSION_STATEMENT && f->state == ES_EXPRESSION && top_op(p) == NULL;
+    pending_op op = unary(p, SJS_OP_NOT, t->at);
+    op.kind = OP_DELETE;
+    op.op = statement ? 1u : 0u;
+    if (statement) {
+        f->state = ES_DELETE;
+    } else if (refuse(p, t, delete_value) == H_STOP) {
+        return H_STOP;
+    }
+    return push_op(p, op);
+}
+
+/* The operand of `delete` has ended. */
+static handled delete_end(sjs_parser *p, const pending_op *op) {
+    bool name = p->last_name;
+    uint8_t operand = p->last_operand;
+    p->last_operand = LO_OTHER;
+    p->last_name = false;
+    if (name && p->goal == SJS_GOAL_MODULE) {
+        queued_token at = { 0 };
+        at.at = op->at;
+        return parse_fail(p, &at, delete_name);
+    }
+    if (op->op == 0) return H_TAKEN; /* refused as a value already */
+    if (!p->statement_ends) return refuse_at(p, op->at, delete_value);
+    if (name || operand != LO_SIMPLE) return refuse_at(p, op->at, delete_target);
+    return send_event(p, counted(SJS_EV_DELETE, 0, op_place(op)));
+}
+
 /* A reserved word where an operand belongs. JavaScript has expressions that
  * start with some (this, function, class, void, ...), and none that start
  * with the others; nor, in a module, with the strict ones. Before `=>`, it
  * is a parameter's name. */
 static handled unsupported_word(sjs_parser *p, const queued_token *t) {
-    static const char *const starters[] = { "this", "function", "class", "void", "delete" };
+    static const char *const starters[] = { "this", "function", "class", "void" };
     sjs_str word = token_text(p, t);
     if (word_listed(word, WORD_LIST(never_words))) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression" });
     const queued_token *next = peek(p, 1);
     if (next == NULL) return H_WAIT;
     if (is_punctuator(next, SJS_P_ARROW)) return parse_fail(p, t, word_problem(p, word, USE_PARAM));
     if (p->goal == SJS_GOAL_MODULE && sjs_str_equal(word, SJS_STR("await"))) return await_word(p, t);
+    /* MUTATION: restore "delete" to the starters refused below. */
+    if (sjs_str_equal(word, SJS_STR("delete"))) return delete_word(p, t);
     if (sjs_str_equal(word, SJS_STR("this"))) {
         /* Refused, and read on as an operand no pattern takes: `[this] = x`. */
         if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs does not have this" }) == H_STOP) return H_STOP;

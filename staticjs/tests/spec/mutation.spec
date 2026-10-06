@@ -2126,3 +2126,333 @@ Array.from({length: 20}, (_, i) => i).reduce((acc) => { acc.splice(0, 1); return
 (() => { const xs = [1, 2, 3]; const ys = xs.toSpliced(0, 1); xs.splice(2, 1); return [xs, ys]; })()
 --- value
 [[1,2],[2,3]]
+
+
+# delete (docs/mutation.md, "delete"): a statement that removes a property
+# of an object on a path whose root the function owns.
+=== delete a property
+(() => { const o = {a: 1, b: 2, c: 3}; delete o.b; return o; })()
+--- value
+{"a":1,"c":3}
+
+=== delete a property by a string key
+(() => { const o = {a: 1, "b c": 2}; delete o["b c"]; return o; })()
+--- value
+{"a":1}
+
+=== delete a property by a key in a variable
+(k => { const o = {a: 1, b: 2}; delete o[k]; return o; })("a")
+--- value
+{"b":2}
+
+=== delete a property by a key built at run time
+(i => { const o = {k1: 1, k2: 2}; delete o[`k${i}`]; return o; })(2)
+--- value
+{"k1":1}
+
+=== delete an integer key by a number
+(() => { const o = {b: 1, 2: 2, 1: 3}; delete o[1]; return [o, Object.keys(o)]; })()
+--- value
+[{"2":2,"b":1},["2","b"]]
+
+=== delete an integer key by its string
+(() => { const o = {1: "a", 2: "b"}; delete o["2"]; return o; })()
+--- value
+{"1":"a"}
+
+=== delete by -0 removes the key 0
+(() => { const o = {0: "z", a: 1}; delete o[-0]; return o; })()
+--- value
+{"a":1}
+
+=== delete by NaN removes the key NaN
+(() => { const o = {NaN: 1, a: 2}; delete o[NaN]; return o; })()
+--- value
+{"a":2}
+
+=== delete a key the object does not have
+(() => { const o = {a: 1}; delete o.b; delete o["c"]; delete o[3]; return o; })()
+--- value
+{"a":1}
+
+=== delete of the only key
+(() => { const o = {a: 1}; delete o.a; return [o, Object.keys(o).length]; })()
+--- value
+[{},0]
+
+=== delete the last key, then add it
+(() => { const o = {a: 1, b: 2}; delete o.b; o.b = 3; return o; })()
+--- value
+{"a":1,"b":3}
+
+=== a key deleted and added again goes last
+(() => { const o = {a: 1, b: 2, c: 3}; delete o.a; o.a = 4; return Object.keys(o); })()
+--- value
+["b","c","a"]
+
+=== an integer key deleted and added again goes among the integer keys
+(() => { const o = {x: 0, 3: "c", 1: "a", 2: "b"}; delete o[1]; delete o[3]; o.y = 1; o[3] = "C"; o[1] = "A"; o[0] = "Z"; return Object.keys(o); })()
+--- value
+["0","1","2","3","x","y"]
+
+=== delete until empty, then add
+(() => { const o = {b: 1, 1: 2, a: 3}; delete o.a; delete o[1]; delete o.b; const e = {...o}; o.z = 1; o[5] = 2; o.a = 3; return [e, o]; })()
+--- value
+[{},{"5":2,"z":1,"a":3}]
+
+=== delete through a path
+(() => { const o = {a: {b: 1, c: 2}, d: 3}; delete o.a.b; return o; })()
+--- value
+{"a":{"c":2},"d":3}
+
+=== delete through an array on the path
+(() => { const o = {rows: [{id: 1, x: 2}, {id: 2, x: 3}]}; delete o.rows[1].x; delete o["rows"][0]["id"]; return o; })()
+--- value
+{"rows":[{"x":2},{"id":2}]}
+
+=== delete through a deep path
+(() => { const o = {a: {b: {c: {d: 1, e: 2}}}}; delete o.a.b.c.d; return o; })()
+--- value
+{"a":{"b":{"c":{"e":2}}}}
+
+=== delete a property that holds an object
+(() => { const o = {a: {b: [1, 2]}, c: 1}; delete o.a; return o; })()
+--- value
+{"c":1}
+
+=== delete in a reduce, by a key it reads
+["b", "d", "x"].reduce((acc, k) => { delete acc[k]; return acc; }, {a: 1, b: 2, c: 3, d: 4})
+--- value
+{"a":1,"c":3}
+
+=== delete most keys of a large object, then look each one up
+(() => { const o = Array.from({length: 90}, (_, i) => `k${i * 7 % 100}`).reduce((acc, k) => { delete acc[k]; return acc; }, Object.fromEntries(Array.from({length: 100}, (_, i) => [`k${i}`, i]))); return [Object.keys(o).length, o, Array.from({length: 100}, (_, i) => o[`k${i}`] ?? -1).filter(v => v >= 0)]; })()
+--- value
+[10,{"k30":30,"k37":37,"k44":44,"k51":51,"k58":58,"k65":65,"k72":72,"k79":79,"k86":86,"k93":93},[30,37,44,51,58,65,72,79,86,93]]
+
+=== delete most integer keys of a large object, then add some back
+(() => { const o = Array.from({length: 36}, (_, i) => i).reduce((acc, i) => { delete acc[i]; return acc; }, Object.fromEntries(Array.from({length: 40}, (_, i) => [i % 2 ? i : `s${i}`, i]))); o[3] = "three"; o.s0 = "zero"; o[1] = "one"; return [Object.keys(o), o[3], o[37], o.s38, o[2]]; })()
+--- value
+[["1","3","37","39","s0","s2","s4","s6","s8","s10","s12","s14","s16","s18","s20","s22","s24","s26","s28","s30","s32","s34","s36","s38"],"three",37,38,undefined]
+
+=== delete every key, then add them in another order
+(() => { const ks = Array.from({length: 20}, (_, i) => `k${i}`); const o = ks.reduce((acc, k) => { delete acc[k]; return acc; }, Object.fromEntries(ks.map(k => [k, 1]))); const e = Object.keys(o).length; const r = ks.toReversed().reduce((acc, k) => { acc[k] = 2; return acc; }, o); return [e, Object.keys(r)]; })()
+--- value
+[0,["k19","k18","k17","k16","k15","k14","k13","k12","k11","k10","k9","k8","k7","k6","k5","k4","k3","k2","k1","k0"]]
+
+=== delete in a branch
+(c => { const o = {a: 1, b: 2}; if (c) { delete o.a; } else { delete o.b; } return o; })(true)
+--- value
+{"b":2}
+
+=== delete as the single statement of an if
+(c => { const o = {a: 1, b: 2}; if (c) delete o.a; return o; })(true)
+--- value
+{"b":2}
+
+=== delete a property of a let
+(() => { let o = {a: 1, b: 2}; delete o.a; o = {...o, c: 3}; delete o.b; return o; })()
+--- value
+{"c":3}
+
+=== delete a property of a parameter given a fresh object
+(o => { delete o.a; return o; })({a: 1, b: 2})
+--- value
+{"b":2}
+
+=== delete a property named as a method of Object.prototype that the object has
+(() => { const o = {toString: 1, valueOf: 2, a: 3}; delete o.toString; delete o["valueOf"]; return o; })()
+--- value
+{"a":3}
+
+=== delete a property named as a mutating method
+(() => { const o = {push: 1, delete: 2}; delete o.push; delete o.delete; return o; })()
+--- value
+{}
+
+=== delete, then the object is spread
+(() => { const o = {a: 1, b: 2, c: 3}; delete o.b; return {...o, d: 4}; })()
+--- value
+{"a":1,"c":3,"d":4}
+
+=== delete, then the object is written and its entries read
+(() => { const o = {a: 1, 5: 2, b: 3}; delete o[5]; return [Object.entries(o), Object.values(o)]; })()
+--- value
+[[["a",1],["b",3]],[1,3]]
+
+=== delete statements one after another
+(() => { const o = {a: 1, b: 2, c: 3, d: 4}; delete o.a; delete o.c; delete o.a; o.e = 5; delete o.d; return o; })()
+--- value
+{"b":2,"e":5}
+
+=== delete of a property of an object a caller holds
+(() => { const p = {a: 1}; const f = o => { delete o.a; return o; }; return [f(p), p]; })()
+--- fault held elsewhere
+
+=== delete through an object another variable holds
+(() => { const o = {a: {b: 1}}; const y = o.a; delete o.a.b; return y; })()
+--- fault held elsewhere
+
+=== delete of a property of an object an array holds, in a callback
+[{a: 1}].map(o => { delete o.a; return o; })
+--- fault held elsewhere
+
+=== delete of an object copied before
+(() => { const o = {a: 1}; const p = o; delete o.a; return p; })()
+--- error unsupported copied
+
+=== delete of an object passed before
+(() => { const o = {a: 1}; const n = Object.keys(o); delete o.a; return [o, n]; })()
+--- error unsupported passed
+
+=== delete of an object stored before
+(() => { const o = {a: 1}; const xs = [o]; delete o.a; return xs; })()
+--- error unsupported stored
+
+=== delete of a captured object
+(() => { const o = {a: 1}; const f = () => o.a; delete o.a; return f(); })()
+--- error unsupported captured
+
+=== delete of an object captured after
+(() => { const o = {a: 1}; delete o.a; const f = () => o; return f(); })()
+--- error unsupported captured
+
+=== delete of a capture
+(() => { const o = {a: 1}; const f = () => { delete o.a; return 1; }; return f(); })()
+--- error unsupported captured
+
+=== delete of a global
+@global g = {a: 1}
+(() => { delete g.a; return 1; })()
+--- error unsupported global
+
+=== delete of an element
+(() => { const xs = [1, 2, 3]; delete xs[1]; return xs; })()
+--- fault no holes
+
+=== delete of the last element
+(() => { const xs = [1, 2, 3]; delete xs[2]; return xs; })()
+--- fault no holes
+
+=== delete of an element past the end
+(() => { const xs = [1]; delete xs[5]; return xs; })()
+--- fault no holes
+
+=== delete of an array's length
+(() => { const xs = [1]; delete xs.length; return xs; })()
+--- fault no holes
+
+=== delete of an element through a path
+(() => { const o = {xs: [1, 2]}; delete o.xs[0]; return o; })()
+--- fault no holes
+
+=== delete of a property of a string
+(() => { const o = {s: "ab"}; delete o.s.length; return o; })()
+--- fault deletes properties of objects only
+
+=== delete of a property of a set
+(() => { const s = new Set([1]); delete s.size; return s; })()
+--- fault deletes properties of objects only
+
+=== delete of a property of a number
+(() => { const o = {n: 1}; delete o.n.x; return o; })()
+--- fault deletes properties of objects only
+
+=== delete of a property of undefined
+(() => { const o = {}; delete o.a.b; return o; })()
+--- fault cannot delete a property of undefined
+
+=== delete of a property of null
+(() => { const o = {a: null}; delete o.a.b; return o; })()
+--- fault cannot delete a property of null
+
+=== delete of __proto__
+(() => { const o = {a: 1}; delete o.__proto__; return o; })()
+--- fault no prototype
+
+=== delete of a computed __proto__
+(k => { const o = {a: 1}; delete o[k]; return o; })("__proto__")
+--- fault no prototype
+
+=== delete of a name of Object.prototype the object does not have
+(() => { const o = {a: 1}; delete o.toString; return o; })()
+--- fault no prototype
+
+=== delete by an object as the key
+(() => { const o = {a: 1}; delete o[{}]; return o; })()
+--- fault
+
+=== delete of a variable
+(() => { const o = {a: 1}; delete o; return o; })()
+--- error unsupported deletes only
+
+=== delete of a parenthesized variable
+(() => { const o = {a: 1}; delete (o); return o; })()
+--- error unsupported deletes only
+
+=== delete of a variable in a module
+@module deleting
+export const f = o => { delete o; return o; };
+--- error syntax strict
+
+=== delete of a parenthesized variable in a module
+@module deleting
+export const f = o => { delete (o); return o; };
+--- error syntax strict
+
+=== delete of a variable in a module, as a value
+@module deleting
+export const f = o => [delete o];
+--- error syntax strict
+
+=== delete as a value
+(() => { const o = {a: 1}; const r = delete o.a; return [r, o]; })()
+--- error unsupported delete as a value
+
+=== delete returned
+(o => { return delete o.a; })({a: 1})
+--- error unsupported delete as a value
+
+=== delete in an arrow's expression body
+(o => delete o.a)({a: 1})
+--- error unsupported delete as a value
+
+=== delete in an operator
+(() => { const o = {a: 1}; delete o.a || 1; return o; })()
+--- error unsupported delete as a value
+
+=== delete of a call
+(() => { const f = () => ({a: 1}); delete f().a; return 1; })()
+--- error unsupported deletes only
+
+=== delete of a method call
+(() => { const o = {f: () => 1}; delete o.f(); return o; })()
+--- error unsupported deletes only
+
+=== delete of an optional member
+(() => { const o = {a: 1}; delete o?.a; return o; })()
+--- error unsupported deletes only
+
+=== delete of a literal
+(() => { delete 1; return 1; })()
+--- error unsupported deletes only
+
+=== delete of a property of a literal
+(() => { delete [1][0]; return 1; })()
+--- error unsupported deletes only
+
+=== delete of delete
+(() => { const o = {a: 1}; delete delete o.a; return o; })()
+--- error unsupported delete as a value
+
+=== delete with a method that changes the root in its key
+(() => { const xs = [0]; delete xs[xs.push(1)]; return xs; })()
+--- error unsupported while it
+
+=== delete without an operand
+(() => { const o = {a: 1}; delete; return o; })()
+--- error syntax
+
+=== delete of an assignment's target
+(() => { const o = {a: 1}; delete o.a = 1; return o; })()
+--- error syntax cannot be assigned to

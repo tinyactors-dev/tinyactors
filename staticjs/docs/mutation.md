@@ -1,10 +1,10 @@
 # Owned mutation
 
 staticjs values used never to change. This document describes the one way
-they now can: a function may change, with one of its methods or by
-assigning to one of its properties or elements, a value that a variable of
-that function holds alone. JavaScript cannot tell that from
-its own semantics, so the rule (`../AGENTS.md`) still holds. The invariant
+they now can: a function may change, with one of its methods, by
+assigning to one of its properties or elements or by deleting one of its
+properties, a value that a variable of that function holds alone.
+JavaScript cannot tell that from its own semantics, so the rule (`../AGENTS.md`) still holds. The invariant
 every optimization relies on is unchanged:
 
 > **A value is never changed once it is shared.**
@@ -22,8 +22,9 @@ This is done in 3 steps:
 2. **Done:** assignment to properties and elements (`a.b.c = v`), with
    the ownership of the whole path checked ("Assignment", below); and
    `let`, a variable that statements assign to ("let", below).
-3. Removal: `delete`, `splice`, `Set.prototype.delete` and `clear`, with
-   removal from the hash index and shrinking ("Removal", below).
+3. **Done:** removal: `delete` ("delete", below), `splice`,
+   `Set.prototype.delete` and `clear`, with removal from the hash index and
+   shrinking ("Removal", below).
 
 ## The methods
 
@@ -272,6 +273,42 @@ let x          CONST_BEGIN(2) BIND(x) CONST_END
 x op= v;       <x> ASSIGN(op) <v> ASSIGN_END(op)
 ```
 
+## delete
+
+`delete o.k;`, `delete o[k];` and `delete a.b[i].c;` are statements of
+their own that remove a property of an object. The target is a path, as an
+assignment's is ("Assignment", above): its root a variable the function
+owns, by the same rules, checked when compiled and again when it runs, and
+each container on the path held by its place alone. When it runs, the keys
+are evaluated left to right, and the last container, which must be an
+object, loses the property: the keys after it move down, and a key added
+again goes in as a new one ("Removal", below). A key the object does not
+have is fine, as in JavaScript, where `delete` gives `true`; `__proto__`
+and a name of `Object.prototype` the object does not have fault, as reading
+them does.
+
+- **An array:** `delete xs[i]` leaves a hole in JavaScript, which a
+  staticjs array has none of, so it faults, whatever the key (`length`
+  too, which JavaScript cannot delete); `splice` removes elements. So does
+  a string, a set, a number or a function on the path or at its end, and
+  `undefined` or `null`, on which JavaScript throws.
+- **A variable:** `delete x` is a syntax error in strict code, a module,
+  even in parentheses, as in JavaScript; in a script, which is sloppy, it
+  is unsupported (JavaScript gives `false`).
+- **As a value** (`const r = delete o.k`, `return delete o.k`, `delete o.k
+  || 1;`, an arrow's body): unsupported, as an assignment is.
+- **Any other operand** (`delete f().k`, `delete o.f()`, `delete o?.k`,
+  `delete 1`, `delete [1][0]`): unsupported; JavaScript evaluates it and
+  gives `true`.
+
+The parser sends `delete` as a prefix operator of a statement, and DELETE
+when the statement ends with its operand; the compiler finds the target as
+an assignment's, and `PATH n, DELETE` removes the property:
+
+```
+delete t;      <t> DELETE
+```
+
 ## Removal
 
 Removing an item from a set or an object, and shrinking a container that
@@ -417,6 +454,19 @@ Step 3, `splice`:
 | `tests/api_test.c` | `test_mutation_splice_fuel`, `test_mutation_splice_out_of_memory`, and the splice in `test_mutation_shrink_array` |
 | `bench/bench.c` | `eval.array.splice`, `eval.array.splice-reduce` |
 
+Step 3, `delete`:
+
+| File | What is tagged |
+|---|---|
+| `include/staticjs.h` | `SJS_EV_DELETE`, and its line in the event grammar |
+| `src/shapes.rules` | the `DELETE` event (`mise run shapes` rewrites `src/shapes_table.h`) |
+| `src/internal.h` | `SJS_PATH_DELETE`, and its words in `SJS_OP_PATH`'s comment |
+| `src/parser.c` | `ES_DELETE`; `OP_DELETE` and its case in `pop_op`, and `delete_end`'s declaration; `sjs_parser.last_name`, set in `send`; the section from `delete_value` to `delete_end`; `delete_word` in `unsupported_word` (restore `"delete"` to its starters) |
+| `src/compiler.c` | `DELETE` in `paths_before`; `compile_delete`, and its case in `event()` |
+| `src/vm.c` | `path_into.mode` and `path_walk.mode` (restore `bool store`), and the delete messages in `path_container`; `SJS_PATH_DELETE` in `path_op` and `path_delete` before it |
+| `tests/api_test.c` | `DELETE` in `event_names`; the `test_mutation_delete_*` functions |
+| `bench/bench.c` | `eval.object.delete-reduce`, `eval.object.delete-reduce.last` |
+
 `splice_arguments` in `src/builtins.c` is `toSpliced`'s argument code,
 moved into a function that both call, inlined; rolling back keeps it, or
 puts its body back in `toSpliced`'s case.
@@ -443,7 +493,9 @@ value" (it was "staticjs has no assignment: values do not change"), and
 "staticjs has no ++ or --: values do not change"); `1++` and `++(a + b)`
 are now syntax errors, as in JavaScript (they were unsupported). Step 3
 changed one case of `mutation.spec` that names a method staticjs lacks: it
-called `splice`, and now calls `copyWithin`. `let` moved two cases from `tests/spec/statements.spec` to `mutation.spec`
+called `splice`, and now calls `copyWithin`. Before step 3, `delete` was
+refused as a word staticjs does not have ("does not have this"); no case
+tested it. `let` moved two cases from `tests/spec/statements.spec` to `mutation.spec`
 ("let" and "let with its name on the next line", which were refused,
 "declares with const"). The README, `AGENTS.md`, `docs/builtins.md` and
 `docs/matcher.md` point here.
