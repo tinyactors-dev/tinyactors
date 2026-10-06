@@ -61,8 +61,8 @@ changing a shared value never is.
    call is compiled as any method call is, and faults when it runs, as it
    did before, on an array or a set.
 2. **Declared in this function**: a parameter of the function, or a
-   `const` of it (in its body or one of its blocks), a name of a pattern
-   included. A name of an enclosing function is a capture (rule 3); an
+   `const` or a `let` of it (in its body or one of its blocks), a name of a
+   pattern included. A name of an enclosing function is a capture (rule 3); an
    import or a global is shared by definition. Both are refused.
 3. **Never captured.** If any arrow function captures `x`, before or after
    the mutation, the mutation is refused. A closure keeps a copy of what
@@ -73,9 +73,10 @@ changing a shared value never is.
 4. **Never kept by something else before the mutation.** An earlier read of
    `x` (in source order, which is evaluation order on every path, as every
    jump goes forward) refuses the mutation when its value may be kept:
-   - **copied**: bound by a `const` (`const y = x`) or by a default value
-     (`const {a = x} = o`), or passed on by `&&`, `||`, `??` or `?:`,
-     whose result is the value itself;
+   - **copied**: bound by a `const` or a `let` (`const y = x`), assigned
+     (`o.k = x`, `y = x`), or bound by a default value (`const {a = x} =
+     o`), or passed on by `&&`, `||`, `??` or `?:`, whose result is the
+     value itself;
    - **passed**: an argument of a call or of `new Set` (`f(x)`);
    - **stored**: an element of an array literal or a property's value in
      an object literal (`[x]`, `{k: x}`).
@@ -152,7 +153,7 @@ a number faults.
 
 **The target** is a path: a variable, then one or more members or
 indices. Its root must be a variable the function owns, by the rules of a
-mutation above (a parameter or a const of the function; never captured,
+mutation above (a parameter, a const or a let of the function; never captured,
 before or after; never copied, passed or stored before), and is refused
 when compiled otherwise, as `unsupported`, with the reason. So is a target
 whose root is not a variable (`f().k = 1`, `[1][0] = 2`, `(a || b).k =
@@ -344,7 +345,8 @@ value" (it was "staticjs has no assignment: values do not change"), and
 are now syntax errors, as in JavaScript (they were unsupported). `let`
 moved two cases from `tests/spec/statements.spec` to `mutation.spec`
 ("let" and "let with its name on the next line", which were refused,
-"declares with const"). The README, `AGENTS.md`, `docs/builtins.md` and `docs/matcher.md` point here.
+"declares with const"). The README, `AGENTS.md`, `docs/builtins.md` and
+`docs/matcher.md` point here.
 
 The new code sits at the end of `src/vm.c` and `src/builtins.c`, and the
 evaluator reaches it from the default case of its switch, so that the code
