@@ -231,6 +231,12 @@ static sjs_result key_of(sjs_vm *vm, sjs_value v, sjs_string **out) {
  * Operators
  */
 
+/* BigInts, and the faults of arithmetic: at the end of the file. */
+static sjs_result bigint_binary(sjs_vm *vm, uint8_t operator, sjs_value *out);
+static sjs_result bigint_unary(sjs_vm *vm, uint8_t operator, sjs_value *out);
+static int bigint_order(uint8_t operator, sjs_value a, sjs_value b);
+static sjs_result order_fault(sjs_vm *vm, sjs_value a, sjs_value b);
+
 /* STRING_APPEND: at the end of the file. */
 static uint32_t appendable_part(sjs_values parts);
 static sjs_result string_append(sjs_vm *vm, sjs_values parts, sjs_value *out);
@@ -278,7 +284,7 @@ static sjs_result add(sjs_vm *vm, const sjs_value *pair, sjs_value *out) {
     if ((a.kind == SJS_STRING || b.kind == SJS_STRING) && sjs_is_primitive(a) && sjs_is_primitive(b)) {
         return concat(vm, (sjs_values){ pair, 2 }, out);
     }
-    return sjs_vm_fault(vm, "staticjs adds two numbers, or a string and a primitive");
+    return bigint_binary(vm, SJS_OP_ADD, out);
 }
 
 static sjs_result in(sjs_vm *vm, const sjs_value *pair, sjs_value *out) {
@@ -322,7 +328,7 @@ int sjs_vm_order(uint8_t operator, sjs_value a, sjs_value b) {
         return operator == SJS_OP_LESS ? c < 0 : operator == SJS_OP_LESS_EQUAL ? c <= 0
              : operator == SJS_OP_GREATER ? c > 0 : c >= 0;
     }
-    return SJS_VM_UNDECIDED;
+    return bigint_order(operator, a, b);
 }
 
 /* The operator applied to the two values on top of the stack. */
@@ -349,12 +355,14 @@ static sjs_result apply_binary(sjs_vm *vm, uint8_t operator, sjs_value *out) {
     case SJS_OP_GREATER:
     case SJS_OP_GREATER_EQUAL: {
         int result = sjs_vm_order(operator, a, b);
-        if (result == SJS_VM_UNDECIDED) return sjs_vm_fault(vm, "staticjs compares two numbers or two strings");
+        if (result == SJS_VM_UNDECIDED) return order_fault(vm, a, b);
         *out = sjs_boolean(result != 0);
         return SJS_OK;
     }
+    case SJS_OP_EXPONENT:
+        return bigint_binary(vm, operator, out);
     default: {
-        if (a.kind != SJS_NUMBER || b.kind != SJS_NUMBER) return sjs_vm_fault(vm, "arithmetic in staticjs is on numbers");
+        if (a.kind != SJS_NUMBER || b.kind != SJS_NUMBER) return bigint_binary(vm, operator, out);
         double x = a.as.number;
         double y = b.as.number;
         double z;
@@ -393,7 +401,7 @@ static sjs_result apply_unary(sjs_vm *vm, uint8_t operator, sjs_value *out) {
         return SJS_OK;
     }
     default:
-        if (v.kind != SJS_NUMBER) return sjs_vm_fault(vm, "arithmetic in staticjs is on numbers");
+        if (v.kind != SJS_NUMBER) return bigint_unary(vm, operator, out);
         *out = sjs_num(operator == SJS_OP_NEGATE ? -v.as.number : v.as.number);
         return SJS_OK;
     }
@@ -2327,4 +2335,70 @@ __attribute__((noinline)) static sjs_result string_append(sjs_vm *vm, sjs_values
     vm->fuel_used += extra / 64u;
     *out = sjs_heap_value(SJS_STRING, &s->h);
     return SJS_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * BigInts: + - * / % ** and unary - of two BigInts, and their comparison
+ * with each other and with numbers, exactly. Out of line and at the end of
+ * the file, so that the numbers' paths before them are laid out as they
+ * were: each reaches this only where it would have faulted.
+ */
+
+/* The faults of arithmetic that is not on two numbers, and BigInt
+ * arithmetic, on the two values on top of the stack. */
+__attribute__((noinline)) static sjs_result bigint_binary(sjs_vm *vm, uint8_t operator, sjs_value *out) {
+    const sjs_value *pair = &vm->stack[vm->sp - 2];
+    bool a = pair[0].kind == SJS_BIGINT;
+    bool b = pair[1].kind == SJS_BIGINT;
+    if (a != b) return sjs_vm_fault(vm, "JavaScript throws a TypeError for arithmetic that mixes a BigInt with another value");
+    if (!a) {
+        if (operator == SJS_OP_EXPONENT) return sjs_vm_fault(vm, "staticjs has ** for BigInts only");
+        if (operator == SJS_OP_ADD) return sjs_vm_fault(vm, "staticjs adds two numbers, or a string and a primitive");
+        return sjs_vm_fault(vm, "arithmetic in staticjs is on numbers");
+    }
+    sjs_bigint_op op = { .op = operator, .a = pair[0], .b = pair[1] };
+    sjs_result r = sjs_bigint_binary(vm->context, &op);
+    if (r == SJS_ERR_PROGRAM) return sjs_vm_fault(vm, op.fault);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    vm->fuel_used += op.cost;
+    *out = op.result;
+    return SJS_OK;
+}
+
+__attribute__((noinline)) static sjs_result bigint_unary(sjs_vm *vm, uint8_t operator, sjs_value *out) {
+    sjs_value v = vm->stack[vm->sp - 1];
+    if (v.kind != SJS_BIGINT) return sjs_vm_fault(vm, "arithmetic in staticjs is on numbers");
+    if (operator != SJS_OP_NEGATE) return sjs_vm_fault(vm, "JavaScript throws a TypeError for unary + of a BigInt");
+    sjs_bigint_op op = { .op = SJS_OP_NEGATE, .a = v };
+    sjs_result r = sjs_bigint_binary(vm->context, &op);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    vm->fuel_used += op.cost;
+    *out = op.result;
+    return SJS_OK;
+}
+
+/* <, <=, > or >= of a BigInt and a BigInt or a number, exactly, as
+ * JavaScript compares them: anything with NaN is false. */
+__attribute__((noinline)) static int bigint_order(uint8_t operator, sjs_value a, sjs_value b) {
+    int c;
+    if (a.kind == SJS_BIGINT && b.kind == SJS_BIGINT) {
+        c = sjs_bigint_compare(SJS_AS_BIGINT(a), SJS_AS_BIGINT(b));
+    } else if (a.kind == SJS_BIGINT && b.kind == SJS_NUMBER) {
+        c = sjs_bigint_compare_number(SJS_AS_BIGINT(a), b.as.number);
+    } else if (a.kind == SJS_NUMBER && b.kind == SJS_BIGINT) {
+        c = sjs_bigint_compare_number(SJS_AS_BIGINT(b), a.as.number);
+        if (c != SJS_BIGINT_UNORDERED) c = -c;
+    } else {
+        return SJS_VM_UNDECIDED;
+    }
+    if (c == SJS_BIGINT_UNORDERED) return 0;
+    return operator == SJS_OP_LESS ? c < 0 : operator == SJS_OP_LESS_EQUAL ? c <= 0
+         : operator == SJS_OP_GREATER ? c > 0 : c >= 0;
+}
+
+__attribute__((noinline)) static sjs_result order_fault(sjs_vm *vm, sjs_value a, sjs_value b) {
+    if (a.kind == SJS_BIGINT || b.kind == SJS_BIGINT) {
+        return sjs_vm_fault(vm, "staticjs compares a BigInt with a BigInt or a number");
+    }
+    return sjs_vm_fault(vm, "staticjs compares two numbers or two strings");
 }

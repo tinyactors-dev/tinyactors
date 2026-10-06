@@ -309,7 +309,7 @@ Math.max(...[3, 9, 4])
 
 === Number
 [Number.isInteger(5), Number.isInteger(5.5), Number.isInteger("5"), Number.isSafeInteger(2 ** 0 * 9007199254740992), Number.isFinite(Infinity), Number.isNaN(NaN), Number.MAX_SAFE_INTEGER]
---- error unsupported **
+--- fault ** for BigInts only
 
 === Number without **
 [Number.isInteger(5), Number.isInteger(5.5), Number.isInteger("5"), Number.isSafeInteger(9007199254740992), Number.isFinite(Infinity), Number.isNaN(NaN), Number.MAX_SAFE_INTEGER]

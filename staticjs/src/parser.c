@@ -1660,7 +1660,7 @@ static handled assignment_statement(sjs_parser *p, const queued_token *t) {
     }
     if (op == UINT8_MAX) {
         bool power = sjs_str_equal(text, SJS_STR("**="));
-        if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, power ? "staticjs has no ** operator" : "staticjs has no bitwise operators" }) == H_STOP) {
+        if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, power ? "staticjs has no **= assignment" : "staticjs has no bitwise operators" }) == H_STOP) {
             return H_STOP;
         }
         return H_AGAIN;
@@ -1707,6 +1707,24 @@ static handled assignment(sjs_parser *p, const queued_token *t) {
     return push_op(p, op);
 }
 
+/* `**`: right-associative, so `a ** b ** c` is `a ** (b ** c)`: an earlier
+ * `**` waits for the later one. `-a ** 2` is not JavaScript: a unary
+ * operand needs parentheses. */
+static handled parse_power(sjs_parser *p, const queued_token *t) {
+    if (end_chain(p) == H_STOP) return H_STOP;
+    if (top_op(p) != NULL && top_op(p)->kind == OP_UNARY) {
+        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "** cannot follow a unary operator without parentheses" });
+    }
+    if (pop_ops(p, PRECEDENCE_EXPONENT + 1u) == H_STOP) return H_STOP;
+    pending_op pending = infix(SJS_OP_EXPONENT, PRECEDENCE_EXPONENT);
+    event_place place = operand_place(p, t->at);
+    pending.at = place.at;
+    pending.node = place.node;
+    pending.start = place.start;
+    p->expect = E_OPERAND;
+    return push_op(p, pending);
+}
+
 /* A binary operator staticjs leaves out (`problem`): a refusal, read on as
  * the operator JavaScript reads. */
 static handled refused_binary(sjs_parser *p, const queued_token *t, sjs_problem problem) {
@@ -1715,14 +1733,6 @@ static handled refused_binary(sjs_parser *p, const queued_token *t, sjs_problem 
     case SJS_P_EQUAL:
     case SJS_P_NOT_EQUAL:
         precedence = PRECEDENCE_EQUALITY;
-        break;
-    case SJS_P_STAR_STAR:
-        /* `-a ** 2` is not JavaScript: a unary operand needs parentheses. */
-        if (end_chain(p) == H_STOP) return H_STOP;
-        if (top_op(p) != NULL && top_op(p)->kind == OP_UNARY) {
-            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "** cannot follow a unary operator without parentheses" });
-        }
-        precedence = PRECEDENCE_EXPONENT;
         break;
     case SJS_P_SHIFT_LEFT:
     case SJS_P_SHIFT_RIGHT:
@@ -1815,7 +1825,7 @@ static handled operator_token(sjs_parser *p, const queued_token *t) {
         /* MUTATION: restore the refusal, "staticjs has no ++ or --: values do not change". */
         return postfix_update(p, t);
     case SJS_P_STAR_STAR:
-        return refused_binary(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no ** operator" });
+        return parse_power(p, t);
     case SJS_P_SHIFT_LEFT:
     case SJS_P_SHIFT_RIGHT:
     case SJS_P_SHIFT_RIGHT_UNSIGNED:

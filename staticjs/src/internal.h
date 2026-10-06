@@ -412,6 +412,26 @@ sjs_result sjs_bigint_to_string(sjs_context *context, sjs_bigint_radix r, sjs_st
  * radix: linear in a power of two, quadratic in any other. */
 uint64_t sjs_bigint_text_cost(uint64_t limbs, uint32_t radix);
 bool sjs_bigint_equal(const sjs_bigint *a, const sjs_bigint *b);
+/* An operator on BigInts: + - * / % ** of `a` and `b`, or unary - of `a`
+ * (SJS_OP_NEGATE); both borrowed. SJS_OK with `result` owned and `cost` the
+ * fuel of its limb work; SJS_ERR_PROGRAM with `fault` where JavaScript
+ * throws a RangeError (division by 0n, a negative exponent);
+ * SJS_ERR_LIMIT past max_bigint_bits; SJS_ERR_NOMEM. */
+typedef struct {
+    uint8_t op;           /* sjs_operator */
+    bool negative;        /* the result's sign, while it is made */
+    sjs_value a;
+    sjs_value b;
+    sjs_value result;
+    uint64_t cost;
+    const char *fault;
+} sjs_bigint_op;
+sjs_result sjs_bigint_binary(sjs_context *context, sjs_bigint_op *op);
+/* <0, 0 or >0 as a is less than, equal to or greater than b; with a number,
+ * exactly (1n < 1.5), and SJS_BIGINT_UNORDERED for NaN. */
+#define SJS_BIGINT_UNORDERED 2
+int sjs_bigint_compare(const sjs_bigint *a, const sjs_bigint *b);
+int sjs_bigint_compare_number(const sjs_bigint *a, double d);
 uint32_t sjs_bigint_hash(const sjs_bigint *b);
 
 /* ========================================================================

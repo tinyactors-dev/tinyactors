@@ -122,6 +122,7 @@ static inline const char *sjs_shape_operator_name(uint32_t op) {
     case SJS_OP_NEGATE: return "NEGATE";
     case SJS_OP_PLUS: return "PLUS";
     case SJS_OP_TYPEOF: return "TYPEOF";
+    case SJS_OP_EXPONENT: return "EXPONENT";
     default: return "NONE";
     }
 }

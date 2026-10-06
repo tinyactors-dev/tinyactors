@@ -1307,7 +1307,7 @@ return [o, p]; })()
 
 === **=
 (() => { const o = {n: 2}; o.n **= 2; return o; })()
---- error unsupported no ** operator
+--- error unsupported no **= assignment
 
 === <<=
 (() => { const o = {n: 2}; o.n <<= 1; return o; })()

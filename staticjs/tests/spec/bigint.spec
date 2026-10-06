@@ -178,3 +178,179 @@ Object.groupBy([1n, 2n, 3n, 4n], x => x === 2n || x === 4n ? 2n : 1n)
 === a BigInt has no properties staticjs reads
 10n.length
 --- fault reads properties
+
+=== addition and subtraction, signs and zero
+[1n + 2n, 1n - 2n, -1n + -2n, -1n - -2n, 5n + -5n, -5n - -5n, 0n - 0n, 0n - 7n, 7n - 0n, 0n + -7n, -0n, -(-3n)]
+--- value
+[3n,-1n,-3n,1n,0n,0n,0n,-7n,7n,-7n,0n,3n]
+
+=== carries and borrows across limbs
+[4294967295n + 1n, 4294967296n - 1n, 18446744073709551615n + 1n, 18446744073709551616n - 1n, 0xffffffffffffffffffffffffn + 1n, 0x1000000000000000000000000n - 1n, -4294967296n + 1n, 1n - 18446744073709551616n]
+--- value
+[4294967296n,4294967295n,18446744073709551616n,18446744073709551615n,79228162514264337593543950336n,79228162514264337593543950335n,-4294967295n,-18446744073709551615n]
+
+=== multiplication
+[3n * 4n, -3n * 4n, -3n * -4n, 0n * -5n, -5n * 0n, 1n * -9n, -1n * 9n, -1n * -9n, 4294967295n * 4294967295n, 18446744073709551615n * 18446744073709551615n, 123456789012345678901234567890n * -987654321098765432109876543210n]
+--- value
+[12n,-12n,12n,0n,0n,-9n,-9n,9n,18446744065119617025n,340282366920938463426481119284349108225n,-121932631137021795226185032733622923332237463801111263526900n]
+
+=== division truncates toward zero
+[7n / 2n, -7n / 2n, 7n / -2n, -7n / -2n, 1n / 3n, -1n / 3n, 0n / 5n, 6n / 3n, 18446744073709551616n / 4294967296n, 18446744073709551615n / 4294967295n, 340282366920938463463374607431768211455n / 18446744073709551617n, 123456789012345678901234567890123456789n / 987654321987654321n]
+--- value
+[3n,-3n,-3n,3n,0n,0n,0n,2n,4294967296n,4294967297n,18446744073709551615n,124999998748437501153n]
+
+=== remainder takes the sign of the dividend
+[7n % 2n, -7n % 2n, 7n % -2n, -7n % -2n, 6n % 3n, -6n % 3n, 1n % 18446744073709551616n, -1n % 18446744073709551616n, 18446744073709551617n % 4294967296n, 123456789012345678901234567890123456789n % 987654321987654321n, 340282366920938463463374607431768211455n % -18446744073709551617n]
+--- value
+[1n,-1n,1n,-1n,0n,0n,1n,-1n,1n,142745764920524676n,0n]
+
+=== division by 0n
+1n / 0n
+--- fault divided by 0n
+
+=== remainder by 0n
+0n % 0n
+--- fault divided by 0n
+
+=== exponentiation
+[2n ** 0n, 0n ** 0n, 0n ** 5n, 1n ** 1000n, (-1n) ** 3n, (-1n) ** 4n, (-2n) ** 3n, (-2n) ** 4n, 2n ** 32n, 2n ** 64n, 3n ** 40n, (-3n) ** 41n, 10n ** 30n, 2n ** 3n ** 2n, (2n ** 3n) ** 2n]
+--- value
+[1n,1n,0n,1n,-1n,1n,-8n,16n,4294967296n,18446744073709551616n,12157665459056928801n,-36472996377170786403n,1000000000000000000000000000000n,512n,64n]
+
+=== a large power
+[String(7n ** 500n).length, 2n ** 1000n % 1000000007n, (3n ** 2000n) / (3n ** 1998n), String(2n ** 10000n).slice(0, 20)]
+--- value
+[423,688423210n,9n,"19950631168807583848"]
+
+=== a negative exponent
+2n ** -1n
+--- fault negative power
+
+=== a power past max_bigint_bits
+2n ** 100000000n
+--- fault larger than the limits allow
+
+=== a product past max_bigint_bits
+(x => x * x)(2n ** 200000n)
+--- fault larger than the limits allow
+
+=== ** with a unary operand
+(-2n ** 2n)
+--- error syntax unary operator
+
+=== ** of numbers
+2 ** 2
+--- fault ** for BigInts only
+
+=== unary + of a BigInt
++1n
+--- fault unary +
+
+=== a BigInt and a number in arithmetic
+1n + 1
+--- fault mixes a BigInt
+
+=== a number and a BigInt in arithmetic
+2 * 1n
+--- fault mixes a BigInt
+
+=== a BigInt and a boolean in arithmetic
+1n - true
+--- fault mixes a BigInt
+
+=== a BigInt and undefined in +
+1n + undefined
+--- fault mixes a BigInt
+
+=== a BigInt and a number in **
+2n ** 2
+--- fault mixes a BigInt
+
+=== a BigInt and null in %
+1n % null
+--- fault mixes a BigInt
+
+=== comparison of BigInts
+[1n < 2n, 2n < 1n, 1n <= 1n, 1n >= 2n, -1n < 0n, -5n < -4n, -4294967296n < -4294967295n, 18446744073709551616n > 18446744073709551615n, 0n >= -0n]
+--- value
+[true,false,true,false,true,true,true,true,true]
+
+=== comparison of a BigInt and a number, exactly
+[1n < 1.5, 2n > 1.5, 1n <= 1, 1n >= 1, 1n < 1, 0n < -0, 0n <= -0, -1n < -0.5, -1n > -1.5, 1.5 < 2n, 1.5 > 1n, 9007199254740993n > 9007199254740992, 9007199254740992 < 9007199254740993n, 18446744073709551616n >= 18446744073709551616, 18446744073709551617n > 18446744073709551616, 2n ** 1024n > 1.7976931348623157e308, 1n > 5e-324, 0n < 5e-324, -1n < -5e-324]
+--- value
+[true,true,true,true,false,false,true,true,true,true,true,true,true,true,true,true,true,true,true]
+
+=== comparison with NaN and Infinity
+[1n < NaN, 1n > NaN, 1n <= NaN, 1n >= NaN, NaN < 1n, NaN >= 1n, 2n ** 2000n < Infinity, -(2n ** 2000n) > -Infinity, Infinity > 0n, -Infinity < 0n]
+--- value
+[false,false,false,false,false,false,true,true,true,true]
+
+=== a BigInt compared with a string
+1n < "2"
+--- fault BigInt with a BigInt or a number
+
+=== a BigInt compared with a boolean
+0n < true
+--- fault BigInt with a BigInt or a number
+
+=== sorting BigInts with a comparator
+[3n, 18446744073709551616n, -1n, 2n, 0n].toSorted((a, b) => a < b ? -1 : a > b ? 1 : 0)
+--- value
+[-1n,0n,2n,3n,18446744073709551616n]
+
+=== a comparator that subtracts BigInts gives a BigInt, which JavaScript does not convert
+@shapes COMPARE_NUMERIC(false)
+[3n, 1n, 2n].toSorted((a, b) => a - b)
+--- fault BigInt
+
+=== a sum of BigInts in reduce
+@shapes SUM(false)
+[1n, 2n, 3n, 18446744073709551616n].reduce((a, x) => a + x, 0n)
+--- value
+18446744073709551622n
+
+=== a sum mixing BigInts and numbers in reduce
+@shapes SUM(false)
+[1n, 2n, 3].reduce((a, x) => a + x, 0n)
+--- fault mixes a BigInt
+
+=== a sum that starts from a number
+@shapes SUM(false)
+[1n, 2n].reduce((a, x) => a + x, 0)
+--- fault mixes a BigInt
+
+=== a sum of a key of BigInts
+@shapes SUM_KEY(n, false)
+[{n: 1n}, {n: 18446744073709551615n}].reduce((a, x) => a + x.n, 0n)
+--- value
+18446744073709551616n
+
+=== filters comparing BigInts with a literal
+@shapes ELEMENT_COMPARE(GREATER, 2) ELEMENT_COMPARE(STRICT_EQUAL, 1) KEY_COMPARE(k, LESS, 1.5)
+[[1n, 2n, 3n, 4n, 1.5].filter(x => x > 2), [1n, 1].filter(x => x === 1), [{k: 1n}, {k: 2n}].filter(r => r.k < 1.5)]
+--- value
+[[3n,4n],[1],[{"k":1n}]]
+
+=== filters comparing BigInts with a BigInt literal
+[[1n, 2n, 3n].filter(x => x === 2n), [1n, 2n, 3n].find(x => x > 1n), [{k: 1n}, {k: 2n}].findIndex(r => r.k >= 2n)]
+--- value
+[[2n],2n,1]
+
+=== a predicate comparing a BigInt with a string
+@shapes ELEMENT_COMPARE(LESS, "b")
+[1n].filter(x => x < "b")
+--- fault BigInt with a BigInt or a number
+
+=== the largest BigInt the default limit allows, and one more
+[String(2n ** 262143n).length, String((2n ** 262143n - 1n) * 2n + 1n).length]
+--- value
+[78913,78914]
+
+=== past the default limit
+2n ** 262144n
+--- fault larger than the limits allow
+
+=== += on a let of a BigInt
+(xs => { let n = 0n; n += xs[0]; n *= 3n; n -= 1n; n /= 2n; n %= 7n; return n; })([10n])
+--- value
+0n

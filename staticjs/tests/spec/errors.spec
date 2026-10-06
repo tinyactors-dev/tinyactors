@@ -308,7 +308,7 @@ new Map()
 
 === exponent operator
 2 ** 10
---- error unsupported no **
+--- fault ** for BigInts only
 
 === bitwise operators
 5 & 3

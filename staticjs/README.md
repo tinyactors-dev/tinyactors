@@ -24,7 +24,9 @@ the exact midpoints between two doubles) read by `Number(s)`; strings with
 white space, signs, prefixes and junk read by `Number(s)` and
 `parseFloat(s)`, and by `parseInt(s, radix)` in every radix; doubles
 through `Math.sqrt` and `Math.fround`; argument lists through `Math.hypot`;
-and pairs through `Math.clz32` and `Math.imul` (`number_test --print`).
+and pairs through `Math.clz32` and `Math.imul`; and BigInts of 1 to 20
+limbs through `+ - * / % **` and comparison, compared with doubles, and
+written as `String(x)` and `toString(radix)` (`number_test --print`).
 
 ## What it guarantees
 
@@ -144,7 +146,7 @@ Expressions: numbers (read to the nearest double, ties to even, however
 many digits a literal has, in any radix), BigInts (`10n`, `0x1Fn`, `0o7n`,
 `0b1n`; see "BigInts" below), strings, template literals, `true`, `false`, `null`,
 `undefined`, `NaN`, `Infinity`, arrays and objects (spread, computed and
-shorthand keys), `new Set(...)`; `+ - * / %`, `< <= > >=`, `=== !==`,
+shorthand keys), `new Set(...)`; `+ - * / %`, `**` (of BigInts), `< <= > >=`, `=== !==`,
 `&& || ??`, `?:`, `!`, unary `-` and `+`, `typeof`, `in`; members, calls
 and spread arguments, with `?.`; arrow functions with an expression body,
 or a block body of statements: `const`, `if`/`else` (with `else if`), nested
@@ -239,13 +241,28 @@ value, through its index); a BigInt as a key is its decimal digits
 template's `${x}`. The writer writes `10n`, and `sjs_bigint_text` gives an
 embedder the digits.
 
+`+ - * / % **` and unary `-` take two BigInts: `/` truncates toward zero,
+`%` takes the dividend's sign, `0n ** 0n` is `1n`. Division by `0n` and a
+negative exponent fault (RangeErrors in JavaScript), as do unary `+` of a
+BigInt and arithmetic that mixes a BigInt with any other value (TypeErrors).
+`**` exists for BigInts only: of numbers it faults, as staticjs cannot give
+V8's `Math.pow` bits. `< <= > >=` compare BigInts with each other and with
+numbers exactly (`1n < 1.5`, `9007199254740993n > 2 ** 53`'s double;
+anything with NaN is false); with a string or a boolean they fault, where
+JavaScript would convert. staticjs has no bitwise operators, for numbers or
+BigInts. Multiplication is schoolbook, division Knuth's algorithm D, and
+text repeated division by 10^9: at the default limit the largest product
+or conversion takes a few tens of milliseconds, and fuel charges each
+operation for its limb work (a unit per 16 limb products).
+
 ## Where it faults instead of following JavaScript
 
 These follow from the rule: staticjs stops where JavaScript would coerce,
 compare identities, or find something on a prototype.
 
 - `===` on two objects (identity); `+` of a string and an object; arithmetic
-  or `<` on values that are not both numbers (or, for `<`, both strings).
+  or `<` on values that are not both numbers (or, for `<`, both strings), or
+  BigInts (and, for `<`, a BigInt and a number); `**` of numbers.
 - Converting an object to a number or a string where JavaScript would call
   its methods: `Number([])`, `parseInt({})`, `parseFloat([1])`. A string
   converted to a number on the way to something else: `isNaN("x")`,
