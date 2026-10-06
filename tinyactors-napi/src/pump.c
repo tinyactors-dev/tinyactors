@@ -430,12 +430,12 @@ napi_value tna_address_object(napi_env env, const ta_actor_address *address) {
     return object;
 }
 
-/* The dotted text of an event name, formatted by core (ADR 0004), or NULL. */
+/* The dotted text of an event name the kernel or core gave, or NULL. */
 napi_value tna_event_text(napi_env env, tah_system *system, ta_event_name_id name) {
     char stack[256];
     uint32_t needed = 0;
     ta_event_name_format_params params = { .name = name, .buffer = stack, .capacity = sizeof stack, .needed = &needed };
-    ta_result result = ta_event_name_format(tah_system_core(system), &params);
+    ta_result result = tah_event_name_format(system, &params);
     char *text = stack;
     if (result == TA_ERR_NOMEM && needed > sizeof stack) {
         text = ta_arena_alloc(tah_scratch_turn(tah_system_scratch(system)), needed, 1);
@@ -444,7 +444,7 @@ napi_value tna_event_text(napi_env env, tah_system *system, ta_event_name_id nam
         }
         params.buffer = text;
         params.capacity = needed;
-        result = ta_event_name_format(tah_system_core(system), &params);
+        result = tah_event_name_format(system, &params);
     }
     napi_value out = NULL;
     if (result != TA_OK || napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &out) != napi_ok) {
@@ -465,11 +465,19 @@ static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const
     const char *reason_text = tah_dead_reason_name(record->reason);
     char body[64];
     int length = snprintf(body, sizeof body, "dead-lettered: %s", reason_text);
+    char name[256];
+    uint32_t needed = 0;
+    ta_str event_text = { 0 };
+    if (tah_event_name_format(wrapper->system, &(ta_event_name_format_params){
+                                                   .name = record->event, .buffer = name, .capacity = sizeof name,
+                                                   .needed = &needed }) == TA_OK) {
+        event_text = (ta_str){ .ptr = name, .len = needed - 1u };
+    }
     tna_pump_host_log(wrapper->system, record->actor,
                  (tao_host_log_params){ .event_name = { "tinyactors.message.dead_lettered", 32 },
                                       .body = { body, length > 0 ? (uint32_t)length : 0u },
                                       .has_event = true,
-                                      .event = record->event,
+                                      .event = event_text,
                                       .key = { "tinyactors.dead_letter.reason", 29 },
                                       .value = { reason_text, (uint32_t)strlen(reason_text) } });
     if (wrapper->dead_letter_hook == NULL) {

@@ -1337,7 +1337,7 @@ class System {
       return {
         send_id: send.id === null || send.id === undefined ? 0 : core.send_id_parse(this.#native, send.id),
         due: send.due,
-        event: this.#events.id(send.event),
+        event: this.#native.delayedEventName(send.event),
         io_type: send.ioType ? core.system_intern_atom(this.#native, send.ioType) : 0,
         destination: this.#destinationRef(send.destination, index),
         target: send.targetContent === null || send.targetContent === undefined ? send.target : undefined,

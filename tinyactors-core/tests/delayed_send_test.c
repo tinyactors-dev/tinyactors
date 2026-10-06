@@ -302,7 +302,7 @@ static void deliver(ta_system *system, ta_actor_id actor, const char *event) {
     test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(system,
                              &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
-                                                         .event = &delivered },
+                                                         .name = test_event_text(system, &delivered), .event = &delivered },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
     CHECK(status == TEST_DRIVE_STABLE);
 }
@@ -840,7 +840,7 @@ static void test_withdrawing_inside_a_paused_macrostep(void) {
     ta_actor_id actor = spawn(system, define(system, "stepper", send_then_cancel), NULL);
     watch_withdrawals(system);
     ta_event go = { .name = event_name(system, "go"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &go }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .name = test_event_text(system, &go), .event = &go }) == TA_OK);
     ta_send_id t = send_id(system, "t");
     /* Delivered, not yet run: `t` does not exist yet. */
     CHECK(ta_actor_withdraw_send(system, actor, t) == TA_ERR_NOT_FOUND);
@@ -976,7 +976,7 @@ static void test_admitted_mail_keeps_a_session_resident(void) {
 
     ta_event waiting = { .name = event_name(system, "nothing"), .type = TA_EVENT_EXTERNAL,
                          .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &waiting,
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .name = test_event_text(system, &waiting), .event = &waiting,
                                                                .time = ta_system_time(system),
                                                                .correlation = 7 }) == TA_OK);
     ta_session_image *image = NULL;

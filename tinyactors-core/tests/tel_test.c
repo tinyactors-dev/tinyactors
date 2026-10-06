@@ -295,7 +295,7 @@ static void deliver(run *r, const char *name, ta_value data) {
     ta_event event = { .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE, .data = data };
     CHECK(ta_event_name_intern(r->system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &event.name) == TA_OK);
     CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system),
-                                                                  .actor = r->actor, .event = &event }) == TA_OK);
+                                                                  .actor = r->actor, .name = test_event_text(r->system, &event), .event = &event }) == TA_OK);
 }
 
 /* Copies of the records read, with the texts the checks look at. */

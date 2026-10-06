@@ -375,8 +375,9 @@ end
 # Delivers `fault` to the first resident actor, behind the scenario's back.
 STRAY_FAULT = lambda do |context|
   id = context.rpc('system.actors', system: context.system_handle).first
-  event = { name: context.event_name('fault'), type: 'external', invoke_id: TinyactorsTest::INVOKE_ID_NONE }
-  context.core('ta_actor_deliver', context.ta.actor.deliver(system: context.system_handle, actor: id, event: event, time: context.now))
+  event = { type: 'external', invoke_id: TinyactorsTest::INVOKE_ID_NONE }
+  context.core('ta_actor_deliver', context.ta.actor.deliver(system: context.system_handle, actor: id, name: 'fault',
+                                                            event: event, time: context.now))
 end
 
 equivalence_group = TinyactorsTest.scenarios 'equivalence', chart: :traffic_light do

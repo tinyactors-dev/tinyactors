@@ -29,6 +29,8 @@
 #define TA_RUN_RECORD_JUMP 0x02u
 /* A report that retires its invocation. */
 #define TA_RUN_RECORD_ENDS 0x04u
+/* The bytes of name the run's name buffer holds from system creation. */
+#define TA_RUN_NAME_ROOM 128u
 /* The event's name is not interned: it is the text field after the record. */
 #define TA_RUN_RECORD_NAME_TEXT 0x08u
 
@@ -240,6 +242,8 @@ static void ta_run_discard(ta_system *system, uint32_t index) {
  * The state
  */
 
+static ta_result ta_run_name_room(ta_system *system);
+
 ta_result ta_run_init(ta_system *system) {
     uint32_t bound = system->params[TA_PARAM_POOL_ENVELOPES];
     uint32_t watermark = system->params[TA_PARAM_ADMISSION_WATERMARK];
@@ -267,6 +271,12 @@ ta_result ta_run_init(ta_system *system) {
                              &(ta_waiting_params){ .allocator = system->allocator,
                                                    .bound = bound,
                                                    .reserve = bound < TA_RUN_RESERVE ? bound : TA_RUN_RESERVE });
+    if (result == TA_OK) {
+        /* Room for the names most events have, so taking them, or admitting
+         * them when nothing more can be allocated, needs no growth. */
+        system->run.name_longest = TA_RUN_NAME_ROOM;
+        result = ta_run_name_room(system);
+    }
     return result;
 }
 
@@ -316,7 +326,7 @@ static ta_run_refilled ta_run_refill(ta_system *system) {
         return (ta_run_refilled){ .pool = TA_OK, .names = TA_OK };
     }
     ta_run_refilled refilled = { .pool = ta_envelope_pool_refill(&system->run.pool),
-                                 .names = ta_name_area_refill(&system->run.names) };
+                                 .names = ta_name_area_refill(&system->run.names, 0u) };
     (void)ta_waiting_refill(&system->run.waiting);
     (void)ta_run_name_room(system);
     return refilled;
@@ -367,6 +377,8 @@ typedef struct {
     ta_invoke_id invoke;
     uint64_t correlation;
     const ta_run_record *record;
+    /* The name as text, written after the record; empty for none. */
+    ta_str name_text;
     /* What its macrostep runs under, or null. */
     const ta_trace_parent *trace;
     /* With `target` 0: the destination it waits for, or null. */
@@ -473,6 +485,24 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
     ta_run_refilled refilled = ta_run_refill(system);
     uint32_t entry = 0u;
     ta_result result = TA_OK;
+    /* Admission is a safe point: the name area makes room for a long name,
+     * and the name buffer grows to take it, so taking the input never
+     * needs to. */
+    if (admission->name_text.len != 0u) {
+        uint32_t need = ta_name_area_field_need(&system->run.names, TA_NAME_AREA_PREFIX_BYTES + TA_RUN_RECORD_BYTES,
+                                                admission->name_text.len);
+        refilled.names = ta_name_area_refill(&system->run.names, need);
+    }
+    if (admission->name_text.len > system->run.name_capacity && !system->run.running) {
+        uint32_t longest = system->run.name_longest;
+        system->run.name_longest = admission->name_text.len;
+        result = ta_run_name_room(system);
+        system->run.name_longest = longest > admission->name_text.len ? longest : admission->name_text.len;
+        if (result != TA_OK) {
+            system->run.name_longest = longest;
+            return result;
+        }
+    }
     if (admission->wait != NULL) {
         result = ta_waiting_take(&system->run.waiting, admission->wait, &entry);
         if (result != TA_OK) {
@@ -494,7 +524,8 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
                                                        .record = admission->record,
                                                        .trace = admission->trace,
                                                        .refilled = refilled,
-                                                       .admission = true });
+                                                       .admission = true,
+                                                       .name_text = admission->name_text });
     if (result != TA_OK) {
         ta_envelope_pool_give(&system->run.pool, index);
         if (entry != 0u) {
@@ -521,7 +552,9 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
 
 ta_result ta_run_admit_event(ta_system *system, const ta_run_event *input) {
     const ta_event *event = input->event;
-    ta_run_record record = { .name = event->name, .origin = event->origin, .time = input->time };
+    ta_run_record record = { .name = input->name_text.len != 0u ? 0u : event->name,
+                             .origin = event->origin,
+                             .time = input->time };
     if (input->jump != NULL) {
         record.flags |= TA_RUN_RECORD_JUMP;
         record.jump = input->jump;
@@ -537,6 +570,7 @@ ta_result ta_run_admit_event(ta_system *system, const ta_run_event *input) {
                                                                  .invoke = event->invoke_id,
                                                                  .correlation = input->correlation,
                                                                  .record = &record,
+                                                                 .name_text = input->name_text,
                                                                  .trace = input->trace },
                                     &index);
     if (result != TA_OK) {

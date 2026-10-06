@@ -106,11 +106,11 @@ check(register[:definition] == { '$handle': 'definition:2' }, 'the compiled hand
 segments = host.calls.select do |method, params|
   method == 'ta.system.intern_atom' && params[:text] != TinyactorsTest::Context::SCXML_INVOKER_TYPE
 end
-check(segments.size == 2, 'each event segment is interned once')
-name = host.calls.find { |method, _| method == 'ta.event.name_intern' }.last
-check(name[:segments] == { atoms: [2, 3] }, "event names travel as a ta_atom_list: #{name[:segments]}")
+check(segments.empty?, 'a delivered event name is not interned (core ADR 0100)')
+check(host.calls.none? { |method, _| method == 'ta.event.name_intern' }, 'no event name is interned')
 deliver = host.calls.find { |method, _| method == 'ta.actor.deliver' }.last
-check(deliver[:event] == { name: 9, type: 'external', invoke_id: TinyactorsTest::INVOKE_ID_NONE,
+check(deliver[:name] == 'fault.minor', "event names travel as text: #{deliver[:name]}")
+check(deliver[:event] == { type: 'external', invoke_id: TinyactorsTest::INVOKE_ID_NONE,
                            data: { reason: 'test' } }, "deliver event: #{deliver[:event]}")
 check(methods.count('ta.run') >= 3 * methods.count('ta.system.dispatch_due'),
       'paused macrosteps, and calls with inputs left, are run until core is idle')

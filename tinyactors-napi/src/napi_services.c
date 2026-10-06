@@ -673,7 +673,7 @@ static ta_result tna_done_name(tah_system *system, ta_invoke_id invoke, ta_event
     }
     memcpy(text, prefix, sizeof prefix - 1u);
     memcpy(text + sizeof prefix - 1u, id.ptr, id.len);
-    result = tah_event_name_intern(tah_system_core(system), (ta_str){ .ptr = text, .len = (uint32_t)length }, out);
+    result = tah_event_name_intern(system, (ta_str){ .ptr = text, .len = (uint32_t)length }, out);
     tah_scratch_reset_call(tah_system_scratch(system));
     return result;
 }

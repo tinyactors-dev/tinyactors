@@ -136,7 +136,7 @@ static ta_event_name_id event_name(ta_system *system, const char *text) {
 
 static void deliver(ta_system *system, ta_actor_id actor, const char *name) {
     ta_event event = { .name = event_name(system, name), .type = TA_EVENT_EXTERNAL };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .name = test_event_text(system, &event), .event = &event }) == TA_OK);
 }
 
 static bool in_state(ta_system *system, ta_actor_id actor, const char *id) {
@@ -279,11 +279,12 @@ static void test_ordinary_run_allocates_nothing(void) {
     CHECK(resume(system, actor) == TEST_DRIVE_STABLE);
     (void)event_name(system, "go"); /* interned once, outside the measure */
     /* The first event's text tops the name area's reserve up, once
-     * (ADR 0099): measured apart, it takes at most one page of the area. */
+     * (ADR 0099), and sizes the run's name buffer, once (ADR 0100):
+     * measured apart, at most one page of the area and the buffer. */
     unsigned long warm = heap.attempts;
     deliver(system, actor, "go");
     CHECK(resume(system, actor) == TEST_DRIVE_STABLE);
-    CHECK(heap.attempts - warm <= 1u);
+    CHECK(heap.attempts - warm <= 2u);
     unsigned long before = heap.attempts;
     for (int round = 0; round < 4; round += 1) {
         deliver(system, actor, "go");

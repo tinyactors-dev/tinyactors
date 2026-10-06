@@ -351,8 +351,14 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
                            .incarnation = config->incarnation,
                            .definition_sink = ta_null_definition_sink() };
     ta_mem_copy(system->params, params, sizeof params);
-    /* The bounds were checked: the pool and the name area accept them. */
-    (void)ta_run_init(system);
+    /* The bounds were checked: the pool and the name area accept them, and
+     * only the run's name buffer is allocated now. */
+    if (ta_run_init(system) != TA_OK) {
+        ta_run_destroy(system);
+        ta_mem_free(config->allocator, system,
+                    &(ta_allocator_free_params){ .size = sizeof(ta_system), .alignment = _Alignof(ta_system) });
+        return TA_ERR_NOMEM;
+    }
     ta_system_seed_trace_ids(system, 0);
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->definitions, config->allocator, TA_VEC_LAYOUT(ta_definition_slot));
@@ -371,6 +377,7 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     }
     if (result != TA_OK) {
         ta_session_table_destroy(&system->sessions);
+        ta_run_destroy(system);
         ta_mem_free(config->allocator, system,
                     &(ta_allocator_free_params){ .size = sizeof(ta_system), .alignment = _Alignof(ta_system) });
         return result;
@@ -967,8 +974,23 @@ bool ta_event_name_matches(const ta_system *system, ta_event_name_id event, ta_e
 }
 
 ta_result ta_event_name_format(const ta_system *system, const ta_event_name_format_params *params) {
-    if (system == NULL || params == NULL || params->needed == NULL ||
-        !ta_trie_valid(&system->event_names, params->name)) {
+    if (system == NULL || params == NULL || params->needed == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (ta_run_name_is_input(params->name)) {
+        ta_str text = ta_run_input_name(system, params->name);
+        if (text.len == 0u) {
+            return TA_ERR_INVALID;
+        }
+        *params->needed = text.len + 1u;
+        if (params->buffer == NULL || params->capacity < text.len + 1u) {
+            return TA_ERR_NOMEM;
+        }
+        ta_mem_copy(params->buffer, text.ptr, text.len);
+        params->buffer[text.len] = '\0';
+        return TA_OK;
+    }
+    if (!ta_trie_valid(&system->event_names, params->name)) {
         return TA_ERR_INVALID;
     }
     ta_atom segments[TA_TRIE_MAX_DEPTH];

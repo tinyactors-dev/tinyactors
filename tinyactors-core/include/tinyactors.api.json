@@ -717,6 +717,13 @@
           "doc": "With `actor` 0: the address the event is for, which core resolves through the host's directory, as it does a chart's <send >. Ignored when `actor` is not 0."
         },
         {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "The event's name: a dotted event name (ADR 0100), borrowed for the call and copied. Core keeps it as text and interns nothing; a name that is not a dotted name, deeper than eventNameDepth, or longer than 65,535 bytes answers TA_ERR_INVALID. `event->name` is not read."
+        },
+        {
           "name": "event",
           "type": {
             "pointer": {
@@ -764,29 +771,31 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
+          "size": 112,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "address": 8,
+            "name": 16,
+            "event": 32,
+            "trace": 40,
+            "transition": 88,
+            "time": 96,
+            "correlation": 104
+          }
+        },
+        "wasm32-unknown-unknown": {
           "size": 96,
           "align": 8,
           "offsets": {
             "actor": 0,
             "address": 8,
-            "event": 16,
+            "name": 12,
+            "event": 20,
             "trace": 24,
             "transition": 72,
             "time": 80,
             "correlation": 88
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 88,
-          "align": 8,
-          "offsets": {
-            "actor": 0,
-            "address": 8,
-            "event": 12,
-            "trace": 16,
-            "transition": 64,
-            "time": 72,
-            "correlation": 80
           }
         }
       }
@@ -10628,7 +10637,7 @@
     },
     "ta_fault": {
       "kind": "struct",
-      "doc": "invoke_id is TA_INVOKE_ID_NONE unless an invoked child generated the event.\n\nA receiver of a fault owns its data; the message is borrowed.",
+      "doc": "invoke_id is TA_INVOKE_ID_NONE unless an invoked child generated the event. `name` names the event in an event core hands a host; the host reads its text with ta_event_name_format() while the event is valid (a run-time name is kept by the input that carries it, ADR 0100). A host passes a name as text (ta_actor_deliver_params.name) and leaves `name` 0.\n\nA receiver of a fault owns its data; the message is borrowed.",
       "fields": [
         {
           "name": "detail",
@@ -11236,6 +11245,13 @@
           "doc": "The host's own name for the report, as ta_actor_deliver_params.correlation."
         },
         {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "TA_INVOKE_REPORT_EVENT: the event's name, as ta_actor_deliver_params.name."
+        },
+        {
           "name": "as",
           "type": {
             "record": {
@@ -11295,7 +11311,7 @@
       },
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 96,
+          "size": 112,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -11304,14 +11320,15 @@
             "trace": 24,
             "time": 72,
             "correlation": 80,
-            "as": 88,
-            "as.event": 88,
-            "as.done_data": 88,
-            "as.error": 88
+            "name": 88,
+            "as": 104,
+            "as.event": 104,
+            "as.done_data": 104,
+            "as.error": 104
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 96,
+          "size": 104,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -11320,10 +11337,11 @@
             "trace": 24,
             "time": 72,
             "correlation": 80,
-            "as": 88,
-            "as.event": 88,
-            "as.done_data": 88,
-            "as.error": 88
+            "name": 88,
+            "as": 96,
+            "as.event": 96,
+            "as.done_data": 96,
+            "as.error": 96
           }
         }
       }

@@ -1812,7 +1812,7 @@ static napi_value tna_intern_event_method(napi_env env, napi_callback_info info)
     napi_get_value_string_utf8(env, argv[0], text, length + 1u, &length);
     ta_event_name_id id = 0;
     tah_system_enter_core(system);
-    ta_result result = tah_event_name_intern(tah_system_core(system), (ta_str){ .ptr = text, .len = (uint32_t)length }, &id);
+    ta_result result = tah_event_name_intern(system, (ta_str){ .ptr = text, .len = (uint32_t)length }, &id);
     tah_system_leave_core(system);
     tah_scratch_reset_call(tah_system_scratch(system));
     if (result != TA_OK) {
@@ -1824,6 +1824,61 @@ static napi_value tna_intern_event_method(napi_env env, napi_callback_info info)
     napi_value out = NULL;
     napi_create_uint32(env, id, &out);
     return out;
+}
+
+/*
+ * delayedEventName(text): core's ID for the name of a delayed send a
+ * loader restores (pendingSends), which core keeps by ID.
+ */
+static napi_value tna_delayed_event_name_method(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    char text[1024];
+    size_t length = 0;
+    if (argc < 1 || napi_get_value_string_utf8(env, argv[0], text, sizeof text, &length) != napi_ok ||
+        length + 1u >= sizeof text) {
+        return tna_throw(env, "invalid", "a delayed send's event name must be a string of at most 1022 bytes");
+    }
+    ta_event_name_id id = 0;
+    tah_system_enter_core(wrapper->system);
+    ta_result result = tah_core_event_name(tah_system_core(wrapper->system),
+                                           (ta_str){ .ptr = text, .len = (uint32_t)length }, &id);
+    tah_system_leave_core(wrapper->system);
+    if (result != TA_OK) {
+        return tna_throw(env, tna_result_code(result), "invalid event name for a delayed send");
+    }
+    napi_value out = NULL;
+    napi_create_uint32(env, id, &out);
+    return out;
+}
+
+/*
+ * eventName(id): the dotted text of an event name the kernel or core gave
+ * (ADR 0004 point 3), for lib/events.js.
+ */
+static napi_value tna_event_name_method(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    uint32_t id = 0;
+    if (argc < 1 || napi_get_value_uint32(env, argv[0], &id) != napi_ok) {
+        return tna_throw(env, "invalid", "an event name ID must be a number");
+    }
+    napi_value out = tna_event_text(env, wrapper->system, id);
+    return out != NULL ? out : tna_throw(env, "invalid", "no event name has that ID");
 }
 
 static napi_status tna_set_number(napi_env env, napi_value object, const char *name, double value) {
@@ -2071,6 +2126,8 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "adoptDefinition", NULL, tna_adopt_definition_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "encodeDefinition", NULL, tna_encode_definition_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "internEvent", NULL, tna_intern_event_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "eventName", NULL, tna_event_name_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "delayedEventName", NULL, tna_delayed_event_name_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "post", NULL, tna_post_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "postNamed", NULL, tna_post_named_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "send", NULL, tna_send_method, NULL, NULL, NULL, napi_default_method, NULL },

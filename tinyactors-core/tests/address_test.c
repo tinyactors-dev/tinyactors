@@ -260,7 +260,7 @@ static void test_submitted_send_outlives_its_sender(void) {
     test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(system,
                              &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = spammer,
-                                                         .event = &event },
+                                                         .name = test_event_text(system, &event), .event = &event },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
     ta_load_request request = { 0 };
     CHECK(ta_system_load_needed(system, &request) == TA_OK);
@@ -312,7 +312,7 @@ static void test_delivered_origin_outlives_the_host_reference(void) {
     ta_event event = { .name = poke, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE,
                        .origin = { .kind = TA_ORIGIN_ACTOR,
                                    .as.actor = { .kind = TA_ACTOR_REF_NAMED, .as.named = origin } } };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .name = test_event_text(system, &event), .event = &event }) == TA_OK);
     ta_address_release(origin);
     /* The pool held the event until the actor takes it; one step takes it,
      * and the macrostep pauses holding it. */

@@ -50,6 +50,7 @@
  *    (waiting_test.c proves the rest).
  */
 #include "../include/tinyactors.c"
+#include "test_drive.h"
 #include "test_allocator.h"
 
 #include <stdio.h>
@@ -355,7 +356,7 @@ static ta_event_name_id name_of(fixture *f, const char *text) {
 
 static ta_result deliver_traced(fixture *f, ta_actor_id actor, const char *text, ta_trace_parent trace) {
     ta_event event = { .name = name_of(f, text), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    return ta_actor_deliver(f->system, &(ta_actor_deliver_params){ .actor = actor, .event = &event,
+    return ta_actor_deliver(f->system, &(ta_actor_deliver_params){ .actor = actor, .name = test_event_text(f->system, &event), .event = &event,
                                                                    .time = ta_system_time(f->system),
                                                                    .trace = trace });
 }

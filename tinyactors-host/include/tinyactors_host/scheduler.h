@@ -169,6 +169,8 @@ typedef struct {
      * Borrowed; the envelope retains it. Not with `jump` or `report`. */
     ta_address *address;
     const ta_event *event;
+    /* Set by the scheduler: the event's name as a kernel name ID (events.h). */
+    ta_event_name_id name;
     uint32_t bytes;         /* retained-bytes estimate of its data, 0 for none */
     uint32_t waiter;        /* a send() waiting for it, or 0 */
     const ta_trace_parent *trace; /* its trace parent, or NULL (core ADR 0067) */

@@ -137,7 +137,7 @@ static ta_event event(fixture *f, const char *text) {
 /* The delivery of `offered` to `actor` at the system's time, kept in the
  * fixture so the test can pass its address. */
 static const ta_actor_deliver_params *deliver_to(fixture *f, ta_actor_id actor, const ta_event *offered) {
-    f->delivery = (ta_actor_deliver_params){ .time = ta_system_time(f->system), .actor = actor, .event = offered };
+    f->delivery = (ta_actor_deliver_params){ .name = test_event_text(f->system, offered), .time = ta_system_time(f->system), .actor = actor, .event = offered };
     return &f->delivery;
 }
 

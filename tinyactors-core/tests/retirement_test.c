@@ -326,7 +326,7 @@ static void test_retire_with_actors(void) {
     CHECK(run(&f, warm_actors[0]) == TEST_DRIVE_STABLE);
     test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(f.system,
-                             &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = warm_actors[0],
+                             &(ta_actor_deliver_params){ .name = test_event_text(f.system, &(ta_event){ .name = warm_go }), .time = ta_system_time(f.system), .actor = warm_actors[0],
                                                          .event = &(ta_event){ .name = warm_go,
                                                                               .type = TA_EVENT_EXTERNAL } },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
@@ -367,7 +367,7 @@ static void test_retire_with_actors(void) {
     CHECK(ta_system_intern_atom(f.system, (ta_str)STR("go"), &segment) == TA_OK);
     CHECK(ta_event_name_intern(f.system, &(ta_atom_list){ .atoms = &segment, .count = 1 }, &go) == TA_OK);
     CHECK(test_drive_deliver(f.system,
-                             &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = first,
+                             &(ta_actor_deliver_params){ .name = test_event_text(f.system, &(ta_event){ .name = go }), .time = ta_system_time(f.system), .actor = first,
                                                          .event = &(ta_event){ .name = go,
                                                                               .type = TA_EVENT_EXTERNAL } },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);

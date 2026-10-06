@@ -23,7 +23,7 @@
  * CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
  * CHECK(status == TEST_DRIVE_STABLE);
  * CHECK(test_drive_deliver(system,
- *                          &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
+ *                          &(ta_actor_deliver_params){ .name = test_event_text(system, &event), .time = ta_system_time(system), .actor = actor,
  *                                                      .event = &event },
  *                          &(test_drive_run_params){ .status = &status }) == TA_OK);
  * ```
@@ -175,6 +175,24 @@ static inline ta_result test_drive_run(ta_system *system, ta_actor_id actor, con
  * delivery's result when it is not TA_OK, having run nothing; otherwise
  * the run's.
  */
+/**
+ * The dotted text of `event`'s name, which a test built by ID, for
+ * ta_actor_deliver_params.name: formatted by core into one of four
+ * buffers used in turn, so a call's text stays valid for the next three
+ * calls. Empty when the name has no text.
+ */
+static inline ta_str test_event_text(const ta_system *system, const ta_event *event) {
+    static char buffers[4][512];
+    static uint32_t next = 0;
+    char *buffer = buffers[next++ % 4u];
+    uint32_t needed = 0;
+    if (ta_event_name_format(system, &(ta_event_name_format_params){ .name = event->name, .buffer = buffer,
+                                                                     .capacity = 512u, .needed = &needed }) != TA_OK) {
+        return (ta_str){ 0 };
+    }
+    return (ta_str){ .ptr = buffer, .len = needed - 1u };
+}
+
 static inline ta_result test_drive_deliver(ta_system *system, const ta_actor_deliver_params *delivery,
                                            const test_drive_run_params *run) {
     ta_result result = ta_actor_deliver(system, delivery);

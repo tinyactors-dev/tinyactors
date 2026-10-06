@@ -392,6 +392,9 @@ typedef struct {
     ta_time time;
     /** The host's name for the input. */
     uint64_t correlation;
+    /** The event's name as text, which the envelope keeps, its `name` then
+     * not read; empty for a name core holds by ID. */
+    ta_str name_text;
 } ta_run_event;
 
 /**

@@ -16,16 +16,15 @@ static void interns_once_and_formats_back(void) {
     ta_event_name_id first = 0;
     ta_event_name_id again = 0;
     ta_event_name_id other = 0;
-    CHECK(tah_event_name_intern(system->core, text_of("user.message.sent"), &first) == TA_OK);
-    CHECK(tah_event_name_intern(system->core, text_of("user.message.sent"), &again) == TA_OK);
-    CHECK(tah_event_name_intern(system->core, text_of("user.message"), &other) == TA_OK);
+    CHECK(tah_event_name_intern(system, text_of("user.message.sent"), &first) == TA_OK);
+    CHECK(tah_event_name_intern(system, text_of("user.message.sent"), &again) == TA_OK);
+    CHECK(tah_event_name_intern(system, text_of("user.message"), &other) == TA_OK);
     CHECK(first == again);
     CHECK(first != other);
-    CHECK(ta_event_name_matches(system->core, first, other));
 
     char buffer[64];
     uint32_t needed = 0;
-    CHECK(ta_event_name_format(system->core, &(ta_event_name_format_params){
+    CHECK(tah_event_name_format(system, &(ta_event_name_format_params){
                                                  .name = first,
                                                  .buffer = buffer,
                                                  .capacity = sizeof buffer,
@@ -41,7 +40,7 @@ static void refuses_malformed_names(void) {
     ta_event_name_id id = 0;
     const char *bad[] = { "", ".", "a..b", ".a", "a." };
     for (size_t index = 0; index < sizeof bad / sizeof bad[0]; index += 1) {
-        CHECK(tah_event_name_intern(system->core, text_of(bad[index]), &id) == TA_ERR_INVALID);
+        CHECK(tah_event_name_intern(system, text_of(bad[index]), &id) == TA_ERR_INVALID);
     }
     char deep[2 * (TA_PARAM_DEFAULT_EVENT_NAME_DEPTH + 1u)];
     size_t at = 0;
@@ -50,9 +49,9 @@ static void refuses_malformed_names(void) {
         deep[at++] = '.';
     }
     deep[at - 1u] = '\0';
-    CHECK(tah_event_name_intern(system->core, text_of(deep), &id) == TA_ERR_INVALID);
+    CHECK(tah_event_name_intern(system, text_of(deep), &id) == TA_ERR_INVALID);
     deep[at - 3u] = '\0'; /* one segment fewer: exactly the limit */
-    CHECK(tah_event_name_intern(system->core, text_of(deep), &id) == TA_OK);
+    CHECK(tah_event_name_intern(system, text_of(deep), &id) == TA_OK);
     tah_system_free(system);
 }
 

@@ -1396,7 +1396,8 @@ static ta_result ta_actor_deliver_waiting(ta_system *system, const ta_actor_deli
                                                         .event = &accepted,
                                                         .trace = &params->trace,
                                                         .time = params->time,
-                                                        .correlation = params->correlation });
+                                                        .correlation = params->correlation,
+                                                        .name_text = params->name });
 }
 
 static ta_result ta_actor_deliver_resident(ta_system *system, ta_actor *actor, const ta_actor_deliver_params *params);
@@ -1412,8 +1413,8 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     /* By address, as h2c.event: resolved as a chart's <send> is. */
     const ta_actor_address *text = params->address;
     if (params->transition != NULL || text->family.name.ptr == NULL || text->family.name.len == 0 ||
-        text->name.ptr == NULL || text->name.len == 0 || !ta_trie_valid(&system->event_names, params->event->name) ||
-        params->event->name == TA_TRIE_ROOT) {
+        text->name.ptr == NULL || text->name.len == 0 || params->name.len > TA_NAME_AREA_FIELD_MAX ||
+        ta_names_resolve(&system->names, params->name) != TA_OK) {
         return TA_ERR_INVALID;
     }
     ta_address *address = NULL;
@@ -1436,7 +1437,7 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
 static ta_result ta_actor_deliver_resident(ta_system *system, ta_actor *actor, const ta_actor_deliver_params *params) {
     const ta_event *event = params->event;
     const ta_operator_transition *transition = params->transition;
-    if (!ta_trie_valid(&system->event_names, event->name) || event->name == TA_TRIE_ROOT ||
+    if (params->name.len > TA_NAME_AREA_FIELD_MAX || ta_names_resolve(&system->names, params->name) != TA_OK ||
         (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition)) ||
         !ta_actor_input_time_valid(system, actor, params->time)) {
         return TA_ERR_INVALID;
@@ -1479,7 +1480,8 @@ static ta_result ta_actor_deliver_resident(ta_system *system, ta_actor *actor, c
                                                          .trace = &params->trace,
                                                          .jump = jump,
                                                          .time = params->time,
-                                                         .correlation = params->correlation });
+                                                         .correlation = params->correlation,
+                                                         .name_text = params->name });
     if (result != TA_OK && jump != NULL) {
         ta_mem_free(system->allocator, jump,
                     &(ta_allocator_free_params){ .size = jump_bytes, .alignment = _Alignof(ta_operator_jump) });

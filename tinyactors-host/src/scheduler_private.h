@@ -6,6 +6,7 @@
  * the functions of the public header.
  */
 #include "tinyactors_host/scheduler.h"
+#include "events_private.h"
 
 /*
  * An actor's mailbox lists the messages its macrostep has not taken, in the
@@ -94,6 +95,8 @@ typedef struct tah_envelopes {
 
 struct tah_sched {
     ta_allocator allocator; /* the scheduling category */
+    /* The names of the messages it holds, as text (events.h). */
+    tah_names names;
     tah_vec pages;          /* tah_sched_entry *, one per page */
     /* The core whose pool admits the mail, the reentrancy flag set around
      * every call into it (ADR 0013 point 4), and the watched sessions whose

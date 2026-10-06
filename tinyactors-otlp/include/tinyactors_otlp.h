@@ -176,7 +176,7 @@ typedef struct {
     ta_str event_name;          /* LogRecord.event_name */
     ta_str body;
     bool has_event;
-    ta_event_name_id event;     /* scxml.event.name, when has_event */
+    ta_str event;               /* scxml.event.name, when has_event; borrowed for the call */
     ta_definition_id definition; /* 0 when unknown */
     uint64_t session;            /* 0 when unknown */
     ta_str key;                  /* one more attribute: the reason or code */

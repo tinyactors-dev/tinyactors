@@ -986,7 +986,7 @@ static void test_history_default_chains(void) {
     ta_event event = { .name = go_name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     CHECK(test_drive_deliver(system_under_test,
                              &(ta_actor_deliver_params){ .time = ta_system_time(system_under_test), .actor = actor,
-                                                         .event = &event },
+                                                         .name = test_event_text(system_under_test, &event), .event = &event },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
     CHECK(status == TEST_DRIVE_STABLE);
     ta_state_id x = 0;

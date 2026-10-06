@@ -1216,20 +1216,34 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
             /* Core fills the origin of a service's own event, whatever the host passed (ADR 0068). */
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
+                                                                  .name = params->name,
                                                                   .trace = params->trace, .time = params->time,
                                                                   .correlation = params->correlation });
         case TA_INVOKE_REPORT_DONE: {
-            ta_result result = ta_invoke_done_name(system, params->invoke_id, &event.name);
-            if (result != TA_OK) {
-                return result;
+            /* done.invoke.<id>, as text (ADR 0100), for the call only. */
+            static const char prefix[] = "done.invoke";
+            ta_str id = ta_invoke_id_text(system, params->invoke_id);
+            uint32_t length = (uint32_t)(sizeof prefix - 1u) + (id.len != 0u ? 1u + id.len : 0u);
+            char *name = ta_mem_alloc(system->allocator, length, 1u);
+            if (name == NULL) {
+                return TA_ERR_NOMEM;
+            }
+            ta_mem_copy(name, prefix, sizeof prefix - 1u);
+            if (id.len != 0u) {
+                name[sizeof prefix - 1u] = '.';
+                ta_mem_copy(name + sizeof prefix, id.ptr, id.len);
             }
             if (params->as.done_data != NULL) {
                 event.data = *params->as.done_data;
             }
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
-            return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
-                                                                  .trace = params->trace, .time = params->time,
-                                                                  .correlation = params->correlation });
+            ta_result result = ta_actor_deliver(system, &(ta_actor_deliver_params){
+                                                            .actor = params->actor, .event = &event,
+                                                            .name = { .ptr = name, .len = length },
+                                                            .trace = params->trace, .time = params->time,
+                                                            .correlation = params->correlation });
+            ta_mem_free(system->allocator, name, &(ta_allocator_free_params){ .size = length, .alignment = 1u });
+            return result;
         }
         case TA_INVOKE_REPORT_ERROR:
             return ta_invoke_report_error(system, actor, params);

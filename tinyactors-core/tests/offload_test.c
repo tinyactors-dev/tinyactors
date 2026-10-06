@@ -191,7 +191,7 @@ static void deliver(fixture *f, ta_actor_id actor, const char *name) {
     CHECK(ta_event_name_intern(f->system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &event) == TA_OK);
     test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(f->system,
-                             &(ta_actor_deliver_params){ .time = ta_system_time(f->system), .actor = actor,
+                             &(ta_actor_deliver_params){ .name = test_event_text(f->system, &(ta_event){ .name = event }), .time = ta_system_time(f->system), .actor = actor,
                                                          .event = &(ta_event){ .name = event,
                                                                               .type = TA_EVENT_EXTERNAL } },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);

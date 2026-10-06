@@ -228,3 +228,19 @@ before it.
   - Not yet changed: the generated invocation ID, `done.invoke.<id>`,
     `error.communication.invoke.<id>.<reason>`, `#_<invokeid>` and
     session-URI families in `targetexpr`, and the host calls.
+- **Hosts pass names as text, 2026-10-06.** `ta_actor_deliver_params.name`
+  and `ta_invoke_report_params.name` carry the event name as text, at most
+  65,535 bytes (one name-area field); `event->name` is not read. Core
+  checks the name with the resolver, keeps it in the envelope's text, and
+  resolves it when the input is taken, as for mail. Admission is a safe
+  point: the name area makes room for a long name there and the run's
+  name buffer grows to hold it (it starts at 128 bytes, at system
+  creation). `done.invoke.<id>` for a host's DONE report is built as text.
+  `ta_event_name_format` reads an input's name kept as text while the input
+  lives. The kernel, a host, keeps the names it is given in its own table
+  until it is removed (`tinyactors-host/src/events.c`).
+  - Still interned in core: names a host gives for delayed sends it
+    restores (`ta_delayed_send_info.event`, through the kernel's
+    `tah_core_event_name`), until delayed sends are envelopes; and names
+    core hands a host (a TAKEN outcome's event, inspection, images, a kept
+    event), until those carry text.

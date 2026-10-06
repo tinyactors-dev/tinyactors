@@ -95,6 +95,20 @@
  * runs, whatever memory the machine reports, and none above it. At least
  * two populations always run.
  */
+/* The dotted text of an event name, for ta_actor_deliver_params.name:
+ * formatted by core into one of four buffers used in turn. */
+static ta_str event_text(const ta_system *system, ta_event_name_id name) {
+    static char buffers[4][256];
+    static unsigned next = 0;
+    char *buffer = buffers[next++ % 4u];
+    uint32_t needed = 0;
+    if (ta_event_name_format(system, &(ta_event_name_format_params){.name = name, .buffer = buffer, .capacity = 256u,
+                                                                    .needed = &needed}) != TA_OK) {
+        return (ta_str){0};
+    }
+    return (ta_str){.ptr = buffer, .len = needed - 1u};
+}
+
 static const uint32_t POPULATIONS[] = {50000u, 200000u, 1000000u, 4000000u};
 #define POPULATION_COUNT (sizeof(POPULATIONS) / sizeof(POPULATIONS[0]))
 #define CHURN_ACTORS 20000u
@@ -640,7 +654,7 @@ static round_cost measure(size_t population) {
     for (size_t index = 0; index < CHURN_ACTORS; index += 1) {
         ta_actor_id timed_actor = timed_actors[(index % INSPECTION_SAMPLE) * stride];
         ta_event rearm = {.name = rearm_name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
-        require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = timed_actor, .event = &rearm }) == TA_OK, "delivering rearm");
+        require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .name = event_text(system, (&rearm)->name), .time = ta_system_time(system), .actor = timed_actor, .event = &rearm }) == TA_OK, "delivering rearm");
         require(run_input(system, timed_actor), "cancelling and re-arming a send");
     }
     double rearmed = cpu_seconds();
@@ -1110,7 +1124,7 @@ static void run_to_stable(ta_system *system, ta_actor_id actor) {
 
 static void run_event(ta_system *system, ta_actor_id actor, ta_event_name_id name) {
     ta_event event = {.name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
-    require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK, "delivering an event");
+    require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .name = event_text(system, (&event)->name), .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK, "delivering an event");
     run_to_stable(system, actor);
 }
 
@@ -1175,7 +1189,7 @@ static void check_event_allocations(void) {
 static void deliver_batch(ta_system *system, const ta_actor_id *actors, ta_event_name_id name) {
     ta_event event = {.name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
     for (unsigned index = 0; index < DELIVERY_BATCH; index += 1u) {
-        require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actors[index], .event = &event }) == TA_OK, "delivering an event of the batch");
+        require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .name = event_text(system, (&event)->name), .time = ta_system_time(system), .actor = actors[index], .event = &event }) == TA_OK, "delivering an event of the batch");
     }
     for (unsigned index = 0; index < DELIVERY_BATCH; index += 1u) {
         run_to_stable(system, actors[index]);
@@ -1236,7 +1250,7 @@ static void run_origin_event(ta_system *system, ta_actor_id actor, ta_event_name
     ta_io_origin_make_params params = *origin;
     params.out = &event.origin;
     require(ta_io_origin_make(system, &params) == TA_OK, "making a message origin");
-    require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK, "delivering an event with an origin");
+    require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .name = event_text(system, (&event)->name), .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK, "delivering an event with an origin");
     ta_event_release(&event);
     run_to_stable(system, actor);
 }

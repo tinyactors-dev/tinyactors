@@ -170,7 +170,7 @@ static void test_init(void) {
 static void test_layout(void) {
     test_allocator heap = { 0 };
     ta_name_area area = area_over(&heap, (uint32_t[3]){ 64u * 64u, 50u, 64u });
-    CHECK(ta_name_area_refill(&area) == TA_OK);
+    CHECK(ta_name_area_refill(&area, 0u) == TA_OK);
     static uint8_t bytes[2u * (TA_NAME_AREA_FIELD_MAX + 2u)];
     static uint8_t field[TA_NAME_AREA_FIELD_MAX];
     for (uint32_t offset = 0; offset < TEXT; offset += 1u) {
@@ -224,7 +224,7 @@ static void test_layout(void) {
 static void test_need(void) {
     test_allocator heap = { 0 };
     ta_name_area area = area_over(&heap, (uint32_t[3]){ 64u * 64u, 50u, 64u });
-    CHECK(ta_name_area_refill(&area) == TA_OK);
+    CHECK(ta_name_area_refill(&area, 0u) == TA_OK);
     for (uint32_t before = 0; before <= 2u * TEXT + 2u; before += 1u) {
         for (uint32_t length = 0; length <= FIELD_MAX; length += 7u) {
             ta_chunk_writer writer = ta_chunk_writer_new();
@@ -257,7 +257,7 @@ static const ta_trace_parent sample_parent = {
 static void test_trace_parent(void) {
     test_allocator heap = { 0 };
     ta_name_area area = area_over(&heap, (uint32_t[3]){ 64u * 64u, 50u, 64u });
-    CHECK(ta_name_area_refill(&area) == TA_OK);
+    CHECK(ta_name_area_refill(&area, 0u) == TA_OK);
     static uint8_t bytes[4u * TEXT];
     for (uint32_t name = 0; name <= 2u * TEXT; name += 1u) {
         ta_chunk_writer writer = ta_chunk_writer_new();
@@ -354,7 +354,7 @@ static void test_trace_parent(void) {
 static void test_reader(void) {
     test_allocator heap = { 0 };
     ta_name_area area = area_over(&heap, (uint32_t[3]){ 64u * 64u, 50u, 64u });
-    CHECK(ta_name_area_refill(&area) == TA_OK);
+    CHECK(ta_name_area_refill(&area, 0u) == TA_OK);
     uint32_t got = 99u;
     ta_name_area_reader reader = ta_name_area_reader_of((ta_chunk_chain){ 0u, 0u });
     CHECK(ta_name_area_next(&area, &reader, &got) == TA_ERR_NOT_FOUND && got == 99u);
@@ -463,7 +463,7 @@ static void test_failures(void) {
                                                                                .parent = &sample_parent }) == TA_ERR_FULL);
     CHECK(unchanged(&area, &writer, &shot));
 
-    CHECK(ta_name_area_refill(&area) == TA_OK);
+    CHECK(ta_name_area_refill(&area, 0u) == TA_OK);
     CHECK(area.chunks.pool.free == 10u);
     shot = snapshot_of(&area, &writer);
 
@@ -508,7 +508,7 @@ static void test_failures(void) {
     shot = snapshot_of(&area, &other);
     CHECK(write_field(&area, &other, (uint32_t[2]){ 2u, 0u }) == TA_ERR_FULL);
     CHECK(unchanged(&area, &other, &shot));
-    CHECK(ta_name_area_refill(&area) == TA_OK); /* at the bound: nothing to make free */
+    CHECK(ta_name_area_refill(&area, 0u) == TA_OK); /* at the bound: nothing to make free */
     CHECK(area.chunks.pool.free == 0u);
 
     ta_name_area_free(&area, &other.chain);
@@ -522,7 +522,7 @@ static void test_failures(void) {
 static void test_free(void) {
     test_allocator heap = { 0 };
     ta_name_area area = area_over(&heap, (uint32_t[3]){ 64u * 64u, 50u, 64u });
-    CHECK(ta_name_area_refill(&area) == TA_OK);
+    CHECK(ta_name_area_refill(&area, 0u) == TA_OK);
     ta_chunk_chain empty = { 0u, 0u };
     ta_name_area_free(&area, &empty);
     CHECK(area.quota.used == 0u && area.chunks.pool.free == 64u);
@@ -559,10 +559,10 @@ static void test_no_allocation(void) {
     /* 4 pages of chunks, reserve one page and one chunk. */
     uint32_t count = 4u * PAGE;
     ta_name_area area = area_over(&heap, (uint32_t[3]){ count * 64u, 50u, PAGE + 1u });
-    CHECK(ta_name_area_refill(&area) == TA_OK);
+    CHECK(ta_name_area_refill(&area, 0u) == TA_OK);
     CHECK(area.chunks.pool.free == 2u * PAGE && area.chunks.pool.pages.count == 2u);
     uint32_t attempts = heap.attempts;
-    CHECK(ta_name_area_refill(&area) == TA_OK);
+    CHECK(ta_name_area_refill(&area, 0u) == TA_OK);
     CHECK(heap.attempts == attempts);
 
     /* A macrostep: every allocation from here on would fail. */
@@ -601,7 +601,7 @@ static void test_no_allocation(void) {
     uint32_t used = area.quota.used;
     uint32_t pages = area.chunks.pool.pages.count;
     uint32_t live = heap.live;
-    CHECK(ta_name_area_refill(&area) == TA_ERR_NOMEM);
+    CHECK(ta_name_area_refill(&area, 0u) == TA_ERR_NOMEM);
     CHECK(area.quota.used == used && area.chunks.pool.free == 0u);
     CHECK(area.chunks.pool.pages.count == pages && heap.live == live);
     CHECK(ta_name_area_trace_parent(&area, writer.chain, &parent) == TA_OK);
@@ -610,15 +610,15 @@ static void test_no_allocation(void) {
     heap.policy.refuse = false;
     ta_name_area_free(&area, &filler.chain);
     filler = ta_chunk_writer_new(); /* the freed chain's writer is spent */
-    CHECK(ta_name_area_refill(&area) == TA_OK);
+    CHECK(ta_name_area_refill(&area, 0u) == TA_OK);
     CHECK(area.chunks.pool.free >= PAGE + 1u);
     while (area.quota.used < count - 3u) {
         if (area.chunks.pool.free == 0u) {
-            CHECK(ta_name_area_refill(&area) == TA_OK);
+            CHECK(ta_name_area_refill(&area, 0u) == TA_OK);
         }
         CHECK(write_field(&area, &filler, (uint32_t[2]){ 42u, TEXT - 2u }) == TA_OK); /* one chunk each */
     }
-    CHECK(ta_name_area_refill(&area) == TA_OK);
+    CHECK(ta_name_area_refill(&area, 0u) == TA_OK);
     CHECK(area.chunks.pool.free == 3u && area.chunks.pool.pages.count == 4u);
 
     /* Trim gives whole free pages back and keeps the reserve free; the traced chain is intact. */

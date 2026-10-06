@@ -182,6 +182,7 @@ const char *tah_dead_reason_name(tah_dead_reason reason) {
 
 void tah_sched_init(tah_sched *sched, ta_allocator allocator, ta_allocator envelopes) {
     *sched = (tah_sched){ .allocator = allocator };
+    tah_names_init(&sched->names, allocator, TA_PARAM_DEFAULT_EVENT_NAME_DEPTH);
     tah_vec_init(&sched->pages, allocator, TAH_LAYOUT(tah_sched_entry *));
     tah_ring_shape shape = { .layout = TAH_LAYOUT(ta_actor_id), .chunk_capacity = TAH_QUEUE_CHUNK };
     tah_ring_init(&sched->held, allocator, shape);
@@ -226,6 +227,7 @@ void tah_sched_discard_mail(tah_sched *sched) {
 }
 
 void tah_sched_destroy(tah_sched *sched) {
+    tah_names_destroy(&sched->names);
     for (uint32_t page = 0; page < sched->pages.count; page += 1) {
         tah_sched_entry **entries = tah_vec_at(&sched->pages, page);
         if (*entries != NULL) {
@@ -938,6 +940,8 @@ static ta_result tah_sched_offer(tah_sched *sched, uint32_t index) {
         result = ta_actor_deliver(sched->core, &(ta_actor_deliver_params){ .time = now,
                                                                            .actor = envelope->target,
                                                                            .address = by_address ? &view : NULL,
+                                                                           .name = tah_names_text(&sched->names,
+                                                                                                  envelope->event.name),
                                                                            .event = &envelope->event,
                                                                            .trace = trace,
                                                                            .transition = envelope->has_jump ? &jump
@@ -1045,6 +1049,8 @@ static void tah_sched_fill(tah_sched *sched, uint32_t index, const tah_message *
     tah_envelope *envelope = tah_sched_envelope(sched, index);
     envelope->trace = trace;
     envelope->event = *message->event;
+    /* The kernel holds the name as text; tah_sched_post adopted it. */
+    envelope->event.name = message->name;
     envelope->target = message->target;
     envelope->bytes = message->bytes;
     envelope->waiter = message->waiter;
@@ -1132,7 +1138,16 @@ static ta_result tah_sched_post_address(tah_sched *sched, const tah_message *mes
     return result;
 }
 
-ta_result tah_sched_post(tah_sched *sched, const tah_message *message) {
+ta_result tah_sched_post(tah_sched *sched, const tah_message *posted) {
+    /* The kernel holds the name as text: a core name is formatted now,
+     * while it is valid, and kept in the kernel's table (events.h). */
+    tah_message adopted = *posted;
+    adopted.name = posted->event->name;
+    ta_result named = tah_names_adopt(&sched->names, sched->core, &adopted.name);
+    if (named != TA_OK) {
+        return named;
+    }
+    const tah_message *message = &adopted;
     if (message->address != NULL) {
         return tah_sched_post_address(sched, message);
     }

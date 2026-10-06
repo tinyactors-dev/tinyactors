@@ -438,14 +438,19 @@ async function failedSystemVariable() {
   );
   const actor = system.spawn(definition);
   await system.flush();
-  // One segment far larger than any scratch block: joining `long.` and it
-  // is the only allocation of 100 KB or more the delivery makes, because
-  // the name is interned when it is posted.
-  const segment = 'x'.repeat(200_000);
+  // One segment far larger than any scratch block, and within the 65,535
+  // bytes a name may have. Core keeps the name as text and reads it into a
+  // buffer it grows when a longer name is admitted (ADR 0100): a name of
+  // the same length, which no transition takes, grows it first, so
+  // rendering the name is the only allocation of 18 KB or more the
+  // delivery makes.
+  const segment = 'x'.repeat(20_000);
   const nativeSystem = nativeOf(system);
+  actor.post(`warm.${segment}`);
+  await system.flush();
 
   actor.post(`long.${segment}`);
-  nativeSystem.refuseAllocationsFrom(100_000);
+  nativeSystem.refuseAllocationsFrom(18_000);
   await system.flush();
   nativeSystem.refuseAllocationsFrom(0);
   let data = actor.inspect().data;
@@ -454,7 +459,7 @@ async function failedSystemVariable() {
   assert.match(data.errors[0], /could not render a system variable/);
 
   actor.post(`quiet.${segment}`);
-  nativeSystem.refuseAllocationsFrom(100_000);
+  nativeSystem.refuseAllocationsFrom(18_000);
   await system.flush();
   nativeSystem.refuseAllocationsFrom(0);
   data = actor.inspect().data;

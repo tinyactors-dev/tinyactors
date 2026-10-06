@@ -33,6 +33,18 @@ typedef struct {
     jv wakes;
 } tat_hosted;
 
+/* The dotted text of an event name the kernel holds, or JSON null. */
+static jv tat_hosted_event_text(const tah_system *system, ta_event_name_id name) {
+    char small[256];
+    uint32_t needed = 0;
+    if (tah_event_name_format(system, &(ta_event_name_format_params){.name = name, .buffer = small,
+                                                                     .capacity = sizeof small, .needed = &needed}) ==
+        TA_OK) {
+        return jv_string(small);
+    }
+    return jv_null();
+}
+
 static uint64_t tat_hosted_monotonic(void *self) {
     return ((tat_hosted_clock *)self)->now_ns;
 }
@@ -194,8 +206,7 @@ jv tat_hosted_post_method(tat_bind *bind, jv params, int *error_code) {
     }
     ta_event_name_id name = 0;
     ta_result result = tah_event_name_intern(
-        tah_system_core(hosted->system), (ta_str){jv_string_value(text), (uint32_t)jv_string_length_bytes(jv_copy(text))},
-        &name);
+        hosted->system, (ta_str){jv_string_value(text), (uint32_t)jv_string_length_bytes(jv_copy(text))}, &name);
     jv_free(text);
     ta_event event = {.name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
     jv data = jv_object_get(jv_copy(params), jv_string("data"));
@@ -288,7 +299,6 @@ static void tat_hosted_take_records(tat_hosted *hosted) {
 /* The turn's dead letters, from its records (kernel ADR 0001 section 5):
  * {"actor", "family"?, "name"?, "event", "reason", "data"?} each. */
 static jv tat_hosted_dead_letters(tah_system *system, jv list) {
-    ta_system *core = tah_system_core(system);
     for (const tah_turn_record *record = tah_sched_records(tah_system_sched(system)); record != NULL;
          record = record->next) {
         if (record->kind != TAH_RECORD_DEAD_LETTER) {
@@ -299,7 +309,7 @@ static jv tat_hosted_dead_letters(tah_system *system, jv list) {
             item = jv_object_set(item, jv_string("family"), tat_hosted_text(record->address.family.name));
             item = jv_object_set(item, jv_string("name"), tat_hosted_text(record->address.name));
         }
-        item = jv_object_set(item, jv_string("event"), tat_event_name_text(core, record->event));
+        item = jv_object_set(item, jv_string("event"), tat_hosted_event_text(system, record->event));
         item = jv_object_set(item, jv_string("reason"), jv_string(tah_dead_reason_name(record->reason)));
         if (record->data.v != NULL) {
             item = jv_object_set(item, jv_string("data"), tat_value_encode(&record->data));
@@ -383,7 +393,6 @@ jv tat_hosted_mailboxes_method(tat_bind *bind, jv params, int *error_code) {
         return tat_bind_take_error(bind, error_code);
     }
     tah_sched *sched = tah_system_sched(hosted->system);
-    ta_system *core = tah_system_core(hosted->system);
     jv actors = jv_object_get(jv_copy(params), jv_string("actors"));
     int count = jv_get_kind(actors) == JV_KIND_ARRAY ? jv_array_length(jv_copy(actors)) : 0;
     jv boxes = jv_array();
@@ -394,7 +403,7 @@ jv tat_hosted_mailboxes_method(tat_bind *bind, jv params, int *error_code) {
         jv events = jv_array();
         for (uint32_t envelope = tah_sched_mailbox_first(sched, actor); envelope != 0;) {
             tah_queued_message message = tah_sched_queued_message(sched, envelope);
-            events = jv_array_append(events, tat_event_name_text(core, message.event->name));
+            events = jv_array_append(events, tat_hosted_event_text(hosted->system, message.event->name));
             envelope = message.next;
         }
         jv box = jv_object_set(jv_object(), jv_string("actor"), jv_number((double)actor));

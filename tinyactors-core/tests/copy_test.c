@@ -436,7 +436,7 @@ static void test_invoke_copies(void) {
     ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE, .data = data };
     CHECK(test_drive_deliver(system,
                              &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
-                                                         .event = &event },
+                                                         .name = test_event_text(system, &event), .event = &event },
                              &(test_drive_run_params){ .budget = 1000 }) == TA_OK);
     CHECK(copies == 3);
     CHECK(forwarded.count == 1);

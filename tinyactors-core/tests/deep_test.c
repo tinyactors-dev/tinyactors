@@ -194,7 +194,7 @@ static void deep_states(void) {
     ta_event event = { .name = event_name(system, "go"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     CHECK(test_drive_deliver(system,
                              &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
-                                                         .event = &event },
+                                                         .name = test_event_text(system, &event), .event = &event },
                              &(test_drive_run_params){ .status = &status }) == TA_OK &&
           status == TEST_DRIVE_STABLE);
     ta_state_id b = 0;

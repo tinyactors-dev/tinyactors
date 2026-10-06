@@ -134,7 +134,7 @@ static ta_actor_id spawn(world *w, ta_definition_id definition, const ta_actor_a
 
 static void post(world *w, ta_actor_id target, const char *name) {
     ta_event event = { .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(tah_event_name_intern(w->system->core, (ta_str){ .ptr = name, .len = (uint32_t)strlen(name) }, &event.name) ==
+    CHECK(tah_event_name_intern(w->system, (ta_str){ .ptr = name, .len = (uint32_t)strlen(name) }, &event.name) ==
           TA_OK);
     CHECK(tah_system_post(w->system, &(tah_message){ .target = target, .event = &event }) == TA_OK);
 }
@@ -169,7 +169,7 @@ static void take(world *w, batch *out) {
         tah_record record = tah_recorder_record(w->system, index);
         char name[64];
         uint32_t needed = 0;
-        CHECK(ta_event_name_format(w->system->core, &(ta_event_name_format_params){
+        CHECK(tah_event_name_format(w->system, &(ta_event_name_format_params){
                                                         .name = record.event->name, .buffer = name,
                                                         .capacity = sizeof name, .needed = &needed }) == TA_OK);
         text_into(out->names[index], sizeof out->names[index], (ta_str){ .ptr = name, .len = needed - 1u });

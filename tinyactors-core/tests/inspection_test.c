@@ -382,7 +382,7 @@ static void test_current_event_from_the_input(ta_system *system, counting_model 
     ta_event event = { .name = go, .type = TA_EVENT_EXTERNAL, .send_id = 42u, .invoke_id = TA_INVOKE_ID_NONE,
                        .data = { .self = &data, .v = &counted_vtable } };
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
-                                                                .event = &event }) == TA_OK);
+                                                                .name = test_event_text(system, &event), .event = &event }) == TA_OK);
     CHECK(data.retains == 1 && data.releases == 0);
 
     /* Admitted, not taken: no macrostep holds it yet. */
@@ -441,7 +441,7 @@ static void test_current_event_replaced_by_the_next_inspection(ta_system *system
                            .data = { .self = &data[index], .v = &counted_vtable } };
         CHECK(test_drive_deliver(system,
                                  &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actors[index],
-                                                             .event = &event },
+                                                             .name = test_event_text(system, &event), .event = &event },
                                  &(test_drive_run_params){ .pause_at_microstep_start = true, .status = &status }) ==
               TA_OK);
         CHECK(status == TEST_DRIVE_PAUSED);

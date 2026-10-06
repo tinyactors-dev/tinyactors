@@ -361,7 +361,7 @@ static void deliver_at(ta_system *system, ta_actor_id actor, const char *event, 
     ta_event delivered = { .name = event_name(system, event), .type = TA_EVENT_EXTERNAL,
                            .invoke_id = TA_INVOKE_ID_NONE };
     test_drive_status status = TEST_DRIVE_ERROR;
-    CHECK(test_drive_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &delivered, .time = time },
+    CHECK(test_drive_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .name = test_event_text(system, &delivered), .event = &delivered, .time = time },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
     CHECK(status == TEST_DRIVE_STABLE);
 }
@@ -638,6 +638,7 @@ static void test_replayed_invocation_finalizes(void) {
     CHECK(ta_system_set_time(system, 10) == TA_OK);
     CHECK(ta_actor_report_invoke(system, &(ta_invoke_report_params){ .actor = replay, .invoke_id = job,
                                                                      .kind = TA_INVOKE_REPORT_EVENT,
+                                                                     .name = test_event_text(system, &reply),
                                                                      .time = 10, .as.event = &reply }) == TA_OK);
     CHECK(run(system, replay) == TEST_DRIVE_STABLE);
     CHECK(in_state(system, replay, "finished_job"));
@@ -690,23 +691,23 @@ static void test_result_codes(void) {
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .out = &live }) == TA_OK);
     CHECK(run(system, live) == TEST_DRIVE_STABLE);
     ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1, .time = 5 }) ==
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .name = test_event_text(system, &e1), .event = &e1, .time = 5 }) ==
           TA_ERR_INVALID); /* a live actor's input is at the system's time */
     CHECK(ta_system_set_time(system, 100) == TA_OK);
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 20);
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 10 }) ==
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .name = test_event_text(system, &e1), .event = &e1, .time = 10 }) ==
           TA_ERR_INVALID); /* backwards */
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 101 }) ==
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .name = test_event_text(system, &e1), .event = &e1, .time = 101 }) ==
           TA_ERR_INVALID); /* the future */
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 25 }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .name = test_event_text(system, &e1), .event = &e1, .time = 25 }) == TA_OK);
     /* A second input waits behind the first (ADR 0099), and its time is the
      * actor's when it is taken. */
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 30 }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .name = test_event_text(system, &e1), .event = &e1, .time = 30 }) == TA_OK);
     /* Admitting 30 then 28 goes backwards too, though neither was taken:
      * refused, and nothing is admitted. */
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 28,
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .name = test_event_text(system, &e1), .event = &e1, .time = 28,
                                                                .correlation = 7 }) == TA_ERR_INVALID);
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .event = &e1, .time = 25,
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .name = test_event_text(system, &e1), .event = &e1, .time = 25,
                                                                .correlation = 7 }) == TA_ERR_INVALID);
     CHECK(ta_system_withdraw_input(system, 7) == TA_ERR_NOT_FOUND);
     test_drive_status taken = TEST_DRIVE_ERROR;
@@ -980,7 +981,7 @@ static void test_export_result_codes(void) {
     CHECK(export_into(system, live, &out) == TA_ERR_BUSY); /* its bootstrap has not run */
     CHECK(run(system, live) == TEST_DRIVE_STABLE);
     ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .event = &e1,
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .name = test_event_text(system, &e1), .event = &e1,
                                                                .time = ta_system_time(system) }) == TA_OK);
     test_drive_status taken = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(system, live, &(test_drive_run_params){ .budget = 1, .status = &taken }) == TA_OK);

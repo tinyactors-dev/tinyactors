@@ -37,9 +37,12 @@ void ta_name_area_destroy(ta_name_area *area) {
     area->quota = ta_quota_make(area->quota.capacity);
 }
 
-ta_result ta_name_area_refill(ta_name_area *area) {
+ta_result ta_name_area_refill(ta_name_area *area, uint32_t extra) {
     uint32_t available = ta_quota_available(&area->quota);
-    uint32_t min_free = area->reserve < available ? area->reserve : available;
+    uint32_t min_free = area->reserve + extra;
+    if (min_free < area->reserve || min_free > available) {
+        min_free = available;
+    }
     /* The ceiling is the quota's capacity, so `used + min_free` never passes it: only NOMEM remains. */
     return ta_index_pool_refill(&area->chunks.pool, min_free);
 }

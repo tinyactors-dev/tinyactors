@@ -371,7 +371,7 @@ static test_drive_status resume_once(run *r) {
         CHECK(ta_event_name_intern(r->system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &waiting.name) == TA_OK);
         r->waiting += 1u;
         CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system),
-                                                                      .actor = r->actor, .event = &waiting,
+                                                                      .actor = r->actor, .name = test_event_text(r->system, &waiting), .event = &waiting,
                                                                       .correlation = r->waiting }) == TA_OK);
     }
     return status;
@@ -392,7 +392,7 @@ static void deliver(run *r, const char *name) {
     ta_event_name_id event_name = 0;
     CHECK(ta_event_name_intern(r->system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &event_name) == TA_OK);
     ta_event event = { .name = event_name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .name = test_event_text(r->system, &event), .event = &event }) == TA_OK);
 }
 
 /* The active states, by ID, appended to the trace. */

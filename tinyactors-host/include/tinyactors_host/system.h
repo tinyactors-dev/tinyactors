@@ -210,6 +210,14 @@ bool tah_system_closed(const tah_system *system);
  * tah_system_close().
  */
 ta_system *tah_system_core(tah_system *system);
+
+/* The kernel ID of an event name given as text, which the kernel keeps
+ * (events.h): TA_ERR_INVALID for malformed text, TA_ERR_NOMEM when its table
+ * cannot grow. */
+ta_result tah_event_name_intern(tah_system *system, ta_str text, ta_event_name_id *out);
+
+/* Like ta_event_name_format(), for a kernel name ID or a name core gave. */
+ta_result tah_event_name_format(const tah_system *system, const ta_event_name_format_params *params);
 tah_allocator *tah_system_allocator(tah_system *system);
 tah_scratch *tah_system_scratch(tah_system *system);
 tah_sched *tah_system_sched(tah_system *system);

@@ -282,6 +282,20 @@ bool tah_system_closed(const tah_system *system) {
     return system == NULL || system->closed;
 }
 
+ta_result tah_event_name_intern(tah_system *system, ta_str text, ta_event_name_id *out) {
+    if (system == NULL) {
+        return TA_ERR_INVALID;
+    }
+    return tah_names_intern(&system->sched.names, text, out);
+}
+
+ta_result tah_event_name_format(const tah_system *system, const ta_event_name_format_params *params) {
+    if (system == NULL || params == NULL) {
+        return TA_ERR_INVALID;
+    }
+    return tah_names_format(&system->sched.names, system->core, params);
+}
+
 ta_system *tah_system_core(tah_system *system) {
     return system->core;
 }

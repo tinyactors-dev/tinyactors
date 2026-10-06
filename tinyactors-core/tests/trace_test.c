@@ -445,7 +445,7 @@ static ta_event event_named(run *r, const char *text) {
 
 static void deliver(run *r, const char *name, ta_trace_parent trace) {
     ta_event event = event_named(r, name);
-    CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .event = &event,
+    CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor, .name = test_event_text(r->system, &event), .event = &event,
                                                                   .trace = trace }) == TA_OK);
     read_tel(r->system);
 }
@@ -774,12 +774,12 @@ static void test_records_are_written_once(void) {
         ta_event event = event_named(&r, "go");
         heap.policy.fail_at = heap.attempts + failing;
         ta_result delivered = ta_actor_deliver(r.system,
-                                               &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor, .event = &event });
+                                               &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor, .name = test_event_text(r.system, &event), .event = &event });
         read_tel(r.system);
         test_drive_status status = TEST_DRIVE_ERROR;
         uint32_t attempts = 0;
         if (delivered == TA_ERR_NOMEM) {
-            delivered = ta_actor_deliver(r.system, &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor, .event = &event });
+            delivered = ta_actor_deliver(r.system, &(ta_actor_deliver_params){ .time = ta_system_time(r.system), .actor = r.actor, .name = test_event_text(r.system, &event), .event = &event });
             read_tel(r.system);
         }
         CHECK(delivered == TA_OK);

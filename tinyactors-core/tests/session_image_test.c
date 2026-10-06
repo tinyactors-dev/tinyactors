@@ -213,7 +213,7 @@ static void test_capture_skips_a_released_external_event(void) {
     counted_value value = { .references = 1 };
     ta_event event = { .name = f.poke, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE,
                        .data = { .self = &value, .v = &counted_vtable } };
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = f.actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = f.actor, .name = test_event_text(f.system, &event), .event = &event }) == TA_OK);
     counted_release(&value); /* the host lets go; core holds its own */
     run_to_stable(&f);
     CHECK(value.references == 0); /* `bounce` replaced it as the current event */
@@ -229,7 +229,7 @@ static void test_capture_keeps_a_held_external_event(void) {
     counted_value value = { .references = 1 };
     ta_event event = { .name = f.poke, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE,
                        .data = { .self = &value, .v = &counted_vtable } };
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = f.actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = f.actor, .name = test_event_text(f.system, &event), .event = &event }) == TA_OK);
     counted_release(&value);
     /* One step takes it, and the macrostep pauses holding it. */
     test_drive_status status = TEST_DRIVE_ERROR;
@@ -261,7 +261,7 @@ static void test_capture_skips_a_released_origin(void) {
     ta_event event = { .name = f.poke, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE,
                        .origin = { .kind = TA_ORIGIN_ACTOR,
                                    .as.actor = { .kind = TA_ACTOR_REF_NAMED, .as.named = origin } } };
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = f.actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .time = ta_system_time(f.system), .actor = f.actor, .name = test_event_text(f.system, &event), .event = &event }) == TA_OK);
     ta_address_release(origin); /* core's references are now the last */
     run_to_stable(&f);          /* ...and releasing the event frees the address */
     capture_and_destroy(&f);
@@ -275,7 +275,7 @@ static ta_session_image *hold_and_capture(fixture *f, counted_value *value) {
     ta_event event = { .name = f->poke, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE,
                        .data = { .self = value, .v = &counted_vtable } };
     CHECK(ta_actor_deliver(f->system, &(ta_actor_deliver_params){ .time = ta_system_time(f->system),
-                                                                 .actor = f->actor, .event = &event }) == TA_OK);
+                                                                 .actor = f->actor, .name = test_event_text(f->system, &event), .event = &event }) == TA_OK);
     counted_release(value);
     test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(f->system, f->actor, &(test_drive_run_params){ .budget = 1, .status = &status }) == TA_OK);

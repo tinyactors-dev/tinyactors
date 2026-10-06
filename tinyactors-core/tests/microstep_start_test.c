@@ -312,7 +312,8 @@ static void deliver(run *r, const char *name, const char *target) {
     ta_event event = { .name = event_name(r->system, name), .type = TA_EVENT_EXTERNAL,
                        .invoke_id = TA_INVOKE_ID_NONE };
     ta_operator_transition transition = { .source = TA_STATE_NONE, .targets = targets, .target_count = 1 };
-    ta_actor_deliver_params params = { .actor = r->actor, .event = &event, .time = ta_system_time(r->system),
+    ta_actor_deliver_params params = { .actor = r->actor, .name = { .ptr = name, .len = (uint32_t)strlen(name) },
+                                       .event = &event, .time = ta_system_time(r->system),
                                        .transition = target == NULL ? NULL : &transition };
     ta_result result = ta_actor_deliver(r->system, &params);
     if (result == TA_ERR_NOMEM) {
@@ -434,7 +435,7 @@ static void check_start(run *r, const start_case *c) {
     ta_event waiting = { .name = event_name(r->system, "waiting"), .type = TA_EVENT_EXTERNAL,
                          .invoke_id = TA_INVOKE_ID_NONE };
     CHECK(ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system), .actor = r->actor,
-                                                                  .event = &waiting, .correlation = 7 }) == TA_OK);
+                                                                  .name = test_event_text(r->system, &waiting), .event = &waiting, .correlation = 7 }) == TA_OK);
     CHECK(ta_actor_abandon(r->system, r->actor) == TA_ERR_BUSY);
 
     /* A single step runs the first unit, and only it. */

@@ -113,7 +113,7 @@ static ta_actor_id spawn(tah_system *system, ta_definition_id definition) {
 
 static ta_event_name_id name(tah_system *system, const char *text) {
     ta_event_name_id id = 0;
-    CHECK(tah_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) }, &id) == TA_OK);
+    CHECK(tah_event_name_intern(system, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) }, &id) == TA_OK);
     return id;
 }
 

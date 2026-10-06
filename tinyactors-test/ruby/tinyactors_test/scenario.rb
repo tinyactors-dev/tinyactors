@@ -311,9 +311,10 @@ module TinyactorsTest
     private
 
     def offer(event, data:, trace: nil, transition: nil, time: nil, correlation: nil)
-      params = { name: @context.event_name(event), type: 'external', invoke_id: INVOKE_ID_NONE }
+      params = { type: 'external', invoke_id: INVOKE_ID_NONE }
       params[:data] = data unless data.nil?
-      delivery = { system: @context.system_handle, actor: handle, event: params, time: time || @context.now }
+      delivery = { system: @context.system_handle, actor: handle, name: event.to_s, event: params,
+                   time: time || @context.now }
       delivery[:correlation] = correlation unless correlation.nil?
       delivery[:trace] = trace unless trace.nil?
       delivery[:transition] = transition unless transition.nil?
@@ -1237,7 +1238,8 @@ module TinyactorsTest
       when :event
         raise ScenarioError, 'report_invoke :event needs event:' unless event
 
-        params[:event] = { name: event_name(event), type: 'external', invoke_id: start.fetch(:invoke_id) }
+        params[:name] = event.to_s
+        params[:event] = { type: 'external', invoke_id: start.fetch(:invoke_id) }
         params[:event][:data] = data unless data.nil?
       when :done
         params[:done_data] = data unless data.nil?
@@ -1931,8 +1933,8 @@ module TinyactorsTest
     # time is the system's (core ADR 0094 section 1), so the answer is the
     # admission test's, not a time error.
     def offer_probe(id, where, finished)
-      event = { name: probe_event, type: 'external', invoke_id: INVOKE_ID_NONE }
-      offered = ta.actor.deliver(system: system_handle, actor: id, event: event, time: now,
+      event = { type: 'external', invoke_id: INVOKE_ID_NONE }
+      offered = ta.actor.deliver(system: system_handle, actor: id, name: 'probe', event: event, time: now,
                                  correlation: PROBE_CORRELATION)[:result]
       expected = finished ? 'err_done' : 'ok'
       raise AssertionFailed, "#{where}: an event offered to it was answered #{offered}" unless offered == expected

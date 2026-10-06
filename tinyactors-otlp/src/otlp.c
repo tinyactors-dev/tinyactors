@@ -328,17 +328,15 @@ static bool tao_kv_int_array(tao_buf *buf, uint32_t field, ta_str key, const uin
 }
 
 /* ------------------------------------------------------------------------
- * The cache: a definition's facts, and event names for host logs
+ * The cache: a definition's facts
  *
  * A trace record names everything it refers to (core ADR 0098), so the
  * encoder looks nothing up in core for a record. What it keeps is what only
  * some records carry: a definition's family, revision, document name and
  * source, which come on the records that open a run and name the scope of
- * every span of that definition. Event names a host log names (not a
- * record) are formatted by core once and cached under definition 0, which
- * core never frees, since it never frees an interned event name.
+ * every span of that definition. A host log brings its event name as text.
  */
-enum { NAME_FACT = 0u, NAME_EVENT = 3u };
+enum { NAME_FACT = 0u };
 enum { FACT_FAMILY = 0u, FACT_REVISION = 1u, FACT_DOCUMENT = 2u, FACT_SOURCE = 3u };
 #define NAME_TAG(kind, id) (((uint32_t)(kind) << 30) | ((uint32_t)(id) & 0x3fffffffu))
 
@@ -517,35 +515,6 @@ static bool tao_fact(const tao_encoder *otlp, uint64_t definition, uint32_t fact
 /* ------------------------------------------------------------------------
  * Text core formats for a host log: event names
  */
-
-/* An event name's dotted text, formatted once and then cached. The text is
- * valid until the next name is cached: use it before naming anything else. */
-static ta_str tao_event_name(tao_encoder *otlp, ta_event_name_id name) {
-    uint32_t tag = NAME_TAG(NAME_EVENT, name);
-    const tao_name *cached = tao_name_find(otlp, 0, tag);
-    if (cached != NULL) {
-        return tao_name_text(otlp, cached);
-    }
-    uint32_t needed = 0;
-    ta_event_name_format_params params = { .name = name, .buffer = (char *)otlp->text.data,
-                                           .capacity = (uint32_t)otlp->text.cap, .needed = &needed };
-    ta_result result = ta_event_name_format(otlp->config.core, &params);
-    if (result == TA_ERR_NOMEM && needed > otlp->text.cap) {
-        otlp->text.len = 0;
-        if (!tao_buf_room(&otlp->text, needed)) {
-            return LIT("?");
-        }
-        params.buffer = (char *)otlp->text.data;
-        params.capacity = (uint32_t)otlp->text.cap;
-        result = ta_event_name_format(otlp->config.core, &params);
-    }
-    if (result != TA_OK) {
-        return LIT("?");
-    }
-    ta_str text = { (const char *)otlp->text.data, needed > 0 ? needed - 1u : 0u };
-    otlp->label.len = 0;
-    return tao_label_add(otlp, text) ? tao_name_keep(otlp, 0, tag) : text;
-}
 
 /* Decimal text for a u64 into `out` (at least 21 bytes). */
 static ta_str tao_decimal(uint64_t value, char *out) {
@@ -1914,7 +1883,7 @@ void tao_host_log(tao_encoder *otlp, const tao_host_log_params *log) {
     tao_log_line line = { .now = otlp->config.host.now(otlp->config.host.self), .severity = SEVERITY_WARN,
                           .severity_text = LIT("WARN"), .event_name = log->event_name, .context = &untraced,
                           .definition = log->definition, .key_name = log->event_name };
-    ta_str event = log->has_event ? tao_event_name(otlp, log->event) : (ta_str){ 0 };
+    ta_str event = log->has_event ? log->event : (ta_str){ 0 };
     otlp->log_body.len = 0;
     bool ok = tao_buf_room(&otlp->log_body, event.len + 1u + log->body.len);
     if (ok) {

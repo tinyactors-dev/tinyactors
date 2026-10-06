@@ -9,7 +9,6 @@
 // the application uses, not with traffic.
 
 const { TinyactorsError } = require('./errors');
-const { core } = require('./native');
 
 class EventNames {
   #native;
@@ -40,7 +39,7 @@ class EventNames {
   name(id) {
     let text = this.#names.get(id);
     if (text === undefined) {
-      text = core.event_name_format(this.#native, id);
+      text = this.#native.eventName(id);
       this.#names.set(id, text);
       this.#ids.set(text, id);
     }

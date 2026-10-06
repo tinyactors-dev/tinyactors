@@ -68,6 +68,8 @@ static char script_log[8192];
 static size_t script_length = 0;
 static ta_event_name_id jump_name = 0;
 static ta_event_name_id go_name = 0;
+/* The system whose events the data model names by text. */
+static ta_system *named_system = NULL;
 
 static void note(const char *what) {
     int written = snprintf(script_log + script_length, sizeof(script_log) - script_length, "%s ", what);
@@ -112,7 +114,11 @@ static ta_op_status dm_execute_script(void *self, const ta_datamodel_execute_scr
     (void)self;
     ta_str text = source(params->shared, params->script);
     const ta_event *event = ta_dm_host_event(params->host);
-    const char *seen = event == NULL ? "@-" : event->name == jump_name ? "@J" : event->name == go_name ? "@G" : "@?";
+    ta_str name = event == NULL ? (ta_str){ 0 } : test_event_text(named_system, event);
+    const char *seen = event == NULL                                                    ? "@-"
+                       : name.len == 13 && memcmp(name.ptr, "operator.goto", 13) == 0 ? "@J"
+                       : name.len == 2 && memcmp(name.ptr, "go", 2) == 0              ? "@G"
+                                                                                      : "@?";
     char line[64];
     snprintf(line, sizeof(line), "%.*s%s", (int)text.len, text.ptr, seen);
     note(line);
@@ -391,6 +397,7 @@ static void start(run *r) {
                                                                   .watched_kinds = UINT32_MAX,
                                                                   .unsampled_kinds = UINT32_MAX }) == TA_OK);
     recorded_system = r->system;
+    named_system = r->system;
     jump_name = event_name(r, "operator.goto");
     go_name = event_name(r, "go");
     record_count = 0;
@@ -456,7 +463,7 @@ static test_drive_status settle(run *r, uint32_t action_budget) {
 static ta_result offer_as(run *r, const char *name, const ta_operator_transition *transition, uint64_t correlation) {
     ta_event event = { .name = event_name(r, name), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     ta_result result = ta_actor_deliver(r->system, &(ta_actor_deliver_params){ .time = ta_system_time(r->system),
-                                                                               .actor = r->actor, .event = &event,
+                                                                               .actor = r->actor, .name = test_event_text(r->system, &event), .event = &event,
                                                                                .transition = transition,
                                                                                .correlation = correlation });
     tel_drain(r->system, sink_write, NULL);

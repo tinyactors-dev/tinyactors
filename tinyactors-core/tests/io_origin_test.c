@@ -304,7 +304,7 @@ static void test_delivery(void) {
     /* An unknown processor index is refused. */
     ta_event bad = message_event(system, request, "ping", "http://c/r/0");
     bad.origin.as.io.processor = 9;
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &bad }) == TA_ERR_INVALID);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .name = test_event_text(system, &bad), .event = &bad }) == TA_ERR_INVALID);
     bad.origin.as.io.processor = request;
     ta_event_release(&bad);
     /* A delivered event waits in an envelope of the system's pool, its
@@ -316,13 +316,13 @@ static void test_delivery(void) {
     test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(system,
                              &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
-                                                         .event = &warm },
+                                                         .name = test_event_text(system, &warm), .event = &warm },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
     long before = heap.live;
 
     /* The actor holds the origin after the host lets go; destroy gives it back. */
     ta_event event = message_event(system, request, "ping", long_uri);
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .name = test_event_text(system, &event), .event = &event }) == TA_OK);
     ta_event_release(&event);
     CHECK(heap.live == before + 1);
     ta_actor_inspection inspection;
@@ -335,13 +335,13 @@ static void test_delivery(void) {
 
     /* A finished actor refuses; the host releases, and nothing is left. */
     ta_event stop = message_event(system, request, "stop", long_uri);
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &stop }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .name = test_event_text(system, &stop), .event = &stop }) == TA_OK);
     ta_event_release(&stop);
     CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     CHECK(status == TEST_DRIVE_DONE);
     long finished = heap.live;
     ta_event late = message_event(system, request, "ping", long_uri);
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &late }) == TA_ERR_DONE);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .name = test_event_text(system, &late), .event = &late }) == TA_ERR_DONE);
     ta_event_release(&late);
     CHECK(heap.live == finished);
     CHECK(ta_actor_destroy(system, actor) == TA_OK);
@@ -369,7 +369,7 @@ static void test_image(void) {
                                                                  .origin_class = TA_IO_ORIGIN_COMPUTED,
                                                                  .token = 42,
                                                                  .out = &event.origin }) == TA_OK);
-    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .name = test_event_text(system, &event), .event = &event }) == TA_OK);
     test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .budget = 1, .status = &status }) == TA_OK);
     CHECK(status == TEST_DRIVE_PAUSED);

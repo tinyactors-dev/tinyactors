@@ -68,6 +68,7 @@
  *    the next run; nothing leaks.
  */
 #include "../include/tinyactors.c"
+#include "test_drive.h"
 #include "test_allocator.h"
 
 #include <stdio.h>
@@ -242,8 +243,10 @@ static ta_event_name_id name_of(fixture *f, const char *text) {
 }
 
 static ta_result deliver(fixture *f, ta_actor_id actor, const char *text, uint64_t correlation) {
-    ta_event event = { .name = name_of(f, text), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    return ta_actor_deliver(f->system, &(ta_actor_deliver_params){ .actor = actor, .event = &event,
+    ta_event event = { .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    return ta_actor_deliver(f->system, &(ta_actor_deliver_params){ .actor = actor,
+                                                                   .name = { .ptr = text, .len = (uint32_t)strlen(text) },
+                                                                   .event = &event,
                                                                    .time = ta_system_time(f->system),
                                                                    .correlation = correlation });
 }
@@ -358,13 +361,13 @@ static void test_full_pool_bounces(void) {
     ta_event event = { .name = name_of(&f, "noise"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE,
                        .data = { .self = &value, .v = &counted_vtable } };
     for (uint64_t correlation = 1; correlation <= 4; correlation += 1u) {
-        CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = actor, .event = &event,
+        CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = actor, .name = test_event_text(f.system, &event), .event = &event,
                                                                      .time = ta_system_time(f.system),
                                                                      .correlation = correlation }) == TA_OK);
     }
     CHECK(value.references == 5);
     long live = heap.live;
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = actor, .event = &event,
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = actor, .name = test_event_text(f.system, &event), .event = &event,
                                                                  .time = ta_system_time(f.system),
                                                                  .correlation = 5 }) == TA_ERR_FULL);
     CHECK(value.references == 5 && heap.live == live);
@@ -376,7 +379,7 @@ static void test_full_pool_bounces(void) {
     CHECK(f.system->run.pool.quota.used == 4u);
     CHECK(run_all(&f) == TA_OK && f.count == 4 && f.status == TA_RUN_IDLE);
     CHECK(value.references == 1);
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = actor, .event = &event,
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = actor, .name = test_event_text(f.system, &event), .event = &event,
                                                                  .time = ta_system_time(f.system),
                                                                  .correlation = 6 }) == TA_OK);
     CHECK(run_all(&f) == TA_OK && f.count == 1 && outcome_is(&f, 0, TA_INPUT_IGNORED, actor, 6));
@@ -609,7 +612,7 @@ static void test_refusals(void) {
     CHECK(deliver(&f, j, "e1", 3) == TA_OK);
     ta_event jump = { .name = name_of(&f, "operator.goto"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     ta_operator_transition from_s0 = { .source = s0, .targets = &s2, .target_count = 1 };
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = j, .event = &jump,
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = j, .name = test_event_text(f.system, &jump), .event = &jump,
                                                                  .time = ta_system_time(f.system),
                                                                  .transition = &from_s0, .correlation = 4 }) ==
           TA_OK); /* s0 is active now; e1 leaves it first */
@@ -632,7 +635,7 @@ static void test_withdraw(void) {
     counted value = { .references = 1 };
     ta_event event = { .name = name_of(&f, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE,
                        .data = { .self = &value, .v = &counted_vtable } };
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = s, .event = &event,
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = s, .name = test_event_text(f.system, &event), .event = &event,
                                                                  .time = ta_system_time(f.system),
                                                                  .correlation = 1 }) == TA_OK);
     CHECK(value.references == 2);

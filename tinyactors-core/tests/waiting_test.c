@@ -53,6 +53,7 @@
  *    withdrawn, leaving the request owed.
  */
 #include "../include/tinyactors.c"
+#include "test_drive.h"
 #include "test_allocator.h"
 
 #include <stdio.h>
@@ -359,7 +360,7 @@ static ta_result deliver(fixture *f, ta_actor_id actor, const char *text, uint64
     CHECK(ta_trie_intern_dotted(&f->system->event_names, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) },
                                 &name) == TA_OK);
     ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    return ta_actor_deliver(f->system, &(ta_actor_deliver_params){ .actor = actor, .event = &event,
+    return ta_actor_deliver(f->system, &(ta_actor_deliver_params){ .actor = actor, .name = test_event_text(f->system, &event), .event = &event,
                                                                    .time = ta_system_time(f->system),
                                                                    .correlation = correlation });
 }
@@ -623,7 +624,7 @@ static ta_result post_by_address(fixture *f, const char *text, uint64_t correlat
                                 &name) == TA_OK);
     ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     ta_actor_address address = { .family = { .name = STR("gone") }, .name = STR("g") };
-    return ta_actor_deliver(f->system, &(ta_actor_deliver_params){ .address = &address, .event = &event,
+    return ta_actor_deliver(f->system, &(ta_actor_deliver_params){ .address = &address, .name = test_event_text(f->system, &event), .event = &event,
                                                                    .time = ta_system_time(f->system),
                                                                    .correlation = correlation });
 }
@@ -676,7 +677,7 @@ static void test_posts_by_address_wait_like_mail(void) {
     /* A post with no actor and no usable address is a caller error. */
     ta_event event = { .name = 0, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     ta_actor_address empty = { 0 };
-    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .address = &empty, .event = &event,
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .address = &empty, .name = test_event_text(f.system, &event), .event = &event,
                                                                  .time = ta_system_time(f.system) }) ==
           TA_ERR_INVALID);
     close_fixture(&f);

@@ -9,6 +9,20 @@
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 #define S(text) ((ta_str){.ptr = (text), .len = (uint32_t)(sizeof(text) - 1)})
 
+/* The dotted text of an event name, for ta_actor_deliver_params.name:
+ * formatted by core into one of four buffers used in turn. */
+static ta_str event_text(const ta_system *system, ta_event_name_id name) {
+    static char buffers[4][256];
+    static unsigned next = 0;
+    char *buffer = buffers[next++ % 4u];
+    uint32_t needed = 0;
+    if (ta_event_name_format(system, &(ta_event_name_format_params){.name = name, .buffer = buffer, .capacity = 256u,
+                                                                    .needed = &needed}) != TA_OK) {
+        return (ta_str){0};
+    }
+    return (ta_str){.ptr = buffer, .len = needed - 1u};
+}
+
 static int failures = 0;
 
 static void check(bool condition, const char *message) {
@@ -604,7 +618,7 @@ static void test_system(tat_js_datamodel_context *context) {
     require(tat_js_value_from_json(context, S("[1,2]"), &data_value) == TA_OK, "event data");
     ta_event event = {.name = event_name(system, "go"), .type = TA_EVENT_EXTERNAL,
                       .invoke_id = TA_INVOKE_ID_NONE, .data = data_value};
-    require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK, "deliver");
+    require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .name = event_text(system, (&event)->name), .time = ta_system_time(system), .actor = actor, .event = &event }) == TA_OK, "deliver");
     ta_value_release(&data_value);
     run(system, actor);
     check(root_contains(system, actor, "\"inB\":true"), "In() sees the other parallel region");

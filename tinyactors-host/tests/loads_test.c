@@ -118,7 +118,7 @@ static ta_address *intern(tah_system *system, const ta_actor_address *text) {
 
 static ta_event_name_id event_name(tah_system *system, const char *text) {
     ta_event_name_id name = 0;
-    CHECK(tah_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) }, &name) ==
+    CHECK(tah_event_name_intern(system, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) }, &name) ==
           TA_OK);
     return name;
 }

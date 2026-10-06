@@ -199,7 +199,7 @@ static ta_result tah_recorder_report_event(tah_system *system, const tah_envelop
     text[sizeof prefix - 1u + id.len] = '.';
     tah_mem_copy(text + sizeof prefix + id.len, reason.ptr, reason.len);
     *out = (ta_event){ .type = TA_EVENT_PLATFORM, .invoke_id = envelope->event.invoke_id };
-    ta_result result = tah_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)length }, &out->name);
+    ta_result result = tah_event_name_intern(system, (ta_str){ .ptr = text, .len = (uint32_t)length }, &out->name);
     tah_free(system->recorder.allocator, &(ta_allocator_free_params){ .ptr = text, .size = length, .alignment = 1 });
     if (result == TA_OK) {
         out->data = envelope->event.data;
@@ -348,10 +348,10 @@ tah_record tah_recorder_record(const tah_system *system, uint32_t index) {
 /* An event name's dotted text, in `arena`. */
 static ta_result tah_recorder_name_text(const tah_system *system, ta_event_name_id name, ta_allocator arena, ta_str *out) {
     uint32_t needed = 0;
-    (void)ta_event_name_format(system->core, &(ta_event_name_format_params){ .name = name, .needed = &needed });
+    (void)tah_event_name_format(system, &(ta_event_name_format_params){ .name = name, .needed = &needed });
     char *buffer = needed == 0 ? NULL : tah_alloc(arena, needed, 1);
     if (buffer == NULL ||
-        ta_event_name_format(system->core, &(ta_event_name_format_params){ .name = name, .buffer = buffer,
+        tah_event_name_format(system, &(ta_event_name_format_params){ .name = name, .buffer = buffer,
                                                                            .capacity = needed, .needed = &needed }) != TA_OK) {
         return TA_ERR_NOMEM;
     }

@@ -455,12 +455,8 @@ static void open_across_turns(void) {
     CHECK(take(f.otlp).len == 0);
 
     /* A delivered event: a macrostep, its microstep, and a raise event on it. */
-    ta_atom go = 0;
-    CHECK(ta_system_intern_atom(f.core, S("go"), &go) == TA_OK);
-    ta_event_name_id name = 0;
-    CHECK(ta_event_name_intern(f.core, &(ta_atom_list){ .atoms = &go, .count = 1 }, &name) == TA_OK);
     CHECK(ta_actor_deliver(f.core, &(ta_actor_deliver_params){ .time = ta_system_time(f.core), .actor = f.actor,
-                                                               .event = &(ta_event){ .name = name } }) == TA_OK);
+                                                               .name = S("go"), .event = &(ta_event){ 0 } }) == TA_OK);
     drain(&f);
     CHECK(resume(&f, 100) == CHECK_RUN_STABLE);
     count = read_spans(take(f.otlp), spans, 16);
@@ -544,16 +540,12 @@ static void linked_across_sessions(void) {
     drain(&f);
     (void)take(f.otlp);
 
-    ta_atom go = 0;
-    CHECK(ta_system_intern_atom(f.core, S("go"), &go) == TA_OK);
-    ta_event_name_id name = 0;
-    CHECK(ta_event_name_intern(f.core, &(ta_atom_list){ .atoms = &go, .count = 1 }, &name) == TA_OK);
     ta_trace_parent request = { .context = { .trace_id_high = 0x4bf92f3577b34da6ull,
                                              .trace_id_low = 0xa3ce929d0e0e4736ull,
                                              .flags = TA_TRACE_FLAG_SAMPLED },
                                 .cause = { .session = 0, .macrostep = 0x00f067aa0ba902b7ull } };
     CHECK(ta_actor_deliver(f.core, &(ta_actor_deliver_params){ .time = ta_system_time(f.core), .actor = sender,
-                                                               .event = &(ta_event){ .name = name },
+                                                               .name = S("go"), .event = &(ta_event){ 0 },
                                                                .trace = request }) == TA_OK);
     CHECK(check_run(f.core, sender, 100) == CHECK_RUN_STABLE);
     drain(&f);

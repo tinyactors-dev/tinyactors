@@ -307,7 +307,7 @@ static void kernel_mail_during_replay(void) {
     ta_actor_id actor = prepare(&w, 0);
     CHECK(tah_replay_events_done(w.system, actor) == TA_OK); /* its bootstrap */
     ta_event_name_id ping = 0;
-    CHECK(tah_event_name_intern(w.system->core, S("ping"), &ping) == TA_OK);
+    CHECK(tah_event_name_intern(w.system, S("ping"), &ping) == TA_OK);
     uint32_t waiter = tah_sched_waiter_take(&w.system->sched);
     CHECK(waiter != 0);
     ta_event message = { .name = ping, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };

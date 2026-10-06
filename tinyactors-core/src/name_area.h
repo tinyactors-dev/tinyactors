@@ -231,11 +231,13 @@ ta_result ta_name_area_init(ta_name_area *area, const ta_name_area_params *param
 void ta_name_area_destroy(ta_name_area *area);
 
 /**
- * Makes `min(reserve, chunks - used)` chunks free, allocating pages when
- * fewer are. Runs only at a safe point, never inside a macrostep. Answers
- * `TA_OK`, or `TA_ERR_NOMEM` when an allocation fails, changing nothing.
+ * Makes `min(reserve + extra, chunks - used)` chunks free, allocating pages
+ * when fewer are: `extra` is room for a write the caller is about to make
+ * at this safe point (an admitted input's long name), 0 for none. Runs
+ * only at a safe point, never inside a macrostep. Answers `TA_OK`, or
+ * `TA_ERR_NOMEM` when an allocation fails, changing nothing.
  */
-ta_result ta_name_area_refill(ta_name_area *area);
+ta_result ta_name_area_refill(ta_name_area *area, uint32_t extra);
 
 /**
  * Gives whole free pages back to the allocator while at least `reserve`

@@ -523,7 +523,7 @@ static void deliver(fixture *f, ta_actor_id actor, ta_event_name_id name) {
     test_drive_status status = TEST_DRIVE_ERROR;
     CHECK(test_drive_deliver(f->system,
                              &(ta_actor_deliver_params){ .time = ta_system_time(f->system), .actor = actor,
-                                                         .event = &event },
+                                                         .name = test_event_text(f->system, &event), .event = &event },
                              &(test_drive_run_params){ .status = &status }) == TA_OK);
     CHECK(status == TEST_DRIVE_STABLE);
 }

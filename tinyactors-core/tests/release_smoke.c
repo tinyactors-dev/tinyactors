@@ -115,7 +115,7 @@ int main(void) {
     }
     ta_event event = { .name = go, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     if (ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
-                                                            .event = &event, .correlation = 1 }) != TA_OK ||
+                                                            .name = { .ptr = "go", .len = 2 }, .event = &event, .correlation = 1 }) != TA_OK ||
         ta_run(system, &run) != TA_OK) {
         return fail("the event is not delivered");
     }

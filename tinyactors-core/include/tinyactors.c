@@ -8386,11 +8386,13 @@ TA_PRIVATE ta_result ta_name_area_init(ta_name_area *area, const ta_name_area_pa
 TA_PRIVATE void ta_name_area_destroy(ta_name_area *area);
 
 /**
- * Makes `min(reserve, chunks - used)` chunks free, allocating pages when
- * fewer are. Runs only at a safe point, never inside a macrostep. Answers
- * `TA_OK`, or `TA_ERR_NOMEM` when an allocation fails, changing nothing.
+ * Makes `min(reserve + extra, chunks - used)` chunks free, allocating pages
+ * when fewer are: `extra` is room for a write the caller is about to make
+ * at this safe point (an admitted input's long name), 0 for none. Runs
+ * only at a safe point, never inside a macrostep. Answers `TA_OK`, or
+ * `TA_ERR_NOMEM` when an allocation fails, changing nothing.
  */
-TA_PRIVATE ta_result ta_name_area_refill(ta_name_area *area);
+TA_PRIVATE ta_result ta_name_area_refill(ta_name_area *area, uint32_t extra);
 
 /**
  * Gives whole free pages back to the allocator while at least `reserve`
@@ -9104,6 +9106,9 @@ typedef struct {
     ta_time time;
     /** The host's name for the input. */
     uint64_t correlation;
+    /** The event's name as text, which the envelope keeps, its `name` then
+     * not read; empty for a name core holds by ID. */
+    ta_str name_text;
 } ta_run_event;
 
 /**
@@ -18253,9 +18258,12 @@ TA_PRIVATE void ta_name_area_destroy(ta_name_area *area) {
     area->quota = ta_quota_make(area->quota.capacity);
 }
 
-TA_PRIVATE ta_result ta_name_area_refill(ta_name_area *area) {
+TA_PRIVATE ta_result ta_name_area_refill(ta_name_area *area, uint32_t extra) {
     uint32_t available = ta_quota_available(&area->quota);
-    uint32_t min_free = area->reserve < available ? area->reserve : available;
+    uint32_t min_free = area->reserve + extra;
+    if (min_free < area->reserve || min_free > available) {
+        min_free = available;
+    }
     /* The ceiling is the quota's capacity, so `used + min_free` never passes it: only NOMEM remains. */
     return ta_index_pool_refill(&area->chunks.pool, min_free);
 }
@@ -18657,6 +18665,8 @@ TA_PRIVATE void ta_waiting_free(ta_waiting *waiting, uint32_t index) {
 #define TA_RUN_RECORD_JUMP 0x02u
 /* A report that retires its invocation. */
 #define TA_RUN_RECORD_ENDS 0x04u
+/* The bytes of name the run's name buffer holds from system creation. */
+#define TA_RUN_NAME_ROOM 128u
 /* The event's name is not interned: it is the text field after the record. */
 #define TA_RUN_RECORD_NAME_TEXT 0x08u
 
@@ -18868,6 +18878,8 @@ static void ta_run_discard(ta_system *system, uint32_t index) {
  * The state
  */
 
+static ta_result ta_run_name_room(ta_system *system);
+
 TA_PRIVATE ta_result ta_run_init(ta_system *system) {
     uint32_t bound = system->params[TA_PARAM_POOL_ENVELOPES];
     uint32_t watermark = system->params[TA_PARAM_ADMISSION_WATERMARK];
@@ -18895,6 +18907,12 @@ TA_PRIVATE ta_result ta_run_init(ta_system *system) {
                              &(ta_waiting_params){ .allocator = system->allocator,
                                                    .bound = bound,
                                                    .reserve = bound < TA_RUN_RESERVE ? bound : TA_RUN_RESERVE });
+    if (result == TA_OK) {
+        /* Room for the names most events have, so taking them, or admitting
+         * them when nothing more can be allocated, needs no growth. */
+        system->run.name_longest = TA_RUN_NAME_ROOM;
+        result = ta_run_name_room(system);
+    }
     return result;
 }
 
@@ -18944,7 +18962,7 @@ static ta_run_refilled ta_run_refill(ta_system *system) {
         return (ta_run_refilled){ .pool = TA_OK, .names = TA_OK };
     }
     ta_run_refilled refilled = { .pool = ta_envelope_pool_refill(&system->run.pool),
-                                 .names = ta_name_area_refill(&system->run.names) };
+                                 .names = ta_name_area_refill(&system->run.names, 0u) };
     (void)ta_waiting_refill(&system->run.waiting);
     (void)ta_run_name_room(system);
     return refilled;
@@ -18995,6 +19013,8 @@ typedef struct {
     ta_invoke_id invoke;
     uint64_t correlation;
     const ta_run_record *record;
+    /* The name as text, written after the record; empty for none. */
+    ta_str name_text;
     /* What its macrostep runs under, or null. */
     const ta_trace_parent *trace;
     /* With `target` 0: the destination it waits for, or null. */
@@ -19101,6 +19121,24 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
     ta_run_refilled refilled = ta_run_refill(system);
     uint32_t entry = 0u;
     ta_result result = TA_OK;
+    /* Admission is a safe point: the name area makes room for a long name,
+     * and the name buffer grows to take it, so taking the input never
+     * needs to. */
+    if (admission->name_text.len != 0u) {
+        uint32_t need = ta_name_area_field_need(&system->run.names, TA_NAME_AREA_PREFIX_BYTES + TA_RUN_RECORD_BYTES,
+                                                admission->name_text.len);
+        refilled.names = ta_name_area_refill(&system->run.names, need);
+    }
+    if (admission->name_text.len > system->run.name_capacity && !system->run.running) {
+        uint32_t longest = system->run.name_longest;
+        system->run.name_longest = admission->name_text.len;
+        result = ta_run_name_room(system);
+        system->run.name_longest = longest > admission->name_text.len ? longest : admission->name_text.len;
+        if (result != TA_OK) {
+            system->run.name_longest = longest;
+            return result;
+        }
+    }
     if (admission->wait != NULL) {
         result = ta_waiting_take(&system->run.waiting, admission->wait, &entry);
         if (result != TA_OK) {
@@ -19122,7 +19160,8 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
                                                        .record = admission->record,
                                                        .trace = admission->trace,
                                                        .refilled = refilled,
-                                                       .admission = true });
+                                                       .admission = true,
+                                                       .name_text = admission->name_text });
     if (result != TA_OK) {
         ta_envelope_pool_give(&system->run.pool, index);
         if (entry != 0u) {
@@ -19149,7 +19188,9 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
 
 TA_PRIVATE ta_result ta_run_admit_event(ta_system *system, const ta_run_event *input) {
     const ta_event *event = input->event;
-    ta_run_record record = { .name = event->name, .origin = event->origin, .time = input->time };
+    ta_run_record record = { .name = input->name_text.len != 0u ? 0u : event->name,
+                             .origin = event->origin,
+                             .time = input->time };
     if (input->jump != NULL) {
         record.flags |= TA_RUN_RECORD_JUMP;
         record.jump = input->jump;
@@ -19165,6 +19206,7 @@ TA_PRIVATE ta_result ta_run_admit_event(ta_system *system, const ta_run_event *i
                                                                  .invoke = event->invoke_id,
                                                                  .correlation = input->correlation,
                                                                  .record = &record,
+                                                                 .name_text = input->name_text,
                                                                  .trace = input->trace },
                                     &index);
     if (result != TA_OK) {
@@ -22726,20 +22768,34 @@ TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_repor
             /* Core fills the origin of a service's own event, whatever the host passed (ADR 0068). */
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
+                                                                  .name = params->name,
                                                                   .trace = params->trace, .time = params->time,
                                                                   .correlation = params->correlation });
         case TA_INVOKE_REPORT_DONE: {
-            ta_result result = ta_invoke_done_name(system, params->invoke_id, &event.name);
-            if (result != TA_OK) {
-                return result;
+            /* done.invoke.<id>, as text (ADR 0100), for the call only. */
+            static const char prefix[] = "done.invoke";
+            ta_str id = ta_invoke_id_text(system, params->invoke_id);
+            uint32_t length = (uint32_t)(sizeof prefix - 1u) + (id.len != 0u ? 1u + id.len : 0u);
+            char *name = ta_mem_alloc(system->allocator, length, 1u);
+            if (name == NULL) {
+                return TA_ERR_NOMEM;
+            }
+            ta_mem_copy(name, prefix, sizeof prefix - 1u);
+            if (id.len != 0u) {
+                name[sizeof prefix - 1u] = '.';
+                ta_mem_copy(name + sizeof prefix, id.ptr, id.len);
             }
             if (params->as.done_data != NULL) {
                 event.data = *params->as.done_data;
             }
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
-            return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
-                                                                  .trace = params->trace, .time = params->time,
-                                                                  .correlation = params->correlation });
+            ta_result result = ta_actor_deliver(system, &(ta_actor_deliver_params){
+                                                            .actor = params->actor, .event = &event,
+                                                            .name = { .ptr = name, .len = length },
+                                                            .trace = params->trace, .time = params->time,
+                                                            .correlation = params->correlation });
+            ta_mem_free(system->allocator, name, &(ta_allocator_free_params){ .size = length, .alignment = 1u });
+            return result;
         }
         case TA_INVOKE_REPORT_ERROR:
             return ta_invoke_report_error(system, actor, params);
@@ -28533,7 +28589,8 @@ static ta_result ta_actor_deliver_waiting(ta_system *system, const ta_actor_deli
                                                         .event = &accepted,
                                                         .trace = &params->trace,
                                                         .time = params->time,
-                                                        .correlation = params->correlation });
+                                                        .correlation = params->correlation,
+                                                        .name_text = params->name });
 }
 
 static ta_result ta_actor_deliver_resident(ta_system *system, ta_actor *actor, const ta_actor_deliver_params *params);
@@ -28549,8 +28606,8 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
     /* By address, as h2c.event: resolved as a chart's <send> is. */
     const ta_actor_address *text = params->address;
     if (params->transition != NULL || text->family.name.ptr == NULL || text->family.name.len == 0 ||
-        text->name.ptr == NULL || text->name.len == 0 || !ta_trie_valid(&system->event_names, params->event->name) ||
-        params->event->name == TA_TRIE_ROOT) {
+        text->name.ptr == NULL || text->name.len == 0 || params->name.len > TA_NAME_AREA_FIELD_MAX ||
+        ta_names_resolve(&system->names, params->name) != TA_OK) {
         return TA_ERR_INVALID;
     }
     ta_address *address = NULL;
@@ -28573,7 +28630,7 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
 static ta_result ta_actor_deliver_resident(ta_system *system, ta_actor *actor, const ta_actor_deliver_params *params) {
     const ta_event *event = params->event;
     const ta_operator_transition *transition = params->transition;
-    if (!ta_trie_valid(&system->event_names, event->name) || event->name == TA_TRIE_ROOT ||
+    if (params->name.len > TA_NAME_AREA_FIELD_MAX || ta_names_resolve(&system->names, params->name) != TA_OK ||
         (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition)) ||
         !ta_actor_input_time_valid(system, actor, params->time)) {
         return TA_ERR_INVALID;
@@ -28616,7 +28673,8 @@ static ta_result ta_actor_deliver_resident(ta_system *system, ta_actor *actor, c
                                                          .trace = &params->trace,
                                                          .jump = jump,
                                                          .time = params->time,
-                                                         .correlation = params->correlation });
+                                                         .correlation = params->correlation,
+                                                         .name_text = params->name });
     if (result != TA_OK && jump != NULL) {
         ta_mem_free(system->allocator, jump,
                     &(ta_allocator_free_params){ .size = jump_bytes, .alignment = _Alignof(ta_operator_jump) });
@@ -30939,8 +30997,14 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
                            .incarnation = config->incarnation,
                            .definition_sink = ta_null_definition_sink() };
     ta_mem_copy(system->params, params, sizeof params);
-    /* The bounds were checked: the pool and the name area accept them. */
-    (void)ta_run_init(system);
+    /* The bounds were checked: the pool and the name area accept them, and
+     * only the run's name buffer is allocated now. */
+    if (ta_run_init(system) != TA_OK) {
+        ta_run_destroy(system);
+        ta_mem_free(config->allocator, system,
+                    &(ta_allocator_free_params){ .size = sizeof(ta_system), .alignment = _Alignof(ta_system) });
+        return TA_ERR_NOMEM;
+    }
     ta_system_seed_trace_ids(system, 0);
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->definitions, config->allocator, TA_VEC_LAYOUT(ta_definition_slot));
@@ -30959,6 +31023,7 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     }
     if (result != TA_OK) {
         ta_session_table_destroy(&system->sessions);
+        ta_run_destroy(system);
         ta_mem_free(config->allocator, system,
                     &(ta_allocator_free_params){ .size = sizeof(ta_system), .alignment = _Alignof(ta_system) });
         return result;
@@ -31555,8 +31620,23 @@ TA_API bool ta_event_name_matches(const ta_system *system, ta_event_name_id even
 }
 
 TA_API ta_result ta_event_name_format(const ta_system *system, const ta_event_name_format_params *params) {
-    if (system == NULL || params == NULL || params->needed == NULL ||
-        !ta_trie_valid(&system->event_names, params->name)) {
+    if (system == NULL || params == NULL || params->needed == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (ta_run_name_is_input(params->name)) {
+        ta_str text = ta_run_input_name(system, params->name);
+        if (text.len == 0u) {
+            return TA_ERR_INVALID;
+        }
+        *params->needed = text.len + 1u;
+        if (params->buffer == NULL || params->capacity < text.len + 1u) {
+            return TA_ERR_NOMEM;
+        }
+        ta_mem_copy(params->buffer, text.ptr, text.len);
+        params->buffer[text.len] = '\0';
+        return TA_OK;
+    }
+    if (!ta_trie_valid(&system->event_names, params->name)) {
         return TA_ERR_INVALID;
     }
     ta_atom segments[TA_TRIE_MAX_DEPTH];

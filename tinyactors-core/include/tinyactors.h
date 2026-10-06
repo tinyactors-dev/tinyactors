@@ -349,7 +349,11 @@ typedef struct {
     } as;
 } ta_origin TA_TAGGED(kind, as);
 typedef struct { ta_event_name_id name; ta_event_type type; ta_send_id send_id; ta_origin origin; ta_invoke_id invoke_id; ta_value data; } ta_event;
-/* invoke_id is TA_INVOKE_ID_NONE unless an invoked child generated the event. */
+/* invoke_id is TA_INVOKE_ID_NONE unless an invoked child generated the event.
+ * `name` names the event in an event core hands a host; the host reads its
+ * text with ta_event_name_format() while the event is valid (a run-time
+ * name is kept by the input that carries it, ADR 0100). A host passes a
+ * name as text (ta_actor_deliver_params.name) and leaves `name` 0. */
 /* A receiver of a fault owns its data; the message is borrowed. */
 typedef struct { ta_event_name_id detail; int32_t code; ta_str message; TA_RELEASE(ta_value_release) ta_value data; } ta_fault;
 /*
@@ -1679,6 +1683,8 @@ typedef struct {
     ta_time time;
     /* The host's own name for the report, as ta_actor_deliver_params.correlation. */
     uint64_t correlation;
+    /* TA_INVOKE_REPORT_EVENT: the event's name, as ta_actor_deliver_params.name. */
+    ta_str name;
     union {
         TA_WHEN(TA_INVOKE_REPORT_EVENT) TA_IN const ta_event *event;
         TA_WHEN(TA_INVOKE_REPORT_DONE) TA_IN TA_OPTIONAL const ta_value *done_data;
@@ -3355,6 +3361,11 @@ typedef struct {
      * through the host's directory, as it does a chart's <send>. Ignored
      * when `actor` is not 0. */
     TA_IN TA_OPTIONAL const ta_actor_address *address;
+    /* The event's name: a dotted event name (ADR 0100), borrowed for the
+     * call and copied. Core keeps it as text and interns nothing; a name
+     * that is not a dotted name, deeper than eventNameDepth, or longer
+     * than 65,535 bytes answers TA_ERR_INVALID. `event->name` is not read. */
+    ta_str name;
     TA_IN const ta_event *event;
     /* What the macrostep that takes the event runs under (ADR 0067). All
      * zero is none. */

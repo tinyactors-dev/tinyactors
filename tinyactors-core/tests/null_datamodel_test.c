@@ -97,7 +97,7 @@ static bool lands_in(const ta_scxml_spec *spec, const char *event, const char *e
                                    .invoke_id = TA_INVOKE_ID_NONE };
             CHECK(test_drive_deliver(system,
                                      &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
-                                                                 .event = &delivered },
+                                                                 .name = test_event_text(system, &delivered), .event = &delivered },
                                      &(test_drive_run_params){ .status = &status }) == TA_OK);
         }
         ta_state_id state = 0;

@@ -177,7 +177,7 @@ static bool tah_replay_error_report(ta_str text, ta_str invoke, ta_str *reason) 
 /* A replaying actor's event, built from its texts; the caller releases it. */
 static ta_result tah_replay_event_of(tah_system *system, const tah_replay_event_params *params, ta_event *out) {
     *out = (ta_event){ .type = params->type, .invoke_id = TA_INVOKE_ID_NONE };
-    ta_result result = tah_event_name_intern(system->core, params->name, &out->name);
+    ta_result result = tah_event_name_intern(system, params->name, &out->name);
     if (result == TA_OK && params->send_id.len != 0) {
         result = ta_send_id_intern(system->core, params->send_id, &out->send_id);
     }
@@ -266,7 +266,9 @@ ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *pa
         }
         system->inside_core = true;
         result = ta_actor_deliver(system->core, &(ta_actor_deliver_params){
-                                                    .actor = params->actor, .event = &event, .time = params->time });
+                                                    .actor = params->actor,
+                                                    .name = tah_names_text(&system->sched.names, event.name),
+                                                    .event = &event, .time = params->time });
         system->inside_core = false;
     }
     ta_event_release(&event);

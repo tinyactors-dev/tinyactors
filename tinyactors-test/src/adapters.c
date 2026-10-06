@@ -527,9 +527,21 @@ static ta_op_status tat_invoker_cancel(void *self, uint64_t service_handle, ta_f
     return TA_OP_OK;
 }
 
+/* The dotted text of an event name core gave, in `buffer`, for
+ * ta_actor_deliver_params.name; empty when it does not fit. */
+static ta_str tat_name_text(const ta_system *system, ta_event_name_id name, char *buffer, uint32_t capacity) {
+    uint32_t needed = 0;
+    if (ta_event_name_format(system, &(ta_event_name_format_params){.name = name, .buffer = buffer,
+                                                                    .capacity = capacity, .needed = &needed}) != TA_OK) {
+        return (ta_str){0};
+    }
+    return (ta_str){.ptr = buffer, .len = needed - 1u};
+}
+
 static ta_op_status tat_invoker_forward(void *self, const ta_invoker_forward_params *params) {
     tat_scxml_invoker *invoker = self;
-    if (ta_actor_deliver(invoker->system, &(ta_actor_deliver_params){ .time = ta_system_time(invoker->system), .actor = params->service_handle, .event = params->event }) != TA_OK) {
+    char name[256];
+    if (ta_actor_deliver(invoker->system, &(ta_actor_deliver_params){ .time = ta_system_time(invoker->system), .actor = params->service_handle, .name = tat_name_text(invoker->system, params->event->name, name, sizeof name), .event = params->event }) != TA_OK) {
         tat_invoker_fault(params->fault, "invoker.scxml: the child did not accept the event");
         return TA_OP_ERROR;
     }
