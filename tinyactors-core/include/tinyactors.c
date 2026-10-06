@@ -19030,8 +19030,10 @@ TA_PRIVATE void ta_waiting_free(ta_waiting *waiting, uint32_t index) {
 #define TA_RUN_RECORD_JUMP 0x02u
 /* A report that retires its invocation. */
 #define TA_RUN_RECORD_ENDS 0x04u
-/* The bytes of name the run's name buffer holds from system creation. */
-#define TA_RUN_NAME_ROOM 128u
+/* The bytes of name the run's name buffer holds from system creation: the
+ * longest name a name-area field holds, so the buffer never grows, and a
+ * macrostep that holds a name never allocates (ADR 0102). */
+#define TA_RUN_NAME_ROOM TA_NAME_AREA_FIELD_MAX
 /* The event's name is not interned: it is the text field after the record. */
 #define TA_RUN_RECORD_NAME_TEXT 0x08u
 
@@ -19288,8 +19290,9 @@ TA_PRIVATE ta_result ta_run_init(ta_system *system) {
                                                    .bound = bound,
                                                    .reserve = bound < TA_RUN_RESERVE ? bound : TA_RUN_RESERVE });
     if (result == TA_OK) {
-        /* Room for the names most events have, so taking them, or admitting
-         * them when nothing more can be allocated, needs no growth. */
+        /* Room for every name a field holds, so taking or holding one,
+         * or admitting it when nothing more can be allocated, needs no
+         * growth. */
         system->run.name_longest = TA_RUN_NAME_ROOM;
         result = ta_run_name_room(system);
     }
