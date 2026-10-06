@@ -316,6 +316,44 @@ Math.max(...[3, 9, 4])
 --- value
 [true,false,false,false,false,true,9007199254740991]
 
+=== Array.of
+[Array.of(), Array.of(7), Array.of(1, "a", null, true), Array.of(3).length, Array.of(1, 2).concat(Array.of(3)), Array.of(undefined)[0] === undefined, Array.of(NaN).includes(NaN), 1 / Array.of(-0)[0]]
+--- value
+[[],[7],[1,"a",null,true],1,[1,2,3],true,true,-Infinity]
+
+=== Array.of holds its arguments, not copies
+((o, a) => { const r = Array.of(o, a, [1], {k: 2}); return [r[0].x, r[1][0], r[2], r[3].k, r.length]; })({x: 5}, [9])
+--- value
+[5,9,[1],2,4]
+
+=== Array.of with a spread and a function argument
+[Array.of(...[1, 2, 3]), Array.of(...[]).length, Array.of(...Array.of(4, 5), 6), Array.of(x => x).length]
+--- value
+[[1,2,3],0,[4,5,6],1]
+
+=== Array.of chains into the methods that reuse a fresh array
+[Array.of(3, 1, 2).toSorted((a, b) => a - b), Array.of(1, 2, 3).toSpliced(1, 1, 9), Array.of(1, 2).with(0, 5), Array.of([1, 2], [3]).map(x => x.length)]
+--- value
+[[1,2,3],[1,9,3],[5,2],[2,1]]
+
+=== Array.of as a callback gets the element, index and array
+[1, 2].map(Array.of)
+--- value
+[[1,0,[1,2]],[2,1,[1,2]]]
+
+=== Array.of call faults
+Array.of.call(null, 1)
+--- fault staticjs has methods on arrays, strings and sets only
+
+=== Array.of typeof
+typeof Array.of
+--- value
+"function"
+
+=== Array.of is not a constructor call
+new Array.of(1)
+--- error unsupported constructs only Set
+
 === String and Boolean
 [String(1.5), String(null), String(), Boolean(""), Boolean("x"), Boolean()]
 --- value
