@@ -191,6 +191,7 @@ typedef enum {
     SJS_OBJECT,
     SJS_SET,
     SJS_MAP,
+    SJS_ITERATOR,   /* a map's keys(), values() or entries(), or an iterator's map() or filter() */
     SJS_FUNCTION
 } sjs_kind;
 
@@ -659,8 +660,9 @@ SJS_API void sjs_vm_destroy(sjs_vm *vm);
  *
  * Writes a value as JavaScript source that evaluates to an equal value:
  * JSON where JSON can say it, and `undefined`, `NaN`, `Infinity`, `-0`, a
- * BigInt's `10n`, `new Set([...])` and `new Map([[key, value], ...])` where it
- * cannot. Resumes when the buffer
+ * BigInt's `10n`, `new Set([...])`, `new Map([[key, value], ...])` and an
+ * iterator's `[...].values()`, an iterator that yields the same values, where
+ * it cannot. Resumes when the buffer
  * is full; a BigInt's digits are made first, through the context.
  */
 

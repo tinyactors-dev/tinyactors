@@ -343,7 +343,7 @@ Math.max(...[3, 9, 4])
 
 === Array.of call faults
 Array.of.call(null, 1)
---- fault staticjs has methods on arrays, strings, sets, maps and BigInts only
+--- fault staticjs has methods on arrays, strings, sets, maps, iterators and BigInts only
 
 === Array.of typeof
 typeof Array.of

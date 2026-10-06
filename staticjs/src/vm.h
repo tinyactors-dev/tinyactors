@@ -33,6 +33,12 @@ typedef struct {
     uint32_t bottom;      /* the stack height the frame leaves behind; a loop's
                            * kept callback frame leaves its own slots */
     uint32_t function;
+    /* Loop frames: an iterator's map, filter or reduce, which runs as an
+     * array's loop over what the iterator yields (late_start): its
+     * callback gets the value and a counter, and map's and filter's array
+     * becomes an iterator when the loop ends. In the padding before
+     * `program`. */
+    bool iterated;
     sjs_program *program;
     union {
         sjs_closure *closure;        /* code frames: NULL for a program's main function */
@@ -152,6 +158,11 @@ sjs_str sjs_primitive_text(sjs_value v, char *room);
 /* A map's entries as a new array of [key, value] arrays, a unit of fuel
  * each. */
 sjs_result sjs_map_entries(sjs_vm *vm, const sjs_array *map, sjs_array **out);
+/* What an iterator yields, as an array: its own or a new one, a unit of fuel
+ * each. An iterator yields its values once in JavaScript, so this faults
+ * unless nothing but the caller's stack slot holds it (sjs_value_unique):
+ * then nothing can read it again, and no program can tell. */
+sjs_result sjs_iterator_items(sjs_vm *vm, sjs_value iterator, sjs_array **out);
 /* MUTATION: a method that changes its receiver, but sort (a loop): the
  * receiver is the value of the variable at `receiver_slot`, which holds it
  * alone; the method updates the slot when the value moves. */

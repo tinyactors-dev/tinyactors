@@ -121,6 +121,23 @@ static void string_piece(sjs_writer *w) {
     say_scratch(w, 6);
 }
 
+/* The map whose entries a map or an iterator of its entries writes, or
+ * NULL for any other value. */
+static const sjs_array *entries_of(sjs_value v) {
+    if (v.kind == SJS_MAP) return SJS_AS_ARRAY(v);
+    if (v.kind != SJS_ITERATOR) return NULL;
+    const sjs_iterator *it = SJS_AS_ITERATOR(v);
+    return it->items.kind == SJS_UNDEFINED && it->h.flags == SJS_ITERATE_ENTRIES ? SJS_AS_ARRAY(it->source) : NULL;
+}
+
+/* The value an iterator yields at `index`: from its items, or its map's key
+ * or value (an entry's is written by entries_of's phases). */
+static sjs_value iterated(sjs_value v, uint32_t index) {
+    const sjs_iterator *it = SJS_AS_ITERATOR(v);
+    if (it->items.kind == SJS_ARRAY) return SJS_AS_ARRAY(it->items)->items[index];
+    return SJS_AS_ARRAY(it->source)->items[2u * index + (it->h.flags == SJS_ITERATE_VALUES ? 1u : 0u)];
+}
+
 static void say_number(sjs_writer *w, double d) {
     if (sjs_number_is_negative_zero(d)) {
         say(w, "-0");
@@ -179,6 +196,10 @@ static sjs_result next(sjs_writer *w, bool *more) {
             say(w, "new Map([");
             f->phase = W_ITEM;
             return SJS_OK;
+        case SJS_ITERATOR:
+            say(w, "[");
+            f->phase = W_ITEM;
+            return SJS_OK;
         default:
             if (w->function_text.length == 0) return SJS_ERR_INVALID;
             w->pending = (const uint8_t *)w->function_text.ptr;
@@ -188,11 +209,12 @@ static sjs_result next(sjs_writer *w, bool *more) {
         w->stack.length -= (uint32_t)sizeof(wframe);
         return SJS_OK;
     }
-    uint32_t count = sjs_length(v);
+    uint32_t count = v.kind == SJS_ITERATOR ? sjs_iterator_count(SJS_AS_ITERATOR(v)) : sjs_length(v);
     switch (f->phase) {
     case W_ITEM:
         if (f->index == count) {
-            say(w, v.kind == SJS_ARRAY ? "]" : (v.kind == SJS_SET || v.kind == SJS_MAP ? "])" : "}"));
+            if (v.kind == SJS_ITERATOR) say(w, "].values()");
+            else say(w, v.kind == SJS_ARRAY ? "]" : (v.kind == SJS_SET || v.kind == SJS_MAP ? "])" : "}"));
             w->stack.length -= (uint32_t)sizeof(wframe);
             return SJS_OK;
         }
@@ -205,12 +227,13 @@ static sjs_result next(sjs_writer *w, bool *more) {
             f->phase = W_KEY_COLON;
             return SJS_OK;
         }
-        if (v.kind == SJS_MAP) {
+        if (entries_of(v) != NULL) {
             say(w, "[");
             f->phase = W_ENTRY_VALUE;
-            return push(w, SJS_AS_ARRAY(v)->items[2u * f->index]);
+            return push(w, entries_of(v)->items[2u * f->index]);
         }
         f->phase = W_ITEM;
+        if (v.kind == SJS_ITERATOR) return push(w, iterated(v, f->index++));
         return push(w, SJS_AS_ARRAY(v)->items[f->index++]);
     case W_KEY_COLON:
         say(w, ":");
@@ -219,7 +242,7 @@ static sjs_result next(sjs_writer *w, bool *more) {
     case W_ENTRY_VALUE:
         say(w, ",");
         f->phase = W_ENTRY_END;
-        return push(w, SJS_AS_ARRAY(v)->items[2u * f->index + 1u]);
+        return push(w, entries_of(v)->items[2u * f->index + 1u]);
     case W_ENTRY_END:
         say(w, "]");
         f->index++;

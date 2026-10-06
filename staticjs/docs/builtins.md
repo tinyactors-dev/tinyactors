@@ -19,7 +19,10 @@ A built-in is one of two kinds, and the choice decides most of its cost.
   borrowed in a `sjs_leaf_call` and returns an owned `result` and a `cost`.
   `call()` charges the cost, cuts the stack and pushes the result.
 - **A loop** calls a callback: `map`, `filter`, `reduce`, `some`, `every`,
-  `find`, `findIndex`, `findLast`, `findLastIndex`, `flatMap`, `toSorted`, `Object.groupBy`, `Array.from` (with a mapper). It is a frame on the
+  `find`, `findIndex`, `findLast`, `findLastIndex`, `flatMap`, `toSorted`, `Object.groupBy`, `Array.from` (with a mapper), `Map.groupBy`, a map's
+  `forEach`, an iterator's `map`, `filter` and `reduce` (which run as the
+  array's loops of their names over what the iterator yields:
+  `late_start`). It is a frame on the
   evaluator's stack (`FRAME_LOOP`). `sjs_loop_start` sets it up, and
   `sjs_loop_step` either calls the callback once (`LOOP_CALL`) or finishes
   (`LOOP_DONE`). A callback never runs on the C stack. That keeps an
@@ -229,7 +232,7 @@ COMPARE_BY_KEY, `(a, b) => a - b` is COMPARE_NUMERIC, `x => x.key OP c` is
 KEY_COMPARE, `x => x OP c` is ELEMENT_COMPARE (OP a strict equality or
 an order, `c` a literal), `(a, x) => a + x` is SUM and `(a, x) => a +
 x.key` is SUM_KEY. A loop built-in may run such a callback in C, as `map`
-does with PLUCK (so do `Object.groupBy` and `Array.from`), `toSorted` with COMPARE_BY_KEY and COMPARE_NUMERIC (and so `sort`, which is its loop: docs/mutation.md),
+does with PLUCK (so do `Object.groupBy`, `Array.from` and `Map.groupBy`, and an iterator's `map`, which runs as map), `toSorted` with COMPARE_BY_KEY and COMPARE_NUMERIC (and so `sort`, which is its loop: docs/mutation.md),
 `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `some` and `every` with
 KEY_COMPARE and ELEMENT_COMPARE, and `reduce` with SUM and SUM_KEY
 (`pluck_step`, `sort_by_key`, `sort_numbers`, `predicate_step` and
@@ -326,6 +329,17 @@ to find. Check for them before committing.
   check that runs once per loop. Show which it is: compile `src/` at both
   commits with the bench's flags and compare the per-element functions
   with the pinned `llvm-objdump -d`. Identical instructions mean placement.
+- **A test on every step that tips the inliner.** Map's `forEach` first
+  had its own step, tested for at the top of `sjs_loop_step`. That one
+  branch, with its call, made clang stop inlining `pluck_step` and
+  `call_element` into `sjs_loop_step`, and map's pluck and findIndex
+  measured 10 to 14% slower; with the two forced inline, the test still
+  cost every C path (every, reduce: 11 to 14%). A loop of a new kind takes
+  its result through a case of the phase-1 switch and its call after the
+  shapes' C paths, where only loops that call back pass; new helpers are
+  `noinline` at the end of the file; and check with `llvm-nm` that the set
+  of out-of-line helpers is the old one (`array_add`, `call_element` and
+  `pluck_step` are now `always_inline` for this).
 - **Lists that name only the old built-ins.** `README.md`'s method list,
   sections 1 and 9 of this guide, `docs/matcher.md`'s consumers, and
   comments such as "findLast walks from the end" each had to be updated by

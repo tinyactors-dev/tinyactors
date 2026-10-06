@@ -2643,6 +2643,40 @@ static void test_map_api(void) {
     }
 }
 
+/* The shapes' C paths run for Map.groupBy and an iterator's map, filter and
+ * reduce, which run as the array's loop of their name: the same value, and
+ * per element what the array's loop saves. */
+static void test_map_shape_paths(void) {
+    static const struct {
+        const char *source;
+        const char *out;
+        uint64_t saved;    /* per element */
+        uint64_t elements;
+    } cases[] = {
+        /* A pluck: 4 units in bytecode (the step, TAKE_LOCAL, GET_MEMBER,
+         * RETURN), 2 in C (the step and the lookup). */
+        { "Map.groupBy([{k: 3}, {k: 1}, {}, {k: 3}], x => x.k)",
+          "new Map([[3,[{\"k\":3},{\"k\":3}]],[1,[{\"k\":1}]],[undefined,[{}]]])", 2, 4 },
+        { "new Map([[1, {k: 3}], [2, {k: 1}], [3, {}]]).values().map(x => x.k)", "[3,1,undefined].values()", 2, 3 },
+        /* A predicate on the element: 5 units in bytecode (the step,
+         * TAKE_LOCAL, NUMBER_, BINARY, RETURN), 1 in C. */
+        { "new Map([[1, 1], [2, 2], [3, 3], [4, 4]]).keys().filter(x => x > 2)", "[3,4].values()", 4, 4 },
+        /* A sum: 5 units in bytecode (the step, TAKE_LOCAL, TAKE_LOCAL,
+         * BINARY, RETURN), 1 in C. */
+        { "new Map([[1, 1], [2, 2], [3, 3], [4, 4]]).values().reduce((a, x) => a + x, 0.5)", "10.5", 4, 4 },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        shaped_run on = run_shaped((shaped_source){ cases[i].source, false, SJS_LIMITS_DEFAULT });
+        shaped_run off = run_shaped((shaped_source){ cases[i].source, true, SJS_LIMITS_DEFAULT });
+        CHECK(strcmp(on.out, cases[i].out) == 0 && strcmp(off.out, on.out) == 0);
+        CHECK(off.fuel - on.fuel == cases[i].saved * cases[i].elements);
+        if (off.fuel - on.fuel != cases[i].saved * cases[i].elements || strcmp(on.out, cases[i].out) != 0) {
+            fprintf(stderr, "  %s: %s, fuel %llu with shapes, %llu without\n", cases[i].source, on.out,
+                    (unsigned long long)on.fuel, (unsigned long long)off.fuel);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     bool full = argc > 1 && strcmp(argv[1], "--full") == 0;
     test_values();
@@ -2697,6 +2731,7 @@ int main(int argc, char **argv) {
     test_string_append_interned();
     test_bigint_api();
     test_map_api();
+    test_map_shape_paths();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */
@@ -2718,6 +2753,13 @@ int main(int argc, char **argv) {
                            "export const xs = [...m, ...new Map(m)];\n"
                            "export const o = Object.fromEntries(m);\n"
                            "export const [[k, v]] = m;\n",
+                           SJS_GOAL_MODULE);
+        test_out_of_memory("const m = new Map([[1, {k: \"a\"}], [2, {k: \"b\"}], [3, {k: \"a\"}]]);\n"
+                           "export const g = Map.groupBy([...m.values()], v => v.k);\n"
+                           "export const xs = m.values().map(v => v.k).filter(k => k === \"a\").toArray();\n"
+                           "export const s = m.keys().reduce((a, x) => a + x, 0);\n"
+                           "export const it = m.entries();\n"
+                           "export const f = m.forEach(v => v.k);\n",
                            SJS_GOAL_MODULE);
         test_out_of_memory("export const f = (xs) => xs.toSorted((a, b) => b - a).flatMap(x => [x, [x]]);\n"
                            "export const g = new Set(f([3, 1, 2]).flat()).union(new Set([9]));\n"

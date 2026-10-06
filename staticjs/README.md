@@ -208,9 +208,10 @@ Built-ins:
 | arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
 | strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `replaceAll` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
-| maps | `get` `has`, `size` |
+| maps | `get` `has` `keys` `values` `entries` `forEach`, `size` |
+| iterators | `toArray` `map` `filter` `reduce` |
 | BigInts | `toString` (radix 2 to 36) |
-| functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` |
+| functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Map.groupBy` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum) |
 | constants | `Number.EPSILON` `MAX_SAFE_INTEGER` `MIN_SAFE_INTEGER` `MAX_VALUE` `MIN_VALUE` `POSITIVE_INFINITY` `NEGATIVE_INFINITY` `NaN`; `Math.PI` `E` `LN2` `LN10` `LOG2E` `LOG10E` `SQRT2` `SQRT1_2`: number constants when compiled |
 | changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear` |
@@ -309,6 +310,37 @@ other is `undefined`. The writer writes `new Map([[key, value], ...])`, and
 an embedder builds and reads maps with `sjs_map_new`, `sjs_map_set`,
 `sjs_map_get`, `sjs_map_at` and `sjs_map_size`.
 
+**Iterators.** `m.keys()`, `m.values()` and `m.entries()` give an iterator
+(the value kind `SJS_ITERATOR`, `typeof` `"object"`), which a spread,
+`Array.from`, `new Set`, `new Map`, `Object.fromEntries`, an array pattern
+and its own `toArray()` take, and whose `map`, `filter` and `reduce` run as
+the array's loops of those names, with their shapes, over what it yields:
+the callback gets the value and a counter, and `map` and `filter` give
+iterators. A JavaScript iterator yields its values once and is then empty;
+a staticjs value cannot change. So staticjs reads an iterator only where
+nothing else holds it (`sjs_value_unique`, as for updating a value in
+place): a temporary (`[...m.keys()]`), or a variable's last read, which
+moves its value. Then nothing can read it again, and no program can tell
+that it was not consumed. A second read, a closure's capture or any other
+holder faults ("an iterator yields its values once"), where JavaScript
+gives nothing the second time; so does a helper of an iterator something
+else holds. An iterator also holds its map, so the map cannot change while
+the iterator lives (owned mutation faults: "held elsewhere"), as a
+JavaScript iterator would yield what changed. The helpers are lazy in
+JavaScript, but their callbacks change nothing, so running them at once
+gives the same values. `next`, `drop`, `take`, `flatMap`, `some`, `every`,
+`find` and an iterator's `forEach` fault ("does not have this method"); a
+property an iterator lacks is `undefined`. The writer writes an iterator as
+`[...].values()`, an iterator that yields the same values.
+
+`m.forEach((value, key, map) => ...)` is a loop that calls back for each
+entry and gives `undefined`; its callback changes nothing outside, so it
+gives `undefined` or faults where the callback faults. `Map.groupBy(items,
+f)` groups an array's elements as `Object.groupBy` does, with its C path for
+`x => x.key`, into a map whose keys are any primitive, in the order first
+seen; an object as a key faults, and so do items that are not an array, as
+for `Object.groupBy`.
+
 ## Where it faults instead of following JavaScript
 
 These follow from the rule: staticjs stops where JavaScript would coerce,
@@ -336,6 +368,10 @@ compare identities, or find something on a prototype.
   (`new Map([[{}, 1]])`), which JavaScript keys by its identity; an entry of
   `new Map` that is not an array (`new Map([{0: "k", 1: "v"}])`), which
   JavaScript reads as an object.
+- An iterator read where something else holds it too (`[[...it], [...it]]`,
+  a closure's capture), where JavaScript gives nothing the second time; an
+  iterator's `next`, `drop`, `take`, `flatMap`, `some`, `every`, `find` and
+  `forEach`; `Map.groupBy` of anything but an array, as `Object.groupBy`.
 - A property JavaScript finds on `Object.prototype` (`toString`,
   `__proto__`); reading a method without calling it, by name, through a
   pattern or with `in`: any method of an array, a string, a set or a map, those

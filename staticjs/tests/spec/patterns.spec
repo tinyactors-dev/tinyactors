@@ -1105,11 +1105,11 @@ a = x => 1
 
 === destructuring a number with [ ]
 (([a]) => a)(5)
---- fault an array, a set, a map or a string
+--- fault an array, a set, a map, an iterator or a string
 
 === a rest element of undefined
 (([...r]) => r)()
---- fault an array, a set, a map or a string
+--- fault an array, a set, a map, an iterator or a string
 
 === an object pattern of a missing argument
 (({a}) => a)()

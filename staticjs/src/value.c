@@ -94,6 +94,12 @@ static void drain(sjs_context *context, sjs_heap *work) {
             lookup_free(context, o->index);
             break;
         }
+        case SJS_HEAP_ITERATOR: {
+            sjs_iterator *it = (sjs_iterator *)(void *)h;
+            drop(context, &work, it->source);
+            drop(context, &work, it->items);
+            break;
+        }
         case SJS_HEAP_CLOSURE: {
             sjs_closure *c = (sjs_closure *)(void *)h;
             for (uint32_t i = 0; i < c->count; i++) drop(context, &work, c->captures[i]);
@@ -1102,4 +1108,19 @@ sjs_result sjs_map_at(sjs_value map, uint32_t index, sjs_map_entry *out) {
     out->key = a->items[2u * index];
     out->value = a->items[2u * index + 1u];
     return SJS_OK;
+}
+
+sjs_result sjs_iterator_make(sjs_context *context, sjs_iterator_spec spec, sjs_value *out) {
+    sjs_iterator *it = heap_alloc(context, sizeof *it, SJS_HEAP_ITERATOR);
+    if (it == NULL) return SJS_ERR_NOMEM;
+    it->h.flags = spec.mode;
+    it->source = spec.source;
+    it->items = spec.items;
+    *out = sjs_heap_value(SJS_ITERATOR, &it->h);
+    return SJS_OK;
+}
+
+uint32_t sjs_iterator_count(const sjs_iterator *it) {
+    if (it->items.kind == SJS_ARRAY) return SJS_AS_ARRAY(it->items)->length;
+    return SJS_AS_ARRAY(it->source)->length / 2u;
 }

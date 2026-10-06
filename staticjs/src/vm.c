@@ -89,6 +89,8 @@ static bool on_prototype(uint8_t kind, const sjs_string *key) {
         return (n->flags & SJS_NAME_ON_SET) != 0;
     case SJS_MAP:
         return (n->flags & SJS_NAME_ON_MAP) != 0;
+    case SJS_ITERATOR:
+        return (n->flags & SJS_NAME_ON_ITERATOR) != 0;
     default:
         return (n->flags & SJS_NAME_OBJECT) != 0;
     }
@@ -200,7 +202,8 @@ static sjs_result method(sjs_vm *vm, sjs_member member, sjs_value *out) {
     case SJS_STRING:
     case SJS_SET:
     case SJS_BIGINT:
-    case SJS_MAP: {
+    case SJS_MAP:
+    case SJS_ITERATOR: {
         const sjs_name *n = sjs_name_of(key);
         sjs_builtin_id id = sjs_method_of(n, receiver.kind);
         if (id == SJS_BUILTIN_NONE) {
@@ -223,7 +226,7 @@ static sjs_result method(sjs_vm *vm, sjs_member member, sjs_value *out) {
     case SJS_NULL:
         return sjs_property_get(vm, member, out);
     default:
-        return fault_named(vm, "staticjs has methods on arrays, strings, sets, maps and BigInts only", name);
+        return fault_named(vm, "staticjs has methods on arrays, strings, sets, maps, iterators and BigInts only", name);
     }
 }
 
@@ -2444,13 +2447,16 @@ __attribute__((noinline)) static sjs_result order_fault(sjs_vm *vm, sjs_value a,
  */
 
 /* A property of a value that is not an object, an array, a string or a set:
- * a map's size, and undefined for a key that is not on Map.prototype (a
- * method read as a value faults, as for a set); anything else faults. */
+ * a map's size, and undefined for a key that is not on the prototype of a
+ * map or an iterator (a method read as a value faults, as for a set);
+ * anything else faults. */
 __attribute__((noinline)) static sjs_result property_other(sjs_vm *vm, sjs_member member, sjs_value *out) {
     sjs_value object = member.object;
     sjs_str name = sjs_string_view(member.key);
-    if (object.kind != SJS_MAP) return fault_named(vm, "staticjs reads properties of objects, arrays, strings, sets and maps", name);
-    if (sjs_str_equal(name, SJS_STR("size"))) {
+    if (object.kind != SJS_MAP && object.kind != SJS_ITERATOR) {
+        return fault_named(vm, "staticjs reads properties of objects, arrays, strings, sets, maps and iterators", name);
+    }
+    if (object.kind == SJS_MAP && sjs_str_equal(name, SJS_STR("size"))) {
         *out = sjs_num((double)(SJS_AS_ARRAY(object)->length / 2u));
         return SJS_OK;
     }
@@ -2460,11 +2466,17 @@ __attribute__((noinline)) static sjs_result property_other(sjs_vm *vm, sjs_membe
     return SJS_OK;
 }
 
-/* `...m`: a map yields its entries, each a new [key, value] array. */
+/* `...m`: a map yields its entries, each a new [key, value] array; an
+ * iterator what it yields, read once (sjs_iterator_items). */
 __attribute__((noinline)) static sjs_result spread_other(sjs_vm *vm, sjs_value *array, sjs_value source) {
-    if (source.kind != SJS_MAP) return sjs_vm_fault(vm, "... spreads arrays, sets, maps and strings");
     sjs_array *entries;
-    if (sjs_map_entries(vm, SJS_AS_ARRAY(source), &entries) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (source.kind == SJS_ITERATOR) {
+        if (sjs_iterator_items(vm, source, &entries) != SJS_OK) return SJS_ERR_PROGRAM;
+    } else if (source.kind != SJS_MAP) {
+        return sjs_vm_fault(vm, "... spreads arrays, sets, maps, iterators and strings");
+    } else if (sjs_map_entries(vm, SJS_AS_ARRAY(source), &entries) != SJS_OK) {
+        return SJS_ERR_PROGRAM;
+    }
     sjs_result r = SJS_OK;
     for (uint32_t i = 0; r == SJS_OK && i < entries->length; i++) {
         sjs_ref(entries->items[i]);
@@ -2474,10 +2486,14 @@ __attribute__((noinline)) static sjs_result spread_other(sjs_vm *vm, sjs_value *
     return r;
 }
 
-/* How many arguments a spread of a map gives, or its fault. */
+/* How many arguments a spread of a map or an iterator gives, or its fault. */
 __attribute__((noinline)) static bool spread_size(sjs_vm *vm, sjs_value source, uint64_t *total) {
+    if (source.kind == SJS_ITERATOR) {
+        *total += sjs_iterator_count(SJS_AS_ITERATOR(source));
+        return true;
+    }
     if (source.kind != SJS_MAP) {
-        sjs_vm_fault(vm, "... spreads arrays, sets, maps and strings");
+        sjs_vm_fault(vm, "... spreads arrays, sets, maps, iterators and strings");
         return false;
     }
     *total += SJS_AS_ARRAY(source)->length / 2u;
@@ -2485,17 +2501,20 @@ __attribute__((noinline)) static bool spread_size(sjs_vm *vm, sjs_value source, 
 }
 
 /* `const [[k, v]] = m`: an array pattern takes a map's entries, as its
- * iterator yields them; they replace the map on top of the stack, which
- * only the pattern reads. Anything else but an array, a set or a string
- * faults. */
+ * iterator yields them, or what an iterator yields, read once; they replace
+ * the map or the iterator on top of the stack, which only the pattern reads.
+ * Anything else but an array, a set or a string faults. */
 __attribute__((noinline)) static void pattern_other(sjs_vm *vm) {
     sjs_value *top = stack_top(vm);
-    if (top->kind != SJS_MAP) {
-        sjs_vm_fault(vm, "only an array, a set, a map or a string can be destructured with [ ]");
+    sjs_array *entries;
+    if (top->kind == SJS_ITERATOR) {
+        if (sjs_iterator_items(vm, *top, &entries) != SJS_OK) return;
+    } else if (top->kind != SJS_MAP) {
+        sjs_vm_fault(vm, "only an array, a set, a map, an iterator or a string can be destructured with [ ]");
+        return;
+    } else if (sjs_map_entries(vm, SJS_AS_ARRAY(*top), &entries) != SJS_OK) {
         return;
     }
-    sjs_array *entries;
-    if (sjs_map_entries(vm, SJS_AS_ARRAY(*top), &entries) != SJS_OK) return;
     sjs_vm_release(vm, *top);
     *top = sjs_heap_value(SJS_ARRAY, &entries->h);
 }
