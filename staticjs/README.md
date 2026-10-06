@@ -186,7 +186,7 @@ Built-ins:
 | | |
 |---|---|
 | arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
-| strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
+| strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `replaceAll` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
 | functions | `String` `Boolean` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN` |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign`, and its constants |
@@ -254,11 +254,15 @@ compare identities, or find something on a prototype.
   number, which JavaScript converts.
 - `toSorted()` without a compare function; `toLowerCase()` of a string
   that is not ASCII; slicing a string through the middle of a surrogate
-  pair, padding one (`padStart`, `padEnd`) with a pad string cut there, and
+  pair, padding one (`padStart`, `padEnd`) with a pad string cut there,
   `at` or `charAt` of half of one (`charCodeAt` and `codePointAt` give its
-  number): staticjs strings cannot hold a lone surrogate. An object as a string
-  method's argument that JavaScript turns into a string (a pad string, an
-  argument of `concat`), as `+` faults on one.
+  number), and `replaceAll` with an empty pattern where it puts text
+  between the halves of one: staticjs strings cannot hold a lone surrogate.
+  An object as a string method's argument that JavaScript turns into a
+  string (a pad string, an argument of `concat`, the replacement of
+  `replaceAll`), as `+` faults on one; a search argument that is not a
+  string (`includes(1)`, `replaceAll(1, "x")`, `split(1)`); a function as
+  `replaceAll`'s replacement.
 - A number literal outside Clinger's fast path (digits worth more than
   2^53, or a power of ten past 10^22) is refused when compiled.
 

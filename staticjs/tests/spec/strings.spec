@@ -471,3 +471,102 @@ Array.from({length: 1000}, (_, i) => i % 10).reduce((acc, x) => acc + x, "").len
 === concat past the limit
 "ab".repeat(5000000).concat("ab".repeat(5000000))
 --- fault limit
+
+# replaceAll with a string pattern. The replacement's $ patterns mean what
+# JavaScript's GetSubstitution gives them with no captures: $$, $&, $` and
+# $', and every other $ as written. An empty pattern matches before every
+# UTF-16 code unit and at the end, so between the halves of a pair too:
+# where the result would then hold a lone surrogate, it faults.
+
+=== replaceAll
+["a-b-c".replaceAll("-", "+"), "aaa".replaceAll("a", "b"), "aaa".replaceAll("aa", "b"), "aaaa".replaceAll("aa", "b"), "abc".replaceAll("x", "y"), "".replaceAll("a", "b"), "abc".replaceAll("abc", ""), "ab".replaceAll("ab", "abab"), "abab".replaceAll("b", "")]
+--- value
+["a+b+c","bbb","ba","bb","abc","","","abab","aa"]
+
+=== replaceAll on text outside ASCII
+["日本日本".replaceAll("本", "😀"), "é😀é".replaceAll("é", "e"), "😀😀".replaceAll("😀", "x"), "a😀b".replaceAll("😀", ""), "éa".replaceAll("a", "é")]
+--- value
+["日😀日😀","e😀e","xx","ab","éé"]
+
+=== replaceAll with an empty pattern
+["abc".replaceAll("", "-"), "".replaceAll("", "-"), "é".replaceAll("", "-"), "abc".replaceAll("", ""), "日本".replaceAll("", "_"), "".replaceAll("", "")]
+--- value
+["-a-b-c-","-","-é-","abc","_日_本_",""]
+
+=== replaceAll with an empty pattern keeps pairs that it leaves together
+["😀".replaceAll("", ""), "a😀b".replaceAll("", ""), "😀".replaceAll("", "$&"), "😀".replaceAll("", "$'$`")]
+--- value
+["😀","a😀b","😀","😀😀😀😀"]
+
+=== replaceAll with an empty pattern faults where it splits a pair
+"😀".replaceAll("", "-")
+--- fault lone surrogate
+
+=== replaceAll with an empty pattern faults on a split before
+"x😀".replaceAll("", "$`")
+--- fault lone surrogate
+
+=== replaceAll with an empty pattern faults on a split after
+"😀x".replaceAll("", "$'")
+--- fault lone surrogate
+
+=== replaceAll gives $$, $&, $` and $' their meaning
+["a-b".replaceAll("-", "$$"), "a-b".replaceAll("-", "[$&]"), "a-b-c".replaceAll("-", "[$`]"), "a-b-c".replaceAll("-", "[$']"), "a-b".replaceAll("-", "$$$"), "a-b".replaceAll("-", "$$&"), "ab".replaceAll("", "[$`|$&|$']")]
+--- value
+["a$b","a[-]b","a[a]b[a-b]c","a[b-c]b[c]c","a$$b","a$&b","[||ab]a[a||b]b[ab||]"]
+
+=== replaceAll keeps every other $ as written
+["a-b".replaceAll("-", "$1"), "a-b".replaceAll("-", "$<x>"), "a-b".replaceAll("-", "$"), "a-b".replaceAll("-", "$0"), "a-b".replaceAll("-", "$10"), "a-b".replaceAll("-", "$x"), "a-b".replaceAll("-", "$<"), "a-b".replaceAll("-", "a$"), "a-b".replaceAll("-", "$$1")]
+--- value
+["a$1b","a$<x>b","a$b","a$0b","a$10b","a$xb","a$<b","aa$b","a$1b"]
+
+=== replaceAll's $ patterns on text outside ASCII
+["é-日-😀".replaceAll("-", "($`)"), "é-日-😀".replaceAll("-", "($')"), "日本".replaceAll("本", "$&$&"), "😀😀".replaceAll("😀", "<$`>")]
+--- value
+["é(é)日(é-日)😀","é(日-😀)日(😀)😀","日本本","<><😀>"]
+
+=== replaceAll converts a primitive replacement as String does
+["a-b".replaceAll("-", 1), "a-b".replaceAll("-", null), "a-b".replaceAll("-", undefined), "a-b".replaceAll("-", true), "a-b".replaceAll("-", -0), "a-b".replaceAll("-", 2.5)]
+--- value
+["a1b","anullb","aundefinedb","atrueb","a0b","a2.5b"]
+
+=== replaceAll faults on a number as the pattern
+"a1".replaceAll(1, "x")
+--- fault take strings
+
+=== replaceAll faults on undefined as the pattern
+"aundefined".replaceAll(undefined, "x")
+--- fault take strings
+
+=== replaceAll faults on null as the pattern
+"anull".replaceAll(null, "x")
+--- fault take strings
+
+=== replaceAll faults on an object as the pattern
+"a".replaceAll({}, "x")
+--- fault take strings
+
+=== replaceAll faults on a function as the replacement
+"a-b".replaceAll("-", x => "+")
+--- fault function
+
+=== replaceAll faults on an object as the replacement
+"a-b".replaceAll("-", {})
+--- fault primitives
+
+=== replaceAll faults on an array as the replacement
+"a-b".replaceAll("-", ["+"])
+--- fault primitives
+
+=== replaceAll of many matches
+(s => [s.length, s.slice(0, 6)])("x".repeat(1000).replaceAll("x", "ab"))
+--- value
+[2000,"ababab"]
+
+=== replaceAll past the limit
+"x".repeat(9000000).replaceAll("x", "xy")
+--- fault limit
+
+=== replaceAll's $` past the limit
+"x".repeat(10000).replaceAll("x", "$`")
+--- fault limit

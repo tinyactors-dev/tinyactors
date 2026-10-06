@@ -55,8 +55,9 @@
  * STRING_APPEND, L); eval.string.append-let (let s = acc; s += r.id;
  * s += ",": each += moves the let to +, MUTATION, L); eval.string.padStart (text, the
  * row ids joined by commas, padded to twice its length with "ab") and
- * eval.string.repeat ("r000000,".repeat(n)), each checked by its length and
- * its ends (L); eval.object.spread-reduce (C);
+ * eval.string.repeat ("r000000,".repeat(n)) and eval.string.replaceAll
+ * (text.replaceAll(",", ";;")), each checked by its length and its ends (L);
+ * eval.object.spread-reduce (C);
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
  * place and quadratic before, eval.object.fromEntries, eval.set.new, .has,
@@ -460,8 +461,8 @@ static const bench_case cases[] = {
       .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "\"r000000,r000001,r000002,r000003,r000004,r000005,r000006,r000007,r000008,r000009,\"",
       .check = CHECK_IDS_JOINED },
-    /* A string built by a method: padded to twice its length, or repeated
-     * n times. */
+    /* A string built by a method: padded to twice its length, repeated n
+     * times, or with each of its n - 1 commas replaced. */
     { .name = "eval.string.padStart", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "(p => [p.length - 2 * text.length, p.startsWith(\"abab\"), p.endsWith(text)])"
                 "(text.padStart(2 * text.length, \"ab\"))",
@@ -469,6 +470,10 @@ static const bench_case cases[] = {
     { .name = "eval.string.repeat", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "(r => [r.length - 8 * xs.length, r.endsWith(\"r000000,r000000,\")])(\"r000000,\".repeat(xs.length))",
       .globals = { { "xs", FIX_XS, NULL } }, .expect = "[0,true]", .check = CHECK_SAME },
+    { .name = "eval.string.replaceAll", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "(r => [r.length - text.length - Math.floor(text.length / 8), r.startsWith(\"r000000;;r000001;;\")])"
+                "(text.replaceAll(\",\", \";;\"))",
+      .globals = { { "text", FIX_TEXT, NULL } }, .expect = "[0,true]", .check = CHECK_SAME },
     { .name = "eval.object.spread-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_C, .smoke = 10,
       .source = "rows.reduce((acc, r) => ({ ...acc, [r.id]: r.kwh }), {})", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "{\"r000000\":0,\"r000001\":3.7,\"r000002\":7.4,\"r000003\":11.1,\"r000004\":14.8,\"r000005\":18.5,"
