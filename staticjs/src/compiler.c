@@ -225,7 +225,7 @@ typedef struct {
     bool gathering;
 } literal_frame;
 
-enum { NS_NONE = 0, NS_MATH, NS_OBJECT, NS_NUMBER, NS_ARRAY };
+enum { NS_NONE = 0, NS_MATH, NS_OBJECT, NS_NUMBER, NS_ARRAY, NS_STRING };
 
 /* An explicit export: resolved when it arrives, or at the end of the module. */
 enum { XE_RESOLVED = 0, XE_LOCAL };
@@ -1117,7 +1117,8 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
     if (sjs_str_equal(e->text, SJS_STR("NaN"))) return number_constant(c, 0.0 / 0.0, e->at);
     if (sjs_str_equal(e->text, SJS_STR("Infinity"))) return number_constant(c, 1.0 / 0.0, e->at);
     static const struct { const char *name; uint8_t space; } spaces[] = {
-        { "Math", NS_MATH }, { "Object", NS_OBJECT }, { "Number", NS_NUMBER }, { "Array", NS_ARRAY }
+        { "Math", NS_MATH }, { "Object", NS_OBJECT }, { "Number", NS_NUMBER }, { "Array", NS_ARRAY },
+        { "String", NS_STRING }
     };
     for (uint32_t i = 0; i < sizeof spaces / sizeof spaces[0]; i++) {
         if (sjs_str_equal(e->text, sjs_cstr(spaces[i].name))) {
@@ -1152,7 +1153,7 @@ static sjs_result fail_unbound(sjs_compiler *c) {
 
 /* `Math.PI`, `Number.MAX_SAFE_INTEGER`, `Math.max`. */
 static sjs_result read_space_member(sjs_compiler *c, const sjs_event *e) {
-    static const char *const space_names[] = { "", "Math", "Object", "Number", "Array" };
+    static const char *const space_names[] = { "", "Math", "Object", "Number", "Array", "String" };
     static const struct { uint8_t space; const char *name; double value; } numbers[] = {
         { NS_MATH, "PI", 3.141592653589793 }, { NS_MATH, "E", 2.718281828459045 },
         { NS_MATH, "LN2", 0.6931471805599453 }, { NS_MATH, "LN10", 2.302585092994046 },
@@ -2652,6 +2653,14 @@ static sjs_result end(sjs_compiler *c, const sjs_event *e) {
 }
 
 static sjs_result event(sjs_compiler *c, const sjs_event *e) {
+    /* `String` is a function as well as a namespace: unless a member
+     * follows, it is the function, read where the name was. */
+    if (c->space == NS_STRING && e->kind != SJS_EV_MEMBER) {
+        c->space = NS_NONE;
+        uint32_t index;
+        if (value_constant(c, sjs_builtin_value(SJS_BUILTIN_STRING), &index) != SJS_OK) return compile_fail(c, c->space_at, (sjs_problem){ SJS_ERROR_MEMORY, "out of memory" });
+        if (op32(c, ins(SJS_OP_CONSTANT, index, c->space_at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
     if (c->pending_read != 0) note_use(c, e->kind); /* MUTATION */
     if (c->paths.length != 0) paths_before(c, e); /* MUTATION */
     if (c->space != NS_NONE && e->kind != SJS_EV_MEMBER) {

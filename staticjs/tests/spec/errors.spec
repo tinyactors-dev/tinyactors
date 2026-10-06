@@ -323,7 +323,7 @@ new Map()
 --- error unsupported no holes
 
 === tagged templates
-String.raw`x`
+String`x`
 --- error unsupported no tagged templates
 
 === a getter

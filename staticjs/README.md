@@ -188,7 +188,7 @@ Built-ins:
 | arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
 | strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `replaceAll` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
-| functions | `String` `Boolean` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN` |
+| functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN` |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign`, and its constants |
 | changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear` |
 
@@ -256,8 +256,10 @@ compare identities, or find something on a prototype.
   that is not ASCII; slicing a string through the middle of a surrogate
   pair, padding one (`padStart`, `padEnd`) with a pad string cut there,
   `at` or `charAt` of half of one (`charCodeAt` and `codePointAt` give its
-  number), and `replaceAll` with an empty pattern where it puts text
-  between the halves of one: staticjs strings cannot hold a lone surrogate.
+  number), `replaceAll` with an empty pattern where it puts text between
+  the halves of one, and `String.fromCharCode` or `String.fromCodePoint`
+  of a half that no other half follows or precedes: staticjs strings
+  cannot hold a lone surrogate.
   An object as a string method's argument that JavaScript turns into a
   string (a pad string, an argument of `concat`, the replacement of
   `replaceAll`), as `+` faults on one; a search argument that is not a

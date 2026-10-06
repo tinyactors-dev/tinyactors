@@ -19,6 +19,8 @@ typedef struct {
 
 static const function_entry FUNCTION_TABLE[] = {
     { "", "String", SJS_BUILTIN_STRING },
+    { "String", "fromCharCode", SJS_BUILTIN_STRING_FROM_CHAR_CODE },
+    { "String", "fromCodePoint", SJS_BUILTIN_STRING_FROM_CODE_POINT },
     { "", "Boolean", SJS_BUILTIN_BOOLEAN },
     { "Array", "from", SJS_BUILTIN_ARRAY_FROM },
     { "Array", "isArray", SJS_BUILTIN_ARRAY_IS_ARRAY },
@@ -164,6 +166,8 @@ static const sjs_name NAMES[] = {
  * written. */
 static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_STRING),
+    FUNCTION_VALUE(SJS_BUILTIN_STRING_FROM_CHAR_CODE),
+    FUNCTION_VALUE(SJS_BUILTIN_STRING_FROM_CODE_POINT),
     FUNCTION_VALUE(SJS_BUILTIN_BOOLEAN),
     FUNCTION_VALUE(SJS_BUILTIN_ARRAY_FROM),
     FUNCTION_VALUE(SJS_BUILTIN_ARRAY_IS_ARRAY),
@@ -522,9 +526,15 @@ static sjs_result math(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     return SJS_OK;
 }
 
+/* String.fromCharCode and String.fromCodePoint, at the end of the file. */
+static sjs_result string_from(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+
 static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_value x = arg(call, 0);
     switch (id) {
+    case SJS_BUILTIN_STRING_FROM_CHAR_CODE:
+    case SJS_BUILTIN_STRING_FROM_CODE_POINT:
+        return string_from(vm, id, call);
     case SJS_BUILTIN_STRING: {
         if (call->count == 0) return new_string(vm, SJS_STR(""), &call->result);
         sjs_string *s;
@@ -2426,4 +2436,31 @@ __attribute__((noinline)) static sjs_result string_method_tail(sjs_vm *vm, sjs_b
     default: /* REPEAT */
         return string_repeat(vm, call);
     }
+}
+
+/* String.fromCharCode(...codes): each code ToUint16, as a UTF-16 code unit.
+ * String.fromCodePoint(...points): each an integer from 0 to 0x10FFFF, or a
+ * RangeError in JavaScript. A pair of halves makes a character either way;
+ * a half left alone faults (text_builder). */
+__attribute__((noinline)) static sjs_result string_from(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    /* Each code unit takes at least a byte. */
+    if (string_with_room(vm, call, call->count) != SJS_OK) return SJS_ERR_PROGRAM;
+    call->cost += call->count;
+    text_builder b = { call, 0 };
+    for (uint32_t i = 0; i < call->count; i++) {
+        double d;
+        if (sjs_vm_to_number(vm, call->args[i], &d) != SJS_OK) return SJS_ERR_PROGRAM;
+        uint32_t point;
+        if (id == SJS_BUILTIN_STRING_FROM_CHAR_CODE) {
+            double t = sjs_number_is_finite(d) ? sjs_number_trunc(d) : 0.0;
+            point = (uint32_t)(t - 65536.0 * sjs_number_floor(t / 65536.0));
+        } else {
+            if (!sjs_number_is_integer(d) || d < 0 || d > 1114111.0) {
+                return sjs_vm_fault(vm, "a code point is an integer from 0 to 0x10FFFF");
+            }
+            point = (uint32_t)d;
+        }
+        if (build_unit(vm, &b, point) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    return build_end(vm, &b);
 }
