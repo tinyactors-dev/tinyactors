@@ -476,7 +476,7 @@ static const char *const event_names[SJS_EV_END + 1] = {
     [SJS_EV_RETURN] = "RETURN", [SJS_EV_BLOCK_END] = "BLOCK_END", [SJS_EV_BLOCK_STATEMENT_BEGIN] = "BLOCK_STATEMENT_BEGIN",
     [SJS_EV_BLOCK_STATEMENT_END] = "BLOCK_STATEMENT_END", [SJS_EV_IF] = "IF", [SJS_EV_ELSE] = "ELSE",
     [SJS_EV_IF_END] = "IF_END", [SJS_EV_EXPRESSION_STATEMENT] = "EXPRESSION_STATEMENT", /* MUTATION */
-    [SJS_EV_ASSIGN] = "ASSIGN", [SJS_EV_ASSIGN_END] = "ASSIGN_END", [SJS_EV_UPDATE] = "UPDATE", /* MUTATION */
+    [SJS_EV_ASSIGN] = "ASSIGN", [SJS_EV_ASSIGN_END] = "ASSIGN_END", [SJS_EV_UPDATE] = "UPDATE", [SJS_EV_DELETE] = "DELETE", /* MUTATION */
     [SJS_EV_BIND] = "BIND", [SJS_EV_ARRAY_PATTERN_BEGIN] = "ARRAY_PATTERN_BEGIN",
     [SJS_EV_PATTERN_INDEX] = "PATTERN_INDEX", [SJS_EV_ARRAY_PATTERN_END] = "ARRAY_PATTERN_END",
     [SJS_EV_OBJECT_PATTERN_BEGIN] = "OBJECT_PATTERN_BEGIN", [SJS_EV_PATTERN_KEY] = "PATTERN_KEY",
@@ -2139,6 +2139,74 @@ static void test_mutation_set_removal_out_of_memory(void) {
                        SJS_GOAL_EXPRESSION);
 }
 
+/* delete is DELETE after its target, a node that starts with the word; it
+ * sends no EXPRESSION_STATEMENT. */
+static void test_mutation_delete_events(void) {
+    expect_nodes("o => { delete o.a; delete o[k].b; }", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "ARROW_BEGIN#1@0 PARAM#1@0 BIND#2@0 PARAMS_END#1@0 BLOCK_BEGIN#1@0 NAME#5@14 MEMBER#6@14 DELETE#4@7 NAME#9@26 "
+                 "NAME#11@28 INDEX#10@26 MEMBER#12@26 DELETE#8@19 BLOCK_END#1@0 ARROW_END#1@0 END#0@0");
+}
+
+/* DELETE in an order no parser sends: outside a statement, or after a name
+ * alone, which the parser refuses. */
+static void test_mutation_delete_order(void) {
+    static const char *const out_of_order = "the events are out of order";
+    const sjs_event body[] = { { .kind = SJS_EV_ARROW_BEGIN, .count = 1 }, { .kind = SJS_EV_PARAM }, { .kind = SJS_EV_BIND, .text = SJS_STR("o") },
+                               { .kind = SJS_EV_PARAMS_END }, { .kind = SJS_EV_BLOCK_BEGIN } };
+    const sjs_event name = { .kind = SJS_EV_NAME, .text = SJS_STR("o"), .at = { 14, 1, 15 }, .start = { 14, 1, 15 } };
+    const sjs_event member = { .kind = SJS_EV_MEMBER, .text = SJS_STR("k"), .at = { 16, 1, 17 }, .start = { 14, 1, 15 } };
+    const sjs_event expression[] = { body[0], body[1], body[2], body[3], name, member, { .kind = SJS_EV_DELETE } };
+    compile_events(expression, 7, out_of_order);
+    const sjs_event bare[] = { body[0], body[1], body[2], body[3], body[4], name, { .kind = SJS_EV_DELETE } };
+    compile_events(bare, 7, out_of_order);
+}
+
+/* An object that delete takes most keys from gives its memory back, its
+ * index included. Deleting its last key costs one unit, as a missing one
+ * does; any other, the object's length more. */
+static void test_mutation_delete_removal(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    static const char *const build = "Object.fromEntries(Array.from({length: 4000}, (_, i) => [`k${i}`, i]))";
+    char source[512];
+    size_t full = live_of(context, build);
+    snprintf(source, sizeof source, "Array.from({length: 3990}, (_, i) => `k${i}`).reduce((o, k) => { delete o[k]; return o; }, %s)", build);
+    size_t emptied = live_of(context, source);
+    size_t small = live_of(context, "Object.fromEntries(Array.from({length: 10}, (_, i) => [`k${i + 3990}`, i + 3990]))");
+    CHECK(full > 4000 * 24);
+    CHECK(emptied < full / 50);
+    CHECK(emptied <= 2 * small);
+    uint64_t fuel[3];
+    static const char *const keys[3] = { "k999", "none", "k0" };
+    for (int i = 0; i < 3; i++) {
+        snprintf(source, sizeof source,
+                 "(() => { const o = Object.fromEntries(Array.from({length: 1000}, (_, i) => [`k${i}`, i])); delete o.%s; return 0; })()", keys[i]);
+        fuel[i] = fuel_of(context, source);
+    }
+    CHECK(fuel[1] == fuel[0]);
+    CHECK(fuel[2] - fuel[0] == 1000);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* Every allocation of a program that deletes from objects, past the size
+ * that indexes them and back, through a path, and adds again, fails in
+ * turn. */
+static void test_mutation_delete_out_of_memory(void) {
+    test_out_of_memory("(() => {\n"
+                       "  const o = Array.from({length: 20}, (_, i) => i).reduce((acc, i) => { acc[i % 3 ? `k${i}` : i] = [i]; return acc; }, {});\n"
+                       "  const d = Array.from({length: 17}, (_, i) => i).reduce((acc, i) => { delete acc[i % 3 ? `k${i}` : i]; return acc; }, o);\n"
+                       "  d.k17[1] = 1;\n"
+                       "  d.n = {a: {b: 1, c: 2}};\n"
+                       "  delete d.n.a.b;\n"
+                       "  delete d.k19;\n"
+                       "  d[1] = 1;\n"
+                       "  return d;\n"
+                       "})()",
+                       SJS_GOAL_EXPRESSION);
+}
+
 static void test_out_of_memory(const char *source, sjs_goal goal) {
     long needed = 0;
     for (long fail_at = 1;; fail_at++) {
@@ -2209,6 +2277,10 @@ int main(int argc, char **argv) {
     test_mutation_set_removal_out_of_memory();
     test_mutation_splice_fuel();
     test_mutation_splice_out_of_memory();
+    test_mutation_delete_events();
+    test_mutation_delete_order();
+    test_mutation_delete_removal();
+    test_mutation_delete_out_of_memory();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */

@@ -530,7 +530,8 @@ typedef enum {
                             * variable's value they name, each a string or a number
                             * (PATH_INDEX): LOAD pushes its
                             * value; STORE pops the value above them into it, and them;
-                            * DROP pops them and the value above them */
+                            * DROP pops them and the value above them; DELETE removes
+                            * the property they name, and pops them */
 } sjs_opcode;
 
 /* SJS_OP_CALL flags. */
@@ -542,6 +543,7 @@ typedef enum {
 #define SJS_PATH_LOAD 0u
 #define SJS_PATH_STORE 1u
 #define SJS_PATH_DROP 2u
+#define SJS_PATH_DELETE 3u   /* MUTATION: step 3: removes the property, pops the keys */
 
 /* SJS_OP_OBJECT_LITERAL flags. */
 #define SJS_LITERAL_ABOVE 1u  /* one value is above the literal's values: a spread's source or a computed key */

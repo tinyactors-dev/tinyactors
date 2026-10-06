@@ -63,6 +63,8 @@
  * eval.let.counter (let n = a; n += r.kwh), eval.array.reduce.key with a let;
  * eval.set.delete-reduce (s.delete(id) of every member of new Set(ids), each
  * the first: Q) and .last (each the last, over ids.toReversed());
+ * eval.object.delete-reduce (delete acc[r.id] of every key of an object of
+ * the rows' ids, each the first: Q) and .last (each the last);
  * eval.array.splice (n / 4 elements of a copy of xs at n / 2 replaced by 1,
  * 2, 3 in place, as .toSpliced does: 3 at every size) and .splice-reduce
  * (acc.splice(i, 1, x * 2 + 1) over a copy of xs, as map).
@@ -472,6 +474,12 @@ static const bench_case cases[] = {
     { .name = "eval.set.delete-reduce.last", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "ids.toReversed().reduce((s, id) => { s.delete(id); return s; }, new Set(ids))",
       .globals = { { "ids", FIX_IDS, NULL } }, .expect = "new Set([])", .check = CHECK_SAME },
+    { .name = "eval.object.delete-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_Q, .smoke = 10,
+      .source = "rows.reduce((acc, r) => { delete acc[r.id]; return acc; }, Object.fromEntries(rows.map(r => [r.id, r.kwh])))",
+      .globals = { { "rows", FIX_ROWS, NULL } }, .expect = "{}", .check = CHECK_SAME },
+    { .name = "eval.object.delete-reduce.last", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.toReversed().reduce((acc, r) => { delete acc[r.id]; return acc; }, Object.fromEntries(rows.map(r => [r.id, r.kwh])))",
+      .globals = { { "rows", FIX_ROWS, NULL } }, .expect = "{}", .check = CHECK_SAME },
     { .name = "eval.array.splice", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "(ys => { const r = ys.splice(Math.floor(ys.length / 2), Math.floor(ys.length / 4), 1, 2, 3); "
                 "return r.length + ys.length - xs.length; })([...xs])",

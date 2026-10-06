@@ -1792,11 +1792,12 @@ static bool path_key_string(sjs_vm *vm, sjs_value *key) {
     return true;
 }
 
-/* A container the path goes into at `key`. */
+/* A container the path goes into at `key`, to LOAD, STORE or DELETE
+ * (SJS_PATH_*; DROP walks nothing). */
 typedef struct {
     sjs_value value;
     sjs_value key;
-    bool store;
+    uint8_t mode;
 } path_into;
 
 /* An object or an array, which a store changes only while its place holds
@@ -1807,16 +1808,21 @@ static bool path_container(sjs_vm *vm, path_into into) {
     char buffer[32];
     if (v.kind == SJS_UNDEFINED || v.kind == SJS_NULL) {
         bool undefined = v.kind == SJS_UNDEFINED;
-        const char *message = into.store ? (undefined ? "cannot set a property of undefined" : "cannot set a property of null")
-                                         : (undefined ? "cannot read a property of undefined" : "cannot read a property of null");
+        const char *message = into.mode == SJS_PATH_STORE ? (undefined ? "cannot set a property of undefined" : "cannot set a property of null")
+                                                          : (undefined ? "cannot read a property of undefined" : "cannot read a property of null");
+        /* MUTATION: step 3, delete. */
+        if (into.mode == SJS_PATH_DELETE) message = undefined ? "cannot delete a property of undefined" : "cannot delete a property of null";
         fault_named(vm, message, path_key_name(into.key, buffer));
         return false;
     }
     if ((v.kind != SJS_OBJECT && v.kind != SJS_ARRAY) || v.internal != SJS_INTERNAL_NONE) {
-        fault_named(vm, "staticjs assigns to properties of objects and elements of arrays only", path_key_name(into.key, buffer));
+        /* MUTATION: step 3, delete's message. */
+        const char *message = into.mode == SJS_PATH_DELETE ? "staticjs deletes properties of objects only, on a path through objects and arrays"
+                                                           : "staticjs assigns to properties of objects and elements of arrays only";
+        fault_named(vm, message, path_key_name(into.key, buffer));
         return false;
     }
-    if (into.store && !sjs_value_unique(v)) {
+    if (into.mode != SJS_PATH_LOAD && !sjs_value_unique(v)) {
         sjs_vm_fault(vm, path_held);
         return false;
     }
@@ -1828,7 +1834,7 @@ typedef struct {
     sjs_value *place;
     const sjs_string *key;
     sjs_value next;
-    bool store;
+    uint8_t mode;
 } path_walk;
 
 /* The place of the value at the step's key, which the path goes into next;
@@ -1844,7 +1850,7 @@ static sjs_value *path_child(sjs_vm *vm, const path_walk *w) {
     }
     sjs_value child;
     if (sjs_property_get(vm, (sjs_member){ v, w->key }, &child) != SJS_OK) return NULL;
-    bool container = path_container(vm, (path_into){ child, w->next, w->store });
+    bool container = path_container(vm, (path_into){ child, w->next, w->mode });
     sjs_vm_release(vm, child);
     if (container) sjs_vm_fault(vm, "the program is damaged");
     return NULL;
@@ -1952,11 +1958,36 @@ static bool path_end(sjs_vm *vm, const path_last *l) {
     return element ? path_put_element(vm, &s, index) : path_put(vm, &s);
 }
 
-/* PATH: [reference, keys] (LOAD) or [reference, keys, value] (STORE,
+/* MUTATION: step 3, delete (docs/mutation.md, "delete"): the property of
+ * the object at `place` named by `key` goes, and the object shrinks as it
+ * empties (sjs_object_remove). One the object does not have is fine, as in
+ * JavaScript, but for __proto__ and a name of Object.prototype, which
+ * faults as reading it does. An array's element would leave a hole, which
+ * staticjs arrays have none of; JavaScript leaves its length alone. */
+static bool path_delete(sjs_vm *vm, sjs_value *place, sjs_value *key) {
+    if (place->kind != SJS_OBJECT) {
+        char buffer[32];
+        fault_named(vm, "staticjs arrays have no holes, which delete would leave: remove elements with splice", path_key_name(*key, buffer));
+        return false;
+    }
+    if (!path_key_string(vm, key)) return false;
+    const sjs_string *name = SJS_AS_STRING(*key);
+    sjs_object *o = SJS_AS_OBJECT(*place);
+    sjs_removal removal = sjs_object_remove(vm->context, &o, sjs_string_view(name));
+    place->as.heap = &o->h;
+    vm->fuel_used += removal.cost;
+    if (!removal.removed && (sjs_str_equal(sjs_string_view(name), SJS_STR("__proto__")) || on_prototype(SJS_OBJECT, name))) {
+        fault_named(vm, "staticjs objects have no prototype", sjs_string_view(name));
+        return false;
+    }
+    return true;
+}
+
+/* PATH: [reference, keys] (LOAD, DELETE) or [reference, keys, value] (STORE,
  * DROP). Each step costs one unit of fuel. */
 __attribute__((noinline)) static void path_op(sjs_vm *vm, uint32_t keys, uint8_t mode) {
-    uint32_t above = mode == SJS_PATH_LOAD ? 0u : 1u;
-    if (keys == 0 || mode > SJS_PATH_DROP || vm->sp < keys + above + 1u) {
+    uint32_t above = mode == SJS_PATH_LOAD || mode == SJS_PATH_DELETE ? 0u : 1u; /* MUTATION: DELETE, step 3 */
+    if (keys == 0 || mode > SJS_PATH_DELETE || vm->sp < keys + above + 1u) { /* MUTATION: DELETE, step 3 */
         sjs_vm_fault(vm, "the program is damaged");
         return;
     }
@@ -1980,7 +2011,7 @@ __attribute__((noinline)) static void path_op(sjs_vm *vm, uint32_t keys, uint8_t
     sjs_value *place = &vm->stack[reference.boolean];
     for (uint32_t i = 1;; i++) {
         sjs_value *key = &vm->stack[base + i];
-        if (!path_container(vm, (path_into){ *place, *key, store })) return;
+        if (!path_container(vm, (path_into){ *place, *key, mode })) return;
         if (i == keys) break;
         uint32_t index;
         if (place->kind == SJS_ARRAY && path_array_index(*key, &index) && index < SJS_AS_ARRAY(*place)->length) {
@@ -1988,9 +2019,14 @@ __attribute__((noinline)) static void path_op(sjs_vm *vm, uint32_t keys, uint8_t
             continue;
         }
         if (!path_key_string(vm, key)) return;
-        path_walk w = { place, SJS_AS_STRING(*key), vm->stack[base + i + 1u], store };
+        path_walk w = { place, SJS_AS_STRING(*key), vm->stack[base + i + 1u], mode };
         place = path_child(vm, &w);
         if (place == NULL) return;
+    }
+    /* MUTATION: step 3, delete. */
+    if (mode == SJS_PATH_DELETE) {
+        if (path_delete(vm, place, &vm->stack[base + keys])) cut(vm, base);
+        return;
     }
     path_last l = { place, &vm->stack[base + keys], store };
     if (path_end(vm, &l) && store) cut(vm, base);

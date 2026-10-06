@@ -178,7 +178,9 @@ before the call. Such a call, or a chain of them (`s.add(1).add(2)`), may
 also be a statement. So may an assignment to a property or an element of
 such a variable, as deep as it goes (`acc[r.id] = r.kwh`, `o.a[i].n += 1`,
 `o.k ??= []`, `o.n++`), with JavaScript's evaluation order, and to a `let`
-of the function (`let n = 0; n += x;`), which no arrow function may capture.
+of the function (`let n = 0; n += x;`), which no arrow function may capture;
+and `delete` of a property on such a path (`delete acc[k]`), which faults
+on an array, as it would leave a hole.
 The compiler
 refuses any other receiver or target it can see is shared, and the
 evaluator faults when the variable's value, or a container on the path,
@@ -247,7 +249,10 @@ scope of their own. An assignment, `++` and `--` are refused as
 unsupported where JavaScript can assign but staticjs does not (anywhere
 but as a statement, `[a] = xs`, a target whose root is not a variable the
 function owns, `**=` and the bitwise forms: docs/mutation.md), and as a
-syntax error where JavaScript cannot (`1 = 2`, `a + b = 1`, `1++`). In a script, which is sloppy, `eval`, `arguments` and the
+syntax error where JavaScript cannot (`1 = 2`, `a + b = 1`, `1++`).
+`delete` is refused as unsupported anywhere but as a statement, and of
+anything but a property on such a path; of a name it is a syntax error in a
+module, as in strict JavaScript. In a script, which is sloppy, `eval`, `arguments` and the
 words only strict code reserves (`yield`, `let`, ...) are names, which
 staticjs does not bind; in a module they are syntax errors.
 

@@ -963,7 +963,7 @@ static sjs_result path_begin(sjs_compiler *c) {
  * starts end, but one that a MEMBER or an INDEX goes on with. ASSIGN and
  * UPDATE take theirs from the top. */
 static void paths_before(sjs_compiler *c, const sjs_event *e) {
-    if (e->kind == SJS_EV_ASSIGN || e->kind == SJS_EV_UPDATE) return;
+    if (e->kind == SJS_EV_ASSIGN || e->kind == SJS_EV_UPDATE || e->kind == SJS_EV_DELETE) return; /* MUTATION: DELETE, step 3 */
     bool goes_on = e->kind == SJS_EV_MEMBER || e->kind == SJS_EV_INDEX;
     uint32_t n = SJS_BUF_COUNT(c->paths, path);
     while (n > 0) {
@@ -2332,6 +2332,22 @@ static sjs_result compile_update(sjs_compiler *c, const sjs_event *e) {
     return target_store(c, &k, e);
 }
 
+/* MUTATION: DELETE, `delete t;` (docs/mutation.md, "delete"): the target
+ * is a path with one key or more, under the rules of an assignment's, and
+ * PATH removes the property its keys name. The parser refuses a name. */
+static sjs_result compile_delete(sjs_compiler *c, const sjs_event *e) {
+    if (!statement_level(c)) return out_of_order(c, e->at);
+    const path *p = top_path(c);
+    if (p == NULL || p->end != here(c)) {
+        return refuse_later(c, e->start, (refusal){ "staticjs deletes only a property of an object, on a path from a variable the function owns", SJS_STR("") });
+    }
+    if (SJS_BUF_COUNT(c->path_steps, uint32_t) == p->steps_base) return out_of_order(c, e->at);
+    construct k = { 0 };
+    uint8_t taken = assign_target(c, e, &k);
+    if (taken != TARGET_TAKEN) return taken == TARGET_REFUSED ? SJS_OK : SJS_ERR_PROGRAM;
+    return emit_path(c, &k, ins(SJS_OP_PATH, SJS_PATH_DELETE, e->at));
+}
+
 /* BLOCK_END: falling off the end of a body returns undefined. */
 static sjs_result compile_body_end(sjs_compiler *c, const sjs_event *e) {
     if (expect_construct(c, K_FUNCTION, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
@@ -2529,6 +2545,8 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
         return assign_end(c, e);
     case SJS_EV_UPDATE: /* MUTATION */
         return compile_update(c, e);
+    case SJS_EV_DELETE: /* MUTATION */
+        return compile_delete(c, e);
     case SJS_EV_CONST_BEGIN:
         return compile_const_begin(c, e);
     case SJS_EV_CONST_END:

@@ -138,6 +138,7 @@ static const shape_event shape_events[SJS_EV_END + 1] = {
     [SJS_EV_ASSIGN] = { SHAPE_OPEN, 1, 1, SJS_EV_ASSIGN_END, 0, 0 },
     [SJS_EV_ASSIGN_END] = { SHAPE_CLOSE, 0, 0, 0, 0, 0 },
     [SJS_EV_UPDATE] = { SHAPE_POSTFIX, 1, 1, 0, 0, 0 },
+    [SJS_EV_DELETE] = { SHAPE_POSTFIX, 1, 1, 0, 0, 0 },
     [SJS_EV_BIND] = { SHAPE_LEAF, 0, 1, 0, 66, 1 },
     [SJS_EV_ARRAY_PATTERN_BEGIN] = { SHAPE_OPEN, 0, 1, SJS_EV_ARRAY_PATTERN_END, 0, 0 },
     [SJS_EV_PATTERN_INDEX] = { SHAPE_INNER, 0, 0, 0, 0, 0 },
