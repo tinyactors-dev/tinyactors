@@ -2986,11 +2986,11 @@ export const f = () => { state.xs.push(3); return state; };
 
 === a path chain on an object's own function
 (() => { const o = {h: {add: x => x}}; return o.h.add(1).add(2); })()
---- fault array or a set
+--- fault array, a set or a map
 
 === a path sort on an object's own function
 (() => { const o = {h: {sort: f => 1}}; return o.h.sort((a, b) => a - b); })()
---- fault an array or a set
+--- fault an array, a set or a map
 
 === a path call through an optional chain is not one
 (() => { const o = {xs: [1]}; return o?.xs.push(2); })()
@@ -3158,27 +3158,27 @@ export const f = () => { state.xs.push(3); return state; };
 
 === sort then reverse of an object's own functions
 (() => { const o = {sort: f => 5}; return o.sort(x => x).reverse(); })()
---- fault goes on only through an array or a set
+--- fault goes on only through an array, a set or a map
 
 === sort then reverse of an object's own functions, as a statement
 (() => { const o = {sort: f => 5}; o.sort(x => x).reverse(); return o; })()
---- fault goes on only through an array or a set
+--- fault goes on only through an array, a set or a map
 
 === add then add of an object's own functions
 (() => { const h = {add: x => x.length}; const o = {add: x => h}; return o.add(1).add([1, 2]); })()
---- fault goes on only through an array or a set
+--- fault goes on only through an array, a set or a map
 
 === add then add of an object's own functions, as a statement
 (() => { const h = {add: x => x}; const o = {add: x => h}; o.add(1).add(2); return o; })()
---- fault goes on only through an array or a set
+--- fault goes on only through an array, a set or a map
 
 === push after sort of an object's own functions
 (() => { const o = {sort: f => [1]}; return o.sort(x => x).push(2); })()
---- fault goes on only through an array or a set
+--- fault goes on only through an array, a set or a map
 
 === fill then sort of an object's own functions
 (() => { const o = {fill: v => [2, 1]}; return o.fill(0).sort((a, b) => a - b); })()
---- fault goes on only through an array or a set
+--- fault goes on only through an array, a set or a map
 
 === sort of an object's property that is not a function
 (() => { const o = {sort: 5}; return o.sort((a, b) => a - b); })()
@@ -3303,11 +3303,11 @@ export const f = () => { state.xs.push(3); return state; };
 
 === a path sort of an object's own function, as a statement
 (() => { const o = {h: {sort: f => 1}}; o.h.sort((a, b) => a - b); return o; })()
---- fault an array or a set
+--- fault an array, a set or a map
 
 === a path chain of an object's own functions, as a statement
 (() => { const o = {h: {fill: x => x}}; o.h.fill(1).reverse(); return o; })()
---- fault an array or a set
+--- fault an array, a set or a map
 
 
 # Appending to a let (docs/mutation.md, "Appending to a let"): s += e,
@@ -3621,3 +3621,212 @@ Array.from({length: 2000}, (_, i) => i % 7).reduce((acc, x) => { let s = acc; s 
 (() => { const o = {sort: f => 5}; const r = o.sort(x => x); return [r, typeof o.sort]; })()
 --- value
 [5,"function"]
+
+# Map.prototype.set, delete and clear on a map the function owns, or on a
+# path from one (README.md, "Maps"; docs/mutation.md). set gives the map, so
+# it chains; delete gives whether the map had the key; clear undefined.
+
+=== Map set on a map the function owns
+(() => { const m = new Map(); m.set(1, "a"); m.set("b", 2); return m; })()
+--- value
+new Map([[1,"a"],["b",2]])
+
+=== Map set gives the map, so it chains
+(() => { const m = new Map(); m.set(1, "a").set(2, "b").set(1, "c"); return [...m]; })()
+--- value
+[[1,"c"],[2,"b"]]
+
+=== the map a chain of sets gives
+(() => { const m = new Map(); return m.set(1, 2).set(3, 4); })()
+--- value
+new Map([[1,2],[3,4]])
+
+=== the map set gives, kept
+(() => { const m = new Map(); const n = m.set(1, 2); return n; })()
+--- value
+new Map([[1,2]])
+
+=== Map set of a key the map has keeps its place
+(() => { const m = new Map([[1, "a"], [2, "b"], [3, "c"]]); m.set(2, "B"); return [...m]; })()
+--- value
+[[1,"a"],[2,"B"],[3,"c"]]
+
+=== Map set of -0 is 0, and NaN is one key
+(() => { const m = new Map(); m.set(-0, "a"); m.set(0, "b"); m.set(NaN, 1); m.set(0 / 0, 2); return [...m]; })()
+--- value
+[[0,"b"],[NaN,2]]
+
+=== Map set keeps a number, a string and a BigInt apart
+(() => { const m = new Map(); m.set(1, "n"); m.set("1", "s"); m.set(1n, "b"); m.set(10n ** 20n, "big"); return [m.size, m.get(1), m.get("1"), m.get(1n), m.get(100000000000000000000n)]; })()
+--- value
+[4,"n","s","b","big"]
+
+=== Map set of null, undefined and booleans
+(() => { const m = new Map(); m.set(null, 1).set(undefined, 2).set(true, 3).set(false, 4).set(); return [...m]; })()
+--- value
+[[null,1],[undefined,undefined],[true,3],[false,4]]
+
+=== Map set whose value reads the map
+(() => { const m = new Map([["n", 1]]); m.set("n", m.get("n") + 1); return m; })()
+--- value
+new Map([["n",2]])
+
+=== Map delete gives whether the map had the key
+(() => { const m = new Map([[1, "a"], [2, "b"]]); const r = [m.delete(1), m.delete(1), m.delete(3)]; return [r, [...m]]; })()
+--- value
+[[true,false,false],[[2,"b"]]]
+
+=== Map delete of an object gives false
+(() => { const m = new Map([[1, 2]]); return [m.delete({}), m.delete([1]), m.size]; })()
+--- value
+[false,false,1]
+
+=== Map delete of -0 removes 0, and of NaN removes NaN
+(() => { const m = new Map([[0, "z"], [NaN, "n"], [1, "o"]]); return [m.delete(-0), m.delete(NaN), [...m]]; })()
+--- value
+[true,true,[[1,"o"]]]
+
+=== a key deleted and set again goes last
+(() => { const m = new Map([[1, "a"], [2, "b"], [3, "c"]]); m.delete(1); m.set(1, "A"); return [...m]; })()
+--- value
+[[2,"b"],[3,"c"],[1,"A"]]
+
+=== deleting keeps the order of the rest
+(() => { const m = new Map([[1, 1], [2, 2], [3, 3], [4, 4]]); m.delete(2); m.delete(4); return [...m, m.size]; })()
+--- value
+[[1,1],[3,3],2]
+
+=== Map clear
+(() => { const m = new Map([[1, 2], [3, 4]]); const r = m.clear(); m.set(5, 6); return [r, [...m]]; })()
+--- value
+[undefined,[[5,6]]]
+
+=== the reduce idiom builds a map in place
+[{k: "a", v: 1}, {k: "b", v: 2}, {k: "a", v: 3}].reduce((acc, x) => { acc.set(x.k, x); return acc; }, new Map())
+--- value
+new Map([["a",{"k":"a","v":3}],["b",{"k":"b","v":2}]])
+
+=== counting in a reduce, with set as its value
+["x", "y", "x", "z", "x"].reduce((m, s) => m.set(s, (m.get(s) ?? 0) + 1), new Map())
+--- value
+new Map([["x",3],["y",1],["z",1]])
+
+=== a reduce's initial value a const reads last
+(() => { const m = new Map([[0, 0]]); return [1, 2].reduce((acc, x) => acc.set(x, x * 2), m); })()
+--- value
+new Map([[0,0],[1,2],[2,4]])
+
+=== many sets past the index threshold
+Array.from({ length: 60 }, (x, i) => i % 25).reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), new Map())
+--- value
+new Map([[0,3],[1,3],[2,3],[3,3],[4,3],[5,3],[6,3],[7,3],[8,3],[9,3],[10,2],[11,2],[12,2],[13,2],[14,2],[15,2],[16,2],[17,2],[18,2],[19,2],[20,2],[21,2],[22,2],[23,2],[24,2]])
+
+=== many deletes past the index threshold, and a shrinking map
+(m => [m.size, m.get(35), m.get(5), [...m.keys()]])(Array.from({ length: 30 }, (x, i) => i).reduce((m, k) => { m.delete(k); return m; }, new Map(Array.from({ length: 40 }, (x, i) => [i, i * 2]))))
+--- value
+[10,70,undefined,[30,31,32,33,34,35,36,37,38,39]]
+
+=== set and delete in turn past the index threshold
+(m => [...m])(Array.from({ length: 50 }, (x, i) => i).reduce((m, i) => { if (i % 3 === 2) m.delete(i - 1); else m.set(i % 17, i); return m; }, new Map()))
+--- value
+[[0,34],[3,37],[6,40],[9,43],[12,46],[15,49],[1,18],[2,36],[4,21],[5,39],[7,24],[8,42],[10,27],[11,45],[13,30],[14,48],[16,33]]
+
+=== clear then set past the index threshold
+(m => [...m])(Array.from({ length: 30 }, (x, i) => i).reduce((m, i) => { if (i === 20) m.clear(); m.set(i, -i); return m; }, new Map()))
+--- value
+[[20,-20],[21,-21],[22,-22],[23,-23],[24,-24],[25,-25],[26,-26],[27,-27],[28,-28],[29,-29]]
+
+=== set, delete and clear through a path
+(() => { const state = { byID: new Map() }; state.byID.set("a", 1); state.byID.set("b", 2).set("c", 3); const had = state.byID.delete("a"); return [had, [...state.byID]]; })()
+--- value
+[true,[["b",2],["c",3]]]
+
+=== clear through a path
+(() => { const o = { m: new Map([[1, 2]]) }; const r = o.m.clear(); return [r, o.m.size]; })()
+--- value
+[undefined,0]
+
+=== the map a set through a path gives
+(() => { const o = { m: new Map() }; const n = o.m.set(1, 2); return [n, ...o.m]; })()
+--- value
+[new Map([[1,2]]),[1,2]]
+
+=== a path's set in reduce
+[{id: "a", n: 1}, {id: "b", n: 2}, {id: "a", n: 3}].reduce((acc, r) => { acc.byID.set(r.id, r.n); return acc; }, { byID: new Map() }).byID
+--- value
+new Map([["a",3],["b",2]])
+
+=== a map that is an array's element
+(() => { const xs = [new Map()]; xs[0].set("k", "v"); return xs; })()
+--- value
+[new Map([["k","v"]])]
+
+=== a let's map
+(() => { let m = new Map(); m.set(1, 2); m = new Map([[3, 4]]); m.set(5, 6); return m; })()
+--- value
+new Map([[3,4],[5,6]])
+
+=== after its iterator is read, a map can change
+(() => { const m = new Map([[1, 2]]); const ks = [...m.keys()]; m.set(3, 4); return [ks, [...m]]; })()
+--- value
+[[1],[[1,2],[3,4]]]
+
+=== an object as a key of set faults
+(() => { const m = new Map(); m.set({}, 1); return m; })()
+--- fault identity
+
+=== an array as a key through a path faults
+(() => { const o = {m: new Map()}; o.m.set([1], 1); return o; })()
+--- fault identity
+
+=== set of the map in itself faults
+(() => { const m = new Map(); m.set(1, m); return m; })()
+--- fault held elsewhere
+
+=== set on a map another variable holds faults
+(() => { const m = new Map(); const k = [m][0]; k.set(1, 2); return m; })()
+--- fault held elsewhere
+
+=== set on a reduce's initial value a const still holds faults
+(() => { const m = new Map(); const r = [1].reduce((acc, x) => acc.set(x, x), m); return [r, m]; })()
+--- fault held elsewhere
+
+=== an iterator holds its map, which cannot change while it lives
+(() => { const m = new Map([[1, 2]]); const it = m.keys(); m.set(3, 4); return [...it]; })()
+--- fault held elsewhere
+
+=== forEach's callback cannot change its map
+new Map([[1, 2]]).forEach((v, k, m) => m.set(k, v + 1))
+--- fault held elsewhere
+
+=== set on a captured map is refused
+(() => { const m = new Map(); const f = () => m.size; m.set(1, 2); return f(); })()
+--- error unsupported captured
+
+=== set on a map captured by a callback is refused
+(() => { const m = new Map(); [1].map(x => m.set(x, x)); return m; })()
+--- error unsupported captured
+
+=== set on a map copied before is refused
+(() => { const m = new Map(); const n = m; m.set(1, 2); return n; })()
+--- error unsupported copied
+
+=== delete of a map passed before is refused
+(() => { const m = new Map([[1, 2]]); const s = new Set([m.size]); const n = [m]; m.delete(1); return n; })()
+--- error unsupported stored
+
+=== set on a map literal faults
+new Map().set(1, 2)
+--- fault changes its receiver
+
+=== assigning a map's property faults
+(() => { const m = new Map(); m.x = 1; return m; })()
+--- fault assigns to properties of objects
+
+=== assigning a map's size faults
+(() => { const m = new Map(); m.size = 1; return m; })()
+--- fault assigns to properties of objects
+
+=== delete of a map's property faults
+(() => { const m = new Map([["x", 1]]); delete m.x; return m; })()
+--- fault deletes properties of objects

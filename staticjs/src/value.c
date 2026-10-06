@@ -945,19 +945,43 @@ sjs_removal sjs_object_remove(sjs_context *context, sjs_object **object, sjs_str
     return out;
 }
 
-sjs_removal sjs_set_remove(sjs_context *context, sjs_array **set, sjs_value element) {
-    sjs_array *a = *set;
-    lookup_hit hit = keyed_hit(a, element, 1u);
+/* A key among a set's elements (stride 1) or a map's keys (stride 2). */
+typedef struct {
+    sjs_value key;
+    uint32_t stride;
+} keyed_item;
+
+/* A set's element, or a map's key and its value, removed: the items after
+ * it move down by the stride. Inlined with its stride, so a set's removal
+ * compiles as it did before maps shared it. */
+__attribute__((always_inline)) static inline sjs_removal keyed_remove(sjs_context *context, sjs_array **keyed, keyed_item item) {
+    sjs_value key = item.key;
+    uint32_t stride = item.stride;
+    sjs_array *a = *keyed;
+    lookup_hit hit = keyed_hit(a, key, stride);
     sjs_removal out = { hit.position != UINT32_MAX, removal_cost(&a->h, a->index, hit) };
     if (!out.removed) return out;
     if (a->index != NULL) lookup_remove(&a->h, a->index, hit);
-    sjs_value gone = a->items[hit.position];
-    for (uint32_t i = hit.position + 1u; i < a->length; i++) a->items[i - 1u] = a->items[i];
-    a->length--;
+    uint32_t at = hit.position * stride;
+    sjs_value gone = a->items[at];
+    sjs_value value = stride == 2u ? a->items[at + 1u] : sjs_undefined();
+    for (uint32_t i = at + stride; i < a->length; i++) a->items[i - stride] = a->items[i];
+    a->length -= stride;
     lookup_shrink(context, &a->h);
-    sjs_array_shrink(context, set);
+    sjs_array_shrink(context, keyed);
     sjs_release(context, gone);
+    sjs_release(context, value);
     return out;
+}
+
+sjs_removal sjs_set_remove(sjs_context *context, sjs_array **set, sjs_value element) {
+    return keyed_remove(context, set, (keyed_item){ element, 1u });
+}
+
+/* MUTATION: Map.prototype.delete. A map's clear is a set's (sjs_set_clear),
+ * which releases its items, keys and values alike. */
+sjs_removal sjs_map_remove(sjs_context *context, sjs_array **map, sjs_value key) {
+    return keyed_remove(context, map, (keyed_item){ key, 2u });
 }
 
 void sjs_set_clear(sjs_context *context, sjs_array **set) {

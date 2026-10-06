@@ -249,6 +249,7 @@ chaining() <- MEMBER{key: "sort"}(mutable());
 chaining() <- MEMBER{key: "reverse"}(mutable());
 chaining() <- MEMBER{key: "fill"}(mutable());
 chaining() <- MEMBER{key: "add"}(mutable());
+chaining() <- MEMBER{key: "set"}(mutable());
 mutating() <- chaining();
 mutating() <- MEMBER{key: "push"}(mutable());
 mutating() <- MEMBER{key: "pop"}(mutable());

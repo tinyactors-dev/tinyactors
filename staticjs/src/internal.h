@@ -399,7 +399,10 @@ typedef struct {
 } sjs_removal;
 sjs_removal sjs_object_remove(sjs_context *context, sjs_object **object, sjs_str key);
 sjs_removal sjs_set_remove(sjs_context *context, sjs_array **set, sjs_value element);
+/* A set's or a map's items all released, and its capacity shrunk. */
 void sjs_set_clear(sjs_context *context, sjs_array **set);
+/* MUTATION: Map.prototype.delete: a map's key and its value. */
+sjs_removal sjs_map_remove(sjs_context *context, sjs_array **map, sjs_value key);
 /* MUTATION: an array or a set the caller holds alone, reallocated smaller
  * when its items fill under a quarter of its capacity. */
 void sjs_array_shrink(sjs_context *context, sjs_array **array);
@@ -640,7 +643,11 @@ typedef enum {
     /* MUTATION: removal (docs/mutation.md, "Removal"). */
     SJS_METHOD_SET_CLEAR,
     SJS_METHOD_SET_DELETE,
-    SJS_METHOD_ARRAY_SPLICE
+    SJS_METHOD_ARRAY_SPLICE,
+    /* MUTATION: a map's set, delete and clear (docs/mutation.md). */
+    SJS_METHOD_MAP_SET,
+    SJS_METHOD_MAP_DELETE,
+    SJS_METHOD_MAP_CLEAR
 } sjs_builtin_id;
 
 /* The built-in function `Namespace.name` or bare `name`; NONE if unknown. */
@@ -683,11 +690,12 @@ sjs_builtin_id sjs_method_of(const sjs_name *name, uint8_t kind);
 sjs_value sjs_builtin_value(sjs_builtin_id id);
 bool sjs_builtin_loops(sjs_builtin_id id);
 /* MUTATION: the method `name` names that changes a receiver of kind `kind`
- * (SJS_ARRAY or SJS_SET); NONE if it names none. sjs_mutation_named: the
- * one of whichever kind has it, what the compiler knows from the name. */
+ * (SJS_ARRAY, SJS_SET or SJS_MAP); NONE if it names none. sjs_mutation_named:
+ * the one of whichever kind has it, what the compiler knows from the name
+ * (a set's delete and clear for a map's too, which return alike). */
 sjs_builtin_id sjs_mutation_of(const sjs_name *name, uint8_t kind);
 sjs_builtin_id sjs_mutation_named(const sjs_name *name);
-/* MUTATION: does the method return its receiver (sort, reverse, fill, add),
+/* MUTATION: does the method return its receiver (sort, reverse, fill, add, set),
  * rather than something else (push and unshift a length, pop and shift an
  * element)? */
 bool sjs_mutation_returns_receiver(sjs_builtin_id id);

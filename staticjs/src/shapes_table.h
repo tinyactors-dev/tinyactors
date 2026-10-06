@@ -19,9 +19,9 @@
 #define SHAPE_RULE_COUNT 67u
 #define SHAPE_CHAIN_COUNT 0u
 #define SHAPE_NUMBER_COUNT 0u
-#define SHAPE_TEXT_COUNT 11u
+#define SHAPE_TEXT_COUNT 12u
 #define SHAPE_ANCHORED_NONTERMINALS 11u /* MUTATION: the anchored lane's */
-#define SHAPE_ANCHORED_RULE_COUNT 24u
+#define SHAPE_ANCHORED_RULE_COUNT 25u
 #define SHAPE_ANCHORED_CHAIN_COUNT 5u
 
 enum { SHAPE_LEAF = 1, SHAPE_POSTFIX, SHAPE_POSTFIX_COUNT, SHAPE_OPEN, SHAPE_INNER, SHAPE_CLOSE };
@@ -349,7 +349,7 @@ static const shape_test shape_tests[] = {
     { SHAPE_FIELD_TEXT, 0, 1, 0 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 0 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 1 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 2 },
     { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 3 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 4 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 5 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 6 },
     { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 7 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 8 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 9 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 10 },
-    { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, SJS_OP_ADD }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, SJS_OP_ADD }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, SJS_OP_ADD },
+    { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 11 }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, SJS_OP_ADD }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, SJS_OP_ADD }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, SJS_OP_ADD },
 };
 
 static const shape_child shape_children[] = {
@@ -572,18 +572,18 @@ static const double shape_numbers[] = { 0.0 };
 
 static const sjs_str shape_texts[] = {
     { "sort", 4u }, { "reverse", 7u }, { "fill", 4u }, { "add", 3u },
-    { "push", 4u }, { "pop", 3u }, { "shift", 5u }, { "unshift", 7u },
-    { "splice", 6u }, { "delete", 6u }, { "clear", 5u },
+    { "set", 3u }, { "push", 4u }, { "pop", 3u }, { "shift", 5u },
+    { "unshift", 7u }, { "splice", 6u }, { "delete", 6u }, { "clear", 5u },
 };
 
 /* MUTATION: the anchored lane's rules, which match the rewrites. */
 static const shape_anchored_event shape_anchored_events[SJS_EV_END + 1] = {
     [SJS_EV_NAME] = { 0, 1 },
-    [SJS_EV_MEMBER] = { 1, 12 },
-    [SJS_EV_INDEX] = { 13, 1 },
-    [SJS_EV_CALL_BEGIN] = { 14, 2 },
-    [SJS_EV_BINARY] = { 16, 2 },
-    [SJS_EV_ASSIGN] = { 18, 1 },
+    [SJS_EV_MEMBER] = { 1, 13 },
+    [SJS_EV_INDEX] = { 14, 1 },
+    [SJS_EV_CALL_BEGIN] = { 15, 2 },
+    [SJS_EV_BINARY] = { 17, 2 },
+    [SJS_EV_ASSIGN] = { 19, 1 },
 };
 
 static const shape_anchored_rule shape_anchored_rules[] = {
@@ -599,43 +599,45 @@ static const shape_anchored_rule shape_anchored_rules[] = {
     { 7, SHAPE_FORM_POSTFIX, 8, 1, 99 },
     /* 5: chaining <- MEMBER{key: "add"}(mutable) */
     { 7, SHAPE_FORM_POSTFIX, 8, 1, 100 },
-    /* 6: mutating <- MEMBER{key: "push"}(mutable) */
-    { 4, SHAPE_FORM_POSTFIX, 8, 1, 101 },
-    /* 7: mutating <- MEMBER{key: "pop"}(mutable) */
+    /* 6: chaining <- MEMBER{key: "set"}(mutable) */
+    { 7, SHAPE_FORM_POSTFIX, 8, 1, 101 },
+    /* 7: mutating <- MEMBER{key: "push"}(mutable) */
     { 4, SHAPE_FORM_POSTFIX, 8, 1, 102 },
-    /* 8: mutating <- MEMBER{key: "shift"}(mutable) */
+    /* 8: mutating <- MEMBER{key: "pop"}(mutable) */
     { 4, SHAPE_FORM_POSTFIX, 8, 1, 103 },
-    /* 9: mutating <- MEMBER{key: "unshift"}(mutable) */
+    /* 9: mutating <- MEMBER{key: "shift"}(mutable) */
     { 4, SHAPE_FORM_POSTFIX, 8, 1, 104 },
-    /* 10: mutating <- MEMBER{key: "splice"}(mutable) */
+    /* 10: mutating <- MEMBER{key: "unshift"}(mutable) */
     { 4, SHAPE_FORM_POSTFIX, 8, 1, 105 },
-    /* 11: mutating <- MEMBER{key: "delete"}(mutable) */
+    /* 11: mutating <- MEMBER{key: "splice"}(mutable) */
     { 4, SHAPE_FORM_POSTFIX, 8, 1, 106 },
-    /* 12: mutating <- MEMBER{key: "clear"}(mutable) */
+    /* 12: mutating <- MEMBER{key: "delete"}(mutable) */
     { 4, SHAPE_FORM_POSTFIX, 8, 1, 107 },
-    /* 13: stepped <- INDEX(path, _) */
-    { 9, SHAPE_FORM_POSTFIX, 10, 0, 108 },
-    /* 14: mutable <- CALL_BEGIN(chaining, ...) */
-    { 8, SHAPE_FORM_BRACKET, 7, 0, 108 },
-    /* 15: MUTATE_PATH <- CALL_BEGIN(mutating, ...) */
-    { 1, SHAPE_FORM_BRACKET, 4, 0, 108 },
-    /* 16: summed <- BINARY{op: ADD}(named, _) */
-    { 6, SHAPE_FORM_POSTFIX, 5, 1, 108 },
-    /* 17: summed <- BINARY{op: ADD}(summed, _) */
-    { 6, SHAPE_FORM_POSTFIX, 6, 1, 109 },
-    /* 18: APPEND <- ASSIGN{op: ADD}(named, ...) */
-    { 2, SHAPE_FORM_BRACKET, 5, 1, 110 },
-    /* 19: path <- named */
+    /* 13: mutating <- MEMBER{key: "clear"}(mutable) */
+    { 4, SHAPE_FORM_POSTFIX, 8, 1, 108 },
+    /* 14: stepped <- INDEX(path, _) */
+    { 9, SHAPE_FORM_POSTFIX, 10, 0, 109 },
+    /* 15: mutable <- CALL_BEGIN(chaining, ...) */
+    { 8, SHAPE_FORM_BRACKET, 7, 0, 109 },
+    /* 16: MUTATE_PATH <- CALL_BEGIN(mutating, ...) */
+    { 1, SHAPE_FORM_BRACKET, 4, 0, 109 },
+    /* 17: summed <- BINARY{op: ADD}(named, _) */
+    { 6, SHAPE_FORM_POSTFIX, 5, 1, 109 },
+    /* 18: summed <- BINARY{op: ADD}(summed, _) */
+    { 6, SHAPE_FORM_POSTFIX, 6, 1, 110 },
+    /* 19: APPEND <- ASSIGN{op: ADD}(named, ...) */
+    { 2, SHAPE_FORM_BRACKET, 5, 1, 111 },
+    /* 20: path <- named */
     { 10, SHAPE_FORM_CHAIN, 5, 0, 0 },
-    /* 20: path <- stepped */
+    /* 21: path <- stepped */
     { 10, SHAPE_FORM_CHAIN, 9, 0, 0 },
-    /* 21: mutable <- stepped */
+    /* 22: mutable <- stepped */
     { 8, SHAPE_FORM_CHAIN, 9, 0, 0 },
-    /* 22: mutating <- chaining */
+    /* 23: mutating <- chaining */
     { 4, SHAPE_FORM_CHAIN, 7, 0, 0 },
-    /* 23: APPEND_SUM <- summed */
+    /* 24: APPEND_SUM <- summed */
     { 3, SHAPE_FORM_CHAIN, 6, 0, 0 },
 };
 
 /* The anchored chain rules, each after those that derive its child. */
-static const uint16_t shape_anchored_chain_rules[] = { 19, 20, 21, 22, 23 };
+static const uint16_t shape_anchored_chain_rules[] = { 20, 21, 22, 23, 24 };
