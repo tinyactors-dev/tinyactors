@@ -3007,3 +3007,305 @@ export const f = () => { state.xs.push(3); return state; };
 === a path from a call is not one
 (() => { const f = () => ({xs: []}); return f().xs.push(1); })()
 --- fault only on a variable
+
+# An object's own function named like a method that changes its receiver,
+# called on a variable: an ordinary call of the property, which leaves the
+# variable as it was. A chain through one faults (it need not return its
+# object), where JavaScript calls on what it returned.
+=== sort of an object's own function, as a value
+(() => { const o = {sort: f => 5}; const r = o.sort(x => x); return [r, o]; })()
+--- value
+[5,{"sort":<function>}]
+
+=== sort of an object's own function, as a statement
+(() => { const o = {sort: f => 5}; o.sort(x => x); return o; })()
+--- value
+{"sort":<function>}
+
+=== sort of an object's own function that returns an array
+(() => { const o = {sort: f => [3, 1]}; const r = o.sort((a, b) => a - b); return [r, o]; })()
+--- value
+[[3,1],{"sort":<function>}]
+
+=== sort of an object's own function, in a let
+(() => { let o = {sort: f => f(2, 1)}; const r = o.sort((a, b) => a - b); o = [r]; o.push(r); return o; })()
+--- value
+[1,1]
+
+=== sort of an object's own function, returned
+(() => { const o = {sort: f => "s"}; return o.sort((a, b) => a - b); })()
+--- value
+"s"
+
+=== push of an object's own function
+(() => { const o = {push: (...a) => a.length}; const r = o.push(1, 2); return [r, o]; })()
+--- value
+[2,{"push":<function>}]
+
+=== push of an object's own function, as a statement
+(() => { const o = {push: (...a) => a.length}; o.push(1, 2); return o; })()
+--- value
+{"push":<function>}
+
+=== pop of an object's own function
+(() => { const o = {pop: () => 7}; return [o.pop(), o]; })()
+--- value
+[7,{"pop":<function>}]
+
+=== pop of an object's own function, as a statement
+(() => { const o = {pop: () => 7}; o.pop(); return o; })()
+--- value
+{"pop":<function>}
+
+=== shift of an object's own function
+(() => { const o = {shift: () => 7}; return [o.shift(), o]; })()
+--- value
+[7,{"shift":<function>}]
+
+=== shift of an object's own function, as a statement
+(() => { const o = {shift: () => 7}; o.shift(); return o; })()
+--- value
+{"shift":<function>}
+
+=== unshift of an object's own function
+(() => { const o = {unshift: (...a) => a}; return [o.unshift(1, 2), o]; })()
+--- value
+[[1,2],{"unshift":<function>}]
+
+=== unshift of an object's own function, as a statement
+(() => { const o = {unshift: (...a) => a}; o.unshift(1, 2); return o; })()
+--- value
+{"unshift":<function>}
+
+=== reverse of an object's own function
+(() => { const o = {reverse: () => [2, 1]}; return [o.reverse(), o]; })()
+--- value
+[[2,1],{"reverse":<function>}]
+
+=== reverse of an object's own function, as a statement
+(() => { const o = {reverse: () => [2, 1]}; o.reverse(); return o; })()
+--- value
+{"reverse":<function>}
+
+=== fill of an object's own function
+(() => { const o = {fill: (v, s, e) => [v, s, e]}; return [o.fill(0, 1), o]; })()
+--- value
+[[0,1,undefined],{"fill":<function>}]
+
+=== fill of an object's own function, as a statement
+(() => { const o = {fill: (v, s, e) => [v, s, e]}; o.fill(0, 1); return o; })()
+--- value
+{"fill":<function>}
+
+=== splice of an object's own function
+(() => { const o = {splice: (s, n) => s + n}; return [o.splice(1, 2), o]; })()
+--- value
+[3,{"splice":<function>}]
+
+=== splice of an object's own function, as a statement
+(() => { const o = {splice: (s, n) => s + n}; o.splice(1, 2); return o; })()
+--- value
+{"splice":<function>}
+
+=== add of an object's own function
+(() => { const o = {add: x => x + 1}; return [o.add(1), o]; })()
+--- value
+[2,{"add":<function>}]
+
+=== add of an object's own function, as a statement
+(() => { const o = {add: x => x + 1}; o.add(1); return o; })()
+--- value
+{"add":<function>}
+
+=== delete of an object's own function
+(() => { const o = {delete: x => x === 1}; return [o.delete(1), o]; })()
+--- value
+[true,{"delete":<function>}]
+
+=== delete of an object's own function, as a statement
+(() => { const o = {delete: x => x === 1}; o.delete(1); return o; })()
+--- value
+{"delete":<function>}
+
+=== clear of an object's own function
+(() => { const o = {clear: () => "c"}; return [o.clear(), o]; })()
+--- value
+["c",{"clear":<function>}]
+
+=== clear of an object's own function, as a statement
+(() => { const o = {clear: () => "c"}; o.clear(); return o; })()
+--- value
+{"clear":<function>}
+
+=== an object's own function of a parameter
+((o) => { const a = o.pop(); const b = o.push(2); return [a, b, o]; })({pop: () => [1], push: x => x})
+--- value
+[[1],2,{"pop":<function>,"push":<function>}]
+
+=== an object's own function, then the variable changes
+(() => { const o = {push: x => x}; const r = o.push(1); return [r, o.push(2)]; })()
+--- value
+[1,2]
+
+=== a chain of an object's own functions that return no receiver
+(() => { const o = {push: x => ({push: y => x + y})}; return o.push(1).push(2); })()
+--- value
+3
+
+=== a chain of an object's own functions that return no receiver, as a statement
+(() => { const o = {pop: () => ({pop: () => 1})}; o.pop().pop(); return o; })()
+--- error unsupported no effect
+
+=== sort then reverse of an object's own functions
+(() => { const o = {sort: f => 5}; return o.sort(x => x).reverse(); })()
+--- fault goes on only through an array or a set
+
+=== sort then reverse of an object's own functions, as a statement
+(() => { const o = {sort: f => 5}; o.sort(x => x).reverse(); return o; })()
+--- fault goes on only through an array or a set
+
+=== add then add of an object's own functions
+(() => { const h = {add: x => x.length}; const o = {add: x => h}; return o.add(1).add([1, 2]); })()
+--- fault goes on only through an array or a set
+
+=== add then add of an object's own functions, as a statement
+(() => { const h = {add: x => x}; const o = {add: x => h}; o.add(1).add(2); return o; })()
+--- fault goes on only through an array or a set
+
+=== push after sort of an object's own functions
+(() => { const o = {sort: f => [1]}; return o.sort(x => x).push(2); })()
+--- fault goes on only through an array or a set
+
+=== fill then sort of an object's own functions
+(() => { const o = {fill: v => [2, 1]}; return o.fill(0).sort((a, b) => a - b); })()
+--- fault goes on only through an array or a set
+
+=== sort of an object's property that is not a function
+(() => { const o = {sort: 5}; return o.sort((a, b) => a - b); })()
+--- fault not a function
+
+=== sort of an object's property that is not a function, as a statement
+(() => { const o = {sort: 5}; o.sort((a, b) => a - b); return o; })()
+--- fault not a function
+
+=== sort of an object without the property
+(() => { const o = {}; o.sort((a, b) => a - b); return o; })()
+--- fault not a function
+
+=== an array's sort after an object's own sort, of one let
+(() => { let o = {sort: f => [3, 1, 2]}; o = o.sort(x => x); o.sort((a, b) => a - b); return o; })()
+--- value
+[1,2,3]
+
+
+# The same through a path: an ordinary call of the property, but for sort and
+# a chain, which fault there, as they need the container back.
+
+=== a path call of an object's own push
+(() => { const o = {h: {push: (...a) => a.length}}; const r = o.h.push(1, 2); return [r, o]; })()
+--- value
+[2,{"h":{"push":<function>}}]
+
+=== a path call of an object's own push, as a statement
+(() => { const o = {h: {push: (...a) => a.length}}; o.h.push(1, 2); return o; })()
+--- value
+{"h":{"push":<function>}}
+
+=== a path call of an object's own pop
+(() => { const o = {h: {pop: (...a) => a.length}}; const r = o.h.pop(1, 2); return [r, o]; })()
+--- value
+[2,{"h":{"pop":<function>}}]
+
+=== a path call of an object's own pop, as a statement
+(() => { const o = {h: {pop: (...a) => a.length}}; o.h.pop(1, 2); return o; })()
+--- value
+{"h":{"pop":<function>}}
+
+=== a path call of an object's own shift
+(() => { const o = {h: {shift: (...a) => a.length}}; const r = o.h.shift(1, 2); return [r, o]; })()
+--- value
+[2,{"h":{"shift":<function>}}]
+
+=== a path call of an object's own shift, as a statement
+(() => { const o = {h: {shift: (...a) => a.length}}; o.h.shift(1, 2); return o; })()
+--- value
+{"h":{"shift":<function>}}
+
+=== a path call of an object's own unshift
+(() => { const o = {h: {unshift: (...a) => a.length}}; const r = o.h.unshift(1, 2); return [r, o]; })()
+--- value
+[2,{"h":{"unshift":<function>}}]
+
+=== a path call of an object's own unshift, as a statement
+(() => { const o = {h: {unshift: (...a) => a.length}}; o.h.unshift(1, 2); return o; })()
+--- value
+{"h":{"unshift":<function>}}
+
+=== a path call of an object's own reverse
+(() => { const o = {h: {reverse: (...a) => a.length}}; const r = o.h.reverse(1, 2); return [r, o]; })()
+--- value
+[2,{"h":{"reverse":<function>}}]
+
+=== a path call of an object's own reverse, as a statement
+(() => { const o = {h: {reverse: (...a) => a.length}}; o.h.reverse(1, 2); return o; })()
+--- value
+{"h":{"reverse":<function>}}
+
+=== a path call of an object's own fill
+(() => { const o = {h: {fill: (...a) => a.length}}; const r = o.h.fill(1, 2); return [r, o]; })()
+--- value
+[2,{"h":{"fill":<function>}}]
+
+=== a path call of an object's own fill, as a statement
+(() => { const o = {h: {fill: (...a) => a.length}}; o.h.fill(1, 2); return o; })()
+--- value
+{"h":{"fill":<function>}}
+
+=== a path call of an object's own splice
+(() => { const o = {h: {splice: (...a) => a.length}}; const r = o.h.splice(1, 2); return [r, o]; })()
+--- value
+[2,{"h":{"splice":<function>}}]
+
+=== a path call of an object's own splice, as a statement
+(() => { const o = {h: {splice: (...a) => a.length}}; o.h.splice(1, 2); return o; })()
+--- value
+{"h":{"splice":<function>}}
+
+=== a path call of an object's own add
+(() => { const o = {h: {add: (...a) => a.length}}; const r = o.h.add(1, 2); return [r, o]; })()
+--- value
+[2,{"h":{"add":<function>}}]
+
+=== a path call of an object's own add, as a statement
+(() => { const o = {h: {add: (...a) => a.length}}; o.h.add(1, 2); return o; })()
+--- value
+{"h":{"add":<function>}}
+
+=== a path call of an object's own delete
+(() => { const o = {h: {delete: (...a) => a.length}}; const r = o.h.delete(1, 2); return [r, o]; })()
+--- value
+[2,{"h":{"delete":<function>}}]
+
+=== a path call of an object's own delete, as a statement
+(() => { const o = {h: {delete: (...a) => a.length}}; o.h.delete(1, 2); return o; })()
+--- value
+{"h":{"delete":<function>}}
+
+=== a path call of an object's own clear
+(() => { const o = {h: {clear: (...a) => a.length}}; const r = o.h.clear(1, 2); return [r, o]; })()
+--- value
+[2,{"h":{"clear":<function>}}]
+
+=== a path call of an object's own clear, as a statement
+(() => { const o = {h: {clear: (...a) => a.length}}; o.h.clear(1, 2); return o; })()
+--- value
+{"h":{"clear":<function>}}
+
+=== a path sort of an object's own function, as a statement
+(() => { const o = {h: {sort: f => 1}}; o.h.sort((a, b) => a - b); return o; })()
+--- fault an array or a set
+
+=== a path chain of an object's own functions, as a statement
+(() => { const o = {h: {fill: x => x}}; o.h.fill(1).reverse(); return o; })()
+--- fault an array or a set
+

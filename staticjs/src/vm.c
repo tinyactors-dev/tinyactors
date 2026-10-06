@@ -1664,7 +1664,16 @@ __attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t 
     bool chain = (flags & SJS_CALL_CHAIN) != 0;
     sjs_value f = vm->stack[callee];
     if (f.internal != SJS_INTERNAL_METHOD || f.boolean < SJS_METHOD_MUTATION_FIRST) {
-        /* An object's property, called as any method is. */
+        /* An object's property, called as any method is: the variable keeps
+         * its value. A sort's SORTED, next, would put the call's result in
+         * the variable, so it is skipped; with CHAIN it would hand a
+         * reference to the next method, which the property's result is not. */
+        vm_frame *frame = &vm->frames[vm->frame_count - 1u];
+        const uint8_t *next = frame->program->code + frame->pc;
+        if (*next == SJS_OP_SORTED) {
+            chain = (next[3] & SJS_CALL_CHAIN) != 0;
+            frame->pc += 4u;
+        }
         if (chain) {
             sjs_vm_fault(vm, "a chain of methods that change their receiver goes on only through an array or a set");
             return false;
