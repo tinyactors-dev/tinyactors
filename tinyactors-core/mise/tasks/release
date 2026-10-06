@@ -3,6 +3,7 @@
 #USAGE arg "<version>" help="The version to release, MAJOR.MINOR.PATCH"
 #USAGE flag "--publish" help="Commit the version, tag tinyactors-core/v<version>, push, and create the GitHub release"
 #USAGE flag "--skip-containers" help="Leave out the Linux container smoke tests (no Docker)"
+#USAGE flag "--skip-tests" help="Leave core's test task out of the checks, for a commit whose tests passed already; every build, symbol check, packed test, smoke test and wasm test still runs"
 #USAGE flag "--build-only" help="Only build, verify and pack (no checks, no version set, nothing committed): a look at the packaging before a release"
 # vim:ft=ruby
 
@@ -10,6 +11,7 @@
 # mise run release -- 0.2.0 --publish          the same, then tag tinyactors-core/v0.2.0 and release
 # mise run release -- 0.2.0 --skip-containers  no Linux container smoke tests (no Docker)
 # mise run release -- 0.2.0 --build-only       only build, verify and pack: no checks, nothing versioned
+# mise run release -- 0.2.0 --skip-tests       the release without core's test task, which passed already
 #
 # The libraries of Core::LIBRARIES are released together, under one tag and
 # version (root ADR 0001, decisions 19 and 20). Each ships its header, its
@@ -31,6 +33,8 @@ argv << '--publish' if ENV['usage_publish'] == 'true'
 argv << '--skip-containers' if ENV['usage_skip_containers'] == 'true'
 argv << '--build-only' if ENV['usage_build_only'] == 'true'
 argv = argv.reject(&:empty?).uniq
+skip_tests = ENV['usage_skip_tests'] == 'true' || !argv.delete('--skip-tests').nil?
+puts "release: --skip-tests: core's test task does not run" if skip_tests
 core = Core.release_project(Core.library('tinyactors'))
 runtime = Core.release_project(Core.library('tinyactors_runtime'))
 ecmascript = Core.release_project(Core.library('tinyactors_datamodel_ecmascript'))
@@ -97,9 +101,9 @@ CRelease.release(
   directory: 'tinyactors-core',
   title: "tinyactors-core #{argv.reject { |arg| arg.start_with?('--') }.first}",
   argv: argv,
-  # The whole test task, once (api --check and wasm:test among it), and the
-  # release build the packed tests link.
-  checks: [%w[mise run --force test], %w[mise run build --release]],
+  # The whole test task, once (api --check and wasm:test among it), unless
+  # --skip-tests, and the release build the packed tests link.
+  checks: [*(skip_tests ? [] : [%w[mise run --force test]]), %w[mise run build --release]],
   regenerate: [%w[mise run api]],
   readme: Core::ROOT.join('README.md')
 )
