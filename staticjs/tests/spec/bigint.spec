@@ -354,3 +354,201 @@ Object.groupBy([1n, 2n, 3n, 4n], x => x === 2n || x === 4n ? 2n : 1n)
 (xs => { let n = 0n; n += xs[0]; n *= 3n; n -= 1n; n /= 2n; n %= 7n; return n; })([10n])
 --- value
 0n
+
+=== BigInt of numbers
+[BigInt(0), BigInt(-0), BigInt(1), BigInt(-1), BigInt(4294967296), BigInt(9007199254740991), BigInt(9007199254740992 * 2048), BigInt(1e21), BigInt(-1e300), BigInt(Number.MAX_VALUE) === 2n ** 1024n - 2n ** 971n]
+--- value
+[0n,0n,1n,-1n,4294967296n,9007199254740991n,18446744073709551616n,1000000000000000000000n,-1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160n,true]
+
+=== BigInt of a number that is not an integer
+BigInt(1.5)
+--- fault RangeError
+
+=== BigInt of NaN
+BigInt(NaN)
+--- fault RangeError
+
+=== BigInt of Infinity
+BigInt(Infinity)
+--- fault RangeError
+
+=== BigInt of strings
+[BigInt(""), BigInt("   "), BigInt("0"), BigInt("-0"), BigInt("+12"), BigInt("-12"), BigInt(" \n\t 42  "), BigInt("0x1F"), BigInt("0XfF"), BigInt("0o17"), BigInt("0b101"), BigInt("000123"), BigInt("123456789012345678901234567890"), BigInt("0x" + "f".repeat(40))]
+--- value
+[0n,0n,0n,0n,12n,-12n,42n,31n,255n,15n,5n,123n,123456789012345678901234567890n,1461501637330902918203684832716283019655932542975n]
+
+=== BigInt of a decimal point
+BigInt("1.0")
+--- fault SyntaxError
+
+=== BigInt of an exponent
+BigInt("1e3")
+--- fault SyntaxError
+
+=== BigInt of a literal's n
+BigInt("10n")
+--- fault SyntaxError
+
+=== BigInt of a signed hexadecimal string
+BigInt("-0x10")
+--- fault SyntaxError
+
+=== BigInt of a prefix alone
+BigInt("0x")
+--- fault SyntaxError
+
+=== BigInt of a separator
+BigInt("1_000")
+--- fault SyntaxError
+
+=== BigInt of a binary string with a 2
+BigInt("0b102")
+--- fault SyntaxError
+
+=== BigInt of Infinity's text
+BigInt("Infinity")
+--- fault SyntaxError
+
+=== BigInt of booleans and BigInts
+[BigInt(true), BigInt(false), BigInt(10n), BigInt(-4294967296n)]
+--- value
+[1n,0n,10n,-4294967296n]
+
+=== BigInt of undefined
+BigInt(undefined)
+--- fault TypeError
+
+=== BigInt of nothing
+BigInt()
+--- fault TypeError
+
+=== BigInt of null
+BigInt(null)
+--- fault TypeError
+
+=== BigInt of an object
+BigInt({})
+--- fault converts only primitives
+
+=== BigInt of an array, which JavaScript turns into a string
+BigInt([1])
+--- fault converts only primitives
+
+=== BigInt is a function
+[typeof BigInt, typeof BigInt.asIntN]
+--- value
+["function","function"]
+
+=== BigInt.asIntN and asUintN
+[BigInt.asIntN(8, 255n), BigInt.asIntN(8, 127n), BigInt.asIntN(8, 128n), BigInt.asIntN(8, -128n), BigInt.asIntN(8, -129n), BigInt.asUintN(8, -1n), BigInt.asUintN(8, 256n), BigInt.asUintN(8, 257n), BigInt.asIntN(0, 5n), BigInt.asUintN(0, -5n), BigInt.asIntN(1, 1n), BigInt.asIntN(1, -1n)]
+--- value
+[-1n,127n,-128n,-128n,127n,255n,0n,1n,0n,0n,-1n,-1n]
+
+=== asIntN and asUintN at 32 and 64 bits
+[BigInt.asIntN(64, 2n ** 63n), BigInt.asIntN(64, 2n ** 63n - 1n), BigInt.asIntN(64, -(2n ** 63n)), BigInt.asIntN(64, -(2n ** 63n) - 1n), BigInt.asUintN(64, -1n), BigInt.asUintN(64, 2n ** 64n), BigInt.asUintN(64, -(2n ** 64n)), BigInt.asIntN(32, 4294967295n), BigInt.asUintN(32, -4294967296n), BigInt.asUintN(65, -1n), BigInt.asIntN(33, 4294967296n)]
+--- value
+[-9223372036854775808n,9223372036854775807n,-9223372036854775808n,9223372036854775807n,18446744073709551615n,0n,0n,-1n,0n,36893488147419103231n,-4294967296n]
+
+=== asIntN and asUintN with many bits keep the value
+[BigInt.asIntN(1000, -5n), BigInt.asUintN(1000, 5n), BigInt.asIntN(9007199254740991, 123n), BigInt.asIntN(9007199254740991, -(2n ** 100n)), BigInt.asUintN(9007199254740991, 2n ** 100n)]
+--- value
+[-5n,5n,123n,-1267650600228229401496703205376n,1267650600228229401496703205376n]
+
+=== asIntN's bits converted
+[BigInt.asIntN(8.9, 255n), BigInt.asUintN(undefined, 5n), BigInt.asUintN(null, 5n), BigInt.asUintN(true, 3n), BigInt.asIntN(8, true)]
+--- value
+[-1n,0n,0n,1n,1n]
+
+=== asUintN of a negative value with more bits than the limit
+BigInt.asUintN(9007199254740991, -1n)
+--- fault larger than the limits allow
+
+=== asIntN with negative bits
+BigInt.asIntN(-1, 5n)
+--- fault RangeError
+
+=== asIntN with too many bits
+BigInt.asIntN(9007199254740992, 5n)
+--- fault RangeError
+
+=== asIntN of a number
+BigInt.asIntN(8, 255)
+--- fault TypeError
+
+=== asIntN of a string, which JavaScript reads as a BigInt
+BigInt.asIntN(8, "255")
+--- fault only in BigInt()
+
+=== asIntN with a string of bits, which JavaScript converts
+BigInt.asIntN("8", 255n)
+--- fault converts only
+
+=== asIntN with BigInt bits
+BigInt.asIntN(8n, 255n)
+--- fault TypeError
+
+=== toString
+[(0n).toString(), (255n).toString(), (255n).toString(16), (-255n).toString(16), (255n).toString(2), (-1n).toString(36), (12345678901234567890n).toString(36), (2n ** 64n).toString(16), (2n ** 64n - 1n).toString(8), (10n ** 30n).toString(7), (35n).toString(36), (255n).toString(undefined), (255n).toString(16.9)]
+--- value
+["0","255","ff","-ff","11111111","-1","2lsohxawjui8i","10000000000000000","1777777777777777777777","243230604464041356413054436032064451","z","255","ff"]
+
+=== toString with a radix out of range
+(10n).toString(37)
+--- fault RangeError
+
+=== toString with radix 1
+(10n).toString(1)
+--- fault RangeError
+
+=== toString with a string radix, which JavaScript converts
+(10n).toString("16")
+--- fault converts only
+
+=== other methods of a BigInt
+(10n).valueOf()
+--- fault does not have this method
+
+=== toLocaleString of a BigInt
+(10n).toLocaleString()
+--- fault does not have this method
+
+=== a method of a number, which staticjs does not have
+(10).toString()
+--- fault methods on arrays, strings, sets and BigInts only
+
+=== Number of BigInts, correctly rounded
+[Number(0n), Number(-1n), Number(4294967296n), Number(9007199254740993n), Number(9007199254740995n), Number(-9007199254740993n), Number(18446744073709551615n), Number(2n ** 64n + 1n), Number(2n ** 1023n), Number(2n ** 1024n), Number(-(2n ** 1024n)), Number(2n ** 1024n - 2n ** 970n), Number(2n ** 1024n - 2n ** 970n - 1n), Number(123456789012345678901234567890n)]
+--- value
+[0,-1,4294967296,9007199254740992,9007199254740996,-9007199254740992,18446744073709552000,18446744073709552000,8.98846567431158e+307,Infinity,-Infinity,Infinity,1.7976931348623157e+308,1.2345678901234568e+29]
+
+=== parseInt and parseFloat read a BigInt's digits
+[parseInt(10n), parseInt(-10n), parseInt(10n, 16), parseInt(10n, 2), parseInt(123456789012345678901234567890n), parseFloat(10n), parseFloat(-123456789012345678901234567890n), Number.parseInt(255n, 36), Number.parseFloat(9007199254740993n)]
+--- value
+[10,-10,16,2,1.2345678901234568e+29,10,-1.2345678901234568e+29,2777,9007199254740992]
+
+=== isNaN of a BigInt
+isNaN(1n)
+--- fault TypeError
+
+=== Math of a BigInt
+Math.abs(-1n)
+--- fault TypeError
+
+=== a BigInt as an index
+[1, 2].at(0n)
+--- fault TypeError
+
+=== Number.isInteger of a BigInt
+[Number.isInteger(1n), Number.isSafeInteger(1n), Number.isNaN(1n), Number.isFinite(1n)]
+--- value
+[false,false,false,false]
+
+=== a round trip through text
+(xs => xs.map(x => BigInt(String(x)) === x && BigInt("0x" + (x < 0n ? -x : x).toString(16)) === (x < 0n ? -x : x)))([0n, 1n, -1n, 4294967295n, -18446744073709551616n, 123456789012345678901234567890n, 3n ** 300n])
+--- value
+[true,true,true,true,true,true,true]
+
+=== factorial of 30 by reduce
+Array.from({length: 30}, (_, i) => BigInt(i + 1)).reduce((a, x) => a * x, 1n)
+--- value
+265252859812191058636308480000000n

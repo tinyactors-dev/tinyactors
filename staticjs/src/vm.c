@@ -192,7 +192,8 @@ static sjs_result method(sjs_vm *vm, sjs_member member, sjs_value *out) {
     switch (receiver.kind) {
     case SJS_ARRAY:
     case SJS_STRING:
-    case SJS_SET: {
+    case SJS_SET:
+    case SJS_BIGINT: {
         const sjs_name *n = sjs_name_of(key);
         sjs_builtin_id id = sjs_method_of(n, receiver.kind);
         if (id == SJS_BUILTIN_NONE) {
@@ -215,7 +216,7 @@ static sjs_result method(sjs_vm *vm, sjs_member member, sjs_value *out) {
     case SJS_NULL:
         return sjs_property_get(vm, member, out);
     default:
-        return fault_named(vm, "staticjs has methods on arrays, strings and sets only", name);
+        return fault_named(vm, "staticjs has methods on arrays, strings, sets and BigInts only", name);
     }
 }
 

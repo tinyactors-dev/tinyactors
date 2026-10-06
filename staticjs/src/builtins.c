@@ -53,7 +53,10 @@ static const function_entry FUNCTION_TABLE[] = {
     { "Math", "hypot", SJS_BUILTIN_MATH_HYPOT },
     { "Math", "fround", SJS_BUILTIN_MATH_FROUND },
     { "Math", "clz32", SJS_BUILTIN_MATH_CLZ32 },
-    { "Math", "imul", SJS_BUILTIN_MATH_IMUL }
+    { "Math", "imul", SJS_BUILTIN_MATH_IMUL },
+    { "", "BigInt", SJS_BUILTIN_BIGINT },
+    { "BigInt", "asIntN", SJS_BUILTIN_BIGINT_AS_INT_N },
+    { "BigInt", "asUintN", SJS_BUILTIN_BIGINT_AS_UINT_N }
 };
 
 /*
@@ -63,9 +66,11 @@ static const function_entry FUNCTION_TABLE[] = {
  * names a method changing its receiver; with the staticjs method each kind
  * has by that name. Sorted by bytes, for sjs_name_id's binary search.
  */
-#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set }, 0 }
+#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set, 0 }, 0 }
+/* A name with a BigInt method too: toString. */
+#define NAME_BIGINT(text, flags, bigint) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, bigint }, 0 }
 /* MUTATION: a name with a method that changes its receiver. Restore: NAME(text, flags, 0, 0, 0). */
-#define NAME_MUTATION(text, flags, mutation) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0 }, mutation }
+#define NAME_MUTATION(text, flags, mutation) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0 }, mutation }
 
 static const sjs_name NAMES[] = {
     NAME("__defineGetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
@@ -157,7 +162,7 @@ static const sjs_name NAMES[] = {
     NAME("toReversed", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_REVERSED, 0, 0),
     NAME("toSorted", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SORTED, 0, 0),
     NAME("toSpliced", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SPLICED, 0, 0),
-    NAME("toString", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME_BIGINT("toString", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, SJS_METHOD_BIGINT_TO_STRING),
     NAME("toUpperCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_UPPER_CASE, 0),
     NAME("toWellFormed", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("trim", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM, 0),
@@ -210,7 +215,10 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_MATH_HYPOT),
     FUNCTION_VALUE(SJS_BUILTIN_MATH_FROUND),
     FUNCTION_VALUE(SJS_BUILTIN_MATH_CLZ32),
-    FUNCTION_VALUE(SJS_BUILTIN_MATH_IMUL)
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_IMUL),
+    FUNCTION_VALUE(SJS_BUILTIN_BIGINT),
+    FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_INT_N),
+    FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_UINT_N)
 };
 
 sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name) {
@@ -265,6 +273,8 @@ sjs_builtin_id sjs_method_of(const sjs_name *name, uint8_t kind) {
         return (sjs_builtin_id)name->methods[1];
     case SJS_SET:
         return (sjs_builtin_id)name->methods[2];
+    case SJS_BIGINT:
+        return (sjs_builtin_id)name->methods[3];
     default:
         return SJS_BUILTIN_NONE;
     }
@@ -564,6 +574,11 @@ static sjs_result string_from(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call
 static sjs_result number_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* Math.sqrt, hypot, fround, clz32 and imul, at the end of the file. */
 static sjs_result math_exact(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+/* BigInt, BigInt.asIntN and asUintN, a BigInt's toString, and Number,
+ * parseInt and parseFloat of a BigInt: at the end of the file. */
+static sjs_result bigint_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+static sjs_result bigint_method(sjs_vm *vm, sjs_leaf_call *call);
+static sjs_result bigint_number(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 
 static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_value x = arg(call, 0);
@@ -629,6 +644,10 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     case SJS_BUILTIN_MATH_CLZ32:
     case SJS_BUILTIN_MATH_IMUL:
         return math_exact(vm, id, call);
+    case SJS_BUILTIN_BIGINT:
+    case SJS_BUILTIN_BIGINT_AS_INT_N:
+    case SJS_BUILTIN_BIGINT_AS_UINT_N:
+        return bigint_function(vm, id, call);
     default:
         return math(vm, id, call);
     }
@@ -1131,7 +1150,8 @@ sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) 
     if (id < SJS_BUILTIN_FUNCTION_COUNT) return function_call(vm, id, call);
     if (id <= SJS_METHOD_ARRAY_WITH) return array_method(vm, id, call);
     if (id <= SJS_METHOD_STRING_TRIM_START) return string_method(vm, id, call);
-    return set_method(vm, id, call);
+    if (id <= SJS_METHOD_SET_UNION) return set_method(vm, id, call);
+    return bigint_method(vm, call);
 }
 
 /* ------------------------------------------------------------------------
@@ -2524,6 +2544,7 @@ static sjs_result number_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *
     char room[32];
     sjs_str text = { 0 };
     double d;
+    if (x.kind == SJS_BIGINT && id != SJS_BUILTIN_IS_NAN && id != SJS_BUILTIN_IS_FINITE) return bigint_number(vm, id, call);
     if (id == SJS_BUILTIN_PARSE_INT || id == SJS_BUILTIN_PARSE_FLOAT) {
         /* The string they read: a primitive's as String gives it. An
          * object faults, as String does. */
@@ -2624,3 +2645,115 @@ static sjs_result math_exact(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
     call->result = sjs_num(y);
     return SJS_OK;
 }
+
+/* ------------------------------------------------------------------------
+ * BigInts: the BigInt function, BigInt.asIntN and asUintN, toString(radix),
+ * and Number, parseInt and parseFloat of a BigInt.
+ */
+
+/* BigInt(x): ToBigInt, but a number converts when it is an integer. */
+static sjs_result bigint_of(sjs_vm *vm, sjs_leaf_call *call) {
+    sjs_value x = arg(call, 0);
+    sjs_result r;
+    switch (x.kind) {
+    case SJS_BIGINT:
+        sjs_ref(x);
+        call->result = x;
+        return SJS_OK;
+    case SJS_BOOLEAN:
+        r = sjs_bigint_from_number(vm->context, x.boolean ? 1.0 : 0.0, &call->result);
+        break;
+    case SJS_NUMBER:
+        if (!sjs_number_is_integer(x.as.number)) {
+            return sjs_vm_fault(vm, "JavaScript throws a RangeError for BigInt of a number that is not an integer");
+        }
+        r = sjs_bigint_from_number(vm->context, x.as.number, &call->result);
+        call->cost = 2u;
+        break;
+    case SJS_STRING: {
+        sjs_str text = sjs_string_view(SJS_AS_STRING(x));
+        sjs_bigint_digits digits;
+        if (!sjs_bigint_parse(text, &digits)) return sjs_vm_fault(vm, "JavaScript throws a SyntaxError for BigInt of this string");
+        call->cost = text.length / 16u + sjs_bigint_text_cost((uint64_t)digits.digits.length / 8u + 1u, digits.radix);
+        r = sjs_bigint_from_digits(vm->context, digits, &call->result);
+        break;
+    }
+    case SJS_UNDEFINED:
+    case SJS_NULL:
+        return sjs_vm_fault(vm, "JavaScript throws a TypeError for BigInt of undefined or null");
+    default:
+        return sjs_vm_fault(vm, "staticjs converts only primitives to BigInts");
+    }
+    return r == SJS_OK ? SJS_OK : sjs_vm_fail(vm, r);
+}
+
+/* asIntN and asUintN: ToIndex of the bits, then ToBigInt of the value; a
+ * string, which ToBigInt reads, faults, as a conversion on the way to
+ * something else. */
+static sjs_result bigint_as_n(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    double bits;
+    if (to_integer(vm, arg(call, 0), &bits) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (bits < 0 || bits > 9007199254740991.0) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a number of bits outside 0 to 2^53 - 1");
+    sjs_value x = arg(call, 1);
+    sjs_value held = sjs_undefined();
+    if (x.kind == SJS_BOOLEAN) {
+        sjs_result r = sjs_bigint_from_number(vm->context, x.boolean ? 1.0 : 0.0, &held);
+        if (r != SJS_OK) return sjs_vm_fail(vm, r);
+        x = held;
+    } else if (x.kind == SJS_STRING) {
+        return sjs_vm_fault(vm, "staticjs reads a string as a BigInt only in BigInt()");
+    } else if (x.kind != SJS_BIGINT) {
+        return sjs_vm_fault(vm, "JavaScript throws a TypeError where this value would become a BigInt");
+    }
+    sjs_bigint_wrap_params w = { x, (uint64_t)bits, id == SJS_BUILTIN_BIGINT_AS_INT_N };
+    uint64_t width = w.bits / 32u + 1u;
+    call->cost = (width < SJS_AS_BIGINT(x)->length ? width : SJS_AS_BIGINT(x)->length) / 16u;
+    sjs_result r = sjs_bigint_wrap(vm->context, w, &call->result);
+    sjs_unref(vm->context, held);
+    if (r == SJS_OK && call->result.kind == SJS_BIGINT) call->cost += SJS_AS_BIGINT(call->result)->length / 16u;
+    return r == SJS_OK ? SJS_OK : sjs_vm_fail(vm, r);
+}
+
+__attribute__((noinline)) static sjs_result bigint_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    if (id == SJS_BUILTIN_BIGINT) return bigint_of(vm, call);
+    return bigint_as_n(vm, id, call);
+}
+
+/* x.toString(radix): radix 10 when undefined, else 2 to 36. */
+__attribute__((noinline)) static sjs_result bigint_method(sjs_vm *vm, sjs_leaf_call *call) {
+    sjs_value radix_arg = arg(call, 0);
+    double radix = 10;
+    if (radix_arg.kind != SJS_UNDEFINED && to_integer(vm, radix_arg, &radix) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (radix < 2 || radix > 36) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a radix outside 2 to 36");
+    const sjs_bigint *b = SJS_AS_BIGINT(call->receiver);
+    call->cost = sjs_bigint_text_cost(b->length, (uint32_t)radix);
+    sjs_string *s;
+    sjs_result r = sjs_bigint_to_string(vm->context, (sjs_bigint_radix){ b, (uint32_t)radix }, &s);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    call->result = sjs_heap_value(SJS_STRING, &s->h);
+    return SJS_OK;
+}
+
+/* Number(x), correctly rounded; parseFloat(x) reads String(x), whose
+ * digits round alike; parseInt(x, radix) reads String(x) in the radix. */
+__attribute__((noinline)) static sjs_result bigint_number(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    const sjs_bigint *b = SJS_AS_BIGINT(arg(call, 0));
+    if (id != SJS_BUILTIN_PARSE_INT) {
+        call->cost = b->length / 16u;
+        call->result = sjs_num(sjs_bigint_to_number(b));
+        return SJS_OK;
+    }
+    double radix;
+    if (sjs_vm_to_number(vm, arg(call, 1), &radix) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_buf text = { 0 };
+    sjs_result r = sjs_bigint_format(&vm->context->counting, (sjs_bigint_radix){ b, 10u }, &text);
+    if (r != SJS_OK) {
+        sjs_buf_free(&vm->context->counting, &text);
+        return sjs_vm_fail(vm, r);
+    }
+    call->cost = sjs_bigint_text_cost(b->length, 10u) + text.length / 16u;
+    call->result = sjs_num(sjs_number_parse_int((sjs_str){ (const char *)text.ptr, text.length }, (int32_t)sjs_number_to_uint32(radix)));
+    sjs_buf_free(&vm->context->counting, &text);
+    return SJS_OK;
+}
+

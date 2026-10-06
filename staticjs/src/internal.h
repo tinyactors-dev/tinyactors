@@ -114,6 +114,14 @@ uint32_t sjs_number_to_uint32(double x);
 /* Correctly rounded square root; the nearest float32, widened. */
 double sjs_number_sqrt(double x);
 double sjs_number_fround(double x);
+/* A positive number q x 2^e2, q's top bit set, `sticky` when it is a little
+ * more: the nearest double, ties to even (Number of a BigInt). */
+typedef struct {
+    uint64_t q;
+    int32_t e2;
+    bool sticky;
+} sjs_number_top;
+double sjs_number_from_top(sjs_number_top v);
 /* Math.hypot, as V8 computes it: from a zeroed sjs_hypot, see every
  * argument; if that settles the result, it is that; otherwise add every
  * argument, and end. */
@@ -432,6 +440,19 @@ sjs_result sjs_bigint_binary(sjs_context *context, sjs_bigint_op *op);
 #define SJS_BIGINT_UNORDERED 2
 int sjs_bigint_compare(const sjs_bigint *a, const sjs_bigint *b);
 int sjs_bigint_compare_number(const sjs_bigint *a, double d);
+/* BigInt(d) of an integer d (finite, no fraction), exactly. */
+sjs_result sjs_bigint_from_number(sjs_context *context, double d, sjs_value *out);
+/* Number(b), rounded to the nearest double, ties to even. */
+double sjs_bigint_to_number(const sjs_bigint *b);
+/* BigInt.asIntN(bits, value) (is_signed) and BigInt.asUintN(bits, value):
+ * value modulo 2^bits, as a two's complement number of `bits` bits when
+ * signed. A value that is its own result is shared. */
+typedef struct {
+    sjs_value value;
+    uint64_t bits;      /* at most 2^53 - 1 */
+    bool is_signed;
+} sjs_bigint_wrap_params;
+sjs_result sjs_bigint_wrap(sjs_context *context, sjs_bigint_wrap_params w, sjs_value *out);
 uint32_t sjs_bigint_hash(const sjs_bigint *b);
 
 /* ========================================================================
@@ -475,6 +496,9 @@ typedef enum {
     SJS_BUILTIN_MATH_FROUND,
     SJS_BUILTIN_MATH_CLZ32,
     SJS_BUILTIN_MATH_IMUL,
+    SJS_BUILTIN_BIGINT,
+    SJS_BUILTIN_BIGINT_AS_INT_N,
+    SJS_BUILTIN_BIGINT_AS_UINT_N,
     SJS_BUILTIN_FUNCTION_COUNT,
     /* Methods, called on a receiver. */
     SJS_METHOD_FIRST = 64,
@@ -529,6 +553,8 @@ typedef enum {
     SJS_METHOD_SET_IS_SUBSET_OF,
     SJS_METHOD_SET_SYMMETRIC_DIFFERENCE,
     SJS_METHOD_SET_UNION,
+    /* BigInts. */
+    SJS_METHOD_BIGINT_TO_STRING,
     /* MUTATION: methods that change their receiver, called only through a
      * reference to the variable that owns it (SJS_OP_MUTATE), never through
      * sjs_builtin_call. Arrays', then sets', then step 3's. */
@@ -566,7 +592,7 @@ sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name);
 typedef struct {
     sjs_str name;
     uint8_t flags;      /* SJS_NAME_* */
-    uint8_t methods[3]; /* the staticjs method on an array, a string, a set; 0 if none */
+    uint8_t methods[4]; /* the staticjs method on an array, a string, a set, a BigInt; 0 if none */
     uint8_t mutation;   /* MUTATION: the method that changes its receiver, of the one kind
                          * that has it (SJS_METHOD_MUTATION_FIRST on); 0 if none */
 } sjs_name;

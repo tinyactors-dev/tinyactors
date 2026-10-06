@@ -80,7 +80,9 @@
  * rows grouped into arrays under the accumulator's keys: a method through a
  * path, MUTATION); eval.number.parse (texts.map(Number), FIX_NUMBERS's doubles
  * as "%.15g", which Clinger's fast path reads) and .parse.17 (as "%.17g",
- * which the bignum reads, back to the doubles themselves) (L).
+ * which the bignum reads, back to the doubles themselves) (L);
+ * eval.bigint.sum-reduce (1n to n added in reduce: L) and eval.bigint.factorial
+ * (1n to n multiplied, n! of up to 118,000 bits: Q).
  *
  * write (unit byte): write.rows (n {1000, 10000}, 64 KiB buffer),
  * write.rows.buf64 (10000 rows, a 64-byte buffer), write.numbers (100000
@@ -240,7 +242,8 @@ typedef enum {
     FIX_CAPACITY,
     FIX_DEMAND,
     FIX_NUMBER_TEXTS,    /* FIX_NUMBERS as "%.15g": Clinger's fast path reads each */
-    FIX_NUMBER_TEXTS_17  /* FIX_NUMBERS as "%.17g": each reads back as it was, past the fast path */
+    FIX_NUMBER_TEXTS_17, /* FIX_NUMBERS as "%.17g": each reads back as it was, past the fast path */
+    FIX_BIGINTS          /* 1n to n as BigInts */
 } bench_fixture;
 
 typedef struct {
@@ -268,7 +271,9 @@ typedef enum {
     CHECK_INTERSECTION,
     CHECK_DIFFERENCE,
     CHECK_SYNTHETIC,
-    CHECK_IDS_JOINED    /* STRING_APPEND: every row's id and a comma, 8n bytes */
+    CHECK_IDS_JOINED,   /* STRING_APPEND: every row's id and a comma, 8n bytes */
+    CHECK_BIGINT_SUM,   /* n(n + 1) / 2 as a BigInt */
+    CHECK_FACTORIAL     /* n! as a BigInt: its digits, counted */
 } bench_check;
 
 #define MAX_GLOBALS 4
@@ -588,6 +593,16 @@ static const bench_case cases[] = {
       .source = "a.difference(b)", .globals = { { "a", FIX_SET_A, NULL }, { "b", FIX_SET_B, NULL } },
       .expect = "new Set([\"s000000\",\"s000001\",\"s000002\",\"s000003\",\"s000004\"])",
       .check = CHECK_DIFFERENCE },
+
+    /* BigInts: small ones added, which is most of what a data model does with
+     * them (L), and a product that grows by a limb every ten elements or so,
+     * schoolbook by one limb at a time (Q). */
+    { .name = "eval.bigint.sum-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "ns.reduce((a, x) => a + x, 0n)", .globals = { { "ns", FIX_BIGINTS, NULL } }, .expect = "55n",
+      .check = CHECK_BIGINT_SUM },
+    { .name = "eval.bigint.factorial", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_Q, .smoke = 10,
+      .source = "ns.reduce((a, x) => a * x, 1n)", .globals = { { "ns", FIX_BIGINTS, NULL } }, .expect = "3628800n",
+      .check = CHECK_FACTORIAL },
 
     /* write */
     { .name = "write.rows", .unit = UNIT_BYTE, .op = OP_WRITE, .sizes = SIZES_WRITE_ROWS, .smoke = 10,
@@ -940,6 +955,19 @@ static bool make_numbers(bench_run *run, sjs_value *out) {
     return true;
 }
 
+/* FIX_BIGINTS: 1n to n. */
+static bool make_bigints(bench_run *run, sjs_value *out) {
+    if (sjs_array_new(run->context, run->n, out) != SJS_OK) return fail(run, "sjs_array_new failed");
+    for (uint32_t i = 0; i < run->n; i++) {
+        char text[16];
+        snprintf(text, sizeof text, "%u", (unsigned)(i + 1u));
+        sjs_value b;
+        if (sjs_bigint_new(run->context, (sjs_str){ text, (uint32_t)strlen(text) }, &b) != SJS_OK) return fail(run, "sjs_bigint_new failed");
+        if (!append(run, out, b)) return false;
+    }
+    return true;
+}
+
 /* FIX_NUMBERS's doubles as strings with `digits` significant digits. */
 static bool make_number_texts(bench_run *run, int digits, sjs_value *out) {
     if (sjs_array_new(run->context, run->n, out) != SJS_OK) return fail(run, "sjs_array_new failed");
@@ -1009,6 +1037,7 @@ static bool make_global(bench_run *run, const bench_global *global, sjs_value *o
     case FIX_STRINGS: return make_strings(run, out);
     case FIX_NUMBER_TEXTS: return make_number_texts(run, 15, out);
     case FIX_NUMBER_TEXTS_17: return make_number_texts(run, 17, out);
+    case FIX_BIGINTS: return make_bigints(run, out);
     case FIX_TEXT: return make_text(run, out);
     case FIX_CAPACITY: *out = sjs_number(6.0 * run->n); return true;
     case FIX_DEMAND: return make_demand(run, out);
@@ -1116,6 +1145,18 @@ static bool expect_number(bench_run *run, sjs_value value, double want) {
     return fail(run, what);
 }
 
+/* A BigInt's decimal text, checked against `want`, or its length. */
+static bool expect_bigint(bench_run *run, sjs_value value, const char *want, uint32_t length) {
+    if (value.kind != SJS_BIGINT) return fail(run, "expected a BigInt");
+    uint32_t bound = sjs_bigint_text_bound(value);
+    char *text = malloc(bound);
+    sjs_buffer b = { (uint8_t *)text, bound, 0 };
+    bool ok = text != NULL && sjs_bigint_text(run->context, value, &b) == SJS_OK &&
+              (want != NULL ? b.length == strlen(want) && memcmp(text, want, b.length) == 0 : b.length == length);
+    free(text);
+    return ok ? true : fail(run, "the BigInt is not the one expected");
+}
+
 static bool check_value(bench_run *run, sjs_value value) {
     uint32_t n = run->n;
     uint32_t half = n / 2u;
@@ -1144,6 +1185,16 @@ static bool check_value(bench_run *run, sjs_value value) {
         }
         return true;
     case CHECK_SAME: return true; /* verify_value compares it with the smoke value */
+    case CHECK_BIGINT_SUM: {
+        char want[32];
+        snprintf(want, sizeof want, "%llu", (unsigned long long)n * (n + 1u) / 2u);
+        return expect_bigint(run, value, want, 0);
+    }
+    case CHECK_FACTORIAL: {
+        /* The digits of n!, from Node: String(f).length. */
+        uint32_t digits = n == 10u ? 7u : n == 100u ? 158u : n == 1000u ? 2568u : n == 10000u ? 35660u : 0u;
+        return digits == 0 ? fail(run, "no digit count for this n") : expect_bigint(run, value, NULL, digits);
+    }
     case CHECK_SORTED_DESC:
         if (!expect_shape(run, value, (bench_shape){ SJS_ARRAY, n })) return false;
         for (uint32_t i = 0; i < n; i++) {

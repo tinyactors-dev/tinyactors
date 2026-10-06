@@ -25,6 +25,8 @@
  *                               comparison (<), on 1 to 20 limbs, in hex
  *     T <a> <radix> <dec> <s>   COUNT BigInts as text: String(a), toString(radix)
  *     M <a> <bits> <c>          COUNT BigInts compared with a double
+ *     R <a> <bits>              COUNT BigInts as numbers: Number(a)
+ *     A <n> <a> <int> <uint>    COUNT BigInts wrapped: BigInt.asIntN(n, a), asUintN
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -530,8 +532,30 @@ static void print_bigint_texts(long count) {
         printf("T %s %u %.*s ", a.text, radix, (int)decimal.length, (const char *)decimal.ptr);
         print_bigint(x, radix);
         printf("\n");
-        double d = next() % 2 == 0 ? any_double() : (double)(int64_t)next() * (double)(1u << (next() % 16));
+        double d;
+        switch (next() % 4) {
+        case 0: d = any_double(); break;
+        case 1: d = (double)(int64_t)next() * (double)(1u << (next() % 16)); break;
+        default: d = sjs_bigint_to_number(SJS_AS_BIGINT(x)) + (next() % 2 == 0 ? 0.0 : 0.5); break;
+        }
         printf("M %s %016llx %d\n", a.text, (unsigned long long)to_bits(d), sjs_bigint_compare_number(SJS_AS_BIGINT(x), d));
+        printf("R %s %016llx\n", a.text, (unsigned long long)to_bits(sjs_bigint_to_number(SJS_AS_BIGINT(x))));
+        /* asIntN and asUintN, at widths around the value's and limbs'. */
+        uint64_t widths[] = { next() % 70, next() % 700, 32u * (next() % 22), 32u * (next() % 22) + 1u };
+        uint64_t bits = widths[next() % 4];
+        sjs_value as_int;
+        sjs_value as_uint;
+        if (sjs_bigint_wrap(context, (sjs_bigint_wrap_params){ x, bits, true }, &as_int) != SJS_OK ||
+            sjs_bigint_wrap(context, (sjs_bigint_wrap_params){ x, bits, false }, &as_uint) != SJS_OK) {
+            abort();
+        }
+        printf("A %llu %s ", (unsigned long long)bits, a.text);
+        print_bigint(as_int, 16);
+        printf(" ");
+        print_bigint(as_uint, 16);
+        printf("\n");
+        sjs_release(context, as_int);
+        sjs_release(context, as_uint);
         sjs_buf_free(&context->counting, &decimal);
         sjs_release(context, x);
         sjs_release(context, back);
