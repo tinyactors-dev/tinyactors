@@ -20,9 +20,9 @@
 #define SHAPE_CHAIN_COUNT 0u
 #define SHAPE_NUMBER_COUNT 0u
 #define SHAPE_TEXT_COUNT 11u
-#define SHAPE_ANCHORED_NONTERMINALS 8u /* MUTATION: the anchored lane's */
-#define SHAPE_ANCHORED_RULE_COUNT 20u
-#define SHAPE_ANCHORED_CHAIN_COUNT 4u
+#define SHAPE_ANCHORED_NONTERMINALS 11u /* MUTATION: the anchored lane's */
+#define SHAPE_ANCHORED_RULE_COUNT 24u
+#define SHAPE_ANCHORED_CHAIN_COUNT 5u
 
 enum { SHAPE_LEAF = 1, SHAPE_POSTFIX, SHAPE_POSTFIX_COUNT, SHAPE_OPEN, SHAPE_INNER, SHAPE_CLOSE };
 enum { SHAPE_FIELD_COUNT = 1, SHAPE_FIELD_NUMBER, SHAPE_FIELD_TEXT, SHAPE_FIELD_OPERAND };
@@ -348,6 +348,7 @@ static const shape_test shape_tests[] = {
     { SHAPE_FIELD_TEXT, 0, 1, 0 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 0 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 1 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 2 },
     { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 3 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 4 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 5 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 6 },
     { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 7 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 8 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 9 }, { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 10 },
+    { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, SJS_OP_ADD }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, SJS_OP_ADD }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, SJS_OP_ADD },
 };
 
 static const shape_child shape_children[] = {
@@ -580,50 +581,60 @@ static const shape_anchored_event shape_anchored_events[SJS_EV_END + 1] = {
     [SJS_EV_MEMBER] = { 1, 12 },
     [SJS_EV_INDEX] = { 13, 1 },
     [SJS_EV_CALL_BEGIN] = { 14, 2 },
+    [SJS_EV_BINARY] = { 16, 2 },
+    [SJS_EV_ASSIGN] = { 18, 1 },
 };
 
 static const shape_anchored_rule shape_anchored_rules[] = {
     /* 0: named <- NAME */
-    { 7, SHAPE_FORM_LEAF, 0, 0, 97 },
+    { 5, SHAPE_FORM_LEAF, 0, 0, 97 },
     /* 1: stepped <- MEMBER(path) */
-    { 5, SHAPE_FORM_POSTFIX, 6, 0, 97 },
+    { 9, SHAPE_FORM_POSTFIX, 10, 0, 97 },
     /* 2: chaining <- MEMBER{key: "sort"}(mutable) */
-    { 3, SHAPE_FORM_POSTFIX, 4, 1, 97 },
+    { 7, SHAPE_FORM_POSTFIX, 8, 1, 97 },
     /* 3: chaining <- MEMBER{key: "reverse"}(mutable) */
-    { 3, SHAPE_FORM_POSTFIX, 4, 1, 98 },
+    { 7, SHAPE_FORM_POSTFIX, 8, 1, 98 },
     /* 4: chaining <- MEMBER{key: "fill"}(mutable) */
-    { 3, SHAPE_FORM_POSTFIX, 4, 1, 99 },
+    { 7, SHAPE_FORM_POSTFIX, 8, 1, 99 },
     /* 5: chaining <- MEMBER{key: "add"}(mutable) */
-    { 3, SHAPE_FORM_POSTFIX, 4, 1, 100 },
+    { 7, SHAPE_FORM_POSTFIX, 8, 1, 100 },
     /* 6: mutating <- MEMBER{key: "push"}(mutable) */
-    { 2, SHAPE_FORM_POSTFIX, 4, 1, 101 },
+    { 4, SHAPE_FORM_POSTFIX, 8, 1, 101 },
     /* 7: mutating <- MEMBER{key: "pop"}(mutable) */
-    { 2, SHAPE_FORM_POSTFIX, 4, 1, 102 },
+    { 4, SHAPE_FORM_POSTFIX, 8, 1, 102 },
     /* 8: mutating <- MEMBER{key: "shift"}(mutable) */
-    { 2, SHAPE_FORM_POSTFIX, 4, 1, 103 },
+    { 4, SHAPE_FORM_POSTFIX, 8, 1, 103 },
     /* 9: mutating <- MEMBER{key: "unshift"}(mutable) */
-    { 2, SHAPE_FORM_POSTFIX, 4, 1, 104 },
+    { 4, SHAPE_FORM_POSTFIX, 8, 1, 104 },
     /* 10: mutating <- MEMBER{key: "splice"}(mutable) */
-    { 2, SHAPE_FORM_POSTFIX, 4, 1, 105 },
+    { 4, SHAPE_FORM_POSTFIX, 8, 1, 105 },
     /* 11: mutating <- MEMBER{key: "delete"}(mutable) */
-    { 2, SHAPE_FORM_POSTFIX, 4, 1, 106 },
+    { 4, SHAPE_FORM_POSTFIX, 8, 1, 106 },
     /* 12: mutating <- MEMBER{key: "clear"}(mutable) */
-    { 2, SHAPE_FORM_POSTFIX, 4, 1, 107 },
+    { 4, SHAPE_FORM_POSTFIX, 8, 1, 107 },
     /* 13: stepped <- INDEX(path, _) */
-    { 5, SHAPE_FORM_POSTFIX, 6, 0, 108 },
+    { 9, SHAPE_FORM_POSTFIX, 10, 0, 108 },
     /* 14: mutable <- CALL_BEGIN(chaining, ...) */
-    { 4, SHAPE_FORM_BRACKET, 3, 0, 108 },
+    { 8, SHAPE_FORM_BRACKET, 7, 0, 108 },
     /* 15: MUTATE_PATH <- CALL_BEGIN(mutating, ...) */
-    { 1, SHAPE_FORM_BRACKET, 2, 0, 108 },
-    /* 16: path <- named */
-    { 6, SHAPE_FORM_CHAIN, 7, 0, 0 },
-    /* 17: path <- stepped */
-    { 6, SHAPE_FORM_CHAIN, 5, 0, 0 },
-    /* 18: mutable <- stepped */
-    { 4, SHAPE_FORM_CHAIN, 5, 0, 0 },
-    /* 19: mutating <- chaining */
-    { 2, SHAPE_FORM_CHAIN, 3, 0, 0 },
+    { 1, SHAPE_FORM_BRACKET, 4, 0, 108 },
+    /* 16: summed <- BINARY{op: ADD}(named, _) */
+    { 6, SHAPE_FORM_POSTFIX, 5, 1, 108 },
+    /* 17: summed <- BINARY{op: ADD}(summed, _) */
+    { 6, SHAPE_FORM_POSTFIX, 6, 1, 109 },
+    /* 18: APPEND <- ASSIGN{op: ADD}(named, ...) */
+    { 2, SHAPE_FORM_BRACKET, 5, 1, 110 },
+    /* 19: path <- named */
+    { 10, SHAPE_FORM_CHAIN, 5, 0, 0 },
+    /* 20: path <- stepped */
+    { 10, SHAPE_FORM_CHAIN, 9, 0, 0 },
+    /* 21: mutable <- stepped */
+    { 8, SHAPE_FORM_CHAIN, 9, 0, 0 },
+    /* 22: mutating <- chaining */
+    { 4, SHAPE_FORM_CHAIN, 7, 0, 0 },
+    /* 23: APPEND_SUM <- summed */
+    { 3, SHAPE_FORM_CHAIN, 6, 0, 0 },
 };
 
 /* The anchored chain rules, each after those that derive its child. */
-static const uint16_t shape_anchored_chain_rules[] = { 16, 17, 18, 19 };
+static const uint16_t shape_anchored_chain_rules[] = { 19, 20, 21, 22, 23 };

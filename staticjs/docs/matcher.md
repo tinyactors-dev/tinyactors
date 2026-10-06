@@ -2541,11 +2541,13 @@ section's status.
 
 ## 12. Rewrites: matches that change the code
 
-Status: implemented, with one rewrite, MUTATE_PATH: a method that changes
-its receiver, called on a path from a variable (`o.items.push(x)`,
-docs/mutation.md, "Methods through a path"). The matcher's rules decide
-the form; the compiler decides what needs scopes, and rewrites what it
-compiled.
+Status: implemented, with three rewrites. MUTATE_PATH: a method that
+changes its receiver, called on a path from a variable (`o.items.push(x)`,
+docs/mutation.md, "Methods through a path"). APPEND and APPEND_SUM:
+`s += e` and `s = s + e1 + e2`, appends to a `let` whose read the compiler
+makes a move (docs/mutation.md, "Appending to a let"; 12.8). The matcher's
+rules decide the form; the compiler decides what needs scopes, and rewrites
+what it compiled.
 
 ### 12.1 A rewrite, not a tag
 
@@ -2755,4 +2757,38 @@ What it does not do yet, and what each would need:
 - **Brackets that take no node before them** (an array or object literal,
   an arrow) are the labeller's, which can match them in a dead region
   already; a rewrite of one would be a labeller rule whose report the
-  compiler takes as a rewrite, matched with `no_shapes` too.
+  compiler takes as a rewrite, matched with `no_shapes` too. A template
+  with any number of parts is neither's: the labeller's rules have fixed
+  children, and the lane anchors a node at its first operand's start,
+  where a template's first substitution does not begin. That is why
+  `` s = `${s}...` `` is found by the compiler in its code (12.8). The lane
+  could take it with a marker for such a bracket that checks the first
+  child to end inside it, counting its separators (a template's head piece
+  is one).
+
+### 12.8 APPEND and APPEND_SUM
+
+The second and third rewrites, for appending to a `let`
+(docs/mutation.md, "Appending to a let"), needed rules only, and the
+`ASSIGN` event's operator as a field (`op: operator`, 0 for `=`):
+
+```
+rewrite APPEND;
+rewrite APPEND_SUM;
+APPEND() <- ASSIGN{op: ADD}(named(), ...);       # s += e
+summed() <- BINARY{op: ADD}(named(), _);         # s + e1
+summed() <- BINARY{op: ADD}(summed(), _);        # s + e1 + e2 ...
+APPEND_SUM() <- summed();
+```
+
+`ASSIGN` is a bracket over the node before it, its target, so APPEND is
+MUTATE_PATH's form, reported at ASSIGN_END for the assignment's construct.
+A plain assignment's value is its second child, which no anchored rule can
+look at; so APPEND_SUM is reported at each `+` of a spine from a name,
+anywhere (`a + x` in a reduce callback too, beside its SUM shape: the
+matcher_test cases of `a + ...` list it), and the compiler keeps the last
+spine's root read, found in its paths when the innermost `+` is reported,
+and the pc of its last `+`. At ASSIGN_END of `s = ...` it takes the spine
+when that `+` is the value's last instruction and its root is the value's
+first, a read of `s`. Each report costs the compiler a look through its
+open paths (a few), at the innermost `+` of a spine only.

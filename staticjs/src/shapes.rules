@@ -68,7 +68,7 @@ event IF open 1 IF_END item;            # the test is its first child; an else-i
 event ELSE inner chain: count;
 event IF_END close;
 event EXPRESSION_STATEMENT postfix 1 item;  # MUTATION: a statement that changes a variable
-event ASSIGN open 1 ASSIGN_END item;    # MUTATION: the target is its first child, the value its second
+event ASSIGN open 1 ASSIGN_END item op: operator;   # MUTATION: the target is its first child, the value its second; op 0 for =
 event ASSIGN_END close;
 event UPDATE postfix 1 item;            # MUTATION: ++ or -- of its target
 event DELETE postfix 1 item;            # MUTATION: delete of its target
@@ -257,3 +257,21 @@ mutating() <- MEMBER{key: "splice"}(mutable());
 mutating() <- MEMBER{key: "delete"}(mutable());
 mutating() <- MEMBER{key: "clear"}(mutable());
 MUTATE_PATH() <- CALL_BEGIN(mutating(), ...);
+
+# A string built on a let (docs/mutation.md, "Appending to a let"): s += e,
+# and s = s + e1 + e2 ..., + left-associated from a name. The compiler moves
+# the let's value out of its slot to the first +, which extends a string
+# nothing else holds in place (STRING_APPEND); the store puts it back.
+# APPEND is reported at the assignment's end, APPEND_SUM at each + of the
+# spine, whose outermost the compiler finds as the value of an assignment
+# to the same name. s = `${s}...`, a bracket over no node before it, is not
+# a form the lane anchors: the compiler finds it in its own code.
+rewrite APPEND;
+rewrite APPEND_SUM;
+
+nonterminal summed();         # a name read, then + of anything, once or more: s + e1 + e2
+
+APPEND() <- ASSIGN{op: ADD}(named(), ...);
+summed() <- BINARY{op: ADD}(named(), _);
+summed() <- BINARY{op: ADD}(summed(), _);
+APPEND_SUM() <- summed();

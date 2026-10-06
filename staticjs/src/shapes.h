@@ -84,6 +84,8 @@ static inline const char *sjs_shape_name(uint32_t shape) {
 typedef enum {
     SJS_REWRITE_NONE = 0,
     SJS_REWRITE_MUTATE_PATH,
+    SJS_REWRITE_APPEND,
+    SJS_REWRITE_APPEND_SUM,
     SJS_REWRITE_COUNT
 } sjs_rewrite;
 
@@ -91,6 +93,8 @@ typedef enum {
 static inline const char *sjs_rewrite_name(uint32_t rewrite) {
     switch (rewrite) {
     case SJS_REWRITE_MUTATE_PATH: return "MUTATE_PATH";
+    case SJS_REWRITE_APPEND: return "APPEND";
+    case SJS_REWRITE_APPEND_SUM: return "APPEND_SUM";
     default: return "NONE";
     }
 }

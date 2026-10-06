@@ -51,7 +51,8 @@
  * their smoke value at every size, and .lastIndexOf (xs.lastIndexOf(-1), likewise), .toSpliced (n / 4 elements at n / 2 replaced by 1, 2, 3, then
  * the length and sum checked against the removed part: [3,6] at every size), eval.string.join (L);
  * eval.string.concat-reduce (acc + r.id + ",", which + extends in place:
- * STRING_APPEND, L); eval.object.spread-reduce (C);
+ * STRING_APPEND, L); eval.string.append-let (let s = acc; s += r.id;
+ * s += ",": each += moves the let to +, MUTATION, L); eval.object.spread-reduce (C);
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
  * place and quadratic before, eval.object.fromEntries, eval.set.new, .has,
@@ -446,6 +447,12 @@ static const bench_case cases[] = {
     /* STRING_APPEND: + extends the accumulator, which the callback holds alone. */
     { .name = "eval.string.concat-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.reduce((acc, r) => acc + r.id + \",\", \"\")", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = "\"r000000,r000001,r000002,r000003,r000004,r000005,r000006,r000007,r000008,r000009,\"",
+      .check = CHECK_IDS_JOINED },
+    /* MUTATION: appending to a let, s += ..., moves it to +, which extends it. */
+    { .name = "eval.string.append-let", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.reduce((acc, r) => { let s = acc; s += r.id; s += \",\"; return s; }, \"\")",
+      .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "\"r000000,r000001,r000002,r000003,r000004,r000005,r000006,r000007,r000008,r000009,\"",
       .check = CHECK_IDS_JOINED },
     { .name = "eval.object.spread-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_C, .smoke = 10,

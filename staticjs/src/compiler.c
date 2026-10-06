@@ -75,7 +75,10 @@
  * a rewrite's rules match, during the event that ends it: a mutating method
  * called on a path (MUTATE_PATH), which the compiler then compiles as a path
  * to the container it changes (docs/matcher.md, section 12). Restore:
- * matching only unless no_shapes, as `matching` said.
+ * matching only unless no_shapes, as `matching` said. MUTATION: and the
+ * appends to a let, `s += e` (APPEND) and `s = s + e1 + e2` (APPEND_SUM),
+ * whose read of the let moves its value (docs/mutation.md, "Appending to a
+ * let").
  */
 #include "matcher.h"
 
@@ -94,6 +97,7 @@ typedef struct {
     uint8_t use;           /* MUTATION: USE_* */
     uint32_t changed_at;   /* MUTATION: its last mutation's receiver's pc, plus one; 0 for none */
     uint8_t declared_let;  /* MUTATION: by let: statements assign to it */
+    uint32_t reads;        /* MUTATION: how many times a name read it: an append's move needs one */
 } binding;
 
 /* An index from names to numbers: open addressing with linear probing. The
@@ -193,6 +197,8 @@ typedef struct {
     uint8_t held;
     uint8_t root_use;
     uint8_t mutate_path;
+    uint8_t append;        /* MUTATION: K_ASSIGN: the matcher reported APPEND */
+    uint32_t reads;        /* MUTATION: K_ASSIGN: its root's binding.reads at ASSIGN */
 } construct;
 
 /* An array or object pattern being compiled. An object pattern keeps its
@@ -374,6 +380,15 @@ struct sjs_compiler {
     sjs_buf paths;
     sjs_buf path_steps;
     bool call_holds_path;  /* MUTATION */
+    /* MUTATION: the spine of + the matcher last reported as APPEND_SUM: its
+     * start, the read of its root (a slot of this function: its pc and
+     * binding), and the pc of its last BINARY; start UINT32_MAX for none. */
+    struct {
+        uint32_t start;
+        uint32_t root_pc;
+        uint32_t which;
+        uint32_t binary_pc;
+    } sum;
 };
 
 static const sjs_allocator *alloc(sjs_compiler *c) {
@@ -1053,6 +1068,7 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
                 return path_begin(c);
             }
             uint32_t owner = SJS_BUF_AT(c->scopes, scope, s).function_scope;
+            b->reads++; /* MUTATION: appending to a let */
             if (owner == current(c)->function_scope) {
                 if (read_slot(c, b->index, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
                 /* MUTATION: the next event tells what the read does. */
@@ -2445,6 +2461,73 @@ static sjs_result target_store(sjs_compiler *c, const construct *k, const sjs_ev
     return k->keys == 0 ? variable_store(c, k, e) : assign_store(c, k, e);
 }
 
+/* MUTATION: appending to a let (docs/mutation.md, "Appending to a let").
+ * `s += e`, `s = s + e1 + e2` and `s = `${s}...``, of a let the function
+ * owns: its read becomes a TAKE_LOCAL, which moves the value out of the
+ * slot, so that + (or the template's join) finds a string nothing else
+ * holds and extends it in place (STRING_APPEND, vm.c); the store puts the
+ * result back. Only when the value reads the let no other time
+ * (append_move): such a read runs between the move and the store, and
+ * would find the slot empty; so would a method of the let's own, which
+ * reads it by name first. The store comes after the whole value on every
+ * path, and a capture of a let is refused, so the move is never seen. */
+static void append_take(sjs_compiler *c, uint32_t pc, const binding *b) {
+    if (c->code.ptr[pc] != SJS_OP_LOCAL || sjs_read16(c->code.ptr + pc + 1u) != b->index) return;
+    c->code.ptr[pc] = SJS_OP_TAKE_LOCAL;
+}
+
+/* MUTATION: the matcher reported APPEND_SUM for a + whose spine starts at
+ * `start`: the innermost finds its root's read in the paths, which still
+ * hold it, as the + has not been handled yet; an outer one goes on with the
+ * same root. */
+static void append_sum(sjs_compiler *c, uint32_t start) {
+    if (c->sum.start != start) {
+        c->sum.start = UINT32_MAX;
+        for (uint32_t n = SJS_BUF_COUNT(c->paths, path); n-- > 0;) {
+            const path *p = &SJS_BUF_AT(c->paths, path, n);
+            if (p->root.at.offset != start) continue;
+            if (p->root.kind != NR_OWN) return;
+            c->sum.start = start;
+            c->sum.root_pc = p->root.pc;
+            c->sum.which = p->root.which;
+            break;
+        }
+        if (c->sum.start == UINT32_MAX) return;
+    }
+    c->sum.binary_pc = here(c);
+}
+
+/* MUTATION: the value of `s = ...` is a template whose head is empty and
+ * whose first substitution starts with a read of s: CONSTANT "", LOCAL s,
+ * ..., CONCAT. A template is a bracket over no node before it, which the
+ * matcher's anchored lane does not match (docs/matcher.md, 12.7), so the
+ * compiler finds the form in its own code. */
+static bool append_template(sjs_compiler *c, const construct *k) {
+    uint32_t at = k->root_pc;
+    if (here(c) < at + 11u || c->code.ptr[at] != SJS_OP_CONSTANT) return false;
+    if (c->last_op != here(c) - 3u || c->code.ptr[c->last_op] != SJS_OP_CONCAT) return false;
+    sjs_value head = SJS_BUF_AT(c->constants, sjs_value, sjs_read32(c->code.ptr + at + 1u));
+    return head.kind == SJS_STRING && SJS_AS_STRING(head)->length == 0;
+}
+
+/* MUTATION: at ASSIGN_END of a let's assignment, before its operator and
+ * its store: move the read of the let that an append starts with, when the
+ * value read the let no other time (binding.reads): `s += e` reads it as
+ * its target, before ASSIGN; `s = s + ...` once in the value, and its
+ * target's read is gone (variable_target). */
+static void append_move(sjs_compiler *c, const construct *k) {
+    const binding *b = &SJS_BUF_AT(c->bindings, binding, k->receiver);
+    if (b->reads != k->reads + (k->assign == 0 ? 1u : 0u)) return;
+    if (k->assign == SJS_OP_ADD && k->append) {
+        append_take(c, k->root_pc, b);
+    } else if (k->assign == 0 && c->sum.start != UINT32_MAX && c->sum.which == k->receiver &&
+               c->sum.root_pc == k->root_pc && c->last_op == c->sum.binary_pc && here(c) == c->sum.binary_pc + 2u) {
+        append_take(c, k->root_pc, b);
+    } else if (k->assign == 0 && append_template(c, k)) {
+        append_take(c, k->root_pc + 5u, b);
+    }
+}
+
 /* ASSIGN: the target is compiled; the value follows. A compound
  * assignment reads the target's value first; && || ?? skip the value and
  * the store by its truth. */
@@ -2453,8 +2536,10 @@ static sjs_result assign_begin(sjs_compiler *c, const sjs_event *e) {
     construct k = { 0 };
     k.kind = K_ASSIGN;
     k.assign = (uint8_t)e->count;
+    k.node = e->node; /* MUTATION: an append's report names it */
     uint8_t taken = assign_target(c, e, &k);
     if (taken != TARGET_TAKEN) return taken == TARGET_REFUSED ? SJS_OK : SJS_ERR_PROGRAM;
+    k.reads = SJS_BUF_AT(c->bindings, binding, k.receiver).reads; /* MUTATION: appending to a let */
     if (k.assign != 0 && k.keys != 0 && emit_path(c, &k, ins(SJS_OP_PATH, SJS_PATH_LOAD, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
     if (logical_operator(k.assign)) {
         uint8_t opcode = k.assign == SJS_OP_AND ? SJS_OP_JUMP_FALSY_KEEP
@@ -2469,6 +2554,7 @@ static sjs_result assign_end(sjs_compiler *c, const sjs_event *e) {
     if (expect_construct(c, K_ASSIGN, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
     construct k = pop_construct(c);
     if (e->count != k.assign) return out_of_order(c, e->at);
+    if (k.keys == 0) append_move(c, &k); /* MUTATION: appending to a let */
     if (k.assign != 0 && !logical_operator(k.assign)) {
         if (op(c, SJS_OP_BINARY_, e->at) != SJS_OK || u8(c, k.assign) != SJS_OK) return SJS_ERR_PROGRAM;
     }
@@ -2829,6 +2915,9 @@ static sjs_result on_rewrite(void *self, const sjs_rewrite_match *match) {
     if (match->rewrite == SJS_REWRITE_MUTATE_PATH && k != NULL && k->kind == K_CALL && k->node == match->node) {
         k->mutate_path = 1;
     }
+    /* MUTATION: appending to a let. */
+    if (match->rewrite == SJS_REWRITE_APPEND && k != NULL && k->kind == K_ASSIGN && k->node == match->node) k->append = 1;
+    if (match->rewrite == SJS_REWRITE_APPEND_SUM) append_sum(c, match->start.offset);
     return SJS_OK;
 }
 
@@ -2853,6 +2942,7 @@ sjs_result sjs_compiler_init(sjs_compiler **out, const sjs_compiler_config *conf
     c->number_index = index_over(&c->numbers);
     c->string_index = index_over(&c->string_text);
     c->global_index = index_over(&c->global_text);
+    c->sum.start = UINT32_MAX; /* MUTATION: no APPEND_SUM yet */
     c->export_names = index_over(&c->names);
     c->star_modules = index_over(&c->names);
     c->namespaces = index_over(&c->names);
