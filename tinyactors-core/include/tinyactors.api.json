@@ -1,0 +1,3863 @@
+{
+  "format": "c-api/1",
+  "header": "tinyactors.h",
+  "version": "0.1.0",
+  "targets": [
+    "x86_64",
+    "aarch64",
+    "wasm32"
+  ],
+  "constants": [
+    {
+      "name": "TA_ABI_VERSION",
+      "value": 1
+    },
+    {
+      "name": "TA_ACTOR_DONE",
+      "value": 5
+    },
+    {
+      "name": "TA_ACTOR_FREE",
+      "value": 0
+    },
+    {
+      "name": "TA_ACTOR_HIBERNATED",
+      "value": 6
+    },
+    {
+      "name": "TA_ACTOR_IDLE",
+      "value": 1
+    },
+    {
+      "name": "TA_ACTOR_RUNNABLE",
+      "value": 2
+    },
+    {
+      "name": "TA_ACTOR_WAIT_EXTERNAL",
+      "value": 4
+    },
+    {
+      "name": "TA_ACTOR_WAIT_WORKSPACE",
+      "value": 3
+    },
+    {
+      "name": "TA_ADDRESS_NAME",
+      "value": 2
+    },
+    {
+      "name": "TA_ADDRESS_SESSION",
+      "value": 1
+    },
+    {
+      "name": "TA_ADDRESS_SESSION_MAX",
+      "value": 295
+    },
+    {
+      "name": "TA_ADDRESS_SYSTEM_MAX",
+      "value": 253
+    },
+    {
+      "name": "TA_BINDING_EARLY",
+      "value": 0
+    },
+    {
+      "name": "TA_BINDING_LATE",
+      "value": 1
+    },
+    {
+      "name": "TA_CAPTURE_DONEDATA",
+      "value": 2
+    },
+    {
+      "name": "TA_CAPTURE_INVOKE",
+      "value": 1
+    },
+    {
+      "name": "TA_CAPTURE_SEND",
+      "value": 0
+    },
+    {
+      "name": "TA_DATAMODEL_EVENT_DETACHABLE",
+      "value": 1
+    },
+    {
+      "name": "TA_EFFECT_DONE",
+      "value": 6
+    },
+    {
+      "name": "TA_EFFECT_ERROR",
+      "value": 7
+    },
+    {
+      "name": "TA_EFFECT_FLAG_NEEDS_RESPONSE",
+      "value": 1
+    },
+    {
+      "name": "TA_EFFECT_INVOKE",
+      "value": 3
+    },
+    {
+      "name": "TA_EFFECT_LOG",
+      "value": 5
+    },
+    {
+      "name": "TA_EFFECT_REQUEST",
+      "value": 2
+    },
+    {
+      "name": "TA_EFFECT_SEND",
+      "value": 1
+    },
+    {
+      "name": "TA_EFFECT_UNINVOKE",
+      "value": 4
+    },
+    {
+      "name": "TA_EFFECT_WAKE",
+      "value": 8
+    },
+    {
+      "name": "TA_ERROR_ABORTED",
+      "value": -9
+    },
+    {
+      "name": "TA_ERROR_COMMUNICATION",
+      "value": -2
+    },
+    {
+      "name": "TA_ERROR_EXECUTION",
+      "value": -1
+    },
+    {
+      "name": "TA_ERROR_FATAL",
+      "value": -8
+    },
+    {
+      "name": "TA_ERROR_INVALID",
+      "value": -3
+    },
+    {
+      "name": "TA_ERROR_NO_MEMORY",
+      "value": -4
+    },
+    {
+      "name": "TA_ERROR_STALE",
+      "value": -5
+    },
+    {
+      "name": "TA_ERROR_STATE",
+      "value": -6
+    },
+    {
+      "name": "TA_ERROR_UNSUPPORTED",
+      "value": -7
+    },
+    {
+      "name": "TA_EVENT_IN_ERROR_COMMUNICATION",
+      "value": 4
+    },
+    {
+      "name": "TA_EVENT_IN_FROM_INVOKE",
+      "value": 1
+    },
+    {
+      "name": "TA_EVENT_IN_INVOKE_DONE",
+      "value": 2
+    },
+    {
+      "name": "TA_EVENT_TYPE_EXTERNAL",
+      "value": 2
+    },
+    {
+      "name": "TA_EVENT_TYPE_INTERNAL",
+      "value": 1
+    },
+    {
+      "name": "TA_EVENT_TYPE_PLATFORM",
+      "value": 0
+    },
+    {
+      "name": "TA_EXPRESSION_CONDITION",
+      "value": 1
+    },
+    {
+      "name": "TA_EXPRESSION_CONTENT",
+      "value": 6
+    },
+    {
+      "name": "TA_EXPRESSION_LOCATION",
+      "value": 3
+    },
+    {
+      "name": "TA_EXPRESSION_SCRIPT",
+      "value": 4
+    },
+    {
+      "name": "TA_EXPRESSION_STRING",
+      "value": 5
+    },
+    {
+      "name": "TA_EXPRESSION_VALUE",
+      "value": 2
+    },
+    {
+      "name": "TA_FRAME_HEADER",
+      "value": 4
+    },
+    {
+      "name": "TA_FRAME_MAX",
+      "value": 1048576
+    },
+    {
+      "name": "TA_FRAME_MORE",
+      "value": 0
+    },
+    {
+      "name": "TA_FRAME_READY",
+      "value": 1
+    },
+    {
+      "name": "TA_FRAME_REFUSED",
+      "value": 2
+    },
+    {
+      "name": "TA_IO_PROCESSOR_SCXML_REMOTE",
+      "value": 2
+    },
+    {
+      "name": "TA_IO_PROCESSOR_SCXML_SHARED",
+      "value": 4
+    },
+    {
+      "name": "TA_IO_PROCESSOR_SYNC",
+      "value": 1
+    },
+    {
+      "name": "TA_NIL",
+      "value": 4294967295
+    },
+    {
+      "name": "TA_OK",
+      "value": 0
+    },
+    {
+      "name": "TA_POOL_ACTORS",
+      "value": 4
+    },
+    {
+      "name": "TA_POOL_EVENTS",
+      "value": 1
+    },
+    {
+      "name": "TA_POOL_NONE",
+      "value": 0
+    },
+    {
+      "name": "TA_POOL_REQUESTS",
+      "value": 5
+    },
+    {
+      "name": "TA_POOL_SLAB",
+      "value": 2
+    },
+    {
+      "name": "TA_POOL_TIMERS",
+      "value": 3
+    },
+    {
+      "name": "TA_RUN_EFFECTS",
+      "value": 5
+    },
+    {
+      "name": "TA_RUN_EFFECTS_FULL",
+      "value": 2
+    },
+    {
+      "name": "TA_RUN_EXHAUSTED",
+      "value": 3
+    },
+    {
+      "name": "TA_RUN_FAULT",
+      "value": 4
+    },
+    {
+      "name": "TA_RUN_IDLE",
+      "value": 0
+    },
+    {
+      "name": "TA_RUN_YIELDED",
+      "value": 1
+    },
+    {
+      "name": "TA_STATE_ATOMIC",
+      "value": 0
+    },
+    {
+      "name": "TA_STATE_COMPOUND",
+      "value": 1
+    },
+    {
+      "name": "TA_STATE_FINAL",
+      "value": 3
+    },
+    {
+      "name": "TA_STATE_HISTORY_DEEP",
+      "value": 5
+    },
+    {
+      "name": "TA_STATE_HISTORY_SHALLOW",
+      "value": 4
+    },
+    {
+      "name": "TA_STATE_PARALLEL",
+      "value": 2
+    },
+    {
+      "name": "TA_STEP_CANCEL",
+      "value": 3
+    },
+    {
+      "name": "TA_STEP_DONE",
+      "value": 8
+    },
+    {
+      "name": "TA_STEP_FAULT",
+      "value": 9
+    },
+    {
+      "name": "TA_STEP_INVOKE",
+      "value": 4
+    },
+    {
+      "name": "TA_STEP_NEED_WORKSPACE",
+      "value": 7
+    },
+    {
+      "name": "TA_STEP_REQUEST",
+      "value": 6
+    },
+    {
+      "name": "TA_STEP_SEND",
+      "value": 2
+    },
+    {
+      "name": "TA_STEP_STABLE",
+      "value": 1
+    },
+    {
+      "name": "TA_STEP_UNINVOKE",
+      "value": 5
+    },
+    {
+      "name": "TA_STEP_YIELD",
+      "value": 0
+    },
+    {
+      "name": "TA_SYSTEM_MAX_ACTORS",
+      "value": 8388606
+    },
+    {
+      "name": "TA_SYSTEM_MAX_POOL",
+      "value": 16777214
+    },
+    {
+      "name": "TA_VERSION_MAJOR",
+      "value": 0
+    },
+    {
+      "name": "TA_VERSION_MINOR",
+      "value": 1
+    },
+    {
+      "name": "TA_VERSION_PATCH",
+      "value": 0
+    }
+  ],
+  "types": {
+    "ta_string_view": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "pointer",
+          "type": "const char *"
+        },
+        {
+          "name": "length",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "length": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "length": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "pointer": 0,
+            "length": 4
+          }
+        }
+      }
+    },
+    "ta_status": {
+      "kind": "alias",
+      "type": "int32_t"
+    },
+    "ta_time": {
+      "kind": "alias",
+      "type": "uint64_t"
+    },
+    "ta_expression": {
+      "kind": "alias",
+      "type": "uint32_t"
+    },
+    "ta_payload": {
+      "kind": "alias",
+      "type": "uint64_t"
+    },
+    "ta_address": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "system",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "local",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "session",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "pad": 4,
+            "system": 8,
+            "local": 24,
+            "name": 40,
+            "session": 56
+          }
+        },
+        "aarch64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "pad": 4,
+            "system": 8,
+            "local": 24,
+            "name": 40,
+            "session": 56
+          }
+        },
+        "wasm32": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "pad": 4,
+            "system": 8,
+            "local": 16,
+            "name": 24,
+            "session": 32
+          }
+        }
+      }
+    },
+    "ta_frame_reader": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_frame",
+          "type": "uint32_t"
+        },
+        {
+          "name": "length",
+          "type": "uint32_t"
+        },
+        {
+          "name": "have",
+          "type": "uint32_t"
+        },
+        {
+          "name": "head",
+          "type": "uint32_t"
+        },
+        {
+          "name": "skip",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "max_frame": 4,
+            "length": 8,
+            "have": 12,
+            "head": 16,
+            "skip": 20
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "max_frame": 4,
+            "length": 8,
+            "have": 12,
+            "head": 16,
+            "skip": 20
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "max_frame": 4,
+            "length": 8,
+            "have": 12,
+            "head": 16,
+            "skip": 20
+          }
+        }
+      }
+    },
+    "ta_image": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "opaque",
+          "type": "uint64_t[32]"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 256,
+          "align": 8,
+          "offsets": {
+            "opaque": 0
+          }
+        },
+        "aarch64": {
+          "size": 256,
+          "align": 8,
+          "offsets": {
+            "opaque": 0
+          }
+        },
+        "wasm32": {
+          "size": 256,
+          "align": 8,
+          "offsets": {
+            "opaque": 0
+          }
+        }
+      }
+    },
+    "ta_image_info": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "version",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chart_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "boot_actor_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "datamodel_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "event_name_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "content_hash",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "version": 4,
+            "chart_count": 8,
+            "boot_actor_count": 12,
+            "datamodel_count": 16,
+            "event_name_count": 20,
+            "content_hash": 24
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "version": 4,
+            "chart_count": 8,
+            "boot_actor_count": 12,
+            "datamodel_count": 16,
+            "event_name_count": 20,
+            "content_hash": 24
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "version": 4,
+            "chart_count": 8,
+            "boot_actor_count": 12,
+            "datamodel_count": 16,
+            "event_name_count": 20,
+            "content_hash": 24
+          }
+        }
+      }
+    },
+    "ta_state_info": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "parent",
+          "type": "uint32_t"
+        },
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "depth",
+          "type": "uint32_t"
+        },
+        {
+          "name": "id",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "parent": 4,
+            "kind": 8,
+            "depth": 12,
+            "id": 16
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "parent": 4,
+            "kind": 8,
+            "depth": 12,
+            "id": 16
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "parent": 4,
+            "kind": 8,
+            "depth": 12,
+            "id": 16
+          }
+        }
+      }
+    },
+    "ta_data_info": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "expression",
+          "type": "ta_expression"
+        },
+        {
+          "name": "state",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "id": 0,
+            "expression": 16,
+            "state": 20
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "id": 0,
+            "expression": 16,
+            "state": 20
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "id": 0,
+            "expression": 8,
+            "state": 12
+          }
+        }
+      }
+    },
+    "ta_expression_info": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "line",
+          "type": "uint32_t"
+        },
+        {
+          "name": "column",
+          "type": "uint32_t"
+        },
+        {
+          "name": "source",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "line": 4,
+            "column": 8,
+            "source": 16
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "line": 4,
+            "column": 8,
+            "source": 16
+          }
+        },
+        "wasm32": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "kind": 0,
+            "line": 4,
+            "column": 8,
+            "source": 12
+          }
+        }
+      }
+    },
+    "ta_datamodel_environment": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "ta_event_view": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "type",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name_id",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "sendid",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "origin",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "origintype",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "invokeid",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "data",
+          "type": "ta_payload"
+        },
+        {
+          "name": "raw",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 120,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "type": 4,
+            "name_id": 8,
+            "pad": 12,
+            "name": 16,
+            "sendid": 32,
+            "origin": 48,
+            "origintype": 64,
+            "invokeid": 80,
+            "data": 96,
+            "raw": 104
+          }
+        },
+        "aarch64": {
+          "size": 120,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "type": 4,
+            "name_id": 8,
+            "pad": 12,
+            "name": 16,
+            "sendid": 32,
+            "origin": 48,
+            "origintype": 64,
+            "invokeid": 80,
+            "data": 96,
+            "raw": 104
+          }
+        },
+        "wasm32": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "type": 4,
+            "name_id": 8,
+            "pad": 12,
+            "name": 16,
+            "sendid": 24,
+            "origin": 32,
+            "origintype": 40,
+            "invokeid": 48,
+            "data": 56,
+            "raw": 64
+          }
+        }
+      }
+    },
+    "ta_io_processor_entry": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "location",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "location": 16
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "location": 16
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "type": 0,
+            "location": 8
+          }
+        }
+      }
+    },
+    "ta_datamodel_system_variables": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "io_processor_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sessionid",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "io_processors",
+          "type": "const ta_io_processor_entry *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "io_processor_count": 4,
+            "sessionid": 8,
+            "name": 24,
+            "io_processors": 40
+          }
+        },
+        "aarch64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "io_processor_count": 4,
+            "sessionid": 8,
+            "name": 24,
+            "io_processors": 40
+          }
+        },
+        "wasm32": {
+          "size": 28,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "io_processor_count": 4,
+            "sessionid": 8,
+            "name": 16,
+            "io_processors": 24
+          }
+        }
+      }
+    },
+    "ta_datamodel_capture": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "namelist_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "param_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "content",
+          "type": "ta_expression"
+        },
+        {
+          "name": "namelist",
+          "type": "const uint32_t *"
+        },
+        {
+          "name": "params",
+          "type": "const uint32_t *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "namelist_count": 4,
+            "param_count": 8,
+            "content": 12,
+            "namelist": 16,
+            "params": 24
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "namelist_count": 4,
+            "param_count": 8,
+            "content": 12,
+            "namelist": 16,
+            "params": 24
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "kind": 0,
+            "namelist_count": 4,
+            "param_count": 8,
+            "content": 12,
+            "namelist": 16,
+            "params": 20
+          }
+        }
+      }
+    },
+    "ta_datamodel_chart": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "binding",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "chart": 4,
+            "image": 8,
+            "binding": 16,
+            "pad": 20
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "chart": 4,
+            "image": 8,
+            "binding": 16,
+            "pad": 20
+          }
+        },
+        "wasm32": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "chart": 4,
+            "image": 8,
+            "binding": 12,
+            "pad": 16
+          }
+        }
+      }
+    },
+    "ta_datamodel_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "const char *"
+        },
+        {
+          "name": "chart_attach",
+          "type": "ta_status (*)(void *, const ta_datamodel_chart *, void **)"
+        },
+        {
+          "name": "chart_detach",
+          "type": "void (*)(void *, void *)"
+        },
+        {
+          "name": "create",
+          "type": "ta_status (*)(void *, void *, const ta_datamodel_system_variables *, ta_payload, uint64_t *)"
+        },
+        {
+          "name": "destroy",
+          "type": "void (*)(void *, uint64_t)"
+        },
+        {
+          "name": "init_data",
+          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, uint32_t)"
+        },
+        {
+          "name": "bind_event",
+          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, const ta_event_view *)"
+        },
+        {
+          "name": "detach_event",
+          "type": "void (*)(void *, uint64_t)"
+        },
+        {
+          "name": "eval_condition",
+          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_expression, int *)"
+        },
+        {
+          "name": "eval_string",
+          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_expression, ta_string_view *)"
+        },
+        {
+          "name": "assign",
+          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_expression, ta_expression)"
+        },
+        {
+          "name": "assign_string",
+          "type": "ta_status (*)(void *, uint64_t, ta_expression, ta_string_view)"
+        },
+        {
+          "name": "script",
+          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_expression)"
+        },
+        {
+          "name": "log",
+          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_expression, ta_string_view *)"
+        },
+        {
+          "name": "foreach_begin",
+          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_expression, uint64_t *, uint32_t *)"
+        },
+        {
+          "name": "foreach_item",
+          "type": "ta_status (*)(void *, uint64_t, uint64_t, uint32_t, ta_expression, ta_expression)"
+        },
+        {
+          "name": "foreach_end",
+          "type": "void (*)(void *, uint64_t, uint64_t)"
+        },
+        {
+          "name": "capture",
+          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, const ta_datamodel_capture *, ta_payload *)"
+        },
+        {
+          "name": "retain",
+          "type": "void (*)(void *, ta_payload)"
+        },
+        {
+          "name": "release",
+          "type": "void (*)(void *, ta_payload)"
+        },
+        {
+          "name": "custom",
+          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, uint32_t)"
+        },
+        {
+          "name": "serialize",
+          "type": "ta_status (*)(void *, uint64_t, void *, size_t, size_t *)"
+        },
+        {
+          "name": "deserialize",
+          "type": "ta_status (*)(void *, void *, const ta_datamodel_system_variables *, const void *, size_t, uint64_t *)"
+        },
+        {
+          "name": "migrate",
+          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_payload *)"
+        },
+        {
+          "name": "to_wire",
+          "type": "ta_status (*)(void *, ta_payload, char *, size_t, size_t *)"
+        },
+        {
+          "name": "from_wire",
+          "type": "ta_status (*)(void *, ta_string_view, ta_payload *)"
+        },
+        {
+          "name": "payload_serialize",
+          "type": "ta_status (*)(void *, ta_payload, void *, size_t, size_t *)"
+        },
+        {
+          "name": "payload_deserialize",
+          "type": "ta_status (*)(void *, const void *, size_t, ta_payload *)"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 232,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "name": 8,
+            "chart_attach": 16,
+            "chart_detach": 24,
+            "create": 32,
+            "destroy": 40,
+            "init_data": 48,
+            "bind_event": 56,
+            "detach_event": 64,
+            "eval_condition": 72,
+            "eval_string": 80,
+            "assign": 88,
+            "assign_string": 96,
+            "script": 104,
+            "log": 112,
+            "foreach_begin": 120,
+            "foreach_item": 128,
+            "foreach_end": 136,
+            "capture": 144,
+            "retain": 152,
+            "release": 160,
+            "custom": 168,
+            "serialize": 176,
+            "deserialize": 184,
+            "migrate": 192,
+            "to_wire": 200,
+            "from_wire": 208,
+            "payload_serialize": 216,
+            "payload_deserialize": 224
+          }
+        },
+        "aarch64": {
+          "size": 232,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "name": 8,
+            "chart_attach": 16,
+            "chart_detach": 24,
+            "create": 32,
+            "destroy": 40,
+            "init_data": 48,
+            "bind_event": 56,
+            "detach_event": 64,
+            "eval_condition": 72,
+            "eval_string": 80,
+            "assign": 88,
+            "assign_string": 96,
+            "script": 104,
+            "log": 112,
+            "foreach_begin": 120,
+            "foreach_item": 128,
+            "foreach_end": 136,
+            "capture": 144,
+            "retain": 152,
+            "release": 160,
+            "custom": 168,
+            "serialize": 176,
+            "deserialize": 184,
+            "migrate": 192,
+            "to_wire": 200,
+            "from_wire": 208,
+            "payload_serialize": 216,
+            "payload_deserialize": 224
+          }
+        },
+        "wasm32": {
+          "size": 120,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "name": 8,
+            "chart_attach": 12,
+            "chart_detach": 16,
+            "create": 20,
+            "destroy": 24,
+            "init_data": 28,
+            "bind_event": 32,
+            "detach_event": 36,
+            "eval_condition": 40,
+            "eval_string": 44,
+            "assign": 48,
+            "assign_string": 52,
+            "script": 56,
+            "log": 60,
+            "foreach_begin": 64,
+            "foreach_item": 68,
+            "foreach_end": 72,
+            "capture": 76,
+            "retain": 80,
+            "release": 84,
+            "custom": 88,
+            "serialize": 92,
+            "deserialize": 96,
+            "migrate": 100,
+            "to_wire": 104,
+            "from_wire": 108,
+            "payload_serialize": 112,
+            "payload_deserialize": 116
+          }
+        }
+      }
+    },
+    "ta_datamodel_binding": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "vtable",
+          "type": "const ta_datamodel_vtable *"
+        },
+        {
+          "name": "datamodel",
+          "type": "void *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "vtable": 0,
+            "datamodel": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "vtable": 0,
+            "datamodel": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "vtable": 0,
+            "datamodel": 4
+          }
+        }
+      }
+    },
+    "ta_system": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "ta_io_processor_descriptor": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "location",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "location": 16,
+            "flags": 32,
+            "pad": 36
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "location": 16,
+            "flags": 32,
+            "pad": 36
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "type": 0,
+            "location": 8,
+            "flags": 16,
+            "pad": 20
+          }
+        }
+      }
+    },
+    "ta_system_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_actors",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_events",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_timers",
+          "type": "uint32_t"
+        },
+        {
+          "name": "workspaces",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_requests",
+          "type": "uint32_t"
+        },
+        {
+          "name": "outbox",
+          "type": "uint32_t"
+        },
+        {
+          "name": "quantum",
+          "type": "uint32_t"
+        },
+        {
+          "name": "instance_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "string_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "io_processor_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "ticks_per_second",
+          "type": "uint64_t"
+        },
+        {
+          "name": "io_processors",
+          "type": "const ta_io_processor_descriptor *"
+        },
+        {
+          "name": "first_serial",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "max_actors": 4,
+            "max_events": 8,
+            "max_timers": 12,
+            "workspaces": 16,
+            "max_requests": 20,
+            "outbox": 24,
+            "quantum": 28,
+            "instance_bytes": 32,
+            "string_bytes": 36,
+            "io_processor_count": 40,
+            "pad": 44,
+            "ticks_per_second": 48,
+            "io_processors": 56,
+            "first_serial": 64
+          }
+        },
+        "aarch64": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "max_actors": 4,
+            "max_events": 8,
+            "max_timers": 12,
+            "workspaces": 16,
+            "max_requests": 20,
+            "outbox": 24,
+            "quantum": 28,
+            "instance_bytes": 32,
+            "string_bytes": 36,
+            "io_processor_count": 40,
+            "pad": 44,
+            "ticks_per_second": 48,
+            "io_processors": 56,
+            "first_serial": 64
+          }
+        },
+        "wasm32": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "max_actors": 4,
+            "max_events": 8,
+            "max_timers": 12,
+            "workspaces": 16,
+            "max_requests": 20,
+            "outbox": 24,
+            "quantum": 28,
+            "instance_bytes": 32,
+            "string_bytes": 36,
+            "io_processor_count": 40,
+            "pad": 44,
+            "ticks_per_second": 48,
+            "io_processors": 56,
+            "first_serial": 64
+          }
+        }
+      }
+    },
+    "ta_event_in": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "target",
+          "type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "token",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "sendid",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "origin",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "origintype",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "data",
+          "type": "ta_payload"
+        },
+        {
+          "name": "raw",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 104,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "target": 4,
+            "flags": 8,
+            "token": 12,
+            "name": 16,
+            "sendid": 32,
+            "origin": 48,
+            "origintype": 64,
+            "data": 80,
+            "raw": 88
+          }
+        },
+        "aarch64": {
+          "size": 104,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "target": 4,
+            "flags": 8,
+            "token": 12,
+            "name": 16,
+            "sendid": 32,
+            "origin": 48,
+            "origintype": 64,
+            "data": 80,
+            "raw": 88
+          }
+        },
+        "wasm32": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "target": 4,
+            "flags": 8,
+            "token": 12,
+            "name": 16,
+            "sendid": 24,
+            "origin": 32,
+            "origintype": 40,
+            "data": 48,
+            "raw": 56
+          }
+        }
+      }
+    },
+    "ta_run": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "status",
+          "type": "uint32_t"
+        },
+        {
+          "name": "effect_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "used",
+          "type": "uint32_t"
+        },
+        {
+          "name": "detail",
+          "type": "uint32_t"
+        },
+        {
+          "name": "next_deadline",
+          "type": "ta_time"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "status": 0,
+            "effect_count": 4,
+            "used": 8,
+            "detail": 12,
+            "next_deadline": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "status": 0,
+            "effect_count": 4,
+            "used": 8,
+            "detail": 12,
+            "next_deadline": 16
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "status": 0,
+            "effect_count": 4,
+            "used": 8,
+            "detail": 12,
+            "next_deadline": 16
+          }
+        }
+      }
+    },
+    "ta_effect": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "token",
+          "type": "uint32_t"
+        },
+        {
+          "name": "io_processor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "target",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "event",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "sendid",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "auxiliary",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "payload",
+          "type": "ta_payload"
+        },
+        {
+          "name": "delay_hint",
+          "type": "ta_time"
+        },
+        {
+          "name": "session",
+          "type": "uint64_t"
+        },
+        {
+          "name": "datamodel",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 120,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "kind": 4,
+            "actor": 8,
+            "token": 12,
+            "io_processor": 16,
+            "flags": 20,
+            "target": 24,
+            "event": 40,
+            "sendid": 56,
+            "auxiliary": 72,
+            "payload": 88,
+            "delay_hint": 96,
+            "session": 104,
+            "datamodel": 112,
+            "pad": 116
+          }
+        },
+        "aarch64": {
+          "size": 120,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "kind": 4,
+            "actor": 8,
+            "token": 12,
+            "io_processor": 16,
+            "flags": 20,
+            "target": 24,
+            "event": 40,
+            "sendid": 56,
+            "auxiliary": 72,
+            "payload": 88,
+            "delay_hint": 96,
+            "session": 104,
+            "datamodel": 112,
+            "pad": 116
+          }
+        },
+        "wasm32": {
+          "size": 88,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "kind": 4,
+            "actor": 8,
+            "token": 12,
+            "io_processor": 16,
+            "flags": 20,
+            "target": 24,
+            "event": 32,
+            "sendid": 40,
+            "auxiliary": 48,
+            "payload": 56,
+            "delay_hint": 64,
+            "session": 72,
+            "datamodel": 80,
+            "pad": 84
+          }
+        }
+      }
+    },
+    "ta_actor_info": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "state",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "parent",
+          "type": "uint32_t"
+        },
+        {
+          "name": "in_macrostep",
+          "type": "uint32_t"
+        },
+        {
+          "name": "mailbox_length",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pending_request",
+          "type": "uint32_t"
+        },
+        {
+          "name": "current_event_name",
+          "type": "uint32_t"
+        },
+        {
+          "name": "serial",
+          "type": "uint64_t"
+        },
+        {
+          "name": "datamodel_instance",
+          "type": "uint64_t"
+        },
+        {
+          "name": "invocations",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "state": 4,
+            "chart": 8,
+            "parent": 12,
+            "in_macrostep": 16,
+            "mailbox_length": 20,
+            "pending_request": 24,
+            "current_event_name": 28,
+            "serial": 32,
+            "datamodel_instance": 40,
+            "invocations": 48,
+            "pad": 52
+          }
+        },
+        "aarch64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "state": 4,
+            "chart": 8,
+            "parent": 12,
+            "in_macrostep": 16,
+            "mailbox_length": 20,
+            "pending_request": 24,
+            "current_event_name": 28,
+            "serial": 32,
+            "datamodel_instance": 40,
+            "invocations": 48,
+            "pad": 52
+          }
+        },
+        "wasm32": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "state": 4,
+            "chart": 8,
+            "parent": 12,
+            "in_macrostep": 16,
+            "mailbox_length": 20,
+            "pending_request": 24,
+            "current_event_name": 28,
+            "serial": 32,
+            "datamodel_instance": 40,
+            "invocations": 48,
+            "pad": 52
+          }
+        }
+      }
+    },
+    "ta_system_stats": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "actors",
+          "type": "uint32_t"
+        },
+        {
+          "name": "actors_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "runnable",
+          "type": "uint32_t"
+        },
+        {
+          "name": "events",
+          "type": "uint32_t"
+        },
+        {
+          "name": "events_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "timers",
+          "type": "uint32_t"
+        },
+        {
+          "name": "timers_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "workspaces",
+          "type": "uint32_t"
+        },
+        {
+          "name": "workspaces_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "requests",
+          "type": "uint32_t"
+        },
+        {
+          "name": "requests_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "slab_pages",
+          "type": "uint32_t"
+        },
+        {
+          "name": "slab_pages_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "slab_page_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "outbox",
+          "type": "uint32_t"
+        },
+        {
+          "name": "outbox_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "region_bytes",
+          "type": "uint64_t"
+        },
+        {
+          "name": "delivered",
+          "type": "uint64_t"
+        },
+        {
+          "name": "fuel",
+          "type": "uint64_t"
+        },
+        {
+          "name": "turns",
+          "type": "uint64_t"
+        },
+        {
+          "name": "timers_fired",
+          "type": "uint64_t"
+        },
+        {
+          "name": "spawned",
+          "type": "uint64_t"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        },
+        {
+          "name": "hibernated",
+          "type": "uint32_t"
+        },
+        {
+          "name": "wakes_pending",
+          "type": "uint32_t"
+        },
+        {
+          "name": "hibernations",
+          "type": "uint64_t"
+        },
+        {
+          "name": "wakes",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 152,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "actors": 4,
+            "actors_capacity": 8,
+            "runnable": 12,
+            "events": 16,
+            "events_capacity": 20,
+            "timers": 24,
+            "timers_capacity": 28,
+            "workspaces": 32,
+            "workspaces_capacity": 36,
+            "requests": 40,
+            "requests_capacity": 44,
+            "slab_pages": 48,
+            "slab_pages_capacity": 52,
+            "slab_page_bytes": 56,
+            "outbox": 60,
+            "outbox_capacity": 64,
+            "pad": 68,
+            "region_bytes": 72,
+            "delivered": 80,
+            "fuel": 88,
+            "turns": 96,
+            "timers_fired": 104,
+            "spawned": 112,
+            "now": 120,
+            "hibernated": 128,
+            "wakes_pending": 132,
+            "hibernations": 136,
+            "wakes": 144
+          }
+        },
+        "aarch64": {
+          "size": 152,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "actors": 4,
+            "actors_capacity": 8,
+            "runnable": 12,
+            "events": 16,
+            "events_capacity": 20,
+            "timers": 24,
+            "timers_capacity": 28,
+            "workspaces": 32,
+            "workspaces_capacity": 36,
+            "requests": 40,
+            "requests_capacity": 44,
+            "slab_pages": 48,
+            "slab_pages_capacity": 52,
+            "slab_page_bytes": 56,
+            "outbox": 60,
+            "outbox_capacity": 64,
+            "pad": 68,
+            "region_bytes": 72,
+            "delivered": 80,
+            "fuel": 88,
+            "turns": 96,
+            "timers_fired": 104,
+            "spawned": 112,
+            "now": 120,
+            "hibernated": 128,
+            "wakes_pending": 132,
+            "hibernations": 136,
+            "wakes": 144
+          }
+        },
+        "wasm32": {
+          "size": 152,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "actors": 4,
+            "actors_capacity": 8,
+            "runnable": 12,
+            "events": 16,
+            "events_capacity": 20,
+            "timers": 24,
+            "timers_capacity": 28,
+            "workspaces": 32,
+            "workspaces_capacity": 36,
+            "requests": 40,
+            "requests_capacity": 44,
+            "slab_pages": 48,
+            "slab_pages_capacity": 52,
+            "slab_page_bytes": 56,
+            "outbox": 60,
+            "outbox_capacity": 64,
+            "pad": 68,
+            "region_bytes": 72,
+            "delivered": 80,
+            "fuel": 88,
+            "turns": 96,
+            "timers_fired": 104,
+            "spawned": 112,
+            "now": 120,
+            "hibernated": 128,
+            "wakes_pending": 132,
+            "hibernations": 136,
+            "wakes": 144
+          }
+        }
+      }
+    },
+    "ta_core": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "ta_instance": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "ta_http_field": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "value",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "value": 16
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "value": 16
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "value": 8
+          }
+        }
+      }
+    },
+    "ta_http_request": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "method",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "target",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "body",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "event",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "field_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "fields",
+          "type": "ta_http_field[32]"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 1096,
+          "align": 8,
+          "offsets": {
+            "method": 0,
+            "target": 16,
+            "body": 32,
+            "event": 48,
+            "field_count": 64,
+            "fields": 72
+          }
+        },
+        "aarch64": {
+          "size": 1096,
+          "align": 8,
+          "offsets": {
+            "method": 0,
+            "target": 16,
+            "body": 32,
+            "event": 48,
+            "field_count": 64,
+            "fields": 72
+          }
+        },
+        "wasm32": {
+          "size": 548,
+          "align": 4,
+          "offsets": {
+            "method": 0,
+            "target": 8,
+            "body": 16,
+            "event": 24,
+            "field_count": 32,
+            "fields": 36
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "name": "ta_actor_config",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "states",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_actor_export",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "buffer",
+          "type": "void *"
+        },
+        {
+          "name": "capacity",
+          "type": "size_t"
+        },
+        {
+          "name": "length",
+          "type": "size_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_actor_hibernate",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "buffer",
+          "type": "void *"
+        },
+        {
+          "name": "capacity",
+          "type": "size_t"
+        },
+        {
+          "name": "length",
+          "type": "size_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_actor_info_get",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_actor_info *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_actor_wake",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "blob",
+          "type": "const void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_address_format",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "session",
+          "type": "uint64_t"
+        },
+        {
+          "name": "buffer",
+          "type": "char *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_address_format_name",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "buffer",
+          "type": "char *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_address_name_decode",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "buffer",
+          "type": "char *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_address_parse",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "text",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "out",
+          "type": "ta_address *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_address_parse_local",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "local",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "out",
+          "type": "ta_address *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_address_system_valid",
+      "returns": "int",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_blob_migrate",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "from_image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "to_image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "to_chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "blob",
+          "type": "const void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "out",
+          "type": "void *"
+        },
+        {
+          "name": "capacity",
+          "type": "size_t"
+        },
+        {
+          "name": "out_length",
+          "type": "size_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_blob_rebase",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "blob",
+          "type": "void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "from",
+          "type": "ta_time"
+        },
+        {
+          "name": "to",
+          "type": "ta_time"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_core_deliver",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "core",
+          "type": "ta_core *"
+        },
+        {
+          "name": "instance",
+          "type": "ta_instance *"
+        },
+        {
+          "name": "event",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_core_instance_size",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_core_step",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "core",
+          "type": "ta_core *"
+        },
+        {
+          "name": "instance",
+          "type": "ta_instance *"
+        },
+        {
+          "name": "fuel",
+          "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_core_workspace_size",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_environment_charge",
+      "returns": "void",
+      "params": [
+        {
+          "name": "environment",
+          "type": "ta_datamodel_environment *"
+        },
+        {
+          "name": "fuel",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_environment_chart",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "environment",
+          "type": "const ta_datamodel_environment *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_environment_image",
+      "returns": "const ta_image *",
+      "params": [
+        {
+          "name": "environment",
+          "type": "const ta_datamodel_environment *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_environment_in",
+      "returns": "int",
+      "params": [
+        {
+          "name": "environment",
+          "type": "const ta_datamodel_environment *"
+        },
+        {
+          "name": "state",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_null",
+      "returns": "const ta_datamodel_vtable *",
+      "params": [],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_frame_header",
+      "returns": "void",
+      "params": [
+        {
+          "name": "length",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "uint8_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_frame_read",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "r",
+          "type": "ta_frame_reader *"
+        },
+        {
+          "name": "buffer",
+          "type": "uint8_t *"
+        },
+        {
+          "name": "in",
+          "type": "const uint8_t *"
+        },
+        {
+          "name": "n",
+          "type": "uint32_t"
+        },
+        {
+          "name": "event",
+          "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_frame_reader_init",
+      "returns": "void",
+      "params": [
+        {
+          "name": "r",
+          "type": "ta_frame_reader *"
+        },
+        {
+          "name": "max_frame",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_http_encode_post",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "url",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "event",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "fields",
+          "type": "const ta_http_field *"
+        },
+        {
+          "name": "field_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "body",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "out",
+          "type": "char *"
+        },
+        {
+          "name": "capacity",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_http_parse_request",
+      "returns": "int",
+      "params": [
+        {
+          "name": "message",
+          "type": "const char *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "scratch",
+          "type": "char *"
+        },
+        {
+          "name": "scratch_capacity",
+          "type": "size_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_http_request *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_ahead_of_time_section",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "datamodel",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_boot_actor",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "i",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_chart_by_name",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_chart_datamodel",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_chart_name",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_chart_source",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_data",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_data_info *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_data_count",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_event_name",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "name_id",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_expression",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "e",
+          "type": "ta_expression"
+        },
+        {
+          "name": "out",
+          "type": "ta_expression_info *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_expression_count",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_get_info",
+      "returns": "void",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "out",
+          "type": "ta_image_info *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_open",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "bytes",
+          "type": "const void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_image *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_state_by_name",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_state_count",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_state_info",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "state",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_state_info *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_state_name",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "state",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_string",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "sid",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_actor_by_name",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_actor_by_session",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "sessionid",
+          "type": "uint64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_actors",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "cursor",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "out",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_adopt",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "blob",
+          "type": "const void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_advance_time",
+      "returns": "void",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_boot",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_cold_actors",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "cursor",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "max_scan",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_deinit",
+      "returns": "void",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_effects",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "out",
+          "type": "const ta_effect **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_effects_ack",
+      "returns": "void",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "n",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_init",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "memory",
+          "type": "void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "config",
+          "type": "const ta_system_config *"
+        },
+        {
+          "name": "datamodels",
+          "type": "const ta_datamodel_binding *"
+        },
+        {
+          "name": "datamodel_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_system **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_layout",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "config",
+          "type": "const ta_system_config *"
+        },
+        {
+          "name": "bytes",
+          "type": "size_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_next_deadline",
+      "returns": "ta_time",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_relocate",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "new_memory",
+          "type": "void *"
+        },
+        {
+          "name": "new_length",
+          "type": "size_t"
+        },
+        {
+          "name": "new_config",
+          "type": "const ta_system_config *"
+        },
+        {
+          "name": "out",
+          "type": "ta_system **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_restore",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "memory",
+          "type": "void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "snap",
+          "type": "const void *"
+        },
+        {
+          "name": "snap_length",
+          "type": "size_t"
+        },
+        {
+          "name": "host",
+          "type": "const ta_system_config *"
+        },
+        {
+          "name": "datamodels",
+          "type": "const ta_datamodel_binding *"
+        },
+        {
+          "name": "datamodel_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_system **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_resume",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "request",
+          "type": "uint32_t"
+        },
+        {
+          "name": "status",
+          "type": "ta_status"
+        },
+        {
+          "name": "result",
+          "type": "ta_payload"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_run",
+      "returns": "ta_run",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "budget",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_send",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "event",
+          "type": "const ta_event_in *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_send_many",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "events",
+          "type": "const ta_event_in *"
+        },
+        {
+          "name": "n",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_set_next_serial",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "serial",
+          "type": "uint64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_snapshot",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "buffer",
+          "type": "void *"
+        },
+        {
+          "name": "capacity",
+          "type": "size_t"
+        },
+        {
+          "name": "length",
+          "type": "size_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_spawn",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "params",
+          "type": "ta_payload"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_stats_get",
+      "returns": "void",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "out",
+          "type": "ta_system_stats *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_terminate",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_wasm_alloc",
+      "returns": "void *",
+      "params": [
+        {
+          "name": "size",
+          "type": "size_t"
+        },
+        {
+          "name": "alignment",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "platform": "wasm",
+      "implemented": true
+    },
+    {
+      "name": "ta_wasm_free",
+      "returns": "void",
+      "params": [
+        {
+          "name": "pointer",
+          "type": "void *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        },
+        {
+          "name": "alignment",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "platform": "wasm",
+      "implemented": true
+    }
+  ]
+}

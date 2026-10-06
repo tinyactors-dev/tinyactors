@@ -6,6 +6,8 @@ require 'pathname'
 # (docs/adr/0001-packaging-and-releases.md, decision 9). A source whose name
 # ends in `_<suffix>.c` or `_<suffix>.h`, with `<suffix>` in SUFFIXES, is
 # built only for that platform: `src/txml_allocator_wasm.c` only for wasm.
+# `hosted` is every target with a C library (the native ones, and WASI):
+# `src/runtime/runtime_hosted.c` is left out of freestanding wasm only.
 # Every other file is portable and built for every target. A suffix not in
 # the list is an ordinary part of a name.
 #
@@ -15,7 +17,7 @@ module PlatformFiles
   # The workspace's platform suffixes. Add one (`linux`, `macos`,
   # `aarch64`, or a pair such as `linux_aarch64`) when the first file needs
   # it.
-  SUFFIXES = %w[wasm].freeze
+  SUFFIXES = %w[wasm hosted].freeze
 
   module_function
 

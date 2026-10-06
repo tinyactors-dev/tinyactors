@@ -15,7 +15,8 @@ drain tagged effects.
 - [docs/distribution.md](docs/distribution.md) — the release artifacts to rebuild: npm, C/pkg-config,
   and PostgreSQL artifacts, target matrix, installation and package tests
 
-`VERSION` is the release version (currently 0.1.0). The build and its tasks
+The release version is `TA_VERSION_MAJOR`, `_MINOR` and `_PATCH` in
+`include/tinyactors/types.h` (currently 0.1.0). The build and its tasks
 are Ruby, on the repository's pinned toolchain (`mise/core.rb`,
 [layout.md](docs/layout.md#tasks)):
 

@@ -37,6 +37,9 @@ abort "tinyactors-core: failed: #{failed.sort.join(', ')}" unless failed.empty?
 puts "tinyactors-core: #{runs.size} test programs pass"
 
 # The rest are tasks of their own; each runs alone too.
-tasks = %w[lint check:freestanding amalgamate w3c node:test web:test conformance:js w3c:js examples:test check:wasm]
-tasks += %w[torture:test check:cross] if ENV['usage_full'] == 'true' || ARGV.include?('--full')
-tasks.each { |task| Core.run('mise', 'run', task) }
+# `api --check` builds the amalgamations first, and fails when a checked-in
+# API description no longer matches its library.
+tasks = [%w[lint], %w[check:freestanding], %w[api --check], %w[w3c], %w[node:test], %w[web:test], %w[conformance:js],
+         %w[w3c:js], %w[examples:test], %w[check:wasm]]
+tasks += [%w[torture:test], %w[check:cross]] if ENV['usage_full'] == 'true' || ARGV.include?('--full')
+tasks.each { |task| Core.run('mise', 'run', *task) }

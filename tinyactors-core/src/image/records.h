@@ -251,7 +251,18 @@ TA_INLINE const ta_transition_record *ta_chart_transitions(const ta_image_view *
 uint32_t ta_event_name_lookup(const ta_image_view *v, const char *name, uint32_t length,
                               int *exact);
 
-/* FNV-1a 64 with the header hash field treated as zero (shared with writer). */
-uint64_t ta_image_hash(const unsigned char *bytes, uint32_t length);
+/* FNV-1a 64 with the header hash field treated as zero. Inline, so the
+ * reader (image.c) and the writer (compile/link.c) each carry it: they ship
+ * in different libraries (libtinyactors, libtinyactors_runtime), and the
+ * runtime library uses only the core library's public API. */
+static inline uint64_t ta_image_hash(const unsigned char *bytes, uint32_t length) {
+    uint64_t h = 1469598103934665603ull;
+    for (uint32_t i = 0; i < length; i++) {
+        unsigned char c = (i >= 16 && i < 24) ? 0 : bytes[i]; /* hash field */
+        h ^= c;
+        h *= 1099511628211ull;
+    }
+    return h;
+}
 
 #endif /* TINYACTORS_IMAGE_RECORDS_H */

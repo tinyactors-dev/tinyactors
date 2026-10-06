@@ -16,7 +16,11 @@
 extern "C" {
 #endif
 
-#if defined(TA_SHARED) && defined(_WIN32)
+/* A build may define TA_API itself: a release compiles the library with
+ * TA_API at default visibility under -fvisibility=hidden, so only the API
+ * is exported. */
+#if defined(TA_API)
+#elif defined(TA_SHARED) && defined(_WIN32)
 #if defined(TA_BUILDING)
 #define TA_API __declspec(dllexport)
 #else
@@ -27,6 +31,12 @@ extern "C" {
 #else
 #define TA_API
 #endif
+
+/* The release, MAJOR.MINOR.PATCH (of libtinyactors and libtinyactors_runtime,
+ * released together); a release sets them. */
+#define TA_VERSION_MAJOR 0
+#define TA_VERSION_MINOR 1
+#define TA_VERSION_PATCH 0
 
 #define TA_ABI_VERSION 1u
 

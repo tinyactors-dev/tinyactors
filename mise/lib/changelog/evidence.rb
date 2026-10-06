@@ -118,7 +118,7 @@ module Changelog
     def api_section
       return [] if first_release?
 
-      out = ['', "## API delta (#{(component.api_json ? [component.api_json] : component.api_files).join(', ')})"]
+      out = ['', "## API delta (#{(component.api_json ? Array(component.api_json) : component.api_files).join(', ')})"]
       if delta.empty?
         out << '' << 'No public declaration was added, removed or changed.'
         return out

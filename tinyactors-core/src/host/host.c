@@ -580,7 +580,7 @@ void communication_error(ta_host *host, uint32_t si, uint32_t actor, ta_string_v
 }
 
 /* A send through the remote processor: another segment of ours, or out. */
-static void route(ta_host *host, uint32_t si, const ta_effect *effect) {
+static void route_effect(ta_host *host, uint32_t si, const ta_effect *effect) {
     ta_router_outbound(host, si, effect);
 }
 
@@ -593,7 +593,7 @@ static void drain(ta_host *host, uint32_t si) {
     for (uint32_t i = 0; i < n; i++) {
         const ta_effect *effect_view = &effect[i];
         if (effect_view->kind == TA_EFFECT_SEND && effect_view->io_processor == 0)
-            route(host, si, effect_view);
+            route_effect(host, si, effect_view);
         else if (effect_view->kind == TA_EFFECT_SEND)
             effect_copy(host, si, effect_view,
                         effect_view->io_processor == TA_NIL ? TA_NIL

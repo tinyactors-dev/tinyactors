@@ -11,6 +11,7 @@ require 'pathname'
 require 'shellwords'
 require 'cache'
 require 'toolchain'
+require 'platform_files'
 
 module Core
   ROOT = Pathname.new(__dir__).join('..').expand_path
@@ -35,7 +36,7 @@ module Core
     # Many systems as one (versions, routing, migration jobs, hibernation
     # policy); hosted, it uses malloc.
     Layer.new(name: 'host', uses: %w[system], sources: %w[src/host/host.c src/host/router.c]),
-    Layer.new(name: 'runtime', uses: %w[system compile], sources: %w[src/runtime/runtime.c]),
+    Layer.new(name: 'runtime', uses: %w[system compile], sources: %w[src/runtime/runtime.c src/runtime/runtime_hosted.c]),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
     # The vendored engine only: quickjs-libc (std and os modules, I/O) is not built.
@@ -48,6 +49,66 @@ module Core
     # The tests' data model (tests/support), linked by the test programs only.
     Layer.new(name: 'test_datamodel', uses: %w[image], libraries: %w[-lm], sources: %w[tests/support/datamodel_test.c])
   ].to_h { |layer| [layer.name, layer] }.freeze
+
+  DIST = ROOT.join('dist')
+
+  # The libraries a release ships (root ADR 0001, decision 19), each as a
+  # header, an amalgamation, a static and a shared library per native target
+  # and a wasm module, all built from dist/ (mise run amalgamate):
+  #
+  #   tinyactors          the freestanding layers: no C library, no allocation
+  #   tinyactors_runtime  the compiler, the host and the runtime conveniences,
+  #                       on the C library's allocator; built on tinyactors's
+  #                       public API alone
+  #
+  # `headers` are its public headers (include/tinyactors/), in the order the
+  # amalgamated header has them; `uses` the libraries it builds on.
+  # `libc` says whether it calls the C library: its wasm module then links
+  # wasi-libc for it (and is checked to import nothing), where tinyactors's
+  # is built for wasm32-freestanding.
+  Library = Struct.new(:name, :headers, :layers, :uses, :libc, keyword_init: true) do
+    def header = DIST.join("#{name}.h")
+    def amalgamation = DIST.join("#{name}.c")
+    # The amalgamation of its platform files for `suffix` (`wasm`, `hosted`).
+    def platform_amalgamation(suffix) = DIST.join("#{name}_#{suffix}.c")
+    def api = ROOT.join("include/#{name}.api.json")
+
+    # What compiles its amalgamation for `platform` (nil, `hosted`, `wasm`)
+    # on this machine.
+    def target(platform)
+      return Toolchain::Target.host unless platform == 'wasm'
+
+      libc ? Toolchain::Target.zig('wasm32-wasi') : Toolchain::Target.release('wasm32-freestanding')
+    end
+
+    # Its C sources: its layers' and their platform files (PlatformFiles),
+    # each with its platform (nil for a portable file).
+    def sources
+      listed = layers.flat_map { |layer| LAYERS.fetch(layer).sources }
+      platform = layers.flat_map do |layer|
+        PlatformFiles::SUFFIXES.flat_map { |suffix| Dir[ROOT.join("src/#{layer}/*_#{suffix}.c").to_s] }
+      end
+      (listed + platform.map { |path| Pathname.new(path).relative_path_from(ROOT).to_s }).uniq.sort
+    end
+  end
+
+  LIBRARIES = [
+    Library.new(name: 'tinyactors', layers: %w[base image core system basic_http], uses: [], libc: false,
+                headers: %w[types.h address.h frame.h image.h datamodel.h system.h core.h basic_http.h wasm.h]),
+    Library.new(name: 'tinyactors_runtime', layers: %w[compile host runtime], uses: %w[tinyactors], libc: true,
+                headers: %w[compile.h host.h runtime.h])
+  ].freeze
+
+  def self.library(name) = LIBRARIES.find { |library| library.name == name } || abort("unknown library #{name}")
+
+  # The version both libraries have: TA_VERSION_* in include/tinyactors/types.h.
+  VERSION_HEADER = ROOT.join('include/tinyactors/types.h')
+
+  def self.version
+    text = VERSION_HEADER.read
+    %w[MAJOR MINOR PATCH].map { |part| text[/^#define TA_VERSION_#{part} (\d+)$/, 1] or abort("types.h has no TA_VERSION_#{part}") }
+                         .join('.')
+  end
 
   # A test program: its sources, the layers it links, and its defines. Each
   # runs from its own directory under the build, so programs that write files

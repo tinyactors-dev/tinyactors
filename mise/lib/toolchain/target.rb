@@ -172,8 +172,11 @@ module Toolchain
     # --- what the target is ---------------------------------------------
 
     # The platform suffixes of the files it builds (mise/lib/platform_files.rb):
-    # its OS, its architecture and the pair.
-    def platform_suffixes = [@os.to_s, @arch.to_s, "#{@os}_#{@arch}"]
+    # its OS, its architecture and the pair, and `hosted` when it has a C
+    # library (every target but freestanding wasm and bare metal).
+    def platform_suffixes = [@os.to_s, @arch.to_s, "#{@os}_#{@arch}", *('hosted' if hosted?)]
+
+    def hosted? = !(wasm? && !@triple.include?('wasi')) && @os != :freestanding
 
     # The docker platform that runs its programs, for a Linux target.
     def container_platform

@@ -6,6 +6,7 @@ module Changelog
   # files are its public API, and where its ADRs are.
   #
   # The public API is read from `api_json`, the clang-generated description
+  # (or descriptions, one per library the component ships)
   # the project keeps in step with its header (`mise run api`), when it has
   # one, and otherwise from `api_files` (globs under `dir`) with ast-grep,
   # whose C parser does not survive every macro the headers use.
@@ -35,7 +36,8 @@ module Changelog
 
   COMPONENTS = [
     Component.new(name: 'core', dir: 'tinyactors-core', scopes: %w[core],
-                  api_json: 'include/tinyactors.api.json', api_ignore: VERSION_MACROS),
+                  api_json: %w[include/tinyactors.api.json include/tinyactors_runtime.api.json],
+                  api_ignore: VERSION_MACROS),
     # The Node.js binding, @tinyactors/node. Its addon lived in
     # tinyactors-napi/ until the standalone runtime replaced it, and its
     # releases keep that line of tags.

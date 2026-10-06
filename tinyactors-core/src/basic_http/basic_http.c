@@ -7,7 +7,7 @@ typedef struct string_buffer {
     int overflow;
 } string_buffer;
 
-static void put(string_buffer *b, const char *s, size_t n) {
+static void buffer_put(string_buffer *b, const char *s, size_t n) {
     for (size_t i = 0; i < n; i++) {
         if (b->length + 1 >= b->capacity) {
             b->overflow = 1;
@@ -20,7 +20,7 @@ static void puts_(string_buffer *b, const char *s) {
     size_t n = 0;
     while (s[n])
         n++;
-    put(b, s, n);
+    buffer_put(b, s, n);
 }
 static void putnum(string_buffer *b, size_t v) {
     char t[24];
@@ -30,7 +30,7 @@ static void putnum(string_buffer *b, size_t v) {
         v /= 10;
     } while (v);
     while (n)
-        put(b, &t[--n], 1);
+        buffer_put(b, &t[--n], 1);
 }
 static int unreserved(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
@@ -41,10 +41,10 @@ static void put_enc(string_buffer *b, ta_string_view s) {
     for (uint32_t i = 0; i < s.length; i++) {
         unsigned char c = (unsigned char)s.pointer[i];
         if (unreserved((char)c)) {
-            put(b, (const char *)&c, 1);
+            buffer_put(b, (const char *)&c, 1);
         } else {
             char e[3] = {'%', hex[c >> 4], hex[c & 15]};
-            put(b, e, 3);
+            buffer_put(b, e, 3);
         }
     }
 }
@@ -83,9 +83,9 @@ size_t ta_http_encode_post(ta_string_view url, ta_string_view event, const ta_ht
     }
     string_buffer b = {out, 0, capacity, 0};
     puts_(&b, "POST ");
-    put(&b, path.pointer, path.length);
+    buffer_put(&b, path.pointer, path.length);
     puts_(&b, " HTTP/1.1\r\nHost: ");
-    put(&b, host.pointer, host.length);
+    buffer_put(&b, host.pointer, host.length);
     puts_(&b, "\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: ");
     putnum(&b, blen);
     puts_(&b, "\r\n\r\n");
@@ -97,9 +97,9 @@ size_t ta_http_encode_post(ta_string_view url, ta_string_view event, const ta_ht
             first = 0;
         }
         for (uint32_t f = 0; f < field_count; f++) {
-            if (!first) put(&b, "&", 1);
+            if (!first) buffer_put(&b, "&", 1);
             put_enc(&b, fields[f].name);
-            put(&b, "=", 1);
+            buffer_put(&b, "=", 1);
             put_enc(&b, fields[f].value);
             first = 0;
         }

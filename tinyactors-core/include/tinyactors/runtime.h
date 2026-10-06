@@ -16,6 +16,10 @@ extern "C" {
 
 TA_API ta_allocator ta_runtime_malloc(void);
 
+/* Files and the clock need an operating system: every target but
+ * freestanding wasm has them (src/runtime/runtime_hosted.c). */
+#if !defined(__wasm__) || defined(__wasi__)
+
 /* Load a whole file into an 8-aligned buffer (suitable for ta_image_open). */
 TA_API ta_status ta_runtime_load_file(const char *path, void **bytes, size_t *length);
 TA_API void ta_runtime_free_file(void *bytes, size_t length);
@@ -33,6 +37,8 @@ TA_API ta_status ta_runtime_resolve(void *files, ta_string_view base, ta_string_
 
 /* Compile an .scxml file (or a <system> manifest if `manifest` != 0). */
 TA_API ta_status ta_runtime_compile_file(const char *path, int manifest, ta_compile_result **out);
+
+#endif
 
 /* malloc'd system that relocates into a larger block on TA_RUN_EXHAUSTED. */
 TA_API ta_status ta_runtime_system_new(const ta_image *image, const ta_system_config *config,

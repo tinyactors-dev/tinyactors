@@ -1,0 +1,50 @@
+#!/usr/bin/env ruby
+#MISE description="Describe each library's public API as include/<library>.api.json, or verify the checked-in descriptions"
+#MISE depends=["amalgamate"]
+#USAGE flag "--check" help="Fail when a checked-in description is out of date, instead of writing it"
+# vim:ft=ruby
+
+# Reads dist/<library>.h (mise run amalgamate) with the pinned clang
+# (mise/lib/c_api.rb): the functions declared with TA_API, the ta_ types
+# with their layouts on x86_64, aarch64 and wasm32, and the TA_ constants;
+# which functions the amalgamations implement; and which only some targets
+# have (`wasm`, `hosted`). The release exports exactly the implemented
+# functions (CRelease.api_functions), and the changelog compares the
+# descriptions between releases. tinyactors_runtime's leaves out what
+# tinyactors's describes: its header includes that one.
+
+require 'c_api'
+require_relative '../core'
+
+check = ENV['usage_check'] == 'true' || ARGV.include?('--check')
+described = []
+stale = []
+Core::LIBRARIES.each do |library|
+  sources = { nil => [library.amalgamation, library.target(nil)] }
+  %w[wasm hosted].each do |suffix|
+    path = library.platform_amalgamation(suffix)
+    sources[suffix] = [path, library.target(suffix)] if path.file?
+  end
+  exclude = library.uses.flat_map do |name|
+    used = JSON.parse(Core.library(name).api.read)
+    used['functions'].map { |f| f['name'] } + used['types'].keys + used['constants'].map { |c| c['name'] }
+  end
+  begin
+    description = CAPI.describe(header: library.header, macro: 'TA_API', prefix: 'ta_', sources: sources,
+                                includes: [Core::DIST], exclude: exclude, version: Core.version)
+  rescue CAPI::Error => e
+    abort "api: #{library.header.relative_path_from(Core::ROOT)} cannot be described:\n#{e.message}"
+  end
+  text = CAPI.render(description)
+  path = library.api
+  current = path.file? && path.read == text
+  if check
+    stale << path.relative_path_from(Core::ROOT) unless current
+  elsif !current
+    path.write(text)
+  end
+  described << "#{path.relative_path_from(Core::ROOT)} (#{description['functions'].size} functions, " \
+               "#{description['types'].size} types, #{description['constants'].size} constants)"
+end
+abort "api: out of date: #{stale.join(', ')}; run mise run api" unless stale.empty?
+puts "api: #{check ? 'current' : 'wrote'}: #{described.join('; ')}"

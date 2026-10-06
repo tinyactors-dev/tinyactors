@@ -10,16 +10,6 @@
 TA_STATIC_ASSERT(sizeof(ta_image_view) <= sizeof(ta_image), view_fits_public_storage);
 TA_STATIC_ASSERT(sizeof(ta_header_record) == 64, header_is_64_bytes);
 
-uint64_t ta_image_hash(const unsigned char *b, uint32_t length) {
-    uint64_t h = 1469598103934665603ull;
-    for (uint32_t i = 0; i < length; i++) {
-        unsigned char c = (i >= 16 && i < 24) ? 0 : b[i]; /* hash field */
-        h ^= c;
-        h *= 1099511628211ull;
-    }
-    return h;
-}
-
 #define NIL_OR_LT(x, n) ((x) == TA_NIL || (x) < (n))
 #define CHECK(c)                                                                                   \
     do {                                                                                           \
