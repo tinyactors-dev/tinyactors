@@ -138,7 +138,7 @@ static const sjs_name NAMES[] = {
     NAME("toLowerCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_LOWER_CASE, 0),
     NAME("toReversed", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_REVERSED, 0, 0),
     NAME("toSorted", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SORTED, 0, 0),
-    NAME("toSpliced", SJS_NAME_ON_ARRAY, 0, 0, 0),
+    NAME("toSpliced", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SPLICED, 0, 0),
     NAME("toString", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
     NAME("toUpperCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_UPPER_CASE, 0),
     NAME("toWellFormed", SJS_NAME_ON_STRING, 0, 0, 0),
@@ -619,7 +619,8 @@ static bool takes_receiver(const sjs_leaf_call *call) {
 /* Move the receiver out of its slot into the result, to change in place.
  * No element is copied, so the fuel array_method charges for copying the
  * receiver (`cost = n`, before its switch) goes: concat then charges only
- * for what it appends, and with() nothing beyond its own unit. */
+ * for what it appends, with() nothing beyond its own unit, and toSpliced
+ * for what it removes, shifts and inserts. */
 static sjs_array *take_receiver(sjs_leaf_call *call) {
     *call->receiver_slot = sjs_undefined();
     call->result = call->receiver;
@@ -742,6 +743,57 @@ static sjs_result array_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
         if (to_integer(vm, arg(call, 0), &start) != SJS_OK) return SJS_ERR_PROGRAM;
         if (arg(call, 1).kind != SJS_UNDEFINED && to_integer(vm, arg(call, 1), &end) != SJS_OK) return SJS_ERR_PROGRAM;
         return array_slice(vm, call, (range){ relative(start, n), relative(end, n) });
+    }
+    case SJS_METHOD_ARRAY_TO_SPLICED: {
+        /* Remove `skip` elements at `start` and insert the rest of the arguments.
+         * With one argument everything from `start` goes; with none, nothing. */
+        double rel = 0;
+        if (call->count > 0 && to_integer(vm, arg(call, 0), &rel) != SJS_OK) return SJS_ERR_PROGRAM;
+        uint32_t start = relative(rel, n);
+        uint32_t skip = n - start;
+        if (call->count == 0) {
+            skip = 0;
+        } else if (call->count > 1) {
+            double count;
+            if (to_integer(vm, arg(call, 1), &count) != SJS_OK) return SJS_ERR_PROGRAM;
+            skip = count <= 0 ? 0 : (count > (double)(n - start) ? n - start : (uint32_t)count);
+        }
+        uint32_t added = call->count > 2 ? call->count - 2 : 0;
+        uint32_t tail = n - start - skip;
+        sjs_array *out;
+        if (takes_receiver(call)) {
+            out = take_receiver(call);
+            if (added > skip) {
+                sjs_result grown = sjs_array_grow(vm->context, &out, added - skip);
+                call->result.as.heap = &out->h;
+                if (grown != SJS_OK) return sjs_vm_fail(vm, grown);
+            }
+            for (uint32_t i = 0; i < skip; i++) sjs_unref(vm->context, out->items[start + i]);
+            if (added != skip) {
+                /* Move the tail by hand: the regions overlap. */
+                if (added < skip) {
+                    for (uint32_t i = 0; i < tail; i++) out->items[start + added + i] = out->items[start + skip + i];
+                } else {
+                    for (uint32_t i = tail; i-- > 0;) out->items[start + added + i] = out->items[start + skip + i];
+                }
+            }
+            out->length = n - skip + added;
+            call->cost = (uint64_t)skip + tail + added;
+        } else {
+            if (new_array(vm, n - skip + added, &out) != SJS_OK) return SJS_ERR_PROGRAM;
+            call->result = sjs_heap_value(SJS_ARRAY, &out->h);
+            for (uint32_t i = 0; i < start; i++) out->items[i] = a->items[i];
+            for (uint32_t i = 0; i < tail; i++) out->items[start + added + i] = a->items[start + skip + i];
+            for (uint32_t i = 0; i < start; i++) sjs_ref(out->items[i]);
+            for (uint32_t i = 0; i < tail; i++) sjs_ref(out->items[start + added + i]);
+            out->length = n - skip + added;
+            call->cost = (uint64_t)n + added;
+        }
+        for (uint32_t i = 0; i < added; i++) {
+            sjs_ref(call->args[2 + i]);
+            out->items[start + i] = call->args[2 + i];
+        }
+        return SJS_OK;
     }
     case SJS_METHOD_ARRAY_TO_REVERSED: {
         sjs_array *out;

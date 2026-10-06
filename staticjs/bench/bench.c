@@ -48,7 +48,8 @@
  * .toSorted.rows.desc ((a, b) => b.kwh - a.kwh), .map.pluck (r => r.kwh),
  * .every (x => x >= 0), .some (r => r.kwh < 0), .findIndex (r => r.id
  * === "none") and .findLastIndex (r => r.kwh < 0), which scan every element and find nothing, so they give
- * their smoke value at every size, and .lastIndexOf (xs.lastIndexOf(-1), likewise), eval.string.join (L); eval.object.spread-reduce (C);
+ * their smoke value at every size, and .lastIndexOf (xs.lastIndexOf(-1), likewise), .toSpliced (n / 4 elements at n / 2 replaced by 1, 2, 3, then
+ * the length and sum checked against the removed part: [3,6] at every size), eval.string.join (L); eval.object.spread-reduce (C);
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
  * place and quadratic before, eval.object.fromEntries, eval.set.new, .has,
@@ -407,6 +408,11 @@ static const bench_case cases[] = {
       .check = CHECK_SAME },
     { .name = "eval.array.lastIndexOf", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "xs.lastIndexOf(-1)", .globals = { { "xs", FIX_XS, NULL } }, .expect = "-1", .check = CHECK_SAME },
+    { .name = "eval.array.toSpliced", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "((a, b, sum) => (r => [r.length - xs.length + b, sum(r) - sum(xs) + sum(xs.slice(a, a + b))])"
+                "(xs.toSpliced(a, b, 1, 2, 3)))(Math.floor(xs.length / 2), Math.floor(xs.length / 4), "
+                "v => v.reduce((s, x) => s + x, 0))",
+      .globals = { { "xs", FIX_XS, NULL } }, .expect = "[3,6]", .check = CHECK_SAME },
     { .name = "eval.string.join", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.map(r => r.id).join(\",\")", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "\"r000000,r000001,r000002,r000003,r000004,r000005,r000006,r000007,r000008,r000009\"",

@@ -879,6 +879,35 @@ static void test_fuel_pinned(sjs_context *context) {
     sjs_program_release(program);
 }
 
+/* toSpliced charges for the work it does: a copy pays for every element, a
+ * receiver nothing else holds only for what it removes, shifts and inserts. */
+static uint64_t fuel_of(sjs_context *context, const char *source) {
+    sjs_program *program;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
+                                  { source, (uint32_t)strlen(source) }, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    sjs_vm *vm;
+    sjs_vm_config config = { context };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    sjs_run_params run = { program, NULL, 0 };
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
+    uint64_t used = sjs_vm_fuel_used(vm);
+    sjs_value v;
+    CHECK(sjs_vm_take_result(vm, &v) == SJS_OK);
+    sjs_release(context, v);
+    sjs_vm_destroy(vm);
+    sjs_program_release(program);
+    return used;
+}
+
+static void test_to_spliced_fuel(sjs_context *context) {
+    uint64_t taken = fuel_of(context, "[1, 2, 3, 4, 5, 6, 7, 8].toSpliced(6, 1, 9)");
+    uint64_t copied = fuel_of(context, "(xs => xs.toSpliced(6, 1, 9))([1, 2, 3, 4, 5, 6, 7, 8])");
+    CHECK(taken == 26);
+    CHECK(copied == 31);
+}
+
 /* A set's lookups go through its index, so combining two sets costs fuel in
  * proportion to their sizes, not their product. */
 static void test_set_fuel_linear(sjs_context *context) {
@@ -944,6 +973,7 @@ static void test_fuel_and_reset(void) {
     sjs_vm_destroy(vm);
     sjs_program_release(program);
     test_fuel_pinned(context);
+    test_to_spliced_fuel(context);
     test_set_fuel_linear(context);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
