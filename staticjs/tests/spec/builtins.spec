@@ -121,6 +121,54 @@
 --- value
 [true,-1,1,false]
 
+=== lastIndexOf finds the last strict match
+[[1, 2, 1].lastIndexOf(1), [1, NaN].lastIndexOf(NaN), [0].lastIndexOf(-0), ["a", "b", "a"].lastIndexOf("a"), [1].lastIndexOf(2), [1, "1"].lastIndexOf("1"), [null, undefined].lastIndexOf(undefined)]
+--- value
+[2,-1,0,2,-1,1,1]
+
+=== lastIndexOf on an empty array
+[[].lastIndexOf(1), [].lastIndexOf(1, 5), [].lastIndexOf(1, -5)]
+--- value
+[-1,-1,-1]
+
+=== lastIndexOf with a fromIndex
+[[1, 2, 1, 2].lastIndexOf(1, 1), [1, 2, 1, 2].lastIndexOf(2, -2), [1, 2, 1].lastIndexOf(1, -3), [1, 2, 1].lastIndexOf(2, -4), [1, 2, 1].lastIndexOf(1, 99), [1, 2, 1].lastIndexOf(1, 1.9), [1, 2, 1].lastIndexOf(1, -Infinity), [1, 2, 1].lastIndexOf(1, Infinity), [1, 2, 1].lastIndexOf(1, NaN), [1, 2].lastIndexOf(1, -0)]
+--- value
+[0,1,0,-1,2,0,-1,2,0,0]
+
+=== lastIndexOf takes the fromIndex a number would give
+[[1, 2, 1].lastIndexOf(1, undefined), [1, 2, 1].lastIndexOf(1, null), [1, 2, 1].lastIndexOf(2, true), [1, 2, 1].lastIndexOf(1, 1e15), [1, 2, 1].lastIndexOf(1, -1e15), [1, 2, 1].lastIndexOf(1, 0), ["é", "ü", "é"].lastIndexOf("é", -2)]
+--- value
+[0,0,1,2,-1,0,0]
+
+=== lastIndexOf faults on an object
+[[1].lastIndexOf({})]
+--- fault identity
+
+=== lastIndexOf faults on an array
+[[1].lastIndexOf([1])]
+--- fault identity
+
+=== lastIndexOf faults on a set
+[[1].lastIndexOf(new Set())]
+--- fault identity
+
+=== lastIndexOf faults on an object even when the array is empty
+[].lastIndexOf({})
+--- fault identity
+
+=== lastIndexOf faults on a fromIndex that would be coerced
+[1].lastIndexOf(1, "0")
+--- fault number
+
+=== lastIndexOf faults on an object even when fromIndex skips every element
+[1, 2].lastIndexOf({}, -9)
+--- fault identity
+
+=== lastIndexOf on a string still faults
+"abc".lastIndexOf("c")
+--- fault does not have this method
+
 === join
 [[1, null, "a", undefined, true].join(), [1, 2].join(" - "), [].join()]
 --- value
