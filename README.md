@@ -61,13 +61,11 @@ Two rules follow from the table:
 
 - `tinyactors-core/` is the core: the freestanding-friendly C API and the
   production interpreter.
-- `tinyactors-host/` is the host kernel (being extracted from napi; see
-  the roadmap).
 - `tinyactors-otlp/` is the OTLP encoder: a small C library that reads
   core's `tel` ring and writes OTLP traces and logs.
 - `tinyactors-napi/` is the Node-API binding for Node.js 22 and Bun.
 - `tinyactors-test/` is the instrumentable JSON-RPC test host and its Ruby
-  driver: a binding that exercises core, and the kernel, from scenarios.
+  driver: a binding that exercises core from scenarios.
 - `tinyactors-scxml/` is the SCXML codec, and `tinyxml/` the XML reader it
   is built on.
 - `docs/proposals/` holds outlines of possible future work, such as new

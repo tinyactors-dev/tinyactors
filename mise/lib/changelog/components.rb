@@ -30,8 +30,6 @@ module Changelog
   COMPONENTS = [
     Component.new(name: 'core', dir: 'tinyactors-core', scopes: %w[core],
                   api_json: 'include/tinyactors.api.json', api_ignore: VERSION_MACROS),
-    Component.new(name: 'host', dir: 'tinyactors-host', scopes: %w[host kernel],
-                  api_files: %w[include/tinyactors_host.h include/tinyactors_host/*.h], api_ignore: VERSION_MACROS),
     Component.new(name: 'napi', dir: 'tinyactors-napi', scopes: %w[napi],
                   api_files: %w[index.d.ts], api_ignore: nil),
     Component.new(name: 'otlp', dir: 'tinyactors-otlp', scopes: %w[otlp],

@@ -64,7 +64,7 @@ Dir.mktmpdir('changelog-test') do |tmp|
               'tinyactors-core/src/a.c' => "a\n")
   git.call('tag', '--annotate', 'tinyactors-core/v0.1.0', '-m', 'first')
   check.call('the last release', repo.last_version(core), '0.1.0')
-  check.call('no release of host yet', repo.last_version(Changelog.component('host')), nil)
+  check.call('no release of napi yet', repo.last_version(Changelog.component('napi')), nil)
 
   # First release: core has a tag, napi does not.
   first = Changelog::Evidence.gather(repo, Changelog.component('napi'))
@@ -172,8 +172,8 @@ Dir.mktmpdir('changelog-test') do |tmp|
 
   # ADR references.
   check.call('ADR references',
-             Changelog::ADRs.references_in('core ADR 0094 section 2; ADRs 0090 and 0091; kernel ADR 0002'),
-             [['core', '0094'], [nil, '0090'], [nil, '0091'], ['host', '0002']])
+             Changelog::ADRs.references_in('core ADR 0094 section 2; ADRs 0090 and 0091; otlp ADR 0002'),
+             [['core', '0094'], [nil, '0090'], [nil, '0091'], ['otlp', '0002']])
 
   # TypeScript: the surface is what a file exports.
   ts = Changelog::Repo.new(dir)

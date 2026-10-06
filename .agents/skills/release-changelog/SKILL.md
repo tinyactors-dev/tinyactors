@@ -1,6 +1,6 @@
 ---
 name: release-changelog
-description: Write the changelog section for a release of tinyactors-core, tinyactors-host, tinyactors-napi, tinyactors-scxml or tinyxml, and stop for the maintainer's review before the release. Use when asked to cut or prepare a release, write or update a CHANGELOG.md, summarize what changed since the last release, or when a release task fails on "is not fit to release". Releases only; do not use it to draft a changelog between releases.
+description: Write the changelog section for a release of tinyactors-core, tinyactors-napi, tinyactors-scxml or tinyxml, and stop for the maintainer's review before the release. Use when asked to cut or prepare a release, write or update a CHANGELOG.md, summarize what changed since the last release, or when a release task fails on "is not fit to release". Releases only; do not use it to draft a changelog between releases.
 ---
 
 # Release changelog
@@ -150,7 +150,7 @@ Work in the order below. Components: `core`, `host`, `napi`, `scxml`,
 
 - The packet lists commits by path and by scope: a commit naming a component
   in its scope belongs to it, and one that names none belongs to the
-  component whose directory it touches. A `feat(core,host)` commit is in both
+  component whose directory it touches. A `feat(core,napi)` commit is in both
   changelogs. Wrong scopes in commit subjects give a wrong packet; say so in
   your report when you see one.
 - The packet's API delta for core, scxml and tinyxml comes from the
