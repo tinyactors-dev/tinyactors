@@ -410,7 +410,13 @@ kernel's scheduler holds no mailboxes, only the code that admits input" is met.
   now (+416: withdrawal, admission inside a macrostep, error reports as inputs,
   `ta_actor_pending`; the 4.2d line count was taken at the unit's start).
 - Not done: the event block (4.4), the name area (4.2b), and quarantine
-  (4.5). `release()` stays declared as partial until 4.5.
+  (4.5). For 4.2b: `ta_invoke_report_error` interns the error event's name at
+  admission, which allocates inside the parent's macrostep when an invoker's
+  start fails (a known exception to "allocation only at safe points", clean
+  TA_ERR_NOMEM); intern it when the invocation starts, or with the name area.
+  Also open: `ta_address_waiting` walks the list (O(list)), so a post to a
+  limited address and `tah_loads_read_stats` are O(list); a per-list pending
+  count in core would make them O(1). `release()` stays declared as partial until 4.5.
 
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits

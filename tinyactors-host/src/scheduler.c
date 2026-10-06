@@ -26,7 +26,13 @@
  *
  * Sizes are computed with sizeof, never from input.
  *
- * Complexity. Post, cancel and a notice are O(1). A turn costs the inputs it
+ * Complexity. Cancel and a notice are O(1). A post is O(1), except a post to
+ * an address when the family limits its waiting messages: it asks core for
+ * the address's waiting count, which walks the waiting list (O(list), at most
+ * the limit plus the withdrawn ones). A post made inside a macrostep (a
+ * data-model callback) may also allocate in the kernel (the follow table, the
+ * verdict ring), outside core's safe points; it answers a clean TA_ERR_NOMEM
+ * and withdraws the input when it fails. A turn costs the inputs it
  * finishes plus the verdicts it reports.
  */
 

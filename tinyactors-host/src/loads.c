@@ -40,7 +40,9 @@
  * names a gone session's instance), so the host's posts and chart mail for
  * the address keep their common arrival order (core ADR 0099).
  *
- * Complexity. Lookup by address is one map probe, O(1). Starting and
+ * Complexity. Reading the statistics (tah_loads_read_stats) asks core for each
+ * load's waiting count, which walks that address's waiting list: O(loads *
+ * list). Lookup by address is one map probe, O(1). Starting and
  * finishing a load are O(1). The wake-up heap is a binary min-heap: O(log n) to add
  * or pop; replacing or cancelling a wake-up is O(1) and leaves the old entry
  * to be skipped when it surfaces, so the heap can hold stale entries until

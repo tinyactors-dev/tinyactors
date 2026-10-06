@@ -717,9 +717,18 @@ static napi_value tna_mailbox_method(napi_env env, napi_callback_info info) {
         return tna_throw(env, "out-of-memory", "mailbox: cannot build the list");
     }
     uint32_t count = 0;
-    ta_pending_input *pending = limit == 0 ? NULL : ta_arena_alloc(tah_scratch_call(tah_system_scratch(system)),
-                                                                   (size_t)limit * sizeof *pending,
-                                                                   _Alignof(ta_pending_input));
+    /* The limit comes from JavaScript: cut it to what the actor has before sizing the scratch. */
+    uint32_t total = 0, none = 0;
+    if (limit != 0 && ta_actor_pending(tah_system_core(system), &(ta_actor_pending_params){
+                                                                   .actor = actor, .capacity = 0, .count = &none,
+                                                                   .total = &total }) == TA_OK && total < limit) {
+        limit = total;
+    }
+    ta_pending_input *pending = NULL;
+    size_t bytes = 0;
+    if (limit != 0 && !__builtin_mul_overflow((size_t)limit, sizeof *pending, &bytes)) {
+        pending = ta_arena_alloc(tah_scratch_call(tah_system_scratch(system)), bytes, _Alignof(ta_pending_input));
+    }
     if (limit != 0 && pending == NULL) {
         return tna_throw(env, "out-of-memory", "mailbox: cannot build the list");
     }
