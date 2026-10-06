@@ -139,9 +139,11 @@ typedef struct sjs_string_ {
  * A hash index over a set's elements or an object's keys: an open-addressed
  * table of positions (plus one; 0 is empty), probed linearly. A container
  * gets one when an item goes in and it holds SJS_INDEX_FROM items or more,
- * so small ones keep the plain scan. Items only ever go in, into a container
- * one holder updates, so the index never goes stale; a container without one
+ * so small ones keep the plain scan. Items go in, into a container one
+ * holder updates, so the index never goes stale; a container without one
  * (one copied whole, or one whose index could not be allocated) is scanned.
+ * MUTATION: items also go out (sjs_object_remove, sjs_set_remove), which
+ * keeps the index current and leaves no deletion marker in it.
  */
 typedef struct {
     uint32_t mask;      /* slots - 1; slots is a power of two */
@@ -295,6 +297,19 @@ const sjs_entry *sjs_object_find(const sjs_object *object, sjs_str key);
 /* Add to a set the caller holds alone; takes over the element's reference. */
 sjs_result sjs_set_insert(sjs_context *context, sjs_array **set, sjs_value element);
 bool sjs_set_contains(const sjs_array *set, sjs_value element);
+/* MUTATION: removal from a set or an object the caller holds alone, which
+ * may move as it shrinks (value.c, "removal"): whether the item was there,
+ * and the fuel the removal costs. */
+typedef struct {
+    bool removed;
+    uint64_t cost;
+} sjs_removal;
+sjs_removal sjs_object_remove(sjs_context *context, sjs_object **object, sjs_str key);
+sjs_removal sjs_set_remove(sjs_context *context, sjs_array **set, sjs_value element);
+void sjs_set_clear(sjs_context *context, sjs_array **set);
+/* MUTATION: an array or a set the caller holds alone, reallocated smaller
+ * when its items fill under a quarter of its capacity. */
+void sjs_array_shrink(sjs_context *context, sjs_array **array);
 sjs_result sjs_closure_make(sjs_context *context, uint32_t count, sjs_closure **out);
 
 /* JavaScript's abstract operations. */

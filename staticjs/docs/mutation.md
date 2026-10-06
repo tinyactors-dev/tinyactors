@@ -23,7 +23,7 @@ This is done in 3 steps:
    the ownership of the whole path checked ("Assignment", below); and
    `let`, a variable that statements assign to ("let", below).
 3. Removal: `delete`, `splice`, `Set.prototype.delete` and `clear`, with
-   removal from the hash index and shrinking.
+   removal from the hash index and shrinking ("Removal", below).
 
 ## The methods
 
@@ -262,6 +262,57 @@ let x          CONST_BEGIN(2) BIND(x) CONST_END
 x op= v;       <x> ASSIGN(op) <v> ASSIGN_END(op)
 ```
 
+## Removal
+
+Removing an item from a set or an object, and shrinking a container that
+has become mostly empty, keep three properties: JavaScript's order, lookups
+in O(1), and memory that comes back.
+
+**Compaction, not deletion markers.** A removal moves the items after the
+one removed down by one (`sjs_object_remove`, `sjs_set_remove`, value.c),
+so a container's items stay dense and in insertion order. A key deleted and
+added again goes in as a new key: at the end, or among the array indices in
+order, as JavaScript puts it. The hash index loses the removed item's slot
+by backward-shift deletion: linear probing finds an item by walking from
+its home slot to the first empty one, so each later item of its cluster
+that the hole would hide moves into it, and the hole moves on. No slot is
+ever a marker, so a lookup probes exactly as it did before removal existed,
+and a table never fills with markers that only a rebuild would clear. Then
+every position after the removed one goes down by one.
+
+The other choice, marking removed entries and compacting later, would make
+removal O(1), but every reader of a container's items (every built-in,
+spread, pattern, writer, the API's `sjs_object_at`) would have to skip the
+marks, on the immutable paths too, or each would have to compact first.
+Compaction keeps them all unchanged; it costs a removal O(n) in the
+container's length, but for the last item, which costs O(1): a removal
+moves the items after it, and renumbers the index once.
+
+**Fuel** follows the lookup rule (`lookup_cost`, `dcca456`): finding the
+item costs one unit through the index or in a container under
+`SJS_INDEX_FROM` items, and its length when its index failed to allocate
+(`SJS_CONTAINER_UNINDEXED`) and the lookup scans it. Removing any item but
+the last costs the container's length more, for the items that move down
+and the positions renumbered.
+
+**Shrinking**, with hysteresis, so that adding and removing around an edge
+does not reallocate each time:
+
+- **Items:** a container grows by doubling when full; once its capacity
+  is at least 16 (`SJS_SHRINK_FROM`) and its items fill under a quarter of
+  it, it is reallocated with room for twice its items. This applies to an
+  array after `pop`, `shift` and `splice`, and to a set and an object after
+  a removal (`sjs_array_shrink`, `object_shrink`).
+- **The index:** it is built a quarter full and rebuilt larger at half
+  load; after a removal it is rebuilt a quarter full once it is at most an
+  eighth full, and dropped when the container falls under half of
+  `SJS_INDEX_FROM`, as a small container is scanned. Such a container gets
+  an index again as it grows past `SJS_INDEX_FROM`, even if one failed to
+  allocate before: `SJS_CONTAINER_UNINDEXED` is cleared with the index.
+- **Out of memory:** a smaller block is allocated before the larger one is
+  freed; when it cannot be, the container keeps the larger one, which is
+  still correct. Shrinking never faults.
+
 ## What is left out
 
 - **Assigning to a parameter**, and `var`: JavaScript allows both; a
@@ -328,6 +379,22 @@ Step 2, `let`:
 | `src/parser.c` | `frame.declares_let` and `.bare`; `let_declarator`, its declaration, `begin_let` and `end_bare_let`; the `bare` line of `const_token` and its message; the next declarator's count in `terminator` (restore `send_kind`); `begin_let` in `statement_token` (restore its refusal) |
 | `src/compiler.c` | `binding.declared_let`, set in `declare`; `construct.declares_let`, set in `compile_const_begin` with the `UNDEFINED` of a declarator without a value; `refused_let_capture` in `note_capture`; `variable_target`, `variable_store` and `target_store` and their lines in `assign_target`, `assign_begin`, `assign_end` and `compile_update` |
 | `bench/bench.c` | `eval.let.counter` |
+
+Step 3, removal from the index and shrinking:
+
+| File | What is tagged |
+|---|---|
+| `src/internal.h` | the index's comment on removal; `sjs_removal`, `sjs_object_remove`, `sjs_set_remove`, `sjs_set_clear`, `sjs_array_shrink` |
+| `src/value.c` | the removal section at the end of the file |
+| `src/builtins.c` | `array_remove`'s shrink (restore `array_remove(id, call)`, without it) |
+| `tests/api_test.c` | `live_of`, `allocations_of` and the `test_mutation_shrink_*` functions |
+
+Nothing on the immutable path removes an item or shrinks a container:
+values never change there, and a value nothing else holds is only ever
+appended to. Compaction leaves the index and every reader of a
+container's items as they were (lookups probe the same slots, with no
+deletion markers to skip), so rolling mutation back removes these with the
+rest; keeping them would keep code nothing calls.
 
 Besides the tags, mutation changed what some existing cases expect, and
 rolling it back restores them: a mutating method on a literal, or named

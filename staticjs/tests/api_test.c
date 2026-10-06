@@ -1989,6 +1989,72 @@ static void test_mutation_out_of_memory(void) {
                        SJS_GOAL_EXPRESSION);
 }
 
+/* MUTATION: removal and shrinking (docs/mutation.md, "Removal"). */
+
+/* The bytes the context holds while it holds the value `source` gives,
+ * and nothing else. */
+static size_t live_of(sjs_context *context, const char *source) {
+    sjs_program *program;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
+                                  { source, (uint32_t)strlen(source) }, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    sjs_vm *vm;
+    sjs_vm_config config = { context };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    sjs_run_params run = { program, NULL, 0 };
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
+    sjs_value v;
+    CHECK(sjs_vm_take_result(vm, &v) == SJS_OK);
+    sjs_vm_destroy(vm);
+    sjs_program_release(program);
+    size_t live = sjs_context_live_bytes(context);
+    sjs_release(context, v);
+    return live;
+}
+
+/* The allocations a program makes, compiled and run. */
+static long allocations_of(counting *c, sjs_context *context, const char *source) {
+    long before = c->allocations;
+    fuel_of(context, source);
+    return c->allocations - before;
+}
+
+/* An array that pop and shift take most elements from gives its memory
+ * back; one that push and pop alternate on is not reallocated each time. */
+static void test_mutation_shrink_array(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    char source[512];
+    static const char *const build = "(() => { const xs = Array.from({length: 4000}, (_, i) => i); return ";
+    snprintf(source, sizeof source, "%sxs; })()", build);
+    size_t full = live_of(context, source);
+    snprintf(source, sizeof source, "%sArray.from({length: 3990}).reduce((a, _, i) => { if (i %% 2) a.pop(); else a.shift(); return a; }, xs); })()", build);
+    size_t emptied = live_of(context, source);
+    size_t small = live_of(context, "Array.from({length: 10}, (_, i) => i)");
+    CHECK(full > 4000 * 16);
+    CHECK(emptied < full / 50);
+    CHECK(emptied <= small + 512);
+    long alternations[2];
+    long plain[2];
+    static const int counts[2] = { 10, 2000 };
+    for (int i = 0; i < 2; i++) {
+        snprintf(source, sizeof source,
+                 "(() => { const xs = Array.from({length: 100}, (_, i) => i); return Array.from({length: %d}).reduce((a) => { a.push(1); a.pop(); a.pop(); a.push(2); return a; }, xs).length; })()",
+                 counts[i]);
+        alternations[i] = allocations_of(&c, context, source);
+        snprintf(source, sizeof source,
+                 "(() => { const xs = Array.from({length: 100}, (_, i) => i); return Array.from({length: %d}).reduce((a) => { return a; }, xs).length; })()",
+                 counts[i]);
+        plain[i] = allocations_of(&c, context, source);
+    }
+    /* No allocation per round: only the first push grows the array. */
+    CHECK(alternations[1] - alternations[0] == plain[1] - plain[0]);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
 static void test_out_of_memory(const char *source, sjs_goal goal) {
     long needed = 0;
     for (long fail_at = 1;; fail_at++) {
@@ -2054,6 +2120,7 @@ int main(int argc, char **argv) {
     test_mutation_assign_out_of_memory();
     test_mutation_let_events();
     test_mutation_let_out_of_memory();
+    test_mutation_shrink_array();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */
