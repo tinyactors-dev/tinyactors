@@ -76,6 +76,51 @@ If a publish fails part way, publish the remaining tarballs in the same
 order before pushing; npm does not let a version be published twice, so
 never repack a version that is already partly on npm.
 
+## Built today: the C libraries
+
+Core ships two C libraries, released together under one tag
+(`tinyactors-core/v<version>`) and version (`TA_VERSION_*` in
+`include/tinyactors/types.h`), as [ADR 0001](../../docs/adr/0001-packaging-and-releases.md)
+decision 19 lays out:
+
+| Library | What it holds | Needs |
+|---|---|---|
+| `libtinyactors` | the freestanding layers: base, image, core, system, basic_http | nothing: no C library, no allocation |
+| `libtinyactors_runtime` | the compiler, the host and the runtime conveniences | `libtinyactors`'s public API, and the C library's allocator, strings, `qsort` and `snprintf` (and files and the clock, except on freestanding wasm) |
+
+The ECMAScript data model (QuickJS) is not shipped: the Node.js and web
+bindings bring their own.
+
+Each library's release assets, in `build/release/<version>/assets/`:
+
+| Asset | Contents |
+|---|---|
+| `<library>-<version>-src.tar.gz` | its header, amalgamation and platform amalgamations (`_hosted.c`, `_wasm.c`), and API description |
+| `<library>-<version>-<target>.tar.gz`, for `aarch64-macos`, `x86_64-macos`, `x86_64-linux`, `aarch64-linux` | `include/<library>.h`, `lib/lib<library>.a` and its shared library (`.so.<major>.<minor>` with a `.so` link, or `.<major>.<minor>.dylib`) |
+| `<library>-<version>-wasm32.tar.gz` | `<library>.wasm`, which imports nothing, and its headers |
+| `<library>-<version>.json` | the manifest: commit, zig, flags and every file's hash |
+
+plus one `SHA256SUMS`. A Linux library links no C library, so one serves
+glibc and musl; `libtinyactors_runtime`'s shared library names
+`libtinyactors`'s, so a program links both. `tinyactors_runtime.wasm` holds
+`libtinyactors` too, since a module cannot call into another's memory; it is
+a WASI reactor built against wasi-libc that imports nothing (a host may call
+its `_initialize` first). In both modules a host places its bytes with
+`ta_wasm_alloc` and gives them back with `ta_wasm_free`.
+
+The tasks, in `tinyactors-core`:
+
+| Command | What it does |
+|---|---|
+| `mise run amalgamate` | `dist/<library>.h`, `.c` and `_<platform>.c`, each compiled on its own |
+| `mise run api [--check]` | `include/<library>.api.json`: what each library exports, and what the changelog compares |
+| `mise run wasm:test` | Builds both wasm modules as the release does and runs `tests/wasm/release_test.mjs` against them |
+| `mise run release -- <version>` | The release as a dry run: the checks (core's whole test task), every target of both libraries, their symbol checks, `test_runtime` and `test_e2e` against the packed libraries of this machine, the smoke programs (`tests/release/`) in Linux containers, the wasm tests, and the assets |
+| `mise run release -- <version> --publish` | The same, then the commit `release(tinyactors-core): v<version>`, the tag and the GitHub release |
+
+A release needs a section in `tinyactors-core/CHANGELOG.md` (component
+`core`), written with the release-changelog skill.
+
 **The rest: not built at the moment.** The pipeline this document describes
 (`tools/dist.py`, `tools/dist/`, the npm package's source fallback) built
 every artifact with CMake and its Zig toolchain file. It was removed when
@@ -199,6 +244,10 @@ Bundlers must preserve/copy that wasm URL. It is a JS-hosted reactor with
 its own adapter, not a standalone WASI executable.
 
 ## C: install prefixes and an embeddable source release
+
+The C libraries are built as above, two libraries without the CMake and
+pkg-config files this section describes; what follows is the plan the old
+pipeline built.
 
 The amalgamation is the freestanding runtime (base/image/core/system),
 including the null datamodel, addresses and frames. It deliberately omits

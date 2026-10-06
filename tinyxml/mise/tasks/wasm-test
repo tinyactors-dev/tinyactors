@@ -13,5 +13,5 @@ require 'c_release'
 
 project = CRelease::Project.new(name: 'txml', prefix: 'txml')
 build = CRelease.build_wasm(project, project.root.join('build/wasm'))
-CRelease.verify_wasm!(project, build,
+CRelease.verify_wasm!(build,
                       test: ->(wasm) { ['node', project.root.join('tests/wasm/wasm_test.js'), wasm, project.api] })

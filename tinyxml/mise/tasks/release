@@ -19,24 +19,23 @@ root = project.root
 argv = ARGV.dup
 
 CRelease.release(
-  project: project,
+  libraries: [
+    CRelease::Library.new(
+      project: project,
+      tests: Suite.public_api_tests.map do |name|
+        [name, root.join('build/objects', "#{name}.o"), Suite::BINARIES.fetch(name)]
+      end,
+      smoke: root.join('tests/release_smoke.c'),
+      # The source tarball has the platform amalgamation too, so a source
+      # embedder can build for wasm (decision 9).
+      sources: [project.header, project.amalgamation, root.join('include/txml_wasm.c'), project.api],
+      wasm_test: ->(module_path) { ['node', root.join('tests/wasm/wasm_test.js'), module_path, project.api] }
+    )
+  ],
   directory: 'tinyxml',
   title: "txml #{argv.reject { |arg| arg.start_with?('--') }.first}",
   argv: argv,
   checks: [%w[mise run amalgamate -- --check], %w[mise run test]],
   regenerate: [%w[mise run generate]],
-  tests: Suite.public_api_tests.map do |name|
-    [name, root.join('build/objects', "#{name}.o"), Suite::BINARIES.fetch(name)]
-  end,
-  smoke: root.join('tests/release_smoke.c'),
-  readme: root.join('README.md'),
-  # The source tarball has the platform amalgamation too, so a source
-  # embedder can build for wasm (decision 9).
-  sources: [project.header, project.amalgamation, root.join('include/txml_wasm.c'), project.api],
-  extra_build: ->(targets) { [CRelease.build_wasm(project, targets)] },
-  extra_verify: lambda do |builds|
-    wasm = builds.find { |build| build[:wasm] }
-    CRelease.verify_wasm!(project, wasm,
-                          test: ->(module_path) { ['node', root.join('tests/wasm/wasm_test.js'), module_path, project.api] })
-  end
+  readme: root.join('README.md')
 )

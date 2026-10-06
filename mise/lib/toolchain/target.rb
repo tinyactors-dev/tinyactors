@@ -154,11 +154,14 @@ module Toolchain
     # A standalone wasm module of `objects`: no entry point, exporting
     # `exports` and its memory. zig links its compiler-rt, for the 128-bit
     # arithmetic core uses (`__multi3`).
-    def wasm_module(objects, into:, exports:)
+    # A module that links the C library (wasm32-wasi) is a WASI reactor
+    # (`flags: %w[-mexec-model=reactor]`): no _start, whose arguments would be
+    # an import; it exports _initialize instead.
+    def wasm_module(objects, into:, exports:, flags: [])
       raise Error, "#{@name} is not a wasm target" unless wasm?
 
       FileUtils.mkdir_p(File.dirname(into))
-      @compiler.run(self, '-Wl,--no-entry', *exports.map { |symbol| "-Wl,--export=#{symbol}" }, *objects, '-o', into)
+      @compiler.run(self, *flags, '-Wl,--no-entry', *exports.map { |symbol| "-Wl,--export=#{symbol}" }, *objects, '-o', into)
       Binary.new(into)
     end
 

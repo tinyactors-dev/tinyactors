@@ -87,7 +87,6 @@ status.success? ? '' : errors
 | `toolchain-test: tool X: is pinned in "…/tinyxml/mise.toml", not the root mise.toml` | a project pinned a tool the toolchain uses | move the pin to the root `mise.toml` |
 | `toolchain-test: LLVM: clang and LLVM's tools are different releases` | `clang` and `conda:llvm-tools` pins moved apart | pin both to the same major ([Upgrade](upgrade-the-toolchain.md)) |
 | `the pinned clang builds against the macOS SDK, which is missing` | no Command Line Tools on this Mac | `xcode-select --install` |
-| `the host tests: only on an x86_64-linux host; this one is aarch64-macos` | a release's host tests run the packed x86_64 Linux libraries natively | release from x86_64 Linux |
 | `lib.a exports other functions than it should: unexpected: … missing: …` | a function's visibility or the API description changed | make the function static, or regenerate the API description |
 | `… leaves undefined: memcpy (allowed: none)` | the compiler turned a copy into a libc call | see the freestanding rules in the project's `AGENTS.md` |
 | `… is not x86_64` | an object for the wrong architecture was linked | check the target the object was compiled for |

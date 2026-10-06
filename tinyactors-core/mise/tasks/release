@@ -1,0 +1,77 @@
+#!/usr/bin/env ruby
+#MISE description="Release libtinyactors and libtinyactors_runtime: check, version, build every target with zig cc, verify, pack; with --publish, also tag and create the GitHub release"
+#USAGE arg "<version>" help="The version to release, MAJOR.MINOR.PATCH"
+#USAGE flag "--publish" help="Commit the version, tag tinyactors-core/v<version>, push, and create the GitHub release"
+#USAGE flag "--skip-containers" help="Leave out the Linux container smoke tests (no Docker)"
+# vim:ft=ruby
+
+# mise run release -- 0.2.0                    check, build, verify, pack; publishes nothing
+# mise run release -- 0.2.0 --publish          the same, then tag tinyactors-core/v0.2.0 and release
+# mise run release -- 0.2.0 --skip-containers  no Linux container smoke tests (no Docker)
+#
+# The two libraries of Core::LIBRARIES are released together, under one tag
+# and version (root ADR 0001, decision 19). Each ships its header, its
+# amalgamation (with its platform amalgamations) and API description in a
+# source tarball, a static and a shared library for each native release
+# target, and a wasm module: tinyactors.wasm, and tinyactors_runtime.wasm
+# with tinyactors inside it. libtinyactors_runtime is built against
+# libtinyactors of the same release: its libraries leave libtinyactors's API
+# undefined and its shared library names libtinyactors's. The stages are in
+# mise/lib/c_release/build.rb; this file only describes the libraries. The
+# assets land in build/release/<version>/assets/.
+
+require_relative '../core'
+
+argv = [ENV['usage_version'], *ARGV].compact.uniq
+argv << '--publish' if ENV['usage_publish'] == 'true'
+argv << '--skip-containers' if ENV['usage_skip_containers'] == 'true'
+argv = argv.reject(&:empty?).uniq
+core = Core.release_project(Core.library('tinyactors'))
+runtime = Core.release_project(Core.library('tinyactors_runtime'))
+
+# The test programs that use the public headers alone (and the test data
+# model, which does too) run against the packed libraries of this machine's
+# target: built by `mise run build --release`, linked with the packed
+# libtinyactors_runtime and libtinyactors.
+PACKED_TESTS = %w[test_runtime test_e2e].freeze
+tests = PACKED_TESTS.map do |name|
+  program = Core::PROGRAMS.find { |candidate| candidate.name == name }
+  FileUtils.mkdir_p(Core.directory('release').join('scratch', name))
+  objects = program.sources.map { |source| Core.directory('release').join('objects', name, "#{File.basename(source, '.c')}.o") }
+  [name, [*objects, Core.archive_path('release', 'test_datamodel'), '-lm'], program.arguments || []]
+end
+
+# The C library functions libtinyactors_runtime calls: each has the same
+# name and signature in glibc and musl, so a Linux library that links no C
+# library binds to either (decision 10), and libSystem has them on macOS,
+# where Darwin's clang also calls bzero and the fortified __memcpy_chk.
+LIBC = %w[calloc clock_gettime fclose fopen fread free fseek ftell malloc memmove qsort realloc snprintf strchr strcmp
+          strlen strncmp vsnprintf].freeze
+DARWIN = %w[bzero __memcpy_chk].freeze
+libc = ->(target) { target.format.links_libc ? LIBC + DARWIN : LIBC }
+
+tests_dir = Core::ROOT.join('tests')
+CRelease.release(
+  libraries: [
+    CRelease::Library.new(
+      project: core, tests: [], smoke: tests_dir.join('release/tinyactors_smoke.c'),
+      sources: [core.header, core.amalgamation, core.platform_amalgamation('wasm'), core.api],
+      wasm_test: ->(wasm) { ['node', tests_dir.join('wasm/release_test.mjs'), wasm, core.api] }
+    ),
+    CRelease::Library.new(
+      project: runtime, uses: %w[tinyactors], tests: tests, smoke: tests_dir.join('release/tinyactors_runtime_smoke.c'),
+      sources: [runtime.header, runtime.amalgamation, runtime.platform_amalgamation('hosted'),
+                runtime.platform_amalgamation('wasm'), runtime.api],
+      wasm_test: ->(wasm) { ['node', tests_dir.join('wasm/release_test.mjs'), wasm, core.api, runtime.api] },
+      libc_imports: libc
+    )
+  ],
+  directory: 'tinyactors-core',
+  title: "tinyactors-core #{argv.reject { |arg| arg.start_with?('--') }.first}",
+  argv: argv,
+  # The whole test task, once (api --check and wasm:test among it), and the
+  # release build the packed tests link.
+  checks: [%w[mise run --force test], %w[mise run build --release]],
+  regenerate: [%w[mise run api]],
+  readme: Core::ROOT.join('README.md')
+)

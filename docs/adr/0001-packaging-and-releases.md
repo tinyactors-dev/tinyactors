@@ -224,6 +224,50 @@ laid out how each library and the addon would ship. It was discussed on
       AVX, which an emulated x64 lacks, so it crashes before the addon
       loads.
 
+19. **Core ships two C libraries, released together** (2026-10-06). The
+    standalone runtime (ADR 0004) has freestanding layers and hosted ones,
+    so one library could not keep decision 16's "nothing undefined":
+    - **`libtinyactors`** is the freestanding layers (base, image, core,
+      system, basic_http), and keeps decision 16 as it is.
+    - **`libtinyactors_runtime`** is the compiler, the host and the runtime
+      conveniences. It calls nothing of `libtinyactors`'s but its public API
+      (the one internal function the two shared, `ta_image_hash`, is inline
+      in an internal header), so it is built against `libtinyactors` as
+      decision 17 builds a dependent: its libraries leave `libtinyactors`'s
+      API undefined, and its shared library names `libtinyactors`'s.
+    - **It may import a list of C library functions** (allocation, strings,
+      `qsort`, `snprintf`, files and the clock), each with the same name and
+      signature in glibc and musl; its Linux libraries link no C library, as
+      decision 10 has it for the addon. The list is in core's `release`
+      task, and the symbol check fails on anything else.
+    - **One tag and version for both** (`tinyactors-core/v<version>`,
+      `TA_VERSION_*` in `include/tinyactors/types.h`): the runtime is built
+      against the `libtinyactors` of the same release, not a downloaded one.
+      `CRelease.release` takes a list of libraries (`CRelease::Library`), each
+      after those it `uses`.
+    - **Each ships a header, an amalgamation, its API description, a static
+      and a shared library per native target, and a wasm module.** The
+      amalgamations and headers are generated into `dist/` (`mise run
+      amalgamate`); the API descriptions are checked in
+      (`include/<library>.api.json`, `mise run api`, `mise/lib/c_api.rb`).
+    - **The wasm modules import nothing.** `tinyactors.wasm` is built for
+      wasm32-freestanding with its own page allocator (decision 6).
+      `tinyactors_runtime.wasm` holds `libtinyactors` too, since a module
+      cannot call into another's memory (decision 17's reasoning, which a
+      combined module answers), and links wasi-libc for its C library as a
+      WASI reactor; the release checks that it imports nothing, and allows
+      its `_initialize` export. Its `ta_wasm_alloc` and `ta_wasm_free` are
+      over malloc, in place of `libtinyactors`'s page allocator, which would
+      claim the same memory.
+    - **A `hosted` platform suffix** (decision 9) names files built for every
+      target with a C library and not for freestanding wasm:
+      `runtime_hosted.c`, the files and the clock. The header declares those
+      functions under `#if !defined(__wasm__) || defined(__wasi__)`, and the
+      API description marks them `hosted`.
+    - **The release runs anywhere:** the packed-library tests run on this
+      machine's target (they ran on x86_64 Linux only), and every native
+      release target is built, `x86_64-macos` included.
+
 ## Still open
 
 - **A signature on `SHA256SUMS`**, for example `ssh-keygen -Y sign` with

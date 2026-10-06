@@ -150,22 +150,25 @@ describes the machine for benchmarks (`hardware`, `power`, `conditions`).
 
 ## Releases
 
-A C project's `release` task describes the project and calls
-`CRelease.release`. The stages:
+A C project's `release` task describes its libraries (`CRelease::Library`:
+the project, its packed tests, its smoke program, its source tarball, the
+libraries of the same release it builds on) and calls `CRelease.release`;
+all of them are released under one tag. The stages:
 
 1. **Check:** a clean `main` in step with its remote, the tag free, the
    project's checks.
-2. **Version:** the header's version macros set, the generated files
-   regenerated.
-3. **Build:** each native target's release object (the amalgamation, the
-   vectorized memset and zig's compiler-rt, combined, with only the API
-   left global), its static archive and its shared library; the wasm
-   module.
+2. **Version:** the version macros set, the generated files regenerated.
+3. **Build**, for each library after those it uses: each native target's
+   release object (the amalgamation and the target's platform
+   amalgamations, the vectorized memset and zig's compiler-rt, combined,
+   with only the API left global), its static archive and its shared
+   library; the wasm module.
 4. **Verify:** each library's symbols, dependencies, name and
-   architecture (`Binary`); the tests against the packed host library on
-   x86_64 Linux; a smoke test in a Linux container per Linux target.
+   architecture (`Binary`); the tests against the packed libraries of this
+   machine's target; a smoke test in a Linux container per Linux target;
+   the wasm module's imports and exports, and its test.
 5. **Pack:** deterministic tarballs (pinned GNU tar and gzip), a manifest
-   and `SHA256SUMS`.
+   per library and one `SHA256SUMS`.
 6. **Publish** (`--publish`): push the commit and tag, then the GitHub
    release.
 

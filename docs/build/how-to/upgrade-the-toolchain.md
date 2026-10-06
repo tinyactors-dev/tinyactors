@@ -100,7 +100,7 @@ out = Pathname.new(ENV.fetch('OUT'))
 CRelease::NATIVE_TARGETS.each do |target|
   CRelease.verify_native!(project, CRelease.build_native(project, target, '0.9.1', out))
 end
-CRelease.verify_wasm!(project, CRelease.build_wasm(project, out))
+CRelease.verify_wasm!(CRelease.build_wasm(project, out))
 ```
 
 ```sh

@@ -28,19 +28,23 @@ project = CRelease::Project.new(name: 'ta_scxml', prefix: 'ta_scxml',
 argv = ARGV.dup
 
 CRelease.release(
-  project: project,
+  libraries: [
+    CRelease::Library.new(
+      project: project,
+      # The codec's test program uses the public headers alone; it links
+      # against the packed codec and the released core and txml.
+      tests: [['ta_scxml_test', root.join('build/objects/ta_scxml_test.o'), []]],
+      smoke: root.join('tests/release_smoke.c'),
+      sources: [project.header, project.amalgamation, project.api]
+    )
+  ],
   directory: 'tinyactors-scxml',
   title: "tinyactors-scxml #{argv.reject { |arg| arg.start_with?('--') }.first}",
   argv: argv,
   checks: [%w[mise run amalgamate -- --check], %w[mise run api -- --check], %w[mise run build],
            %w[mise run --force test]],
   regenerate: [%w[mise run amalgamate], %w[mise run api]],
-  # The codec's test program uses the public headers alone; it links
-  # against the packed codec and the released core and txml.
-  tests: [['ta_scxml_test', root.join('build/objects/ta_scxml_test.o'), []]],
-  smoke: root.join('tests/release_smoke.c'),
   readme: root.join('README.md'),
-  sources: [project.header, project.amalgamation, project.api],
   dependencies: [CRelease::Dependency.new(name: 'tinyactors', directory: 'tinyactors-core', macro: 'TA'),
                  CRelease::Dependency.new(name: 'txml', directory: 'tinyxml', macro: 'TXML')]
 )

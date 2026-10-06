@@ -1,0 +1,24 @@
+#!/usr/bin/env ruby
+#MISE description="Build tinyactors.wasm and tinyactors_runtime.wasm as the release builds them, check that they import nothing, and run tests/wasm/release_test.mjs against each in Node"
+#MISE depends=["amalgamate"]
+# vim:ft=ruby
+
+# The modules are built exactly as the release builds them
+# (CRelease.build_wasm) into build/wasm/: tinyactors.wasm for
+# wasm32-freestanding with its own page allocator, and
+# tinyactors_runtime.wasm with tinyactors inside it, against wasi-libc, as a
+# reactor (root ADR 0001, decision 19). Each one's interface is checked (no
+# imports; the API, the wasm functions and memory exported) and the test
+# runs against it. The release's verify stage runs the same test on the
+# modules it packs.
+
+require_relative '../../core'
+
+core = Core.release_project(Core.library('tinyactors'))
+runtime = Core.release_project(Core.library('tinyactors_runtime'))
+out = Core::BUILD.join('wasm')
+test = Core::ROOT.join('tests/wasm/release_test.mjs')
+[[core, [], [core.api]], [runtime, [core], [core.api, runtime.api]]].each do |project, uses, apis|
+  build = CRelease.build_wasm(project, out, uses: uses)
+  CRelease.verify_wasm!(build, test: ->(wasm) { ['node', test, wasm, *apis] })
+end

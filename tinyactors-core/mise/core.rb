@@ -101,6 +101,15 @@ module Core
 
   def self.library(name) = LIBRARIES.find { |library| library.name == name } || abort("unknown library #{name}")
 
+  # The CRelease::Project of a library (mise/lib/c_release.rb): its files in
+  # dist/ and include/, the version macros of types.h, and whether it uses
+  # the C library.
+  def self.release_project(library)
+    require 'c_release'
+    CRelease::Project.new(name: library.name, prefix: 'ta', header: library.header, amalgamation: library.amalgamation,
+                          api: library.api, version_header: VERSION_HEADER, libc: library.libc)
+  end
+
   # The version both libraries have: TA_VERSION_* in include/tinyactors/types.h.
   VERSION_HEADER = ROOT.join('include/tinyactors/types.h')
 

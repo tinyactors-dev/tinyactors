@@ -16,7 +16,7 @@ position-independent; `wasi`).
 - `mise run build` builds every layer, test program and tool
   (`build/dev/lib`, `build/dev/bin`); `--release` builds `build/release`.
 - `mise run test` builds and runs every test program, then `lint`,
-  `check:freestanding`, `api --check` (after `amalgamate`), `w3c`, `node:test`, `web:test`,
+  `check:freestanding`, `api --check` (after `amalgamate`), `wasm:test`, `w3c`, `node:test`, `web:test`,
   `conformance:js`, `w3c:js`, `examples:test` and `check:wasm`; `--full`
   adds `torture:test` and `check:cross`. Each also runs on its own.
 - `mise run check:freestanding` must pass for any change under

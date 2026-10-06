@@ -30,16 +30,18 @@ says why it ended.
    stays; its input side (`ta_system_tel_peek`, `ta_trace_record_text`)
    changes.
 3. **Rebuild release packaging** on [ADR 0001](docs/adr/0001-packaging-and-releases.md)'s
-   machinery: prebuilt Node addons for every target, the web package, the
-   C prefixes and the PostgreSQL source archive
+   machinery. Done: `@tinyactors/node` (decision 18) and the C libraries,
+   libtinyactors and libtinyactors_runtime (decision 19). Left: the web
+   package and the PostgreSQL source archive
    (`tinyactors-core/docs/distribution.md` is the specification).
 4. **Port the binding surface check** (`tinyactors-core/tools/check_surface.py`)
    onto the pinned toolchain (`Toolchain::Binary` instead of `cc` and `nm`
    from PATH) and run it in `mise run test`.
-5. **Changelog components** (`mise/lib/changelog/components.rb`): drop
-   napi, and read core's API from its headers (`include/tinyactors/`)
-   instead of the earlier core's `tinyactors.api.json`; rewrite the
-   changelog self-test's fixtures to match.
+5. **Changelog components** (`mise/lib/changelog/components.rb`). Done:
+   `napi` is the Node.js binding (`tinyactors-core/bindings/node`, ADR 0001
+   decision 18), and `core` reads the descriptions of both libraries,
+   `include/tinyactors.api.json` and `include/tinyactors_runtime.api.json`
+   (`mise run api`).
 6. **`tinyactors-scxml`:** decide whether the C SCXML writer is still
    wanted (the JavaScript binding writes SCXML itself); if so, port it to
    the compiler's model, and bring its decoder's edge cases into the

@@ -23,7 +23,7 @@ require 'release'
 # keeps its own C library's memcpy and no internal name can clash with its
 # own (decision 16, as Ghostty does).
 module CRelease
-  NATIVE_TARGETS = %w[aarch64-macos x86_64-linux aarch64-linux].freeze
+  NATIVE_TARGETS = Toolchain::Target.native_releases.map(&:name).freeze
   MEMORY = %w[memcpy memset memmove memcmp bcmp].freeze
   # zig 0.16's compiler-rt memset is scalar; this one replaces it in every
   # native release object (decision 16: 24% of core's time before, 4% after).
@@ -67,21 +67,21 @@ module CRelease
     end.map { |function| function['name'] }.sort
   end
 
-  # MAJOR.MINOR.PATCH from the header's <MACRO>_VERSION_* macros.
+  # MAJOR.MINOR.PATCH from the <MACRO>_VERSION_* macros of its version header.
   def header_version(project)
-    text = project.header.read
+    text = project.version_header.read
     %w[MAJOR MINOR PATCH].map do |part|
       text[/^#define #{project.macro}_VERSION_#{part} (\d+)$/, 1] or
-        release_fail!("#{project.header.basename} has no #{project.macro}_VERSION_#{part}")
+        release_fail!("#{project.version_header.basename} has no #{project.macro}_VERSION_#{part}")
     end.join('.')
   end
 
   def set_header_version!(project, version)
     numbers = version.split('.').first(3)
-    text = %w[MAJOR MINOR PATCH].zip(numbers).reduce(project.header.read) do |header, (part, number)|
+    text = %w[MAJOR MINOR PATCH].zip(numbers).reduce(project.version_header.read) do |header, (part, number)|
       header.sub(/^#define #{project.macro}_VERSION_#{part} \d+$/, "#define #{project.macro}_VERSION_#{part} #{number}")
     end
-    project.header.write(text)
+    project.version_header.write(text)
   end
 
   # ------------------------------------------------------------------
@@ -180,23 +180,32 @@ module CRelease
     out
   end
 
-  # The library's one release object for `target`: the amalgamation
-  # compiled with the API at default visibility, joined with compiler-rt,
-  # stripped of debug info, and with only the API left global.
-  def release_object(project, target, dir)
-    FileUtils.mkdir_p(dir)
-    api = api_functions(project, target: target)
-    flags = %w[-g0 -ffunction-sections -fdata-sections]
-    compiled = target.compile(project.amalgamation, into: dir.join("#{project.name}-amalgamation.o"),
-                                                    includes: [project.header.dirname, *project.includes],
-                                                    defines: ["#{project.api_macro}=__attribute__((visibility(\"default\")))"],
-                                                    flags: flags)
+# The amalgamations `target` builds for `project`: the portable one, and
+# its platform amalgamations for the target's suffixes (PlatformFiles), of
+# those it has.
+def amalgamations(project, target)
+  platform = PlatformFiles.suffixes_for(target).map { |suffix| project.platform_amalgamation(suffix) }.select(&:file?)
+  [project.amalgamation, *platform]
+end
+
+# The library's one release object for `target`: its amalgamations
+# compiled with the API at default visibility, joined with compiler-rt,
+# stripped of debug info, and with only the API left global.
+def release_object(project, target, dir)
+  FileUtils.mkdir_p(dir)
+  api = api_functions(project, target: target)
+  flags = %w[-g0 -ffunction-sections -fdata-sections]
+  compiled = amalgamations(project, target).map do |source|
+    target.compile(source, into: dir.join("#{source.basename('.c')}.o"),
+                           includes: [project.header.dirname, *project.includes],
+                           defines: ["#{project.api_macro}=__attribute__((visibility(\"default\")))"], flags: flags)
+  end
     # The vectorized memset takes the place of compiler-rt's weak, scalar one
     # (MEMSET_SOURCE; decision 16).
     memset = target.compile(MEMSET_SOURCE, into: dir.join('memset.o'), flags: flags)
     # Rooted at the API: only the compiler-rt functions the library calls
     # stay, where the format's linker collects garbage.
-    joined = target.combine([compiled, memset, compiler_rt(project, target)], into: dir.join("#{project.name}-joined.o"),
+    joined = target.combine([*compiled, memset, compiler_rt(project, target)], into: dir.join("#{project.name}-joined.o"),
                                                                              keep: api)
     exports = dir.join('exports.txt')
     exports.write(api.map { |name| "#{target.format.symbol(name)}\n" }.join)
@@ -242,23 +251,29 @@ module CRelease
   # are the dependencies' API functions, which a dependent's libraries
   # leave undefined and nothing else may. What the platform's runtime adds
   # (libSystem, ld64's symbols) is the object format's to allow.
-  def verify_native!(project, build, external: [])
-    target = build[:target]
-    expected = api_functions(project, target: target)
-    Toolchain::Binary.new(build[:archive]).must_export_exactly!(expected).must_leave_undefined_only!(external)
-                     .must_keep_local!(MEMORY)
-    Toolchain::Binary.new(build[:shared]).must_export_exactly!(expected).must_leave_undefined_only!(external)
-                     .must_load_only!(build[:needed]).must_be_named!(build[:shared_name]).must_be_for!(target)
-    # The archive holds exactly the release object, which is checked.
-    Toolchain::Binary.new(build[:object]).must_be_for!(target)
-    puts "release: #{target.name}: exports are the #{expected.size} API functions, undefined symbols allowed" \
-         "#{external.empty? ? '' : " (the dependencies' #{external.size} API functions among them)"}, memory functions local, " \
-         'architecture right'
-  end
+# `libc` are the C library functions a `libc` library may import on this
+# target (Library#libc_imports): a Linux library links no C library, so they
+# bind to the program's, glibc or musl (decision 10's rule, as the Node
+# addon follows it); each must have the same name and signature in both.
+def verify_native!(project, build, external: [], libc: [])
+  target = build[:target]
+  expected = api_functions(project, target: target)
+  allowed = external + libc
+  Toolchain::Binary.new(build[:archive]).must_export_exactly!(expected).must_leave_undefined_only!(allowed)
+                   .must_keep_local!(MEMORY)
+  Toolchain::Binary.new(build[:shared]).must_export_exactly!(expected).must_leave_undefined_only!(allowed)
+                   .must_load_only!(build[:needed]).must_be_named!(build[:shared_name]).must_be_for!(target)
+  # The archive holds exactly the release object, which is checked.
+  Toolchain::Binary.new(build[:object]).must_be_for!(target)
+  puts "release: #{target.name}: #{project.name} exports the #{expected.size} API functions; undefined symbols allowed" \
+       "#{external.empty? ? '' : " (the dependencies' #{external.size} API functions among them)"}" \
+       "#{libc.empty? ? '' : " and #{libc.size} C library functions"}; memory functions local; architecture right"
+end
 
-  # Links each [label, object, arguments] test against the packed static and
-  # shared library of the host's target, with the host's C compiler, and
-  # runs it from the project root.
+  # Links each [label, inputs, arguments] test (inputs: its objects, and any
+  # library flags it needs) against the packed static and shared library of
+  # this machine's target, with its C compiler, and runs it from the project
+  # root.
   def host_tests!(project, build, tests, dependencies: [])
     Toolchain::Host.current.must_run!(build[:target], 'the host tests')
     dir = build[:dir].join('host-tests')
@@ -267,11 +282,12 @@ module CRelease
     others = dependency_libraries(dependencies, build[:target])
     failed = []
     { 'static' => [build[:archive].to_s, *others.map { |other| other[:archive].to_s }],
-      'shared' => ["-L#{lib}", "-l:#{build[:shared_name]}", "-Wl,-rpath,#{lib}",
-                   *others.flat_map { |other| ["-L#{other[:shared].dirname}", "-l:#{other[:shared].basename}",
-                                               "-Wl,-rpath,#{other[:shared].dirname}"] }] }.each do |kind, library|
-      tests.each do |label, object, arguments|
-        binary = Toolchain::Target.host.program([object, *library], into: dir.join("#{label}-#{kind}"))
+      # By path: the linker records the library's soname (or @rpath
+      # install name), and the rpath finds it.
+      'shared' => [build[:shared].to_s, "-Wl,-rpath,#{lib}",
+                   *others.flat_map { |other| [other[:shared].to_s, "-Wl,-rpath,#{other[:shared].dirname}"] }] }.each do |kind, library|
+      tests.each do |label, inputs, arguments|
+        binary = Toolchain::Target.host.program([*Array(inputs), *library], into: dir.join("#{label}-#{kind}"))
         # A dependent's shared library names its dependencies; the loader
         # finds them on the library path, as it would installed ones.
         paths = [lib, *others.map { |other| other[:shared].dirname }].join(':')
@@ -283,7 +299,7 @@ module CRelease
       end
     end
     release_fail!("tests failed against the packed library: #{failed.join(', ')}") unless failed.empty?
-    with = dependencies.empty? ? '' : " with #{dependencies.map { |d| "#{d[:name]} #{d[:version]}" }.join(' and ')}'s released ones"
+    with = dependencies.empty? ? '' : " with those of #{dependencies.map { |d| "#{d[:name]} #{d[:version]}" }.join(' and ')}"
     puts "release: #{tests.size} tests passed against the packed #{build[:target]} static and shared library#{with}"
   end
 
@@ -317,29 +333,42 @@ module CRelease
 
   WASM = 'wasm32-freestanding'
 
-  # The standalone module <out>/wasm32-freestanding/<name>.wasm: the
-  # amalgamation and the platform amalgamation include/<name>_wasm.c (the
-  # module's allocator among it), linked with no entry point, exporting the
-  # API, the platform's functions included, and its memory, and importing
-  # nothing. zig's default wasm CPU has bulk memory, so copies need no
-  # memcpy (decision 16).
-  def build_wasm(project, out)
-    target = Toolchain::Target.release(WASM)
-    dir = out.join(target.name)
-    FileUtils.rm_rf(dir)
-    work = dir.join('work')
-    platform = project.root.join("include/#{project.name}_wasm.c")
-    release_fail!("#{platform.basename} is missing: run mise run amalgamate") unless platform.file?
-    objects = [project.amalgamation, platform].map do |source|
-      target.compile(source, into: work.join("#{source.basename('.c')}.o"), includes: [project.header.dirname],
-                             defines: ["#{project.api_macro}=__attribute__((visibility(\"default\")))"], flags: %w[-g0])
-    end
-    wasm = target.wasm_module(objects, into: dir.join("#{project.name}.wasm"),
-                                       exports: api_functions(project, target: target)).path
-    FileUtils.mkdir_p(dir.join('include'))
-    FileUtils.cp(project.header, dir.join('include'))
-    { target: target, dir: dir, wasm: wasm, extra: [wasm], asset: 'wasm32', cflags: target.cflags + %w[-g0] }
+# The standalone module <out>/wasm32-freestanding/<name>.wasm: the
+# amalgamation and the platform amalgamation <name>_wasm.c (the module's
+# allocator among it), linked with no entry point, exporting the API, the
+# platform's functions included, and its memory, and importing nothing.
+# zig's default wasm CPU has bulk memory, so copies need no memcpy
+# (decision 16).
+#
+# A library that builds on others in the same release (`uses`, Projects)
+# ships one module with them, since a module cannot call into another's
+# memory: their portable amalgamations, its own, and its wasm platform
+# amalgamation, which stands in for theirs (decision 19). A `libc`
+# library's module is compiled against wasi-libc and linked as a WASI
+# reactor; it still imports nothing (verify_wasm!), and exports
+# _initialize beside the API.
+def build_wasm(project, out, uses: [])
+  api_target = Toolchain::Target.release(WASM)
+  target = project.libc ? Toolchain::Target.zig('wasm32-wasi') : api_target
+  dir = out.join(api_target.name, project.name)
+  FileUtils.rm_rf(dir)
+  work = dir.join('work')
+  platform = project.platform_amalgamation('wasm')
+  release_fail!("#{platform.basename} is missing: run mise run amalgamate") unless platform.file?
+  sources = [*uses.map(&:amalgamation), project.amalgamation, platform]
+  objects = sources.map do |source|
+    target.compile(source, into: work.join("#{source.basename('.c')}.o"),
+                           includes: [project.header.dirname, *project.includes, *uses.map { |used| used.header.dirname }],
+                           defines: ["#{project.api_macro}=__attribute__((visibility(\"default\")))"], flags: %w[-g0])
   end
+  exports = [*uses, project].flat_map { |library| api_functions(library, target: api_target) }.uniq.sort
+  wasm = target.wasm_module(objects, into: dir.join("#{project.name}.wasm"), exports: exports,
+                                     flags: project.libc ? %w[-mexec-model=reactor] : []).path
+  FileUtils.mkdir_p(dir.join('include'))
+  [*uses, project].each { |library| FileUtils.cp(library.header, dir.join('include')) }
+  { target: api_target, dir: dir, wasm: wasm, extra: [wasm], asset: 'wasm32', exports: exports,
+    reactor: project.libc, triple: target.triple, cflags: target.cflags + %w[-g0] }
+end
 
   # The imports and exports of a wasm module, as [[module, name, kind]] and
   # [[name, kind]], read from its binary: the import section (2) and the
@@ -398,17 +427,20 @@ module CRelease
     [imports, exports]
   end
 
-  # The module imports nothing and exports exactly the API, the platform's
-  # functions and its memory; then `test`, a lambda from the module's path
-  # to a command, runs it.
-  def verify_wasm!(project, build, test: nil)
-    imports, exports = wasm_interface(build[:wasm])
-    release_fail!("#{build[:wasm].basename} imports #{imports.map { |i| i.first(2).join('.') }.join(', ')}") unless imports.empty?
-    expected = api_functions(project, target: build[:target]).map { |name| [name, 'function'] } + [%w[memory memory]]
-    expect_equal!("#{build[:wasm].basename} exports", exports.sort, expected.sort)
-    puts "release: #{build[:wasm].basename}: imports nothing, exports the #{expected.size - 1} functions and memory"
-    capture!(*test.call(build[:wasm])).lines.each { |line| puts "release: #{line.strip}" } if test
-  end
+# The module imports nothing and exports exactly the API (its own and that
+# of the libraries it holds), the platform's functions, its memory, and a
+# reactor's _initialize; then `test`, a lambda from the module's path to a
+# command, runs it.
+def verify_wasm!(build, test: nil)
+  imports, exports = wasm_interface(build[:wasm])
+  release_fail!("#{build[:wasm].basename} imports #{imports.map { |i| i.first(2).join('.') }.join(', ')}") unless imports.empty?
+  expected = build[:exports].map { |name| [name, 'function'] } + [%w[memory memory]]
+  expected << %w[_initialize function] if build[:reactor]
+  expect_equal!("#{build[:wasm].basename} exports", exports.sort, expected.sort)
+  puts "release: #{build[:wasm].basename}: imports nothing, exports the #{build[:exports].size} functions and memory" \
+       "#{build[:reactor] ? ' (and _initialize, a WASI reactor)' : ''}"
+  capture!(*test.call(build[:wasm])).lines.each { |line| puts "release: #{line.strip}" } if test
+end
 
   # ------------------------------------------------------------------
   # Packing
@@ -428,11 +460,11 @@ module CRelease
     end
   end
 
-  # Stages and packs every asset into `assets`; answers the asset paths,
-  # the manifest and SHA256SUMS last.
+  # Stages and packs one library's assets into `assets`: its source
+  # tarball, a tarball per build, and its manifest last. The release writes
+  # one SHA256SUMS for every library's assets.
   def pack(project, version:, builds:, sources:, readme:, assets:, commit:, epoch:, dependencies: [])
-    FileUtils.rm_rf(assets)
-    staging = assets.join('staging')
+    staging = assets.join('staging', project.name)
     FileUtils.mkdir_p(staging)
     base = "#{project.name}-#{version}"
     packed = []
@@ -454,7 +486,7 @@ module CRelease
       FileUtils.cp(Release::REPO.join('LICENSE'), staged)
       packed << tarball(staging, staged.basename, assets.join("#{base}-#{label}.tar.gz"), epoch)
       manifest_targets[label] = {
-        'triple' => target.triple,
+        'triple' => build[:triple] || target.triple,
         'cflags' => build.fetch(:cflags),
         'files' => sha256_tree(staged)
       }
@@ -473,43 +505,63 @@ module CRelease
       'assets' => packed.to_h { |file| [file.basename.to_s, Digest::SHA256.file(file).hexdigest] }
     )}\n")
     packed << manifest
-    sums = Release.write_sha256sums(packed.map(&:to_s), assets.join('SHA256SUMS'))
     FileUtils.rm_rf(staging)
-    packed + [Pathname.new(sums)]
+    packed
   end
 
   # ------------------------------------------------------------------
   # The command
 
-  # `mise run release -- <version> [--publish] [--skip-containers]` for one
-  # C project. The stages (ADR 0001, "The release command"):
+  # One library of a release: `project`, its `tests` against the packed
+  # library ([label, inputs, arguments], host_tests!), its container
+  # `smoke` program, the `sources` of its source tarball, the libraries of
+  # the same release it builds on (`uses`, by name), and, when it ships a
+  # wasm module, `wasm_test`, a lambda from the module's path to the command
+  # that tests it (true for none).
   #
-  # 1. check: a clean main in step with origin, the tag free, the
-  #    project's `checks` (its amalgamation and test suite);
-  # 2. version: the header's version macros set and `regenerate` run when
-  #    they differ; with --publish, committed as release(<dir>): v<version>
-  #    and tagged; a dry run restores the files instead;
-  # 3. build every native target (and `extra_build`'s, such as wasm);
-  # 4. verify: symbols, architectures, `tests` against the packed host
-  #    library, `smoke` in a container for each Linux target, `extra_verify`;
-  # 5. pack: deterministic tarballs, the manifest and SHA256SUMS in
-  #    build/release/<version>/assets/;
+  # `libc_imports` is a lambda from a target to the C library functions a
+  # `libc` library may import there (verify_native!).
+  Library = Data.define(:project, :tests, :smoke, :sources, :uses, :wasm_test, :libc_imports) do
+    def initialize(project:, tests:, smoke:, sources:, uses: [], wasm_test: nil, libc_imports: ->(_target) { [] })
+      super
+    end
+
+    def name = project.name
+  end
+
+  # `mise run release -- <version> [--publish] [--skip-containers]` for a C
+  # project's libraries, released together under one tag. The stages (ADR
+  # 0001, "The release command"):
+  #
+  # 1. check: a clean main in step with origin, the tag free, the changelog,
+  #    the project's `checks` (its amalgamations and test suite);
+  # 2. version: the version macros set and `regenerate` run when they
+  #    differ; with --publish, committed as release(<dir>): v<version> and
+  #    tagged; a dry run restores the files instead;
+  # 3. build every native target of each library, and its wasm module;
+  # 4. verify: symbols, architectures, `tests` against the packed libraries
+  #    of this machine's target, `smoke` in a container for each Linux
+  #    target, the wasm module's interface and its test;
+  # 5. pack: deterministic tarballs, a manifest per library and one
+  #    SHA256SUMS in build/release/<version>/assets/;
   # 6. publish (--publish): push the commit and tag, then the GitHub release.
   #
   # A failure after the commit and tag, before anything is pushed, undoes
-  # them.
+  # them. The first library's version macros are the release's.
   #
-  # `dependencies` (CRelease::Dependency) are the released libraries this
-  # one builds on: fetched and matched against HEAD in the check stage,
-  # left undefined in its libraries, linked beside them in the tests and
-  # the smoke, and recorded in the manifest.
-  def release(project:, directory:, title:, argv:, checks:, regenerate:, tests:, smoke:,
-              readme:, sources:, extra_build: nil, extra_verify: nil, dependencies: [])
+  # A library that `uses` another of the same release is built against it:
+  # its libraries leave that one's API functions undefined, its shared
+  # library names that one's, and its tests and smoke link both (decision
+  # 17's rules, without a download). `dependencies` (CRelease::Dependency)
+  # are libraries of other projects, released before: fetched and matched
+  # against HEAD in the check stage, and treated the same way.
+  def release(libraries:, directory:, title:, argv:, checks:, regenerate:, readme:, dependencies: [])
     publish = !argv.delete('--publish').nil?
     containers = argv.delete('--skip-containers').nil?
     release_fail!("usage: mise run release -- <version> [--publish] [--skip-containers]") unless argv.size == 1
     version = argv.first
     prefix = "#{directory}/"
+    first = libraries.first.project
     require_tools!(containers: containers)
 
     # 1. Check.
@@ -517,11 +569,10 @@ module CRelease
     tag = Release.check_version!(prefix, version)
     release_fail!("#{version} is a prerelease; C releases are MAJOR.MINOR.PATCH") if Release.parse_version(version)[3]
     Release.check_changelog!(prefix: prefix, version: version)
-    checks.each { |command| Release.run(*command, chdir: project.root) }
+    checks.each { |command| Release.run(*command, chdir: first.root) }
 
-    out = project.root.join('build/release', version)
+    out = first.root.join('build/release', version)
     fetched = dependencies.map { |dependency| fetch_dependency!(dependency, out) }
-    external = fetched.flat_map { |dependency| api_functions(dependency[:api]) }.uniq.sort
     notes = out.join('notes.md')
     FileUtils.mkdir_p(out)
     notes.write(Release.notes(prefix: prefix, version: version, title: title))
@@ -532,9 +583,9 @@ module CRelease
     pushed = false
     begin
       # 2. Version.
-      if header_version(project) != version
-        set_header_version!(project, version)
-        regenerate.each { |command| Release.run(*command, chdir: project.root) }
+      if header_version(first) != version
+        set_header_version!(first, version)
+        regenerate.each { |command| Release.run(*command, chdir: first.root) }
         changed = Release.git('status', '--porcelain').to_s.lines.map { |line| line[3..].strip }
       end
       if publish
@@ -550,32 +601,53 @@ module CRelease
       commit = Release.git('rev-parse', 'HEAD').to_s.strip
       epoch = Release.git('show', '-s', '--format=%ct', 'HEAD').to_s.strip
 
-      # 3. Build.
-      targets = out.join('targets')
-      builds = NATIVE_TARGETS.map { |name| build_native(project, name, version, targets, dependencies: fetched) }
-      builds += Array(extra_build&.call(targets))
-
-      # 4. Verify.
-      natives = builds.first(NATIVE_TARGETS.size)
-      natives.each { |build| verify_native!(project, build, external: external) }
-      host_tests!(project, natives.find { |build| build[:target].name == 'x86_64-linux' }, tests, dependencies: fetched)
-      if containers
-        natives.select { |build| build[:target].container_platform }.each { |build| container_smoke!(build, smoke, dependencies: fetched) }
-      else
-        puts 'release: --skip-containers: no Linux container smoke test ran'
+      # 3. Build, 4. verify, 5. pack: each library after those it uses.
+      assets = out.join('assets')
+      FileUtils.rm_rf(assets)
+      packed = []
+      built = {}
+      libraries.each do |library|
+        project = library.project
+        used = library.uses.map { |name| built.fetch(name) { release_fail!("#{library.name} uses #{name}, which comes later") } }
+        others = fetched + used.map { |entry| entry[:dependency] }
+        external = others.flat_map { |other| api_functions(other[:api]) }.uniq.sort
+        targets = out.join('targets', project.name)
+        natives = NATIVE_TARGETS.map { |name| build_native(project, name, version, targets, dependencies: others) }
+        natives.each do |build|
+          verify_native!(project, build, external: external, libc: library.libc_imports.call(build[:target]))
+        end
+        host = natives.find { |build| build[:target] == Toolchain::Host.current.target }
+        host_tests!(project, host, library.tests, dependencies: others) unless library.tests.empty?
+        if containers
+          natives.select { |build| build[:target].container_platform }
+                 .each { |build| container_smoke!(build, library.smoke, dependencies: others) }
+        else
+          puts "release: --skip-containers: no Linux container smoke test of #{project.name} ran"
+        end
+        builds = natives
+        if library.wasm_test
+          wasm = build_wasm(project, out.join('targets'), uses: used.map { |entry| entry[:project] })
+          verify_wasm!(wasm, test: library.wasm_test == true ? nil : library.wasm_test)
+          builds += [wasm]
+        end
+        packed += pack(project, version: version, builds: builds, sources: library.sources, readme: readme,
+                                assets: assets, commit: commit, epoch: epoch, dependencies: others)
+        built[library.name] = {
+          project: project,
+          dependency: { name: project.name, version: version, api: project.api,
+                        targets: natives.to_h { |build| [build[:target].name, build[:dir]] } }
+        }
       end
-      extra_verify&.call(builds)
-
-      # 5. Pack.
-      assets = pack(project, version: version, builds: builds, sources: sources, readme: readme,
-                             assets: out.join('assets'), commit: commit, epoch: epoch, dependencies: fetched)
+      FileUtils.rm_rf(assets.join('staging'))
+      sums = Release.write_sha256sums(packed.map(&:to_s), assets.join('SHA256SUMS'))
+      assets_list = packed + [Pathname.new(sums)]
 
       unless publish
         puts <<~DRY
-          release: dry run for #{project.name} #{version} passed; nothing was committed, tagged or uploaded.
+          release: dry run for #{libraries.map(&:name).join(' and ')} #{version} passed; nothing was committed, tagged or uploaded.
             would tag:     #{tag}
-            assets:        #{assets.map { |file| file.basename.to_s }.join(', ')}
-            in:            #{out.join('assets').relative_path_from(Release::REPO)}
+            assets:        #{assets_list.map { |file| file.basename.to_s }.join(', ')}
+            in:            #{assets.relative_path_from(Release::REPO)}
             notes:         #{notes.relative_path_from(Release::REPO)}
           Publish with: mise run //#{directory}:release -- #{version} --publish
         DRY
@@ -583,9 +655,9 @@ module CRelease
       end
 
       # 6. Publish.
-      Release.push_and_release!(tag: tag, title: title, notes_file: notes, assets: assets)
+      Release.push_and_release!(tag: tag, title: title, notes_file: notes, assets: assets_list)
       pushed = true
-      puts "release: published #{project.name} #{version}, tagged #{tag}"
+      puts "release: published #{libraries.map(&:name).join(' and ')} #{version}, tagged #{tag}"
     ensure
       if tagged && !pushed
         if committed
