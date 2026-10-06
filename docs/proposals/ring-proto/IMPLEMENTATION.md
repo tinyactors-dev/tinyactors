@@ -591,6 +591,23 @@ Decisions for these commits:
   live in the test host and the benchmarks, not in core. 5.1 checks the
   figures again on real rings.
 
+Carried forward from commit 4 (19cd1813):
+
+- **The macrostep reserve is a fixed 64 envelopes**, and a macrostep
+  never refills, so on a cold pool one macrostep can send about 64
+  messages before `error.execution.capacity.pool`, however large
+  `poolEnvelopes` is. 4.5 sizes the reserve per slot from the pool's
+  headroom (`poolEnvelopes` minus the admission watermark) and refills
+  each slot's claim before it takes an input.
+- **`_event.data` of `error.execution.capacity.*` is empty.** 4.4 fills
+  it with the action and the `<foreach>` iteration (ADR 0102).
+- **The trace watch no longer marks mail between resident actors**,
+  because that mail no longer passes through the kernel. The per-actor
+  watch bit in core ([telemetry](reference/telemetry.md)) restores it; it
+  lands with 6.1, when napi drives core directly.
+- Mail to a resident actor that finishes before taking it is refused by
+  core; commit 5 turns it into `error.communication`.
+
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
   input.
@@ -739,12 +756,22 @@ Phase 7, not step by step.
 - **Implementers iterate narrowly** (one test program, one scenario
   pattern, one napi suite) and run `mise run test` and `test:full` once,
   at the end of a step.
-- **One deep review per commit**, no separate quick pass.
-- **Commits overlap with their reviews.** A step that passes its gates
-  lands on `main`; its deep review reads the commit while the next step
-  is implemented in the working tree, and the review's findings land as a
-  follow-up `fix` commit. The next step does not wait for the review,
-  except where the review finds a defect the next step builds on.
+- **A side lane runs `test:full` once**, when its work is complete;
+  its commits along the way pass `mise run test`.
+- **One deep review per step**, over the step's commit range, with no
+  separate quick pass. Each commit still passes `mise run test` and,
+  where it changes behaviour, `test:full`.
+- **Steps overlap with their reviews.** A commit that passes its gates
+  lands on `main`. When a step is complete, its deep review reads the
+  step's commits while the next step is implemented in the working tree,
+  and the review's findings land as a follow-up `fix` commit. The next
+  step does not wait for the review, except where the review finds a
+  defect the next step builds on.
+- **No step waits for a person.** The decisions are in the ADRs and the
+  reference documents. Where they leave something open, the implementer
+  chooses what fits them and records the choice in the commit message
+  and here. The gates in the next section are kept by a fresh review
+  agent that did not write the change.
 
 ### Where oversight is needed
 
