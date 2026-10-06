@@ -6,8 +6,10 @@
  */
 #include "internal.h"
 
-/* Where a container is: its opening is written, and then each item. */
-enum { W_START = 0, W_ITEM, W_ITEM_VALUE, W_KEY_COLON, W_VALUE };
+/* Where a container is: its opening is written, and then each item. A
+ * map's item is an entry, `[key,value]`: its key (W_ITEM_VALUE), then the
+ * comma and its value (W_ENTRY_VALUE), then its `]` (W_ENTRY_END). */
+enum { W_START = 0, W_ITEM, W_ITEM_VALUE, W_KEY_COLON, W_VALUE, W_ENTRY_VALUE, W_ENTRY_END };
 
 typedef struct {
     sjs_value value;
@@ -173,6 +175,10 @@ static sjs_result next(sjs_writer *w, bool *more) {
             say(w, "{");
             f->phase = W_ITEM;
             return SJS_OK;
+        case SJS_MAP:
+            say(w, "new Map([");
+            f->phase = W_ITEM;
+            return SJS_OK;
         default:
             if (w->function_text.length == 0) return SJS_ERR_INVALID;
             w->pending = (const uint8_t *)w->function_text.ptr;
@@ -186,7 +192,7 @@ static sjs_result next(sjs_writer *w, bool *more) {
     switch (f->phase) {
     case W_ITEM:
         if (f->index == count) {
-            say(w, v.kind == SJS_ARRAY ? "]" : (v.kind == SJS_SET ? "])" : "}"));
+            say(w, v.kind == SJS_ARRAY ? "]" : (v.kind == SJS_SET || v.kind == SJS_MAP ? "])" : "}"));
             w->stack.length -= (uint32_t)sizeof(wframe);
             return SJS_OK;
         }
@@ -199,11 +205,25 @@ static sjs_result next(sjs_writer *w, bool *more) {
             f->phase = W_KEY_COLON;
             return SJS_OK;
         }
+        if (v.kind == SJS_MAP) {
+            say(w, "[");
+            f->phase = W_ENTRY_VALUE;
+            return push(w, SJS_AS_ARRAY(v)->items[2u * f->index]);
+        }
         f->phase = W_ITEM;
         return push(w, SJS_AS_ARRAY(v)->items[f->index++]);
     case W_KEY_COLON:
         say(w, ":");
         f->phase = W_VALUE;
+        return SJS_OK;
+    case W_ENTRY_VALUE:
+        say(w, ",");
+        f->phase = W_ENTRY_END;
+        return push(w, SJS_AS_ARRAY(v)->items[2u * f->index + 1u]);
+    case W_ENTRY_END:
+        say(w, "]");
+        f->index++;
+        f->phase = W_ITEM;
         return SJS_OK;
     default: { /* W_VALUE */
         f->phase = W_ITEM;

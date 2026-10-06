@@ -15,7 +15,7 @@ commit must show with `bench-compare` that it costs nothing.
 A built-in is one of two kinds, and the choice decides most of its cost.
 
 - **A leaf** finishes in one C call: `includes`, `slice`, `join`,
-  `Math.max`, `Object.fromEntries`, the set methods. It gets its arguments
+  `Math.max`, `Object.fromEntries`, the set methods, a map's `get` and `has`. It gets its arguments
   borrowed in a `sjs_leaf_call` and returns an owned `result` and a `cost`.
   `call()` charges the cost, cuts the stack and pushes the result.
 - **A loop** calls a callback: `map`, `filter`, `reduce`, `some`, `every`,
@@ -56,15 +56,16 @@ For a loop built-in:
 ## 2. Register it
 
 **A method** (`xs.name(…)`, `s.name(…)`, `set.name(…)`, `x.toString()` of a
-BigInt):
+BigInt, `m.name(…)` of a map):
 
 1. Add an ID to `sjs_builtin_id` in `src/internal.h`, inside its receiver's
    group. `sjs_builtin_call` picks the group by ID range
    (`id <= SJS_METHOD_ARRAY_WITH`, `id <= SJS_METHOD_STRING_TRIM_START`,
-   `id <= SJS_METHOD_SET_UNION`, then BigInts). A new last member of a group must move that bound, or the call
+   `id <= SJS_METHOD_SET_UNION`, `SJS_METHOD_BIGINT_TO_STRING`, then maps'
+   `map_method`, at the end of the file). A new last member of a group must move that bound, or the call
    lands in the wrong group's switch.
 2. Give its name's entry in `NAMES` (`src/builtins.c`) the ID in the
-   column of the receiver kind: array, string, set or BigInt. Every name Node 22 has
+   column of the receiver kind: array, string, set, BigInt or map. Every name Node 22 has
    on those prototypes is already listed, so that reading one faults instead
    of giving `undefined`. If the name is missing, add it in byte order;
    `names_test` checks the order and fails on a mistake. The flags say which

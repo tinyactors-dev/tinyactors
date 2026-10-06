@@ -148,7 +148,8 @@ enum {
     SJS_HEAP_CLOSURE,
     SJS_HEAP_NATIVE,
     SJS_HEAP_BUILTIN,
-    SJS_HEAP_BIGINT
+    SJS_HEAP_BIGINT,
+    SJS_HEAP_MAP
 };
 
 /* refs of a value that is never freed: built-in functions. */
@@ -201,9 +202,12 @@ typedef struct {
     sjs_heap h;
     uint32_t length;
     uint32_t capacity;
-    sjs_index *index;   /* a set's, or NULL; an array has none */
+    sjs_index *index;   /* a set's or a map's, or NULL; an array has none */
     sjs_value items[];
-} sjs_array;   /* also a set: elements in insertion order */
+} sjs_array;   /* also a set: elements in insertion order; and a map (SJS_HEAP_MAP):
+                * its keys and their values alternate, items[2i] and items[2i + 1],
+                * in insertion order, and length and capacity count both; its
+                * index is over the keys, by entry */
 
 typedef struct {
     sjs_string *key;
@@ -343,6 +347,17 @@ const sjs_entry *sjs_object_find(const sjs_object *object, sjs_str key);
 /* Add to a set the caller holds alone; takes over the element's reference. */
 sjs_result sjs_set_insert(sjs_context *context, sjs_array **set, sjs_value element);
 bool sjs_set_contains(const sjs_array *set, sjs_value element);
+/* A map with room for `entries` entries. */
+sjs_result sjs_map_make(sjs_context *context, uint32_t entries, sjs_array **out);
+/* The value of `key` in the map, or NULL: through the index, under
+ * SameValueZero, so an object, which is never a key, finds nothing. */
+const sjs_value *sjs_map_find(const sjs_array *map, sjs_value key);
+/* Set in a map the caller holds alone, as Map.prototype.set does; takes over
+ * the entry's references, but for SJS_ERR_PROGRAM (a key that is not a
+ * primitive) and the errors of growing. */
+sjs_result sjs_map_put(sjs_context *context, sjs_array **map, const sjs_map_entry *entry);
+/* A copy of a map, its index rebuilt. */
+sjs_result sjs_map_copy(sjs_context *context, const sjs_array *map, sjs_array **out);
 /* MUTATION: removal from a set or an object the caller holds alone, which
  * may move as it shrinks (value.c, "removal"): whether the item was there,
  * and the fuel the removal costs. */
@@ -562,6 +577,9 @@ typedef enum {
     SJS_METHOD_SET_UNION,
     /* BigInts. */
     SJS_METHOD_BIGINT_TO_STRING,
+    /* Maps. */
+    SJS_METHOD_MAP_GET,
+    SJS_METHOD_MAP_HAS,
     /* MUTATION: methods that change their receiver, called only through a
      * reference to the variable that owns it (SJS_OP_MUTATE), never through
      * sjs_builtin_call. Arrays', then sets', then step 3's. */
@@ -595,11 +613,12 @@ sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name);
 #define SJS_NAME_ON_SET 4u     /* on Set.prototype (or Object.prototype) */
 #define SJS_NAME_OBJECT 8u     /* on Object.prototype, which staticjs objects lack */
 #define SJS_NAME_MUTATING 16u  /* a method that changes its receiver */
+#define SJS_NAME_ON_MAP 32u    /* on Map.prototype (or Object.prototype) */
 
 typedef struct {
     sjs_str name;
     uint8_t flags;      /* SJS_NAME_* */
-    uint8_t methods[4]; /* the staticjs method on an array, a string, a set, a BigInt; 0 if none */
+    uint8_t methods[5]; /* the staticjs method on an array, a string, a set, a BigInt, a map; 0 if none */
     uint8_t mutation;   /* MUTATION: the method that changes its receiver, of the one kind
                          * that has it (SJS_METHOD_MUTATION_FIRST on); 0 if none */
 } sjs_name;
@@ -707,6 +726,10 @@ typedef enum {
     SJS_OP_PATH_SORTED,    /* u16 n, u8 flags (CHAIN): after a PATH_CALL of sort, [reference,
                             * n keys, sorted] the sorted array back in its place; then as
                             * PATH_CALL gives it */
+    /* Not mutation: maps, which execute()'s default case reaches as it does
+     * mutation's instructions, so that the evaluator's loop compiles as it
+     * did. */
+    SJS_OP_NEW_MAP,        /* u16 argc, u8 flags (SPREAD), as NEW_SET */
 } sjs_opcode;
 
 /* SJS_OP_CALL flags. */

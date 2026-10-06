@@ -66,18 +66,20 @@ static const function_entry FUNCTION_TABLE[] = {
  * names a method changing its receiver; with the staticjs method each kind
  * has by that name. Sorted by bytes, for sjs_name_id's binary search.
  */
-#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set, 0 }, 0 }
+#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set, 0, 0 }, 0 }
 /* A name with a BigInt method too: toString. */
-#define NAME_BIGINT(text, flags, bigint) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, bigint }, 0 }
+#define NAME_BIGINT(text, flags, bigint) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, bigint, 0 }, 0 }
+/* A name with a map's method: on a set too, and maps'. */
+#define NAME_MAP(text, flags, set, map) { { text, sizeof(text) - 1u }, flags, { 0, 0, set, 0, map }, 0 }
 /* MUTATION: a name with a method that changes its receiver. Restore: NAME(text, flags, 0, 0, 0). */
-#define NAME_MUTATION(text, flags, mutation) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0 }, mutation }
+#define NAME_MUTATION(text, flags, mutation) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0, 0 }, mutation }
 
 static const sjs_name NAMES[] = {
-    NAME("__defineGetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
-    NAME("__defineSetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
-    NAME("__lookupGetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
-    NAME("__lookupSetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
-    NAME("__proto__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("__defineGetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
+    NAME("__defineSetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
+    NAME("__lookupGetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
+    NAME("__lookupSetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
+    NAME("__proto__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
     NAME_MUTATION("add", SJS_NAME_ON_SET | SJS_NAME_MUTATING, SJS_METHOD_SET_ADD), /* MUTATION */
     NAME("anchor", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("at", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_AT, SJS_METHOD_STRING_AT, 0),
@@ -86,15 +88,15 @@ static const sjs_name NAMES[] = {
     NAME("bold", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("charAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CHAR_AT, 0),
     NAME("charCodeAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CHAR_CODE_AT, 0),
-    NAME_MUTATION("clear", SJS_NAME_ON_SET | SJS_NAME_MUTATING, SJS_METHOD_SET_CLEAR), /* MUTATION */
+    NAME_MUTATION("clear", SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_MUTATING, SJS_METHOD_SET_CLEAR), /* MUTATION */
     NAME("codePointAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CODE_POINT_AT, 0),
     NAME("concat", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_CONCAT, SJS_METHOD_STRING_CONCAT, 0),
-    NAME("constructor", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("constructor", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
     NAME("copyWithin", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
-    NAME_MUTATION("delete", SJS_NAME_ON_SET | SJS_NAME_MUTATING, SJS_METHOD_SET_DELETE), /* MUTATION */
+    NAME_MUTATION("delete", SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_MUTATING, SJS_METHOD_SET_DELETE), /* MUTATION */
     NAME("difference", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_DIFFERENCE),
     NAME("endsWith", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_ENDS_WITH, 0),
-    NAME("entries", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("entries", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
     NAME("every", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_EVERY, 0, 0),
     NAME_MUTATION("fill", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_FILL), /* MUTATION */
     NAME("filter", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FILTER, 0, 0),
@@ -107,20 +109,21 @@ static const sjs_name NAMES[] = {
     NAME("flatMap", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FLAT_MAP, 0, 0),
     NAME("fontcolor", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("fontsize", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("forEach", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET, 0, 0, 0),
-    NAME("has", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_HAS),
-    NAME("hasOwnProperty", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("forEach", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
+    NAME_MAP("get", SJS_NAME_ON_MAP, 0, SJS_METHOD_MAP_GET),
+    NAME_MAP("has", SJS_NAME_ON_SET | SJS_NAME_ON_MAP, SJS_METHOD_SET_HAS, SJS_METHOD_MAP_HAS),
+    NAME("hasOwnProperty", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
     NAME("includes", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_INCLUDES, SJS_METHOD_STRING_INCLUDES, 0),
     NAME("indexOf", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_INDEX_OF, SJS_METHOD_STRING_INDEX_OF, 0),
     NAME("intersection", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_INTERSECTION),
     NAME("isDisjointFrom", SJS_NAME_ON_SET, 0, 0, 0),
-    NAME("isPrototypeOf", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("isPrototypeOf", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
     NAME("isSubsetOf", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_IS_SUBSET_OF),
     NAME("isSupersetOf", SJS_NAME_ON_SET, 0, 0, 0),
     NAME("isWellFormed", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("italics", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("join", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_JOIN, 0, 0),
-    NAME("keys", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("keys", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
     NAME("lastIndexOf", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_LAST_INDEX_OF, 0, 0),
     NAME("link", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("localeCompare", SJS_NAME_ON_STRING, 0, 0, 0),
@@ -131,7 +134,7 @@ static const sjs_name NAMES[] = {
     NAME("padEnd", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_PAD_END, 0),
     NAME("padStart", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_PAD_START, 0),
     NAME_MUTATION("pop", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_POP), /* MUTATION */
-    NAME("propertyIsEnumerable", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("propertyIsEnumerable", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
     NAME_MUTATION("push", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_PUSH), /* MUTATION */
     NAME("reduce", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_REDUCE, 0, 0),
     NAME("reduceRight", SJS_NAME_ON_ARRAY, 0, 0, 0),
@@ -140,7 +143,7 @@ static const sjs_name NAMES[] = {
     NAME("replaceAll", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPLACE_ALL, 0),
     NAME_MUTATION("reverse", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_REVERSE), /* MUTATION */
     NAME("search", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("set", SJS_NAME_MUTATING, 0, 0, 0),
+    NAME("set", SJS_NAME_ON_MAP | SJS_NAME_MUTATING, 0, 0, 0),
     NAME_MUTATION("shift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_SHIFT), /* MUTATION */
     NAME("slice", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_SLICE, SJS_METHOD_STRING_SLICE, 0),
     NAME("small", SJS_NAME_ON_STRING, 0, 0, 0),
@@ -156,13 +159,13 @@ static const sjs_name NAMES[] = {
     NAME("sup", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("symmetricDifference", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_SYMMETRIC_DIFFERENCE),
     NAME("toLocaleLowerCase", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("toLocaleString", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("toLocaleString", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
     NAME("toLocaleUpperCase", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("toLowerCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_LOWER_CASE, 0),
     NAME("toReversed", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_REVERSED, 0, 0),
     NAME("toSorted", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SORTED, 0, 0),
     NAME("toSpliced", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SPLICED, 0, 0),
-    NAME_BIGINT("toString", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, SJS_METHOD_BIGINT_TO_STRING),
+    NAME_BIGINT("toString", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, SJS_METHOD_BIGINT_TO_STRING),
     NAME("toUpperCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_UPPER_CASE, 0),
     NAME("toWellFormed", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("trim", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM, 0),
@@ -172,8 +175,8 @@ static const sjs_name NAMES[] = {
     NAME("trimStart", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM_START, 0),
     NAME("union", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_UNION),
     NAME_MUTATION("unshift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_UNSHIFT), /* MUTATION */
-    NAME("valueOf", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
-    NAME("values", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("valueOf", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
+    NAME("values", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, 0, 0),
     NAME("with", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_WITH, 0, 0)
 };
 
@@ -275,6 +278,8 @@ sjs_builtin_id sjs_method_of(const sjs_name *name, uint8_t kind) {
         return (sjs_builtin_id)name->methods[2];
     case SJS_BIGINT:
         return (sjs_builtin_id)name->methods[3];
+    case SJS_MAP:
+        return (sjs_builtin_id)name->methods[4];
     default:
         return SJS_BUILTIN_NONE;
     }
@@ -434,6 +439,10 @@ static sjs_result no_position(sjs_vm *vm, const sjs_leaf_call *call, uint32_t al
  * Functions
  */
 
+/* Maps' methods, and Object.fromEntries of a map: at the end of the file. */
+static sjs_result map_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+static sjs_result entries_other(sjs_vm *vm, sjs_leaf_call *call);
+
 static sjs_result object_listing(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_value o = arg(call, 0);
     if (o.kind != SJS_OBJECT && o.kind != SJS_ARRAY) return sjs_vm_fault(vm, "Object.keys, values and entries take an object or an array");
@@ -483,9 +492,33 @@ static sjs_result object_listing(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *c
     return SJS_OK;
 }
 
+/* One entry of Object.fromEntries, put into the object in call->result. The
+ * key and the value are borrowed. */
+static sjs_result from_entry(sjs_vm *vm, sjs_leaf_call *call, const sjs_map_entry *entry) {
+    sjs_value value = entry->value;
+    sjs_string *k;
+    sjs_result r = sjs_to_key(vm->context, entry->key, &k);
+    if (r == SJS_ERR_PROGRAM) return sjs_vm_fault(vm, "a key must be a primitive");
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    if (sjs_str_equal(sjs_string_view(k), SJS_STR("__proto__"))) {
+        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+        return sjs_vm_fault(vm, "staticjs objects have no prototype");
+    }
+    sjs_object *o = SJS_AS_OBJECT(call->result);
+    sjs_ref(value);
+    r = sjs_object_put_key(vm->context, &o, (sjs_put){ k, value });
+    call->result.as.heap = &o->h;
+    if (r != SJS_OK) {
+        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+        sjs_unref(vm->context, value);
+        return sjs_vm_fail(vm, r);
+    }
+    return SJS_OK;
+}
+
 static sjs_result from_entries(sjs_vm *vm, sjs_leaf_call *call) {
     sjs_value entries = arg(call, 0);
-    if (entries.kind != SJS_ARRAY) return sjs_vm_fault(vm, "Object.fromEntries takes an array of [key, value] arrays");
+    if (entries.kind != SJS_ARRAY) return entries_other(vm, call);
     const sjs_array *a = SJS_AS_ARRAY(entries);
     sjs_object *o;
     sjs_result r = sjs_object_make(vm->context, a->length, &o);
@@ -495,24 +528,7 @@ static sjs_result from_entries(sjs_vm *vm, sjs_leaf_call *call) {
     for (uint32_t i = 0; i < a->length; i++) {
         sjs_value pair = a->items[i];
         if (pair.kind != SJS_ARRAY) return sjs_vm_fault(vm, "Object.fromEntries takes an array of [key, value] arrays");
-        sjs_value key = sjs_array_at(pair, 0);
-        sjs_value value = sjs_array_at(pair, 1);
-        sjs_string *k;
-        r = sjs_to_key(vm->context, key, &k);
-        if (r == SJS_ERR_PROGRAM) return sjs_vm_fault(vm, "a key must be a primitive");
-        if (r != SJS_OK) return sjs_vm_fail(vm, r);
-        if (sjs_str_equal(sjs_string_view(k), SJS_STR("__proto__"))) {
-            sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
-            return sjs_vm_fault(vm, "staticjs objects have no prototype");
-        }
-        sjs_ref(value);
-        r = sjs_object_put_key(vm->context, &o, (sjs_put){ k, value });
-        call->result.as.heap = &o->h;
-        if (r != SJS_OK) {
-            sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
-            sjs_unref(vm->context, value);
-            return sjs_vm_fail(vm, r);
-        }
+        if (from_entry(vm, call, &(sjs_map_entry){ sjs_array_at(pair, 0), sjs_array_at(pair, 1) }) != SJS_OK) return SJS_ERR_PROGRAM;
     }
     return SJS_OK;
 }
@@ -1151,7 +1167,8 @@ sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) 
     if (id <= SJS_METHOD_ARRAY_WITH) return array_method(vm, id, call);
     if (id <= SJS_METHOD_STRING_TRIM_START) return string_method(vm, id, call);
     if (id <= SJS_METHOD_SET_UNION) return set_method(vm, id, call);
-    return bigint_method(vm, call);
+    if (id == SJS_METHOD_BIGINT_TO_STRING) return bigint_method(vm, call);
+    return map_method(vm, id, call);
 }
 
 /* ------------------------------------------------------------------------
@@ -1207,10 +1224,12 @@ static sjs_result from_list(sjs_vm *vm, sjs_value items, sjs_value *list) {
             }
         }
         vm->fuel_used += a->length;
+    } else if (items.kind == SJS_MAP) {
+        if (sjs_map_entries(vm, SJS_AS_ARRAY(items), &a) != SJS_OK) return SJS_ERR_PROGRAM;
     } else {
         const sjs_entry *e = NULL;
         if (items.kind == SJS_OBJECT && SJS_AS_OBJECT(items)->count == 1) e = sjs_object_find(SJS_AS_OBJECT(items), SJS_STR("length"));
-        if (e == NULL) return sjs_vm_fault(vm, "Array.from takes an array, a set, a string or an object with only a length");
+        if (e == NULL) return sjs_vm_fault(vm, "Array.from takes an array, a set, a map, a string or an object with only a length");
         double n = e->value.kind == SJS_NUMBER ? e->value.as.number : -1.0;
         if (!sjs_number_is_integer(n) || n < 0) return sjs_vm_fault(vm, "Array.from takes a length that is a non-negative integer");
         if (n > (double)vm->context->limits.max_value_items) return sjs_vm_fault(vm, "Array.from length is past the limit of an array");
@@ -2757,3 +2776,77 @@ __attribute__((noinline)) static sjs_result bigint_number(sjs_vm *vm, sjs_builti
     return SJS_OK;
 }
 
+
+/* ------------------------------------------------------------------------
+ * Maps (README.md, "Maps"): get, has, a map's entries as arrays, and
+ * Object.fromEntries of a map. At the end of the file, so that the code
+ * before it is laid out as it was.
+ */
+
+/* The fuel of one lookup in a map: one through its index, or in a map under
+ * SJS_INDEX_FROM entries; its entries when its index failed to allocate and
+ * a lookup scans it (lookup_cost, by entries). */
+static uint64_t map_lookup_cost(const sjs_array *map) {
+    uint32_t entries = map->length / 2u;
+    return map->index != NULL || entries < SJS_INDEX_FROM ? 1u : entries;
+}
+
+/* get(key): its value, or undefined; has(key). An object is never a key, so
+ * either finds nothing for one, as JavaScript finds nothing for an object
+ * the map does not hold. One lookup through the index. */
+static sjs_result map_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    SJS_UNUSED(vm);
+    const sjs_array *m = SJS_AS_ARRAY(call->receiver);
+    const sjs_value *found = sjs_map_find(m, arg(call, 0));
+    call->cost = map_lookup_cost(m);
+    if (id == SJS_METHOD_MAP_HAS) {
+        call->result = sjs_boolean(found != NULL);
+        return SJS_OK;
+    }
+    if (found != NULL) {
+        call->result = *found;
+        sjs_ref(call->result);
+    }
+    return SJS_OK;
+}
+
+sjs_result sjs_map_entries(sjs_vm *vm, const sjs_array *map, sjs_array **out) {
+    uint32_t n = map->length / 2u;
+    sjs_array *a;
+    if (new_array(vm, n, &a) != SJS_OK) return SJS_ERR_PROGRAM;
+    for (uint32_t i = 0; i < n; i++) {
+        sjs_array *pair;
+        sjs_result r = sjs_array_make(vm->context, 2, &pair);
+        if (r != SJS_OK) {
+            sjs_unref(vm->context, sjs_heap_value(SJS_ARRAY, &a->h));
+            return sjs_vm_fail(vm, r);
+        }
+        pair->items[0] = map->items[2u * i];
+        pair->items[1] = map->items[2u * i + 1u];
+        sjs_ref(pair->items[0]);
+        sjs_ref(pair->items[1]);
+        pair->length = 2;
+        a->items[a->length++] = sjs_heap_value(SJS_ARRAY, &pair->h);
+    }
+    vm->fuel_used += n;
+    *out = a;
+    return SJS_OK;
+}
+
+/* Object.fromEntries of anything but an array: a map's entries, each key
+ * ToPropertyKey as an array's pair's is. */
+static sjs_result entries_other(sjs_vm *vm, sjs_leaf_call *call) {
+    sjs_value entries = arg(call, 0);
+    if (entries.kind != SJS_MAP) return sjs_vm_fault(vm, "Object.fromEntries takes an array of [key, value] arrays, or a map");
+    const sjs_array *m = SJS_AS_ARRAY(entries);
+    uint32_t n = m->length / 2u;
+    sjs_object *o;
+    sjs_result r = sjs_object_make(vm->context, n, &o);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    call->result = sjs_heap_value(SJS_OBJECT, &o->h);
+    call->cost = n;
+    for (uint32_t i = 0; i < n; i++) {
+        if (from_entry(vm, call, &(sjs_map_entry){ m->items[2u * i], m->items[2u * i + 1u] }) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    return SJS_OK;
+}

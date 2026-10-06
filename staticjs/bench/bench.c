@@ -82,7 +82,8 @@
  * as "%.15g", which Clinger's fast path reads) and .parse.17 (as "%.17g",
  * which the bignum reads, back to the doubles themselves) (L);
  * eval.bigint.sum-reduce (1n to n added in reduce: L) and eval.bigint.factorial
- * (1n to n multiplied, n! of up to 118,000 bits: Q).
+ * (1n to n multiplied, n! of up to 118,000 bits: Q); eval.map.get (each row's
+ * kwh looked up by its id in a map of every row's, built through the API: L).
  *
  * write (unit byte): write.rows (n {1000, 10000}, 64 KiB buffer),
  * write.rows.buf64 (10000 rows, a 64-byte buffer), write.numbers (100000
@@ -243,7 +244,8 @@ typedef enum {
     FIX_DEMAND,
     FIX_NUMBER_TEXTS,    /* FIX_NUMBERS as "%.15g": Clinger's fast path reads each */
     FIX_NUMBER_TEXTS_17, /* FIX_NUMBERS as "%.17g": each reads back as it was, past the fast path */
-    FIX_BIGINTS          /* 1n to n as BigInts */
+    FIX_BIGINTS,         /* 1n to n as BigInts */
+    FIX_ID_MAP           /* each row's id to its kwh, a map */
 } bench_fixture;
 
 typedef struct {
@@ -594,6 +596,11 @@ static const bench_case cases[] = {
       .expect = "new Set([\"s000000\",\"s000001\",\"s000002\",\"s000003\",\"s000004\"])",
       .check = CHECK_DIFFERENCE },
 
+    /* Maps: a lookup by each row's id in a map of every row's (L). */
+    { .name = "eval.map.get", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.map(r => byID.get(r.id))", .globals = { { "rows", FIX_ROWS, NULL }, { "byID", FIX_ID_MAP, NULL } },
+      .expect = "[0,3.7,7.4,11.1,14.8,18.5,22.2,25.9,29.6,33.3]", .check = CHECK_ARRAY_N },
+
     /* BigInts: small ones added, which is most of what a data model does with
      * them (L), and a product that grows by a limb every ten elements or so,
      * schoolbook by one limb at a time (Q). */
@@ -919,6 +926,21 @@ static bool make_ids(bench_run *run, sjs_value *out) {
     return true;
 }
 
+/* FIX_ID_MAP: each row's id to its kwh, built through the API. */
+static bool make_id_map(bench_run *run, sjs_value *out) {
+    if (sjs_map_new(run->context, run->n, out) != SJS_OK) return fail(run, "sjs_map_new failed");
+    for (uint32_t i = 0; i < run->n; i++) {
+        sjs_value row;
+        if (!make_row(run, i, &row)) return false;
+        sjs_map_entry entry;
+        bool ok = sjs_object_get(row, SJS_STR("id"), &entry.key) == SJS_OK && sjs_object_get(row, SJS_STR("kwh"), &entry.value) == SJS_OK;
+        if (ok) sjs_retain(entry.key);
+        sjs_release(run->context, row);
+        if (!ok || sjs_map_set(run->context, out, &entry) != SJS_OK) return fail(run, "sjs_map_set failed");
+    }
+    return true;
+}
+
 /* Strings "s%06u" from `first`, `count` of them. */
 typedef struct {
     uint32_t first;
@@ -1030,6 +1052,7 @@ static bool make_global(bench_run *run, const bench_global *global, sjs_value *o
     case FIX_XS: return make_xs(run, out);
     case FIX_ROWS: return make_rows(run, out);
     case FIX_IDS: return make_ids(run, out);
+    case FIX_ID_MAP: return make_id_map(run, out);
     case FIX_SET_A: return make_string_set(run, (bench_range){ 0, run->n }, out);
     case FIX_SET_B: return make_string_set(run, (bench_range){ run->n / 2u, run->n }, out);
     case FIX_PENDING_HALF: return make_pending_half(run, out);

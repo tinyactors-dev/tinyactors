@@ -174,6 +174,7 @@ typedef struct {
     uint32_t depth;        /* K_CHAIN: the chain's depth */
     uint32_t jumps_base;   /* K_CHAIN, K_IF: its jumps, in c->jumps */
     uint32_t param;        /* K_DEFAULT: the parameter's slot + 1, or 0 for an element's */
+    uint8_t map;           /* K_NEW: new Map, not new Set */
     /* MUTATION: K_CALL: a method that changes the variable `receiver` (a
      * binding), whether it returns its receiver, and whether it sorts. */
     uint8_t mutate;
@@ -225,7 +226,7 @@ typedef struct {
     bool gathering;
 } literal_frame;
 
-enum { NS_NONE = 0, NS_MATH, NS_OBJECT, NS_NUMBER, NS_ARRAY, NS_STRING, NS_BIGINT };
+enum { NS_NONE = 0, NS_MATH, NS_OBJECT, NS_NUMBER, NS_ARRAY, NS_STRING, NS_BIGINT, NS_MAP };
 
 /* An explicit export: resolved when it arrives, or at the end of the module. */
 enum { XE_RESOLVED = 0, XE_LOCAL };
@@ -1129,7 +1130,7 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
     if (sjs_str_equal(e->text, SJS_STR("Infinity"))) return number_constant(c, 1.0 / 0.0, e->at);
     static const struct { const char *name; uint8_t space; } spaces[] = {
         { "Math", NS_MATH }, { "Object", NS_OBJECT }, { "Number", NS_NUMBER }, { "Array", NS_ARRAY },
-        { "String", NS_STRING }, { "BigInt", NS_BIGINT }
+        { "String", NS_STRING }, { "BigInt", NS_BIGINT }, { "Map", NS_MAP }
     };
     for (uint32_t i = 0; i < sizeof spaces / sizeof spaces[0]; i++) {
         if (sjs_str_equal(e->text, sjs_cstr(spaces[i].name))) {
@@ -1164,7 +1165,7 @@ static sjs_result fail_unbound(sjs_compiler *c) {
 
 /* `Math.PI`, `Number.MAX_SAFE_INTEGER`, `Math.max`. */
 static sjs_result read_space_member(sjs_compiler *c, const sjs_event *e) {
-    static const char *const space_names[] = { "", "Math", "Object", "Number", "Array", "String", "BigInt" };
+    static const char *const space_names[] = { "", "Math", "Object", "Number", "Array", "String", "BigInt", "Map" };
     static const struct { uint8_t space; const char *name; double value; } numbers[] = {
         { NS_MATH, "PI", 3.141592653589793 }, { NS_MATH, "E", 2.718281828459045 },
         { NS_MATH, "LN2", 0.6931471805599453 }, { NS_MATH, "LN10", 2.302585092994046 },
@@ -2751,10 +2752,13 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
     case SJS_EV_NEW_BEGIN: {
         construct k = { 0 };
         k.kind = K_NEW;
+        k.map = sjs_str_equal(e->text, SJS_STR("Map")) ? 1u : 0u;
         return push_construct(c, k, e->at);
     }
-    case SJS_EV_NEW_END:
-        return call_end(c, e, SJS_OP_NEW_SET);
+    case SJS_EV_NEW_END: {
+        const construct *k = top_construct(c);
+        return call_end(c, e, k != NULL && k->kind == K_NEW && k->map ? SJS_OP_NEW_MAP : SJS_OP_NEW_SET);
+    }
     case SJS_EV_UNARY:
         if (op(c, SJS_OP_UNARY_, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
         return u8(c, (uint8_t)e->count);

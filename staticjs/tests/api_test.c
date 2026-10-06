@@ -2524,6 +2524,125 @@ static void test_bigint_api(void) {
     }
 }
 
+/* The fuel of `m.get(k)` and `m.has(k)` with the map `m` given as a global. */
+static uint64_t map_lookup_fuel(sjs_context *context, sjs_value map) {
+    static const sjs_str names[1] = { { "m", 1 } };
+    const char *source = "[m.get(3), m.has(-1), m.get(\"3\")]";
+    sjs_program *program;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, names, 1, { NULL, NULL }, false },
+                                  { source, (uint32_t)strlen(source) }, NULL };
+    if (sjs_compile(&params, &program) != SJS_OK) return 0;
+    sjs_vm *vm;
+    sjs_vm_config config = { context };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    sjs_run_params run = { program, &map, 1 };
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
+    uint64_t used = sjs_vm_fuel_used(vm);
+    sjs_value v;
+    CHECK(sjs_vm_take_result(vm, &v) == SJS_OK);
+    char out[64];
+    write_text(context, v, out, sizeof out);
+    CHECK(strcmp(out, "[9,false,undefined]") == 0);
+    sjs_release(context, v);
+    sjs_vm_destroy(vm);
+    sjs_program_release(program);
+    return used;
+}
+
+/* Maps through the API: built, read, written, given to a program, and their
+ * lookups one unit of fuel through the index whatever their size. */
+static void test_map_api(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    sjs_value map;
+    CHECK(sjs_map_new(context, 0, &map) == SJS_OK && map.kind == SJS_MAP);
+    sjs_value s;
+    CHECK(sjs_string_new(context, SJS_STR("v"), &s) == SJS_OK);
+    sjs_map_entry e1 = { sjs_number(1), s };
+    CHECK(sjs_map_set(context, &map, &e1) == SJS_OK);
+    CHECK(sjs_string_new(context, SJS_STR("k"), &s) == SJS_OK);
+    sjs_map_entry e2 = { s, sjs_boolean(true) };
+    CHECK(sjs_map_set(context, &map, &e2) == SJS_OK);
+    sjs_map_entry e3 = { sjs_number(-0.0), sjs_null() };
+    CHECK(sjs_map_set(context, &map, &e3) == SJS_OK);
+    /* A key it has keeps its place and takes the value. */
+    sjs_map_entry e4 = { sjs_number(1), sjs_number(2) };
+    CHECK(sjs_map_set(context, &map, &e4) == SJS_OK);
+    CHECK(sjs_map_size(map) == 3 && sjs_length(map) == 3);
+    char text[4096];
+    write_text(context, map, text, sizeof text);
+    CHECK(strcmp(text, "new Map([[1,2],[\"k\",true],[0,null]])") == 0);
+    sjs_value got;
+    CHECK(sjs_map_get(map, sjs_number(0), &got) == SJS_OK && got.kind == SJS_NULL);
+    CHECK(sjs_map_get(map, sjs_number(1), &got) == SJS_OK && got.as.number == 2);
+    CHECK(sjs_map_get(map, sjs_number(3), &got) == SJS_ERR_NOT_FOUND);
+    sjs_map_entry at;
+    CHECK(sjs_map_at(map, 1, &at) == SJS_OK && at.key.kind == SJS_STRING && at.value.kind == SJS_BOOLEAN);
+    CHECK(sjs_map_at(map, 2, &at) == SJS_OK && at.key.kind == SJS_NUMBER && at.key.as.number == 0);
+    CHECK(sjs_map_at(map, 3, &at) == SJS_ERR_NOT_FOUND);
+    /* Only a primitive is a key; the caller keeps its reference. */
+    sjs_value array;
+    CHECK(sjs_array_new(context, 0, &array) == SJS_OK);
+    sjs_map_entry bad = { array, sjs_number(1) };
+    CHECK(sjs_map_set(context, &map, &bad) == SJS_ERR_INVALID);
+    sjs_release(context, array);
+    /* A map someone else holds cannot change. */
+    sjs_retain(map);
+    CHECK(sjs_map_set(context, &map, &e3) == SJS_ERR_INVALID);
+    sjs_release(context, map);
+    /* Other values are no maps. */
+    CHECK(sjs_map_size(sjs_number(1)) == 0);
+    CHECK(sjs_map_get(sjs_number(1), sjs_number(1), &got) == SJS_ERR_INVALID);
+    CHECK(sjs_map_at(sjs_null(), 0, &at) == SJS_ERR_INVALID);
+    CHECK(sjs_map_set(context, &array, &e3) == SJS_ERR_INVALID);
+    env e = { context, (const sjs_str[]){ { "m", 1 } }, &map, 1, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    CHECK(evaluate(&e, "[m.get(1), m.get(\"k\"), m.has(-0), m.size, [...m]]", text) == SJS_OK);
+    CHECK(strcmp(text, "[2,true,true,3,[[1,2],[\"k\",true],[0,null]]]") == 0);
+    CHECK(evaluate(&e, "new Map(m)", text) == SJS_OK && strcmp(text, "new Map([[1,2],[\"k\",true],[0,null]])") == 0);
+    sjs_release(context, map);
+
+    /* A lookup is one unit through the index: a map of 5,000 entries costs
+     * what one of 10 does. */
+    sjs_value maps[2];
+    for (uint32_t m = 0; m < 2; m++) {
+        uint32_t n = m == 0 ? 10u : 5000u;
+        CHECK(sjs_map_new(context, n, &maps[m]) == SJS_OK);
+        for (uint32_t i = 0; i < n; i++) {
+            sjs_map_entry entry = { sjs_number(i), sjs_number(i * 3.0) };
+            CHECK(sjs_map_set(context, &maps[m], &entry) == SJS_OK);
+        }
+    }
+    uint64_t small = map_lookup_fuel(context, maps[0]);
+    CHECK(small != 0 && small == map_lookup_fuel(context, maps[1]));
+    sjs_release(context, maps[0]);
+    sjs_release(context, maps[1]);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+
+    /* Building one and writing it, each allocation failing in turn. */
+    for (long fail = 1; fail < 40; fail++) {
+        counting f = { 0 };
+        context = new_context(&f, SJS_LIMITS_DEFAULT);
+        f.fail_at = fail;
+        sjs_value m;
+        if (sjs_map_new(context, 0, &m) == SJS_OK) {
+            for (uint32_t i = 0; i < 12; i++) {
+                sjs_value key;
+                if (sjs_string_new(context, (sjs_str){ &"abcdefghijkl"[i], 1 }, &key) != SJS_OK) continue;
+                sjs_map_entry entry = { key, sjs_number(i) };
+                if (sjs_map_set(context, &m, &entry) != SJS_OK) sjs_release(context, key);
+            }
+            write_text(context, m, text, sizeof text);
+            sjs_release(context, m);
+        }
+        CHECK(sjs_context_live_bytes(context) == 0);
+        sjs_context_destroy(context);
+        CHECK(f.live == 0);
+    }
+}
+
 int main(int argc, char **argv) {
     bool full = argc > 1 && strcmp(argv[1], "--full") == 0;
     test_values();
@@ -2577,6 +2696,7 @@ int main(int argc, char **argv) {
     test_string_append_memory();
     test_string_append_interned();
     test_bigint_api();
+    test_map_api();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */
@@ -2593,6 +2713,11 @@ int main(int argc, char **argv) {
         test_out_of_memory("const pairs = [[2, \"b\"], [1, \"a\"]].toSorted(([p], [q], d = p - q) => d);\n"
                            "export const nested = pairs.map(([n, k]) => [n, n + 1].map(m => { const f = () => `${k}${m}`; return f; }));\n"
                            "export default nested.flatMap(fs => fs.map(f => f()));\n",
+                           SJS_GOAL_MODULE);
+        test_out_of_memory("const m = new Map([[1, \"a\"], [2, [1]], [1, \"c\"]]);\n"
+                           "export const xs = [...m, ...new Map(m)];\n"
+                           "export const o = Object.fromEntries(m);\n"
+                           "export const [[k, v]] = m;\n",
                            SJS_GOAL_MODULE);
         test_out_of_memory("export const f = (xs) => xs.toSorted((a, b) => b - a).flatMap(x => [x, [x]]);\n"
                            "export const g = new Set(f([3, 1, 2]).flat()).union(new Set([9]));\n"

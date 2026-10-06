@@ -302,9 +302,9 @@ let => 1
 ({ this })
 --- error syntax cannot stand for a value
 
-=== new of anything but Set
-new Map()
---- error unsupported constructs only Set
+=== new of anything but Set and Map
+new WeakMap()
+--- error unsupported constructs only Set and Map
 
 === exponent operator
 2 ** 10

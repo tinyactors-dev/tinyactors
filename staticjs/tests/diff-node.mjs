@@ -29,6 +29,7 @@ function show(v) {
   if (typeof v === 'function') return '<function>';
   if (Array.isArray(v)) return '[' + v.map(show).join(',') + ']';
   if (v instanceof Set) return 'new Set([' + [...v].map(show).join(',') + '])';
+  if (v instanceof Map) return 'new Map([' + [...v].map(([k, x]) => '[' + show(k) + ',' + show(x) + ']').join(',') + '])';
   return '{' + Object.keys(v).map((k) => JSON.stringify(k) + ':' + show(v[k])).join(',') + '}';
 }
 
