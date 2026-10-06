@@ -241,6 +241,9 @@ typedef struct {
     bool in_run;
     /* A delayed send that fell due, not mail sent now. */
     bool timer;
+    /* With the send's `event` 0: its name, an eventexpr's value kept as
+     * text, borrowed for the call (ADR 0100). */
+    ta_str event_text;
     /* Set by the call: with `in_run`, the resource the mail's envelope found
      * no room in, and the answer is FAILED with the send released and
      * nobody told; the caller raises error.execution.capacity.<resource>.

@@ -96,6 +96,8 @@
 #include "atom.h"
 #include "builder.h"
 #include "trie.h"
+#include "names.h"
+#include "text_writer.h"
 #include "io.h"
 #include "io_origin.h"
 #include "invoke.h"
@@ -176,6 +178,11 @@ struct ta_system {
     ta_session_table sessions;
     /* Event names: a trie of atoms, holding the built-in names below. */
     ta_trie event_names;
+    /* Resolves an event name kept as text into atoms for the matcher, with
+     * `name_atoms` as its scratch (names.h); one serves the system, since
+     * one macrostep runs at a time. */
+    ta_names names;
+    ta_atom name_atoms[TA_TRIE_MAX_DEPTH];
 
     /*
      * ta_definition_slot; a definition ID is (generation << 32) | slot, as
@@ -295,6 +302,31 @@ uint32_t ta_system_invoker_index(const ta_system *system, ta_atom type);
 /* The type of the invoker at registry index `index`; TA_ATOM_NONE when none. */
 ta_atom ta_system_invoker_type(const ta_system *system, uint32_t index);
 bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);
+
+/*
+ * The segments of `event`'s name as atoms, at most TA_TRIE_MAX_DEPTH of
+ * them in `out`, and how many: its trie path, or, for a name its input
+ * keeps as text (`TA_RUN_NAME_INPUT`, run.h), the text resolved by the
+ * system's resolver, a segment
+ * that is not an atom being TA_NAMES_UNKNOWN (names.h). 0 for no name, or
+ * a text that is not a valid event name. Never allocates; may run inside a
+ * macrostep.
+ */
+uint32_t ta_event_name_atoms(ta_system *system, const ta_event *event, ta_atom out[TA_TRIE_MAX_DEPTH]);
+
+/* Puts `event`'s dotted name; false when it has none. Allocates nothing of
+ * its own; may run inside a macrostep. */
+bool ta_event_name_put(const ta_system *system, const ta_event *event, ta_text_writer *writer);
+
+/*
+ * Gives `event` a name ID for a host, or for a record that keeps the event
+ * after its input completes: a name its input keeps as text is interned
+ * into the event-name trie, and `name` set. May
+ * allocate; TA_ERR_INVALID for a text that is not a valid event name,
+ * TA_ERR_NOMEM or TA_ERR_FULL when the tables cannot grow, changing
+ * nothing. An event that has an ID is left as it is.
+ */
+ta_result ta_event_name_for_host(ta_system *system, ta_event *event);
 
 /*
  * Counts one occurrence for `definition` and for the system (ADR 0072). A

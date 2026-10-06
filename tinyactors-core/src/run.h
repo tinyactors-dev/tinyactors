@@ -20,9 +20,11 @@
  * the macrostep it started ends. Its text is a binary **record** (the
  * event name's ID, the origin, whose references the envelope holds, the
  * input's time, the family of its trace parent's cause, and an operator
- * transition, owned, with the definition its states belong to), and,
- * when its macrostep runs under a trace ID, the **trace parent** behind
- * it as the text's last field (`name_area.h`), with
+ * transition, owned, with the definition its states belong to); then, for
+ * an event whose name core did not intern (an immediate `<send
+ * eventexpr>`, ADR 0100), the **name** as text, with the record's name ID
+ * 0; and, when its macrostep runs under a trace ID, the **trace parent**
+ * behind them as the text's last field (`name_area.h`), with
  * `TA_ENVELOPE_FLAG_TRACED` set. The field leaves the cause's family out;
  * the record keeps it, so the step key reads back whole. Its `source`
  * says what it is:
@@ -84,6 +86,15 @@
  *
  * ## The taken envelope stays put
  *
+ * An event whose name is kept as text names it by `TA_RUN_NAME_INPUT` and
+ * its input's envelope index. Core reads the name into the run's name
+ * buffer, one run of bytes, where it is needed (`ta_run_input_name`): the
+ * system's resolver turns it into atoms for the matcher (`names.h`), and
+ * `_event.name` and trace records read the text. The
+ * buffer grows at a safe point (the refill before an input is taken) to
+ * the longest such name any envelope was given; an input whose name does
+ * not fit, because that growth failed, is not taken, and `ta_run` answers
+ * TA_ERR_NOMEM.
  * A taken input keeps its text and its references until it completes:
  * nothing is copied out of it. While its macrostep runs, `_event`,
  * inspection and trace records read the external event from the envelope
@@ -342,6 +353,12 @@ typedef struct {
     /** The external event of `event_input`, decoded from its envelope; its
      * references are the envelope's, borrowed. */
     ta_event event;
+    /** Where an input's name kept as text is read to, as one run of bytes
+     * (`ta_run_input_name`): `name_capacity` bytes, grown at a safe point
+     * to `name_longest`, the longest such name any envelope was given. */
+    char *name_buffer;
+    uint32_t name_capacity;
+    uint32_t name_longest;
 } ta_run_state;
 
 /**
@@ -453,6 +470,29 @@ void ta_run_wake_place(ta_system *system, struct ta_actor *actor, uint32_t wake)
  * text holds. Never allocates. */
 void ta_run_wake_cancel(ta_system *system, uint32_t wake);
 
+/**
+ * The name ID of an input's event whose name core did not intern (ADR
+ * 0100): this bit, or'ed with the input's envelope index. The name is the
+ * text the envelope keeps; it lives as long as the input does, and no trie
+ * node has this bit. Core reads it with `ta_run_input_name`, and gives an
+ * event a real ID (`ta_event_name_for_host`) before a host or a stored
+ * record keeps it.
+ */
+#define TA_RUN_NAME_INPUT 0x80000000u
+
+/** Whether `name` names an input's name kept as text (`TA_RUN_NAME_INPUT`). */
+static inline bool ta_run_name_is_input(ta_event_name_id name) {
+    return (name & TA_RUN_NAME_INPUT) != 0u;
+}
+
+/**
+ * The name input `name & ~TA_RUN_NAME_INPUT` keeps as text, read into the
+ * run's name buffer: valid until the next call reads another name, or the
+ * buffer grows. Empty when the input keeps none. Never allocates; may run
+ * inside a macrostep.
+ */
+ta_str ta_run_input_name(const ta_system *system, ta_event_name_id name);
+
 /** Mail for another session; see `ta_run_post_mail`. */
 typedef struct {
     /** The actor that holds the session it is for (`ta_actor_mail_route`),
@@ -463,6 +503,9 @@ typedef struct {
     /** The event as the target takes it, borrowed; the envelope retains its
      * data and its origin. */
     const ta_event *event;
+    /** With the event's `name` 0: its name, kept as text (ADR 0100),
+     * borrowed for the call and copied into the envelope's text. */
+    ta_str name_text;
     /** The sending step's trace parent, copied into the envelope's text;
      * null, or no trace ID, for none. */
     const ta_trace_parent *trace;

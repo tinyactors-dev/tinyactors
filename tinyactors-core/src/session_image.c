@@ -461,7 +461,12 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
         .completion = sparse != NULL ? sparse->completion : (ta_actor_completion){0},
         .final_state = sparse != NULL && actor->finished ? sparse->final_state : TA_STATE_NONE,
     };
-    ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
+    /* An image names its events by ID: a name kept as text stays with the
+     * envelope that holds it. */
+    ta_result result = ta_event_name_for_host(system, &image->events.external_event);
+    if (result == TA_OK) {
+        result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
+    }
     if (result == TA_OK) {
         result = ta_image_fill(image, actor);
     }

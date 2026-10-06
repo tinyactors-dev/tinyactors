@@ -251,6 +251,9 @@ typedef struct {
     ta_time now;
 
     const ta_event *event;
+    /* With the event's `name` 0: its name, an eventexpr's value kept as text
+     * (ADR 0100), borrowed for the call. */
+    ta_str event_text;
     ta_state_id state;
     ta_expr_id expr;
     ta_str name;

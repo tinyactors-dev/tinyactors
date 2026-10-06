@@ -865,6 +865,9 @@ static void ta_keep_event(ta_actor *actor, const ta_event *event) {
         ta_event_release(&queue->kept_event);
     }
     queue->kept_event = *event;
+    /* Its envelope, which holds a name kept as text, goes with its input:
+     * the kept event names it by ID (ADR 0069). */
+    (void)ta_event_name_for_host(actor->host_impl.system, &queue->kept_event);
     queue->has_kept = true;
 }
 
@@ -1472,6 +1475,7 @@ ta_dispatch_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed
             ta_result posted = ta_run_post_mail(
                 system,
                 &(ta_run_mail){ .target = route.actor, .wait = &wait, .event = &event, .trace = &send->trace,
+                                .name_text = send->event == 0 ? how->event_text : (ta_str){ 0 },
                                 .from = sender != NULL ? sender->session_id : 0u,
                                 .source = how->timer ? TA_RECORD_INPUT_SOURCE_TIMER : TA_RECORD_INPUT_SOURCE_MAIL },
                 &short_of);
@@ -1569,6 +1573,11 @@ typedef struct {
     ta_atom io_type;
     ta_send_id send_id;
     ta_event_name_id event;
+    /* With `event` 0: the eventexpr's value, a valid event name kept as text
+     * (ADR 0100), borrowed from `event_holder`, which the send owns until it
+     * ends; the name is interned only where the send is stored. */
+    ta_str event_text;
+    ta_value event_holder;
     ta_time delay;
     bool scxml_io;
     bool has_content;
@@ -1809,28 +1818,52 @@ static ta_result ta_send_io_type(ta_interpreter *it, const ta_send_action *send,
                                           .message = "the <send> type names no I/O processor this system has" });
 }
 
-/* Resolves `event` / `eventexpr`; the expression's text is a dotted event name. */
-static ta_result ta_send_event_name(ta_interpreter *it, const ta_send_action *send, ta_event_name_id *out,
+/*
+ * Resolves `event` / `eventexpr`. The expression's text must be a dotted
+ * event name; it stays text (ADR 0100), checked with the system's resolver,
+ * which interns nothing. Never allocates beyond the evaluation.
+ */
+static ta_result ta_send_event_name(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                     ta_fault *fault) {
     if (send->event.kind == TA_EVENT_SOURCE_NAME) {
-        *out = send->event.as.name;
+        state->event = send->event.as.name;
         return TA_OK;
     }
-    ta_value holder = {0};
     ta_str text = {0};
     ta_result result = ta_op_result(ta_eval_text(it, &(ta_text_eval_params){
-                                                         .expr = send->event.as.expr, .holder = &holder,
+                                                         .expr = send->event.as.expr, .holder = &state->event_holder,
                                                          .text = &text, .fault = fault,
                                                      }));
     if (result == TA_OK) {
         result = ta_core_fault(fault, &(ta_core_fault_params){
-                                          .result = ta_core_result(ta_trie_intern_dotted(&it->system->event_names,
-                                                                                         text, out)),
+                                          .result = ta_core_result(ta_names_resolve(&it->system->names, text)),
                                           .code = TA_ERR_INVALID,
                                           .message = "the <send> eventexpr is not a dotted event name" });
     }
-    ta_value_release(&holder);
+    if (result == TA_OK) {
+        state->event = 0;
+        state->event_text = text;
+    }
     return result;
+}
+
+/*
+ * Interns an eventexpr's name where the send is stored: as a delayed send,
+ * held for an unpublished session, queued for #_internal, or handed to an
+ * I/O processor, all of which keep a name ID. An immediate send to another
+ * session keeps it as text. May allocate.
+ */
+static ta_result ta_send_intern_event(ta_interpreter *it, ta_send_state *state, ta_fault *fault) {
+    bool mail_now = state->scxml_io && state->scxml.kind != TA_SCXML_TARGET_INTERNAL && state->delay == 0 &&
+                    it->actor->published;
+    if (state->event != 0 || state->event_text.len == 0 || mail_now) {
+        return TA_OK;
+    }
+    return ta_core_fault(fault, &(ta_core_fault_params){
+                                    .result = ta_core_result(ta_trie_intern_dotted(&it->system->event_names,
+                                                                                   state->event_text, &state->event)),
+                                    .code = TA_ERR_INVALID,
+                                    .message = "the <send> eventexpr is not a dotted event name" });
 }
 
 /* Resolves `delay` / `delayexpr`; the expression's text is an SCXML duration. */
@@ -1966,7 +1999,7 @@ static ta_result ta_send_evaluate(ta_interpreter *it, const ta_send_action *send
                                   ta_fault *fault) {
     ta_result result = ta_send_assign_id(it, send, state, fault);
     if (result == TA_OK) {
-        result = ta_send_event_name(it, send, &state->event, fault);
+        result = ta_send_event_name(it, send, state, fault);
     }
     if (result == TA_OK) {
         result = ta_send_io_type(it, send, state, fault);
@@ -1998,6 +2031,9 @@ static ta_result ta_send_evaluate(ta_interpreter *it, const ta_send_action *send
                                           .result = ta_op_result(ta_interpreter_copy_out(it, &state->data, fault)),
                                           .code = TA_ERR_UNSUPPORTED,
                                           .message = "the data model cannot copy the <send> data" });
+    }
+    if (result == TA_OK) {
+        result = ta_send_intern_event(it, state, fault);
     }
     return result;
 }
@@ -2083,7 +2119,7 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         return raised == TA_EXEC_FAILED ? TA_OK : raised;
     }
     if (state->delay == 0) {
-        ta_dispatch how = { .in_run = true };
+        ta_dispatch how = { .in_run = true, .event_text = state->event_text };
         ta_dispatch_status submitted = ta_interpreter_dispatch_delayed(system, &record, &how);
         if (how.short_of != 0) {
             state->sent = false;
@@ -2098,6 +2134,17 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
          * submitted, waits in the deadline index, due now, and keeps its
          * order among later sends.
          */
+        if (record.event == 0) {
+            ta_result interned = ta_trie_intern_dotted(&system->event_names, state->event_text, &record.event);
+            if (interned != TA_OK) {
+                ta_value_release(&record.data);
+                ta_value_release(&record.target);
+                ta_actor_ref_release(&record.destination);
+                ta_actor_ref_release(&record.origin);
+                state->sent = false;
+                return interned;
+            }
+        }
     }
     ta_result result = ta_actor_schedule_send(system, actor, &record);
     if (result != TA_OK) {
@@ -2127,6 +2174,7 @@ static void ta_trace_sent(ta_interpreter *it, const ta_send_state *state, const 
     ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_SENT);
     record.send = state->send_id;
     record.event = &event;
+    record.event_text = state->event == 0 ? state->event_text : (ta_str){ 0 };
     ta_trace_emit(it, &record);
 }
 
@@ -2172,6 +2220,7 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
             ta_value_release(&fault.data);
         }
     }
+    ta_value_release(&state.event_holder);
     if (result != TA_ERR_NOMEM && state.generated_id) {
         it->actor->next_send_id += 1u;
     }
@@ -2775,7 +2824,7 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
     ta_atom segments[TA_TRIE_MAX_DEPTH];
     ta_atom_list name = { .atoms = segments, .count = 0 };
     if (event != NULL) {
-        name.count = ta_trie_path(&it->system->event_names, event->name, segments);
+        name.count = ta_event_name_atoms(it->system, event, segments);
     }
     const ta_atom_list *matched = event != NULL ? &name : NULL;
     for (ta_state_id atomic = 0; atomic < definition->state_count; atomic += 1) {

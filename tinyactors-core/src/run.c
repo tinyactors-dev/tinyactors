@@ -20,14 +20,17 @@
 #include "waiting.h"
 
 /* ------------------------------------------------------------------------
- * An input's text: one binary field, and the trace parent behind it when
- * the input is traced (see the file comment)
+ * An input's text: one binary field, the name as text when it is not
+ * interned, and the trace parent behind them when the input is traced
+ * (see the file comment)
  */
 
 /* The field holds an operator transition and its definition. */
 #define TA_RUN_RECORD_JUMP 0x02u
 /* A report that retires its invocation. */
 #define TA_RUN_RECORD_ENDS 0x04u
+/* The event's name is not interned: it is the text field after the record. */
+#define TA_RUN_RECORD_NAME_TEXT 0x08u
 
 /* What an input keeps in its first field, unpacked. */
 typedef struct {
@@ -125,6 +128,73 @@ static ta_trace_parent ta_run_trace_of(const ta_system *system, uint32_t index) 
     return parent;
 }
 
+/* The length of the name envelope `index` keeps as text, 0 when its name is
+ * interned. Never allocates. */
+static uint32_t ta_run_name_length(const ta_system *system, uint32_t index) {
+    const ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    if (envelope->text.first == 0u ||
+        (ta_run_record_of(system, index).flags & TA_RUN_RECORD_NAME_TEXT) == 0u) {
+        return 0u;
+    }
+    ta_name_area_reader reader = ta_name_area_reader_of(envelope->text);
+    uint32_t length = 0u;
+    if (ta_name_area_next(&system->run.names, &reader, &length) != TA_OK ||
+        ta_name_area_next(&system->run.names, &reader, &length) != TA_OK) {
+        return 0u;
+    }
+    return length;
+}
+
+/* The name envelope `index` keeps as text, read into the run's name buffer,
+ * valid until the buffer is read into again or grows; empty when its name
+ * is interned or does not fit the buffer (ta_run_take checks it fits). */
+static ta_str ta_run_name_text(const ta_system *system, uint32_t index) {
+    uint32_t length = ta_run_name_length(system, index);
+    if (length == 0u || length > system->run.name_capacity) {
+        return (ta_str){ 0 };
+    }
+    const ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    ta_name_area_reader reader = ta_name_area_reader_of(envelope->text);
+    uint32_t skip = 0u;
+    (void)ta_name_area_next(&system->run.names, &reader, &skip);
+    (void)ta_name_area_next(&system->run.names, &reader, &length);
+    uint32_t got = 0u;
+    while (got < length) {
+        ta_bytes span = ta_name_area_read(&system->run.names, &reader, length - got);
+        ta_mem_copy(system->run.name_buffer + got, span.ptr, span.len);
+        got += span.len;
+    }
+    return (ta_str){ .ptr = system->run.name_buffer, .len = length };
+}
+
+ta_str ta_run_input_name(const ta_system *system, ta_event_name_id name) {
+    uint32_t index = name & ~TA_RUN_NAME_INPUT;
+    if (!ta_run_name_is_input(name) || index == 0u || index > system->run.pool.items.high_water) {
+        return (ta_str){ 0 };
+    }
+    return ta_run_name_text(system, index);
+}
+
+/* Grows the name buffer to the longest name kept as text: a safe point.
+ * TA_ERR_NOMEM, changing nothing. */
+static ta_result ta_run_name_room(ta_system *system) {
+    ta_run_state *run = &system->run;
+    if (run->name_capacity >= run->name_longest) {
+        return TA_OK;
+    }
+    char *grown = ta_mem_alloc(system->allocator, run->name_longest, 1u);
+    if (grown == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (run->name_buffer != NULL) {
+        ta_mem_free(system->allocator, run->name_buffer,
+                    &(ta_allocator_free_params){ .size = run->name_capacity, .alignment = 1u });
+    }
+    run->name_buffer = grown;
+    run->name_capacity = run->name_longest;
+    return TA_OK;
+}
+
 /* Frees an operator transition an input carried. */
 static void ta_run_jump_free(ta_system *system, ta_operator_jump *jump) {
     if (jump == NULL) {
@@ -220,6 +290,12 @@ void ta_run_destroy(ta_system *system) {
     ta_waiting_destroy(&system->run.waiting);
     ta_name_area_destroy(&system->run.names);
     ta_envelope_pool_destroy(pool);
+    if (system->run.name_buffer != NULL) {
+        ta_mem_free(system->allocator, system->run.name_buffer,
+                    &(ta_allocator_free_params){ .size = system->run.name_capacity, .alignment = 1u });
+        system->run.name_buffer = NULL;
+        system->run.name_capacity = 0u;
+    }
     system->run.slot = 0u;
     system->run.event_input = 0u;
     system->run.outgoing = TA_LIST_EMPTY;
@@ -242,6 +318,7 @@ static ta_run_refilled ta_run_refill(ta_system *system) {
     ta_run_refilled refilled = { .pool = ta_envelope_pool_refill(&system->run.pool),
                                  .names = ta_name_area_refill(&system->run.names) };
     (void)ta_waiting_refill(&system->run.waiting);
+    (void)ta_run_name_room(system);
     return refilled;
 }
 
@@ -309,6 +386,9 @@ typedef struct {
     ta_run_refilled refilled;
     /* Admitted input, held to the name area's watermark. */
     bool admission;
+    /* The event's name when it is not interned, written as the field after
+     * the record; empty for an interned name. */
+    ta_str name_text;
 } ta_run_text;
 
 /*
@@ -322,6 +402,10 @@ static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
     bool traced = text->trace != NULL && !ta_trace_context_empty(&text->trace->context);
     ta_run_record record = *text->record;
     record.cause_family = traced ? text->trace->cause.family : 0u;
+    bool named = text->name_text.len != 0u;
+    if (named) {
+        record.flags |= TA_RUN_RECORD_NAME_TEXT;
+    }
     uint8_t bytes[TA_RUN_RECORD_BYTES];
     uint32_t length = ta_run_record_pack(&record, bytes);
     ta_chunk_writer writer = ta_chunk_writer_new();
@@ -330,6 +414,17 @@ static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
                                                      .text = { .ptr = bytes, .len = length },
                                                      .admission = text->admission,
                                                  });
+    if (result == TA_OK && named) {
+        result = ta_name_area_write(names, &(ta_name_area_write_params){
+                                               .writer = &writer,
+                                               .text = { .ptr = (const uint8_t *)text->name_text.ptr,
+                                                         .len = text->name_text.len },
+                                               .admission = text->admission,
+                                           });
+        if (result != TA_OK) {
+            ta_name_area_free(names, &writer.chain);
+        }
+    }
     if (result == TA_OK && traced) {
         result = ta_name_area_write_trace_parent(names, &(ta_name_area_trace_params){
                                                             .writer = &writer,
@@ -342,9 +437,13 @@ static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
     }
     if (result != TA_OK) {
         uint32_t need = ta_name_area_field_need(names, 0u, length);
+        uint32_t written = TA_NAME_AREA_PREFIX_BYTES + length;
+        if (named) {
+            need += ta_name_area_field_need(names, written, text->name_text.len);
+            written += TA_NAME_AREA_PREFIX_BYTES + text->name_text.len;
+        }
         if (traced) {
-            need += ta_name_area_field_need(names, TA_NAME_AREA_PREFIX_BYTES + length,
-                                            TA_NAME_AREA_TRACE_PARENT_BYTES);
+            need += ta_name_area_field_need(names, written, TA_NAME_AREA_TRACE_PARENT_BYTES);
         }
         ta_run_refusal refusal = { .refill = text->refilled.names, .result = result };
         return text->admission ? ta_run_names_short(names, refusal, need)
@@ -353,6 +452,9 @@ static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
     }
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, text->index);
     envelope->text = writer.chain;
+    if (named && text->name_text.len > system->run.name_longest) {
+        system->run.name_longest = text->name_text.len;
+    }
     if (traced) {
         envelope->flags |= TA_ENVELOPE_FLAG_TRACED;
     }
@@ -652,10 +754,14 @@ ta_result ta_run_post_mail(ta_system *system, const ta_run_mail *mail, ta_record
                                      false);
     }
     const ta_event *event = mail->event;
-    ta_run_record record = { .name = event->name, .origin = event->origin, .time = ta_clock_now(&system->clock) };
+    /* A name kept as text is copied into the new envelope's text. */
+    ta_str name_text = ta_run_name_is_input(event->name) ? ta_run_input_name(system, event->name) : mail->name_text;
+    ta_run_record record = { .name = name_text.len != 0u ? 0u : event->name,
+                             .origin = event->origin,
+                             .time = ta_clock_now(&system->clock) };
     result = ta_run_write_text(system, &(ta_run_text){
                                            .index = index, .record = &record, .trace = mail->trace,
-                                           .refilled = refilled });
+                                           .refilled = refilled, .name_text = name_text });
     if (result != TA_OK) {
         ta_envelope_pool_give(&system->run.pool, index);
         if (entry != 0u) {
@@ -762,7 +868,7 @@ ta_event ta_run_input_event_of(const ta_system *system, uint32_t input) {
     }
     ta_run_record record = ta_run_record_of(system, input);
     const ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, input);
-    return (ta_event){ .name = record.name,
+    return (ta_event){ .name = (record.flags & TA_RUN_RECORD_NAME_TEXT) != 0u ? TA_RUN_NAME_INPUT | input : record.name,
                        .type = (ta_event_type)envelope->type,
                        .send_id = envelope->send_id,
                        .origin = record.origin,
@@ -1147,6 +1253,10 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
         ta_envelope_pool_defer(&system->run.pool, (ta_envelope_defer){ .deferred = &actor->deferred,
                                                                       .index = index });
         return TA_OK;
+    } else if (ta_run_name_length(system, index) > system->run.name_capacity) {
+        /* Its name, kept as text, does not fit the name buffer the refill
+         * before it could not grow. */
+        return ta_run_put_back(call, index, TA_ERR_NOMEM);
     } else {
         ta_result result = envelope->source == TA_RECORD_INPUT_SOURCE_INVOKE_REPORT
                                ? ta_run_bind_report(system, actor, index)
@@ -1168,6 +1278,8 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
             /* Core made it: the host learns its event here, and releases it. */
             ta_event event = ta_run_input_event_of(system, index);
             ta_event_retain(&event, &taken.event);
+            /* A host reads the name by ID; the text stays in the envelope. */
+            (void)ta_event_name_for_host(system, &taken.event);
             taken.has_event = true;
         }
         ta_run_report_input(call, index, taken);

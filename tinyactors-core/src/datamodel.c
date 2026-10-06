@@ -80,15 +80,7 @@ static bool ta_dm_write_field(const void *context, ta_text_writer *writer) {
         ta_send_id_write(system, event->send_id, writer);
         return true;
     }
-    ta_atom segments[TA_TRIE_MAX_DEPTH];
-    uint32_t count = ta_trie_path(&system->event_names, event->name, segments);
-    for (uint32_t index = 0; index < count; index += 1) {
-        if (index != 0) {
-            ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
-        }
-        ta_text_put(writer, ta_atom_text(&system->atoms, segments[index]));
-    }
-    return count != 0;
+    return ta_event_name_put(system, event, writer);
 }
 
 static ta_result ta_dm_render_field(const ta_dm_host *host, ta_dm_text_kind kind, ta_str *out) {

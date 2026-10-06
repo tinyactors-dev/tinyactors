@@ -755,7 +755,11 @@ static void ta_trace_compose(const ta_trace_compose_params *params, ta_trace_are
     if (entry->event != NULL) {
         const ta_event *event = entry->event;
         build->flags |= TA_TEL_TRACE_FLAG_EVENT;
-        TA_TRACE_COMPOSE(area, build, event_name, ta_trace_put_event_name(system, event->name, out));
+        if (event->name == 0 && entry->event_text.len != 0) {
+            TA_TRACE_COMPOSE(area, build, event_name, ta_text_put(out, entry->event_text));
+        } else {
+            TA_TRACE_COMPOSE(area, build, event_name, (void)ta_event_name_put(system, event, out));
+        }
         if (event->send_id != 0) {
             TA_TRACE_COMPOSE(area, build, event_send_id, ta_send_id_write(system, event->send_id, out));
         }

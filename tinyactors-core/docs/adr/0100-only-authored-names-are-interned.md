@@ -1,6 +1,6 @@
 # ADR 0100: Only authored names are interned
 
-**Status:** Accepted (2026-10-05); partly implemented (matching by lookup). Refines ADR 0007.
+**Status:** Accepted (2026-10-05); partly implemented (matching by lookup; immediate eventexpr sends as text). Refines ADR 0007.
 **Date:** 2026-10-05
 
 ## Context
@@ -205,3 +205,26 @@ before it.
   `TA_ERR_INVALID`, for an error report as already for a done report, and
   the session is unchanged. Tested in `tests/name_matching_test.c`
   (claims 6 and 7); no IRP test or scenario changed.
+- **An immediate `<send eventexpr>` to a session travels as text,
+  2026-10-06.** The eventexpr's value is checked with the system's
+  resolver and kept as text; its envelope keeps the name as a field of its
+  text after the record. Inside core the taken event names it with
+  `TA_RUN_NAME_INPUT` and the envelope's index (run.h), so `ta_event` keeps
+  its 64 bytes (ADR 0068). Where the name is needed it is read into the
+  run's name buffer, which grows at the refill before a take: the matcher
+  resolves it into atoms, and `_event.name` and trace records read the
+  text. 10,000 random
+  names sent this way leave the atom table and the trie unchanged
+  (`tests/name_matching_test.c`, claim 8).
+  - Still interned, because the event is stored by name ID: a delayed send
+    (`timer.c` and `ta_delayed_send_info.event` hold IDs; delayed sends
+    become envelopes in step 4.3), a send held for an unpublished session,
+    one for `#_internal`, one handed to an I/O processor, and mail kept as
+    a submitted send when no envelope was free outside a macrostep.
+  - Interned where a host reads the event, since hosts read names by ID
+    until they pass and read names as text: a TAKEN outcome's event,
+    inspection's `current_event`, a session image's events, an event
+    forwarded to a host invoker, and an invoked session's kept event.
+  - Not yet changed: the generated invocation ID, `done.invoke.<id>`,
+    `error.communication.invoke.<id>.<reason>`, `#_<invokeid>` and
+    session-URI families in `targetexpr`, and the host calls.

@@ -44,17 +44,24 @@
  *    error name would be too deep answers TA_ERR_INVALID and changes
  *    nothing the session sees, as a DONE report whose done.invoke name
  *    would be too deep does; a shallower name for the same session is
- *    still made.
+ *    still made;
+ * 8. 10,000 random names sent with an immediate `<send eventexpr>` to a
+ *    session travel as text: each is taken and matched by `*` (resolved
+ *    from the envelope's bytes), and the atom table and the trie keep
+ *    their size.
  *
- * Paths that still add a run-time name to the tables, and that claim 4
- * and 5 therefore do not cover, because an event carries its name as a
- * trie node: the value of a `<send eventexpr>`; the generated invocation
- * ID and the `done.invoke.<id>` and `error.communication.invoke.<id>.
- * <reason>` names built from it (the ID and the reason, not the `invoke`
- * segment); `#_<invokeid>` targets and the family of a session URI in a
- * `targetexpr`; and the public calls a host uses to turn text into IDs
- * (ta_system_intern_atom, ta_event_name_intern, ta_send_id_intern,
- * ta_system_intern_invoke_id).
+ * Paths that still add a run-time name to the tables, and that claims 4,
+ * 5 and 8 therefore do not cover, because an event there carries its name
+ * as a trie node: the value of a `<send eventexpr>` that is stored (a
+ * delayed send, one held for an unpublished session, one for #_internal or
+ * for an I/O processor), or handed to a host (a TAKEN outcome's event,
+ * inspection, a session image, an event forwarded to a host invoker, a
+ * kept event); the generated invocation ID and the `done.invoke.<id>` and
+ * `error.communication.invoke.<id>.<reason>` names built from it (the ID
+ * and the reason, not the `invoke` segment); `#_<invokeid>` targets and
+ * the family of a session URI in a `targetexpr`; and the public calls a
+ * host uses to turn text into IDs (ta_system_intern_atom,
+ * ta_event_name_intern, ta_send_id_intern, ta_system_intern_invoke_id).
  */
 #include "../include/tinyactors.c"
 #include "test_allocator.h"
@@ -574,6 +581,70 @@ static void test_typeexpr_looks_up(void) {
     fixture_close(&f);
 }
 
+/* `idle` sends to itself with an eventexpr on `send`, and counts, with an
+ * <assign>, every other event its `*` transition takes. */
+static const ta_scxml_spec *eventexpr_chart(void) {
+    static const ta_scxml_action_spec send[] = {
+        { .kind = TA_SCXML_ACTION_SEND,
+          .as.send = { .event = { .kind = TA_SCXML_EVENT_EXPR, .as.expr = EXPR("name") } } },
+        {0},
+    };
+    static const ta_scxml_action_spec count[] = {
+        { .kind = TA_SCXML_ACTION_ASSIGN,
+          .as.assign = { .location = EXPR("taken"),
+                         .value = { .kind = TA_SCXML_VALUE_EXPR, .as.expr = EXPR("taken + 1") } } },
+        {0},
+    };
+    static const ta_scxml_transition_spec idle[] = {
+        { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("send"), .actions = send },
+        { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("*"), .actions = count },
+        {0},
+    };
+    static const ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle"), .transitions = idle },
+        {0},
+    };
+    static const ta_scxml_spec spec = { .name = STR("eventexpr"), .states = states };
+    return &spec;
+}
+
+/* Claim 8. */
+static void test_eventexpr_travels_as_text(void) {
+    fixture f;
+    fixture_open(&f, eventexpr_chart());
+    ta_actor_id actor = 0;
+    CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = f.id, .out = &actor }) == TA_OK);
+    test_drive_status status = TEST_DRIVE_ERROR;
+    CHECK(test_drive_run(f.system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    ta_event_name_id send = event_name(&f, "send");
+    /* A first round sizes the name buffer and the reserves. */
+    set_type("warm", 4);
+    deliver(&f, actor, send);
+    uint32_t atoms = atom_count(&f);
+    uint32_t nodes = node_count(&f);
+    assigned = 0;
+    char buffer[TA_EVENT_NAME_MAX_DEPTH * 14u];
+    for (uint32_t round = 0; round < 10000u; round += 1u) {
+        ta_str name = random_name(buffer, f.names.capacity);
+        if (name.len > sizeof typed) {
+            name.len = sizeof typed;
+            while (name.len > 0 && buffer[name.len - 1u] == '.') {
+                name.len -= 1u;
+            }
+        }
+        if (name.len == 4 && memcmp(name.ptr, "send", 4) == 0) {
+            continue;
+        }
+        set_type(name.ptr, name.len);
+        deliver(&f, actor, send);
+        CHECK(test_drive_run(f.system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    }
+    CHECK(assigned >= 9990u);
+    CHECK(atom_count(&f) == atoms);
+    CHECK(node_count(&f) == nodes);
+    fixture_close(&f);
+}
+
 /* ------------------------------------------------------------------------
  * Invocation names
  */
@@ -882,6 +953,7 @@ int main(void) {
     test_typeexpr_looks_up();
     test_error_name_splits_the_id();
     test_too_deep_names();
+    test_eventexpr_travels_as_text();
     if (failures != 0) {
         fprintf(stderr, "name_matching_test: %d failure(s)\n", failures);
         return 1;

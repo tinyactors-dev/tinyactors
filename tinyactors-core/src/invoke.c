@@ -767,11 +767,17 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     if (posted == TA_OK) {
         return TA_OK;
     }
+    /* A stored send names its event by ID. */
+    ta_event named = delivery->event;
+    ta_result interned = ta_event_name_for_host(system, &named);
+    if (interned != TA_OK) {
+        return interned;
+    }
     ta_delayed_send record = {
         .owner = delivery->sender->record.id,
         .send_id = delivery->event.send_id,
         .due = ta_clock_now(&system->clock),
-        .event = delivery->event.name,
+        .event = named.name,
         .io_type = system->scxml_io_type,
         .destination = delivery->destination,
         .submitted = true,
@@ -872,6 +878,12 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
                                                   .trace = ta_interpreter_trace_here(it),
                                               });
     } else {
+        /* A host reads the name by ID. */
+        ta_result named = ta_event_name_for_host(it->system, &copy);
+        if (named != TA_OK) {
+            ta_value_release(&copy.data);
+            return named;
+        }
         (void)meta.invoker.v->forward(meta.invoker.self, &(ta_invoker_forward_params){
                                                               .service_handle = sparse->invokes[index].service_handle,
                                                               .event = &copy,

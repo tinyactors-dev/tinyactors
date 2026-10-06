@@ -285,6 +285,51 @@ static ta_result ta_system_event_names_init(ta_system *system, ta_allocator allo
     if (result == TA_OK) {
         result = ta_atom_intern(&system->atoms, ta_str_from_cstr("invoke"), &system->invoke_segment);
     }
+    ta_names_init(&system->names, &(ta_names_init_params){
+                                      .atoms = &system->atoms, .scratch = system->name_atoms, .capacity = depth });
+    return result;
+}
+
+uint32_t ta_event_name_atoms(ta_system *system, const ta_event *event, ta_atom out[TA_TRIE_MAX_DEPTH]) {
+    if (!ta_run_name_is_input(event->name)) {
+        return ta_trie_path(&system->event_names, event->name, out);
+    }
+    ta_str text = ta_run_input_name(system, event->name);
+    if (text.len == 0 || ta_names_resolve(&system->names, text) != TA_OK) {
+        return 0;
+    }
+    for (uint32_t index = 0; index < system->names.count; index += 1u) {
+        out[index] = system->name_atoms[index];
+    }
+    return system->names.count;
+}
+
+bool ta_event_name_put(const ta_system *system, const ta_event *event, ta_text_writer *writer) {
+    if (ta_run_name_is_input(event->name)) {
+        ta_str text = ta_run_input_name(system, event->name);
+        ta_text_put(writer, text);
+        return text.len != 0;
+    }
+    ta_atom segments[TA_TRIE_MAX_DEPTH];
+    uint32_t count = ta_trie_path(&system->event_names, event->name, segments);
+    for (uint32_t index = 0; index < count; index += 1u) {
+        if (index != 0) {
+            ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
+        }
+        ta_text_put(writer, ta_atom_text(&system->atoms, segments[index]));
+    }
+    return count != 0;
+}
+
+ta_result ta_event_name_for_host(ta_system *system, ta_event *event) {
+    if (!ta_run_name_is_input(event->name)) {
+        return TA_OK;
+    }
+    ta_event_name_id name = 0;
+    ta_result result = ta_trie_intern_dotted(&system->event_names, ta_run_input_name(system, event->name), &name);
+    if (result == TA_OK) {
+        event->name = name;
+    }
     return result;
 }
 

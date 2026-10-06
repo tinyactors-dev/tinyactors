@@ -7506,6 +7506,9 @@ typedef struct {
     ta_time now;
 
     const ta_event *event;
+    /* With the event's `name` 0: its name, an eventexpr's value kept as text
+     * (ADR 0100), borrowed for the call. */
+    ta_str event_text;
     ta_state_id state;
     ta_expr_id expr;
     ta_str name;
@@ -8736,9 +8739,11 @@ TA_PRIVATE void ta_waiting_free(ta_waiting *waiting, uint32_t index);
  * the macrostep it started ends. Its text is a binary **record** (the
  * event name's ID, the origin, whose references the envelope holds, the
  * input's time, the family of its trace parent's cause, and an operator
- * transition, owned, with the definition its states belong to), and,
- * when its macrostep runs under a trace ID, the **trace parent** behind
- * it as the text's last field (`name_area.h`), with
+ * transition, owned, with the definition its states belong to); then, for
+ * an event whose name core did not intern (an immediate `<send
+ * eventexpr>`, ADR 0100), the **name** as text, with the record's name ID
+ * 0; and, when its macrostep runs under a trace ID, the **trace parent**
+ * behind them as the text's last field (`name_area.h`), with
  * `TA_ENVELOPE_FLAG_TRACED` set. The field leaves the cause's family out;
  * the record keeps it, so the step key reads back whole. Its `source`
  * says what it is:
@@ -8800,6 +8805,15 @@ TA_PRIVATE void ta_waiting_free(ta_waiting *waiting, uint32_t index);
  *
  * ## The taken envelope stays put
  *
+ * An event whose name is kept as text names it by `TA_RUN_NAME_INPUT` and
+ * its input's envelope index. Core reads the name into the run's name
+ * buffer, one run of bytes, where it is needed (`ta_run_input_name`): the
+ * system's resolver turns it into atoms for the matcher (`names.h`), and
+ * `_event.name` and trace records read the text. The
+ * buffer grows at a safe point (the refill before an input is taken) to
+ * the longest such name any envelope was given; an input whose name does
+ * not fit, because that growth failed, is not taken, and `ta_run` answers
+ * TA_ERR_NOMEM.
  * A taken input keeps its text and its references until it completes:
  * nothing is copied out of it. While its macrostep runs, `_event`,
  * inspection and trace records read the external event from the envelope
@@ -9051,6 +9065,12 @@ typedef struct {
     /** The external event of `event_input`, decoded from its envelope; its
      * references are the envelope's, borrowed. */
     ta_event event;
+    /** Where an input's name kept as text is read to, as one run of bytes
+     * (`ta_run_input_name`): `name_capacity` bytes, grown at a safe point
+     * to `name_longest`, the longest such name any envelope was given. */
+    char *name_buffer;
+    uint32_t name_capacity;
+    uint32_t name_longest;
 } ta_run_state;
 
 /**
@@ -9162,6 +9182,29 @@ TA_PRIVATE void ta_run_wake_place(ta_system *system, struct ta_actor *actor, uin
  * text holds. Never allocates. */
 TA_PRIVATE void ta_run_wake_cancel(ta_system *system, uint32_t wake);
 
+/**
+ * The name ID of an input's event whose name core did not intern (ADR
+ * 0100): this bit, or'ed with the input's envelope index. The name is the
+ * text the envelope keeps; it lives as long as the input does, and no trie
+ * node has this bit. Core reads it with `ta_run_input_name`, and gives an
+ * event a real ID (`ta_event_name_for_host`) before a host or a stored
+ * record keeps it.
+ */
+#define TA_RUN_NAME_INPUT 0x80000000u
+
+/** Whether `name` names an input's name kept as text (`TA_RUN_NAME_INPUT`). */
+TA_PRIVATE inline bool ta_run_name_is_input(ta_event_name_id name) {
+    return (name & TA_RUN_NAME_INPUT) != 0u;
+}
+
+/**
+ * The name input `name & ~TA_RUN_NAME_INPUT` keeps as text, read into the
+ * run's name buffer: valid until the next call reads another name, or the
+ * buffer grows. Empty when the input keeps none. Never allocates; may run
+ * inside a macrostep.
+ */
+TA_PRIVATE ta_str ta_run_input_name(const ta_system *system, ta_event_name_id name);
+
 /** Mail for another session; see `ta_run_post_mail`. */
 typedef struct {
     /** The actor that holds the session it is for (`ta_actor_mail_route`),
@@ -9172,6 +9215,9 @@ typedef struct {
     /** The event as the target takes it, borrowed; the envelope retains its
      * data and its origin. */
     const ta_event *event;
+    /** With the event's `name` 0: its name, kept as text (ADR 0100),
+     * borrowed for the call and copied into the envelope's text. */
+    ta_str name_text;
     /** The sending step's trace parent, copied into the envelope's text;
      * null, or no trace ID, for none. */
     const ta_trace_parent *trace;
@@ -11325,6 +11371,11 @@ struct ta_system {
     ta_session_table sessions;
     /* Event names: a trie of atoms, holding the built-in names below. */
     ta_trie event_names;
+    /* Resolves an event name kept as text into atoms for the matcher, with
+     * `name_atoms` as its scratch (names.h); one serves the system, since
+     * one macrostep runs at a time. */
+    ta_names names;
+    ta_atom name_atoms[TA_TRIE_MAX_DEPTH];
 
     /*
      * ta_definition_slot; a definition ID is (generation << 32) | slot, as
@@ -11444,6 +11495,31 @@ TA_PRIVATE uint32_t ta_system_invoker_index(const ta_system *system, ta_atom typ
 /* The type of the invoker at registry index `index`; TA_ATOM_NONE when none. */
 TA_PRIVATE ta_atom ta_system_invoker_type(const ta_system *system, uint32_t index);
 TA_PRIVATE bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);
+
+/*
+ * The segments of `event`'s name as atoms, at most TA_TRIE_MAX_DEPTH of
+ * them in `out`, and how many: its trie path, or, for a name its input
+ * keeps as text (`TA_RUN_NAME_INPUT`, run.h), the text resolved by the
+ * system's resolver, a segment
+ * that is not an atom being TA_NAMES_UNKNOWN (names.h). 0 for no name, or
+ * a text that is not a valid event name. Never allocates; may run inside a
+ * macrostep.
+ */
+TA_PRIVATE uint32_t ta_event_name_atoms(ta_system *system, const ta_event *event, ta_atom out[TA_TRIE_MAX_DEPTH]);
+
+/* Puts `event`'s dotted name; false when it has none. Allocates nothing of
+ * its own; may run inside a macrostep. */
+TA_PRIVATE bool ta_event_name_put(const ta_system *system, const ta_event *event, ta_text_writer *writer);
+
+/*
+ * Gives `event` a name ID for a host, or for a record that keeps the event
+ * after its input completes: a name its input keeps as text is interned
+ * into the event-name trie, and `name` set. May
+ * allocate; TA_ERR_INVALID for a text that is not a valid event name,
+ * TA_ERR_NOMEM or TA_ERR_FULL when the tables cannot grow, changing
+ * nothing. An event that has an ID is left as it is.
+ */
+TA_PRIVATE ta_result ta_event_name_for_host(ta_system *system, ta_event *event);
 
 /*
  * Counts one occurrence for `definition` and for the system (ADR 0072). A
@@ -11687,6 +11763,9 @@ typedef struct {
     bool in_run;
     /* A delayed send that fell due, not mail sent now. */
     bool timer;
+    /* With the send's `event` 0: its name, an eventexpr's value kept as
+     * text, borrowed for the call (ADR 0100). */
+    ta_str event_text;
     /* Set by the call: with `in_run`, the resource the mail's envelope found
      * no room in, and the answer is FAILED with the send released and
      * nobody told; the caller raises error.execution.capacity.<resource>.
@@ -16917,7 +16996,11 @@ static void ta_trace_compose(const ta_trace_compose_params *params, ta_trace_are
     if (entry->event != NULL) {
         const ta_event *event = entry->event;
         build->flags |= TA_TEL_TRACE_FLAG_EVENT;
-        TA_TRACE_COMPOSE(area, build, event_name, ta_trace_put_event_name(system, event->name, out));
+        if (event->name == 0 && entry->event_text.len != 0) {
+            TA_TRACE_COMPOSE(area, build, event_name, ta_text_put(out, entry->event_text));
+        } else {
+            TA_TRACE_COMPOSE(area, build, event_name, (void)ta_event_name_put(system, event, out));
+        }
         if (event->send_id != 0) {
             TA_TRACE_COMPOSE(area, build, event_send_id, ta_send_id_write(system, event->send_id, out));
         }
@@ -18565,14 +18648,17 @@ TA_PRIVATE void ta_waiting_free(ta_waiting *waiting, uint32_t index) {
 
 
 /* ------------------------------------------------------------------------
- * An input's text: one binary field, and the trace parent behind it when
- * the input is traced (see the file comment)
+ * An input's text: one binary field, the name as text when it is not
+ * interned, and the trace parent behind them when the input is traced
+ * (see the file comment)
  */
 
 /* The field holds an operator transition and its definition. */
 #define TA_RUN_RECORD_JUMP 0x02u
 /* A report that retires its invocation. */
 #define TA_RUN_RECORD_ENDS 0x04u
+/* The event's name is not interned: it is the text field after the record. */
+#define TA_RUN_RECORD_NAME_TEXT 0x08u
 
 /* What an input keeps in its first field, unpacked. */
 typedef struct {
@@ -18670,6 +18756,73 @@ static ta_trace_parent ta_run_trace_of(const ta_system *system, uint32_t index) 
     return parent;
 }
 
+/* The length of the name envelope `index` keeps as text, 0 when its name is
+ * interned. Never allocates. */
+static uint32_t ta_run_name_length(const ta_system *system, uint32_t index) {
+    const ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    if (envelope->text.first == 0u ||
+        (ta_run_record_of(system, index).flags & TA_RUN_RECORD_NAME_TEXT) == 0u) {
+        return 0u;
+    }
+    ta_name_area_reader reader = ta_name_area_reader_of(envelope->text);
+    uint32_t length = 0u;
+    if (ta_name_area_next(&system->run.names, &reader, &length) != TA_OK ||
+        ta_name_area_next(&system->run.names, &reader, &length) != TA_OK) {
+        return 0u;
+    }
+    return length;
+}
+
+/* The name envelope `index` keeps as text, read into the run's name buffer,
+ * valid until the buffer is read into again or grows; empty when its name
+ * is interned or does not fit the buffer (ta_run_take checks it fits). */
+static ta_str ta_run_name_text(const ta_system *system, uint32_t index) {
+    uint32_t length = ta_run_name_length(system, index);
+    if (length == 0u || length > system->run.name_capacity) {
+        return (ta_str){ 0 };
+    }
+    const ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    ta_name_area_reader reader = ta_name_area_reader_of(envelope->text);
+    uint32_t skip = 0u;
+    (void)ta_name_area_next(&system->run.names, &reader, &skip);
+    (void)ta_name_area_next(&system->run.names, &reader, &length);
+    uint32_t got = 0u;
+    while (got < length) {
+        ta_bytes span = ta_name_area_read(&system->run.names, &reader, length - got);
+        ta_mem_copy(system->run.name_buffer + got, span.ptr, span.len);
+        got += span.len;
+    }
+    return (ta_str){ .ptr = system->run.name_buffer, .len = length };
+}
+
+TA_PRIVATE ta_str ta_run_input_name(const ta_system *system, ta_event_name_id name) {
+    uint32_t index = name & ~TA_RUN_NAME_INPUT;
+    if (!ta_run_name_is_input(name) || index == 0u || index > system->run.pool.items.high_water) {
+        return (ta_str){ 0 };
+    }
+    return ta_run_name_text(system, index);
+}
+
+/* Grows the name buffer to the longest name kept as text: a safe point.
+ * TA_ERR_NOMEM, changing nothing. */
+static ta_result ta_run_name_room(ta_system *system) {
+    ta_run_state *run = &system->run;
+    if (run->name_capacity >= run->name_longest) {
+        return TA_OK;
+    }
+    char *grown = ta_mem_alloc(system->allocator, run->name_longest, 1u);
+    if (grown == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (run->name_buffer != NULL) {
+        ta_mem_free(system->allocator, run->name_buffer,
+                    &(ta_allocator_free_params){ .size = run->name_capacity, .alignment = 1u });
+    }
+    run->name_buffer = grown;
+    run->name_capacity = run->name_longest;
+    return TA_OK;
+}
+
 /* Frees an operator transition an input carried. */
 static void ta_run_jump_free(ta_system *system, ta_operator_jump *jump) {
     if (jump == NULL) {
@@ -18765,6 +18918,12 @@ TA_PRIVATE void ta_run_destroy(ta_system *system) {
     ta_waiting_destroy(&system->run.waiting);
     ta_name_area_destroy(&system->run.names);
     ta_envelope_pool_destroy(pool);
+    if (system->run.name_buffer != NULL) {
+        ta_mem_free(system->allocator, system->run.name_buffer,
+                    &(ta_allocator_free_params){ .size = system->run.name_capacity, .alignment = 1u });
+        system->run.name_buffer = NULL;
+        system->run.name_capacity = 0u;
+    }
     system->run.slot = 0u;
     system->run.event_input = 0u;
     system->run.outgoing = TA_LIST_EMPTY;
@@ -18787,6 +18946,7 @@ static ta_run_refilled ta_run_refill(ta_system *system) {
     ta_run_refilled refilled = { .pool = ta_envelope_pool_refill(&system->run.pool),
                                  .names = ta_name_area_refill(&system->run.names) };
     (void)ta_waiting_refill(&system->run.waiting);
+    (void)ta_run_name_room(system);
     return refilled;
 }
 
@@ -18854,6 +19014,9 @@ typedef struct {
     ta_run_refilled refilled;
     /* Admitted input, held to the name area's watermark. */
     bool admission;
+    /* The event's name when it is not interned, written as the field after
+     * the record; empty for an interned name. */
+    ta_str name_text;
 } ta_run_text;
 
 /*
@@ -18867,6 +19030,10 @@ static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
     bool traced = text->trace != NULL && !ta_trace_context_empty(&text->trace->context);
     ta_run_record record = *text->record;
     record.cause_family = traced ? text->trace->cause.family : 0u;
+    bool named = text->name_text.len != 0u;
+    if (named) {
+        record.flags |= TA_RUN_RECORD_NAME_TEXT;
+    }
     uint8_t bytes[TA_RUN_RECORD_BYTES];
     uint32_t length = ta_run_record_pack(&record, bytes);
     ta_chunk_writer writer = ta_chunk_writer_new();
@@ -18875,6 +19042,17 @@ static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
                                                      .text = { .ptr = bytes, .len = length },
                                                      .admission = text->admission,
                                                  });
+    if (result == TA_OK && named) {
+        result = ta_name_area_write(names, &(ta_name_area_write_params){
+                                               .writer = &writer,
+                                               .text = { .ptr = (const uint8_t *)text->name_text.ptr,
+                                                         .len = text->name_text.len },
+                                               .admission = text->admission,
+                                           });
+        if (result != TA_OK) {
+            ta_name_area_free(names, &writer.chain);
+        }
+    }
     if (result == TA_OK && traced) {
         result = ta_name_area_write_trace_parent(names, &(ta_name_area_trace_params){
                                                             .writer = &writer,
@@ -18887,9 +19065,13 @@ static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
     }
     if (result != TA_OK) {
         uint32_t need = ta_name_area_field_need(names, 0u, length);
+        uint32_t written = TA_NAME_AREA_PREFIX_BYTES + length;
+        if (named) {
+            need += ta_name_area_field_need(names, written, text->name_text.len);
+            written += TA_NAME_AREA_PREFIX_BYTES + text->name_text.len;
+        }
         if (traced) {
-            need += ta_name_area_field_need(names, TA_NAME_AREA_PREFIX_BYTES + length,
-                                            TA_NAME_AREA_TRACE_PARENT_BYTES);
+            need += ta_name_area_field_need(names, written, TA_NAME_AREA_TRACE_PARENT_BYTES);
         }
         ta_run_refusal refusal = { .refill = text->refilled.names, .result = result };
         return text->admission ? ta_run_names_short(names, refusal, need)
@@ -18898,6 +19080,9 @@ static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
     }
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, text->index);
     envelope->text = writer.chain;
+    if (named && text->name_text.len > system->run.name_longest) {
+        system->run.name_longest = text->name_text.len;
+    }
     if (traced) {
         envelope->flags |= TA_ENVELOPE_FLAG_TRACED;
     }
@@ -19197,10 +19382,14 @@ TA_PRIVATE ta_result ta_run_post_mail(ta_system *system, const ta_run_mail *mail
                                      false);
     }
     const ta_event *event = mail->event;
-    ta_run_record record = { .name = event->name, .origin = event->origin, .time = ta_clock_now(&system->clock) };
+    /* A name kept as text is copied into the new envelope's text. */
+    ta_str name_text = ta_run_name_is_input(event->name) ? ta_run_input_name(system, event->name) : mail->name_text;
+    ta_run_record record = { .name = name_text.len != 0u ? 0u : event->name,
+                             .origin = event->origin,
+                             .time = ta_clock_now(&system->clock) };
     result = ta_run_write_text(system, &(ta_run_text){
                                            .index = index, .record = &record, .trace = mail->trace,
-                                           .refilled = refilled });
+                                           .refilled = refilled, .name_text = name_text });
     if (result != TA_OK) {
         ta_envelope_pool_give(&system->run.pool, index);
         if (entry != 0u) {
@@ -19307,7 +19496,7 @@ TA_PRIVATE ta_event ta_run_input_event_of(const ta_system *system, uint32_t inpu
     }
     ta_run_record record = ta_run_record_of(system, input);
     const ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, input);
-    return (ta_event){ .name = record.name,
+    return (ta_event){ .name = (record.flags & TA_RUN_RECORD_NAME_TEXT) != 0u ? TA_RUN_NAME_INPUT | input : record.name,
                        .type = (ta_event_type)envelope->type,
                        .send_id = envelope->send_id,
                        .origin = record.origin,
@@ -19692,6 +19881,10 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
         ta_envelope_pool_defer(&system->run.pool, (ta_envelope_defer){ .deferred = &actor->deferred,
                                                                       .index = index });
         return TA_OK;
+    } else if (ta_run_name_length(system, index) > system->run.name_capacity) {
+        /* Its name, kept as text, does not fit the name buffer the refill
+         * before it could not grow. */
+        return ta_run_put_back(call, index, TA_ERR_NOMEM);
     } else {
         ta_result result = envelope->source == TA_RECORD_INPUT_SOURCE_INVOKE_REPORT
                                ? ta_run_bind_report(system, actor, index)
@@ -19713,6 +19906,8 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
             /* Core made it: the host learns its event here, and releases it. */
             ta_event event = ta_run_input_event_of(system, index);
             ta_event_retain(&event, &taken.event);
+            /* A host reads the name by ID; the text stays in the envelope. */
+            (void)ta_event_name_for_host(system, &taken.event);
             taken.has_event = true;
         }
         ta_run_report_input(call, index, taken);
@@ -20690,15 +20885,7 @@ static bool ta_dm_write_field(const void *context, ta_text_writer *writer) {
         ta_send_id_write(system, event->send_id, writer);
         return true;
     }
-    ta_atom segments[TA_TRIE_MAX_DEPTH];
-    uint32_t count = ta_trie_path(&system->event_names, event->name, segments);
-    for (uint32_t index = 0; index < count; index += 1) {
-        if (index != 0) {
-            ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
-        }
-        ta_text_put(writer, ta_atom_text(&system->atoms, segments[index]));
-    }
-    return count != 0;
+    return ta_event_name_put(system, event, writer);
 }
 
 static ta_result ta_dm_render_field(const ta_dm_host *host, ta_dm_text_kind kind, ta_str *out) {
@@ -22090,11 +22277,17 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     if (posted == TA_OK) {
         return TA_OK;
     }
+    /* A stored send names its event by ID. */
+    ta_event named = delivery->event;
+    ta_result interned = ta_event_name_for_host(system, &named);
+    if (interned != TA_OK) {
+        return interned;
+    }
     ta_delayed_send record = {
         .owner = delivery->sender->record.id,
         .send_id = delivery->event.send_id,
         .due = ta_clock_now(&system->clock),
-        .event = delivery->event.name,
+        .event = named.name,
         .io_type = system->scxml_io_type,
         .destination = delivery->destination,
         .submitted = true,
@@ -22195,6 +22388,12 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
                                                   .trace = ta_interpreter_trace_here(it),
                                               });
     } else {
+        /* A host reads the name by ID. */
+        ta_result named = ta_event_name_for_host(it->system, &copy);
+        if (named != TA_OK) {
+            ta_value_release(&copy.data);
+            return named;
+        }
         (void)meta.invoker.v->forward(meta.invoker.self, &(ta_invoker_forward_params){
                                                               .service_handle = sparse->invokes[index].service_handle,
                                                               .event = &copy,
@@ -28620,6 +28819,10 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
         .trace = { .context = ta_run_session_trace(system, actor).context,
                    .cause = ta_actor_step(actor) },
     };
+    if (out->current_event == &system->run.event) {
+        /* A host reads the name by ID (ta_event). */
+        (void)ta_event_name_for_host(system, &system->run.event);
+    }
     /* A taken head is `_event`, not work that waits. */
     uint32_t waiting = ta_actor_waiting_internal(actor);
     if (waiting != 0) {
@@ -29225,7 +29428,12 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
         .completion = sparse != NULL ? sparse->completion : (ta_actor_completion){0},
         .final_state = sparse != NULL && actor->finished ? sparse->final_state : TA_STATE_NONE,
     };
-    ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
+    /* An image names its events by ID: a name kept as text stays with the
+     * envelope that holds it. */
+    ta_result result = ta_event_name_for_host(system, &image->events.external_event);
+    if (result == TA_OK) {
+        result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
+    }
     if (result == TA_OK) {
         result = ta_image_fill(image, actor);
     }
@@ -30664,6 +30872,51 @@ static ta_result ta_system_event_names_init(ta_system *system, ta_allocator allo
     }
     if (result == TA_OK) {
         result = ta_atom_intern(&system->atoms, ta_str_from_cstr("invoke"), &system->invoke_segment);
+    }
+    ta_names_init(&system->names, &(ta_names_init_params){
+                                      .atoms = &system->atoms, .scratch = system->name_atoms, .capacity = depth });
+    return result;
+}
+
+TA_PRIVATE uint32_t ta_event_name_atoms(ta_system *system, const ta_event *event, ta_atom out[TA_TRIE_MAX_DEPTH]) {
+    if (!ta_run_name_is_input(event->name)) {
+        return ta_trie_path(&system->event_names, event->name, out);
+    }
+    ta_str text = ta_run_input_name(system, event->name);
+    if (text.len == 0 || ta_names_resolve(&system->names, text) != TA_OK) {
+        return 0;
+    }
+    for (uint32_t index = 0; index < system->names.count; index += 1u) {
+        out[index] = system->name_atoms[index];
+    }
+    return system->names.count;
+}
+
+TA_PRIVATE bool ta_event_name_put(const ta_system *system, const ta_event *event, ta_text_writer *writer) {
+    if (ta_run_name_is_input(event->name)) {
+        ta_str text = ta_run_input_name(system, event->name);
+        ta_text_put(writer, text);
+        return text.len != 0;
+    }
+    ta_atom segments[TA_TRIE_MAX_DEPTH];
+    uint32_t count = ta_trie_path(&system->event_names, event->name, segments);
+    for (uint32_t index = 0; index < count; index += 1u) {
+        if (index != 0) {
+            ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
+        }
+        ta_text_put(writer, ta_atom_text(&system->atoms, segments[index]));
+    }
+    return count != 0;
+}
+
+TA_PRIVATE ta_result ta_event_name_for_host(ta_system *system, ta_event *event) {
+    if (!ta_run_name_is_input(event->name)) {
+        return TA_OK;
+    }
+    ta_event_name_id name = 0;
+    ta_result result = ta_trie_intern_dotted(&system->event_names, ta_run_input_name(system, event->name), &name);
+    if (result == TA_OK) {
+        event->name = name;
     }
     return result;
 }
@@ -32318,6 +32571,9 @@ static void ta_keep_event(ta_actor *actor, const ta_event *event) {
         ta_event_release(&queue->kept_event);
     }
     queue->kept_event = *event;
+    /* Its envelope, which holds a name kept as text, goes with its input:
+     * the kept event names it by ID (ADR 0069). */
+    (void)ta_event_name_for_host(actor->host_impl.system, &queue->kept_event);
     queue->has_kept = true;
 }
 
@@ -32925,6 +33181,7 @@ TA_PRIVATE ta_dispatch_status ta_interpreter_dispatch_delayed(ta_system *system,
             ta_result posted = ta_run_post_mail(
                 system,
                 &(ta_run_mail){ .target = route.actor, .wait = &wait, .event = &event, .trace = &send->trace,
+                                .name_text = send->event == 0 ? how->event_text : (ta_str){ 0 },
                                 .from = sender != NULL ? sender->session_id : 0u,
                                 .source = how->timer ? TA_RECORD_INPUT_SOURCE_TIMER : TA_RECORD_INPUT_SOURCE_MAIL },
                 &short_of);
@@ -33022,6 +33279,11 @@ typedef struct {
     ta_atom io_type;
     ta_send_id send_id;
     ta_event_name_id event;
+    /* With `event` 0: the eventexpr's value, a valid event name kept as text
+     * (ADR 0100), borrowed from `event_holder`, which the send owns until it
+     * ends; the name is interned only where the send is stored. */
+    ta_str event_text;
+    ta_value event_holder;
     ta_time delay;
     bool scxml_io;
     bool has_content;
@@ -33262,28 +33524,52 @@ static ta_result ta_send_io_type(ta_interpreter *it, const ta_send_action *send,
                                           .message = "the <send> type names no I/O processor this system has" });
 }
 
-/* Resolves `event` / `eventexpr`; the expression's text is a dotted event name. */
-static ta_result ta_send_event_name(ta_interpreter *it, const ta_send_action *send, ta_event_name_id *out,
+/*
+ * Resolves `event` / `eventexpr`. The expression's text must be a dotted
+ * event name; it stays text (ADR 0100), checked with the system's resolver,
+ * which interns nothing. Never allocates beyond the evaluation.
+ */
+static ta_result ta_send_event_name(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                     ta_fault *fault) {
     if (send->event.kind == TA_EVENT_SOURCE_NAME) {
-        *out = send->event.as.name;
+        state->event = send->event.as.name;
         return TA_OK;
     }
-    ta_value holder = {0};
     ta_str text = {0};
     ta_result result = ta_op_result(ta_eval_text(it, &(ta_text_eval_params){
-                                                         .expr = send->event.as.expr, .holder = &holder,
+                                                         .expr = send->event.as.expr, .holder = &state->event_holder,
                                                          .text = &text, .fault = fault,
                                                      }));
     if (result == TA_OK) {
         result = ta_core_fault(fault, &(ta_core_fault_params){
-                                          .result = ta_core_result(ta_trie_intern_dotted(&it->system->event_names,
-                                                                                         text, out)),
+                                          .result = ta_core_result(ta_names_resolve(&it->system->names, text)),
                                           .code = TA_ERR_INVALID,
                                           .message = "the <send> eventexpr is not a dotted event name" });
     }
-    ta_value_release(&holder);
+    if (result == TA_OK) {
+        state->event = 0;
+        state->event_text = text;
+    }
     return result;
+}
+
+/*
+ * Interns an eventexpr's name where the send is stored: as a delayed send,
+ * held for an unpublished session, queued for #_internal, or handed to an
+ * I/O processor, all of which keep a name ID. An immediate send to another
+ * session keeps it as text. May allocate.
+ */
+static ta_result ta_send_intern_event(ta_interpreter *it, ta_send_state *state, ta_fault *fault) {
+    bool mail_now = state->scxml_io && state->scxml.kind != TA_SCXML_TARGET_INTERNAL && state->delay == 0 &&
+                    it->actor->published;
+    if (state->event != 0 || state->event_text.len == 0 || mail_now) {
+        return TA_OK;
+    }
+    return ta_core_fault(fault, &(ta_core_fault_params){
+                                    .result = ta_core_result(ta_trie_intern_dotted(&it->system->event_names,
+                                                                                   state->event_text, &state->event)),
+                                    .code = TA_ERR_INVALID,
+                                    .message = "the <send> eventexpr is not a dotted event name" });
 }
 
 /* Resolves `delay` / `delayexpr`; the expression's text is an SCXML duration. */
@@ -33419,7 +33705,7 @@ static ta_result ta_send_evaluate(ta_interpreter *it, const ta_send_action *send
                                   ta_fault *fault) {
     ta_result result = ta_send_assign_id(it, send, state, fault);
     if (result == TA_OK) {
-        result = ta_send_event_name(it, send, &state->event, fault);
+        result = ta_send_event_name(it, send, state, fault);
     }
     if (result == TA_OK) {
         result = ta_send_io_type(it, send, state, fault);
@@ -33451,6 +33737,9 @@ static ta_result ta_send_evaluate(ta_interpreter *it, const ta_send_action *send
                                           .result = ta_op_result(ta_interpreter_copy_out(it, &state->data, fault)),
                                           .code = TA_ERR_UNSUPPORTED,
                                           .message = "the data model cannot copy the <send> data" });
+    }
+    if (result == TA_OK) {
+        result = ta_send_intern_event(it, state, fault);
     }
     return result;
 }
@@ -33536,7 +33825,7 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         return raised == TA_EXEC_FAILED ? TA_OK : raised;
     }
     if (state->delay == 0) {
-        ta_dispatch how = { .in_run = true };
+        ta_dispatch how = { .in_run = true, .event_text = state->event_text };
         ta_dispatch_status submitted = ta_interpreter_dispatch_delayed(system, &record, &how);
         if (how.short_of != 0) {
             state->sent = false;
@@ -33551,6 +33840,17 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
          * submitted, waits in the deadline index, due now, and keeps its
          * order among later sends.
          */
+        if (record.event == 0) {
+            ta_result interned = ta_trie_intern_dotted(&system->event_names, state->event_text, &record.event);
+            if (interned != TA_OK) {
+                ta_value_release(&record.data);
+                ta_value_release(&record.target);
+                ta_actor_ref_release(&record.destination);
+                ta_actor_ref_release(&record.origin);
+                state->sent = false;
+                return interned;
+            }
+        }
     }
     ta_result result = ta_actor_schedule_send(system, actor, &record);
     if (result != TA_OK) {
@@ -33580,6 +33880,7 @@ static void ta_trace_sent(ta_interpreter *it, const ta_send_state *state, const 
     ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_SENT);
     record.send = state->send_id;
     record.event = &event;
+    record.event_text = state->event == 0 ? state->event_text : (ta_str){ 0 };
     ta_trace_emit(it, &record);
 }
 
@@ -33625,6 +33926,7 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
             ta_value_release(&fault.data);
         }
     }
+    ta_value_release(&state.event_holder);
     if (result != TA_ERR_NOMEM && state.generated_id) {
         it->actor->next_send_id += 1u;
     }
@@ -34228,7 +34530,7 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
     ta_atom segments[TA_TRIE_MAX_DEPTH];
     ta_atom_list name = { .atoms = segments, .count = 0 };
     if (event != NULL) {
-        name.count = ta_trie_path(&it->system->event_names, event->name, segments);
+        name.count = ta_event_name_atoms(it->system, event, segments);
     }
     const ta_atom_list *matched = event != NULL ? &name : NULL;
     for (ta_state_id atomic = 0; atomic < definition->state_count; atomic += 1) {
