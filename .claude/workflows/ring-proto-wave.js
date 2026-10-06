@@ -3,13 +3,11 @@ export const meta = {
   description: 'One wave of docs/proposals/ring-proto/IMPLEMENTATION.md: plan, implement and review C units in parallel, integrate onto ring-proto one at a time, then stop for human approval',
   whenToUse: 'Run once per wave of the ring-proto plan. Pass args {wave, prewave, units:[{id,title,brief,full_test?}], max_rounds?}. Read the returned report and approve before running the next wave.',
   phases: [
-    { title: 'Plan', detail: 'one planner per unit: lifetimes, allocation, measurements' },
+    { title: 'Plan', detail: 'one planner per unit that needs design (units[].plan !== false)' },
     { title: 'Implement', detail: 'one implementer per unit, each in its own worktree' },
-    { title: 'Review', detail: 'lifetimes and allocation (Sonnet), docs and repo rules (Haiku)' },
-    { title: 'Fix', detail: 'address blocking findings, then review again' },
-    { title: 'Integrate', detail: 'one at a time: rebase onto ring-proto, mise run test, push' },
-    { title: 'Full test', detail: 'mise run test:full once, on a quiet machine; timing flakes classified against the pre-wave commit' },
-    { title: 'Report', detail: 'wave summary and the proposed next wave, for human approval' },
+    { title: 'Review', detail: 'lifetimes and allocation, conventions (both Sonnet); blocking findings verified before any fix' },
+    { title: 'Fix', detail: 'confirmed findings only; a second look at the fix diff only for confirmed lifetime defects' },
+    { title: 'Integrate', detail: 'one at a time: rebase, mise run test (test:full for full_test units) as the gate, then push' },
   ],
 }
 
@@ -18,7 +16,9 @@ export const meta = {
 //
 //   wave        a label such as "1a"
 //   units       [{ id: "1.4", title: "A2 layout builder", brief: "...", full_test: false }]
-//   max_rounds  review rounds per unit before it is handed to a human (default 2)
+//   max_rounds  review rounds per unit before it is handed to a human (default 2;
+//               a second round runs only when the first confirmed a lifetime defect)
+//   units[].plan false to skip the planner when the ADRs already fix the design
 //   integrate   false to stop after review and leave the wip branches unmerged
 //   prewave     the commit ring-proto was at before the wave, for timing baselines
 //   units[].existing  true when the unit's wip branch already holds its implementation
@@ -45,7 +45,9 @@ Environment: before any mise command run
   export PATH="$HOME/.local/bin:$PATH" LANG=C.UTF-8 LC_ALL=C.UTF-8; mise trust -a >/dev/null 2>&1
 The machine has 4 CPUs shared with other agents: run the narrowest test that covers your change
 (a single core test program after \`mise run build\` in tinyactors-core, or \`mise run asan\` there after
-changing src/). Do not run the repository-wide \`mise run test\`; the integrator does that.`
+changing src/). Run the repository-wide \`mise run test\` (incremental: it runs only the projects
+whose sources changed) once, before your last commit. Never run \`mise run test:full\`: the integrator
+runs it once per unit, as the gate before pushing.`
 
 const CONTEXT = `
 You are working on the ring-proto experiment in ${REPO} (git branch ${BASE}, a deliberate parallel
@@ -153,17 +155,6 @@ const INTEGRATION = {
   required: ['status', 'head_sha', 'pushed_commits', 'test_summary', 'full_test', 'notes'],
 }
 
-const REPORT = {
-  type: 'object',
-  properties: {
-    markdown: { type: 'string', description: 'the wave report for the maintainer' },
-    next_wave: { type: 'array', items: { type: 'object', properties: {
-      id: { type: 'string' }, title: { type: 'string' }, brief: { type: 'string' },
-      full_test: { type: 'boolean' } }, required: ['id', 'title', 'brief'] } },
-  },
-  required: ['markdown', 'next_wave'],
-}
-
 // ---------------------------------------------------------------------------
 // Review lenses. The lifetime lens needs judgement; the other two are
 // checklists, which a smaller model does well.
@@ -181,27 +172,19 @@ recursion (ADR 0060), and any behaviour change in a refactor that claims none. R
 not just the diff hunks. A finding is blocking when it is a real defect or a broken rule.`,
   },
   {
-    key: 'docs', model: 'haiku',
-    prompt: `Review the documentation only. Each new or changed unit (.h and its .c) must open with a
-Go-style package comment: purpose, contract, lifetime, when it allocates, invariants, complexity,
-failure behaviour, a short usage example. Every declared function must have a comment that starts
-with its name and says what it does, needs and guarantees. Flag comments that say what instead of why,
-that are stale or wrong against the code, or that cite files and lines that no longer exist. Missing
-unit docs or missing function docs are blocking; wording is a nit. The repository's convention is that a
-function is documented once, where it is declared (the .h, or tinyactors.h for the public API); its
-definition in the .c carries only "/* name: see file.h. */". That is correct, never a finding; check the
-declaration's comment instead. A static helper is documented at its definition.`,
-  },
-  {
-    key: 'rules', model: 'haiku',
-    prompt: `Review against the repository's rules, as a checklist: no malloc/free or stdlib headers in
-core (stdint, stddef, stdbool are fine); at most three parameters per function; no recursion; acronyms
-all caps or all lowercase; public API only in include/tinyactors.h with TA_API; include/tinyactors.c
-regenerated, not hand-edited; APIs changed in place with every caller migrated, no _v2 / _ex /
-compatibility shims; nothing left unused; the duplicates the unit claims to replace are actually gone;
-a new core test program starts with its /* test: runtime|standalone [asan] */ marker line; commit subjects scoped like
-refactor(core): with a body that says what a caller does if behaviour or API changed. Broken rules are
-blocking; style is a nit.`,
+    key: 'conventions', model: 'sonnet',
+    prompt: `Review documentation and the repository's rules together.
+Blocking: a new or substantially changed unit (.h with its .c) without its Go-style package comment
+(purpose, contract, lifetime, when it allocates, invariants, complexity, failure behaviour, a short
+example); a comment that is wrong against the code; malloc/free or stdlib headers in core; more than
+three parameters; recursion; the public API outside include/tinyactors.h or without TA_API; a hand
+edit of include/tinyactors.c; a second function, shim or alias beside one that should have changed in
+place; code the unit left unused; a duplicate the unit claims to replace that is still there; a breaking
+change whose commit body does not say what a caller does.
+Not findings at all: a definition in a .c whose comment is "/* name: see file.h. */" (a function is
+documented once, at its declaration); several related declarations sharing one comment that names
+them; acronyms, recursion, freestanding builds and portability, which mise run test checks mechanically.
+Everything else (wording, a thin function comment, a missing example) is a nit.`,
   },
 ]
 
@@ -255,12 +238,14 @@ If the plan turns out wrong, deviate as little as needed and say so in deviation
     { label: `impl:${u.id}`, phase: 'Implement', schema: IMPL, model: 'sonnet', isolation: 'worktree' })
 }
 
-function reviewUnit(plan, impl, u, round) {
-  return parallel(LENSES.map(lens => () => agent(`${CONTEXT}
+function reviewUnit(plan, impl, u, round, lifetimesOnly) {
+  const lenses = lifetimesOnly ? LENSES.filter(l => l.key === 'lifetimes') : LENSES
+  return parallel(lenses.map(lens => () => agent(`${CONTEXT}
 
 ${unitHeader(u)}
 
-You are a reviewer (round ${round}). Do not edit files. From ${REPO}, read the change with
+You are a reviewer (round ${round}${round > 1 ? ': the earlier rounds were fixed; review the fix commits
+made after the first review, and the code paths they touch' : ''}). Do not edit files. From ${REPO}, read the change with
   git log --oneline ${BASE}..${wip(u)}
   git diff ${BASE}...${wip(u)}
 and read whole files at that revision with git show ${wip(u)}:<path>.
@@ -283,14 +268,17 @@ function fixUnit(plan, findings, u, round) {
 
 ${unitHeader(u)}
 
-Reviewers found the following in round ${round}:
+Reviewers found the following in round ${round}. Blocking ones were confirmed against the code by a
+second reader; nits were not checked:
 ${JSON.stringify(findings, null, 2)}
 
 In this worktree (your current directory; never cd into ${REPO} or run git -C ${REPO}, which the
 integrator owns): git checkout ${wip(u)}, and before every commit confirm that
 git rev-parse --abbrev-ref HEAD prints ${wip(u)}: a commit on a detached HEAD is lost when the branch
 is integrated (this happened in wave 1a-fix). Verify each finding against the code first. Fix every
-blocking finding that is real, and every nit that is plainly right. Decline the rest with the reason.
+blocking finding (they are confirmed), and every nit that is plainly right. In \`declined\` list only
+blocking findings you could not fix, with their issue text copied verbatim: each holds the unit. Nits
+you skip go in \`addressed\` as "skipped nit: <issue>: <why>".
 Build, run the narrowest covering tests, run mise run amalgamate if core changed, and commit in small
 scoped commits with the same two trailer lines as before:
   Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -315,8 +303,8 @@ function verifyFindings(findings, u) {
 
 ${unitHeader(u)}
 
-After the last review round these findings are still marked blocking, and the unit will be held from
-integration because of them. Do not edit files. For each one, check it against the code at ${wip(u)}
+A reviewer marked these findings blocking. Only confirmed ones go to the fixer, and a confirmed one
+still open after fixing holds the unit from integration. Do not edit files. For each one, check it against the code at ${wip(u)}
 (git show ${wip(u)}:<path>, and how the file is built: which headers a test can see, what the build
 links). A finding is real only if it is a defect or a broken repository rule AND fixing it as described
 is possible. Say why in one or two sentences either way.
@@ -345,15 +333,20 @@ You integrate this unit, in the main checkout ${REPO} (branch ${BASE}). Nobody e
    the resolution is mechanical (both sides kept, nothing lost); otherwise git rebase --abort and
    report status "conflict" with the files and why.
 3. Back on ${BASE}: git merge --ff-only ${wip(u)}. Never create a merge commit.
-4. Run mise run test (it runs what changed and prints a step-time table). Do not run test:full:
-   it runs once for the whole wave, after the last unit lands, on a quiet machine.
+4. The gate: ${u.full_test ? `run mise run test:full (it includes everything mise run test runs; it can
+   exceed 30 minutes). In tinyactors-napi run bun install first if node_modules is missing.` : 'run mise run test (it runs what changed and prints a step-time table).'}
+   Run it in the foreground with a long timeout, redirect its output to a log file and read its exit
+   status (never pipe it through tail or grep), and do not answer before it has exited. If the only
+   failure is a timing-ratio assertion in tinyactors-napi/test/scale.js, rerun that one script once;
+   a second failure is real.
 5. If a test fails: find whether the unit caused it. If a fix is small and clearly within the unit,
    make it as a separate scoped commit (same trailer lines as the unit's commits) and re-run. Otherwise
    git reset --hard to the commit before the unit (ORIG_HEAD of the merge) and report "tests_failed"
    with the failing output.
 6. Push: git push -u origin ${BASE}. On a network failure retry up to 4 times, waiting 2, 4, 8, 16 s.
    Never force-push.
-7. Delete the local branch ${wip(u)}.`,
+7. Delete the local branch ${wip(u)}, and remove the worktrees under .claude/worktrees/ whose HEAD is
+   a commit of this unit (git worktree remove --force, one command per Bash call).`,
     { label: `integrate:${u.id}`, phase: 'Integrate', schema: INTEGRATION, model: 'sonnet' })
   const p = gate.then(run, run)
   gate = p.catch(() => null)
@@ -372,27 +365,33 @@ const results = await pipeline(
   // A unit marked `existing` already has its implementation on its wip branch
   // (a wave interrupted by a container restart): it skips planning and
   // implementation and resumes at review, against the branch as it stands.
-  u => u.existing ? { summary: `Existing implementation on ${wip(u)}. Brief: ${u.brief}`, full_test_needed: !!u.full_test } : planUnit(u),
+  u => u.existing ? { summary: `Existing implementation on ${wip(u)}. Brief: ${u.brief}`, full_test_needed: !!u.full_test }
+    : u.plan === false ? { summary: `No separate plan: the brief and the ADRs it names fix the design. Plan as you go, in small verified steps. Brief: ${u.brief}`, full_test_needed: !!u.full_test }
+    : planUnit(u),
   (plan, u) => (u.existing
     ? Promise.resolve({ branch: wip(u), commits: [], tests_run: [], deviations_from_plan: 'resumed from the existing branch', open_questions: [] })
     : implementUnit(plan, u)).then(impl => ({ plan, impl })),
   async ({ plan, impl }, u) => {
+    // Findings are verified before anyone fixes them: in wave 4e a whole fix
+    // round went to findings a checklist reviewer got wrong. A second round
+    // runs only for a confirmed lifetime defect, and looks at the fix diff.
     const rounds = []
     let open = []
     for (let round = 1; round <= MAX_ROUNDS; round++) {
       const findings = await reviewUnit(plan, impl, u, round)
-      const blocking = findings.filter(f => f.severity === 'blocking')
-      const fix = findings.length ? await fixUnit(plan, findings, u, round) : null
-      rounds.push({ round, findings, fix })
-      open = blocking
-      if (!blocking.length) { open = []; break }
+      const raw = findings.filter(f => f.severity === 'blocking')
+      const blocking = raw.length ? await verifyFindings(raw, u) : []
+      const nits = findings.filter(f => f.severity !== 'blocking')
+      const toFix = [...blocking, ...nits]
+      const fix = toFix.length ? await fixUnit(plan, toFix, u, round) : null
+      rounds.push({ round, findings, confirmed: blocking, fix })
+      open = !blocking.length ? []
+        : (!fix || !fix.tests_passed) ? blocking
+        : fix.declined.map(d => ({ severity: 'blocking', lens: 'fix', file: '', issue: d.issue, fix: d.why }))
+      if (!blocking.some(f => f.lens === 'lifetimes')) break
       if (round === MAX_ROUNDS) {
-        // The last fix was not reviewed: one more look, blocking findings only.
-        const last = (await reviewUnit(plan, impl, u, round + 1)).filter(f => f.severity === 'blocking')
+        const last = (await reviewUnit(plan, impl, u, round + 1, true)).filter(f => f.severity === 'blocking')
         rounds.push({ round: round + 1, findings: last, fix: null })
-        // A unit is held only for findings a second reader confirms against the
-        // code: in wave 1b a checklist reviewer held unit 1.2 for asking a test
-        // that sees only the public header to call private functions.
         open = last.length ? await verifyFindings(last, u) : []
       }
     }
@@ -408,56 +407,7 @@ const results = await pipeline(
   },
 )
 
-// The full pass runs once, after every unit has landed, when no other agent
-// is using the CPUs: its scale tests compare timings. scale.js's ratio checks
-// were already flaky on this 4-CPU container before wave 1a (Bun failed 2 of 3
-// runs at 16450db), so a ratio failure is classified against the pre-wave
-// commit rather than taken as a verdict on the wave.
-phase('Full test')
-const wantFull = results.some((r, i) => r && r.integration && r.integration.status === 'pushed' &&
-  (UNITS[i].full_test || (r.plan && r.plan.full_test_needed)))
-const full = !wantFull ? 'not needed: no unit that touches allocation or per-actor costs landed' : await agent(`${CONTEXT.replace(/Do not run the repository-wide[^\n]*/, '')}
-
-Every unit of wave ${WAVE} has landed on ${BASE}. Nothing else runs now. In ${REPO}, and with one
-command per Bash call (compound commands get refused by the permission check):
-1. Remove the wave's leftover worktrees under .claude/worktrees/. The integrator rebases each unit and
-   regenerates the amalgamation, so landed commits have new hashes and patch IDs: match by subject.
-   For each worktree, every commit in git log ${BASE}..HEAD whose subject also appears in
-   git log --format=%s ${BASE} is landed. Remove (git worktree remove --force) a worktree whose commits
-   are all landed; list any other with the subjects that are not, and keep it.
-2. Run mise run test:full on ${BASE}, redirecting its output to a log file and reading its exit status
-   (never pipe it through tail or grep: that hides the status). Do not answer before it has exited:
-   if it moves to the background, wait for its exit status; a run you leave behind is killed with you. (it can exceed 30 minutes; run it in the foreground with a long
-   timeout, or in pieces per project, but never in the background where it can be killed).
-3. If it fails only on a timing-ratio assertion in tinyactors-napi/test/scale.js, classify it: run
-   TAT_SCALE_MAX_POPULATION=1000000 <node|bun> test/scale.js three times on ${BASE}, then three times on
-   the pre-wave commit ${PREWAVE} in a temporary worktree (copy tinyactors-napi/node_modules into it,
-   mise trust -a, mise run build in tinyactors-napi), and remove that worktree afterwards. Report the
-   pass counts and the failing ratios for each side.
-4. Any other failure is real: report it with the output and the unit that most likely caused it.
-   Do not fix anything and do not push.
-Answer in markdown: the step-time table, what failed, the classification, and the per-actor figures
-(native B/actor) scale.js printed for both commits if you ran it.`,
-  { label: `full-test:${WAVE}`, phase: 'Full test', model: 'sonnet' })
-
-phase('Report')
-const summary = { full_test: full, units: UNITS.map((u, i) => ({ unit: u, result: results[i] })) }
-const report = await agent(`${CONTEXT}
-
-You write the report for wave ${WAVE} of the ring-proto plan. The maintainer reads it before approving
-the next wave, so it must make inspection quick and honest. From ${REPO}, check the facts against git
-(git log --oneline origin/${BASE}, git show --stat) rather than trusting the data below.
-
-Data from the wave (null means a stage failed):
-${JSON.stringify(summary, null, 2)}
-
-Write markdown with: the full-test result as the data gives it (do not soften a failure); a table of
-units (status, commits pushed, core lines before/after, tests); for each unit, the lifetimes and allocation decisions in two or three lines, what it replaced,
-review findings that were declined and why, anything still open; what a human should look at first
-(file:line); and the risks for the next wave. Then propose the next wave from IMPLEMENTATION.md: units
-that can run in parallel without editing the same files, each with a brief that names the blocks, the
-files and the duplicates to replace. Prefer a smaller wave to a conflicting one. Mark full_test for
-units that touch allocation, pause/resume, paging, trace writing or per-actor costs.`,
-  { label: `report:${WAVE}`, phase: 'Report', schema: REPORT, model: 'sonnet' })
-
-return { wave: WAVE, results: summary, report }
+// No separate full pass and no report agent: the integrator's gate is the
+// full pass for full_test units, and the maintainer reads the journal.
+const summary = { units: UNITS.map((u, i) => ({ unit: u.id, result: results[i] })) }
+return { wave: WAVE, results: summary }
