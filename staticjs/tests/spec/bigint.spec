@@ -552,3 +552,23 @@ Math.abs(-1n)
 Array.from({length: 30}, (_, i) => BigInt(i + 1)).reduce((a, x) => a * x, 1n)
 --- value
 265252859812191058636308480000000n
+
+=== an accumulator nothing else holds, added to in place, across limbs and signs
+[[4294967295n, 1n, -4294967297n, -1n, 18446744073709551615n, -18446744073709551614n].reduce((a, x) => a + x, 0n), [3n, 5n, 7n].reduce((a, x) => x - a, 4294967296n), [1n, 2n].reduce((a, x) => -a - x, 5n)]
+--- value
+[-1n,-4294967291n,4n]
+
+=== an accumulator multiplied in place, past its room
+Array.from({length: 60}, (_, i) => BigInt(i + 4294967290)).reduce((a, x) => a * x, 1n) % 1000000000000000000007n
+--- value
+472010457201373978637n
+
+=== an accumulator held elsewhere too is not changed
+(xs => { const start = 4294967295n; const r = xs.reduce((a, x) => a + x, start); return [start, r, xs.reduce((a, x) => [...a, a.length === 0 ? x * 3n : a[a.length - 1] * x], [])]; })([1n, 2n, 3n])
+--- value
+[4294967295n,4294967301n,[3n,6n,18n]]
+
+=== a let of a BigInt updated in place
+(xs => { let n = 1n; n *= xs[0]; n *= xs[0]; n += 1n; n = -n; return [n, xs[0]]; })([18446744073709551615n])
+--- value
+[-340282366920938463426481119284349108226n,18446744073709551615n]

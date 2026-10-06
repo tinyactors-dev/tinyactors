@@ -425,8 +425,15 @@ bool sjs_bigint_equal(const sjs_bigint *a, const sjs_bigint *b);
  * fuel of its limb work; SJS_ERR_PROGRAM with `fault` where JavaScript
  * throws a RangeError (division by 0n, a negative exponent);
  * SJS_ERR_LIMIT past max_bigint_bits; SJS_ERR_NOMEM. */
+#define SJS_BIGINT_REUSE_A 1u
+#define SJS_BIGINT_REUSE_B 2u
 typedef struct {
     uint8_t op;           /* sjs_operator */
+    /* BIGINT_REUSE: the operands the caller holds alone and gives up if the
+     * result takes one over (SJS_BIGINT_REUSE_*), and the one it took, which
+     * is the result: the caller's reference to it is now the result's. */
+    uint8_t reuse;
+    uint8_t took;
     bool negative;        /* the result's sign, while it is made */
     sjs_value a;
     sjs_value b;
