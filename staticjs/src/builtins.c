@@ -69,7 +69,7 @@ static const sjs_name NAMES[] = {
     NAME("charCodeAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CHAR_CODE_AT, 0),
     NAME_MUTATION("clear", SJS_NAME_ON_SET | SJS_NAME_MUTATING, SJS_METHOD_SET_CLEAR), /* MUTATION */
     NAME("codePointAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CODE_POINT_AT, 0),
-    NAME("concat", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_CONCAT, 0, 0),
+    NAME("concat", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_CONCAT, SJS_METHOD_STRING_CONCAT, 0),
     NAME("constructor", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
     NAME("copyWithin", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
     NAME_MUTATION("delete", SJS_NAME_ON_SET | SJS_NAME_MUTATING, SJS_METHOD_SET_DELETE), /* MUTATION */
@@ -147,10 +147,10 @@ static const sjs_name NAMES[] = {
     NAME("toUpperCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_UPPER_CASE, 0),
     NAME("toWellFormed", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("trim", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM, 0),
-    NAME("trimEnd", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("trimEnd", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM_END, 0),
     NAME("trimLeft", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("trimRight", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("trimStart", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("trimStart", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM_START, 0),
     NAME("union", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_UNION),
     NAME_MUTATION("unshift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_UNSHIFT), /* MUTATION */
     NAME("valueOf", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
@@ -920,21 +920,13 @@ static sjs_result string_split(sjs_vm *vm, sjs_str s, sjs_leaf_call *call) {
     }
 }
 
-/* The string methods added after these, at the end of the file. */
+/* trim and the string methods added after these, at the end of the file. */
 static sjs_result string_method_tail(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 
 static sjs_result string_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_str s = sjs_string_view(SJS_AS_STRING(call->receiver));
     call->cost = s.length / 16u;
     switch (id) {
-    case SJS_METHOD_STRING_AT:
-    case SJS_METHOD_STRING_CHAR_AT:
-    case SJS_METHOD_STRING_CHAR_CODE_AT:
-    case SJS_METHOD_STRING_CODE_POINT_AT:
-    case SJS_METHOD_STRING_PAD_END:
-    case SJS_METHOD_STRING_PAD_START:
-    case SJS_METHOD_STRING_REPEAT:
-        return string_method_tail(vm, id, call);
     case SJS_METHOD_STRING_ENDS_WITH:
     case SJS_METHOD_STRING_STARTS_WITH:
     case SJS_METHOD_STRING_INCLUDES:
@@ -987,21 +979,8 @@ static sjs_result string_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
         }
         return SJS_OK;
     }
-    default: { /* TRIM */
-        uint32_t start = 0;
-        while (start < s.length) {
-            uint32_t next = start;
-            if (!is_trim_space((uint32_t)sjs_utf8_next(s, &next))) break;
-            start = next;
-        }
-        uint32_t end = start;
-        uint32_t i = start;
-        while (i < s.length) {
-            int32_t point = sjs_utf8_next(s, &i);
-            if (!is_trim_space((uint32_t)point)) end = i;
-        }
-        return new_string(vm, (sjs_str){ s.ptr + start, end - start }, &call->result);
-    }
+    default:
+        return string_method_tail(vm, id, call);
     }
 }
 
@@ -1095,7 +1074,7 @@ sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) 
     call->cost = 0;
     if (id < SJS_BUILTIN_FUNCTION_COUNT) return function_call(vm, id, call);
     if (id <= SJS_METHOD_ARRAY_WITH) return array_method(vm, id, call);
-    if (id <= SJS_METHOD_STRING_TRIM) return string_method(vm, id, call);
+    if (id <= SJS_METHOD_STRING_TRIM_START) return string_method(vm, id, call);
     return set_method(vm, id, call);
 }
 
@@ -2210,8 +2189,68 @@ static sjs_result string_index(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
     }
 }
 
+/* trim, trimStart and trimEnd: what is_trim_space matches, off both ends
+ * or one. A string with nothing to trim is given back as it is. */
+static sjs_result string_trim(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    sjs_str s = sjs_string_view(SJS_AS_STRING(call->receiver));
+    uint32_t start = 0;
+    if (id != SJS_METHOD_STRING_TRIM_END) {
+        while (start < s.length) {
+            uint32_t next = start;
+            if (!is_trim_space((uint32_t)sjs_utf8_next(s, &next))) break;
+            start = next;
+        }
+    }
+    uint32_t end = s.length;
+    if (id != SJS_METHOD_STRING_TRIM_START) {
+        end = start;
+        uint32_t i = start;
+        while (i < s.length) {
+            int32_t point = sjs_utf8_next(s, &i);
+            if (!is_trim_space((uint32_t)point)) end = i;
+        }
+    }
+    if (start == 0 && end == s.length) return same_string(call);
+    return new_string(vm, (sjs_str){ s.ptr + start, end - start }, &call->result);
+}
+
+/* concat: the receiver and each argument as String turns it into a string,
+ * joined. STRING_APPEND: a receiver nothing else holds, and not interned,
+ * is extended in place, as + extends its left operand (vm.c's
+ * string_append); otherwise the text is copied into a new string. */
+static sjs_result string_concat(sjs_vm *vm, sjs_leaf_call *call) {
+    sjs_string *s = SJS_AS_STRING(call->receiver);
+    char room[32];
+    uint64_t extra = 0;
+    for (uint32_t i = 0; i < call->count; i++) {
+        if (!sjs_is_primitive(call->args[i])) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
+        extra += sjs_primitive_text(call->args[i], room).length;
+    }
+    if (s->length + extra > vm->context->limits.max_string_bytes) return sjs_vm_fail(vm, SJS_ERR_LIMIT);
+    if (call->receiver_slot != NULL && sjs_value_unique(call->receiver) && (s->h.flags & SJS_STRING_INTERNED) == 0) {
+        *call->receiver_slot = sjs_undefined();
+        call->result = call->receiver;
+        call->cost = extra / 16u;
+        sjs_result r = sjs_string_reserve(vm->context, &s, (uint32_t)extra);
+        call->result.as.heap = &s->h;
+        if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    } else {
+        if (string_with_room(vm, call, s->length + extra) != SJS_OK) return SJS_ERR_PROGRAM;
+        sjs_string_extend(SJS_AS_STRING(call->result), sjs_string_view(s));
+        s = SJS_AS_STRING(call->result);
+    }
+    for (uint32_t i = 0; i < call->count; i++) sjs_string_extend(s, sjs_primitive_text(call->args[i], room));
+    return SJS_OK;
+}
+
 __attribute__((noinline)) static sjs_result string_method_tail(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     switch (id) {
+    case SJS_METHOD_STRING_TRIM:
+    case SJS_METHOD_STRING_TRIM_END:
+    case SJS_METHOD_STRING_TRIM_START:
+        return string_trim(vm, id, call);
+    case SJS_METHOD_STRING_CONCAT:
+        return string_concat(vm, call);
     case SJS_METHOD_STRING_AT:
     case SJS_METHOD_STRING_CHAR_AT:
     case SJS_METHOD_STRING_CHAR_CODE_AT:

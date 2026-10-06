@@ -403,3 +403,71 @@ Array.from({length: 1000}, (_, i) => i % 10).reduce((acc, x) => acc + x, "").len
 ["a😀é", "日本"].map(s => [s.at(-1), s.charAt(0), s.charCodeAt(0), s.codePointAt(1)])
 --- value
 [["é","a",97,128512],["本","日",26085,26412]]
+
+# trimStart and trimEnd remove what trim removes, from one end. concat
+# converts each argument as String does: primitives join, objects fault.
+
+=== trimStart and trimEnd
+["  a b  ".trimStart(), "  a b  ".trimEnd(), "\t\n\v\f\r a".trimStart(), "a \t\n\v\f\r".trimEnd(), "".trimStart(), "".trimEnd(), "   ".trimStart(), "   ".trimEnd(), "x".trimStart(), "x".trimEnd()]
+--- value
+["a b  ","  a b","a","a","","","","","x","x"]
+
+=== trimStart and trimEnd remove the same white space as trim
+["        　﻿é".trimStart(), "é        　﻿".trimEnd(), "​x​".trimStart(), "​x​".trimEnd(), " 😀 ".trimStart(), " 😀 ".trimEnd(), " 日本 ".trim()]
+--- value
+["é","é","​x​","​x​","😀 "," 😀","日本"]
+
+=== trimStart and trimEnd ignore their arguments
+["  a  ".trimStart(1), "  a  ".trimEnd({})]
+--- value
+["a  ","  a"]
+
+=== concat
+["a".concat("b", "c"), "a".concat(), "".concat(""), "".concat("x"), "é".concat("😀", "日本")]
+--- value
+["abc","a","","x","é😀日本"]
+
+=== concat converts primitives as String does
+["n:".concat(1, -0, 2.5, 1e21, NaN, Infinity), "".concat(true, false, null, undefined), "x".concat(undefined)]
+--- value
+["n:102.51e+21NaNInfinity","truefalsenullundefined","xundefined"]
+
+=== concat faults on an object
+"a".concat({})
+--- fault primitives
+
+=== concat faults on an array
+"a".concat([1, 2])
+--- fault primitives
+
+=== concat faults on a set
+"a".concat("b", new Set())
+--- fault primitives
+
+=== concat faults on a function
+"a".concat(x => x)
+--- fault primitives
+
+=== concat with a string as receiver and argument
+(s => [s.concat(s), s])("ab")
+--- value
+["abab","ab"]
+
+=== concat in reduce extends the accumulator
+["a", "b", 1, "😀"].reduce((acc, x) => acc.concat(x, ","), "")
+--- value
+"a,b,1,😀,"
+
+=== concat in reduce keeps a string something else holds
+(s => [["b", "c"].reduce((acc, x) => acc.concat(x), s), s])("a")
+--- value
+["abc","a"]
+
+=== concat of a constant keeps the constant
+[1, 2].map(x => "k".concat(x))
+--- value
+["k1","k2"]
+
+=== concat past the limit
+"ab".repeat(5000000).concat("ab".repeat(5000000))
+--- fault limit

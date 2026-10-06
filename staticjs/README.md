@@ -66,7 +66,9 @@ too; and 100,000 doubles must format as `String(x)` does.
   stays with it when it is shared or returned: a string holds at most twice
   its bytes. Fuel is a unit per 64 bytes appended, where a copy charges for
   the whole string. Numbers still add first: `add` tests for two numbers
-  before anything else.
+  before anything else. A string's `concat` extends its receiver the same
+  way when nothing else holds it (`acc.concat(x)` in `reduce`), charging a
+  unit per 16 bytes appended, as the string methods do.
 - **Shapes change speed and fuel, never a value or a fault.** `toSorted`
   (and `sort`, which runs its loop) with a comparator `(a, b) => a.key - b.key` (or `b.key - a.key`) and
   `map` with `x => x.key` run the callback in C while each step's
@@ -184,7 +186,7 @@ Built-ins:
 | | |
 |---|---|
 | arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
-| strings | `at` `charAt` `charCodeAt` `codePointAt` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim`, `length`, indexing |
+| strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
 | functions | `String` `Boolean` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN` |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign`, and its constants |
@@ -255,7 +257,8 @@ compare identities, or find something on a prototype.
   pair, padding one (`padStart`, `padEnd`) with a pad string cut there, and
   `at` or `charAt` of half of one (`charCodeAt` and `codePointAt` give its
   number): staticjs strings cannot hold a lone surrogate. An object as a string
-  method's argument that JavaScript turns into a string (a pad string).
+  method's argument that JavaScript turns into a string (a pad string, an
+  argument of `concat`), as `+` faults on one.
 - A number literal outside Clinger's fast path (digits worth more than
   2^53, or a power of ten past 10^22) is refused when compiled.
 

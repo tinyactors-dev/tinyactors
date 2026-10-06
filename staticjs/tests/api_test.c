@@ -2336,16 +2336,18 @@ static void test_out_of_memory(const char *source, sjs_goal goal) {
     CHECK(needed > 1);
 }
 
-/* STRING_APPEND: + and a template extend a string nothing else holds, so a
- * string built a piece at a time, as reduce's accumulator, takes O(log n)
- * allocations, not one per piece, and holds at most twice its length. */
+/* STRING_APPEND: +, a template and concat extend a string nothing else
+ * holds, so a string built a piece at a time, as reduce's accumulator,
+ * takes O(log n) allocations, not one per piece, and holds at most twice its
+ * length. */
 static void test_string_append_memory(void) {
     counting c = { 0 };
     sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
-    static const char *const callbacks[] = { "(acc, x) => acc + x", "(acc, x) => `${acc}${x}`", "(acc, x) => acc + x + \"\"" };
+    static const char *const callbacks[] = { "(acc, x) => acc + x", "(acc, x) => `${acc}${x}`", "(acc, x) => acc + x + \"\"",
+                                              "(acc, x) => acc.concat(x)" };
     static const int sizes[2] = { 1000, 100000 };
     char source[256];
-    for (int f = 0; f < 3; f++) {
+    for (int f = 0; f < 4; f++) {
         long allocations[2];
         size_t live[2];
         for (int i = 0; i < 2; i++) {

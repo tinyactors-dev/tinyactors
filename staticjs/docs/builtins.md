@@ -59,7 +59,7 @@ For a loop built-in:
 
 1. Add an ID to `sjs_builtin_id` in `src/internal.h`, inside its receiver's
    group. `sjs_builtin_call` picks the group by ID range
-   (`id <= SJS_METHOD_ARRAY_WITH`, `id <= SJS_METHOD_STRING_TRIM`, then
+   (`id <= SJS_METHOD_ARRAY_WITH`, `id <= SJS_METHOD_STRING_TRIM_START`, then
    sets). A new last member of a group must move that bound, or the call
    lands in the wrong group's switch.
 2. Give its name's entry in `NAMES` (`src/builtins.c`) the ID in the
@@ -123,6 +123,11 @@ means no program can see the difference.
 
 If the built-in reads its receiver after taking it over, read it through
 the taken pointer: `a` may move when the array grows.
+
+A string's `concat` takes its receiver over the same way, when it is not
+interned as well (the context's table finds an interned string by its
+text), and extends it in place with `sjs_string_reserve` and
+`sjs_string_extend`, as `+` does (`STRING_APPEND`).
 
 ## 5. No linear searches
 
