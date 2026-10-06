@@ -13,6 +13,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BIN="${TP_EXAMPLES:-$HERE/../../build/examples}/jit/jit"
 
+# The JIT emits x86-64 machine code: skip (exit 77, which the test harness
+# reports as a pass) on any other host.
+case "$(uname -m)" in x86_64|amd64) ;; *) echo "run.sh: skipped, needs an x86-64 host" >&2; exit 77 ;; esac
+
 if [ "$#" -lt 3 ]; then
   echo "usage: run.sh '<C source>' <function> <int-arg>" >&2
   exit 2

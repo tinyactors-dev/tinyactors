@@ -4,7 +4,7 @@
 set -e
 pfx=$(mktemp -d)
 trap 'rm -rf "$pfx"' EXIT
-sh install.sh --from-file dist/release/tinyparse-0.1.0-x86_64-linux.tar.gz --prefix "$pfx" >/dev/null 2>&1
+sh install.sh --from-file dist/release/tinyparse-0.1.0-$(uname -m | sed s/arm64/aarch64/)-$(uname | sed "s/Darwin/macos/;s/Linux/linux/").tar.gz --prefix "$pfx" >/dev/null 2>&1
 test -x "$pfx/bin/tinyparse"
 test -f "$pfx/include/tinyparse.h"
 test -f "$pfx/lib/libtinyparse.a"

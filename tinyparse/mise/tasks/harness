@@ -9,7 +9,10 @@ require 'cache'
 require_relative '../lib/tinyparse'
 
 command = [*Tinyparse.host.compile_command, *Tinyparse::COMMON_FLAGS]
-object = Tinyparse.compile_all(command, [Tinyparse::ROOT.join('test/harness.c')], Tinyparse::BUILD.join('objects/harness'),
+# harness_<os>.c sets the feature-test macros for the host, then includes harness.c.
+PLATFORM_FILES = { macos: 'harness_darwin.c', linux: 'harness_linux.c' }.freeze
+source = Tinyparse::ROOT.join('test', PLATFORM_FILES.fetch(Toolchain::Host.current.os))
+object = Tinyparse.compile_all(command, [source], Tinyparse::BUILD.join('objects/harness'),
                                'harness').first
 harness = Tinyparse.harness
 outcome = Tinyparse.link('harness', harness, %w[program], [object]) do

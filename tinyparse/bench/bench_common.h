@@ -19,6 +19,9 @@
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE /* macOS hides ru_maxrss under _POSIX_C_SOURCE */
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -135,13 +138,17 @@ static int bench_cmp_double(const void *a, const void *b)
     return 0;
 }
 
-/* ** Peak resident set size in kilobytes (getrusage ru_maxrss is KB on Linux). */
+/* ** Peak resident set size in kilobytes (ru_maxrss is KB on Linux, bytes on macOS). */
 static long bench_peak_rss_kb(void)
 {
     struct rusage ru;
     if (getrusage(RUSAGE_SELF, &ru) != 0)
         return 0;
+#ifdef __APPLE__
+    return ru.ru_maxrss / 1024;
+#else
     return ru.ru_maxrss;
+#endif
 }
 
 /* ** Report a result line in a machine-parseable KEY=VALUE form the orchestrator

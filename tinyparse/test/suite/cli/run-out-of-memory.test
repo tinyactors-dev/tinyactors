@@ -5,6 +5,8 @@
 # enforces) cannot be parsed.
 <<<cmd
 set -e
+# macOS does not enforce ulimit -v: skip there (exit 77).
+( ulimit -v 100000 ) 2>/dev/null || exit 77
 w="$(mktemp -d)"
 trap 'rm -rf "$w"' EXIT
 { printf '['; yes '[1,2.5,"x"],' | head -c 20000000; printf '1]'; } > "$w/big.json"

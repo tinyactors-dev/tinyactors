@@ -28,6 +28,7 @@
  *
  *   exit N                  exit code equals N
  *   exit-not N              exit code is not N
+ *   (a <<<cmd that exits 77 is skipped: reported as a pass)
  *   out-contains TEXT       stdout contains TEXT (literal substring)
  *   out-absent TEXT         stdout does not contain TEXT
  *   out-regex RE            stdout matches POSIX extended regex RE
@@ -46,7 +47,8 @@
  * 1 if any test fails that is not listed in xfail (a regression); 2 if the
  * remaining failures are all expected (work still pending).
  */
-#define _POSIX_C_SOURCE 200809L
+/* Feature-test macros come from the platform file that includes this one:
+ * harness_linux.c or harness_darwin.c (mise/tasks/harness picks one). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -367,6 +369,9 @@ static int run_test(const testcase *t, const char *cwd, buffer *detail) {
     read_file(err_path, &err);
 
     int failed = eval_assertions(t->assertions.data, code, out.data, err.data, detail);
+    /* Exit 77 from the command means "this host cannot run the test" (an
+     * x86-64-only JIT on arm64, a limit macOS does not enforce): not a failure. */
+    if (code == 77) failed = 0;
 
     if (t->have_stdout_exact) {
         buffer want; buffer_init(&want);

@@ -31,7 +31,8 @@ GENERATED = [*HOST.compile_command, '-std=c11', '-O2', '-Iinclude', '-Isrc'].fre
 EXAMPLES = {
   'ebnf' => { program: 'ebnf2scm', driver: 'examples/ebnf/ebnf2scm.c' },
   'uri' => { program: 'uri', driver: 'examples/uri/uri.c' },
-  'jit' => { program: 'jit', driver: 'examples/jit/jit.c' },
+  # The JIT emits x86-64 machine code, so it builds only on an x86-64 host.
+  'jit' => { program: 'jit', driver: 'examples/jit/jit.c', arch: :x86_64 },
   # The rewriter embeds its grammar, so it needs no .scm path at run time.
   'rewriter' => { program: 'rewriter', driver: 'examples/rewriter/rewriter.c',
                   embed: ['examples/rewriter/cdefines.scm', 'cdefines_scm.h', 'cdefines_scm'] },
@@ -65,6 +66,10 @@ def embedded_grammar(scm, name)
 end
 
 EXAMPLES.each do |name, example|
+  if example[:arch] && example[:arch] != HOST.arch
+    puts "examples: #{name}: skipped (needs #{example[:arch]}, this host is #{HOST.arch})"
+    next
+  end
   dir = OUT.join(name)
   objects = Tinyparse::BUILD.join('objects/examples', name)
   includes = (example[:includes] || []).map { |path| "-I#{path}" }
