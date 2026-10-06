@@ -245,7 +245,17 @@ typedef struct {
     void (*load_needed)(void *context, const ta_run_notice *notice);
 } tah_turn_params;
 
-/* `allocator` for the maps and rings, `envelopes` for the waiter records and verdicts. */
+/*
+ * tah_sched_init makes `sched` ready for tah_sched_post. `allocator` serves
+ * the maps and settlement ring (the follows, the replaying set), `envelopes`
+ * the waiter records and the verdict ring, so the two are accounted
+ * separately. Init allocates nothing and cannot fail: the vectors, map and
+ * rings are empty until used and grow on demand, where an allocation failure
+ * is answered by the operation that needed it (TA_ERR_NOMEM from a post).
+ * The block holds no mailboxes: it holds only what admission needs, the
+ * waiters of send(), the verdicts to report and the follows of a turn.
+ * Pair it with tah_sched_discard and tah_sched_destroy.
+ */
 void tah_sched_init(tah_sched *sched, ta_allocator allocator, ta_allocator envelopes);
 /*
  * Releases what the verdicts hold (data, addresses). Call it while core is

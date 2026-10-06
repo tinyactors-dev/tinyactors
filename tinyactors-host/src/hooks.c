@@ -18,6 +18,7 @@ ta_result tah_hook_actor_created(tah_system *system, ta_actor_id actor) {
 
 ta_result tah_hook_actor_removed(tah_system *system, ta_actor_id actor) {
     tah_recorder_removed(system, actor);
+    tah_sched_replaying_remove(&system->sched, actor); /* a replay cut short by the removal never reaches events_done */
     tah_system_want_turn(system); /* its inputs are refused, and reported as dead letters */
     return TA_OK;
 }
