@@ -1,6 +1,7 @@
 #include "datamodel.h"
 #include "actor.h"
 #include "interpreter.h"
+#include "run.h"
 #include "scxml_uri.h"
 #include "system.h"
 #include "memory.h"
@@ -22,7 +23,7 @@ const ta_event *ta_dm_host_event(const ta_dm_host *host) {
     if (host == NULL || host->impl == NULL || host->impl->actor == NULL) {
         return NULL;
     }
-    return ta_actor_bound_event(host->impl->actor);
+    return ta_actor_bound_event(host->impl->system, host->impl->actor);
 }
 
 ta_actor_id ta_dm_host_actor(const ta_dm_host *host) {
@@ -40,7 +41,7 @@ ta_time ta_dm_host_time(const ta_dm_host *host) {
     if (!ta_dm_host_valid(host)) {
         return 0;
     }
-    return ta_interpreter_macrostep_time(host->impl->system, host->impl->actor);
+    return ta_run_macrostep_time(host->impl->system, host->impl->actor);
 }
 
 /* The render area of the interpreter run that is calling the data model

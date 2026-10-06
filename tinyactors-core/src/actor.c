@@ -281,7 +281,7 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
 void ta_actor_free(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
     /* Its taken input goes back, and its deferred inputs return to the run
-     * queue to be refused, while its event block still names them. */
+     * queue to be refused. */
     ta_run_session_gone(system, actor);
     ta_actor_discard_activation_effects(actor);
     if (actor->datamodel_initialized) {
@@ -622,9 +622,11 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
         return TA_ERR_INVALID;
     }
     /* The bootstrap is the session's first input: admitted (run.h), before
-     * anything is made, so a full pool refuses the spawn. */
+     * anything is made, so a full pool refuses the spawn. A traced spawn's
+     * parent waits in it for the bootstrap macrostep (ADR 0067). */
     uint32_t wake = 0;
-    ta_result result = ta_run_wake_reserve(system, true, &wake);
+    ta_result result =
+        ta_run_wake_reserve(system, &(ta_run_wake){ .admission = true, .trace = &params->trace }, &wake);
     if (result != TA_OK) {
         return result;
     }
@@ -654,18 +656,6 @@ static ta_result ta_actor_spawn_new(ta_system *system, const ta_actor_spawn_para
         return result;
     }
     ta_actor_id id = actor->record.id;
-
-    /* A traced spawn's parent waits in an event block for the bootstrap
-     * macrostep (ADR 0067); an untraced one needs no block. */
-    if (!ta_trace_parent_empty(&params->trace)) {
-        result = ta_interpreter_hold_block(system, actor);
-        if (result != TA_OK) {
-            ta_actor_release_slot(system, id);
-            ta_actor_free(system, actor);
-            return result;
-        }
-        actor->event_block->slots.trace = params->trace;
-    }
 
     if (params->parent != NULL) {
         actor->sparse = ta_mem_alloc(system->allocator, sizeof(ta_actor_sparse_state),
@@ -921,7 +911,7 @@ ta_result ta_actor_export_state(ta_system *system, const ta_actor_export_params 
     if (actor->finished) {
         return TA_ERR_DONE;
     }
-    if (actor->macrostep || ta_actor_external_event(actor) != NULL || ta_interpreter_internal_pending(actor)) {
+    if (actor->macrostep || actor->external != TA_EXTERNAL_NONE || ta_interpreter_internal_pending(actor)) {
         return TA_ERR_BUSY;
     }
     const ta_definition *definition = actor->definition;
@@ -1012,10 +1002,11 @@ ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *par
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
-    /* Its bootstrap is admitted as a spawn's is; a restored state has none,
-     * and gives the wake back. */
+    /* Its bootstrap is admitted as a spawn's is, with its trace parent; a
+     * restored state has none, and gives the wake back. */
     uint32_t wake = 0;
-    ta_result result = ta_run_wake_reserve(system, true, &wake);
+    ta_result result =
+        ta_run_wake_reserve(system, &(ta_run_wake){ .admission = true, .trace = &params->trace }, &wake);
     if (result != TA_OK) {
         return result;
     }
@@ -1077,13 +1068,6 @@ static ta_result ta_actor_prepare_new(ta_system *system, const ta_actor_prepare_
         } else {
             effects->replaying = true;
             effects->clock = *at;
-        }
-    }
-    /* A traced bootstrap's parent waits in an event block (ADR 0067). */
-    if (result == TA_OK && !ta_trace_parent_empty(&params->trace)) {
-        result = ta_interpreter_hold_block(system, actor);
-        if (result == TA_OK) {
-            actor->event_block->slots.trace = params->trace;
         }
     }
     if (result == TA_OK) {
@@ -1244,7 +1228,7 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
     }
     uint32_t wake = 0;
     if (result == TA_OK) {
-        result = ta_run_wake_reserve(system, false, &wake);
+        result = ta_run_wake_reserve(system, &(ta_run_wake){ 0 }, &wake);
     }
     if (result == TA_OK) {
         result = ta_actor_publish_route(system, actor, params->incumbent);
@@ -1266,7 +1250,7 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
         /* Its services never started, and the world moved on while it was
          * away: each active invocation is reported lost, as after a load. */
         if (ta_invoke_retire_all(system, actor)) {
-            ta_interpreter_start_macrostep(actor, NULL);
+            ta_interpreter_start_macrostep(actor);
         }
     } else if (actor->sparse != NULL && actor->sparse->pending_invokes.count != 0) {
         actor->macrostep = true;
@@ -1419,12 +1403,10 @@ ta_result ta_actor_abandon(ta_system *system, ta_actor_id id) {
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    /* Abandoning may give the event block back, so the input it names is read first. */
-    uint32_t input = actor->event_block == NULL ? 0u : actor->event_block->slots.input;
     ta_result result = ta_interpreter_abandon(system, actor);
     if (result == TA_OK) {
         /* Its input ends unreported, and its next deferred input may run. */
-        ta_run_input_dropped(system, actor, input);
+        ta_run_input_dropped(system, actor);
     }
     return result;
 }
@@ -1514,33 +1496,29 @@ ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
     return TA_OK;
 }
 
-static const ta_event *ta_actor_paused_event(const ta_actor *actor) {
+static const ta_event *ta_actor_paused_event(ta_system *system, const ta_actor *actor) {
     if (!actor->macrostep) {
         return NULL;
     }
-    return ta_actor_external_event(actor);
+    return ta_actor_external_event(system, actor);
 }
 
-const ta_event *ta_actor_external_event(const ta_actor *actor) {
-    const ta_event_block *block = actor->event_block;
-    if (block == NULL || block->slots.external == TA_EXTERNAL_NONE) {
+const ta_event *ta_actor_external_event(ta_system *system, const ta_actor *actor) {
+    if (actor->external == TA_EXTERNAL_NONE) {
         return NULL;
     }
-    return &block->slots.external_event;
+    /* Its taken input, or, restored and not yet taken, the wake holding it. */
+    return ta_run_input_event(system, actor->input);
 }
 
-const ta_event *ta_actor_bound_event(const ta_actor *actor) {
-    const ta_event_block *block = actor->event_block;
-    if (block == NULL) {
-        return NULL;
-    }
-    switch ((ta_event_binding)block->slots.bound) {
+const ta_event *ta_actor_bound_event(ta_system *system, const ta_actor *actor) {
+    switch ((ta_event_binding)actor->bound) {
     case TA_BOUND_EXTERNAL:
-        return &block->slots.external_event;
+        return ta_actor_external_event(system, actor);
     case TA_BOUND_INTERNAL:
-        return &block->events[0].event;
+        return &actor->internal->events[0].event;
     case TA_BOUND_KEPT:
-        return &block->slots.kept_event;
+        return &actor->internal->kept_event;
     case TA_BOUND_NONE:
     default:
         return NULL;
@@ -1548,11 +1526,11 @@ const ta_event *ta_actor_bound_event(const ta_actor *actor) {
 }
 
 uint32_t ta_actor_waiting_internal(const ta_actor *actor) {
-    const ta_event_block *block = actor->event_block;
-    if (block == NULL) {
+    const ta_internal_queue *queue = actor->internal;
+    if (queue == NULL) {
         return 0;
     }
-    return block->count - (block->slots.bound == TA_BOUND_INTERNAL ? 1u : 0u);
+    return queue->count - (actor->bound == TA_BOUND_INTERNAL ? 1u : 0u);
 }
 
 static size_t ta_vec_bytes(const ta_vec *vec) {
@@ -1562,8 +1540,8 @@ static size_t ta_vec_bytes(const ta_vec *vec) {
 /* Everything the core allocates for the actor now; see ta_actor_inspection. */
 static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
     size_t total = actor->definition->actor_block_bytes;
-    if (actor->event_block != NULL) {
-        total += ta_event_block_bytes(actor->event_block->capacity);
+    if (actor->internal != NULL) {
+        total += ta_internal_queue_bytes(actor->internal->capacity);
     }
     const ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse != NULL) {
@@ -1609,16 +1587,16 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
                                  ta_run_phase_in_microstep(actor->sparse->paused->at.phase),
         .step = ta_actor_step(actor),
         .position = ta_actor_position(actor),
-        .current_event = ta_actor_paused_event(actor),
+        .current_event = ta_actor_paused_event(system, actor),
         .allocated_bytes = ta_actor_allocated_bytes(actor),
         .final_state = TA_STATE_NONE,
-        .trace = { .context = ta_actor_macrostep_parent(actor).context,
+        .trace = { .context = ta_run_session_trace(system, actor).context,
                    .cause = ta_actor_step(actor) },
     };
     /* A taken head is `_event`, not work that waits. */
     uint32_t waiting = ta_actor_waiting_internal(actor);
     if (waiting != 0) {
-        out->internal_events = actor->event_block->events + (actor->event_block->count - waiting);
+        out->internal_events = actor->internal->events + (actor->internal->count - waiting);
         out->internal_count = waiting;
     }
     if (actor->sparse != NULL) {

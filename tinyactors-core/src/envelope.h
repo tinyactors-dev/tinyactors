@@ -246,7 +246,8 @@ typedef struct {
     uint64_t target;
     /** The sending session's ID, or 0 for external input. */
     uint64_t from;
-    /** A timer's deadline. */
+    /** A timer's deadline; while taken, the logical time of the macrostep
+     * it runs (`run.h`). */
     ta_time due;
     /** The invocation-instance token of a child event, completion or
      * stop, or 0. */

@@ -124,17 +124,30 @@ static void ta_run_jump_free(ta_system *system, ta_operator_jump *jump) {
 
 /*
  * Releases everything envelope `index` holds (its data and content, an
- * event's origin and operator transition, its text) and gives it back. The
- * envelope is on no list.
+ * event's origin and operator transition, its text) and leaves it bare,
+ * where it stands: a bare envelope reads as a wake without an event. O(1)
+ * in the envelopes; frees the text's chunks.
  */
-static void ta_run_discard(ta_system *system, uint32_t index) {
+static void ta_run_strip(ta_system *system, uint32_t index) {
+    if (system->run.event_input == index) {
+        system->run.event_input = 0u;
+        system->run.event = (ta_event){ 0 };
+    }
     ta_run_record record = ta_run_record_of(system, index);
     ta_origin_release(&record.origin);
     ta_run_jump_free(system, record.jump);
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
     ta_value_release(&envelope->data);
     ta_value_release(&envelope->content);
+    envelope->data = (ta_value){ 0 };
+    envelope->content = (ta_value){ 0 };
     ta_name_area_free(&system->run.names, &envelope->text);
+}
+
+/* Releases everything envelope `index` holds and gives it back. The
+ * envelope is on no list. */
+static void ta_run_discard(ta_system *system, uint32_t index) {
+    ta_run_strip(system, index);
     ta_envelope_pool_give(&system->run.pool, index);
 }
 
@@ -168,9 +181,10 @@ void ta_run_destroy(ta_system *system) {
     ta_envelope_pool *pool = &system->run.pool;
     for (uint32_t index = 1u; index <= pool->items.high_water; index += 1u) {
         ta_envelope *envelope = ta_envelope_pool_at(pool, index);
-        /* A taken input holds nothing: its session released it, or held it
-         * until the session went. Every runnable envelope still holds its own. */
-        if (envelope != NULL && envelope->state == TA_ENVELOPE_RUNNABLE) {
+        /* Every session is gone, and gave its taken input back; a runnable
+         * envelope, or a taken one no session names, still holds its own. */
+        if (envelope != NULL &&
+            (envelope->state == TA_ENVELOPE_RUNNABLE || envelope->state == TA_ENVELOPE_TAKEN)) {
             ta_run_record record = ta_run_record_of(system, index);
             ta_origin_release(&record.origin);
             ta_run_jump_free(system, record.jump);
@@ -181,6 +195,7 @@ void ta_run_destroy(ta_system *system) {
     ta_name_area_destroy(&system->run.names);
     ta_envelope_pool_destroy(pool);
     system->run.slot = 0u;
+    system->run.event_input = 0u;
 }
 
 /* What a refill answered, for the pool and for the name area. */
@@ -247,6 +262,28 @@ typedef struct {
     const ta_run_record *record;
 } ta_run_admission;
 
+/* Writes `record` as the one field of envelope `index`'s text, which has
+ * none. TA_ERR_FULL or TA_ERR_NOMEM as the name area answers, changing
+ * nothing; `admission` holds it to the watermark. */
+static ta_result ta_run_write_record(ta_system *system, uint32_t index, const ta_run_record *record,
+                                     ta_run_refilled refilled, bool admission) {
+    uint8_t bytes[TA_RUN_RECORD_BYTES];
+    uint32_t length = ta_run_record_pack(record, bytes);
+    ta_chunk_writer writer = ta_chunk_writer_new();
+    ta_result result = ta_name_area_write(&system->run.names, &(ta_name_area_write_params){
+                                                                   .writer = &writer,
+                                                                   .text = { .ptr = bytes, .len = length },
+                                                                   .admission = admission,
+                                                               });
+    if (result != TA_OK) {
+        return admission ? ta_run_names_short(&system->run.names,
+                                              (ta_run_refusal){ .refill = refilled.names, .result = result }, length)
+                         : result == TA_ERR_FULL && refilled.names == TA_ERR_NOMEM ? TA_ERR_NOMEM : result;
+    }
+    ta_envelope_pool_at(&system->run.pool, index)->text = writer.chain;
+    return TA_OK;
+}
+
 /*
  * Takes an envelope below the watermark, writes the record into its text,
  * fills it and appends it to the run queue. Whoever calls it retains what
@@ -254,24 +291,16 @@ typedef struct {
  */
 static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admission, uint32_t *out) {
     ta_run_refilled refilled = ta_run_refill(system);
-    uint8_t bytes[TA_RUN_RECORD_BYTES];
-    uint32_t length = ta_run_record_pack(admission->record, bytes);
     uint32_t index = 0u;
     ta_result result = ta_envelope_pool_admit(&system->run.pool, &index);
     if (result != TA_OK) {
         return ta_run_envelope_short(&system->run.pool, (ta_run_refusal){ .refill = refilled.pool, .result = result },
                                      true);
     }
-    ta_chunk_writer writer = ta_chunk_writer_new();
-    result = ta_name_area_write(&system->run.names, &(ta_name_area_write_params){
-                                                        .writer = &writer,
-                                                        .text = { .ptr = bytes, .len = length },
-                                                        .admission = true,
-                                                    });
+    result = ta_run_write_record(system, index, admission->record, refilled, true);
     if (result != TA_OK) {
         ta_envelope_pool_give(&system->run.pool, index);
-        return ta_run_names_short(&system->run.names, (ta_run_refusal){ .refill = refilled.names, .result = result },
-                                  length);
+        return result;
     }
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
     envelope->source = admission->source;
@@ -280,7 +309,6 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
     envelope->send_id = admission->send_id;
     envelope->invoke_instance = admission->invoke;
     envelope->source_seq = admission->correlation;
-    envelope->text = writer.chain;
     ta_envelope_pool_enqueue(&system->run.pool, index);
     *out = index;
     return TA_OK;
@@ -346,22 +374,61 @@ ta_result ta_run_admit_report(ta_system *system, const ta_run_report *report) {
     return TA_OK;
 }
 
-ta_result ta_run_wake_reserve(ta_system *system, bool admission, uint32_t *out) {
+ta_result ta_run_wake_reserve(ta_system *system, const ta_run_wake *wake, uint32_t *out) {
     ta_run_refilled refilled = ta_run_refill(system);
-    ta_result result =
-        admission ? ta_envelope_pool_admit(&system->run.pool, out) : ta_envelope_pool_take(&system->run.pool, out);
-    return ta_run_envelope_short(&system->run.pool, (ta_run_refusal){ .refill = refilled.pool, .result = result },
-                                 admission);
+    uint32_t index = 0u;
+    ta_result result = wake->admission ? ta_envelope_pool_admit(&system->run.pool, &index)
+                                       : ta_envelope_pool_take(&system->run.pool, &index);
+    if (result != TA_OK) {
+        return ta_run_envelope_short(&system->run.pool, (ta_run_refusal){ .refill = refilled.pool, .result = result },
+                                     wake->admission);
+    }
+    bool traced = wake->trace != NULL && !ta_trace_parent_empty(wake->trace);
+    if (traced || wake->event != NULL) {
+        ta_run_record record = { .origin = { .kind = TA_ORIGIN_NONE } };
+        if (traced) {
+            record.flags |= TA_RUN_RECORD_TRACED;
+            record.trace = *wake->trace;
+        }
+        if (wake->event != NULL) {
+            record.name = wake->event->name;
+            record.origin = wake->event->origin;
+        }
+        if (wake->jump != NULL) {
+            record.flags |= TA_RUN_RECORD_JUMP;
+            record.jump = wake->jump;
+        }
+        result = ta_run_write_record(system, index, &record, refilled, wake->admission);
+        if (result != TA_OK) {
+            ta_envelope_pool_give(&system->run.pool, index);
+            return result;
+        }
+    }
+    if (wake->event != NULL) {
+        ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+        envelope->type = (uint8_t)wake->event->type;
+        envelope->send_id = wake->event->send_id;
+        envelope->invoke_instance = wake->event->invoke_id;
+        envelope->data = wake->event->data;
+    }
+    *out = index;
+    return TA_OK;
 }
 
 void ta_run_wake_place(ta_system *system, ta_actor *actor, uint32_t wake) {
     if (!actor->macrostep) {
-        ta_envelope_pool_give(&system->run.pool, wake);
+        ta_run_discard(system, wake);
         return;
     }
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, wake);
     envelope->source = TA_RECORD_INPUT_SOURCE_PLATFORM;
     envelope->target = actor->record.id;
+    if (actor->input == 0u) {
+        /* The wake that starts its macrostep: what the macrostep runs under
+         * is read from it until it is taken. */
+        actor->input = wake;
+        actor->input_flags = TA_ACTOR_INPUT_WAITING;
+    }
     if (system->run.running && system->run.current != 0u) {
         ta_envelope_pool_enqueue_beside(&system->run.pool,
                                         (ta_envelope_beside){ .beside = system->run.current, .index = wake });
@@ -371,21 +438,72 @@ void ta_run_wake_place(ta_system *system, ta_actor *actor, uint32_t wake) {
 }
 
 void ta_run_wake_cancel(ta_system *system, uint32_t wake) {
-    ta_envelope_pool_give(&system->run.pool, wake);
+    ta_run_discard(system, wake);
+}
+
+/* ------------------------------------------------------------------------
+ * A taken input
+ */
+
+ta_event ta_run_input_event_of(const ta_system *system, uint32_t input) {
+    if (input == 0u) {
+        return (ta_event){ .origin = { .kind = TA_ORIGIN_NONE } };
+    }
+    ta_run_record record = ta_run_record_of(system, input);
+    const ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, input);
+    return (ta_event){ .name = record.name,
+                       .type = (ta_event_type)envelope->type,
+                       .send_id = envelope->send_id,
+                       .origin = record.origin,
+                       .invoke_id = envelope->invoke_instance,
+                       .data = envelope->data };
+}
+
+const ta_event *ta_run_input_event(ta_system *system, uint32_t input) {
+    if (input == 0u) {
+        return NULL;
+    }
+    if (system->run.event_input != input) {
+        system->run.event = ta_run_input_event_of(system, input);
+        system->run.event_input = input;
+    }
+    return &system->run.event;
+}
+
+const struct ta_operator_jump *ta_run_input_jump(const ta_system *system, uint32_t input) {
+    return input == 0u ? NULL : ta_run_record_of(system, input).jump;
+}
+
+/* The trace parent envelope `index`'s text holds, all zero for none. */
+static ta_trace_parent ta_run_trace_of(const ta_system *system, uint32_t index) {
+    ta_run_record record = ta_run_record_of(system, index);
+    return (record.flags & TA_RUN_RECORD_TRACED) != 0u ? record.trace : (ta_trace_parent){ 0 };
+}
+
+ta_trace_parent ta_run_session_trace(const ta_system *system, const ta_actor *actor) {
+    return actor->input == 0u ? (ta_trace_parent){ 0 } : ta_run_trace_of(system, actor->input);
+}
+
+ta_time ta_run_macrostep_time(const ta_system *system, const ta_actor *actor) {
+    if (actor->macrostep && actor->input != 0u && (actor->input_flags & TA_ACTOR_INPUT_WAITING) == 0u) {
+        return ta_envelope_pool_at(&system->run.pool, actor->input)->due;
+    }
+    return ta_actor_now(system, actor);
 }
 
 /* ------------------------------------------------------------------------
  * Sessions
  */
 
-/* The input `actor` has taken, or 0. */
-static uint32_t ta_run_input_of(const ta_actor *actor) {
-    return actor->event_block == NULL ? 0u : actor->event_block->slots.input;
-}
-
 /* Whether envelope `index` is the taken input of its session, queued again. */
 static bool ta_run_is_taken_input(const ta_actor *actor, uint32_t index) {
-    return actor != NULL && ta_run_input_of(actor) == index;
+    return actor != NULL && actor->input == index && (actor->input_flags & TA_ACTOR_INPUT_WAITING) == 0u;
+}
+
+/* `actor` names no input any more. */
+static void ta_run_forget_input(ta_actor *actor) {
+    actor->input = 0u;
+    actor->input_flags = 0u;
 }
 
 /* Returns the first of `actor`'s deferred envelopes to the run queue, or all of them. */
@@ -403,9 +521,18 @@ static void ta_run_return_deferred(ta_system *system, ta_actor *actor, bool all)
     }
 }
 
-/* Gives back the taken input `index` of `actor`, wherever it is, and
- * forgets it; 0 is none. */
-static void ta_run_drop_input(ta_system *system, ta_actor *actor, uint32_t index) {
+/* Releases and gives back `actor`'s taken input, wherever it is, and
+ * forgets it; nothing when it has none. A wake not taken yet stays queued,
+ * so this never walks the run queue for it: what it holds (an event's
+ * data, origin and operator transition, its text) is released at once,
+ * and the bare wake is dropped when it is reached. */
+static void ta_run_drop_input(ta_system *system, ta_actor *actor) {
+    uint32_t index = actor->input;
+    if ((actor->input_flags & TA_ACTOR_INPUT_WAITING) != 0u) {
+        ta_run_strip(system, index);
+        ta_run_forget_input(actor);
+        return;
+    }
     if (index == 0u) {
         return;
     }
@@ -416,23 +543,17 @@ static void ta_run_drop_input(ta_system *system, ta_actor *actor, uint32_t index
          * queue; stopped, it is on no list. */
         (void)ta_envelope_pool_unqueue(&system->run.pool, index);
     }
-    ta_envelope_pool_give(&system->run.pool, index);
-    if (actor->event_block != NULL && actor->event_block->slots.input == index) {
-        ta_event_slots *slots = &actor->event_block->slots;
-        slots->input = 0u;
-        slots->stopped = false;
-        slots->runaway = false;
-        slots->unlimited = false;
-    }
+    ta_run_discard(system, index);
+    ta_run_forget_input(actor);
 }
 
 void ta_run_session_gone(ta_system *system, ta_actor *actor) {
-    ta_run_drop_input(system, actor, ta_run_input_of(actor));
+    ta_run_drop_input(system, actor);
     ta_run_return_deferred(system, actor, true);
 }
 
-void ta_run_input_dropped(ta_system *system, ta_actor *actor, uint32_t input) {
-    ta_run_drop_input(system, actor, input);
+void ta_run_input_dropped(ta_system *system, ta_actor *actor) {
+    ta_run_drop_input(system, actor);
     ta_run_return_deferred(system, actor, false);
 }
 
@@ -508,11 +629,11 @@ static bool ta_run_waiting(const ta_run_call *call) {
 }
 
 /*
- * Binds an external event to `actor`, idle: its event moves into the event
- * block as the waiting external event (ADR 0069), with its operator
- * transition, trace parent and time. TA_ERR_INVALID when the operator
- * transition no longer applies; TA_ERR_NOMEM when the block cannot be had,
- * changing nothing.
+ * Binds an external event to `actor`, idle: it becomes the waiting external
+ * event (ADR 0069), read from its envelope, with its operator transition,
+ * trace parent and time. TA_ERR_INVALID when the operator transition no
+ * longer applies; TA_ERR_NOMEM, changing nothing, when an invoked session
+ * cannot have the storage its kept event needs.
  */
 static ta_result ta_run_bind_event(ta_system *system, ta_actor *actor, uint32_t index) {
     ta_run_record record = ta_run_record_of(system, index);
@@ -521,26 +642,13 @@ static ta_result ta_run_bind_event(ta_system *system, ta_actor *actor, uint32_t 
          (record.jump->source != TA_STATE_NONE && !ta_actor_state_active(actor, record.jump->source)))) {
         return TA_ERR_INVALID;
     }
-    ta_result result = ta_interpreter_hold_block(system, actor);
+    ta_result result = ta_interpreter_keep_room(system, actor);
     if (result != TA_OK) {
         return result;
     }
-    ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
     /* Admission checked the time against every input admitted before it. */
     ta_actor_move_clock(actor, record.time);
-    ta_event_slots *slots = &actor->event_block->slots;
-    /* The envelope's references move into the slot. */
-    slots->external_event = (ta_event){ .name = record.name,
-                                        .type = (ta_event_type)envelope->type,
-                                        .send_id = envelope->send_id,
-                                        .origin = record.origin,
-                                        .invoke_id = envelope->invoke_instance,
-                                        .data = envelope->data };
-    slots->external = TA_EXTERNAL_WAITING;
-    slots->jump = record.jump;
-    slots->trace = (record.flags & TA_RUN_RECORD_TRACED) != 0u ? record.trace : (ta_trace_parent){ 0 };
-    envelope->data = (ta_value){ 0 };
-    ta_name_area_free(&system->run.names, &envelope->text);
+    actor->external = TA_EXTERNAL_WAITING;
     actor->macrostep = true;
     ta_actor_touch(actor);
     actor->record.residency = TA_ACTOR_RUNNING;
@@ -550,41 +658,37 @@ static ta_result ta_run_bind_event(ta_system *system, ta_actor *actor, uint32_t 
 /*
  * Binds an error report to `actor`, idle: its event joins the internal
  * queue, the invocation retires when the report ends it, and a macrostep
- * starts under its trace parent (ADR 0081). TA_ERR_NOT_FOUND when the
- * invocation ended; TA_ERR_NOMEM, changing nothing, when there is no room.
+ * starts under its trace parent (ADR 0081), which stays in its envelope.
+ * TA_ERR_NOT_FOUND when the invocation ended; TA_ERR_NOMEM, changing
+ * nothing, when there is no room.
  */
 static ta_result ta_run_bind_report(ta_system *system, ta_actor *actor, uint32_t index) {
     ta_run_record record = ta_run_record_of(system, index);
-    ta_result result = ta_interpreter_hold_block(system, actor);
-    if (result != TA_OK) {
-        return result;
-    }
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
     ta_trace_parent trace = (record.flags & TA_RUN_RECORD_TRACED) != 0u ? record.trace : (ta_trace_parent){ 0 };
-    result = ta_invoke_take_report(system, actor, &(ta_invoke_report_take){
-                                                      .invoke = envelope->invoke_instance,
-                                                      .name = record.name,
-                                                      .data = &envelope->data,
-                                                      .ends = (record.flags & TA_RUN_RECORD_ENDS) != 0u,
-                                                      .trace = &trace,
-                                                  });
+    ta_result result = ta_invoke_take_report(system, actor, &(ta_invoke_report_take){
+                                                                .invoke = envelope->invoke_instance,
+                                                                .name = record.name,
+                                                                .data = &envelope->data,
+                                                                .ends = (record.flags & TA_RUN_RECORD_ENDS) != 0u,
+                                                                .trace = &trace,
+                                                            });
     if (result != TA_OK) {
         return result;
     }
     ta_actor_move_clock(actor, record.time);
-    ta_name_area_free(&system->run.names, &envelope->text);
     return TA_OK;
 }
 
 /* Takes envelope `index` as `actor`'s input: it becomes the input the
- * session's macrostep runs, until it ends. */
+ * session's macrostep runs, until it completes, and its `due` the
+ * macrostep's logical time (ADR 0089 section 9). */
 static void ta_run_hold_input(ta_system *system, ta_actor *actor, uint32_t index) {
-    ta_envelope_pool_at(&system->run.pool, index)->state = TA_ENVELOPE_TAKEN;
-    ta_event_slots *slots = &actor->event_block->slots;
-    slots->input = index;
-    slots->stopped = false;
-    slots->runaway = false;
-    slots->unlimited = false;
+    ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    envelope->state = TA_ENVELOPE_TAKEN;
+    envelope->due = ta_actor_now(system, actor);
+    actor->input = index;
+    actor->input_flags = 0u;
 }
 
 /* Puts the input that could not be bound back at the head: it is taken first next time. */
@@ -612,13 +716,9 @@ static void ta_run_complete(ta_run_call *call, ta_actor *actor, ta_run_ended end
     if (system->run.slot == index) {
         system->run.slot = 0u;
     }
-    ta_envelope_pool_give(&system->run.pool, index);
-    if (actor->event_block != NULL && actor->event_block->slots.input == index) {
-        ta_event_slots *slots = &actor->event_block->slots;
-        slots->input = 0u;
-        slots->stopped = false;
-        slots->runaway = false;
-        slots->unlimited = false;
+    ta_run_discard(system, index);
+    if (actor->input == index) {
+        ta_run_forget_input(actor);
     }
     ta_run_return_deferred(system, actor, actor->finished);
 }
@@ -635,7 +735,7 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
         .budget = call->budget,
         .action_budget = limited ? call->actions : 0u,
         .pause_at_microstep_start = call->params->pause_at_microstep_start,
-        .unlimited = actor->event_block->slots.unlimited,
+        .unlimited = (actor->input_flags & TA_ACTOR_INPUT_UNLIMITED) != 0u,
     };
     system->run.running = true;
     system->run.current = index;
@@ -652,10 +752,8 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
         if (system->run.slot == index) {
             system->run.slot = 0u;
         }
-        ta_event_slots *slots = &actor->event_block->slots;
-        slots->stopped = true;
-        slots->runaway = result == TA_ERR_RUNAWAY;
-        slots->unlimited = false;
+        actor->input_flags = (uint8_t)((actor->input_flags & TA_ACTOR_INPUT_IGNORED) | TA_ACTOR_INPUT_STOPPED |
+                                       (result == TA_ERR_RUNAWAY ? TA_ACTOR_INPUT_RUNAWAY : 0u));
         return;
     }
     if (result != TA_OK) {
@@ -705,14 +803,11 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
         return TA_OK;
     }
     if (wake) {
-        if (!actor->macrostep || ta_run_input_of(actor) != 0u) {
-            /* Its macrostep began or ended already. */
-            ta_envelope_pool_give(&system->run.pool, index);
+        if (!actor->macrostep || actor->input != index) {
+            /* Not the wake that starts its macrostep, which began or ended
+             * already, or waits for another wake. */
+            ta_run_discard(system, index);
             return TA_OK;
-        }
-        ta_result result = ta_interpreter_hold_block(system, actor);
-        if (result != TA_OK) {
-            return ta_run_put_back(call, index, result);
         }
     } else if (actor->finished && !actor->macrostep) {
         ta_run_refuse(call, index, TA_ERR_DONE);
@@ -824,14 +919,13 @@ ta_result ta_actor_release(ta_system *system, ta_actor_id id) {
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    if (actor->event_block == NULL || !actor->event_block->slots.stopped) {
+    if ((actor->input_flags & TA_ACTOR_INPUT_STOPPED) == 0u) {
         return TA_ERR_INVALID;
     }
-    ta_event_slots *slots = &actor->event_block->slots;
-    slots->stopped = false;
-    slots->unlimited = slots->runaway;
-    slots->runaway = false;
-    ta_envelope_pool_enqueue(&system->run.pool, slots->input);
+    bool runaway = (actor->input_flags & TA_ACTOR_INPUT_RUNAWAY) != 0u;
+    actor->input_flags = (uint8_t)((actor->input_flags & TA_ACTOR_INPUT_IGNORED) |
+                                   (runaway ? TA_ACTOR_INPUT_UNLIMITED : 0u));
+    ta_envelope_pool_enqueue(&system->run.pool, actor->input);
     return TA_OK;
 }
 

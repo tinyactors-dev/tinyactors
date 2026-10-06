@@ -59,8 +59,12 @@
  *    from inside a ta_run() with TA_ERR_BUSY, running nothing;
  * 12. running out of memory: a refill that fails leaves admission what is
  *    free, and once nothing is free admission answers TA_ERR_NOMEM, not
- *    TA_ERR_FULL, far below the watermark; a run that cannot take the next
- *    input answers TA_ERR_NOMEM and the input waits at the head, taken by
+ *    TA_ERR_FULL, far below the watermark; taking an event allocates
+ *    nothing, so a run takes and runs admitted events with the allocator
+ *    refusing everything; a run that cannot take the next input (a
+ *    report whose event finds no room in its session's internal queue,
+ *    while another session's paused macrostep holds the system's spare
+ *    queue) answers TA_ERR_NOMEM and the input waits at the head, taken by
  *    the next run; nothing leaks.
  */
 #include "../include/tinyactors.c"
@@ -807,8 +811,7 @@ static void test_bad_calls(void) {
 
 /* Claim 12. */
 static void test_out_of_memory(void) {
-    ta_param_value no_cache[] = { { TA_PARAM_EVENT_BLOCK_CACHE, 0 } };
-    fixture f = open_with(no_cache, 1);
+    fixture f = open_default();
     ta_actor_id s = spawn(&f, f.sequence);
     CHECK(run_all(&f) == TA_OK);
     /* No allocation at all: admission takes what is free. */
@@ -825,13 +828,36 @@ static void test_out_of_memory(void) {
     for (uint64_t correlation = 3u; correlation < extra; correlation += 1u) {
         CHECK(ta_system_withdraw_input(f.system, correlation) == TA_OK);
     }
-    /* Taking needs an event block, which cannot be had. */
-    CHECK(run_all(&f) == TA_ERR_NOMEM);
-    CHECK(f.count == 0 && f.status == TA_RUN_MORE && in_state(&f, s, "s0"));
-    heap.policy.refuse = false;
+    /* Taking an event allocates nothing: its event stays in its envelope. */
     CHECK(run_all(&f) == TA_OK && f.count == 2);
     CHECK(outcome_is(&f, 0, TA_INPUT_COMPLETED, s, 1) && outcome_is(&f, 1, TA_INPUT_COMPLETED, s, 2));
     CHECK(in_state(&f, s, "s2"));
+    heap.policy.refuse = false;
+    close_fixture(&f);
+
+    /* A report's event needs room in its session's internal queue. While
+     * another session's paused macrostep holds the system's spare queue,
+     * that room is allocated: without it the run takes nothing, and the
+     * report waits at the head. */
+    f = open_default();
+    ta_atom type = 0;
+    CHECK(ta_system_intern_atom(f.system, STR("svc"), &type) == TA_OK);
+    CHECK(ta_system_register_invoker(f.system, type, (ta_invoker){ .v = &svc_vtable }) == TA_OK);
+    ta_actor_id actor = spawn(&f, define(f.system, &invoking));
+    ta_actor_id c = spawn(&f, f.chain);
+    CHECK(run_all(&f) == TA_OK);
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(f.system, actor, &view) == TA_OK && view.invoke_count == 1);
+    CHECK(deliver(&f, c, "long", 1) == TA_OK);
+    CHECK(run_with(&f, (run_limits){ .session = c, .budget = 2 }) == TA_OK && f.status == TA_RUN_PAUSED);
+    CHECK(report(&f, actor, view.invokes[0].id, 2) == TA_OK);
+    heap.policy.refuse = true;
+    CHECK(run_with(&f, (run_limits){ .session = actor }) == TA_ERR_NOMEM);
+    CHECK(f.count == 0 && f.status == TA_RUN_MORE && !in_state(&f, actor, "failed"));
+    heap.policy.refuse = false;
+    CHECK(run_with(&f, (run_limits){ .session = actor }) == TA_OK && f.count == 1);
+    CHECK(outcome_is(&f, 0, TA_INPUT_COMPLETED, actor, 2) && in_state(&f, actor, "failed"));
+    CHECK(run_all(&f) == TA_OK && f.count == 1 && outcome_is(&f, 0, TA_INPUT_COMPLETED, c, 1));
     close_fixture(&f);
     CHECK(test_allocator_finish(&heap) == 0);
 }

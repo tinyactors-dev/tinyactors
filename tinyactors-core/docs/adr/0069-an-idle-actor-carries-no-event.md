@@ -1,6 +1,6 @@
 # ADR 0069: An idle actor carries no event
 
-**Status:** Accepted and implemented; refines ADR 0038, ADR 0047, ADR 0055, ADR 0064 and ADR 0067 (section 8). See the implementation notes for where the code differs from the text.; refined by ADR 0070 (a failed selection gives its event back; the queue grows per unit of content)
+**Status:** Accepted and implemented; refines ADR 0038, ADR 0047, ADR 0055, ADR 0064 and ADR 0067 (section 8). See the implementation notes for where the code differs from the text.; refined by ADR 0070 (a failed selection gives its event back; the queue grows per unit of content); refined by ADR 0099 (the taken event stays in its envelope; there are no event blocks)
 **Date:** 2026-09-24
 
 ## Context

@@ -10,9 +10,11 @@
  * budget is spent, it pauses, or it runs out of memory. Between calls the
  * actor holds everything (its configuration, history, internal queue and
  * events); a run that stops inside a phase leaves the rest in a
- * continuation (`continuation.h`). The unit also keeps the actor's event
- * block and internal queue, send IDs as text, and the system's spare
- * continuation and sparse state.
+ * continuation (`continuation.h`). The unit also keeps the actor's
+ * internal queue and kept event, send IDs as text, and the system's spare
+ * continuation, sparse state and internal queue. The external event a macrostep takes is
+ * not copied: it stays in the input's envelope (`run.h`), and `_event`
+ * reads it from there.
  *
  * ## Scratch
  *
@@ -32,7 +34,7 @@
  * ## Memory
  *
  * The interpreter owns nothing between calls: scratch is reset when a call
- * starts. What a run allocates (event blocks, a sparse state, a
+ * starts. What a run allocates (an internal queue, a sparse state, a
  * continuation, room for delayed sends and internal events) it reserves
  * before the step that needs it, so a step that runs out of memory has
  * had no effect that doing it again would repeat (ADR 0047, ADR 0070).
@@ -167,8 +169,6 @@ typedef struct {
     bool ended_ignored;
 } ta_interpreter;
 
-ta_time ta_interpreter_macrostep_time(const ta_system *system, const ta_actor *actor);
-
 /** How one run of a session's macrostep ended (`ta_interpreter_run`). */
 typedef enum {
     /** The macrostep ended with the session stable. */
@@ -255,17 +255,18 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
 ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *out);
 /* The fault of a temporary that does not fit the render area (ADR 0092). */
 void ta_interpreter_render_fault(ta_fault *fault);
-/* Frees cached event blocks until the cache holds no more than its limit
- * (ADR 0069); a limit of 0 frees them all, at teardown. */
-void ta_interpreter_block_cache_trim(ta_system *system);
 /* Frees the continuation and sparse state the system keeps for a run that
- * stops (ADR 0070), at teardown. */
+ * stops (ADR 0070), and its spare internal queue, at teardown. */
 void ta_interpreter_release_spares(ta_system *system);
-/* Lends the actor an event block if it holds none: a cached one, else a
- * header only. TA_ERR_NOMEM changes nothing (ADR 0069). */
-ta_result ta_interpreter_hold_block(ta_system *system, ta_actor *actor);
-/* The bytes an event block with room for this many internal events takes. */
-size_t ta_event_block_bytes(uint32_t capacity);
+/*
+ * Makes sure an invoked session has the internal queue its kept event
+ * lives in, so that keeping the external event when its macrostep ends
+ * never allocates (SCXML 6.4); any other session needs none. Called when
+ * an input is taken, between inputs. TA_ERR_NOMEM changes nothing.
+ */
+ta_result ta_interpreter_keep_room(ta_system *system, ta_actor *actor);
+/* The bytes an internal queue with room for this many events takes. */
+size_t ta_internal_queue_bytes(uint32_t capacity);
 
 /* Send IDs as text: literal IDs are their author's text; generated ones round-trip. */
 void ta_send_id_write(const ta_system *system, ta_send_id id, ta_text_writer *writer);
@@ -310,8 +311,6 @@ void ta_interpreter_trace_forward(ta_interpreter *it, ta_invoke_id invoke, const
 /* What a step running now passes to what it produces: the macrostep's
  * context, and the step's own key as the cause (ADR 0067 section 6). */
 ta_trace_parent ta_interpreter_trace_here(const ta_interpreter *it);
-/* The parent the actor's current macrostep runs under; all zero for none. */
-ta_trace_parent ta_actor_macrostep_parent(const ta_actor *actor);
 /* The key of the step the actor stands in: its macrostep and microstep
  * while a macrostep has begun, the session alone otherwise (ADR 0067). */
 ta_step_key ta_actor_step(const ta_actor *actor);
@@ -327,10 +326,10 @@ void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_
                                    const ta_trace_parent *parent);
 /*
  * Makes an idle actor run a macrostep for work queued outside any run, such
- * as a failed send's error, under `trace` (null: none). An actor already in
- * a macrostep is left alone.
+ * as a failed send's error. What it runs under is in the wake the caller
+ * reserved for it (run.h). An actor already in a macrostep is left alone.
  */
-void ta_interpreter_start_macrostep(ta_actor *actor, const ta_trace_parent *trace);
+void ta_interpreter_start_macrostep(ta_actor *actor);
 bool ta_interpreter_internal_pending(const ta_actor *actor);
 
 /* ------------------------------------------------------------------------

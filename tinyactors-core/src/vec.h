@@ -51,8 +51,8 @@
  * The atom table, the event-name trie, the page directories of addresses,
  * sessions, I/O origins, timers and index pools (the actor table's), an
  * actor's activation effects and pending invokes, the system's
- * definitions and registrations, the builder's state lists and the
- * compiler's frames (ADR 0060), the internal queue (ADR 0064), and the
+ * definitions and registrations, the builder's state lists, the
+ * compiler's frames and the interpreter's exit frames (ADR 0060), and the
  * session image.
  */
 #pragma once

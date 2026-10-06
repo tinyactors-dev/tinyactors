@@ -7,9 +7,11 @@
  * record (runtime ID, definition, self reference, residency), its session
  * storage (configuration, late-binding bits, history), its data-model
  * instance, and the state it needs only sometimes. The unit also holds the
- * system's actor table, which maps a runtime ID to its actor, the event
- * slots and event block an actor holds its events in, and the operator
- * transition a delivered event may carry (ADR 0082).
+ * system's actor table, which maps a runtime ID to its actor, the internal
+ * queue an actor holds its internal and kept events in, and the operator
+ * transition a delivered event may carry (ADR 0082). An actor's external
+ * event is not here: it stays in the pool envelope of the input the actor
+ * took (`run.h`), which the actor names by index.
  *
  * ## Contract and invariants
  *
@@ -42,8 +44,13 @@
  *   pool's free list gives exactly that order. `ta_actor_table_issued`
  *   bounds a walk over the table.
  * - **An operator transition** is one allocation: its header, then its
- *   targets (`ta_operator_jump_bytes`). The event block owns it from
- *   delivery until the macrostep that takes the event frees it.
+ *   targets (`ta_operator_jump_bytes`). The input's envelope owns it from
+ *   delivery until the input completes.
+ * - **The input.** While a macrostep runs, waits or is stopped, `input`
+ *   names its taken envelope, by index, never by address; before the
+ *   macrostep begins, the wake queued to start it. `external`,
+ *   `bound`, `bound_before` and `input_flags` describe that input's events
+ *   and fill padding, so an actor costs no more for them.
  * - Each semantic mutation advances the session epoch
  *   (`ta_actor_touch`); a session image records the epoch it was taken
  *   at, and unloading refuses an older one (ADR 0014).
@@ -54,16 +61,18 @@
  * `ta_actor_new` allocates the block, and refills the table's pool by one
  * page when no slot is free, at the point where it allocates the block;
  * `ta_actor_free` releases what the actor holds (its sparse state, its
- * event block, its session entry, the input it took and the inputs
+ * internal queue, its session entry, the input it took and the inputs
  * deferred for it, which go back to the run queue) and frees the block.
- * An actor's deferred list and the input its event block names are pool
- * envelopes (`envelope.h`): the actor owns neither, only the indices.
- * The definition outlives each of its actors: it counts them in
- * `actor_count`. The event block is lent to an actor from delivery or its
- * first internal event until its macrostep ends (ADR 0064, ADR 0069).
- * `ta_actor_layout` and `ta_operator_jump_bytes` never allocate. Making an
- * actor, delivering to it and storing its delayed sends allocate, outside
- * a macrostep or into room reserved before it (ADR 0070).
+ * An actor's deferred list and its input are pool envelopes
+ * (`envelope.h`): the actor owns neither, only the indices. The definition
+ * outlives each of its actors: it counts them in `actor_count`. The
+ * internal queue is the actor's from its first internal event until its
+ * macrostep ends with nothing queued or kept (ADR 0069); then it becomes
+ * the system's spare, which the next macrostep takes.
+ * `ta_actor_layout`, `ta_operator_jump_bytes` and the event accessors
+ * never allocate. Making an actor, delivering to it and storing its
+ * delayed sends allocate, outside a macrostep or into room reserved before
+ * it (ADR 0070).
  *
  * ## Complexity
  *
@@ -81,8 +90,9 @@
  *
  * ## Users
  *
- * The system (spawn, delivery, unload and load), the interpreter, session
- * images and invocations. ADRs 0014, 0063, 0064, 0066, 0069, 0070, 0082.
+ * The system (spawn, delivery, unload and load), the run, the interpreter,
+ * session images and invocations. ADRs 0014, 0063, 0066, 0069, 0070, 0082,
+ * 0099.
  */
 #pragma once
 
@@ -142,22 +152,36 @@ typedef struct ta_activation_effects {
 /* Where an actor's external event is (ADR 0069). */
 typedef enum {
     TA_EXTERNAL_NONE = 0,
-    TA_EXTERNAL_WAITING, /* delivered, behind any internal events */
-    TA_EXTERNAL_TAKEN    /* taken by the running macrostep, kept until it ends */
+    TA_EXTERNAL_WAITING, /* in its taken input, behind any internal events */
+    TA_EXTERNAL_TAKEN    /* taken by the running macrostep, until the macrostep ends */
 } ta_external_state;
 
 /* What `_event` names (ADR 0069). */
 typedef enum {
     TA_BOUND_NONE = 0,
-    TA_BOUND_EXTERNAL, /* the external event */
+    TA_BOUND_EXTERNAL, /* the external event, in the taken input's envelope */
     TA_BOUND_INTERNAL, /* the head of the internal queue, which stays queued while bound */
     TA_BOUND_KEPT      /* the kept event */
 } ta_event_binding;
 
+/* `ta_actor.input_flags`: what happened to the input its macrostep runs. */
+/* Its external event enabled no transition (ADR 0089 section 8); read when
+ * the macrostep ends, cleared with the event. */
+#define TA_ACTOR_INPUT_IGNORED ((uint8_t)0x01u)
+/* A fault stopped the macrostep: it waits for ta_actor_release(). */
+#define TA_ACTOR_INPUT_STOPPED ((uint8_t)0x02u)
+/* The fault was the microstep limit (ADR 0075). */
+#define TA_ACTOR_INPUT_RUNAWAY ((uint8_t)0x04u)
+/* Released after a runaway: the rest of the macrostep runs without the
+ * microstep limit. */
+#define TA_ACTOR_INPUT_UNLIMITED ((uint8_t)0x08u)
+/* `input` is the wake queued to start the macrostep, not taken yet. */
+#define TA_ACTOR_INPUT_WAITING ((uint8_t)0x10u)
+
 /*
  * An operator transition delivered with the external event (ADR 0082), in
- * one allocation the event block owns until the macrostep takes the event.
- * Its targets are checked when it is delivered, against the configuration
+ * one allocation the input's envelope owns until the input completes. Its
+ * targets are checked when the input is taken, against the configuration
  * it will run from: the event it came with is the first step taken.
  */
 typedef struct ta_operator_jump {
@@ -176,72 +200,27 @@ typedef struct ta_operator_jump {
 ta_result ta_operator_jump_bytes(uint32_t count, size_t *out);
 
 /*
- * An actor's events other than its queued internal ones (ADR 0069). Taking
- * an event does not move it: `bound` names where it is. An event leaves
- * only when `_event` moves on, and it moves into `kept_event` when
- * something may still read it:
+ * An actor's internal queue (ADR 0069): its internal events, oldest first,
+ * with the queue's capacity, and its kept event, in one allocation the
+ * actor owns. An event leaves the queue only when `_event` moves on, and
+ * it moves into `kept_event` when something may still read it:
  * - a taken queue head, when the next event is taken, so that a retry can
- *   bind it again;
+ *   bind it again (ADR 0047);
  * - the last event of an invoked session, when its macrostep ends, so that
  *   the session's <onexit> sees it if the parent cancels it (SCXML 6.4).
+ * The actor takes one with its first internal event, or, for an invoked
+ * session, when it takes an input: the system's spare when there is one,
+ * else a new one. It gives it up when its macrostep ends with the queue
+ * empty and no event kept, to be the system's spare or freed. An idle actor
+ * that nobody invoked holds none.
  */
-typedef struct {
-    uint8_t external;     /* ta_external_state */
-    uint8_t bound;        /* ta_event_binding */
-    uint8_t bound_before; /* what `bound` was before the last take, for a retry (ADR 0047) */
-    bool has_kept;
-    /* The external event enabled no transition (ADR 0089 section 8); read
-     * when its macrostep ends, cleared with the event. Fills padding. */
-    bool external_ignored;
-    /* `time` holds the running macrostep's logical time (ADR 0089 section
-     * 9), taken by the macrostep's first run. */
-    bool timed;
-    ta_time time;
-    /* The external event of the running macrostep. Inspection reports it
-     * while the macrostep runs (ADR 0047). */
-    ta_event external_event;
-    ta_event kept_event;
-    /* The operator transition that takes the waiting external event, or
-     * null (ADR 0082). */
-    ta_operator_jump *jump;
-    /*
-     * What the running macrostep runs under (ADR 0067): its delivery's, its
-     * spawn's, or the failed send's that queued its first event. Set when a
-     * macrostep starts, and kept while it runs, so a block that holds only a
-     * parent stays with its actor until the macrostep ends.
-     */
-    ta_trace_parent trace;
-    /*
-     * The pool envelope of the input this macrostep runs (run.h): taken
-     * from the run queue when the macrostep began, and given back when it
-     * ends; 0 while no input is taken.
-     */
-    uint32_t input;
-    /* A fault stopped the macrostep: it waits for ta_actor_release(). */
-    bool stopped;
-    /* The fault was the microstep limit (ADR 0075). */
-    bool runaway;
-    /* Released after a runaway: the rest of this macrostep runs without
-     * the microstep limit. */
-    bool unlimited;
-} ta_event_slots;
-
-/*
- * An actor's event block (ADR 0064, ADR 0069): its events and its internal
- * queue, oldest first, with the queue's capacity, in one allocation. It is
- * lent to an actor from ta_actor_deliver(), or the first internal event,
- * until the macrostep ends; an actor keeps it longer only while events are
- * queued, a microstep is paused, or it keeps an event. An idle actor that
- * nobody invoked holds none, so it carries no event.
- */
-typedef struct ta_event_block {
+typedef struct ta_internal_queue {
     uint32_t count;
-    uint32_t capacity; /* 0 for a header only, which grows with the first internal event */
-    /* While the block is in the system's cache, the next cached block. */
-    struct ta_event_block *next_cached;
-    ta_event_slots slots;
+    uint32_t capacity;
+    bool has_kept;
+    ta_event kept_event;
     ta_queued_event events[];
-} ta_event_block;
+} ta_internal_queue;
 
 /* Allocated only for actors that use one of these uncommon facilities. */
 typedef struct {
@@ -278,9 +257,22 @@ struct ta_actor {
     uint64_t *late_initialized;
     void *datamodel_instance;
     bool datamodel_initialized;
+    /* Where its input's external event is (ta_external_state), what
+     * `_event` names (ta_event_binding), and what it named before the last
+     * take, for a retry (ADR 0047). They fill padding. */
+    uint8_t external;
+    uint8_t bound;
+    uint8_t bound_before;
+    /* The pool envelope of the input its macrostep runs (run.h): taken from
+     * the run queue when the macrostep began, and given back when its input
+     * completes; with TA_ACTOR_INPUT_WAITING, the wake queued to start a
+     * macrostep that has not begun; 0 for none. The external event, its
+     * operator transition, the macrostep's trace parent and its logical
+     * time are read from it. */
+    uint32_t input;
     ta_actor_sparse_state *sparse;
-    /* Its event block (ADR 0064), or null. */
-    ta_event_block *event_block;
+    /* Its internal queue and kept event, or null. */
+    ta_internal_queue *internal;
     /* Its inputs that ta_run() reached while it was in a macrostep, in
      * arrival order, linked through the pool's envelopes (run.h). */
     ta_list deferred;
@@ -291,6 +283,8 @@ struct ta_actor {
     ta_session_node *session_node;
     uint64_t session_epoch;
     bool published;
+    /* TA_ACTOR_INPUT_*; fills padding. */
+    uint8_t input_flags;
     /* Lifecycle records written for this session, from 1 (ADR 0067; napi
      * ADR 0016): a lifecycle record's key is (session, 0, this count), so
      * each has its own span ID. Sits in the padding after `published`. */
@@ -400,11 +394,14 @@ void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 ta_result ta_actor_directory_swap(ta_system *system, const ta_actor_directory_replace_params *params);
 ta_result ta_actor_directory_drop(ta_system *system, const ta_actor_directory_remove_params *params);
 
-/* The external event the actor holds, waiting or taken, or null. */
-const ta_event *ta_actor_external_event(const ta_actor *actor);
+/* The external event of the actor's input, waiting or taken, or null: read
+ * from the input's envelope (run.h). The pointer is valid until the next
+ * call that reads another input's event, or the input completes. */
+const ta_event *ta_actor_external_event(ta_system *system, const ta_actor *actor);
 /* The event `_event` names, or null (ADR 0069). The pointer is valid until
- * the actor's event block grows or the event is released. */
-const ta_event *ta_actor_bound_event(const ta_actor *actor);
+ * the internal queue grows, the event is released, or, for the external
+ * event, as ta_actor_external_event says. */
+const ta_event *ta_actor_bound_event(ta_system *system, const ta_actor *actor);
 /* Internal events waiting to be taken: the queue without a taken head. */
 uint32_t ta_actor_waiting_internal(const ta_actor *actor);
 

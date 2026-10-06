@@ -229,6 +229,13 @@ What the comparison is and isn't:
 
 ## 2026-09-24: an idle actor carries no event (core ADR 0069)
 
+> **Note (2026-10-06):** core has no event blocks and no block cache any
+> more (core ADR 0099): a delivered event waits in an envelope of core's
+> pool, and the taken event stays in it until its input completes. The
+> addon no longer sizes a cache, and the bench, now
+> `test/bench/delivered_events.js`, measures idle and delivered bytes and
+> throughput only. The figures below are those of 2026-09-24.
+
 Core moved an actor's events into the event block it lends a running
 actor, so an idle actor holds no event. The addon sizes core's block
 cache to `messageBudget`. `TAT_SCALE_MAX_POPULATION=1000000 node
@@ -245,7 +252,7 @@ test/scale.js`, same machine, before (`0a37619`) and after:
 Every ratio stayed within its bound, and the times per operation did not
 move beyond run-to-run noise.
 
-`test/bench/event_blocks.js` (200,000 actors) measures the rest:
+The bench (then `test/bench/event_blocks.js`, 200,000 actors) measured the rest:
 - core bytes per idle actor: 464 before, 256 after;
 - while every actor holds a delivered event it has not taken: 152 more
   bytes per actor, a header-only block;

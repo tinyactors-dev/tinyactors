@@ -23,8 +23,8 @@ delivered event that carries one is taken as the first step of its
 macrostep, before eventless transitions and before internal events queued
 since the delivery, and without `<finalize>` or autoforwarding. No
 selection runs: `enabled` holds the mark `TA_ENABLED_OPERATOR`, and the
-transition's source and targets are read from the event block's copy while
-the microstep begins. From there it is an ordinary microstep: exit set,
+transition's source and targets are read from the copy its input's envelope
+holds while the microstep begins. From there it is an ordinary microstep: exit set,
 history, `<onexit>`, entry set, `<onentry>`, defaults, `done.state`, and
 invocations when the macrostep ends. A transition's targets are read as a
 `ta_state_list`, which a definition's span and an operator transition both

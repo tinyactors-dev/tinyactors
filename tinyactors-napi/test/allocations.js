@@ -162,7 +162,8 @@ async function tracedSteadyState() {
             `sampled out: the first round made ${extra} more allocator calls than untraced for ${ACTORS} messages`);
 }
 
-// Native bytes after spawning `count` actors in one turn, with or without a sink.
+// Native bytes after spawning `count` actors in one turn, with or without a
+// sink: core's, and everything else's.
 async function nativeBytes(count, withSink) {
   const system = createSystem();
   if (withSink) {
@@ -173,21 +174,39 @@ async function nativeBytes(count, withSink) {
     system.spawn(definition);
   }
   await system.flush();
-  const bytes = system.stats().memory.total.bytesInUse;
+  const { total, core } = system.stats().memory;
   system.close();
-  return bytes;
+  return { core: core.bytesInUse, rest: total.bytesInUse - core.bytesInUse };
 }
 
 // An installed sink keeps no per-actor memory once the turn that traced a
 // burst of spawns has handed its bytes over: the encoder keeps at most 1 MiB
 // of staging capacity between turns (napi ADR 0017 implementation notes).
+// Core keeps what its pool filled for the burst (core ADR 0099): each traced
+// spawn's trace parent waits in its bootstrap's text, two 64-byte chunks of
+// the name area. Core never trims on its own: the name area keeps its pages
+// until the host asks core to give memory back, so the bound is those two
+// chunks per actor, plus the one page (64 chunks of 64 bytes) the last of
+// them and the area's reserve may only partly fill, plus the directory that
+// finds the pages: one 16-byte entry per page, in a vector that at most
+// doubles.
 async function idleSinkMemory() {
   const COUNT = 50000;
   const KEPT = 1 << 20;
   const PER_ACTOR = 16;
-  const extra = (await nativeBytes(COUNT, true)) - (await nativeBytes(COUNT, false));
+  const CORE_PER_ACTOR = 2 * 64;
+  const NAME_AREA_PAGE = 64 * 64;
+  const NAME_AREA_PAGES = Math.ceil((COUNT * CORE_PER_ACTOR) / NAME_AREA_PAGE) + 1;
+  const NAME_AREA_DIRECTORY = 2 * 16 * NAME_AREA_PAGES;
+  const traced = await nativeBytes(COUNT, true);
+  const untraced = await nativeBytes(COUNT, false);
+  const extra = traced.rest - untraced.rest;
   assert.ok(extra <= KEPT + PER_ACTOR * COUNT,
             `an idle sink kept ${extra} bytes for ${COUNT} actors, more than ${KEPT} + ${PER_ACTOR} per actor`);
+  const text = traced.core - untraced.core;
+  assert.ok(text <= CORE_PER_ACTOR * COUNT + NAME_AREA_PAGE + NAME_AREA_DIRECTORY,
+            `core kept ${text} bytes more for ${COUNT} traced spawns, more than ${CORE_PER_ACTOR} per actor, ` +
+            `one name-area page and the directory of ${NAME_AREA_PAGES} pages`);
 }
 
 (async () => {

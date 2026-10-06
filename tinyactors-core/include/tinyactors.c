@@ -209,8 +209,8 @@ TA_PRIVATE inline ta_str ta_str_from_cstr(const char *text) {
  * The atom table, the event-name trie, the page directories of addresses,
  * sessions, I/O origins, timers and index pools (the actor table's), an
  * actor's activation effects and pending invokes, the system's
- * definitions and registrations, the builder's state lists and the
- * compiler's frames (ADR 0060), the internal queue (ADR 0064), and the
+ * definitions and registrations, the builder's state lists, the
+ * compiler's frames and the interpreter's exit frames (ADR 0060), and the
  * session image.
  */
 
@@ -7899,7 +7899,8 @@ typedef struct {
     uint64_t target;
     /** The sending session's ID, or 0 for external input. */
     uint64_t from;
-    /** A timer's deadline. */
+    /** A timer's deadline; while taken, the logical time of the macrostep
+     * it runs (`run.h`). */
     ta_time due;
     /** The invocation-instance token of a child event, completion or
      * stop, or 0. */
@@ -8470,8 +8471,8 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  *
  * ## Inputs
  *
- * An input is one envelope, from its admission until the macrostep it
- * started ends. Its `source` says what it is:
+ * An input is one envelope, from its admission until it completes, when
+ * the macrostep it started ends. Its `source` says what it is:
  *
  * - **An external event** (`TA_RECORD_INPUT_SOURCE_H2C`), admitted by
  *   `ta_actor_deliver()`. The envelope holds the event's data in `data`,
@@ -8490,7 +8491,10 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  *   session with a macrostep to run that no admitted input started, its
  *   bootstrap after a spawn, a prepare, a load or a reconstruction, or work
  *   queued outside any run (a delayed send's failure, invocations retired
- *   at a load or a publish). It has no text and correlation 0. A session
+ *   at a load or a publish). It has correlation 0, and text only when its
+ *   macrostep runs under a trace parent, or when a reconstruction restores
+ *   a macrostep that holds an external event: then the field holds them as
+ *   an event's does, and the envelope holds the event's data. A session
  *   may have more than one; the ones its macrostep does not need are
  *   dropped when they are reached. The bootstrap of an invoked child,
  *   which a macrostep spawns, takes the arrival number of that
@@ -8509,14 +8513,30 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  * - an event or report for a session in a macrostep (waiting to begin,
  *   paused, or stopped by a fault) moves to that session's **deferred
  *   list**, in arrival order, and the walk goes on;
- * - otherwise it is **bound**: an event moves into the session's event
- *   block as its external event, waiting (ADR 0069), a report queues its
- *   error event, a wake takes the session's pending macrostep; the
- *   envelope becomes `TA_ENVELOPE_TAKEN`, its text and data go, and the
- *   session's event block names it as `input`.
+ * - otherwise it is **bound**: an event becomes the session's external
+ *   event, waiting (ADR 0069), a report queues its error event, and the
+ *   wake the session names takes its pending macrostep; the envelope
+ *   becomes `TA_ENVELOPE_TAKEN`, and the session names it as its taken
+ *   `input`.
+ *
+ * ## The taken envelope stays put
+ *
+ * A taken input keeps its text and its references until it completes:
+ * nothing is copied out of it. While its macrostep runs, `_event`,
+ * inspection and trace records read the external event from the envelope
+ * (`ta_run_input_event`), along with its operator transition
+ * (`ta_run_input_jump`), the trace parent the macrostep runs under
+ * (`ta_run_session_trace`), and the macrostep's logical time, which is
+ * written into the envelope's `due` when the input is taken
+ * (`ta_run_macrostep_time`). The session holds only the index. Reading the
+ * event decodes it into one `ta_event` the run state keeps, for the input
+ * read last; a pointer to it is valid until another input's event is read
+ * or the input completes, never across a refill, which happens only
+ * between inputs.
  *
  * Its macrostep then runs with what is left of the call's budgets. When
- * it ends, the input's outcome is reported, the envelope is given back,
+ * it ends, the input's outcome is reported, the envelope is released and
+ * given back,
  * and the session's first deferred envelope returns to the run queue at
  * its arrival position (all of them when the session finished, so that
  * each is refused). When a budget runs out inside it, the input stays in
@@ -8535,10 +8555,20 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  *
  * ## Invariants
  *
- * - A session has at most one taken input, the one its event block
- *   names; its envelope is in the slot, on no list while stopped or
- *   running, or on the run queue when released or paused by a filtered
- *   call.
+ * - A session has at most one taken input, the one it names as `input`;
+ *   its envelope is in the slot, on no list while stopped or running, or
+ *   on the run queue when released or paused by a filtered call. Before
+ *   its macrostep begins, a session in a macrostep names the first wake
+ *   placed for it as its `input`, marked waiting, so what the macrostep
+ *   runs under is found without a walk; that wake is the one taken, and
+ *   any other wake for the session is dropped when it is reached. When
+ *   the session goes or its macrostep is abandoned before that wake is
+ *   taken, what the wake holds (a restored event's data, origin and
+ *   operator transition, its text) is released at once, in O(1), and the
+ *   bare wake stays queued until it is reached and dropped.
+ * - A taken envelope holds its text and references until its input
+ *   completes, is abandoned, or its session goes; then they are released
+ *   and the envelope is given back.
  * - Every envelope on a deferred list arrived before every envelope for
  *   the same session still on the run queue, and a deferred list is in
  *   arrival order, so one sender's inputs to one session run in the order
@@ -8552,8 +8582,8 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  * from the system's allocator, on demand, up to `poolEnvelopes` and
  * `nameAreaBytes`, and keep them until the system goes. An envelope holds
  * references (its data, an event's origin) and an operator transition,
- * which the run releases when the input is bound, refused, withdrawn or
- * discarded at teardown.
+ * which the run releases when the input completes, is refused, withdrawn,
+ * abandoned, or discarded at teardown.
  *
  * - **Refills happen at safe points only:** at admission and at a wake's
  *   reservation outside any run, and in `ta_run()` before each input it
@@ -8561,10 +8591,13 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  *   a macrostep (a router admitting mail, an invoker spawning a child) an
  *   admission or a wake takes only envelopes and chunks that are free
  *   already, and answers `TA_ERR_FULL` when there are none.
- * - Binding an input may allocate the session's event block, or room in
- *   its internal queue for a report's event, between inputs.
+ * - Binding an input may allocate, between inputs only: room in the
+ *   session's internal queue for a report's event, or, for an invoked
+ *   session, the queue storage that keeps its last event. Taking an input
+ *   for any other session allocates nothing once the pool is warm.
  * - `ta_run_session_gone`, `ta_run_input_dropped`, `ta_run_wake_place`,
- *   `ta_run_wake_cancel` and `ta_actor_release()` never allocate.
+ *   `ta_run_wake_cancel`, the readers of a taken input and
+ *   `ta_actor_release()` never allocate.
  *
  * ## Complexity
  *
@@ -8576,6 +8609,7 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  * | `ta_system_withdraw_input()` | walks the pool, bounded by `poolEnvelopes` |
  * | `ta_run_session_gone` | O(its deferred envelopes), each returned in place |
  * | `ta_run_has_mail` | walks the run queue |
+ * | `ta_run_input_event`, `ta_run_input_jump`, `ta_run_session_trace`, `ta_run_macrostep_time` | O(1): one field of text |
  *
  * ## Failure
  *
@@ -8585,11 +8619,12 @@ TA_PRIVATE ta_result ta_name_area_trace_parent(const ta_name_area *area, ta_chun
  *   free only because the refill before it could not allocate (ADR 0102):
  *   the limits would have let the input in.
  * - A wake's reservation answers `TA_ERR_FULL` and `TA_ERR_NOMEM` the same
- *   way. A refill that fails leaves the envelopes that are free, and an
- *   admission or a wake that finds one free succeeds.
+ *   way, for its envelope and, when it carries a trace parent or an event,
+ *   its text. A refill that fails leaves the envelopes that are free, and
+ *   an admission or a wake that finds one free succeeds.
  * - `ta_run()` answers `TA_ERR_NOMEM` when it cannot bind the next input
- *   (its event block, or a report's queue room): that input goes back to
- *   the head of the run queue.
+ *   (a report's queue room, or an invoked session's queue storage): that
+ *   input goes back to the head of the run queue.
  *
  * ## Users
  *
@@ -8620,6 +8655,11 @@ typedef struct {
     uint32_t current;
     /** A macrostep runs inside `ta_run()`: no refill may allocate. */
     bool running;
+    /** The input whose external event `event` holds, or 0. */
+    uint32_t event_input;
+    /** The external event of `event_input`, decoded from its envelope; its
+     * references are the envelope's, borrowed. */
+    ta_event event;
 } ta_run_state;
 
 /**
@@ -8684,15 +8724,32 @@ typedef struct {
  */
 TA_PRIVATE ta_result ta_run_admit_report(ta_system *system, const ta_run_report *report);
 
+/** A wake to reserve; see `ta_run_wake_reserve`. */
+typedef struct {
+    /** Hold it to the admission watermark: a spawn's or a load's bootstrap
+     * is admitted; core's own wakes are not. */
+    bool admission;
+    /** What the macrostep it starts runs under, copied; null, or no trace
+     * ID, for none. */
+    const ta_trace_parent *trace;
+    /** The external event of a macrostep a reconstruction restores, or
+     * null. Its references are taken over on `TA_OK`. */
+    const ta_event *event;
+    /** The operator transition waiting with `event`, or null; taken over on
+     * `TA_OK`. */
+    struct ta_operator_jump *jump;
+} ta_run_wake;
+
 /**
  * Reserves an envelope for a wake, before the caller gives a session a
- * macrostep to run, so placing it cannot fail. `admission` holds it to the
- * admission watermark: a spawn's or a load's bootstrap is admitted; core's
- * own wakes are not. Refills first when no macrostep runs. Answers
- * `TA_OK` with the envelope in `*out`, `TA_ERR_FULL`, or `TA_ERR_NOMEM`
- * when nothing was free because the refill failed.
+ * macrostep to run, so placing it cannot fail, and writes its text when it
+ * carries a trace parent or an event. Refills first when no macrostep
+ * runs. Answers `TA_OK` with the envelope in `*out`, `TA_ERR_FULL`, or
+ * `TA_ERR_NOMEM` when nothing was free because the refill failed. A
+ * failure changes nothing and leaves the event and the operator transition
+ * the caller's.
  */
-TA_PRIVATE ta_result ta_run_wake_reserve(ta_system *system, bool admission, uint32_t *out);
+TA_PRIVATE ta_result ta_run_wake_reserve(ta_system *system, const ta_run_wake *wake, uint32_t *out);
 
 /**
  * Queues the reserved wake for `actor` when it has a macrostep to run, and
@@ -8705,8 +8762,45 @@ TA_PRIVATE ta_result ta_run_wake_reserve(ta_system *system, bool admission, uint
  */
 TA_PRIVATE void ta_run_wake_place(ta_system *system, struct ta_actor *actor, uint32_t wake);
 
-/** Gives back a reserved wake the caller no longer needs. Never allocates. */
+/** Gives back a reserved wake the caller no longer needs, with what its
+ * text holds. Never allocates. */
 TA_PRIVATE void ta_run_wake_cancel(ta_system *system, uint32_t wake);
+
+/**
+ * The external event of taken input `input`, decoded from its envelope
+ * into the run state, or null for 0. Its references are the envelope's,
+ * borrowed: the pointer is valid until another input's event is read or
+ * `input` completes. O(1); never allocates; may run inside a macrostep.
+ */
+TA_PRIVATE const ta_event *ta_run_input_event(ta_system *system, uint32_t input);
+
+/**
+ * The external event of taken input `input`, by value, its references
+ * borrowed from the envelope as `ta_run_input_event` says; all zero with
+ * no origin for 0. O(1); never allocates.
+ */
+TA_PRIVATE ta_event ta_run_input_event_of(const ta_system *system, uint32_t input);
+
+/**
+ * The operator transition that came with taken input `input`, owned by its
+ * envelope until it completes, or null. O(1); never allocates.
+ */
+const struct ta_operator_jump *ta_run_input_jump(const ta_system *system, uint32_t input);
+
+/**
+ * The trace parent `actor`'s macrostep runs under, all zero for none: what
+ * its input holds, taken, or the wake queued to start it. O(1); never
+ * allocates.
+ */
+TA_PRIVATE ta_trace_parent ta_run_session_trace(const ta_system *system, const struct ta_actor *actor);
+
+/**
+ * The logical time of `actor`'s macrostep (ADR 0089 section 9): the time
+ * written into its taken input when it was taken, so it does not move while
+ * the macrostep spans several `ta_run()` calls; the actor's time when no
+ * macrostep has taken an input. O(1); never allocates.
+ */
+TA_PRIVATE ta_time ta_run_macrostep_time(const ta_system *system, const struct ta_actor *actor);
 
 /**
  * Whether inputs admitted for `actor` wait to be taken: on the run queue or
@@ -8717,20 +8811,20 @@ TA_PRIVATE bool ta_run_has_mail(const ta_system *system, const struct ta_actor *
 
 /**
  * `actor` is going (destroyed, unloaded, or a construction undone): its
- * taken input is given back, wherever it is, and its deferred envelopes
- * return to the run queue, where they are refused. Never allocates; cannot
- * fail.
+ * taken input is given back, wherever it is, a wake it waits for is left
+ * bare on the run queue, and its deferred envelopes return to the run
+ * queue, where they are refused. Never allocates; cannot fail.
  */
 TA_PRIVATE void ta_run_session_gone(ta_system *system, struct ta_actor *actor);
 
 /**
  * `actor`'s macrostep ended outside `ta_run()` (an operator abandoned it):
- * `input`, the input it had taken (read before the macrostep ended, which
- * may give back the event block that named it), or 0, is given back
- * unreported, and the session's first deferred envelope returns to the run
- * queue. Never allocates; cannot fail.
+ * its taken input, if any, is released and given back unreported, a wake
+ * it waits for is left bare on the run queue, and the session's first
+ * deferred envelope returns to the run queue. Never allocates; cannot
+ * fail.
  */
-TA_PRIVATE void ta_run_input_dropped(ta_system *system, struct ta_actor *actor, uint32_t input);
+TA_PRIVATE void ta_run_input_dropped(ta_system *system, struct ta_actor *actor);
 
 
 
@@ -9450,7 +9544,9 @@ typedef struct {
     ta_value *data;
     /* It retires the invocation. */
     bool ends;
-    /* What the macrostep runs under; all zero for none. */
+    /* The report's trace parent, the cause the queued event is recorded
+     * with; all zero for none. The macrostep reads it from the report's
+     * envelope, which keeps it until the report completes. */
     const ta_trace_parent *trace;
 } ta_invoke_report_take;
 /*
@@ -10163,9 +10259,11 @@ TA_PRIVATE ta_result ta_export_spec(const ta_system *system, const ta_export_req
  * record (runtime ID, definition, self reference, residency), its session
  * storage (configuration, late-binding bits, history), its data-model
  * instance, and the state it needs only sometimes. The unit also holds the
- * system's actor table, which maps a runtime ID to its actor, the event
- * slots and event block an actor holds its events in, and the operator
- * transition a delivered event may carry (ADR 0082).
+ * system's actor table, which maps a runtime ID to its actor, the internal
+ * queue an actor holds its internal and kept events in, and the operator
+ * transition a delivered event may carry (ADR 0082). An actor's external
+ * event is not here: it stays in the pool envelope of the input the actor
+ * took (`run.h`), which the actor names by index.
  *
  * ## Contract and invariants
  *
@@ -10198,8 +10296,13 @@ TA_PRIVATE ta_result ta_export_spec(const ta_system *system, const ta_export_req
  *   pool's free list gives exactly that order. `ta_actor_table_issued`
  *   bounds a walk over the table.
  * - **An operator transition** is one allocation: its header, then its
- *   targets (`ta_operator_jump_bytes`). The event block owns it from
- *   delivery until the macrostep that takes the event frees it.
+ *   targets (`ta_operator_jump_bytes`). The input's envelope owns it from
+ *   delivery until the input completes.
+ * - **The input.** While a macrostep runs, waits or is stopped, `input`
+ *   names its taken envelope, by index, never by address; before the
+ *   macrostep begins, the wake queued to start it. `external`,
+ *   `bound`, `bound_before` and `input_flags` describe that input's events
+ *   and fill padding, so an actor costs no more for them.
  * - Each semantic mutation advances the session epoch
  *   (`ta_actor_touch`); a session image records the epoch it was taken
  *   at, and unloading refuses an older one (ADR 0014).
@@ -10210,16 +10313,18 @@ TA_PRIVATE ta_result ta_export_spec(const ta_system *system, const ta_export_req
  * `ta_actor_new` allocates the block, and refills the table's pool by one
  * page when no slot is free, at the point where it allocates the block;
  * `ta_actor_free` releases what the actor holds (its sparse state, its
- * event block, its session entry, the input it took and the inputs
+ * internal queue, its session entry, the input it took and the inputs
  * deferred for it, which go back to the run queue) and frees the block.
- * An actor's deferred list and the input its event block names are pool
- * envelopes (`envelope.h`): the actor owns neither, only the indices.
- * The definition outlives each of its actors: it counts them in
- * `actor_count`. The event block is lent to an actor from delivery or its
- * first internal event until its macrostep ends (ADR 0064, ADR 0069).
- * `ta_actor_layout` and `ta_operator_jump_bytes` never allocate. Making an
- * actor, delivering to it and storing its delayed sends allocate, outside
- * a macrostep or into room reserved before it (ADR 0070).
+ * An actor's deferred list and its input are pool envelopes
+ * (`envelope.h`): the actor owns neither, only the indices. The definition
+ * outlives each of its actors: it counts them in `actor_count`. The
+ * internal queue is the actor's from its first internal event until its
+ * macrostep ends with nothing queued or kept (ADR 0069); then it becomes
+ * the system's spare, which the next macrostep takes.
+ * `ta_actor_layout`, `ta_operator_jump_bytes` and the event accessors
+ * never allocate. Making an actor, delivering to it and storing its
+ * delayed sends allocate, outside a macrostep or into room reserved before
+ * it (ADR 0070).
  *
  * ## Complexity
  *
@@ -10237,8 +10342,9 @@ TA_PRIVATE ta_result ta_export_spec(const ta_system *system, const ta_export_req
  *
  * ## Users
  *
- * The system (spawn, delivery, unload and load), the interpreter, session
- * images and invocations. ADRs 0014, 0063, 0064, 0066, 0069, 0070, 0082.
+ * The system (spawn, delivery, unload and load), the run, the interpreter,
+ * session images and invocations. ADRs 0014, 0063, 0066, 0069, 0070, 0082,
+ * 0099.
  */
 
 
@@ -10285,22 +10391,36 @@ typedef struct ta_activation_effects {
 /* Where an actor's external event is (ADR 0069). */
 typedef enum {
     TA_EXTERNAL_NONE = 0,
-    TA_EXTERNAL_WAITING, /* delivered, behind any internal events */
-    TA_EXTERNAL_TAKEN    /* taken by the running macrostep, kept until it ends */
+    TA_EXTERNAL_WAITING, /* in its taken input, behind any internal events */
+    TA_EXTERNAL_TAKEN    /* taken by the running macrostep, until the macrostep ends */
 } ta_external_state;
 
 /* What `_event` names (ADR 0069). */
 typedef enum {
     TA_BOUND_NONE = 0,
-    TA_BOUND_EXTERNAL, /* the external event */
+    TA_BOUND_EXTERNAL, /* the external event, in the taken input's envelope */
     TA_BOUND_INTERNAL, /* the head of the internal queue, which stays queued while bound */
     TA_BOUND_KEPT      /* the kept event */
 } ta_event_binding;
 
+/* `ta_actor.input_flags`: what happened to the input its macrostep runs. */
+/* Its external event enabled no transition (ADR 0089 section 8); read when
+ * the macrostep ends, cleared with the event. */
+#define TA_ACTOR_INPUT_IGNORED ((uint8_t)0x01u)
+/* A fault stopped the macrostep: it waits for ta_actor_release(). */
+#define TA_ACTOR_INPUT_STOPPED ((uint8_t)0x02u)
+/* The fault was the microstep limit (ADR 0075). */
+#define TA_ACTOR_INPUT_RUNAWAY ((uint8_t)0x04u)
+/* Released after a runaway: the rest of the macrostep runs without the
+ * microstep limit. */
+#define TA_ACTOR_INPUT_UNLIMITED ((uint8_t)0x08u)
+/* `input` is the wake queued to start the macrostep, not taken yet. */
+#define TA_ACTOR_INPUT_WAITING ((uint8_t)0x10u)
+
 /*
  * An operator transition delivered with the external event (ADR 0082), in
- * one allocation the event block owns until the macrostep takes the event.
- * Its targets are checked when it is delivered, against the configuration
+ * one allocation the input's envelope owns until the input completes. Its
+ * targets are checked when the input is taken, against the configuration
  * it will run from: the event it came with is the first step taken.
  */
 typedef struct ta_operator_jump {
@@ -10319,72 +10439,27 @@ typedef struct ta_operator_jump {
 TA_PRIVATE ta_result ta_operator_jump_bytes(uint32_t count, size_t *out);
 
 /*
- * An actor's events other than its queued internal ones (ADR 0069). Taking
- * an event does not move it: `bound` names where it is. An event leaves
- * only when `_event` moves on, and it moves into `kept_event` when
- * something may still read it:
+ * An actor's internal queue (ADR 0069): its internal events, oldest first,
+ * with the queue's capacity, and its kept event, in one allocation the
+ * actor owns. An event leaves the queue only when `_event` moves on, and
+ * it moves into `kept_event` when something may still read it:
  * - a taken queue head, when the next event is taken, so that a retry can
- *   bind it again;
+ *   bind it again (ADR 0047);
  * - the last event of an invoked session, when its macrostep ends, so that
  *   the session's <onexit> sees it if the parent cancels it (SCXML 6.4).
+ * The actor takes one with its first internal event, or, for an invoked
+ * session, when it takes an input: the system's spare when there is one,
+ * else a new one. It gives it up when its macrostep ends with the queue
+ * empty and no event kept, to be the system's spare or freed. An idle actor
+ * that nobody invoked holds none.
  */
-typedef struct {
-    uint8_t external;     /* ta_external_state */
-    uint8_t bound;        /* ta_event_binding */
-    uint8_t bound_before; /* what `bound` was before the last take, for a retry (ADR 0047) */
-    bool has_kept;
-    /* The external event enabled no transition (ADR 0089 section 8); read
-     * when its macrostep ends, cleared with the event. Fills padding. */
-    bool external_ignored;
-    /* `time` holds the running macrostep's logical time (ADR 0089 section
-     * 9), taken by the macrostep's first run. */
-    bool timed;
-    ta_time time;
-    /* The external event of the running macrostep. Inspection reports it
-     * while the macrostep runs (ADR 0047). */
-    ta_event external_event;
-    ta_event kept_event;
-    /* The operator transition that takes the waiting external event, or
-     * null (ADR 0082). */
-    ta_operator_jump *jump;
-    /*
-     * What the running macrostep runs under (ADR 0067): its delivery's, its
-     * spawn's, or the failed send's that queued its first event. Set when a
-     * macrostep starts, and kept while it runs, so a block that holds only a
-     * parent stays with its actor until the macrostep ends.
-     */
-    ta_trace_parent trace;
-    /*
-     * The pool envelope of the input this macrostep runs (run.h): taken
-     * from the run queue when the macrostep began, and given back when it
-     * ends; 0 while no input is taken.
-     */
-    uint32_t input;
-    /* A fault stopped the macrostep: it waits for ta_actor_release(). */
-    bool stopped;
-    /* The fault was the microstep limit (ADR 0075). */
-    bool runaway;
-    /* Released after a runaway: the rest of this macrostep runs without
-     * the microstep limit. */
-    bool unlimited;
-} ta_event_slots;
-
-/*
- * An actor's event block (ADR 0064, ADR 0069): its events and its internal
- * queue, oldest first, with the queue's capacity, in one allocation. It is
- * lent to an actor from ta_actor_deliver(), or the first internal event,
- * until the macrostep ends; an actor keeps it longer only while events are
- * queued, a microstep is paused, or it keeps an event. An idle actor that
- * nobody invoked holds none, so it carries no event.
- */
-typedef struct ta_event_block {
+typedef struct ta_internal_queue {
     uint32_t count;
-    uint32_t capacity; /* 0 for a header only, which grows with the first internal event */
-    /* While the block is in the system's cache, the next cached block. */
-    struct ta_event_block *next_cached;
-    ta_event_slots slots;
+    uint32_t capacity;
+    bool has_kept;
+    ta_event kept_event;
     ta_queued_event events[];
-} ta_event_block;
+} ta_internal_queue;
 
 /* Allocated only for actors that use one of these uncommon facilities. */
 typedef struct {
@@ -10421,9 +10496,22 @@ struct ta_actor {
     uint64_t *late_initialized;
     void *datamodel_instance;
     bool datamodel_initialized;
+    /* Where its input's external event is (ta_external_state), what
+     * `_event` names (ta_event_binding), and what it named before the last
+     * take, for a retry (ADR 0047). They fill padding. */
+    uint8_t external;
+    uint8_t bound;
+    uint8_t bound_before;
+    /* The pool envelope of the input its macrostep runs (run.h): taken from
+     * the run queue when the macrostep began, and given back when its input
+     * completes; with TA_ACTOR_INPUT_WAITING, the wake queued to start a
+     * macrostep that has not begun; 0 for none. The external event, its
+     * operator transition, the macrostep's trace parent and its logical
+     * time are read from it. */
+    uint32_t input;
     ta_actor_sparse_state *sparse;
-    /* Its event block (ADR 0064), or null. */
-    ta_event_block *event_block;
+    /* Its internal queue and kept event, or null. */
+    ta_internal_queue *internal;
     /* Its inputs that ta_run() reached while it was in a macrostep, in
      * arrival order, linked through the pool's envelopes (run.h). */
     ta_list deferred;
@@ -10434,6 +10522,8 @@ struct ta_actor {
     ta_session_node *session_node;
     uint64_t session_epoch;
     bool published;
+    /* TA_ACTOR_INPUT_*; fills padding. */
+    uint8_t input_flags;
     /* Lifecycle records written for this session, from 1 (ADR 0067; napi
      * ADR 0016): a lifecycle record's key is (session, 0, this count), so
      * each has its own span ID. Sits in the padding after `published`. */
@@ -10543,11 +10633,14 @@ TA_PRIVATE void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 TA_PRIVATE ta_result ta_actor_directory_swap(ta_system *system, const ta_actor_directory_replace_params *params);
 TA_PRIVATE ta_result ta_actor_directory_drop(ta_system *system, const ta_actor_directory_remove_params *params);
 
-/* The external event the actor holds, waiting or taken, or null. */
-TA_PRIVATE const ta_event *ta_actor_external_event(const ta_actor *actor);
+/* The external event of the actor's input, waiting or taken, or null: read
+ * from the input's envelope (run.h). The pointer is valid until the next
+ * call that reads another input's event, or the input completes. */
+TA_PRIVATE const ta_event *ta_actor_external_event(ta_system *system, const ta_actor *actor);
 /* The event `_event` names, or null (ADR 0069). The pointer is valid until
- * the actor's event block grows or the event is released. */
-TA_PRIVATE const ta_event *ta_actor_bound_event(const ta_actor *actor);
+ * the internal queue grows, the event is released, or, for the external
+ * event, as ta_actor_external_event says. */
+TA_PRIVATE const ta_event *ta_actor_bound_event(ta_system *system, const ta_actor *actor);
 /* Internal events waiting to be taken: the queue without a taken head. */
 TA_PRIVATE uint32_t ta_actor_waiting_internal(const ta_actor *actor);
 
@@ -10664,8 +10757,8 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
  * start empty. Afterwards it allocates where a caller adds something (a
  * spawn, a registration, an interned address, an admitted input, which
  * may add a page to the pool or the name area), a nested interpreter's
- * region the first time an invocation is cancelled at that depth, and the
- * event blocks it caches; never in the middle of a macrostep, where room
+ * region the first time an invocation is cancelled at that depth, and an
+ * actor's internal queue; never in the middle of a macrostep, where room
  * is reserved before the run (ADR 0070).
  *
  * ## Complexity
@@ -10823,13 +10916,6 @@ struct ta_system {
      * interned at creation with the built-in event names. */
     ta_atom invoke_segment;
     ta_arena scratch;
-    /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
-     * newest first, linked through `next_cached`; at most `block_cache_limit`
-     * of them (ADR 0069). Empty at creation: a block is made when a delivery
-     * finds none, and kept when released while there is room (ADR 0093). */
-    ta_event_block *block_cache;
-    uint32_t block_cache_count;
-    uint32_t block_cache_limit;
     /*
      * What a run that stops inside a phase takes (ADR 0070): a continuation
      * at least as large as the running definition needs, and a sparse state
@@ -10838,6 +10924,15 @@ struct ta_system {
      */
     ta_continuation *spare_continuation;
     ta_actor_sparse_state *spare_sparse;
+    /*
+     * The internal queue the next macrostep that needs one takes (ADR
+     * 0069): one an actor left empty, keeping no event, when its macrostep
+     * ended, at its first capacity. One macrostep runs at a time, so one
+     * spare serves them all, and a macrostep that runs executable content
+     * allocates no queue of its own; an actor whose macrostep is stopped or
+     * paused, or that keeps an event, keeps its own. Null when taken.
+     */
+    ta_internal_queue *spare_queue;
 };
 
 /*
@@ -10891,9 +10986,11 @@ TA_PRIVATE bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);
  * budget is spent, it pauses, or it runs out of memory. Between calls the
  * actor holds everything (its configuration, history, internal queue and
  * events); a run that stops inside a phase leaves the rest in a
- * continuation (`continuation.h`). The unit also keeps the actor's event
- * block and internal queue, send IDs as text, and the system's spare
- * continuation and sparse state.
+ * continuation (`continuation.h`). The unit also keeps the actor's
+ * internal queue and kept event, send IDs as text, and the system's spare
+ * continuation, sparse state and internal queue. The external event a macrostep takes is
+ * not copied: it stays in the input's envelope (`run.h`), and `_event`
+ * reads it from there.
  *
  * ## Scratch
  *
@@ -10913,7 +11010,7 @@ TA_PRIVATE bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);
  * ## Memory
  *
  * The interpreter owns nothing between calls: scratch is reset when a call
- * starts. What a run allocates (event blocks, a sparse state, a
+ * starts. What a run allocates (an internal queue, a sparse state, a
  * continuation, room for delayed sends and internal events) it reserves
  * before the step that needs it, so a step that runs out of memory has
  * had no effect that doing it again would repeat (ADR 0047, ADR 0070).
@@ -11037,8 +11134,6 @@ typedef struct {
     bool ended_ignored;
 } ta_interpreter;
 
-TA_PRIVATE ta_time ta_interpreter_macrostep_time(const ta_system *system, const ta_actor *actor);
-
 /** How one run of a session's macrostep ended (`ta_interpreter_run`). */
 typedef enum {
     /** The macrostep ended with the session stable. */
@@ -11125,17 +11220,18 @@ TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *
 TA_PRIVATE ta_result ta_interpreter_scratch_need(const ta_definition *definition, size_t *out);
 /* The fault of a temporary that does not fit the render area (ADR 0092). */
 TA_PRIVATE void ta_interpreter_render_fault(ta_fault *fault);
-/* Frees cached event blocks until the cache holds no more than its limit
- * (ADR 0069); a limit of 0 frees them all, at teardown. */
-TA_PRIVATE void ta_interpreter_block_cache_trim(ta_system *system);
 /* Frees the continuation and sparse state the system keeps for a run that
- * stops (ADR 0070), at teardown. */
+ * stops (ADR 0070), and its spare internal queue, at teardown. */
 TA_PRIVATE void ta_interpreter_release_spares(ta_system *system);
-/* Lends the actor an event block if it holds none: a cached one, else a
- * header only. TA_ERR_NOMEM changes nothing (ADR 0069). */
-TA_PRIVATE ta_result ta_interpreter_hold_block(ta_system *system, ta_actor *actor);
-/* The bytes an event block with room for this many internal events takes. */
-TA_PRIVATE size_t ta_event_block_bytes(uint32_t capacity);
+/*
+ * Makes sure an invoked session has the internal queue its kept event
+ * lives in, so that keeping the external event when its macrostep ends
+ * never allocates (SCXML 6.4); any other session needs none. Called when
+ * an input is taken, between inputs. TA_ERR_NOMEM changes nothing.
+ */
+TA_PRIVATE ta_result ta_interpreter_keep_room(ta_system *system, ta_actor *actor);
+/* The bytes an internal queue with room for this many events takes. */
+TA_PRIVATE size_t ta_internal_queue_bytes(uint32_t capacity);
 
 /* Send IDs as text: literal IDs are their author's text; generated ones round-trip. */
 TA_PRIVATE void ta_send_id_write(const ta_system *system, ta_send_id id, ta_text_writer *writer);
@@ -11180,8 +11276,6 @@ TA_PRIVATE void ta_interpreter_trace_forward(ta_interpreter *it, ta_invoke_id in
 /* What a step running now passes to what it produces: the macrostep's
  * context, and the step's own key as the cause (ADR 0067 section 6). */
 TA_PRIVATE ta_trace_parent ta_interpreter_trace_here(const ta_interpreter *it);
-/* The parent the actor's current macrostep runs under; all zero for none. */
-TA_PRIVATE ta_trace_parent ta_actor_macrostep_parent(const ta_actor *actor);
 /* The key of the step the actor stands in: its macrostep and microstep
  * while a macrostep has begun, the session alone otherwise (ADR 0067). */
 TA_PRIVATE ta_step_key ta_actor_step(const ta_actor *actor);
@@ -11197,10 +11291,10 @@ TA_PRIVATE void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor
                                    const ta_trace_parent *parent);
 /*
  * Makes an idle actor run a macrostep for work queued outside any run, such
- * as a failed send's error, under `trace` (null: none). An actor already in
- * a macrostep is left alone.
+ * as a failed send's error. What it runs under is in the wake the caller
+ * reserved for it (run.h). An actor already in a macrostep is left alone.
  */
-TA_PRIVATE void ta_interpreter_start_macrostep(ta_actor *actor, const ta_trace_parent *trace);
+TA_PRIVATE void ta_interpreter_start_macrostep(ta_actor *actor);
 TA_PRIVATE bool ta_interpreter_internal_pending(const ta_actor *actor);
 
 /* ------------------------------------------------------------------------
@@ -17853,17 +17947,30 @@ static void ta_run_jump_free(ta_system *system, ta_operator_jump *jump) {
 
 /*
  * Releases everything envelope `index` holds (its data and content, an
- * event's origin and operator transition, its text) and gives it back. The
- * envelope is on no list.
+ * event's origin and operator transition, its text) and leaves it bare,
+ * where it stands: a bare envelope reads as a wake without an event. O(1)
+ * in the envelopes; frees the text's chunks.
  */
-static void ta_run_discard(ta_system *system, uint32_t index) {
+static void ta_run_strip(ta_system *system, uint32_t index) {
+    if (system->run.event_input == index) {
+        system->run.event_input = 0u;
+        system->run.event = (ta_event){ 0 };
+    }
     ta_run_record record = ta_run_record_of(system, index);
     ta_origin_release(&record.origin);
     ta_run_jump_free(system, record.jump);
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
     ta_value_release(&envelope->data);
     ta_value_release(&envelope->content);
+    envelope->data = (ta_value){ 0 };
+    envelope->content = (ta_value){ 0 };
     ta_name_area_free(&system->run.names, &envelope->text);
+}
+
+/* Releases everything envelope `index` holds and gives it back. The
+ * envelope is on no list. */
+static void ta_run_discard(ta_system *system, uint32_t index) {
+    ta_run_strip(system, index);
     ta_envelope_pool_give(&system->run.pool, index);
 }
 
@@ -17897,9 +18004,10 @@ TA_PRIVATE void ta_run_destroy(ta_system *system) {
     ta_envelope_pool *pool = &system->run.pool;
     for (uint32_t index = 1u; index <= pool->items.high_water; index += 1u) {
         ta_envelope *envelope = ta_envelope_pool_at(pool, index);
-        /* A taken input holds nothing: its session released it, or held it
-         * until the session went. Every runnable envelope still holds its own. */
-        if (envelope != NULL && envelope->state == TA_ENVELOPE_RUNNABLE) {
+        /* Every session is gone, and gave its taken input back; a runnable
+         * envelope, or a taken one no session names, still holds its own. */
+        if (envelope != NULL &&
+            (envelope->state == TA_ENVELOPE_RUNNABLE || envelope->state == TA_ENVELOPE_TAKEN)) {
             ta_run_record record = ta_run_record_of(system, index);
             ta_origin_release(&record.origin);
             ta_run_jump_free(system, record.jump);
@@ -17910,6 +18018,7 @@ TA_PRIVATE void ta_run_destroy(ta_system *system) {
     ta_name_area_destroy(&system->run.names);
     ta_envelope_pool_destroy(pool);
     system->run.slot = 0u;
+    system->run.event_input = 0u;
 }
 
 /* What a refill answered, for the pool and for the name area. */
@@ -17976,6 +18085,28 @@ typedef struct {
     const ta_run_record *record;
 } ta_run_admission;
 
+/* Writes `record` as the one field of envelope `index`'s text, which has
+ * none. TA_ERR_FULL or TA_ERR_NOMEM as the name area answers, changing
+ * nothing; `admission` holds it to the watermark. */
+static ta_result ta_run_write_record(ta_system *system, uint32_t index, const ta_run_record *record,
+                                     ta_run_refilled refilled, bool admission) {
+    uint8_t bytes[TA_RUN_RECORD_BYTES];
+    uint32_t length = ta_run_record_pack(record, bytes);
+    ta_chunk_writer writer = ta_chunk_writer_new();
+    ta_result result = ta_name_area_write(&system->run.names, &(ta_name_area_write_params){
+                                                                   .writer = &writer,
+                                                                   .text = { .ptr = bytes, .len = length },
+                                                                   .admission = admission,
+                                                               });
+    if (result != TA_OK) {
+        return admission ? ta_run_names_short(&system->run.names,
+                                              (ta_run_refusal){ .refill = refilled.names, .result = result }, length)
+                         : result == TA_ERR_FULL && refilled.names == TA_ERR_NOMEM ? TA_ERR_NOMEM : result;
+    }
+    ta_envelope_pool_at(&system->run.pool, index)->text = writer.chain;
+    return TA_OK;
+}
+
 /*
  * Takes an envelope below the watermark, writes the record into its text,
  * fills it and appends it to the run queue. Whoever calls it retains what
@@ -17983,24 +18114,16 @@ typedef struct {
  */
 static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admission, uint32_t *out) {
     ta_run_refilled refilled = ta_run_refill(system);
-    uint8_t bytes[TA_RUN_RECORD_BYTES];
-    uint32_t length = ta_run_record_pack(admission->record, bytes);
     uint32_t index = 0u;
     ta_result result = ta_envelope_pool_admit(&system->run.pool, &index);
     if (result != TA_OK) {
         return ta_run_envelope_short(&system->run.pool, (ta_run_refusal){ .refill = refilled.pool, .result = result },
                                      true);
     }
-    ta_chunk_writer writer = ta_chunk_writer_new();
-    result = ta_name_area_write(&system->run.names, &(ta_name_area_write_params){
-                                                        .writer = &writer,
-                                                        .text = { .ptr = bytes, .len = length },
-                                                        .admission = true,
-                                                    });
+    result = ta_run_write_record(system, index, admission->record, refilled, true);
     if (result != TA_OK) {
         ta_envelope_pool_give(&system->run.pool, index);
-        return ta_run_names_short(&system->run.names, (ta_run_refusal){ .refill = refilled.names, .result = result },
-                                  length);
+        return result;
     }
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
     envelope->source = admission->source;
@@ -18009,7 +18132,6 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
     envelope->send_id = admission->send_id;
     envelope->invoke_instance = admission->invoke;
     envelope->source_seq = admission->correlation;
-    envelope->text = writer.chain;
     ta_envelope_pool_enqueue(&system->run.pool, index);
     *out = index;
     return TA_OK;
@@ -18075,22 +18197,61 @@ TA_PRIVATE ta_result ta_run_admit_report(ta_system *system, const ta_run_report 
     return TA_OK;
 }
 
-TA_PRIVATE ta_result ta_run_wake_reserve(ta_system *system, bool admission, uint32_t *out) {
+TA_PRIVATE ta_result ta_run_wake_reserve(ta_system *system, const ta_run_wake *wake, uint32_t *out) {
     ta_run_refilled refilled = ta_run_refill(system);
-    ta_result result =
-        admission ? ta_envelope_pool_admit(&system->run.pool, out) : ta_envelope_pool_take(&system->run.pool, out);
-    return ta_run_envelope_short(&system->run.pool, (ta_run_refusal){ .refill = refilled.pool, .result = result },
-                                 admission);
+    uint32_t index = 0u;
+    ta_result result = wake->admission ? ta_envelope_pool_admit(&system->run.pool, &index)
+                                       : ta_envelope_pool_take(&system->run.pool, &index);
+    if (result != TA_OK) {
+        return ta_run_envelope_short(&system->run.pool, (ta_run_refusal){ .refill = refilled.pool, .result = result },
+                                     wake->admission);
+    }
+    bool traced = wake->trace != NULL && !ta_trace_parent_empty(wake->trace);
+    if (traced || wake->event != NULL) {
+        ta_run_record record = { .origin = { .kind = TA_ORIGIN_NONE } };
+        if (traced) {
+            record.flags |= TA_RUN_RECORD_TRACED;
+            record.trace = *wake->trace;
+        }
+        if (wake->event != NULL) {
+            record.name = wake->event->name;
+            record.origin = wake->event->origin;
+        }
+        if (wake->jump != NULL) {
+            record.flags |= TA_RUN_RECORD_JUMP;
+            record.jump = wake->jump;
+        }
+        result = ta_run_write_record(system, index, &record, refilled, wake->admission);
+        if (result != TA_OK) {
+            ta_envelope_pool_give(&system->run.pool, index);
+            return result;
+        }
+    }
+    if (wake->event != NULL) {
+        ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+        envelope->type = (uint8_t)wake->event->type;
+        envelope->send_id = wake->event->send_id;
+        envelope->invoke_instance = wake->event->invoke_id;
+        envelope->data = wake->event->data;
+    }
+    *out = index;
+    return TA_OK;
 }
 
 TA_PRIVATE void ta_run_wake_place(ta_system *system, ta_actor *actor, uint32_t wake) {
     if (!actor->macrostep) {
-        ta_envelope_pool_give(&system->run.pool, wake);
+        ta_run_discard(system, wake);
         return;
     }
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, wake);
     envelope->source = TA_RECORD_INPUT_SOURCE_PLATFORM;
     envelope->target = actor->record.id;
+    if (actor->input == 0u) {
+        /* The wake that starts its macrostep: what the macrostep runs under
+         * is read from it until it is taken. */
+        actor->input = wake;
+        actor->input_flags = TA_ACTOR_INPUT_WAITING;
+    }
     if (system->run.running && system->run.current != 0u) {
         ta_envelope_pool_enqueue_beside(&system->run.pool,
                                         (ta_envelope_beside){ .beside = system->run.current, .index = wake });
@@ -18100,21 +18261,72 @@ TA_PRIVATE void ta_run_wake_place(ta_system *system, ta_actor *actor, uint32_t w
 }
 
 TA_PRIVATE void ta_run_wake_cancel(ta_system *system, uint32_t wake) {
-    ta_envelope_pool_give(&system->run.pool, wake);
+    ta_run_discard(system, wake);
+}
+
+/* ------------------------------------------------------------------------
+ * A taken input
+ */
+
+TA_PRIVATE ta_event ta_run_input_event_of(const ta_system *system, uint32_t input) {
+    if (input == 0u) {
+        return (ta_event){ .origin = { .kind = TA_ORIGIN_NONE } };
+    }
+    ta_run_record record = ta_run_record_of(system, input);
+    const ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, input);
+    return (ta_event){ .name = record.name,
+                       .type = (ta_event_type)envelope->type,
+                       .send_id = envelope->send_id,
+                       .origin = record.origin,
+                       .invoke_id = envelope->invoke_instance,
+                       .data = envelope->data };
+}
+
+TA_PRIVATE const ta_event *ta_run_input_event(ta_system *system, uint32_t input) {
+    if (input == 0u) {
+        return NULL;
+    }
+    if (system->run.event_input != input) {
+        system->run.event = ta_run_input_event_of(system, input);
+        system->run.event_input = input;
+    }
+    return &system->run.event;
+}
+
+const struct ta_operator_jump *ta_run_input_jump(const ta_system *system, uint32_t input) {
+    return input == 0u ? NULL : ta_run_record_of(system, input).jump;
+}
+
+/* The trace parent envelope `index`'s text holds, all zero for none. */
+static ta_trace_parent ta_run_trace_of(const ta_system *system, uint32_t index) {
+    ta_run_record record = ta_run_record_of(system, index);
+    return (record.flags & TA_RUN_RECORD_TRACED) != 0u ? record.trace : (ta_trace_parent){ 0 };
+}
+
+TA_PRIVATE ta_trace_parent ta_run_session_trace(const ta_system *system, const ta_actor *actor) {
+    return actor->input == 0u ? (ta_trace_parent){ 0 } : ta_run_trace_of(system, actor->input);
+}
+
+TA_PRIVATE ta_time ta_run_macrostep_time(const ta_system *system, const ta_actor *actor) {
+    if (actor->macrostep && actor->input != 0u && (actor->input_flags & TA_ACTOR_INPUT_WAITING) == 0u) {
+        return ta_envelope_pool_at(&system->run.pool, actor->input)->due;
+    }
+    return ta_actor_now(system, actor);
 }
 
 /* ------------------------------------------------------------------------
  * Sessions
  */
 
-/* The input `actor` has taken, or 0. */
-static uint32_t ta_run_input_of(const ta_actor *actor) {
-    return actor->event_block == NULL ? 0u : actor->event_block->slots.input;
-}
-
 /* Whether envelope `index` is the taken input of its session, queued again. */
 static bool ta_run_is_taken_input(const ta_actor *actor, uint32_t index) {
-    return actor != NULL && ta_run_input_of(actor) == index;
+    return actor != NULL && actor->input == index && (actor->input_flags & TA_ACTOR_INPUT_WAITING) == 0u;
+}
+
+/* `actor` names no input any more. */
+static void ta_run_forget_input(ta_actor *actor) {
+    actor->input = 0u;
+    actor->input_flags = 0u;
 }
 
 /* Returns the first of `actor`'s deferred envelopes to the run queue, or all of them. */
@@ -18132,9 +18344,18 @@ static void ta_run_return_deferred(ta_system *system, ta_actor *actor, bool all)
     }
 }
 
-/* Gives back the taken input `index` of `actor`, wherever it is, and
- * forgets it; 0 is none. */
-static void ta_run_drop_input(ta_system *system, ta_actor *actor, uint32_t index) {
+/* Releases and gives back `actor`'s taken input, wherever it is, and
+ * forgets it; nothing when it has none. A wake not taken yet stays queued,
+ * so this never walks the run queue for it: what it holds (an event's
+ * data, origin and operator transition, its text) is released at once,
+ * and the bare wake is dropped when it is reached. */
+static void ta_run_drop_input(ta_system *system, ta_actor *actor) {
+    uint32_t index = actor->input;
+    if ((actor->input_flags & TA_ACTOR_INPUT_WAITING) != 0u) {
+        ta_run_strip(system, index);
+        ta_run_forget_input(actor);
+        return;
+    }
     if (index == 0u) {
         return;
     }
@@ -18145,23 +18366,17 @@ static void ta_run_drop_input(ta_system *system, ta_actor *actor, uint32_t index
          * queue; stopped, it is on no list. */
         (void)ta_envelope_pool_unqueue(&system->run.pool, index);
     }
-    ta_envelope_pool_give(&system->run.pool, index);
-    if (actor->event_block != NULL && actor->event_block->slots.input == index) {
-        ta_event_slots *slots = &actor->event_block->slots;
-        slots->input = 0u;
-        slots->stopped = false;
-        slots->runaway = false;
-        slots->unlimited = false;
-    }
+    ta_run_discard(system, index);
+    ta_run_forget_input(actor);
 }
 
 TA_PRIVATE void ta_run_session_gone(ta_system *system, ta_actor *actor) {
-    ta_run_drop_input(system, actor, ta_run_input_of(actor));
+    ta_run_drop_input(system, actor);
     ta_run_return_deferred(system, actor, true);
 }
 
-TA_PRIVATE void ta_run_input_dropped(ta_system *system, ta_actor *actor, uint32_t input) {
-    ta_run_drop_input(system, actor, input);
+TA_PRIVATE void ta_run_input_dropped(ta_system *system, ta_actor *actor) {
+    ta_run_drop_input(system, actor);
     ta_run_return_deferred(system, actor, false);
 }
 
@@ -18237,11 +18452,11 @@ static bool ta_run_waiting(const ta_run_call *call) {
 }
 
 /*
- * Binds an external event to `actor`, idle: its event moves into the event
- * block as the waiting external event (ADR 0069), with its operator
- * transition, trace parent and time. TA_ERR_INVALID when the operator
- * transition no longer applies; TA_ERR_NOMEM when the block cannot be had,
- * changing nothing.
+ * Binds an external event to `actor`, idle: it becomes the waiting external
+ * event (ADR 0069), read from its envelope, with its operator transition,
+ * trace parent and time. TA_ERR_INVALID when the operator transition no
+ * longer applies; TA_ERR_NOMEM, changing nothing, when an invoked session
+ * cannot have the storage its kept event needs.
  */
 static ta_result ta_run_bind_event(ta_system *system, ta_actor *actor, uint32_t index) {
     ta_run_record record = ta_run_record_of(system, index);
@@ -18250,26 +18465,13 @@ static ta_result ta_run_bind_event(ta_system *system, ta_actor *actor, uint32_t 
          (record.jump->source != TA_STATE_NONE && !ta_actor_state_active(actor, record.jump->source)))) {
         return TA_ERR_INVALID;
     }
-    ta_result result = ta_interpreter_hold_block(system, actor);
+    ta_result result = ta_interpreter_keep_room(system, actor);
     if (result != TA_OK) {
         return result;
     }
-    ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
     /* Admission checked the time against every input admitted before it. */
     ta_actor_move_clock(actor, record.time);
-    ta_event_slots *slots = &actor->event_block->slots;
-    /* The envelope's references move into the slot. */
-    slots->external_event = (ta_event){ .name = record.name,
-                                        .type = (ta_event_type)envelope->type,
-                                        .send_id = envelope->send_id,
-                                        .origin = record.origin,
-                                        .invoke_id = envelope->invoke_instance,
-                                        .data = envelope->data };
-    slots->external = TA_EXTERNAL_WAITING;
-    slots->jump = record.jump;
-    slots->trace = (record.flags & TA_RUN_RECORD_TRACED) != 0u ? record.trace : (ta_trace_parent){ 0 };
-    envelope->data = (ta_value){ 0 };
-    ta_name_area_free(&system->run.names, &envelope->text);
+    actor->external = TA_EXTERNAL_WAITING;
     actor->macrostep = true;
     ta_actor_touch(actor);
     actor->record.residency = TA_ACTOR_RUNNING;
@@ -18279,41 +18481,37 @@ static ta_result ta_run_bind_event(ta_system *system, ta_actor *actor, uint32_t 
 /*
  * Binds an error report to `actor`, idle: its event joins the internal
  * queue, the invocation retires when the report ends it, and a macrostep
- * starts under its trace parent (ADR 0081). TA_ERR_NOT_FOUND when the
- * invocation ended; TA_ERR_NOMEM, changing nothing, when there is no room.
+ * starts under its trace parent (ADR 0081), which stays in its envelope.
+ * TA_ERR_NOT_FOUND when the invocation ended; TA_ERR_NOMEM, changing
+ * nothing, when there is no room.
  */
 static ta_result ta_run_bind_report(ta_system *system, ta_actor *actor, uint32_t index) {
     ta_run_record record = ta_run_record_of(system, index);
-    ta_result result = ta_interpreter_hold_block(system, actor);
-    if (result != TA_OK) {
-        return result;
-    }
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
     ta_trace_parent trace = (record.flags & TA_RUN_RECORD_TRACED) != 0u ? record.trace : (ta_trace_parent){ 0 };
-    result = ta_invoke_take_report(system, actor, &(ta_invoke_report_take){
-                                                      .invoke = envelope->invoke_instance,
-                                                      .name = record.name,
-                                                      .data = &envelope->data,
-                                                      .ends = (record.flags & TA_RUN_RECORD_ENDS) != 0u,
-                                                      .trace = &trace,
-                                                  });
+    ta_result result = ta_invoke_take_report(system, actor, &(ta_invoke_report_take){
+                                                                .invoke = envelope->invoke_instance,
+                                                                .name = record.name,
+                                                                .data = &envelope->data,
+                                                                .ends = (record.flags & TA_RUN_RECORD_ENDS) != 0u,
+                                                                .trace = &trace,
+                                                            });
     if (result != TA_OK) {
         return result;
     }
     ta_actor_move_clock(actor, record.time);
-    ta_name_area_free(&system->run.names, &envelope->text);
     return TA_OK;
 }
 
 /* Takes envelope `index` as `actor`'s input: it becomes the input the
- * session's macrostep runs, until it ends. */
+ * session's macrostep runs, until it completes, and its `due` the
+ * macrostep's logical time (ADR 0089 section 9). */
 static void ta_run_hold_input(ta_system *system, ta_actor *actor, uint32_t index) {
-    ta_envelope_pool_at(&system->run.pool, index)->state = TA_ENVELOPE_TAKEN;
-    ta_event_slots *slots = &actor->event_block->slots;
-    slots->input = index;
-    slots->stopped = false;
-    slots->runaway = false;
-    slots->unlimited = false;
+    ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+    envelope->state = TA_ENVELOPE_TAKEN;
+    envelope->due = ta_actor_now(system, actor);
+    actor->input = index;
+    actor->input_flags = 0u;
 }
 
 /* Puts the input that could not be bound back at the head: it is taken first next time. */
@@ -18341,13 +18539,9 @@ static void ta_run_complete(ta_run_call *call, ta_actor *actor, ta_run_ended end
     if (system->run.slot == index) {
         system->run.slot = 0u;
     }
-    ta_envelope_pool_give(&system->run.pool, index);
-    if (actor->event_block != NULL && actor->event_block->slots.input == index) {
-        ta_event_slots *slots = &actor->event_block->slots;
-        slots->input = 0u;
-        slots->stopped = false;
-        slots->runaway = false;
-        slots->unlimited = false;
+    ta_run_discard(system, index);
+    if (actor->input == index) {
+        ta_run_forget_input(actor);
     }
     ta_run_return_deferred(system, actor, actor->finished);
 }
@@ -18364,7 +18558,7 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
         .budget = call->budget,
         .action_budget = limited ? call->actions : 0u,
         .pause_at_microstep_start = call->params->pause_at_microstep_start,
-        .unlimited = actor->event_block->slots.unlimited,
+        .unlimited = (actor->input_flags & TA_ACTOR_INPUT_UNLIMITED) != 0u,
     };
     system->run.running = true;
     system->run.current = index;
@@ -18381,10 +18575,8 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
         if (system->run.slot == index) {
             system->run.slot = 0u;
         }
-        ta_event_slots *slots = &actor->event_block->slots;
-        slots->stopped = true;
-        slots->runaway = result == TA_ERR_RUNAWAY;
-        slots->unlimited = false;
+        actor->input_flags = (uint8_t)((actor->input_flags & TA_ACTOR_INPUT_IGNORED) | TA_ACTOR_INPUT_STOPPED |
+                                       (result == TA_ERR_RUNAWAY ? TA_ACTOR_INPUT_RUNAWAY : 0u));
         return;
     }
     if (result != TA_OK) {
@@ -18434,14 +18626,11 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
         return TA_OK;
     }
     if (wake) {
-        if (!actor->macrostep || ta_run_input_of(actor) != 0u) {
-            /* Its macrostep began or ended already. */
-            ta_envelope_pool_give(&system->run.pool, index);
+        if (!actor->macrostep || actor->input != index) {
+            /* Not the wake that starts its macrostep, which began or ended
+             * already, or waits for another wake. */
+            ta_run_discard(system, index);
             return TA_OK;
-        }
-        ta_result result = ta_interpreter_hold_block(system, actor);
-        if (result != TA_OK) {
-            return ta_run_put_back(call, index, result);
         }
     } else if (actor->finished && !actor->macrostep) {
         ta_run_refuse(call, index, TA_ERR_DONE);
@@ -18553,14 +18742,13 @@ TA_API ta_result ta_actor_release(ta_system *system, ta_actor_id id) {
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    if (actor->event_block == NULL || !actor->event_block->slots.stopped) {
+    if ((actor->input_flags & TA_ACTOR_INPUT_STOPPED) == 0u) {
         return TA_ERR_INVALID;
     }
-    ta_event_slots *slots = &actor->event_block->slots;
-    slots->stopped = false;
-    slots->unlimited = slots->runaway;
-    slots->runaway = false;
-    ta_envelope_pool_enqueue(&system->run.pool, slots->input);
+    bool runaway = (actor->input_flags & TA_ACTOR_INPUT_RUNAWAY) != 0u;
+    actor->input_flags = (uint8_t)((actor->input_flags & TA_ACTOR_INPUT_IGNORED) |
+                                   (runaway ? TA_ACTOR_INPUT_UNLIMITED : 0u));
+    ta_envelope_pool_enqueue(&system->run.pool, actor->input);
     return TA_OK;
 }
 
@@ -19238,7 +19426,7 @@ TA_API const ta_event *ta_dm_host_event(const ta_dm_host *host) {
     if (host == NULL || host->impl == NULL || host->impl->actor == NULL) {
         return NULL;
     }
-    return ta_actor_bound_event(host->impl->actor);
+    return ta_actor_bound_event(host->impl->system, host->impl->actor);
 }
 
 TA_API ta_actor_id ta_dm_host_actor(const ta_dm_host *host) {
@@ -19256,7 +19444,7 @@ TA_API ta_time ta_dm_host_time(const ta_dm_host *host) {
     if (!ta_dm_host_valid(host)) {
         return 0;
     }
-    return ta_interpreter_macrostep_time(host->impl->system, host->impl->actor);
+    return ta_run_macrostep_time(host->impl->system, host->impl->actor);
 }
 
 /* The render area of the interpreter run that is calling the data model
@@ -21066,7 +21254,7 @@ TA_PRIVATE ta_result ta_invoke_take_report(ta_system *system, ta_actor *actor, c
     if (take->ends) {
         ta_invoke_remove_at(actor->sparse, (uint32_t)index);
     }
-    ta_interpreter_start_macrostep(actor, take->trace);
+    ta_interpreter_start_macrostep(actor);
     return TA_OK;
 }
 
@@ -25804,7 +25992,7 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
 TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
     /* Its taken input goes back, and its deferred inputs return to the run
-     * queue to be refused, while its event block still names them. */
+     * queue to be refused. */
     ta_run_session_gone(system, actor);
     ta_actor_discard_activation_effects(actor);
     if (actor->datamodel_initialized) {
@@ -26145,9 +26333,11 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
         return TA_ERR_INVALID;
     }
     /* The bootstrap is the session's first input: admitted (run.h), before
-     * anything is made, so a full pool refuses the spawn. */
+     * anything is made, so a full pool refuses the spawn. A traced spawn's
+     * parent waits in it for the bootstrap macrostep (ADR 0067). */
     uint32_t wake = 0;
-    ta_result result = ta_run_wake_reserve(system, true, &wake);
+    ta_result result =
+        ta_run_wake_reserve(system, &(ta_run_wake){ .admission = true, .trace = &params->trace }, &wake);
     if (result != TA_OK) {
         return result;
     }
@@ -26177,18 +26367,6 @@ static ta_result ta_actor_spawn_new(ta_system *system, const ta_actor_spawn_para
         return result;
     }
     ta_actor_id id = actor->record.id;
-
-    /* A traced spawn's parent waits in an event block for the bootstrap
-     * macrostep (ADR 0067); an untraced one needs no block. */
-    if (!ta_trace_parent_empty(&params->trace)) {
-        result = ta_interpreter_hold_block(system, actor);
-        if (result != TA_OK) {
-            ta_actor_release_slot(system, id);
-            ta_actor_free(system, actor);
-            return result;
-        }
-        actor->event_block->slots.trace = params->trace;
-    }
 
     if (params->parent != NULL) {
         actor->sparse = ta_mem_alloc(system->allocator, sizeof(ta_actor_sparse_state),
@@ -26444,7 +26622,7 @@ TA_API ta_result ta_actor_export_state(ta_system *system, const ta_actor_export_
     if (actor->finished) {
         return TA_ERR_DONE;
     }
-    if (actor->macrostep || ta_actor_external_event(actor) != NULL || ta_interpreter_internal_pending(actor)) {
+    if (actor->macrostep || actor->external != TA_EXTERNAL_NONE || ta_interpreter_internal_pending(actor)) {
         return TA_ERR_BUSY;
     }
     const ta_definition *definition = actor->definition;
@@ -26535,10 +26713,11 @@ TA_API ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_para
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
-    /* Its bootstrap is admitted as a spawn's is; a restored state has none,
-     * and gives the wake back. */
+    /* Its bootstrap is admitted as a spawn's is, with its trace parent; a
+     * restored state has none, and gives the wake back. */
     uint32_t wake = 0;
-    ta_result result = ta_run_wake_reserve(system, true, &wake);
+    ta_result result =
+        ta_run_wake_reserve(system, &(ta_run_wake){ .admission = true, .trace = &params->trace }, &wake);
     if (result != TA_OK) {
         return result;
     }
@@ -26600,13 +26779,6 @@ static ta_result ta_actor_prepare_new(ta_system *system, const ta_actor_prepare_
         } else {
             effects->replaying = true;
             effects->clock = *at;
-        }
-    }
-    /* A traced bootstrap's parent waits in an event block (ADR 0067). */
-    if (result == TA_OK && !ta_trace_parent_empty(&params->trace)) {
-        result = ta_interpreter_hold_block(system, actor);
-        if (result == TA_OK) {
-            actor->event_block->slots.trace = params->trace;
         }
     }
     if (result == TA_OK) {
@@ -26767,7 +26939,7 @@ TA_API ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_para
     }
     uint32_t wake = 0;
     if (result == TA_OK) {
-        result = ta_run_wake_reserve(system, false, &wake);
+        result = ta_run_wake_reserve(system, &(ta_run_wake){ 0 }, &wake);
     }
     if (result == TA_OK) {
         result = ta_actor_publish_route(system, actor, params->incumbent);
@@ -26789,7 +26961,7 @@ TA_API ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_para
         /* Its services never started, and the world moved on while it was
          * away: each active invocation is reported lost, as after a load. */
         if (ta_invoke_retire_all(system, actor)) {
-            ta_interpreter_start_macrostep(actor, NULL);
+            ta_interpreter_start_macrostep(actor);
         }
     } else if (actor->sparse != NULL && actor->sparse->pending_invokes.count != 0) {
         actor->macrostep = true;
@@ -26942,12 +27114,10 @@ TA_API ta_result ta_actor_abandon(ta_system *system, ta_actor_id id) {
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    /* Abandoning may give the event block back, so the input it names is read first. */
-    uint32_t input = actor->event_block == NULL ? 0u : actor->event_block->slots.input;
     ta_result result = ta_interpreter_abandon(system, actor);
     if (result == TA_OK) {
         /* Its input ends unreported, and its next deferred input may run. */
-        ta_run_input_dropped(system, actor, input);
+        ta_run_input_dropped(system, actor);
     }
     return result;
 }
@@ -27037,33 +27207,29 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
     return TA_OK;
 }
 
-static const ta_event *ta_actor_paused_event(const ta_actor *actor) {
+static const ta_event *ta_actor_paused_event(ta_system *system, const ta_actor *actor) {
     if (!actor->macrostep) {
         return NULL;
     }
-    return ta_actor_external_event(actor);
+    return ta_actor_external_event(system, actor);
 }
 
-TA_PRIVATE const ta_event *ta_actor_external_event(const ta_actor *actor) {
-    const ta_event_block *block = actor->event_block;
-    if (block == NULL || block->slots.external == TA_EXTERNAL_NONE) {
+TA_PRIVATE const ta_event *ta_actor_external_event(ta_system *system, const ta_actor *actor) {
+    if (actor->external == TA_EXTERNAL_NONE) {
         return NULL;
     }
-    return &block->slots.external_event;
+    /* Its taken input, or, restored and not yet taken, the wake holding it. */
+    return ta_run_input_event(system, actor->input);
 }
 
-TA_PRIVATE const ta_event *ta_actor_bound_event(const ta_actor *actor) {
-    const ta_event_block *block = actor->event_block;
-    if (block == NULL) {
-        return NULL;
-    }
-    switch ((ta_event_binding)block->slots.bound) {
+TA_PRIVATE const ta_event *ta_actor_bound_event(ta_system *system, const ta_actor *actor) {
+    switch ((ta_event_binding)actor->bound) {
     case TA_BOUND_EXTERNAL:
-        return &block->slots.external_event;
+        return ta_actor_external_event(system, actor);
     case TA_BOUND_INTERNAL:
-        return &block->events[0].event;
+        return &actor->internal->events[0].event;
     case TA_BOUND_KEPT:
-        return &block->slots.kept_event;
+        return &actor->internal->kept_event;
     case TA_BOUND_NONE:
     default:
         return NULL;
@@ -27071,11 +27237,11 @@ TA_PRIVATE const ta_event *ta_actor_bound_event(const ta_actor *actor) {
 }
 
 TA_PRIVATE uint32_t ta_actor_waiting_internal(const ta_actor *actor) {
-    const ta_event_block *block = actor->event_block;
-    if (block == NULL) {
+    const ta_internal_queue *queue = actor->internal;
+    if (queue == NULL) {
         return 0;
     }
-    return block->count - (block->slots.bound == TA_BOUND_INTERNAL ? 1u : 0u);
+    return queue->count - (actor->bound == TA_BOUND_INTERNAL ? 1u : 0u);
 }
 
 static size_t ta_vec_bytes(const ta_vec *vec) {
@@ -27085,8 +27251,8 @@ static size_t ta_vec_bytes(const ta_vec *vec) {
 /* Everything the core allocates for the actor now; see ta_actor_inspection. */
 static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
     size_t total = actor->definition->actor_block_bytes;
-    if (actor->event_block != NULL) {
-        total += ta_event_block_bytes(actor->event_block->capacity);
+    if (actor->internal != NULL) {
+        total += ta_internal_queue_bytes(actor->internal->capacity);
     }
     const ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse != NULL) {
@@ -27132,16 +27298,16 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
                                  ta_run_phase_in_microstep(actor->sparse->paused->at.phase),
         .step = ta_actor_step(actor),
         .position = ta_actor_position(actor),
-        .current_event = ta_actor_paused_event(actor),
+        .current_event = ta_actor_paused_event(system, actor),
         .allocated_bytes = ta_actor_allocated_bytes(actor),
         .final_state = TA_STATE_NONE,
-        .trace = { .context = ta_actor_macrostep_parent(actor).context,
+        .trace = { .context = ta_run_session_trace(system, actor).context,
                    .cause = ta_actor_step(actor) },
     };
     /* A taken head is `_event`, not work that waits. */
     uint32_t waiting = ta_actor_waiting_internal(actor);
     if (waiting != 0) {
-        out->internal_events = actor->event_block->events + (actor->event_block->count - waiting);
+        out->internal_events = actor->internal->events + (actor->internal->count - waiting);
         out->internal_count = waiting;
     }
     if (actor->sparse != NULL) {
@@ -27302,6 +27468,24 @@ TA_API ta_result ta_actor_get_completion(ta_system *system, ta_actor_id id, ta_a
 
 
 /*
+ * The events a session held (ADR 0069): its input's external event and its
+ * kept event, what `_event` names, the trace parent its macrostep runs
+ * under, and an operator transition still waiting with the external event
+ * (ADR 0082), copied into the arena. An event is captured only while the
+ * session holds it, so the image retains, detaches and releases only those.
+ */
+typedef struct {
+    uint8_t external;     /* ta_external_state */
+    uint8_t bound;        /* ta_event_binding */
+    uint8_t bound_before; /* what `bound` was before the last take, for a retry (ADR 0047) */
+    bool has_kept;
+    ta_event external_event;
+    ta_event kept_event;
+    ta_trace_parent trace;
+    ta_operator_jump *jump;
+} ta_image_events;
+
+/*
  * A session image owns one arena, and every core-owned byte it keeps lives
  * there: the session storage, the queued events, the invocation records, the
  * delayed sends, and the text of the definition identity and of a named
@@ -27338,15 +27522,14 @@ struct ta_session_image {
     bool macrostep;
     bool finished;
     /* The step counters, and whether the macrostep has begun (ADR 0067);
-     * the macrostep's trace parent is in `slots`. */
+     * the macrostep's trace parent is in `events`. */
     bool trace_begun;
     uint32_t trace_microstep;
     uint32_t trace_lifecycle;
     uint64_t trace_macrostep;
     /* The external and kept events and what `_event` names (ADR 0069). A
-     * bound queue head is internal_events[0]. An operator transition waiting
-     * with the external event is copied into the arena (ADR 0082). */
-    ta_event_slots slots;
+     * bound queue head is internal_events[0]. */
+    ta_image_events events;
     uint64_t next_send_id;
 
     ta_queued_event *internal_events;
@@ -27485,6 +27668,16 @@ static ta_result ta_image_copy_identity(ta_arena *arena, ta_definition_identity 
  * Capture
  */
 
+/* The operator transition still waiting with the session's external event,
+ * or null: once the event is taken, nothing takes the transition again. */
+static const ta_operator_jump *ta_image_waiting_jump(const ta_actor *actor) {
+    if (actor->external != TA_EXTERNAL_WAITING) {
+        return NULL;
+    }
+    const ta_system *system = actor->host_impl.system;
+    return ta_run_input_jump(system, actor->input);
+}
+
 /* What the arena has to hold, so one block usually serves the whole image. */
 static size_t ta_image_measure(const ta_actor *actor) {
     const ta_actor_sparse_state *sparse = actor->sparse;
@@ -27495,13 +27688,14 @@ static size_t ta_image_measure(const ta_actor *actor) {
         ta_actor_address view = ta_address_view(actor->record.self.as.named);
         total += sizeof(ta_address) + (size_t)view.family.name.len + (size_t)view.name.len + 2u;
     }
-    if (actor->event_block != NULL) {
-        total += (size_t)actor->event_block->count * sizeof(ta_queued_event);
-        if (actor->event_block->slots.jump != NULL) {
-            size_t bytes = 0;
-            (void)ta_operator_jump_bytes(actor->event_block->slots.jump->target_count, &bytes); /* it exists */
-            total += bytes + _Alignof(ta_operator_jump);
-        }
+    if (actor->internal != NULL) {
+        total += (size_t)actor->internal->count * sizeof(ta_queued_event);
+    }
+    const ta_operator_jump *jump = ta_image_waiting_jump(actor);
+    if (jump != NULL) {
+        size_t bytes = 0;
+        (void)ta_operator_jump_bytes(jump->target_count, &bytes); /* it exists */
+        total += bytes + _Alignof(ta_operator_jump);
     }
     if (sparse != NULL) {
         total += (size_t)sparse->invoke_count * sizeof(ta_active_invoke);
@@ -27532,38 +27726,39 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         result = ta_image_copy_address(arena, &image->self);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(system, arena, &image->slots.external_event);
+        result = ta_image_copy_origin(system, arena, &image->events.external_event);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(system, arena, &image->slots.kept_event);
+        result = ta_image_copy_origin(system, arena, &image->events.kept_event);
     }
     if (result != TA_OK) {
         return result;
     }
 
     /* An operator transition waiting with the external event (ADR 0082). */
-    if (actor->event_block != NULL && actor->event_block->slots.jump != NULL) {
+    const ta_operator_jump *jump = ta_image_waiting_jump(actor);
+    if (jump != NULL) {
         size_t bytes = 0;
-        ta_result sized = ta_operator_jump_bytes(actor->event_block->slots.jump->target_count, &bytes);
+        ta_result sized = ta_operator_jump_bytes(jump->target_count, &bytes);
         if (sized != TA_OK) {
             return sized;
         }
-        image->slots.jump = ta_arena_alloc(arena, bytes, _Alignof(ta_operator_jump));
-        if (image->slots.jump == NULL) {
+        image->events.jump = ta_arena_alloc(arena, bytes, _Alignof(ta_operator_jump));
+        if (image->events.jump == NULL) {
             return TA_ERR_NOMEM;
         }
-        ta_mem_copy(image->slots.jump, actor->event_block->slots.jump, bytes);
+        ta_mem_copy(image->events.jump, jump, bytes);
     }
 
-    if (actor->event_block != NULL && actor->event_block->count != 0) {
-        uint32_t count = actor->event_block->count;
+    if (actor->internal != NULL && actor->internal->count != 0) {
+        uint32_t count = actor->internal->count;
         image->internal_events = ta_arena_alloc(arena, (size_t)count * sizeof(ta_queued_event),
                                                 _Alignof(ta_queued_event));
         if (image->internal_events == NULL) {
             return TA_ERR_NOMEM;
         }
         for (uint32_t index = 0; index < count; index += 1) {
-            image->internal_events[index] = actor->event_block->events[index];
+            image->internal_events[index] = actor->internal->events[index];
             result = ta_image_copy_origin(system, arena, &image->internal_events[index].event);
             if (result != TA_OK) {
                 return result;
@@ -27632,8 +27827,8 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
 
 /* The second half of a capture: infallible, so it cannot leave a half-image. */
 static void ta_image_retain(ta_session_image *image) {
-    ta_value_retain(&image->slots.external_event.data);
-    ta_value_retain(&image->slots.kept_event.data);
+    ta_value_retain(&image->events.external_event.data);
+    ta_value_retain(&image->events.kept_event.data);
     ta_value_retain(&image->completion.data);
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
         ta_value_retain(&image->internal_events[index].event.data);
@@ -27647,20 +27842,20 @@ static void ta_image_retain(ta_session_image *image) {
     }
 }
 
-/* The actor's event slots, with only the events it holds (see below). */
-static ta_event_slots ta_image_slots(const ta_actor *actor) {
-    if (actor->event_block == NULL) {
-        return (ta_event_slots){0};
-    }
-    const ta_event_slots *slots = &actor->event_block->slots;
-    return (ta_event_slots){
-        .external = slots->external,
-        .bound = slots->bound,
-        .bound_before = slots->bound_before,
-        .has_kept = slots->has_kept,
-        .external_event = slots->external != TA_EXTERNAL_NONE ? slots->external_event : (ta_event){0},
-        .kept_event = slots->has_kept ? slots->kept_event : (ta_event){0},
-        .trace = actor->macrostep ? slots->trace : (ta_trace_parent){0},
+/* The actor's events, with only those it holds (see below): the external
+ * event read from its input's envelope, borrowed until the image retains. */
+static ta_image_events ta_image_events_of(const ta_system *system, const ta_actor *actor) {
+    bool kept = actor->internal != NULL && actor->internal->has_kept;
+    return (ta_image_events){
+        .external = actor->external,
+        .bound = actor->bound,
+        .bound_before = actor->bound_before,
+        .has_kept = kept,
+        .external_event = actor->external != TA_EXTERNAL_NONE
+                              ? ta_run_input_event_of(system, actor->input)
+                              : (ta_event){0},
+        .kept_event = kept ? actor->internal->kept_event : (ta_event){0},
+        .trace = actor->macrostep ? ta_run_session_trace(system, actor) : (ta_trace_parent){0},
     };
 }
 
@@ -27706,7 +27901,7 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
          * takes, and later retains, detaches and releases, only what the
          * flags say the actor holds.
          */
-        .slots = ta_image_slots(actor),
+        .events = ta_image_events_of(system, actor),
         .next_send_id = actor->next_send_id,
         .has_parent = sparse != NULL && sparse->has_parent,
         .parent = sparse != NULL ? sparse->parent : (ta_actor_parent){0},
@@ -27757,8 +27952,8 @@ TA_API void ta_session_image_destroy(ta_session_image *image) {
         return;
     }
     /* The mirror of ta_image_retain(), in the same order. */
-    ta_value_release(&image->slots.external_event.data);
-    ta_value_release(&image->slots.kept_event.data);
+    ta_value_release(&image->events.external_event.data);
+    ta_value_release(&image->events.kept_event.data);
     ta_value_release(&image->completion.data);
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
         ta_value_release(&image->internal_events[index].event.data);
@@ -27832,10 +28027,8 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
             return result;
         }
     }
-    if (actor->event_block != NULL) {
-        actor->event_block->slots.bound = image->slots.bound;
-        actor->event_block->slots.bound_before = image->slots.bound_before;
-    }
+    actor->bound = image->events.bound;
+    actor->bound_before = image->events.bound_before;
     /*
      * Invoker service handles do not survive an image, so every invocation
      * that was active is retired and reported once, in the order it was
@@ -27881,7 +28074,7 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
      * image recorded as idle, so it has a macrostep to run again.
      */
     if (ta_interpreter_internal_pending(actor)) {
-        ta_interpreter_start_macrostep(actor, NULL);
+        ta_interpreter_start_macrostep(actor);
     }
     return TA_OK;
 }
@@ -27974,24 +28167,18 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     actor->trace_macrostep = image->trace_macrostep;
     actor->next_send_id = image->next_send_id;
     actor->session_epoch = image->source_epoch;
-    /* The events live in an event block (ADR 0069). What `_event` names is
-     * restored with the queue it may point into. */
-    ta_event_slots *slots = NULL;
-    if (image->slots.external != TA_EXTERNAL_NONE || image->slots.has_kept ||
-        !ta_trace_parent_empty(&image->slots.trace)) {
-        result = ta_interpreter_hold_block(system, actor);
-        slots = result == TA_OK ? &actor->event_block->slots : NULL;
+    /* The external event is in the wake the caller reserved for this
+     * session (ta_image_wake_reserve); the kept event lives in the internal
+     * queue, which an invoked session holding an external event needs too,
+     * to keep it when its macrostep ends. What `_event` names is restored
+     * with the queue it may point into. */
+    actor->external = image->events.external;
+    if (image->events.has_kept || (image->events.external != TA_EXTERNAL_NONE && image->has_parent)) {
+        result = ta_interpreter_queue_reserve(system, actor, 0);
     }
-    if (slots != NULL) {
-        slots->trace = image->slots.trace;
-    }
-    if (slots != NULL && image->slots.external != TA_EXTERNAL_NONE) {
-        ta_event_retain(&image->slots.external_event, &slots->external_event);
-        slots->external = image->slots.external;
-    }
-    if (slots != NULL && image->slots.has_kept) {
-        ta_event_retain(&image->slots.kept_event, &slots->kept_event);
-        slots->has_kept = true;
+    if (result == TA_OK && image->events.has_kept) {
+        ta_event_retain(&image->events.kept_event, &actor->internal->kept_event);
+        actor->internal->has_kept = true;
     }
     /*
      * The image carries detached addresses; the actor holds this system's
@@ -28001,22 +28188,8 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     if (result == TA_OK) {
         result = ta_actor_ref_localize(system, &actor->record.self);
     }
-    if (result == TA_OK && slots != NULL && slots->external != TA_EXTERNAL_NONE) {
-        result = ta_image_localize_origin(system, &slots->external_event);
-    }
-    if (result == TA_OK && slots != NULL && slots->has_kept) {
-        result = ta_image_localize_origin(system, &slots->kept_event);
-    }
-    if (result == TA_OK && slots != NULL && image->slots.jump != NULL) {
-        size_t bytes = 0;
-        result = ta_operator_jump_bytes(image->slots.jump->target_count, &bytes);
-        if (result == TA_OK) {
-            slots->jump = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
-            result = slots->jump == NULL ? TA_ERR_NOMEM : TA_OK;
-        }
-        if (result == TA_OK) {
-            ta_mem_copy(slots->jump, image->slots.jump, bytes);
-        }
+    if (result == TA_OK && image->events.has_kept) {
+        result = ta_image_localize_origin(system, &actor->internal->kept_event);
     }
     if (result == TA_OK && image->paused != NULL) {
         result = ta_image_restore_pause(image, actor, system);
@@ -28068,14 +28241,58 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     return TA_OK;
 }
 
+/*
+ * Reserves the wake a session restored from `image` runs its macrostep
+ * with, admitted like a spawn's bootstrap (run.h), before anything is made:
+ * it carries the trace parent the macrostep runs under and, when the
+ * session held an external event, that event, its origin made this
+ * system's, and the operator transition waiting with it. A failure changes
+ * nothing.
+ */
+static ta_result ta_image_wake_reserve(ta_system *system, const ta_session_image *image, uint32_t *out) {
+    const ta_image_events *events = &image->events;
+    ta_run_wake wake = { .admission = true, .trace = &events->trace };
+    if (events->external == TA_EXTERNAL_NONE) {
+        return ta_run_wake_reserve(system, &wake, out);
+    }
+    ta_event event;
+    ta_event_retain(&events->external_event, &event);
+    ta_result result = ta_image_localize_origin(system, &event);
+    size_t bytes = 0;
+    ta_operator_jump *jump = NULL;
+    if (result == TA_OK && events->jump != NULL) {
+        result = ta_operator_jump_bytes(events->jump->target_count, &bytes);
+        if (result == TA_OK) {
+            jump = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
+            result = jump == NULL ? TA_ERR_NOMEM : TA_OK;
+        }
+        if (result == TA_OK) {
+            ta_mem_copy(jump, events->jump, bytes);
+        }
+    }
+    if (result == TA_OK) {
+        wake.event = &event;
+        wake.jump = jump;
+        result = ta_run_wake_reserve(system, &wake, out);
+    }
+    if (result != TA_OK) {
+        ta_event_release(&event);
+        if (jump != NULL) {
+            ta_mem_free(system->allocator, jump,
+                        &(ta_allocator_free_params){ .size = bytes, .alignment = _Alignof(ta_operator_jump) });
+        }
+    }
+    return result;
+}
+
 TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
-    if (system == NULL) {
+    if (system == NULL || params == NULL || params->image == NULL) {
         return TA_ERR_INVALID;
     }
     /* A session restored in a macrostep has it to run: its wake is admitted
      * like a spawn's bootstrap (run.h), before anything is made. */
     uint32_t wake = 0;
-    ta_result result = ta_run_wake_reserve(system, true, &wake);
+    ta_result result = ta_image_wake_reserve(system, params->image, &wake);
     if (result != TA_OK) {
         return result;
     }
@@ -28380,8 +28597,8 @@ static ta_result ta_offload_encode_value(const ta_offload_value_params *params) 
 /* A stable actor only (ADR 0074 section 6): nothing runs, waits or is owed. */
 static bool ta_offload_stable(const ta_session_image *image) {
     return !image->macrostep && image->paused == NULL && image->internal_count == 0 &&
-           !image->completion_pending && !image->has_parent && image->slots.external == TA_EXTERNAL_NONE &&
-           !image->slots.has_kept;
+           !image->completion_pending && !image->has_parent && image->events.external == TA_EXTERNAL_NONE &&
+           !image->events.has_kept;
 }
 
 typedef struct {
@@ -28817,9 +29034,11 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
     }
     /* A session loaded in a macrostep, or with invocations to retire, has it
      * to run: its wake is admitted like a spawn's bootstrap (run.h), before
-     * anything is made. */
+     * anything is made. An image in bytes is stable, so it holds no event
+     * and runs under no trace parent. */
     uint32_t wake = 0;
-    ta_result result = ta_run_wake_reserve(system, true, &wake);
+    ta_result result = params->image != NULL ? ta_image_wake_reserve(system, params->image, &wake)
+                                             : ta_run_wake_reserve(system, &(ta_run_wake){ .admission = true }, &wake);
     if (result != TA_OK) {
         return result;
     }
@@ -28889,7 +29108,6 @@ typedef struct {
  * code checks a parameter again. */
 static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_MICROSTEP_LIMIT] = { "microstepLimit", "microsteps", TA_PARAM_DEFAULT_MICROSTEP_LIMIT, 0, 2147483647u },
-    [TA_PARAM_EVENT_BLOCK_CACHE] = { "eventBlockCache", "blocks", TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, 0, 65536u },
     [TA_PARAM_EVENT_NAME_DEPTH] = { "eventNameDepth", "segments", TA_PARAM_DEFAULT_EVENT_NAME_DEPTH, 8,
                                     TA_EVENT_NAME_MAX_DEPTH },
     [TA_PARAM_COMPILE_MESSAGE_BYTES] = { "compileMessageBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES, 16,
@@ -29048,7 +29266,7 @@ TA_PRIVATE ta_result ta_system_nested_region(ta_system *system, uint32_t depth, 
 /*
  * The memory every run needs, allocated once (ADR 0092 section 3):
  * interpreter region 0 with its render area, then the table of nested
- * regions; and the event-block cache, filled to its parameter.
+ * regions.
  */
 static ta_result ta_system_arena_open(ta_system *system) {
     ta_interpreter_region first = { 0 };
@@ -29148,7 +29366,6 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     }
     *system = (ta_system){ .allocator = config->allocator,
                            .incarnation = config->incarnation,
-                           .block_cache_limit = params[TA_PARAM_EVENT_BLOCK_CACHE],
                            .definition_sink = ta_null_definition_sink() };
     ta_mem_copy(system->params, params, sizeof params);
     /* The bounds were checked: the pool and the name area accept them. */
@@ -29241,8 +29458,6 @@ TA_API void ta_system_destroy(ta_system *system) {
     ta_io_origin_table_destroy(&system->io_messages);
     ta_vec_destroy(&system->io_processors);
     ta_vec_destroy(&system->invokers);
-    system->block_cache_limit = 0;
-    ta_interpreter_block_cache_trim(system);
     ta_system_arena_close(system);
     ta_interpreter_release_spares(system);
     ta_trace_close(system);
@@ -30081,10 +30296,6 @@ static bool ta_tracing(const ta_interpreter *it, ta_trace_kind kind) {
     return (it->trace_kinds & TA_TRACE_BIT(kind)) != 0;
 }
 
-TA_PRIVATE ta_trace_parent ta_actor_macrostep_parent(const ta_actor *actor) {
-    return actor->event_block == NULL ? (ta_trace_parent){0} : actor->event_block->slots.trace;
-}
-
 TA_PRIVATE ta_step_key ta_actor_step(const ta_actor *actor) {
     if (!actor->trace_begun) {
         return (ta_step_key){ .session = actor->session_id, .family = actor->definition->family };
@@ -30347,14 +30558,14 @@ static void ta_count_error(ta_system *system, const ta_actor *actor, ta_event_na
 
 /* Counts the errors a unit queued after `mark`, when it commits. */
 static void ta_count_raised(ta_interpreter *it, uint32_t mark) {
-    const ta_event_block *queue = it->actor->event_block;
+    const ta_internal_queue *queue = it->actor->internal;
     for (uint32_t index = mark; queue != NULL && index < queue->count; index += 1u) {
         ta_count_error(it->system, it->actor, queue->events[index].event.name);
     }
 }
 
 static void ta_trace_raised_records(ta_interpreter *it, uint32_t mark) {
-    const ta_event_block *queue = it->actor->event_block;
+    const ta_internal_queue *queue = it->actor->internal;
     if (!ta_tracing(it, TA_TRACE_RAISED) || queue == NULL) {
         return;
     }
@@ -30404,7 +30615,7 @@ static void ta_trace_action_failed(ta_interpreter *it, const ta_fault *fault) {
     ta_trace_entry_fault(&record, fault);
     /* The error the failure just queued is the queue's last event, and its
      * data is what the operation reported: borrow it for the record. */
-    const ta_event_block *queue = it->actor->event_block;
+    const ta_internal_queue *queue = it->actor->internal;
     if (queue != NULL && queue->count != 0) {
         record.fault.data = queue->events[queue->count - 1u].event.data;
     }
@@ -30439,7 +30650,7 @@ static void ta_trace_begin(ta_interpreter *it) {
     actor->trace_macrostep += 1u;
     TA_COUNT(it->system, actor->definition, macrosteps);
     actor->trace_microstep = 0;
-    ta_trace_parent parent = ta_actor_macrostep_parent(actor);
+    ta_trace_parent parent = ta_run_session_trace(it->system, actor);
     it->trace_context = parent.context;
     it->trace_kinds = ta_trace_macrostep_kinds(&it->system->trace.masks, &parent.context);
     if (!ta_tracing(it, TA_TRACE_MACROSTEP_BEGIN)) {
@@ -30448,9 +30659,8 @@ static void ta_trace_begin(ta_interpreter *it) {
     ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_MACROSTEP_BEGIN);
     record.position = ta_trace_nowhere();
     record.cause = parent.cause;
-    const ta_event_block *block = actor->event_block;
-    if (block != NULL && block->slots.external == TA_EXTERNAL_TAKEN) {
-        record.event = &block->slots.external_event;
+    if (actor->external == TA_EXTERNAL_TAKEN) {
+        record.event = ta_run_input_event(it->system, actor->input);
     }
     ta_trace_emit(it, &record);
 }
@@ -30574,7 +30784,7 @@ static void ta_trace_selection(ta_interpreter *it, uint32_t mark) {
         ta_trace_raised_records(it, mark);
         return;
     }
-    const ta_event_block *queue = it->actor->event_block;
+    const ta_internal_queue *queue = it->actor->internal;
     for (uint32_t index = 0; index < count; index += 1u) {
         const struct ta_trace_condition *guard = &it->conditions[index];
         ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_CONDITION);
@@ -30635,129 +30845,109 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
 }
 
 /* ------------------------------------------------------------------------
- * Event blocks (ADR 0064, ADR 0069)
+ * The internal queue (ADR 0069)
  */
 
-/* The first capacity of a block's queue, which is also the largest a block
- * the system caches may have: the cache holds small blocks only. */
-#define TA_EVENT_BLOCK_QUEUE_INITIAL 8u
+/* The first capacity of an actor's internal queue. */
+#define TA_INTERNAL_QUEUE_INITIAL 8u
 
-TA_PRIVATE size_t ta_event_block_bytes(uint32_t capacity) {
-    return offsetof(ta_event_block, events) + (size_t)capacity * sizeof(ta_queued_event);
+TA_PRIVATE size_t ta_internal_queue_bytes(uint32_t capacity) {
+    return offsetof(ta_internal_queue, events) + (size_t)capacity * sizeof(ta_queued_event);
 }
 
-static void ta_block_free(ta_system *system, ta_event_block *block) {
-    ta_mem_free(system->allocator, block,
-                &(ta_allocator_free_params){ .size = ta_event_block_bytes(block->capacity),
-                                             .alignment = _Alignof(ta_event_block) });
-}
-
-/* An empty block: the newest cached one, else a new one with room for
- * `capacity` events. Null when there is no memory for one. */
-static ta_event_block *ta_block_take(ta_system *system, uint32_t capacity) {
-    ta_event_block *block = system->block_cache;
-    if (block != NULL) {
-        system->block_cache = block->next_cached;
-        system->block_cache_count -= 1u;
-    } else {
-        block = ta_mem_alloc(system->allocator, ta_event_block_bytes(capacity), _Alignof(ta_event_block));
-        if (block == NULL) {
-            return NULL;
-        }
-        block->capacity = capacity;
-    }
-    block->count = 0;
-    block->next_cached = NULL;
-    block->slots = (ta_event_slots){0};
-    return block;
-}
-
-TA_PRIVATE ta_result ta_interpreter_hold_block(ta_system *system, ta_actor *actor) {
-    if (actor->event_block == NULL) {
-        /* A delivered event needs no queue room: a new block is a header
-         * only, which grows when the first internal event is queued. */
-        actor->event_block = ta_block_take(system, 0);
-        if (actor->event_block == NULL) {
-            return TA_ERR_NOMEM;
-        }
-    }
-    return TA_OK;
+static void ta_internal_queue_free(ta_system *system, ta_internal_queue *queue) {
+    ta_mem_free(system->allocator, queue,
+                &(ta_allocator_free_params){ .size = ta_internal_queue_bytes(queue->capacity),
+                                             .alignment = _Alignof(ta_internal_queue) });
 }
 
 /*
- * Makes sure the actor holds a block with room for one more internal event:
- * its own, else one from the system's cache, else a new one; a full queue
- * doubles. TA_ERR_NOMEM leaves the actor as it was, apart from a block
- * taken from the cache, which it may keep.
+ * Gives the actor an internal queue with room for `capacity` events, or at
+ * least the one it has: the system's spare when it has none and the spare
+ * is large enough, else a new one; or its own, grown, which moves its
+ * events and its kept event. TA_ERR_NOMEM leaves the actor as it was.
  */
-static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
-    ta_event_block *block = actor->event_block;
-    if (block == NULL) {
-        block = ta_block_take(system, TA_EVENT_BLOCK_QUEUE_INITIAL);
-        if (block == NULL) {
-            return TA_ERR_NOMEM;
-        }
-        actor->event_block = block;
-    }
-    if (block->count < block->capacity) {
+static ta_result ta_internal_queue_grow(ta_system *system, ta_actor *actor, uint32_t capacity) {
+    ta_internal_queue *queue = actor->internal;
+    if (queue != NULL && queue->capacity >= capacity) {
         return TA_OK;
     }
-    if (block->capacity > UINT32_MAX / 2u) {
-        return TA_ERR_NOMEM;
+    ta_internal_queue *spare = system->spare_queue;
+    if (queue == NULL && spare != NULL && spare->capacity >= capacity) {
+        system->spare_queue = NULL;
+        actor->internal = spare;
+        return TA_OK;
     }
-    uint32_t capacity = block->capacity == 0 ? TA_EVENT_BLOCK_QUEUE_INITIAL : block->capacity * 2u;
-    ta_event_block *grown = ta_mem_alloc(system->allocator, ta_event_block_bytes(capacity),
-                                         _Alignof(ta_event_block));
+    ta_internal_queue *grown = ta_mem_alloc(system->allocator, ta_internal_queue_bytes(capacity),
+                                            _Alignof(ta_internal_queue));
     if (grown == NULL) {
         return TA_ERR_NOMEM;
     }
-    ta_mem_copy(grown, block, ta_event_block_bytes(block->count));
-    grown->capacity = capacity;
-    ta_block_free(system, block);
-    actor->event_block = grown;
+    if (queue == NULL) {
+        *grown = (ta_internal_queue){ .capacity = capacity };
+    } else {
+        ta_mem_copy(grown, queue, ta_internal_queue_bytes(queue->count));
+        grown->capacity = capacity;
+        ta_internal_queue_free(system, queue);
+    }
+    actor->internal = grown;
     return TA_OK;
 }
 
 /*
- * Gives an actor's block back when the actor no longer needs it: it holds
- * no event, no microstep is paused, and no running macrostep's trace parent
- * (ADR 0067). It goes to the system's cache, or is freed when the cache is
- * full or the block grew past the first capacity. Cannot fail.
+ * Makes sure the actor's queue has room for one more internal event: the
+ * system's spare, or a new queue, when it has none; a full one doubles.
+ * TA_ERR_NOMEM leaves the actor as it was.
  */
-static void ta_block_settle(ta_system *system, ta_actor *actor) {
-    ta_event_block *block = actor->event_block;
-    if (block == NULL || block->count != 0 || block->slots.external != TA_EXTERNAL_NONE || block->slots.has_kept ||
+static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
+    const ta_internal_queue *queue = actor->internal;
+    if (queue != NULL && queue->count < queue->capacity) {
+        return TA_OK;
+    }
+    if (queue != NULL && queue->capacity > UINT32_MAX / 2u) {
+        return TA_ERR_NOMEM;
+    }
+    uint32_t capacity = queue == NULL || queue->capacity == 0 ? TA_INTERNAL_QUEUE_INITIAL : queue->capacity * 2u;
+    return ta_internal_queue_grow(system, actor, capacity);
+}
+
+TA_PRIVATE ta_result ta_interpreter_keep_room(ta_system *system, ta_actor *actor) {
+    if (actor->sparse == NULL || !actor->sparse->has_parent) {
+        return TA_OK;
+    }
+    /* A queue of no events holds the kept event; the first internal event grows it. */
+    return ta_internal_queue_grow(system, actor, 0);
+}
+
+/*
+ * Takes an actor's queue once nothing needs it: it holds no event and keeps
+ * none, and no macrostep runs or is paused, so it is never given up and
+ * made again inside one. It becomes the system's spare when there is none
+ * and it has its first capacity; otherwise it is freed. Cannot fail.
+ */
+static void ta_queue_settle(ta_system *system, ta_actor *actor) {
+    ta_internal_queue *queue = actor->internal;
+    if (queue == NULL || queue->count != 0 || queue->has_kept ||
         (actor->sparse != NULL && actor->sparse->paused != NULL) || actor->macrostep) {
         return;
     }
-    actor->event_block = NULL;
-    if (system->block_cache_count < system->block_cache_limit && block->capacity <= TA_EVENT_BLOCK_QUEUE_INITIAL) {
-        block->next_cached = system->block_cache;
-        system->block_cache = block;
-        system->block_cache_count += 1u;
+    actor->internal = NULL;
+    if (system->spare_queue == NULL && queue->capacity == TA_INTERNAL_QUEUE_INITIAL) {
+        system->spare_queue = queue;
         return;
     }
-    ta_block_free(system, block);
-}
-
-TA_PRIVATE void ta_interpreter_block_cache_trim(ta_system *system) {
-    while (system->block_cache_count > system->block_cache_limit) {
-        ta_event_block *block = system->block_cache;
-        system->block_cache = block->next_cached;
-        system->block_cache_count -= 1u;
-        ta_block_free(system, block);
-    }
+    ta_internal_queue_free(system, queue);
 }
 
 TA_PRIVATE ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event) {
     ta_actor_touch(actor);
     ta_result result = ta_queue_room(system, actor);
     if (result != TA_OK) {
-        ta_block_settle(system, actor);
+        ta_queue_settle(system, actor);
         ta_event_release(event);
         return result;
     }
-    ta_event_block *queue = actor->event_block;
+    ta_internal_queue *queue = actor->internal;
     queue->events[queue->count] = (ta_queued_event){
         .event = *event,
         .flags = TA_EVENT_FLAG_OWNS_DATA | (event->type == TA_EVENT_PLATFORM ? TA_EVENT_FLAG_GENERATED : 0u),
@@ -30768,7 +30958,7 @@ TA_PRIVATE ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor
 
 /* Removes the queue's head; its event is the caller's now. */
 static ta_event ta_queue_pop(ta_actor *actor) {
-    ta_event_block *queue = actor->event_block;
+    ta_internal_queue *queue = actor->internal;
     ta_event head = queue->events[0].event;
     for (uint32_t index = 1; index < queue->count; index += 1) {
         queue->events[index - 1u] = queue->events[index];
@@ -30779,7 +30969,7 @@ static ta_event ta_queue_pop(ta_actor *actor) {
 
 /* How many events the actor's queue holds, a taken head included. */
 static uint32_t ta_queue_mark(const ta_actor *actor) {
-    return actor->event_block == NULL ? 0 : actor->event_block->count;
+    return actor->internal == NULL ? 0 : actor->internal->count;
 }
 
 /*
@@ -30788,152 +30978,106 @@ static uint32_t ta_queue_mark(const ta_actor *actor) {
  * (ADR 0070). Only events of that step lie after the mark.
  */
 static void ta_queue_truncate(ta_actor *actor, uint32_t mark) {
-    ta_event_block *queue = actor->event_block;
+    ta_internal_queue *queue = actor->internal;
     while (queue != NULL && queue->count > mark) {
         queue->count -= 1u;
         ta_event_release(&queue->events[queue->count].event);
     }
 }
 
-/* Makes `event`, and its references, the kept event (ADR 0069). */
-static void ta_keep_event(ta_event_slots *slots, const ta_event *event) {
-    if (slots->has_kept) {
-        ta_event_release(&slots->kept_event);
+/* Makes `event`, and its references, the kept event (ADR 0069); the queue
+ * exists, since it held the event or was made for the kept one. */
+static void ta_keep_event(ta_actor *actor, const ta_event *event) {
+    ta_internal_queue *queue = actor->internal;
+    if (queue->has_kept) {
+        ta_event_release(&queue->kept_event);
     }
-    slots->kept_event = *event;
-    slots->has_kept = true;
+    queue->kept_event = *event;
+    queue->has_kept = true;
 }
 
 /*
- * Binds `_event` to an event just taken (SCXML 5.10.1); the actor holds a
- * block, since it holds the event. Nothing moves but a taken queue head,
- * which leaves the queue for the kept slot, so that a retry can bind it
- * again.
+ * Binds `_event` to an event just taken (SCXML 5.10.1). Nothing moves but a
+ * taken queue head, which leaves the queue for the kept slot, so that a
+ * retry can bind it again; the external event stays in its input.
  */
 static void ta_bind_event(ta_actor *actor, ta_event_binding taken) {
-    ta_event_slots *slots = &actor->event_block->slots;
-    if (slots->bound == TA_BOUND_INTERNAL) {
+    if (actor->bound == TA_BOUND_INTERNAL) {
         ta_event head = ta_queue_pop(actor);
-        ta_keep_event(slots, &head);
-        slots->bound = TA_BOUND_KEPT;
+        ta_keep_event(actor, &head);
+        actor->bound = TA_BOUND_KEPT;
     }
-    slots->bound_before = slots->bound;
-    slots->bound = (uint8_t)taken;
+    actor->bound_before = actor->bound;
+    actor->bound = (uint8_t)taken;
     if (taken == TA_BOUND_EXTERNAL) {
-        slots->external = TA_EXTERNAL_TAKEN;
+        actor->external = TA_EXTERNAL_TAKEN;
     }
 }
 
 /*
  * Gives back the event of a microstep that could not start (ADR 0047): it
- * never left its slot or the queue, so only the marks go back.
+ * never left its input or the queue, so only the marks go back.
  */
 static void ta_unbind_event(ta_actor *actor) {
-    ta_event_slots *slots = &actor->event_block->slots;
-    if (slots->bound == TA_BOUND_EXTERNAL) {
-        slots->external = TA_EXTERNAL_WAITING;
+    if (actor->bound == TA_BOUND_EXTERNAL) {
+        actor->external = TA_EXTERNAL_WAITING;
     }
-    slots->bound = slots->bound_before;
-}
-
-/* Frees the operator transition a waiting external event came with. */
-static void ta_jump_free(ta_system *system, ta_event_slots *slots) {
-    if (slots->jump != NULL) {
-        size_t bytes = 0;
-        (void)ta_operator_jump_bytes(slots->jump->target_count, &bytes); /* sized when it was allocated */
-        ta_mem_free(system->allocator, slots->jump,
-                    &(ta_allocator_free_params){ .size = bytes, .alignment = _Alignof(ta_operator_jump) });
-        slots->jump = NULL;
-    }
+    actor->bound = actor->bound_before;
 }
 
 /* Notes, as its macrostep ends, whether the external event it took enabled
  * nothing, for an IGNORED outcome (ADR 0089 section 8). */
 static void ta_note_ignored(ta_interpreter *it) {
-    ta_event_block *block = it->actor->event_block;
-    it->ended_ignored = block != NULL && block->slots.external_ignored;
-    if (block != NULL) {
-        block->slots.timed = false;
-    }
+    it->ended_ignored = (it->actor->input_flags & TA_ACTOR_INPUT_IGNORED) != 0u;
 }
 
-/*
- * The logical time of the actor's macrostep (ADR 0089 section 9): the one
- * its first run took, so it does not move while a macrostep spans
- * several ta_run() calls; the system's time when no macrostep has one.
- */
-TA_PRIVATE ta_time ta_interpreter_macrostep_time(const ta_system *system, const ta_actor *actor) {
-    const ta_event_block *block = actor->event_block;
-    if (actor->macrostep && block != NULL && block->slots.timed) {
-        return block->slots.time;
-    }
-    return ta_actor_now(system, actor);
-}
-
-/* The first run of a macrostep takes its time, in a block the actor then
- * holds until the macrostep ends (ta_block_settle). */
-static ta_result ta_take_macrostep_time(ta_system *system, ta_actor *actor) {
-    ta_result result = ta_interpreter_hold_block(system, actor);
-    if (result == TA_OK && !actor->event_block->slots.timed) {
-        actor->event_block->slots.time = ta_actor_now(system, actor);
-        actor->event_block->slots.timed = true;
-    }
-    return result;
-}
-
-/* Releases the external event, and the operator transition it came with. */
-static void ta_release_external(ta_system *system, ta_event_slots *slots) {
-    if (slots->external != TA_EXTERNAL_NONE) {
-        ta_event_release(&slots->external_event);
-        slots->external = TA_EXTERNAL_NONE;
-    }
-    slots->external_ignored = false;
-    ta_jump_free(system, slots);
+/* The external event is done with; its input keeps its references until it
+ * completes. */
+static void ta_release_external(ta_actor *actor) {
+    actor->external = TA_EXTERNAL_NONE;
+    actor->input_flags &= (uint8_t)~TA_ACTOR_INPUT_IGNORED;
 }
 
 /* Releases every event the actor holds: its queue, taken head included,
- * its kept event and its external event. */
-static void ta_release_events(ta_system *system, ta_actor *actor) {
-    ta_event_block *block = actor->event_block;
-    if (block == NULL) {
-        return;
-    }
-    while (block->count != 0) {
+ * and its kept event; and lets go of its external event. */
+static void ta_release_events(ta_actor *actor) {
+    ta_internal_queue *queue = actor->internal;
+    while (queue != NULL && queue->count != 0) {
         ta_event event = ta_queue_pop(actor);
         ta_event_release(&event);
     }
-    ta_event_slots *slots = &block->slots;
-    if (slots->has_kept) {
-        ta_event_release(&slots->kept_event);
-        slots->has_kept = false;
+    if (queue != NULL && queue->has_kept) {
+        ta_event_release(&queue->kept_event);
+        queue->has_kept = false;
     }
-    ta_release_external(system, slots);
-    slots->bound = TA_BOUND_NONE;
+    ta_release_external(actor);
+    actor->bound = TA_BOUND_NONE;
 }
 
 /*
  * A macrostep ended with no internal event waiting. An invoked session keeps
- * the event `_event` names, and so its block, since cancelling it runs its
- * <onexit> between its macrosteps (SCXML 6.4); any other session lets go of
- * every event, and its block goes back when the run returns.
+ * the event `_event` names, and so its queue, since cancelling it runs its
+ * <onexit> between its macrosteps (SCXML 6.4): an external event is copied
+ * out of its input, which completes, into the queue that taking the input
+ * made sure of (ta_interpreter_keep_room). Any other session lets go of
+ * every event, and its queue goes when the run returns.
  */
 static void ta_end_macrostep_events(ta_system *system, ta_actor *actor) {
-    ta_event_block *block = actor->event_block;
-    if (block == NULL || actor->sparse == NULL || !actor->sparse->has_parent) {
-        ta_release_events(system, actor);
+    if (actor->sparse == NULL || !actor->sparse->has_parent) {
+        ta_release_events(actor);
         return;
     }
-    ta_event_slots *slots = &block->slots;
-    if (slots->bound == TA_BOUND_INTERNAL) {
+    if (actor->bound == TA_BOUND_INTERNAL) {
         ta_event head = ta_queue_pop(actor);
-        ta_keep_event(slots, &head);
-        slots->bound = TA_BOUND_KEPT;
-    } else if (slots->bound == TA_BOUND_EXTERNAL) {
-        ta_keep_event(slots, &slots->external_event);
-        slots->external = TA_EXTERNAL_NONE;
-        slots->bound = TA_BOUND_KEPT;
+        ta_keep_event(actor, &head);
+        actor->bound = TA_BOUND_KEPT;
+    } else if (actor->bound == TA_BOUND_EXTERNAL) {
+        ta_event kept;
+        ta_event_retain(ta_run_input_event(system, actor->input), &kept);
+        ta_keep_event(actor, &kept);
+        actor->bound = TA_BOUND_KEPT;
     }
-    ta_release_external(system, slots);
+    ta_release_external(actor);
 }
 
 typedef struct {
@@ -31375,7 +31519,7 @@ TA_PRIVATE void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor
     if ((ta_trace_macrostep_kinds(&system->trace.masks, context) & TA_TRACE_BIT(TA_TRACE_RAISED)) == 0) {
         return;
     }
-    const ta_event_block *queue = actor->event_block;
+    const ta_internal_queue *queue = actor->internal;
     if (queue == NULL || queue->count == 0) {
         return;
     }
@@ -31402,10 +31546,13 @@ static ta_result ta_communication_error(ta_system *system, ta_actor *actor, cons
         return TA_OK;
     }
     /* An asynchronous failure makes an idle actor run a macrostep again,
-     * which a wake on the run queue starts (run.h): it is reserved first,
-     * so the error is queued only when the actor will run it. */
+     * which a wake on the run queue starts (run.h), under the failed send's
+     * parent: it is reserved first, so the error is queued only when the
+     * actor will run it. */
     uint32_t wake = 0;
-    ta_result result = actor->macrostep ? TA_OK : ta_run_wake_reserve(system, false, &wake);
+    ta_result result =
+        actor->macrostep ? TA_OK
+                         : ta_run_wake_reserve(system, &(ta_run_wake){ .trace = params->trace }, &wake);
     if (result != TA_OK) {
         if (params->fault != NULL) {
             ta_value_release(&params->fault->data);
@@ -31422,7 +31569,7 @@ static ta_result ta_communication_error(ta_system *system, ta_actor *actor, cons
         ta_interpreter_raised_outside(system, actor, TA_EVENT_NAME_ERROR_COMMUNICATION, params->trace);
     }
     if (result == TA_OK) {
-        ta_interpreter_start_macrostep(actor, params->trace);
+        ta_interpreter_start_macrostep(actor);
     }
     if (wake != 0) {
         ta_run_wake_place(system, actor, wake);
@@ -31430,15 +31577,12 @@ static ta_result ta_communication_error(ta_system *system, ta_actor *actor, cons
     return result;
 }
 
-TA_PRIVATE void ta_interpreter_start_macrostep(ta_actor *actor, const ta_trace_parent *trace) {
+TA_PRIVATE void ta_interpreter_start_macrostep(ta_actor *actor) {
     if (actor->macrostep) {
         return;
     }
     actor->macrostep = true;
     actor->record.residency = TA_ACTOR_RUNNING;
-    if (actor->event_block != NULL) {
-        actor->event_block->slots.trace = trace != NULL ? *trace : (ta_trace_parent){0};
-    }
 }
 
 TA_PRIVATE void ta_interpreter_literal_content(const ta_definition *definition, ta_content_id content, ta_str *media_type,
@@ -33494,24 +33638,24 @@ static ta_result ta_microstep(ta_interpreter *it) {
 static void ta_after_selection(ta_interpreter *it, uint32_t mark) {
     ta_trace_selection(it, mark);
     ta_actor *actor = it->actor;
-    bool external = actor->event_block != NULL && actor->event_block->slots.bound == TA_BOUND_EXTERNAL;
+    bool external = actor->bound == TA_BOUND_EXTERNAL;
     if (external) {
         TA_COUNT(it->system, actor->definition, events_taken);
     }
     if (it->enabled_count != 0) {
-        ta_microstep_begin(it, ta_actor_bound_event(actor));
+        ta_microstep_begin(it, ta_actor_bound_event(it->system, actor));
         return;
     }
     /* The event is consumed and enabled nothing (ADR 0072). */
     if (external) {
-        actor->event_block->slots.external_ignored = true;
+        actor->input_flags |= TA_ACTOR_INPUT_IGNORED;
         TA_COUNT(it->system, actor->definition, events_ignored);
     } else {
         TA_COUNT(it->system, actor->definition, internal_ignored);
     }
     if (ta_tracing(it, TA_TRACE_IGNORED)) {
         ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_IGNORED);
-        record.event = ta_actor_bound_event(actor);
+        record.event = ta_actor_bound_event(it->system, actor);
         ta_trace_emit(it, &record);
     }
     it->at = (ta_micro_position){0};
@@ -33527,7 +33671,7 @@ static void ta_after_selection(ta_interpreter *it, uint32_t mark) {
 static ta_result ta_select_taken(ta_interpreter *it) {
     /* A copy: an error.execution a guard raises can grow the queue, which
      * moves a bound queue head. */
-    ta_event taken = *ta_actor_bound_event(it->actor);
+    ta_event taken = *ta_actor_bound_event(it->system, it->actor);
     uint32_t mark = ta_queue_mark(it->actor);
     ta_result result = ta_select_transitions(it, &taken);
     if (result != TA_OK) {
@@ -33594,8 +33738,8 @@ static ta_result ta_run_script(ta_interpreter *it) {
  */
 static ta_result ta_run_finalize(ta_interpreter *it) {
     /* A copy: <finalize> may grow the internal queue, which can move the
-     * bound event (ADR 0069). The slot keeps the data retained. */
-    const ta_event event = *ta_actor_bound_event(it->actor);
+     * bound event (ADR 0069). The input keeps the data retained. */
+    const ta_event event = *ta_actor_bound_event(it->system, it->actor);
     if (it->at.stage == TA_FINALIZE_BLOCK) {
         ta_span32 finalize = {0};
         if (!it->at.block_open) {
@@ -33622,7 +33766,7 @@ static ta_result ta_run_finalize(ta_interpreter *it) {
  * run here, and the next one selects again.
  */
 static ta_result ta_run_select(ta_interpreter *it) {
-    ta_event taken = *ta_actor_bound_event(it->actor);
+    ta_event taken = *ta_actor_bound_event(it->system, it->actor);
     uint32_t mark = ta_queue_mark(it->actor);
     ta_result result = ta_select_transitions(it, &taken);
     if (result != TA_OK) {
@@ -33674,7 +33818,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
     /* Sends the router already refused once stay queued: they were sent before termination. */
     ta_timer_cancel_unsubmitted(&it->system->timers, ta_actor_timers(it->actor));
     ta_note_ignored(it);
-    ta_release_events(it->system, it->actor);
+    ta_release_events(it->actor);
     /* Invoke: cancel this session's invocations and report done.invoke to its parent. */
     ta_result result = ta_invoke_finished(it);
     if (result != TA_OK) {
@@ -33733,20 +33877,19 @@ static ta_result ta_continue_phase(ta_interpreter *it) {
  * Nothing here allocates, so there is nothing to give back, and taking it
  * commits the macrostep. <finalize> and autoforwarding do not run, since
  * no chart transition sees the event. Once the microstep has begun, its
- * sets hold all it needs, and the operator transition is freed.
+ * sets hold all it needs; the operator transition stays in the input until
+ * the input completes, and the event, taken, never takes it again.
  */
-static void ta_take_jump(ta_interpreter *it) {
+static void ta_take_jump(ta_interpreter *it, const ta_operator_jump *jump) {
     ta_actor *actor = it->actor;
     ta_bind_event(actor, TA_BOUND_EXTERNAL);
     ta_trace_begin(it);
     TA_COUNT(it->system, actor->definition, events_taken);
-    ta_event_slots *slots = &actor->event_block->slots;
-    it->jump = slots->jump;
+    it->jump = jump;
     it->enabled[0] = TA_ENABLED_OPERATOR;
     it->enabled_count = 1;
-    ta_microstep_begin(it, ta_actor_bound_event(actor));
+    ta_microstep_begin(it, ta_actor_bound_event(it->system, actor));
     it->jump = NULL;
-    ta_jump_free(it->system, slots);
 }
 
 /*
@@ -33761,13 +33904,14 @@ static void ta_take_jump(ta_interpreter *it) {
  */
 static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
     ta_actor *actor = it->actor;
-    bool external_waiting =
-        actor->event_block != NULL && actor->event_block->slots.external == TA_EXTERNAL_WAITING;
-    if (external_waiting && !actor->trace_begun && actor->event_block->slots.jump != NULL) {
+    bool external_waiting = actor->external == TA_EXTERNAL_WAITING;
+    const ta_operator_jump *jump =
+        external_waiting && !actor->trace_begun ? ta_run_input_jump(it->system, actor->input) : NULL;
+    if (jump != NULL) {
         /* An operator transition is the first microstep of its macrostep,
          * before internal events queued since it was delivered, so it runs
          * from the configuration it was checked against. */
-        ta_take_jump(it);
+        ta_take_jump(it, jump);
         return TA_OK;
     }
     bool skip_to_external = !ta_interpreter_internal_pending(actor) &&
@@ -33799,13 +33943,13 @@ static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
             return TA_OK;
         }
     }
-    if (actor->event_block != NULL && actor->event_block->slots.external == TA_EXTERNAL_WAITING) {
-        /* It stays in its slot, where inspection reports it, until the
-         * macrostep ends. */
+    if (actor->external == TA_EXTERNAL_WAITING) {
+        /* It stays in its input's envelope, where inspection reports it,
+         * until the input completes. */
         ta_bind_event(actor, TA_BOUND_EXTERNAL);
         /* Invoke: <finalize> and autoforwarding. The event cannot be given
          * back once they start, so taking it commits the macrostep. */
-        if (ta_invoke_before_external(actor, ta_actor_bound_event(actor))) {
+        if (ta_invoke_before_external(actor, ta_actor_bound_event(it->system, actor))) {
             it->at = (ta_micro_position){ .phase = TA_PHASE_FINALIZE, .stage = TA_FINALIZE_BLOCK };
             ta_trace_begin(it);
             return TA_OK;
@@ -33882,6 +34026,10 @@ TA_PRIVATE void ta_interpreter_release_spares(ta_system *system) {
                     &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
                                                  .alignment = _Alignof(ta_actor_sparse_state) });
         system->spare_sparse = NULL;
+    }
+    if (system->spare_queue != NULL) {
+        ta_internal_queue_free(system, system->spare_queue);
+        system->spare_queue = NULL;
     }
 }
 
@@ -34101,7 +34249,7 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     }
     /* Tracing (ADR 0067): what this macrostep builds, and the scratch its
      * records need, taken only when the masks want those records. */
-    ta_trace_parent parent = ta_actor_macrostep_parent(actor);
+    ta_trace_parent parent = ta_run_session_trace(system, actor);
     it->trace_context = parent.context;
     it->trace_kinds = ta_trace_macrostep_kinds(&system->trace.masks, &parent.context);
     it->trace_action = TA_ACTION_NONE;
@@ -34227,9 +34375,6 @@ TA_PRIVATE ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, ta_i
     ta_interpreter *it = &interpreter;
     ta_result result = ta_reserve_stop(system, actor);
     if (result == TA_OK) {
-        result = ta_take_macrostep_time(system, actor);
-    }
-    if (result == TA_OK) {
         result = ta_interpreter_init(it, system, actor);
     }
     if (result != TA_OK) {
@@ -34264,8 +34409,8 @@ TA_PRIVATE ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, ta_i
     if (it->resumed != NULL) {
         ta_continuation_recycle(system, it->resumed);
     }
-    /* An empty queue goes back; queued events or a stopped run keep it. */
-    ta_block_settle(system, actor);
+    /* An empty queue goes; queued or kept events, or a stopped run, keep it. */
+    ta_queue_settle(system, actor);
     return result;
 }
 
@@ -34459,21 +34604,11 @@ TA_PRIVATE ta_result ta_interpreter_queue_room(ta_system *system, ta_actor *acto
 
 TA_PRIVATE ta_result ta_interpreter_queue_reserve(ta_system *system, ta_actor *actor, uint32_t count) {
     ta_result result = ta_queue_room(system, actor);
-    while (result == TA_OK && actor->event_block->capacity - actor->event_block->count < count) {
-        ta_event_block *block = actor->event_block;
-        if (block->capacity > UINT32_MAX / 2u) {
+    while (result == TA_OK && actor->internal->capacity - actor->internal->count < count) {
+        if (actor->internal->capacity > UINT32_MAX / 2u) {
             return TA_ERR_NOMEM;
         }
-        uint32_t capacity = block->capacity * 2u;
-        ta_event_block *grown = ta_mem_alloc(system->allocator, ta_event_block_bytes(capacity),
-                                             _Alignof(ta_event_block));
-        if (grown == NULL) {
-            return TA_ERR_NOMEM;
-        }
-        ta_mem_copy(grown, block, ta_event_block_bytes(block->count));
-        grown->capacity = capacity;
-        ta_block_free(system, block);
-        actor->event_block = grown;
+        result = ta_internal_queue_grow(system, actor, actor->internal->capacity * 2u);
     }
     return result;
 }
@@ -34487,20 +34622,17 @@ TA_PRIVATE bool ta_interpreter_internal_pending(const ta_actor *actor) {
 }
 
 TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
-    ta_release_events(system, actor);
-    /* The actor goes: its block goes too, whatever it ran under, and even
-     * mid-macrostep, which otherwise keeps it (ta_block_settle). */
+    ta_release_events(actor);
+    /* The actor goes: its queue goes too, even mid-macrostep, which
+     * otherwise keeps it (ta_queue_settle). */
     actor->macrostep = false;
-    if (actor->event_block != NULL) {
-        actor->event_block->slots.trace = (ta_trace_parent){0};
-    }
     if (actor->sparse == NULL) {
-        ta_block_settle(system, actor);
+        ta_queue_settle(system, actor);
         return;
     }
     ta_invoke_release(system, actor); /* Invoke: cancel services, free bookkeeping. */
     ta_continuation_free(system->allocator, &actor->sparse->paused);
-    ta_block_settle(system, actor); /* empty, and no longer paused */
+    ta_queue_settle(system, actor); /* empty, and no longer paused */
     /* The owner heap must not keep pointing into the freed sparse state. */
     ta_timer_list_destroy(&system->timers, &actor->sparse->timers);
     ta_value_release(&actor->sparse->completion.data);
@@ -34585,7 +34717,7 @@ TA_PRIVATE ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor) 
     if (ta_tracing(it, TA_TRACE_ABANDONED)) {
         ta_trace_entry record = ta_trace_record_now(it, TA_TRACE_ABANDONED);
         record.position = ta_trace_nowhere();
-        record.event = ta_actor_external_event(actor);
+        record.event = ta_actor_external_event(system, actor);
         record.dropped = dropped;
         ta_trace_emit(it, &record);
     }
@@ -34598,7 +34730,7 @@ TA_PRIVATE ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor) 
     actor->macrostep = false;
     actor->record.residency = TA_ACTOR_IDLE;
     ta_compact_sparse(it);
-    ta_block_settle(system, actor);
+    ta_queue_settle(system, actor);
     return TA_OK;
 }
 

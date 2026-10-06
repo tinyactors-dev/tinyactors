@@ -45,7 +45,6 @@ typedef struct {
  * code checks a parameter again. */
 static const ta_param_row ta_param_rows[TA_PARAM_COUNT] = {
     [TA_PARAM_MICROSTEP_LIMIT] = { "microstepLimit", "microsteps", TA_PARAM_DEFAULT_MICROSTEP_LIMIT, 0, 2147483647u },
-    [TA_PARAM_EVENT_BLOCK_CACHE] = { "eventBlockCache", "blocks", TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, 0, 65536u },
     [TA_PARAM_EVENT_NAME_DEPTH] = { "eventNameDepth", "segments", TA_PARAM_DEFAULT_EVENT_NAME_DEPTH, 8,
                                     TA_EVENT_NAME_MAX_DEPTH },
     [TA_PARAM_COMPILE_MESSAGE_BYTES] = { "compileMessageBytes", "bytes", TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES, 16,
@@ -204,7 +203,7 @@ ta_result ta_system_nested_region(ta_system *system, uint32_t depth, ta_arena *s
 /*
  * The memory every run needs, allocated once (ADR 0092 section 3):
  * interpreter region 0 with its render area, then the table of nested
- * regions; and the event-block cache, filled to its parameter.
+ * regions.
  */
 static ta_result ta_system_arena_open(ta_system *system) {
     ta_interpreter_region first = { 0 };
@@ -304,7 +303,6 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     }
     *system = (ta_system){ .allocator = config->allocator,
                            .incarnation = config->incarnation,
-                           .block_cache_limit = params[TA_PARAM_EVENT_BLOCK_CACHE],
                            .definition_sink = ta_null_definition_sink() };
     ta_mem_copy(system->params, params, sizeof params);
     /* The bounds were checked: the pool and the name area accept them. */
@@ -397,8 +395,6 @@ void ta_system_destroy(ta_system *system) {
     ta_io_origin_table_destroy(&system->io_messages);
     ta_vec_destroy(&system->io_processors);
     ta_vec_destroy(&system->invokers);
-    system->block_cache_limit = 0;
-    ta_interpreter_block_cache_trim(system);
     ta_system_arena_close(system);
     ta_interpreter_release_spares(system);
     ta_trace_close(system);

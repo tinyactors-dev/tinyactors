@@ -3419,9 +3419,10 @@ TA_API ta_result ta_actor_deliver(ta_system *system, TA_IN const ta_actor_delive
  *   outcomes than one input reports (one, or two with `report_taken`);
  *   nothing ran.
  * - TA_ERR_BUSY: called from inside a ta_run() (a callback); nothing ran.
- * - TA_ERR_NOMEM: no memory to take the next input (its event block); the
- *   input waits at the head of the run queue, and what ran before is
- *   reported in the outcomes.
+ * - TA_ERR_NOMEM: no memory to take the next input (room in its session's
+ *   internal queue for a report's event, or the queue an invoked session
+ *   keeps its last event in); the input waits at the head of the run
+ *   queue, and what ran before is reported in the outcomes.
  */
 TA_API ta_result ta_run(ta_system *system, TA_IN const ta_run_params *params);
 /*
@@ -3588,7 +3589,12 @@ typedef struct {
      */
     ta_step_key step;
     ta_trace_position position;
-    /* The external event of the paused macrostep, or null. */
+    /*
+     * The external event of the macrostep in progress, or null: read from
+     * the pool envelope of the input it took, which holds it until the
+     * input completes. Borrowed, and valid until the next inspection or run
+     * reads another input's event, or the input completes.
+     */
     TA_IN TA_OPTIONAL const ta_event *current_event;
     TA_COUNTED_BY(internal_count) TA_OPTIONAL const ta_queued_event *internal_events;
     uint32_t internal_count;
@@ -3626,8 +3632,9 @@ typedef struct {
     /*
      * What a step caused by this actor now runs under (ADR 0067): the trace
      * context of its current macrostep and the key of its current step.
-     * Between macrosteps the key names the session alone, and the context
-     * is whatever the actor's event block still holds, often none.
+     * The context is read from the input the macrostep runs, or from the
+     * wake it waits for. Between macrosteps the key names the session
+     * alone, and the context is none.
      */
     ta_trace_parent trace;
 } ta_actor_inspection;
@@ -4084,7 +4091,7 @@ TA_API void ta_session_image_destroy(TA_DESTROYS ta_session_image *image);
  * System parameters (ADR 0092): each is set once, when the system is
  * created, and never changes. A parameter bounds a limit or a buffer; the
  * buffers every run needs are allocated at creation (interpreter region 0,
- * the render area, the event-block cache, the tel ring), the ones only nested
+ * the render area, the tel ring), the ones only nested
  * interpreters need on first use, up to their bound. ta_param_info_of()
  * gives each one's name, default, bounds and unit; names are lowerCamelCase,
  * for hosts to use as they are. Creation also checks the bounds between
@@ -4102,7 +4109,6 @@ TA_API void ta_session_image_destroy(TA_DESTROYS ta_session_image *image);
  */
 typedef enum {
     TA_PARAM_MICROSTEP_LIMIT = 0,  /* microsteps per macrostep before a runaway (ADR 0075); 0: none */
-    TA_PARAM_EVENT_BLOCK_CACHE,    /* empty event blocks kept for reuse (ADR 0069), made on demand (ADR 0093) */
     TA_PARAM_EVENT_NAME_DEPTH,     /* segments an event name may have; at most 64 */
     TA_PARAM_COMPILE_MESSAGE_BYTES,/* bytes kept of a data model's rejection message (ADR 0058) */
     TA_PARAM_COMPILE_TEXT_BYTES,   /* bytes of a compile error formatted as a line (ta_compile_error_format) */
@@ -4126,7 +4132,6 @@ typedef enum {
 typedef uint32_t ta_param_default;
 enum TA_CONSTANTS_OF(ta_param_default, "TA_PARAM_DEFAULT_") {
     TA_PARAM_DEFAULT_MICROSTEP_LIMIT = 100000,
-    TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE = 1024,
     TA_PARAM_DEFAULT_EVENT_NAME_DEPTH = 64,
     TA_PARAM_DEFAULT_COMPILE_MESSAGE_BYTES = 256,
     TA_PARAM_DEFAULT_COMPILE_TEXT_BYTES = 1024,

@@ -20,6 +20,24 @@
 #include "system.h"
 
 /*
+ * The events a session held (ADR 0069): its input's external event and its
+ * kept event, what `_event` names, the trace parent its macrostep runs
+ * under, and an operator transition still waiting with the external event
+ * (ADR 0082), copied into the arena. An event is captured only while the
+ * session holds it, so the image retains, detaches and releases only those.
+ */
+typedef struct {
+    uint8_t external;     /* ta_external_state */
+    uint8_t bound;        /* ta_event_binding */
+    uint8_t bound_before; /* what `bound` was before the last take, for a retry (ADR 0047) */
+    bool has_kept;
+    ta_event external_event;
+    ta_event kept_event;
+    ta_trace_parent trace;
+    ta_operator_jump *jump;
+} ta_image_events;
+
+/*
  * A session image owns one arena, and every core-owned byte it keeps lives
  * there: the session storage, the queued events, the invocation records, the
  * delayed sends, and the text of the definition identity and of a named
@@ -56,15 +74,14 @@ struct ta_session_image {
     bool macrostep;
     bool finished;
     /* The step counters, and whether the macrostep has begun (ADR 0067);
-     * the macrostep's trace parent is in `slots`. */
+     * the macrostep's trace parent is in `events`. */
     bool trace_begun;
     uint32_t trace_microstep;
     uint32_t trace_lifecycle;
     uint64_t trace_macrostep;
     /* The external and kept events and what `_event` names (ADR 0069). A
-     * bound queue head is internal_events[0]. An operator transition waiting
-     * with the external event is copied into the arena (ADR 0082). */
-    ta_event_slots slots;
+     * bound queue head is internal_events[0]. */
+    ta_image_events events;
     uint64_t next_send_id;
 
     ta_queued_event *internal_events;
@@ -203,6 +220,16 @@ static ta_result ta_image_copy_identity(ta_arena *arena, ta_definition_identity 
  * Capture
  */
 
+/* The operator transition still waiting with the session's external event,
+ * or null: once the event is taken, nothing takes the transition again. */
+static const ta_operator_jump *ta_image_waiting_jump(const ta_actor *actor) {
+    if (actor->external != TA_EXTERNAL_WAITING) {
+        return NULL;
+    }
+    const ta_system *system = actor->host_impl.system;
+    return ta_run_input_jump(system, actor->input);
+}
+
 /* What the arena has to hold, so one block usually serves the whole image. */
 static size_t ta_image_measure(const ta_actor *actor) {
     const ta_actor_sparse_state *sparse = actor->sparse;
@@ -213,13 +240,14 @@ static size_t ta_image_measure(const ta_actor *actor) {
         ta_actor_address view = ta_address_view(actor->record.self.as.named);
         total += sizeof(ta_address) + (size_t)view.family.name.len + (size_t)view.name.len + 2u;
     }
-    if (actor->event_block != NULL) {
-        total += (size_t)actor->event_block->count * sizeof(ta_queued_event);
-        if (actor->event_block->slots.jump != NULL) {
-            size_t bytes = 0;
-            (void)ta_operator_jump_bytes(actor->event_block->slots.jump->target_count, &bytes); /* it exists */
-            total += bytes + _Alignof(ta_operator_jump);
-        }
+    if (actor->internal != NULL) {
+        total += (size_t)actor->internal->count * sizeof(ta_queued_event);
+    }
+    const ta_operator_jump *jump = ta_image_waiting_jump(actor);
+    if (jump != NULL) {
+        size_t bytes = 0;
+        (void)ta_operator_jump_bytes(jump->target_count, &bytes); /* it exists */
+        total += bytes + _Alignof(ta_operator_jump);
     }
     if (sparse != NULL) {
         total += (size_t)sparse->invoke_count * sizeof(ta_active_invoke);
@@ -250,38 +278,39 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         result = ta_image_copy_address(arena, &image->self);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(system, arena, &image->slots.external_event);
+        result = ta_image_copy_origin(system, arena, &image->events.external_event);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(system, arena, &image->slots.kept_event);
+        result = ta_image_copy_origin(system, arena, &image->events.kept_event);
     }
     if (result != TA_OK) {
         return result;
     }
 
     /* An operator transition waiting with the external event (ADR 0082). */
-    if (actor->event_block != NULL && actor->event_block->slots.jump != NULL) {
+    const ta_operator_jump *jump = ta_image_waiting_jump(actor);
+    if (jump != NULL) {
         size_t bytes = 0;
-        ta_result sized = ta_operator_jump_bytes(actor->event_block->slots.jump->target_count, &bytes);
+        ta_result sized = ta_operator_jump_bytes(jump->target_count, &bytes);
         if (sized != TA_OK) {
             return sized;
         }
-        image->slots.jump = ta_arena_alloc(arena, bytes, _Alignof(ta_operator_jump));
-        if (image->slots.jump == NULL) {
+        image->events.jump = ta_arena_alloc(arena, bytes, _Alignof(ta_operator_jump));
+        if (image->events.jump == NULL) {
             return TA_ERR_NOMEM;
         }
-        ta_mem_copy(image->slots.jump, actor->event_block->slots.jump, bytes);
+        ta_mem_copy(image->events.jump, jump, bytes);
     }
 
-    if (actor->event_block != NULL && actor->event_block->count != 0) {
-        uint32_t count = actor->event_block->count;
+    if (actor->internal != NULL && actor->internal->count != 0) {
+        uint32_t count = actor->internal->count;
         image->internal_events = ta_arena_alloc(arena, (size_t)count * sizeof(ta_queued_event),
                                                 _Alignof(ta_queued_event));
         if (image->internal_events == NULL) {
             return TA_ERR_NOMEM;
         }
         for (uint32_t index = 0; index < count; index += 1) {
-            image->internal_events[index] = actor->event_block->events[index];
+            image->internal_events[index] = actor->internal->events[index];
             result = ta_image_copy_origin(system, arena, &image->internal_events[index].event);
             if (result != TA_OK) {
                 return result;
@@ -350,8 +379,8 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
 
 /* The second half of a capture: infallible, so it cannot leave a half-image. */
 static void ta_image_retain(ta_session_image *image) {
-    ta_value_retain(&image->slots.external_event.data);
-    ta_value_retain(&image->slots.kept_event.data);
+    ta_value_retain(&image->events.external_event.data);
+    ta_value_retain(&image->events.kept_event.data);
     ta_value_retain(&image->completion.data);
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
         ta_value_retain(&image->internal_events[index].event.data);
@@ -365,20 +394,20 @@ static void ta_image_retain(ta_session_image *image) {
     }
 }
 
-/* The actor's event slots, with only the events it holds (see below). */
-static ta_event_slots ta_image_slots(const ta_actor *actor) {
-    if (actor->event_block == NULL) {
-        return (ta_event_slots){0};
-    }
-    const ta_event_slots *slots = &actor->event_block->slots;
-    return (ta_event_slots){
-        .external = slots->external,
-        .bound = slots->bound,
-        .bound_before = slots->bound_before,
-        .has_kept = slots->has_kept,
-        .external_event = slots->external != TA_EXTERNAL_NONE ? slots->external_event : (ta_event){0},
-        .kept_event = slots->has_kept ? slots->kept_event : (ta_event){0},
-        .trace = actor->macrostep ? slots->trace : (ta_trace_parent){0},
+/* The actor's events, with only those it holds (see below): the external
+ * event read from its input's envelope, borrowed until the image retains. */
+static ta_image_events ta_image_events_of(const ta_system *system, const ta_actor *actor) {
+    bool kept = actor->internal != NULL && actor->internal->has_kept;
+    return (ta_image_events){
+        .external = actor->external,
+        .bound = actor->bound,
+        .bound_before = actor->bound_before,
+        .has_kept = kept,
+        .external_event = actor->external != TA_EXTERNAL_NONE
+                              ? ta_run_input_event_of(system, actor->input)
+                              : (ta_event){0},
+        .kept_event = kept ? actor->internal->kept_event : (ta_event){0},
+        .trace = actor->macrostep ? ta_run_session_trace(system, actor) : (ta_trace_parent){0},
     };
 }
 
@@ -424,7 +453,7 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
          * takes, and later retains, detaches and releases, only what the
          * flags say the actor holds.
          */
-        .slots = ta_image_slots(actor),
+        .events = ta_image_events_of(system, actor),
         .next_send_id = actor->next_send_id,
         .has_parent = sparse != NULL && sparse->has_parent,
         .parent = sparse != NULL ? sparse->parent : (ta_actor_parent){0},
@@ -475,8 +504,8 @@ void ta_session_image_destroy(ta_session_image *image) {
         return;
     }
     /* The mirror of ta_image_retain(), in the same order. */
-    ta_value_release(&image->slots.external_event.data);
-    ta_value_release(&image->slots.kept_event.data);
+    ta_value_release(&image->events.external_event.data);
+    ta_value_release(&image->events.kept_event.data);
     ta_value_release(&image->completion.data);
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
         ta_value_release(&image->internal_events[index].event.data);
@@ -550,10 +579,8 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
             return result;
         }
     }
-    if (actor->event_block != NULL) {
-        actor->event_block->slots.bound = image->slots.bound;
-        actor->event_block->slots.bound_before = image->slots.bound_before;
-    }
+    actor->bound = image->events.bound;
+    actor->bound_before = image->events.bound_before;
     /*
      * Invoker service handles do not survive an image, so every invocation
      * that was active is retired and reported once, in the order it was
@@ -599,7 +626,7 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
      * image recorded as idle, so it has a macrostep to run again.
      */
     if (ta_interpreter_internal_pending(actor)) {
-        ta_interpreter_start_macrostep(actor, NULL);
+        ta_interpreter_start_macrostep(actor);
     }
     return TA_OK;
 }
@@ -692,24 +719,18 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     actor->trace_macrostep = image->trace_macrostep;
     actor->next_send_id = image->next_send_id;
     actor->session_epoch = image->source_epoch;
-    /* The events live in an event block (ADR 0069). What `_event` names is
-     * restored with the queue it may point into. */
-    ta_event_slots *slots = NULL;
-    if (image->slots.external != TA_EXTERNAL_NONE || image->slots.has_kept ||
-        !ta_trace_parent_empty(&image->slots.trace)) {
-        result = ta_interpreter_hold_block(system, actor);
-        slots = result == TA_OK ? &actor->event_block->slots : NULL;
+    /* The external event is in the wake the caller reserved for this
+     * session (ta_image_wake_reserve); the kept event lives in the internal
+     * queue, which an invoked session holding an external event needs too,
+     * to keep it when its macrostep ends. What `_event` names is restored
+     * with the queue it may point into. */
+    actor->external = image->events.external;
+    if (image->events.has_kept || (image->events.external != TA_EXTERNAL_NONE && image->has_parent)) {
+        result = ta_interpreter_queue_reserve(system, actor, 0);
     }
-    if (slots != NULL) {
-        slots->trace = image->slots.trace;
-    }
-    if (slots != NULL && image->slots.external != TA_EXTERNAL_NONE) {
-        ta_event_retain(&image->slots.external_event, &slots->external_event);
-        slots->external = image->slots.external;
-    }
-    if (slots != NULL && image->slots.has_kept) {
-        ta_event_retain(&image->slots.kept_event, &slots->kept_event);
-        slots->has_kept = true;
+    if (result == TA_OK && image->events.has_kept) {
+        ta_event_retain(&image->events.kept_event, &actor->internal->kept_event);
+        actor->internal->has_kept = true;
     }
     /*
      * The image carries detached addresses; the actor holds this system's
@@ -719,22 +740,8 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     if (result == TA_OK) {
         result = ta_actor_ref_localize(system, &actor->record.self);
     }
-    if (result == TA_OK && slots != NULL && slots->external != TA_EXTERNAL_NONE) {
-        result = ta_image_localize_origin(system, &slots->external_event);
-    }
-    if (result == TA_OK && slots != NULL && slots->has_kept) {
-        result = ta_image_localize_origin(system, &slots->kept_event);
-    }
-    if (result == TA_OK && slots != NULL && image->slots.jump != NULL) {
-        size_t bytes = 0;
-        result = ta_operator_jump_bytes(image->slots.jump->target_count, &bytes);
-        if (result == TA_OK) {
-            slots->jump = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
-            result = slots->jump == NULL ? TA_ERR_NOMEM : TA_OK;
-        }
-        if (result == TA_OK) {
-            ta_mem_copy(slots->jump, image->slots.jump, bytes);
-        }
+    if (result == TA_OK && image->events.has_kept) {
+        result = ta_image_localize_origin(system, &actor->internal->kept_event);
     }
     if (result == TA_OK && image->paused != NULL) {
         result = ta_image_restore_pause(image, actor, system);
@@ -786,14 +793,58 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     return TA_OK;
 }
 
+/*
+ * Reserves the wake a session restored from `image` runs its macrostep
+ * with, admitted like a spawn's bootstrap (run.h), before anything is made:
+ * it carries the trace parent the macrostep runs under and, when the
+ * session held an external event, that event, its origin made this
+ * system's, and the operator transition waiting with it. A failure changes
+ * nothing.
+ */
+static ta_result ta_image_wake_reserve(ta_system *system, const ta_session_image *image, uint32_t *out) {
+    const ta_image_events *events = &image->events;
+    ta_run_wake wake = { .admission = true, .trace = &events->trace };
+    if (events->external == TA_EXTERNAL_NONE) {
+        return ta_run_wake_reserve(system, &wake, out);
+    }
+    ta_event event;
+    ta_event_retain(&events->external_event, &event);
+    ta_result result = ta_image_localize_origin(system, &event);
+    size_t bytes = 0;
+    ta_operator_jump *jump = NULL;
+    if (result == TA_OK && events->jump != NULL) {
+        result = ta_operator_jump_bytes(events->jump->target_count, &bytes);
+        if (result == TA_OK) {
+            jump = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
+            result = jump == NULL ? TA_ERR_NOMEM : TA_OK;
+        }
+        if (result == TA_OK) {
+            ta_mem_copy(jump, events->jump, bytes);
+        }
+    }
+    if (result == TA_OK) {
+        wake.event = &event;
+        wake.jump = jump;
+        result = ta_run_wake_reserve(system, &wake, out);
+    }
+    if (result != TA_OK) {
+        ta_event_release(&event);
+        if (jump != NULL) {
+            ta_mem_free(system->allocator, jump,
+                        &(ta_allocator_free_params){ .size = bytes, .alignment = _Alignof(ta_operator_jump) });
+        }
+    }
+    return result;
+}
+
 ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
-    if (system == NULL) {
+    if (system == NULL || params == NULL || params->image == NULL) {
         return TA_ERR_INVALID;
     }
     /* A session restored in a macrostep has it to run: its wake is admitted
      * like a spawn's bootstrap (run.h), before anything is made. */
     uint32_t wake = 0;
-    ta_result result = ta_run_wake_reserve(system, true, &wake);
+    ta_result result = ta_image_wake_reserve(system, params->image, &wake);
     if (result != TA_OK) {
         return result;
     }
@@ -1098,8 +1149,8 @@ static ta_result ta_offload_encode_value(const ta_offload_value_params *params) 
 /* A stable actor only (ADR 0074 section 6): nothing runs, waits or is owed. */
 static bool ta_offload_stable(const ta_session_image *image) {
     return !image->macrostep && image->paused == NULL && image->internal_count == 0 &&
-           !image->completion_pending && !image->has_parent && image->slots.external == TA_EXTERNAL_NONE &&
-           !image->slots.has_kept;
+           !image->completion_pending && !image->has_parent && image->events.external == TA_EXTERNAL_NONE &&
+           !image->events.has_kept;
 }
 
 typedef struct {
@@ -1535,9 +1586,11 @@ ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *params) {
     }
     /* A session loaded in a macrostep, or with invocations to retire, has it
      * to run: its wake is admitted like a spawn's bootstrap (run.h), before
-     * anything is made. */
+     * anything is made. An image in bytes is stable, so it holds no event
+     * and runs under no trace parent. */
     uint32_t wake = 0;
-    ta_result result = ta_run_wake_reserve(system, true, &wake);
+    ta_result result = params->image != NULL ? ta_image_wake_reserve(system, params->image, &wake)
+                                             : ta_run_wake_reserve(system, &(ta_run_wake){ .admission = true }, &wake);
     if (result != TA_OK) {
         return result;
     }

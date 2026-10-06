@@ -12,8 +12,8 @@
  *
  * ## Inputs
  *
- * An input is one envelope, from its admission until the macrostep it
- * started ends. Its `source` says what it is:
+ * An input is one envelope, from its admission until it completes, when
+ * the macrostep it started ends. Its `source` says what it is:
  *
  * - **An external event** (`TA_RECORD_INPUT_SOURCE_H2C`), admitted by
  *   `ta_actor_deliver()`. The envelope holds the event's data in `data`,
@@ -32,7 +32,10 @@
  *   session with a macrostep to run that no admitted input started, its
  *   bootstrap after a spawn, a prepare, a load or a reconstruction, or work
  *   queued outside any run (a delayed send's failure, invocations retired
- *   at a load or a publish). It has no text and correlation 0. A session
+ *   at a load or a publish). It has correlation 0, and text only when its
+ *   macrostep runs under a trace parent, or when a reconstruction restores
+ *   a macrostep that holds an external event: then the field holds them as
+ *   an event's does, and the envelope holds the event's data. A session
  *   may have more than one; the ones its macrostep does not need are
  *   dropped when they are reached. The bootstrap of an invoked child,
  *   which a macrostep spawns, takes the arrival number of that
@@ -51,14 +54,30 @@
  * - an event or report for a session in a macrostep (waiting to begin,
  *   paused, or stopped by a fault) moves to that session's **deferred
  *   list**, in arrival order, and the walk goes on;
- * - otherwise it is **bound**: an event moves into the session's event
- *   block as its external event, waiting (ADR 0069), a report queues its
- *   error event, a wake takes the session's pending macrostep; the
- *   envelope becomes `TA_ENVELOPE_TAKEN`, its text and data go, and the
- *   session's event block names it as `input`.
+ * - otherwise it is **bound**: an event becomes the session's external
+ *   event, waiting (ADR 0069), a report queues its error event, and the
+ *   wake the session names takes its pending macrostep; the envelope
+ *   becomes `TA_ENVELOPE_TAKEN`, and the session names it as its taken
+ *   `input`.
+ *
+ * ## The taken envelope stays put
+ *
+ * A taken input keeps its text and its references until it completes:
+ * nothing is copied out of it. While its macrostep runs, `_event`,
+ * inspection and trace records read the external event from the envelope
+ * (`ta_run_input_event`), along with its operator transition
+ * (`ta_run_input_jump`), the trace parent the macrostep runs under
+ * (`ta_run_session_trace`), and the macrostep's logical time, which is
+ * written into the envelope's `due` when the input is taken
+ * (`ta_run_macrostep_time`). The session holds only the index. Reading the
+ * event decodes it into one `ta_event` the run state keeps, for the input
+ * read last; a pointer to it is valid until another input's event is read
+ * or the input completes, never across a refill, which happens only
+ * between inputs.
  *
  * Its macrostep then runs with what is left of the call's budgets. When
- * it ends, the input's outcome is reported, the envelope is given back,
+ * it ends, the input's outcome is reported, the envelope is released and
+ * given back,
  * and the session's first deferred envelope returns to the run queue at
  * its arrival position (all of them when the session finished, so that
  * each is refused). When a budget runs out inside it, the input stays in
@@ -77,10 +96,20 @@
  *
  * ## Invariants
  *
- * - A session has at most one taken input, the one its event block
- *   names; its envelope is in the slot, on no list while stopped or
- *   running, or on the run queue when released or paused by a filtered
- *   call.
+ * - A session has at most one taken input, the one it names as `input`;
+ *   its envelope is in the slot, on no list while stopped or running, or
+ *   on the run queue when released or paused by a filtered call. Before
+ *   its macrostep begins, a session in a macrostep names the first wake
+ *   placed for it as its `input`, marked waiting, so what the macrostep
+ *   runs under is found without a walk; that wake is the one taken, and
+ *   any other wake for the session is dropped when it is reached. When
+ *   the session goes or its macrostep is abandoned before that wake is
+ *   taken, what the wake holds (a restored event's data, origin and
+ *   operator transition, its text) is released at once, in O(1), and the
+ *   bare wake stays queued until it is reached and dropped.
+ * - A taken envelope holds its text and references until its input
+ *   completes, is abandoned, or its session goes; then they are released
+ *   and the envelope is given back.
  * - Every envelope on a deferred list arrived before every envelope for
  *   the same session still on the run queue, and a deferred list is in
  *   arrival order, so one sender's inputs to one session run in the order
@@ -94,8 +123,8 @@
  * from the system's allocator, on demand, up to `poolEnvelopes` and
  * `nameAreaBytes`, and keep them until the system goes. An envelope holds
  * references (its data, an event's origin) and an operator transition,
- * which the run releases when the input is bound, refused, withdrawn or
- * discarded at teardown.
+ * which the run releases when the input completes, is refused, withdrawn,
+ * abandoned, or discarded at teardown.
  *
  * - **Refills happen at safe points only:** at admission and at a wake's
  *   reservation outside any run, and in `ta_run()` before each input it
@@ -103,10 +132,13 @@
  *   a macrostep (a router admitting mail, an invoker spawning a child) an
  *   admission or a wake takes only envelopes and chunks that are free
  *   already, and answers `TA_ERR_FULL` when there are none.
- * - Binding an input may allocate the session's event block, or room in
- *   its internal queue for a report's event, between inputs.
+ * - Binding an input may allocate, between inputs only: room in the
+ *   session's internal queue for a report's event, or, for an invoked
+ *   session, the queue storage that keeps its last event. Taking an input
+ *   for any other session allocates nothing once the pool is warm.
  * - `ta_run_session_gone`, `ta_run_input_dropped`, `ta_run_wake_place`,
- *   `ta_run_wake_cancel` and `ta_actor_release()` never allocate.
+ *   `ta_run_wake_cancel`, the readers of a taken input and
+ *   `ta_actor_release()` never allocate.
  *
  * ## Complexity
  *
@@ -118,6 +150,7 @@
  * | `ta_system_withdraw_input()` | walks the pool, bounded by `poolEnvelopes` |
  * | `ta_run_session_gone` | O(its deferred envelopes), each returned in place |
  * | `ta_run_has_mail` | walks the run queue |
+ * | `ta_run_input_event`, `ta_run_input_jump`, `ta_run_session_trace`, `ta_run_macrostep_time` | O(1): one field of text |
  *
  * ## Failure
  *
@@ -127,11 +160,12 @@
  *   free only because the refill before it could not allocate (ADR 0102):
  *   the limits would have let the input in.
  * - A wake's reservation answers `TA_ERR_FULL` and `TA_ERR_NOMEM` the same
- *   way. A refill that fails leaves the envelopes that are free, and an
- *   admission or a wake that finds one free succeeds.
+ *   way, for its envelope and, when it carries a trace parent or an event,
+ *   its text. A refill that fails leaves the envelopes that are free, and
+ *   an admission or a wake that finds one free succeeds.
  * - `ta_run()` answers `TA_ERR_NOMEM` when it cannot bind the next input
- *   (its event block, or a report's queue room): that input goes back to
- *   the head of the run queue.
+ *   (a report's queue room, or an invoked session's queue storage): that
+ *   input goes back to the head of the run queue.
  *
  * ## Users
  *
@@ -166,6 +200,11 @@ typedef struct {
     uint32_t current;
     /** A macrostep runs inside `ta_run()`: no refill may allocate. */
     bool running;
+    /** The input whose external event `event` holds, or 0. */
+    uint32_t event_input;
+    /** The external event of `event_input`, decoded from its envelope; its
+     * references are the envelope's, borrowed. */
+    ta_event event;
 } ta_run_state;
 
 /**
@@ -230,15 +269,32 @@ typedef struct {
  */
 ta_result ta_run_admit_report(ta_system *system, const ta_run_report *report);
 
+/** A wake to reserve; see `ta_run_wake_reserve`. */
+typedef struct {
+    /** Hold it to the admission watermark: a spawn's or a load's bootstrap
+     * is admitted; core's own wakes are not. */
+    bool admission;
+    /** What the macrostep it starts runs under, copied; null, or no trace
+     * ID, for none. */
+    const ta_trace_parent *trace;
+    /** The external event of a macrostep a reconstruction restores, or
+     * null. Its references are taken over on `TA_OK`. */
+    const ta_event *event;
+    /** The operator transition waiting with `event`, or null; taken over on
+     * `TA_OK`. */
+    struct ta_operator_jump *jump;
+} ta_run_wake;
+
 /**
  * Reserves an envelope for a wake, before the caller gives a session a
- * macrostep to run, so placing it cannot fail. `admission` holds it to the
- * admission watermark: a spawn's or a load's bootstrap is admitted; core's
- * own wakes are not. Refills first when no macrostep runs. Answers
- * `TA_OK` with the envelope in `*out`, `TA_ERR_FULL`, or `TA_ERR_NOMEM`
- * when nothing was free because the refill failed.
+ * macrostep to run, so placing it cannot fail, and writes its text when it
+ * carries a trace parent or an event. Refills first when no macrostep
+ * runs. Answers `TA_OK` with the envelope in `*out`, `TA_ERR_FULL`, or
+ * `TA_ERR_NOMEM` when nothing was free because the refill failed. A
+ * failure changes nothing and leaves the event and the operator transition
+ * the caller's.
  */
-ta_result ta_run_wake_reserve(ta_system *system, bool admission, uint32_t *out);
+ta_result ta_run_wake_reserve(ta_system *system, const ta_run_wake *wake, uint32_t *out);
 
 /**
  * Queues the reserved wake for `actor` when it has a macrostep to run, and
@@ -251,8 +307,45 @@ ta_result ta_run_wake_reserve(ta_system *system, bool admission, uint32_t *out);
  */
 void ta_run_wake_place(ta_system *system, struct ta_actor *actor, uint32_t wake);
 
-/** Gives back a reserved wake the caller no longer needs. Never allocates. */
+/** Gives back a reserved wake the caller no longer needs, with what its
+ * text holds. Never allocates. */
 void ta_run_wake_cancel(ta_system *system, uint32_t wake);
+
+/**
+ * The external event of taken input `input`, decoded from its envelope
+ * into the run state, or null for 0. Its references are the envelope's,
+ * borrowed: the pointer is valid until another input's event is read or
+ * `input` completes. O(1); never allocates; may run inside a macrostep.
+ */
+const ta_event *ta_run_input_event(ta_system *system, uint32_t input);
+
+/**
+ * The external event of taken input `input`, by value, its references
+ * borrowed from the envelope as `ta_run_input_event` says; all zero with
+ * no origin for 0. O(1); never allocates.
+ */
+ta_event ta_run_input_event_of(const ta_system *system, uint32_t input);
+
+/**
+ * The operator transition that came with taken input `input`, owned by its
+ * envelope until it completes, or null. O(1); never allocates.
+ */
+const struct ta_operator_jump *ta_run_input_jump(const ta_system *system, uint32_t input);
+
+/**
+ * The trace parent `actor`'s macrostep runs under, all zero for none: what
+ * its input holds, taken, or the wake queued to start it. O(1); never
+ * allocates.
+ */
+ta_trace_parent ta_run_session_trace(const ta_system *system, const struct ta_actor *actor);
+
+/**
+ * The logical time of `actor`'s macrostep (ADR 0089 section 9): the time
+ * written into its taken input when it was taken, so it does not move while
+ * the macrostep spans several `ta_run()` calls; the actor's time when no
+ * macrostep has taken an input. O(1); never allocates.
+ */
+ta_time ta_run_macrostep_time(const ta_system *system, const struct ta_actor *actor);
 
 /**
  * Whether inputs admitted for `actor` wait to be taken: on the run queue or
@@ -263,17 +356,17 @@ bool ta_run_has_mail(const ta_system *system, const struct ta_actor *actor);
 
 /**
  * `actor` is going (destroyed, unloaded, or a construction undone): its
- * taken input is given back, wherever it is, and its deferred envelopes
- * return to the run queue, where they are refused. Never allocates; cannot
- * fail.
+ * taken input is given back, wherever it is, a wake it waits for is left
+ * bare on the run queue, and its deferred envelopes return to the run
+ * queue, where they are refused. Never allocates; cannot fail.
  */
 void ta_run_session_gone(ta_system *system, struct ta_actor *actor);
 
 /**
  * `actor`'s macrostep ended outside `ta_run()` (an operator abandoned it):
- * `input`, the input it had taken (read before the macrostep ended, which
- * may give back the event block that named it), or 0, is given back
- * unreported, and the session's first deferred envelope returns to the run
- * queue. Never allocates; cannot fail.
+ * its taken input, if any, is released and given back unreported, a wake
+ * it waits for is left bare on the run queue, and the session's first
+ * deferred envelope returns to the run queue. Never allocates; cannot
+ * fail.
  */
-void ta_run_input_dropped(ta_system *system, struct ta_actor *actor, uint32_t input);
+void ta_run_input_dropped(ta_system *system, struct ta_actor *actor);

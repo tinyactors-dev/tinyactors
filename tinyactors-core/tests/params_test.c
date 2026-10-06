@@ -210,7 +210,7 @@ static void test_validation(void) {
                                                 .rejected = &rejected },
                            &none) == TA_ERR_INVALID);
     CHECK(none == NULL && rejected == TA_PARAM_INTERPRETER_BYTES);
-    ta_param_value twice[] = { { TA_PARAM_MAX_ACTORS, 5 }, { TA_PARAM_EVENT_BLOCK_CACHE, 1 }, { TA_PARAM_MAX_ACTORS, 6 } };
+    ta_param_value twice[] = { { TA_PARAM_MAX_ACTORS, 5 }, { TA_PARAM_EVENT_NAME_DEPTH, 8 }, { TA_PARAM_MAX_ACTORS, 6 } };
     rejected = TA_PARAM_COUNT;
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator, .params = twice, .param_count = 3,
                                                 .rejected = &rejected },
@@ -295,15 +295,18 @@ static void test_ordinary_run_allocates_nothing(void) {
 }
 
 /* ------------------------------------------------------------------------
- * The event-block cache fills on demand up to its bound (ADR 0093)
+ * Taking an input allocates nothing once the pool is warm (ADR 0069, ADR
+ * 0099): the taken event stays in its envelope, which the pool already
+ * holds, so however many sessions hold an input at once, nothing is
+ * allocated for them, and creation makes nothing for events either.
  */
 
-enum { CACHE_ACTORS = 5, CACHE_BOUND = 3 };
+enum { HELD_ACTORS = 5 };
 
 /* Delivers "go" to the first `count` actors, then takes it in each with a
- * budget of one microstep, where its macrostep pauses holding its event
+ * budget of one microstep, where its macrostep pauses holding its input
  * (the session filter lets each pause beside the others): `count` actors
- * hold a block at once. Then each finishes. */
+ * hold an input at once. Then each finishes. */
 static void go_round(ta_system *system, const ta_actor_id *actors, uint32_t count) {
     for (uint32_t index = 0; index < count; index += 1u) {
         deliver(system, actors[index], "go");
@@ -319,82 +322,40 @@ static void go_round(ta_system *system, const ta_actor_id *actors, uint32_t coun
     }
 }
 
-static void test_block_cache_on_demand(void) {
-    /* Creation makes no block, whatever the bound. */
-    unsigned long before = heap.attempts;
-    ta_param_value none[] = { { TA_PARAM_EVENT_BLOCK_CACHE, 0 } };
-    ta_system *empty = create(none, 1);
-    CHECK(empty != NULL);
-    unsigned long empty_allocations = heap.attempts - before;
-    ta_system_destroy(empty);
-    before = heap.attempts;
-    ta_param_value bound[] = { { TA_PARAM_EVENT_BLOCK_CACHE, CACHE_BOUND } };
-    ta_system *system = create(bound, 1);
+static void test_taking_allocates_nothing(void) {
+    ta_system *system = create(NULL, 0);
     CHECK(system != NULL);
-    CHECK(heap.attempts - before == empty_allocations);
-    before = heap.attempts;
-    ta_system *defaults = create(NULL, 0);
-    CHECK(defaults != NULL);
-    CHECK(heap.attempts - before == empty_allocations);
-    ta_system_destroy(defaults);
-
     ta_definition_id id = define(system, &toggle);
-    ta_actor_id actors[CACHE_ACTORS];
-    for (uint32_t index = 0; index < CACHE_ACTORS; index += 1u) {
+    ta_actor_id actors[HELD_ACTORS];
+    for (uint32_t index = 0; index < HELD_ACTORS; index += 1u) {
         actors[index] = spawn(system, id);
         CHECK(resume(system, actors[index]) == TEST_DRIVE_STABLE);
     }
     (void)event_name(system, "go");
+    /* Warm-up: the first round's text tops the name area's reserve up. */
+    go_round(system, actors, HELD_ACTORS);
 
-    /* Concurrency rising to 2 makes blocks for 2 at most, then none. */
-    go_round(system, actors, 2);
-    before = heap.attempts;
-    go_round(system, actors, 2);
-    CHECK(heap.attempts == before);
-
-    /* Rising to 5 makes 3 more; beyond the bound of 3, released blocks are freed. */
-    before = heap.attempts;
+    /* One session, two, or all of them holding an input at once: none of
+     * it allocates, and nothing is freed. */
+    unsigned long before = heap.attempts;
     unsigned long frees_before = heap.frees;
-    go_round(system, actors, CACHE_ACTORS);
-    CHECK(heap.attempts - before == CACHE_ACTORS - 2u);
-    CHECK(heap.frees - frees_before == CACHE_ACTORS - CACHE_BOUND);
-
-    /* Steady state within the bound allocates nothing. */
-    before = heap.attempts;
-    go_round(system, actors, CACHE_BOUND);
-    go_round(system, actors, CACHE_BOUND);
+    go_round(system, actors, 1);
+    go_round(system, actors, 2);
+    go_round(system, actors, HELD_ACTORS);
     CHECK(heap.attempts == before);
+    CHECK(heap.frees == frees_before);
 
-    /* Above the bound, every delivery past it takes a block and frees it again. */
-    before = heap.attempts;
-    go_round(system, actors, CACHE_ACTORS);
-    CHECK(heap.attempts - before == CACHE_ACTORS - CACHE_BOUND);
-    ta_system_destroy(system);
-
-    /* Out of memory on the on-demand path, when the input is taken: the run
-     * answers TA_ERR_NOMEM, nothing is taken, and the input waits for the
-     * next run (ADR 0069). One round first tops the pool's reserves up. */
-    ta_system *bare = create(none, 1);
-    CHECK(bare != NULL);
-    ta_definition_id bare_id = define(bare, &toggle);
-    ta_actor_id actor = spawn(bare, bare_id);
-    CHECK(resume(bare, actor) == TEST_DRIVE_STABLE);
-    deliver(bare, actor, "go");
-    CHECK(resume(bare, actor) == TEST_DRIVE_STABLE);
-    deliver(bare, actor, "go");
+    /* With the allocator refusing everything, a warm system still takes
+     * an input and runs it to its end. */
+    deliver(system, actors[0], "go");
+    bool was_a = in_state(system, actors[0], "a");
+    heap.policy.refuse = true;
     test_drive_status status = TEST_DRIVE_ERROR;
-    heap.policy.fail_at = heap.attempts + 1u;
-    CHECK(test_drive_run(bare, actor, &(test_drive_run_params){ .budget = 1000, .status = &status }) ==
-          TA_ERR_NOMEM);
-    heap.policy.fail_at = 0;
-    CHECK(status == TEST_DRIVE_ERROR);
-    CHECK(in_state(bare, actor, "b"));
-    ta_actor_inspection inspection = {0};
-    CHECK(ta_actor_inspect(bare, actor, &inspection) == TA_OK && !inspection.macrostep_in_progress);
-    CHECK(test_drive_run(bare, actor, &(test_drive_run_params){ .budget = 1000, .status = &status }) == TA_OK);
-    CHECK(status == TEST_DRIVE_STABLE);
-    CHECK(in_state(bare, actor, "a"));
-    ta_system_destroy(bare);
+    ta_result result = test_drive_run(system, actors[0], &(test_drive_run_params){ .budget = 1000, .status = &status });
+    heap.policy.refuse = false;
+    CHECK(result == TA_OK && status == TEST_DRIVE_STABLE);
+    CHECK(in_state(system, actors[0], was_a ? "b" : "a"));
+    ta_system_destroy(system);
 }
 
 /* ------------------------------------------------------------------------
@@ -780,7 +741,7 @@ int main(void) {
     test_validation();
     test_creation_out_of_memory();
     test_ordinary_run_allocates_nothing();
-    test_block_cache_on_demand();
+    test_taking_allocates_nothing();
     test_render_overflow();
     test_event_name_depth();
     test_nested_regions();

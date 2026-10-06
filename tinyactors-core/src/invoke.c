@@ -1137,7 +1137,7 @@ ta_result ta_invoke_take_report(ta_system *system, ta_actor *actor, const ta_inv
     if (take->ends) {
         ta_invoke_remove_at(actor->sparse, (uint32_t)index);
     }
-    ta_interpreter_start_macrostep(actor, take->trace);
+    ta_interpreter_start_macrostep(actor);
     return TA_OK;
 }
 

@@ -1634,7 +1634,7 @@
           "shape": "single",
           "direction": "in",
           "optional": true,
-          "doc": "The external event of the paused macrostep, or null."
+          "doc": "The external event of the macrostep in progress, or null: read from the pool envelope of the input it took, which holds it until the input completes. Borrowed, and valid until the next inspection or run reads another input's event, or the input completes."
         },
         {
           "name": "internal_events",
@@ -1747,7 +1747,7 @@
           "type": {
             "type": "ta_trace_parent"
           },
-          "doc": "What a step caused by this actor now runs under (ADR 0067): the trace context of its current macrostep and the key of its current step. Between macrosteps the key names the session alone, and the context is whatever the actor's event block still holds, often none."
+          "doc": "What a step caused by this actor now runs under (ADR 0067): the trace context of its current macrostep and the key of its current step. The context is read from the input the macrostep runs, or from the wake it waits for. Between macrosteps the key names the session alone, and the context is none."
         }
       ],
       "layout": {
@@ -13030,114 +13030,108 @@
           "doc": "microsteps per macrostep before a runaway (ADR 0075); 0: none"
         },
         {
-          "name": "TA_PARAM_EVENT_BLOCK_CACHE",
-          "value": 1,
-          "symbol": "event_block_cache",
-          "doc": "empty event blocks kept for reuse (ADR 0069), made on demand (ADR 0093)"
-        },
-        {
           "name": "TA_PARAM_EVENT_NAME_DEPTH",
-          "value": 2,
+          "value": 1,
           "symbol": "event_name_depth",
           "doc": "segments an event name may have; at most 64"
         },
         {
           "name": "TA_PARAM_COMPILE_MESSAGE_BYTES",
-          "value": 3,
+          "value": 2,
           "symbol": "compile_message_bytes",
           "doc": "bytes kept of a data model's rejection message (ADR 0058)"
         },
         {
           "name": "TA_PARAM_COMPILE_TEXT_BYTES",
-          "value": 4,
+          "value": 3,
           "symbol": "compile_text_bytes",
           "doc": "bytes of a compile error formatted as a line (ta_compile_error_format)"
         },
         {
           "name": "TA_PARAM_COMPILE_NEAREST_BYTES",
-          "value": 5,
+          "value": 4,
           "symbol": "compile_nearest_bytes",
           "doc": "longest unknown target that gets a nearest-name suggestion"
         },
         {
           "name": "TA_PARAM_INTERPRETER_BYTES",
-          "value": 6,
+          "value": 5,
           "symbol": "interpreter_bytes",
           "doc": "one interpreter's frames and sets, what a chart's structure needs"
         },
         {
           "name": "TA_PARAM_RENDER_BYTES",
-          "value": 7,
+          "value": 6,
           "symbol": "render_bytes",
           "doc": "one interpreter's temporaries whose size depends on content (ADR 0068)"
         },
         {
           "name": "TA_PARAM_INTERPRETER_NESTING",
-          "value": 8,
+          "value": 7,
           "symbol": "interpreter_nesting",
           "doc": "interpreters that may run inside one another (ADR 0060)"
         },
         {
           "name": "TA_PARAM_MAX_ACTORS",
-          "value": 9,
+          "value": 8,
           "symbol": "max_actors",
           "doc": "quota: live actors"
         },
         {
           "name": "TA_PARAM_MAX_PENDING_SENDS",
-          "value": 10,
+          "value": 9,
           "symbol": "max_pending_sends",
           "doc": "quota: pending delayed sends of one actor"
         },
         {
           "name": "TA_PARAM_MAX_DEFINITIONS",
-          "value": 11,
+          "value": 10,
           "symbol": "max_definitions",
           "doc": "quota: live definitions"
         },
         {
           "name": "TA_PARAM_TEL_BYTES",
-          "value": 12,
+          "value": 11,
           "symbol": "tel_bytes",
           "doc": "the tel ring (ADR 0098); 0: none, so no tracing; else at least maxRecordBytes"
         },
         {
           "name": "TA_PARAM_MAX_RECORD_BYTES",
-          "value": 13,
+          "value": 12,
           "symbol": "max_record_bytes",
           "doc": "the largest record on a ring, header and tail included"
         },
         {
           "name": "TA_PARAM_TELEMETRY_VALUE_BYTES",
-          "value": 14,
+          "value": 13,
           "symbol": "telemetry_value_bytes",
           "doc": "text kept of a value in a trace record; at most maxRecordBytes - 512"
         },
         {
           "name": "TA_PARAM_POOL_ENVELOPES",
-          "value": 15,
+          "value": 14,
           "symbol": "pool_envelopes",
           "doc": "pending inputs the pool holds (ADR 0099); 8 to 2^24"
         },
         {
           "name": "TA_PARAM_NAME_AREA_BYTES",
-          "value": 16,
+          "value": 15,
           "symbol": "name_area_bytes",
           "doc": "the pool's text (ADR 0099), in 64-byte chunks; maxRecordBytes to 1 GiB"
         },
         {
           "name": "TA_PARAM_ADMISSION_WATERMARK",
-          "value": 17,
+          "value": 16,
           "symbol": "admission_watermark",
           "doc": "percent of the pool and of the name area admission may fill (ADR 0099)"
         },
         {
           "name": "TA_PARAM_COUNT",
-          "value": 18,
+          "value": 17,
           "symbol": "count"
         }
       ],
-      "doc": "`incarnation` (ADR 0088) tells this system's session IDs from those of the systems and processes before it: a host chooses a distinct value for each system, from random bytes or a restart counter; tests use 0. It is the first part of every session ID's text.\n\nSystem parameters (ADR 0092): each is set once, when the system is created, and never changes. A parameter bounds a limit or a buffer; the buffers every run needs are allocated at creation (interpreter region 0, the render area, the event-block cache, the tel ring), the ones only nested interpreters need on first use, up to their bound. ta_param_info_of() gives each one's name, default, bounds and unit; names are lowerCamelCase, for hosts to use as they are. Creation also checks the bounds between them (ADR 0098): telBytes is 0 or at least maxRecordBytes, and telemetryValueBytes is at most maxRecordBytes - 512, the room a trace record's fixed part and its names take; and nameAreaBytes is at least maxRecordBytes (ADR 0099); it names the one at fault.\n\nThe pool of pending inputs (ADR 0099) is bounded by poolEnvelopes and its name area by nameAreaBytes; both fill on demand, at safe points, up to their bound, and keep what they filled. Admission (ta_actor_deliver(), ta_actor_report_invoke(), a spawn's or a load's bootstrap) stops at admissionWatermark percent of either, so the rest stays free for what sessions send each other.",
+      "doc": "`incarnation` (ADR 0088) tells this system's session IDs from those of the systems and processes before it: a host chooses a distinct value for each system, from random bytes or a restart counter; tests use 0. It is the first part of every session ID's text.\n\nSystem parameters (ADR 0092): each is set once, when the system is created, and never changes. A parameter bounds a limit or a buffer; the buffers every run needs are allocated at creation (interpreter region 0, the render area, the tel ring), the ones only nested interpreters need on first use, up to their bound. ta_param_info_of() gives each one's name, default, bounds and unit; names are lowerCamelCase, for hosts to use as they are. Creation also checks the bounds between them (ADR 0098): telBytes is 0 or at least maxRecordBytes, and telemetryValueBytes is at most maxRecordBytes - 512, the room a trace record's fixed part and its names take; and nameAreaBytes is at least maxRecordBytes (ADR 0099); it names the one at fault.\n\nThe pool of pending inputs (ADR 0099) is bounded by poolEnvelopes and its name area by nameAreaBytes; both fill on demand, at safe points, up to their bound, and keep what they filled. Admission (ta_actor_deliver(), ta_actor_report_invoke(), a spawn's or a load's bootstrap) stops at admissionWatermark percent of either, so the rest stays free for what sessions send each other.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -13159,11 +13153,6 @@
           "name": "TA_PARAM_DEFAULT_MICROSTEP_LIMIT",
           "value": 100000,
           "symbol": "microstep_limit"
-        },
-        {
-          "name": "TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE",
-          "value": 1024,
-          "symbol": "event_block_cache"
         },
         {
           "name": "TA_PARAM_DEFAULT_EVENT_NAME_DEPTH",
@@ -20977,7 +20966,7 @@
     },
     {
       "name": "ta_run",
-      "doc": "Runs the system's admitted inputs with one macrostep slot (ADR 0103; see ta_run_params): it continues the macrostep a budget paused, then takes the run queue's inputs in arrival order and runs each one's macrostep to its end, reporting each input's outcome, until the run queue is empty, the budget runs out, or the outcome buffer is full. A session whose macrostep a fault stopped holds no slot: the next inputs go on, and its own wait until ta_actor_release(). Between inputs it is a safe point: core refills its pool and its name area before each input it takes or continues, and never inside a macrostep, nor after the last input a call runs; so a call that takes nothing refills and runs nothing (a session filter with nothing queued). `*status` says how it ended. - TA_OK: whatever the status. Faults are the inputs' own, in the outcomes. - TA_ERR_INVALID: a null system, params, status, outcome count or outcomes, a budget of 0, or an outcome buffer with room for fewer outcomes than one input reports (one, or two with `report_taken`); nothing ran. - TA_ERR_BUSY: called from inside a ta_run() (a callback); nothing ran. - TA_ERR_NOMEM: no memory to take the next input (its event block); the input waits at the head of the run queue, and what ran before is reported in the outcomes.",
+      "doc": "Runs the system's admitted inputs with one macrostep slot (ADR 0103; see ta_run_params): it continues the macrostep a budget paused, then takes the run queue's inputs in arrival order and runs each one's macrostep to its end, reporting each input's outcome, until the run queue is empty, the budget runs out, or the outcome buffer is full. A session whose macrostep a fault stopped holds no slot: the next inputs go on, and its own wait until ta_actor_release(). Between inputs it is a safe point: core refills its pool and its name area before each input it takes or continues, and never inside a macrostep, nor after the last input a call runs; so a call that takes nothing refills and runs nothing (a session filter with nothing queued). `*status` says how it ended. - TA_OK: whatever the status. Faults are the inputs' own, in the outcomes. - TA_ERR_INVALID: a null system, params, status, outcome count or outcomes, a budget of 0, or an outcome buffer with room for fewer outcomes than one input reports (one, or two with `report_taken`); nothing ran. - TA_ERR_BUSY: called from inside a ta_run() (a callback); nothing ran. - TA_ERR_NOMEM: no memory to take the next input (room in its session's internal queue for a report's event, or the queue an invoked session keeps its last event in); the input waits at the head of the run queue, and what ran before is reported in the outcomes.",
       "public": true,
       "static_inline": false,
       "implemented": true,

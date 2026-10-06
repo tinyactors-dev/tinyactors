@@ -307,9 +307,10 @@ static void test_delivery(void) {
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor, .event = &bad }) == TA_ERR_INVALID);
     bad.origin.as.io.processor = request;
     ta_event_release(&bad);
-    /* A delivered event lives in an event block (ADR 0069): one plain
-     * delivery leaves a block in the system's cache, so the counts below
-     * see only the origin. */
+    /* A delivered event waits in an envelope of the system's pool, its
+     * record in chunks of the name area; a run refills both to their
+     * reserve, which the first time takes a page, and they keep it. One
+     * plain delivery fills them, so the counts below see only the origin. */
     ta_event warm = { .name = event_name(system, "ping"), .type = TA_EVENT_EXTERNAL,
                       .invoke_id = TA_INVOKE_ID_NONE };
     test_drive_status status = TEST_DRIVE_ERROR;

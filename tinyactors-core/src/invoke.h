@@ -125,7 +125,9 @@ typedef struct {
     ta_value *data;
     /* It retires the invocation. */
     bool ends;
-    /* What the macrostep runs under; all zero for none. */
+    /* The report's trace parent, the cause the queued event is recorded
+     * with; all zero for none. The macrostep reads it from the report's
+     * envelope, which keeps it until the report completes. */
     const ta_trace_parent *trace;
 } ta_invoke_report_take;
 /*

@@ -1,6 +1,9 @@
 /*
  * Definition and actor inspection (ADR 0042, work package 1), exercised
- * through the public header and the amalgamation only.
+ * through the public header and the amalgamation only. Inspection reports
+ * the event of a macrostep in progress from the pool envelope of the input
+ * it took, which holds the event until the input completes (ADR 0069,
+ * ADR 0099).
  */
 #include <stdio.h>
 
@@ -336,6 +339,143 @@ static void test_actor_inspection(ta_system *system, counting_model *model) {
 
 /* A ta_str as a call argument; STR() above is an initializer. */
 #define S(text) ((ta_str){ .ptr = (text), .len = (uint32_t)(sizeof(text) - 1u) })
+
+/* A host value that counts its retains and releases. */
+typedef struct {
+    int retains;
+    int releases;
+} counted_value;
+
+static void counted_retain(void *self) {
+    ((counted_value *)self)->retains += 1;
+}
+
+static void counted_release(void *self) {
+    ((counted_value *)self)->releases += 1;
+}
+
+static const ta_value_vtable counted_vtable = { .retain = counted_retain, .release = counted_release };
+
+/*
+ * The event of a macrostep in progress comes from its input: nothing while
+ * the input waits on the run queue; the delivered event, its name, send ID
+ * and the very data value, while the macrostep that took it is paused; and
+ * nothing once the input completes. The input holds the data from delivery
+ * to completion, retained once and released once, never copied.
+ */
+static void test_current_event_from_the_input(ta_system *system, counting_model *model) {
+    ta_datamodel counting = { .self = model, .v = &counting_vtable };
+    ta_definition_id definition = 0;
+    CHECK(compile(system, (compile_request){&(ta_scxml_spec){ .name = STR("held"), .states = two_states }, counting,
+                                            &definition}) == TA_OK);
+    ta_actor_id actor = 0;
+    CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .out = &actor }) == TA_OK);
+    test_drive_status status = TEST_DRIVE_ERROR;
+    CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    CHECK(status == TEST_DRIVE_STABLE);
+
+    ta_atom atom = 0;
+    ta_event_name_id go = 0;
+    CHECK(ta_system_intern_atom(system, S("go"), &atom) == TA_OK);
+    CHECK(ta_event_name_intern(system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &go) == TA_OK);
+    counted_value data = {0};
+    ta_event event = { .name = go, .type = TA_EVENT_EXTERNAL, .send_id = 42u, .invoke_id = TA_INVOKE_ID_NONE,
+                       .data = { .self = &data, .v = &counted_vtable } };
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actor,
+                                                                .event = &event }) == TA_OK);
+    CHECK(data.retains == 1 && data.releases == 0);
+
+    /* Admitted, not taken: no macrostep holds it yet. */
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system, actor, &view) == TA_OK);
+    CHECK(!view.macrostep_in_progress && view.current_event == NULL);
+
+    /* Taken, its macrostep paused at the first microstep's start. */
+    CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .pause_at_microstep_start = true,
+                                                                  .status = &status }) == TA_OK);
+    CHECK(status == TEST_DRIVE_PAUSED);
+    CHECK(ta_actor_inspect(system, actor, &view) == TA_OK);
+    CHECK(view.macrostep_in_progress && view.current_event != NULL);
+    if (view.current_event != NULL) {
+        CHECK(view.current_event->name == go);
+        CHECK(view.current_event->type == TA_EVENT_EXTERNAL);
+        CHECK(view.current_event->send_id == 42u);
+        CHECK(view.current_event->data.self == &data && view.current_event->data.v == &counted_vtable);
+    }
+    CHECK(data.retains == 1 && data.releases == 0);
+
+    /* Completed: the input gave the event back, its data released once. */
+    CHECK(test_drive_run(system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    CHECK(status == TEST_DRIVE_STABLE);
+    CHECK(ta_actor_inspect(system, actor, &view) == TA_OK);
+    CHECK(!view.macrostep_in_progress && view.current_event == NULL);
+    CHECK(data.retains == 1 && data.releases == 1);
+    CHECK(ta_actor_destroy(system, actor) == TA_OK);
+}
+
+/*
+ * The current event an inspection reports is borrowed until the next
+ * inspection reads another input's event: inspecting a second paused actor
+ * replaces what the first inspection's pointer shows, and inspecting the
+ * first again reads its own event back.
+ */
+static void test_current_event_replaced_by_the_next_inspection(ta_system *system, counting_model *model) {
+    ta_datamodel counting = { .self = model, .v = &counting_vtable };
+    ta_definition_id definition = 0;
+    CHECK(compile(system, (compile_request){&(ta_scxml_spec){ .name = STR("held twice"), .states = two_states },
+                                            counting, &definition}) == TA_OK);
+    ta_atom atom = 0;
+    ta_event_name_id go = 0;
+    CHECK(ta_system_intern_atom(system, S("go"), &atom) == TA_OK);
+    CHECK(ta_event_name_intern(system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &go) == TA_OK);
+
+    ta_actor_id actors[2] = {0};
+    counted_value data[2] = {{0}};
+    for (uint32_t index = 0; index < 2u; index += 1u) {
+        CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .out = &actors[index] }) ==
+              TA_OK);
+        test_drive_status status = TEST_DRIVE_ERROR;
+        CHECK(test_drive_run(system, actors[index], &(test_drive_run_params){ .status = &status }) == TA_OK);
+        ta_event event = { .name = go, .type = TA_EVENT_EXTERNAL, .send_id = 7u + index,
+                           .invoke_id = TA_INVOKE_ID_NONE,
+                           .data = { .self = &data[index], .v = &counted_vtable } };
+        CHECK(test_drive_deliver(system,
+                                 &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = actors[index],
+                                                             .event = &event },
+                                 &(test_drive_run_params){ .pause_at_microstep_start = true, .status = &status }) ==
+              TA_OK);
+        CHECK(status == TEST_DRIVE_PAUSED);
+    }
+
+    ta_actor_inspection first;
+    CHECK(ta_actor_inspect(system, actors[0], &first) == TA_OK);
+    CHECK(first.current_event != NULL);
+    if (first.current_event != NULL) {
+        CHECK(first.current_event->send_id == 7u && first.current_event->data.self == &data[0]);
+    }
+    ta_actor_inspection second;
+    CHECK(ta_actor_inspect(system, actors[1], &second) == TA_OK);
+    CHECK(second.current_event != NULL);
+    if (second.current_event != NULL) {
+        CHECK(second.current_event->send_id == 8u && second.current_event->data.self == &data[1]);
+    }
+    /* The first pointer now shows the second actor's event. */
+    if (first.current_event != NULL) {
+        CHECK(first.current_event->send_id == 8u && first.current_event->data.self == &data[1]);
+    }
+    CHECK(ta_actor_inspect(system, actors[0], &first) == TA_OK);
+    if (first.current_event != NULL) {
+        CHECK(first.current_event->send_id == 7u && first.current_event->data.self == &data[0]);
+    }
+
+    for (uint32_t index = 0; index < 2u; index += 1u) {
+        test_drive_status status = TEST_DRIVE_ERROR;
+        CHECK(test_drive_run(system, actors[index], &(test_drive_run_params){ .status = &status }) == TA_OK);
+        CHECK(status == TEST_DRIVE_STABLE);
+        CHECK(data[index].retains == 1 && data[index].releases == 1);
+        CHECK(ta_actor_destroy(system, actors[index]) == TA_OK);
+    }
+}
 
 /* ------------------------------------------------------------------------
  * Reading identities back (ADR 0049): the inverses of ta_definition_state
@@ -795,6 +935,8 @@ int main(void) {
     test_definition_inspect(system, &model);
     test_find_definition(system, &model);
     test_actor_inspection(system, &model);
+    test_current_event_from_the_input(system, &model);
+    test_current_event_replaced_by_the_next_inspection(system, &model);
     test_reading_identities_back(system, &model);
     test_elements_by_id(system, &model);
     ta_system_destroy(system);

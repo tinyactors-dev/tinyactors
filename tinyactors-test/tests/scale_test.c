@@ -1086,12 +1086,11 @@ static void print_machine(void) {
 }
 
 /* ------------------------------------------------------------------------
- * Allocator calls per event (ADR 0064). An actor's internal queue is lent
- * to it while it runs, so once the system is warm an event that moves a
- * simple actor and brings it back to stable makes no allocator call. Nor
- * does one on an actor that keeps its sparse state for a pending delayed
- * send. Before ADR 0064 every such event allocated and freed a queue, and a
- * simple actor its sparse state too. This depends on no population.
+ * Allocator calls per event (ADR 0069, ADR 0099). The event an actor takes
+ * stays in its envelope in core's pool, so once the pool is warm an event
+ * that moves a simple actor and brings it back to stable makes no
+ * allocator call. Nor does one on an actor that keeps its sparse state for
+ * a pending delayed send. This depends on no population.
  */
 
 #define EVENT_ROUNDS 1000u
@@ -1132,7 +1131,7 @@ static void check_event_allocations(void) {
     ta_event_name_id go = intern_event(system, (ta_str)STR("go"));
     ta_event_name_id done = intern_event(system, (ta_str)STR("done"));
     ta_event_name_id rearm = intern_event(system, (ta_str)STR("rearm"));
-    /* Warm-up: the first run may fill the system's cache of queues. */
+    /* Warm-up: the first events top the pool's and the name area's reserves up. */
     run_event(system, simple_actor, go);
     run_event(system, simple_actor, done);
     run_event(system, timed_actor, rearm);
@@ -1157,20 +1156,17 @@ static void check_event_allocations(void) {
            simple_allocs, simple_frees, timed_allocs, timed_frees);
     ta_system_destroy(system);
     require(counts.live_bytes == 0, "the event system returned every byte it was given");
-    require(simple_allocs == 0.0 && simple_frees == 0.0, "an event to a simple actor calls the allocator (ADR 0064)");
+    require(simple_allocs == 0.0 && simple_frees == 0.0, "an event to a simple actor calls the allocator (ADR 0069)");
     require(timed_allocs == 0.0 && timed_frees == 0.0,
-            "an event to an actor with a pending delayed send calls the allocator (ADR 0064)");
+            "an event to an actor with a pending delayed send calls the allocator (ADR 0069)");
 }
 
 /* ------------------------------------------------------------------------
  * Batched delivery (ADR 0069, ADR 0099). A delivered event waits in core's
- * pool, which holds no event block, and takes one from its session only
- * when its macrostep takes it, until that macrostep ends. So a host that
- * delivers a batch before it runs the actors holds one block at a time.
- * The cache fills on demand up to its bound (ADR 0093): with the default
- * bound of 1,024, or a bound of 4, a warm system makes no allocator call,
- * and with no cache every input takes a new block and frees it again.
- * Creation makes no block.
+ * pool, and when its macrostep takes it, it stays in its envelope until its
+ * input completes: nothing is allocated to hold it. So once the pool is
+ * warm, taking an input allocates nothing, however many inputs a host
+ * delivers before it runs the actors.
  */
 
 #define DELIVERY_BATCH 256u
@@ -1186,33 +1182,11 @@ static void deliver_batch(ta_system *system, const ta_actor_id *actors, ta_event
     }
 }
 
-/* Allocator calls per delivered event over DELIVERY_ROUNDS go/done rounds. */
-static double batch_allocations(ta_system *system, const ta_actor_id *actors, counting_allocator *counts) {
-    ta_event_name_id go = intern_event(system, (ta_str)STR("go"));
-    ta_event_name_id done = intern_event(system, (ta_str)STR("done"));
-    /* Warm-up: the first round fills the cache as far as it reaches. */
-    deliver_batch(system, actors, go);
-    deliver_batch(system, actors, done);
-    counts->alloc_calls = 0;
-    for (unsigned round = 0; round < DELIVERY_ROUNDS; round += 1u) {
-        deliver_batch(system, actors, go);
-        deliver_batch(system, actors, done);
-    }
-    return (double)counts->alloc_calls / (2.0 * DELIVERY_ROUNDS * DELIVERY_BATCH);
-}
-
-/* A system whose block cache keeps at most `cache` blocks (core ADR 0093),
- * with DELIVERY_BATCH actors of the batched chart; allocator calls per
- * delivered event. `created_bytes` is what creation allocated. */
-static double batched_system(uint32_t cache, size_t *created_bytes) {
+static void check_batched_delivery_allocations(void) {
     counting_allocator counts = {.backing = tat_libc_allocator()};
     ta_allocator allocator = {.self = &counts, .v = &COUNTING_VTABLE};
     ta_system *system = NULL;
-    ta_param_value params[] = {{.param = TA_PARAM_EVENT_BLOCK_CACHE, .value = cache}};
-    require(ta_system_create(&(ta_system_config){.allocator = allocator, .params = params, .param_count = 1},
-                             &system) == TA_OK,
-            "system creation");
-    *created_bytes = counts.live_bytes;
+    require(ta_system_create(&(ta_system_config){.allocator = allocator}, &system) == TA_OK, "system creation");
     ta_definition_id simple = register_revision(system, allocator, &(revision_spec){"batched", "v2", STATES_V2});
     ta_actor_id actors[DELIVERY_BATCH];
     for (unsigned index = 0; index < DELIVERY_BATCH; index += 1u) {
@@ -1220,28 +1194,24 @@ static double batched_system(uint32_t cache, size_t *created_bytes) {
                 "spawning an actor of the batch");
         run_to_stable(system, actors[index]);
     }
-    double calls = batch_allocations(system, actors, &counts);
+    ta_event_name_id go = intern_event(system, (ta_str)STR("go"));
+    ta_event_name_id done = intern_event(system, (ta_str)STR("done"));
+    /* Warm-up: the first round fills the pool and the name area as far as a batch reaches. */
+    deliver_batch(system, actors, go);
+    deliver_batch(system, actors, done);
+    counts.alloc_calls = 0;
+    counts.free_calls = 0;
+    for (unsigned round = 0; round < DELIVERY_ROUNDS; round += 1u) {
+        deliver_batch(system, actors, go);
+        deliver_batch(system, actors, done);
+    }
+    double allocs = (double)counts.alloc_calls / (2.0 * DELIVERY_ROUNDS * DELIVERY_BATCH);
+    double frees = (double)counts.free_calls / (2.0 * DELIVERY_ROUNDS * DELIVERY_BATCH);
     ta_system_destroy(system);
+    printf("allocator calls per event delivered in batches of %u, the pool warm: %.2f allocations and %.2f frees\n",
+           DELIVERY_BATCH, allocs, frees);
     require(counts.live_bytes == 0, "the batched system returned every byte it was given");
-    return calls;
-}
-
-static void check_batched_delivery_allocations(void) {
-    size_t default_bytes = 0;
-    size_t small_bytes = 0;
-    size_t empty_bytes = 0;
-    double default_cache = batched_system(TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, &default_bytes);
-    double small_cache = batched_system(4u, &small_bytes);
-    double no_cache = batched_system(0, &empty_bytes);
-    printf("allocator calls per event delivered in batches of %u: %.2f with the default block cache (%u), %.2f with "
-           "a cache of 4, %.2f with none; creation allocated %zu bytes with either bound, %zu with none\n",
-           DELIVERY_BATCH, default_cache, (unsigned)TA_PARAM_DEFAULT_EVENT_BLOCK_CACHE, small_cache, no_cache,
-           default_bytes, empty_bytes);
-    require(default_cache == 0.0, "a warm system with the default cache calls no allocator (ADR 0093)");
-    require(small_cache == 0.0, "a batch waiting in the pool holds no event block, so a cache of 4 serves it (ADR 0099)");
-    require(no_cache > 0.9, "with no cache every input taken takes a block (ADR 0069)");
-    require(default_bytes == empty_bytes && small_bytes == empty_bytes,
-            "creation makes no event block, whatever the bound (ADR 0093)");
+    require(allocs == 0.0 && frees == 0.0, "taking an input from a warm pool calls the allocator (ADR 0099)");
 }
 
 /* ------------------------------------------------------------------------

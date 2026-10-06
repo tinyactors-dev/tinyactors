@@ -573,11 +573,11 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
 
     # Catches: a second actor that finds no continuation to stop into after
     # the first took the system's spare, or that changes before it has one.
-    # Taking an input first gets the session its event block, and every run
-    # then reserves its continuation before it does anything (ADR 0070): so
-    # failing the second actor's first allocation leaves its input waiting,
-    # and failing the next one, that reservation, stops it holding its event
-    # before anything of the macrostep ran.
+    # Taking an input allocates nothing, since its event stays in its
+    # envelope (core ADR 0099), and every run then reserves its continuation
+    # before it does anything (ADR 0070): so failing the second actor's
+    # first allocation, that reservation, stops it holding its event before
+    # anything of the macrostep ran.
     scenario "an actor that stops takes the spare continuation, and the next one reserves its own (#{datamodel})" do
       reference = spawn phases
       reference.deliver 'deeper'
@@ -598,13 +598,6 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
 
       before = [second.active, second.data]
       allocator.arm_fault(after: 0, count: 1)
-      response = second.run_once(budget: 1024)
-      allocator.clear_faults
-      assert_equal ['err_nomem', nil], response.values_at(:result, :outcome), 'the second actor could not take go'
-      assert !second.inspect_actor[:macrostep_in_progress], 'go still waits to be taken'
-      assert_equal before, [second.active, second.data], 'nothing of its macrostep ran'
-
-      allocator.arm_fault(after: 1, count: 1)
       response = second.run_once(budget: 1024)
       allocator.clear_faults
       assert_equal %w[err_nomem faulted], response.values_at(:result, :outcome),

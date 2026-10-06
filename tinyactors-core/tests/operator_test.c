@@ -968,13 +968,27 @@ static void jump_retrying(run *r) {
     }
 }
 
+/* Pauses a second session inside a macrostep that raises, where it holds an
+ * internal queue: the system's spare queue is taken, so the jump's
+ * macrostep makes its own, inside the jump's microstep, before its first
+ * unit (ADR 0070). */
+static void hold_the_spare_queue(run *r) {
+    ta_actor_id actor = r->actor;
+    CHECK(ta_actor_spawn(r->system, &(ta_actor_spawn_params){ .definition = r->definition, .out = &r->actor }) ==
+          TA_OK);
+    CHECK(settle(r, 0) == TEST_DRIVE_STABLE);
+    CHECK(offer(r, "spin", NULL) == TA_OK);
+    test_drive_status status = TEST_DRIVE_ERROR;
+    CHECK(run_for(r, 7, 0, &status) == TA_OK && status == TEST_DRIVE_PAUSED);
+    CHECK(inspect(r).internal_count != 0);
+    r->actor = actor;
+}
+
 static void test_out_of_memory(void) {
     run r;
-    /* No cached event blocks: the jump's event takes a new one, which grows
-     * inside the jump's microstep, before its first unit (ADR 0070). */
-    next_param(TA_PARAM_EVENT_BLOCK_CACHE, 0);
     start(&r);
     CHECK(settle(&r, 0) == TEST_DRIVE_STABLE);
+    hold_the_spare_queue(&r);
     clear_log();
     uint32_t first = record_count;
     unsigned long before = heap.attempts;
@@ -988,13 +1002,13 @@ static void test_out_of_memory(void) {
     records_text(baseline_records, sizeof(baseline_records));
     CHECK(active_is(&r, "work w1"));
     finish(&r);
-    CHECK(used >= 3u); /* the operator transition, the event block, and its growth */
+    CHECK(used >= 2u); /* the operator transition and the jump's internal queue */
 
     char text[4096];
     for (unsigned long failing = 1; failing <= used; failing += 1u) {
-        next_param(TA_PARAM_EVENT_BLOCK_CACHE, 0);
         start(&r);
         CHECK(settle(&r, 0) == TEST_DRIVE_STABLE);
+        hold_the_spare_queue(&r);
         clear_log();
         first = record_count;
         heap.policy.fail_at = heap.attempts + failing;

@@ -66,8 +66,8 @@
  * start empty. Afterwards it allocates where a caller adds something (a
  * spawn, a registration, an interned address, an admitted input, which
  * may add a page to the pool or the name area), a nested interpreter's
- * region the first time an invocation is cancelled at that depth, and the
- * event blocks it caches; never in the middle of a macrostep, where room
+ * region the first time an invocation is cancelled at that depth, and an
+ * actor's internal queue; never in the middle of a macrostep, where room
  * is reserved before the run (ADR 0070).
  *
  * ## Complexity
@@ -245,13 +245,6 @@ struct ta_system {
      * interned at creation with the built-in event names. */
     ta_atom invoke_segment;
     ta_arena scratch;
-    /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
-     * newest first, linked through `next_cached`; at most `block_cache_limit`
-     * of them (ADR 0069). Empty at creation: a block is made when a delivery
-     * finds none, and kept when released while there is room (ADR 0093). */
-    ta_event_block *block_cache;
-    uint32_t block_cache_count;
-    uint32_t block_cache_limit;
     /*
      * What a run that stops inside a phase takes (ADR 0070): a continuation
      * at least as large as the running definition needs, and a sparse state
@@ -260,6 +253,15 @@ struct ta_system {
      */
     ta_continuation *spare_continuation;
     ta_actor_sparse_state *spare_sparse;
+    /*
+     * The internal queue the next macrostep that needs one takes (ADR
+     * 0069): one an actor left empty, keeping no event, when its macrostep
+     * ended, at its first capacity. One macrostep runs at a time, so one
+     * spare serves them all, and a macrostep that runs executable content
+     * allocates no queue of its own; an actor whose macrostep is stopped or
+     * paused, or that keeps an event, keeps its own. Null when taken.
+     */
+    ta_internal_queue *spare_queue;
 };
 
 /*
