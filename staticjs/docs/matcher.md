@@ -1549,7 +1549,7 @@ use most:
 | item | shape | matches | consumer | fuel per element or comparison: bytecode, C |
 |---|---|---|---|---|
 | 1 | COMPARE_NUMERIC(descending) | `(a, b) => a - b`, `(a, b) => b - a` | `toSorted` | 5, 1 |
-| 2 | KEY_COMPARE(key, op, value) | `x => x.k OP c`, `x => c OP x.k` | `filter`, `find`, `findIndex`, `findLast`, `some`, `every` | 6, 2 |
+| 2 | KEY_COMPARE(key, op, value) | `x => x.k OP c`, `x => c OP x.k` | `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `some`, `every` | 6, 2 |
 | 2 | ELEMENT_COMPARE(op, value) | `x => x OP c`, `x => c OP x` | the same | 5, 1 |
 | 3 | SUM(element_first) | `(a, x) => a + x`, `(a, x) => x + a` | `reduce` | 5, 1 |
 | 3 | SUM_KEY(key, element_first) | `(a, x) => a + x.k`, `(a, x) => x.k + a` | `reduce` | 6, 2 |
@@ -1840,7 +1840,7 @@ are charged. The changes common to all three items:
 
 - **`shape_start` takes a table** from built-in to the shapes it runs.
   MAP runs PLUCK; TO_SORTED runs COMPARE_BY_KEY and COMPARE_NUMERIC;
-  FILTER, FIND, FIND_INDEX, FIND_LAST, SOME and EVERY run KEY_COMPARE and
+  FILTER, FIND, FIND_INDEX, FIND_LAST, FIND_LAST_INDEX, SOME and EVERY run KEY_COMPARE and
   ELEMENT_COMPARE; REDUCE runs SUM and SUM_KEY. `Object.groupBy` runs PLUCK, as MAP does (7.3A). The table replaces the
   conditional chain, which three more cases would make unreadable.
   **Implemented with item 1** as `shape_runners`, rows of `{ builtin,
@@ -1872,7 +1872,7 @@ are charged. The changes common to all three items:
   the same helpers, as `sort_take` does for the sort. `predicate_answer(vm,
   frame, truthy)` decides the element at `frame->index`: keep it (filter),
   or finish with true, false, the element, or its index (some, every,
-  find, findLast, findIndex), or go on. `sjs_loop_step`'s phase-1 switch
+  find, findLast, findIndex, findLastIndex), or go on. `sjs_loop_step`'s phase-1 switch
   calls it too, so the two paths cannot drift. It returns LOOP_DONE,
   LOOP_FAULT (filter's `array_add` failing), or LOOP_AGAIN for "go on",
   which phase 1 reads as "carry on in this step".
@@ -1932,7 +1932,7 @@ item 2's commit moves them further.
 #### 11.7.1 Preconditions and the C step
 
 In `predicate_step(vm, frame)`, for element `e` (`frame->index`, or
-`length - 1 - index` for findLast):
+`length - 1 - index` for findLast and findLastIndex):
 
 1. `frame->shape` is KEY_COMPARE or ELEMENT_COMPARE (set at the start).
    For `<`, `<=`, `>` and `>=` with an operand that is `true`, `false` or
@@ -1992,7 +1992,7 @@ When the bytecode decides, the step calls `call_element` exactly as today.
   relational comparison of mixed types. So the fault comes from the same
   instruction for the same element. Identity comparison of two objects
   cannot arise, because `c` is a literal.
-- **Short-circuit.** some, every, find, findIndex and findLast stop at the
+- **Short-circuit.** some, every, find, findIndex, findLast and findLastIndex stop at the
   element where `predicate_answer` finishes. That is the element where the
   bytecode's phase 1 finishes, because both read the same truthiness of
   the same answer. Elements after it are never read, on either path, so a

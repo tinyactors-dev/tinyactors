@@ -1260,7 +1260,7 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 --- fault staticjs calls methods
 
 # The predicate loops with KEY_COMPARE and ELEMENT_COMPARE (docs/matcher.md,
-# 11.7): filter, find, findIndex, findLast, some and every decide an
+# 11.7): filter, find, findIndex, findLast, findLastIndex, some and every decide an
 # element in C while its preconditions hold, and call the bytecode for it
 # otherwise, which gives the answer or the fault.
 
@@ -1501,6 +1501,56 @@ true
 @shapes KEY_COMPARE(k, GREATER, 5)
 [{k: "a"}, null, {k: 1}].findLast(x => x.k > 5)
 --- fault cannot read a property of null
+
+=== predicates: findLastIndex stops at its element, from the end
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 2)
+[null, {k: 2, i: 0}, {k: 2, i: 1}, {k: 3}].findLastIndex(x => x.k === 2)
+--- value
+2
+
+=== predicates: findLastIndex, mirrored and in a block, gives the index
+@shapes KEY_COMPARE(k, LESS, 3) KEY_COMPARE(k, GREATER, 1)
+[[{k: 1}, {k: 2}, {k: 5}].findLastIndex(x => 3 > x.k), [{k: 1}, {k: 2}, {k: 5}].findLastIndex(x => { return x.k > 1; })]
+--- value
+[1,2]
+
+=== predicates: findLastIndex of an element comparison, plain and mirrored
+@shapes ELEMENT_COMPARE(GREATER, 1) ELEMENT_COMPARE(LESS, 3)
+[[1, 2, 3, 0].findLastIndex(x => x > 1), [1, 2, 3, 0].findLastIndex(x => 3 > x)]
+--- value
+[2,3]
+
+=== predicates: findLastIndex gives -1 when nothing matches, or on an empty array
+@shapes ELEMENT_COMPARE(GREATER, 5) ELEMENT_COMPARE(GREATER, 5) KEY_COMPARE(k, STRICT_EQUAL, 1)
+[[1, 2, 3].findLastIndex(x => x > 5), [].findLastIndex(x => x > 5), [].findLastIndex(x => x.k === 1)]
+--- value
+[-1,-1,-1]
+
+=== predicates: findLastIndex stops before a faulting element below it
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 2)
+[null, {k: 2}].findLastIndex(x => x.k === 2)
+--- value
+1
+
+=== predicates: findLastIndex faults at a null first, from the end
+@shapes KEY_COMPARE(k, GREATER, 5)
+[{k: "a"}, null, {k: 1}].findLastIndex(x => x.k > 5)
+--- fault cannot read a property of null
+
+=== predicates: findLastIndex faults at a mixed comparison first, from the end
+@shapes KEY_COMPARE(k, GREATER, 5)
+[null, {k: "a"}, {k: 1}].findLastIndex(x => x.k > 5)
+--- fault staticjs compares two numbers or two strings
+
+=== predicates: findLastIndex with a boolean operand of an order faults
+@shapes ELEMENT_COMPARE(LESS, true)
+[1].findLastIndex(x => x < true)
+--- fault staticjs compares two numbers or two strings
+
+=== predicates: findLastIndex with a key found only on Object.prototype faults
+@shapes KEY_COMPARE(toString, STRICT_EQUAL, 1)
+[{toString: 1}, {}].findLastIndex(x => x.toString === 1)
+--- fault staticjs objects have no prototype
 
 === predicates: filter faults at the element, after keeping some
 @shapes ELEMENT_COMPARE(GREATER_EQUAL, 2)
