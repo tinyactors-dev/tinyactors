@@ -95,7 +95,8 @@ void ta_envelopes_destroy(ta_envelopes *envelopes) {
             continue;
         }
         ta_event_release(&envelope->event);
-        if (envelope->state == TA_ENVELOPE_WAITING) {
+        if (envelope->payload.address != NULL) {
+            /* Whatever the state: a refused host input keeps its reference for its notice. */
             ta_address_release(envelope->payload.address);
         }
     }

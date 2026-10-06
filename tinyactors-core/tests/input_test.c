@@ -505,6 +505,7 @@ enum { HOOK_MAX = 8 };
 typedef struct {
     world *w;
     ta_actor_id target;
+    ta_address *address; /* when set, the post is made by address instead of by session */
     uint32_t calls;
     uint32_t admitted; /* how many posts answered TA_OK, however many calls were made */
     ta_result results[HOOK_MAX];
@@ -542,7 +543,8 @@ static ta_op_status dm_execute_script(void *self, const ta_datamodel_execute_scr
     ta_event event = { .name = hook_name(&text), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     hook.executing[at] = ta_run_executing(system);
     uint64_t before = heap.stats.attempts;
-    hook.results[at] = ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = hook.target, .event = &event,
+    hook.results[at] = ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = hook.address != NULL ? 0 : hook.target,
+                                                                           .address = hook.address, .event = &event,
                                                                            .time = ta_system_time(system),
                                                                            .input = &hook.tokens[at] });
     hook.attempts[at] = heap.stats.attempts - before;
@@ -697,6 +699,61 @@ static void test_withdraw_inside_a_macrostep(void) {
     settle(&w);
     quiescent(&w);
     world_close(&w);
+}
+
+/*
+ * A post by address that a script withdraws in the same macrostep, when the
+ * address is served by the end of it: the withdrawn envelope holds no place in
+ * `queued` (run.h I7), so it is freed unseen and the session can unload.
+ */
+static void test_withdraw_by_address_inside_a_macrostep(void) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_actor_id receiver = spawn(&w, w.chain);
+    settle(&w);
+    ta_address *address = intern_address(&w, "n1");
+    uint64_t first = 0;
+    CHECK(post_to(&w, address, w.e1, &first) == TA_OK); /* the list a load answers */
+    report r;
+    CHECK(run(&w, false, &r) == TA_OK);
+    CHECK(count_kind(&r, TA_NOTICE_LOAD_NEEDED) == 1u);
+    CHECK(ta_address_loaded(w.system, &(ta_address_loaded_params){ .address = address, .actor = receiver }) == TA_OK);
+    CHECK(run(&w, false, &r) == TA_OK);
+    CHECK(in_state(&w, receiver, "s1")); /* e1 ran: the address is resident */
+    ta_scxml_action_spec actions[] = { SCRIPT("post:e1"), SCRIPT("withdraw"), END };
+    ta_definition_id poster_chart = define_poster(&w, actions);
+    hook = (hook_record){ .w = &w, .target = receiver, .address = address };
+    (void)spawn(&w, poster_chart);
+    CHECK(run(&w, true, &r) == TA_OK);
+    CHECK(hook.results[0] == TA_OK && hook.withdraw_result == TA_OK);
+    CHECK(count_token(&r, TA_NOTICE_INPUT_TAKEN, hook.tokens[0]) == 0u);
+    CHECK(in_state(&w, receiver, "s1")); /* the withdrawn e1 did not run */
+    CHECK(gauge(&w) == 0u && queued_of(&w, receiver) == 0u);
+    settle(&w);
+    quiescent(&w);
+    ta_address_release(address);
+    world_close(&w);
+}
+
+/*
+ * A refused host input keeps its address reference until its notice is
+ * written. Destroying the system before that run gives it back: the address
+ * table is empty at teardown, which the leak check of world_close sees.
+ */
+static void test_destroy_with_a_refused_input_unreported(void) {
+    world w;
+    world_init(&w, NULL, 0);
+    ta_address *address = intern_address(&w, "n1");
+    uint64_t token = 0;
+    CHECK(post_to(&w, address, w.e1, &token) == TA_OK);
+    report r;
+    CHECK(run(&w, false, &r) == TA_OK);
+    CHECK(count_kind(&r, TA_NOTICE_LOAD_NEEDED) == 1u);
+    CHECK(ta_address_load_failed(w.system, &(ta_address_load_failed_params){ .address = address,
+                                                                            .reason = TA_REFUSED_LOAD_FAILED }) ==
+          TA_OK);
+    ta_address_release(address);
+    world_close(&w); /* no ta_run: the refused envelope is still on the refused list */
 }
 
 /* The macrostep's reserve pays for its mail and its posts alike; the post after the last envelope is FULL. */
@@ -1169,6 +1226,8 @@ int main(void) {
     test_gauge_follows_every_end();
     test_post_inside_a_macrostep();
     test_withdraw_inside_a_macrostep();
+    test_withdraw_by_address_inside_a_macrostep();
+    test_destroy_with_a_refused_input_unreported();
     test_reserve_spent_inside_a_macrostep();
     test_abandoned_macrostep_discards_its_posts();
     test_runaway_macrostep_discards_its_posts();

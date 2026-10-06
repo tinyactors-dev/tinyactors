@@ -9421,6 +9421,57 @@ TA_PRIVATE ta_result ta_io_origin_uri(const ta_system *system, const ta_io_origi
 TA_PRIVATE ta_result ta_io_origin_type(const ta_system *system, const ta_origin *origin, ta_str *out);
 
 
+/*
+ * invoke: the active invocations of a session (SCXML <invoke>), and the
+ * reports that services make about them.
+ *
+ * Purpose. A state that is entered with an <invoke> starts a service through a
+ * registered invoker at the end of the macrostep; the service lives while the
+ * state is active, and ends when the state exits (cancel), when it finishes
+ * (done.invoke, <finalize>) or when it reports an error. This unit owns the
+ * bookkeeping that ties those together: the invoke table, ID interning,
+ * autoforwarding and the application of error reports (ADR 0081, ADR 0089).
+ *
+ * Lifetime. Everything here belongs to a session. An invocation's record
+ * (ta_invoke_meta, kept parallel to the public ta_active_invoke array of the
+ * actor's sparse state) is allocated when the session starts the invocation
+ * (or restores it, ta_invoke_restore) and freed when the invocation is
+ * retired or the session is destroyed (ta_invoke_release). Nothing may hold a
+ * pointer into the table past the macrostep that found it: the table moves
+ * when it grows. An error report is an envelope (lifetime: envelope) from its
+ * admission until ta_run takes it; ta_invoke_report_take consumes what it
+ * needs and the envelope keeps its own event references.
+ *
+ * Allocation. Starting and restoring an invocation, and interning an ID,
+ * allocate through the system's allocator, at the safe points the catalog
+ * names (the end of a macrostep, ta_run's take, restore). The query functions
+ * (ta_invoke_table_bytes, ta_invoke_table_decl, ta_invoke_is_active,
+ * ta_invoke_origin_of, ta_invoke_origin_for) never allocate. Sizes are
+ * computed with checked arithmetic, and a failed allocation leaves the
+ * session as it was. One known exception: admitting an error report interns
+ * the event name error.communication.invoke.<id>.<reason> (see
+ * ta_invoke_report_error in invoke.c), which can allocate inside the parent's
+ * macrostep when the invoker's start fails; it answers a clean TA_ERR_NOMEM
+ * with nothing queued, and it goes with the name area in unit 4.2b.
+ *
+ * Invariants. An invocation is active from its start until it is retired
+ * exactly once; its ID is the interned text's atom + 1, so the text is always
+ * recoverable; a replayed invocation (ADR 0089) has no invoker called and
+ * nothing running behind it. A report for an invocation that is no longer
+ * active is dropped (TA_ERR_NOT_FOUND), never applied to a successor.
+ *
+ * Complexity. Lookup of an invocation by ID is linear in the session's active
+ * invocations, which is small by construction (bounded by the definition's
+ * <invoke> elements in the active configuration).
+ *
+ * Usage. The interpreter calls ta_invoke_state_entered and
+ * ta_invoke_state_exited as states change and ta_invoke_start_pending at the
+ * end of the macrostep. A service reports through the public
+ * ta_invoke_report API, which admits an envelope; ta_run then calls
+ * ta_invoke_report_take, which queues the report's event and starts the
+ * macrostep that handles it.
+ */
+
 
 typedef struct {
     ta_atom type;
@@ -18863,7 +18914,8 @@ TA_PRIVATE void ta_envelopes_destroy(ta_envelopes *envelopes) {
             continue;
         }
         ta_event_release(&envelope->event);
-        if (envelope->state == TA_ENVELOPE_WAITING) {
+        if (envelope->payload.address != NULL) {
+            /* Whatever the state: a refused host input keeps its reference for its notice. */
             ta_address_release(envelope->payload.address);
         }
     }
@@ -32564,6 +32616,11 @@ TA_PRIVATE void ta_mail_macrostep_ended(ta_system *system) {
     while ((index = ta_ilist_pop_front(&slot->outgoing_waiting, link)) != 0) {
         ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
         ta_mail_route route = {0};
+        if (envelope->source == TA_SOURCE_HOST && (envelope->flags & TA_ENVELOPE_WITHDRAWN) != 0) {
+            /* Withdrawn while held: it holds no place in `queued` (run.h I7), so free it unseen. */
+            ta_envelope_release(&system->envelopes, index);
+            continue;
+        }
         if ((envelope->flags & TA_MAIL_FLAG_SESSION) != 0) {
             route.session = envelope->target;
             route.family = (ta_atom)envelope->input;

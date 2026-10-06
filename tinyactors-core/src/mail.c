@@ -280,6 +280,11 @@ void ta_mail_macrostep_ended(ta_system *system) {
     while ((index = ta_ilist_pop_front(&slot->outgoing_waiting, link)) != 0) {
         ta_envelope *envelope = ta_envelope_at(&system->envelopes, index);
         ta_mail_route route = {0};
+        if (envelope->source == TA_SOURCE_HOST && (envelope->flags & TA_ENVELOPE_WITHDRAWN) != 0) {
+            /* Withdrawn while held: it holds no place in `queued` (run.h I7), so free it unseen. */
+            ta_envelope_release(&system->envelopes, index);
+            continue;
+        }
         if ((envelope->flags & TA_MAIL_FLAG_SESSION) != 0) {
             route.session = envelope->target;
             route.family = (ta_atom)envelope->input;
