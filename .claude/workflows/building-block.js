@@ -3,6 +3,7 @@ export const meta = {
   description: 'Implement one ring-protocol plan step in tinyactors-core, or deep-review one landed commit',
   whenToUse: 'One plan step per run: args {block: "4.2 commit 4", notes}. Leaves the change uncommitted. Review a landed commit with {reviewCommit: "<sha>", block}; the review runs read-only and reports findings for a follow-up fix commit, so the next step can be implemented at the same time.',
   phases: [
+    { title: 'Brief', detail: 'a read-only pass maps call sites, tests and generated files' },
     { title: 'Implement', detail: 'block-implementer writes the change, its header docs and its tests' },
     { title: 'Review', detail: 'block-reviewer reviews the change in depth; findings go back to the implementer' },
   ],
@@ -95,11 +96,25 @@ if (args && args.reviewCommit) {
 // args.fix: the maintainer's corrections to a step already in the working
 // tree; the run starts with a fix round instead of implementing anew.
 const FIX = args && args.fix
+
+// A cheap read-only pass maps the change before the implementer starts, so
+// the implementer does not rediscover call sites across four projects.
+// args.brief === false skips it.
+let BRIEF = ''
+if (!FIX && !(args && args.brief === false)) {
+  phase('Brief')
+  const brief = await agent(
+    `Map the code a change will touch, for the implementer who makes it. Do not design or edit anything. The change: ${block} of docs/proposals/ring-proto/IMPLEMENTATION.md (read its entry under "Step 4.2 in commits" or the step's row).${NOTES}\n\nReturn a compact brief, file:line throughout:\n1. The functions, types and fields the change replaces or extends, where each is defined.\n2. Every call site of each, grouped by project (tinyactors-core, tinyactors-host, tinyactors-otlp, tinyactors-test C and Ruby, tinyactors-napi src/lib/test), from git grep.\n3. The tests that cover them (core test programs, kernel tests, test host scenario files and names, napi suites), and which are likely to need changes.\n4. Generated files to regenerate (amalgamation, napi bindings) and the commands that do it.\n5. Anything surprising: a second code path doing the same thing, a test that pins the old behaviour.\nNo prose beyond what the implementer needs.`,
+    { agentType: 'Explore', label: `brief ${block}`, phase: 'Brief' },
+  )
+  if (brief) BRIEF = `\n\nA read-only pass mapped the code for you. Verify what you rely on, but do not rediscover it:\n${brief}`
+}
+
 phase('Implement')
 let impl = await run('implementer',
   FIX
     ? `${block} is already implemented in the working tree, uncommitted. Apply the maintainer's corrections below, rerun the commands and report as for an implementation. Change nothing else.\n${FIX}`
-    : `Carry out ${block} of the ring protocol plan, with its header documentation and its tests, as your instructions describe. Leave everything uncommitted.${NOTES}`,
+    : `Carry out ${block} of the ring protocol plan, with its header documentation and its tests, as your instructions describe. Leave everything uncommitted.${NOTES}${BRIEF}`,
   { schema: IMPL, label: FIX ? `correct ${block}` : `implement ${block}` },
 )
 if (!impl) throw new Error(`the implementer for ${block} returned nothing`)

@@ -218,6 +218,25 @@ the change:
   end); `mise run bindings` in `tinyactors-napi` after a public header
   change.
 
+**Run the fragile suites early.** These have caught real defects only at
+the end of a step, costing a full extra round. Run them as soon as the
+core change builds, before migrating the rest, and again after:
+
+- `tinyactors-test`'s `scale_test` (something grows with the population);
+- `node tinyactors-napi/test/scale.js` (spawn or delivery cost growing
+  with the population);
+- `node tinyactors-napi/test/allocations.js` (memory kept per actor);
+- core's `params_test` (allocations at take and at bootstrap).
+
+When the maintainer's task or a brief names files and call sites, start
+from them instead of rediscovering them; verify what you rely on.
+
+**A continued implementer.** The maintainer may send you the next commit
+of the same step as a follow-up message after the previous one has
+landed. Your earlier reading still holds for the code that commit did not
+change; reread only what changed (`git show HEAD --stat` and the files you
+will edit). Each commit is still a fresh report.
+
 Run the full gates **once, at the end**, after the narrow tests pass:
 
 - a new block: `mise run asan` and `mise run test` inside
