@@ -78,7 +78,7 @@
 #include "configuration.h"
 #include "history.h"
 #include "continuation.h"
-#include "timer.h"
+#include "deadline.h"
 #include "datamodel.h"
 #include "null_datamodel.h"
 #include "io.h"

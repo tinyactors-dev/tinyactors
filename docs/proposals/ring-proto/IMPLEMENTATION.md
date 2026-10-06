@@ -583,8 +583,14 @@ Decisions for these commits:
 - **One session at a time.** Replay and the debugger run one session
   through a session filter in `ta_run`'s parameters, the debugging
   exception of [macrostep.md](reference/macrostep.md#macrostep-slots).
-- **Invocation tokens** come from free envelopes when an invocation
-  starts, until 4.4 moves startup after the macrostep.
+- **Invocation tokens** landed in 4.3a, not 4.2: a local invoked child
+  takes one envelope from the pool when it is spawned, a free one inside
+  the parent's macrostep (a spawn that finds none answers `TA_ERR_FULL`;
+  an invoker that passes that code on fails the `<invoke>` as
+  `error.execution.capacity.pool`), with room in the name area for a timer's
+  record. Publishing its completion gives the token back first, so the
+  completion's mail, or the timer that keeps it, always finds room; a
+  completion is never dropped. 4.4 moves startup after the macrostep.
 - **The defaults are measured by proxy** in 4.2, since h2c and c2h
   arrive in 5.1: `tel` by `tel.dropped` directly; h2c by the peak of
   native admissions between two `ta_run` calls times the size of

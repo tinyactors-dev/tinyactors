@@ -216,10 +216,9 @@ typedef enum {
     TA_ENVELOPE_TAKEN = 4,
     /** A delayed send, in the deadline index and its sender's owner list. */
     TA_ENVELOPE_TIMER = 5,
-    /** Held by a live local invocation, on no list. */
+    /** Held by a live local invoked child, on no list, for its completion
+     * (`deadline.h`). */
     TA_ENVELOPE_INVOCATION_TOKEN = 6,
-    /** An invocation token turned into the stop of a child session. */
-    TA_ENVELOPE_CHILD_STOP = 7,
     /** A completed input kept, on no list, only for the name its text
      * holds: an invoked session's kept event names it (`run.h`). It holds
      * no references. */
@@ -236,6 +235,9 @@ typedef enum {
 /** A taken input whose name an invoked session's kept event names: when it
  * completes it is kept (`TA_ENVELOPE_KEPT`), not given back. */
 #define TA_ENVELOPE_FLAG_KEEP ((uint8_t)0x08u)
+/** A timer offered once and refused, waiting to be offered again
+ * (`deadline.h`): `<cancel>` and the end of its session leave it. */
+#define TA_ENVELOPE_FLAG_SUBMITTED ((uint8_t)0x10u)
 
 /** One pending input; see the file comment. */
 typedef struct {

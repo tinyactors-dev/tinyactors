@@ -203,35 +203,36 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
 
   # Catches: a send between actors lost silently, retried, or queued past
   # core's pool when the pool has no room for it (core ADR 0099). In a pool
-  # of eight, `go`, an event waiting for a bystander and six of the
-  # filler's sends, fallen due, leave no envelope free: the self-send `go`
-  # makes fails in the sender as error.execution.capacity.pool, once, the
-  # rest of its block (raising `counted`) does not run, and the ping never
-  # arrives.
+  # of eight, the sender's bootstrap holds one envelope and its seven
+  # delayed sends hold the rest (core ADR 0101): the immediate `ping` to
+  # itself then fails in the sender as error.execution.capacity.pool, once,
+  # the rest of its block (raising `counted`) does not run, and the ping
+  # never arrives.
   scenario 'a send the pool has no room for fails in its sender, and never arrives' do
     system_params(pool_envelopes: 8)
-    filler = TinyactorsTest::Chart.define(:filler) do
-      state :filling do
+    sender = TinyactorsTest::Chart.define(:crowded_sender) do
+      data log: { expr: '[]' }
+      state :sending do
         on_entry do
-          (1..6).each { |index| send_event 'fill', delay: '1s', id: "f#{index}" }
+          (1..7).each { |index| send_event 'fill', delay: '60s', id: "f#{index}" }
+          send_event 'ping'
+          raise_event 'counted'
+        end
+        transition on: 'ping', type: :internal do
+          assign '.log', '.log + ["ping"]'
+        end
+        transition on: 'counted', type: :internal do
+          assign '.log', '.log + ["counted"]'
         end
       end
     end
-    spawn filler
-    relay = spawn
-    bystander = spawn
-    assert_equal 'ok', relay.post('go')
-    assert_equal 'ok', bystander.post('extra')
-    set_time(1000)
-    due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 100))
-    assert_equal [6, false], due.values_at(:dispatched, :more_due), 'the filler\'s sends fill the pool'
     recording_trace
-    run_system('go, whose ping finds no room, then extra')
+    crowded = spawn sender
     errors = trace_records.select { |record| record[:kind] == 'raised' }
                           .map { |record| record.dig(:event, :name_text) }.grep(/\Aerror/)
     assert_equal ['error.execution.capacity.pool'], errors, 'the send failed once, in its sender'
-    assert_equal ['go', 'n=5'], relay.data('.log'), 'the ping never arrived, and `counted` was never raised'
-    assert_equal ['extra'], bystander.data('.log')
+    assert_equal [], crowded.data('.log'), 'the ping never arrived'
+    assert_equal 7, crowded.delayed_sends, 'the seven delayed sends hold the pool'
     assert_equal [], load_requests
   end
 

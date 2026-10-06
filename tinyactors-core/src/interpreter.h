@@ -67,7 +67,7 @@
 #include "text_writer.h"
 #include "../include/tinyactors.h"
 #include "continuation.h"
-#include "timer.h"
+#include "deadline.h"
 #include "invoke.h"
 #include "definition.h"
 #include "actor.h"
@@ -272,6 +272,10 @@ typedef enum {
  * allocates inside a macrostep.
  */
 ta_dispatch_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, ta_dispatch *how);
+/* Raises error.execution.capacity.pool or .names in the running action, as
+ * a <send> with no room does (ADR 0102's names): TA_EXEC_FAILED when it was
+ * queued. */
+ta_result ta_interpreter_capacity_error(ta_interpreter *it, ta_record_capacity_resource resource);
 
 /** A send to another session that failed after it left its macrostep; see
  * `ta_interpreter_send_failed`. */

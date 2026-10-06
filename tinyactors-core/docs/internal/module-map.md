@@ -27,7 +27,7 @@ are private and hold layouts and internal functions.
 | `configuration.h` | the active atomic states, one bit per state ID (see its file comment) |
 | `history.h` | shallow/deep history storage layout |
 | `continuation.h` | paused macrostep interpreter state |
-| `timer.h` | per-owner delayed-send lists and the owner deadline index (ADR 0054) |
+| `deadline.h` | delayed sends as envelopes: the deadline index and owner lists (ADR 0101) |
 | `datamodel.h` | the data model's view of its actor (see its file comment) |
 | `io.h` | the I/O processor registry entry and origin rendering (see its file comment) |
 | `invoke.h` | invocation bookkeeping, retirement and restore (see its file comment) |

@@ -2,8 +2,8 @@
  * An event's named origin outlives the actor that sent it (ADR 0065). A
  * named sender is destroyed while one of its events is still held: by
  * core, as mail waiting for a target that is not resident, and as a
- * submitted delayed send no envelope was free for, and as the event a host
- * delivered and then let go of. The holder then reads the origin's name.
+ * submitted delayed send its I/O processor refused once, and as the event a
+ * host delivered and then let go of. The holder then reads the origin's name.
  * Built with AddressSanitizer (mise run asan), reading freed memory fails
  * the run; it did, before addresses were shared handles.
  */
@@ -163,17 +163,46 @@ static const ta_scxml_state_spec sender_chart[] = {
     {0},
 };
 
-static const ta_scxml_action_spec spam[] = {
-    SEND_TO_PEER("x", "0s"), SEND_TO_PEER("x", "0s"), SEND_TO_PEER("x", "0s"), SEND_TO_PEER("x", "0s"),
-    SEND_TO_PEER("x", "0s"), SEND_TO_PEER("x", "0s"), SEND_TO_PEER("x", "0s"), SEND_TO_PEER("x", "0s"),
+/* A delayed send to the host I/O processor `slow`. */
+static const ta_scxml_state_spec slow_sender_chart[] = {
+    {
+        .kind = TA_SCXML_STATE_ATOMIC,
+        .id = STR("sent"),
+        .onentry = (const ta_scxml_handler_spec[]){
+            { .actions = (const ta_scxml_action_spec[]){
+                  { .kind = TA_SCXML_ACTION_SEND,
+                    .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR("late") },
+                                 .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("slow") },
+                                 .delay = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("1s") } } },
+                  {0} } },
+            {0},
+        },
+    },
     {0},
 };
-static const ta_scxml_state_spec spammer_chart[] = {
-    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle"),
-      .transitions = (const ta_scxml_transition_spec[]){
-          { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("spam"), .actions = spam }, {0} } },
-    {0},
-};
+
+/* `slow` refuses its first offer, so the send waits, submitted; it takes
+ * the second and reads the name of the send's source. */
+static int slow_offers;
+static char slow_source[32];
+
+static ta_op_status slow_send(void *self, const ta_send *send, ta_fault *fault) {
+    (void)self;
+    (void)fault;
+    slow_offers += 1;
+    if (slow_offers == 1) {
+        return TA_OP_NOMEM;
+    }
+    if (send->source.kind == TA_ACTOR_REF_NAMED) {
+        ta_actor_address address = ta_address_view(send->source.as.named);
+        size_t length = address.name.len < sizeof slow_source - 1u ? address.name.len : sizeof slow_source - 1u;
+        memcpy(slow_source, address.name.ptr, length);
+        slow_source[length] = '\0';
+    }
+    return TA_OP_OK;
+}
+
+static const ta_io_vtable slow_vtable = { .send = slow_send };
 
 static const ta_scxml_state_spec peer_chart[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("p") }, {0} };
 
@@ -245,48 +274,30 @@ static void test_waiting_mail_outlives_its_sender(void) {
     ta_system_destroy(system);
 }
 
-/* (b) A due send finds no free envelope and is kept as submitted; the sender
- * is destroyed; the send is dispatched later, waits for the peer's load,
- * and the peer reads its origin. */
+/* (b) A due send's I/O processor refuses it, and it is kept as submitted;
+ * the sender is destroyed; the send is offered again, and the processor
+ * reads its origin's name. */
 static void test_submitted_send_outlives_its_sender(void) {
     small_directory dir = {0};
-    ta_param_value small_pool[] = { { TA_PARAM_POOL_ENVELOPES, 8 } };
-    ta_system *system = create_system(&dir, small_pool, 1);
-    ta_actor_id sender = spawn_sender(system);
-    /* The spammer's mail to peer/p waits, and fills the pool. */
-    ta_actor_id spammer = spawn_at(system, spammer_chart, "spammer", "s");
-    ta_atom atom = 0;
-    CHECK(ta_system_intern_atom(system, (ta_str)STR("spam"), &atom) == TA_OK);
-    ta_event_name_id name = 0;
-    CHECK(ta_event_name_intern(system, &(ta_atom_list){ .atoms = &atom, .count = 1 }, &name) == TA_OK);
-    ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    test_drive_status status = TEST_DRIVE_ERROR;
-    CHECK(test_drive_deliver(system,
-                             &(ta_actor_deliver_params){ .time = ta_system_time(system), .actor = spammer,
-                                                         .name = test_event_text(system, &event), .event = &event },
-                             &(test_drive_run_params){ .status = &status }) == TA_OK);
-    ta_load_request request = { 0 };
-    CHECK(ta_system_load_needed(system, &request) == TA_OK);
+    ta_system *system = create_system(&dir, NULL, 0);
+    ta_atom type = 0;
+    CHECK(ta_system_intern_atom(system, (ta_str)STR("slow"), &type) == TA_OK);
+    CHECK(ta_system_register_io(system, &(ta_io_registration_params){ .type = type, .io = { .v = &slow_vtable } }) ==
+          TA_OK);
+    slow_offers = 0;
+    slow_source[0] = '\0';
+    ta_actor_id sender = spawn_at(system, slow_sender_chart, "sender", "sender1");
     CHECK(ta_system_set_time(system, 1000) == TA_OK);
     uint32_t dispatched = 0;
     bool more = false;
     CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
                                                                     .more_due = &more }) == TA_OK);
-    /* `later` takes the last free envelope, and `last` finds none: it is
-     * submitted, and waits, due now. */
-    CHECK(dispatched == 1 && more);
+    CHECK(dispatched == 0 && more && slow_offers == 1);
     CHECK(ta_actor_destroy(system, sender) == TA_OK);
-    /* The load fails: the spammer's mail becomes its errors, and the pool
-     * has room again. */
-    ta_fault fault = { .code = TA_ERR_NOT_FOUND };
-    CHECK(ta_system_load_failed(system, &(ta_load_failed_params){ .request = request.request, .fault = &fault }) ==
-          TA_OK);
-    (void)took_mail_from(system, spammer, "sender1"); /* runs the spammer's errors */
     CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
                                                                     .more_due = &more }) == TA_OK);
-    CHECK(dispatched == 1);
-    ta_actor_id peer = load_peer(system);
-    CHECK(took_mail_from(system, peer, "sender1"));
+    CHECK(dispatched == 1 && !more && slow_offers == 2);
+    CHECK(strcmp(slow_source, "sender1") == 0);
     ta_system_destroy(system);
 }
 

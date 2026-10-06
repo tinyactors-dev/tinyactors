@@ -599,45 +599,42 @@ TinyactorsTest.scenarios 'virtual actor paging, delayed sends', chart: :timed_pa
     end
   end
 
-  # ADR 0054's retry path for an unloaded target. The due send finds core's
-  # pool full (the filler's sends took it): it goes back to its owner,
-  # submitted, and stays due. The host pages the target in, evicting the
-  # owner; the owner's image does not hold the submitted send (it moved to
-  # the system), and the retry reaches the paged-in target exactly once, in
-  # core, since the target is resident by then (core ADR 0099).
-  scenario 'a send refused for an unloaded target is retried after the target pages in' do
+  # Core ADR 0101 under paging: a pending send holds its envelope from the
+  # moment it is armed and keeps it as it falls due. With the target paged
+  # out and a crowd's sends holding every other envelope of the pool, the
+  # due send needs no free one: it waits on the target's address for its
+  # load, and the target, paged in (evicting the owner), takes it exactly
+  # once, in core.
+  scenario 'a due send for an unloaded target waits for its page-in with its own envelope' do
     system_params(pool_envelopes: 8)
     on_load_needed { |_request| :hold }
     watch_mail
-    filler = TinyactorsTest::Chart.define(:refusal_filler) do
-      state :filling do
-        on_entry do
-          (1..8).each { |index| send_event 'fill', delay: '500ms', id: "f#{index}" }
-        end
-      end
-    end
-    filling = spawn filler
     host = VirtualActorPagingScenarios::TimedHost.new(self, limit: 1, random: Random.new(0), prefix: 'r',
                                                             chart: :timed_pager)
     host.page_in('r1')
     owner = host.page_in('r0') # evicts r1: the target is unloaded
     owner.deliver('arm', data: { to: "#_actor_#{family(:timed_pager)}/r1", delay: '1000ms', k: 1 })
+    crowd = TinyactorsTest::Chart.define(:crowd) do
+      state :crowding do
+        on_entry do
+          (1..8).each { |index| send_event 'later', delay: '60s', id: "c#{index}" }
+        end
+      end
+    end
+    crowding = spawn crowd
     set_time(now + 1_000)
     due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 100))
-    assert_equal [8, true], due.values_at(:dispatched, :more_due), 'the filler\'s sends left no room for the due send'
-    pending = Array(owner.inspect_actor[:delayed_sends])
-    assert_equal [true], pending.map { |send| send[:submitted] }, 'the refused send is back with its owner, submitted'
-    # The filler takes its sends, which makes room again.
-    8.times { filling.resume(budget: 64) }
+    assert_equal [1, false], due.values_at(:dispatched, :more_due), 'the due send went, with the pool crowded'
+    assert_equal [], Array(owner.inspect_actor[:delayed_sends]), 'it left its owner as it fell due'
+    # The crowd goes, which leaves admission room for the page-in.
+    crowding.destroy
 
-    host.page_in('r1') # evicts the owner while its send is submitted
-    assert_equal nil, host.earliest_deadline, 'the owner\'s image holds no submitted send: it moved to the system'
-    run_system('retry the refused send')
-    assert_equal [], load_requests, 'the retry went to the resident target in core, and asked for no load'
-    ledger = VirtualActorPagingScenarios::SendLedger.new(self, 'refused')
+    host.page_in('r1') # evicts the owner; the waiting send goes to the loaded target
+    run_system('deliver the waiting send')
+    ledger = VirtualActorPagingScenarios::SendLedger.new(self, 'waiting')
     ledger.armed(1, owner: 'r0', target: 'r1', due: now)
     VirtualActorPagingScenarios.pump(self, host, ledger)
-    assert_equal [], ledger.undelivered, 'the target took the retry'
+    assert_equal [], ledger.undelivered, 'the target took the send'
     assert_equal 1, host.page_in('r1').data('.t'), 'the target received the send exactly once'
     host.release_parked
   end
@@ -856,36 +853,36 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
     assert_equal [5], actor.data('.k'), 'the send to self is delivered once'
   end
 
-  # A send to self that finds no room when it falls due (core's pool full,
-  # core ADR 0099) is submitted: it stays with its owner, not in the owner's
-  # image (ADR 0054). When the owner pages out before the retry, the send
-  # moves to the system's list. It names the session by its session ID, so
-  # its retry reaches the reloaded owner (ADR 0066).
-  scenario 'a refused send to self survives its owner paging out' do
+  # Core ADR 0101 for a send to self under paging: in a pool whose other
+  # envelopes a crowd's sends hold, the owner's send to itself falls due
+  # with the envelope it has held since it was armed, and arrives. The
+  # owner then pages out and in, and nothing arrives twice: a send that
+  # fell due is in no image.
+  scenario 'a due send to self arrives in a crowded pool, and once across paging' do
     system_params(pool_envelopes: 8)
-    filler = TinyactorsTest::Chart.define(:filler) do
-      state :filling do
+    owner = spawn :self_pager, name: 'a'
+    owner.deliver 'self_arm', data: { delay: '100ms', k: 7 }
+    crowd = TinyactorsTest::Chart.define(:crowd) do
+      state :crowding do
         on_entry do
-          (1..8).each { |index| send_event 'fill', delay: '50ms', id: "f#{index}" }
+          (1..8).each { |index| send_event 'later', delay: '60s', id: "c#{index}" }
         end
       end
     end
-    filling = spawn filler
-    owner = spawn :self_pager, name: 'a'
-    owner.deliver 'self_arm', data: { delay: '100ms', k: 7 }
+    crowding = spawn crowd
     set_time(now + 100)
     due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 100))
-    assert_equal [8, true], due.values_at(:dispatched, :more_due), 'the filler\'s sends left no room for the send to self'
-    assert_equal [true], Array(owner.inspect_actor[:delayed_sends]).map { |send| send[:submitted] }
+    assert_equal [1, false], due.values_at(:dispatched, :more_due), 'the send to self went, with the pool crowded'
+    run_system('the owner takes its send')
+    assert_equal [7], owner.data('.k'), 'the owner received its send to self'
+    # The crowd goes, which leaves admission room for the load.
+    crowding.destroy
     image = capture(owner)
     binding = owner.data
     core('ta_actor_unload', { result: unload(owner, image) })
-    # The filler takes its sends, which makes room for the load, before
-    # anything is dispatched again.
-    8.times { filling.resume(budget: 64) }
     core('ta_actor_load', { result: load(owner, image, binding: binding) })
     destroy_image(image)
-    run_system('retry the refused send')
-    assert_equal [7], owner.data('.k'), 'the reloaded owner receives its refused send to self'
+    run_system('the reloaded owner runs')
+    assert_equal [7], owner.data('.k'), 'nothing arrived twice'
   end
 end

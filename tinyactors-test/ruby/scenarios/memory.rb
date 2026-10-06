@@ -59,18 +59,19 @@ TinyactorsTest.scenarios 'actor memory' do
     end
   end
 
-  # Catches: delayed-send storage that inspection does not count, or that
-  # lives somewhere other than with its owner. A traffic light arms a timer
-  # on entry; the send is the actor's (ADR 0054), so it adds to what the
-  # actor holds and the allocator agrees byte for byte.
-  scenario 'an actor that arms a timer holds its sends with it' do
+  # Catches: delayed-send storage that grows the actor, or that the
+  # allocator hands out per send. A traffic light arms a timer on entry; the
+  # send is an envelope of core's pool, which holds it until it is due (core
+  # ADR 0101), so the actor holds no more than its fixed size, and one more
+  # light costs the allocator exactly that.
+  scenario 'an actor that arms a timer holds no storage for its sends' do
     fixed = definition_facts(:traffic_light).fetch(:actor_fixed_bytes)
     light = spawn(:traffic_light)
     held = light.inspect_actor.fetch(:allocated_bytes)
     assert_equal 1, light.delayed_sends, 'the light has one timer pending'
-    assert held > fixed, "the pending send is counted: #{held} bytes against #{fixed} fixed"
-    assert_equal held, ActorMemory.marginal(self, :traffic_light),
-                 'the allocator handed out exactly what inspection reports for one more light'
+    assert_equal fixed, held, 'the pending send is the pool\'s, not the actor\'s'
+    assert_equal fixed, ActorMemory.marginal(self, :traffic_light),
+                 'the allocator handed out the fixed size for one more light'
   end
 
   # Catches: a definition compiled, copied, or indexed per actor. A chart

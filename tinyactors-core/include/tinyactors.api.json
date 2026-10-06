@@ -1727,7 +1727,7 @@
           "shape": "counted",
           "direction": "in",
           "optional": true,
-          "doc": "Pending delayed sends, ordered by due time, then send order."
+          "doc": "Pending delayed sends, ordered by due time, then send order: a view the system keeps, valid until the next inspection or export, or until a send changes. It has room from system creation for 16 sends, and the pool's refill keeps room for the longest list seen; a longer one grows it, outside any macrostep, so such an inspection can answer TA_ERR_NOMEM (ADR 0101)."
         },
         {
           "name": "delayed_send_count",
@@ -2655,7 +2655,7 @@
     },
     "ta_actor_state": {
       "kind": "struct",
-      "doc": "An idle actor's state (ADR 0094 section 3): what a checkpoint holds, as structure, for a host to encode. State IDs are the definition's own numbers, which its revision fixes (states are numbered in document order, ADR 0060), so a state restores only under the revision it came from. Pending sends are the actor's, as inspection reports them; a submitted one has left the actor and is not restored. `root` is the data model's root. What ta_actor_export_state() fills is borrowed from the actor and the caller's arrays, except `root`, which the caller releases with ta_value_release(); what ta_actor_prepare_params.state points at is borrowed for the call.",
+      "doc": "An idle actor's state (ADR 0094 section 3): what a checkpoint holds, as structure, for a host to encode. State IDs are the definition's own numbers, which its revision fixes (states are numbered in document order, ADR 0060), so a state restores only under the revision it came from. Pending sends are the actor's, as inspection reports them; a submitted one has left the actor and is not restored. `root` is the data model's root. What ta_actor_export_state() fills is borrowed from the actor, the caller's arrays and, for `sends`, the system's view of the actor's sends, valid until the next inspection or export (it may allocate: TA_ERR_NOMEM), except `root`, which the caller releases with ta_value_release(); what ta_actor_prepare_params.state points at is borrowed for the call.",
       "fields": [
         {
           "name": "definition",

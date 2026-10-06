@@ -102,7 +102,7 @@
 #include "io_origin.h"
 #include "invoke.h"
 #include "routing.h"
-#include "timer.h"
+#include "deadline.h"
 #include "trace.h"
 #include "ring.h"
 #include "run.h"
@@ -203,7 +203,8 @@ struct ta_system {
      */
     ta_actor_table actors;
 
-    ta_timer_heap timers;
+    /* Pending delayed sends (ADR 0101). */
+    ta_deadline deadline;
 
     /* The I/O processor registry (ADR 0068): registry index i is element i - 1; 0 is SCXML. */
     ta_vec io_processors; /* ta_io_registration */
@@ -320,7 +321,7 @@ bool ta_event_name_put(const ta_system *system, const ta_event *event, ta_text_w
 
 /*
  * Gives `event` a name ID for a record that holds names by ID and keeps the
- * event after its input completes: a delayed send (timer.h). A name its
+ * event after its input completes: a delayed send (deadline.h). A name its
  * input keeps as text is interned into the event-name trie, and `name`
  * set. Nothing a host is handed goes through here (ADR 0100). May
  * allocate; TA_ERR_INVALID for a text that is not a valid event name,

@@ -515,7 +515,17 @@ static round_cost measure(size_t population) {
     counting_allocator counts = {.backing = tat_libc_allocator()};
     ta_allocator allocator = {.self = &counts, .v = &COUNTING_VTABLE};
     ta_system *system = NULL;
-    require(ta_system_create(&(ta_system_config){.allocator = allocator}, &system) == TA_OK, "system creation");
+    /* Each pending delayed send holds an envelope and a 64-byte chunk until
+     * it is due (core ADR 0101): room for one per timed actor, twice over so
+     * that spawning stays below the admission watermark, and the defaults'
+     * worth for everything else. The pool and the name area grow as they
+     * are used, so the room costs nothing until then. */
+    uint32_t envelopes = 2u * (uint32_t)population + 4096u;
+    ta_param_value room[] = { { TA_PARAM_POOL_ENVELOPES, envelopes },
+                              { TA_PARAM_NAME_AREA_BYTES, envelopes * 64u + 262144u } };
+    require(ta_system_create(&(ta_system_config){.allocator = allocator, .params = room, .param_count = 2}, &system) ==
+                TA_OK,
+            "system creation");
     /* Measured with every trace mask zero, which a system starts with, so the
      * per-actor figures include what tracing costs every actor untraced:
      * the step counters (ADR 0067). */

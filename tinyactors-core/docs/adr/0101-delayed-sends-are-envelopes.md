@@ -1,6 +1,6 @@
 # ADR 0101: Delayed sends are envelopes
 
-**Status:** Accepted (2026-10-05); not yet implemented. Refines ADR 0026 and ADR 0054.
+**Status:** Accepted (2026-10-05); implementation in progress (see the implementation notes). Refines ADR 0026 and ADR 0054.
 **Date:** 2026-10-05
 
 ## Context
@@ -158,3 +158,50 @@ This ADR records item 4 of the proposal's migration plan
   how a replaying session's timers behave (ADR 0089);
 - how inspection presents pending sends, which ADR 0054 sections 4 and 5
   define over the arrays this ADR removes.
+
+## Implementation notes
+
+**Delayed sends are envelopes (2026-10-06).** `src/deadline.c` replaces
+`timer.c` and `timer.h`. The host's dispatch call is unchanged so far;
+time and dispatch change with the next part of the step.
+
+- **The record.** A timer envelope holds its due time, its send order (in
+  `source_seq`), its send ID and its owner's runtime ID (`from`) in the
+  envelope's own fields, the data and a host processor's evaluated target
+  in `data` and `content`, and the rest in one text field of about 41
+  bytes: event name, I/O processor, destination, invocation, literal
+  content and target IDs, and a submitted send's origin. A traced send
+  adds the trace field. A pending send takes one envelope and one 64-byte
+  chunk, two when traced.
+- **The owner list** is a 4-byte head on the actor, with new sends at the
+  front. Readers that need order (inspection, export, images) sort a
+  session's sends by `(due, order)`, a heapsort over its k sends.
+  `ta_actor` grows from 240 to 248 bytes (the head and its padding); the
+  sparse state loses its 32-byte `ta_timer_list`, and an actor with a
+  pending send no longer needs a sparse state for it.
+- **A due send to a session gives its envelope back before it is
+  delivered**, and the delivery takes one again, at a safe point, so it
+  never finds the pool full (decision 6). The submitted state remains only
+  for a send its host I/O processor refuses (out of memory), until I/O
+  processors become `c2h.send` records; such a send keeps its place in the
+  index and, when its owner goes, stays indexed on no list.
+- **Inspection and export** read a session's sends through a view buffer
+  the system keeps: room for 16 sends from creation, grown at the pool's
+  refill to the longest owner list seen, and otherwise when they ask,
+  outside any macrostep, so only then can they answer `TA_ERR_NOMEM`. An
+  owner list keeps its length beside its head, which fills padding:
+  `ta_actor` stays 248 bytes.
+- **Order.** Ties are broken by the send order, a system-wide counter, as
+  ADR 0054's timer ID did, so dispatch order did not change.
+- **Tests.** Core tests that made a send submitted by filling the pool now
+  make its I/O processor refuse it; populations of tens of thousands of
+  pending sends run with a pool and name area sized for them.
+- **Invocation tokens.** Since a kept completion is a timer, and a timer
+  takes an envelope, a full pool could drop a completion. A local invoked
+  child therefore holds its invocation token (`TA_ENVELOPE_INVOCATION_TOKEN`)
+  from its spawn: one envelope and name-area room for one traced timer
+  record. Publishing the completion gives the token back first, so the
+  completion's mail or its keeping timer takes that room. A child restored
+  from an image takes its token again. The unused `TA_ENVELOPE_CHILD_STOP`
+  state is removed: core stops a child synchronously.
+

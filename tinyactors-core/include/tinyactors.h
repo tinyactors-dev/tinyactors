@@ -3213,8 +3213,10 @@ typedef struct {
  * ADR 0060), so a state restores only under the revision it came from.
  * Pending sends are the actor's, as inspection reports them; a submitted
  * one has left the actor and is not restored. `root` is the data model's
- * root. What ta_actor_export_state() fills is borrowed from the actor and
- * the caller's arrays, except `root`, which the caller releases with
+ * root. What ta_actor_export_state() fills is borrowed from the actor, the
+ * caller's arrays and, for `sends`, the system's view of the actor's sends,
+ * valid until the next inspection or export (it may allocate:
+ * TA_ERR_NOMEM), except `root`, which the caller releases with
  * ta_value_release(); what ta_actor_prepare_params.state points at is
  * borrowed for the call.
  */
@@ -3694,7 +3696,12 @@ typedef struct {
     uint32_t internal_count;
     TA_COUNTED_BY(invoke_count) TA_OPTIONAL const ta_active_invoke *invokes;
     uint32_t invoke_count;
-    /* Pending delayed sends, ordered by due time, then send order. */
+    /* Pending delayed sends, ordered by due time, then send order: a view
+     * the system keeps, valid until the next inspection or export, or until
+     * a send changes. It has room from system creation for 16 sends, and
+     * the pool's refill keeps room for the longest list seen; a longer one
+     * grows it, outside any macrostep, so such an inspection can answer
+     * TA_ERR_NOMEM (ADR 0101). */
     TA_COUNTED_BY(delayed_send_count) TA_OPTIONAL const ta_delayed_send_info *delayed_sends;
     uint32_t delayed_send_count;
     bool has_completion;

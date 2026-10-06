@@ -3,6 +3,7 @@
 #include "actor.h"
 #include "chunks.h"
 #include "clock.h"
+#include "deadline.h"
 #include "envelope.h"
 #include "event.h"
 #include "generated/ring_records.h"
@@ -337,6 +338,11 @@ static ta_run_refilled ta_run_refill(ta_system *system) {
     }
     ta_run_refilled refilled = { .pool = ta_envelope_pool_refill(&system->run.pool),
                                  .names = ta_name_area_refill(&system->run.names, 0u) };
+    /* The deadline index keeps room for every envelope, so a delayed send
+     * never allocates (ADR 0101). */
+    if (refilled.pool == TA_OK) {
+        refilled.pool = ta_deadline_grow(system);
+    }
     (void)ta_waiting_refill(&system->run.waiting);
     (void)ta_run_name_room(system);
     return refilled;

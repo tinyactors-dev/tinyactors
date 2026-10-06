@@ -18,7 +18,7 @@
 #include "configuration.h"
 #include "history.h"
 #include "continuation.h"
-#include "timer.h"
+#include "deadline.h"
 #include "datamodel.h"
 #include "invoke.h"
 #include "definition.h"
@@ -113,38 +113,8 @@ ta_actor_id ta_actor_id_make(uint32_t slot, uint32_t generation) {
     return ta_handle_make(slot, generation);
 }
 
-ta_timer_list *ta_actor_timers(const ta_actor *actor) {
-    return actor->sparse == NULL ? NULL : &actor->sparse->timers;
-}
-
-ta_result ta_actor_schedule_send(ta_system *system, ta_actor *actor, const ta_delayed_send *send) {
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    return ta_timer_schedule(&system->timers, &sparse->timers, send);
-}
-
-ta_result ta_actor_reserve_send(ta_system *system, ta_actor *actor) {
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    return ta_timer_reserve(&system->timers, &sparse->timers, 1u);
-}
-
-ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out) {
-    ta_actor *actor = ta_actor_lookup(system, owner);
-    if (actor == NULL) {
-        *out = &system->timers.orphans;
-        return TA_OK;
-    }
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    *out = &sparse->timers;
-    return TA_OK;
+ta_deadline_owner *ta_actor_timers(const ta_actor *actor) {
+    return (ta_deadline_owner *)&actor->timers;
 }
 
 static void ta_activation_effect_release(ta_activation_effect *effect) {
@@ -583,11 +553,7 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
             return TA_ERR_INVALID;
         }
     }
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    ta_result result = ta_timer_reserve(&system->timers, &sparse->timers, count);
+    ta_result result = ta_deadline_reserve(system, count);
     for (uint32_t index = 0; result == TA_OK && index < count; index += 1) {
         const ta_delayed_send_info *info = &params->pending_sends[index];
         ta_delayed_send send = {
@@ -617,7 +583,7 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
         ta_actor_ref_retain(&send.destination);
         ta_value_retain(&send.target);
         ta_value_retain(&send.data);
-        result = ta_timer_schedule(&system->timers, &sparse->timers, &send);
+        result = ta_deadline_schedule(system, ta_actor_timers(actor), &send, NULL);
         if (result != TA_OK) {
             ta_actor_ref_release(&send.destination);
             ta_value_release(&send.target);
@@ -697,6 +663,14 @@ static ta_result ta_actor_spawn_new(ta_system *system, const ta_actor_spawn_para
             return TA_ERR_NOMEM;
         }
         *actor->sparse = (ta_actor_sparse_state){ .parent = *params->parent, .has_parent = true };
+        /* The envelope its completion will use, so a full pool never drops
+         * it (ADR 0101). Inside the parent's macrostep it is a free one. */
+        result = ta_deadline_token_take(system, &actor->sparse->token, NULL);
+        if (result != TA_OK) {
+            ta_actor_release_slot(system, id);
+            ta_actor_free(system, actor);
+            return result;
+        }
     }
 
     result = definition->datamodel.v->init_instance(
@@ -947,6 +921,12 @@ ta_result ta_actor_export_state(ta_system *system, const ta_actor_export_params 
     }
     const ta_definition *definition = actor->definition;
     const ta_actor_sparse_state *sparse = actor->sparse;
+    const ta_delayed_send_info *sends = NULL;
+    uint32_t send_count = 0;
+    ta_result viewed = ta_deadline_views(system, ta_actor_timers(actor), &sends, &send_count);
+    if (viewed != TA_OK) {
+        return viewed;
+    }
     uint32_t active = 0;
     uint32_t late = 0;
     uint32_t history = 0;
@@ -1018,8 +998,8 @@ ta_result ta_actor_export_state(ta_system *system, const ta_actor_export_params 
         .late_count = late,
         .history = history != 0 ? params->history : NULL,
         .history_count = history,
-        .sends = sparse != NULL && sparse->timers.count != 0 ? sparse->timers.sends : NULL,
-        .send_count = sparse != NULL ? sparse->timers.count : 0,
+        .sends = sends,
+        .send_count = send_count,
         .invokes = invokes != 0 ? params->invokes : NULL,
         .invoke_count = invokes,
         .root = root,
@@ -1181,7 +1161,7 @@ static void ta_actor_release_activation_effects(ta_system *system, ta_actor *act
             /* Dispatch marked it submitted and took its origin and invoke ID. */
         }
         /* Reserved by ta_actor_publish(), so this cannot fail. */
-        (void)ta_timer_schedule(&system->timers, &sparse->timers, send);
+        (void)ta_deadline_schedule(system, ta_actor_timers(actor), send, NULL);
     }
     ta_actor_free_activation(sparse);
 }
@@ -1254,7 +1234,7 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
      * room for the held sends, the retired invocations' events, and a wake
      * for the macrostep they or the invocations to start may leave (run.h). */
     uint32_t sends = ta_actor_activation_send_count(actor, at);
-    ta_result result = sends == 0 ? TA_OK : ta_timer_reserve(&system->timers, &actor->sparse->timers, sends);
+    ta_result result = sends == 0 ? TA_OK : ta_deadline_reserve(system, sends);
     if (result == TA_OK && replaying) {
         result = ta_invoke_prepare_retire(system, actor);
     }
@@ -1515,23 +1495,19 @@ ta_result ta_actor_withdraw_send(ta_system *system, ta_actor_id id, ta_send_id s
         return TA_ERR_INVALID;
     }
     ta_actor *actor = ta_actor_lookup(system, id);
-    if (actor == NULL || ta_actor_timers(actor) == NULL) {
+    if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
     return ta_actor_withdraw(system, actor, send);
 }
 
 static ta_result ta_actor_withdraw(ta_system *system, ta_actor *actor, ta_send_id send) {
-    ta_timer_list *list = ta_actor_timers(actor);
+    ta_deadline_owner *owner = ta_actor_timers(actor);
     /* A replaying actor's delayed sends are held, not pending (ADR 0089). */
     bool held = ta_actor_replaying(actor) && ta_actor_cancel_held_send(actor, send);
-    if (ta_timer_cancel(&system->timers, list, send) != TA_OK && !held) {
-        for (uint32_t index = 0; index < list->count; index += 1u) {
-            if (list->sends[index].send_id == send) {
-                return TA_ERR_DONE; /* only submitted ones are left */
-            }
-        }
-        return TA_ERR_NOT_FOUND;
+    if (ta_deadline_cancel(system, owner, send) != TA_OK && !held) {
+        /* Only submitted ones are left: they have left the actor. */
+        return ta_deadline_has_submitted(system, owner, send) ? TA_ERR_DONE : TA_ERR_NOT_FOUND;
     }
     ta_actor_touch(actor);
     TA_COUNT(system, actor->definition, sends_cancelled);
@@ -1575,11 +1551,7 @@ ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
         }
     }
     /* Sends already submitted stay queued for their receivers (ADR 0054). */
-    ta_result result = ta_timer_reserve_orphans(&system->timers, ta_actor_timers(actor));
-    if (result != TA_OK) {
-        return result;
-    }
-    ta_timer_orphan(&system->timers, ta_actor_timers(actor));
+    ta_deadline_orphan(system, ta_actor_timers(actor));
     ta_trace_lifecycle(system, actor, TA_TRACE_DESTROYED, NULL);
     ta_actor_release_address(system, actor);
     ta_actor_release_slot(system, id);
@@ -1643,7 +1615,6 @@ static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
             total += sizeof(ta_activation_effects);
             total += ta_vec_bytes(&sparse->activation_effects->entries);
         }
-        total += ta_timer_list_bytes(&sparse->timers);
         if (sparse->paused != NULL) {
             total += sparse->paused->bytes;
         }
@@ -1664,8 +1635,16 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
     for (ta_state_id state = 0; state < definition->state_count; state += 1) {
         active += ta_actor_state_active(actor, state) ? 1u : 0u;
     }
+    const ta_delayed_send_info *sends = NULL;
+    uint32_t send_count = 0;
+    ta_result viewed = ta_deadline_views(system, ta_actor_timers(actor), &sends, &send_count);
+    if (viewed != TA_OK) {
+        return viewed;
+    }
     *out = (ta_actor_inspection){
         .actor = id,
+        .delayed_sends = sends,
+        .delayed_send_count = send_count,
         .session_id = actor->session_id,
         .self = actor->record.self,
         .definition_id = definition->id,
@@ -1693,8 +1672,6 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
     if (actor->sparse != NULL) {
         out->invokes = actor->sparse->invokes;
         out->invoke_count = actor->sparse->invoke_count;
-        out->delayed_sends = actor->sparse->timers.count == 0 ? NULL : actor->sparse->timers.sends;
-        out->delayed_send_count = actor->sparse->timers.count;
         out->has_completion = actor->finished;
         out->completion = actor->finished ? &actor->sparse->completion : NULL;
         out->final_state = actor->finished ? actor->sparse->final_state : TA_STATE_NONE;

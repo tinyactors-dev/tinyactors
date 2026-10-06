@@ -914,39 +914,51 @@ static void test_export_restores_invocations(void) {
     destroy_system(system);
 }
 
-/* Eight sends to itself at 5.5s: falling due, they fill a pool of eight. */
-static const ta_scxml_state_spec filler[] = {
-    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("filling"),
+/* A send to the host I/O processor `slow` at 5s, and one to itself at 9s. */
+static const ta_scxml_state_spec slow_timers[] = {
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("waiting"),
       .onentry = (const ta_scxml_handler_spec[]){
           { .actions = (const ta_scxml_action_spec[]){
-                SEND_SELF("f1", "f", "5500ms"), SEND_SELF("f2", "f", "5500ms"), SEND_SELF("f3", "f", "5500ms"),
-                SEND_SELF("f4", "f", "5500ms"), SEND_SELF("f5", "f", "5500ms"), SEND_SELF("f6", "f", "5500ms"),
-                SEND_SELF("f7", "f", "5500ms"), SEND_SELF("f8", "f", "5500ms"), END } },
+                { .kind = TA_SCXML_ACTION_SEND,
+                  .as.send = { .id = { .kind = TA_SCXML_ID_LITERAL, .as.literal = STR("s1") },
+                               .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR("out") },
+                               .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("slow") },
+                               .delay = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("5s") } } },
+                SEND_SELF("k1", "keep", "9s"), END } },
           END } },
     END,
 };
 
+/* `slow` accepts nothing: a send it refuses waits, submitted. */
+static ta_op_status slow_send(void *self, const ta_send *send, ta_fault *fault) {
+    (void)self;
+    (void)send;
+    (void)fault;
+    return TA_OP_NOMEM;
+}
+
+static const ta_io_vtable slow_vtable = { .send = slow_send };
+
 /*
- * A send that found no room when it fell due waits, submitted, and the
- * state exported then reports it; a restore does not hold it (ADR 0094
+ * A send its I/O processor refused when it fell due waits, submitted, and
+ * the state exported then reports it; a restore does not hold it (ADR 0094
  * section 3; kernel ADR 0003 removed ADR 0095's restore of it): only the
- * unsubmitted sends come back. The filler's sends fill a pool of eight at
- * 5.5s, so t1, due at 6s, finds none and is submitted, and the dispatch
- * stops there, leaving b1 pending.
+ * unsubmitted sends come back. `s1`, due at 5s, is refused; `k1` stays
+ * pending.
  */
 static void test_export_leaves_submitted(void) {
-    ta_param_value small_pool[] = { { TA_PARAM_POOL_ENVELOPES, 8 } };
-    ta_system *system = create_system_with(small_pool, 1);
-    ta_definition_id definition = define(system, "timers", timers);
-    ta_actor_id fill = 0;
-    CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = define(system, "filler", filler),
-                                                           .out = &fill }) == TA_OK);
-    CHECK(run(system, fill) == TEST_DRIVE_STABLE);
-    ta_actor_id live = live_until_e1(system, definition);
-    (void)routed_in(system); /* `now` to b goes to the sink, which starts, then takes it */
-    CHECK(run(system, sink) == TEST_DRIVE_STABLE && run(system, sink) == TEST_DRIVE_STABLE);
+    ta_system *system = create_system();
+    ta_atom type = 0;
+    CHECK(ta_system_intern_atom(system, (ta_str)STR("slow"), &type) == TA_OK);
+    CHECK(ta_system_register_io(system, &(ta_io_registration_params){ .type = type, .io = { .v = &slow_vtable } }) ==
+          TA_OK);
+    ta_definition_id definition = define(system, "slow_timers", slow_timers);
+    ta_actor_id live = 0;
+    CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &address_a,
+                                                           .out = &live }) == TA_OK);
+    CHECK(run(system, live) == TEST_DRIVE_STABLE);
     CHECK(ta_system_set_time(system, 6000) == TA_OK);
-    CHECK(dispatch(system) == 8);
+    CHECK(dispatch(system) == 0);
     exported out;
     CHECK(export_into(system, live, &out) == TA_OK);
     CHECK(out.state.send_count == 2);
@@ -955,16 +967,12 @@ static void test_export_leaves_submitted(void) {
         submitted += out.state.sends[index].submitted ? 1u : 0u;
     }
     CHECK(submitted == 1);
-    /* The filler takes its sends, which frees the pool for the copy. */
-    for (int round = 0; round < 8; round += 1) {
-        CHECK(run(system, fill) == TEST_DRIVE_STABLE);
-    }
-    static const ta_actor_address copy_address = { .family = { .name = STR("timers") }, .name = STR("c") };
+    static const ta_actor_address copy_address = { .family = { .name = STR("slow_timers") }, .name = STR("c") };
     ta_result result = TA_OK;
     ta_actor_id copy = prepare_from_state(system, definition, &copy_address, &out.state, &result);
     CHECK(result == TA_OK);
     CHECK(publish(system, copy) == TA_OK); /* its clock is the state's, 6000 */
-    CHECK(pending_sends(system, copy) == 1); /* b1, due at 6000 */
+    CHECK(pending_sends(system, copy) == 1); /* k1, due at 9000 */
     ta_actor_inspection view;
     CHECK(ta_actor_inspect(system, copy, &view) == TA_OK);
     for (uint32_t index = 0; index < view.delayed_send_count; index += 1u) {

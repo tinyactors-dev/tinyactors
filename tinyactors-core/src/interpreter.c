@@ -16,7 +16,7 @@
 #include "configuration.h"
 #include "history.h"
 #include "continuation.h"
-#include "timer.h"
+#include "deadline.h"
 #include "datamodel.h"
 #include "invoke.h"
 #include "definition.h"
@@ -1991,8 +1991,8 @@ static ta_result ta_send_execution_error(ta_interpreter *it, ta_send_id send_id,
  */
 static ta_result ta_send_capacity_error(ta_interpreter *it, ta_send_id send_id,
                                         ta_record_capacity_resource resource) {
-    static const char pool[] = "no free envelope for the mail (poolEnvelopes)";
-    static const char names[] = "no room in the name area for the mail's text (nameAreaBytes)";
+    static const char pool[] = "no free envelope in the pool (poolEnvelopes)";
+    static const char names[] = "no room in the name area (nameAreaBytes)";
     bool short_of_pool = resource == TA_RECORD_CAPACITY_RESOURCE_POOL;
     ta_fault fault = { .code = TA_ERR_FULL,
                        .message = short_of_pool ? (ta_str){ .ptr = pool, .len = (uint32_t)(sizeof pool - 1u) }
@@ -2008,6 +2008,10 @@ static ta_result ta_send_capacity_error(ta_interpreter *it, ta_send_id send_id,
     }
     ta_trace_action_failed(it, &fault);
     return TA_EXEC_FAILED;
+}
+
+ta_result ta_interpreter_capacity_error(ta_interpreter *it, ta_record_capacity_resource resource) {
+    return ta_send_capacity_error(it, 0, resource);
 }
 
 /* Evaluates every attribute of a <send>, in the order SCXML 6.2 gives them. */
@@ -2135,8 +2139,9 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         state->sent = result == TA_OK;
         return result;
     }
-    if (state->delay != 0 && actor->sparse != NULL &&
-        actor->sparse->timers.count >= system->params[TA_PARAM_MAX_PENDING_SENDS]) {
+    uint32_t quota = system->params[TA_PARAM_MAX_PENDING_SENDS];
+    if (state->delay != 0 && quota < TA_PARAM_DEFAULT_MAX_PENDING_SENDS &&
+        ta_deadline_count(system, ta_actor_timers(actor)) >= quota) {
         /* A quota (ADR 0092 section 4): the send is not made, and the
          * sender hears it as an execution error. */
         ta_value_release(&record.data);
@@ -2177,7 +2182,8 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
             }
         }
     }
-    ta_result result = ta_actor_schedule_send(system, actor, &record);
+    ta_record_capacity_resource short_of = (ta_record_capacity_resource)0;
+    ta_result result = ta_deadline_schedule(system, ta_actor_timers(actor), &record, &short_of);
     if (result != TA_OK) {
         ta_value_release(&record.data);
         ta_value_release(&record.target);
@@ -2185,7 +2191,8 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         ta_actor_ref_release(&record.origin);
     }
     state->sent = result == TA_OK;
-    return result;
+    /* A delayed send takes an envelope until it is due (ADR 0101 decision 9). */
+    return result == TA_ERR_FULL ? ta_send_capacity_error(it, state->send_id, short_of) : result;
 }
 
 /*
@@ -2371,7 +2378,7 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
             }
             if (status == TA_OP_OK && send_id != 0) {
                 (void)ta_actor_cancel_held_send(it->actor, send_id);
-                if (ta_timer_cancel(&it->system->timers, ta_actor_timers(it->actor), send_id) == TA_OK) {
+                if (ta_deadline_cancel(it->system, ta_actor_timers(it->actor), send_id) == TA_OK) {
                     TA_COUNT(it->system, it->actor->definition, sends_cancelled);
                 }
                 if (ta_tracing(it, TA_TRACE_CANCELLED)) {
@@ -2519,22 +2526,17 @@ static bool ta_exec_should_pause(const ta_interpreter *it, uint32_t floor) {
 
 /*
  * What a unit of executable content needs before it runs (ADR 0070): room
- * for the one internal event it may queue, its own or the error it raises,
- * and for a published actor's <send> with a delay, room to store the send.
- * Running out of memory here stops the run before the unit, with nothing
+ * for the one internal event it may queue, its own or the error it raises.
+ * A <send> with a delay takes a free envelope and allocates nothing. Running
+ * out of memory here stops the run before the unit, with nothing
  * of it done; so a <script> that changed the data model and then failed
  * never runs twice because its error could not be queued.
  */
-static ta_result ta_unit_reserve(ta_interpreter *it, const ta_action_def *action) {
+static ta_result ta_unit_reserve(ta_interpreter *it) {
     /* Content-sized temporaries live for one unit (ADR 0092 section 3): a
      * <foreach> of many sends reuses the render area instead of filling it. */
     ta_arena_reset(&it->system->render);
-    ta_result result = ta_queue_room(it->system, it->actor);
-    if (result == TA_OK && action != NULL && action->kind == TA_ACTION_SEND &&
-        action->as.send.delay.kind != TA_DELAY_SOURCE_NONE && it->actor->published) {
-        result = ta_actor_reserve_send(it->system, it->actor);
-    }
-    return result;
+    return ta_queue_room(it->system, it->actor);
 }
 
 /*
@@ -2575,7 +2577,7 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
                 it->at.block_open = true;
                 return TA_EXEC_PAUSED;
             }
-            result = ta_unit_reserve(it, NULL);
+            result = ta_unit_reserve(it);
             if (result == TA_OK) {
                 it->actions += 1u;
                 it->trace_action = frame->cursor;
@@ -2600,7 +2602,7 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
         }
         uint32_t index = frame->actions.offset + frame->cursor;
         const ta_action_def *action = &definition->action_defs[index];
-        result = ta_unit_reserve(it, action);
+        result = ta_unit_reserve(it);
         if (result != TA_OK) {
             break;
         }
@@ -3523,11 +3525,6 @@ static void ta_compact_sparse(ta_interpreter *it) {
         return;
     }
     ta_invoke_release(it->system, it->actor);
-    if (sparse->timers.count != 0) {
-        /* Pending delayed sends keep the sparse state (ADR 0054). */
-        return;
-    }
-    ta_timer_list_destroy(&it->system->timers, &sparse->timers);
     ta_mem_free(it->system->allocator, sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
                                              .alignment = _Alignof(ta_actor_sparse_state) });
@@ -3797,7 +3794,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
         it->at.stage = TA_FINISH_END;
     }
     /* Sends nothing accepted once stay queued: they were sent before termination. */
-    ta_timer_cancel_unsubmitted(&it->system->timers, ta_actor_timers(it->actor));
+    ta_deadline_cancel_unsubmitted(it->system, ta_actor_timers(it->actor));
     ta_note_ignored(it);
     ta_release_events(it->actor);
     /* Invoke: cancel this session's invocations and report done.invoke to its parent. */
@@ -4607,6 +4604,13 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
     /* The actor goes: its queue goes too, even mid-macrostep, which
      * otherwise keeps it (ta_queue_settle). */
     actor->macrostep = false;
+    if (actor->sparse != NULL) {
+        ta_deadline_token_release(system, actor->sparse->token);
+        actor->sparse->token = 0u;
+    }
+    /* What its owner list still holds goes with it, submitted sends too:
+     * a session that goes on as an orphan or an image is taken off first. */
+    ta_deadline_owner_release(system, ta_actor_timers(actor));
     if (actor->sparse == NULL) {
         ta_queue_settle(system, actor);
         return;
@@ -4614,8 +4618,6 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
     ta_invoke_release(system, actor); /* Invoke: cancel services, free bookkeeping. */
     ta_continuation_free(system->allocator, &actor->sparse->paused);
     ta_queue_settle(system, actor); /* empty, and no longer paused */
-    /* The owner heap must not keep pointing into the freed sparse state. */
-    ta_timer_list_destroy(&system->timers, &actor->sparse->timers);
     ta_value_release(&actor->sparse->completion.data);
     ta_mem_free(system->allocator, actor->sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),

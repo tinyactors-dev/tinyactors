@@ -41,8 +41,8 @@
  * 7. a delayed send to a resident session falls due into the pool at
  *    ta_system_dispatch_due(), which refills first: it joins the run
  *    queue at once as a TIMER input, the fired buffer reports it with its
- *    sender, due time and trace parent, and when no envelope is free it
- *    waits, submitted, more_due set, until a later dispatch delivers it;
+ *    sender, due time and trace parent; a pending send holds its envelope,
+ *    so it arrives when the pool is at its bound;
  * 8. a TAKEN outcome carries the event of mail and of a due send,
  *    retained for the host, and none for an input the host admitted;
  * 9. mail to a session that is not resident does not join the run queue:
@@ -688,28 +688,27 @@ static void test_a_due_send_falls_into_the_pool(void) {
     CHECK(load_requests(f.system) == 0);
     close_fixture(&f);
 
-    /* A pool at its bound: the send waits, submitted, and goes later. */
+    /* A pool at its bound: the pending send holds its envelope, which it
+     * keeps as it falls due (ADR 0101), so it arrives with none free. */
     ta_param_value small_pool[] = { { TA_PARAM_POOL_ENVELOPES, 8 } };
     f = open_with(small_pool, 1, &sender);
     CHECK(deliver(&f, f.sender, "later") == TA_OK);
     run_all(&f, 0, NULL);
     pool = &f.system->run.pool;
-    for (uint32_t index = 0; index < 8u; index += 1u) {
-        CHECK(ta_envelope_pool_take(pool, &held[index]) == TA_OK);
+    uint32_t full = 0;
+    while (full < 8u && ta_envelope_pool_take(pool, &held[full]) == TA_OK) {
+        full += 1u;
     }
+    CHECK(full < 8u && ta_quota_available(&pool->quota) == 0);
     CHECK(ta_system_set_time(f.system, 1000) == TA_OK);
     CHECK(ta_system_dispatch_due(f.system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
                                                                       .more_due = &more }) == TA_OK);
-    CHECK(dispatched == 0 && more);
+    CHECK(dispatched == 1 && !more);
     ta_actor_inspection view;
-    CHECK(ta_actor_inspect(f.system, f.sender, &view) == TA_OK && view.delayed_send_count == 1);
-    CHECK(view.delayed_send_count != 1 || view.delayed_sends[0].submitted);
-    for (uint32_t index = 0; index < 8u; index += 1u) {
+    CHECK(ta_actor_inspect(f.system, f.sender, &view) == TA_OK && view.delayed_send_count == 0);
+    for (uint32_t index = 0; index < full; index += 1u) {
         ta_envelope_pool_give(pool, held[index]);
     }
-    CHECK(ta_system_dispatch_due(f.system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
-                                                                      .more_due = &more }) == TA_OK);
-    CHECK(dispatched == 1 && !more);
     run_all(&f, f.receiver, &taken);
     CHECK(taken.count == 2 && in_state(&f, f.receiver, "r1"));
     close_fixture(&f);

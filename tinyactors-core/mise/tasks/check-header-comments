@@ -24,7 +24,7 @@ ALLOWED = %w[
   src/address.h src/arena.h src/builder.h src/clock.h src/codec.h
   src/event.h src/export.h
   src/history.h src/io_origin.h src/null_datamodel.h
-  src/scxml_uri.h src/session.h src/session_image.h src/timer.h
+  src/scxml_uri.h src/session.h src/session_image.h
   src/tree.h
 ].freeze
 

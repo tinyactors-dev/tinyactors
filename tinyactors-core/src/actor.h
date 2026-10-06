@@ -101,7 +101,7 @@
 #include "index_pool.h"
 #include "list.h"
 #include "invoke.h"
-#include "timer.h"
+#include "deadline.h"
 #include "session.h"
 #include "vec.h"
 #include "../include/tinyactors.h"
@@ -236,11 +236,13 @@ typedef struct {
     ta_activation_effects *activation_effects;
     ta_actor_parent parent;
     ta_actor_completion completion;
+    /* A local invoked child's invocation token (deadline.h): the envelope
+     * its completion uses, held until the completion is published; 0 for
+     * none. */
+    uint32_t token;
     /* The top-level <final> whose entry ended the session (ADR 0056); set
      * with `completion`, and meaningful only while the actor is finished. */
     ta_state_id final_state;
-    /* This actor's pending delayed sends, indexed by the system's owner heap. */
-    ta_timer_list timers;
     bool has_parent;
     bool completion_pending;
     /* A microstep paused inside executable content (ADR 0061), or null. */
@@ -312,6 +314,8 @@ struct ta_actor {
      * included), so In() sees states as SCXML defines them mid-microstep.
      */
     const uint64_t *live_active;
+    /* Its pending delayed sends: the head of its owner list (deadline.h). */
+    ta_deadline_owner timers;
 };
 
 /*
@@ -437,15 +441,8 @@ const ta_event *ta_actor_bound_event(ta_system *system, const ta_actor *actor);
 /* Internal events waiting to be taken: the queue without a taken head. */
 uint32_t ta_actor_waiting_internal(const ta_actor *actor);
 
-/* The actor's delayed sends, or null when it has no sparse state (so none). */
-ta_timer_list *ta_actor_timers(const ta_actor *actor);
-/* Stores a delayed send with its owner; takes the send's values on TA_OK. */
-ta_result ta_actor_schedule_send(ta_system *system, ta_actor *actor, const ta_delayed_send *send);
-/* Makes room to store one more delayed send, so that storing it cannot fail
- * (ADR 0070). */
-ta_result ta_actor_reserve_send(ta_system *system, ta_actor *actor);
-/* The list a send owned by `owner` belongs in: the actor's, or the orphans when it is gone. */
-ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out);
+/* The actor's owner list of pending delayed sends (deadline.h). */
+ta_deadline_owner *ta_actor_timers(const ta_actor *actor);
 
 /* True for a replaying actor (ADR 0089): prepared with `at`, not yet published. */
 bool ta_actor_replaying(const ta_actor *actor);

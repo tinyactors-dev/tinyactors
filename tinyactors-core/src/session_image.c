@@ -2,7 +2,7 @@
 #include "run.h"
 #include "bytes.h"
 #include "interpreter.h"
-#include "timer.h"
+#include "deadline.h"
 #include "memory.h"
 #include "str.h"
 #include "vec.h"
@@ -272,7 +272,7 @@ static ta_result ta_image_copy_name(const ta_system *system, ta_arena *arena, ta
 }
 
 /* What the arena has to hold, so one block usually serves the whole image. */
-static size_t ta_image_measure(const ta_actor *actor) {
+static size_t ta_image_measure(const ta_system *system, const ta_actor *actor) {
     const ta_actor_sparse_state *sparse = actor->sparse;
     size_t total = actor->session_bytes + 64u;
     total += (size_t)actor->definition->identity.family.name.len + 1u;
@@ -295,7 +295,7 @@ static size_t ta_image_measure(const ta_actor *actor) {
         total += (size_t)sparse->invoke_count * sizeof(ta_active_invoke);
         total += (size_t)sparse->pending_invokes.count * sizeof(ta_state_id);
     }
-    total += (size_t)ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL) * sizeof(ta_delayed_send);
+    total += (size_t)ta_deadline_copy(system, ta_actor_timers(actor), NULL) * sizeof(ta_delayed_send);
     if (sparse != NULL && sparse->paused != NULL) {
         total += sparse->paused->bytes + TA_CONTINUATION_ALIGN;
     }
@@ -408,14 +408,14 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         ta_mem_copy(image->paused, sparse->paused, sparse->paused->bytes);
     }
 
-    uint32_t sends = ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL);
+    uint32_t sends = ta_deadline_copy(system, ta_actor_timers(actor), NULL);
     if (sends != 0) {
         image->delayed_sends = ta_arena_alloc(arena, (size_t)sends * sizeof(ta_delayed_send),
                                               _Alignof(ta_delayed_send));
         if (image->delayed_sends == NULL) {
             return TA_ERR_NOMEM;
         }
-        (void)ta_timer_copy_unsubmitted(ta_actor_timers(actor), image->delayed_sends);
+        (void)ta_deadline_copy(system, ta_actor_timers(actor), image->delayed_sends);
         image->delayed_send_count = sends;
         for (uint32_t index = 0; index < sends; index += 1) {
             ta_delayed_send *send = &image->delayed_sends[index];
@@ -515,7 +515,7 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
         .completion = sparse != NULL ? sparse->completion : (ta_actor_completion){0},
         .final_state = sparse != NULL && actor->finished ? sparse->final_state : TA_STATE_NONE,
     };
-    ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
+    ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(system, actor));
     if (result == TA_OK) {
         result = ta_image_fill(image, actor);
     }
@@ -658,6 +658,11 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
             return result;
         }
     }
+    /* The image's sends take envelopes from the pool, outside any macrostep. */
+    ta_result reserved = ta_deadline_reserve(system, image->delayed_send_count);
+    if (reserved != TA_OK) {
+        return reserved;
+    }
     for (uint32_t index = 0; index < image->delayed_send_count; index += 1) {
         ta_delayed_send send = image->delayed_sends[index];
         /* A fresh timer ID; the SCXML send ID that <cancel> names is kept. */
@@ -674,7 +679,7 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
             result = ta_actor_ref_localize(system, &send.origin);
         }
         if (result == TA_OK) {
-            result = ta_actor_schedule_send(system, actor, &send);
+            result = ta_deadline_schedule(system, ta_actor_timers(actor), &send, NULL);
         }
         if (result != TA_OK) {
             ta_value_release(&send.target);
@@ -826,6 +831,11 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         } else {
             sparse->has_parent = image->has_parent;
             sparse->parent = image->parent;
+            /* A child whose completion is still to come holds its token
+             * again (deadline.h); the image does not carry it. */
+            if (image->has_parent && (!image->finished || image->completion_pending)) {
+                result = ta_deadline_token_take(system, &sparse->token, NULL);
+            }
             sparse->completion_pending = image->completion_pending;
             sparse->completion = image->completion;
             ta_value_retain(&sparse->completion.data);
@@ -974,14 +984,9 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
     if (ta_run_has_mail(system, actor) || ta_run_has_unsent_mail(system, actor)) {
         return TA_ERR_BUSY;
     }
-    /* Room for the submitted sends to outlive the session, before anything changes. */
-    ta_result result = ta_timer_reserve_orphans(&system->timers, ta_actor_timers(actor));
-    if (result != TA_OK) {
-        return result;
-    }
-    /* And the entry that keeps the session findable while it is out (ADR 0066). */
+    /* The entry that keeps the session findable while it is out (ADR 0066). */
     ta_session_node *parked = NULL;
-    result = ta_session_node_new(&system->sessions, &parked);
+    ta_result result = ta_session_node_new(&system->sessions, &parked);
     if (result != TA_OK) {
         return result;
     }
@@ -1012,7 +1017,7 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
     parked->id = actor->session_id;
     parked->address = address;
     ta_address_retain(address);
-    ta_timer_orphan(&system->timers, ta_actor_timers(actor));
+    ta_deadline_orphan(system, ta_actor_timers(actor));
     ta_trace_lifecycle(system, actor, TA_TRACE_UNLOADED, NULL);
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);

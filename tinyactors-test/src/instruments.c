@@ -889,7 +889,10 @@ bool tat_make_scripted_invoker(tat_bind *bind, jv config, void *out) {
  *
  * An Event I/O Processor that journals every send (op "send": source,
  * send_id, event, io_type, target, data) and delivers nothing. "fail" on op
- * "send" answers TA_OP_ERROR with the armed fault. Config: {"name", "system"}.
+ * "send" answers TA_OP_ERROR with the armed fault, or, with "status":
+ * "nomem", TA_OP_NOMEM: the processor ran out of memory and accepted
+ * nothing, so core keeps the send, submitted, and offers it again.
+ * Config: {"name", "system"}.
  */
 
 static ta_op_status tat_recording_send(void *self, const ta_send *send, ta_fault *fault) {
@@ -905,10 +908,15 @@ static ta_op_status tat_recording_send(void *self, const ta_send *send, ta_fault
     entry = tat_put_content(entry, send->content_type, send->content);
     jv spec;
     if (tat_take_fault(instrument, "send", &spec)) {
-        tat_fault_fill(instrument, spec, TA_ERR_UNSUPPORTED, fault);
+        jv status = jv_object_get(jv_copy(spec), jv_string("status"));
+        bool nomem = jv_get_kind(status) == JV_KIND_STRING && strcmp(jv_string_value(status), "nomem") == 0;
+        jv_free(status);
+        if (!nomem) {
+            tat_fault_fill(instrument, spec, TA_ERR_UNSUPPORTED, fault);
+        }
         jv_free(spec);
         tat_journal(instrument, "send", tat_injected(entry));
-        return TA_OP_ERROR;
+        return nomem ? TA_OP_NOMEM : TA_OP_ERROR;
     }
     tat_journal(instrument, "send", entry);
     return TA_OP_OK;

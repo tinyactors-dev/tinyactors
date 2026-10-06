@@ -31,18 +31,36 @@ module InvokedCompletion
       [parent, child]
     end
   end
+end
 
-  # Eight sends to itself, due at 1s: falling due, they fill a pool of
-  # eight envelopes until it takes them.
-  def self.filler
-    TinyactorsTest::Chart.define(:filler) do
-      state :filling do
-        on_entry do
-          (1..8).each { |index| send_event 'fill', delay: '1s', id: "f#{index}" }
-        end
-      end
+# A child that, on `finish`, sends its parent more events than the pool
+# has envelopes, and ends with done data. Its mail waits on its macrostep's
+# outgoing list until the macrostep ends (core ADR 0099), so the pool is
+# full when its completion is published.
+TinyactorsTest.chart :crowding_callee do
+  state :working do
+    transition on: 'finish', target: :finished do
+      (1..12).each { send_event 'noise', to: '#_parent' }
     end
   end
+
+  final :finished do
+    done_data params: { result: '42' }
+  end
+end
+
+# A parent that forwards `finish` to its child and logs its child's done.
+TinyactorsTest.chart :crowding_caller do
+  data log: { expr: '[]' }
+
+  state :calling do
+    invoke chart: :crowding_callee, id: :worker, autoforward: true
+    transition on: 'done.invoke.worker', target: :done do
+      assign '.log', '.log + ["done \($_event.data.result)"]'
+    end
+  end
+
+  final :done
 end
 
 TinyactorsTest.scenarios 'invoked completion' do
@@ -78,46 +96,26 @@ TinyactorsTest.scenarios 'invoked completion' do
                  'the parent was told once, however often the host retried'
   end
 
-  # Catches: a completion lost when the parent's pool refused it, or one
-  # told twice when the host publishes it again. In a pool of eight, the
-  # parent's paused input, its forwarded `finish`, the child's `finish` and
-  # five of the filler's sends, fallen due, leave no envelope free: the
-  # child's completion finds no room (TA_ERR_FULL), and the child keeps it
-  # as one submitted delayed send; publishing it while the pool is still
-  # full (another of the filler's sends took the envelope the child's
-  # input gave back) keeps it so, and publishing after a run that made room
-  # admits it, once.
-  scenario 'a completion the parent\'s pool refused is published again after a run' do
+  # Catches: a completion lost, or told twice, when the parent's pool is
+  # full as the child finishes. An invoked child holds its invocation token,
+  # one envelope, from its spawn (core ADR 0101): on `finish` the child
+  # sends its parent more mail than the pool holds (the send that finds no
+  # envelope fails as error.execution.capacity.pool), and its completion
+  # still reaches the parent, once, through the token.
+  scenario 'a completion reaches its parent through the child\'s token when the pool is full' do
     system_params(pool_envelopes: 8)
-    spawn InvokedCompletion.filler
-    parent = spawn :caller
+    recording_trace
+    parent = spawn :crowding_caller
     child = invoked_actors.fetch(0)
     assert_equal 'ok', parent.post('finish')
-    assert_equal 'paused', parent.resume(budget: 1)
-    assert_equal 'ok', child.post('finish')
-    set_time(1000)
-    due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 100))
-    assert_equal [5, true], due.values_at(:dispatched, :more_due), 'five of the filler\'s sends fill the pool'
-    child.resume(budget: 64)
-    assert_equal 'done', child.inspect_actor.fetch(:residency)
-    assert parent.inspect_actor.fetch(:macrostep_in_progress), 'the parent is still busy'
-
-    held = Array(child.inspect_actor[:delayed_sends])
-    assert_equal 1, held.size, 'the refused completion is held for a retry'
-    assert_equal true, held.first[:submitted], 'the held completion waits to be offered again'
-    # The child's input, ended, freed its envelope: the filler's sixth send takes it.
-    due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 1))
-    assert_equal [1, true], due.values_at(:dispatched, :more_due), 'the pool is full again'
-    assert_equal 'err_full', parent.post('noise'), 'admission is closed: the pool is past its watermark'
-    assert_equal 'ok', publish_completion(child), 'publishing into the full pool keeps it'
-    assert_equal 1, Array(child.inspect_actor[:delayed_sends]).size, 'still one pending delivery'
-    assert_equal [], parent.data('.log').grep(/done/), 'the busy parent has not been told'
-
-    assert_equal 'stable', parent.resume(budget: 64), 'the parent ends its macrostep and gives its input back'
-    assert_equal 'ok', publish_completion(child)
-    assert_equal [], Array(child.inspect_actor[:delayed_sends]), 'admitted: nothing waits for a retry'
-    run_system('let the parent take it')
-    assert_equal ['progress 21', 'done 42'], parent.data('.log'), 'the parent was told exactly once'
+    run_system('the child fills the pool and finishes')
+    raised = trace_records.select { |record| record[:kind] == 'raised' }
+                          .map { |record| record.dig(:event, :name_text) }
+    assert raised.include?('error.execution.capacity.pool'), "the child filled the pool: #{raised}"
+    assert_equal ['done 42'], parent.data('.log'), 'the parent was told, through the child\'s token'
+    assert_equal 'err_not_found', publish_completion(child), 'told once, the child has nothing left to publish'
+    run_system('nothing more to tell')
+    assert_equal ['done 42'], parent.data('.log'), 'the parent was told exactly once'
     assert_equal [], invoked_actors, 'the child is reclaimed once its parent has been told'
   end
 

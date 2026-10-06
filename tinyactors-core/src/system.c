@@ -15,7 +15,7 @@
 #include "session.h"
 #include "trie.h"
 #include "clock.h"
-#include "timer.h"
+#include "deadline.h"
 #include "datamodel.h"
 #include "io.h"
 #include "invoke.h"
@@ -384,7 +384,7 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     }
     result = ta_system_event_names_init(system, config->allocator, params[TA_PARAM_EVENT_NAME_DEPTH]);
     if (result == TA_OK) {
-        result = ta_timer_heap_init(&system->timers, config->allocator);
+        result = ta_deadline_init(&system->deadline, config->allocator);
     }
     if (result == TA_OK) {
         result = ta_system_arena_open(system);
@@ -416,8 +416,6 @@ void ta_system_destroy(ta_system *system) {
     }
     /* No record is built, nor the clock called, for a ring about to be freed. */
     system->trace.masks = (ta_trace_masks){ 0 };
-    /* Teardown releases submitted sends instead of keeping them as orphans. */
-    system->timers.closing = true;
     for (uint32_t slot = 0; slot < ta_actor_table_issued(&system->actors); slot += 1) {
         ta_actor_slot *entry = ta_actor_slot_at(system, slot);
         if (entry->actor != NULL) {
@@ -425,7 +423,9 @@ void ta_system_destroy(ta_system *system) {
         }
     }
     /* After the actors, which gave their inputs back: what still waits
-     * holds origins, values and addresses, which go before their tables. */
+     * holds origins, values and addresses, which go before their tables.
+     * Submitted sends whose owners are gone are released first. */
+    ta_deadline_destroy(system);
     ta_run_destroy(system);
     while (system->unregistered_definitions != NULL) {
         ta_definition_destroy(system->unregistered_definitions);
@@ -441,7 +441,6 @@ void ta_system_destroy(ta_system *system) {
         }
     }
     ta_vec_destroy(&system->definitions);
-    ta_timer_heap_destroy(&system->timers);
     ta_actor_table_destroy(&system->actors);
     /* After the actors: their held events released their MESSAGE origins. */
     ta_io_origin_table_destroy(&system->io_scopes);
@@ -1040,7 +1039,7 @@ ta_result ta_system_next_deadline(const ta_system *system, ta_time *out) {
     if (system == NULL || out == NULL) {
         return TA_ERR_INVALID;
     }
-    return ta_timer_next_due(&system->timers, out) ? TA_OK : TA_ERR_NOT_FOUND;
+    return ta_deadline_next_due(system, out) ? TA_OK : TA_ERR_NOT_FOUND;
 }
 
 ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params *params) {
@@ -1055,11 +1054,11 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
     uint32_t fired_count = 0;
     while (dispatched < params->budget && (params->fired == NULL || fired_count < params->fired_capacity)) {
         ta_time due = 0;
-        if (!ta_timer_next_due(&system->timers, &due) || due > now) {
+        if (!ta_deadline_next_due(system, &due) || due > now) {
             break;
         }
         ta_delayed_send send;
-        (void)ta_timer_pop(&system->timers, &send);
+        (void)ta_deadline_pop(system, &send);
         ta_actor *owner = ta_actor_lookup(system, send.owner);
         /*
          * A pending send leaves its owner's list as it fires, and an image
@@ -1088,14 +1087,14 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
              * Rescheduling keeps its ID, and so its place in deadline order.
              * The owner may be gone by now; its submitted sends are orphans.
              */
-            ta_timer_list *home = NULL;
-            ta_result result = ta_actor_timer_home(system, send.owner, &home);
-            if (result == TA_OK) {
-                result = ta_timer_schedule(&system->timers, home, &send);
-            }
+            ta_actor *home = ta_actor_lookup(system, send.owner);
+            ta_result result =
+                ta_deadline_schedule(system, home != NULL ? ta_actor_timers(home) : NULL, &send, NULL);
             if (result != TA_OK) {
                 ta_value_release(&send.target);
                 ta_value_release(&send.data);
+                ta_actor_ref_release(&send.destination);
+                ta_actor_ref_release(&send.origin);
                 return result;
             }
             retry = true;
@@ -1113,7 +1112,7 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
     if (params->fired != NULL) {
         *params->fired_count = fired_count;
     }
-    *params->more_due = retry || (ta_timer_next_due(&system->timers, &next) && next <= now);
+    *params->more_due = retry || (ta_deadline_next_due(system, &next) && next <= now);
     return TA_OK;
 }
 

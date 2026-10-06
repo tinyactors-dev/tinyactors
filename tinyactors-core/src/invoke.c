@@ -10,7 +10,7 @@
 #include "trie.h"
 #include "routing.h"
 #include "clock.h"
-#include "timer.h"
+#include "deadline.h"
 #include "datamodel.h"
 #include "definition.h"
 #include "actor.h"
@@ -656,8 +656,13 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
         ta_invoke_remove_at(sparse, (uint32_t)found);
     }
     /* An invoker that ran out of memory started nothing: the invocation
-     * starts again when the host resumes the actor (ADR 0070). */
-    return status == TA_OP_NOMEM ? TA_ERR_NOMEM : ta_interpreter_execution_error(it, &values->fault);
+     * starts again when the host resumes the actor (ADR 0070). A local
+     * child that found no envelope for its token fails as a capacity error. */
+    if (status == TA_OP_NOMEM) {
+        return TA_ERR_NOMEM;
+    }
+    return values->fault.code == TA_ERR_FULL ? ta_interpreter_capacity_error(it, TA_RECORD_CAPACITY_RESOURCE_POOL)
+                                             : ta_interpreter_execution_error(it, &values->fault);
 }
 
 /*
@@ -822,7 +827,7 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     if (posted == TA_OK) {
         return TA_OK;
     }
-    /* A stored send names its event by ID (timer.h). */
+    /* A stored send names its event by ID (deadline.h). */
     ta_event named = delivery->event;
     ta_result interned = delivery->name_text.len != 0u
                              ? ta_trie_intern_dotted(&system->event_names, delivery->name_text, &named.name)
@@ -848,7 +853,7 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     /* The stored send owns its destination and origin references (ADR 0065). */
     ta_actor_ref_retain(&record.destination);
     ta_actor_ref_retain(&record.origin);
-    ta_result result = ta_actor_schedule_send(system, delivery->sender, &record);
+    ta_result result = ta_deadline_schedule(system, ta_actor_timers(delivery->sender), &record, NULL);
     if (result != TA_OK) {
         ta_value_release(&record.data);
         ta_actor_ref_release(&record.destination);
@@ -1007,6 +1012,10 @@ ta_result ta_invoke_autoforward(ta_interpreter *it, const ta_event *event, uint3
  * again after a refusal. */
 static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_parent trace) {
     ta_actor_sparse_state *sparse = actor->sparse;
+    /* Its token goes back first: the completion's mail, or the timer that
+     * keeps it while the parent's pool is full, takes that room (ADR 0101). */
+    ta_deadline_token_release(system, sparse->token);
+    sparse->token = 0u;
     ta_str name = { 0 };
     ta_result result = ta_invoke_name_text(system, (ta_invoke_name){ .system = system,
                                                                       .invoke = sparse->parent.invoke_id },
@@ -1343,10 +1352,10 @@ ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id id) {
     }
     ta_actor *parent = ta_actor_lookup(system, sparse->parent.actor);
     if (parent == NULL || ta_invoke_find(parent, sparse->parent.invoke_id) < 0) {
-        (void)ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION);
+        (void)ta_deadline_withdraw(system, ta_actor_timers(actor), TA_SEND_ID_COMPLETION);
         return TA_ERR_NOT_FOUND;
     }
-    if (ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION) != TA_OK) {
+    if (ta_deadline_withdraw(system, ta_actor_timers(actor), TA_SEND_ID_COMPLETION) != TA_OK) {
         return TA_OK; /* already delivered */
     }
     return ta_invoke_publish(system, actor, (ta_trace_parent){0});

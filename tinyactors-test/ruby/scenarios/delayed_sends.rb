@@ -1,19 +1,18 @@
 # frozen_string_literal: true
 
-# Delayed sends live with their owner, and a global index orders the owners
-# (ADR 0054). Each actor keeps its pending sends in one list sorted by
-# (due, send order); the system keeps a heap of the owners that have any,
-# keyed by each owner's front send. So:
+# Delayed sends live with their owner (ADR 0054), as envelopes of core's
+# pool on the owner's list, ordered by core's deadline index (core ADR
+# 0101). So:
 #
 # - inspection lists an actor's own sends, with where each one goes (D4, D5);
 # - due sends still go out in one global (due, send order), across owners,
-#   and cancelling an owner's front send re-keys it (D2); one to a resident
-#   actor goes into core's pool, never to the router (core ADR 0099);
-# - a send that finds no room when it falls due (core's pool full) goes
-#   back to its owner, marked submitted, and to a system-owned list when
-#   the owner is destroyed or unloaded (D3);
-# - destroy and unload reserve that room first, so running out of memory
-#   leaves the actor exactly as it was (D3).
+#   and cancelling an owner's front send moves the deadline to its next
+#   (D2); one to a resident actor goes into core's pool (core ADR 0099);
+# - a send its I/O processor refuses (out of memory) when it falls due
+#   stays with its owner, marked submitted, and stays indexed when the
+#   owner is destroyed or unloaded (D3);
+# - destroy and unload need no memory to keep it, so running out of memory
+#   cannot stop them.
 module DelayedSendsAtOwner
   # An actor that arms one delayed event per [event, delay] pair on entry,
   # each with the send ID of its event, to `to` through `type` (the built-in
@@ -44,34 +43,30 @@ module DelayedSendsAtOwner
     end
   end
 
-  # Eight sends to itself, due at 5s: falling due, they fill a pool of
-  # eight envelopes until it takes them.
-  def self.filler
-    TinyactorsTest::Chart.define(:filler) do
-      state :filling do
-        on_entry do
-          (1..8).each { |index| send_event 'fill', delay: '5s', id: "f#{index}" }
-        end
-      end
-    end
-  end
+  # The I/O processor the refused send goes through.
+  IO_TYPE = 'x-slow'
 
-  # [receiver, sender] with the sender's one send refused once at 10s, when
-  # it found core's pool of eight full of the filler's sends: it is back in
-  # the sender's list, submitted, and still due.
+  # [io, sender] with the sender's one send to IO_TYPE refused once at 10s:
+  # the processor ran out of memory, so the send is back in the sender's
+  # list, submitted, and still due.
   def self.refused(context, name: nil)
     context.instance_exec do
-      system_params(pool_envelopes: 8)
-      spawn DelayedSendsAtOwner.filler
-      receiver = spawn DelayedSendsAtOwner.receiver
-      chart = DelayedSendsAtOwner.sender(:refused, [['tick.one', '10s']], to: "#_scxml_#{receiver.handle}")
+      io = recording_io(DelayedSendsAtOwner::IO_TYPE)
+      io.arm_fault(:send, status: 'nomem')
+      chart = DelayedSendsAtOwner.sender(:refused, [['tick.one', '10s']], to: 'somewhere',
+                                                                           type: DelayedSendsAtOwner::IO_TYPE)
       sender = name ? spawn(chart, name: name) : spawn(chart)
       core('ta_system_set_time', ta.system.set_time(system: system_handle, now: 10_000))
       due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 100))
-      assert_equal [8, true], due.values_at(:dispatched, :more_due),
-                   'the filler\'s sends filled the pool, and the one due send found no room'
-      [receiver, sender]
+      assert_equal [0, true], due.values_at(:dispatched, :more_due),
+                   'the processor refused the one due send, which waits to be offered again'
+      [io, sender]
     end
+  end
+
+  # The events IO_TYPE took, refusals left out.
+  def self.delivered(io)
+    io.entries('send').reject { |entry| entry[:injected] }.map { |entry| entry[:event_text] }
   end
 
   # The sender's pending sends as [event name, due, submitted].
@@ -112,11 +107,11 @@ TinyactorsTest.scenarios 'delayed sends at their owner' do
                  'a custom processor resolves no destination: the field is zero, which names no actor')
   end
 
-  # Catches: an owner heap keyed by something other than each owner's front
-  # send (order would follow the owners, not the sends), a tie broken by
-  # owner instead of by send order, or a cancel of an owner's front send
-  # that leaves the heap keyed by the cancelled send (the owner's other send
-  # would go out at the cancelled send's time).
+  # Catches: a deadline index keyed by something other than each send's due
+  # time and order (order would follow the owners, not the sends), a tie
+  # broken by owner instead of by send order, or a cancel that leaves the
+  # cancelled send indexed (the owner's other send would go out at the
+  # cancelled send's time).
   scenario 'due sends go out in one global order across owners, after a cancel too' do
     receiver = spawn DelayedSendsAtOwner.receiver
     to = "#_scxml_#{receiver.handle}"
@@ -142,28 +137,28 @@ TinyactorsTest.scenarios 'delayed sends at their owner' do
   # lose its place in deadline order), or not marked as waiting to be
   # offered again (D3, ADR 0026).
   scenario 'a refused send goes back to its owner, submitted' do
-    receiver, sender = DelayedSendsAtOwner.refused(self)
+    io, sender = DelayedSendsAtOwner.refused(self)
     assert_equal [['tick.one', 10_000, true]], DelayedSendsAtOwner.pending(self, sender),
                  'the refused send is back in its owner\'s list, submitted, at its own time'
     assert_equal 10_000, next_deadline, 'it is still the next deadline'
 
     run_system('offer it again')
-    assert_equal ['tick.one'], receiver.data('.inbox'), 'the second offer delivered it, once'
+    assert_equal ['tick.one'], DelayedSendsAtOwner.delivered(io), 'the second offer delivered it, once'
     assert_equal [], DelayedSendsAtOwner.pending(self, sender)
   end
 
   # Catches: destroy discarding a submitted send (it is already sent, so it
   # belongs to the receiver now), or keeping it in the destroyed actor's
-  # storage. It moves to the system-owned list, stays due, and goes out.
+  # storage. It stays indexed with no owner, stays due, and goes out.
   scenario 'a refused send outlives its owner\'s destroy' do
-    receiver, sender = DelayedSendsAtOwner.refused(self)
+    io, sender = DelayedSendsAtOwner.refused(self)
     core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: sender.handle))
     forget(sender)
     assert !sender.resident?, 'the owner is gone'
     assert_equal 10_000, next_deadline, 'its submitted send is still pending, owned by the system'
 
     run_system('offer the orphaned send again')
-    assert_equal ['tick.one'], receiver.data('.inbox')
+    assert_equal ['tick.one'], DelayedSendsAtOwner.delivered(io)
     assert_equal nil, next_deadline, 'nothing is pending'
   end
 
@@ -171,54 +166,41 @@ TinyactorsTest.scenarios 'delayed sends at their owner' do
   # image keeps the unsent sends, and the submitted one stays with the
   # system.
   scenario 'a refused send outlives its owner\'s unload' do
-    receiver, sender = DelayedSendsAtOwner.refused(self, name: 'u1')
+    io, sender = DelayedSendsAtOwner.refused(self, name: 'u1')
     image = capture(sender)
     assert_equal 'ok', unload(sender, image)
     assert_equal nil, image_deadline(image), 'the image holds no submitted send; it is not the actor\'s any more'
     assert_equal 10_000, next_deadline, 'the submitted send is still pending, owned by the system'
 
     run_system('offer the orphaned send again')
-    assert_equal ['tick.one'], receiver.data('.inbox')
+    assert_equal ['tick.one'], DelayedSendsAtOwner.delivered(io)
     destroy_image(image)
   end
 
-  # Catches: destroy that moves the submitted send before it has room for
-  # it, and then either loses it or leaves the actor half destroyed. Room is
-  # reserved first, so a refused allocation is TA_ERR_NOMEM with nothing
-  # changed, and a retry succeeds (D3, ADR 0047).
-  scenario 'a destroy that cannot reserve room changes nothing' do
-    receiver, sender = DelayedSendsAtOwner.refused(self)
-    before = DelayedSendsAtOwner.pending(self, sender)
-
-    allocator.arm_fault(after: 0, count: 1)
+  # Catches: a destroy that needs memory to keep the submitted send, and so
+  # can fail, or leave the actor half destroyed, when memory runs out. The
+  # send is already an envelope of core's pool (core ADR 0101): destroy
+  # allocates nothing for it, and succeeds with every allocation refused.
+  scenario 'a destroy keeps a submitted send without allocating' do
+    io, sender = DelayedSendsAtOwner.refused(self)
+    allocator.arm_fault(after: 0, count: 1_000_000)
     result = ta.actor.destroy(system: system_handle, actor: sender.handle)[:result]
     allocator.clear_faults
-    assert_equal 'err_nomem', result, 'the destroy could not reserve room for the submitted send'
-    assert sender.resident?, 'the actor is still resident'
-    assert_equal before, DelayedSendsAtOwner.pending(self, sender), 'its sends are unchanged'
-    assert_equal 10_000, next_deadline, 'and so is the global order'
-
-    sender.destroy
-    assert_equal ['tick.one'], receiver.data('.inbox'), 'the retried destroy kept the send, which went out'
+    assert_equal 'ok', result, 'the destroy needed no memory'
+    forget(sender)
+    assert_equal 10_000, next_deadline, 'its submitted send is still pending'
+    run_system('offer the orphaned send again')
+    assert_equal ['tick.one'], DelayedSendsAtOwner.delivered(io), 'the send went out'
   end
 
   # Catches: the same for unload.
-  scenario 'an unload that cannot reserve room changes nothing' do
-    receiver, sender = DelayedSendsAtOwner.refused(self, name: 'u1')
-    before = DelayedSendsAtOwner.pending(self, sender)
+  scenario 'an unload keeps a submitted send without allocating for it' do
+    io, sender = DelayedSendsAtOwner.refused(self, name: 'u1')
     image = capture(sender)
-
-    allocator.arm_fault(after: 0, count: 1)
-    result = unload(sender, image)
-    allocator.clear_faults
-    assert_equal 'err_nomem', result, 'the unload could not reserve room for the submitted send'
-    assert sender.resident?, 'the actor is still resident'
-    assert_equal before, DelayedSendsAtOwner.pending(self, sender), 'its sends are unchanged'
-    assert_equal 10_000, next_deadline
-
-    assert_equal 'ok', unload(sender, image), 'a retry succeeds'
+    assert_equal 'ok', unload(sender, image), 'the unload succeeds'
+    assert_equal 10_000, next_deadline, 'the submitted send is still pending, owned by no session'
     run_system('offer the orphaned send again')
-    assert_equal ['tick.one'], receiver.data('.inbox')
+    assert_equal ['tick.one'], DelayedSendsAtOwner.delivered(io)
     destroy_image(image)
   end
 
@@ -246,15 +228,16 @@ TinyactorsTest.scenarios 'delayed sends at their owner' do
     assert_equal %w[tick.one tick.two], receiver.data('.inbox'), 'b\'s tick.one and a\'s tick.two'
   end
 
-  # Catches: a withdrawal that takes back a send the router already refused
-  # once: it was sent and belongs to its receiver (ADR 0054), so it stays.
+  # Catches: a withdrawal that takes back a send its processor already
+  # refused once: it was sent and belongs to its receiver (ADR 0054), so it
+  # stays.
   scenario 'a refused send is not withdrawn' do
-    receiver, sender = DelayedSendsAtOwner.refused(self)
+    io, sender = DelayedSendsAtOwner.refused(self)
     send_id = sender.inspect_actor[:delayed_sends].first[:send_id]
     result = ta.actor.withdraw_send(system: system_handle, actor: sender.handle, send: send_id)[:result]
     assert_equal 'err_done', result, 'a submitted send is done'
     run_system('offer it again')
-    assert_equal ['tick.one'], receiver.data('.inbox')
+    assert_equal ['tick.one'], DelayedSendsAtOwner.delivered(io)
   end
 
   # Catches: a send that fires without advancing its owner's session epoch.

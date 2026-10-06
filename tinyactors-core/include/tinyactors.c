@@ -7867,10 +7867,9 @@ typedef enum {
     TA_ENVELOPE_TAKEN = 4,
     /** A delayed send, in the deadline index and its sender's owner list. */
     TA_ENVELOPE_TIMER = 5,
-    /** Held by a live local invocation, on no list. */
+    /** Held by a live local invoked child, on no list, for its completion
+     * (`deadline.h`). */
     TA_ENVELOPE_INVOCATION_TOKEN = 6,
-    /** An invocation token turned into the stop of a child session. */
-    TA_ENVELOPE_CHILD_STOP = 7,
     /** A completed input kept, on no list, only for the name its text
      * holds: an invoked session's kept event names it (`run.h`). It holds
      * no references. */
@@ -7887,6 +7886,9 @@ typedef enum {
 /** A taken input whose name an invoked session's kept event names: when it
  * completes it is kept (`TA_ENVELOPE_KEPT`), not given back. */
 #define TA_ENVELOPE_FLAG_KEEP ((uint8_t)0x08u)
+/** A timer offered once and refused, waiting to be offered again
+ * (`deadline.h`): `<cancel>` and the end of its session leave it. */
+#define TA_ENVELOPE_FLAG_SUBMITTED ((uint8_t)0x10u)
 
 /** One pending input; see the file comment. */
 typedef struct {
@@ -9718,30 +9720,128 @@ TA_PRIVATE void ta_continuation_release(ta_continuation *continuation);
 /* Retains the snapshots of a continuation's frames, for a copy of it. */
 TA_PRIVATE void ta_continuation_retain(ta_continuation *continuation);
 
-
-
-/*
- * Delayed sends (ADR 0026, ADR 0054).
+/**
+ * @file deadline.h
  *
- * A send is stored with its owner: each owner has a ta_timer_list, one array
- * of public ta_delayed_send_info sorted by (due, timer id) plus a parallel
- * array of private fields. The system keeps a min-heap of the lists that hold
- * at least one send, keyed by each list's front. The heap's top list's front
- * is the globally earliest send, so dispatch order is exactly (due, id).
+ * # Delayed sends: the deadline index and owner lists
  *
- * A list's address must stay stable while it holds sends: the heap points at
- * it. Actors keep theirs in their sparse state; the sends whose session is
- * gone live in the heap's own `orphans` list.
+ * A delayed `<send>` is an envelope of the system's pool (`envelope.h`) in
+ * state `TA_ENVELOPE_TIMER`, waiting for a time instead of a slot (ADR
+ * 0101). `ta_deadline` holds the system's **deadline index**: a binary
+ * min-heap (`heap.h`) of those envelopes, ordered by the envelope's `due`
+ * time and then its `source_seq`, which for a timer is its send order.
+ * Each session holds the **owner list** of its pending sends,
+ * `ta_deadline_owner`, linked through the envelopes' `owner_next`.
+ *
+ * ## The envelope of a timer
+ *
+ * - `due` is the deadline and `source_seq` the order: the send's `id`,
+ *   assigned from the system's counter when the send is scheduled with
+ *   none, so one sender's sends due at the same time leave in send
+ *   order. A send scheduled again with its `id` keeps its place.
+ * - `send_id` is the send's ID, which `<cancel>` matches.
+ * - `from` is the runtime ID of the session that made it. A submitted
+ *   send whose session is gone is on no list, and that ID names no actor.
+ * - `TA_ENVELOPE_FLAG_SUBMITTED` marks a send that was offered once and
+ *   refused, and waits to be offered again. `<cancel>` and the end of its
+ *   session leave it in place: it has left its owner (ADR 0054).
+ * - `data` holds the send's data and `content` its evaluated `target` for a
+ *   host I/O processor; the envelope holds a reference to each.
+ * - The text holds the record: the event name, the I/O processor, the
+ *   destination, the invocation, the literal content and target IDs, and
+ *   for a submitted send its origin. A traced send's trace parent follows
+ *   it as the trace field (`name_area.h`), with `TA_ENVELOPE_FLAG_TRACED`;
+ *   an untraced send keeps none. The envelope owns the destination and
+ *   origin handles. A record takes one 64-byte chunk, a traced one two.
+ *
+ * ## The owner list
+ *
+ * `ta_deadline_owner` is one envelope index, the list's head; new sends go
+ * at the front, so the list is in reverse send order. What reads a
+ * session's sends in order (inspection, export, session images) sorts
+ * them by `(due, order)`.
+ *
+ * ## Dispatch, images and the end of a session
+ *
+ * - **Dispatch** takes due sends in `(due, order)` order. A send that falls
+ *   due takes its owner off nothing but its list: it advances the owner's
+ *   session epoch, as a withdrawal does, so an image captured before it is
+ *   stale (ADR 0014). Its envelope goes back to the pool before the send
+ *   is delivered, so a due send to a session never finds the pool full.
+ * - **Submitted.** A send its host I/O processor refuses (out of memory)
+ *   was sent: it keeps its origin, `<cancel>` no longer reaches it, and it
+ *   waits, due, at its own place in the order, to be offered again.
+ * - **The end of a session.** Destroy and unload take the owner's sends
+ *   off its list: the unsubmitted ones are released, or for an unload
+ *   carried in its image, and the submitted ones stay indexed with no
+ *   list, until they are offered again or the system goes. Neither can
+ *   fail for want of memory.
+ * - **Images** hold a session's unsubmitted sends, in order, and a load
+ *   schedules them again with their due times; a send already due fires at
+ *   the next dispatch. Host values (target, data) are retained, not
+ *   serialized.
+ *
+ * ## Memory
+ *
+ * The envelopes and their text are the pool's and the name area's. The
+ * index keeps one `uint32_t` position per envelope the pool has, in the
+ * heap's pages, grown by `ta_deadline_grow` at the pool's refill: a safe
+ * point. `views` is the buffer inspection and export fill with a
+ * session's sends, grown when they ask, outside any macrostep, and kept
+ * until the system goes.
+ *
+ * - `ta_deadline_schedule`, `ta_deadline_cancel`, `ta_deadline_withdraw`,
+ *   `ta_deadline_cancel_unsubmitted`, `ta_deadline_orphan`,
+ *   `ta_deadline_owner_release`, `ta_deadline_copy`,
+ *   `ta_deadline_next_due` and `ta_deadline_pop` never allocate; each may
+ *   run inside a macrostep.
+ * - `ta_deadline_grow`, `ta_deadline_reserve` and `ta_deadline_views`
+ *   allocate, and run only at a safe point. The pool's refill grows
+ *   `views` for the longest owner list seen, so `ta_deadline_views`
+ *   allocates only when a list grew longer since the last refill.
+ *
+ * ## Complexity
+ *
+ * | Operation | Cost |
+ * |---|---|
+ * | schedule, pop, remove one send | O(log n) in the index, n its length |
+ * | cancel, withdraw, orphan, release | O(k + m log n), k the owner's sends, m those removed |
+ * | copy, views | O(k log k): a walk and a sort |
+ * | next due | O(1) |
+ *
+ * ## Failure
+ *
+ * A failed call changes nothing. `ta_deadline_schedule` answers
+ * `TA_ERR_FULL` when the pool has no free envelope or the index no room,
+ * and names the resource in `short_of`, or when the name area has no room
+ * for the send's record. `ta_deadline_reserve` answers `TA_ERR_FULL` when
+ * the pool's bound leaves fewer free envelopes than asked for, and
+ * `TA_ERR_NOMEM` when its pages cannot be allocated. `ta_deadline_cancel`
+ * answers `TA_ERR_NOT_FOUND` when it removed nothing.
+ *
+ * ## Users
+ *
+ * `<send>` with a delay and `<cancel>` (interpreter), a host's
+ * `ta_actor_withdraw_send`, re-armed sends at spawn and restore, sends a
+ * replaying session held until publish, session images, and the dispatch
+ * of due sends. ADR 0101 is the decision; ADR 0054 and ADR 0026 the
+ * contract of a pending send.
  */
 
-/*
- * An evaluated delayed send, the flat form used to schedule a send, to hand a
- * due send to dispatch, and to carry sends in a session image. For the
+
+struct ta_system;
+struct ta_actor;
+
+/**
+ * An evaluated delayed send, the flat form used to schedule a send, to hand
+ * a due send to dispatch, and to carry sends in a session image. For the
  * built-in SCXML processor `destination` is the resolved external target;
  * custom processors receive `target`.
  */
 typedef struct {
+    /** Its order among sends due at the same time; 0 asks for the next. */
     ta_timer_id id;
+    /** The runtime ID of the session that made it. */
     ta_actor_id owner;
     ta_send_id send_id;
     ta_time due;
@@ -9750,113 +9850,170 @@ typedef struct {
     ta_actor_ref destination;
     ta_value target;
     ta_value data;
-    /*
-     * A send to a host I/O processor with literal <content>: the content's ID
-     * in the owner's definition, not its bytes, so a session image restores
-     * it against its exact revision (ADR 0053, ADR 0038). The processor gets
-     * the bytes when the send is dispatched.
+    /**
+     * A send to a host I/O processor with literal `<content>`: the
+     * content's ID in the owner's definition, not its bytes, so a session
+     * image restores it against its exact revision (ADR 0053, ADR 0038).
+     * The processor gets the bytes when the send is dispatched.
      */
     bool has_content;
     ta_content_id content;
-    /*
-     * A send to a host I/O processor with a literal `target`: its content ID
-     * in the owner's definition, for the same reason. `target` is then
-     * absent. Public, in ta_delayed_send_info, so inspection can name it.
+    /**
+     * A send to a host I/O processor with a literal `target`: its content
+     * ID in the owner's definition, for the same reason. `target` is then
+     * absent.
      */
     bool has_target_text;
     ta_content_id target_text;
-    /*
-     * Already sent: the router accepted nothing and the send waits here to be
-     * offered again. <cancel> and session termination leave it in place.
+    /**
+     * Already offered once and refused: it waits to be offered again.
+     * `<cancel>` and the end of its session leave it in place.
      */
     bool submitted;
-    /* Submitted sends only: the envelope, which outlives the sending session. */
+    /** Submitted sends only: the sending session, which it outlives. */
     ta_actor_ref origin;
     ta_invoke_id invoke_id;
-    /* The sending step (ADR 0067): a send that fires later still names it. */
+    /** The sending step (ADR 0067): a send that fires later still names it. */
     ta_trace_parent trace;
 } ta_delayed_send;
 
-/* The private fields of one stored send, parallel to ta_timer_list.sends. */
+/** One session's pending delayed sends: the head of its owner list, or 0,
+ * and how many the list holds. */
 typedef struct {
-    ta_timer_id id;
-    ta_actor_id owner;
-    ta_actor_ref origin;
-    ta_invoke_id invoke_id;
-} ta_delayed_send_meta;
-
-/* One owner's pending sends, sorted by (due, id). Zero-initialized is empty. */
-typedef struct {
-    ta_delayed_send_info *sends;
-    ta_delayed_send_meta *meta;
+    uint32_t head;
     uint32_t count;
-    uint32_t capacity;
-    /* Position in the owner heap; meaningful only while `indexed`. */
-    uint32_t heap_index;
-    /* In the owner heap: true exactly when count != 0. */
-    bool indexed;
-} ta_timer_list;
+} ta_deadline_owner;
 
-/*
- * The owner heap's slots live in fixed pages of TA_TIMER_PAGE_OWNERS, found
- * through a page directory, as the actor table's do (ADR 0063). Growing adds
- * a page and never copies the heap; only the directory of page pointers
- * doubles. Pages live as long as the system.
- */
-#define TA_TIMER_PAGE_OWNERS 8192u
-
+/** The system's deadline index; see the file comment. */
 typedef struct {
-    ta_allocator allocator;
-    /* A binary min-heap of non-empty lists, keyed by each list's front. */
-    ta_vec pages; /* ta_timer_list **, one per page of owner slots */
-    uint32_t count;
-    ta_timer_id next_id;
-    /* Submitted sends whose sending session is gone (ADR 0054). */
-    ta_timer_list orphans;
-    /* Set while the system is destroyed: orphaning releases instead of keeping. */
-    bool closing;
-} ta_timer_heap;
+    /** The timer envelopes, by `(due, order)`. */
+    ta_heap heap;
+    /** The order the next send without one is given. */
+    ta_timer_id next_order;
+    /** `ta_delayed_send_info`: what inspection and export last read. */
+    ta_vec views;
+    /** The most sends one owner's list has held: the refill keeps `views`
+     * large enough for it, so reading a session's sends seldom allocates. */
+    uint32_t most_per_owner;
+} ta_deadline;
 
-TA_PRIVATE ta_result ta_timer_heap_init(ta_timer_heap *heap, ta_allocator allocator);
-/* Releases every send still indexed, the orphans included. */
-TA_PRIVATE void ta_timer_heap_destroy(ta_timer_heap *heap);
-/* Makes the next `additional` schedules into list allocation-free. */
-TA_PRIVATE ta_result ta_timer_reserve(ta_timer_heap *heap, ta_timer_list *list, uint32_t additional);
-/* Takes ownership of the send's values on TA_OK; assigns send->id when it is zero. */
-TA_PRIVATE ta_result ta_timer_schedule(ta_timer_heap *heap, ta_timer_list *list, const ta_delayed_send *send);
-/* Removes and releases every not yet submitted send in list with send_id. */
-TA_PRIVATE ta_result ta_timer_cancel(ta_timer_heap *heap, ta_timer_list *list, ta_send_id send_id);
-/* Like ta_timer_cancel(), but also removes submitted sends. */
-TA_PRIVATE ta_result ta_timer_withdraw(ta_timer_heap *heap, ta_timer_list *list, ta_send_id send_id);
-/* Removes and releases every not yet submitted send in list (session termination). */
-TA_PRIVATE void ta_timer_cancel_unsubmitted(ta_timer_heap *heap, ta_timer_list *list);
-/*
- * Makes ta_timer_orphan(list) allocation-free: reserves room in the orphans
- * for the list's submitted sends.
+/** Room `views` has from system creation: a session with up to this many
+ * pending sends is read without allocating. */
+#define TA_DEADLINE_VIEWS_MIN 16u
+
+/**
+ * Sets up an empty index, with `views` room for `TA_DEADLINE_VIEWS_MIN`
+ * sends. Allocates that room at system creation: `TA_ERR_NOMEM`, changing
+ * nothing, when it cannot.
  */
-TA_PRIVATE ta_result ta_timer_reserve_orphans(ta_timer_heap *heap, const ta_timer_list *list);
-/*
- * The sending session is gone: releases the list's unsubmitted sends and
- * moves its submitted ones to the orphans. Call ta_timer_reserve_orphans()
- * first. Leaves the list empty and unindexed; its storage stays allocated.
+TA_PRIVATE ta_result ta_deadline_init(ta_deadline *deadline, ta_allocator allocator);
+
+/**
+ * Releases every pending send still indexed, submitted ones included, and
+ * frees the index. Run at system teardown, before the pool goes.
  */
-TA_PRIVATE void ta_timer_orphan(ta_timer_heap *heap, ta_timer_list *list);
-/* Releases every send in list, unindexes it, and frees its storage. */
-TA_PRIVATE void ta_timer_list_destroy(ta_timer_heap *heap, ta_timer_list *list);
-/* Bytes the list's storage occupies. */
-TA_PRIVATE size_t ta_timer_list_bytes(const ta_timer_list *list);
-/*
- * Copies the list's not yet submitted sends in (due, id) order, and returns
- * how many there are; a null `out` only counts. These are the sends a
- * session belongs to — a submitted send outlives it and is the system's to
- * re-offer. The copies borrow their values; the caller takes its own
- * references.
+TA_PRIVATE void ta_deadline_destroy(struct ta_system *system);
+
+/**
+ * Makes the index's room match the pool's envelopes, so that scheduling
+ * never allocates. Runs at the pool's refill, a safe point. Answers
+ * `TA_ERR_NOMEM`, changing nothing, when a page cannot be allocated.
  */
-TA_PRIVATE uint32_t ta_timer_copy_unsubmitted(const ta_timer_list *list, ta_delayed_send *out);
-/* The earliest due time of any indexed send; false when there is none. */
-TA_PRIVATE bool ta_timer_next_due(const ta_timer_heap *heap, ta_time *out);
-/* Removes the earliest send and transfers ownership of its values to *out. */
-TA_PRIVATE ta_result ta_timer_pop(ta_timer_heap *heap, ta_delayed_send *out);
+TA_PRIVATE ta_result ta_deadline_grow(struct ta_system *system);
+
+/**
+ * Makes `count` envelopes free for sends scheduled before the next safe
+ * point, and the index's room for them. Allocates; never inside a
+ * macrostep. `TA_ERR_FULL` when the pool's bound leaves too few;
+ * `TA_ERR_NOMEM` when pages cannot be allocated.
+ */
+TA_PRIVATE ta_result ta_deadline_reserve(struct ta_system *system, uint32_t count);
+
+/**
+ * Stores `send` in an envelope, puts it in the index and, when `owner` is
+ * not null, on `owner`'s list. Takes over the send's references on
+ * `TA_OK`; assigns `send->id` from the system's counter when it is 0.
+ * Never allocates; may run inside a macrostep. Answers `TA_ERR_FULL`,
+ * changing nothing, with `*short_of` (when not null) naming the pool or
+ * the name area.
+ */
+TA_PRIVATE ta_result ta_deadline_schedule(struct ta_system *system,
+                               ta_deadline_owner *owner,
+                               const ta_delayed_send *send,
+                               ta_record_capacity_resource *short_of);
+
+/** How many sends `owner`'s list holds. O(1). Never allocates. */
+TA_PRIVATE uint32_t ta_deadline_count(const struct ta_system *system, const ta_deadline_owner *owner);
+
+/**
+ * Removes and releases every send on `owner`'s list with `send_id` that is
+ * not submitted (`<cancel>`). Never allocates. `TA_ERR_NOT_FOUND` when it
+ * removed none.
+ */
+TA_PRIVATE ta_result ta_deadline_cancel(struct ta_system *system, ta_deadline_owner *owner, ta_send_id send_id);
+
+/** Like ta_deadline_cancel(), but removes submitted sends too. */
+TA_PRIVATE ta_result ta_deadline_withdraw(struct ta_system *system, ta_deadline_owner *owner, ta_send_id send_id);
+
+/** Whether `owner`'s list holds a submitted send with `send_id`. */
+TA_PRIVATE bool ta_deadline_has_submitted(const struct ta_system *system, const ta_deadline_owner *owner, ta_send_id send_id);
+
+/** Removes and releases every send on `owner`'s list that is not submitted. */
+TA_PRIVATE void ta_deadline_cancel_unsubmitted(struct ta_system *system, ta_deadline_owner *owner);
+
+/**
+ * The owner goes: releases its sends that are not submitted, and takes its
+ * submitted ones off its list, so they stay indexed with no owner (ADR
+ * 0054). Never allocates; never fails.
+ */
+TA_PRIVATE void ta_deadline_orphan(struct ta_system *system, ta_deadline_owner *owner);
+
+/** Removes and releases every send on `owner`'s list, submitted ones too. */
+TA_PRIVATE void ta_deadline_owner_release(struct ta_system *system, ta_deadline_owner *owner);
+
+/**
+ * Copies `owner`'s sends that are not submitted, in `(due, order)` order,
+ * into `out`, and answers how many there are; a null `out` only counts.
+ * The copies borrow their references. Never allocates.
+ */
+TA_PRIVATE uint32_t ta_deadline_copy(const struct ta_system *system, const ta_deadline_owner *owner, ta_delayed_send *out);
+
+/**
+ * Fills the system's view buffer with `owner`'s sends, submitted ones
+ * included, as `ta_delayed_send_info` in `(due, order)` order, and points
+ * `*out` at it. The view borrows the sends' references and stays valid
+ * until the next call or until a send changes. Allocates when the buffer
+ * is short, outside any macrostep: `TA_ERR_NOMEM` then.
+ */
+TA_PRIVATE ta_result ta_deadline_views(struct ta_system *system,
+                            const ta_deadline_owner *owner,
+                            const ta_delayed_send_info **out,
+                            uint32_t *count);
+
+/**
+ * Takes the **invocation token** of a local child: one envelope, in state
+ * `TA_ENVELOPE_INVOCATION_TOKEN` on no list, whose text holds room for the
+ * record of one traced timer. The child holds it from its spawn until its
+ * completion is published; publishing gives it back first, so the
+ * completion's mail, or the timer that keeps it while the parent's pool is
+ * full, always finds an envelope and room for its record. Never allocates;
+ * may run inside a macrostep. `TA_ERR_FULL`, changing nothing, with
+ * `*short_of` (when not null) naming the pool or the name area.
+ */
+TA_PRIVATE ta_result ta_deadline_token_take(struct ta_system *system, uint32_t *out, ta_record_capacity_resource *short_of);
+
+/** Gives an invocation token back: its text and its envelope. 0 is none. */
+TA_PRIVATE void ta_deadline_token_release(struct ta_system *system, uint32_t token);
+
+/** The earliest due time of any indexed send; false when there is none. */
+TA_PRIVATE bool ta_deadline_next_due(const struct ta_system *system, ta_time *out);
+
+/**
+ * Removes the earliest send from the index and from its owner's list, gives
+ * its envelope back, and hands its references to `*out`. `TA_ERR_NOT_FOUND`
+ * when the index is empty. Never allocates.
+ */
+TA_PRIVATE ta_result ta_deadline_pop(struct ta_system *system, ta_delayed_send *out);
 
 /**
  * @file datamodel.h
@@ -11032,11 +11189,13 @@ typedef struct {
     ta_activation_effects *activation_effects;
     ta_actor_parent parent;
     ta_actor_completion completion;
+    /* A local invoked child's invocation token (deadline.h): the envelope
+     * its completion uses, held until the completion is published; 0 for
+     * none. */
+    uint32_t token;
     /* The top-level <final> whose entry ended the session (ADR 0056); set
      * with `completion`, and meaningful only while the actor is finished. */
     ta_state_id final_state;
-    /* This actor's pending delayed sends, indexed by the system's owner heap. */
-    ta_timer_list timers;
     bool has_parent;
     bool completion_pending;
     /* A microstep paused inside executable content (ADR 0061), or null. */
@@ -11108,6 +11267,8 @@ struct ta_actor {
      * included), so In() sees states as SCXML defines them mid-microstep.
      */
     const uint64_t *live_active;
+    /* Its pending delayed sends: the head of its owner list (deadline.h). */
+    ta_deadline_owner timers;
 };
 
 /*
@@ -11233,15 +11394,8 @@ TA_PRIVATE const ta_event *ta_actor_bound_event(ta_system *system, const ta_acto
 /* Internal events waiting to be taken: the queue without a taken head. */
 TA_PRIVATE uint32_t ta_actor_waiting_internal(const ta_actor *actor);
 
-/* The actor's delayed sends, or null when it has no sparse state (so none). */
-TA_PRIVATE ta_timer_list *ta_actor_timers(const ta_actor *actor);
-/* Stores a delayed send with its owner; takes the send's values on TA_OK. */
-TA_PRIVATE ta_result ta_actor_schedule_send(ta_system *system, ta_actor *actor, const ta_delayed_send *send);
-/* Makes room to store one more delayed send, so that storing it cannot fail
- * (ADR 0070). */
-TA_PRIVATE ta_result ta_actor_reserve_send(ta_system *system, ta_actor *actor);
-/* The list a send owned by `owner` belongs in: the actor's, or the orphans when it is gone. */
-TA_PRIVATE ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out);
+/* The actor's owner list of pending delayed sends (deadline.h). */
+TA_PRIVATE ta_deadline_owner *ta_actor_timers(const ta_actor *actor);
 
 /* True for a replaying actor (ADR 0089): prepared with `at`, not yet published. */
 TA_PRIVATE bool ta_actor_replaying(const ta_actor *actor);
@@ -11461,7 +11615,8 @@ struct ta_system {
      */
     ta_actor_table actors;
 
-    ta_timer_heap timers;
+    /* Pending delayed sends (ADR 0101). */
+    ta_deadline deadline;
 
     /* The I/O processor registry (ADR 0068): registry index i is element i - 1; 0 is SCXML. */
     ta_vec io_processors; /* ta_io_registration */
@@ -11578,7 +11733,7 @@ TA_PRIVATE bool ta_event_name_put(const ta_system *system, const ta_event *event
 
 /*
  * Gives `event` a name ID for a record that holds names by ID and keeps the
- * event after its input completes: a delayed send (timer.h). A name its
+ * event after its input completes: a delayed send (deadline.h). A name its
  * input keeps as text is interned into the event-name trie, and `name`
  * set. Nothing a host is handed goes through here (ADR 0100). May
  * allocate; TA_ERR_INVALID for a text that is not a valid event name,
@@ -11860,6 +12015,10 @@ typedef enum {
  * allocates inside a macrostep.
  */
 TA_PRIVATE ta_dispatch_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, ta_dispatch *how);
+/* Raises error.execution.capacity.pool or .names in the running action, as
+ * a <send> with no room does (ADR 0102's names): TA_EXEC_FAILED when it was
+ * queued. */
+TA_PRIVATE ta_result ta_interpreter_capacity_error(ta_interpreter *it, ta_record_capacity_resource resource);
 
 /** A send to another session that failed after it left its macrostep; see
  * `ta_interpreter_send_failed`. */
@@ -19054,6 +19213,11 @@ static ta_run_refilled ta_run_refill(ta_system *system) {
     }
     ta_run_refilled refilled = { .pool = ta_envelope_pool_refill(&system->run.pool),
                                  .names = ta_name_area_refill(&system->run.names, 0u) };
+    /* The deadline index keeps room for every envelope, so a delayed send
+     * never allocates (ADR 0101). */
+    if (refilled.pool == TA_OK) {
+        refilled.pool = ta_deadline_grow(system);
+    }
     (void)ta_waiting_refill(&system->run.waiting);
     (void)ta_run_name_room(system);
     return refilled;
@@ -20579,493 +20743,621 @@ TA_PRIVATE bool ta_run_phase_in_microstep(ta_run_phase phase) {
 }
 
 
-/* ------------------------------------------------------------------------
- * Keys and the owner heap
+/* Deadline index pages hold 1024 positions, as the pool's pages hold items. */
+#define TA_DEADLINE_PAGE_SHIFT 10u
+
+static void *ta_deadline_item(void *items, uint32_t index) {
+    return ta_envelope_pool_at((const ta_envelope_pool *)items, index);
+}
+
+static ta_heap_items ta_deadline_items(ta_system *system) {
+    return (ta_heap_items){
+        .item = ta_deadline_item,
+        .items = &system->run.pool,
+        .due_offset = offsetof(ta_envelope, due),
+        .order_offset = offsetof(ta_envelope, source_seq),
+        .position_offset = offsetof(ta_envelope, heap_index),
+    };
+}
+
+static ta_envelope *ta_deadline_at(const ta_system *system, uint32_t index) {
+    return ta_envelope_pool_at(&system->run.pool, index);
+}
+
+/*
+ * The fixed part of a timer's record, its text's first field: what the
+ * envelope's own fields do not hold. `origin` is written only for a
+ * submitted send, and `family` only for a traced one.
  */
+typedef struct {
+    ta_event_name_id event;
+    ta_atom io_type;
+    ta_actor_ref destination;
+    ta_invoke_id invoke_id;
+    ta_content_id content;
+    ta_content_id target_text;
+    uint8_t bits;
+} ta_deadline_record;
+
+#define TA_DEADLINE_HAS_CONTENT ((uint8_t)0x01u)
+#define TA_DEADLINE_HAS_TARGET_TEXT ((uint8_t)0x02u)
+
+/* The packed bytes of a record, at most this many. */
+#define TA_DEADLINE_RECORD_BYTES                                                                                  \
+    (sizeof(ta_event_name_id) + sizeof(ta_atom) + sizeof(ta_actor_ref) + sizeof(ta_invoke_id) +                   \
+     2u * sizeof(ta_content_id) + 1u + sizeof(ta_actor_ref) + sizeof(ta_atom))
 
 typedef struct {
-    ta_time due;
-    ta_timer_id id;
-} ta_timer_key;
+    uint8_t *bytes;
+    uint32_t length;
+} ta_deadline_packer;
 
-static bool ta_timer_key_before(ta_timer_key left, ta_timer_key right) {
-    return left.due < right.due || (left.due == right.due && left.id < right.id);
+static void ta_deadline_put(ta_deadline_packer *packer, const void *field, size_t size) {
+    ta_mem_copy(packer->bytes + packer->length, field, size);
+    packer->length += (uint32_t)size;
 }
 
-static ta_timer_key ta_timer_key_at(const ta_timer_list *list, uint32_t index) {
-    return (ta_timer_key){ .due = list->sends[index].due, .id = list->meta[index].id };
+static void ta_deadline_get(ta_deadline_packer *packer, void *field, size_t size) {
+    ta_mem_copy(field, packer->bytes + packer->length, size);
+    packer->length += (uint32_t)size;
 }
 
-static bool ta_timer_list_before(const ta_timer_list *left, const ta_timer_list *right) {
-    return ta_timer_key_before(ta_timer_key_at(left, 0), ta_timer_key_at(right, 0));
+static bool ta_deadline_traced(const ta_delayed_send *send) {
+    return !ta_trace_context_empty(&send->trace.context);
 }
 
-/* The heap slot at `index`, which must be below the reserved capacity. */
-static ta_timer_list **ta_timer_slot(const ta_timer_heap *heap, uint32_t index) {
-    ta_timer_list **const *pages = heap->pages.items;
-    return &pages[index / TA_TIMER_PAGE_OWNERS][index % TA_TIMER_PAGE_OWNERS];
-}
-
-static ta_timer_list *ta_timer_owner(const ta_timer_heap *heap, uint32_t index) {
-    return *ta_timer_slot(heap, index);
-}
-
-static void ta_timer_place(ta_timer_heap *heap, uint32_t index, ta_timer_list *list) {
-    *ta_timer_slot(heap, index) = list;
-    list->heap_index = index;
-}
-
-static void ta_timer_sift_up(ta_timer_heap *heap, uint32_t index) {
-    ta_timer_list *list = ta_timer_owner(heap, index);
-    while (index > 0) {
-        uint32_t parent = (index - 1u) / 2u;
-        if (!ta_timer_list_before(list, ta_timer_owner(heap, parent))) {
-            break;
-        }
-        ta_timer_place(heap, index, ta_timer_owner(heap, parent));
-        index = parent;
-    }
-    ta_timer_place(heap, index, list);
-}
-
-static void ta_timer_sift_down(ta_timer_heap *heap, uint32_t index) {
-    ta_timer_list *list = ta_timer_owner(heap, index);
-    for (;;) {
-        uint32_t smallest = index;
-        const ta_timer_list *best = list;
-        uint32_t left = index * 2u + 1u;
-        uint32_t right = left + 1u;
-        if (left < heap->count && ta_timer_list_before(ta_timer_owner(heap, left), best)) {
-            smallest = left;
-            best = ta_timer_owner(heap, left);
-        }
-        if (right < heap->count && ta_timer_list_before(ta_timer_owner(heap, right), best)) {
-            smallest = right;
-        }
-        if (smallest == index) {
-            break;
-        }
-        ta_timer_place(heap, index, ta_timer_owner(heap, smallest));
-        index = smallest;
-    }
-    ta_timer_place(heap, index, list);
-}
-
-static void ta_timer_unindex(ta_timer_heap *heap, ta_timer_list *list) {
-    if (!list->indexed) {
-        return;
-    }
-    uint32_t index = list->heap_index;
-    list->indexed = false;
-    heap->count -= 1u;
-    if (index == heap->count) {
-        return;
-    }
-    ta_timer_place(heap, index, ta_timer_owner(heap, heap->count));
-    ta_timer_sift_down(heap, index);
-    ta_timer_sift_up(heap, index);
-}
-
-/*
- * Restores the heap after the list's front may have changed. Inserting a
- * list needs a free heap slot; ta_timer_reserve_heap() provides it.
- */
-static void ta_timer_reindex(ta_timer_heap *heap, ta_timer_list *list) {
-    if (list->count == 0) {
-        ta_timer_unindex(heap, list);
-        return;
-    }
-    if (!list->indexed) {
-        list->indexed = true;
-        ta_timer_place(heap, heap->count, list);
-        heap->count += 1u;
-        ta_timer_sift_up(heap, list->heap_index);
-        return;
-    }
-    uint32_t index = list->heap_index;
-    ta_timer_sift_down(heap, index);
-    ta_timer_sift_up(heap, list->heap_index);
-}
-
-static uint32_t ta_timer_heap_capacity(const ta_timer_heap *heap) {
-    uint64_t capacity = (uint64_t)heap->pages.count * TA_TIMER_PAGE_OWNERS;
-    return capacity > UINT32_MAX ? UINT32_MAX : (uint32_t)capacity;
-}
-
-static void ta_timer_free_page(ta_allocator allocator, ta_timer_list **page) {
-    ta_mem_free(allocator, page,
-                &(ta_allocator_free_params){ .size = (size_t)TA_TIMER_PAGE_OWNERS * sizeof(ta_timer_list *),
-                                             .alignment = _Alignof(ta_timer_list *) });
-}
-
-static uint32_t ta_timer_grow_capacity(uint32_t current, uint32_t needed) {
-    uint32_t capacity = current == 0 ? 4u : current;
-    while (capacity < needed) {
-        if (capacity > UINT32_MAX / 2u) {
-            return needed;
-        }
-        capacity *= 2u;
-    }
-    return capacity;
-}
-
-/*
- * Makes room for `additional` more owners by adding pages; the heap itself
- * never moves, so no spawn or schedule copies it (as ADR 0063 did for the
- * actor table). TA_ERR_NOMEM changes nothing visible: pages already added
- * stay as spare capacity.
- */
-static ta_result ta_timer_reserve_heap(ta_timer_heap *heap, uint32_t additional) {
-    if (additional > UINT32_MAX - heap->count) {
-        return TA_ERR_NOMEM;
-    }
-    while (heap->count + additional > ta_timer_heap_capacity(heap)) {
-        ta_timer_list **page = ta_mem_alloc(heap->allocator, (size_t)TA_TIMER_PAGE_OWNERS * sizeof(ta_timer_list *),
-                                            _Alignof(ta_timer_list *));
-        if (page == NULL) {
-            return TA_ERR_NOMEM;
-        }
-        ta_result result = ta_vec_push(&heap->pages, &page);
-        if (result != TA_OK) {
-            ta_timer_free_page(heap->allocator, page);
-            return result;
-        }
-    }
-    return TA_OK;
-}
-
-/* ------------------------------------------------------------------------
- * One owner's list
- */
-
-static void ta_timer_free_storage(ta_allocator allocator, ta_timer_list *list) {
-    if (list->capacity == 0) {
-        return;
-    }
-    ta_mem_free(allocator, list->sends,
-                &(ta_allocator_free_params){ .size = (size_t)list->capacity * sizeof(ta_delayed_send_info),
-                                             .alignment = _Alignof(ta_delayed_send_info) });
-    ta_mem_free(allocator, list->meta,
-                &(ta_allocator_free_params){ .size = (size_t)list->capacity * sizeof(ta_delayed_send_meta),
-                                             .alignment = _Alignof(ta_delayed_send_meta) });
-    list->sends = NULL;
-    list->meta = NULL;
-    list->capacity = 0;
-}
-
-static ta_result ta_timer_reserve_list(ta_allocator allocator, ta_timer_list *list, uint32_t additional) {
-    if (additional > UINT32_MAX - list->count) {
-        return TA_ERR_NOMEM;
-    }
-    if (additional <= list->capacity - list->count) {
-        return TA_OK;
-    }
-    uint32_t capacity = ta_timer_grow_capacity(list->capacity, list->count + additional);
-    ta_delayed_send_info *sends = ta_mem_alloc(allocator, (size_t)capacity * sizeof(ta_delayed_send_info),
-                                               _Alignof(ta_delayed_send_info));
-    ta_delayed_send_meta *meta = ta_mem_alloc(allocator, (size_t)capacity * sizeof(ta_delayed_send_meta),
-                                              _Alignof(ta_delayed_send_meta));
-    if (sends == NULL || meta == NULL) {
-        if (sends != NULL) {
-            ta_mem_free(allocator, sends,
-                        &(ta_allocator_free_params){ .size = (size_t)capacity * sizeof(ta_delayed_send_info),
-                                                     .alignment = _Alignof(ta_delayed_send_info) });
-        }
-        if (meta != NULL) {
-            ta_mem_free(allocator, meta,
-                        &(ta_allocator_free_params){ .size = (size_t)capacity * sizeof(ta_delayed_send_meta),
-                                                     .alignment = _Alignof(ta_delayed_send_meta) });
-        }
-        return TA_ERR_NOMEM;
-    }
-    if (list->count != 0) {
-        ta_mem_copy(sends, list->sends, (size_t)list->count * sizeof(ta_delayed_send_info));
-        ta_mem_copy(meta, list->meta, (size_t)list->count * sizeof(ta_delayed_send_meta));
-    }
-    ta_timer_free_storage(allocator, list);
-    list->sends = sends;
-    list->meta = meta;
-    list->capacity = capacity;
-    return TA_OK;
-}
-
-static void ta_timer_split(const ta_delayed_send *send, ta_delayed_send_info *info, ta_delayed_send_meta *meta) {
-    *info = (ta_delayed_send_info){
-        .send_id = send->send_id,
-        .due = send->due,
+/* Packs what of `send` goes in the text's first field; answers its length. */
+static uint32_t ta_deadline_pack(const ta_delayed_send *send, uint8_t *bytes) {
+    ta_deadline_record record = {
         .event = send->event,
         .io_type = send->io_type,
         .destination = send->destination,
-        .target = send->target,
-        .data = send->data,
-        .submitted = send->submitted,
-        .has_target_text = send->has_target_text,
-        .target_text = send->target_text,
-        .has_content = send->has_content,
-        .content = send->content,
-        .trace = send->trace,
-    };
-    *meta = (ta_delayed_send_meta){
-        .id = send->id,
-        .owner = send->owner,
-        .origin = send->origin,
         .invoke_id = send->invoke_id,
+        .content = send->content,
+        .target_text = send->target_text,
+        .bits = (uint8_t)((send->has_content ? TA_DEADLINE_HAS_CONTENT : 0u) |
+                          (send->has_target_text ? TA_DEADLINE_HAS_TARGET_TEXT : 0u)),
     };
+    ta_deadline_packer packer = { .bytes = bytes, .length = 0u };
+    ta_deadline_put(&packer, &record.event, sizeof record.event);
+    ta_deadline_put(&packer, &record.io_type, sizeof record.io_type);
+    ta_deadline_put(&packer, &record.destination, sizeof record.destination);
+    ta_deadline_put(&packer, &record.invoke_id, sizeof record.invoke_id);
+    ta_deadline_put(&packer, &record.content, sizeof record.content);
+    ta_deadline_put(&packer, &record.target_text, sizeof record.target_text);
+    ta_deadline_put(&packer, &record.bits, sizeof record.bits);
+    if (send->submitted) {
+        ta_deadline_put(&packer, &send->origin, sizeof send->origin);
+    }
+    if (ta_deadline_traced(send)) {
+        ta_deadline_put(&packer, &send->trace.cause.family, sizeof send->trace.cause.family);
+    }
+    return packer.length;
 }
 
-static ta_delayed_send ta_timer_join(const ta_timer_list *list, uint32_t index) {
-    const ta_delayed_send_info *info = &list->sends[index];
-    const ta_delayed_send_meta *meta = &list->meta[index];
-    return (ta_delayed_send){
-        .id = meta->id,
-        .owner = meta->owner,
-        .send_id = info->send_id,
-        .due = info->due,
-        .event = info->event,
-        .io_type = info->io_type,
-        .destination = info->destination,
-        .target = info->target,
-        .data = info->data,
-        .submitted = info->submitted,
-        .origin = meta->origin,
-        .invoke_id = meta->invoke_id,
-        .has_content = info->has_content,
-        .content = info->content,
-        .has_target_text = info->has_target_text,
-        .target_text = info->target_text,
-        .trace = info->trace,
+/* The send stored in timer envelope `index`; its references stay the envelope's. */
+static ta_delayed_send ta_deadline_read(const ta_system *system, uint32_t index) {
+    const ta_envelope *envelope = ta_deadline_at(system, index);
+    ta_delayed_send send = {
+        .id = envelope->source_seq,
+        .owner = envelope->from,
+        .send_id = envelope->send_id,
+        .due = envelope->due,
+        .target = envelope->content,
+        .data = envelope->data,
+        .submitted = (envelope->flags & TA_ENVELOPE_FLAG_SUBMITTED) != 0u,
     };
-}
-
-/* The index of the first stored send that sorts after key. */
-static uint32_t ta_timer_upper_bound(const ta_timer_list *list, ta_timer_key key) {
-    uint32_t low = 0;
-    uint32_t high = list->count;
-    while (low < high) {
-        uint32_t middle = low + (high - low) / 2u;
-        if (ta_timer_key_before(key, ta_timer_key_at(list, middle))) {
-            high = middle;
-        } else {
-            low = middle + 1u;
-        }
+    ta_name_area *names = (ta_name_area *)&system->run.names;
+    ta_name_area_reader reader = ta_name_area_reader_of(envelope->text);
+    uint32_t length = 0u;
+    uint8_t bytes[TA_DEADLINE_RECORD_BYTES];
+    if (ta_name_area_next(names, &reader, &length) != TA_OK || length > sizeof bytes) {
+        return send;
     }
-    return low;
-}
-
-/* Inserts into reserved capacity; the caller reindexes. */
-static void ta_timer_insert(ta_timer_list *list, const ta_delayed_send *send) {
-    uint32_t at = ta_timer_upper_bound(list, (ta_timer_key){ .due = send->due, .id = send->id });
-    for (uint32_t index = list->count; index > at; index -= 1u) {
-        list->sends[index] = list->sends[index - 1u];
-        list->meta[index] = list->meta[index - 1u];
+    uint32_t got = 0u;
+    while (got < length) {
+        ta_bytes span = ta_name_area_read(names, &reader, length - got);
+        ta_mem_copy(bytes + got, span.ptr, span.len);
+        got += span.len;
     }
-    ta_timer_split(send, &list->sends[at], &list->meta[at]);
-    list->count += 1u;
+    ta_deadline_record record;
+    ta_deadline_packer packer = { .bytes = bytes, .length = 0u };
+    ta_deadline_get(&packer, &record.event, sizeof record.event);
+    ta_deadline_get(&packer, &record.io_type, sizeof record.io_type);
+    ta_deadline_get(&packer, &record.destination, sizeof record.destination);
+    ta_deadline_get(&packer, &record.invoke_id, sizeof record.invoke_id);
+    ta_deadline_get(&packer, &record.content, sizeof record.content);
+    ta_deadline_get(&packer, &record.target_text, sizeof record.target_text);
+    ta_deadline_get(&packer, &record.bits, sizeof record.bits);
+    send.event = record.event;
+    send.io_type = record.io_type;
+    send.destination = record.destination;
+    send.invoke_id = record.invoke_id;
+    send.content = record.content;
+    send.target_text = record.target_text;
+    send.has_content = (record.bits & TA_DEADLINE_HAS_CONTENT) != 0u;
+    send.has_target_text = (record.bits & TA_DEADLINE_HAS_TARGET_TEXT) != 0u;
+    if (send.submitted) {
+        ta_deadline_get(&packer, &send.origin, sizeof send.origin);
+    }
+    if ((envelope->flags & TA_ENVELOPE_FLAG_TRACED) != 0u &&
+        ta_name_area_trace_parent(names, envelope->text, &send.trace) == TA_OK) {
+        ta_deadline_get(&packer, &send.trace.cause.family, sizeof send.trace.cause.family);
+    }
+    return send;
 }
 
+static void ta_deadline_send_release(ta_delayed_send *send) {
+    ta_value_release(&send->target);
+    ta_value_release(&send->data);
+    /* A stored send owns its destination and origin references (ADR 0065). */
+    ta_actor_ref_release(&send->destination);
+    ta_actor_ref_release(&send->origin);
+}
+
+/* Takes envelope `index` out of the index, frees its text and gives it back. */
+static void ta_deadline_free(ta_system *system, uint32_t index) {
+    ta_heap_items items = ta_deadline_items(system);
+    (void)ta_heap_remove(&system->deadline.heap, &items, index);
+    ta_envelope *envelope = ta_deadline_at(system, index);
+    ta_name_area_free(&system->run.names, &envelope->text);
+    envelope->data = (ta_value){ 0 };
+    envelope->content = (ta_value){ 0 };
+    ta_envelope_pool_give(&system->run.pool, index);
+}
+
+/* Releases what envelope `index` holds and frees it. */
+static void ta_deadline_drop(ta_system *system, uint32_t index) {
+    ta_delayed_send send = ta_deadline_read(system, index);
+    ta_deadline_send_release(&send);
+    ta_deadline_free(system, index);
+}
+
+/* Which sends a removal from an owner list selects. */
 typedef struct {
     ta_send_id send_id;
     bool any_send_id;
     bool include_submitted;
-} ta_timer_selection;
+    /* Submitted sends that are not selected stay indexed with no owner. */
+    bool detach_rest;
+} ta_deadline_selection;
 
-static bool ta_timer_selected(const ta_delayed_send_info *send, const ta_timer_selection *selection) {
-    return (selection->any_send_id || send->send_id == selection->send_id) &&
-           (selection->include_submitted || !send->submitted);
-}
-
-/* Releases and removes the selected sends, keeping order; reindexes the list. */
-static bool ta_timer_remove_selected(ta_timer_heap *heap, ta_timer_list *list, const ta_timer_selection *selection) {
-    if (list == NULL) {
-        return false;
-    }
-    uint32_t kept = 0;
-    for (uint32_t index = 0; index < list->count; index += 1u) {
-        if (ta_timer_selected(&list->sends[index], selection)) {
-            ta_value_release(&list->sends[index].target);
-            ta_value_release(&list->sends[index].data);
-            /* A stored send owns its destination and origin references (ADR 0065). */
-            ta_actor_ref_release(&list->sends[index].destination);
-            ta_actor_ref_release(&list->meta[index].origin);
-            continue;
+/* Removes the selected sends from `owner`'s list and releases them. */
+static bool ta_deadline_remove(ta_system *system, ta_deadline_owner *owner, const ta_deadline_selection *selection) {
+    bool found = false;
+    uint32_t previous = 0u;
+    uint32_t current = owner->head;
+    while (current != 0u) {
+        ta_envelope *envelope = ta_deadline_at(system, current);
+        uint32_t next = envelope->owner_next;
+        bool submitted = (envelope->flags & TA_ENVELOPE_FLAG_SUBMITTED) != 0u;
+        bool selected = (selection->any_send_id || envelope->send_id == selection->send_id) &&
+                        (selection->include_submitted || !submitted);
+        bool leaves = selected || selection->detach_rest;
+        if (leaves) {
+            if (previous == 0u) {
+                owner->head = next;
+            } else {
+                ta_deadline_at(system, previous)->owner_next = next;
+            }
+            envelope->owner_next = 0u;
+            owner->count -= 1u;
+            if (selected) {
+                ta_deadline_drop(system, current);
+                found = true;
+            }
+        } else {
+            previous = current;
         }
-        list->sends[kept] = list->sends[index];
-        list->meta[kept] = list->meta[index];
-        kept += 1u;
-    }
-    bool found = kept != list->count;
-    list->count = kept;
-    if (found) {
-        ta_timer_reindex(heap, list);
+        current = next;
     }
     return found;
 }
 
+/* Takes envelope `index` off the list of the owner `from` names, if any. */
+static void ta_deadline_unlink(ta_system *system, uint32_t index) {
+    ta_envelope *envelope = ta_deadline_at(system, index);
+    ta_actor *actor = envelope->from != 0u ? ta_actor_lookup(system, envelope->from) : NULL;
+    if (actor == NULL) {
+        return;
+    }
+    ta_deadline_owner *owner = &actor->timers;
+    uint32_t previous = 0u;
+    uint32_t current = owner->head;
+    while (current != 0u && current != index) {
+        previous = current;
+        current = ta_deadline_at(system, current)->owner_next;
+    }
+    if (current == 0u) {
+        return;
+    }
+    if (previous == 0u) {
+        owner->head = envelope->owner_next;
+    } else {
+        ta_deadline_at(system, previous)->owner_next = envelope->owner_next;
+    }
+    envelope->owner_next = 0u;
+    owner->count -= 1u;
+}
+
 /* ------------------------------------------------------------------------
- * Public within core
+ * Sorting a session's sends by (due, order), without recursion
  */
 
-TA_PRIVATE ta_result ta_timer_heap_init(ta_timer_heap *heap, ta_allocator allocator) {
-    *heap = (ta_timer_heap){ .allocator = allocator, .next_id = 1 };
-    ta_vec_init(&heap->pages, allocator, TA_VEC_LAYOUT(ta_timer_list **));
-    return TA_OK;
+typedef struct {
+    void *base;
+    size_t size;
+    /* Whether element `left` sorts before element `right`. */
+    bool (*before)(const void *left, const void *right);
+} ta_deadline_sort;
+
+static void *ta_deadline_element(const ta_deadline_sort *sort, uint32_t index) {
+    return (uint8_t *)sort->base + (size_t)index * sort->size;
 }
 
-TA_PRIVATE void ta_timer_heap_destroy(ta_timer_heap *heap) {
-    /* Lists still indexed belong to actors that outlived the system's teardown. */
-    while (heap->count != 0) {
-        ta_timer_list *list = ta_timer_owner(heap, 0);
-        (void)ta_timer_remove_selected(heap, list,
-                                       &(ta_timer_selection){ .any_send_id = true, .include_submitted = true });
+static void ta_deadline_swap(const ta_deadline_sort *sort, uint32_t left, uint32_t right) {
+    uint8_t *a = ta_deadline_element(sort, left);
+    uint8_t *b = ta_deadline_element(sort, right);
+    for (size_t byte = 0; byte < sort->size; byte += 1u) {
+        uint8_t kept = a[byte];
+        a[byte] = b[byte];
+        b[byte] = kept;
     }
-    ta_timer_free_storage(heap->allocator, &heap->orphans);
-    ta_timer_list ***pages = heap->pages.items;
-    for (uint32_t page = 0; page < heap->pages.count; page += 1u) {
-        ta_timer_free_page(heap->allocator, pages[page]);
-    }
-    ta_vec_destroy(&heap->pages);
-    *heap = (ta_timer_heap){0};
 }
 
-TA_PRIVATE ta_result ta_timer_reserve(ta_timer_heap *heap, ta_timer_list *list, uint32_t additional) {
-    if (additional == 0) {
-        return TA_OK;
+static void ta_deadline_sift(const ta_deadline_sort *sort, uint32_t root, uint32_t count) {
+    for (;;) {
+        uint32_t largest = root;
+        uint32_t left = 2u * root + 1u;
+        uint32_t right = left + 1u;
+        if (left < count && sort->before(ta_deadline_element(sort, largest), ta_deadline_element(sort, left))) {
+            largest = left;
+        }
+        if (right < count && sort->before(ta_deadline_element(sort, largest), ta_deadline_element(sort, right))) {
+            largest = right;
+        }
+        if (largest == root) {
+            return;
+        }
+        ta_deadline_swap(sort, root, largest);
+        root = largest;
     }
-    ta_result result = ta_timer_reserve_heap(heap, list->indexed ? 0u : 1u);
-    return result == TA_OK ? ta_timer_reserve_list(heap->allocator, list, additional) : result;
 }
 
-TA_PRIVATE ta_result ta_timer_schedule(ta_timer_heap *heap, ta_timer_list *list, const ta_delayed_send *send) {
-    ta_result result = ta_timer_reserve(heap, list, 1u);
+/* Heapsort: O(k log k), in place. */
+static void ta_deadline_sort_run(const ta_deadline_sort *sort, uint32_t count) {
+    for (uint32_t root = count / 2u; root > 0u; root -= 1u) {
+        ta_deadline_sift(sort, root - 1u, count);
+    }
+    for (uint32_t end = count; end > 1u; end -= 1u) {
+        ta_deadline_swap(sort, 0u, end - 1u);
+        ta_deadline_sift(sort, 0u, end - 1u);
+    }
+}
+
+static bool ta_deadline_send_before(const void *left, const void *right) {
+    const ta_delayed_send *a = left;
+    const ta_delayed_send *b = right;
+    return a->due < b->due || (a->due == b->due && a->id < b->id);
+}
+
+/* An envelope index with its key, for sorting a session's views. */
+typedef struct {
+    ta_time due;
+    uint64_t order;
+    uint32_t index;
+} ta_deadline_key;
+
+static bool ta_deadline_key_before(const void *left, const void *right) {
+    const ta_deadline_key *a = left;
+    const ta_deadline_key *b = right;
+    return a->due < b->due || (a->due == b->due && a->order < b->order);
+}
+
+/* ------------------------------------------------------------------------
+ * Within core
+ */
+
+TA_PRIVATE ta_result ta_deadline_init(ta_deadline *deadline, ta_allocator allocator) {
+    ta_deadline fresh = { .next_order = 1u };
+    ta_result result =
+        ta_heap_init(&fresh.heap, &(ta_heap_params){ .allocator = allocator, .page_shift = TA_DEADLINE_PAGE_SHIFT });
     if (result != TA_OK) {
         return result;
     }
-    ta_delayed_send record = *send;
-    if (record.id == 0) {
-        record.id = heap->next_id;
-        heap->next_id += 1u;
+    ta_vec_init(&fresh.views, allocator, TA_VEC_LAYOUT(ta_delayed_send_info));
+    result = ta_vec_reserve(&fresh.views, 2u * TA_DEADLINE_VIEWS_MIN);
+    if (result != TA_OK) {
+        ta_heap_destroy(&fresh.heap);
+        return result;
     }
-    ta_timer_insert(list, &record);
-    ta_timer_reindex(heap, list);
+    *deadline = fresh;
     return TA_OK;
 }
 
-TA_PRIVATE ta_result ta_timer_cancel(ta_timer_heap *heap, ta_timer_list *list, ta_send_id send_id) {
-    return ta_timer_remove_selected(heap, list, &(ta_timer_selection){ .send_id = send_id }) ? TA_OK
+TA_PRIVATE void ta_deadline_destroy(ta_system *system) {
+    ta_heap_items items = ta_deadline_items(system);
+    for (uint32_t index = ta_heap_pop(&system->deadline.heap, &items); index != 0u;
+         index = ta_heap_pop(&system->deadline.heap, &items)) {
+        ta_envelope *envelope = ta_deadline_at(system, index);
+        ta_delayed_send send = ta_deadline_read(system, index);
+        ta_deadline_send_release(&send);
+        ta_name_area_free(&system->run.names, &envelope->text);
+        envelope->data = (ta_value){ 0 };
+        envelope->content = (ta_value){ 0 };
+        ta_envelope_pool_give(&system->run.pool, index);
+    }
+    ta_heap_destroy(&system->deadline.heap);
+    ta_vec_destroy(&system->deadline.views);
+}
+
+TA_PRIVATE ta_result ta_deadline_grow(ta_system *system) {
+    const ta_index_pool *items = &system->run.pool.items;
+    ta_deadline *deadline = &system->deadline;
+    /* Room to read the longest owner list seen, keys and infos together;
+     * a refusal here only leaves inspection to grow it. */
+    uint64_t views = (uint64_t)deadline->most_per_owner * 2u;
+    if (views > deadline->views.capacity && views <= UINT32_MAX) {
+        (void)ta_vec_reserve(&deadline->views, (uint32_t)views);
+    }
+    return ta_heap_grow(&deadline->heap, items->used + items->free);
+}
+
+TA_PRIVATE ta_result ta_deadline_reserve(ta_system *system, uint32_t count) {
+    ta_envelope_pool *pool = &system->run.pool;
+    if (ta_quota_available(&pool->quota) < count) {
+        return TA_ERR_FULL;
+    }
+    ta_result result = ta_index_pool_refill(&pool->items, count);
+    if (result == TA_OK) {
+        result = ta_deadline_grow(system);
+    }
+    return result == TA_ERR_FULL ? TA_ERR_NOMEM : result;
+}
+
+TA_PRIVATE ta_result ta_deadline_schedule(ta_system *system,
+                               ta_deadline_owner *owner,
+                               const ta_delayed_send *send,
+                               ta_record_capacity_resource *short_of) {
+    ta_deadline *deadline = &system->deadline;
+    if ((uint64_t)ta_heap_length(&deadline->heap) >= ta_heap_capacity(&deadline->heap)) {
+        if (short_of != NULL) {
+            *short_of = TA_RECORD_CAPACITY_RESOURCE_POOL;
+        }
+        return TA_ERR_FULL;
+    }
+    uint32_t index = 0u;
+    if (ta_envelope_pool_take(&system->run.pool, &index) != TA_OK) {
+        if (short_of != NULL) {
+            *short_of = TA_RECORD_CAPACITY_RESOURCE_POOL;
+        }
+        return TA_ERR_FULL;
+    }
+    ta_delayed_send stored = *send;
+    if (stored.id == 0u) {
+        stored.id = deadline->next_order;
+    }
+    uint8_t bytes[TA_DEADLINE_RECORD_BYTES];
+    uint32_t length = ta_deadline_pack(&stored, bytes);
+    bool traced = ta_deadline_traced(&stored);
+    ta_chunk_writer writer = ta_chunk_writer_new();
+    ta_result result = ta_name_area_write(&system->run.names, &(ta_name_area_write_params){
+                                                                  .writer = &writer,
+                                                                  .text = { .ptr = bytes, .len = length },
+                                                              });
+    if (result == TA_OK && traced) {
+        result = ta_name_area_write_trace_parent(&system->run.names, &(ta_name_area_trace_params){
+                                                                         .writer = &writer,
+                                                                         .parent = &stored.trace,
+                                                                     });
+        if (result != TA_OK) {
+            ta_name_area_free(&system->run.names, &writer.chain);
+        }
+    }
+    if (result != TA_OK) {
+        ta_envelope_pool_give(&system->run.pool, index);
+        if (short_of != NULL) {
+            *short_of = TA_RECORD_CAPACITY_RESOURCE_NAMES;
+        }
+        return TA_ERR_FULL;
+    }
+    ta_envelope *envelope = ta_deadline_at(system, index);
+    envelope->state = TA_ENVELOPE_TIMER;
+    envelope->due = stored.due;
+    envelope->source_seq = stored.id;
+    envelope->send_id = stored.send_id;
+    envelope->flags = (uint8_t)((stored.submitted ? TA_ENVELOPE_FLAG_SUBMITTED : 0u) |
+                                (traced ? TA_ENVELOPE_FLAG_TRACED : 0u));
+    envelope->from = stored.owner;
+    envelope->text = writer.chain;
+    envelope->data = stored.data;
+    envelope->content = stored.target;
+    ta_heap_items items = ta_deadline_items(system);
+    (void)ta_heap_insert(&deadline->heap, &items, index);
+    if (owner != NULL) {
+        envelope->owner_next = owner->head;
+        owner->head = index;
+        owner->count += 1u;
+        if (owner->count > deadline->most_per_owner) {
+            deadline->most_per_owner = owner->count;
+        }
+    }
+    if (stored.id >= deadline->next_order) {
+        deadline->next_order = stored.id + 1u;
+    }
+    return TA_OK;
+}
+
+TA_PRIVATE uint32_t ta_deadline_count(const ta_system *system, const ta_deadline_owner *owner) {
+    (void)system;
+    return owner->count;
+}
+
+TA_PRIVATE ta_result ta_deadline_cancel(ta_system *system, ta_deadline_owner *owner, ta_send_id send_id) {
+    return ta_deadline_remove(system, owner, &(ta_deadline_selection){ .send_id = send_id }) ? TA_OK
                                                                                             : TA_ERR_NOT_FOUND;
 }
 
-TA_PRIVATE ta_result ta_timer_withdraw(ta_timer_heap *heap, ta_timer_list *list, ta_send_id send_id) {
-    return ta_timer_remove_selected(heap, list,
-                                    &(ta_timer_selection){ .send_id = send_id, .include_submitted = true })
+TA_PRIVATE ta_result ta_deadline_withdraw(ta_system *system, ta_deadline_owner *owner, ta_send_id send_id) {
+    return ta_deadline_remove(system, owner, &(ta_deadline_selection){ .send_id = send_id, .include_submitted = true })
                ? TA_OK
                : TA_ERR_NOT_FOUND;
 }
 
-TA_PRIVATE void ta_timer_cancel_unsubmitted(ta_timer_heap *heap, ta_timer_list *list) {
-    (void)ta_timer_remove_selected(heap, list, &(ta_timer_selection){ .any_send_id = true });
-}
-
-static uint32_t ta_timer_submitted_count(const ta_timer_list *list) {
-    uint32_t count = 0;
-    for (uint32_t index = 0; index < list->count; index += 1u) {
-        count += list->sends[index].submitted ? 1u : 0u;
-    }
-    return count;
-}
-
-TA_PRIVATE ta_result ta_timer_reserve_orphans(ta_timer_heap *heap, const ta_timer_list *list) {
-    if (list == NULL || heap->closing) {
-        return TA_OK;
-    }
-    return ta_timer_reserve(heap, &heap->orphans, ta_timer_submitted_count(list));
-}
-
-TA_PRIVATE void ta_timer_orphan(ta_timer_heap *heap, ta_timer_list *list) {
-    if (list == NULL) {
-        return;
-    }
-    ta_timer_cancel_unsubmitted(heap, list);
-    if (heap->closing) {
-        (void)ta_timer_remove_selected(heap, list,
-                                       &(ta_timer_selection){ .any_send_id = true, .include_submitted = true });
-        return;
-    }
-    if (list->count == 0) {
-        return;
-    }
-    /* Merge the two sorted lists from the back into the reserved room. */
-    ta_timer_list *orphans = &heap->orphans;
-    uint32_t left = orphans->count;
-    uint32_t right = list->count;
-    uint32_t out = left + right;
-    while (right > 0) {
-        out -= 1u;
-        if (left > 0 && ta_timer_key_before(ta_timer_key_at(list, right - 1u), ta_timer_key_at(orphans, left - 1u))) {
-            left -= 1u;
-            orphans->sends[out] = orphans->sends[left];
-            orphans->meta[out] = orphans->meta[left];
-        } else {
-            right -= 1u;
-            orphans->sends[out] = list->sends[right];
-            orphans->meta[out] = list->meta[right];
+TA_PRIVATE bool ta_deadline_has_submitted(const ta_system *system, const ta_deadline_owner *owner, ta_send_id send_id) {
+    for (uint32_t index = owner->head; index != 0u; index = ta_deadline_at(system, index)->owner_next) {
+        const ta_envelope *envelope = ta_deadline_at(system, index);
+        if (envelope->send_id == send_id && (envelope->flags & TA_ENVELOPE_FLAG_SUBMITTED) != 0u) {
+            return true;
         }
     }
-    orphans->count += list->count;
-    list->count = 0;
-    ta_timer_unindex(heap, list);
-    ta_timer_reindex(heap, orphans);
+    return false;
 }
 
-TA_PRIVATE void ta_timer_list_destroy(ta_timer_heap *heap, ta_timer_list *list) {
-    (void)ta_timer_remove_selected(heap, list,
-                                   &(ta_timer_selection){ .any_send_id = true, .include_submitted = true });
-    ta_timer_unindex(heap, list);
-    ta_timer_free_storage(heap->allocator, list);
+TA_PRIVATE void ta_deadline_cancel_unsubmitted(ta_system *system, ta_deadline_owner *owner) {
+    (void)ta_deadline_remove(system, owner, &(ta_deadline_selection){ .any_send_id = true });
 }
 
-TA_PRIVATE size_t ta_timer_list_bytes(const ta_timer_list *list) {
-    return list == NULL ? 0u
-                        : (size_t)list->capacity * (sizeof(ta_delayed_send_info) + sizeof(ta_delayed_send_meta));
+TA_PRIVATE void ta_deadline_orphan(ta_system *system, ta_deadline_owner *owner) {
+    (void)ta_deadline_remove(system, owner, &(ta_deadline_selection){ .any_send_id = true, .detach_rest = true });
 }
 
-TA_PRIVATE uint32_t ta_timer_copy_unsubmitted(const ta_timer_list *list, ta_delayed_send *out) {
-    if (list == NULL) {
-        return 0;
-    }
-    uint32_t count = 0;
-    for (uint32_t index = 0; index < list->count; index += 1u) {
-        if (list->sends[index].submitted) {
+TA_PRIVATE void ta_deadline_owner_release(ta_system *system, ta_deadline_owner *owner) {
+    (void)ta_deadline_remove(system, owner, &(ta_deadline_selection){ .any_send_id = true, .include_submitted = true });
+}
+
+TA_PRIVATE uint32_t ta_deadline_copy(const ta_system *system, const ta_deadline_owner *owner, ta_delayed_send *out) {
+    uint32_t count = 0u;
+    for (uint32_t index = owner->head; index != 0u; index = ta_deadline_at(system, index)->owner_next) {
+        if ((ta_deadline_at(system, index)->flags & TA_ENVELOPE_FLAG_SUBMITTED) != 0u) {
             continue;
         }
         if (out != NULL) {
-            out[count] = ta_timer_join(list, index);
+            out[count] = ta_deadline_read(system, index);
         }
         count += 1u;
+    }
+    if (out != NULL) {
+        ta_deadline_sort_run(
+            &(ta_deadline_sort){ .base = out, .size = sizeof *out, .before = ta_deadline_send_before }, count);
     }
     return count;
 }
 
-TA_PRIVATE bool ta_timer_next_due(const ta_timer_heap *heap, ta_time *out) {
-    if (heap->count == 0) {
+TA_PRIVATE ta_result ta_deadline_views(ta_system *system,
+                            const ta_deadline_owner *owner,
+                            const ta_delayed_send_info **out,
+                            uint32_t *count) {
+    uint32_t total = ta_deadline_count(system, owner);
+    *out = NULL;
+    *count = 0u;
+    if (total == 0u) {
+        return TA_OK;
+    }
+    /* The keys sort in the first `total` elements, each smaller than an
+     * info; the infos go in the next `total`, so no key is overwritten
+     * before it is read. */
+    _Static_assert(sizeof(ta_deadline_key) <= sizeof(ta_delayed_send_info), "a key fits where an info goes");
+    ta_vec *views = &system->deadline.views;
+    if (total > UINT32_MAX / 2u) {
+        return TA_ERR_NOMEM;
+    }
+    if (views->capacity < total * 2u) {
+        ta_result result = ta_vec_reserve(views, total * 2u);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    ta_deadline_key *keys = views->items;
+    uint32_t at = 0u;
+    for (uint32_t index = owner->head; index != 0u; index = ta_deadline_at(system, index)->owner_next) {
+        const ta_envelope *envelope = ta_deadline_at(system, index);
+        keys[at] = (ta_deadline_key){ .due = envelope->due, .order = envelope->source_seq, .index = index };
+        at += 1u;
+    }
+    ta_deadline_sort_run(&(ta_deadline_sort){ .base = keys, .size = sizeof *keys, .before = ta_deadline_key_before },
+                         total);
+    ta_delayed_send_info *infos = (ta_delayed_send_info *)views->items + total;
+    for (uint32_t index = 0u; index < total; index += 1u) {
+        ta_delayed_send send = ta_deadline_read(system, keys[index].index);
+        infos[index] = (ta_delayed_send_info){
+            .send_id = send.send_id,
+            .due = send.due,
+            .event = send.event,
+            .io_type = send.io_type,
+            .destination = send.destination,
+            .target = send.target,
+            .data = send.data,
+            .submitted = send.submitted,
+            .has_target_text = send.has_target_text,
+            .target_text = send.target_text,
+            .has_content = send.has_content,
+            .content = send.content,
+            .trace = send.trace,
+        };
+    }
+    *out = infos;
+    *count = total;
+    return TA_OK;
+}
+
+/* A token's room in the name area: one field as long as a timer's record
+ * and its trace field together, so the chunks it frees hold either. */
+#define TA_DEADLINE_TOKEN_TEXT_BYTES (TA_DEADLINE_RECORD_BYTES + TA_NAME_AREA_TRACE_FIELD_BYTES)
+
+TA_PRIVATE ta_result ta_deadline_token_take(ta_system *system, uint32_t *out, ta_record_capacity_resource *short_of) {
+    uint32_t index = 0u;
+    if (ta_envelope_pool_take(&system->run.pool, &index) != TA_OK) {
+        if (short_of != NULL) {
+            *short_of = TA_RECORD_CAPACITY_RESOURCE_POOL;
+        }
+        return TA_ERR_FULL;
+    }
+    uint8_t room[TA_DEADLINE_TOKEN_TEXT_BYTES] = { 0 };
+    ta_chunk_writer writer = ta_chunk_writer_new();
+    if (ta_name_area_write(&system->run.names, &(ta_name_area_write_params){
+                                                    .writer = &writer,
+                                                    .text = { .ptr = room, .len = sizeof room },
+                                                }) != TA_OK) {
+        ta_envelope_pool_give(&system->run.pool, index);
+        if (short_of != NULL) {
+            *short_of = TA_RECORD_CAPACITY_RESOURCE_NAMES;
+        }
+        return TA_ERR_FULL;
+    }
+    ta_envelope *envelope = ta_deadline_at(system, index);
+    envelope->state = TA_ENVELOPE_INVOCATION_TOKEN;
+    envelope->text = writer.chain;
+    *out = index;
+    return TA_OK;
+}
+
+TA_PRIVATE void ta_deadline_token_release(ta_system *system, uint32_t token) {
+    if (token == 0u) {
+        return;
+    }
+    ta_envelope *envelope = ta_deadline_at(system, token);
+    ta_name_area_free(&system->run.names, &envelope->text);
+    ta_envelope_pool_give(&system->run.pool, token);
+}
+
+TA_PRIVATE bool ta_deadline_next_due(const ta_system *system, ta_time *out) {
+    uint32_t head = ta_heap_head(&system->deadline.heap);
+    if (head == 0u) {
         return false;
     }
-    *out = ta_timer_owner(heap, 0)->sends[0].due;
+    *out = ta_deadline_at(system, head)->due;
     return true;
 }
 
-TA_PRIVATE ta_result ta_timer_pop(ta_timer_heap *heap, ta_delayed_send *out) {
-    if (heap->count == 0) {
+TA_PRIVATE ta_result ta_deadline_pop(ta_system *system, ta_delayed_send *out) {
+    uint32_t head = ta_heap_head(&system->deadline.heap);
+    if (head == 0u) {
         return TA_ERR_NOT_FOUND;
     }
-    ta_timer_list *list = ta_timer_owner(heap, 0);
-    *out = ta_timer_join(list, 0);
-    for (uint32_t index = 1; index < list->count; index += 1u) {
-        list->sends[index - 1u] = list->sends[index];
-        list->meta[index - 1u] = list->meta[index];
-    }
-    list->count -= 1u;
-    ta_timer_reindex(heap, list);
+    *out = ta_deadline_read(system, head);
+    ta_deadline_unlink(system, head);
+    ta_deadline_free(system, head);
     return TA_OK;
 }
 
@@ -22421,8 +22713,13 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
         ta_invoke_remove_at(sparse, (uint32_t)found);
     }
     /* An invoker that ran out of memory started nothing: the invocation
-     * starts again when the host resumes the actor (ADR 0070). */
-    return status == TA_OP_NOMEM ? TA_ERR_NOMEM : ta_interpreter_execution_error(it, &values->fault);
+     * starts again when the host resumes the actor (ADR 0070). A local
+     * child that found no envelope for its token fails as a capacity error. */
+    if (status == TA_OP_NOMEM) {
+        return TA_ERR_NOMEM;
+    }
+    return values->fault.code == TA_ERR_FULL ? ta_interpreter_capacity_error(it, TA_RECORD_CAPACITY_RESOURCE_POOL)
+                                             : ta_interpreter_execution_error(it, &values->fault);
 }
 
 /*
@@ -22587,7 +22884,7 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     if (posted == TA_OK) {
         return TA_OK;
     }
-    /* A stored send names its event by ID (timer.h). */
+    /* A stored send names its event by ID (deadline.h). */
     ta_event named = delivery->event;
     ta_result interned = delivery->name_text.len != 0u
                              ? ta_trie_intern_dotted(&system->event_names, delivery->name_text, &named.name)
@@ -22613,7 +22910,7 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     /* The stored send owns its destination and origin references (ADR 0065). */
     ta_actor_ref_retain(&record.destination);
     ta_actor_ref_retain(&record.origin);
-    ta_result result = ta_actor_schedule_send(system, delivery->sender, &record);
+    ta_result result = ta_deadline_schedule(system, ta_actor_timers(delivery->sender), &record, NULL);
     if (result != TA_OK) {
         ta_value_release(&record.data);
         ta_actor_ref_release(&record.destination);
@@ -22772,6 +23069,10 @@ TA_PRIVATE ta_result ta_invoke_autoforward(ta_interpreter *it, const ta_event *e
  * again after a refusal. */
 static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_parent trace) {
     ta_actor_sparse_state *sparse = actor->sparse;
+    /* Its token goes back first: the completion's mail, or the timer that
+     * keeps it while the parent's pool is full, takes that room (ADR 0101). */
+    ta_deadline_token_release(system, sparse->token);
+    sparse->token = 0u;
     ta_str name = { 0 };
     ta_result result = ta_invoke_name_text(system, (ta_invoke_name){ .system = system,
                                                                       .invoke = sparse->parent.invoke_id },
@@ -23108,10 +23409,10 @@ TA_API ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id id) 
     }
     ta_actor *parent = ta_actor_lookup(system, sparse->parent.actor);
     if (parent == NULL || ta_invoke_find(parent, sparse->parent.invoke_id) < 0) {
-        (void)ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION);
+        (void)ta_deadline_withdraw(system, ta_actor_timers(actor), TA_SEND_ID_COMPLETION);
         return TA_ERR_NOT_FOUND;
     }
-    if (ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION) != TA_OK) {
+    if (ta_deadline_withdraw(system, ta_actor_timers(actor), TA_SEND_ID_COMPLETION) != TA_OK) {
         return TA_OK; /* already delivered */
     }
     return ta_invoke_publish(system, actor, (ta_trace_parent){0});
@@ -27599,38 +27900,8 @@ TA_API ta_actor_id ta_actor_id_make(uint32_t slot, uint32_t generation) {
     return ta_handle_make(slot, generation);
 }
 
-TA_PRIVATE ta_timer_list *ta_actor_timers(const ta_actor *actor) {
-    return actor->sparse == NULL ? NULL : &actor->sparse->timers;
-}
-
-TA_PRIVATE ta_result ta_actor_schedule_send(ta_system *system, ta_actor *actor, const ta_delayed_send *send) {
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    return ta_timer_schedule(&system->timers, &sparse->timers, send);
-}
-
-TA_PRIVATE ta_result ta_actor_reserve_send(ta_system *system, ta_actor *actor) {
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    return ta_timer_reserve(&system->timers, &sparse->timers, 1u);
-}
-
-TA_PRIVATE ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out) {
-    ta_actor *actor = ta_actor_lookup(system, owner);
-    if (actor == NULL) {
-        *out = &system->timers.orphans;
-        return TA_OK;
-    }
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    *out = &sparse->timers;
-    return TA_OK;
+TA_PRIVATE ta_deadline_owner *ta_actor_timers(const ta_actor *actor) {
+    return (ta_deadline_owner *)&actor->timers;
 }
 
 static void ta_activation_effect_release(ta_activation_effect *effect) {
@@ -28069,11 +28340,7 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
             return TA_ERR_INVALID;
         }
     }
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    ta_result result = ta_timer_reserve(&system->timers, &sparse->timers, count);
+    ta_result result = ta_deadline_reserve(system, count);
     for (uint32_t index = 0; result == TA_OK && index < count; index += 1) {
         const ta_delayed_send_info *info = &params->pending_sends[index];
         ta_delayed_send send = {
@@ -28103,7 +28370,7 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
         ta_actor_ref_retain(&send.destination);
         ta_value_retain(&send.target);
         ta_value_retain(&send.data);
-        result = ta_timer_schedule(&system->timers, &sparse->timers, &send);
+        result = ta_deadline_schedule(system, ta_actor_timers(actor), &send, NULL);
         if (result != TA_OK) {
             ta_actor_ref_release(&send.destination);
             ta_value_release(&send.target);
@@ -28183,6 +28450,14 @@ static ta_result ta_actor_spawn_new(ta_system *system, const ta_actor_spawn_para
             return TA_ERR_NOMEM;
         }
         *actor->sparse = (ta_actor_sparse_state){ .parent = *params->parent, .has_parent = true };
+        /* The envelope its completion will use, so a full pool never drops
+         * it (ADR 0101). Inside the parent's macrostep it is a free one. */
+        result = ta_deadline_token_take(system, &actor->sparse->token, NULL);
+        if (result != TA_OK) {
+            ta_actor_release_slot(system, id);
+            ta_actor_free(system, actor);
+            return result;
+        }
     }
 
     result = definition->datamodel.v->init_instance(
@@ -28433,6 +28708,12 @@ TA_API ta_result ta_actor_export_state(ta_system *system, const ta_actor_export_
     }
     const ta_definition *definition = actor->definition;
     const ta_actor_sparse_state *sparse = actor->sparse;
+    const ta_delayed_send_info *sends = NULL;
+    uint32_t send_count = 0;
+    ta_result viewed = ta_deadline_views(system, ta_actor_timers(actor), &sends, &send_count);
+    if (viewed != TA_OK) {
+        return viewed;
+    }
     uint32_t active = 0;
     uint32_t late = 0;
     uint32_t history = 0;
@@ -28504,8 +28785,8 @@ TA_API ta_result ta_actor_export_state(ta_system *system, const ta_actor_export_
         .late_count = late,
         .history = history != 0 ? params->history : NULL,
         .history_count = history,
-        .sends = sparse != NULL && sparse->timers.count != 0 ? sparse->timers.sends : NULL,
-        .send_count = sparse != NULL ? sparse->timers.count : 0,
+        .sends = sends,
+        .send_count = send_count,
         .invokes = invokes != 0 ? params->invokes : NULL,
         .invoke_count = invokes,
         .root = root,
@@ -28667,7 +28948,7 @@ static void ta_actor_release_activation_effects(ta_system *system, ta_actor *act
             /* Dispatch marked it submitted and took its origin and invoke ID. */
         }
         /* Reserved by ta_actor_publish(), so this cannot fail. */
-        (void)ta_timer_schedule(&system->timers, &sparse->timers, send);
+        (void)ta_deadline_schedule(system, ta_actor_timers(actor), send, NULL);
     }
     ta_actor_free_activation(sparse);
 }
@@ -28740,7 +29021,7 @@ TA_API ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_para
      * room for the held sends, the retired invocations' events, and a wake
      * for the macrostep they or the invocations to start may leave (run.h). */
     uint32_t sends = ta_actor_activation_send_count(actor, at);
-    ta_result result = sends == 0 ? TA_OK : ta_timer_reserve(&system->timers, &actor->sparse->timers, sends);
+    ta_result result = sends == 0 ? TA_OK : ta_deadline_reserve(system, sends);
     if (result == TA_OK && replaying) {
         result = ta_invoke_prepare_retire(system, actor);
     }
@@ -29001,23 +29282,19 @@ TA_API ta_result ta_actor_withdraw_send(ta_system *system, ta_actor_id id, ta_se
         return TA_ERR_INVALID;
     }
     ta_actor *actor = ta_actor_lookup(system, id);
-    if (actor == NULL || ta_actor_timers(actor) == NULL) {
+    if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
     return ta_actor_withdraw(system, actor, send);
 }
 
 static ta_result ta_actor_withdraw(ta_system *system, ta_actor *actor, ta_send_id send) {
-    ta_timer_list *list = ta_actor_timers(actor);
+    ta_deadline_owner *owner = ta_actor_timers(actor);
     /* A replaying actor's delayed sends are held, not pending (ADR 0089). */
     bool held = ta_actor_replaying(actor) && ta_actor_cancel_held_send(actor, send);
-    if (ta_timer_cancel(&system->timers, list, send) != TA_OK && !held) {
-        for (uint32_t index = 0; index < list->count; index += 1u) {
-            if (list->sends[index].send_id == send) {
-                return TA_ERR_DONE; /* only submitted ones are left */
-            }
-        }
-        return TA_ERR_NOT_FOUND;
+    if (ta_deadline_cancel(system, owner, send) != TA_OK && !held) {
+        /* Only submitted ones are left: they have left the actor. */
+        return ta_deadline_has_submitted(system, owner, send) ? TA_ERR_DONE : TA_ERR_NOT_FOUND;
     }
     ta_actor_touch(actor);
     TA_COUNT(system, actor->definition, sends_cancelled);
@@ -29061,11 +29338,7 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
         }
     }
     /* Sends already submitted stay queued for their receivers (ADR 0054). */
-    ta_result result = ta_timer_reserve_orphans(&system->timers, ta_actor_timers(actor));
-    if (result != TA_OK) {
-        return result;
-    }
-    ta_timer_orphan(&system->timers, ta_actor_timers(actor));
+    ta_deadline_orphan(system, ta_actor_timers(actor));
     ta_trace_lifecycle(system, actor, TA_TRACE_DESTROYED, NULL);
     ta_actor_release_address(system, actor);
     ta_actor_release_slot(system, id);
@@ -29129,7 +29402,6 @@ static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
             total += sizeof(ta_activation_effects);
             total += ta_vec_bytes(&sparse->activation_effects->entries);
         }
-        total += ta_timer_list_bytes(&sparse->timers);
         if (sparse->paused != NULL) {
             total += sparse->paused->bytes;
         }
@@ -29150,8 +29422,16 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
     for (ta_state_id state = 0; state < definition->state_count; state += 1) {
         active += ta_actor_state_active(actor, state) ? 1u : 0u;
     }
+    const ta_delayed_send_info *sends = NULL;
+    uint32_t send_count = 0;
+    ta_result viewed = ta_deadline_views(system, ta_actor_timers(actor), &sends, &send_count);
+    if (viewed != TA_OK) {
+        return viewed;
+    }
     *out = (ta_actor_inspection){
         .actor = id,
+        .delayed_sends = sends,
+        .delayed_send_count = send_count,
         .session_id = actor->session_id,
         .self = actor->record.self,
         .definition_id = definition->id,
@@ -29179,8 +29459,6 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
     if (actor->sparse != NULL) {
         out->invokes = actor->sparse->invokes;
         out->invoke_count = actor->sparse->invoke_count;
-        out->delayed_sends = actor->sparse->timers.count == 0 ? NULL : actor->sparse->timers.sends;
-        out->delayed_send_count = actor->sparse->timers.count;
         out->has_completion = actor->finished;
         out->completion = actor->finished ? &actor->sparse->completion : NULL;
         out->final_state = actor->finished ? actor->sparse->final_state : TA_STATE_NONE;
@@ -29586,7 +29864,7 @@ static ta_result ta_image_copy_name(const ta_system *system, ta_arena *arena, ta
 }
 
 /* What the arena has to hold, so one block usually serves the whole image. */
-static size_t ta_image_measure(const ta_actor *actor) {
+static size_t ta_image_measure(const ta_system *system, const ta_actor *actor) {
     const ta_actor_sparse_state *sparse = actor->sparse;
     size_t total = actor->session_bytes + 64u;
     total += (size_t)actor->definition->identity.family.name.len + 1u;
@@ -29609,7 +29887,7 @@ static size_t ta_image_measure(const ta_actor *actor) {
         total += (size_t)sparse->invoke_count * sizeof(ta_active_invoke);
         total += (size_t)sparse->pending_invokes.count * sizeof(ta_state_id);
     }
-    total += (size_t)ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL) * sizeof(ta_delayed_send);
+    total += (size_t)ta_deadline_copy(system, ta_actor_timers(actor), NULL) * sizeof(ta_delayed_send);
     if (sparse != NULL && sparse->paused != NULL) {
         total += sparse->paused->bytes + TA_CONTINUATION_ALIGN;
     }
@@ -29722,14 +30000,14 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         ta_mem_copy(image->paused, sparse->paused, sparse->paused->bytes);
     }
 
-    uint32_t sends = ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL);
+    uint32_t sends = ta_deadline_copy(system, ta_actor_timers(actor), NULL);
     if (sends != 0) {
         image->delayed_sends = ta_arena_alloc(arena, (size_t)sends * sizeof(ta_delayed_send),
                                               _Alignof(ta_delayed_send));
         if (image->delayed_sends == NULL) {
             return TA_ERR_NOMEM;
         }
-        (void)ta_timer_copy_unsubmitted(ta_actor_timers(actor), image->delayed_sends);
+        (void)ta_deadline_copy(system, ta_actor_timers(actor), image->delayed_sends);
         image->delayed_send_count = sends;
         for (uint32_t index = 0; index < sends; index += 1) {
             ta_delayed_send *send = &image->delayed_sends[index];
@@ -29829,7 +30107,7 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
         .completion = sparse != NULL ? sparse->completion : (ta_actor_completion){0},
         .final_state = sparse != NULL && actor->finished ? sparse->final_state : TA_STATE_NONE,
     };
-    ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
+    ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(system, actor));
     if (result == TA_OK) {
         result = ta_image_fill(image, actor);
     }
@@ -29972,6 +30250,11 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
             return result;
         }
     }
+    /* The image's sends take envelopes from the pool, outside any macrostep. */
+    ta_result reserved = ta_deadline_reserve(system, image->delayed_send_count);
+    if (reserved != TA_OK) {
+        return reserved;
+    }
     for (uint32_t index = 0; index < image->delayed_send_count; index += 1) {
         ta_delayed_send send = image->delayed_sends[index];
         /* A fresh timer ID; the SCXML send ID that <cancel> names is kept. */
@@ -29988,7 +30271,7 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
             result = ta_actor_ref_localize(system, &send.origin);
         }
         if (result == TA_OK) {
-            result = ta_actor_schedule_send(system, actor, &send);
+            result = ta_deadline_schedule(system, ta_actor_timers(actor), &send, NULL);
         }
         if (result != TA_OK) {
             ta_value_release(&send.target);
@@ -30140,6 +30423,11 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         } else {
             sparse->has_parent = image->has_parent;
             sparse->parent = image->parent;
+            /* A child whose completion is still to come holds its token
+             * again (deadline.h); the image does not carry it. */
+            if (image->has_parent && (!image->finished || image->completion_pending)) {
+                result = ta_deadline_token_take(system, &sparse->token, NULL);
+            }
             sparse->completion_pending = image->completion_pending;
             sparse->completion = image->completion;
             ta_value_retain(&sparse->completion.data);
@@ -30288,14 +30576,9 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
     if (ta_run_has_mail(system, actor) || ta_run_has_unsent_mail(system, actor)) {
         return TA_ERR_BUSY;
     }
-    /* Room for the submitted sends to outlive the session, before anything changes. */
-    ta_result result = ta_timer_reserve_orphans(&system->timers, ta_actor_timers(actor));
-    if (result != TA_OK) {
-        return result;
-    }
-    /* And the entry that keeps the session findable while it is out (ADR 0066). */
+    /* The entry that keeps the session findable while it is out (ADR 0066). */
     ta_session_node *parked = NULL;
-    result = ta_session_node_new(&system->sessions, &parked);
+    ta_result result = ta_session_node_new(&system->sessions, &parked);
     if (result != TA_OK) {
         return result;
     }
@@ -30326,7 +30609,7 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
     parked->id = actor->session_id;
     parked->address = address;
     ta_address_retain(address);
-    ta_timer_orphan(&system->timers, ta_actor_timers(actor));
+    ta_deadline_orphan(system, ta_actor_timers(actor));
     ta_trace_lifecycle(system, actor, TA_TRACE_UNLOADED, NULL);
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);
@@ -31384,7 +31667,7 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     }
     result = ta_system_event_names_init(system, config->allocator, params[TA_PARAM_EVENT_NAME_DEPTH]);
     if (result == TA_OK) {
-        result = ta_timer_heap_init(&system->timers, config->allocator);
+        result = ta_deadline_init(&system->deadline, config->allocator);
     }
     if (result == TA_OK) {
         result = ta_system_arena_open(system);
@@ -31416,8 +31699,6 @@ TA_API void ta_system_destroy(ta_system *system) {
     }
     /* No record is built, nor the clock called, for a ring about to be freed. */
     system->trace.masks = (ta_trace_masks){ 0 };
-    /* Teardown releases submitted sends instead of keeping them as orphans. */
-    system->timers.closing = true;
     for (uint32_t slot = 0; slot < ta_actor_table_issued(&system->actors); slot += 1) {
         ta_actor_slot *entry = ta_actor_slot_at(system, slot);
         if (entry->actor != NULL) {
@@ -31425,7 +31706,9 @@ TA_API void ta_system_destroy(ta_system *system) {
         }
     }
     /* After the actors, which gave their inputs back: what still waits
-     * holds origins, values and addresses, which go before their tables. */
+     * holds origins, values and addresses, which go before their tables.
+     * Submitted sends whose owners are gone are released first. */
+    ta_deadline_destroy(system);
     ta_run_destroy(system);
     while (system->unregistered_definitions != NULL) {
         ta_definition_destroy(system->unregistered_definitions);
@@ -31441,7 +31724,6 @@ TA_API void ta_system_destroy(ta_system *system) {
         }
     }
     ta_vec_destroy(&system->definitions);
-    ta_timer_heap_destroy(&system->timers);
     ta_actor_table_destroy(&system->actors);
     /* After the actors: their held events released their MESSAGE origins. */
     ta_io_origin_table_destroy(&system->io_scopes);
@@ -32040,7 +32322,7 @@ TA_API ta_result ta_system_next_deadline(const ta_system *system, ta_time *out) 
     if (system == NULL || out == NULL) {
         return TA_ERR_INVALID;
     }
-    return ta_timer_next_due(&system->timers, out) ? TA_OK : TA_ERR_NOT_FOUND;
+    return ta_deadline_next_due(system, out) ? TA_OK : TA_ERR_NOT_FOUND;
 }
 
 TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params *params) {
@@ -32055,11 +32337,11 @@ TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch
     uint32_t fired_count = 0;
     while (dispatched < params->budget && (params->fired == NULL || fired_count < params->fired_capacity)) {
         ta_time due = 0;
-        if (!ta_timer_next_due(&system->timers, &due) || due > now) {
+        if (!ta_deadline_next_due(system, &due) || due > now) {
             break;
         }
         ta_delayed_send send;
-        (void)ta_timer_pop(&system->timers, &send);
+        (void)ta_deadline_pop(system, &send);
         ta_actor *owner = ta_actor_lookup(system, send.owner);
         /*
          * A pending send leaves its owner's list as it fires, and an image
@@ -32088,14 +32370,14 @@ TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch
              * Rescheduling keeps its ID, and so its place in deadline order.
              * The owner may be gone by now; its submitted sends are orphans.
              */
-            ta_timer_list *home = NULL;
-            ta_result result = ta_actor_timer_home(system, send.owner, &home);
-            if (result == TA_OK) {
-                result = ta_timer_schedule(&system->timers, home, &send);
-            }
+            ta_actor *home = ta_actor_lookup(system, send.owner);
+            ta_result result =
+                ta_deadline_schedule(system, home != NULL ? ta_actor_timers(home) : NULL, &send, NULL);
             if (result != TA_OK) {
                 ta_value_release(&send.target);
                 ta_value_release(&send.data);
+                ta_actor_ref_release(&send.destination);
+                ta_actor_ref_release(&send.origin);
                 return result;
             }
             retry = true;
@@ -32113,7 +32395,7 @@ TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch
     if (params->fired != NULL) {
         *params->fired_count = fired_count;
     }
-    *params->more_due = retry || (ta_timer_next_due(&system->timers, &next) && next <= now);
+    *params->more_due = retry || (ta_deadline_next_due(system, &next) && next <= now);
     return TA_OK;
 }
 
@@ -34131,8 +34413,8 @@ static ta_result ta_send_execution_error(ta_interpreter *it, ta_send_id send_id,
  */
 static ta_result ta_send_capacity_error(ta_interpreter *it, ta_send_id send_id,
                                         ta_record_capacity_resource resource) {
-    static const char pool[] = "no free envelope for the mail (poolEnvelopes)";
-    static const char names[] = "no room in the name area for the mail's text (nameAreaBytes)";
+    static const char pool[] = "no free envelope in the pool (poolEnvelopes)";
+    static const char names[] = "no room in the name area (nameAreaBytes)";
     bool short_of_pool = resource == TA_RECORD_CAPACITY_RESOURCE_POOL;
     ta_fault fault = { .code = TA_ERR_FULL,
                        .message = short_of_pool ? (ta_str){ .ptr = pool, .len = (uint32_t)(sizeof pool - 1u) }
@@ -34148,6 +34430,10 @@ static ta_result ta_send_capacity_error(ta_interpreter *it, ta_send_id send_id,
     }
     ta_trace_action_failed(it, &fault);
     return TA_EXEC_FAILED;
+}
+
+TA_PRIVATE ta_result ta_interpreter_capacity_error(ta_interpreter *it, ta_record_capacity_resource resource) {
+    return ta_send_capacity_error(it, 0, resource);
 }
 
 /* Evaluates every attribute of a <send>, in the order SCXML 6.2 gives them. */
@@ -34275,8 +34561,9 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         state->sent = result == TA_OK;
         return result;
     }
-    if (state->delay != 0 && actor->sparse != NULL &&
-        actor->sparse->timers.count >= system->params[TA_PARAM_MAX_PENDING_SENDS]) {
+    uint32_t quota = system->params[TA_PARAM_MAX_PENDING_SENDS];
+    if (state->delay != 0 && quota < TA_PARAM_DEFAULT_MAX_PENDING_SENDS &&
+        ta_deadline_count(system, ta_actor_timers(actor)) >= quota) {
         /* A quota (ADR 0092 section 4): the send is not made, and the
          * sender hears it as an execution error. */
         ta_value_release(&record.data);
@@ -34317,7 +34604,8 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
             }
         }
     }
-    ta_result result = ta_actor_schedule_send(system, actor, &record);
+    ta_record_capacity_resource short_of = (ta_record_capacity_resource)0;
+    ta_result result = ta_deadline_schedule(system, ta_actor_timers(actor), &record, &short_of);
     if (result != TA_OK) {
         ta_value_release(&record.data);
         ta_value_release(&record.target);
@@ -34325,7 +34613,8 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         ta_actor_ref_release(&record.origin);
     }
     state->sent = result == TA_OK;
-    return result;
+    /* A delayed send takes an envelope until it is due (ADR 0101 decision 9). */
+    return result == TA_ERR_FULL ? ta_send_capacity_error(it, state->send_id, short_of) : result;
 }
 
 /*
@@ -34511,7 +34800,7 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
             }
             if (status == TA_OP_OK && send_id != 0) {
                 (void)ta_actor_cancel_held_send(it->actor, send_id);
-                if (ta_timer_cancel(&it->system->timers, ta_actor_timers(it->actor), send_id) == TA_OK) {
+                if (ta_deadline_cancel(it->system, ta_actor_timers(it->actor), send_id) == TA_OK) {
                     TA_COUNT(it->system, it->actor->definition, sends_cancelled);
                 }
                 if (ta_tracing(it, TA_TRACE_CANCELLED)) {
@@ -34659,22 +34948,17 @@ static bool ta_exec_should_pause(const ta_interpreter *it, uint32_t floor) {
 
 /*
  * What a unit of executable content needs before it runs (ADR 0070): room
- * for the one internal event it may queue, its own or the error it raises,
- * and for a published actor's <send> with a delay, room to store the send.
- * Running out of memory here stops the run before the unit, with nothing
+ * for the one internal event it may queue, its own or the error it raises.
+ * A <send> with a delay takes a free envelope and allocates nothing. Running
+ * out of memory here stops the run before the unit, with nothing
  * of it done; so a <script> that changed the data model and then failed
  * never runs twice because its error could not be queued.
  */
-static ta_result ta_unit_reserve(ta_interpreter *it, const ta_action_def *action) {
+static ta_result ta_unit_reserve(ta_interpreter *it) {
     /* Content-sized temporaries live for one unit (ADR 0092 section 3): a
      * <foreach> of many sends reuses the render area instead of filling it. */
     ta_arena_reset(&it->system->render);
-    ta_result result = ta_queue_room(it->system, it->actor);
-    if (result == TA_OK && action != NULL && action->kind == TA_ACTION_SEND &&
-        action->as.send.delay.kind != TA_DELAY_SOURCE_NONE && it->actor->published) {
-        result = ta_actor_reserve_send(it->system, it->actor);
-    }
-    return result;
+    return ta_queue_room(it->system, it->actor);
 }
 
 /*
@@ -34715,7 +34999,7 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
                 it->at.block_open = true;
                 return TA_EXEC_PAUSED;
             }
-            result = ta_unit_reserve(it, NULL);
+            result = ta_unit_reserve(it);
             if (result == TA_OK) {
                 it->actions += 1u;
                 it->trace_action = frame->cursor;
@@ -34740,7 +35024,7 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
         }
         uint32_t index = frame->actions.offset + frame->cursor;
         const ta_action_def *action = &definition->action_defs[index];
-        result = ta_unit_reserve(it, action);
+        result = ta_unit_reserve(it);
         if (result != TA_OK) {
             break;
         }
@@ -35663,11 +35947,6 @@ static void ta_compact_sparse(ta_interpreter *it) {
         return;
     }
     ta_invoke_release(it->system, it->actor);
-    if (sparse->timers.count != 0) {
-        /* Pending delayed sends keep the sparse state (ADR 0054). */
-        return;
-    }
-    ta_timer_list_destroy(&it->system->timers, &sparse->timers);
     ta_mem_free(it->system->allocator, sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
                                              .alignment = _Alignof(ta_actor_sparse_state) });
@@ -35937,7 +36216,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
         it->at.stage = TA_FINISH_END;
     }
     /* Sends nothing accepted once stay queued: they were sent before termination. */
-    ta_timer_cancel_unsubmitted(&it->system->timers, ta_actor_timers(it->actor));
+    ta_deadline_cancel_unsubmitted(it->system, ta_actor_timers(it->actor));
     ta_note_ignored(it);
     ta_release_events(it->actor);
     /* Invoke: cancel this session's invocations and report done.invoke to its parent. */
@@ -36747,6 +37026,13 @@ TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *
     /* The actor goes: its queue goes too, even mid-macrostep, which
      * otherwise keeps it (ta_queue_settle). */
     actor->macrostep = false;
+    if (actor->sparse != NULL) {
+        ta_deadline_token_release(system, actor->sparse->token);
+        actor->sparse->token = 0u;
+    }
+    /* What its owner list still holds goes with it, submitted sends too:
+     * a session that goes on as an orphan or an image is taken off first. */
+    ta_deadline_owner_release(system, ta_actor_timers(actor));
     if (actor->sparse == NULL) {
         ta_queue_settle(system, actor);
         return;
@@ -36754,8 +37040,6 @@ TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *
     ta_invoke_release(system, actor); /* Invoke: cancel services, free bookkeeping. */
     ta_continuation_free(system->allocator, &actor->sparse->paused);
     ta_queue_settle(system, actor); /* empty, and no longer paused */
-    /* The owner heap must not keep pointing into the freed sparse state. */
-    ta_timer_list_destroy(&system->timers, &actor->sparse->timers);
     ta_value_release(&actor->sparse->completion.data);
     ta_mem_free(system->allocator, actor->sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
