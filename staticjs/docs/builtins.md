@@ -55,15 +55,16 @@ For a loop built-in:
 
 ## 2. Register it
 
-**A method** (`xs.name(…)`, `s.name(…)`, `set.name(…)`):
+**A method** (`xs.name(…)`, `s.name(…)`, `set.name(…)`, `x.toString()` of a
+BigInt):
 
 1. Add an ID to `sjs_builtin_id` in `src/internal.h`, inside its receiver's
    group. `sjs_builtin_call` picks the group by ID range
-   (`id <= SJS_METHOD_ARRAY_WITH`, `id <= SJS_METHOD_STRING_TRIM_START`, then
-   sets). A new last member of a group must move that bound, or the call
+   (`id <= SJS_METHOD_ARRAY_WITH`, `id <= SJS_METHOD_STRING_TRIM_START`,
+   `id <= SJS_METHOD_SET_UNION`, then BigInts). A new last member of a group must move that bound, or the call
    lands in the wrong group's switch.
 2. Give its name's entry in `NAMES` (`src/builtins.c`) the ID in the
-   column of the receiver kind: array, string or set. Every name Node 22 has
+   column of the receiver kind: array, string, set or BigInt. Every name Node 22 has
    on those prototypes is already listed, so that reading one faults instead
    of giving `undefined`. If the name is missing, add it in byte order;
    `names_test` checks the order and fails on a mistake. The flags say which
@@ -78,13 +79,13 @@ method lookup at run time is an index into `NAMES` plus a column. Never
 compare method names as strings at run time: the old `strlen` and `strcmp`
 lookup cost 17% of a guard.
 
-**A function** (`Math.x`, `Object.x`, `Number.x`, `String.x`, or a bare global name):
+**A function** (`Math.x`, `Object.x`, `Number.x`, `String.x`, `BigInt.x`, or a bare global name):
 add an ID before `SJS_BUILTIN_FUNCTION_COUNT`, an entry in
 `FUNCTION_TABLE`, and an immortal value in `FUNCTIONS`. The compiler
 resolves the name when it compiles (`sjs_builtin_lookup`), so the linear
 table costs nothing at run time. A namespace is a row of `spaces` in
 `read_name` and of `space_names` in `read_space_member` (`src/compiler.c`);
-`String` and `Number` are ones and functions too: `event()` reads each as
+`String`, `Number` and `BigInt` are ones and functions too: `event()` reads each as
 the function when no member follows. A function value is immortal: its
 reference count is never written, which is why there is no global mutable
 state.

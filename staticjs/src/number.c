@@ -920,3 +920,8 @@ void sjs_hypot_add(sjs_hypot *h, double x) {
 double sjs_hypot_end(const sjs_hypot *h) {
     return sjs_number_sqrt(h->sum) * h->max;
 }
+
+/* Number of a BigInt: its top 64 bits, rounded as a decimal's are. */
+double sjs_number_from_top(sjs_number_top v) {
+    return round_binary((binary_value){ v.q, v.e2, v.sticky });
+}

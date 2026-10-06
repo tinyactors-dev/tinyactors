@@ -759,6 +759,118 @@ int sjs_bigint_compare_number(const sjs_bigint *a, double d) {
 }
 
 /* ------------------------------------------------------------------------
+ * Conversions: numbers, and BigInt.asIntN and asUintN
+ */
+
+sjs_result sjs_bigint_from_number(sjs_context *context, double d, sjs_value *out) {
+    double_parts parts;
+    double_split(d, &parts);
+    sjs_bigint *b;
+    sjs_result r = bigint_alloc(context, parts.length, &b);
+    if (r != SJS_OK) return r;
+    sjs_copy(b->limbs, parts.limbs, (size_t)parts.length * sizeof(uint32_t));
+    b->length = parts.length;
+    r = bigint_finish(context, b, d < 0);
+    if (r != SJS_OK) {
+        bigint_free(context, b);
+        return r;
+    }
+    *out = sjs_heap_value(SJS_BIGINT, &b->h);
+    return SJS_OK;
+}
+
+double sjs_bigint_to_number(const sjs_bigint *b) {
+    if (b->length == 0) return 0;
+    uint64_t bits = bigint_bits(b);
+    sjs_number_top top = { 0, 0, false };
+    if (bits > 2048u) {
+        top.q = 1ull << 63;
+        top.e2 = 2048; /* past the largest double: Infinity */
+    } else if (bits <= 64u) {
+        uint64_t v = b->limbs[0] | (b->length > 1u ? (uint64_t)b->limbs[1] << 32 : 0u);
+        top.q = v << (64u - bits);
+        top.e2 = (int32_t)bits - 64;
+    } else {
+        /* The top 64 bits, and whether any below them is set. */
+        uint64_t below = bits - 64u;
+        uint32_t at = (uint32_t)(below / 32u);
+        uint32_t shift = (uint32_t)(below % 32u);
+        uint64_t low = b->limbs[at] | (uint64_t)b->limbs[at + 1u] << 32;
+        uint64_t high = at + 2u < b->length ? b->limbs[at + 2u] : 0u;
+        top.q = low >> shift | (shift != 0 ? high << (64u - shift) : 0u);
+        top.e2 = (int32_t)below;
+        top.sticky = shift != 0 && (b->limbs[at] & ((1u << shift) - 1u)) != 0;
+        for (uint32_t i = 0; i < at && !top.sticky; i++) top.sticky = b->limbs[i] != 0;
+    }
+    double d = sjs_number_from_top(top);
+    return sjs_bigint_negative(b) ? -d : d;
+}
+
+/* The `bits` low bits of a magnitude, in all of out's limbs. */
+static void low_bits(sjs_bigint *out, const sjs_bigint *x, uint64_t bits) {
+    for (uint32_t i = 0; i < out->length; i++) out->limbs[i] = i < x->length ? x->limbs[i] : 0u;
+    if (bits % 32u != 0) out->limbs[out->length - 1u] &= (1u << (bits % 32u)) - 1u;
+}
+
+/* 2^bits - v, for v from 1 to 2^bits - 1, in place. */
+static void complement(uint32_t *v, uint32_t width, uint64_t bits) {
+    uint64_t carry = 1;
+    for (uint32_t i = 0; i < width; i++) {
+        carry += (uint32_t)~v[i];
+        v[i] = (uint32_t)carry;
+        carry >>= 32;
+    }
+    if (bits % 32u != 0) v[width - 1u] &= (1u << (bits % 32u)) - 1u;
+}
+
+static bool limbs_zero(const uint32_t *v, uint32_t width) {
+    for (uint32_t i = 0; i < width; i++) {
+        if (v[i] != 0) return false;
+    }
+    return true;
+}
+
+sjs_result sjs_bigint_wrap(sjs_context *context, sjs_bigint_wrap_params w, sjs_value *out) {
+    const sjs_bigint *x = SJS_AS_BIGINT(w.value);
+    bool negative = sjs_bigint_negative(x);
+    uint64_t bits = bigint_bits(x);
+    /* Where the value is its own result. */
+    bool power_of_two = x->length != 0 && (x->limbs[x->length - 1u] & (x->limbs[x->length - 1u] - 1u)) == 0;
+    for (uint32_t i = 0; power_of_two && i + 1u < x->length; i++) power_of_two = x->limbs[i] == 0;
+    bool same = x->length == 0 ? true
+              : !negative ? (w.is_signed ? bits < w.bits : bits <= w.bits)
+              : w.is_signed && (bits < w.bits || (bits == w.bits && power_of_two));
+    if (same) {
+        sjs_ref(w.value);
+        *out = w.value;
+        return SJS_OK;
+    }
+    if (negative && !w.is_signed && w.bits > context->limits.max_bigint_bits) return SJS_ERR_LIMIT;
+    uint32_t width = (uint32_t)((w.bits + 31u) / 32u);
+    sjs_bigint *b;
+    sjs_result r = bigint_alloc(context, width, &b);
+    if (r != SJS_OK) return r;
+    b->length = width;
+    low_bits(b, x, w.bits);
+    uint64_t sign_bit = w.bits - 1u;
+    bool result_negative = false;
+    if (!limbs_zero(b->limbs, width)) {
+        if (negative) complement(b->limbs, width, w.bits); /* x mod 2^bits */
+        if (w.is_signed && ((b->limbs[sign_bit / 32u] >> (sign_bit % 32u)) & 1u) != 0) {
+            complement(b->limbs, width, w.bits); /* minus 2^bits */
+            result_negative = true;
+        }
+    }
+    r = bigint_finish(context, b, result_negative);
+    if (r != SJS_OK) {
+        bigint_free(context, b);
+        return r;
+    }
+    *out = sjs_heap_value(SJS_BIGINT, &b->h);
+    return SJS_OK;
+}
+
+/* ------------------------------------------------------------------------
  * The public API
  */
 

@@ -26,7 +26,9 @@ white space, signs, prefixes and junk read by `Number(s)` and
 through `Math.sqrt` and `Math.fround`; argument lists through `Math.hypot`;
 and pairs through `Math.clz32` and `Math.imul`; and BigInts of 1 to 20
 limbs through `+ - * / % **` and comparison, compared with doubles, and
-written as `String(x)` and `toString(radix)` (`number_test --print`).
+written as `String(x)` and `toString(radix)`, read back, rounded as
+`Number(x)` and wrapped by `BigInt.asIntN` and `asUintN` (`number_test
+--print`).
 
 ## What it guarantees
 
@@ -198,7 +200,8 @@ Built-ins:
 | arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
 | strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `replaceAll` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
-| functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` |
+| BigInts | `toString` (radix 2 to 36) |
+| functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum) |
 | constants | `Number.EPSILON` `MAX_SAFE_INTEGER` `MIN_SAFE_INTEGER` `MAX_VALUE` `MIN_VALUE` `POSITIVE_INFINITY` `NEGATIVE_INFINITY` `NaN`; `Math.PI` `E` `LN2` `LN10` `LOG2E` `LOG10E` `SQRT2` `SQRT1_2`: number constants when compiled |
 | changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear` |
@@ -255,6 +258,17 @@ text repeated division by 10^9: at the default limit the largest product
 or conversion takes a few tens of milliseconds, and fuel charges each
 operation for its limb work (a unit per 16 limb products).
 
+`BigInt(x)` converts an integer number exactly (a number with a fraction,
+NaN or Infinity faults, a RangeError), a string as StringToBigInt reads it
+(white space, a sign, `0x`/`0o`/`0b`; empty is `0n`; anything else faults,
+a SyntaxError), and a boolean; `undefined`, `null` (TypeErrors) and an
+object fault. `BigInt.asIntN` and `asUintN` take their bits as an index (0
+to 2^53 - 1, else a fault) and a BigInt or a boolean. `x.toString(radix)`
+writes 2 to 36. `Number(x)` rounds to the nearest double, ties to even, and
+`parseInt(x, radix)` and `parseFloat(x)` read `String(x)`, as JavaScript
+does; `isNaN(x)`, `Math` and every other place a number is needed fault on
+a BigInt, as JavaScript throws there.
+
 ## Where it faults instead of following JavaScript
 
 These follow from the rule: staticjs stops where JavaScript would coerce,
@@ -310,7 +324,9 @@ compare identities, or find something on a prototype.
   string (a pad string, an argument of `concat`, the replacement of
   `replaceAll`), as `+` faults on one, and a BigInt there too: staticjs
   makes a BigInt's digits only for `String`, `toString`, `+` and a
-  template; a search argument that is not a
+  template; a string as `BigInt.asIntN`'s or `asUintN`'s value, or a
+  string as any built-in's number (`toString("16")`), which JavaScript
+  converts; a search argument that is not a
   string (`includes(1)`, `replaceAll(1, "x")`, `split(1)`); a function as
   `replaceAll`'s replacement.
 

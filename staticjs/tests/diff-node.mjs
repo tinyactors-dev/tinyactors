@@ -238,6 +238,18 @@ const numberChecks = {
     const want = x < d ? -1 : x > d ? 1 : x <= d ? 0 : 2;
     return Number(c) === want ? null : `BigInt ${a} against ${d}: staticjs ${c}, JavaScript ${want}`;
   },
+  R(rest) { // <a> <bits>: Number(a)
+    const [a, bits] = rest.split(' ');
+    const want = Number(hexBigInt(a));
+    return sameDouble(bits, want) ? null : `Number(${a}): staticjs ${bits}, JavaScript ${toHex(want)}`;
+  },
+  A(rest) { // <bits> <a> <asIntN> <asUintN>
+    const [bits, a, signed, unsigned] = rest.split(' ');
+    const x = hexBigInt(a);
+    const [i, u] = [BigInt.asIntN(Number(bits), x), BigInt.asUintN(Number(bits), x)];
+    if (hexBigInt(signed) !== i) return `BigInt.asIntN(${bits}, ${a}): staticjs ${signed}, JavaScript ${i.toString(16)}`;
+    return hexBigInt(unsigned) === u ? null : `BigInt.asUintN(${bits}, ${a}): staticjs ${unsigned}, JavaScript ${u.toString(16)}`;
+  },
 };
 if (numbers) {
   for (const line of readFileSync(numbers, 'utf8').split('\n')) {
@@ -260,6 +272,8 @@ const numberSummary = [
   ['B', 'BigInt operations (+ - * / % ** <) give what JavaScript does'],
   ['T', 'BigInts write as String(x) and toString(radix) do, and read back'],
   ['M', 'BigInts compare with doubles as JavaScript does'],
+  ['R', 'BigInts round to Number(x)'],
+  ['A', 'BigInts wrap as BigInt.asIntN and asUintN do'],
 ].filter(([tag]) => counts.has(tag)).map(([tag, what]) => `${counts.get(tag)} ${what}`).join(', ');
 
 if (failures.length > 0) {
