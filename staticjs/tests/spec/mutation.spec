@@ -1349,3 +1349,346 @@ export const f = () => { data.a = 3; return data; };
 import { data, set } from "exporting";
 export default set(data);
 --- fault held elsewhere
+
+
+# let (docs/mutation.md, "let"): a variable of a function that statements
+# assign to.
+=== let, moved from statements.spec
+(x => { let y = 1; return y; })
+--- value
+<function>
+
+=== let with its name on the next line, moved from statements.spec
+(x => { let
+y = 1; return y; })
+--- value
+<function>
+
+=== let and reassign
+(() => { let x = 1; x = x + 1; return x; })()
+--- value
+2
+
+=== let without a value is undefined
+(() => { let x; return x; })()
+--- value
+undefined
+
+=== let without a value, then assigned
+(() => { let x; x = 5; return x; })()
+--- value
+5
+
+=== let with several declarators
+(() => { let a = 1, b, c = a + 1; b = c * 10; return [a, b, c]; })()
+--- value
+[1,20,2]
+
+=== let declarators without values
+(() => { let a, b; a = 1; return [a, b]; })()
+--- value
+[1,undefined]
+
+=== let with a pattern
+(() => { let [a, b] = [1, 2]; let {c, d = 4} = {c: 3}; a = b; d += c; return [a, b, c, d]; })()
+--- value
+[2,2,3,7]
+
+=== let with its name on the next line
+(x => { let
+y = 1; y += x; return y; })(1)
+--- value
+2
+
+=== let without a semicolon
+(() => { let x
+x = 2
+return x })()
+--- value
+2
+
+=== let without a value before a closing brace
+(() => { { let x } return 1; })()
+--- value
+1
+
+=== let without a value at the end of a line before a parenthesis
+(() => { let x
+(x)
+return 1; })()
+--- error unsupported no effect
+
+=== let then = on the next line
+(() => { let x
+= 3; return x; })()
+--- value
+3
+
+=== compound assignment to a let
+(() => { let a = 10, b = 10, c = 10, d = 10, e = 10, s = "a"; a += 2; b -= 2; c *= 2; d /= 4; e %= 3; s += "b"; return [a, b, c, d, e, s]; })()
+--- value
+[12,8,20,2.5,1,"ab"]
+
+=== logical assignment to a let
+(() => { let a = null, b = 0, c = 1, d; a ??= 1; b ||= 2; c &&= 3; d ??= "x"; return [a, b, c, d]; })()
+--- value
+[1,2,3,"x"]
+
+=== ??= of a let does not evaluate the value when defined
+(() => { let a = 1; const xs = []; a ??= xs.push(1); return [a, xs]; })()
+--- value
+[1,[]]
+
+=== ++ and -- of a let
+(() => { let i = 0; i++; ++i; i--; i++; return i; })()
+--- value
+2
+
+=== ++ of a let that is not a number
+(() => { let s = "1"; s++; return s; })()
+--- fault arithmetic
+
+=== ++ of a let without a value
+(() => { let n; n++; return n; })()
+--- fault arithmetic
+
+=== a let in a block
+(() => { let x = 1; { let x = 2; x++; } return x; })()
+--- value
+1
+
+=== a let assigned in a block
+(() => { let x = 1; { x = 2; } return x; })()
+--- value
+2
+
+=== a let assigned in a branch
+[1, 2, 3].map(n => { let label = "small"; if (n > 1) label = "big"; if (n > 2) { label += "!"; } return label; })
+--- value
+["small","big","big!"]
+
+=== a let assigned in an else-if chain
+[0, 1, 2].map(n => { let s; if (n === 0) s = "zero"; else if (n === 1) s = "one"; else s = "many"; return s; })
+--- value
+["zero","one","many"]
+
+=== a let assigned in one branch only
+[true, false].map(b => { let x = [0]; if (b) x = [1]; return x; })
+--- value
+[[1],[0]]
+
+=== a let read before it is assigned again
+(() => { let x = [1]; const y = x; x = [2]; return [x, y]; })()
+--- value
+[[2],[1]]
+
+=== a let read after a move is assigned first
+(() => { let xs = [1]; const ys = xs.concat([2]); xs = ys; return xs; })()
+--- value
+[1,2]
+
+=== a let reassigned from itself
+(() => { let xs = [1, 2]; xs = xs.map(x => x * 2); xs = [...xs, 9]; return xs; })()
+--- value
+[2,4,9]
+
+=== a let in a reduce callback
+[1, 2, 3].reduce((acc, x) => { let s = acc; s += x; return s; }, 0)
+--- value
+6
+
+=== a let counter
+[3, 1, 4, 1, 5].reduce((acc, x) => { let n = acc; if (x > 2) n++; return n; }, 0)
+--- value
+3
+
+=== a let's property assigned
+(() => { let o = {}; o.k = 1; o = {...o, j: 2}; o.m = 3; return o; })()
+--- value
+{"k":1,"j":2,"m":3}
+
+=== a let's method
+(() => { let xs = []; xs.push(1); xs = [0, ...xs]; xs.push(2); return xs; })()
+--- value
+[0,1,2]
+
+=== a let's method after it was copied, reassigned since
+(() => { let xs = [1]; const ys = xs; xs = [2]; xs.push(3); return [xs, ys]; })()
+--- value
+[[2,3],[1]]
+
+=== a let's property after it was copied
+(() => { let o = {}; const p = o; o.k = 1; return p; })()
+--- error unsupported copied before
+
+=== a let given another variable's value faults when changed
+(() => { const base = [1]; let xs = base; xs.push(2); return base; })()
+--- fault held elsewhere
+
+=== a let that holds a shared value faults when it runs
+(() => { const base = {a: [1]}; let xs = base.a; xs.push(2); return base; })()
+--- fault held elsewhere
+
+=== a let's value moved in by another's last read is its own
+(() => { let xs = [1]; let ys = xs; ys.push(2); return ys; })()
+--- value
+[1,2]
+
+=== assign a let in a nested block, then read it
+(() => { let total = 0; { const add = 5; total += add; { total *= 2; } } return total; })()
+--- value
+10
+
+=== a let in a module's function
+@module counting
+export const count = xs => { let n = 0; if (xs.length > 0) n = xs.length; return n; };
+export const n = count([1, 2]);
+--- value
+{"count":<function>,"n":2}
+
+# Refused when compiled.
+=== a let captured by an arrow function
+(() => { let x = 1; const f = () => x; return f(); })()
+--- error unsupported captures
+
+=== a let captured before it is assigned
+(() => { let x = 1; const f = () => x; x = 2; return f(); })()
+--- error unsupported captures
+
+=== a let captured by a callback
+(() => { let total = 0; [1, 2].forEach(x => { total += x; }); return total; })()
+--- error unsupported captures
+
+=== a let never assigned, captured
+(xs => { let k = 2; return xs.map(x => x * k); })([1])
+--- error unsupported captures
+
+=== a let at a module's top level
+@module letting
+let x = 1;
+export { x };
+--- error unsupported a staticjs module holds
+
+=== export let
+@module letting
+export let x = 1;
+--- error unsupported exports const
+
+=== reassign a const
+(() => { const x = 1; x = 2; return x; })()
+--- error unsupported a const
+
+=== compound assign a const
+(() => { const x = 1; x += 2; return x; })()
+--- error unsupported a const
+
+=== ++ of a const
+(() => { const x = 1; x++; return x; })()
+--- error unsupported a const
+
+=== reassign a parameter
+(x => { x = 2; return x; })(1)
+--- error unsupported a parameter
+
+=== reassign a let of an enclosing function
+(() => { let x = 1; const f = () => { x = 2; return x; }; return f(); })()
+--- error unsupported captures
+
+=== reassign a global
+@global g = 1
+(() => { g = 2; return g; })()
+--- error unsupported a global
+
+=== reassign a name bound nowhere
+(() => { y = 2; return 1; })()
+--- error unsupported
+
+=== reassign undefined
+(() => { undefined = 2; return 1; })()
+--- error unsupported
+
+=== an import reassigned
+@module letting
+import { n } from "counting";
+export const f = () => { n = 3; return n; };
+--- error unsupported an import
+
+=== let as the statement of an if
+(x => { if (x) let y = 1; return 0; })
+--- error syntax lexical declaration
+
+=== let declared twice
+(() => { let x = 1; let x = 2; return x; })()
+--- error syntax declared twice
+
+=== a let and a const of one name
+(() => { const x = 1; let x = 2; return x; })()
+--- error syntax declared twice
+
+=== let used before its declaration
+(() => { x = 1; let x = 2; return x; })()
+--- error unsupported
+
+=== let named let
+(() => { let let = 1; return 1; })()
+--- error syntax
+
+=== let with a pattern and no value
+(() => { let [a]; return a; })()
+--- error syntax
+
+=== let without a value then a name on the line
+(() => { let x y; return 1; })()
+--- error syntax
+
+=== var stays refused
+(x => { var y = 1; return y; })
+--- error unsupported declares with const
+
+# The last read of a slot moves its value (compiler.c): a let written
+# after a read keeps the read a copy, and a read after the write sees the
+# new value, on every path.
+=== a read before a write in a branch stays a copy
+[true, false].map(c => { let x = [1]; const y = x; if (c) x = [2]; return [x, y]; })
+--- value
+[[[2],[1]],[[1],[1]]]
+
+=== a read in a branch before a write
+[true, false].map(c => { let x = [1]; let y = []; if (c) y = x; x = [2]; return [x, y]; })
+--- value
+[[[2],[1]],[[2],[]]]
+
+=== a write in a branch, then a read
+[true, false].map(c => { let x = [1]; if (c) { x = [2]; } else { const z = x; } return x; })
+--- value
+[[2],[1]]
+
+=== a read of itself in a compound assignment
+(() => { let s = "ab"; s += s; s += s.length; return s; })()
+--- value
+"abab4"
+
+=== a block's let, then another block's in the same slot
+(() => { { let a = [1]; a.push(2); } { let b; return b; } })()
+--- value
+undefined
+
+=== a block's let without a value after one with
+[1, 2].map(n => { { let a = n; a++; } let b; b ??= n * 10; return b; })
+--- value
+[10,20]
+
+=== a let reassigned in a block it was declared outside
+(() => { let xs = [1]; { const ys = xs; xs = [2]; xs.push(ys.length); } return xs; })()
+--- value
+[2,1]
+
+=== a let moved into a call, then reassigned
+(() => { let xs = [3, 1, 2]; xs = xs.toSorted((a, b) => a - b); xs.push(4); return xs; })()
+--- value
+[1,2,3,4]
+
+=== a let moved into a literal, then reassigned
+(() => { let acc = {a: 1}; acc = {...acc, b: 2}; acc.c = 3; return acc; })()
+--- value
+{"a":1,"b":2,"c":3}

@@ -490,15 +490,6 @@ export const f = () => { if (1) l: l: return 1 };
 (x => { try {} catch {} })
 --- error unsupported no exceptions
 
-=== let
-(x => { let y = 1; return y; })
---- error unsupported declares with const
-
-=== let with its name on the next line
-(x => { let
-y = 1; return y; })
---- error unsupported declares with const
-
 === var
 (x => { var y = 1; })
 --- error unsupported declares with const

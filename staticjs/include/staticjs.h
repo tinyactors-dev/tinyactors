@@ -318,10 +318,13 @@ SJS_API sjs_result sjs_function_native(sjs_context *context, sjs_native native, 
  * member or an index) first, then the value; ASSIGN's and ASSIGN_END's
  * count is the operator (an sjs_operator: ADD for `+=`, AND for `&&=`, ...),
  * 0 for `=`. ++ and -- are statements of their own, prefix or postfix,
- * UPDATE's count ADD for ++ and SUBTRACT for --:
+ * UPDATE's count ADD for ++ and SUBTRACT for --. `let` is CONST_BEGIN with
+ * count 1, or 2 for a name without a value, which is undefined:
  *
  *   t op= v;                  <t> ASSIGN(op) <v> ASSIGN_END(op)
  *   t++;  ++t;                <t> UPDATE(ADD)
+ *   let p = v                 CONST_BEGIN(1) <v> <p> CONST_END
+ *   let x                     CONST_BEGIN(2) BIND(x) CONST_END
  */
 
 typedef enum {
@@ -402,7 +405,7 @@ typedef enum {
     SJS_EV_DEFAULT,          /* a default value's events follow: taken when the */
     SJS_EV_DEFAULT_END,      /* value is undefined */
     /* Declarations: the value, then its pattern. */
-    SJS_EV_CONST_BEGIN,
+    SJS_EV_CONST_BEGIN,      /* MUTATION: count 1 for let, 2 for let without a value; 0 for const */
     SJS_EV_CONST_END,
     SJS_EV_EXPORT,           /* before CONST_BEGIN: its names are exported */
     SJS_EV_IMPORT,           /* text: the module; count: an sjs_import_kind */

@@ -20,7 +20,8 @@
  *
  * Names are resolved when they are read. A function captures the values of
  * the names it uses from enclosing functions when it is created: every
- * binding is const, so a copy is the same as a reference. A name may not be
+ * binding it can capture is const (MUTATION: a let, which statements assign
+ * to, is never captured), so a copy is the same as a reference. A name may not be
  * used before its const declaration or import, which also makes a function
  * unable to refer to itself: a name read is noted in every scope it is
  * looked for in, blocks included, and a later declaration there is refused. A name bound nowhere is reported at the end, so
@@ -45,7 +46,8 @@
  * the parameters, finds another binding). With that, the separate scope
  * needs no work of its own: a body's const cannot share a parameter's name
  * (declared twice), and a closure in a default captures parameters by
- * value, which every binding being const makes the same as a reference.
+ * value, which every binding being const makes the same as a reference (a
+ * parameter is never assigned to).
  *
  * The last read of a slot moves its value instead of copying it: a LOCAL
  * becomes a TAKE_LOCAL, which leaves the slot undefined, so that a value the
@@ -85,6 +87,7 @@ typedef struct {
     uint8_t kind;
     uint8_t use;           /* MUTATION: USE_* */
     uint32_t changed_at;   /* MUTATION: its last mutation's receiver's pc, plus one; 0 for none */
+    uint8_t declared_let;  /* MUTATION: by let: statements assign to it */
 } binding;
 
 /* An index from names to numbers: open addressing with linear probing. The
@@ -173,6 +176,7 @@ typedef struct {
     uint8_t assign;
     uint32_t keys;
     uint32_t root_pc;
+    uint8_t declares_let;  /* MUTATION: K_CONST: a let */
 } construct;
 
 /* An array or object pattern being compiled. An object pattern keeps its
@@ -780,6 +784,10 @@ static sjs_result declare(sjs_compiler *c, const sjs_event *e, target to) {
     b.index = index;
     b.kind = kind;
     uint32_t which = SJS_BUF_COUNT(c->bindings, binding);
+    /* MUTATION: a name a let binds. */
+    uint32_t constructs = SJS_BUF_COUNT(c->constructs, construct);
+    const construct *declaring = constructs == 0 ? NULL : &SJS_BUF_AT(c->constructs, construct, constructs - 1);
+    b.declared_let = declaring != NULL && declaring->kind == K_CONST ? declaring->declares_let : 0u;
     sjs_result r = keep_name(c, e->text, &b.name_offset);
     if (r == SJS_OK) r = buf_add(c, &c->bindings, bytes_of(&b, sizeof b));
     if (r == SJS_OK) r = index_put(c, &current(c)->names, at_offset(b.name_offset, b.name_length, which));
@@ -877,8 +885,14 @@ static const char *refused_use(uint8_t use) {
 
 /* A binding of an enclosing function is captured: refused if it was
  * changed, and noted, so that a later change is refused. */
+static const char *const refused_let_capture =
+    "a function captures this let variable, and a function keeps a copy of what it captures: declare it with const, or build the value with reduce";
+
 static sjs_result note_capture(sjs_compiler *c, uint32_t which, sjs_position at) {
     binding *b = &SJS_BUF_AT(c->bindings, binding, which);
+    /* A capture copies the value, and JavaScript's closure would see what
+     * is assigned to the variable later. */
+    if (b->declared_let) return refuse_later(c, at, (refusal){ refused_let_capture, binding_name(c, which) });
     b->use |= USE_CAPTURED;
     if ((b->use & USE_MUTATED) != 0) return refuse_later(c, at, (refusal){ refused_captured, binding_name(c, which) });
     return SJS_OK;
@@ -2155,6 +2169,38 @@ static bool logical_operator(uint32_t op) {
     return op == SJS_OP_AND || op == SJS_OP_OR || op == SJS_OP_COALESCE;
 }
 
+/* The target is a variable, the path on top with no step: a let of this
+ * function. A plain assignment does not read it, so its read goes. */
+static uint8_t variable_target(sjs_compiler *c, construct *k) {
+    name_read root = top_path(c)->root;
+    const char *why = NULL;
+    sjs_str name = root.kind == NR_GLOBAL ? c->globals[root.which] : binding_name(c, root.which);
+    if (root.kind == NR_GLOBAL) {
+        why = "staticjs assigns only to a variable declared with let, and this is a global";
+    } else if (root.kind == NR_IMPORT) {
+        why = "staticjs assigns only to a variable declared with let, and this is an import";
+    } else if (root.kind == NR_CAPTURE) {
+        why = refused_let_capture;
+    } else if (!SJS_BUF_AT(c->bindings, binding, root.which).declared_let) {
+        why = "staticjs assigns only to a variable declared with let, and this one is a const or a parameter";
+    }
+    if (why != NULL) {
+        refuse_later(c, root.at, (refusal){ why, name });
+        return TARGET_REFUSED;
+    }
+    drop_paths(c, SJS_BUF_COUNT(c->paths, path) - 1u);
+    forget_read(c, current(c)->function_scope, SJS_BUF_AT(c->bindings, binding, root.which).index);
+    if (k->assign == 0) {
+        c->code.length = root.pc;
+        c->last_op_valid = false;
+        c->last_name.kind = NR_NONE;
+    }
+    k->receiver = root.which;
+    k->keys = 0;
+    k->root_pc = root.pc;
+    return TARGET_TAKEN;
+}
+
 /* The target of an assignment or an update: the path on top, which ends
  * here. Its root must be a variable the function owns, under the rules of a
  * mutation; k takes the root's binding, its keys and the read's pc. */
@@ -2166,10 +2212,7 @@ static uint8_t assign_target(sjs_compiler *c, const sjs_event *e, construct *k) 
     }
     name_read root = p->root;
     uint32_t keys = SJS_BUF_COUNT(c->path_steps, uint32_t) - p->steps_base;
-    if (keys == 0) {
-        refuse_later(c, root.at, (refusal){ refused_target, SJS_STR("") });
-        return TARGET_REFUSED;
-    }
+    if (keys == 0) return variable_target(c, k);
     if (root.kind == NR_GLOBAL) {
         refuse_later(c, root.at, (refusal){ "staticjs changes only a value a variable of the function holds, and this is a global", c->globals[root.which] });
         return TARGET_REFUSED;
@@ -2222,6 +2265,18 @@ static sjs_result assign_store(sjs_compiler *c, const construct *k, const sjs_ev
     return emit_path(c, k, ins(SJS_OP_PATH, SJS_PATH_STORE, e->at));
 }
 
+/* A variable's new value: as far as the compiler knows, nothing else holds
+ * it yet. */
+static sjs_result variable_store(sjs_compiler *c, const construct *k, const sjs_event *e) {
+    binding *b = &SJS_BUF_AT(c->bindings, binding, k->receiver);
+    b->use &= (uint8_t)~(USE_COPIED | USE_PASSED | USE_STORED);
+    return write_slot(c, ins(SJS_OP_SET_LOCAL, b->index, e->at));
+}
+
+static sjs_result target_store(sjs_compiler *c, const construct *k, const sjs_event *e) {
+    return k->keys == 0 ? variable_store(c, k, e) : assign_store(c, k, e);
+}
+
 /* ASSIGN: the target is compiled; the value follows. A compound
  * assignment reads the target's value first; && || ?? skip the value and
  * the store by its truth. */
@@ -2232,7 +2287,7 @@ static sjs_result assign_begin(sjs_compiler *c, const sjs_event *e) {
     k.assign = (uint8_t)e->count;
     uint8_t taken = assign_target(c, e, &k);
     if (taken != TARGET_TAKEN) return taken == TARGET_REFUSED ? SJS_OK : SJS_ERR_PROGRAM;
-    if (k.assign != 0 && emit_path(c, &k, ins(SJS_OP_PATH, SJS_PATH_LOAD, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (k.assign != 0 && k.keys != 0 && emit_path(c, &k, ins(SJS_OP_PATH, SJS_PATH_LOAD, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
     if (logical_operator(k.assign)) {
         uint8_t opcode = k.assign == SJS_OP_AND ? SJS_OP_JUMP_FALSY_KEEP
                        : (k.assign == SJS_OP_OR ? SJS_OP_JUMP_TRUTHY_KEEP : SJS_OP_JUMP_DEFINED_KEEP);
@@ -2249,13 +2304,15 @@ static sjs_result assign_end(sjs_compiler *c, const sjs_event *e) {
     if (k.assign != 0 && !logical_operator(k.assign)) {
         if (op(c, SJS_OP_BINARY_, e->at) != SJS_OK || u8(c, k.assign) != SJS_OK) return SJS_ERR_PROGRAM;
     }
-    if (assign_store(c, &k, e) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (target_store(c, &k, e) != SJS_OK) return SJS_ERR_PROGRAM;
     if (!logical_operator(k.assign)) return SJS_OK;
     /* The target's value decided: it goes, with the path. */
     uint32_t after;
     if (jump(c, ins(SJS_OP_JUMP, 0, e->at), &after) != SJS_OK) return SJS_ERR_PROGRAM;
     land(c, k.jump);
-    if (emit_path(c, &k, ins(SJS_OP_PATH, SJS_PATH_DROP, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (k.keys == 0 ? op(c, SJS_OP_POP, e->at) != SJS_OK : emit_path(c, &k, ins(SJS_OP_PATH, SJS_PATH_DROP, e->at)) != SJS_OK) {
+        return SJS_ERR_PROGRAM;
+    }
     land(c, after);
     return SJS_OK;
 }
@@ -2265,12 +2322,13 @@ static sjs_result assign_end(sjs_compiler *c, const sjs_event *e) {
 static sjs_result compile_update(sjs_compiler *c, const sjs_event *e) {
     if (!statement_level(c) || (e->count != SJS_OP_ADD && e->count != SJS_OP_SUBTRACT)) return out_of_order(c, e->at);
     construct k = { 0 };
+    k.assign = SJS_OP_SUBTRACT; /* it reads its target */
     uint8_t taken = assign_target(c, e, &k);
     if (taken != TARGET_TAKEN) return taken == TARGET_REFUSED ? SJS_OK : SJS_ERR_PROGRAM;
-    if (emit_path(c, &k, ins(SJS_OP_PATH, SJS_PATH_LOAD, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (k.keys != 0 && emit_path(c, &k, ins(SJS_OP_PATH, SJS_PATH_LOAD, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
     if (number_constant(c, e->count == SJS_OP_ADD ? -1.0 : 1.0, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
     if (op(c, SJS_OP_BINARY_, e->at) != SJS_OK || u8(c, SJS_OP_SUBTRACT) != SJS_OK) return SJS_ERR_PROGRAM;
-    return assign_store(c, &k, e);
+    return target_store(c, &k, e);
 }
 
 /* BLOCK_END: falling off the end of a body returns undefined. */
@@ -2301,6 +2359,11 @@ static sjs_result compile_const_begin(sjs_compiler *c, const sjs_event *e) {
     k.kind = K_CONST;
     k.exported = c->exporting ? 1u : 0u;
     c->exporting = false;
+    /* MUTATION: let (count 1), and let with no value (2), whose value is
+     * undefined; in a function only. Restore pushing the construct alone. */
+    if (e->count > 2u || (e->count != 0 && scope_count(c) == 1)) return out_of_order(c, e->at);
+    k.declares_let = e->count != 0 ? 1u : 0u;
+    if (e->count == 2u && op(c, SJS_OP_UNDEFINED_, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
     return push_construct(c, k, e->at);
 }
 
