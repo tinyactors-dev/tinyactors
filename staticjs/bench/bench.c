@@ -60,7 +60,9 @@
  * eval.object.assign-reduce (acc[r.id] = r.kwh) and eval.array.assign-reduce
  * (acc[acc.length] = r.kwh), assignment into reduce's accumulator, and
  * eval.array.assign-index (acc[i] = x * 2 + 1 over a copy of xs, as map);
- * eval.let.counter (let n = a; n += r.kwh), eval.array.reduce.key with a let.
+ * eval.let.counter (let n = a; n += r.kwh), eval.array.reduce.key with a let;
+ * eval.set.delete-reduce (s.delete(id) of every member of new Set(ids), each
+ * the first: Q) and .last (each the last, over ids.toReversed()).
  *
  * write (unit byte): write.rows (n {1000, 10000}, 64 KiB buffer),
  * write.rows.buf64 (10000 rows, a 64-byte buffer), write.numbers (100000
@@ -458,6 +460,15 @@ static const bench_case cases[] = {
       .expect = "new Set([\"r000000\",\"r000001\",\"r000002\",\"r000003\",\"r000004\",\"r000005\",\"r000006\","
                 "\"r000007\",\"r000008\",\"r000009\"])",
       .check = CHECK_SET_N },
+    /* MUTATION: removal. delete-reduce removes each member while it is the
+     * first, so every later one moves (Q); .last removes each while it is
+     * the last, which moves none (L). */
+    { .name = "eval.set.delete-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_Q, .smoke = 10,
+      .source = "ids.reduce((s, id) => { s.delete(id); return s; }, new Set(ids))", .globals = { { "ids", FIX_IDS, NULL } },
+      .expect = "new Set([])", .check = CHECK_SAME },
+    { .name = "eval.set.delete-reduce.last", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "ids.toReversed().reduce((s, id) => { s.delete(id); return s; }, new Set(ids))",
+      .globals = { { "ids", FIX_IDS, NULL } }, .expect = "new Set([])", .check = CHECK_SAME },
     /* MUTATION: assignment */
     { .name = "eval.object.assign-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.reduce((acc, r) => { acc[r.id] = r.kwh; return acc; }, {})", .globals = { { "rows", FIX_ROWS, NULL } },

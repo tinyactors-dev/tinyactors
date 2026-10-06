@@ -169,7 +169,7 @@ Built-ins:
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
 | functions | `String` `Boolean` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN` |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign`, and its constants |
-| changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill`; sets: `add` |
+| changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill`; sets: `add` `delete` `clear` |
 
 **Owned mutation.** A method that changes its receiver may be called on a
 variable that the function owns: a parameter or a `const` of the function,

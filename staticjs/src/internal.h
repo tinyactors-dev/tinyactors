@@ -400,7 +400,7 @@ typedef enum {
     SJS_METHOD_SET_UNION,
     /* MUTATION: methods that change their receiver, called only through a
      * reference to the variable that owns it (SJS_OP_MUTATE), never through
-     * sjs_builtin_call. Arrays', then sets'. */
+     * sjs_builtin_call. Arrays', then sets', then step 3's. */
     SJS_METHOD_MUTATION_FIRST,
     SJS_METHOD_ARRAY_FILL = SJS_METHOD_MUTATION_FIRST,
     SJS_METHOD_ARRAY_POP,
@@ -409,7 +409,10 @@ typedef enum {
     SJS_METHOD_ARRAY_SHIFT,
     SJS_METHOD_ARRAY_SORT,
     SJS_METHOD_ARRAY_UNSHIFT,
-    SJS_METHOD_SET_ADD
+    SJS_METHOD_SET_ADD,
+    /* MUTATION: removal (docs/mutation.md, "Removal"). */
+    SJS_METHOD_SET_CLEAR,
+    SJS_METHOD_SET_DELETE
 } sjs_builtin_id;
 
 /* The built-in function `Namespace.name` or bare `name`; NONE if unknown. */

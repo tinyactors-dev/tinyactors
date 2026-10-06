@@ -2055,6 +2055,54 @@ static void test_mutation_shrink_array(void) {
     CHECK(c.live == 0);
 }
 
+/* A set that delete takes most members from, or clear empties, gives its
+ * memory back, its index included. Removing the last member costs one
+ * unit, as a missing one does; any other, the set's length more, for the
+ * members that move down; clear, one per member. */
+static void test_mutation_set_removal(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    size_t full = live_of(context, "new Set(Array.from({length: 4000}, (_, i) => i))");
+    size_t emptied = live_of(context, "Array.from({length: 3990}, (_, i) => i).reduce((s, x) => { s.delete(x); return s; }, new Set(Array.from({length: 4000}, (_, i) => i)))");
+    size_t cleared = live_of(context, "(() => { const s = new Set(Array.from({length: 4000}, (_, i) => i)); s.clear(); return s; })()");
+    size_t small = live_of(context, "new Set(Array.from({length: 10}, (_, i) => i))");
+    CHECK(full > 4000 * 16);
+    CHECK(emptied < full / 50);
+    CHECK(emptied <= small + 512);
+    CHECK(cleared <= small);
+    char source[256];
+    uint64_t fuel[4];
+    static const char *const calls[4] = { "s.delete(999)", "s.delete(5000)", "s.delete(0)", "s.clear()" };
+    for (int i = 0; i < 4; i++) {
+        snprintf(source, sizeof source, "(() => { const s = new Set(Array.from({length: 1000}, (_, i) => i)); return %s; })()", calls[i]);
+        fuel[i] = fuel_of(context, source);
+    }
+    CHECK(fuel[1] == fuel[0]);
+    CHECK(fuel[2] - fuel[0] == 1000);
+    /* clear has no argument to push, and costs 1,000 for 1 */
+    CHECK(fuel[3] + 2u - fuel[0] == 1000);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* Every allocation of a program that removes from an indexed set until it
+ * shrinks, and clears one, fails in turn: a shrink that cannot allocate
+ * keeps the larger block. */
+static void test_mutation_set_removal_out_of_memory(void) {
+    test_out_of_memory("(() => {\n"
+                       "  const s = Array.from({length: 40}, (_, i) => `k${i}`).reduce((t, k) => t.add(k), new Set());\n"
+                       "  const d = Array.from({length: 36}, (_, i) => `k${i * 7 % 40}`).reduce((t, k) => { t.delete(k); return t; }, s);\n"
+                       "  const before = [...d];\n"
+                       "  d.add(\"k1\").add(\"z\");\n"
+                       "  const has = [d.has(\"k1\"), d.has(\"k2\"), d.delete(\"z\")];\n"
+                       "  d.clear();\n"
+                       "  d.add(1);\n"
+                       "  return [before, has, [...d]];\n"
+                       "})()",
+                       SJS_GOAL_EXPRESSION);
+}
+
 static void test_out_of_memory(const char *source, sjs_goal goal) {
     long needed = 0;
     for (long fail_at = 1;; fail_at++) {
@@ -2121,6 +2169,8 @@ int main(int argc, char **argv) {
     test_mutation_let_events();
     test_mutation_let_out_of_memory();
     test_mutation_shrink_array();
+    test_mutation_set_removal();
+    test_mutation_set_removal_out_of_memory();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */

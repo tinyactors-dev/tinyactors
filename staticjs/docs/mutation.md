@@ -37,6 +37,8 @@ This is done in 3 steps:
 | array | `reverse()` | the array |
 | array | `fill(value, start, end)` | the array |
 | set | `add(value)` | the set |
+| set | `delete(value)` | whether the set had it |
+| set | `clear()` | `undefined` |
 
 Each has JavaScript's semantics and return value. `sort` takes a compare
 function and sorts as `toSorted` does, with the same merge sort, fuel and
@@ -44,8 +46,11 @@ faults, and the same C path for a comparator of a known shape
 (`(a, b) => a - b`, `(a, b) => a.key - b.key`, docs/matcher.md); without one it faults, as `toSorted()` does, since JavaScript
 would compare the elements as strings. `Set.prototype.add` appends, as a
 set keeps insertion order; it holds primitives only, as `new Set` does.
-None of these removes from a hash index: arrays have none, and `add` only
-appends. `pop` and `shift` remove from an array, which has no index.
+`delete` removes a member, found under SameValueZero as `has` finds it (NaN
+is NaN, -0 is 0), from the set's hash index too ("Removal", below); an
+object is never a member, so `delete` of one gives `false`. `clear`
+removes them all. Arrays have no index: `pop` and `shift` remove from an
+array without one.
 
 ## The rule, at compile time
 
@@ -318,8 +323,8 @@ does not reallocate each time:
 - **Assigning to a parameter**, and `var`: JavaScript allows both; a
   `let` does what they would. `var` stays refused ("staticjs declares with
   const").
-- **The other mutating methods** (`splice`, `copyWithin`, `delete`,
-  `clear`): step 3. They fault by name, as before.
+- **The other mutating methods** (`splice`, `copyWithin`): step 3. They
+  fault by name, as before.
 - **A method that changes a property or an element** (`o.items.push(x)`):
   the receiver of a mutation is a variable, read directly, and an
   assignment's path is not one. It is compiled as any method call and
@@ -388,6 +393,15 @@ Step 3, removal from the index and shrinking:
 | `src/value.c` | the removal section at the end of the file |
 | `src/builtins.c` | `array_remove`'s shrink (restore `array_remove(id, call)`, without it) |
 | `tests/api_test.c` | `live_of`, `allocations_of` and the `test_mutation_shrink_*` functions |
+
+Step 3, `Set.prototype.delete` and `clear`:
+
+| File | What is tagged |
+|---|---|
+| `src/internal.h` | `SJS_METHOD_SET_CLEAR`, `SJS_METHOD_SET_DELETE` |
+| `src/builtins.c` | the names `clear` and `delete` (restore `NAME(text, flags, 0, 0, 0)`); `mutation_kind`, used by `sjs_mutation_of` (restore the test of `SJS_METHOD_SET_ADD`); `set_remove` and its case in `sjs_mutation_call` |
+| `tests/api_test.c` | `test_mutation_set_removal`, `test_mutation_set_removal_out_of_memory` |
+| `bench/bench.c` | `eval.set.delete-reduce`, `eval.set.delete-reduce.last` |
 
 Nothing on the immutable path removes an item or shrinks a container:
 values never change there, and a value nothing else holds is only ever

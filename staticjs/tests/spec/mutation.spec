@@ -1742,3 +1742,193 @@ undefined
 === a number key of a string on the way
 (() => { const xs = ["ab"]; xs[0][0] = "x"; return xs; })()
 --- fault objects and elements
+
+
+
+
+# Set.prototype.delete and clear (docs/mutation.md, "Removal").
+=== delete returns true for a member
+(() => { const s = new Set([1, 2, 3]); const d = s.delete(2); return [d, s]; })()
+--- value
+[true,new Set([1,3])]
+
+=== delete returns false for a value not there
+(() => { const s = new Set([1, 2]); const d = s.delete(3); return [d, s]; })()
+--- value
+[false,new Set([1,2])]
+
+=== delete of the last member
+(() => { const s = new Set([1, 2, 3]); s.delete(3); return [...s]; })()
+--- value
+[1,2]
+
+=== delete of the first member
+(() => { const s = new Set(["a", "b", "c"]); s.delete("a"); return [...s, s.size]; })()
+--- value
+["b","c",2]
+
+=== delete of no argument removes undefined
+(() => { const s = new Set([undefined, 1]); return [s.delete(), [...s]]; })()
+--- value
+[true,[1]]
+
+=== delete of NaN
+(() => { const s = new Set([1, NaN, 2]); return [s.delete(NaN), s.has(NaN), [...s]]; })()
+--- value
+[true,false,[1,2]]
+
+=== delete of -0 removes 0
+(() => { const s = new Set([0, 1]); return [s.delete(-0), [...s]]; })()
+--- value
+[true,[1]]
+
+=== delete of 0 removes the -0 added
+(() => { const s = new Set([-0, 1]); return [s.delete(0), [...s]]; })()
+--- value
+[true,[1]]
+
+=== delete of a number does not remove its string
+(() => { const s = new Set(["1", 1]); s.delete(1); return [...s]; })()
+--- value
+["1"]
+
+=== delete of null, true and a string
+(() => { const s = new Set([null, true, "x", false]); return [s.delete(null), s.delete(true), s.delete("x"), [...s]]; })()
+--- value
+[true,true,true,[false]]
+
+=== delete of an object gives false
+(() => { const s = new Set([1]); return [s.delete({}), s.delete([1]), s.size]; })()
+--- value
+[false,false,1]
+
+=== delete twice
+(() => { const s = new Set([1, 2]); return [s.delete(1), s.delete(1), [...s]]; })()
+--- value
+[true,false,[2]]
+
+=== a member deleted and added again goes last
+(() => { const s = new Set([1, 2, 3]); s.delete(1); s.add(1); return [...s]; })()
+--- value
+[2,3,1]
+
+=== a number-like string deleted and added again goes last
+(() => { const s = new Set(["2", "1", "x"]); s.delete("2"); s.add("2"); return [...s]; })()
+--- value
+["1","x","2"]
+
+=== delete until empty, then add
+(() => { const s = new Set([1, 2]); s.delete(1); s.delete(2); const e = s.size; s.add(3); s.add(1); return [e, [...s]]; })()
+--- value
+[0,[3,1]]
+
+=== delete in a chain after add
+(() => { const s = new Set([1]); return [s.add(2).delete(1), [...s]]; })()
+--- value
+[true,[2]]
+
+=== delete in a reduce
+[3, 1, 4, 1, 5].reduce((s, x) => { s.delete(x); return s; }, new Set([1, 2, 3, 4, 5, 6]))
+--- value
+new Set([2,6])
+
+=== delete most members of a large set, then look each one up
+(() => { const s = Array.from({length: 90}, (_, i) => i * 7 % 100).reduce((t, x) => { t.delete(x); return t; }, Array.from({length: 100}, (_, i) => i).reduce((t, x) => t.add(x), new Set())); return [s.size, [...s], Array.from({length: 100}, (_, i) => i).filter(x => s.has(x))]; })()
+--- value
+[10,[30,37,44,51,58,65,72,79,86,93],[30,37,44,51,58,65,72,79,86,93]]
+
+=== delete most members of a large set, then add them back
+(() => { const s = Array.from({length: 36}, (_, i) => `k${i}`).reduce((t, k) => { t.delete(k); return t; }, new Set(Array.from({length: 40}, (_, i) => `k${i}`))); s.add("k5").add("k0").add("k39"); return [s.size, [...s], s.has("k0"), s.has("k1"), s.has("k39")]; })()
+--- value
+[6,["k36","k37","k38","k39","k5","k0"],true,false,true]
+
+=== delete from a large set of strings and numbers
+(() => { const s = [1, "2", 3, "3", 29, "28", NaN].reduce((t, x) => { t.delete(x); return t; }, new Set(Array.from({length: 30}, (_, i) => i % 2 ? i : `${i}`))); return [...s]; })()
+--- value
+["0","4",5,"6",7,"8",9,"10",11,"12",13,"14",15,"16",17,"18",19,"20",21,"22",23,"24",25,"26",27]
+
+=== delete each member, then add them in another order
+(() => { const xs = Array.from({length: 20}, (_, i) => i); const s = xs.reduce((t, x) => { t.delete(x); return t; }, new Set(xs)); const e = s.size; const r = xs.toReversed().reduce((t, x) => t.add(x), s); return [e, [...r]]; })()
+--- value
+[0,[19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0]]
+
+=== clear returns undefined
+(() => { const s = new Set([1, 2]); const r = s.clear(); return [r, s.size, [...s]]; })()
+--- value
+[undefined,0,[]]
+
+=== clear of an empty set
+(() => { const s = new Set(); s.clear(); return s.size; })()
+--- value
+0
+
+=== clear, then add
+(() => { const s = new Set([1, 2, 3]); s.clear(); s.add(3).add(1); return [...s]; })()
+--- value
+[3,1]
+
+=== clear a large set, then add and look up
+(() => { const s = new Set(Array.from({length: 50}, (_, i) => i)); s.clear(); s.add(7); return [s.has(7), s.has(8), s.size]; })()
+--- value
+[true,false,1]
+
+=== clear in a chain after add
+(() => { const s = new Set(); return [s.add(1).clear(), s.size]; })()
+--- value
+[undefined,0]
+
+=== delete of a set passed in
+(s => { s.delete(1); return s; })(new Set([1, 2]))
+--- value
+new Set([2])
+
+=== delete of a set a caller holds
+(() => { const t = new Set([1, 2]); const f = s => { s.delete(1); return s; }; return [f(t), t]; })()
+--- fault held elsewhere
+
+=== clear of a set a caller holds
+(() => { const t = new Set([1, 2]); const f = s => { s.clear(); return s; }; return [f(t), t]; })()
+--- fault held elsewhere
+
+=== delete of a set stored before
+(() => { const s = new Set([1]); const xs = [s]; s.delete(1); return xs; })()
+--- error unsupported stored
+
+=== delete of a set an array holds, in a callback
+(() => { const xs = [new Set([1])]; return xs.map(t => { t.delete(1); return t; }); })()
+--- fault held elsewhere
+
+=== delete of a set copied before
+(() => { const s = new Set([1]); const t = s; s.delete(1); return t; })()
+--- error unsupported copied
+
+=== delete of a captured set
+(() => { const s = new Set([1]); const f = () => s.size; s.delete(1); return f(); })()
+--- error unsupported captured
+
+=== delete of a set not in a variable
+new Set([1]).delete(1)
+--- fault only on a variable
+
+=== clear of an array
+(() => { const xs = [1]; xs.clear(); return xs; })()
+--- fault changes its receiver
+
+=== delete of an array
+(() => { const xs = [1]; return xs.delete(0); })()
+--- fault changes its receiver
+
+=== delete of a string
+(() => { const s = "a"; return s.delete("a"); })()
+--- fault changes its receiver
+
+=== delete through an object's property
+(() => { const o = {delete: x => x * 2}; return o.delete(2); })()
+--- value
+4
+
+=== delete as a statement on its own
+(() => { const s = new Set([1, 2]); s.delete(1); s.delete(5); s.clear(); s.add(4); return [...s]; })()
+--- value
+[4]
+
