@@ -741,6 +741,25 @@ mark and truncate) stays until those go; `_event.data` of capacity
 errors is still empty; the test host's data models still answer
 `TA_OP_NOMEM`, which core now reads as an error.
 
+**Startup after the macrostep, and no allocator call inside one.**
+Invocation startup runs after the macrostep (macrostep.md, "Invocation
+startup and input completion"): it may allocate, and an invocation it
+cannot start, out of memory included, starts nothing and raises its
+error.execution; it is a cut of `check-macrostep-alloc`, since
+`system->run.running` is false while it runs. Inside a macrostep nothing
+frees either: a session the macrostep's host destroys is gone at once
+and its storage is given back when the macrostep returns
+(`ta_actor_free_doomed`, the design's "child exit cleanup"); the sparse
+state and the internal queue are compacted there too
+(`ta_interpreter_settle`). Choices the design left open, after checking
+macrostep.md, BEHAVIORS.md and ADRs 0102 and 0103: a finished session's
+done data and final state live in a finish record in its actor block,
+made at spawn for a definition with a top-level `<final>` (the design
+names only the floor's `F` entries and the child's token for a parent's
+completion); generated invocation names are written into one buffer
+made at system creation for the longest name a field holds (ADR 0102:
+"generated error names ... have pre-sized storage").
+
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
   input.

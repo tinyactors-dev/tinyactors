@@ -365,6 +365,14 @@ typedef struct {
     ta_fault *fault;
 } ta_interpreter_value_params;
 
+/**
+ * Gives back what the actor's last macrostep left unused, its sparse state
+ * and its internal queue, once nothing in them is needed. A safe point
+ * only: the run calls it after a macrostep returns, never inside one, where
+ * the same checks do nothing. May free; never allocates.
+ */
+void ta_interpreter_settle(ta_system *system, struct ta_actor *actor);
+
 ta_actor_sparse_state *ta_interpreter_sparse(ta_system *system, ta_actor *actor);
 ta_op_status ta_interpreter_eval(ta_interpreter *it, const ta_interpreter_value_params *params);
 /*

@@ -237,6 +237,18 @@ typedef struct ta_internal_queue {
     ta_queued_event events[];
 } ta_internal_queue;
 
+/*
+ * What a finished session keeps (ADR 0056): the done data of the top-level
+ * <final> it entered and that state. It lives in the actor block, made at
+ * spawn for a definition with a top-level <final>, so finishing inside a
+ * macrostep needs no storage (ADR 0102); a definition without one has
+ * none. Meaningful only while the actor is finished.
+ */
+typedef struct {
+    ta_actor_completion completion;
+    ta_state_id final_state;
+} ta_actor_finish;
+
 /* Allocated only for actors that use one of these uncommon facilities. */
 typedef struct {
     ta_active_invoke *invokes;
@@ -248,14 +260,10 @@ typedef struct {
     ta_vec pending_invokes;
     ta_activation_effects *activation_effects;
     ta_actor_parent parent;
-    ta_actor_completion completion;
     /* A local invoked child's invocation token (deadline.h): the envelope
      * its completion uses, held until the completion is published; 0 for
      * none. */
     uint32_t token;
-    /* The top-level <final> whose entry ended the session (ADR 0056); set
-     * with `completion`, and meaningful only while the actor is finished. */
-    ta_state_id final_state;
     bool has_parent;
     bool completion_pending;
     /* A microstep paused inside executable content (ADR 0061), or null. */
@@ -326,10 +334,22 @@ struct ta_actor {
      * While the interpreter runs, the full active set it is updating (ancestors
      * included), so In() sees states as SCXML defines them mid-microstep.
      */
-    const uint64_t *live_active;
+    /* While a macrostep runs, the session it ran for destroyed (ta_actor_free):
+     * the next session whose storage waits for the run to give it back. */
+    union {
+        const uint64_t *live_active;
+        struct ta_actor *doomed_next;
+    };
     /* Its pending delayed sends: the head of its owner list (deadline.h). */
     ta_deadline_owner timers;
 };
+
+/** The actor's finish record, or null when its definition has no top-level
+ * <final>. O(1); allocates nothing. */
+static inline ta_actor_finish *ta_actor_finish_of(const ta_actor *actor) {
+    size_t offset = actor->definition->actor_finish_offset;
+    return offset == 0 ? NULL : (ta_actor_finish *)((unsigned char *)actor + offset);
+}
 
 /*
  * One slot of the actor table, an item of its index pool. Slot `s` is pool
@@ -440,6 +460,10 @@ void ta_actor_exit_invoked(ta_system *system, ta_actor_id id);
 ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **out);
 /* Tears the actor down completely and uncounts it against its definition. */
 void ta_actor_free(ta_system *system, ta_actor *actor);
+/** Gives back the storage of the sessions destroyed while the last macrostep
+ * ran. A safe point only: the run calls it after a macrostep returns, and
+ * the system calls it at teardown. Only frees. */
+void ta_actor_free_doomed(ta_system *system);
 /* Frees the slot an actor was given, so a failed construction reuses it. */
 void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 

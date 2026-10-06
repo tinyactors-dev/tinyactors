@@ -561,6 +561,10 @@ struct ta_definition {
     size_t actor_block_alignment;
     size_t actor_session_offset;
     size_t actor_instance_offset;
+    /* Where the actor block keeps the session's finish record
+     * (ta_actor_finish), for a definition with a top-level <final>; 0 for
+     * one without, which never finishes that way. */
+    size_t actor_finish_offset;
     /* Resident actors whose `definition` points here; see ta_actor_free(). */
     uint32_t actor_count;
     /*

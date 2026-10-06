@@ -30,10 +30,6 @@
 #define TA_RUN_RECORD_JUMP 0x02u
 /* A report that retires its invocation. */
 #define TA_RUN_RECORD_ENDS 0x04u
-/* The bytes of name the run's name buffer holds from system creation: the
- * longest name a name-area field holds, so the buffer never grows, and a
- * macrostep that holds a name never allocates (ADR 0102). */
-#define TA_RUN_NAME_ROOM TA_NAME_AREA_FIELD_MAX
 /* The event's name is not interned: it is the text field after the record. */
 #define TA_RUN_RECORD_NAME_TEXT 0x08u
 
@@ -296,6 +292,10 @@ ta_result ta_run_init(ta_system *system) {
         system->run.name_longest = TA_RUN_NAME_ROOM;
         result = ta_run_name_room(system);
     }
+    if (result == TA_OK) {
+        system->run.invoke_names = ta_mem_alloc(system->allocator, TA_RUN_NAME_ROOM + 1u, 1u);
+        result = system->run.invoke_names != NULL ? TA_OK : TA_ERR_NOMEM;
+    }
     return result;
 }
 
@@ -319,6 +319,11 @@ void ta_run_destroy(ta_system *system) {
     ta_waiting_destroy(&system->run.waiting);
     ta_name_area_destroy(&system->run.names);
     ta_envelope_pool_destroy(pool);
+    if (system->run.invoke_names != NULL) {
+        ta_mem_free(system->allocator, system->run.invoke_names,
+                    &(ta_allocator_free_params){ .size = TA_RUN_NAME_ROOM + 1u, .alignment = 1u });
+        system->run.invoke_names = NULL;
+    }
     if (system->run.name_buffer != NULL) {
         ta_mem_free(system->allocator, system->run.name_buffer,
                     &(ta_allocator_free_params){ .size = system->run.name_capacity, .alignment = 1u });
@@ -692,7 +697,7 @@ void ta_run_wake_place(ta_system *system, ta_actor *actor, uint32_t wake) {
         actor->input = wake;
         actor->input_flags = TA_ACTOR_INPUT_WAITING;
     }
-    if (system->run.running && system->run.current != 0u) {
+    if (system->run.current != 0u) {
         ta_envelope_pool_enqueue_beside(&system->run.pool,
                                         (ta_envelope_beside){ .beside = system->run.current, .index = wake });
         return;
@@ -886,7 +891,9 @@ ta_result ta_run_post_mail(ta_system *system, const ta_run_mail *mail, ta_record
     envelope->send_id = event->send_id;
     envelope->invoke_instance = event->invoke_id;
     envelope->data = held.data;
-    if (system->run.running) {
+    if (system->run.current != 0u) {
+        /* Inside a macrostep or its invocation startup: unseen until the
+         * input's chain ends. */
         ta_envelope_pool_post(&system->run.pool,
                               (ta_envelope_post){ .outgoing = &system->run.outgoing, .index = index });
     } else if (entry != 0u) {
@@ -1262,6 +1269,8 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
     ta_result result = ta_interpreter_run(system, actor, &run);
     system->run.running = false;
     system->run.current = 0u;
+    ta_interpreter_settle(system, actor);
+    ta_actor_free_doomed(system);
     call->budget -= run.steps < call->budget ? run.steps : call->budget;
     if (limited) {
         call->actions -= run.actions < call->actions ? run.actions : call->actions;
@@ -1482,7 +1491,7 @@ ta_result ta_run(ta_system *system, const ta_run_params *params) {
     if (params->name_used != NULL) {
         *params->name_used = 0u;
     }
-    if (system->run.running) {
+    if (system->run.current != 0u) {
         return TA_ERR_BUSY;
     }
     ta_run_call call = { .system = system, .params = params, .budget = params->budget,
@@ -1689,7 +1698,7 @@ ta_result ta_system_load_settled(ta_system *system, const ta_load_settled_params
     if (system == NULL || params == NULL) {
         return TA_ERR_INVALID;
     }
-    if (system->run.running) {
+    if (system->run.current != 0u) {
         return TA_ERR_BUSY;
     }
     uint32_t entry = ta_run_answered(system, params->request);
@@ -1722,7 +1731,7 @@ ta_result ta_system_load_failed(ta_system *system, const ta_load_failed_params *
     if (system == NULL || params == NULL || params->fault == NULL) {
         return TA_ERR_INVALID;
     }
-    if (system->run.running) {
+    if (system->run.current != 0u) {
         return TA_ERR_BUSY;
     }
     uint32_t entry = ta_run_answered(system, params->request);

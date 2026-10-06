@@ -329,7 +329,8 @@ TinyactorsTest.scenarios 'tracing' do
       errors = OutOfMemory::CHART_ERRORS.include?(kind)
 
       scenario "#{label}: every record is written once when an allocation fails (#{datamodel})", exhaustive: true do
-        result = assert_allocation_failures_invisible(counts: [1, 2], chart_errors: errors) do
+        result = assert_allocation_failures_invisible(counts: [1, 2], chart_errors: errors,
+                                                      invocation_failed: kind == :family) do
           recording_trace(kinds: Tracing::SWEEP_KINDS)
           instance_exec(chart, nil, &body)
         end

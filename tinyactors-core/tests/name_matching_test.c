@@ -1537,6 +1537,12 @@ static void test_error_name_splits_the_id(void) {
     CHECK(ta_invoke_name_text(f.system, (ta_invoke_name){ .system = f.system, .invoke = authored,
                                                            .reason = STR("failed") },
                               &authored_name) == TA_OK);
+    /* The text lives in the system's invocation-name buffer until the next
+     * name is written there: kept here to compare both. */
+    char authored_text[96];
+    CHECK(authored_name.len < sizeof authored_text);
+    memcpy(authored_text, authored_name.ptr, authored_name.len);
+    authored_name.ptr = authored_text;
     CHECK(ta_invoke_name_text(f.system, (ta_invoke_name){ .system = f.system, .invoke = generated,
                                                            .reason = STR("failed") },
                               &generated_name) == TA_OK);
@@ -1561,8 +1567,6 @@ static void test_error_name_splits_the_id(void) {
         }
         CHECK(ok);
     }
-    ta_invoke_name_free(f.system, authored_name);
-    ta_invoke_name_free(f.system, generated_name);
     CHECK(atom_count(&f) == atoms);
     CHECK(node_count(&f) == nodes);
 
@@ -1651,7 +1655,6 @@ static void test_too_deep_names(void) {
     ta_str done = { 0 };
     CHECK(ta_invoke_name_text(f.system, (ta_invoke_name){ .system = f.system, .invoke = five }, &done) == TA_OK);
     CHECK(ta_names_resolve(&f.names, done) == TA_OK && f.names.count == 7u);
-    ta_invoke_name_free(f.system, done);
 
     /* A short name for the same session is still made and taken. */
     CHECK(report_error(&f, actor, short_id) == TA_OK);

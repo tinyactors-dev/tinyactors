@@ -524,8 +524,10 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
         .has_parent = sparse != NULL && sparse->has_parent,
         .parent = sparse != NULL ? sparse->parent : (ta_actor_parent){0},
         .completion_pending = sparse != NULL && sparse->completion_pending,
-        .completion = sparse != NULL ? sparse->completion : (ta_actor_completion){0},
-        .final_state = sparse != NULL && actor->finished ? sparse->final_state : TA_STATE_NONE,
+        .completion = ta_actor_finish_of(actor) != NULL ? ta_actor_finish_of(actor)->completion
+                                                        : (ta_actor_completion){0},
+        .final_state = ta_actor_finish_of(actor) != NULL && actor->finished ? ta_actor_finish_of(actor)->final_state
+                                                                          : TA_STATE_NONE,
     };
     ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(system, actor));
     if (result == TA_OK) {
@@ -838,8 +840,13 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         result = ta_image_restore_pause(image, actor, system);
     }
 
-    if (result == TA_OK && (image->finished || image->has_parent || image->completion.has_data ||
-                            image->internal_count != 0 || image->invoke_count != 0 ||
+    ta_actor_finish *finish = ta_actor_finish_of(actor);
+    if (result == TA_OK && finish != NULL) {
+        finish->completion = image->completion;
+        ta_value_retain(&finish->completion.data);
+        finish->final_state = image->final_state;
+    }
+    if (result == TA_OK && (image->has_parent || image->internal_count != 0 || image->invoke_count != 0 ||
                             image->pending_invoke_count != 0)) {
         ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
         if (sparse == NULL) {
@@ -853,9 +860,6 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
                 result = ta_deadline_token_take(system, &sparse->token, NULL);
             }
             sparse->completion_pending = image->completion_pending;
-            sparse->completion = image->completion;
-            ta_value_retain(&sparse->completion.data);
-            sparse->final_state = image->final_state;
             if (image->pending_invoke_count != 0 && sparse->pending_invokes.element_size == 0) {
                 ta_vec_init(&sparse->pending_invokes, system->allocator, TA_VEC_LAYOUT(ta_state_id));
             }

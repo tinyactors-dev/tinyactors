@@ -327,6 +327,11 @@
 struct ta_actor;
 struct ta_operator_jump;
 
+/** The longest name the run's buffers hold from system creation: one
+ * name-area field, so they never grow, and a macrostep that holds or
+ * writes a name never allocates (ADR 0102). */
+#define TA_RUN_NAME_ROOM TA_NAME_AREA_FIELD_MAX
+
 /** Free envelopes, and free name-area chunks, a refill keeps: one page each. */
 #define TA_RUN_RESERVE 64u
 
@@ -346,8 +351,11 @@ typedef struct {
      * mail it sent to resident sessions, in send order, on no queue until
      * the macrostep ends. Empty whenever no macrostep runs. */
     ta_list outgoing;
-    /** A macrostep runs inside `ta_run()`: no refill may allocate. */
+    /** A macrostep runs inside `ta_run()`: nothing may call the allocator. */
     bool running;
+    /** Sessions destroyed while a macrostep ran, whose storage is given back
+     * when it returns (ta_actor_free_doomed), linked through `doomed_next`. */
+    struct ta_actor *doomed;
     /** The input whose external event `event` holds, or 0. */
     uint32_t event_input;
     /** The external event of `event_input`, decoded from its envelope; its
@@ -359,6 +367,11 @@ typedef struct {
     char *name_buffer;
     uint32_t name_capacity;
     uint32_t name_longest;
+    /** Where an invocation's generated event name is written
+     * (`done.invoke.<id>`, `error.communication.invoke.<id>.<reason>`): pre-sized
+     * at system creation for the longest name a field holds, and its NUL,
+     * so writing one never allocates (ADR 0102). Null until then. */
+    char *invoke_names;
 } ta_run_state;
 
 /**

@@ -144,27 +144,26 @@ static bool ta_invoke_name_write(const void *context, ta_text_writer *writer) {
     return true;
 }
 
-/* The name's text in memory of the system's allocator, which the caller
- * frees with ta_invoke_name_free. TA_ERR_NOMEM; TA_ERR_INVALID for an ID
- * with no text, or a name that is no dotted event name. */
+/* The name's text, written into the system's invocation-name buffer, which
+ * holds it until the next name is written there (ta_run_state.invoke_names).
+ * Never allocates; may run inside a macrostep. TA_ERR_INVALID for an ID with
+ * no text, a name longer than a name-area field, or one that is no dotted
+ * event name. */
 static ta_result ta_invoke_name_text(ta_system *system, ta_invoke_name name, ta_str *out) {
-    ta_result result = ta_text_render(system->allocator, &(ta_text_render_params){ .write = ta_invoke_name_write,
-                                                                                   .context = &name,
-                                                                                   .out = out });
-    if (result == TA_ERR_NOT_FOUND) {
+    ta_text_writer writer = { .buffer = system->run.invoke_names, .capacity = TA_RUN_NAME_ROOM + 1u };
+    if (!ta_invoke_name_write(&name, &writer)) {
         return TA_ERR_INVALID;
     }
-    if (result == TA_OK && ta_names_resolve(&system->names, *out) != TA_OK) {
-        ta_mem_free(system->allocator, (void *)out->ptr,
-                    &(ta_allocator_free_params){ .size = out->len + 1u, .alignment = 1u });
+    uint32_t needed = 0;
+    if (ta_text_finish(&writer, &needed) != TA_OK) {
         return TA_ERR_INVALID;
     }
-    return result;
-}
-
-static void ta_invoke_name_free(ta_system *system, ta_str text) {
-    ta_mem_free(system->allocator, (void *)text.ptr,
-                &(ta_allocator_free_params){ .size = text.len + 1u, .alignment = 1u });
+    ta_str text = { .ptr = system->run.invoke_names, .len = (uint32_t)(needed - 1u) };
+    if (ta_names_resolve(&system->names, text) != TA_OK) {
+        return TA_ERR_INVALID;
+    }
+    *out = text;
+    return TA_OK;
 }
 
 /* ------------------------------------------------------------------------
@@ -425,8 +424,15 @@ static ta_op_status ta_invoke_value_text(ta_interpreter *it, ta_datamodel_value_
  * fault in its ta_invoke_values says why. */
 #define TA_INVOKE_FAILED 1
 
+/* Says in `fault` that starting the invocation ran out of memory. */
+static void ta_invoke_out_of_memory(ta_fault *fault) {
+    static const char text[] = "out of memory starting the invocation";
+    ta_value_release(&fault->data);
+    *fault = (ta_fault){ .code = TA_ERR_NOMEM, .message = { .ptr = text, .len = sizeof text - 1u } };
+}
+
 static ta_result ta_invoke_op(ta_op_status status) {
-    return status == TA_OP_OK ? TA_OK : status == TA_OP_NOMEM ? TA_ERR_NOMEM : TA_INVOKE_FAILED;
+    return status == TA_OP_OK ? TA_OK : TA_INVOKE_FAILED;
 }
 
 /*
@@ -688,15 +694,12 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
     if (found >= 0) {
         ta_invoke_remove_at(sparse, (uint32_t)found);
     }
-    /* An invoker that ran out of memory started nothing: the invocation
-     * starts again when the host runs the session again. Starting a service
-     * still runs inside the macrostep that entered its state, so its
-     * out-of-memory is a stop, not an error the chart sees, until startup
-     * moves after the macrostep (ADR 0102 decision 6). A local child that
-     * found no envelope for its token fails as a capacity error. */
-    if (status == TA_OP_NOMEM) {
-        ta_value_release(&values->fault.data);
-        return TA_ERR_NOMEM;
+    /* An invoker that could not start the service, out of memory included,
+     * started nothing, and the chart sees the invocation's error: startup
+     * runs after the macrostep (ADR 0102). A local child that found no
+     * envelope for its token fails as a capacity error. */
+    if (status == TA_OP_NOMEM && values->fault.code == TA_OK) {
+        ta_invoke_out_of_memory(&values->fault);
     }
     return values->fault.code == TA_ERR_FULL ? ta_interpreter_capacity_error(it, TA_RECORD_CAPACITY_RESOURCE_POOL)
                                              : ta_interpreter_execution_error(it, &values->fault);
@@ -714,13 +717,19 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
 static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) {
     ta_system *system = it->system;
     const ta_invoke_decl *decl = &it->definition->invokes[decl_id];
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, it->actor);
-    ta_result result = sparse == NULL ? TA_ERR_NOMEM : ta_invoke_grow(system, sparse);
-    if (result == TA_OK) {
-        result = ta_interpreter_queue_room(system, it->actor);
-    }
+    /* Room for the invocation's error, first: the queue was sized for one
+     * startup pass when the input was taken (ADR 0102). */
+    ta_result result = ta_interpreter_queue_room(system, it->actor);
     if (result != TA_OK) {
         return result;
+    }
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, it->actor);
+    result = sparse == NULL ? TA_ERR_NOMEM : ta_invoke_grow(system, sparse);
+    if (result != TA_OK) {
+        /* No room to record it: it starts nothing, and the chart sees why. */
+        ta_fault fault = {0};
+        ta_invoke_out_of_memory(&fault);
+        return ta_interpreter_execution_error(it, &fault);
     }
     uint32_t mark = ta_interpreter_queue_mark(it->actor);
     ta_invoke_values values = {0};
@@ -743,7 +752,10 @@ static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) 
                                           .decl = decl_id, .id = id, .type = type, .invoker = invoker,
                                           .values = &values });
         launched = result == TA_OK && ta_invoke_find(it->actor, id) >= 0;
-    } else if (result == TA_INVOKE_FAILED) {
+    } else if (result == TA_INVOKE_FAILED || result == TA_ERR_NOMEM) {
+        if (result == TA_ERR_NOMEM) {
+            ta_invoke_out_of_memory(&values.fault);
+        }
         result = ta_interpreter_execution_error(it, &values.fault);
     }
     ta_invoke_values_release(&values);
@@ -1048,6 +1060,12 @@ ta_result ta_invoke_autoforward(ta_interpreter *it, const ta_event *event, uint3
 /* Sends done.invoke.<id> with the completion data to the invoking parent,
  * under `trace`, the finishing step's, or none when the host publishes it
  * again after a refusal. */
+/* The finished child's done data, borrowed, or no value. */
+static ta_value ta_invoke_completion_data(const ta_actor *actor) {
+    const ta_actor_finish *finish = ta_actor_finish_of(actor);
+    return finish != NULL && finish->completion.has_data ? finish->completion.data : (ta_value){0};
+}
+
 static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_parent trace) {
     ta_actor_sparse_state *sparse = actor->sparse;
     /* Its token goes back first: the completion's mail, or the timer that
@@ -1066,7 +1084,7 @@ static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_
         .send_id = TA_SEND_ID_COMPLETION,
         .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = actor->record.self },
         .invoke_id = sparse->parent.invoke_id,
-        .data = sparse->completion.has_data ? sparse->completion.data : (ta_value){0},
+        .data = ta_invoke_completion_data(actor),
     };
     result = ta_invoke_submit(system, &(ta_invoke_delivery){
                                           .sender = actor,
@@ -1075,7 +1093,6 @@ static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_
                                           .name_text = name,
                                           .trace = trace,
                                       });
-    ta_invoke_name_free(system, name);
     return result;
 }
 
@@ -1162,7 +1179,6 @@ static ta_result ta_invoke_error_hold(ta_system *system, ta_invoke_id invoke, ta
         return result;
     }
     result = ta_run_hold_name(system, text, out);
-    ta_invoke_name_free(system, text);
     return result;
 }
 
@@ -1276,7 +1292,6 @@ static ta_result ta_invoke_report_error(ta_system *system, ta_actor *actor, cons
                                                          .trace = &params->trace,
                                                          .time = params->time,
                                                          .correlation = params->correlation });
-    ta_invoke_name_free(system, name);
     return result;
 }
 
@@ -1371,7 +1386,6 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
                                                             .name = name,
                                                             .trace = params->trace, .time = params->time,
                                                             .correlation = params->correlation });
-            ta_invoke_name_free(system, name);
             return result;
         }
         case TA_INVOKE_REPORT_ERROR:

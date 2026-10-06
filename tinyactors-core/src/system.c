@@ -430,6 +430,7 @@ void ta_system_destroy(ta_system *system) {
     }
     /* No record is built, nor the clock called, for a ring about to be freed. */
     system->trace.masks = (ta_trace_masks){ 0 };
+    ta_actor_free_doomed(system);
     for (uint32_t slot = 0; slot < ta_actor_table_issued(&system->actors); slot += 1) {
         ta_actor_slot *entry = ta_actor_slot_at(system, slot);
         if (entry->actor != NULL) {

@@ -69,6 +69,15 @@ ta_result ta_actor_layout(ta_definition *definition) {
                                                    .alignment = _Alignof(uint64_t), .count = 1 },
                                &session);
     }
+    size_t finish = 0;
+    bool can_finish = false;
+    for (ta_state_id state = 0; state < definition->state_count && !can_finish; state += 1u) {
+        can_finish = definition->states[state].parent == TA_STATE_NONE &&
+                     definition->states[state].kind == TA_STATE_FINAL;
+    }
+    if (result == TA_OK && can_finish) {
+        result = ta_layout_add(&layout, TA_LAYOUT_ENTRY(ta_actor_finish, 1), &finish);
+    }
     if (result == TA_OK) {
         result = ta_layout_add(&layout,
                                &(ta_layout_entry){ .size = definition->datamodel_instance_size,
@@ -81,6 +90,7 @@ ta_result ta_actor_layout(ta_definition *definition) {
     }
     definition->actor_session_offset = session;
     definition->actor_instance_offset = instance;
+    definition->actor_finish_offset = finish;
     definition->actor_block_bytes = layout.bytes;
     definition->actor_block_alignment = layout.alignment;
     return TA_OK;
@@ -249,11 +259,10 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
  * Tears the actor down completely, then uncounts it. The last actor of a
  * definition nothing holds frees it (ADR 0077), so nothing below may touch it.
  */
-void ta_actor_free(ta_system *system, ta_actor *actor) {
+/* Gives back what a gone session held: its storage, its address and its
+ * block. Never inside a macrostep (ta_actor_free defers it). */
+static void ta_actor_free_storage(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
-    /* Its taken input goes back, and its deferred inputs return to the run
-     * queue to be refused. */
-    ta_run_session_gone(system, actor);
     ta_actor_discard_activation_effects(actor);
     if (actor->datamodel_initialized) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
@@ -263,7 +272,6 @@ void ta_actor_free(ta_system *system, ta_actor *actor) {
     ta_actor_ref_release(&actor->record.self);
     ta_interpreter_release_actor_state(system, actor);
     if (actor->session_node != NULL) {
-        ta_session_remove(&system->sessions, actor->session_node);
         ta_session_node_free(&system->sessions, actor->session_node);
     }
     /* The record, the session storage and the instance are one block (ADR 0063). */
@@ -274,6 +282,35 @@ void ta_actor_free(ta_system *system, ta_actor *actor) {
     owner->actor_count -= 1u;
     system->live_actors -= 1u;
     ta_system_settle_definition(system, owner);
+}
+
+/*
+ * Tears the actor down completely, then uncounts it. The last actor of a
+ * definition nothing holds frees it (ADR 0077), so nothing below may touch
+ * it. Its taken input goes back, and its deferred inputs return to the run
+ * queue to be refused, at once; inside a macrostep, which never calls the
+ * allocator (ADR 0102), what it held is given back when the macrostep
+ * returns (ta_actor_free_doomed), the session already gone.
+ */
+void ta_actor_free(ta_system *system, ta_actor *actor) {
+    ta_run_session_gone(system, actor);
+    if (actor->session_node != NULL) {
+        ta_session_remove(&system->sessions, actor->session_node);
+    }
+    if (system->run.running) {
+        actor->doomed_next = system->run.doomed;
+        system->run.doomed = actor;
+        return;
+    }
+    ta_actor_free_storage(system, actor);
+}
+
+void ta_actor_free_doomed(ta_system *system) {
+    while (system->run.doomed != NULL) {
+        ta_actor *actor = system->run.doomed;
+        system->run.doomed = actor->doomed_next;
+        ta_actor_free_storage(system, actor);
+    }
 }
 
 /*
@@ -515,6 +552,11 @@ ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **
     actor->configuration = (ta_configuration){ .storage = storage, .layout = &definition->configuration };
     actor->late_initialized = (uint64_t *)(storage + config_bytes);
     actor->history = (ta_history_state){ .storage = storage + config_bytes * 2u, .layout = &definition->history };
+
+    ta_actor_finish *finish = ta_actor_finish_of(actor);
+    if (finish != NULL) {
+        *finish = (ta_actor_finish){ .final_state = TA_STATE_NONE };
+    }
 
     /* An instance of size 0 (the null data model) points at the block's end. */
     actor->datamodel_instance = block + definition->actor_instance_offset;
@@ -1707,12 +1749,15 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         out->internal_events = actor->internal->events + (actor->internal->count - waiting);
         out->internal_count = waiting;
     }
+    ta_actor_finish *finish = ta_actor_finish_of(actor);
+    if (finish != NULL && actor->finished) {
+        out->has_completion = true;
+        out->completion = &finish->completion;
+        out->final_state = finish->final_state;
+    }
     if (actor->sparse != NULL) {
         out->invokes = actor->sparse->invokes;
         out->invoke_count = actor->sparse->invoke_count;
-        out->has_completion = actor->finished;
-        out->completion = actor->finished ? &actor->sparse->completion : NULL;
-        out->final_state = actor->finished ? actor->sparse->final_state : TA_STATE_NONE;
         out->has_parent = actor->sparse->has_parent;
         out->parent = actor->sparse->parent;
     }
@@ -1852,10 +1897,11 @@ ta_result ta_actor_get_completion(ta_system *system, ta_actor_id id, ta_actor_co
         return TA_ERR_BUSY;
     }
     *out = (ta_actor_completion){ .has_data = false };
-    if (actor->sparse == NULL || !actor->sparse->completion.has_data) {
+    const ta_actor_finish *finish = ta_actor_finish_of(actor);
+    if (finish == NULL || !finish->completion.has_data) {
         return TA_OK;
     }
-    out->data = actor->sparse->completion.data;
+    out->data = finish->completion.data;
     ta_value_retain(&out->data);
     out->has_data = true;
     return TA_OK;

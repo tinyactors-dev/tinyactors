@@ -206,6 +206,9 @@ typedef struct {
     ta_scxml_codec codec;
     /* Canonical source -> registered ta_definition_id as decimal text. */
     jv definitions;
+    /* Config `"refuse": true`: start() answers out of memory and starts
+     * nothing, as a host that cannot start a child does. */
+    bool refuse;
 } tat_scxml_invoker;
 
 static void tat_invoker_fault(ta_fault *fault, const char *message) {
@@ -429,6 +432,9 @@ static bool tat_invoker_binding(tat_scxml_invoker *invoker, const ta_invoke_requ
 
 static ta_op_status tat_invoker_start(void *self, const ta_invoker_start_params *params) {
     tat_scxml_invoker *invoker = self;
+    if (invoker->refuse) {
+        return TA_OP_NOMEM;
+    }
     const ta_invoke_request *request = params->request;
     ta_datamodel parent = {0};
     if (tat_actor_datamodel(invoker->system, request->parent, &parent) != TA_OK ||
@@ -568,8 +574,12 @@ static const ta_invoker_vtable TAT_SCXML_INVOKER = {
 static bool tat_make_scxml_invoker(tat_bind *bind, jv config, void *out) {
     jv system = jv_invalid();
     jv charts = jv_object();
+    bool refuse = false;
     if (jv_is_valid(config) && jv_get_kind(config) == JV_KIND_OBJECT) {
         system = jv_object_get(jv_copy(config), jv_string("system"));
+        jv refusing = jv_object_get(jv_copy(config), jv_string("refuse"));
+        refuse = jv_get_kind(refusing) == JV_KIND_TRUE;
+        jv_free(refusing);
         jv given = jv_object_get(jv_copy(config), jv_string("charts"));
         if (jv_get_kind(given) == JV_KIND_OBJECT) {
             jv_free(charts);
@@ -595,7 +605,7 @@ static bool tat_make_scxml_invoker(tat_bind *bind, jv config, void *out) {
         return tat_fail(bind, "out of memory");
     }
     *invoker = (tat_scxml_invoker){
-        .bind = bind, .system = handle, .charts = charts, .files = files, .definitions = jv_object()};
+        .bind = bind, .system = handle, .charts = charts, .files = files, .definitions = jv_object(), .refuse = refuse};
     (void)ta_scxml_codec_init(&invoker->codec, NULL);
     *(ta_invoker *)out = (ta_invoker){.self = invoker, .v = &TAT_SCXML_INVOKER};
     return true;

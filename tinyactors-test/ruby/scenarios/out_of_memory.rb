@@ -7,9 +7,11 @@
 # input, and every actor is as it was; running again takes the input once
 # and ends the run exactly as a run without the failure does:
 # configuration, data, queued events, delayed sends, invocations,
-# completion, and every instrument's journal. Starting an invocation still
-# runs inside the macrostep that entered its state, so a failure there
-# stops the session, which is released and goes on (the family charts).
+# completion, and every instrument's journal. Starting an invocation runs
+# after the macrostep and may allocate: a failure there starts no child and
+# gives the chart the invocation's error.execution, so the family charts'
+# runs end either as the baseline or exactly as a run whose SCXML invoker
+# refuses to start the child.
 module OutOfMemory
   # Expressions in each data model's language.
   class Language
@@ -431,9 +433,8 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
   # each resume failing once.
   bodies = OutOfMemory::BODIES
   chart_errors = OutOfMemory::CHART_ERRORS
-  # Charts whose content only core runs: every failed allocation is core's
-  # own, so every one must stop the resume with err_nomem.
-  self_contained = bodies.keys - %i[family]
+  # Every failed allocation is core's own, or the SCXML invoker's during
+  # invocation startup: each one refuses a take, or fails the invocation.
 
   %w[jq ecmascript].each do |datamodel|
     bodies.each do |kind, body|
@@ -445,12 +446,15 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
       # none), and one at a take that changed anything: the trace would
       # differ from the run without the failure.
       scenario "#{label}: each failed allocation is invisible (#{datamodel})" do
-        result = assert_allocation_failures_invisible(chart_errors: errors) { instance_exec(chart, nil, &body) }
+        result = assert_allocation_failures_invisible(chart_errors: errors, invocation_failed: kind == :family) do
+          instance_exec(chart, nil, &body)
+        end
         warn "#{chart}: #{result.except(:stops).inspect}" if ENV['OOM_VERBOSE']
         assert result[:runs] >= 3, "only #{result[:runs]} allocations were failed"
-        if self_contained.include?(kind)
-          assert_equal [], result[:unreported], 'every failed allocation is reported'
-          assert_equal [], result[:stops], 'no macrostep stopped: every failure refused a take'
+        assert_equal [], result[:unreported], 'every failed allocation is reported'
+        assert_equal [], result[:stops], 'no macrostep stopped: every failure refused a take'
+        if kind == :family
+          assert result[:invocation_failures].positive?, 'some failure fell in invocation startup'
         end
       end
 
@@ -458,10 +462,12 @@ TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
       # failing twice, then the one after it) and does not refuse cleanly
       # the second time, or takes the input twice.
       scenario "#{label}: allocations failing three times in a row are invisible (#{datamodel})" do
-        result = assert_allocation_failures_invisible(counts: [3], chart_errors: errors) do
+        result = assert_allocation_failures_invisible(counts: [3], chart_errors: errors,
+                                                      invocation_failed: kind == :family) do
           instance_exec(chart, nil, &body)
         end
-        assert result[:stops].size + result[:refusals] > result[:runs], 'retries ran out of memory again'
+        retried = result[:runs] - result[:invocation_failures]
+        assert result[:stops].size + result[:refusals] > retried, 'retries ran out of memory again'
       end
 
       # Catches: a failed allocation right after a pause at a microstep's

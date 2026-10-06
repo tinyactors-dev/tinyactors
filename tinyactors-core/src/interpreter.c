@@ -733,7 +733,7 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
     if (actor->sparse == NULL && system->run.running && system->spare_sparse != NULL) {
         actor->sparse = system->spare_sparse;
         system->spare_sparse = NULL;
-        *actor->sparse = (ta_actor_sparse_state){ .final_state = TA_STATE_NONE };
+        *actor->sparse = (ta_actor_sparse_state){0};
     }
     if (actor->sparse == NULL) {
         if (system->run.running) {
@@ -744,7 +744,7 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
         if (actor->sparse == NULL) {
             return NULL;
         }
-        *actor->sparse = (ta_actor_sparse_state){ .final_state = TA_STATE_NONE };
+        *actor->sparse = (ta_actor_sparse_state){0};
     }
     return actor->sparse;
 }
@@ -924,7 +924,7 @@ ta_result ta_interpreter_keep_name(ta_system *system, ta_actor *actor, ta_str te
  */
 static void ta_queue_settle(ta_system *system, ta_actor *actor) {
     ta_internal_queue *queue = actor->internal;
-    if (queue == NULL || queue->count != 0 || queue->has_kept ||
+    if (system->run.running || queue == NULL || queue->count != 0 || queue->has_kept ||
         (actor->sparse != NULL && actor->sparse->paused != NULL) || actor->macrostep) {
         return;
     }
@@ -3411,12 +3411,12 @@ static ta_result ta_done_data_value(ta_interpreter *it, ta_done_data_id id, ta_v
     return result == TA_EXEC_FAILED ? TA_OK : result;
 }
 
-/* Keeps a top-level final state's done data as the actor's completion; the
- * actor holds its sparse state already. */
+/* Keeps a top-level final state's done data as the actor's completion, in
+ * its finish record, which its definition made room for. */
 static void ta_store_completion(ta_interpreter *it, ta_value *data) {
-    ta_actor_sparse_state *sparse = it->actor->sparse;
-    ta_value_release(&sparse->completion.data);
-    sparse->completion = (ta_actor_completion){ .has_data = data->v != NULL, .data = *data };
+    ta_actor_finish *finish = ta_actor_finish_of(it->actor);
+    ta_value_release(&finish->completion.data);
+    finish->completion = (ta_actor_completion){ .has_data = data->v != NULL, .data = *data };
     *data = (ta_value){0};
 }
 
@@ -3517,9 +3517,6 @@ static void ta_enter_set(ta_interpreter *it) {
  */
 static ta_result ta_enter_final(ta_interpreter *it, ta_state_id state) {
     const ta_state_def *def = ta_state(it, state);
-    if (def->parent == TA_STATE_NONE && ta_sparse(it->system, it->actor) == NULL) {
-        return TA_ERR_NOMEM;
-    }
     ta_value data = {0};
     ta_result result = ta_done_data_value(it, def->done_data, &data);
     if (result != TA_OK) {
@@ -3527,7 +3524,7 @@ static ta_result ta_enter_final(ta_interpreter *it, ta_state_id state) {
     }
     if (def->parent == TA_STATE_NONE) {
         ta_store_completion(it, &data);
-        it->actor->sparse->final_state = state; /* ADR 0056 */
+        ta_actor_finish_of(it->actor)->final_state = state; /* ADR 0056 */
         it->actor->finished = true;
         return TA_OK;
     }
@@ -3659,24 +3656,28 @@ static void ta_store_active(ta_interpreter *it) {
     ta_interpreter_occupancy(it->actor, true);
 }
 
-static void ta_compact_sparse(ta_interpreter *it) {
-    ta_actor_sparse_state *sparse = it->actor->sparse;
-    if (sparse == NULL || sparse->paused != NULL || sparse->invoke_count != 0 ||
+/* Gives back the actor's sparse state once it holds nothing. Only at a safe
+ * point: inside a macrostep it does nothing, and the run settles the actor
+ * after its macrostep (ta_interpreter_settle). */
+static void ta_compact_sparse_of(ta_system *system, ta_actor *actor) {
+    ta_actor_sparse_state *sparse = actor->sparse;
+    if (system->run.running || sparse == NULL || sparse->paused != NULL || sparse->invoke_count != 0 ||
         sparse->pending_invokes.count != 0 || sparse->activation_effects != NULL || sparse->has_parent ||
-        sparse->completion_pending || sparse->completion.has_data) {
+        sparse->completion_pending) {
         return;
     }
-    ta_invoke_release(it->system, it->actor);
-    it->actor->sparse = NULL;
-    if (it->system->spare_sparse == NULL) {
+    ta_invoke_release(system, actor);
+    actor->sparse = NULL;
+    if (system->spare_sparse == NULL) {
         /* The system's spare again, for the next take that needs one. */
-        it->system->spare_sparse = sparse;
+        system->spare_sparse = sparse;
         return;
     }
-    ta_mem_free(it->system->allocator, sparse,
+    ta_mem_free(system->allocator, sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
                                              .alignment = _Alignof(ta_actor_sparse_state) });
 }
+
 
 /* ------------------------------------------------------------------------
  * Running a microstep
@@ -3905,10 +3906,15 @@ static ta_result ta_run_select(ta_interpreter *it) {
 }
 
 /* Starts the invocations of the states the macrostep entered, from the
- * state and <invoke> `at` names. */
+ * state and <invoke> `at` names. Startup runs after the macrostep, outside
+ * it (ADR 0102): it may allocate, to spawn a local child or record an
+ * invocation, and an invocation it cannot start raises its error instead. */
 static ta_result ta_run_invokes(ta_interpreter *it) {
     ta_trace_begin(it);
+    bool running = it->system->run.running;
+    it->system->run.running = false;
     ta_result result = ta_invoke_start_pending(it, &it->at.state, &it->at.handler);
+    it->system->run.running = running;
     if (result != TA_OK) {
         return result;
     }
@@ -3962,7 +3968,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
         record.cause = step;
         record.position = (ta_trace_position){ .at = TA_TRACE_AT_NONE, .state = TA_STATE_NONE,
                                                .transition = TA_TRANSITION_NONE, .action = TA_ACTION_NONE };
-        record.state = actor->sparse != NULL ? actor->sparse->final_state : TA_STATE_NONE;
+        record.state = ta_actor_finish_of(actor) != NULL ? ta_actor_finish_of(actor)->final_state : TA_STATE_NONE;
         ta_trace_emit(it, &record);
     }
     actor->macrostep = false;
@@ -4081,7 +4087,8 @@ static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
         }
         return ta_select_taken(it);
     }
-    ta_compact_sparse(it);
+    /* What the macrostep left unused is given back after it returns, at a
+     * safe point (ta_interpreter_settle). */
     ta_trace_end(it);
     ta_note_ignored(it);
     ta_end_macrostep_events(it->system, actor);
@@ -4210,7 +4217,7 @@ static void ta_stop(ta_interpreter *it) {
     if (actor->sparse == NULL) {
         actor->sparse = system->spare_sparse;
         system->spare_sparse = NULL;
-        *actor->sparse = (ta_actor_sparse_state){ .final_state = TA_STATE_NONE };
+        *actor->sparse = (ta_actor_sparse_state){0};
     }
     ta_continuation *saved = it->resumed;
     it->resumed = NULL;
@@ -4754,12 +4761,22 @@ uint32_t ta_interpreter_queue_mark(const ta_actor *actor) {
     return ta_queue_mark(actor);
 }
 
+void ta_interpreter_settle(ta_system *system, ta_actor *actor) {
+    ta_compact_sparse_of(system, actor);
+    ta_queue_settle(system, actor);
+}
+
 bool ta_interpreter_internal_pending(const ta_actor *actor) {
     return ta_actor_waiting_internal(actor) != 0;
 }
 
 void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
     ta_release_events(actor);
+    ta_actor_finish *finish = ta_actor_finish_of(actor);
+    if (finish != NULL) {
+        ta_value_release(&finish->completion.data);
+        finish->completion = (ta_actor_completion){0};
+    }
     /* The actor goes: its queue goes too, even mid-macrostep, which
      * otherwise keeps it (ta_queue_settle). */
     actor->macrostep = false;
@@ -4777,7 +4794,6 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
     ta_invoke_release(system, actor); /* Invoke: cancel services, free bookkeeping. */
     ta_continuation_free(system->allocator, &actor->sparse->paused);
     ta_queue_settle(system, actor); /* empty, and no longer paused */
-    ta_value_release(&actor->sparse->completion.data);
     if (system->spare_sparse == NULL) {
         /* The system's spare again: a later take may need one. */
         system->spare_sparse = actor->sparse;
@@ -4913,7 +4929,7 @@ ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor) {
     ta_actor_touch(actor);
     actor->macrostep = false;
     actor->record.residency = TA_ACTOR_IDLE;
-    ta_compact_sparse(it);
+    ta_compact_sparse_of(system, actor);
     ta_queue_settle(system, actor);
     return TA_OK;
 }

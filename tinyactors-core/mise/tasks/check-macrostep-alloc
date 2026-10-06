@@ -63,7 +63,8 @@ ROOTS = {
 # runs.
 CUTS = {
   'ta_run_refill' => 'the refill between inputs (run.c): answers at once while system->run.running',
-  'ta_sparse' => 'takes the spare the take reserved while system->run.running, and allocates only outside a run'
+  'ta_sparse' => 'takes the spare the take reserved while system->run.running, and allocates only outside a run',
+  'ta_run_invokes' => 'invocation startup, after the macrostep: system->run.running is false while it runs (ADR 0102 decision 6)'
 }.freeze
 
 # Offenders older than the check, as 'function -> allocator function',
@@ -78,16 +79,8 @@ ALLOWED = {
   'ta_internal_queue_grow -> ta_mem_alloc' => 'ta_queue_room makes or doubles a queue the take did not size',
   'ta_internal_queue_free -> ta_mem_free' => 'ta_queue_settle frees an empty queue beyond the spares as the macrostep ends',
   # The sparse state and the invoke table.
-  'ta_compact_sparse -> ta_mem_free' => 'frees a sparse state with nothing left in it when the system has a spare',
-  'ta_invoke_release -> ta_mem_free' => 'ta_compact_sparse frees the invoke table with the sparse state',
-  'ta_invoke_release -> ta_vec_destroy' => 'ta_compact_sparse frees the pending-invoke list with the sparse state',
   'ta_invoke_state_entered -> ta_vec_push' => 'entering a state with <invoke>s pushes it on the pending list (decision 6)',
-  'ta_invoke_grow_to -> ta_mem_alloc' => 'invocation startup inside the macrostep grows the invoke table (decisions 6, 7)',
-  'ta_invoke_grow_to -> ta_mem_free' => 'invocation startup inside the macrostep frees the old invoke table (decisions 6, 7)',
   # A finished invoked session's done event to its parent.
-  'ta_text_render -> ta_mem_alloc' => "ta_invoke_name_text renders a child's done.invoke.<id> name into a new buffer",
-  'ta_invoke_name_text -> ta_mem_free' => 'frees a rendered done.invoke name that does not resolve',
-  'ta_invoke_name_free -> ta_mem_free' => 'ta_invoke_publish frees the rendered done.invoke name',
   # Effects held for an unpublished session (ADR 0102 notes).
   'ta_actor_activation -> ta_mem_alloc' => "the held-effects record, made on a prepared session's first held effect",
   'ta_actor_hold_effect -> ta_vec_push' => "a <send> or <log> of an unpublished session joins its held effects",

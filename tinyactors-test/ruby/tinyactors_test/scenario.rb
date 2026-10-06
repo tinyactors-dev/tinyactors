@@ -406,7 +406,7 @@ module TinyactorsTest
     def initialize(driver, group, charts, run: 'main', trace: false, resume_budget: RESUME_BUDGET,
                    dispatch_budget: DISPATCH_BUDGET, resume_action_budget: 0,
                    resume_pause_at_microstep_start: false, after_step: nil, count_allocations: false,
-                   allocation_fault: nil)
+                   allocation_fault: nil, scxml_invoker_refuses: false)
       @driver = driver
       @group = group
       @charts = charts
@@ -429,6 +429,7 @@ module TinyactorsTest
       @trace = trace ? Trace.new(self) : nil
       @count_allocations = count_allocations
       @allocation_fault = allocation_fault
+      @scxml_invoker_refuses = scxml_invoker_refuses
       @resume_index = 0
       @resume_costs = []
       @stops = []
@@ -670,11 +671,19 @@ module TinyactorsTest
     # because core held admitted mail for the actor; and how many refusals it
     # checked left every actor as it was (#check_refusal). Other options
     # (`resume_action_budget:`, ...) are the runs' Context options.
+    # With `invocation_failed: true`, a failure may instead match a second
+    # reference: the same run with the SCXML invoker refusing every start.
+    # Invocation startup runs after the macrostep and may allocate (ADR
+    # 0102), so an allocation it fails starts no child and gives the chart
+    # the invocation's error.execution: the run must then end exactly as
+    # that reference does. `invocation_failures` counts those runs.
     def assert_allocation_failures_invisible(counts: [1], on_stop: nil, chart_errors: false, normalize: nil,
-                                             **options, &body)
+                                             invocation_failed: false, **options, &body)
       raise ScenarioError, 'assert_allocation_failures_invisible needs a block' unless body
 
       reference = fresh_run('baseline', normalize, count_allocations: true, **options, &body)
+      refused = fresh_run('invoker refuses', normalize, scxml_invoker_refuses: true, **options, &body) if invocation_failed
+      invocation_failures = 0
       points = reference.resume_costs.each_with_index.flat_map do |allocations, resume|
         Array.new(allocations) do |after|
           counts.map do |count|
@@ -692,6 +701,10 @@ module TinyactorsTest
         name = "allocation #{fault[:after] + 1} of resume #{fault[:resume]} failing #{fault[:count]}x"
         run = fresh_run(name, normalize, allocation_fault: fault, **options, &body)
         difference = Trace.difference(reference.trace, run.trace, actual_name: name)
+        if difference && refused && Trace.difference(refused.trace, run.trace, actual_name: name).nil?
+          invocation_failures += 1
+          next
+        end
         raise AssertionFailed, difference if difference
 
         reported = run.stops.any? { |stop| stop[:resume] == fault[:resume] } || run.refusals.include?(fault[:resume])
@@ -703,7 +716,7 @@ module TinyactorsTest
         checked += run.refusals_checked
       end
       { runs: points.size, unreported: unreported, stops: stops, refusals: refusals, cycles: cycles,
-        skipped: skipped, refusals_checked: checked }
+        skipped: skipped, refusals_checked: checked, invocation_failures: invocation_failures }
     end
 
     # Runs one interruption after baseline step `at` and passes only when its
@@ -1610,7 +1623,9 @@ module TinyactorsTest
       type = core('ta_system_intern_atom', ta.system.intern_atom(system: system, text: SCXML_INVOKER_TYPE)).fetch(:out)
       charts = @charts.to_h { |name, chart| [name.to_s, chart.is_a?(SCXMLChart) ? chart.invoker_entry : chart.to_spec] }
       files = @charts.values.grep(SCXMLChart).map(&:files).reduce({}, :merge)
-      invoker = { '$adapter' => 'invoker.scxml', 'config' => { 'system' => system, 'charts' => charts, 'files' => files } }
+      config = { 'system' => system, 'charts' => charts, 'files' => files }
+      config['refuse'] = true if @scxml_invoker_refuses
+      invoker = { '$adapter' => 'invoker.scxml', 'config' => config }
       core('ta_system_register_invoker', ta.system.register_invoker(system: system, type: type, invoker: invoker))
     end
 

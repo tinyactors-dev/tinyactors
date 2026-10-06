@@ -9060,6 +9060,11 @@ TA_PRIVATE void ta_waiting_free(ta_waiting *waiting, uint32_t index);
 struct ta_actor;
 struct ta_operator_jump;
 
+/** The longest name the run's buffers hold from system creation: one
+ * name-area field, so they never grow, and a macrostep that holds or
+ * writes a name never allocates (ADR 0102). */
+#define TA_RUN_NAME_ROOM TA_NAME_AREA_FIELD_MAX
+
 /** Free envelopes, and free name-area chunks, a refill keeps: one page each. */
 #define TA_RUN_RESERVE 64u
 
@@ -9079,8 +9084,11 @@ typedef struct {
      * mail it sent to resident sessions, in send order, on no queue until
      * the macrostep ends. Empty whenever no macrostep runs. */
     ta_list outgoing;
-    /** A macrostep runs inside `ta_run()`: no refill may allocate. */
+    /** A macrostep runs inside `ta_run()`: nothing may call the allocator. */
     bool running;
+    /** Sessions destroyed while a macrostep ran, whose storage is given back
+     * when it returns (ta_actor_free_doomed), linked through `doomed_next`. */
+    struct ta_actor *doomed;
     /** The input whose external event `event` holds, or 0. */
     uint32_t event_input;
     /** The external event of `event_input`, decoded from its envelope; its
@@ -9092,6 +9100,11 @@ typedef struct {
     char *name_buffer;
     uint32_t name_capacity;
     uint32_t name_longest;
+    /** Where an invocation's generated event name is written
+     * (`done.invoke.<id>`, `error.communication.invoke.<id>.<reason>`): pre-sized
+     * at system creation for the longest name a field holds, and its NUL,
+     * so writing one never allocates (ADR 0102). Null until then. */
+    char *invoke_names;
 } ta_run_state;
 
 /**
@@ -10893,6 +10906,10 @@ struct ta_definition {
     size_t actor_block_alignment;
     size_t actor_session_offset;
     size_t actor_instance_offset;
+    /* Where the actor block keeps the session's finish record
+     * (ta_actor_finish), for a definition with a top-level <final>; 0 for
+     * one without, which never finishes that way. */
+    size_t actor_finish_offset;
     /* Resident actors whose `definition` points here; see ta_actor_free(). */
     uint32_t actor_count;
     /*
@@ -11249,6 +11266,18 @@ typedef struct ta_internal_queue {
     ta_queued_event events[];
 } ta_internal_queue;
 
+/*
+ * What a finished session keeps (ADR 0056): the done data of the top-level
+ * <final> it entered and that state. It lives in the actor block, made at
+ * spawn for a definition with a top-level <final>, so finishing inside a
+ * macrostep needs no storage (ADR 0102); a definition without one has
+ * none. Meaningful only while the actor is finished.
+ */
+typedef struct {
+    ta_actor_completion completion;
+    ta_state_id final_state;
+} ta_actor_finish;
+
 /* Allocated only for actors that use one of these uncommon facilities. */
 typedef struct {
     ta_active_invoke *invokes;
@@ -11260,14 +11289,10 @@ typedef struct {
     ta_vec pending_invokes;
     ta_activation_effects *activation_effects;
     ta_actor_parent parent;
-    ta_actor_completion completion;
     /* A local invoked child's invocation token (deadline.h): the envelope
      * its completion uses, held until the completion is published; 0 for
      * none. */
     uint32_t token;
-    /* The top-level <final> whose entry ended the session (ADR 0056); set
-     * with `completion`, and meaningful only while the actor is finished. */
-    ta_state_id final_state;
     bool has_parent;
     bool completion_pending;
     /* A microstep paused inside executable content (ADR 0061), or null. */
@@ -11338,10 +11363,22 @@ struct ta_actor {
      * While the interpreter runs, the full active set it is updating (ancestors
      * included), so In() sees states as SCXML defines them mid-microstep.
      */
-    const uint64_t *live_active;
+    /* While a macrostep runs, the session it ran for destroyed (ta_actor_free):
+     * the next session whose storage waits for the run to give it back. */
+    union {
+        const uint64_t *live_active;
+        struct ta_actor *doomed_next;
+    };
     /* Its pending delayed sends: the head of its owner list (deadline.h). */
     ta_deadline_owner timers;
 };
+
+/** The actor's finish record, or null when its definition has no top-level
+ * <final>. O(1); allocates nothing. */
+TA_PRIVATE inline ta_actor_finish *ta_actor_finish_of(const ta_actor *actor) {
+    size_t offset = actor->definition->actor_finish_offset;
+    return offset == 0 ? NULL : (ta_actor_finish *)((unsigned char *)actor + offset);
+}
 
 /*
  * One slot of the actor table, an item of its index pool. Slot `s` is pool
@@ -11452,6 +11489,10 @@ TA_PRIVATE void ta_actor_exit_invoked(ta_system *system, ta_actor_id id);
 TA_PRIVATE ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **out);
 /* Tears the actor down completely and uncounts it against its definition. */
 TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor);
+/** Gives back the storage of the sessions destroyed while the last macrostep
+ * ran. A safe point only: the run calls it after a macrostep returns, and
+ * the system calls it at teardown. Only frees. */
+TA_PRIVATE void ta_actor_free_doomed(ta_system *system);
 /* Frees the slot an actor was given, so a failed construction reuses it. */
 TA_PRIVATE void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 
@@ -12197,6 +12238,14 @@ typedef struct {
     ta_value *out;
     ta_fault *fault;
 } ta_interpreter_value_params;
+
+/**
+ * Gives back what the actor's last macrostep left unused, its sparse state
+ * and its internal queue, once nothing in them is needed. A safe point
+ * only: the run calls it after a macrostep returns, never inside one, where
+ * the same checks do nothing. May free; never allocates.
+ */
+TA_PRIVATE void ta_interpreter_settle(ta_system *system, struct ta_actor *actor);
 
 TA_PRIVATE ta_actor_sparse_state *ta_interpreter_sparse(ta_system *system, ta_actor *actor);
 TA_PRIVATE ta_op_status ta_interpreter_eval(ta_interpreter *it, const ta_interpreter_value_params *params);
@@ -19030,10 +19079,6 @@ TA_PRIVATE void ta_waiting_free(ta_waiting *waiting, uint32_t index) {
 #define TA_RUN_RECORD_JUMP 0x02u
 /* A report that retires its invocation. */
 #define TA_RUN_RECORD_ENDS 0x04u
-/* The bytes of name the run's name buffer holds from system creation: the
- * longest name a name-area field holds, so the buffer never grows, and a
- * macrostep that holds a name never allocates (ADR 0102). */
-#define TA_RUN_NAME_ROOM TA_NAME_AREA_FIELD_MAX
 /* The event's name is not interned: it is the text field after the record. */
 #define TA_RUN_RECORD_NAME_TEXT 0x08u
 
@@ -19296,6 +19341,10 @@ TA_PRIVATE ta_result ta_run_init(ta_system *system) {
         system->run.name_longest = TA_RUN_NAME_ROOM;
         result = ta_run_name_room(system);
     }
+    if (result == TA_OK) {
+        system->run.invoke_names = ta_mem_alloc(system->allocator, TA_RUN_NAME_ROOM + 1u, 1u);
+        result = system->run.invoke_names != NULL ? TA_OK : TA_ERR_NOMEM;
+    }
     return result;
 }
 
@@ -19319,6 +19368,11 @@ TA_PRIVATE void ta_run_destroy(ta_system *system) {
     ta_waiting_destroy(&system->run.waiting);
     ta_name_area_destroy(&system->run.names);
     ta_envelope_pool_destroy(pool);
+    if (system->run.invoke_names != NULL) {
+        ta_mem_free(system->allocator, system->run.invoke_names,
+                    &(ta_allocator_free_params){ .size = TA_RUN_NAME_ROOM + 1u, .alignment = 1u });
+        system->run.invoke_names = NULL;
+    }
     if (system->run.name_buffer != NULL) {
         ta_mem_free(system->allocator, system->run.name_buffer,
                     &(ta_allocator_free_params){ .size = system->run.name_capacity, .alignment = 1u });
@@ -19692,7 +19746,7 @@ TA_PRIVATE void ta_run_wake_place(ta_system *system, ta_actor *actor, uint32_t w
         actor->input = wake;
         actor->input_flags = TA_ACTOR_INPUT_WAITING;
     }
-    if (system->run.running && system->run.current != 0u) {
+    if (system->run.current != 0u) {
         ta_envelope_pool_enqueue_beside(&system->run.pool,
                                         (ta_envelope_beside){ .beside = system->run.current, .index = wake });
         return;
@@ -19886,7 +19940,9 @@ TA_PRIVATE ta_result ta_run_post_mail(ta_system *system, const ta_run_mail *mail
     envelope->send_id = event->send_id;
     envelope->invoke_instance = event->invoke_id;
     envelope->data = held.data;
-    if (system->run.running) {
+    if (system->run.current != 0u) {
+        /* Inside a macrostep or its invocation startup: unseen until the
+         * input's chain ends. */
         ta_envelope_pool_post(&system->run.pool,
                               (ta_envelope_post){ .outgoing = &system->run.outgoing, .index = index });
     } else if (entry != 0u) {
@@ -20262,6 +20318,8 @@ static void ta_run_input(ta_run_call *call, ta_actor *actor, uint32_t index) {
     ta_result result = ta_interpreter_run(system, actor, &run);
     system->run.running = false;
     system->run.current = 0u;
+    ta_interpreter_settle(system, actor);
+    ta_actor_free_doomed(system);
     call->budget -= run.steps < call->budget ? run.steps : call->budget;
     if (limited) {
         call->actions -= run.actions < call->actions ? run.actions : call->actions;
@@ -20482,7 +20540,7 @@ TA_API ta_result ta_run(ta_system *system, const ta_run_params *params) {
     if (params->name_used != NULL) {
         *params->name_used = 0u;
     }
-    if (system->run.running) {
+    if (system->run.current != 0u) {
         return TA_ERR_BUSY;
     }
     ta_run_call call = { .system = system, .params = params, .budget = params->budget,
@@ -20689,7 +20747,7 @@ TA_API ta_result ta_system_load_settled(ta_system *system, const ta_load_settled
     if (system == NULL || params == NULL) {
         return TA_ERR_INVALID;
     }
-    if (system->run.running) {
+    if (system->run.current != 0u) {
         return TA_ERR_BUSY;
     }
     uint32_t entry = ta_run_answered(system, params->request);
@@ -20722,7 +20780,7 @@ TA_API ta_result ta_system_load_failed(ta_system *system, const ta_load_failed_p
     if (system == NULL || params == NULL || params->fault == NULL) {
         return TA_ERR_INVALID;
     }
-    if (system->run.running) {
+    if (system->run.current != 0u) {
         return TA_ERR_BUSY;
     }
     uint32_t entry = ta_run_answered(system, params->request);
@@ -22475,27 +22533,26 @@ static bool ta_invoke_name_write(const void *context, ta_text_writer *writer) {
     return true;
 }
 
-/* The name's text in memory of the system's allocator, which the caller
- * frees with ta_invoke_name_free. TA_ERR_NOMEM; TA_ERR_INVALID for an ID
- * with no text, or a name that is no dotted event name. */
+/* The name's text, written into the system's invocation-name buffer, which
+ * holds it until the next name is written there (ta_run_state.invoke_names).
+ * Never allocates; may run inside a macrostep. TA_ERR_INVALID for an ID with
+ * no text, a name longer than a name-area field, or one that is no dotted
+ * event name. */
 static ta_result ta_invoke_name_text(ta_system *system, ta_invoke_name name, ta_str *out) {
-    ta_result result = ta_text_render(system->allocator, &(ta_text_render_params){ .write = ta_invoke_name_write,
-                                                                                   .context = &name,
-                                                                                   .out = out });
-    if (result == TA_ERR_NOT_FOUND) {
+    ta_text_writer writer = { .buffer = system->run.invoke_names, .capacity = TA_RUN_NAME_ROOM + 1u };
+    if (!ta_invoke_name_write(&name, &writer)) {
         return TA_ERR_INVALID;
     }
-    if (result == TA_OK && ta_names_resolve(&system->names, *out) != TA_OK) {
-        ta_mem_free(system->allocator, (void *)out->ptr,
-                    &(ta_allocator_free_params){ .size = out->len + 1u, .alignment = 1u });
+    uint32_t needed = 0;
+    if (ta_text_finish(&writer, &needed) != TA_OK) {
         return TA_ERR_INVALID;
     }
-    return result;
-}
-
-static void ta_invoke_name_free(ta_system *system, ta_str text) {
-    ta_mem_free(system->allocator, (void *)text.ptr,
-                &(ta_allocator_free_params){ .size = text.len + 1u, .alignment = 1u });
+    ta_str text = { .ptr = system->run.invoke_names, .len = (uint32_t)(needed - 1u) };
+    if (ta_names_resolve(&system->names, text) != TA_OK) {
+        return TA_ERR_INVALID;
+    }
+    *out = text;
+    return TA_OK;
 }
 
 /* ------------------------------------------------------------------------
@@ -22756,8 +22813,15 @@ static ta_op_status ta_invoke_value_text(ta_interpreter *it, ta_datamodel_value_
  * fault in its ta_invoke_values says why. */
 #define TA_INVOKE_FAILED 1
 
+/* Says in `fault` that starting the invocation ran out of memory. */
+static void ta_invoke_out_of_memory(ta_fault *fault) {
+    static const char text[] = "out of memory starting the invocation";
+    ta_value_release(&fault->data);
+    *fault = (ta_fault){ .code = TA_ERR_NOMEM, .message = { .ptr = text, .len = sizeof text - 1u } };
+}
+
 static ta_result ta_invoke_op(ta_op_status status) {
-    return status == TA_OP_OK ? TA_OK : status == TA_OP_NOMEM ? TA_ERR_NOMEM : TA_INVOKE_FAILED;
+    return status == TA_OP_OK ? TA_OK : TA_INVOKE_FAILED;
 }
 
 /*
@@ -23019,15 +23083,12 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
     if (found >= 0) {
         ta_invoke_remove_at(sparse, (uint32_t)found);
     }
-    /* An invoker that ran out of memory started nothing: the invocation
-     * starts again when the host runs the session again. Starting a service
-     * still runs inside the macrostep that entered its state, so its
-     * out-of-memory is a stop, not an error the chart sees, until startup
-     * moves after the macrostep (ADR 0102 decision 6). A local child that
-     * found no envelope for its token fails as a capacity error. */
-    if (status == TA_OP_NOMEM) {
-        ta_value_release(&values->fault.data);
-        return TA_ERR_NOMEM;
+    /* An invoker that could not start the service, out of memory included,
+     * started nothing, and the chart sees the invocation's error: startup
+     * runs after the macrostep (ADR 0102). A local child that found no
+     * envelope for its token fails as a capacity error. */
+    if (status == TA_OP_NOMEM && values->fault.code == TA_OK) {
+        ta_invoke_out_of_memory(&values->fault);
     }
     return values->fault.code == TA_ERR_FULL ? ta_interpreter_capacity_error(it, TA_RECORD_CAPACITY_RESOURCE_POOL)
                                              : ta_interpreter_execution_error(it, &values->fault);
@@ -23045,13 +23106,19 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
 static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) {
     ta_system *system = it->system;
     const ta_invoke_decl *decl = &it->definition->invokes[decl_id];
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, it->actor);
-    ta_result result = sparse == NULL ? TA_ERR_NOMEM : ta_invoke_grow(system, sparse);
-    if (result == TA_OK) {
-        result = ta_interpreter_queue_room(system, it->actor);
-    }
+    /* Room for the invocation's error, first: the queue was sized for one
+     * startup pass when the input was taken (ADR 0102). */
+    ta_result result = ta_interpreter_queue_room(system, it->actor);
     if (result != TA_OK) {
         return result;
+    }
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, it->actor);
+    result = sparse == NULL ? TA_ERR_NOMEM : ta_invoke_grow(system, sparse);
+    if (result != TA_OK) {
+        /* No room to record it: it starts nothing, and the chart sees why. */
+        ta_fault fault = {0};
+        ta_invoke_out_of_memory(&fault);
+        return ta_interpreter_execution_error(it, &fault);
     }
     uint32_t mark = ta_interpreter_queue_mark(it->actor);
     ta_invoke_values values = {0};
@@ -23074,7 +23141,10 @@ static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) 
                                           .decl = decl_id, .id = id, .type = type, .invoker = invoker,
                                           .values = &values });
         launched = result == TA_OK && ta_invoke_find(it->actor, id) >= 0;
-    } else if (result == TA_INVOKE_FAILED) {
+    } else if (result == TA_INVOKE_FAILED || result == TA_ERR_NOMEM) {
+        if (result == TA_ERR_NOMEM) {
+            ta_invoke_out_of_memory(&values.fault);
+        }
         result = ta_interpreter_execution_error(it, &values.fault);
     }
     ta_invoke_values_release(&values);
@@ -23379,6 +23449,12 @@ TA_PRIVATE ta_result ta_invoke_autoforward(ta_interpreter *it, const ta_event *e
 /* Sends done.invoke.<id> with the completion data to the invoking parent,
  * under `trace`, the finishing step's, or none when the host publishes it
  * again after a refusal. */
+/* The finished child's done data, borrowed, or no value. */
+static ta_value ta_invoke_completion_data(const ta_actor *actor) {
+    const ta_actor_finish *finish = ta_actor_finish_of(actor);
+    return finish != NULL && finish->completion.has_data ? finish->completion.data : (ta_value){0};
+}
+
 static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_parent trace) {
     ta_actor_sparse_state *sparse = actor->sparse;
     /* Its token goes back first: the completion's mail, or the timer that
@@ -23397,7 +23473,7 @@ static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_
         .send_id = TA_SEND_ID_COMPLETION,
         .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = actor->record.self },
         .invoke_id = sparse->parent.invoke_id,
-        .data = sparse->completion.has_data ? sparse->completion.data : (ta_value){0},
+        .data = ta_invoke_completion_data(actor),
     };
     result = ta_invoke_submit(system, &(ta_invoke_delivery){
                                           .sender = actor,
@@ -23406,7 +23482,6 @@ static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_
                                           .name_text = name,
                                           .trace = trace,
                                       });
-    ta_invoke_name_free(system, name);
     return result;
 }
 
@@ -23493,7 +23568,6 @@ static ta_result ta_invoke_error_hold(ta_system *system, ta_invoke_id invoke, ta
         return result;
     }
     result = ta_run_hold_name(system, text, out);
-    ta_invoke_name_free(system, text);
     return result;
 }
 
@@ -23607,7 +23681,6 @@ static ta_result ta_invoke_report_error(ta_system *system, ta_actor *actor, cons
                                                          .trace = &params->trace,
                                                          .time = params->time,
                                                          .correlation = params->correlation });
-    ta_invoke_name_free(system, name);
     return result;
 }
 
@@ -23702,7 +23775,6 @@ TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_repor
                                                             .name = name,
                                                             .trace = params->trace, .time = params->time,
                                                             .correlation = params->correlation });
-            ta_invoke_name_free(system, name);
             return result;
         }
         case TA_INVOKE_REPORT_ERROR:
@@ -28169,6 +28241,15 @@ TA_PRIVATE ta_result ta_actor_layout(ta_definition *definition) {
                                                    .alignment = _Alignof(uint64_t), .count = 1 },
                                &session);
     }
+    size_t finish = 0;
+    bool can_finish = false;
+    for (ta_state_id state = 0; state < definition->state_count && !can_finish; state += 1u) {
+        can_finish = definition->states[state].parent == TA_STATE_NONE &&
+                     definition->states[state].kind == TA_STATE_FINAL;
+    }
+    if (result == TA_OK && can_finish) {
+        result = ta_layout_add(&layout, TA_LAYOUT_ENTRY(ta_actor_finish, 1), &finish);
+    }
     if (result == TA_OK) {
         result = ta_layout_add(&layout,
                                &(ta_layout_entry){ .size = definition->datamodel_instance_size,
@@ -28181,6 +28262,7 @@ TA_PRIVATE ta_result ta_actor_layout(ta_definition *definition) {
     }
     definition->actor_session_offset = session;
     definition->actor_instance_offset = instance;
+    definition->actor_finish_offset = finish;
     definition->actor_block_bytes = layout.bytes;
     definition->actor_block_alignment = layout.alignment;
     return TA_OK;
@@ -28349,11 +28431,10 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
  * Tears the actor down completely, then uncounts it. The last actor of a
  * definition nothing holds frees it (ADR 0077), so nothing below may touch it.
  */
-TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor) {
+/* Gives back what a gone session held: its storage, its address and its
+ * block. Never inside a macrostep (ta_actor_free defers it). */
+static void ta_actor_free_storage(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
-    /* Its taken input goes back, and its deferred inputs return to the run
-     * queue to be refused. */
-    ta_run_session_gone(system, actor);
     ta_actor_discard_activation_effects(actor);
     if (actor->datamodel_initialized) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
@@ -28363,7 +28444,6 @@ TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor) {
     ta_actor_ref_release(&actor->record.self);
     ta_interpreter_release_actor_state(system, actor);
     if (actor->session_node != NULL) {
-        ta_session_remove(&system->sessions, actor->session_node);
         ta_session_node_free(&system->sessions, actor->session_node);
     }
     /* The record, the session storage and the instance are one block (ADR 0063). */
@@ -28374,6 +28454,35 @@ TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor) {
     owner->actor_count -= 1u;
     system->live_actors -= 1u;
     ta_system_settle_definition(system, owner);
+}
+
+/*
+ * Tears the actor down completely, then uncounts it. The last actor of a
+ * definition nothing holds frees it (ADR 0077), so nothing below may touch
+ * it. Its taken input goes back, and its deferred inputs return to the run
+ * queue to be refused, at once; inside a macrostep, which never calls the
+ * allocator (ADR 0102), what it held is given back when the macrostep
+ * returns (ta_actor_free_doomed), the session already gone.
+ */
+TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor) {
+    ta_run_session_gone(system, actor);
+    if (actor->session_node != NULL) {
+        ta_session_remove(&system->sessions, actor->session_node);
+    }
+    if (system->run.running) {
+        actor->doomed_next = system->run.doomed;
+        system->run.doomed = actor;
+        return;
+    }
+    ta_actor_free_storage(system, actor);
+}
+
+TA_PRIVATE void ta_actor_free_doomed(ta_system *system) {
+    while (system->run.doomed != NULL) {
+        ta_actor *actor = system->run.doomed;
+        system->run.doomed = actor->doomed_next;
+        ta_actor_free_storage(system, actor);
+    }
 }
 
 /*
@@ -28615,6 +28724,11 @@ TA_PRIVATE ta_result ta_actor_new(ta_system *system, ta_definition *definition, 
     actor->configuration = (ta_configuration){ .storage = storage, .layout = &definition->configuration };
     actor->late_initialized = (uint64_t *)(storage + config_bytes);
     actor->history = (ta_history_state){ .storage = storage + config_bytes * 2u, .layout = &definition->history };
+
+    ta_actor_finish *finish = ta_actor_finish_of(actor);
+    if (finish != NULL) {
+        *finish = (ta_actor_finish){ .final_state = TA_STATE_NONE };
+    }
 
     /* An instance of size 0 (the null data model) points at the block's end. */
     actor->datamodel_instance = block + definition->actor_instance_offset;
@@ -29807,12 +29921,15 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
         out->internal_events = actor->internal->events + (actor->internal->count - waiting);
         out->internal_count = waiting;
     }
+    ta_actor_finish *finish = ta_actor_finish_of(actor);
+    if (finish != NULL && actor->finished) {
+        out->has_completion = true;
+        out->completion = &finish->completion;
+        out->final_state = finish->final_state;
+    }
     if (actor->sparse != NULL) {
         out->invokes = actor->sparse->invokes;
         out->invoke_count = actor->sparse->invoke_count;
-        out->has_completion = actor->finished;
-        out->completion = actor->finished ? &actor->sparse->completion : NULL;
-        out->final_state = actor->finished ? actor->sparse->final_state : TA_STATE_NONE;
         out->has_parent = actor->sparse->has_parent;
         out->parent = actor->sparse->parent;
     }
@@ -29952,10 +30069,11 @@ TA_API ta_result ta_actor_get_completion(ta_system *system, ta_actor_id id, ta_a
         return TA_ERR_BUSY;
     }
     *out = (ta_actor_completion){ .has_data = false };
-    if (actor->sparse == NULL || !actor->sparse->completion.has_data) {
+    const ta_actor_finish *finish = ta_actor_finish_of(actor);
+    if (finish == NULL || !finish->completion.has_data) {
         return TA_OK;
     }
-    out->data = actor->sparse->completion.data;
+    out->data = finish->completion.data;
     ta_value_retain(&out->data);
     out->has_data = true;
     return TA_OK;
@@ -30467,8 +30585,10 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
         .has_parent = sparse != NULL && sparse->has_parent,
         .parent = sparse != NULL ? sparse->parent : (ta_actor_parent){0},
         .completion_pending = sparse != NULL && sparse->completion_pending,
-        .completion = sparse != NULL ? sparse->completion : (ta_actor_completion){0},
-        .final_state = sparse != NULL && actor->finished ? sparse->final_state : TA_STATE_NONE,
+        .completion = ta_actor_finish_of(actor) != NULL ? ta_actor_finish_of(actor)->completion
+                                                        : (ta_actor_completion){0},
+        .final_state = ta_actor_finish_of(actor) != NULL && actor->finished ? ta_actor_finish_of(actor)->final_state
+                                                                          : TA_STATE_NONE,
     };
     ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(system, actor));
     if (result == TA_OK) {
@@ -30781,8 +30901,13 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         result = ta_image_restore_pause(image, actor, system);
     }
 
-    if (result == TA_OK && (image->finished || image->has_parent || image->completion.has_data ||
-                            image->internal_count != 0 || image->invoke_count != 0 ||
+    ta_actor_finish *finish = ta_actor_finish_of(actor);
+    if (result == TA_OK && finish != NULL) {
+        finish->completion = image->completion;
+        ta_value_retain(&finish->completion.data);
+        finish->final_state = image->final_state;
+    }
+    if (result == TA_OK && (image->has_parent || image->internal_count != 0 || image->invoke_count != 0 ||
                             image->pending_invoke_count != 0)) {
         ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
         if (sparse == NULL) {
@@ -30796,9 +30921,6 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
                 result = ta_deadline_token_take(system, &sparse->token, NULL);
             }
             sparse->completion_pending = image->completion_pending;
-            sparse->completion = image->completion;
-            ta_value_retain(&sparse->completion.data);
-            sparse->final_state = image->final_state;
             if (image->pending_invoke_count != 0 && sparse->pending_invokes.element_size == 0) {
                 ta_vec_init(&sparse->pending_invokes, system->allocator, TA_VEC_LAYOUT(ta_state_id));
             }
@@ -32092,6 +32214,7 @@ TA_API void ta_system_destroy(ta_system *system) {
     }
     /* No record is built, nor the clock called, for a ring about to be freed. */
     system->trace.masks = (ta_trace_masks){ 0 };
+    ta_actor_free_doomed(system);
     for (uint32_t slot = 0; slot < ta_actor_table_issued(&system->actors); slot += 1) {
         ta_actor_slot *entry = ta_actor_slot_at(system, slot);
         if (entry->actor != NULL) {
@@ -33555,7 +33678,7 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
     if (actor->sparse == NULL && system->run.running && system->spare_sparse != NULL) {
         actor->sparse = system->spare_sparse;
         system->spare_sparse = NULL;
-        *actor->sparse = (ta_actor_sparse_state){ .final_state = TA_STATE_NONE };
+        *actor->sparse = (ta_actor_sparse_state){0};
     }
     if (actor->sparse == NULL) {
         if (system->run.running) {
@@ -33566,7 +33689,7 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
         if (actor->sparse == NULL) {
             return NULL;
         }
-        *actor->sparse = (ta_actor_sparse_state){ .final_state = TA_STATE_NONE };
+        *actor->sparse = (ta_actor_sparse_state){0};
     }
     return actor->sparse;
 }
@@ -33746,7 +33869,7 @@ TA_PRIVATE ta_result ta_interpreter_keep_name(ta_system *system, ta_actor *actor
  */
 static void ta_queue_settle(ta_system *system, ta_actor *actor) {
     ta_internal_queue *queue = actor->internal;
-    if (queue == NULL || queue->count != 0 || queue->has_kept ||
+    if (system->run.running || queue == NULL || queue->count != 0 || queue->has_kept ||
         (actor->sparse != NULL && actor->sparse->paused != NULL) || actor->macrostep) {
         return;
     }
@@ -36233,12 +36356,12 @@ static ta_result ta_done_data_value(ta_interpreter *it, ta_done_data_id id, ta_v
     return result == TA_EXEC_FAILED ? TA_OK : result;
 }
 
-/* Keeps a top-level final state's done data as the actor's completion; the
- * actor holds its sparse state already. */
+/* Keeps a top-level final state's done data as the actor's completion, in
+ * its finish record, which its definition made room for. */
 static void ta_store_completion(ta_interpreter *it, ta_value *data) {
-    ta_actor_sparse_state *sparse = it->actor->sparse;
-    ta_value_release(&sparse->completion.data);
-    sparse->completion = (ta_actor_completion){ .has_data = data->v != NULL, .data = *data };
+    ta_actor_finish *finish = ta_actor_finish_of(it->actor);
+    ta_value_release(&finish->completion.data);
+    finish->completion = (ta_actor_completion){ .has_data = data->v != NULL, .data = *data };
     *data = (ta_value){0};
 }
 
@@ -36339,9 +36462,6 @@ static void ta_enter_set(ta_interpreter *it) {
  */
 static ta_result ta_enter_final(ta_interpreter *it, ta_state_id state) {
     const ta_state_def *def = ta_state(it, state);
-    if (def->parent == TA_STATE_NONE && ta_sparse(it->system, it->actor) == NULL) {
-        return TA_ERR_NOMEM;
-    }
     ta_value data = {0};
     ta_result result = ta_done_data_value(it, def->done_data, &data);
     if (result != TA_OK) {
@@ -36349,7 +36469,7 @@ static ta_result ta_enter_final(ta_interpreter *it, ta_state_id state) {
     }
     if (def->parent == TA_STATE_NONE) {
         ta_store_completion(it, &data);
-        it->actor->sparse->final_state = state; /* ADR 0056 */
+        ta_actor_finish_of(it->actor)->final_state = state; /* ADR 0056 */
         it->actor->finished = true;
         return TA_OK;
     }
@@ -36481,24 +36601,28 @@ static void ta_store_active(ta_interpreter *it) {
     ta_interpreter_occupancy(it->actor, true);
 }
 
-static void ta_compact_sparse(ta_interpreter *it) {
-    ta_actor_sparse_state *sparse = it->actor->sparse;
-    if (sparse == NULL || sparse->paused != NULL || sparse->invoke_count != 0 ||
+/* Gives back the actor's sparse state once it holds nothing. Only at a safe
+ * point: inside a macrostep it does nothing, and the run settles the actor
+ * after its macrostep (ta_interpreter_settle). */
+static void ta_compact_sparse_of(ta_system *system, ta_actor *actor) {
+    ta_actor_sparse_state *sparse = actor->sparse;
+    if (system->run.running || sparse == NULL || sparse->paused != NULL || sparse->invoke_count != 0 ||
         sparse->pending_invokes.count != 0 || sparse->activation_effects != NULL || sparse->has_parent ||
-        sparse->completion_pending || sparse->completion.has_data) {
+        sparse->completion_pending) {
         return;
     }
-    ta_invoke_release(it->system, it->actor);
-    it->actor->sparse = NULL;
-    if (it->system->spare_sparse == NULL) {
+    ta_invoke_release(system, actor);
+    actor->sparse = NULL;
+    if (system->spare_sparse == NULL) {
         /* The system's spare again, for the next take that needs one. */
-        it->system->spare_sparse = sparse;
+        system->spare_sparse = sparse;
         return;
     }
-    ta_mem_free(it->system->allocator, sparse,
+    ta_mem_free(system->allocator, sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
                                              .alignment = _Alignof(ta_actor_sparse_state) });
 }
+
 
 /* ------------------------------------------------------------------------
  * Running a microstep
@@ -36727,10 +36851,15 @@ static ta_result ta_run_select(ta_interpreter *it) {
 }
 
 /* Starts the invocations of the states the macrostep entered, from the
- * state and <invoke> `at` names. */
+ * state and <invoke> `at` names. Startup runs after the macrostep, outside
+ * it (ADR 0102): it may allocate, to spawn a local child or record an
+ * invocation, and an invocation it cannot start raises its error instead. */
 static ta_result ta_run_invokes(ta_interpreter *it) {
     ta_trace_begin(it);
+    bool running = it->system->run.running;
+    it->system->run.running = false;
     ta_result result = ta_invoke_start_pending(it, &it->at.state, &it->at.handler);
+    it->system->run.running = running;
     if (result != TA_OK) {
         return result;
     }
@@ -36784,7 +36913,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
         record.cause = step;
         record.position = (ta_trace_position){ .at = TA_TRACE_AT_NONE, .state = TA_STATE_NONE,
                                                .transition = TA_TRANSITION_NONE, .action = TA_ACTION_NONE };
-        record.state = actor->sparse != NULL ? actor->sparse->final_state : TA_STATE_NONE;
+        record.state = ta_actor_finish_of(actor) != NULL ? ta_actor_finish_of(actor)->final_state : TA_STATE_NONE;
         ta_trace_emit(it, &record);
     }
     actor->macrostep = false;
@@ -36903,7 +37032,8 @@ static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
         }
         return ta_select_taken(it);
     }
-    ta_compact_sparse(it);
+    /* What the macrostep left unused is given back after it returns, at a
+     * safe point (ta_interpreter_settle). */
     ta_trace_end(it);
     ta_note_ignored(it);
     ta_end_macrostep_events(it->system, actor);
@@ -37032,7 +37162,7 @@ static void ta_stop(ta_interpreter *it) {
     if (actor->sparse == NULL) {
         actor->sparse = system->spare_sparse;
         system->spare_sparse = NULL;
-        *actor->sparse = (ta_actor_sparse_state){ .final_state = TA_STATE_NONE };
+        *actor->sparse = (ta_actor_sparse_state){0};
     }
     ta_continuation *saved = it->resumed;
     it->resumed = NULL;
@@ -37576,12 +37706,22 @@ TA_PRIVATE uint32_t ta_interpreter_queue_mark(const ta_actor *actor) {
     return ta_queue_mark(actor);
 }
 
+TA_PRIVATE void ta_interpreter_settle(ta_system *system, ta_actor *actor) {
+    ta_compact_sparse_of(system, actor);
+    ta_queue_settle(system, actor);
+}
+
 TA_PRIVATE bool ta_interpreter_internal_pending(const ta_actor *actor) {
     return ta_actor_waiting_internal(actor) != 0;
 }
 
 TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
     ta_release_events(actor);
+    ta_actor_finish *finish = ta_actor_finish_of(actor);
+    if (finish != NULL) {
+        ta_value_release(&finish->completion.data);
+        finish->completion = (ta_actor_completion){0};
+    }
     /* The actor goes: its queue goes too, even mid-macrostep, which
      * otherwise keeps it (ta_queue_settle). */
     actor->macrostep = false;
@@ -37599,7 +37739,6 @@ TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *
     ta_invoke_release(system, actor); /* Invoke: cancel services, free bookkeeping. */
     ta_continuation_free(system->allocator, &actor->sparse->paused);
     ta_queue_settle(system, actor); /* empty, and no longer paused */
-    ta_value_release(&actor->sparse->completion.data);
     if (system->spare_sparse == NULL) {
         /* The system's spare again: a later take may need one. */
         system->spare_sparse = actor->sparse;
@@ -37735,7 +37874,7 @@ TA_PRIVATE ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor) 
     ta_actor_touch(actor);
     actor->macrostep = false;
     actor->record.residency = TA_ACTOR_IDLE;
-    ta_compact_sparse(it);
+    ta_compact_sparse_of(system, actor);
     ta_queue_settle(system, actor);
     return TA_OK;
 }
