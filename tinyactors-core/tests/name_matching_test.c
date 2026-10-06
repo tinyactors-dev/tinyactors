@@ -66,6 +66,10 @@
  *    table, the trie and the address table the same size: such a target
  *    is looked up, never interned. A session URI whose family no
  *    definition has still interns the family, for a host's loader.
+ * 13. a delayed `<send eventexpr>` keeps its name as text: 150 random
+ *     names wait as timers, read back as text by inspection and by a
+ *     respawn from those records, fire when the time comes, and leave the
+ *     atom table and the trie the same size.
  * 10. an invoked session keeps its last external event's name as text in
  *    its own queue, with no pool envelope: the kept name reads back as the
  *    text sent, the pool holds no envelope for it and admits as before, a
@@ -663,6 +667,109 @@ static void test_eventexpr_travels_as_text(void) {
         CHECK(test_drive_run(f.system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
     }
     CHECK(assigned >= 9990u);
+    CHECK(atom_count(&f) == atoms);
+    CHECK(node_count(&f) == nodes);
+    fixture_close(&f);
+}
+
+/* `idle` sends to itself, a second later, with an eventexpr on `send`, and
+ * counts every other event its `*` transition takes. */
+static const ta_scxml_spec *delayed_eventexpr_chart(void) {
+    static const ta_scxml_action_spec send[] = {
+        { .kind = TA_SCXML_ACTION_SEND,
+          .as.send = { .event = { .kind = TA_SCXML_EVENT_EXPR, .as.expr = EXPR("name") },
+                       .delay = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("1s") } } },
+        {0},
+    };
+    static const ta_scxml_action_spec count[] = {
+        { .kind = TA_SCXML_ACTION_ASSIGN,
+          .as.assign = { .location = EXPR("taken"),
+                         .value = { .kind = TA_SCXML_VALUE_EXPR, .as.expr = EXPR("taken + 1") } } },
+        {0},
+    };
+    static const ta_scxml_transition_spec idle[] = {
+        { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("send"), .actions = send },
+        { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("*"), .actions = count },
+        {0},
+    };
+    static const ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle"), .transitions = idle },
+        {0},
+    };
+    static const ta_scxml_spec spec = { .name = STR("delayed"), .states = states };
+    return &spec;
+}
+
+/* Claim 13. */
+static void test_delayed_eventexpr_travels_as_text(void) {
+    fixture f;
+    fixture_open(&f, delayed_eventexpr_chart());
+    ta_actor_id actor = 0;
+    CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = f.id, .out = &actor }) == TA_OK);
+    test_drive_status status = TEST_DRIVE_ERROR;
+    CHECK(test_drive_run(f.system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    ta_event_name_id send = event_name(&f, "send");
+    uint32_t atoms = atom_count(&f);
+    uint32_t nodes = node_count(&f);
+    enum { rounds = 150 };
+    static char sent[rounds][TA_EVENT_NAME_MAX_DEPTH * 14u];
+    static uint32_t sent_len[rounds];
+    uint32_t made = 0;
+    while (made < rounds) {
+        ta_str name = random_name(sent[made], f.names.capacity);
+        if (name.len > sizeof typed) {
+            name.len = sizeof typed;
+            while (name.len > 0 && sent[made][name.len - 1u] == '.') {
+                name.len -= 1u;
+            }
+        }
+        if (name.len == 0 || (name.len == 4 && memcmp(name.ptr, "send", 4) == 0)) {
+            continue;
+        }
+        sent_len[made] = name.len;
+        set_type(name.ptr, name.len);
+        deliver(&f, actor, send);
+        made += 1u;
+    }
+    /* Inspection reads every pending name back as text, in send order. */
+    ta_actor_inspection view = {0};
+    CHECK(ta_actor_inspect(f.system, actor, &view) == TA_OK);
+    CHECK(view.delayed_send_count == rounds);
+    bool all_text = true;
+    for (uint32_t index = 0; index < view.delayed_send_count && index < rounds; index += 1u) {
+        const ta_delayed_send_info *info = &view.delayed_sends[index];
+        all_text = all_text && info->event == 0u && info->event_text.len == sent_len[index] &&
+                   memcmp(info->event_text.ptr, sent[index], sent_len[index]) == 0;
+    }
+    CHECK(all_text);
+    /* A respawn from those records re-arms them, names copied as text. */
+    ta_actor_id again = 0;
+    CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = f.id, .out = &again,
+                                                             .pending_sends = view.delayed_sends,
+                                                             .pending_send_count = view.delayed_send_count })
+          == TA_OK);
+    CHECK(test_drive_run(f.system, again, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    assigned = 0;
+    uint32_t fired = 0;
+    ta_time now = ta_system_time(f.system) + 2000u;
+    bool more = true;
+    while (more) {
+        uint32_t dispatched = 0;
+        CHECK(ta_system_set_time(f.system, &(ta_set_time_params){ .now = now, .budget = UINT32_MAX,
+                                                                  .dispatched = &dispatched,
+                                                                  .more_due = &more }) == TA_OK);
+        fired += dispatched;
+        /* Run what fired, so the next round finds the pool free again. */
+        ta_run_status ran = TA_RUN_MORE;
+        while (ran != TA_RUN_IDLE) {
+            ta_input_outcome outcomes[16];
+            uint32_t count = 0;
+            CHECK(ta_run(f.system, &(ta_run_params){ .budget = 1000u, .outcomes = outcomes, .outcome_capacity = 16,
+                                                     .outcome_count = &count, .status = &ran }) == TA_OK);
+        }
+    }
+    CHECK(fired == 2u * rounds);
+    CHECK(assigned == 2u * rounds);
     CHECK(atom_count(&f) == atoms);
     CHECK(node_count(&f) == nodes);
     fixture_close(&f);
@@ -1562,6 +1669,7 @@ int main(void) {
     test_error_name_splits_the_id();
     test_too_deep_names();
     test_eventexpr_travels_as_text();
+    test_delayed_eventexpr_travels_as_text();
     test_names_reach_hosts_as_text();
     test_kept_event_keeps_its_name();
     test_internal_names_travel_as_text();

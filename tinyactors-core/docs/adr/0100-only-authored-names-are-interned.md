@@ -339,3 +339,14 @@ before it.
   stops when waiting entries keep the address's bytes (envelope.md), which
   the native records of 5.1 and the images of 5.3 carry. A named address
   in a target is a counted handle (ADR 0065), not an atom.
+
+**Delayed and I/O-processor sends (4.3c).** A delayed `<send eventexpr>`
+keeps its name as text in its timer envelope, the text's second field;
+inspection and export copy it beside their records
+(`ta_delayed_send_info.event_text`), session images and offload bytes
+carry it, and an I/O processor reads `ta_send.event_text`. Two run-time
+names are still interned, both rare: the eventexpr of a send held for an
+unpublished session (held sends keep a name ID until publish), and a
+local child's `done.invoke.<id>` kept as a stored send when its parent's
+pool is full. `ta_event_name_intern` and `ta_system_intern_atom` remain
+for hosts that build authored names' IDs and register types.

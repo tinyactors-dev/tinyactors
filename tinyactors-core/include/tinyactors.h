@@ -1061,10 +1061,13 @@ TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host,
  * `content_type` is the literal's media type, empty when nothing said. At
  * most one of `data` and `content` is present. `trace` is the sending
  * macrostep's context and the key of the step that sent it (ADR 0067), for
- * the processor to carry, as a `traceparent` header for example. Everything
- * is borrowed for the call.
+ * the processor to carry, as a `traceparent` header for example. `event` is
+ * an authored name's ID; with `event` 0, `event_text` is the name as text
+ * (core interns only authored names, ADR 0100). Everything is borrowed for
+ * the call.
  */
-typedef struct { ta_actor_ref source; ta_send_id send_id; ta_event_name_id event; ta_atom io_type; ta_value target;
+typedef struct { ta_actor_ref source; ta_send_id send_id; ta_event_name_id event; ta_str event_text; ta_atom io_type;
+                 ta_value target;
                  ta_str target_text; ta_value data; ta_str content_type; ta_bytes content; ta_trace_parent trace;
                  ta_time due; } ta_send;
 /*
@@ -2941,7 +2944,12 @@ typedef struct {
 typedef struct {
     ta_send_id send_id;
     ta_time due;
+    /* An authored name's ID, or 0 with `event_text`: the name as text
+     * (ADR 0100). Read from inspection or export, the text lives in the
+     * same buffer as the record, until the next inspection or export; given
+     * to ta_actor_spawn() or a reconstruction, it is copied. */
     ta_event_name_id event;
+    ta_str event_text;
     ta_atom io_type;
     ta_actor_ref destination;
     ta_value target;

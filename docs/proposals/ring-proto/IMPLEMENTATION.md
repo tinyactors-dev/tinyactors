@@ -675,6 +675,20 @@ Carried forward from the step's review (the 4.2 fix commits):
   interns it. JavaScript's own name cache (`lib/events.js`) stays until
   6.1.
 
+**Done (4.3).** Delayed sends are envelopes in a deadline index
+(95c4228c), setting the time fires due sends and `ta_run` reports the
+next wake (caf78dfe), and delayed and I/O-processor sends keep an
+eventexpr name as text (4.3c): a timer envelope keeps the name as the
+second field of its text, inspection and export copy it next to their
+records (`ta_delayed_send_info.event_text`), images and offload bytes
+carry it, and `ta_send.event_text` gives it to an I/O processor. Two
+places still intern a run-time name, both recorded in ADR 0100's notes:
+a send held for an unpublished session, and a child's completion kept as
+a stored send when its parent's pool is full. `ta_event_name_intern` and
+`ta_system_intern_atom` stay public: the test host interns authored names
+and registers I/O and invoker types with them until 5.2's type
+registries; core interns no run-time name through them.
+
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
   input.

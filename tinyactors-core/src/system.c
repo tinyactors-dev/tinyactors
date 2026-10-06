@@ -1036,6 +1036,11 @@ ta_result ta_system_set_time(ta_system *system, const ta_set_time_params *params
     if (system->run.running) {
         return TA_ERR_BUSY; /* a safe point only: never from inside a macrostep */
     }
+    /* Names a due send keeps as text are read into the run's name buffer. */
+    ta_result room = ta_run_name_room(system);
+    if (room != TA_OK) {
+        return room;
+    }
     ta_clock_set(&system->clock, params->now);
     uint32_t budget = params->budget;
     uint32_t dispatched = 0;

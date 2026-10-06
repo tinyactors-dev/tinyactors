@@ -131,7 +131,17 @@ typedef struct {
     ta_actor_id owner;
     ta_send_id send_id;
     ta_time due;
+    /**
+     * The event's name: an authored name's ID, or 0 with `event_text`.
+     * Read back from the index, a name kept as text is the handle
+     * `TA_RUN_NAME_INPUT | envelope` (`ta_deadline_name_copy` copies it).
+     */
     ta_event_name_id event;
+    /**
+     * With `event` 0: the name as text (ADR 0100), borrowed. Scheduling
+     * copies it into the timer envelope's text, so it is never interned.
+     */
+    ta_str event_text;
     ta_atom io_type;
     ta_actor_ref destination;
     ta_value target;
@@ -178,6 +188,8 @@ typedef struct {
     ta_timer_id next_order;
     /** `ta_delayed_send_info`: what inspection and export last read. */
     ta_vec views;
+    /** The names `views` hold as text, one run of bytes, grown with them. */
+    ta_vec view_text;
     /** The most sends one owner's list has held: the refill keeps `views`
      * large enough for it, so reading a session's sends seldom allocates. */
     uint32_t most_per_owner;
@@ -209,11 +221,12 @@ ta_result ta_deadline_grow(struct ta_system *system);
 
 /**
  * Makes `count` envelopes free for sends scheduled before the next safe
- * point, and the index's room for them. Allocates; never inside a
- * macrostep. `TA_ERR_FULL` when the pool's bound leaves too few;
+ * point, the index's room for them, and name-area room for their records,
+ * trace parents and `text_bytes` of names kept as text. Allocates; never
+ * inside a macrostep. `TA_ERR_FULL` when the pool's bound leaves too few;
  * `TA_ERR_NOMEM` when pages cannot be allocated.
  */
-ta_result ta_deadline_reserve(struct ta_system *system, uint32_t count);
+ta_result ta_deadline_reserve(struct ta_system *system, uint32_t count, uint64_t text_bytes);
 
 /**
  * Stores `send` in an envelope, puts it in the index and, when `owner` is
@@ -265,6 +278,19 @@ void ta_deadline_owner_release(struct ta_system *system, ta_deadline_owner *owne
 uint32_t ta_deadline_copy(const struct ta_system *system, const ta_deadline_owner *owner, ta_delayed_send *out);
 
 /**
+ * The length of the name timer envelope `index` keeps as text, or 0 when
+ * it keeps an authored name's ID. Allocates nothing; may run inside a
+ * macrostep.
+ */
+uint32_t ta_deadline_name_length(const struct ta_system *system, uint32_t index);
+
+/**
+ * Copies the name timer envelope `index` keeps as text into `out`, which
+ * has room for `ta_deadline_name_length` bytes. Allocates nothing.
+ */
+void ta_deadline_name_copy(const struct ta_system *system, uint32_t index, char *out);
+
+/**
  * Fills the system's view buffer with `owner`'s sends, submitted ones
  * included, as `ta_delayed_send_info` in `(due, order)` order, and points
  * `*out` at it. The view borrows the sends' references and stays valid
@@ -298,5 +324,9 @@ bool ta_deadline_next_due(const struct ta_system *system, ta_time *out);
  * Removes the earliest send from the index and from its owner's list, gives
  * its envelope back, and hands its references to `*out`. `TA_ERR_NOT_FOUND`
  * when the index is empty. Never allocates.
+ *
+ * A name kept as text comes back in `event_text`, read into the run's name
+ * buffer (valid until the buffer is next used), with `event` 0; the caller
+ * grows the buffer first (`ta_run_name_room`).
  */
 ta_result ta_deadline_pop(struct ta_system *system, ta_delayed_send *out);

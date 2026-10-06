@@ -72,7 +72,7 @@ module DelayedSendsAtOwner
   # The sender's pending sends as [event name, due, submitted].
   def self.pending(context, actor)
     Array(actor.inspect_actor[:delayed_sends]).map do |send|
-      [context.event_text(send[:event]), send[:due], send[:submitted]]
+      [send[:event].to_i.zero? ? send[:event_text] : context.event_text(send[:event]), send[:due], send[:submitted]]
     end
   end
 end

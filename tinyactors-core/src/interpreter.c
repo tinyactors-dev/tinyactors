@@ -1547,7 +1547,9 @@ ta_dispatch_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed
             ta_result posted = ta_run_post_mail(
                 system,
                 &(ta_run_mail){ .target = route.actor, .wait = &wait, .event = &event, .trace = &send->trace,
-                                .name_text = send->event == 0 ? how->event_text : (ta_str){ 0 },
+                                .name_text = send->event != 0      ? (ta_str){ 0 }
+                                             : how->event_text.len != 0 ? how->event_text
+                                                                        : send->event_text,
                                 .from = sender != NULL ? sender->session_id : 0u,
                                 .source = how->timer ? TA_RECORD_INPUT_SOURCE_TIMER : TA_RECORD_INPUT_SOURCE_MAIL },
                 &short_of);
@@ -1571,6 +1573,9 @@ ta_dispatch_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed
             .source = origin,
             .send_id = send->send_id,
             .event = send->event,
+            .event_text = send->event != 0      ? (ta_str){ 0 }
+                          : how->event_text.len != 0 ? how->event_text
+                                                     : send->event_text,
             .io_type = send->io_type,
             .target = send->target,
             .data = send->data,
@@ -1920,15 +1925,14 @@ static ta_result ta_send_event_name(ta_interpreter *it, const ta_send_action *se
 }
 
 /*
- * Interns an eventexpr's name where the send is stored: as a delayed send,
- * held for an unpublished session, or handed to an I/O processor, all of
- * which keep a name ID. An immediate send to another session, and one to
- * #_internal, keep it as text (ADR 0100). May allocate.
+ * Interns an eventexpr's name only where a send is held for an unpublished
+ * session, whose held sends keep a name ID until it is published. Every
+ * other send keeps the name as text (ADR 0100): mail, #_internal, delayed
+ * sends and I/O processors. May allocate.
  */
 static ta_result ta_send_intern_event(ta_interpreter *it, ta_send_state *state, ta_fault *fault) {
     bool internal = state->scxml_io && state->scxml.kind == TA_SCXML_TARGET_INTERNAL;
-    bool mail_now = state->scxml_io && !internal && state->delay == 0 && it->actor->published;
-    if (state->event != 0 || state->event_text.len == 0 || mail_now || internal) {
+    if (state->event != 0 || state->event_text.len == 0 || it->actor->published || internal) {
         return TA_OK;
     }
     return ta_core_fault(fault, &(ta_core_fault_params){
@@ -2169,6 +2173,7 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         .send_id = state->send_id,
         .due = ta_actor_now(system, actor) + state->delay,
         .event = state->event,
+        .event_text = state->event == 0 ? state->event_text : (ta_str){ 0 },
         .io_type = state->io_type,
         .target = state->target,
         .data = state->data,
@@ -2226,17 +2231,6 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
          * submitted, waits in the deadline index, due now, and keeps its
          * order among later sends.
          */
-        if (record.event == 0) {
-            ta_result interned = ta_trie_intern_dotted(&system->event_names, state->event_text, &record.event);
-            if (interned != TA_OK) {
-                ta_value_release(&record.data);
-                ta_value_release(&record.target);
-                ta_actor_ref_release(&record.destination);
-                ta_actor_ref_release(&record.origin);
-                state->sent = false;
-                return interned;
-            }
-        }
     }
     ta_record_capacity_resource short_of = (ta_record_capacity_resource)0;
     ta_result result = ta_deadline_schedule(system, ta_actor_timers(actor), &record, &short_of);

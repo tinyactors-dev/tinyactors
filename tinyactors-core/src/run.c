@@ -187,9 +187,7 @@ ta_str ta_run_input_name(const ta_system *system, ta_event_name_id name) {
     return ta_run_name_text(system, index);
 }
 
-/* Grows the name buffer to the longest name kept as text: a safe point.
- * TA_ERR_NOMEM, changing nothing. */
-static ta_result ta_run_name_room(ta_system *system) {
+ta_result ta_run_name_room(ta_system *system) {
     ta_run_state *run = &system->run;
     if (run->name_capacity >= run->name_longest) {
         return TA_OK;

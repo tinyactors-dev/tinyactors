@@ -419,6 +419,18 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         image->delayed_send_count = sends;
         for (uint32_t index = 0; index < sends; index += 1) {
             ta_delayed_send *send = &image->delayed_sends[index];
+            if (ta_run_name_is_input(send->event)) {
+                /* A name kept as text goes in the image as text (ADR 0100). */
+                uint32_t timer = send->event & ~TA_RUN_NAME_INPUT;
+                uint32_t length = ta_deadline_name_length(system, timer);
+                char *copy = ta_arena_alloc(arena, length == 0u ? 1u : length, 1u);
+                if (copy == NULL) {
+                    return TA_ERR_NOMEM;
+                }
+                ta_deadline_name_copy(system, timer, copy);
+                send->event = 0u;
+                send->event_text = (ta_str){ .ptr = copy, .len = length };
+            }
             result = ta_image_copy_address(arena, &send->destination);
             if (result == TA_OK) {
                 result = ta_image_copy_address(arena, &send->origin);
@@ -659,7 +671,11 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
         }
     }
     /* The image's sends take envelopes from the pool, outside any macrostep. */
-    ta_result reserved = ta_deadline_reserve(system, image->delayed_send_count);
+    uint64_t text_bytes = 0u;
+    for (uint32_t index = 0; index < image->delayed_send_count; index += 1) {
+        text_bytes += image->delayed_sends[index].event_text.len;
+    }
+    ta_result reserved = ta_deadline_reserve(system, image->delayed_send_count, text_bytes);
     if (reserved != TA_OK) {
         return reserved;
     }
@@ -1247,6 +1263,7 @@ static size_t ta_offload_records_bytes(const ta_session_image *image) {
     for (uint32_t index = 0; index < image->delayed_send_count; index += 1) {
         total += ta_offload_ref_bytes(&image->delayed_sends[index].destination);
         total += ta_offload_ref_bytes(&image->delayed_sends[index].origin);
+        total += image->delayed_sends[index].event_text.len;
     }
     return total;
 }
@@ -1264,6 +1281,7 @@ static uint8_t *ta_offload_put_records(uint8_t *at, const ta_session_image *imag
         at = ta_offload_put(at, send, sizeof *send);
         at = ta_offload_put_ref(at, &send->destination);
         at = ta_offload_put_ref(at, &send->origin);
+        at = ta_offload_put(at, send->event_text.ptr, send->event_text.len);
     }
     return at;
 }
@@ -1494,6 +1512,16 @@ static ta_result ta_offload_take_sends(ta_offload_reader *reader, uint32_t count
         ta_result result = ta_offload_take_ref(reader, &image->arena, &send->destination);
         if (result == TA_OK) {
             result = ta_offload_take_ref(reader, &image->arena, &send->origin);
+        }
+        if (result == TA_OK && send->event_text.len != 0u) {
+            /* A name kept as text follows its record (ADR 0100). */
+            char *name = ta_arena_alloc(&image->arena, send->event_text.len, 1u);
+            result = name == NULL ? TA_ERR_NOMEM
+                     : ta_offload_take(reader, name, send->event_text.len) ? TA_OK
+                                                                            : TA_ERR_INVALID;
+            send->event_text = (ta_str){ .ptr = name, .len = result == TA_OK ? send->event_text.len : 0u };
+        } else {
+            send->event_text.ptr = NULL;
         }
         if (result != TA_OK) {
             return result;

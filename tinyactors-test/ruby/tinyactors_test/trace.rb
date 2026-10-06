@@ -125,7 +125,8 @@ module TinyactorsTest
     # Inspection carries the actor's pending delayed sends, by due time (ADR 0054).
     def delayed_sends(inspection)
       Array(inspection[:delayed_sends]).map do |send|
-        { due: send[:due], event: @context.event_text(send[:event]), send_id: send[:send_id],
+        { due: send[:due], event: send[:event].to_i.zero? ? send[:event_text] : @context.event_text(send[:event]),
+          send_id: send[:send_id],
           target: @context.send_target(inspection[:definition_id], send), data: send[:data] }
       end
     end

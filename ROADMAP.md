@@ -30,7 +30,7 @@ decisions are core ADRs 0098 to 0105, repository ADR 0003 and napi ADR
   the pool and `ta_run` with one slot (4.2, done: hosts pass and read
   names as text, the router is gone, the ring defaults measured by proxy in
   ADR 0099's notes), delayed sends as envelopes
-  (4.3), no allocation in a macrostep (4.4), macrostep slots (4.5).
+  (4.3, done: names of delayed and I/O sends stay text), no allocation in a macrostep (4.4), macrostep slots (4.5).
 - [ ] **Phase 5, rings replace the vtables:** inputs (5.1), effects (5.2),
   unloading and loading (5.3), definitions (5.4), recording and replay
   (5.5); the test host becomes a ring driver in 5.1.

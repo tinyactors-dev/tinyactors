@@ -555,7 +555,9 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
     const ta_definition *definition = actor->definition;
     for (uint32_t index = 0; index < count; index += 1) {
         const ta_delayed_send_info *info = &params->pending_sends[index];
-        if (!ta_trie_valid(&system->event_names, info->event) ||
+        bool named = info->event == 0u && info->event_text.len != 0u &&
+                     ta_names_resolve((ta_names *)&system->names, info->event_text) == TA_OK;
+        if ((!named && !ta_trie_valid(&system->event_names, info->event)) ||
             (info->has_content && info->content >= definition->content_count) ||
             (info->has_target_text && info->target_text >= definition->content_count) ||
             (info->destination.kind == TA_ACTOR_REF_RUNTIME &&
@@ -563,7 +565,11 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
             return TA_ERR_INVALID;
         }
     }
-    ta_result result = ta_deadline_reserve(system, count);
+    uint64_t text_bytes = 0u;
+    for (uint32_t index = 0; index < count; index += 1) {
+        text_bytes += params->pending_sends[index].event_text.len;
+    }
+    ta_result result = ta_deadline_reserve(system, count, text_bytes);
     for (uint32_t index = 0; result == TA_OK && index < count; index += 1) {
         const ta_delayed_send_info *info = &params->pending_sends[index];
         ta_delayed_send send = {
@@ -571,6 +577,7 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
             .send_id = info->send_id,
             .due = info->due,
             .event = info->event,
+            .event_text = info->event == 0u ? info->event_text : (ta_str){ 0 },
             .io_type = info->io_type,
             .destination = info->destination,
             .target = info->target,
@@ -872,6 +879,7 @@ static ta_result ta_actor_state_restore(ta_system *system, ta_actor *actor, cons
                                  .send_id = info->send_id,
                                  .due = info->due,
                                  .event = info->event,
+                                 .event_text = info->event == 0u ? info->event_text : (ta_str){ 0 },
                                  .io_type = info->io_type,
                                  .destination = info->destination,
                                  .target = info->target,
@@ -1244,7 +1252,7 @@ ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *par
      * room for the held sends, the retired invocations' events, and a wake
      * for the macrostep they or the invocations to start may leave (run.h). */
     uint32_t sends = ta_actor_activation_send_count(actor, at);
-    ta_result result = sends == 0 ? TA_OK : ta_deadline_reserve(system, sends);
+    ta_result result = sends == 0 ? TA_OK : ta_deadline_reserve(system, sends, 0u);
     if (result == TA_OK && replaying) {
         result = ta_invoke_prepare_retire(system, actor);
     }

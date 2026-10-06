@@ -9631,6 +9631,13 @@
           "name": "event",
           "type": {
             "type": "ta_event_name_id"
+          },
+          "doc": "An authored name's ID, or 0 with `event_text`: the name as text (ADR 0100). Read from inspection or export, the text lives in the same buffer as the record, until the next inspection or export; given to ta_actor_spawn() or a reconstruction, it is copied."
+        },
+        {
+          "name": "event_text",
+          "type": {
+            "type": "ta_str"
           }
         },
         {
@@ -9698,41 +9705,43 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 136,
+          "size": 160,
           "align": 8,
           "offsets": {
             "send_id": 0,
             "due": 8,
             "event": 16,
-            "io_type": 20,
-            "destination": 24,
-            "target": 40,
-            "data": 56,
-            "submitted": 72,
-            "has_target_text": 73,
-            "target_text": 76,
-            "has_content": 80,
-            "content": 84,
-            "trace": 88
+            "event_text": 24,
+            "io_type": 40,
+            "destination": 48,
+            "target": 64,
+            "data": 80,
+            "submitted": 96,
+            "has_target_text": 97,
+            "target_text": 100,
+            "has_content": 104,
+            "content": 108,
+            "trace": 112
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 120,
+          "size": 128,
           "align": 8,
           "offsets": {
             "send_id": 0,
             "due": 8,
             "event": 16,
-            "io_type": 20,
-            "destination": 24,
-            "target": 40,
-            "data": 48,
-            "submitted": 56,
-            "has_target_text": 57,
-            "target_text": 60,
-            "has_content": 64,
-            "content": 68,
-            "trace": 72
+            "event_text": 20,
+            "io_type": 28,
+            "destination": 32,
+            "target": 48,
+            "data": 56,
+            "submitted": 64,
+            "has_target_text": 65,
+            "target_text": 68,
+            "has_content": 72,
+            "content": 76,
+            "trace": 80
           }
         }
       }
@@ -15705,7 +15714,7 @@
     },
     "ta_send": {
       "kind": "struct",
-      "doc": "One send to a host I/O processor. `target` is the evaluated `targetexpr`; `target_text` is a literal `target`, the text the chart wrote, which is never imported into the data model, so a chart on the null data model can name one. At most one of them is present. `data` is the evaluated ` <content expr>`, namelist or <param >s; `content` is a literal <content >, delivered as the bytes the chart holds and not imported into the data model (ADR 0053). `content_type` is the literal's media type, empty when nothing said. At most one of `data` and `content` is present. `trace` is the sending macrostep's context and the key of the step that sent it (ADR 0067), for the processor to carry, as a `traceparent` header for example. Everything is borrowed for the call.",
+      "doc": "One send to a host I/O processor. `target` is the evaluated `targetexpr`; `target_text` is a literal `target`, the text the chart wrote, which is never imported into the data model, so a chart on the null data model can name one. At most one of them is present. `data` is the evaluated ` <content expr>`, namelist or <param >s; `content` is a literal <content >, delivered as the bytes the chart holds and not imported into the data model (ADR 0053). `content_type` is the literal's media type, empty when nothing said. At most one of `data` and `content` is present. `trace` is the sending macrostep's context and the key of the step that sent it (ADR 0067), for the processor to carry, as a `traceparent` header for example. `event` is an authored name's ID; with `event` 0, `event_text` is the name as text (core interns only authored names, ADR 0100). Everything is borrowed for the call.",
       "fields": [
         {
           "name": "source",
@@ -15723,6 +15732,12 @@
           "name": "event",
           "type": {
             "type": "ta_event_name_id"
+          }
+        },
+        {
+          "name": "event_text",
+          "type": {
+            "type": "ta_str"
           }
         },
         {
@@ -15776,37 +15791,39 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 168,
+          "size": 192,
           "align": 8,
           "offsets": {
             "source": 0,
             "send_id": 16,
             "event": 24,
-            "io_type": 28,
-            "target": 32,
-            "target_text": 48,
-            "data": 64,
-            "content_type": 80,
-            "content": 96,
-            "trace": 112,
-            "due": 160
+            "event_text": 32,
+            "io_type": 48,
+            "target": 56,
+            "target_text": 72,
+            "data": 88,
+            "content_type": 104,
+            "content": 120,
+            "trace": 136,
+            "due": 184
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 128,
+          "size": 136,
           "align": 8,
           "offsets": {
             "source": 0,
             "send_id": 16,
             "event": 24,
-            "io_type": 28,
-            "target": 32,
-            "target_text": 40,
-            "data": 48,
-            "content_type": 56,
-            "content": 64,
-            "trace": 72,
-            "due": 120
+            "event_text": 28,
+            "io_type": 36,
+            "target": 40,
+            "target_text": 48,
+            "data": 56,
+            "content_type": 64,
+            "content": 72,
+            "trace": 80,
+            "due": 128
           }
         }
       }

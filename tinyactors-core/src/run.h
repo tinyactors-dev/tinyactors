@@ -500,6 +500,12 @@ void ta_run_wake_cancel(ta_system *system, uint32_t wake);
  */
 #define TA_RUN_NAME_KEPT ((uint32_t)0x40000000)
 
+/**
+ * Grows the run's name buffer to the longest name an envelope keeps as
+ * text. A safe point only: it allocates. TA_ERR_NOMEM changes nothing.
+ */
+ta_result ta_run_name_room(struct ta_system *system);
+
 /** Whether `name` names an input's name kept as text (`TA_RUN_NAME_INPUT`). */
 static inline bool ta_run_name_is_input(ta_event_name_id name) {
     return (name & TA_RUN_NAME_INPUT) != 0u;

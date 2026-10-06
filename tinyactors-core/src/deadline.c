@@ -6,6 +6,7 @@
 #include "memory.h"
 #include "name_area.h"
 #include "routing.h"
+#include "run.h"
 #include "system.h"
 #include "trace.h"
 
@@ -47,6 +48,8 @@ typedef struct {
 
 #define TA_DEADLINE_HAS_CONTENT ((uint8_t)0x01u)
 #define TA_DEADLINE_HAS_TARGET_TEXT ((uint8_t)0x02u)
+/* The name is kept as text, in the text's second field. */
+#define TA_DEADLINE_HAS_NAME_TEXT ((uint8_t)0x04u)
 
 /* The packed bytes of a record, at most this many. */
 #define TA_DEADLINE_RECORD_BYTES                                                                                  \
@@ -82,7 +85,8 @@ static uint32_t ta_deadline_pack(const ta_delayed_send *send, uint8_t *bytes) {
         .content = send->content,
         .target_text = send->target_text,
         .bits = (uint8_t)((send->has_content ? TA_DEADLINE_HAS_CONTENT : 0u) |
-                          (send->has_target_text ? TA_DEADLINE_HAS_TARGET_TEXT : 0u)),
+                          (send->has_target_text ? TA_DEADLINE_HAS_TARGET_TEXT : 0u) |
+                          (send->event == 0u && send->event_text.len != 0u ? TA_DEADLINE_HAS_NAME_TEXT : 0u)),
     };
     ta_deadline_packer packer = { .bytes = bytes, .length = 0u };
     ta_deadline_put(&packer, &record.event, sizeof record.event);
@@ -135,7 +139,7 @@ static ta_delayed_send ta_deadline_read(const ta_system *system, uint32_t index)
     ta_deadline_get(&packer, &record.content, sizeof record.content);
     ta_deadline_get(&packer, &record.target_text, sizeof record.target_text);
     ta_deadline_get(&packer, &record.bits, sizeof record.bits);
-    send.event = record.event;
+    send.event = (record.bits & TA_DEADLINE_HAS_NAME_TEXT) != 0u ? (TA_RUN_NAME_INPUT | index) : record.event;
     send.io_type = record.io_type;
     send.destination = record.destination;
     send.invoke_id = record.invoke_id;
@@ -332,6 +336,7 @@ ta_result ta_deadline_init(ta_deadline *deadline, ta_allocator allocator) {
         return result;
     }
     ta_vec_init(&fresh.views, allocator, TA_VEC_LAYOUT(ta_delayed_send_info));
+    ta_vec_init(&fresh.view_text, allocator, TA_VEC_LAYOUT(char));
     result = ta_vec_reserve(&fresh.views, 2u * TA_DEADLINE_VIEWS_MIN);
     if (result != TA_OK) {
         ta_heap_destroy(&fresh.heap);
@@ -355,6 +360,7 @@ void ta_deadline_destroy(ta_system *system) {
     }
     ta_heap_destroy(&system->deadline.heap);
     ta_vec_destroy(&system->deadline.views);
+    ta_vec_destroy(&system->deadline.view_text);
 }
 
 ta_result ta_deadline_grow(ta_system *system) {
@@ -369,14 +375,26 @@ ta_result ta_deadline_grow(ta_system *system) {
     return ta_heap_grow(&deadline->heap, items->used + items->free);
 }
 
-ta_result ta_deadline_reserve(ta_system *system, uint32_t count) {
+ta_result ta_deadline_reserve(ta_system *system, uint32_t count, uint64_t text_bytes) {
     ta_envelope_pool *pool = &system->run.pool;
     if (ta_quota_available(&pool->quota) < count) {
+        return TA_ERR_FULL;
+    }
+    /* Each send's text: its record, its trace parent and its name, with a
+     * chunk's slack for each of its three fields. */
+    uint64_t bytes = (uint64_t)count * (TA_DEADLINE_RECORD_BYTES + TA_NAME_AREA_TRACE_FIELD_BYTES +
+                                        3u * (TA_NAME_AREA_PREFIX_BYTES + TA_NAME_AREA_TEXT_BYTES)) +
+                     text_bytes;
+    uint64_t chunks = bytes / TA_NAME_AREA_TEXT_BYTES + 1u;
+    if (chunks > UINT32_MAX) {
         return TA_ERR_FULL;
     }
     ta_result result = ta_index_pool_refill(&pool->items, count);
     if (result == TA_OK) {
         result = ta_deadline_grow(system);
+    }
+    if (result == TA_OK) {
+        result = ta_name_area_refill(&system->run.names, (uint32_t)chunks);
     }
     return result == TA_ERR_FULL ? TA_ERR_NOMEM : result;
 }
@@ -411,6 +429,17 @@ ta_result ta_deadline_schedule(ta_system *system,
                                                                   .writer = &writer,
                                                                   .text = { .ptr = bytes, .len = length },
                                                               });
+    bool named = stored.event == 0u && stored.event_text.len != 0u;
+    if (result == TA_OK && named) {
+        result = ta_name_area_write(&system->run.names, &(ta_name_area_write_params){
+                                                            .writer = &writer,
+                                                            .text = { .ptr = (const uint8_t *)stored.event_text.ptr,
+                                                                      .len = stored.event_text.len },
+                                                        });
+        if (result != TA_OK) {
+            ta_name_area_free(&system->run.names, &writer.chain);
+        }
+    }
     if (result == TA_OK && traced) {
         result = ta_name_area_write_trace_parent(&system->run.names, &(ta_name_area_trace_params){
                                                                          .writer = &writer,
@@ -425,7 +454,10 @@ ta_result ta_deadline_schedule(ta_system *system,
         if (short_of != NULL) {
             *short_of = TA_RECORD_CAPACITY_RESOURCE_NAMES;
         }
-        return TA_ERR_FULL;
+        return result == TA_ERR_INVALID ? TA_ERR_INVALID : TA_ERR_FULL;
+    }
+    if (named && stored.event_text.len > system->run.name_longest) {
+        system->run.name_longest = stored.event_text.len;
     }
     ta_envelope *envelope = ta_deadline_at(system, index);
     envelope->state = TA_ENVELOPE_TIMER;
@@ -543,13 +575,40 @@ ta_result ta_deadline_views(ta_system *system,
     }
     ta_deadline_sort_run(&(ta_deadline_sort){ .base = keys, .size = sizeof *keys, .before = ta_deadline_key_before },
                          total);
+    /* Names kept as text are copied next to the records, so a host reads
+     * them for as long as it reads the records. */
+    uint64_t text_bytes = 0u;
+    for (uint32_t index = 0u; index < total; index += 1u) {
+        text_bytes += ta_deadline_name_length(system, keys[index].index);
+    }
+    ta_vec *text = &system->deadline.view_text;
+    if (text_bytes > UINT32_MAX) {
+        return TA_ERR_NOMEM;
+    }
+    if (text->capacity < (uint32_t)text_bytes) {
+        ta_result result = ta_vec_reserve(text, (uint32_t)text_bytes);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    char *names = text->items;
+    uint32_t used = 0u;
     ta_delayed_send_info *infos = (ta_delayed_send_info *)views->items + total;
     for (uint32_t index = 0u; index < total; index += 1u) {
         ta_delayed_send send = ta_deadline_read(system, keys[index].index);
+        ta_str name = { 0 };
+        if (ta_run_name_is_input(send.event)) {
+            uint32_t length = ta_deadline_name_length(system, keys[index].index);
+            ta_deadline_name_copy(system, keys[index].index, names + used);
+            name = (ta_str){ .ptr = names + used, .len = length };
+            used += length;
+            send.event = 0u;
+        }
         infos[index] = (ta_delayed_send_info){
             .send_id = send.send_id,
             .due = send.due,
             .event = send.event,
+            .event_text = name,
             .io_type = send.io_type,
             .destination = send.destination,
             .target = send.target,
@@ -616,12 +675,69 @@ bool ta_deadline_next_due(const ta_system *system, ta_time *out) {
     return true;
 }
 
+/* Positions `reader` at the name field of timer envelope `index`; answers
+ * its length, or 0 when the envelope keeps no name as text. */
+static uint32_t ta_deadline_name_field(const ta_system *system, uint32_t index, ta_name_area_reader *reader) {
+    const ta_envelope *envelope = ta_deadline_at(system, index);
+    ta_name_area *names = (ta_name_area *)&system->run.names;
+    *reader = ta_name_area_reader_of(envelope->text);
+    uint32_t length = 0u;
+    if (ta_name_area_next(names, reader, &length) != TA_OK || length < TA_DEADLINE_RECORD_BYTES - sizeof(ta_actor_ref) -
+                                                                             sizeof(ta_atom)) {
+        return 0u;
+    }
+    uint8_t bytes[TA_DEADLINE_RECORD_BYTES];
+    uint32_t got = 0u;
+    while (got < length && got < sizeof bytes) {
+        ta_bytes span = ta_name_area_read(names, reader, length - got);
+        ta_mem_copy(bytes + got, span.ptr, span.len);
+        got += span.len;
+    }
+    /* The bits follow the event, I/O type, destination, invoke ID and two content IDs. */
+    size_t at = sizeof(ta_event_name_id) + sizeof(ta_atom) + sizeof(ta_actor_ref) + sizeof(ta_invoke_id) +
+                2u * sizeof(ta_content_id);
+    if ((bytes[at] & TA_DEADLINE_HAS_NAME_TEXT) == 0u) {
+        return 0u;
+    }
+    uint32_t name = 0u;
+    if (ta_name_area_next(names, reader, &name) != TA_OK) {
+        return 0u;
+    }
+    return name;
+}
+
+uint32_t ta_deadline_name_length(const ta_system *system, uint32_t index) {
+    ta_name_area_reader reader;
+    return ta_deadline_name_field(system, index, &reader);
+}
+
+void ta_deadline_name_copy(const ta_system *system, uint32_t index, char *out) {
+    ta_name_area_reader reader;
+    uint32_t length = ta_deadline_name_field(system, index, &reader);
+    uint32_t got = 0u;
+    while (got < length) {
+        ta_bytes span = ta_name_area_read((ta_name_area *)&system->run.names, &reader, length - got);
+        ta_mem_copy(out + got, span.ptr, span.len);
+        got += span.len;
+    }
+}
+
 ta_result ta_deadline_pop(ta_system *system, ta_delayed_send *out) {
     uint32_t head = ta_heap_head(&system->deadline.heap);
     if (head == 0u) {
         return TA_ERR_NOT_FOUND;
     }
     *out = ta_deadline_read(system, head);
+    if (ta_run_name_is_input(out->event)) {
+        /* The name leaves with the envelope: it is read into the run's name
+         * buffer, which ta_system_set_time grew first (run.h). */
+        uint32_t length = ta_deadline_name_length(system, head);
+        if (length <= system->run.name_capacity) {
+            ta_deadline_name_copy(system, head, system->run.name_buffer);
+            out->event_text = (ta_str){ .ptr = system->run.name_buffer, .len = length };
+        }
+        out->event = 0u;
+    }
     ta_deadline_unlink(system, head);
     ta_deadline_free(system, head);
     return TA_OK;

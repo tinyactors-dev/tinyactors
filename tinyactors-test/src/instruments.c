@@ -232,6 +232,15 @@ jv tat_event_name_text(const ta_system *system, ta_event_name_id name) {
     return text;
 }
 
+/* A send's event name as text: its text when core keeps it as text, or
+ * its authored name's ID formatted. */
+static jv tat_send_event_text(const ta_system *system, const ta_send *send) {
+    if (send->event == 0 && send->event_text.len != 0) {
+        return jv_string_sized(send->event_text.ptr, (int)send->event_text.len);
+    }
+    return tat_event_name_text(system, send->event);
+}
+
 /* The text an atom interns, or null when it is none of this system's. */
 static jv tat_atom_text(const ta_system *system, ta_atom atom) {
     ta_str text = {0};
@@ -901,7 +910,7 @@ static ta_op_status tat_recording_send(void *self, const ta_send *send, ta_fault
     entry = jv_object_set(entry, jv_string("source"), tat_encode_ta_actor_ref(instrument->bind, &send->source));
     entry = jv_object_set(entry, jv_string("send_id"), tat_u64(send->send_id));
     entry = jv_object_set(entry, jv_string("event"), tat_u64(send->event));
-    entry = jv_object_set(entry, jv_string("event_text"), tat_event_name_text(instrument->system, send->event));
+    entry = jv_object_set(entry, jv_string("event_text"), tat_send_event_text(instrument->system, send));
     entry = jv_object_set(entry, jv_string("io_type"), tat_atom_text(instrument->system, send->io_type));
     entry = jv_object_set(entry, jv_string("target"), tat_send_target(send));
     entry = jv_object_set(entry, jv_string("data"), tat_value_or_null(&send->data));
@@ -992,7 +1001,7 @@ static ta_op_status tat_endpoint_send(void *self, const ta_send *send, ta_fault 
     jv entry = jv_object();
     entry = jv_object_set(entry, jv_string("source"), tat_encode_ta_actor_ref(instrument->bind, &send->source));
     entry = jv_object_set(entry, jv_string("send_id"), tat_u64(send->send_id));
-    entry = jv_object_set(entry, jv_string("event_text"), tat_event_name_text(instrument->system, send->event));
+    entry = jv_object_set(entry, jv_string("event_text"), tat_send_event_text(instrument->system, send));
     entry = jv_object_set(entry, jv_string("io_type"), tat_atom_text(instrument->system, send->io_type));
     entry = jv_object_set(entry, jv_string("target"), jv_copy(target));
     entry = jv_object_set(entry, jv_string("data"), tat_value_or_null(&send->data));
