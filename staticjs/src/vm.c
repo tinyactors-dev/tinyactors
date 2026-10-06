@@ -2357,10 +2357,14 @@ __attribute__((noinline)) static sjs_result bigint_binary(sjs_vm *vm, uint8_t op
         if (operator == SJS_OP_ADD) return sjs_vm_fault(vm, "staticjs adds two numbers, or a string and a primitive");
         return sjs_vm_fault(vm, "arithmetic in staticjs is on numbers");
     }
+    /* BIGINT_REUSE: an operand the stack holds alone may become the result,
+     * written in place; its slot then gives its reference up. */
     sjs_bigint_op op = { .op = operator, .a = pair[0], .b = pair[1] };
+    op.reuse = (uint8_t)((sjs_value_unique(pair[0]) ? SJS_BIGINT_REUSE_A : 0u) | (sjs_value_unique(pair[1]) ? SJS_BIGINT_REUSE_B : 0u));
     sjs_result r = sjs_bigint_binary(vm->context, &op);
     if (r == SJS_ERR_PROGRAM) return sjs_vm_fault(vm, op.fault);
     if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    if (op.took != 0) vm->stack[vm->sp - (op.took == SJS_BIGINT_REUSE_A ? 2u : 1u)] = sjs_undefined();
     vm->fuel_used += op.cost;
     *out = op.result;
     return SJS_OK;
@@ -2370,9 +2374,10 @@ __attribute__((noinline)) static sjs_result bigint_unary(sjs_vm *vm, uint8_t ope
     sjs_value v = vm->stack[vm->sp - 1];
     if (v.kind != SJS_BIGINT) return sjs_vm_fault(vm, "arithmetic in staticjs is on numbers");
     if (operator != SJS_OP_NEGATE) return sjs_vm_fault(vm, "JavaScript throws a TypeError for unary + of a BigInt");
-    sjs_bigint_op op = { .op = SJS_OP_NEGATE, .a = v };
+    sjs_bigint_op op = { .op = SJS_OP_NEGATE, .a = v, .reuse = sjs_value_unique(v) ? SJS_BIGINT_REUSE_A : 0u };
     sjs_result r = sjs_bigint_binary(vm->context, &op);
     if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    if (op.took != 0) vm->stack[vm->sp - 1u] = sjs_undefined();
     vm->fuel_used += op.cost;
     *out = op.result;
     return SJS_OK;

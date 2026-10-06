@@ -62,6 +62,14 @@ written as `String(x)` and `toString(radix)`, read back, rounded as
   `{...acc, [k]: v}` in a `reduce` no longer copies the accumulator at each
   step. Owned mutation (below) relies on the same count: `acc.push(x)` in a
   `reduce` changes the accumulator the callback holds alone.
+- **BigInt arithmetic writes over an operand nothing else holds** (tagged
+  `BIGINT_REUSE`): `+`, `-` and unary `-` of a BigInt the stack holds alone,
+  a reduce's accumulator or a let a last read moved, put the result in its
+  block when it has room, and `*` by a one-limb BigInt does too; a product
+  of such an operand gets an eighth more room for the next. Adding small
+  BigInts in a reduce then allocates nothing per element, and a factorial
+  rarely. Fuel is unchanged; no program can tell, as nothing else sees the
+  operand.
 - **`+` and a template extend a string nothing else holds** (tagged
   `STRING_APPEND`): in `reduce((acc, x) => acc + x, "")` or
   `` (acc, x) => `${acc}${x},` ``, or wherever the left operand (a

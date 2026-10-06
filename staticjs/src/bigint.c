@@ -456,7 +456,8 @@ typedef struct {
 static sjs_result bigint_give(sjs_context *context, sjs_bigint_op *op, bigint_made made) {
     sjs_result r = bigint_finish(context, made.block, made.negative);
     if (r != SJS_OK) {
-        bigint_free(context, made.block);
+        /* An operand taken over stays its caller's to release. */
+        if (op->took == 0) bigint_free(context, made.block);
         return r;
     }
     op->result = sjs_heap_value(SJS_BIGINT, &made.block->h);
@@ -475,7 +476,37 @@ static sjs_result bigint_small(sjs_context *context, sjs_bigint_op *op, uint64_t
     return bigint_give(context, op, (bigint_made){ b, negative });
 }
 
-/* a + b, or a - b: signs decide whether magnitudes add or subtract. */
+/* BIGINT_REUSE: an operand the caller holds alone (op->reuse) with room
+ * for `need` limbs becomes the result, written in place, as a string
+ * nothing else holds is extended (README.md, "A value nothing else holds is
+ * updated in place"): no program can tell, as nothing else sees it. Else a
+ * new block of `need` limbs and `slack` more, for a result that will grow. */
+typedef struct {
+    uint32_t need;
+    uint32_t slack;
+    sjs_bigint **out;
+} bigint_room;
+
+static sjs_result bigint_target(sjs_context *context, sjs_bigint_op *op, bigint_room room) {
+    sjs_bigint **out = room.out;
+    if ((op->reuse & SJS_BIGINT_REUSE_A) != 0 && SJS_AS_BIGINT(op->a)->capacity >= room.need) {
+        op->took = SJS_BIGINT_REUSE_A;
+        *out = SJS_AS_BIGINT(op->a);
+        return SJS_OK;
+    }
+    if ((op->reuse & SJS_BIGINT_REUSE_B) != 0 && SJS_AS_BIGINT(op->b)->capacity >= room.need) {
+        op->took = SJS_BIGINT_REUSE_B;
+        *out = SJS_AS_BIGINT(op->b);
+        return SJS_OK;
+    }
+    uint32_t limit = bigint_limit_limbs(context) + 2u;
+    uint32_t capacity = room.need;
+    if (room.slack <= limit && capacity <= limit - room.slack) capacity += room.slack;
+    return bigint_alloc(context, capacity, out);
+}
+
+/* a + b, or a - b: signs decide whether magnitudes add or subtract. Each
+ * limb is read before it is written, so the result may be either operand. */
 static sjs_result bigint_add(sjs_context *context, sjs_bigint_op *op) {
     const sjs_bigint *a = SJS_AS_BIGINT(op->a);
     const sjs_bigint *b = SJS_AS_BIGINT(op->b);
@@ -488,7 +519,7 @@ static sjs_result bigint_add(sjs_context *context, sjs_bigint_op *op) {
     magnitude y = magnitude_of(b);
     uint32_t longer = x.length > y.length ? x.length : y.length;
     sjs_bigint *out;
-    sjs_result r = bigint_alloc(context, longer + 1u, &out);
+    sjs_result r = bigint_target(context, op, (bigint_room){ longer + 1u, 0, &out });
     if (r != SJS_OK) return r;
     bool negative = an;
     if (an == bn) {
@@ -525,11 +556,24 @@ static sjs_result bigint_multiply(sjs_context *context, sjs_bigint_op *op) {
     if (b->length == 0) return bigint_share(op, op->b);
     if (is_one(b)) return sjs_bigint_negative(b) ? bigint_copy(context, op, a) : bigint_share(op, op->a);
     if (is_one(a)) return sjs_bigint_negative(a) ? bigint_copy(context, op, b) : bigint_share(op, op->b);
+    if (b->length == 1u && (op->reuse & SJS_BIGINT_REUSE_A) != 0 && a->capacity > a->length) {
+        /* BIGINT_REUSE: times one limb, in place. */
+        op->took = SJS_BIGINT_REUSE_A;
+        sjs_bigint *out = SJS_AS_BIGINT(op->a);
+        op->cost = out->length / 16u;
+        bigint_scale_add(out, b->limbs[0], 0);
+        return bigint_give(context, op, (bigint_made){ out, op->negative });
+    }
     if (a->length == 1u && b->length == 1u) return bigint_small(context, op, (uint64_t)a->limbs[0] * b->limbs[0]);
     /* The product has the operands' bits together, or one fewer. */
     if (bigint_bits(a) + bigint_bits(b) - 1u > context->limits.max_bigint_bits) return SJS_ERR_LIMIT;
+    /* Schoolbook cannot write over an operand. A product of an operand
+     * nothing else holds, a reduce's accumulator, often grows on: room for
+     * a quarter more, which a multiplication by one limb fills in place. */
     sjs_bigint *out;
-    sjs_result r = bigint_alloc(context, a->length + b->length, &out);
+    uint32_t need = a->length + b->length;
+    sjs_bigint_op fresh = { 0 };
+    sjs_result r = bigint_target(context, &fresh, (bigint_room){ need, op->reuse != 0 ? need / 8u + 1u : 0u, &out });
     if (r != SJS_OK) return r;
     op->cost = magnitude_multiply(out->limbs, magnitude_of(a), magnitude_of(b)) / 16u;
     out->length = a->length + b->length;
@@ -669,6 +713,7 @@ sjs_result sjs_bigint_binary(sjs_context *context, sjs_bigint_op *op) {
     op->cost = 0;
     op->fault = NULL;
     op->negative = false;
+    op->took = 0;
     switch (op->op) {
     case SJS_OP_ADD:
     case SJS_OP_SUBTRACT:
@@ -684,6 +729,11 @@ sjs_result sjs_bigint_binary(sjs_context *context, sjs_bigint_op *op) {
         const sjs_bigint *a = SJS_AS_BIGINT(op->a);
         if (a->length == 0) return bigint_share(op, op->a);
         op->negative = !sjs_bigint_negative(a);
+        if ((op->reuse & SJS_BIGINT_REUSE_A) != 0) {
+            /* BIGINT_REUSE: the sign alone changes. */
+            op->took = SJS_BIGINT_REUSE_A;
+            return bigint_give(context, op, (bigint_made){ SJS_AS_BIGINT(op->a), op->negative });
+        }
         return bigint_copy(context, op, a);
     }
     }
