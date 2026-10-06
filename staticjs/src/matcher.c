@@ -360,6 +360,12 @@ static void matcher_free_stacks(sjs_matcher *m) {
     m->text = (sjs_buf){ NULL, 0, 0 };
 }
 
+/* MUTATION: the anchored lane's cells. */
+static void matcher_free_lane(sjs_matcher *m) {
+    if (m->lane.ptr != (uint8_t *)m->lane_inline) sjs_buf_free(m->allocator, &m->lane);
+    m->lane = (sjs_buf){ NULL, 0, 0 };
+}
+
 /* Nothing is above the record's region: the bytes of the event (its text,
  * or its operand) that the record refers to go after everything, once. */
 static sjs_result matcher_settle_event(matcher_step *s, shape_record *record, uint32_t sentinel) {
@@ -454,6 +460,19 @@ static sjs_result matcher_settle(matcher_step *s, shape_record *record, uint32_t
 /* ------------------------------------------------------------------------
  * The stack
  */
+
+/* MUTATION: room for one more cell of the anchored lane: in the matcher's
+ * own bytes while they suffice, then on the heap, doubling. */
+static sjs_result matcher_lane_reserve(sjs_matcher *m) {
+    if (m->lane.ptr != (uint8_t *)m->lane_inline) return sjs_buf_reserve(m->allocator, &m->lane, m->lane.capacity);
+    sjs_buf heap = { 0 };
+    sjs_result r = sjs_buf_reserve(m->allocator, &heap, 2u * m->lane.capacity);
+    if (r != SJS_OK) return r;
+    sjs_copy(heap.ptr, m->lane.ptr, m->lane.length);
+    heap.length = m->lane.length;
+    m->lane = heap;
+    return SJS_OK;
+}
 
 /* Room for one more record, within the bound. */
 static sjs_result matcher_reserve(sjs_matcher *m) {
@@ -750,6 +769,152 @@ static sjs_result matcher_step_event(sjs_matcher *m, const sjs_event *e) {
 }
 
 /* ------------------------------------------------------------------------
+ * MUTATION: the anchored lane (docs/matcher.md, 12.4), which matches the
+ * rewrites' rules beside the labeller, in a dead region too.
+ *
+ * A rewrite's rule is anchored: a leaf; a postfix event whose first operand
+ * derives a nonterminal and whose others are anything; or a bracket over
+ * the node before it, with anything inside. Its first operand is the node
+ * that ended last among those that start where the event's node starts
+ * (sjs_event.start: an operator's, a member's, an index's or a call's node
+ * starts with its first operand). So the lane keeps a stack of cells, each
+ * a node's start and the nonterminals it derives, their starts increasing:
+ *
+ *   - an event's node holds every cell that starts after it does, which
+ *     ended inside it: they go;
+ *   - a cell that starts where the event's node does is its first operand,
+ *     or inside its first operand: it goes, and is the operand;
+ *   - a leaf, a postfix event or a bracket's close that derives something
+ *     pushes a cell; a bracket over an operand that one of its rules wants
+ *     pushes a marker, whose separators pass and whose close derives.
+ *
+ * Each event costs a comparison or two of starts (an event no rule looks at
+ * that starts after the top cell, most of them, one: matcher_lane_idle),
+ * and the lane holds one cell per node still open around the current one,
+ * at most. Nothing is
+ * copied: the rules bind no text, and a report names the node and its
+ * start.
+ */
+
+/* A cell (a node that derives something) or a marker (a bracket that one
+ * of its rules can still match: `derived` is then a bit per bracket rule of
+ * its kind that wants its operand). */
+typedef struct {
+    uint32_t start;
+    uint32_t node;
+    uint32_t derived;      /* cell: a bit per anchored nonterminal; marker: per bracket rule alive */
+    uint8_t marker;
+    uint8_t kind;          /* marker: its open's kind */
+} matcher_lane_cell;
+
+_Static_assert(SHAPE_ANCHORED_NONTERMINALS <= 32u, "an anchored cell's nonterminals fit a uint32_t");
+
+static uint32_t matcher_lane_count(const sjs_matcher *m) {
+    return SJS_BUF_COUNT(m->lane, matcher_lane_cell);
+}
+
+static matcher_lane_cell *matcher_lane_at(sjs_matcher *m, uint32_t i) {
+    return &SJS_BUF_AT(m->lane, matcher_lane_cell, i);
+}
+
+/* The rule's tests, on the event: constants only. */
+static bool matcher_lane_tests(const sjs_event *e, const shape_anchored_rule *r) {
+    for (uint32_t i = 0; i < r->test_count; i++) {
+        const shape_test *t = &shape_tests[r->first_test + i];
+        shape_value v = { 0 };
+        if (t->field == SHAPE_FIELD_COUNT) v.count = e->count;
+        else if (t->field == SHAPE_FIELD_NUMBER) v.number = e->number;
+        if (!matcher_constant(e, t, v)) return false;
+    }
+    return true;
+}
+
+/* What the chain rules add to what a node derives, in their order. */
+static uint32_t matcher_lane_chains(uint32_t derived) {
+    for (uint32_t k = 0; k < SHAPE_ANCHORED_CHAIN_COUNT; k++) {
+        const shape_anchored_rule *r = &shape_anchored_rules[shape_anchored_chain_rules[k]];
+        if ((derived >> r->child) & 1u) derived |= 1u << r->lhs;
+    }
+    return derived;
+}
+
+/* The node `e` ends derives `derived`: report its rewrites, then keep it,
+ * unless it derives nothing. */
+static sjs_result matcher_lane_push(sjs_matcher *m, const sjs_event *e, matcher_lane_cell cell) {
+    if (!cell.marker) {
+        cell.derived = matcher_lane_chains(cell.derived);
+        for (uint32_t rewrite = 1; rewrite < SJS_REWRITE_COUNT; rewrite++) {
+            if (((cell.derived >> rewrite) & 1u) == 0 || m->reporter.v->rewrite == NULL) continue;
+            sjs_rewrite_match match = { (sjs_rewrite)rewrite, e->node, e->start };
+            sjs_result r = m->reporter.v->rewrite(m->reporter.self, &match);
+            if (r != SJS_OK) return r;
+        }
+    }
+    if (cell.derived == 0) return SJS_OK;
+    uint32_t n = matcher_lane_count(m);
+    if (n + 1u > m->bound) return MATCHER_UNREADABLE;
+    if (m->lane.length + (uint32_t)sizeof cell > m->lane.capacity) {
+        sjs_result r = matcher_lane_reserve(m);
+        if (r != SJS_OK) return r;
+    }
+    *matcher_lane_at(m, n) = cell;
+    m->lane.length += (uint32_t)sizeof cell;
+    if (n + 1u > m->lane_peak) m->lane_peak = n + 1u;
+    return SJS_OK;
+}
+
+/* An event that no anchored rule looks at and that starts after every cell:
+ * it ends none and takes none as its operand, so it changes nothing. Most
+ * events are such, leaves and the operators over them aside. */
+static bool matcher_lane_idle(const sjs_matcher *m, const sjs_event *e) {
+    if (shape_anchored_events[e->kind].rule_count != 0) return false;
+    if (m->lane.length == 0) return true;
+    const matcher_lane_cell *top = (const matcher_lane_cell *)(const void *)(m->lane.ptr + m->lane.length - sizeof *top);
+    return top->start < e->start.offset;
+}
+
+/* One event, before the labeller and the compiler see it. */
+static sjs_result matcher_lane_event(sjs_matcher *m, const sjs_event *e) {
+    uint32_t start = e->start.offset;
+    uint32_t n = matcher_lane_count(m);
+    /* What started after this node ended inside it. */
+    while (n > 0 && matcher_lane_at(m, n - 1u)->start > start) n--;
+    m->lane.length = n * (uint32_t)sizeof(matcher_lane_cell);
+    const shape_anchored_event *ae = &shape_anchored_events[e->kind];
+    matcher_lane_cell *top = n > 0 ? matcher_lane_at(m, n - 1u) : NULL;
+    if (top != NULL && top->marker && top->node == e->node) {
+        /* A separator of the bracket, which `...` takes, or its close. */
+        if (shape_events[e->kind].action != SHAPE_CLOSE) return SJS_OK;
+        if (e->kind != shape_events[top->kind].close) return MATCHER_UNREADABLE;
+        const shape_anchored_event *open = &shape_anchored_events[top->kind];
+        matcher_lane_cell cell = { top->start, e->node, 0, 0, 0 };
+        for (uint32_t j = 0; j < open->rule_count; j++) {
+            if ((top->derived >> j) & 1u) cell.derived |= 1u << shape_anchored_rules[open->first_rule + j].lhs;
+        }
+        m->lane.length -= (uint32_t)sizeof(matcher_lane_cell);
+        return matcher_lane_push(m, e, cell);
+    }
+    /* A node that starts where this one does, and ended before it, is its
+     * first operand, or inside it: it goes either way. */
+    uint32_t operand = 0;
+    if (top != NULL && top->start == start) {
+        if (!top->marker) operand = top->derived;
+        m->lane.length -= (uint32_t)sizeof(matcher_lane_cell);
+    }
+    if (ae->rule_count == 0) return SJS_OK;
+    uint8_t action = shape_events[e->kind].action;
+    if (action != SHAPE_LEAF && operand == 0) return SJS_OK;
+    matcher_lane_cell cell = { start, e->node, 0, action == SHAPE_OPEN ? 1u : 0u, (uint8_t)e->kind };
+    for (uint32_t j = 0; j < ae->rule_count; j++) {
+        const shape_anchored_rule *r = &shape_anchored_rules[ae->first_rule + j];
+        if (r->form != SHAPE_FORM_LEAF && ((operand >> r->child) & 1u) == 0) continue;
+        if (!matcher_lane_tests(e, r)) continue;
+        cell.derived |= cell.marker ? 1u << j : 1u << r->lhs;
+    }
+    return matcher_lane_push(m, e, cell);
+}
+
+/* ------------------------------------------------------------------------
  * The interface
  */
 
@@ -760,12 +925,26 @@ void sjs_matcher_init(sjs_matcher *matcher, const sjs_matcher_config *config) {
     matcher->bound = 4u * config->max_nesting + 4u;
     matcher->text = (sjs_buf){ matcher->text_inline, 0, (uint32_t)sizeof matcher->text_inline };
     matcher_set_top(matcher, SJS_MATCHER_PROGRAM);
+    /* MUTATION */
+    matcher->rewrites_only = config->rewrites_only;
+    matcher->lane = (sjs_buf){ (uint8_t *)matcher->lane_inline, 0, (uint32_t)sizeof matcher->lane_inline };
 }
 
 sjs_result sjs_matcher_event(sjs_matcher *matcher, const sjs_event *event) {
-    if (matcher->stopped) return SJS_OK;
+    bool readable = event->kind >= SJS_EV_NUMBER && event->kind <= SJS_EV_END && (event->node != 0 || event->kind == SJS_EV_END);
+    /* MUTATION: the anchored lane first, which stops on its own. */
+    if (!matcher->lane_stopped && !(readable && matcher_lane_idle(matcher, event))) {
+        sjs_result lane = readable ? matcher_lane_event(matcher, event) : MATCHER_UNREADABLE;
+        if (lane == MATCHER_UNREADABLE) {
+            matcher->lane_stopped = true;
+            matcher_free_lane(matcher);
+        } else if (lane != SJS_OK) {
+            return lane;
+        }
+    }
+    if (matcher->stopped || matcher->rewrites_only) return SJS_OK;
     sjs_result r = MATCHER_UNREADABLE;
-    if (event->kind >= SJS_EV_NUMBER && event->kind <= SJS_EV_END && (event->node != 0 || event->kind == SJS_EV_END)) {
+    if (readable) { /* MUTATION: what the lane reads too */
         /* Most events: in a dead region, and neither an open nor its end. */
         if (matcher->top_dead && event->node != matcher->top_node && shape_events[event->kind].action != SHAPE_OPEN) {
             return SJS_OK;
@@ -780,4 +959,5 @@ sjs_result sjs_matcher_event(sjs_matcher *matcher, const sjs_event *event) {
 
 void sjs_matcher_free(sjs_matcher *matcher) {
     matcher_free_stacks(matcher);
+    matcher_free_lane(matcher); /* MUTATION */
 }

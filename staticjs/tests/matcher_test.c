@@ -67,6 +67,7 @@ typedef struct {
     sjs_matcher matcher;
     sjs_result result;     /* the matcher's first result other than SJS_OK */
     int reports;
+    int rewrites;          /* MUTATION */
     char text[4096];       /* SHAPE#node@offset(arguments) ... */
 } tee;
 
@@ -82,7 +83,8 @@ static const sjs_sink_vtable tee_vtable = { tee_event };
 static sjs_result tee_report(void *self, const sjs_shape_match *match) {
     tee *t = self;
     size_t used = strlen(t->text);
-    used += (size_t)snprintf(t->text + used, sizeof t->text - used, "%s%s#%u@%u(", t->reports > 0 ? " " : "",
+    /* MUTATION: a space after a rewrite too. */
+    used += (size_t)snprintf(t->text + used, sizeof t->text - used, "%s%s#%u@%u(", used > 0 ? " " : "",
                              sjs_shape_name(match->shape), match->node, match->start.offset);
     for (uint32_t i = 0; i < SJS_SHAPE_ARGS && match->args[i].kind != SJS_SHAPE_ARG_NONE && used < sizeof t->text; i++) {
         const sjs_shape_value *arg = &match->args[i];
@@ -114,11 +116,22 @@ static sjs_result tee_report(void *self, const sjs_shape_match *match) {
     return SJS_OK;
 }
 
-static const sjs_shape_reporter_vtable report_vtable = { tee_report };
+/* MUTATION: a rewrite, written down as REWRITE#node@offset among the
+ * reports, which do not count it (no function records one). */
+static sjs_result tee_rewrite(void *self, const sjs_rewrite_match *match) {
+    tee *t = self;
+    size_t used = strlen(t->text);
+    snprintf(t->text + used, sizeof t->text - used, "%s%s#%u@%u", used > 0 ? " " : "", sjs_rewrite_name(match->rewrite),
+             match->node, match->start.offset);
+    t->rewrites++;
+    return SJS_OK;
+}
+
+static const sjs_shape_reporter_vtable report_vtable = { tee_report, tee_rewrite };
 
 static void tee_init(tee *t, const sjs_allocator *allocator, uint32_t max_nesting) {
     memset(t, 0, sizeof *t);
-    sjs_matcher_config config = { allocator, max_nesting, { t, &report_vtable } };
+    sjs_matcher_config config = { allocator, max_nesting, { t, &report_vtable }, false }; /* MUTATION: rewrites_only */
     sjs_matcher_init(&t->matcher, &config);
 }
 
@@ -250,6 +263,22 @@ static void test_reports(void) {
     expect_reports("(a, x) => a + x[0]", SJS_GOAL_EXPRESSION, "");
     expect_reports("(a, x) => a.k + x", SJS_GOAL_EXPRESSION, "");
     expect_reports("(a, ...x) => a + x", SJS_GOAL_EXPRESSION, "");
+    /* MUTATION: rewrites, in the program's dead region and in an arrow;
+     * each names its call's node, and starts where the path's root does. */
+    expect_reports("(o => o.items.push(1))", SJS_GOAL_EXPRESSION, "MUTATE_PATH#6@6");
+    expect_reports("((s, k, t) => s.byID[k].tags.add(t))", SJS_GOAL_EXPRESSION, "MUTATE_PATH#11@14");
+    expect_reports("((f, a, g) => f(a.b.sort(g).reverse(), a[0].pop()))", SJS_GOAL_EXPRESSION, "MUTATE_PATH#10@16 MUTATE_PATH#13@16 MUTATE_PATH#18@39");
+    expect_reports("(acc, x) => { acc.byKey[x.k].push(x); return acc; }", SJS_GOAL_EXPRESSION, "MUTATE_PATH#11@14");
+    expect_reports("x => x.a.b.c.shift()", SJS_GOAL_EXPRESSION, "MUTATE_PATH#8@5");
+    /* Not a path, or not a mutating method: nothing. */
+    expect_reports("(xs => xs.push(1))", SJS_GOAL_EXPRESSION, "");
+    expect_reports("((o, f) => o.items.map(f))", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(o => o?.items.push(1))", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(o => o.items[\"push\"](1))", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(f => f().items.push(1))", SJS_GOAL_EXPRESSION, "");
+    expect_reports("((a, b) => (a + b).items.push(1))", SJS_GOAL_EXPRESSION, "");
+    /* push gives a number: the second call is not one. */
+    expect_reports("(o => o.items.push(1).push(2))", SJS_GOAL_EXPRESSION, "MUTATE_PATH#6@6");
 }
 
 /* ------------------------------------------------------------------------
@@ -259,6 +288,7 @@ static void test_reports(void) {
 typedef struct {
     int sources;
     uint32_t peak;
+    uint32_t lane_peak;    /* MUTATION */
 } spec_tally;
 
 static void check_source(const char *source, sjs_goal goal, const char *where, spec_tally *tally) {
@@ -267,6 +297,12 @@ static void check_source(const char *source, sjs_goal goal, const char *where, s
     static tee t;
     tee_init(&t, &allocator, SJS_LIMITS_DEFAULT.max_nesting);
     parse_into(&t, whole(source, goal), SJS_LIMITS_DEFAULT);
+    /* MUTATION: the anchored lane never stops either. */
+    if (t.matcher.lane_stopped || t.matcher.lane_peak > t.matcher.bound) {
+        fprintf(stderr, "%s: the anchored lane stopped (peak %u of %u)\n", where, t.matcher.lane_peak, t.matcher.bound);
+        failures++;
+    }
+    if (t.matcher.lane_peak > tally->lane_peak) tally->lane_peak = t.matcher.lane_peak;
     if (t.matcher.stopped || t.matcher.peak > t.matcher.bound || t.result != SJS_OK) {
         fprintf(stderr, "%s: the matcher %s (peak %u of %u)\n", where, t.matcher.stopped ? "stopped" : "failed",
                 t.matcher.peak, t.matcher.bound);
@@ -328,7 +364,7 @@ static int compare_names(const void *a, const void *b) {
 }
 
 static void test_spec_sources(const char *directory) {
-    spec_tally tally = { 0, 0 };
+    spec_tally tally = { 0, 0, 0 }; /* MUTATION: lane_peak */
     DIR *dir = opendir(directory);
     if (dir == NULL) {
         fprintf(stderr, "cannot open %s\n", directory);
@@ -351,7 +387,8 @@ static void test_spec_sources(const char *directory) {
         free(names[i]);
     }
     CHECK(tally.sources > 1000);
-    printf("matcher_test: %d spec sources, at most %u records\n", tally.sources, tally.peak);
+    /* MUTATION: anchored cells. */
+    printf("matcher_test: %d spec sources, at most %u records, %u anchored cells\n", tally.sources, tally.peak, tally.lane_peak);
 }
 
 /* ------------------------------------------------------------------------
@@ -405,6 +442,9 @@ static void test_deepest(void) {
         { "object patterns", "const ", "{k: a, j: ", "b", "}", " = c;", SJS_GOAL_MODULE },
         { "defaults of parameters", "", "(a = ", "1", ") => a", "", SJS_GOAL_EXPRESSION },
         { "patterns of parameters", "", "(a, [b = (", "c", ")]) => a", "", SJS_GOAL_EXPRESSION },
+        /* MUTATION: methods called on paths, in their arguments and keys. */
+        { "methods on paths", "", "o.a.push(", "1", ")", "", SJS_GOAL_EXPRESSION },
+        { "keys of paths", "", "o[p[", "k", "].b].c.pop()", "", SJS_GOAL_EXPRESSION },
     };
     counting c = { 0 };
     sjs_allocator allocator = { &c, &test_vtable };
@@ -412,6 +452,7 @@ static void test_deepest(void) {
     for (size_t k = 0; k < sizeof kinds / sizeof kinds[0]; k++) {
         int deepest = 0;
         uint32_t peak = 0;
+        uint32_t lane_peak = 0; /* MUTATION */
         for (int depth = 1; depth <= 600; depth++) {
             char *source = repeated(&kinds[k], depth);
             tee_init(&t, &allocator, SJS_LIMITS_DEFAULT.max_nesting);
@@ -419,6 +460,12 @@ static void test_deepest(void) {
             if (r == SJS_OK) {
                 deepest = depth;
                 peak = t.matcher.peak;
+                lane_peak = t.matcher.lane_peak; /* MUTATION */
+                if (t.matcher.lane_stopped || t.matcher.lane_peak > t.matcher.bound) {
+                    fprintf(stderr, "%s, %d deep: the anchored lane stopped (peak %u of %u)\n", kinds[k].name, depth,
+                            t.matcher.lane_peak, t.matcher.bound);
+                    failures++;
+                }
                 if (t.matcher.stopped || t.matcher.peak > t.matcher.bound) {
                     fprintf(stderr, "%s, %d deep: the matcher stopped (peak %u of %u)\n", kinds[k].name, depth, t.matcher.peak,
                             t.matcher.bound);
@@ -433,7 +480,8 @@ static void test_deepest(void) {
         /* Every kind nests deep before a limit of the parser refuses it. */
         if (deepest < 10) fprintf(stderr, "%s: only %d deep\n", kinds[k].name, deepest);
         CHECK(deepest >= 10);
-        printf("matcher_test: %-26s %3d deep, at most %4u records\n", kinds[k].name, deepest, peak);
+        /* MUTATION: anchored cells. */
+        printf("matcher_test: %-26s %3d deep, at most %4u records, %4u anchored cells\n", kinds[k].name, deepest, peak, lane_peak);
     }
 }
 
@@ -453,6 +501,7 @@ static void test_width(void) {
     tee_init(&t, &allocator, SJS_LIMITS_DEFAULT.max_nesting);
     CHECK(parse_into(&t, whole(source, SJS_GOAL_EXPRESSION), SJS_LIMITS_DEFAULT) == SJS_OK);
     CHECK(!t.matcher.stopped && t.matcher.peak <= 6);
+    CHECK(!t.matcher.lane_stopped && t.matcher.lane_peak <= 2); /* MUTATION */
     printf("matcher_test: an array of %d members, at most %u records\n", ELEMENTS, t.matcher.peak);
     sjs_matcher_free(&t.matcher);
 
@@ -461,6 +510,7 @@ static void test_width(void) {
     tee_init(&t, &allocator, SJS_LIMITS_DEFAULT.max_nesting);
     CHECK(parse_into(&t, whole(source, SJS_GOAL_MODULE), SJS_LIMITS_DEFAULT) == SJS_OK);
     CHECK(!t.matcher.stopped && t.matcher.peak <= 6 && t.reports == CONSTS);
+    CHECK(!t.matcher.lane_stopped && t.matcher.lane_peak <= 2); /* MUTATION */
     printf("matcher_test: a module of %d consts, at most %u records\n", CONSTS, t.matcher.peak);
     sjs_matcher_free(&t.matcher);
 
@@ -470,6 +520,7 @@ static void test_width(void) {
     tee_init(&t, &allocator, SJS_LIMITS_DEFAULT.max_nesting);
     CHECK(parse_into(&t, whole(source, SJS_GOAL_EXPRESSION), SJS_LIMITS_DEFAULT) == SJS_OK);
     CHECK(!t.matcher.stopped && t.matcher.peak <= 6);
+    CHECK(!t.matcher.lane_stopped && t.matcher.lane_peak <= 2); /* MUTATION */
     printf("matcher_test: a template of %d substitutions, at most %u records\n", SUBSTITUTIONS, t.matcher.peak);
     sjs_matcher_free(&t.matcher);
 
@@ -502,6 +553,25 @@ static void test_unreadable(void) {
     /* A hand-built stream, as api_test's compile_events sends: node 0. */
     const sjs_event unnamed[] = { { .kind = SJS_EV_ARROW_BEGIN }, { .kind = SJS_EV_PARAMS_END } };
     expect_stop(unnamed, 2, 0);
+    /* MUTATION: the anchored lane stops on its own: node 0, and more cells
+     * than the bound (names whose nodes start ever later, in nothing that
+     * ends them). */
+    counting lane_c = { 0 };
+    sjs_allocator lane_allocator = { &lane_c, &test_vtable };
+    static tee lane;
+    tee_init(&lane, &lane_allocator, SJS_LIMITS_DEFAULT.max_nesting);
+    CHECK(sjs_matcher_event(&lane.matcher, &unnamed[0]) == SJS_OK && lane.matcher.lane_stopped);
+    sjs_matcher_free(&lane.matcher);
+    tee_init(&lane, &lane_allocator, 2); /* a bound of 12 */
+    for (uint32_t i = 0; i < 16; i++) {
+        sjs_event name = { .kind = SJS_EV_NAME, .node = i + 1u, .text = { "x", 1 } };
+        name.start.offset = i;
+        CHECK(sjs_matcher_event(&lane.matcher, &name) == SJS_OK);
+        CHECK(lane.matcher.lane_stopped == (i >= 12));
+    }
+    CHECK(lane.matcher.lane_peak == 12 && lane_c.live == 0);
+    sjs_matcher_free(&lane.matcher);
+    CHECK(lane_c.live == 0);
     /* The rest is read where a rule could still match: in an arrow whose
      * rules are alive. (In a dead region the matcher keeps nothing and
      * checks nothing but the region's own end: its events, and those of the
@@ -577,6 +647,8 @@ static void test_out_of_memory(void) {
     const char *operand = "x => x === \"a string literal of sixty-four bytes: with its kind, 65 bytes!!!\"";
     CHECK(sweep_out_of_memory(operand, 1) == 3);
     CHECK(sweep_out_of_memory("x => x === \"short\"", 1) == 2);
+    /* MUTATION: the anchored lane past its own cells: ten names open. */
+    CHECK(sweep_out_of_memory("a + (b + (c + (d + (e + (f + (g + (h + (i + j))))))))", 0) == 1);
     printf("matcher_test: the matcher's allocations each failed in turn\n");
 }
 

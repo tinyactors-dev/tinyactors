@@ -21,7 +21,7 @@ module StaticJS
 
     FIELD_TYPES = %w[count operator number text name read operand].freeze
     PARAM_TYPES = %w[text flag count number operator operand].freeze
-    KEYWORDS = %w[event shape nonterminal leaf postfix open inner close item cost true false].freeze
+    KEYWORDS = %w[event shape rewrite nonterminal leaf postfix open inner close item cost true false].freeze # MUTATION: rewrite
     # A captured text longer than this fails its test (docs/matcher.md, 5.2).
     TEXT_MAX = 64
     # The table's types: a cell's nonterminals in a uint64_t mask (0 is
@@ -31,6 +31,10 @@ module StaticJS
     MAX_BRACKET_RULES = 32
     MAX_VARIABLES = 32
     MAX_COST = 0xFFFE
+    # MUTATION: a rewrite's rules (docs/matcher.md, section 12): their
+    # nonterminals, rewrites included, in a uint32_t mask (0 is none), and
+    # bracket rules of one open kind in a uint32_t mask.
+    MAX_ANCHORED_NONTERMINALS = 32
 
     module_function
 
@@ -67,7 +71,7 @@ module StaticJS
     Token = Struct.new(:type, :value, :line)
 
     class Lexer
-      PUNCTUATION = ['<-', '(', ')', '{', '}', ',', ':', ';'].freeze
+      PUNCTUATION = ['...', '<-', '(', ')', '{', '}', ',', ':', ';'].freeze # MUTATION: ...
 
       def initialize(text, file)
         @text = text
@@ -133,17 +137,23 @@ module StaticJS
 
     EventDecl = Struct.new(:kind, :action, :arity, :close, :item, :fields, :line, keyword_init: true)
     ShapeDecl = Struct.new(:name, :params, :line, keyword_init: true)
+    # MUTATION: a rewrite the compiler performs where its rules match.
+    RewriteDecl = Struct.new(:name, :line, keyword_init: true)
     NonterminalDecl = Struct.new(:name, :attributes, :line, keyword_init: true)
     Rule = Struct.new(:name, :terms, :pattern, :cost, :line, keyword_init: true)
     # An event pattern: its kind, tests [[field, term]], and children (nil
     # when it has no parentheses).
     EventPattern = Struct.new(:kind, :tests, :children, :line, keyword_init: true)
     NonterminalPattern = Struct.new(:name, :terms, :line, keyword_init: true)
+    # MUTATION: in a rewrite's rules, `_`: any one node; `...`: whatever
+    # else a bracket holds, up to its close.
+    AnyPattern = Struct.new(:line, keyword_init: true)
+    RestPattern = Struct.new(:line, keyword_init: true)
     # A term: a variable (:variable, name), or a constant (:int, :number,
     # :string, :flag, :operator).
     Term = Struct.new(:type, :value, :line)
 
-    AST = Struct.new(:events, :shapes, :nonterminals, :rules)
+    AST = Struct.new(:events, :shapes, :nonterminals, :rules, :rewrites) # MUTATION: rewrites
 
     class Parser
       def initialize(tokens, file)
@@ -154,11 +164,12 @@ module StaticJS
       end
 
       def parse
-        ast = AST.new([], [], [], [])
+        ast = AST.new([], [], [], [], []) # MUTATION: rewrites
         until peek.type == :end
           case peek.value
           when 'event' then ast.events << event
           when 'shape' then ast.shapes << shape
+          when 'rewrite' then ast.rewrites << rewrite # MUTATION
           when 'nonterminal' then ast.nonterminals << nonterminal
           else ast.rules << rule
           end
@@ -253,6 +264,14 @@ module StaticJS
         ShapeDecl.new(name: name, params: params, line: line)
       end
 
+      # MUTATION: `rewrite NAME;`
+      def rewrite
+        line = take.line
+        name = word(:upper, "a rewrite's name").value
+        expect(';')
+        RewriteDecl.new(name: name, line: line)
+      end
+
       def nonterminal
         line = take.line
         name = word(:lower, "a nonterminal's name")
@@ -321,14 +340,16 @@ module StaticJS
           if accept('(')
             children = []
             unless peek.value == ')'
-              children << pattern
-              children << pattern while accept(',')
+              children << child_pattern # MUTATION: child_pattern, which reads ...
+              children << child_pattern while accept(',')
             end
             expect(')')
           end
           EventPattern.new(kind: token.value, tests: tests, children: children, line: token.line)
         when :lower
           fail("#{token.value} is a keyword", token) if KEYWORDS.include?(token.value)
+          return AnyPattern.new(line: token.line) if token.value == '_' # MUTATION
+
           terms = []
           if accept('(')
             terms = term_list unless peek.value == ')'
@@ -337,6 +358,13 @@ module StaticJS
           NonterminalPattern.new(name: token.value, terms: terms, line: token.line)
         else fail("expected a pattern, found #{describe(token)}", token)
         end
+      end
+
+      # MUTATION: a child, or `...`, the rest of a bracket's children.
+      def child_pattern
+        return RestPattern.new(line: take.line) if peek.value == '...' && peek.type == :punct
+
+        pattern
       end
     end
 
@@ -350,7 +378,10 @@ module StaticJS
     CLASSES = { 'count' => :count, 'operator' => :operator, 'number' => :number, 'text' => :text, 'name' => :text,
                 'read' => :text, 'flag' => :flag, 'operand' => :operand }.freeze
 
-    Model = Struct.new(:kinds, :operators, :events, :shapes, :nonterminals, :rules, keyword_init: true)
+    # MUTATION: `rewrites` and `anchored`, the nonterminals a rewrite's rules
+    # use, whose rules (`anchored_rules`) the normaliser leaves alone.
+    Model = Struct.new(:kinds, :operators, :events, :shapes, :nonterminals, :rules, :rewrites, :anchored,
+                       :anchored_rules, keyword_init: true)
 
     class Checker
       def initialize(ast, kinds, operators, file)
@@ -378,11 +409,23 @@ module StaticJS
         end
         @shapes = shapes
         @nonterminals = nonterminals
-        @ast.rules.each { |rule| check_rule(rule) }
+        @rewrites = check_rewrites # MUTATION
+        @anchored = anchored_names
+        @anchored.each do |name|
+          decl = @nonterminals[name]
+          next unless decl && !decl.attributes.empty?
+
+          fail(decl.line, "nonterminal #{name} serves a rewrite's rules, which hand up nothing: it has no attributes")
+        end
+        anchored_rules, rules = @ast.rules.partition { |rule| anchored?(rule.name) }
+        rules.each { |rule| check_rule(rule) }
+        anchored_rules.each { |rule| check_anchored_rule(rule) }
         check_use
         check_chains
-        Model.new(kinds: @kinds, operators: @operators, events: events, shapes: shapes, nonterminals: nonterminals,
-                  rules: @ast.rules)
+        # MUTATION: the anchored nonterminals and rules apart.
+        Model.new(kinds: @kinds, operators: @operators, events: events, shapes: shapes,
+                  nonterminals: nonterminals.reject { |name, _| @anchored.include?(name) }, rules: rules,
+                  rewrites: @rewrites, anchored: @anchored, anchored_rules: anchored_rules)
       end
 
       private
@@ -416,6 +459,103 @@ module StaticJS
         end
         fail(events['END'].line, "END closes the program, not #{closers['END'].join(', ')}") unless closers['END'].empty?
         events
+      end
+
+      # MUTATION: rewrites (docs/matcher.md, section 12): declared once, of
+      # names no shape has.
+      def check_rewrites
+        rewrites = {}
+        @ast.rewrites.each do |r|
+          fail(r.line, "rewrite #{r.name} is declared twice") if rewrites.key?(r.name)
+          fail(r.line, "#{r.name} is a shape and a rewrite") if @shapes.key?(r.name)
+          rewrites[r.name] = r
+        end
+        rewrites
+      end
+
+      def anchored?(name) = @rewrites.key?(name) || @anchored.include?(name)
+
+      # The nonterminals a rewrite's rules use, and the ones their rules
+      # use, and so on: they are matched by the anchored lane, not the
+      # labeller, so no shape's rule may use one.
+      def anchored_names
+        names = []
+        used = lambda do |p|
+          case p
+          when NonterminalPattern then [p.name]
+          when EventPattern then (p.children || []).flat_map { |c| used.call(c) }
+          else []
+          end
+        end
+        loop do
+          grown = @ast.rules.select { |r| @rewrites.key?(r.name) || names.include?(r.name) }
+                            .flat_map { |r| used.call(r.pattern) }.uniq - names
+          break if grown.empty?
+
+          names.concat(grown)
+        end
+        @ast.rules.each do |r|
+          next if @rewrites.key?(r.name) || names.include?(r.name)
+
+          shared = used.call(r.pattern) & names
+          fail(r.line, "#{shared.first} serves a rewrite's rules and #{r.name}'s: give each its own") unless shared.empty?
+        end
+        names
+      end
+
+      # A rule of a rewrite, or of a nonterminal one uses: anchored at the
+      # node's start, so that the lane matches it anywhere, in a dead region
+      # too (docs/matcher.md, 12.2). It is a leaf; a postfix event whose
+      # first operand derives an anchored nonterminal and whose others are
+      # `_`; a bracket that takes the node before it, which derives one,
+      # then `...`; or a chain rule. Its tests compare with constants; it
+      # binds nothing and hands up nothing.
+      def check_anchored_rule(rule)
+        declared = @rewrites[rule.name] || @nonterminals[rule.name]
+        fail(rule.line, "#{rule.name} is not a declared #{rule.name.match?(/\A[A-Z]/) ? 'rewrite' : 'nonterminal'}") unless declared
+        fail(rule.line, "#{rule.name} hands up nothing: a rewrite's rules have no attributes") unless rule.terms.empty?
+        fail(rule.line, "a rewrite's rules have no cost") if rule.cost.positive?
+        p = rule.pattern
+        return anchored_child(p, rule) if p.is_a?(NonterminalPattern)
+        fail(p.line, "#{rule.name}'s pattern is an event or a nonterminal") unless p.is_a?(EventPattern)
+
+        e = @events[p.kind] or fail(p.line, "#{p.kind} is not an event kind")
+        p.tests.each do |field, term|
+          f = e.fields.find { |name, _| name == field } or fail(term.line, "#{p.kind} has no field #{field}")
+          fail(term.line, "a rewrite's rule tests against constants only, not #{term.value}") if term.type == :variable
+          constant(term, f[1], "#{p.kind}'s #{field}")
+        end
+        children = p.children || []
+        case e.action
+        when :leaf
+          fail(p.line, "#{p.kind} has no children") unless children.empty?
+        when :postfix
+          unless children.size == e.arity
+            fail(p.line, "#{p.kind} takes #{e.arity} child pattern(s), not #{children.size}")
+          end
+          anchored_child(children[0], rule)
+          children.drop(1).each do |c|
+            fail(c.line, "a rewrite's rule names only the first operand of #{p.kind}: write _ for the others") unless c.is_a?(AnyPattern)
+          end
+        when :open
+          unless e.arity == 1 && children.size == 2 && children[1].is_a?(RestPattern)
+            fail(p.line, "a rewrite's bracket takes the node before it and then `...`: #{p.kind}(n, ...)")
+          end
+          anchored_child(children[0], rule)
+        else
+          fail(p.line, "#{p.kind} cannot be anchored: a rewrite's rule is a leaf, a postfix event or a bracket that takes the node before it")
+        end
+      end
+
+      def anchored_child(p, rule)
+        fail(p.line, "a rewrite (#{p.kind}) cannot be a child") if p.is_a?(EventPattern) && @rewrites.key?(p.kind)
+        unless p.is_a?(NonterminalPattern)
+          fail(p.line, "the first child of a rewrite's rule is a nonterminal: write a nested pattern as a rule of its own")
+        end
+        fail(p.line, "a rewrite (#{p.name}) cannot be a child") if @rewrites.key?(p.name)
+        fail(p.line, "#{p.name} is not a declared nonterminal") unless @nonterminals.key?(p.name)
+        fail(p.line, "#{p.name} hands up nothing: a rewrite's rules have no attributes") unless p.terms.empty?
+        fail(p.line, "#{rule.name} is a rewrite's: #{p.name} is not") unless @anchored.include?(p.name)
       end
 
       # The variables of a rule: name => [[class, type, line], ...].
@@ -495,8 +635,11 @@ module StaticJS
       # `where`: :root, :child (a node in a bracket's sequence or a postfix's
       # operand), :sequence (anything in a bracket's sequence).
       def pattern(p, where)
+        # MUTATION: wildcards are a rewrite's.
+        fail(p.line, "`_` and `...` are in a rewrite's rules only") if p.is_a?(AnyPattern) || p.is_a?(RestPattern)
         if p.is_a?(NonterminalPattern)
           fail(p.line, "a shape (#{p.name}) cannot be a child") if @shapes.key?(p.name)
+          fail(p.line, "a rewrite (#{p.name}) cannot be a child") if @rewrites.key?(p.name) # MUTATION
           decl = @nonterminals[p.name] or fail(p.line, "#{p.name} is not a declared nonterminal")
           unless p.terms.size == decl.attributes.size
             fail(p.line, "#{p.name} has #{decl.attributes.size} attribute(s), not #{p.terms.size}")
@@ -505,6 +648,7 @@ module StaticJS
           return
         end
         fail(p.line, "a shape (#{p.kind}) cannot be a child") if @shapes.key?(p.kind)
+        fail(p.line, "a rewrite (#{p.kind}) cannot be a child") if @rewrites.key?(p.kind) # MUTATION
         e = @events[p.kind] or fail(p.line, "#{p.kind} is not an event kind")
         fail(p.line, "#{p.kind} closes a bracket and is never in a pattern") if e.action == :close
         if e.action == :open && e.arity.positive?
@@ -552,12 +696,13 @@ module StaticJS
         walk = lambda do |p|
           if p.is_a?(NonterminalPattern)
             used << p.name
-          else
+          elsif p.is_a?(EventPattern) # MUTATION: not a wildcard
             (p.children || []).each { |c| walk.call(c) }
           end
         end
         @ast.rules.each { |r| walk.call(r.pattern) }
         @shapes.each_value { |s| fail(s.line, "shape #{s.name} has no rule") unless derived.include?(s.name) }
+        @rewrites.each_value { |r| fail(r.line, "rewrite #{r.name} has no rule") unless derived.include?(r.name) } # MUTATION
         @nonterminals.each_value do |n|
           fail(n.line, "nonterminal #{n.name} has no rule") unless derived.include?(n.name)
           fail(n.line, "nonterminal #{n.name} is never used") unless used.include?(n.name)
@@ -854,6 +999,7 @@ module StaticJS
               }
           }
         C
+        out << rewrites_h(model) # MUTATION
         operators = shapes.flat_map(&:params).any? { |_, type, _| type == 'operator' } ? model.operators : []
         return out if operators.empty?
 
@@ -865,6 +1011,34 @@ module StaticJS
               switch (op) {
         C
         operators.each { |o| out << "    case SJS_OP_#{o}: return \"#{o}\";\n" }
+        out << <<~C
+              default: return "NONE";
+              }
+          }
+        C
+        out
+      end
+
+      # MUTATION: the rewrites the compiler performs where their rules match
+      # (docs/matcher.md, section 12).
+      def rewrites_h(model)
+        out = +<<~C
+
+          /* The rewrites the matcher reports where their rules match: the compiler
+           * compiles the node it names differently (docs/matcher.md, section 12). */
+          typedef enum {
+              SJS_REWRITE_NONE = 0,
+        C
+        model.rewrites.each_key { |name| out << "    SJS_REWRITE_#{name},\n" }
+        out << <<~C
+              SJS_REWRITE_COUNT
+          } sjs_rewrite;
+
+          /* "MUTATE_PATH" and the like: for tests and messages. */
+          static inline const char *sjs_rewrite_name(uint32_t rewrite) {
+              switch (rewrite) {
+        C
+        model.rewrites.each_key { |name| out << "    case SJS_REWRITE_#{name}: return \"#{name}\";\n" }
         out << <<~C
               default: return "NONE";
               }
@@ -932,6 +1106,69 @@ module StaticJS
           @slots = [@slot_fields.size, marker_slots.values.max.to_i, 1].max
           @variables = [@rules.map { |r| r.variables.size }.max.to_i, 1].max
           @rows = @rules.map { |r| row(r) }
+          anchored_layout # MUTATION
+        end
+
+        # MUTATION: the anchored lane's rules (docs/matcher.md, 12.3): ids
+        # from 1, the rewrites first; leaf, postfix and bracket rules by
+        # their event, each group as written, then the chain rules, each
+        # after those that derive its child. Their tests share shape_tests.
+        def anchored_layout
+          names = @model.rewrites.keys + @model.anchored
+          if names.size >= MAX_ANCHORED_NONTERMINALS
+            raise Error, "the rewrites need #{names.size} nonterminals; the table holds #{MAX_ANCHORED_NONTERMINALS - 1}"
+          end
+
+          @anchored_id = names.each_with_index.to_h { |name, i| [name, i + 1] }
+          rules = @model.anchored_rules.each_with_index.to_a
+          chains, grouped = rules.partition { |r, _| r.pattern.is_a?(NonterminalPattern) }
+          kinds = @model.kinds
+          grouped = grouped.sort_by { |r, i| [kinds.index(r.pattern.kind), i] }.map(&:first)
+          ordered = []
+          chains = chains.map(&:first)
+          until chains.empty?
+            ready = chains.find { |r| chains.none? { |other| other.name == r.pattern.name } }
+            ordered << ready
+            chains.delete(ready)
+          end
+          @anchored_chain_count = ordered.size
+          @anchored_rules = grouped + ordered
+          @anchored_first = {}
+          grouped.each_with_index { |r, i| (@anchored_first[r.pattern.kind] ||= [i, 0])[1] += 1 }
+          if (over = @anchored_first.find { |_, (_, n)| n > MAX_BRACKET_RULES })
+            raise Error, "#{over[0]} has #{over[1][1]} rewrite rules; the table holds #{MAX_BRACKET_RULES} per kind"
+          end
+          @anchored_rows = @anchored_rules.map { |r| anchored_row(r) }
+        end
+
+        def anchored_row(rule)
+          p = rule.pattern
+          lhs = @anchored_id.fetch(rule.name)
+          if p.is_a?(NonterminalPattern)
+            return { lhs: lhs, form: FORMS.fetch(:chain), child: @anchored_id.fetch(p.name), test_count: 0, first_test: 0,
+                     comment: "#{rule.name} <- #{p.name}" }
+          end
+          fields = @model.events.fetch(p.kind).fields
+          first_test = @tests.size
+          p.tests.each do |field, term|
+            cls = CLASSES.fetch(fields.find { |f| f[0] == field }[1])
+            value = case term.type
+                    when :operator then "SJS_OP_#{term.value}"
+                    when :number, :int then cls == :number ? term.value.to_f : term.value
+                    else term.value
+                    end
+            @tests << test([field, cls, nil, false, value])
+          end
+          children = p.children || []
+          action = @model.events.fetch(p.kind).action
+          form = action == :open ? :bracket : (children.empty? ? :leaf : :postfix)
+          child = children.empty? ? 0 : @anchored_id.fetch(children[0].name)
+          tests = p.tests.map { |field, t| "#{field}: #{t.type == :string ? t.value.inspect : t.value}" }
+          kids = children.map { |c| c.is_a?(NonterminalPattern) ? c.name : (c.is_a?(RestPattern) ? '...' : '_') }
+          comment = "#{rule.name} <- #{p.kind}#{tests.empty? ? '' : "{#{tests.join(', ')}}"}"
+          comment += "(#{kids.join(', ')})" unless kids.empty?
+          { lhs: lhs, form: FORMS.fetch(form), child: child, test_count: p.tests.size, first_test: first_test,
+            comment: comment.gsub('*/', '* /') }
         end
 
         def row(rule)
@@ -1045,6 +1282,9 @@ module StaticJS
             #define SHAPE_CHAIN_COUNT #{@table.chains.size}u
             #define SHAPE_NUMBER_COUNT #{@numbers.size}u
             #define SHAPE_TEXT_COUNT #{@texts.size}u
+            #define SHAPE_ANCHORED_NONTERMINALS #{@anchored_id.size + 1}u /* MUTATION: the anchored lane's */
+            #define SHAPE_ANCHORED_RULE_COUNT #{@anchored_rules.size}u
+            #define SHAPE_ANCHORED_CHAIN_COUNT #{@anchored_chain_count}u
 
             enum { SHAPE_LEAF = 1, SHAPE_POSTFIX, SHAPE_POSTFIX_COUNT, SHAPE_OPEN, SHAPE_INNER, SHAPE_CLOSE };
             enum { SHAPE_FIELD_COUNT = 1, SHAPE_FIELD_NUMBER, SHAPE_FIELD_TEXT, SHAPE_FIELD_OPERAND };
@@ -1110,6 +1350,26 @@ module StaticJS
                 uint16_t first_variable; /* in shape_variable_fields */
             } shape_rule;
 
+            /* MUTATION: a rule of the anchored lane (docs/matcher.md, 12.3), which
+             * matches a rewrite's rules: `child` is the anchored nonterminal its
+             * first child derives (the operand a postfix event or a bracket takes
+             * from before it; a chain rule's child), 0 for a leaf. Its tests, in
+             * shape_tests, compare with constants. Nonterminal 0 is none; 1 to
+             * SJS_REWRITE_COUNT - 1 are the rewrites. */
+            typedef struct {
+                uint8_t lhs;
+                uint8_t form;          /* SHAPE_FORM_* */
+                uint8_t child;
+                uint8_t test_count;
+                uint16_t first_test;
+            } shape_anchored_rule;
+
+            /* An event's anchored rules: its leaf or postfix rules, or its bracket's. */
+            typedef struct {
+                uint16_t first_rule;
+                uint16_t rule_count;
+            } shape_anchored_event;
+
           C
           out << "static const shape_event shape_events[SJS_EV_END + 1] = {\n"
           @model.kinds.each do |kind|
@@ -1143,7 +1403,31 @@ module StaticJS
           out << array('uint8_t', 'shape_slot_field', @slot_fields, '0')
           out << array('double', 'shape_numbers', @numbers.map { |n| c_number(n) }, '0.0')
           out << array('sjs_str', 'shape_texts', @texts.map { |t| "{ #{c_string(t)}, #{t.bytesize}u }" }, '{ 0, 0 }')
+          out << anchored_text # MUTATION
           out.sub(/\n+\z/, "\n")
+        end
+
+        # MUTATION: the anchored lane's tables.
+        def anchored_text
+          out = +"/* MUTATION: the anchored lane's rules, which match the rewrites. */\n"
+          out << "static const shape_anchored_event shape_anchored_events[SJS_EV_END + 1] = {\n"
+          @model.kinds.each do |kind|
+            first, count = @anchored_first.fetch(kind, [0, 0])
+            out << "    [SJS_EV_#{kind}] = { #{first}, #{count} },\n" if count.positive?
+          end
+          out << "    { 0, 0 },\n" if @anchored_first.empty?
+          out << "};\n\n"
+          rows = @anchored_rows.each_with_index.map do |r, i|
+            "/* #{i}: #{r[:comment]} */\n    { #{r[:lhs]}, #{r[:form]}, #{r[:child]}, #{r[:test_count]}, #{r[:first_test]} }"
+          end
+          out << "static const shape_anchored_rule shape_anchored_rules[] = {\n"
+          rows = ['{ 0, 0, 0, 0, 0 }'] if rows.empty?
+          rows.each { |row| out << "    #{row},\n" }
+          out << "};\n\n"
+          chains = @anchored_rules.each_index.drop(@anchored_rules.size - @anchored_chain_count).map(&:to_s)
+          out << "/* The anchored chain rules, each after those that derive its child. */\n"
+          out << array('uint16_t', 'shape_anchored_chain_rules', chains, '0')
+          out
         end
 
         # A static array. C has no empty arrays: an unused one holds one

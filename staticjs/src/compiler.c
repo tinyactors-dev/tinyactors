@@ -70,6 +70,12 @@
  * while the function is still the innermost scope here, and the compiler
  * records the shape on its sjs_function_info. The code is the same either
  * way (docs/matcher.md).
+ *
+ * MUTATION: rewrites. The matcher also reports, with no_shapes too, a node
+ * a rewrite's rules match, during the event that ends it: a mutating method
+ * called on a path (MUTATE_PATH), which the compiler then compiles as a path
+ * to the container it changes (docs/matcher.md, section 12). Restore:
+ * matching only unless no_shapes, as `matching` said.
  */
 #include "matcher.h"
 
@@ -177,6 +183,16 @@ typedef struct {
     uint32_t keys;
     uint32_t root_pc;
     uint8_t declares_let;  /* MUTATION: K_CONST: a let */
+    /* MUTATION: K_CALL: its node, which a rewrite's report names; the pc of
+     * its callee's GET_MEMBER (0 for none); its callee is a path the call
+     * holds until it ends (path.held), and what was done with its root's
+     * value before the call (binding.use); and the matcher reported
+     * MUTATE_PATH. */
+    uint32_t node;
+    uint32_t member;
+    uint8_t held;
+    uint8_t root_use;
+    uint8_t mutate_path;
 } construct;
 
 /* An array or object pattern being compiled. An object pattern keeps its
@@ -242,12 +258,16 @@ typedef struct {
 
 /* MUTATION: the last mutation's last instruction (SJS_OP_MUTATE, or the
  * SJS_OP_SORTED after a sort), from `pc` to `end`, of binding `receiver`;
- * `returns`: its method returns the receiver. */
+ * `returns`: its method returns the receiver. MUTATION: through a path
+ * (PATH_CALL, or PATH_SORTED after a sort), its keys and the pc of its
+ * flags. */
 typedef struct {
     uint32_t pc;
     uint32_t end;
     uint32_t receiver;
     uint8_t returns;
+    uint32_t keys;         /* MUTATION: through a path */
+    uint32_t flags_at;
 } mutation_site;
 
 /* MUTATION: a path, which an assignment's target is: a name read, and the
@@ -258,6 +278,7 @@ typedef struct {
     name_read root;
     uint32_t end;
     uint32_t steps_base;
+    uint8_t held;          /* MUTATION: a call's callee, kept until the call ends */
 } path;
 
 /* Names to sort as a namespace sorts its keys; rank and index break ties.
@@ -272,8 +293,8 @@ typedef struct {
 struct sjs_compiler {
     sjs_context *context;
     sjs_goal goal;
-    /* The tee before the compiler's own handling of each event. */
-    bool matching;
+    /* The tee before the compiler's own handling of each event: always, for
+     * the rewrites (MUTATION); with no_shapes, for them alone. */
     sjs_matcher matcher;
     const sjs_str *globals;
     uint32_t global_count;
@@ -348,9 +369,11 @@ struct sjs_compiler {
     uint32_t pending_read;
     bool refusing;
     sjs_error_slot refusal;
-    /* MUTATION: the paths an assignment could be to, innermost last. */
+    /* MUTATION: the paths an assignment could be to, innermost last; and a
+     * path the next CALL_BEGIN's call holds. */
     sjs_buf paths;
     sjs_buf path_steps;
+    bool call_holds_path;  /* MUTATION */
 };
 
 static const sjs_allocator *alloc(sjs_compiler *c) {
@@ -954,21 +977,40 @@ static void drop_paths(sjs_compiler *c, uint32_t from) {
 
 /* The name read_name has just read begins a path. */
 static sjs_result path_begin(sjs_compiler *c) {
-    path p = { c->last_name, here(c), SJS_BUF_COUNT(c->path_steps, uint32_t) };
+    path p = { c->last_name, here(c), SJS_BUF_COUNT(c->path_steps, uint32_t), 0 }; /* MUTATION: held */
     sjs_result r = buf_add(c, &c->paths, bytes_of(&p, sizeof p));
     return r == SJS_OK ? SJS_OK : fail_result(c, r, p.root.at);
 }
 
+/* MUTATION: a path whose last step is the GET_MEMBER just compiled, after
+ * one step or more: a call of it is a method called on a path. */
+static bool path_callee(const sjs_compiler *c, const path *p) {
+    uint32_t steps = SJS_BUF_COUNT(c->path_steps, uint32_t) - p->steps_base;
+    return steps >= 2u && p->end == here(c) && c->last_op_valid &&
+           SJS_BUF_AT(c->path_steps, uint32_t, p->steps_base + steps - 1u) == c->last_op &&
+           c->code.ptr[c->last_op] == SJS_OP_GET_MEMBER;
+}
+
 /* Before an event: the paths whose root is at or after where its node
  * starts end, but one that a MEMBER or an INDEX goes on with. ASSIGN and
- * UPDATE take theirs from the top. */
+ * UPDATE take theirs from the top. A CALL_BEGIN of a method on the path on
+ * top holds it until its CALL_END, so that a rewrite reported then finds
+ * its steps (MUTATION, "Methods through a path"). */
 static void paths_before(sjs_compiler *c, const sjs_event *e) {
     if (e->kind == SJS_EV_ASSIGN || e->kind == SJS_EV_UPDATE || e->kind == SJS_EV_DELETE) return; /* MUTATION: DELETE, step 3 */
     bool goes_on = e->kind == SJS_EV_MEMBER || e->kind == SJS_EV_INDEX;
-    uint32_t n = SJS_BUF_COUNT(c->paths, path);
+    uint32_t count = SJS_BUF_COUNT(c->paths, path); /* MUTATION: the top, for a call */
+    uint32_t n = count;
     while (n > 0) {
-        uint32_t root = SJS_BUF_AT(c->paths, path, n - 1u).root.at.offset;
-        if (root < e->start.offset || (goes_on && root == e->start.offset)) break;
+        path *p = &SJS_BUF_AT(c->paths, path, n - 1u);
+        uint32_t root = p->root.at.offset;
+        if (root < e->start.offset || (goes_on && root == e->start.offset) || p->held) break;
+        /* MUTATION: a method called on a path. */
+        if (e->kind == SJS_EV_CALL_BEGIN && n == count && root == e->start.offset && path_callee(c, p)) {
+            p->held = 1;
+            c->call_holds_path = true;
+            break;
+        }
         n--;
     }
     drop_paths(c, n);
@@ -1925,7 +1967,7 @@ static bool mutation_begin(sjs_compiler *c, construct *k) {
         b->changed_at = read->pc + 1u;
         c->code.ptr[read->pc] = SJS_OP_RECEIVER;
         k->receiver = read->which;
-    } else if (chain->end == member && c->last_label <= chain->pc && chain->returns) {
+    } else if (chain->end == member && c->last_label <= chain->pc && chain->returns && chain->keys == 0) { /* MUTATION: keys, a path's chain is its own */
         /* The receiver goes on as the reference it was. */
         c->code.ptr[chain->pc + 3u] |= SJS_CALL_CHAIN;
         k->receiver = chain->receiver;
@@ -1956,18 +1998,139 @@ static sjs_result mutation_end(sjs_compiler *c, const construct *k, const sjs_ev
         if (u8(c, 0) != SJS_OK) return SJS_ERR_PROGRAM;
     }
     c->last_op_valid = false;
-    c->last_mutation = (mutation_site){ pc, here(c), k->receiver, k->returns };
+    c->last_mutation = (mutation_site){ pc, here(c), k->receiver, k->returns, 0, 0 }; /* MUTATION: no keys */
     forget_read(c, current(c)->function_scope, SJS_BUF_AT(c->bindings, binding, k->receiver).index);
     if (k->returns) c->pending_read = k->receiver + 1u;
+    return SJS_OK;
+}
+
+/* MUTATION: a method that changes its receiver, called on a path from a
+ * variable the function owns (docs/mutation.md, "Methods through a path"):
+ * `o.items.push(x)`, `s.byID[k].tags.add(t)`, and a chain of them. The
+ * matcher reported MUTATE_PATH for the call (on_rewrite), whose rules decide
+ * the form: a mutating method's name, called on a name and one step or
+ * more. Its code is already there, as an ordinary method call on a path,
+ * which the call held (paths_before): as an assignment's target, the read
+ * of the root becomes a RECEIVER and each step pushes its key; the method's
+ * METHOD_MEMBER becomes a PATH_METHOD, which pushes its name; and PATH_CALL,
+ * after the arguments, finds the container when it runs and changes it in
+ * place. A chain goes on from the last such call, whose CHAIN flag leaves
+ * the reference and the keys for the next. What needs scopes is decided
+ * here: the root is a variable the function owns, by the rules of a
+ * mutation, and no method changed it in the keys or the arguments. */
+static const char *const refused_path_changing =
+    "staticjs does not change a variable with one of its methods while it calls a method on a path from it";
+
+/* The path the call held is its callee: the root's read becomes a
+ * RECEIVER and each step but the method a key. k->member is the method's
+ * METHOD_MEMBER, the path's last step. Answers the keys, or 0 when the
+ * call stays an ordinary one (refused, or no path). */
+static uint32_t path_mutation_target(sjs_compiler *c, construct *k, const sjs_event *e) {
+    const path *p = top_path(c);
+    if (p == NULL || !p->held) return 0;
+    uint32_t steps = SJS_BUF_COUNT(c->path_steps, uint32_t) - p->steps_base;
+    name_read root = p->root;
+    const char *why = NULL;
+    sjs_str name = root.kind == NR_GLOBAL ? c->globals[root.which] : binding_name(c, root.which);
+    if (root.kind == NR_GLOBAL) {
+        why = "staticjs changes only a value a variable of the function holds, and this is a global";
+    } else if (root.kind == NR_IMPORT) {
+        why = "staticjs changes only a value a variable of the function holds, and this is an import";
+    } else {
+        /* What the arguments do with the root's value is the evaluator's to
+         * check, as for a mutation of a variable: it holds the value too
+         * when the call runs (`o.items.push(o)`, a cycle). A capture is
+         * refused wherever it is. */
+        binding *b = &SJS_BUF_AT(c->bindings, binding, root.which);
+        why = root.kind == NR_CAPTURE ? refused_captured : refused_use((uint8_t)(k->root_use | (b->use & USE_CAPTURED)));
+        if (why == NULL && b->changed_at > root.pc + 1u) why = refused_path_changing;
+    }
+    if (why != NULL || steps < 2u || SJS_BUF_AT(c->path_steps, uint32_t, p->steps_base + steps - 1u) != k->member) {
+        if (why != NULL) refuse_later(c, root.at, (refusal){ why, name });
+        drop_paths(c, SJS_BUF_COUNT(c->paths, path) - 1u);
+        return 0;
+    }
+    if (steps - 1u > UINT16_MAX) {
+        compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_LIMIT, "a method's path has too many keys" });
+        return 0;
+    }
+    binding *b = &SJS_BUF_AT(c->bindings, binding, root.which);
+    b->use |= USE_MUTATED;
+    b->changed_at = root.pc + 1u;
+    c->code.ptr[root.pc] = SJS_OP_RECEIVER;
+    for (uint32_t i = 0; i + 1u < steps; i++) {
+        uint8_t *step = c->code.ptr + SJS_BUF_AT(c->path_steps, uint32_t, p->steps_base + i);
+        *step = *step == SJS_OP_GET_MEMBER ? SJS_OP_CONSTANT : SJS_OP_PATH_INDEX;
+    }
+    k->receiver = root.which;
+    drop_paths(c, SJS_BUF_COUNT(c->paths, path) - 1u);
+    return steps - 1u;
+}
+
+/* CALL_END of a call the matcher reported as MUTATE_PATH, or that held a
+ * path: PATH_CALL, and PATH_SORTED after a sort. A call that is not a
+ * mutation through a path clears k->mutate_path and is compiled as any
+ * call is. */
+static sjs_result path_mutation_end(sjs_compiler *c, construct *k, const sjs_event *e) {
+    uint32_t keys = 0;
+    sjs_builtin_id id = SJS_BUILTIN_NONE;
+    if (k->member != 0 && c->code.ptr[k->member] == SJS_OP_METHOD_MEMBER) {
+        const sjs_string *key = SJS_AS_STRING(SJS_BUF_AT(c->constants, sjs_value, sjs_read32(c->code.ptr + k->member + 1u)));
+        id = sjs_mutation_named(sjs_name_of(key));
+    }
+    const mutation_site *chain = &c->last_mutation;
+    if (!k->mutate_path || id == SJS_BUILTIN_NONE) {
+        if (k->held) drop_paths(c, SJS_BUF_COUNT(c->paths, path) - 1u);
+        k->mutate_path = 0;
+        return SJS_OK;
+    }
+    if (k->held) {
+        keys = path_mutation_target(c, k, e);
+        if (c->failed) return SJS_ERR_PROGRAM;
+    } else if (chain->keys != 0 && chain->end == k->member && c->last_label <= chain->pc && chain->returns) {
+        /* A chain: the last mutation left the reference and its keys. */
+        c->code.ptr[chain->flags_at] |= SJS_CALL_CHAIN;
+        keys = chain->keys;
+        k->receiver = chain->receiver;
+    }
+    if (keys == 0) {
+        k->mutate_path = 0;
+        return SJS_OK;
+    }
+    c->code.ptr[k->member] = SJS_OP_PATH_METHOD;
+    if (op(c, SJS_OP_PATH_CALL, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    uint32_t pc = c->last_op;
+    if (u16(c, (uint16_t)keys) != SJS_OK || u16(c, (uint16_t)e->count) != SJS_OK) return SJS_ERR_PROGRAM;
+    uint32_t flags_at = here(c);
+    if (u8(c, k->spread ? SJS_CALL_SPREAD : 0u) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (id == SJS_METHOD_ARRAY_SORT) {
+        if (op(c, SJS_OP_PATH_SORTED, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+        pc = c->last_op;
+        if (u16(c, (uint16_t)keys) != SJS_OK) return SJS_ERR_PROGRAM;
+        flags_at = here(c);
+        if (u8(c, 0) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    c->last_op_valid = false;
+    bool returns = sjs_mutation_returns_receiver(id);
+    c->last_mutation = (mutation_site){ pc, here(c), k->receiver, returns ? 1u : 0u, keys, flags_at };
+    /* The call reads the root's slot after the arguments: none of their
+     * reads moves its value. */
+    forget_read(c, current(c)->function_scope, SJS_BUF_AT(c->bindings, binding, k->receiver).index);
     return SJS_OK;
 }
 
 static sjs_result call_begin(sjs_compiler *c, const sjs_event *e) {
     construct k = { 0 };
     k.kind = K_CALL;
+    /* MUTATION: what a rewrite of the call needs (path_mutation_end). */
+    k.node = e->node;
+    k.held = c->call_holds_path ? 1u : 0u;
+    c->call_holds_path = false;
+    if (k.held && top_path(c)->root.kind == NR_OWN) k.root_use = SJS_BUF_AT(c->bindings, binding, top_path(c)->root.which).use;
     /* `a.b(...)` and `a[b](...)` call with a receiver. */
     if (c->last_op_valid && c->last_label <= c->last_op) {
         uint8_t *last = c->code.ptr + c->last_op;
+        if (*last == SJS_OP_GET_MEMBER) k.member = c->last_op; /* MUTATION */
         if (*last == SJS_OP_GET_MEMBER && mutation_begin(c, &k)) {
             /* MUTATION: a method that changes the variable it is called on. */
         } else if (*last == SJS_OP_GET_MEMBER) {
@@ -1987,6 +2150,10 @@ static sjs_result call_end(sjs_compiler *c, const sjs_event *e, uint8_t opcode) 
     construct k = pop_construct(c);
     if (e->count > UINT16_MAX) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_LIMIT, "a call has too many arguments" });
     if (k.mutate) return mutation_end(c, &k, e); /* MUTATION */
+    if (k.held || k.mutate_path) { /* MUTATION: a method called on a path */
+        sjs_result r = path_mutation_end(c, &k, e);
+        if (r != SJS_OK || k.mutate_path) return r;
+    }
     if (op(c, opcode, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
     if (u16(c, (uint16_t)e->count) != SJS_OK) return SJS_ERR_PROGRAM;
     uint8_t flags = (uint8_t)((k.method ? SJS_CALL_METHOD : 0u) | (k.spread ? SJS_CALL_SPREAD : 0u));
@@ -2581,9 +2748,10 @@ static sjs_result on_event(void *self, const sjs_event *e) {
         c->failed = true;
         return SJS_ERR_PROGRAM;
     }
-    if (c->matching) {
+    { /* MUTATION: always, for the rewrites. Restore `if (c->matching)`. */
         /* The matcher sees the event first: a report about the function an
-         * ARROW_END closes comes while it is still open here. */
+         * ARROW_END closes comes while it is still open here; one about a
+         * rewrite, while the node's construct is (MUTATION). */
         sjs_result r = sjs_matcher_event(&c->matcher, e);
         if (r != SJS_OK) return c->failed ? SJS_ERR_PROGRAM : fail_result(c, r, e->at);
     }
@@ -2650,7 +2818,21 @@ static sjs_result on_shape(void *self, const sjs_shape_match *match) {
     return SJS_OK;
 }
 
-static const sjs_shape_reporter_vtable shape_reporter_vtable = { on_shape };
+/* MUTATION: the matcher found that a rewrite's rules match the node the
+ * event it is about to hand over ends (docs/matcher.md, section 12). The
+ * construct of that node takes it, and its end compiles it. A report for
+ * any other node is ignored; the parser's ids make that never happen. */
+static sjs_result on_rewrite(void *self, const sjs_rewrite_match *match) {
+    sjs_compiler *c = self;
+    if (c->failed) return SJS_ERR_PROGRAM;
+    construct *k = top_construct(c);
+    if (match->rewrite == SJS_REWRITE_MUTATE_PATH && k != NULL && k->kind == K_CALL && k->node == match->node) {
+        k->mutate_path = 1;
+    }
+    return SJS_OK;
+}
+
+static const sjs_shape_reporter_vtable shape_reporter_vtable = { on_shape, on_rewrite /* MUTATION */ };
 
 /* ------------------------------------------------------------------------
  * The public API
@@ -2674,11 +2856,10 @@ sjs_result sjs_compiler_init(sjs_compiler **out, const sjs_compiler_config *conf
     c->export_names = index_over(&c->names);
     c->star_modules = index_over(&c->names);
     c->namespaces = index_over(&c->names);
-    if (!config->no_shapes) {
-        sjs_matcher_config matcher = { alloc(c), c->context->limits.max_nesting, { c, &shape_reporter_vtable } };
-        sjs_matcher_init(&c->matcher, &matcher);
-        c->matching = true;
-    }
+    /* MUTATION: a matcher with no_shapes too, for the rewrites alone.
+     * Restore: none with no_shapes. */
+    sjs_matcher_config matcher = { alloc(c), c->context->limits.max_nesting, { c, &shape_reporter_vtable }, config->no_shapes };
+    sjs_matcher_init(&c->matcher, &matcher);
     sjs_result r = SJS_OK;
     for (uint32_t i = 0; i < c->global_count && r == SJS_OK; i++) {
         /* A name given twice is the first. */
@@ -2784,7 +2965,7 @@ void sjs_compiler_destroy(sjs_compiler *compiler) {
                         &c->constructs, &c->jumps, &c->patterns, &c->pattern_keys, &c->pattern_slots, &c->literals, &c->literal_keys, &c->exports,
                         &c->stars, &c->sorting, &c->paths, &c->path_steps /* MUTATION */ };
     for (uint32_t i = 0; i < sizeof bufs / sizeof bufs[0]; i++) sjs_buf_free(a, bufs[i]);
-    if (c->matching) sjs_matcher_free(&c->matcher);
+    sjs_matcher_free(&c->matcher); /* MUTATION: always made */
     sjs_mem_free(a, c, sizeof *c);
 }
 

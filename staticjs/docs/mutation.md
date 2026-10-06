@@ -26,6 +26,11 @@ This is done in 3 steps:
    `Set.prototype.delete` and `clear`, with removal from the hash index and
    shrinking ("Removal", below).
 
+After the three steps, the methods above called on a path from such a
+variable (`o.items.push(x)`, `s.byID[k].tags.add(t)`), which the shape
+rules recognise and the compiler rewrites into the path machinery of step
+2 ("Methods through a path", below).
+
 ## The methods
 
 | Receiver | Method | Returns |
@@ -66,9 +71,10 @@ function making the call owns. Otherwise it refuses the program as
 `unsupported`, with a message that says why. Refusing is always allowed;
 changing a shared value never is.
 
-1. **The receiver is a name, read directly**: `x.m(`. A receiver that is
+1. **The receiver is a name, read directly**: `x.m(`, or a path from one,
+   `x.a[k].m(` ("Methods through a path", below). A receiver that is
    anything else (`f().push(1)`, `[1].push(2)`, `(a || b).push(1)`,
-   `x?.push(1)`, `x["push"](1)`, `a.b.push(1)`) is not a mutation: the
+   `x?.push(1)`, `x["push"](1)`, `f().a.push(1)`) is not a mutation: the
    call is compiled as any method call is, and faults when it runs, as it
    did before, on an array or a set.
 2. **Declared in this function**: a parameter of the function, or a
@@ -309,6 +315,85 @@ an assignment's, and `PATH n, DELETE` removes the property:
 delete t;      <t> DELETE
 ```
 
+## Methods through a path
+
+A method of the table above may be called on a path from a variable the
+function owns: `o.items.push(x)`, `state.byID[k].tags.add(t)`,
+`acc.byKey[x.k].push(x)` in reduce, `a.b.sort(f).reverse()`. The receiver
+is a name, then one member or index or more, then the method, by name:
+`ROOT(.k | [k])+ .m(...)`, and a chain of them. Each has JavaScript's
+semantics and evaluation order, and returns what the method returns on a
+variable:
+
+- **Order:** the path's keys from left to right, then the arguments, then
+  the call. JavaScript reads the method from the container before the
+  arguments; staticjs finds the container when the call runs, after them,
+  which gives the same result, as nothing in the arguments may change the
+  root's variable (below). So a missing step faults after the arguments
+  run, where JavaScript throws before: both are errors.
+- **Return values:** as on a variable: `push` and `unshift` the length,
+  `pop` and `shift` the element, `splice` the elements removed, `delete`
+  whether the set had it, `clear` `undefined`; `sort`, `reverse`, `fill`
+  and `add` the container, a copy of it, which then holds it too, so a
+  later mutation of the container faults while the copy lives.
+- **Chains:** a method that returns its receiver goes on with the same
+  container: `o.a.sort(f).reverse()` sorts and reverses `o.a`, and
+  `o.s.add(1).add(2)` adds to `o.s`. Any other method's result is a value:
+  `o.xs.push(1).push(2)` calls `push` on a number, and faults as
+  JavaScript throws.
+- **Statements:** such a call, or a chain of them, may be a statement, as a
+  mutation of a variable may.
+
+**Refused when compiled**, as `unsupported`, with step 1's messages: a root
+that is a global, an import or a capture, or a variable captured (before
+or after), copied, passed or stored before the call. What the call's own
+arguments do with the root's value is the evaluator's to check, as for a
+mutation of a variable: the value is then held twice when the call runs.
+Also refused: a method that changes the root's variable in the path's keys
+or in the arguments (`o.a.push(o.b.pop())`, `xs[0].push(xs.shift())`), as
+the path is walked after them ("staticjs does not change a variable with
+one of its methods while it calls a method on a path from it"); and, as
+for an assignment, a path call in the value of an assignment to its root
+(`o.n = o.a.push(1)`).
+
+**Faults when it runs:** a container on the path, the root's value
+included, or the receiver, held elsewhere ("held elsewhere": another
+variable, a caller's argument, a value a native holds, an element of the
+array a callback walks); a cycle (`o.items.push(o)`, `o.items.push(o.items)`),
+as the argument is a second holder; a missing step (`o.missing.push(1)`,
+"cannot read a property of undefined", where JavaScript throws a
+TypeError); a step that is not an object or an array ("staticjs calls a
+method on a path through objects and arrays only"); `__proto__` and a name
+of `Object.prototype` the object does not have, as an assignment's path
+faults on them. A receiver of a kind without the method is called as any
+method is: a string's or a number's faults by name, and an object's own
+function, found by the name, is called as an ordinary method call calls
+it. `sort` and a chain on one fault ("on an array or a set only"), as they
+need the container back.
+
+**The rewrite.** The parser sends such a call as any method call on a path,
+and the compiler compiles it so, holding the path from its CALL_BEGIN to
+its CALL_END. The shape rules (`src/shapes.rules`, MUTATE_PATH) recognise
+the call's form, and the matcher reports it during its CALL_END, with
+shapes on and off (docs/matcher.md, section 12). The compiler then checks
+the root's ownership and rewrites what it compiled, as it does an
+assignment's target: the root's read becomes a RECEIVER, each member's
+GET_MEMBER a CONSTANT of its key and each index's GET_INDEX a PATH_INDEX,
+and the method's METHOD_MEMBER a PATH_METHOD, which pushes the method's
+name and room for the container. After the arguments, `PATH_CALL n, argc,
+flags` walks the `n` keys from the slot, each container held by its place
+alone, and calls the method with the container's place as its receiver's
+slot, changing it in place; for `sort`, toSorted's loop takes the array
+over from its place, and `PATH_SORTED n` puts it back. With CHAIN (set
+when the next call goes on with the container), the reference and the keys
+stay on the stack for the next PATH_CALL. Each step costs a unit of fuel,
+besides the instructions and the method's own cost.
+
+```
+o.a[k].push(x)    RECEIVER o, CONSTANT "a", <k> PATH_INDEX, PATH_METHOD "push", <x>, PATH_CALL 2, 1
+o.a.sort(f)       RECEIVER o, CONSTANT "a", PATH_METHOD "sort", <f>, PATH_CALL 1, 1, PATH_SORTED 1
+```
+
 ## Removal
 
 Removing an item from a set or an object, and shrinking a container that
@@ -367,11 +452,14 @@ does not reallocate each time:
   const").
 - **`copyWithin`**, the one other method that changes an array: it faults
   by name, as before.
-- **A method that changes a property or an element** (`o.items.push(x)`):
-  the receiver of a mutation is a variable, read directly, and an
-  assignment's path is not one. It is compiled as any method call and
-  faults when it runs; as a statement it is refused as one with no effect.
-  `o.items[o.items.length] = x` appends.
+- **A method through any other receiver**: a path through an optional
+  chain (`o?.a.push(1)`), a method named by a computed key
+  (`o.a["push"](1)`), a path from a call or an operator (`f().a.push(1)`,
+  `(a || b).k.push(1)`). Each is compiled as any method call and faults
+  when it runs; as a statement it is refused as one with no effect.
+- **A method that changes the root inside a path call's keys or
+  arguments** (`o.a.push(o.b.pop())`): refused, even where the two paths
+  part, as telling them apart needs the keys' values.
 - **`sort()` without a compare function**: faults, as `toSorted()` does.
 
 ## Rolling it back
@@ -467,6 +555,21 @@ Step 3, `delete`:
 | `tests/api_test.c` | `DELETE` in `event_names`; the `test_mutation_delete_*` functions |
 | `bench/bench.c` | `eval.object.delete-reduce`, `eval.object.delete-reduce.last` |
 
+Methods through a path:
+
+| File | What is tagged |
+|---|---|
+| `src/shapes.rules` | the rewrites' section: `MUTATE_PATH` and its nonterminals and rules (`mise run shapes` rewrites `src/shapes.h` and `src/shapes_table.h`) |
+| `mise/shapes.rb` | rewrites, `_` and `...`, the anchored rules' checks and tables (docs/matcher.md, section 12); `mise/tasks/shapes-test` and `mise/shapes-test/small.*`, their checks and the small rewrite |
+| `src/matcher.h` | `sjs_rewrite_match`, the reporter's `rewrite`, `sjs_matcher_config.rewrites_only`, and the lane's fields |
+| `src/matcher.c` | `matcher_lane_reserve`, `matcher_free_lane`, the anchored lane's section, and their lines in `sjs_matcher_init`, `sjs_matcher_event` and `sjs_matcher_free` |
+| `src/internal.h` | `SJS_OP_PATH_METHOD`, `SJS_OP_PATH_CALL`, `SJS_OP_PATH_SORTED`, `SJS_PATH_CALL` |
+| `src/compiler.c` | the header's rewrites; `construct.node`, `.member`, `.held`, `.root_use`, `.mutate_path`; `mutation_site.keys`, `.flags_at`; `path.held`; `c->call_holds_path`; `path_callee` and its lines in `paths_before`; the chain's `keys` in `mutation_begin`; `refused_path_changing` to `path_mutation_end`, and their lines in `call_begin` and `call_end`; `on_rewrite`; the matcher made with `no_shapes` too (restore: none, and `matching`) |
+| `src/vm.c` | the message in `method()` (restore it without ", or on a path from one"); `path_call_site`, the three cases in `execute_other`; the method's message in `path_container`; the section at the end of the file |
+| `tests/api_test.c` | `test_mutation_path_*` |
+| `tests/matcher_test.c` | the rewrites in the tee and `test_reports`, the lane's checks, deepest kinds and allocation |
+| `bench/bench.c` | `eval.object.push-path-reduce` |
+
 `splice_arguments` in `src/builtins.c` is `toSpliced`'s argument code,
 moved into a function that both call, inlined; rolling back keeps it, or
 puts its body back in `toSpliced`'s case.
@@ -493,7 +596,12 @@ value" (it was "staticjs has no assignment: values do not change"), and
 "staticjs has no ++ or --: values do not change"); `1++` and `++(a + b)`
 are now syntax errors, as in JavaScript (they were unsupported). Step 3
 changed one case of `mutation.spec` that names a method staticjs lacks: it
-called `splice`, and now calls `copyWithin`. Before step 3, `delete` was
+called `splice`, and now calls `copyWithin`. Methods through a path changed
+`mutation.spec`'s "a method on a container held by another variable", which
+faulted "only on a variable" and now faults "held elsewhere"; the message a
+mutating method of the wrong receiver faults with, which now ends ", or on
+a path from one"; and `no_shapes`, which made no matcher and now makes one
+that matches the rewrites alone. Before step 3, `delete` was
 refused as a word staticjs does not have ("does not have this"); no case
 tested it. `let` moved two cases from `tests/spec/statements.spec` to `mutation.spec`
 ("let" and "let with its name on the next line", which were refused,

@@ -8,7 +8,10 @@
 #define SHAPE_RULE_COUNT 17u
 #define SHAPE_CHAIN_COUNT 2u
 #define SHAPE_NUMBER_COUNT 1u
-#define SHAPE_TEXT_COUNT 1u
+#define SHAPE_TEXT_COUNT 2u
+#define SHAPE_ANCHORED_NONTERMINALS 5u /* MUTATION: the anchored lane's */
+#define SHAPE_ANCHORED_RULE_COUNT 5u
+#define SHAPE_ANCHORED_CHAIN_COUNT 1u
 
 static const shape_event shape_events[SJS_EV_END + 1] = {
     [SJS_EV_NUMBER] = { SHAPE_LEAF, 0, 0, 0, 0, 2 },
@@ -20,6 +23,10 @@ static const shape_event shape_events[SJS_EV_END + 1] = {
     [SJS_EV_PARAMS_END] = { SHAPE_INNER, 0, 0, 0, 0, 0 },
     [SJS_EV_ARROW_END] = { SHAPE_CLOSE, 0, 0, 0, 0, 0 },
     [SJS_EV_BIND] = { SHAPE_LEAF, 0, 1, 0, 14, 1 },
+    [SJS_EV_INDEX] = { SHAPE_POSTFIX, 2, 0, 0, 0, 0 },
+    [SJS_EV_CALL_BEGIN] = { SHAPE_OPEN, 1, 0, SJS_EV_CALL_END, 0, 0 },
+    [SJS_EV_ARGUMENT] = { SHAPE_INNER, 0, 0, 0, 0, 0 },
+    [SJS_EV_CALL_END] = { SHAPE_CLOSE, 0, 0, 0, 0, 0 },
     [SJS_EV_END] = { SHAPE_CLOSE, 0, 0, 0, 0, 0 },
 };
 
@@ -66,6 +73,7 @@ static const shape_test shape_tests[] = {
     { SHAPE_FIELD_COUNT, 0, 1, 0 }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, 1 }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, 0 }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, 1 },
     { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, 0 }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, 1 }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, 0 }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, 1 },
     { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, 0 }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, 1 }, { SHAPE_FIELD_COUNT, SHAPE_CONSTANT, 0, 0 }, { SHAPE_FIELD_TEXT, 0, 1, 0 },
+    { SHAPE_FIELD_TEXT, SHAPE_CONSTANT, 0, 1 },
 };
 
 static const shape_child shape_children[] = {
@@ -138,4 +146,28 @@ static const uint8_t shape_slot_field[] = {
 
 static const double shape_numbers[] = { 2.0 };
 
-static const sjs_str shape_texts[] = { { "length", 6u } };
+static const sjs_str shape_texts[] = { { "length", 6u }, { "pop", 3u } };
+
+/* MUTATION: the anchored lane's rules, which match the rewrites. */
+static const shape_anchored_event shape_anchored_events[SJS_EV_END + 1] = {
+    [SJS_EV_NAME] = { 0, 1 },
+    [SJS_EV_MEMBER] = { 1, 1 },
+    [SJS_EV_INDEX] = { 2, 1 },
+    [SJS_EV_CALL_BEGIN] = { 3, 1 },
+};
+
+static const shape_anchored_rule shape_anchored_rules[] = {
+    /* 0: place <- NAME */
+    { 4, SHAPE_FORM_LEAF, 0, 0, 20 },
+    /* 1: popped <- MEMBER{key: "pop"}(place) */
+    { 3, SHAPE_FORM_POSTFIX, 4, 1, 20 },
+    /* 2: place <- INDEX(place, _) */
+    { 4, SHAPE_FORM_POSTFIX, 4, 0, 21 },
+    /* 3: POP_PATH <- CALL_BEGIN(callee, ...) */
+    { 1, SHAPE_FORM_BRACKET, 2, 0, 21 },
+    /* 4: callee <- popped */
+    { 2, SHAPE_FORM_CHAIN, 3, 0, 0 },
+};
+
+/* The anchored chain rules, each after those that derive its child. */
+static const uint16_t shape_anchored_chain_rules[] = { 4 };

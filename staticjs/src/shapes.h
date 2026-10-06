@@ -79,6 +79,22 @@ static inline const char *sjs_shape_name(uint32_t shape) {
     }
 }
 
+/* The rewrites the matcher reports where their rules match: the compiler
+ * compiles the node it names differently (docs/matcher.md, section 12). */
+typedef enum {
+    SJS_REWRITE_NONE = 0,
+    SJS_REWRITE_MUTATE_PATH,
+    SJS_REWRITE_COUNT
+} sjs_rewrite;
+
+/* "MUTATE_PATH" and the like: for tests and messages. */
+static inline const char *sjs_rewrite_name(uint32_t rewrite) {
+    switch (rewrite) {
+    case SJS_REWRITE_MUTATE_PATH: return "MUTATE_PATH";
+    default: return "NONE";
+    }
+}
+
 /* "STRICT_EQUAL" and the like, for an operator argument: for tests and
  * messages. */
 static inline const char *sjs_shape_operator_name(uint32_t op) {

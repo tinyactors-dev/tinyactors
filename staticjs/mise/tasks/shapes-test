@@ -44,6 +44,10 @@ EVENTS = <<~RULES
   event PARAMS_END inner;
   event ARROW_END close;
   event BIND leaf item name: name;
+  event INDEX postfix 2;            # MUTATION: for the rewrites
+  event CALL_BEGIN open 1 CALL_END;
+  event ARGUMENT inner;
+  event CALL_END close;
   event END close;
 RULES
 DECLARATIONS = <<~RULES
@@ -65,10 +69,23 @@ end
 event_line = ->(kind) { EVENTS.lines.index { |l| l.start_with?("event #{kind} ") } + 1 }
 replace = ->(kind, with) { EVENTS.sub(/^event #{kind} .*\n/, "#{with}\n") + DECLARATIONS + "#{KEY_OF}\n#{GET}\n" }
 rule_line = BASE.lines.size + 1
+after_events = EVENTS.lines.size + 1
+# MUTATION: a rewrite, and its anchored rules.
+REWRITE = <<~RULES
+  rewrite POP;
+  nonterminal place();
+  nonterminal popped();
+  place() <- NAME;
+  popped() <- MEMBER{key: "pop"}(place());
+RULES
+CALL = 'POP() <- CALL_BEGIN(popped(), ...);'
+with_rewrite = "#{BASE}#{KEY_OF}\n#{GET}\n#{REWRITE}"
+rewrite_line = with_rewrite.lines.size + 1
 errors = [
-  ['a kind staticjs.h lacks', "#{EVENTS}event FOO leaf;\n", 11, 'FOO is not an sjs_event_kind of staticjs.h'],
-  ['a kind declared twice', "#{EVENTS}event NUMBER leaf;\n", 11, 'NUMBER is declared twice'],
-  ['a kind not declared', EVENTS.sub(/^event NUMBER .*\n/, ''), 9, 'NUMBER not declared'],
+  # MUTATION: after_events, as EVENTS grew for the rewrites.
+  ['a kind staticjs.h lacks', "#{EVENTS}event FOO leaf;\n", after_events, 'FOO is not an sjs_event_kind of staticjs.h'],
+  ['a kind declared twice', "#{EVENTS}event NUMBER leaf;\n", after_events, 'NUMBER is declared twice'],
+  ['a kind not declared', EVENTS.sub(/^event NUMBER .*\n/, ''), after_events - 2, 'NUMBER not declared'],
   ['two fields of one name', replace.call('NUMBER', 'event NUMBER leaf value: number, value: count;'), 1,
    'NUMBER has two fields value'],
   ['an open closed by a kind not declared close', replace.call('ARROW_END', 'event ARROW_END leaf;'),
@@ -81,8 +98,9 @@ errors = [
   ['a rule on an open that takes the nodes before it',
    replace.call('ARROW_BEGIN', 'event ARROW_BEGIN open 1 ARROW_END params: count;'), BASE.lines.size + 2,
    'ARROW_BEGIN takes the 1 node(s) before it as its first children, which the matcher does not keep'],
-  ['an unknown action', "#{EVENTS}event FOO sideways;\n", 11, 'unknown action "sideways"'],
-  ['an unknown type', "#{EVENTS}shape BAD(key: string);\n", 11, '"string" is not one of text, flag, count, number, operator, operand'],
+  ['an unknown action', "#{EVENTS}event FOO sideways;\n", after_events, 'unknown action "sideways"'], # MUTATION: after_events
+  ['an unknown type', "#{EVENTS}shape BAD(key: string);\n", after_events,
+   '"string" is not one of text, flag, count, number, operator, operand'],
   ['an operand field on an event that is not a leaf',
    replace.call('MEMBER', 'event MEMBER postfix 1 key: text, value: operand;'), event_line.call('MEMBER'),
    "MEMBER's value is an operand, which only a leaf event has"],
@@ -143,7 +161,34 @@ errors = [
   ['a cost too high', "#{BASE}#{KEY_OF}\n#{GET.delete_suffix(';')} cost 70000;\n", rule_line + 1,
    'a cost is at most 65534'],
   ['more bracket rules than the alive mask holds', "#{BASE}#{KEY_OF}\n#{"#{GET}\n" * 33}", nil,
-   'ARROW_BEGIN has 33 bracket rules; the table holds 32 per open kind']
+   'ARROW_BEGIN has 33 bracket rules; the table holds 32 per open kind'],
+  # MUTATION: rewrites and their anchored rules.
+  ['a wildcard in a shape\'s rule', "#{BASE}key_of(x, k) <- MEMBER{key: k}(_);\n#{GET}\n", rule_line,
+   "`_` and `...` are in a rewrite's rules only"],
+  ['a rewrite declared twice', "#{with_rewrite}rewrite POP;\n#{CALL}\n", rewrite_line, 'rewrite POP is declared twice'],
+  ['a shape and a rewrite of one name', "#{with_rewrite}rewrite GET;\n#{CALL}\n", rewrite_line, 'GET is a shape and a rewrite'],
+  ['a rewrite with no rule', with_rewrite, with_rewrite.lines.index { |l| l.start_with?('rewrite POP') } + 1,
+   'rewrite POP has no rule'],
+  ['a rewrite as a child', "#{with_rewrite}#{CALL}\npopped() <- MEMBER(POP());\n", rewrite_line + 1,
+   'a rewrite (POP) cannot be a child'],
+  ['a rewrite\'s test of a variable', "#{with_rewrite}POP() <- CALL_BEGIN(popped(), ...);\nplace() <- MEMBER{key: k}(place());\n",
+   rewrite_line + 1, "a rewrite's rule tests against constants only, not k"],
+  ['a rewrite\'s nonterminal with attributes', "#{with_rewrite}#{CALL}\nnonterminal named(name: read);\nplace() <- named(x);\nnamed(x) <- NAME{name: x};\n",
+   rewrite_line + 1, "nonterminal named serves a rewrite's rules, which hand up nothing: it has no attributes"],
+  ['a nonterminal a rewrite and a shape share', "#{with_rewrite}#{CALL}\nkey_of(x, k) <- MEMBER{key: k}(place());\n",
+   rewrite_line + 1, "place serves a rewrite's rules and key_of's"],
+  ['a rewrite\'s rule with a cost', "#{with_rewrite}#{CALL.delete_suffix(';')} cost 1;\n", rewrite_line,
+   "a rewrite's rules have no cost"],
+  ['a rewrite\'s postfix event with a second operand named', "#{with_rewrite}#{CALL}\nplace() <- BINARY(place(), place());\n",
+   rewrite_line + 1, 'write _ for the others'],
+  ['a rewrite\'s bracket without ...', "#{with_rewrite}POP() <- CALL_BEGIN(popped(), ARGUMENT);\n", rewrite_line,
+   "a rewrite's bracket takes the node before it and then `...`"],
+  ['a rewrite\'s rule on a bracket that takes nothing before it', "#{with_rewrite}#{CALL}\nplace() <- ARROW_BEGIN(place(), ...);\n",
+   rewrite_line + 1, "a rewrite's bracket takes the node before it and then `...`"],
+  ['a rewrite\'s nested pattern', "#{with_rewrite}#{CALL}\nplace() <- MEMBER(NAME);\n", rewrite_line + 1,
+   'write a nested pattern as a rule of its own'],
+  ['a rewrite\'s rule on a separator', "#{with_rewrite}#{CALL}\nplace() <- ARGUMENT;\n", rewrite_line + 1,
+   'ARGUMENT cannot be anchored']
 ]
 errors.each do |what, rules, line, words|
   message = error_of(rules, header)

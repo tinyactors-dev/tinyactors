@@ -9,6 +9,10 @@ typedef enum {
     SJS_EV_PARAMS_END,
     SJS_EV_ARROW_END,
     SJS_EV_BIND,
+    SJS_EV_INDEX,
+    SJS_EV_CALL_BEGIN,
+    SJS_EV_ARGUMENT,
+    SJS_EV_CALL_END,
     SJS_EV_END
 } sjs_event_kind;
 typedef enum { SJS_OP_ADD = 1, SJS_OP_SUBTRACT } sjs_operator;
