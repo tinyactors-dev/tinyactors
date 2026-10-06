@@ -132,15 +132,32 @@ module Core
 
   module_function
 
+  # The addon for a release target, `addon-<target>` (`mise run node:build
+  # --target <target>`): the addon build's flags, compiled and linked by the
+  # target's pinned `zig cc` from any host (docs/adr/0001).
+  RELEASE_ADDON = /\Aaddon-(?<target>.+)\z/
+
+  def addon_variant(target) = "addon-#{target}"
+
   def variant(name)
-    settings = VARIANTS.fetch(name) { abort "unknown build #{name.inspect}: #{VARIANTS.keys.join(', ')}" }
+    settings = VARIANTS.fetch(name) do
+      match = RELEASE_ADDON.match(name) or
+        abort "unknown build #{name.inspect}: #{VARIANTS.keys.join(', ')}, addon-<release target>"
+      { **VARIANTS.fetch('addon'), release: Toolchain::Target.release(match[:target]) }
+    end
     return settings unless settings[:position_independent]
 
-    { **settings, flags: [*settings[:flags], *Toolchain::Target.host.format.position_independent] }
+    { **settings, flags: [*settings[:flags], *target_of(settings).format.position_independent] }
   end
 
-  # What the build compiles for: this machine, or wasm32-wasi.
-  def target(variant_name) = variant(variant_name)[:wasi] ? Toolchain::Target.zig('wasm32-wasi') : Toolchain::Target.host
+  # What the build compiles for: this machine, wasm32-wasi, or a release target.
+  def target(variant_name) = target_of(variant(variant_name))
+
+  def target_of(settings)
+    return settings[:release] if settings[:release]
+
+    settings[:wasi] ? Toolchain::Target.zig('wasm32-wasi') : Toolchain::Target.host
+  end
 
   def directory(variant_name) = BUILD.join(variant_name)
 

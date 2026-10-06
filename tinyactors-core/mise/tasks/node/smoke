@@ -1,0 +1,35 @@
+#!/usr/bin/env ruby
+#MISE description="Install the packed @tinyactors/node tarballs into a fresh project with npm and with Bun, and run bindings/node/test/smoke/smoke.js under each"
+# vim:ft=ruby
+
+# Uses build/node/npm/tarballs/ from `mise run node:package`: the main
+# package and this machine's platform package, installed by path into a
+# temporary directory outside the repository. The other platform packages
+# the main package depends on are optional and skipped, as they are in a
+# real install on this machine.
+
+require 'fileutils'
+require 'tmpdir'
+require_relative '../../node_package'
+
+target = NodePackage.host_target
+main = Dir[NodePackage::TARBALLS.join('tinyactors-node-[0-9]*.tgz').to_s].first
+addon = Dir[NodePackage::TARBALLS.join("tinyactors-node-#{NodePackage::PLATFORMS.fetch(target).join('-')}-[0-9]*.tgz").to_s].first
+abort "node:smoke: no packed tarballs for #{target}; run `mise run node:package` first" unless main && addon
+
+def run(*command, chdir:)
+  pid = Process.spawn(*command, chdir: chdir.to_s)
+  _pid, status = Process.wait2(pid)
+  abort "node:smoke: #{command.join(' ')} failed" unless status.success?
+end
+
+[
+  [%w[npm install --no-audit --no-fund --silent], %w[node smoke.js]],
+  [%w[bun add --silent], %w[bun smoke.js]]
+].each do |install, smoke|
+  Dir.mktmpdir('tinyactors-smoke') do |dir|
+    FileUtils.cp(Dir[NodePackage::SMOKE.join('*').to_s], dir)
+    run(*install, main, addon, chdir: dir)
+    run(*smoke, chdir: dir)
+  end
+end

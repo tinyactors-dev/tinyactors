@@ -1,29 +1,49 @@
 #!/usr/bin/env ruby
-#MISE description="Build the Node.js binding's N-API addon (bindings/node/build/tinyactors.node) against the addon build of the layers"
+#MISE description="Build the Node.js binding's N-API addon: for this machine (bindings/node/build/tinyactors.node), or with --target for a release target (build/node/<target>/tinyactors.node)"
+#USAGE flag "--target <target>" help="A native release target (aarch64-macos, x86_64-macos, x86_64-linux, aarch64-linux): build the addon @tinyactors/node ships for it with the pinned zig cc"
 # vim:ft=ruby
 
 # The addon is a shared object the Node process loads, and Node provides
-# its N-API symbols; its headers ship with Node (include/node beside
-# bin/node). The layers it links are compiled position-independent
+# its N-API symbols; its headers ship with Node (include/node beside the
+# pinned bin/node). The layers it links are compiled position-independent
 # (Core::VARIANTS['addon']).
+#
+# Without --target it is built for this machine with the pinned clang, and
+# index.js loads it from bindings/node/build/. With --target it is built as
+# @tinyactors/node ships it (docs/adr/0001-packaging-and-releases.md): by
+# `zig cc` for the release target, from any host, as a plugin whose
+# undefined symbols the loading process provides. A Linux addon links no C
+# library (decision 10), so one binary serves glibc and musl.
 
 require_relative '../../core'
 
 LAYERS = %w[host system compile].freeze
-node_include = Pathname.new(IO.popen(['node', '-p', 'process.execPath'], &:read).strip).join('../../include/node').expand_path
+node = Pathname.new(Toolchain::Tool[:node].path)
+node_include = node.join('../../include/node').expand_path
 abort "node:build: no node_api.h in #{node_include}" unless node_include.join('node_api.h').file?
 
-Core.build_layers('addon', Core.link_order(LAYERS))
+release = ENV['usage_target'].to_s
+release = ARGV[ARGV.index('--target') + 1].to_s if release.empty? && ARGV.include?('--target')
+native = Toolchain::Target.native_releases.map(&:name)
+abort "node:build: #{release} builds no addon; one of #{native.join(', ')}" unless release.empty? || native.include?(release)
+variant = release.empty? ? 'addon' : Core.addon_variant(release)
+target = Core.target(variant)
+
+Core.build_layers(variant, Core.link_order(LAYERS))
 # NAPI_MODULE defines the addon's exported entry points without prototypes.
-command = [*Core.compile_command('addon'), '-Wno-missing-prototypes', '-isystem', node_include.to_s,
+command = [*Core.compile_command(variant), '-Wno-missing-prototypes', '-isystem', node_include.to_s,
            '-DNAPI_VERSION=8', '-DNODE_GYP_MODULE_NAME=tinyactors']
 objects = %w[bindings/node/src/addon.c bindings/shared/binding.c].map do |source|
-  object = Core.directory('addon').join('objects/node', "#{File.basename(source, '.c')}.o")
+  object = Core.directory(variant).join('objects/node', "#{File.basename(source, '.c')}.o")
   Core.compile(command, source, object)
   object.to_s
 end
-target = Toolchain::Target.host
-archives = Core.link_order(LAYERS).map { |name| Core.archive_path('addon', name).to_s }
-addon = Core::ROOT.join('bindings/node/build/tinyactors.node')
-target.program([*objects, *archives], into: addon.to_s, flags: target.plugin_flags)
+archives = Core.link_order(LAYERS).map { |name| Core.archive_path(variant, name).to_s }
+if release.empty?
+  addon = Core::ROOT.join('bindings/node/build/tinyactors.node')
+  target.program([*objects, *archives], into: addon.to_s, flags: target.plugin_flags)
+else
+  addon = Core::BUILD.join('node', release, 'tinyactors.node')
+  target.plugin([*objects, *archives], into: addon.to_s)
+end
 puts "node:build: #{addon.relative_path_from(Core::ROOT)}"

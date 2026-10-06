@@ -1,0 +1,148 @@
+#!/usr/bin/env ruby
+#MISE description="Release @tinyactors/node: check, build every target, verify, pack and smoke test; with --publish, also publish to npm, tag, and create the GitHub release; --dev makes a development build for the next dist-tag"
+#USAGE arg "[version]" help="The version to release, MAJOR.MINOR.PATCH; none with --dev, which computes it"
+#USAGE flag "--dev" help="A development build of HEAD: version <next minor>-dev.<date>.<n>.g<sha>, published under the next dist-tag, with no commit, tag or GitHub release"
+#USAGE flag "--publish" help="Publish to npm; for a release, also commit the version, tag it, push, and create the GitHub release"
+#USAGE flag "--skip-containers" help="Leave out the Docker smoke tests (glibc and musl, x64 and arm64)"
+# vim:ft=ruby
+
+# docs/adr/0001-packaging-and-releases.md; the packages are described in
+# mise/node_package.rb. The stages:
+#
+# 1. Check: a clean main in step with origin (in tinyactors-core/ and
+#    mise/), a new version whose tag `tinyactors-napi/v<version>` is free,
+#    a CHANGELOG.md section that passes `changelog:check napi`, no package
+#    of that version on npm, and the binding's suites passing
+#    (`mise run node:test`, on Node.js and on Bun).
+# 2. Build every release target, verify its symbols, and pack the five npm
+#    packages at the version (`mise run node:package --version`).
+# 3. Smoke test the packed packages here and in containers.
+# 4. Publish (--publish only): commit `release(napi): v<version>` (the
+#    version in bindings/node/package.json and package-lock.json), tag it
+#    with the notes, publish the platform packages and then
+#    @tinyactors/node, push, and create the GitHub release with the
+#    tarballs and SHA256SUMS.
+#
+# Without --publish, nothing is committed, tagged or uploaded; build/node/npm/
+# keeps the tarballs, notes and SHA256SUMS that --publish would upload.
+#
+# --dev (ADR 0001, decision 15) builds HEAD as a development version,
+# Release.dev_version, and publishes it under the `next` dist-tag: `npm
+# install @tinyactors/node@next`. It runs the same checks, builds and smoke
+# tests, never touches `latest`, and makes no commit, tag or GitHub release.
+
+require 'fileutils'
+require 'release'
+require_relative '../../node_package'
+
+version = ENV['usage_version'].to_s
+version = ARGV.find { |arg| !arg.start_with?('--') }.to_s if version.empty?
+dev = NodePackage.switch?('dev')
+publish = NodePackage.switch?('publish')
+containers = !NodePackage.switch?('skip-containers')
+usage = 'usage: mise run //tinyactors-core:node:release -- (<version> | --dev) [--publish] [--skip-containers]'
+Release.fail!("#{usage}: --dev computes the version; give none") if dev && !version.empty?
+Release.fail!(usage) if !dev && version.empty?
+dist_tag = dev ? 'next' : 'latest'
+prefix = NodePackage::TAG_PREFIX
+
+def task(*task)
+  Release.run('mise', 'run', *task, chdir: Core::ROOT)
+end
+
+# 1. Check.
+Release.check_tree!(scope: ['tinyactors-core', 'mise'])
+if dev
+  version = Release.dev_version(prefix)
+  tag = nil
+else
+  tag = Release.check_version!(prefix, version)
+  Release.fail!("#{version} is a prerelease; give MAJOR.MINOR.PATCH, or use --dev") if Release.parse_version(version)[3]
+  Release.check_changelog!(prefix: prefix, version: version)
+end
+taken = NodePackage.names.select { |name| Release.npm_published?(name, version) }
+unless taken.empty?
+  already = taken.map { |name| "#{name}@#{version}" }.join(', ')
+  Release.fail!(dev ? "npm already has #{already}: this commit's development build is published" : "npm already has #{already}")
+end
+Release.fail!('fnox has no NPM_TOKEN (fnox list)') if publish && !Release.npm_token?
+Release.fail!('the registry does not accept NPM_TOKEN (npm whoami failed)') if publish && !Release.npm_authenticated?
+task('node:test')
+
+# 2. Build, verify and pack; 3. smoke test.
+task('node:package', '--version', version)
+task('node:smoke')
+if containers
+  task('node:smoke-containers')
+else
+  puts 'release: --skip-containers: no glibc/musl or Linux arm64 smoke test ran'
+end
+
+tarballs = NodePackage.tarballs(version)
+missing = tarballs.reject(&:file?)
+Release.fail!("node:package did not write #{missing.map { |t| t.basename.to_s }.join(', ')}") unless missing.empty?
+FileUtils.mkdir_p(NodePackage::RELEASE)
+title = "#{NodePackage::NAME} #{version}"
+notes = NodePackage::RELEASE.join('notes.md')
+notes.write(if dev
+              "# #{title}\n\nA development build of #{Release.git('rev-parse', 'HEAD').strip}.\n"
+            else
+              Release.notes(prefix: prefix, version: version, title: title)
+            end)
+sums = Pathname.new(Release.write_sha256sums(tarballs, NodePackage::RELEASE.join('SHA256SUMS')))
+shown = ->(paths) { paths.map { |path| path.basename.to_s }.join(', ') }
+
+unless publish
+  puts <<~DRY
+    release: dry run for #{title} passed; nothing was committed, tagged or uploaded.
+      would tag:     #{tag || 'nothing (a development build)'}
+      would publish: #{shown.call(tarballs)}, under the #{dist_tag} dist-tag
+      notes:         #{notes.relative_path_from(Core::ROOT)}
+      checksums:     #{sums.relative_path_from(Core::ROOT)}
+    Publish with: mise run //tinyactors-core:node:release -- #{dev ? '--dev' : version} --publish
+  DRY
+  exit 0
+end
+
+stopped = lambda do |failed, published, after|
+  left = tarballs - published
+  Release.fail!(<<~STOPPED)
+    npm publish #{failed.basename} failed; stopping.#{after}
+      published: #{published.empty? ? 'none' : shown.call(published)}
+      left, to publish by hand in this order (fnox exec -- npm publish <tgz> --access public --tag #{dist_tag}):
+        #{left.map(&:to_s).join("\n    ")}
+  STOPPED
+end
+
+if dev
+  published, failed = Release.npm_publish!(tarballs, dist_tag: dist_tag)
+  stopped.call(failed, published, '') if failed
+  puts "release: published #{title} under the #{dist_tag} dist-tag: npm install #{NodePackage::NAME}@#{dist_tag}"
+  exit 0
+end
+
+# 4. Publish.
+lock = NodePackage::BINDING.join('package-lock.json')
+[NodePackage::PACKAGE_JSON, lock].each do |file|
+  # The package's own version: the first "version" in package.json, and the
+  # two (the lock's and its root package's) before any dependency in the lock.
+  left = file == lock ? 2 : 1
+  file.write(file.read.gsub(/^(\s*"version":\s*)"[^"]*"/) do |line|
+    (left -= 1) >= 0 ? "#{Regexp.last_match(1)}\"#{version}\"" : line
+  end)
+end
+Release.fail!("bindings/node/package.json does not say #{version}") unless NodePackage.version == version
+subject = "release(napi): v#{version}"
+Release.commit_and_tag!(paths: [NodePackage::PACKAGE_JSON, lock], subject: subject, tag: tag, notes_file: notes)
+published, failed = Release.npm_publish!(tarballs)
+if failed && published.empty?
+  # Nothing reached npm: the release did not happen, so neither do its
+  # commit and tag. A retry starts from a clean tree.
+  Release.undo_commit_and_tag!(subject: subject, tag: tag)
+  Release.fail!("npm publish #{failed.basename} failed; nothing was published, and the commit and tag are undone")
+elsif failed
+  stopped.call(failed, published, " The commit and tag stay: npm has some packages.\n  " \
+                                  'Publish the rest, then push the commit and tag, and create the GitHub release.')
+end
+Release.push_and_release!(tag: tag, title: title, notes_file: notes, assets: [*tarballs, sums])
+puts "release: published #{title}, tagged #{tag}"

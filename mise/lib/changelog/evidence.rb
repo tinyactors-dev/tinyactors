@@ -109,7 +109,7 @@ module Changelog
     end
 
     def files_summary(commit)
-      ours = commit.files.select { |file| file.start_with?(component.prefix) }
+      ours = commit.files.select { |file| file.start_with?(component.path_prefix) }
       ours = commit.files if ours.empty?
       shown = ours.first(6).join(', ')
       ours.size > 6 ? "#{shown} (and #{ours.size - 6} more; #{commit.files.size} in the commit)" : shown

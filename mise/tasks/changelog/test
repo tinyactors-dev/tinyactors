@@ -78,7 +78,7 @@ Dir.mktmpdir('changelog-test') do |tmp|
                          body: "Callers of ta_old call ta_fresh.\n\nCo-Authored-By: Someone <a@example.com>",
                          'tinyactors-core/include/tinyactors.api.json' => api(functions: %w[ta_keep ta_fresh], size: 16),
                          'tinyactors-core/src/a.c' => "b\n")
-  commit.call('fix(napi): a call site', 'tinyactors-core/src/call.c' => "call\n", 'tinyactors-napi/x.js' => "x\n")
+  commit.call('fix(napi): a call site', 'tinyactors-core/src/call.c' => "call\n", 'tinyactors-core/bindings/node/x.js' => "x\n")
   commit.call('feat(test-host): a harness change that edits core', 'tinyactors-core/src/harness.c' => "h\n")
   commit.call('feat(core): ta_keep reports more', 'tinyactors-core/src/b.c' => "c\n")
   commit.call('docs: a root note', 'NOTES.md' => "n\n")
@@ -178,16 +178,27 @@ Dir.mktmpdir('changelog-test') do |tmp|
   # TypeScript: the surface is what a file exports.
   ts = Changelog::Repo.new(dir)
   commit.call('feat(napi): declarations',
-              'tinyactors-napi/index.d.ts' => "/** The version. */\nexport const version: string;\n// status: unimplemented\nexport interface Options {\n  a: string;\n}\nexport function go(n: number): void;\n")
+              'tinyactors-core/bindings/node/index.d.ts' => "/** The version. */\nexport const version: string;\n// status: unimplemented\nexport interface Options {\n  a: string;\n}\nexport function go(n: number): void;\n")
   old = Changelog::APISurface.surface(ts, napi, 'HEAD')
   check.call('the exports of a declaration file', old.keys.sort, ['export Options', 'export go', 'export version'])
   commit.call('feat(napi): more declarations',
-              'tinyactors-napi/index.d.ts' => "export const version: string;\nexport interface Options {\n  a: string;\n  b?: number;\n}\n")
+              'tinyactors-core/bindings/node/index.d.ts' => "export const version: string;\nexport interface Options {\n  a: string;\n  b?: number;\n}\n")
   delta = Changelog::APISurface.delta(old, Changelog::APISurface.surface(ts, napi, 'HEAD'))
   check.call('a removed export', delta.removed.map(&:name), ['go'])
   check.call('a changed export, by a member',
              delta.changed.map { |entity, prior| [entity.name, Changelog::APISurface.line_diff(entity, prior)] },
              [['Options', ['+ b?: number;']]])
+
+  # A component that moved keeps its tags: napi's files are the Node.js
+  # binding's, its releases are still tinyactors-napi/v*.
+  check.call('a moved component is found by its tag prefix', Changelog.component('tinyactors-napi/').name, 'napi')
+  git.call('tag', '--annotate', 'tinyactors-napi/v0.1.0', '-m', 'napi')
+  check.call('a moved component reads its old tags', repo.last_version(napi), '0.1.0')
+  check.call('a moved component owns its new files',
+             Changelog::Evidence.gather(repo, napi).commits.size, 0)
+  commit.call('docs: a binding note', 'tinyactors-core/bindings/node/NOTES.md' => "n\n")
+  check.call('an unscoped commit is attributed by its new path',
+             Changelog::Evidence.gather(repo, napi).commits.map(&:subject), ['docs: a binding note'])
 end
 
 if failures.empty?

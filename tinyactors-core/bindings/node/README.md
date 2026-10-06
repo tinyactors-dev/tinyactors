@@ -7,15 +7,26 @@ in `bindings/shared/core.mjs` and is shared with the
 [web binding](../web) (same `index.d.ts`), so the same code runs in Node.js and
 in browsers. Node.js ≥ 22.12 (`require()` of the ES-module core).
 
-## Installable distribution
+## Install
 
-Packages are not built at the moment: the pipeline that made them used
-CMake and is to be rebuilt on the repository's release machinery
-([distribution](../../docs/distribution.md)). In this repository, `mise run node:build` (in `tinyactors-core`) builds the addon into
-`bindings/node/build/tinyactors.node`, which `index.js` loads.
+```sh
+npm install @tinyactors/node     # or: pnpm add, bun add
+```
+
+The package carries no compiler step: each supported platform has a
+prebuilt addon in its own package (`@tinyactors/node-darwin-arm64`,
+`-darwin-x64`, `-linux-x64`, `-linux-arm64`), an optional dependency that
+npm, pnpm and Bun install only where it matches. The Linux addon serves
+glibc and musl alike. Development builds are under the `next` dist-tag
+(`npm install @tinyactors/node@next`).
+
+In this repository, `mise run node:build` (in `tinyactors-core`) builds the
+addon into `bindings/node/build/tinyactors.node`, which `index.js` loads
+before any installed platform package. Packaging and releasing are in
+[distribution](../../docs/distribution.md).
 
 ```js
-const { createMachine, createActor, assign } = require('tinyactors');
+const { createMachine, createActor, assign } = require('@tinyactors/node');
 
 const toggle = createMachine({
   id: 'toggle',
@@ -159,7 +170,7 @@ semantics as the C datamodel; `null` works too. The W3C IRP suite passes
 through this binding (158/158 mandatory; `mise run w3c:js`).
 
 ```js
-const { fromSCXML, createActor } = require('tinyactors');
+const { fromSCXML, createActor } = require('@tinyactors/node');
 
 const counter = fromSCXML(`
   <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" initial="idle">
@@ -201,7 +212,7 @@ one immutable image you can ship as bytes (also produced by the C `tac`
 compiler) and boot anywhere — Node, a browser, a C host.
 
 ```js
-const { compileSystem, loadImage, createSystem } = require('tinyactors');
+const { compileSystem, loadImage, createSystem } = require('@tinyactors/node');
 
 const image = compileSystem(`
   <system>

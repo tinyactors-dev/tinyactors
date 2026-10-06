@@ -61,7 +61,7 @@ module Changelog
       named = commit.scopes & Changelog.component_scopes
       return !(named & component.scopes).empty? unless named.empty?
 
-      commit.files.any? { |file| file.start_with?(component.prefix) }
+      commit.files.any? { |file| file.start_with?(component.path_prefix) }
     end
 
     # Sections in the order a release lists them: what each commit is, after

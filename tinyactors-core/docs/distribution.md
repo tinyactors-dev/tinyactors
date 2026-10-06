@@ -1,6 +1,31 @@
 # Distribution: build artifacts, then install them
 
-**Status: not built at the moment.** The pipeline this document describes
+## Built today: @tinyactors/node
+
+The Node.js binding ships on npm as `@tinyactors/node`, with one package
+per platform, as [ADR 0001](../../docs/adr/0001-packaging-and-releases.md)
+(decisions 10, 11, 15 and 18) lays out. The tasks, in `tinyactors-core`:
+
+| Command | What it does |
+|---|---|
+| `mise run node:build --target <t>` | The addon for a release target (`aarch64-macos`, `x86_64-macos`, `x86_64-linux`, `aarch64-linux`), by the pinned `zig cc`, into `build/node/<t>/tinyactors.node`; any host builds every target |
+| `mise run node:symbols` | Checks each built addon: its architecture, that it exports only the Node-API entry points, imports only Node-API and an allowlist of libc functions, and on Linux needs no library |
+| `mise run node:package` | Builds and checks every addon, and packs the five packages into `build/node/npm/tarballs/`; `--dev` stamps HEAD's development version, `--version` another |
+| `mise run node:smoke` | Installs the tarballs into a fresh project with npm and with Bun, and runs `bindings/node/test/smoke/smoke.js` |
+| `mise run node:smoke-containers` | The same in Docker: Node on glibc and musl, x64 and arm64, and Bun |
+| `mise run node:release -- <version>` | All of the above after the release checks, as a dry run; `--publish` publishes, commits the version, tags `tinyactors-napi/v<version>` and creates the GitHub release |
+| `mise run node:release -- --dev --publish` | Publishes HEAD as `<next minor>-dev.<date>.<n>.g<sha>` under the `next` dist-tag |
+
+`@tinyactors/node` holds `bindings/node/` and `bindings/shared/` as
+`node/` and `shared/`, so its relative imports are the repository's, and
+depends on every platform package at exactly its own version. The version
+is `bindings/node/package.json`'s; a release commits the new one. A release
+needs a `CHANGELOG.md` section in `bindings/node/` (component `napi`,
+`mise run changelog:check napi <version>`), written with the
+release-changelog skill; a development build does not. Publishing needs
+`NPM_TOKEN` in fnox, a token that bypasses two-factor authentication.
+
+**The rest: not built at the moment.** The pipeline this document describes
 (`tools/dist.py`, `tools/dist/`, the npm package's source fallback) built
 every artifact with CMake and its Zig toolchain file. It was removed when
 the build moved to the repository's Ruby toolchain, and is kept at the tag
@@ -56,7 +81,13 @@ them against that release's `SHASUMS256.txt`; nothing is downloaded at npm
 install time on a prebuilt target. Distribution builds need Internet on
 their first Windows import-library download.
 
-## npm: complete packages, no sibling imports outside the package
+## npm: the web package
+
+The Node.js package is built as above, not as this section describes: per
+platform packages replaced the bundled prebuilts and the source fallback
+(ADR 0001, decision 11). What follows is still the plan for the web package.
+
+### The plan, as the old pipeline built it
 
 ```sh
 mise run dist:node

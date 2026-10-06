@@ -6,11 +6,16 @@
 const path = require('path');
 const { createRuntime } = require('../shared/core.mjs');
 
+/* The addon: an override, then this tree's build (mise run node:build),
+ * then the platform package an install of @tinyactors/node brings
+ * (@tinyactors/node-<platform>-<arch>, an optional dependency npm, pnpm and
+ * Bun install only where it matches). The platform package is tried last,
+ * so its error is the one an install without a matching addon reports. */
 function loadNative() {
   const candidates = [
     process.env.TINYACTORS_NATIVE,
     path.join(__dirname, 'build', 'tinyactors.node'),
-    path.join(__dirname, 'build', 'Release', 'tinyactors.node'),
+    `@tinyactors/node-${process.platform}-${process.arch}`,
   ].filter(Boolean);
   let lastError;
   for (const p of candidates) {

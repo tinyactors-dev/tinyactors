@@ -199,6 +199,31 @@ laid out how each library and the addon would ship. It was discussed on
       amalgamations from the source tarballs into one module, as the
       repository's own combined builds do.
 
+18. **`@tinyactors/node` is built from `tinyactors-core/bindings/node`**
+    (2026-10-06). The standalone runtime (ADR 0004) replaced the addon in
+    `tinyactors-napi/` with its own Node-API binding, so that binding is
+    what `@tinyactors/node` ships. The packages, names and rules of
+    decisions 10, 11, 14 and 15 are unchanged:
+    - **The tasks are core's:** `node:build --target`, `node:symbols`,
+      `node:package`, `node:smoke`, `node:smoke-containers` and
+      `node:release` in `tinyactors-core` (`tinyactors-core/docs/distribution.md`),
+      with what they share in `tinyactors-core/mise/node_package.rb`. A
+      release addon is the `addon-<target>` build (`Core.addon_variant`):
+      the addon build's flags, compiled and linked by the target's `zig cc`.
+    - **The release line continues.** Versions are
+      `bindings/node/package.json`'s and tags stay `tinyactors-napi/v*`, so
+      the next release is above the published 0.1.0 and a development
+      build counts from it. The changelog component `napi` (scopes `napi`
+      and `node`) now has the binding's directory and keeps that tag
+      prefix (`Changelog::Component#tag_prefix`).
+    - **The main package keeps the repository's layout:** `node/` and
+      `shared/`, so `index.js` imports `../shared/core.mjs` unchanged.
+      `index.js` loads this tree's build first, then the platform package.
+    - **Containers:** Node on glibc and musl, x64 and arm64, and Bun on
+      Debian x64 and on arm64. Bun on musl x64 is left out: its build needs
+      AVX, which an emulated x64 lacks, so it crashes before the addon
+      loads.
+
 ## Still open
 
 - **A signature on `SHA256SUMS`**, for example `ssh-keygen -Y sign` with

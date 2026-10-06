@@ -12,9 +12,15 @@ module Changelog
   #
   # `api_ignore` names what changes at every release and so says nothing
   # about the API (the version macros).
-  Component = Struct.new(:name, :dir, :scopes, :api_json, :api_files, :api_ignore, keyword_init: true) do
+  #
+  # `tag_prefix` is the prefix of its release tags when that is not its
+  # directory's: a component that moved keeps its release line.
+  Component = Struct.new(:name, :dir, :scopes, :api_json, :api_files, :api_ignore, :tag_prefix, keyword_init: true) do
     # The tag prefix of the component's releases (Release.released_versions).
-    def prefix = "#{dir}/"
+    def prefix = tag_prefix || path_prefix
+
+    # What the paths of its files begin with.
+    def path_prefix = "#{dir}/"
 
     def tag(version) = "#{prefix}v#{version}"
 
@@ -30,8 +36,11 @@ module Changelog
   COMPONENTS = [
     Component.new(name: 'core', dir: 'tinyactors-core', scopes: %w[core],
                   api_json: 'include/tinyactors.api.json', api_ignore: VERSION_MACROS),
-    Component.new(name: 'napi', dir: 'tinyactors-napi', scopes: %w[napi],
-                  api_files: %w[index.d.ts], api_ignore: nil),
+    # The Node.js binding, @tinyactors/node. Its addon lived in
+    # tinyactors-napi/ until the standalone runtime replaced it, and its
+    # releases keep that line of tags.
+    Component.new(name: 'napi', dir: 'tinyactors-core/bindings/node', scopes: %w[napi node],
+                  api_files: %w[index.d.ts], api_ignore: nil, tag_prefix: 'tinyactors-napi/'),
     Component.new(name: 'otlp', dir: 'tinyactors-otlp', scopes: %w[otlp],
                   api_files: %w[include/tinyactors_otlp.h], api_ignore: VERSION_MACROS),
     Component.new(name: 'scxml', dir: 'tinyactors-scxml', scopes: %w[scxml],
@@ -43,7 +52,9 @@ module Changelog
   module_function
 
   def component(name)
-    COMPONENTS.find { |component| component.name == name || component.dir == name.to_s.chomp('/') } or
+    COMPONENTS.find do |component|
+      component.name == name || component.dir == name.to_s.chomp('/') || component.prefix == name.to_s
+    end or
       raise Error, "unknown component #{name.inspect}; one of #{COMPONENTS.map(&:name).join(', ')}"
   end
 

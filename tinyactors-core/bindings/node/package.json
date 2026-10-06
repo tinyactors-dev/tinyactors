@@ -1,17 +1,29 @@
 {
-  "name": "tinyactors",
+  "name": "@tinyactors/node",
   "version": "0.1.0",
   "description": "xstate-style state machines and actors on the tinyactors SCXML runtime (N-API addon); hibernation, links",
+  "keywords": [
+    "actor",
+    "actors",
+    "statechart",
+    "scxml",
+    "state-machine",
+    "xstate",
+    "napi",
+    "bun"
+  ],
+  "homepage": "https://github.com/dhamidi/tinyactors/tree/main/tinyactors-core/bindings/node#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dhamidi/tinyactors.git",
+    "directory": "tinyactors-core/bindings/node"
+  },
+  "bugs": {
+    "url": "https://github.com/dhamidi/tinyactors/issues"
+  },
+  "license": "MIT",
   "main": "index.js",
   "types": "index.d.ts",
-  "license": "MIT",
-  "files": [
-    "index.js",
-    "index.d.ts",
-    "ws.js",
-    "transports.js",
-    "src/"
-  ],
   "engines": {
     "node": ">=22.12"
   },
