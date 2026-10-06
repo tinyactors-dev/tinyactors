@@ -78,7 +78,7 @@ static const sjs_name NAMES[] = {
     NAME("find", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FIND, 0, 0),
     NAME("findIndex", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FIND_INDEX, 0, 0),
     NAME("findLast", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FIND_LAST, 0, 0),
-    NAME("findLastIndex", SJS_NAME_ON_ARRAY, 0, 0, 0),
+    NAME("findLastIndex", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FIND_LAST_INDEX, 0, 0),
     NAME("fixed", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("flat", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FLAT, 0, 0),
     NAME("flatMap", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FLAT_MAP, 0, 0),
@@ -249,6 +249,7 @@ bool sjs_builtin_loops(sjs_builtin_id id) {
     case SJS_METHOD_ARRAY_FIND:
     case SJS_METHOD_ARRAY_FIND_INDEX:
     case SJS_METHOD_ARRAY_FIND_LAST:
+    case SJS_METHOD_ARRAY_FIND_LAST_INDEX:
     case SJS_METHOD_ARRAY_FLAT_MAP:
     case SJS_METHOD_ARRAY_MAP:
     case SJS_METHOD_ARRAY_REDUCE:
@@ -1318,15 +1319,20 @@ static loop_step pluck_step(sjs_vm *vm, vm_frame *frame) {
     return call_element(vm, frame, frame->index);
 }
 
-/* What filter, find, findIndex, findLast, some and every make of the
- * callback's answer for the element at frame->index (from the end, for
- * findLast), which it moves past: keep it, or finish with true, false, the
+/* findLast and findLastIndex visit the elements from the end. */
+static bool walks_from_end(sjs_builtin_id id) {
+    return id == SJS_METHOD_ARRAY_FIND_LAST || id == SJS_METHOD_ARRAY_FIND_LAST_INDEX;
+}
+
+/* What filter, find, findIndex, findLast, findLastIndex, some and every make
+ * of the callback's answer for the element at frame->index (from the end, for
+ * findLast and findLastIndex), which it moves past: keep it, or finish with true, false, the
  * element or its index. LOOP_AGAIN to go on to the next element. The
  * bytecode's answer and the C path's go through here alike. */
 static loop_step predicate_answer(sjs_vm *vm, vm_frame *frame, bool truthy) {
     const sjs_array *a = receiver(vm, frame);
     uint32_t i = frame->index;
-    uint32_t element = frame->builtin == SJS_METHOD_ARRAY_FIND_LAST ? frame->length - 1u - i : i;
+    uint32_t element = walks_from_end(frame->builtin) ? frame->length - 1u - i : i;
     frame->index++;
     if (!truthy) {
         return frame->builtin == SJS_METHOD_ARRAY_EVERY ? done(vm, frame, sjs_boolean(false)) : LOOP_AGAIN;
@@ -1344,6 +1350,7 @@ static loop_step predicate_answer(sjs_vm *vm, vm_frame *frame, bool truthy) {
     case SJS_METHOD_ARRAY_EVERY:
         return LOOP_AGAIN;
     case SJS_METHOD_ARRAY_FIND_INDEX:
+    case SJS_METHOD_ARRAY_FIND_LAST_INDEX:
         return done(vm, frame, sjs_num((double)element));
     default: /* FIND, FIND_LAST */
         sjs_ref(a->items[element]);
@@ -1379,7 +1386,7 @@ static int predicate_compare(const vm_frame *frame, sjs_value v) {
  * bytecode for that element, which faults. */
 static loop_step predicate_step(sjs_vm *vm, vm_frame *frame) {
     if (!frame->entered && !sjs_vm_enter_callback(vm, frame)) return LOOP_FAULT;
-    uint32_t element = frame->builtin == SJS_METHOD_ARRAY_FIND_LAST ? frame->length - 1u - frame->index : frame->index;
+    uint32_t element = walks_from_end(frame->builtin) ? frame->length - 1u - frame->index : frame->index;
     sjs_value v = receiver(vm, frame)->items[element];
     if (vm->stack_capacity - vm->sp < PREDICATE_STACK) return call_element(vm, frame, element);
     uint64_t lookups = 0;
@@ -1616,6 +1623,7 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
         case SJS_METHOD_ARRAY_EVERY:
             return done(vm, frame, sjs_boolean(true));
         case SJS_METHOD_ARRAY_FIND_INDEX:
+        case SJS_METHOD_ARRAY_FIND_LAST_INDEX:
             return done(vm, frame, sjs_num(-1));
         case SJS_METHOD_ARRAY_FIND:
         case SJS_METHOD_ARRAY_FIND_LAST:
@@ -1644,6 +1652,6 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
     }
     if (frame->shape == SJS_SHAPE_PLUCK) return pluck_step(vm, frame);
     if (frame->shape == SJS_SHAPE_KEY_COMPARE || frame->shape == SJS_SHAPE_ELEMENT_COMPARE) return predicate_step(vm, frame);
-    uint32_t element = frame->builtin == SJS_METHOD_ARRAY_FIND_LAST ? frame->length - 1u - frame->index : frame->index;
+    uint32_t element = walks_from_end(frame->builtin) ? frame->length - 1u - frame->index : frame->index;
     return call_element(vm, frame, element);
 }
