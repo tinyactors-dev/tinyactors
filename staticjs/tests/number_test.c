@@ -8,7 +8,8 @@
  *     D <bits> <decimal>        COUNT decimal strings read: Number(decimal);
  *                               random digits and exponents, long ones, and
  *                               the exact midpoints between two doubles, a
- *                               digit under and a digit over them
+ *                               digit under and a digit over them, and ties
+ *                               of up to 19 digits next to 2^53
  *     N <bits> <bits> <text>    COUNT strings read: Number(text), parseFloat(text);
  *                               those decimals with white space, a sign, a
  *                               prefix, Infinity or junk around them
@@ -155,8 +156,13 @@ static void random_decimal(decimal_text *t, long i) {
         put_exponent(t, (int)(next() % 700) - 350);
         break;
     }
-    case 2: /* 17 significant digits: what a double prints as at most */
-    case 3: {
+    case 3: { /* m + j / 2^k next to 2^53: up to 19 digits over 10^k, half of them ties */
+        int k = 1 + (int)(next() % 3);
+        uint64_t m = (1ull << (53 - k)) + next() % (1ull << (53 - k));
+        exact_decimal(t, (m << k) | (next() % (1ull << k)), -k);
+        break;
+    }
+    case 2: { /* 17 significant digits: what a double prints as at most */
         char text[40];
         snprintf(text, sizeof text, "%.16e", random_double());
         for (size_t k = 0; text[k] != '\0'; k++) put(t, text[k]);
