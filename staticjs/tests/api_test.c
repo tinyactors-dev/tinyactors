@@ -1383,9 +1383,9 @@ static void test_reuse_leaves_others_alone(void) {
 }
 
 /* The off switch (docs/matcher.md, section 8): with no_shapes the compiler
- * makes no matcher, so it does not allocate the matcher's records, and the
- * program gives the same value. A config that leaves the field out
- * matches. */
+ * matches the rewrites alone (MUTATION: it made no matcher before), so it
+ * does not allocate the matcher's records, and the program gives the same
+ * value. A config that leaves the field out matches. */
 typedef struct {
     long allocations;
     char out[256];
@@ -2207,6 +2207,102 @@ static void test_mutation_delete_out_of_memory(void) {
                        SJS_GOAL_EXPRESSION);
 }
 
+/* MUTATION: methods through a path (docs/mutation.md, "Methods through a
+ * path"). */
+
+/* The rewrite is semantics, so no_shapes leaves it on: the same value, and
+ * no allocation more, as the anchored lane keeps its first cells in the
+ * matcher; with shapes, the matcher's records, for the arrows. */
+static void test_mutation_path_no_shapes(void) {
+    const char *source = "(() => { const o = {a: {b: [3, 1, 2]}, s: new Set()}; o.a.b.sort((x, y) => x - y).reverse(); "
+                         "const p = o.a.b.pop(); o.s.add(p); const n = o.a.b.push(9); return [o, n]; })()";
+    sjs_compiler_config on = { NULL, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false };
+    sjs_compiler_config off = on;
+    off.no_shapes = true;
+    compiled with = compile_counting(on, source);
+    compiled without = compile_counting(off, source);
+    CHECK(strcmp(with.out, "[{\"a\":{\"b\":[3,2,9]},\"s\":new Set([1])},3]") == 0 && strcmp(without.out, with.out) == 0);
+    /* The comparator's marker and keys outgrow the first records. */
+    CHECK(with.allocations == without.allocations + 2);
+    /* A path nested past the lane's own cells allocates the same both
+     * ways; with shapes, the records the arrow's open reserves besides. */
+    const char *deep = "(() => { const o = {a: [[], []]}; const k = [0, 1]; "
+                       "o.a[k[k[k[k[k[k[k[k[k[0]]]]]]]]]].push(1); return o; })()";
+    with = compile_counting(on, deep);
+    without = compile_counting(off, deep);
+    CHECK(strcmp(with.out, "{\"a\":[[1],[]]}") == 0 && strcmp(without.out, with.out) == 0);
+    CHECK(with.allocations == without.allocations + 1);
+}
+
+/* A method through a path costs a unit of fuel for each key, besides its
+ * instructions (one per key pushed, the name's, the call's) and what the
+ * method costs on a variable; a sort, the instruction that puts it back. */
+static void test_mutation_path_fuel(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    uint64_t variable = fuel_of(context, "(() => { const xs = [1, 2]; return xs.pop(); })()");
+    uint64_t one = fuel_of(context, "(() => { const o = {a: [1, 2]}; return o.a.pop(); })()");
+    uint64_t three = fuel_of(context, "(() => { const o = {a: {b: {c: [1, 2]}}}; return o.a.b.c.pop(); })()");
+    uint64_t sorts = fuel_of(context, "(() => { const o = {a: [2, 1]}; return o.a.sort((x, y) => (x < y ? -1 : 1)); })()");
+    uint64_t sorted = fuel_of(context, "(() => { const xs = [2, 1]; return xs.sort((x, y) => (x < y ? -1 : 1)); })()");
+    /* The object literal, the key pushed, the key's unit; PATH_METHOD and
+     * PATH_CALL are METHOD_MUTATE and MUTATE. */
+    CHECK(one - variable == 3);
+    /* Two more object literals, two more keys pushed, two more units. */
+    CHECK(three - one == 6);
+    /* As one more key does; PATH_SORTED is SORTED. */
+    CHECK(sorts - sorted == 3);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* A container a native holds, inside a root the function owns, is never
+ * changed through a path: the call faults when it runs. One the native
+ * gives away is the function's to change. */
+static void test_mutation_path_natives(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    char out[4096];
+    keeper k = { 0 };
+    k.held = number_array(context, (const double[]){ 1, 2 }, 2);
+    sjs_value natives[2];
+    CHECK(sjs_function_native(context, (sjs_native){ &k, &held_vtable }, &natives[0]) == SJS_OK);
+    CHECK(sjs_function_native(context, (sjs_native){ NULL, &fresh_vtable }, &natives[1]) == SJS_OK);
+    sjs_str names[2] = { SJS_STR("held"), SJS_STR("fresh") };
+    env e = { context, names, natives, 2, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    CHECK(evaluate(&e, "(() => { const o = {xs: held()}; o.xs.push(3); return o; })()", out) == SJS_ERR_PROGRAM);
+    CHECK(strstr(out, "fault") == out && strstr(out, "held elsewhere") != NULL);
+    CHECK(evaluate(&e, "(() => { const o = {a: {xs: held()}}; o.a.xs.sort((x, y) => y - x); return o; })()", out) == SJS_ERR_PROGRAM);
+    CHECK(strstr(out, "held elsewhere") != NULL);
+    write_text(context, k.held, out, sizeof out);
+    CHECK(strcmp(out, "[1,2]") == 0);
+    CHECK(evaluate(&e, "(() => { const o = {xs: fresh()}; o.xs.push(1); o.xs.unshift(0); return o; })()", out) == SJS_OK);
+    CHECK(strcmp(out, "{\"xs\":[0,1]}") == 0);
+    sjs_release(context, k.held);
+    for (int i = 0; i < 2; i++) sjs_release(context, natives[i]);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* Every allocation of a program that grows arrays and a set through paths,
+ * past the size that gives the set an index, sorts and chains through one,
+ * and nests a path past the anchored lane's own cells, fails in turn. */
+static void test_mutation_path_out_of_memory(void) {
+    test_out_of_memory("(() => {\n"
+                       "  const g = [5, 3, 9, 1, 7, 2, 8, 6, 4, 0].reduce((acc, x) => { acc.by[x % 2].push(x); acc.s.tags.add(x % 13); return acc; },\n"
+                       "                                                 {by: [[], []], s: {tags: new Set()}});\n"
+                       "  g.by[0].sort((a, b) => a - b).fill(0, 3).reverse();\n"
+                       "  const p = g.by[1].pop();\n"
+                       "  const q = g.by[1].splice(0, 2, \"x\", \"y\", \"z\");\n"
+                       "  const k = [0, 1];\n"
+                       "  g.by[k[k[k[k[k[k[k[k[k[1]]]]]]]]]].unshift(-1);\n"
+                       "  return [g.by, [...g.s.tags], p, q];\n"
+                       "})()",
+                       SJS_GOAL_EXPRESSION);
+}
+
 static void test_out_of_memory(const char *source, sjs_goal goal) {
     long needed = 0;
     for (long fail_at = 1;; fail_at++) {
@@ -2281,6 +2377,11 @@ int main(int argc, char **argv) {
     test_mutation_delete_order();
     test_mutation_delete_removal();
     test_mutation_delete_out_of_memory();
+    /* MUTATION: methods through a path. */
+    test_mutation_path_no_shapes();
+    test_mutation_path_fuel();
+    test_mutation_path_natives();
+    test_mutation_path_out_of_memory();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */

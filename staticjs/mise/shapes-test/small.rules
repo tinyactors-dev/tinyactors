@@ -2,8 +2,10 @@
 # bracket, chain), nested patterns made nonterminals and merged when equal,
 # two chain rules written before the order they run in, costs, a number and
 # a text constant, an operand field read beside a number field of the same
-# event, and an operator and an operand as a shape's parameters. Its tables
-# are small_shapes.h and small_table.txt.
+# event, and an operator and an operand as a shape's parameters; and a
+# rewrite, whose anchored rules take every form they can (a leaf, a postfix
+# event over its first operand, a bracket over the node before it, a chain
+# rule). Its tables are small_shapes.h and small_table.txt.
 
 event NUMBER leaf value: number, operand: operand;
 event NAME leaf name: read;
@@ -14,6 +16,10 @@ event PARAM inner index: count;
 event PARAMS_END inner;
 event ARROW_END close;
 event BIND leaf item name: name;
+event INDEX postfix 2;
+event CALL_BEGIN open 1 CALL_END;
+event ARGUMENT inner;
+event CALL_END close arguments: count;
 event END close;
 
 shape GET(key: text);
@@ -37,3 +43,14 @@ TWICE(k, false) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS
                                            BINARY{op: SUBTRACT}(key_of(x, k), length_of(x)));
 BOUND(k, o, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
                                          BINARY{op: o}(key_of(x, k), NUMBER{operand: c}));
+
+rewrite POP_PATH;
+nonterminal place();
+nonterminal popped();
+nonterminal callee();
+
+place() <- NAME;
+place() <- INDEX(place(), _);
+callee() <- popped();
+popped() <- MEMBER{key: "pop"}(place());
+POP_PATH() <- CALL_BEGIN(callee(), ...);

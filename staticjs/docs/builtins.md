@@ -183,9 +183,10 @@ callback's own instructions.
   value.
 - **Mutating methods** (`push`, `sort`, `splice`, `add`, ...) change the
   receiver and return something else in JavaScript, so never implement
-  them as copies. One that changes a variable the function owns is a
-  mutation (`docs/mutation.md`): called through `SJS_OP_MUTATE` with the
-  variable's slot, never through `sjs_builtin_call`, and tagged
+  them as copies. One that changes a variable the function owns, or a
+  container on a path from one, is a mutation (`docs/mutation.md`): called
+  through `SJS_OP_MUTATE` with the variable's slot, or `SJS_OP_PATH_CALL`
+  with the container's place, never through `sjs_builtin_call`, and tagged
   `MUTATION`. Every other one faults by name (`SJS_NAME_MUTATING`).
 
 ## 8. Measure it

@@ -532,6 +532,17 @@ typedef enum {
                             * value; STORE pops the value above them into it, and them;
                             * DROP pops them and the value above them; DELETE removes
                             * the property they name, and pops them */
+    /* MUTATION: a method that changes a container on a path from a variable
+     * (docs/mutation.md, "Methods through a path"). */
+    SJS_OP_PATH_METHOD,    /* u32 constant (string): [reference, n keys] -> [.., name, undefined],
+                            * the method's name and the room its receiver takes */
+    SJS_OP_PATH_CALL,      /* u16 n, u16 argc, u8 flags (SPREAD, CHAIN): [reference, n keys,
+                            * name, room, arguments] call the method on the container the keys
+                            * name, each container on the way held by its place alone; then
+                            * as MUTATE, or with CHAIN [reference, n keys] for the next */
+    SJS_OP_PATH_SORTED,    /* u16 n, u8 flags (CHAIN): after a PATH_CALL of sort, [reference,
+                            * n keys, sorted] the sorted array back in its place; then as
+                            * PATH_CALL gives it */
 } sjs_opcode;
 
 /* SJS_OP_CALL flags. */
@@ -544,6 +555,7 @@ typedef enum {
 #define SJS_PATH_STORE 1u
 #define SJS_PATH_DROP 2u
 #define SJS_PATH_DELETE 3u   /* MUTATION: step 3: removes the property, pops the keys */
+#define SJS_PATH_CALL 4u     /* MUTATION: a method's walk (PATH_CALL), never PATH's operand */
 
 /* SJS_OP_OBJECT_LITERAL flags. */
 #define SJS_LITERAL_ABOVE 1u  /* one value is above the literal's values: a spread's source or a computed key */

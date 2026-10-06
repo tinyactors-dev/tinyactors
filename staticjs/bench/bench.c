@@ -67,7 +67,10 @@
  * the rows' ids, each the first: Q) and .last (each the last);
  * eval.array.splice (n / 4 elements of a copy of xs at n / 2 replaced by 1,
  * 2, 3 in place, as .toSpliced does: 3 at every size) and .splice-reduce
- * (acc.splice(i, 1, x * 2 + 1) over a copy of xs, as map).
+ * (acc.splice(i, 1, x * 2 + 1) over a copy of xs, as map);
+ * eval.object.push-path-reduce (acc.groups[r.priority].push(r.kwh), the
+ * rows grouped into arrays under the accumulator's keys: a method through a
+ * path, MUTATION).
  *
  * write (unit byte): write.rows (n {1000, 10000}, 64 KiB buffer),
  * write.rows.buf64 (10000 rows, a 64-byte buffer), write.numbers (100000
@@ -499,6 +502,12 @@ static const bench_case cases[] = {
     { .name = "eval.array.assign-index", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "xs.reduce((acc, x, i) => { acc[i] = x * 2 + 1; return acc; }, [...xs])", .globals = { { "xs", FIX_XS, NULL } },
       .expect = MAP_VALUE, .check = CHECK_ARRAY_N },
+    /* MUTATION: methods through a path. Each row's kwh pushed into its
+     * priority's array, under the accumulator's keys; priority 2's group. */
+    { .name = "eval.object.push-path-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.reduce((acc, r) => { acc.groups[r.priority].push(r.kwh); return acc; }, "
+                "{groups: {0: [], 1: [], 2: [], 3: []}}).groups[2]",
+      .globals = { { "rows", FIX_ROWS, NULL } }, .expect = "[7.4,22.2]", .check = CHECK_FILTER_QUARTER },
     /* MUTATION: let */
     { .name = "eval.let.counter", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.reduce((a, r) => { let n = a; n += r.kwh; return n; }, 0)", .globals = { { "rows", FIX_ROWS, NULL } },

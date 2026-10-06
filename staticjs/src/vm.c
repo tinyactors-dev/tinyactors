@@ -199,7 +199,7 @@ static sjs_result method(sjs_vm *vm, sjs_member member, sjs_value *out) {
             /* MUTATION: the message. Restore "staticjs values do not change, so
              * this method is not there". */
             if (n != NULL && (n->flags & SJS_NAME_MUTATING) != 0) {
-                return fault_named(vm, "this method changes its receiver: staticjs has some such methods, and calls them only on a variable of the function that owns its value", name);
+                return fault_named(vm, "this method changes its receiver: staticjs has some such methods, and calls them only on a variable of the function that owns its value, or on a path from one", name); /* MUTATION: or a path */
             }
             return fault_named(vm, "staticjs does not have this method", name);
         }
@@ -1703,6 +1703,17 @@ __attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t 
  * "Assignment"), through a path of keys from a variable's slot. */
 static void path_op(sjs_vm *vm, uint32_t keys, uint8_t mode);
 
+/* MUTATION: a method called on a path (docs/mutation.md, "Methods through a
+ * path"): PATH_CALL's operands, and the functions after path_op. */
+typedef struct {
+    uint32_t keys;
+    uint32_t argc;
+    uint8_t flags;
+} path_call_site;
+
+static void path_call(sjs_vm *vm, path_call_site site);
+static void path_sorted(sjs_vm *vm, uint32_t keys, uint8_t flags);
+
 /* The instructions of mutation, reached from the default case of
  * execute()'s switch, which they share with the fault for an opcode there
  * is none of, so that the evaluator's loop compiles as it did. */
@@ -1744,6 +1755,22 @@ __attribute__((noinline)) static void execute_other(sjs_vm *vm, vm_frame *f) {
     case SJS_OP_PATH:
         f->pc = pc + 3;
         path_op(vm, sjs_read16(code + pc), code[pc + 2]);
+        return;
+    case SJS_OP_PATH_METHOD: {
+        /* MUTATION: the method's name, and room for its receiver. */
+        f->pc = pc + 4;
+        sjs_value name = f->program->constants[sjs_read32(code + pc)];
+        sjs_ref(name);
+        if (sjs_vm_push(vm, name)) sjs_vm_push(vm, sjs_undefined());
+        return;
+    }
+    case SJS_OP_PATH_CALL:
+        f->pc = pc + 5;
+        path_call(vm, (path_call_site){ sjs_read16(code + pc), sjs_read16(code + pc + 2), code[pc + 4] });
+        return;
+    case SJS_OP_PATH_SORTED:
+        f->pc = pc + 3;
+        path_sorted(vm, sjs_read16(code + pc), code[pc + 2]);
         return;
     default:
         /* Restore this fault alone in execute()'s default case. */
@@ -1816,9 +1843,10 @@ static bool path_container(sjs_vm *vm, path_into into) {
         return false;
     }
     if ((v.kind != SJS_OBJECT && v.kind != SJS_ARRAY) || v.internal != SJS_INTERNAL_NONE) {
-        /* MUTATION: step 3, delete's message. */
+        /* MUTATION: step 3, delete's message; a method's. */
         const char *message = into.mode == SJS_PATH_DELETE ? "staticjs deletes properties of objects only, on a path through objects and arrays"
                                                            : "staticjs assigns to properties of objects and elements of arrays only";
+        if (into.mode == SJS_PATH_CALL) message = "staticjs calls a method on a path through objects and arrays only"; /* MUTATION */
         fault_named(vm, message, path_key_name(into.key, buffer));
         return false;
     }
@@ -2030,4 +2058,184 @@ __attribute__((noinline)) static void path_op(sjs_vm *vm, uint32_t keys, uint8_t
     }
     path_last l = { place, &vm->stack[base + keys], store };
     if (path_end(vm, &l) && store) cut(vm, base);
+}
+
+/* ------------------------------------------------------------------------
+ * MUTATION: a method that changes its receiver, called on a path from a
+ * variable (docs/mutation.md, "Methods through a path"). The compiler made
+ * `o.items.push(x)` [reference, keys, name, room, arguments]: the keys from
+ * the variable's slot to the container, the method's name and room for the
+ * container, as MUTATE has it. PATH_CALL finds the container when it runs,
+ * after the arguments, through containers each held by its place alone, and
+ * changes it in place.
+ */
+
+/* The place of the value the first `keys` keys above `base` name: each
+ * container on the way held by its place alone, as a store needs; the key
+ * above the last names what the walk reads next, for a fault's subject.
+ * NULL after a fault. */
+static sjs_value *path_receiver(sjs_vm *vm, uint32_t base, uint32_t keys) {
+    sjs_value *place = &vm->stack[vm->stack[base].boolean];
+    for (uint32_t i = 1; i <= keys; i++) {
+        sjs_value *key = &vm->stack[base + i];
+        if (!path_container(vm, (path_into){ *place, *key, SJS_PATH_CALL })) return NULL;
+        uint32_t index;
+        if (place->kind == SJS_ARRAY && path_array_index(*key, &index) && index < SJS_AS_ARRAY(*place)->length) {
+            place = &SJS_AS_ARRAY(*place)->items[index];
+            continue;
+        }
+        if (!path_key_string(vm, key)) return NULL;
+        path_walk w = { place, SJS_AS_STRING(*key), vm->stack[base + i + 1u], SJS_PATH_CALL };
+        place = path_child(vm, &w);
+        if (place == NULL) return NULL;
+    }
+    return place;
+}
+
+/* The reference and keys from `base` are a path's: anything else is code
+ * the compiler did not make. */
+static bool path_damaged(sjs_vm *vm, uint32_t base, uint32_t keys) {
+    sjs_value reference = vm->stack[base];
+    if (reference.internal != SJS_INTERNAL_SLOT || reference.boolean >= base) return true;
+    for (uint32_t i = 1; i <= keys; i++) {
+        sjs_value key = vm->stack[base + i];
+        if ((key.kind != SJS_STRING && key.kind != SJS_NUMBER) || key.internal != SJS_INTERNAL_NONE) return true;
+    }
+    return false;
+}
+
+/* What a mutation through a path gives: with CHAIN, the reference and the
+ * keys stay for the next, and `result` is nothing; else the container
+ * (sort, reverse, fill, add), a copy, or the method's result, which it
+ * takes over, above `base`. */
+typedef struct {
+    uint32_t base;
+    uint32_t keys;
+    bool chain;
+} path_result;
+
+static bool path_give(sjs_vm *vm, path_result at, sjs_value result) {
+    if (at.chain) {
+        cut(vm, at.base + at.keys + 1u);
+        return true;
+    }
+    cut(vm, at.base);
+    return sjs_vm_push(vm, result);
+}
+
+/* The container is not of a kind with the method: call what an ordinary
+ * call finds, a property of an object, or fault as it faults. A sort or a
+ * chain needs the container back, which a property need not give. */
+static void path_call_other(sjs_vm *vm, sjs_value *place, path_call_site site) {
+    uint32_t base = vm->sp - site.argc - site.keys - 3u;
+    uint32_t room = base + site.keys + 1u;
+    const sjs_string *name = SJS_AS_STRING(vm->stack[room]);
+    sjs_value callee;
+    if (method(vm, (sjs_member){ *place, name }, &callee) != SJS_OK) return;
+    if ((site.flags & SJS_CALL_CHAIN) != 0 || sjs_mutation_named(sjs_name_of(name)) == SJS_METHOD_ARRAY_SORT) {
+        sjs_vm_release(vm, callee);
+        fault_named(vm, "staticjs calls a method that changes its receiver, through a path, on an array or a set only", sjs_string_view(name));
+        return;
+    }
+    sjs_value receiver = *place;
+    sjs_ref(receiver);
+    for (uint32_t i = base + 1u; i <= room + 1u; i++) sjs_vm_release(vm, vm->stack[i]);
+    vm->stack[base] = receiver;
+    vm->stack[base + 1u] = callee;
+    for (uint32_t i = 0; i < site.argc; i++) vm->stack[base + 2u + i] = vm->stack[room + 2u + i];
+    vm->sp = base + 2u + site.argc;
+    call(vm, site.argc, SJS_CALL_METHOD);
+}
+
+/* PATH_CALL: [reference, keys, name, room, arguments]. Each step costs one
+ * unit of fuel, and the method what it costs on a variable. */
+__attribute__((noinline)) static void path_call(sjs_vm *vm, path_call_site site) {
+    if ((site.flags & SJS_CALL_SPREAD) != 0 && !expand_spread(vm, &site.argc)) return;
+    uint32_t keys = site.keys;
+    if (keys == 0 || vm->sp < keys + site.argc + 3u) {
+        sjs_vm_fault(vm, "the program is damaged");
+        return;
+    }
+    uint32_t base = vm->sp - site.argc - keys - 3u;
+    uint32_t room = base + keys + 1u;
+    sjs_value name = vm->stack[room];
+    if (path_damaged(vm, base, keys) || name.kind != SJS_STRING || name.internal != SJS_INTERNAL_NONE) {
+        sjs_vm_fault(vm, "the program is damaged");
+        return;
+    }
+    vm->fuel_used += keys;
+    sjs_value *place = path_receiver(vm, base, keys);
+    if (place == NULL) return;
+    if (place->kind == SJS_UNDEFINED || place->kind == SJS_NULL) {
+        path_container(vm, (path_into){ *place, name, SJS_PATH_LOAD });
+        return;
+    }
+    sjs_builtin_id id = sjs_mutation_of(sjs_name_of(SJS_AS_STRING(name)), place->kind);
+    if (id == SJS_BUILTIN_NONE) {
+        path_call_other(vm, place, site);
+        return;
+    }
+    if (!sjs_value_unique(*place)) {
+        sjs_vm_fault(vm, path_held);
+        return;
+    }
+    if (id == SJS_METHOD_ARRAY_SORT) {
+        /* toSorted's loop takes the array over from its place, which holds
+         * undefined until PATH_SORTED puts the sorted array back. */
+        sjs_vm_release(vm, name);
+        vm->stack[room] = *place;
+        *place = sjs_undefined();
+        vm->stack[room + 1u] = (sjs_value){ .kind = SJS_FUNCTION, .internal = SJS_INTERNAL_METHOD, .boolean = (uint32_t)id };
+        enter_loop(vm, SJS_METHOD_ARRAY_TO_SORTED, (call_site){ room + 1u, site.argc, room });
+        return;
+    }
+    sjs_leaf_call leaf = { 0 };
+    leaf.receiver = *place;
+    leaf.receiver_slot = place;
+    leaf.args = &vm->stack[room + 2u];
+    leaf.count = site.argc;
+    if (sjs_mutation_call(vm, id, &leaf) != SJS_OK) {
+        sjs_vm_release(vm, leaf.result);
+        return;
+    }
+    vm->fuel_used += leaf.cost;
+    bool chain = (site.flags & SJS_CALL_CHAIN) != 0;
+    sjs_value result = leaf.result;
+    if (sjs_mutation_returns_receiver(id) && !chain) {
+        result = *place;
+        sjs_ref(result);
+    }
+    path_give(vm, (path_result){ base, keys, chain }, result);
+}
+
+/* PATH_SORTED: [reference, keys, sorted]. The sorted array goes back in the
+ * place the keys name, which held undefined while toSorted's loop had it;
+ * then it is the result, as PATH_CALL gives one. */
+__attribute__((noinline)) static void path_sorted(sjs_vm *vm, uint32_t keys, uint8_t flags) {
+    if (keys == 0 || vm->sp < keys + 2u || path_damaged(vm, vm->sp - keys - 2u, keys)) {
+        sjs_vm_fault(vm, "the program is damaged");
+        return;
+    }
+    uint32_t base = vm->sp - keys - 2u;
+    sjs_value *container = path_receiver(vm, base, keys - 1u);
+    if (container == NULL) return;
+    sjs_value *key = &vm->stack[base + keys];
+    sjs_value *place = NULL;
+    uint32_t index;
+    if (container->kind == SJS_ARRAY && path_array_index(*key, &index) && index < SJS_AS_ARRAY(*container)->length) {
+        place = &SJS_AS_ARRAY(*container)->items[index];
+    } else if (container->kind == SJS_OBJECT && path_key_string(vm, key)) {
+        sjs_entry *e = (sjs_entry *)sjs_object_find(SJS_AS_OBJECT(*container), sjs_string_view(SJS_AS_STRING(*key)));
+        if (e != NULL) place = &e->value;
+    }
+    if (place == NULL || place->kind != SJS_UNDEFINED) {
+        sjs_vm_fault(vm, "the program is damaged");
+        return;
+    }
+    sjs_value sorted = vm->stack[vm->sp - 1u];
+    vm->stack[vm->sp - 1u] = sjs_undefined();
+    *place = sorted;
+    bool chain = (flags & SJS_CALL_CHAIN) != 0;
+    if (!chain) sjs_ref(sorted);
+    path_give(vm, (path_result){ base, keys, chain }, sorted);
 }

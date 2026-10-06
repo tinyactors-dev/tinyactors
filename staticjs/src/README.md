@@ -13,14 +13,16 @@ Implementation modules. Headers here are private; the public API is
 - `compiler.c`  syntax events to bytecode, as each arrives; scopes and captures;
                 block scopes inside function scopes, their slots reused; the last
                 read of each slot moves its value (TAKE_LOCAL); each event goes
-                through the matcher first, and a match tags its function
+                through the matcher first, and a match tags its function, or,
+                for a rewrite, changes how the compiler compiles its node
 - `shapes.rules` the trees the matcher looks for (docs/matcher.md); `mise run shapes`
                 compiles them to `shapes.h` (the shapes, for src/ and the tests) and
                 `shapes_table.h` (the matcher's tables), both generated and checked in
 - `matcher.h`   the matcher's interface, private to the compiler and its tests
 - `matcher.c`   the matcher: a bottom-up tree automaton (iburg-style dynamic
                 programming) over the events as they arrive; it keeps only brackets
-                a rule can still match
+                a rule can still match; and the anchored lane, which matches the
+                rewrites' rules everywhere, by where each node starts
 - `vm.h`        the evaluator's state, shared with the built-ins
 - `vm.c`        the evaluator: one instruction per unit of fuel
 - `builtins.c`  built-in functions and methods; the ones that call back are frames,

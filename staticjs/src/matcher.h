@@ -5,6 +5,10 @@
  * the compiler which functions compute a known shape. It never changes an
  * event and never changes what the compiler emits: a match only tags.
  *
+ * MUTATION: it also reports rewrites (docs/matcher.md, section 12): nodes
+ * the compiler compiles differently where a rewrite's rules match, which an
+ * anchored lane matches beside the labeller, with shapes on and off.
+ *
  *   parser --event--> sjs_matcher_event --> the compiler's own handling
  *                          |
  *                          +--> report(shape, node, start, arguments)
@@ -36,9 +40,20 @@ typedef struct {
     sjs_shape_value args[SJS_SHAPE_ARGS];
 } sjs_shape_match;
 
+/* MUTATION: a node a rewrite's rules match: which rewrite, which node, and
+ * where the node's source begins (docs/matcher.md, 12.5). */
+typedef struct {
+    sjs_rewrite rewrite;
+    uint32_t node;
+    sjs_position start;
+} sjs_rewrite_match;
+
 typedef struct sjs_shape_reporter_vtable {
     /* SJS_OK to go on; any other result is sjs_matcher_event's. */
     sjs_result (*report)(void *self, const sjs_shape_match *match);
+    /* MUTATION: a rewrite, during the event that ends its node; NULL to
+     * ignore them. */
+    sjs_result (*rewrite)(void *self, const sjs_rewrite_match *match);
 } sjs_shape_reporter_vtable;
 
 typedef struct { void *self; const sjs_shape_reporter_vtable *v; } sjs_shape_reporter;
@@ -47,6 +62,9 @@ typedef struct {
     const sjs_allocator *allocator;   /* the context's counting allocator */
     uint32_t max_nesting;             /* sizes its bound: 4 * max_nesting + 4 records */
     sjs_shape_reporter reporter;
+    /* MUTATION: match the rewrites alone, not the shapes: what no_shapes
+     * leaves on (docs/matcher.md, 12.6). */
+    bool rewrites_only;
 } sjs_matcher_config;
 
 /* The program, the bracket around everything, which no rule matches: it
@@ -69,6 +87,14 @@ typedef struct {
     sjs_buf text;          /* text the records captured, in record order: in
                             * text_inline until it outgrows it */
     uint8_t text_inline[64];
+    /* MUTATION: the anchored lane (docs/matcher.md, 12.4): its cells, in
+     * lane_inline until they outgrow it; the most held at once; stopped by
+     * a stream it cannot read. The labeller does not run when rewrites_only. */
+    bool rewrites_only;
+    bool lane_stopped;
+    uint32_t lane_peak;
+    sjs_buf lane;
+    uint64_t lane_inline[16];
 } sjs_matcher;
 
 /* The matcher points into itself, so it is initialised where it stays. */

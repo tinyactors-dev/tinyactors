@@ -109,7 +109,11 @@ the compiler's shape matcher does.
 `x => x.key` or `(a, b) => a.key - b.key`, and tags them. A tag never
 changes the code a function compiles to; `map` and `toSorted` use it to
 run such a callback in C, giving the same values and faults on less fuel.
-`sjs_compiler_config.no_shapes` turns the matcher off.
+`sjs_compiler_config.no_shapes` turns the tags off. The same rules also
+declare rewrites, matched with `no_shapes` too, as they change what a
+program means: a mutating method called on a path (`o.items.push(x)`),
+which the compiler compiles as a path to the container it changes
+(docs/matcher.md, section 12).
 
 ## The language
 
@@ -180,7 +184,9 @@ such a variable, as deep as it goes (`acc[r.id] = r.kwh`, `o.a[i].n += 1`,
 `o.k ??= []`, `o.n++`), with JavaScript's evaluation order, and to a `let`
 of the function (`let n = 0; n += x;`), which no arrow function may capture;
 and `delete` of a property on such a path (`delete acc[k]`), which faults
-on an array, as it would leave a hole.
+on an array, as it would leave a hole; and a method that changes its
+receiver called on such a path (`acc.byKey[x.k].push(x)`,
+`o.a.sort(f).reverse()`).
 The compiler
 refuses any other receiver or target it can see is shared, and the
 evaluator faults when the variable's value, or a container on the path,

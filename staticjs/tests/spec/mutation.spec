@@ -997,7 +997,7 @@ return [o, p]; })()
 
 === a method on a container held by another variable
 (() => { const o = {items: []}; const y = o.items; const n = o.items.push(1); return [o, y, n]; })()
---- fault only on a variable
+--- fault held elsewhere
 
 === a container held by another variable, through a parameter
 (o => { o.items[0] = 1; return o; })((() => { const items = [0]; return {items, again: items}; })())
@@ -2518,3 +2518,492 @@ export const f = o => [delete o];
 === a captured let
 (() => { let n = 0; const f = () => n; n = 1; return f(); })()
 --- error unsupported captures this let
+
+
+# Methods through a path (docs/mutation.md, "Methods through a path"): a
+# mutating method whose receiver is a path from a variable the function
+# owns, `o.items.push(x)`, `s.byID[k].tags.add(t)`. The shape rules
+# recognise the call (src/shapes.rules, MUTATE_PATH), and the compiler
+# rewrites it into the path machinery, with shapes on and off.
+
+# Each method, through a path of one step and of several.
+
+=== push through a path returns the new length
+(() => { const o = {items: [1]}; const n = o.items.push(2, 3); return [n, o]; })()
+--- value
+[3,{"items":[1,2,3]}]
+
+=== push through a path of several steps
+(() => { const s = {a: {b: [[1], [2]]}}; const n = s.a.b[1].push(5); return [n, s]; })()
+--- value
+[2,{"a":{"b":[[1],[2,5]]}}]
+
+=== push of nothing through a path
+(() => { const o = {xs: [1]}; return [o.xs.push(), o]; })()
+--- value
+[1,{"xs":[1]}]
+
+=== push of spread arguments through a path
+(() => { const o = {xs: [1]}; const ys = [2, 3]; o.xs.push(...ys, 4); return o; })()
+--- value
+{"xs":[1,2,3,4]}
+
+=== pop through a path
+(() => { const o = {xs: [1, 2]}; const a = o.xs.pop(); return [a, o]; })()
+--- value
+[2,{"xs":[1]}]
+
+=== pop through a path of several steps, to empty
+(() => { const o = {a: [{xs: [1, 2]}]}; return [o.a[0].xs.pop(), o.a[0].xs.pop(), o.a[0].xs.pop(), o]; })()
+--- value
+[2,1,undefined,{"a":[{"xs":[]}]}]
+
+=== shift through a path
+(() => { const o = {q: {items: [1, 2, 3]}}; const a = o.q.items.shift(); return [a, o]; })()
+--- value
+[1,{"q":{"items":[2,3]}}]
+
+=== shift of an empty array through a path
+(() => { const o = {xs: []}; return [o.xs.shift(), o]; })()
+--- value
+[undefined,{"xs":[]}]
+
+=== unshift through a path
+(() => { const o = {xs: [3]}; return [o.xs.unshift(1, 2), o]; })()
+--- value
+[3,{"xs":[1,2,3]}]
+
+=== unshift through a path of several steps
+(() => { const m = [[{xs: [9]}]]; return [m[0][0].xs.unshift(7, 8), m]; })()
+--- value
+[3,[[{"xs":[7,8,9]}]]]
+
+=== sort through a path returns the array
+(() => { const o = {xs: [3, 1, 2]}; const r = o.xs.sort((a, b) => a - b); return [r, o]; })()
+--- value
+[[1,2,3],{"xs":[1,2,3]}]
+
+=== sort through a path by a key, in C
+@shapes - COMPARE_BY_KEY(k, false)
+(() => { const o = {rows: {list: [{k: 2}, {k: 3}, {k: 1}]}}; o.rows.list.sort((a, b) => a.k - b.k); return o; })()
+--- value
+{"rows":{"list":[{"k":1},{"k":2},{"k":3}]}}
+
+=== sort through a path, descending numbers, in C
+@shapes - COMPARE_NUMERIC(true)
+(() => { const o = {a: [[1, 3, 2]]}; o.a[0].sort((x, y) => y - x); return o; })()
+--- value
+{"a":[[3,2,1]]}
+
+=== sort through a path with a comparator in bytecode
+@shapes - -
+(() => { const o = {xs: ["b", "c", "a"]}; o.xs.sort((x, y) => x < y ? -1 : (x > y ? 1 : 0)); return o; })()
+--- value
+{"xs":["a","b","c"]}
+
+=== sort through a path is stable
+(() => { const o = {rows: [{k: 1, n: "a"}, {k: 0, n: "b"}, {k: 1, n: "c"}, {k: 0, n: "d"}]}; o.rows.sort((a, b) => a.k - b.k); return o.rows.map(r => r.n); })()
+--- value
+["b","d","a","c"]
+
+=== reverse through a path
+(() => { const o = {a: {xs: [1, 2, 3]}}; const r = o.a.xs.reverse(); return [r, o]; })()
+--- value
+[[3,2,1],{"a":{"xs":[3,2,1]}}]
+
+=== fill through a path
+(() => { const o = {xs: [1, 2, 3, 4]}; return [o.xs.fill(0, 1, 3), o]; })()
+--- value
+[[1,0,0,4],{"xs":[1,0,0,4]}]
+
+=== fill through a path of several steps
+(() => { const o = {grid: [[1, 2], [3, 4]]}; o.grid[1].fill(9); return o; })()
+--- value
+{"grid":[[1,2],[9,9]]}
+
+=== splice through a path returns what it removed
+(() => { const o = {xs: [1, 2, 3, 4]}; const r = o.xs.splice(1, 2, "a"); return [r, o]; })()
+--- value
+[[2,3],{"xs":[1,"a",4]}]
+
+=== splice through a path of several steps
+(() => { const o = {a: {b: [5, 6, 7]}}; const r = o.a.b.splice(-1); const t = o.a.b.splice(0, 0, 4); return [r, t, o]; })()
+--- value
+[[7],[],{"a":{"b":[4,5,6]}}]
+
+=== add through a path returns the set
+(() => { const o = {s: new Set([1])}; const r = o.s.add(2); return [r, o]; })()
+--- value
+[new Set([1,2]),{"s":new Set([1,2])}]
+
+=== add through a path of several steps
+(() => { const state = {byID: {a: {tags: new Set(["x"])}}}; state.byID.a.tags.add("y"); return state; })()
+--- value
+{"byID":{"a":{"tags":new Set(["x","y"])}}}
+
+=== delete through a path returns whether the set had it
+(() => { const o = {s: new Set([1, 2])}; return [o.s.delete(1), o.s.delete(9), o]; })()
+--- value
+[true,false,{"s":new Set([2])}]
+
+=== clear through a path
+(() => { const o = {a: [new Set([1, 2])]}; return [o.a[0].clear(), o]; })()
+--- value
+[undefined,{"a":[new Set([])]}]
+
+# Computed keys: evaluated left to right, then the arguments, then the call.
+
+=== a computed key through a path
+(() => { const state = {byID: {a: {tags: new Set()}, b: {tags: new Set()}}}; const k = "b"; state.byID[k].tags.add("t"); return state; })()
+--- value
+{"byID":{"a":{"tags":new Set([])},"b":{"tags":new Set(["t"])}}}
+
+=== a number key through a path
+(() => { const o = {rows: [[], [], []]}; const i = 2; o.rows[i].push(i); o.rows[i - 1].push(0); return o; })()
+--- value
+{"rows":[[],[0],[2]]}
+
+=== a string key that names an element
+(() => { const o = {rows: [[0], [1]]}; o.rows["1"].push(2); return o; })()
+--- value
+{"rows":[[0],[1,2]]}
+
+=== keys, then arguments, then the call
+(() => { const log = []; const o = {a: [[], []]}; const n = o[["a", log.push("key")][0]][log.push("index") - 1].push(log.push("argument"), log.length); return [n, log, o]; })()
+--- value
+[2,["key","index","argument"],{"a":[[],[3,3]]}]
+
+=== an argument reads the container before the call
+(() => { const o = {xs: [1, 2]}; o.xs.push(o.xs.length, o.xs[0]); return o; })()
+--- value
+{"xs":[1,2,2,1]}
+
+=== an argument reads the root before the call
+(() => { const o = {n: 5, xs: []}; o.xs.push(o.n, o.xs.length); return o; })()
+--- value
+{"n":5,"xs":[5,0]}
+
+=== a key may read the root
+(() => { const o = {k: "b", a: [], b: []}; o[o.k].push(1); return o; })()
+--- value
+{"k":"b","a":[],"b":[1]}
+
+=== a path call reads the root after an argument read it last
+(() => { const o = {xs: []}; o.xs.push(o.xs.length); return 1; })()
+--- value
+1
+
+# Chains: a method that returns its receiver goes on with the same container.
+
+=== sort then reverse through a path
+(() => { const o = {a: {b: [3, 1, 2]}}; const r = o.a.b.sort((x, y) => x - y).reverse(); return [r, o]; })()
+--- value
+[[3,2,1],{"a":{"b":[3,2,1]}}]
+
+=== a chain through a path as a statement
+(() => { const o = {a: {b: [3, 1, 2]}}; o.a.b.sort((x, y) => x - y).reverse(); return o; })()
+--- value
+{"a":{"b":[3,2,1]}}
+
+=== add, add through a path
+(() => { const o = {s: new Set()}; o.s.add(1).add(2).add(1); return o; })()
+--- value
+{"s":new Set([1,2])}
+
+=== fill, reverse, then push through a path
+(() => { const o = {xs: [1, 2, 3]}; const n = o.xs.fill(0, 2).reverse().push(9); return [n, o]; })()
+--- value
+[4,{"xs":[0,2,1,9]}]
+
+=== sort through a path, then map
+(() => { const o = {xs: [3, 1, 2]}; const ys = o.xs.sort((a, b) => a - b).map(x => x * 10); return [ys, o]; })()
+--- value
+[[10,20,30],{"xs":[1,2,3]}]
+
+=== reverse through a path, then read its length
+(() => { const o = {xs: [1, 2]}; return [o.xs.reverse().length, o]; })()
+--- value
+[2,{"xs":[2,1]}]
+
+=== two chains on two paths of one root
+(() => { const o = {a: [2, 1], b: [4, 3]}; o.a.sort((x, y) => x - y).reverse(); o.b.reverse().reverse(); return o; })()
+--- value
+{"a":[2,1],"b":[4,3]}
+
+# Return values used as values.
+
+=== a path call in an array literal
+(() => { const o = {xs: [1, 2, 3]}; return [o.xs.pop(), o.xs.shift(), o.xs]; })()
+--- value
+[3,1,[2]]
+
+=== path calls as operands
+(() => { const o = {a: [], b: [1]}; return o.a.push(1) + o.b.push(2) * 10; })()
+--- value
+21
+
+=== a path call in a template
+(() => { const o = {xs: ["a"]}; return `${o.xs.push("b")}:${o.xs.join("")}`; })()
+--- value
+"2:ab"
+
+=== a path call returned
+(() => { const o = {xs: [1, 2]}; return o.xs.pop(); })()
+--- value
+2
+
+=== a path call as an arrow's body
+(o => o.xs.push(4))({xs: [1]})
+--- value
+2
+
+=== a path call as a test
+(() => { const o = {s: new Set([1])}; return o.s.delete(1) ? "had" : "had not"; })()
+--- value
+"had"
+
+=== a path call in an argument of another call
+(() => { const o = {xs: [3]}; return Math.max(o.xs.push(5), 1); })()
+--- value
+2
+
+=== a path call in an if
+(c => { const o = {xs: []}; if (c) o.xs.push(1); else o.xs.push(2); return o; })(false)
+--- value
+{"xs":[2]}
+
+=== a path call in a block
+(() => { const o = {xs: []}; { o.xs.push(1); } return o; })()
+--- value
+{"xs":[1]}
+
+=== a path call on a parameter
+(o => { o.list.push(2); return o; })({list: [1]})
+--- value
+{"list":[1,2]}
+
+=== a path call on a let given a new value
+(() => { let o = {xs: [0]}; o.xs.push(1); o = {xs: [5]}; o.xs.push(6); return o; })()
+--- value
+{"xs":[5,6]}
+
+=== a path call after an assignment along the same path
+(() => { const o = {}; o.xs = []; o.xs.push(1); o.xs[1] = 2; o.xs.push(3); return o; })()
+--- value
+{"xs":[1,2,3]}
+
+=== a path call in a module
+@module path_mutated
+const state = {xs: [1]};
+export const n = state.xs.push(2);
+export { state };
+--- value
+{"n":2,"state":{"xs":[1,2]}}
+
+# reduce, its accumulator owned by the callback.
+
+=== reduce groups into arrays under its accumulator's keys
+[{k: "a", v: 1}, {k: "b", v: 2}, {k: "a", v: 3}].reduce((acc, x) => { acc.byKey[x.k].push(x.v); return acc; }, {byKey: {a: [], b: []}})
+--- value
+{"byKey":{"a":[1,3],"b":[2]}}
+
+=== reduce makes a group on first sight, then pushes
+[{k: "x", v: 1}, {k: "y", v: 2}, {k: "x", v: 3}].reduce((acc, r) => { acc[r.k] ??= []; acc[r.k].push(r.v); return acc; }, {})
+--- value
+{"x":[1,3],"y":[2]}
+
+=== reduce adds tags to a set by id
+[["a", "t1"], ["b", "t2"], ["a", "t3"], ["a", "t1"]].reduce((state, [id, t]) => { state.byID[id] ??= {tags: new Set()}; state.byID[id].tags.add(t); return state; }, {byID: {}})
+--- value
+{"byID":{"a":{"tags":new Set(["t1","t3"])},"b":{"tags":new Set(["t2"])}}}
+
+=== reduce sorts each group at the end
+Object.entries([3, 1, 4, 1, 5, 9, 2, 6].reduce((acc, x) => { acc[x % 2 === 0 ? "even" : "odd"].push(x); return acc; }, {even: [], odd: []})).map(([k, xs]) => { const o = {k, xs: [...xs]}; o.xs.sort((a, b) => a - b); return o; })
+--- value
+[{"k":"even","xs":[2,4,6]},{"k":"odd","xs":[1,1,3,5,9]}]
+
+# Refused when compiled: the root is not owned (docs/mutation.md, "The rule").
+
+=== a path call on a global
+@global g = {xs: []}
+(() => { g.xs.push(1); return g; })()
+--- error unsupported this is a global
+
+=== a path call on an import
+@module path_importer
+import { state } from "path_mutated";
+export const f = () => { state.xs.push(3); return state; };
+--- error unsupported this is an import
+
+=== a path call on a variable captured before
+(() => { const o = {xs: []}; const f = () => o.xs.length; o.xs.push(1); return f(); })()
+--- error unsupported captured
+
+=== a path call on a variable captured after
+(() => { const o = {xs: []}; o.xs.push(1); const f = () => o.xs.length; return f(); })()
+--- error unsupported captured
+
+=== a path call on a capture of an enclosing function
+(() => { const o = {xs: []}; [1, 2].map(x => o.xs.push(x)); return o; })()
+--- error unsupported reduce
+
+=== a path call on a variable copied before
+(() => { const o = {xs: []}; const p = o; o.xs.push(1); return p; })()
+--- error unsupported copied
+
+=== a path call on a variable passed before
+(() => { const o = {xs: []}; const a = Object.keys(o); o.xs.push(1); return a; })()
+--- error unsupported passed
+
+=== a path call on a variable stored before
+(() => { const o = {xs: []}; const box = [o]; o.xs.push(1); return box; })()
+--- error unsupported stored
+
+=== a path call whose argument changes the root's variable
+(() => { const o = {a: [], b: [1]}; o.a.push(o.b.pop()); return o; })()
+--- error unsupported while it calls
+
+=== a path call whose key changes the root's variable
+(() => { const o = {a: [[], []], b: [1]}; o.a[o.b.pop()].push(1); return o; })()
+--- error unsupported while it calls
+
+=== a path call whose argument changes the root array
+(() => { const xs = [[1], [2]]; xs[0].push(xs.shift()); return xs; })()
+--- error unsupported while it calls
+
+=== an assignment whose value is a path call on its root
+(() => { const o = {a: [], n: 0}; o.n = o.a.push(1); return o; })()
+--- error unsupported while it assigns
+
+=== an assignment to another variable from a path call
+(() => { const o = {a: []}; const p = {}; p.n = o.a.push(1); return [o, p]; })()
+--- value
+[{"a":[1]},{"n":1}]
+
+=== a syntax error after a refused path call is still the program's
+(() => { const o = {xs: []}; const p = o; o.xs.push(1); return p; })(
+--- error syntax
+
+# Faults when it runs: a container held elsewhere, a missing step, a
+# step that is not an object or an array, a cycle.
+
+=== a path call on a container another variable holds
+(() => { const o = {items: [1]}; const y = o.items; o.items.push(2); return y; })()
+--- fault held elsewhere
+
+=== a path call on a root its caller holds
+(() => { const o = {xs: []}; const f = p => { p.xs.push(1); return p; }; return [f(o), o]; })()
+--- fault held elsewhere
+
+=== a path call on an element of the array a callback walks
+[{xs: [1]}, {xs: [2]}].map(o => { o.xs.push(0); return o; })
+--- fault held elsewhere
+
+=== a path call on a container held twice in the root
+(() => { const a = [1]; const o = {x: a, y: a}; o.x.push(2); return o; })()
+--- fault held elsewhere
+
+=== a path call through an inner object held twice
+(() => { const inner = {xs: []}; const o = {p: inner, q: inner}; o.p.xs.push(1); return o; })()
+--- fault held elsewhere
+
+=== a path call with a missing step
+(() => { const o = {}; o.missing.push(1); return o; })()
+--- fault cannot read a property of undefined
+
+=== a path call with a missing step before the last
+(() => { const o = {a: {}}; o.a.b.c.push(1); return o; })()
+--- fault cannot read a property of undefined
+
+=== a path call past an array's end
+(() => { const o = {rows: [[]]}; o.rows[3].push(1); return o; })()
+--- fault cannot read a property of undefined
+
+=== a path call through null
+(() => { const o = {a: null}; o.a.push(1); return o; })()
+--- fault cannot read a property of null
+
+=== a path call through a step that is a string
+(() => { const o = {s: "ab"}; o.s.x.push(1); return o; })()
+--- fault objects and arrays
+
+=== a path call through a step that is a number
+(() => { const o = {n: 1}; o.n.k.push(1); return o; })()
+--- fault objects and arrays
+
+=== a path call on a string
+(() => { const o = {s: "ab"}; o.s.push("c"); return o; })()
+--- fault changes its receiver
+
+=== a path call on a number
+(() => { const o = {n: 1}; o.n.push(2); return o; })()
+--- fault methods on arrays, strings and sets only
+
+=== a path call of a set's method on an array
+(() => { const o = {xs: [1]}; o.xs.add(2); return o; })()
+--- fault changes its receiver
+
+=== a path call of an array's method on a set
+(() => { const o = {s: new Set()}; o.s.push(2); return o; })()
+--- fault changes its receiver
+
+=== a path call through __proto__
+(() => { const o = {}; o.__proto__.push(1); return o; })()
+--- fault no prototype
+
+=== a path call through a name of Object.prototype
+(() => { const o = {}; o.toString.push(1); return o; })()
+--- fault no prototype
+
+=== a cycle through a path call
+(() => { const o = {xs: []}; o.xs.push(o); return o.xs.length; })()
+--- fault held elsewhere
+
+=== a cycle of a container into itself through a path call
+(() => { const o = {xs: []}; o.xs.push(o.xs); return o.xs.length; })()
+--- fault held elsewhere
+
+=== a cycle through fill on a path
+(() => { const o = {a: {xs: [1]}}; o.a.xs.fill(o.a); return 1; })()
+--- fault held elsewhere
+
+=== push then push through a path, on a number
+(() => { const o = {xs: []}; return o.xs.push(1).push(2); })()
+--- fault methods on arrays, strings and sets only
+
+=== push then push through a path, as a statement
+(() => { const o = {xs: []}; o.xs.push(1).push(2); return o; })()
+--- error unsupported no effect
+
+=== a sort through a path without a compare function
+(() => { const o = {xs: [2, 1]}; o.xs.sort(); return o; })()
+--- fault compare
+
+=== a path call on an object's own function
+(() => { const o = {h: {push: x => x * 2}}; return o.h.push(21); })()
+--- value
+42
+
+=== a path chain on an object's own function
+(() => { const o = {h: {add: x => x}}; return o.h.add(1).add(2); })()
+--- fault array or a set
+
+=== a path sort on an object's own function
+(() => { const o = {h: {sort: f => 1}}; return o.h.sort((a, b) => a - b); })()
+--- fault an array or a set
+
+=== a path call through an optional chain is not one
+(() => { const o = {xs: [1]}; return o?.xs.push(2); })()
+--- fault only on a variable
+
+=== a path call named by a computed key is not one
+(() => { const o = {xs: [1]}; return o.xs["push"](2); })()
+--- fault only on a variable
+
+=== a path call through an optional chain as a statement
+(() => { const o = {xs: [1]}; o?.xs.push(2); return o; })()
+--- error unsupported no effect
+
+=== a path from a call is not one
+(() => { const f = () => ({xs: []}); return f().xs.push(1); })()
+--- fault only on a variable
