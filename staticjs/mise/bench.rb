@@ -66,9 +66,7 @@ module StaticJS
     end
 
     # { 'hash' => 12 hex digits, 'fields' => { ... } }: the machine as
-    # Toolchain::Host describes it (tinyactors-napi's NapiMachine derives its
-    # signature the same way), with the compiler and the flags in place of
-    # napi's runtime.
+    # Toolchain::Host describes it, with the compiler and the flags.
     def signature
       host = Toolchain::Host.current
       fields = host.hardware.merge(host.power).merge('compiler' => Toolchain::Tool[:clang].identity,

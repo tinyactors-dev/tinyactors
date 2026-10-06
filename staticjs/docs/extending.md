@@ -253,8 +253,6 @@ Run these in `staticjs/`, with `LANG=C.UTF-8 LC_ALL=C.UTF-8` set for Ruby:
 3. After changing the build, a target or numeric code, also run
    `mise run check-freestanding`.
 4. The repository root's `mise run test` also tests other projects.
-   `tinyactors-host`'s sanitizer failure (`recorder_test.c:158`) predates
-   staticjs and is not yours.
 
 ## To add a benchmark case
 
