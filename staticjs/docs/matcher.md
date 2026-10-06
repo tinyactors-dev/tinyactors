@@ -1236,6 +1236,21 @@ takes the same group step as the bytecode path (one helper), so the key's
 text, the group's order and the faults cannot drift. Fuel: 2 per element
 against 4.
 
+### 7.3B `Array.from` with PLUCK
+
+`Array.from(items, x => x.k)` is a third consumer of PLUCK, with no new rule.
+The loop walks an array: when `items` is a set, a string or `{ length: n }`,
+the built-in first makes the array of its elements (members in order, code
+points, n undefined values) and the loop walks that copy, so 7.3's
+preconditions hold unchanged (loop entered, room for 1, element an object,
+own key or absent and not on Object.prototype). Elements that are not
+objects (every element of a string, every `undefined` of `{ length: n }`)
+fall back to the bytecode, which faults as `x.k` does. The output is sized
+to the array when the loop starts, as map's is, and the step is map's. The
+callback gets (element, index) and nothing else: a third parameter reads
+undefined, not the array, because Array.from passes no array (as
+Object.groupBy). Fuel: 2 per element against 4.
+
 ### 7.4 Measuring
 
 - The existing cases `eval.array.toSorted.rows` (`(a, b) => a.kwh - b.kwh`),
@@ -1841,7 +1856,7 @@ are charged. The changes common to all three items:
 - **`shape_start` takes a table** from built-in to the shapes it runs.
   MAP runs PLUCK; TO_SORTED runs COMPARE_BY_KEY and COMPARE_NUMERIC;
   FILTER, FIND, FIND_INDEX, FIND_LAST, FIND_LAST_INDEX, SOME and EVERY run KEY_COMPARE and
-  ELEMENT_COMPARE; REDUCE runs SUM and SUM_KEY. `Object.groupBy` runs PLUCK, as MAP does (7.3A). The table replaces the
+  ELEMENT_COMPARE; REDUCE runs SUM and SUM_KEY. `Object.groupBy` runs PLUCK, as MAP does (7.3A), and so does `Array.from` (7.3B). The table replaces the
   conditional chain, which three more cases would make unreadable.
   **Implemented with item 1** as `shape_runners`, rows of `{ builtin,
   shape }` that `shape_start` scans; a switch on the shape then reads its
