@@ -310,3 +310,96 @@ Array.from({length: 1000}, (_, i) => i % 10).reduce((acc, x) => acc + x, "").len
 (s => s + s.padEnd(4, "-") + s.repeat(2))("ab")
 --- value
 "abab--abab"
+
+# at, charAt, charCodeAt and codePointAt index UTF-16 code units. at and
+# charAt fault where the unit is half of a character outside the BMP, as
+# indexing does: staticjs strings cannot hold a lone surrogate.
+# charCodeAt and codePointAt give numbers, so they never fault on one.
+
+=== at
+["abc".at(0), "abc".at(2), "abc".at(3), "abc".at(-1), "abc".at(-3), "abc".at(-4), "".at(0), "".at(-1)]
+--- value
+["a","c",undefined,"c","a",undefined,undefined,undefined]
+
+=== at converts its index as ToIntegerOrInfinity does
+["abc".at(1.9), "abc".at(-1.5), "abc".at(NaN), "abc".at(), "abc".at(undefined), "abc".at(null), "abc".at(true), "abc".at(-0), "abc".at(Infinity) === undefined, "abc".at(-Infinity) === undefined]
+--- value
+["b","c","a","a","a","a","b","a",true,true]
+
+=== at on text outside ASCII
+["héllo".at(1), "日本".at(-1), "😀x".at(2), "x😀".at(0), "é😀é".at(-1), "é😀é".at(0)]
+--- value
+["é","本","x","x","é","é"]
+
+=== at faults on the first half of a pair
+"😀".at(0)
+--- fault half
+
+=== at faults on the second half of a pair
+"x😀".at(-1)
+--- fault half
+
+=== at faults on an index that is a string
+"abc".at("1")
+--- fault numbers
+
+=== charAt
+["abc".charAt(0), "abc".charAt(2), "abc".charAt(3), "abc".charAt(-1), "".charAt(0), "abc".charAt(1.7), "abc".charAt(NaN), "abc".charAt(), "abc".charAt(null), "abc".charAt(true), "abc".charAt(Infinity), "abc".charAt(-Infinity)]
+--- value
+["a","c","","","","b","a","a","a","b","",""]
+
+=== charAt on text outside ASCII
+["héllo".charAt(1), "日本".charAt(1), "😀x".charAt(2), "😀".charAt(2), "😀".charAt(-1)]
+--- value
+["é","本","x","",""]
+
+=== charAt faults on half of a pair
+"a😀".charAt(2)
+--- fault half
+
+=== charAt faults on an index that is an object
+"abc".charAt({})
+--- fault numbers
+
+=== charCodeAt
+["abc".charCodeAt(0), "abc".charCodeAt(), "abc".charCodeAt(2.5), "abc".charCodeAt(-0), "abc".charCodeAt(true), "abc".charCodeAt(null)]
+--- value
+[97,97,99,97,98,97]
+
+=== charCodeAt out of range is NaN
+["abc".charCodeAt(3), "abc".charCodeAt(-1), "".charCodeAt(0), "abc".charCodeAt(Infinity), "abc".charCodeAt(-Infinity), "abc".charCodeAt(NaN)]
+--- value
+[NaN,NaN,NaN,NaN,NaN,97]
+
+=== charCodeAt gives each half of a pair
+["😀".charCodeAt(0), "😀".charCodeAt(1), "é".charCodeAt(0), "日本".charCodeAt(1), "a😀b".charCodeAt(3), "￿".charCodeAt(0)]
+--- value
+[55357,56832,233,26412,98,65535]
+
+=== charCodeAt faults on an index that is a string
+"abc".charCodeAt("0")
+--- fault numbers
+
+=== codePointAt
+["abc".codePointAt(0), "abc".codePointAt(), "abc".codePointAt(1.9), "é".codePointAt(0), "日本".codePointAt(1), "abc".codePointAt(null)]
+--- value
+[97,97,98,233,26412,97]
+
+=== codePointAt out of range is undefined
+["abc".codePointAt(3) === undefined, "abc".codePointAt(-1) === undefined, "".codePointAt(0) === undefined, "abc".codePointAt(Infinity) === undefined, "abc".codePointAt(NaN)]
+--- value
+[true,true,true,true,97]
+
+=== codePointAt joins a pair from its first half only
+["😀".codePointAt(0), "😀".codePointAt(1), "a😀".codePointAt(1), "a😀".codePointAt(2), "😀😀".codePointAt(2), "😀😀".codePointAt(3), "\u{10FFFF}".codePointAt(0), "\u{10000}".codePointAt(1)]
+--- value
+[128512,56832,128512,56832,128512,56832,1114111,56320]
+
+=== codePointAt faults on an index that is a function
+"abc".codePointAt(x => 0)
+--- fault numbers
+
+=== the string methods read from an array of characters
+["a😀é", "日本"].map(s => [s.at(-1), s.charAt(0), s.charCodeAt(0), s.codePointAt(1)])
+--- value
+[["é","a",97,128512],["本","日",26085,26412]]

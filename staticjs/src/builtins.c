@@ -61,14 +61,14 @@ static const sjs_name NAMES[] = {
     NAME("__proto__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
     NAME_MUTATION("add", SJS_NAME_ON_SET | SJS_NAME_MUTATING, SJS_METHOD_SET_ADD), /* MUTATION */
     NAME("anchor", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("at", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_AT, 0, 0),
+    NAME("at", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_AT, SJS_METHOD_STRING_AT, 0),
     NAME("big", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("blink", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("bold", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("charAt", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("charCodeAt", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("charAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CHAR_AT, 0),
+    NAME("charCodeAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CHAR_CODE_AT, 0),
     NAME_MUTATION("clear", SJS_NAME_ON_SET | SJS_NAME_MUTATING, SJS_METHOD_SET_CLEAR), /* MUTATION */
-    NAME("codePointAt", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("codePointAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CODE_POINT_AT, 0),
     NAME("concat", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_CONCAT, 0, 0),
     NAME("constructor", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
     NAME("copyWithin", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
@@ -927,6 +927,10 @@ static sjs_result string_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     sjs_str s = sjs_string_view(SJS_AS_STRING(call->receiver));
     call->cost = s.length / 16u;
     switch (id) {
+    case SJS_METHOD_STRING_AT:
+    case SJS_METHOD_STRING_CHAR_AT:
+    case SJS_METHOD_STRING_CHAR_CODE_AT:
+    case SJS_METHOD_STRING_CODE_POINT_AT:
     case SJS_METHOD_STRING_PAD_END:
     case SJS_METHOD_STRING_PAD_START:
     case SJS_METHOD_STRING_REPEAT:
@@ -2149,8 +2153,70 @@ static sjs_result string_repeat(sjs_vm *vm, sjs_leaf_call *call) {
     return SJS_OK;
 }
 
+/* The UTF-16 code unit at an index in range, and the code point it is part
+ * of: its bytes are [start, end); `second` when the unit is the second half
+ * of a pair. */
+typedef struct {
+    uint32_t point;
+    uint32_t unit;
+    uint32_t start;
+    uint32_t end;
+    bool second;
+} code_unit;
+
+static code_unit unit_at(const sjs_string *s, uint32_t index) {
+    code_unit u = { 0 };
+    if (s->h.flags & SJS_STRING_ASCII) {
+        u.point = u.unit = (uint8_t)s->bytes[index];
+        u.start = index;
+        u.end = index + 1u;
+        return u;
+    }
+    sjs_str text = sjs_string_view(s);
+    u.second = !utf16_to_byte(text, index, &u.start);
+    u.end = u.start;
+    u.point = (uint32_t)sjs_utf8_next(text, &u.end);
+    if (u.point < 0x10000u) u.unit = u.point;
+    else if (u.second) u.unit = 0xDC00u + ((u.point - 0x10000u) & 0x3FFu);
+    else u.unit = 0xD800u + ((u.point - 0x10000u) >> 10);
+    return u;
+}
+
+/* at, charAt, charCodeAt and codePointAt: by UTF-16 index. at counts a
+ * negative index from the end; the others give "", NaN or undefined
+ * outside the string. A unit that is half of a pair is a number for
+ * charCodeAt and codePointAt, but cannot be a staticjs string. */
+static sjs_result string_index(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    const sjs_string *s = SJS_AS_STRING(call->receiver);
+    double index;
+    if (to_integer(vm, arg(call, 0), &index) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (id == SJS_METHOD_STRING_AT && index < 0) index += (double)s->utf16_length;
+    if (!(index >= 0 && index < (double)s->utf16_length)) {
+        if (id == SJS_METHOD_STRING_CHAR_AT) return new_string(vm, SJS_STR(""), &call->result);
+        if (id == SJS_METHOD_STRING_CHAR_CODE_AT) call->result = sjs_num(0.0 / 0.0);
+        return SJS_OK;
+    }
+    code_unit u = unit_at(s, (uint32_t)index);
+    switch (id) {
+    case SJS_METHOD_STRING_CHAR_CODE_AT:
+        call->result = sjs_num((double)u.unit);
+        return SJS_OK;
+    case SJS_METHOD_STRING_CODE_POINT_AT:
+        call->result = sjs_num((double)(u.second ? u.unit : u.point));
+        return SJS_OK;
+    default: /* AT, CHAR_AT */
+        if (u.point >= 0x10000u) return sjs_vm_fault(vm, "this index is half of a character outside the BMP");
+        return new_string(vm, (sjs_str){ s->bytes + u.start, u.end - u.start }, &call->result);
+    }
+}
+
 __attribute__((noinline)) static sjs_result string_method_tail(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     switch (id) {
+    case SJS_METHOD_STRING_AT:
+    case SJS_METHOD_STRING_CHAR_AT:
+    case SJS_METHOD_STRING_CHAR_CODE_AT:
+    case SJS_METHOD_STRING_CODE_POINT_AT:
+        return string_index(vm, id, call);
     case SJS_METHOD_STRING_PAD_END:
     case SJS_METHOD_STRING_PAD_START:
         return string_pad(vm, id, call);
