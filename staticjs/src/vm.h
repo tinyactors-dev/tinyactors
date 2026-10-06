@@ -145,6 +145,10 @@ typedef struct {
 } sjs_leaf_call;
 
 sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+/* MUTATION: a method that changes its receiver, but sort (a loop): the
+ * receiver is the value of the variable at `receiver_slot`, which holds it
+ * alone; the method updates the slot when the value moves. */
+sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 
 /* LOOP_AGAIN: the loop did a unit of work itself, without calling back
  * (a shape's C path), and stays on top to be stepped again. */

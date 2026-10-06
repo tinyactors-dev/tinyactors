@@ -196,7 +196,11 @@ static sjs_result method(sjs_vm *vm, sjs_member member, sjs_value *out) {
         const sjs_name *n = sjs_name_of(key);
         sjs_builtin_id id = sjs_method_of(n, receiver.kind);
         if (id == SJS_BUILTIN_NONE) {
-            if (n != NULL && (n->flags & SJS_NAME_MUTATING) != 0) return fault_named(vm, "staticjs values do not change, so this method is not there", name);
+            /* MUTATION: the message. Restore "staticjs values do not change, so
+             * this method is not there". */
+            if (n != NULL && (n->flags & SJS_NAME_MUTATING) != 0) {
+                return fault_named(vm, "this method changes its receiver: staticjs has some such methods, and calls them only on a variable of the function that owns its value", name);
+            }
             return fault_named(vm, "staticjs does not have this method", name);
         }
         sjs_value m = { 0 };
@@ -877,6 +881,7 @@ static void clear_callback(sjs_vm *vm) {
     }
 }
 
+
 static void finish_loop(sjs_vm *vm, vm_frame *f) {
     sjs_value result = vm->stack[f->base + LOOP_OUTPUT];
     vm->stack[f->base + LOOP_OUTPUT] = sjs_undefined();
@@ -1037,6 +1042,9 @@ static sjs_result rest_properties(sjs_vm *vm, const excluded_keys *x, sjs_value 
 /* ------------------------------------------------------------------------
  * One instruction
  */
+
+/* MUTATION: at the end of the file. */
+static void execute_other(sjs_vm *vm, vm_frame *f);
 
 static void jump_to(vm_frame *f, const uint8_t *code, uint32_t pc) {
     f->pc = sjs_read32(code + pc);
@@ -1492,7 +1500,9 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
         f->pc = pc + 6;
         return;
     default:
-        sjs_vm_fault(vm, "the program is damaged");
+        /* MUTATION: the instructions of mutation, or the fault. Restore:
+         * sjs_vm_fault(vm, "the program is damaged"). */
+        execute_other(vm, f);
         return;
     }
 }
@@ -1611,4 +1621,118 @@ void sjs_vm_destroy(sjs_vm *vm) {
     sjs_mem_free(a, vm->stack, (size_t)vm->stack_capacity * sizeof(sjs_value));
     sjs_mem_free(a, vm->frames, (size_t)vm->frame_capacity * sizeof(vm_frame));
     sjs_mem_free(a, vm, sizeof *vm);
+}
+
+/* ------------------------------------------------------------------------
+ * MUTATION: methods that change the variable they are called on
+ * (docs/mutation.md). This section exists only for it, at the end of the
+ * file, so that the code before it is laid out as it was.
+ */
+
+/* A reference to the variable at stack index `at` (SJS_OP_RECEIVER). */
+static sjs_value slot_reference(uint32_t at) {
+    return (sjs_value){ .kind = SJS_UNDEFINED, .internal = SJS_INTERNAL_SLOT, .boolean = at };
+}
+
+/* A method that returns its receiver gives the variable's value, a copy,
+ * or in a chain the reference again, for the next method to change. */
+static bool push_receiver(sjs_vm *vm, uint32_t at, bool chain) {
+    if (chain) return sjs_vm_push(vm, slot_reference(at));
+    sjs_value v = vm->stack[at];
+    sjs_ref(v);
+    return sjs_vm_push(vm, v);
+}
+
+/* METHOD_MUTATE: the callee for `x.m(...)`, with a reference to x on top:
+ * the method of x's kind that changes it, or, for a value of another kind,
+ * what an ordinary call finds (an object's property) or its fault. */
+__attribute__((noinline)) static void mutation_method(sjs_vm *vm, const sjs_string *key) {
+    sjs_value receiver = vm->stack[stack_top(vm)->boolean];
+    sjs_builtin_id id = sjs_mutation_of(sjs_name_of(key), receiver.kind);
+    sjs_value callee = { .kind = SJS_FUNCTION, .internal = SJS_INTERNAL_METHOD, .boolean = (uint32_t)id };
+    if (id == SJS_BUILTIN_NONE && method(vm, (sjs_member){ receiver, key }, &callee) != SJS_OK) return;
+    sjs_vm_push(vm, callee);
+}
+
+/* MUTATE: [reference, callee, arguments]. The variable's value must have
+ * one holder, the variable: anything else that holds it (an argument, a
+ * caller, the embedder, a closure) would see it change. */
+__attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t flags) {
+    if ((flags & SJS_CALL_SPREAD) != 0 && !expand_spread(vm, &argc)) return false;
+    uint32_t callee = vm->sp - argc - 1u;
+    uint32_t at = vm->stack[callee - 1u].boolean;
+    bool chain = (flags & SJS_CALL_CHAIN) != 0;
+    sjs_value f = vm->stack[callee];
+    if (f.internal != SJS_INTERNAL_METHOD || f.boolean < SJS_METHOD_MUTATION_FIRST) {
+        /* An object's property, called as any method is. */
+        if (chain) {
+            sjs_vm_fault(vm, "a chain of methods that change their receiver goes on only through an array or a set");
+            return false;
+        }
+        return call(vm, argc, SJS_CALL_METHOD);
+    }
+    sjs_value *slot = &vm->stack[at];
+    if (!sjs_value_unique(*slot)) {
+        sjs_vm_fault(vm, "staticjs changes a value only while one variable holds it, and this one is held elsewhere too");
+        return false;
+    }
+    sjs_builtin_id id = (sjs_builtin_id)f.boolean;
+    if (id == SJS_METHOD_ARRAY_SORT) {
+        /* toSorted's loop, which takes over a receiver it holds alone; the
+         * SORTED after this instruction puts its result back. */
+        vm->stack[callee - 1u] = *slot;
+        *slot = sjs_undefined();
+        if (!enter_loop(vm, SJS_METHOD_ARRAY_TO_SORTED, (call_site){ callee, argc, callee - 1u })) return false;
+        vm->frames[vm->frame_count - 1u].shape = SJS_SHAPE_NONE; /* the comparator runs as bytecode */
+        return true;
+    }
+    sjs_leaf_call leaf = { 0 };
+    leaf.receiver = *slot;
+    leaf.receiver_slot = slot;
+    leaf.args = &vm->stack[callee + 1u];
+    leaf.count = argc;
+    if (sjs_mutation_call(vm, id, &leaf) != SJS_OK) {
+        sjs_vm_release(vm, leaf.result);
+        return false;
+    }
+    vm->fuel_used += leaf.cost;
+    cut(vm, callee - 1u);
+    if (sjs_mutation_returns_receiver(id)) return push_receiver(vm, at, chain);
+    return sjs_vm_push(vm, leaf.result);
+}
+
+/* The instructions of mutation, reached from the default case of
+ * execute()'s switch, which they share with the fault for an opcode there
+ * is none of, so that the evaluator's loop compiles as it did. */
+__attribute__((noinline)) static void execute_other(sjs_vm *vm, vm_frame *f) {
+    const uint8_t *code = f->program->code;
+    uint32_t pc = f->pc;
+    uint8_t opcode = code[pc++];
+    switch (opcode) {
+    case SJS_OP_RECEIVER:
+        f->pc = pc + 2;
+        sjs_vm_push(vm, slot_reference(f->base + sjs_read16(code + pc)));
+        return;
+    case SJS_OP_METHOD_MUTATE:
+        f->pc = pc + 4;
+        mutation_method(vm, SJS_AS_STRING(f->program->constants[sjs_read32(code + pc)]));
+        return;
+    case SJS_OP_MUTATE:
+        f->pc = pc + 3;
+        mutate(vm, sjs_read16(code + pc), code[pc + 2]);
+        return;
+    case SJS_OP_SORTED: {
+        /* The variable, undefined while toSorted's loop sorted its value,
+         * holds the sorted array again. */
+        f->pc = pc + 3;
+        uint32_t at = f->base + sjs_read16(code + pc);
+        vm->stack[at] = sjs_vm_pop(vm);
+        push_receiver(vm, at, (code[pc + 2] & SJS_CALL_CHAIN) != 0);
+        return;
+    }
+    default:
+        /* Restore this fault alone in execute()'s default case. */
+        sjs_vm_fault(vm, "the program is damaged");
+        return;
+    }
 }

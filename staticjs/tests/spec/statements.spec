@@ -563,11 +563,11 @@ y = 1; return y; })
 === let and a name on the next line as the body of an if
 (x => { if (x) let
 y = 1; return 0; })
---- error unsupported expression statement
+--- error unsupported does not have this
 
 === let alone as the body of an if
 (x => { if (x) let; return 0; })
---- error unsupported expression statement
+--- error unsupported does not have this
 
 === a name that starts with else
 (x => { if (x) return 1; elsewhere; })
@@ -584,7 +584,7 @@ y = 1; return 0; })
 === let as an expression statement before a block
 (x => { if (x) let
 {} })
---- error unsupported expression statement
+--- error unsupported does not have this
 
 === a comma in a condition
 (x => { if (x, 1) return 1; })

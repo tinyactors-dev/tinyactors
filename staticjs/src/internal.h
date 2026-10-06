@@ -196,7 +196,11 @@ typedef struct {
 enum {
     SJS_INTERNAL_NONE = 0,
     SJS_INTERNAL_SPREAD,   /* an argument to splice into a call */
-    SJS_INTERNAL_METHOD    /* a built-in method; boolean holds its id */
+    SJS_INTERNAL_METHOD,   /* a built-in method; boolean holds its id */
+    /* MUTATION: a reference to a variable's slot, the receiver of a method
+     * that changes it (SJS_OP_RECEIVER); boolean holds the slot's index in
+     * the stack. Its kind is undefined, so releasing it releases nothing. */
+    SJS_INTERNAL_SLOT
 };
 
 #define SJS_AS_STRING(v) ((sjs_string *)(void *)(v).as.heap)
@@ -378,7 +382,19 @@ typedef enum {
     SJS_METHOD_SET_INTERSECTION,
     SJS_METHOD_SET_IS_SUBSET_OF,
     SJS_METHOD_SET_SYMMETRIC_DIFFERENCE,
-    SJS_METHOD_SET_UNION
+    SJS_METHOD_SET_UNION,
+    /* MUTATION: methods that change their receiver, called only through a
+     * reference to the variable that owns it (SJS_OP_MUTATE), never through
+     * sjs_builtin_call. Arrays', then sets'. */
+    SJS_METHOD_MUTATION_FIRST,
+    SJS_METHOD_ARRAY_FILL = SJS_METHOD_MUTATION_FIRST,
+    SJS_METHOD_ARRAY_POP,
+    SJS_METHOD_ARRAY_PUSH,
+    SJS_METHOD_ARRAY_REVERSE,
+    SJS_METHOD_ARRAY_SHIFT,
+    SJS_METHOD_ARRAY_SORT,
+    SJS_METHOD_ARRAY_UNSHIFT,
+    SJS_METHOD_SET_ADD
 } sjs_builtin_id;
 
 /* The built-in function `Namespace.name` or bare `name`; NONE if unknown. */
@@ -401,6 +417,8 @@ typedef struct {
     sjs_str name;
     uint8_t flags;      /* SJS_NAME_* */
     uint8_t methods[3]; /* the staticjs method on an array, a string, a set; 0 if none */
+    uint8_t mutation;   /* MUTATION: the method that changes its receiver, of the one kind
+                         * that has it (SJS_METHOD_MUTATION_FIRST on); 0 if none */
 } sjs_name;
 
 /* The entry of `text` plus one, or 0 when it has none. */
@@ -414,6 +432,15 @@ sjs_builtin_id sjs_method_of(const sjs_name *name, uint8_t kind);
 /* The immortal function value of a built-in function. */
 sjs_value sjs_builtin_value(sjs_builtin_id id);
 bool sjs_builtin_loops(sjs_builtin_id id);
+/* MUTATION: the method `name` names that changes a receiver of kind `kind`
+ * (SJS_ARRAY or SJS_SET); NONE if it names none. sjs_mutation_named: the
+ * one of whichever kind has it, what the compiler knows from the name. */
+sjs_builtin_id sjs_mutation_of(const sjs_name *name, uint8_t kind);
+sjs_builtin_id sjs_mutation_named(const sjs_name *name);
+/* MUTATION: does the method return its receiver (sort, reverse, fill, add),
+ * rather than something else (push and unshift a length, pop and shift an
+ * element)? */
+bool sjs_mutation_returns_receiver(sjs_builtin_id id);
 
 /* ========================================================================
  * Programs
@@ -468,12 +495,21 @@ typedef enum {
     SJS_OP_PATTERN_REST_OBJECT, /* u32 constant (array of keys, or UINT32_MAX), u16 n:
                                  * [source, n keys] -> [source, object of the other properties] */
     SJS_OP_DEFAULT,        /* u32 target: not undefined: jump, keeping it; else pop it */
-    SJS_OP_DEFAULT_LOCAL   /* u16 slot, u32 target: the slot is not undefined: jump */
+    SJS_OP_DEFAULT_LOCAL,  /* u16 slot, u32 target: the slot is not undefined: jump */
+    /* MUTATION: a method that changes the variable it is called on. */
+    SJS_OP_RECEIVER,       /* u16 slot: push a reference to the slot (SJS_INTERNAL_SLOT) */
+    SJS_OP_METHOD_MUTATE,  /* u32 constant (string): [reference] -> [reference, callee] */
+    SJS_OP_MUTATE,         /* u16 argc, u8 flags (SPREAD, CHAIN): call it, the slot's value
+                            * held by the slot alone; a method that returns its receiver
+                            * gives a copy of it, or with CHAIN the reference again */
+    SJS_OP_SORTED          /* u16 slot, u8 flags (CHAIN): after a MUTATE of sort, whose
+                            * result it pops into the slot; then as MUTATE gives it */
 } sjs_opcode;
 
 /* SJS_OP_CALL flags. */
 #define SJS_CALL_METHOD 1u
 #define SJS_CALL_SPREAD 2u
+#define SJS_CALL_CHAIN 4u   /* MUTATION: SJS_OP_MUTATE: the receiver goes on to the next mutation */
 
 /* SJS_OP_OBJECT_LITERAL flags. */
 #define SJS_LITERAL_ABOVE 1u  /* one value is above the literal's values: a spread's source or a computed key */

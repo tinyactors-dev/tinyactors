@@ -22,10 +22,12 @@ too; and 100,000 doubles must format as `String(x)` does.
 
 ## What it guarantees
 
-- **No side effects.** There is no assignment, no mutating method, no
-  statements but `const`, `if`, blocks and `return`, and no way to reach
-  anything that is not passed in. Values cannot change once they are
-  shared.
+- **No side effects.** There is no assignment, no statements but `const`,
+  `if`, blocks, `return` and a call that changes a variable, and no way to
+  reach anything that is not passed in. Values are never changed once
+  shared: a function changes only a value that a variable of its own holds
+  alone, with one of its methods (`xs.push(x)`, `s.add(x)`), which no one
+  else can see ([docs/mutation.md](docs/mutation.md)).
 - **Every evaluation ends.** Loops are built-ins over collections that
   already exist; code jumps only forward. A function cannot refer to itself
   or to a later `const`
@@ -47,7 +49,8 @@ too; and 100,000 doubles must format as `String(x)` does.
   export or a value a native keeps is always another holder, so it is
   copied. No program can tell the difference, and fuel can only go down:
   `{...acc, [k]: v}` in a `reduce` no longer copies the accumulator at each
-  step.
+  step. Owned mutation (below) relies on the same count: `acc.push(x)` in a
+  `reduce` changes the accumulator the callback holds alone.
 - **Shapes change speed and fuel, never a value or a fault.** `toSorted`
   with a comparator `(a, b) => a.key - b.key` (or `b.key - a.key`) and
   `map` with `x => x.key` run the callback in C while each step's
@@ -165,6 +168,17 @@ Built-ins:
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
 | functions | `String` `Boolean` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN` |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign`, and its constants |
+| changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill`; sets: `add` |
+
+**Owned mutation.** A method that changes its receiver may be called on a
+variable that the function owns: a parameter or a `const` of the function,
+never captured by an arrow function, and never copied, passed or stored
+before the call. Such a call, or a chain of them (`s.add(1).add(2)`), may
+also be a statement. The compiler refuses any other receiver it can see is
+shared, and the evaluator faults when the variable's value has another
+holder: a caller, the embedder, a module's export, or itself
+(`xs.push(xs)`). The rules, the check and how to roll it back are in
+[docs/mutation.md](docs/mutation.md).
 
 The embedder can add functions (`sjs_function_native`), such as SCXML's
 `In()`. They are the one way into a program from outside.
@@ -192,6 +206,11 @@ compare identities, or find something on a prototype.
   (`import * as ns`) is an object too: `ns.toString` and `"valueOf" in ns`
   fault where JavaScript finds nothing, and so does turning a namespace into
   a string.
+- A method that changes its receiver on a value something else holds
+  (a caller's argument, a global, a module's export, an element of an
+  array, an argument that is the receiver), or on a receiver that is not a
+  variable (`[1].push(2)`, `xs?.push(1)`). `sort()` without a compare
+  function, as `toSorted()`.
 - `toSorted()` without a compare function; `toLowerCase()` of a string
   that is not ASCII; slicing a string through the middle of a surrogate pair.
 - A number literal outside Clinger's fast path (digits worth more than
@@ -219,7 +238,10 @@ staticjs does not bind; in a module they are syntax errors.
 
 Among the statements: loops, `switch`, `throw`, `try`, `let` and `var`,
 labels, function and class declarations, and expression statements, which
-can have no effect, are unsupported; `break` and `continue` are syntax
+can have no effect, are unsupported, but for a call that changes a variable
+the function owns (and the mutation of a variable the function does not
+own, or that was captured, copied, passed or stored before it, is
+unsupported too: docs/mutation.md); `break` and `continue` are syntax
 errors, as staticjs has no loop for them to leave, but for `break name`
 inside the label `name`, which is unsupported with it. A label inside one
 of the same name is a syntax error, as in JavaScript. A declaration
@@ -236,8 +258,10 @@ JavaScript would throw only if it ran.
 After JavaScript staticjs leaves out, the parser reads on where it can,
 sending nothing more: past an assignment, the comma operator, an operator
 staticjs does not have, `this`, `new.target`, a method in an object
-literal, an expression statement, a label, and an `if` or a block at a
-module's top level. So a program that is not JavaScript further on, such
+literal, an expression statement that is not a call, a label, and an `if`
+or a block at a module's top level. An expression statement that is a call
+is sent, and the compiler, refusing it unless it changes a variable, reads
+on the same way. So a program that is not JavaScript further on, such
 as `([a.b = 1]) => 0`, `a = 1 = 2` or `x => { a b; }`, is a syntax error,
 not unsupported. It stops at the first refusal where it cannot read on: a loop,
 `switch`, `try` or another statement staticjs does not have, a

@@ -67,6 +67,7 @@ event BLOCK_STATEMENT_END close;
 event IF open 1 IF_END item;            # the test is its first child; an else-if's IF is its own event
 event ELSE inner chain: count;
 event IF_END close;
+event EXPRESSION_STATEMENT postfix 1 item;  # MUTATION: a statement that changes a variable
 event BIND leaf item name: name;
 event ARRAY_PATTERN_BEGIN open 0 ARRAY_PATTERN_END item;
 event PATTERN_INDEX inner index: count;

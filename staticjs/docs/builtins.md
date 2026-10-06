@@ -68,7 +68,9 @@ For a loop built-in:
    of giving `undefined`. If the name is missing, add it in byte order;
    `names_test` checks the order and fails on a mistake. The flags say which
    prototypes have the name and whether the method changes its receiver
-   (`SJS_NAME_MUTATING`, which faults).
+   (`SJS_NAME_MUTATING`, which faults, unless the name's `mutation` column
+   names a method that changes a variable the function owns:
+   `docs/mutation.md`).
 3. If it calls back, add it to `sjs_builtin_loops`.
 
 The compiler marks a key constant with its entry (`SJS_STRING_NAMED`), so
@@ -179,9 +181,12 @@ callback's own instructions.
   `ToNumber` or a prototype method on an object, staticjs faults. A built-in
   that accepted an object and coerced it would be returning a different
   value.
-- **Refuse mutating methods** (`push`, `sort`, `splice`, `add`, ...) by
-  name (`SJS_NAME_MUTATING`). Do not implement them as copies: in
-  JavaScript they change the receiver and return something else.
+- **Mutating methods** (`push`, `sort`, `splice`, `add`, ...) change the
+  receiver and return something else in JavaScript, so never implement
+  them as copies. One that changes a variable the function owns is a
+  mutation (`docs/mutation.md`): called through `SJS_OP_MUTATE` with the
+  variable's slot, never through `sjs_builtin_call`, and tagged
+  `MUTATION`. Every other one faults by name (`SJS_NAME_MUTATING`).
 
 ## 8. Measure it
 

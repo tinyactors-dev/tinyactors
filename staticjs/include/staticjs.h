@@ -306,6 +306,13 @@ SJS_API sjs_result sjs_function_native(sjs_context *context, sjs_native native, 
  *
  * ELSE comes even when the alternative is `;`. A branch in braces is a
  * BLOCK_STATEMENT, with a scope of its own; a branch without braces has none.
+ *
+ * MUTATION: an expression statement's value comes before
+ * EXPRESSION_STATEMENT, sent only for a statement whose expression, as a
+ * whole, is a call (a method that changes its receiver, docs/mutation.md);
+ * any other is refused:
+ *
+ *   x.m(a);                   <x.m(a)> EXPRESSION_STATEMENT
  */
 
 typedef enum {
@@ -364,6 +371,7 @@ typedef enum {
     SJS_EV_ELSE,             /* after the consequent; count 1: else if, whose test and IF
                               * follow and continue the chain, which one IF_END ends */
     SJS_EV_IF_END,           /* after the last branch of an if or an else-if chain */
+    SJS_EV_EXPRESSION_STATEMENT, /* MUTATION: after the value of a statement that is a call */
     /* Patterns: each one takes the value before it. A target's default
      * value comes before its pattern, as it is evaluated first. */
     SJS_EV_BIND,             /* text: the name bound */

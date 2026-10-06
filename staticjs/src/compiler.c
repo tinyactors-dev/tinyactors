@@ -74,11 +74,16 @@
 /* Kinds of binding. */
 enum { B_LOCAL = 0, B_CONSTANT };
 
+/* MUTATION: what the function has done with a binding's value so far, as
+ * owned mutation needs to know (docs/mutation.md, "The rule"). */
+enum { USE_MUTATED = 1, USE_CAPTURED = 2, USE_COPIED = 4, USE_PASSED = 8, USE_STORED = 16 };
+
 typedef struct {
     uint32_t name_offset;
     uint32_t name_length;
     uint32_t index;        /* local slot, or constant */
     uint8_t kind;
+    uint8_t use;           /* MUTATION: USE_* */
 } binding;
 
 /* An index from names to numbers: open addressing with linear probing. The
@@ -154,6 +159,12 @@ typedef struct {
     uint32_t depth;        /* K_CHAIN: the chain's depth */
     uint32_t jumps_base;   /* K_CHAIN, K_IF: its jumps, in c->jumps */
     uint32_t param;        /* K_DEFAULT: the parameter's slot + 1, or 0 for an element's */
+    /* MUTATION: K_CALL: a method that changes the variable `receiver` (a
+     * binding), whether it returns its receiver, and whether it sorts. */
+    uint8_t mutate;
+    uint8_t returns;
+    uint8_t sorts;
+    uint32_t receiver;
 } construct;
 
 /* An array or object pattern being compiled. An object pattern keeps its
@@ -203,6 +214,29 @@ typedef struct {
     sjs_value exports;
     sjs_position at;
 } star_source;
+
+/* MUTATION: the instruction read_name compiled last, from `pc` to `end`,
+ * and what it read: a slot of this function, a capture, a global or an
+ * import (NR_*); `which` is its binding, or the global. */
+enum { NR_NONE = 0, NR_OWN, NR_CAPTURE, NR_GLOBAL, NR_IMPORT };
+
+typedef struct {
+    uint32_t pc;
+    uint32_t end;
+    uint32_t which;
+    uint8_t kind;
+    sjs_position at;
+} name_read;
+
+/* MUTATION: the last mutation's last instruction (SJS_OP_MUTATE, or the
+ * SJS_OP_SORTED after a sort), from `pc` to `end`, of binding `receiver`;
+ * `returns`: its method returns the receiver. */
+typedef struct {
+    uint32_t pc;
+    uint32_t end;
+    uint32_t receiver;
+    uint8_t returns;
+} mutation_site;
 
 /* Names to sort as a namespace sorts its keys; rank and index break ties.
  * Rank 0: exports[index]. Rank 1: key `entry` of stars[index]'s module. */
@@ -283,6 +317,15 @@ struct sjs_compiler {
     uint32_t unbound_offset;
     uint32_t unbound_length;
     sjs_position unbound_at;
+    /* MUTATION: the last name read and the last mutation, for a call to
+     * find its receiver; a read of a binding (plus one) whose use the next
+     * event tells; and a refusal the compiler reads on after, as the parser
+     * does, reported at the end unless a syntax error comes first. */
+    name_read last_name;
+    mutation_site last_mutation;
+    uint32_t pending_read;
+    bool refusing;
+    sjs_error_slot refusal;
 };
 
 static const sjs_allocator *alloc(sjs_compiler *c) {
@@ -774,19 +817,119 @@ static sjs_result find_capture(sjs_compiler *c, capture *made) {
     return buf_add(c, &c->pending_captures, bytes_of(made, sizeof *made));
 }
 
+/* MUTATION: owned mutation (docs/mutation.md). Everything from here to
+ * "MUTATION ends" exists only for it. */
+
+/* Refuse the program, as unsupported, and read on: the compiler takes no
+ * more events but the END, where it reports this (on_event), so that a
+ * syntax error the parser finds later is still the program's error. */
+typedef struct {
+    const char *message;
+    sjs_str subject;
+} refusal;
+
+static sjs_result refuse_later(sjs_compiler *c, sjs_position at, refusal why) {
+    if (c->refusing) return SJS_OK;
+    sjs_error_set(&c->refusal, at, (sjs_problem){ SJS_ERROR_UNSUPPORTED, why.message });
+    sjs_error_subject(&c->refusal, why.subject);
+    c->refusing = true;
+    return SJS_OK;
+}
+
+static sjs_str binding_name(const sjs_compiler *c, uint32_t which) {
+    const binding *b = &SJS_BUF_AT(c->bindings, binding, which);
+    return (sjs_str){ (const char *)c->names.ptr + b->name_offset, b->name_length };
+}
+
+static const char *const refused_captured =
+    "staticjs changes a variable's value only while the variable holds it alone, and a function captured this one: build the value with reduce instead";
+
+/* Why a mutation of the binding is refused, from what was done with it
+ * before; NULL when nothing was. */
+static const char *refused_use(uint8_t use) {
+    if ((use & USE_CAPTURED) != 0) return refused_captured;
+    if ((use & USE_COPIED) != 0) return "staticjs changes a variable's value only while the variable holds it alone, and this one was copied before";
+    if ((use & USE_PASSED) != 0) return "staticjs changes a variable's value only while the variable holds it alone, and this one was passed to a function before";
+    if ((use & USE_STORED) != 0) return "staticjs changes a variable's value only while the variable holds it alone, and this one was stored in an array or an object before";
+    return NULL;
+}
+
+/* A binding of an enclosing function is captured: refused if it was
+ * changed, and noted, so that a later change is refused. */
+static sjs_result note_capture(sjs_compiler *c, uint32_t which, sjs_position at) {
+    binding *b = &SJS_BUF_AT(c->bindings, binding, which);
+    b->use |= USE_CAPTURED;
+    if ((b->use & USE_MUTATED) != 0) return refuse_later(c, at, (refusal){ refused_captured, binding_name(c, which) });
+    return SJS_OK;
+}
+
+/* The event after a read of a binding of this function says what the read
+ * does with its value: one it may keep is noted. Every other event keeps
+ * nothing: a member, a spread, a pattern, an operator, a test, a return,
+ * or an operand that an index or an operator consumes with the value. */
+static void note_use(sjs_compiler *c, uint32_t kind) {
+    binding *b = &SJS_BUF_AT(c->bindings, binding, c->pending_read - 1u);
+    c->pending_read = 0;
+    switch (kind) {
+    case SJS_EV_ARGUMENT:
+        b->use |= USE_PASSED;
+        break;
+    case SJS_EV_ELEMENT:
+    case SJS_EV_PROPERTY:
+        b->use |= USE_STORED;
+        break;
+    case SJS_EV_BIND:
+    case SJS_EV_DEFAULT_END:
+    case SJS_EV_EXPORT_DEFAULT:
+    case SJS_EV_LOGICAL:
+    case SJS_EV_LOGICAL_END:
+    case SJS_EV_CONDITIONAL_ELSE:
+    case SJS_EV_CONDITIONAL_END:
+        b->use |= USE_COPIED;
+        break;
+    default:
+        break;
+    }
+}
+
+static void note_read(sjs_compiler *c, name_read read) {
+    read.end = here(c);
+    c->last_name = read;
+}
+
+/* MUTATION ends. */
+
 /* Read a name: a local, a capture, a constant, a global or a built-in. The
  * name is noted as read in every scope it is looked for in, blocks
  * included, so that a later declaration there is refused. */
 static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
     uint32_t count = scope_count(c);
     uint32_t inner = count - 1;
+    /* MUTATION: what is read, for a call to find its receiver. */
+    name_read read = { here(c), 0, 0, NR_NONE, e->at };
     for (uint32_t s = count; s-- > 0;) {
         uint32_t i;
         if (index_find(&SJS_BUF_AT(c->scopes, scope, s).names, e->text, &i)) {
             binding *b = &SJS_BUF_AT(c->bindings, binding, i);
-            if (b->kind == B_CONSTANT) return op32(c, ins(SJS_OP_CONSTANT, b->index, e->at));
+            read.which = i;
+            if (b->kind == B_CONSTANT) {
+                if (op32(c, ins(SJS_OP_CONSTANT, b->index, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+                read.kind = NR_IMPORT; /* MUTATION */
+                note_read(c, read);
+                return SJS_OK;
+            }
             uint32_t owner = SJS_BUF_AT(c->scopes, scope, s).function_scope;
-            if (owner == current(c)->function_scope) return read_slot(c, b->index, e->at);
+            if (owner == current(c)->function_scope) {
+                if (read_slot(c, b->index, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+                /* MUTATION: the next event tells what the read does. */
+                read.kind = NR_OWN;
+                note_read(c, read);
+                c->pending_read = i + 1u;
+                return SJS_OK;
+            }
+            /* MUTATION */
+            if (note_capture(c, i, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+            read.kind = NR_CAPTURE;
             /* Captured: through every function between. The CLOSURE that
              * makes the outermost of them reads the slot, after any LOCAL of
              * it emitted so far, as its function emits nothing until then. */
@@ -805,12 +948,21 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
                 from_capture = 1;
                 index = made.own;
             }
-            return op16(c, ins(SJS_OP_CAPTURE, index, e->at));
+            if (op16(c, ins(SJS_OP_CAPTURE, index, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+            note_read(c, read); /* MUTATION */
+            return SJS_OK;
         }
         if (note_outer_ref(c, s, e) != SJS_OK) return SJS_ERR_PROGRAM;
     }
     uint32_t global;
-    if (index_find(&c->global_index, e->text, &global)) return op16(c, ins(SJS_OP_GLOBAL, global, e->at));
+    if (index_find(&c->global_index, e->text, &global)) {
+        if (op16(c, ins(SJS_OP_GLOBAL, global, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+        /* MUTATION */
+        read.kind = NR_GLOBAL;
+        read.which = global;
+        note_read(c, read);
+        return SJS_OK;
+    }
     if (sjs_str_equal(e->text, SJS_STR("undefined"))) return op(c, SJS_OP_UNDEFINED_, e->at);
     if (sjs_str_equal(e->text, SJS_STR("NaN"))) return number_constant(c, 0.0 / 0.0, e->at);
     if (sjs_str_equal(e->text, SJS_STR("Infinity"))) return number_constant(c, 1.0 / 0.0, e->at);
@@ -1647,13 +1799,85 @@ static sjs_result object_end(sjs_compiler *c, const sjs_event *e) {
  * Events
  */
 
+/* MUTATION: `x.m(` where m names a method that changes its receiver
+ * (sjs_mutation_of), the GET_MEMBER of m at c->last_op. A mutation when x
+ * is a variable this function owns, read just before, or the value a
+ * mutation of one returned its receiver as: then the read becomes a
+ * RECEIVER, and m's GET_MEMBER a METHOD_MUTATE. Refused when x is a name
+ * the function does not own; any other receiver is an ordinary method call
+ * (false), which faults when it runs on an array or a set. */
+static bool mutation_begin(sjs_compiler *c, construct *k) {
+    uint32_t member = c->last_op;
+    const sjs_string *key = SJS_AS_STRING(SJS_BUF_AT(c->constants, sjs_value, sjs_read32(c->code.ptr + member + 1u)));
+    sjs_builtin_id id = sjs_mutation_named(sjs_name_of(key));
+    if (id == SJS_BUILTIN_NONE) return false;
+    const name_read *read = &c->last_name;
+    const mutation_site *chain = &c->last_mutation;
+    if (read->end == member && c->last_label <= read->pc && read->kind != NR_NONE) {
+        if (read->kind == NR_GLOBAL) {
+            refuse_later(c, read->at, (refusal){ "staticjs changes only a value a variable of the function holds, and this is a global", c->globals[read->which] });
+            return false;
+        }
+        sjs_str name = binding_name(c, read->which);
+        if (read->kind == NR_IMPORT) {
+            refuse_later(c, read->at, (refusal){ "staticjs changes only a value a variable of the function holds, and this is an import", name });
+            return false;
+        }
+        binding *b = &SJS_BUF_AT(c->bindings, binding, read->which);
+        const char *why = read->kind == NR_CAPTURE ? refused_captured : refused_use(b->use);
+        if (why != NULL) {
+            refuse_later(c, read->at, (refusal){ why, name });
+            return false;
+        }
+        b->use |= USE_MUTATED;
+        c->code.ptr[read->pc] = SJS_OP_RECEIVER;
+        k->receiver = read->which;
+    } else if (chain->end == member && c->last_label <= chain->pc && chain->returns) {
+        /* The receiver goes on as the reference it was. */
+        c->code.ptr[chain->pc + 3u] |= SJS_CALL_CHAIN;
+        k->receiver = chain->receiver;
+    } else {
+        return false;
+    }
+    c->code.ptr[member] = SJS_OP_METHOD_MUTATE;
+    k->mutate = 1;
+    k->returns = sjs_mutation_returns_receiver(id) ? 1u : 0u;
+    k->sorts = id == SJS_METHOD_ARRAY_SORT ? 1u : 0u;
+    return true;
+}
+
+/* MUTATION: the call of a mutation: MUTATE, after its arguments, and for
+ * a sort SORTED, which puts the sorted array back. The mutation reads the
+ * slot after them, so no read of it among them moves its value
+ * (forget_read). A method that returns its receiver gives a copy of the
+ * variable's value, a read whose use the next event tells. The last
+ * instruction's flags take CHAIN (mutation_begin). */
+static sjs_result mutation_end(sjs_compiler *c, const construct *k, const sjs_event *e) {
+    if (op(c, SJS_OP_MUTATE, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    uint32_t pc = c->last_op;
+    if (u16(c, (uint16_t)e->count) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (u8(c, k->spread ? SJS_CALL_SPREAD : 0u) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (k->sorts) {
+        if (op16(c, ins(SJS_OP_SORTED, SJS_BUF_AT(c->bindings, binding, k->receiver).index, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+        pc = c->last_op;
+        if (u8(c, 0) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    c->last_op_valid = false;
+    c->last_mutation = (mutation_site){ pc, here(c), k->receiver, k->returns };
+    forget_read(c, current(c)->function_scope, SJS_BUF_AT(c->bindings, binding, k->receiver).index);
+    if (k->returns) c->pending_read = k->receiver + 1u;
+    return SJS_OK;
+}
+
 static sjs_result call_begin(sjs_compiler *c, const sjs_event *e) {
     construct k = { 0 };
     k.kind = K_CALL;
     /* `a.b(...)` and `a[b](...)` call with a receiver. */
     if (c->last_op_valid && c->last_label <= c->last_op) {
         uint8_t *last = c->code.ptr + c->last_op;
-        if (*last == SJS_OP_GET_MEMBER) {
+        if (*last == SJS_OP_GET_MEMBER && mutation_begin(c, &k)) {
+            /* MUTATION: a method that changes the variable it is called on. */
+        } else if (*last == SJS_OP_GET_MEMBER) {
             *last = SJS_OP_METHOD_MEMBER;
             k.method = 1;
         } else if (*last == SJS_OP_GET_INDEX) {
@@ -1669,6 +1893,7 @@ static sjs_result call_end(sjs_compiler *c, const sjs_event *e, uint8_t opcode) 
     if (expect_construct(c, kind, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
     construct k = pop_construct(c);
     if (e->count > UINT16_MAX) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_LIMIT, "a call has too many arguments" });
+    if (k.mutate) return mutation_end(c, &k, e); /* MUTATION */
     if (op(c, opcode, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
     if (u16(c, (uint16_t)e->count) != SJS_OK) return SJS_ERR_PROGRAM;
     uint8_t flags = (uint8_t)((k.method ? SJS_CALL_METHOD : 0u) | (k.spread ? SJS_CALL_SPREAD : 0u));
@@ -1821,6 +2046,16 @@ static sjs_result compile_return(sjs_compiler *c, const sjs_event *e) {
     return op(c, SJS_OP_RETURN, e->at);
 }
 
+/* MUTATION: EXPRESSION_STATEMENT, after a call: the statement is a
+ * mutation, or a chain of them, whose value goes; any other is refused. */
+static sjs_result compile_expression_statement(sjs_compiler *c, const sjs_event *e) {
+    if (!statement_level(c)) return out_of_order(c, e->at);
+    if (c->last_mutation.end != here(c) || c->last_label > c->last_mutation.pc) {
+        return refuse_later(c, e->start, (refusal){ "an expression statement has no effect in staticjs, unless it changes a variable with one of its methods", SJS_STR("") });
+    }
+    return op(c, SJS_OP_POP, e->at);
+}
+
 /* BLOCK_END: falling off the end of a body returns undefined. */
 static sjs_result compile_body_end(sjs_compiler *c, const sjs_event *e) {
     if (expect_construct(c, K_FUNCTION, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
@@ -1867,6 +2102,7 @@ static sjs_result end(sjs_compiler *c, const sjs_event *e) {
 }
 
 static sjs_result event(sjs_compiler *c, const sjs_event *e) {
+    if (c->pending_read != 0) note_use(c, e->kind); /* MUTATION */
     if (c->space != NS_NONE && e->kind != SJS_EV_MEMBER) {
         return compile_fail(c, c->space_at, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "Math, Object, Number and Array are used only as Math.name" });
     }
@@ -2001,6 +2237,8 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
         return compile_else(c, e);
     case SJS_EV_IF_END:
         return compile_if_end(c, e);
+    case SJS_EV_EXPRESSION_STATEMENT: /* MUTATION */
+        return compile_expression_statement(c, e);
     case SJS_EV_CONST_BEGIN:
         return compile_const_begin(c, e);
     case SJS_EV_CONST_END:
@@ -2027,6 +2265,14 @@ static sjs_result on_event(void *self, const sjs_event *e) {
     sjs_compiler *c = self;
     if (c->failed) return SJS_ERR_PROGRAM;
     if (c->ended) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_SYNTAX, "an event after the end" });
+    if (c->refusing) {
+        /* MUTATION: refuse_later: read on, and report it at the end. */
+        if (e->kind != SJS_EV_END) return SJS_OK;
+        c->error = c->refusal;
+        c->error.error.subject.ptr = c->error.subject;
+        c->failed = true;
+        return SJS_ERR_PROGRAM;
+    }
     if (c->matching) {
         /* The matcher sees the event first: a report about the function an
          * ARROW_END closes comes while it is still open here. */

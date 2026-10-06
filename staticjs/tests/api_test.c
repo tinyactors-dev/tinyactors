@@ -475,7 +475,8 @@ static const char *const event_names[SJS_EV_END + 1] = {
     [SJS_EV_PARAMS_END] = "PARAMS_END", [SJS_EV_ARROW_END] = "ARROW_END", [SJS_EV_BLOCK_BEGIN] = "BLOCK_BEGIN",
     [SJS_EV_RETURN] = "RETURN", [SJS_EV_BLOCK_END] = "BLOCK_END", [SJS_EV_BLOCK_STATEMENT_BEGIN] = "BLOCK_STATEMENT_BEGIN",
     [SJS_EV_BLOCK_STATEMENT_END] = "BLOCK_STATEMENT_END", [SJS_EV_IF] = "IF", [SJS_EV_ELSE] = "ELSE",
-    [SJS_EV_IF_END] = "IF_END", [SJS_EV_BIND] = "BIND", [SJS_EV_ARRAY_PATTERN_BEGIN] = "ARRAY_PATTERN_BEGIN",
+    [SJS_EV_IF_END] = "IF_END", [SJS_EV_EXPRESSION_STATEMENT] = "EXPRESSION_STATEMENT", /* MUTATION */
+    [SJS_EV_BIND] = "BIND", [SJS_EV_ARRAY_PATTERN_BEGIN] = "ARRAY_PATTERN_BEGIN",
     [SJS_EV_PATTERN_INDEX] = "PATTERN_INDEX", [SJS_EV_ARRAY_PATTERN_END] = "ARRAY_PATTERN_END",
     [SJS_EV_OBJECT_PATTERN_BEGIN] = "OBJECT_PATTERN_BEGIN", [SJS_EV_PATTERN_KEY] = "PATTERN_KEY",
     [SJS_EV_PATTERN_COMPUTED_KEY] = "PATTERN_COMPUTED_KEY", [SJS_EV_PATTERN_REST] = "PATTERN_REST",
@@ -1716,6 +1717,127 @@ static void test_shape_paths(void) {
 
 /* Fail every allocation in turn: each run ends with an error, never a
  * crash, and frees all it took. */
+/* ------------------------------------------------------------------------
+ * MUTATION: owned mutation (docs/mutation.md).
+ */
+
+/* A statement that is a call is sent, with EXPRESSION_STATEMENT after the
+ * call's events: a node of its own that starts where the statement does. */
+static void test_mutation_events(void) {
+    static event_log log;
+    parse_events("xs => { xs.push(1); return xs; }", SJS_GOAL_EXPRESSION, &log);
+    static const int events[] = {
+        SJS_EV_ARROW_BEGIN, 1, SJS_EV_PARAM, 0, SJS_EV_BIND, 0, SJS_EV_PARAMS_END, 0, SJS_EV_BLOCK_BEGIN, 0,
+        SJS_EV_NAME, 0, SJS_EV_MEMBER, 0, SJS_EV_CALL_BEGIN, 0, SJS_EV_NUMBER, 0, SJS_EV_ARGUMENT, 0,
+        SJS_EV_CALL_END, 1, SJS_EV_EXPRESSION_STATEMENT, 0, SJS_EV_NAME, 0, SJS_EV_RETURN, 1, SJS_EV_BLOCK_END, 0,
+        SJS_EV_ARROW_END, 0, SJS_EV_END, 0
+    };
+    static const char *const texts[] = {
+        NULL, NULL, "xs", NULL, NULL, "xs", "push", NULL, NULL, NULL, NULL, NULL, "xs", NULL, NULL, NULL, NULL
+    };
+    expect_events(&log, events, (int)(sizeof texts / sizeof texts[0]), texts);
+    expect_nodes("x => { x.add(1).add(2); }", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "ARROW_BEGIN#1@0 PARAM#1@0 BIND#2@0 PARAMS_END#1@0 BLOCK_BEGIN#1@0 NAME#4@7 MEMBER#5@7 CALL_BEGIN#6@7 "
+                 "NUMBER#7@13 ARGUMENT#6@7 CALL_END#6@7 MEMBER#8@7 CALL_BEGIN#9@7 NUMBER#10@20 ARGUMENT#9@7 "
+                 "CALL_END#9@7 EXPRESSION_STATEMENT#3@7 BLOCK_END#1@0 ARROW_END#1@0 END#0@0");
+}
+
+static sjs_result fresh_value(void *self, sjs_native_call *call) {
+    (void)self;
+    return sjs_array_new(call->context, 2, &call->result);
+}
+
+static const sjs_native_vtable fresh_vtable = { fresh_value };
+
+/* A value a native gives and still holds, or keeps, is never changed: the
+ * mutation faults when it runs, or, for one the function passed to it
+ * before, is refused when compiled. A value a native gives away, or keeps
+ * after the last mutation, is the function's to change. */
+static void test_mutation_natives(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    char out[4096];
+    keeper k = { 0 };
+    k.held = number_array(context, (const double[]){ 1, 2 }, 2);
+    sjs_value natives[3];
+    CHECK(sjs_function_native(context, (sjs_native){ &k, &keep_vtable }, &natives[0]) == SJS_OK);
+    CHECK(sjs_function_native(context, (sjs_native){ &k, &held_vtable }, &natives[1]) == SJS_OK);
+    CHECK(sjs_function_native(context, (sjs_native){ NULL, &fresh_vtable }, &natives[2]) == SJS_OK);
+    sjs_str names[3] = { SJS_STR("keep"), SJS_STR("held"), SJS_STR("fresh") };
+    env e = { context, names, natives, 3, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    CHECK(evaluate(&e, "(() => { const xs = held(); xs.push(3); return xs; })()", out) == SJS_ERR_PROGRAM);
+    CHECK(strstr(out, "fault") == out && strstr(out, "held elsewhere") != NULL);
+    CHECK(evaluate(&e, "(xs => { xs.sort((a, b) => b - a); return xs; })(held())", out) == SJS_ERR_PROGRAM);
+    CHECK(strstr(out, "held elsewhere") != NULL);
+    write_text(context, k.held, out, sizeof out);
+    CHECK(strcmp(out, "[1,2]") == 0);
+    CHECK(evaluate(&e, "(() => { const xs = fresh(); xs.push(1); xs.unshift(0); return xs; })()", out) == SJS_OK);
+    CHECK(strcmp(out, "[0,1]") == 0);
+    CHECK(evaluate(&e, "(() => { const xs = [1]; xs.push(2); const kept = keep(xs); return xs.length; })()", out) == SJS_OK);
+    CHECK(strcmp(out, "2") == 0);
+    CHECK(k.count == 1);
+    write_text(context, k.kept[0], out, sizeof out);
+    CHECK(strcmp(out, "[1,2]") == 0);
+    CHECK(evaluate(&e, "(() => { const xs = [1]; const kept = keep(xs); xs.push(2); return xs; })()", out) == SJS_ERR_PROGRAM);
+    char unsupported[16];
+    snprintf(unsupported, sizeof unsupported, "error %d ", (int)SJS_ERROR_UNSUPPORTED);
+    CHECK(strstr(out, unsupported) == out && strstr(out, "passed") != NULL);
+    CHECK(k.count == 1);
+    for (int i = 0; i < k.count; i++) sjs_release(context, k.kept[i]);
+    sjs_release(context, k.held);
+    for (int i = 0; i < 3; i++) sjs_release(context, natives[i]);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* Each method charges for the elements it moves or writes: shift for the
+ * ones it moves down, unshift for the ones it moves up, reverse and fill
+ * for each one; pop for none. sort costs what toSorted costs, and the
+ * instruction that puts the array back. */
+static void test_mutation_fuel(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    char source[256];
+    uint64_t fuel[6];
+    static const char *const calls[6] = { "xs.pop()", "xs.shift()", "xs.unshift(0)", "xs.push(0)", "xs.reverse().length", "xs.fill(0).length" };
+    for (int i = 0; i < 6; i++) {
+        snprintf(source, sizeof source, "(() => { const xs = Array.from({length: 1000}, (_, i) => i); return %s; })()", calls[i]);
+        fuel[i] = fuel_of(context, source);
+    }
+    CHECK(fuel[1] - fuel[0] == 999);
+    CHECK(fuel[2] - fuel[3] == 1000);
+    /* push's argument is one more instruction. */
+    CHECK(fuel[3] - fuel[0] == 2);
+    /* reverse and fill read a member after: one GET_MEMBER more than pop. */
+    CHECK(fuel[4] - fuel[0] == 1001);
+    CHECK(fuel[5] - fuel[0] == 1002);
+    const char *sorted = "(() => { const xs = [5, 3, 1, 4, 2, 0]; return xs.toSorted((a, b) => (a < b ? -1 : 1)); })()";
+    const char *sorts = "(() => { const xs = [5, 3, 1, 4, 2, 0]; return xs.sort((a, b) => (a < b ? -1 : 1)); })()";
+    /* The one more instruction that puts the sorted array back. */
+    CHECK(fuel_of(context, sorts) == fuel_of(context, sorted) + 1u);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+static void test_out_of_memory(const char *source, sjs_goal goal);
+
+/* Every allocation of a program that grows arrays and a set in place,
+ * past the size that gives the set an index, and sorts, fails in turn. */
+static void test_mutation_out_of_memory(void) {
+    test_out_of_memory("(() => {\n"
+                       "  const xs = [5, 3, 9, 1, 7, 2, 8, 6, 4, 0].reduce((a, x) => { a.push(x); a.unshift(-x); return a; }, []);\n"
+                       "  const s = xs.reduce((t, x) => t.add(x % 13), new Set());\n"
+                       "  xs.sort((a, b) => a - b).fill(0, 15).reverse();\n"
+                       "  const p = xs.pop();\n"
+                       "  const q = xs.shift();\n"
+                       "  const n = xs.push(...xs);\n"
+                       "  return [xs, [...s], p, q, n];\n"
+                       "})()",
+                       SJS_GOAL_EXPRESSION);
+}
+
 static void test_out_of_memory(const char *source, sjs_goal goal) {
     long needed = 0;
     for (long fail_at = 1;; fail_at++) {
@@ -1769,6 +1891,11 @@ int main(int argc, char **argv) {
     test_reuse_leaves_others_alone();
     test_no_shapes();
     test_shape_paths();
+    /* MUTATION */
+    test_mutation_events();
+    test_mutation_natives();
+    test_mutation_fuel();
+    test_mutation_out_of_memory();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */
