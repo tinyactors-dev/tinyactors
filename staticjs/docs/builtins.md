@@ -15,7 +15,8 @@ commit must show with `bench-compare` that it costs nothing.
 A built-in is one of two kinds, and the choice decides most of its cost.
 
 - **A leaf** finishes in one C call: `includes`, `slice`, `join`,
-  `Math.max`, `Object.fromEntries`, the set methods, a map's `get` and `has`. It gets its arguments
+  `Math.max`, `Object.fromEntries`, the set methods, a map's `get` and `has`,
+  `JSON.stringify` (in `src/json.c`, over an explicit stack). It gets its arguments
   borrowed in a `sjs_leaf_call` and returns an owned `result` and a `cost`.
   `call()` charges the cost, cuts the stack and pushes the result.
 - **A loop** calls a callback: `map`, `filter`, `reduce`, `some`, `every`,
@@ -83,7 +84,7 @@ method lookup at run time is an index into `NAMES` plus a column. Never
 compare method names as strings at run time: the old `strlen` and `strcmp`
 lookup cost 17% of a guard.
 
-**A function** (`Math.x`, `Object.x`, `Number.x`, `String.x`, `BigInt.x`, or a bare global name):
+**A function** (`Math.x`, `Object.x`, `Number.x`, `String.x`, `BigInt.x`, `JSON.x`, or a bare global name):
 add an ID before `SJS_BUILTIN_FUNCTION_COUNT`, an entry in
 `FUNCTION_TABLE`, and an immortal value in `FUNCTIONS`. The compiler
 resolves the name when it compiles (`sjs_builtin_lookup`), so the linear

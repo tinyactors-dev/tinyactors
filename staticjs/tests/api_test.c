@@ -2729,6 +2729,43 @@ static void test_map_shape_paths(void) {
     }
 }
 
+/* JSON.stringify: fuel a unit per 16 bytes and per value, pinned; its
+ * limit; and every allocation failing in turn. */
+static void test_json(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    /* The instructions (15 with the array literal built), then a unit per
+     * value (7 visited) and per 16 bytes (the 27 bytes written, 1). */
+    CHECK(fuel_of(context, "JSON.stringify([1, \"two\", {\"k\": [true]}, null])") == 15 + 7 + 1);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+
+    sjs_limits limits = SJS_LIMITS_DEFAULT;
+    limits.max_string_bytes = 32;
+    limits.max_value_items = 4;
+    context = new_context(&c, limits);
+    env e = { context, NULL, NULL, 0, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    char out[4096];
+    static const char *const over[] = {
+        /* Output past max_string_bytes. */
+        "JSON.stringify([\"0123456789\", \"0123456789\", \"0123456789\"])",
+        "JSON.stringify([[1, 2, 3, 4], [1, 2, 3, 4]], null, 10)",
+        /* Members left out count toward it, so one call's work is bounded. */
+        "(o => JSON.stringify([[o, o, o, o], [o, o, o, o]]))({a: undefined, b: undefined, c: undefined, d: undefined})",
+    };
+    for (size_t i = 0; i < sizeof over / sizeof over[0]; i++) {
+        CHECK(evaluate(&e, over[i], out) == SJS_ERR_PROGRAM);
+        CHECK(strncmp(out, "fault 4", 7) == 0);
+        CHECK(sjs_context_live_bytes(context) == 0);
+    }
+    CHECK(evaluate(&e, "JSON.stringify([\"0123456789\", \"0123456789\"])", out) == SJS_OK);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+
+    test_out_of_memory("JSON.stringify({a: [1, \"q\\\"\", {b: undefined, c: new Map()}], d: \"\\u0001\"}, [\"a\", \"c\", \"d\", 1], \"--\")",
+                       SJS_GOAL_EXPRESSION);
+}
+
 int main(int argc, char **argv) {
     bool full = argc > 1 && strcmp(argv[1], "--full") == 0;
     test_values();
@@ -2786,6 +2823,7 @@ int main(int argc, char **argv) {
     test_bigint_api();
     test_map_api();
     test_map_shape_paths();
+    test_json();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */

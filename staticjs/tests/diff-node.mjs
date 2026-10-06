@@ -11,9 +11,10 @@
 //
 //   node --experimental-vm-modules tests/diff-node.mjs tests/spec [numbers.txt]
 //
-// numbers.txt, if given, holds the lines number_test --print writes: what
-// staticjs computed from an input (a double formatted, a decimal read, ...),
-// each of which must be what Node computes from it.
+// numbers.txt, if given, holds the lines number_test --print and
+// json_test --print write: what staticjs computed from an input (a double
+// formatted, a decimal read, a JSON.stringify call, ...), each
+// of which must be what Node computes from it.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import vm from 'node:vm';
@@ -252,6 +253,13 @@ const numberChecks = {
     if (hexBigInt(signed) !== i) return `BigInt.asIntN(${bits}, ${a}): staticjs ${signed}, JavaScript ${i.toString(16)}`;
     return hexBigInt(unsigned) === u ? null : `BigInt.asUintN(${bits}, ${a}): staticjs ${unsigned}, JavaScript ${u.toString(16)}`;
   },
+  K(rest) { // <source> <text>: JSON.stringify(value, replacer, space), never a fault
+    const [source, ours] = rest.split('\t');
+    const want = new Function(`return (${JSON.parse(source)}\n);`)();
+    if (ours.startsWith('!')) return `JSON.stringify: staticjs faults (${ours}), JavaScript ${JSON.stringify(want)}`;
+    const got = ours === 'u' ? undefined : JSON.parse(ours);
+    return got === want ? null : `JSON.stringify: staticjs ${ours}, JavaScript ${JSON.stringify(want)}`;
+  },
 };
 if (numbers) {
   for (const line of readFileSync(numbers, 'utf8').split('\n')) {
@@ -276,6 +284,7 @@ const numberSummary = [
   ['M', 'BigInts compare with doubles as JavaScript does'],
   ['R', 'BigInts round to Number(x)'],
   ['A', 'BigInts wrap as BigInt.asIntN and asUintN do'],
+  ['K', 'JSON.stringify calls, with replacers and spaces, give what JavaScript does'],
 ].filter(([tag]) => counts.has(tag)).map(([tag, what]) => `${counts.get(tag)} ${what}`).join(', ');
 
 if (failures.length > 0) {

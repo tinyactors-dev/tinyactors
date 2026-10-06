@@ -57,7 +57,8 @@ static const function_entry FUNCTION_TABLE[] = {
     { "", "BigInt", SJS_BUILTIN_BIGINT },
     { "BigInt", "asIntN", SJS_BUILTIN_BIGINT_AS_INT_N },
     { "BigInt", "asUintN", SJS_BUILTIN_BIGINT_AS_UINT_N },
-    { "Map", "groupBy", SJS_BUILTIN_MAP_GROUP_BY }
+    { "Map", "groupBy", SJS_BUILTIN_MAP_GROUP_BY },
+    { "JSON", "stringify", SJS_BUILTIN_JSON_STRINGIFY }
 };
 
 /*
@@ -230,7 +231,8 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_INT_N),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_UINT_N),
-    FUNCTION_VALUE(SJS_BUILTIN_MAP_GROUP_BY)
+    FUNCTION_VALUE(SJS_BUILTIN_MAP_GROUP_BY),
+    FUNCTION_VALUE(SJS_BUILTIN_JSON_STRINGIFY)
 };
 
 sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name) {
@@ -681,6 +683,8 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     case SJS_BUILTIN_BIGINT_AS_INT_N:
     case SJS_BUILTIN_BIGINT_AS_UINT_N:
         return bigint_function(vm, id, call);
+    case SJS_BUILTIN_JSON_STRINGIFY:
+        return sjs_json_stringify(vm, call);
     default:
         return math(vm, id, call);
     }

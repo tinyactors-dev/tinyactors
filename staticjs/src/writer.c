@@ -97,28 +97,8 @@ static void string_piece(sjs_writer *w) {
         say(w, "\"");
         return;
     }
-    uint8_t c = (uint8_t)s.ptr[i];
     w->string_at = i + 1;
-    const char *escape = NULL;
-    switch (c) {
-    case '"': escape = "\\\""; break;
-    case '\\': escape = "\\\\"; break;
-    case '\n': escape = "\\n"; break;
-    case '\r': escape = "\\r"; break;
-    case '\t': escape = "\\t"; break;
-    case '\b': escape = "\\b"; break;
-    case '\f': escape = "\\f"; break;
-    default: break;
-    }
-    if (escape != NULL) {
-        say(w, escape);
-        return;
-    }
-    static const char hex[] = "0123456789abcdef";
-    sjs_copy(w->scratch, "\\u00", 4);
-    w->scratch[4] = (uint8_t)hex[c >> 4];
-    w->scratch[5] = (uint8_t)hex[c & 15u];
-    say_scratch(w, 6);
+    say_scratch(w, sjs_json_escape((uint8_t)s.ptr[i], (char *)w->scratch));
 }
 
 /* The map whose entries a map or an iterator of its entries writes, or
@@ -289,4 +269,24 @@ sjs_result sjs_writer_write(sjs_writer *writer, sjs_buffer *buffer) {
         }
         if (!more) return SJS_OK;
     }
+}
+
+/* JSON's escape (QuoteJSONString's) of `"`, `\\` or a control character
+ * below U+0020, written to `out` (room for 6): its length. The writer's
+ * strings and JSON.stringify's are escaped alike. */
+uint32_t sjs_json_escape(uint8_t c, char *out) {
+    char short_form = c == '"' ? '"' : c == '\\' ? '\\' : c == '\n' ? 'n' : c == '\r' ? 'r' : c == '\t' ? 't'
+                    : c == '\b' ? 'b' : c == '\f' ? 'f' : 0;
+    out[0] = '\\';
+    if (short_form != 0) {
+        out[1] = short_form;
+        return 2;
+    }
+    static const char hex[] = "0123456789abcdef";
+    out[1] = 'u';
+    out[2] = '0';
+    out[3] = '0';
+    out[4] = hex[c >> 4];
+    out[5] = hex[c & 15u];
+    return 6;
 }

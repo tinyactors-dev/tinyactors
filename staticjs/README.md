@@ -28,7 +28,8 @@ and pairs through `Math.clz32` and `Math.imul`; and BigInts of 1 to 20
 limbs through `+ - * / % **` and comparison, compared with doubles, and
 written as `String(x)` and `toString(radix)`, read back, rounded as
 `Number(x)` and wrapped by `BigInt.asIntN` and `asUintN` (`number_test
---print`).
+--print`); and `JSON.stringify` calls with replacers and spaces
+(`json_test --print`).
 
 ## What it guarantees
 
@@ -212,6 +213,7 @@ Built-ins:
 | iterators | `toArray` `map` `filter` `reduce` |
 | BigInts | `toString` (radix 2 to 36) |
 | functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Map.groupBy` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` |
+| `JSON` | `stringify` (see "JSON" below) |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum) |
 | constants | `Number.EPSILON` `MAX_SAFE_INTEGER` `MIN_SAFE_INTEGER` `MAX_VALUE` `MIN_VALUE` `POSITIVE_INFINITY` `NEGATIVE_INFINITY` `NaN`; `Math.PI` `E` `LN2` `LN10` `LOG2E` `LOG10E` `SQRT2` `SQRT1_2`: number constants when compiled |
 | changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear`; maps: `set` `delete` `clear` |
@@ -351,6 +353,27 @@ f)` groups an array's elements as `Object.groupBy` does, with its C path for
 seen; an object as a key faults, and so do items that are not an array, as
 for `Object.groupBy`.
 
+## JSON
+
+`JSON.stringify(value, replacer, space)` writes as JavaScript does: strings
+with JSON's escapes, numbers as `String(x)` (NaN and the infinities as
+`null`, -0 as `0`), objects in their order, `undefined` and functions left
+out of objects and `null` in arrays, `undefined` (not a string) for them at
+the top; a map, a set or an iterator is `{}`, as none has an own enumerable
+property, and an iterator is not read. `space` indents by a number of spaces
+(at most 10) or a string's first 10 code units, `[]` and `{}` staying empty;
+an array replacer keeps its strings' and numbers' keys, each once, in its
+order, and any other replacer that is not a function is ignored. It faults
+on a BigInt (a TypeError in JavaScript); on a `toJSON` method and a replacer
+function, which JavaScript calls back; on a key of an array replacer that
+JavaScript would read from a prototype (`["toString"]`, a map's `size`); on
+a string `space` whose 10th code unit splits a pair, which would write a
+lone surrogate; and on a `space` between 0 and 1, which V8 indents with
+empty lines where the specification does not indent. Its output, the
+members it leaves out included, is at most `max_string_bytes`, so one call's
+work is bounded. It is a leaf: one C call, over an explicit stack of the
+containers open, a unit of fuel per 16 bytes and per value.
+
 ## Where it faults instead of following JavaScript
 
 These follow from the rule: staticjs stops where JavaScript would coerce,
@@ -378,6 +401,10 @@ compare identities, or find something on a prototype.
   (`new Map([[{}, 1]])`), which JavaScript keys by its identity; an entry of
   `new Map` that is not an array (`new Map([{0: "k", 1: "v"}])`), which
   JavaScript reads as an object.
+- `JSON.stringify` with a replacer function or of an object with a `toJSON`
+  method, which JavaScript calls; with an array replacer naming a key
+  JavaScript reads from a prototype; and with a `space` between 0 and 1, or
+  a string cut inside a pair (the "JSON" section).
 - An iterator read where something else holds it too (`[[...it], [...it]]`,
   a closure's capture), where JavaScript gives nothing the second time; an
   iterator's `next`, `drop`, `take`, `flatMap`, `some`, `every`, `find` and
@@ -516,7 +543,8 @@ different amounts of fuel, and once more with shapes off, which must give
 the same program but for its tags, the same outcome and no less fuel),
 `tests/api_test.c`, `tests/matcher_test.c` (the shape matcher on every
 spec source, the deepest and widest programs, unreadable streams and
-running out of memory) and `tests/number_test.c`.
+running out of memory), `tests/number_test.c` and `tests/json_test.c`
+(random `JSON.stringify` calls).
 `mise run test` also runs `bench --smoke` (below), which times nothing.
 
 ## Benchmarks

@@ -226,7 +226,7 @@ typedef struct {
     bool gathering;
 } literal_frame;
 
-enum { NS_NONE = 0, NS_MATH, NS_OBJECT, NS_NUMBER, NS_ARRAY, NS_STRING, NS_BIGINT, NS_MAP };
+enum { NS_NONE = 0, NS_MATH, NS_OBJECT, NS_NUMBER, NS_ARRAY, NS_STRING, NS_BIGINT, NS_MAP, NS_JSON };
 
 /* An explicit export: resolved when it arrives, or at the end of the module. */
 enum { XE_RESOLVED = 0, XE_LOCAL };
@@ -1130,7 +1130,7 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
     if (sjs_str_equal(e->text, SJS_STR("Infinity"))) return number_constant(c, 1.0 / 0.0, e->at);
     static const struct { const char *name; uint8_t space; } spaces[] = {
         { "Math", NS_MATH }, { "Object", NS_OBJECT }, { "Number", NS_NUMBER }, { "Array", NS_ARRAY },
-        { "String", NS_STRING }, { "BigInt", NS_BIGINT }, { "Map", NS_MAP }
+        { "String", NS_STRING }, { "BigInt", NS_BIGINT }, { "Map", NS_MAP }, { "JSON", NS_JSON }
     };
     for (uint32_t i = 0; i < sizeof spaces / sizeof spaces[0]; i++) {
         if (sjs_str_equal(e->text, sjs_cstr(spaces[i].name))) {
@@ -1165,7 +1165,7 @@ static sjs_result fail_unbound(sjs_compiler *c) {
 
 /* `Math.PI`, `Number.MAX_SAFE_INTEGER`, `Math.max`. */
 static sjs_result read_space_member(sjs_compiler *c, const sjs_event *e) {
-    static const char *const space_names[] = { "", "Math", "Object", "Number", "Array", "String", "BigInt", "Map" };
+    static const char *const space_names[] = { "", "Math", "Object", "Number", "Array", "String", "BigInt", "Map", "JSON" };
     static const struct { uint8_t space; const char *name; double value; } numbers[] = {
         { NS_MATH, "PI", 3.141592653589793 }, { NS_MATH, "E", 2.718281828459045 },
         { NS_MATH, "LN2", 0.6931471805599453 }, { NS_MATH, "LN10", 2.302585092994046 },
