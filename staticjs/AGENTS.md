@@ -16,6 +16,9 @@ JavaScript does, or a fault. Never a different value.
   fault (`sjs_vm_fault`) instead of following it.
 - Adding a built-in function or method: follow `docs/builtins.md`, which
   says how to keep it from slowing evaluation down.
+- Any other extension (syntax, a value kind, a shape or rewrite, mutation,
+  numeric code, measuring, delegating to agents): `docs/extending.md` gives
+  the steps for each goal.
 - A refusal at compile time is `syntax` only when JavaScript refuses it too;
   JavaScript that staticjs leaves out is `unsupported`. `diff-node` checks
   both.
