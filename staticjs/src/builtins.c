@@ -118,7 +118,7 @@ static const sjs_name NAMES[] = {
     NAME("reduceRight", SJS_NAME_ON_ARRAY, 0, 0, 0),
     NAME("repeat", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPEAT, 0),
     NAME("replace", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("replaceAll", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("replaceAll", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPLACE_ALL, 0),
     NAME_MUTATION("reverse", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_REVERSE), /* MUTATION */
     NAME("search", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("set", SJS_NAME_MUTATING, 0, 0, 0),
@@ -2243,8 +2243,172 @@ static sjs_result string_concat(sjs_vm *vm, sjs_leaf_call *call) {
     return SJS_OK;
 }
 
+/* Text built a piece at a time into call->result, a string made by
+ * string_with_room, growing as sjs_string_reserve grows it. A code unit
+ * that is half of a pair waits in `high` for its second half: a staticjs
+ * string cannot hold a lone surrogate, so a half that stays alone faults. */
+typedef struct {
+    sjs_leaf_call *call;
+    uint32_t high;
+} text_builder;
+
+static sjs_result lone_surrogate(sjs_vm *vm) {
+    return sjs_vm_fault(vm, "staticjs strings cannot hold a lone surrogate");
+}
+
+static sjs_result build_text(sjs_vm *vm, text_builder *b, sjs_str text) {
+    if (text.length == 0) return SJS_OK;
+    if (b->high != 0) return lone_surrogate(vm);
+    sjs_string *s = SJS_AS_STRING(b->call->result);
+    sjs_result r = sjs_string_reserve(vm->context, &s, text.length);
+    b->call->result.as.heap = &s->h;
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    sjs_string_extend(s, text);
+    return SJS_OK;
+}
+
+/* One UTF-16 code unit: a first half waits, a second half joins it. */
+static sjs_result build_unit(sjs_vm *vm, text_builder *b, uint32_t unit) {
+    uint32_t point = unit;
+    if (unit >= 0xD800u && unit <= 0xDBFFu) {
+        if (b->high != 0) return lone_surrogate(vm);
+        b->high = unit;
+        return SJS_OK;
+    }
+    if (unit >= 0xDC00u && unit <= 0xDFFFu) {
+        if (b->high == 0) return lone_surrogate(vm);
+        point = 0x10000u + ((b->high - 0xD800u) << 10) + (unit - 0xDC00u);
+        b->high = 0;
+    }
+    uint8_t bytes[4];
+    uint32_t n = sjs_utf8_encode(point, bytes);
+    return build_text(vm, b, (sjs_str){ (const char *)bytes, n });
+}
+
+/* The end: a first half still waiting is alone. Charges a unit per 16
+ * bytes built. */
+static sjs_result build_end(sjs_vm *vm, text_builder *b) {
+    if (b->high != 0) return lone_surrogate(vm);
+    b->call->cost += SJS_AS_STRING(b->call->result)->length / 16u;
+    return SJS_OK;
+}
+
+/* A match of replaceAll: the text before it and after it, each with the
+ * half of a pair it ends or starts with when an empty pattern matched
+ * between the halves (0 when none). */
+typedef struct {
+    sjs_str replacement;
+    sjs_str before;
+    uint32_t before_half;
+    sjs_str matched;
+    uint32_t after_half;
+    sjs_str after;
+} replace_match;
+
+/* GetSubstitution with a string pattern, which has no captures: $$ is $,
+ * $& the match, $` the text before it and $' the text after it; any other
+ * $ ($1, $<name>, a $ at the end) stays as written. */
+static sjs_result substitute(sjs_vm *vm, text_builder *b, const replace_match *m) {
+    sjs_str r = m->replacement;
+    uint32_t plain = 0;
+    uint32_t i = 0;
+    while (i + 1u < r.length) {
+        char c = r.ptr[i + 1u];
+        if (r.ptr[i] != '$' || (c != '$' && c != '&' && c != '`' && c != '\'')) {
+            i++;
+            continue;
+        }
+        sjs_result res = build_text(vm, b, (sjs_str){ r.ptr + plain, i - plain });
+        if (res == SJS_OK && c == '$') res = build_text(vm, b, SJS_STR("$"));
+        if (res == SJS_OK && c == '&') res = build_text(vm, b, m->matched);
+        if (res == SJS_OK && c == '`') {
+            res = build_text(vm, b, m->before);
+            if (res == SJS_OK && m->before_half != 0) res = build_unit(vm, b, m->before_half);
+        }
+        if (res == SJS_OK && c == '\'') {
+            if (m->after_half != 0) res = build_unit(vm, b, m->after_half);
+            if (res == SJS_OK) res = build_text(vm, b, m->after);
+        }
+        if (res != SJS_OK) return res;
+        i += 2u;
+        plain = i;
+    }
+    return build_text(vm, b, (sjs_str){ r.ptr + plain, r.length - plain });
+}
+
+/* replaceAll with an empty pattern: the replacement before every UTF-16
+ * code unit and at the end, so between the halves of a pair too. */
+static sjs_result replace_empty(sjs_vm *vm, text_builder *b, replace_match *m) {
+    sjs_str s = m->after;
+    uint32_t i = 0;
+    while (i < s.length) {
+        uint32_t next = i;
+        uint32_t point = (uint32_t)sjs_utf8_next(s, &next);
+        m->before = (sjs_str){ s.ptr, i };
+        m->after = (sjs_str){ s.ptr + i, s.length - i };
+        if (substitute(vm, b, m) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (point < 0x10000u) {
+            if (build_text(vm, b, (sjs_str){ s.ptr + i, next - i }) != SJS_OK) return SJS_ERR_PROGRAM;
+        } else {
+            uint32_t high = 0xD800u + ((point - 0x10000u) >> 10);
+            uint32_t low = 0xDC00u + ((point - 0x10000u) & 0x3FFu);
+            if (build_unit(vm, b, high) != SJS_OK) return SJS_ERR_PROGRAM;
+            m->before_half = high;
+            m->after_half = low;
+            m->after = (sjs_str){ s.ptr + next, s.length - next };
+            sjs_result r = substitute(vm, b, m);
+            m->before_half = 0;
+            m->after_half = 0;
+            if (r != SJS_OK || build_unit(vm, b, low) != SJS_OK) return SJS_ERR_PROGRAM;
+        }
+        i = next;
+    }
+    m->before = s;
+    m->after = (sjs_str){ s.ptr + s.length, 0 };
+    return substitute(vm, b, m);
+}
+
+/* replaceAll(pattern, replacement) with a string pattern: every match, left
+ * to right and not overlapping, replaced. A non-empty pattern is matched by
+ * bytes, which finds what UTF-16 finds: a valid string cannot start with a
+ * second half or end with a first half. */
+static sjs_result string_replace_all(sjs_vm *vm, sjs_leaf_call *call) {
+    sjs_str s = sjs_string_view(SJS_AS_STRING(call->receiver));
+    sjs_str pattern;
+    if (string_arg(vm, arg(call, 0), &pattern) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_value with = arg(call, 1);
+    if (with.kind == SJS_FUNCTION) return sjs_vm_fault(vm, "staticjs replaces with a string, not with a function's result");
+    if (!sjs_is_primitive(with)) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
+    char room[32];
+    replace_match m = { 0 };
+    m.replacement = sjs_primitive_text(with, room);
+    m.matched = pattern;
+    text_builder b = { call, 0 };
+    if (string_with_room(vm, call, s.length) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (pattern.length == 0) {
+        m.after = s;
+        if (replace_empty(vm, &b, &m) != SJS_OK) return SJS_ERR_PROGRAM;
+        return build_end(vm, &b);
+    }
+    uint32_t last = 0;
+    for (;;) {
+        int64_t at = find_bytes(s, pattern, last);
+        if (at < 0) break;
+        uint32_t end = (uint32_t)at + pattern.length;
+        m.before = (sjs_str){ s.ptr, (uint32_t)at };
+        m.after = (sjs_str){ s.ptr + end, s.length - end };
+        if (build_text(vm, &b, (sjs_str){ s.ptr + last, (uint32_t)at - last }) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (substitute(vm, &b, &m) != SJS_OK) return SJS_ERR_PROGRAM;
+        last = end;
+    }
+    if (build_text(vm, &b, (sjs_str){ s.ptr + last, s.length - last }) != SJS_OK) return SJS_ERR_PROGRAM;
+    return build_end(vm, &b);
+}
+
 __attribute__((noinline)) static sjs_result string_method_tail(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     switch (id) {
+    case SJS_METHOD_STRING_REPLACE_ALL:
+        return string_replace_all(vm, call);
     case SJS_METHOD_STRING_TRIM:
     case SJS_METHOD_STRING_TRIM_END:
     case SJS_METHOD_STRING_TRIM_START:
