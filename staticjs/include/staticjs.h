@@ -313,6 +313,15 @@ SJS_API sjs_result sjs_function_native(sjs_context *context, sjs_native native, 
  * any other is refused:
  *
  *   x.m(a);                   <x.m(a)> EXPRESSION_STATEMENT
+ *
+ * MUTATION: an assignment is a statement of its own, its target (a name, a
+ * member or an index) first, then the value; ASSIGN's and ASSIGN_END's
+ * count is the operator (an sjs_operator: ADD for `+=`, AND for `&&=`, ...),
+ * 0 for `=`. ++ and -- are statements of their own, prefix or postfix,
+ * UPDATE's count ADD for ++ and SUBTRACT for --:
+ *
+ *   t op= v;                  <t> ASSIGN(op) <v> ASSIGN_END(op)
+ *   t++;  ++t;                <t> UPDATE(ADD)
  */
 
 typedef enum {
@@ -372,6 +381,9 @@ typedef enum {
                               * follow and continue the chain, which one IF_END ends */
     SJS_EV_IF_END,           /* after the last branch of an if or an else-if chain */
     SJS_EV_EXPRESSION_STATEMENT, /* MUTATION: after the value of a statement that is a call */
+    SJS_EV_ASSIGN,           /* MUTATION: after an assignment's target; count: its operator, 0 for = */
+    SJS_EV_ASSIGN_END,       /* MUTATION: after its value; count: as ASSIGN's */
+    SJS_EV_UPDATE,           /* MUTATION: after the target of ++ (count ADD) or -- (SUBTRACT) */
     /* Patterns: each one takes the value before it. A target's default
      * value comes before its pattern, as it is evaluated first. */
     SJS_EV_BIND,             /* text: the name bound */

@@ -68,6 +68,9 @@ event IF open 1 IF_END item;            # the test is its first child; an else-i
 event ELSE inner chain: count;
 event IF_END close;
 event EXPRESSION_STATEMENT postfix 1 item;  # MUTATION: a statement that changes a variable
+event ASSIGN open 1 ASSIGN_END item;    # MUTATION: the target is its first child, the value its second
+event ASSIGN_END close;
+event UPDATE postfix 1 item;            # MUTATION: ++ or -- of its target
 event BIND leaf item name: name;
 event ARRAY_PATTERN_BEGIN open 0 ARRAY_PATTERN_END item;
 event PATTERN_INDEX inner index: count;

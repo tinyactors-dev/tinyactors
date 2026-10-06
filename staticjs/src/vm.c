@@ -1699,6 +1699,10 @@ __attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t 
     return sjs_vm_push(vm, leaf.result);
 }
 
+/* MUTATION: assignment to a property or an element (docs/mutation.md,
+ * "Assignment"), through a path of keys from a variable's slot. */
+static void path_op(sjs_vm *vm, uint32_t keys, uint8_t mode);
+
 /* The instructions of mutation, reached from the default case of
  * execute()'s switch, which they share with the fault for an opcode there
  * is none of, so that the evaluator's loop compiles as it did. */
@@ -1728,9 +1732,196 @@ __attribute__((noinline)) static void execute_other(sjs_vm *vm, vm_frame *f) {
         push_receiver(vm, at, (code[pc + 2] & SJS_CALL_CHAIN) != 0);
         return;
     }
+    case SJS_OP_PATH:
+        f->pc = pc + 3;
+        path_op(vm, sjs_read16(code + pc), code[pc + 2]);
+        return;
     default:
         /* Restore this fault alone in execute()'s default case. */
         sjs_vm_fault(vm, "the program is damaged");
         return;
     }
+}
+
+/* ------------------------------------------------------------------------
+ * MUTATION: assignment to a property or an element (docs/mutation.md,
+ * "Assignment"). A path is a reference to a variable's slot and its keys,
+ * strings: the place each names is in the container the place before it
+ * holds. A store changes each container on the way in place, so each must
+ * be held by its place alone; a value that holds one of them, the variable's
+ * own value included, would be a second holder, so a store makes no cycle.
+ */
+
+static const char *const path_held = "staticjs changes a value only while one variable holds it, and this one is held elsewhere too";
+
+/* A container the path goes into at `key`. */
+typedef struct {
+    sjs_value value;
+    const sjs_string *key;
+    bool store;
+} path_into;
+
+/* An object or an array, which a store changes only while its place holds
+ * it alone. JavaScript sets a property of anything but undefined and null,
+ * or ignores it; staticjs has no other value that can hold one. */
+static bool path_container(sjs_vm *vm, path_into into) {
+    sjs_value v = into.value;
+    sjs_str name = sjs_string_view(into.key);
+    if (v.kind == SJS_UNDEFINED || v.kind == SJS_NULL) {
+        bool undefined = v.kind == SJS_UNDEFINED;
+        const char *message = into.store ? (undefined ? "cannot set a property of undefined" : "cannot set a property of null")
+                                         : (undefined ? "cannot read a property of undefined" : "cannot read a property of null");
+        fault_named(vm, message, name);
+        return false;
+    }
+    if ((v.kind != SJS_OBJECT && v.kind != SJS_ARRAY) || v.internal != SJS_INTERNAL_NONE) {
+        fault_named(vm, "staticjs assigns to properties of objects and elements of arrays only", name);
+        return false;
+    }
+    if (into.store && !sjs_value_unique(v)) {
+        sjs_vm_fault(vm, path_held);
+        return false;
+    }
+    return true;
+}
+
+/* One step of a path: from the container at `place`, at `key`. */
+typedef struct {
+    sjs_value *place;
+    const sjs_string *key;
+    const sjs_string *next;
+    bool store;
+} path_walk;
+
+/* The place of the value at the step's key, which the path goes into next;
+ * NULL, after a fault, when there is none: reading it faults (a prototype's
+ * name), or gives a value no key goes into (undefined, a length). */
+static sjs_value *path_child(sjs_vm *vm, const path_walk *w) {
+    sjs_value v = *w->place;
+    if (v.kind == SJS_OBJECT) {
+        sjs_entry *e = (sjs_entry *)sjs_object_find(SJS_AS_OBJECT(v), sjs_string_view(w->key));
+        if (e != NULL) return &e->value;
+    } else if ((w->key->h.flags & SJS_STRING_INDEX) != 0 && w->key->index < SJS_AS_ARRAY(v)->length) {
+        return &SJS_AS_ARRAY(v)->items[w->key->index];
+    }
+    sjs_value child;
+    if (sjs_property_get(vm, (sjs_member){ v, w->key }, &child) != SJS_OK) return NULL;
+    bool container = path_container(vm, (path_into){ child, w->next, w->store });
+    sjs_vm_release(vm, child);
+    if (container) sjs_vm_fault(vm, "the program is damaged");
+    return NULL;
+}
+
+/* The last step of a store: `value` goes in at `key`. */
+typedef struct {
+    sjs_value *place;
+    const sjs_string *key;
+    sjs_value value;
+} path_store;
+
+/* An object's key keeps its place when its value is replaced, as in
+ * JavaScript, and a new one goes in as a literal's would (an array index in
+ * order, any other key last), its index kept current. An array's element is
+ * replaced, or appended just past its end; past that JavaScript leaves
+ * holes, which staticjs arrays have none of. Takes the value over. */
+static bool path_put(sjs_vm *vm, const path_store *s) {
+    sjs_str name = sjs_string_view(s->key);
+    sjs_value value = s->value;
+    const char *refused;
+    if (s->place->kind == SJS_OBJECT) {
+        sjs_object *o = SJS_AS_OBJECT(*s->place);
+        sjs_entry *e = (sjs_entry *)sjs_object_find(o, name);
+        if (e != NULL) {
+            sjs_value old = e->value;
+            e->value = value;
+            sjs_vm_release(vm, old);
+            return true;
+        }
+        if (sjs_str_equal(name, SJS_STR("__proto__")) || on_prototype(SJS_OBJECT, s->key)) {
+            refused = "staticjs objects have no prototype";
+        } else {
+            sjs_string *key = (sjs_string *)(uintptr_t)s->key;
+            sjs_ref(sjs_heap_value(SJS_STRING, &key->h));
+            sjs_result r = sjs_object_put_key(vm->context, &o, (sjs_put){ key, value });
+            s->place->as.heap = &o->h;
+            if (r == SJS_OK) return true;
+            sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &key->h));
+            sjs_vm_release(vm, value);
+            sjs_vm_fail(vm, r);
+            return false;
+        }
+    } else if ((s->key->h.flags & SJS_STRING_INDEX) != 0) {
+        sjs_array *a = SJS_AS_ARRAY(*s->place);
+        uint32_t i = s->key->index;
+        if (i < a->length) {
+            sjs_value old = a->items[i];
+            a->items[i] = value;
+            sjs_vm_release(vm, old);
+            return true;
+        }
+        if (i == a->length) {
+            sjs_result r = sjs_array_grow(vm->context, &a, 1);
+            s->place->as.heap = &a->h;
+            if (r != SJS_OK) {
+                sjs_vm_release(vm, value);
+                sjs_vm_fail(vm, r);
+                return false;
+            }
+            a->items[a->length++] = value;
+            return true;
+        }
+        refused = "staticjs arrays have no holes: an element is assigned inside the array, or just past its end";
+    } else if (sjs_str_equal(name, SJS_STR("length"))) {
+        refused = "staticjs does not assign an array's length";
+    } else {
+        refused = "staticjs assigns to an array only its elements, by index";
+    }
+    sjs_vm_release(vm, value);
+    fault_named(vm, refused, name);
+    return false;
+}
+
+/* PATH: [reference, keys] (LOAD) or [reference, keys, value] (STORE,
+ * DROP). Each step costs one unit of fuel. */
+__attribute__((noinline)) static void path_op(sjs_vm *vm, uint32_t keys, uint8_t mode) {
+    uint32_t above = mode == SJS_PATH_LOAD ? 0u : 1u;
+    if (keys == 0 || mode > SJS_PATH_DROP || vm->sp < keys + above + 1u) {
+        sjs_vm_fault(vm, "the program is damaged");
+        return;
+    }
+    uint32_t base = vm->sp - above - keys - 1u;
+    sjs_value reference = vm->stack[base];
+    bool damaged = reference.internal != SJS_INTERNAL_SLOT || reference.boolean >= base;
+    for (uint32_t i = 1; i <= keys; i++) {
+        if (vm->stack[base + i].kind != SJS_STRING || vm->stack[base + i].internal != SJS_INTERNAL_NONE) damaged = true;
+    }
+    if (damaged) {
+        sjs_vm_fault(vm, "the program is damaged");
+        return;
+    }
+    if (mode == SJS_PATH_DROP) {
+        cut(vm, base);
+        return;
+    }
+    vm->fuel_used += keys - 1u;
+    bool store = mode == SJS_PATH_STORE;
+    sjs_value *place = &vm->stack[reference.boolean];
+    for (uint32_t i = 1;; i++) {
+        const sjs_string *key = SJS_AS_STRING(vm->stack[base + i]);
+        if (!path_container(vm, (path_into){ *place, key, store })) return;
+        if (i == keys) break;
+        path_walk w = { place, key, SJS_AS_STRING(vm->stack[base + i + 1u]), store };
+        place = path_child(vm, &w);
+        if (place == NULL) return;
+    }
+    const sjs_string *last = SJS_AS_STRING(vm->stack[base + keys]);
+    if (!store) {
+        sjs_value v;
+        if (sjs_property_get(vm, (sjs_member){ *place, last }, &v) != SJS_OK) return;
+        sjs_vm_push(vm, v);
+        return;
+    }
+    path_store s = { place, last, vm->stack[vm->sp - 1u] };
+    vm->stack[vm->sp - 1u] = sjs_undefined();
+    if (path_put(vm, &s)) cut(vm, base);
 }

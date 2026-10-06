@@ -56,7 +56,9 @@
  * .union, .intersection, .difference (Q). Mutation (docs/mutation.md, L):
  * eval.array.push-reduce (acc.push(r.kwh) into reduce's accumulator),
  * eval.array.sort and .sort.rows (a copy of xs or rows sorted in place, as
- * .toSorted and .toSorted.rows sort), eval.set.add-reduce (s.add(id)).
+ * .toSorted and .toSorted.rows sort), eval.set.add-reduce (s.add(id));
+ * eval.object.assign-reduce (acc[r.id] = r.kwh) and eval.array.assign-reduce
+ * (acc[acc.length] = r.kwh), assignment into reduce's accumulator.
  *
  * write (unit byte): write.rows (n {1000, 10000}, 64 KiB buffer),
  * write.rows.buf64 (10000 rows, a 64-byte buffer), write.numbers (100000
@@ -454,6 +456,15 @@ static const bench_case cases[] = {
       .expect = "new Set([\"r000000\",\"r000001\",\"r000002\",\"r000003\",\"r000004\",\"r000005\",\"r000006\","
                 "\"r000007\",\"r000008\",\"r000009\"])",
       .check = CHECK_SET_N },
+    /* MUTATION: assignment */
+    { .name = "eval.object.assign-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.reduce((acc, r) => { acc[r.id] = r.kwh; return acc; }, {})", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = "{\"r000000\":0,\"r000001\":3.7,\"r000002\":7.4,\"r000003\":11.1,\"r000004\":14.8,\"r000005\":18.5,"
+                "\"r000006\":22.2,\"r000007\":25.9,\"r000008\":29.6,\"r000009\":33.3}",
+      .check = CHECK_OBJECT_N },
+    { .name = "eval.array.assign-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.reduce((acc, r) => { acc[acc.length] = r.kwh; return acc; }, [])", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = "[0,3.7,7.4,11.1,14.8,18.5,22.2,25.9,29.6,33.3]", .check = CHECK_ARRAY_N },
     { .name = "eval.object.fromEntries", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_Q, .smoke = 10,
       .source = "Object.fromEntries(rows.map(r => [r.id, r.kwh]))", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "{\"r000000\":0,\"r000001\":3.7,\"r000002\":7.4,\"r000003\":11.1,\"r000004\":14.8,\"r000005\":18.5,"

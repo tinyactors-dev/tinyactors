@@ -1,8 +1,9 @@
 # Owned mutation
 
 staticjs values used never to change. This document describes the one way
-they now can: a function may change, with one of its methods, a value that
-a variable of that function holds alone. JavaScript cannot tell that from
+they now can: a function may change, with one of its methods or by
+assigning to one of its properties or elements, a value that a variable of
+that function holds alone. JavaScript cannot tell that from
 its own semantics, so the rule (`../AGENTS.md`) still holds. The invariant
 every optimization relies on is unchanged:
 
@@ -14,12 +15,12 @@ place"). Mutation is the same idea made visible to the program: a call
 such as `xs.push(x)` changes `xs` in place, and staticjs makes sure that no
 one else holds `xs` when it does.
 
-This is step 1 of 3:
+This is done in 3 steps:
 
-1. **This step:** methods that change an array or a set, on a variable the
+1. **Done:** methods that change an array or a set, on a variable the
    function owns; such a call as a statement.
-2. Assignment to properties and elements (`a.b.c = v`), with the ownership
-   of the whole path checked.
+2. **Done:** assignment to properties and elements (`a.b.c = v`), with
+   the ownership of the whole path checked ("Assignment", below).
 3. Removal: `delete`, `splice`, `Set.prototype.delete` and `clear`, with
    removal from the hash index and shrinking.
 
@@ -135,19 +136,99 @@ compiler accepts it only when that call is a mutation, and otherwise
 refuses it after reading on, as the parser does, so that a syntax error
 later in the source is still the program's error.
 
+## Assignment
+
+An assignment is a statement of its own: `o.k = v;`, `o[k] = v;`,
+`a.b[i].c = v;`, and the compound forms `+=`, `-=`, `*=`, `/=`, `%=`,
+`&&=`, `||=` and `??=`; and `++` and `--`, prefix or postfix, of such a
+target, as a statement. Each has JavaScript's semantics and evaluation
+order: the target's keys from left to right, a compound assignment's read
+of the target, then the value, then the store. `&&=`, `||=` and `??=`
+evaluate the value and store only when the target's value says so, and add
+no key otherwise. `++` adds to a number only: `x - (-1)`, as `+` would join
+a string where JavaScript converts it to a number, so `++` of anything but
+a number faults.
+
+**The target** is a path: a variable, then one or more members or
+indices. Its root must be a variable the function owns, by the rules of a
+mutation above (a parameter or a const of the function; never captured,
+before or after; never copied, passed or stored before), and is refused
+when compiled otherwise, as `unsupported`, with the reason. So is a target
+whose root is not a variable (`f().k = 1`, `[1][0] = 2`, `(a || b).k =
+1`), a variable itself (`x = 1`: there is no `let`), and a method that
+changes the root's variable inside the target's keys or the value
+(`xs[0] = xs.push(1)`): JavaScript holds the containers on the path from
+before the value runs, and staticjs finds them again when it stores. An
+assignment anywhere but as a statement (`f(o.k = 1)`, `o.a = o.b = 1`),
+a pattern as the target (`[o.a, o.b] = xs`), and `**=` and the bitwise
+forms are unsupported; a target that cannot be assigned to (`1++`,
+`o?.a = 1`) is a syntax error, as in JavaScript.
+
+**When it runs**, the root is a `RECEIVER`, a reference to its slot, and
+each member or index pushes its key as a string, so evaluating the target
+adds no holder. `PATH n, mode` then walks from the slot through the `n`
+keys: `LOAD` pushes the value there (a compound assignment's, read as any
+property is read), `STORE` stores the value above the keys, and `DROP`
+drops them when `&&=`, `||=` or `??=` stores nothing. A store faults
+("held elsewhere") unless each container on the way has one holder, the
+place before it: the slot, then the property or element that holds it.
+That catches what the compiler cannot see, as for a mutation (a caller's
+argument, a global, a module's export, a value a native holds, an element
+of the array a callback walks) and sharing inside the value: after
+`const y = o.items`, `o.items[0] = 1` faults, as `y` holds the array too. It
+makes no cycle: `o.self = o` and `o.a.b = [o.a]` fault, as the value is a
+second holder of a container on the path.
+
+What a store does:
+
+- **An object:** a key it has keeps its place and takes the value, as in
+  JavaScript; a new key goes in as a literal's would, an array index among
+  the others in order and any other key last. The object's hash index stays
+  current: a replaced key's entry does not move, and `sjs_object_put_key`
+  indexes a key appended and rebuilds the index when an array index goes in
+  before others.
+- **An array:** an index inside the array replaces the element; the index
+  at its length appends. Past the length JavaScript leaves holes, which a
+  staticjs array has none of, so it faults; so does `length`, and any key
+  that is not an index (`xs[-1]`, `xs.name`), which JavaScript would add as
+  a property.
+- **Anything else faults:** a string, a set, a number, a function (which
+  JavaScript gives the property, or ignores, or throws on), and `undefined`
+  and `null`, on which JavaScript throws. So do `__proto__` and a name of
+  `Object.prototype` that the object does not have (`o.toString = f`), as
+  reading them does; one it has is replaced.
+- On the way, a key the container does not have faults as reading it
+  would, or as setting a property of what reading it gives (`undefined`).
+
+The compiler finds the target as it compiles any read, as the parser sends
+it as one: a name read begins a path, and a member or an index whose node
+starts at the path's root (`sjs_event.start`) goes on with it, its key's
+code between them. Any other event whose node starts at the root holds the
+path as an operand (`(o.a + 1).k`, `o.f().k`) and ends it. At `ASSIGN`,
+the path that ends at the last instruction is the target: its read of the
+root becomes the `RECEIVER`, each `GET_MEMBER` a `CONSTANT` of its key and
+each `GET_INDEX` a `TO_KEY`. The events are
+
+```
+t op= v;       <t> ASSIGN(op) <v> ASSIGN_END(op)     (op 0 for =)
+t++;  ++t;     <t> UPDATE(ADD)                       (SUBTRACT for --)
+```
+
 ## What is left out
 
 - **`let` with reassignment** (`let x = 0; x = x + 1;`, `+=`, `++`). The
-  parser refuses `let` and every assignment where they begin and reads on
-  without sending events; supporting them means new events for a `let`
-  declaration and for assignments to a name (and their compound forms),
-  automatic semicolon insertion around `let` and `++`, and refusing every
-  other assignment target. That is not cheap here, and step 2 needs
-  assignment events anyway, so `let` belongs with it. The ownership rules
-  extend to it as they are: a `let` captured by any arrow function is
-  refused.
+  parser refuses `let` where it begins, and the compiler an assignment to
+  a variable; supporting them means a `let` declaration's events, and
+  keeping the last-read moves sound when a slot is written again. The
+  ownership rules extend to it as they are: a `let` captured by any arrow
+  function is refused.
 - **The other mutating methods** (`splice`, `copyWithin`, `delete`,
   `clear`): step 3. They fault by name, as before.
+- **A method that changes a property or an element** (`o.items.push(x)`):
+  the receiver of a mutation is a variable, read directly, and an
+  assignment's path is not one. It is compiled as any method call and
+  faults when it runs; as a statement it is refused as one with no effect.
+  `o.items[o.items.length] = x` appends.
 - **`sort()` without a compare function**: faults, as `toSorted()` does.
 
 ## Rolling it back
@@ -165,6 +246,8 @@ Everything that exists only for mutation is tagged:
 To remove mutation, revert those commits (newest first), or delete what the
 tags mark and restore what they say. The places tagged are listed below.
 
+Step 1, the methods:
+
 | File | What is tagged |
 |---|---|
 | `include/staticjs.h` | `SJS_EV_EXPRESSION_STATEMENT`, and its line in the event grammar |
@@ -178,6 +261,20 @@ tags mark and restore what they say. The places tagged are listed below.
 | `tests/api_test.c` | `EXPRESSION_STATEMENT` in `event_names`; the `test_mutation_*` functions and their calls in `main` |
 | `bench/bench.c` | `eval.array.push-reduce`, `eval.array.sort`, `eval.array.sort.rows`, `eval.set.add-reduce` |
 
+Step 2, assignment:
+
+| File | What is tagged |
+|---|---|
+| `include/staticjs.h` | `SJS_EV_ASSIGN`, `SJS_EV_ASSIGN_END`, `SJS_EV_UPDATE`, and their lines in the event grammar |
+| `src/shapes.rules` | the `ASSIGN`, `ASSIGN_END` and `UPDATE` events (`mise run shapes` rewrites `src/shapes_table.h`) |
+| `src/internal.h` | `SJS_OP_PATH`, `SJS_PATH_LOAD`, `SJS_PATH_STORE`, `SJS_PATH_DROP` |
+| `src/parser.c` | the `ES_*` states of `F_EXPRESSION_STATEMENT`; `OP_STORE` and `OP_UPDATE`; `sjs_parser.statement_ends`, set in `terminator`; their cases in `pop_op`, and `prefix_update`'s declaration before it; `OP_STORE` in `takes_assignment`; the section from `update_value` to `postfix_update`, and the `++`/`--` cases of `operand` and `operator_token` (restore the refusal they name); `assignment_statement`, and its lines in `assignment` (restore the one refusal); the state in `end_expression_statement` |
+| `src/compiler.c` | `binding.changed_at`, set in `mutation_begin`; `K_ASSIGN` and `construct.assign`, `.keys`, `.root_pc`; the `path` type, `c->paths` and `c->path_steps` and their free; the paths, from `top_path` to `path_step`; `path_begin` in `read_name` (restore `return SJS_OK`); `paths_before` in `event()`, and `path_step` in its `MEMBER` and `INDEX` cases; `ASSIGN_END` in `note_use`; the assignment section, from `TARGET_TAKEN` to `compile_update`, and its three cases in `event()` |
+| `src/vm.c` | `SJS_OP_PATH` in `execute_other`, and `path_op`'s declaration before it; the assignment section at the end of the file |
+| `tests/spec_test.c` | `ASSIGN` and `ASSIGN_END` in `role_of` |
+| `tests/api_test.c` | `ASSIGN`, `ASSIGN_END` and `UPDATE` in `event_names`; the `test_mutation_assign_*` functions and their calls in `main` |
+| `bench/bench.c` | `eval.object.assign-reduce`, `eval.array.assign-reduce` |
+
 Besides the tags, mutation changed what some existing cases expect, and
 rolling it back restores them: a mutating method on a literal, or named
 by a key built at run time, faults "only on a variable" in
@@ -185,7 +282,13 @@ by a key built at run time, faults "only on a variable" in
 name in a script's expression statement is refused for the word itself,
 "does not have this", in `tests/spec/statements.spec` and
 `tests/spec/errors.spec` (it was "expression statement"), as the parser
-now refuses an expression statement at its end, after the word. The
+now refuses an expression statement at its end, after the word. Step 2
+changed two refusals' messages, which their comments restore: an
+assignment that is not a statement is "staticjs has no assignment as a
+value" (it was "staticjs has no assignment: values do not change"), and
+`++` or `--` that is not one "staticjs has no ++ or -- as a value" (it was
+"staticjs has no ++ or --: values do not change"); `1++` and `++(a + b)`
+are now syntax errors, as in JavaScript (they were unsupported). The
 README, `AGENTS.md`, `docs/builtins.md` and `docs/matcher.md` point here.
 
 The new code sits at the end of `src/vm.c` and `src/builtins.c`, and the
