@@ -9,5 +9,9 @@ postgres = Core::ROOT.join('bindings/postgres')
 Core.run('mise', 'install', '--quiet', chdir: postgres)
 pg_config = Pathname.new(IO.popen(%w[mise where conda:postgresql], chdir: postgres.to_s, &:read).strip).join('bin/pg_config')
 Core.build_layers('addon', Core.link_order(LAYERS))
+# PGXS compiles with the flags PostgreSQL was built with, gcc's
+# (-fno-merge-constants, -Wimplicit-fallthrough=3, ...); the pinned clang
+# ignores those it lacks.
 Core.run('make', '-s', "PG_CONFIG=#{pg_config}", "CC=#{Toolchain::Target.host.compile_command.first}",
+         'COPT=-Wno-ignored-optimization-argument -Wno-unknown-warning-option',
          "TA_BUILD=#{Core.directory('addon').join('lib')}", 'install', chdir: postgres)
