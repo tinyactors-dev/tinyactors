@@ -65,7 +65,8 @@ unless taken.empty?
   already = taken.map { |name| "#{name}@#{version}" }.join(', ')
   Release.fail!(dev ? "npm already has #{already}: this commit's development build is published" : "npm already has #{already}")
 end
-Release.fail!('fnox has no NPM_TOKEN (fnox list)') if publish && !Release.npm_token?
+Release.fail!('fnox has no NPM_TOKEN (fnox list); to publish with your own npm login instead, ' \
+              'see docs/distribution.md, "Publishing"') if publish && !Release.npm_token?
 Release.fail!('the registry does not accept NPM_TOKEN (npm whoami failed)') if publish && !Release.npm_authenticated?
 task('node:test')
 

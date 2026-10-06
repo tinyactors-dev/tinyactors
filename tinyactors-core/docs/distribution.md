@@ -22,8 +22,59 @@ depends on every platform package at exactly its own version. The version
 is `bindings/node/package.json`'s; a release commits the new one. A release
 needs a `CHANGELOG.md` section in `bindings/node/` (component `napi`,
 `mise run changelog:check napi <version>`), written with the
-release-changelog skill; a development build does not. Publishing needs
-`NPM_TOKEN` in fnox, a token that bypasses two-factor authentication.
+release-changelog skill; a development build does not.
+
+### Publishing: with a token, or with your own npm login
+
+**With a token (CI, or any machine without a person at it).** `node:release
+-- <version> --publish` publishes with `NPM_TOKEN`, which `fnox exec` puts
+in npm's environment; on a CI runner, set `NPM_TOKEN` as a secret the same
+way. The token must be allowed to publish without two-factor
+authentication (a granular access token with "bypass 2FA" for the
+`@tinyactors` scope): npm cannot ask a CI job for a one-time password.
+`--dev --publish` works the same way for the `next` dist-tag.
+
+**With your own npm login (a maintainer at a terminal, no token).** npm
+restricts tokens that bypass two-factor authentication, so from a laptop
+you may publish with `npm login` instead, approving each publish in the
+browser. The release task cannot do this for you, since it publishes with
+the token, so run its dry run and then the publishing steps yourself
+(this is how 0.2.0 was released):
+
+1. Write and commit the changelog (release-changelog skill), and push
+   `main`: the release task refuses a tree that is not in step with
+   `origin/main`.
+2. `mise run node:release -- <version>` (in `tinyactors-core`): the checks,
+   the four addons, the five tarballs at `<version>`, the smoke tests here
+   and in containers, and `build/node/npm/release/notes.md` and
+   `SHA256SUMS`. Nothing is committed or published.
+3. Set `"version"` to `<version>` in `bindings/node/package.json` and in the
+   first two `"version"` fields of `bindings/node/package-lock.json`, commit
+   them as `release(napi): v<version>`, and tag that commit:
+   `git tag --annotate --cleanup=verbatim tinyactors-napi/v<version> --file build/node/npm/release/notes.md`
+   (path relative to `tinyactors-core`). The tarballs do not change: they
+   already carry `<version>`.
+4. `npm login`, then publish the platform packages before the main package
+   that depends on them, from `tinyactors-core/build/node/npm/tarballs/`:
+
+   ```sh
+   for t in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+     npm publish tinyactors-node-$t-<version>.tgz --access public --tag latest
+   done
+   npm publish tinyactors-node-<version>.tgz --access public --tag latest
+   ```
+
+   npm may ask you to approve the first publish in the browser. It then
+   reports "being processed": a new version can take ten minutes before
+   `npm install` finds it (`npm install --prefer-online` skips npm's own
+   cache of the old list).
+5. `git push origin main tinyactors-napi/v<version>`, then create the GitHub
+   release from `tinyactors-core`:
+   `gh release create tinyactors-napi/v<version> --verify-tag --title "@tinyactors/node <version>" --notes-file build/node/npm/release/notes.md build/node/npm/tarballs/*-<version>.tgz build/node/npm/release/SHA256SUMS`
+
+If a publish fails part way, publish the remaining tarballs in the same
+order before pushing; npm does not let a version be published twice, so
+never repack a version that is already partly on npm.
 
 **The rest: not built at the moment.** The pipeline this document describes
 (`tools/dist.py`, `tools/dist/`, the npm package's source fallback) built
