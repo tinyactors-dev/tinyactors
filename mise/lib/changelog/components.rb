@@ -36,7 +36,8 @@ module Changelog
 
   COMPONENTS = [
     Component.new(name: 'core', dir: 'tinyactors-core', scopes: %w[core],
-                  api_json: %w[include/tinyactors.api.json include/tinyactors_runtime.api.json],
+                  api_json: %w[include/tinyactors.api.json include/tinyactors_runtime.api.json
+                             include/tinyactors_datamodel_ecmascript.api.json],
                   api_ignore: VERSION_MACROS),
     # The Node.js binding, @tinyactors/node. Its addon lived in
     # tinyactors-napi/ until the standalone runtime replaced it, and its

@@ -42,13 +42,16 @@ module CAPI
   # platform (nil for portable) to the amalgamation that implements it;
   # `includes` are directories the header needs. `exclude` are names a
   # library it builds on already describes (its header includes theirs).
-  # Each source comes with the Toolchain::Target that compiles it here.
+  # Each source comes with the Toolchain::Target that compiles it here, and
+  # the flags it needs beyond C11.
   def describe(header:, macro:, prefix:, sources:, includes: [], exclude: [], version: nil)
     header = Pathname.new(header)
     flags = ->(target) { clang_flags(target, macro, includes) }
     native = AST.new(json(flags.call(NATIVE), header), prefix, exclude)
     wasm = AST.new(json(flags.call(WASM), header), prefix, exclude)
-    implemented = sources.to_h { |platform, (source, target)| [platform, exported(source, target, macro, includes)] }
+    implemented = sources.to_h do |platform, (source, target, flags)|
+      [platform, exported(source, target, macro, includes, flags || [])]
+    end
     functions = native.functions.map do |function|
       wasm.function?(function['name']) ? function : function.merge('platform' => 'hosted')
     end
@@ -88,11 +91,11 @@ module CAPI
 
   # The functions the amalgamation `source` defines and exports, compiled by
   # `target` with the API at default visibility and everything else hidden.
-  def exported(source, target, macro, includes)
+  def exported(source, target, macro, includes, flags = [])
     Dir.mktmpdir('c-api') do |dir|
       object = target.compile(source.to_s, into: File.join(dir, 'library.o'), includes: [*includes, File.dirname(source)],
                                            defines: ["#{macro}=__attribute__((visibility(\"default\")))"],
-                                           flags: %w[-std=c11 -w -fvisibility=hidden])
+                                           flags: [*%w[-std=c11 -w -fvisibility=hidden], *flags])
       object.exports.to_a
     end
   end

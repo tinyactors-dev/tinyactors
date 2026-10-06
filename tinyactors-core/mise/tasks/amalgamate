@@ -19,8 +19,8 @@
 # tinyactors.c` needs no other file; database extensions, embedded projects
 # and language bindings vendor the pair. Each file is compiled on its own:
 # the portable and hosted ones for this machine, the wasm ones for wasm
-# (tinyactors's for wasm32-freestanding; tinyactors_runtime's, which uses the
-# C library, against wasi-libc).
+# (tinyactors's for wasm32-freestanding; those of the libraries that call the
+# C library against wasi-libc, which their browser modules compile in).
 
 require_relative '../core'
 
@@ -29,7 +29,14 @@ OUT = Core::DIST
 PUBLIC_DIR = Core::ROOT.join('include/tinyactors')
 
 def header(name, directory)
-  [directory.join(name), Core::ROOT.join('include', name), Core::ROOT.join('src', name)].find(&:file?)&.realpath
+  [directory.join(name), Core::ROOT.join('include', name), Core::ROOT.join('src', name),
+   Core::ROOT.join('third_party/quickjs-ng', name)].find(&:file?)&.realpath
+end
+
+# Whether `path` opens with an include guard or `#pragma once`, after its
+# leading comments.
+def guarded?(path)
+  path.read.match?(%r{\A(?:\s*(?:/\*.*?\*/|//[^\n]*))*\s*#\s*(?:ifndef\s+\w+\s*\n\s*#\s*define|pragma\s+once)}m)
 end
 
 # Inlines `path` and, once each, the project headers it includes, into
@@ -40,7 +47,9 @@ def expand(path, seen, out, public: {}, state: {})
   path = path.realpath
   return if seen.include?(path)
 
-  seen << path
+  # A header without an include guard is meant to be included again (QuickJS's
+  # opcode and atom tables are X-macros), so it is inlined every time.
+  seen << path if guarded?(path)
   out << "/* ---- #{path.relative_path_from(Core::ROOT)} ---- */\n"
   path.each_line do |line|
     match = INCLUDE.match(line.chomp)
@@ -105,6 +114,6 @@ flags = %w[-std=c11 -Wall -Wextra -Werror]
 written.select { |path, _, _| path.extname == '.c' }.each do |source, library, platform|
   target = library.target(platform)
   target.compile(source.to_s, into: OUT.join('objects', target.name, "#{source.basename('.c')}.o").to_s,
-                              includes: [OUT.to_s], flags: flags)
+                              includes: [OUT.to_s], flags: library.cflags ? [*library.cflags, '-Werror'] : flags)
 end
 puts "amalgamate: #{written.map { |path, _, _| path.relative_path_from(Core::ROOT) }.join(', ')}, each compiling on its own"

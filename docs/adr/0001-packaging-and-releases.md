@@ -250,15 +250,18 @@ laid out how each library and the addon would ship. It was discussed on
       amalgamations and headers are generated into `dist/` (`mise run
       amalgamate`); the API descriptions are checked in
       (`include/<library>.api.json`, `mise run api`, `mise/lib/c_api.rb`).
-    - **The wasm modules import nothing.** `tinyactors.wasm` is built for
-      wasm32-freestanding with its own page allocator (decision 6).
+    - **The wasm modules are for browsers, and import nothing**: a browser
+      supplies no imports, WASI's least of all. `tinyactors.wasm` is built
+      for wasm32-freestanding with its own page allocator (decision 6).
       `tinyactors_runtime.wasm` holds `libtinyactors` too, since a module
       cannot call into another's memory (decision 17's reasoning, which a
-      combined module answers), and links wasi-libc for its C library as a
-      WASI reactor; the release checks that it imports nothing, and allows
-      its `_initialize` export. Its `ta_wasm_alloc` and `ta_wasm_free` are
-      over malloc, in place of `libtinyactors`'s page allocator, which would
-      claim the same memory.
+      combined module answers). Its C library is wasi-libc, compiled in
+      (zig's wasm32-wasi target is only how it gets one), with no entry
+      point; the release checks that it imports nothing, and allows its
+      `_initialize` export, which runs the C library's constructors and
+      which a host calls once first, as the web binding does. Its
+      `ta_wasm_alloc` and `ta_wasm_free` are over malloc, in place of
+      `libtinyactors`'s page allocator, which would claim the same memory.
     - **A `hosted` platform suffix** (decision 9) names files built for every
       target with a C library and not for freestanding wasm:
       `runtime_hosted.c`, the files and the clock. The header declares those
@@ -267,6 +270,36 @@ laid out how each library and the addon would ship. It was discussed on
     - **The release runs anywhere:** the packed-library tests run on this
       machine's target (they ran on x86_64 Linux only), and every native
       release target is built, `x86_64-macos` included.
+
+20. **The ECMAScript data model ships as a library of its own**
+    (2026-10-06), as a tree-sitter grammar ships beside the tree-sitter
+    runtime: a program opts into it by linking it, and nobody builds
+    QuickJS themselves. `libtinyactors_datamodel_ecmascript` is the
+    data model with QuickJS inside, released with the other two
+    (decision 19):
+    - **It is built on `libtinyactors`'s public API alone**, as the runtime
+      is, and keeps only its `ta_datamodel_ecmascript_*` API global: QuickJS's
+      own symbols are local, so they cannot clash with a program's QuickJS.
+    - **QuickJS compiles without C11 atomics** (`-D__STDC_NO_ATOMICS__=1`,
+      `Core::QUICKJS_FLAGS`, in every build), so it leaves out `Atomics.wait`
+      and calls no pthread function: a data model is single threaded, and a
+      library that links no C library cannot count on libpthread.
+    - **Its C library imports** (allocation, strings, the clock and local
+      time, stdio for QuickJS's debugging dumps, and math) are listed in
+      core's `release` task. glibc keeps the math functions in libm, so a
+      program links `-lm` beside the libraries.
+    - **Every tarball carries QuickJS's license** as `LICENSE.quickjs`
+      (`CRelease::Library#notices`).
+    - **Its browser module imports nothing either.** wasi-libc reaches the
+      system through WASI functions it would import; the module defines
+      them instead (`src/datamodel_ecmascript/browser_wasm.c`): files do not
+      exist, and the clock is the time the host last set with
+      `ta_datamodel_ecmascript_wasm_set_time` (milliseconds since the
+      epoch; 0 until it is called), which Date, `performance.now()` and
+      QuickJS's random seed read. A host passes `Date.now()` before each
+      run. (zig 0.16 implements `close` in its own libc layer, whose
+      `fd_close` import is defined there by its linker name; the release's
+      import check catches a zig upgrade that adds another.)
 
 ## Still open
 

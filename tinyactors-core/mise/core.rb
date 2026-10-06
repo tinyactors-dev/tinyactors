@@ -22,6 +22,12 @@ module Core
   # layers compile without the host's C library headers (AGENTS.md).
   Layer = Struct.new(:name, :sources, :uses, :freestanding, :flags, :libraries, keyword_init: true)
 
+  # How QuickJS compiles. Without C11 atomics it leaves out `Atomics.wait`
+  # and its threads, so it calls no pthread function: a data model is single
+  # threaded, and a library that links no C library cannot count on
+  # libpthread (root ADR 0001, decision 20).
+  QUICKJS_FLAGS = %w[-std=gnu11 -w -fno-strict-aliasing -D_GNU_SOURCE -D__STDC_NO_ATOMICS__=1].freeze
+
   LAYERS = [
     Layer.new(name: 'base', uses: [], freestanding: true,
               sources: %w[address frame arena pool heap slab].map { |s| "src/base/#{s}.c" }),
@@ -42,7 +48,7 @@ module Core
     # The vendored engine only: quickjs-libc (std and os modules, I/O) is not built.
     Layer.new(name: 'quickjs', uses: [], libraries: %w[-lm],
               sources: %w[quickjs libregexp libunicode dtoa].map { |s| "third_party/quickjs-ng/#{s}.c" },
-              flags: %w[-std=gnu11 -w -fno-strict-aliasing -D_GNU_SOURCE]),
+              flags: QUICKJS_FLAGS),
     # The SCXML ECMAScript data model; link it like a tree-sitter language.
     Layer.new(name: 'datamodel_ecmascript', uses: %w[image quickjs],
               sources: %w[src/datamodel_ecmascript/datamodel_ecmascript.c]),
@@ -60,13 +66,21 @@ module Core
   #   tinyactors_runtime  the compiler, the host and the runtime conveniences,
   #                       on the C library's allocator; built on tinyactors's
   #                       public API alone
+  #   tinyactors_datamodel_ecmascript
+  #                       the ECMAScript data model with QuickJS inside, opted
+  #                       into as a tree-sitter grammar is beside the
+  #                       tree-sitter runtime; built on tinyactors's public
+  #                       API alone
   #
   # `headers` are its public headers (include/tinyactors/), in the order the
   # amalgamated header has them; `uses` the libraries it builds on.
-  # `libc` says whether it calls the C library: its wasm module then links
-  # wasi-libc for it (and is checked to import nothing), where tinyactors's
-  # is built for wasm32-freestanding.
-  Library = Struct.new(:name, :headers, :layers, :uses, :libc, keyword_init: true) do
+  # `libc` says whether it calls the C library: its wasm module, for
+  # browsers, then compiles wasi-libc in for it and is checked to import
+  # nothing, since a browser supplies no imports; tinyactors's is built for
+  # wasm32-freestanding.
+  #
+  # `cflags` are flags its amalgamations compile with beyond a release's.
+  Library = Struct.new(:name, :headers, :layers, :uses, :libc, :cflags, keyword_init: true) do
     def header = DIST.join("#{name}.h")
     def amalgamation = DIST.join("#{name}.c")
     # The amalgamation of its platform files for `suffix` (`wasm`, `hosted`).
@@ -96,7 +110,9 @@ module Core
     Library.new(name: 'tinyactors', layers: %w[base image core system basic_http], uses: [], libc: false,
                 headers: %w[types.h address.h frame.h image.h datamodel.h system.h core.h basic_http.h wasm.h]),
     Library.new(name: 'tinyactors_runtime', layers: %w[compile host runtime], uses: %w[tinyactors], libc: true,
-                headers: %w[compile.h host.h runtime.h])
+                headers: %w[compile.h host.h runtime.h]),
+    Library.new(name: 'tinyactors_datamodel_ecmascript', layers: %w[datamodel_ecmascript quickjs], uses: %w[tinyactors],
+                libc: true, headers: %w[datamodel_ecmascript.h], cflags: QUICKJS_FLAGS)
   ].freeze
 
   def self.library(name) = LIBRARIES.find { |library| library.name == name } || abort("unknown library #{name}")
@@ -107,7 +123,8 @@ module Core
   def self.release_project(library)
     require 'c_release'
     CRelease::Project.new(name: library.name, prefix: 'ta', header: library.header, amalgamation: library.amalgamation,
-                          api: library.api, version_header: VERSION_HEADER, libc: library.libc)
+                          api: library.api, version_header: VERSION_HEADER, libc: library.libc,
+                          cflags: library.cflags || [])
   end
 
   # The version both libraries have: TA_VERSION_* in include/tinyactors/types.h.

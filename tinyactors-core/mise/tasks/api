@@ -20,10 +20,10 @@ check = ENV['usage_check'] == 'true' || ARGV.include?('--check')
 described = []
 stale = []
 Core::LIBRARIES.each do |library|
-  sources = { nil => [library.amalgamation, library.target(nil)] }
+  sources = { nil => [library.amalgamation, library.target(nil), library.cflags || []] }
   %w[wasm hosted].each do |suffix|
     path = library.platform_amalgamation(suffix)
-    sources[suffix] = [path, library.target(suffix)] if path.file?
+    sources[suffix] = [path, library.target(suffix), library.cflags || []] if path.file?
   end
   exclude = library.uses.flat_map do |name|
     used = JSON.parse(Core.library(name).api.read)

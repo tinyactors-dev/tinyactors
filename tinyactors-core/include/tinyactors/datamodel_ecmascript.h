@@ -131,6 +131,14 @@ TA_API void ta_datamodel_ecmascript_set_memory_limit(ta_datamodel_ecmascript *ec
 /* The underlying JSRuntime* (for embedders adding their own globals). */
 TA_API void *ta_datamodel_ecmascript_js_runtime(ta_datamodel_ecmascript *ecmascript);
 
+#if defined(__wasm__)
+/* tinyactors_datamodel_ecmascript.wasm imports nothing, so it has no clock
+ * of its own: Date, performance.now() and the random seed read the time the
+ * host last set here, in milliseconds since the Unix epoch (0 until then).
+ * A browser host calls it with Date.now() before each run. */
+TA_API void ta_datamodel_ecmascript_wasm_set_time(double unix_milliseconds);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

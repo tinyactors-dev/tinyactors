@@ -1,14 +1,16 @@
 // The release's test of a wasm module (mise run release, and mise run
 // wasm:test): node tests/wasm/release_test.mjs <module.wasm> <api.json>...
 //
-// tinyactors.wasm: an address written and read back, in memory from the
-// module's own allocator, many times with memory steady. With
-// tinyactors_runtime's description too, tinyactors_runtime.wasm: a chart
-// compiled, an actor spawned, sent an event and run to its final state.
-// The module imports nothing; struct layouts and constants come from the
-// API descriptions (their wasm32 layouts), and the C ABI for wasm32 passes
-// a struct by value as a pointer to a copy and returns one through a
-// pointer given first.
+// The modules are for browsers: each is instantiated with no imports, as a
+// page would. tinyactors.wasm: an address written and read back, in memory
+// from the module's own allocator, many times with memory steady.
+// tinyactors_runtime.wasm: that, and a chart compiled, an actor spawned,
+// sent an event and run to its final state.
+// tinyactors_datamodel_ecmascript.wasm: that, and an expression evaluated by
+// QuickJS, its Date reading the time the host set. Struct layouts and
+// constants come from the API descriptions (their wasm32 layouts), and the
+// C ABI for wasm32 passes a struct by value as a pointer to a copy and
+// returns one through a pointer given first.
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
@@ -21,7 +23,7 @@ const offset = (type, field) => layout(type).offsets[field];
 
 const { instance } = await WebAssembly.instantiate(readFileSync(modulePath), {});
 const x = instance.exports;
-if (x._initialize) x._initialize(); // a WASI reactor's start
+if (x._initialize) x._initialize(); // the C library's constructors, once, as the web binding does
 const memory = () => new DataView(x.memory.buffer);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -116,5 +118,23 @@ if (x.ta_compile_charts) {
   x.ta_runtime_system_free(u32(system));
   x.ta_compile_free(u32(result));
   results.push('a chart compiles and runs to its final state');
+}
+// tinyactors_datamodel_ecmascript.wasm: QuickJS, with the time the host set.
+if (x.ta_datamodel_ecmascript_new) {
+  const when = 1767225600000; // 2026-01-01T00:00:00Z
+  x.ta_datamodel_ecmascript_wasm_set_time(when);
+  const config = alloc(layout('ta_datamodel_ecmascript_config').size);
+  setU32(config + offset('ta_datamodel_ecmascript_config', 'size'), layout('ta_datamodel_ecmascript_config').size);
+  const ecmascript = x.ta_datamodel_ecmascript_new(config);
+  assert.notEqual(ecmascript, 0, 'the data model starts');
+  const payload = x.ta_datamodel_ecmascript_payload_eval(ecmascript,
+    view("({sum: [1, 2, 3].reduce((a, b) => a + b), year: new Date().getUTCFullYear(), now: Date.now()})"));
+  assert.notEqual(payload, 0n, 'the expression evaluates');
+  const buffer = alloc(256, 1);
+  const length = x.ta_datamodel_ecmascript_payload_to_json(ecmascript, payload, buffer, 256);
+  const json = decoder.decode(new Uint8Array(x.memory.buffer, buffer, length));
+  assert.deepEqual(JSON.parse(json), { sum: 6, year: 2026, now: when });
+  x.ta_datamodel_ecmascript_free(ecmascript);
+  results.push(`QuickJS evaluated ${json}, its clock the host's`);
 }
 console.log(`${modulePath.split('/').at(-1)}: ${results.join('; ')}`);

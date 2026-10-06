@@ -1,33 +1,44 @@
 #!/usr/bin/env ruby
-#MISE description="Release libtinyactors and libtinyactors_runtime: check, version, build every target with zig cc, verify, pack; with --publish, also tag and create the GitHub release"
+#MISE description="Release libtinyactors, libtinyactors_runtime and libtinyactors_datamodel_ecmascript: check, version, build every target with zig cc, verify, pack; with --publish, also tag and create the GitHub release"
 #USAGE arg "<version>" help="The version to release, MAJOR.MINOR.PATCH"
 #USAGE flag "--publish" help="Commit the version, tag tinyactors-core/v<version>, push, and create the GitHub release"
 #USAGE flag "--skip-containers" help="Leave out the Linux container smoke tests (no Docker)"
+#USAGE flag "--build-only" help="Only build, verify and pack (no checks, no version set, nothing committed): a look at the packaging before a release"
 # vim:ft=ruby
 
 # mise run release -- 0.2.0                    check, build, verify, pack; publishes nothing
 # mise run release -- 0.2.0 --publish          the same, then tag tinyactors-core/v0.2.0 and release
 # mise run release -- 0.2.0 --skip-containers  no Linux container smoke tests (no Docker)
+# mise run release -- 0.2.0 --build-only       only build, verify and pack: no checks, nothing versioned
 #
-# The two libraries of Core::LIBRARIES are released together, under one tag
-# and version (root ADR 0001, decision 19). Each ships its header, its
+# The libraries of Core::LIBRARIES are released together, under one tag and
+# version (root ADR 0001, decisions 19 and 20). Each ships its header, its
 # amalgamation (with its platform amalgamations) and API description in a
 # source tarball, a static and a shared library for each native release
-# target, and a wasm module: tinyactors.wasm, and tinyactors_runtime.wasm
-# with tinyactors inside it. libtinyactors_runtime is built against
-# libtinyactors of the same release: its libraries leave libtinyactors's API
-# undefined and its shared library names libtinyactors's. The stages are in
-# mise/lib/c_release/build.rb; this file only describes the libraries. The
-# assets land in build/release/<version>/assets/.
+# target, and a wasm module for browsers that imports nothing. libtinyactors
+# is the freestanding core; libtinyactors_runtime (the compiler, the host)
+# and libtinyactors_datamodel_ecmascript (the ECMAScript data model, QuickJS
+# inside) are built against the libtinyactors of the same release: their
+# libraries leave its API undefined and their shared libraries name its, and
+# their wasm modules hold it. The stages are in mise/lib/c_release/build.rb;
+# this file only describes the libraries. The assets land in
+# build/release/<version>/assets/.
 
 require_relative '../core'
 
 argv = [ENV['usage_version'], *ARGV].compact.uniq
 argv << '--publish' if ENV['usage_publish'] == 'true'
 argv << '--skip-containers' if ENV['usage_skip_containers'] == 'true'
+argv << '--build-only' if ENV['usage_build_only'] == 'true'
 argv = argv.reject(&:empty?).uniq
 core = Core.release_project(Core.library('tinyactors'))
 runtime = Core.release_project(Core.library('tinyactors_runtime'))
+ecmascript = Core.release_project(Core.library('tinyactors_datamodel_ecmascript'))
+tests_dir = Core::ROOT.join('tests')
+
+# A smoke program, as a test against the packed libraries of this machine's
+# target, beside its run in the Linux containers.
+smoke = ->(name, *libraries) { ["#{name}_smoke", ['-I', Core::DIST, tests_dir.join("release/#{name}_smoke.c"), *libraries], []] }
 
 # The test programs that use the public headers alone (and the test data
 # model, which does too) run against the packed libraries of this machine's
@@ -41,20 +52,29 @@ tests = PACKED_TESTS.map do |name|
   [name, [*objects, Core.archive_path('release', 'test_datamodel'), '-lm'], program.arguments || []]
 end
 
-# The C library functions libtinyactors_runtime calls: each has the same
-# name and signature in glibc and musl, so a Linux library that links no C
-# library binds to either (decision 10), and libSystem has them on macOS,
-# where Darwin's clang also calls bzero and the fortified __memcpy_chk.
-LIBC = %w[calloc clock_gettime fclose fopen fread free fseek ftell malloc memmove qsort realloc snprintf strchr strcmp
-          strlen strncmp vsnprintf].freeze
+# The C library functions a library calls: each has the same name and
+# signature in glibc and musl, so a Linux library that links no C library
+# binds to either (decision 10), and libSystem has them on macOS, where
+# Darwin's clang also calls bzero and the fortified __memcpy_chk.
+RUNTIME_LIBC = %w[calloc clock_gettime fclose fopen fread free fseek ftell malloc memmove qsort realloc snprintf strchr
+                  strcmp strlen strncmp vsnprintf].freeze
+# QuickJS's: allocation (malloc_usable_size, which glibc and musl both
+# have; libSystem's malloc_size on macOS), strings and numbers, the clock and
+# local time for Date, stdio for its debugging dumps, and the math library,
+# which glibc keeps in libm: a program links -lm (decision 20).
+ECMASCRIPT_LIBC = %w[abort acos acosh asin asinh atan atan2 atanh calloc cbrt ceil clock_gettime cos cosh exp expm1
+                     floor fmod fprintf fputc free frexp fwrite gettimeofday hypot localtime_r log log10 log1p log2
+                     malloc memchr memmove modf pow printf realloc round scalbn sin sinh snprintf sscanf strchr
+                     strcmp strlen strrchr strstr strtod tan tanh trunc vsnprintf].freeze
 DARWIN = %w[bzero __memcpy_chk].freeze
-libc = ->(target) { target.format.links_libc ? LIBC + DARWIN : LIBC }
+libc = lambda do |list, linux_only: [], darwin_only: []|
+  ->(target) { target.format.links_libc ? list + DARWIN + darwin_only : list + linux_only }
+end
 
-tests_dir = Core::ROOT.join('tests')
 CRelease.release(
   libraries: [
     CRelease::Library.new(
-      project: core, tests: [], smoke: tests_dir.join('release/tinyactors_smoke.c'),
+      project: core, tests: [smoke.call('tinyactors')], smoke: tests_dir.join('release/tinyactors_smoke.c'),
       sources: [core.header, core.amalgamation, core.platform_amalgamation('wasm'), core.api],
       wasm_test: ->(wasm) { ['node', tests_dir.join('wasm/release_test.mjs'), wasm, core.api] }
     ),
@@ -63,7 +83,15 @@ CRelease.release(
       sources: [runtime.header, runtime.amalgamation, runtime.platform_amalgamation('hosted'),
                 runtime.platform_amalgamation('wasm'), runtime.api],
       wasm_test: ->(wasm) { ['node', tests_dir.join('wasm/release_test.mjs'), wasm, core.api, runtime.api] },
-      libc_imports: libc
+      libc_imports: libc.call(RUNTIME_LIBC)
+    ),
+    CRelease::Library.new(
+      project: ecmascript, uses: %w[tinyactors], tests: [smoke.call('tinyactors_datamodel_ecmascript', '-lm')],
+      smoke: tests_dir.join('release/tinyactors_datamodel_ecmascript_smoke.c'),
+      sources: [ecmascript.header, ecmascript.amalgamation, ecmascript.platform_amalgamation('wasm'), ecmascript.api],
+      notices: { 'LICENSE.quickjs' => Core::ROOT.join('third_party/quickjs-ng/LICENSE') },
+      wasm_test: ->(wasm) { ['node', tests_dir.join('wasm/release_test.mjs'), wasm, core.api, ecmascript.api] },
+      libc_imports: libc.call(ECMASCRIPT_LIBC, linux_only: %w[malloc_usable_size], darwin_only: %w[malloc_size])
     )
   ],
   directory: 'tinyactors-core',

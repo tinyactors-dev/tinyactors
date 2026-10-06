@@ -1,7 +1,7 @@
 /*
  * tinyactors_runtime.wasm's allocator (docs/adr/0001-packaging-and-releases.md,
  * decisions 6, 9 and 19): ta_wasm_alloc and ta_wasm_free over the C
- * library's malloc, which the module links in (wasi-libc's, growing linear
+ * library's malloc, which the module compiles in (wasi-libc's, growing linear
  * memory itself, with no import), so the host's blocks and the runtime's
  * own allocations come from one heap. The runtime module therefore does not
  * link tinyactors.wasm's page allocator (src/base/allocator_wasm.c), which

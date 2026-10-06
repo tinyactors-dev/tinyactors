@@ -78,18 +78,22 @@ never repack a version that is already partly on npm.
 
 ## Built today: the C libraries
 
-Core ships two C libraries, released together under one tag
+Core ships three C libraries, released together under one tag
 (`tinyactors-core/v<version>`) and version (`TA_VERSION_*` in
 `include/tinyactors/types.h`), as [ADR 0001](../../docs/adr/0001-packaging-and-releases.md)
-decision 19 lays out:
+decisions 19 and 20 lay out:
 
 | Library | What it holds | Needs |
 |---|---|---|
 | `libtinyactors` | the freestanding layers: base, image, core, system, basic_http | nothing: no C library, no allocation |
-| `libtinyactors_runtime` | the compiler, the host and the runtime conveniences | `libtinyactors`'s public API, and the C library's allocator, strings, `qsort` and `snprintf` (and files and the clock, except on freestanding wasm) |
+| `libtinyactors_runtime` | the compiler, the host and the runtime conveniences | `libtinyactors`'s public API, and the C library's allocator, strings, `qsort` and `snprintf` (and files and the clock, except in wasm) |
+| `libtinyactors_datamodel_ecmascript` | the ECMAScript data model, QuickJS inside | `libtinyactors`'s public API, and the C library, its math included: a program links `-lm` |
 
-The ECMAScript data model (QuickJS) is not shipped: the Node.js and web
-bindings bring their own.
+The ECMAScript data model is opted into as a tree-sitter grammar is beside
+the tree-sitter runtime: link `libtinyactors_datamodel_ecmascript` and pass
+`ta_datamodel_ecmascript_binding()` to a system. QuickJS's own symbols stay
+inside it, and every one of its tarballs carries QuickJS's license as
+`LICENSE.quickjs`.
 
 Each library's release assets, in `build/release/<version>/assets/`:
 
@@ -101,12 +105,20 @@ Each library's release assets, in `build/release/<version>/assets/`:
 | `<library>-<version>.json` | the manifest: commit, zig, flags and every file's hash |
 
 plus one `SHA256SUMS`. A Linux library links no C library, so one serves
-glibc and musl; `libtinyactors_runtime`'s shared library names
-`libtinyactors`'s, so a program links both. `tinyactors_runtime.wasm` holds
-`libtinyactors` too, since a module cannot call into another's memory; it is
-a WASI reactor built against wasi-libc that imports nothing (a host may call
-its `_initialize` first). In both modules a host places its bytes with
-`ta_wasm_alloc` and gives them back with `ta_wasm_free`.
+glibc and musl; the runtime's and the data model's shared libraries name
+`libtinyactors`'s, so a program links them with it.
+
+The wasm modules are for browsers, and import nothing. `tinyactors.wasm` is
+freestanding; `tinyactors_runtime.wasm` and
+`tinyactors_datamodel_ecmascript.wasm` hold `libtinyactors` too, since a
+module cannot call into another's memory, and have a C library compiled in
+(wasi-libc, with no WASI import left). Load one with
+`WebAssembly.instantiate(bytes, {})`, call its `_initialize` once if it has
+one (the C library's constructors, as the web binding does), place bytes
+with `ta_wasm_alloc` and give them back with `ta_wasm_free`. The data
+model's module has no clock of its own: call
+`ta_datamodel_ecmascript_wasm_set_time(Date.now())` before each run, or
+Date reads the epoch.
 
 The tasks, in `tinyactors-core`:
 
@@ -114,8 +126,9 @@ The tasks, in `tinyactors-core`:
 |---|---|
 | `mise run amalgamate` | `dist/<library>.h`, `.c` and `_<platform>.c`, each compiled on its own |
 | `mise run api [--check]` | `include/<library>.api.json`: what each library exports, and what the changelog compares |
-| `mise run wasm:test` | Builds both wasm modules as the release does and runs `tests/wasm/release_test.mjs` against them |
-| `mise run release -- <version>` | The release as a dry run: the checks (core's whole test task), every target of both libraries, their symbol checks, `test_runtime` and `test_e2e` against the packed libraries of this machine, the smoke programs (`tests/release/`) in Linux containers, the wasm tests, and the assets |
+| `mise run wasm:test` | Builds the three wasm modules as the release does and runs `tests/wasm/release_test.mjs` against each, instantiated with no imports as a browser would |
+| `mise run release -- <version> --build-only` | Only build, verify and pack (no checks, no version set): a look at the packaging before a release |
+| `mise run release -- <version>` | The release as a dry run: the checks (core's whole test task), every target of the three libraries, their symbol checks, the smoke programs (`tests/release/`) and `test_runtime` and `test_e2e` against the packed libraries of this machine, the smoke programs in Linux containers, the wasm tests, and the assets |
 | `mise run release -- <version> --publish` | The same, then the commit `release(tinyactors-core): v<version>`, the tag and the GitHub release |
 
 A release needs a section in `tinyactors-core/CHANGELOG.md` (component

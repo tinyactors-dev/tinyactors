@@ -1,0 +1,346 @@
+{
+  "format": "c-api/1",
+  "header": "tinyactors_datamodel_ecmascript.h",
+  "version": "0.1.0",
+  "targets": [
+    "x86_64",
+    "aarch64",
+    "wasm32"
+  ],
+  "constants": [
+    {
+      "name": "TA_DATAMODEL_ECMASCRIPT_REALM_AUTO",
+      "value": 0
+    },
+    {
+      "name": "TA_DATAMODEL_ECMASCRIPT_REALM_ISOLATED",
+      "value": 1
+    }
+  ],
+  "types": {
+    "ta_datamodel_ecmascript": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "ta_datamodel_ecmascript_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_ops",
+          "type": "uint32_t"
+        },
+        {
+          "name": "memory_limit",
+          "type": "size_t"
+        },
+        {
+          "name": "stack_limit",
+          "type": "size_t"
+        },
+        {
+          "name": "realm",
+          "type": "uint32_t"
+        },
+        {
+          "name": "abort_flag",
+          "type": "const volatile int *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "max_ops": 4,
+            "memory_limit": 8,
+            "stack_limit": 16,
+            "realm": 24,
+            "abort_flag": 32
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "max_ops": 4,
+            "memory_limit": 8,
+            "stack_limit": 16,
+            "realm": 24,
+            "abort_flag": 32
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "max_ops": 4,
+            "memory_limit": 8,
+            "stack_limit": 12,
+            "realm": 16,
+            "abort_flag": 20
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "name": "ta_datamodel_ecmascript_binding",
+      "returns": "ta_datamodel_binding",
+      "params": [
+        {
+          "name": "es",
+          "type": "ta_datamodel_ecmascript *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_eval_json",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "ecmascript",
+          "type": "ta_datamodel_ecmascript *"
+        },
+        {
+          "name": "instance",
+          "type": "uint64_t"
+        },
+        {
+          "name": "expression",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "buffer",
+          "type": "char *"
+        },
+        {
+          "name": "capacity",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_free",
+      "returns": "void",
+      "params": [
+        {
+          "name": "ecmascript",
+          "type": "ta_datamodel_ecmascript *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_heap_bytes",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "ecmascript",
+          "type": "const ta_datamodel_ecmascript *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_js_runtime",
+      "returns": "void *",
+      "params": [
+        {
+          "name": "ecmascript",
+          "type": "ta_datamodel_ecmascript *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_last_error",
+      "returns": "const char *",
+      "params": [
+        {
+          "name": "ecmascript",
+          "type": "const ta_datamodel_ecmascript *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_new",
+      "returns": "ta_datamodel_ecmascript *",
+      "params": [
+        {
+          "name": "config",
+          "type": "const ta_datamodel_ecmascript_config *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_payload_eval",
+      "returns": "ta_payload",
+      "params": [
+        {
+          "name": "ecmascript",
+          "type": "ta_datamodel_ecmascript *"
+        },
+        {
+          "name": "expression",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_payload_from_json",
+      "returns": "ta_payload",
+      "params": [
+        {
+          "name": "ecmascript",
+          "type": "ta_datamodel_ecmascript *"
+        },
+        {
+          "name": "json",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_payload_to_json",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "ecmascript",
+          "type": "ta_datamodel_ecmascript *"
+        },
+        {
+          "name": "p",
+          "type": "ta_payload"
+        },
+        {
+          "name": "buffer",
+          "type": "char *"
+        },
+        {
+          "name": "capacity",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_restore",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "ecmascript",
+          "type": "ta_datamodel_ecmascript *"
+        },
+        {
+          "name": "buffer",
+          "type": "const void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_set_memory_limit",
+      "returns": "void",
+      "params": [
+        {
+          "name": "ecmascript",
+          "type": "ta_datamodel_ecmascript *"
+        },
+        {
+          "name": "bytes",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_snapshot",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "ecmascript",
+          "type": "ta_datamodel_ecmascript *"
+        },
+        {
+          "name": "buffer",
+          "type": "void *"
+        },
+        {
+          "name": "capacity",
+          "type": "size_t"
+        },
+        {
+          "name": "length",
+          "type": "size_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_vtable",
+      "returns": "const ta_datamodel_vtable *",
+      "params": [],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_datamodel_ecmascript_wasm_set_time",
+      "returns": "void",
+      "params": [
+        {
+          "name": "unix_milliseconds",
+          "type": "double"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "platform": "wasm",
+      "implemented": true
+    }
+  ]
+}

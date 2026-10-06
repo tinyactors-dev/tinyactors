@@ -53,18 +53,20 @@ module CRelease
   # platform amalgamations (<name>_<suffix>.c, PlatformFiles) lie beside its
   # amalgamation. `version_header` has its <MACRO>_VERSION_* macros (its
   # header, unless given). `libc` says whether it calls the C library: its
-  # wasm module then links wasi-libc for it, and is checked to import
-  # nothing all the same (decision 19).
-  Project = Data.define(:name, :prefix, :includes, :api_macro, :header, :amalgamation, :api, :version_header, :libc) do
+  # wasm module, for browsers, compiles wasi-libc in for it, and is checked to import
+  # nothing all the same (decision 19). `cflags` are flags its amalgamations
+  # compile with beyond a release's (QuickJS's dialect, decision 20).
+  Project = Data.define(:name, :prefix, :includes, :api_macro, :header, :amalgamation, :api, :version_header, :libc,
+                        :cflags) do
     def initialize(name:, prefix:, includes: [], api_macro: nil, header: nil, amalgamation: nil, api: nil,
-                   version_header: nil, libc: false)
+                   version_header: nil, libc: false, cflags: [])
       root = Cache::ROOT
       header = Pathname.new(header || root.join("include/#{name}.h"))
       super(name: name, prefix: prefix, includes: includes.map { |dir| Pathname.new(dir).expand_path },
             api_macro: api_macro || "#{prefix.upcase}_API", header: header,
             amalgamation: Pathname.new(amalgamation || root.join("include/#{name}.c")),
             api: Pathname.new(api || root.join("include/#{name}.api.json")),
-            version_header: Pathname.new(version_header || header), libc: libc)
+            version_header: Pathname.new(version_header || header), libc: libc, cflags: cflags)
     end
 
     def root = Cache::ROOT
