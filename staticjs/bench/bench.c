@@ -46,8 +46,8 @@
  * ((a, r) => a + r.kwh, which gives 166.5 at 10, as Node does), .pipeline,
  * .toSorted, .toSorted.desc ((a, b) => b - a), .toSorted.rows,
  * .toSorted.rows.desc ((a, b) => b.kwh - a.kwh), .map.pluck (r => r.kwh),
- * .every (x => x >= 0), .some (r => r.kwh < 0) and .findIndex (r => r.id
- * === "none"), which scan every element and find nothing, so they give
+ * .every (x => x >= 0), .some (r => r.kwh < 0), .findIndex (r => r.id
+ * === "none") and .findLastIndex (r => r.kwh < 0), which scan every element and find nothing, so they give
  * their smoke value at every size, eval.string.join (L); eval.object.spread-reduce (C);
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
@@ -401,6 +401,9 @@ static const bench_case cases[] = {
       .check = CHECK_SAME },
     { .name = "eval.array.findIndex", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.findIndex(r => r.id === \"none\")", .globals = { { "rows", FIX_ROWS, NULL } }, .expect = "-1",
+      .check = CHECK_SAME },
+    { .name = "eval.array.findLastIndex", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.findLastIndex(r => r.kwh < 0)", .globals = { { "rows", FIX_ROWS, NULL } }, .expect = "-1",
       .check = CHECK_SAME },
     { .name = "eval.string.join", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "rows.map(r => r.id).join(\",\")", .globals = { { "rows", FIX_ROWS, NULL } },

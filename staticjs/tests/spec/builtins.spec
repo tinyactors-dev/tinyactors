@@ -39,6 +39,34 @@
 --- value
 [12,1,8,undefined,-1]
 
+=== findLastIndex walks from the end
+[[5, 12, 8].findLastIndex(x => x > 6), [5, 12, 8].findLastIndex(x => x > 20), [].findLastIndex(x => true), [7, 7].findLastIndex(x => x === 7)]
+--- value
+[2,-1,-1,1]
+
+=== findLastIndex gives the callback the element, index and array
+[10, 20, 30].findLastIndex((x, i, xs) => x === 20 && i === 1 && xs.length === 3)
+--- value
+1
+
+=== findLastIndex visits from the end, so the last match wins
+["a", "b", "c", "b"].findLastIndex((x, i) => x === "b" && i < 3)
+--- value
+1
+
+=== findLastIndex faults on a callback that is not a function
+[1].findLastIndex(1)
+--- fault not a function
+
+=== findLastIndex faults without a callback, even on an empty array
+[].findLastIndex()
+--- fault not a function
+
+=== findLastIndex takes the truthiness of the answer
+[[0, 1, 2].findLastIndex(x => x), [0, 1, 2].findLastIndex(x => ''), [NaN, 0, -0].findLastIndex(x => x === 0), [NaN].findLastIndex(x => x !== x)]
+--- value
+[2,-1,2,0]
+
 === flatMap flattens one level
 [1, 2].flatMap(x => [x, [x * 10]])
 --- value
