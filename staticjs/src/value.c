@@ -729,3 +729,205 @@ sjs_result sjs_to_string(sjs_context *context, sjs_value v, sjs_string **out) {
 sjs_result sjs_to_key(sjs_context *context, sjs_value v, sjs_string **out) {
     return sjs_to_string(context, v, out);
 }
+
+/* ------------------------------------------------------------------------
+ * MUTATION: removal from sets and objects, and shrinking (docs/mutation.md,
+ * "Removal"). Removal compacts: the items after the one removed move down,
+ * so a container's items stay dense and in order, and every reader of
+ * them is unchanged; its index loses the removed item's slot by backward
+ * shifting, which leaves no deletion marker, and the positions after it
+ * go down by one. A container whose items or index have become mostly
+ * empty is reallocated smaller. This section exists only for mutation.
+ */
+
+/* Where an item is: its position, and its slot in the index, or
+ * UINT32_MAX for none (not found; no index). */
+typedef struct {
+    uint32_t position;
+    uint32_t slot;
+} lookup_hit;
+
+static lookup_hit object_hit(const sjs_object *o, sjs_str key) {
+    lookup_hit hit = { UINT32_MAX, UINT32_MAX };
+    const sjs_index *index = o->index;
+    if (index != NULL) {
+        for (uint32_t i = hash_bytes(key) & index->mask; index->slots[i] != 0; i = (i + 1u) & index->mask) {
+            if (sjs_str_equal(sjs_string_view(o->entries[index->slots[i] - 1u].key), key)) {
+                hit.position = index->slots[i] - 1u;
+                hit.slot = i;
+                return hit;
+            }
+        }
+        return hit;
+    }
+    for (uint32_t i = 0; i < o->count; i++) {
+        if (sjs_str_equal(sjs_string_view(o->entries[i].key), key)) {
+            hit.position = i;
+            return hit;
+        }
+    }
+    return hit;
+}
+
+static lookup_hit set_hit(const sjs_array *set, sjs_value element) {
+    lookup_hit hit = { UINT32_MAX, UINT32_MAX };
+    const sjs_index *index = set->index;
+    if (index != NULL) {
+        for (uint32_t i = hash_value(element) & index->mask; index->slots[i] != 0; i = (i + 1u) & index->mask) {
+            if (sjs_same_value_zero(set->items[index->slots[i] - 1u], element)) {
+                hit.position = index->slots[i] - 1u;
+                hit.slot = i;
+                return hit;
+            }
+        }
+        return hit;
+    }
+    for (uint32_t i = 0; i < set->length; i++) {
+        if (sjs_same_value_zero(set->items[i], element)) {
+            hit.position = i;
+            return hit;
+        }
+    }
+    return hit;
+}
+
+/* Take the item at `hit` out of the container's index, before the items
+ * after it move down. Linear probing finds an item by walking from its
+ * home slot to the first empty one, so each item after the hole in its
+ * cluster that could no longer be found moves into the hole, which moves
+ * on (backward-shift deletion): no slot is ever a deletion marker. */
+static void lookup_remove(const sjs_heap *h, sjs_index *index, lookup_hit hit) {
+    uint32_t mask = index->mask;
+    uint32_t hole = hit.slot;
+    for (uint32_t j = (hole + 1u) & mask; index->slots[j] != 0; j = (j + 1u) & mask) {
+        uint32_t home = item_hash(h, index->slots[j] - 1u) & mask;
+        /* It stays when its home is after the hole, up to j, cyclically. */
+        bool stays = hole <= j ? (home > hole && home <= j) : (home > hole || home <= j);
+        if (stays) continue;
+        index->slots[hole] = index->slots[j];
+        hole = j;
+    }
+    index->slots[hole] = 0;
+    if (hit.position + 1u == item_count(h)) return;
+    for (uint32_t i = 0; i <= mask; i++) {
+        if (index->slots[i] > hit.position + 1u) index->slots[i]--;
+    }
+}
+
+/* After a removal: a container under half of SJS_INDEX_FROM items goes
+ * without an index, as a small one is scanned, and may get one again as it
+ * grows, even if one failed to allocate before; an index at most an eighth
+ * full is rebuilt a quarter full, so that a table grows at half load and
+ * shrinks at an eighth, and adding and removing around either does not
+ * rebuild it each time. When the smaller table cannot be allocated, the
+ * larger one stays: it is still correct. */
+static void lookup_shrink(sjs_context *context, sjs_heap *h) {
+    sjs_index **field = lookup_field(h);
+    uint32_t count = item_count(h);
+    sjs_index *index = *field;
+    if (count < SJS_INDEX_FROM / 2u) {
+        lookup_free(context, index);
+        *field = NULL;
+        h->flags &= (uint8_t)~SJS_CONTAINER_UNINDEXED;
+        return;
+    }
+    if (index == NULL || index->mask < 16u || (uint64_t)count * 8u > (uint64_t)index->mask + 1u) return;
+    uint32_t slots = 16u;
+    while (slots / 4u < count) slots *= 2u;
+    sjs_index *smaller = sjs_mem_alloc(&context->counting, lookup_size(slots - 1u));
+    if (smaller == NULL) return;
+    lookup_free(context, index);
+    smaller->mask = slots - 1u;
+    *field = smaller;
+    sjs_zero(smaller->slots, (size_t)slots * sizeof(uint32_t));
+    for (uint32_t i = 0; i < count; i++) lookup_put(smaller, item_hash(h, i), i);
+}
+
+/* A container's capacity shrinks once it reaches SJS_SHRINK_FROM and its
+ * items fill under a quarter of it, to twice its items: it grows by
+ * doubling when full, so adding and removing around the edge does not
+ * reallocate each time. */
+#define SJS_SHRINK_FROM 16u
+
+static uint32_t shrunk_capacity(uint32_t capacity, uint32_t count) {
+    if (capacity < SJS_SHRINK_FROM || (uint64_t)count * 4u >= capacity) return capacity;
+    return count * 2u < 4u ? 4u : count * 2u;
+}
+
+void sjs_array_shrink(sjs_context *context, sjs_array **array) {
+    sjs_array *a = *array;
+    uint32_t capacity = shrunk_capacity(a->capacity, a->length);
+    if (capacity == a->capacity) return;
+    sjs_array *smaller;
+    if (array_alloc(context, (shape){ capacity, a->h.type }, &smaller) != SJS_OK) return;
+    smaller->length = a->length;
+    sjs_copy(smaller->items, a->items, (size_t)a->length * sizeof(sjs_value));
+    smaller->h.flags = a->h.flags;
+    smaller->index = a->index;
+    sjs_mem_free(&context->counting, a, a->h.size);
+    *array = smaller;
+}
+
+static void object_shrink(sjs_context *context, sjs_object **object) {
+    sjs_object *o = *object;
+    uint32_t capacity = shrunk_capacity(o->capacity, o->count);
+    if (capacity == o->capacity) return;
+    sjs_object *smaller;
+    if (object_alloc(context, capacity, &smaller) != SJS_OK) return;
+    smaller->count = o->count;
+    sjs_copy(smaller->entries, o->entries, (size_t)o->count * sizeof(sjs_entry));
+    smaller->h.flags = o->h.flags;
+    smaller->index = o->index;
+    sjs_mem_free(&context->counting, o, o->h.size);
+    *object = smaller;
+}
+
+/* The fuel of a removal: the lookup, one unit through the index or in a
+ * small container, its length when it is scanned (as lookup_cost charges a
+ * set's); and its length again when the item was not the last, as the
+ * items after it move down and the index's positions are renumbered. */
+static uint64_t removal_cost(const sjs_heap *h, const sjs_index *index, lookup_hit hit) {
+    uint32_t count = item_count(h);
+    uint64_t cost = index != NULL || count < SJS_INDEX_FROM ? 1u : count;
+    if (hit.position != UINT32_MAX && hit.position + 1u < count) cost += count;
+    return cost;
+}
+
+sjs_removal sjs_object_remove(sjs_context *context, sjs_object **object, sjs_str key) {
+    sjs_object *o = *object;
+    lookup_hit hit = object_hit(o, key);
+    sjs_removal out = { hit.position != UINT32_MAX, removal_cost(&o->h, o->index, hit) };
+    if (!out.removed) return out;
+    if (o->index != NULL) lookup_remove(&o->h, o->index, hit);
+    sjs_entry gone = o->entries[hit.position];
+    for (uint32_t i = hit.position + 1u; i < o->count; i++) o->entries[i - 1u] = o->entries[i];
+    o->count--;
+    lookup_shrink(context, &o->h);
+    object_shrink(context, object);
+    sjs_release(context, sjs_heap_value(SJS_STRING, &gone.key->h));
+    sjs_release(context, gone.value);
+    return out;
+}
+
+sjs_removal sjs_set_remove(sjs_context *context, sjs_array **set, sjs_value element) {
+    sjs_array *a = *set;
+    lookup_hit hit = set_hit(a, element);
+    sjs_removal out = { hit.position != UINT32_MAX, removal_cost(&a->h, a->index, hit) };
+    if (!out.removed) return out;
+    if (a->index != NULL) lookup_remove(&a->h, a->index, hit);
+    sjs_value gone = a->items[hit.position];
+    for (uint32_t i = hit.position + 1u; i < a->length; i++) a->items[i - 1u] = a->items[i];
+    a->length--;
+    lookup_shrink(context, &a->h);
+    sjs_array_shrink(context, set);
+    sjs_release(context, gone);
+    return out;
+}
+
+void sjs_set_clear(sjs_context *context, sjs_array **set) {
+    sjs_array *a = *set;
+    for (uint32_t i = 0; i < a->length; i++) sjs_release(context, a->items[i]);
+    a->length = 0;
+    lookup_shrink(context, &a->h);
+    sjs_array_shrink(context, set);
+}

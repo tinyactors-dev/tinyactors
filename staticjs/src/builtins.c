@@ -1877,8 +1877,9 @@ static sjs_result array_insert(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
 }
 
 /* pop and shift: the element taken out is the result, its reference moved
- * from the array. shift moves the rest down, one unit each. */
-static sjs_result array_remove(sjs_builtin_id id, sjs_leaf_call *call) {
+ * from the array. shift moves the rest down, one unit each. The array
+ * shrinks when it has become mostly empty (sjs_array_shrink). */
+static sjs_result array_remove(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_array *a = SJS_AS_ARRAY(*call->receiver_slot);
     uint32_t n = a->length;
     if (n == 0) return SJS_OK;
@@ -1890,6 +1891,8 @@ static sjs_result array_remove(sjs_builtin_id id, sjs_leaf_call *call) {
         call->cost = n - 1u;
     }
     a->length = n - 1u;
+    sjs_array_shrink(vm->context, &a);
+    call->receiver_slot->as.heap = &a->h;
     return SJS_OK;
 }
 
@@ -1936,7 +1939,7 @@ sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
         return array_insert(vm, id, call);
     case SJS_METHOD_ARRAY_POP:
     case SJS_METHOD_ARRAY_SHIFT:
-        return array_remove(id, call);
+        return array_remove(vm, id, call);
     case SJS_METHOD_ARRAY_FILL:
         return array_fill(vm, call);
     case SJS_METHOD_ARRAY_REVERSE: {
