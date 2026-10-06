@@ -1989,7 +1989,9 @@ static void test_mutation_out_of_memory(void) {
                        SJS_GOAL_EXPRESSION);
 }
 
-/* MUTATION: removal and shrinking (docs/mutation.md, "Removal"). */
+/* MUTATION: removal and shrinking (docs/mutation.md, "Removal"). live_of
+ * and allocations_of serve STRING_APPEND's tests too: rolling mutation back
+ * keeps them. */
 
 /* The bytes the context holds while it holds the value `source` gives,
  * and nothing else. */
@@ -2334,6 +2336,75 @@ static void test_out_of_memory(const char *source, sjs_goal goal) {
     CHECK(needed > 1);
 }
 
+/* STRING_APPEND: + and a template extend a string nothing else holds, so a
+ * string built a piece at a time, as reduce's accumulator, takes O(log n)
+ * allocations, not one per piece, and holds at most twice its length. */
+static void test_string_append_memory(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    static const char *const callbacks[] = { "(acc, x) => acc + x", "(acc, x) => `${acc}${x}`", "(acc, x) => acc + x + \"\"" };
+    static const int sizes[2] = { 1000, 100000 };
+    char source[256];
+    for (int f = 0; f < 3; f++) {
+        long allocations[2];
+        size_t live[2];
+        for (int i = 0; i < 2; i++) {
+            snprintf(source, sizeof source, "Array.from({length: %d}, () => \"x\").reduce(%s, \"\")", sizes[i], callbacks[f]);
+            allocations[i] = allocations_of(&c, context, source);
+            live[i] = live_of(context, source);
+        }
+        if (getenv("SJS_TEST_VERBOSE") != NULL) {
+            printf("%s: allocations %ld -> %ld, live %zu -> %zu\n", callbacks[f], allocations[0], allocations[1], live[0], live[1]);
+        }
+        /* From 1,000 to 100,000 pieces: 7 more doublings, not 99,000 copies. */
+        CHECK(allocations[1] - allocations[0] <= 10);
+        CHECK(live[1] >= (size_t)sizes[1] && live[1] <= 2u * (size_t)sizes[1] + 256u);
+    }
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+static sjs_result interned_key_object(void *self, sjs_native_call *call) {
+    (void)self;
+    sjs_result r = sjs_object_new(call->context, 1, &call->result);
+    sjs_property p = { SJS_STR("ab"), sjs_number(1) };
+    return r == SJS_OK ? sjs_object_put(call->context, &call->result, &p) : r;
+}
+
+static const sjs_native_vtable interned_key_vtable = { interned_key_object };
+
+/* STRING_APPEND: an interned string is found by its text, so one that
+ * nothing else holds is copied, not extended: here a key put through the
+ * API, read out of a temporary object. The table still finds the key. */
+static void test_string_append_interned(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    char out[256];
+    sjs_value native;
+    CHECK(sjs_function_native(context, (sjs_native){ NULL, &interned_key_vtable }, &native) == SJS_OK);
+    sjs_str names[1] = { SJS_STR("o") };
+    env e = { context, names, &native, 1, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    CHECK(evaluate(&e, "Object.keys(o())[0] + \"c\"", out) == SJS_OK && strcmp(out, "\"abc\"") == 0);
+    CHECK(evaluate(&e, "`${Object.keys(o())[0]}c${1}`", out) == SJS_OK && strcmp(out, "\"abc1\"") == 0);
+    sjs_value kept;
+    CHECK(sjs_object_new(context, 1, &kept) == SJS_OK);
+    sjs_property p = { SJS_STR("ab"), sjs_number(2) };
+    CHECK(sjs_object_put(context, &kept, &p) == SJS_OK);
+    CHECK(evaluate(&e, "[Object.keys(o())[0] + \"c\", Object.keys(o())[0]]", out) == SJS_OK && strcmp(out, "[\"abc\",\"ab\"]") == 0);
+    sjs_property a, b;
+    sjs_value fresh;
+    CHECK(sjs_object_new(context, 1, &fresh) == SJS_OK);
+    CHECK(sjs_object_put(context, &fresh, &p) == SJS_OK);
+    CHECK(sjs_object_at(kept, 0, &a) == SJS_OK && sjs_object_at(fresh, 0, &b) == SJS_OK && a.key.ptr == b.key.ptr);
+    sjs_release(context, fresh);
+    sjs_release(context, kept);
+    sjs_release(context, native);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
 int main(int argc, char **argv) {
     bool full = argc > 1 && strcmp(argv[1], "--full") == 0;
     test_values();
@@ -2382,6 +2453,9 @@ int main(int argc, char **argv) {
     test_mutation_path_fuel();
     test_mutation_path_natives();
     test_mutation_path_out_of_memory();
+    /* STRING_APPEND */
+    test_string_append_memory();
+    test_string_append_interned();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */

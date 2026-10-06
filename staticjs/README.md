@@ -52,6 +52,21 @@ too; and 100,000 doubles must format as `String(x)` does.
   `{...acc, [k]: v}` in a `reduce` no longer copies the accumulator at each
   step. Owned mutation (below) relies on the same count: `acc.push(x)` in a
   `reduce` changes the accumulator the callback holds alone.
+- **`+` and a template extend a string nothing else holds** (tagged
+  `STRING_APPEND`): in `reduce((acc, x) => acc + x, "")` or
+  `` (acc, x) => `${acc}${x},` ``, or wherever the left operand (a
+  template's first substitution, after an empty head) is a value a last
+  read moved, the string's block grows to twice its length when full, and
+  the right-hand values are appended. Building a string of n bytes then
+  copies O(n) bytes in O(log n) allocations, where it copied the whole
+  string at each step. Its byte and UTF-16 lengths, its ASCII flag and
+  whether it is an array index stay true; an interned string (a program's
+  constants, keys put through the API) is copied, as the context's table
+  finds it by its text. The spare room is at most the string's length, and
+  stays with it when it is shared or returned: a string holds at most twice
+  its bytes. Fuel is a unit per 64 bytes appended, where a copy charges for
+  the whole string. Numbers still add first: `add` tests for two numbers
+  before anything else.
 - **Shapes change speed and fuel, never a value or a fault.** `toSorted`
   (and `sort`, which runs its loop) with a comparator `(a, b) => a.key - b.key` (or `b.key - a.key`) and
   `map` with `x => x.key` run the callback in C while each step's

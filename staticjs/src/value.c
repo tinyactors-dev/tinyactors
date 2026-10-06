@@ -931,3 +931,52 @@ void sjs_set_clear(sjs_context *context, sjs_array **set) {
     lookup_shrink(context, &a->h);
     sjs_array_shrink(context, set);
 }
+
+/* ------------------------------------------------------------------------
+ * STRING_APPEND: a string that one holder has, extended in place by + and a
+ * template (README.md, "A value nothing else holds is updated in place").
+ * Not mutation: no program can tell, as nothing else sees the string.
+ */
+
+/* Room for `extra` more bytes in a string the caller holds alone and that is
+ * not interned. Its block grows to twice its length, or to what it needs if
+ * that is more, so appending n bytes a few at a time copies O(n) bytes and
+ * allocates O(log n) times; the slack is at most the string's length, and
+ * stays when the string is shared or kept (README.md). The new block is
+ * allocated before the old one is freed: out of memory, the string is as it
+ * was. */
+sjs_result sjs_string_reserve(sjs_context *context, sjs_string **string, uint32_t extra) {
+    sjs_string *s = *string;
+    uint64_t need = (uint64_t)s->length + extra;
+    if (need > context->limits.max_string_bytes) return SJS_ERR_LIMIT;
+    if (need + sizeof(sjs_string) + 1u <= s->h.size) return SJS_OK;
+    uint64_t want = 2u * (uint64_t)s->length;
+    if (want < need) want = need;
+    if (want > context->limits.max_string_bytes) want = context->limits.max_string_bytes;
+    uint64_t size = sizeof(sjs_string) + want + 1u;
+    if (size > UINT32_MAX) return SJS_ERR_NOMEM;
+    sjs_string *grown = sjs_mem_alloc(&context->counting, (size_t)size);
+    if (grown == NULL) return SJS_ERR_NOMEM;
+    sjs_copy(grown, s, sizeof(sjs_string) + s->length + 1u);
+    grown->h.size = (uint32_t)size;
+    sjs_mem_free(&context->counting, s, s->h.size);
+    *string = grown;
+    return SJS_OK;
+}
+
+/* Append `tail` to a string with room for it (sjs_string_reserve), and keep
+ * what the string caches true of its text: both lengths, ASCII, and whether
+ * it is an array index; its name's ID is looked up again when needed. */
+void sjs_string_extend(sjs_string *s, sjs_str tail) {
+    bool ascii = true;
+    for (uint32_t i = 0; i < tail.length; i++) {
+        if ((uint8_t)tail.ptr[i] >= 0x80u) ascii = false;
+    }
+    sjs_copy(s->bytes + s->length, tail.ptr, tail.length);
+    s->length += tail.length;
+    s->bytes[s->length] = '\0';
+    s->utf16_length += ascii ? tail.length : sjs_utf16_length(tail);
+    s->h.flags &= (uint8_t)~(SJS_STRING_INDEX | SJS_STRING_NAMED | (ascii ? 0u : SJS_STRING_ASCII));
+    s->h.name_id = 0;
+    if (parse_index(sjs_string_view(s), &s->index)) s->h.flags |= SJS_STRING_INDEX;
+}
