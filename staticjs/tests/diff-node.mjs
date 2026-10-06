@@ -189,6 +189,25 @@ const numberChecks = {
     const want = parseInt(rest.slice(radix.length + bits.length + 2), Number(radix));
     return sameDouble(bits, want) ? null : `parseInt: staticjs ${bits}, JavaScript ${toHex(want)}`;
   },
+  S(rest) { // <x> <sqrt> <fround>
+    const [x, root, round] = rest.split(' ');
+    const v = toDouble(x);
+    if (!sameDouble(root, Math.sqrt(v))) return `Math.sqrt: staticjs ${root}, JavaScript ${toHex(Math.sqrt(v))}`;
+    if (!sameDouble(round, Math.fround(v))) return `Math.fround: staticjs ${round}, JavaScript ${toHex(Math.fround(v))}`;
+    return null;
+  },
+  H(rest) { // <hypot> <x>...
+    const [result, ...args] = rest.split(' ');
+    const want = Math.hypot(...args.map(toDouble));
+    return sameDouble(result, want) ? null : `Math.hypot: staticjs ${result}, JavaScript ${toHex(want)}`;
+  },
+  C(rest) { // <a> <b> <clz32(a)> <imul(a, b)>
+    const [a, b, clz, imul] = rest.split(' ');
+    const [x, y] = [toDouble(a), toDouble(b)];
+    if (Number(clz) !== Math.clz32(x)) return `Math.clz32: staticjs ${clz}, JavaScript ${Math.clz32(x)}`;
+    if (Number(imul) !== Math.imul(x, y)) return `Math.imul: staticjs ${imul}, JavaScript ${Math.imul(x, y)}`;
+    return null;
+  },
 };
 if (numbers) {
   for (const line of readFileSync(numbers, 'utf8').split('\n')) {
@@ -205,6 +224,9 @@ const numberSummary = [
   ['D', 'decimals read as Number(s) does'],
   ['N', 'strings read as Number(s) and parseFloat(s) do'],
   ['I', 'strings read as parseInt(s, radix) does'],
+  ['S', 'doubles give Math.sqrt(x) and Math.fround(x)'],
+  ['H', 'argument lists give Math.hypot(...xs)'],
+  ['C', 'pairs give Math.clz32(a) and Math.imul(a, b)'],
 ].filter(([tag]) => counts.has(tag)).map(([tag, what]) => `${counts.get(tag)} ${what}`).join(', ');
 
 if (failures.length > 0) {

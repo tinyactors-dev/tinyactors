@@ -48,7 +48,12 @@ static const function_entry FUNCTION_TABLE[] = {
     { "Number", "parseInt", SJS_BUILTIN_PARSE_INT },
     { "Number", "parseFloat", SJS_BUILTIN_PARSE_FLOAT },
     { "", "isNaN", SJS_BUILTIN_IS_NAN },
-    { "", "isFinite", SJS_BUILTIN_IS_FINITE }
+    { "", "isFinite", SJS_BUILTIN_IS_FINITE },
+    { "Math", "sqrt", SJS_BUILTIN_MATH_SQRT },
+    { "Math", "hypot", SJS_BUILTIN_MATH_HYPOT },
+    { "Math", "fround", SJS_BUILTIN_MATH_FROUND },
+    { "Math", "clz32", SJS_BUILTIN_MATH_CLZ32 },
+    { "Math", "imul", SJS_BUILTIN_MATH_IMUL }
 };
 
 /*
@@ -200,7 +205,12 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_PARSE_INT),
     FUNCTION_VALUE(SJS_BUILTIN_PARSE_FLOAT),
     FUNCTION_VALUE(SJS_BUILTIN_IS_NAN),
-    FUNCTION_VALUE(SJS_BUILTIN_IS_FINITE)
+    FUNCTION_VALUE(SJS_BUILTIN_IS_FINITE),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_SQRT),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_HYPOT),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_FROUND),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_CLZ32),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_IMUL)
 };
 
 sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name) {
@@ -542,6 +552,8 @@ static sjs_result math(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
 static sjs_result string_from(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* Number, parseInt, parseFloat, isNaN and isFinite, at the end of the file. */
 static sjs_result number_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+/* Math.sqrt, hypot, fround, clz32 and imul, at the end of the file. */
+static sjs_result math_exact(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 
 static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_value x = arg(call, 0);
@@ -601,6 +613,12 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     case SJS_BUILTIN_IS_NAN:
     case SJS_BUILTIN_IS_FINITE:
         return number_function(vm, id, call);
+    case SJS_BUILTIN_MATH_SQRT:
+    case SJS_BUILTIN_MATH_HYPOT:
+    case SJS_BUILTIN_MATH_FROUND:
+    case SJS_BUILTIN_MATH_CLZ32:
+    case SJS_BUILTIN_MATH_IMUL:
+        return math_exact(vm, id, call);
     default:
         return math(vm, id, call);
     }
@@ -2532,5 +2550,67 @@ static sjs_result number_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *
         return SJS_OK;
     }
     call->result = sjs_num(d);
+    return SJS_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * Math functions IEEE 754 makes exact, the same bits on every target:
+ * sqrt and fround round once; clz32 and imul are integer operations; hypot
+ * is V8's own sum (number.c). Each converts its arguments as the other
+ * Math functions do.
+ */
+
+/* ToInt32's bits as a number. */
+static double int32_number(uint32_t bits) {
+    return bits >= 0x80000000u ? (double)bits - 4294967296.0 : (double)bits;
+}
+
+static sjs_result math_hypot(sjs_vm *vm, sjs_leaf_call *call) {
+    /* Every argument is converted and seen first, as V8 does. */
+    sjs_hypot h = { 0, 0, 0, false };
+    for (uint32_t i = 0; i < call->count; i++) {
+        double d;
+        if (sjs_vm_to_number(vm, call->args[i], &d) != SJS_OK) return SJS_ERR_PROGRAM;
+        sjs_hypot_see(&h, d);
+    }
+    call->cost = call->count;
+    double result;
+    if (!sjs_hypot_settled(&h, &result)) {
+        for (uint32_t i = 0; i < call->count; i++) {
+            double d;
+            if (sjs_vm_to_number(vm, call->args[i], &d) != SJS_OK) return SJS_ERR_PROGRAM;
+            sjs_hypot_add(&h, d);
+        }
+        result = sjs_hypot_end(&h);
+    }
+    call->result = sjs_num(result);
+    return SJS_OK;
+}
+
+static sjs_result math_exact(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    if (id == SJS_BUILTIN_MATH_HYPOT) return math_hypot(vm, call);
+    double x;
+    if (sjs_vm_to_number(vm, arg(call, 0), &x) != SJS_OK) return SJS_ERR_PROGRAM;
+    double y;
+    switch (id) {
+    case SJS_BUILTIN_MATH_SQRT:
+        y = sjs_number_sqrt(x);
+        break;
+    case SJS_BUILTIN_MATH_FROUND:
+        y = sjs_number_fround(x);
+        break;
+    case SJS_BUILTIN_MATH_CLZ32: {
+        uint32_t bits = sjs_number_to_uint32(x);
+        y = bits == 0 ? 32 : (double)__builtin_clz(bits);
+        break;
+    }
+    default: { /* IMUL */
+        double b;
+        if (sjs_vm_to_number(vm, arg(call, 1), &b) != SJS_OK) return SJS_ERR_PROGRAM;
+        y = int32_number(sjs_number_to_uint32(x) * sjs_number_to_uint32(b));
+        break;
+    }
+    }
+    call->result = sjs_num(y);
     return SJS_OK;
 }

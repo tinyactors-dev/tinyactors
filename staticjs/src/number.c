@@ -874,3 +874,49 @@ uint32_t sjs_number_to_uint32(double x) {
     else low = (uint32_t)(m >> -e);
     return (u >> 63) != 0 ? 0u - low : low;
 }
+
+double sjs_number_sqrt(double x) {
+    /* An instruction on every target (sqrtsd, fsqrt, f64.sqrt), correctly
+     * rounded by IEEE 754; unlike __builtin_sqrt, never a call to libm's
+     * sqrt for errno. */
+    return __builtin_elementwise_sqrt(x);
+}
+
+double sjs_number_fround(double x) {
+    return (double)(float)x;
+}
+
+/* Math.hypot as V8 computes it (MathHypot, src/builtins/math.tq): every
+ * argument seen first, for the largest magnitude and whether one is NaN;
+ * then an Infinity gives Infinity, a NaN NaN, and a largest of 0 (or no
+ * arguments) 0; otherwise each magnitude divided by the largest, squared
+ * and summed with Kahan's compensation, and sqrt(sum) * max. */
+static double hypot_magnitude(double x) {
+    return x < 0 ? -x : x + 0.0;
+}
+
+void sjs_hypot_see(sjs_hypot *h, double x) {
+    if (sjs_number_is_nan(x)) h->nan = true;
+    else if (hypot_magnitude(x) > h->max) h->max = hypot_magnitude(x);
+}
+
+bool sjs_hypot_settled(const sjs_hypot *h, double *out) {
+    if (!sjs_number_is_finite(h->max)) *out = h->max;
+    else if (h->nan) *out = 0.0 / 0.0;
+    else if (h->max == 0) *out = 0;
+    else return false;
+    return true;
+}
+
+void sjs_hypot_add(sjs_hypot *h, double x) {
+    double n = hypot_magnitude(x) / h->max;
+    double square = n * n;
+    double summand = square - h->compensation;
+    double preliminary = h->sum + summand;
+    h->compensation = (preliminary - h->sum) - summand;
+    h->sum = preliminary;
+}
+
+double sjs_hypot_end(const sjs_hypot *h) {
+    return sjs_number_sqrt(h->sum) * h->max;
+}

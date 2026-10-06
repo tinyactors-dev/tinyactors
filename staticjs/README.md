@@ -18,9 +18,13 @@ value is evaluated in Node and must give the same value; every case staticjs
 refuses as a syntax error must be one JavaScript refuses too; every case it
 refuses as unsupported must be valid JavaScript; every case it refuses for a
 name (bound nowhere, not exported, no such module) must throw in JavaScript
-too; and 100,000 doubles must format as `String(x)` does, and 100,000
-decimal strings (random digits, long ones, and the exact midpoints between
-two doubles) must read as `Number(s)` does.
+too; and 100,000 of each of these must give Node's bits: doubles
+formatted as `String(x)`; decimal strings (random digits, long ones, and
+the exact midpoints between two doubles) read by `Number(s)`; strings with
+white space, signs, prefixes and junk read by `Number(s)` and
+`parseFloat(s)`, and by `parseInt(s, radix)` in every radix; doubles
+through `Math.sqrt` and `Math.fround`; argument lists through `Math.hypot`;
+and pairs through `Math.clz32` and `Math.imul` (`number_test --print`).
 
 ## What it guarantees
 
@@ -192,7 +196,7 @@ Built-ins:
 | strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `replaceAll` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
 | functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` |
-| `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign`, and its constants |
+| `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum) |
 | constants | `Number.EPSILON` `MAX_SAFE_INTEGER` `MIN_SAFE_INTEGER` `MAX_VALUE` `MIN_VALUE` `POSITIVE_INFINITY` `NEGATIVE_INFINITY` `NaN`; `Math.PI` `E` `LN2` `LN10` `LOG2E` `LOG10E` `SQRT2` `SQRT1_2`: number constants when compiled |
 | changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear` |
 
@@ -361,7 +365,7 @@ mise run shapes [--check]   # write src/shapes.h and src/shapes_table.h from src
 mise run shapes-test        # the shapes generator's own tests
 mise run check-parameters   # at most three parameters per function
 mise run check-recursion    # no cycle in the call graph
-mise run check-freestanding # builds for wasm32-freestanding with no C library
+mise run check-freestanding # builds for every release target, wasm32 included, with no C library
 mise run asan               # the tests under AddressSanitizer and UBSan
 mise run diff-node          # the spec against JavaScript
 mise run bench [filter] [--quick]                  # the benchmarks, optimized: throughput and memory

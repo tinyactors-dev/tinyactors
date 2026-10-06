@@ -111,6 +111,22 @@ double sjs_number_parse_float(sjs_str s);
 double sjs_number_parse_int(sjs_str s, int32_t radix);
 /* ToUint32 (ToInt32 is the same bits, signed). */
 uint32_t sjs_number_to_uint32(double x);
+/* Correctly rounded square root; the nearest float32, widened. */
+double sjs_number_sqrt(double x);
+double sjs_number_fround(double x);
+/* Math.hypot, as V8 computes it: from a zeroed sjs_hypot, see every
+ * argument; if that settles the result, it is that; otherwise add every
+ * argument, and end. */
+typedef struct {
+    double max;
+    double sum;
+    double compensation;
+    bool nan;
+} sjs_hypot;
+void sjs_hypot_see(sjs_hypot *h, double x);
+bool sjs_hypot_settled(const sjs_hypot *h, double *out);
+void sjs_hypot_add(sjs_hypot *h, double x);
+double sjs_hypot_end(const sjs_hypot *h);
 
 /* ========================================================================
  * Values
@@ -383,6 +399,11 @@ typedef enum {
     SJS_BUILTIN_PARSE_FLOAT,
     SJS_BUILTIN_IS_NAN,
     SJS_BUILTIN_IS_FINITE,
+    SJS_BUILTIN_MATH_SQRT,
+    SJS_BUILTIN_MATH_HYPOT,
+    SJS_BUILTIN_MATH_FROUND,
+    SJS_BUILTIN_MATH_CLZ32,
+    SJS_BUILTIN_MATH_IMUL,
     SJS_BUILTIN_FUNCTION_COUNT,
     /* Methods, called on a receiver. */
     SJS_METHOD_FIRST = 64,

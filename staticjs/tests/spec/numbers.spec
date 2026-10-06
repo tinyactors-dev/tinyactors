@@ -234,3 +234,67 @@ Math.TAU
 === a Number member staticjs leaves out is refused
 Number.prototype
 --- error unsupported does not have this built-in
+
+# Math functions IEEE 754 makes exact: the same bits on every target.
+=== Math.sqrt
+[Math.sqrt(4), Math.sqrt(2), Math.sqrt(0), Math.sqrt(-0), Math.sqrt(-1), Math.sqrt(Infinity), Math.sqrt(-Infinity), Math.sqrt(NaN), Math.sqrt(5e-324), Math.sqrt(Number.MAX_VALUE), Math.sqrt(0.01), Math.sqrt(1e-310), Math.sqrt(), Math.sqrt(null), Math.sqrt(true), Math.sqrt(undefined)]
+--- value
+[2,1.4142135623730951,0,-0,NaN,Infinity,NaN,NaN,2.2227587494850775e-162,1.3407807929942596e+154,0.1,9.999999999999986e-156,NaN,0,1,NaN]
+
+=== Math.fround
+[Math.fround(1.1), Math.fround(0.1), Math.fround(-0), Math.fround(NaN), Math.fround(Infinity), Math.fround(3.4028234663852886e38), Math.fround(3.4028235677973366e38), Math.fround(3.4028235677973362e38), Math.fround(1e39), Math.fround(-1e39), Math.fround(1.401298464324817e-45), Math.fround(7.006492321624085e-46), Math.fround(7.006492321624087e-46), Math.fround(1e-46), Math.fround(-1e-46), Math.fround(16777217), Math.fround(16777219), Math.fround(5e-324), Math.fround(), Math.fround(true)]
+--- value
+[1.100000023841858,0.10000000149011612,-0,NaN,Infinity,3.4028234663852886e+38,Infinity,3.4028234663852886e+38,Infinity,-Infinity,1.401298464324817e-45,0,1.401298464324817e-45,0,-0,16777216,16777220,0,NaN,1]
+
+=== Math.clz32
+[Math.clz32(0), Math.clz32(1), Math.clz32(-1), Math.clz32(0.5), Math.clz32(-0), Math.clz32(NaN), Math.clz32(Infinity), Math.clz32(-Infinity), Math.clz32(2147483648), Math.clz32(4294967295), Math.clz32(4294967296), Math.clz32(4294967297), Math.clz32(-2147483649), Math.clz32(1e20), Math.clz32(3.9), Math.clz32(), Math.clz32(true), Math.clz32(null), Math.clz32(2 ** 0 * 9007199254740991)]
+--- error unsupported **
+
+=== Math.clz32 without **
+[Math.clz32(0), Math.clz32(1), Math.clz32(-1), Math.clz32(0.5), Math.clz32(-0), Math.clz32(NaN), Math.clz32(Infinity), Math.clz32(-Infinity), Math.clz32(2147483648), Math.clz32(4294967295), Math.clz32(4294967296), Math.clz32(4294967297), Math.clz32(-2147483649), Math.clz32(1e20), Math.clz32(3.9), Math.clz32(), Math.clz32(true), Math.clz32(null), Math.clz32(9007199254740991), Math.clz32(1.7976931348623157e308), Math.clz32(-4294967295.5)]
+--- value
+[32,31,0,32,32,32,32,32,0,0,32,31,1,1,30,32,31,32,0,32,31]
+
+=== Math.imul
+[Math.imul(2, 3), Math.imul(-5, 12), Math.imul(0xffffffff, 5), Math.imul(0xfffffffe, 5), Math.imul(2147483647, 2), Math.imul(65536, 65536), Math.imul(65537, 65537), Math.imul(1.9, 2.9), Math.imul(-1.9, 3), Math.imul(NaN, 3), Math.imul(Infinity, 3), Math.imul(3), Math.imul(), Math.imul(true, 7), Math.imul(null, 7), Math.imul(-0, 5), Math.imul(-1, 0), Math.imul(4294967296 + 3, 5), Math.imul(1e20, 3), Math.imul(9007199254740991, 9007199254740991)]
+--- value
+[6,-60,-5,-10,-2,0,131073,2,-3,0,0,0,0,7,0,0,0,15,691011584,1]
+
+=== Math.hypot
+[Math.hypot(), Math.hypot(3, 4), Math.hypot(-3, -4), Math.hypot(5), Math.hypot(-5), Math.hypot(-0), Math.hypot(0, -0), Math.hypot(1, 1, 1), Math.hypot(3, 4, 12), Math.hypot(1e200, 1e200), Math.hypot(1e-200, 1e-200), Math.hypot(5e-324, 5e-324), Math.hypot(Number.MAX_VALUE, Number.MAX_VALUE), Math.hypot(0.1, 0.2, 0.3, 0.4, 0.5), Math.hypot(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), Math.hypot(null, 3, 4), Math.hypot(true, true), Math.hypot(...[6, 8])]
+--- value
+[0,5,5,5,5,0,0,1.7320508075688772,13,1.414213562373095e+200,1.414213562373095e-200,5e-324,Infinity,0.7416198487095663,19.621416870348586,5,1.4142135623730951,10]
+
+=== Math.hypot with an Infinity and a NaN
+[Math.hypot(NaN), Math.hypot(1, NaN), Math.hypot(NaN, Infinity), Math.hypot(Infinity, NaN), Math.hypot(-Infinity, NaN, 1), Math.hypot(undefined), Math.hypot(undefined, -Infinity), Math.hypot(1, undefined), Math.hypot(0, NaN)]
+--- value
+[NaN,NaN,Infinity,Infinity,Infinity,NaN,Infinity,NaN,NaN]
+
+=== Math functions as callbacks
+[[1, 4, 9, -1].map(Math.sqrt), [1.1, 2.2].map(Math.fround), [1, 2, 3].map(Math.clz32), [[3, 4], [5, 12]].map(([a, b]) => Math.hypot(a, b)), [2, 3].map(Math.imul)]
+--- value
+[[1,2,3,NaN],[1.100000023841858,2.200000047683716],[31,30,30],[5,13],[0,3]]
+
+=== Math.sqrt of a string faults
+Math.sqrt("4")
+--- fault converts only numbers
+
+=== Math.hypot of a string faults
+Math.hypot(3, "4")
+--- fault converts only numbers
+
+=== Math.hypot converts every argument before it looks at any
+Math.hypot(Infinity, [1])
+--- fault converts only numbers
+
+=== Math.fround of an array faults
+Math.fround([1])
+--- fault converts only numbers
+
+=== Math.clz32 of an object faults
+Math.clz32({})
+--- fault converts only numbers
+
+=== Math.imul of a string faults
+Math.imul(2, "3")
+--- fault converts only numbers
