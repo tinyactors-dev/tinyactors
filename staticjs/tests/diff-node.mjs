@@ -161,6 +161,7 @@ const toDouble = (hex) => {
   view.setBigUint64(0, BigInt('0x' + hex));
   return view.getFloat64(0);
 };
+const hexBigInt = (t) => (t.startsWith('-') ? -BigInt('0x' + t.slice(1)) : BigInt('0x' + t));
 const toHex = (x) => {
   view.setFloat64(0, x);
   return view.getBigUint64(0).toString(16).padStart(16, '0');
@@ -209,6 +210,34 @@ const numberChecks = {
     if (Number(imul) !== Math.imul(x, y)) return `Math.imul: staticjs ${imul}, JavaScript ${Math.imul(x, y)}`;
     return null;
   },
+  B(rest) { // <op> <a> <b> <result>, BigInts in hex
+    const [op, a, b, result] = rest.split(' ');
+    const [x, y] = [hexBigInt(a), hexBigInt(b)];
+    let want;
+    try {
+      want = op === '+' ? x + y : op === '-' ? x - y : op === '*' ? x * y : op === '/' ? x / y : op === '%' ? x % y
+        : op === '^' ? x ** y : String(x < y ? -1 : x > y ? 1 : 0);
+    } catch {
+      want = '!';
+    }
+    if (op === '<') return result === want ? null : `BigInt ${a} < ${b}: staticjs ${result}, JavaScript ${want}`;
+    if (want === '!') return result === '!' ? null : `BigInt ${a} ${op} ${b}: staticjs ${result}, JavaScript throws`;
+    return result !== '!' && hexBigInt(result) === want ? null : `BigInt ${a} ${op} ${b}: staticjs ${result}, JavaScript ${want.toString(16)}`;
+  },
+  T(rest) { // <a> <radix> <decimal> <text>
+    const [a, radix, decimal, text] = rest.split(' ');
+    const x = hexBigInt(a);
+    if (String(x) !== decimal) return `String(${a}): staticjs ${decimal}, JavaScript ${x}`;
+    if (BigInt(decimal) !== x) return `BigInt(${decimal}) is not ${a}`;
+    const theirs = x.toString(Number(radix));
+    return text === theirs ? null : `${a}.toString(${radix}): staticjs ${text}, JavaScript ${theirs}`;
+  },
+  M(rest) { // <a> <bits> <c>: a compared with a double
+    const [a, bits, c] = rest.split(' ');
+    const [x, d] = [hexBigInt(a), toDouble(bits)];
+    const want = x < d ? -1 : x > d ? 1 : x <= d ? 0 : 2;
+    return Number(c) === want ? null : `BigInt ${a} against ${d}: staticjs ${c}, JavaScript ${want}`;
+  },
 };
 if (numbers) {
   for (const line of readFileSync(numbers, 'utf8').split('\n')) {
@@ -228,6 +257,9 @@ const numberSummary = [
   ['S', 'doubles give Math.sqrt(x) and Math.fround(x)'],
   ['H', 'argument lists give Math.hypot(...xs)'],
   ['C', 'pairs give Math.clz32(a) and Math.imul(a, b)'],
+  ['B', 'BigInt operations (+ - * / % ** <) give what JavaScript does'],
+  ['T', 'BigInts write as String(x) and toString(radix) do, and read back'],
+  ['M', 'BigInts compare with doubles as JavaScript does'],
 ].filter(([tag]) => counts.has(tag)).map(([tag, what]) => `${counts.get(tag)} ${what}`).join(', ');
 
 if (failures.length > 0) {

@@ -302,6 +302,463 @@ uint32_t sjs_bigint_hash(const sjs_bigint *b) {
 }
 
 /* ------------------------------------------------------------------------
+ * Magnitudes: limbs, least significant first, the top one not 0
+ */
+
+typedef struct {
+    const uint32_t *limbs;
+    uint32_t length;
+} magnitude;
+
+static magnitude magnitude_of(const sjs_bigint *b) {
+    return (magnitude){ b->limbs, b->length };
+}
+
+static int magnitude_compare(magnitude a, magnitude b) {
+    if (a.length != b.length) return a.length < b.length ? -1 : 1;
+    for (uint32_t i = a.length; i-- > 0;) {
+        if (a.limbs[i] != b.limbs[i]) return a.limbs[i] < b.limbs[i] ? -1 : 1;
+    }
+    return 0;
+}
+
+/* out = a + b; room for the longer's length and one more. out may be
+ * either operand's limbs: each limb is read before it is written. */
+static uint32_t magnitude_add(uint32_t *out, magnitude a, magnitude b) {
+    if (a.length < b.length) {
+        magnitude t = a;
+        a = b;
+        b = t;
+    }
+    uint64_t carry = 0;
+    for (uint32_t i = 0; i < a.length; i++) {
+        carry += (uint64_t)a.limbs[i] + (i < b.length ? b.limbs[i] : 0u);
+        out[i] = (uint32_t)carry;
+        carry >>= 32;
+    }
+    out[a.length] = (uint32_t)carry;
+    return a.length + 1u;
+}
+
+/* out = a - b, a at least b; room for a's length. out may be either
+ * operand's limbs. */
+static uint32_t magnitude_subtract(uint32_t *out, magnitude a, magnitude b) {
+    uint64_t borrow = 0;
+    for (uint32_t i = 0; i < a.length; i++) {
+        uint64_t t = (uint64_t)a.limbs[i] - (i < b.length ? b.limbs[i] : 0u) - borrow;
+        out[i] = (uint32_t)t;
+        borrow = t >> 63;
+    }
+    return a.length;
+}
+
+/* out = a * b, schoolbook; room for both lengths, and none of either
+ * operand's limbs. The products it makes. */
+static uint64_t magnitude_multiply(uint32_t *out, magnitude a, magnitude b) {
+    sjs_zero(out, ((size_t)a.length + b.length) * sizeof(uint32_t));
+    for (uint32_t i = 0; i < a.length; i++) {
+        uint64_t carry = 0;
+        uint64_t x = a.limbs[i];
+        if (x == 0) continue;
+        for (uint32_t j = 0; j < b.length; j++) {
+            uint64_t t = x * b.limbs[j] + out[i + j] + carry;
+            out[i + j] = (uint32_t)t;
+            carry = t >> 32;
+        }
+        out[i + b.length] = (uint32_t)carry;
+    }
+    return (uint64_t)a.length * b.length;
+}
+
+/* Knuth's algorithm D (TAOCP 4.3.1), as in Hacker's Delight's divmnu:
+ * u / v with v of two limbs or more and u at least as long; q gets
+ * u.length - v.length + 1 limbs, r (unless NULL) v.length; the scratch
+ * holds u.length + 1 + v.length limbs. */
+typedef struct {
+    magnitude u;
+    magnitude v;
+    uint32_t *q;
+    uint32_t *r;
+    uint32_t *scratch;
+} division;
+
+static void magnitude_divide(const division *d) {
+    uint32_t n = d->v.length;
+    uint32_t m = d->u.length - n;
+    const uint32_t *u = d->u.limbs;
+    const uint32_t *v = d->v.limbs;
+    uint32_t *un = d->scratch;
+    uint32_t *vn = d->scratch + d->u.length + 1u;
+    /* Normalize: shift both so that v's top bit is set. */
+    uint32_t s = (uint32_t)__builtin_clz(v[n - 1u]);
+    for (uint32_t i = n - 1u; i > 0; i--) vn[i] = v[i] << s | (s != 0 ? v[i - 1u] >> (32u - s) : 0u);
+    vn[0] = v[0] << s;
+    un[m + n] = s != 0 ? u[m + n - 1u] >> (32u - s) : 0u;
+    for (uint32_t i = m + n - 1u; i > 0; i--) un[i] = u[i] << s | (s != 0 ? u[i - 1u] >> (32u - s) : 0u);
+    un[0] = u[0] << s;
+    for (uint32_t j = m + 1u; j-- > 0;) {
+        /* Estimate the quotient limb from the top two limbs, and correct
+         * it with the third: then it is at most one too large. */
+        uint64_t top = (uint64_t)un[j + n] << 32 | un[j + n - 1u];
+        uint64_t qhat = top / vn[n - 1u];
+        uint64_t rhat = top % vn[n - 1u];
+        while (qhat > UINT32_MAX || qhat * vn[n - 2u] > (rhat << 32 | un[j + n - 2u])) {
+            qhat--;
+            rhat += vn[n - 1u];
+            if (rhat > UINT32_MAX) break;
+        }
+        /* Multiply and subtract. */
+        uint64_t borrow = 0;
+        uint64_t carry = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            uint64_t p = qhat * vn[i] + carry;
+            carry = p >> 32;
+            uint64_t t = (uint64_t)un[i + j] - (uint32_t)p - borrow;
+            un[i + j] = (uint32_t)t;
+            borrow = t >> 63;
+        }
+        uint64_t t = (uint64_t)un[j + n] - carry - borrow;
+        un[j + n] = (uint32_t)t;
+        if ((t >> 63) != 0) {
+            /* One too large: add v back. */
+            qhat--;
+            uint64_t c = 0;
+            for (uint32_t i = 0; i < n; i++) {
+                c += (uint64_t)un[i + j] + vn[i];
+                un[i + j] = (uint32_t)c;
+                c >>= 32;
+            }
+            un[j + n] += (uint32_t)c;
+        }
+        d->q[j] = (uint32_t)qhat;
+    }
+    if (d->r == NULL) return;
+    for (uint32_t i = 0; i < n; i++) d->r[i] = un[i] >> s | (s != 0 ? un[i + 1u] << (32u - s) : 0u);
+}
+
+/* ------------------------------------------------------------------------
+ * Arithmetic
+ */
+
+/* The result is an operand, shared. */
+static sjs_result bigint_share(sjs_bigint_op *op, sjs_value v) {
+    sjs_ref(v);
+    op->result = v;
+    return SJS_OK;
+}
+
+/* A block of `capacity` limbs for a result. */
+typedef struct {
+    sjs_bigint *block;
+    bool negative;
+} bigint_made;
+
+static sjs_result bigint_give(sjs_context *context, sjs_bigint_op *op, bigint_made made) {
+    sjs_result r = bigint_finish(context, made.block, made.negative);
+    if (r != SJS_OK) {
+        bigint_free(context, made.block);
+        return r;
+    }
+    op->result = sjs_heap_value(SJS_BIGINT, &made.block->h);
+    return SJS_OK;
+}
+
+/* A small result: a magnitude of up to 64 bits. */
+static sjs_result bigint_small(sjs_context *context, sjs_bigint_op *op, uint64_t value) {
+    bool negative = op->negative;
+    sjs_bigint *b;
+    sjs_result r = bigint_alloc(context, 2u, &b);
+    if (r != SJS_OK) return r;
+    b->limbs[0] = (uint32_t)value;
+    b->limbs[1] = (uint32_t)(value >> 32);
+    b->length = 2u;
+    return bigint_give(context, op, (bigint_made){ b, negative });
+}
+
+/* a + b, or a - b: signs decide whether magnitudes add or subtract. */
+static sjs_result bigint_add(sjs_context *context, sjs_bigint_op *op) {
+    const sjs_bigint *a = SJS_AS_BIGINT(op->a);
+    const sjs_bigint *b = SJS_AS_BIGINT(op->b);
+    bool subtract = op->op == SJS_OP_SUBTRACT;
+    if (b->length == 0) return bigint_share(op, op->a);
+    if (a->length == 0 && !subtract) return bigint_share(op, op->b);
+    bool an = sjs_bigint_negative(a);
+    bool bn = sjs_bigint_negative(b) != subtract;
+    magnitude x = magnitude_of(a);
+    magnitude y = magnitude_of(b);
+    uint32_t longer = x.length > y.length ? x.length : y.length;
+    sjs_bigint *out;
+    sjs_result r = bigint_alloc(context, longer + 1u, &out);
+    if (r != SJS_OK) return r;
+    bool negative = an;
+    if (an == bn) {
+        out->length = magnitude_add(out->limbs, x, y);
+    } else if (magnitude_compare(x, y) >= 0) {
+        out->length = magnitude_subtract(out->limbs, x, y);
+    } else {
+        out->length = magnitude_subtract(out->limbs, y, x);
+        negative = bn;
+    }
+    op->cost = longer / 16u;
+    return bigint_give(context, op, (bigint_made){ out, negative });
+}
+
+static sjs_result bigint_copy(sjs_context *context, sjs_bigint_op *op, const sjs_bigint *from) {
+    sjs_bigint *out;
+    sjs_result r = bigint_alloc(context, from->length, &out);
+    if (r != SJS_OK) return r;
+    sjs_copy(out->limbs, from->limbs, (size_t)from->length * sizeof(uint32_t));
+    out->length = from->length;
+    op->cost = from->length / 16u;
+    return bigint_give(context, op, (bigint_made){ out, op->negative });
+}
+
+static bool is_one(const sjs_bigint *b) {
+    return b->length == 1u && b->limbs[0] == 1u;
+}
+
+static sjs_result bigint_multiply(sjs_context *context, sjs_bigint_op *op) {
+    const sjs_bigint *a = SJS_AS_BIGINT(op->a);
+    const sjs_bigint *b = SJS_AS_BIGINT(op->b);
+    op->negative = sjs_bigint_negative(a) != sjs_bigint_negative(b);
+    if (a->length == 0) return bigint_share(op, op->a);
+    if (b->length == 0) return bigint_share(op, op->b);
+    if (is_one(b)) return sjs_bigint_negative(b) ? bigint_copy(context, op, a) : bigint_share(op, op->a);
+    if (is_one(a)) return sjs_bigint_negative(a) ? bigint_copy(context, op, b) : bigint_share(op, op->b);
+    if (a->length == 1u && b->length == 1u) return bigint_small(context, op, (uint64_t)a->limbs[0] * b->limbs[0]);
+    /* The product has the operands' bits together, or one fewer. */
+    if (bigint_bits(a) + bigint_bits(b) - 1u > context->limits.max_bigint_bits) return SJS_ERR_LIMIT;
+    sjs_bigint *out;
+    sjs_result r = bigint_alloc(context, a->length + b->length, &out);
+    if (r != SJS_OK) return r;
+    op->cost = magnitude_multiply(out->limbs, magnitude_of(a), magnitude_of(b)) / 16u;
+    out->length = a->length + b->length;
+    return bigint_give(context, op, (bigint_made){ out, op->negative });
+}
+
+/* a / b, truncated toward zero, or a % b, with a's sign. */
+static sjs_result bigint_divide(sjs_context *context, sjs_bigint_op *op) {
+    const sjs_bigint *a = SJS_AS_BIGINT(op->a);
+    const sjs_bigint *b = SJS_AS_BIGINT(op->b);
+    bool quotient = op->op == SJS_OP_DIVIDE;
+    if (b->length == 0) {
+        op->fault = "JavaScript throws a RangeError when a BigInt is divided by 0n";
+        return SJS_ERR_PROGRAM;
+    }
+    op->negative = quotient ? sjs_bigint_negative(a) != sjs_bigint_negative(b) : sjs_bigint_negative(a);
+    if (magnitude_compare(magnitude_of(a), magnitude_of(b)) < 0) {
+        if (!quotient) return bigint_share(op, op->a);
+        return bigint_small(context, op, 0);
+    }
+    if (quotient && is_one(b)) return sjs_bigint_negative(b) ? bigint_copy(context, op, a) : bigint_share(op, op->a);
+    if (a->length <= 2u) {
+        uint64_t x = a->limbs[0] | (a->length > 1u ? (uint64_t)a->limbs[1] << 32 : 0u);
+        uint64_t y = b->limbs[0] | (b->length > 1u ? (uint64_t)b->limbs[1] << 32 : 0u);
+        return bigint_small(context, op, quotient ? x / y : x % y);
+    }
+    uint32_t n = b->length;
+    uint32_t length = n == 1u ? a->length : quotient ? a->length - n + 1u : n;
+    sjs_bigint *out;
+    sjs_result r = bigint_alloc(context, length, &out);
+    if (r != SJS_OK) return r;
+    out->length = length;
+    if (n == 1u) {
+        sjs_copy(out->limbs, a->limbs, (size_t)a->length * sizeof(uint32_t));
+        out->length = a->length;
+        uint32_t rest = bigint_divide_small(out->limbs, a->length, b->limbs[0]);
+        if (!quotient) {
+            out->limbs[0] = rest;
+            out->length = 1u;
+        }
+        op->cost = a->length / 16u;
+        return bigint_give(context, op, (bigint_made){ out, op->negative });
+    }
+    /* Scratch for the normalized operands, and for the quotient when the
+     * result is the remainder. */
+    size_t limbs = (size_t)a->length + 1u + n + (quotient ? 0u : a->length - n + 1u);
+    uint32_t *scratch = sjs_mem_alloc(&context->counting, limbs * sizeof(uint32_t));
+    if (scratch == NULL) {
+        bigint_free(context, out);
+        return SJS_ERR_NOMEM;
+    }
+    division d = { magnitude_of(a), magnitude_of(b), quotient ? out->limbs : scratch + a->length + 1u + n,
+                   quotient ? NULL : out->limbs, scratch };
+    magnitude_divide(&d);
+    sjs_mem_free(&context->counting, scratch, limbs * sizeof(uint32_t));
+    op->cost = (uint64_t)(a->length - n + 1u) * n / 16u;
+    return bigint_give(context, op, (bigint_made){ out, op->negative });
+}
+
+/* a ** b, by squaring and multiplying, from the exponent's top bit; a
+ * power of two by a shift. */
+static sjs_result bigint_power(sjs_context *context, sjs_bigint_op *op) {
+    const sjs_bigint *a = SJS_AS_BIGINT(op->a);
+    const sjs_bigint *b = SJS_AS_BIGINT(op->b);
+    if (sjs_bigint_negative(b)) {
+        op->fault = "JavaScript throws a RangeError for a BigInt to a negative power";
+        return SJS_ERR_PROGRAM;
+    }
+    op->negative = false;
+    if (b->length == 0) return bigint_small(context, op, 1u);
+    bool odd = (b->limbs[0] & 1u) != 0;
+    op->negative = sjs_bigint_negative(a) && odd;
+    if (a->length == 0) return bigint_share(op, op->a);
+    if (is_one(a)) return sjs_bigint_negative(a) && !odd ? bigint_small(context, op, 1u) : bigint_share(op, op->a);
+    if (b->length > 1u) return SJS_ERR_LIMIT; /* 2^(2^32) has more bits than any limit */
+    uint32_t e = b->limbs[0];
+    uint64_t bits = bigint_bits(a);
+    if ((bits - 1u) * e + 1u > context->limits.max_bigint_bits) return SJS_ERR_LIMIT;
+    uint64_t most = bits * e / 32u + 2u;
+    uint32_t capacity = most > bigint_limit_limbs(context) + 2u ? bigint_limit_limbs(context) + 2u : (uint32_t)most;
+    sjs_bigint *out;
+    sjs_result r = bigint_alloc(context, capacity, &out);
+    if (r != SJS_OK) return r;
+    sjs_zero(out->limbs, (size_t)capacity * sizeof(uint32_t));
+    bool single = a->limbs[a->length - 1u] == (1u << (limb_bits(a->limbs[a->length - 1u]) - 1u));
+    for (uint32_t i = 0; single && i + 1u < a->length; i++) single = a->limbs[i] == 0;
+    if (single) {
+        uint64_t at = (bits - 1u) * e;
+        out->limbs[at / 32u] = 1u << (at % 32u);
+        out->length = (uint32_t)(at / 32u) + 1u;
+        op->cost = out->length / 16u;
+        return bigint_give(context, op, (bigint_made){ out, op->negative });
+    }
+    uint32_t *scratch = sjs_mem_alloc(&context->counting, (size_t)capacity * sizeof(uint32_t));
+    if (scratch == NULL) {
+        bigint_free(context, out);
+        return SJS_ERR_NOMEM;
+    }
+    /* `x` holds the power so far, in one of the two blocks; each product
+     * goes into the other. */
+    uint32_t *x = out->limbs;
+    uint32_t *other = scratch;
+    sjs_copy(x, a->limbs, (size_t)a->length * sizeof(uint32_t));
+    uint32_t length = a->length;
+    uint64_t work = 0;
+    r = SJS_OK;
+    for (uint32_t bit = limb_bits(e) - 1u; bit-- > 0 && r == SJS_OK;) {
+        for (uint32_t pass = 0; pass < 2u && r == SJS_OK; pass++) {
+            magnitude by = pass == 0 ? (magnitude){ x, length } : magnitude_of(a);
+            if (pass == 1u && ((e >> bit) & 1u) == 0) break;
+            if ((uint64_t)length + by.length > capacity) {
+                r = SJS_ERR_LIMIT;
+                break;
+            }
+            work += magnitude_multiply(other, (magnitude){ x, length }, by);
+            length += by.length;
+            while (length > 0 && other[length - 1u] == 0) length--;
+            uint32_t *t = x;
+            x = other;
+            other = t;
+            if ((uint64_t)(length - 1u) * 32u + limb_bits(x[length - 1u]) > context->limits.max_bigint_bits) r = SJS_ERR_LIMIT;
+        }
+    }
+    if (r == SJS_OK && x != out->limbs) sjs_copy(out->limbs, x, (size_t)length * sizeof(uint32_t));
+    sjs_mem_free(&context->counting, scratch, (size_t)capacity * sizeof(uint32_t));
+    if (r != SJS_OK) {
+        bigint_free(context, out);
+        return r;
+    }
+    out->length = length;
+    op->cost = work / 16u;
+    return bigint_give(context, op, (bigint_made){ out, op->negative });
+}
+
+sjs_result sjs_bigint_binary(sjs_context *context, sjs_bigint_op *op) {
+    op->result = sjs_undefined();
+    op->cost = 0;
+    op->fault = NULL;
+    op->negative = false;
+    switch (op->op) {
+    case SJS_OP_ADD:
+    case SJS_OP_SUBTRACT:
+        return bigint_add(context, op);
+    case SJS_OP_MULTIPLY:
+        return bigint_multiply(context, op);
+    case SJS_OP_DIVIDE:
+    case SJS_OP_REMAINDER:
+        return bigint_divide(context, op);
+    case SJS_OP_EXPONENT:
+        return bigint_power(context, op);
+    default: { /* SJS_OP_NEGATE */
+        const sjs_bigint *a = SJS_AS_BIGINT(op->a);
+        if (a->length == 0) return bigint_share(op, op->a);
+        op->negative = !sjs_bigint_negative(a);
+        return bigint_copy(context, op, a);
+    }
+    }
+}
+
+/* ------------------------------------------------------------------------
+ * Comparison, with a BigInt or a number
+ */
+
+int sjs_bigint_compare(const sjs_bigint *a, const sjs_bigint *b) {
+    bool an = sjs_bigint_negative(a);
+    if (an != sjs_bigint_negative(b)) return an ? -1 : 1;
+    int c = magnitude_compare(magnitude_of(a), magnitude_of(b));
+    return an ? -c : c;
+}
+
+/* A finite double's integer part as a magnitude (at most 1024 bits), and
+ * whether it has a fraction. */
+typedef struct {
+    uint32_t limbs[33];
+    uint32_t length;
+    bool fraction;
+} double_parts;
+
+static void double_split(double d, double_parts *out) {
+    union {
+        double d;
+        uint64_t u;
+    } bits;
+    bits.d = d;
+    uint64_t u = bits.u & ~(1ull << 63);
+    int32_t exponent = (int32_t)(u >> 52);
+    uint64_t mantissa = u & ((1ull << 52) - 1u);
+    sjs_zero(out, sizeof *out);
+    if (exponent == 0) {
+        out->fraction = mantissa != 0; /* a subnormal: under 1 */
+        return;
+    }
+    mantissa |= 1ull << 52;
+    int32_t shift = exponent - 1075; /* value = mantissa * 2^shift */
+    if (shift <= -53) {
+        out->fraction = true;
+        return;
+    }
+    if (shift < 0) {
+        out->fraction = (mantissa & ((1ull << -shift) - 1u)) != 0;
+        mantissa >>= -shift;
+        shift = 0;
+    }
+    uint32_t at = (uint32_t)shift / 32u;
+    uint32_t rest = (uint32_t)shift % 32u;
+    uint64_t low = mantissa << rest; /* the bits past 64 follow */
+    out->limbs[at] = (uint32_t)low;
+    out->limbs[at + 1u] = (uint32_t)(low >> 32);
+    out->limbs[at + 2u] = rest == 0 ? 0u : (uint32_t)(mantissa >> (64u - rest));
+    out->length = at + 3u;
+    while (out->length > 0 && out->limbs[out->length - 1u] == 0) out->length--;
+}
+
+int sjs_bigint_compare_number(const sjs_bigint *a, double d) {
+    if (d != d) return SJS_BIGINT_UNORDERED;
+    if (d == 1.0 / 0.0) return -1;
+    if (d == -1.0 / 0.0) return 1;
+    int as = a->length == 0 ? 0 : sjs_bigint_negative(a) ? -1 : 1;
+    int ds = d > 0 ? 1 : d < 0 ? -1 : 0;
+    if (as != ds) return as < ds ? -1 : 1;
+    if (as == 0) return 0;
+    double_parts parts;
+    double_split(d, &parts);
+    int c = magnitude_compare(magnitude_of(a), (magnitude){ parts.limbs, parts.length });
+    if (c == 0 && parts.fraction) c = -1;
+    return as < 0 ? -c : c;
+}
+
+/* ------------------------------------------------------------------------
  * The public API
  */
 

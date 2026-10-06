@@ -351,7 +351,8 @@ sjs_result sjs_vm_to_number(sjs_vm *vm, sjs_value v, double *out) {
         *out = v.boolean ? 1 : 0;
         return SJS_OK;
     default:
-        return sjs_vm_fault(vm, "staticjs converts only numbers, booleans, null and undefined to numbers");
+        return sjs_vm_fault(vm, v.kind == SJS_BIGINT ? "JavaScript throws a TypeError where a BigInt would become a number"
+                                                     : "staticjs converts only numbers, booleans, null and undefined to numbers");
     }
 }
 

@@ -21,6 +21,10 @@
  *                               arguments, of any bits, of near magnitudes,
  *                               integers, zeros, Infinity and NaN
  *     C <a> <b> <clz32> <imul>  COUNT pairs: Math.clz32(a), Math.imul(a, b)
+ *     B <op> <a> <b> <result>   COUNT BigInt operations: + - * / % ** (^) and a
+ *                               comparison (<), on 1 to 20 limbs, in hex
+ *     T <a> <radix> <dec> <s>   COUNT BigInts as text: String(a), toString(radix)
+ *     M <a> <bits> <c>          COUNT BigInts compared with a double
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -398,6 +402,142 @@ static void print_integer_ops(long count) {
     }
 }
 
+/* ------------------------------------------------------------------------
+ * BigInts, against Node: random operands of 1 to 20 limbs, each limb
+ * random or one of the edges (0, 1, 2^31, 2^32 - 1), so that carries and
+ * borrows cross limbs and quotient estimates are corrected. Written in
+ * hexadecimal, a sign before it: Node reads them with BigInt("0x...").
+ */
+
+static void *malloc_alloc(void *self, size_t size, size_t alignment) {
+    (void)self;
+    (void)alignment;
+    return malloc(size);
+}
+
+static void malloc_free(void *self, const sjs_allocator_free_params *params) {
+    (void)self;
+    free(params->ptr);
+}
+
+static const sjs_allocator_vtable malloc_vtable = { malloc_alloc, malloc_free };
+
+static sjs_context *bigint_context(void) {
+    static sjs_context *context;
+    if (context == NULL) {
+        sjs_context_config config = { { NULL, &malloc_vtable }, SJS_LIMITS_DEFAULT };
+        if (sjs_context_init(&context, &config) != SJS_OK) abort();
+    }
+    return context;
+}
+
+typedef struct {
+    char text[20 * 8 + 2];
+} bigint_hex;
+
+static bigint_hex random_hex(uint32_t limbs) {
+    bigint_hex h;
+    size_t at = 0;
+    if (next() % 2 == 0) h.text[at++] = '-';
+    for (uint32_t i = 0; i < limbs; i++) {
+        uint32_t limb;
+        switch (next() % 8) {
+        case 0: limb = 0; break;
+        case 1: limb = 0xffffffffu; break;
+        case 2: limb = 0x80000000u; break;
+        case 3: limb = 1; break;
+        default: limb = (uint32_t)next(); break;
+        }
+        if (i == 0 && limb == 0) limb = 1u + (uint32_t)(next() % 0xfffffffeu);
+        at += (size_t)snprintf(h.text + at, sizeof h.text - at, "%08x", limb);
+    }
+    return h;
+}
+
+static sjs_value bigint_from_hex(const char *text) {
+    bool negative = text[0] == '-';
+    const char *digits = text + (negative ? 1 : 0);
+    sjs_value v;
+    if (sjs_bigint_from_digits(bigint_context(), (sjs_bigint_digits){ { digits, (uint32_t)strlen(digits) }, 16u, negative }, &v) != SJS_OK) abort();
+    return v;
+}
+
+static void print_bigint(sjs_value v, uint32_t radix) {
+    sjs_buf text = { 0 };
+    sjs_context *context = bigint_context();
+    if (sjs_bigint_format(&context->counting, (sjs_bigint_radix){ SJS_AS_BIGINT(v), radix }, &text) != SJS_OK) abort();
+    printf("%.*s", (int)text.length, (const char *)text.ptr);
+    sjs_buf_free(&context->counting, &text);
+}
+
+static const char BIGINT_OPS[] = { '+', '-', '*', '/', '%', '^', '<' };
+
+/* B <op> <a> <b> <result>: a op b, `^` for **, `<` for the comparison (-1, 0
+ * or 1), and `!` where staticjs faults (a division by 0n). */
+static void print_bigint_ops(long count) {
+    sjs_context *context = bigint_context();
+    for (long i = 0; i < count; i++) {
+        char op = BIGINT_OPS[i % (long)sizeof BIGINT_OPS];
+        bigint_hex a = random_hex(1u + (uint32_t)(next() % 20));
+        bigint_hex b = random_hex(1u + (uint32_t)(next() % 20));
+        if (op == '^') {
+            a = random_hex(1u + (uint32_t)(next() % 4));
+            snprintf(b.text, sizeof b.text, "%x", (unsigned)(next() % 48));
+        }
+        if (next() % 16 == 0) snprintf(b.text, sizeof b.text, "%s", next() % 2 == 0 ? "0" : "1");
+        if (next() % 16 == 0) snprintf(a.text, sizeof a.text, "%s", b.text);
+        sjs_value x = bigint_from_hex(a.text);
+        sjs_value y = bigint_from_hex(b.text);
+        printf("B %c %s %s ", op, a.text, b.text);
+        if (op == '<') {
+            printf("%d\n", sjs_bigint_compare(SJS_AS_BIGINT(x), SJS_AS_BIGINT(y)));
+        } else {
+            uint8_t codes[] = { SJS_OP_ADD, SJS_OP_SUBTRACT, SJS_OP_MULTIPLY, SJS_OP_DIVIDE, SJS_OP_REMAINDER, SJS_OP_EXPONENT };
+            sjs_bigint_op o = { .op = codes[strchr(BIGINT_OPS, op) - BIGINT_OPS], .a = x, .b = y };
+            sjs_result r = sjs_bigint_binary(context, &o);
+            if (r == SJS_ERR_PROGRAM) {
+                printf("!\n");
+            } else {
+                if (r != SJS_OK) abort();
+                print_bigint(o.result, 16);
+                printf("\n");
+                sjs_release(context, o.result);
+            }
+        }
+        sjs_release(context, x);
+        sjs_release(context, y);
+    }
+}
+
+/* T <a> <radix> <decimal> <text>: String(a) and a.toString(radix), and
+ * BigInt(decimal) read back. M <a> <bits> <c>: a compared with a double. */
+static void print_bigint_texts(long count) {
+    sjs_context *context = bigint_context();
+    for (long i = 0; i < count; i++) {
+        bigint_hex a = random_hex(1u + (uint32_t)(next() % 20));
+        sjs_value x = bigint_from_hex(a.text);
+        uint32_t radix = 2u + (uint32_t)(next() % 35);
+        sjs_buf decimal = { 0 };
+        if (sjs_bigint_format(&context->counting, (sjs_bigint_radix){ SJS_AS_BIGINT(x), 10u }, &decimal) != SJS_OK) abort();
+        sjs_bigint_digits digits;
+        if (!sjs_bigint_parse((sjs_str){ (const char *)decimal.ptr, decimal.length }, &digits)) abort();
+        sjs_value back;
+        if (sjs_bigint_from_digits(context, digits, &back) != SJS_OK) abort();
+        if (!sjs_strict_equal_primitive(x, back)) {
+            fprintf(stderr, "number_test: %s does not read back from its decimal text\n", a.text);
+            abort();
+        }
+        printf("T %s %u %.*s ", a.text, radix, (int)decimal.length, (const char *)decimal.ptr);
+        print_bigint(x, radix);
+        printf("\n");
+        double d = next() % 2 == 0 ? any_double() : (double)(int64_t)next() * (double)(1u << (next() % 16));
+        printf("M %s %016llx %d\n", a.text, (unsigned long long)to_bits(d), sjs_bigint_compare_number(SJS_AS_BIGINT(x), d));
+        sjs_buf_free(&context->counting, &decimal);
+        sjs_release(context, x);
+        sjs_release(context, back);
+    }
+}
+
 static int print(long count) {
     print_formats(count);
     print_decimals(count);
@@ -406,6 +546,8 @@ static int print(long count) {
     print_roots(count);
     print_hypots(count);
     print_integer_ops(count);
+    print_bigint_ops(count);
+    print_bigint_texts(count);
     return 0;
 }
 
