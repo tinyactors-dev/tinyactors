@@ -1376,7 +1376,9 @@ sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
         sjs_result started = from_start(vm, frame, mapping);
         if (started != SJS_OK || !mapping) return started;
     }
-    if (slot(vm, frame, LOOP_RECEIVER)->kind != SJS_ARRAY) return sjs_vm_fault(vm, "Object.groupBy takes an array");
+    if (frame->builtin == SJS_BUILTIN_OBJECT_GROUP_BY && slot(vm, frame, LOOP_RECEIVER)->kind != SJS_ARRAY) {
+        return sjs_vm_fault(vm, "Object.groupBy takes an array");
+    }
     const sjs_array *a = receiver(vm, frame);
     frame->index = 0;
     frame->length = a->length;

@@ -766,11 +766,11 @@ static bool call(sjs_vm *vm, uint32_t argc, uint8_t flags) {
         if (sjs_builtin_loops(id)) {
             /* A function that calls back (Object.groupBy, Array.from) is a loop laid out
              * like a method's: its first argument is the receiver, below the
-             * function. */
+             * function. With no arguments the receiver is undefined, and the
+             * built-in's own check of its items faults. */
             if (argc == 0) {
-                sjs_vm_fault(vm, id == SJS_BUILTIN_ARRAY_FROM ? "Array.from takes items to turn into an array"
-                                                              : "Object.groupBy takes an array and a function");
-                return false;
+                if (!sjs_vm_push(vm, (sjs_value){ .kind = SJS_UNDEFINED })) return false;
+                argc = 1;
             }
             sjs_value items = vm->stack[callee + 1];
             vm->stack[callee + 1] = vm->stack[callee];
