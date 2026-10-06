@@ -105,7 +105,7 @@ state.
 ## 4. Reuse a value nothing else holds
 
 A built-in that returns a changed copy of its receiver (`concat`, `with`,
-`toSorted`'s output) can change the receiver itself when nothing else holds
+`toSpliced`, `toSorted`'s output) can change the receiver itself when nothing else holds
 it. Values cannot form cycles, and every holder is counted, so a count of 1
 means no program can see the difference.
 

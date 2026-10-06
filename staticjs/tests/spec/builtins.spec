@@ -564,3 +564,82 @@ Object.groupBy(["ab", "c", "de"], x => x.length)
 Object.groupBy([{k: true}, {k: false}, {k: null}, {k: true}], x => x.k)
 --- value
 {"true":[{"k":true},{"k":true}],"false":[{"k":false}],"null":[{"k":null}]}
+
+=== toSpliced removes and inserts
+[[1, 2, 3, 4].toSpliced(1, 2), [1, 2, 3, 4].toSpliced(1, 2, "a", "b", "c"), [1, 2, 3].toSpliced(1, 0, 9), [1, 2, 3].toSpliced(3, 0, 4), [1, 2, 3].toSpliced(0, 1, [7], {k: 1})]
+--- value
+[[1,4],[1,"a","b","c",4],[1,9,2,3],[1,2,3,4],[[7],{"k":1},2,3]]
+
+=== toSpliced without a skipCount removes to the end
+[[1, 2, 3].toSpliced(1), [1, 2, 3].toSpliced(), [1, 2, 3].toSpliced(undefined), [1, 2, 3].toSpliced(1, undefined), [1, 2, 3].toSpliced(-1), [1, 2, 3].toSpliced(5)]
+--- value
+[[1],[1,2,3],[],[1,2,3],[1,2],[1,2,3]]
+
+=== toSpliced clamps start and skipCount
+[[1, 2, 3].toSpliced(-9, 1), [1, 2, 3].toSpliced(-Infinity, 1), [1, 2, 3].toSpliced(Infinity, 1, 0), [1, 2, 3].toSpliced(1, -5), [1, 2, 3].toSpliced(1, 99), [1, 2, 3].toSpliced(1, Infinity), [1, 2, 3].toSpliced(1.9, 1.9), [1, 2, 3].toSpliced(NaN, NaN, 0), [1, 2, 3].toSpliced(-0, -0, 0), [1, 2, 3].toSpliced(null, true), [1, 2, 3].toSpliced(1e15, 1e15, 7)]
+--- value
+[[2,3],[2,3],[1,2,3,0],[1,2,3],[1],[1],[1,3],[0,1,2,3],[0,1,2,3],[2,3],[1,2,3,7]]
+
+=== toSpliced on an empty array
+[[].toSpliced(), [].toSpliced(0, 1), [].toSpliced(-3, 2, 1, 2), [].toSpliced(5, 0, "x")]
+--- value
+[[],[],[1,2],["x"]]
+
+=== toSpliced inserts undefined, null and -0 as given
+[[1].toSpliced(0, 0, undefined, null, -0, NaN)]
+--- value
+[[undefined,null,-0,NaN,1]]
+
+=== toSpliced leaves the receiver alone while it is held
+(xs => [xs.toSpliced(1, 1, 8, 9), xs])([1, 2, 3])
+--- value
+[[1,8,9,3],[1,2,3]]
+
+=== toSpliced on a receiver nothing else holds
+[[1, 2, 3].toSpliced(1, 1), [1, 2, 3].toSpliced(1, 1, 8), [1, 2, 3].toSpliced(1, 1, 8, 9, 10), [1, 2, 3].toSpliced(0, 3, 4), [1, 2, 3].toSpliced(0, 0, 4, 5, 6, 7), [[1], [2]].toSpliced(0, 1, [3])]
+--- value
+[[1,3],[1,8,3],[1,8,9,10,3],[4],[4,5,6,7,1,2,3],[[3],[2]]]
+
+=== toSpliced inserts the receiver into itself
+(xs => xs.toSpliced(1, 0, xs))([1, 2])
+--- value
+[1,[1,2],2]
+
+=== toSpliced in a chain
+[1, 2, 3, 4, 5].toSpliced(1, 1).toSpliced(1, 0, 7, 7).toSpliced(-1)
+--- value
+[1,7,7,3,4]
+
+=== toSpliced faults on a start that would be coerced
+[1].toSpliced("0", 1)
+--- fault number
+
+=== toSpliced faults on a skipCount that would be coerced
+[1].toSpliced(0, "1")
+--- fault number
+
+=== toSpliced faults on an object start
+[1].toSpliced({}, 1)
+--- fault number
+
+=== toSpliced faults on an empty array too
+[].toSpliced([], 0)
+--- fault number
+
+=== toSpliced is not a string method
+"abc".toSpliced(1)
+--- fault does not have this method
+
+=== toSpliced clamps huge arguments
+[[1, 2, 3].toSpliced(4294967296, 4294967296, 0), [1, 2, 3].toSpliced(-4294967296, 4294967296), [1, 2, 3].toSpliced(1, -4294967296, 5), [1, 2, 3].toSpliced(4294967297, 1)]
+--- value
+[[1,2,3,0],[],[1,5,2,3],[1,2,3]]
+
+=== toSpliced keeps closures as items
+[1, 2].toSpliced(1, 0, x => x, new Set([1])).length
+--- value
+4
+
+=== toSpliced faults on an array skipCount
+[1].toSpliced(0, [1])
+--- fault number
