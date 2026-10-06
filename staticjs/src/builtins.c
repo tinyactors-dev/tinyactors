@@ -41,7 +41,14 @@ static const function_entry FUNCTION_TABLE[] = {
     { "Math", "ceil", SJS_BUILTIN_MATH_CEIL },
     { "Math", "round", SJS_BUILTIN_MATH_ROUND },
     { "Math", "trunc", SJS_BUILTIN_MATH_TRUNC },
-    { "Math", "sign", SJS_BUILTIN_MATH_SIGN }
+    { "Math", "sign", SJS_BUILTIN_MATH_SIGN },
+    { "", "Number", SJS_BUILTIN_NUMBER },
+    { "", "parseInt", SJS_BUILTIN_PARSE_INT },
+    { "", "parseFloat", SJS_BUILTIN_PARSE_FLOAT },
+    { "Number", "parseInt", SJS_BUILTIN_PARSE_INT },
+    { "Number", "parseFloat", SJS_BUILTIN_PARSE_FLOAT },
+    { "", "isNaN", SJS_BUILTIN_IS_NAN },
+    { "", "isFinite", SJS_BUILTIN_IS_FINITE }
 };
 
 /*
@@ -188,7 +195,12 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_MATH_CEIL),
     FUNCTION_VALUE(SJS_BUILTIN_MATH_ROUND),
     FUNCTION_VALUE(SJS_BUILTIN_MATH_TRUNC),
-    FUNCTION_VALUE(SJS_BUILTIN_MATH_SIGN)
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_SIGN),
+    FUNCTION_VALUE(SJS_BUILTIN_NUMBER),
+    FUNCTION_VALUE(SJS_BUILTIN_PARSE_INT),
+    FUNCTION_VALUE(SJS_BUILTIN_PARSE_FLOAT),
+    FUNCTION_VALUE(SJS_BUILTIN_IS_NAN),
+    FUNCTION_VALUE(SJS_BUILTIN_IS_FINITE)
 };
 
 sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name) {
@@ -528,6 +540,8 @@ static sjs_result math(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
 
 /* String.fromCharCode and String.fromCodePoint, at the end of the file. */
 static sjs_result string_from(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+/* Number, parseInt, parseFloat, isNaN and isFinite, at the end of the file. */
+static sjs_result number_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 
 static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_value x = arg(call, 0);
@@ -581,6 +595,12 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     case SJS_BUILTIN_NUMBER_IS_NAN:
         call->result = sjs_boolean(x.kind == SJS_NUMBER && sjs_number_is_nan(x.as.number));
         return SJS_OK;
+    case SJS_BUILTIN_NUMBER:
+    case SJS_BUILTIN_PARSE_INT:
+    case SJS_BUILTIN_PARSE_FLOAT:
+    case SJS_BUILTIN_IS_NAN:
+    case SJS_BUILTIN_IS_FINITE:
+        return number_function(vm, id, call);
     default:
         return math(vm, id, call);
     }
@@ -883,9 +903,7 @@ static sjs_result array_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
  */
 
 static bool is_trim_space(uint32_t p) {
-    return p == 0x09u || p == 0x0Au || p == 0x0Bu || p == 0x0Cu || p == 0x0Du || p == 0x20u || p == 0xA0u ||
-           p == 0x1680u || (p >= 0x2000u && p <= 0x200Au) || p == 0x2028u || p == 0x2029u || p == 0x202Fu ||
-           p == 0x205Fu || p == 0x3000u || p == 0xFEFFu;
+    return sjs_is_white_space(p);
 }
 
 static sjs_result string_split(sjs_vm *vm, sjs_str s, sjs_leaf_call *call) {
@@ -2463,4 +2481,56 @@ __attribute__((noinline)) static sjs_result string_from(sjs_vm *vm, sjs_builtin_
         if (build_unit(vm, &b, point) != SJS_OK) return SJS_ERR_PROGRAM;
     }
     return build_end(vm, &b);
+}
+
+/* ------------------------------------------------------------------------
+ * Number, parseInt, parseFloat, isNaN and isFinite
+ */
+
+/* Explicit conversions: Number reads a string (StringToNumber), as
+ * parseInt and parseFloat do; the global isNaN and isFinite convert as the
+ * Math functions do, so a string faults there. Reading a string costs a
+ * unit of fuel per 16 bytes. */
+static sjs_result number_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    sjs_value x = arg(call, 0);
+    char room[32];
+    sjs_str text = { 0 };
+    double d;
+    if (id == SJS_BUILTIN_PARSE_INT || id == SJS_BUILTIN_PARSE_FLOAT) {
+        /* The string they read: a primitive's as String gives it. An
+         * object faults, as String does. */
+        if (!sjs_is_primitive(x)) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
+        text = sjs_primitive_text(x, room);
+        call->cost = text.length / 16u;
+    }
+    switch (id) {
+    case SJS_BUILTIN_NUMBER:
+        if (call->count == 0) {
+            d = 0;
+        } else if (x.kind == SJS_STRING) {
+            text = sjs_string_view(SJS_AS_STRING(x));
+            call->cost = text.length / 16u;
+            d = sjs_number_parse(text);
+        } else if (!sjs_is_primitive(x)) {
+            return sjs_vm_fault(vm, "staticjs converts only primitives to numbers");
+        } else if (sjs_vm_to_number(vm, x, &d) != SJS_OK) {
+            return SJS_ERR_PROGRAM;
+        }
+        break;
+    case SJS_BUILTIN_PARSE_FLOAT:
+        d = sjs_number_parse_float(text);
+        break;
+    case SJS_BUILTIN_PARSE_INT: {
+        double radix;
+        if (sjs_vm_to_number(vm, arg(call, 1), &radix) != SJS_OK) return SJS_ERR_PROGRAM;
+        d = sjs_number_parse_int(text, (int32_t)sjs_number_to_uint32(radix));
+        break;
+    }
+    default: /* IS_NAN, IS_FINITE */
+        if (sjs_vm_to_number(vm, x, &d) != SJS_OK) return SJS_ERR_PROGRAM;
+        call->result = sjs_boolean(id == SJS_BUILTIN_IS_NAN ? sjs_number_is_nan(d) : sjs_number_is_finite(d));
+        return SJS_OK;
+    }
+    call->result = sjs_num(d);
+    return SJS_OK;
 }

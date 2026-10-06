@@ -74,6 +74,12 @@ uint32_t sjs_utf8_encode(uint32_t point, uint8_t *out);
 uint32_t sjs_utf16_length(sjs_str text);
 /* <0, 0, >0 as JavaScript compares the two strings: by UTF-16 code unit. */
 int32_t sjs_utf16_compare(sjs_str a, sjs_str b);
+/* WhiteSpace and LineTerminator: what trim removes and Number skips. */
+static inline bool sjs_is_white_space(uint32_t p) {
+    return p == 0x09u || p == 0x0Au || p == 0x0Bu || p == 0x0Cu || p == 0x0Du || p == 0x20u || p == 0xA0u ||
+           p == 0x1680u || (p >= 0x2000u && p <= 0x200Au) || p == 0x2028u || p == 0x2029u || p == 0x202Fu ||
+           p == 0x205Fu || p == 0x3000u || p == 0xFEFFu;
+}
 
 /* ========================================================================
  * Numbers
@@ -98,6 +104,13 @@ double sjs_number_from_decimal(sjs_str digits, int64_t exponent);
 /* Digits of `radix` (2, 4, 8, 16 or 32; each a valid digit), rounded the
  * same way. */
 double sjs_number_from_binary(sjs_str digits, uint32_t radix);
+/* StringToNumber: Number(s). */
+double sjs_number_parse(sjs_str s);
+/* parseFloat(s), and parseInt(s, radix) with the radix already ToInt32. */
+double sjs_number_parse_float(sjs_str s);
+double sjs_number_parse_int(sjs_str s, int32_t radix);
+/* ToUint32 (ToInt32 is the same bits, signed). */
+uint32_t sjs_number_to_uint32(double x);
 
 /* ========================================================================
  * Values
@@ -365,6 +378,11 @@ typedef enum {
     SJS_BUILTIN_MATH_ROUND,
     SJS_BUILTIN_MATH_TRUNC,
     SJS_BUILTIN_MATH_SIGN,
+    SJS_BUILTIN_NUMBER,
+    SJS_BUILTIN_PARSE_INT,
+    SJS_BUILTIN_PARSE_FLOAT,
+    SJS_BUILTIN_IS_NAN,
+    SJS_BUILTIN_IS_FINITE,
     SJS_BUILTIN_FUNCTION_COUNT,
     /* Methods, called on a receiver. */
     SJS_METHOD_FIRST = 64,

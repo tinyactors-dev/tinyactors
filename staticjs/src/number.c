@@ -654,3 +654,191 @@ double sjs_number_from_binary(sjs_str digits, uint32_t radix) {
     }
     return round_binary(v);
 }
+
+/* The longest StrUnsignedDecimalLiteral at s[at] but Infinity: digits, a
+ * point and digits (one side may be empty, not both), and an exponent when
+ * it has digits. `end` stays `at` when there is none. */
+typedef struct {
+    uint32_t end;
+    sjs_str digits; /* the mantissa, with its point */
+    int64_t exponent;
+} decimal_literal;
+
+static bool is_decimal_digit(char c) {
+    return c >= '0' && c <= '9';
+}
+
+static decimal_literal read_decimal(sjs_str s, uint32_t at) {
+    decimal_literal r = { at, { s.ptr + at, 0 }, 0 };
+    uint32_t i = at;
+    while (i < s.length && is_decimal_digit(s.ptr[i])) i++;
+    bool any = i > at;
+    if (i < s.length && s.ptr[i] == '.') {
+        uint32_t j = i + 1u;
+        while (j < s.length && is_decimal_digit(s.ptr[j])) j++;
+        if (any || j > i + 1u) {
+            r.exponent = -(int64_t)(j - i - 1u);
+            i = j;
+            any = true;
+        }
+    }
+    if (!any) return r;
+    r.digits.length = i - at;
+    r.end = i;
+    if (i < s.length && (s.ptr[i] == 'e' || s.ptr[i] == 'E')) {
+        uint32_t j = i + 1u;
+        int64_t sign = 1;
+        if (j < s.length && (s.ptr[j] == '+' || s.ptr[j] == '-')) {
+            if (s.ptr[j] == '-') sign = -1;
+            j++;
+        }
+        if (j < s.length && is_decimal_digit(s.ptr[j])) {
+            /* Saturated: 10^(10^11) is Infinity, whatever the digits. */
+            int64_t e = 0;
+            for (; j < s.length && is_decimal_digit(s.ptr[j]); j++) {
+                if (e < 100000000000) e = e * 10 + (s.ptr[j] - '0');
+            }
+            r.exponent += sign * e;
+            r.end = j;
+        }
+    }
+    return r;
+}
+
+/* Where StrWhiteSpaceChar ends from s[at] on. */
+static uint32_t skip_white_space(sjs_str s, uint32_t at) {
+    while (at < s.length) {
+        uint32_t next = at;
+        if (!sjs_is_white_space((uint32_t)sjs_utf8_next(s, &next))) break;
+        at = next;
+    }
+    return at;
+}
+
+/* A sign at s[*at], taken: whether it is '-'. */
+static bool read_sign(sjs_str s, uint32_t *at) {
+    if (*at < s.length && (s.ptr[*at] == '+' || s.ptr[*at] == '-')) return s.ptr[(*at)++] == '-';
+    return false;
+}
+
+static bool starts_with_infinity(sjs_str s, uint32_t at) {
+    return s.length - at >= 8u && sjs_str_equal((sjs_str){ s.ptr + at, 8 }, SJS_STR("Infinity"));
+}
+
+double sjs_number_parse(sjs_str s) {
+    uint32_t start = skip_white_space(s, 0);
+    uint32_t end = start;
+    for (uint32_t i = start; i < s.length;) {
+        if (!sjs_is_white_space((uint32_t)sjs_utf8_next(s, &i))) end = i;
+    }
+    sjs_str body = { s.ptr + start, end - start };
+    if (body.length == 0) return 0;
+    if (body.length > 2u && body.ptr[0] == '0') {
+        char p = body.ptr[1];
+        uint32_t radix = (p == 'x' || p == 'X') ? 16u : (p == 'o' || p == 'O') ? 8u : (p == 'b' || p == 'B') ? 2u : 0u;
+        if (radix != 0) {
+            sjs_str digits = { body.ptr + 2, body.length - 2u };
+            for (uint32_t i = 0; i < digits.length; i++) {
+                if (radix_digit(digits.ptr[i]) >= radix) return 0.0 / 0.0;
+            }
+            return sjs_number_from_binary(digits, radix);
+        }
+    }
+    uint32_t at = 0;
+    bool negative = read_sign(body, &at);
+    double v;
+    if (starts_with_infinity(body, at) && body.length - at == 8u) {
+        v = 1.0 / 0.0;
+    } else {
+        decimal_literal d = read_decimal(body, at);
+        if (d.end == at || d.end != body.length) return 0.0 / 0.0;
+        v = sjs_number_from_decimal(d.digits, d.exponent);
+    }
+    return negative ? -v : v;
+}
+
+double sjs_number_parse_float(sjs_str s) {
+    uint32_t at = skip_white_space(s, 0);
+    bool negative = read_sign(s, &at);
+    double v;
+    if (starts_with_infinity(s, at)) {
+        v = 1.0 / 0.0;
+    } else {
+        decimal_literal d = read_decimal(s, at);
+        if (d.end == at) return 0.0 / 0.0;
+        v = sjs_number_from_decimal(d.digits, d.exponent);
+    }
+    return negative ? -v : v;
+}
+
+/* parseInt's value for a radix that is not 10 or a power of two, which the
+ * specification lets an implementation approximate past 20 digits: V8's
+ * (src/numbers/conversions.cc), so that it is Node's. Digits are read into
+ * parts while a part's multiplier stays under 2^32 / 36, and each part is
+ * added as number * multiplier + part, each operation rounding. */
+static double radix_accumulate(sjs_str digits, uint32_t radix) {
+    double number = 0;
+    uint32_t i = 0;
+    bool done = false;
+    while (!done) {
+        uint32_t part = 0;
+        uint32_t multiplier = 1;
+        for (;;) {
+            if (i == digits.length) {
+                done = true;
+                break;
+            }
+            uint32_t m = multiplier * radix;
+            if (m > 0xFFFFFFFFu / 36u) break;
+            part = part * radix + radix_digit(digits.ptr[i]);
+            multiplier = m;
+            i++;
+        }
+        double scaled = number * (double)multiplier;
+        number = scaled + (double)part;
+    }
+    return number;
+}
+
+double sjs_number_parse_int(sjs_str s, int32_t radix) {
+    uint32_t at = skip_white_space(s, 0);
+    bool negative = read_sign(s, &at);
+    bool strip = true;
+    if (radix != 0) {
+        if (radix < 2 || radix > 36) return 0.0 / 0.0;
+        strip = radix == 16;
+    } else {
+        radix = 10;
+    }
+    if (strip && s.length - at >= 2u && s.ptr[at] == '0' && (s.ptr[at + 1u] == 'x' || s.ptr[at + 1u] == 'X')) {
+        at += 2u;
+        radix = 16;
+    }
+    uint32_t end = at;
+    while (end < s.length && radix_digit(s.ptr[end]) < (uint32_t)radix) end++;
+    if (end == at) return 0.0 / 0.0;
+    while (at < end && s.ptr[at] == '0') at++;
+    sjs_str digits = { s.ptr + at, end - at };
+    double v;
+    if (digits.length == 0) v = 0;
+    else if (radix == 10) v = sjs_number_from_decimal(digits, 0);
+    else if ((radix & (radix - 1)) == 0) v = sjs_number_from_binary(digits, (uint32_t)radix);
+    else v = radix_accumulate(digits, (uint32_t)radix);
+    return negative ? -v : v;
+}
+
+/* ToUint32: the integer toward zero, modulo 2^32; NaN and the infinities
+ * give 0. ToInt32 is the same bits, signed. */
+uint32_t sjs_number_to_uint32(double x) {
+    uint64_t u = to_bits(x);
+    uint32_t field = (uint32_t)((u >> 52) & 0x7FFu);
+    /* NaN and the infinities; zero, subnormals and anything else under 1. */
+    if (field == 0x7FFu || field < 1023u) return 0;
+    int32_t e = (int32_t)field - 1075; /* |x| = m x 2^e */
+    uint64_t m = (u & ((1ull << 52) - 1u)) | (1ull << 52);
+    uint32_t low;
+    if (e >= 32) low = 0;
+    else if (e >= 0) low = (uint32_t)(m << e);
+    else low = (uint32_t)(m >> -e);
+    return (u >> 63) != 0 ? 0u - low : low;
+}

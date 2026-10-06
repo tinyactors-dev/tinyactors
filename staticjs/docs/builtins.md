@@ -84,8 +84,8 @@ add an ID before `SJS_BUILTIN_FUNCTION_COUNT`, an entry in
 resolves the name when it compiles (`sjs_builtin_lookup`), so the linear
 table costs nothing at run time. A namespace is a row of `spaces` in
 `read_name` and of `space_names` in `read_space_member` (`src/compiler.c`);
-`String` is one and a function too: `event()` reads it as the function
-when no member follows. A function value is immortal: its
+`String` and `Number` are ones and functions too: `event()` reads each as
+the function when no member follows. A function value is immortal: its
 reference count is never written, which is why there is no global mutable
 state.
 
@@ -188,7 +188,10 @@ callback's own instructions.
 - **Fault instead of coercing.** Where JavaScript would call `ToString`,
   `ToNumber` or a prototype method on an object, staticjs faults. A built-in
   that accepted an object and coerced it would be returning a different
-  value.
+  value. A conversion the program asks for by name may read a string:
+  `Number(s)`, `parseInt` and `parseFloat` (and `String` of a primitive);
+  one JavaScript does on the way to something else (`isNaN(s)`,
+  `Math.abs(s)`) faults on a string, through `sjs_vm_to_number`.
 - **Mutating methods** (`push`, `sort`, `splice`, `add`, ...) change the
   receiver and return something else in JavaScript, so never implement
   them as copies. One that changes a variable the function owns, or a
