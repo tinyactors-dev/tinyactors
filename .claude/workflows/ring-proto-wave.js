@@ -187,7 +187,10 @@ Go-style package comment: purpose, contract, lifetime, when it allocates, invari
 failure behaviour, a short usage example. Every declared function must have a comment that starts
 with its name and says what it does, needs and guarantees. Flag comments that say what instead of why,
 that are stale or wrong against the code, or that cite files and lines that no longer exist. Missing
-unit docs or missing function docs are blocking; wording is a nit.`,
+unit docs or missing function docs are blocking; wording is a nit. The repository's convention is that a
+function is documented once, where it is declared (the .h, or tinyactors.h for the public API); its
+definition in the .c carries only "/* name: see file.h. */". That is correct, never a finding; check the
+declaration's comment instead. A static helper is documented at its definition.`,
   },
   {
     key: 'rules', model: 'haiku',
