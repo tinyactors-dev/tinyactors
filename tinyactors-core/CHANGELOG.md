@@ -1,0 +1,945 @@
+# Changelog: tinyactors-core
+
+What changed in tinyactors-core in each release. The summary of a release
+is written for someone upgrading; the lists below it are generated from the
+commits and from the public API (docs/adr/0002-changelogs.md).
+
+## [0.2.0] - 2026-10-06
+
+### Summary
+
+This release replaces the core (943b1f3). tinyactors-core 0.2.0 is the standalone runtime: one block of memory per system, sized at creation, with mailboxes, the run queue and timers in a shared event pool, and effects the host pulls; freestanding base, image, core and system layers; a compiler; a host layer that runs many systems as one; the ECMAScript data model on quickjs-ng; and Node.js, WebAssembly and PostgreSQL bindings. Its C API is a new one: a few names carry over, none with its old shape. The Node.js addon of tinyactors-napi is gone with it; the bindings in tinyactors-core replace it. CMake and the Python build scripts gave way to Ruby tasks on the pinned toolchain. The earlier core is kept at the tag ring-proto-final, and the commits listed below from before the replacement changed it, not this release.
+
+It is also the first release built as three C libraries, released together (4bc7560, b04ae6f, c87a9ae): libtinyactors, the freestanding layers, which call no C library and work in the block the host gives each system; libtinyactors_runtime, the compiler, the host and the runtime conveniences; and libtinyactors_datamodel_ecmascript, the ECMAScript data model with QuickJS inside, which a program opts into by linking it (a glibc program links -lm beside it). Each ships its header, an amalgamation and its API description, a static and a shared library for aarch64-macos, x86_64-macos, x86_64-linux and aarch64-linux, and a wasm module for browsers that imports nothing; in the data model's, Date reads the time the host sets with `ta_datamodel_ecmascript_wasm_set_time` (c87a9ae).
+
+### Upgrading
+
+- The 0.1.0 API is replaced, with no compatibility layer: 0.2.0 is the standalone runtime (943b1f3), whose public headers are `tinyactors.h`, `tinyactors_runtime.h` and `tinyactors_datamodel_ecmascript.h`. Rewrite callers against them. Removed (some come back under the same name with a new shape, as `ta_address` and `ta_expression` do; `ta_system_init` and `ta_system_deinit` take the place of `ta_system_create` and `ta_system_destroy`, `ta_status` that of `ta_result`, and the TA_VERSION_MAJOR, _MINOR and _PATCH macros that of `ta_version`): `ta_action_block_id`, `ta_action_id`, `ta_actor_id`, `ta_actor_inspection_visitor`, `ta_atom`, `ta_content_id`, `ta_data_decl_id`, `ta_definition_id`, `ta_done_data_id`, `ta_event_name_id`, `ta_expr_id`, `ta_initial_transition_id`, `ta_initializer_id`, `ta_invoke_decl_id`, `ta_invoke_id`, `ta_param_id`, `ta_send_id`, `ta_state_id`, `ta_timer_id`, `ta_transition_id`, `TA_ACTION_NONE`, `TA_ACTOR_VISIT_END`, `TA_COMPILE_ERROR_MESSAGE_MAX`, `TA_COMPILE_ERROR_TEXT_MAX`, `TA_CONTENT_ID_NONE`, `TA_DONE_DATA_NONE`, `TA_EXPR_ID_NONE`, `TA_INITIALIZER_NONE`, `TA_INITIAL_TRANSITION_NONE`, `TA_INVOKE_ID_NONE`, `TA_MICROSTEP_LIMIT_NONE`, `TA_SPEC_INDEX_NONE`, `TA_STATE_NONE`, `TA_TRACE_DEFINITIONS_SESSION`, `TA_TRACE_DETAIL_WATCHED`, `TA_TRACE_FLAG_RANDOM`, `TA_TRACE_FLAG_SAMPLED`, `TA_TRANSITION_NONE`, `ta_action_block`, `ta_actor_directory_entry_kind`, `ta_actor_ref_kind`, `ta_actor_residency`, `ta_chart_error_code`, `ta_compile_error_code`, `ta_definition_event_kind`, `ta_dm_text_kind`, `ta_element_kind`, `ta_event_type`, `ta_expr_role`, `ta_expression_kind`, `ta_external_event_submit_status`, `ta_import_stage`, `ta_invoke_report_kind`, `ta_io_origin_class`, `ta_io_text_kind`, `ta_op_status`, `ta_origin_kind`, `ta_result`, `ta_run_status`, `ta_scxml_action_kind`, `ta_scxml_binding_kind`, `ta_scxml_event_kind`, `ta_scxml_id_kind`, `ta_scxml_invoke_kind`, `ta_scxml_state_kind`, `ta_scxml_string_kind`, `ta_scxml_target_kind`, `ta_scxml_transition_kind`, `ta_scxml_value_kind`, `ta_spec_member`, `ta_state_kind`, `ta_trace_at`, `ta_trace_kind`, `ta_transition_origin`, `ta_chart_codec_flags`, `ta_event_flags`, `ta_actor_abandon`, `ta_actor_activate_replacement`, `ta_actor_active_states`, `ta_actor_capture`, `ta_actor_datamodel_root`, `ta_actor_deliver`, `ta_actor_destroy`, `ta_actor_find`, `ta_actor_get_completion`, `ta_actor_history`, `ta_actor_id_generation`, `ta_actor_id_make`, `ta_actor_id_slot`, `ta_actor_inspect`, `ta_actor_load`, `ta_actor_offload`, `ta_actor_prepare_replacement`, `ta_actor_publish_completion`, `ta_actor_reconstruct`, `ta_actor_remove_unloaded`, `ta_actor_report_invoke`, `ta_actor_resume`, `ta_actor_spawn`, `ta_actor_unload`, `ta_actor_withdraw_send`, `ta_address_intern`, `ta_address_release`, `ta_address_retain`, `ta_address_view`, `ta_arena_alloc`, `ta_arena_allocator`, `ta_arena_destroy`, `ta_arena_init`, `ta_arena_reset`, `ta_compile_error_format`, `ta_definition_action`, `ta_definition_compile_spec`, `ta_definition_content`, `ta_definition_counters`, `ta_definition_destroy`, `ta_definition_encode`, `ta_definition_export`, `ta_definition_expression`, `ta_definition_find_state`, `ta_definition_import`, `ta_definition_inspect`, `ta_definition_invoke`, `ta_definition_nest`, `ta_definition_occupancy`, `ta_definition_set_microstep_limit`, `ta_definition_span`, `ta_definition_state`, `ta_definition_transition`, `ta_dm_host_actor`, `ta_dm_host_event`, `ta_dm_host_find_state`, `ta_dm_host_in_state`, `ta_dm_host_state_name`, `ta_dm_host_text`, `ta_event_name_format`, `ta_event_name_intern`, `ta_event_name_matches`, `ta_event_release`, `ta_event_retain`, `ta_external_delivery_release`, `ta_external_delivery_retain`, `ta_io_origin_make`, `ta_io_scope_close`, `ta_io_scope_open`, `ta_null_datamodel`, `ta_null_definition_sink`, `ta_null_trace_sink`, `ta_origin_release`, `ta_origin_text`, `ta_scxml_target_format`, `ta_scxml_target_parse`, `ta_scxml_target_release`, `ta_send_id_format`, `ta_send_id_parse`, `ta_session_image_definition`, `ta_session_image_destroy`, `ta_session_image_next_deadline`, `ta_span_id_format`, `ta_step_key_span_id`, `ta_system_atom_text`, `ta_system_counters`, `ta_system_create`, `ta_system_definitions`, `ta_system_destroy`, `ta_system_dispatch_due`, `ta_system_find_definition`, `ta_system_find_io`, `ta_system_intern_atom`, `ta_system_invoke_id_text`, `ta_system_new_span_id`, `ta_system_new_trace`, `ta_system_register_definition`, `ta_system_register_invoker`, `ta_system_register_io`, `ta_system_release_definition`, `ta_system_retire_definition`, `ta_system_scxml_io_type`, `ta_system_seed_trace_ids`, `ta_system_set_actor_directory`, `ta_system_set_definition_sink`, `ta_system_set_event_block_cache`, `ta_system_set_external_event_router`, `ta_system_set_log_sink`, `ta_system_set_microstep_limit`, `ta_system_set_time`, `ta_system_set_trace_ratio`, `ta_system_set_trace_sink`, `ta_system_time`, `ta_system_visit_actors`, `ta_trace_id_format`, `ta_trace_ratio_threshold`, `ta_trace_sampled_at`, `ta_traceparent_format`, `ta_traceparent_parse`, `ta_tree_alloc`, `ta_tree_close`, `ta_tree_destroy`, `ta_tree_init`, `ta_tree_list_init`, `ta_tree_put`, `ta_tree_result`, `ta_value_release`, `ta_value_retain`, `ta_version`, `ta_wasm_allocator`, `ta_address`, `ta_definition`, `ta_session_image`, `ta_system`, `ta_action_info`, `ta_active_invoke`, `ta_actor_activate_replacement_params`, `ta_actor_active_states_params`, `ta_actor_address`, `ta_actor_capture_params`, `ta_actor_completion`, `ta_actor_deliver_params`, `ta_actor_directory`, `ta_actor_directory_claim_params`, `ta_actor_directory_entry`, `ta_actor_directory_remove_params`, `ta_actor_directory_replace_params`, `ta_actor_directory_resolve_params`, `ta_actor_directory_vtable`, `ta_actor_find_params`, `ta_actor_history_params`, `ta_actor_inspection`, `ta_actor_inspector`, `ta_actor_load_params`, `ta_actor_offload_params`, `ta_actor_parent`, `ta_actor_prepare_replacement_params`, `ta_actor_reconstruct_params`, `ta_actor_ref`, `ta_actor_remove_unloaded_params`, `ta_actor_resume_params`, `ta_actor_spawn_params`, `ta_actor_unload_params`, `ta_actor_visit_params`, `ta_allocator_free_params`, `ta_allocator_vtable`, `ta_arena`, `ta_atom_list`, `ta_bytes`, `ta_chart_codec`, `ta_chart_codec_info`, `ta_chart_codec_vtable`, `ta_chart_decode_params`, `ta_chart_encode_params`, `ta_chart_error`, `ta_chart_expression_printer`, `ta_chart_expression_printer_vtable`, `ta_chart_lowering`, `ta_chart_lowering_vtable`, `ta_chart_position`, `ta_chart_span_sink`, `ta_chart_span_sink_vtable`, `ta_chart_src_resolver`, `ta_chart_src_resolver_vtable`, `ta_compile_error`, `ta_compile_error_format_params`, `ta_content_info`, `ta_counters`, `ta_datamodel`, `ta_datamodel_assign_params`, `ta_datamodel_declare_params`, `ta_datamodel_eval_condition_params`, `ta_datamodel_eval_value_params`, `ta_datamodel_execute_script_params`, `ta_datamodel_foreach_bind_params`, `ta_datamodel_foreach_snapshot_params`, `ta_datamodel_import_content_params`, `ta_datamodel_init_instance_params`, `ta_datamodel_inspect_params`, `ta_datamodel_make_params_params`, `ta_datamodel_prepare_definition_params`, `ta_datamodel_read_location_params`, `ta_datamodel_set_named_params`, `ta_datamodel_text_value_params`, `ta_datamodel_value_decode_params`, `ta_datamodel_value_encode_params`, `ta_datamodel_value_text_params`, `ta_definition_action_params`, `ta_definition_compile_params`, `ta_definition_content_params`, `ta_definition_encode_params`, `ta_definition_event`, `ta_definition_export_params`, `ta_definition_expression_params`, `ta_definition_family`, `ta_definition_find_state_params`, `ta_definition_identity`, `ta_definition_import_params`, `ta_definition_inspection`, `ta_definition_invoke_params`, `ta_definition_nest_params`, `ta_definition_occupancy_params`, `ta_definition_sink`, `ta_definition_sink_vtable`, `ta_definition_span_params`, `ta_definition_state_params`, `ta_definition_transition_params`, `ta_delayed_send_info`, `ta_dm_text_params`, `ta_due_dispatch_params`, `ta_event`, `ta_event_name_format_params`, `ta_expression`, `ta_expression_host`, `ta_expression_host_vtable`, `ta_expression_rejection`, `ta_external_delivery`, `ta_external_event_router`, `ta_external_event_router_vtable`, `ta_external_event_submit_params`, `ta_fault`, `ta_import_error`, `ta_invoke_error`, `ta_invoke_info`, `ta_invoke_origin`, `ta_invoke_report_params`, `ta_invoke_request`, `ta_invoker`, `ta_invoker_forward_params`, `ta_invoker_start_params`, `ta_invoker_vtable`, `ta_io`, `ta_io_origin`, `ta_io_origin_make_params`, `ta_io_registration_params`, `ta_io_scope`, `ta_io_scope_open_params`, `ta_io_text_params`, `ta_io_vtable`, `ta_log_record`, `ta_log_sink`, `ta_log_sink_vtable`, `ta_named_value`, `ta_operator_transition`, `ta_origin`, `ta_origin_text_params`, `ta_queued_event`, `ta_scxml_action_spec`, `ta_scxml_data_spec`, `ta_scxml_done_data_spec`, `ta_scxml_event_spec`, `ta_scxml_handler_spec`, `ta_scxml_id_spec`, `ta_scxml_initial_spec`, `ta_scxml_invoke_spec`, `ta_scxml_param_spec`, `ta_scxml_send_spec`, `ta_scxml_source`, `ta_scxml_spec`, `ta_scxml_state_spec`, `ta_scxml_string_spec`, `ta_scxml_target`, `ta_scxml_target_format_params`, `ta_scxml_transition_spec`, `ta_scxml_value_spec`, `ta_send`, `ta_send_id_format_params`, `ta_source_location`, `ta_source_map`, `ta_source_span`, `ta_span_id_format_params`, `ta_spec_step`, `ta_step_key`, `ta_str`, `ta_system_definitions_params`, `ta_trace_context`, `ta_trace_id_format_params`, `ta_trace_parent`, `ta_trace_position`, `ta_trace_record`, `ta_trace_sink`, `ta_trace_sink_vtable`, `ta_traceparent_format_params`, `ta_traceparent_parse_params`, `ta_transition_info`, `ta_tree`, `ta_tree_list`, `ta_tree_list_layout`, `ta_value`, `ta_value_vtable`, `ta_arena_block`, `ta_dm_host`, `ta_io_origin_entry`.
+- These keep their names but not their types or signatures: `ta_time`, `ta_system_next_deadline`, `ta_wasm_alloc`, `ta_wasm_free`, `ta_datamodel_vtable`, `ta_state_info`, `ta_system_config`, `ta_allocator`. Check each use against the new headers.
+- The changes the earlier core went through before it was replaced (136d175, bd75321, 1c33460, 9183bd7, cf2b4b7, caf78df, 95c4228, 1d4f458, bb87794, 0bc6cfa, 6a6a1fa, 482417e, 19cd181, 904b335, 93c3d46, ccd6d63, e5bf9b5, 192b6d5, a6b451b, 5254618, e4b6974) need nothing beyond that rewrite.
+- A program that built the earlier core with CMake links the new libraries instead, or compiles their amalgamations; a user of the tinyactors-napi addon moves to the Node.js binding in tinyactors-core (943b1f3).
+
+<!-- Generated by `mise run changelog:write`. Do not edit below: `mise run changelog:check` renders it again. -->
+
+### Breaking changes
+
+- replace the core with the standalone runtime, built with Ruby tasks (943b1f3)
+- invocation startup runs after the macrostep, and a macrostep frees nothing (136d175)
+- restate the out-of-memory sweeps for ADR 0102, and fix what they found (bd75321)
+- a data model or invoker that runs out of memory fails in the chart (1c33460)
+- a macrostep takes its internal queue and pause storage at the take (9183bd7)
+- delayed and I/O-processor sends keep their names as text (cf2b4b7)
+- setting the time fires due sends; ta_run reports the next wake (caf78df)
+- delayed sends are envelopes in a deadline index (95c4228)
+- internal events and invocation names travel as text (1d4f458)
+- hosts read event names as text (bb87794)
+- hosts pass event names to core as text (0bc6cfa)
+- hosts post by address into core; the router goes (6a6a1fa)
+- mail for targets that are not resident waits in core (482417e)
+- mail to resident sessions travels as envelopes (19cd181)
+- the taken input stays in its envelope; event blocks go (904b335)
+- admit inputs into the envelope pool and run them with ta_run (93c3d46)
+- core writes telemetry to a lossy ring stamped by a host clock (ccd6d63)
+- a release's notes are its changelog section (e5bf9b5)
+- remove the checkpoint's submitted-send special case (192b6d5)
+- actor names are percent-encoded in target URIs (a6b451b)
+- checkpoints restore submitted sends (5254618)
+- the input log leaves core (core ADR 0094 section 2) (e4b6974)
+
+### API changes
+
+**Removed**
+
+- alias `ta_action_block_id`
+- alias `ta_action_id`
+- alias `ta_actor_id`
+- alias `ta_actor_inspection_visitor`
+- alias `ta_atom`
+- alias `ta_content_id`
+- alias `ta_data_decl_id`
+- alias `ta_definition_id`
+- alias `ta_done_data_id`
+- alias `ta_event_name_id`
+- alias `ta_expr_id`
+- alias `ta_initial_transition_id`
+- alias `ta_initializer_id`
+- alias `ta_invoke_decl_id`
+- alias `ta_invoke_id`
+- alias `ta_param_id`
+- alias `ta_send_id`
+- alias `ta_state_id`
+- alias `ta_timer_id`
+- alias `ta_transition_id`
+- constant `TA_ACTION_NONE`
+- constant `TA_ACTOR_VISIT_END`
+- constant `TA_COMPILE_ERROR_MESSAGE_MAX`
+- constant `TA_COMPILE_ERROR_TEXT_MAX`
+- constant `TA_CONTENT_ID_NONE`
+- constant `TA_DONE_DATA_NONE`
+- constant `TA_EXPR_ID_NONE`
+- constant `TA_INITIALIZER_NONE`
+- constant `TA_INITIAL_TRANSITION_NONE`
+- constant `TA_INVOKE_ID_NONE`
+- constant `TA_MICROSTEP_LIMIT_NONE`
+- constant `TA_SPEC_INDEX_NONE`
+- constant `TA_STATE_NONE`
+- constant `TA_TRACE_DEFINITIONS_SESSION`
+- constant `TA_TRACE_DETAIL_WATCHED`
+- constant `TA_TRACE_FLAG_RANDOM`
+- constant `TA_TRACE_FLAG_SAMPLED`
+- constant `TA_TRANSITION_NONE`
+- enum `ta_action_block`
+- enum `ta_actor_directory_entry_kind`
+- enum `ta_actor_ref_kind`
+- enum `ta_actor_residency`
+- enum `ta_chart_error_code`
+- enum `ta_compile_error_code`
+- enum `ta_definition_event_kind`
+- enum `ta_dm_text_kind`
+- enum `ta_element_kind`
+- enum `ta_event_type`
+- enum `ta_expr_role`
+- enum `ta_expression_kind`
+- enum `ta_external_event_submit_status`
+- enum `ta_import_stage`
+- enum `ta_invoke_report_kind`
+- enum `ta_io_origin_class`
+- enum `ta_io_text_kind`
+- enum `ta_op_status`
+- enum `ta_origin_kind`
+- enum `ta_result`
+- enum `ta_run_status`
+- enum `ta_scxml_action_kind`
+- enum `ta_scxml_binding_kind`
+- enum `ta_scxml_event_kind`
+- enum `ta_scxml_id_kind`
+- enum `ta_scxml_invoke_kind`
+- enum `ta_scxml_state_kind`
+- enum `ta_scxml_string_kind`
+- enum `ta_scxml_target_kind`
+- enum `ta_scxml_transition_kind`
+- enum `ta_scxml_value_kind`
+- enum `ta_spec_member`
+- enum `ta_state_kind`
+- enum `ta_trace_at`
+- enum `ta_trace_kind`
+- enum `ta_transition_origin`
+- flag set `ta_chart_codec_flags`
+- flag set `ta_event_flags`
+- function `ta_actor_abandon`
+- function `ta_actor_activate_replacement`
+- function `ta_actor_active_states`
+- function `ta_actor_capture`
+- function `ta_actor_datamodel_root`
+- function `ta_actor_deliver`
+- function `ta_actor_destroy`
+- function `ta_actor_find`
+- function `ta_actor_get_completion`
+- function `ta_actor_history`
+- function `ta_actor_id_generation`
+- function `ta_actor_id_make`
+- function `ta_actor_id_slot`
+- function `ta_actor_inspect`
+- function `ta_actor_load`
+- function `ta_actor_offload`
+- function `ta_actor_prepare_replacement`
+- function `ta_actor_publish_completion`
+- function `ta_actor_reconstruct`
+- function `ta_actor_remove_unloaded`
+- function `ta_actor_report_invoke`
+- function `ta_actor_resume`
+- function `ta_actor_spawn`
+- function `ta_actor_unload`
+- function `ta_actor_withdraw_send`
+- function `ta_address_intern`
+- function `ta_address_release`
+- function `ta_address_retain`
+- function `ta_address_view`
+- function `ta_arena_alloc`
+- function `ta_arena_allocator`
+- function `ta_arena_destroy`
+- function `ta_arena_init`
+- function `ta_arena_reset`
+- function `ta_compile_error_format`
+- function `ta_definition_action`
+- function `ta_definition_compile_spec`
+- function `ta_definition_content`
+- function `ta_definition_counters`
+- function `ta_definition_destroy`
+- function `ta_definition_encode`
+- function `ta_definition_export`
+- function `ta_definition_expression`
+- function `ta_definition_find_state`
+- function `ta_definition_import`
+- function `ta_definition_inspect`
+- function `ta_definition_invoke`
+- function `ta_definition_nest`
+- function `ta_definition_occupancy`
+- function `ta_definition_set_microstep_limit`
+- function `ta_definition_span`
+- function `ta_definition_state`
+- function `ta_definition_transition`
+- function `ta_dm_host_actor`
+- function `ta_dm_host_event`
+- function `ta_dm_host_find_state`
+- function `ta_dm_host_in_state`
+- function `ta_dm_host_state_name`
+- function `ta_dm_host_text`
+- function `ta_event_name_format`
+- function `ta_event_name_intern`
+- function `ta_event_name_matches`
+- function `ta_event_release`
+- function `ta_event_retain`
+- function `ta_external_delivery_release`
+- function `ta_external_delivery_retain`
+- function `ta_io_origin_make`
+- function `ta_io_scope_close`
+- function `ta_io_scope_open`
+- function `ta_null_datamodel`
+- function `ta_null_definition_sink`
+- function `ta_null_trace_sink`
+- function `ta_origin_release`
+- function `ta_origin_text`
+- function `ta_scxml_target_format`
+- function `ta_scxml_target_parse`
+- function `ta_scxml_target_release`
+- function `ta_send_id_format`
+- function `ta_send_id_parse`
+- function `ta_session_image_definition`
+- function `ta_session_image_destroy`
+- function `ta_session_image_next_deadline`
+- function `ta_span_id_format`
+- function `ta_step_key_span_id`
+- function `ta_system_atom_text`
+- function `ta_system_counters`
+- function `ta_system_create`
+- function `ta_system_definitions`
+- function `ta_system_destroy`
+- function `ta_system_dispatch_due`
+- function `ta_system_find_definition`
+- function `ta_system_find_io`
+- function `ta_system_intern_atom`
+- function `ta_system_invoke_id_text`
+- function `ta_system_new_span_id`
+- function `ta_system_new_trace`
+- function `ta_system_register_definition`
+- function `ta_system_register_invoker`
+- function `ta_system_register_io`
+- function `ta_system_release_definition`
+- function `ta_system_retire_definition`
+- function `ta_system_scxml_io_type`
+- function `ta_system_seed_trace_ids`
+- function `ta_system_set_actor_directory`
+- function `ta_system_set_definition_sink`
+- function `ta_system_set_event_block_cache`
+- function `ta_system_set_external_event_router`
+- function `ta_system_set_log_sink`
+- function `ta_system_set_microstep_limit`
+- function `ta_system_set_time`
+- function `ta_system_set_trace_ratio`
+- function `ta_system_set_trace_sink`
+- function `ta_system_time`
+- function `ta_system_visit_actors`
+- function `ta_trace_id_format`
+- function `ta_trace_ratio_threshold`
+- function `ta_trace_sampled_at`
+- function `ta_traceparent_format`
+- function `ta_traceparent_parse`
+- function `ta_tree_alloc`
+- function `ta_tree_close`
+- function `ta_tree_destroy`
+- function `ta_tree_init`
+- function `ta_tree_list_init`
+- function `ta_tree_put`
+- function `ta_tree_result`
+- function `ta_value_release`
+- function `ta_value_retain`
+- function `ta_version`
+- function `ta_wasm_allocator`
+- handle `ta_address`
+- handle `ta_definition`
+- handle `ta_session_image`
+- handle `ta_system`
+- struct `ta_action_info`
+- struct `ta_active_invoke`
+- struct `ta_actor_activate_replacement_params`
+- struct `ta_actor_active_states_params`
+- struct `ta_actor_address`
+- struct `ta_actor_capture_params`
+- struct `ta_actor_completion`
+- struct `ta_actor_deliver_params`
+- struct `ta_actor_directory`
+- struct `ta_actor_directory_claim_params`
+- struct `ta_actor_directory_entry`
+- struct `ta_actor_directory_remove_params`
+- struct `ta_actor_directory_replace_params`
+- struct `ta_actor_directory_resolve_params`
+- struct `ta_actor_directory_vtable`
+- struct `ta_actor_find_params`
+- struct `ta_actor_history_params`
+- struct `ta_actor_inspection`
+- struct `ta_actor_inspector`
+- struct `ta_actor_load_params`
+- struct `ta_actor_offload_params`
+- struct `ta_actor_parent`
+- struct `ta_actor_prepare_replacement_params`
+- struct `ta_actor_reconstruct_params`
+- struct `ta_actor_ref`
+- struct `ta_actor_remove_unloaded_params`
+- struct `ta_actor_resume_params`
+- struct `ta_actor_spawn_params`
+- struct `ta_actor_unload_params`
+- struct `ta_actor_visit_params`
+- struct `ta_allocator_free_params`
+- struct `ta_allocator_vtable`
+- struct `ta_arena`
+- struct `ta_atom_list`
+- struct `ta_bytes`
+- struct `ta_chart_codec`
+- struct `ta_chart_codec_info`
+- struct `ta_chart_codec_vtable`
+- struct `ta_chart_decode_params`
+- struct `ta_chart_encode_params`
+- struct `ta_chart_error`
+- struct `ta_chart_expression_printer`
+- struct `ta_chart_expression_printer_vtable`
+- struct `ta_chart_lowering`
+- struct `ta_chart_lowering_vtable`
+- struct `ta_chart_position`
+- struct `ta_chart_span_sink`
+- struct `ta_chart_span_sink_vtable`
+- struct `ta_chart_src_resolver`
+- struct `ta_chart_src_resolver_vtable`
+- struct `ta_compile_error`
+- struct `ta_compile_error_format_params`
+- struct `ta_content_info`
+- struct `ta_counters`
+- struct `ta_datamodel`
+- struct `ta_datamodel_assign_params`
+- struct `ta_datamodel_declare_params`
+- struct `ta_datamodel_eval_condition_params`
+- struct `ta_datamodel_eval_value_params`
+- struct `ta_datamodel_execute_script_params`
+- struct `ta_datamodel_foreach_bind_params`
+- struct `ta_datamodel_foreach_snapshot_params`
+- struct `ta_datamodel_import_content_params`
+- struct `ta_datamodel_init_instance_params`
+- struct `ta_datamodel_inspect_params`
+- struct `ta_datamodel_make_params_params`
+- struct `ta_datamodel_prepare_definition_params`
+- struct `ta_datamodel_read_location_params`
+- struct `ta_datamodel_set_named_params`
+- struct `ta_datamodel_text_value_params`
+- struct `ta_datamodel_value_decode_params`
+- struct `ta_datamodel_value_encode_params`
+- struct `ta_datamodel_value_text_params`
+- struct `ta_definition_action_params`
+- struct `ta_definition_compile_params`
+- struct `ta_definition_content_params`
+- struct `ta_definition_encode_params`
+- struct `ta_definition_event`
+- struct `ta_definition_export_params`
+- struct `ta_definition_expression_params`
+- struct `ta_definition_family`
+- struct `ta_definition_find_state_params`
+- struct `ta_definition_identity`
+- struct `ta_definition_import_params`
+- struct `ta_definition_inspection`
+- struct `ta_definition_invoke_params`
+- struct `ta_definition_nest_params`
+- struct `ta_definition_occupancy_params`
+- struct `ta_definition_sink`
+- struct `ta_definition_sink_vtable`
+- struct `ta_definition_span_params`
+- struct `ta_definition_state_params`
+- struct `ta_definition_transition_params`
+- struct `ta_delayed_send_info`
+- struct `ta_dm_text_params`
+- struct `ta_due_dispatch_params`
+- struct `ta_event`
+- struct `ta_event_name_format_params`
+- struct `ta_expression`
+- struct `ta_expression_host`
+- struct `ta_expression_host_vtable`
+- struct `ta_expression_rejection`
+- struct `ta_external_delivery`
+- struct `ta_external_event_router`
+- struct `ta_external_event_router_vtable`
+- struct `ta_external_event_submit_params`
+- struct `ta_fault`
+- struct `ta_import_error`
+- struct `ta_invoke_error`
+- struct `ta_invoke_info`
+- struct `ta_invoke_origin`
+- struct `ta_invoke_report_params`
+- struct `ta_invoke_request`
+- struct `ta_invoker`
+- struct `ta_invoker_forward_params`
+- struct `ta_invoker_start_params`
+- struct `ta_invoker_vtable`
+- struct `ta_io`
+- struct `ta_io_origin`
+- struct `ta_io_origin_make_params`
+- struct `ta_io_registration_params`
+- struct `ta_io_scope`
+- struct `ta_io_scope_open_params`
+- struct `ta_io_text_params`
+- struct `ta_io_vtable`
+- struct `ta_log_record`
+- struct `ta_log_sink`
+- struct `ta_log_sink_vtable`
+- struct `ta_named_value`
+- struct `ta_operator_transition`
+- struct `ta_origin`
+- struct `ta_origin_text_params`
+- struct `ta_queued_event`
+- struct `ta_scxml_action_spec`
+- struct `ta_scxml_data_spec`
+- struct `ta_scxml_done_data_spec`
+- struct `ta_scxml_event_spec`
+- struct `ta_scxml_handler_spec`
+- struct `ta_scxml_id_spec`
+- struct `ta_scxml_initial_spec`
+- struct `ta_scxml_invoke_spec`
+- struct `ta_scxml_param_spec`
+- struct `ta_scxml_send_spec`
+- struct `ta_scxml_source`
+- struct `ta_scxml_spec`
+- struct `ta_scxml_state_spec`
+- struct `ta_scxml_string_spec`
+- struct `ta_scxml_target`
+- struct `ta_scxml_target_format_params`
+- struct `ta_scxml_transition_spec`
+- struct `ta_scxml_value_spec`
+- struct `ta_send`
+- struct `ta_send_id_format_params`
+- struct `ta_source_location`
+- struct `ta_source_map`
+- struct `ta_source_span`
+- struct `ta_span_id_format_params`
+- struct `ta_spec_step`
+- struct `ta_step_key`
+- struct `ta_str`
+- struct `ta_system_definitions_params`
+- struct `ta_trace_context`
+- struct `ta_trace_id_format_params`
+- struct `ta_trace_parent`
+- struct `ta_trace_position`
+- struct `ta_trace_record`
+- struct `ta_trace_sink`
+- struct `ta_trace_sink_vtable`
+- struct `ta_traceparent_format_params`
+- struct `ta_traceparent_parse_params`
+- struct `ta_transition_info`
+- struct `ta_tree`
+- struct `ta_tree_list`
+- struct `ta_tree_list_layout`
+- struct `ta_value`
+- struct `ta_value_vtable`
+- view `ta_arena_block`
+- view `ta_dm_host`
+- view `ta_io_origin_entry`
+
+**Added**
+
+- alias `ta_expression`
+- alias `ta_payload`
+- alias `ta_status`
+- constant `TA_ACTOR_DONE`
+- constant `TA_ACTOR_FREE`
+- constant `TA_ACTOR_HIBERNATED`
+- constant `TA_ACTOR_IDLE`
+- constant `TA_ACTOR_RUNNABLE`
+- constant `TA_ACTOR_WAIT_EXTERNAL`
+- constant `TA_ACTOR_WAIT_WORKSPACE`
+- constant `TA_ADDRESS_NAME`
+- constant `TA_ADDRESS_SESSION`
+- constant `TA_ADDRESS_SESSION_MAX`
+- constant `TA_ADDRESS_SYSTEM_MAX`
+- constant `TA_BINDING_EARLY`
+- constant `TA_BINDING_LATE`
+- constant `TA_CAPTURE_DONEDATA`
+- constant `TA_CAPTURE_INVOKE`
+- constant `TA_CAPTURE_SEND`
+- constant `TA_DATAMODEL_EVENT_DETACHABLE`
+- constant `TA_EFFECT_DONE`
+- constant `TA_EFFECT_ERROR`
+- constant `TA_EFFECT_FLAG_NEEDS_RESPONSE`
+- constant `TA_EFFECT_INVOKE`
+- constant `TA_EFFECT_LOG`
+- constant `TA_EFFECT_REQUEST`
+- constant `TA_EFFECT_SEND`
+- constant `TA_EFFECT_UNINVOKE`
+- constant `TA_EFFECT_WAKE`
+- constant `TA_ERROR_ABORTED`
+- constant `TA_ERROR_COMMUNICATION`
+- constant `TA_ERROR_EXECUTION`
+- constant `TA_ERROR_FATAL`
+- constant `TA_ERROR_INVALID`
+- constant `TA_ERROR_NO_MEMORY`
+- constant `TA_ERROR_STALE`
+- constant `TA_ERROR_STATE`
+- constant `TA_ERROR_UNSUPPORTED`
+- constant `TA_EVENT_IN_ERROR_COMMUNICATION`
+- constant `TA_EVENT_IN_FROM_INVOKE`
+- constant `TA_EVENT_IN_INVOKE_DONE`
+- constant `TA_EVENT_TYPE_EXTERNAL`
+- constant `TA_EVENT_TYPE_INTERNAL`
+- constant `TA_EVENT_TYPE_PLATFORM`
+- constant `TA_EXPRESSION_CONDITION`
+- constant `TA_EXPRESSION_CONTENT`
+- constant `TA_EXPRESSION_LOCATION`
+- constant `TA_EXPRESSION_SCRIPT`
+- constant `TA_EXPRESSION_STRING`
+- constant `TA_EXPRESSION_VALUE`
+- constant `TA_FRAME_HEADER`
+- constant `TA_FRAME_MAX`
+- constant `TA_FRAME_MORE`
+- constant `TA_FRAME_READY`
+- constant `TA_FRAME_REFUSED`
+- constant `TA_IO_PROCESSOR_SCXML_REMOTE`
+- constant `TA_IO_PROCESSOR_SCXML_SHARED`
+- constant `TA_IO_PROCESSOR_SYNC`
+- constant `TA_NIL`
+- constant `TA_OK`
+- constant `TA_POOL_ACTORS`
+- constant `TA_POOL_EVENTS`
+- constant `TA_POOL_NONE`
+- constant `TA_POOL_REQUESTS`
+- constant `TA_POOL_SLAB`
+- constant `TA_POOL_TIMERS`
+- constant `TA_RUN_EFFECTS`
+- constant `TA_RUN_EFFECTS_FULL`
+- constant `TA_RUN_EXHAUSTED`
+- constant `TA_RUN_FAULT`
+- constant `TA_RUN_IDLE`
+- constant `TA_RUN_YIELDED`
+- constant `TA_STATE_ATOMIC`
+- constant `TA_STATE_COMPOUND`
+- constant `TA_STATE_FINAL`
+- constant `TA_STATE_HISTORY_DEEP`
+- constant `TA_STATE_HISTORY_SHALLOW`
+- constant `TA_STATE_PARALLEL`
+- constant `TA_STEP_CANCEL`
+- constant `TA_STEP_DONE`
+- constant `TA_STEP_FAULT`
+- constant `TA_STEP_INVOKE`
+- constant `TA_STEP_NEED_WORKSPACE`
+- constant `TA_STEP_REQUEST`
+- constant `TA_STEP_SEND`
+- constant `TA_STEP_STABLE`
+- constant `TA_STEP_UNINVOKE`
+- constant `TA_STEP_YIELD`
+- constant `TA_SYSTEM_MAX_ACTORS`
+- constant `TA_SYSTEM_MAX_POOL`
+- function `ta_actor_config`
+- function `ta_actor_export`
+- function `ta_actor_hibernate`
+- function `ta_actor_info_get`
+- function `ta_actor_wake`
+- function `ta_address_format`
+- function `ta_address_format_name`
+- function `ta_address_name_decode`
+- function `ta_address_parse`
+- function `ta_address_parse_local`
+- function `ta_address_system_valid`
+- function `ta_blob_migrate`
+- function `ta_blob_rebase`
+- function `ta_core_deliver`
+- function `ta_core_instance_size`
+- function `ta_core_step`
+- function `ta_core_workspace_size`
+- function `ta_datamodel_environment_charge`
+- function `ta_datamodel_environment_chart`
+- function `ta_datamodel_environment_image`
+- function `ta_datamodel_environment_in`
+- function `ta_datamodel_null`
+- function `ta_frame_header`
+- function `ta_frame_read`
+- function `ta_frame_reader_init`
+- function `ta_http_encode_post`
+- function `ta_http_parse_request`
+- function `ta_image_ahead_of_time_section`
+- function `ta_image_boot_actor`
+- function `ta_image_chart_by_name`
+- function `ta_image_chart_datamodel`
+- function `ta_image_chart_name`
+- function `ta_image_chart_source`
+- function `ta_image_data`
+- function `ta_image_data_count`
+- function `ta_image_event_name`
+- function `ta_image_expression`
+- function `ta_image_expression_count`
+- function `ta_image_get_info`
+- function `ta_image_open`
+- function `ta_image_state_by_name`
+- function `ta_image_state_count`
+- function `ta_image_state_info`
+- function `ta_image_state_name`
+- function `ta_image_string`
+- function `ta_system_actor_by_name`
+- function `ta_system_actor_by_session`
+- function `ta_system_actors`
+- function `ta_system_adopt`
+- function `ta_system_advance_time`
+- function `ta_system_boot`
+- function `ta_system_cold_actors`
+- function `ta_system_deinit`
+- function `ta_system_effects`
+- function `ta_system_effects_ack`
+- function `ta_system_init`
+- function `ta_system_layout`
+- function `ta_system_relocate`
+- function `ta_system_restore`
+- function `ta_system_resume`
+- function `ta_system_run`
+- function `ta_system_send`
+- function `ta_system_send_many`
+- function `ta_system_set_next_serial`
+- function `ta_system_snapshot`
+- function `ta_system_spawn`
+- function `ta_system_stats_get`
+- function `ta_system_terminate`
+- opaque `ta_core`
+- opaque `ta_datamodel_environment`
+- opaque `ta_instance`
+- opaque `ta_system`
+- struct `ta_actor_info`
+- struct `ta_address`
+- struct `ta_data_info`
+- struct `ta_datamodel_binding`
+- struct `ta_datamodel_capture`
+- struct `ta_datamodel_chart`
+- struct `ta_datamodel_system_variables`
+- struct `ta_effect`
+- struct `ta_event_in`
+- struct `ta_event_view`
+- struct `ta_expression_info`
+- struct `ta_frame_reader`
+- struct `ta_http_field`
+- struct `ta_http_request`
+- struct `ta_image`
+- struct `ta_image_info`
+- struct `ta_io_processor_descriptor`
+- struct `ta_io_processor_entry`
+- struct `ta_run`
+- struct `ta_string_view`
+- struct `ta_system_stats`
+- constant `TA_DATAMODEL_ECMASCRIPT_REALM_AUTO`
+- constant `TA_DATAMODEL_ECMASCRIPT_REALM_ISOLATED`
+- function `ta_datamodel_ecmascript_binding`
+- function `ta_datamodel_ecmascript_eval_json`
+- function `ta_datamodel_ecmascript_free`
+- function `ta_datamodel_ecmascript_heap_bytes`
+- function `ta_datamodel_ecmascript_js_runtime`
+- function `ta_datamodel_ecmascript_last_error`
+- function `ta_datamodel_ecmascript_new`
+- function `ta_datamodel_ecmascript_payload_eval`
+- function `ta_datamodel_ecmascript_payload_from_json`
+- function `ta_datamodel_ecmascript_payload_to_json`
+- function `ta_datamodel_ecmascript_restore`
+- function `ta_datamodel_ecmascript_set_memory_limit`
+- function `ta_datamodel_ecmascript_snapshot`
+- function `ta_datamodel_ecmascript_vtable`
+- function `ta_datamodel_ecmascript_wasm_set_time`
+- opaque `ta_datamodel_ecmascript`
+- struct `ta_datamodel_ecmascript_config`
+- constant `TA_COMPILE_MAX_CONTENT_NESTING`
+- constant `TA_COMPILE_STRIP_DEBUG`
+- constant `TA_COMPILE_WERROR`
+- constant `TA_DIAGNOSTIC_ERROR`
+- constant `TA_DIAGNOSTIC_NOTE`
+- constant `TA_DIAGNOSTIC_WARNING`
+- constant `TA_HOST_EFFECT_JOB_DONE`
+- constant `TA_HOST_EFFECT_MIGRATED`
+- constant `TA_HOST_EFFECT_PEER`
+- constant `TA_HOST_EFFECT_PEER_ERROR`
+- constant `TA_HOST_EFFECT_SEGMENT_FREED`
+- constant `TA_HOST_MIGRATE_WAKE`
+- constant `TA_PEER_CLOSED`
+- constant `TA_PEER_CONNECTING`
+- constant `TA_PEER_OPEN`
+- constant `TA_PEER_QUEUE`
+- constant `TA_PEER_RECONNECTING`
+- constant `TA_PEER_TRUSTED`
+- constant `TA_ROUTE_ASK_PEERS`
+- constant `TA_ROUTE_DEDUPLICATE`
+- constant `TA_ROUTE_DEDUPLICATE_HOST`
+- constant `TA_ROUTE_DELIVERED`
+- constant `TA_ROUTE_DUPLICATE`
+- constant `TA_ROUTE_DURABLE`
+- constant `TA_ROUTE_ERROR_DENIED`
+- constant `TA_ROUTE_ERROR_EXPIRED`
+- constant `TA_ROUTE_ERROR_HOPS`
+- constant `TA_ROUTE_ERROR_MALFORMED`
+- constant `TA_ROUTE_ERROR_UNKNOWN_TARGET`
+- constant `TA_ROUTE_ERROR_UNREACHABLE`
+- constant `TA_ROUTE_LOCAL`
+- constant `TA_ROUTE_LOCAL_ONLY`
+- constant `TA_ROUTE_LOOKUP`
+- constant `TA_ROUTE_MAX_HOPS`
+- constant `TA_ROUTE_PEER`
+- constant `TA_ROUTE_PEERS`
+- constant `TA_ROUTE_REFUSED`
+- constant `TA_ROUTE_RELAYED`
+- function `ta_compile_charts`
+- function `ta_compile_diagnostics`
+- function `ta_compile_free`
+- function `ta_compile_image`
+- function `ta_compile_system`
+- function `ta_host_actor_by_name`
+- function `ta_host_actors`
+- function `ta_host_add_image`
+- function `ta_host_adopt`
+- function `ta_host_advance_time`
+- function `ta_host_boot`
+- function `ta_host_chart`
+- function `ta_host_deliver`
+- function `ta_host_effects`
+- function `ta_host_effects_ack`
+- function `ta_host_envelope_json`
+- function `ta_host_error_event`
+- function `ta_host_error_route`
+- function `ta_host_export`
+- function `ta_host_export_actor`
+- function `ta_host_free`
+- function `ta_host_hibernate`
+- function `ta_host_job_pending`
+- function `ta_host_locate`
+- function `ta_host_message_init`
+- function `ta_host_migrate`
+- function `ta_host_new`
+- function `ta_host_peer_add`
+- function `ta_host_peer_error`
+- function `ta_host_peer_reach`
+- function `ta_host_peer_remove`
+- function `ta_host_peer_round_trip_time`
+- function `ta_host_peer_status`
+- function `ta_host_peer_up`
+- function `ta_host_restore`
+- function `ta_host_resume`
+- function `ta_host_route`
+- function `ta_host_route_begin`
+- function `ta_host_route_reason`
+- function `ta_host_route_step`
+- function `ta_host_run`
+- function `ta_host_segment_count`
+- function `ta_host_segment_info_get`
+- function `ta_host_send`
+- function `ta_host_send_many`
+- function `ta_host_snapshot`
+- function `ta_host_snapshot_segments`
+- function `ta_host_spawn`
+- function `ta_host_stats_get`
+- function `ta_host_sweep`
+- function `ta_host_system`
+- function `ta_host_terminate`
+- function `ta_host_wake`
+- function `ta_runtime_compile_file`
+- function `ta_runtime_files_free`
+- function `ta_runtime_files_new`
+- function `ta_runtime_free_file`
+- function `ta_runtime_load_file`
+- function `ta_runtime_malloc`
+- function `ta_runtime_now_ns`
+- function `ta_runtime_resolve`
+- function `ta_runtime_run`
+- function `ta_runtime_system_free`
+- function `ta_runtime_system_grow`
+- function `ta_runtime_system_new`
+- opaque `ta_compile_result`
+- opaque `ta_host`
+- opaque `ta_runtime_files`
+- struct `ta_compile_options`
+- struct `ta_datamodel_compiler`
+- struct `ta_diagnostic`
+- struct `ta_envelope`
+- struct `ta_host_config`
+- struct `ta_host_effect`
+- struct `ta_host_message`
+- struct `ta_host_segment_info`
+- struct `ta_host_stats`
+- struct `ta_peer_config`
+- struct `ta_peer_status`
+- struct `ta_resolve_function`
+- struct `ta_route_request`
+- struct `ta_source`
+
+**Changed**
+
+- alias `ta_time`
+- function `ta_system_next_deadline`
+- function `ta_wasm_alloc`
+- function `ta_wasm_free`
+- struct `ta_datamodel_vtable`
+- struct `ta_state_info`
+- struct `ta_system_config`
+- struct `ta_allocator`
+
+### Changes
+
+**Added**
+
+- ship the ECMAScript data model as libtinyactors_datamodel_ecmascript (c87a9ae)
+- release libtinyactors and libtinyactors_runtime as native libraries and wasm modules (b04ae6f)
+- two libraries, tinyactors and tinyactors_runtime, with amalgamations and API descriptions (4bc7560)
+- add the envelope pool and the name area (4ca6784)
+- add the type registry (e1cf8e2)
+- add the chunk chain, and a byte sink and source over it (cf6312a)
+- add the name resolver (ecec6d8)
+- generate the ring records' writers and validating reader (9f099a0)
+- add the single-producer, single-consumer byte ring (706fe69)
+- add the quota with reservations (47a56f0)
+- add the fixed-entry FIFO (3680437)
+- add the indexed min-heap and TA_ERR_FULL (7319dd3)
+- add the paged array (91bac7d)
+- add the intrusive index list, and agents that build blocks (d06c68c)
+- event data leaving a session is a copy (3d83589)
+- actorURI() builds an actor's address (d795ce9)
+- send and invoke IDs are interned from text another process wrote (kernel ADR 0002) (c7d1502)
+- an idle actor's state is exported and restored as structure (core ADR 0094 section 3) (bb32e5f)
+- every input carries its time; ta_actor_set_time is gone (core ADR 0094 section 1) (9861f8a)
+- an empty host kernel that builds, tests, and builds for wasm32 with no C library (kernel ADR 0001, step 1) (3a1eaa1)
+- the jq data model writes its values in pieces (core ADR 0090) (83e58dd)
+- the event-block cache fills on demand up to its bound (ADR 0093) (ee1db2c)
+- compileTextBytes is a parameter; a longer line shows more (ADR 0092) (807b744)
+- system parameters, fixed at creation, that bound every buffer (ADR 0092) (c3b84c6)
+- an input sink can ask whose record it writes (ta_system_input_owner) (842fc45)
+- checkpoints, written through a byte sink and replayed from (ADR 0091) (2d5b040)
+- the input log's records, sink, host records and replay (ADR 0090 §§3-7) (e61ee26)
+- byte sinks and sources, and data-model codecs that stream (ADR 0090 §§1-2) (30f1142)
+- replaying actors, prepare and publish (ADR 0089 §§1-3, 6, 7) (fb908fd)
+- inputs reach a session between macrosteps; invoke IDs per session; ignored and macrostep time (ADR 0089 §§4, 5, 8, 9) (1c0991b)
+- a session ID names its incarnation and family (ADR 0088) (5c56ac5)
+- compare host expressions by handle (ADR 0087) (a79ba9b)
+
+**Fixed**
+
+- set the size before asking for system stats when growing (28a9558)
+- build the test programs and tools on macOS (8067f29)
+- build the PostgreSQL extension with the pinned clang (1a880f4)
+- keep kept names in the session, keep mail in order across a load, and plug four review findings (98ddfab)
+- split a dotted invocation ID in the invocation error name (1e21d19)
+- check the compiler's sizing arithmetic instead of letting it wrap (25c9a1f)
+- never issue definition generation 0 when a slot's generation wraps (97d0769)
+- the default interpreterBytes is 64 KiB, about 20 times the largest chart (ADR 0092) (e5de36e)
+
+**Changed**
+
+- the run's name buffer holds the longest name from system creation (5cd2d33)
+- nested interpreter regions are reserved at the take, not on first use (ce1535f)
+- an actor's invoke table is sized from its definition at the take (78c7d71)
+- an immediate send's eventexpr name travels as bytes (3c7ebc7)
+- match event names over their atoms (f1b27af)
+- remove dead code (f12f6e0)
+- make the event-name trie a trie of atoms on the hash table (33a56a6)
+- add the hash table and put the atom table on it (110615c)
+- put the actor table on an index pool (235e21c)
+- one layout builder with checked arithmetic (43b083a)
+- one generation-handle unit for actor and definition IDs (01e5f3b)
+- one copy of the hash functions and the number formatters (3c2983a)
+- split types.h into one unit per object (56b7b5f)
+- move the arena sink and memory source into their own unit (5a91656)
+- move the ring protocol's catalog into core and check its rendering (aac29d2)
+- one toolchain that answers the same on every host (05300da)
+
+<details>
+<summary>Internal (94)</summary>
+
+- indent the release and API description code inside its modules (861d483)
+- run the Node.js binding's suites on Bun as well as Node.js (f3587e8)
+- slot records own the pause storage (unfinished) (37c6514)
+- check that no allocator call is reachable from a running macrostep (c14cc4e)
+- record where no-allocation-in-a-macrostep stands (3225862)
+- measure the ring defaults by proxy and close step 4.2 (8236c62)
+- random target expressions leave core's tables unchanged (17ee9a9)
+- drive actors through one test helper (fe01185)
+- state the price of 64 slots against today's idle system (19ee1b9)
+- correct the proposal where its ADRs found it stale (09516f4)
+- accept the ring protocol's ADRs (ccbad31)
+- record the Phase 1 benchmark (bce10e9)
+- measure core's size at the end of the plan, not after Phase 1 (52ddaf6)
+- record that step 1.7 found nothing to fold into ta_vec (bb821a2)
+- say which tables the hash table serves (ca75426)
+- share a waiting address once, and keep linear hashing for addresses and sessions (c7982c8)
+- one failing, counting allocator for core's tests (ab9ac44)
+- document units in their headers and plan how the work runs (9ddd42e)
+- bring the implementation plan up to the latest decisions (d81867a)
+- carry trace context across the rings as core does today (ce7824a)
+- let a host inspect a live system between ta_run calls (4b76ef1)
+- store the deadline index in a paged array that follows the pool (3c48d3c)
+- state the protocol catalog and remaining references as specification (a929f03)
+- state the scenarios and charts as walkthroughs of the settled design (c4ddc0b)
+- state the building blocks catalog as specification (6733ac4)
+- fold settled decisions into the ADRs to write (694ed7b)
+- plan the ring protocol against its settled design (f8607e2)
+- state BEHAVIORS as specification (14e4e4f)
+- state ARCHITECTURE as specification (5c5885c)
+- state the ring protocol README as specification (96a021f)
+- state the c2h reserve, pad term and c2h sizing as specification (a465121)
+- state parking and host trimming as specification in macrostep.md (af340dc)
+- state how waiting lists are bounded as specification (62b780a)
+- state the optional tel ring and the drop rule as specification (c50afd7)
+- state the full-c2h pause as specification in ring.md and macrostep.md (5c2d016)
+- state atom lifetime as specification in names.md (d1b6a83)
+- state the resident-only directory as specification in unloading.md (4a0df0e)
+- state tel records, the host clock and tinyactors-otlp as specification (dc895c6)
+- state the native spec handle as specification in definitions.md (59ffbe8)
+- state mandatory internal-event storage as specification (626758a)
+- state fairness and deferred mail as specification in envelope.md (8193d21)
+- say the 14 MB arena figure is an illustration (439c513)
+- size mandatory internal events by one round and treat overflow as a runaway (d2e92fe)
+- check for c2h room before evaluating an action (a567d61)
+- reserve a pad per c2h record and derive c2hBytes from the slot count (cd872f6)
+- bound waiting lists by the pool and the host's answers, not a cap (df68330)
+- keep atoms for the life of the system (5219d63)
+- drop the directory vtable; ask the host for any non-resident address (d5a5f9c)
+- allow a system without a tel ring; close spans a drop cut (c826315)
+- stamp tel records with a host clock and encode OTLP in tinyactors-otlp (af7662f)
+- let the host trim the pool, name area and park area (5368561)
+- take the MCP mapping off the ring protocol's critical path (12430c1)
+- register definitions by native spec handle, not a byte layout (ed7cdd1)
+- return deferred mail to the run queue in arrival order (8524804)
+- pause a slot on a full c2h ring instead of failing the action (1067c8a)
+- plan where the ring protocol's documentation goes (8d2313b)
+- keep build mechanics out of the desired source tree (049e1bc)
+- split types.h into units and keep generated code in src/generated (98b639d)
+- sketch tinyactors-core's source tree after the ring protocol (72d38b6)
+- plan the ring protocol's replacement of core's plumbing (a2c0edc)
+- declare I/O processor and invoker types with h2c.type_declare (c206f86)
+- catalog the ring protocol's building blocks, drop I/O callbacks (9d4416a)
+- generate C enums, not defines, for ring protocol constants (4908699)
+- delete reserved sketch codes from the ring protocol catalog (a2fd70d)
+- remove quarantine; the chain limit abandons a runaway's input (8375de3)
+- park waiting slots in a chunked area, one running workspace (0abb5c8)
+- rename macrostepSlots to maxConcurrentInputs, add maxQuarantined (44ef6cd)
+- run inputs in macrostep slots and quarantine runaways in core (333fcd8)
+- withdraw an admitted input with h2c.withdraw (5a666a0)
+- define ring protocol execution boundaries (6991de1)
+- rename ring fence to macrostep ended (8fc9b3c)
+- specify debugger ownership outside ring protocol (1d1429f)
+- submit complete definitions through the ring protocol (0d469b3)
+- clarify ring replay seeds and execute effects on receipt (bfb00ca)
+- unloading bounds memory and is not persistence (95ce0e6)
+- actors record their events through the application, and are rebuilt by replaying them (8e26b9a)
+- a crash loses a delayed send's firing and its receipt together (1dc516d)
+- a full mailbox overflows instead of refusing mail between actors (0c61dd1)
+- core ADR 0094 implemented (section 2 notes); ADRs 0090 and 0091 point to it; roadmap step 5 done (63a675d)
+- the layers, the host kernel, and the migration onto it (58ae1af)
+- core ADR 0093 and napi ADR 0036 implemented, with notes and measurements (51c907a)
+- core ADR 0093 and napi ADR 0036, parameters that hold on every path (5b46a4a)
+- ADR 0092 notes compileTextBytes and the interpreterBytes default; its Status names two deviations (a9b0c5f)
+- ADR 0092 implemented, with notes and measured figures; pointers from ADRs 0023, 0060 and 0075 (ce8f89e)
+- ADRs 0090 and 0091 implemented; checkpoints carry owed messages (ef9b206)
+- core ADR 0092 and napi ADR 0035, system parameters (22f2192)
+- ADR 0090 sections 3 to 7 implemented, with notes (764cccd)
+- core ADRs 0090 and 0091, napi ADR 0034; the input log, checkpoints and their bytes move into core (ffccf7a)
+- ADR 0089 implemented, with notes; pointers from ADRs 0012, 0037 and 0084; napi ADR 0032 section 5 (5c4f796)
+- ADR 0089 sections 4, 5, 8 and 9 implemented, with notes; pointer from ADR 0081 (3bafe6e)
+- ADR 0088 implemented, with its notes; pointers from ADRs 0044, 0065 and 0066 (62e35e1)
+- ADRs 0088 and 0089, session IDs that name their family and replay before publish (a91ed24)
+- compare host expressions by handle; named functions are how charts are written (2bfa253)
+- LLVM 22 is the toolchain, with zig cc for releases (1470888)
+
+</details>
+
