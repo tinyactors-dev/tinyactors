@@ -98,7 +98,7 @@ static const sjs_name NAMES[] = {
     NAME("italics", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("join", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_JOIN, 0, 0),
     NAME("keys", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET, 0, 0, 0),
-    NAME("lastIndexOf", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("lastIndexOf", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_LAST_INDEX_OF, 0, 0),
     NAME("link", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("localeCompare", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("map", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_MAP, 0, 0),
@@ -715,6 +715,27 @@ static sjs_result array_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
     }
     case SJS_METHOD_ARRAY_JOIN:
         return array_join(vm, call);
+    case SJS_METHOD_ARRAY_LAST_INDEX_OF: {
+        sjs_value x = arg(call, 0);
+        if (!sjs_is_primitive(x)) return sjs_vm_fault(vm, "staticjs does not compare objects by identity");
+        call->result = sjs_num(-1);
+        if (n == 0) return SJS_OK;
+        double from = (double)n - 1;
+        if (call->count > 1) {
+            double rel;
+            if (to_integer(vm, arg(call, 1), &rel) != SJS_OK) return SJS_ERR_PROGRAM;
+            from = rel < 0 ? (double)n + rel : (rel > from ? from : rel);
+        }
+        if (from < 0) return SJS_OK;
+        for (uint32_t i = (uint32_t)from + 1; i-- > 0;) {
+            call->cost++;
+            if (sjs_strict_equal_primitive(a->items[i], x)) {
+                call->result = sjs_num((double)i);
+                return SJS_OK;
+            }
+        }
+        return SJS_OK;
+    }
     case SJS_METHOD_ARRAY_SLICE: {
         double start = 0;
         double end = (double)n;

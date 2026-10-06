@@ -160,7 +160,7 @@ Built-ins:
 
 | | |
 |---|---|
-| arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `map` `reduce` `slice` `some` `toReversed` `toSorted` `with`, `length` |
+| arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `with`, `length` |
 | strings | `endsWith` `includes` `indexOf` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim`, `length`, indexing |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
 | functions | `String` `Boolean` `Array.isArray` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN` |
