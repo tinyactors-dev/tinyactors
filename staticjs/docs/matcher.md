@@ -8,7 +8,10 @@ switch and the differential test ([matcher]); and the first consumers,
 implementation proved the first draft wrong in a detail, the sections say
 what changed and why. Section 10 is what may come next. Section 11 adds
 numeric sorts, predicates against a literal and sums (implemented), and
-designs set membership through a captured name.
+designs set membership through a captured name. Section 12 adds rewrites:
+rules whose match changes the code the compiler emits, matched by an
+anchored lane in every region and with shapes off (implemented, with one
+rewrite: a mutating method called on a path).
 
 The compiler keeps reinventing small pattern matchers over the events it
 receives: OBJECT_LITERAL gathers static keys until a property breaks the
@@ -27,7 +30,8 @@ the tagged callback in C instead of in bytecode. Later uses (constant
 folding, superinstructions, chain fusion) are further rule sets; they are
 not part of the commits of section 9.
 
-Three properties hold throughout:
+Three properties hold throughout, for shapes; a rewrite (section 12) is
+the one exception to the first and the third, by design:
 
 - **A match only tags.** The compiler emits the same bytecode for every
   function whether or not it matched. A match records a shape on the
@@ -38,7 +42,9 @@ Three properties hold throughout:
   identical faults (code, message, subject and position). Fuel can go down,
   never up.
 - **Matching can be switched off** per compiler, without global state, so
-  the tests run the whole spec both ways and compare (section 8).
+  the tests run the whole spec both ways and compare (section 8). Since
+  rewrites, the switch turns off the shapes and leaves the rewrites on
+  (12.6): they are semantics, the shapes fast paths.
 
 ```
 bytes --> parser --events--> matcher (tee) --same events--> compiler
@@ -220,9 +226,11 @@ one small struct:
 
 ### 1.4 Who uses them
 
-- **The compiler** ignores `start`. It reads `node` once per function:
+- **The compiler** reads `node` once per function:
   `begin_function` stores ARROW_BEGIN's `node` in the function's scope
-  (`scope.node`), so that a match report names the function it is for.
+  (`scope.node`), so that a match report names the function it is for; and
+  once per call, for a rewrite's report (section 12). It reads `start` to
+  find paths (docs/mutation.md, "Assignment").
   Errors and line tables keep using `at`.
 - **The matcher** uses `node` to tell which open bracket an event belongs
   to, and copies the closing event's `node` and `start` into each report. It
@@ -293,7 +301,8 @@ of many substitutions never holds more than a few cells.
 ### 3.1 Grammar
 
 ```
-file         = { event | shape | nonterminal | rule } ;
+file         = { event | shape | rewrite | nonterminal | rule } ;
+rewrite      = "rewrite" UPPER ";" ;       (* section 12 *)
 event        = "event" KIND action [ "item" ] [ field { "," field } ] ";" ;
 action       = "leaf" | "postfix" ( INT | "count" ) | "open" INT KIND
              | "inner" | "close" ;
@@ -305,8 +314,9 @@ nonterminal  = "nonterminal" lower "(" [ attribute { "," attribute } ] ")" ";" ;
 attribute    = lower ":" type ;
 rule         = head "<-" pattern [ "cost" INT ] ";" ;
 head         = ( lower | UPPER ) "(" [ term { "," term } ] ")" ;
-pattern      = KIND [ "{" test { "," test } "}" ] [ "(" [ pattern { "," pattern } ] ")" ]
+pattern      = KIND [ "{" test { "," test } "}" ] [ "(" [ child { "," child } ] ")" ]
              | lower [ "(" [ term { "," term } ] ")" ] ;    (* a nonterminal *)
+child        = pattern | "_" | "..." ;     (* `_` and `...`: a rewrite's rules only, section 12 *)
 test         = lower ":" term ;            (* a field of the event *)
 term         = lower                       (* a variable; `_` is a new one each time *)
              | INT | NUMBER | STRING | "true" | "false" | UPPER ;  (* a constant; UPPER: an sjs_operator *)
@@ -964,11 +974,13 @@ labeller hot; section 6.5 has the profile.
 
 ### 6.1 Wiring
 
-- `sjs_compiler` holds `bool matching` and an `sjs_matcher`, initialised in
-  `sjs_compiler_init` unless the config says `no_shapes` (section 8), with
-  the context's counting allocator, `limits.max_nesting`, and the compiler
-  as reporter. The compiler's sink function hands each event to
-  `sjs_matcher_event` before it handles it itself: that is the tee.
+- `sjs_compiler` holds an `sjs_matcher`, initialised in
+  `sjs_compiler_init`, with the context's counting allocator,
+  `limits.max_nesting`, and the compiler as reporter; with `no_shapes`
+  (section 8) it matches the rewrites alone (section 12). Before rewrites,
+  it held `bool matching` and made no matcher with `no_shapes`. The
+  compiler's sink function hands each event to `sjs_matcher_event` before
+  it handles it itself: that is the tee.
   `sjs_compiler_sink()` and `sjs_compile()` are unchanged, and every sink a
   compiler gives out goes through the tee.
 - A matcher failure (out of memory) is the compiler's own: the sink sets
@@ -1287,8 +1299,13 @@ typedef struct {
 } sjs_compiler_config;
 ```
 
-With `no_shapes`, `sjs_compiler_init` makes no matcher, so it costs
-nothing. `sjs_compile_params.compiler` carries the field, so `sjs_compile()`
+With `no_shapes`, `sjs_compiler_init` makes a matcher that matches the
+rewrites alone (`rewrites_only`, section 12.6): the labeller never runs, so
+no function is tagged, no record is allocated and no C path is taken, and
+the anchored lane, which keeps its first cells in the matcher, costs a
+comparison or two per event. A rewrite is semantics, so the switch leaves
+it on: `no_shapes` turns off fast paths only. (It made no matcher at all
+before rewrites.) `sjs_compile_params.compiler` carries the field, so `sjs_compile()`
 honours it too. A positional initialiser of the five older fields still
 means "on", but `-Wextra` warns about the missing field, so every caller in
 the repository now names it (`api_test`, `spec_test`) or uses designated
@@ -2519,3 +2536,223 @@ section's status.
    its own commit with its own tests, after [slots]. The next session that
    takes item 4 starts from 11.9 and updates it with what the
    implementation finds.
+
+---
+
+## 12. Rewrites: matches that change the code
+
+Status: implemented, with one rewrite, MUTATE_PATH: a method that changes
+its receiver, called on a path from a variable (`o.items.push(x)`,
+docs/mutation.md, "Methods through a path"). The matcher's rules decide
+the form; the compiler decides what needs scopes, and rewrites what it
+compiled.
+
+### 12.1 A rewrite, not a tag
+
+A shape tags a function, and the code is the same either way (the first
+property at the top): `no_shapes` can drop a tag, and only the fuel moves.
+MUTATE_PATH is different in kind. Without it, `o.items.push(x)` is an
+ordinary call that faults by name; with it, the call changes `o.items`. So
+it changes what a program means, and the compiler emits other bytecode
+where it matches. That is a rewrite:
+
+- it runs with shapes on and off, and its match is not recorded anywhere
+  but in the code;
+- the differential test (8.2) still holds: both runs rewrite, so they
+  compile to the same program, give the same outcome and tag the same
+  functions (none with `no_shapes`);
+- `no_shapes` keeps its meaning as the off switch of fast paths.
+
+The form could have been one more hand-written look-back in the compiler
+(the habit the top of this document describes). As rules, it is declared
+in one place, with the generator's checks, and the next desugaring adds
+rules, not another matcher.
+
+### 12.2 The anchored lane
+
+The labeller cannot match it. Most of a program is in a dead region (5.3),
+which keeps no cells, so a rule rooted at a name read anywhere never sees
+the name; and a rule on a bracket that takes the nodes before it, as a
+call takes its callee, is refused (4.3) for the same reason. Keeping a cell
+for every node would bring back the 15% to 20% of compile throughput that
+dead regions saved (6.5).
+
+But the rewrite's pattern is a left spine: a name, a member or an index of
+it, a member of that, a call of that. Each node's first operand is the
+node before it, every node of the spine starts where the name does
+(`sjs_event.start`: an operator's, a member's, an index's or a call's node
+starts with its first operand), and the other children (an index's key, a
+call's arguments) can be anything. So the first operand can be found by
+its start rather than by its place on a stack, and nothing else needs a
+cell. The matcher runs such rules in a second, small automaton beside the
+labeller, the **anchored lane** (`src/matcher.c`), on every event, in a
+dead region too:
+
+```
+lane(e):
+    no anchored rule on e, and e starts after the top cell: nothing    # most events
+    pop the cells that start after e's node does   # they ended inside it
+    top is a marker of e's node:
+        a separator: `...` takes it; the close: the marker's rules derive a cell
+    top starts where e's node does:
+        pop it: it is e's first operand, or inside it
+    e has anchored rules:
+        a leaf derives a cell; a postfix event, or an open that takes one
+        node, derives from the operand: a cell, or a marker of the
+        bracket's rules that want the operand
+    a cell: its chain rules, then a report for each rewrite it derives
+```
+
+Why the operand is right: nodes that start at one position are nested (a
+node has a token, and siblings do not overlap); an event comes after its
+children; so a cell still on the lane that starts where an event's node
+starts ended before the event inside that node, and is its first operand
+when the event takes one. An operator that is not a spine node (`(a +
+b).k`, `f(x).k`) pops the cell as its own operand, so the member after it
+finds none. The compiler finds an assignment's target the same way
+(docs/mutation.md, "Assignment").
+
+- **Cost:** an event no anchored rule looks at that starts after the top
+  cell costs a comparison; any other pops what it ends and compares two
+  starts. The lane holds a cell only for a node that derives an anchored
+  nonterminal (here, every name read, and the spine above it), and pops it
+  at the next event of an enclosing node. `mise run bench-compare 1ac1e956
+  compile --quick` (machine `172a3dd3bd74`): compile throughput 2% to 6%
+  lower, one row (`compile.guard.event.whole`, -6.3%) past 5% in every run,
+  the rest within the noise; no allocation more; peaks up by 168 bytes per
+  compile, the lane's 128 bytes of cells and its fields in the matcher. The
+  first version, which ran the whole lane step on every event, cost 4% to
+  11%.
+- **Memory:** a cell is 16 bytes (start, node, a bit per anchored
+  nonterminal, or for a marker a bit per bracket rule alive). The first 8
+  are in the matcher itself; past them, the heap, doubling. Starts increase
+  up the lane, so it holds at most one cell per enclosing node: within the
+  labeller's bound, 4 × max_nesting + 4, which matcher_test checks on
+  every spec source and the deepest programs (255 cells at 255 nested
+  path calls; at most 3 over the spec).
+- **Unreadable streams:** node 0, or more cells than the bound, stop the
+  lane, independently of the labeller; reports made before stand. The
+  parser's streams never stop it (matcher_test).
+
+### 12.3 Rules
+
+`rewrite NAME;` declares a rewrite; `NAME() <- pattern;` is a rule for it.
+The nonterminals a rewrite's rules use, and theirs in turn, are
+**anchored**: the lane matches their rules, the labeller never sees them,
+and no shape's rule may use one. An anchored rule is
+
+- a leaf: `named() <- NAME;`
+- a postfix event over its first operand, whose other children are `_`,
+  any node: `stepped() <- INDEX(path(), _);`
+- a bracket that takes the node before it, then `...`, whatever it holds
+  up to its close: `MUTATE_PATH() <- CALL_BEGIN(mutating(), ...);`
+- a chain rule: `path() <- stepped();`
+
+Its tests compare a field with a constant (`MEMBER{key: "push"}`); it
+binds no variable, hands up no attribute and has no cost: a node derives a
+set of anchored nonterminals, and a rewrite reports where it ends. The
+generator checks each form (4.3), with `mise/tasks/shapes-test`; `_` and
+`...` anywhere else are an error.
+
+The rules of MUTATE_PATH (`src/shapes.rules`):
+
+```
+rewrite MUTATE_PATH;
+named() <- NAME;
+path() <- named();
+path() <- stepped();
+stepped() <- MEMBER(path());
+stepped() <- INDEX(path(), _);
+mutable() <- stepped();
+mutable() <- CALL_BEGIN(chaining(), ...);
+chaining() <- MEMBER{key: "sort"}(mutable());       # and reverse, fill, add
+mutating() <- chaining();
+mutating() <- MEMBER{key: "push"}(mutable());       # and pop, shift, unshift, splice, delete, clear
+MUTATE_PATH() <- CALL_BEGIN(mutating(), ...);
+```
+
+A receiver needs a step (`stepped`): a variable read directly is the
+compiler's own mutation (docs/mutation.md, "The rule"). An optional chain,
+a computed method name, or a path from a call or an operator is no
+`mutable`, so it reports nothing. A call of a method that returns its
+receiver is `mutable` again, so a chain reports each of its calls.
+
+The generator writes `sjs_rewrite` and `sjs_rewrite_name` into
+`src/shapes.h`, and into `src/shapes_table.h` the lane's tables:
+`shape_anchored_events` (each kind's rules), `shape_anchored_rules` (the
+nonterminal derived, the form, the anchored nonterminal of the first child,
+the tests, in `shape_tests`), and `shape_anchored_chain_rules`. Anchored
+nonterminals are numbered from 1, the rewrites first, in a `uint32_t`.
+
+### 12.4 The report
+
+```c
+typedef struct {
+    sjs_rewrite rewrite;
+    uint32_t node;         /* the node it ends: the call's */
+    sjs_position start;    /* where the node begins: the path's root */
+} sjs_rewrite_match;
+```
+
+The reporter's `rewrite` callback (NULL ignores them) gets it during the
+event that ends the node, the call's CALL_END, before the compiler
+handles that event. That is early enough: the compiler has compiled the
+node as an ordinary call, and has not yet emitted the call itself. It is
+enough position: the node id names the call's construct, which the
+compiler keeps open until then, and the compiler kept the path the call's
+callee is from its CALL_BEGIN (12.5). So the report needed no more than
+the node id and the start, which every report has; nothing the parser
+sends changed.
+
+### 12.5 The compiler acts on it
+
+- At a CALL_BEGIN whose callee is a member on the path on top, ending at
+  the GET_MEMBER just compiled, the compiler holds that path until the
+  call ends (`paths_before`, `path.held`), so that its steps' pcs outlive
+  the arguments; the call's construct keeps its node, the callee's pc and
+  what was done with the root's value so far. A call it is not reported
+  for drops the path at its CALL_END.
+- `on_rewrite` marks the open call whose node the report names. At its
+  CALL_END, `path_mutation_end` checks what needs scopes: the root is a
+  variable the function owns (docs/mutation.md, "The rule"), and nothing
+  in the keys or arguments changed it. Then it rewrites what it compiled,
+  in place, instruction for instruction of the same size, as it rewrites
+  an assignment's target: the root's read becomes a RECEIVER, each step a
+  key, the method's METHOD_MEMBER a PATH_METHOD; and it emits PATH_CALL
+  (and PATH_SORTED) instead of CALL. A chain's report finds the last
+  PATH_CALL just before its callee and sets its CHAIN flag, as
+  `mutation_begin` does for a variable's chain.
+- A report the compiler cannot use (no path held, no chain before it) is
+  ignored: the call stays an ordinary one. The matcher decides only the
+  form.
+
+### 12.6 The off switch
+
+`sjs_matcher_config.rewrites_only` (the compiler passes `no_shapes`): the
+lane runs, the labeller does not. With shapes, both run on each event, the
+lane first; they stop independently on a stream they cannot read.
+
+### 12.7 For the next rewrite
+
+What MUTATE_PATH built is general:
+
+- **Rules:** a `rewrite` and its anchored rules, for any form that is a
+  left spine of leaves, postfix events and brackets over one node, with
+  constant tests. The lane, the tables, the generator's checks and the
+  report need no change.
+- **The compiler:** a case in `on_rewrite` for the construct (or, for a
+  postfix rewrite, the node the event itself is), and a retroactive
+  rewrite where the node ends, as the paths already allow.
+
+What it does not do yet, and what each would need:
+
+- **Attributes** (a key's text, a count): the lane's cells would keep
+  slots and text as the labeller's records do. MUTATE_PATH needs none, as
+  the compiler reads the method's name from its own constant.
+- **Children other than the first:** `_` matches any node; a rule that
+  looks at an index's key, or a call's arguments, needs the labeller's
+  cells, which a dead region does not keep.
+- **Brackets that take no node before them** (an array or object literal,
+  an arrow) are the labeller's, which can match them in a dead region
+  already; a rewrite of one would be a labeller rule whose report the
+  compiler takes as a rewrite, matched with `no_shapes` too.
