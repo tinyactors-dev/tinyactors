@@ -1,0 +1,94 @@
+# Multiplayer chess — server-hosted games, a lobby, join by code
+
+A complete multiplayer game where every moving part is an actor, and the
+browser and the server talk *actor to actor* through a link.
+
+```sh
+mise run example:chess        # builds the wasm + addon, serves http://localhost:8080/
+```
+
+Open it in two windows: create a game in one, enter the five-letter code (or
+open the share link) in the other. Open it a third time with the same code to
+watch.
+
+```text
+ browser (web binding, wasm)                        server (Node.js, N-API binding)
+┌────────────────────────────┐   link (WebSocket)  ┌───────────────────────────────────┐
+│ player actor  ─────────────┼── CREATE/JOIN ─────▶│ lobby  (systemID "lobby")         │
+│  (client/player.mjs)       │                     │   └ starts ─▶ game "game:K7QXN"   │
+│        ▲                   │◀─ JOINED, STATE ────┤ game actor (actors.mjs)           │
+│        └── MOVE/RESIGN ────┼────────────────────▶│   rules: chess.mjs (pure)         │
+│ link actor: connecting /   │                     │   idle games hibernate            │
+│ open / reconnecting/closed │                     └───────────────────────────────────┘
+└────────────────────────────┘
+```
+
+## How it works
+
+- **The lobby** (`actors.mjs`, systemID `lobby`) answers `CREATE` by starting a
+  game actor registered as `game:<CODE>`. It routes `JOIN {code}` to that
+  game, or answers `NO_SUCH_GAME`. It keeps the list of games from what the
+  games report (`GAME_OPENED`, `GAME_STARTED`, `GAME_OVER`, `GAME_GONE`).
+- **A game** is one actor per board, moving through `waiting → playing → over
+  → gone`. `MOVE {from, to, player}` passes only if the guard says it is that
+  player's colour *and* a legal move (`chess.mjs`). Otherwise the player gets
+  `REJECTED` with a reason. Every change is broadcast as `STATE` to both
+  players and all spectators. A game left unplayed for 30 minutes ends as
+  abandoned; a finished game stays visible for 10 minutes.
+- **Players are references to actors in browsers.** The client puts `player:
+  self` into its events; on the server that arrives as an `ActorRef`, and
+  `sendTo(({ event }) => event.player, …)` answers it across the link. The
+  game replies with `game: self`, so the client then talks to its game
+  directly. Neither side knows the other is remote.
+- **The link is an actor too.** The status pill in the corner renders its
+  snapshot: connecting, open with the round-trip time, reconnecting with the
+  attempt and queue length, or closed. Moves made while the link is down are
+  queued and delivered when it reopens.
+- **Reloading** keeps you in the game. The client's system id is kept per tab
+  (`sessionStorage`), so your actors keep their addresses. The client rejoins
+  its game code, and the game recognizes the returning player.
+- **Hibernation.** The server unloads idle actors (finished or quiet games)
+  every minute. A move, a join or a timer brings a game back with its board,
+  players and history.
+- `/stats` shows the server system's numbers: actors, hibernated, wakes, links,
+  games.
+
+## Files
+
+| File | |
+|---|---|
+| `chess.mjs` | rules: legal moves (castling, en passant, promotion, pins), check, mate, stalemate, 50-move and insufficient-material draws; FEN; perft-validated |
+| `actors.mjs` | the lobby and game machines (pure; given a binding's API and a system) |
+| `server.mjs` | the server: one tinyactors system, `serveLinks(system, { server, path: '/link', exports })` (browsers may send only the game's events), static files |
+| `client/player.mjs` | the player machine (pure, also driven by the tests) |
+| `client/app.mjs`, `client/board.mjs`, `client/index.html` | custom elements cloning `<template>`s: `<chess-app>`, `<chess-board>`, `<link-status>` |
+| `test/chess.test.mjs` | perft: start position (depth 3), "Kiwipete" (depth 3: 97,862), en-passant endgame (depth 4), promotions; mate, stalemate |
+| `test/game.test.mjs` | the whole flow over real WebSockets: the server on the N-API binding, three "browsers" on the wasm binding |
+
+## Game records in PostgreSQL
+
+With PostgreSQL running (`mise run pg:start`), the server keeps finished
+games and every player's standing in an actor that lives **in the database**
+([records.scxml](records.scxml), an SCXML document with the ECMAScript
+datamodel), reached through a store link ([records.mjs](records.mjs),
+`createStoreLink` with the dependency-free `tools/pgwire.mjs` client):
+
+```
+ browser ──(link)──▶ game (Node) ──(store link)──▶ records (PostgreSQL)
+    ▲                                                     │
+    └──────────── RECORD ◀── server relays ◀── outbox ◀───┘
+```
+
+When a game ends, the game actor sends `game.over` with both players'
+references; the records actor updates its rows and sends each player
+`RECORD {wins, losses, draws, games}` — addressed to the player actor in the
+browser, relayed by the server, which announced only the database to the
+browsers (`announce: [databaseID]`). The standings are plain rows:
+
+```sql
+SELECT datamodel->'standings' FROM tinyactors.actors WHERE name = 'records';
+```
+
+`node examples/chess/server.mjs --no-pg` runs without it.
+`examples/chess/test/e2e.test.mjs` plays two games this way (skipped when
+PostgreSQL is not running).

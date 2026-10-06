@@ -1,0 +1,9 @@
+# PGXS build products
+build/
+*.o
+*.so
+*.bc
+results/
+regression.*
+# `amp orb service start` from scripts/start.sh (orb portal bookkeeping)
+.amp/

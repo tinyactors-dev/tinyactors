@@ -42,9 +42,8 @@ change is not something an upgrade may cause.
 ### 3. Run everything that uses clang
 
 ```sh
-mise run test --all        # the host builds, the checks, every project
-mise run //tinyactors-core:asan
-mise run //tinyactors-napi:test-native-asan
+mise run test --all --full   # the host builds, the checks, every project,
+                             # core's sanitizer build and its Node-API addon
 ```
 
 The host compile commands name clang's path, so every host object
@@ -74,17 +73,15 @@ A new zig changes the release's bytes by design. What must hold is what
 the release verifies: each library exports exactly the API, leaves only
 the allowed symbols undefined, keeps the memory functions local, loads
 only its dependencies, and is for its architecture. Build and verify
-every target (below), and the Node-API addons:
+every target (below):
 
 ```sh
-for target in aarch64-macos x86_64-macos x86_64-linux aarch64-linux; do
-  mise run //tinyactors-napi:build --target "$target"
-done
-mise run //tinyactors-napi:symbols
+mise run //tinyactors-core:check:cross     # every layer, for each release target
+mise run //tinyactors-core:check:wasm      # the tests, as wasm32-wasi, under wasmtime
 ```
 
-Record in the commit how the release's size and speed changed
-(`mise run bench-compare` in `tinyactors-napi`); zig's compiler-rt
+Record in the commit how the release's size and speed changed (the
+torture chamber, `mise run torture` in `tinyactors-core`); zig's compiler-rt
 `memset` is why the release carries its own (ADR 0001, decision 16).
 
 ## Building and comparing the release libraries

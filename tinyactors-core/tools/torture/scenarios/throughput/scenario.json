@@ -1,0 +1,74 @@
+{
+  "name": "throughput",
+  "title": "Throughput — ping-pong storms",
+  "summary": "Ping-pong storms with no host round trips: raw event delivery in a null-datamodel system next to ECMAScript pingers answered via _event.origin.",
+  "description": "Every root invokes children that ping-pong with it forever (null datamodel, static #_parent/#_child routing). A second system runs ECMAScript pingers that address pongers by session URI and are answered via _event.origin. Measures raw event delivery with no host round trips.",
+  "duration": 30,
+  "systems": {
+    "storm": {
+      "charts": [
+        {
+          "name": "storm.scxml",
+          "script": "charts/storm.js",
+          "params": {
+            "children": 16
+          }
+        }
+      ],
+      "config": {
+        "maxActors": 1024,
+        "maxEvents": 8192,
+        "quantum": 400
+      }
+    },
+    "echo": {
+      "charts": [
+        "charts/pinger.scxml",
+        "charts/ponger.scxml"
+      ],
+      "config": {
+        "maxActors": 1024,
+        "maxEvents": 8192,
+        "quantum": 400
+      }
+    }
+  },
+  "spawn": [
+    {
+      "system": "storm",
+      "chart": "storm",
+      "count": 32,
+      "group": "storms"
+    }
+  ],
+  "scripts": [
+    "scripts/setup.js"
+  ],
+  "mutations": {
+    "more-storms": {
+      "title": "Add 32 storms",
+      "description": "Spawn 32 more ping-pong roots (16 children each)",
+      "script": "mutations/more-storms.js"
+    },
+    "calm": {
+      "title": "Stop half the storms",
+      "description": "Terminate half of the storm roots (their children are cancelled)",
+      "script": "mutations/calm.js"
+    }
+  },
+  "schedule": [
+    {
+      "at": 10,
+      "mutation": "more-storms"
+    },
+    {
+      "at": 20,
+      "mutation": "calm"
+    }
+  ],
+  "expect": [
+    "systems.storm.deliveredTotal > 10000",
+    "systems.echo.deliveredTotal > 1000",
+    "totals.faults == 0"
+  ]
+}

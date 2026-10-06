@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+#MISE description="Build tinyactors-core's layers, test programs and tools; --release for the optimized build"
+#USAGE flag "--release" help="The optimized build (build/release), not the sanitizer build (build/dev)"
+# vim:ft=ruby
+
+# Each layer is a static archive in build/<variant>/lib, each program a
+# binary in build/<variant>/bin (mise/core.rb). Objects are reused while
+# their bytes and headers are unchanged (mise/lib/cache.rb).
+
+require_relative '../core'
+
+variant = ENV['usage_release'] == 'true' || ARGV.include?('--release') ? 'release' : 'dev'
+Core.build_layers(variant)
+Core.in_parallel(Core::PROGRAMS + Core::TOOLS) { |program| Core.build_program(variant, program) }
+puts "build #{variant}: #{Core::LAYERS.size} layers, #{(Core::PROGRAMS + Core::TOOLS).size} programs"

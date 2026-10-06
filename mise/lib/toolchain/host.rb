@@ -50,16 +50,6 @@ module Toolchain
       Target.new(name: 'host', triple: target.triple, os: os, arch: @arch, format: target.format, compiler: compiler)
     end
 
-    # What decides how fast the same build runs here, for a benchmark's
-    # machine signature (tinyactors-napi/mise/lib/napi/machine.rb).
-    def hardware = raise(NotImplementedError)
-
-    # What can change the speed of a laptop between runs.
-    def power = {}
-
-    # Time-varying conditions, recorded with a run and never hashed.
-    def conditions = raise(NotImplementedError)
-
     private
 
     # The pinned clang builds this machine's programs against its C library.
@@ -75,31 +65,6 @@ module Toolchain
     class Mac < Host
       def os = :macos
 
-      def hardware
-        {
-          'cpu' => sysctl('machdep.cpu.brand_string'),
-          'cores' => sysctl('hw.physicalcpu')&.to_i,
-          'performanceCores' => sysctl('hw.perflevel0.physicalcpu')&.to_i,
-          'efficiencyCores' => sysctl('hw.perflevel1.physicalcpu')&.to_i,
-          'ramBytes' => sysctl('hw.memsize')&.to_i,
-          'os' => "macOS #{run('sw_vers', '-productVersion')}",
-          'arch' => run('uname', '-m')
-        }
-      end
-
-      def power
-        source = run('pmset', '-g', 'ps')&.[](/Now drawing from '([^']+)'/, 1)
-        low = run('pmset', '-g')&.[](/^\s*lowpowermode\s+(\d+)/, 1)
-        { 'powerSource' => source, 'lowPowerMode' => low == '1' }
-      end
-
-      def conditions
-        {
-          'loadAverage' => sysctl('vm.loadavg')&.scan(/[\d.]+/)&.first(3)&.map(&:to_f),
-          'cpuSpeedLimit' => run('pmset', '-g', 'therm')&.[](/CPU_Speed_Limit\s*=\s*(\d+)/, 1)&.to_i
-        }
-      end
-
       private
 
       # The pinned clang reads the macOS SDK of the Command Line Tools.
@@ -108,33 +73,10 @@ module Toolchain
 
         raise Error, 'the pinned clang builds against the macOS SDK, which is missing: run `xcode-select --install`'
       end
-
-      def sysctl(name) = run('sysctl', '-n', name)
     end
 
     class Linux < Host
       def os = :linux
-
-      def hardware
-        cpuinfo = read('/proc/cpuinfo')
-        release = read('/etc/os-release')[/^PRETTY_NAME="?([^"\n]*)/, 1]
-        {
-          'cpu' => cpuinfo[/^model name\s*:\s*(.*)$/, 1],
-          'cores' => run('nproc')&.to_i,
-          'ramBytes' => read('/proc/meminfo')[/^MemTotal:\s*(\d+)/, 1]&.then { |kb| kb.to_i * 1024 },
-          'os' => "#{release || run('uname', '-s')} (kernel #{run('uname', '-r')})",
-          'arch' => run('uname', '-m')
-        }
-      end
-
-      def conditions
-        load = read('/proc/loadavg').split.first(3).map(&:to_f)
-        { 'loadAverage' => load.empty? ? nil : load, 'cpuSpeedLimit' => nil }
-      end
-
-      private
-
-      def read(path) = File.exist?(path) ? File.read(path) : ''
     end
   end
 end

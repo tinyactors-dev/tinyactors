@@ -1,5 +1,10 @@
 # tinyactors-scxml
 
+> **Parked.** This project builds against the earlier core (tag
+> `ring-proto-final`), which [ADR 0004](../docs/adr/0004-replace-the-core-with-the-standalone-runtime.md)
+> replaced. Nothing builds or tests it until it is ported to the current
+> `tinyactors-core`; the [ROADMAP](../ROADMAP.md) says how.
+
 The SCXML 1.0 XML codec for tinyactors: a `ta_chart_codec` (core ADR 0053)
 that reads and writes SCXML documents over [txml](../tinyxml), the
 freestanding XML library. Core ships without XML (core ADR 0025); this module

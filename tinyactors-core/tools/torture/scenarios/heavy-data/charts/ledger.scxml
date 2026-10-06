@@ -1,0 +1,48 @@
+<!-- A ledger with a large datamodel: a 20k-entry price catalog, a journal of
+     orders, and running aggregates per customer and SKU. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"
+       name="ledger" initial="open">
+  <datamodel>
+    <data id="catalog" expr="Array.from({ length: 20000 }, (_, i) => ({ sku: i, price: (i % 97) + 0.99, tags: ['t' + (i % 13), 't' + (i % 7)] }))"/>
+    <data id="journal" expr="[]"/>
+    <data id="byCustomer" expr="({})"/>
+    <data id="bySku" expr="({})"/>
+    <data id="total" expr="0"/>
+    <data id="line" expr="null"/>
+    <data id="maxJournal" expr="5000"/>
+  </datamodel>
+  <state id="open">
+    <transition event="post">
+      <assign location="journal" expr="journal.concat([_event.data])"/>
+      <foreach array="_event.data.items" item="line">
+        <assign location="total" expr="total + catalog[line.sku % catalog.length].price * line.qty"/>
+        <script>bySku[line.sku] = (bySku[line.sku] || 0) + line.qty;</script>
+      </foreach>
+      <script>{
+        const c = _event.data.customer; /* block-scoped: scripts share the global scope */
+        byCustomer[c.id] = (byCustomer[c.id] || 0) + _event.data.items.length;
+      }</script>
+      <if cond="journal.length &gt; maxJournal">
+        <assign location="journal" expr="journal.slice(journal.length / 2)"/>
+      </if>
+      <send type="bench" event="posted"><param name="n" expr="journal.length"/></send>
+    </transition>
+    <transition event="error.execution"><log label="error" expr="_event.data &amp;&amp; _event.data.message || JSON.stringify(_event.data)"/></transition>
+    <transition event="rebuild" target="rebuilding"/>
+    <transition event="compact">
+      <assign location="journal" expr="journal.slice(-500)"/>
+      <assign location="bySku" expr="({})"/>
+    </transition>
+  </state>
+  <state id="rebuilding">
+    <onentry>
+      <assign location="total" expr="0"/>
+      <assign location="byCustomer" expr="({})"/>
+      <foreach array="journal" item="line">
+        <assign location="total" expr="total + line.items.reduce((s, it) => s + catalog[it.sku % catalog.length].price * it.qty, 0)"/>
+      </foreach>
+      <send type="bench" event="rebuilt"><param name="entries" expr="journal.length"/></send>
+    </onentry>
+    <transition target="open"/>
+  </state>
+</scxml>

@@ -1,0 +1,77 @@
+{
+  "name": "federation",
+  "title": "Federation — actors addressing actors in other systems",
+  "summary": "Three systems whose actors address each other by session URI; kill and restore a system, or add one while orders keep flowing.",
+  "description": "Three systems with separate ECMAScript runtimes: gateway sessions submit schema-generated orders to order desks in the orders system, which charge accounts in the billing system. All hops are SCXML sends to tinyactors://<system>/#_scxml_<id> URIs; replies follow _event.origin. Kill billing to watch error.communication turn into rejections, restore it, or add a second gateway system at run time.",
+  "duration": 40,
+  "systems": {
+    "billing": {
+      "charts": [
+        "charts/account.scxml"
+      ],
+      "config": {
+        "maxActors": 256,
+        "maxEvents": 8192
+      }
+    },
+    "orders": {
+      "charts": [
+        "charts/desk.scxml"
+      ],
+      "config": {
+        "maxActors": 256,
+        "maxEvents": 8192
+      }
+    },
+    "gateway": {
+      "charts": [
+        "charts/session.scxml"
+      ],
+      "config": {
+        "maxActors": 2048,
+        "maxEvents": 8192
+      }
+    }
+  },
+  "scripts": [
+    "scripts/topology.js"
+  ],
+  "generators": [
+    "generators/orders.js"
+  ],
+  "mutations": {
+    "kill-billing": {
+      "title": "Kill billing",
+      "description": "Destroy the billing system; desks get error.communication",
+      "script": "mutations/kill-billing.js"
+    },
+    "restore-billing": {
+      "title": "Restore billing",
+      "script": "mutations/restore-billing.js"
+    },
+    "add-gateway": {
+      "title": "Add a gateway system",
+      "description": "Create gateway-2 at run time with its own sessions",
+      "script": "mutations/add-gateway.js"
+    }
+  },
+  "schedule": [
+    {
+      "at": 12,
+      "mutation": "kill-billing"
+    },
+    {
+      "at": 18,
+      "mutation": "restore-billing"
+    },
+    {
+      "at": 24,
+      "mutation": "add-gateway"
+    }
+  ],
+  "expect": [
+    "totals.remoteOut > 100",
+    "counters.confirmed > 0",
+    "totals.faults == 0"
+  ]
+}

@@ -1,0 +1,21 @@
+id: no-retired-abbreviations
+valid:
+  - "static uint32_t state_count(const ta_chart_record *chart) { return chart->state_count; }"
+  - "typedef struct ta_vector { void *data; uint32_t length, capacity; } ta_vector;"
+  - "void use(StringInfo info) { size_t n = info->len; (void)n; }"
+  - "enum { TA_EFFECT_SEND = 1 };"
+  - "#define TA_TIMEOUT_NS 1000"
+  - "void f(ta_system *system, uint64_t delay_ns) { uint32_t i = 0; (void)i; }"
+  - "#define MSG_NOSIGNAL 0"
+  - "typedef struct ta_chart_record { uint32_t first_transition, transition_count; } ta_chart_record;"
+invalid:
+  - "static void f(char *buf) {}"
+  - "void g(void) { uint32_t len = 0; (void)len; }"
+  - "typedef struct ta_queue { uint32_t n_items; } ta_queue;"
+  - "typedef struct ta_x { uint32_t mb_head; } ta_x;"
+  - "enum { TA_FX_SEND = 1 };"
+  - "#define TA_ERR_NOMEM 3"
+  - "static int ws_get(void) { return 0; }"
+  - "typedef struct es_inst es_inst;"
+  - "struct ta_instance_layout { uint32_t W; };"
+  - "typedef struct ta_chart_record { uint32_t trans0, transition_count; } ta_chart_record;"

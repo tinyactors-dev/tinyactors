@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<!-- Version 1 of a worker. Residents (limit 0) live forever; the others take
+     `limit` jobs and finish. Every job is acknowledged with its sequence number
+     and the worker's running count; a delayed send to itself (the timeout
+     pattern) fires every second. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="worker" datamodel="ecmascript" initial="idle">
+  <datamodel>
+    <data id="count" expr="0"/>
+    <data id="limit" expr="0"/>
+    <data id="timeouts" expr="0"/>
+  </datamodel>
+  <state id="idle">
+    <onentry>
+      <send event="timeout" delay="1s" id="timeout"/>
+    </onentry>
+    <onexit>
+      <cancel sendid="timeout"/>
+    </onexit>
+    <transition event="job">
+      <assign location="count" expr="count + 1"/>
+      <send type="bench" event="ack">
+        <param name="seq" expr="_event.data.seq"/>
+        <param name="n" expr="count"/>
+        <param name="v" expr="1"/>
+        <param name="who" expr="_ioprocessors.scxml.location"/>
+      </send>
+    </transition>
+    <transition event="timeout" target="idle">
+      <assign location="timeouts" expr="timeouts + 1"/>
+      <send type="bench" event="timeout">
+        <param name="v" expr="1"/>
+        <param name="who" expr="_ioprocessors.scxml.location"/>
+      </send>
+    </transition>
+    <transition cond="limit &gt; 0 &amp;&amp; count &gt;= limit" target="done"/>
+  </state>
+  <final id="done"/>
+</scxml>

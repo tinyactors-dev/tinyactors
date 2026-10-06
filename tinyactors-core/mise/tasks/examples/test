@@ -1,0 +1,12 @@
+#!/usr/bin/env ruby
+#MISE description="Examples: the access-reconciler simulation (invariants), chess (rules perft, lobby and games over real links) and the ui-elements machines"
+#MISE depends=["build", "node:build", "web:build"]
+# vim:ft=ruby
+
+require_relative '../../core'
+
+reconciler = Core.program_path('dev', 'access-reconciler')
+Core.run(reconciler, '--employees', '1500', '--days', '30', '--check', '--quiet')
+Core.run(reconciler, '--employees', '400', '--days', '21', '--seed', '7', '--check', '--quiet')
+node = Core.node_packages
+Core.run('node', '--test', *Dir[Core::ROOT.join('examples/{chess,ui-elements}/test/*.test.mjs').to_s].sort, chdir: node)

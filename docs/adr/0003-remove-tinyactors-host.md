@@ -1,6 +1,6 @@
 # ADR 0003: Remove tinyactors-host
 
-**Status:** Accepted (2026-10-05); not yet implemented. Supersedes kernel ADRs 0001 to 0006 (`tinyactors-host/docs/adr/`).
+**Status:** Superseded by [ADR 0004](0004-replace-the-core-with-the-standalone-runtime.md) (2026-10-06); the kernel was removed, the rings were not built. Was: accepted (2026-10-05). Supersedes kernel ADRs 0001 to 0006 (`tinyactors-host/docs/adr/`).
 **Date:** 2026-10-05
 
 ## Context

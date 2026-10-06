@@ -1,0 +1,6 @@
+<!-- Never stable: an eventless transition loop. Fuel budgets preempt it at
+     microstep boundaries; it stays runnable without new events. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="null" name="looper" initial="a">
+  <state id="a"><transition target="b"/></state>
+  <state id="b"><transition target="a"/></state>
+</scxml>

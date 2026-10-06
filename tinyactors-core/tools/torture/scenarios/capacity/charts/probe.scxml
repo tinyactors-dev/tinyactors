@@ -1,0 +1,9 @@
+<!-- Answers probes at once: the round trip is the scheduling latency an
+     ordinary actor sees at the current load. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="probe" initial="s">
+  <state id="s">
+    <transition event="probe">
+      <send type="bench" event="probe"><param name="t" expr="_event.data.t"/></send>
+    </transition>
+  </state>
+</scxml>

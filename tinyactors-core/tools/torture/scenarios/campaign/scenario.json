@@ -1,0 +1,30 @@
+{
+  "name": "campaign",
+  "title": "Campaign — 50,000 emails, one actor per attempt",
+  "summary": "A campaign actor spawns an actor for every delivery attempt through the system I/O processor, sends through an idempotent mail processor, and checkpoints progress so crashes never re-send what was delivered.",
+  "description": "A campaign actor mails 50,000 recipients. Every delivery attempt is its own actor, spawned with <send type=\"system\" event=\"spawn\"> (at most 200 in flight). Sends go to an idempotent mail processor keyed by campaign:recipient that remembers keys for 30 s, with latency, throttling, bounces and lost replies. Progress (a cursor plus the in-flight and retry sets) is checkpointed to a store every second; sending pauses when checkpoints stop being confirmed. Crash the campaign and it resumes from its checkpoint — re-sent emails are dropped as duplicates by the processor, so no recipient is mailed twice. Restart it after the key retention has passed and it refuses to resume until an operator decides.",
+  "duration": 120,
+  "ioprocessors": ["mail", "store"],
+  "systems": {
+    "mailer": {
+      "charts": ["charts/campaign.scxml", "charts/delivery.scxml"],
+      "config": { "maxActors": 1024, "maxEvents": 16384, "maxTimers": 4096, "quantum": 400 }
+    }
+  },
+  "scripts": ["scripts/store.js", "scripts/mail.js", "scripts/campaign.js"],
+  "mutations": {
+    "crash": { "title": "Crash and restart", "description": "Destroy the campaign's system and start it again from the last confirmed checkpoint", "script": "mutations/crash.js" },
+    "mail-outage": { "title": "Mail outage (5 s)", "description": "The mail processor is unreachable: attempts fail with error.communication and are retried", "script": "mutations/mail-outage.js" },
+    "store-outage": { "title": "Store outage (6 s)", "description": "Checkpoints are not confirmed: the campaign pauses once its progress is 3 s unconfirmed", "script": "mutations/store-outage.js" },
+    "pause": { "title": "Pause / resume", "script": "mutations/pause.js" },
+    "crash-late": { "title": "Crash, restart after the key retention", "description": "The restart comes too late for safe re-sends: the campaign stops in 'stale' until an operator forces or aborts", "script": "mutations/crash-late.js" },
+    "force": { "title": "Operator: force resume", "script": "mutations/force.js" },
+    "abort": { "title": "Operator: abort", "script": "mutations/abort.js" }
+  },
+  "schedule": [
+    { "at": 15, "mutation": "crash" },
+    { "at": 25, "mutation": "mail-outage" },
+    { "at": 35, "mutation": "store-outage" }
+  ],
+  "expect": ["counters.deliveredTwice == 0", "counters.delivered > 0", "totals.faults == 0"]
+}

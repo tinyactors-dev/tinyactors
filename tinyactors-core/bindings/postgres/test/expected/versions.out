@@ -1,0 +1,51 @@
+-- Versions: define() adds one; running actors keep theirs; new actors start on the newest.
+SET tinyactors.log = notice;
+SELECT tinyactors.define('greeter', $scxml$
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="greeter" initial="s">
+  <state id="s"><transition event="hi"><log expr="'hello (v1)'"/></transition></state>
+</scxml>
+$scxml$) AS version;
+ version 
+---------
+       1
+(1 row)
+
+SELECT tinyactors.spawn('greeter', '{}', 'old') AS old \gset
+SELECT tinyactors.define('greeter', $scxml$
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="greeter" initial="s">
+  <state id="s"><transition event="hi"><log expr="'hello (v2)'"/></transition></state>
+</scxml>
+$scxml$) AS version;
+ version 
+---------
+       2
+(1 row)
+
+SELECT tinyactors.spawn('greeter', '{}', 'new') AS new \gset
+SELECT name, version FROM tinyactors.actors WHERE chart = 'greeter' ORDER BY id;
+ name | version 
+------+---------
+ old  |       1
+ new  |       2
+(2 rows)
+
+SELECT (tinyactors.send('old', 'hi')).version;
+NOTICE:  tinyactors 13: hello (v1)
+ version 
+---------
+       1
+(1 row)
+
+SELECT (tinyactors.send('new', 'hi')).version;
+NOTICE:  tinyactors 14: hello (v2)
+ version 
+---------
+       2
+(1 row)
+
+SELECT name, version FROM tinyactors.current_charts WHERE name = 'greeter';
+  name   | version 
+---------+---------
+ greeter |       2
+(1 row)
+

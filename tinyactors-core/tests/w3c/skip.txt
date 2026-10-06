@@ -1,0 +1,4 @@
+# W3C IRP tests excluded from `mise run w3c:ecmascript`, one per line:
+#   <test id> <reason>
+# Currently empty: all 191 automatic tests (mandatory and optional) pass with
+# the quickjs-ng ECMAScript datamodel and the runner's BasicHTTP loopback host.

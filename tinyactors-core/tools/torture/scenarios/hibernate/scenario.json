@@ -1,0 +1,12 @@
+{
+  "name": "hibernate",
+  "title": "Hibernate — far more sessions than fit in RAM",
+  "summary": "Millions of ECMAScript sessions, a few percent resident: the host unloads idle ones to a blob file and brings them back on demand.",
+  "description": "Spawns ECMAScript session actors (a set of ids, a small profile, a timeout as a delayed send to itself) far beyond what fits resident, while the host sweeps for cold actors (ta_system_cold_actors, a CLOCK sweep) and hibernates them into an append-only blob file. Touches are skewed: most go to a small hot set, the rest to random sessions, which are hibernated and must be woken first — the system queues their events and emits TA_EFFECT_WAKE, the host reads the blob and calls ta_actor_wake. A sample of touches replies, measuring hot vs cold latency. Hibernated sessions keep their actor record (session address, timers, mailbox); their state lives in the file. Tune with --param sessions, hotFraction, hotShare, touchRate, sweepMs, idleMs.",
+  "duration": 120,
+  "scripts": ["scripts/hibernate.js"],
+  "mutations": {
+    "flash-crowd": { "title": "Flash crowd", "description": "Touch 5% of all sessions at once (mostly hibernated)", "script": "mutations/flash-crowd.js" },
+    "new-hot-set": { "title": "New hot set", "description": "Move the hot set to other sessions", "script": "mutations/new-hot-set.js" }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "fit",
+  "title": "Fit — how many actors fit on this machine?",
+  "summary": "Keeps adding small ECMAScript session actors — a set of ids and a resettable timeout — until this machine's memory budget or the latency SLO says stop.",
+  "description": "Each actor is the common session shape: an ECMAScript datamodel holding a small set of ids and a timeout implemented as a delayed send to itself that every touch cancels and re-arms. The host touches 10% of the sessions per second. The actor count grows (×2 while far from the limits, then ×1.25) while the bench watches its own resident memory against a budget derived from this machine (80% of the memory available at start, or the cgroup limit), the probe latency SLO and whether touches are processed. It reports how many actors fit and what one costs. Tune with --param memoryFraction, memoryMB, sloMs, touchRate, idleMs, maxActors.",
+  "duration": 600,
+  "scripts": ["scripts/fit.js"],
+  "mutations": {
+    "stop-here": { "title": "Stop here", "description": "Report the current count as the result", "script": "mutations/stop-here.js" }
+  }
+}

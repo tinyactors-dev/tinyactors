@@ -1,0 +1,71 @@
+#!/usr/bin/env ruby
+#MISE description="Torture chamber: every scenario headless, its expectations and time series checked, then the dashboard server and WebSocket test"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+require_relative '../../core'
+require 'json'
+require 'socket'
+
+# A torture-bench JSONL time series: samples well formed, time increasing,
+# rates not negative, and the run ending with a passing summary.
+REQUIRED = %w[name actors actorsCap runnable events eventsCap timers regionBytes delivered fuel turns remoteOut
+              remoteIn busy jsHeap deliveredTotal faults].freeze
+
+def validate(path, min_samples)
+  messages = File.readlines(path).map { |line| JSON.parse(line) }
+  unknown = messages.find { |m| !%w[sample summary log].include?(m['type']) }
+  abort "#{path}: unknown message type #{unknown['type'].inspect}" if unknown
+  samples = messages.select { |m| m['type'] == 'sample' }
+  summary = messages.find { |m| m['type'] == 'summary' }
+  abort "#{path}: #{samples.size} samples < #{min_samples}" if samples.size < min_samples
+  samples.each_cons(2) { |a, b| abort "#{path}: time does not increase at t=#{b['t']}" unless b['t'] > a['t'] }
+  samples.each do |sample|
+    sample['systems'].each do |system|
+      missing = REQUIRED - system.keys
+      abort "#{path}: system #{system['name']} lacks #{missing}" unless missing.empty?
+      negative = %w[delivered fuel turns remoteOut busy].find { |key| system[key].negative? }
+      abort "#{path}: negative #{negative} in #{system['name']} at t=#{sample['t']}" if negative
+      if system['actors'] > system['actorsCap'] || system['events'] > system['eventsCap']
+        abort "#{path}: pool over capacity in #{system['name']}"
+      end
+    end
+  end
+  # A scenario measures in-process systems in every sample, or an external
+  # service through its own metrics (postgres: the actors live in the database).
+  external = samples.none? { |sample| sample['systems'].any? }
+  abort "#{path}: no systems and no metrics" if external && samples.none? { |sample| sample['metrics'] }
+  abort "#{path}: a sample without systems" if !external && !samples.all? { |sample| sample['systems'].any? }
+  abort "#{path}: no summary" unless summary
+  abort "#{path}: expectations failed: #{summary['failures']}" unless summary['ok']
+
+  total = samples.last['systems'].sum { |system| system['deliveredTotal'] }
+  total = (summary['results'] || []).first&.fetch('events', 0).to_i if external
+  rate = summary['totals']['deliveredPerSecond'] || total / summary['duration'].to_f
+  puts format('ok  %-11s %3d samples  %9d events  %10.0f events/s  %d checks', summary['scenario'], samples.size, total,
+              rate, summary['expect'].size)
+end
+
+def postgres_running?
+  Socket.tcp('127.0.0.1', 54_320, connect_timeout: 1).close
+  true
+rescue SystemCallError, SocketError
+  false
+end
+
+bench = Core.program_path('dev', 'torture-bench')
+Dir[Core::ROOT.join('tools/torture/scenarios/*/scenario.json').to_s].sort.each do |scenario|
+  directory = File.dirname(scenario)
+  name = File.basename(directory)
+  if File.read(scenario).include?('"postgres"') && !postgres_running?
+    puts "torture: scenario #{name} skipped (PostgreSQL is not running; mise run pg:start)"
+    next
+  end
+  series = Core.directory('dev').join("torture-#{name}.jsonl")
+  pid = Process.spawn(bench.to_s, directory, '--headless', '--quiet', '--duration', '4', '--scale', '0.05',
+                      '--out', series.to_s, out: File::NULL)
+  _pid, status = Process.wait2(pid)
+  abort "torture: scenario #{name} failed" unless status.success?
+  validate(series, 8)
+end
+Core.run('node', '--test', 'test/server.test.mjs', chdir: Core::ROOT.join('tools/torture'))

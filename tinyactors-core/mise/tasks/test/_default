@@ -1,0 +1,42 @@
+#!/usr/bin/env ruby
+#MISE description="Test tinyactors-core: every test program under AddressSanitizer and UBSan, the bindings, conformance and the W3C IRP suite on each, the examples, and the freestanding and wasm builds; --full adds every torture scenario and the cross builds"
+#USAGE flag "--full" help="Also run every torture scenario and cross-compile for each release target"
+#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "third_party/**/*", "bindings/**/*.{c,h,js,mjs,cjs,ts,json}", "tools/**/*", "examples/**/*", "web/**/*", "sgconfig.yml", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml"]
+#MISE outputs={auto=true}
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# The programs run side by side, each from its own directory under
+# build/dev/scratch, so none depends on another or on a fixed path
+# (AGENTS.md, "Tests run in parallel").
+
+require_relative '../../core'
+require 'open3'
+
+runs = Core::PROGRAMS.map { |program| [program.name, [Core.program_path('dev', program.name), *program.arguments]] }
+# A short self-checking run of the torture chamber (its scenario's
+# expectations); `mise run torture:test` runs every scenario.
+runs << ['torture', [Core.program_path('dev', 'torture-bench'), Core::ROOT.join('tools/torture/scenarios/throughput'),
+                     '--headless', '--quiet', '--duration', '2', '--scale', '0.05']]
+
+failed = []
+lock = Mutex.new
+Core.in_parallel(runs) do |name, command|
+  scratch = Core.directory('dev').join('scratch', name)
+  FileUtils.rm_rf(scratch)
+  FileUtils.mkdir_p(scratch)
+  output, status = Open3.capture2e(*command.map(&:to_s), chdir: scratch.to_s)
+  lock.synchronize do
+    next puts("ok   #{name}") if status.success?
+
+    failed << name
+    puts "FAIL #{name}", output.lines.last(40).join
+  end
+end
+abort "tinyactors-core: failed: #{failed.sort.join(', ')}" unless failed.empty?
+puts "tinyactors-core: #{runs.size} test programs pass"
+
+# The rest are tasks of their own; each runs alone too.
+tasks = %w[lint check:freestanding amalgamate w3c node:test web:test conformance:js w3c:js examples:test check:wasm]
+tasks += %w[torture:test check:cross] if ENV['usage_full'] == 'true' || ARGV.include?('--full')
+tasks.each { |task| Core.run('mise', 'run', task) }

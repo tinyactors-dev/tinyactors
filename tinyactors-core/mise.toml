@@ -1,0 +1,10 @@
+# tinyactors-core's tasks live in mise/tasks/ (Ruby file tasks, AGENTS.md);
+# the compiler and binutils are the root mise.toml's.
+
+[tools]
+# The W3C IRP templates are XSLT 2.0; tools/w3c/convert.py instantiates them
+# with SaxonC, which uv fetches (mise run w3c).
+uv = "0.12.22"
+python = "3.13"
+# Runs the wasm32-wasi build of the test programs (mise run check:wasm).
+wasmtime = "49.0.2"

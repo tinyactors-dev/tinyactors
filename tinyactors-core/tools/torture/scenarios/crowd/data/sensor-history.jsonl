@@ -1,0 +1,600 @@
+{"t": 0.0486, "sensor": 28, "event": "reading", "data": {"celsius": 21.6, "battery": 95}}
+{"t": 0.0665, "sensor": 12, "event": "poke"}
+{"t": 0.069, "sensor": 39, "event": "reading", "data": {"celsius": 17.8, "battery": 58}}
+{"t": 0.1105, "sensor": 9, "event": "poke"}
+{"t": 0.1231, "sensor": 2, "event": "reading", "data": {"celsius": 16.3, "battery": 40}}
+{"t": 0.1419, "sensor": 39, "event": "poke"}
+{"t": 0.1948, "sensor": 3, "event": "poke"}
+{"t": 0.2104, "sensor": 38, "event": "poke"}
+{"t": 0.2158, "sensor": 28, "event": "reading", "data": {"celsius": 22.4, "battery": 49}}
+{"t": 0.243, "sensor": 18, "event": "reading", "data": {"celsius": 18.7, "battery": 90}}
+{"t": 0.2524, "sensor": 5, "event": "reading", "data": {"celsius": 21.6, "battery": 49}}
+{"t": 0.2542, "sensor": 32, "event": "reading", "data": {"celsius": 21.3, "battery": 57}}
+{"t": 0.2547, "sensor": 24, "event": "poke"}
+{"t": 0.3201, "sensor": 0, "event": "poke"}
+{"t": 0.4184, "sensor": 3, "event": "reading", "data": {"celsius": 18.0, "battery": 70}}
+{"t": 0.4432, "sensor": 26, "event": "poke"}
+{"t": 0.4525, "sensor": 17, "event": "reading", "data": {"celsius": 24.1, "battery": 35}}
+{"t": 0.4552, "sensor": 8, "event": "poke"}
+{"t": 0.4719, "sensor": 3, "event": "reading", "data": {"celsius": 21.3, "battery": 91}}
+{"t": 0.4771, "sensor": 12, "event": "reading", "data": {"celsius": 20.8, "battery": 69}}
+{"t": 0.5924, "sensor": 7, "event": "reading", "data": {"celsius": 19.4, "battery": 20}}
+{"t": 0.6845, "sensor": 17, "event": "reading", "data": {"celsius": 12.2, "battery": 22}}
+{"t": 0.8215, "sensor": 13, "event": "poke"}
+{"t": 0.8242, "sensor": 38, "event": "reading", "data": {"celsius": 15.2, "battery": 38}}
+{"t": 0.8244, "sensor": 13, "event": "reading", "data": {"celsius": 16.7, "battery": 69}}
+{"t": 0.8303, "sensor": 4, "event": "poke"}
+{"t": 0.8418, "sensor": 15, "event": "poke"}
+{"t": 0.9217, "sensor": 39, "event": "reading", "data": {"celsius": 17.4, "battery": 81}}
+{"t": 0.9339, "sensor": 36, "event": "poke"}
+{"t": 0.9404, "sensor": 9, "event": "reading", "data": {"celsius": 17.3, "battery": 40}}
+{"t": 1.0153, "sensor": 35, "event": "poke"}
+{"t": 1.029, "sensor": 30, "event": "reading", "data": {"celsius": 17.9, "battery": 33}}
+{"t": 1.1112, "sensor": 6, "event": "poke"}
+{"t": 1.1236, "sensor": 15, "event": "reading", "data": {"celsius": 15.3, "battery": 82}}
+{"t": 1.1899, "sensor": 18, "event": "reading", "data": {"celsius": 24.1, "battery": 28}}
+{"t": 1.2103, "sensor": 8, "event": "poke"}
+{"t": 1.2186, "sensor": 39, "event": "reading", "data": {"celsius": 22.8, "battery": 22}}
+{"t": 1.2333, "sensor": 4, "event": "poke"}
+{"t": 1.2416, "sensor": 3, "event": "poke"}
+{"t": 1.2451, "sensor": 33, "event": "reading", "data": {"celsius": 20.0, "battery": 66}}
+{"t": 1.3435, "sensor": 8, "event": "reading", "data": {"celsius": 18.5, "battery": 94}}
+{"t": 1.4078, "sensor": 8, "event": "reading", "data": {"celsius": 17.2, "battery": 80}}
+{"t": 1.4901, "sensor": 22, "event": "reading", "data": {"celsius": 25.2, "battery": 81}}
+{"t": 1.4997, "sensor": 4, "event": "reading", "data": {"celsius": 21.6, "battery": 29}}
+{"t": 1.5112, "sensor": 4, "event": "reading", "data": {"celsius": 27.8, "battery": 36}}
+{"t": 1.5401, "sensor": 21, "event": "reading", "data": {"celsius": 22.9, "battery": 29}}
+{"t": 1.5408, "sensor": 26, "event": "reading", "data": {"celsius": 20.5, "battery": 68}}
+{"t": 1.5643, "sensor": 24, "event": "reading", "data": {"celsius": 21.0, "battery": 30}}
+{"t": 1.6895, "sensor": 5, "event": "reading", "data": {"celsius": 24.5, "battery": 69}}
+{"t": 1.705, "sensor": 37, "event": "reading", "data": {"celsius": 17.7, "battery": 89}}
+{"t": 1.7231, "sensor": 5, "event": "reading", "data": {"celsius": 20.5, "battery": 22}}
+{"t": 1.7261, "sensor": 14, "event": "alarm"}
+{"t": 1.7428, "sensor": 39, "event": "reading", "data": {"celsius": 22.2, "battery": 21}}
+{"t": 1.7711, "sensor": 23, "event": "reading", "data": {"celsius": 21.5, "battery": 63}}
+{"t": 1.778, "sensor": 28, "event": "reading", "data": {"celsius": 22.7, "battery": 71}}
+{"t": 1.7921, "sensor": 16, "event": "poke"}
+{"t": 1.8042, "sensor": 12, "event": "reading", "data": {"celsius": 18.7, "battery": 37}}
+{"t": 1.8496, "sensor": 8, "event": "reading", "data": {"celsius": 19.7, "battery": 25}}
+{"t": 1.8577, "sensor": 4, "event": "alarm"}
+{"t": 1.8736, "sensor": 10, "event": "poke"}
+{"t": 1.8857, "sensor": 13, "event": "reading", "data": {"celsius": 16.6, "battery": 99}}
+{"t": 1.9298, "sensor": 28, "event": "reading", "data": {"celsius": 20.4, "battery": 55}}
+{"t": 1.9606, "sensor": 38, "event": "poke"}
+{"t": 1.9868, "sensor": 36, "event": "reading", "data": {"celsius": 17.0, "battery": 71}}
+{"t": 2.0235, "sensor": 29, "event": "poke"}
+{"t": 2.0273, "sensor": 17, "event": "poke"}
+{"t": 2.0303, "sensor": 3, "event": "alarm"}
+{"t": 2.0569, "sensor": 6, "event": "reading", "data": {"celsius": 19.3, "battery": 67}}
+{"t": 2.0858, "sensor": 4, "event": "reset"}
+{"t": 2.0932, "sensor": 12, "event": "reading", "data": {"celsius": 19.9, "battery": 88}}
+{"t": 2.1011, "sensor": 2, "event": "poke"}
+{"t": 2.1745, "sensor": 22, "event": "reading", "data": {"celsius": 16.1, "battery": 84}}
+{"t": 2.1788, "sensor": 39, "event": "alarm"}
+{"t": 2.1811, "sensor": 14, "event": "reset"}
+{"t": 2.1962, "sensor": 24, "event": "poke"}
+{"t": 2.2172, "sensor": 0, "event": "reading", "data": {"celsius": 24.9, "battery": 63}}
+{"t": 2.3181, "sensor": 29, "event": "reading", "data": {"celsius": 17.3, "battery": 32}}
+{"t": 2.3757, "sensor": 7, "event": "poke"}
+{"t": 2.3949, "sensor": 5, "event": "alarm"}
+{"t": 2.4266, "sensor": 20, "event": "poke"}
+{"t": 2.4288, "sensor": 1, "event": "reading", "data": {"celsius": 17.5, "battery": 55}}
+{"t": 2.4349, "sensor": 31, "event": "reading", "data": {"celsius": 22.4, "battery": 28}}
+{"t": 2.4397, "sensor": 27, "event": "reading", "data": {"celsius": 18.3, "battery": 37}}
+{"t": 2.4578, "sensor": 30, "event": "poke"}
+{"t": 2.4871, "sensor": 33, "event": "reading", "data": {"celsius": 25.5, "battery": 83}}
+{"t": 2.4893, "sensor": 37, "event": "alarm"}
+{"t": 2.5098, "sensor": 14, "event": "reading", "data": {"celsius": 22.9, "battery": 41}}
+{"t": 2.5692, "sensor": 33, "event": "reading", "data": {"celsius": 17.6, "battery": 52}}
+{"t": 2.6466, "sensor": 19, "event": "reading", "data": {"celsius": 23.8, "battery": 58}}
+{"t": 2.6652, "sensor": 9, "event": "alarm"}
+{"t": 2.6784, "sensor": 36, "event": "reading", "data": {"celsius": 18.0, "battery": 34}}
+{"t": 2.6903, "sensor": 32, "event": "poke"}
+{"t": 2.7084, "sensor": 34, "event": "alarm"}
+{"t": 2.8221, "sensor": 25, "event": "reading", "data": {"celsius": 22.0, "battery": 41}}
+{"t": 2.8374, "sensor": 4, "event": "reading", "data": {"celsius": 21.9, "battery": 71}}
+{"t": 2.8544, "sensor": 17, "event": "poke"}
+{"t": 2.8967, "sensor": 21, "event": "reading", "data": {"celsius": 23.8, "battery": 60}}
+{"t": 2.9208, "sensor": 6, "event": "poke"}
+{"t": 2.9585, "sensor": 16, "event": "poke"}
+{"t": 2.9627, "sensor": 1, "event": "poke"}
+{"t": 2.9725, "sensor": 0, "event": "reading", "data": {"celsius": 19.0, "battery": 65}}
+{"t": 2.9752, "sensor": 15, "event": "reading", "data": {"celsius": 20.8, "battery": 85}}
+{"t": 2.9824, "sensor": 39, "event": "reset"}
+{"t": 3.0352, "sensor": 12, "event": "reading", "data": {"celsius": 19.5, "battery": 22}}
+{"t": 3.0788, "sensor": 24, "event": "reading", "data": {"celsius": 18.2, "battery": 88}}
+{"t": 3.1264, "sensor": 13, "event": "reading", "data": {"celsius": 18.5, "battery": 98}}
+{"t": 3.175, "sensor": 37, "event": "reset"}
+{"t": 3.1997, "sensor": 14, "event": "reading", "data": {"celsius": 19.9, "battery": 97}}
+{"t": 3.2051, "sensor": 20, "event": "reading", "data": {"celsius": 22.6, "battery": 44}}
+{"t": 3.212, "sensor": 6, "event": "poke"}
+{"t": 3.2195, "sensor": 5, "event": "reset"}
+{"t": 3.2903, "sensor": 6, "event": "reading", "data": {"celsius": 16.5, "battery": 45}}
+{"t": 3.3304, "sensor": 25, "event": "reading", "data": {"celsius": 19.7, "battery": 32}}
+{"t": 3.3415, "sensor": 12, "event": "reading", "data": {"celsius": 22.2, "battery": 84}}
+{"t": 3.3704, "sensor": 21, "event": "reading", "data": {"celsius": 18.4, "battery": 44}}
+{"t": 3.371, "sensor": 4, "event": "reading", "data": {"celsius": 21.3, "battery": 92}}
+{"t": 3.3761, "sensor": 30, "event": "poke"}
+{"t": 3.3804, "sensor": 13, "event": "poke"}
+{"t": 3.3829, "sensor": 18, "event": "reading", "data": {"celsius": 16.9, "battery": 27}}
+{"t": 3.3984, "sensor": 8, "event": "alarm"}
+{"t": 3.4142, "sensor": 6, "event": "reading", "data": {"celsius": 17.8, "battery": 96}}
+{"t": 3.4443, "sensor": 23, "event": "poke"}
+{"t": 3.4595, "sensor": 12, "event": "poke"}
+{"t": 3.4649, "sensor": 23, "event": "reading", "data": {"celsius": 20.7, "battery": 41}}
+{"t": 3.4653, "sensor": 6, "event": "reading", "data": {"celsius": 25.2, "battery": 71}}
+{"t": 3.4828, "sensor": 36, "event": "reading", "data": {"celsius": 17.6, "battery": 63}}
+{"t": 3.4859, "sensor": 16, "event": "reading", "data": {"celsius": 20.9, "battery": 71}}
+{"t": 3.5426, "sensor": 8, "event": "reset"}
+{"t": 3.5723, "sensor": 34, "event": "reset"}
+{"t": 3.5853, "sensor": 27, "event": "reading", "data": {"celsius": 19.2, "battery": 43}}
+{"t": 3.5943, "sensor": 4, "event": "reading", "data": {"celsius": 26.1, "battery": 99}}
+{"t": 3.6009, "sensor": 3, "event": "reset"}
+{"t": 3.6279, "sensor": 19, "event": "reading", "data": {"celsius": 24.7, "battery": 92}}
+{"t": 3.6402, "sensor": 11, "event": "reading", "data": {"celsius": 25.3, "battery": 35}}
+{"t": 3.6408, "sensor": 25, "event": "alarm"}
+{"t": 3.6475, "sensor": 39, "event": "poke"}
+{"t": 3.6488, "sensor": 28, "event": "reading", "data": {"celsius": 21.0, "battery": 45}}
+{"t": 3.6563, "sensor": 24, "event": "poke"}
+{"t": 3.6763, "sensor": 17, "event": "reading", "data": {"celsius": 13.2, "battery": 92}}
+{"t": 3.7177, "sensor": 6, "event": "reading", "data": {"celsius": 20.6, "battery": 29}}
+{"t": 3.7533, "sensor": 35, "event": "reading", "data": {"celsius": 27.6, "battery": 40}}
+{"t": 3.758, "sensor": 24, "event": "reading", "data": {"celsius": 22.9, "battery": 83}}
+{"t": 3.7595, "sensor": 34, "event": "reading", "data": {"celsius": 24.0, "battery": 87}}
+{"t": 3.7822, "sensor": 25, "event": "reset"}
+{"t": 3.7987, "sensor": 23, "event": "reading", "data": {"celsius": 19.9, "battery": 54}}
+{"t": 3.826, "sensor": 35, "event": "reading", "data": {"celsius": 21.0, "battery": 51}}
+{"t": 3.8302, "sensor": 37, "event": "poke"}
+{"t": 3.8397, "sensor": 24, "event": "poke"}
+{"t": 3.9519, "sensor": 25, "event": "poke"}
+{"t": 4.0109, "sensor": 20, "event": "poke"}
+{"t": 4.0181, "sensor": 27, "event": "reading", "data": {"celsius": 20.3, "battery": 51}}
+{"t": 4.0874, "sensor": 2, "event": "reading", "data": {"celsius": 20.4, "battery": 51}}
+{"t": 4.0887, "sensor": 38, "event": "reading", "data": {"celsius": 17.7, "battery": 73}}
+{"t": 4.138, "sensor": 29, "event": "poke"}
+{"t": 4.1413, "sensor": 22, "event": "reading", "data": {"celsius": 16.8, "battery": 78}}
+{"t": 4.1632, "sensor": 38, "event": "poke"}
+{"t": 4.1972, "sensor": 26, "event": "reading", "data": {"celsius": 22.6, "battery": 37}}
+{"t": 4.204, "sensor": 18, "event": "reading", "data": {"celsius": 25.8, "battery": 84}}
+{"t": 4.212, "sensor": 39, "event": "reading", "data": {"celsius": 25.2, "battery": 98}}
+{"t": 4.2173, "sensor": 36, "event": "reading", "data": {"celsius": 20.6, "battery": 51}}
+{"t": 4.2792, "sensor": 32, "event": "alarm"}
+{"t": 4.2794, "sensor": 2, "event": "reading", "data": {"celsius": 23.2, "battery": 53}}
+{"t": 4.2804, "sensor": 27, "event": "poke"}
+{"t": 4.2822, "sensor": 14, "event": "reading", "data": {"celsius": 24.9, "battery": 90}}
+{"t": 4.2939, "sensor": 15, "event": "reading", "data": {"celsius": 23.3, "battery": 81}}
+{"t": 4.3045, "sensor": 22, "event": "poke"}
+{"t": 4.3064, "sensor": 8, "event": "reading", "data": {"celsius": 25.0, "battery": 99}}
+{"t": 4.3408, "sensor": 13, "event": "reading", "data": {"celsius": 24.7, "battery": 69}}
+{"t": 4.3523, "sensor": 9, "event": "reset"}
+{"t": 4.3722, "sensor": 38, "event": "reading", "data": {"celsius": 20.8, "battery": 74}}
+{"t": 4.3877, "sensor": 23, "event": "reading", "data": {"celsius": 14.2, "battery": 61}}
+{"t": 4.4018, "sensor": 5, "event": "reading", "data": {"celsius": 16.0, "battery": 79}}
+{"t": 4.402, "sensor": 19, "event": "reading", "data": {"celsius": 18.7, "battery": 59}}
+{"t": 4.4252, "sensor": 13, "event": "reading", "data": {"celsius": 19.8, "battery": 61}}
+{"t": 4.4314, "sensor": 18, "event": "reading", "data": {"celsius": 17.7, "battery": 61}}
+{"t": 4.4411, "sensor": 23, "event": "reading", "data": {"celsius": 17.2, "battery": 55}}
+{"t": 4.563, "sensor": 28, "event": "reading", "data": {"celsius": 22.5, "battery": 78}}
+{"t": 4.6488, "sensor": 20, "event": "poke"}
+{"t": 4.6601, "sensor": 33, "event": "poke"}
+{"t": 4.6883, "sensor": 23, "event": "poke"}
+{"t": 4.6937, "sensor": 37, "event": "reading", "data": {"celsius": 16.1, "battery": 89}}
+{"t": 4.7144, "sensor": 9, "event": "reading", "data": {"celsius": 18.9, "battery": 42}}
+{"t": 4.7676, "sensor": 5, "event": "reading", "data": {"celsius": 20.9, "battery": 86}}
+{"t": 4.7886, "sensor": 3, "event": "reading", "data": {"celsius": 21.6, "battery": 22}}
+{"t": 4.8083, "sensor": 27, "event": "poke"}
+{"t": 4.8105, "sensor": 34, "event": "poke"}
+{"t": 4.8127, "sensor": 6, "event": "reading", "data": {"celsius": 19.9, "battery": 74}}
+{"t": 4.8295, "sensor": 15, "event": "reading", "data": {"celsius": 19.8, "battery": 86}}
+{"t": 4.842, "sensor": 21, "event": "reading", "data": {"celsius": 16.9, "battery": 37}}
+{"t": 4.8829, "sensor": 31, "event": "reading", "data": {"celsius": 27.7, "battery": 29}}
+{"t": 4.8961, "sensor": 39, "event": "reading", "data": {"celsius": 23.0, "battery": 20}}
+{"t": 4.9509, "sensor": 24, "event": "reading", "data": {"celsius": 17.1, "battery": 89}}
+{"t": 4.9819, "sensor": 1, "event": "reading", "data": {"celsius": 22.0, "battery": 73}}
+{"t": 4.9863, "sensor": 9, "event": "poke"}
+{"t": 4.996, "sensor": 24, "event": "reading", "data": {"celsius": 18.0, "battery": 69}}
+{"t": 5.004, "sensor": 27, "event": "reading", "data": {"celsius": 23.6, "battery": 34}}
+{"t": 5.0414, "sensor": 19, "event": "reading", "data": {"celsius": 18.8, "battery": 42}}
+{"t": 5.0418, "sensor": 3, "event": "reading", "data": {"celsius": 15.7, "battery": 60}}
+{"t": 5.053, "sensor": 6, "event": "poke"}
+{"t": 5.0845, "sensor": 37, "event": "poke"}
+{"t": 5.0991, "sensor": 38, "event": "reading", "data": {"celsius": 21.6, "battery": 55}}
+{"t": 5.1345, "sensor": 25, "event": "poke"}
+{"t": 5.2057, "sensor": 19, "event": "reading", "data": {"celsius": 15.4, "battery": 82}}
+{"t": 5.2162, "sensor": 25, "event": "reading", "data": {"celsius": 19.2, "battery": 90}}
+{"t": 5.2224, "sensor": 5, "event": "reading", "data": {"celsius": 27.9, "battery": 69}}
+{"t": 5.2596, "sensor": 33, "event": "reading", "data": {"celsius": 23.2, "battery": 27}}
+{"t": 5.3114, "sensor": 15, "event": "reading", "data": {"celsius": 23.7, "battery": 51}}
+{"t": 5.3157, "sensor": 26, "event": "reading", "data": {"celsius": 19.2, "battery": 40}}
+{"t": 5.3754, "sensor": 20, "event": "poke"}
+{"t": 5.4092, "sensor": 33, "event": "poke"}
+{"t": 5.4284, "sensor": 39, "event": "poke"}
+{"t": 5.4333, "sensor": 9, "event": "reading", "data": {"celsius": 22.9, "battery": 39}}
+{"t": 5.4411, "sensor": 8, "event": "poke"}
+{"t": 5.4575, "sensor": 33, "event": "poke"}
+{"t": 5.492, "sensor": 29, "event": "poke"}
+{"t": 5.501, "sensor": 34, "event": "reading", "data": {"celsius": 27.4, "battery": 44}}
+{"t": 5.5297, "sensor": 26, "event": "poke"}
+{"t": 5.5493, "sensor": 28, "event": "poke"}
+{"t": 5.6225, "sensor": 33, "event": "reading", "data": {"celsius": 23.5, "battery": 71}}
+{"t": 5.7701, "sensor": 4, "event": "reading", "data": {"celsius": 20.4, "battery": 28}}
+{"t": 5.7739, "sensor": 23, "event": "poke"}
+{"t": 5.8082, "sensor": 25, "event": "reading", "data": {"celsius": 21.3, "battery": 76}}
+{"t": 5.8393, "sensor": 0, "event": "reading", "data": {"celsius": 19.5, "battery": 80}}
+{"t": 5.8423, "sensor": 15, "event": "reading", "data": {"celsius": 21.8, "battery": 46}}
+{"t": 5.867, "sensor": 39, "event": "poke"}
+{"t": 5.9441, "sensor": 34, "event": "reading", "data": {"celsius": 15.1, "battery": 70}}
+{"t": 5.9515, "sensor": 35, "event": "reading", "data": {"celsius": 22.5, "battery": 62}}
+{"t": 5.9722, "sensor": 19, "event": "alarm"}
+{"t": 5.9842, "sensor": 21, "event": "reading", "data": {"celsius": 25.6, "battery": 33}}
+{"t": 5.9877, "sensor": 9, "event": "reading", "data": {"celsius": 19.7, "battery": 44}}
+{"t": 6.0033, "sensor": 25, "event": "poke"}
+{"t": 6.0041, "sensor": 5, "event": "poke"}
+{"t": 6.041, "sensor": 7, "event": "reading", "data": {"celsius": 19.6, "battery": 63}}
+{"t": 6.0447, "sensor": 27, "event": "reading", "data": {"celsius": 21.5, "battery": 69}}
+{"t": 6.058, "sensor": 30, "event": "reading", "data": {"celsius": 22.6, "battery": 21}}
+{"t": 6.0676, "sensor": 25, "event": "reading", "data": {"celsius": 21.5, "battery": 97}}
+{"t": 6.0776, "sensor": 33, "event": "poke"}
+{"t": 6.0922, "sensor": 21, "event": "reading", "data": {"celsius": 18.8, "battery": 91}}
+{"t": 6.1023, "sensor": 24, "event": "poke"}
+{"t": 6.1259, "sensor": 18, "event": "reading", "data": {"celsius": 23.8, "battery": 58}}
+{"t": 6.1496, "sensor": 35, "event": "poke"}
+{"t": 6.1534, "sensor": 32, "event": "reset"}
+{"t": 6.1715, "sensor": 12, "event": "alarm"}
+{"t": 6.1925, "sensor": 12, "event": "reset"}
+{"t": 6.198, "sensor": 1, "event": "reading", "data": {"celsius": 25.3, "battery": 30}}
+{"t": 6.2195, "sensor": 8, "event": "poke"}
+{"t": 6.2856, "sensor": 21, "event": "reading", "data": {"celsius": 18.8, "battery": 35}}
+{"t": 6.2893, "sensor": 28, "event": "alarm"}
+{"t": 6.3098, "sensor": 36, "event": "reading", "data": {"celsius": 23.6, "battery": 91}}
+{"t": 6.3441, "sensor": 16, "event": "poke"}
+{"t": 6.3473, "sensor": 21, "event": "reading", "data": {"celsius": 22.1, "battery": 66}}
+{"t": 6.3586, "sensor": 15, "event": "reading", "data": {"celsius": 18.8, "battery": 41}}
+{"t": 6.4003, "sensor": 11, "event": "reading", "data": {"celsius": 18.1, "battery": 37}}
+{"t": 6.4356, "sensor": 19, "event": "reset"}
+{"t": 6.4611, "sensor": 24, "event": "reading", "data": {"celsius": 21.9, "battery": 22}}
+{"t": 6.4769, "sensor": 10, "event": "poke"}
+{"t": 6.4801, "sensor": 9, "event": "reading", "data": {"celsius": 18.7, "battery": 36}}
+{"t": 6.5472, "sensor": 16, "event": "poke"}
+{"t": 6.5481, "sensor": 3, "event": "reading", "data": {"celsius": 22.5, "battery": 38}}
+{"t": 6.571, "sensor": 25, "event": "alarm"}
+{"t": 6.6278, "sensor": 30, "event": "reading", "data": {"celsius": 24.3, "battery": 72}}
+{"t": 6.7584, "sensor": 18, "event": "reading", "data": {"celsius": 19.0, "battery": 72}}
+{"t": 6.7614, "sensor": 27, "event": "poke"}
+{"t": 6.7798, "sensor": 33, "event": "reading", "data": {"celsius": 20.4, "battery": 26}}
+{"t": 6.8374, "sensor": 18, "event": "reading", "data": {"celsius": 21.3, "battery": 68}}
+{"t": 6.8764, "sensor": 38, "event": "reading", "data": {"celsius": 25.5, "battery": 51}}
+{"t": 6.8833, "sensor": 7, "event": "reading", "data": {"celsius": 16.9, "battery": 70}}
+{"t": 6.8861, "sensor": 3, "event": "reading", "data": {"celsius": 24.2, "battery": 70}}
+{"t": 7.0669, "sensor": 15, "event": "reading", "data": {"celsius": 19.0, "battery": 67}}
+{"t": 7.1078, "sensor": 34, "event": "reading", "data": {"celsius": 21.9, "battery": 92}}
+{"t": 7.1104, "sensor": 7, "event": "reading", "data": {"celsius": 25.9, "battery": 36}}
+{"t": 7.1318, "sensor": 7, "event": "reading", "data": {"celsius": 18.6, "battery": 58}}
+{"t": 7.1335, "sensor": 1, "event": "reading", "data": {"celsius": 21.7, "battery": 77}}
+{"t": 7.1445, "sensor": 33, "event": "reading", "data": {"celsius": 20.2, "battery": 23}}
+{"t": 7.1537, "sensor": 29, "event": "reading", "data": {"celsius": 20.5, "battery": 83}}
+{"t": 7.2483, "sensor": 9, "event": "reading", "data": {"celsius": 19.0, "battery": 57}}
+{"t": 7.2938, "sensor": 3, "event": "poke"}
+{"t": 7.2942, "sensor": 22, "event": "reading", "data": {"celsius": 21.3, "battery": 91}}
+{"t": 7.3009, "sensor": 12, "event": "reading", "data": {"celsius": 28.8, "battery": 33}}
+{"t": 7.3103, "sensor": 19, "event": "reading", "data": {"celsius": 18.4, "battery": 55}}
+{"t": 7.3139, "sensor": 26, "event": "reading", "data": {"celsius": 18.6, "battery": 76}}
+{"t": 7.3203, "sensor": 26, "event": "poke"}
+{"t": 7.3496, "sensor": 19, "event": "poke"}
+{"t": 7.3563, "sensor": 17, "event": "poke"}
+{"t": 7.368, "sensor": 18, "event": "reading", "data": {"celsius": 14.3, "battery": 87}}
+{"t": 7.3745, "sensor": 7, "event": "reading", "data": {"celsius": 18.8, "battery": 48}}
+{"t": 7.402, "sensor": 17, "event": "poke"}
+{"t": 7.4165, "sensor": 29, "event": "alarm"}
+{"t": 7.476, "sensor": 33, "event": "poke"}
+{"t": 7.4844, "sensor": 0, "event": "reading", "data": {"celsius": 27.5, "battery": 52}}
+{"t": 7.4867, "sensor": 27, "event": "reading", "data": {"celsius": 19.9, "battery": 51}}
+{"t": 7.5065, "sensor": 11, "event": "reading", "data": {"celsius": 25.9, "battery": 43}}
+{"t": 7.5074, "sensor": 9, "event": "alarm"}
+{"t": 7.5694, "sensor": 29, "event": "reset"}
+{"t": 7.6357, "sensor": 37, "event": "reading", "data": {"celsius": 19.1, "battery": 91}}
+{"t": 7.6522, "sensor": 23, "event": "reading", "data": {"celsius": 21.0, "battery": 24}}
+{"t": 7.6961, "sensor": 33, "event": "reading", "data": {"celsius": 15.3, "battery": 88}}
+{"t": 7.7329, "sensor": 11, "event": "reading", "data": {"celsius": 14.6, "battery": 34}}
+{"t": 7.7605, "sensor": 38, "event": "reading", "data": {"celsius": 18.8, "battery": 50}}
+{"t": 7.7668, "sensor": 16, "event": "reading", "data": {"celsius": 20.3, "battery": 94}}
+{"t": 7.7677, "sensor": 38, "event": "reading", "data": {"celsius": 17.1, "battery": 93}}
+{"t": 7.8192, "sensor": 28, "event": "reset"}
+{"t": 7.8427, "sensor": 11, "event": "reading", "data": {"celsius": 18.3, "battery": 97}}
+{"t": 7.8602, "sensor": 31, "event": "reading", "data": {"celsius": 20.0, "battery": 23}}
+{"t": 7.8651, "sensor": 4, "event": "poke"}
+{"t": 7.8971, "sensor": 34, "event": "reading", "data": {"celsius": 15.2, "battery": 99}}
+{"t": 7.8985, "sensor": 9, "event": "reset"}
+{"t": 7.9079, "sensor": 27, "event": "poke"}
+{"t": 7.9459, "sensor": 39, "event": "reading", "data": {"celsius": 21.3, "battery": 85}}
+{"t": 7.953, "sensor": 10, "event": "reading", "data": {"celsius": 17.5, "battery": 83}}
+{"t": 7.9546, "sensor": 38, "event": "reading", "data": {"celsius": 18.6, "battery": 47}}
+{"t": 7.9898, "sensor": 2, "event": "poke"}
+{"t": 7.9937, "sensor": 38, "event": "alarm"}
+{"t": 8.0998, "sensor": 29, "event": "reading", "data": {"celsius": 22.5, "battery": 20}}
+{"t": 8.1184, "sensor": 15, "event": "reading", "data": {"celsius": 24.2, "battery": 80}}
+{"t": 8.2075, "sensor": 27, "event": "reading", "data": {"celsius": 23.1, "battery": 98}}
+{"t": 8.2106, "sensor": 14, "event": "reading", "data": {"celsius": 22.9, "battery": 31}}
+{"t": 8.2209, "sensor": 14, "event": "reading", "data": {"celsius": 18.5, "battery": 98}}
+{"t": 8.2338, "sensor": 13, "event": "poke"}
+{"t": 8.2548, "sensor": 3, "event": "reading", "data": {"celsius": 26.3, "battery": 42}}
+{"t": 8.3233, "sensor": 29, "event": "reading", "data": {"celsius": 17.7, "battery": 47}}
+{"t": 8.3245, "sensor": 24, "event": "reading", "data": {"celsius": 19.0, "battery": 90}}
+{"t": 8.3373, "sensor": 10, "event": "reading", "data": {"celsius": 22.1, "battery": 96}}
+{"t": 8.3533, "sensor": 29, "event": "reading", "data": {"celsius": 16.8, "battery": 43}}
+{"t": 8.3654, "sensor": 31, "event": "poke"}
+{"t": 8.3735, "sensor": 4, "event": "poke"}
+{"t": 8.3918, "sensor": 17, "event": "reading", "data": {"celsius": 21.3, "battery": 53}}
+{"t": 8.456, "sensor": 32, "event": "reading", "data": {"celsius": 20.5, "battery": 66}}
+{"t": 8.525, "sensor": 3, "event": "poke"}
+{"t": 8.5319, "sensor": 23, "event": "poke"}
+{"t": 8.5416, "sensor": 7, "event": "poke"}
+{"t": 8.5898, "sensor": 24, "event": "reading", "data": {"celsius": 18.7, "battery": 68}}
+{"t": 8.6426, "sensor": 20, "event": "poke"}
+{"t": 8.666, "sensor": 3, "event": "reading", "data": {"celsius": 19.1, "battery": 85}}
+{"t": 8.6694, "sensor": 38, "event": "reset"}
+{"t": 8.6832, "sensor": 13, "event": "reading", "data": {"celsius": 21.1, "battery": 89}}
+{"t": 8.703, "sensor": 8, "event": "reading", "data": {"celsius": 19.7, "battery": 68}}
+{"t": 8.748, "sensor": 9, "event": "reading", "data": {"celsius": 24.0, "battery": 88}}
+{"t": 8.7602, "sensor": 28, "event": "reading", "data": {"celsius": 22.4, "battery": 57}}
+{"t": 8.7663, "sensor": 23, "event": "reading", "data": {"celsius": 19.4, "battery": 25}}
+{"t": 8.7828, "sensor": 1, "event": "reading", "data": {"celsius": 26.1, "battery": 58}}
+{"t": 8.7889, "sensor": 4, "event": "reading", "data": {"celsius": 21.4, "battery": 65}}
+{"t": 8.8396, "sensor": 7, "event": "alarm"}
+{"t": 8.8471, "sensor": 15, "event": "reading", "data": {"celsius": 21.5, "battery": 83}}
+{"t": 8.9138, "sensor": 3, "event": "reading", "data": {"celsius": 19.6, "battery": 56}}
+{"t": 8.9201, "sensor": 31, "event": "reading", "data": {"celsius": 22.8, "battery": 41}}
+{"t": 8.9269, "sensor": 22, "event": "reading", "data": {"celsius": 20.1, "battery": 31}}
+{"t": 8.9677, "sensor": 21, "event": "reading", "data": {"celsius": 18.7, "battery": 90}}
+{"t": 8.9683, "sensor": 19, "event": "reading", "data": {"celsius": 21.3, "battery": 70}}
+{"t": 8.9796, "sensor": 7, "event": "reset"}
+{"t": 8.9875, "sensor": 4, "event": "reading", "data": {"celsius": 16.8, "battery": 58}}
+{"t": 9.0418, "sensor": 30, "event": "reading", "data": {"celsius": 25.1, "battery": 29}}
+{"t": 9.0516, "sensor": 1, "event": "poke"}
+{"t": 9.0592, "sensor": 23, "event": "reading", "data": {"celsius": 20.1, "battery": 80}}
+{"t": 9.1365, "sensor": 24, "event": "reading", "data": {"celsius": 19.3, "battery": 66}}
+{"t": 9.2079, "sensor": 1, "event": "reading", "data": {"celsius": 21.6, "battery": 99}}
+{"t": 9.2213, "sensor": 34, "event": "reading", "data": {"celsius": 16.8, "battery": 55}}
+{"t": 9.2743, "sensor": 4, "event": "reading", "data": {"celsius": 16.2, "battery": 24}}
+{"t": 9.2822, "sensor": 8, "event": "reading", "data": {"celsius": 25.4, "battery": 83}}
+{"t": 9.2828, "sensor": 23, "event": "reading", "data": {"celsius": 19.1, "battery": 53}}
+{"t": 9.2828, "sensor": 14, "event": "poke"}
+{"t": 9.2829, "sensor": 34, "event": "alarm"}
+{"t": 9.3091, "sensor": 35, "event": "reading", "data": {"celsius": 19.5, "battery": 90}}
+{"t": 9.3297, "sensor": 5, "event": "reading", "data": {"celsius": 24.9, "battery": 62}}
+{"t": 9.3841, "sensor": 16, "event": "reading", "data": {"celsius": 14.1, "battery": 60}}
+{"t": 9.4131, "sensor": 13, "event": "reading", "data": {"celsius": 26.5, "battery": 40}}
+{"t": 9.4299, "sensor": 21, "event": "reading", "data": {"celsius": 19.7, "battery": 92}}
+{"t": 9.4384, "sensor": 18, "event": "reading", "data": {"celsius": 21.0, "battery": 50}}
+{"t": 9.469, "sensor": 15, "event": "reading", "data": {"celsius": 17.3, "battery": 85}}
+{"t": 9.5821, "sensor": 8, "event": "reading", "data": {"celsius": 23.6, "battery": 59}}
+{"t": 9.6001, "sensor": 7, "event": "reading", "data": {"celsius": 15.3, "battery": 81}}
+{"t": 9.6504, "sensor": 2, "event": "poke"}
+{"t": 9.6577, "sensor": 30, "event": "poke"}
+{"t": 9.6873, "sensor": 32, "event": "reading", "data": {"celsius": 20.9, "battery": 67}}
+{"t": 9.7357, "sensor": 20, "event": "poke"}
+{"t": 9.7798, "sensor": 13, "event": "reading", "data": {"celsius": 25.3, "battery": 92}}
+{"t": 9.7832, "sensor": 26, "event": "reading", "data": {"celsius": 20.9, "battery": 40}}
+{"t": 9.8074, "sensor": 8, "event": "poke"}
+{"t": 9.8125, "sensor": 18, "event": "poke"}
+{"t": 9.8421, "sensor": 0, "event": "reading", "data": {"celsius": 18.6, "battery": 37}}
+{"t": 9.8557, "sensor": 17, "event": "reading", "data": {"celsius": 19.0, "battery": 37}}
+{"t": 10.004, "sensor": 3, "event": "poke"}
+{"t": 10.015, "sensor": 2, "event": "poke"}
+{"t": 10.1414, "sensor": 34, "event": "reset"}
+{"t": 10.2002, "sensor": 7, "event": "reading", "data": {"celsius": 18.8, "battery": 89}}
+{"t": 10.2019, "sensor": 30, "event": "poke"}
+{"t": 10.2475, "sensor": 28, "event": "reading", "data": {"celsius": 20.4, "battery": 99}}
+{"t": 10.3466, "sensor": 26, "event": "reading", "data": {"celsius": 23.9, "battery": 69}}
+{"t": 10.3868, "sensor": 13, "event": "reading", "data": {"celsius": 22.1, "battery": 33}}
+{"t": 10.3941, "sensor": 35, "event": "reading", "data": {"celsius": 22.5, "battery": 82}}
+{"t": 10.4038, "sensor": 27, "event": "poke"}
+{"t": 10.4249, "sensor": 1, "event": "poke"}
+{"t": 10.4329, "sensor": 17, "event": "reading", "data": {"celsius": 21.5, "battery": 66}}
+{"t": 10.4342, "sensor": 35, "event": "poke"}
+{"t": 10.4699, "sensor": 4, "event": "poke"}
+{"t": 10.4802, "sensor": 5, "event": "poke"}
+{"t": 10.4858, "sensor": 8, "event": "alarm"}
+{"t": 10.4992, "sensor": 26, "event": "reading", "data": {"celsius": 24.4, "battery": 91}}
+{"t": 10.5196, "sensor": 25, "event": "reset"}
+{"t": 10.5463, "sensor": 13, "event": "reading", "data": {"celsius": 19.3, "battery": 57}}
+{"t": 10.561, "sensor": 15, "event": "alarm"}
+{"t": 10.5616, "sensor": 3, "event": "poke"}
+{"t": 10.5897, "sensor": 10, "event": "reading", "data": {"celsius": 19.3, "battery": 54}}
+{"t": 10.61, "sensor": 22, "event": "poke"}
+{"t": 10.6103, "sensor": 4, "event": "reading", "data": {"celsius": 22.9, "battery": 21}}
+{"t": 10.6173, "sensor": 33, "event": "poke"}
+{"t": 10.6579, "sensor": 31, "event": "reading", "data": {"celsius": 28.4, "battery": 32}}
+{"t": 10.6885, "sensor": 30, "event": "reading", "data": {"celsius": 21.0, "battery": 23}}
+{"t": 10.6949, "sensor": 0, "event": "reading", "data": {"celsius": 27.6, "battery": 69}}
+{"t": 10.703, "sensor": 23, "event": "reading", "data": {"celsius": 25.2, "battery": 77}}
+{"t": 10.7047, "sensor": 22, "event": "reading", "data": {"celsius": 20.8, "battery": 61}}
+{"t": 10.7149, "sensor": 38, "event": "poke"}
+{"t": 10.7489, "sensor": 11, "event": "poke"}
+{"t": 10.7547, "sensor": 34, "event": "reading", "data": {"celsius": 20.0, "battery": 67}}
+{"t": 10.7552, "sensor": 22, "event": "poke"}
+{"t": 10.7682, "sensor": 25, "event": "reading", "data": {"celsius": 22.4, "battery": 61}}
+{"t": 10.804, "sensor": 34, "event": "reading", "data": {"celsius": 22.8, "battery": 28}}
+{"t": 10.9135, "sensor": 37, "event": "poke"}
+{"t": 10.9833, "sensor": 27, "event": "reading", "data": {"celsius": 21.2, "battery": 83}}
+{"t": 11.038, "sensor": 26, "event": "reading", "data": {"celsius": 21.4, "battery": 69}}
+{"t": 11.0756, "sensor": 20, "event": "reading", "data": {"celsius": 19.9, "battery": 87}}
+{"t": 11.1008, "sensor": 0, "event": "poke"}
+{"t": 11.1022, "sensor": 24, "event": "reading", "data": {"celsius": 18.9, "battery": 76}}
+{"t": 11.1232, "sensor": 27, "event": "reading", "data": {"celsius": 19.2, "battery": 34}}
+{"t": 11.1524, "sensor": 7, "event": "reading", "data": {"celsius": 16.8, "battery": 73}}
+{"t": 11.1642, "sensor": 24, "event": "reading", "data": {"celsius": 22.3, "battery": 89}}
+{"t": 11.2273, "sensor": 36, "event": "poke"}
+{"t": 11.2421, "sensor": 33, "event": "reading", "data": {"celsius": 17.6, "battery": 61}}
+{"t": 11.2521, "sensor": 9, "event": "reading", "data": {"celsius": 18.8, "battery": 52}}
+{"t": 11.2854, "sensor": 39, "event": "reading", "data": {"celsius": 24.0, "battery": 36}}
+{"t": 11.2906, "sensor": 31, "event": "poke"}
+{"t": 11.3306, "sensor": 9, "event": "reading", "data": {"celsius": 20.8, "battery": 85}}
+{"t": 11.3322, "sensor": 16, "event": "alarm"}
+{"t": 11.3395, "sensor": 2, "event": "reading", "data": {"celsius": 22.2, "battery": 88}}
+{"t": 11.3449, "sensor": 0, "event": "reading", "data": {"celsius": 17.9, "battery": 55}}
+{"t": 11.3468, "sensor": 15, "event": "reset"}
+{"t": 11.3822, "sensor": 35, "event": "reading", "data": {"celsius": 21.8, "battery": 83}}
+{"t": 11.4021, "sensor": 3, "event": "reading", "data": {"celsius": 20.2, "battery": 28}}
+{"t": 11.407, "sensor": 9, "event": "reading", "data": {"celsius": 17.5, "battery": 48}}
+{"t": 11.4121, "sensor": 18, "event": "poke"}
+{"t": 11.4407, "sensor": 24, "event": "poke"}
+{"t": 11.4425, "sensor": 29, "event": "reading", "data": {"celsius": 27.0, "battery": 46}}
+{"t": 11.4949, "sensor": 34, "event": "reading", "data": {"celsius": 20.7, "battery": 75}}
+{"t": 11.5052, "sensor": 24, "event": "poke"}
+{"t": 11.5782, "sensor": 20, "event": "reading", "data": {"celsius": 19.0, "battery": 97}}
+{"t": 11.5831, "sensor": 13, "event": "reading", "data": {"celsius": 24.2, "battery": 79}}
+{"t": 11.5862, "sensor": 2, "event": "poke"}
+{"t": 11.5973, "sensor": 22, "event": "reading", "data": {"celsius": 24.3, "battery": 45}}
+{"t": 11.6267, "sensor": 0, "event": "alarm"}
+{"t": 11.6634, "sensor": 23, "event": "reading", "data": {"celsius": 21.4, "battery": 54}}
+{"t": 11.6871, "sensor": 27, "event": "reading", "data": {"celsius": 22.1, "battery": 55}}
+{"t": 11.6904, "sensor": 29, "event": "poke"}
+{"t": 11.7208, "sensor": 6, "event": "reading", "data": {"celsius": 21.4, "battery": 56}}
+{"t": 11.7293, "sensor": 7, "event": "reading", "data": {"celsius": 24.9, "battery": 30}}
+{"t": 11.7455, "sensor": 29, "event": "poke"}
+{"t": 11.7685, "sensor": 12, "event": "reading", "data": {"celsius": 20.0, "battery": 73}}
+{"t": 11.783, "sensor": 21, "event": "reading", "data": {"celsius": 21.3, "battery": 54}}
+{"t": 11.7833, "sensor": 18, "event": "reading", "data": {"celsius": 20.6, "battery": 67}}
+{"t": 11.8058, "sensor": 8, "event": "reset"}
+{"t": 11.8181, "sensor": 16, "event": "reset"}
+{"t": 11.8611, "sensor": 17, "event": "reading", "data": {"celsius": 20.7, "battery": 95}}
+{"t": 11.8637, "sensor": 6, "event": "reading", "data": {"celsius": 22.0, "battery": 66}}
+{"t": 11.8958, "sensor": 1, "event": "reading", "data": {"celsius": 20.2, "battery": 64}}
+{"t": 11.9, "sensor": 1, "event": "reading", "data": {"celsius": 22.6, "battery": 84}}
+{"t": 11.9264, "sensor": 20, "event": "reading", "data": {"celsius": 21.8, "battery": 27}}
+{"t": 12.0491, "sensor": 14, "event": "alarm"}
+{"t": 12.0556, "sensor": 25, "event": "reading", "data": {"celsius": 19.6, "battery": 27}}
+{"t": 12.0823, "sensor": 4, "event": "alarm"}
+{"t": 12.1042, "sensor": 13, "event": "reading", "data": {"celsius": 20.6, "battery": 83}}
+{"t": 12.1223, "sensor": 23, "event": "reading", "data": {"celsius": 25.4, "battery": 20}}
+{"t": 12.1521, "sensor": 10, "event": "alarm"}
+{"t": 12.2397, "sensor": 16, "event": "reading", "data": {"celsius": 24.0, "battery": 80}}
+{"t": 12.2439, "sensor": 7, "event": "reading", "data": {"celsius": 19.0, "battery": 23}}
+{"t": 12.2631, "sensor": 6, "event": "reading", "data": {"celsius": 23.1, "battery": 88}}
+{"t": 12.2656, "sensor": 7, "event": "reading", "data": {"celsius": 24.9, "battery": 28}}
+{"t": 12.2927, "sensor": 36, "event": "poke"}
+{"t": 12.3015, "sensor": 32, "event": "reading", "data": {"celsius": 21.0, "battery": 51}}
+{"t": 12.3172, "sensor": 15, "event": "reading", "data": {"celsius": 25.0, "battery": 41}}
+{"t": 12.3209, "sensor": 35, "event": "poke"}
+{"t": 12.3384, "sensor": 6, "event": "reading", "data": {"celsius": 20.7, "battery": 38}}
+{"t": 12.3514, "sensor": 36, "event": "reading", "data": {"celsius": 16.4, "battery": 35}}
+{"t": 12.3579, "sensor": 26, "event": "reading", "data": {"celsius": 17.1, "battery": 34}}
+{"t": 12.3768, "sensor": 24, "event": "poke"}
+{"t": 12.3938, "sensor": 1, "event": "reading", "data": {"celsius": 24.2, "battery": 25}}
+{"t": 12.3959, "sensor": 24, "event": "reading", "data": {"celsius": 19.0, "battery": 53}}
+{"t": 12.4587, "sensor": 34, "event": "poke"}
+{"t": 12.4644, "sensor": 21, "event": "reading", "data": {"celsius": 24.8, "battery": 37}}
+{"t": 12.5298, "sensor": 36, "event": "alarm"}
+{"t": 12.5387, "sensor": 6, "event": "reading", "data": {"celsius": 20.8, "battery": 96}}
+{"t": 12.5409, "sensor": 16, "event": "poke"}
+{"t": 12.5671, "sensor": 30, "event": "reading", "data": {"celsius": 20.2, "battery": 59}}
+{"t": 12.5858, "sensor": 33, "event": "poke"}
+{"t": 12.6285, "sensor": 35, "event": "reading", "data": {"celsius": 22.3, "battery": 32}}
+{"t": 12.6397, "sensor": 23, "event": "poke"}
+{"t": 12.658, "sensor": 14, "event": "reset"}
+{"t": 12.6582, "sensor": 33, "event": "reading", "data": {"celsius": 14.5, "battery": 20}}
+{"t": 12.6653, "sensor": 37, "event": "reading", "data": {"celsius": 25.3, "battery": 96}}
+{"t": 12.6712, "sensor": 23, "event": "reading", "data": {"celsius": 21.1, "battery": 43}}
+{"t": 12.7067, "sensor": 31, "event": "poke"}
+{"t": 12.7091, "sensor": 22, "event": "poke"}
+{"t": 12.7503, "sensor": 16, "event": "reading", "data": {"celsius": 20.0, "battery": 74}}
+{"t": 12.7588, "sensor": 23, "event": "reading", "data": {"celsius": 20.5, "battery": 48}}
+{"t": 12.7683, "sensor": 16, "event": "reading", "data": {"celsius": 19.9, "battery": 39}}
+{"t": 12.7698, "sensor": 18, "event": "reading", "data": {"celsius": 21.1, "battery": 99}}
+{"t": 12.8353, "sensor": 5, "event": "reading", "data": {"celsius": 20.1, "battery": 22}}
+{"t": 12.8702, "sensor": 39, "event": "reading", "data": {"celsius": 20.7, "battery": 81}}
+{"t": 12.8948, "sensor": 26, "event": "reading", "data": {"celsius": 20.8, "battery": 29}}
+{"t": 12.9093, "sensor": 11, "event": "reading", "data": {"celsius": 21.0, "battery": 77}}
+{"t": 12.924, "sensor": 27, "event": "reading", "data": {"celsius": 18.1, "battery": 29}}
+{"t": 12.935, "sensor": 7, "event": "alarm"}
+{"t": 12.9654, "sensor": 35, "event": "reading", "data": {"celsius": 17.3, "battery": 91}}
+{"t": 13.0292, "sensor": 7, "event": "reset"}
+{"t": 13.039, "sensor": 13, "event": "poke"}
+{"t": 13.0423, "sensor": 8, "event": "reading", "data": {"celsius": 23.8, "battery": 55}}
+{"t": 13.0991, "sensor": 30, "event": "reading", "data": {"celsius": 22.8, "battery": 83}}
+{"t": 13.1391, "sensor": 31, "event": "reading", "data": {"celsius": 20.2, "battery": 85}}
+{"t": 13.173, "sensor": 30, "event": "poke"}
+{"t": 13.2101, "sensor": 10, "event": "reset"}
+{"t": 13.2207, "sensor": 20, "event": "poke"}
+{"t": 13.2325, "sensor": 10, "event": "reading", "data": {"celsius": 22.5, "battery": 77}}
+{"t": 13.2548, "sensor": 36, "event": "reset"}
+{"t": 13.2767, "sensor": 29, "event": "reading", "data": {"celsius": 16.7, "battery": 81}}
+{"t": 13.3066, "sensor": 25, "event": "reading", "data": {"celsius": 21.2, "battery": 72}}
+{"t": 13.3702, "sensor": 36, "event": "poke"}
+{"t": 13.4018, "sensor": 16, "event": "reading", "data": {"celsius": 23.3, "battery": 75}}
+{"t": 13.4067, "sensor": 39, "event": "poke"}
+{"t": 13.4219, "sensor": 26, "event": "reading", "data": {"celsius": 18.8, "battery": 99}}
+{"t": 13.4393, "sensor": 6, "event": "reading", "data": {"celsius": 21.2, "battery": 39}}
+{"t": 13.4501, "sensor": 2, "event": "alarm"}
+{"t": 13.4603, "sensor": 10, "event": "reading", "data": {"celsius": 25.3, "battery": 65}}
+{"t": 13.4986, "sensor": 19, "event": "poke"}
+{"t": 13.5479, "sensor": 13, "event": "alarm"}
+{"t": 13.5524, "sensor": 39, "event": "reading", "data": {"celsius": 27.0, "battery": 44}}
+{"t": 13.6907, "sensor": 37, "event": "poke"}
+{"t": 13.702, "sensor": 23, "event": "reading", "data": {"celsius": 25.6, "battery": 57}}
+{"t": 13.7345, "sensor": 38, "event": "reading", "data": {"celsius": 19.6, "battery": 53}}
+{"t": 13.735, "sensor": 7, "event": "poke"}
+{"t": 13.7626, "sensor": 34, "event": "reading", "data": {"celsius": 20.1, "battery": 53}}
+{"t": 13.7633, "sensor": 31, "event": "poke"}
+{"t": 13.7674, "sensor": 17, "event": "reading", "data": {"celsius": 24.7, "battery": 69}}
+{"t": 13.7871, "sensor": 10, "event": "reading", "data": {"celsius": 21.9, "battery": 40}}
+{"t": 13.8174, "sensor": 34, "event": "reading", "data": {"celsius": 22.0, "battery": 95}}
+{"t": 13.8313, "sensor": 16, "event": "reading", "data": {"celsius": 21.8, "battery": 89}}
+{"t": 13.8603, "sensor": 14, "event": "reading", "data": {"celsius": 16.7, "battery": 64}}
+{"t": 13.9322, "sensor": 13, "event": "reset"}
+{"t": 13.9646, "sensor": 32, "event": "poke"}
+{"t": 13.9846, "sensor": 14, "event": "poke"}
+{"t": 14.0113, "sensor": 36, "event": "reading", "data": {"celsius": 26.8, "battery": 33}}
+{"t": 14.0168, "sensor": 36, "event": "alarm"}
+{"t": 14.0682, "sensor": 23, "event": "reading", "data": {"celsius": 23.8, "battery": 27}}
+{"t": 14.072, "sensor": 4, "event": "reset"}
+{"t": 14.1736, "sensor": 26, "event": "reading", "data": {"celsius": 18.7, "battery": 86}}
+{"t": 14.1923, "sensor": 34, "event": "poke"}
+{"t": 14.2219, "sensor": 11, "event": "poke"}
+{"t": 14.2274, "sensor": 39, "event": "reading", "data": {"celsius": 15.6, "battery": 33}}
+{"t": 14.2328, "sensor": 26, "event": "poke"}
+{"t": 14.3031, "sensor": 31, "event": "poke"}
+{"t": 14.3605, "sensor": 35, "event": "poke"}
+{"t": 14.3908, "sensor": 16, "event": "reading", "data": {"celsius": 28.6, "battery": 39}}
+{"t": 14.3913, "sensor": 27, "event": "reading", "data": {"celsius": 17.9, "battery": 82}}
+{"t": 14.4125, "sensor": 37, "event": "alarm"}
+{"t": 14.4171, "sensor": 39, "event": "reading", "data": {"celsius": 21.2, "battery": 24}}
+{"t": 14.468, "sensor": 6, "event": "poke"}
+{"t": 14.472, "sensor": 1, "event": "reading", "data": {"celsius": 19.3, "battery": 43}}
+{"t": 14.4937, "sensor": 38, "event": "reading", "data": {"celsius": 21.3, "battery": 20}}
+{"t": 14.5332, "sensor": 23, "event": "poke"}
+{"t": 14.5463, "sensor": 25, "event": "reading", "data": {"celsius": 15.6, "battery": 62}}
+{"t": 14.5467, "sensor": 14, "event": "reading", "data": {"celsius": 21.3, "battery": 94}}
+{"t": 14.5569, "sensor": 23, "event": "reading", "data": {"celsius": 18.7, "battery": 65}}
+{"t": 14.6237, "sensor": 29, "event": "reading", "data": {"celsius": 19.3, "battery": 47}}
+{"t": 14.63, "sensor": 16, "event": "reading", "data": {"celsius": 22.0, "battery": 62}}
+{"t": 14.6565, "sensor": 11, "event": "poke"}
+{"t": 14.6779, "sensor": 16, "event": "reading", "data": {"celsius": 20.4, "battery": 59}}
+{"t": 14.6957, "sensor": 14, "event": "poke"}
+{"t": 14.7347, "sensor": 13, "event": "reading", "data": {"celsius": 20.7, "battery": 89}}
+{"t": 14.7708, "sensor": 5, "event": "poke"}
+{"t": 14.7719, "sensor": 15, "event": "reading", "data": {"celsius": 19.5, "battery": 65}}
+{"t": 14.8882, "sensor": 4, "event": "reading", "data": {"celsius": 20.4, "battery": 69}}
+{"t": 14.916, "sensor": 8, "event": "reading", "data": {"celsius": 22.0, "battery": 46}}
+{"t": 14.9366, "sensor": 24, "event": "reading", "data": {"celsius": 30.3, "battery": 28}}
+{"t": 14.9973, "sensor": 30, "event": "alarm"}
+{"t": 15.0093, "sensor": 3, "event": "reading", "data": {"celsius": 27.1, "battery": 38}}
+{"t": 15.0619, "sensor": 4, "event": "poke"}
+{"t": 15.0724, "sensor": 14, "event": "reading", "data": {"celsius": 23.6, "battery": 37}}
+{"t": 15.082, "sensor": 9, "event": "reading", "data": {"celsius": 23.1, "battery": 50}}
+{"t": 15.1145, "sensor": 29, "event": "reading", "data": {"celsius": 21.6, "battery": 54}}
+{"t": 15.1163, "sensor": 9, "event": "reading", "data": {"celsius": 22.1, "battery": 26}}
+{"t": 15.1214, "sensor": 7, "event": "reading", "data": {"celsius": 23.5, "battery": 35}}
+{"t": 15.1408, "sensor": 17, "event": "reading", "data": {"celsius": 16.4, "battery": 87}}
+{"t": 15.1429, "sensor": 16, "event": "alarm"}
+{"t": 15.2066, "sensor": 14, "event": "poke"}
+{"t": 15.2905, "sensor": 32, "event": "poke"}
+{"t": 15.2933, "sensor": 36, "event": "reset"}
+{"t": 15.3326, "sensor": 30, "event": "reset"}
+{"t": 15.3557, "sensor": 38, "event": "reading", "data": {"celsius": 18.9, "battery": 82}}
+{"t": 15.3597, "sensor": 29, "event": "poke"}
+{"t": 15.3603, "sensor": 30, "event": "alarm"}
+{"t": 15.3731, "sensor": 37, "event": "reset"}
+{"t": 15.3743, "sensor": 3, "event": "reading", "data": {"celsius": 16.5, "battery": 22}}
+{"t": 15.4144, "sensor": 1, "event": "poke"}

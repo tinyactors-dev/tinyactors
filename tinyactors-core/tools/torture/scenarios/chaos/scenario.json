@@ -1,0 +1,131 @@
+{
+  "name": "chaos",
+  "title": "Chaos — pathological charts sharing one thread",
+  "summary": "Infinite eventless loops, invoke churn, timer storms, a hot mailbox, deep and wide charts and an error storm — and probe latency proving fairness.",
+  "description": "Eventless infinite loops, invoke churn (children that finish immediately, forever), timer storms with cancellation, a hot mailbox flooded by the host, a 48-level hierarchy, 64 parallel regions and an error storm — next to responder actors whose probe latency shows that fuel-based fair scheduling keeps everyone moving.",
+  "duration": 30,
+  "systems": {
+    "chaos": {
+      "charts": [
+        "charts/looper.scxml",
+        "charts/churn.scxml",
+        "charts/ticker.scxml",
+        "charts/sink.scxml",
+        "charts/responder.scxml",
+        "charts/faulty.scxml",
+        {
+          "name": "deep.scxml",
+          "script": "charts/deep.js",
+          "params": {
+            "depth": 48
+          }
+        },
+        {
+          "name": "wide.scxml",
+          "script": "charts/wide.js",
+          "params": {
+            "regions": 64
+          }
+        }
+      ],
+      "config": {
+        "maxActors": 512,
+        "maxEvents": 16384,
+        "maxTimers": 4096,
+        "quantum": 300,
+        "workspaces": 4
+      }
+    }
+  },
+  "spawn": [
+    {
+      "system": "chaos",
+      "chart": "looper",
+      "count": 8,
+      "group": "loopers",
+      "fixed": true
+    },
+    {
+      "system": "chaos",
+      "chart": "churn",
+      "count": 8,
+      "group": "churners"
+    },
+    {
+      "system": "chaos",
+      "chart": "ticker",
+      "count": 32,
+      "group": "tickers"
+    },
+    {
+      "system": "chaos",
+      "chart": "sink",
+      "count": 1,
+      "group": "sinks",
+      "fixed": true
+    },
+    {
+      "system": "chaos",
+      "chart": "responder",
+      "count": 4,
+      "group": "responders",
+      "fixed": true
+    },
+    {
+      "system": "chaos",
+      "chart": "faulty",
+      "count": 4,
+      "group": "faulty",
+      "fixed": true
+    },
+    {
+      "system": "chaos",
+      "chart": "deep",
+      "count": 16,
+      "group": "deep"
+    },
+    {
+      "system": "chaos",
+      "chart": "wide",
+      "count": 16,
+      "group": "wide"
+    }
+  ],
+  "scripts": [
+    "scripts/probe.js"
+  ],
+  "generators": [
+    "generators/flood.js"
+  ],
+  "mutations": {
+    "more-loopers": {
+      "title": "Add 16 infinite loopers",
+      "script": "mutations/more-loopers.js"
+    },
+    "flip-all": {
+      "title": "Flip all wide charts",
+      "description": "64 regions × all wide actors react to one event",
+      "script": "mutations/flip-all.js"
+    },
+    "kill-loopers": {
+      "title": "Terminate loopers",
+      "description": "Forced termination of runaway eventless loops",
+      "script": "mutations/kill-loopers.js"
+    }
+  },
+  "schedule": [
+    {
+      "at": 10,
+      "mutation": "more-loopers"
+    },
+    {
+      "at": 20,
+      "mutation": "kill-loopers"
+    }
+  ],
+  "expect": [
+    "totals.faults == 0",
+    "metrics.probeLatencyMs.count > 10",
+    "counters.sunk > 100"
+  ]
+}

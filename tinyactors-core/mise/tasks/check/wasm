@@ -1,0 +1,31 @@
+#!/usr/bin/env ruby
+#MISE description="Build the layers and test programs for wasm32-wasi with the pinned zig, and run the tests under wasmtime"
+# vim:ft=ruby
+
+# The C++ header check and the torture chamber's POSIX event loop have no
+# WebAssembly build. wasmtime preopens the host's root, as the tests write
+# their files under the build tree.
+
+require_relative '../../core'
+require 'open3'
+
+programs = Core::PROGRAMS.reject { |program| program.cxx || program.name.start_with?('test_torture') }
+Core.build_layers('wasi')
+Core.in_parallel(programs) { |program| Core.build_program('wasi', program) }
+failed = []
+lock = Mutex.new
+Core.in_parallel(programs) do |program|
+  scratch = Core.directory('wasi').join('scratch', program.name)
+  FileUtils.rm_rf(scratch)
+  FileUtils.mkdir_p(scratch)
+  output, status = Open3.capture2e('wasmtime', 'run', '--dir=/::/', Core.program_path('wasi', program.name).to_s,
+                                   *program.arguments.to_a.map(&:to_s), chdir: scratch.to_s)
+  lock.synchronize do
+    next puts("ok   #{program.name}") if status.success?
+
+    failed << program.name
+    puts "FAIL #{program.name}", output.lines.last(40).join
+  end
+end
+abort "check:wasm: failed: #{failed.sort.join(', ')}" unless failed.empty?
+puts "check:wasm: #{programs.size} test programs pass under wasmtime"

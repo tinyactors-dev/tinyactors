@@ -6,9 +6,9 @@ keep are in [Design constraints](design-constraints.md).
 ## Tasks
 
 Every command is a mise task: `mise run <task>`. The root `mise.toml`
-declares a monorepo (`config_roots`) of six projects: `tinyactors-core`,
-`tinyactors-host`, `tinyxml`, `tinyactors-scxml`, `tinyactors-test` and
-`tinyactors-napi`. Each project has its own `mise.toml` and tasks, which
+declares a monorepo (`config_roots`) of two projects: `tinyactors-core`
+and `tinyxml` (`tinyactors-scxml` and `tinyactors-otlp` are parked, see
+the README). Each project has its own `mise.toml` and tasks, which
 run from the root as `mise run //<project>:<task>` or from inside the
 project as `mise run <task>`.
 

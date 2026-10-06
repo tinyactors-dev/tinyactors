@@ -1,0 +1,25 @@
+<!-- Timer storm: schedules 40 delayed sends with random delays, cancels every
+     other one by its generated send id, and starts over after the last one. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="ticker" initial="arming">
+  <datamodel>
+    <data id="k" expr="0"/>
+    <data id="sid" expr="''"/>
+    <data id="sids" expr="[]"/>
+    <data id="fired" expr="0"/>
+  </datamodel>
+  <state id="arming">
+    <onentry>
+      <assign location="sids" expr="[]"/>
+      <foreach array="Array.from({ length: 40 }, (_, j) => j)" item="k">
+        <send event="tick" idlocation="sid" delayexpr="(5 + Math.floor(Math.random() * 200)) + 'ms'"/>
+        <script>sids.push(sid);</script>
+      </foreach>
+      <foreach array="sids.filter((_, j) => j % 2)" item="sid">
+        <cancel sendidexpr="sid"/>
+      </foreach>
+      <send event="last" delay="260ms"/>
+    </onentry>
+    <transition event="tick"><assign location="fired" expr="fired + 1"/></transition>
+    <transition event="last" target="arming"/>
+  </state>
+</scxml>

@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<!-- Forwards jobs to workers by SCXML address. The address names a session
+     wherever it lives: in whichever version of the "workers" system holds it. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="router" datamodel="ecmascript" initial="routing">
+  <state id="routing">
+    <transition event="job">
+      <send targetexpr="_event.data.to" event="job">
+        <param name="seq" expr="_event.data.seq"/>
+      </send>
+    </transition>
+    <transition event="error.communication">
+      <send type="bench" event="undeliverable"/>
+    </transition>
+  </state>
+</scxml>

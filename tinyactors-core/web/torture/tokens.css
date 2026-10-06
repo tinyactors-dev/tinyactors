@@ -1,0 +1,117 @@
+/* Design tokens — see docs/design-system.md. Custom properties inherit into
+ * shadow roots, so every tb-* component reads these directly. */
+:root {
+  color-scheme: light dark;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --text-xs: 12px;
+  --lh-xs: 16px;
+  --text-sm: 13px;
+  --lh-sm: 20px;
+  --text-md: 14px;
+  --lh-md: 22px;
+  --text-lg: 16px;
+  --lh-lg: 24px;
+  --text-xl: 20px;
+  --lh-xl: 28px;
+  --text-2xl: 28px;
+  --lh-2xl: 32px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  --page-max: 1440px;
+  --header-h: 56px;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --border-width: 1px;
+  --shadow-overlay: 0 8px 24px rgb(0 0 0 / 0.12);
+  --duration: 120ms;
+
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-2: #f1f3f6;
+  --border: #e3e6eb;
+  --text: #14171c;
+  --text-2: #5b6472;
+  --text-3: #8a93a1;
+  --accent: #3b5bdb;
+  --accent-hover: #3249c0;
+  --accent-soft: #eef1fd;
+  --on-accent: #ffffff;
+  --ok: #2f9e44;
+  --warn: #e8590c;
+  --danger: #e03131;
+
+  --series-1: #4c6ef5;
+  --series-2: #0ca678;
+  --series-3: #f59f00;
+  --series-4: #d6336c;
+  --series-5: #7950f2;
+  --series-6: #868e96;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1116;
+    --surface: #161a21;
+    --surface-2: #1d222b;
+    --border: #272d38;
+    --text: #e8ebf0;
+    --text-2: #9aa4b2;
+    --text-3: #6b7483;
+    --accent: #7c94ff;
+    --accent-hover: #93a6ff;
+    --accent-soft: #1e2547;
+    --on-accent: #0e1116;
+    --ok: #51cf66;
+    --warn: #ffa94d;
+    --danger: #ff6b6b;
+    --series-1: #748ffc;
+    --series-2: #38d9a9;
+    --series-3: #ffd43b;
+    --series-4: #f783ac;
+    --series-5: #b197fc;
+    --series-6: #adb5bd;
+    --shadow-overlay: 0 8px 24px rgb(0 0 0 / 0.5);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0e1116;
+  --surface: #161a21;
+  --surface-2: #1d222b;
+  --border: #272d38;
+  --text: #e8ebf0;
+  --text-2: #9aa4b2;
+  --text-3: #6b7483;
+  --accent: #7c94ff;
+  --accent-hover: #93a6ff;
+  --accent-soft: #1e2547;
+  --on-accent: #0e1116;
+  --ok: #51cf66;
+  --warn: #ffa94d;
+  --danger: #ff6b6b;
+  --series-1: #748ffc;
+  --series-2: #38d9a9;
+  --series-3: #ffd43b;
+  --series-4: #f783ac;
+  --series-5: #b197fc;
+  --series-6: #adb5bd;
+  --shadow-overlay: 0 8px 24px rgb(0 0 0 / 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration: 0ms;
+  }
+}

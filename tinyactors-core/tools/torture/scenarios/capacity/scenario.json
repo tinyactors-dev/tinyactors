@@ -1,0 +1,22 @@
+{
+  "name": "capacity",
+  "title": "Capacity — where is the limit?",
+  "summary": "Determines, for five messaging patterns, the largest actor count this machine sustains — and whether latency, throughput, memory or the runtime's per-system limit stops it.",
+  "description": "One messaging pattern at a time: the actor count grows (×2 while far from the limit, then ×1.25, at most to what still fits the memory budget) while a probe actor measures scheduling latency and the bench checks that the pattern's traffic is actually delivered. A step is healthy when the probe p99 stays within the SLO, ≥ 85% of the expected events arrive and nothing faults. Once a step fails twice, the limit lies between the last healthy and the failing count: the search bisects that bracket (removing the newest actors) until it is within 5%. It also stops at the memory budget (80% of the memory available at start, or of the cgroup limit — resident memory, including the region copy while it grows) or at the runtime's hard limit of 8,388,606 actors per system. Patterns: idle actors, 1 s heartbeats, invoke cells (a parent ticking 8 children that reply), ECMAScript gossip to random peers by session address, and host ingress of 1 event per actor per second. Tune with --param patterns=…, sloMs, tolerance, growth, fastGrowth, memoryFraction, memoryMB, maxActors, phaseSeconds.",
+  "duration": 3600,
+  "scripts": [
+    "scripts/capacity.js"
+  ],
+  "mutations": {
+    "next-pattern": {
+      "title": "Finish this pattern",
+      "description": "Record the current capacity and move to the next pattern",
+      "script": "mutations/next-pattern.js"
+    },
+    "hold": {
+      "title": "Hold / resume growth",
+      "description": "Keep the current actor count and keep measuring",
+      "script": "mutations/hold.js"
+    }
+  }
+}

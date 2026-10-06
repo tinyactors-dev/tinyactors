@@ -1,6 +1,6 @@
 # The ring protocol: core and host talk through shared memory
 
-**Status:** Adopted → core ADRs [0098](../../../tinyactors-core/docs/adr/0098-telemetry-is-a-lossy-ring.md) to [0105](../../../tinyactors-core/docs/adr/0105-recorded-sessions-expose-input-observations-on-c2h.md), repository ADR [0003](../../adr/0003-remove-tinyactors-host.md) and napi ADR [0041](../../../tinyactors-napi/docs/adr/0041-napi-is-a-binding-over-cores-rings.md) (2026-10-05). The steps are in the root [ROADMAP](../../../ROADMAP.md#the-ring-protocol); these documents stay the reference until each moves into the code it describes ([IMPLEMENTATION.md](IMPLEMENTATION.md#where-the-documentation-goes)).
+**Status:** Dropped (2026-10-06): superseded by [ADR 0004](../../adr/0004-replace-the-core-with-the-standalone-runtime.md), which replaced the core with a runtime that holds its own queues without rings. The work is kept at the tag `ring-proto-final`.
 **Touches:** tinyactors-core (gains the rings, the envelope pool and run-time names), tinyactors-host (deleted), tinyactors-napi and tinyactors-test (become ring drivers)
 **Plan:** [IMPLEMENTATION.md](IMPLEMENTATION.md), tracked in the root ROADMAP. ADRs win where a document here disagrees.
 

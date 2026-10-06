@@ -1,0 +1,31 @@
+<!-- session: the common "small state + timeout" actor. It holds a small set of
+     ids (subscriptions, open documents, ...) and expires after `idleMs`
+     without activity; every touch resets the timeout (cancel + re-arm the
+     delayed send to itself). An expired session re-arms, so every actor
+     always owns one pending timer. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"
+       name="session" initial="active">
+  <datamodel>
+    <data id="ids" expr="[]"/>          <!-- spawn data: a handful of ids -->
+    <data id="idleMs" expr="30000"/>
+    <data id="touches" expr="0"/>
+    <data id="expirations" expr="0"/>
+  </datamodel>
+
+  <state id="active">
+    <onentry><send event="session.timeout" delayexpr="idleMs + 'ms'" id="idle"/></onentry>
+    <onexit><cancel sendid="idle"/></onexit>
+
+    <!-- activity: remember the id (a set, at most 16), restart the timeout -->
+    <transition event="touch" target="active">
+      <assign location="touches" expr="touches + 1"/>
+      <if cond="_event.data &amp;&amp; ids.indexOf(_event.data.id) &lt; 0">
+        <assign location="ids" expr="ids.concat([_event.data.id]).slice(-16)"/>
+      </if>
+    </transition>
+
+    <transition event="session.timeout" target="active">
+      <assign location="expirations" expr="expirations + 1"/>
+    </transition>
+  </state>
+</scxml>

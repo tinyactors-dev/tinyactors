@@ -1,0 +1,35 @@
+{
+  "name": "invoke",
+  "description": "<invoke> of a linked document with params, child -> #_parent, parent -> #_<invokeid>, done.invoke; a dynamic src the image does not have becomes a host request, which the host resumes with an error (error.execution)",
+  "documents": {
+    "parent.scxml": [
+      "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='ecmascript' name='parent' initial='s'>",
+      "  <datamodel><data id='got' expr='null'/></datamodel>",
+      "  <state id='s'>",
+      "    <invoke src='child.scxml' id='kid'><param name='n' expr='21'/></invoke>",
+      "    <transition event='answer'><assign location='got' expr='_event.data.v'/><log expr=\"'answer ' + got + ' from ' + _event.invokeid\"/><send target='#_kid' event='thanks'/></transition>",
+      "    <transition event='done.invoke.kid' target='after'><log expr=\"'child done'\"/></transition>",
+      "  </state>",
+      "  <state id='after'>",
+      "    <invoke srcexpr=\"'missing.scxml'\" id='ghost'/>",
+      "    <transition event='error.execution' target='end'><log expr=\"'cannot invoke missing'\"/></transition>",
+      "  </state>",
+      "  <final id='end'/>",
+      "</scxml>"
+    ],
+    "child.scxml": [
+      "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='ecmascript' name='child' initial='c'>",
+      "  <datamodel><data id='n' expr='0'/></datamodel>",
+      "  <state id='c'>",
+      "    <onentry><send target='#_parent' event='answer'><param name='v' expr='n * 2'/></send></onentry>",
+      "    <transition event='thanks' target='bye'><log expr=\"'child thanked'\"/></transition>",
+      "  </state>",
+      "  <final id='bye'/>",
+      "</scxml>"
+    ]
+  },
+  "steps": [
+    { "spawn": "parent.scxml", "as": "p", "documents": ["child.scxml"] },
+    { "expect": { "logs": ["answer 42 from kid", "child thanked", "child done", "cannot invoke missing"], "done": { "p": true } } }
+  ]
+}

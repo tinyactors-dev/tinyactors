@@ -1,70 +1,59 @@
-# Tinyactors actor/statechart header skeleton
+# tinyactors (`ta`)
 
-This archive captures the C API shape discussed for a tiny in-process actor system using SCXML-like execution semantics without requiring XML.
+A portable, embeddable SCXML interpreter and cooperative actor-system VM in C.
 
-## Design points represented here
+Compile an actor system into an immutable, relocatable image; give the
+library one block of mutable memory sized from that image; plug in a
+datamodel; drive it with `send / run(budget) / advance_time / resume`, and
+drain tagged effects.
 
-- `ta_` prefix throughout.
-- `#pragma once` in every header.
-- One authored public header, `include/tinyactors.h`, in the style of `sqlite3.h`.
-- One private header per subsystem, collected by `src/internal.h`.
-- Immutable statechart definitions, actor/session instances, and explicit resumable execution.
-- Parallel state configurations are represented as sets of active atomic states, with definition-specific compact layouts.
-- Event names are structural trie IDs rather than strings; prefix matching implements SCXML event descriptor semantics efficiently.
-- `error.*`, `done.state.*`, and `done.invoke.*` are structured event names.
-- Runtime/plugin faults become SCXML-style internal events; they are distinct from C API misuse/failure.
-- Logical time and delayed sends are runtime state.
-- Named actor identity and logical addressing are core semantics; storage and physical routing are host-provided.
-- Every resident interpreter can be inspected, including active configuration, history, continuation, queued internal events, invocations, and a host data-model root view.
-- Session images capture/reconstruct Tinyactors-owned interpreter state against one exact immutable definition revision.
-- Host data-model object graphs are bindings, not serialized session-image contents. Python, Ruby, JavaScript, and native hosts keep ownership of their existing objects.
-- Host values are fat pointers with retain/release hooks; core does not require a universal serialization format.
-- Unloading and session images bound memory within one process; an image is valid only in the process that wrote it. Durability—checkpoints of actor state, recorded inputs and replay, effect deduplication, storage transactions—is a separate layer, and does not use session images.
-- Data models, I/O processors, invokers, clocks, storage, and concurrency remain under embedder control.
-- The mandatory SCXML Event I/O Processor is built in; embedders provide its
-  external-event scheduling/routing callback rather than reimplementing SCXML
-  target and envelope semantics.
-- The SCXML target URI grammar is core's, parsed and written in one place, so a
-  literal `target`, an evaluated `targetexpr`, and the URIs core gives a chart
-  all agree.
+- [docs/architecture.md](docs/architecture.md) — design, conflicts, building blocks, ABI
+- [docs/concurrency.md](docs/concurrency.md) — concurrency and parallelism: what runs when,
+  what you can rely on, from one actor to a PostgreSQL table of them
+- [docs/scenarios.md](docs/scenarios.md) — twelve execution walkthroughs
+- [docs/layout.md](docs/layout.md) — file tree, tooling, tasks
+- [docs/distribution.md](docs/distribution.md) — the release artifacts to rebuild: npm, C/pkg-config,
+  and PostgreSQL artifacts, target matrix, installation and package tests
 
-## Layout
+`VERSION` is the release version (currently 0.1.0). The build and its tasks
+are Ruby, on the repository's pinned toolchain (`mise/core.rb`,
+[layout.md](docs/layout.md#tasks)):
 
-- `include/tinyactors.h` — the complete, authored public API. Every public
-  function is declared here with `TA_API`; nothing else is public.
-- `src/*.{c,h}` — canonical implementation modules. Their headers are private:
-  they include `tinyactors.h` and add layouts and internal functions.
-- `include/tinyactors.c` — generated implementation amalgamation of `src/*.c`.
-- `protocol/` — the ring protocol's records, defined once in `catalog.rb`
-  (with `dsl.rb` and `render.rb`); see `protocol/README.md`.
-- `src/generated/` — what `mise run protocol` renders from the catalog:
-  `ring_records.h`, `MESSAGES.md` and `messages.json`. Never edited by hand;
-  `mise run test` checks it is current.
-- `include/tinyactors.api.json` — generated, checked-in description of the
-  public API for binding generators (`mise run api`; see
-  `docs/internal/api-ir.md`), in the format of
-  `include/tinyactors.api.schema.json`. The `TA_*` annotation macros in the
-  header record what C types cannot express.
-- `tests/*.c` — compile-only checks for internal and public header use
-  (`smoke.c`, `public_smoke.c`) and runtime unit tests that link the
-  amalgamation (`mise run test` runs them). A test written against a public
-  API that `src/` does not implement yet still has to compile, but its link
-  may fail: the build lists it in `PENDING_TESTS`, reports it as pending, and
-  the suite runs it as soon as it links. `PENDING_TESTS` is empty today;
-  `tests/tree_test.c` was the last entry and `src/tree.c` links it.
+```sh
+mise install                  # at the repository root
+mise run test                 # every test under ASan/UBSan, the bindings, W3C, wasm
+mise run check:freestanding   # no-libc proof for wasm32 / x86_64 / Cortex-M / RISC-V
+mise run check:wasm           # wasm32-wasi, tests under wasmtime
+```
 
-## Intentional omissions
-
-This is a header/API skeleton, not a completed implementation. It intentionally does not ship an XML parser/importer or a durability subsystem. It also leaves representation choices such as hash tables, actor name indexes, transition-set scratch storage, and portable checkpoint encoding to implementation work or optional modules.
-
-## Public header workflow
-
-Declare public types and `TA_API` functions in `include/tinyactors.h`; keep
-layouts and internal functions in the private module headers. Add a new module
-pair to `src/` and list its header in `src/internal.h` in dependency order.
-
-Run `mise run amalgamate` from `tinyactors-core` to produce the distributable
-`tinyactors.c`, in which every non-public function has internal linkage; only
-that generated file is not edited by hand. `mise run amalgamate --check` is
-suitable for CI and also rejects public prototypes without `TA_API` and private
-redeclarations of public functions. See ADR 0041.
+Status: all six layers are implemented — base, image, core,
+system (freestanding: no libc/malloc/OS, checked for wasm32, x86_64,
+Cortex-M and RISC-V), compile and runtime (`libtinyactors_<layer>.a`); plus the ECMAScript
+datamodel on quickjs-ng (`ta_datamodel_ecmascript`, linked like a tree-sitter
+language) and a BasicHTTP codec (`tinyactors/basic_http.h`). All 191 automatic W3C
+SCXML IRP tests pass (`mise run w3c`). A Node.js binding with an
+xstate-style API lives in [bindings/node](bindings/node) (`mise run node:test`); machines
+compile to readable SCXML and all actors share one native system. The
+[torture chamber](tools/torture) (`mise run torture`, `mise run torture:test`) runs
+pathological scenarios — 100k actors, ~1M events/s, large datamodels, systems
+addressing each other's actors, a 50,000-email campaign with one actor per
+delivery attempt, how many actors fit on this machine — from a scenario home
+page with a live dashboard ([design system](docs/design-system.md)), including
+2 million sessions with a few thousand resident: idle actors are hibernated by
+the host (`ta_actor_hibernate` / `TA_EFFECT_WAKE` / `ta_actor_wake`; the library
+does no I/O). Charts **hot-reload** CGI style — new actors run the new version,
+old versions drain — and running actors **migrate live** at a stable point
+(`ta_actor_export` / `ta_blob_migrate` / `ta_system_adopt`), keeping their
+address, data and timers and receiving `error.platform.upgrade` with their
+previous bindings. [examples/access-reconciler](examples/access-reconciler) is a
+Kubernetes-style controller per employee that keeps SaaS access in line with HR
+(joiners, movers, leavers, approvals, drift, outages), simulated for 30 days
+with invariants checked (`mise run examples:test`). The same JavaScript API
+runs in browsers: [bindings/web](bindings/web) is the runtime compiled to
+WebAssembly (~52 KB gzipped). **Links** connect systems, so browser actors talk
+to server actors transparently, and the link's status is itself an actor.
+Examples: [UI elements backed by actors](examples/ui-elements) and
+[multiplayer chess](examples/chess) (lobby, join by code, server-hosted games).
+See
+[architecture.md §15](docs/architecture.md#15-implementation-status-and-deviations-from-this-design)
+for what differs from the original design.

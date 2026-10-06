@@ -1,0 +1,133 @@
+{
+  "name": "links: duplicates are dropped by msgid or dedup key",
+  "description": "The same msgid from the same origin is delivered once (the dedup window); a `dedup` key replaces the msgid for that purpose, so two msgids with one key are one delivery.",
+  "system": "srv",
+  "serve": {
+    "trusted": true,
+    "resumeMs": 0
+  },
+  "documents": {
+    "echo.scxml": [
+      "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" version=\"1.0\" datamodel=\"ecmascript\" name=\"echo\" initial=\"s\">",
+      "  <state id=\"s\">",
+      "    <transition event=\"ping\">",
+      "      <log expr=\"'ping ' + _event.data.n\"/>",
+      "      <send event=\"pong\" targetexpr=\"_event.origin\"><param name=\"n\" expr=\"_event.data.n\"/></send>",
+      "    </transition>",
+      "    <transition event=\"later\">",
+      "      <send event=\"pong\" targetexpr=\"_event.origin\" delay=\"100ms\"><param name=\"n\" expr=\"_event.data.n\"/></send>",
+      "    </transition>",
+      "    <transition event=\"error.communication\"><log expr=\"'lost ' + _event.sendid\"/></transition>",
+      "  </state>",
+      "</scxml>"
+    ]
+  },
+  "spawn": [
+    {
+      "doc": "echo.scxml",
+      "as": "echo"
+    }
+  ],
+  "transcript": [
+    {
+      "in": {
+        "t": "hello",
+        "v": 1,
+        "id": "tab",
+        "reach": [],
+        "caps": {
+          "profile": "neutral"
+        }
+      }
+    },
+    {
+      "out": {
+        "t": "hello",
+        "v": 1,
+        "id": "srv",
+        "reach": []
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "tinyactors://srv/@echo",
+        "name": "ping",
+        "data": {
+          "n": 1
+        },
+        "origin": "tinyactors://tab/#_scxml_7",
+        "msgid": "tinyactors://tab/#_scxml_7/1",
+        "hops": 0
+      }
+    },
+    {
+      "out": {
+        "t": "ev",
+        "name": "pong",
+        "data": {
+          "n": 1
+        }
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "tinyactors://srv/@echo",
+        "name": "ping",
+        "data": {
+          "n": 1
+        },
+        "origin": "tinyactors://tab/#_scxml_7",
+        "msgid": "tinyactors://tab/#_scxml_7/1",
+        "hops": 0
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "tinyactors://srv/@echo",
+        "name": "ping",
+        "data": {
+          "n": 2
+        },
+        "origin": "tinyactors://tab/#_scxml_7",
+        "msgid": "tinyactors://tab/#_scxml_7/2",
+        "hops": 0,
+        "dedup": "order-17"
+      }
+    },
+    {
+      "out": {
+        "t": "ev",
+        "name": "pong",
+        "data": {
+          "n": 2
+        }
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "tinyactors://srv/@echo",
+        "name": "ping",
+        "data": {
+          "n": 3
+        },
+        "origin": "tinyactors://tab/#_scxml_7",
+        "msgid": "tinyactors://tab/#_scxml_7/3",
+        "hops": 0,
+        "dedup": "order-17"
+      }
+    },
+    {
+      "expect": {
+        "logs": [
+          "ping 1",
+          "ping 2"
+        ],
+        "silent": true
+      }
+    }
+  ]
+}

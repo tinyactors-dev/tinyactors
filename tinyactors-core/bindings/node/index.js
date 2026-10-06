@@ -1,0 +1,39 @@
+'use strict';
+/**
+ * tinyactors for Node.js — the xstate-style API (bindings/shared/core.mjs)
+ * over the native addon written against the N-API C API (src/addon.c).
+ */
+const path = require('path');
+const { createRuntime } = require('../shared/core.mjs');
+
+function loadNative() {
+  const candidates = [
+    process.env.TINYACTORS_NATIVE,
+    path.join(__dirname, 'build', 'tinyactors.node'),
+    path.join(__dirname, 'build', 'Release', 'tinyactors.node'),
+  ].filter(Boolean);
+  let lastError;
+  for (const p of candidates) {
+    try {
+      return require(p);
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError;
+}
+
+const platform = {
+  now: () => performance.now(),
+  defer: (fn) => setImmediate(fn),
+  cancelDefer: (h) => clearImmediate(h),
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (h) => clearTimeout(h),
+  log: (...args) => console.log(...args),
+};
+
+/* links in Node also over WebSocket servers ({ server, path } or { port })
+ * and TCP ({ tcp }): transports.js */
+const api = require('./transports').withNodeTransports(createRuntime({ native: loadNative(), platform }));
+
+module.exports = api;

@@ -1,0 +1,25 @@
+{
+  "name": "tinyactors",
+  "version": "0.1.0",
+  "description": "xstate-style state machines and actors on the tinyactors SCXML runtime (N-API addon); hibernation, links",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "ws.js",
+    "transports.js",
+    "src/"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "mise run node:build",
+    "test": "node --test \"test/*.test.js\" && tsc -p test"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

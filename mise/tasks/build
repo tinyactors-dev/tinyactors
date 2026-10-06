@@ -33,19 +33,9 @@ end
 core = Project.new(ROOT.join('tinyactors-core'))
 core.run('build')
 
-# tinyactors-otlp, the trace encoder, builds against core's header; the
-# kernel links it.
-otlp = Project.new(ROOT.join('tinyactors-otlp'))
-otlp.run('build')
-
-test_host = Project.new(ROOT.join('tinyactors-test'))
-test_host.run('build')
-
-napi = Project.new(ROOT.join('tinyactors-napi'))
-napi.run('build')
-
 xml = Project.new(ROOT.join('tinyxml'))
 xml.run('build')
 
-scxml = Project.new(ROOT.join('tinyactors-scxml'))
-scxml.run('build')
+# tinyactors-scxml and tinyactors-otlp are parked: they build against the
+# ring-protocol core this repo replaced (tag ring-proto-final), and wait to
+# be ported to the current one (their READMEs say how).

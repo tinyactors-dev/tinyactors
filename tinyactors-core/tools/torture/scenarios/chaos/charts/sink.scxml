@@ -1,0 +1,12 @@
+<!-- The hot mailbox: the host floods it; it reports progress every 1000 events. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="sink" initial="s">
+  <datamodel><data id="n" expr="0"/></datamodel>
+  <state id="s">
+    <transition event="drop">
+      <assign location="n" expr="n + 1"/>
+      <if cond="n % 1000 === 0">
+        <send type="bench" event="sunk"><param name="n" expr="n"/></send>
+      </if>
+    </transition>
+  </state>
+</scxml>

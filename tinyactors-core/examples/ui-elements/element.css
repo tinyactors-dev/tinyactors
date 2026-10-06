@@ -1,0 +1,55 @@
+/* shared by every element's shadow root */
+*, *::before, *::after { box-sizing: border-box; }
+:host { display: block; font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; color: #111827; }
+:host(ta-toggle) { display: flex; align-items: center; gap: 10px; }
+[hidden] { display: none !important; }
+button { font: 600 14px/1 inherit; cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: 0.45; }
+.primary { background: #1d4ed8; color: #fff; border: 0; padding: 10px 16px; border-radius: 10px; }
+.secondary { background: #fff; color: #111827; border: 1px solid #e5e7eb; padding: 10px 16px; border-radius: 10px; }
+.state { display: none; margin-left: 8px; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font: 600 11px ui-monospace, monospace; cursor: pointer; vertical-align: middle; }
+:host([debug]) .state { display: inline-block; }
+
+/* toggle */
+.toggle { position: relative; width: 46px; height: 26px; border-radius: 999px; border: 0; background: #d1d5db; transition: background 0.15s; padding: 0; }
+.toggle[aria-checked='true'] { background: #16a34a; }
+.knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0003; transition: transform 0.15s; }
+.toggle[aria-checked='true'] .knob { transform: translateX(20px); }
+
+/* counter */
+.counter { display: inline-flex; align-items: center; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; background: #fff; }
+.counter button { width: 40px; height: 40px; border: 0; background: #f3f4f6; font-size: 20px; touch-action: none; user-select: none; }
+.counter button:active:not(:disabled) { background: #e5e7eb; }
+.value { min-width: 56px; text-align: center; font: 600 18px ui-monospace, monospace; outline: none; }
+
+/* search */
+.search { position: relative; }
+input { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 10px; }
+input:focus { outline: 2px solid #1d4ed855; border-color: #1d4ed8; }
+input[aria-invalid] { border-color: #dc2626; }
+.spinner { position: absolute; right: 12px; top: 13px; width: 16px; height: 16px; border-radius: 50%; border: 2px solid #c7d2fe; border-top-color: #1d4ed8; animation: spin 0.7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+ul { position: absolute; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 4px; list-style: none; background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; box-shadow: 0 10px 25px #0f172a1f; z-index: 2; }
+li { padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+li[aria-selected='true'], li:hover { background: #eef2ff; }
+li.empty { color: #6b7280; cursor: default; }
+.foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; min-height: 22px; color: #4b5563; font-size: 13px; }
+
+/* form + fields */
+.form { display: grid; gap: 12px; }
+.field { display: grid; gap: 4px; }
+.field .label { font-weight: 500; font-size: 14px; }
+.input-row { position: relative; }
+.ok { position: absolute; right: 12px; top: 10px; color: #16a34a; font-weight: 700; }
+.error { color: #dc2626; font-size: 12px; min-height: 18px; }
+.done { margin-top: 12px; padding: 12px; border-radius: 10px; background: #f0fdf4; color: #166534; font-weight: 500; }
+.again { margin-left: 8px; border: 1px solid #bbf7d0; background: #fff; border-radius: 8px; padding: 6px 10px; }
+
+/* dialog */
+.backdrop { position: fixed; inset: 0; display: grid; place-items: center; background: #0f172a00; pointer-events: none; transition: background 0.18s; z-index: 10; }
+.backdrop[data-phase='closed'] { visibility: hidden; }
+.backdrop[data-phase='opening'], .backdrop[data-phase='open'] { background: #0f172a66; pointer-events: auto; }
+.sheet { width: min(420px, 90vw); background: #fff; border-radius: 16px; padding: 24px; box-shadow: 0 30px 80px #0f172a59; transform: translateY(16px) scale(0.98); opacity: 0; transition: transform 0.18s, opacity 0.18s; }
+.backdrop[data-phase='opening'] .sheet, .backdrop[data-phase='open'] .sheet { transform: none; opacity: 1; }
+.sheet h3 { margin: 0 0 8px; }
+.sheet p { color: #4b5563; margin: 0 0 18px; }

@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<!-- Version {{VERSION}} of the worker (scripts/reload.js fills in the number).
+     `count` is renamed to `total`: a migrated worker takes it over from the
+     previous bindings, which arrive as the data of error.platform.upgrade.
+     Edit this file while the scenario runs with the watch parameter set and it is
+     reloaded (and running workers migrated) on save. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="worker" datamodel="ecmascript" initial="idle">
+  <datamodel>
+    <data id="total" expr="0"/>
+    <data id="limit" expr="0"/>
+    <data id="timeouts" expr="0"/>
+  </datamodel>
+  <state id="idle">
+    <onentry>
+      <send event="timeout" delay="1s" id="timeout"/>
+    </onentry>
+    <onexit>
+      <cancel sendid="timeout"/>
+    </onexit>
+    <transition event="error.platform.upgrade">
+      <assign location="total" expr="_event.data.count !== undefined ? _event.data.count : _event.data.total"/>
+      <send type="bench" event="upgraded">
+        <param name="n" expr="total"/>
+        <param name="v" expr="{{VERSION}}"/>
+        <param name="renamed" expr="_event.data.count !== undefined"/>
+        <param name="who" expr="_ioprocessors.scxml.location"/>
+      </send>
+    </transition>
+    <transition event="job">
+      <assign location="total" expr="total + 1"/>
+      <send type="bench" event="ack">
+        <param name="seq" expr="_event.data.seq"/>
+        <param name="n" expr="total"/>
+        <param name="v" expr="{{VERSION}}"/>
+        <param name="who" expr="_ioprocessors.scxml.location"/>
+      </send>
+    </transition>
+    <transition event="timeout" target="idle">
+      <assign location="timeouts" expr="timeouts + 1"/>
+      <send type="bench" event="timeout">
+        <param name="v" expr="{{VERSION}}"/>
+        <param name="who" expr="_ioprocessors.scxml.location"/>
+      </send>
+    </transition>
+    <transition cond="limit &gt; 0 &amp;&amp; total &gt;= limit" target="done"/>
+  </state>
+  <final id="done"/>
+</scxml>

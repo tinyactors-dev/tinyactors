@@ -1,0 +1,149 @@
+{
+  "name": "links: hello, an envelope in, the reply out",
+  "description": "A peer says hello (neutral profile), sends an envelope to an exported @name; the reply goes back to its origin as an `ev` with a msgid of the replying session. ping is answered with pong; unknown message types and fields are ignored.",
+  "system": "srv",
+  "serve": {
+    "exports": {
+      "echo": "ping later"
+    },
+    "resumeMs": 0
+  },
+  "documents": {
+    "echo.scxml": [
+      "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" version=\"1.0\" datamodel=\"ecmascript\" name=\"echo\" initial=\"s\">",
+      "  <state id=\"s\">",
+      "    <transition event=\"ping\">",
+      "      <log expr=\"'ping ' + _event.data.n\"/>",
+      "      <send event=\"pong\" targetexpr=\"_event.origin\"><param name=\"n\" expr=\"_event.data.n\"/></send>",
+      "    </transition>",
+      "    <transition event=\"later\">",
+      "      <send event=\"pong\" targetexpr=\"_event.origin\" delay=\"100ms\"><param name=\"n\" expr=\"_event.data.n\"/></send>",
+      "    </transition>",
+      "    <transition event=\"error.communication\"><log expr=\"'lost ' + _event.sendid\"/></transition>",
+      "  </state>",
+      "</scxml>"
+    ]
+  },
+  "spawn": [
+    {
+      "doc": "echo.scxml",
+      "as": "echo"
+    }
+  ],
+  "transcript": [
+    {
+      "in": {
+        "t": "hello",
+        "v": 1,
+        "id": "tab",
+        "reach": [],
+        "caps": {
+          "profile": "neutral"
+        }
+      }
+    },
+    {
+      "out": {
+        "t": "hello",
+        "v": 1,
+        "id": "srv",
+        "reach": []
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "tinyactors://srv/@echo",
+        "name": "ping",
+        "data": {
+          "n": 1
+        },
+        "origin": "tinyactors://tab/#_scxml_7",
+        "msgid": "tinyactors://tab/#_scxml_7/1",
+        "hops": 0,
+        "extra": "ignored"
+      }
+    },
+    {
+      "out": {
+        "t": "ev",
+        "target": "tinyactors://tab/#_scxml_7",
+        "name": "pong",
+        "data": {
+          "n": 1
+        },
+        "origin": "~^tinyactors://srv/#_scxml_[0-9]+$",
+        "msgid": "~^tinyactors://srv/#_scxml_[0-9]+/[0-9]+$",
+        "hops": 0
+      }
+    },
+    {
+      "expect": {
+        "logs": [
+          "ping 1"
+        ]
+      }
+    },
+    {
+      "in": {
+        "t": "ping",
+        "at": 42
+      }
+    },
+    {
+      "out": {
+        "t": "pong",
+        "at": 42
+      }
+    },
+    {
+      "in": {
+        "t": "gossip",
+        "what": "unknown types are ignored"
+      }
+    },
+    {
+      "in": {
+        "t": "ack",
+        "msgid": "x"
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "tinyactors://srv/@echo",
+        "name": "ping",
+        "data": {
+          "n": 2,
+          "bytes": {
+            "$bytes": "AAE="
+          },
+          "me": {
+            "$ref": "tinyactors://tab/#_scxml_7"
+          }
+        },
+        "origin": "tinyactors://tab/#_scxml_7",
+        "msgid": "tinyactors://tab/#_scxml_7/2",
+        "hops": 0
+      }
+    },
+    {
+      "out": {
+        "t": "ev",
+        "target": "tinyactors://tab/#_scxml_7",
+        "name": "pong",
+        "data": {
+          "n": 2
+        }
+      }
+    },
+    {
+      "expect": {
+        "logs": [
+          "ping 2"
+        ],
+        "silent": true
+      }
+    }
+  ]
+}

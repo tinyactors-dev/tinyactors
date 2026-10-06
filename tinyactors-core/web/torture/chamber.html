@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Torture chamber · tinyactors</title>
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="page.css" />
+    <!-- the whole module graph and the components' stylesheet in one round trip -->
+    <script type="module" src="app.js"></script>
+    <link rel="modulepreload" href="service.js" />
+    <link rel="modulepreload" href="sheet.js" />
+    <link rel="preload" href="components.css" as="fetch" crossorigin />
+  </head>
+  <body>
+    <tb-app>
+      <div class="boot">
+        <div class="boot-inner">
+          <span class="boot-mark" aria-hidden="true"></span>Torture chamber
+          <span class="boot-divider" aria-hidden="true">/</span>
+          <span class="boot-title">Connecting…</span>
+        </div>
+      </div>
+    </tb-app>
+
+    <!-- ===================================================== templates
+         Each tb-* element clones its template into a shadow root. -->
+
+    <template id="tb-app">
+      <header class="header">
+        <div class="header-inner">
+          <div class="brand">
+            <a class="home-link" href="/" title="All scenarios">
+              <span class="mark" aria-hidden="true"></span>
+              <span class="brand-name">Torture chamber</span>
+            </a>
+            <span class="divider" aria-hidden="true">/</span>
+            <h1 class="scenario-title" data-ref="title">Connecting…</h1>
+          </div>
+          <div class="header-meta">
+            <span class="clock" data-ref="clock">0:00</span>
+            <tb-status data-ref="run" label="Waiting" tone="neutral"></tb-status>
+            <tb-status data-ref="conn" label="Connecting" tone="warn"></tb-status>
+          </div>
+        </div>
+      </header>
+      <main class="page">
+        <p class="description" data-ref="description"></p>
+        <section class="banner" data-ref="idle" hidden>
+          <div class="banner-title">No scenario is running</div>
+          <p class="hint">Pick one on the <a href="/">scenarios page</a>.</p>
+        </section>
+        <section class="banner" data-ref="banner" hidden></section>
+        <section class="kpis" data-ref="kpis" aria-label="Key figures"></section>
+        <div class="layout" data-ref="layout">
+          <section class="charts" data-ref="charts" aria-label="Time series"></section>
+          <aside class="side">
+            <tb-service data-ref="service" hidden></tb-service>
+            <tb-controls data-ref="controls"></tb-controls>
+            <tb-systems data-ref="systems"></tb-systems>
+            <tb-log data-ref="log"></tb-log>
+          </aside>
+        </div>
+      </main>
+    </template>
+
+    <template id="tb-status">
+      <span class="pill"><span class="dot"></span><span class="pill-label"></span></span>
+    </template>
+
+    <template id="tb-stat">
+      <div class="card stat">
+        <div class="stat-label"></div>
+        <div class="stat-value"><span class="num">–</span><span class="unit"></span></div>
+        <canvas class="spark" height="28" aria-hidden="true"></canvas>
+      </div>
+    </template>
+
+    <template id="tb-chart">
+      <figure class="card chart">
+        <figcaption class="chart-head">
+          <span class="chart-title"></span>
+          <span class="chart-unit"></span>
+        </figcaption>
+        <div class="legend" role="group" aria-label="Series"></div>
+        <div class="plot">
+          <canvas></canvas>
+          <div class="readout" hidden></div>
+        </div>
+      </figure>
+    </template>
+
+    <template id="tb-controls">
+      <section class="card panel">
+        <h2 class="panel-title">Controls</h2>
+        <div class="row">
+          <button class="btn" data-ref="stream" type="button">Pause stream</button>
+          <button class="btn" data-ref="sim" type="button">Pause system</button>
+        </div>
+        <div class="field">
+          <span class="field-label" id="window-label">Time window</span>
+          <div class="segmented" role="radiogroup" aria-labelledby="window-label" data-ref="window">
+            <button type="button" role="radio" data-window="30">30 s</button>
+            <button type="button" role="radio" data-window="120" aria-checked="true">2 min</button>
+            <button type="button" role="radio" data-window="600">10 min</button>
+          </div>
+        </div>
+        <h3 class="panel-subtitle">Mutations</h3>
+        <p class="hint" data-ref="hint">Scripts that change the running system.</p>
+        <div class="mutations" data-ref="mutations"></div>
+      </section>
+    </template>
+
+    <template id="tb-systems">
+      <section class="card panel">
+        <h2 class="panel-title">Systems</h2>
+        <div class="systems" data-ref="list"></div>
+      </section>
+    </template>
+
+    <template id="tb-system-row">
+      <div class="system">
+        <div class="system-head">
+          <span class="system-name"></span>
+          <span class="system-rate"></span>
+        </div>
+        <dl class="system-facts">
+          <div><dt>Actors</dt><dd data-k="actors"></dd></div>
+          <div><dt>Runnable</dt><dd data-k="runnable"></dd></div>
+          <div><dt>Region</dt><dd data-k="region"></dd></div>
+          <div><dt>JS heap</dt><dd data-k="heap"></dd></div>
+        </dl>
+        <div class="meters">
+          <tb-meter label="Actors" data-k="m-actors"></tb-meter>
+          <tb-meter label="Events" data-k="m-events"></tb-meter>
+          <tb-meter label="Timers" data-k="m-timers"></tb-meter>
+          <tb-meter label="Workspaces" data-k="m-ws"></tb-meter>
+        </div>
+      </div>
+    </template>
+
+    <template id="tb-meter">
+      <div class="meter">
+        <div class="meter-head"><span class="meter-label"></span><span class="meter-value"></span></div>
+        <div class="meter-track"><div class="meter-fill"></div></div>
+      </div>
+    </template>
+
+    <template id="tb-log">
+      <section class="card panel">
+        <h2 class="panel-title">Log</h2>
+        <ol class="log" data-ref="list" aria-live="polite"></ol>
+      </section>
+    </template>
+
+    <template id="tb-service">
+      <section class="card panel service">
+        <div class="service-head">
+          <h2 class="panel-title" data-ref="title">Service</h2>
+          <tb-status data-ref="state" label="Checking" tone="neutral"></tb-status>
+        </div>
+        <p class="hint" data-ref="detail" hidden></p>
+        <dl class="system-facts service-facts">
+          <div><dt>Address</dt><dd data-ref="address">–</dd></div>
+          <div><dt>Server</dt><dd data-ref="version">–</dd></div>
+          <div><dt>Extension</dt><dd data-ref="extension">–</dd></div>
+        </dl>
+        <div class="service-actions" data-ref="actions">
+          <button class="btn primary" data-ref="start" type="button" hidden>Start</button>
+          <span class="hint service-how" data-ref="how" hidden>runs <code data-ref="command"></code></span>
+        </div>
+      </section>
+    </template>
+  </body>
+</html>

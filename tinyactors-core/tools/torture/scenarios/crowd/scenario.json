@@ -1,0 +1,51 @@
+{
+  "name": "crowd",
+  "title": "Crowd — 100,000 mostly idle actors",
+  "summary": "Ramps to 100,000 mostly idle actors while a Markov model learned from a recorded history pokes them; shows bytes per actor and growth by relocation.",
+  "description": "Ramps a null-datamodel system to 100k sensor actors while a Markov model learned from a recorded sensor history pokes random sensors. Each poke arms a delayed send, so the timer heap and event pool breathe with the load. Shows bytes per actor and growth by relocation.",
+  "duration": 40,
+  "systems": {
+    "crowd": {
+      "charts": [
+        "charts/sensor.scxml"
+      ],
+      "config": {
+        "maxActors": 1024,
+        "maxEvents": 4096,
+        "maxTimers": 1024,
+        "quantum": 200
+      }
+    }
+  },
+  "scripts": [
+    "scripts/ramp.js"
+  ],
+  "generators": [
+    "generators/history.js"
+  ],
+  "mutations": {
+    "spawn-10k": {
+      "title": "Spawn 10k sensors",
+      "script": "mutations/spawn-10k.js"
+    },
+    "poke-all": {
+      "title": "Poke every sensor",
+      "description": "One event to every actor at once (pool surge)",
+      "script": "mutations/poke-all.js"
+    },
+    "cull": {
+      "title": "Terminate a third",
+      "script": "mutations/cull.js"
+    }
+  },
+  "schedule": [
+    {
+      "at": 25,
+      "mutation": "poke-all"
+    }
+  ],
+  "expect": [
+    "totals.faults == 0",
+    "systems.crowd.timersFired > 0"
+  ]
+}

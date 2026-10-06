@@ -1,0 +1,18 @@
+# W3C IRP tests excluded from `mise run w3c:js` (the JavaScript bindings), one per line:
+#   <test id> <reason>
+# All mandatory tests run. The excluded optional tests need the BasicHTTP Event
+# I/O Processor (SCXML Appendix D.2), which the JS bindings do not register:
+# HTTP stays with the application (links carry SCXML events between systems).
+# The C runner (`mise run w3c:ecmascript`) covers them with a loopback host.
+201 BasicHTTP Event I/O Processor (optional, not in the JS bindings)
+509 BasicHTTP Event I/O Processor (optional, not in the JS bindings)
+510 BasicHTTP Event I/O Processor (optional, not in the JS bindings)
+518 BasicHTTP Event I/O Processor (optional, not in the JS bindings)
+519 BasicHTTP Event I/O Processor (optional, not in the JS bindings)
+520 BasicHTTP Event I/O Processor (optional, not in the JS bindings)
+522 BasicHTTP Event I/O Processor (optional, not in the JS bindings)
+531 BasicHTTP Event I/O Processor (optional, not in the JS bindings)
+532 BasicHTTP Event I/O Processor (optional, not in the JS bindings)
+534 BasicHTTP Event I/O Processor (optional, not in the JS bindings)
+567 BasicHTTP Event I/O Processor (optional, not in the JS bindings)
+577 BasicHTTP Event I/O Processor (optional, not in the JS bindings)

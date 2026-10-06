@@ -1,0 +1,51 @@
+<!-- delivery: ONE attempt to deliver ONE email. Every attempt is a new actor,
+     spawned by the campaign through the test runtime's system I/O processor;
+     retries are decided by the campaign, which gets the donedata as
+     done.spawn.<id>.
+
+     The idempotency key is per (campaign, recipient) — not per attempt — so
+     the mail processor turns retries and post-restart re-sends into no-ops
+     for as long as it remembers the key. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"
+       name="delivery" initial="sending">
+  <datamodel>
+    <!-- spawn params: { campaign, user, to, key, attempt, first, template } -->
+    <data id="job" expr="null"/>
+    <data id="timeoutMs" expr="15000"/>
+  </datamodel>
+
+  <state id="sending">
+    <onentry>
+      <send type="mail" event="mail.send" target="outbound">
+        <param name="key" expr="job.key"/>
+        <param name="to" expr="job.to"/>
+        <param name="template" expr="job.template"/>
+        <param name="attempt" expr="job.attempt"/>
+      </send>
+      <send event="timeout" delayexpr="timeoutMs + 'ms'" id="timeout"/>
+    </onentry>
+    <onexit><cancel sendid="timeout"/></onexit>
+
+    <!-- accepted (duplicate = the processor had already taken this key) -->
+    <transition event="mail.accepted" target="sent"/>
+    <transition event="mail.rejected" cond="_event.data.retryable" target="retryable"/>
+    <transition event="mail.rejected" target="failed"/>
+    <!-- the processor is unreachable: nothing was handed over -->
+    <transition event="error.communication" target="retryable"/>
+    <!-- no answer: it may or may not have been sent -->
+    <transition event="timeout" target="unknown"/>
+  </state>
+
+  <final id="sent">
+    <donedata><content expr="({ job: job, outcome: 'sent', duplicate: !!_event.data.duplicate })"/></donedata>
+  </final>
+  <final id="retryable">
+    <donedata><content expr="({ job: job, outcome: 'retry', reason: (_event.data &amp;&amp; _event.data.reason) || _event.name })"/></donedata>
+  </final>
+  <final id="failed">
+    <donedata><content expr="({ job: job, outcome: 'failed', reason: _event.data.reason })"/></donedata>
+  </final>
+  <final id="unknown">
+    <donedata><content expr="({ job: job, outcome: 'unknown', reason: 'timeout' })"/></donedata>
+  </final>
+</scxml>

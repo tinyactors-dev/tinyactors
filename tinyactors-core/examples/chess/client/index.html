@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chess · tinyactors</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="app.mjs"></script>
+  </head>
+  <body>
+    <chess-app></chess-app>
+
+    <template id="chess-app">
+      <header class="top">
+        <div class="brand"><span class="mark">♞</span> Chess <span class="sub">on tinyactors</span></div>
+        <link-status></link-status>
+      </header>
+
+      <main>
+        <section data-screen="lobby" class="card lobby">
+          <h1>Play a friend</h1>
+          <p class="lead">Open a game and share its code — or join one with a code you were given.</p>
+          <label class="field">Your name <input id="name" maxlength="24" autocomplete="nickname" /></label>
+          <div class="choices">
+            <div class="choice">
+              <h2>New game</h2>
+              <p>You play white and get a code to share.</p>
+              <button id="create" class="primary">Create game</button>
+            </div>
+            <form id="join-form" class="choice">
+              <h2>Join with a code</h2>
+              <input id="code" class="code-input" placeholder="ABCDE" maxlength="5" autocomplete="off" spellcheck="false" required />
+              <button class="secondary">Join</button>
+            </form>
+          </div>
+          <p id="busy" class="busy" hidden>Talking to the lobby…</p>
+        </section>
+
+        <section data-screen="waiting" class="card waiting" hidden>
+          <h1>Waiting for an opponent</h1>
+          <p class="lead">Tell them this code:</p>
+          <div id="the-code" class="big-code"></div>
+          <div class="share"><input id="share" readonly /><button id="copy" class="secondary">Copy link</button></div>
+          <p class="hint">The game starts as soon as someone joins.</p>
+        </section>
+
+        <section data-screen="game" class="game" hidden>
+          <chess-board></chess-board>
+          <aside class="card panel">
+            <div class="meta"><span>Game <b id="game-code"></b></span><span id="role"></span></div>
+            <div id="black-row" class="seat"><span class="dot black"></span><span id="black"></span></div>
+            <div id="white-row" class="seat"><span class="dot white"></span><span id="white"></span></div>
+            <p id="info" class="info"></p>
+            <p id="moves" class="hint"></p>
+            <p id="record" class="hint" hidden></p>
+            <div class="actions">
+              <button id="resign" class="secondary">Resign</button>
+              <button class="new-game primary" hidden>New game</button>
+            </div>
+          </aside>
+        </section>
+
+        <p id="error" class="error" hidden></p>
+      </main>
+
+      <footer class="foot">
+        Your player is an actor in this tab (WebAssembly); the lobby and the game are actors on the server, reached
+        through a link. <a href="/stats" target="_blank">server stats</a>
+      </footer>
+    </template>
+
+    <template id="link-status">
+      <style>
+        :host { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+          font: 500 13px/1 var(--font, system-ui); background: var(--chip, #eef0f3); color: var(--muted, #4b5563); }
+        .dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; }
+        :host([data-state='open']) .dot { background: #16a34a; box-shadow: 0 0 0 3px #16a34a33; }
+        :host([data-state='connecting']) .dot, :host([data-state='reconnecting']) .dot { background: #f59e0b; animation: pulse 1s infinite; }
+        :host([data-state='closed']) .dot { background: #dc2626; }
+        @keyframes pulse { 50% { opacity: 0.35; } }
+      </style>
+      <span class="dot"></span><span class="label">connecting</span>
+    </template>
+
+    <template id="chess-board">
+      <style>
+        :host { display: block; width: min(560px, 92vw); aspect-ratio: 1; }
+        .grid { display: grid; grid-template: repeat(8, 1fr) / repeat(8, 1fr); width: 100%; height: 100%;
+          border-radius: 10px; overflow: hidden; box-shadow: 0 10px 30px #0f172a26; }
+        .sq { position: relative; border: 0; padding: 0; margin: 0; display: grid; place-items: center; cursor: default;
+          font: inherit; }
+        :host([interactive]) .sq { cursor: pointer; }
+        .light { background: #eeeed2; } .dark { background: #769656; }
+        .last.light { background: #f6f669; } .last.dark { background: #baca2b; }
+        .selected { box-shadow: inset 0 0 0 4px #1d4ed8aa; }
+        .target::after { content: ''; width: 28%; height: 28%; border-radius: 50%; background: #0f172a33; }
+        .capture { box-shadow: inset 0 0 0 5px #0f172a40; }
+        .piece { font-size: min(9vw, 52px); line-height: 1; user-select: none; }
+        .piece.white { color: #fff; text-shadow: 0 0 1px #000, 0 1px 2px #000a, 0 0 0 #000; -webkit-text-stroke: 1px #1f2937; }
+        .piece.black { color: #111827; }
+        [data-rank]::before { content: attr(data-rank); position: absolute; left: 4px; top: 2px; font: 600 11px system-ui; opacity: 0.55; }
+        [data-file]::after { content: attr(data-file); position: absolute; right: 4px; bottom: 2px; font: 600 11px system-ui; opacity: 0.55; }
+      </style>
+      <div class="grid" role="grid" aria-label="chess board"></div>
+    </template>
+  </body>
+</html>

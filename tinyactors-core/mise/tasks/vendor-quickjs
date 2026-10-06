@@ -1,0 +1,57 @@
+#!/usr/bin/env ruby
+#MISE description="Vendor the pinned quickjs-ng release into third_party/quickjs-ng: the engine only (quickjs, libregexp, libunicode, dtoa and their headers), no quickjs-libc"
+# vim:ft=ruby
+
+# quickjs-ng publishes no source tarball asset, so this pins GitHub's tag
+# archive by its checksum. third_party/quickjs-ng/VERSION records both.
+
+require_relative '../core'
+require 'digest'
+require 'net/http'
+require 'rubygems/package'
+require 'stringio'
+require 'zlib'
+
+VERSION = 'v0.17.0'
+SHA256 = '559bc4c420475e55c7ab4510adbc562f55d7524d75e8e89d79ce4bb02f5687d9'
+URL = URI("https://github.com/quickjs-ng/quickjs/archive/refs/tags/#{VERSION}.tar.gz")
+FILES = %w[
+  LICENSE quickjs.c quickjs.h quickjs-atom.h quickjs-opcode.h quickjs-c-atomics.h libregexp.c libregexp.h
+  libregexp-opcode.h libunicode.c libunicode.h libunicode-table.h dtoa.c dtoa.h cutils.h list.h
+  builtin-array-fromasync.h builtin-iterator-zip.h builtin-iterator-zip-keyed.h
+].freeze
+DESTINATION = Core::ROOT.join('third_party/quickjs-ng')
+
+def download(uri, redirects = 5)
+  abort "too many redirects downloading #{URL}" if redirects.zero?
+  response = Net::HTTP.get_response(uri)
+  return response.body if response.is_a?(Net::HTTPSuccess)
+  return download(URI.join(uri, response['location']), redirects - 1) if response.is_a?(Net::HTTPRedirection)
+
+  abort "download failed: HTTP #{response.code} #{response.message}"
+end
+
+if DESTINATION.join('VERSION').file? && DESTINATION.join('VERSION').read == "#{VERSION}\n#{SHA256}\n"
+  puts "quickjs-ng #{VERSION} is already vendored"
+  exit
+end
+archive = download(URL)
+actual = Digest::SHA256.hexdigest(archive)
+abort "quickjs-ng archive checksum mismatch: expected #{SHA256}, got #{actual}" unless actual == SHA256
+
+contents = {}
+Zlib::GzipReader.wrap(StringIO.new(archive)) do |gzip|
+  Gem::Package::TarReader.new(gzip) do |tar|
+    tar.each do |entry|
+      name = entry.full_name.split('/', 2).last
+      contents[name] = entry.read if entry.file? && FILES.include?(name)
+    end
+  end
+end
+missing = FILES - contents.keys
+abort "quickjs-ng #{VERSION} lacks #{missing.join(', ')}" unless missing.empty?
+FileUtils.rm_rf(DESTINATION)
+FileUtils.mkdir_p(DESTINATION)
+contents.each { |name, bytes| DESTINATION.join(name).binwrite(bytes) }
+DESTINATION.join('VERSION').write("#{VERSION}\n#{SHA256}\n")
+puts "vendored quickjs-ng #{VERSION} (#{FILES.size} files) into #{DESTINATION.relative_path_from(Core::ROOT)}"

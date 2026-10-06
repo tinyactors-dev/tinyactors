@@ -1,12 +1,15 @@
 # Working in this repo
 
-**Layers.** Core decides what inputs mean; the host kernel
-(`tinyactors-host`) queues, records and replays them; a language binding
-(napi, the test host) owns values and their encoding; the application
-owns storage and policy. Before adding code, place it in the right layer:
+**Layers.** Core decides what inputs mean and runs actors in one block of
+memory; the host layer runs many systems as one; a language binding
+(`tinyactors-core/bindings/`) owns values and their encoding; the
+application owns storage and policy. Before adding code, place it in the
+right layer:
 [README.md, "Layers and responsibilities"](README.md#layers-and-responsibilities).
-Code free of any language's API belongs in the kernel, not in a binding,
-and core does not handle bytes it has no use for.
+Code free of any language's API belongs in a C layer, not in a binding,
+and core does not handle bytes it has no use for. `tinyactors-core/AGENTS.md`
+has the rules of the C layers themselves (freestanding layers, no pointers
+in system memory, no allocation after init).
 
 - use `mise run <task> <args>` for every task,
 - define tasks in ./mise/tasks/ as file tasks using `ruby` (version 4, provided by mise)
@@ -56,12 +59,12 @@ Do it at release time, not between releases.
 
   | You changed                         | These projects' tests run                |
   |-------------------------------------|------------------------------------------|
-  | `tinyactors-core` code or tests     | all of them                              |
-  | `tinyactors-otlp` (the OTLP encoder) | otlp, the test host, napi           |
-  | `tinyxml`, `tinyactors-scxml`       | that one, the scxml codec, test host, napi |
-  | `tinyactors-test`                   | test host, and napi when the IRP importer changed |
-  | `tinyactors-napi`                   | napi                                     |
+  | `tinyactors-core` (code, bindings, tests, tools) | core                  |
+  | `tinyxml`                           | tinyxml                                  |
   | root `mise/lib`, `mise.toml`        | all of them                              |
+
+  `tinyactors-scxml` and `tinyactors-otlp` are parked (README.md): no
+  test runs them until they are ported to the current core.
   | docs, READMEs, ADRs only            | none (the acronym check still runs)      |
 
   When you add a directory a project's tests read, add it to that
@@ -69,24 +72,23 @@ Do it at release time, not between releases.
 - **`mise run test --all`** runs every project's tests, changed or not.
 - **`mise run test:full`** runs everything, plus what the fast pass leaves
   out:
-  - the test host's exhaustive scenarios (below);
-  - `scale_test` up to four million actors (the fast pass stops at
-    200,000);
-  - napi's `scale.js` on Bun as well as Node, and up to a million actors;
+  - every torture chamber scenario (the fast pass runs one);
+  - the cross builds for each release target (`mise run check:cross`).
 
   Run it before a release, and before committing a change to core's
-  allocation, pause and resume, offload and paging, or trace-writing paths,
-  or to per-actor costs. Say in the commit message that it passed.
+  memory layout, scheduling, hibernation or migration, or to per-actor
+  costs. Say in the commit message that it passed.
 - **While iterating, run the narrowest thing that covers the change.** A
   whole suite keeps every CPU of a laptop busy for minutes; do not run one
   after each edit.
-  - one core test program: `tinyactors-core/build/<name>_test` after
-    `mise run build` in `tinyactors-core`; `mise run asan` there after
-    changing `src/`;
-  - test host scenarios: `mise run //tinyactors-test:scenarios -n
-    'PATTERN'` (matches `group: name`; `--fast` skips the exhaustive ones,
-    `--timings 10` lists the slowest, `--jobs N` limits the workers);
-  - one napi suite: `node tinyactors-napi/test/<suite>.js`, then `bun`;
+  - one core test program: `tinyactors-core/build/dev/bin/<name>` after
+    `mise run build` in `tinyactors-core` (the sanitizer build);
+  - one part of core's suite, as a task in `tinyactors-core`: `w3c`,
+    `node:test`, `web:test`, `conformance:js`, `w3c:js`, `examples:test`,
+    `torture:test`, `check:wasm`, `check:freestanding` (`mise tasks` lists
+    them);
+  - one Node.js binding suite: `node --test test/<suite>.test.js` in
+    `tinyactors-core/bindings/node`, after `mise run node:build`;
   - one project's whole suite: `mise run test` inside it.
 - Do not skip, weaken or delete a check to make the fast pass faster. Make
   it cheaper, or move it to the full pass as below.
@@ -101,40 +103,30 @@ A test is **fast** unless it is exhaustive. It is exhaustive when it
   hundreds of messages or steps; or
 - takes more than about five seconds on its own (`--timings` shows it).
 
-Mark a test host scenario, or a whole group, `exhaustive: true`:
-
-```ruby
-TinyactorsTest.scenarios 'running out of memory', exhaustive: true do ... end
-scenario 'every record is written once when an allocation fails', exhaustive: true do ... end
-```
-
-Anything else that is exhaustive (a benchmark-style population, a
-program-level sweep) runs in its task's `--full` mode: give the task a
+An exhaustive test runs in its task's `--full` mode: give the task a
 `#USAGE flag "--full"`, let `mise run test:full` pass it down, and keep the
-fast mode smaller, as `scale_test` does with `TAT_SCALE_MAX_POPULATION`.
+fast mode smaller, as core's `test` does with the torture chamber (one
+scenario in the fast pass, every scenario in the full one).
 
 When you make a test exhaustive, keep a small version of the same property
-in the fast pass, as the paging scenarios do: `20 actors, at most 3
-resident, 120 random messages` is fast, `100 actors, ..., 1000 random
-messages` is exhaustive. The fast pass must still exercise every behaviour;
-the full pass exercises it harder.
+in the fast pass. The fast pass must still exercise every behaviour; the
+full pass exercises it harder.
 
 ### Tests run in parallel
 
-Test host scenarios run one host process each, in a worker per CPU
-(`--jobs N` changes it). The test host's checks, napi's suites (on Node and
-Bun), core's test programs and its sanitizer builds also run side by side.
-So a test must not depend on another, on the order they run in, or on a
-fixed port or file path: listen on port 0, write to a temporary directory.
-A test that compares timings (`scale_test`, `scale.js`) runs alone; put a
-new one beside them, not in a parallel list.
+Core's test programs run side by side, one per CPU, each from its own
+directory under `build/dev/scratch/`, and node's test runner runs the
+binding suites in parallel. So a test must not depend on another, on the
+order they run in, or on a fixed port or file path: listen on port 0,
+write to a temporary directory. A test that compares timings runs alone,
+in a task of its own, not in a parallel list.
 
 ## The libraries are private: change APIs in place
 
-Every caller of every library in this repo is in this repo:
-`tinyactors-core`, `tinyxml`, `tinyactors-scxml`, the test host in
-`tinyactors-test`, and the addon in `tinyactors-napi`. Nothing is published,
-so no outside code depends on an API or ABI staying the same.
+Every caller of every library in this repo is in this repo: the C layers
+of `tinyactors-core`, its bindings (`bindings/node`, `bindings/web`,
+`bindings/postgres`), its tools and examples, and `tinyxml`. Nothing is
+published, so no outside code depends on an API or ABI staying the same.
 
 - **Change an API in place, and migrate every caller in the same change.**
   When a function needs a new parameter, a params struct or different
@@ -148,9 +140,9 @@ so no outside code depends on an API or ABI staying the same.
 - **Remove what nothing uses.** When a change leaves a function, type,
   field or result code unused, delete it in the same change.
 - **Another session's directory.** Callers can be in a directory another
-  session is working in at the same time, such as `tinyactors-napi` during
-  its rewrite. Change the call sites there too, keep the edit to those
-  lines, and say in your report which of its files you touched.
+  session is working in at the same time. Change the call sites there too,
+  keep the edit to those lines, and say in your report which of its files
+  you touched.
 
 ## Acronyms
 
@@ -211,20 +203,12 @@ the host it runs on. Both run in `mise run test`. Write new static checks
 of the build scripts as ast-grep rules, with a test, not as `grep` or a
 regular expression.
 
-## Desired API files
-
-`tinyactors-napi/index.d.ts` is the target, not the implementation; see its
-header. Never delete a declaration there because `lib/` lacks it: implement
-it, or mark it `// status: unimplemented` (or `// status: partial: <what is
-missing>`) on the line above it. `mise run check-api-status` checks the
-markers.
-
 ## Benchmarks
 
 Benchmark reports give throughput and memory together, name the machine
-signature, and compare builds side by side (`mise run bench-compare
-<commit>` in `tinyactors-napi`), never against numbers from another day or
-machine. See `tinyactors-napi/DEVELOPMENT.md` (Benchmarks).
+signature, and compare builds side by side, never against numbers from
+another day or machine. The torture chamber (`mise run torture` in
+`tinyactors-core`) measures both.
 
 ## Proposals are not instructions
 

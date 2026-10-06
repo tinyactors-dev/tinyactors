@@ -1,0 +1,34 @@
+<!-- session: the common "small state + timeout" actor with a realistic
+     profile. Mostly idle: the host hibernates it, and any event (a touch, its
+     timeout) brings it back. A touch with `reply` answers the bench, which
+     measures the latency of hot (resident) vs cold (hibernated) sessions. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"
+       name="session" initial="active">
+  <datamodel>
+    <data id="ids" expr="[]"/>
+    <data id="profile" expr="({ plan: 'free', locale: 'en', seats: 1, flags: {}, history: [] })"/>
+    <data id="idleMs" expr="600000"/>
+    <data id="touches" expr="0"/>
+    <data id="expirations" expr="0"/>
+  </datamodel>
+
+  <state id="active">
+    <onentry><send event="session.timeout" delayexpr="idleMs + 'ms'" id="idle"/></onentry>
+    <onexit><cancel sendid="idle"/></onexit>
+
+    <transition event="touch" target="active">
+      <assign location="touches" expr="touches + 1"/>
+      <if cond="_event.data &amp;&amp; ids.indexOf(_event.data.id) &lt; 0">
+        <assign location="ids" expr="ids.concat([_event.data.id]).slice(-16)"/>
+        <assign location="profile.history" expr="profile.history.concat([{ id: _event.data.id, n: touches }]).slice(-8)"/>
+      </if>
+      <if cond="_event.data &amp;&amp; _event.data.reply">
+        <send type="bench" event="touched"><param name="t" expr="_event.data.t"/><param name="cold" expr="_event.data.cold"/></send>
+      </if>
+    </transition>
+
+    <transition event="session.timeout" target="active">
+      <assign location="expirations" expr="expirations + 1"/>
+    </transition>
+  </state>
+</scxml>

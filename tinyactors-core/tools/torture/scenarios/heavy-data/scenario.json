@@ -1,0 +1,66 @@
+{
+  "name": "heavy-data",
+  "title": "Heavy data — large ECMAScript datamodels",
+  "summary": "Ledgers with 20k-entry catalogs and growing journals of schema-generated orders: large ECMAScript datamodels, <foreach>, bulk imports.",
+  "description": "Ledger actors each hold a 20k-entry catalog plus a growing journal of schema-generated orders (nested line items). Posting iterates line items with <foreach>; rebuilds walk the whole journal. Watch the JS heap, fuel per event and the effect of bulk imports.",
+  "duration": 30,
+  "systems": {
+    "ledgers": {
+      "charts": [
+        "charts/ledger.scxml"
+      ],
+      "config": {
+        "maxActors": 128,
+        "maxEvents": 16384,
+        "quantum": 2000,
+        "jsMemoryMB": 1536
+      }
+    }
+  },
+  "spawn": [
+    {
+      "system": "ledgers",
+      "chart": "ledger",
+      "count": 24,
+      "group": "ledgers"
+    }
+  ],
+  "generators": [
+    "generators/orders.js"
+  ],
+  "mutations": {
+    "bulk-import": {
+      "title": "Bulk import 2,000 orders",
+      "description": "A burst of large orders to every ledger",
+      "script": "mutations/bulk-import.js"
+    },
+    "rebuild": {
+      "title": "Rebuild all ledgers",
+      "description": "Each ledger re-aggregates its whole journal",
+      "script": "mutations/rebuild.js"
+    },
+    "compact": {
+      "title": "Compact journals",
+      "script": "mutations/compact.js"
+    }
+  },
+  "schedule": [
+    {
+      "at": 8,
+      "mutation": "bulk-import"
+    },
+    {
+      "at": 16,
+      "mutation": "rebuild"
+    },
+    {
+      "at": 24,
+      "mutation": "compact"
+    }
+  ],
+  "expect": [
+    "totals.faults == 0",
+    "systems.ledgers.jsHeap > 1000000",
+    "counters.posted > 0"
+  ]
+}

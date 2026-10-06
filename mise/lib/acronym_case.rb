@@ -29,11 +29,11 @@ module AcronymCase
   # says why.
   EXCLUDED = [
     %r{(\A|/)vendor/},                     # third-party sources we copy in
+    %r{(\A|/)third_party/},                # the same, where tinyactors-core keeps them
     %r{(\A|/)node_modules/},               # installed packages
     %r{(\A|/)build/},                      # build output
     %r{(\A|/)dist/},                       # release output
     %r{\A\.claude/},                       # agent worktrees and settings
-    %r{\Atinyactors-core/include/tinyactors\.c\z}, # generated from src/ (amalgamation)
     %r{(\A|/)docs/adr/},                   # ADRs are an append-only record
     %r{(\A|/)docs/research/},              # quotes other projects' names
     %r{\Amise/tasks/check-acronyms-test\z}, # the checker's own cases, wrong on purpose

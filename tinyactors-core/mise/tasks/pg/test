@@ -1,0 +1,8 @@
+#!/usr/bin/env ruby
+#MISE description="PostgreSQL binding: a throwaway server, the pg_regress suites, then the concurrency, durability and hardening tests"
+#MISE depends=["pg:build"]
+# vim:ft=ruby
+
+require_relative '../../core'
+
+Core.run('bash', 'test/run.sh', chdir: Core::ROOT.join('bindings/postgres'))

@@ -1,0 +1,20 @@
+<!-- A sensor: idle until poked or a reading arrives; readings above the
+     threshold (classified by the sender as "reading.high") raise an alarm
+     that clears on reset. Activity cools down after a delayed send. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="null"
+       name="sensor" initial="idle">
+  <state id="idle">
+    <transition event="poke reading" target="active"/>
+    <transition event="alarm" target="alarmed"/>
+  </state>
+  <state id="active">
+    <onentry><send event="cool" delay="250ms" id="cool"/></onentry>
+    <onexit><cancel sendid="cool"/></onexit>
+    <transition event="cool" target="idle"/>
+    <transition event="poke reading" target="active"/>
+    <transition event="alarm" target="alarmed"/>
+  </state>
+  <state id="alarmed">
+    <transition event="reset" target="idle"/>
+  </state>
+</scxml>

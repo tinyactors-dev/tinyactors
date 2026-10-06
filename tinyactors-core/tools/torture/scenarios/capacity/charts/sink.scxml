@@ -1,0 +1,4 @@
+<!-- ingress: receives events from the host. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="null" name="sink" initial="s">
+  <state id="s"><transition event="msg"/></state>
+</scxml>

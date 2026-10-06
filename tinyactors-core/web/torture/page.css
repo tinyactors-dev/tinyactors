@@ -1,0 +1,59 @@
+/* Document-level styles; components style themselves (components.css). */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+tb-app {
+  display: block;
+  min-height: 100vh;
+}
+
+/* Shown until the page's custom elements are defined (their shadow root then
+ * hides it): the header, styled by the render-blocking document styles. */
+.boot {
+  height: var(--header-h);
+  border-bottom: var(--border-width) solid var(--border);
+}
+.boot-inner {
+  max-width: var(--page-max);
+  height: 100%;
+  margin: 0 auto;
+  padding: 0 var(--space-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.boot-mark {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--accent);
+  box-shadow: 5px 5px 0 -1px color-mix(in srgb, var(--accent) 40%, transparent);
+  margin-right: var(--space-2);
+}
+.boot-divider {
+  color: var(--text-3);
+}
+.boot-title {
+  color: var(--text-3);
+  font-size: var(--text-lg);
+  line-height: var(--lh-lg);
+}

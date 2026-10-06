@@ -1,0 +1,18 @@
+<!-- Pings its peer (an SCXML session address handed over at spawn) and
+     counts pongs. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"
+       name="pinger" initial="pinging">
+  <datamodel>
+    <data id="peer" expr="''"/>
+    <data id="n" expr="0"/>
+  </datamodel>
+  <state id="pinging">
+    <onentry><send event="ping" targetexpr="peer"/></onentry>
+    <transition event="pong">
+      <assign location="n" expr="n + 1"/>
+      <send event="ping" targetexpr="peer"><param name="n" expr="n"/></send>
+    </transition>
+    <transition event="error.communication" target="lost"/>
+  </state>
+  <state id="lost"/>
+</scxml>

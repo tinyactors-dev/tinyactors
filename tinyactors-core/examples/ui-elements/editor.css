@@ -1,0 +1,69 @@
+:host { display: block; color: #23324a; font: 14px/1.5 var(--font, system-ui, sans-serif); }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+button, input, select { font: inherit; }
+button, select { cursor: pointer; }
+button { border: 1px solid #cbd5e1; border-radius: 6px; background: white; color: inherit; padding: 6px 12px; }
+button:hover { border-color: #2563eb; }
+button:disabled { cursor: wait; opacity: .6; }
+:focus-visible { outline: 2px solid #60a5fa; outline-offset: 3px; }
+.workbench { display: grid; grid-template-columns: minmax(0, 1fr) 350px; }
+.document { min-width: 0; background: #111c2d; color: #d9e4f5; border-radius: 12px 0 0 0; overflow: hidden; }
+.toolbar { min-height: 57px; display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: #1a293f; border-bottom: 1px solid #314159; }
+.filename { margin-right: auto; font: 13px ui-monospace, monospace; white-space: nowrap; }
+.file-dot, .live-dot { display: inline-block; width: 7px; height: 7px; background: #5ee1b7; border-radius: 50%; margin-right: 8px; }
+.toolbar label { font-size: 12px; color: #b8c7dc; display: flex; align-items: center; gap: 8px; }
+.keymap { padding: 4px 8px; color: #e6eefb; background: #253951; border: 1px solid #4b6080; border-radius: 5px; }
+.save-button { background: #376eec; border-color: #4a80fd; color: white; padding: 5px 16px; }
+.buffer { display: flex; height: 310px; }
+.line-numbers, textarea { margin: 0; padding: 22px 0; font: 14px/26px ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 2; }
+.line-numbers { width: 52px; flex: none; text-align: right; padding-right: 16px; color: #72849f; overflow: hidden; user-select: none; }
+textarea { flex: 1; width: 100%; min-width: 0; resize: none; border: 0; border-radius: 0; background: transparent; color: #e1eaf7; padding-right: 16px; caret-color: #7dd3fc; outline: none; }
+textarea:focus { box-shadow: inset 0 0 0 1px #3c5679; }
+textarea::selection { background: #386cb8; color: white; }
+.statusbar { min-height: 36px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 20px; background: #22344f; font: 11px/1.5 ui-monospace, monospace; }
+.mode-name { color: #8ebfff; letter-spacing: .08em; }
+.savebar, .recordbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 20px; font-size: 11px; color: #a7b8ce; }
+.savebar { border-bottom: 1px solid #2b3a50; }
+.save-status { color: #72dcb1; }
+.save-status[data-state="failed"] { color: #ff9e98; }
+.save-status[data-state="saving"], .save-status[data-state="dirty"] { color: #f5cf80; }
+.saved-revision { margin-left: auto; font-family: ui-monospace, monospace; }
+.fail-button { font-size: 11px; border-color: #465772; background: transparent; color: #b9c9df; padding: 4px 8px; }
+.fail-button[aria-pressed="true"] { background: #7d302f; border-color: #d57770; color: #fff; }
+.record-status { color: #c2b6ff; }
+.notice { margin-left: auto; }
+.inspector { padding: 18px; background: #f8fafc; border-left: 1px solid #dce4ed; border-radius: 0 12px 0 0; }
+.inspector-heading { display: flex; align-items: center; font-size: 10px; font-weight: 750; letter-spacing: .08em; margin-bottom: 15px; }
+.inspector-heading > span:last-child { margin-left: auto; font-size: 10px; font-weight: 400; letter-spacing: 0; color: #64748b; }
+.live-dot { background: #2563eb; width: 6px; height: 6px; }
+.region { display: block; width: 100%; margin: 0 0 10px; padding: 12px; background: #fff; border: 1px solid #dbe3ed; border-radius: 7px; text-align: left; }
+.region-title { display: flex; justify-content: space-between; gap: 8px; font-size: 9px; letter-spacing: .08em; color: #60728b; font-weight: 650; }
+.region-title span { font-weight: 400; letter-spacing: 0; }
+.region strong { display: block; margin-top: 6px; font: 13px/1.5 ui-monospace, monospace; }
+.region small { display: block; font-size: 10px; color: #64748b; margin-top: 6px; }
+.lights { display: flex; gap: 5px; margin-top: 9px; }
+.lights button { padding: 4px 7px; border: 0; background: #eef2f6; color: #64748b; font: 10px/1.5 ui-monospace, monospace; }
+.lights button[data-active="true"] { background: #2563eb; color: white; box-shadow: 0 0 0 2px #dce9ff; }
+.sequence-panel[data-pending="true"] { background: #edf4ff; border-color: #7ea7f1; }
+.timeout-track { display: block; height: 3px; background: #e8eef5; margin-top: 10px; overflow: hidden; border-radius: 2px; }
+.timeout { display: block; height: 100%; background: #3b82f6; transform-origin: left; transform: scaleX(0); }
+@keyframes deadline { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.region-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.inspect-hint { margin: 3px 0 0; font-size: 10px; color: #64748b; }
+.lab { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; padding: 23px 26px; border-top: 1px solid #dbe3ed; }
+.lab h2 { font-size: 14px; margin: 0 0 12px; color: #172b49; }
+.lab p { font-size: 12px; color: #63728a; margin: 8px 0; }
+.recipes p { display: flex; align-items: baseline; gap: 5px; }
+.recipes p > span { margin-left: 5px; }
+kbd { display: inline-block; color: #34496a; background: #f2f5f9; border: 1px solid #dce4ed; border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; white-space: nowrap; font: 11px/1.4 ui-monospace, monospace; }
+.binding-form { display: flex; gap: 8px; align-items: end; margin-top: 14px; }
+.binding-form label { flex: 1; font-size: 10px; font-weight: 600; }
+.binding { display: block; width: 100%; min-width: 0; margin-top: 4px; padding: 6px 9px; border: 1px solid #cbd5e1; border-radius: 5px; font: 12px/1.5 ui-monospace, monospace; color: #334155; }
+.apply { font-size: 11px; font-weight: 600; padding: 7px 12px; color: #2458bc; }
+.lab .migration { color: #2458bc; font-size: 11px; }
+.actor-id { display: block; font-size: 9px; color: #7b8aa0; overflow-wrap: anywhere; }
+:host(:not([debug])) .inspector { display: none; }
+:host(:not([debug])) .workbench { grid-template-columns: 1fr; }
+@media (max-width: 1000px) { .workbench { grid-template-columns: minmax(0, 1fr) 310px; } .toolbar { gap: 8px; padding: 12px; } .filename { font-size: 11px; } .savebar, .recordbar { padding: 10px 12px; } .notice { margin-left: 0; } }
+@media (max-width: 760px) { .workbench, .lab { grid-template-columns: 1fr; } .inspector { border-left: 0; border-radius: 0; } .document { border-radius: 12px 12px 0 0; } .buffer { height: 290px; } .lab { gap: 20px; padding: 20px; } .toolbar label { font-size: 0; } .keymap { font-size: 12px; } }

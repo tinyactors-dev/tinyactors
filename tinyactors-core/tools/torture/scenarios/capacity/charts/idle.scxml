@@ -1,0 +1,9 @@
+<!-- idle: an actor that exists and waits. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="null" name="idle" initial="waiting">
+  <state id="waiting">
+    <transition event="wake" target="awake"/>
+  </state>
+  <state id="awake">
+    <transition event="sleep" target="waiting"/>
+  </state>
+</scxml>

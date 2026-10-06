@@ -1,0 +1,13 @@
+#!/usr/bin/env ruby
+#MISE description="PostgreSQL binding: build the extension (PGXS) against the position-independent layers and install it into the pinned PostgreSQL 17"
+# vim:ft=ruby
+
+require_relative '../../core'
+
+LAYERS = %w[host system compile datamodel_ecmascript].freeze
+postgres = Core::ROOT.join('bindings/postgres')
+Core.run('mise', 'install', '--quiet', chdir: postgres)
+pg_config = Pathname.new(IO.popen(%w[mise where conda:postgresql], chdir: postgres.to_s, &:read).strip).join('bin/pg_config')
+Core.build_layers('addon', Core.link_order(LAYERS))
+Core.run('make', '-s', "PG_CONFIG=#{pg_config}", "CC=#{Toolchain::Target.host.compile_command.first}",
+         "TA_BUILD=#{Core.directory('addon').join('lib')}", 'install', chdir: postgres)

@@ -1,0 +1,7 @@
+# tinyactors: durable SCXML actors in PostgreSQL
+comment = 'Durable SCXML actors: charts and actors are rows, events commit with your transaction, effects go to an outbox'
+default_version = '0.1.0'
+module_pathname = '$libdir/tinyactors'
+relocatable = false
+schema = tinyactors
+superuser = false

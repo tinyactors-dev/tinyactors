@@ -1,0 +1,14 @@
+<!-- Invoke churn: a child that is done immediately, re-invoked forever. Every
+     cycle allocates and reclaims an actor and delivers done.invoke. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="null" name="churn" initial="spawning">
+  <state id="spawning">
+    <invoke id="child">
+      <content>
+        <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="null" initial="f">
+          <final id="f"/>
+        </scxml>
+      </content>
+    </invoke>
+    <transition event="done.invoke.child" target="spawning"/>
+  </state>
+</scxml>

@@ -1,0 +1,7 @@
+<!-- heartbeat: a delayed send to itself every second (one timer per actor). -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="null" name="heartbeat" initial="beating">
+  <state id="beating">
+    <onentry><send event="beat" delay="1s"/></onentry>
+    <transition event="beat" target="beating"/>
+  </state>
+</scxml>

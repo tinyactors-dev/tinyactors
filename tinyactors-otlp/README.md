@@ -1,5 +1,10 @@
 # tinyactors-otlp: core's trace records as OTLP
 
+> **Parked.** This project builds against the earlier core (tag
+> `ring-proto-final`), which [ADR 0004](../docs/adr/0004-replace-the-core-with-the-standalone-runtime.md)
+> replaced. Nothing builds or tests it until it is ported to the current
+> `tinyactors-core`; the [ROADMAP](../ROADMAP.md) says how.
+
 A small C library that reads core's `tel` ring and encodes what it reads
 as OTLP protobuf: spans in one `ExportTraceServiceRequest` (`/v1/traces`)
 and log records in one `ExportLogsServiceRequest` (`/v1/logs`). It sends

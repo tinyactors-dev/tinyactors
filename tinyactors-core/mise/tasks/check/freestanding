@@ -1,0 +1,37 @@
+#!/usr/bin/env ruby
+#MISE description="Prove the freestanding layers need no C library, no malloc and no OS: compile them for wasm32, x86_64, Cortex-M0+ and RISC-V without the C library's headers, and link the wasm32 image with nothing left undefined"
+# vim:ft=ruby
+
+# Only the compiler's own headers (stdint.h, stddef.h) are visible, so a
+# hidden dependency (printf, malloc, abort, clock_gettime, ...) fails the
+# compile, or the link of the wasm32 image, which allows nothing undefined.
+
+require_relative '../../core'
+
+LAYERS = Core::LAYERS.values.select(&:freestanding).freeze
+# zig's target, its extra flags, and whether to link an image.
+TARGETS = [
+  ['wasm32-freestanding', %w[-mbulk-memory], true],
+  ['x86_64-freestanding', [], false],
+  ['thumb-freestanding-eabi', %w[-mcpu=cortex_m0plus], false],
+  ['riscv32-freestanding', [], false]
+].freeze
+FLAGS = %w[-std=c11 -Os -ffreestanding -nostdlibinc -fno-builtin-malloc -Wall -Wextra -Werror -Iinclude -Isrc].freeze
+
+sources = LAYERS.flat_map(&:sources)
+TARGETS.each do |triple, extra, link|
+  target = Toolchain::Target.zig(triple)
+  objects = Core.directory('freestanding').join(triple)
+  command = target.compile_command(*FLAGS, *extra)
+  outputs = sources.map do |source|
+    object = objects.join("#{File.basename(source, '.c')}.o")
+    Core.compile(command, source, object)
+    object.to_s
+  end
+  # Nothing is collected, so every reference must resolve.
+  if link
+    target.program(outputs, into: objects.join('image.wasm').to_s,
+                            flags: [*extra, '-nostdlib', '-Wl,--no-entry', '-rdynamic', '-Wl,--no-gc-sections'])
+  end
+  puts "ok   #{triple}: #{sources.size} files (#{LAYERS.map(&:name).join(', ')})#{link ? ', linked' : ''}"
+end

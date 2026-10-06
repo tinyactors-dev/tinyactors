@@ -1,0 +1,26 @@
+<!-- billing: an account that approves charges while the balance lasts and
+     answers whoever asked (_event.origin is a session in another system). -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"
+       name="account" initial="open">
+  <datamodel>
+    <data id="balance" expr="1000000"/>
+    <data id="charges" expr="0"/>
+  </datamodel>
+  <state id="open">
+    <transition event="charge" cond="_event.data.amount &lt;= balance">
+      <assign location="balance" expr="balance - _event.data.amount"/>
+      <assign location="charges" expr="charges + 1"/>
+      <send event="charged" targetexpr="_event.origin">
+        <param name="order" expr="_event.data.order"/>
+      </send>
+    </transition>
+    <transition event="charge">
+      <send event="declined" targetexpr="_event.origin">
+        <param name="order" expr="_event.data.order"/>
+      </send>
+    </transition>
+    <transition event="topup">
+      <assign location="balance" expr="balance + _event.data.amount"/>
+    </transition>
+  </state>
+</scxml>

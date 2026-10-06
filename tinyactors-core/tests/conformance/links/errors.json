@@ -1,0 +1,209 @@
+{
+  "name": "links: refusals come back as err",
+  "description": "An untrusted peer: events not exported, names nobody has, forged origins, malformed targets and too many hops are each answered with an `err` naming the msgid, sendid, origin and reason. Nothing is delivered.",
+  "system": "srv",
+  "serve": {
+    "exports": {
+      "echo": "ping"
+    },
+    "resumeMs": 0
+  },
+  "documents": {
+    "echo.scxml": [
+      "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" version=\"1.0\" datamodel=\"ecmascript\" name=\"echo\" initial=\"s\">",
+      "  <state id=\"s\">",
+      "    <transition event=\"ping\">",
+      "      <log expr=\"'ping ' + _event.data.n\"/>",
+      "      <send event=\"pong\" targetexpr=\"_event.origin\"><param name=\"n\" expr=\"_event.data.n\"/></send>",
+      "    </transition>",
+      "    <transition event=\"later\">",
+      "      <send event=\"pong\" targetexpr=\"_event.origin\" delay=\"100ms\"><param name=\"n\" expr=\"_event.data.n\"/></send>",
+      "    </transition>",
+      "    <transition event=\"error.communication\"><log expr=\"'lost ' + _event.sendid\"/></transition>",
+      "  </state>",
+      "</scxml>"
+    ]
+  },
+  "spawn": [
+    {
+      "doc": "echo.scxml",
+      "as": "echo"
+    },
+    {
+      "doc": "echo.scxml",
+      "as": "private"
+    }
+  ],
+  "transcript": [
+    {
+      "in": {
+        "t": "hello",
+        "v": 1,
+        "id": "tab",
+        "reach": [],
+        "caps": {
+          "profile": "neutral"
+        }
+      }
+    },
+    {
+      "out": {
+        "t": "hello",
+        "v": 1,
+        "id": "srv",
+        "reach": []
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "tinyactors://srv/@echo",
+        "name": "later",
+        "data": {
+          "n": 1
+        },
+        "origin": "tinyactors://tab/#_scxml_7",
+        "msgid": "m1",
+        "hops": 0,
+        "sendid": "s1"
+      }
+    },
+    {
+      "out": {
+        "t": "err",
+        "msgid": "m1",
+        "sendid": "s1",
+        "origin": "tinyactors://tab/#_scxml_7",
+        "reason": "denied"
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "tinyactors://srv/@private",
+        "name": "ping",
+        "data": {
+          "n": 2
+        },
+        "origin": "tinyactors://tab/#_scxml_7",
+        "msgid": "m2",
+        "hops": 0
+      }
+    },
+    {
+      "out": {
+        "t": "err",
+        "msgid": "m2",
+        "origin": "tinyactors://tab/#_scxml_7",
+        "reason": "denied"
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "tinyactors://srv/@echo",
+        "name": "ping",
+        "data": {
+          "n": 3
+        },
+        "origin": "tinyactors://db/#_scxml_1",
+        "msgid": "m3",
+        "hops": 0
+      }
+    },
+    {
+      "out": {
+        "t": "err",
+        "msgid": "m3",
+        "origin": "tinyactors://db/#_scxml_1",
+        "reason": "denied"
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "tinyactors://srv/#_scxml_999999",
+        "name": "ping",
+        "data": {
+          "n": 4
+        },
+        "origin": "tinyactors://tab/#_scxml_7",
+        "msgid": "m4",
+        "hops": 0
+      }
+    },
+    {
+      "out": {
+        "t": "err",
+        "msgid": "m4",
+        "reason": "~^(denied|unknown-target)$"
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "not an address",
+        "name": "ping",
+        "data": {
+          "n": 5
+        },
+        "origin": "tinyactors://tab/#_scxml_7",
+        "msgid": "m5",
+        "hops": 0
+      }
+    },
+    {
+      "out": {
+        "t": "err",
+        "msgid": "m5",
+        "reason": "malformed"
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "tinyactors://srv/@echo",
+        "name": "ping",
+        "data": {
+          "n": 6
+        },
+        "origin": "tinyactors://tab/#_scxml_7",
+        "msgid": "m6",
+        "hops": 9
+      }
+    },
+    {
+      "out": {
+        "t": "err",
+        "msgid": "m6",
+        "reason": "hops"
+      }
+    },
+    {
+      "in": {
+        "t": "ev",
+        "target": "tinyactors://elsewhere/@x",
+        "name": "ping",
+        "data": {
+          "n": 7
+        },
+        "origin": "tinyactors://tab/#_scxml_7",
+        "msgid": "m7",
+        "hops": 0
+      }
+    },
+    {
+      "out": {
+        "t": "err",
+        "msgid": "m7",
+        "reason": "denied"
+      }
+    },
+    {
+      "expect": {
+        "logs": [],
+        "silent": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "tinyactors-web",
+  "version": "0.1.0",
+  "description": "xstate-style state machines and actors on the tinyactors SCXML runtime compiled to WebAssembly (browsers, Node.js); same API as the Node.js binding",
+  "type": "module",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "node": "./node.mjs",
+      "default": "./index.mjs"
+    }
+  },
+  "files": [
+    "index.mjs",
+    "node.mjs",
+    "native.mjs",
+    "index.d.ts",
+    "tinyactors.wasm",
+    "src/glue.c"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  }
+}

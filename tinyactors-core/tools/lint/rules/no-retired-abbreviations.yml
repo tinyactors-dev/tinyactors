@@ -1,0 +1,63 @@
+# The naming lint (docs/layout.md, "Naming"): a name declared in our C code —
+# function, parameter, local, global, field, type, struct/enum tag, enum
+# constant or macro — must not use a retired abbreviation as one of its
+# `_`-separated words (either case, with or without trailing digits: trans0),
+# nor the n_<things> count form, nor the old W/Wt bitset widths. Spell the
+# word out instead (len -> length, dm -> datamodel, n_states -> state_count,
+# ...). Retired words:
+#  dm dms es fx fxf fxs sys act inst insts sess ev evs evf evin evtype ename enames evname evnode
+#  evnodes ir imgv sec secs aot op ws wlay ilay iw fe sref bs bsword iq heap4 smap vec cb cpending
+#  cdiag carena cutil err errs comm diag diags addr expr exprs cond hist ext env sysvars ioproc
+#  ioprocs basichttp pg tb desc decl decls src doc docs gen gens rtt len cap pos buf tmp val vals
+#  fmt fn fns eq cstr mem fini st stf trf tgt ctx cfg img imgs hdr mb efx pay runq wsq wakeq hwm
+#  cls dflt hdflt rel off idx msg seg segs cx ch trans
+# Names we do not choose are exempt: the N-API subset mirrored in
+# bindings/web/src/node_api.h (napi_*), PostgreSQL's _PG_init and the POSIX
+# MSG_NOSIGNAL fallback. Uses of other libraries' names are never checked,
+# only declarations. Run with `mise run lint` (part of `mise run ci` and of
+# the completion gate, tools/check_layers.py).
+id: no-retired-abbreviations
+language: c
+severity: error
+message: "`$NAME` uses a retired abbreviation; spell the word out (docs/layout.md, Naming)"
+ignores:
+  - third_party/**
+utils:
+  retired:
+    regex: '^(n_.*|W|Wt|(.*_)?(dm|dms|es|fx|fxf|fxs|sys|act|inst|insts|sess|ev|evs|evf|evin|evtype|ename|enames|evname|evnode|evnodes|ir|imgv|sec|secs|aot|op|ws|wlay|ilay|iw|fe|sref|bs|bsword|iq|heap4|smap|vec|cb|cpending|cdiag|carena|cutil|err|errs|comm|diag|diags|addr|expr|exprs|cond|hist|ext|env|sysvars|ioproc|ioprocs|basichttp|pg|tb|desc|decl|decls|src|doc|docs|gen|gens|rtt|len|cap|pos|buf|tmp|val|vals|fmt|fn|fns|eq|cstr|mem|fini|st|stf|trf|tgt|ctx|cfg|img|imgs|hdr|mb|efx|pay|runq|wsq|wakeq|hwm|cls|dflt|hdflt|rel|off|idx|msg|seg|segs|cx|ch|trans)[0-9]*(_.*)?|(.*_)?(DM|DMS|ES|FX|FXF|FXS|SYS|ACT|INST|INSTS|SESS|EV|EVS|EVF|EVIN|EVTYPE|ENAME|ENAMES|EVNAME|EVNODE|EVNODES|IR|IMGV|SEC|SECS|AOT|OP|WS|WLAY|ILAY|IW|FE|SREF|BS|BSWORD|IQ|HEAP4|SMAP|VEC|CB|CPENDING|CDIAG|CARENA|CUTIL|ERR|ERRS|COMM|DIAG|DIAGS|ADDR|EXPR|EXPRS|COND|HIST|EXT|ENV|SYSVARS|IOPROC|IOPROCS|BASICHTTP|PG|TB|DESC|DECL|DECLS|SRC|DOC|DOCS|GEN|GENS|RTT|LEN|CAP|POS|BUF|TMP|VAL|VALS|FMT|FN|FNS|EQ|CSTR|MEM|FINI|ST|STF|TRF|TGT|CTX|CFG|IMG|IMGS|HDR|MB|EFX|PAY|RUNQ|WSQ|WAKEQ|HWM|CLS|DFLT|HDFLT|REL|OFF|IDX|MSG|SEG|SEGS|CX|CH|TRANS)[0-9]*(_.*)?)$'
+  exempt:
+    regex: '^(napi_.*|_PG_init|MSG_NOSIGNAL)$'
+rule:
+  pattern: $NAME
+  not:
+    matches: exempt
+  any:
+    - kind: identifier
+      matches: retired
+      any:
+        - inside: {kind: function_declarator, field: declarator}
+        - inside: {kind: parameter_declaration, field: declarator}
+        - inside: {kind: init_declarator, field: declarator}
+        - inside: {kind: declaration, field: declarator}
+        - inside: {kind: pointer_declarator, field: declarator}
+        - inside: {kind: array_declarator, field: declarator}
+        - inside: {kind: parenthesized_declarator}
+        - inside: {kind: enumerator, field: name}
+        - inside: {kind: preproc_def, field: name}
+        - inside: {kind: preproc_function_def, field: name}
+    - kind: field_identifier
+      matches: retired
+      any:
+        - inside: {kind: field_declaration, field: declarator}
+        - inside: {kind: pointer_declarator, field: declarator}
+        - inside: {kind: array_declarator, field: declarator}
+        - inside: {kind: function_declarator, field: declarator}
+        - inside: {kind: parenthesized_declarator}
+    - kind: type_identifier
+      matches: retired
+      any:
+        - inside: {kind: type_definition, field: declarator}
+        - inside: {kind: pointer_declarator, field: declarator}
+        - inside: {kind: struct_specifier, field: name}
+        - inside: {kind: enum_specifier, field: name}
+        - inside: {kind: union_specifier, field: name}

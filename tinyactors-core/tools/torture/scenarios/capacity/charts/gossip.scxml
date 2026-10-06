@@ -1,0 +1,18 @@
+<!-- gossip: about once a second, message a random peer by its SCXML session
+     address (ECMAScript datamodel; peers are handed over at spawn). -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="gossip" initial="live">
+  <datamodel>
+    <data id="peers" expr="[]"/>
+    <data id="heard" expr="0"/>
+  </datamodel>
+  <state id="live">
+    <onentry><send event="round" delayexpr="(500 + Math.floor(Math.random() * 1000)) + 'ms'"/></onentry>
+    <transition event="round" target="live">
+      <if cond="peers.length">
+        <send event="rumor" targetexpr="peers[Math.floor(Math.random() * peers.length)]"/>
+      </if>
+    </transition>
+    <transition event="rumor"><assign location="heard" expr="heard + 1"/></transition>
+    <transition event="error.communication"/>
+  </state>
+</scxml>

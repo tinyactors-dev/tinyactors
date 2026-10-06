@@ -1,0 +1,8 @@
+#!/usr/bin/env ruby
+#MISE description="Naming lint of the C sources: no declared identifier uses a retired abbreviation (ast-grep; rules in tools/lint/rules, their tests in tools/lint/tests)"
+# vim:ft=ruby
+
+require_relative '../core'
+
+Core.run('ast-grep', 'test')
+Core.run('ast-grep', 'scan')

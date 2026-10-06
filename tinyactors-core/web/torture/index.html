@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scenarios · Torture chamber</title>
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="page.css" />
+    <!-- the whole module graph and the components' stylesheet in one round trip -->
+    <script type="module" src="home.js"></script>
+    <link rel="modulepreload" href="service.js" />
+    <link rel="modulepreload" href="sheet.js" />
+    <link rel="preload" href="components.css" as="fetch" crossorigin />
+    <link rel="preload" href="/api/scenarios" as="fetch" crossorigin />
+  </head>
+  <body>
+    <tb-home>
+      <div class="boot">
+        <div class="boot-inner">
+          <span class="boot-mark" aria-hidden="true"></span>Torture chamber
+          <span class="boot-divider" aria-hidden="true">/</span>
+          <span class="boot-title">Scenarios</span>
+        </div>
+      </div>
+    </tb-home>
+
+    <!-- tb-home: the scenario catalog; each card opens the chamber for it -->
+    <template id="tb-home">
+      <header class="header">
+        <div class="header-inner">
+          <div class="brand">
+            <span class="mark" aria-hidden="true"></span>
+            <span class="brand-name">Torture chamber</span>
+            <span class="divider" aria-hidden="true">/</span>
+            <h1 class="scenario-title">Scenarios</h1>
+          </div>
+          <div class="header-meta">
+            <tb-status data-ref="status" label="Loading" tone="warn"></tb-status>
+          </div>
+        </div>
+      </header>
+      <main class="page">
+        <p class="description">
+          Each scenario is a set of charts, scripts that change the running system, and generators of
+          schema- and history-based events. Opening one starts it on this bench and shows its live
+          time series.
+        </p>
+        <section class="services" data-ref="services" aria-label="Services" hidden>
+          <tb-service data-ref="postgres"></tb-service>
+        </section>
+        <section class="cards" data-ref="cards" aria-label="Scenarios"></section>
+        <p class="hint" data-ref="error" hidden></p>
+      </main>
+    </template>
+
+    <template id="tb-status">
+      <span class="pill"><span class="dot"></span><span class="pill-label"></span></span>
+    </template>
+
+    <template id="tb-scenario-card">
+      <a class="card scenario-card" data-ref="link">
+        <div class="scenario-card-head">
+          <h2 class="scenario-card-title" data-ref="title"></h2>
+          <tb-status data-ref="state" hidden></tb-status>
+        </div>
+        <p class="scenario-card-subtitle" data-ref="subtitle"></p>
+        <p class="scenario-card-summary" data-ref="summary"></p>
+        <ul class="chips" data-ref="chips"></ul>
+        <span class="scenario-card-open" aria-hidden="true">Open →</span>
+      </a>
+    </template>
+
+    <template id="tb-service">
+      <section class="card panel service">
+        <div class="service-head">
+          <h2 class="panel-title" data-ref="title">Service</h2>
+          <tb-status data-ref="state" label="Checking" tone="neutral"></tb-status>
+        </div>
+        <p class="hint" data-ref="detail" hidden></p>
+        <dl class="system-facts service-facts">
+          <div><dt>Address</dt><dd data-ref="address">–</dd></div>
+          <div><dt>Server</dt><dd data-ref="version">–</dd></div>
+          <div><dt>Extension</dt><dd data-ref="extension">–</dd></div>
+        </dl>
+        <div class="service-actions" data-ref="actions">
+          <button class="btn primary" data-ref="start" type="button" hidden>Start</button>
+          <span class="hint service-how" data-ref="how" hidden>runs <code data-ref="command"></code></span>
+        </div>
+      </section>
+    </template>
+  </body>
+</html>

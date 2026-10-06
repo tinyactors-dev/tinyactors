@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+#MISE description="Torture chamber with the live dashboard (release build): the scenario home page, or `mise run torture <scenario>` to start one"
+#USAGE arg "[scenario]" help="A directory of tools/torture/scenarios to start at once"
+# vim:ft=ruby
+
+require_relative '../../core'
+
+program = Core::TOOLS.find { |tool| tool.name == 'torture-bench' }
+Core.build_layers('release', Core.link_order(program.uses))
+Core.build_program('release', program)
+bench = Core.program_path('release', 'torture-bench').to_s
+scenario = ENV['usage_scenario'].to_s.empty? ? ARGV.first.to_s : ENV['usage_scenario']
+scenarios = Core::ROOT.join('tools/torture/scenarios')
+exec(bench, scenarios.join(scenario).to_s) unless scenario.empty?
+exec(bench, '--scenarios', scenarios.to_s)

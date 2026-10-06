@@ -1,0 +1,24 @@
+#!/usr/bin/env ruby
+#MISE description="Cross-compile every layer for each native release target (Linux and macOS, x86_64 and arm64) with the pinned zig, and archive it"
+# vim:ft=ruby
+
+# What runs here is tested by `mise run test`; this proves the same sources
+# build, with -Werror, for the machines a release ships to
+# (Toolchain::Target.native_releases).
+
+require_relative '../../core'
+
+Core.in_parallel(Toolchain::Target.native_releases) do |target|
+  objects = Core::LAYERS.values.flat_map do |layer|
+    flags = layer.flags || [*Core::WARNINGS, *Core::C_WARNINGS]
+    flags = [*flags, *Core::FREESTANDING] if layer.freestanding
+    command = target.compile_command(*flags, *Core::INCLUDES)
+    layer.sources.map do |source|
+      object = Core.directory('cross').join(target.name, layer.name, "#{File.basename(source, '.c')}.o")
+      Core.compile(command, source, object)
+      object.to_s
+    end
+  end
+  target.archive(objects, into: Core.directory('cross').join(target.name, 'libtinyactors.a').to_s)
+  puts "ok   #{target.name}: #{objects.size} objects"
+end

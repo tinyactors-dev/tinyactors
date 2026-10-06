@@ -16,9 +16,7 @@ all = full || ENV['usage_all'] == 'true' || ARGV.include?('--all')
 # the projects it builds against (`#MISE sources` in its task file). mise
 # skips a task whose sources did not change since it last passed, so only
 # the projects a change can affect run; --all and --full force every one.
-# The order follows the dependencies: core first, then what builds on it.
 flags = ->(*extra) { [*(all ? ['--force'] : []), 'test', *extra] }
-full_flag = full ? ['--full'] : []
 steps = [
   ['acronyms', %w[mise run check-acronyms-test], root],
   ['acronyms', %w[mise run check-acronyms], root],
@@ -29,15 +27,13 @@ steps = [
   ['portability', ['mise', 'run', *(all ? ['--force'] : []), 'check-portability'], root],
   ['toolchain', ['mise', 'run', *(all ? ['--force'] : []), 'toolchain-test'], root],
   ['build', %w[mise run build], root],
-  ['core', ['mise', 'run', *flags.call], root.join('tinyactors-core')],
-  ['otlp', ['mise', 'run', *flags.call], root.join('tinyactors-otlp')],
-  ['tinyxml', ['mise', 'run', *flags.call], root.join('tinyxml')],
-  ['scxml codec', ['mise', 'run', *flags.call], root.join('tinyactors-scxml')],
-  # --full: the exhaustive scenarios, and scale_test up to four million actors.
-  ['test host', ['mise', 'run', *flags.call(*full_flag)], root.join('tinyactors-test')],
-  # --full: scale.js on Bun too, and up to a million actors.
-  # TODO: re-enable when bringing back napi: 
-  # ['napi', ['mise', 'run', *flags.call(*full_flag)], root.join('tinyactors-napi')]
+  # The sanitizer build of every test program, the bindings, conformance and
+  # the W3C IRP suite on each, the examples, the freestanding and wasm builds.
+  # --full: every torture scenario and the cross builds.
+  ['core', ['mise', 'run', *flags.call(*(full ? ['--full'] : []))], root.join('tinyactors-core')],
+  ['tinyxml', ['mise', 'run', *flags.call], root.join('tinyxml')]
+  # tinyactors-scxml and tinyactors-otlp are parked until they are ported to
+  # the current core (mise/tasks/build).
 ]
 
 clock = -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }

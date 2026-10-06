@@ -68,6 +68,16 @@ module Toolchain
     # The release targets that build a native shared library or addon.
     def self.native_releases = releases.reject(&:wasm?)
 
+    # A target of the pinned `zig cc` that is neither shipped nor this
+    # machine, by its zig triple: what a check builds for another machine
+    # (wasm32-wasi test programs run under wasmtime, freestanding objects
+    # for Cortex-M or RISC-V). Its flags are a release's.
+    def self.zig(triple)
+      wasm = triple.start_with?('wasm')
+      new(name: triple, triple: triple, os: wasm ? :wasm : :freestanding, arch: triple.split('-').first.to_sym,
+          format: wasm ? ObjectFormat::WASM : ObjectFormat::ELF, compiler: Zig.new)
+    end
+
     def self.check
       @check ||= new(name: 'check', triple: 'x86_64-unknown-linux-gnu', os: :linux, arch: :x86_64,
                      format: ObjectFormat::ELF, compiler: Clang.new(cross: true, flags: %w[-ffreestanding]))

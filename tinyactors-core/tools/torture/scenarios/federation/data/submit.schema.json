@@ -1,0 +1,11 @@
+{
+  "title": "Submitted order",
+  "type": "object",
+  "required": ["id", "amount", "currency"],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "amount": { "type": "number", "minimum": 1, "maximum": 400 },
+    "currency": { "enum": ["EUR", "USD", "GBP"], "x-weights": [5, 4, 1] },
+    "coupon": { "type": "string", "maxLength": 8 }
+  }
+}

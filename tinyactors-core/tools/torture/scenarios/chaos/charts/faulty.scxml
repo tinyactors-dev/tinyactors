@@ -1,0 +1,12 @@
+<!-- An error storm: every step throws (error.execution) and retries. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="faulty" initial="trying">
+  <datamodel><data id="errors" expr="0"/></datamodel>
+  <state id="trying">
+    <onentry>
+      <assign location="nope.deeper" expr="1"/>
+      <send event="retry" delay="1ms"/>
+    </onentry>
+    <transition event="error.execution"><assign location="errors" expr="errors + 1"/></transition>
+    <transition event="retry" target="trying"/>
+  </state>
+</scxml>

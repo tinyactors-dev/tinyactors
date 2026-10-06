@@ -1,0 +1,19 @@
+{
+  "name": "postgres",
+  "title": "PostgreSQL — durable actors under load",
+  "summary": "Bank accounts as durable actors in PostgreSQL: concurrent transfers from pgbench, money conserved at every sample, timers, an outbox, and a database restart in the middle.",
+  "description": "Runs on the PostgreSQL instance of the PostgreSQL binding (mise run pg:start; the page detects it live and offers to start it). 2,000 account actors live in tinyactors.actors. pgbench clients send transfer events; an account that can afford it debits itself and sends a deposit to the other account — an actor-to-actor event, processed in the same transaction when the receiver is free, otherwise left in its inbox (SKIP LOCKED) for tinyactors.run(). Two more pgbench processes are the application's workers, as a deployment would run them: a scheduler calling tinyactors.run() (due timers — every account files a statement every 5 s — and deferred deposits) and an audit worker draining the outbox with claim() and ack() (large transfers are reported to an audit service). Every second the bench only measures: one snapshot query checks that money is conserved — balances plus deposits still in inboxes — and one event's end-to-end latency is probed. A hot spot puts 3 accounts under heavy contention; a restart of PostgreSQL shows that nothing is lost: balances, queued deposits and timers survive. Tune with --param accounts, clients.",
+  "duration": 90,
+  "services": ["postgres"],
+  "scripts": ["scripts/postgres.js"],
+  "metrics": {},
+  "mutations": {
+    "hot-spot": { "title": "Hot spot (20 s)", "description": "8 more clients transfer between 3 accounts: their row locks serialize them, cascades skip them", "script": "mutations/hot-spot.js" },
+    "restart": { "title": "Restart PostgreSQL", "description": "A fast shutdown and start: committed balances, queued deposits and timers survive; the load resumes", "script": "mutations/restart.js" },
+    "pause": { "title": "Pause / resume the load", "script": "mutations/pause.js" }
+  },
+  "schedule": [
+    { "at": 25, "mutation": "hot-spot" },
+    { "at": 55, "mutation": "restart" }
+  ]
+}

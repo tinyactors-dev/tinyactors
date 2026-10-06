@@ -1,0 +1,8 @@
+<!-- Answers probes immediately; probe latency measures scheduling fairness. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="responder" initial="s">
+  <state id="s">
+    <transition event="probe">
+      <send type="bench" event="probe"><param name="t" expr="_event.data.t"/></send>
+    </transition>
+  </state>
+</scxml>

@@ -37,37 +37,36 @@ Under active development - breaking changes are made frequently to land on a goo
 
 ## Layers and responsibilities
 
-Tinyactors is built in four layers. Each has one job, and bytes and
-decisions do not pass through a layer that does not need them.
+Tinyactors is built in layers. Each has one job, and bytes and decisions do
+not pass through a layer that does not need them. The C layers are static
+libraries in `tinyactors-core/`, and each links only against the layers
+below it ([architecture](tinyactors-core/docs/architecture.md), section 1).
 
 | Layer | Its job, in one line | What it holds | Where |
 |---|---|---|---|
-| **Core** | Decides what an input *means*, and guarantees that the same inputs at the same times give the same state. | Statechart semantics: configuration, macrosteps, delayed sends, invocations; replaying actors, prepare and publish; the interfaces a host implements (data model, router, I/O processors, invokers, directory, allocator). No I/O, no threads, no queues, no log, no storage. | `tinyactors-core/` |
-| **Host kernel** | Decides how inputs are *queued, recorded and fed back*. | Everything a host that keeps actors in memory needs, free of any language's API: scheduling, mailboxes, the router, the directory, the turn logic, effects, feeding the OTLP encoder (`tinyactors-otlp/`, a library every binding links), and the write-ahead log (message identity, records, batches, wakes, the write-ahead hold, replay and checkpoint encoding). | `tinyactors-host/` (being extracted, see the [roadmap](ROADMAP.md)) |
-| **Language binding** | Decides how values *look* in its language and how they *become* bytes. | Value boxes; the data model and its durable codec (a data model encodes and decodes its own values); a pump driver on the language's event loop; the public API. | `tinyactors-napi/` (Node.js and Bun); the test host `tinyactors-test/` is a binding for testing |
-| **Application** | Decides where bytes *live*, and everything that is policy. | Storage for logs and checkpoints; eviction; loaders; several bindings sharing one system; deployment. | outside this repository |
+| **Core** (base, image, core, system) | Decides what an input *means*, and runs actors in one block of memory sized at creation. | Statechart semantics over an immutable compiled image; mailboxes, the run queue and timers in a shared event pool; the SCXML I/O processor; hibernation and live migration. Freestanding: no C library, no malloc, no I/O, no threads, no clock. | `tinyactors-core/src/{base,image,core,system}` |
+| **Compiler** | Turns SCXML documents into an image. | XML to SCXML to bytecode, validation and linking. Allocates through an allocator the caller gives it. | `tinyactors-core/src/compile` |
+| **Host** | Runs many systems as one. | Segments per image, routing between them, chart versions, migration jobs, the hibernation sweep, growth by relocation. Hosted (malloc). | `tinyactors-core/src/{host,runtime}` |
+| **Data models** | Evaluate expressions in a language. | The null data model in core; ECMAScript on quickjs-ng, linked like a tree-sitter language. | `tinyactors-core/src/datamodel_ecmascript` |
+| **Language binding** | Decides how values *look* in its language and how they *become* bytes. | Node.js (N-API), browsers and Node.js (WebAssembly), PostgreSQL; one JavaScript API over the first two. | `tinyactors-core/bindings/` |
+| **Application** | Decides where bytes *live*, and everything that is policy. | Storage for hibernated actors and snapshots; eviction; deployment. | outside this repository |
 
 Two rules follow from the table:
 
-- **A host adds what a language needs; the kernel adds what every host
-  needs.** Code free of any language's API goes in the kernel, so a second
-  binding does not copy it.
-- **Core does not see bytes it has no use for.** The host sits at the
-  input edge and already has every value, so it records inputs and encodes
-  them itself; core only guarantees that replaying the recorded inputs
-  rebuilds the state.
+- **Core never does I/O and never calls back with an effect.** Effects are
+  drained by the host (`ta_system_effects`); the only callbacks are the
+  data model and the allocator.
+- **Core does not see bytes it has no use for.** A payload is a handle the
+  data model owns; core passes it along without reading it.
 
 ## Repository layout
 
-- `tinyactors-core/` is the core: the freestanding-friendly C API and the
-  production interpreter.
-- `tinyactors-otlp/` is the OTLP encoder: a small C library that reads
-  core's `tel` ring and writes OTLP traces and logs.
-- `tinyactors-napi/` is the Node-API binding for Node.js 22 and Bun.
-- `tinyactors-test/` is the instrumentable JSON-RPC test host and its Ruby
-  driver: a binding that exercises core from scenarios.
-- `tinyactors-scxml/` is the SCXML codec, and `tinyxml/` the XML reader it
-  is built on.
+- `tinyactors-core/` is the runtime: the C layers above, its bindings
+  (`bindings/`), the torture chamber (`tools/torture/`), and examples.
+- `tinyxml/` is a freestanding XML reader and writer.
+- `tinyactors-scxml/` (an SCXML codec over tinyxml) and `tinyactors-otlp/`
+  (an OTLP encoder) are parked: they were written for the earlier core,
+  kept at the tag `ring-proto-final`, and wait to be ported to this one.
 - `docs/proposals/` holds outlines of possible future work, such as new
   hosts. They are not plans or decisions; see its README.
 - `docs/research/` holds background research that informed the designs,

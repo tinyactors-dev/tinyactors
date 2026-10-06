@@ -1,0 +1,6 @@
+# ast-grep project (invoke as `ast-grep`; in orbs `sg` is shadow-utils' group tool).
+# `mise run lint` scans the C sources with these rules and runs their tests.
+ruleDirs:
+  - tools/lint/rules
+testConfigs:
+  - testDir: tools/lint/tests

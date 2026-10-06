@@ -1,0 +1,102 @@
+id: no-retired-abbreviations
+snapshots:
+  '#define TA_ERR_NOMEM 3':
+    labels:
+    - source: TA_ERR_NOMEM
+      style: primary
+      start: 8
+      end: 20
+    - source: '#define TA_ERR_NOMEM 3'
+      style: secondary
+      start: 0
+      end: 22
+  enum { TA_FX_SEND = 1 };:
+    labels:
+    - source: TA_FX_SEND
+      style: primary
+      start: 7
+      end: 17
+    - source: TA_FX_SEND = 1
+      style: secondary
+      start: 7
+      end: 21
+  static int ws_get(void) { return 0; }:
+    labels:
+    - source: ws_get
+      style: primary
+      start: 11
+      end: 17
+    - source: ws_get(void)
+      style: secondary
+      start: 11
+      end: 23
+  static void f(char *buf) {}:
+    labels:
+    - source: buf
+      style: primary
+      start: 20
+      end: 23
+    - source: '*buf'
+      style: secondary
+      start: 19
+      end: 23
+  struct ta_instance_layout { uint32_t W; };:
+    labels:
+    - source: W
+      style: primary
+      start: 37
+      end: 38
+    - source: uint32_t W;
+      style: secondary
+      start: 28
+      end: 39
+  typedef struct es_inst es_inst;:
+    labels:
+    - source: es_inst
+      style: primary
+      start: 15
+      end: 22
+    - source: struct es_inst
+      style: secondary
+      start: 8
+      end: 22
+  typedef struct ta_chart_record { uint32_t trans0, transition_count; } ta_chart_record;:
+    labels:
+    - source: trans0
+      style: primary
+      start: 42
+      end: 48
+    - source: uint32_t trans0, transition_count;
+      style: secondary
+      start: 33
+      end: 67
+  typedef struct ta_queue { uint32_t n_items; } ta_queue;:
+    labels:
+    - source: n_items
+      style: primary
+      start: 35
+      end: 42
+    - source: uint32_t n_items;
+      style: secondary
+      start: 26
+      end: 43
+  typedef struct ta_x { uint32_t mb_head; } ta_x;:
+    labels:
+    - source: mb_head
+      style: primary
+      start: 31
+      end: 38
+    - source: uint32_t mb_head;
+      style: secondary
+      start: 22
+      end: 39
+  void g(void) { uint32_t len = 0; (void)len; }:
+    labels:
+    - source: len
+      style: primary
+      start: 24
+      end: 27
+    - source: len = 0
+      style: secondary
+      start: 24
+      end: 31

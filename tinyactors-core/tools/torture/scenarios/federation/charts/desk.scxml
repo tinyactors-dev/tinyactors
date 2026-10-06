@@ -1,0 +1,45 @@
+<!-- orders: takes orders from gateway sessions, charges a billing account,
+     and reports back to the session that placed the order. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"
+       name="desk" initial="taking">
+  <datamodel>
+    <data id="billing" expr="''"/>
+    <data id="pending" expr="({})"/>
+    <data id="open" expr="0"/>
+  </datamodel>
+  <state id="taking">
+    <transition event="order">
+      <script>pending[_event.data.id] = { from: _event.origin, t: _event.data.t };</script>
+      <assign location="open" expr="open + 1"/>
+      <send event="charge" targetexpr="billing" idlocation="lastSend">
+        <param name="order" expr="_event.data.id"/>
+        <param name="amount" expr="_event.data.amount"/>
+      </send>
+    </transition>
+    <transition event="charged declined" cond="pending[_event.data.order]">
+      <send eventexpr="_event.name === 'charged' ? 'confirmed' : 'rejected'"
+            targetexpr="pending[_event.data.order].from">
+        <param name="order" expr="_event.data.order"/>
+        <param name="t" expr="pending[_event.data.order].t"/>
+      </send>
+      <script>delete pending[_event.data.order];</script>
+      <assign location="open" expr="open - 1"/>
+    </transition>
+    <!-- billing unreachable: reject everything that is still pending -->
+    <transition event="error.communication">
+      <foreach array="Object.keys(pending)" item="k">
+        <send event="rejected" targetexpr="pending[k].from">
+          <param name="order" expr="k"/>
+          <param name="t" expr="pending[k].t"/>
+          <param name="reason" expr="'billing unreachable'"/>
+        </send>
+      </foreach>
+      <assign location="pending" expr="({})"/>
+      <assign location="open" expr="0"/>
+    </transition>
+    <transition event="rewire">
+      <assign location="billing" expr="_event.data.billing"/>
+    </transition>
+  </state>
+  <datamodel><data id="lastSend"/><data id="k"/></datamodel>
+</scxml>

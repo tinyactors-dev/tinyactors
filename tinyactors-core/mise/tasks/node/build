@@ -1,0 +1,29 @@
+#!/usr/bin/env ruby
+#MISE description="Build the Node.js binding's N-API addon (bindings/node/build/tinyactors.node) against the addon build of the layers"
+# vim:ft=ruby
+
+# The addon is a shared object the Node process loads, and Node provides
+# its N-API symbols; its headers ship with Node (include/node beside
+# bin/node). The layers it links are compiled position-independent
+# (Core::VARIANTS['addon']).
+
+require_relative '../../core'
+
+LAYERS = %w[host system compile].freeze
+node_include = Pathname.new(IO.popen(['node', '-p', 'process.execPath'], &:read).strip).join('../../include/node').expand_path
+abort "node:build: no node_api.h in #{node_include}" unless node_include.join('node_api.h').file?
+
+Core.build_layers('addon', Core.link_order(LAYERS))
+# NAPI_MODULE defines the addon's exported entry points without prototypes.
+command = [*Core.compile_command('addon'), '-Wno-missing-prototypes', '-isystem', node_include.to_s,
+           '-DNAPI_VERSION=8', '-DNODE_GYP_MODULE_NAME=tinyactors']
+objects = %w[bindings/node/src/addon.c bindings/shared/binding.c].map do |source|
+  object = Core.directory('addon').join('objects/node', "#{File.basename(source, '.c')}.o")
+  Core.compile(command, source, object)
+  object.to_s
+end
+target = Toolchain::Target.host
+archives = Core.link_order(LAYERS).map { |name| Core.archive_path('addon', name).to_s }
+addon = Core::ROOT.join('bindings/node/build/tinyactors.node')
+target.program([*objects, *archives], into: addon.to_s, flags: target.plugin_flags)
+puts "node:build: #{addon.relative_path_from(Core::ROOT)}"

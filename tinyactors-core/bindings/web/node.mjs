@@ -1,0 +1,35 @@
+/**
+ * The web binding in Node.js: the same wasm module and JavaScript API as in
+ * browsers, instantiated synchronously (so `require()` works) — used to run
+ * the binding test suite against the wasm backend, and for server-side use
+ * without a native addon. serveLinks() also accepts { server | port } and
+ * { tcp } here, createLink() { tcp }.
+ */
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { createRuntime } from '../shared/core.mjs';
+import { createNative } from './native.mjs';
+
+const bytes = readFileSync(new URL('./tinyactors.wasm', import.meta.url));
+const native = createNative((imports) => new WebAssembly.Instance(new WebAssembly.Module(bytes), imports));
+
+const api = createRuntime({
+  native,
+  platform: {
+    now: () => performance.now(),
+    defer: (fn) => setImmediate(fn),
+    cancelDefer: (h) => clearImmediate(h),
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (h) => clearTimeout(h),
+    log: (...args) => console.log(...args),
+  },
+});
+
+createRequire(import.meta.url)('../node/transports.js').withNodeTransports(api);
+
+export const {
+  createMachine, createActor, createSystem, fromSCXML, SCXMLLogic, compileSystem, loadImage, SystemImage, setup, assign, raise, sendTo, sendParent, log, cancel,
+  stateIn, and, or, not, StateMachine, Actor, System, ActorRef, createLink, serveLinks, encodeFrame, FrameDecoder,
+  createMemoryStore, encodeValue, decodeValue, parseAddress, formatAddress, encodeWire, decodeWire, createStoreLink,
+} = api;
+export default api;

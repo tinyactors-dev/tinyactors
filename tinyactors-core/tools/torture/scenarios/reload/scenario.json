@@ -1,0 +1,14 @@
+{
+  "name": "reload",
+  "title": "Reload — new chart versions while traffic flows",
+  "summary": "CGI-style hot reloading: new workers start on the newest chart version, old versions drain and are freed, and running workers migrate live with error.platform.upgrade.",
+  "description": "A router forwards a steady stream of numbered jobs to workers by SCXML address. Short-lived workers take a few jobs and finish; resident workers live forever and keep a delayed send to themselves (the timeout pattern). While the traffic flows, the worker chart is reloaded several times (bench.reload): each version is a new ta_system sharing the family's address and ECMAScript runtime, new workers start in the newest one, old versions drain as their workers finish and are freed. Shortly after each reload the residents migrate live (bench.migrate: export, translate states by id, adopt with the same session id) and receive error.platform.upgrade carrying their previous <datamodel> bindings — version 2 renames count to total and takes it over from there. Checks: no job lost or acknowledged twice, every worker's count continues across versions, the timeouts survive the move, and old versions are freed. Tune with --param residents, rate, lifetime, reloads; --param watch=1 reloads when you edit charts/worker-next.scxml.",
+  "duration": 30,
+  "scripts": ["scripts/reload.js"],
+  "mutations": {
+    "reload": { "title": "Reload the worker chart", "description": "Compile the next version; new workers start on it", "script": "mutations/reload.js" },
+    "migrate": { "title": "Migrate running workers", "description": "Move workers of older versions to the newest one (error.platform.upgrade)", "script": "mutations/migrate.js" },
+    "reload-migrate": { "title": "Reload and migrate", "script": "mutations/reload-migrate.js" }
+  },
+  "expect": ["totals.faults == 0", "counters.jobsAcked > 0"]
+}

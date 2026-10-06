@@ -1,0 +1,28 @@
+<!-- gateway: a client session that submits orders to its order desk (in the
+     orders system) and reports outcomes to the bench. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"
+       name="session" initial="active">
+  <datamodel>
+    <data id="desk" expr="''"/>
+    <data id="placed" expr="0"/>
+  </datamodel>
+  <state id="active">
+    <transition event="submit">
+      <assign location="placed" expr="placed + 1"/>
+      <send event="order" targetexpr="desk">
+        <param name="id" expr="_event.data.id"/>
+        <param name="amount" expr="_event.data.amount"/>
+        <param name="t" expr="_event.data.t"/>
+      </send>
+    </transition>
+    <transition event="confirmed">
+      <send type="bench" event="confirmed"><param name="t" expr="_event.data.t"/></send>
+    </transition>
+    <transition event="rejected">
+      <send type="bench" event="rejected"><param name="reason" expr="_event.data.reason"/></send>
+    </transition>
+    <transition event="error.communication">
+      <send type="bench" event="lost"/>
+    </transition>
+  </state>
+</scxml>
