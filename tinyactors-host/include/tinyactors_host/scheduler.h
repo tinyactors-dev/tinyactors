@@ -263,6 +263,13 @@ void tah_sched_init(tah_sched *sched, ta_allocator allocator, ta_allocator envel
  * ta_system_destroy().
  */
 void tah_sched_discard(tah_sched *sched);
+/*
+ * tah_sched_destroy frees the block's memory: the waiter and follow tables,
+ * the replaying set and both rings. It calls tah_sched_discard first, so it
+ * too must run while core is alive. The waiters' `host` values are the
+ * binding's: settle them (tah_sched_next_waiter) before. Idempotent; the
+ * block can be initialised again. Never allocates.
+ */
 void tah_sched_destroy(tah_sched *sched);
 
 /*
@@ -317,6 +324,12 @@ typedef struct {
     uint64_t dead_by_reason[TAH_DEAD_REASONS]; /* by tah_dead_reason */
     uint64_t faults[TAH_FAULT_CODES];          /* by -ta_result: only the runaway counter moves */
 } tah_sched_stats;
+/*
+ * tah_sched_read_stats fills `out` with the counters now. `queued` is read
+ * from core (its gauge of host inputs not yet decided) plus the verdicts this
+ * block still has to report, so `core` must be the system the block admits
+ * into. Never allocates; O(TAH_DEAD_REASONS + TAH_FAULT_CODES).
+ */
 void tah_sched_read_stats(const tah_sched *sched, const ta_system *core, tah_sched_stats *out);
 
 /*
@@ -328,6 +341,13 @@ void tah_sched_read_stats(const tah_sched *sched, const ta_system *core, tah_sch
 uint32_t tah_sched_waiter_take(tah_sched *sched);
 tah_waiter *tah_sched_waiter(const tah_sched *sched, uint32_t index);
 void tah_sched_waiter_give(tah_sched *sched, uint32_t index);
+/*
+ * tah_sched_settlement_pop takes the oldest settlement into `*out` and
+ * answers true, or answers false with `*out` untouched when none is waiting.
+ * The waiter it names stays SETTLING, and so reserved, until the binding has
+ * settled its promise and gives it back with tah_sched_waiter_give(). Never
+ * allocates; O(1).
+ */
 bool tah_sched_settlement_pop(tah_sched *sched, tah_settlement *out);
 /*
  * What a binding keeps with a waiter: its `host` (napi's promise), set
