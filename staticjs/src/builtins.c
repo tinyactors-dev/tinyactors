@@ -67,12 +67,12 @@ static const sjs_name NAMES[] = {
     NAME("bold", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("charAt", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("charCodeAt", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("clear", SJS_NAME_ON_SET | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_MUTATION("clear", SJS_NAME_ON_SET | SJS_NAME_MUTATING, SJS_METHOD_SET_CLEAR), /* MUTATION */
     NAME("codePointAt", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("concat", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_CONCAT, 0, 0),
     NAME("constructor", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
     NAME("copyWithin", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
-    NAME("delete", SJS_NAME_ON_SET | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_MUTATION("delete", SJS_NAME_ON_SET | SJS_NAME_MUTATING, SJS_METHOD_SET_DELETE), /* MUTATION */
     NAME("difference", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_DIFFERENCE),
     NAME("endsWith", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_ENDS_WITH, 0),
     NAME("entries", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET, 0, 0, 0),
@@ -1916,14 +1916,36 @@ static sjs_result array_fill(sjs_vm *vm, sjs_leaf_call *call) {
     return SJS_OK;
 }
 
+/* delete(value): whether the set had it, which it no longer has; an
+ * object is never a member, so it gives false. clear(): undefined, one
+ * unit for each member released. The set shrinks as it empties. */
+static sjs_result set_remove(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    sjs_array *set = SJS_AS_ARRAY(*call->receiver_slot);
+    if (id == SJS_METHOD_SET_CLEAR) {
+        call->cost = set->length;
+        sjs_set_clear(vm->context, &set);
+    } else {
+        sjs_removal removal = sjs_set_remove(vm->context, &set, arg(call, 0));
+        call->cost = removal.cost;
+        call->result = sjs_boolean(removal.removed);
+    }
+    call->receiver_slot->as.heap = &set->h;
+    return SJS_OK;
+}
+
 sjs_builtin_id sjs_mutation_named(const sjs_name *name) {
     return name == NULL ? SJS_BUILTIN_NONE : (sjs_builtin_id)name->mutation;
+}
+
+/* The kind of receiver a method that changes it is a method of. */
+static uint8_t mutation_kind(sjs_builtin_id id) {
+    return id == SJS_METHOD_SET_ADD || id == SJS_METHOD_SET_CLEAR || id == SJS_METHOD_SET_DELETE ? SJS_SET : SJS_ARRAY;
 }
 
 sjs_builtin_id sjs_mutation_of(const sjs_name *name, uint8_t kind) {
     sjs_builtin_id id = sjs_mutation_named(name);
     if (id == SJS_BUILTIN_NONE) return id;
-    return kind == (id == SJS_METHOD_SET_ADD ? SJS_SET : SJS_ARRAY) ? id : SJS_BUILTIN_NONE;
+    return kind == mutation_kind(id) ? id : SJS_BUILTIN_NONE;
 }
 
 bool sjs_mutation_returns_receiver(sjs_builtin_id id) {
@@ -1952,6 +1974,9 @@ sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
         call->cost = a->length;
         return SJS_OK;
     }
+    case SJS_METHOD_SET_CLEAR:
+    case SJS_METHOD_SET_DELETE:
+        return set_remove(vm, id, call);
     default: { /* SET_ADD: appends, as a set keeps insertion order */
         sjs_value x = arg(call, 0);
         if (!sjs_is_primitive(x)) return sjs_vm_fault(vm, "staticjs sets hold primitives only");
