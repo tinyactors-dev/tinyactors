@@ -6,6 +6,7 @@
 #include "tinyactors_host/events.h"
 #include "tinyactors_host/system.h"
 #include "allocator_private.h"
+#include "events_private.h"
 #include "recorder_private.h"
 #include "scheduler_private.h"
 #include "system_private.h"
@@ -181,39 +182,46 @@ static ta_str tah_recorder_reason(uint8_t kind) {
     }
 }
 
-/* An invocation ID's text in a stack buffer: empty when it has none or
- * is longer than the buffer. */
-static ta_str tah_recorder_invoke_id(const ta_system *core, ta_invoke_id invoke, char *buffer, uint32_t capacity) {
+/* The bytes an invocation ID's text takes, its NUL included: 0 when the
+ * system issued no such ID. */
+static uint32_t tah_recorder_invoke_id_bytes(const ta_system *core, ta_invoke_id invoke) {
     uint32_t needed = 0;
-    if (ta_system_invoke_id_format(core, &(ta_invoke_id_format_params){ .invoke = invoke, .buffer = buffer,
-                                                                         .capacity = capacity,
-                                                                         .needed = &needed }) != TA_OK) {
-        return (ta_str){ 0 };
-    }
-    return (ta_str){ .ptr = buffer, .len = needed - 1u };
+    ta_result result = ta_system_invoke_id_format(
+        core, &(ta_invoke_id_format_params){ .invoke = invoke, .buffer = NULL, .capacity = 0, .needed = &needed });
+    return result == TA_OK || result == TA_ERR_NOMEM ? needed : 0u;
 }
 
-/* An invocation's error report as the event the chart takes: error.communication.invoke.<id>.<reason>. */
+/* An invocation's error report as the event the chart takes:
+ * error.communication.invoke.<id>.<reason>, whatever the ID's length. */
 static ta_result tah_recorder_report_event(tah_system *system, const tah_envelope *envelope, ta_event *out) {
     static const char prefix[] = "error.communication.invoke.";
-    char id_text[256];
-    ta_str id = tah_recorder_invoke_id(system->core, envelope->event.invoke_id, id_text, sizeof id_text);
-    if (id.len == 0) {
+    uint32_t id_bytes = tah_recorder_invoke_id_bytes(system->core, envelope->event.invoke_id);
+    if (id_bytes <= 1u) {
         return TA_ERR_NOT_FOUND;
     }
     ta_str reason = tah_recorder_reason(envelope->report);
-    size_t length = sizeof prefix - 1u + id.len + 1u + reason.len;
-    char *text = tah_alloc(system->recorder.allocator, length, 1);
+    /* The ID is written in place; its NUL is where the '.' before the reason goes. */
+    size_t length = sizeof prefix - 1u + (id_bytes - 1u) + 1u + reason.len;
+    char *text = tah_alloc(system->recorder.allocator, length + 1u, 1);
     if (text == NULL) {
         return TA_ERR_NOMEM;
     }
     tah_mem_copy(text, prefix, sizeof prefix - 1u);
-    tah_mem_copy(text + sizeof prefix - 1u, id.ptr, id.len);
-    text[sizeof prefix - 1u + id.len] = '.';
-    tah_mem_copy(text + sizeof prefix + id.len, reason.ptr, reason.len);
+    uint32_t needed = 0;
+    ta_result formatted = ta_system_invoke_id_format(
+        system->core, &(ta_invoke_id_format_params){ .invoke = envelope->event.invoke_id,
+                                                     .buffer = text + sizeof prefix - 1u,
+                                                     .capacity = id_bytes,
+                                                     .needed = &needed });
+    if (formatted != TA_OK) {
+        tah_free(system->recorder.allocator, &(ta_allocator_free_params){ .ptr = text, .size = length + 1u, .alignment = 1 });
+        return formatted;
+    }
+    text[sizeof prefix - 1u + id_bytes - 1u] = '.';
+    tah_mem_copy(text + sizeof prefix - 1u + id_bytes, reason.ptr, reason.len);
     *out = (ta_event){ .type = TA_EVENT_PLATFORM, .invoke_id = envelope->event.invoke_id };
     ta_result result = tah_event_name_intern(system, (ta_str){ .ptr = text, .len = (uint32_t)length }, &out->name);
-    tah_free(system->recorder.allocator, &(ta_allocator_free_params){ .ptr = text, .size = length, .alignment = 1 });
+    tah_free(system->recorder.allocator, &(ta_allocator_free_params){ .ptr = text, .size = length + 1u, .alignment = 1 });
     if (result == TA_OK) {
         out->data = envelope->event.data;
         ta_value_retain(&out->data);
@@ -244,6 +252,14 @@ static void tah_recorder_taken(tah_system *system, const tah_sched_note *note) {
         }
     } else {
         ta_event_retain(note->message != NULL ? &note->message->event : note->event, &recorded.event);
+        if (note->message == NULL && note->name.len != 0u &&
+            tah_names_intern(&system->sched.names, note->name, &recorded.event.name) != TA_OK) {
+            /* The journal keeps names by the kernel's ID: mail the recorder
+             * keeps has its name interned now, and only that mail. */
+            ta_event_release(&recorded.event);
+            recorder->lost += 1u;
+            return;
+        }
     }
     ta_address_retain(address);
     if (tah_vec_push(&recorder->open, &recorded) != TA_OK) {
@@ -410,13 +426,18 @@ ta_result tah_recorder_texts(const tah_system *system, uint32_t index, ta_alloca
         }
     }
     if (result == TA_OK && event->invoke_id != TA_INVOKE_ID_NONE) {
-        char id_text[256];
-        ta_str id = tah_recorder_invoke_id(system->core, event->invoke_id, id_text, sizeof id_text);
-        char *copy = id.len == 0 ? NULL : tah_alloc(arena, id.len, 1);
-        if (copy != NULL) {
-            tah_mem_copy(copy, id.ptr, id.len);
+        /* The ID's text, whatever its length, in the arena. */
+        uint32_t bytes = tah_recorder_invoke_id_bytes(system->core, event->invoke_id);
+        char *copy = bytes <= 1u ? NULL : tah_alloc(arena, bytes, 1);
+        uint32_t needed = 0;
+        if (copy != NULL &&
+            ta_system_invoke_id_format(system->core, &(ta_invoke_id_format_params){ .invoke = event->invoke_id,
+                                                                                    .buffer = copy,
+                                                                                    .capacity = bytes,
+                                                                                    .needed = &needed }) != TA_OK) {
+            copy = NULL;
         }
-        out->invoke_id = copy == NULL ? (ta_str){ 0 } : (ta_str){ .ptr = copy, .len = id.len };
+        out->invoke_id = copy == NULL ? (ta_str){ 0 } : (ta_str){ .ptr = copy, .len = bytes - 1u };
     }
     return result;
 }

@@ -247,7 +247,7 @@ static const tat_method TAT_HOST_METHODS[] = {
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"time\":{\"type\":\"u64\",\"required\":true}}}"},
     {"hosted.set_loader", tat_hosted_set_loader_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"family\":{\"type\":\"string\",\"required\":true},"
-     "\"max_waiting\":{\"type\":\"u64\",\"required\":true}}}"},
+     "\"loader\":{\"type\":\"bool\",\"required\":false}}}"},
     {"hosted.load", tat_hosted_load_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"index\":{\"type\":\"u64\",\"required\":true},"
      "\"generation\":{\"type\":\"u64\",\"required\":true},\"outcome\":{\"type\":\"string\",\"required\":false},"

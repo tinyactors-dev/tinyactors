@@ -241,7 +241,7 @@ void tah_sched_destroy(tah_sched *sched) {
         }
     }
     tah_vec_destroy(&sched->pages);
-    tah_map_destroy(&sched->failed_loads);
+    tah_map_destroy(&sched->failed_loads); /* emptied while core lived (tah_sched_forget_failed_loads) */
     tah_ring_destroy(&sched->held);
     tah_ring_destroy(&sched->backoff);
     tah_sched_discard_mail(sched); /* gives back the trace parents envelopes hold */
@@ -1408,7 +1408,10 @@ static void tah_sched_release_backoff(tah_sched *sched) {
  */
 static void tah_sched_taken(tah_sched *sched, tah_sched_entry *entry, ta_actor_id actor, uint32_t index) {
     tah_envelope *envelope = tah_sched_envelope(sched, index);
-    if (entry != NULL && tah_sched_unlink(sched, entry, index)) {
+    if (entry != NULL) {
+        /* A post by address was in no mailbox until now: it joins this one,
+         * so a destroy or an abandon of its actor settles it. */
+        (void)tah_sched_unlink(sched, entry, index);
         envelope->next = entry->first;
         entry->first = index;
         if (entry->last == 0) {
@@ -1449,12 +1452,30 @@ static void tah_sched_ended(tah_sched *sched, tah_sched_entry *entry, ta_actor_i
 }
 
 void tah_sched_note_failed_load(tah_sched *sched, const ta_address *address, tah_dead_reason reason) {
-    (void)tah_map_put(&sched->failed_loads, (uint64_t)(uintptr_t)address, (uint64_t)reason);
+    /* The map holds the address, so the key names this address until the
+     * entry goes, never another one that reuses its memory. */
+    uint64_t key = (uint64_t)(uintptr_t)address;
+    uint64_t before = 0;
+    bool had = tah_map_count(&sched->failed_loads) != 0 && tah_map_get(&sched->failed_loads, key, &before);
+    if (tah_map_put(&sched->failed_loads, key, (uint64_t)reason) == TA_OK && !had) {
+        ta_address_retain((ta_address *)(uintptr_t)address);
+    }
+}
+
+void tah_sched_forget_failed_loads(tah_sched *sched) {
+    uint32_t cursor = 0;
+    uint64_t key = 0;
+    uint64_t value = 0;
+    while (tah_map_next(&sched->failed_loads, &cursor, &key, &value)) {
+        ta_address_release((ta_address *)(uintptr_t)key);
+    }
+    tah_map_destroy(&sched->failed_loads);
+    tah_map_init(&sched->failed_loads, sched->allocator);
 }
 
 void tah_sched_forget_failed_load(tah_sched *sched, const ta_address *address) {
-    if (tah_map_count(&sched->failed_loads) != 0) {
-        (void)tah_map_remove(&sched->failed_loads, (uint64_t)(uintptr_t)address);
+    if (tah_map_count(&sched->failed_loads) != 0 && tah_map_remove(&sched->failed_loads, (uint64_t)(uintptr_t)address)) {
+        ta_address_release((ta_address *)(uintptr_t)address);
     }
 }
 
@@ -1500,13 +1521,12 @@ static void tah_sched_outcome(tah_sched *sched, const tah_turn_params *params, c
             tah_sched_taken(sched, entry, actor, index);
         } else if (outcome->has_event) {
             /* Mail between actors, which core queued itself (core ADR 0099):
-             * its name, given as text, is kept in the kernel's table. */
+             * its name goes to the observer as text, and only an observer
+             * that keeps the event interns it (core ADR 0100). */
             ta_event event = outcome->event;
-            if (outcome->name.len != 0u && tah_names_intern(&sched->names, outcome->name, &event.name) != TA_OK) {
-                event.name = 0u;
-            }
+            event.name = 0u;
             tah_sched_note_to(sched, (tah_sched_note){ .kind = TAH_NOTE_DELIVERED, .actor = actor,
-                                                       .event = &event });
+                                                       .event = &event, .name = outcome->name });
         }
         if (entry != NULL && entry->state != TAH_SCHED_QUARANTINED) {
             tah_sched_set_state(sched, entry, TAH_SCHED_RUNNABLE);

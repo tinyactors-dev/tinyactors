@@ -8,9 +8,12 @@
  * so the cache never needs invalidation.
  *
  * A kernel name ID has TAH_NAME_KERNEL set. An event that came from core
- * (mail core queued, an event forwarded to a host invoker) names its event
- * with core's ID; the kernel stores it under a kernel ID when it keeps the
- * event (tah_names_adopt), while core's name is still valid.
+ * carries its name as text: mail core queued gives it in the TAKEN
+ * outcome's name, and only an observer that keeps the event (the recorder)
+ * stores it under a kernel ID; an event forwarded to a host invoker names
+ * it with core's text handle (TA_EVENT_NAME_TEXT), which the kernel stores
+ * under a kernel ID when it keeps the event (tah_names_adopt), while the
+ * handle is still valid.
  *
  * Validation happens once per name: the text must be non-empty, have no
  * empty segment ("a..b", ".a", "a."), and at most the system's

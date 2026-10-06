@@ -15,6 +15,7 @@
 #include "tinyactors_host/hooks.h"
 #include "tinyactors_host/scheduler.h"
 #include "tinyactors_host/system.h"
+#include "events_private.h"
 #include "scheduler_private.h"
 #include "system_private.h"
 
@@ -337,6 +338,46 @@ static void close_with_waiters(void) {
     finish_system(system);
 }
 
+/* idle --go--> idle, mailing itself m1 to m8 at once. */
+#define MAIL_SELF(event_text)                                                                     \
+    { .kind = TA_SCXML_ACTION_SEND,                                                               \
+      .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = { event_text, sizeof(event_text) - 1u } } } }
+static ta_definition_id define_mailer(tah_system *system) {
+    static const ta_scxml_action_spec mail[] = {
+        MAIL_SELF("m1"), MAIL_SELF("m2"), MAIL_SELF("m3"), MAIL_SELF("m4"),
+        MAIL_SELF("m5"), MAIL_SELF("m6"), MAIL_SELF("m7"), MAIL_SELF("m8"), { 0 },
+    };
+    static ta_scxml_transition_spec on_idle[] = {
+        { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = { "go", 2 }, .actions = mail },
+        { 0 },
+    };
+    static ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = { "idle", 4 }, .transitions = on_idle },
+        { 0 },
+    };
+    ta_scxml_spec spec = { .name = S("mailer"), .states = states };
+    return define(system, &spec);
+}
+
+/* Mail between actors reaches the kernel as text (core ADR 0100): with no
+ * observer, the kernel interns none of its names, round after round. */
+static void mail_names_are_not_interned(void) {
+    tah_system *system = make_system();
+    ta_actor_id actor = spawn(system, define_mailer(system));
+    run(system);
+    ta_event_name_id go = name(system, "go");
+    uint32_t names = system->sched.names.spans.count;
+    for (int round = 0; round < 5; round += 1) {
+        reset_settled();
+        ta_event message = { .name = go, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+        CHECK(tah_system_post(system, &(tah_message){ .target = actor, .event = &message }) == TA_OK);
+        run(system);
+        CHECK(system->sched.names.spans.count == names);
+    }
+    CHECK(system->sched.delivered == 5u); /* the posts; the mail never passed the kernel */
+    finish_system(system);
+}
+
 int main(void) {
     settles_on_completion();
     settles_as_a_dead_letter();
@@ -345,6 +386,7 @@ int main(void) {
     retained_bytes();
     steady_state();
     close_with_waiters();
+    mail_names_are_not_interned();
     printf("send_test passed\n");
     return 0;
 }

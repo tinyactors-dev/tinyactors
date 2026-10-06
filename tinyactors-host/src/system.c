@@ -262,6 +262,7 @@ void tah_system_close(tah_system *system) {
     tah_recorder_destroy(&system->recorder);
     tao_destroy(system->otlp);
     system->otlp = NULL;
+    tah_sched_forget_failed_loads(&system->sched); /* core owns the addresses */
     ta_system_destroy(system->core);
     system->core = NULL;
     /* Core held the I/O processor records as adapters until now. */
@@ -722,7 +723,7 @@ static void tah_quarantine_reports_make(tah_system *system) {
 typedef struct {
     tah_dead_reason reason;
     const ta_actor_ref *destination;
-} tah_router_failure;
+} tah_request_failure;
 
 /*
  * Whether mail for the runtime `destination` goes to its family's loader
@@ -731,7 +732,7 @@ typedef struct {
  * family (core ADR 0088), and the family has a loader. `family` gets the
  * family's name.
  */
-static bool tah_router_session_loads(tah_system *system, const ta_actor_ref *destination, ta_str *family) {
+static bool tah_request_session_loads(tah_system *system, const ta_actor_ref *destination, ta_str *family) {
     if (destination->kind != TA_ACTOR_REF_RUNTIME || destination->family == 0 || system->loads.families.count == 0) {
         return false;
     }
@@ -751,7 +752,7 @@ static bool tah_router_session_loads(tah_system *system, const ta_actor_ref *des
  * `<incarnation>.0.<family>`, and gets a load of its own. One reference
  * goes to `*out`.
  */
-static ta_result tah_router_session_key(tah_system *system, const ta_actor_ref *destination, ta_str family,
+static ta_result tah_request_session_key(tah_system *system, const ta_actor_ref *destination, ta_str family,
                                         ta_address **out) {
     char small[256];
     char *text = small;
@@ -815,7 +816,7 @@ static ta_result tah_router_session_key(tah_system *system, const ta_actor_ref *
  * that would start one. `*resident` gets the resident actor of a name that
  * is not finished, which takes the mail at once.
  */
-static bool tah_router_unreachable(tah_system *system, const ta_actor_ref *destination, tah_dead_reason *reason,
+static bool tah_request_unreachable(tah_system *system, const ta_actor_ref *destination, tah_dead_reason *reason,
                                    ta_actor_id *resident) {
     *resident = 0;
     if (destination->kind == TA_ACTOR_REF_NAMED) {
@@ -843,7 +844,7 @@ static bool tah_router_unreachable(tah_system *system, const ta_actor_ref *desti
     return true;
 }
 
-static const char *tah_router_unreachable_message(tah_dead_reason reason) {
+static const char *tah_request_unreachable_message(tah_dead_reason reason) {
     switch (reason) {
     case TAH_DEAD_DONE: return "the target session has finished";
     case TAH_DEAD_UNLOADED: return "the target is unloaded and no loader would bring it back";
@@ -854,8 +855,8 @@ static const char *tah_router_unreachable_message(tah_dead_reason reason) {
     }
 }
 
-static void tah_router_fail(tah_system *system, uint64_t request, const tah_router_failure *failure) {
-    const char *text = tah_router_unreachable_message(failure->reason);
+static void tah_request_fail(tah_system *system, uint64_t request, const tah_request_failure *failure) {
+    const char *text = tah_request_unreachable_message(failure->reason);
     /* The code an event JavaScript posted to the address is refused with:
      * its dead letter's reason (scheduler.c). */
     ta_result code = failure->reason == TAH_DEAD_DONE       ? TA_ERR_DONE
@@ -871,7 +872,7 @@ static void tah_router_fail(tah_system *system, uint64_t request, const tah_rout
     ta_value_release(&fault.data);
 }
 
-static void tah_router_answer(tah_system *system, const ta_load_request *request) {
+static void tah_request_answer(tah_system *system, const ta_load_request *request) {
     const ta_actor_ref *destination = &request->destination;
     if (destination->kind == TA_ACTOR_REF_NAMED) {
         tah_sched_forget_failed_load(&system->sched, destination->as.named);
@@ -880,8 +881,8 @@ static void tah_router_answer(tah_system *system, const ta_load_request *request
     ta_str family = { 0 };
     ta_address *key = NULL;
     ta_result result = TA_ERR_NOT_FOUND;
-    if (tah_router_session_loads(system, destination, &family)) {
-        result = tah_router_session_key(system, destination, family, &key);
+    if (tah_request_session_loads(system, destination, &family)) {
+        result = tah_request_session_key(system, destination, family, &key);
         if (result == TA_OK) {
             result = tah_loads_ask(&system->loads, &(tah_load_ask){ .address = key,
                                                                     .why = TAH_LOAD_WHY_SESSION,
@@ -894,7 +895,7 @@ static void tah_router_answer(tah_system *system, const ta_load_request *request
         }
     } else {
         ta_actor_id resident = 0;
-        if (!tah_router_unreachable(system, destination, &reason, &resident)) {
+        if (!tah_request_unreachable(system, destination, &reason, &resident)) {
             if (resident != 0) {
                 /* Resident again since core asked: it takes the mail now. */
                 (void)ta_system_load_settled(system->core,
@@ -916,8 +917,8 @@ static void tah_router_answer(tah_system *system, const ta_load_request *request
     }
     /* Nowhere to go, or no memory to start the load: each message becomes
      * error.communication for its sender (SCXML 6.2.4). */
-    tah_router_fail(system, request->request,
-                    &(tah_router_failure){ .reason = result == TA_ERR_NOMEM ? TAH_DEAD_LOAD_FAILED : reason,
+    tah_request_fail(system, request->request,
+                    &(tah_request_failure){ .reason = result == TA_ERR_NOMEM ? TAH_DEAD_LOAD_FAILED : reason,
                                            .destination = destination });
     tah_system_want_turn(system);
 }
@@ -927,7 +928,7 @@ static void tah_router_answer(tah_system *system, const ta_load_request *request
 static void tah_system_answer_loads(tah_system *system) {
     ta_load_request request;
     while (ta_system_load_needed(system->core, &request) == TA_OK) {
-        tah_router_answer(system, &request);
+        tah_request_answer(system, &request);
         /* What core delivered or recycled runs at its next ta_run(). */
         tah_sched_core_work(&system->sched);
     }
@@ -939,7 +940,7 @@ static void tah_system_answer_loads(tah_system *system) {
 /*
  * Dispatches the sends due now, up to the due budget. A send to another
  * session goes into core's pool and runs at core's next ta_run(), or waits
- * there for its target's load, which this answers (router.h); any other
+ * there for its target's load, which this answers; any other
  * goes to its I/O processor. For each send that
  * fired, its sender's wake is reported again (the recorder), and, when it
  * was delivered, how late it fired (the lateness histogram). A refusal (no
@@ -1075,7 +1076,10 @@ ta_result tah_system_post(tah_system *system, const tah_message *message) {
          * mailbox, which a replacement or a removal moves (ADR 0006). With
          * none, core keeps it for the address's load (core ADR 0099). */
         ta_actor_directory_entry entry = tah_directory_find(&system->directory, message->address);
-        if (entry.kind == TA_ACTOR_DIRECTORY_RESIDENT) {
+        /* While the address's load is in flight, core still holds earlier
+         * mail for it on the address's waiting entry: this message joins
+         * that entry, so one sender's posts by name keep their order. */
+        if (entry.kind == TA_ACTOR_DIRECTORY_RESIDENT && !tah_loads_waiting(&system->loads, message->address)) {
             resolved.target = entry.actor;
             resolved.address = NULL;
         }
@@ -1146,8 +1150,8 @@ ta_result tah_system_finish_load(tah_system *system, const tah_system_load_finis
         } else {
             ta_actor_ref destination = { .kind = TA_ACTOR_REF_NAMED, .as.named = address };
             tah_sched_note_failed_load(&system->sched, address, tah_load_dead_reason(finish->outcome));
-            tah_router_fail(system, request,
-                            &(tah_router_failure){ .reason = tah_load_dead_reason(finish->outcome),
+            tah_request_fail(system, request,
+                            &(tah_request_failure){ .reason = tah_load_dead_reason(finish->outcome),
                                                    .destination = &destination });
         }
         tah_sched_core_work(&system->sched);

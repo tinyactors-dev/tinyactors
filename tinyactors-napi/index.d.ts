@@ -308,6 +308,7 @@ export interface SystemParameters {
    * appears (kernel ADR 0003). post() and send() are bounded by core's pool
    * instead (admissionWatermark). 0 (default): no limit.
    */
+  // status: partial: mail between actors stays in core's pool and never reaches the kernel's overflow, so the limit acts on nothing until napi drives core's rings
   maxQueuedMessages?: number;
   /**
    * Retained-bytes estimate of the data of accepted messages not yet taken
@@ -317,6 +318,7 @@ export interface SystemParameters {
    * byteLength for buffers, 64 for other objects, 0 for primitives. Mail
    * between actors carries no estimate.
    */
+  // status: partial: mail between actors stays in core's pool and never reaches the kernel's overflow, so the limit acts on nothing until napi drives core's rings
   maxRetainedBytes?: number;
 }
 
@@ -821,7 +823,9 @@ export interface SystemStats {
      * maxRetainedBytes (kernel ADR 0003): it waits in its receiver's
      * mailbox and is admitted as room appears.
      */
+    // status: partial: mail between actors stays in core's pool, so this stays 0
     readonly overflow: number;
+    /** Messages that passed through the kernel and core took: post(), send() and reports; mail between actors stays in core and is not counted. */
     readonly delivered: number;
     readonly deadLetters: number;
   };
@@ -2488,7 +2492,7 @@ export interface TraceSinkOptions extends TraceConfiguration {
    * Resource attributes every request carries, such as `service.name`. The
    * system's parameters are added as one attribute, `tinyactors.params`: the
    * defaults' version, then `name=value` for each parameter that differs from
-   * its default, in name order (`v2;valueBytes=16384`), or `v2` alone (napi
+   * its default, in name order (`v3;valueBytes=16384`), or `v3` alone (napi
    * ADR 0036), unless this names the same key.
    */
   resource?: Record<string, string>;

@@ -613,7 +613,7 @@ the scheduling budgets, the mailbox limits) and napi's own
 (`registeredDatamodels`, `datamodelNameBytes`); `owner` says which. Every trace request's resource
 carries them as one attribute, `tinyactors.params`: the defaults' version,
 then each parameter that differs from its default, in name order
-(`v2;valueBytes=16384`), or `v2` alone, so a trace says which caps applied
+(`v3;valueBytes=16384`), or `v3` alone, so a trace says which caps applied
 (napi ADR 0036).
 
 ## TypeScript

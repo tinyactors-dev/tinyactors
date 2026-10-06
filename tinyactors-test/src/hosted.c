@@ -37,10 +37,23 @@ typedef struct {
 static jv tat_hosted_event_text(const tah_system *system, ta_event_name_id name) {
     char small[256];
     uint32_t needed = 0;
-    if (tah_event_name_format(system, &(ta_event_name_format_params){.name = name, .buffer = small,
-                                                                     .capacity = sizeof small, .needed = &needed}) ==
-        TA_OK) {
+    ta_result result = tah_event_name_format(system, &(ta_event_name_format_params){
+                                                         .name = name, .buffer = small, .capacity = sizeof small,
+                                                         .needed = &needed});
+    if (result == TA_OK) {
         return jv_string(small);
+    }
+    if (result == TA_ERR_NOMEM && needed > sizeof small) {
+        /* A longer name, such as one with a long invocation ID. */
+        char *large = malloc(needed);
+        jv text = large != NULL &&
+                          tah_event_name_format(system, &(ta_event_name_format_params){
+                                                            .name = name, .buffer = large, .capacity = needed,
+                                                            .needed = &needed}) == TA_OK
+                      ? jv_string(large)
+                      : jv_null();
+        free(large);
+        return text;
     }
     return jv_null();
 }

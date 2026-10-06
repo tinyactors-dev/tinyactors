@@ -1960,6 +1960,13 @@ module TinyactorsTest
       result = unload(actor, image)
       if result == 'err_busy'
         destroy_image(image)
+        # Only mail core holds for it may keep it resident: with internal
+        # events, a completion to publish or a parent, the refusal would
+        # have another cause, which the sweep must not skip.
+        view = core('ta_actor_inspect', ta.actor.inspect(system: system_handle, actor: actor.handle)).fetch(:out)
+        if view[:internal_count].to_i.positive? || view[:has_completion] || view[:has_parent]
+          raise AssertionFailed, "#{actor}: the unload was refused with #{view.slice(:internal_count, :has_completion, :has_parent)}"
+        end
         return false
       end
       core('ta_actor_unload', { result: result })

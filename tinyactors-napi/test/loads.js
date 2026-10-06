@@ -192,7 +192,7 @@ async function slowAndTimedOutLoads() {
 // Mail waiting for a load waits in core, bounded by its pool (core ADR
 // 0099): maxWaiting is accepted and bounds nothing, so every message waits
 // and is delivered, in order, and none is a dead letter.
-async function waitingFull() {
+async function manyWaitingMessagesAreDelivered() {
   const dead = [];
   const system = createSystem({ deadLetter: (letter) => dead.push(letter) });
   const image = await unloaded(system);
@@ -372,7 +372,7 @@ async function arguments_() {
   await failedLoads();
   await cancelWhileWaiting();
   await slowAndTimedOutLoads();
-  await waitingFull();
+  await manyWaitingMessagesAreDelivered();
   await virtualFamily();
   await timerWakesAnUnloadedActor();
   await gracefulRestart();

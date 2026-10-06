@@ -268,8 +268,12 @@ typedef struct {
     const tah_envelope *message;
     /* DELIVERED of mail core queued itself, which has no envelope here:
      * the event core took (ta_input_outcome's), borrowed for the call;
-     * null otherwise. */
+     * null otherwise. Its name is `name`, as text, borrowed for the call,
+     * and its `name` ID is 0: an observer that keeps the event interns
+     * the name (tah_event_name_intern); the kernel interns nothing for
+     * mail no observer keeps. */
     const ta_event *event;
+    ta_str name;
 } tah_sched_note;
 
 typedef struct {
@@ -359,7 +363,7 @@ ta_result tah_sched_transfer(tah_sched *sched, const tah_sched_transfer_params *
  *   message is neither mail between actors (`may_overflow`) nor a report,
  *   which are held instead; nothing was accepted.
  * - TA_ERR_NOMEM: nothing was accepted.
- * May run inside a core call (the router, an invoker), where core admits
+ * May run inside a core call (an invoker, an I/O processor), where core admits
  * from what is free.
  */
 ta_result tah_sched_post(tah_sched *sched, const tah_message *message);
@@ -372,6 +376,9 @@ ta_result tah_sched_post(tah_sched *sched, const tah_message *message);
 void tah_sched_note_failed_load(tah_sched *sched, const ta_address *address, tah_dead_reason reason);
 /* `address` is asked about again: a reason noted for it no longer applies. */
 void tah_sched_forget_failed_load(tah_sched *sched, const ta_address *address);
+/* Releases every address the failed-load map holds and empties it: at
+ * close, while core, which owns the addresses, still lives. */
+void tah_sched_forget_failed_loads(tah_sched *sched);
 /* The envelope at `index` (for tests), or NULL. */
 tah_envelope *tah_sched_envelope(const tah_sched *sched, uint32_t index);
 /* Messages waiting in `actor`'s mailbox, its overflow included. */

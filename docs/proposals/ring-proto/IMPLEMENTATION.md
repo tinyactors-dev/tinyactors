@@ -654,6 +654,27 @@ Carried forward from commit 4 (19cd1813):
   `maxRetainedBytes` act on nothing. They go with napi's parameter
   changes in 6.1 (migration.md), not before.
 
+Carried forward from the step's review (the 4.2 fix commits):
+
+- **The kernel still keeps per-actor mailboxes** that shadow core's pool,
+  for `send()` waiters, held mail and quarantine. Phase 4's exit "the
+  kernel's scheduler holds no mailboxes" is met by 4.5, which removes
+  quarantine and `release()`; what remains after that (waiters keyed by
+  correlation, held mail of the application) goes with 5.1, when outcomes
+  arrive on c2h and the kernel's admission code is deleted.
+- **The random paging runs no longer cause refused due sends.** Resolved
+  by 95c4228c (4.3a), which replaced those scenarios with ADR 0101's
+  property.
+- **A kernel load answers only the last core request that joined it**
+  (`tah_loads_ask`): two runtime IDs of one gone session are two waiting
+  entries that share one load, and the first request is replaced, so its
+  entry stays owed. A load keeps every core request it answers when 5.1
+  moves load requests onto c2h.
+- **The kernel keeps names only where an observer needs an ID**: mail core
+  queued reaches the kernel's observer as text, and only the recorder
+  interns it. JavaScript's own name cache (`lib/events.js`) stays until
+  6.1.
+
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
   input.

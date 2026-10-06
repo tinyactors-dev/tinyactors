@@ -384,8 +384,163 @@ static void a_gone_session_loads_a_new_instance(void) {
     finish_system(system);
 }
 
+/* A chart that finishes only when it takes a, b, c and d in that order. */
+static ta_definition_id define_orderly(tah_system *system) {
+    static const ta_str to_s1[] = { { "s1", 2 }, { 0 } };
+    static const ta_str to_s2[] = { { "s2", 2 }, { 0 } };
+    static const ta_str to_s3[] = { { "s3", 2 }, { 0 } };
+    static const ta_str to_done[] = { { "done", 4 }, { 0 } };
+    static ta_scxml_transition_spec on_a[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = { "a", 1 }, .targets = to_s1 }, { 0 } };
+    static ta_scxml_transition_spec on_b[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = { "b", 1 }, .targets = to_s2 }, { 0 } };
+    static ta_scxml_transition_spec on_c[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = { "c", 1 }, .targets = to_s3 }, { 0 } };
+    static ta_scxml_transition_spec on_d[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = { "d", 1 }, .targets = to_done }, { 0 } };
+    static ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = { "s0", 2 }, .transitions = on_a },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = { "s1", 2 }, .transitions = on_b },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = { "s2", 2 }, .transitions = on_c },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = { "s3", 2 }, .transitions = on_d },
+        { .kind = TA_SCXML_STATE_FINAL, .id = { "done", 4 } },
+        { 0 },
+    };
+    ta_scxml_spec spec = { .name = S("r"), .states = states };
+    ta_definition *definition = NULL;
+    CHECK(ta_definition_compile_spec(system->core, &(ta_definition_compile_params){
+                                                       .spec = &spec,
+                                                       .datamodel = ta_null_datamodel(),
+                                                       .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
+                                                       .out = &definition,
+                                                   }) == TA_OK);
+    ta_definition_id id = 0;
+    CHECK(ta_system_register_definition(system->core, definition, &id) == TA_OK);
+    return id;
+}
+
+/* One sender's mail keeps its order across a load: a and b wait for the
+ * load, the actor is loaded before the load is answered, and c by name and
+ * d by its ID wait behind them; the chart finishes only in that order. */
+static void mail_keeps_its_order_across_a_load(void) {
+    tah_system *system = make_system();
+    ta_actor_id first = spawn(system, define_orderly(system), &recv_name);
+    CHECK(settle(system, NULL) == 0u);
+    ta_session_image *image = unload(system, first);
+    CHECK(tah_loads_set_family(&system->loads, S("r"), true) == TA_OK);
+    ta_address *address = intern(system, &recv_name);
+    CHECK(post(system, address, "a") == TA_OK);
+    CHECK(post(system, address, "b") == TA_OK);
+    one_turn(system);
+    tah_load_request request = next_request(system);
+    ta_actor_id loaded = load(system, image);
+    CHECK(post(system, address, "c") == TA_OK);
+    ta_event d = { .type = TA_EVENT_EXTERNAL, .name = event_name(system, "d"), .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(tah_system_post(system, &(tah_message){ .target = loaded, .event = &d }) == TA_OK);
+    one_turn(system);
+    CHECK(finish(system, request, TAH_LOAD_LOADED, loaded) == TA_OK);
+    CHECK(settle(system, NULL) == 0u);
+    CHECK(system->sched.delivered == 4u);
+    /* Finished: it took a, b, c and d in order. */
+    ta_event probe = { .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(ta_actor_deliver(system->core, &(ta_actor_deliver_params){ .actor = loaded, .name = S("z"), .event = &probe,
+                                                                     .time = ta_system_time(system->core) }) ==
+          TA_ERR_DONE);
+    ta_address_release(address);
+    finish_system(system);
+}
+
+/* s0 takes any event to s1, which goes back to s0 with no event: a
+ * macrostep of two microsteps, which a budget of one pauses between. */
+static ta_definition_id define_slow(tah_system *system) {
+    static const ta_str to_s1[] = { { "s1", 2 }, { 0 } };
+    static const ta_str to_s0[] = { { "s0", 2 }, { 0 } };
+    static ta_scxml_transition_spec any[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = { "*", 1 }, .targets = to_s1 }, { 0 } };
+    static ta_scxml_transition_spec back[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = to_s0 }, { 0 } };
+    static ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = { "s0", 2 }, .transitions = any },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = { "s1", 2 }, .transitions = back },
+        { 0 },
+    };
+    ta_scxml_spec spec = { .name = S("r"), .states = states };
+    ta_definition *definition = NULL;
+    CHECK(ta_definition_compile_spec(system->core, &(ta_definition_compile_params){
+                                                       .spec = &spec,
+                                                       .datamodel = ta_null_datamodel(),
+                                                       .allocator = tah_allocator_for(&system->allocator, TAH_MEMORY_CORE),
+                                                       .out = &definition,
+                                                   }) == TA_OK);
+    ta_definition_id id = 0;
+    CHECK(ta_system_register_definition(system->core, definition, &id) == TA_OK);
+    return id;
+}
+
+/* The settlement of `waiter` among those the system gives, or kind -1. */
+static int settled_kind(tah_system *system, uint32_t waiter, tah_dead_reason *reason) {
+    int kind = -1;
+    tah_settlement settlement;
+    while (tah_sched_settlement_pop(&system->sched, &settlement)) {
+        if (settlement.waiter == waiter) {
+            kind = (int)settlement.kind;
+            *reason = settlement.reason;
+        }
+        tah_sched_waiter_give(&system->sched, settlement.waiter);
+    }
+    return kind;
+}
+
+/* A send() posted by address that core took after the address's load,
+ * whose macrostep pauses, settles when its actor is destroyed, and when an
+ * operator abandons the macrostep: it joins the actor's mailbox when it is
+ * taken, and its envelope goes back. */
+static void a_taken_post_by_address_settles_when_its_actor_goes(void) {
+    for (int abandon = 0; abandon < 2; abandon += 1) {
+        tah_system *system = make_system();
+        ta_actor_id first = spawn(system, define_slow(system), &recv_name);
+        CHECK(settle(system, NULL) == 0u);
+        ta_session_image *image = unload(system, first);
+        CHECK(tah_loads_set_family(&system->loads, S("r"), true) == TA_OK);
+        ta_address *address = intern(system, &recv_name);
+        uint32_t waiter = tah_sched_waiter_take(&system->sched);
+        CHECK(post_waiting(system, address, "a", waiter) == TA_OK);
+        one_turn(system);
+        tah_load_request request = next_request(system);
+        ta_actor_id loaded = load(system, image);
+        CHECK(finish(system, request, TAH_LOAD_LOADED, loaded) == TA_OK);
+        /* One microstep: core takes it, and its macrostep pauses. */
+        system->budgets.resumes = 1;
+        system->budgets.microsteps = 1;
+        tah_system_turn(system);
+        tah_system_end_turn(system);
+        CHECK(tah_sched_waiter(&system->sched, waiter)->state == TAH_WAITER_INFLIGHT);
+        if (abandon) {
+            CHECK(tah_system_abandon(system, loaded) == TA_OK);
+        } else {
+            CHECK(ta_actor_destroy(system->core, loaded) == TA_OK);
+            CHECK(tah_hook_actor_removed(system, loaded) == TA_OK);
+        }
+        system->budgets.microsteps = 100;
+        tah_dead_reason reason = TAH_DEAD_NOT_FOUND;
+        int kind = settled_kind(system, waiter, &reason);
+        for (int guard = 0; !tah_system_quiet(system); guard += 1) {
+            CHECK(guard < 1000);
+            tah_system_turn(system);
+            int now = settled_kind(system, waiter, &reason);
+            kind = now >= 0 ? now : kind;
+            tah_system_end_turn(system);
+        }
+        CHECK(abandon ? kind == (int)TAH_SETTLE_ABANDONED
+                      : kind == (int)TAH_SETTLE_DEAD && reason == TAH_DEAD_DESTROYED);
+        ta_address_release(address);
+        finish_system(system);
+    }
+}
+
 int main(void) {
     waiting_mail_moves_in_order();
+    mail_keeps_its_order_across_a_load();
+    a_taken_post_by_address_settles_when_its_actor_goes();
     a_waiting_message_can_be_withdrawn();
     a_failed_load_dead_letters_its_mail();
     a_virtual_family_spawns();

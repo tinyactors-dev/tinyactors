@@ -2,6 +2,7 @@
 
 #include "napi_children.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "tinyactors_host.h"
@@ -138,6 +139,34 @@ static napi_value tna_io_payload(napi_env env, tna_napi_system *wrapper, const t
     return payload;
 }
 
+/* An invocation ID's text, whatever its length: in `stack` when it fits,
+ * else in memory the caller frees with free(). Empty when the system
+ * issued no such ID or memory ran out. */
+static ta_str tna_invoke_id_text(tah_system *system, ta_invoke_id invoke, char *stack, uint32_t capacity,
+                                 char **heap) {
+    *heap = NULL;
+    uint32_t needed = 0;
+    ta_result result = ta_system_invoke_id_format(
+        tah_system_core(system),
+        &(ta_invoke_id_format_params){ .invoke = invoke, .buffer = stack, .capacity = capacity, .needed = &needed });
+    if (result == TA_OK) {
+        return (ta_str){ .ptr = stack, .len = needed - 1u };
+    }
+    if (result != TA_ERR_NOMEM || needed <= 1u) {
+        return (ta_str){ 0 };
+    }
+    *heap = malloc(needed);
+    if (*heap == NULL ||
+        ta_system_invoke_id_format(tah_system_core(system),
+                                   &(ta_invoke_id_format_params){ .invoke = invoke, .buffer = *heap,
+                                                                  .capacity = needed, .needed = &needed }) != TA_OK) {
+        free(*heap);
+        *heap = NULL;
+        return (ta_str){ 0 };
+    }
+    return (ta_str){ .ptr = *heap, .len = needed - 1u };
+}
+
 static napi_value tna_start_payload(napi_env env, tna_napi_system *wrapper, const tah_effect *effect) {
     tah_system *system = wrapper->system;
     napi_value payload = NULL;
@@ -149,14 +178,10 @@ static napi_value tna_start_payload(napi_env env, tna_napi_system *wrapper, cons
         return NULL;
     }
     char invoke_text[256];
-    uint32_t needed = 0;
-    napi_value invoke_id = ta_system_invoke_id_format(tah_system_core(system),
-                                                      &(ta_invoke_id_format_params){ .invoke = effect->invoke_id,
-                                                                                     .buffer = invoke_text,
-                                                                                     .capacity = sizeof invoke_text,
-                                                                                     .needed = &needed }) == TA_OK
-                               ? tna_text(env, invoke_text, needed - 1u)
-                               : tna_js_undefined(env);
+    char *invoke_heap = NULL;
+    ta_str invoke_str = tna_invoke_id_text(system, effect->invoke_id, invoke_text, sizeof invoke_text, &invoke_heap);
+    napi_value invoke_id = invoke_str.len != 0 ? tna_text(env, invoke_str.ptr, invoke_str.len) : tna_js_undefined(env);
+    free(invoke_heap);
     tna_put(env, payload, "handle", tna_handle(env, effect->service));
     tna_put(env, payload, "parent", tna_actor_view(env, wrapper, effect->parent));
     tna_put(env, payload, "invocationID", invocation);
@@ -667,23 +692,21 @@ napi_value tna_set_log_sink_method(napi_env env, napi_callback_info info) {
 static ta_result tna_done_name(tah_system *system, ta_invoke_id invoke, ta_event_name_id *out) {
     static const char prefix[] = "done.invoke.";
     char id_text[256];
-    uint32_t needed = 0;
-    ta_result result = ta_system_invoke_id_format(tah_system_core(system),
-                                                  &(ta_invoke_id_format_params){ .invoke = invoke, .buffer = id_text,
-                                                                                 .capacity = sizeof id_text,
-                                                                                 .needed = &needed });
-    if (result != TA_OK) {
-        return result;
+    char *id_heap = NULL;
+    ta_str id = tna_invoke_id_text(system, invoke, id_text, sizeof id_text, &id_heap);
+    if (id.len == 0) {
+        return TA_ERR_NOT_FOUND;
     }
-    ta_str id = { .ptr = id_text, .len = needed - 1u };
     size_t length = sizeof prefix - 1u + id.len;
     char *text = ta_arena_alloc(tah_scratch_call(tah_system_scratch(system)), length, 1);
     if (text == NULL) {
+        free(id_heap);
         return TA_ERR_NOMEM;
     }
     memcpy(text, prefix, sizeof prefix - 1u);
     memcpy(text + sizeof prefix - 1u, id.ptr, id.len);
-    result = tah_event_name_intern(system, (ta_str){ .ptr = text, .len = (uint32_t)length }, out);
+    free(id_heap);
+    ta_result result = tah_event_name_intern(system, (ta_str){ .ptr = text, .len = (uint32_t)length }, out);
     tah_scratch_reset_call(tah_system_scratch(system));
     return result;
 }

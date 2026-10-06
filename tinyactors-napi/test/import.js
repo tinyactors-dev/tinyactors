@@ -227,11 +227,16 @@ async function reentrancy() {
 // is an allocation the data model makes. It changes nothing, so the data
 // model answers TA_OP_NOMEM: the run stops where it stands, napi retries it
 // (ADR 0008), and once memory is back the send runs once, with no
-// error.execution from the stop the chart could see. The send then fails
-// once for its own reason: the name is longer than core keeps as text.
+// error.execution from the stop the chart could see. The name is within the
+// 65,535 bytes core keeps as text (core ADR 0100), so the event is then
+// taken; a name longer than that fails the send once, on its own.
 async function outOfMemory() {
   const system = createSystem();
-  const segment = 'x'.repeat(200_000);
+  // One segment far larger than any scratch block, and within one
+  // name-area field. A name of the same length, which no transition
+  // takes, grows core's buffers first, so turning the name into text is
+  // the only allocation of 18 KB or more the run makes (datamodel.js).
+  const segment = 'x'.repeat(20_000);
   globalThis.__tinyactorsImportName = () => `long.${segment}`;
   system.registerDatamodel('ecmascript', ecmascript);
   const imported = system.define(`<scxml ${NS} name="memory" datamodel="ecmascript">
@@ -261,8 +266,10 @@ async function outOfMemory() {
   for (const definition of [imported, built]) {
     const actor = system.spawn(definition);
     await system.flush();
+    actor.post(`warm.${segment}`);
+    await system.flush();
     actor.post('go');
-    native.refuseAllocationsFrom(100_000);
+    native.refuseAllocationsFrom(18_000);
     // Not flush(): the run keeps stopping until memory is back.
     await turns(20);
     assert.deepEqual(actor.inspect().data, { seen: 0, errors: 0 }, 'stopped, with nothing done twice or lost');
@@ -273,10 +280,16 @@ async function outOfMemory() {
     results.push(actor.inspect().data);
   }
   assert.deepEqual(results[0], results[1]);
-  // Each `go` ran its send once. Core keeps a run-time name as text, at
-  // most one name-area field (65,535 bytes, core ADR 0100), so this name
-  // cannot be queued: each send fails once as error.execution.capacity.names.
-  assert.deepEqual(results[0], { seen: 0, errors: 2 });
+  // Each `go` ran its send once, and the long event was taken once.
+  assert.deepEqual(results[0], { seen: 2, errors: 0 });
+  // A name longer than one name-area field cannot be queued: the send
+  // fails once as error.execution.capacity.names.
+  globalThis.__tinyactorsImportName = () => `long.${'x'.repeat(200_000)}`;
+  const over = system.spawn(imported);
+  await system.flush();
+  over.post('go');
+  await system.flush();
+  assert.deepEqual(over.inspect().data, { seen: 0, errors: 1 });
   delete globalThis.__tinyactorsImportName;
   system.close();
 }
