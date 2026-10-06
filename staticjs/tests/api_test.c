@@ -2729,19 +2729,25 @@ static void test_map_shape_paths(void) {
     }
 }
 
-/* JSON.stringify: fuel a unit per 16 bytes and per value, pinned; its
- * limit; and every allocation failing in turn. */
+/* JSON.parse and JSON.stringify: fuel a unit per 16 bytes and per value,
+ * pinned; their limits; and every allocation failing in turn. */
 static void test_json(void) {
     counting c = { 0 };
     sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
-    /* The instructions (15 with the array literal built), then a unit per
-     * value (7 visited) and per 16 bytes (the 27 bytes written, 1). */
+    /* The instructions (4 for the parse, 15 with the array literal built),
+     * then a unit per value (7 made; 7 visited) and per 16 bytes (the
+     * 34-byte text, 2; the 27 bytes written, 1). */
+    CHECK(fuel_of(context, "JSON.parse('[1, \"two\", {\"k\": [true]}, null]   ')") == 4 + 7 + 2);
     CHECK(fuel_of(context, "JSON.stringify([1, \"two\", {\"k\": [true]}, null])") == 15 + 7 + 1);
+    /* An index key put before the index keys an object has moves them,
+     * a unit each. */
+    CHECK(fuel_of(context, "JSON.parse('{\"3\":0,\"2\":0,\"1\":0}')") == fuel_of(context, "JSON.parse('{\"1\":0,\"2\":0,\"3\":0}')") + 3);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
 
     sjs_limits limits = SJS_LIMITS_DEFAULT;
     limits.max_string_bytes = 32;
+    limits.max_nesting = 8;
     limits.max_value_items = 4;
     context = new_context(&c, limits);
     env e = { context, NULL, NULL, 0, { NULL, NULL }, SJS_GOAL_EXPRESSION };
@@ -2752,6 +2758,10 @@ static void test_json(void) {
         "JSON.stringify([[1, 2, 3, 4], [1, 2, 3, 4]], null, 10)",
         /* Members left out count toward it, so one call's work is bounded. */
         "(o => JSON.stringify([[o, o, o, o], [o, o, o, o]]))({a: undefined, b: undefined, c: undefined, d: undefined})",
+        /* Past max_nesting and max_value_items. */
+        "JSON.parse(\"[[[[[[[[[]]]]]]]]]\")",
+        "JSON.parse(\"[1,2,3,4,5]\")",
+        "JSON.parse('{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5}')",
     };
     for (size_t i = 0; i < sizeof over / sizeof over[0]; i++) {
         CHECK(evaluate(&e, over[i], out) == SJS_ERR_PROGRAM);
@@ -2759,10 +2769,12 @@ static void test_json(void) {
         CHECK(sjs_context_live_bytes(context) == 0);
     }
     CHECK(evaluate(&e, "JSON.stringify([\"0123456789\", \"0123456789\"])", out) == SJS_OK);
+    CHECK(evaluate(&e, "JSON.parse(\"[[[[[[[[]]]]]]]]\").length", out) == SJS_OK && strcmp(out, "1") == 0);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
 
-    test_out_of_memory("JSON.stringify({a: [1, \"q\\\"\", {b: undefined, c: new Map()}], d: \"\\u0001\"}, [\"a\", \"c\", \"d\", 1], \"--\")",
+    test_out_of_memory("[JSON.parse(' {\"b\": [1, -0.5e3, \"x\\\\u00e9\\\\n\", {\"2\": null, \"1\": true, \"2\": [] }], \"a\": {}} '),\n"
+                       " JSON.stringify({a: [1, \"q\\\"\", {b: undefined, c: new Map()}], d: \"\\u0001\"}, [\"a\", \"c\", \"d\", 1], \"--\")]",
                        SJS_GOAL_EXPRESSION);
 }
 

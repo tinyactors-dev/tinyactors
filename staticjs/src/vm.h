@@ -216,5 +216,6 @@ sjs_result sjs_property_get(sjs_vm *vm, sjs_member member, sjs_value *out);
 /* ToNumber, for the values it does not need to parse. */
 sjs_result sjs_vm_to_number(sjs_vm *vm, sjs_value v, double *out);
 
-/* JSON.stringify (json.c): a leaf. */
+/* JSON.parse and JSON.stringify (json.c): leaves. */
+sjs_result sjs_json_parse(sjs_vm *vm, sjs_leaf_call *call);
 sjs_result sjs_json_stringify(sjs_vm *vm, sjs_leaf_call *call);

@@ -13,7 +13,7 @@
 //
 // numbers.txt, if given, holds the lines number_test --print and
 // json_test --print write: what staticjs computed from an input (a double
-// formatted, a decimal read, a JSON.stringify call, ...), each
+// formatted, a decimal read, a JSON document read and written, ...), each
 // of which must be what Node computes from it.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -253,6 +253,26 @@ const numberChecks = {
     if (hexBigInt(signed) !== i) return `BigInt.asIntN(${bits}, ${a}): staticjs ${signed}, JavaScript ${i.toString(16)}`;
     return hexBigInt(unsigned) === u ? null : `BigInt.asUintN(${bits}, ${a}): staticjs ${unsigned}, JavaScript ${u.toString(16)}`;
   },
+  J(rest) { // <document> <text>: JSON.stringify(JSON.parse(document)), never a fault
+    const [document, ours] = rest.split('\t');
+    const want = JSON.stringify(JSON.parse(JSON.parse(document)));
+    if (ours.startsWith('!')) return `JSON round trip: staticjs faults (${ours}), JavaScript ${want}`;
+    return JSON.parse(ours) === want ? null : `JSON round trip: staticjs ${ours}, JavaScript ${JSON.stringify(want)}`;
+  },
+  E(rest) { // <document> <text>: the same, or a SyntaxError where JavaScript throws one
+    const [document, ours] = rest.split('\t');
+    let want;
+    try {
+      want = JSON.stringify(JSON.parse(JSON.parse(document)));
+    } catch (error) {
+      want = error instanceof SyntaxError ? '!S' : `!${error}`;
+    }
+    jsonOutcomes[ours.startsWith('!') ? ours : 'value']++;
+    if (ours === '!O') return null; // a fault of staticjs's own (a lone surrogate, __proto__): not compared
+    if (ours === '!S') return want === '!S' ? null : `JSON.parse: staticjs says SyntaxError, JavaScript ${want}`;
+    if (want.startsWith('!')) return `JSON.parse: staticjs ${ours}, JavaScript throws ${want}`;
+    return JSON.parse(ours) === want ? null : `JSON.parse: staticjs ${ours}, JavaScript ${JSON.stringify(want)}`;
+  },
   K(rest) { // <source> <text>: JSON.stringify(value, replacer, space), never a fault
     const [source, ours] = rest.split('\t');
     const want = new Function(`return (${JSON.parse(source)}\n);`)();
@@ -261,6 +281,7 @@ const numberChecks = {
     return got === want ? null : `JSON.stringify: staticjs ${ours}, JavaScript ${JSON.stringify(want)}`;
   },
 };
+const jsonOutcomes = { value: 0, '!S': 0, '!O': 0 };
 if (numbers) {
   for (const line of readFileSync(numbers, 'utf8').split('\n')) {
     if (!line) continue;
@@ -284,6 +305,9 @@ const numberSummary = [
   ['M', 'BigInts compare with doubles as JavaScript does'],
   ['R', 'BigInts round to Number(x)'],
   ['A', 'BigInts wrap as BigInt.asIntN and asUintN do'],
+  ['J', 'random JSON documents give JSON.stringify(JSON.parse(t))'],
+  ['E', `mutated JSON documents read as JSON.parse reads them (${jsonOutcomes.value} read, ` +
+    `${jsonOutcomes['!S']} SyntaxErrors where JavaScript throws one, ${jsonOutcomes['!O']} faults of staticjs's own not compared)`],
   ['K', 'JSON.stringify calls, with replacers and spaces, give what JavaScript does'],
 ].filter(([tag]) => counts.has(tag)).map(([tag, what]) => `${counts.get(tag)} ${what}`).join(', ');
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Check the spec against JavaScript itself: every expected value is Node's, every syntax error is one Node rejects, every unsupported case is valid JavaScript, every name error throws in Node; and numbers format and read as in Node (number_test --print), and JSON.stringify writes as in Node (json_test --print)"
+#MISE description="Check the spec against JavaScript itself: every expected value is Node's, every syntax error is one Node rejects, every unsupported case is valid JavaScript, every name error throws in Node; and numbers format and read as in Node (number_test --print), and JSON reads and writes as in Node (json_test --print)"
 #MISE depends=["build"]
 # vim:ft=ruby
 
@@ -8,7 +8,7 @@
 # evaluates every case of tests/spec in Node, and compares what number_test
 # --print and json_test --print compute with what Node computes from the
 # same inputs: 100,000 doubles formatted as String(x), 100,000 decimals read
-# as Number(s), ..., 100,000 JSON.stringify calls.
+# as Number(s), ..., 100,000 random JSON documents read and written back.
 
 require_relative '../staticjs'
 require 'tempfile'

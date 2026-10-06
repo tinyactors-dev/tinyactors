@@ -28,8 +28,10 @@ and pairs through `Math.clz32` and `Math.imul`; and BigInts of 1 to 20
 limbs through `+ - * / % **` and comparison, compared with doubles, and
 written as `String(x)` and `toString(radix)`, read back, rounded as
 `Number(x)` and wrapped by `BigInt.asIntN` and `asUintN` (`number_test
---print`); and `JSON.stringify` calls with replacers and spaces
-(`json_test --print`).
+--print`); and random JSON documents read by `JSON.parse` and written back
+by `JSON.stringify`, the same documents with a byte or two changed (a
+SyntaxError where JavaScript throws one), and `JSON.stringify` calls with
+replacers and spaces (`json_test --print`).
 
 ## What it guarantees
 
@@ -213,7 +215,7 @@ Built-ins:
 | iterators | `toArray` `map` `filter` `reduce` |
 | BigInts | `toString` (radix 2 to 36) |
 | functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Map.groupBy` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` |
-| `JSON` | `stringify` (see "JSON" below) |
+| `JSON` | `parse` `stringify` (see "JSON" below) |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum) |
 | constants | `Number.EPSILON` `MAX_SAFE_INTEGER` `MIN_SAFE_INTEGER` `MAX_VALUE` `MIN_VALUE` `POSITIVE_INFINITY` `NEGATIVE_INFINITY` `NaN`; `Math.PI` `E` `LN2` `LN10` `LOG2E` `LOG10E` `SQRT2` `SQRT1_2`: number constants when compiled |
 | changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear`; maps: `set` `delete` `clear` |
@@ -355,6 +357,21 @@ for `Object.groupBy`.
 
 ## JSON
 
+`JSON.parse(text)` reads JSON as ECMAScript's `JSON.parse` does: JSON's
+white space only (space, tab, LF, CR), every escape, an escaped surrogate
+pair as one character, numbers by JSON's grammar read exactly (to the
+nearest double, ties to even: `1e400` is Infinity, `-0` is -0), objects in
+JavaScript's key order (integer-like keys first, ascending), a duplicate key's
+last value in its first place. A text that is not JSON faults, as JavaScript
+throws a SyntaxError, naming the position in UTF-16 code units. A number, a
+boolean, null or undefined as the text is read as its string, as JavaScript
+reads it (`JSON.parse(1)` is 1). It faults where JavaScript would make what
+staticjs cannot hold: a lone surrogate (`"\uD800"`), or an object with the
+key `__proto__`, which JavaScript makes an own property; on a reviver,
+which JavaScript calls back for every value; on a BigInt or an object as the
+text, which JavaScript turns into a string; and on a text nested deeper than
+`max_nesting`, a limit.
+
 `JSON.stringify(value, replacer, space)` writes as JavaScript does: strings
 with JSON's escapes, numbers as `String(x)` (NaN and the infinities as
 `null`, -0 as `0`), objects in their order, `undefined` and functions left
@@ -371,8 +388,8 @@ a string `space` whose 10th code unit splits a pair, which would write a
 lone surrogate; and on a `space` between 0 and 1, which V8 indents with
 empty lines where the specification does not indent. Its output, the
 members it leaves out included, is at most `max_string_bytes`, so one call's
-work is bounded. It is a leaf: one C call, over an explicit stack of the
-containers open, a unit of fuel per 16 bytes and per value.
+work is bounded. Both are leaves: one C call each, over an explicit stack of
+the containers open, a unit of fuel per 16 bytes and per value.
 
 ## Where it faults instead of following JavaScript
 
@@ -401,10 +418,12 @@ compare identities, or find something on a prototype.
   (`new Map([[{}, 1]])`), which JavaScript keys by its identity; an entry of
   `new Map` that is not an array (`new Map([{0: "k", 1: "v"}])`), which
   JavaScript reads as an object.
-- `JSON.stringify` with a replacer function or of an object with a `toJSON`
-  method, which JavaScript calls; with an array replacer naming a key
-  JavaScript reads from a prototype; and with a `space` between 0 and 1, or
-  a string cut inside a pair (the "JSON" section).
+- `JSON.parse` with a reviver, of a lone surrogate (`"\uD800"`) or of the
+  key `__proto__`, and of a BigInt or an object; `JSON.stringify` with a
+  replacer function or of an object with a `toJSON` method, which JavaScript
+  calls; with an array replacer naming a key JavaScript reads from a
+  prototype; and with a `space` between 0 and 1, or a string cut inside a
+  pair (the "JSON" section).
 - An iterator read where something else holds it too (`[[...it], [...it]]`,
   a closure's capture), where JavaScript gives nothing the second time; an
   iterator's `next`, `drop`, `take`, `flatMap`, `some`, `every`, `find` and
@@ -544,7 +563,7 @@ the same program but for its tags, the same outcome and no less fuel),
 `tests/api_test.c`, `tests/matcher_test.c` (the shape matcher on every
 spec source, the deepest and widest programs, unreadable streams and
 running out of memory), `tests/number_test.c` and `tests/json_test.c`
-(random `JSON.stringify` calls).
+(random JSON read and written back, and mutated JSON read or refused).
 `mise run test` also runs `bench --smoke` (below), which times nothing.
 
 ## Benchmarks
