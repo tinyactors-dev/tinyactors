@@ -354,6 +354,191 @@ typeof Array.of
 new Array.of(1)
 --- error unsupported constructs only Set
 
+=== Array.from an array, a set, a string and a length object
+[Array.from([1, 2, 3]), Array.from(new Set([3, 1, 3, 2])), Array.from("abc"), Array.from({length: 3}).length, Array.from({length: 0})]
+--- value
+[[1,2,3],[3,1,2],["a","b","c"],3,[]]
+
+=== Array.from empty input
+[Array.from([]), Array.from(new Set()), Array.from(""), Array.from([], x => x), Array.from("", x => x), Array.from(new Set(), x => x), Array.from({length: 0}, x => x)]
+--- value
+[[],[],[],[],[],[],[]]
+
+=== Array.from a string keeps surrogate pairs together
+[Array.from("a\u{1F600}b").length, Array.from("a\u{1F600}b")[1] === "\u{1F600}", Array.from("é中").length, Array.from("\u{1F600}", c => c.length)]
+--- value
+[3,true,2,[2]]
+
+=== Array.from gives an array that holds the same elements
+((a, o) => { const b = Array.from([o, a]); return [b[0].x, b[1][0], b.length, Array.from(a) !== undefined]; })([4], {x: 5})
+--- value
+[5,4,2,true]
+
+=== Array.from keeps NaN, -0 and undefined
+[Array.from([NaN])[0] !== Array.from([NaN])[0], 1 / Array.from([-0])[0], Array.from([undefined, null]).length, Array.from({length: 2})[1] === undefined]
+--- value
+[true,-Infinity,2,true]
+
+=== Array.from with a mapper
+[Array.from([1, 2, 3], x => x * 2), Array.from(new Set([1, 2]), x => x + 1), Array.from("ab", c => c + c), Array.from({length: 3}, (_, i) => i * i), Array.from([5, 6], (x, i) => [x, i])]
+--- value
+[[2,4,6],[2,3],["aa","bb"],[0,1,4],[[5,0],[6,1]]]
+
+=== Array.from calls the mapper with the element and its index only
+Array.from([7, 8], (...args) => args.length)
+--- value
+[2,2]
+
+=== Array.from with a mapper that is a built-in
+[Array.from([1, 2], Array.of), Array.from([[1], [2, 3]], Array.isArray), Array.from([4, 9], Math.max)]
+--- value
+[[[1,0],[2,1]],[true,true],[4,9]]
+
+=== Array.from with an undefined mapper is Array.from without one
+[Array.from([1, 2], undefined), Array.from("ab", undefined)]
+--- value
+[[1,2],["a","b"]]
+
+=== Array.from for an array-like gives undefined to the mapper
+Array.from({length: 2}, x => x === undefined)
+--- value
+[true,true]
+
+=== Array.from inside a mapper and a loop
+[Array.from([1, 2], x => Array.from({length: x}, (_, i) => i)), [1, 2].map(x => Array.from("ab", c => c + x)), Array.from([3, 1, 2]).toSorted((a, b) => a - b)]
+--- value
+[[[0],[0,1]],[["a1","b1"],["a2","b2"]],[1,2,3]]
+
+=== Array.from with a mapper that returns objects and arrays
+Array.from([1, 2], x => ({k: x}))
+--- value
+[{"k":1},{"k":2}]
+
+=== Array.from with a PLUCK mapper
+[Array.from([{a: 1}, {a: 2}, {}], x => x.a).length, Array.from([{a: 1}, {a: 2}], x => x.a), Array.from([{a: [1]}], x => x.a)]
+--- value
+[3,[1,2],[[1]]]
+
+=== Array.from with a PLUCK mapper in C
+@shapes PLUCK(k)
+Array.from([{k: 1}, {k: "a"}, {n: 2}], x => x.k)
+--- value
+[1,"a",undefined]
+
+=== Array.from with a PLUCK mapper on a string reads undefined
+@shapes PLUCK(k)
+Array.from("ab", x => x.k)
+--- value
+[undefined,undefined]
+
+=== Array.from with a PLUCK mapper on a length object faults
+@shapes PLUCK(k)
+Array.from({length: 2}, x => x.k)
+--- fault
+
+=== Array.from with a PLUCK mapper on a number element faults
+@shapes PLUCK(k)
+Array.from([{k: 1}, 5], x => x.k)
+--- fault reads properties
+
+=== Array.from with a PLUCK mapper that reads a prototype name
+@shapes PLUCK(toString)
+Array.from([{a: 1}], x => x.toString)
+--- fault no prototype
+
+=== Array.from with a third mapper parameter reads undefined
+@shapes -
+Array.from([1, 2], (x, i, a) => a === undefined)
+--- value
+[true,true]
+
+=== Array.from ignores a third argument
+Array.from([1, 2], x => x + 1, 5)
+--- value
+[2,3]
+
+=== Array.from with a spread and chained
+[Array.from(...[[1, 2]]), Array.from([1, 2]).concat(Array.from("c")), Array.from(Array.from([1])).length]
+--- value
+[[1,2],[1,2,"c"],1]
+
+=== Array.from faults on a number
+Array.from(5)
+--- fault Array.from takes
+
+=== Array.from faults on null and undefined
+Array.from(null)
+--- fault Array.from takes
+
+=== Array.from faults with no arguments
+Array.from()
+--- fault Array.from takes
+
+=== Array.from faults on an object that is not a length
+Array.from({a: 1})
+--- fault Array.from takes
+
+=== Array.from faults on an empty object
+Array.from({})
+--- fault Array.from takes
+
+=== Array.from faults on an object with a length and another key
+Array.from({length: 1, a: 1})
+--- fault Array.from takes
+
+=== Array.from faults on a negative length
+Array.from({length: -1})
+--- fault non-negative integer
+
+=== Array.from faults on a fractional length
+Array.from({length: 1.5})
+--- fault non-negative integer
+
+=== Array.from faults on a NaN length
+Array.from({length: NaN})
+--- fault non-negative integer
+
+=== Array.from faults on an infinite length
+Array.from({length: Infinity})
+--- fault non-negative integer
+
+=== Array.from faults on a length that is a string
+Array.from({length: "2"})
+--- fault non-negative integer
+
+=== Array.from faults on a length past the limit
+Array.from({length: 1e9})
+--- fault limit
+
+=== Array.from faults on a mapper that is not a function
+Array.from([1], 1)
+--- fault Array.from maps with a function
+
+=== Array.from faults on a null mapper
+Array.from([1], null)
+--- fault Array.from maps with a function
+
+=== Array.from faults on a mapper that is not a function, for an empty array
+Array.from([], "x")
+--- fault Array.from maps with a function
+
+=== Array.from faults when the mapper faults
+Array.from([1], x => x.a.b)
+--- fault
+
+=== Array.from faults on a function as items
+Array.from(x => x)
+--- fault Array.from takes
+
+=== Array.from typeof
+typeof Array.from
+--- value
+"function"
+
+=== Array.from is not a constructor call
+new Array.from([1])
+--- error unsupported constructs only Set
+
 === String and Boolean
 [String(1.5), String(null), String(), Boolean(""), Boolean("x"), Boolean()]
 --- value

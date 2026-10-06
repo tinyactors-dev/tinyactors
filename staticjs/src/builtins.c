@@ -20,6 +20,7 @@ typedef struct {
 static const function_entry FUNCTION_TABLE[] = {
     { "", "String", SJS_BUILTIN_STRING },
     { "", "Boolean", SJS_BUILTIN_BOOLEAN },
+    { "Array", "from", SJS_BUILTIN_ARRAY_FROM },
     { "Array", "isArray", SJS_BUILTIN_ARRAY_IS_ARRAY },
     { "Array", "of", SJS_BUILTIN_ARRAY_OF },
     { "Object", "keys", SJS_BUILTIN_OBJECT_KEYS },
@@ -162,6 +163,7 @@ static const sjs_name NAMES[] = {
 static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_STRING),
     FUNCTION_VALUE(SJS_BUILTIN_BOOLEAN),
+    FUNCTION_VALUE(SJS_BUILTIN_ARRAY_FROM),
     FUNCTION_VALUE(SJS_BUILTIN_ARRAY_IS_ARRAY),
     FUNCTION_VALUE(SJS_BUILTIN_ARRAY_OF),
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_KEYS),
@@ -258,6 +260,7 @@ bool sjs_builtin_loops(sjs_builtin_id id) {
     case SJS_METHOD_ARRAY_SOME:
     case SJS_METHOD_ARRAY_TO_SORTED:
     case SJS_BUILTIN_OBJECT_GROUP_BY:
+    case SJS_BUILTIN_ARRAY_FROM:
         return true;
     default:
         return false;
@@ -1075,6 +1078,81 @@ static const sjs_array *receiver(sjs_vm *vm, const vm_frame *frame) {
     return SJS_AS_ARRAY(*slot(vm, frame, LOOP_RECEIVER));
 }
 
+/* Array.from's items as an array held in the receiver's slot: an array as
+ * it is, a set's members, a string's code points, or n undefined values for
+ * { length: n }. Charges what it copies. With no mapper the list is the
+ * result, and the loop ends before its first step. */
+static sjs_result from_list(sjs_vm *vm, sjs_value items, sjs_value *list) {
+    sjs_array *a;
+    if (items.kind == SJS_ARRAY) {
+        sjs_ref(items);
+        *list = items;
+        return SJS_OK;
+    }
+    if (items.kind == SJS_SET) {
+        const sjs_array *s = SJS_AS_ARRAY(items);
+        if (new_array(vm, s->length, &a) != SJS_OK) return SJS_ERR_PROGRAM;
+        for (uint32_t i = 0; i < s->length; i++) {
+            sjs_ref(s->items[i]);
+            a->items[i] = s->items[i];
+            a->length = i + 1;
+        }
+        vm->fuel_used += s->length;
+    } else if (items.kind == SJS_STRING) {
+        sjs_str text = sjs_string_view(SJS_AS_STRING(items));
+        if (new_array(vm, 4, &a) != SJS_OK) return SJS_ERR_PROGRAM;
+        uint32_t i = 0;
+        while (i < text.length) {
+            uint32_t start = i;
+            sjs_utf8_next(text, &i);
+            sjs_string *c;
+            sjs_result r = sjs_string_make(vm->context, (sjs_str){ text.ptr + start, i - start }, &c);
+            if (r != SJS_OK) {
+                sjs_unref(vm->context, sjs_heap_value(SJS_ARRAY, &a->h));
+                return sjs_vm_fail(vm, r);
+            }
+            if (array_add(vm, &a, sjs_heap_value(SJS_STRING, &c->h)) != SJS_OK) {
+                sjs_unref(vm->context, sjs_heap_value(SJS_ARRAY, &a->h));
+                return SJS_ERR_PROGRAM;
+            }
+        }
+        vm->fuel_used += a->length;
+    } else {
+        const sjs_entry *e = NULL;
+        if (items.kind == SJS_OBJECT && SJS_AS_OBJECT(items)->count == 1) e = sjs_object_find(SJS_AS_OBJECT(items), SJS_STR("length"));
+        if (e == NULL) return sjs_vm_fault(vm, "Array.from takes an array, a set, a string or an object with only a length");
+        double n = e->value.kind == SJS_NUMBER ? e->value.as.number : -1.0;
+        if (!sjs_number_is_integer(n) || n < 0) return sjs_vm_fault(vm, "Array.from takes a length that is a non-negative integer");
+        if (n > (double)vm->context->limits.max_value_items) return sjs_vm_fault(vm, "Array.from length is past the limit of an array");
+        if (new_array(vm, (uint32_t)n, &a) != SJS_OK) return SJS_ERR_PROGRAM;
+        for (uint32_t i = 0; i < (uint32_t)n; i++) a->items[i] = sjs_undefined();
+        a->length = (uint32_t)n;
+        vm->fuel_used += a->length;
+    }
+    *list = sjs_heap_value(SJS_ARRAY, &a->h);
+    return SJS_OK;
+}
+
+static sjs_result set_output(sjs_vm *vm, vm_frame *frame, sjs_value v);
+
+/* The loop's state for Array.from: its items become the receiver, and with
+ * no mapper they are also the result. */
+static sjs_result from_start(sjs_vm *vm, vm_frame *frame, bool mapping) {
+    sjs_value *held = slot(vm, frame, LOOP_RECEIVER);
+    sjs_value list;
+    if (from_list(vm, *held, &list) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_vm_release(vm, *held);
+    *held = list;
+    if (mapping) return SJS_OK;
+    sjs_ref(list);
+    frame->index = 0;
+    frame->length = 0;
+    frame->phase = 0;
+    frame->entered = false;
+    frame->shape = SJS_SHAPE_NONE;
+    return set_output(vm, frame, list);
+}
+
 /* Object.groupBy's step for the key the callback gave for the element at
  * `i`: ToPropertyKey of a primitive, and the element appended to the array
  * the key holds in the output object, which is made when the key is first
@@ -1291,6 +1369,12 @@ static const sjs_entry *own_entry(vm_frame *frame, const sjs_object *o) {
 
 sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
     sjs_value callback = *slot(vm, frame, LOOP_CALLBACK);
+    if (frame->builtin == SJS_BUILTIN_ARRAY_FROM) {
+        bool mapping = callback.kind != SJS_UNDEFINED;
+        if (mapping && !is_callable(callback)) return sjs_vm_fault(vm, "Array.from maps with a function");
+        sjs_result started = from_start(vm, frame, mapping);
+        if (started != SJS_OK || !mapping) return started;
+    }
     if (slot(vm, frame, LOOP_RECEIVER)->kind != SJS_ARRAY) return sjs_vm_fault(vm, "Object.groupBy takes an array");
     const sjs_array *a = receiver(vm, frame);
     frame->index = 0;
@@ -1307,9 +1391,10 @@ sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
     switch (frame->builtin) {
     case SJS_METHOD_ARRAY_MAP:
     case SJS_METHOD_ARRAY_FILTER:
-    case SJS_METHOD_ARRAY_FLAT_MAP: {
+    case SJS_METHOD_ARRAY_FLAT_MAP:
+    case SJS_BUILTIN_ARRAY_FROM: {
         sjs_array *out;
-        if (new_array(vm, frame->builtin == SJS_METHOD_ARRAY_MAP ? a->length : 4, &out) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (new_array(vm, frame->builtin == SJS_METHOD_ARRAY_MAP || frame->builtin == SJS_BUILTIN_ARRAY_FROM ? a->length : 4, &out) != SJS_OK) return SJS_ERR_PROGRAM;
         return set_output(vm, frame, sjs_heap_value(SJS_ARRAY, &out->h));
     }
     case SJS_BUILTIN_OBJECT_GROUP_BY: {
@@ -1368,8 +1453,9 @@ static loop_step call_back(sjs_vm *vm, vm_frame *frame, sjs_values values) {
 static loop_step call_element(sjs_vm *vm, vm_frame *frame, uint32_t i) {
     const sjs_array *a = receiver(vm, frame);
     sjs_value args[3] = { a->items[i], sjs_num((double)i), *slot(vm, frame, LOOP_RECEIVER) };
-    /* Object.groupBy calls back with the element and its index only. */
-    return call_back(vm, frame, (sjs_values){ args, frame->builtin == SJS_BUILTIN_OBJECT_GROUP_BY ? 2u : 3u });
+    /* Object.groupBy and Array.from call back with the element and its index only. */
+    bool two = frame->builtin == SJS_BUILTIN_OBJECT_GROUP_BY || frame->builtin == SJS_BUILTIN_ARRAY_FROM;
+    return call_back(vm, frame, (sjs_values){ args, two ? 2u : 3u });
 }
 
 static loop_step done(sjs_vm *vm, vm_frame *frame, sjs_value result) {
@@ -1659,7 +1745,8 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
         sjs_value r = sjs_vm_pop(vm);
         frame->phase = 0;
         switch (frame->builtin) {
-        case SJS_METHOD_ARRAY_MAP: {
+        case SJS_METHOD_ARRAY_MAP:
+        case SJS_BUILTIN_ARRAY_FROM: {
             sjs_array *out = SJS_AS_ARRAY(*slot(vm, frame, LOOP_OUTPUT));
             out->items[out->length++] = r;
             frame->index++;
