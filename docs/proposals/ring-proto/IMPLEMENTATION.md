@@ -714,6 +714,33 @@ a stored send when its parent's pool is full. `ta_event_name_intern` and
 and registers I/O and invoker types with them until 5.2's type
 registries; core interns no run-time name through them.
 
+**4.4 so far.** What a macrostep needs is allocated when it takes its
+input, a safe point (9183bd73, 78c7d71b, ce1535fe, 5cd2d33e): the storage
+to pause or stop, an internal queue of `internalQueueEvents` ordinary
+entries plus a floor the definition's shape sizes, the invoke table (a
+record per `<invoke>`), pending invocations, the nested interpreter
+regions and their exit frames, and a name buffer for the longest name.
+A `<raise>` or `#_internal` send beyond the ordinary quota fails as
+`error.execution.capacity.internal`. A data model, `copy_out` or an
+invoker that runs out of memory fails in the chart as `error.execution`
+(1c334601); `TA_OP_NOMEM` remains only for an I/O processor's send and
+for image bytes. `tests/macrostep_alloc_test.c` checks, with an
+allocator that refuses whatever is asked while a macrostep runs, that
+raises, sends, delayed sends, cancels and host invocations make no
+request. Choices where the design left one open: the floor is
+`1 + data + 3 × states + 2 × transitions + invokes`, an overestimate; the
+system keeps up to 64 spare queues; the name buffer costs 64 KiB per
+system. **Left for 4.4:** a queue full of mandatory events still stops
+the session as running out of memory did, where ADR 0102 abandons the
+input as a runaway with `runaway_cause` `internal_queue`; invocation
+startup still runs inside the macrostep, so a local child's spawn, its
+queue when it is exited, and an unpublished session's held effects
+(`ta_activation_effects`) still allocate there; the out-of-memory stop
+machinery (`ta_stop*`, the spare continuation and sparse state, queue
+mark and truncate) stays until those go; `_event.data` of capacity
+errors is still empty; the test host's data models still answer
+`TA_OP_NOMEM`, which core now reads as an error.
+
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
   input.

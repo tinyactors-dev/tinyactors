@@ -235,3 +235,21 @@ Two facts shape the decision:
     refills at safe points. The sweep inside a macrostep
     (`out_of_memory.rb`, `pause_test`'s refused allocations) has nothing
     left to fail.
+
+## Implementation notes (2026-10-06)
+
+Decision 1 holds for the running session's own macrostep: its pause
+storage, internal queue, invoke table, pending invocations, nested
+regions and name buffer are allocated when it takes its input, and a
+macrostep of a session that invokes host services, raises, sends,
+schedules and cancels makes no allocator request
+(`tests/macrostep_alloc_test.c`). Decision 4's queue is still one per
+session, sized at the take (`internalQueueEvents` plus a floor of
+`1 + data + 3 × states + 2 × transitions + invokes`) and returned to a
+list of up to 64 spares, rather than one live queue per workspace. A
+queue full of mandatory events still stops the session as running out of
+memory did, not as a runaway. Data models, `copy_out` and invokers that
+run out of memory are `error.execution`; `TA_OP_NOMEM` remains for an I/O
+processor's send and for image bytes. Invocation startup inside the
+macrostep (decision 6), and with it a local child's spawn and an
+unpublished session's held effects, still allocate there.

@@ -31,7 +31,9 @@ decisions are core ADRs 0098 to 0105, repository ADR 0003 and napi ADR
   pass and read names as text, the router is gone, the ring defaults
   measured by proxy in ADR 0099's notes), delayed sends as envelopes
   (4.3, done: names of delayed and I/O sends stay text), no allocation in
-  a macrostep (4.4), macrostep slots (4.5). The kernel, the test host's
+  a macrostep (4.4, in progress: what a macrostep needs is allocated at the
+  take; the stop machinery, invocation startup after the macrostep and the
+  internal-queue runaway remain), macrostep slots (4.5). The kernel, the test host's
   hosted mode and napi's native layer were deleted on 2026-10-06; until
   M3 the test host is the only host.
 - [ ] **M2, core speaks only rings:** inputs (5.1, the test host becomes
