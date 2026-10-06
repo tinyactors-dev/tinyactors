@@ -1013,7 +1013,7 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 === sort by a key: number elements fault
 @shapes COMPARE_BY_KEY(k, false)
 [2, 1].toSorted((a, b) => a.k - b.k)
---- fault staticjs reads properties of objects, arrays, strings and sets
+--- fault staticjs reads properties of objects, arrays, strings, sets and maps
 
 === sort by a key: the one bad pair faults where the bytecode does, after fast pairs
 @shapes COMPARE_BY_KEY(k, false)
@@ -1247,12 +1247,12 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 === pluck: a number element faults
 @shapes PLUCK(k)
 [{k: 1}, 2].map(x => x.k)
---- fault staticjs reads properties of objects, arrays, strings and sets
+--- fault staticjs reads properties of objects, arrays, strings, sets and maps
 
 === pluck: a boolean element faults
 @shapes PLUCK(k)
 [true].map(x => x.k)
---- fault staticjs reads properties of objects, arrays, strings and sets
+--- fault staticjs reads properties of objects, arrays, strings, sets and maps
 
 === pluck: a method name on an array faults
 @shapes PLUCK(map)
@@ -1416,7 +1416,7 @@ true
 === predicates: a number element faults
 @shapes KEY_COMPARE(k, STRICT_EQUAL, 1)
 [{k: 2}, 3].find(x => x.k === 1)
---- fault staticjs reads properties of objects, arrays, strings and sets
+--- fault staticjs reads properties of objects, arrays, strings, sets and maps
 
 === predicates: arrays and strings by length, sets by size, in bytecode
 @shapes KEY_COMPARE(length, STRICT_EQUAL, 3) KEY_COMPARE(size, GREATER, 0)
@@ -1723,7 +1723,7 @@ true
 === sums: a number element faults for a key
 @shapes SUM_KEY(k, true)
 [{k: 1}, 2].reduce((a, x) => x.k + a, 0)
---- fault staticjs reads properties of objects, arrays, strings and sets
+--- fault staticjs reads properties of objects, arrays, strings, sets and maps
 
 === sums: the first bad key faults, before a null
 @shapes SUM_KEY(k, false)

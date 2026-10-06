@@ -2937,7 +2937,7 @@ export const f = () => { state.xs.push(3); return state; };
 
 === a path call on a number
 (() => { const o = {n: 1}; o.n.push(2); return o; })()
---- fault methods on arrays, strings, sets and BigInts only
+--- fault methods on arrays, strings, sets, maps and BigInts only
 
 === a path call of a set's method on an array
 (() => { const o = {xs: [1]}; o.xs.add(2); return o; })()
@@ -2969,7 +2969,7 @@ export const f = () => { state.xs.push(3); return state; };
 
 === push then push through a path, on a number
 (() => { const o = {xs: []}; return o.xs.push(1).push(2); })()
---- fault methods on arrays, strings, sets and BigInts only
+--- fault methods on arrays, strings, sets, maps and BigInts only
 
 === push then push through a path, as a statement
 (() => { const o = {xs: []}; o.xs.push(1).push(2); return o; })()

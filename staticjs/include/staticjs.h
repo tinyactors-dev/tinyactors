@@ -28,7 +28,7 @@
 #endif
 
 #define SJS_VERSION_MAJOR 0
-#define SJS_VERSION_MINOR 4
+#define SJS_VERSION_MINOR 5
 #define SJS_VERSION_PATCH 0
 /* (major << 16) | (minor << 8) | patch; sjs_version() answers it for the library linked. */
 #define SJS_VERSION ((SJS_VERSION_MAJOR << 16) | (SJS_VERSION_MINOR << 8) | SJS_VERSION_PATCH)
@@ -136,7 +136,8 @@ typedef struct {
                                  * pattern, its default values included, waits for its value */
     uint32_t max_stack;         /* evaluator value slots */
     uint32_t max_frames;        /* evaluator frames: calls and looping built-ins */
-    uint32_t max_value_items;   /* elements of one array, object or set */
+    uint32_t max_value_items;   /* elements of one array, object or set; a map's keys and values
+                                 * count two for each entry */
     uint32_t max_string_bytes;  /* bytes of one string value */
     uint32_t max_bigint_bits;   /* bits of one BigInt's magnitude: 2^max_bigint_bits - 1 is the
                                  * largest; an operation whose result is larger faults */
@@ -189,6 +190,7 @@ typedef enum {
     SJS_ARRAY,
     SJS_OBJECT,
     SJS_SET,
+    SJS_MAP,
     SJS_FUNCTION
 } sjs_kind;
 
@@ -247,13 +249,39 @@ SJS_API sjs_result sjs_set_new(sjs_context *context, uint32_t capacity, sjs_valu
  * error the caller keeps its reference to the element. */
 SJS_API sjs_result sjs_set_add(sjs_context *context, sjs_value *set, sjs_value element);
 
-/* Elements of an array, properties of an object, elements of a set. */
+/* Elements of an array, properties of an object, elements of a set, entries
+ * of a map. */
 SJS_API uint32_t sjs_length(sjs_value value);
 /* Borrowed: valid while the container is. */
 SJS_API sjs_value sjs_array_at(sjs_value array, uint32_t index);
 SJS_API sjs_value sjs_set_at(sjs_value set, uint32_t index);
 SJS_API sjs_result sjs_object_at(sjs_value object, uint32_t index, sjs_property *out);
 SJS_API sjs_result sjs_object_get(sjs_value object, sjs_str key, sjs_value *out);
+
+/*
+ * Maps: each key once, with its value, in insertion order. A key is any
+ * primitive, compared as SameValueZero (NaN is NaN, -0 is 0, a BigInt by its
+ * value); staticjs has no identity, so an object is never a key. A new map is
+ * empty, with room for `capacity` entries, and can be set while the caller
+ * holds its only reference.
+ */
+typedef struct {
+    sjs_value key;
+    sjs_value value;
+} sjs_map_entry;
+
+SJS_API sjs_result sjs_map_new(sjs_context *context, uint32_t capacity, sjs_value *out);
+/* Set as Map.prototype.set would: a key the map has keeps its place and
+ * takes the value; a new one goes last. Takes over the caller's references to
+ * the key and the value; on an error (SJS_ERR_INVALID for a key that is not a
+ * primitive) the caller keeps them. */
+SJS_API sjs_result sjs_map_set(sjs_context *context, sjs_value *map, const sjs_map_entry *entry);
+/* Entries of a map; 0 for any other value. */
+SJS_API uint32_t sjs_map_size(sjs_value map);
+/* The value of `key`, borrowed; SJS_ERR_NOT_FOUND when the map has none. */
+SJS_API sjs_result sjs_map_get(sjs_value map, sjs_value key, sjs_value *out);
+/* The entry at `index`, in insertion order, borrowed. */
+SJS_API sjs_result sjs_map_at(sjs_value map, uint32_t index, sjs_map_entry *out);
 
 /*
  * Functions the embedder provides, such as SCXML's In(). A native is called
@@ -631,7 +659,8 @@ SJS_API void sjs_vm_destroy(sjs_vm *vm);
  *
  * Writes a value as JavaScript source that evaluates to an equal value:
  * JSON where JSON can say it, and `undefined`, `NaN`, `Infinity`, `-0`, a
- * BigInt's `10n` and `new Set([...])` where it cannot. Resumes when the buffer
+ * BigInt's `10n`, `new Set([...])` and `new Map([[key, value], ...])` where it
+ * cannot. Resumes when the buffer
  * is full; a BigInt's digits are made first, through the context.
  */
 

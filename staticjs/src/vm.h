@@ -149,6 +149,9 @@ sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
  * or written into `room` (32 bytes). Not for an object (sjs_is_primitive),
  * nor a BigInt. */
 sjs_str sjs_primitive_text(sjs_value v, char *room);
+/* A map's entries as a new array of [key, value] arrays, a unit of fuel
+ * each. */
+sjs_result sjs_map_entries(sjs_vm *vm, const sjs_array *map, sjs_array **out);
 /* MUTATION: a method that changes its receiver, but sort (a loop): the
  * receiver is the value of the variable at `receiver_slot`, which holds it
  * alone; the method updates the slot when the value moves. */

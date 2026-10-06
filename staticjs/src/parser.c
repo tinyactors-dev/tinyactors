@@ -3618,7 +3618,8 @@ static handled new_token(sjs_parser *p, const queued_token *t) {
             p->head++;
             return H_TAKEN;
         }
-        if (t->kind != SJS_TOKEN_NAME || !sjs_str_equal(token_text(p, t), SJS_STR("Set"))) {
+        bool map = t->kind == SJS_TOKEN_NAME && sjs_str_equal(token_text(p, t), SJS_STR("Map"));
+        if (!map && (t->kind != SJS_TOKEN_NAME || !sjs_str_equal(token_text(p, t), SJS_STR("Set")))) {
             /* What new constructs is a member expression: no unary operator,
              * and of import only import.meta. */
             bool member = starts_member(p, t);
@@ -3628,17 +3629,18 @@ static handled new_token(sjs_parser *p, const queued_token *t) {
                 member = p->goal == SJS_GOAL_MODULE && is_punctuator(next, SJS_P_DOT);
             }
             if (!member) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected what new constructs" });
-            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs constructs only Set" });
+            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs constructs only Set and Map" });
         }
         f->state = N_OPEN;
+        f->is_new = map ? 2u : 1u;   /* which, until the ( */
         return H_TAKEN;
     }
-    if (!is_punctuator(t, SJS_P_LPAREN)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "write new Set(...) with parentheses" });
+    if (!is_punctuator(t, SJS_P_LPAREN)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "write new Set(...) and new Map(...) with parentheses" });
+    bool map = f->is_new == 2u;
     f->type = F_CALL;
-    f->is_new = 1;
     f->state = 0;
     p->expect = E_OPERAND;
-    return send_event(p, texted(SJS_EV_NEW_BEGIN, SJS_STR("Set"), frame_place(f, f->at)));
+    return send_event(p, texted(SJS_EV_NEW_BEGIN, map ? SJS_STR("Map") : SJS_STR("Set"), frame_place(f, f->at)));
 }
 
 /* ------------------------------------------------------------------------

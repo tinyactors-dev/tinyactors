@@ -78,7 +78,8 @@ static void drain(sjs_context *context, sjs_heap *work) {
         work = h->link;
         switch (h->type) {
         case SJS_HEAP_ARRAY:
-        case SJS_HEAP_SET: {
+        case SJS_HEAP_SET:
+        case SJS_HEAP_MAP: {   /* a map's keys and values alike */
             sjs_array *a = (sjs_array *)(void *)h;
             for (uint32_t i = 0; i < a->length; i++) drop(context, &work, a->items[i]);
             lookup_free(context, a->index);
@@ -266,16 +267,19 @@ static sjs_index **lookup_field(sjs_heap *h) {
     return &((sjs_array *)(void *)h)->index;
 }
 
+/* The items an index is over: an object's keys, a set's elements, a map's
+ * entries, whose keys are its even items. */
 static uint32_t item_count(const sjs_heap *h) {
     if (h->type == SJS_HEAP_OBJECT) return ((const sjs_object *)(const void *)h)->count;
-    return ((const sjs_array *)(const void *)h)->length;
+    uint32_t length = ((const sjs_array *)(const void *)h)->length;
+    return h->type == SJS_HEAP_MAP ? length / 2u : length;
 }
 
 static uint32_t item_hash(const sjs_heap *h, uint32_t i) {
     if (h->type == SJS_HEAP_OBJECT) {
         return hash_bytes(sjs_string_view(((const sjs_object *)(const void *)h)->entries[i].key));
     }
-    return hash_value(((const sjs_array *)(const void *)h)->items[i]);
+    return hash_value(((const sjs_array *)(const void *)h)->items[h->type == SJS_HEAP_MAP ? 2u * i : i]);
 }
 
 static void lookup_put(sjs_index *index, uint32_t hash, uint32_t position) {
@@ -400,6 +404,40 @@ sjs_result sjs_array_append(sjs_context *context, sjs_value *array, sjs_value el
     return SJS_OK;
 }
 
+/* Where an item is: its position (an entry's, in a map), and its slot in
+ * the index, or UINT32_MAX for none (not found; no index). */
+typedef struct {
+    uint32_t position;
+    uint32_t slot;
+} lookup_hit;
+
+/* Where `key` is among a set's elements (stride 1) or a map's keys (stride
+ * 2: its even items), under SameValueZero. Inlined with its stride, so a
+ * set's lookup compiles as it did before maps shared it. */
+__attribute__((always_inline)) static inline lookup_hit keyed_hit(const sjs_array *a, sjs_value key, uint32_t stride) {
+    lookup_hit hit = { UINT32_MAX, UINT32_MAX };
+    const sjs_index *index = a->index;
+    if (index != NULL) {
+        for (uint32_t i = hash_value(key) & index->mask; index->slots[i] != 0; i = (i + 1u) & index->mask) {
+            if (same_value_zero(a->items[(index->slots[i] - 1u) * stride], key)) {
+                hit.position = index->slots[i] - 1u;
+                hit.slot = i;
+                return hit;
+            }
+        }
+        return hit;
+    }
+    for (uint32_t i = 0; i < a->length; i += stride) {
+        if (same_value_zero(a->items[i], key)) {
+            hit.position = i / stride;
+            return hit;
+        }
+    }
+    return hit;
+}
+
+/* A set's own scan, as it was before keyed_hit: the same lookup, but it
+ * answers a bool, which compiles to tighter code on the sets' hot paths. */
 bool sjs_set_contains(const sjs_array *set, sjs_value element) {
     const sjs_index *index = set->index;
     if (index != NULL) {
@@ -588,6 +626,8 @@ uint32_t sjs_length(sjs_value value) {
         return SJS_AS_ARRAY(value)->length;
     case SJS_OBJECT:
         return SJS_AS_OBJECT(value)->count;
+    case SJS_MAP:
+        return SJS_AS_ARRAY(value)->length / 2u;
     default:
         return 0;
     }
@@ -759,13 +799,6 @@ sjs_result sjs_to_key(sjs_context *context, sjs_value v, sjs_string **out) {
  * empty is reallocated smaller. This section exists only for mutation.
  */
 
-/* Where an item is: its position, and its slot in the index, or
- * UINT32_MAX for none (not found; no index). */
-typedef struct {
-    uint32_t position;
-    uint32_t slot;
-} lookup_hit;
-
 static lookup_hit object_hit(const sjs_object *o, sjs_str key) {
     lookup_hit hit = { UINT32_MAX, UINT32_MAX };
     const sjs_index *index = o->index;
@@ -781,28 +814,6 @@ static lookup_hit object_hit(const sjs_object *o, sjs_str key) {
     }
     for (uint32_t i = 0; i < o->count; i++) {
         if (sjs_str_equal(sjs_string_view(o->entries[i].key), key)) {
-            hit.position = i;
-            return hit;
-        }
-    }
-    return hit;
-}
-
-static lookup_hit set_hit(const sjs_array *set, sjs_value element) {
-    lookup_hit hit = { UINT32_MAX, UINT32_MAX };
-    const sjs_index *index = set->index;
-    if (index != NULL) {
-        for (uint32_t i = hash_value(element) & index->mask; index->slots[i] != 0; i = (i + 1u) & index->mask) {
-            if (same_value_zero(set->items[index->slots[i] - 1u], element)) {
-                hit.position = index->slots[i] - 1u;
-                hit.slot = i;
-                return hit;
-            }
-        }
-        return hit;
-    }
-    for (uint32_t i = 0; i < set->length; i++) {
-        if (same_value_zero(set->items[i], element)) {
             hit.position = i;
             return hit;
         }
@@ -930,7 +941,7 @@ sjs_removal sjs_object_remove(sjs_context *context, sjs_object **object, sjs_str
 
 sjs_removal sjs_set_remove(sjs_context *context, sjs_array **set, sjs_value element) {
     sjs_array *a = *set;
-    lookup_hit hit = set_hit(a, element);
+    lookup_hit hit = keyed_hit(a, element, 1u);
     sjs_removal out = { hit.position != UINT32_MAX, removal_cost(&a->h, a->index, hit) };
     if (!out.removed) return out;
     if (a->index != NULL) lookup_remove(&a->h, a->index, hit);
@@ -998,4 +1009,97 @@ void sjs_string_extend(sjs_string *s, sjs_str tail) {
     s->h.flags &= (uint8_t)~(SJS_STRING_INDEX | SJS_STRING_NAMED | (ascii ? 0u : SJS_STRING_ASCII));
     s->h.name_id = 0;
     if (parse_index(sjs_string_view(s), &s->index)) s->h.flags |= SJS_STRING_INDEX;
+}
+
+/* ------------------------------------------------------------------------
+ * Maps: a set of keys with a value for each. A map is an sjs_array of
+ * SJS_HEAP_MAP whose keys and values alternate in its items, so that it
+ * grows, shrinks and is freed as a set is, and its keys are found through
+ * the same index (keyed_hit with a stride of 2, item_count and item_hash
+ * count and hash its entries by their keys).
+ */
+
+sjs_result sjs_map_make(sjs_context *context, uint32_t entries, sjs_array **out) {
+    if (entries > context->limits.max_value_items / 2u) return SJS_ERR_LIMIT;
+    return array_alloc(context, (shape){ entries * 2u, SJS_HEAP_MAP }, out);
+}
+
+const sjs_value *sjs_map_find(const sjs_array *map, sjs_value key) {
+    lookup_hit hit = keyed_hit(map, key, 2u);
+    return hit.position == UINT32_MAX ? NULL : &map->items[2u * hit.position + 1u];
+}
+
+sjs_result sjs_map_put(sjs_context *context, sjs_array **map, const sjs_map_entry *entry) {
+    sjs_value key = entry->key;
+    if (!sjs_is_primitive(key)) return SJS_ERR_PROGRAM;
+    if (key.kind == SJS_NUMBER && key.as.number == 0) key.as.number = 0.0;
+    sjs_value *found = (sjs_value *)(uintptr_t)sjs_map_find(*map, key);
+    if (found != NULL) {
+        sjs_value old = *found;
+        *found = entry->value;
+        sjs_release(context, old);
+        sjs_release(context, key);
+        return SJS_OK;
+    }
+    sjs_result r = sjs_array_grow(context, map, 2u);
+    if (r != SJS_OK) return r;
+    sjs_array *a = *map;
+    a->items[a->length++] = key;
+    a->items[a->length++] = entry->value;
+    lookup_appended(context, &a->h);
+    return SJS_OK;
+}
+
+sjs_result sjs_map_copy(sjs_context *context, const sjs_array *map, sjs_array **out) {
+    sjs_result r = array_alloc(context, (shape){ map->length < 4u ? 4u : map->length, SJS_HEAP_MAP }, out);
+    if (r != SJS_OK) return r;
+    sjs_array *a = *out;
+    for (uint32_t i = 0; i < map->length; i++) {
+        sjs_ref(map->items[i]);
+        a->items[i] = map->items[i];
+    }
+    a->length = map->length;
+    if (a->length / 2u >= SJS_INDEX_FROM) lookup_build(context, &a->h);
+    return SJS_OK;
+}
+
+sjs_result sjs_map_new(sjs_context *context, uint32_t capacity, sjs_value *out) {
+    if (context == NULL || out == NULL) return SJS_ERR_INVALID;
+    sjs_array *a;
+    sjs_result r = sjs_map_make(context, capacity, &a);
+    if (r != SJS_OK) return r;
+    *out = sjs_heap_value(SJS_MAP, &a->h);
+    return SJS_OK;
+}
+
+sjs_result sjs_map_set(sjs_context *context, sjs_value *map, const sjs_map_entry *entry) {
+    if (context == NULL || map == NULL || entry == NULL || map->kind != SJS_MAP || map->internal != 0) return SJS_ERR_INVALID;
+    sjs_array *a = SJS_AS_ARRAY(*map);
+    if (a->h.refs != 1 || entry->key.internal != 0 || entry->value.internal != 0) return SJS_ERR_INVALID;
+    sjs_result r = sjs_map_put(context, &a, entry);
+    if (r == SJS_ERR_PROGRAM) return SJS_ERR_INVALID;
+    map->as.heap = &a->h;
+    return r;
+}
+
+uint32_t sjs_map_size(sjs_value map) {
+    if (map.kind != SJS_MAP || map.internal != 0) return 0;
+    return SJS_AS_ARRAY(map)->length / 2u;
+}
+
+sjs_result sjs_map_get(sjs_value map, sjs_value key, sjs_value *out) {
+    if (map.kind != SJS_MAP || map.internal != 0 || key.internal != 0 || out == NULL) return SJS_ERR_INVALID;
+    const sjs_value *found = sjs_map_find(SJS_AS_ARRAY(map), key);
+    if (found == NULL) return SJS_ERR_NOT_FOUND;
+    *out = *found;
+    return SJS_OK;
+}
+
+sjs_result sjs_map_at(sjs_value map, uint32_t index, sjs_map_entry *out) {
+    if (map.kind != SJS_MAP || map.internal != 0 || out == NULL) return SJS_ERR_INVALID;
+    const sjs_array *a = SJS_AS_ARRAY(map);
+    if (index >= a->length / 2u) return SJS_ERR_NOT_FOUND;
+    out->key = a->items[2u * index];
+    out->value = a->items[2u * index + 1u];
+    return SJS_OK;
 }

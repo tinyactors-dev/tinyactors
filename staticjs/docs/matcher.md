@@ -2168,7 +2168,7 @@ As designed above, with these details:
   faults with "staticjs adds two numbers, or a string and a primitive",
   and a null first with "cannot read a property of null" (`shapes.spec`).
   A number element for SUM_KEY falls back too, and the bytecode faults
-  with "staticjs reads properties of objects, arrays, strings and sets".
+  with "staticjs reads properties of objects, arrays, strings, sets and maps".
 - **Spec numbers.** `1e308` is refused as unsupported, like `1e999`, so
   the overflow case adds `Number.MAX_VALUE` to itself.
 - **Fuel** (`api_test`): `[1, 2, 3, 4].reduce((a, x) => a + x, 0.5)` costs

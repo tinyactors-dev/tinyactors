@@ -72,6 +72,10 @@ static void cut(sjs_vm *vm, uint32_t height) {
  * Properties
  */
 
+/* Maps' properties, and the fault for a value that has none: at the end of
+ * the file. */
+static sjs_result property_other(sjs_vm *vm, sjs_member member, sjs_value *out);
+
 /* Whether JavaScript finds `key` on the prototype of a value of `kind`. */
 static bool on_prototype(uint8_t kind, const sjs_string *key) {
     const sjs_name *n = sjs_name_of(key);
@@ -83,6 +87,8 @@ static bool on_prototype(uint8_t kind, const sjs_string *key) {
         return (n->flags & SJS_NAME_ON_STRING) != 0;
     case SJS_SET:
         return (n->flags & SJS_NAME_ON_SET) != 0;
+    case SJS_MAP:
+        return (n->flags & SJS_NAME_ON_MAP) != 0;
     default:
         return (n->flags & SJS_NAME_OBJECT) != 0;
     }
@@ -176,7 +182,7 @@ sjs_result sjs_property_get(sjs_vm *vm, sjs_member member, sjs_value *out) {
         }
         break;
     default:
-        return fault_named(vm, "staticjs reads properties of objects, arrays, strings and sets", name);
+        return property_other(vm, member, out);
     }
     if (on_prototype(object.kind, key)) {
         return fault_named(vm, "staticjs calls methods; it does not read them as values", name);
@@ -193,7 +199,8 @@ static sjs_result method(sjs_vm *vm, sjs_member member, sjs_value *out) {
     case SJS_ARRAY:
     case SJS_STRING:
     case SJS_SET:
-    case SJS_BIGINT: {
+    case SJS_BIGINT:
+    case SJS_MAP: {
         const sjs_name *n = sjs_name_of(key);
         sjs_builtin_id id = sjs_method_of(n, receiver.kind);
         if (id == SJS_BUILTIN_NONE) {
@@ -216,7 +223,7 @@ static sjs_result method(sjs_vm *vm, sjs_member member, sjs_value *out) {
     case SJS_NULL:
         return sjs_property_get(vm, member, out);
     default:
-        return fault_named(vm, "staticjs has methods on arrays, strings, sets and BigInts only", name);
+        return fault_named(vm, "staticjs has methods on arrays, strings, sets, maps and BigInts only", name);
     }
 }
 
@@ -424,7 +431,13 @@ static sjs_result array_append(sjs_vm *vm, sjs_value *array, sjs_value element) 
     return SJS_OK;
 }
 
-/* Each element a spread yields: arrays, sets, and strings by code point. */
+/* Spreading a map, and the fault for what does not spread: at the end of
+ * the file. */
+static sjs_result spread_other(sjs_vm *vm, sjs_value *array, sjs_value source);
+static bool spread_size(sjs_vm *vm, sjs_value source, uint64_t *total);
+
+/* Each element a spread yields: arrays, sets, and strings by code point;
+ * and a map's entries (spread_other). */
 static sjs_result spread_into(sjs_vm *vm, sjs_value *array, sjs_value source) {
     if (source.kind == SJS_ARRAY || source.kind == SJS_SET) {
         const sjs_array *s = SJS_AS_ARRAY(source);
@@ -448,7 +461,7 @@ static sjs_result spread_into(sjs_vm *vm, sjs_value *array, sjs_value source) {
         }
         return SJS_OK;
     }
-    return sjs_vm_fault(vm, "... spreads arrays, sets and strings");
+    return spread_other(vm, array, source);
 }
 
 /* Takes over the property's key and value. */
@@ -496,8 +509,8 @@ static sjs_result spread_properties(sjs_vm *vm, sjs_value *object, sjs_value sou
         return SJS_OK;
     }
     if (source.kind == SJS_STRING) return sjs_vm_fault(vm, "staticjs does not spread a string into an object");
-    /* undefined, null, numbers, booleans, sets and functions have no own
-     * enumerable properties. */
+    /* undefined, null, numbers, booleans, sets, maps and functions have no
+     * own enumerable properties. */
     return SJS_OK;
 }
 
@@ -599,10 +612,7 @@ static bool expand_spread(sjs_vm *vm, uint32_t *argc) {
         v.internal = SJS_INTERNAL_NONE;
         if (v.kind == SJS_ARRAY || v.kind == SJS_SET) total += SJS_AS_ARRAY(v)->length;
         else if (v.kind == SJS_STRING) total += SJS_AS_STRING(v)->length;
-        else {
-            sjs_vm_fault(vm, "... spreads arrays, sets and strings");
-            return false;
-        }
+        else if (!spread_size(vm, v, &total)) return false;
     }
     if (vm->sp + total > vm->stack_capacity) {
         sjs_vm_fail(vm, SJS_ERR_LIMIT);
@@ -1050,8 +1060,8 @@ static sjs_result rest_properties(sjs_vm *vm, const excluded_keys *x, sjs_value 
         }
         vm->fuel_used += (uint64_t)a->length * (keys + 1u) / 8u;
     } else {
-        /* undefined and null fault before; numbers, booleans, sets and
-         * functions have no own enumerable properties. */
+        /* undefined and null fault before; numbers, booleans, sets, maps
+         * and functions have no own enumerable properties. */
         r = sjs_object_make(vm->context, 0, &rest);
         if (r != SJS_OK) return sjs_vm_fail(vm, r);
         rest->count = 0;
@@ -1066,6 +1076,8 @@ static sjs_result rest_properties(sjs_vm *vm, const excluded_keys *x, sjs_value 
 
 /* MUTATION: at the end of the file. */
 static void execute_other(sjs_vm *vm, vm_frame *f);
+/* An array pattern over a map, or its fault: at the end of the file. */
+static void pattern_other(sjs_vm *vm);
 
 static void jump_to(vm_frame *f, const uint8_t *code, uint32_t pc) {
     f->pc = sjs_read32(code + pc);
@@ -1445,7 +1457,7 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
     case SJS_OP_PATTERN_ARRAY:
         f->pc = pc;
         if (stack_top(vm)->kind != SJS_ARRAY && stack_top(vm)->kind != SJS_SET && stack_top(vm)->kind != SJS_STRING) {
-            sjs_vm_fault(vm, "only an array, a set or a string can be destructured with [ ]");
+            pattern_other(vm);
         }
         return;
     case SJS_OP_PATTERN_OBJECT:
@@ -1744,6 +1756,9 @@ typedef struct {
 static void path_call(sjs_vm *vm, path_call_site site);
 static void path_sorted(sjs_vm *vm, uint32_t keys, uint8_t flags);
 
+/* new Map(...): at the end of the file. */
+static sjs_result new_map(sjs_vm *vm, sjs_values args, sjs_value *out);
+
 /* The instructions of mutation, reached from the default case of
  * execute()'s switch, which they share with the fault for an opcode there
  * is none of, so that the evaluator's loop compiles as it did. */
@@ -1802,6 +1817,18 @@ __attribute__((noinline)) static void execute_other(sjs_vm *vm, vm_frame *f) {
         f->pc = pc + 3;
         path_sorted(vm, sjs_read16(code + pc), code[pc + 2]);
         return;
+    case SJS_OP_NEW_MAP: {
+        /* Not mutation: maps are values, as sets are. Rolling mutation
+         * back keeps this case, and this function for it. */
+        f->pc = pc + 3;
+        uint32_t argc = sjs_read16(code + pc);
+        if ((code[pc + 2] & SJS_CALL_SPREAD) != 0 && !expand_spread(vm, &argc)) return;
+        sjs_value result;
+        if (new_map(vm, (sjs_values){ &vm->stack[vm->sp - argc], argc }, &result) != SJS_OK) return;
+        cut(vm, vm->sp - argc);
+        sjs_vm_push(vm, result);
+        return;
+    }
     default:
         /* Restore this fault alone in execute()'s default case. */
         sjs_vm_fault(vm, "the program is damaged");
@@ -2407,4 +2434,133 @@ __attribute__((noinline)) static sjs_result order_fault(sjs_vm *vm, sjs_value a,
         return sjs_vm_fault(vm, "staticjs compares a BigInt with a BigInt or a number");
     }
     return sjs_vm_fault(vm, "staticjs compares two numbers or two strings");
+}
+
+/* ------------------------------------------------------------------------
+ * Maps (README.md, "Maps"): their properties, spreading one, an array
+ * pattern over one, and new Map. Out of line and at the end of the file, so
+ * that the code before it is laid out as it was: each is reached only where
+ * the code before faulted.
+ */
+
+/* A property of a value that is not an object, an array, a string or a set:
+ * a map's size, and undefined for a key that is not on Map.prototype (a
+ * method read as a value faults, as for a set); anything else faults. */
+__attribute__((noinline)) static sjs_result property_other(sjs_vm *vm, sjs_member member, sjs_value *out) {
+    sjs_value object = member.object;
+    sjs_str name = sjs_string_view(member.key);
+    if (object.kind != SJS_MAP) return fault_named(vm, "staticjs reads properties of objects, arrays, strings, sets and maps", name);
+    if (sjs_str_equal(name, SJS_STR("size"))) {
+        *out = sjs_num((double)(SJS_AS_ARRAY(object)->length / 2u));
+        return SJS_OK;
+    }
+    if (on_prototype(object.kind, member.key)) {
+        return fault_named(vm, "staticjs calls methods; it does not read them as values", name);
+    }
+    return SJS_OK;
+}
+
+/* `...m`: a map yields its entries, each a new [key, value] array. */
+__attribute__((noinline)) static sjs_result spread_other(sjs_vm *vm, sjs_value *array, sjs_value source) {
+    if (source.kind != SJS_MAP) return sjs_vm_fault(vm, "... spreads arrays, sets, maps and strings");
+    sjs_array *entries;
+    if (sjs_map_entries(vm, SJS_AS_ARRAY(source), &entries) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_result r = SJS_OK;
+    for (uint32_t i = 0; r == SJS_OK && i < entries->length; i++) {
+        sjs_ref(entries->items[i]);
+        r = array_append(vm, array, entries->items[i]);
+    }
+    sjs_unref(vm->context, sjs_heap_value(SJS_ARRAY, &entries->h));
+    return r;
+}
+
+/* How many arguments a spread of a map gives, or its fault. */
+__attribute__((noinline)) static bool spread_size(sjs_vm *vm, sjs_value source, uint64_t *total) {
+    if (source.kind != SJS_MAP) {
+        sjs_vm_fault(vm, "... spreads arrays, sets, maps and strings");
+        return false;
+    }
+    *total += SJS_AS_ARRAY(source)->length / 2u;
+    return true;
+}
+
+/* `const [[k, v]] = m`: an array pattern takes a map's entries, as its
+ * iterator yields them; they replace the map on top of the stack, which
+ * only the pattern reads. Anything else but an array, a set or a string
+ * faults. */
+__attribute__((noinline)) static void pattern_other(sjs_vm *vm) {
+    sjs_value *top = stack_top(vm);
+    if (top->kind != SJS_MAP) {
+        sjs_vm_fault(vm, "only an array, a set, a map or a string can be destructured with [ ]");
+        return;
+    }
+    sjs_array *entries;
+    if (sjs_map_entries(vm, SJS_AS_ARRAY(*top), &entries) != SJS_OK) return;
+    sjs_vm_release(vm, *top);
+    *top = sjs_heap_value(SJS_ARRAY, &entries->h);
+}
+
+/* One [key, value] of new Map's argument into the map at `*map`: an array,
+ * whose missing items are undefined. A key that is not a primitive faults:
+ * JavaScript keys an object by its identity, which staticjs does not have. */
+static sjs_result map_entry_put(sjs_vm *vm, sjs_value *map, sjs_value pair) {
+    if (pair.kind != SJS_ARRAY) return sjs_vm_fault(vm, "an entry of new Map is a [key, value] array");
+    sjs_map_entry entry = { sjs_array_at(pair, 0), sjs_array_at(pair, 1) };
+    if (!sjs_is_primitive(entry.key)) return sjs_vm_fault(vm, "staticjs keys a map by primitives: JavaScript keys an object by its identity");
+    sjs_ref(entry.key);
+    sjs_ref(entry.value);
+    sjs_array *m = SJS_AS_ARRAY(*map);
+    sjs_result r = sjs_map_put(vm->context, &m, &entry);
+    map->as.heap = &m->h;
+    if (r == SJS_OK) return SJS_OK;
+    sjs_unref(vm->context, entry.key);
+    sjs_unref(vm->context, entry.value);
+    return sjs_vm_fail(vm, r);
+}
+
+/* new Map(), new Map(undefined or null): empty; new Map(map): a copy; new
+ * Map(entries): each [key, value] in order, a later key's value replacing an
+ * earlier one's in its place, from an array or anything else a spread
+ * takes (a set's members, a string's characters are not entries, and
+ * fault). A unit of fuel per entry, and one per lookup. */
+__attribute__((noinline)) static sjs_result new_map(sjs_vm *vm, sjs_values args, sjs_value *out) {
+    sjs_value source = args.count > 0 ? args.ptr[0] : sjs_undefined();
+    if (source.kind == SJS_MAP) {
+        sjs_array *copy;
+        sjs_result r = sjs_map_copy(vm->context, SJS_AS_ARRAY(source), &copy);
+        if (r != SJS_OK) return sjs_vm_fail(vm, r);
+        vm->fuel_used += copy->length / 2u;
+        *out = sjs_heap_value(SJS_MAP, &copy->h);
+        return SJS_OK;
+    }
+    sjs_value list = sjs_undefined();
+    if (source.kind == SJS_ARRAY) {
+        list = source;
+        sjs_ref(list);
+    } else if (source.kind != SJS_UNDEFINED && source.kind != SJS_NULL) {
+        sjs_result r = sjs_array_new(vm->context, 4, &list);
+        if (r != SJS_OK) return sjs_vm_fail(vm, r);
+        if (spread_into(vm, &list, source) != SJS_OK) {
+            sjs_unref(vm->context, list);
+            return SJS_ERR_PROGRAM;
+        }
+    }
+    uint32_t n = sjs_length(list);
+    sjs_value map = sjs_undefined();
+    sjs_array *made;
+    sjs_result r = sjs_map_make(vm->context, n, &made);
+    if (r != SJS_OK) {
+        sjs_unref(vm->context, list);
+        return sjs_vm_fail(vm, r);
+    }
+    map = sjs_heap_value(SJS_MAP, &made->h);
+    vm->fuel_used += 2u * (uint64_t)n;
+    for (uint32_t i = 0; r == SJS_OK && i < n; i++) r = map_entry_put(vm, &map, sjs_array_at(list, i));
+    sjs_unref(vm->context, list);
+    if (r != SJS_OK) {
+        sjs_unref(vm->context, map);
+        return SJS_ERR_PROGRAM;
+    }
+    *out = map;
+    return SJS_OK;
 }

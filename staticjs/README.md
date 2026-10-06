@@ -156,7 +156,7 @@ Expressions: numbers (read to the nearest double, ties to even, however
 many digits a literal has, in any radix), BigInts (`10n`, `0x1Fn`, `0o7n`,
 `0b1n`; see "BigInts" below), strings, template literals, `true`, `false`, `null`,
 `undefined`, `NaN`, `Infinity`, arrays and objects (spread, computed and
-shorthand keys), `new Set(...)`; `+ - * / %`, `**` (of BigInts), `< <= > >=`, `=== !==`,
+shorthand keys), `new Set(...)`, `new Map(...)` (see "Maps" below); `+ - * / %`, `**` (of BigInts), `< <= > >=`, `=== !==`,
 `&& || ??`, `?:`, `!`, unary `-` and `+`, `typeof`, `in`; members, calls
 and spread arguments, with `?.`; arrow functions with an expression body,
 or a block body of statements: `const`, `if`/`else` (with `else if`), nested
@@ -178,8 +178,8 @@ object pattern a rest element (`[head, ...tail]`, `{a, ...others}`), last
 and without a default. Object patterns take names, strings, numbers
 (`{0: first}`) and computed keys (`{[key]: value}`) as keys; an object rest
 element copies the properties the pattern does not name, in their order.
-An array pattern destructures an array, a set (in insertion order) or a
-string (by code point). The parser reads an arrow function's parameter list
+An array pattern destructures an array, a set (in insertion order), a map
+(its entries, as `[key, value]` arrays) or a string (by code point). The parser reads an arrow function's parameter list
 ahead to tell it from a parenthesized expression, so the list, defaults
 included, must fit in `max_lookahead` tokens (256 by default), and its
 patterns nest at most `max_nesting` deep, as everything else does. A
@@ -208,6 +208,7 @@ Built-ins:
 | arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
 | strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `replaceAll` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
+| maps | `get` `has`, `size` |
 | BigInts | `toString` (radix 2 to 36) |
 | functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum) |
@@ -277,6 +278,37 @@ writes 2 to 36. `Number(x)` rounds to the nearest double, ties to even, and
 does; `isNaN(x)`, `Math` and every other place a number is needed fault on
 a BigInt, as JavaScript throws there.
 
+## Maps
+
+A map is a value like a set: each key once, with its value, in insertion
+order, reference counted, immutable once shared. Its storage is a set's: the
+keys and their values alternate in one block, and the keys go through the
+same insertion-ordered hash index past `SJS_INDEX_FROM` entries, so a lookup
+costs one unit of fuel whatever the size. A key is any primitive, compared as
+SameValueZero: `1` and `"1"` are two keys, NaN is one, `-0` is `0` (and is
+kept as `0`), a BigInt is a key by its value (`10n` is not `10`). An object,
+an array, a set, a map or a function as a key faults, as JavaScript keys
+them by their identity, which staticjs does not have; `get`, `has` of one
+find nothing, as in JavaScript, where a map could not hold that object.
+
+`new Map()` (of `undefined` or `null` too) is empty; `new Map(entries)` takes
+`[key, value]` arrays from an array, or from anything a spread takes, whose
+missing items are `undefined`, a later key's value replacing an earlier
+one's in its place; `new Map(otherMap)` copies it. An entry that is not an
+array faults: a primitive throws in JavaScript, and an object (`{0: k, 1:
+v}`), which JavaScript reads, is not taken. `m.get(k)` is the value or
+`undefined`, `m.has(k)` and `m.size` as in JavaScript. A spread, `Array.from`,
+an array pattern (`const [[k, v]] = m`) and `Object.fromEntries` take a
+map's entries, each a new `[key, value]` array; `{...m}` and an object rest
+element of a map are `{}`, as in JavaScript; `Object.keys`, `values` and
+`entries` of one fault, as of a set, where JavaScript gives `[]`. `typeof m`
+is `"object"`,
+`Array.isArray(m)` is false. A property read follows the prototype rules: a
+name of `Map.prototype` or `Object.prototype` read as a value faults, any
+other is `undefined`. The writer writes `new Map([[key, value], ...])`, and
+an embedder builds and reads maps with `sjs_map_new`, `sjs_map_set`,
+`sjs_map_get`, `sjs_map_at` and `sjs_map_size`.
+
 ## Where it faults instead of following JavaScript
 
 These follow from the rule: staticjs stops where JavaScript would coerce,
@@ -300,10 +332,13 @@ compare identities, or find something on a prototype.
   whose properties JavaScript finds on its prototype; an object rest
   element of one gives `{}`, as in JavaScript.
 - A computed key, in a literal or a pattern, that is an object or an array:
-  JavaScript turns it into a string.
+  JavaScript turns it into a string. A map's key that is not a primitive
+  (`new Map([[{}, 1]])`), which JavaScript keys by its identity; an entry of
+  `new Map` that is not an array (`new Map([{0: "k", 1: "v"}])`), which
+  JavaScript reads as an object.
 - A property JavaScript finds on `Object.prototype` (`toString`,
   `__proto__`); reading a method without calling it, by name, through a
-  pattern or with `in`: any method of an array, a string or a set, those
+  pattern or with `in`: any method of an array, a string, a set or a map, those
   staticjs leaves out included (`const {at = 1} = "x"`). A namespace
   (`import * as ns`) is an object too: `ns.toString` and `"valueOf" in ns`
   fault where JavaScript finds nothing, and so does turning a namespace into
@@ -410,7 +445,7 @@ export.
 
 The first stage of the proposal: the language. Not done yet, in the
 proposal's order: the data model (`tinyactors-staticjs`); a hash index for
-large objects and sets; a static cost estimate; `Map`.
+large objects and sets; a static cost estimate.
 
 ## Tasks
 

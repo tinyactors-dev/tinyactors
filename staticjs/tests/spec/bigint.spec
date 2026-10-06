@@ -514,7 +514,7 @@ BigInt.asIntN(8n, 255n)
 
 === a method of a number, which staticjs does not have
 (10).toString()
---- fault methods on arrays, strings, sets and BigInts only
+--- fault methods on arrays, strings, sets, maps and BigInts only
 
 === Number of BigInts, correctly rounded
 [Number(0n), Number(-1n), Number(4294967296n), Number(9007199254740993n), Number(9007199254740995n), Number(-9007199254740993n), Number(18446744073709551615n), Number(2n ** 64n + 1n), Number(2n ** 1023n), Number(2n ** 1024n), Number(-(2n ** 1024n)), Number(2n ** 1024n - 2n ** 970n), Number(2n ** 1024n - 2n ** 970n - 1n), Number(123456789012345678901234567890n)]
