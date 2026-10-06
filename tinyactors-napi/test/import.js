@@ -226,8 +226,9 @@ async function reentrancy() {
 // <send> computes a new, very long event name; turning it into text for core
 // is an allocation the data model makes. It changes nothing, so the data
 // model answers TA_OP_NOMEM: the run stops where it stands, napi retries it
-// (ADR 0008), and once memory is back the send completes, once, with no
-// error.execution the chart could see.
+// (ADR 0008), and once memory is back the send runs once, with no
+// error.execution from the stop the chart could see. The send then fails
+// once for its own reason: the name is longer than core keeps as text.
 async function outOfMemory() {
   const system = createSystem();
   const segment = 'x'.repeat(200_000);
@@ -272,7 +273,10 @@ async function outOfMemory() {
     results.push(actor.inspect().data);
   }
   assert.deepEqual(results[0], results[1]);
-  assert.deepEqual(results[0], { seen: 2, errors: 0 });
+  // Each `go` ran its send once. Core keeps a run-time name as text, at
+  // most one name-area field (65,535 bytes, core ADR 0100), so this name
+  // cannot be queued: each send fails once as error.execution.capacity.names.
+  assert.deepEqual(results[0], { seen: 0, errors: 2 });
   delete globalThis.__tinyactorsImportName;
   system.close();
 }

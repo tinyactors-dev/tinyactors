@@ -325,8 +325,12 @@ ta_result ta_scxml_target_parse(ta_system *system, ta_str text, ta_scxml_target 
     }
     rest = text;
     if (ta_uri_prefix(&rest, TA_URI_INVOKE) && rest.len != 0) {
-        *out = (ta_scxml_target){ .kind = TA_SCXML_TARGET_INVOKE };
-        return ta_invoke_id_from_text(system, rest, &out->as.invoke);
+        /* Looked up, never interned (ADR 0100): text that names no
+         * invocation this system issued names none, and a send to it fails
+         * as one to an invocation that ended does. */
+        *out = (ta_scxml_target){ .kind = TA_SCXML_TARGET_INVOKE, .as.invoke = TA_INVOKE_ID_NONE };
+        (void)ta_invoke_id_parse(system, rest, &out->as.invoke);
+        return TA_OK;
     }
     return TA_ERR_INVALID;
 }
@@ -347,7 +351,7 @@ bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writer, const t
             return true;
         case TA_SCXML_TARGET_INVOKE:
             ta_text_put(writer, ta_str_from_cstr(TA_URI_INVOKE));
-            ta_text_put(writer, ta_invoke_id_text(system, target->as.invoke));
+            (void)ta_invoke_id_write(system, target->as.invoke, writer);
             return true;
         case TA_SCXML_TARGET_ACTOR:
             if (target->as.actor.kind == TA_ACTOR_REF_NAMED) {

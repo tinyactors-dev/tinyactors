@@ -558,21 +558,45 @@ static void test_reading_identities_back(ta_system *system, counting_model *mode
      * Parsing such a target is how a caller without a running invocation
      * gets an ID to ask about, and the two grammars agree. */
     ta_scxml_target target = {0};
-    CHECK(ta_scxml_target_parse(system, S("#_fetchUser"), &target) == TA_OK);
+    char id_text[64];
+    uint32_t needed = 0;
+    CHECK(ta_scxml_target_parse(system, S("#_busy"), &target) == TA_OK);
     CHECK(target.kind == TA_SCXML_TARGET_INVOKE);
-    CHECK(ta_system_invoke_id_text(system, target.as.invoke, &text) == TA_OK);
-    CHECK(str_is(text, "fetchUser"));
-    /* The dotted form core generates for an <invoke> without an author ID is
-     * one ID, not a path. */
+    CHECK(ta_system_invoke_id_format(system, &(ta_invoke_id_format_params){ .invoke = target.as.invoke,
+                                                                            .buffer = id_text,
+                                                                            .capacity = sizeof id_text,
+                                                                            .needed = &needed }) == TA_OK);
+    CHECK(strcmp(id_text, "busy") == 0 && needed == 5u);
+    /* The dotted form core generates for an <invoke> without an author ID,
+     * `<stateid>.<serial>`, is one ID, not a path, and parsing it interns
+     * nothing (ADR 0100). */
+    CHECK(ta_scxml_target_parse(system, S("#_busy.2"), &target) == TA_OK);
+    CHECK(ta_system_invoke_id_format(system, &(ta_invoke_id_format_params){ .invoke = target.as.invoke,
+                                                                            .buffer = id_text,
+                                                                            .capacity = sizeof id_text,
+                                                                            .needed = &needed }) == TA_OK);
+    CHECK(strcmp(id_text, "busy.2") == 0);
+    /* Text that names no invocation this system issued names none. */
     CHECK(ta_scxml_target_parse(system, S("#_work.2"), &target) == TA_OK);
-    CHECK(ta_system_invoke_id_text(system, target.as.invoke, &text) == TA_OK);
-    CHECK(str_is(text, "work.2"));
+    CHECK(target.kind == TA_SCXML_TARGET_INVOKE && target.as.invoke == TA_INVOKE_ID_NONE);
 
-    text = (ta_str){ .ptr = "stale", .len = 5 };
-    CHECK(ta_system_invoke_id_text(system, 0, &text) == TA_ERR_NOT_FOUND);
-    CHECK(ta_system_invoke_id_text(system, 987654u, &text) == TA_ERR_NOT_FOUND);
-    CHECK(str_is(text, "stale"));
-    CHECK(ta_system_invoke_id_text(system, target.as.invoke, NULL) == TA_ERR_INVALID);
+    needed = 7;
+    CHECK(ta_system_invoke_id_format(system, &(ta_invoke_id_format_params){ .invoke = 0, .needed = &needed }) ==
+          TA_ERR_NOT_FOUND);
+    CHECK(ta_system_invoke_id_format(system, &(ta_invoke_id_format_params){ .invoke = 987654u,
+                                                                            .needed = &needed }) ==
+          TA_ERR_NOT_FOUND);
+    CHECK(needed == 0);
+    /* A buffer too small for the text reports the size it needed. */
+    CHECK(ta_system_invoke_id_format(system, &(ta_invoke_id_format_params){ .invoke = target.as.invoke,
+                                                                            .needed = &needed }) ==
+          TA_ERR_NOT_FOUND);
+    CHECK(ta_scxml_target_parse(system, S("#_busy.2"), &target) == TA_OK);
+    CHECK(ta_system_invoke_id_format(system, &(ta_invoke_id_format_params){ .invoke = target.as.invoke,
+                                                                            .buffer = id_text, .capacity = 3,
+                                                                            .needed = &needed }) == TA_ERR_NOMEM);
+    CHECK(needed == 7u);
+    CHECK(ta_system_invoke_id_format(system, NULL) == TA_ERR_INVALID);
 }
 
 /* ------------------------------------------------------------------------

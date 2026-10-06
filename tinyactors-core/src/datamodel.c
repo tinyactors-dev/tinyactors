@@ -73,6 +73,9 @@ static bool ta_dm_write_field(const void *context, ta_text_writer *writer) {
     if (event == NULL) {
         return false;
     }
+    if (field->kind == TA_DM_TEXT_EVENT_INVOKEID) {
+        return ta_invoke_id_write(system, event->invoke_id, writer);
+    }
     if (field->kind == TA_DM_TEXT_EVENT_SENDID) {
         if (event->send_id == 0) {
             return false;
@@ -129,9 +132,8 @@ static ta_result ta_dm_event_text(const ta_dm_host *host, ta_dm_text_kind kind, 
             if (event->invoke_id == TA_INVOKE_ID_NONE) {
                 return TA_ERR_NOT_FOUND;
             }
-            /* The SCXML ID text, e.g. the author's ID or `<stateid>.<platformid>`. */
-            *out = ta_invoke_id_text(system, event->invoke_id);
-            return TA_OK;
+            /* The SCXML ID text, the author's ID or `<stateid>.<serial>`. */
+            return ta_dm_render_field(host, kind, out);
         default:
             return ta_dm_render_field(host, kind, out);
     }

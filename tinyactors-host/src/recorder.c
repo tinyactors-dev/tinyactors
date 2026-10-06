@@ -181,11 +181,24 @@ static ta_str tah_recorder_reason(uint8_t kind) {
     }
 }
 
+/* An invocation ID's text in a stack buffer: empty when it has none or
+ * is longer than the buffer. */
+static ta_str tah_recorder_invoke_id(const ta_system *core, ta_invoke_id invoke, char *buffer, uint32_t capacity) {
+    uint32_t needed = 0;
+    if (ta_system_invoke_id_format(core, &(ta_invoke_id_format_params){ .invoke = invoke, .buffer = buffer,
+                                                                         .capacity = capacity,
+                                                                         .needed = &needed }) != TA_OK) {
+        return (ta_str){ 0 };
+    }
+    return (ta_str){ .ptr = buffer, .len = needed - 1u };
+}
+
 /* An invocation's error report as the event the chart takes: error.communication.invoke.<id>.<reason>. */
 static ta_result tah_recorder_report_event(tah_system *system, const tah_envelope *envelope, ta_event *out) {
     static const char prefix[] = "error.communication.invoke.";
-    ta_str id = { 0 };
-    if (ta_system_invoke_id_text(system->core, envelope->event.invoke_id, &id) != TA_OK) {
+    char id_text[256];
+    ta_str id = tah_recorder_invoke_id(system->core, envelope->event.invoke_id, id_text, sizeof id_text);
+    if (id.len == 0) {
         return TA_ERR_NOT_FOUND;
     }
     ta_str reason = tah_recorder_reason(envelope->report);
@@ -396,9 +409,14 @@ ta_result tah_recorder_texts(const tah_system *system, uint32_t index, ta_alloca
             result = TA_OK; /* an origin with no text: a closed scope */
         }
     }
-    if (result == TA_OK && event->invoke_id != TA_INVOKE_ID_NONE &&
-        ta_system_invoke_id_text(system->core, event->invoke_id, &out->invoke_id) != TA_OK) {
-        out->invoke_id = (ta_str){ 0 };
+    if (result == TA_OK && event->invoke_id != TA_INVOKE_ID_NONE) {
+        char id_text[256];
+        ta_str id = tah_recorder_invoke_id(system->core, event->invoke_id, id_text, sizeof id_text);
+        char *copy = id.len == 0 ? NULL : tah_alloc(arena, id.len, 1);
+        if (copy != NULL) {
+            tah_mem_copy(copy, id.ptr, id.len);
+        }
+        out->invoke_id = copy == NULL ? (ta_str){ 0 } : (ta_str){ .ptr = copy, .len = id.len };
     }
     return result;
 }

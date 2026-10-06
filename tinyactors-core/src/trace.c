@@ -764,7 +764,7 @@ static void ta_trace_compose(const ta_trace_compose_params *params, ta_trace_are
             TA_TRACE_COMPOSE(area, build, event_send_id, ta_send_id_write(system, event->send_id, out));
         }
         if (event->invoke_id != TA_INVOKE_ID_NONE) {
-            (void)ta_system_invoke_id_text(system, event->invoke_id, &build->texts.event_invoke_id);
+            TA_TRACE_COMPOSE(area, build, event_invoke_id, (void)ta_invoke_id_write(system, event->invoke_id, out));
         }
         bool cut = false;
         build->texts.event_data = ta_trace_value_text(&(ta_trace_value_params){
@@ -778,7 +778,7 @@ static void ta_trace_compose(const ta_trace_compose_params *params, ta_trace_are
         TA_TRACE_COMPOSE(area, build, send_id, ta_send_id_write(system, entry->send, out));
     }
     if (entry->invoke != TA_INVOKE_ID_NONE) {
-        (void)ta_system_invoke_id_text(system, entry->invoke, &build->texts.invoke_id);
+        TA_TRACE_COMPOSE(area, build, invoke_id, (void)ta_invoke_id_write(system, entry->invoke, out));
     }
     if (entry->has_value) {
         build->flags |= TA_TEL_TRACE_FLAG_VALUE;

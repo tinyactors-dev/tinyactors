@@ -134,15 +134,18 @@ int main(void) {
     /* Invocation IDs: finding is the inverse of their text, and never
      * interns. */
     ta_invoke_id invoke = TA_INVOKE_ID_NONE;
-    ta_str invoke_text = { 0 };
+    char invoke_text[16];
+    uint32_t invoke_needed = 0;
     check(ta_system_invoke_id_find(system, str("timeout"), &invoke) == TA_OK, "find an ID whose text is interned");
-    check(ta_system_invoke_id_text(system, invoke, &invoke_text) == TA_OK && invoke_text.len == 7 &&
-              memcmp(invoke_text.ptr, "timeout", 7) == 0,
+    check(ta_system_invoke_id_format(system, &(ta_invoke_id_format_params){ .invoke = invoke, .buffer = invoke_text,
+                                                                            .capacity = sizeof invoke_text,
+                                                                            .needed = &invoke_needed }) == TA_OK &&
+              strcmp(invoke_text, "timeout") == 0,
           "its text");
     ta_invoke_id same = TA_INVOKE_ID_NONE;
     check(ta_system_invoke_id_find(system, str("timeout"), &same) == TA_OK && same == invoke, "the same text, the same ID");
-    check(ta_system_invoke_id_find(system, str("state.9"), &same) == TA_ERR_NOT_FOUND, "an unseen ID is not found");
-    check(ta_system_invoke_id_find(system, str("state.9"), &same) == TA_ERR_NOT_FOUND, "nor after asking once");
+    check(ta_system_invoke_id_find(system, str("nostate.9"), &same) == TA_ERR_NOT_FOUND, "an unseen ID is not found");
+    check(ta_system_invoke_id_find(system, str("nostate.9"), &same) == TA_ERR_NOT_FOUND, "nor after asking once");
     check(ta_system_invoke_id_find(system, str(""), &same) == TA_ERR_INVALID, "empty text is no invoke ID");
 
     ta_system_destroy(system);

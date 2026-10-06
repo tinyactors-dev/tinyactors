@@ -418,7 +418,26 @@ static void ta_trace_entry_fault(ta_trace_entry *record, const ta_fault *fault) 
 }
 
 /* Counts one error event by its kind (ADR 0072); other events count nothing. */
+/* Whether `text` is `prefix` or begins with its segments. */
+static bool ta_name_text_under(ta_str text, const char *prefix) {
+    ta_str head = ta_str_from_cstr(prefix);
+    return text.len >= head.len && ta_str_equal((ta_str){ .ptr = text.ptr, .len = head.len }, head) &&
+           (text.len == head.len || text.ptr[head.len] == '.');
+}
+
 static void ta_count_error(ta_system *system, const ta_actor *actor, ta_event_name_id name) {
+    if (ta_run_name_is_input(name)) {
+        /* A name core keeps as text (ADR 0100). */
+        ta_str text = ta_run_input_name(system, name);
+        if (ta_name_text_under(text, "error.execution")) {
+            TA_COUNT(system, actor->definition, errors_execution);
+        } else if (ta_name_text_under(text, "error.communication")) {
+            TA_COUNT(system, actor->definition, errors_communication);
+        } else if (ta_name_text_under(text, "error.platform")) {
+            TA_COUNT(system, actor->definition, errors_platform);
+        }
+        return;
+    }
     if (ta_trie_has_prefix(&system->event_names, name, TA_EVENT_NAME_ERROR_EXECUTION)) {
         TA_COUNT(system, actor->definition, errors_execution);
     } else if (ta_trie_has_prefix(&system->event_names, name, TA_EVENT_NAME_ERROR_COMMUNICATION)) {
@@ -811,12 +830,19 @@ static void ta_queue_settle(ta_system *system, ta_actor *actor) {
     ta_internal_queue_free(system, queue);
 }
 
+/* Releases an event the queue or the kept slot owned, with the envelope
+ * that holds its name when core keeps it only as text. */
+static void ta_queued_release(ta_system *system, ta_event *event) {
+    ta_run_release_name(system, event->name);
+    ta_event_release(event);
+}
+
 ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event) {
     ta_actor_touch(actor);
     ta_result result = ta_queue_room(system, actor);
     if (result != TA_OK) {
         ta_queue_settle(system, actor);
-        ta_event_release(event);
+        ta_queued_release(system, event);
         return result;
     }
     ta_internal_queue *queue = actor->internal;
@@ -853,31 +879,26 @@ static void ta_queue_truncate(ta_actor *actor, uint32_t mark) {
     ta_internal_queue *queue = actor->internal;
     while (queue != NULL && queue->count > mark) {
         queue->count -= 1u;
-        ta_event_release(&queue->events[queue->count].event);
+        ta_queued_release(actor->host_impl.system, &queue->events[queue->count].event);
     }
 }
 
 /* Lets go of the kept event and of the kept envelope that holds its name. */
 static void ta_release_kept(ta_actor *actor) {
     ta_internal_queue *queue = actor->internal;
-    ta_event_release(&queue->kept_event);
-    if (queue->kept_input != 0u) {
-        ta_run_release_kept(actor->host_impl.system, queue->kept_input);
-        queue->kept_input = 0u;
-    }
+    ta_queued_release(actor->host_impl.system, &queue->kept_event);
     queue->has_kept = false;
 }
 
-/* Makes `event`, and its references, the kept event (ADR 0069), with
- * `kept_input`, the kept envelope that holds its name as text, or 0; the
- * queue exists, since it held the event or was made for the kept one. */
-static void ta_keep_event(ta_actor *actor, const ta_event *event, uint32_t kept_input) {
+/* Makes `event`, and its references and the envelope that holds its name
+ * as text, if any, the kept event (ADR 0069); the queue exists, since it
+ * held the event or was made for the kept one. */
+static void ta_keep_event(ta_actor *actor, const ta_event *event) {
     ta_internal_queue *queue = actor->internal;
     if (queue->has_kept) {
         ta_release_kept(actor);
     }
     queue->kept_event = *event;
-    queue->kept_input = kept_input;
     queue->has_kept = true;
 }
 
@@ -889,7 +910,7 @@ static void ta_keep_event(ta_actor *actor, const ta_event *event, uint32_t kept_
 static void ta_bind_event(ta_actor *actor, ta_event_binding taken) {
     if (actor->bound == TA_BOUND_INTERNAL) {
         ta_event head = ta_queue_pop(actor);
-        ta_keep_event(actor, &head, 0u);
+        ta_keep_event(actor, &head);
         actor->bound = TA_BOUND_KEPT;
     }
     actor->bound_before = actor->bound;
@@ -929,7 +950,7 @@ static void ta_release_events(ta_actor *actor) {
     ta_internal_queue *queue = actor->internal;
     while (queue != NULL && queue->count != 0) {
         ta_event event = ta_queue_pop(actor);
-        ta_event_release(&event);
+        ta_queued_release(actor->host_impl.system, &event);
     }
     if (queue != NULL && queue->has_kept) {
         ta_release_kept(actor);
@@ -953,7 +974,7 @@ static void ta_end_macrostep_events(ta_system *system, ta_actor *actor) {
     }
     if (actor->bound == TA_BOUND_INTERNAL) {
         ta_event head = ta_queue_pop(actor);
-        ta_keep_event(actor, &head, 0u);
+        ta_keep_event(actor, &head);
         actor->bound = TA_BOUND_KEPT;
     } else if (actor->bound == TA_BOUND_EXTERNAL) {
         ta_event kept;
@@ -961,12 +982,10 @@ static void ta_end_macrostep_events(ta_system *system, ta_actor *actor) {
         /* A name core keeps as text stays in the input's envelope, which the
          * input keeps when it completes, for as long as the event is kept
          * (ADR 0100). */
-        uint32_t kept_input = 0u;
         if (ta_run_name_is_input(kept.name)) {
-            kept_input = actor->input;
-            ta_run_keep_input(system, kept_input);
+            ta_run_keep_input(system, actor->input);
         }
-        ta_keep_event(actor, &kept, kept_input);
+        ta_keep_event(actor, &kept);
         actor->bound = TA_BOUND_KEPT;
     }
     ta_release_external(actor);
@@ -1846,14 +1865,14 @@ static ta_result ta_send_event_name(ta_interpreter *it, const ta_send_action *se
 
 /*
  * Interns an eventexpr's name where the send is stored: as a delayed send,
- * held for an unpublished session, queued for #_internal, or handed to an
- * I/O processor, all of which keep a name ID. An immediate send to another
- * session keeps it as text. May allocate.
+ * held for an unpublished session, or handed to an I/O processor, all of
+ * which keep a name ID. An immediate send to another session, and one to
+ * #_internal, keep it as text (ADR 0100). May allocate.
  */
 static ta_result ta_send_intern_event(ta_interpreter *it, ta_send_state *state, ta_fault *fault) {
-    bool mail_now = state->scxml_io && state->scxml.kind != TA_SCXML_TARGET_INTERNAL && state->delay == 0 &&
-                    it->actor->published;
-    if (state->event != 0 || state->event_text.len == 0 || mail_now) {
+    bool internal = state->scxml_io && state->scxml.kind == TA_SCXML_TARGET_INTERNAL;
+    bool mail_now = state->scxml_io && !internal && state->delay == 0 && it->actor->published;
+    if (state->event != 0 || state->event_text.len == 0 || mail_now || internal) {
         return TA_OK;
     }
     return ta_core_fault(fault, &(ta_core_fault_params){
@@ -2048,9 +2067,24 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
     ta_system *system = it->system;
     ta_actor *actor = it->actor;
     if (state->scxml_io && state->scxml.kind == TA_SCXML_TARGET_INTERNAL) {
+        ta_event_name_id name = state->event;
+        if (name == 0 && state->event_text.len != 0u) {
+            /* The queued event holds its name as text in an envelope of its
+             * own (ADR 0100); with no room, the send fails as mail does. */
+            ta_result held = ta_run_hold_name(system, state->event_text, &name);
+            if (held == TA_ERR_FULL || held == TA_ERR_INVALID) {
+                /* No room, or a name longer than one name-area field. */
+                ta_send_state_release(state);
+                state->sent = false;
+                return ta_send_capacity_error(it, state->send_id, TA_RECORD_CAPACITY_RESOURCE_NAMES);
+            }
+            if (held != TA_OK) {
+                return held;
+            }
+        }
         ta_value_release(&state->target);
         ta_event event = {
-            .name = state->event,
+            .name = name,
             .type = TA_EVENT_INTERNAL,
             .send_id = state->send_id,
             .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = actor->record.self },

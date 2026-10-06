@@ -279,3 +279,42 @@ before it.
     `#_internal` or for an I/O processor.
   - Tested in `tests/name_matching_test.c` (claims 9 and 10) and
     `tests/run_test.c` (a names buffer is required for TAKEN outcomes).
+- **Internal events and invocation names travel as text, 2026-10-06.**
+  - A `<send>` to `#_internal` with an `eventexpr` queues its event with
+    the name held as text in an envelope of its own (`TA_ENVELOPE_KEPT`,
+    `ta_run_hold_name`), which the queued event owns until it is released;
+    an image copies such names into its arena and a restore holds them
+    again. With no envelope or no name-area room, or a name longer than
+    one name-area field (65,535 bytes), the send fails as
+    `error.execution.capacity.names`, as mail does; such a name was
+    interned before, and napi's `test/import.js` now expects that error. Holding a name grows
+    the run's name buffer to it, so the macrostep that queued the event can
+    read it: that is the one allocation a hold may make inside a
+    macrostep.
+  - A generated invocation ID is no longer interned:
+    `TA_GENERATED_INVOKE_ID_BIT` with the state ID's atom and the session's
+    serial, formatted `<stateid>.<serial>` (`ta_invoke_id_write`) and
+    parsed back by lookup (`ta_invoke_id_parse`). The public
+    `ta_system_invoke_id_text`, which lent interned text, became
+    `ta_system_invoke_id_format` with the buffer convention of
+    `ta_send_id_format`. A `#_<invokeid>` target is looked up, and text
+    that names no issued invocation names none (`TA_INVOKE_ID_NONE`), so a
+    send to it fails as one to an ended invocation does. An authored ID
+    whose text equals a generated one's is the authored one.
+  - `done.invoke.<id>` from a local child, and
+    `error.communication.invoke.<id>.<reason>` for a host's ERROR report,
+    for a lost service and for retirement, are built as text: mail and
+    admitted reports carry them in their envelopes; an error queued
+    outside a run holds its name; retirement holds each name when it is
+    prepared (`ta_invoke_prepare_retire`), so queueing them cannot fail,
+    and `ta_invoke_cancel_retire` gives them back when publishing fails
+    later. A report taken into the internal queue copies its name into a
+    holder of its own, since the report's envelope goes when it
+    completes. Error counters read a name kept as text by its prefix.
+  - Still interned: the `eventexpr` of a send to an I/O processor, since
+    `ta_send.event` carries the name by ID and a send the processor
+    refuses is kept as a submitted delayed send, which holds names by ID;
+    and the names of delayed sends, until they are envelopes.
+  - Tested in `tests/name_matching_test.c` (claims 6, 7 and 11) and the
+    invoke-ID checks of `inspection_test`, `send_id_test` and
+    `scxml_uri_test`.

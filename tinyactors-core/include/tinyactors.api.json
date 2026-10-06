@@ -11098,6 +11098,72 @@
         }
       }
     },
+    "ta_invoke_id_format_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "invoke",
+          "type": {
+            "type": "ta_invoke_id"
+          }
+        },
+        {
+          "name": "buffer",
+          "type": {
+            "pointer": {
+              "builtin": "char"
+            }
+          },
+          "capacity": "capacity",
+          "needed": "needed",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "buffer"
+        },
+        {
+          "name": "needed",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "buffer"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "invoke": 0,
+            "buffer": 8,
+            "capacity": 16,
+            "needed": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "invoke": 0,
+            "buffer": 8,
+            "capacity": 12,
+            "needed": 16
+          }
+        }
+      }
+    },
     "ta_invoke_info": {
       "kind": "struct",
       "doc": "One <invoke > of a definition, by declaration index from 0 (ADR 0077): what a host needs to compile its child chart when the definition is defined. `type` is the literal type, normalized as ta_invoke_request's is (\"http://www.w3.org/TR/scxml/\" for the SCXML aliases and when the <invoke > names no type), or empty when the type is computed (`has_type_expr`). `content` is a literal <content > and `src` a literal src, each TA_CONTENT_ID_NONE when absent; read their bytes with ta_definition_content(). `nested` is the definition nested for it with ta_definition_nest(), or 0. TA_ERR_NOT_FOUND ends a walk over 0, 1, 2, ... and answers an unknown or stale definition.",
@@ -23159,8 +23225,8 @@
       ]
     },
     {
-      "name": "ta_system_invoke_id_text",
-      "doc": "The text of an invocation's ID (ADR 0049): the author's ` <invoke id>`, or the ` <stateid >. <platformid >` core generated for one without. It is what `done.invoke. <id >` names and what the `#_ <invokeid >` target spells, so a host holding `ta_active_invoke.id` can say which invocation it has. Borrowed from the system. TA_ERR_NOT_FOUND for an ID it never issued.",
+      "name": "ta_system_invoke_id_format",
+      "doc": "The text of an invocation's ID (ADR 0049): the author's ` <invoke id>`, or the ` <stateid >. <serial >` core generated for one without. It is what `done.invoke. <id >` names and what the `#_ <invokeid >` target spells, so a host holding `ta_active_invoke.id` can say which invocation it has. Follows the buffer convention of ta_send_id_format(): `*needed` receives the size including the terminating NUL, and a too-small buffer yields TA_ERR_NOMEM without writing. TA_ERR_NOT_FOUND for an ID it never issued. Core never interns a generated ID's text (ADR 0100).",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -23183,28 +23249,21 @@
           "direction": "in"
         },
         {
-          "name": "invoke",
-          "type": {
-            "type": "ta_invoke_id"
-          }
-        },
-        {
-          "name": "out",
+          "name": "params",
           "type": {
             "pointer": {
-              "type": "ta_str"
+              "type": "ta_invoke_id_format_params",
+              "const": true
             }
           },
           "shape": "single",
-          "direction": "out",
-          "valid_on": "success",
-          "lifetime": "system"
+          "direction": "in"
         }
       ]
     },
     {
       "name": "ta_system_invoke_id_find",
-      "doc": "The invocation ID `text` names: the inverse of ta_system_invoke_id_text(), for a host that replays an event an invoked session sent, which a log written by another process names (kernel ADR 0002). It looks the text up and never interns it (ADR 0100): the replayed parent's invocation issued the ID again before its child's events are replayed. TA_ERR_INVALID for empty text; TA_ERR_NOT_FOUND for an ID this system has not issued.",
+      "doc": "The invocation ID `text` names: the inverse of ta_system_invoke_id_format(), for a host that replays an event an invoked session sent, which a log written by another process names (kernel ADR 0002). It looks the text up and never interns it (ADR 0100): the replayed parent's invocation issued the ID again before its child's events are replayed. TA_ERR_INVALID for empty text; TA_ERR_NOT_FOUND for an ID this system has not issued.",
       "public": true,
       "static_inline": false,
       "implemented": true,

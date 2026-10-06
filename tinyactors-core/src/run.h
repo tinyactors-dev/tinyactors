@@ -414,8 +414,9 @@ typedef struct {
     struct ta_actor *actor;
     /** The invocation it reports on. */
     ta_invoke_id invoke;
-    /** error.communication.invoke.<id>.<reason>, interned by the caller. */
-    ta_event_name_id name;
+    /** error.communication.invoke.<id>.<reason> as text (ADR 0100),
+     * borrowed for the call and copied into the envelope's text. */
+    ta_str name_text;
     /** The event's data, borrowed and retained, or null. */
     const ta_value *data;
     /** It retires the invocation. */
@@ -513,16 +514,31 @@ ta_str ta_run_input_name(const ta_system *system, ta_event_name_id name);
 void ta_run_keep_input(ta_system *system, uint32_t index);
 
 /**
- * Reserves an envelope that only keeps `name` as text for a kept event a
- * session image restores, as `ta_run_keep_input` leaves one: `*out` names
- * it. A safe point: refills first. `TA_ERR_FULL` or `TA_ERR_NOMEM`,
- * changing nothing.
+ * Holds `name` as text in an envelope of its own (`TA_ENVELOPE_KEPT`), for
+ * an event that outlives any input: an internal event whose name core
+ * keeps only as text (ADR 0100), such as a `<send>` to #_internal or an
+ * invocation's error, or a kept event a session image restores. `*out` is
+ * the name's handle (`TA_RUN_NAME_INPUT` and the envelope), which the
+ * event owns from here: `ta_run_release_name` gives the envelope back when
+ * the event goes. Refills first when no macrostep runs, and grows the
+ * run's name buffer to the name, so the macrostep that holds the event can
+ * read it: inside a macrostep that growth is the one allocation it may
+ * make. `TA_ERR_FULL`, or `TA_ERR_NOMEM` when only a failed refill left
+ * too little or the buffer could not grow, changing nothing.
  */
-ta_result ta_run_keep_name(ta_system *system, ta_str name, uint32_t *out);
+ta_result ta_run_hold_name(ta_system *system, ta_str name, ta_event_name_id *out);
 
-/** Gives back a kept envelope (`ta_run_keep_input`, `ta_run_keep_name`)
- * and its text, when the kept event that names it goes. Never allocates. */
-void ta_run_release_kept(ta_system *system, uint32_t index);
+/**
+ * `name` as an event that outlives its input holds it: a handle to text an
+ * input keeps is copied into an envelope of its own (`ta_run_hold_name`);
+ * an interned name is `name` itself. Answers as `ta_run_hold_name`.
+ */
+ta_result ta_run_hold_copy(ta_system *system, ta_event_name_id name, ta_event_name_id *out);
+
+/** Gives back the envelope that holds `name` as text, when the event that
+ * owns it goes: one `ta_run_keep_input` kept, or `ta_run_hold_name` made.
+ * Nothing for an interned name. Never allocates. */
+void ta_run_release_name(ta_system *system, ta_event_name_id name);
 
 /** Mail for another session; see `ta_run_post_mail`. */
 typedef struct {

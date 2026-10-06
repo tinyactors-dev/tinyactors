@@ -55,6 +55,12 @@
  *    the caller's names buffer with no ID, read back as the text sent, and
  *    the atom table and the trie keep their size; a call whose names
  *    buffer has no room for the next name answers MORE and loses none.
+ * 11. run-time names of internal events and invocations travel as text:
+ *    random names sent to #_internal, done.invoke.<id> of local
+ *    invocations whose IDs core generates again and again, and
+ *    error.communication.invoke.<id>.<reason> for random reasons a host
+ *    reports leave the atom table and the trie the same size, and every
+ *    envelope that held such a name goes back.
  * 10. an invoked session keeps its last external event's name as text: one
  *    kept envelope holds it while the event is kept, the next event gives
  *    it back, a session image carries the name and restores it into a
@@ -102,7 +108,7 @@ static ta_str text(const char *cstr) {
  * condition is false, and every assignment counts in `assigned`.
  */
 
-static char typed[40000];
+static char typed[70000];
 static uint32_t typed_len = 0;
 static uint32_t assigned = 0;
 
@@ -992,6 +998,11 @@ static void invoke_fixture_open(fixture *f, const ta_scxml_spec *spec, uint32_t 
     CHECK(ta_system_register_definition(f->system, compiled, &f->id) == TA_OK);
     f->definition = ta_definition_lookup(f->system, f->id);
     CHECK(f->definition != NULL);
+    uint64_t names_depth = 0;
+    CHECK(ta_system_param(f->system, TA_PARAM_EVENT_NAME_DEPTH, &names_depth) == TA_OK && names_depth > 0);
+    f->scratch = malloc((size_t)names_depth * sizeof(ta_atom));
+    ta_names_init(&f->names, &(ta_names_init_params){ .atoms = &f->system->atoms, .scratch = f->scratch,
+                                                      .capacity = (uint32_t)names_depth });
 }
 
 static void run_stable(fixture *f, ta_actor_id actor) {
@@ -1015,7 +1026,10 @@ static ta_invoke_id invoke_named(fixture *f, ta_actor_id actor, const char *cstr
     const ta_actor_sparse_state *sparse = record == NULL ? NULL : record->sparse;
     size_t len = strlen(cstr);
     for (uint32_t index = 0; sparse != NULL && index < sparse->invoke_count; index += 1u) {
-        ta_str id = ta_invoke_id_text(f->system, sparse->invokes[index].id);
+        char buffer[128];
+        ta_text_writer writer = { .buffer = buffer, .capacity = sizeof buffer };
+        (void)ta_invoke_id_write(f->system, sparse->invokes[index].id, &writer);
+        ta_str id = { .ptr = buffer, .len = writer.length < sizeof buffer ? writer.length : 0u };
         if ((prefix ? id.len > len : id.len == len) && memcmp(id.ptr, cstr, len) == 0) {
             return sparse->invokes[index].id;
         }
@@ -1051,19 +1065,200 @@ static ta_result report_error(fixture *f, ta_actor_id actor, ta_invoke_id invoke
                                              });
 }
 
-/* Whether the segments of `name` are, in order, the `count` texts. */
-static bool segments_are(fixture *f, ta_event_name_id name, const char *const *texts, uint32_t count) {
-    ta_atom segments[TA_TRIE_MAX_DEPTH];
-    if (ta_trie_path(&f->system->event_names, name, segments) != count) {
-        return false;
-    }
-    for (uint32_t index = 0; index < count; index += 1u) {
-        ta_str segment = ta_atom_text(&f->system->atoms, segments[index]);
-        if (segment.len != strlen(texts[index]) || memcmp(segment.ptr, texts[index], segment.len) != 0) {
-            return false;
+/* `idle` sends `name` to #_internal on `send`, and counts every other
+ * event its `*` transition takes. */
+static const ta_scxml_spec *internal_chart(void) {
+    static const ta_scxml_action_spec send[] = {
+        { .kind = TA_SCXML_ACTION_SEND,
+          .as.send = { .event = { .kind = TA_SCXML_EVENT_EXPR, .as.expr = EXPR("name") },
+                       .target = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("#_internal") } } },
+        {0},
+    };
+    static const ta_scxml_action_spec count[] = {
+        { .kind = TA_SCXML_ACTION_ASSIGN,
+          .as.assign = { .location = EXPR("taken"),
+                         .value = { .kind = TA_SCXML_VALUE_EXPR, .as.expr = EXPR("taken + 1") } } },
+        {0},
+    };
+    static const ta_scxml_transition_spec idle[] = {
+        { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("send"), .actions = send },
+        { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("*"), .actions = count },
+        {0},
+    };
+    static const ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle"), .transitions = idle },
+        {0},
+    };
+    static const ta_scxml_spec spec = { .name = STR("internal"), .states = states };
+    return &spec;
+}
+
+/* Claim 11, #_internal. */
+static void test_internal_names_travel_as_text(void) {
+    fixture f;
+    fixture_open(&f, internal_chart());
+    ta_actor_id actor = 0;
+    CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = f.id, .out = &actor }) == TA_OK);
+    test_drive_status status = TEST_DRIVE_ERROR;
+    CHECK(test_drive_run(f.system, actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+    ta_event_name_id send = event_name(&f, "send");
+    set_type("warm", 4);
+    deliver(&f, actor, send);
+    uint32_t atoms = atom_count(&f);
+    uint32_t nodes = node_count(&f);
+    assigned = 0;
+    char buffer[TA_EVENT_NAME_MAX_DEPTH * 14u];
+    uint32_t rounds = 0;
+    for (uint32_t round = 0; round < 2000u; round += 1u) {
+        ta_str name = random_name(buffer, f.names.capacity);
+        bool sends = name.len >= 4 && memcmp(name.ptr, "send", 4) == 0 && (name.len == 4 || name.ptr[4] == '.');
+        if (name.len == 0 || name.len > sizeof typed || sends) {
+            continue; /* `send` and its descendants take the send transition */
         }
+        set_type(name.ptr, name.len);
+        deliver(&f, actor, send);
+        rounds += 1u;
     }
-    return true;
+    /* Each was taken from the internal queue and counted by `*`. */
+    CHECK(assigned == rounds);
+    /* A long name, held in many chunks, is taken too. */
+    static char long_name[3005];
+    memcpy(long_name, "long.", 5);
+    memset(long_name + 5, 'x', sizeof long_name - 5);
+    set_type(long_name, sizeof long_name);
+    uint32_t before = assigned;
+    deliver(&f, actor, send);
+    CHECK(assigned == before + 1u);
+    /* A name longer than one name-area field cannot be held: the send
+     * fails once, as error.execution.capacity.names, which `*` counts. */
+    static char too_long[70000];
+    memset(too_long, 'z', sizeof too_long);
+    set_type(too_long, sizeof too_long);
+    before = assigned;
+    deliver(&f, actor, send);
+    CHECK(assigned == before + 1u);
+    CHECK(atom_count(&f) == atoms);
+    CHECK(node_count(&f) == nodes);
+    CHECK(kept_envelopes(&f) == 0u);
+    fixture_close(&f);
+}
+
+/* Claim 11, local invocations: `working` invokes a `kid` with no ID, whose
+ * session finishes at once; its done.invoke takes the parent to `idle`,
+ * and `again` starts another, with a new generated ID. */
+static void test_invocation_names_travel_as_text(void) {
+    static const ta_scxml_invoke_spec invokes[] = {
+        { .kind = TA_SCXML_INVOKE, .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("kid") } }, {0}
+    };
+    static const ta_str to_idle[] = { STR("idle"), {0} };
+    static const ta_str to_working[] = { STR("working"), {0} };
+    static const ta_scxml_transition_spec working[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("done.invoke"), .targets = to_idle }, {0}
+    };
+    static const ta_scxml_transition_spec idle[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("again"), .targets = to_working }, {0}
+    };
+    static const ta_scxml_state_spec parent_states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("working"), .invokes = invokes, .transitions = working },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle"), .transitions = idle },
+        {0},
+    };
+    static const ta_scxml_spec parent = { .name = STR("parent"), .states = parent_states };
+    static const ta_scxml_state_spec child_states[] = { { .kind = TA_SCXML_STATE_FINAL, .id = STR("end") }, {0} };
+    static const ta_scxml_spec child = { .name = STR("kid"), .states = child_states };
+    fixture f;
+    fixture_open(&f, &parent);
+    ta_definition *compiled = NULL;
+    CHECK(ta_definition_compile_spec(f.system, &(ta_definition_compile_params){
+                                                   .spec = &child,
+                                                   .datamodel = { .v = &dm_vtable },
+                                                   .allocator = test_allocator_of(&f.heap),
+                                                   .out = &compiled,
+                                               }) == TA_OK);
+    CHECK(ta_system_register_definition(f.system, compiled, &kept_child_definition) == TA_OK);
+    ta_atom kid = 0;
+    CHECK(ta_system_intern_atom(f.system, STR("kid"), &kid) == TA_OK);
+    CHECK(ta_system_register_invoker(f.system, kid, (ta_invoker){ .v = &kid_vtable }) == TA_OK);
+    kept_system = f.system;
+    ta_actor_id parent_actor = 0;
+    CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = f.id, .out = &parent_actor }) == TA_OK);
+    ta_event_name_id again = event_name(&f, "again");
+    uint32_t atoms = 0;
+    uint32_t nodes = 0;
+    for (uint32_t round = 0; round < 300u; round += 1u) {
+        /* The parent starts an invocation; the child finishes at once, and
+         * its done.invoke.<stateid>.<serial> returns the parent to idle. */
+        for (uint32_t turn = 0; turn < 4u; turn += 1u) {
+            test_drive_status status = TEST_DRIVE_ERROR;
+            CHECK(test_drive_run(f.system, parent_actor, &(test_drive_run_params){ .status = &status }) == TA_OK);
+            if (kept_child != 0) {
+                (void)test_drive_run(f.system, kept_child, &(test_drive_run_params){ .status = &status });
+            }
+        }
+        CHECK(session_in(&f, parent_actor, "idle"));
+        kept_child = 0;
+        if (round == 1u) {
+            atoms = atom_count(&f);
+            nodes = node_count(&f);
+        }
+        deliver(&f, parent_actor, again);
+    }
+    CHECK(atom_count(&f) == atoms);
+    CHECK(node_count(&f) == nodes);
+    CHECK(kept_envelopes(&f) == 0u);
+    fixture_close(&f);
+}
+
+/* `s3` invokes a `svc` with no ID, and takes every error it reports
+ * without leaving. */
+static const ta_scxml_spec *reporting_chart(void) {
+    static const ta_scxml_transition_spec stay[] = {
+        { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("error.communication.invoke.*") }, {0}
+    };
+    static const ta_scxml_invoke_spec invokes[] = {
+        { .kind = TA_SCXML_INVOKE, .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("svc") } }, {0}
+    };
+    static const ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("s3"), .transitions = stay, .invokes = invokes }, {0}
+    };
+    static const ta_scxml_spec spec = { .name = STR("reporting"), .states = states };
+    return &spec;
+}
+
+/* Claim 11, a host's error reports with random reasons. */
+static void test_reported_errors_travel_as_text(void) {
+    fixture f;
+    invoke_fixture_open(&f, reporting_chart(), 0);
+    ta_actor_id actor = spawn_invoking(&f);
+    ta_invoke_id generated = invoke_named(&f, actor, "s3.", true);
+    CHECK(generated != 0);
+    CHECK(ta_actor_report_invoke(f.system, &(ta_invoke_report_params){
+                                               .actor = actor, .invoke_id = generated,
+                                               .kind = TA_INVOKE_REPORT_ERROR,
+                                               .time = ta_system_time(f.system),
+                                               .as.error = &(ta_invoke_error){ .reason = STR("warm") } }) == TA_OK);
+    run_stable(&f, actor);
+    uint32_t atoms = atom_count(&f);
+    uint32_t nodes = node_count(&f);
+    char reason[16];
+    for (uint32_t round = 0; round < 1000u; round += 1u) {
+        uint32_t length = 1u + (uint32_t)(rand() % 12);
+        for (uint32_t at = 0; at < length; at += 1u) {
+            reason[at] = (char)('a' + rand() % 26);
+        }
+        CHECK(ta_actor_report_invoke(f.system, &(ta_invoke_report_params){
+                                                   .actor = actor, .invoke_id = generated,
+                                                   .kind = TA_INVOKE_REPORT_ERROR,
+                                                   .time = ta_system_time(f.system),
+                                                   .as.error = &(ta_invoke_error){
+                                                       .reason = { .ptr = reason, .len = length } } }) == TA_OK);
+        run_stable(&f, actor);
+    }
+    CHECK(session_in(&f, actor, "s3"));
+    CHECK(atom_count(&f) == atoms);
+    CHECK(node_count(&f) == nodes);
+    CHECK(kept_envelopes(&f) == 0u);
+    fixture_close(&f);
 }
 
 /* Claim 6. */
@@ -1074,42 +1269,54 @@ static void test_error_name_splits_the_id(void) {
     ta_invoke_id authored = invoke_named(&f, actor, "pay.ment", false);
     ta_invoke_id generated = invoke_named(&f, actor, "s3.", true);
     CHECK(authored != 0 && generated != 0);
-    ta_str generated_text = ta_invoke_id_text(f.system, generated);
+    char generated_buffer[64];
+    ta_text_writer generated_writer = { .buffer = generated_buffer, .capacity = sizeof generated_buffer };
+    CHECK(ta_invoke_id_write(f.system, generated, &generated_writer) && generated_writer.length < 64u);
+    ta_str generated_text = { .ptr = generated_buffer, .len = generated_writer.length };
     char platform[32] = {0};
     CHECK(generated_text.len > 3u && generated_text.len - 3u < sizeof platform);
     memcpy(platform, generated_text.ptr + 3, generated_text.len - 3u);
     CHECK(strchr(platform, '.') == NULL);
+    /* The generated ID's text is a state ID and a serial, and nothing of
+     * it is interned: the serial is no atom. */
+    CHECK(!is_atom(&f, platform, NULL));
 
-    ta_event_name_id authored_name = 0;
-    ta_event_name_id generated_name = 0;
-    CHECK(ta_invoke_error_name(f.system, authored, STR("failed"), &authored_name) == TA_OK);
-    CHECK(ta_invoke_error_name(f.system, generated, STR("failed"), &generated_name) == TA_OK);
-
-    /* One segment per dotted part. */
-    static const char *const authored_segments[] = { "error", "communication", "invoke", "pay", "ment", "failed" };
-    const char *const generated_segments[] = { "error", "communication", "invoke", "s3", platform, "failed" };
-    CHECK(segments_are(&f, authored_name, authored_segments, 6));
-    CHECK(segments_are(&f, generated_name, generated_segments, 6));
-
-    /* The node the full dotted text names: the full name matches itself. */
+    /* The names are text, built without interning (ADR 0100). */
+    uint32_t atoms = atom_count(&f);
+    uint32_t nodes = node_count(&f);
+    ta_str authored_name = { 0 };
+    ta_str generated_name = { 0 };
+    CHECK(ta_invoke_name_text(f.system, (ta_invoke_name){ .system = f.system, .invoke = authored,
+                                                           .reason = STR("failed") },
+                              &authored_name) == TA_OK);
+    CHECK(ta_invoke_name_text(f.system, (ta_invoke_name){ .system = f.system, .invoke = generated,
+                                                           .reason = STR("failed") },
+                              &generated_name) == TA_OK);
     char full[96];
-    ta_event_name_id dotted = 0;
-    CHECK(ta_trie_intern_dotted(&f.system->event_names, text("error.communication.invoke.pay.ment.failed"),
-                                &dotted) == TA_OK && dotted == authored_name);
     snprintf(full, sizeof full, "error.communication.invoke.s3.%s.failed", platform);
-    CHECK(ta_trie_intern_dotted(&f.system->event_names, text(full), &dotted) == TA_OK && dotted == generated_name);
+    CHECK(authored_name.len == strlen("error.communication.invoke.pay.ment.failed") &&
+          memcmp(authored_name.ptr, "error.communication.invoke.pay.ment.failed", authored_name.len) == 0);
+    CHECK(generated_name.len == strlen(full) && memcmp(generated_name.ptr, full, generated_name.len) == 0);
 
-    /* The descriptors match by prefix of whole segments. */
+    /* One segment per dotted part: the resolver splits the ID, the serial
+     * being no atom (UNKNOWN), and the descriptors match by prefix of
+     * whole segments. */
     static const bool authored_matches[INVOKE_DESCRIPTORS] = { true, false, true, true, true, false, false };
     static const bool generated_matches[INVOKE_DESCRIPTORS] = { false, true, false, true, false, false, false };
     for (uint32_t index = 0; index < INVOKE_DESCRIPTORS; index += 1u) {
-        bool ok = interned_matches(&f, index, authored_name) == authored_matches[index] &&
-                  interned_matches(&f, index, generated_name) == generated_matches[index];
+        CHECK(ta_names_resolve(&f.names, authored_name) == TA_OK && f.names.count == 6u);
+        bool ok = resolved_matches(&f, index) == authored_matches[index];
+        CHECK(ta_names_resolve(&f.names, generated_name) == TA_OK && f.names.count == 6u);
+        ok = ok && resolved_matches(&f, index) == generated_matches[index];
         if (!ok) {
             fprintf(stderr, "%s matched an invocation error name wrongly\n", invoke_descriptors[index]);
         }
         CHECK(ok);
     }
+    ta_invoke_name_free(f.system, authored_name);
+    ta_invoke_name_free(f.system, generated_name);
+    CHECK(atom_count(&f) == atoms);
+    CHECK(node_count(&f) == nodes);
 
     /* A host's report takes the transition the first part selects. */
     CHECK(report_error(&f, actor, generated) == TA_OK);
@@ -1193,9 +1400,10 @@ static void test_too_deep_names(void) {
     CHECK(untouched(&f, actor));
 
     /* The five-part ID's done.invoke name has seven segments and is made. */
-    ta_event_name_id done = 0;
-    CHECK(ta_invoke_done_name(f.system, five, &done) == TA_OK);
-    CHECK(ta_trie_path(&f.system->event_names, done, (ta_atom[TA_TRIE_MAX_DEPTH]){0}) == 7u);
+    ta_str done = { 0 };
+    CHECK(ta_invoke_name_text(f.system, (ta_invoke_name){ .system = f.system, .invoke = five }, &done) == TA_OK);
+    CHECK(ta_names_resolve(&f.names, done) == TA_OK && f.names.count == 7u);
+    ta_invoke_name_free(f.system, done);
 
     /* A short name for the same session is still made and taken. */
     CHECK(report_error(&f, actor, short_id) == TA_OK);
@@ -1215,6 +1423,9 @@ int main(void) {
     test_eventexpr_travels_as_text();
     test_names_reach_hosts_as_text();
     test_kept_event_keeps_its_name();
+    test_internal_names_travel_as_text();
+    test_invocation_names_travel_as_text();
+    test_reported_errors_travel_as_text();
     if (failures != 0) {
         fprintf(stderr, "name_matching_test: %d failure(s)\n", failures);
         return 1;

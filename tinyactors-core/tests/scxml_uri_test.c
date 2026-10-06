@@ -48,6 +48,10 @@ int main(void) {
         printf("scxml uri test: could not create a system\n");
         return 1;
     }
+    /* `worker` is an author's invocation ID, interned with its chart: a
+     * `#_<invokeid>` target looks its text up and never interns it. */
+    ta_atom worker = 0;
+    check(ta_system_intern_atom(system, str("worker"), &worker) == TA_OK, "intern the author's ID");
 
     ta_scxml_target target = { 0 };
     check(ta_scxml_target_parse(system, str("#_internal"), &target) == TA_OK &&

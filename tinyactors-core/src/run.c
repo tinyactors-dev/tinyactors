@@ -598,7 +598,7 @@ ta_result ta_run_admit_event(ta_system *system, const ta_run_event *input) {
 }
 
 ta_result ta_run_admit_report(ta_system *system, const ta_run_report *report) {
-    ta_run_record record = { .name = report->name, .origin = { .kind = TA_ORIGIN_NONE }, .time = report->time,
+    ta_run_record record = { .origin = { .kind = TA_ORIGIN_NONE }, .time = report->time,
                              .flags = report->ends ? TA_RUN_RECORD_ENDS : 0u };
     uint32_t index = 0u;
     ta_result result = ta_run_admit(system, &(ta_run_admission){ .source = TA_RECORD_INPUT_SOURCE_INVOKE_REPORT,
@@ -607,6 +607,7 @@ ta_result ta_run_admit_report(ta_system *system, const ta_run_report *report) {
                                                                  .invoke = report->invoke,
                                                                  .correlation = report->correlation,
                                                                  .record = &record,
+                                                                 .name_text = report->name_text,
                                                                  .trace = report->trace },
                                     &index);
     if (result != TA_OK) {
@@ -697,18 +698,41 @@ void ta_run_keep_input(ta_system *system, uint32_t index) {
     ta_envelope_pool_at(&system->run.pool, index)->flags |= TA_ENVELOPE_FLAG_KEEP;
 }
 
-ta_result ta_run_keep_name(ta_system *system, ta_str name, uint32_t *out) {
+ta_result ta_run_hold_name(ta_system *system, ta_str name, ta_event_name_id *out) {
     uint32_t index = 0u;
     ta_result result = ta_run_wake_reserve(system, &(ta_run_wake){ .name_text = name }, &index);
-    if (result == TA_OK) {
-        ta_envelope_pool_at(&system->run.pool, index)->state = TA_ENVELOPE_KEPT;
-        *out = index;
+    if (result != TA_OK) {
+        return result;
     }
-    return result;
+    /* The event may be read in the macrostep that holds it, before any
+     * refill: the name buffer grows to the name now. */
+    result = ta_run_name_room(system);
+    if (result != TA_OK) {
+        ta_run_discard(system, index);
+        return result;
+    }
+    ta_envelope_pool_at(&system->run.pool, index)->state = TA_ENVELOPE_KEPT;
+    *out = TA_RUN_NAME_INPUT | index;
+    return TA_OK;
 }
 
-void ta_run_release_kept(ta_system *system, uint32_t index) {
-    ta_run_discard(system, index);
+ta_result ta_run_hold_copy(ta_system *system, ta_event_name_id name, ta_event_name_id *out) {
+    if (!ta_run_name_is_input(name)) {
+        *out = name;
+        return TA_OK;
+    }
+    if (!system->run.running) {
+        /* Refilled now, the name buffer the text is read into does not move
+         * while the text is written (ta_run_name_room). */
+        (void)ta_run_refill(system);
+    }
+    return ta_run_hold_name(system, ta_run_input_name(system, name), out);
+}
+
+void ta_run_release_name(ta_system *system, ta_event_name_id name) {
+    if (ta_run_name_is_input(name)) {
+        ta_run_discard(system, name & ~TA_RUN_NAME_INPUT);
+    }
 }
 
 /* ------------------------------------------------------------------------
@@ -1151,7 +1175,9 @@ static ta_result ta_run_bind_report(ta_system *system, ta_actor *actor, uint32_t
     ta_trace_parent trace = ta_run_trace_of(system, index);
     ta_result result = ta_invoke_take_report(system, actor, &(ta_invoke_report_take){
                                                                 .invoke = envelope->invoke_instance,
-                                                                .name = record.name,
+                                                                .name = (record.flags & TA_RUN_RECORD_NAME_TEXT) != 0u
+                                                                            ? TA_RUN_NAME_INPUT | index
+                                                                            : record.name,
                                                                 .data = &envelope->data,
                                                                 .ends = (record.flags & TA_RUN_RECORD_ENDS) != 0u,
                                                                 .trace = &trace,

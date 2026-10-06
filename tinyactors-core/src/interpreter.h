@@ -395,9 +395,18 @@ bool ta_interpreter_internal_pending(const ta_actor *actor);
  * Invoke hooks, implemented in invoke.c
  */
 
-/* Interns an SCXML invoke ID's text; the runtime ID is its atom + 1. */
-ta_result ta_invoke_id_from_text(ta_system *system, ta_str text, ta_invoke_id *out);
-ta_str ta_invoke_id_text(const ta_system *system, ta_invoke_id invoke);
+/*
+ * Invocation IDs (ADR 0100). An author's literal ID is its atom + 1; a
+ * generated `<stateid>.<serial>` is TA_GENERATED_INVOKE_ID_BIT with the
+ * state ID's atom and the session's serial, so core never interns its
+ * text. ta_invoke_id_write puts an ID's text and answers false for none;
+ * ta_invoke_id_parse looks text up, a literal's atom or a generated ID's
+ * parts, and never interns: TA_ERR_NOT_FOUND for text this system never
+ * issued, TA_ERR_INVALID for empty text. Neither allocates.
+ */
+#define TA_GENERATED_INVOKE_ID_BIT ((ta_invoke_id)1u << 63)
+bool ta_invoke_id_write(const ta_system *system, ta_invoke_id invoke, ta_text_writer *writer);
+ta_result ta_invoke_id_parse(const ta_system *system, ta_str text, ta_invoke_id *out);
 ta_result ta_invoke_state_entered(ta_interpreter *it, ta_state_id state);
 ta_result ta_invoke_state_exited(ta_interpreter *it, ta_state_id state);
 /* An invocation taken out of an actor's table, to be cancelled. */

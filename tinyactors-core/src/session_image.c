@@ -90,6 +90,9 @@ struct ta_session_image {
     uint64_t next_send_id;
 
     ta_queued_event *internal_events;
+    /* Each queued event's name when core keeps it only as text (ADR 0100),
+     * in the arena, that event's `name` then 0; empty otherwise. */
+    ta_str *internal_names;
     uint32_t internal_count;
     /* Logical records only: a service handle is runtime-only and is dropped. */
     ta_active_invoke *invokes;
@@ -245,7 +248,10 @@ static size_t ta_image_name_bytes(const ta_actor *actor) {
     if (actor->internal != NULL && actor->internal->has_kept) {
         total += ta_run_input_name(system, actor->internal->kept_event.name).len;
     }
-    return total;
+    for (uint32_t index = 0; actor->internal != NULL && index < actor->internal->count; index += 1u) {
+        total += sizeof(ta_str) + ta_run_input_name(system, actor->internal->events[index].event.name).len;
+    }
+    return total + _Alignof(ta_str);
 }
 
 /* Copies the text of `event`'s name into the arena when core keeps it only
@@ -348,12 +354,18 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         uint32_t count = actor->internal->count;
         image->internal_events = ta_arena_alloc(arena, (size_t)count * sizeof(ta_queued_event),
                                                 _Alignof(ta_queued_event));
-        if (image->internal_events == NULL) {
+        image->internal_names = ta_arena_alloc(arena, (size_t)count * sizeof(ta_str), _Alignof(ta_str));
+        if (image->internal_events == NULL || image->internal_names == NULL) {
             return TA_ERR_NOMEM;
         }
         for (uint32_t index = 0; index < count; index += 1) {
             image->internal_events[index] = actor->internal->events[index];
+            image->internal_names[index] = (ta_str){ 0 };
             result = ta_image_copy_origin(system, arena, &image->internal_events[index].event);
+            if (result == TA_OK) {
+                result = ta_image_copy_name(system, arena, &image->internal_events[index].event,
+                                            &image->internal_names[index]);
+            }
             if (result != TA_OK) {
                 return result;
             }
@@ -611,8 +623,17 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
         ta_event event;
         ta_event_retain(&image->internal_events[index].event, &event);
+        if (image->internal_names[index].len != 0u) {
+            /* Its name, kept only as text, gets an envelope of its own. */
+            ta_result held = ta_run_hold_name(system, image->internal_names[index], &event.name);
+            if (held != TA_OK) {
+                ta_event_release(&event);
+                return held;
+            }
+        }
         ta_result result = ta_image_localize_origin(system, &event);
         if (result != TA_OK) {
+            ta_run_release_name(system, event.name);
             ta_event_release(&event);
             return result;
         }
@@ -770,16 +791,15 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     if (image->events.has_kept || (image->events.external != TA_EXTERNAL_NONE && image->has_parent)) {
         result = ta_interpreter_queue_reserve(system, actor, 0);
     }
+    ta_event_name_id kept_name = image->events.kept_event.name;
     if (result == TA_OK && image->events.has_kept && image->events.kept_name.len != 0u) {
         /* Its name, which core keeps only as text, gets an envelope of its
          * own, as when the session kept the event (ADR 0100). */
-        result = ta_run_keep_name(system, image->events.kept_name, &actor->internal->kept_input);
+        result = ta_run_hold_name(system, image->events.kept_name, &kept_name);
     }
     if (result == TA_OK && image->events.has_kept) {
         ta_event_retain(&image->events.kept_event, &actor->internal->kept_event);
-        if (actor->internal->kept_input != 0u) {
-            actor->internal->kept_event.name = TA_RUN_NAME_INPUT | actor->internal->kept_input;
-        }
+        actor->internal->kept_event.name = kept_name;
         actor->internal->has_kept = true;
     }
     /*

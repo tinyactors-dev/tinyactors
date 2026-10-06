@@ -609,6 +609,14 @@ Carried forward from commit 4 (19cd1813):
   lands with 6.1, when napi drives core directly.
 - Mail to a resident actor that finishes before taking it is refused by
   core; commit 5 turns it into `error.communication`.
+- **Holding an `#_internal` name may grow the run's name buffer inside a
+  macrostep** (commit 6b), where interning allocated before. 4.4 removes
+  it: the buffer is sized for one name-area field (65,535 bytes) at
+  system creation, or names are matched without a contiguous copy.
+- **napi does not recover an actor whose data model ran out of memory**
+  under `refuseAllocationsFrom`: its macrostep stays stopped after the
+  refusal is lifted. It predates 4.2; 4.4 removes the out-of-memory stop
+  machinery and checks the case.
 - **The kernel's overflow machinery is idle after commit 5**: no message
   is marked `may_overflow`, so napi's `maxQueuedMessages` and
   `maxRetainedBytes` act on nothing. They go with napi's parameter

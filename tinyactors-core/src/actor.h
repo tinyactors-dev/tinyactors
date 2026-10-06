@@ -218,9 +218,8 @@ typedef struct ta_internal_queue {
     uint32_t count;
     uint32_t capacity;
     bool has_kept;
-    /* The kept envelope that holds the kept event's name as text
-     * (`ta_run_keep_input`), 0 when its name is interned. */
-    uint32_t kept_input;
+    /* An event here, kept or queued, whose name core keeps only as text
+     * owns the envelope that holds it (`ta_run_release_name`). */
     ta_event kept_event;
     ta_queued_event events[];
 } ta_internal_queue;

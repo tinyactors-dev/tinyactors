@@ -78,7 +78,7 @@ TinyactorsTest.scenarios 'actor walk', chart: :caller do
   end
 
   # An inspection view reports an actor's invocations as `ta_invoke_id`s, and
-  # ta_system_invoke_id_text says which invocation each one is (ADR 0049) -
+  # ta_system_invoke_id_format says which invocation each one is (ADR 0049) -
   # the author's `<invoke id>`, the same text `done.invoke.<id>` carries and
   # `#_<invokeid>` spells. Without it a host can list invocations but cannot
   # name them.
@@ -93,14 +93,14 @@ TinyactorsTest.scenarios 'actor walk', chart: :caller do
     invokes = caller.inspect_actor.fetch(:invokes)
     assert_equal 2, invokes.size, 'both invocations of the state are live'
     names = invokes.map do |invoke|
-      core('ta_system_invoke_id_text',
-           ta.system.invoke_id_text(system: system_handle, invoke: invoke.fetch(:id))).fetch(:out)
+      core('ta_system_invoke_id_format',
+           ta.system.invoke_id_format(system: system_handle, invoke: invoke.fetch(:id), capacity: 256)).fetch(:buffer)
     end
     assert_equal %w[first second], names, 'the author IDs, in document order'
 
     # An ID this system never issued is a question, not a failure.
     assert_equal 'err_not_found',
-                 ta.system.invoke_id_text(system: system_handle, invoke: 987_654)[:result]
+                 ta.system.invoke_id_format(system: system_handle, invoke: 987_654, capacity: 256)[:result]
   end
   # Catches: pages that skip or repeat actors at page boundaries, a limit
   # that is off by one, or a walk out of position order.

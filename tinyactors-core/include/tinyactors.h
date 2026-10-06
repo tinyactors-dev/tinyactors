@@ -4473,19 +4473,27 @@ TA_API ta_result ta_system_intern_atom(ta_system *system, ta_str text, TA_OUT ta
 TA_API ta_result ta_system_atom_text(const ta_system *system,
                                      ta_atom atom,
                                      TA_OUT TA_LIFETIME(system) ta_str *out);
+typedef struct {
+    ta_invoke_id invoke;
+    TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
+    uint32_t capacity;
+    TA_OUT TA_ALWAYS uint32_t *needed;
+} ta_invoke_id_format_params;
 /*
  * The text of an invocation's ID (ADR 0049): the author's `<invoke id>`, or
- * the `<stateid>.<platformid>` core generated for one without. It is what
+ * the `<stateid>.<serial>` core generated for one without. It is what
  * `done.invoke.<id>` names and what the `#_<invokeid>` target spells, so a
  * host holding `ta_active_invoke.id` can say which invocation it has.
- * Borrowed from the system. TA_ERR_NOT_FOUND for an ID it never issued.
+ * Follows the buffer convention of ta_send_id_format(): `*needed` receives
+ * the size including the terminating NUL, and a too-small buffer yields
+ * TA_ERR_NOMEM without writing. TA_ERR_NOT_FOUND for an ID it never issued.
+ * Core never interns a generated ID's text (ADR 0100).
  */
-TA_API ta_result ta_system_invoke_id_text(const ta_system *system,
-                                          ta_invoke_id invoke,
-                                          TA_OUT TA_LIFETIME(system) ta_str *out);
+TA_API ta_result ta_system_invoke_id_format(const ta_system *system,
+                                            TA_IN const ta_invoke_id_format_params *params);
 /*
  * The invocation ID `text` names: the inverse of
- * ta_system_invoke_id_text(), for a host that replays an event an invoked
+ * ta_system_invoke_id_format(), for a host that replays an event an invoked
  * session sent, which a log written by another process names (kernel ADR
  * 0002). It looks the text up and never interns it (ADR 0100): the
  * replayed parent's invocation issued the ID again before its child's

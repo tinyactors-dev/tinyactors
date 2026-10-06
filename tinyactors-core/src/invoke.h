@@ -40,9 +40,9 @@
  *
  * Invocation records are owned by the actor's sparse state and freed with
  * it. Restoring an invocation may grow those arrays, and reporting a lost
- * one may intern its event's name and grow the actor's internal queue; the
- * retire pair separates that allocation (`ta_invoke_prepare_retire`) from
- * the work that cannot fail.
+ * one holds its event's name as text (ADR 0100) and may grow the actor's
+ * internal queue; the retire pair separates that work
+ * (`ta_invoke_prepare_retire`) from the work that cannot fail.
  * The registry entries are owned by the system.
  *
  * ## Failure
@@ -83,6 +83,9 @@ typedef struct {
     /* Started while its actor replayed (ADR 0089): no invoker was called, so
      * none is cancelled or forwarded to, and nothing runs behind it. */
     bool replayed;
+    /* Between ta_invoke_prepare_retire and ta_invoke_retire_all: the name
+     * of its `unavailable` error, held as text (ADR 0100). */
+    ta_event_name_id retire_name;
 } ta_invoke_meta;
 
 /* The send ID of a child's queued done.invoke completion record. */
@@ -114,12 +117,16 @@ bool ta_invoke_is_active(const ta_actor *actor, ta_invoke_id invoke);
  */
 ta_result ta_invoke_prepare_retire(ta_system *system, ta_actor *actor);
 bool ta_invoke_retire_all(ta_system *system, ta_actor *actor);
+/* Undoes ta_invoke_prepare_retire when what follows it fails: the names it
+ * held go back. */
+void ta_invoke_cancel_retire(ta_system *system, ta_actor *actor);
 
 /* An admitted ERROR report as ta_run() takes it (run.h). */
 typedef struct {
     /* The invocation it reports on. */
     ta_invoke_id invoke;
-    /* error.communication.invoke.<id>.<reason>, made when it was admitted. */
+    /* error.communication.invoke.<id>.<reason>: a handle to the text the
+     * report's envelope keeps (ADR 0100). */
     ta_event_name_id name;
     /* The report's data: moved into the event on TA_OK, kept otherwise. */
     ta_value *data;

@@ -148,9 +148,14 @@ static napi_value tna_start_payload(napi_env env, tna_napi_system *wrapper, cons
         napi_get_boolean(env, effect->autoforward, &autoforward) != napi_ok) {
         return NULL;
     }
-    ta_str invoke_text = { 0 };
-    napi_value invoke_id = ta_system_invoke_id_text(tah_system_core(system), effect->invoke_id, &invoke_text) == TA_OK
-                               ? tna_text(env, invoke_text.ptr, invoke_text.len)
+    char invoke_text[256];
+    uint32_t needed = 0;
+    napi_value invoke_id = ta_system_invoke_id_format(tah_system_core(system),
+                                                      &(ta_invoke_id_format_params){ .invoke = effect->invoke_id,
+                                                                                     .buffer = invoke_text,
+                                                                                     .capacity = sizeof invoke_text,
+                                                                                     .needed = &needed }) == TA_OK
+                               ? tna_text(env, invoke_text, needed - 1u)
                                : tna_js_undefined(env);
     tna_put(env, payload, "handle", tna_handle(env, effect->service));
     tna_put(env, payload, "parent", tna_actor_view(env, wrapper, effect->parent));
@@ -661,11 +666,16 @@ napi_value tna_set_log_sink_method(napi_env env, napi_callback_info info) {
 /* The event name done.invoke.<invokeid> of an invocation (SCXML 6.4). */
 static ta_result tna_done_name(tah_system *system, ta_invoke_id invoke, ta_event_name_id *out) {
     static const char prefix[] = "done.invoke.";
-    ta_str id = { 0 };
-    ta_result result = ta_system_invoke_id_text(tah_system_core(system), invoke, &id);
+    char id_text[256];
+    uint32_t needed = 0;
+    ta_result result = ta_system_invoke_id_format(tah_system_core(system),
+                                                  &(ta_invoke_id_format_params){ .invoke = invoke, .buffer = id_text,
+                                                                                 .capacity = sizeof id_text,
+                                                                                 .needed = &needed });
     if (result != TA_OK) {
         return result;
     }
+    ta_str id = { .ptr = id_text, .len = needed - 1u };
     size_t length = sizeof prefix - 1u + id.len;
     char *text = ta_arena_alloc(tah_scratch_call(tah_system_scratch(system)), length, 1);
     if (text == NULL) {

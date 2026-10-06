@@ -87,6 +87,15 @@ TinyactorsTest.scenarios 'target URIs' do
   # Catches: an invoke target parsed by position or by a counter, so that
   # `#_worker` in two charts of one system named two different invocations.
   scenario 'an invocation target is an ID of the system' do
+    # A target is looked up and never interned (core ADR 0100): text that
+    # names no invocation ID of the system names none.
+    _, unknown = parse_target('#_worker')
+    assert_equal 'invoke', unknown[:kind]
+    assert_equal (2**64 - 1).to_s, unknown[:invoke].to_s, 'an ID no chart or invocation made is TA_INVOKE_ID_NONE'
+    # Authors' IDs are interned with their charts.
+    %w[worker helper self].each do |id|
+      core('ta_system_intern_atom', ta.system.intern_atom(system: system_handle, text: id))
+    end
     result, worker = parse_target('#_worker')
     assert_equal 'ok', result
     assert_equal 'invoke', worker[:kind]

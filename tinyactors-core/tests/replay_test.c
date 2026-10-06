@@ -629,8 +629,12 @@ static void test_replayed_invocation_finalizes(void) {
     ta_definition_id definition = define(system, "jobs", invoking);
     ta_actor_id replay = prepare_replaying(system, definition, &address_job, 0);
     ta_invoke_id job = active_invoke(system, replay);
-    ta_str text = {0};
-    CHECK(ta_system_invoke_id_text(system, job, &text) == TA_OK && text.len == 3 && memcmp(text.ptr, "job", 3) == 0);
+    char text[8];
+    uint32_t needed = 0;
+    CHECK(ta_system_invoke_id_format(system, &(ta_invoke_id_format_params){ .invoke = job, .buffer = text,
+                                                                            .capacity = sizeof text,
+                                                                            .needed = &needed }) == TA_OK &&
+          strcmp(text, "job") == 0);
     CHECK(invoker_starts == 0);
     deliver(system, replay, "poke"); /* autoforwarded: to nothing */
     CHECK(invoker_forwards == 0);
