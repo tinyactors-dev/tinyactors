@@ -244,8 +244,7 @@ function reviewUnit(plan, impl, u, round, lifetimesOnly) {
 
 ${unitHeader(u)}
 
-You are a reviewer (round ${round}${round > 1 ? ': the earlier rounds were fixed; review the fix commits
-made after the first review, and the code paths they touch' : ''}). Do not edit files. From ${REPO}, read the change with
+You are a reviewer (round ${round}${round > 1 ? ': the earlier rounds were fixed; review the fix commits made after the first review, and the code paths they touch' : ''}). Do not edit files. From ${REPO}, read the change with
   git log --oneline ${BASE}..${wip(u)}
   git diff ${BASE}...${wip(u)}
 and read whole files at that revision with git show ${wip(u)}:<path>.
