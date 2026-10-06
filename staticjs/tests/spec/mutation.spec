@@ -1692,3 +1692,53 @@ undefined
 (() => { let acc = {a: 1}; acc = {...acc, b: 2}; acc.c = 3; return acc; })()
 --- value
 {"a":1,"b":2,"c":3}
+
+# Number keys index an array without a string (PATH_INDEX), and are
+# strings to anything else.
+=== number keys replace and append elements
+(() => { const xs = [0, 0]; xs[0] = 1; xs[1] += 2; xs[2] = 3; xs[3] ??= 4; xs[0]++; return xs; })()
+--- value
+[2,2,3,4]
+
+=== number keys through nested arrays
+(() => { const m = [[0, 0], [0, 0]]; m[0][1] = 5; m[1][0] += 2; m[1][2] = 9; return m; })()
+--- value
+[[0,5],[2,0,9]]
+
+=== a number key of an object is its string
+(() => { const o = {1: {a: 0}}; o[1].a = 2; o[2] = [0]; o[2][0] += 1; o[0.5] = "h"; return o; })()
+--- value
+{"1":{"a":2},"2":[1],"0.5":"h"}
+
+=== a number key into an array, then an object
+(() => { const xs = [{n: 1}]; xs[0].n *= 10; xs[0][7] = "x"; return xs; })()
+--- value
+[{"7":"x","n":10}]
+
+=== the largest index past the length
+(() => { const xs = [1]; xs[4294967294] = 2; return xs; })()
+--- fault no holes
+
+=== a number past the largest index is not one
+(() => { const xs = [1]; xs[4294967295] = 2; return xs; })()
+--- fault by index
+
+=== NaN is not an index
+(() => { const xs = [1]; xs[NaN] = 2; return xs; })()
+--- fault by index
+
+=== Infinity is not an index
+(() => { const xs = [1]; xs[Infinity] += 2; return xs; })()
+--- fault adds two numbers
+
+=== a number key past an array's end on the way
+(() => { const xs = [[1]]; xs[1][0] = 2; return xs; })()
+--- fault set a property of undefined
+
+=== a compound number key past the end reads undefined
+(() => { const xs = [1]; xs[2] ||= 5; return xs; })()
+--- fault no holes
+
+=== a number key of a string on the way
+(() => { const xs = ["ab"]; xs[0][0] = "x"; return xs; })()
+--- fault objects and elements

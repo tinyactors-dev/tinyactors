@@ -505,8 +505,11 @@ typedef enum {
     SJS_OP_SORTED,         /* u16 slot, u8 flags (CHAIN): after a MUTATE of sort, whose
                             * result it pops into the slot; then as MUTATE gives it */
     /* MUTATION: assignment to a property or an element of a variable. */
-    SJS_OP_PATH            /* u16 n, u8 SJS_PATH_*: [reference, n keys] the place of the
-                            * variable's value they name, each a string: LOAD pushes its
+    SJS_OP_PATH_INDEX,     /* [key] -> [key]: a number stays one, for PATH to index an
+                            * array with; anything else becomes a string, as TO_KEY makes it */
+    SJS_OP_PATH,           /* u16 n, u8 SJS_PATH_*: [reference, n keys] the place of the
+                            * variable's value they name, each a string or a number
+                            * (PATH_INDEX): LOAD pushes its
                             * value; STORE pops the value above them into it, and them;
                             * DROP pops them and the value above them */
 } sjs_opcode;
