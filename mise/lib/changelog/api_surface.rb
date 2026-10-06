@@ -80,26 +80,26 @@ module Changelog
     # view), constants and flag sets. An entity's lines are every leaf of its
     # entry, docs left out, so a changed field type, enum value, parameter or
     # layout (size, alignment, offset) shows as the lines it changed.
-def json_surface(repo, component, rev)
-  Array(component.api_json).each_with_object({}) do |file, surface|
-    text = repo.show(rev, "#{component.dir}/#{file}") or next
+  def json_surface(repo, component, rev)
+    Array(component.api_json).each_with_object({}) do |file, surface|
+      text = repo.show(rev, "#{component.dir}/#{file}") or next
 
-    api = JSON.parse(text)
-    entities = []
-    api.fetch('functions', []).each { |entry| entities << json_entity('function', entry.fetch('name'), entry, component, file) }
-    api.fetch('types', {}).each { |name, entry| entities << json_entity(entry.fetch('kind', 'type'), name, entry, component, file) }
-    api.fetch('constants', []).each { |entry| entities << json_entity('constant', entry.fetch('name'), entry, component, file) }
-    api.fetch('flag_sets', {}).each { |name, entry| entities << json_entity('flag set', name, entry, component, file) }
-    entities.compact.each { |entity| surface[entity.key] = entity }
+      api = JSON.parse(text)
+      entities = []
+      api.fetch('functions', []).each { |entry| entities << json_entity('function', entry.fetch('name'), entry, component, file) }
+      api.fetch('types', {}).each { |name, entry| entities << json_entity(entry.fetch('kind', 'type'), name, entry, component, file) }
+      api.fetch('constants', []).each { |entry| entities << json_entity('constant', entry.fetch('name'), entry, component, file) }
+      api.fetch('flag_sets', {}).each { |name, entry| entities << json_entity('flag set', name, entry, component, file) }
+      entities.compact.each { |entity| surface[entity.key] = entity }
+    end
   end
-end
 
-def json_entity(kind, name, entry, component, file)
-  return if component.api_ignore && name.match?(component.api_ignore)
+  def json_entity(kind, name, entry, component, file)
+    return if component.api_ignore && name.match?(component.api_ignore)
 
-  lines = flatten(entry, named: true)
-  Entity.new(kind: kind, name: name, file: file, text: lines.join(' | '), lines: lines)
-end
+    lines = flatten(entry, named: true)
+    Entity.new(kind: kind, name: name, file: file, text: lines.join(' | '), lines: lines)
+  end
 
     JSON_SKIPPED = %w[doc implemented].freeze
 

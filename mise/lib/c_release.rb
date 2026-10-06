@@ -46,33 +46,33 @@ module CRelease
   # `includes` are the directories its header and amalgamation need beyond
   # their own: those of the libraries it builds on (the codec's core and
   # txml).
-# `api_macro` is the macro its header declares public functions with
-# (TXML_API, TA_API); the codec uses core's TA_API.
-# Its header, amalgamation and API description are include/<name>.h, .c
-# and .api.json unless given (core's are generated into dist/), and its
-# platform amalgamations (<name>_<suffix>.c, PlatformFiles) lie beside its
-# amalgamation. `version_header` has its <MACRO>_VERSION_* macros (its
-# header, unless given). `libc` says whether it calls the C library: its
-# wasm module then links wasi-libc for it, and is checked to import
-# nothing all the same (decision 19).
-Project = Data.define(:name, :prefix, :includes, :api_macro, :header, :amalgamation, :api, :version_header, :libc) do
-  def initialize(name:, prefix:, includes: [], api_macro: nil, header: nil, amalgamation: nil, api: nil,
-                 version_header: nil, libc: false)
-    root = Cache::ROOT
-    header = Pathname.new(header || root.join("include/#{name}.h"))
-    super(name: name, prefix: prefix, includes: includes.map { |dir| Pathname.new(dir).expand_path },
-          api_macro: api_macro || "#{prefix.upcase}_API", header: header,
-          amalgamation: Pathname.new(amalgamation || root.join("include/#{name}.c")),
-          api: Pathname.new(api || root.join("include/#{name}.api.json")),
-          version_header: Pathname.new(version_header || header), libc: libc)
-  end
+  # `api_macro` is the macro its header declares public functions with
+  # (TXML_API, TA_API); the codec uses core's TA_API.
+  # Its header, amalgamation and API description are include/<name>.h, .c
+  # and .api.json unless given (core's are generated into dist/), and its
+  # platform amalgamations (<name>_<suffix>.c, PlatformFiles) lie beside its
+  # amalgamation. `version_header` has its <MACRO>_VERSION_* macros (its
+  # header, unless given). `libc` says whether it calls the C library: its
+  # wasm module then links wasi-libc for it, and is checked to import
+  # nothing all the same (decision 19).
+  Project = Data.define(:name, :prefix, :includes, :api_macro, :header, :amalgamation, :api, :version_header, :libc) do
+    def initialize(name:, prefix:, includes: [], api_macro: nil, header: nil, amalgamation: nil, api: nil,
+                   version_header: nil, libc: false)
+      root = Cache::ROOT
+      header = Pathname.new(header || root.join("include/#{name}.h"))
+      super(name: name, prefix: prefix, includes: includes.map { |dir| Pathname.new(dir).expand_path },
+            api_macro: api_macro || "#{prefix.upcase}_API", header: header,
+            amalgamation: Pathname.new(amalgamation || root.join("include/#{name}.c")),
+            api: Pathname.new(api || root.join("include/#{name}.api.json")),
+            version_header: Pathname.new(version_header || header), libc: libc)
+    end
 
-  def root = Cache::ROOT
-  # The prefix of the header's macros: TXML for txml, TA for core.
-  def macro = prefix.upcase
-  # Its amalgamation of the platform files for `suffix` (`wasm`, `hosted`).
-  def platform_amalgamation(suffix) = amalgamation.dirname.join("#{name}_#{suffix}.c")
-end
+    def root = Cache::ROOT
+    # The prefix of the header's macros: TXML for txml, TA for core.
+    def macro = prefix.upcase
+    # Its amalgamation of the platform files for `suffix` (`wasm`, `hosted`).
+    def platform_amalgamation(suffix) = amalgamation.dirname.join("#{name}_#{suffix}.c")
+  end
 
   # Host profiles for dist; -fPIC in every one.
   PROFILES = {

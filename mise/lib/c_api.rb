@@ -86,16 +86,16 @@ module CAPI
 
   def json(flags, header) = JSON.parse(run(*flags, '-Xclang', '-ast-dump=json', '-fsyntax-only', header))
 
-# The functions the amalgamation `source` defines and exports, compiled by
-# `target` with the API at default visibility and everything else hidden.
-def exported(source, target, macro, includes)
-  Dir.mktmpdir('c-api') do |dir|
-    object = target.compile(source.to_s, into: File.join(dir, 'library.o'), includes: [*includes, File.dirname(source)],
-                                         defines: ["#{macro}=__attribute__((visibility(\"default\")))"],
-                                         flags: %w[-std=c11 -w -fvisibility=hidden])
-    object.exports.to_a
+  # The functions the amalgamation `source` defines and exports, compiled by
+  # `target` with the API at default visibility and everything else hidden.
+  def exported(source, target, macro, includes)
+    Dir.mktmpdir('c-api') do |dir|
+      object = target.compile(source.to_s, into: File.join(dir, 'library.o'), includes: [*includes, File.dirname(source)],
+                                           defines: ["#{macro}=__attribute__((visibility(\"default\")))"],
+                                           flags: %w[-std=c11 -w -fvisibility=hidden])
+      object.exports.to_a
+    end
   end
-end
 
   # The header's AST, read for one target: its prefixed declarations.
   class AST

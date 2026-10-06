@@ -180,26 +180,26 @@ module CRelease
     out
   end
 
-# The amalgamations `target` builds for `project`: the portable one, and
-# its platform amalgamations for the target's suffixes (PlatformFiles), of
-# those it has.
-def amalgamations(project, target)
-  platform = PlatformFiles.suffixes_for(target).map { |suffix| project.platform_amalgamation(suffix) }.select(&:file?)
-  [project.amalgamation, *platform]
-end
-
-# The library's one release object for `target`: its amalgamations
-# compiled with the API at default visibility, joined with compiler-rt,
-# stripped of debug info, and with only the API left global.
-def release_object(project, target, dir)
-  FileUtils.mkdir_p(dir)
-  api = api_functions(project, target: target)
-  flags = %w[-g0 -ffunction-sections -fdata-sections]
-  compiled = amalgamations(project, target).map do |source|
-    target.compile(source, into: dir.join("#{source.basename('.c')}.o"),
-                           includes: [project.header.dirname, *project.includes],
-                           defines: ["#{project.api_macro}=__attribute__((visibility(\"default\")))"], flags: flags)
+  # The amalgamations `target` builds for `project`: the portable one, and
+  # its platform amalgamations for the target's suffixes (PlatformFiles), of
+  # those it has.
+  def amalgamations(project, target)
+    platform = PlatformFiles.suffixes_for(target).map { |suffix| project.platform_amalgamation(suffix) }.select(&:file?)
+    [project.amalgamation, *platform]
   end
+
+  # The library's one release object for `target`: its amalgamations
+  # compiled with the API at default visibility, joined with compiler-rt,
+  # stripped of debug info, and with only the API left global.
+  def release_object(project, target, dir)
+    FileUtils.mkdir_p(dir)
+    api = api_functions(project, target: target)
+    flags = %w[-g0 -ffunction-sections -fdata-sections]
+    compiled = amalgamations(project, target).map do |source|
+      target.compile(source, into: dir.join("#{source.basename('.c')}.o"),
+                             includes: [project.header.dirname, *project.includes],
+                             defines: ["#{project.api_macro}=__attribute__((visibility(\"default\")))"], flags: flags)
+    end
     # The vectorized memset takes the place of compiler-rt's weak, scalar one
     # (MEMSET_SOURCE; decision 16).
     memset = target.compile(MEMSET_SOURCE, into: dir.join('memset.o'), flags: flags)
@@ -214,61 +214,61 @@ def release_object(project, target, dir)
     [object, exports]
   end
 
-  # Builds `target`'s static and shared library into <out>/<target>/:
-  # include/<name>.h, lib/lib<name>.a, and lib<name>.so.<major>.<minor>
-  # with a lib<name>.so symlink (Linux) or lib<name>.<major>.<minor>.dylib
-  # (macOS). The shared library's name follows the minor version on 0.x.
-  # A library with `dependencies` (fetch_dependency!) leaves their functions
-  # undefined in its archive, and links its shared library against their
-  # released shared libraries, so it names them (their sonames, or their
-  # @rpath install names on macOS) and a program that links it needs
-  # nothing else to find them.
-  def build_native(project, target_name, version, out, dependencies: [])
-    target = Toolchain::Target.release(target_name)
-    needed = dependency_libraries(dependencies, target).map { |other| other[:shared] }
-    dir = out.join(target_name)
-    FileUtils.rm_rf(dir)
-    object, exports = release_object(project, target, dir.join('work'))
-    lib = dir.join('lib')
-    archive = target.archive([object], into: lib.join("lib#{project.name}.a"))
-    major, minor, = version.split('.')
-    shared = target.shared_library([object, *needed], library: project.name, version: "#{major}.#{minor}", dir: lib,
-                                                      exports: exports)
-    FileUtils.mkdir_p(dir.join('include'))
-    FileUtils.cp(project.header, dir.join('include'))
-    { target: target, dir: dir, object: object, archive: archive.path, shared: shared.path,
-      shared_name: shared.basename.to_s, needed: needed.map { |path| path.basename.to_s },
-      cflags: target.cflags + %w[-g0 -ffunction-sections -fdata-sections] }
+    # Builds `target`'s static and shared library into <out>/<target>/:
+    # include/<name>.h, lib/lib<name>.a, and lib<name>.so.<major>.<minor>
+    # with a lib<name>.so symlink (Linux) or lib<name>.<major>.<minor>.dylib
+    # (macOS). The shared library's name follows the minor version on 0.x.
+    # A library with `dependencies` (fetch_dependency!) leaves their functions
+    # undefined in its archive, and links its shared library against their
+    # released shared libraries, so it names them (their sonames, or their
+    # @rpath install names on macOS) and a program that links it needs
+    # nothing else to find them.
+    def build_native(project, target_name, version, out, dependencies: [])
+      target = Toolchain::Target.release(target_name)
+      needed = dependency_libraries(dependencies, target).map { |other| other[:shared] }
+      dir = out.join(target_name)
+      FileUtils.rm_rf(dir)
+      object, exports = release_object(project, target, dir.join('work'))
+      lib = dir.join('lib')
+      archive = target.archive([object], into: lib.join("lib#{project.name}.a"))
+      major, minor, = version.split('.')
+      shared = target.shared_library([object, *needed], library: project.name, version: "#{major}.#{minor}", dir: lib,
+                                                        exports: exports)
+      FileUtils.mkdir_p(dir.join('include'))
+      FileUtils.cp(project.header, dir.join('include'))
+      { target: target, dir: dir, object: object, archive: archive.path, shared: shared.path,
+        shared_name: shared.basename.to_s, needed: needed.map { |path| path.basename.to_s },
+        cflags: target.cflags + %w[-g0 -ffunction-sections -fdata-sections] }
+    end
+
+    def expect_equal!(what, actual, expected)
+      return if actual == expected
+
+      release_fail!("#{what}:\n  unexpected: #{(actual - expected).join(' ')}\n  missing:    #{(expected - actual).join(' ')}")
+    end
+
+    # The symbol checks of decision 16 for one target's libraries. `external`
+    # are the dependencies' API functions, which a dependent's libraries
+    # leave undefined and nothing else may. What the platform's runtime adds
+    # (libSystem, ld64's symbols) is the object format's to allow.
+  # `libc` are the C library functions a `libc` library may import on this
+  # target (Library#libc_imports): a Linux library links no C library, so they
+  # bind to the program's, glibc or musl (decision 10's rule, as the Node
+  # addon follows it); each must have the same name and signature in both.
+  def verify_native!(project, build, external: [], libc: [])
+    target = build[:target]
+    expected = api_functions(project, target: target)
+    allowed = external + libc
+    Toolchain::Binary.new(build[:archive]).must_export_exactly!(expected).must_leave_undefined_only!(allowed)
+                     .must_keep_local!(MEMORY)
+    Toolchain::Binary.new(build[:shared]).must_export_exactly!(expected).must_leave_undefined_only!(allowed)
+                     .must_load_only!(build[:needed]).must_be_named!(build[:shared_name]).must_be_for!(target)
+    # The archive holds exactly the release object, which is checked.
+    Toolchain::Binary.new(build[:object]).must_be_for!(target)
+    puts "release: #{target.name}: #{project.name} exports the #{expected.size} API functions; undefined symbols allowed" \
+         "#{external.empty? ? '' : " (the dependencies' #{external.size} API functions among them)"}" \
+         "#{libc.empty? ? '' : " and #{libc.size} C library functions"}; memory functions local; architecture right"
   end
-
-  def expect_equal!(what, actual, expected)
-    return if actual == expected
-
-    release_fail!("#{what}:\n  unexpected: #{(actual - expected).join(' ')}\n  missing:    #{(expected - actual).join(' ')}")
-  end
-
-  # The symbol checks of decision 16 for one target's libraries. `external`
-  # are the dependencies' API functions, which a dependent's libraries
-  # leave undefined and nothing else may. What the platform's runtime adds
-  # (libSystem, ld64's symbols) is the object format's to allow.
-# `libc` are the C library functions a `libc` library may import on this
-# target (Library#libc_imports): a Linux library links no C library, so they
-# bind to the program's, glibc or musl (decision 10's rule, as the Node
-# addon follows it); each must have the same name and signature in both.
-def verify_native!(project, build, external: [], libc: [])
-  target = build[:target]
-  expected = api_functions(project, target: target)
-  allowed = external + libc
-  Toolchain::Binary.new(build[:archive]).must_export_exactly!(expected).must_leave_undefined_only!(allowed)
-                   .must_keep_local!(MEMORY)
-  Toolchain::Binary.new(build[:shared]).must_export_exactly!(expected).must_leave_undefined_only!(allowed)
-                   .must_load_only!(build[:needed]).must_be_named!(build[:shared_name]).must_be_for!(target)
-  # The archive holds exactly the release object, which is checked.
-  Toolchain::Binary.new(build[:object]).must_be_for!(target)
-  puts "release: #{target.name}: #{project.name} exports the #{expected.size} API functions; undefined symbols allowed" \
-       "#{external.empty? ? '' : " (the dependencies' #{external.size} API functions among them)"}" \
-       "#{libc.empty? ? '' : " and #{libc.size} C library functions"}; memory functions local; architecture right"
-end
 
   # Links each [label, inputs, arguments] test (inputs: its objects, and any
   # library flags it needs) against the packed static and shared library of
@@ -333,42 +333,42 @@ end
 
   WASM = 'wasm32-freestanding'
 
-# The standalone module <out>/wasm32-freestanding/<name>.wasm: the
-# amalgamation and the platform amalgamation <name>_wasm.c (the module's
-# allocator among it), linked with no entry point, exporting the API, the
-# platform's functions included, and its memory, and importing nothing.
-# zig's default wasm CPU has bulk memory, so copies need no memcpy
-# (decision 16).
-#
-# A library that builds on others in the same release (`uses`, Projects)
-# ships one module with them, since a module cannot call into another's
-# memory: their portable amalgamations, its own, and its wasm platform
-# amalgamation, which stands in for theirs (decision 19). A `libc`
-# library's module is compiled against wasi-libc and linked as a WASI
-# reactor; it still imports nothing (verify_wasm!), and exports
-# _initialize beside the API.
-def build_wasm(project, out, uses: [])
-  api_target = Toolchain::Target.release(WASM)
-  target = project.libc ? Toolchain::Target.zig('wasm32-wasi') : api_target
-  dir = out.join(api_target.name, project.name)
-  FileUtils.rm_rf(dir)
-  work = dir.join('work')
-  platform = project.platform_amalgamation('wasm')
-  release_fail!("#{platform.basename} is missing: run mise run amalgamate") unless platform.file?
-  sources = [*uses.map(&:amalgamation), project.amalgamation, platform]
-  objects = sources.map do |source|
-    target.compile(source, into: work.join("#{source.basename('.c')}.o"),
-                           includes: [project.header.dirname, *project.includes, *uses.map { |used| used.header.dirname }],
-                           defines: ["#{project.api_macro}=__attribute__((visibility(\"default\")))"], flags: %w[-g0])
+  # The standalone module <out>/wasm32-freestanding/<name>.wasm: the
+  # amalgamation and the platform amalgamation <name>_wasm.c (the module's
+  # allocator among it), linked with no entry point, exporting the API, the
+  # platform's functions included, and its memory, and importing nothing.
+  # zig's default wasm CPU has bulk memory, so copies need no memcpy
+  # (decision 16).
+  #
+  # A library that builds on others in the same release (`uses`, Projects)
+  # ships one module with them, since a module cannot call into another's
+  # memory: their portable amalgamations, its own, and its wasm platform
+  # amalgamation, which stands in for theirs (decision 19). A `libc`
+  # library's module is compiled against wasi-libc and linked as a WASI
+  # reactor; it still imports nothing (verify_wasm!), and exports
+  # _initialize beside the API.
+  def build_wasm(project, out, uses: [])
+    api_target = Toolchain::Target.release(WASM)
+    target = project.libc ? Toolchain::Target.zig('wasm32-wasi') : api_target
+    dir = out.join(api_target.name, project.name)
+    FileUtils.rm_rf(dir)
+    work = dir.join('work')
+    platform = project.platform_amalgamation('wasm')
+    release_fail!("#{platform.basename} is missing: run mise run amalgamate") unless platform.file?
+    sources = [*uses.map(&:amalgamation), project.amalgamation, platform]
+    objects = sources.map do |source|
+      target.compile(source, into: work.join("#{source.basename('.c')}.o"),
+                             includes: [project.header.dirname, *project.includes, *uses.map { |used| used.header.dirname }],
+                             defines: ["#{project.api_macro}=__attribute__((visibility(\"default\")))"], flags: %w[-g0])
+    end
+    exports = [*uses, project].flat_map { |library| api_functions(library, target: api_target) }.uniq.sort
+    wasm = target.wasm_module(objects, into: dir.join("#{project.name}.wasm"), exports: exports,
+                                       flags: project.libc ? %w[-mexec-model=reactor] : []).path
+    FileUtils.mkdir_p(dir.join('include'))
+    [*uses, project].each { |library| FileUtils.cp(library.header, dir.join('include')) }
+    { target: api_target, dir: dir, wasm: wasm, extra: [wasm], asset: 'wasm32', exports: exports,
+      reactor: project.libc, triple: target.triple, cflags: target.cflags + %w[-g0] }
   end
-  exports = [*uses, project].flat_map { |library| api_functions(library, target: api_target) }.uniq.sort
-  wasm = target.wasm_module(objects, into: dir.join("#{project.name}.wasm"), exports: exports,
-                                     flags: project.libc ? %w[-mexec-model=reactor] : []).path
-  FileUtils.mkdir_p(dir.join('include'))
-  [*uses, project].each { |library| FileUtils.cp(library.header, dir.join('include')) }
-  { target: api_target, dir: dir, wasm: wasm, extra: [wasm], asset: 'wasm32', exports: exports,
-    reactor: project.libc, triple: target.triple, cflags: target.cflags + %w[-g0] }
-end
 
   # The imports and exports of a wasm module, as [[module, name, kind]] and
   # [[name, kind]], read from its binary: the import section (2) and the
@@ -427,20 +427,20 @@ end
     [imports, exports]
   end
 
-# The module imports nothing and exports exactly the API (its own and that
-# of the libraries it holds), the platform's functions, its memory, and a
-# reactor's _initialize; then `test`, a lambda from the module's path to a
-# command, runs it.
-def verify_wasm!(build, test: nil)
-  imports, exports = wasm_interface(build[:wasm])
-  release_fail!("#{build[:wasm].basename} imports #{imports.map { |i| i.first(2).join('.') }.join(', ')}") unless imports.empty?
-  expected = build[:exports].map { |name| [name, 'function'] } + [%w[memory memory]]
-  expected << %w[_initialize function] if build[:reactor]
-  expect_equal!("#{build[:wasm].basename} exports", exports.sort, expected.sort)
-  puts "release: #{build[:wasm].basename}: imports nothing, exports the #{build[:exports].size} functions and memory" \
-       "#{build[:reactor] ? ' (and _initialize, a WASI reactor)' : ''}"
-  capture!(*test.call(build[:wasm])).lines.each { |line| puts "release: #{line.strip}" } if test
-end
+  # The module imports nothing and exports exactly the API (its own and that
+  # of the libraries it holds), the platform's functions, its memory, and a
+  # reactor's _initialize; then `test`, a lambda from the module's path to a
+  # command, runs it.
+  def verify_wasm!(build, test: nil)
+    imports, exports = wasm_interface(build[:wasm])
+    release_fail!("#{build[:wasm].basename} imports #{imports.map { |i| i.first(2).join('.') }.join(', ')}") unless imports.empty?
+    expected = build[:exports].map { |name| [name, 'function'] } + [%w[memory memory]]
+    expected << %w[_initialize function] if build[:reactor]
+    expect_equal!("#{build[:wasm].basename} exports", exports.sort, expected.sort)
+    puts "release: #{build[:wasm].basename}: imports nothing, exports the #{build[:exports].size} functions and memory" \
+         "#{build[:reactor] ? ' (and _initialize, a WASI reactor)' : ''}"
+    capture!(*test.call(build[:wasm])).lines.each { |line| puts "release: #{line.strip}" } if test
+  end
 
   # ------------------------------------------------------------------
   # Packing
