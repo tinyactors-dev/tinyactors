@@ -1,9 +1,10 @@
 # Implementation: replacing core's plumbing with building blocks
 
-**Status:** In progress (2026-10-05), part of [the ring protocol proposal](README.md),
+**Status:** In progress (2026-10-06), part of [the ring protocol proposal](README.md),
 adopted as core ADRs 0098 to 0105, repository ADR 0003 and napi ADR 0041.
-Phases 0 to 3 are done; the root [ROADMAP](../../../ROADMAP.md#the-ring-protocol)
-tracks the phases.
+The work is organised as four [milestones](#milestones). Phases 0 to 3
+and step 4.1 to 4.3 are done; the root [ROADMAP](../../../ROADMAP.md#the-ring-protocol)
+tracks the milestones.
 
 This plan replaces [migration.md's "rough order of
 work"](reference/migration.md#a-rough-order-of-work). Its block names
@@ -32,6 +33,30 @@ that change are replaced module by module, as building blocks. The reasons:
 - **Every commit stays green.** AGENTS.md asks for small commits on
   `main`, each passing `mise run test`. Only an incremental replacement
   can keep the existing suites as the reference throughout.
+
+## Milestones
+
+The plan began as seven phases built around the kernel: core gained its
+queue while the kernel kept napi working, the rings replaced the vtables
+while the kernel followed, and the kernel went last. On 2026-10-06 the
+kernel (`tinyactors-host`), the test host's hosted mode and napi's native
+layer (`tinyactors-napi/src`) were deleted, and napi's tests disabled,
+because adapting them at every step cost more than rewriting napi on the
+rings at the end. What is left is a dependency order in core, a napi
+rewrite and a finale, as four milestones:
+
+| Milestone | Contents | Done when |
+|---|---|---|
+| **M1: core runs inputs safely** | The rest of [Phase 4](#phase-4-core-gains-its-queue): 4.3c, 4.4, 4.5 | No allocation inside a macrostep; slots and parking work; core's tests and the test host's scenarios pass, IRP 183/183 |
+| **M2: core speaks only rings** | [Rings, effects, definitions, loading, recording](#m2-core-speaks-only-rings) (the former 5.1 to 5.5) | No vtable left in core but the data model's, the value vtable, byte sinks and sources and the chart codec; the test host drives core only through the rings; IRP 183/183 and S01 to S13 pass as ring scripts |
+| **M3: napi on the rings** | [A rewrite from scratch](#m3-napi-on-the-rings) of napi's native layer | `lib/` works; napi's suites and IRP 176/176 pass on Node and Bun, with `// status:` markers where it lags |
+| **M4: finale** | [Verification, size, benchmarks, tuning](#m4-finale) | The figures are recorded and the regressions accepted are named |
+
+Phases 0 to 3 and the Phase 4 table below are kept as the record of what
+was done and why. Until M3, **the test host is the only host**: core's
+tests and the test host's scenarios are the oracle, and napi's suites,
+`lib/`, `test/` and `index.d.ts` wait unchanged as the rewrite's
+specification.
 
 ## Desired source tree
 
@@ -698,189 +723,129 @@ registries; core interns no run-time name through them.
 - The pool ADR records the measured h2c and `tel` defaults and the check
   of the derived `c2hBytes` (4.2).
 
-## Phase 5: rings replace the vtables
+## M2: core speaks only rings
 
-`h2c` and `c2h` arrive together, because inputs need their dispositions.
-The test host becomes a ring driver here rather than at the end. From then
-on its scenarios check the protocol directly.
+The rings replace every host-facing call and vtable. **The test host is
+the reference host:** its Ruby driver becomes the pump loop of
+[ARCHITECTURE.md](ARCHITECTURE.md#the-host-loop), written once and
+plainly: write h2c, run, drain c2h, act on each record. Policy that the
+kernel used to hold (answering load requests, keeping a recording
+journal, running effects) lives there, as small as the scenarios need.
+M3 translates this host into napi, so it is written to be read.
+
+The test host reaches the rings through its existing RPC server, which
+exposes them as bytes; Ruby decodes them with `messages.json`, so the
+generated codec is checked from a second language.
 
 | Step | Change | Deletes | ADR |
 |---|---|---|---|
-| 5.1 | **h2c and c2h for inputs.** The ring records reach hosts through `tinyactors.h`, a public API change the maintainer reviews: napi's generated bindings follow. How the build puts them there is described in `docs/build/`. `h2c.event`, `h2c.time`, `h2c.spawn`, `h2c.destroy` and `h2c.withdraw`. On c2h, `c2h.bounced`, `c2h.input_refused`, `c2h.input_completed` (with `ignored`), `c2h.spawned`, `c2h.macrostep_ended`, `c2h.wake`, `c2h.finished` and `c2h.destroyed`. `h2c.event`, `h2c.spawn` and `h2c.invoke_report` carry a trace parent that a host fills from an incoming `traceparent`. Core reserves room for mandatory records, one pad per record, before taking an input, and takes it only if 2 × `maxRecordBytes` of headroom stays unreserved ([ring](reference/ring.md#the-c2h-reserve)). **The test host becomes a ring driver**: `hosted.post`, `hosted.turn`, `hosted.batches`, decoded with `messages.json`. Add the E3 ring script driver to core's tests. | `ta_actor_deliver`, the native spawn, time and destroy entry points; the kernel's admission code | three rings |
-| 5.2 | **Effects on c2h.** `c2h.send`, `c2h.invoke`, `c2h.invoke_cancel`, `c2h.invoke_forward`, `c2h.log`, and `h2c.invoke_report` coming back. An action that may write c2h checks for room before it evaluates anything; without room its slot parks before the action, and the action runs once, after a drain; `ta_run` answers `TA_RUN_C2H_FULL` when nothing else can run ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)). `c2h.send`, `c2h.invoke`, `c2h.invoke_forward` and `c2h.log` carry the step's trace ID, flags and span ID, so a processor writes `traceparent` without calling into core. Two B7 registries, filled by `h2c.type_declare`. Bindings render `_ioprocessors` locations themselves, and origins are text. | The I/O, invoker and log vtables; `ta_system_register_io`, `ta_system_find_io`, `ta_system_register_invoker`; `io.c`, `io_origin.c`, the scope API, `TA_DM_TEXT_IO_*`; the kernel's adapters and effects queue | type registries through h2c |
-| 5.3 | **Unloading and loading.** Waiting entries (A5), one per waiting address, each holding the address's text once and its waiting list (B1), found through a B3 table keyed by the address's hash that grows in the pool's refill ([envelope](reference/envelope.md#the-waiting-entry-one-copy-of-the-address)), `c2h.load_needed`, `h2c.load`, `h2c.load_failed`, `c2h.load_result`, `h2c.unload`, `c2h.unloaded`, `c2h.loaded`. Images go through D1 and D2 into host blobs. | The directory vtable; the kernel's loads, offloads and directory | – (refines 0037) |
-| 5.4 | **Definitions through h2c.** `h2c.definition_register`, `h2c.definition_release`, `h2c.definition_retire`, `c2h.definition_result`, with bounded diagnostics. The request carries a native spec handle built with `tree.c`'s builder; core writes the native compile-error struct into host memory, or answers `capacity` if it does not fit ([definitions.md](reference/definitions.md#a-native-spec-handle-not-a-byte-layout)). | The native definition-management entry points that bindings do not need; `ta_definition_sink` if nothing uses it | – (refines 0058, 0077, 0079) |
-| 5.5 | **Recording and replay.** The `recorded` bit, `c2h.input` with the input's trace parent, `h2c.spawn` with the replaying flag, `h2c.publish`, `h2c.checkpoint`, `c2h.state`. | Held effects (`ta_activation_effects`, about 300 lines); the kernel's recorder and replay; the unused `durable` field of `ta_datamodel_value_write_params` (nothing passes true since ADR 0090 was removed) | input observations on c2h |
+| 5.1 | **Rings for inputs.** `h2c.event`, `h2c.time`, `h2c.spawn`, `h2c.destroy`, `h2c.withdraw`; `c2h.bounced`, `c2h.input_refused`, `c2h.input_completed` (with `ignored`), `c2h.spawned`, `c2h.macrostep_ended`, `c2h.wake`, `c2h.finished`, `c2h.destroyed`. `h2c.event` and `h2c.spawn` carry a trace parent. Core reserves room for mandatory records, one pad per record, sized from the slot count, before taking an input, and takes it only if 2 × `maxRecordBytes` of headroom stays unreserved ([ring](reference/ring.md#the-c2h-reserve)). The ring records reach hosts through `tinyactors.h`, as `docs/build/` describes. The test host becomes a ring driver, and its scenarios assert on decoded records. Core's tests gain the ring-script driver (E3). The ring defaults are measured on real rings in the test host, replacing 4.2's proxies. | `ta_actor_deliver`; the native spawn, time and destroy entry points; `ta_run`'s outcome and names buffers, which previewed c2h | three rings |
+| 5.2 | **Effects on c2h.** `c2h.send`, `c2h.invoke`, `c2h.invoke_cancel`, `c2h.invoke_forward`, `c2h.log`, and `h2c.invoke_report` back. An action that may write c2h checks for room before it evaluates anything; without room its slot parks before the action, which runs once, after a drain; `ta_run` answers `TA_RUN_C2H_FULL` when nothing else can run ([macrostep](reference/macrostep.md#a-full-c2h-pauses-the-slot)). Effects carry the step's trace ID, flags and span ID. Two B7 registries filled by `h2c.type_declare`; bindings render `_ioprocessors` themselves; origins are text. The test host's I/O and invoker instruments become effect handlers in the reference host. | The I/O, invoker and log vtables; `ta_system_register_io`, `ta_system_find_io`, `ta_system_register_invoker`; `io.c`, `io_origin.c`, the scope API, `TA_DM_TEXT_IO_*` | type registries through h2c |
+| 5.4 | **Definitions through h2c**, beside 5.2. `h2c.definition_register`, `h2c.definition_release`, `h2c.definition_retire`, `c2h.definition_result`, with bounded diagnostics. The request carries a native spec handle built with `tree.c`'s builder ([definitions](reference/definitions.md#a-native-spec-handle-not-a-byte-layout)). | Native definition-management entry points a host does not need; `ta_definition_sink` if nothing uses it | – (refines 0058, 0077, 0079) |
+| 5.3 | **Unloading and loading.** Waiting entries keep the address's text once, which ends the last run-time interning (a session URI's family); `c2h.load_needed`, `h2c.load`, `h2c.load_failed`, `c2h.load_result`, `h2c.unload`, `c2h.unloaded`, `c2h.loaded`. Images go through D1 and D2 into host blobs. The reference host gains a small loader. | The directory vtable; the native load-request calls of 4.2 | – (refines 0037) |
+| 5.5 | **Recording and replay.** The `recorded` bit, `c2h.input` with the input's trace parent, `h2c.spawn` with the replaying flag, `h2c.publish`, `h2c.checkpoint`, `c2h.state`. The reference host gains a small journal; its scenarios bring back the replay coverage napi's suites held. | Held effects (`ta_activation_effects`); the unused `durable` field of `ta_datamodel_value_write_params` | input observations on c2h |
+| S01–S13 | **The scenarios as ring scripts**, one commit each, beside 5.2 to 5.5. They become M3's acceptance tests. | – | – |
 
-**Exit:**
-- No vtable remains in core except the data model's, the value vtable,
-  byte sinks and sources, and the chart codec.
-- The test host's scenarios include S01 to S13 as ring scripts.
-- `mise run test:full` passes.
+Order: 5.1, then 5.2 and 5.4 side by side, then 5.3, then 5.5; the ring
+scripts run beside them once 5.1 has landed.
 
-## Phase 6: delete the kernel
+**Done when:** no vtable remains in core but the data model's, the value
+vtable, byte sinks and sources and the chart codec; the test host drives
+core only through the rings and covers every c2h record kind; IRP
+183/183; S01 to S13 pass as ring scripts; `mise run test:full` passes.
 
-| Step | Change |
-|---|---|
-| 6.1 | napi drives core's rings directly: the pump loop in [ARCHITECTURE.md](ARCHITECTURE.md#the-host-loop). napi sizes its own rings: `tel` large enough for one turn's records only when the system traces (the kernel gives every napi system 1 MiB today, traced or not, ADR 0098's notes). Its `index.d.ts` changes as [migration.md](reference/migration.md#napi) lists, with `// status:` markers where the implementation lags. The suites [migration.md](reference/migration.md#napi) lists are rewritten, and `test/quarantine.js` is removed with quarantine. napi ADR 0040's text about quarantining actors on a failed commit no longer applies once quarantine is removed (napi ADR 0041): this step says so on 0040's status line. Coordinate with the napi rewrite. |
-| 6.2 | Move OTLP into `tinyactors-otlp`, a small C library that reads `tel` ([telemetry.md](reference/telemetry.md#otlp-tinyactors-otlp)). napi and the test host link it, and `TAH_PARAM_TRACE_STAGING_BYTES` becomes its own setting. Every span ID it or napi's `lib/tracing.js` computes comes from core's `ta_step_key_span_id`, or is tested against the values `tests/hash_test.c` pins, so IDs never drift from core's. Move the counting allocator, the containers, and the metrics and definitions helpers into napi ([migration](reference/migration.md#moved-still-needed-but-not-in-a-kernel)). Delete what napi does not use. |
-| 6.3 | Delete `tinyactors-host`: its sources, tests, mise tasks, the root `mise.toml` entries, and the rows in AGENTS.md's test table. Mark kernel ADRs 0001 to 0006 superseded. The MCP server is not part of this plan. It is an experimental feature with its own proposal ([mcp-server.md](../mcp-server.md)): a `tinyactors-mcp` library beside `tinyactors-otlp`, built on the rings once Phase 6 lands. |
+## M3: napi on the rings
 
-**Exit:** `mise run test --all` and `mise run test:full` pass with no
-kernel. The napi suites listed in migration.md are rewritten against the
-rings.
+napi's native layer is written again from scratch, against the rings.
+`lib/`, `test/` and `index.d.ts` are its specification; the reference
+host of M2 is its model.
 
-## Phase 7: close
+1. **A design note first,** in `tinyactors-napi/docs/`: the pump loop;
+   ring sizing (`tel` only when the system traces, large enough for one
+   turn's records); value bindings; where each piece of policy lives,
+   native or JavaScript (the loader, the recorder and replay, metrics,
+   offload, the trace watch, containers, the counting allocator);
+   linking `tinyactors-otlp` for OTLP. Span IDs come from core's
+   `ta_step_key_span_id`.
+2. **Then the code, until `lib/` works:** napi's suites and its IRP run
+   pass on Node and Bun. `index.d.ts` changes as
+   [migration.md](reference/migration.md#napi) lists; what the design
+   removes goes (quarantine and `release()`, the overflow parameters,
+   `waiting-full`, `maxWaiting`), and napi ADR 0040's status line says
+   so. Where the implementation lags, `// status:` markers say what is
+   missing.
 
-- Walk the removal table and the duplication summary in
-  [building-blocks.md](reference/building-blocks.md) once more: every row
-  is gone or deliberately kept.
-- `mise run check-api-status` has no stale markers.
-- Run the out-of-memory sweep over creation, registration, spawn, load
-  and refill only. A sweep over macrosteps has nothing left to fail.
-- Final `bench-compare` against the commit before Phase 1.
+**Done when:** napi's tests are enabled again and pass, IRP 176/176 on
+Node and Bun, and `mise run check-api-status` is clean.
+
+## M4: finale
+
+- **Verification:** `mise run test:full`; one review of the whole range
+  against `ccd6d632` by a reader who did not write it; the IRP results
+  of the test host and napi against `ccd6d632`.
+- **Removals:** walk the removal table and the duplication summary in
+  [building-blocks.md](reference/building-blocks.md): every row is gone
+  or deliberately kept.
+- **Out-of-memory sweep** over creation, registration, spawn, load and
+  refill only; a macrostep has nothing left to fail.
 - **Core is smaller than before Phase 1:** count `tinyactors-core/src/`
   without `src/generated/`, code and comments separately, against the
   commit before Phase 1. At the end of Phase 1, code was 18,424 lines
-  against 17,588 before it, and comments 5,975 against 4,070; the
-  comments grow on purpose, as documentation moves into headers.
-- Changelogs come at release time, through the `release-changelog` skill,
-  not as part of this work.
-
-## What runs where, by phase
-
-| Phase | Core tests | Test host | napi | Kernel |
-|---|---|---|---|---|
-| 1, 2, 3 | new block tests; existing suite | unchanged | unchanged | unchanged |
-| 4 | pool, timer, capacity and slot tests; out-of-memory sweep shrinks | through the kernel | through the kernel; quarantine removed | changed in place each commit |
-| 5 | ring script tests (E3) | **ring driver**; S01 to S13 | through the kernel, which drives the rings | shrinks each step |
-| 6 | – | – | **drives the rings** | deleted |
+  against 17,588 before it, and comments 5,975 against 4,070; comments
+  grow on purpose, as documentation moves into headers.
+- **Benchmarks and tuning:** a `bench-compare` with throughput, memory
+  and the machine signature against the commit before Phase 1. Known
+  debt to tune or accept: traced throughput (13 to 22% slower since
+  4.1), bytes per actor (264 before 4.2, 348 after 4.3a), the names
+  buffer.
+- Changelogs come at release time, through the `release-changelog` skill.
 
 ## Running the work
 
-### The critical path
-
-Most of the plan can run side by side. One chain cannot, because each link
-changes the interpreter, the actor record, the system and the kernel that
-the next link builds on:
+### Order
 
 ```
-1.0 ─▶ 1.5 ─▶ 1.6 ─▶ 4.2 ─▶ 4.3 ─▶ 4.4 ─▶ 4.5 ─▶ 5.1 ─▶ 5.3 ─▶ 5.5 ─▶ 6.1 ─▶ 6.3
+M1: 4.3c ─▶ 4.4 ─▶ 4.5
+M2: 5.1 ─▶ 5.2 ┬─▶ 5.3 ─▶ 5.5
+           5.4 ┘
+           S01 … S13 beside 5.2 to 5.5
+M3: design note ─▶ napi native layer ─▶ napi tests enabled
+M4: finale
 ```
 
-4.2 builds the pool on A5 (1.5) and the waiting-entry table on B3 (1.6).
-Everything else is a side lane that must land before the link that needs
-it: 4.2 also needs A6 (2.4), B1, C3, the name resolver and Phase 3. The rule for scheduling is: keep the critical path busy, and use the
-other lanes to have its inputs ready before it needs them.
+One implementer works the main line at a time; the ring scripts, and
+folding `docs/internal/` into headers, are the side lanes. A side lane
+works in its own worktree and lands by rebase when the main tree is
+clean.
 
-### Lanes
+### How a step runs
 
-| When | Lane | Steps | Waits for | Touches |
-|---|---|---|---|---|
-| first, alone | foundation | 1.0 | – | every module's includes, `internal.h`; nothing else can land cleanly beside it |
-| Phase 1 | tables | 1.5 → 1.6 | 1.0 | actor, atom, trie; the address and session tables keep linear hashing |
-| Phase 1 | helpers | 1.1, 1.2, 1.4, then 1.7 | 1.0 | hash and format helpers, handles, layouts, invoke and export arrays; 1.1 also edits `session.c`, so it lands before 1.5 or rebases onto it |
-| Phase 1 | tests and dead code | 1.3, 1.8 | 1.0 | core's tests, `fault.h`, `configuration` |
-| with Phase 1 | free blocks | 2.1, 2.2, 2.3, 2.8, 2.10 | 1.0 | new units only |
-| with Phase 1 | generator | 2.9 | 1.0 | `protocol/`, a mise task, `src/generated/`, `docs/build/` |
-| after its inputs | dependent blocks | 2.4 (needs A5), 2.7 (needs B3) | 1.5, 1.6 | new units |
-| with Phase 1 | names and images | 2.5, 2.6 | 1.0 | new units; 2.5 moves sinks out of `session_image.c`; 2.6 uses today's `ta_atom_find`, whose storage 1.6 changes underneath it |
-| beside Phase 2 | matching | 3.1, 3.2 | 2.6 | the matcher's input; lands before 4.2 |
-| beside Phase 3 | telemetry | 4.1 | 2.8, 2.9 | `trace.c`, the kernel's OTLP adapter |
-| right after 4.1 | OTLP library | 6.2's `tinyactors-otlp` | 4.1 | a new package; the kernel links it until Phase 6 |
-| Phase 4 | core | 4.2 → 4.3 → 4.4 → 4.5 | Phase 3, Phase 2 blocks | interpreter, actor, system, the kernel; one lane, serial |
-| Phase 5 | driver | 5.1 | 4.5 | the test host becomes a ring driver |
-| after 5.1 | scenarios | S01 … S13 as ring scripts, one per lane | 5.1 | one test file and one walkthrough each |
-| after 5.1 | effects, definitions | 5.2 and 5.4, side by side | 5.1 | I/O and invoke code; builder and definition code |
-| after 5.1 | images | 5.3 → 5.5 | 5.1 | session images, actor records, the recorder; serial because both change images |
-| Phase 6 | napi | 6.1 | Phase 5 | napi, with the session rewriting it |
-| last | removal | 6.3 | 6.1, 6.2 | deletes the kernel |
-
-Two moves shorten the critical path most. **4.1 and `tinyactors-otlp`
-run before Phase 4**, so 2,300 lines of encoder move while the
-interpreter work has not started. **The free blocks and the generator run
-during Phase 1**, so Phase 2 is mostly done when the tables land.
-
-Work that lands in the same commit as a critical-path step is prepared
-beside it but never lands alone: the jq, quickjs and napi data models'
-change from `TA_OP_NOMEM` to `TA_OP_ERROR` lands with 4.4, as every API
-change lands with its callers.
-
-### How parallel lanes land
-
-The repository has no feature branches: every lane commits to `main`. A
-lane works in its own worktree, rebases onto `main` before each commit,
-runs `mise run test`, and lands small commits. A lane owns its files;
-two lanes that need the same module run one after the other.
-
-Three places conflict often and are handled the same way each time:
-
-- **`src/internal.h`** lists units in amalgamation order. A rebase
-  re-applies the lane's lines in the group order of the source tree.
-- **`protocol/catalog.rb` and `src/generated/`.** Only the catalog is
-  merged. The generated files are rendered again after the rebase, never
-  merged by hand.
-- **The kernel during Phases 4 and 5.** Every critical-path step changes
-  it in place. Side lanes do not touch it.
-
-### Pace
-
-The design fixes the costs that matter: bounded memory, no allocation in
-a macrostep, O(1) take. Throughput and per-actor bytes are tuned once, in
-Phase 7, not step by step.
-
-- **Benchmarks record and do not block.** `bench-compare` runs at phase
-  boundaries and its figures go in the ADR or the commit; a regression is
-  a finding for Phase 7, not a reason to stop. The scale tests in the
-  suites (`scale_test`, napi's `scale.js`) stay: they catch complexity
-  bugs, which are fixed where they appear.
+- **One implementer per step,** forked with the design in its context.
+  It commits each green commit itself, small and focused, each passing
+  `mise run test`, and reports at the end of the step, at a decision the
+  design does not settle, or near its turn limit.
+- **`mise run test:full` and core's `mise run asan` run once per step,**
+  and the step's last commit says they passed.
 - **Implementers iterate narrowly** (one test program, one scenario
-  pattern, one napi suite) and run `mise run test` and `test:full` once,
-  at the end of a step.
-- **A side lane runs `test:full` once**, when its work is complete;
-  its commits along the way pass `mise run test`.
-- **One deep review per step**, over the step's commit range, with no
-  separate quick pass. Each commit still passes `mise run test` and,
-  where it changes behaviour, `test:full`.
-- **Steps overlap with their reviews.** A commit that passes its gates
-  lands on `main`. When a step is complete, its deep review reads the
-  step's commits while the next step is implemented in the working tree,
-  and the review's findings land as a follow-up `fix` commit. The next
-  step does not wait for the review, except where the review finds a
-  defect the next step builds on.
-- **No step waits for a person.** The decisions are in the ADRs and the
-  reference documents. Where they leave something open, the implementer
-  chooses what fits them and records the choice in the commit message
-  and here. The gates in the next section are kept by a fresh review
-  agent that did not write the change.
+  pattern) and run the fragile suites early: `scale_test` and
+  `params_test`.
+- **No per-step review.** Each step ends with the implementer's own
+  check of lifetimes, allocation inside a macrostep, ordering and
+  weakened tests, and each new mechanism gets a randomized property test
+  where one fits. One independent review runs at the end of M2, where
+  the test oracle moves to the rings, and one at the finale.
+- **No step waits for a person.** Where the ADRs and reference documents
+  leave something open, the implementer chooses what fits them and
+  records the choice in the commit message and here.
+- **Benchmarks record and do not block;** tuning waits for M4. The scale
+  tests stay in the suites, because they catch complexity bugs.
 
-### Where oversight is needed
-
-The automated checks cover most of the risk: `mise run test`,
-`mise run test:full`, the sanitizer builds, the acronym and portability
-checks, `check-api-status`, the header-comment rule, the core test that an
-allocator refusing every request after a macrostep starts never sees a
-call, and the IRP suites. These gates need a person as well:
+### Where a person or an independent reader is needed
 
 | Gate | Who | What they check |
 |---|---|---|
-| Each ADR (Phase 0, just before the phase that needs it) | the maintainer | the decision and its figures; the ADR is the decision, not the proposal |
-| Public API changes in `tinyactors.h` | the maintainer | names, ownership, failure codes; the `// status:` markers napi needs |
-| 2.9, the generator and its build task | the maintainer | the rules in `docs/build/`; nothing host-specific outside `mise/lib/toolchain/` |
-| Each commit of 4.2 to 4.5 | a deep review of the commit, then the maintainer, reading the header comments first | the macrostep invariants hold; `test:full` passed and the message says so; IRP results unchanged; the review's findings land as a follow-up commit |
-| Phase 4's and Phase 7's benchmarks | the maintainer | `bench-compare` with throughput, memory and the machine signature; per-actor bytes before and after. Phase 4 records its figures; Phase 7 decides which regressions to tune away and which to accept |
-| 5.1, the test host becoming a ring driver | a reviewer who did not write it | every scenario property the old driver checked is still checked; nothing is weakened or dropped to make a scenario pass |
-| Removals that supersede ADRs (5.x, 6.3) | the maintainer | the ADR's status line, and that nothing still depends on what goes |
-| 4.5 and 6.1 in napi | the session rewriting napi | which napi files change, and when |
-
-### Who does which work
-
-- **Suited to agents, with an ordinary review:** the Phase 2 blocks (each
-  has a contract in `building-blocks.md`, no callers and its own tests),
-  the Phase 1 refactors (the existing tests are the oracle), folding
-  `docs/internal/` documents into headers, the scenario ring scripts (the
-  step IDs name the tests), and moving the OTLP encoder.
-- **Agents with close review:** 1.0 (wide but mechanical), 2.9, Phase 3,
-  and 5.2 to 5.5.
-- **Led by a person, agents assisting:** the Phase 0 ADRs, 4.2 to 4.5,
-  5.1's change of oracle, and 6.1 with the napi session.
+| Public API changes in `tinyactors.h` | the maintainer, when they look | names, ownership, failure codes |
+| End of M2, the test oracle on the rings | a reader who did not write it | every property the old driver checked is still checked through the rings |
+| M3's design note | the maintainer | where policy lives, and what `index.d.ts` keeps |
+| M4's benchmarks | the maintainer | which regressions to tune away and which to accept |
+| The finale's review | a reader who did not write it | the whole range against `ccd6d632` |

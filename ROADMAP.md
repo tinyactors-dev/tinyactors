@@ -25,19 +25,25 @@ decisions are core ADRs 0098 to 0105, repository ADR 0003 and napi ADR
   registry. The claim set (2.10) waits for a user.
 - [x] **Phase 3, names are matched by lookup:** the matcher runs over a
   name's atoms; `typeexpr` lookups no longer intern.
-- [ ] **Phase 4, core gains its queue:** `tel` and the host clock (4.1, done:
-  untraced cost unchanged, tracing +13 to 22% per event, ADR 0098's notes),
-  the pool and `ta_run` with one slot (4.2, done: hosts pass and read
-  names as text, the router is gone, the ring defaults measured by proxy in
-  ADR 0099's notes), delayed sends as envelopes
-  (4.3, done: names of delayed and I/O sends stay text), no allocation in a macrostep (4.4), macrostep slots (4.5).
-- [ ] **Phase 5, rings replace the vtables:** inputs (5.1), effects (5.2),
-  unloading and loading (5.3), definitions (5.4), recording and replay
-  (5.5); the test host becomes a ring driver in 5.1.
-- [ ] **Phase 6, the kernel goes:** napi drives the rings (6.1),
-  `tinyactors-otlp` (6.2), `tinyactors-host` deleted (6.3).
-- [ ] **Phase 7, close:** the removal table walked, the final
-  `bench-compare`, and core smaller than before Phase 1.
+- [ ] **M1, core runs inputs safely (Phase 4):** `tel` and the host clock
+  (4.1, done: untraced cost unchanged, tracing +13 to 22% per event, ADR
+  0098's notes), the pool and `ta_run` with one slot (4.2, done: hosts
+  pass and read names as text, the router is gone, the ring defaults
+  measured by proxy in ADR 0099's notes), delayed sends as envelopes
+  (4.3, done: names of delayed and I/O sends stay text), no allocation in
+  a macrostep (4.4), macrostep slots (4.5). The kernel, the test host's
+  hosted mode and napi's native layer were deleted on 2026-10-06; until
+  M3 the test host is the only host.
+- [ ] **M2, core speaks only rings:** inputs (5.1, the test host becomes
+  the reference host and drives core through the rings), effects (5.2),
+  definitions (5.4), unloading and loading (5.3), recording and replay
+  (5.5), and S01 to S13 as ring scripts.
+- [x] **`tinyactors-otlp`:** the OTLP encoder reads `tel` in its own
+  package.
+- [ ] **M3, napi on the rings:** napi's native layer rewritten from
+  scratch until `lib/` works and its suites and IRP pass again.
+- [ ] **M4, finale:** `test:full`, a review of the whole range, the IRP
+  diff, core smaller than before Phase 1, benchmarks and tuning.
 
 ## Done recently
 
