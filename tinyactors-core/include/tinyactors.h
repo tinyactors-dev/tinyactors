@@ -367,12 +367,14 @@ typedef struct { ta_event_name_id name; ta_event_type type; ta_send_id send_id; 
 typedef struct { ta_event_name_id detail; int32_t code; ta_str message; TA_RELEASE(ta_value_release) ta_value data; } ta_fault;
 /*
  * What a data-model, invoker or I/O-processor operation answers. ERROR is
- * the chart's failure: core raises the event SCXML defines for it. NOMEM
- * says the operation could not get memory and changed nothing: core stops
- * the run where it stands, ta_run() reports the input faulted with
- * TA_ERR_NOMEM, and the operation is called again when the host releases
- * the session (ta_actor_release(), ADR 0047, ADR 0070). An operation that
- * may have changed something before it ran out of memory answers ERROR.
+ * the chart's failure: core raises the event SCXML defines for it. A
+ * macrostep never stops for want of memory (ADR 0102): a data model or an
+ * invoker that runs out of its own memory answers ERROR, and the chart
+ * sees error.execution; core reads a NOMEM from them the same way. NOMEM
+ * is meaningful in two places only: an I/O processor's send, which then
+ * waits as a submitted send and is offered again (ADR 0040), and writing
+ * or reading a value's bytes for an image, outside any macrostep, where
+ * the operation that asked answers TA_ERR_NOMEM and changes nothing.
  */
 typedef enum { TA_OP_OK TA_SUCCESS = 0, TA_OP_ERROR = 1, TA_OP_NOMEM = 2 } ta_op_status TA_SYMBOLS("TA_OP_");
 /*
@@ -933,8 +935,8 @@ typedef struct { void *shared; void *instance; TA_IN const ta_value *snapshot; u
  * sends *out in place of `value` and releases `value`.
  *
  * Null means every value of the data model is immutable, so sharing is a
- * copy: core retains `value`. TA_OP_NOMEM changes nothing, and the step
- * runs again (ADR 0070); TA_OP_ERROR is error.execution with `fault`.
+ * copy: core retains `value`. A copy that fails, for want of memory too,
+ * answers TA_OP_ERROR: error.execution with `fault` (ADR 0102).
  */
 typedef struct { void *shared; void *instance; TA_IN const ta_value *value; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_copy_out_params;
 typedef struct ta_datamodel_vtable {
@@ -1706,8 +1708,8 @@ typedef struct {
 typedef struct ta_invoker_vtable {
     /*
      * start arranges for the service to start and answers TA_OP_OK, or
-     * TA_OP_NOMEM when it could not even arrange that (core starts the
-     * invocation again later, ADR 0070). A service that then fails to start
+     * TA_OP_ERROR when it could not even arrange that, for want of memory
+     * too: the chart sees error.execution (ADR 0102). A service that then fails to start
      * is reported with an ERROR report (ADR 0089 section 4), which reaches
      * the session between macrosteps like any input. A start that still
      * answers TA_OP_ERROR raises error.execution in the invoking macrostep,

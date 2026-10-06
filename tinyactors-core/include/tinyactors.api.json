@@ -5583,7 +5583,7 @@
     },
     "ta_datamodel_copy_out_params": {
       "kind": "struct",
-      "doc": "A value leaving the session (ADR 0097, SCXML C.1): the data of a <send > to anything but #_internal, the params and content expr of an <invoke >, and an event autoforwarded to an invocation. copy_out answers a value the session can no longer change: a copy, or `value` itself retained when the session cannot change it anyway (an immutable value). Core sends *out in place of `value` and releases `value`.\n\nNull means every value of the data model is immutable, so sharing is a copy: core retains `value`. TA_OP_NOMEM changes nothing, and the step runs again (ADR 0070); TA_OP_ERROR is error.execution with `fault`.",
+      "doc": "A value leaving the session (ADR 0097, SCXML C.1): the data of a <send > to anything but #_internal, the params and content expr of an <invoke >, and an event autoforwarded to an invocation. copy_out answers a value the session can no longer change: a copy, or `value` itself retained when the session cannot change it anyway (an immutable value). Core sends *out in place of `value` and releases `value`.\n\nNull means every value of the data model is immutable, so sharing is a copy: core retains `value`. A copy that fails, for want of memory too, answers TA_OP_ERROR: error.execution with `fault` (ADR 0102).",
       "fields": [
         {
           "name": "shared",
@@ -11729,7 +11729,7 @@
           },
           "shape": "callback",
           "direction": "in",
-          "doc": "start arranges for the service to start and answers TA_OP_OK, or TA_OP_NOMEM when it could not even arrange that (core starts the invocation again later, ADR 0070). A service that then fails to start is reported with an ERROR report (ADR 0089 section 4), which reaches the session between macrosteps like any input. A start that still answers TA_OP_ERROR raises error.execution in the invoking macrostep, as before ADR 0089; that failure is in no host's log, so a replay of that session is not exact. start must not report reentrantly through ta_actor_report_invoke()."
+          "doc": "start arranges for the service to start and answers TA_OP_OK, or TA_OP_ERROR when it could not even arrange that, for want of memory too: the chart sees error.execution (ADR 0102). A service that then fails to start is reported with an ERROR report (ADR 0089 section 4), which reaches the session between macrosteps like any input. A start that still answers TA_OP_ERROR raises error.execution in the invoking macrostep, as before ADR 0089; that failure is in no host's log, so a replay of that session is not exact. start must not report reentrantly through ta_actor_report_invoke()."
         },
         {
           "name": "cancel",
@@ -12823,7 +12823,7 @@
           "symbol": "nomem"
         }
       ],
-      "doc": "What a data-model, invoker or I/O-processor operation answers. ERROR is the chart's failure: core raises the event SCXML defines for it. NOMEM says the operation could not get memory and changed nothing: core stops the run where it stands, ta_run() reports the input faulted with TA_ERR_NOMEM, and the operation is called again when the host releases the session (ta_actor_release(), ADR 0047, ADR 0070). An operation that may have changed something before it ran out of memory answers ERROR.",
+      "doc": "What a data-model, invoker or I/O-processor operation answers. ERROR is the chart's failure: core raises the event SCXML defines for it. A macrostep never stops for want of memory (ADR 0102): a data model or an invoker that runs out of its own memory answers ERROR, and the chart sees error.execution; core reads a NOMEM from them the same way. NOMEM is meaningful in two places only: an I/O processor's send, which then waits as a submitted send and is offered again (ADR 0040), and writing or reading a value's bytes for an image, outside any macrostep, where the operation that asked answers TA_ERR_NOMEM and changes nothing.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,

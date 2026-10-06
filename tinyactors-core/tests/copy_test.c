@@ -3,7 +3,8 @@
  * <send> to anything but #_internal, an <invoke>'s params and content expr,
  * and autoforwarded events go through the data model's copy_out; a data
  * model without copy_out shares; a refused copy is error.execution, and one
- * that runs out of memory runs again.
+ * that runs out of memory is an execution error, like a refused one
+ * (ADR 0102): a macrostep never stops for want of memory.
  */
 #include <stdbool.h>
 #include <stdint.h>
@@ -377,19 +378,15 @@ static void test_refused_copy_is_an_execution_error(void) {
     finish(system);
 }
 
-static void test_copy_out_of_memory_runs_again(void) {
+static void test_copy_out_of_memory_is_an_execution_error(void) {
     reset(COPY_NOMEM_ONCE);
     ta_system *system = create();
     ta_actor_id actor = start(system, &sender, &copying);
-    CHECK(resume(system, actor) == TA_ERR_NOMEM);
+    CHECK(resume(system, actor) == TA_OK);
+    CHECK(copies == 1);
     take_mail(system, actor);
     CHECK(mailed.count == 0);
-    CHECK(ta_actor_release(system, actor) == TA_OK); /* the fault stopped it: it goes on */
-    CHECK(resume(system, actor) == TA_OK);
-    CHECK(copies == 2);
-    take_mail(system, actor);
-    CHECK(mailed.count == 1 && box_of(&mailed.data[0]) != held);
-    CHECK(in_state(system, actor, "start"));
+    CHECK(in_state(system, actor, "failed"));
     finish(system);
 }
 
@@ -463,7 +460,7 @@ int main(void) {
     test_send_copies();
     test_without_copy_out_values_are_shared();
     test_refused_copy_is_an_execution_error();
-    test_copy_out_of_memory_runs_again();
+    test_copy_out_of_memory_is_an_execution_error();
     test_invoke_copies();
     test_refused_invoke_copy_fails_the_invocation();
     CHECK(test_allocator_finish(&heap) == 0);
