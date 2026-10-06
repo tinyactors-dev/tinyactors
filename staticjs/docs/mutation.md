@@ -20,7 +20,8 @@ This is done in 3 steps:
 1. **Done:** methods that change an array or a set, on a variable the
    function owns; such a call as a statement.
 2. **Done:** assignment to properties and elements (`a.b.c = v`), with
-   the ownership of the whole path checked ("Assignment", below).
+   the ownership of the whole path checked ("Assignment", below); and
+   `let`, a variable that statements assign to ("let", below).
 3. Removal: `delete`, `splice`, `Set.prototype.delete` and `clear`, with
    removal from the hash index and shrinking.
 
@@ -155,7 +156,8 @@ mutation above (a parameter or a const of the function; never captured,
 before or after; never copied, passed or stored before), and is refused
 when compiled otherwise, as `unsupported`, with the reason. So is a target
 whose root is not a variable (`f().k = 1`, `[1][0] = 2`, `(a || b).k =
-1`), a variable itself (`x = 1`: there is no `let`), and a method that
+1`), a variable that is not a `let` of the function (`x = 1`, "let"
+below), and a method that
 changes the root's variable inside the target's keys or the value
 (`xs[0] = xs.push(1)`): JavaScript holds the containers on the path from
 before the value runs, and staticjs finds them again when it stores. An
@@ -214,14 +216,54 @@ t op= v;       <t> ASSIGN(op) <v> ASSIGN_END(op)     (op 0 for =)
 t++;  ++t;     <t> UPDATE(ADD)                       (SUBTRACT for --)
 ```
 
+## let
+
+`let` declares a variable of a function, in its body or one of its blocks
+or branches' blocks, as `const` does, with a value or without one
+(`let x;`, whose value is `undefined`), a pattern included (which needs a
+value, as in JavaScript), several declarators to a statement. Statements
+assign to it: `x = v;`, the compound forms, `x++;` and `x--;`, with the
+semantics above. At a module's top level `let` is refused, as every
+statement there is: a module holds imports, `const` and exports.
+
+- **A `let` captured by any arrow function is refused** when compiled,
+  whether or not it is assigned, before or after: a closure keeps a copy of
+  what it captures when it is made, and JavaScript's would see what is
+  assigned later. The message suggests `const`, or building the value with
+  `reduce`.
+- **Assigning to a `const`, a parameter**, a global, an import or a name
+  bound nowhere is refused as `unsupported`. JavaScript reads it, and
+  throws a `TypeError` for a `const` only when the assignment runs, so it is
+  not a syntax error; a `const` declared twice, or a `let` and a `const` of
+  one name, is.
+- **Its value is owned as a `const`'s is**: a method that changes it, or an
+  assignment to its properties, follows the rules above. Assigning to the
+  variable gives it a new value, so what was done with the old one (copied,
+  passed, stored) no longer refuses a mutation of it; the evaluator still
+  faults if the new value has another holder (`xs = ys; xs.push(1)` while
+  `ys` holds it).
+- **The last read of a slot still moves its value** (`TAKE_LOCAL`,
+  compiler.c): a write of the slot cancels the move of every read before
+  it, so a read before a write stays a copy, and a read after it is a read
+  of the new value, which moves when nothing reads or writes the slot
+  later, on any path. A plain assignment compiles no read of its target;
+  a compound one reads it (`LOCAL`), then `SET_LOCAL` stores the result.
+
+The events are CONST_BEGIN's: count 1 for `let`, 2 for a declarator
+without a value, which the parser tells from the token after its name
+(`let x;`, `let x, y = 1`, `let x` and a line break):
+
+```
+let p = v      CONST_BEGIN(1) <v> <p> CONST_END
+let x          CONST_BEGIN(2) BIND(x) CONST_END
+x op= v;       <x> ASSIGN(op) <v> ASSIGN_END(op)
+```
+
 ## What is left out
 
-- **`let` with reassignment** (`let x = 0; x = x + 1;`, `+=`, `++`). The
-  parser refuses `let` where it begins, and the compiler an assignment to
-  a variable; supporting them means a `let` declaration's events, and
-  keeping the last-read moves sound when a slot is written again. The
-  ownership rules extend to it as they are: a `let` captured by any arrow
-  function is refused.
+- **Assigning to a parameter**, and `var`: JavaScript allows both; a
+  `let` does what they would. `var` stays refused ("staticjs declares with
+  const").
 - **The other mutating methods** (`splice`, `copyWithin`, `delete`,
   `clear`): step 3. They fault by name, as before.
 - **A method that changes a property or an element** (`o.items.push(x)`):
@@ -275,6 +317,15 @@ Step 2, assignment:
 | `tests/api_test.c` | `ASSIGN`, `ASSIGN_END` and `UPDATE` in `event_names`; the `test_mutation_assign_*` functions and their calls in `main` |
 | `bench/bench.c` | `eval.object.assign-reduce`, `eval.array.assign-reduce` |
 
+Step 2, `let`:
+
+| File | What is tagged |
+|---|---|
+| `include/staticjs.h` | CONST_BEGIN's count, and its lines in the event grammar |
+| `src/parser.c` | `frame.declares_let` and `.bare`; `let_declarator`, its declaration, `begin_let` and `end_bare_let`; the `bare` line of `const_token` and its message; the next declarator's count in `terminator` (restore `send_kind`); `begin_let` in `statement_token` (restore its refusal) |
+| `src/compiler.c` | `binding.declared_let`, set in `declare`; `construct.declares_let`, set in `compile_const_begin` with the `UNDEFINED` of a declarator without a value; `refused_let_capture` in `note_capture`; `variable_target`, `variable_store` and `target_store` and their lines in `assign_target`, `assign_begin`, `assign_end` and `compile_update` |
+| `bench/bench.c` | `eval.let.counter` |
+
 Besides the tags, mutation changed what some existing cases expect, and
 rolling it back restores them: a mutating method on a literal, or named
 by a key built at run time, faults "only on a variable" in
@@ -288,8 +339,10 @@ assignment that is not a statement is "staticjs has no assignment as a
 value" (it was "staticjs has no assignment: values do not change"), and
 `++` or `--` that is not one "staticjs has no ++ or -- as a value" (it was
 "staticjs has no ++ or --: values do not change"); `1++` and `++(a + b)`
-are now syntax errors, as in JavaScript (they were unsupported). The
-README, `AGENTS.md`, `docs/builtins.md` and `docs/matcher.md` point here.
+are now syntax errors, as in JavaScript (they were unsupported). `let`
+moved two cases from `tests/spec/statements.spec` to `mutation.spec`
+("let" and "let with its name on the next line", which were refused,
+"declares with const"). The README, `AGENTS.md`, `docs/builtins.md` and `docs/matcher.md` point here.
 
 The new code sits at the end of `src/vm.c` and `src/builtins.c`, and the
 evaluator reaches it from the default case of its switch, so that the code

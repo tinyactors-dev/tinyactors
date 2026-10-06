@@ -1913,7 +1913,49 @@ static void test_mutation_assign_fuel(void) {
     CHECK(c.live == 0);
 }
 
+/* let is CONST_BEGIN with count 1, or 2 for a declarator without a value,
+ * whose pattern comes with no value before it. */
+static void test_mutation_let_events(void) {
+    expect_nodes("() => { let a = 1, b; b = a; }", SJS_GOAL_EXPRESSION, LOG_NODES,
+                 "ARROW_BEGIN#1@0 PARAMS_END#1@0 BLOCK_BEGIN#1@0 CONST_BEGIN#2@8 NUMBER#4@16 BIND#3@12 CONST_END#2@8 "
+                 "CONST_BEGIN#5@8 BIND#6@19 CONST_END#5@8 NAME#8@22 ASSIGN#9@22 NAME#10@26 ASSIGN_END#9@22 BLOCK_END#1@0 "
+                 "ARROW_END#1@0 END#0@0");
+    static event_log log;
+    parse_events("() => { let a = 1, b; b += a; }", SJS_GOAL_EXPRESSION, &log);
+    static const int events[] = {
+        SJS_EV_ARROW_BEGIN, 0, SJS_EV_PARAMS_END, 0, SJS_EV_BLOCK_BEGIN, 0, SJS_EV_CONST_BEGIN, 1, SJS_EV_NUMBER, 0,
+        SJS_EV_BIND, 0, SJS_EV_CONST_END, 0, SJS_EV_CONST_BEGIN, 2, SJS_EV_BIND, 0, SJS_EV_CONST_END, 0, SJS_EV_NAME, 0,
+        SJS_EV_ASSIGN, SJS_OP_ADD, SJS_EV_NAME, 0, SJS_EV_ASSIGN_END, SJS_OP_ADD, SJS_EV_BLOCK_END, 0, SJS_EV_ARROW_END, 0,
+        SJS_EV_END, 0
+    };
+    static const char *const texts[] = {
+        NULL, NULL, NULL, NULL, NULL, "a", NULL, NULL, "b", NULL, "b", NULL, "a", NULL, NULL, NULL, NULL
+    };
+    expect_events(&log, events, (int)(sizeof texts / sizeof texts[0]), texts);
+    /* A CONST_BEGIN of let outside a function, or of a count no parser sends. */
+    const sjs_event top_let[] = { { .kind = SJS_EV_CONST_BEGIN, .count = 1 } };
+    compile_events(top_let, 1, "the events are out of order");
+    const sjs_event body[] = { { .kind = SJS_EV_ARROW_BEGIN }, { .kind = SJS_EV_PARAMS_END }, { .kind = SJS_EV_BLOCK_BEGIN },
+                               { .kind = SJS_EV_CONST_BEGIN, .count = 3 } };
+    compile_events(body, 4, "the events are out of order");
+}
+
 static void test_out_of_memory(const char *source, sjs_goal goal);
+
+/* Every allocation of a program with let variables, assigned, compounded
+ * and moved, fails in turn. */
+static void test_mutation_let_out_of_memory(void) {
+    test_out_of_memory("[1, 2, 3].map(n => {\n"
+                       "  let s = \"\", xs = [], o;\n"
+                       "  s += n;\n"
+                       "  xs = [...xs, s];\n"
+                       "  o ?\?= {};\n"
+                       "  o[s] = xs;\n"
+                       "  { let k = n; k++; o.k = k; }\n"
+                       "  return o;\n"
+                       "})",
+                       SJS_GOAL_EXPRESSION);
+}
 
 /* Every allocation of a program that assigns, appending to arrays and to
  * objects past the size that gives them an index, an integer key among
@@ -2010,6 +2052,8 @@ int main(int argc, char **argv) {
     test_mutation_assign_natives();
     test_mutation_assign_fuel();
     test_mutation_assign_out_of_memory();
+    test_mutation_let_events();
+    test_mutation_let_out_of_memory();
     test_out_of_memory("[1, 2, 3].map(x => ({x, s: `${x}`}))", SJS_GOAL_EXPRESSION);
     /* Functions the matcher tags: its records and text, and the shapes'
      * arguments, fail too. */

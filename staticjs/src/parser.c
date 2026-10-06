@@ -159,6 +159,8 @@ typedef struct {
     uint8_t nonsimple;     /* F_PARAMS, F_BLOCK: the parameters are not all plain names */
     uint8_t not_pattern;   /* F_ARRAY, F_OBJECT: an item no assignment pattern takes */
     uint8_t refused_before; /* MUTATION: F_EXPRESSION_STATEMENT: the parser was refusing when it began */
+    uint8_t declares_let;  /* MUTATION: F_CONST: a let declaration */
+    uint8_t bare;          /* MUTATION: F_CONST: its declarator has no value (`let x;`) */
     uint32_t ops_base;
     uint32_t count;
     uint32_t held_base;    /* F_CONST: its pattern's first held event; F_IMPORT, F_EXPORT: its specifiers';
@@ -1830,6 +1832,7 @@ static handled list_terminator(sjs_parser *p, const queued_token *t, uint8_t clo
 
 static handled end_initializer(sjs_parser *p, const queued_token *t);
 static handled statement_done(sjs_parser *p);
+static handled let_declarator(sjs_parser *p, uint32_t i, uint8_t *bare); /* MUTATION */
 
 /* MUTATION: an expression statement ends at `t`. A call is sent, for the
  * compiler to accept if it changes a variable; anything else is refused, as
@@ -1986,6 +1989,12 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
         return end_initializer(p, t);
     case F_CONST:
         if (is_punctuator(t, SJS_P_SEMICOLON) || is_punctuator(t, SJS_P_COMMA)) {
+            /* MUTATION: whether a let's next declarator has a value. */
+            uint8_t bare = 0;
+            if (is_punctuator(t, SJS_P_COMMA) && f->declares_let) {
+                handled h = let_declarator(p, 1, &bare);
+                if (h != H_TAKEN) return h;
+            }
             if (finish_const(p) == H_STOP) return H_STOP;
             if (is_punctuator(t, SJS_P_COMMA)) {
                 /* `export const a = 1, b = 2` exports both; each is a node,
@@ -1995,7 +2004,10 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
                     if (send_kind(p, SJS_EV_EXPORT, exported) == H_STOP) return H_STOP;
                 }
                 f->node = p->next_node++;
-                if (send_kind(p, SJS_EV_CONST_BEGIN, frame_place(f, t->at)) == H_STOP) return H_STOP;
+                /* MUTATION: and the count; restore send_kind(p, SJS_EV_CONST_BEGIN, ...). */
+                f->bare = bare;
+                uint32_t count = f->declares_let ? (bare ? 2u : 1u) : 0u;
+                if (send_event(p, counted(SJS_EV_CONST_BEGIN, count, frame_place(f, t->at))) == H_STOP) return H_STOP;
                 top_frame(p)->state = C_PATTERN;
                 hold_from_here(p);
                 return H_TAKEN;
@@ -2638,11 +2650,58 @@ static handled begin_const(sjs_parser *p, const queued_token *t) {
     return H_TAKEN;
 }
 
+/* MUTATION: `let`, a const whose names can be assigned to: CONST_BEGIN's
+ * count is 1, or 2 for a declarator without a value (`let x;`), whose
+ * value is undefined. That the parser tells from the tokens at `i` and
+ * after: a name without `=` after it. */
+static handled let_declarator(sjs_parser *p, uint32_t i, uint8_t *bare) {
+    const queued_token *name = peek(p, i);
+    if (name == NULL) return H_WAIT;
+    *bare = 0;
+    if (name->kind != SJS_TOKEN_NAME) return H_TAKEN;
+    const queued_token *next = peek(p, i + 1u);
+    if (next == NULL) return H_WAIT;
+    *bare = is_punctuator(next, SJS_P_ASSIGN) ? 0u : 1u;
+    return H_TAKEN;
+}
+
+static handled begin_let(sjs_parser *p, const queued_token *t) {
+    uint8_t bare;
+    handled h = let_declarator(p, 1, &bare);
+    if (h != H_TAKEN) return h;
+    if (push_frame(p, F_CONST, own_place(p, t->at)) == H_STOP) return H_STOP;
+    frame *f = top_frame(p);
+    f->declares_let = 1;
+    f->bare = bare;
+    if (send_event(p, counted(SJS_EV_CONST_BEGIN, bare ? 2u : 1u, frame_place(f, t->at))) == H_STOP) return H_STOP;
+    hold_from_here(p);
+    return H_TAKEN;
+}
+
+/* After the name of a let declarator without a value: the declarator
+ * ends, at a `;`, a `,`, a `}`, the end or a line break. */
+static handled end_bare_let(sjs_parser *p, const queued_token *t) {
+    frame *f = top_frame(p);
+    f->state = C_INIT;
+    f->ops_base = SJS_BUF_COUNT(p->ops, pending_op);
+    p->expect = E_OPERATOR;
+    if (is_punctuator(t, SJS_P_SEMICOLON) || is_punctuator(t, SJS_P_COMMA) || is_punctuator(t, SJS_P_RBRACE) || t->kind == SJS_TOKEN_END) {
+        return terminator(p, t);
+    }
+    if (t->newline_before) return insert_semicolon(p, t);
+    return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ; after a let declaration" });
+}
+
 static handled const_token(sjs_parser *p, const queued_token *t) {
     frame *f = top_frame(p);
     if (f->state == C_PATTERN) return pattern_start(p, t);
     /* C_ASSIGN */
-    if (!is_punctuator(t, SJS_P_ASSIGN)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "a const declaration needs = and a value" });
+    if (f->bare) return end_bare_let(p, t); /* MUTATION */
+    if (!is_punctuator(t, SJS_P_ASSIGN)) {
+        /* MUTATION: let's message; restore the const's alone. */
+        const char *message = f->declares_let ? "a let declaration of a pattern needs = and a value" : "a const declaration needs = and a value";
+        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, message });
+    }
     f->state = C_INIT;
     f->ops_base = SJS_BUF_COUNT(p->ops, pending_op);
     p->expect = E_OPERAND;
@@ -2898,6 +2957,12 @@ static handled statement_token(sjs_parser *p, const queued_token *t, bool single
     uint8_t declares = declaration_at(p, 0, single);
     if (declares == SD_WAIT) return H_WAIT;
     if (declares != SD_NONE) {
+        /* MUTATION: let declares; restore its refusal below. */
+        if (!single && declares == SD_LEXICAL && is_word(p, t, SJS_STR("let"))) {
+            const queued_token *next = peek(p, 1);
+            if (next == NULL) return H_WAIT;
+            if (statement_goes_on(p, t, next)) return begin_let(p, t);
+        }
         if (!single) return refuse_statement(p, t, statement_problem(p, t));
         if (declares == SD_LEXICAL) return parse_fail(p, t, lexical_single);
         if (declares == SD_DECLARATION || p->goal == SJS_GOAL_MODULE) return parse_fail(p, t, declaration_single);

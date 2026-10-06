@@ -2252,7 +2252,8 @@ third build on the first. So item 4 is three commits ([brackets],
     is ignored and the function stays untagged.
 - **Loop start.** `shape_start` reads the operand once:
   `closure->captures[i]`, `program->constants[i]`, `vm->globals[i]`, or
-  undefined. Every binding is const, a value is never changed once shared
+  undefined. Every binding a closure captures is const (a `let` is never
+  captured), a value is never changed once shared
   (`docs/mutation.md`), and globals are fixed for an evaluation
   (`sjs_run_params`), so the value cannot change while the loop runs. It is borrowed, from the closure in LOOP_CALLBACK, its program, or
   the embedder.
