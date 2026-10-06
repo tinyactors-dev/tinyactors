@@ -590,7 +590,7 @@ export default (a => { a.push(3); return a; })(xs);
 --- fault undefined
 
 === a method that changes its receiver, not in staticjs
-(() => { const xs = [1, 2]; return xs.splice(0, 1); })()
+(() => { const xs = [1, 2]; return xs.copyWithin(0, 1); })()
 --- fault changes its receiver
 
 
@@ -1932,3 +1932,197 @@ new Set([1]).delete(1)
 --- value
 [4]
 
+
+# Array.prototype.splice (docs/mutation.md): the removed elements, as a
+# new array; start and deleteCount relative and clamped as toSpliced takes
+# them.
+=== splice with no arguments removes nothing
+(() => { const xs = [1, 2, 3]; const r = xs.splice(); return [r, xs]; })()
+--- value
+[[],[1,2,3]]
+
+=== splice from a start removes the rest
+(() => { const xs = [1, 2, 3, 4]; const r = xs.splice(1); return [r, xs]; })()
+--- value
+[[2,3,4],[1]]
+
+=== splice from a negative start
+(() => { const xs = [1, 2, 3, 4]; const r = xs.splice(-2); return [r, xs]; })()
+--- value
+[[3,4],[1,2]]
+
+=== splice of a count
+(() => { const xs = [1, 2, 3, 4]; const r = xs.splice(1, 2); return [r, xs]; })()
+--- value
+[[2,3],[1,4]]
+
+=== splice that inserts
+(() => { const xs = [1, 2, 3]; const r = xs.splice(1, 0, "a", "b"); return [r, xs]; })()
+--- value
+[[],[1,"a","b",2,3]]
+
+=== splice that replaces with fewer
+(() => { const xs = [1, 2, 3, 4, 5]; const r = xs.splice(1, 3, "a"); return [r, xs]; })()
+--- value
+[[2,3,4],[1,"a",5]]
+
+=== splice that replaces with more
+(() => { const xs = [1, 2, 3]; const r = xs.splice(1, 1, "a", "b", "c"); return [r, xs]; })()
+--- value
+[[2],[1,"a","b","c",3]]
+
+=== splice that replaces as many
+(() => { const xs = [1, 2, 3]; const r = xs.splice(0, 2, "a", "b"); return [r, xs]; })()
+--- value
+[[1,2],["a","b",3]]
+
+=== splice of a count past the end
+(() => { const xs = [1, 2, 3]; const r = xs.splice(1, 10); return [r, xs]; })()
+--- value
+[[2,3],[1]]
+
+=== splice from a start past the end
+(() => { const xs = [1, 2, 3]; const r = xs.splice(10, 1, "z"); return [r, xs]; })()
+--- value
+[[],[1,2,3,"z"]]
+
+=== splice from a start before the beginning
+(() => { const xs = [1, 2, 3]; const r = xs.splice(-10, 2); return [r, xs]; })()
+--- value
+[[1,2],[3]]
+
+=== splice of a negative count
+(() => { const xs = [1, 2, 3]; const r = xs.splice(1, -1, "a"); return [r, xs]; })()
+--- value
+[[],[1,"a",2,3]]
+
+=== splice of an undefined count removes nothing
+(() => { const xs = [1, 2, 3]; const r = xs.splice(1, undefined); return [r, xs]; })()
+--- value
+[[],[1,2,3]]
+
+=== splice of an undefined start alone removes everything
+(() => { const xs = [1, 2, 3]; const r = xs.splice(undefined); return [r, xs]; })()
+--- value
+[[1,2,3],[]]
+
+=== splice of fractions
+(() => { const xs = [1, 2, 3, 4]; const r = xs.splice(1.7, 2.9); return [r, xs]; })()
+--- value
+[[2,3],[1,4]]
+
+=== splice of NaN
+(() => { const xs = [1, 2, 3]; const r = xs.splice(NaN, NaN); return [r, xs]; })()
+--- value
+[[],[1,2,3]]
+
+=== splice of NaN as a start alone
+(() => { const xs = [1, 2, 3]; const r = xs.splice(NaN); return [r, xs]; })()
+--- value
+[[1,2,3],[]]
+
+=== splice of infinities
+(() => { const xs = [1, 2, 3]; const a = xs.splice(-Infinity, 1); const b = xs.splice(1, Infinity); const c = xs.splice(Infinity, 1, 9); return [a, b, c, xs]; })()
+--- value
+[[1],[3],[],[2,9]]
+
+=== splice of null, true and false
+(() => { const xs = [1, 2, 3, 4]; const a = xs.splice(null, true); const b = xs.splice(true, false, 0); return [a, b, xs]; })()
+--- value
+[[1],[],[2,0,3,4]]
+
+=== splice of -0
+(() => { const xs = [1, 2]; const r = xs.splice(-0, 1); return [r, xs]; })()
+--- value
+[[1],[2]]
+
+=== splice of an empty array
+(() => { const xs = []; const r = xs.splice(0, 1, "a"); return [r, xs]; })()
+--- value
+[[],["a"]]
+
+=== splice of spread arguments
+(() => { const xs = [1, 2, 3, 4]; const r = xs.splice(...[1, 2], ...["a", "b", "c"]); return [r, xs]; })()
+--- value
+[[2,3],[1,"a","b","c",4]]
+
+=== splice as a statement
+(() => { const xs = [1, 2, 3, 4]; xs.splice(1, 1); xs.splice(0, 0, 0); return xs; })()
+--- value
+[0,1,3,4]
+
+=== splice of objects keeps them
+(() => { const xs = [{a: 1}, {b: 2}, {c: 3}]; const r = xs.splice(1, 1, {d: 4}); return [r, xs]; })()
+--- value
+[[{"b":2}],[{"a":1},{"d":4},{"c":3}]]
+
+=== splice of the variable's own elements
+(() => { const xs = [1, 2, 3]; xs.splice(1, 0, ...xs); return xs; })()
+--- value
+[1,1,2,3,2,3]
+
+=== splice of the variable's length
+(() => { const xs = [1, 2, 3]; xs.splice(xs.length - 1, 1, xs.length); return xs; })()
+--- value
+[1,2,3]
+
+=== splice most elements of a large array, then push
+(() => { const xs = Array.from({length: 100}, (_, i) => i); const r = xs.splice(5, 90); xs.push(100); return [r.length, r[0], r[89], xs]; })()
+--- value
+[90,5,94,[0,1,2,3,4,95,96,97,98,99,100]]
+
+=== splice in a reduce
+[1, 2, 3, 4, 5, 6].reduce((acc, x) => { if (x % 2) acc.splice(0, 0, x); else acc.splice(acc.length, 0, x); return acc; }, [])
+--- value
+[5,3,1,2,4,6]
+
+=== splice of each element from the front, in a reduce
+Array.from({length: 20}, (_, i) => i).reduce((acc) => { acc.splice(0, 1); return acc; }, Array.from({length: 25}, (_, i) => i))
+--- value
+[20,21,22,23,24]
+
+=== splice's result is a new array
+(() => { const xs = [1, 2, 3]; const r = xs.splice(0, 2); const n = r.length; xs.push(4); return [r, xs, n]; })()
+--- value
+[[1,2],[3,4],2]
+
+=== splice's result is not the variable
+(() => { const xs = [1, 2, 3]; return xs.splice(0, 1).push(4); })()
+--- fault only on a variable
+
+=== splice of a start that is a string
+(() => { const xs = [1, 2, 3]; return xs.splice("1"); })()
+--- fault converts only numbers
+
+=== splice of a count that is an object
+(() => { const xs = [1, 2, 3]; return xs.splice(0, {}); })()
+--- fault converts only numbers
+
+=== splice of an array a caller holds
+(() => { const ys = [1, 2]; const f = xs => { xs.splice(0, 1); return xs; }; return [f(ys), ys]; })()
+--- fault held elsewhere
+
+=== splice of the variable into itself
+(() => { const xs = [1, 2]; xs.splice(0, 0, xs); return xs; })()
+--- fault held elsewhere
+
+=== splice of an array copied before
+(() => { const xs = [1, 2]; const ys = xs; xs.splice(0, 1); return ys; })()
+--- error unsupported copied
+
+=== splice of a captured array
+(() => { const xs = [1, 2]; const f = () => xs[0]; xs.splice(0, 1); return f(); })()
+--- error unsupported captured
+
+=== splice of a set
+(() => { const s = new Set([1]); return s.splice(0, 1); })()
+--- fault changes its receiver
+
+=== splice of an array literal
+[1, 2, 3].splice(0, 1)
+--- fault only on a variable
+
+=== toSpliced leaves the variable as it was
+(() => { const xs = [1, 2, 3]; const ys = xs.toSpliced(0, 1); xs.splice(2, 1); return [xs, ys]; })()
+--- value
+[[1,2],[2,3]]

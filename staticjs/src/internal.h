@@ -412,7 +412,8 @@ typedef enum {
     SJS_METHOD_SET_ADD,
     /* MUTATION: removal (docs/mutation.md, "Removal"). */
     SJS_METHOD_SET_CLEAR,
-    SJS_METHOD_SET_DELETE
+    SJS_METHOD_SET_DELETE,
+    SJS_METHOD_ARRAY_SPLICE
 } sjs_builtin_id;
 
 /* The built-in function `Namespace.name` or bare `name`; NONE if unknown. */

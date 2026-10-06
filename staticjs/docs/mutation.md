@@ -36,6 +36,7 @@ This is done in 3 steps:
 | array | `sort(compare)` | the array |
 | array | `reverse()` | the array |
 | array | `fill(value, start, end)` | the array |
+| array | `splice(start, deleteCount, ...items)` | the elements removed, a new array |
 | set | `add(value)` | the set |
 | set | `delete(value)` | whether the set had it |
 | set | `clear()` | `undefined` |
@@ -44,7 +45,11 @@ Each has JavaScript's semantics and return value. `sort` takes a compare
 function and sorts as `toSorted` does, with the same merge sort, fuel and
 faults, and the same C path for a comparator of a known shape
 (`(a, b) => a - b`, `(a, b) => a.key - b.key`, docs/matcher.md); without one it faults, as `toSorted()` does, since JavaScript
-would compare the elements as strings. `Set.prototype.add` appends, as a
+would compare the elements as strings. `splice` takes its arguments as
+`toSpliced` does, with the same code (`splice_arguments`): `start` and
+`deleteCount` relative and clamped, everything from `start` removed when
+`deleteCount` is left out, nothing when both are; it removes and inserts
+in place, and returns what it removed. `Set.prototype.add` appends, as a
 set keeps insertion order; it holds primitives only, as `new Set` does.
 `delete` removes a member, found under SameValueZero as `has` finds it (NaN
 is NaN, -0 is 0), from the set's hash index too ("Removal", below); an
@@ -323,8 +328,8 @@ does not reallocate each time:
 - **Assigning to a parameter**, and `var`: JavaScript allows both; a
   `let` does what they would. `var` stays refused ("staticjs declares with
   const").
-- **The other mutating methods** (`splice`, `copyWithin`): step 3. They
-  fault by name, as before.
+- **`copyWithin`**, the one other method that changes an array: it faults
+  by name, as before.
 - **A method that changes a property or an element** (`o.items.push(x)`):
   the receiver of a mutation is a variable, read directly, and an
   assignment's path is not one. It is compiled as any method call and
@@ -403,6 +408,19 @@ Step 3, `Set.prototype.delete` and `clear`:
 | `tests/api_test.c` | `test_mutation_set_removal`, `test_mutation_set_removal_out_of_memory` |
 | `bench/bench.c` | `eval.set.delete-reduce`, `eval.set.delete-reduce.last` |
 
+Step 3, `splice`:
+
+| File | What is tagged |
+|---|---|
+| `src/internal.h` | `SJS_METHOD_ARRAY_SPLICE` |
+| `src/builtins.c` | the name `splice` (restore `NAME(text, flags, 0, 0, 0)`); `array_splice` and its case in `sjs_mutation_call` |
+| `tests/api_test.c` | `test_mutation_splice_fuel`, `test_mutation_splice_out_of_memory`, and the splice in `test_mutation_shrink_array` |
+| `bench/bench.c` | `eval.array.splice`, `eval.array.splice-reduce` |
+
+`splice_arguments` in `src/builtins.c` is `toSpliced`'s argument code,
+moved into a function that both call, inlined; rolling back keeps it, or
+puts its body back in `toSpliced`'s case.
+
 Nothing on the immutable path removes an item or shrinks a container:
 values never change there, and a value nothing else holds is only ever
 appended to. Compaction leaves the index and every reader of a
@@ -423,8 +441,9 @@ assignment that is not a statement is "staticjs has no assignment as a
 value" (it was "staticjs has no assignment: values do not change"), and
 `++` or `--` that is not one "staticjs has no ++ or -- as a value" (it was
 "staticjs has no ++ or --: values do not change"); `1++` and `++(a + b)`
-are now syntax errors, as in JavaScript (they were unsupported). `let`
-moved two cases from `tests/spec/statements.spec` to `mutation.spec`
+are now syntax errors, as in JavaScript (they were unsupported). Step 3
+changed one case of `mutation.spec` that names a method staticjs lacks: it
+called `splice`, and now calls `copyWithin`. `let` moved two cases from `tests/spec/statements.spec` to `mutation.spec`
 ("let" and "let with its name on the next line", which were refused,
 "declares with const"). The README, `AGENTS.md`, `docs/builtins.md` and
 `docs/matcher.md` point here.
