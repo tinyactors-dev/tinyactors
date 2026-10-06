@@ -33,7 +33,7 @@ argv << '--publish' if ENV['usage_publish'] == 'true'
 argv << '--skip-containers' if ENV['usage_skip_containers'] == 'true'
 argv << '--build-only' if ENV['usage_build_only'] == 'true'
 argv = argv.reject(&:empty?).uniq
-skip_tests = ENV['usage_skip_tests'] == 'true' || !argv.delete('--skip-tests').nil?
+skip_tests = !argv.delete('--skip-tests').nil? | (ENV['usage_skip_tests'] == 'true')
 puts "release: --skip-tests: core's test task does not run" if skip_tests
 core = Core.release_project(Core.library('tinyactors'))
 runtime = Core.release_project(Core.library('tinyactors_runtime'))
