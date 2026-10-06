@@ -278,8 +278,7 @@ to find. Check for them before committing.
   Node and paste what `JSON.stringify` prints, at every size the case uses.
   `tests/spec/group_by.spec` and `array_methods.spec` were made that way.
 - **A test that staticjs itself refuses.** `===` on two objects, `+`
-  between a string and a number, a literal such as `1e300` that needs more
-  precision than the lexer keeps, a set of objects: each faults or is
+  between a string and a number, a set of objects: each faults or is
   unsupported in staticjs, so the case tests nothing about the built-in.
   Know what staticjs refuses before writing a case (README.md, "Where it
   faults instead of following JavaScript"); `"a".k` is `undefined`, not a

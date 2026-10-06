@@ -11,8 +11,9 @@
 //
 //   node --experimental-vm-modules tests/diff-node.mjs tests/spec [numbers.txt]
 //
-// numbers.txt, if given, holds lines of "<hex bits> <text>" that staticjs
-// wrote for doubles; each must be String(x) for the same double.
+// numbers.txt, if given, holds the lines number_test --print writes: what
+// staticjs computed from an input (a double formatted, a decimal read, ...),
+// each of which must be what Node computes from it.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import vm from 'node:vm';
@@ -151,20 +152,46 @@ const files = statSync(specs).isDirectory()
   : [specs];
 for (const file of files) await runFile(file);
 
-let numberCount = 0;
+// Lines of number_test --print: a tag, then what staticjs computed and
+// what from. Each must be what Node computes from the same input.
+const counts = new Map();
+const view = new DataView(new ArrayBuffer(8));
+const toDouble = (hex) => {
+  view.setBigUint64(0, BigInt('0x' + hex));
+  return view.getFloat64(0);
+};
+const toHex = (x) => {
+  view.setFloat64(0, x);
+  return view.getBigUint64(0).toString(16).padStart(16, '0');
+};
+const sameDouble = (hex, x) => Object.is(toDouble(hex), x);
+const numberChecks = {
+  F(rest) { // <bits> <text>: String(x)
+    const space = rest.indexOf(' ');
+    const x = toDouble(rest.slice(0, space));
+    const theirs = Object.is(x, -0) ? '-0' : String(x);
+    return rest.slice(space + 1) === theirs ? null : `String: staticjs ${rest.slice(space + 1)}, JavaScript ${theirs}`;
+  },
+  D(rest) { // <bits> <decimal>: Number(decimal)
+    const space = rest.indexOf(' ');
+    const want = Number(rest.slice(space + 1));
+    return sameDouble(rest.slice(0, space), want) ? null : `Number: staticjs ${rest.slice(0, space)}, JavaScript ${toHex(want)}`;
+  },
+};
 if (numbers) {
-  const view = new DataView(new ArrayBuffer(8));
   for (const line of readFileSync(numbers, 'utf8').split('\n')) {
     if (!line) continue;
-    const space = line.indexOf(' ');
-    view.setBigUint64(0, BigInt('0x' + line.slice(0, space)));
-    const x = view.getFloat64(0);
-    const ours = line.slice(space + 1);
-    const theirs = Object.is(x, -0) ? '-0' : String(x);
-    numberCount++;
-    if (ours !== theirs) failures.push(`number ${line.slice(0, space)}: staticjs ${ours}, JavaScript ${theirs}`);
+    const tag = line.slice(0, line.indexOf(' '));
+    const check = numberChecks[tag];
+    const problem = check ? check(line.slice(tag.length + 1)) : 'an unknown tag';
+    counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    if (problem) failures.push(`number_test ${line.slice(0, 200)}: ${problem}`);
   }
 }
+const numberSummary = [
+  ['F', 'numbers format as String(x) does'],
+  ['D', 'decimals read as Number(s) does'],
+].filter(([tag]) => counts.has(tag)).map(([tag, what]) => `${counts.get(tag)} ${what}`).join(', ');
 
 if (failures.length > 0) {
   console.error(failures.slice(0, 50).join('\n'));
@@ -172,4 +199,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log(`diff-node: ${checked} cases agree with JavaScript (${skipped} faults not compared)` +
-  (numbers ? `, and ${numberCount} numbers format as String(x) does` : ''));
+  (numberSummary ? `; ${numberSummary}` : ''));
