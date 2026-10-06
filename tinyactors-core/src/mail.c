@@ -187,7 +187,26 @@ static void ta_mail_place_waiting(ta_system *system, uint32_t index, const ta_ma
     ta_address_release(address); /* the waiting list took its own */
 }
 
-/* ta_mail_send: see mail.h. */
+/*
+ * ta_mail_send sends one chart event as mail (lifetime of the envelope it
+ * makes: from now until its input is taken, refused or discarded; it owns a
+ * retained reference to the event data, so the caller's copy may go at once).
+ * It answers where the mail went: TA_MAIL_QUEUED (a resident receiver's
+ * queue, or, inside a macrostep, its outgoing list), TA_MAIL_WAITING (it
+ * waits for an address or session to become resident, or for the macrostep to
+ * end), TA_MAIL_FULL (no room: the receiver's queue is at its limit, the pool
+ * is at its bound, or the claim of the running slot is spent) and
+ * TA_MAIL_UNDELIVERABLE (the destination can never receive it).
+ *
+ * Order of work, so a refusal retains nothing: the slot is checked, the
+ * destination is resolved, the receiver's queue limit is checked, and only
+ * then is an envelope taken. UNDELIVERABLE and FULL therefore leave no
+ * envelope, no reference and no counter changed. Inside a macrostep
+ * (`in_macrostep`) the envelope is paid from the slot's claim and nothing is
+ * allocated; outside one it comes from the pool, which a safe point has
+ * already refilled (ta_mail_prepare), so a plain post does not allocate
+ * either, except for the key of a gone session's address (ta_mail_place_waiting).
+ */
 ta_mail_status ta_mail_send(ta_system *system, const ta_mail_params *params) {
     ta_run_slot *slot = &system->runner.slot;
     if (params->in_macrostep && !slot->occupied) {
@@ -329,7 +348,18 @@ static void ta_mail_discard(ta_system *system, uint32_t index) {
     ta_ilist_push_back(&system->runner.refused, ta_envelopes_link(&system->envelopes), index);
 }
 
-/* ta_mail_macrostep_discarded: see mail.h. */
+/*
+ * ta_mail_macrostep_discarded disposes of everything an abandoned macrostep
+ * sent or admitted: the envelopes on the slot's `outgoing` and
+ * `outgoing_waiting` lists (the macrostep's effects are undone, so its mail
+ * never existed). Mail is freed unseen and a resident receiver's queued count
+ * goes back down. A host input admitted inside the macrostep is different:
+ * the host holds its token, so it is moved to the refused list with reason
+ * TA_REFUSED_DISCARDED and its REFUSED notice is written by the next ta_run.
+ * The host_inputs gauge goes down at that moment (ta_run_input_decided), not
+ * when the notice is read. Finally the unused part of the slot's claim is
+ * returned. Never allocates; O(envelopes on the two lists).
+ */
 void ta_mail_macrostep_discarded(ta_system *system) {
     ta_run_slot *slot = &system->runner.slot;
     const ta_ilink *link = ta_envelopes_link(&system->envelopes);
@@ -420,7 +450,19 @@ static void ta_mail_drop_cue(ta_system *system, uint32_t head) {
     (void)ta_ilist_unlink(&system->runner.loads, ta_envelopes_owner_link(&system->envelopes), head);
 }
 
-/* ta_mail_post_waiting: see mail.h. */
+/*
+ * ta_mail_post_waiting puts a RUNNABLE envelope that is on no list on the
+ * waiting list of `address` (the envelope retains the address itself, via
+ * ta_waiting_insert). If it is the first of its list the envelope is also
+ * queued on the cue list, so the next ta_run writes one LOAD_NEEDED notice
+ * for the address. The envelope's target is 0 while it waits: it counts for
+ * no session.
+ *
+ * It never allocates. The waiting table entry for a new list was made room
+ * for by ta_envelopes_refill when the envelope's slot in the pool was made
+ * (envelope.h I4), which is why this can run inside a macrostep's end. The
+ * recycle on a failed insert is therefore unreachable and only a guard.
+ */
 void ta_mail_post_waiting(ta_system *system, uint32_t index, ta_address *address) {
     bool first = false;
     ta_envelope_at(&system->envelopes, index)->target = 0;

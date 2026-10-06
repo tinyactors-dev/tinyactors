@@ -18864,7 +18864,24 @@ static uint32_t ta_envelopes_page_items(uint32_t pool_envelopes) {
     return page;
 }
 
-/* ta_envelopes_init: see envelope.h. */
+/*
+ * ta_envelopes_init sets up the envelope pool of one system (lifetime:
+ * system; the block lives inside ta_system). It needs `envelopes` to be
+ * storage the caller will not move afterwards, because the block holds
+ * pointers into itself (the pool and both link views name each other), and
+ * valid `limits`: a pool of at least one envelope, a watermark of 1..99
+ * percent, and a macrostep reserve of 1..pool_envelopes.
+ *
+ * The pool bound is `pool_envelopes` rounded down to a whole number of pages
+ * (all arithmetic is checked inside ta_pool_init). Init allocates nothing: the
+ * pool and the waiting table are empty until ta_envelopes_refill runs at a
+ * safe point.
+ *
+ * Answers TA_ERR_INVALID for a NULL argument or limits outside the ranges
+ * above, and whatever ta_pool_init or ta_ilink_init answers for a size that
+ * overflows. On every failure `*envelopes` is left zeroed and nothing is
+ * held, so a failed init needs no destroy.
+ */
 TA_PRIVATE ta_result ta_envelopes_init(ta_envelopes *envelopes, ta_allocator allocator, const ta_envelope_limits *limits) {
     if (envelopes == NULL) {
         return TA_ERR_INVALID;
@@ -18905,7 +18922,18 @@ TA_PRIVATE ta_result ta_envelopes_init(ta_envelopes *envelopes, ta_allocator all
     return TA_OK;
 }
 
-/* ta_envelopes_destroy: see envelope.h. */
+/*
+ * ta_envelopes_destroy ends the pool's lifetime. Every envelope still in use
+ * gives back what it owns: its event data, its origin, and the address of one
+ * that waits or of a refused host input that keeps its reference for its
+ * notice. Then the waiting table and the pool's pages are freed, each with
+ * the size it was allocated with, and the block is zeroed.
+ *
+ * It must run while the address table is alive (an address is a core handle
+ * and releasing it touches the table), so ta_system_destroy calls it before
+ * the address table goes. Calling it on a zeroed block, or twice, does
+ * nothing. It never allocates and is O(pool extent).
+ */
 TA_PRIVATE void ta_envelopes_destroy(ta_envelopes *envelopes) {
     uint32_t extent = ta_pool_extent(&envelopes->pool);
     for (uint32_t index = 1; index <= extent; index += 1u) {
@@ -18962,7 +18990,25 @@ static ta_result ta_envelopes_table_build(const ta_envelopes *envelopes, uint32_
     return TA_OK;
 }
 
-/* ta_envelopes_refill: see envelope.h. */
+/*
+ * ta_envelopes_refill grows the pool, at a safe point, so that `want_free`
+ * envelopes are free, and replaces the waiting table with one that can hold
+ * an entry for every envelope the pool can then have. That is what lets a
+ * later ta_mail_post_waiting never allocate (envelope.h I4).
+ *
+ * `want_free` is first cut to bound - used: the pool never exceeds its
+ * bound, so asking for more than can exist is not an error, it just asks for
+ * all of it. Reservations are not counted in `used`: a claim is backed by
+ * items that exist (see ta_run_fill), and the callers add what they promise
+ * to `want_free` themselves. If enough items are free already the call
+ * returns TA_OK without allocating.
+ *
+ * Failure leaves no partial state: the new table is built first (nothing
+ * existing changes), the pool grows second, and if that fails the new table
+ * is destroyed and the old one stays. Only after both succeed is the old
+ * table destroyed and the new installed. Answers TA_ERR_NOMEM (or the
+ * allocator's answer) on failure. Cost is O(waiting entries) when it grows.
+ */
 TA_PRIVATE ta_result ta_envelopes_refill(ta_envelopes *envelopes, uint32_t want_free) {
     uint32_t room = envelopes->bound - envelopes->pool.used;
     uint32_t want = want_free < room ? want_free : room;
@@ -19377,7 +19423,16 @@ TA_API uint32_t ta_input_slot(uint64_t input) {
     return (uint32_t)(input & TA_INPUT_INDEX_MASK);
 }
 
-/* ta_run_input_decided: see run.h. */
+/*
+ * ta_run_input_decided counts one host-visible input as decided. Every
+ * HOST or TRANSITION envelope reaches exactly one terminal state (taken,
+ * refused, abandoned or withdrawn) and its owner calls this once at that
+ * moment, which lowers the `host_inputs` gauge the host reads to learn how
+ * many of its inputs core still holds. It is called when the state changes,
+ * before the notice is written, so that a host reading the gauge and the
+ * notice together never counts an input twice. Envelopes of other sources
+ * are not counted. Never allocates; O(1). The gauge never goes below zero.
+ */
 TA_PRIVATE void ta_run_input_decided(ta_system *system, const ta_envelope *envelope) {
     if ((envelope->source == TA_SOURCE_HOST || envelope->source == TA_SOURCE_TRANSITION) &&
         system->counters.host_inputs != 0) {
@@ -19511,7 +19566,20 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
     return TA_OK;
 }
 
-/* ta_actor_pending: see tinyactors.h. */
+/*
+ * ta_actor_pending is the inspection behind the host's mailbox(): it lists
+ * the inputs still queued for one session, oldest first, without changing
+ * anything. It walks the run queue and writes at most `capacity` entries
+ * into the caller's array, so it never allocates and costs O(position of the
+ * capacity-th match in the run queue), at worst the queue's length. Withdrawn
+ * envelopes are skipped (they are dead, only not yet unlinked), and so are
+ * inputs waiting for an address: they have no session (target 0) and are not
+ * on the run queue. `*count` is the number written; `*total`, when asked
+ * for, is the session's whole queued count, which may exceed `count`. The
+ * entries point at the envelopes' event data and are valid only until core
+ * next runs or admits input (the envelope lifetime): the caller copies out
+ * what it keeps. Answers TA_ERR_NOT_FOUND for an unknown session.
+ */
 TA_API ta_result ta_actor_pending(const ta_system *system, const ta_actor_pending_params *params) {
     if (system == NULL || params == NULL || params->count == NULL || (params->capacity != 0 && params->inputs == NULL)) {
         if (params != NULL && params->count != NULL) {
@@ -19545,7 +19613,24 @@ TA_API ta_result ta_actor_pending(const ta_system *system, const ta_actor_pendin
     return TA_OK;
 }
 
-/* ta_run_admit_report: see run.h. */
+/*
+ * ta_run_admit_report queues an invocation's ERROR or DONE report for its
+ * invoking session as a carrier envelope: source ERROR, flag REPORT (and
+ * REPORT_ENDS when the report ends the invocation), the invocation's id in
+ * `from`. The event it carries was named by the caller (the name is interned
+ * before admission); the envelope retains its own reference. Nothing is
+ * applied here: the report takes effect when ta_run takes the envelope, in
+ * order with the session's other inputs, which is what keeps replay
+ * deterministic.
+ *
+ * Outside a macrostep this is a safe point and may refill the pool (so it
+ * may answer TA_ERR_NOMEM) and obeys the admission watermark. Inside one
+ * (ta_run_executing, the invoker's start reporting an error) nothing may
+ * allocate: the envelope is paid from the running slot's claim, is held on
+ * the slot's outgoing list until the macrostep ends, and a short claim
+ * answers TA_ERR_FULL. TA_ERR_FULL also answers a session whose queue is at
+ * its limit. Failure leaves nothing queued and no reference held.
+ */
 TA_PRIVATE ta_result ta_run_admit_report(ta_system *system, ta_actor *actor, const ta_run_report *report) {
     bool inside = ta_run_executing(system);
     if ((!inside && !ta_envelopes_admissible(&system->envelopes)) || actor->queued == UINT16_MAX) {
@@ -19573,7 +19658,17 @@ TA_PRIVATE ta_result ta_run_admit_report(ta_system *system, ta_actor *actor, con
 }
 
 /*
- * ta_input_withdraw takes back a host input: see tinyactors.h. The envelope
+ * ta_input_withdraw takes back a host input before core has taken it, so the
+ * host can give up a post it no longer wants (a timed-out send, a cancel).
+ * It needs a token from ta_actor_deliver and answers TA_OK exactly once for
+ * it; it never allocates and is O(1).
+ *
+ * Why the envelope is found directly: the token's low bits are the
+ * envelope's pool index and its high bits a sequence number that is stored
+ * in the envelope when it is made. A token whose envelope was released and
+ * reused for another input carries a different sequence, so the comparison
+ * `envelope->input == input` fails and the answer is TA_ERR_NOT_FOUND:
+ * a stale token can never withdraw someone else's input. The envelope
  * is found by the index in the token and must still carry exactly that
  * token, so a token whose envelope was released and reused is NOT_FOUND. Only
  * an envelope that waits can be withdrawn (RUNNABLE on the run queue or an
@@ -32523,7 +32618,26 @@ static void ta_mail_place_waiting(ta_system *system, uint32_t index, const ta_ma
     ta_address_release(address); /* the waiting list took its own */
 }
 
-/* ta_mail_send: see mail.h. */
+/*
+ * ta_mail_send sends one chart event as mail (lifetime of the envelope it
+ * makes: from now until its input is taken, refused or discarded; it owns a
+ * retained reference to the event data, so the caller's copy may go at once).
+ * It answers where the mail went: TA_MAIL_QUEUED (a resident receiver's
+ * queue, or, inside a macrostep, its outgoing list), TA_MAIL_WAITING (it
+ * waits for an address or session to become resident, or for the macrostep to
+ * end), TA_MAIL_FULL (no room: the receiver's queue is at its limit, the pool
+ * is at its bound, or the claim of the running slot is spent) and
+ * TA_MAIL_UNDELIVERABLE (the destination can never receive it).
+ *
+ * Order of work, so a refusal retains nothing: the slot is checked, the
+ * destination is resolved, the receiver's queue limit is checked, and only
+ * then is an envelope taken. UNDELIVERABLE and FULL therefore leave no
+ * envelope, no reference and no counter changed. Inside a macrostep
+ * (`in_macrostep`) the envelope is paid from the slot's claim and nothing is
+ * allocated; outside one it comes from the pool, which a safe point has
+ * already refilled (ta_mail_prepare), so a plain post does not allocate
+ * either, except for the key of a gone session's address (ta_mail_place_waiting).
+ */
 TA_PRIVATE ta_mail_status ta_mail_send(ta_system *system, const ta_mail_params *params) {
     ta_run_slot *slot = &system->runner.slot;
     if (params->in_macrostep && !slot->occupied) {
@@ -32665,7 +32779,18 @@ static void ta_mail_discard(ta_system *system, uint32_t index) {
     ta_ilist_push_back(&system->runner.refused, ta_envelopes_link(&system->envelopes), index);
 }
 
-/* ta_mail_macrostep_discarded: see mail.h. */
+/*
+ * ta_mail_macrostep_discarded disposes of everything an abandoned macrostep
+ * sent or admitted: the envelopes on the slot's `outgoing` and
+ * `outgoing_waiting` lists (the macrostep's effects are undone, so its mail
+ * never existed). Mail is freed unseen and a resident receiver's queued count
+ * goes back down. A host input admitted inside the macrostep is different:
+ * the host holds its token, so it is moved to the refused list with reason
+ * TA_REFUSED_DISCARDED and its REFUSED notice is written by the next ta_run.
+ * The host_inputs gauge goes down at that moment (ta_run_input_decided), not
+ * when the notice is read. Finally the unused part of the slot's claim is
+ * returned. Never allocates; O(envelopes on the two lists).
+ */
 TA_PRIVATE void ta_mail_macrostep_discarded(ta_system *system) {
     ta_run_slot *slot = &system->runner.slot;
     const ta_ilink *link = ta_envelopes_link(&system->envelopes);
@@ -32756,7 +32881,19 @@ static void ta_mail_drop_cue(ta_system *system, uint32_t head) {
     (void)ta_ilist_unlink(&system->runner.loads, ta_envelopes_owner_link(&system->envelopes), head);
 }
 
-/* ta_mail_post_waiting: see mail.h. */
+/*
+ * ta_mail_post_waiting puts a RUNNABLE envelope that is on no list on the
+ * waiting list of `address` (the envelope retains the address itself, via
+ * ta_waiting_insert). If it is the first of its list the envelope is also
+ * queued on the cue list, so the next ta_run writes one LOAD_NEEDED notice
+ * for the address. The envelope's target is 0 while it waits: it counts for
+ * no session.
+ *
+ * It never allocates. The waiting table entry for a new list was made room
+ * for by ta_envelopes_refill when the envelope's slot in the pool was made
+ * (envelope.h I4), which is why this can run inside a macrostep's end. The
+ * recycle on a failed insert is therefore unreachable and only a guard.
+ */
 TA_PRIVATE void ta_mail_post_waiting(ta_system *system, uint32_t index, ta_address *address) {
     bool first = false;
     ta_envelope_at(&system->envelopes, index)->target = 0;

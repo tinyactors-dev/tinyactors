@@ -20657,7 +20657,7 @@
     },
     {
       "name": "ta_actor_report_invoke",
-      "doc": "Externally synchronize this call; do not call it reentrantly from start, except with an ERROR report.",
+      "doc": "ta_actor_report_invoke queues a service's report for the session that invoked it. Externally synchronize this call; do not call it reentrantly from start, except with an ERROR report.\n\nAllocation: a report allocates only at a safe point, except that an ERROR report interns its event name (error.communication.invoke. <id >. <reason >) before admission, and so may allocate when called inside a macrostep from start. That is a known exception, recorded in ADR 0099 and ended by unit 4.2b (the name area). It answers TA_ERR_NOMEM with nothing queued, or TA_ERR_FULL when the slot's claim is spent.",
       "public": true,
       "static_inline": false,
       "implemented": true,

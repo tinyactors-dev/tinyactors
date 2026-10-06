@@ -1438,7 +1438,18 @@ typedef struct ta_invoker_vtable {
 } ta_invoker_vtable TA_VTABLE;
 typedef struct { void *self; const ta_invoker_vtable *v; } ta_invoker TA_ADAPTER;
 
-/* Externally synchronize this call; do not call it reentrantly from start, except with an ERROR report. */
+/*
+ * ta_actor_report_invoke queues a service's report for the session that
+ * invoked it. Externally synchronize this call; do not call it reentrantly
+ * from start, except with an ERROR report.
+ *
+ * Allocation: a report allocates only at a safe point, except that an ERROR
+ * report interns its event name (error.communication.invoke.<id>.<reason>)
+ * before admission, and so may allocate when called inside a macrostep from
+ * start. That is a known exception, recorded in ADR 0099 and ended by unit
+ * 4.2b (the name area). It answers TA_ERR_NOMEM with nothing queued, or
+ * TA_ERR_FULL when the slot's claim is spent.
+ */
 TA_API ta_result ta_actor_report_invoke(ta_system *system,
                                         TA_IN const ta_invoke_report_params *params)
     TA_VALUE_MODEL(actor, params.actor);

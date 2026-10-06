@@ -206,7 +206,16 @@ uint32_t ta_input_slot(uint64_t input) {
     return (uint32_t)(input & TA_INPUT_INDEX_MASK);
 }
 
-/* ta_run_input_decided: see run.h. */
+/*
+ * ta_run_input_decided counts one host-visible input as decided. Every
+ * HOST or TRANSITION envelope reaches exactly one terminal state (taken,
+ * refused, abandoned or withdrawn) and its owner calls this once at that
+ * moment, which lowers the `host_inputs` gauge the host reads to learn how
+ * many of its inputs core still holds. It is called when the state changes,
+ * before the notice is written, so that a host reading the gauge and the
+ * notice together never counts an input twice. Envelopes of other sources
+ * are not counted. Never allocates; O(1). The gauge never goes below zero.
+ */
 void ta_run_input_decided(ta_system *system, const ta_envelope *envelope) {
     if ((envelope->source == TA_SOURCE_HOST || envelope->source == TA_SOURCE_TRANSITION) &&
         system->counters.host_inputs != 0) {
@@ -340,7 +349,20 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     return TA_OK;
 }
 
-/* ta_actor_pending: see tinyactors.h. */
+/*
+ * ta_actor_pending is the inspection behind the host's mailbox(): it lists
+ * the inputs still queued for one session, oldest first, without changing
+ * anything. It walks the run queue and writes at most `capacity` entries
+ * into the caller's array, so it never allocates and costs O(position of the
+ * capacity-th match in the run queue), at worst the queue's length. Withdrawn
+ * envelopes are skipped (they are dead, only not yet unlinked), and so are
+ * inputs waiting for an address: they have no session (target 0) and are not
+ * on the run queue. `*count` is the number written; `*total`, when asked
+ * for, is the session's whole queued count, which may exceed `count`. The
+ * entries point at the envelopes' event data and are valid only until core
+ * next runs or admits input (the envelope lifetime): the caller copies out
+ * what it keeps. Answers TA_ERR_NOT_FOUND for an unknown session.
+ */
 ta_result ta_actor_pending(const ta_system *system, const ta_actor_pending_params *params) {
     if (system == NULL || params == NULL || params->count == NULL || (params->capacity != 0 && params->inputs == NULL)) {
         if (params != NULL && params->count != NULL) {
@@ -374,7 +396,24 @@ ta_result ta_actor_pending(const ta_system *system, const ta_actor_pending_param
     return TA_OK;
 }
 
-/* ta_run_admit_report: see run.h. */
+/*
+ * ta_run_admit_report queues an invocation's ERROR or DONE report for its
+ * invoking session as a carrier envelope: source ERROR, flag REPORT (and
+ * REPORT_ENDS when the report ends the invocation), the invocation's id in
+ * `from`. The event it carries was named by the caller (the name is interned
+ * before admission); the envelope retains its own reference. Nothing is
+ * applied here: the report takes effect when ta_run takes the envelope, in
+ * order with the session's other inputs, which is what keeps replay
+ * deterministic.
+ *
+ * Outside a macrostep this is a safe point and may refill the pool (so it
+ * may answer TA_ERR_NOMEM) and obeys the admission watermark. Inside one
+ * (ta_run_executing, the invoker's start reporting an error) nothing may
+ * allocate: the envelope is paid from the running slot's claim, is held on
+ * the slot's outgoing list until the macrostep ends, and a short claim
+ * answers TA_ERR_FULL. TA_ERR_FULL also answers a session whose queue is at
+ * its limit. Failure leaves nothing queued and no reference held.
+ */
 ta_result ta_run_admit_report(ta_system *system, ta_actor *actor, const ta_run_report *report) {
     bool inside = ta_run_executing(system);
     if ((!inside && !ta_envelopes_admissible(&system->envelopes)) || actor->queued == UINT16_MAX) {
@@ -402,7 +441,17 @@ ta_result ta_run_admit_report(ta_system *system, ta_actor *actor, const ta_run_r
 }
 
 /*
- * ta_input_withdraw takes back a host input: see tinyactors.h. The envelope
+ * ta_input_withdraw takes back a host input before core has taken it, so the
+ * host can give up a post it no longer wants (a timed-out send, a cancel).
+ * It needs a token from ta_actor_deliver and answers TA_OK exactly once for
+ * it; it never allocates and is O(1).
+ *
+ * Why the envelope is found directly: the token's low bits are the
+ * envelope's pool index and its high bits a sequence number that is stored
+ * in the envelope when it is made. A token whose envelope was released and
+ * reused for another input carries a different sequence, so the comparison
+ * `envelope->input == input` fails and the answer is TA_ERR_NOT_FOUND:
+ * a stale token can never withdraw someone else's input. The envelope
  * is found by the index in the token and must still carry exactly that
  * token, so a token whose envelope was released and reused is NOT_FOUND. Only
  * an envelope that waits can be withdrawn (RUNNABLE on the run queue or an

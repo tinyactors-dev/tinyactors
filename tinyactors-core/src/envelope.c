@@ -45,7 +45,24 @@ static uint32_t ta_envelopes_page_items(uint32_t pool_envelopes) {
     return page;
 }
 
-/* ta_envelopes_init: see envelope.h. */
+/*
+ * ta_envelopes_init sets up the envelope pool of one system (lifetime:
+ * system; the block lives inside ta_system). It needs `envelopes` to be
+ * storage the caller will not move afterwards, because the block holds
+ * pointers into itself (the pool and both link views name each other), and
+ * valid `limits`: a pool of at least one envelope, a watermark of 1..99
+ * percent, and a macrostep reserve of 1..pool_envelopes.
+ *
+ * The pool bound is `pool_envelopes` rounded down to a whole number of pages
+ * (all arithmetic is checked inside ta_pool_init). Init allocates nothing: the
+ * pool and the waiting table are empty until ta_envelopes_refill runs at a
+ * safe point.
+ *
+ * Answers TA_ERR_INVALID for a NULL argument or limits outside the ranges
+ * above, and whatever ta_pool_init or ta_ilink_init answers for a size that
+ * overflows. On every failure `*envelopes` is left zeroed and nothing is
+ * held, so a failed init needs no destroy.
+ */
 ta_result ta_envelopes_init(ta_envelopes *envelopes, ta_allocator allocator, const ta_envelope_limits *limits) {
     if (envelopes == NULL) {
         return TA_ERR_INVALID;
@@ -86,7 +103,18 @@ ta_result ta_envelopes_init(ta_envelopes *envelopes, ta_allocator allocator, con
     return TA_OK;
 }
 
-/* ta_envelopes_destroy: see envelope.h. */
+/*
+ * ta_envelopes_destroy ends the pool's lifetime. Every envelope still in use
+ * gives back what it owns: its event data, its origin, and the address of one
+ * that waits or of a refused host input that keeps its reference for its
+ * notice. Then the waiting table and the pool's pages are freed, each with
+ * the size it was allocated with, and the block is zeroed.
+ *
+ * It must run while the address table is alive (an address is a core handle
+ * and releasing it touches the table), so ta_system_destroy calls it before
+ * the address table goes. Calling it on a zeroed block, or twice, does
+ * nothing. It never allocates and is O(pool extent).
+ */
 void ta_envelopes_destroy(ta_envelopes *envelopes) {
     uint32_t extent = ta_pool_extent(&envelopes->pool);
     for (uint32_t index = 1; index <= extent; index += 1u) {
@@ -143,7 +171,25 @@ static ta_result ta_envelopes_table_build(const ta_envelopes *envelopes, uint32_
     return TA_OK;
 }
 
-/* ta_envelopes_refill: see envelope.h. */
+/*
+ * ta_envelopes_refill grows the pool, at a safe point, so that `want_free`
+ * envelopes are free, and replaces the waiting table with one that can hold
+ * an entry for every envelope the pool can then have. That is what lets a
+ * later ta_mail_post_waiting never allocate (envelope.h I4).
+ *
+ * `want_free` is first cut to bound - used: the pool never exceeds its
+ * bound, so asking for more than can exist is not an error, it just asks for
+ * all of it. Reservations are not counted in `used`: a claim is backed by
+ * items that exist (see ta_run_fill), and the callers add what they promise
+ * to `want_free` themselves. If enough items are free already the call
+ * returns TA_OK without allocating.
+ *
+ * Failure leaves no partial state: the new table is built first (nothing
+ * existing changes), the pool grows second, and if that fails the new table
+ * is destroyed and the old one stays. Only after both succeed is the old
+ * table destroyed and the new installed. Answers TA_ERR_NOMEM (or the
+ * allocator's answer) on failure. Cost is O(waiting entries) when it grows.
+ */
 ta_result ta_envelopes_refill(ta_envelopes *envelopes, uint32_t want_free) {
     uint32_t room = envelopes->bound - envelopes->pool.used;
     uint32_t want = want_free < room ? want_free : room;
