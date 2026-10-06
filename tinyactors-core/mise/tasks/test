@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
-#MISE description="Test core: the generated protocol files, header file comments, no recursion, the lifetime tests under AddressSanitizer, every test program, and the API description"
-#MISE sources=["include/**/*", "src/**/*", "src/generated/**/*", "protocol/**/*", "tests/**/*", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise/ast-grep/rules/header-file-comment.yml", "../mise.toml"]
+#MISE description="Test core: the generated protocol files, header file comments, no recursion, no allocator call in a running macrostep, the lifetime tests under AddressSanitizer, every test program, and the API description"
+#MISE sources=["include/**/*", "src/**/*", "src/generated/**/*", "protocol/**/*", "tests/**/*", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise/ast-grep/rules/header-file-comment.yml", "../mise/ast-grep/rules/core-allocator-call.yml", "../mise.toml"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 
@@ -24,6 +24,8 @@ run('mise', 'run', 'protocol', '--check')
 # Every header opens with a file comment, except those on its allow-list.
 run('mise', 'run', 'check-header-comments')
 run('mise', 'run', 'check-recursion')
+# No allocator call a running macrostep reaches, except those on its allow-list (ADR 0102).
+run('mise', 'run', 'check-macrostep-alloc')
 # The lifetime tests under AddressSanitizer: a use-after-free is undefined
 # behaviour an ordinary run may survive (ADR 0065).
 run('mise', 'run', 'asan')

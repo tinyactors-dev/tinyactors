@@ -74,6 +74,17 @@ What to do instead, by kind of walk:
 `mise run check-recursion` builds core's call graph and fails on any cycle.
 It is part of `mise run test`.
 
+## No allocator call in a running macrostep (ADR 0102)
+
+A macrostep never calls core's allocator, to allocate or to free.
+`mise run check-macrostep-alloc` (part of `mise run test`) walks core's
+call graph from the functions a macrostep runs in and fails on every
+allocator call it reaches (`mise/ast-grep/rules/core-allocator-call.yml`
+at the repository's root says what counts). Allocate at a safe point
+instead: the take, a refill between inputs, registration, spawn or load.
+The calls older than the check are on the task's allow-list, which only
+shrinks: when a change removes one, take its entry off; never add one.
+
 ## ADRs are an append-only record
 
 `docs/adr/` is the history of the design. A reader must be able to go

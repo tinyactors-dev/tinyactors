@@ -1,0 +1,35 @@
+id: core-allocator-call
+valid:
+  - |
+    void ta_copy(void *out, const void *in) { ta_mem_copy(out, in, 8u); }
+  - |
+    void ta_take(ta_system *system) { void *p = ta_arena_alloc(&system->scratch, 8u, 8u); }
+  - |
+    void ta_take(ta_interpreter *it) { void *p = ta_arena_alloc(&it->system->render, 8u, 8u); }
+  - |
+    ta_result ta_pop(ta_fifo *fifo, void *out) { return ta_fifo_pop(fifo, out); }
+  - |
+    void ta_send(ta_io *io) { io->v->send(io->self, 0); }
+  - |
+    void *ta_vec_at_last(ta_vec *vec) { return ta_vec_at(vec, vec->count - 1u); }
+  - |
+    void *p = ta_mem_alloc(allocator, 8u, 8u);
+invalid:
+  - |
+    void *ta_grow(ta_system *system) { return ta_mem_alloc(system->allocator, 8u, 8u); }
+  - |
+    static void ta_drop(ta_system *system, void *p) { ta_mem_free(system->allocator, p, &layout); }
+  - |
+    ta_result ta_add(ta_vec *vec, int x) { return ta_vec_push(vec, &x); }
+  - |
+    void *ta_block(ta_arena *arena) { return arena->backing.v->alloc(arena->backing.self, 64u, 8u); }
+  - |
+    void ta_close(ta_allocator allocator) { allocator.v->free(allocator.self, &params); }
+  - |
+    void *ta_keep(ta_definition *definition) { return ta_arena_alloc(&definition->arena, 8u, 8u); }
+  - |
+    ta_result ta_name(ta_system *system, ta_str text, ta_atom *out) { return ta_atom_intern(&system->atoms, text, out); }
+  - |
+    void ta_release(ta_event *event) { ta_event_release(event); }
+  - |
+    ta_result ta_refill(ta_run_state *run) { return ta_envelope_pool_refill(&run->pool); }

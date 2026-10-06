@@ -1,0 +1,59 @@
+id: core-allocator-call
+language: c
+severity: info
+message: A call that reaches core's allocator, to allocate or to free.
+note: |
+  ADR 0102: a macrostep never calls core's allocator. This rule finds the
+  calls that do, and names the function that makes each one ($FUNCTION);
+  `mise run check-macrostep-alloc` in tinyactors-core joins them to core's
+  call graph and fails on one that a running macrostep can reach. A call
+  is to the allocator when it is
+  - `ta_mem_alloc` or `ta_mem_free` (memory.h), or a call through a
+    `ta_allocator`'s vtable, `<allocator>.v->alloc` or `->free`
+    (the arena's growth and its destroy);
+  - a container function that grows or frees its storage: a vector's
+    reserve, extend, push and destroy, a paged array's or a heap's grow,
+    shrink and destroy, an index pool's refill, trim and destroy, a fifo's
+    reserve and destroy, a table's init, reserve and destroy, the envelope
+    pool's, the name area's and the waiting entries' refill, trim and
+    destroy, the deadline index's grow, reserve and destroy, chunks' and a
+    ring's init and destroy, interning into a trie or the atom table, and
+    releasing an event (an origin's spilled entry is freed);
+  - taking from an arena that can grow (`ta_arena_alloc`,
+    `ta_arena_copy_str`), or destroying one. Taking from the interpreter's
+    fixed arenas, `&<x>->scratch` and `&<x>->render`, is not: they are laid
+    over the interpreter region (`ta_arena_init_fixed`), and their backing
+    never allocates.
+  A call hidden in a macro, or made through any other function pointer, is
+  not seen here; the check compares this rule's calls with the compiled
+  call graph to find the first kind.
+rule:
+  kind: call_expression
+  any:
+    - has:
+        field: function
+        regex: '\Ata_(mem_(alloc|free)|vec_(reserve|extend|push|destroy)|paged_array_(grow|shrink|destroy)|heap_(grow|shrink|destroy)|index_pool_(refill|trim|destroy)|fifo_(reserve|destroy)|table_(init|reserve|destroy)|(envelope_pool|name_area)_(refill|trim|destroy)|waiting_(refill|destroy)|deadline_(grow|reserve|destroy)|(chunks|ring)_(init|destroy)|trie_(child|intern_path|intern_dotted)|atom_intern|event_release|arena_destroy)\z'
+    - has:
+        field: function
+        kind: field_expression
+        all:
+          - has: { field: field, regex: '\A(alloc|free)\z' }
+          - has: { field: argument, kind: field_expression, has: { field: field, regex: '\Av\z' } }
+    - all:
+        - has: { field: function, regex: '\Ata_arena_(alloc|copy_str)\z' }
+        - not:
+            has:
+              field: arguments
+              has:
+                nthChild: 1
+                kind: pointer_expression
+                has: { kind: field_expression, has: { field: field, regex: '\A(scratch|render)\z' } }
+  inside:
+    kind: function_definition
+    stopBy: end
+    has:
+      field: declarator
+      stopBy:
+        not: { any: [{ kind: pointer_declarator }, { kind: function_declarator }] }
+      kind: function_declarator
+      has: { field: declarator, kind: identifier, pattern: $FUNCTION }

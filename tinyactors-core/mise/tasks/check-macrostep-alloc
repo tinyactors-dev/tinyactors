@@ -1,0 +1,218 @@
+#!/usr/bin/env ruby
+#MISE description="Fail on an allocator call a running macrostep can reach (ADR 0102), unless it is on the allow-list of calls older than the check"
+#USAGE flag "--paths" help="Also print each allowed call with the path that reaches it"
+# vim:ft=ruby
+
+# ADR 0102: a macrostep never calls core's allocator, to allocate or to
+# free. This check finds every call that could.
+#
+# - The calls: the rule mise/ast-grep/rules/core-allocator-call.yml (at the
+#   repository's root; `mise run check-portability` runs its test) finds
+#   each call to the allocator in src/, and the function that makes it:
+#   ta_mem_alloc and ta_mem_free, a call through a ta_allocator's vtable,
+#   and the container functions that grow or free storage (its note lists
+#   them).
+# - The graph: core's direct call graph, read from the amalgamation's LLVM
+#   IR as check-recursion reads it (mise/lib/call_graph.rb).
+# - The walk: from ROOTS, the functions a running macrostep starts in,
+#   along direct calls, never into an allocator function the rule names
+#   (the call to it is the finding), and never through CUTS, the functions
+#   and calls a macrostep passes without running what they would allocate
+#   in. Every allocator call in a function the walk reaches is an
+#   **offender**, reported with the call path that reaches it.
+#
+# ALLOWED lists the offenders that exist while ADR 0102 is being carried
+# out, each with why it is there. It only shrinks: a change that removes
+# an offender takes its entry off, and the task fails on an entry that no
+# longer offends, so the list stays exact. A new offender fails the task;
+# it does not go on the list.
+#
+# What the check cannot see: a call through a function pointer is no edge
+# (the data model's, an invoker's and an I/O processor's vtables, the
+# value vtable, ta_allocator adapters): what a data model allocates is its
+# own (ADR 0102 decision 1), and core's own adapters are reached through
+# the code that makes the pointer. A call hidden in a macro is in the graph
+# but not in the rule's findings; the task fails on such a call to an
+# allocator function, except a take from an arena, which it cannot tell
+# from a take from the fixed interpreter arenas the rule leaves out.
+#
+#   mise run check-macrostep-alloc           exit 1, naming each offender and its path
+#   mise run check-macrostep-alloc --paths   the allowed calls' paths too
+
+require 'json'
+require 'open3'
+require 'pathname'
+require 'set'
+require 'call_graph'
+require 'toolchain'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+RULE = ROOT.join('../mise/ast-grep/rules/core-allocator-call.yml').expand_path
+
+# The functions a macrostep runs in: called while `system->run.running`.
+ROOTS = {
+  # ta_run_input's only call between `running = true` and `running = false`
+  # (run.c): it runs the session's macrostep, its microsteps and the
+  # nested interpreters of what it cancels.
+  'ta_interpreter_run' => 'runs one macrostep, from its start to its end or a pause (run.c, ta_run_input)'
+}.freeze
+
+# What the walk does not cross. A function: never entered. A call,
+# 'caller -> callee': not followed from that caller. Each is a safe point
+# a macrostep calls but that does nothing, or does not allocate, while it
+# runs.
+CUTS = {
+  'ta_run_refill' => 'the refill between inputs (run.c): answers at once while system->run.running',
+  'ta_sparse' => 'takes the spare the take reserved while system->run.running, and allocates only outside a run'
+}.freeze
+
+# Offenders older than the check, as 'function -> allocator function',
+# each with why it is there. Take an entry off when its call goes.
+ALLOWED = {
+  # ADR 0070's out-of-memory stop, which ADR 0102 decision 9 deletes. The
+  # take reserves both, so at run time these find them in place.
+  'ta_reserve_stop -> ta_mem_alloc' => 'the spare continuation and sparse state, at the start of ta_interpreter_run',
+  'ta_continuation_forget -> ta_mem_free' => 'ta_reserve_stop frees a spare continuation too small for this definition',
+  # The internal queue: one per session, sized at the take (ADR 0102 notes),
+  # not yet the workspace's fixed queue of decision 4.
+  'ta_internal_queue_grow -> ta_mem_alloc' => 'ta_queue_room makes or doubles a queue the take did not size',
+  'ta_internal_queue_free -> ta_mem_free' => 'ta_queue_settle frees an empty queue beyond the spares as the macrostep ends',
+  # The sparse state and the invoke table.
+  'ta_compact_sparse -> ta_mem_free' => 'frees a sparse state with nothing left in it when the system has a spare',
+  'ta_invoke_release -> ta_mem_free' => 'ta_compact_sparse frees the invoke table with the sparse state',
+  'ta_invoke_release -> ta_vec_destroy' => 'ta_compact_sparse frees the pending-invoke list with the sparse state',
+  'ta_invoke_state_entered -> ta_vec_push' => 'entering a state with <invoke>s pushes it on the pending list (decision 6)',
+  'ta_invoke_grow_to -> ta_mem_alloc' => 'invocation startup inside the macrostep grows the invoke table (decisions 6, 7)',
+  'ta_invoke_grow_to -> ta_mem_free' => 'invocation startup inside the macrostep frees the old invoke table (decisions 6, 7)',
+  # A finished invoked session's done event to its parent.
+  'ta_text_render -> ta_mem_alloc' => "ta_invoke_name_text renders a child's done.invoke.<id> name into a new buffer",
+  'ta_invoke_name_text -> ta_mem_free' => 'frees a rendered done.invoke name that does not resolve',
+  'ta_invoke_name_free -> ta_mem_free' => 'ta_invoke_publish frees the rendered done.invoke name',
+  # Effects held for an unpublished session (ADR 0102 notes).
+  'ta_actor_activation -> ta_mem_alloc' => "the held-effects record, made on a prepared session's first held effect",
+  'ta_actor_hold_effect -> ta_vec_push' => "a <send> or <log> of an unpublished session joins its held effects",
+  'ta_send_intern_event -> ta_trie_intern_dotted' => "a send held for an unpublished session interns its eventexpr's name",
+  # Storing a send or a forwarded event by name ID, where it is not text yet (ADR 0100).
+  'ta_invoke_submit -> ta_trie_intern_dotted' => 'an event to a child that cannot be posted is stored by an interned name',
+  'ta_event_name_store -> ta_trie_intern_dotted' => 'ta_invoke_submit interns an input name kept as text to store it',
+  # A <send> target parsed at run time (scxml_uri.c).
+  'ta_scxml_target_parse -> ta_atom_intern' => "a #_scxml_ session target's family not yet an atom is interned (ADR 0065)",
+  'ta_uri_address_intern -> ta_mem_alloc' => 'a percent-encoded target address is decoded into a new buffer',
+  'ta_uri_address_intern -> ta_mem_free' => 'frees the decoded target address',
+  'ta_address_record -> ta_mem_alloc' => 'a target address seen for the first time gets a record in the address table',
+  'ta_address_page_for -> ta_mem_alloc' => "the address table's new page for that record",
+  'ta_address_page_for -> ta_mem_free' => 'frees the new page when the page list cannot grow',
+  'ta_address_page_for -> ta_vec_push' => "the address table's page list grows",
+  # References released when their last holder goes.
+  'ta_address_free -> ta_mem_free' => "an actor reference's address is freed with its last reference",
+  'ta_io_origin_free_spill -> ta_mem_free' => "an event's origin entry beyond the inline ones is freed with its last reference",
+  'ta_queued_release -> ta_event_release' => 'a queued internal event released, by consuming or truncating the queue',
+  'ta_run_jump_free -> ta_mem_free' => "a discarded envelope's operator transition is freed",
+  # Names kept as text (ADR 0100).
+  'ta_run_name_room -> ta_mem_alloc' => 'ta_run_hold_name grows the name buffer for a <send> to #_internal by name text',
+  'ta_run_name_room -> ta_mem_free' => 'ta_run_name_room frees the name buffer it outgrew'
+}.freeze
+
+# Takes from an arena: the rule leaves out the takes from the fixed
+# interpreter arenas, so the graph has calls to them the rule did not report.
+ARENA_TAKES = %w[ta_arena_alloc ta_arena_copy_str].freeze
+
+def compile_ir
+  source = ROOT.join('include/tinyactors.c')
+  # The check target (the pinned clang, freestanding x86_64 Linux), at -O0
+  # so nothing is inlined away: the same graph on every host.
+  command = Toolchain::Target.check.compile_command('-std=c11', '-O0', '-S', '-emit-llvm', '-o', '-', source)
+  ir, error, status = Open3.capture3(*command)
+  return ir if status.success?
+
+  warn error
+  abort 'check-macrostep-alloc: could not compile the amalgamation to LLVM IR'
+end
+
+# { function => { allocator function => ['src/file.c:line', ...] } }; a
+# call through a vtable is named by its callee's text, `<x>.v->alloc`.
+def allocator_calls
+  out, err, status = Toolchain::Tool[:ast_grep].capture('scan', '--rule', RULE.to_s, '--json=compact',
+                                                        '--globs', '*.{c,h}', 'src', chdir: ROOT.to_s)
+  abort "check-macrostep-alloc: ast-grep scan failed:\n#{err}" if out.strip.empty? && !status.success?
+
+  calls = Hash.new { |hash, key| hash[key] = Hash.new { |inner, callee| inner[callee] = [] } }
+  JSON.parse(out).each do |match|
+    function = match.dig('metaVariables', 'single', 'FUNCTION', 'text')
+    callee = match.fetch('text')[/\A[^(]*/].gsub(/\s+/, '')
+    callee = callee.sub(/\A.*\.v->/, '<allocator>.v->') if callee.include?('.v->')
+    place = "#{match.fetch('file').delete_prefix('./')}:#{match.dig('range', 'start', 'line') + 1}"
+    calls[function][callee] << place
+  end
+  calls
+end
+
+# Breadth first from ROOTS, so each path is a shortest one: { function =>
+# the function it was reached from }, and the cuts it met.
+def walk(graph, allocators)
+  from = ROOTS.keys.to_h { |root| [root, nil] }
+  met = Set.new
+  queue = ROOTS.keys.dup
+  until queue.empty?
+    function = queue.shift
+    graph.fetch(function, []).each do |callee|
+      next if allocators.include?(callee)
+
+      edge = "#{function} -> #{callee}"
+      [edge, callee].each { |cut| met << cut if CUTS.key?(cut) }
+      next if from.key?(callee) || CUTS.key?(edge) || CUTS.key?(callee)
+
+      from[callee] = function
+      queue << callee
+    end
+  end
+  [from, met]
+end
+
+def path_to(from, function)
+  path = [function]
+  path.unshift(from[path.first]) while from[path.first]
+  path.join(' -> ')
+end
+
+graph = CallGraph.calls(compile_ir)
+calls = allocator_calls
+allocators = calls.values.flat_map(&:keys).to_set
+errors = []
+
+# Every direct call to an allocator function in the graph is one the rule
+# found, or a macro hides it from the check.
+graph.each do |function, callees|
+  (callees & allocators).each do |callee|
+    next if ARENA_TAKES.include?(callee) || calls.key?(function) && calls[function].key?(callee)
+
+    errors << "#{function} -> #{callee}: a call the rule does not see (a macro?); " \
+              'make it a plain call, or teach mise/ast-grep/rules/core-allocator-call.yml to find it'
+  end
+end
+
+ROOTS.each_key { |root| errors << "ROOTS: #{root} is not a function of core" unless graph.key?(root) }
+from, met = walk(graph, allocators)
+offenders = {}
+from.each_key do |function|
+  calls[function].each { |callee, places| offenders["#{function} -> #{callee}"] = [function, places] } if calls.key?(function)
+end
+
+paths = ENV['usage_paths'] == 'true' || ARGV.include?('--paths')
+offenders.sort.each do |entry, (function, places)|
+  found = "#{entry} (#{places.join(', ')}): #{path_to(from, function)}"
+  if ALLOWED.key?(entry)
+    puts "check-macrostep-alloc: allowed: #{found}" if paths
+  else
+    errors << "#{entry} (#{places.join(', ')}): an allocator call a running macrostep reaches: #{path_to(from, function)}"
+  end
+end
+(ALLOWED.keys - offenders.keys).each do |entry|
+  errors << "ALLOWED: #{entry} no longer offends; take it off the allow-list"
+end
+(CUTS.keys - met.to_a).each { |cut| errors << "CUTS: the walk never meets #{cut}; take it off" }
+
+errors.each { |error| puts "check-macrostep-alloc: #{error}" }
+abort "check-macrostep-alloc: #{errors.size} finding(s) (ADR 0102)" unless errors.empty?
+puts "check-macrostep-alloc: #{from.size} functions a running macrostep reaches; " \
+     "#{offenders.size} allocator call(s), all on the allow-list"
