@@ -430,14 +430,6 @@ String`x`
 10n
 --- error unsupported BigInt
 
-=== a number that needs more precision than staticjs reads
-0.1234567890123456789
---- error unsupported precision
-
-=== a number too small for the fast path
-5e-324
---- error unsupported precision
-
 === an unknown name
 nope + 1
 --- error name not bound

@@ -18,7 +18,9 @@ value is evaluated in Node and must give the same value; every case staticjs
 refuses as a syntax error must be one JavaScript refuses too; every case it
 refuses as unsupported must be valid JavaScript; every case it refuses for a
 name (bound nowhere, not exported, no such module) must throw in JavaScript
-too; and 100,000 doubles must format as `String(x)` does.
+too; and 100,000 doubles must format as `String(x)` does, and 100,000
+decimal strings (random digits, long ones, and the exact midpoints between
+two doubles) must read as `Number(s)` does.
 
 ## What it guarantees
 
@@ -134,7 +136,8 @@ which the compiler compiles as a path to the container it changes
 
 ## The language
 
-Expressions: numbers, strings, template literals, `true`, `false`, `null`,
+Expressions: numbers (read to the nearest double, ties to even, however
+many digits a literal has, in any radix), strings, template literals, `true`, `false`, `null`,
 `undefined`, `NaN`, `Infinity`, arrays and objects (spread, computed and
 shorthand keys), `new Set(...)`; `+ - * / %`, `< <= > >=`, `=== !==`,
 `&& || ??`, `?:`, `!`, unary `-` and `+`, `typeof`, `in`; members, calls
@@ -265,8 +268,6 @@ compare identities, or find something on a prototype.
   `replaceAll`), as `+` faults on one; a search argument that is not a
   string (`includes(1)`, `replaceAll(1, "x")`, `split(1)`); a function as
   `replaceAll`'s replacement.
-- A number literal outside Clinger's fast path (digits worth more than
-  2^53, or a power of ten past 10^22) is refused when compiled.
 
 ## Refused when compiled
 
@@ -340,8 +341,7 @@ export.
 
 The first stage of the proposal: the language. Not done yet, in the
 proposal's order: the data model (`tinyactors-staticjs`); a hash index for
-large objects and sets; a static cost estimate; `Map`; number literals
-beyond the fast path.
+large objects and sets; a static cost estimate; `Map`.
 
 ## Tasks
 

@@ -91,9 +91,13 @@ bool sjs_number_is_nan(double x);
 bool sjs_number_is_finite(double x);
 bool sjs_number_is_negative_zero(double x);
 bool sjs_number_is_integer(double x);
-/* The decimal digits `digits` (no sign, no point) times 10^exponent, when
- * that is exact with one rounding (Clinger's fast path). */
-bool sjs_number_from_decimal(sjs_str digits, int32_t exponent, double *out);
+/* The decimal digits `digits` (no sign; a '.' among them is skipped) times
+ * 10^exponent, rounded to the nearest double, ties to even: exact for any
+ * number of digits. */
+double sjs_number_from_decimal(sjs_str digits, int64_t exponent);
+/* Digits of `radix` (2, 4, 8, 16 or 32; each a valid digit), rounded the
+ * same way. */
+double sjs_number_from_binary(sjs_str digits, uint32_t radix);
 
 /* ========================================================================
  * Values

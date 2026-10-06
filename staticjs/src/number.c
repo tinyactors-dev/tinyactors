@@ -2,9 +2,14 @@
  * Numbers without a C library: Number::toString (the shortest digits that
  * read back as the same double, Burger and Dybvig's free-format algorithm
  * over a small bignum), exact remainder and rounding by bit manipulation,
- * and Clinger's fast path for decimal literals.
+ * and reading numbers, correctly rounded for any number of digits
+ * (Clinger's fast path, then the bignum).
  */
 #include "internal.h"
+
+/* Every operation below rounds once, as JavaScript's do: never a fused
+ * multiply-add, which a compiler may otherwise make of a * b + c. */
+#pragma STDC FP_CONTRACT OFF
 
 typedef union {
     double d;
@@ -130,10 +135,13 @@ double sjs_number_remainder(double x, double y) {
 }
 
 /* ------------------------------------------------------------------------
- * Bignums, just large enough for the scaled values of any double.
+ * Bignums, just large enough for the scaled values of any double, and for
+ * reading a decimal: at most 781 significant digits (2,595 bits) over
+ * 10^1104 (3,668 bits) scaled by 2^64, doubled (big_quotient), fits in
+ * 3,733 bits.
  */
 
-#define BIG_WORDS 40u
+#define BIG_WORDS 128u
 
 typedef struct {
     uint32_t w[BIG_WORDS];
@@ -146,6 +154,11 @@ static void big_set(big *b, uint64_t v) {
         b->w[b->n++] = (uint32_t)v;
         v >>= 32;
     }
+}
+
+static void big_copy(big *to, const big *from) {
+    for (uint32_t i = 0; i < from->n; i++) to->w[i] = from->w[i];
+    to->n = from->n;
 }
 
 static void big_shift_left(big *b, uint32_t bits) {
@@ -250,7 +263,7 @@ static uint32_t shortest_digits(double value, char *digits, int32_t *point) {
             big_set(&s, 2);
             big_set(&plus, 1);
             big_shift_left(&plus, (uint32_t)e);
-            minus = plus;
+            big_copy(&minus, &plus);
         } else {
             big_set(&r, f);
             big_shift_left(&r, (uint32_t)e + 2u);
@@ -330,7 +343,8 @@ static uint32_t shortest_digits(double value, char *digits, int32_t *point) {
         } else if (!tc1 && tc2) {
             digits[count++] = (char)('0' + d + 1);
         } else {
-            big twice = r;
+            big twice;
+            big_copy(&twice, &r);
             big_multiply_small(&twice, 2);
             int c = big_compare(&twice, &s);
             uint32_t last = c < 0 ? d : (c > 0 ? d + 1 : ((d % 2u == 0) ? d : d + 1));
@@ -398,35 +412,149 @@ uint32_t sjs_number_format(double value, char *out) {
     return at;
 }
 
+/* ------------------------------------------------------------------------
+ * Reading numbers: digits to the nearest double, ties to even, for any
+ * number of digits, as JavaScript reads a literal and as Number,
+ * parseFloat and parseInt read a string (RoundMVResult; V8 rounds every one
+ * correctly). Clinger's fast path where one rounding is exact; past it, the
+ * bignums above.
+ */
+
 static const double POWERS[23] = {
     1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
     1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
 };
 
-bool sjs_number_from_decimal(sjs_str digits, int32_t exponent, double *out) {
-    uint32_t start = 0;
-    while (start < digits.length && digits.ptr[start] == '0') start++;
-    uint32_t end = digits.length;
-    while (end > start && digits.ptr[end - 1] == '0') {
-        end--;
-        exponent++;
+/* Rounding a decimal correctly needs at most 768 significant digits (the
+ * longest midpoint between two doubles has 767). Past them only whether a
+ * digit is not 0 matters, which a 1 after the first DECIMAL_DIGITS_MAX
+ * stands for: no midpoint lies between the digits kept and that 1. */
+#define DECIMAL_DIGITS_MAX 780u
+
+/* q x 2^e2 with q's top bit set; `sticky` when the value read is a little
+ * more than that. */
+typedef struct {
+    uint64_t q;
+    int32_t e2;
+    bool sticky;
+} binary_value;
+
+/* The double nearest a binary_value, ties to even: a normal double keeps
+ * 53 of q's bits, a subnormal fewer. */
+static double round_binary(binary_value v) {
+    int32_t top = v.e2 + 63; /* the exponent of q's top bit */
+    if (top > 1023) return 1.0 / 0.0;
+    int32_t drop = top >= -1022 ? 11 : -1011 - top;
+    if (drop > 64) return 0.0;
+    uint64_t kept = drop == 64 ? 0 : v.q >> drop;
+    uint64_t rest = drop == 64 ? v.q : v.q & ((1ull << drop) - 1u);
+    uint64_t half = 1ull << (drop - 1);
+    if (rest > half || (rest == half && (v.sticky || (kept & 1u) != 0))) kept++;
+    if (drop > 11) return from_bits(kept); /* subnormal: 2^52 is the smallest normal */
+    if (kept == (1ull << 53)) {
+        kept >>= 1;
+        top++;
+        if (top > 1023) return 1.0 / 0.0;
     }
-    if (start == end) {
-        *out = 0;
-        return true;
+    return from_bits(((uint64_t)(top + 1023) << 52) | (kept & ((1ull << 52) - 1u)));
+}
+
+static uint32_t big_bits(const big *b) {
+    return b->n == 0 ? 0 : (b->n - 1u) * 32u + bit_length(b->w[b->n - 1u]);
+}
+
+static void big_add_small(big *b, uint32_t v) {
+    uint64_t carry = v;
+    for (uint32_t i = 0; carry != 0; i++) {
+        if (i == b->n) {
+            b->w[b->n++] = (uint32_t)carry;
+            return;
+        }
+        uint64_t s = (uint64_t)b->w[i] + carry;
+        b->w[i] = (uint32_t)s;
+        carry = s >> 32;
     }
-    if (end - start > 16) return false;
-    uint64_t mantissa = 0;
-    for (uint32_t i = start; i < end; i++) mantissa = mantissa * 10u + (uint64_t)(digits.ptr[i] - '0');
+}
+
+static void big_scale10(big *b, uint32_t power) {
+    static const uint32_t TENS[9] = { 1u, 10u, 100u, 1000u, 10000u, 100000u, 1000000u, 10000000u, 100000000u };
+    for (; power >= 9u; power -= 9u) big_multiply_small(b, 1000000000u);
+    if (power != 0) big_multiply_small(b, TENS[power]);
+}
+
+/* A positive integer's top 64 bits. */
+static binary_value big_top(const big *b) {
+    uint32_t bits = big_bits(b);
+    binary_value v = { 0, (int32_t)bits - 64, false };
+    for (uint32_t i = 0; i < 64u; i++) {
+        v.q <<= 1;
+        if (i < bits) {
+            uint32_t at = bits - 1u - i;
+            v.q |= (b->w[at / 32u] >> (at % 32u)) & 1u;
+        }
+    }
+    if (bits > 64u) {
+        uint32_t below = bits - 64u;
+        for (uint32_t i = 0; i < below / 32u; i++) v.sticky = v.sticky || b->w[i] != 0;
+        if (below % 32u != 0 && (b->w[below / 32u] & ((1u << (below % 32u)) - 1u)) != 0) v.sticky = true;
+    }
+    return v;
+}
+
+/* n / s (both positive), to 64 bits by long division: scaled so that the
+ * quotient lies in (2^62, 2^64), then a bit at a time until the top bit is
+ * set. Uses up n and s. */
+static binary_value big_quotient(big *n, big *s) {
+    int32_t k = 63 - (int32_t)big_bits(n) + (int32_t)big_bits(s);
+    if (k > 0) big_shift_left(n, (uint32_t)k);
+    big_shift_left(s, 64u + (uint32_t)(k < 0 ? -k : 0));
+    binary_value v = { 0, 0, false };
+    int32_t steps = 0;
+    while ((v.q >> 63) == 0) {
+        big_shift_left(n, 1);
+        v.q <<= 1;
+        if (big_compare(n, s) >= 0) {
+            big_subtract(n, s);
+            v.q |= 1u;
+        }
+        steps++;
+    }
+    v.e2 = 64 - steps - k;
+    v.sticky = n->n != 0;
+    return v;
+}
+
+/* The significant digits of a decimal: `count` digits from `first`, a '.'
+ * among them skipped, times 10^exponent. */
+typedef struct {
+    sjs_str text;
+    uint32_t first;
+    uint32_t count;
+    int64_t exponent;
+} decimal;
+
+/* The next `count` digits from text[*at], skipping a '.', as an integer. */
+static uint64_t decimal_chunk(const decimal *d, uint32_t *at, uint32_t count) {
+    uint64_t v = 0;
+    while (count > 0) {
+        char c = d->text.ptr[(*at)++];
+        if (c == '.') continue;
+        v = v * 10u + (uint64_t)(c - '0');
+        count--;
+    }
+    return v;
+}
+
+/* Clinger: digits worth at most 2^53 and a power of ten up to 10^22 are
+ * exact doubles, and one division or multiplication rounds them once. */
+static bool decimal_fast(const decimal *d, double *out) {
+    if (d->count > 16u || d->exponent < -22 || d->exponent > 22 + 16) return false;
+    uint32_t at = d->first;
+    uint64_t mantissa = decimal_chunk(d, &at, d->count);
     if (mantissa > (1ull << 53)) return false;
-    double m = (double)mantissa;
-    if (exponent == 0) {
-        *out = m;
-        return true;
-    }
-    if (exponent < 0) {
-        if (exponent < -22) return false;
-        *out = m / POWERS[-exponent];
+    int32_t exponent = (int32_t)d->exponent;
+    if (exponent <= 0) {
+        *out = exponent == 0 ? (double)mantissa : (double)mantissa / POWERS[-exponent];
         return true;
     }
     /* Move what does not fit in 10^22 into the mantissa while it stays exact. */
@@ -437,4 +565,92 @@ bool sjs_number_from_decimal(sjs_str digits, int32_t exponent, double *out) {
     }
     *out = (double)mantissa * POWERS[exponent];
     return true;
+}
+
+static double decimal_slow(const decimal *d) {
+    big n;
+    big_set(&n, 0);
+    uint32_t used = d->count > DECIMAL_DIGITS_MAX ? DECIMAL_DIGITS_MAX : d->count;
+    int64_t exponent = d->exponent + (int64_t)(d->count - used);
+    uint32_t at = d->first;
+    for (uint32_t done = 0; done < used;) {
+        uint32_t take = used - done < 9u ? used - done : 9u;
+        big_scale10(&n, take);
+        big_add_small(&n, (uint32_t)decimal_chunk(d, &at, take));
+        done += take;
+    }
+    if (used < d->count) {
+        big_multiply_small(&n, 10);
+        big_add_small(&n, 1);
+        exponent--;
+    }
+    if (exponent >= 0) {
+        big_scale10(&n, (uint32_t)exponent);
+        return round_binary(big_top(&n));
+    }
+    big s;
+    big_set(&s, 1);
+    big_scale10(&s, (uint32_t)-exponent);
+    return round_binary(big_quotient(&n, &s));
+}
+
+double sjs_number_from_decimal(sjs_str digits, int64_t exponent) {
+    decimal d = { digits, 0, 0, exponent };
+    uint32_t seen = 0;
+    uint32_t first = 0;
+    uint32_t last = 0;
+    bool any = false;
+    for (uint32_t i = 0; i < digits.length; i++) {
+        char c = digits.ptr[i];
+        if (c == '.') continue;
+        if (c != '0') {
+            if (!any) {
+                d.first = i;
+                first = seen;
+            }
+            any = true;
+            last = seen;
+        }
+        seen++;
+    }
+    if (!any) return 0;
+    d.count = last - first + 1u;
+    d.exponent += (int64_t)(seen - 1u - last);
+    /* The value lies in [10^(top - 1), 10^top). */
+    int64_t top = (int64_t)d.count + d.exponent;
+    if (top > 309) return 1.0 / 0.0;
+    if (top <= -324) return 0;
+    double out;
+    if (decimal_fast(&d, &out)) return out;
+    return decimal_slow(&d);
+}
+
+/* A digit's value in any radix up to 36; 36 for anything else. */
+static uint32_t radix_digit(char c) {
+    if (c >= '0' && c <= '9') return (uint32_t)(c - '0');
+    if (c >= 'a' && c <= 'z') return (uint32_t)(c - 'a') + 10u;
+    if (c >= 'A' && c <= 'Z') return (uint32_t)(c - 'A') + 10u;
+    return 36;
+}
+
+double sjs_number_from_binary(sjs_str digits, uint32_t radix) {
+    uint32_t bits = radix == 2u ? 1u : radix == 4u ? 2u : radix == 8u ? 3u : radix == 16u ? 4u : 5u;
+    binary_value v = { 0, 0, false };
+    for (uint32_t i = 0; i < digits.length; i++) {
+        uint32_t d = radix_digit(digits.ptr[i]);
+        if ((v.q >> (64u - bits)) == 0) {
+            v.q = (v.q << bits) | d;
+        } else {
+            /* Past 60 bits, the rest only scales and marks: 2^4096 is
+             * Infinity already. */
+            if (v.e2 < 4096) v.e2 += (int32_t)bits;
+            if (d != 0) v.sticky = true;
+        }
+    }
+    if (v.q == 0) return 0;
+    while ((v.q >> 63) == 0) {
+        v.q <<= 1;
+        v.e2--;
+    }
+    return round_binary(v);
 }

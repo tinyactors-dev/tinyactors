@@ -2374,9 +2374,10 @@ JavaScript (`2`, `"open"`, `true`, `null`).
 - **Positives:** each of the six operators in both orientations, for a
   key and for the element; each operand kind (an integer, `1.5`, `1e21`,
   `0x10`, `""`, a non-ASCII string, a string of 64 bytes, `true`,
-  `false`, `null`); the block form. (`1e999` is refused as unsupported,
-  "this number needs more precision than staticjs reads", so Infinity is
-  only the name `Infinity`, a near-miss until item 4.)
+  `false`, `null`); the block form. (`1e999` was refused as unsupported
+  then, "this number needs more precision than staticjs reads", so Infinity
+  was only the name `Infinity`, a near-miss until item 4; literals are read
+  exactly since, and `1e999` is an Infinity literal.)
 - **Near-misses:** `x => x.k === y` (a capture, until item 4);
   `x => x.k === undefined` and `x => x === NaN` (names, until item 4);
   `x => x.k === -1` (a UNARY); `x => x.k === "a" + "b"`;

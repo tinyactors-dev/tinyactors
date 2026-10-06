@@ -325,12 +325,8 @@ static step end_number(sjs_lexer *lexer, uint8_t next, bool at_end) {
             (lexer->substate == N_EXPONENT && lexer->exponent_digits == 0)) {
             return lex_fail(lexer, SJS_ERROR_SYNTAX, "an exponent needs digits");
         }
-        int32_t exponent = lexer->exponent;
         sjs_str digits = { (const char *)lexer->text.ptr, lexer->text.length };
-        if (!sjs_number_from_decimal(digits, exponent, &token.number)) {
-            return lex_fail_at_start(lexer, SJS_ERROR_UNSUPPORTED,
-                                 "this number needs more precision than staticjs reads");
-        }
+        token.number = sjs_number_from_decimal(digits, lexer->exponent);
     }
     return emit(lexer, &token);
 }
@@ -418,7 +414,7 @@ static step number_byte(sjs_lexer *lexer, uint8_t c) {
         if (is_digit(c)) {
             lexer->last_separator = false;
             lexer->seen_digit = true;
-            if (lexer->escape_value < 100000u) lexer->escape_value = lexer->escape_value * 10u + (uint32_t)(c - '0');
+            if (lexer->escape_value < 100000000u) lexer->escape_value = lexer->escape_value * 10u + (uint32_t)(c - '0');
             lexer->exponent_digits++;
             return TAKEN;
         }
@@ -441,18 +437,12 @@ static step number_byte(sjs_lexer *lexer, uint8_t c) {
         }
         if (c == '_') return number_separator(lexer);
         if (c == 'n') return lex_fail(lexer, SJS_ERROR_UNSUPPORTED, "staticjs has no BigInt");
-        /* The value of the digits held. */
-        uint64_t value = 0;
-        for (uint32_t i = 0; i < lexer->text.length; i++) {
-            value = value * lexer->radix + (uint64_t)hex_value(lexer->text.ptr[i]);
-            if (value > (1ull << 53)) return lex_fail_at_start(lexer, SJS_ERROR_UNSUPPORTED, "this number needs more precision than staticjs reads");
-        }
         if (!lexer->seen_digit) return lex_fail(lexer, SJS_ERROR_SYNTAX, "a number needs digits after its prefix");
         if (lexer->last_separator) return lex_fail(lexer, SJS_ERROR_SYNTAX, "a numeric separator must sit between digits");
         if (is_name_part(c) || c == '\\') return lex_fail(lexer, SJS_ERROR_SYNTAX, "a number cannot be followed by a name or a digit");
         sjs_token token = { 0 };
         token.kind = SJS_TOKEN_NUMBER;
-        token.number = (double)value;
+        token.number = sjs_number_from_binary((sjs_str){ (const char *)lexer->text.ptr, lexer->text.length }, lexer->radix);
         if (emit(lexer, &token) == STOP) return STOP;
         return AGAIN;
     }
