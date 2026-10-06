@@ -201,3 +201,16 @@ static inline ta_result test_drive_deliver(ta_system *system, const ta_actor_del
     }
     return test_drive_run(system, delivery->actor, run);
 }
+
+/*
+ * The earliest due time of a pending delayed send, read the way a host reads
+ * it: a ta_system_set_time() to the current time with no budget, which
+ * fires nothing and reports the wake. TA_ERR_NOT_FOUND when none is pending.
+ */
+static inline ta_result test_next_deadline(ta_system *system, ta_time *out) {
+    bool pending = false;
+    ta_result result = ta_system_set_time(system, &(ta_set_time_params){ .now = ta_system_time(system),
+                                                                          .has_wake = &pending,
+                                                                          .wake = out });
+    return result != TA_OK ? result : pending ? TA_OK : TA_ERR_NOT_FOUND;
+}

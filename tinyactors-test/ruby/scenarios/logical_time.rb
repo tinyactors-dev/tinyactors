@@ -23,7 +23,7 @@ TinyactorsTest.scenarios 'logical time', chart: :traffic_light do
 
     assert_equal before[:time], system_time, 'logical time did not move'
     assert_equal before[:deadline], next_deadline, 'the deadline did not move'
-    due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 64))
+    due = dispatch_due(64)
     assert_equal [0, false], due.values_at(:dispatched, :more_due), 'nothing became due'
     assert_equal before[:active], light.active
     assert_equal before[:data], light.data

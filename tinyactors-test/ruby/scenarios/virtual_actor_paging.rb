@@ -260,7 +260,7 @@ end
 #   of the resident timers and into the image, so it cannot fire while the
 #   owner is out. The host indexes each held image's earliest deadline
 #   (ta_session_image_next_deadline) and, when logical time reaches it,
-#   pages the owner in and lets due sends go out (ta_system_dispatch_due);
+#   pages the owner in and lets due sends go out (ta_system_set_time);
 # - its target is paged out when it comes due: the mail waits in core,
 #   which asks the host to load the target (core ADR 0099); the host pages
 #   the target in and answers, and the mail goes to it. Every delivery is
@@ -623,7 +623,7 @@ TinyactorsTest.scenarios 'virtual actor paging, delayed sends', chart: :timed_pa
     end
     crowding = spawn crowd
     set_time(now + 1_000)
-    due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 100))
+    due = dispatch_due(100)
     assert_equal [1, false], due.values_at(:dispatched, :more_due), 'the due send went, with the pool crowded'
     assert_equal [], Array(owner.inspect_actor[:delayed_sends]), 'it left its owner as it fell due'
     # The crowd goes, which leaves admission room for the page-in.
@@ -812,7 +812,7 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
     binding = target.data
     core('ta_actor_unload', { result: unload(target, image) })
     set_time(now + 100)
-    core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 1))
+    dispatch_due(1)
     assert_equal 1, answer_loads, 'the mail waits, and core asks for the target once'
     request = held_loads.first
     assert_equal 'named', request.dig(:destination, :kind), 'the unloaded session is addressed by name'
@@ -871,7 +871,7 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
     end
     crowding = spawn crowd
     set_time(now + 100)
-    due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 100))
+    due = dispatch_due(100)
     assert_equal [1, false], due.values_at(:dispatched, :more_due), 'the send to self went, with the pool crowded'
     run_system('the owner takes its send')
     assert_equal [7], owner.data('.k'), 'the owner received its send to self'

@@ -16,7 +16,7 @@ static void use_public_types(void) {
     ta_actor_prepare_params prepare = {0};
     ta_actor_publish_params activate = {0};
     ta_actor_completion completion = {0};
-    ta_due_dispatch_params due = {0};
+    ta_set_time_params due = {0};
     ta_load_request load_request = {0};
     ta_scxml_target target = {0};
     ta_definition_compile_params compile = {0};

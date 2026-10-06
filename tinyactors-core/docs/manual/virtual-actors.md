@@ -267,7 +267,7 @@ send to `#_actor_<family>/<name>`. Host calls such as `ta_actor_deliver()`
 still take the current runtime ID: an old one stays stale.
 
 If the residency adapter's deadline index fires first, the host follows the same load path,
-advances logical time, and calls `ta_system_dispatch_due()` instead of initially
+advances logical time with `ta_system_set_time()`, which fires the due sends, instead of initially
 delivering a user event.
 
 ## Transaction boundary

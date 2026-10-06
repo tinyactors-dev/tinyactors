@@ -421,7 +421,7 @@ static ta_result publish_at(ta_system *system, ta_actor_id actor, ta_time at) {
 static uint32_t dispatch(ta_system *system) {
     uint32_t dispatched = 0;
     bool more = false;
-    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 100, .dispatched = &dispatched,
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = ta_system_time(system), .budget = 100, .dispatched = &dispatched,
                                                                    .more_due = &more }) == TA_OK);
     return dispatched;
 }
@@ -442,7 +442,7 @@ static ta_actor_id live_until_e1(ta_system *system, ta_definition_id definition)
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &address_a,
                                                            .out = &live }) == TA_OK);
     CHECK(run(system, live) == TEST_DRIVE_STABLE);
-    CHECK(ta_system_set_time(system, 1000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 1000 }) == TA_OK);
     deliver(system, live, "e1");
     return live;
 }
@@ -455,15 +455,15 @@ static void test_timeline_timeout_to_self(void) {
     ta_actor_id live = live_until_e1(system, definition);
     int routed_live = routed_in(system);
     CHECK(routed_live == 1 && logs_written == 1); /* the immediate reply, and the log */
-    CHECK(ta_system_set_time(system, 6000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 6000 }) == TA_OK);
     CHECK(dispatch(system) == 2); /* t1 to itself, b1 to b */
-    CHECK(ta_system_set_time(system, 6500) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 6500 }) == TA_OK);
     deliver(system, live, "timeout"); /* the log: timeout @ 6500 */
-    CHECK(ta_system_set_time(system, 7000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 7000 }) == TA_OK);
     CHECK(ta_actor_destroy(system, live) == TA_OK); /* evicted @ 7000 */
 
     int routed_before = routed_in(system);
-    CHECK(ta_system_set_time(system, 7000 + 7u * 24u * 3600u * 1000u) == TA_OK); /* a week later */
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 7000 + 7u * 24u * 3600u * 1000u }) == TA_OK); /* a week later */
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
     deliver_at(system, replay, "e1", 1000);
     CHECK(pending_sends(system, replay) == 0); /* held, not pending */
@@ -471,7 +471,7 @@ static void test_timeline_timeout_to_self(void) {
     CHECK(in_state(system, replay, "timedout"));
     CHECK(publish_at(system, replay, 7000) == TA_OK);
     ta_time deadline = 0;
-    CHECK(ta_system_next_deadline(system, &deadline) == TA_ERR_NOT_FOUND);
+    CHECK(test_next_deadline(system, &deadline) == TA_ERR_NOT_FOUND);
     CHECK(routed_in(system) == routed_before && logs_written == 1 && invoker_starts == 0);
     destroy_system(system);
 }
@@ -481,9 +481,9 @@ static void test_timeline_fired_before_stop(void) {
     ta_system *system = create_system();
     ta_definition_id definition = define(system, "timers", timers);
     ta_actor_id live = live_until_e1(system, definition);
-    CHECK(ta_system_set_time(system, 6000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 6000 }) == TA_OK);
     CHECK(dispatch(system) == 2);
-    CHECK(ta_system_set_time(system, 7000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 7000 }) == TA_OK);
     CHECK(ta_actor_destroy(system, live) == TA_OK); /* evicted @ 7000, E >= d */
 
     int routed_before = routed_in(system);
@@ -501,10 +501,10 @@ static void test_timeline_pending_at_stop(void) {
     ta_system *system = create_system();
     ta_definition_id definition = define(system, "timers", timers);
     ta_actor_id live = live_until_e1(system, definition);
-    CHECK(ta_system_set_time(system, 3000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 3000 }) == TA_OK);
     CHECK(ta_actor_destroy(system, live) == TA_OK); /* evicted @ 3000, E < d */
 
-    CHECK(ta_system_set_time(system, 7u * 24u * 3600u * 1000u) == TA_OK); /* a week later */
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 7u * 24u * 3600u * 1000u }) == TA_OK); /* a week later */
     int routed_before = routed_in(system);
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 0);
     deliver_at(system, replay, "e1", 1000);
@@ -526,8 +526,8 @@ static void test_timeline_crash_between_commits(void) {
     ta_system *system = create_system();
     ta_definition_id definition = define(system, "timers", timers);
     ta_actor_id live = live_until_e1(system, definition);
-    CHECK(ta_system_set_time(system, 3000) == TA_OK); /* turn committed, horizon 3000 */
-    CHECK(ta_system_set_time(system, 6000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 3000 }) == TA_OK); /* turn committed, horizon 3000 */
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 6000 }) == TA_OK);
     CHECK(dispatch(system) == 2); /* dispatched, then the crash */
     CHECK(ta_actor_destroy(system, live) == TA_OK);
 
@@ -558,7 +558,7 @@ static void test_replay_matches_live_run(void) {
                                                            .out = &live }) == TA_OK);
     CHECK(run(system, live) == TEST_DRIVE_STABLE);
     for (size_t index = 0; index < sizeof inputs / sizeof inputs[0]; index += 1) {
-        CHECK(ta_system_set_time(system, inputs[index].at) == TA_OK);
+        CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = inputs[index].at }) == TA_OK);
         deliver(system, live, inputs[index].event);
     }
     int routed_live = routed_in(system);
@@ -639,7 +639,7 @@ static void test_replayed_invocation_finalizes(void) {
     deliver(system, replay, "poke"); /* autoforwarded: to nothing */
     CHECK(invoker_forwards == 0);
     ta_event reply = { .name = event_name(system, "svc.reply"), .type = TA_EVENT_EXTERNAL, .invoke_id = job };
-    CHECK(ta_system_set_time(system, 10) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 10 }) == TA_OK);
     CHECK(ta_actor_report_invoke(system, &(ta_invoke_report_params){ .actor = replay, .invoke_id = job,
                                                                      .kind = TA_INVOKE_REPORT_EVENT,
                                                                      .name = test_event_text(system, &reply),
@@ -724,7 +724,7 @@ static void test_result_codes(void) {
     ta_event e1 = { .name = event_name(system, "e1"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = live, .name = test_event_text(system, &e1), .event = &e1, .time = 5 }) ==
           TA_ERR_INVALID); /* a live actor's input is at the system's time */
-    CHECK(ta_system_set_time(system, 100) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 100 }) == TA_OK);
     ta_actor_id replay = prepare_replaying(system, definition, &address_a, 20);
     CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = replay, .name = test_event_text(system, &e1), .event = &e1, .time = 10 }) ==
           TA_ERR_INVALID); /* backwards */
@@ -868,7 +868,7 @@ static void test_export_restores(void) {
         { 100, "next" }, { 200, "arm" }, { 300, "next" }, { 400, "off" }, { 500, "arm" },
     };
     for (size_t index = 0; index < sizeof inputs / sizeof inputs[0]; index += 1) {
-        CHECK(ta_system_set_time(system, inputs[index].at) == TA_OK);
+        CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = inputs[index].at }) == TA_OK);
         deliver(system, live, inputs[index].event);
     }
 
@@ -892,7 +892,7 @@ static void test_export_restores(void) {
           out.state.history[0].state == state_of(system, live, "a3"));
     CHECK(out.state.send_count == 2 && out.state.clock == 500);
 
-    CHECK(ta_system_set_time(system, 600) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 600 }) == TA_OK);
     ta_result result = TA_OK;
     ta_actor_id copy = prepare_from_state(system, definition, &copy_address, &out.state, &result);
     CHECK(result == TA_OK);
@@ -984,7 +984,7 @@ static void test_export_leaves_submitted(void) {
     CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = definition, .address = &address_a,
                                                            .out = &live }) == TA_OK);
     CHECK(run(system, live) == TEST_DRIVE_STABLE);
-    CHECK(ta_system_set_time(system, 6000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 6000 }) == TA_OK);
     CHECK(dispatch(system) == 0);
     exported out;
     CHECK(export_into(system, live, &out) == TA_OK);

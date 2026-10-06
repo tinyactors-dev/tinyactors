@@ -89,7 +89,9 @@ static ta_result tah_replay_resume(tah_system *system, ta_actor_id actor, bool *
                                                                   .outcome_count = &count,
                                                                   .status = &status,
                                                                   .names = system->sched.taken_names.items,
-                                                                  .name_capacity = TA_RUN_NAMES_MIN_BYTES });
+                                                                  .name_capacity = TA_RUN_NAMES_MIN_BYTES,
+                                                                  .has_wake = &system->sched.core_has_wake,
+                                                                  .wake = &system->sched.core_wake });
         system->inside_core = false;
         bool ended = false;
         ta_result answer = TA_OK;

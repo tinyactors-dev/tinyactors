@@ -34,7 +34,8 @@
  * it. With the realtime clock it follows a monotonic clock read natively,
  * relative to system creation: every turn starts by setting it, and so does
  * the host timer when it fires. After each turn the system asks the host for
- * one timer at ta_system_next_deadline(), through `arm`, but only when that
+ * one timer at core's next deadline (the wake its last ta_run() or
+ * ta_system_set_time() reported), through `arm`, but only when that
  * deadline is earlier than the one already armed; a later deadline lets the
  * armed timer fire early and arm again. Due sends are dispatched at the end
  * of a turn, at most `due` of them.

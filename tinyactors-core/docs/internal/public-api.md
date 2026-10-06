@@ -160,9 +160,9 @@ data-model binding with that definition's data model before loading.
 
 `ta_actor_destroy` terminates/removes the actor and its actor-owned semantic resources.
 
-`ta_system_next_deadline` and bounded `ta_system_dispatch_due` integrate
-resident delayed sends with the host scheduler. They do not wait or read a
-physical clock.
+`ta_system_set_time` moves the logical clock and fires the resident delayed
+sends due by then, within its budget, and reports the next deadline; a
+`ta_run` call reports it too. They do not wait or read a physical clock.
 
 ## Durability boundary
 

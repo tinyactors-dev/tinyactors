@@ -153,7 +153,7 @@
  *   session with parked mail does not unload (`ta_run_has_unsent_mail`),
  *   since an image cannot carry it.
  * - **Outside a macrostep** (a delayed send that fell due, at
- *   `ta_system_dispatch_due()`; a held send released at a publish; a
+ *   `ta_system_set_time()`; a held send released at a publish; a
  *   completion published again) it joins the run queue, or its waiting
  *   entry, at once.
  *
@@ -308,7 +308,7 @@
  * `ta_actor_report_invoke()` admit through it; spawn, prepare, load,
  * reconstruction, publishing and a delayed send's failure reserve and
  * place wakes; the interpreter's `<send>`, an invocation's events and
- * completion, `ta_system_dispatch_due()` and a publish's held sends post
+ * completion, `ta_system_set_time()` and a publish's held sends post
  * mail; publishing returns the mail that waited for it; destroying,
  * unloading and abandoning tell it a session's input or the session is
  * gone. `ta_system_load_needed()`, `ta_system_load_settled()` and

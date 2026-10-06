@@ -2974,7 +2974,7 @@ typedef struct {
      * (ADR 0074 section 8): records a host read from ta_actor_inspect() of
      * an earlier session of this actor and stored with its data. Each keeps
      * its send ID, due time, event, destination, target, data, content and
-     * trace parent; a due time already past fires on the next dispatch.
+     * trace parent; a due time already past fires at the next ta_system_set_time().
      * The session's generated-ID counter moves past every generated ID
      * among them. Event names must be this system's and content IDs the
      * definition's (TA_ERR_INVALID otherwise). `target` and `data` are
@@ -3119,6 +3119,11 @@ typedef struct {
     TA_BUFFER(name_capacity, name_used) TA_OPTIONAL char *names;
     uint32_t name_capacity;
     TA_OUT TA_OPTIONAL uint32_t *name_used;
+    /* The earliest due time of a pending delayed send when the call
+     * returns, as c2h.wake will report it (ADR 0101); `has_wake` is false
+     * when none is pending. */
+    TA_OUT TA_OPTIONAL bool *has_wake;
+    TA_OUT TA_OPTIONAL ta_time *wake;
 } ta_run_params;
 /* The least ta_run_params.name_capacity with `report_taken`: room for the
  * longest name an input can carry (one name-area field) and its NUL. */
@@ -3317,7 +3322,7 @@ TA_API ta_result ta_actor_prepare(ta_system *system, TA_IN const ta_actor_prepar
  * unloaded session ends). Then an actor prepared without `at` releases its
  * held effects in SCXML order and starts its pending invocations; a
  * replaying actor schedules its held delayed sends under their due times
- * (one already due fires at the next ta_system_dispatch_due()) and retires
+ * (one already due fires at the next ta_system_set_time()) and retires
  * each active invocation with error.communication.invoke.<id>.unavailable,
  * as a load does (ADR 0038), which leaves it a macrostep to run.
  * - TA_ERR_DONE: it reached a top-level final state before it was published.
@@ -4528,7 +4533,6 @@ TA_API bool ta_event_name_matches(const ta_system *system, ta_event_name_id even
  */
 TA_API ta_result ta_event_name_format(const ta_system *system,
                                       TA_IN const ta_event_name_format_params *params);
-TA_API ta_result ta_system_set_time(ta_system *system, ta_time now);
 TA_API ta_time ta_system_time(const ta_system *system);
 /* Returns the built-in SCXML Event I/O Processor's system-local type atom. */
 TA_API ta_atom ta_system_scxml_io_type(const ta_system *system);
@@ -4540,9 +4544,9 @@ TA_API ta_atom ta_system_scxml_io_type(const ta_system *system);
 
 
 /*
- * One delayed send ta_system_dispatch_due() fired: sent, or failed with its
- * sender told (error.communication). A send that found no room and waits to
- * be offered again has not fired.
+ * One delayed send ta_system_set_time() fired: sent, or failed with its
+ * sender told (error.communication). A send its I/O processor refused, which
+ * waits to be offered again, has not fired.
  */
 typedef struct {
     /* The runtime ID of the session that made it, which may be gone. */
@@ -4556,30 +4560,40 @@ typedef struct {
 } ta_due_fired;
 
 /*
- * `dispatched` counts the sends the call took off the deadline index, a
- * send whose session is gone, which goes nowhere, included. `fired`, when
- * not null, is the caller's buffer of `fired_capacity` entries, at least
- * one, which the call fills with each send it fired, in order, and counts
- * in `fired_count`; the call fires no more than it has room for, so a full
- * buffer leaves the rest due (`more_due`). A send to another session stays
- * in core (ADR 0099), and no host call sees it: a host that measures
- * how late timers fire, or tracks its senders' next deadlines, reads them
- * here.
+ * Moves the system's logical clock to `now`, and fires every delayed send
+ * due by then, in (due, send order) order (ADR 0101), as h2c.time will: a
+ * send to a session joins the run queue with the envelope it holds, or
+ * waits for its target's load; one to a host I/O processor is offered to
+ * it here. The call is a safe point, outside any macrostep. `now` may equal
+ * the current time, which offers again what is due and was refused.
+ *
+ * `budget` is the most sends the call takes off the deadline index (each
+ * synchronous I/O processor call among them): UINT32_MAX for every due
+ * send, as h2c.time; 0 only moves the clock. `dispatched`
+ * counts them, a send whose session is gone, which goes nowhere, included.
+ * `fired`, when not null, is the caller's buffer of `fired_capacity`
+ * entries, at least one, which the call fills with each send it fired, in
+ * order, and counts in `fired_count`; the call fires no more than it has
+ * room for. `more_due` says sends due by `now` remain: a spent budget, a
+ * full buffer, or a send a processor refused. `has_wake` and `wake` give the
+ * earliest due time still pending, as c2h.wake will.
+ *
+ * TA_ERR_INVALID: `now` is earlier than the clock, or `fired` has no room.
+ * TA_ERR_BUSY: called from inside ta_run(), as from a host callback.
  */
 typedef struct {
-    /* Must be nonzero; limits synchronous host callbacks in this call. */
+    ta_time now;
     uint32_t budget;
-    TA_OUT uint32_t *dispatched;
-    TA_OUT bool *more_due;
+    TA_OUT TA_OPTIONAL uint32_t *dispatched;
+    TA_OUT TA_OPTIONAL bool *more_due;
     TA_BUFFER(fired_capacity, fired_count) TA_OPTIONAL ta_due_fired *fired;
     uint32_t fired_capacity;
     TA_OUT TA_OPTIONAL uint32_t *fired_count;
-} ta_due_dispatch_params;
+    TA_OUT TA_OPTIONAL bool *has_wake;
+    TA_OUT TA_OPTIONAL ta_time *wake;
+} ta_set_time_params;
 
-/* TA_ERR_NOT_FOUND means that no resident delayed send is pending. */
-TA_API ta_result ta_system_next_deadline(const ta_system *system, TA_OUT ta_time *out);
-TA_API ta_result ta_system_dispatch_due(ta_system *system,
-                                        TA_IN const ta_due_dispatch_params *params);
+TA_API ta_result ta_system_set_time(ta_system *system, TA_IN const ta_set_time_params *params);
 
 #ifdef __cplusplus
 }

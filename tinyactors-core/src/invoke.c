@@ -782,7 +782,7 @@ typedef struct {
  * host to load it, and failing as error.communication for the sender when
  * it cannot be (run.h). When the pool or the name area has no room, the
  * event waits in the deadline index, due now, owned by the sender, so
- * ta_system_dispatch_due() offers it again. Never allocates inside a
+ * ta_system_set_time() offers it again. Never allocates inside a
  * macrostep, but for that wait.
  */
 static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *delivery) {

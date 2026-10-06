@@ -106,6 +106,10 @@ struct tah_sched {
      * mail is marked as it is admitted (watch.h); set by
      * tah_sched_attach(). */
     ta_system *core;
+    /* Core's earliest pending deadline, as its last ta_run() or
+     * ta_system_set_time() reported it (core ADR 0101). */
+    bool core_has_wake;
+    ta_time core_wake;
     bool *inside_core;
     tah_trace_watch *watch;
     /* Core may have an input to run: something was admitted, created,

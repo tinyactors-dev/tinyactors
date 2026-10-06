@@ -67,8 +67,7 @@ module TinyactorsTest
     end
 
     def dispatch
-      due = @context.core('ta_system_dispatch_due',
-                          @context.ta.system.dispatch_due(system: @context.system_handle, budget: @dispatch_budget))
+      due = @context.dispatch_due(@dispatch_budget)
       return :round if due.fetch(:dispatched).positive? || due.fetch(:more_due)
       return :round if @context.answer_loads.positive?
 

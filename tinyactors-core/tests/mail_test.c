@@ -3,7 +3,7 @@
  * session resident in this system takes an envelope from the pool, waits on
  * the sending macrostep's outgoing list until that macrostep ends, and then
  * joins the run queue; a delayed send that falls due joins the run queue at
- * ta_system_dispatch_due(). Neither asks the host for anything.
+ * ta_system_set_time(). Neither asks the host for anything.
  *
  * The test includes the amalgamation so it reaches the private units; it
  * uses the C library, the core does not. Memory comes from the test
@@ -39,7 +39,7 @@
  *    first field the step's family, so the step key reads back whole; an
  *    untraced one carries no trace parent at all;
  * 7. a delayed send to a resident session falls due into the pool at
- *    ta_system_dispatch_due(), which refills first: it joins the run
+ *    ta_system_set_time(), which refills first: it joins the run
  *    queue at once as a TIMER input, the fired buffer reports it with its
  *    sender, due time and trace parent; a pending send holds its envelope,
  *    so it arrives when the pool is at its bound;
@@ -665,12 +665,12 @@ static void test_a_due_send_falls_into_the_pool(void) {
         CHECK(ta_envelope_pool_take(pool, &held[index]) == TA_OK);
     }
     uint32_t pages = pool->items.pages.count;
-    CHECK(ta_system_set_time(f.system, 1000) == TA_OK);
+    CHECK(ta_system_set_time(f.system, &(ta_set_time_params){ .now = 1000 }) == TA_OK);
     ta_due_fired fired[4];
     uint32_t dispatched = 0;
     uint32_t fired_count = 0;
     bool more = true;
-    CHECK(ta_system_dispatch_due(f.system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
+    CHECK(ta_system_set_time(f.system, &(ta_set_time_params){ .now = ta_system_time(f.system), .budget = 10, .dispatched = &dispatched,
                                                                       .more_due = &more, .fired = fired,
                                                                       .fired_capacity = 4,
                                                                       .fired_count = &fired_count }) == TA_OK);
@@ -702,8 +702,8 @@ static void test_a_due_send_falls_into_the_pool(void) {
         full += 1u;
     }
     CHECK(full < 8u && ta_quota_available(&pool->quota) == 0);
-    CHECK(ta_system_set_time(f.system, 1000) == TA_OK);
-    CHECK(ta_system_dispatch_due(f.system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
+    CHECK(ta_system_set_time(f.system, &(ta_set_time_params){ .now = 1000 }) == TA_OK);
+    CHECK(ta_system_set_time(f.system, &(ta_set_time_params){ .now = ta_system_time(f.system), .budget = 10, .dispatched = &dispatched,
                                                                       .more_due = &more }) == TA_OK);
     CHECK(dispatched == 1 && !more);
     ta_actor_inspection view;

@@ -57,8 +57,9 @@ class FakeHost
     when 'system.actors'
       # At quiescence no session is left in a macrostep.
       params[:runnable] ? [] : [5]
-    when 'ta.system.dispatch_due' then ok(dispatched: 0, more_due: false)
-    when 'ta.system.set_time', 'ta.actor.deliver' then ok
+    when 'ta.system.set_time' then ok(dispatched: 0, more_due: false, has_wake: false)
+    when 'ta.system.time' then { value: 0 }
+    when 'ta.actor.deliver' then ok
     when 'ta.system.intern_atom' then ok(out: @atoms += 1)
     when 'ta.event.name_intern' then ok(out: 9)
     when 'ta.actor.inspect'
@@ -112,7 +113,8 @@ deliver = host.calls.find { |method, _| method == 'ta.actor.deliver' }.last
 check(deliver[:name] == 'fault.minor', "event names travel as text: #{deliver[:name]}")
 check(deliver[:event] == { type: 'external', invoke_id: TinyactorsTest::INVOKE_ID_NONE,
                            data: { reason: 'test' } }, "deliver event: #{deliver[:event]}")
-check(methods.count('ta.run') >= 3 * methods.count('ta.system.dispatch_due'),
+dispatches = host.calls.count { |method, params| method == 'ta.system.set_time' && params[:budget] }
+check(methods.count('ta.run') >= 3 * dispatches,
       'paused macrosteps, and calls with inputs left, are run until core is idle')
 check(host.calls.any? { |method, params| method == 'system.actors' && params[:runnable] },
       'at quiescence, every session left in a macrostep is cross-checked')

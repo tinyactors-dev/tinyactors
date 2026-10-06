@@ -1512,6 +1512,14 @@ ta_result ta_run(ta_system *system, const ta_run_params *params) {
     if (params->name_used != NULL) {
         *params->name_used = call.names_used;
     }
+    ta_time wake = 0;
+    bool pending = ta_deadline_next_due(system, &wake);
+    if (params->has_wake != NULL) {
+        *params->has_wake = pending;
+    }
+    if (params->wake != NULL) {
+        *params->wake = pending ? wake : 0;
+    }
     *params->status = status;
     return result;
 }

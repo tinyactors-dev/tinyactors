@@ -57,7 +57,7 @@ module DelayedSendsAtOwner
                                                                            type: DelayedSendsAtOwner::IO_TYPE)
       sender = name ? spawn(chart, name: name) : spawn(chart)
       core('ta_system_set_time', ta.system.set_time(system: system_handle, now: 10_000))
-      due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 100))
+      due = dispatch_due(100)
       assert_equal [0, true], due.values_at(:dispatched, :more_due),
                    'the processor refused the one due send, which waits to be offered again'
       [io, sender]

@@ -380,7 +380,7 @@ static void test_allocation_failures(void) {
 static void test_rearm_at_spawn(void) {
     fixture f;
     start(&f);
-    CHECK(ta_system_set_time(f.system, 1000) == TA_OK);
+    CHECK(ta_system_set_time(f.system, &(ta_set_time_params){ .now = 1000 }) == TA_OK);
     ta_actor_id first = spawn(&f, NULL);
     ta_actor_inspection view = inspect(&f, first);
     CHECK(view.delayed_send_count == 2);
@@ -400,7 +400,7 @@ static void test_rearm_at_spawn(void) {
     captured[1].destination.as.runtime = 0;
     ta_actor_id squatter = spawn(&f, NULL);
 
-    CHECK(ta_system_set_time(f.system, 3000) == TA_OK);
+    CHECK(ta_system_set_time(f.system, &(ta_set_time_params){ .now = 3000 }) == TA_OK);
     ta_actor_id second = 0;
     CHECK(ta_actor_spawn(f.system, &(ta_actor_spawn_params){ .definition = f.definition,
                                                             .pending_sends = captured,

@@ -407,7 +407,7 @@ static void drain(ta_system *system, mail_seen *mail) {
 /* Fires what is due at the system's time, up to `budget` sends; answers how many fired. */
 static uint32_t dispatch_up_to(ta_system *system, uint32_t budget, bool *more) {
     uint32_t dispatched = 0;
-    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = budget, .dispatched = &dispatched,
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = ta_system_time(system), .budget = budget, .dispatched = &dispatched,
                                                                     .more_due = more }) == TA_OK);
     return dispatched;
 }
@@ -433,7 +433,7 @@ static void test_inspection_lists_only_the_actors_sends(void) {
         (void)spawn(system, many, NULL);
     }
     ta_actor_id actor = spawn(system, three, NULL);
-    CHECK(ta_system_set_time(system, 500) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 500 }) == TA_OK);
     for (uint32_t index = 0; index < POPULATION / 2u; index += 1u) {
         (void)spawn(system, many, NULL);
     }
@@ -457,7 +457,7 @@ static void test_inspection_lists_only_the_actors_sends(void) {
     CHECK(other.delayed_send_count != 1 || other.delayed_sends[0].due == 60000);
 
     ta_time next = 0;
-    CHECK(ta_system_next_deadline(system, &next) == TA_OK && next == 1000);
+    CHECK(test_next_deadline(system, &next) == TA_OK && next == 1000);
     ta_system_destroy(system);
 }
 
@@ -479,7 +479,7 @@ static void test_deadline_index_spans_pages(void) {
     static ta_actor_id actors[OWNERS];
     heap.largest_request = 0;
     for (uint32_t index = 0; index < OWNERS; index += 1u) {
-        CHECK(ta_system_set_time(system, index) == TA_OK);
+        CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = index }) == TA_OK);
         actors[index] = spawn(system, definitions[index % 4u], NULL);
     }
     uint32_t live = OWNERS;
@@ -493,11 +493,11 @@ static void test_deadline_index_spans_pages(void) {
     uint32_t total = 0;
     ta_time next = 0;
     mail_seen mail = {0};
-    while (ta_system_next_deadline(system, &next) == TA_OK) {
+    while (test_next_deadline(system, &next) == TA_OK) {
         CHECK(next >= previous);
         previous = next;
         if (next > ta_system_time(system)) {
-            CHECK(ta_system_set_time(system, next) == TA_OK);
+            CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = next }) == TA_OK);
         }
         bool more = false;
         uint32_t dispatched = dispatch_up_to(system, 1, &more);
@@ -530,18 +530,18 @@ static void test_cancelling_the_front_send(void) {
         CHECK(view.delayed_sends[1].event == event_name(system, "late"));
     }
     ta_time next = 0;
-    CHECK(ta_system_next_deadline(system, &next) == TA_OK && next == 2000);
+    CHECK(test_next_deadline(system, &next) == TA_OK && next == 2000);
 
     /* Dispatch follows global (due, send order) across both owners, and the
      * sessions take the sends in that order. */
-    CHECK(ta_system_set_time(system, 60000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 60000 }) == TA_OK);
     bool more = true;
     CHECK(dispatch_up_to(system, 10, &more) == 3 && !more);
     mail_seen mail = {0};
     drain(system, &mail);
     CHECK(mail.taken == 3 && mail.last_event == event_name(system, "far") && owed_requests(system, NULL) == 0);
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 0);
-    CHECK(ta_system_next_deadline(system, &next) == TA_ERR_NOT_FOUND);
+    CHECK(test_next_deadline(system, &next) == TA_ERR_NOT_FOUND);
     ta_system_destroy(system);
 }
 
@@ -558,7 +558,7 @@ static ta_actor_id submit_to_slow(ta_system *system, uint32_t senders) {
         ta_actor_id spawned = spawn(system, definition, NULL);
         sender = index == 0u ? spawned : sender;
     }
-    CHECK(ta_system_set_time(system, 2000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 2000 }) == TA_OK);
     bool more = false;
     CHECK(dispatch_up_to(system, 100, &more) == 0 && more);
     return sender;
@@ -582,14 +582,14 @@ static void test_submitted_send_outlives_its_sender(void) {
 
     CHECK(ta_actor_destroy(system, sender) == TA_OK);
     ta_time next = 0;
-    CHECK(ta_system_next_deadline(system, &next) == TA_OK && next == 2000);
+    CHECK(test_next_deadline(system, &next) == TA_OK && next == 2000);
 
     slow.refusing = false;
     bool more = true;
     CHECK(dispatch_up_to(system, 10, &more) == 1 && !more);
     CHECK(slow.sent == 1 && slow.event == event_name(system, "ping"));
     CHECK(slow.source_kind == TA_ACTOR_REF_RUNTIME && slow.source_runtime == sender);
-    CHECK(ta_system_next_deadline(system, &next) == TA_ERR_NOT_FOUND);
+    CHECK(test_next_deadline(system, &next) == TA_ERR_NOT_FOUND);
     ta_system_destroy(system);
 }
 
@@ -616,7 +616,7 @@ static void test_capture_and_load_keep_the_sends(void) {
     CHECK(ta_session_image_next_deadline(image, &image_next) == TA_OK && image_next == 1000);
     CHECK(ta_actor_unload(system, &(ta_actor_unload_params){ .actor = actor, .image = image }) == TA_OK);
     ta_time next = 0;
-    CHECK(ta_system_next_deadline(system, &next) == TA_ERR_NOT_FOUND);
+    CHECK(test_next_deadline(system, &next) == TA_ERR_NOT_FOUND);
 
     ta_actor_id loaded = 0;
     CHECK(ta_actor_load(system, &(ta_actor_load_params){ .image = image, .out = &loaded }) == TA_OK);
@@ -625,7 +625,7 @@ static void test_capture_and_load_keep_the_sends(void) {
     if (view.delayed_send_count == 3) {
         CHECK(view.delayed_sends[0].due == 1000 && view.delayed_sends[2].due == 3000);
     }
-    CHECK(ta_system_next_deadline(system, &next) == TA_OK && next == 1000);
+    CHECK(test_next_deadline(system, &next) == TA_OK && next == 1000);
     ta_session_image_destroy(image);
     ta_system_destroy(system);
 }
@@ -640,7 +640,7 @@ static void test_a_due_send_needs_no_free_envelope(void) {
     ta_system *system = create_small_system();
     ta_actor_id actor = spawn(system, define(system, "immediate", ping_later), NULL);
     (void)spawn(system, define(system, "filler", filler), NULL);
-    CHECK(ta_system_set_time(system, 2000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 2000 }) == TA_OK);
     bool more = true;
     CHECK(dispatch_up_to(system, 100, &more) == 7 && !more);
     ta_actor_inspection view;
@@ -649,7 +649,7 @@ static void test_a_due_send_needs_no_free_envelope(void) {
     drain(system, &mail);
     CHECK(mail.taken == 7 && mail.last_actor == actor && mail.last_event == event_name(system, "ping"));
     ta_time next = 0;
-    CHECK(ta_system_next_deadline(system, &next) == TA_ERR_NOT_FOUND);
+    CHECK(test_next_deadline(system, &next) == TA_ERR_NOT_FOUND);
     ta_system_destroy(system);
 }
 
@@ -729,7 +729,7 @@ static void test_withdrawing_one_send(void) {
         CHECK(view.delayed_sends[1].event == event_name(system, "late"));
     }
     ta_time next = 0;
-    CHECK(ta_system_next_deadline(system, &next) == TA_OK && next == 2000);
+    CHECK(test_next_deadline(system, &next) == TA_OK && next == 2000);
 
     /* One record, outside any macrostep: the session's second lifecycle key
      * (SPAWNED was the first). */
@@ -753,7 +753,7 @@ static void test_withdrawing_one_send(void) {
     deliver(system, actor, "drop");
     CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 2);
 
-    CHECK(ta_system_set_time(system, 60000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 60000 }) == TA_OK);
     bool more = true;
     CHECK(dispatch_up_to(system, 10, &more) == 3);
     mail_seen mail = {0};
@@ -872,7 +872,7 @@ static void test_an_image_from_before_a_withdrawal_is_stale(void) {
 static void dispatch(ta_system *system) {
     uint32_t dispatched = 0;
     bool more = false;
-    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 100, .dispatched = &dispatched,
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = ta_system_time(system), .budget = 100, .dispatched = &dispatched,
                                                                     .more_due = &more }) == TA_OK);
 }
 
@@ -892,7 +892,7 @@ static void test_an_image_from_before_a_send_fired_is_stale(void) {
 
     ta_session_image *before = NULL;
     CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &before }) == TA_OK);
-    CHECK(ta_system_set_time(system, 1000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 1000 }) == TA_OK);
     dispatch(system);
     mail_seen mail = {0};
     drain(system, &mail);
@@ -902,7 +902,7 @@ static void test_an_image_from_before_a_send_fired_is_stale(void) {
 
     /* The next send fires too: an image from before still holds it. */
     CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &before }) == TA_OK);
-    CHECK(ta_system_set_time(system, 2000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 2000 }) == TA_OK);
     dispatch(system);
     ta_actor_inspection fired;
     CHECK(ta_actor_inspect(system, actor, &fired) == TA_OK && fired.delayed_send_count == 1);

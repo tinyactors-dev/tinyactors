@@ -404,12 +404,28 @@ void tah_system_free(tah_system *system) {
     tah_system_release_record(system);
 }
 
+/*
+ * Core's earliest pending deadline: asked of core with a ta_system_set_time()
+ * to its own time and no budget, which fires nothing (core ADR 0101), or,
+ * while core is busy, the one its last call reported.
+ */
+static bool tah_system_core_wake(const tah_system *system, ta_time *out) {
+    tah_sched *sched = (tah_sched *)&system->sched;
+    if (system->core != NULL && !system->inside_core) {
+        (void)ta_system_set_time(system->core, &(ta_set_time_params){ .now = ta_system_time(system->core),
+                                                                       .has_wake = &sched->core_has_wake,
+                                                                       .wake = &sched->core_wake });
+    }
+    *out = sched->core_wake;
+    return system->core != NULL && sched->core_has_wake;
+}
+
 /* The earliest of core's next deadline and the next wake-up of an unloaded
  * actor (napi ADR 0020); false when there is neither. */
 static bool tah_system_next_deadline(const tah_system *system, ta_time *out) {
     ta_time deadline = 0;
     ta_time wake = 0;
-    bool core_due = system->core != NULL && ta_system_next_deadline(system->core, &deadline) == TA_OK;
+    bool core_due = tah_system_core_wake(system, &deadline);
     bool wake_due = tah_loads_next_wake(&system->loads, &wake);
     if (!core_due && !wake_due) {
         return false;
@@ -459,7 +475,7 @@ uint64_t tah_system_monotonic_ns(const tah_system *system) {
 
 double tah_system_overdue_seconds(const tah_system *system) {
     ta_time deadline = 0;
-    if (system == NULL || system->closed || ta_system_next_deadline(system->core, &deadline) != TA_OK) {
+    if (system == NULL || system->closed || !tah_system_core_wake(system, &deadline)) {
         return 0.0;
     }
     /* The host's time in core's units, without moving core's clock. */
@@ -537,11 +553,18 @@ bool tah_system_effect(tah_system *system, const tah_effect *effect) {
 }
 
 
+/* Moves core's clock without firing anything; the turn fires what is due. */
+static ta_result tah_system_core_time(tah_system *system, ta_time time) {
+    return ta_system_set_time(system->core, &(ta_set_time_params){ .now = time,
+                                                                    .has_wake = &system->sched.core_has_wake,
+                                                                    .wake = &system->sched.core_wake });
+}
+
 ta_result tah_system_set_clock(tah_system *system, tah_clock_kind kind, ta_time initial) {
     if (system == NULL || system->closed || ta_system_time(system->core) != 0) {
         return TA_ERR_INVALID;
     }
-    ta_result result = ta_system_set_time(system->core, initial);
+    ta_result result = tah_system_core_time(system, initial);
     if (result != TA_OK) {
         return result;
     }
@@ -559,7 +582,7 @@ void tah_system_sync_time(tah_system *system) {
     uint64_t elapsed = now > system->clock.origin ? (now - system->clock.origin) / 1000000u : 0;
     ta_time time = system->clock.initial + (ta_time)elapsed;
     if (time > ta_system_time(system->core)) {
-        (void)ta_system_set_time(system->core, time);
+        (void)tah_system_core_time(system, time);
     }
 }
 
@@ -570,7 +593,7 @@ ta_result tah_system_advance_to(tah_system *system, ta_time time) {
     if (system->inside_core) {
         return TA_ERR_BUSY;
     }
-    ta_result result = ta_system_set_time(system->core, time);
+    ta_result result = tah_system_core_time(system, time);
     if (result == TA_OK) {
         tah_system_want_turn(system);
     }
@@ -934,7 +957,7 @@ static void tah_system_answer_loads(tah_system *system) {
     }
 }
 
-/* Sends one ta_system_dispatch_due() call reports at most. */
+/* Sends one ta_system_set_time() call reports at most. */
 #define TAH_DUE_FIRED 64u
 
 /*
@@ -951,8 +974,7 @@ static void tah_system_answer_loads(tah_system *system) {
  */
 bool tah_system_dispatch_due(tah_system *system) {
     ta_time core_deadline = 0;
-    if (ta_system_next_deadline(system->core, &core_deadline) != TA_OK ||
-        core_deadline > ta_system_time(system->core)) {
+    if (!tah_system_core_wake(system, &core_deadline) || core_deadline > ta_system_time(system->core)) {
         return false;
     }
     bool more_due = false;
@@ -963,7 +985,10 @@ bool tah_system_dispatch_due(tah_system *system) {
         uint32_t dispatched = 0;
         system->inside_core = true;
         system->dispatching_due = true;
-        (void)ta_system_dispatch_due(system->core, &(ta_due_dispatch_params){
+        (void)ta_system_set_time(system->core, &(ta_set_time_params){
+                                                       .now = ta_system_time(system->core),
+                                                       .has_wake = &system->sched.core_has_wake,
+                                                       .wake = &system->sched.core_wake,
                                                        .budget = left,
                                                        .dispatched = &dispatched,
                                                        .more_due = &more_due,

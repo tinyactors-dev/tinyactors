@@ -287,14 +287,14 @@ static void test_submitted_send_outlives_its_sender(void) {
     slow_offers = 0;
     slow_source[0] = '\0';
     ta_actor_id sender = spawn_at(system, slow_sender_chart, "sender", "sender1");
-    CHECK(ta_system_set_time(system, 1000) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 1000 }) == TA_OK);
     uint32_t dispatched = 0;
     bool more = false;
-    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = ta_system_time(system), .budget = 10, .dispatched = &dispatched,
                                                                     .more_due = &more }) == TA_OK);
     CHECK(dispatched == 0 && more && slow_offers == 1);
     CHECK(ta_actor_destroy(system, sender) == TA_OK);
-    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = ta_system_time(system), .budget = 10, .dispatched = &dispatched,
                                                                     .more_due = &more }) == TA_OK);
     CHECK(dispatched == 1 && !more && slow_offers == 2);
     CHECK(strcmp(slow_source, "sender1") == 0);

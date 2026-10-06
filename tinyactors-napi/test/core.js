@@ -54,7 +54,7 @@ function categories() {
     assert.equal(typeof core[name], 'function', `core.${name} is bound`);
   }
   // The kernel admits, runs, releases and withdraws (core ADRs 0099, 0103).
-  for (const name of ['actor_deliver', 'run', 'actor_release', 'system_withdraw_input', 'system_set_time', 'system_dispatch_due', 'system_create',
+  for (const name of ['actor_deliver', 'run', 'actor_release', 'system_withdraw_input', 'system_set_time', 'system_create',
     'system_visit_actors', 'event_name_intern', 'arena_init', 'address_intern', 'dm_host_event',
     // The kernel records them in the input log before calling core (kernel ADR 0002).
     'actor_abandon', 'actor_withdraw_send']) {

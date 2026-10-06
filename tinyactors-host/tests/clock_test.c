@@ -252,9 +252,7 @@ static void test_realtime_idle(void) {
     settle(system);
     CHECK(in_state(system, actor, "armed"));
     CHECK(ta_system_time(system->core) == 10000);
-    ta_time deadline = 0;
-    CHECK(ta_system_next_deadline(system->core, &deadline) == TA_OK);
-    CHECK(deadline == 10100);
+    CHECK(system->sched.core_has_wake && system->sched.core_wake == 10100);
     CHECK(armed_count == 1 && armed_delay == 100);
 
     /* The timer fires early: nothing is due yet, so it is armed again. */

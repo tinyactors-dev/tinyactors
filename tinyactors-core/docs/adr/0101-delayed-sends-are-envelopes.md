@@ -205,3 +205,13 @@ time and dispatch change with the next part of the step.
   from an image takes its token again. The unused `TA_ENVELOPE_CHILD_STOP`
   state is removed: core stops a child synchronously.
 
+**Time and dispatch (2026-10-06).** `ta_system_set_time()` takes a
+params struct and previews `h2c.time`: it moves the clock and fires due
+sends at a safe point, up to its `budget` (`UINT32_MAX` for every due send,
+0 only moves the clock), reporting `dispatched`, `more_due`, the `fired`
+sends and the next deadline (`has_wake`, `wake`). `ta_run()` reports the
+next deadline too, previewing `c2h.wake`. `ta_system_dispatch_due()`,
+`ta_system_next_deadline()` and `ta_due_dispatch_params` are gone. A host
+that needs the deadline between calls asks with a budget of 0 at the
+current time. It answers `TA_ERR_BUSY` from inside `ta_run()`.
+

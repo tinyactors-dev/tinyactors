@@ -1015,13 +1015,6 @@ ta_result ta_event_name_format(const ta_system *system, const ta_event_name_form
     return TA_OK;
 }
 
-ta_result ta_system_set_time(ta_system *system, ta_time now) {
-    if (system == NULL || now < ta_clock_now(&system->clock)) {
-        return TA_ERR_INVALID;
-    }
-    ta_clock_set(&system->clock, now);
-    return TA_OK;
-}
 
 ta_time ta_system_time(const ta_system *system) {
     return system == NULL ? 0 : ta_clock_now(&system->clock);
@@ -1035,24 +1028,21 @@ ta_atom ta_system_scxml_io_type(const ta_system *system) {
     return system == NULL ? TA_ATOM_NONE : system->scxml_io_type;
 }
 
-ta_result ta_system_next_deadline(const ta_system *system, ta_time *out) {
-    if (system == NULL || out == NULL) {
+ta_result ta_system_set_time(ta_system *system, const ta_set_time_params *params) {
+    if (system == NULL || params == NULL || params->now < ta_clock_now(&system->clock) ||
+        (params->fired != NULL && params->fired_capacity == 0)) {
         return TA_ERR_INVALID;
     }
-    return ta_deadline_next_due(system, out) ? TA_OK : TA_ERR_NOT_FOUND;
-}
-
-ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params *params) {
-    if (system == NULL || params == NULL || params->budget == 0 || params->dispatched == NULL ||
-        params->more_due == NULL ||
-        (params->fired != NULL && (params->fired_capacity == 0 || params->fired_count == NULL))) {
-        return TA_ERR_INVALID;
+    if (system->run.running) {
+        return TA_ERR_BUSY; /* a safe point only: never from inside a macrostep */
     }
+    ta_clock_set(&system->clock, params->now);
+    uint32_t budget = params->budget;
     uint32_t dispatched = 0;
     bool retry = false;
     ta_time now = ta_clock_now(&system->clock);
     uint32_t fired_count = 0;
-    while (dispatched < params->budget && (params->fired == NULL || fired_count < params->fired_capacity)) {
+    while (dispatched < budget && (params->fired == NULL || fired_count < params->fired_capacity)) {
         ta_time due = 0;
         if (!ta_deadline_next_due(system, &due) || due > now) {
             break;
@@ -1108,11 +1098,22 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
         }
     }
     ta_time next = 0;
-    *params->dispatched = dispatched;
-    if (params->fired != NULL) {
+    bool pending = ta_deadline_next_due(system, &next);
+    if (params->dispatched != NULL) {
+        *params->dispatched = dispatched;
+    }
+    if (params->fired_count != NULL) {
         *params->fired_count = fired_count;
     }
-    *params->more_due = retry || (ta_deadline_next_due(system, &next) && next <= now);
+    if (params->more_due != NULL) {
+        *params->more_due = retry || (pending && next <= now);
+    }
+    if (params->has_wake != NULL) {
+        *params->has_wake = pending;
+    }
+    if (params->wake != NULL) {
+        *params->wake = pending ? next : 0;
+    }
     return TA_OK;
 }
 

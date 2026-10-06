@@ -367,7 +367,7 @@ module TinyactorsTest
     }.freeze
     DEFAULT_DATAMODEL = 'jq'
     # Microsteps per ta_run call, and delayed sends per
-    # ta_system_dispatch_due call.
+    # ta_system_set_time call.
     RESUME_BUDGET = 1024
     DISPATCH_BUDGET = 64
 
@@ -389,7 +389,7 @@ module TinyactorsTest
     # `run` names this run; instrument names are prefixed with it, so
     # several runs can share one host process. `trace: true` records a Trace
     # after every step. `resume_budget` and `dispatch_budget` are passed to
-    # ta_run and ta_system_dispatch_due; `resume_action_budget` is
+    # ta_run and ta_system_set_time; `resume_action_budget` is
     # ta_run's action budget (ADR 0061), zero for none, and
     # `resume_pause_at_microstep_start` its pause at each microstep's start
     # (ADR 0086). `after_step` is called as
@@ -515,8 +515,8 @@ module TinyactorsTest
       run_system("advance_time #{milliseconds} (t=#{@now}ms)")
     end
 
-    # Sets logical time to `now` without running the system, so a scenario
-    # can dispatch due sends itself (ta_system_dispatch_due) and look at
+    # Sets logical time to `now` without running the system or firing due
+    # sends, so a scenario can fire them itself (`dispatch_due`) and look at
     # what is left in between. Time never goes back.
     def set_time(now)
       unless now.is_a?(Integer) && now >= @now
@@ -533,13 +533,12 @@ module TinyactorsTest
     # of logical time.
     def run_to_completion(actor, limit: 600_000)
       until actor.done?
-        response = ta.system.next_deadline(system: system_handle)
-        if response[:result] == 'err_not_found'
+        deadline = next_deadline
+        if deadline.nil?
           raise AssertionFailed, "#{actor} at t=#{@now}ms: not done and no delayed send is pending; " \
                                  "active: #{actor.active.join(', ')}"
         end
 
-        deadline = Integer(core('ta_system_next_deadline', response).fetch(:out))
         if deadline > limit
           raise AssertionFailed, "#{actor} at t=#{@now}ms: not done before the #{limit}ms limit; " \
                                  "next deadline #{deadline}ms"
@@ -725,10 +724,23 @@ module TinyactorsTest
 
     # The time of the hosted core's next delayed send, or nil when none is pending.
     def hosted_next_deadline(hosted)
-      response = ta.system.next_deadline(system: hosted[:core])
-      return nil if response[:result] == 'err_not_found'
+      wake_of(hosted[:core])
+    end
 
-      Integer(core('ta_system_next_deadline', response).fetch(:out))
+    # The earliest pending delayed-send deadline of `core`, or nil: a
+    # ta_system_set_time() to its own time with no budget fires nothing and
+    # reports the wake, as c2h.wake will (core ADR 0101).
+    def wake_of(core_handle)
+      now = Integer(ta.system.time(system: core_handle).fetch(:value))
+      response = core('ta_system_set_time', ta.system.set_time(system: core_handle, now: now))
+      response[:has_wake] ? Integer(response.fetch(:wake)) : nil
+    end
+
+    # Fires up to `budget` sends due by now, as h2c.time does: a
+    # ta_system_set_time() to the current time. Answers its response
+    # (:dispatched, :more_due).
+    def dispatch_due(budget)
+      core('ta_system_set_time', ta.system.set_time(system: system_handle, now: system_time, budget: budget))
     end
 
     # The names of an actor's active atomic states, read from core.
@@ -1375,10 +1387,7 @@ module TinyactorsTest
 
     # The earliest pending delayed-send deadline, or nil when none is pending.
     def next_deadline
-      response = ta.system.next_deadline(system: system_handle)
-      return nil if response[:result] == 'err_not_found'
-
-      Integer(core('ta_system_next_deadline', response).fetch(:out))
+      wake_of(system_handle)
     end
 
     # The current logical time core reports (ta_system_time), which the

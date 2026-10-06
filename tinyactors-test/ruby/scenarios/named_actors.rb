@@ -336,7 +336,7 @@ TinyactorsTest.scenarios 'replacement', chart: :counter_v1 do
 
     assert_equal [], log_sink.logged
     assert_equal [], service.started
-    assert_equal 'err_not_found', ta.system.next_deadline(system: system_handle)[:result]
+    assert_equal nil, next_deadline, 'no delayed send is pending before the publish'
 
     assert_equal 'ok', publish(replacement, incumbent: incumbent)
     assert_equal [['revision', 'v2']], log_sink.logged

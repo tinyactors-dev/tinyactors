@@ -1640,7 +1640,9 @@ static bool tah_sched_run_core(tah_sched *sched, const tah_turn_params *params) 
                                                                  .outcome_count = &count,
                                                                  .status = &status,
                                                                  .names = sched->taken_names.items,
-                                                                 .name_capacity = TA_RUN_NAMES_MIN_BYTES });
+                                                                 .name_capacity = TA_RUN_NAMES_MIN_BYTES,
+                                                                 .has_wake = &sched->core_has_wake,
+                                                                 .wake = &sched->core_wake });
         *sched->inside_core = false;
         /* The table is the addon's: core calls never move its pages. */
         for (uint32_t at = 0; at < count; at += 1u) {

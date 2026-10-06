@@ -8893,7 +8893,7 @@ TA_PRIVATE void ta_waiting_free(ta_waiting *waiting, uint32_t index);
  *   session with parked mail does not unload (`ta_run_has_unsent_mail`),
  *   since an image cannot carry it.
  * - **Outside a macrostep** (a delayed send that fell due, at
- *   `ta_system_dispatch_due()`; a held send released at a publish; a
+ *   `ta_system_set_time()`; a held send released at a publish; a
  *   completion published again) it joins the run queue, or its waiting
  *   entry, at once.
  *
@@ -9048,7 +9048,7 @@ TA_PRIVATE void ta_waiting_free(ta_waiting *waiting, uint32_t index);
  * `ta_actor_report_invoke()` admit through it; spawn, prepare, load,
  * reconstruction, publishing and a delayed send's failure reserve and
  * place wakes; the interpreter's `<send>`, an invocation's events and
- * completion, `ta_system_dispatch_due()` and a publish's held sends post
+ * completion, `ta_system_set_time()` and a publish's held sends post
  * mail; publishing returns the mail that waited for it; destroying,
  * unloading and abandoning tell it a session's input or the session is
  * gone. `ta_system_load_needed()`, `ta_system_load_settled()` and
@@ -20437,6 +20437,14 @@ TA_API ta_result ta_run(ta_system *system, const ta_run_params *params) {
     if (params->name_used != NULL) {
         *params->name_used = call.names_used;
     }
+    ta_time wake = 0;
+    bool pending = ta_deadline_next_due(system, &wake);
+    if (params->has_wake != NULL) {
+        *params->has_wake = pending;
+    }
+    if (params->wake != NULL) {
+        *params->wake = pending ? wake : 0;
+    }
     *params->status = status;
     return result;
 }
@@ -22906,7 +22914,7 @@ typedef struct {
  * host to load it, and failing as error.communication for the sender when
  * it cannot be (run.h). When the pool or the name area has no room, the
  * event waits in the deadline index, due now, owned by the sender, so
- * ta_system_dispatch_due() offers it again. Never allocates inside a
+ * ta_system_set_time() offers it again. Never allocates inside a
  * macrostep, but for that wait.
  */
 static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *delivery) {
@@ -32396,13 +32404,6 @@ TA_API ta_result ta_event_name_format(const ta_system *system, const ta_event_na
     return TA_OK;
 }
 
-TA_API ta_result ta_system_set_time(ta_system *system, ta_time now) {
-    if (system == NULL || now < ta_clock_now(&system->clock)) {
-        return TA_ERR_INVALID;
-    }
-    ta_clock_set(&system->clock, now);
-    return TA_OK;
-}
 
 TA_API ta_time ta_system_time(const ta_system *system) {
     return system == NULL ? 0 : ta_clock_now(&system->clock);
@@ -32416,24 +32417,21 @@ TA_API ta_atom ta_system_scxml_io_type(const ta_system *system) {
     return system == NULL ? TA_ATOM_NONE : system->scxml_io_type;
 }
 
-TA_API ta_result ta_system_next_deadline(const ta_system *system, ta_time *out) {
-    if (system == NULL || out == NULL) {
+TA_API ta_result ta_system_set_time(ta_system *system, const ta_set_time_params *params) {
+    if (system == NULL || params == NULL || params->now < ta_clock_now(&system->clock) ||
+        (params->fired != NULL && params->fired_capacity == 0)) {
         return TA_ERR_INVALID;
     }
-    return ta_deadline_next_due(system, out) ? TA_OK : TA_ERR_NOT_FOUND;
-}
-
-TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params *params) {
-    if (system == NULL || params == NULL || params->budget == 0 || params->dispatched == NULL ||
-        params->more_due == NULL ||
-        (params->fired != NULL && (params->fired_capacity == 0 || params->fired_count == NULL))) {
-        return TA_ERR_INVALID;
+    if (system->run.running) {
+        return TA_ERR_BUSY; /* a safe point only: never from inside a macrostep */
     }
+    ta_clock_set(&system->clock, params->now);
+    uint32_t budget = params->budget;
     uint32_t dispatched = 0;
     bool retry = false;
     ta_time now = ta_clock_now(&system->clock);
     uint32_t fired_count = 0;
-    while (dispatched < params->budget && (params->fired == NULL || fired_count < params->fired_capacity)) {
+    while (dispatched < budget && (params->fired == NULL || fired_count < params->fired_capacity)) {
         ta_time due = 0;
         if (!ta_deadline_next_due(system, &due) || due > now) {
             break;
@@ -32489,11 +32487,22 @@ TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch
         }
     }
     ta_time next = 0;
-    *params->dispatched = dispatched;
-    if (params->fired != NULL) {
+    bool pending = ta_deadline_next_due(system, &next);
+    if (params->dispatched != NULL) {
+        *params->dispatched = dispatched;
+    }
+    if (params->fired_count != NULL) {
         *params->fired_count = fired_count;
     }
-    *params->more_due = retry || (ta_deadline_next_due(system, &next) && next <= now);
+    if (params->more_due != NULL) {
+        *params->more_due = retry || (pending && next <= now);
+    }
+    if (params->has_wake != NULL) {
+        *params->has_wake = pending;
+    }
+    if (params->wake != NULL) {
+        *params->wake = pending ? next : 0;
+    }
     return TA_OK;
 }
 

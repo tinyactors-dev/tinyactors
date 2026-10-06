@@ -2612,7 +2612,7 @@
           "shape": "counted",
           "direction": "in",
           "optional": true,
-          "doc": "Delayed sends to re-arm in the new session before it bootstraps (ADR 0074 section 8): records a host read from ta_actor_inspect() of an earlier session of this actor and stored with its data. Each keeps its send ID, due time, event, destination, target, data, content and trace parent; a due time already past fires on the next dispatch. The session's generated-ID counter moves past every generated ID among them. Event names must be this system's and content IDs the definition's (TA_ERR_INVALID otherwise). `target` and `data` are retained. `submitted` and `destination` of a custom processor's send are ignored: every record is armed afresh. An SCXML send whose `destination` is runtime ID 0 goes to the new session itself, so a host re-arms a send to self without knowing the session's ID: an earlier session's runtime or session ID names another actor by then."
+          "doc": "Delayed sends to re-arm in the new session before it bootstraps (ADR 0074 section 8): records a host read from ta_actor_inspect() of an earlier session of this actor and stored with its data. Each keeps its send ID, due time, event, destination, target, data, content and trace parent; a due time already past fires at the next ta_system_set_time(). The session's generated-ID counter moves past every generated ID among them. Event names must be this system's and content IDs the definition's (TA_ERR_INVALID otherwise). `target` and `data` are retained. `submitted` and `destination` of a custom processor's send are ignored: every record is armed afresh. An SCXML send whose `destination` is runtime ID 0 goes to the new session itself, so a host re-arms a send to self without knowing the session's ID: an earlier session's runtime or session ID names another actor by then."
         },
         {
           "name": "pending_send_count",
@@ -9882,104 +9882,9 @@
         }
       }
     },
-    "ta_due_dispatch_params": {
-      "kind": "struct",
-      "doc": "`dispatched` counts the sends the call took off the deadline index, a send whose session is gone, which goes nowhere, included. `fired`, when not null, is the caller's buffer of `fired_capacity` entries, at least one, which the call fills with each send it fired, in order, and counts in `fired_count`; the call fires no more than it has room for, so a full buffer leaves the rest due (`more_due`). A send to another session stays in core (ADR 0099), and no host call sees it: a host that measures how late timers fire, or tracks its senders' next deadlines, reads them here.",
-      "fields": [
-        {
-          "name": "budget",
-          "type": {
-            "builtin": "uint32_t"
-          },
-          "doc": "Must be nonzero; limits synchronous host callbacks in this call."
-        },
-        {
-          "name": "dispatched",
-          "type": {
-            "pointer": {
-              "builtin": "uint32_t"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "success"
-        },
-        {
-          "name": "more_due",
-          "type": {
-            "pointer": {
-              "builtin": "bool"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "success"
-        },
-        {
-          "name": "fired",
-          "type": {
-            "pointer": {
-              "type": "ta_due_fired"
-            }
-          },
-          "capacity": "fired_capacity",
-          "needed": "fired_count",
-          "shape": "buffer",
-          "direction": "out",
-          "optional": true,
-          "valid_on": "success"
-        },
-        {
-          "name": "fired_capacity",
-          "type": {
-            "builtin": "uint32_t"
-          },
-          "capacity_of": "fired"
-        },
-        {
-          "name": "fired_count",
-          "type": {
-            "pointer": {
-              "builtin": "uint32_t"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "optional": true,
-          "valid_on": "success",
-          "needed_of": "fired"
-        }
-      ],
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 48,
-          "align": 8,
-          "offsets": {
-            "budget": 0,
-            "dispatched": 8,
-            "more_due": 16,
-            "fired": 24,
-            "fired_capacity": 32,
-            "fired_count": 40
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 24,
-          "align": 4,
-          "offsets": {
-            "budget": 0,
-            "dispatched": 4,
-            "more_due": 8,
-            "fired": 12,
-            "fired_capacity": 16,
-            "fired_count": 20
-          }
-        }
-      }
-    },
     "ta_due_fired": {
       "kind": "struct",
-      "doc": "One delayed send ta_system_dispatch_due() fired: sent, or failed with its sender told (error.communication). A send that found no room and waits to be offered again has not fired.",
+      "doc": "One delayed send ta_system_set_time() fired: sent, or failed with its sender told (error.communication). A send its I/O processor refused, which waits to be offered again, has not fired.",
       "fields": [
         {
           "name": "sender",
@@ -13732,11 +13637,36 @@
           "optional": true,
           "valid_on": "success",
           "needed_of": "names"
+        },
+        {
+          "name": "has_wake",
+          "type": {
+            "pointer": {
+              "builtin": "bool"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success",
+          "doc": "The earliest due time of a pending delayed send when the call returns, as c2h.wake will report it (ADR 0101); `has_wake` is false when none is pending."
+        },
+        {
+          "name": "wake",
+          "type": {
+            "pointer": {
+              "type": "ta_time"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 80,
+          "size": 96,
           "align": 8,
           "offsets": {
             "budget": 0,
@@ -13750,11 +13680,13 @@
             "status": 48,
             "names": 56,
             "name_capacity": 64,
-            "name_used": 72
+            "name_used": 72,
+            "has_wake": 80,
+            "wake": 88
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 56,
+          "size": 64,
           "align": 8,
           "offsets": {
             "budget": 0,
@@ -13768,7 +13700,9 @@
             "status": 36,
             "names": 40,
             "name_capacity": 44,
-            "name_used": 48
+            "name_used": 48,
+            "has_wake": 52,
+            "wake": 56
           }
         }
       }
@@ -16054,6 +15988,138 @@
           ]
         }
       ]
+    },
+    "ta_set_time_params": {
+      "kind": "struct",
+      "doc": "Moves the system's logical clock to `now`, and fires every delayed send due by then, in (due, send order) order (ADR 0101), as h2c.time will: a send to a session joins the run queue with the envelope it holds, or waits for its target's load; one to a host I/O processor is offered to it here. The call is a safe point, outside any macrostep. `now` may equal the current time, which offers again what is due and was refused.\n\n`budget` is the most sends the call takes off the deadline index (each synchronous I/O processor call among them): UINT32_MAX for every due send, as h2c.time; 0 only moves the clock. `dispatched` counts them, a send whose session is gone, which goes nowhere, included. `fired`, when not null, is the caller's buffer of `fired_capacity` entries, at least one, which the call fills with each send it fired, in order, and counts in `fired_count`; the call fires no more than it has room for. `more_due` says sends due by `now` remain: a spent budget, a full buffer, or a send a processor refused. `has_wake` and `wake` give the earliest due time still pending, as c2h.wake will.\n\nTA_ERR_INVALID: `now` is earlier than the clock, or `fired` has no room. TA_ERR_BUSY: called from inside ta_run(), as from a host callback.",
+      "fields": [
+        {
+          "name": "now",
+          "type": {
+            "type": "ta_time"
+          }
+        },
+        {
+          "name": "budget",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "dispatched",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "more_due",
+          "type": {
+            "pointer": {
+              "builtin": "bool"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "fired",
+          "type": {
+            "pointer": {
+              "type": "ta_due_fired"
+            }
+          },
+          "capacity": "fired_capacity",
+          "needed": "fired_count",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "fired_capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "fired"
+        },
+        {
+          "name": "fired_count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success",
+          "needed_of": "fired"
+        },
+        {
+          "name": "has_wake",
+          "type": {
+            "pointer": {
+              "builtin": "bool"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "wake",
+          "type": {
+            "pointer": {
+              "type": "ta_time"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "now": 0,
+            "budget": 8,
+            "dispatched": 16,
+            "more_due": 24,
+            "fired": 32,
+            "fired_capacity": 40,
+            "fired_count": 48,
+            "has_wake": 56,
+            "wake": 64
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "now": 0,
+            "budget": 8,
+            "dispatched": 12,
+            "more_due": 16,
+            "fired": 20,
+            "fired_capacity": 24,
+            "fired_count": 28,
+            "has_wake": 32,
+            "wake": 36
+          }
+        }
+      }
     },
     "ta_source_location": {
       "kind": "struct",
@@ -20886,7 +20952,7 @@
     },
     {
       "name": "ta_actor_publish",
-      "doc": "Publishes a prepared actor: one atomic directory call puts it on the route, replacing the incumbent's RESIDENT entry, or, with no incumbent, claiming an address with no entry or replacing an UNLOADED one (whose unloaded session ends). Then an actor prepared without `at` releases its held effects in SCXML order and starts its pending invocations; a replaying actor schedules its held delayed sends under their due times (one already due fires at the next ta_system_dispatch_due()) and retires each active invocation with error.communication.invoke. <id >.unavailable, as a load does (ADR 0038), which leaves it a macrostep to run. - TA_ERR_DONE: it reached a top-level final state before it was published. - TA_ERR_BUSY: it is inside a macrostep; or, with no incumbent, another actor is resident at the address. - TA_ERR_STALE: the directory no longer holds the incumbent's entry. - TA_ERR_INVALID: it is published, or was not prepared for `incumbent`. - TA_ERR_NOT_FOUND: no resident actor has either ID. - TA_ERR_FULL: the system's pool of pending inputs has no free envelope for the macrostep publishing may leave it to run; nothing changed. Publish again after a ta_run(). - TA_ERR_NOMEM: nothing changed.",
+      "doc": "Publishes a prepared actor: one atomic directory call puts it on the route, replacing the incumbent's RESIDENT entry, or, with no incumbent, claiming an address with no entry or replacing an UNLOADED one (whose unloaded session ends). Then an actor prepared without `at` releases its held effects in SCXML order and starts its pending invocations; a replaying actor schedules its held delayed sends under their due times (one already due fires at the next ta_system_set_time()) and retires each active invocation with error.communication.invoke. <id >.unavailable, as a load does (ADR 0038), which leaves it a macrostep to run. - TA_ERR_DONE: it reached a top-level final state before it was published. - TA_ERR_BUSY: it is inside a macrostep; or, with no incumbent, another actor is resident at the address. - TA_ERR_STALE: the directory no longer holds the incumbent's entry. - TA_ERR_INVALID: it is published, or was not prepared for `incumbent`. - TA_ERR_NOT_FOUND: no resident actor has either ID. - TA_ERR_FULL: the system's pool of pending inputs has no free envelope for the macrostep publishing may leave it to run; nothing changed. Publish again after a ta_run(). - TA_ERR_NOMEM: nothing changed.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -23424,36 +23490,6 @@
       ]
     },
     {
-      "name": "ta_system_set_time",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "type": "ta_result"
-        },
-        "success": "TA_OK"
-      },
-      "params": [
-        {
-          "name": "system",
-          "type": {
-            "pointer": {
-              "type": "ta_system"
-            }
-          },
-          "shape": "handle",
-          "direction": "in"
-        },
-        {
-          "name": "now",
-          "type": {
-            "type": "ta_time"
-          }
-        }
-      ]
-    },
-    {
       "name": "ta_system_time",
       "public": true,
       "static_inline": false,
@@ -23503,44 +23539,7 @@
       ]
     },
     {
-      "name": "ta_system_next_deadline",
-      "doc": "TA_ERR_NOT_FOUND means that no resident delayed send is pending.",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "type": "ta_result"
-        },
-        "success": "TA_OK"
-      },
-      "params": [
-        {
-          "name": "system",
-          "type": {
-            "pointer": {
-              "type": "ta_system",
-              "const": true
-            }
-          },
-          "shape": "handle",
-          "direction": "in"
-        },
-        {
-          "name": "out",
-          "type": {
-            "pointer": {
-              "type": "ta_time"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "success"
-        }
-      ]
-    },
-    {
-      "name": "ta_system_dispatch_due",
+      "name": "ta_system_set_time",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -23565,7 +23564,7 @@
           "name": "params",
           "type": {
             "pointer": {
-              "type": "ta_due_dispatch_params",
+              "type": "ta_set_time_params",
               "const": true
             }
           },

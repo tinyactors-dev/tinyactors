@@ -721,10 +721,10 @@ static void test_counters_and_parents_survive_an_image(void) {
     CHECK(use(system, (sink){ .write = begin_write,
                               .masks = { .kinds = TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN) } }) == TA_OK);
     journal_reset();
-    CHECK(ta_system_set_time(system, 20) == TA_OK);
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = 20 }) == TA_OK);
     uint32_t dispatched = 0;
     bool more = false;
-    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
+    CHECK(ta_system_set_time(system, &(ta_set_time_params){ .now = ta_system_time(system), .budget = 10, .dispatched = &dispatched,
                                                                     .more_due = &more }) == TA_OK);
     ta_load_request request;
     CHECK(dispatched == 1 && ta_system_load_needed(system, &request) == TA_ERR_NOT_FOUND);
