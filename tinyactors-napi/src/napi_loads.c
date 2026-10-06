@@ -92,12 +92,12 @@ napi_value tna_set_loader_family_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     ta_str family = { 0 };
-    uint32_t max_waiting = 0;
+    bool loader = false;
     if (argc < 2 || !tna_text_argument(env, wrapper->system, argv[0], &family) || family.len == 0 ||
-        napi_get_value_uint32(env, argv[1], &max_waiting) != napi_ok) {
-        return tna_throw(env, "invalid", "setLoader: expected a family name and maxWaiting");
+        napi_get_value_bool(env, argv[1], &loader) != napi_ok) {
+        return tna_throw(env, "invalid", "setLoader: expected a family name and whether it has a loader");
     }
-    ta_result result = tah_loads_set_family(tah_system_loads(wrapper->system), family, max_waiting);
+    ta_result result = tah_loads_set_family(tah_system_loads(wrapper->system), family, loader);
     tah_scratch_reset_call(tah_system_scratch(wrapper->system));
     if (result != TA_OK) {
         return tna_throw(env, "out-of-memory", "setLoader: no memory for the family");

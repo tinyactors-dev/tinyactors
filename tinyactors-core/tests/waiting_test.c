@@ -43,7 +43,14 @@
  * 9. a send to a session ID that names no family, which no session holds,
  *    waits for nothing: no host could bring it back, so it fails at once,
  *    in the sending macrostep, before an event the macrostep raised after
- *    it (SCXML 6.2.4), and no load request is owed.
+ *    it (SCXML 6.2.4), and no load request is owed;
+ * 10. an event the host posts to an address (ta_actor_deliver with no
+ *    actor) goes to the actor resident there; with none, it is admitted
+ *    and waits for the address on the same entry as mail does, under the
+ *    host's correlation, and core asks once; settling delivers it, and the
+ *    run reports it under its correlation; failing refuses it, and the next
+ *    run reports it REFUSED with the fault's code; a waiting one can be
+ *    withdrawn, leaving the request owed.
  */
 #include "../include/tinyactors.c"
 #include "test_allocator.h"
@@ -609,6 +616,72 @@ static void test_a_send_no_host_can_answer_fails_at_once(void) {
     close_fixture(&f);
 }
 
+/* Posts `text` to gone/g by address, with `correlation`. */
+static ta_result post_by_address(fixture *f, const char *text, uint64_t correlation) {
+    ta_event_name_id name = 0;
+    CHECK(ta_trie_intern_dotted(&f->system->event_names, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) },
+                                &name) == TA_OK);
+    ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    ta_actor_address address = { .family = { .name = STR("gone") }, .name = STR("g") };
+    return ta_actor_deliver(f->system, &(ta_actor_deliver_params){ .address = &address, .event = &event,
+                                                                   .time = ta_system_time(f->system),
+                                                                   .correlation = correlation });
+}
+
+/* Claim 10. */
+static void test_posts_by_address_wait_like_mail(void) {
+    fixture f = open_fixture();
+    CHECK(post_by_address(&f, "e1", 11) == TA_OK);
+    CHECK(deliver(&f, f.sender, "two", 0) == TA_OK); /* chart mail for the same address */
+    CHECK(post_by_address(&f, "e1", 12) == TA_OK);
+    run_all(&f, 0, NULL);
+    CHECK(envelopes_in(&f, TA_ENVELOPE_WAITING) == 4 && live_entries(&f) == 1);
+    ta_load_request request = { 0 };
+    CHECK(ta_system_load_needed(f.system, &request) == TA_OK && request.waiting == 4);
+    CHECK(ta_system_load_needed(f.system, &(ta_load_request){ 0 }) == TA_ERR_NOT_FOUND);
+    /* A waiting post is withdrawn; the request stays owed. */
+    CHECK(ta_system_withdraw_input(f.system, 12) == TA_OK);
+    CHECK(envelopes_in(&f, TA_ENVELOPE_WAITING) == 3 && live_entries(&f) == 1);
+    ta_actor_id loaded = spawn_named(&f, f.receiver_definition, "gone", "g");
+    CHECK(ta_system_load_settled(f.system, &(ta_load_settled_params){ .request = request.request,
+                                                                       .actor = loaded }) == TA_OK);
+    bool reported = false;
+    for (uint32_t call = 0; call < 100u && !reported; call += 1u) {
+        CHECK(run_once(&f, 0) == TA_OK);
+        for (uint32_t at = 0; at < f.count; at += 1u) {
+            reported = reported || (f.outcomes[at].correlation == 11u && f.outcomes[at].actor == loaded &&
+                                    f.outcomes[at].kind == TA_INPUT_COMPLETED);
+        }
+    }
+    CHECK(reported);
+    run_all(&f, 0, NULL);
+    CHECK(in_state(&f, loaded, "r3"));
+    /* Resident now: a post by address goes straight to it. */
+    CHECK(post_by_address(&f, "fin", 13) == TA_OK);
+    CHECK(envelopes_in(&f, TA_ENVELOPE_WAITING) == 0 && live_entries(&f) == 0);
+    run_all(&f, 0, NULL);
+    close_fixture(&f);
+
+    /* A failed load refuses the post, under its correlation, with the code. */
+    f = open_fixture();
+    CHECK(post_by_address(&f, "e1", 21) == TA_OK);
+    CHECK(ta_system_load_needed(f.system, &request) == TA_OK && request.hint == TA_ERR_NOT_FOUND);
+    ta_fault fault = { .code = TA_ERR_UNLOADED };
+    CHECK(ta_system_load_failed(f.system, &(ta_load_failed_params){ .request = request.request, .fault = &fault }) ==
+          TA_OK);
+    CHECK(run_once(&f, 0) == TA_OK);
+    CHECK(f.count == 1 && f.outcomes[0].kind == TA_INPUT_REFUSED && f.outcomes[0].correlation == 21u &&
+          f.outcomes[0].code == TA_ERR_UNLOADED);
+    CHECK(envelopes_in(&f, TA_ENVELOPE_RUNNABLE) == 0 && live_entries(&f) == 0);
+    /* A post with no actor and no usable address is a caller error. */
+    ta_event event = { .name = 0, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    ta_actor_address empty = { 0 };
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .address = &empty, .event = &event,
+                                                                 .time = ta_system_time(f.system) }) ==
+          TA_ERR_INVALID);
+    close_fixture(&f);
+}
+
 int main(void) {
     test_mail_waits_on_one_entry_per_address();
     test_settling_delivers_the_mail_in_order();
@@ -619,6 +692,7 @@ int main(void) {
     test_withdrawal_reads_the_index();
     test_teardown_releases_waiting_mail();
     test_a_send_no_host_can_answer_fails_at_once();
+    test_posts_by_address_wait_like_mail();
     if (failures != 0) {
         fprintf(stderr, "waiting_test: %d failures\n", failures);
         return 1;

@@ -43,7 +43,7 @@ typedef struct {
 /* ta_result codes are small negative numbers; faults are counted by -code. */
 #define TAH_FAULT_CODES 32u
 /* tah_dead_reason, in scheduler.h. */
-#define TAH_DEAD_REASONS 9u
+#define TAH_DEAD_REASONS 8u
 
 typedef struct tah_host_metrics tah_host_metrics;
 

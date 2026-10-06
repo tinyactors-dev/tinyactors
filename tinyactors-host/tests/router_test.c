@@ -268,7 +268,7 @@ static void turns_until_a_load_request(tah_system *system) {
  */
 static void chart_mail_waits_for_a_load(void) {
     tah_system *system = make_system();
-    CHECK(tah_loads_set_family(&system->loads, S("r"), 10) == TA_OK);
+    CHECK(tah_loads_set_family(&system->loads, S("r"), true) == TA_OK);
     ta_definition_id receiver_chart = define_receiver(system);
     (void)spawn(system, define_sender(system, S("#_actor_r/later")), NULL);
     turns_until_a_load_request(system);

@@ -482,18 +482,21 @@ TinyactorsTest.scenarios 'hosted' do
   end
 
   # Catches: a load that cannot be answered keeping its mail forever, or
-  # dropping it silently; a load's mailbox that grows past max_waiting.
+  # dropping it silently. The mail waits in core while the loader runs (core
+  # ADR 0099), all of it on one load; a failed load refuses each message.
   scenario 'a load the loader cannot answer turns its waiting mail into dead letters' do
     hosted = hosted_system
     hosted_define(hosted, :hosted_counter)
-    hosted_set_loader(hosted, 'hosted_counter', max_waiting: 1)
+    hosted_set_loader(hosted, 'hosted_counter')
     hosted_post_to(hosted, 'hosted_counter', 'gone', 'bump', data: { tag: 'kept' })
-    hosted_post_to(hosted, 'hosted_counter', 'gone', 'bump', data: { tag: 'over' })
+    hosted_post_to(hosted, 'hosted_counter', 'gone', 'bump', data: { tag: 'too' })
     run = hosted_run(hosted)
-    assert_equal [['waiting-full', { tag: 'over' }]], run[:dead_letters].map { |dead| [dead[:reason], dead[:data]] }
+    assert_equal [], run[:dead_letters], 'the mail waits for the load'
+    assert_equal 1, run[:loads].size, 'one load for the address'
     assert_equal 'not-found', hosted_load(hosted, run[:loads].first, outcome: 'not-found')[:outcome]
     dead = hosted_run(hosted)[:dead_letters]
-    assert_equal [['not-found', { tag: 'kept' }]], dead.map { |letter| [letter[:reason], letter[:data]] }
+    assert_equal [['not-found', { tag: 'kept' }], ['not-found', { tag: 'too' }]],
+                 dead.map { |letter| [letter[:reason], letter[:data]] }
     assert_equal 'err_stale', hosted_load(hosted, run[:loads].first, outcome: 'not-found')[:result],
                  'a load is answered once'
     assert_equal 0, close_hosted(hosted)

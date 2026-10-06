@@ -71,15 +71,14 @@ static tah_loader_family *tah_loads_family_named(const tah_loads *loads, ta_str 
     return NULL;
 }
 
-ta_result tah_loads_set_family(tah_loads *loads, ta_str name, uint32_t max_waiting) {
+ta_result tah_loads_set_family(tah_loads *loads, ta_str name, bool loader) {
     uint32_t at = 0;
     tah_loader_family *family = tah_loads_family_named(loads, name, &at);
-    if (family != NULL && max_waiting != 0) {
-        family->max_waiting = max_waiting;
+    if (family != NULL && loader) {
         return TA_OK;
     }
     if (family != NULL) {
-        /* Loads already in flight keep the limit they started with. */
+        /* Loads already in flight finish as they started. */
         tah_free(loads->allocator, &(ta_allocator_free_params){ .ptr = family->name, .size = family->length + 1u,
                                                                  .alignment = 1 });
         tah_loader_family *last = tah_vec_at(&loads->families, loads->families.count - 1u);
@@ -87,7 +86,7 @@ ta_result tah_loads_set_family(tah_loads *loads, ta_str name, uint32_t max_waiti
         loads->families.count -= 1u;
         return TA_OK;
     }
-    if (max_waiting == 0) {
+    if (!loader) {
         return TA_OK;
     }
     char *copy = tah_alloc(loads->allocator, (size_t)name.len + 1u, 1);
@@ -96,7 +95,7 @@ ta_result tah_loads_set_family(tah_loads *loads, ta_str name, uint32_t max_waiti
     }
     tah_mem_copy(copy, name.ptr, name.len);
     copy[name.len] = '\0';
-    tah_loader_family fresh = { .name = copy, .length = name.len, .max_waiting = max_waiting };
+    tah_loader_family fresh = { .name = copy, .length = name.len };
     if (tah_vec_push(&loads->families, &fresh) != TA_OK) {
         tah_free(loads->allocator, &(ta_allocator_free_params){ .ptr = copy, .size = (size_t)name.len + 1u,
                                                                  .alignment = 1 });
@@ -105,13 +104,10 @@ ta_result tah_loads_set_family(tah_loads *loads, ta_str name, uint32_t max_waiti
     return TA_OK;
 }
 
-/* The loader limit of the family `address` belongs to, or 0 without a loader. */
-static uint32_t tah_loads_limit(const tah_loads *loads, const ta_address *address) {
-    if (loads->families.count == 0) {
-        return 0;
-    }
-    const tah_loader_family *family = tah_loads_family_named(loads, ta_address_view(address).family.name, NULL);
-    return family == NULL ? 0 : family->max_waiting;
+/* Whether the family `address` belongs to has a loader. */
+static bool tah_loads_has_loader(const tah_loads *loads, const ta_address *address) {
+    return loads->families.count != 0 &&
+           tah_loads_family_named(loads, ta_address_view(address).family.name, NULL) != NULL;
 }
 
 /* ------------------------------------------------------------------------
@@ -127,8 +123,7 @@ tah_load_info tah_loads_info(const tah_loads *loads, uint32_t index, uint32_t ge
     if (load == NULL) {
         return (tah_load_info){ 0 };
     }
-    return (tah_load_info){ .address = load->address, .waiting = load->mail.count + load->core_waiting,
-                            .trace = load->trace };
+    return (tah_load_info){ .address = load->address, .waiting = load->core_waiting, .trace = load->trace };
 }
 
 void tah_loads_read_stats(const tah_loads *loads, tah_loads_stats *out) {
@@ -147,29 +142,13 @@ tah_load *tah_loads_find(const tah_loads *loads, uint32_t index, uint32_t genera
 }
 
 bool tah_loads_would_load(const tah_loads *loads, const ta_address *address) {
-    return tah_loads_limit(loads, address) != 0;
+    return tah_loads_has_loader(loads, address);
 }
 
 bool tah_loads_waiting(const tah_loads *loads, const ta_address *address) {
     uint64_t index = 0;
     return tah_map_count(&loads->by_address) != 0 &&
            tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)address, &index);
-}
-
-bool tah_loads_withdraw(tah_loads *loads, tah_sched *sched, uint32_t index) {
-    tah_envelope *envelope = tah_sched_envelope(sched, index);
-    uint64_t load_index = 0;
-    if (envelope == NULL || envelope->target != 0 || envelope->address == NULL ||
-        tah_map_count(&loads->by_address) == 0 ||
-        !tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)envelope->address, &load_index)) {
-        return false;
-    }
-    tah_load *load = tah_vec_at(&loads->loads, (uint32_t)load_index);
-    if (!tah_sched_withdraw_waiting(sched, &load->mail, index)) {
-        return false;
-    }
-    loads->waiting -= 1u;
-    return true;
 }
 
 /* A free record's index, with the record reset; 0 when there is no memory. */
@@ -211,7 +190,6 @@ static void tah_loads_give(tah_loads *loads, uint32_t index) {
  */
 typedef struct {
     ta_address *address;
-    uint32_t max_waiting;
     tah_load_why why;
     const ta_trace_parent *trace;
     uint64_t now_ns;
@@ -234,7 +212,6 @@ static ta_result tah_loads_start(tah_loads *loads, const tah_load_start *start, 
     tah_load *load = tah_vec_at(&loads->loads, index);
     ta_address_retain(start->address);
     load->address = start->address;
-    load->max_waiting = start->max_waiting;
     load->why = (uint8_t)start->why;
     load->keyed = !start->unkeyed;
     load->started_ns = start->now_ns;
@@ -246,63 +223,9 @@ static ta_result tah_loads_start(tah_loads *loads, const tah_load_start *start, 
     return TA_OK;
 }
 
-/* Appends a message to a load's mailbox, or dead-letters it when it is full. */
-static ta_result tah_loads_append(tah_loads *loads, tah_sched *sched, tah_load *load, const tah_message *message) {
-    if (load->mail.count >= load->max_waiting) {
-        ta_address_retain(load->address);
-        ta_result result = tah_sched_post_dead(sched, &(tah_dead_post){ .address = load->address, .message = message,
-                                                                        .reason = TAH_DEAD_WAITING_FULL });
-        if (result != TA_OK) {
-            ta_address_release(load->address);
-        }
-        return result;
-    }
-    ta_result result = tah_sched_post_waiting(
-        sched, &(tah_waiting_post){ .box = &load->mail, .address = load->address, .message = message });
-    if (result == TA_OK) {
-        loads->waiting += 1u;
-    }
-    return result;
-}
-
-ta_result tah_loads_route(tah_loads *loads, const tah_load_route *route) {
-    uint64_t found = 0;
-    if (tah_map_count(&loads->by_address) != 0 &&
-        tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)route->address, &found)) {
-        return tah_loads_append(loads, route->sched, tah_vec_at(&loads->loads, (uint32_t)found), route->message);
-    }
-    if (route->resident) {
-        return TA_ERR_NOT_FOUND;
-    }
-    uint32_t limit = tah_loads_limit(loads, route->address);
-    if (limit == 0) {
-        return TA_ERR_NOT_FOUND;
-    }
-    uint32_t index = 0;
-    ta_result result = tah_loads_start(loads, &(tah_load_start){ .address = route->address,
-                                                                  .max_waiting = limit,
-                                                                  .why = TAH_LOAD_WHY_MAIL,
-                                                                  .trace = route->message->trace,
-                                                                  .now_ns = route->now_ns },
-                                       &index);
-    if (result != TA_OK) {
-        return result;
-    }
-    tah_load *load = tah_vec_at(&loads->loads, index);
-    result = tah_loads_append(loads, route->sched, load, route->message);
-    if (result != TA_OK) {
-        /* Nothing was accepted: the load never happened. */
-        loads->requests.count -= 1u;
-        tah_map_remove(&loads->by_address, (uint64_t)(uintptr_t)route->address);
-        loads->in_flight -= 1u;
-        tah_loads_give(loads, index);
-    }
-    return result;
-}
-
 bool tah_loads_family_loads(const tah_loads *loads, ta_str family) {
     const tah_loader_family *found = loads->families.count == 0 ? NULL : tah_loads_family_named(loads, family, NULL);
-    return found != NULL && found->max_waiting != 0;
+    return found != NULL;
 }
 
 ta_result tah_loads_ask(tah_loads *loads, const tah_load_ask *ask) {
@@ -310,17 +233,17 @@ ta_result tah_loads_ask(tah_loads *loads, const tah_load_ask *ask) {
     if (ask->shared && tah_map_count(&loads->by_address) != 0 &&
         tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)ask->address, &found)) {
         tah_load *load = tah_vec_at(&loads->loads, (uint32_t)found);
+        loads->waiting -= load->core_waiting;
         load->core_request = ask->request;
         load->core_waiting = ask->waiting;
+        loads->waiting += ask->waiting;
         return TA_OK;
     }
-    uint32_t limit = tah_loads_limit(loads, ask->address);
-    if (limit == 0) {
+    if (!tah_loads_has_loader(loads, ask->address)) {
         return TA_ERR_NOT_FOUND;
     }
     uint32_t index = 0;
     ta_result result = tah_loads_start(loads, &(tah_load_start){ .address = ask->address,
-                                                                  .max_waiting = limit,
                                                                   .why = ask->why,
                                                                   .trace = ask->trace,
                                                                   .now_ns = ask->now_ns,
@@ -332,7 +255,21 @@ ta_result tah_loads_ask(tah_loads *loads, const tah_load_ask *ask) {
     tah_load *load = tah_vec_at(&loads->loads, index);
     load->core_request = ask->request;
     load->core_waiting = ask->waiting;
+    loads->waiting += ask->waiting;
     return TA_OK;
+}
+
+void tah_loads_withdrawn(tah_loads *loads, const ta_address *address) {
+    uint64_t found = 0;
+    if (tah_map_count(&loads->by_address) == 0 ||
+        !tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)address, &found)) {
+        return;
+    }
+    tah_load *load = tah_vec_at(&loads->loads, (uint32_t)found);
+    if (load->core_waiting != 0) {
+        load->core_waiting -= 1u;
+        loads->waiting -= 1u;
+    }
 }
 
 uint64_t tah_loads_core_request(const tah_loads *loads, uint32_t index, uint32_t generation) {
@@ -375,8 +312,6 @@ ta_result tah_loads_finish(tah_loads *loads, const tah_load_finish *finish) {
         return TA_ERR_STALE;
     }
     tah_load_outcome outcome = finish->outcome;
-    ta_result result = TA_OK;
-    uint32_t waiting = load->mail.count;
     bool session = load->why == TAH_LOAD_WHY_SESSION;
     if (outcome == TAH_LOAD_LOADED || outcome == TAH_LOAD_SPAWNED) {
         if (session) {
@@ -389,18 +324,10 @@ ta_result tah_loads_finish(tah_loads *loads, const tah_load_finish *finish) {
             if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT || entry.actor != finish->actor) {
                 return TA_ERR_NOT_FOUND;
             }
-        }
-        result = tah_sched_hand_over(finish->sched, &load->mail, finish->actor);
-        if (result != TA_OK) {
-            outcome = TAH_LOAD_FAILED;
-        } else if (!session) {
             tah_loads_cancel_wake(loads, load->address);
         }
     }
-    if (load->mail.first != 0) {
-        tah_sched_bury_waiting(finish->sched, &load->mail, tah_load_dead_reason(outcome));
-    }
-    loads->waiting -= waiting;
+    loads->waiting -= load->core_waiting;
     loads->outcomes[outcome] += 1u;
     double seconds = finish->now_ns > load->started_ns ? (double)(finish->now_ns - load->started_ns) / 1e9 : 0.0;
     tah_exemplar exemplar =
@@ -411,7 +338,7 @@ ta_result tah_loads_finish(tah_loads *loads, const tah_load_finish *finish) {
     }
     loads->in_flight -= 1u;
     tah_loads_give(loads, finish->index);
-    return result == TA_OK ? TA_OK : TA_ERR_NOMEM;
+    return TA_OK;
 }
 
 /* ------------------------------------------------------------------------
@@ -514,11 +441,11 @@ void tah_loads_fire_wakes(tah_loads *loads, const tah_wake_fire *fire) {
         tah_wake wake = tah_wake_pop(loads);
         tah_map_remove(&loads->wake_due, (uint64_t)(uintptr_t)wake.address);
         ta_actor_directory_entry entry = tah_directory_find(fire->directory, wake.address);
-        uint32_t limit = tah_loads_limit(loads, wake.address);
-        if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT && limit != 0 && !tah_loads_waiting(loads, wake.address)) {
+        if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT && tah_loads_has_loader(loads, wake.address) &&
+            !tah_loads_waiting(loads, wake.address)) {
             uint32_t index = 0;
-            if (tah_loads_start(loads, &(tah_load_start){ .address = wake.address, .max_waiting = limit,
-                                                          .why = TAH_LOAD_WHY_TIMER, .now_ns = fire->now_ns },
+            if (tah_loads_start(loads, &(tah_load_start){ .address = wake.address, .why = TAH_LOAD_WHY_TIMER,
+                                                          .now_ns = fire->now_ns },
                                 &index) != TA_OK) {
                 /* No memory: try again at the next turn, and stop for now. */
                 (void)tah_loads_wake_at(loads, wake.address, wake.due);

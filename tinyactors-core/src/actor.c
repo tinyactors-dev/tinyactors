@@ -1354,6 +1354,8 @@ void ta_actor_move_clock(ta_actor *actor, ta_time time) {
  * the actor's invocations an invoke origin when it has none (ADR 0068).
  * That covers hosts that post invoker events through their own mailbox.
  */
+/* Checks an event's origin; fills an invoked child's origin for `actor`,
+ * which may be null for an event that waits for its address. */
 static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor *actor, ta_event *event) {
     if (event->origin.kind == TA_ORIGIN_IO) {
         const ta_io_origin *io = &event->origin.as.io;
@@ -1364,22 +1366,75 @@ static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor 
         }
         return TA_OK;
     }
-    if (event->origin.kind != TA_ORIGIN_NONE || event->invoke_id == TA_INVOKE_ID_NONE) {
+    if (actor == NULL || event->origin.kind != TA_ORIGIN_NONE || event->invoke_id == TA_INVOKE_ID_NONE) {
         return TA_OK;
     }
     (void)ta_invoke_origin_for(system, actor, event->invoke_id, &event->origin);
     return TA_OK;
 }
 
+/*
+ * Admits an event for an address that has no resident actor, or whose actor
+ * finished: it waits for the address, as a chart's mail does (run.h), with
+ * the host's correlation, and core asks the host to load it. The input's
+ * time is the system's: no session's clock is known yet.
+ */
+static ta_result ta_actor_deliver_waiting(ta_system *system, const ta_actor_deliver_params *params,
+                                          const ta_mail_route *route) {
+    if (params->time != ta_clock_now(&system->clock)) {
+        return TA_ERR_INVALID;
+    }
+    ta_event accepted = *params->event;
+    if (accepted.origin.kind == TA_ORIGIN_IO) {
+        ta_result result = ta_actor_accept_origin(system, NULL, &accepted);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    ta_waiting_key wait = { .destination = &route->destination, .hint = route->hint };
+    return ta_run_admit_event(system, &(ta_run_event){ .wait = &wait,
+                                                        .event = &accepted,
+                                                        .trace = &params->trace,
+                                                        .time = params->time,
+                                                        .correlation = params->correlation });
+}
+
+static ta_result ta_actor_deliver_resident(ta_system *system, ta_actor *actor, const ta_actor_deliver_params *params);
+
 ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *params) {
     if (system == NULL || params == NULL || params->event == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_event *event = params->event;
-    ta_actor *actor = ta_actor_lookup(system, params->actor);
-    if (actor == NULL) {
-        return TA_ERR_NOT_FOUND;
+    if (params->actor != 0 || params->address == NULL) {
+        ta_actor *actor = ta_actor_lookup(system, params->actor);
+        return actor == NULL ? TA_ERR_NOT_FOUND : ta_actor_deliver_resident(system, actor, params);
     }
+    /* By address, as h2c.event: resolved as a chart's <send> is. */
+    const ta_actor_address *text = params->address;
+    if (params->transition != NULL || text->family.name.ptr == NULL || text->family.name.len == 0 ||
+        text->name.ptr == NULL || text->name.len == 0 || !ta_trie_valid(&system->event_names, params->event->name) ||
+        params->event->name == TA_TRIE_ROOT) {
+        return TA_ERR_INVALID;
+    }
+    ta_address *address = NULL;
+    ta_result result = ta_address_intern(system, text, &address);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_mail_route route;
+    ta_actor_mail_route(system, &(ta_actor_ref){ .kind = TA_ACTOR_REF_NAMED, .as.named = address }, &route);
+    result = route.actor != NULL ? ta_actor_deliver_resident(system, route.actor, params)
+                                 : ta_actor_deliver_waiting(system, params, &route);
+    if (route.held) {
+        ta_actor_ref_release(&route.destination);
+    }
+    ta_address_release(address);
+    return result;
+}
+
+/* Admits an event for resident `actor`; see ta_actor_deliver(). */
+static ta_result ta_actor_deliver_resident(ta_system *system, ta_actor *actor, const ta_actor_deliver_params *params) {
+    const ta_event *event = params->event;
     const ta_operator_transition *transition = params->transition;
     if (!ta_trie_valid(&system->event_names, event->name) || event->name == TA_TRIE_ROOT ||
         (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition)) ||

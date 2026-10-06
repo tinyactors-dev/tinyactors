@@ -282,8 +282,8 @@ Each would be one ADR in `tinyactors-core/docs/adr/`, unless noted.
      ([envelope.md](envelope.md#the-waiting-entry-one-copy-of-the-address)).
    - **Withdrawal is a new record.** Committed records never change.
      [`h2c.withdraw`](../../../../tinyactors-core/src/generated/MESSAGES.md#h2cwithdraw) names
-     an admitted input by its h2c seq, which core finds through a
-     `source_seq` index that grows in the pool's refill. If it has not
+     an admitted input by its h2c seq, which core finds by scanning the
+     pool, bounded by `poolEnvelopes` (ADR 0099 decision 11). If it has not
      been taken, core frees its envelope and writes `c2h.input_refused` (`withdrawn`);
      otherwise the input's own terminal record stands, and only an
      operator abandon stops it

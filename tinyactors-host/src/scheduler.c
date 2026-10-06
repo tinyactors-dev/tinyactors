@@ -172,7 +172,6 @@ const char *tah_dead_reason_name(tah_dead_reason reason) {
         [TAH_DEAD_DESTROYED] = "destroyed",       [TAH_DEAD_REFUSED] = "refused",
         [TAH_DEAD_UNLOADED] = "unloaded",         [TAH_DEAD_REJECTED] = "rejected",
         [TAH_DEAD_LOAD_FAILED] = "load-failed",   [TAH_DEAD_LOAD_TIMEOUT] = "load-timeout",
-        [TAH_DEAD_WAITING_FULL] = "waiting-full",
     };
     return (uint32_t)reason < TAH_DEAD_REASONS ? names[reason] : "not-found";
 }
@@ -192,6 +191,7 @@ void tah_sched_init(tah_sched *sched, ta_allocator allocator, ta_allocator envel
     tah_vec_init(&sched->waiters, envelopes, TAH_LAYOUT(tah_waiter));
     tah_vec_init(&sched->faults_pending, allocator, TAH_LAYOUT(tah_pending_fault));
     tah_vec_init(&sched->outcomes_pending, allocator, TAH_LAYOUT(ta_input_outcome));
+    tah_map_init(&sched->failed_loads, allocator);
     /* One chunk holds a default turn's settlements (messageBudget and
      * resumesPerTurn are 1024 by default), so steady state reuses it. */
     tah_ring_init(&sched->settled, allocator,
@@ -237,6 +237,7 @@ void tah_sched_destroy(tah_sched *sched) {
         }
     }
     tah_vec_destroy(&sched->pages);
+    tah_map_destroy(&sched->failed_loads);
     tah_ring_destroy(&sched->held);
     tah_ring_destroy(&sched->backoff);
     tah_sched_discard_mail(sched); /* gives back the trace parents envelopes hold */
@@ -568,7 +569,6 @@ bool tah_sched_cancel(tah_sched *sched, uint32_t index) {
         return false;
     }
     if (waiter->state == TAH_WAITER_QUEUED) {
-        /* A message waiting for a load is withdrawn by tah_system_cancel(). */
         uint32_t at = waiter->envelope;
         tah_envelope *envelope = tah_sched_envelope(sched, at);
         tah_sched_entry *entry = tah_sched_lookup(sched, waiter->actor);
@@ -751,48 +751,6 @@ ta_result tah_sched_transfer(tah_sched *sched, const tah_sched_transfer_params *
     return TA_OK;
 }
 
-ta_result tah_sched_hand_over(tah_sched *sched, tah_mailbox *box, ta_actor_id to) {
-    tah_sched_entry *entry = tah_sched_lookup(sched, to);
-    if (entry == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    tah_sched_splice_front(sched, &(tah_splice){ .first = box->first, .last = box->last, .to = to, .entry = entry });
-    *box = (tah_mailbox){ 0 };
-    return TA_OK;
-}
-
-void tah_sched_bury_waiting(tah_sched *sched, tah_mailbox *box, tah_dead_reason reason) {
-    uint32_t index = box->first;
-    while (index != 0) {
-        uint32_t next = tah_sched_envelope(sched, index)->next;
-        tah_sched_dead_append(sched, index, reason);
-        index = next;
-    }
-    *box = (tah_mailbox){ 0 };
-}
-
-bool tah_sched_withdraw_waiting(tah_sched *sched, tah_mailbox *box, uint32_t index) {
-    uint32_t previous = 0;
-    for (uint32_t at = box->first; at != 0; at = tah_sched_envelope(sched, at)->next) {
-        if (at == index) {
-            uint32_t next = tah_sched_envelope(sched, at)->next;
-            if (previous == 0) {
-                box->first = next;
-            } else {
-                tah_sched_envelope(sched, previous)->next = next;
-            }
-            if (box->last == index) {
-                box->last = previous;
-            }
-            box->count -= 1u;
-            tah_envelope_give(sched, index);
-            return true;
-        }
-        previous = at;
-    }
-    return false;
-}
-
 ta_result tah_sched_wake(tah_sched *sched, ta_actor_id actor) {
     tah_sched_entry *entry = tah_sched_lookup(sched, actor);
     if (entry == NULL) {
@@ -964,6 +922,13 @@ static ta_result tah_sched_offer(tah_sched *sched, uint32_t index) {
                                                                                  .as.error = &error });
     } else {
         tah_trace_watch_mark(sched->watch, sched->core, envelope->target, &trace);
+        /* A message posted by address names no actor: core resolves it
+         * (core ADR 0099). */
+        ta_actor_address view = { 0 };
+        bool by_address = envelope->target == 0 && !envelope->has_jump && envelope->address != NULL;
+        if (by_address) {
+            view = ta_address_view(envelope->address);
+        }
         ta_operator_transition jump = { 0 };
         if (envelope->has_jump) {
             jump = (ta_operator_transition){ .source = envelope->jump->source,
@@ -972,6 +937,7 @@ static ta_result tah_sched_offer(tah_sched *sched, uint32_t index) {
         }
         result = ta_actor_deliver(sched->core, &(ta_actor_deliver_params){ .time = now,
                                                                            .actor = envelope->target,
+                                                                           .address = by_address ? &view : NULL,
                                                                            .event = &envelope->event,
                                                                            .trace = trace,
                                                                            .transition = envelope->has_jump ? &jump
@@ -1124,7 +1090,52 @@ static bool tah_sched_jump_applies(tah_sched *sched, ta_actor_id actor, const ta
     return result == TA_OK && view.definition_id == message->jump->definition;
 }
 
+/*
+ * Posts a message by address (core ADR 0099): core resolves the address,
+ * admitting it for the actor resident there, or keeping it until the
+ * address's load is answered. It is in no actor's mailbox; core's outcomes
+ * settle it. On a refusal at the post the caller keeps the event and the
+ * waiter, as for the host's own message to an actor.
+ */
+static ta_result tah_sched_post_address(tah_sched *sched, const tah_message *message) {
+    ta_trace_parent *trace = NULL;
+    if (!tah_sched_take_trace(sched, message, &trace)) {
+        return TA_ERR_NOMEM;
+    }
+    uint32_t index = tah_envelope_take(sched);
+    if (index == 0) {
+        if (trace != NULL) {
+            tah_free_list_give(&sched->traces, trace);
+        }
+        return TA_ERR_NOMEM;
+    }
+    tah_message posted = *message;
+    posted.target = 0;
+    tah_sched_fill(sched, index, &posted, trace);
+    tah_envelope *envelope = tah_sched_envelope(sched, index);
+    ta_address_retain(message->address);
+    envelope->address = message->address; /* a dead letter names it */
+    ta_result result = tah_sched_offer(sched, index);
+    if (result == TA_OK) {
+        envelope->phase = TAH_ENVELOPE_ADMITTED;
+        sched->core_work = true;
+        return TA_OK;
+    }
+    envelope->event = (ta_event){ 0 };
+    tah_waiter *waiter = tah_sched_waiter(sched, message->waiter);
+    if (waiter != NULL) {
+        waiter->state = TAH_WAITER_SETTLING;
+        waiter->envelope = 0;
+        waiter->actor = 0;
+    }
+    tah_envelope_give(sched, index);
+    return result;
+}
+
 ta_result tah_sched_post(tah_sched *sched, const tah_message *message) {
+    if (message->address != NULL) {
+        return tah_sched_post_address(sched, message);
+    }
     ta_actor_id target = message->target;
     tah_sched_entry *entry = tah_sched_lookup(sched, target);
     bool dead = entry == NULL || (entry->flags & TAH_SCHED_FINISHED) != 0;
@@ -1195,60 +1206,6 @@ ta_result tah_sched_post(tah_sched *sched, const tah_message *message) {
         sched->held_blocked = true;
     }
     tah_sched_hold(sched, entry, target);
-    return TA_OK;
-}
-
-ta_result tah_sched_post_waiting(tah_sched *sched, const tah_waiting_post *post) {
-    bool overflow = tah_sched_full(sched, post->message->bytes);
-    ta_trace_parent *trace = NULL;
-    if (!tah_sched_take_trace(sched, post->message, &trace)) {
-        return TA_ERR_NOMEM;
-    }
-    uint32_t index = tah_envelope_take(sched);
-    if (index == 0) {
-        if (trace != NULL) {
-            tah_free_list_give(&sched->traces, trace);
-        }
-        return TA_ERR_NOMEM;
-    }
-    tah_message message = *post->message;
-    message.target = 0; /* no actor yet: the hand-over names it */
-    tah_sched_fill(sched, index, &message, trace);
-    if (overflow) {
-        tah_sched_mark_overflow(sched, index);
-    }
-    ta_address_retain(post->address);
-    tah_envelope *envelope = tah_sched_envelope(sched, index);
-    envelope->address = post->address; /* a dead letter names it if the load fails */
-    envelope->phase = TAH_ENVELOPE_WAITING;
-    tah_mailbox *box = post->box;
-    if (box->last != 0) {
-        tah_sched_envelope(sched, box->last)->next = index;
-    } else {
-        box->first = index;
-    }
-    box->last = index;
-    box->count += 1u;
-    return TA_OK;
-}
-
-ta_result tah_sched_post_dead(tah_sched *sched, const tah_dead_post *post) {
-    ta_trace_parent *trace = NULL;
-    if (!tah_sched_take_trace(sched, post->message, &trace)) {
-        return TA_ERR_NOMEM;
-    }
-    uint32_t index = tah_envelope_take(sched);
-    if (index == 0) {
-        if (trace != NULL) {
-            tah_free_list_give(&sched->traces, trace);
-        }
-        return TA_ERR_NOMEM;
-    }
-    tah_sched_fill(sched, index, post->message, trace);
-    tah_envelope *envelope = tah_sched_envelope(sched, index);
-    envelope->target = 0;
-    envelope->address = post->address;
-    tah_sched_dead_append(sched, index, post->reason);
     return TA_OK;
 }
 
@@ -1474,11 +1431,31 @@ static void tah_sched_ended(tah_sched *sched, tah_sched_entry *entry, ta_actor_i
     }
 }
 
-/* A message core refused: a dead letter. */
+void tah_sched_note_failed_load(tah_sched *sched, const ta_address *address, tah_dead_reason reason) {
+    (void)tah_map_put(&sched->failed_loads, (uint64_t)(uintptr_t)address, (uint64_t)reason);
+}
+
+void tah_sched_forget_failed_load(tah_sched *sched, const ta_address *address) {
+    if (tah_map_count(&sched->failed_loads) != 0) {
+        (void)tah_map_remove(&sched->failed_loads, (uint64_t)(uintptr_t)address);
+    }
+}
+
+/* A message core refused: a dead letter. A message posted by address whose
+ * load failed carries the failure's code (system.c), and its reason when
+ * the loader gave one (tah_sched_note_failed_load). */
 static void tah_sched_refused(tah_sched *sched, tah_sched_entry *entry, uint32_t index, ta_result code) {
-    tah_dead_reason reason = code == TA_ERR_DONE      ? TAH_DEAD_DONE
-                             : code == TA_ERR_INVALID ? TAH_DEAD_REFUSED
-                                                      : TAH_DEAD_NOT_FOUND;
+    tah_dead_reason reason = code == TA_ERR_DONE       ? TAH_DEAD_DONE
+                             : code == TA_ERR_INVALID  ? TAH_DEAD_REFUSED
+                             : code == TA_ERR_UNLOADED ? TAH_DEAD_UNLOADED
+                                                       : TAH_DEAD_NOT_FOUND;
+    const tah_envelope *posted = tah_sched_envelope(sched, index);
+    uint64_t failed = 0;
+    if (posted != NULL && posted->target == 0 && !posted->has_jump && posted->address != NULL &&
+        reason == TAH_DEAD_NOT_FOUND && tah_map_count(&sched->failed_loads) != 0 &&
+        tah_map_get(&sched->failed_loads, (uint64_t)(uintptr_t)posted->address, &failed)) {
+        reason = (tah_dead_reason)failed;
+    }
     if (entry != NULL) {
         (void)tah_sched_unlink(sched, entry, index);
         if (code == TA_ERR_DONE) {

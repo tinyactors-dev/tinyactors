@@ -226,6 +226,9 @@ typedef enum {
 #define TA_ENVELOPE_FLAG_WAITING_TARGET ((uint8_t)0x01u)
 /** `text` ends with a trace parent field (`name_area.h`). */
 #define TA_ENVELOPE_FLAG_TRACED ((uint8_t)0x02u)
+/** An input posted to an address whose load failed: refused when it is
+ * reached, with the fault's code in `due` (`run.h`). */
+#define TA_ENVELOPE_FLAG_REFUSED ((uint8_t)0x04u)
 
 /** One pending input; see the file comment. */
 typedef struct {
@@ -255,7 +258,8 @@ typedef struct {
      * or a sender that is gone. */
     uint64_t from;
     /** A timer's deadline; while taken, the logical time of the macrostep
-     * it runs (`run.h`). */
+     * it runs; with `TA_ENVELOPE_FLAG_REFUSED`, the code it is refused with
+     * (`run.h`). */
     ta_time due;
     /** The invocation-instance token of a child event, completion or
      * stop, or 0. */

@@ -113,6 +113,7 @@ export interface DeadLetterRecord {
    * (the loader said "not now"), `load-failed`, `load-timeout`, or
    * `waiting-full` (the address already had maxWaiting messages waiting).
    */
+  // status: partial: waiting-full is not produced; mail posted by name waits in core, bounded by its pool (core ADR 0099)
   readonly reason:
     | "not-found"
     | "done"
@@ -199,6 +200,7 @@ export interface LoaderOptions {
   /** Milliseconds the loader may take; after that its mail is `load-timeout` (default 5000). */
   readonly timeout?: number;
   /** Messages that may wait for one address; the rest are `waiting-full` (default 1000). */
+  // status: unimplemented: mail waits in core, bounded by its pool (core ADR 0099)
   readonly maxWaiting?: number;
 }
 

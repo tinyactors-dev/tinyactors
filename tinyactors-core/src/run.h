@@ -177,6 +177,13 @@
  *   error needs no room the pool may not have; mail still on its way fails
  *   the same way when it arrives.
  *
+ * An external event the host posts to an address (`ta_actor_deliver()`
+ * with no actor) waits the same way when no actor is resident there. When
+ * its load fails it is not recycled: it carries `TA_ENVELOPE_FLAG_REFUSED`
+ * and the fault's code in `due`, goes back to the run queue with no
+ * target, and the next `ta_run()` reports it REFUSED with that code, under
+ * its correlation.
+ *
  * Mail whose target was resident when it was sent, but is gone or finished
  * when it is taken, is recycled the same way, with core's own fault.
  *
@@ -353,8 +360,11 @@ void ta_run_destroy(ta_system *system);
 
 /** An external event to admit; see `ta_run_admit_event`. */
 typedef struct {
-    /** The resident session it is for. */
+    /** The resident session it is for, or null when it waits for `wait`. */
     struct ta_actor *actor;
+    /** With no actor: the address it waits for (posted by address, with no
+     * resident actor there). */
+    const ta_waiting_key *wait;
     /** The event, borrowed; the envelope retains its data and origin. */
     const ta_event *event;
     /** What its macrostep runs under, copied; all zero for none. */
@@ -368,12 +378,14 @@ typedef struct {
 } ta_run_event;
 
 /**
- * Admits an external event for `input->actor` onto the run queue. Refills
- * first when no macrostep runs. Answers `TA_OK`; `TA_ERR_FULL` at the
- * admission watermark or with nothing free; or `TA_ERR_NOMEM` when nothing
- * was free because the refill failed. A failure changes nothing and leaves
- * the operator transition the caller's. May run inside a macrostep, where
- * it never allocates.
+ * Admits an external event for `input->actor` onto the run queue, or, with
+ * no actor, onto the waiting list of `input->wait`'s destination, which is
+ * then owed a load request. Refills first when no macrostep runs. Answers
+ * `TA_OK`; `TA_ERR_FULL` at the admission watermark, with nothing free, or
+ * with no waiting entry free; or `TA_ERR_NOMEM` when nothing was free
+ * because the refill failed. A failure changes nothing and leaves the
+ * operator transition the caller's. May run inside a macrostep, where it
+ * never allocates.
  */
 ta_result ta_run_admit_event(ta_system *system, const ta_run_event *input);
 

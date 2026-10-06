@@ -303,3 +303,40 @@ ring defaults in this ADR's implementation notes.
 - **A quiet system pays for its peak, not the bound,** as with ADR 0093.
   At their bounds the pool and the name area are about 624 KiB per system,
   against napi's 811 KB prefilled block cache before ADR 0093.
+
+## Implementation notes
+
+Step 4.2 of the ring protocol plan implements mail that waits for a target
+that is not resident (decisions 8 and 11) before the rings exist: the host
+reads load requests with `ta_system_load_needed()` and answers them with
+`ta_system_load_settled()` or `ta_system_load_failed()`, and posts by address
+through `ta_actor_deliver_params.address`. Three points differ from the
+reference documents:
+
+- **A runtime ID no host could bring back fails at once.** A send to a
+  runtime or session ID that no session holds, from a reference that names
+  no family (ADR 0088; for example `#_scxml_foo`), does not wait: no host can
+  load a target with no address and no family, so core raises
+  `error.communication` in the sending macrostep, on its internal queue, as
+  SCXML 6.2.4 and the W3C IRP tests 496 and 521 require. Waiting would make
+  the error arrive after events the macrostep raised itself. Every other
+  target that is not resident waits and asks, as decision 8 says, including
+  a runtime ID with a family, which a family loader may answer.
+- **Withdrawal scans the pool, as decision 11 says.** `envelope.md`
+  describes a B3 table from correlation to envelope. It was built and
+  removed: a B3 table grows by rehashing one contiguous array, so at 200,000
+  admitted inputs it took one 4 MB block, against the 1 MB the system's
+  largest block was at 50,000, and napi's scale test, which requires the
+  largest block not to grow with the population, failed. ADR 0065 decision
+  6 rejects such growth for tables that scale with the population. The scan
+  is bounded by `poolEnvelopes`, runs between macrosteps, allocates nothing,
+  and finds runnable inputs by arrival first, then waiting ones.
+- **A waiting entry holds the address's handle, not a copy of its text.**
+  Core interns every named address it routes to (ADR 0065), so the entry
+  keeps the destination's reference, retained once per entry, and its table
+  is keyed by the handle; a session ID is keyed by its runtime ID and
+  family. This keeps one copy per address with no name-area chunks and no
+  failure for want of them. The text copy the reference documents describe
+  comes when h2c carries addresses as text (step 5.1), since then no handle
+  exists.
+

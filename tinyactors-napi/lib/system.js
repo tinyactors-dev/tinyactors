@@ -1702,7 +1702,7 @@ class System {
     // Mail or a timer for an offloaded actor starts a load, loader or not.
     if (!this.#loaders.has(self.family)) {
       this.#offloadFamilies.add(self.family);
-      this.#native.setLoaderFamily(self.family, DEFAULT_MAX_WAITING);
+      this.#native.setLoaderFamily(self.family, true);
     }
     this.#native.offload(slot, generation);
     if (due !== undefined) {
@@ -1788,9 +1788,11 @@ class System {
    * A thrown error is `load-failed`; a loader that has not settled after
    * `timeout` ms (default 5000) is `load-timeout`, and a result that comes
    * later is discarded (an image in it is destroyed). One load runs per
-   * address; at most `maxWaiting` messages (default 1000) wait, and the rest
-   * are dead letters with reason `waiting-full`. Pass `null` as the loader
-   * to remove it.
+   * address. The mail waits in core meanwhile, bounded by its pool (core
+   * ADR 0099); `maxWaiting` is accepted and has no effect. When a load
+   * fails, mail a chart sent becomes its sender's error.communication, with
+   * the reason, and mail posted from JavaScript a dead letter with reason
+   * `not-found`. Pass `null` as the loader to remove it.
    *
    * Mail a chart sends to a session of `family` that has gone also waits,
    * with `loader({ family, sessionID }, "session", { offloaded: false })`
@@ -1805,7 +1807,7 @@ class System {
     if (loader === null || loader === undefined) {
       this.#loaders.delete(family);
       // Offloaded actors still load back from their bytes.
-      this.#native.setLoaderFamily(family, this.#offloadFamilies.has(family) ? DEFAULT_MAX_WAITING : 0);
+      this.#native.setLoaderFamily(family, this.#offloadFamilies.has(family));
       return;
     }
     if (typeof loader !== 'function') {
@@ -1821,7 +1823,7 @@ class System {
       }
     }
     this.#loaders.set(family, { loader, timeout, maxWaiting });
-    this.#native.setLoaderFamily(family, maxWaiting);
+    this.#native.setLoaderFamily(family, true);
   }
 
   /**
@@ -2571,10 +2573,6 @@ function actorOf(system, actor) {
   }
   return actor;
 }
-
-// How many messages wait for an offloaded actor's load with no loader
-// (setLoader's maxWaiting default, napi ADR 0020).
-const DEFAULT_MAX_WAITING = 1000;
 
 // A trace parent that names no trace (core ADR 0067).
 const NO_TRACE = Object.freeze({

@@ -189,7 +189,9 @@ async function slowAndTimedOutLoads() {
   system.close();
 }
 
-// At most maxWaiting messages wait; the rest are dead letters.
+// Mail waiting for a load waits in core, bounded by its pool (core ADR
+// 0099): maxWaiting is accepted and bounds nothing, so every message waits
+// and is delivered, in order, and none is a dead letter.
 async function waitingFull() {
   const dead = [];
   const system = createSystem({ deadLetter: (letter) => dead.push(letter) });
@@ -203,9 +205,8 @@ async function waitingFull() {
   await tick(5);
   release();
   await system.flush();
-  assert.deepEqual(logOf(system, ONE), [1, 2]);
-  assert.deepEqual(dead.map((letter) => letter.reason), ['waiting-full', 'waiting-full']);
-  image.destroy();
+  assert.deepEqual(logOf(system, ONE), [1, 2, 3, 4]);
+  assert.deepEqual(dead, []);
   system.close();
 }
 

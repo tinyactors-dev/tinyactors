@@ -292,6 +292,8 @@ typedef struct {
     const ta_run_record *record;
     /* What its macrostep runs under, or null. */
     const ta_trace_parent *trace;
+    /* With `target` 0: the destination it waits for, or null. */
+    const ta_waiting_key *wait;
 } ta_run_admission;
 
 /* The text ta_run_write_text writes into an envelope. */
@@ -357,6 +359,9 @@ static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
     return TA_OK;
 }
 
+static void ta_run_waiting_unref(ta_system *system, uint32_t entry);
+static void ta_run_arrive(ta_system *system, uint32_t index);
+
 /*
  * Takes an envelope below the watermark, writes the record into its text,
  * fills it and appends it to the run queue. Whoever calls it retains what
@@ -364,9 +369,22 @@ static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
  */
 static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admission, uint32_t *out) {
     ta_run_refilled refilled = ta_run_refill(system);
+    uint32_t entry = 0u;
+    ta_result result = TA_OK;
+    if (admission->wait != NULL) {
+        result = ta_waiting_take(&system->run.waiting, admission->wait, &entry);
+        if (result != TA_OK) {
+            return result;
+        }
+        /* Counted now, so a failure below frees a new entry again. */
+        ta_waiting_at(&system->run.waiting, entry)->count += 1u;
+    }
     uint32_t index = 0u;
-    ta_result result = ta_envelope_pool_admit(&system->run.pool, &index);
+    result = ta_envelope_pool_admit(&system->run.pool, &index);
     if (result != TA_OK) {
+        if (entry != 0u) {
+            ta_run_waiting_unref(system, entry);
+        }
         return ta_run_envelope_short(&system->run.pool, (ta_run_refusal){ .refill = refilled.pool, .result = result },
                                      true);
     }
@@ -377,17 +395,25 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
                                                        .admission = true });
     if (result != TA_OK) {
         ta_envelope_pool_give(&system->run.pool, index);
+        if (entry != 0u) {
+            ta_run_waiting_unref(system, entry);
+        }
         return result;
     }
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
     envelope->source = admission->source;
     envelope->type = admission->type;
-    envelope->target = admission->target;
+    envelope->target = entry != 0u ? entry : admission->target;
     envelope->send_id = admission->send_id;
     envelope->invoke_instance = admission->invoke;
     envelope->source_seq = admission->correlation;
-    ta_envelope_pool_enqueue(&system->run.pool, index);
     *out = index;
+    if (entry != 0u) {
+        envelope->flags |= TA_ENVELOPE_FLAG_WAITING_TARGET;
+        ta_run_arrive(system, index);
+        return TA_OK;
+    }
+    ta_envelope_pool_enqueue(&system->run.pool, index);
     return TA_OK;
 }
 
@@ -402,7 +428,9 @@ ta_result ta_run_admit_event(ta_system *system, const ta_run_event *input) {
     uint32_t index = 0u;
     ta_result result = ta_run_admit(system, &(ta_run_admission){ .source = TA_RECORD_INPUT_SOURCE_H2C,
                                                                  .type = (uint8_t)event->type,
-                                                                 .target = input->actor->record.id,
+                                                                 .target = input->actor != NULL ? input->actor->record.id
+                                                                                                : 0u,
+                                                                 .wait = input->actor != NULL ? NULL : input->wait,
                                                                  .send_id = event->send_id,
                                                                  .invoke = event->invoke_id,
                                                                  .correlation = input->correlation,
@@ -417,7 +445,9 @@ ta_result ta_run_admit_event(ta_system *system, const ta_run_event *input) {
     ta_event held;
     ta_event_retain(event, &held);
     ta_envelope_pool_at(&system->run.pool, index)->data = held.data;
-    ta_actor_note_admitted(input->actor, input->time);
+    if (input->actor != NULL) {
+        ta_actor_note_admitted(input->actor, input->time);
+    }
     return TA_OK;
 }
 
@@ -1082,6 +1112,11 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
         ta_run_input(call, actor, index);
         return TA_OK;
     }
+    if ((envelope->flags & TA_ENVELOPE_FLAG_REFUSED) != 0u) {
+        /* Posted to an address whose load failed (ta_system_load_failed()). */
+        ta_run_refuse(call, index, (ta_result)(int64_t)envelope->due);
+        return TA_OK;
+    }
     bool wake = envelope->source == TA_RECORD_INPUT_SOURCE_PLATFORM;
     bool mail = envelope->source == TA_RECORD_INPUT_SOURCE_MAIL || envelope->source == TA_RECORD_INPUT_SOURCE_TIMER;
     if (mail && (actor == NULL || (actor->finished && !actor->macrostep))) {
@@ -1390,6 +1425,17 @@ ta_result ta_system_load_failed(ta_system *system, const ta_load_failed_params *
     ta_waiting_at(waiting, entry)->list = TA_LIST_EMPTY;
     for (uint32_t index = ta_list_pop_front(&list, &links); index != 0u; index = ta_list_pop_front(&list, &links)) {
         ta_waiting_at(waiting, entry)->count -= 1u;
+        ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+        if (envelope->source == TA_RECORD_INPUT_SOURCE_H2C) {
+            /* The host's own input is refused, under its correlation, by
+             * the next ta_run(): it carries the fault's code in `due`. */
+            envelope->flags = (uint8_t)((envelope->flags & ~TA_ENVELOPE_FLAG_WAITING_TARGET) |
+                                        TA_ENVELOPE_FLAG_REFUSED);
+            envelope->target = 0u;
+            envelope->due = (ta_time)(int64_t)(params->fault->code == TA_OK ? TA_ERR_NOT_FOUND : params->fault->code);
+            ta_envelope_pool_enqueue(&system->run.pool, index);
+            continue;
+        }
         ta_run_recycle(system, index, params->fault);
     }
     if (ta_waiting_at(waiting, entry)->count == 0u) {

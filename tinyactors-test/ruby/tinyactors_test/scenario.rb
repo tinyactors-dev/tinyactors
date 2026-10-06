@@ -600,8 +600,8 @@ module TinyactorsTest
 
     # Gives `family` a loader: mail for one of its names with no actor starts
     # a load, which hosted_run hands back in `loads`.
-    def hosted_set_loader(hosted, family, max_waiting: 16)
-      rpc('hosted.set_loader', system: hosted[:hosted], family: family, max_waiting: max_waiting)
+    def hosted_set_loader(hosted, family, loader: true)
+      rpc('hosted.set_loader', system: hosted[:hosted], family: family, loader: loader)
     end
 
     # Answers a load request from hosted_run's `loads` as a loader would:

@@ -24,35 +24,25 @@ struct tah_sched_entry {
     uint32_t last;  /* mailbox tail envelope, 0 when empty */
 };
 
-/*
- * A mailbox that belongs to an address, not an actor: mail waiting while a
- * loader brings the actor back (napi ADR 0020). Its envelopes have no
- * target yet; each holds a reference to the address.
- */
-struct tah_mailbox {
-    uint32_t first;
-    uint32_t last;
-    uint32_t count;
-};
-
 /* Where a kernel envelope stands; see tah_envelope. */
 typedef enum {
     TAH_ENVELOPE_HELD = 0,  /* in its target's mailbox; core has not admitted it */
-    TAH_ENVELOPE_ADMITTED,  /* in its target's mailbox, and in core's pool, not yet taken */
+    /* in core's pool, not yet taken, and in its target's mailbox; a message
+     * posted by address is in none until core takes it */
+    TAH_ENVELOPE_ADMITTED,
     TAH_ENVELOPE_TAKEN,     /* taken by its target's macrostep, out of the mailbox */
     /* admitted for an actor the kernel removed inside a ta_run(), before
      * the turn read what core did with it: the outcome makes it a dead letter */
     TAH_ENVELOPE_ORPHANED,
-    TAH_ENVELOPE_DEAD,      /* on the dead list */
-    TAH_ENVELOPE_WAITING    /* in a load's mailbox (loads.h) */
+    TAH_ENVELOPE_DEAD       /* on the dead list */
 } tah_envelope_phase;
 
 /*
  * One message from its post until core reports what became of it. `event`
  * holds its own references (data, named origin) also while core holds its
  * own, so a refused message's data reaches its dead letter. `address` is
- * set only for a dead letter to a named target that had no resident actor,
- * and for mail waiting for a load; it holds a reference too. `jump` is set
+ * set only for a message posted by address (core ADR 0099), which names no
+ * actor until core takes it; it holds a reference too. `jump` is set
  * only for a message that carries an operator transition, which only a
  * message to an actor ID does, so the two share their room and `has_jump`
  * says which it is. Core names it by its index (the correlation).
@@ -129,6 +119,11 @@ struct tah_sched {
      * reported for messages the kernel admitted (ta_input_outcome), acted
      * on at the next turn. */
     tah_vec outcomes_pending;
+    /* Why the last load of an address failed, by the address's pointer
+     * (tah_sched_note_failed_load): the reason the mail JavaScript posted
+     * there is refused with. An entry goes when the address is asked about
+     * again, before any of its later posts can be refused. */
+    tah_map failed_loads;
     tah_envelopes envelopes;
     /* Trace parents of queued traced messages (ta_trace_parent). */
     tah_free_list traces;

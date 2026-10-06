@@ -700,7 +700,21 @@
           "name": "actor",
           "type": {
             "type": "ta_actor_id"
-          }
+          },
+          "doc": "The resident actor the event is for, or 0 with `address`."
+        },
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_address",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true,
+          "doc": "With `actor` 0: the address the event is for, which core resolves through the host's directory, as it does a chart's <send >. Ignored when `actor` is not 0."
         },
         {
           "name": "event",
@@ -750,15 +764,16 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 88,
+          "size": 96,
           "align": 8,
           "offsets": {
             "actor": 0,
-            "event": 8,
-            "trace": 16,
-            "transition": 64,
-            "time": 72,
-            "correlation": 80
+            "address": 8,
+            "event": 16,
+            "trace": 24,
+            "transition": 72,
+            "time": 80,
+            "correlation": 88
           }
         },
         "wasm32-unknown-unknown": {
@@ -766,7 +781,8 @@
           "align": 8,
           "offsets": {
             "actor": 0,
-            "event": 8,
+            "address": 8,
+            "event": 12,
             "trace": 16,
             "transition": 64,
             "time": 72,
@@ -10956,7 +10972,7 @@
           "symbol": "refused"
         }
       ],
-      "doc": "What became of one input, as ta_run() reports it in the caller's outcome buffer (ADR 0103). An input ta_run() takes is reported once when it ends, with one of COMPLETED, IGNORED or FINISHED, and FAULTED comes before that each time a fault stops its macrostep on the way; an input it does not take is reported once, REFUSED. An input is never reported when: - it is withdrawn (ta_system_withdraw_input()) before it is taken; - it was taken, and its session is destroyed or unloaded before its macrostep ends, or its macrostep is abandoned (ta_actor_abandon()); that includes an input reported FAULTED whose session is then abandoned or destroyed instead of released; - it is one of core's own that its session no longer needs; - it is mail or a due send whose target is gone or has finished when it is reached: it becomes error.communication for its sender instead, as mail for a target that cannot be loaded does (ta_system_load_failed()). The kinds: - TAKEN: its macrostep began (only with `report_taken`). - COMPLETED: its macrostep ended with the session stable; the event, if it had one, enabled a transition. - IGNORED: as COMPLETED, but its external event enabled no transition, the event events_ignored counts (ADR 0089 section 8). - FINISHED: the session reached a top-level final state. - FAULTED: a fault stopped the session inside its macrostep: `code` is TA_ERR_RUNAWAY at the microstep limit (ADR 0075), TA_ERR_NOMEM when it ran out of memory (ADR 0070), or another error an operation answered. The session is still in that macrostep, always: it keeps its input and its continuation; later inputs for it wait until ta_actor_release() lets it go on, or it is abandoned or destroyed. When it goes on, the input is reported again when it ends. A fault that comes as the macrostep ends leaves nothing to continue, and is reported as the input's end instead (COMPLETED or FINISHED, with the fault's `code`). - REFUSED: never taken: `code` is TA_ERR_NOT_FOUND when its session is gone, or, for an invocation's error report, its invocation is; TA_ERR_DONE when the session has finished; TA_ERR_INVALID when the operator transition it carries no longer applies (its source is not active, or the session now runs another definition). Core's own inputs have correlation 0: a session's bootstrap, a macrostep core started for work queued outside any run, mail one session sent another, and a delayed send that fell due. Core queues mail and due sends itself: a session's mail joins the queue only when the macrostep that sent it ends, and mail for a target that is not resident waits for the host's answer to a load request (ta_system_load_needed(), ADR 0099). Mail for a session that is not published yet (prepared, or replaying) waits until it is published.",
+      "doc": "What became of one input, as ta_run() reports it in the caller's outcome buffer (ADR 0103). An input ta_run() takes is reported once when it ends, with one of COMPLETED, IGNORED or FINISHED, and FAULTED comes before that each time a fault stops its macrostep on the way; an input it does not take is reported once, REFUSED. An input is never reported when: - it is withdrawn (ta_system_withdraw_input()) before it is taken; - it was taken, and its session is destroyed or unloaded before its macrostep ends, or its macrostep is abandoned (ta_actor_abandon()); that includes an input reported FAULTED whose session is then abandoned or destroyed instead of released; - it is one of core's own that its session no longer needs; - it is mail or a due send whose target is gone or has finished when it is reached: it becomes error.communication for its sender instead, as mail for a target that cannot be loaded does (ta_system_load_failed()). The kinds: - TAKEN: its macrostep began (only with `report_taken`). - COMPLETED: its macrostep ended with the session stable; the event, if it had one, enabled a transition. - IGNORED: as COMPLETED, but its external event enabled no transition, the event events_ignored counts (ADR 0089 section 8). - FINISHED: the session reached a top-level final state. - FAULTED: a fault stopped the session inside its macrostep: `code` is TA_ERR_RUNAWAY at the microstep limit (ADR 0075), TA_ERR_NOMEM when it ran out of memory (ADR 0070), or another error an operation answered. The session is still in that macrostep, always: it keeps its input and its continuation; later inputs for it wait until ta_actor_release() lets it go on, or it is abandoned or destroyed. When it goes on, the input is reported again when it ends. A fault that comes as the macrostep ends leaves nothing to continue, and is reported as the input's end instead (COMPLETED or FINISHED, with the fault's `code`). - REFUSED: never taken: `code` is TA_ERR_NOT_FOUND when its session is gone, or, for an invocation's error report, its invocation is; for an event posted to an address, the code of the fault the host failed its load with (ta_system_load_failed()); TA_ERR_DONE when the session has finished; TA_ERR_INVALID when the operator transition it carries no longer applies (its source is not active, or the session now runs another definition). Core's own inputs have correlation 0: a session's bootstrap, a macrostep core started for work queued outside any run, mail one session sent another, and a delayed send that fell due. Core queues mail and due sends itself: a session's mail joins the queue only when the macrostep that sent it ends, and mail for a target that is not resident waits for the host's answer to a load request (ta_system_load_needed(), ADR 0099). Mail for a session that is not published yet (prepared, or replaying) waits until it is published.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -20869,7 +20885,7 @@
     },
     {
       "name": "ta_actor_deliver",
-      "doc": "Admits an external event for a resident actor into the system's pool of pending inputs (ADR 0099): it waits on the run queue, in the order it was admitted, until ta_run() takes it. A session in a macrostep, or with inputs ahead of it, takes it in turn: the host never sees a busy session and keeps no mailbox. Admission allocates only to keep the pool's and the name area's reserve of free room, at this safe point; it never runs anything. The result alone tells a host what to do with the message: - TA_OK: admitted; ta_run() reports what became of it under `correlation`. - TA_ERR_FULL: the pool or the name area is at the admission watermark (admissionWatermark of poolEnvelopes and of nameAreaBytes), so the rest stays free for what sessions send each other. Refuse the message at the host's edge, or offer it again after a ta_run(). - TA_ERR_DONE: the actor has reached a top-level final state. Drop the message or route it to a dead-letter policy. - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or unloaded). The receiver is gone from here; drop or route the message. - TA_ERR_INVALID: a caller error only: a null event, an event name this system never issued, or the root name; an input time the actor cannot take; or an operator transition with no targets, an unknown state, targets that cannot form a legal configuration, or, for an actor between macrosteps, a source that is not active (ADR 0082). - TA_ERR_NOMEM: no memory for the operator transition, or the pool or the name area had no free room below the watermark because refilling them failed (ADR 0102). Offer it again later. On any result but TA_OK nothing is retained and the event is untouched. A malformed event or operator transition is TA_ERR_INVALID whatever the actor's state. A finished actor is TA_ERR_DONE: finishing is permanent. Whether an operator transition's source is active is asked again when the input is taken, of the configuration it then runs from; one that no longer applies is reported REFUSED with TA_ERR_INVALID.",
+      "doc": "Admits an external event for a resident actor into the system's pool of pending inputs (ADR 0099): it waits on the run queue, in the order it was admitted, until ta_run() takes it. An event for an `address` goes to the actor resident there; when there is none, or it has finished, it is admitted all the same and waits for the address, as a chart's mail does, and core asks the host to load it (ta_system_load_needed()): the host's answer delivers it (ta_system_load_settled()), or refuses it (ta_system_load_failed()), which ta_run() reports as REFUSED with the fault's code. A session in a macrostep, or with inputs ahead of it, takes it in turn: the host never sees a busy session and keeps no mailbox. Admission allocates only to keep the pool's and the name area's reserve of free room, at this safe point; it never runs anything. The result alone tells a host what to do with the message: - TA_OK: admitted; ta_run() reports what became of it under `correlation`. - TA_ERR_FULL: the pool or the name area is at the admission watermark (admissionWatermark of poolEnvelopes and of nameAreaBytes), so the rest stays free for what sessions send each other. Refuse the message at the host's edge, or offer it again after a ta_run(). - TA_ERR_DONE: the actor has reached a top-level final state. Drop the message or route it to a dead-letter policy. - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or unloaded). The receiver is gone from here; drop the message, or post it by address. - TA_ERR_INVALID: a caller error only: no actor and no address, an address with an empty family or name, an operator transition with an address, a null event, an event name this system never issued, or the root name; an input time the actor cannot take; or an operator transition with no targets, an unknown state, targets that cannot form a legal configuration, or, for an actor between macrosteps, a source that is not active (ADR 0082). - TA_ERR_NOMEM: no memory for the operator transition, or the pool or the name area had no free room below the watermark because refilling them failed (ADR 0102). Offer it again later. On any result but TA_OK nothing is retained and the event is untouched. A malformed event or operator transition is TA_ERR_INVALID whatever the actor's state. A finished actor is TA_ERR_DONE: finishing is permanent. Whether an operator transition's source is active is asked again when the input is taken, of the configuration it then runs from; one that no longer applies is reported REFUSED with TA_ERR_INVALID.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -21083,7 +21099,7 @@
     },
     {
       "name": "ta_system_load_failed",
-      "doc": "Answers a load request: the destination cannot come back. Each message that waited for it becomes error.communication for its sender, with the send's ID and the fault's code, message and data (SCXML 6.2.4); a message whose sender is gone is dropped. Mail still on its way to it fails the same way when it arrives. Between macrosteps, a safe point: raising each error may take room in its sender's internal queue and an envelope to start the sender's macrostep; when there is none, that sender's error is dropped and the call goes on. TA_ERR_STALE when the request was answered already or never read; TA_ERR_BUSY inside a ta_run() callback; TA_ERR_INVALID for null arguments.",
+      "doc": "Answers a load request: the destination cannot come back. Each message that waited for it becomes error.communication for its sender, with the send's ID and the fault's code, message and data (SCXML 6.2.4); a message whose sender is gone is dropped. An event the host posted to the address (ta_actor_deliver_params.address) is refused instead: the next ta_run() reports it REFUSED, with the fault's code, under its correlation. Mail still on its way to it fails the same way when it arrives. Between macrosteps, a safe point: raising each error may take room in its sender's internal queue and an envelope to start the sender's macrostep; when there is none, that sender's error is dropped and the call goes on. TA_ERR_STALE when the request was answered already or never read; TA_ERR_BUSY inside a ta_run() callback; TA_ERR_INVALID for null arguments.",
       "public": true,
       "static_inline": false,
       "implemented": true,

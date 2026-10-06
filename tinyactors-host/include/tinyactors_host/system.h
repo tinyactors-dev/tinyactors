@@ -24,7 +24,7 @@
  *
  * Routing (ADR 0006): the directory is installed on core when the system is
  * created, and each turn answers the load requests core owes for mail to
- * targets that are not resident (router.h). Close uninstalls the directory,
+ * targets that are not resident (its loads, loads.h). Close uninstalls the directory,
  * gives back its address references and the mailboxes' events, and only
  * then destroys core, because core frees its address records at the end of
  * ta_system_destroy().
@@ -267,8 +267,11 @@ void tah_system_free(tah_system *system);
 
 /*
  * Accepts a message, admits it into core's pool, and asks for a turn (ADR
- * 0005, core ADR 0099). On TA_OK the system owns the event's references and
- * the message's waiter. TA_ERR_FULL: core's pool is at its admission
+ * 0005, core ADR 0099). A message posted by address goes to the actor
+ * resident there, as one posted to its ID; with none, core keeps it until
+ * the address's load is answered, and a failed load makes it a dead letter
+ * with the load's reason. On TA_OK the system owns the event's references
+ * and the message's waiter. TA_ERR_FULL: core's pool is at its admission
  * watermark and the message may not be held (tah_message.may_overflow);
  * TA_ERR_NOMEM: nothing accepted.
  */
@@ -334,15 +337,15 @@ void tah_system_want_turn(tah_system *system);
 void tah_system_turn(tah_system *system);
 bool tah_system_dispatch_due(tah_system *system);
 /*
- * Cancels the send() waiter at `index` (ADR 0005 point 11). A message still
- * waiting for a load is withdrawn from the load's mailbox (napi ADR 0020),
- * as one in an actor's mailbox is; otherwise tah_sched_cancel(). True when
- * the waiter was cancelled; the caller settles and gives it back.
+ * Cancels the send() waiter at `index` (ADR 0005 point 11) with
+ * tah_sched_cancel(): a message core has not taken is withdrawn, also one
+ * waiting in core for its address's load (napi ADR 0020). True when the
+ * waiter was cancelled; the caller settles and gives it back.
  */
 bool tah_system_cancel(tah_system *system, uint32_t index);
 /*
  * Finishes a load JavaScript ran (loads.h, tah_loads_finish()), and answers
- * the load request core owes for it, when it has one (router.h): the mail
+ * the load request core owes for it, when it has one: the mail
  * core kept for the address goes to `actor` when the load succeeded, and
  * otherwise becomes error.communication for each sender. TA_ERR_STALE: the
  * token names no load in flight; TA_ERR_NOT_FOUND: `actor` is not the

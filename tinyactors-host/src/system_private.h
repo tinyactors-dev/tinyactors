@@ -75,8 +75,8 @@ struct tah_system {
     tah_vec io_processors; /* tah_io_processor * */
     /* Turn duration and timer lateness (host_metrics.h, napi ADR 0017 section 7). */
     tah_host_metrics metrics;
-    /* Set while core dispatches due delayed sends: what the router is handed
-     * then is a timer firing, and its lateness is recorded. */
+    /* Set while core dispatches due delayed sends: what an I/O processor is
+     * handed then is a timer firing, and its sender's wake is reported. */
     bool dispatching_due;
     /* The recorder (recorder.h, kernel ADR 0006 section 2). */
     tah_recorder recorder;

@@ -207,15 +207,15 @@ jv tat_hosted_post_method(tat_bind *bind, jv params, int *error_code) {
     jv family = jv_object_get(jv_copy(params), jv_string("family"));
     jv actor_name = jv_object_get(jv_copy(params), jv_string("name"));
     if (result == TA_OK && jv_get_kind(family) == JV_KIND_STRING && jv_get_kind(actor_name) == JV_KIND_STRING) {
-        /* By name, as an application posts: through the directory, or into a
-         * load when the address has no actor and its family has a loader. */
+        /* By name, as an application posts: core resolves the address, and
+         * keeps the event for its load when no actor is resident there. */
         ta_actor_address text = {
             .family = {.name = {jv_string_value(family), (uint32_t)jv_string_length_bytes(jv_copy(family))}},
             .name = {jv_string_value(actor_name), (uint32_t)jv_string_length_bytes(jv_copy(actor_name))}};
         ta_address *address = NULL;
         result = ta_address_intern(tah_system_core(hosted->system), &text, &address);
         if (result == TA_OK) {
-            result = tah_router_post_named(hosted->system, address, &(tah_message){.event = &event});
+            result = tah_system_post(hosted->system, &(tah_message){.address = address, .event = &event});
             ta_address_release(address);
         }
     } else if (result == TA_OK) {
@@ -626,7 +626,16 @@ jv tat_hosted_restore_method(tat_bind *bind, jv params, int *error_code) {
     return jv_number((double)replay.actor);
 }
 
-/* Gives `family` a loader that lets `max_waiting` messages wait (0 removes it). */
+/* The boolean member `key` of `params`, or `fallback` when it is absent. */
+static bool tat_hosted_flag(jv params, const char *key, bool fallback) {
+    jv value = jv_object_get(jv_copy(params), jv_string(key));
+    jv_kind kind = jv_get_kind(value);
+    jv_free(value);
+    return kind == JV_KIND_TRUE ? true : kind == JV_KIND_FALSE ? false : fallback;
+}
+
+/* Gives `family` a loader; `"loader": false` removes it. Mail waits in core
+ * meanwhile (core ADR 0099), bounded by core's pool. */
 jv tat_hosted_set_loader_method(tat_bind *bind, jv params, int *error_code) {
     tat_hosted *hosted = NULL;
     if (!tat_hosted_resolve(bind, params, &hosted)) {
@@ -638,7 +647,7 @@ jv tat_hosted_set_loader_method(tat_bind *bind, jv params, int *error_code) {
         result = tah_loads_set_family(
             tah_system_loads(hosted->system),
             (ta_str){jv_string_value(family), (uint32_t)jv_string_length_bytes(jv_copy(family))},
-            (uint32_t)tat_hosted_u64(params, "max_waiting"));
+            tat_hosted_flag(params, "loader", true));
     }
     jv_free(family);
     return tat_encode_ta_result(bind, &result);

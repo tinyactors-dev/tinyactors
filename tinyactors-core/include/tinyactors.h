@@ -3009,7 +3009,9 @@ typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_id *out;
  *   macrostep ends leaves nothing to continue, and is reported as the
  *   input's end instead (COMPLETED or FINISHED, with the fault's `code`).
  * - REFUSED: never taken: `code` is TA_ERR_NOT_FOUND when its session is
- *   gone, or, for an invocation's error report, its invocation is;
+ *   gone, or, for an invocation's error report, its invocation is; for an
+ *   event posted to an address, the code of the fault the host failed its
+ *   load with (ta_system_load_failed());
  *   TA_ERR_DONE when the session has finished; TA_ERR_INVALID when the
  *   operator transition it carries no longer applies (its source is not
  *   active, or the session now runs another definition).
@@ -3347,7 +3349,12 @@ typedef struct {
     uint32_t target_count;
 } ta_operator_transition;
 typedef struct {
+    /* The resident actor the event is for, or 0 with `address`. */
     ta_actor_id actor;
+    /* With `actor` 0: the address the event is for, which core resolves
+     * through the host's directory, as it does a chart's <send>. Ignored
+     * when `actor` is not 0. */
+    TA_IN TA_OPTIONAL const ta_actor_address *address;
     TA_IN const ta_event *event;
     /* What the macrostep that takes the event runs under (ADR 0067). All
      * zero is none. */
@@ -3375,7 +3382,13 @@ typedef struct {
 /*
  * Admits an external event for a resident actor into the system's pool of
  * pending inputs (ADR 0099): it waits on the run queue, in the order it was
- * admitted, until ta_run() takes it. A session in a macrostep, or with
+ * admitted, until ta_run() takes it. An event for an `address` goes to the
+ * actor resident there; when there is none, or it has finished, it is
+ * admitted all the same and waits for the address, as a chart's mail does,
+ * and core asks the host to load it (ta_system_load_needed()): the host's
+ * answer delivers it (ta_system_load_settled()), or refuses it
+ * (ta_system_load_failed()), which ta_run() reports as REFUSED with the
+ * fault's code. A session in a macrostep, or with
  * inputs ahead of it, takes it in turn: the host never sees a busy session
  * and keeps no mailbox. Admission allocates only to keep the pool's and the
  * name area's reserve of free room, at this safe point; it never runs
@@ -3389,8 +3402,11 @@ typedef struct {
  * - TA_ERR_DONE: the actor has reached a top-level final state. Drop the
  *   message or route it to a dead-letter policy.
  * - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or
- *   unloaded). The receiver is gone from here; drop or route the message.
- * - TA_ERR_INVALID: a caller error only: a null event, an event name this
+ *   unloaded). The receiver is gone from here; drop the message, or post it
+ *   by address.
+ * - TA_ERR_INVALID: a caller error only: no actor and no address, an
+ *   address with an empty family or name, an operator transition with an
+ *   address, a null event, an event name this
  *   system never issued, or the root name; an input time the actor cannot
  *   take; or an operator transition with no targets, an unknown state,
  *   targets that cannot form a legal configuration, or, for an actor
@@ -3476,7 +3492,9 @@ TA_API ta_result ta_system_load_settled(ta_system *system, TA_IN const ta_load_s
  * Answers a load request: the destination cannot come back. Each message
  * that waited for it becomes error.communication for its sender, with the
  * send's ID and the fault's code, message and data (SCXML 6.2.4); a message
- * whose sender is gone is dropped. Mail still on its way to it fails the
+ * whose sender is gone is dropped. An event the host posted to the address
+ * (ta_actor_deliver_params.address) is refused instead: the next ta_run()
+ * reports it REFUSED, with the fault's code, under its correlation. Mail still on its way to it fails the
  * same way when it arrives. Between macrosteps, a safe point: raising each
  * error may take room in its sender's internal queue and an envelope to
  * start the sender's macrostep; when there is none, that sender's error is

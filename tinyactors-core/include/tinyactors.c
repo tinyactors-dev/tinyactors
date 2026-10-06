@@ -7874,6 +7874,9 @@ typedef enum {
 #define TA_ENVELOPE_FLAG_WAITING_TARGET ((uint8_t)0x01u)
 /** `text` ends with a trace parent field (`name_area.h`). */
 #define TA_ENVELOPE_FLAG_TRACED ((uint8_t)0x02u)
+/** An input posted to an address whose load failed: refused when it is
+ * reached, with the fault's code in `due` (`run.h`). */
+#define TA_ENVELOPE_FLAG_REFUSED ((uint8_t)0x04u)
 
 /** One pending input; see the file comment. */
 typedef struct {
@@ -7903,7 +7906,8 @@ typedef struct {
      * or a sender that is gone. */
     uint64_t from;
     /** A timer's deadline; while taken, the logical time of the macrostep
-     * it runs (`run.h`). */
+     * it runs; with `TA_ENVELOPE_FLAG_REFUSED`, the code it is refused with
+     * (`run.h`). */
     ta_time due;
     /** The invocation-instance token of a child event, completion or
      * stop, or 0. */
@@ -8889,6 +8893,13 @@ TA_PRIVATE void ta_waiting_free(ta_waiting *waiting, uint32_t index);
  *   error needs no room the pool may not have; mail still on its way fails
  *   the same way when it arrives.
  *
+ * An external event the host posts to an address (`ta_actor_deliver()`
+ * with no actor) waits the same way when no actor is resident there. When
+ * its load fails it is not recycled: it carries `TA_ENVELOPE_FLAG_REFUSED`
+ * and the fault's code in `due`, goes back to the run queue with no
+ * target, and the next `ta_run()` reports it REFUSED with that code, under
+ * its correlation.
+ *
  * Mail whose target was resident when it was sent, but is gone or finished
  * when it is taken, is recycled the same way, with core's own fault.
  *
@@ -9058,8 +9069,11 @@ TA_PRIVATE void ta_run_destroy(ta_system *system);
 
 /** An external event to admit; see `ta_run_admit_event`. */
 typedef struct {
-    /** The resident session it is for. */
+    /** The resident session it is for, or null when it waits for `wait`. */
     struct ta_actor *actor;
+    /** With no actor: the address it waits for (posted by address, with no
+     * resident actor there). */
+    const ta_waiting_key *wait;
     /** The event, borrowed; the envelope retains its data and origin. */
     const ta_event *event;
     /** What its macrostep runs under, copied; all zero for none. */
@@ -9073,12 +9087,14 @@ typedef struct {
 } ta_run_event;
 
 /**
- * Admits an external event for `input->actor` onto the run queue. Refills
- * first when no macrostep runs. Answers `TA_OK`; `TA_ERR_FULL` at the
- * admission watermark or with nothing free; or `TA_ERR_NOMEM` when nothing
- * was free because the refill failed. A failure changes nothing and leaves
- * the operator transition the caller's. May run inside a macrostep, where
- * it never allocates.
+ * Admits an external event for `input->actor` onto the run queue, or, with
+ * no actor, onto the waiting list of `input->wait`'s destination, which is
+ * then owed a load request. Refills first when no macrostep runs. Answers
+ * `TA_OK`; `TA_ERR_FULL` at the admission watermark, with nothing free, or
+ * with no waiting entry free; or `TA_ERR_NOMEM` when nothing was free
+ * because the refill failed. A failure changes nothing and leaves the
+ * operator transition the caller's. May run inside a macrostep, where it
+ * never allocates.
  */
 TA_PRIVATE ta_result ta_run_admit_event(ta_system *system, const ta_run_event *input);
 
@@ -18821,6 +18837,8 @@ typedef struct {
     const ta_run_record *record;
     /* What its macrostep runs under, or null. */
     const ta_trace_parent *trace;
+    /* With `target` 0: the destination it waits for, or null. */
+    const ta_waiting_key *wait;
 } ta_run_admission;
 
 /* The text ta_run_write_text writes into an envelope. */
@@ -18886,6 +18904,9 @@ static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
     return TA_OK;
 }
 
+static void ta_run_waiting_unref(ta_system *system, uint32_t entry);
+static void ta_run_arrive(ta_system *system, uint32_t index);
+
 /*
  * Takes an envelope below the watermark, writes the record into its text,
  * fills it and appends it to the run queue. Whoever calls it retains what
@@ -18893,9 +18914,22 @@ static ta_result ta_run_write_text(ta_system *system, const ta_run_text *text) {
  */
 static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admission, uint32_t *out) {
     ta_run_refilled refilled = ta_run_refill(system);
+    uint32_t entry = 0u;
+    ta_result result = TA_OK;
+    if (admission->wait != NULL) {
+        result = ta_waiting_take(&system->run.waiting, admission->wait, &entry);
+        if (result != TA_OK) {
+            return result;
+        }
+        /* Counted now, so a failure below frees a new entry again. */
+        ta_waiting_at(&system->run.waiting, entry)->count += 1u;
+    }
     uint32_t index = 0u;
-    ta_result result = ta_envelope_pool_admit(&system->run.pool, &index);
+    result = ta_envelope_pool_admit(&system->run.pool, &index);
     if (result != TA_OK) {
+        if (entry != 0u) {
+            ta_run_waiting_unref(system, entry);
+        }
         return ta_run_envelope_short(&system->run.pool, (ta_run_refusal){ .refill = refilled.pool, .result = result },
                                      true);
     }
@@ -18906,17 +18940,25 @@ static ta_result ta_run_admit(ta_system *system, const ta_run_admission *admissi
                                                        .admission = true });
     if (result != TA_OK) {
         ta_envelope_pool_give(&system->run.pool, index);
+        if (entry != 0u) {
+            ta_run_waiting_unref(system, entry);
+        }
         return result;
     }
     ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
     envelope->source = admission->source;
     envelope->type = admission->type;
-    envelope->target = admission->target;
+    envelope->target = entry != 0u ? entry : admission->target;
     envelope->send_id = admission->send_id;
     envelope->invoke_instance = admission->invoke;
     envelope->source_seq = admission->correlation;
-    ta_envelope_pool_enqueue(&system->run.pool, index);
     *out = index;
+    if (entry != 0u) {
+        envelope->flags |= TA_ENVELOPE_FLAG_WAITING_TARGET;
+        ta_run_arrive(system, index);
+        return TA_OK;
+    }
+    ta_envelope_pool_enqueue(&system->run.pool, index);
     return TA_OK;
 }
 
@@ -18931,7 +18973,9 @@ TA_PRIVATE ta_result ta_run_admit_event(ta_system *system, const ta_run_event *i
     uint32_t index = 0u;
     ta_result result = ta_run_admit(system, &(ta_run_admission){ .source = TA_RECORD_INPUT_SOURCE_H2C,
                                                                  .type = (uint8_t)event->type,
-                                                                 .target = input->actor->record.id,
+                                                                 .target = input->actor != NULL ? input->actor->record.id
+                                                                                                : 0u,
+                                                                 .wait = input->actor != NULL ? NULL : input->wait,
                                                                  .send_id = event->send_id,
                                                                  .invoke = event->invoke_id,
                                                                  .correlation = input->correlation,
@@ -18946,7 +18990,9 @@ TA_PRIVATE ta_result ta_run_admit_event(ta_system *system, const ta_run_event *i
     ta_event held;
     ta_event_retain(event, &held);
     ta_envelope_pool_at(&system->run.pool, index)->data = held.data;
-    ta_actor_note_admitted(input->actor, input->time);
+    if (input->actor != NULL) {
+        ta_actor_note_admitted(input->actor, input->time);
+    }
     return TA_OK;
 }
 
@@ -19611,6 +19657,11 @@ static ta_result ta_run_take(ta_run_call *call, uint32_t index) {
         ta_run_input(call, actor, index);
         return TA_OK;
     }
+    if ((envelope->flags & TA_ENVELOPE_FLAG_REFUSED) != 0u) {
+        /* Posted to an address whose load failed (ta_system_load_failed()). */
+        ta_run_refuse(call, index, (ta_result)(int64_t)envelope->due);
+        return TA_OK;
+    }
     bool wake = envelope->source == TA_RECORD_INPUT_SOURCE_PLATFORM;
     bool mail = envelope->source == TA_RECORD_INPUT_SOURCE_MAIL || envelope->source == TA_RECORD_INPUT_SOURCE_TIMER;
     if (mail && (actor == NULL || (actor->finished && !actor->macrostep))) {
@@ -19919,6 +19970,17 @@ TA_API ta_result ta_system_load_failed(ta_system *system, const ta_load_failed_p
     ta_waiting_at(waiting, entry)->list = TA_LIST_EMPTY;
     for (uint32_t index = ta_list_pop_front(&list, &links); index != 0u; index = ta_list_pop_front(&list, &links)) {
         ta_waiting_at(waiting, entry)->count -= 1u;
+        ta_envelope *envelope = ta_envelope_pool_at(&system->run.pool, index);
+        if (envelope->source == TA_RECORD_INPUT_SOURCE_H2C) {
+            /* The host's own input is refused, under its correlation, by
+             * the next ta_run(): it carries the fault's code in `due`. */
+            envelope->flags = (uint8_t)((envelope->flags & ~TA_ENVELOPE_FLAG_WAITING_TARGET) |
+                                        TA_ENVELOPE_FLAG_REFUSED);
+            envelope->target = 0u;
+            envelope->due = (ta_time)(int64_t)(params->fault->code == TA_OK ? TA_ERR_NOT_FOUND : params->fault->code);
+            ta_envelope_pool_enqueue(&system->run.pool, index);
+            continue;
+        }
         ta_run_recycle(system, index, params->fault);
     }
     if (ta_waiting_at(waiting, entry)->count == 0u) {
@@ -28230,6 +28292,8 @@ TA_PRIVATE void ta_actor_move_clock(ta_actor *actor, ta_time time) {
  * the actor's invocations an invoke origin when it has none (ADR 0068).
  * That covers hosts that post invoker events through their own mailbox.
  */
+/* Checks an event's origin; fills an invoked child's origin for `actor`,
+ * which may be null for an event that waits for its address. */
 static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor *actor, ta_event *event) {
     if (event->origin.kind == TA_ORIGIN_IO) {
         const ta_io_origin *io = &event->origin.as.io;
@@ -28240,22 +28304,75 @@ static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor 
         }
         return TA_OK;
     }
-    if (event->origin.kind != TA_ORIGIN_NONE || event->invoke_id == TA_INVOKE_ID_NONE) {
+    if (actor == NULL || event->origin.kind != TA_ORIGIN_NONE || event->invoke_id == TA_INVOKE_ID_NONE) {
         return TA_OK;
     }
     (void)ta_invoke_origin_for(system, actor, event->invoke_id, &event->origin);
     return TA_OK;
 }
 
+/*
+ * Admits an event for an address that has no resident actor, or whose actor
+ * finished: it waits for the address, as a chart's mail does (run.h), with
+ * the host's correlation, and core asks the host to load it. The input's
+ * time is the system's: no session's clock is known yet.
+ */
+static ta_result ta_actor_deliver_waiting(ta_system *system, const ta_actor_deliver_params *params,
+                                          const ta_mail_route *route) {
+    if (params->time != ta_clock_now(&system->clock)) {
+        return TA_ERR_INVALID;
+    }
+    ta_event accepted = *params->event;
+    if (accepted.origin.kind == TA_ORIGIN_IO) {
+        ta_result result = ta_actor_accept_origin(system, NULL, &accepted);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    ta_waiting_key wait = { .destination = &route->destination, .hint = route->hint };
+    return ta_run_admit_event(system, &(ta_run_event){ .wait = &wait,
+                                                        .event = &accepted,
+                                                        .trace = &params->trace,
+                                                        .time = params->time,
+                                                        .correlation = params->correlation });
+}
+
+static ta_result ta_actor_deliver_resident(ta_system *system, ta_actor *actor, const ta_actor_deliver_params *params);
+
 TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *params) {
     if (system == NULL || params == NULL || params->event == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_event *event = params->event;
-    ta_actor *actor = ta_actor_lookup(system, params->actor);
-    if (actor == NULL) {
-        return TA_ERR_NOT_FOUND;
+    if (params->actor != 0 || params->address == NULL) {
+        ta_actor *actor = ta_actor_lookup(system, params->actor);
+        return actor == NULL ? TA_ERR_NOT_FOUND : ta_actor_deliver_resident(system, actor, params);
     }
+    /* By address, as h2c.event: resolved as a chart's <send> is. */
+    const ta_actor_address *text = params->address;
+    if (params->transition != NULL || text->family.name.ptr == NULL || text->family.name.len == 0 ||
+        text->name.ptr == NULL || text->name.len == 0 || !ta_trie_valid(&system->event_names, params->event->name) ||
+        params->event->name == TA_TRIE_ROOT) {
+        return TA_ERR_INVALID;
+    }
+    ta_address *address = NULL;
+    ta_result result = ta_address_intern(system, text, &address);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_mail_route route;
+    ta_actor_mail_route(system, &(ta_actor_ref){ .kind = TA_ACTOR_REF_NAMED, .as.named = address }, &route);
+    result = route.actor != NULL ? ta_actor_deliver_resident(system, route.actor, params)
+                                 : ta_actor_deliver_waiting(system, params, &route);
+    if (route.held) {
+        ta_actor_ref_release(&route.destination);
+    }
+    ta_address_release(address);
+    return result;
+}
+
+/* Admits an event for resident `actor`; see ta_actor_deliver(). */
+static ta_result ta_actor_deliver_resident(ta_system *system, ta_actor *actor, const ta_actor_deliver_params *params) {
+    const ta_event *event = params->event;
     const ta_operator_transition *transition = params->transition;
     if (!ta_trie_valid(&system->event_names, event->name) || event->name == TA_TRIE_ROOT ||
         (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition)) ||

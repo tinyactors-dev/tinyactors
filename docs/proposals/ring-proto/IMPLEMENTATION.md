@@ -558,8 +558,10 @@ commit before the first.
    with the trace parent in its text when traced. A failed fanout fails
    once, at the first send that does not fit.
 5. Waiting entries, `load_needed` and a native "load failed" call, the
-   index by input sequence behind a native withdraw (napi's `send()`
-   cancellation needs it before `h2c.withdraw` exists), and
+   native withdraw, by a scan of the pool as ADR 0099 decision 11 says
+   (napi's `send()` cancellation needs it before `h2c.withdraw` exists;
+   the B3 index was tried and removed, ADR 0099's implementation notes),
+   and
    `error.communication` for undeliverable mail. The router vtable and the
    kernel's router and mailboxes go; the kernel's `loads.c` keeps the
    loader policy until 5.1.
@@ -607,6 +609,10 @@ Carried forward from commit 4 (19cd1813):
   lands with 6.1, when napi drives core directly.
 - Mail to a resident actor that finishes before taking it is refused by
   core; commit 5 turns it into `error.communication`.
+- **The kernel's overflow machinery is idle after commit 5**: no message
+  is marked `may_overflow`, so napi's `maxQueuedMessages` and
+  `maxRetainedBytes` act on nothing. They go with napi's parameter
+  changes in 6.1 (migration.md), not before.
 
 **Exit:**
 - The kernel's scheduler holds no mailboxes, only the code that admits
@@ -687,7 +693,7 @@ the next link builds on:
 1.0 ─▶ 1.5 ─▶ 1.6 ─▶ 4.2 ─▶ 4.3 ─▶ 4.4 ─▶ 4.5 ─▶ 5.1 ─▶ 5.3 ─▶ 5.5 ─▶ 6.1 ─▶ 6.3
 ```
 
-4.2 builds the pool on A5 (1.5) and the `h2c.withdraw` index on B3 (1.6).
+4.2 builds the pool on A5 (1.5) and the waiting-entry table on B3 (1.6).
 Everything else is a side lane that must land before the link that needs
 it: 4.2 also needs A6 (2.4), B1, C3, the name resolver and Phase 3. The rule for scheduling is: keep the critical path busy, and use the
 other lanes to have its inputs ready before it needs them.

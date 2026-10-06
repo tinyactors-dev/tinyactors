@@ -519,7 +519,6 @@ static const char *const tna_dead_codes[TAH_DEAD_REASONS] = {
     [TAH_DEAD_REJECTED] = "rejected",
     [TAH_DEAD_LOAD_FAILED] = "load-failed",
     [TAH_DEAD_LOAD_TIMEOUT] = "load-timeout",
-    [TAH_DEAD_WAITING_FULL] = "waiting-full",
 };
 
 static napi_value tna_settlement_error(napi_env env, const tah_settlement *settlement) {

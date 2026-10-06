@@ -118,17 +118,15 @@ typedef enum {
     TAH_DEAD_DESTROYED,     /* the target was destroyed or unloaded with mail waiting */
     TAH_DEAD_REFUSED,       /* core refused the message itself (for example a malformed event) */
     TAH_DEAD_UNLOADED,      /* the target is unloaded (a named address, or an actor unloaded with mail waiting) */
-    /* Mail that waited for a loader (napi ADR 0020): */
+    /* Why a load failed (napi ADR 0020), as a chart's error.communication
+     * names it (system.c): */
     TAH_DEAD_REJECTED,      /* the loader answered "not now" */
     TAH_DEAD_LOAD_FAILED,   /* the loader threw, or its result could not be used */
-    TAH_DEAD_LOAD_TIMEOUT,  /* the loader did not settle in time */
-    TAH_DEAD_WAITING_FULL   /* the address already had maxWaiting messages waiting */
+    TAH_DEAD_LOAD_TIMEOUT   /* the loader did not settle in time */
 } tah_dead_reason;
 
 /* The reason's name as JavaScript sees it ("not-found", "load-timeout", ...). */
 const char *tah_dead_reason_name(tah_dead_reason reason);
-
-typedef struct tah_mailbox tah_mailbox;
 
 /*
  * An invocation's error report that waits in its parent's mailbox (napi ADR
@@ -165,7 +163,11 @@ typedef struct {
 
 /* A message to accept: the target, the event, and what it carries along. */
 typedef struct {
-    ta_actor_id target;     /* unused for a named post */
+    ta_actor_id target;     /* unused for a post by address */
+    /* A post by address (core ADR 0099), or NULL: core resolves it, and it
+     * waits in core for the address's load when no actor is resident there.
+     * Borrowed; the envelope retains it. Not with `jump` or `report`. */
+    ta_address *address;
     const ta_event *event;
     uint32_t bytes;         /* retained-bytes estimate of its data, 0 for none */
     uint32_t waiter;        /* a send() waiting for it, or 0 */
@@ -360,48 +362,15 @@ ta_result tah_sched_transfer(tah_sched *sched, const tah_sched_transfer_params *
  */
 ta_result tah_sched_post(tah_sched *sched, const tah_message *message);
 /*
- * Accepts a message that is a dead letter already: its target is a name the
- * directory has no resident actor for (ADR 0006 point 4). On TA_OK the
- * envelope owns `event`'s references and the `address` reference.
- * TA_ERR_NOMEM as for tah_sched_post().
+ * The load of `address` failed with `reason` (rejected, load-failed,
+ * load-timeout, ...): mail JavaScript posted there, which core refuses
+ * next, becomes a dead letter with that reason. Never fails; out of memory
+ * the letters say not-found.
  */
-typedef struct {
-    ta_address *address;
-    const tah_message *message;
-    tah_dead_reason reason;
-} tah_dead_post;
-ta_result tah_sched_post_dead(tah_sched *sched, const tah_dead_post *post);
-/*
- * Accepts a message into the waiting mailbox `box` of `address` (napi ADR
- * 0020). The envelope takes its own reference to `address`. On TA_OK it
- * owns the event's references and the waiter follows the message, as for
- * tah_sched_post(); the limits of ADR 0005 point 9 count it, as overflow
- * past them. TA_ERR_NOMEM as for tah_sched_post().
- */
-typedef struct {
-    tah_mailbox *box;
-    ta_address *address;
-    const tah_message *message;
-} tah_waiting_post;
-ta_result tah_sched_post_waiting(tah_sched *sched, const tah_waiting_post *post);
-/*
- * The actor for the address was loaded: the waiting mail moves, in order,
- * to the front of `to`'s mailbox, held, with its send() waiters, as
- * replacement moves an incumbent's mail; the next turn admits it. It is
- * older than anything posted to `to` directly. TA_ERR_NOT_FOUND when the
- * table does not know `to`; TA_ERR_NOMEM (nothing moved) when `to` cannot
- * join the held queue. `box` is empty afterwards on TA_OK.
- */
-ta_result tah_sched_hand_over(tah_sched *sched, tah_mailbox *box, ta_actor_id to);
-/* The load failed: every waiting message becomes a dead letter with `reason`. */
-void tah_sched_bury_waiting(tah_sched *sched, tah_mailbox *box, tah_dead_reason reason);
-/*
- * Withdraws the envelope at `index` from the waiting mailbox `box` and
- * frees it, as cancelling a send() does for mail in an actor's mailbox (ADR
- * 0005 point 11). False, changing nothing, when `box` does not hold it.
- */
-bool tah_sched_withdraw_waiting(tah_sched *sched, tah_mailbox *box, uint32_t index);
-/* The envelope at `index` (for tests and the router), or NULL. */
+void tah_sched_note_failed_load(tah_sched *sched, const ta_address *address, tah_dead_reason reason);
+/* `address` is asked about again: a reason noted for it no longer applies. */
+void tah_sched_forget_failed_load(tah_sched *sched, const ta_address *address);
+/* The envelope at `index` (for tests), or NULL. */
 tah_envelope *tah_sched_envelope(const tah_sched *sched, uint32_t index);
 /* Messages waiting in `actor`'s mailbox, its overflow included. */
 uint32_t tah_sched_mailbox_count(const tah_sched *sched, ta_actor_id actor);

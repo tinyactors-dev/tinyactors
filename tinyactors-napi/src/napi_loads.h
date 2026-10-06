@@ -8,8 +8,9 @@
  * with an array of { index, generation, family, name, why }.
  *
  * Methods of the native System (lib/system.js calls them):
- * - setLoaderFamily(family, maxWaiting): registers a family's loader limit;
- *   0 removes the loader.
+ * - setLoaderFamily(family, loader): registers a family's loader, or with
+ *   `loader` false removes it. Mail for the family waits in core meanwhile
+ *   (core ADR 0099).
  * - completeLoad(index, generation, outcome, slot?, actorGeneration?,
  *   detail?): finishes a load. `outcome` is "loaded" or "spawned" (the
  *   actor at slot/actorGeneration is resident at the address), or
