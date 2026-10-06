@@ -1,6 +1,6 @@
 {
   "name": "@tinyactors/node",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "xstate-style state machines and actors on the tinyactors SCXML runtime (N-API addon); hibernation, links",
   "keywords": [
     "actor",
