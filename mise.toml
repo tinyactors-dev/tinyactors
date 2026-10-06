@@ -23,9 +23,11 @@ clang = "22"
 "conda:gzip" = "1.14"
 # The static analysis of the build scripts (mise run check-portability).
 ast-grep = "0.45.3"
-# The JavaScript runtime the bindings' tests run on (tinyactors-core's
-# node:test, web:test, w3c:js), the same from every directory.
+# The JavaScript runtimes the bindings' tests run on, the same from every
+# directory: Node.js (node:test, web:test, w3c:js) and Bun (node:test runs
+# the Node.js binding's suites on both).
 node = "22"
+bun = "1"
 # Every release binary is built with `zig cc` (docs/adr/0001): one compiler,
 # linker, compiler-rt and C library for every target, from any host
 # (Toolchain::Target.release). It is LLVM too (21 in zig 0.16), and LLVM

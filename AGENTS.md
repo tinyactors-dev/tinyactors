@@ -88,7 +88,8 @@ Do it at release time, not between releases.
     `torture:test`, `check:wasm`, `check:freestanding` (`mise tasks` lists
     them);
   - one Node.js binding suite: `node --test test/<suite>.test.js` in
-    `tinyactors-core/bindings/node`, after `mise run node:build`;
+    `tinyactors-core/bindings/node`, after `mise run node:build`, then
+    `bun test test/<suite>.test.js` (`node:test` runs both);
   - one project's whole suite: `mise run test` inside it.
 - Do not skip, weaken or delete a check to make the fast pass faster. Make
   it cheaper, or move it to the full pass as below.

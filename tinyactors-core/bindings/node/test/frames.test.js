@@ -132,7 +132,7 @@ test('links over TCP: length-prefixed frames both ways; envelopes above the peer
 test('links over TCP: a dropped connection reconnects and resumes the same peer', async () => {
   const server = createSystem({ id: 'srv-tcp2' });
   const echoes = createActor(echo, { system: server, systemID: 'echo' }).start();
-  const served = serveLinks(server, { tcp: { port: 0 }, exports: ['echo'], resumeMs: 5000 });
+  const served = serveLinks(server, { tcp: { port: 0, host: '127.0.0.1' }, exports: ['echo'], resumeMs: 5000 });
   await until(() => served.port);
   const sockets = [];
   const client = createSystem({ id: 'cli-tcp2' });

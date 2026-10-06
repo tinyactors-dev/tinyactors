@@ -1,10 +1,13 @@
 #!/usr/bin/env ruby
-#MISE description="Test the Node.js binding: its node:test suites and the TypeScript type tests, against a fresh addon"
+#MISE description="Test the Node.js binding: its node:test suites on Node.js and on Bun, and the TypeScript type tests, against a fresh addon"
 #MISE depends=["node:build"]
 # vim:ft=ruby
 
 require_relative '../../core'
 
 node = Core.node_packages
-Core.run('node', '--test', *Dir[node.join('test/*.test.js').to_s].sort, chdir: node)
+suites = Dir[node.join('test/*.test.js').to_s].sort
+Core.run('node', '--test', *suites, chdir: node)
+# Bun loads the same addon through its own N-API; its runner reads node:test.
+Core.run('bun', 'test', *suites, chdir: node)
 Core.run('node_modules/.bin/tsc', '-p', 'test', chdir: node)

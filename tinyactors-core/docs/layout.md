@@ -207,7 +207,7 @@ implementation of that layer). Layer dependency rules are in
 | `mise run check:freestanding` | *test* · prove `base/image/core/system/basic_http` compile and link with no libc for 4 targets |
 | `mise run amalgamate` | *test* · `dist/tinyactors.c` + `dist/tinyactors.h`, compiled on their own |
 | `mise run w3c` | *test* · W3C IRP with the test datamodel (153 mandatory passes at least) and with quickjs-ng in both realm modes: everything not in `tests/w3c/skip.txt` must pass |
-| `mise run node:build` / `node:test` | *test* · the N-API addon; node tests and TypeScript type tests |
+| `mise run node:build` / `node:test` | *test* · the N-API addon; its tests on Node.js and on Bun, and the TypeScript type tests |
 | `mise run web:build` / `web:test` | *test* · the wasm module; the node suite against it, plus its own tests |
 | `mise run conformance:js` | *test* · host conformance through the Node addon and the wasm binding (the C host runs it in `test`) |
 | `mise run w3c:js` | *test* · the IRP suite through the JS bindings; everything not in `tests/w3c/skip-js.txt` must pass |

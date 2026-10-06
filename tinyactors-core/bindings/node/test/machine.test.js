@@ -341,10 +341,12 @@ test('contexts compile to one <data> per property, assigns to one <assign> per p
   for (const re of [
     /<data id="a" expr="\(calls\+\+, input.a \?\? 1\)"\/>/,
     /<data id="b" expr="\[\]"\/>/,
-    /<data id="c" expr="`t\$\{input.a\}, \$\{'\{'\}`"\/>/,
+    // Bun transpiles the source toString() returns: it folds ${'{'} to {,
+    /<data id="c" expr="`t\$\{input.a\}, (\$\{'\{'\}|\{)`"\/>/,
     /<data id="e-f" expr="\{ nested: \[1, 2, \{ x: 3 \}\] \}"\/>/,
     /<assign location="a" expr="context.g"\/>\s*<assign location="g" expr="context.a"\/>/,
-    /<assign location="a" expr="context.b"\/>\s*<assign location="b" expr="'const'"\/>/,
+    // and rewrites 'const' as "const", which changes the attribute's quotes
+    /<assign location="a" expr="context.b"\/>\s*<assign location="b" expr=("'const'"|'"const"')\/>/,
   ])
     assert.match(xml, re);
   assert.doesNotMatch(xml, /<data id="context"/);

@@ -386,5 +386,5 @@ running.
 ## Build & test
 
 ```sh
-mise run node:test     # npm ci, build the addon, node --test, tsc
+mise run node:test     # npm ci, build the addon, node --test, bun test, tsc
 ```
