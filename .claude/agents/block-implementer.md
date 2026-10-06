@@ -61,9 +61,11 @@ follow the catalog and list the question under `open_questions`.
 
 ## What comes after you
 
-1. A reviewer spot-checks your diff against the rules below and may send
-   findings back to you. Fix exactly those; argue in your report if one
-   is wrong.
+1. A reviewer reviews your change in depth (lifetimes, macrostep
+   invariants, ordering, weakened tests, leftovers), either before it is
+   committed or as a commit on main, while the next step is under way.
+   Findings come back to you, or to a later implementer as a follow-up
+   fix. Fix exactly those; argue in your report if one is wrong.
 2. The maintainer inspects the working tree and approves or rejects.
    **Do not commit, stage, stash, branch or reset.** Leave every change in
    the working tree of `main`.
@@ -202,11 +204,37 @@ requirements out.
 
 ## Commands
 
-- While iterating: `mise run build` at the repo root, then
-  `tinyactors-core/build/<unit>_test`.
-- Before you report: `mise run asan` and `mise run test` inside
-  `tinyactors-core`. Report each command and whether it passed. If one
-  fails for a reason outside your unit, say so; do not work around it.
+**Iterate narrowly. This is a hard rule.** A whole suite takes minutes
+(the kernel's tests alone take three), and running one after each edit is
+where most of a step's time went. While you work, run only what covers
+the change:
+
+- core: `mise run build` at the repo root, then the one test program,
+  `tinyactors-core/build/<name>_test`; its ASan build when you touch
+  memory;
+- the kernel: the one test binary under `tinyactors-host/build/`;
+- the test host: `mise run //tinyactors-test:scenarios -n 'PATTERN' --fast`;
+- napi: `node tinyactors-napi/test/<suite>.js` (then `bun` once at the
+  end); `mise run bindings` in `tinyactors-napi` after a public header
+  change.
+
+Run the full gates **once, at the end**, after the narrow tests pass:
+
+- a new block: `mise run asan` and `mise run test` inside
+  `tinyactors-core`;
+- a step that changes behaviour or a public API: `mise run test` at the
+  repo root, then `mise run test:full`, and compare the IRP results with
+  HEAD's (test host scenarios and napi's IRP suite).
+
+If a full gate fails, fix it with narrow runs again, and rerun only the
+failed project's suite before the final full run. Report each command and
+whether it passed. If one fails for a reason outside your change, say so;
+do not work around it.
+
+**Performance.** Do not tune performance and do not run `bench-compare`;
+tuning happens at the end of the plan. The scale tests in the suites
+(`scale_test`, napi's `scale.js`) still must pass: a failure there is a
+complexity bug (something grows with the population), and you fix it.
 
 ## Report
 

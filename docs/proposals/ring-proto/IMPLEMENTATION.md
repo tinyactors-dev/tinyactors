@@ -725,6 +725,27 @@ Three places conflict often and are handled the same way each time:
 - **The kernel during Phases 4 and 5.** Every critical-path step changes
   it in place. Side lanes do not touch it.
 
+### Pace
+
+The design fixes the costs that matter: bounded memory, no allocation in
+a macrostep, O(1) take. Throughput and per-actor bytes are tuned once, in
+Phase 7, not step by step.
+
+- **Benchmarks record and do not block.** `bench-compare` runs at phase
+  boundaries and its figures go in the ADR or the commit; a regression is
+  a finding for Phase 7, not a reason to stop. The scale tests in the
+  suites (`scale_test`, napi's `scale.js`) stay: they catch complexity
+  bugs, which are fixed where they appear.
+- **Implementers iterate narrowly** (one test program, one scenario
+  pattern, one napi suite) and run `mise run test` and `test:full` once,
+  at the end of a step.
+- **One deep review per commit**, no separate quick pass.
+- **Commits overlap with their reviews.** A step that passes its gates
+  lands on `main`; its deep review reads the commit while the next step
+  is implemented in the working tree, and the review's findings land as a
+  follow-up `fix` commit. The next step does not wait for the review,
+  except where the review finds a defect the next step builds on.
+
 ### Where oversight is needed
 
 The automated checks cover most of the risk: `mise run test`,
@@ -738,8 +759,8 @@ call, and the IRP suites. These gates need a person as well:
 | Each ADR (Phase 0, just before the phase that needs it) | the maintainer | the decision and its figures; the ADR is the decision, not the proposal |
 | Public API changes in `tinyactors.h` | the maintainer | names, ownership, failure codes; the `// status:` markers napi needs |
 | 2.9, the generator and its build task | the maintainer | the rules in `docs/build/`; nothing host-specific outside `mise/lib/toolchain/` |
-| Each commit of 4.2 to 4.5 | the maintainer, reading the header comments first | the macrostep invariants hold; `test:full` passed and the message says so; IRP results unchanged |
-| Phase 4's and Phase 7's benchmarks | the maintainer | `bench-compare` with throughput, memory and the machine signature; per-actor bytes before and after; whether a regression is accepted |
+| Each commit of 4.2 to 4.5 | a deep review of the commit, then the maintainer, reading the header comments first | the macrostep invariants hold; `test:full` passed and the message says so; IRP results unchanged; the review's findings land as a follow-up commit |
+| Phase 4's and Phase 7's benchmarks | the maintainer | `bench-compare` with throughput, memory and the machine signature; per-actor bytes before and after. Phase 4 records its figures; Phase 7 decides which regressions to tune away and which to accept |
 | 5.1, the test host becoming a ring driver | a reviewer who did not write it | every scenario property the old driver checked is still checked; nothing is weakened or dropped to make a scenario pass |
 | Removals that supersede ADRs (5.x, 6.3) | the maintainer | the ADR's status line, and that nothing still depends on what goes |
 | 4.5 and 6.1 in napi | the session rewriting napi | which napi files change, and when |
