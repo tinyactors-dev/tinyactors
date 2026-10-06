@@ -149,7 +149,7 @@ static const sjs_name NAMES[] = {
     NAME("return", SJS_NAME_ON_ITERATOR, 0, 0, 0),
     NAME_MUTATION("reverse", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_REVERSE), /* MUTATION */
     NAME("search", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("set", SJS_NAME_ON_MAP | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_MUTATION("set", SJS_NAME_ON_MAP | SJS_NAME_MUTATING, SJS_METHOD_MAP_SET), /* MUTATION */
     NAME_MUTATION("shift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_SHIFT), /* MUTATION */
     NAME("slice", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_SLICE, SJS_METHOD_STRING_SLICE, 0),
     NAME("small", SJS_NAME_ON_STRING, 0, 0, 0),
@@ -2131,18 +2131,27 @@ sjs_builtin_id sjs_mutation_named(const sjs_name *name) {
 
 /* The kind of receiver a method that changes it is a method of. */
 static uint8_t mutation_kind(sjs_builtin_id id) {
+    if (id >= SJS_METHOD_MAP_SET) return SJS_MAP; /* MUTATION: a map's set, delete and clear */
     return id == SJS_METHOD_SET_ADD || id == SJS_METHOD_SET_CLEAR || id == SJS_METHOD_SET_DELETE ? SJS_SET : SJS_ARRAY;
 }
 
 sjs_builtin_id sjs_mutation_of(const sjs_name *name, uint8_t kind) {
     sjs_builtin_id id = sjs_mutation_named(name);
     if (id == SJS_BUILTIN_NONE) return id;
+    /* MUTATION: delete and clear name a set's method and a map's; the
+     * name's column holds the set's. */
+    if (kind == SJS_MAP && id == SJS_METHOD_SET_DELETE) return SJS_METHOD_MAP_DELETE;
+    if (kind == SJS_MAP && id == SJS_METHOD_SET_CLEAR) return SJS_METHOD_MAP_CLEAR;
     return kind == mutation_kind(id) ? id : SJS_BUILTIN_NONE;
 }
 
 bool sjs_mutation_returns_receiver(sjs_builtin_id id) {
-    return id == SJS_METHOD_ARRAY_FILL || id == SJS_METHOD_ARRAY_REVERSE || id == SJS_METHOD_ARRAY_SORT || id == SJS_METHOD_SET_ADD;
+    return id == SJS_METHOD_ARRAY_FILL || id == SJS_METHOD_ARRAY_REVERSE || id == SJS_METHOD_ARRAY_SORT || id == SJS_METHOD_SET_ADD ||
+           id == SJS_METHOD_MAP_SET; /* MUTATION */
 }
+
+/* MUTATION: a map's set, delete and clear, at the end of the file. */
+static sjs_result map_change(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 
 sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     call->result = sjs_undefined();
@@ -2171,6 +2180,10 @@ sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
         return set_remove(vm, id, call);
     case SJS_METHOD_ARRAY_SPLICE:
         return array_splice(vm, call);
+    case SJS_METHOD_MAP_SET:     /* MUTATION */
+    case SJS_METHOD_MAP_DELETE:
+    case SJS_METHOD_MAP_CLEAR:
+        return map_change(vm, id, call);
     default: { /* SET_ADD: appends, as a set keeps insertion order */
         sjs_value x = arg(call, 0);
         if (!sjs_is_primitive(x)) return sjs_vm_fault(vm, "staticjs sets hold primitives only");
@@ -3077,4 +3090,44 @@ __attribute__((noinline)) static loop_step for_each_call(sjs_vm *vm, vm_frame *f
     const sjs_array *m = SJS_AS_ARRAY(map);
     sjs_value args[3] = { m->items[2u * frame->index + 1u], m->items[2u * frame->index], map };
     return call_back(vm, frame, (sjs_values){ args, 3 });
+}
+
+/* ------------------------------------------------------------------------
+ * MUTATION: a map's set, delete and clear (docs/mutation.md), called by
+ * SJS_OP_MUTATE or SJS_OP_PATH_CALL with the place of the map, which holds
+ * it alone. This section exists only for mutation.
+ */
+
+/* set(key, value): the key keeps its place and takes the value, or goes in
+ * last; the call gives the map (sjs_mutation_returns_receiver). A key that
+ * is not a primitive faults, as JavaScript keys an object by its identity;
+ * one lookup. delete(key): whether the map had it, which it no longer has;
+ * an object is never a key, so it gives false; the lookup, and the map's
+ * entries when one moves down (sjs_map_remove). clear(): undefined, a unit
+ * for each entry released. The map shrinks as it empties. */
+__attribute__((noinline)) static sjs_result map_change(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    sjs_array *m = SJS_AS_ARRAY(*call->receiver_slot);
+    sjs_result r = SJS_OK;
+    if (id == SJS_METHOD_MAP_CLEAR) {
+        call->cost = m->length / 2u;
+        sjs_set_clear(vm->context, &m);
+    } else if (id == SJS_METHOD_MAP_DELETE) {
+        sjs_removal removal = sjs_map_remove(vm->context, &m, arg(call, 0));
+        call->cost = removal.cost;
+        call->result = sjs_boolean(removal.removed);
+    } else {
+        sjs_map_entry entry = { arg(call, 0), arg(call, 1) };
+        if (!sjs_is_primitive(entry.key)) return sjs_vm_fault(vm, "staticjs keys a map by primitives: JavaScript keys an object by its identity");
+        call->cost = map_lookup_cost(m);
+        sjs_ref(entry.key);
+        sjs_ref(entry.value);
+        r = sjs_map_put(vm->context, &m, &entry);
+        if (r != SJS_OK) {
+            sjs_unref(vm->context, entry.key);
+            sjs_unref(vm->context, entry.value);
+            r = sjs_vm_fail(vm, r);
+        }
+    }
+    call->receiver_slot->as.heap = &m->h;
+    return r;
 }

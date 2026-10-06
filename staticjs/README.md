@@ -214,7 +214,7 @@ Built-ins:
 | functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Map.groupBy` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum) |
 | constants | `Number.EPSILON` `MAX_SAFE_INTEGER` `MIN_SAFE_INTEGER` `MAX_VALUE` `MIN_VALUE` `POSITIVE_INFINITY` `NEGATIVE_INFINITY` `NaN`; `Math.PI` `E` `LN2` `LN10` `LOG2E` `LOG10E` `SQRT2` `SQRT1_2`: number constants when compiled |
-| changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear` |
+| changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear`; maps: `set` `delete` `clear` |
 
 **Owned mutation.** A method that changes its receiver may be called on a
 variable that the function owns: a parameter or a `const` of the function,
@@ -332,6 +332,16 @@ gives the same values. `next`, `drop`, `take`, `flatMap`, `some`, `every`,
 `find` and an iterator's `forEach` fault ("does not have this method"); a
 property an iterator lacks is `undefined`. The writer writes an iterator as
 `[...].values()`, an iterator that yields the same values.
+
+`m.set(key, value)`, `m.delete(key)` and `m.clear()` change a map a
+variable of the function owns, or a container on a path from one
+(`state.byID.set(k, v)`), as owned mutation changes a set
+([docs/mutation.md](docs/mutation.md)): `set` gives the map, so it chains
+(`m.set(1, "a").set(2, "b")`), and the reduce idiom
+`(acc, x) => { acc.set(x.k, x); return acc; }` with `new Map()` changes the
+accumulator in place. A key deleted and set again goes last; `delete` and
+`clear` shrink the map as a set's removal does; a lookup costs one unit
+through the index, and a `delete` but of the last entry its entries more.
 
 `m.forEach((value, key, map) => ...)` is a loop that calls back for each
 entry and gives `undefined`; its callback changes nothing outside, so it

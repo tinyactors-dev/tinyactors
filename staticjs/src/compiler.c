@@ -1968,7 +1968,7 @@ static sjs_result object_end(sjs_compiler *c, const sjs_event *e) {
  * mutation of one returned its receiver as: then the read becomes a
  * RECEIVER, and m's GET_MEMBER a METHOD_MUTATE. Refused when x is a name
  * the function does not own; any other receiver is an ordinary method call
- * (false), which faults when it runs on an array or a set. */
+ * (false), which faults when it runs on an array, a set or a map. */
 static bool mutation_begin(sjs_compiler *c, construct *k) {
     uint32_t member = c->last_op;
     const sjs_string *key = SJS_AS_STRING(SJS_BUF_AT(c->constants, sjs_value, sjs_read32(c->code.ptr + member + 1u)));

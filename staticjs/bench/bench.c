@@ -64,7 +64,8 @@
  * .union, .intersection, .difference (Q). Mutation (docs/mutation.md, L):
  * eval.array.push-reduce (acc.push(r.kwh) into reduce's accumulator),
  * eval.array.sort and .sort.rows (a copy of xs or rows sorted in place, as
- * .toSorted and .toSorted.rows sort), eval.set.add-reduce (s.add(id));
+ * .toSorted and .toSorted.rows sort), eval.set.add-reduce (s.add(id)),
+ * eval.map.set-reduce (m.set(r.id, r.kwh), the reduce idiom);
  * eval.object.assign-reduce (acc[r.id] = r.kwh) and eval.array.assign-reduce
  * (acc[acc.length] = r.kwh), assignment into reduce's accumulator, and
  * eval.array.assign-index (acc[i] = x * 2 + 1 over a copy of xs, as map);
@@ -277,7 +278,8 @@ typedef enum {
     CHECK_SYNTHETIC,
     CHECK_IDS_JOINED,   /* STRING_APPEND: every row's id and a comma, 8n bytes */
     CHECK_BIGINT_SUM,   /* n(n + 1) / 2 as a BigInt */
-    CHECK_FACTORIAL     /* n! as a BigInt: its digits, counted */
+    CHECK_FACTORIAL,    /* n! as a BigInt: its digits, counted */
+    CHECK_MAP_N         /* MUTATION: a map of n entries */
 } bench_check;
 
 #define MAX_GLOBALS 4
@@ -526,6 +528,13 @@ static const bench_case cases[] = {
       .expect = "new Set([\"r000000\",\"r000001\",\"r000002\",\"r000003\",\"r000004\",\"r000005\",\"r000006\","
                 "\"r000007\",\"r000008\",\"r000009\"])",
       .check = CHECK_SET_N },
+    /* MUTATION: a map's set, each row's kwh under its id, into reduce's
+     * accumulator, as the reduce idiom builds one in place (L). */
+    { .name = "eval.map.set-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.reduce((m, r) => m.set(r.id, r.kwh), new Map())", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = "new Map([[\"r000000\",0],[\"r000001\",3.7],[\"r000002\",7.4],[\"r000003\",11.1],[\"r000004\",14.8],"
+                "[\"r000005\",18.5],[\"r000006\",22.2],[\"r000007\",25.9],[\"r000008\",29.6],[\"r000009\",33.3]])",
+      .check = CHECK_MAP_N },
     /* MUTATION: removal. delete-reduce removes each member while it is the
      * first, so every later one moves (Q); .last removes each while it is
      * the last, which moves none (L). */
@@ -1237,6 +1246,7 @@ static bool check_value(bench_run *run, sjs_value value) {
         return true;
     case CHECK_OBJECT_N: return expect_shape(run, value, (bench_shape){ SJS_OBJECT, n });
     case CHECK_SET_N: return expect_shape(run, value, (bench_shape){ SJS_SET, n });
+    case CHECK_MAP_N: return expect_shape(run, value, (bench_shape){ SJS_MAP, n }); /* MUTATION */
     case CHECK_HAS: {
         uint32_t count = 0;
         for (uint32_t i = 0; i < n; i += 2) count += i % 5u == 4u ? 2u : 1u;

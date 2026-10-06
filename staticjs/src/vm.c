@@ -1711,7 +1711,7 @@ __attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t 
             frame->pc += 4u;
         }
         if (chain) {
-            sjs_vm_fault(vm, "a chain of methods that change their receiver goes on only through an array or a set");
+            sjs_vm_fault(vm, "a chain of methods that change their receiver goes on only through an array, a set or a map"); /* MUTATION: a map */
             return false;
         }
         return call(vm, argc, SJS_CALL_METHOD);
@@ -2194,7 +2194,7 @@ static void path_call_other(sjs_vm *vm, sjs_value *place, path_call_site site) {
     if (method(vm, (sjs_member){ *place, name }, &callee) != SJS_OK) return;
     if ((site.flags & SJS_CALL_CHAIN) != 0 || sjs_mutation_named(sjs_name_of(name)) == SJS_METHOD_ARRAY_SORT) {
         sjs_vm_release(vm, callee);
-        fault_named(vm, "staticjs calls a method that changes its receiver, through a path, on an array or a set only", sjs_string_view(name));
+        fault_named(vm, "staticjs calls a method that changes its receiver, through a path, on an array, a set or a map only", sjs_string_view(name)); /* MUTATION: a map */
         return;
     }
     sjs_value receiver = *place;

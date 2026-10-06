@@ -2141,6 +2141,58 @@ static void test_mutation_set_removal_out_of_memory(void) {
                        SJS_GOAL_EXPRESSION);
 }
 
+/* MUTATION: a map's delete and clear shrink it as a set's do, and its set
+ * and delete cost a lookup through the index, and its entries when one
+ * moves down. */
+static void test_mutation_map_removal(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    size_t full = live_of(context, "new Map(Array.from({length: 4000}, (_, i) => [i, i]))");
+    size_t emptied = live_of(context, "Array.from({length: 3990}, (_, i) => i).reduce((m, x) => { m.delete(x); return m; }, new Map(Array.from({length: 4000}, (_, i) => [i, i])))");
+    size_t cleared = live_of(context, "(() => { const m = new Map(Array.from({length: 4000}, (_, i) => [i, i])); m.clear(); return m; })()");
+    size_t small = live_of(context, "new Map(Array.from({length: 10}, (_, i) => [i, i]))");
+    CHECK(full > 4000 * 32);
+    CHECK(emptied < full / 50);
+    /* A set's bound, for entries of two values. */
+    CHECK(emptied <= small + 1024);
+    CHECK(cleared <= small);
+    char source[256];
+    uint64_t fuel[6];
+    static const char *const calls[6] = { "m.delete(999)", "m.delete(5000)", "m.delete(0)", "m.clear()", "m.set(5, 1)", "m.set(5000, 1)" };
+    for (int i = 0; i < 6; i++) {
+        snprintf(source, sizeof source, "(() => { const m = new Map(Array.from({length: 1000}, (_, i) => [i, i])); return %s; })()", calls[i]);
+        fuel[i] = fuel_of(context, source);
+    }
+    /* The last entry, and a key the map lacks, cost one lookup; the first
+     * moves the other 999 entries down and renumbers the index. */
+    CHECK(fuel[1] == fuel[0]);
+    CHECK(fuel[2] - fuel[0] == 1000);
+    /* clear has no argument to push, and costs 1,000 for 1 */
+    CHECK(fuel[3] + 2u - fuel[0] == 1000);
+    /* set has one argument more than delete, and costs a lookup, whether
+     * the key is there or goes in last. */
+    CHECK(fuel[4] == fuel[0] + 1u && fuel[5] == fuel[4]);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* MUTATION: every allocation of a program that sets and deletes in an
+ * indexed map until it shrinks, and clears one, fails in turn. */
+static void test_mutation_map_removal_out_of_memory(void) {
+    test_out_of_memory("(() => {\n"
+                       "  const m = Array.from({length: 40}, (_, i) => `k${i}`).reduce((t, k) => t.set(k, [k]), new Map());\n"
+                       "  const d = Array.from({length: 36}, (_, i) => `k${i * 7 % 40}`).reduce((t, k) => { t.delete(k); return t; }, m);\n"
+                       "  const before = [...d];\n"
+                       "  d.set(\"k1\", 1).set(\"z\", 2);\n"
+                       "  const has = [d.has(\"k1\"), d.get(\"k2\"), d.delete(\"z\")];\n"
+                       "  d.clear();\n"
+                       "  d.set(1, 1);\n"
+                       "  return [before, has, [...d]];\n"
+                       "})()",
+                       SJS_GOAL_EXPRESSION);
+}
+
 /* delete is DELETE after its target, a node that starts with the word; it
  * sends no EXPRESSION_STATEMENT. */
 static void test_mutation_delete_events(void) {
@@ -2714,6 +2766,8 @@ int main(int argc, char **argv) {
     test_mutation_shrink_array();
     test_mutation_set_removal();
     test_mutation_set_removal_out_of_memory();
+    test_mutation_map_removal();
+    test_mutation_map_removal_out_of_memory();
     test_mutation_splice_fuel();
     test_mutation_splice_out_of_memory();
     test_mutation_delete_events();

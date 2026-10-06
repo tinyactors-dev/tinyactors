@@ -29,9 +29,10 @@ This is done in 3 steps:
 After the three steps, the methods above called on a path from such a
 variable (`o.items.push(x)`, `s.byID[k].tags.add(t)`), which the shape
 rules recognise and the compiler rewrites into the path machinery of step
-2 ("Methods through a path", below); and appending to a `let` (`s += x`),
+2 ("Methods through a path", below); appending to a `let` (`s += x`),
 whose value moves to the `+`, which extends a string nothing else holds
-("Appending to a let", below).
+("Appending to a let", below); and a map's `set`, `delete` and `clear`,
+on a variable or a path, by the same rules (README.md, "Maps").
 
 ## The methods
 
@@ -48,6 +49,9 @@ whose value moves to the `+`, which extends a string nothing else holds
 | set | `add(value)` | the set |
 | set | `delete(value)` | whether the set had it |
 | set | `clear()` | `undefined` |
+| map | `set(key, value)` | the map |
+| map | `delete(key)` | whether the map had it |
+| map | `clear()` | `undefined` |
 
 Each has JavaScript's semantics and return value. `sort` takes a compare
 function and sorts as `toSorted` does, with the same merge sort, fuel and
@@ -63,7 +67,16 @@ set keeps insertion order; it holds primitives only, as `new Set` does.
 is NaN, -0 is 0), from the set's hash index too ("Removal", below); an
 object is never a member, so `delete` of one gives `false`. `clear`
 removes them all. Arrays have no index: `pop` and `shift` remove from an
-array without one.
+array without one. A map's `set` puts a key it has in its place with the
+new value and a new key last, as `new Map` does; its key is any primitive
+under SameValueZero (`-0` goes in as `0`), and an object faults, as
+JavaScript keys one by its identity. Its `delete` and `clear` remove as a
+set's do, the key's value with it; `delete` of an object gives `false`.
+`delete` and `clear` name a set's method and a map's: the name's
+`mutation` column holds the set's, which returns alike, and
+`sjs_mutation_of` gives the map's for a map. A map's iterator holds the
+map, so a mutation faults ("held elsewhere") while one lives; so does
+`forEach`'s callback's, as the loop holds the map.
 
 ## The rule, at compile time
 
@@ -404,9 +417,10 @@ variable:
   run, where JavaScript throws before: both are errors.
 - **Return values:** as on a variable: `push` and `unshift` the length,
   `pop` and `shift` the element, `splice` the elements removed, `delete`
-  whether the set had it, `clear` `undefined`; `sort`, `reverse`, `fill`
-  and `add` the container, a copy of it, which then holds it too, so a
-  later mutation of the container faults while the copy lives.
+  whether the set or the map had it, `clear` `undefined`; `sort`,
+  `reverse`, `fill`, `add` and a map's `set` the container, a copy of it,
+  which then holds it too, so a later mutation of the container faults
+  while the copy lives.
 - **Chains:** a method that returns its receiver goes on with the same
   container: `o.a.sort(f).reverse()` sorts and reverses `o.a`, and
   `o.s.add(1).add(2)` adds to `o.s`. Any other method's result is a value:
@@ -472,7 +486,9 @@ has become mostly empty, keep three properties: JavaScript's order, lookups
 in O(1), and memory that comes back.
 
 **Compaction, not deletion markers.** A removal moves the items after the
-one removed down by one (`sjs_object_remove`, `sjs_set_remove`, value.c),
+one removed down by one (`sjs_object_remove`, `sjs_set_remove`, value.c;
+a map's entry, its key and its value, by `sjs_map_remove`, the set's
+`keyed_remove` with a stride of two),
 so a container's items stay dense and in insertion order. A key deleted and
 added again goes in as a new key: at the end, or among the array indices in
 order, as JavaScript puts it. The hash index loses the removed item's slot
@@ -659,6 +675,21 @@ Methods through a path:
 | `tests/api_test.c` | `test_mutation_path_*` |
 | `tests/matcher_test.c` | the rewrites in the tee and `test_reports`, the lane's checks, deepest kinds and allocation |
 | `bench/bench.c` | `eval.object.push-path-reduce` |
+
+A map's `set`, `delete` and `clear`:
+
+| File | What is tagged |
+|---|---|
+| `src/internal.h` | `SJS_METHOD_MAP_SET`, `SJS_METHOD_MAP_DELETE`, `SJS_METHOD_MAP_CLEAR`; `sjs_map_remove` |
+| `src/value.c` | `sjs_map_remove` (`keyed_remove`, the set's removal with a stride, stays with the removal section) |
+| `src/builtins.c` | the name `set` (restore `NAME("set", SJS_NAME_ON_MAP \| SJS_NAME_MUTATING, 0, 0, 0)`); `mutation_kind`'s first line, `sjs_mutation_of`'s two lines for a map and `SJS_METHOD_MAP_SET` in `sjs_mutation_returns_receiver`; `map_change`, its declaration and its case in `sjs_mutation_call`, the section at the end of the file |
+| `src/vm.c` | ", a set or a map" in the two messages of chains and paths (restore "or a set") |
+| `src/shapes.rules` | `chaining() <- MEMBER{key: "set"}` (`mise run shapes` rewrites `src/shapes_table.h`) |
+| `tests/api_test.c` | `test_mutation_map_removal`, `test_mutation_map_removal_out_of_memory` |
+| `bench/bench.c` | `eval.map.set-reduce`, `CHECK_MAP_N` |
+
+The rest of maps (values, `new Map`, `get`, `has`, `size`, iteration,
+`forEach`, `Map.groupBy`) is not mutation, and stays.
 
 `splice_arguments` in `src/builtins.c` is `toSpliced`'s argument code,
 moved into a function that both call, inlined; rolling back keeps it, or
