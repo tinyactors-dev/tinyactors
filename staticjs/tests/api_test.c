@@ -1479,6 +1479,11 @@ static void test_shape_paths(void) {
     CHECK(strcmp(on.out, "[3,1,undefined,0]") == 0 && strcmp(off.out, on.out) == 0);
     CHECK(off.fuel == 34 && on.fuel == 26 && off.fuel - on.fuel == 4 * (4 - 2));
     CHECK(off.pauses == 33 && on.pauses == 33 - 4 * 3);
+    /* groupBy by a pluck, like map: 4 units each in bytecode, 1 in C. */
+    const char *group = "Object.groupBy([{k: 3}, {k: 1}, {}, {k: 3}], x => x.k)";
+    on = run_shaped((shaped_source){ group, false, SJS_LIMITS_DEFAULT });
+    off = run_shaped((shaped_source){ group, true, SJS_LIMITS_DEFAULT });
+    CHECK(strcmp(on.out, off.out) == 0 && off.fuel > on.fuel);
     /* Five comparisons of numbers: 5 units each in bytecode (the step,
      * TAKE_LOCAL, TAKE_LOCAL, BINARY, RETURN), 1 in C (the step). */
     const char *numbers = "[3, 1, 2, 0].toSorted((a, b) => a - b)";

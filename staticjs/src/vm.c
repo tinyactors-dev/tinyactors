@@ -763,6 +763,19 @@ static bool call(sjs_vm *vm, uint32_t argc, uint8_t flags) {
         return enter_closure(vm, (call_site){ callee, argc, bottom });
     } else if (f.as.heap->type == SJS_HEAP_BUILTIN) {
         sjs_builtin_id id = (sjs_builtin_id)((const sjs_builtin_function *)(const void *)f.as.heap)->id;
+        if (sjs_builtin_loops(id)) {
+            /* A function that calls back (Object.groupBy) is a loop laid out
+             * like a method's: its first argument is the receiver, below the
+             * function. */
+            if (argc == 0) {
+                sjs_vm_fault(vm, "Object.groupBy takes an array and a function");
+                return false;
+            }
+            sjs_value items = vm->stack[callee + 1];
+            vm->stack[callee + 1] = vm->stack[callee];
+            vm->stack[callee] = items;
+            return enter_loop(vm, id, (call_site){ callee + 1, argc - 1u, bottom });
+        }
         if (sjs_builtin_call(vm, id, &leaf) != SJS_OK) {
             sjs_vm_release(vm, leaf.result);
             return false;
