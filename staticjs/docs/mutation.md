@@ -38,7 +38,8 @@ This is step 1 of 3:
 
 Each has JavaScript's semantics and return value. `sort` takes a compare
 function and sorts as `toSorted` does, with the same merge sort, fuel and
-faults; without one it faults, as `toSorted()` does, since JavaScript
+faults, and the same C path for a comparator of a known shape
+(`(a, b) => a - b`, `(a, b) => a.key - b.key`, docs/matcher.md); without one it faults, as `toSorted()` does, since JavaScript
 would compare the elements as strings. `Set.prototype.add` appends, as a
 set keeps insertion order; it holds primitives only, as `new Set` does.
 None of these removes from a hash index: arrays have none, and `add` only

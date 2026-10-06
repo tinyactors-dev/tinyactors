@@ -1816,6 +1816,11 @@ static void test_mutation_fuel(void) {
     const char *sorts = "(() => { const xs = [5, 3, 1, 4, 2, 0]; return xs.sort((a, b) => (a < b ? -1 : 1)); })()";
     /* The one more instruction that puts the sorted array back. */
     CHECK(fuel_of(context, sorts) == fuel_of(context, sorted) + 1u);
+    /* A comparator of a shape runs in C for both (docs/matcher.md). */
+    const char *sorted_shape = "(() => { const xs = [5, 3, 1, 4, 2, 0]; return xs.toSorted((a, b) => a - b); })()";
+    const char *sorts_shape = "(() => { const xs = [5, 3, 1, 4, 2, 0]; return xs.sort((a, b) => a - b); })()";
+    CHECK(fuel_of(context, sorts_shape) == fuel_of(context, sorted_shape) + 1u);
+    CHECK(fuel_of(context, sorts_shape) < fuel_of(context, sorts));
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
     CHECK(c.live == 0);

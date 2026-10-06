@@ -1682,9 +1682,7 @@ __attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t 
          * SORTED after this instruction puts its result back. */
         vm->stack[callee - 1u] = *slot;
         *slot = sjs_undefined();
-        if (!enter_loop(vm, SJS_METHOD_ARRAY_TO_SORTED, (call_site){ callee, argc, callee - 1u })) return false;
-        vm->frames[vm->frame_count - 1u].shape = SJS_SHAPE_NONE; /* the comparator runs as bytecode */
-        return true;
+        return enter_loop(vm, SJS_METHOD_ARRAY_TO_SORTED, (call_site){ callee, argc, callee - 1u });
     }
     sjs_leaf_call leaf = { 0 };
     leaf.receiver = *slot;

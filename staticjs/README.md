@@ -52,7 +52,7 @@ too; and 100,000 doubles must format as `String(x)` does.
   step. Owned mutation (below) relies on the same count: `acc.push(x)` in a
   `reduce` changes the accumulator the callback holds alone.
 - **Shapes change speed and fuel, never a value or a fault.** `toSorted`
-  with a comparator `(a, b) => a.key - b.key` (or `b.key - a.key`) and
+  (and `sort`, which runs its loop) with a comparator `(a, b) => a.key - b.key` (or `b.key - a.key`) and
   `map` with `x => x.key` run the callback in C while each step's
   preconditions hold: objects that hold the key, numbers for a comparator.
   Any other step calls the callback's bytecode, which gives its value or

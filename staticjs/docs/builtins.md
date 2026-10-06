@@ -215,7 +215,7 @@ COMPARE_BY_KEY, `(a, b) => a - b` is COMPARE_NUMERIC, `x => x.key OP c` is
 KEY_COMPARE, `x => x OP c` is ELEMENT_COMPARE (OP a strict equality or
 an order, `c` a literal), `(a, x) => a + x` is SUM and `(a, x) => a +
 x.key` is SUM_KEY. A loop built-in may run such a callback in C, as `map`
-does with PLUCK (so do `Object.groupBy` and `Array.from`), `toSorted` with COMPARE_BY_KEY and COMPARE_NUMERIC,
+does with PLUCK (so do `Object.groupBy` and `Array.from`), `toSorted` with COMPARE_BY_KEY and COMPARE_NUMERIC (and so `sort`, which is its loop: docs/mutation.md),
 `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `some` and `every` with
 KEY_COMPARE and ELEMENT_COMPARE, and `reduce` with SUM and SUM_KEY
 (`pluck_step`, `sort_by_key`, `sort_numbers`, `predicate_step` and
