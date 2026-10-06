@@ -1,0 +1,13 @@
+{
+  "arch": "arm64",
+  "compiler": "clang version 22.1.8",
+  "cores": 16,
+  "cpu": "Apple M4 Max",
+  "efficiencyCores": 4,
+  "flags": "-O2 -fno-stack-protector -fvisibility=hidden",
+  "lowPowerMode": false,
+  "os": "macOS 26.6.2",
+  "performanceCores": 12,
+  "powerSource": "Battery Power",
+  "ramBytes": 51539607552
+}
