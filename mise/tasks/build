@@ -38,11 +38,6 @@ core.run('build')
 otlp = Project.new(ROOT.join('tinyactors-otlp'))
 otlp.run('build')
 
-# The host kernel builds against core's header; napi and the test host
-# link it (kernel ADR 0001).
-kernel = Project.new(ROOT.join('tinyactors-host'))
-kernel.run('build')
-
 test_host = Project.new(ROOT.join('tinyactors-test'))
 test_host.run('build')
 
