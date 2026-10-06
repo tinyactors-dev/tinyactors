@@ -22,6 +22,7 @@
  *   rows  n objects {id: "r%06u", kwh: (i*37 % 1000)/10, priority: i%4, tags: ["a","b"]}
  *   ids   the row ids, with every fifth one twice
  *   text  the row ids joined by commas: "r000000,r000001,...", 8n - 1 bytes
+ *   json  the rows as JSON.stringify writes them, about 64n bytes
  *   a, b  string sets of n elements that overlap by half
  *
  * compile (unit byte; eventsPerOp): bytes pushed to sjs_parser_init ->
@@ -86,8 +87,8 @@
  * (1n to n multiplied, n! of up to 118,000 bits: Q); eval.map.get (each row's
  * kwh looked up by its id in a map of every row's, built through the API: L)
  * and eval.map.groupBy (the rows by r => r.priority, the PLUCK path, as
- * eval.object.groupBy.pluck: L); eval.json.stringify (the rows written as
- * text: L).
+ * eval.object.groupBy.pluck: L); eval.json.parse (the rows' text read) and
+ * eval.json.stringify (the rows written as text) (L).
  *
  * write (unit byte): write.rows (n {1000, 10000}, 64 KiB buffer),
  * write.rows.buf64 (10000 rows, a 64-byte buffer), write.numbers (100000
@@ -249,7 +250,8 @@ typedef enum {
     FIX_NUMBER_TEXTS,    /* FIX_NUMBERS as "%.15g": Clinger's fast path reads each */
     FIX_NUMBER_TEXTS_17, /* FIX_NUMBERS as "%.17g": each reads back as it was, past the fast path */
     FIX_BIGINTS,         /* 1n to n as BigInts */
-    FIX_ID_MAP           /* each row's id to its kwh, a map */
+    FIX_ID_MAP,          /* each row's id to its kwh, a map */
+    FIX_ROWS_JSON        /* the rows as JSON.stringify writes them */
 } bench_fixture;
 
 typedef struct {
@@ -640,7 +642,10 @@ static const bench_case cases[] = {
       .source = "ns.reduce((a, x) => a * x, 1n)", .globals = { { "ns", FIX_BIGINTS, NULL } }, .expect = "3628800n",
       .check = CHECK_FACTORIAL },
 
-    /* JSON: the rows written as text (L). */
+    /* JSON: the rows' text read, and the rows written as text (L). */
+    { .name = "eval.json.parse", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "JSON.parse(text)", .globals = { { "text", FIX_ROWS_JSON, NULL } }, .expect = ROWS_VALUE,
+      .check = CHECK_ARRAY_N },
     { .name = "eval.json.stringify", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "JSON.stringify(rows)", .globals = { { "rows", FIX_ROWS, NULL } }, .expect = ROWS_JSON_TEXT,
       .check = CHECK_ROWS_JSON },
@@ -1070,6 +1075,14 @@ static char *rows_json(bench_run *run, size_t *length) {
     return t.ptr;
 }
 
+static bool make_rows_json(bench_run *run, sjs_value *out) {
+    size_t length;
+    char *text = rows_json(run, &length);
+    bool ok = sjs_string_new(run->context, (sjs_str){ text, (uint32_t)length }, out) == SJS_OK;
+    free(text);
+    return ok ? true : fail(run, "sjs_string_new failed");
+}
+
 /* The row ids joined by commas: "r000000,r000001,...". */
 static bool make_text(bench_run *run, sjs_value *out) {
     size_t length = (size_t)run->n * 8u - 1u;
@@ -1117,6 +1130,7 @@ static bool make_global(bench_run *run, const bench_global *global, sjs_value *o
     case FIX_NUMBER_TEXTS_17: return make_number_texts(run, 17, out);
     case FIX_BIGINTS: return make_bigints(run, out);
     case FIX_TEXT: return make_text(run, out);
+    case FIX_ROWS_JSON: return make_rows_json(run, out);
     case FIX_CAPACITY: *out = sjs_number(6.0 * run->n); return true;
     case FIX_DEMAND: return make_demand(run, out);
     case FIX_WATERFILL:
@@ -1497,7 +1511,7 @@ static bool needs_ids(const bench_case *c) {
     if (c->op == OP_VALUES_ROWS) return true;
     for (uint32_t i = 0; i < MAX_GLOBALS; i++) {
         bench_fixture f = c->globals[i].fixture;
-        if (f == FIX_ROWS || f == FIX_IDS || f == FIX_PENDING_HALF || f == FIX_TEXT) return true;
+        if (f == FIX_ROWS || f == FIX_IDS || f == FIX_PENDING_HALF || f == FIX_TEXT || f == FIX_ROWS_JSON) return true;
     }
     return false;
 }
