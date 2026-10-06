@@ -128,6 +128,16 @@ holds. So the evaluator checks every mutation when it runs:
   value in the slot, and `MUTATE` calls it with the slot itself. `sort`
   is `toSorted`'s loop, which takes over the value moved out of the
   variable, and `SORTED slot` after it puts the sorted array back.
+- A receiver of another kind is called as any method call calls it: an
+  object's own function found by the name (`{sort: f => 5}`), whose result
+  is the call's, with the variable left as it was. `MUTATE` then skips the
+  `SORTED` after it, which has no sorted array to put back: it once stored
+  the property's result in the variable, which gave `o.sort(f)` the value
+  `5` for `o` and leaked the object. A `SORTED` with CHAIN faults instead,
+  as any chain through such a receiver does (below). A path call faults on
+  a sort of one ("Methods through a path"), where the container's place,
+  not a slot, would take it back; a variable's ordinary call costs only the
+  skip, so it follows JavaScript.
 - `MUTATE` faults unless the slot's value has exactly one holder, the slot
   (`sjs_value_unique`). This catches the holders above, and a cycle:
   `xs.push(xs)` gives the argument a second reference, so it faults.
