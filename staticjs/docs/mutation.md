@@ -103,7 +103,10 @@ holds. So the evaluator checks every mutation when it runs:
 
 - The receiver is not pushed. `RECEIVER slot` pushes a reference to the
   variable's slot (an internal value, which holds nothing), so evaluating
-  the call adds no holder.
+  the call adds no holder. `METHOD_MUTATE` finds the method from the
+  value in the slot, and `MUTATE` calls it with the slot itself. `sort`
+  is `toSorted`'s loop, which takes over the value moved out of the
+  variable, and `SORTED slot` after it puts the sorted array back.
 - `MUTATE` faults unless the slot's value has exactly one holder, the slot
   (`sjs_value_unique`). This catches the holders above, and a cycle:
   `xs.push(xs)` gives the argument a second reference, so it faults.
@@ -160,3 +163,33 @@ Everything that exists only for mutation is tagged:
 
 To remove mutation, revert those commits (newest first), or delete what the
 tags mark and restore what they say. The places tagged are listed below.
+
+| File | What is tagged |
+|---|---|
+| `include/staticjs.h` | `SJS_EV_EXPRESSION_STATEMENT`, and its line in the event grammar |
+| `src/shapes.rules` | the `EXPRESSION_STATEMENT` event; `mise run shapes` rewrites `src/shapes_table.h` from it |
+| `src/internal.h` | `SJS_INTERNAL_SLOT`; the method IDs from `SJS_METHOD_MUTATION_FIRST`; `sjs_name.mutation`; `sjs_mutation_of`, `sjs_mutation_named`, `sjs_mutation_returns_receiver`; `SJS_OP_RECEIVER`, `SJS_OP_METHOD_MUTATE`, `SJS_OP_MUTATE`, `SJS_OP_SORTED`; `SJS_CALL_CHAIN` |
+| `src/parser.c` | `F_EXPRESSION_STATEMENT` sends its events; `frame.refused_before`; `end_expression_statement`, which refuses at the statement's end what is not a call (restore: refuse where it begins) |
+| `src/compiler.c` | `binding.use`; `construct.mutate`, `.returns`, `.receiver`; `name_read`, `mutation_site` and the compiler's fields after `unbound_at`; the block from `refuse_later` to `note_read`; the lines of `read_name` that note what it read; `mutation_begin`, `mutation_end` and their lines in `call_begin` and `call_end`; `compile_expression_statement`; `note_use` in `event()`; the refusal in `on_event` |
+| `src/vm.h` | `sjs_mutation_call` |
+| `src/vm.c` | the message in `method()` (restore the one it names); `execute()`'s default case, which calls `execute_other` (restore the fault alone), and its declaration; the section at the end of the file |
+| `src/builtins.c` | `NAME_MUTATION`, the `mutation` column in `NAME`, and the eight names that use it (restore `NAME(text, flags, 0, 0, 0)`); the section at the end of the file |
+| `tests/api_test.c` | `EXPRESSION_STATEMENT` in `event_names`; the `test_mutation_*` functions and their calls in `main` |
+| `bench/bench.c` | `eval.array.push-reduce`, `eval.array.sort`, `eval.array.sort.rows`, `eval.set.add-reduce` |
+
+Besides the tags, mutation changed what some existing cases expect, and
+rolling it back restores them: a mutating method on a literal, or named
+by a key built at run time, faults "only on a variable" in
+`tests/spec/builtins.spec` (it was "do not change"); and `let` read as a
+name in a script's expression statement is refused for the word itself,
+"does not have this", in `tests/spec/statements.spec` and
+`tests/spec/errors.spec` (it was "expression statement"), as the parser
+now refuses an expression statement at its end, after the word. The
+README, `AGENTS.md`, `docs/builtins.md` and `docs/matcher.md` point here.
+
+The new code sits at the end of `src/vm.c` and `src/builtins.c`, and the
+evaluator reaches it from the default case of its switch, so that the code
+before it compiles as it did: `call`, `method`, `sjs_loop_step`,
+`sjs_loop_start` and `sjs_builtin_call` are the same instructions as before
+mutation. Moving code earlier in those files moved the functions after it
+in the binary, which made unchanged loops measure up to 18% slower.

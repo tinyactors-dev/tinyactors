@@ -86,7 +86,7 @@ enum {
     F_LABEL,               /* `name:`, refused and read on to its statement's end */
     F_CONST,
     F_RETURN,
-    F_EXPRESSION_STATEMENT, /* refused, and read on to its end */
+    F_EXPRESSION_STATEMENT, /* MUTATION: sent if it is a call, else refused at its end */
     F_PARAMS,
     F_PATTERN_ARRAY,
     F_PATTERN_OBJECT,
@@ -156,6 +156,7 @@ typedef struct {
     uint8_t rest;          /* F_PARAMS, F_PATTERN_*: the last target was `...` */
     uint8_t nonsimple;     /* F_PARAMS, F_BLOCK: the parameters are not all plain names */
     uint8_t not_pattern;   /* F_ARRAY, F_OBJECT: an item no assignment pattern takes */
+    uint8_t refused_before; /* MUTATION: F_EXPRESSION_STATEMENT: the parser was refusing when it began */
     uint32_t ops_base;
     uint32_t count;
     uint32_t held_base;    /* F_CONST: its pattern's first held event; F_IMPORT, F_EXPORT: its specifiers';
@@ -1715,6 +1716,27 @@ static handled list_terminator(sjs_parser *p, const queued_token *t, uint8_t clo
 static handled end_initializer(sjs_parser *p, const queued_token *t);
 static handled statement_done(sjs_parser *p);
 
+/* MUTATION: an expression statement ends at `t`. A call is sent, for the
+ * compiler to accept if it changes a variable; anything else is refused, as
+ * it can have no effect, from where the statement began. That is before any
+ * refusal inside it, which it replaces; a refusal before it stands. */
+static const sjs_problem expression_statement = { SJS_ERROR_UNSUPPORTED, "an expression statement has no effect in staticjs" };
+
+static handled end_expression_statement(sjs_parser *p, const queued_token *t) {
+    frame *f = top_frame(p);
+    event_place place = frame_place(f, t->at);
+    sjs_position at = f->at;
+    bool refused_before = f->refused_before != 0;
+    bool call = p->last_operand == LO_CALL;
+    pop_frame(p);
+    if (call) return send_event(p, counted(SJS_EV_EXPRESSION_STATEMENT, 0, place));
+    if (!refused_before) {
+        sjs_error_set(&p->refusal, at, expression_statement);
+        p->refusing = true;
+    }
+    return H_TAKEN;
+}
+
 static handled finish_const(sjs_parser *p) {
     frame *f = top_frame(p);
     if (settle_held(p, f->held_base, f->held_mid) == H_STOP) return H_STOP;
@@ -1879,11 +1901,11 @@ static handled terminator(sjs_parser *p, const queued_token *t) {
         return is_punctuator(t, SJS_P_SEMICOLON) ? H_TAKEN : H_AGAIN;
     }
     case F_EXPRESSION_STATEMENT:
-        /* Refused already; it ends as a statement does. */
         if (!is_punctuator(t, SJS_P_SEMICOLON) && !is_punctuator(t, SJS_P_RBRACE) && t->kind != SJS_TOKEN_END) {
             return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected ; after an expression" });
         }
-        pop_frame(p);
+        /* MUTATION: restore `pop_frame(p);` (refused when it began). */
+        if (end_expression_statement(p, t) == H_STOP) return H_STOP;
         if (statement_done(p) == H_STOP) return H_STOP;
         return is_punctuator(t, SJS_P_SEMICOLON) ? H_TAKEN : H_AGAIN;
     case F_IF:
@@ -2768,15 +2790,19 @@ static handled statement_token(sjs_parser *p, const queued_token *t, bool single
     }
     if (t->kind == SJS_TOKEN_NAME && t->keyword == SJS_K_RESERVED && is_word(p, t, SJS_STR("break"))) return break_word(p, t);
     if (!starts_operand(p, t)) return refuse_statement(p, t, statement_problem(p, t));
-    /* An expression statement: refused, as it can have no effect, and read
-     * on as an expression, for a syntax error after it. */
+    /* An expression statement. MUTATION: its events are sent, and at its
+     * end it is refused unless its expression, as a whole, is a call, which
+     * the compiler accepts if it changes a variable (end_expression_statement).
+     * Restore: refuse here, as `refuse(p, t, expression_statement)`, and push
+     * the frame with no_node(t->at). */
     if (t->kind == SJS_TOKEN_NAME || t->kind == SJS_TOKEN_PUNCTUATOR) {
         const queued_token *next = peek(p, 1);
         if (next == NULL) return H_WAIT;
         if (!statement_goes_on(p, t, next)) return parse_fail(p, next, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a statement" });
     }
-    if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "an expression statement has no effect in staticjs" }) == H_STOP) return H_STOP;
-    if (push_frame(p, F_EXPRESSION_STATEMENT, no_node(t->at)) == H_STOP) return H_STOP;
+    bool refusing = p->refusing;
+    if (push_frame(p, F_EXPRESSION_STATEMENT, own_place(p, t->at)) == H_STOP) return H_STOP;
+    top_frame(p)->refused_before = refusing ? 1u : 0u;
     p->expect = E_OPERAND;
     return H_AGAIN;
 }

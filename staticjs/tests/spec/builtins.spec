@@ -179,9 +179,9 @@
 --- value
 [[2,1],[1,2]]
 
-=== mutating methods are not there
+=== a mutating method of a literal
 [1, 2].push(3)
---- fault do not change
+--- fault only on a variable
 
 === reading a method without calling it
 [1].map
@@ -562,7 +562,7 @@ Math
 
 === a changing method named by a key built at run time
 (p => [1][p](2))("pu" + "sh")
---- fault do not change
+--- fault only on a variable
 
 === a method of another kind named by a key built at run time
 (h => [1][h](1))("h" + "as")

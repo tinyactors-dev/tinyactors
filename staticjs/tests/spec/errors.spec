@@ -373,7 +373,7 @@ String.raw`x`
 
 === let as a name in a script's block
 (() => { let; return 1; })
---- error unsupported expression statement
+--- error unsupported does not have this
 
 === a line break before ! ends a const in a block
 (() => { const a = 1

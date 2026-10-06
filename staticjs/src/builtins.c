@@ -49,7 +49,9 @@ static const function_entry FUNCTION_TABLE[] = {
  * names a method changing its receiver; with the staticjs method each kind
  * has by that name. Sorted by bytes, for sjs_name_id's binary search.
  */
-#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set } }
+#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set }, 0 }
+/* MUTATION: a name with a method that changes its receiver. Restore: NAME(text, flags, 0, 0, 0). */
+#define NAME_MUTATION(text, flags, mutation) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0 }, mutation }
 
 static const sjs_name NAMES[] = {
     NAME("__defineGetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
@@ -57,7 +59,7 @@ static const sjs_name NAMES[] = {
     NAME("__lookupGetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
     NAME("__lookupSetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
     NAME("__proto__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
-    NAME("add", SJS_NAME_ON_SET | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_MUTATION("add", SJS_NAME_ON_SET | SJS_NAME_MUTATING, SJS_METHOD_SET_ADD), /* MUTATION */
     NAME("anchor", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("at", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_AT, 0, 0),
     NAME("big", SJS_NAME_ON_STRING, 0, 0, 0),
@@ -75,7 +77,7 @@ static const sjs_name NAMES[] = {
     NAME("endsWith", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_ENDS_WITH, 0),
     NAME("entries", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET, 0, 0, 0),
     NAME("every", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_EVERY, 0, 0),
-    NAME("fill", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_MUTATION("fill", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_FILL), /* MUTATION */
     NAME("filter", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FILTER, 0, 0),
     NAME("find", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FIND, 0, 0),
     NAME("findIndex", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FIND_INDEX, 0, 0),
@@ -109,22 +111,22 @@ static const sjs_name NAMES[] = {
     NAME("normalize", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("padEnd", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("padStart", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("pop", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_MUTATION("pop", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_POP), /* MUTATION */
     NAME("propertyIsEnumerable", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
-    NAME("push", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_MUTATION("push", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_PUSH), /* MUTATION */
     NAME("reduce", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_REDUCE, 0, 0),
     NAME("reduceRight", SJS_NAME_ON_ARRAY, 0, 0, 0),
     NAME("repeat", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("replace", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("replaceAll", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("reverse", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_MUTATION("reverse", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_REVERSE), /* MUTATION */
     NAME("search", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("set", SJS_NAME_MUTATING, 0, 0, 0),
-    NAME("shift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_MUTATION("shift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_SHIFT), /* MUTATION */
     NAME("slice", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_SLICE, SJS_METHOD_STRING_SLICE, 0),
     NAME("small", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("some", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_SOME, 0, 0),
-    NAME("sort", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_MUTATION("sort", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_SORT), /* MUTATION */
     NAME("splice", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
     NAME("split", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_SPLIT, 0),
     NAME("startsWith", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_STARTS_WITH, 0),
@@ -150,7 +152,7 @@ static const sjs_name NAMES[] = {
     NAME("trimRight", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("trimStart", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("union", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_UNION),
-    NAME("unshift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_MUTATION("unshift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_UNSHIFT), /* MUTATION */
     NAME("valueOf", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET, 0, 0, 0),
     NAME("values", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET, 0, 0, 0),
     NAME("with", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_WITH, 0, 0)
@@ -1833,4 +1835,128 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
     if (frame->shape == SJS_SHAPE_KEY_COMPARE || frame->shape == SJS_SHAPE_ELEMENT_COMPARE) return predicate_step(vm, frame);
     uint32_t element = walks_from_end(frame->builtin) ? frame->length - 1u - frame->index : frame->index;
     return call_element(vm, frame, element);
+}
+
+/* ------------------------------------------------------------------------
+ * MUTATION: methods that change their receiver (docs/mutation.md), called
+ * by SJS_OP_MUTATE with the slot of the variable that holds the receiver
+ * alone. Each updates the slot when the receiver moves as it grows. sort is
+ * toSorted's loop, which writes back (vm.c, mutate). This section exists
+ * only for mutation.
+ */
+
+/* Room for `extra` more elements in the receiver, which may move. */
+static sjs_result receiver_grow(sjs_vm *vm, sjs_leaf_call *call, uint32_t extra) {
+    sjs_array *a = SJS_AS_ARRAY(*call->receiver_slot);
+    sjs_result r = sjs_array_grow(vm->context, &a, extra);
+    call->receiver_slot->as.heap = &a->h;
+    return r == SJS_OK ? SJS_OK : sjs_vm_fail(vm, r);
+}
+
+/* push and unshift: the arguments go in at the end or at the start; the
+ * new length is the result. One unit per element added or moved. */
+static sjs_result array_insert(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    uint32_t n = SJS_AS_ARRAY(*call->receiver_slot)->length;
+    uint32_t count = call->count;
+    if (receiver_grow(vm, call, count) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_array *a = SJS_AS_ARRAY(*call->receiver_slot);
+    uint32_t at = n;
+    call->cost = count;
+    if (id == SJS_METHOD_ARRAY_UNSHIFT) {
+        for (uint32_t i = n; i-- > 0;) a->items[i + count] = a->items[i];
+        at = 0;
+        call->cost += n;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        sjs_ref(call->args[i]);
+        a->items[at + i] = call->args[i];
+    }
+    a->length = n + count;
+    call->result = sjs_num((double)a->length);
+    return SJS_OK;
+}
+
+/* pop and shift: the element taken out is the result, its reference moved
+ * from the array. shift moves the rest down, one unit each. */
+static sjs_result array_remove(sjs_builtin_id id, sjs_leaf_call *call) {
+    sjs_array *a = SJS_AS_ARRAY(*call->receiver_slot);
+    uint32_t n = a->length;
+    if (n == 0) return SJS_OK;
+    if (id == SJS_METHOD_ARRAY_POP) {
+        call->result = a->items[n - 1u];
+    } else {
+        call->result = a->items[0];
+        for (uint32_t i = 1; i < n; i++) a->items[i - 1u] = a->items[i];
+        call->cost = n - 1u;
+    }
+    a->length = n - 1u;
+    return SJS_OK;
+}
+
+/* fill(value, start, end): start and end relative, as slice takes them. */
+static sjs_result array_fill(sjs_vm *vm, sjs_leaf_call *call) {
+    sjs_array *a = SJS_AS_ARRAY(*call->receiver_slot);
+    uint32_t n = a->length;
+    double start = 0;
+    double end = (double)n;
+    if (to_integer(vm, arg(call, 1), &start) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (arg(call, 2).kind != SJS_UNDEFINED && to_integer(vm, arg(call, 2), &end) != SJS_OK) return SJS_ERR_PROGRAM;
+    uint32_t from = relative(start, n);
+    uint32_t to = relative(end, n);
+    sjs_value v = arg(call, 0);
+    for (uint32_t i = from; i < to; i++) {
+        sjs_ref(v);
+        sjs_unref(vm->context, a->items[i]);
+        a->items[i] = v;
+    }
+    call->cost = to > from ? to - from : 0;
+    return SJS_OK;
+}
+
+sjs_builtin_id sjs_mutation_named(const sjs_name *name) {
+    return name == NULL ? SJS_BUILTIN_NONE : (sjs_builtin_id)name->mutation;
+}
+
+sjs_builtin_id sjs_mutation_of(const sjs_name *name, uint8_t kind) {
+    sjs_builtin_id id = sjs_mutation_named(name);
+    if (id == SJS_BUILTIN_NONE) return id;
+    return kind == (id == SJS_METHOD_SET_ADD ? SJS_SET : SJS_ARRAY) ? id : SJS_BUILTIN_NONE;
+}
+
+bool sjs_mutation_returns_receiver(sjs_builtin_id id) {
+    return id == SJS_METHOD_ARRAY_FILL || id == SJS_METHOD_ARRAY_REVERSE || id == SJS_METHOD_ARRAY_SORT || id == SJS_METHOD_SET_ADD;
+}
+
+sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    call->result = sjs_undefined();
+    call->cost = 0;
+    switch (id) {
+    case SJS_METHOD_ARRAY_PUSH:
+    case SJS_METHOD_ARRAY_UNSHIFT:
+        return array_insert(vm, id, call);
+    case SJS_METHOD_ARRAY_POP:
+    case SJS_METHOD_ARRAY_SHIFT:
+        return array_remove(id, call);
+    case SJS_METHOD_ARRAY_FILL:
+        return array_fill(vm, call);
+    case SJS_METHOD_ARRAY_REVERSE: {
+        sjs_array *a = SJS_AS_ARRAY(*call->receiver_slot);
+        for (uint32_t i = 0, j = a->length; i + 1u < j; i++, j--) {
+            sjs_value swap = a->items[i];
+            a->items[i] = a->items[j - 1u];
+            a->items[j - 1u] = swap;
+        }
+        call->cost = a->length;
+        return SJS_OK;
+    }
+    default: { /* SET_ADD: appends, as a set keeps insertion order */
+        sjs_value x = arg(call, 0);
+        if (!sjs_is_primitive(x)) return sjs_vm_fault(vm, "staticjs sets hold primitives only");
+        sjs_array *set = SJS_AS_ARRAY(*call->receiver_slot);
+        call->cost = lookup_cost(set);
+        sjs_result r = set_add(vm, &set, x);
+        call->receiver_slot->as.heap = &set->h;
+        return r;
+    }
+    }
 }

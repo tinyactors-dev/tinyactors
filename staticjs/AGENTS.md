@@ -19,6 +19,11 @@ JavaScript does, or a fault. Never a different value.
 - A refusal at compile time is `syntax` only when JavaScript refuses it too;
   JavaScript that staticjs leaves out is `unsupported`. `diff-node` checks
   both.
+- Values are never changed once shared. A function may change a value only
+  through a variable of its own that holds it alone (`docs/mutation.md`);
+  everything that exists for that is tagged `MUTATION`, its spec cases are
+  in `tests/spec/mutation.spec`, and its commits end with `Mutation: yes`.
+  Keep new mutation code tagged the same way.
 
 ## C rules
 

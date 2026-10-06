@@ -53,7 +53,10 @@
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
  * place and quadratic before, eval.object.fromEntries, eval.set.new, .has,
- * .union, .intersection, .difference (Q).
+ * .union, .intersection, .difference (Q). Mutation (docs/mutation.md, L):
+ * eval.array.push-reduce (acc.push(r.kwh) into reduce's accumulator),
+ * eval.array.sort and .sort.rows (a copy of xs or rows sorted in place, as
+ * .toSorted and .toSorted.rows sort), eval.set.add-reduce (s.add(id)).
  *
  * write (unit byte): write.rows (n {1000, 10000}, 64 KiB buffer),
  * write.rows.buf64 (10000 rows, a 64-byte buffer), write.numbers (100000
@@ -436,6 +439,21 @@ static const bench_case cases[] = {
     { .name = "eval.array.concat-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_Q, .smoke = 10,
       .source = "rows.reduce((acc, r) => acc.concat([r.kwh]), [])", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "[0,3.7,7.4,11.1,14.8,18.5,22.2,25.9,29.6,33.3]", .check = CHECK_ARRAY_N },
+    /* MUTATION */
+    { .name = "eval.array.push-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.reduce((acc, r) => { acc.push(r.kwh); return acc; }, [])", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = "[0,3.7,7.4,11.1,14.8,18.5,22.2,25.9,29.6,33.3]", .check = CHECK_ARRAY_N },
+    { .name = "eval.array.sort", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "(ys => { ys.sort((a, b) => a - b); return ys; })([...xs])", .globals = { { "xs", FIX_XS, NULL } },
+      .expect = "[0,0.5,1,1.5,2,2.5,3,3.5,4,4.5]", .check = CHECK_SORTED },
+    { .name = "eval.array.sort.rows", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "(ys => { ys.sort((a, b) => a.kwh - b.kwh); return ys; })([...rows])",
+      .globals = { { "rows", FIX_ROWS, NULL } }, .expect = ROWS_VALUE, .check = CHECK_ARRAY_N },
+    { .name = "eval.set.add-reduce", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "ids.reduce((s, id) => s.add(id), new Set())", .globals = { { "ids", FIX_IDS, NULL } },
+      .expect = "new Set([\"r000000\",\"r000001\",\"r000002\",\"r000003\",\"r000004\",\"r000005\",\"r000006\","
+                "\"r000007\",\"r000008\",\"r000009\"])",
+      .check = CHECK_SET_N },
     { .name = "eval.object.fromEntries", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_Q, .smoke = 10,
       .source = "Object.fromEntries(rows.map(r => [r.id, r.kwh]))", .globals = { { "rows", FIX_ROWS, NULL } },
       .expect = "{\"r000000\":0,\"r000001\":3.7,\"r000002\":7.4,\"r000003\":11.1,\"r000004\":14.8,\"r000005\":18.5,"

@@ -24,5 +24,7 @@ Implementation modules. Headers here are private; the public API is
 - `vm.h`        the evaluator's state, shared with the built-ins
 - `vm.c`        the evaluator: one instruction per unit of fuel
 - `builtins.c`  built-in functions and methods; the ones that call back are frames,
-                and `map` and `toSorted` run a callback the matcher tagged in C
+                and `map` and `toSorted` run a callback the matcher tagged in C;
+                the methods that change a variable the function owns
+                (../docs/mutation.md)
 - `writer.c`    a value to JavaScript source, into a buffer of any size
