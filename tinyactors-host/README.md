@@ -1,7 +1,7 @@
 # tinyactors-host: the host kernel
 
 The C that every host keeping actors in memory needs, free of any
-language's API: scheduling, mailboxes, routing, the directory, turns,
+language's API: admitting input into core's queue, the directory, turns,
 effects, the OTLP encoder and the recorder of the events actors take
 (kernel ADR 0006), and the replay of those events. Language bindings
 (`tinyactors-napi`, the test host in `tinyactors-test`) link it and

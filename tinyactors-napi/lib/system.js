@@ -1529,7 +1529,8 @@ class System {
    * message starts has ended: the actor is stable again, or it finished
    * (`completion` is its done data). It rejects when the message becomes a
    * dead letter (`not-found`, `done`, `unloaded`, `invalid`), when the
-   * macrostep faults (the fault's code; the actor is quarantined), on
+   * macrostep reaches the microstep limit (`runaway`; the actor keeps the
+   * configuration of its last microstep), on
    * `options.signal` (`aborted`), after `options.timeout` milliseconds
    * (`timeout`), and on close() (`closed`). Aborting or timing out withdraws
    * the message if it is still queued; a message the actor already took is
@@ -2259,7 +2260,11 @@ class System {
     return javascript;
   }
 
-  /** Put an actor that faulted back into scheduling (ADR 0008). */
+  /**
+   * Put an actor that faulted back into scheduling (ADR 0008). Nothing is
+   * quarantined until core's fault handling arrives, so this throws
+   * `invalid` for every actor (napi ADR 0041).
+   */
   release(actor) {
     const { slot, generation } = actorOf(this, actor);
     this.#native.release(slot, generation);
@@ -2270,12 +2275,12 @@ class System {
    */
 
   /**
-   * The messages waiting in `actor`'s mailbox, oldest first, at most
-   * `limit` (default 100): { event, data, awaited, scope, transition }.
-   * `awaited` is true when a send() waits for the message; `scope` is
-   * { index, generation } when its origin is an openScope() scope;
-   * `transition` is { source, targets } (state IDs, source null for the
-   * root) when it carries an operator transition. O(limit).
+   * The inputs core holds for `actor`, oldest first, at most `limit`
+   * (default 100): { event, data, awaited, scope }. Mail from other actors
+   * is listed too. `awaited` is true when a send() waits for the message;
+   * `scope` is { index, generation } when its origin is an openScope()
+   * scope. An operator transition is never listed: it does not queue (napi
+   * ADR 0041). O(the actor's place in core's queue up to `limit`).
    */
   mailbox(actor, options = {}) {
     const { slot, generation } = actorOf(this, actor);
@@ -2283,15 +2288,7 @@ class System {
     if (!Number.isInteger(limit) || limit < 0 || limit > 4294967295) {
       throw new TinyactorsError('mailbox(): limit must be a non-negative integer', 'invalid');
     }
-    const messages = this.#native.mailbox(slot, generation, limit);
-    const definition = messages.some((message) => message.transition !== undefined)
-      ? core.actor_inspect(this.#native, slot, generation).definition_id
-      : undefined;
-    const stateName = (state) => (state === NO_STATE ? null : readState(this.#native, definition, state).name);
-    return messages.map((message) => (message.transition === undefined ? message : {
-      ...message,
-      transition: { source: stateName(message.transition.source), targets: message.transition.targets.map(stateName) },
-    }));
+    return this.#native.mailbox(slot, generation, limit);
   }
 
   /**
@@ -2351,7 +2348,7 @@ class System {
    * which removes its address from the directory, and its wake is armed
    * with wakeAt(), so its family's loader brings it back when a timer is
    * due. Mail for the address goes to the loader as well. Throws `busy`
-   * while the actor is inside a macrostep, is quarantined, has mail waiting
+   * while the actor is inside a macrostep, has mail waiting
    * (a due timer's included), or has a send still due. Returns the
    * eviction time.
    */
@@ -2367,9 +2364,6 @@ class System {
     const scheduling = this.#native.scheduling(slot, generation);
     if (scheduling === 'runnable' || view.macrostep_in_progress) {
       throw busy('the actor is inside a macrostep');
-    }
-    if (scheduling === 'quarantined') {
-      throw busy('the actor is quarantined');
     }
     this.#native.dispatchDue();
     const now = this.time;

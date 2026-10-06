@@ -1,6 +1,6 @@
 # ADR 0099: Pending inputs are envelopes in one pool per system
 
-**Status:** Accepted (2026-10-04); sections 1 to 5, 7 and 8 implemented in ring-proto step 4.2a, in 4.2e the withdrawal of host inputs, admission inside a macrostep and error reports as inputs, and in 4.2d the mail, waiting lists, router deletion and the event-block cache (see the implementation notes at the end); partly implemented: the start record and kept event in sparse state, the kernel's admission-only scheduler (4.2d's remainder) and the name area (4.2b) are pending. Supersedes ADR 0011, ADR 0029, ADR 0040, ADR 0055, ADR 0064, ADR 0069, ADR 0093 and ADR 0095, each in the part section 10 names; the rest of each stays. Run-time names in the name area are ADR 0100; delayed sends join the pool in ADR 0101; slots and the chain limit are ADR 0103.
+**Status:** Accepted (2026-10-04); sections 1 to 5, 7 and 8 implemented in ring-proto step 4.2a, in 4.2e host input straight into core (the withdrawal of host inputs, admission inside a macrostep, error reports as inputs, and the kernel's mailboxes gone), and in 4.2d the mail, waiting lists, router deletion and the event-block cache (see the implementation notes at the end); partly implemented: the start record and kept event in sparse state (4.4) and the name area (4.2b) are pending. Supersedes ADR 0011, ADR 0029, ADR 0040, ADR 0055, ADR 0064, ADR 0069, ADR 0093 and ADR 0095, each in the part section 10 names; the rest of each stays. Run-time names in the name area are ADR 0100; delayed sends join the pool in ADR 0101; slots and the chain limit are ADR 0103.
 **Date:** 2026-10-04
 
 ## Context
@@ -603,6 +603,29 @@ in the kernel's ADRs and napi's ADR 0041). Four additions, all in
   reference to the address in `payload.address`, and the REFUSED notice names
   it (`ta_run_notice.address`), so a host can tell the application which
   address a dead letter was for.
+- **What the kernel needs from core, and gets.** `ta_run_executing` and
+  `ta_input_slot(token)` are public: the first tells a binding whether a post is
+  made by a macrostep (and so waits for its end) or from outside core, the second
+  is the token's envelope slot, so a host can keep one small record per input in a
+  table it indexes itself, with no hashing and no allocation in a steady state
+  (compare the whole token before trusting an entry: a slot is reused). A REFUSED
+  notice carries the refused input's trace parent (`ta_run_notice.trace`) as well
+  as its event and address, because the envelope owns it and a dead letter is
+  reported with it. The carrier of an error report names its invocation in the
+  event's `invoke_id`, so a TAKEN notice lets a recorder journal the report with it.
+- **Lent events and the idle call.** A TAKEN or REFUSED notice lends its event
+  until the next `ta_run`. A host that has nothing more to run therefore makes
+  one more, idle, call after the last notices of a turn, or the data of a refused
+  input would stay alive until the next turn (the kernel does this only when the
+  turn saw such a notice).
+- **The kernel's part.** The kernel keeps no mailbox, ready or runnable queue,
+  quarantine or envelope store. It calls `ta_actor_deliver` from `post()` and
+  `send()`, keeps a table indexed by `ta_input_slot` for the sends that wait and
+  the retained bytes it counts, reports not-found and waiting-full answers as
+  dead letters at the next turn, and settles waiters and dead letters from the
+  COMPLETED and REFUSED notices. `maxQueuedMessages` is checked against
+  `ta_counters.host_inputs`. The turn's bound is in inputs, checked between
+  `ta_run` calls (napi ADR 0041).
 - **Tests:** `tests/input_test.c` (withdrawal in every state, the gauge,
   admission and withdrawal inside a macrostep, an abandoned and a runaway
   macrostep, error reports, `ta_actor_pending`, the notice time) and

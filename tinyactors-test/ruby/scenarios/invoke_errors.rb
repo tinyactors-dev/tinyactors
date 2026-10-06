@@ -91,10 +91,9 @@ TinyactorsTest.scenarios 'invocation errors' do
   end
 
   # Catches: a report taken inside a macrostep, where a log could not say
-  # where it fell (core ADR 0089 section 4): inside one, every kind answers
-  # BUSY and changes nothing; once the session is idle, the same report is
-  # taken.
-  scenario 'a report into a paused macrostep answers busy and is taken once idle' do
+  # where it fell (core ADR 0089 section 4): core admits it as an input, so it
+  # never answers BUSY, and takes it only once the macrostep has ended.
+  scenario 'a report into a paused macrostep is queued and taken once idle' do
     service = scripted_invoker(InvokeErrors::SERVICE)
     client = spawn :error_client
     start = service.started.first
@@ -103,19 +102,15 @@ TinyactorsTest.scenarios 'invocation errors' do
     error = { reason: 'quarantined', ends: false }
     report = ta.actor.report_invoke(system: system_handle, actor: start[:parent], invoke_id: start[:invoke_id],
                                     kind: 'error', error: error)
-    assert_equal 'err_busy', report[:result]
+    assert_equal 'ok', report[:result]
+    assert_equal [], client.data('.errors'), 'the report waits behind the paused macrostep'
     status = 'paused'
     20.times do
       status = client.resume(budget: 1)
       break unless status == 'paused'
     end
-    assert_equal 'stable', status
+    run_system('after the macrostep')
     assert_equal ['worked'], client.data('.replies')
-    assert_equal [], client.data('.errors'), 'the refused report changed nothing'
-    report = ta.actor.report_invoke(system: system_handle, actor: start[:parent], invoke_id: start[:invoke_id],
-                                    kind: 'error', error: error)
-    assert_equal 'ok', report[:result]
-    client.resume(budget: 100)
     assert_equal ['error.communication.invoke.svc.quarantined'], client.data('.errors')
   end
 

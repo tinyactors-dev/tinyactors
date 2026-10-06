@@ -116,10 +116,6 @@ static ta_op_status tah_scxml_try_start(void *self, const ta_invoker_start_param
     if (result != TA_OK) {
         return TAH_FAULT(params->fault, result, "invoker.scxml: could not spawn the child");
     }
-    if (tah_sched_add(&system->sched, child) != TA_OK) {
-        (void)ta_actor_destroy(system->core, child);
-        return TAH_FAULT(params->fault, TA_ERR_NOMEM, "invoker.scxml: could not schedule the child");
-    }
     tah_system_want_turn(system);
     *params->service_handle = child;
     return TA_OP_OK;
@@ -129,9 +125,10 @@ static ta_op_status tah_scxml_try_start(void *self, const ta_invoker_start_param
  * Starts the child; a child that cannot be compiled or spawned is reported
  * to the parent, not answered (core ADR 0089 section 4, napi ADR 0032
  * section 3): start answers OK with no service, and
- * error.communication.invoke.<id>.failed, with data { code, message }, waits
- * in the parent's mailbox for the parent to be between macrosteps. Out of
- * memory is still answered, and core starts the invocation again.
+ * error.communication.invoke.<id>.failed, with data { code, message }, is
+ * reported to core, which queues it for the parent and takes it when the
+ * parent is between macrosteps (core ADR 0099). Out of memory is still
+ * answered, and core starts the invocation again.
  */
 static ta_op_status tah_scxml_start(void *self, const ta_invoker_start_params *params) {
     tah_system *system = self;
@@ -148,13 +145,18 @@ static ta_op_status tah_scxml_start(void *self, const ta_invoker_start_params *p
     if (!made) {
         return TA_OP_NOMEM;
     }
-    ta_trace_parent trace = params->request->trace;
-    ta_result result = tah_sched_post(&system->sched, &(tah_message){ .target = params->request->parent,
-                                                                      .event = &event,
-                                                                      .trace = &trace,
-                                                                      .report = TAH_REPORT_FAILED });
+    ta_invoke_error error = { .reason = { .ptr = "failed", .len = 6 },
+                              .data = event.data.v != NULL ? &event.data : NULL,
+                              .ends = true };
+    ta_result result = ta_actor_report_invoke(system->core, &(ta_invoke_report_params){
+                                                                .time = ta_system_time(system->core),
+                                                                .actor = params->request->parent,
+                                                                .invoke_id = params->request->invoke_id,
+                                                                .kind = TA_INVOKE_REPORT_ERROR,
+                                                                .trace = params->request->trace,
+                                                                .as.error = &error });
+    ta_value_release(&event.data); /* the admitted report keeps its own reference */
     if (result != TA_OK) {
-        ta_value_release(&event.data);
         return TA_OP_NOMEM; /* no room for the report: core starts the invocation again */
     }
     tah_system_want_turn(system);
@@ -170,8 +172,7 @@ static ta_op_status tah_scxml_cancel(void *self, uint64_t service, ta_fault *fau
     }
     ta_result result = ta_actor_destroy(system->core, service);
     if (result == TA_OK || result == TA_ERR_NOT_FOUND) {
-        tah_sched_remove(&system->sched, service, TAH_DEAD_DESTROYED);
-        tah_system_want_turn(system);
+        tah_system_want_turn(system); /* the child's waiting inputs are refused */
     }
     return TA_OP_OK;
 }
@@ -181,14 +182,11 @@ static ta_op_status tah_scxml_forward(void *self, const ta_invoker_forward_param
     if (params->service_handle == 0) {
         return TA_OP_OK; /* a child that never started has nobody to forward to */
     }
-    ta_event event;
-    ta_event_retain(params->event, &event);
-    ta_result result = tah_sched_post(&system->sched, &(tah_message){ .target = params->service_handle, .event = &event });
+    ta_result result = tah_system_post(system, &(tah_message){ .target = params->service_handle,
+                                                                .event = params->event });
     if (result != TA_OK) {
-        ta_event_release(&event);
-        return TAH_FAULT(params->fault, result, "invoker.scxml: the child's mailbox did not accept the event");
+        return TAH_FAULT(params->fault, result, "invoker.scxml: the child's queue did not accept the event");
     }
-    tah_system_want_turn(system);
     return TA_OP_OK;
 }
 

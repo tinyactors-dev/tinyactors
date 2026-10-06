@@ -114,22 +114,6 @@ typedef struct {
 } tah_child_params;
 
 /*
- * A quarantined invoked child's report to its parent (napi ADR 0025):
- * error.communication.invoke.<id>.quarantined, kept until it is queued in
- * the parent's mailbox (napi ADR 0032 section 3), so running out of memory
- * or a full mailbox delays it but never loses it.
- */
-typedef struct {
-    ta_actor_id parent;
-    ta_invoke_id invoke_id;
-    /* The child's step when it faulted (core ADR 0067). */
-    ta_trace_parent trace;
-    /* The fault, as the fault hook sees it: core's result and the call. */
-    ta_result code;
-    const char *operation;
-} tah_quarantine_report;
-
-/*
  * What the system asks the binding's language layer (tah_system_set_callbacks).
  * Each may be NULL; all get `context`. None is called after
  * tah_system_close() returns.
@@ -144,13 +128,6 @@ typedef struct {
      * NULL: the invoker refuses every invoke.
      */
     ta_op_status (*child_definition)(void *context, const tah_child_params *params);
-    /*
-     * The data of the error a quarantined child's parent gets (napi ADR
-     * 0025): napi makes { code, message }, as the fault hook sees them.
-     * False: no memory, so the report waits for a later turn. NULL: the
-     * event has no data.
-     */
-    bool (*quarantine_data)(void *context, const tah_quarantine_report *report, ta_value *out);
     /* The data of an invocation's `failed` report: { code, message } (napi
      * ADR 0032 section 3); NULL leaves it without data. */
     bool (*fault_data)(void *context, int32_t code, ta_str message, ta_value *out);
@@ -241,11 +218,31 @@ size_t tah_system_leaked_bytes(const tah_system *system);
 void tah_system_free(tah_system *system);
 
 /*
- * Accepts a message and asks for a turn (ADR 0005). On TA_OK the system owns
- * the event's references and the message's waiter. TA_ERR_BUSY: the queue is
- * full (max_queued or max_retained); TA_ERR_NOMEM: nothing accepted.
+ * Admits a message into core and asks for a turn (ADR 0005); it never runs a
+ * macrostep. `message->target` names the actor, or `message->address` the
+ * named destination: core makes the message wait on the address's list when
+ * no session is resident there, and starts a load for it when its family has
+ * a loader (napi ADR 0020); a destination that is not found, unloaded or
+ * finished becomes a dead letter the next turn reports. The event stays the
+ * caller's, and so does the address; a send() waiter follows the input's
+ * token. May be called from a callback core runs inside a macrostep (the
+ * input then waits for the macrostep's end, core ADR 0099); at any other
+ * point inside a core call it answers TA_ERR_BUSY (tah_system_reentrant()).
+ * TA_OK: admitted, or turned into a dead letter. TA_ERR_FULL: core's pool is
+ * at its watermark, the target holds 65,535 inputs, or maxQueuedMessages or
+ * maxRetainedBytes would pass (napi `queue-full`). TA_ERR_BUSY: reentrant, or
+ * an operator transition while the actor is not idle (napi `reentrant`,
+ * `busy`). TA_ERR_INVALID: a malformed event or transition; the actor is not
+ * harmed. TA_ERR_NOMEM: nothing admitted, nothing left behind. See
+ * scheduler.h.
  */
 ta_result tah_system_post(tah_system *system, const tah_message *message);
+/*
+ * True when a call into core is running that is not a macrostep, so a post
+ * now would reach core where it may not (ADR 0013 point 4). A callback of a
+ * macrostep, or of the due dispatch, is not reentrant for a post.
+ */
+bool tah_system_reentrant(const tah_system *system);
 
 /*
  * Queues an effect (effects.h), which hands over its references, and asks
@@ -266,19 +263,6 @@ double tah_system_overdue_seconds(const tah_system *system);
 void tah_system_record_turn(tah_system *system, uint64_t started_ns);
 /* A delayed send due at `due` fired now: records how late (host_metrics.h). */
 void tah_system_record_lateness(tah_system *system, ta_time due, const ta_trace_parent *trace);
-/*
- * Accepts a message from the host for a named destination: the waiting
- * mailbox of a load in flight for it, or of a new load when its family has a
- * loader and it has no resident actor (napi ADR 0020); otherwise the resident
- * actor's mailbox, or a dead letter when the name has none (not found, or
- * unloaded). `message->target` is ignored. On TA_OK the system owns the
- * event's references and the waiter; `address` stays the caller's.
- * TA_ERR_BUSY: the queue is full (max_queued or max_retained);
- * TA_ERR_NOMEM: nothing accepted. The host's messages wait in the kernel's
- * mailboxes until the kernel hands the host's input to core; mail between
- * sessions never does.
- */
-ta_result tah_system_post_named(tah_system *system, ta_address *address, const tah_message *message);
 /* Installs core's log sink when JavaScript or the trace encoder wants
  * <log> records (napi ADR 0017 section 7), and the null sink otherwise. */
 ta_result tah_system_refresh_log_sink(tah_system *system);
@@ -302,15 +286,15 @@ void tah_system_want_turn(tah_system *system);
 void tah_system_turn(tah_system *system);
 bool tah_system_dispatch_due(tah_system *system);
 /*
- * Cancels the send() waiter at `index` (ADR 0005 point 11). A message still
- * waiting for a load is withdrawn from the load's mailbox (napi ADR 0020),
- * as one in an actor's mailbox is; otherwise tah_sched_cancel(). True when
- * the waiter was cancelled; the caller settles and gives it back.
+ * Cancels the send() waiter at `index` (ADR 0005 point 11). A message core has
+ * not taken, whether it waits in the run queue or for a load (napi ADR 0020),
+ * is withdrawn and never runs (tah_sched_cancel()). True when the waiter was
+ * cancelled; the caller settles and gives it back.
  */
 bool tah_system_cancel(tah_system *system, uint32_t index);
 void tah_system_end_turn(tah_system *system);
 /*
- * No runnable or ready actors, no dead letters to report, no effects or load
+ * Nothing for core to run, no dead letters to report, no effects or load
  * requests waiting for JavaScript, and nothing due at core's current time
  * (ADR 0007 point 4). A load JavaScript is running does not count: flush()
  * waits for it separately (pump.c).

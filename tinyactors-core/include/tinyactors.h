@@ -2810,7 +2810,10 @@ typedef struct {
      * address, borrowed until the next ta_run(); null for every other refusal.
      */
     TA_OPTIONAL const ta_address *address;
-    /* LOAD_NEEDED: the trace parent of the first input that waits, for the load's own record. */
+    /*
+     * LOAD_NEEDED: the trace parent of the first input that waits, for the load's own record. REFUSED: the
+     * refused input's trace parent, for a host that reports it as a dead letter. All zero is none.
+     */
     ta_trace_parent trace;
     /*
      * LOAD_NEEDED: the address is the key of a session that is gone, made from
@@ -3174,6 +3177,17 @@ TA_API ta_result ta_actor_deliver(ta_system *system, TA_IN const ta_actor_delive
  */
 TA_API ta_result ta_input_withdraw(ta_system *system, uint64_t input);
 /*
+ * The place of a host input's envelope in the pool, from its token: a number
+ * below poolEnvelopes' bound (at most 2^24), distinct for the inputs that are
+ * pending at once, and reused when an input ends. A host may index a table
+ * of its own with it (the kernel follows the sends and the retained bytes of
+ * the inputs it admitted this way, with no hashing and no allocation in
+ * steady state); it must compare the whole token with the one it stored
+ * before it trusts an entry, since a slot is reused. Pure: no system, no
+ * failure.
+ */
+TA_API uint32_t ta_input_slot(uint64_t input);
+/*
  * One input waiting for a session, as ta_actor_pending() lists it. `input` is
  * the token of a host input (the one ta_actor_deliver() gave), and 0 for
  * mail and error reports, which have none. `event` is borrowed until the next
@@ -3322,6 +3336,15 @@ TA_API ta_result ta_run(ta_system *system, TA_IN const ta_run_params *params);
  * and whether to call ta_run() again. It never allocates and costs O(1).
  */
 TA_API bool ta_run_pending(const ta_system *system);
+/*
+ * True only while ta_run() is inside a macrostep's executable content: a
+ * callback core makes (a data-model evaluation, an invoker or I/O processor
+ * call, a log sink) is then running for that macrostep. ta_actor_deliver()
+ * and ta_actor_report_invoke() may be called from such a callback, and are
+ * ordered with the macrostep's own mail; elsewhere inside a core call they
+ * may not be.
+ */
+TA_API bool ta_run_executing(const ta_system *system);
 /*
  * Abandons the actor's macrostep, one that may never end (ADR 0082): its
  * continuation, its internal queue and its external event are discarded,

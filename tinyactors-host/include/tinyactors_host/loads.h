@@ -7,24 +7,25 @@
  * A definition family can have a loader, registered here by name with its
  * `max_waiting`. Mail for a name in such a family that has no resident actor
  * (the directory's entry is unloaded, or there is none: the family is
- * virtual) starts a **load**: a record for the address. Two kinds of mail
- * wait for it, in two places. The host's own posts (tah_system_post_named)
- * wait in a mailbox of the load's own (scheduler.h's tah_mailbox) and join it
- * while the load is in flight, whether or not the actor has become resident
- * meanwhile, so they keep their order; at most `max_waiting` of them wait, and
- * the rest are dead letters with reason `waiting-full`. Mail between sessions
- * waits in core, on the address's waiting list (core ADR 0099 section 4); core
- * reports the first of it with a LOAD_NEEDED notice, which starts the load
- * here (tah_loads_wanted), unless one is in flight already. There is one load
- * per address at a time.
+ * virtual) starts a **load**: a record for the address. Every message that
+ * waits for it waits in one place, core's waiting list for the address (core
+ * ADR 0099 section 4), the host's own posts and the mail between sessions
+ * alike, in the order they arrived. Core reports the first of them with a
+ * LOAD_NEEDED notice, which starts the load here (tah_loads_wanted), unless
+ * one is in flight already. There is one load per address at a time. At most
+ * `max_waiting` messages wait for an address (tah_loads_limit() says what the
+ * limit is, ta_address_waiting() how many wait); the rest of the host's posts
+ * are dead letters with reason `waiting-full`, and chart mail is counted but
+ * bounded by the pool alone.
  *
  * Each new load is a **request** for JavaScript, which calls the loader
  * after the turn and finishes the load with its outcome: loaded or spawned
- * (the waiting posts move to the front of the actor's mailbox, and core moves
- * its own list when the actor becomes resident), or not found, rejected,
- * failed or timed out (the posts become dead letters, and core recycles its
- * list: the senders hear error.communication). The record's generation
- * guards against a stale finish.
+ * (core moves its list when the actor becomes resident, or when
+ * ta_address_loaded() names the instance of a session's key), or not found,
+ * rejected, failed or timed out (core recycles its list: the host's posts
+ * come back as REFUSED notices, and the senders of chart mail hear
+ * error.communication). The record's generation guards against a stale
+ * finish.
  *
  * **Wake-ups.** An unloaded actor's delayed sends travel in its image, so a
  * host registers the image's next deadline for its address. When that time
@@ -53,7 +54,6 @@
 #include "containers.h"
 #include "directory.h"
 #include "host_metrics.h"
-#include "scheduler.h"
 #include "tinyactors.h"
 
 /* SESSION: mail for a session that has gone, in a family with a loader
@@ -80,38 +80,21 @@ typedef struct tah_loads tah_loads;
 
 void tah_loads_init(tah_loads *loads, ta_allocator allocator);
 /*
- * Gives back every address reference and frees everything. The waiting
- * envelopes of the host's posts are the scheduler's: tah_sched_discard_mail()
- * releases them. Core's lists are core's. Call it while core is alive.
+ * Gives back every address reference and frees everything. Core's waiting
+ * lists are core's. Call it while core is alive.
  */
 void tah_loads_close(tah_loads *loads);
-
-/*
- * Withdraws the waiting envelope at `index` from its load's mailbox, when
- * it is there: a send() waiting for it was cancelled. False when it is not
- * waiting (it is in an actor's mailbox or on the dead list).
- */
-bool tah_loads_withdraw(tah_loads *loads, tah_sched *sched, uint32_t index);
 
 /* Registers `family`'s loader limit; `max_waiting` 0 removes the loader. */
 ta_result tah_loads_set_family(tah_loads *loads, ta_str family, uint32_t max_waiting);
 
 /*
- * Routes a message of the host for the named `address`: into its load's
- * mailbox when a load is in flight; otherwise, when it has no resident actor
- * and its family has a loader, a new load (and a request) with the message
- * as its first. TA_ERR_NOT_FOUND: neither, and the caller routes as before.
- * TA_OK: accepted, perhaps as a `waiting-full` dead letter. TA_ERR_BUSY and
- * TA_ERR_NOMEM: nothing accepted.
+ * The most messages that may wait for `address`: the `max_waiting` of its
+ * family's loader, or 0 when the family has none (core then answers the
+ * LOAD_NEEDED notice at once, and the message is refused). O(1) for a system
+ * with no loader, otherwise a search of the families. Never allocates.
  */
-typedef struct {
-    tah_sched *sched;
-    ta_address *address;
-    const tah_message *message;
-    bool resident; /* the directory has a resident actor at `address` */
-    uint64_t now_ns;
-} tah_load_route;
-ta_result tah_loads_route(tah_loads *loads, const tah_load_route *route);
+uint32_t tah_loads_limit(const tah_loads *loads, const ta_address *address);
 
 /*
  * Core asked for `address` to be loaded: its first waiting input arrived (a
@@ -131,8 +114,6 @@ typedef struct {
 } tah_load_wanted;
 ta_result tah_loads_wanted(tah_loads *loads, const tah_load_wanted *wanted);
 
-/* True when a load for `address` is in flight. */
-bool tah_loads_waiting(const tah_loads *loads, const ta_address *address);
 /* A load JavaScript has not been told about, oldest first. */
 typedef struct {
     uint32_t index;
@@ -151,7 +132,6 @@ tah_load *tah_loads_find(const tah_loads *loads, uint32_t index, uint32_t genera
  * names none (it finished). Borrowed until the load finishes. */
 typedef struct {
     const ta_address *address;
-    uint32_t waiting;      /* posts in its mailbox (core's own list is counted by ta_address_waiting) */
     ta_trace_parent trace; /* the first message's trace parent, or all zero */
 } tah_load_info;
 tah_load_info tah_loads_info(const tah_loads *loads, uint32_t index, uint32_t generation);
@@ -159,27 +139,26 @@ tah_load_info tah_loads_info(const tah_loads *loads, uint32_t index, uint32_t ge
 /* The loads' counters (napi's metrics() and flush()). */
 typedef struct {
     uint32_t in_flight; /* loads started and not finished */
-    uint32_t waiting;   /* posts in every load's mailbox */
+    uint32_t waiting;   /* messages waiting on core's lists for the addresses of the loads in flight */
     uint64_t outcomes[TAH_LOAD_OUTCOMES];
 } tah_loads_stats;
-void tah_loads_read_stats(const tah_loads *loads, tah_loads_stats *out);
+/* Reads the counters; `core` is asked how many messages wait for each load's address (O(waiting messages)). */
+void tah_loads_read_stats(const tah_loads *loads, const ta_system *core, tah_loads_stats *out);
 
 /*
  * Finishes a load. LOADED and SPAWNED: `actor` must be the resident actor
  * at the address, or for a session's load any resident actor, which is the
- * new instance (TA_ERR_NOT_FOUND otherwise, and nothing changes); the
- * waiting posts move to the front of its mailbox, and its wake-up goes. Core
- * has already moved its own list to an actor that holds the address; for a
- * session's key, which no actor holds, this call names the instance to core
- * (ta_address_loaded). Other outcomes: the waiting posts become dead letters,
- * and core recycles its list (ta_address_load_failed). Records the outcome
- * and the load's duration in `metrics`. TA_ERR_STALE: the token names no
- * load in flight. TA_ERR_NOMEM: the hand-over could not reserve the actor's
- * ready-queue entry, so the posts became `load-failed` dead letters.
+ * new instance (TA_ERR_NOT_FOUND otherwise, and nothing changes); its
+ * wake-up goes. Core has already moved its waiting list to an actor that
+ * holds the address; for a session's key, which no actor holds, this call
+ * names the instance to core (ta_address_loaded). Other outcomes: core
+ * recycles its list (ta_address_load_failed), so every message that waited
+ * for the address is refused. Records the outcome and the load's duration in
+ * `metrics`. TA_ERR_STALE: the token names no load in flight. Never
+ * allocates.
  */
 typedef struct {
     ta_system *core;
-    tah_sched *sched;
     const tah_directory *directory;
     tah_host_metrics *metrics;
     uint32_t index;

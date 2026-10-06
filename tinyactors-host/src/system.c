@@ -49,8 +49,7 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
     }
     *system = (tah_system){
         .budgets = {
-            .resumes = (uint32_t)napi.values[TAH_PARAM_RESUMES_PER_TURN],
-            .messages = (uint32_t)napi.values[TAH_PARAM_MESSAGE_BUDGET],
+            .inputs = (uint32_t)napi.values[TAH_PARAM_MESSAGE_BUDGET],
             .microsteps = (uint32_t)napi.values[TAH_PARAM_RESUME_BUDGET],
             .actions = (uint32_t)napi.values[TAH_PARAM_ACTION_BUDGET],
         },
@@ -63,8 +62,8 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
     tah_allocator_init(&system->allocator, platform->allocator);
     tah_sched_init(&system->sched, tah_allocator_for(&system->allocator, TAH_MEMORY_SCHEDULING),
                    tah_allocator_for(&system->allocator, TAH_MEMORY_ENVELOPES));
-    system->sched.max_queued = (uint32_t)napi.values[TAH_PARAM_MAX_QUEUED_MESSAGES];
-    system->sched.max_retained = napi.values[TAH_PARAM_MAX_RETAINED_BYTES];
+    tah_sched_set_limits(&system->sched, (uint32_t)napi.values[TAH_PARAM_MAX_QUEUED_MESSAGES],
+                         napi.values[TAH_PARAM_MAX_RETAINED_BYTES]);
     tah_directory_init(&system->directory, tah_allocator_for(&system->allocator, TAH_MEMORY_DIRECTORY));
     tah_loads_init(&system->loads, tah_allocator_for(&system->allocator, TAH_MEMORY_DIRECTORY));
     tah_offloads_init(&system->offloads, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER));
@@ -72,8 +71,6 @@ ta_result tah_system_create(const tah_system_create_params *params, tah_system *
     tah_definitions_init(&system->definitions, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER));
     tah_vec_init(&system->io_processors, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER),
                  TAH_LAYOUT(tah_io_processor *));
-    tah_vec_init(&system->quarantine_reports, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER),
-                 TAH_LAYOUT(tah_quarantine_report));
     tah_host_metrics_init(&system->metrics);
     tah_recorder_init(&system->recorder, tah_allocator_for(&system->allocator, TAH_MEMORY_OTHER));
     ta_result result = tah_scratch_init(&system->scratch, &system->allocator);
@@ -124,7 +121,7 @@ void tah_system_close(tah_system *system) {
     (void)ta_system_set_actor_directory(system->core, (ta_actor_directory){0});
     /* A hook may close the system while the turn's records still own data. */
     tah_sched_release_records(&system->sched);
-    tah_sched_discard_mail(&system->sched);
+    tah_sched_discard(&system->sched);
     /* Offloaded bytes may hold value handles; they go while the directory still keys them. */
     tah_offloads_destroy(&system->offloads);
     tah_directory_clear(&system->directory);
@@ -144,7 +141,6 @@ void tah_system_close(tah_system *system) {
     /* Core held the I/O processor records as adapters until now. */
     tah_io_close(system);
     tah_sched_destroy(&system->sched);
-    tah_vec_destroy(&system->quarantine_reports);
     tah_trace_watch_destroy(&system->trace_watch);
     /* Core freed every definition in its teardown, so the origins are empty. */
     tah_definitions_destroy(&system->definitions);
@@ -293,7 +289,6 @@ bool tah_system_quiet(const tah_system *system) {
     return tah_sched_quiet(&system->sched) && (system->core == NULL || !ta_run_pending(system->core)) &&
            system->effects.count == 0 &&
            system->recorder.records.count == 0 && system->recorder.touched.count == 0 &&
-           system->quarantine_reports.count == 0 &&
            tah_loads_pending_requests(&system->loads) == 0 &&
            (!system->tracing || system->otlp.span_count == 0) &&
            !tah_system_due_now(system);
@@ -468,73 +463,6 @@ void tah_system_want_turn(tah_system *system) {
     }
 }
 
-/*
- * Queues one report in the parent's mailbox (napi ADR 0025), where it waits
- * for the parent to be between macrosteps (napi ADR 0032 section 3). True
- * when it is finished with: queued, or dropped because the parent is gone
- * (the scheduler drops a report for a gone target). False when it must
- * wait for a later turn: memory ran out, or the mailbox is full.
- */
-static bool tah_quarantine_report_try(tah_system *system, tah_quarantine_report *report) {
-    ta_event event = { .type = TA_EVENT_PLATFORM, .invoke_id = report->invoke_id };
-    if (system->callbacks.quarantine_data != NULL &&
-        !system->callbacks.quarantine_data(system->callbacks.context, report, &event.data)) {
-        return false;
-    }
-    ta_result result = tah_sched_post(&system->sched, &(tah_message){ .target = report->parent, .event = &event,
-                                                                      .trace = &report->trace,
-                                                                      .report = TAH_REPORT_QUARANTINED });
-    if (result != TA_OK) {
-        ta_value_release(&event.data);
-        return false;
-    }
-    tah_system_want_turn(system);
-    return true;
-}
-
-/* Tries the reports still waiting, keeping those that must wait again. */
-static void tah_quarantine_reports_retry(tah_system *system) {
-    tah_vec *reports = &system->quarantine_reports;
-    uint32_t kept = 0;
-    for (uint32_t index = 0; index < reports->count; index += 1) {
-        tah_quarantine_report *report = tah_vec_at(reports, index);
-        if (!tah_quarantine_report_try(system, report)) {
-            *(tah_quarantine_report *)tah_vec_at(reports, kept) = *report;
-            kept += 1u;
-        }
-    }
-    reports->count = kept;
-}
-
-/*
- * The turn's quarantines of invoked children tell their parents (napi ADR
- * 0025). The child is inspected now, while it still stands where it
- * faulted; a report that must wait is kept for the next turn.
- */
-static void tah_quarantine_reports_make(tah_system *system) {
-    for (const tah_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-        ta_actor_inspection view;
-        if (record->kind != TAH_RECORD_FAULT || record->runaway ||
-            ta_actor_inspect(system->core, record->actor, &view) != TA_OK ||
-            !view.has_parent) {
-            continue;
-        }
-        tah_quarantine_report report = {
-            .parent = view.parent.actor,
-            .invoke_id = view.parent.invoke_id,
-            .trace = view.trace,
-            .code = record->code,
-            .operation = record->operation,
-        };
-        if (!tah_quarantine_report_try(system, &report)) {
-            /* A push that fails loses the report: the parent is not told,
-             * though the fault hook, the failure log and the quarantine
-             * gauge still are. */
-            (void)tah_vec_push(&system->quarantine_reports, &report);
-        }
-    }
-}
-
 /* Records one dispatch call keeps for the mail core placed (ta_due_fired); more are left due for the next call. */
 #define TAH_DUE_FIRED_BATCH 32u
 
@@ -581,40 +509,6 @@ bool tah_system_dispatch_due(tah_system *system) {
     }
     tah_system_leave_core(system);
     return more_due || result != TA_OK;
-}
-
-ta_result tah_system_post_named(tah_system *system, ta_address *address, const tah_message *message) {
-    ta_actor_directory_entry entry = tah_directory_find(&system->directory, address);
-    bool resident = entry.kind == TA_ACTOR_DIRECTORY_RESIDENT;
-    if (!resident || tah_loads_waiting(&system->loads, address)) {
-        /* A load in flight holds the address's mail, or a loader starts one
-         * (napi ADR 0020); otherwise the mail goes where it went before. */
-        ta_result result = tah_loads_route(&system->loads, &(tah_load_route){ .sched = &system->sched,
-                                                                               .address = address,
-                                                                               .message = message,
-                                                                               .resident = resident,
-                                                                               .now_ns = tah_system_monotonic_ns(system) });
-        if (result != TA_ERR_NOT_FOUND) {
-            return result;
-        }
-    }
-    if (resident) {
-        tah_message resolved = *message;
-        resolved.target = entry.actor;
-        return tah_sched_post(&system->sched, &resolved);
-    }
-    ta_address_retain(address);
-    ta_result result = tah_sched_post_dead(&system->sched, &(tah_dead_post){
-                                                               .address = address,
-                                                               .message = message,
-                                                               .reason = entry.kind == TA_ACTOR_DIRECTORY_UNLOADED
-                                                                             ? TAH_DEAD_UNLOADED
-                                                                             : TAH_DEAD_NOT_FOUND,
-                                                           });
-    if (result != TA_OK) {
-        ta_address_release(address);
-    }
-    return result;
 }
 
 /*
@@ -672,7 +566,6 @@ tah_turn_params tah_system_turn_params(tah_system *system) {
         .arena = &system->scratch.turn,
         .inside_core = &system->inside_core,
         .budgets = system->budgets,
-        .watch = &system->trace_watch,
         .stop = tah_system_staging_full,
         .stop_context = system,
         .left_core = tah_system_left_core,
@@ -688,8 +581,6 @@ void tah_system_turn(tah_system *system) {
     tah_system_sync_time(system);
     tah_turn_params turn = tah_system_turn_params(system);
     tah_sched_turn(&system->sched, &turn);
-    tah_quarantine_reports_retry(system);
-    tah_quarantine_reports_make(system);
     /* Unloaded actors whose own timers are due wake through their loader
      * (napi ADR 0020): the request goes to JavaScript after this turn. */
     tah_loads_fire_wakes(&system->loads, &(tah_wake_fire){ .directory = &system->directory,
@@ -709,28 +600,33 @@ void tah_system_end_turn(tah_system *system) {
 }
 
 bool tah_system_cancel(tah_system *system, uint32_t index) {
-    tah_waiter *waiter = tah_sched_waiter(&system->sched, index);
-    if (waiter == NULL) {
+    if (system == NULL || system->closed) {
         return false;
     }
-    bool cancelled = waiter->state == TAH_WAITER_QUEUED &&
-                     tah_loads_withdraw(&system->loads, &system->sched, waiter->envelope);
+    bool cancelled = tah_sched_cancel(&system->sched, system->core, index);
     if (cancelled) {
-        waiter->state = TAH_WAITER_SETTLING;
-    } else {
-        cancelled = tah_sched_cancel(&system->sched, index);
-    }
-    if (cancelled) {
-        tah_system_want_turn(system); /* a withdrawn message leaves its actor's mailbox: it may be idle now */
+        tah_system_want_turn(system); /* a withdrawn input is released where the run queue reaches it */
     }
     return cancelled;
+}
+
+bool tah_system_reentrant(const tah_system *system) {
+    return system->inside_core && !ta_run_executing(system->core) && !system->dispatching_due;
 }
 
 ta_result tah_system_post(tah_system *system, const tah_message *message) {
     if (system == NULL || system->closed) {
         return TA_ERR_INVALID;
     }
-    ta_result result = tah_sched_post(&system->sched, message);
+    if (tah_system_reentrant(system)) {
+        return TA_ERR_BUSY;
+    }
+    /* The family's limit on waiting messages counts only for a name: a post by actor ID never waits. */
+    uint32_t max_waiting = message->address != NULL ? tah_loads_limit(&system->loads, message->address) : 0;
+    ta_result result = tah_sched_post(&system->sched, &(tah_post){ .core = system->core,
+                                                                   .message = message,
+                                                                   .time = ta_system_time(system->core),
+                                                                   .max_waiting = max_waiting });
     if (result == TA_OK) {
         tah_system_want_turn(system);
     }

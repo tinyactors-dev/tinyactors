@@ -1052,7 +1052,8 @@ static ta_result ta_invoke_report_error(ta_system *system, ta_actor *actor, cons
     if (error == NULL || !ta_invoke_reason_valid(error->reason)) {
         return TA_ERR_INVALID;
     }
-    ta_run_report report = { .event = { .type = TA_EVENT_PLATFORM, .invoke_id = TA_INVOKE_ID_NONE },
+    /* The carrier names its invocation, so a TAKEN notice lets a recorder journal the report with it. */
+    ta_run_report report = { .event = { .type = TA_EVENT_PLATFORM, .invoke_id = params->invoke_id },
                              .trace = params->trace,
                              .time = params->time,
                              .invoke = params->invoke_id,

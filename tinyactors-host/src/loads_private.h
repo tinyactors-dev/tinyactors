@@ -6,14 +6,11 @@
  * the functions of the public header.
  */
 #include "tinyactors_host/loads.h"
-#include "scheduler_private.h"
 
 struct tah_load {
     ta_address *address;   /* one reference; NULL while the record is free */
-    tah_mailbox mail;
     ta_trace_parent trace; /* the first message's trace parent, or all zero */
     uint64_t started_ns;   /* monotonic, when the load started */
-    uint32_t max_waiting;
     uint32_t generation;   /* half of the token JavaScript holds; never 0 */
     uint32_t next_free;
     uint8_t why;           /* tah_load_why */
@@ -41,7 +38,6 @@ struct tah_loads {
     uint32_t requests_head;
     tah_vec wakes;      /* tah_wake: a min-heap by due */
     tah_map wake_due;   /* (uintptr_t)address -> the due time of its live wake-up */
-    uint32_t waiting;   /* posts in every load's mailbox */
     uint64_t outcomes[TAH_LOAD_OUTCOMES];
 };
 

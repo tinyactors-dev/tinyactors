@@ -1,6 +1,6 @@
 # ADR 0001: The host kernel holds what every host needs
 
-**Status:** Accepted and implemented (2026-09-30); see the implementation notes. Turns `docs/proposals/host-kernel.md` into a decision, earlier than it planned, with the test host as the second consumer. Core ADR 0094 and kernel ADR 0002 depend on it.
+**Status:** Accepted and implemented (2026-09-30); see the implementation notes. Turns `docs/proposals/host-kernel.md` into a decision, earlier than it planned, with the test host as the second consumer. Core ADR 0094 and kernel ADR 0002 depend on it. Since ring-proto step 4.2e (2026-10-05) the kernel holds no mailboxes, ready or runnable queues, quarantine or envelope store: it admits `post()` and `send()` into core's queue and keeps the `send()` waiters, the retained-bytes estimate, the dead letters and the limits ([napi ADR 0041](../../../tinyactors-napi/docs/adr/0041-host-input-goes-straight-into-core.md); core ADR 0099 notes). The text below describes the kernel as it was when this ADR was written.
 **Date:** 2026-09-30
 
 ## Context

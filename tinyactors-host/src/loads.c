@@ -5,25 +5,25 @@
  *
  * Purpose. A load is the host kernel's record that an address with no
  * resident actor is being brought in. The kernel owns the record, the
- * requests JavaScript has yet to hear of, and the wake-up heap. Core owns the
- * chart mail that waits for the same address (ADR 0099 section 4); this file
- * only starts a load when core reports LOAD_NEEDED (tah_loads_wanted) and
- * tells core how it ended (tah_loads_finish).
+ * requests JavaScript has yet to hear of, and the wake-up heap. Core owns
+ * every message that waits for the same address, the host's posts and chart
+ * mail alike (ADR 0099 section 4); this file only starts a load when core
+ * reports LOAD_NEEDED (tah_loads_wanted) and tells core how it ended
+ * (tah_loads_finish).
  *
  * Lifetimes. A tah_load is a record-lifetime object: it lives from
  * tah_loads_start to tah_loads_finish (or tah_loads_close) and is then given
  * back to a free list; its generation advances on reuse, so a finish with a
  * stale (index, generation) answers TA_ERR_STALE and touches nothing. The
  * address is retained by the record and by each wake-up heap entry, and
- * released when the record or the entry goes. The load's mailbox holds
- * scheduler envelopes (the host's own posts); they are the scheduler's, and
- * leave through tah_sched_hand_over (to the actor) or tah_sched_bury_waiting
- * (dead letters), never freed here.
+ * released when the record or the entry goes. The record holds no message:
+ * what waits for the address is on core's list, and leaves it when core
+ * moves the list or recycles it.
  *
  * Allocation. Only through the tah_vec and tah_map containers on the
  * allocator given to tah_loads_init: the record vector, the family list, the
  * address map, the request queue and the wake-up heap. They grow only in
- * tah_loads_set_family, tah_loads_route, tah_loads_wanted and
+ * tah_loads_set_family, tah_loads_wanted and
  * tah_loads_wake_at, the functions that may return TA_ERR_NOMEM; every other
  * function, and tah_loads_finish above all, never allocates, so a load can
  * always end.
@@ -31,23 +31,17 @@
  *
  * Failure. tah_loads_start reserves the request slot and the map entry
  * before it retains the address or counts the load, so a failure leaves no
- * record and no count behind. tah_loads_route undoes a start whose first
- * message was refused. tah_loads_finish reports the outcome to core with
- * ta_address_loaded or ta_address_load_failed after the kernel's mail has
- * moved, so a handover that ran out of memory still ends the load (as FAILED)
- * and the senders hear error.communication.
+ * record and no count behind. tah_loads_finish reports the outcome to core
+ * with ta_address_loaded or ta_address_load_failed and cannot fail.
  *
- * Order. Host posts for an address wait in the load's mailbox and chart mail
- * waits on core's list. When the load finishes, core's list moves to the run
- * queue when the actor is published (or ta_address_loaded names a gone
- * session's instance), and the kernel's mailbox is handed over afterwards by
- * tah_sched_hand_over. Chart mail for the address therefore precedes the
- * host's posts to it, whatever order they arrived in: each source keeps its
- * own order, and the two are not merged (recorded in core ADR 0099).
+ * Order. Every message for an address waits on core's list for it, in the
+ * order it arrived, whoever sent it. When the load finishes, core's list
+ * moves to the run queue when the actor is published (or ta_address_loaded
+ * names a gone session's instance), so the host's posts and chart mail for
+ * the address keep their common arrival order (core ADR 0099).
  *
  * Complexity. Lookup by address is one map probe, O(1). Starting and
- * finishing a load are O(1) plus the hand-over of its mailbox, O(k) in the
- * posts that waited. The wake-up heap is a binary min-heap: O(log n) to add
+ * finishing a load are O(1). The wake-up heap is a binary min-heap: O(log n) to add
  * or pop; replacing or cancelling a wake-up is O(1) and leaves the old entry
  * to be skipped when it surfaces, so the heap can hold stale entries until
  * they come due.
@@ -115,7 +109,6 @@ void tah_loads_close(tah_loads *loads) {
     loads->free_head = 0;
     loads->in_flight = 0;
     loads->requests_head = 0;
-    loads->waiting = 0;
 }
 
 /* ------------------------------------------------------------------------
@@ -143,7 +136,7 @@ ta_result tah_loads_set_family(tah_loads *loads, ta_str name, uint32_t max_waiti
         return TA_OK;
     }
     if (family != NULL) {
-        /* Loads already in flight keep the limit they started with. */
+        /* Dropping the limit removes the family entry; mail already waiting stays on its list in core. */
         tah_free(loads->allocator, &(ta_allocator_free_params){ .ptr = family->name, .size = family->length + 1u,
                                                                  .alignment = 1 });
         tah_loader_family *last = tah_vec_at(&loads->families, loads->families.count - 1u);
@@ -169,8 +162,8 @@ ta_result tah_loads_set_family(tah_loads *loads, ta_str name, uint32_t max_waiti
     return TA_OK;
 }
 
-/* The loader limit of the family `address` belongs to, or 0 without a loader. */
-static uint32_t tah_loads_limit(const tah_loads *loads, const ta_address *address) {
+/* tah_loads_limit: see loads.h. */
+uint32_t tah_loads_limit(const tah_loads *loads, const ta_address *address) {
     if (loads->families.count == 0) {
         return 0;
     }
@@ -191,11 +184,17 @@ tah_load_info tah_loads_info(const tah_loads *loads, uint32_t index, uint32_t ge
     if (load == NULL) {
         return (tah_load_info){ 0 };
     }
-    return (tah_load_info){ .address = load->address, .waiting = load->mail.count, .trace = load->trace };
+    return (tah_load_info){ .address = load->address, .trace = load->trace };
 }
 
-void tah_loads_read_stats(const tah_loads *loads, tah_loads_stats *out) {
-    *out = (tah_loads_stats){ .in_flight = loads->in_flight, .waiting = loads->waiting };
+void tah_loads_read_stats(const tah_loads *loads, const ta_system *core, tah_loads_stats *out) {
+    *out = (tah_loads_stats){ .in_flight = loads->in_flight };
+    for (uint32_t index = 1; index < loads->loads.count; index += 1u) {
+        const tah_load *load = tah_vec_at(&loads->loads, index);
+        if (load->address != NULL) {
+            out->waiting += ta_address_waiting(core, load->address);
+        }
+    }
     for (uint32_t outcome = 0; outcome < TAH_LOAD_OUTCOMES; outcome += 1u) {
         out->outcomes[outcome] = loads->outcomes[outcome];
     }
@@ -207,28 +206,6 @@ tah_load *tah_loads_find(const tah_loads *loads, uint32_t index, uint32_t genera
     }
     tah_load *load = tah_vec_at(&loads->loads, index);
     return load->address != NULL && load->generation == generation ? load : NULL;
-}
-
-bool tah_loads_waiting(const tah_loads *loads, const ta_address *address) {
-    uint64_t index = 0;
-    return tah_map_count(&loads->by_address) != 0 &&
-           tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)address, &index);
-}
-
-bool tah_loads_withdraw(tah_loads *loads, tah_sched *sched, uint32_t index) {
-    tah_envelope *envelope = tah_sched_envelope(sched, index);
-    uint64_t load_index = 0;
-    if (envelope == NULL || envelope->target != 0 || envelope->address == NULL ||
-        tah_map_count(&loads->by_address) == 0 ||
-        !tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)envelope->address, &load_index)) {
-        return false;
-    }
-    tah_load *load = tah_vec_at(&loads->loads, (uint32_t)load_index);
-    if (!tah_sched_withdraw_waiting(sched, &load->mail, index)) {
-        return false;
-    }
-    loads->waiting -= 1u;
-    return true;
 }
 
 /* A free record's index, with the record reset; 0 when there is no memory. */
@@ -270,7 +247,6 @@ static void tah_loads_give(tah_loads *loads, uint32_t index) {
  */
 typedef struct {
     ta_address *address;
-    uint32_t max_waiting;
     tah_load_why why;
     const ta_trace_parent *trace;
     uint64_t now_ns;
@@ -292,7 +268,6 @@ static ta_result tah_loads_start(tah_loads *loads, const tah_load_start *start, 
     tah_load *load = tah_vec_at(&loads->loads, index);
     ta_address_retain(start->address);
     load->address = start->address;
-    load->max_waiting = start->max_waiting;
     load->why = (uint8_t)start->why;
     load->started_ns = start->now_ns;
     if (start->trace != NULL) {
@@ -303,73 +278,17 @@ static ta_result tah_loads_start(tah_loads *loads, const tah_load_start *start, 
     return TA_OK;
 }
 
-/* Appends a message to a load's mailbox, or dead-letters it when it is full. */
-static ta_result tah_loads_append(tah_loads *loads, tah_sched *sched, tah_load *load, const tah_message *message) {
-    if (load->mail.count >= load->max_waiting) {
-        ta_address_retain(load->address);
-        ta_result result = tah_sched_post_dead(sched, &(tah_dead_post){ .address = load->address, .message = message,
-                                                                        .reason = TAH_DEAD_WAITING_FULL });
-        if (result != TA_OK) {
-            ta_address_release(load->address);
-        }
-        return result;
-    }
-    ta_result result = tah_sched_post_waiting(
-        sched, &(tah_waiting_post){ .box = &load->mail, .address = load->address, .message = message });
-    if (result == TA_OK) {
-        loads->waiting += 1u;
-    }
-    return result;
-}
-
-ta_result tah_loads_route(tah_loads *loads, const tah_load_route *route) {
-    uint64_t found = 0;
-    if (tah_map_count(&loads->by_address) != 0 &&
-        tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)route->address, &found)) {
-        return tah_loads_append(loads, route->sched, tah_vec_at(&loads->loads, (uint32_t)found), route->message);
-    }
-    if (route->resident) {
-        return TA_ERR_NOT_FOUND;
-    }
-    uint32_t limit = tah_loads_limit(loads, route->address);
-    if (limit == 0) {
-        return TA_ERR_NOT_FOUND;
-    }
-    uint32_t index = 0;
-    ta_result result = tah_loads_start(loads, &(tah_load_start){ .address = route->address,
-                                                                  .max_waiting = limit,
-                                                                  .why = TAH_LOAD_WHY_MAIL,
-                                                                  .trace = route->message->trace,
-                                                                  .now_ns = route->now_ns },
-                                       &index);
-    if (result != TA_OK) {
-        return result;
-    }
-    tah_load *load = tah_vec_at(&loads->loads, index);
-    result = tah_loads_append(loads, route->sched, load, route->message);
-    if (result != TA_OK) {
-        /* Nothing was accepted: the load never happened. */
-        loads->requests.count -= 1u;
-        tah_map_remove(&loads->by_address, (uint64_t)(uintptr_t)route->address);
-        loads->in_flight -= 1u;
-        tah_loads_give(loads, index);
-    }
-    return result;
-}
-
 ta_result tah_loads_wanted(tah_loads *loads, const tah_load_wanted *wanted) {
     uint64_t found = 0;
     if (tah_map_count(&loads->by_address) != 0 &&
         tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)wanted->address, &found)) {
         return TA_OK; /* the load in flight serves this mail too */
     }
-    uint32_t limit = tah_loads_limit(loads, wanted->address);
-    if (limit == 0) {
+    if (tah_loads_limit(loads, wanted->address) == 0) {
         return TA_ERR_NOT_FOUND;
     }
     uint32_t index = 0;
     return tah_loads_start(loads, &(tah_load_start){ .address = wanted->address,
-                                                      .max_waiting = limit,
                                                       .why = wanted->session ? TAH_LOAD_WHY_SESSION : TAH_LOAD_WHY_MAIL,
                                                       .trace = wanted->trace,
                                                       .now_ns = wanted->now_ns },
@@ -406,29 +325,18 @@ static ta_refusal_reason tah_load_refusal(tah_load_outcome outcome) {
     }
 }
 
-static tah_dead_reason tah_load_dead_reason(tah_load_outcome outcome) {
-    switch (outcome) {
-    case TAH_LOAD_NOT_FOUND: return TAH_DEAD_NOT_FOUND;
-    case TAH_LOAD_REJECTED: return TAH_DEAD_REJECTED;
-    case TAH_LOAD_TIMED_OUT: return TAH_DEAD_LOAD_TIMEOUT;
-    case TAH_LOAD_DONE: return TAH_DEAD_DONE;
-    default: return TAH_DEAD_LOAD_FAILED;
-    }
-}
-
 ta_result tah_loads_finish(tah_loads *loads, const tah_load_finish *finish) {
     tah_load *load = tah_loads_find(loads, finish->index, finish->generation);
     if (load == NULL) {
         return TA_ERR_STALE;
     }
     tah_load_outcome outcome = finish->outcome;
-    ta_result result = TA_OK;
-    uint32_t waiting = load->mail.count;
     bool session = load->why == TAH_LOAD_WHY_SESSION;
     if (outcome == TAH_LOAD_LOADED || outcome == TAH_LOAD_SPAWNED) {
         if (session) {
             /* The new instance of the family has no address; it only has to be resident. */
-            if (tah_sched_lookup(finish->sched, finish->actor) == NULL) {
+            ta_actor_inspection view;
+            if (ta_actor_inspect(finish->core, finish->actor, &view) != TA_OK) {
                 return TA_ERR_NOT_FOUND;
             }
         } else {
@@ -436,19 +344,9 @@ ta_result tah_loads_finish(tah_loads *loads, const tah_load_finish *finish) {
             if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT || entry.actor != finish->actor) {
                 return TA_ERR_NOT_FOUND;
             }
-        }
-        result = tah_sched_hand_over(finish->sched, &load->mail, finish->actor);
-        if (result != TA_OK) {
-            outcome = TAH_LOAD_FAILED;
-        } else if (!session) {
             tah_loads_cancel_wake(loads, load->address);
         }
-    }
-    if (load->mail.first != 0) {
-        tah_sched_bury_waiting(finish->sched, &load->mail, tah_load_dead_reason(outcome));
-    }
-    /* Core's own list: a named address was served by the actor's becoming resident there; a session's key is named. */
-    if (outcome == TAH_LOAD_LOADED || outcome == TAH_LOAD_SPAWNED) {
+        /* Core's own list: a named address was served by the actor's becoming resident there; a session's key is named. */
         if (session) {
             (void)ta_address_loaded(finish->core, &(ta_address_loaded_params){ .address = load->address,
                                                                               .actor = finish->actor });
@@ -457,7 +355,6 @@ ta_result tah_loads_finish(tah_loads *loads, const tah_load_finish *finish) {
         (void)ta_address_load_failed(finish->core, &(ta_address_load_failed_params){ .address = load->address,
                                                                                     .reason = tah_load_refusal(outcome) });
     }
-    loads->waiting -= waiting;
     loads->outcomes[outcome] += 1u;
     double seconds = finish->now_ns > load->started_ns ? (double)(finish->now_ns - load->started_ns) / 1e9 : 0.0;
     tah_exemplar exemplar =
@@ -466,7 +363,7 @@ ta_result tah_loads_finish(tah_loads *loads, const tah_load_finish *finish) {
     tah_map_remove(&loads->by_address, (uint64_t)(uintptr_t)load->address);
     loads->in_flight -= 1u;
     tah_loads_give(loads, finish->index);
-    return result == TA_OK ? TA_OK : TA_ERR_NOMEM;
+    return TA_OK;
 }
 
 /* ------------------------------------------------------------------------
@@ -569,10 +466,12 @@ void tah_loads_fire_wakes(tah_loads *loads, const tah_wake_fire *fire) {
         tah_wake wake = tah_wake_pop(loads);
         tah_map_remove(&loads->wake_due, (uint64_t)(uintptr_t)wake.address);
         ta_actor_directory_entry entry = tah_directory_find(fire->directory, wake.address);
-        uint32_t limit = tah_loads_limit(loads, wake.address);
-        if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT && limit != 0 && !tah_loads_waiting(loads, wake.address)) {
+        uint64_t in_flight = 0;
+        bool loading = tah_map_count(&loads->by_address) != 0 &&
+                       tah_map_get(&loads->by_address, (uint64_t)(uintptr_t)wake.address, &in_flight);
+        if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT && tah_loads_limit(loads, wake.address) != 0 && !loading) {
             uint32_t index = 0;
-            if (tah_loads_start(loads, &(tah_load_start){ .address = wake.address, .max_waiting = limit,
+            if (tah_loads_start(loads, &(tah_load_start){ .address = wake.address,
                                                           .why = TAH_LOAD_WHY_TIMER, .now_ns = fire->now_ns },
                                 &index) != TA_OK) {
                 /* No memory: try again at the next turn, and stop for now. */

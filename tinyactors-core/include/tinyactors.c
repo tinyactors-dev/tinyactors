@@ -8689,17 +8689,7 @@ typedef struct ta_run_report {
  */
 TA_PRIVATE ta_result ta_run_admit_report(ta_system *system, ta_actor *actor, const ta_run_report *report);
 
-/*
- * ta_run_executing reports whether a macrostep is executing now, inside
- * ta_run. Everything a send does while it is true is paid from the slot's
- * claim and waits on the slot's outgoing lists, whichever session sends:
- * an invoked child cancelled by its parent's macrostep runs its <onexit>
- * inside that macrostep, so its mail belongs to the parent's input (dropped
- * if the parent's macrostep is abandoned, after the parent's earlier sends).
- * While it is false the caller is at a safe point (a host call, a due
- * dispatch, a publish) and posts from the pool after ta_mail_prepare. O(1).
- */
-TA_PRIVATE bool ta_run_executing(const ta_system *system);
+/* ta_run_executing is public (tinyactors.h); what a send does while it is true: see ta_mail_send and ta_mail_hold. */
 
 /*
  * ta_runner_init prepares an empty runner over `allocator`. It allocates
@@ -19280,8 +19270,8 @@ static ta_result ta_run_cover(ta_system *system) {
     return ta_envelopes_refill(&system->envelopes, system->envelopes.macrostep_reserve);
 }
 
-/* ta_run_executing: see run.h. */
-TA_PRIVATE bool ta_run_executing(const ta_system *system) {
+/* ta_run_executing: see tinyactors.h. */
+TA_API bool ta_run_executing(const ta_system *system) {
     return system->runner.executing;
 }
 
@@ -19328,6 +19318,11 @@ static uint64_t ta_run_token(ta_system *system, uint32_t index) {
     }
     system->runner.tokens = sequence;
     return (sequence << TA_INPUT_INDEX_BITS) | index;
+}
+
+/* ta_input_slot: see tinyactors.h. */
+TA_API uint32_t ta_input_slot(uint64_t input) {
+    return (uint32_t)(input & TA_INPUT_INDEX_MASK);
 }
 
 /* ta_run_input_decided: see run.h. */
@@ -19600,7 +19595,8 @@ static void ta_run_refuse(ta_system *system, uint32_t index, ta_refusal_reason r
                                              .input = envelope->input,
                                              .source = (ta_input_source)envelope->source,
                                              .reason = reason,
-                                             .event = &envelope->event });
+                                             .event = &envelope->event,
+                                             .trace = envelope->trace });
     envelope->state = TA_ENVELOPE_DECIDED;
     ta_run_input_decided(system, envelope);
     ta_ilist_push_back(&system->runner.lent, ta_envelopes_link(&system->envelopes), index);
@@ -19911,7 +19907,8 @@ static bool ta_run_report_cues(ta_system *system, ta_run_notices *out) {
                                                  .source = (ta_input_source)envelope->source,
                                                  .reason = (ta_refusal_reason)envelope->flags,
                                                  .event = &envelope->event,
-                                                 .address = envelope->payload.address });
+                                                 .address = envelope->payload.address,
+                                                 .trace = envelope->trace });
         ta_ilist_push_back(&runner->lent, link, index);
     }
     return false;
@@ -23436,7 +23433,8 @@ static ta_result ta_invoke_report_error(ta_system *system, ta_actor *actor, cons
     if (error == NULL || !ta_invoke_reason_valid(error->reason)) {
         return TA_ERR_INVALID;
     }
-    ta_run_report report = { .event = { .type = TA_EVENT_PLATFORM, .invoke_id = TA_INVOKE_ID_NONE },
+    /* The carrier names its invocation, so a TAKEN notice lets a recorder journal the report with it. */
+    ta_run_report report = { .event = { .type = TA_EVENT_PLATFORM, .invoke_id = params->invoke_id },
                              .trace = params->trace,
                              .time = params->time,
                              .invoke = params->invoke_id,

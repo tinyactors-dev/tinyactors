@@ -367,7 +367,11 @@ static void test_withdraw_a_waiting_input(void) {
     ta_address *address = intern_address(&w, "n1");
     uint64_t first = 0, second = 0;
     CHECK(post_to(&w, address, w.e1, &first) == TA_OK);
-    CHECK(post_to(&w, address, w.e2, &second) == TA_OK);
+    ta_event traced = { .name = w.e2, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(ta_actor_deliver(w.system, &(ta_actor_deliver_params){ .address = address, .event = &traced,
+                                                                 .time = ta_system_time(w.system),
+                                                                 .trace = { .context = { .trace_id_low = 77u } },
+                                                                 .input = &second }) == TA_OK);
     CHECK(ta_address_waiting(w.system, address) == 2u && gauge(&w) == 2u);
     CHECK(ta_input_withdraw(w.system, first) == TA_OK); /* the first one holds the cue */
     CHECK(ta_address_waiting(w.system, address) == 1u && gauge(&w) == 1u);
@@ -385,6 +389,7 @@ static void test_withdraw_a_waiting_input(void) {
         if (r.notices[index].kind == TA_NOTICE_INPUT_REFUSED) {
             CHECK(r.notices[index].address == address); /* the refusal names the address the input waited for */
             CHECK(r.notices[index].reason == TA_REFUSED_LOAD_NOT_FOUND);
+            CHECK(r.notices[index].trace.context.trace_id_low == 77u); /* and carries the input's trace parent */
         }
     }
     CHECK(gauge(&w) == 0u);

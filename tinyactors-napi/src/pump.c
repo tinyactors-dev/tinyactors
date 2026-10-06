@@ -322,13 +322,17 @@ void tna_call_hook(napi_env env, napi_ref hook, napi_value argument, napi_value 
     }
 }
 
+/* Core refuses what still waits for the destroyed actor; the next turn reports it (napi ADR 0041). */
 static void tna_destroy_finished(tah_system *system, ta_actor_id actor) {
     tah_system_enter_core(system);
-    ta_result result = ta_actor_destroy(tah_system_core(system), actor);
+    (void)ta_actor_destroy(tah_system_core(system), actor);
     tah_system_leave_core(system);
-    if (result == TA_OK || result == TA_ERR_NOT_FOUND) {
-        tah_sched_remove(tah_system_sched(system), actor, TAH_DEAD_DONE);
-    }
+}
+
+/* Whether core still knows the actor (a hook may have destroyed it). */
+static bool tna_actor_known(tah_system *system, ta_actor_id actor) {
+    ta_actor_inspection view;
+    return ta_actor_inspect(tah_system_core(system), actor, &view) == TA_OK;
 }
 
 /* The actor's completion data (<donedata>), or undefined (ADR 0012, ADR 0011). */
@@ -349,7 +353,7 @@ static napi_value tna_completion_data(napi_env env, tah_system *system, ta_actor
 
 static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tah_turn_record *record, napi_value *first_error) {
     tah_system *system = wrapper->system;
-    if (wrapper->done_hook != NULL && tah_sched_state_of(tah_system_sched(system), record->actor) != TAH_SCHED_NONE) {
+    if (wrapper->done_hook != NULL && tna_actor_known(system, record->actor)) {
         napi_value view = tna_actor_view(env, wrapper, record->actor);
         napi_value argument = NULL;
         napi_value data = tna_completion_data(env, system, record->actor);
@@ -361,8 +365,7 @@ static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tah_tu
         }
     }
     /* The hook may have closed the system or destroyed the actor itself. */
-    if (wrapper->destroy_finished && !tah_system_closed(system) &&
-        tah_sched_state_of(tah_system_sched(system), record->actor) != TAH_SCHED_NONE) {
+    if (wrapper->destroy_finished && !tah_system_closed(system) && tna_actor_known(system, record->actor)) {
         tna_destroy_finished(system, record->actor);
     }
 }
@@ -386,22 +389,12 @@ void tna_fault_message(const char *operation, ta_result code, char *buffer, size
     snprintf(buffer, size, "%s failed: %s", operation, tna_result_code(code));
 }
 
+/* The only fault left is the runaway (napi ADR 0041): core abandoned a macrostep at the microstep limit, and the actor keeps the
+ * configuration of its last microstep. Core's own trace logs it, so there is no host log (ADR 0103). */
 static void tna_fault_record(napi_env env, tna_napi_system *wrapper, const tah_turn_record *record, napi_value *first_error) {
-    const char *code = record->runaway ? "runaway" : tna_result_code(record->code);
+    const char *code = "runaway";
     char message[160];
-    if (record->runaway) {
-        /* Core's own trace logs the runaway; the actor is not quarantined, so there is no host log (ADR 0103). */
-        snprintf(message, sizeof message, "the macrostep reached the microstep limit and was abandoned");
-    } else {
-        tna_fault_message(record->operation, record->code, message, sizeof message);
-        char body[200];
-        int length = snprintf(body, sizeof body, "actor quarantined: %s", message);
-        tna_pump_host_log(wrapper->system, record->actor,
-                     (tah_otlp_host_log_params){ .event_name = { "tinyactors.actor.quarantined", 28 },
-                                          .body = { body, length > 0 ? (uint32_t)length : 0u },
-                                          .key = { "tinyactors.fault.code", 21 },
-                                          .value = { code, (uint32_t)strlen(code) } });
-    }
+    snprintf(message, sizeof message, "the macrostep reached the microstep limit and was abandoned");
     if (wrapper->fault_hook == NULL) {
         return;
     }
@@ -552,9 +545,7 @@ static napi_value tna_settlement_error(napi_env env, const tah_settlement *settl
                          "send: the message's macrostep reached the microstep limit and was abandoned (core ADR 0099); "
                          "the actor keeps the configuration of its last microstep");
     }
-    const char *code = tna_result_code(settlement->code);
-    snprintf(message, sizeof message, "send: the message's macrostep failed (%s); the actor is quarantined", code);
-    return tna_error(env, code, message);
+    return tna_error(env, "invalid", "send: the message did not end in an error");
 }
 
 /* { actor, status, consumed, completion }: the macrostep ended with the actor
@@ -649,7 +640,7 @@ static bool tna_settled(tah_system *system) {
         return true;
     }
     tah_loads_stats loads;
-    tah_loads_read_stats(tah_system_loads(system), &loads);
+    tah_loads_read_stats(tah_system_loads(system), tah_system_core(system), &loads);
     return tah_system_quiet(system) && !tah_system_turn_pending(system) && loads.in_flight == 0;
 }
 

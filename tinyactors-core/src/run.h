@@ -259,17 +259,7 @@ typedef struct ta_run_report {
  */
 ta_result ta_run_admit_report(ta_system *system, ta_actor *actor, const ta_run_report *report);
 
-/*
- * ta_run_executing reports whether a macrostep is executing now, inside
- * ta_run. Everything a send does while it is true is paid from the slot's
- * claim and waits on the slot's outgoing lists, whichever session sends:
- * an invoked child cancelled by its parent's macrostep runs its <onexit>
- * inside that macrostep, so its mail belongs to the parent's input (dropped
- * if the parent's macrostep is abandoned, after the parent's earlier sends).
- * While it is false the caller is at a safe point (a host call, a due
- * dispatch, a publish) and posts from the pool after ta_mail_prepare. O(1).
- */
-bool ta_run_executing(const ta_system *system);
+/* ta_run_executing is public (tinyactors.h); what a send does while it is true: see ta_mail_send and ta_mail_hold. */
 
 /*
  * ta_runner_init prepares an empty runner over `allocator`. It allocates

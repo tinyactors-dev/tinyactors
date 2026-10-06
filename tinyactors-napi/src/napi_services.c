@@ -254,36 +254,6 @@ void tna_services_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *f
     }
 }
 
-/*
- * The data of the error.communication.invoke.<id>.quarantined a quarantined
- * child's parent gets (napi ADR 0025): { code, message }, as the fault hook
- * has them.
- */
-static bool tna_quarantine_data(void *context, const tah_quarantine_report *report, ta_value *out) {
-    tna_napi_system *wrapper = context;
-    if (!wrapper->dm.js_usable) {
-        return false;
-    }
-    napi_env env = wrapper->env;
-    napi_handle_scope scope = NULL;
-    if (napi_open_handle_scope(env, &scope) != napi_ok) {
-        return false;
-    }
-    char text[160];
-    tna_fault_message(report->operation, report->code, text, sizeof text);
-    napi_value data = NULL;
-    napi_value code = NULL;
-    napi_value message = NULL;
-    bool made = napi_create_object(env, &data) == napi_ok &&
-                napi_create_string_utf8(env, tna_result_code(report->code), NAPI_AUTO_LENGTH, &code) == napi_ok &&
-                napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &message) == napi_ok &&
-                napi_set_named_property(env, data, "code", code) == napi_ok &&
-                napi_set_named_property(env, data, "message", message) == napi_ok &&
-                tna_value_make(&wrapper->values, data, out);
-    napi_close_handle_scope(env, scope);
-    return made;
-}
-
 /* The data of an invocation's `failed` report (napi ADR 0032 section 3):
  * { code, message }, from the fault the child's start ended with. */
 static bool tna_fault_data(void *context, int32_t code, ta_str message, ta_value *out) {
@@ -313,7 +283,6 @@ static bool tna_fault_data(void *context, int32_t code, ta_str message, ta_value
 
 void tna_services_init(tna_napi_system *wrapper, tah_system_callbacks *callbacks) {
     tna_children_init(wrapper, callbacks);
-    callbacks->quarantine_data = tna_quarantine_data;
     callbacks->fault_data = tna_fault_data;
 }
 
@@ -675,9 +644,9 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
     ta_actor_id parent = ta_actor_id_make(slot, generation);
     napi_value taken = NULL;
     if (strcmp(kind, "unavailable") == 0) {
-        /* A lost service: its invocation ends (core ADR 0081). The report
-         * waits in the parent's mailbox, since core takes it only between
-         * macrosteps (napi ADR 0032 section 3). */
+        /* A lost service: its invocation ends (core ADR 0081). Core admits the
+         * report as an input and takes it between the parent's macrosteps
+         * (napi ADR 0032 section 3, ADR 0041). */
         ta_event event = { .type = TA_EVENT_PLATFORM, .invoke_id = invoke };
         napi_valuetype type = napi_undefined;
         if (argc >= 6 && napi_typeof(env, argv[5], &type) == napi_ok && type != napi_undefined &&
@@ -689,15 +658,28 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
             ta_value_release(&event.data);
             return NULL;
         }
-        ta_result result = tah_system_post(system, &(tah_message){ .target = parent, .event = &event, .trace = &trace,
-                                                                   .report = TAH_REPORT_UNAVAILABLE });
-        if (result != TA_OK) {
+        if (tah_system_reentrant(system)) {
             ta_value_release(&event.data);
-            if (result == TA_ERR_BUSY) {
-                return tna_throw(env, "queue-full", "reportInvoke: the parent's mailbox is full");
+            return tna_throw(env, "reentrant", "reportInvoke: cannot be called from inside a core call (ADR 0013)");
+        }
+        ta_invoke_error error = { .reason = { .ptr = "unavailable", .len = 11 },
+                                  .data = event.data.v != NULL ? &event.data : NULL,
+                                  .ends = true };
+        ta_result result = ta_actor_report_invoke(tah_system_core(system),
+                                                  &(ta_invoke_report_params){ .time = ta_system_time(tah_system_core(system)),
+                                                                              .actor = parent,
+                                                                              .invoke_id = invoke,
+                                                                              .kind = TA_INVOKE_REPORT_ERROR,
+                                                                              .trace = trace,
+                                                                              .as.error = &error });
+        ta_value_release(&event.data); /* the admitted report keeps its own reference */
+        if (result != TA_OK) {
+            if (result == TA_ERR_FULL) {
+                return tna_throw(env, "queue-full", "reportInvoke: core's queue is full");
             }
             return tna_throw(env, tna_result_code(result), "reportInvoke: the report was not accepted");
         }
+        tah_system_want_turn(system);
         napi_get_boolean(env, true, &taken);
         return taken;
     }
@@ -734,10 +716,10 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     ta_result result = tah_system_post(system, &(tah_message){ .target = parent, .event = &event, .trace = &trace });
+    ta_value_release(&event.data); /* the post borrows the event */
     if (result != TA_OK) {
-        ta_value_release(&event.data);
-        if (result == TA_ERR_BUSY) {
-            return tna_throw(env, "queue-full", "reportInvoke: the parent's mailbox is full");
+        if (result == TA_ERR_FULL) {
+            return tna_throw(env, "queue-full", "reportInvoke: core's queue is full");
         }
         return tna_throw(env, tna_result_code(result), "reportInvoke: the report was not accepted");
     }

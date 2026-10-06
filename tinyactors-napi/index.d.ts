@@ -83,13 +83,11 @@ export interface DoneRecord<Data = unknown> {
 }
 
 /**
- * A core call for an actor failed; the actor is quarantined (ADR 0008). An
- * invoked child's parent also gets error.communication.invoke.<id>.quarantined
- * with `{ code, message }` from this record (napi ADR 0025). The exception is
- * a runaway: `code` is `runaway` and `operation` is `run` when core
- * abandoned a macrostep at the microstep limit (core ADR 0099 section 7).
- * The actor stands stable and is not quarantined, and its parent is not told
- * (core ADR 0103 section 8).
+ * A macrostep failed. Today the only failure is a runaway: `code` is
+ * `runaway` and `operation` is `run` when core abandoned a macrostep at the
+ * microstep limit (core ADR 0099 section 7). The actor stands stable and is
+ * not quarantined, and its parent is not told (core ADR 0103 section 8).
+ * Nothing is quarantined until 4.5 (napi ADR 0041).
  */
 export interface FaultRecord {
   readonly actor: Actor;
@@ -311,17 +309,19 @@ export interface SystemParameters {
    * inside a microstep (core ADR 0061); 0 means no limit; default 1024.
    */
   actionBudget?: number;
-  /** Runnable actors resumed in one pump turn; default 1024, at least 1. */
-  resumesPerTurn?: number;
   /** Due sends dispatched during one pump turn; default 1024, at least 1. */
   dueBudget?: number;
-  /** Deliveries started, and dead letters reported, in one pump turn; default 1024, at least 1. */
+  /**
+   * Inputs one pump turn lets core take, and dead letters it reports;
+   * default 1024, at least 1. A soft bound, checked between core's runs
+   * (napi ADR 0041).
+   */
   messageBudget?: number;
   /**
-   * Accepted messages not yet delivered or reported; post() and send()
-   * are refused with `queue-full` beyond it. It counts the application's
-   * mail only: mail between actors is core's, and waits in core's pool
-   * (core ADR 0099). 0 (default): no limit.
+   * Posts and sends accepted and not yet ended or reported; post() and send()
+   * are refused with `queue-full` beyond it. They wait in core's queue, and
+   * mail between actors waits there too, outside this limit (core ADR 0099).
+   * Core's own pool limit also answers `queue-full`. 0 (default): no limit.
    */
   maxQueuedMessages?: number;
   /**
@@ -510,10 +510,18 @@ export interface System {
    * actor's address gets no wake (kernel ADR 0006).
    */
   destroy(actor: ActorID): void;
-  /** Put an actor that faulted back into scheduling (ADR 0008). */
+  /**
+   * Put an actor that faulted back into scheduling (ADR 0008). Nothing is
+   * quarantined until 4.5, so this throws `invalid` for every actor.
+   */
+  // status: partial: nothing is quarantined until 4.5
   release(actor: ActorID): void;
 
-  /** The messages waiting in `actor`'s mailbox, oldest first, at most `limit` (default 100). */
+  /**
+   * The inputs core holds for `actor` (posts, sends and mail from other
+   * actors), oldest first, at most `limit` (default 100). An operator
+   * transition never queues.
+   */
   mailbox(actor: ActorID, options?: { readonly limit?: number }): readonly QueuedMessage[];
   /**
    * Abandon `actor`'s macrostep (core ADR 0082): the actor keeps the
@@ -721,7 +729,7 @@ export interface System {
    * Mail for an actor that is gone is a dead letter, not an error. An
    * address is resolved through the directory when the post is accepted; a
    * name with no resident actor is a dead letter too (ADR 0006). Throws
-   * `queue-full` at maxQueuedMessages or maxRetainedBytes. `data` is any JavaScript value, shared
+   * `queue-full` at maxQueuedMessages or maxRetainedBytes, or when core's queue is full. `data` is any JavaScript value, shared
    * with the receiver, not copied (ADR 0011; mail enters a session, napi ADR
    * 0039); the receiver's expressions see it as `context.event.data`.
    */
@@ -888,16 +896,16 @@ export interface PostOptions {
    * by a transition to `targets`, states of the target actor's chart, from
    * the active state `source` or the root, instead of by the chart's
    * transitions, with every exit, entry, history and invocation a chart
-   * transition would have. It queues behind the mail before it. When it
-   * arrives, an actor whose `source` is no longer active, or that runs
-   * another revision by then, refuses it: a dead letter with reason
-   * `refused` (a send() rejects with `invalid`), and the actor is not
-   * quarantined. Only for an ActorID target.
+   * transition would have. It does not queue: the actor must be idle with
+   * nothing waiting for it, or post() throws `busy` (napi ADR 0041). An
+   * actor whose `source` is not active, or that runs another revision,
+   * refuses it: post() throws `invalid` and the actor is not quarantined.
+   * Only for an ActorID target.
    */
   transition?: { readonly targets: readonly string[]; readonly source?: string };
 }
 
-/** A message waiting in a mailbox (System.mailbox). */
+/** An input waiting for an actor in core's queue (System.mailbox). */
 export interface QueuedMessage {
   readonly event: EventName;
   readonly data?: unknown;
@@ -905,8 +913,6 @@ export interface QueuedMessage {
   readonly awaited: boolean;
   /** Its origin's scope, when it was posted with `origin: { type, scope }`. */
   readonly scope?: { readonly index: number; readonly generation: number };
-  /** The operator transition it carries, by state names; `source` null is the root. */
-  readonly transition?: { readonly source: string | null; readonly targets: readonly string[] };
 }
 
 export type IOOrigin =
@@ -1916,7 +1922,7 @@ export interface ActorInspection<Data = unknown> {
   /** Pending delayed sends, by due time then send order (core ADR 0054). */
   readonly delayedSends: readonly DelayedSendInspection[];
   /** The addon's scheduling state (ADR 0005). */
-  readonly scheduling: "none" | "idle" | "ready" | "runnable" | "quarantined";
+  readonly scheduling: "none" | "idle" | "ready" | "runnable";
   /** The top-level final state it reached, or null (core ADR 0056). */
   readonly finalState: string | null;
   readonly allocatedBytes: number;
@@ -2377,15 +2383,14 @@ export interface InvokedService {
  * Reports from an invocation to its parent. event() and done() arrive as
  * external events (done as done.invoke.<id>); unavailable() retires the
  * invocation and the parent gets error.communication. Every report waits in
- * the parent's mailbox, behind the mail before it, and reaches the parent
+ * core's queue, behind the mail before it, and reaches the parent
  * between macrosteps (napi ADR 0032 section 3). Each returns true when the
  * report was queued, and false once the invocation has ended (done,
  * unavailable, cancelled, closed) or its parent is gone; a queued report for
  * an invocation that ends before it is taken is dropped.
  *
  * A report that could not be taken throws and changes nothing: event() and
- * done() throw `queue-full` when the parent's mailbox is at
- * maxQueuedMessages or maxRetainedBytes, and any report throws
+ * done() throw `queue-full` when core's queue is full, and any report throws
  * `out-of-memory` when the addon or core cannot allocate. The invocation
  * stays alive and its signal unaborted, so the service can report again,
  * for example once the parent has drained its mailbox.

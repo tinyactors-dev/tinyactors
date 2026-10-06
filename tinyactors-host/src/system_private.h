@@ -70,8 +70,6 @@ struct tah_system {
     tah_definitions definitions;
     /* The last service handle a JavaScript invoker's start was given. */
     uint64_t next_service;
-    /* Reports to parents that core has not taken yet (tah_quarantine_report). */
-    tah_vec quarantine_reports;
     /* One record per registered I/O processor type (adapters/io.h, core ADR 0068). */
     tah_vec io_processors; /* tah_io_processor * */
     /* Turn duration and timer lateness (host_metrics.h, napi ADR 0017 section 7). */

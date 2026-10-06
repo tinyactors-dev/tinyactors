@@ -14319,7 +14319,7 @@
           "type": {
             "type": "ta_trace_parent"
           },
-          "doc": "LOAD_NEEDED: the trace parent of the first input that waits, for the load's own record."
+          "doc": "LOAD_NEEDED: the trace parent of the first input that waits, for the load's own record. REFUSED: the refused input's trace parent, for a host that reports it as a dead letter. All zero is none."
         },
         {
           "name": "session",
@@ -21422,6 +21422,26 @@
       ]
     },
     {
+      "name": "ta_input_slot",
+      "doc": "The place of a host input's envelope in the pool, from its token: a number below poolEnvelopes' bound (at most 2^24), distinct for the inputs that are pending at once, and reused when an input ends. A host may index a table of its own with it (the kernel follows the sends and the retained bytes of the inputs it admitted this way, with no hashing and no allocation in steady state); it must compare the whole token with the one it stored before it trusts an entry, since a slot is reused. Pure: no system, no failure.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "input",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        }
+      ]
+    },
+    {
       "name": "ta_actor_pending",
       "doc": "Writes the inputs waiting for `actor` into the caller's array, oldest first (the order ta_run() will take them in), at most `capacity` of them; `*count` is how many were written. It looks at the run queue only and changes nothing: it never allocates and costs the length of the queue up to the capacity-th input found. Inputs withdrawn (ta_input_withdraw()) are not listed. Not listed either: mail the running macrostep has sent and inputs it admitted, which are invisible until it ends, and inputs waiting for an address. `*total` counts the session's queued inputs, those included. - TA_OK: written. - TA_ERR_NOT_FOUND: no such session; `*count` is 0. - TA_ERR_INVALID: a null argument, or a capacity with no array.",
       "public": true,
@@ -21648,6 +21668,31 @@
     {
       "name": "ta_run_pending",
       "doc": "Whether ta_run() has something to do: an input waits on the run queue (mail a macrostep sent included), a session has begun a macrostep that no input is running, an input is paused inside a macrostep, an abandoned input waits to be reported, or a LOAD_NEEDED or REFUSED notice waits to be written. A host calls it to decide whether it is quiet and whether to call ta_run() again. It never allocates and costs O(1).",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "bool"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_run_executing",
+      "doc": "True only while ta_run() is inside a macrostep's executable content: a callback core makes (a data-model evaluation, an invoker or I/O processor call, a log sink) is then running for that macrostep. ta_actor_deliver() and ta_actor_report_invoke() may be called from such a callback, and are ordered with the macrostep's own mail; elsewhere inside a core call they may not be.",
       "public": true,
       "static_inline": false,
       "implemented": true,

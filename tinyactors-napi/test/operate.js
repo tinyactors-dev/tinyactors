@@ -1,7 +1,8 @@
 'use strict';
 
-// Operating one actor (ADR 0026; core ADRs 0082, 0083, 0084): the mailbox,
-// operator transitions in post() and send(), abandoning a macrostep,
+// Operating one actor (ADR 0026; core ADRs 0082, 0083, 0084): the inputs
+// core holds for it, operator transitions in post() and send() (napi ADR
+// 0041: an idle actor with nothing waiting), abandoning a macrostep,
 // withdrawing a delayed send, and what inspect() and definitions() report.
 // Runs on Node and Bun.
 
@@ -46,31 +47,43 @@ const chart = () =>
         .always((t) => t.target('loop2')))
     .state('loop2', (s) => s.always((t) => t.target('loop1')));
 
-// Operator transitions queue behind real mail; a refused one is a dead
-// letter and the actor is not quarantined.
+// An operator transition needs an idle actor with nothing waiting for it: it
+// is `busy` while mail waits, and a refused one is `invalid` with the actor
+// not quarantined (napi ADR 0041).
 async function transitions() {
   const deadLetters = [];
   const system = createSystem({ clock: 'manual', deadLetter: (record) => deadLetters.push(record) });
   const actor = system.spawn(system.define(chart()));
   await system.flush();
   actor.post('hook', { attempt: 1 });
-  const jumped = actor.send('operator.goto', { by: 'test' }, { transition: { targets: ['c'] } });
-  // The mailbox, before the pump takes it: oldest first, at most `limit`.
-  assert.deepEqual(system.mailbox(actor).map((message) => message.event), ['hook', 'operator.goto']);
+  actor.post('hook', { attempt: 2 }, { origin: undefined });
+  // The inputs core holds, before the pump takes them: oldest first, at most `limit`.
+  assert.deepEqual(system.mailbox(actor).map((message) => message.event), ['hook', 'hook']);
   assert.deepEqual(system.mailbox(actor, { limit: 1 }).map((message) => message.data), [{ attempt: 1 }]);
   assertThrows(() => system.mailbox(actor, { limit: -1 }), 'invalid');
-  const [queued] = system.mailbox(actor).slice(-1);
-  assert.deepEqual(queued.transition, { source: null, targets: ['c'] });
-  assert.equal(queued.awaited, true);
+  assert.equal(system.mailbox(actor)[0].awaited, false);
+  assert.equal(actor.inspect().scheduling, 'ready');
+  assertThrows(() => actor.post('operator.goto', { by: 'test' }, { transition: { targets: ['c'] } }), 'busy');
+  await assertRejects(actor.send('operator.goto', { by: 'test' }, { transition: { targets: ['c'] } }), 'busy');
+  await system.flush();
+  assert.deepEqual(actor.inspect().activeStates, ['a']);
+  assert.equal(actor.inspect().data.hooks, 2);
+  assert.deepEqual(system.mailbox(actor), []);
+
+  const awaited = actor.send('hook');
+  assert.equal(system.mailbox(actor)[0].awaited, true, 'a send() waits for it');
+  await awaited;
+
+  const jumped = actor.send('operator.goto', { by: 'test' }, { transition: { targets: ['c'] } });
   assert.equal((await jumped).status, 'stable');
   assert.deepEqual(actor.inspect().activeStates, ['c']);
   assert.deepEqual(actor.inspect().data.entered, ['operator.goto'], 'onentry sees the operator event');
 
-  // From b, but the actor is in c by the time it arrives: refused.
+  // From b, but the actor is in c: refused at the call.
   await assertRejects(actor.send('operator.goto', undefined, { transition: { targets: ['d'], source: 'b' } }), 'invalid');
   assert.equal(actor.inspect().scheduling, 'idle', 'not quarantined');
   assert.deepEqual(actor.inspect().activeStates, ['c']);
-  assert.equal(deadLetters.at(-1).reason, 'refused');
+  assert.equal(deadLetters.length, 0, 'a refused transition is not a dead letter');
 
   assertThrows(() => actor.post('operator.goto', undefined, { transition: { targets: ['nowhere'] } }), 'invalid');
   assertThrows(() => actor.post('operator.goto', undefined, { transition: { targets: [] } }), 'invalid');
@@ -86,7 +99,6 @@ async function abandoning() {
   const actor = system.spawn(system.define(chart()));
   await system.flush();
   const runaway = actor.send('spin');
-  actor.post('operator.goto', undefined, { transition: { targets: ['d'] } });
   let view;
   for (let index = 0; index < 20; index += 1) {
     await turn();
@@ -96,8 +108,11 @@ async function abandoning() {
   assert.equal(view.macrostepInProgress, true);
   assert.ok(view.step.macrostep > 0 && view.step.microstep > 0, 'inspection names the step');
   assert.equal(view.position.at, 'none', 'the system\'s budgets pause it between microsteps');
+  assertThrows(() => actor.post('operator.goto', undefined, { transition: { targets: ['d'] } }), 'busy');
   system.abandon(actor);
   await assertRejects(runaway, 'abandoned');
+  await system.flush();
+  actor.post('operator.goto', undefined, { transition: { targets: ['d'] } });
   await system.flush();
   assert.deepEqual(actor.inspect().activeStates, ['d'], 'the next message, a jump, was taken');
   assertThrows(() => system.abandon(actor), 'invalid');

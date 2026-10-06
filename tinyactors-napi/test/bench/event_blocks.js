@@ -9,10 +9,9 @@
 //   holds no event, so this is the actor alone.
 // - delivered: core bytes per actor when every actor holds a delivered event
 //   it has not taken yet. The chart takes `go` and then runs a chain of
-//   eventless transitions. With resumeBudget 1, resumesPerTurn 1 and a
-//   messageBudget of the whole population, one pump turn delivers `go` to
-//   every actor and resumes only one, so every other actor holds an event
-//   block from delivery until its macrostep ends.
+//   eventless transitions. Core runs each admitted input to its end, so
+//   no actor holds a delivered event it has not taken (core ADR 0099): this
+//   figure is the actor alone, as `idle` is.
 // - kept: core bytes per actor after the flush, beyond `idle`: what core
 //   keeps after a burst, the envelopes of its pool (core ADR 0099) and its
 //   one spare event block, the workspace.
@@ -41,7 +40,7 @@ function pingChart() {
 
 async function memory() {
   const system = createSystem({
-    parameters: { resumeBudget: 1, resumesPerTurn: 1, messageBudget: population },
+    parameters: { resumeBudget: 1, messageBudget: population },
   });
   const definition = system.define(chainChart());
   const actors = [];

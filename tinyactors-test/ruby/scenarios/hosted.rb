@@ -124,10 +124,10 @@ module HostedRelay
 end
 
 module HostedFullQueue
-  # hosted_ping/a sends `ping` to hosted_pong/p while p's kernel queue is
-  # full (maxQueuedMessages 1, taken by the application's `noise` for p). Mail
-  # between actors waits in core (ADR 0099 section 4), outside the kernel's
-  # mailboxes and their limits, so the full queue does not stand in its way.
+  # hosted_ping/a sends `ping` to hosted_pong/p while the application's backlog is
+  # full (maxQueuedMessages 1, taken by the `go` for a, so p's `noise` is refused).
+  # Mail between actors waits in core (ADR 0099 section 4), outside the
+  # application's limits, so the full backlog does not stand in its way.
   # Both families are recorded. Answers [hosted, ping, pong].
   def self.start(context, incarnation: 1)
     hosted = context.hosted_system(incarnation: incarnation, max_queued_messages: 1)
@@ -135,11 +135,9 @@ module HostedFullQueue
     ping = context.hosted_spawn(hosted, context.hosted_define(hosted, :hosted_ping), family: 'hosted_ping', name: 'a')
     pong = context.hosted_spawn(hosted, context.hosted_define(hosted, :hosted_pong), family: 'hosted_pong', name: 'p')
     context.hosted_run(hosted)
-    context.hosted_post(hosted, ping, 'go')
-    context.hosted_run(hosted, limit: 1) # `go` delivered; a runs it next turn
-    context.assert_equal 'ok', context.hosted_post(hosted, pong, 'noise')
-    context.assert_equal 'err_busy', context.hosted_post(hosted, pong, 'noise'), "the application's mail is refused"
-    context.hosted_run(hosted, limit: 1) # a sends `ping`; p takes `noise`
+    context.assert_equal 'ok', context.hosted_post(hosted, ping, 'go')
+    context.assert_equal 'err_full', context.hosted_post(hosted, pong, 'noise'), "the application's mail is refused"
+    context.hosted_run(hosted) # a runs `go` and sends `ping`; p takes it
     [hosted, ping, pong]
   end
 end
@@ -174,8 +172,8 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(hosted_system), 'with room, the same create works'
   end
 
-  # Catches: mail between actors that bypasses the kernel's mailboxes
-  # (or is not core's own mail), or a turn that does not run what was posted.
+  # Catches: mail between actors that does not reach its receiver (core's
+  # own mail), or a turn that does not run what was posted.
   scenario 'mail between two actors goes through the kernel' do
     hosted = hosted_system
     ping = hosted_spawn(hosted, hosted_define(hosted, :hosted_ping), family: 'hosted_ping', name: 'a')
@@ -188,32 +186,32 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 0, close_hosted(hosted)
   end
 
-  # Catches: a post delivered at once instead of queued, a mailbox that
-  # loses its order, or a turn that leaves delivered mail in it.
-  scenario "mail waits in the kernel's mailbox, in order, until a turn" do
+  # Catches: a post run at once instead of queued in core, a queue that
+  # loses its order, or a turn that leaves finished input in it.
+  scenario "posts wait in core's queue, in order, until a turn" do
     hosted = hosted_system
     actor = hosted_spawn(hosted, hosted_define(hosted, :hosted_stopper))
     hosted_run(hosted)
     3.times { assert_equal 'ok', hosted_post(hosted, actor, 'tick') }
     assert_equal 'ok', hosted_post(hosted, actor, 'stop')
-    boxes = hosted_mailboxes(hosted, actor)
-    assert_equal({ actor: actor, state: 'ready', depth: 4, events: %w[tick tick tick stop] }, boxes[:mailboxes].first)
+    boxes = hosted_pending(hosted, actor)
+    assert_equal({ actor: actor, state: 'ready', depth: 4, events: %w[tick tick tick stop] }, boxes[:pending].first)
     assert_equal 4, boxes[:queued]
     delivered = boxes[:delivered]
     assert hosted_run(hosted)[:quiet]
     assert_equal [], hosted_mailbox(hosted, actor)
-    assert_equal delivered + 4, hosted_mailboxes(hosted)[:delivered]
+    assert_equal delivered, hosted_pending(hosted)[:delivered], 'delivered counts the inputs core admitted'
     assert_equal 0, close_hosted(hosted)
   end
 
-  # Catches: mail between actors held back by a full kernel queue. Since core
-  # ADR 0099 it waits in core, outside the kernel's mailboxes and their
-  # limits, and runs at once.
-  scenario 'a full kernel queue does not hold back mail between actors' do
+  # Catches: mail between actors held back by a full application backlog.
+  # Since core ADR 0099 it waits in core, outside the application's limits,
+  # and runs at once.
+  scenario 'a full application backlog does not hold back mail between actors' do
     hosted, _ping, pong = HostedFullQueue.start(self)
     assert_equal [:pinged], hosted_states(hosted, pong)
     assert hosted_run(hosted)[:quiet]
-    boxes = hosted_mailboxes(hosted, pong)
+    boxes = hosted_pending(hosted, pong)
     assert_equal 0, boxes[:queued]
     assert_equal 0, close_hosted(hosted)
   end
@@ -248,7 +246,7 @@ TinyactorsTest.scenarios 'hosted' do
     hosted_post_data(hosted, actor, 'tick', { n: 1 })
     dead = hosted_run(hosted)[:dead_letters]
     assert_equal [{ actor: actor, event: 'tick', reason: 'done', data: { n: 1 } }], dead
-    assert_equal({ total: 1, by_reason: { done: 1 } }, hosted_mailboxes(hosted)[:dead_letters])
+    assert_equal({ total: 1, by_reason: { done: 1 } }, hosted_pending(hosted)[:dead_letters])
     assert_equal [], hosted_run(hosted)[:dead_letters], 'a dead letter is reported once'
     assert_equal 0, close_hosted(hosted)
   end
@@ -263,9 +261,10 @@ TinyactorsTest.scenarios 'hosted' do
     assert_equal 'ok', hosted_evict(hosted, actor)
     assert_equal 'ok', hosted_post(hosted, actor, 'stop')
     dead = hosted_run(hosted)[:dead_letters]
-    assert_equal [{ actor: actor, event: 'tick', reason: 'destroyed' },
-                  { actor: actor, event: 'stop', reason: 'not-found' }], dead
-    assert_equal({ total: 2, by_reason: { destroyed: 1, 'not-found': 1 } }, hosted_mailboxes(hosted)[:dead_letters])
+    # The post to the old ID is answered at once and reported first; core refuses what waited when it runs.
+    assert_equal [{ actor: actor, event: 'stop', reason: 'not-found' },
+                  { actor: actor, event: 'tick', reason: 'destroyed' }], dead
+    assert_equal({ total: 2, by_reason: { destroyed: 1, 'not-found': 1 } }, hosted_pending(hosted)[:dead_letters])
     assert_equal 0, close_hosted(hosted)
   end
 

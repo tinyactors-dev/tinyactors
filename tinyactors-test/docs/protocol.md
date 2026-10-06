@@ -121,13 +121,14 @@ reproducible. Scenarios about core's semantics keep using core directly.
   ...), and `data` is the message's data when it had any. `loads` lists
   the loads started since the last `hosted.turn`, which the scenario
   answers with `hosted.load` (see "Loads" below).
-- `hosted.mailboxes` takes `{"system", "actors"?}` and returns
-  `{"mailboxes", "queued", "delivered", "dead_letters"}`: for each actor ID
-  in `actors`, `{"actor", "state", "depth", "events"}` with its scheduling
-  state (`idle`, `ready`, `runnable`, `quarantined`, or `none` for an ID the
-  kernel does not know) and the names of the events in its mailbox, oldest
-  first; the messages queued and delivered so far; and the dead letters
-  reported so far, `{"total", "by_reason": {reason: count}}`.
+- `hosted.pending` takes `{"system", "actors"?}` and returns
+  `{"pending", "queued", "delivered", "dead_letters"}`: for each actor ID
+  in `actors`, `{"actor", "state", "depth", "events"}` with its state
+  (`idle`, `ready` when inputs wait, `runnable` inside a macrostep, or
+  `none` for an ID core does not know) and the names of the events core will
+  take for it, oldest first (core's `ta_actor_pending`); the inputs admitted
+  and not finished (`queued`) and the messages delivered so far; and the dead
+  letters reported so far, `{"total", "by_reason": {reason: count}}`.
 - `hosted.advance` takes `{"system", "time"}` and moves the scenario's
   clock, and core's time, to `time` milliseconds.
 - `hosted.record` takes `{"system", "families"}` and records the events

@@ -1,14 +1,14 @@
 /*
  * Loading unloaded actors on demand (napi ADR 0020), driven without
- * Node-API: the host's posts for an unloaded name wait in its load's mailbox
- * and move, in order, to the front of the loaded actor's mailbox; the
- * per-address cap; waiting posts count against maxQueuedMessages; a failed
- * load's posts become dead letters that keep the name; a virtual family's
- * unknown name starts a load; an unloaded actor's own timer wakes it; and
- * without a loader nothing changes. Mail between sessions waits in core, and
- * core's LOAD_NEEDED notice starts the same loads: a gone session of a family
- * is served by a new instance, and a family without a loader answers at once
- * with error.communication for the sender. Run under AddressSanitizer by
+ * Node-API: the host's posts for an unloaded name wait on core's list for the
+ * address, in arrival order with chart mail, and core's LOAD_NEEDED notice
+ * starts the load; the loaded actor takes them in order; the per-address
+ * cap; waiting posts count against maxQueuedMessages; a failed load's posts
+ * come back as dead letters that keep the name; a virtual family's unknown
+ * name starts a load; an unloaded actor's own timer wakes it; and without a
+ * loader the post is refused at once. A gone session of a family is served
+ * by a new instance, and a family without a loader answers with
+ * error.communication for the sender. Run under AddressSanitizer by
  * test-native-asan.
  */
 #include "check.h"
@@ -92,6 +92,10 @@ static uint32_t settle(tah_system *system, tah_dead_reason *reason) {
                 CHECK(record->has_address || record->actor != 0);
             }
         }
+        tah_settlement settlement; /* as the Node-API layer settles the sends */
+        while (tah_sched_settlement_pop(&system->sched, &settlement)) {
+            tah_sched_waiter_give(&system->sched, settlement.waiter);
+        }
         tah_system_end_turn(system);
     }
     return dead;
@@ -126,10 +130,20 @@ static ta_event_name_id event_name(tah_system *system, const char *text) {
     return name;
 }
 
-/* Posts an event named `text` to `address` as JavaScript's postNamed does. */
-static ta_result post(tah_system *system, ta_address *address, const char *text) {
+/* Posts an event named `text` to `address` as JavaScript's postNamed does, with `waiter` (0 for none). */
+static ta_result post_waiter(tah_system *system, ta_address *address, const char *text, uint32_t waiter) {
     ta_event event = { .type = TA_EVENT_EXTERNAL, .name = event_name(system, text), .invoke_id = TA_INVOKE_ID_NONE };
-    return tah_system_post_named(system, address, &(tah_message){ .event = &event });
+    return tah_system_post(system, &(tah_message){ .address = address, .event = &event, .waiter = waiter });
+}
+
+static ta_result post(tah_system *system, ta_address *address, const char *text) {
+    return post_waiter(system, address, text, 0);
+}
+
+static uint32_t waiting_total(tah_system *system) {
+    tah_loads_stats stats;
+    tah_loads_read_stats(&system->loads, system->core, &stats);
+    return stats.waiting;
 }
 
 static tah_load_request next_request(tah_system *system) {
@@ -140,7 +154,6 @@ static tah_load_request next_request(tah_system *system) {
 
 static ta_result finish(tah_system *system, tah_load_request request, tah_load_outcome outcome, ta_actor_id actor) {
     return tah_loads_finish(&system->loads, &(tah_load_finish){ .core = system->core,
-                                                                .sched = &system->sched,
                                                                 .directory = &system->directory,
                                                                 .metrics = &system->metrics,
                                                                 .index = request.index,
@@ -155,24 +168,24 @@ static void turn(tah_system *system) {
     tah_system_end_turn(system);
 }
 
-/* The event names in `actor`'s mailbox, in order, must be `expected`. */
-static void mailbox_is(tah_system *system, ta_actor_id actor, const char *const *expected, uint32_t count) {
-    const tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
-    CHECK(entry != NULL);
-    uint32_t at = 0;
-    for (uint32_t index = entry->first; index != 0; index = tah_sched_envelope(&system->sched, index)->next) {
-        CHECK(at < count);
-        CHECK(tah_sched_envelope(&system->sched, index)->event.name == event_name(system, expected[at]));
-        CHECK(tah_sched_envelope(&system->sched, index)->target == actor);
-        at += 1u;
+/* The inputs waiting for `actor`, in the order core will take them, must be the events named in `expected`. */
+static void pending_is(tah_system *system, ta_actor_id actor, const char *const *expected, uint32_t count) {
+    ta_pending_input inputs[16];
+    uint32_t found = 0;
+    CHECK(count <= 16u);
+    CHECK(ta_actor_pending(system->core, &(ta_actor_pending_params){ .actor = actor, .inputs = inputs, .capacity = 16,
+                                                                     .count = &found }) == TA_OK);
+    CHECK(found == count);
+    for (uint32_t at = 0; at < found && at < count; at += 1u) {
+        CHECK(inputs[at].event->name == event_name(system, expected[at]));
     }
-    CHECK(at == count);
 }
 
 /*
- * Mail for an unloaded name starts one load; more mail joins its mailbox,
- * even after the actor is resident again, until the load finishes; then it
- * goes, in order, ahead of mail sent to the actor meanwhile.
+ * Mail for an unloaded name waits on core's list; the first starts one load
+ * (when the turn reads core's LOAD_NEEDED); the actor that becomes resident
+ * takes the list at once, and mail sent to it meanwhile follows, in arrival
+ * order.
  */
 static void waiting_mail_moves_in_order(void) {
     tah_system *system = make_system();
@@ -185,21 +198,24 @@ static void waiting_mail_moves_in_order(void) {
 
     CHECK(post(system, address, "a") == TA_OK);
     CHECK(post(system, address, "b") == TA_OK);
-    CHECK(system->loads.in_flight == 1u && system->loads.waiting == 2u);
+    CHECK(ta_address_waiting(system->core, address) == 2u);
+    turn(system); /* core reports LOAD_NEEDED, which starts the load */
+    CHECK(system->loads.in_flight == 1u && waiting_total(system) == 2u);
     tah_load_request request = next_request(system);
     CHECK(request.address == address && request.why == TAH_LOAD_WHY_MAIL);
     tah_load_request none;
     CHECK(!tah_loads_next_request(&system->loads, &none)); /* one load per address */
 
     ta_actor_id loaded = load(system, image);
-    CHECK(post(system, address, "c") == TA_OK); /* resident, but the load is in flight: it waits too */
+    CHECK(ta_address_waiting(system->core, address) == 0u); /* core moved the list when the image loaded */
+    CHECK(post(system, address, "c") == TA_OK); /* resident: straight to the actor, behind a and b */
     ta_event direct = { .type = TA_EVENT_EXTERNAL, .name = event_name(system, "d"), .invoke_id = TA_INVOKE_ID_NONE };
     CHECK(tah_system_post(system, &(tah_message){ .target = loaded, .event = &direct }) == TA_OK);
+    static const char *const order[] = { "a", "b", "c", "d" };
+    pending_is(system, loaded, order, 4);
 
     CHECK(finish(system, request, TAH_LOAD_LOADED, loaded) == TA_OK);
-    static const char *const order[] = { "a", "b", "c", "d" };
-    mailbox_is(system, loaded, order, 4);
-    CHECK(system->loads.in_flight == 0u && system->loads.waiting == 0u);
+    CHECK(system->loads.in_flight == 0u && waiting_total(system) == 0u);
     CHECK(system->loads.outcomes[TAH_LOAD_LOADED] == 1u);
     CHECK(system->metrics.load_seconds.count == 1u);
     CHECK(finish(system, request, TAH_LOAD_LOADED, loaded) == TA_ERR_STALE);
@@ -208,12 +224,14 @@ static void waiting_mail_moves_in_order(void) {
 
     /* Resident and no load in flight: mail goes straight to the actor. */
     CHECK(post(system, address, "e") == TA_OK);
-    CHECK(tah_sched_mailbox_count(&system->sched, loaded) == 1u && system->loads.in_flight == 0u);
+    static const char *const only_e[] = { "e" };
+    pending_is(system, loaded, only_e, 1);
+    CHECK(system->loads.in_flight == 0u);
     ta_address_release(address);
     finish_system(system);
 }
 
-/* At most max_waiting messages wait; waiting mail counts against max_queued. */
+/* At most max_waiting messages wait; waiting posts count against max_queued. */
 static void waiting_mail_is_bounded(void) {
     tah_system *system = make_system();
     ta_actor_id first = spawn(system, define_receiver(system), &recv_name);
@@ -224,18 +242,23 @@ static void waiting_mail_is_bounded(void) {
     CHECK(post(system, address, "a") == TA_OK);
     CHECK(post(system, address, "b") == TA_OK);
     CHECK(post(system, address, "c") == TA_OK); /* accepted as a waiting-full dead letter */
-    CHECK(system->loads.waiting == 2u && system->sched.queued == 3u);
+    CHECK(ta_address_waiting(system->core, address) == 2u);
+    tah_sched_stats stats;
+    tah_sched_read_stats(&system->sched, system->core, &stats);
+    CHECK(stats.queued == 3u);
     system->sched.max_queued = 3u;
-    CHECK(post(system, address, "d") == TA_ERR_BUSY);
+    CHECK(post(system, address, "d") == TA_ERR_FULL);
     system->sched.max_queued = 0;
-    tah_load_request request = next_request(system); /* the pump hands it to JavaScript after a turn */
-    tah_dead_reason reason = TAH_DEAD_NOT_FOUND;
-    CHECK(settle(system, &reason) == 1u && reason == TAH_DEAD_WAITING_FULL);
+    tah_system_turn(system); /* reports the dead letter, and core's LOAD_NEEDED starts the load */
+    CHECK(system->sched.records != NULL && system->sched.records->kind == TAH_RECORD_DEAD_LETTER);
+    CHECK(system->sched.records->reason == TAH_DEAD_WAITING_FULL && system->sched.records->has_address);
+    tah_system_end_turn(system);
+    tah_load_request request = next_request(system);
 
     ta_actor_id loaded = load(system, image);
     CHECK(finish(system, request, TAH_LOAD_LOADED, loaded) == TA_OK);
     CHECK(settle(system, NULL) == 0u);
-    CHECK(system->sched.delivered == 2u);
+    CHECK(system->sched.delivered == 3u); /* a, b and the dead letter: posts core or the kernel took */
     ta_address_release(address);
     finish_system(system);
 }
@@ -260,16 +283,18 @@ static void a_failed_load_dead_letters_its_mail(void) {
         ta_address *address = intern(system, &recv_name);
         CHECK(post(system, address, "a") == TA_OK);
         CHECK(post(system, address, "b") == TA_OK);
+        turn(system);
         tah_load_request request = next_request(system);
         /* A LOADED finish for an actor that is not at the address changes nothing. */
         CHECK(finish(system, request, TAH_LOAD_LOADED, first) == TA_ERR_NOT_FOUND);
         CHECK(finish(system, request, cases[at].outcome, 0) == TA_OK);
         tah_dead_reason reason = TAH_DEAD_DONE;
         CHECK(settle(system, &reason) == 2u && reason == cases[at].reason);
-        CHECK(system->loads.outcomes[cases[at].outcome] == 1u && system->loads.waiting == 0u);
+        CHECK(system->loads.outcomes[cases[at].outcome] == 1u && waiting_total(system) == 0u);
         CHECK(system->sched.dead_by_reason[cases[at].reason] == 2u);
         /* The next message starts a new load. */
         CHECK(post(system, address, "c") == TA_OK);
+        turn(system);
         tah_load_request again = next_request(system);
         CHECK(again.index != request.index || again.generation != request.generation);
         ta_actor_id loaded = load(system, image);
@@ -287,12 +312,13 @@ static void a_virtual_family_spawns(void) {
     CHECK(tah_loads_set_family(&system->loads, S("r"), 10) == TA_OK);
     ta_address *address = intern(system, &recv_name);
     CHECK(post(system, address, "a") == TA_OK);
+    turn(system);
     tah_load_request request = next_request(system);
     ta_actor_id spawned = spawn(system, chart, &recv_name);
     CHECK(finish(system, request, TAH_LOAD_SPAWNED, spawned) == TA_OK);
     CHECK(settle(system, NULL) == 0u);
     CHECK(system->sched.delivered == 1u && system->loads.outcomes[TAH_LOAD_SPAWNED] == 1u);
-    /* Without a loader, the old behaviour: a dead letter. */
+    /* Without a loader, core's LOAD_NEEDED is answered at once and the post is a dead letter. */
     CHECK(tah_loads_set_family(&system->loads, S("r"), 0) == TA_OK);
     ta_actor_address other = { .family = { .name = S("r") }, .name = S("other") };
     ta_address *nobody = intern(system, &other);
@@ -340,9 +366,8 @@ static void a_wake_up_starts_a_load(void) {
 }
 
 /*
- * A cancelled send() withdraws its message from the load's mailbox: the
- * rest still move, in order; withdrawing it again, or a message that is
- * not waiting, changes nothing.
+ * A cancelled send() withdraws its message from core's list for the address:
+ * the rest still move, in order; cancelling it again changes nothing.
  */
 static void a_waiting_message_can_be_withdrawn(void) {
     tah_system *system = make_system();
@@ -353,27 +378,29 @@ static void a_waiting_message_can_be_withdrawn(void) {
     CHECK(tah_loads_set_family(&system->loads, S("r"), 10) == TA_OK);
     ta_address *address = intern(system, &recv_name);
 
-    CHECK(post(system, address, "a") == TA_OK);
-    CHECK(post(system, address, "b") == TA_OK);
-    CHECK(post(system, address, "c") == TA_OK);
+    uint32_t waiters[3];
+    static const char *const names[] = { "a", "b", "c" };
+    for (uint32_t at = 0; at < 3u; at += 1u) {
+        waiters[at] = tah_sched_waiter_take(&system->sched);
+        CHECK(waiters[at] != 0);
+        CHECK(post_waiter(system, address, names[at], waiters[at]) == TA_OK);
+    }
+    CHECK(ta_address_waiting(system->core, address) == 3u);
+    turn(system);
     tah_load_request request = next_request(system);
-    tah_load *record = tah_loads_find(&system->loads, request.index, request.generation);
-    CHECK(record != NULL);
-    uint32_t middle = tah_sched_envelope(&system->sched, record->mail.first)->next;
-    uint32_t live = system->sched.envelopes.live;
-    CHECK(tah_loads_withdraw(&system->loads, &system->sched, middle));
-    CHECK(system->loads.waiting == 2u && record->mail.count == 2u);
-    CHECK(system->sched.envelopes.live == live - 1u);
-    CHECK(!tah_loads_withdraw(&system->loads, &system->sched, middle));
-    uint32_t last = record->mail.last;
-    CHECK(tah_loads_withdraw(&system->loads, &system->sched, last)); /* the tail moves back */
-    CHECK(record->mail.count == 1u && record->mail.first == record->mail.last);
-    CHECK(post(system, address, "d") == TA_OK); /* appends after the new tail */
+    CHECK(tah_system_cancel(system, waiters[1]));
+    tah_sched_waiter_give(&system->sched, waiters[1]);
+    CHECK(ta_address_waiting(system->core, address) == 2u); /* the withdrawn one is not counted */
+    CHECK(!tah_system_cancel(system, waiters[1]));
+    CHECK(tah_system_cancel(system, waiters[2])); /* the tail */
+    tah_sched_waiter_give(&system->sched, waiters[2]);
+    CHECK(ta_address_waiting(system->core, address) == 1u);
+    CHECK(post(system, address, "d") == TA_OK); /* appends behind the withdrawn ones */
 
     ta_actor_id loaded = load(system, image);
-    CHECK(finish(system, request, TAH_LOAD_LOADED, loaded) == TA_OK);
     static const char *const order[] = { "a", "d" };
-    mailbox_is(system, loaded, order, 2);
+    pending_is(system, loaded, order, 2);
+    CHECK(finish(system, request, TAH_LOAD_LOADED, loaded) == TA_OK);
     CHECK(settle(system, NULL) == 0u);
     ta_address_release(address);
     finish_system(system);

@@ -64,7 +64,7 @@ module TinyactorsNapiBindings
     'ta_origin_text' => 'the ta_origin codec renders an origin into the call arena (core ADR 0068)',
     'ta_actor_export_state' => 'the kernel exports an actor\'s state for its checkpoints (core ADR 0094, kernel ADR 0002)',
     'ta_address_{load_failed,waiting}' => 'the kernel answers a LOAD_NEEDED notice with them (core ADR 0099 section 6)',
-    'ta_{input_withdraw,actor_pending}' => 'send() cancels through the kernel, and mailbox() reads the pending inputs through it (core ADR 0099, unit 4.2e)'
+    'ta_{input_withdraw,input_slot,actor_pending}' => 'send() cancels through the kernel, and mailbox() reads the pending inputs through it (core ADR 0099, unit 4.2e)'
   }.freeze
 
   OVERRIDE_FUNCTIONS = {}.freeze

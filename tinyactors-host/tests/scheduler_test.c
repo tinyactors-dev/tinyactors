@@ -1,8 +1,10 @@
 /*
- * The scheduling table and the runnable part of a turn (ADRs 0005, 0007,
- * 0008), driven without Node-API: entries in fixed pages, stale queue
- * entries skipped, coalesced wake-ups, bootstrap, budget pauses and done
- * records, and no leak at close.
+ * The turn (ADRs 0005, 0007, 0008), driven without Node-API: a turn runs
+ * what core holds, bootstraps and done records, budget pauses, the bound on
+ * the inputs one turn finishes, and the cost of bootstrap and delivery in
+ * calls of ta_run(), not clocks. The kernel keeps no table with an entry per
+ * actor and no queue of its own: core's run queue and started queue are the
+ * only queues.
  */
 #include "check.h"
 #include <string.h>
@@ -14,41 +16,6 @@
 #include "system_private.h"
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
-
-static void table_pages(void) {
-    tah_allocator allocator;
-    tah_allocator_init(&allocator, check_platform_allocator());
-    tah_sched sched;
-    tah_sched_init(&sched, tah_allocator_for(&allocator, TAH_MEMORY_SCHEDULING),
-                   tah_allocator_for(&allocator, TAH_MEMORY_ENVELOPES));
-    CHECK(sizeof(tah_sched_entry) == 16u);
-    CHECK(tah_sched_entry_at(&sched, 0) == NULL);
-
-    /* A slot in the second page allocates that page only. */
-    ta_actor_id far = ta_actor_id_make(TAH_SCHED_PAGE_ENTRIES + 5u, 3u);
-    CHECK(tah_sched_add(&sched, far) == TA_OK);
-    CHECK(tah_sched_entry_at(&sched, 0) == NULL);
-    tah_sched_entry *entry = tah_sched_lookup(&sched, far);
-    CHECK(entry != NULL && entry->state == TAH_SCHED_RUNNABLE && entry->generation == 3u);
-    CHECK(sched.known == 1u);
-    CHECK(!tah_sched_quiet(&sched));
-
-    /* Another generation in the same slot is not this actor. */
-    CHECK(tah_sched_lookup(&sched, ta_actor_id_make(TAH_SCHED_PAGE_ENTRIES + 5u, 4u)) == NULL);
-    tah_sched_remove(&sched, ta_actor_id_make(TAH_SCHED_PAGE_ENTRIES + 5u, 4u), TAH_DEAD_DESTROYED);
-    CHECK(sched.known == 1u);
-
-    /* Pages never move: an entry pointer survives growth of the directory. */
-    ta_actor_id later = ta_actor_id_make(40u * TAH_SCHED_PAGE_ENTRIES, 1u);
-    CHECK(tah_sched_add(&sched, later) == TA_OK);
-    CHECK(tah_sched_lookup(&sched, far) == entry);
-
-    tah_sched_remove(&sched, far, TAH_DEAD_DESTROYED);
-    CHECK(tah_sched_lookup(&sched, far) == NULL);
-    CHECK(sched.known == 1u);
-    tah_sched_destroy(&sched);
-    CHECK(tah_allocator_total(&allocator).bytes_in_use == 0);
-}
 
 typedef struct {
     uint32_t wakes;
@@ -119,22 +86,20 @@ static void turns(void) {
     ta_actor_id b = spawn(system, finish_chart);
     CHECK(counter.wakes == 1u);
     CHECK(system->turn_pending);
-    CHECK(tah_sched_lookup(&system->sched, a)->state == TAH_SCHED_RUNNABLE);
+    CHECK(ta_run_pending(system->core));
 
     tah_system_turn(system);
     CHECK(!system->inside_core);
-    CHECK(tah_sched_lookup(&system->sched, a)->state == TAH_SCHED_IDLE);
     CHECK(residency(system, a) == TA_ACTOR_IDLE);
     CHECK(residency(system, b) == TA_ACTOR_DONE);
     CHECK(count_records(system, TAH_RECORD_DONE) == 1u);
     CHECK(system->sched.records->actor == b);
-    CHECK((tah_sched_lookup(&system->sched, b)->flags & TAH_SCHED_FINISHED) != 0);
     tah_system_end_turn(system);
     CHECK(tah_system_quiet(system));
     CHECK(!system->turn_pending);
     CHECK(counter.wakes == 1u);
 
-    /* A destroyed actor's queue entry is skipped. */
+    /* A destroyed actor's bootstrap is dropped. */
     ta_actor_id c = spawn(system, idle_chart);
     CHECK(ta_actor_destroy(system->core, c) == TA_OK);
     CHECK(tah_hook_actor_removed(system, c) == TA_OK);
@@ -143,10 +108,9 @@ static void turns(void) {
     tah_system_end_turn(system);
     CHECK(tah_system_quiet(system));
 
-    /* A slot reused by a new actor: the old ID's entry is gone. */
+    /* A slot reused by a new actor. */
     ta_actor_id d = spawn(system, idle_chart);
     CHECK(ta_actor_id_slot(d) == ta_actor_id_slot(c));
-    CHECK(tah_sched_lookup(&system->sched, c) == NULL);
     tah_system_turn(system);
     tah_system_end_turn(system);
     CHECK(residency(system, d) == TA_ACTOR_IDLE);
@@ -186,7 +150,7 @@ static void action_budget(void) {
     ta_actor_id busy = spawn(system, chart);
     ta_actor_id other = 0;
     uint32_t turns = 0;
-    while (tah_sched_lookup(&system->sched, busy)->state == TAH_SCHED_RUNNABLE) {
+    while (residency(system, busy) == TA_ACTOR_RUNNING) {
         tah_system_turn(system);
         tah_system_end_turn(system);
         turns += 1u;
@@ -198,12 +162,11 @@ static void action_budget(void) {
             tah_system_end_turn(system);
             turns += 1u;
             CHECK(residency(system, other) == TA_ACTOR_RUNNING);
-            CHECK(tah_sched_lookup(&system->sched, busy)->state == TAH_SCHED_RUNNABLE);
+            CHECK(residency(system, busy) == TA_ACTOR_RUNNING);
         }
         CHECK(turns < 100u);
     }
-    /* A turn makes one ta_run call for each runnable actor, and each call continues the paused macrostep, so
-     * the 40 units, 8 to a call, take more than one turn. */
+    /* Each turn's call continues the paused macrostep, so the 40 units, 8 to a call, take more than one turn. */
     CHECK(turns >= 3u);
     CHECK(residency(system, busy) == TA_ACTOR_IDLE);
     while (!tah_system_quiet(system)) {
@@ -219,81 +182,74 @@ static void action_budget(void) {
     tah_system_free(system);
 }
 
-/* How many of `actors` the scheduler has settled (they are no longer RUNNABLE). */
+/* How many of `actors` have finished their bootstrap (they are idle). */
 static uint32_t settled_count(tah_system *system, const ta_actor_id *actors, uint32_t count) {
     uint32_t settled = 0;
     for (uint32_t index = 0; index < count; index += 1u) {
-        tah_sched_entry *entry = tah_sched_lookup(&system->sched, actors[index]);
-        settled += entry != NULL && entry->state != TAH_SCHED_RUNNABLE ? 1u : 0u;
+        settled += residency(system, actors[index]) == TA_ACTOR_IDLE ? 1u : 0u;
     }
     return settled;
 }
 
-/* The resume limit bounds the inputs one turn completes; the rest waits for the next. A ta_run() call serves
- * whichever actors' inputs are next, so the queue keeps entries of actors the call already settled, and the
- * count of settled actors is what the limit bounds. */
-static void resume_limit(void) {
+/* The input limit bounds the inputs one turn finishes; the rest waits for the next. */
+static void input_limit(void) {
     tah_system *system = NULL;
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);
     ta_scxml_state_spec idle_states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("idle") }, { 0 } };
     ta_scxml_spec idle = { .name = S("idle"), .states = idle_states };
     ta_definition_id chart = define(system, &idle);
-    system->budgets.resumes = 10u;
+    system->budgets.inputs = 10u;
     enum { COUNT = 25 };
     ta_actor_id actors[COUNT];
     for (int index = 0; index < COUNT; index += 1) {
         actors[index] = spawn(system, chart);
     }
-    CHECK(tah_ring_count(&system->sched.runnable) == COUNT);
     CHECK(settled_count(system, actors, COUNT) == 0);
     tah_system_turn(system);
     tah_system_end_turn(system);
-    /* The turn's 10 microsteps: nine bootstraps end, and the tenth is stopped inside its macrostep, which the next
-     * turn continues first. */
-    CHECK(settled_count(system, actors, COUNT) == 9);
+    uint32_t first = settled_count(system, actors, COUNT);
+    CHECK(first == 10u); /* the turn asks for more after each input: it stops at the bound */
     CHECK(system->turn_pending); /* work remains: another turn was asked for */
     tah_system_turn(system);
-    tah_system_turn(system);
     tah_system_end_turn(system);
-    CHECK(tah_system_quiet(system));
+    CHECK(settled_count(system, actors, COUNT) > first);
+    while (!tah_system_quiet(system)) {
+        tah_system_turn(system);
+        tah_system_end_turn(system);
+    }
+    CHECK(settled_count(system, actors, COUNT) == COUNT);
     tah_system_close(system);
     CHECK(tah_system_leaked_bytes(system) == 0);
     tah_system_free(system);
 }
 
-/* turn_work_is_bounded checks that a turn costs what its resume budget allows, not the length of the runnable
- * queue: after the budget is used the turn stops and leaves the queue as it is. Counts, not clocks: the ring after
- * one turn still holds nearly every actor, and bootstrapping N actors takes about N / resumes turns, none of which
- * pushes an actor twice. */
+/* A turn costs what its input bound allows, not the number of actors: every turn of a large population finishes
+ * the same number of inputs, in a bounded number of ta_run() calls. Counts, not clocks. */
 static void turn_work_is_bounded(void) {
     tah_system *system = NULL;
     CHECK(tah_system_create(&(tah_system_create_params){ .platform = check_platform() }, &system) == TA_OK);
     ta_scxml_state_spec idle_states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("idle") }, { 0 } };
     ta_scxml_spec idle = { .name = S("idle"), .states = idle_states };
     ta_definition_id chart = define(system, &idle);
-    system->budgets.resumes = 10u;
+    system->budgets.inputs = 10u;
     enum { COUNT = 2000 };
     static ta_actor_id actors[COUNT];
     for (int index = 0; index < COUNT; index += 1) {
         actors[index] = spawn(system, chart);
     }
-    CHECK(tah_ring_count(&system->sched.runnable) == COUNT);
     tah_system_turn(system);
     tah_system_end_turn(system);
-    CHECK(settled_count(system, actors, COUNT) == 9);
-    /* The turn popped the entry it ran and the few it settled, not the 2000 behind them. */
-    CHECK(system->sched.turn_visited <= 2u * system->budgets.resumes);
-    CHECK(tah_ring_count(&system->sched.runnable) >= COUNT - 2u * system->budgets.resumes);
+    CHECK(settled_count(system, actors, COUNT) == 10u);
+    CHECK(system->sched.turn_run_calls <= 10u + 1u); /* one call for each input, as the staging bound asks */
     uint32_t turns = 1;
-    while (!tah_system_quiet(system) && turns < COUNT / 8u + 8u) {
+    while (!tah_system_quiet(system) && turns < COUNT / 10u + 8u) {
         tah_system_turn(system);
         tah_system_end_turn(system);
         turns += 1u;
-        CHECK(system->sched.turn_visited <= 2u * system->budgets.resumes);
-        CHECK(tah_ring_count(&system->sched.runnable) <= COUNT);
+        CHECK(system->sched.turn_run_calls <= 10u + 1u);
     }
     CHECK(tah_system_quiet(system));
-    CHECK(turns < COUNT / 8u + 8u);
+    CHECK(turns <= COUNT / 10u + 1u);
     CHECK(settled_count(system, actors, COUNT) == COUNT);
     tah_system_close(system);
     CHECK(tah_system_leaked_bytes(system) == 0);
@@ -330,7 +286,7 @@ static work_counts work_per_actor(uint32_t count, uint32_t posted, uint32_t per_
     ta_scxml_state_spec idle_states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("idle") }, { 0 } };
     ta_scxml_spec idle = { .name = S("idle"), .states = idle_states };
     ta_definition_id chart = define(system, &idle);
-    system->budgets.resumes = 10u;
+    system->budgets.inputs = 10u;
     static ta_actor_id actors[4096];
     CHECK(count <= sizeof actors / sizeof actors[0]);
     for (uint32_t index = 0; index < count; index += 1u) {
@@ -377,10 +333,9 @@ static void bootstrap_and_delivery_cost_a_constant_number_of_calls(void) {
 }
 
 int main(void) {
-    table_pages();
     turns();
     action_budget();
-    resume_limit();
+    input_limit();
     turn_work_is_bounded();
     bootstrap_and_delivery_cost_a_constant_number_of_calls();
     puts("scheduler_test passed");

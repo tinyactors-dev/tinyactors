@@ -4,7 +4,7 @@
 /*
  * The kernel's system parameters (napi ADR 0035, kernel ADR 0001 step 2b),
  * beside core's (core ADR 0092): how a system is hosted (turn budgets,
- * mailbox limits), named, bounded, set once when the system is
+ * limits on the application's backlog), named, bounded, set once when the system is
  * created. Defaults are enumerators, so the compiler sees them. A binding
  * reports them with its own (napi's parameterInfo() lists them as napi's,
  * since napi is what embeds the kernel).
@@ -12,20 +12,18 @@
 #include <stdint.h>
 
 typedef enum {
-    TAH_PARAM_RESUME_BUDGET,         /* microsteps one resume may run (core's `budget`) */
-    TAH_PARAM_ACTION_BUDGET,         /* units of executable content per resume; 0: no limit */
-    TAH_PARAM_RESUMES_PER_TURN,      /* runnable actors resumed in one turn */
+    TAH_PARAM_RESUME_BUDGET,         /* microsteps one ta_run call may run (core's `budget`) */
+    TAH_PARAM_ACTION_BUDGET,         /* units of executable content per ta_run call; 0: no limit */
     TAH_PARAM_DUE_BUDGET,            /* due sends dispatched in one turn */
-    TAH_PARAM_MESSAGE_BUDGET,        /* deliveries, and dead letters reported, in one turn */
-    TAH_PARAM_MAX_QUEUED_MESSAGES,   /* accepted messages not yet delivered; 0: no limit */
-    TAH_PARAM_MAX_RETAINED_BYTES,    /* their retained-bytes estimate; 0: no limit */
+    TAH_PARAM_MESSAGE_BUDGET,        /* inputs core finishes in one turn, and dead letters reported */
+    TAH_PARAM_MAX_QUEUED_MESSAGES,   /* inputs the application admitted that core has not finished; 0: no limit */
+    TAH_PARAM_MAX_RETAINED_BYTES,    /* their retained-bytes estimate (the binding's); 0: no limit */
     TAH_PARAM_COUNT
 } tah_param;
 
 enum {
     TAH_PARAM_DEFAULT_RESUME_BUDGET = 64,
     TAH_PARAM_DEFAULT_ACTION_BUDGET = 1024,
-    TAH_PARAM_DEFAULT_RESUMES_PER_TURN = 1024,
     TAH_PARAM_DEFAULT_DUE_BUDGET = 1024,
     TAH_PARAM_DEFAULT_MESSAGE_BUDGET = 1024,
     TAH_PARAM_DEFAULT_MAX_QUEUED_MESSAGES = 0,

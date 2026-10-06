@@ -215,16 +215,14 @@ jv tat_hosted_post_method(tat_bind *bind, jv params, int *error_code) {
         ta_address *address = NULL;
         result = ta_address_intern(tah_system_core(hosted->system), &text, &address);
         if (result == TA_OK) {
-            result = tah_system_post_named(hosted->system, address, &(tah_message){.event = &event});
+            result = tah_system_post(hosted->system, &(tah_message){.address = address, .event = &event});
             ta_address_release(address);
         }
     } else if (result == TA_OK) {
         result = tah_system_post(hosted->system,
                                  &(tah_message){.target = (ta_actor_id)tat_hosted_u64(params, "actor"), .event = &event});
     }
-    if (result != TA_OK) {
-        ta_value_release(&event.data);
-    }
+    ta_value_release(&event.data); /* the post borrows the event: core and the kernel took their own references */
     jv_free(family);
     jv_free(actor_name);
     return tat_encode_ta_result(bind, &result);
@@ -354,29 +352,30 @@ jv tat_hosted_turn_method(tat_bind *bind, jv params, int *error_code) {
     return jv_object_set(out, jv_string("loads"), loads);
 }
 
-static const char *tat_hosted_state_name(tah_sched_state state) {
-    switch (state) {
-    case TAH_SCHED_IDLE:
-        return "idle";
-    case TAH_SCHED_READY:
-        return "ready";
-    case TAH_SCHED_RUNNABLE:
-        return "runnable";
-    case TAH_SCHED_QUARANTINED:
-        return "quarantined";
-    case TAH_SCHED_NONE:
-        break;
+/*
+ * What an actor is doing, as the application would ask (napi's scheduling()):
+ * "none" for an actor core does not know, "runnable" while it is inside a
+ * macrostep, "ready" while inputs wait for it, "idle" otherwise.
+ */
+static const char *tat_hosted_state_name(ta_system *core, ta_actor_id actor, uint32_t queued) {
+    ta_actor_inspection view;
+    if (ta_actor_inspect(core, actor, &view) != TA_OK) {
+        return "none";
     }
-    return "none";
+    if (view.macrostep_in_progress || view.residency == TA_ACTOR_RUNNING) {
+        return "runnable";
+    }
+    return queued != 0 ? "ready" : "idle";
 }
 
 /*
- * The mailboxes of `actors` (kernel ADR 0001 section 5), each
- * {"actor", "state", "depth", "events"}, with the queued events' names in
- * delivery order, and the scheduler's counters: messages queued,
- * delivered, and the dead letters reported so far, by reason.
+ * The inputs waiting for `actors` (core's ta_actor_pending), each
+ * {"actor", "state", "depth", "events"}, with the queued events' names in the
+ * order core will take them, and the kernel's counters: inputs admitted and
+ * not finished, messages delivered, and the dead letters reported so far, by
+ * reason.
  */
-jv tat_hosted_mailboxes_method(tat_bind *bind, jv params, int *error_code) {
+jv tat_hosted_pending_method(tat_bind *bind, jv params, int *error_code) {
     tat_hosted *hosted = NULL;
     if (!tat_hosted_resolve(bind, params, &hosted)) {
         return tat_bind_take_error(bind, error_code);
@@ -391,19 +390,23 @@ jv tat_hosted_mailboxes_method(tat_bind *bind, jv params, int *error_code) {
         ta_actor_id actor = jv_get_kind(id) == JV_KIND_NUMBER ? (ta_actor_id)jv_number_value(id) : 0;
         jv_free(id);
         jv events = jv_array();
-        for (uint32_t envelope = tah_sched_mailbox_first(sched, actor); envelope != 0;) {
-            tah_queued_message message = tah_sched_queued_message(sched, envelope);
-            events = jv_array_append(events, tat_event_name_text(core, message.event->name));
-            envelope = message.next;
+        ta_pending_input inputs[64];
+        uint32_t found = 0;
+        uint32_t total = 0;
+        if (ta_actor_pending(core, &(ta_actor_pending_params){.actor = actor, .inputs = inputs, .capacity = 64,
+                                                               .count = &found, .total = &total}) == TA_OK) {
+            for (uint32_t at = 0; at < found; at += 1u) {
+                events = jv_array_append(events, tat_event_name_text(core, inputs[at].event->name));
+            }
         }
         jv box = jv_object_set(jv_object(), jv_string("actor"), jv_number((double)actor));
-        box = jv_object_set(box, jv_string("state"), jv_string(tat_hosted_state_name(tah_sched_state_of(sched, actor))));
-        box = jv_object_set(box, jv_string("depth"), jv_number((double)tah_sched_mailbox_count(sched, actor)));
+        box = jv_object_set(box, jv_string("state"), jv_string(tat_hosted_state_name(core, actor, total)));
+        box = jv_object_set(box, jv_string("depth"), jv_number((double)total));
         boxes = jv_array_append(boxes, jv_object_set(box, jv_string("events"), events));
     }
     jv_free(actors);
     tah_sched_stats stats;
-    tah_sched_read_stats(sched, &stats);
+    tah_sched_read_stats(sched, core, &stats);
     jv reasons = jv_object();
     for (uint32_t reason = 0; reason < TAH_DEAD_REASONS; reason += 1u) {
         if (stats.dead_by_reason[reason] != 0) {
@@ -412,7 +415,7 @@ jv tat_hosted_mailboxes_method(tat_bind *bind, jv params, int *error_code) {
         }
     }
     jv dead = jv_object_set(jv_object(), jv_string("total"), jv_number((double)stats.dead_letters));
-    jv out = jv_object_set(jv_object(), jv_string("mailboxes"), boxes);
+    jv out = jv_object_set(jv_object(), jv_string("pending"), boxes);
     out = jv_object_set(out, jv_string("queued"), jv_number((double)stats.queued));
     out = jv_object_set(out, jv_string("delivered"), jv_number((double)stats.delivered));
     return jv_object_set(out, jv_string("dead_letters"), jv_object_set(dead, jv_string("by_reason"), reasons));
@@ -714,7 +717,6 @@ jv tat_hosted_load_method(tat_bind *bind, jv params, int *error_code) {
                              ? result
                              : tah_loads_finish(tah_system_loads(system), &(tah_load_finish){
                                                                           .core = tah_system_core(system),
-                                                                          .sched = tah_system_sched(system),
                                                                           .directory = tah_system_directory(system),
                                                                           .metrics = tah_system_metrics(system),
                                                                           .index = index,

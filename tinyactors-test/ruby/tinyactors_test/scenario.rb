@@ -565,16 +565,16 @@ module TinyactorsTest
       rpc('hosted.turn', system: hosted[:hosted], limit: limit)
     end
 
-    # The kernel's mailboxes of `actors` and its counters: { mailboxes:
+    # The inputs core holds for `actors` and the kernel's counters: { pending:
     # [{ actor:, state:, depth:, events: }], queued:, delivered:,
     # dead_letters: { total:, by_reason: { 'done' => n, ... } } }.
-    def hosted_mailboxes(hosted, *actors)
-      rpc('hosted.mailboxes', system: hosted[:hosted], actors: actors)
+    def hosted_pending(hosted, *actors)
+      rpc('hosted.pending', system: hosted[:hosted], actors: actors)
     end
 
-    # The events waiting in `actor`'s mailbox, oldest first.
+    # The events waiting for `actor` in core's run queue, oldest first.
     def hosted_mailbox(hosted, actor)
-      hosted_mailboxes(hosted, actor)[:mailboxes].first[:events]
+      hosted_pending(hosted, actor)[:pending].first[:events]
     end
 
     # Records the events of the named actors of `families` (kernel ADR 0006).

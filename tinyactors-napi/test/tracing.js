@@ -561,7 +561,7 @@ async function largeValues() {
 // bound ends early, so the sink gets several requests where one turn would
 // have made one large one, and no span is lost.
 async function stagingBound() {
-  const actors = 3000;
+  const actors = 2000; // one burst of posts stays under core's admission watermark (napi ADR 0041)
   const counts = [];
   for (const parameters of [{ traceStagingBytes: 65536 }, {}]) {
     const system = createSystem({ parameters });
@@ -659,7 +659,7 @@ function defaultsVersion() {
       interpreterBytes: 65536, interpreterNesting: 4, maxActors: 2147483647, maxDefinitions: 2147483647,
       macrostepReserve: 1024, maxPendingSends: 2147483647, maxQueuedMessages: 0, maxRecordBytes: 4096,
       maxRetainedBytes: 0, messageBudget: 1024, microstepLimit: 100000, poolEnvelopes: 4096, registeredDatamodels: 8, renderBytes: 16384,
-      resumeBudget: 64, resumesPerTurn: 1024, telBytes: 65536, telemetryValueBytes: 1024,
+      resumeBudget: 64, telBytes: 65536, telemetryValueBytes: 1024,
       traceStagingBytes: 1048576,
     },
   };

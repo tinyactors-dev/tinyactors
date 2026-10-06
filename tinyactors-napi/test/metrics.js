@@ -100,12 +100,13 @@ async function snapshot() {
 }
 
 // What only the host knows (napi ADR 0017 section 7): turn duration, the run
-// queues, quarantine and faults by code, dead letters by reason, and how
-// late timers fire; the quarantine and the dead letter also arrive as WARN
-// logs, and a histogram bucket links to the trace of a sampled step.
+// queues, faults by code, dead letters by reason, and how late timers fire;
+// the dead letter also arrives as a WARN log, and a histogram bucket links
+// to the trace of a sampled step. Nothing is quarantined (napi ADR 0041), so
+// that gauge stays 0; a runaway is the fault left.
 async function hostMetrics() {
   const logs = [];
-  const system = createSystem({ clock: 'manual', fault: () => {}, deadLetter: () => {} });
+  const system = createSystem({ clock: 'manual', fault: () => {}, deadLetter: () => {}, parameters: { microstepLimit: 100 } });
   system.setTraceSink((traces, batch) => {
     if (batch !== undefined) logs.push(...strings(batch));
   });
@@ -116,7 +117,11 @@ async function hostMetrics() {
       .state('armed', (s) => s.on('ring', (t) => t.target('idle'))),
   );
   const timer = system.spawn(definition, { name: 'clock' });
-  const bad = system.spawn(definition);
+  const spinner = system.spawn(system.define(
+    statechart({ family: 'spinner', revision: 'v1' })
+      .state('idle', (s) => s.on('spin', (t) => t.target('loop')))
+      .state('loop', (s) => s.always((t) => t.target('loop'))),
+  ));
   const gone = system.spawn(definition);
   await system.flush();
 
@@ -126,8 +131,8 @@ async function hostMetrics() {
   await system.flush();
   // The timer was due at 100 and fires at 350: 250 ms late.
   await system.advanceTo(350);
-  // A delivery core refuses quarantines its actor (faults "invalid").
-  nativeOf(system).post(bad.slot, bad.generation, 0x7fffffff);
+  // A macrostep that reaches the microstep limit is abandoned (faults "runaway").
+  spinner.post('spin');
   // Mail to a destroyed actor is a dead letter ("not-found").
   gone.destroy();
   gone.post('arm');
@@ -149,14 +154,11 @@ async function hostMetrics() {
   assert.ok(lateness.exemplars.some((e) => e.traceID === traceID), 'the late timer links to the trace that set it');
   assert.equal(point(metrics, 'tinyactors.timers.overdue').value, 0, 'nothing is overdue now');
 
-  assert.equal(point(metrics, 'tinyactors.actors.quarantined').value, 1);
-  assert.equal(point(metrics, 'tinyactors.faults', { 'tinyactors.fault.code': 'invalid' }).value, 1);
+  assert.equal(point(metrics, 'tinyactors.actors.quarantined').value, 0, 'nothing is quarantined');
+  assert.equal(point(metrics, 'tinyactors.faults', { 'tinyactors.fault.code': 'runaway' }).value, 1);
   assert.equal(point(metrics, 'tinyactors.messages.dead_lettered', { 'tinyactors.dead_letter.reason': 'not-found' }).value, 1);
-  assert.equal(point(metrics, 'tinyactors.messages.dead_lettered', { 'tinyactors.dead_letter.reason': 'refused' }).value, 1);
   assert.equal(typeof point(metrics, 'tinyactors.scheduler.runnable').value, 'number');
   assert.equal(typeof point(metrics, 'tinyactors.scheduler.ready').value, 'number');
-  system.release(bad);
-  assert.equal(point(system.metrics(), 'tinyactors.actors.quarantined').value, 0, 'release leaves quarantine');
 
   // The OTLP bytes carry the histograms, bounds, exemplars and doubles.
   const text = strings(metricsToOTLP(metrics));
@@ -165,9 +167,7 @@ async function hostMetrics() {
     assert.ok(text.includes(name), `the OTLP bytes carry ${name}`);
   }
 
-  // The quarantine and the dead letter, as WARN logs.
-  assert.ok(logs.includes('tinyactors.actor.quarantined') && logs.includes('actor quarantined: deliver failed: invalid'),
-            `a quarantine log: ${logs}`);
+  // The dead letter, as a WARN log.
   assert.ok(logs.includes('tinyactors.message.dead_lettered') && logs.includes('arm dead-lettered: not-found'),
             `a dead-letter log: ${logs}`);
   system.close();

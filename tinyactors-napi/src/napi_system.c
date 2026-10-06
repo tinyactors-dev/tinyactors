@@ -660,14 +660,13 @@ static napi_value tna_release_method(napi_env env, napi_callback_info info) {
         napi_get_value_uint32(env, argv[1], &generation) != napi_ok) {
         return tna_throw(env, "invalid", "release: expected (slot, generation)");
     }
-    ta_result result = tah_sched_release(tah_system_sched(wrapper->system), ta_actor_id_make(slot, generation));
+    /* Nothing is quarantined until 4.5: a fault never takes an actor out of scheduling (kernel ADR 0008, napi ADR 0041). */
+    ta_actor_inspection view;
+    ta_result result = ta_actor_inspect(tah_system_core(wrapper->system), ta_actor_id_make(slot, generation), &view);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "release: the actor is not known");
     }
-    tah_system_want_turn(wrapper->system);
-    napi_value undefined = NULL;
-    napi_get_undefined(env, &undefined);
-    return undefined;
+    return tna_throw(env, "invalid", "release: nothing is quarantined");
 }
 
 /* (slot, generation) from the first two arguments; throws and returns false otherwise. */
@@ -689,33 +688,13 @@ static napi_status tna_put_value(napi_env env, napi_value object, const char *na
     return value == NULL ? napi_ok : napi_set_named_property(env, object, name, value);
 }
 
-/* { source, targets }: an operator transition waiting in a mailbox, by state ID. */
-static napi_value tna_jump_object(napi_env env, const tah_jump *jump) {
-    napi_value out = NULL;
-    napi_value source = NULL;
-    napi_value targets = NULL;
-    if (napi_create_object(env, &out) != napi_ok || napi_create_uint32(env, jump->source, &source) != napi_ok ||
-        napi_create_array_with_length(env, jump->count, &targets) != napi_ok) {
-        return NULL;
-    }
-    for (uint32_t at = 0; at < jump->count; at += 1u) {
-        napi_value target = NULL;
-        if (napi_create_uint32(env, jump->targets[at], &target) != napi_ok ||
-            napi_set_element(env, targets, at, target) != napi_ok) {
-            return NULL;
-        }
-    }
-    return tna_put_value(env, out, "source", source) == napi_ok && tna_put_value(env, out, "targets", targets) == napi_ok
-               ? out
-               : NULL;
-}
-
 /*
- * mailbox(slot, generation, limit): the first `limit` messages waiting for
- * the actor, oldest first, as [{ event, data?, awaited, scope?, transition? }]:
- * `awaited` when a send() waits for it, `scope` ({ index, generation }) when
- * its origin is an openScope() scope, `transition` ({ source, targets } by
- * state ID) when it carries an operator transition (ADR 0026). O(limit).
+ * mailbox(slot, generation, limit): the first `limit` inputs core holds for
+ * the actor (ta_actor_pending), oldest first, as [{ event, data?, awaited,
+ * scope? }]: `awaited` when a send() waits for it, `scope` ({ index,
+ * generation }) when its origin is an openScope() scope. Mail another session
+ * sent is listed too. An operator transition does not queue (ADR 0026, napi
+ * ADR 0041). O(the run queue up to the limit), no allocation in core.
  */
 static napi_value tna_mailbox_method(napi_env env, napi_callback_info info) {
     size_t argc = 3;
@@ -738,10 +717,22 @@ static napi_value tna_mailbox_method(napi_env env, napi_callback_info info) {
         return tna_throw(env, "out-of-memory", "mailbox: cannot build the list");
     }
     uint32_t count = 0;
-    for (uint32_t index = tah_sched_mailbox_first(tah_system_sched(system), actor); index != 0 && count < limit;) {
-        tah_queued_message queued = tah_sched_queued_message(tah_system_sched(system), index);
-        const tah_queued_message *envelope = &queued;
-        index = queued.next;
+    ta_pending_input *pending = limit == 0 ? NULL : ta_arena_alloc(tah_scratch_call(tah_system_scratch(system)),
+                                                                   (size_t)limit * sizeof *pending,
+                                                                   _Alignof(ta_pending_input));
+    if (limit != 0 && pending == NULL) {
+        return tna_throw(env, "out-of-memory", "mailbox: cannot build the list");
+    }
+    uint32_t found = 0;
+    ta_result listed = ta_actor_pending(tah_system_core(system), &(ta_actor_pending_params){
+                                                                    .actor = actor, .inputs = pending,
+                                                                    .capacity = limit, .count = &found });
+    if (listed != TA_OK && listed != TA_ERR_NOT_FOUND) {
+        tah_scratch_reset_call(tah_system_scratch(system));
+        return tna_throw(env, tna_result_code(listed), "mailbox: cannot read the actor's inputs");
+    }
+    for (uint32_t at = 0; at < found; at += 1u) {
+        const ta_pending_input *envelope = &pending[at];
         napi_value item = NULL;
         napi_value awaited = NULL;
         napi_value data = NULL;
@@ -750,7 +741,9 @@ static napi_value tna_mailbox_method(napi_env env, napi_callback_info info) {
         if (status == napi_ok && !tna_value_absent(&envelope->event->data) && tna_value_get(env, &envelope->event->data, &data)) {
             status = tna_put_value(env, item, "data", data);
         }
-        if (status == napi_ok) status = napi_get_boolean(env, envelope->waiter != 0, &awaited);
+        if (status == napi_ok) {
+            status = napi_get_boolean(env, tah_sched_awaited(tah_system_sched(system), envelope->input), &awaited);
+        }
         if (status == napi_ok) status = tna_put_value(env, item, "awaited", awaited);
         const ta_origin *origin = &envelope->event->origin;
         if (status == napi_ok && origin->kind == TA_ORIGIN_IO && origin->as.io.origin_class == TA_IO_ORIGIN_SCOPED) {
@@ -763,16 +756,14 @@ static napi_value tna_mailbox_method(napi_env env, napi_callback_info info) {
             if (status == napi_ok) status = tna_put_value(env, scope, "generation", number);
             if (status == napi_ok) status = tna_put_value(env, item, "scope", scope);
         }
-        if (status == napi_ok && envelope->jump != NULL) {
-            napi_value jump = tna_jump_object(env, envelope->jump);
-            status = jump == NULL ? napi_generic_failure : tna_put_value(env, item, "transition", jump);
-        }
         if (status == napi_ok) status = napi_set_element(env, out, count, item);
         if (status != napi_ok) {
+            tah_scratch_reset_call(tah_system_scratch(system));
             return tna_throw(env, "out-of-memory", "mailbox: cannot build the list");
         }
         count += 1u;
     }
+    tah_scratch_reset_call(tah_system_scratch(system));
     return out;
 }
 
@@ -1304,7 +1295,12 @@ static napi_value tna_encode_definition_method(napi_env env, napi_callback_info 
     return tna_call_end(&call, out);
 }
 
-/* scheduling(slot, generation): the actor's scheduling state, for tests and inspection. */
+/*
+ * scheduling(slot, generation): the actor's scheduling state, for tests and
+ * inspection, read from core: "none" for an actor core does not know,
+ * "runnable" while it is inside a macrostep, "ready" while inputs wait for
+ * it, "idle" otherwise. Nothing is "quarantined" (napi ADR 0041).
+ */
 static napi_value tna_scheduling_method(napi_env env, napi_callback_info info) {
     size_t argc = 2;
     napi_value argv[2] = { NULL, NULL };
@@ -1321,10 +1317,20 @@ static napi_value tna_scheduling_method(napi_env env, napi_callback_info info) {
         napi_get_value_uint32(env, argv[1], &generation) != napi_ok) {
         return tna_throw(env, "invalid", "scheduling: expected (slot, generation)");
     }
-    static const char *const names[] = { "none", "idle", "ready", "runnable", "quarantined" };
-    tah_sched_state scheduling = tah_sched_state_of(tah_system_sched(wrapper->system), ta_actor_id_make(slot, generation));
+    ta_system *core = tah_system_core(wrapper->system);
+    ta_actor_id actor = ta_actor_id_make(slot, generation);
+    ta_actor_inspection view;
+    const char *name = "none";
+    if (ta_actor_inspect(core, actor, &view) == TA_OK) {
+        uint32_t found = 0;
+        uint32_t total = 0;
+        (void)ta_actor_pending(core, &(ta_actor_pending_params){ .actor = actor, .count = &found, .total = &total });
+        name = view.macrostep_in_progress || view.residency == TA_ACTOR_RUNNING ? "runnable"
+               : total != 0                                                       ? "ready"
+                                                                                  : "idle";
+    }
     napi_value state = NULL;
-    napi_create_string_utf8(env, names[scheduling], NAPI_AUTO_LENGTH, &state);
+    napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &state);
     return state;
 }
 
@@ -1388,9 +1394,11 @@ static bool tna_accept_begin(napi_env env, tna_napi_system *wrapper, tna_accepti
 }
 
 static napi_value tna_accept_failed(napi_env env, tna_napi_system *wrapper, tna_accepting *accepting, ta_result result) {
-    const char *code = result == TA_ERR_BUSY ? "queue-full" : tna_result_code(result);
-    const char *message = result == TA_ERR_BUSY
-                              ? "the system holds maxQueuedMessages messages or maxRetainedBytes of data"
+    const char *code = result == TA_ERR_FULL ? "queue-full" : tna_result_code(result);
+    const char *message = result == TA_ERR_FULL
+                              ? "core's queue is full, or the system holds maxQueuedMessages messages or maxRetainedBytes of data"
+                          : result == TA_ERR_BUSY
+                              ? "an operator transition needs an idle actor with nothing waiting for it"
                               : "the message was not accepted";
     if (!accepting->send) {
         return tna_throw(env, code, message);
@@ -1463,10 +1471,14 @@ static bool tna_jump_argument(napi_env env, tah_system *system, napi_value value
  * and send(...): queue an event for an actor (ADR 0005). `name` is a ta_event_name_id from internEvent();
  * `data` is any JavaScript value, shared, not copied (ADR 0011); `bytes` is
  * its retained-bytes estimate. Mail for a stale ID is accepted as a dead
- * letter. post() throws "queue-full" when a limit is reached; send() returns
- * a promise that settles when the message's macrostep ends (ADR 0005 point
- * 11) and rejects with "queue-full" instead. Neither calls core, so both are
- * allowed inside a core call (a data-model callback may post; ADR 0013).
+ * letter. post() throws "queue-full" when core's queue or a limit is full;
+ * send() returns a promise that settles when the message's macrostep ends (ADR
+ * 0005 point 11) and rejects with "queue-full" instead. Both admit the
+ * message into core at once; a data-model callback may post, and the message
+ * waits for the end of the macrostep that posted it, ordered with its mail
+ * (core ADR 0099, napi ADR 0041). Anywhere else inside a core call they throw
+ * "reentrant". The event is borrowed: this function releases its own
+ * references on every result.
  */
 static napi_value tna_post_common(napi_env env, napi_callback_info info, bool send) {
     size_t argc = 8;
@@ -1481,6 +1493,9 @@ static napi_value tna_post_common(napi_env env, napi_callback_info info, bool se
     uint32_t bytes = 0;
     if (wrapper == NULL) {
         return NULL;
+    }
+    if (tah_system_reentrant(wrapper->system)) {
+        return tna_throw(env, "reentrant", "post: cannot be called from inside a core call (ADR 0013)");
     }
     if (argc < 3 || napi_get_value_uint32(env, argv[0], &slot) != napi_ok ||
         napi_get_value_uint32(env, argv[1], &generation) != napi_ok ||
@@ -1524,10 +1539,10 @@ static napi_value tna_post_common(napi_env env, napi_callback_info info, bool se
                                                                   .jump = has_jump ? &jump : NULL,
                                                               });
     if (has_jump) {
-        tah_scratch_reset_call(tah_system_scratch(wrapper->system)); /* the scheduler copied the targets */
+        tah_scratch_reset_call(tah_system_scratch(wrapper->system)); /* core copied the targets */
     }
+    ta_event_release(&event); /* the post borrows the event */
     if (result != TA_OK) {
-        ta_event_release(&event);
         return tna_accept_failed(env, wrapper, &accepting, result);
     }
     return tna_accept_done(env, wrapper, &accepting);
@@ -1675,9 +1690,11 @@ static napi_value tna_id_page_method(napi_env env, napi_callback_info info) {
 
 /*
  * postNamed(family, name, event, data?, bytes?) and sendNamed(...): as post
- * and send, for the actor the directory has at that address (ADR 0006), or a
- * dead letter when it has none. Interning the address is a core call, so
- * these are not allowed inside a core call.
+ * and send, for the actor the directory has at that address (ADR 0006); core
+ * makes the message wait on the address's list when none is resident, and a
+ * load starts when the family has a loader (ADR 0020); otherwise a dead
+ * letter. Interning the address is a core call, so these are not allowed
+ * inside a core call.
  */
 static napi_value tna_post_named_common(napi_env env, napi_callback_info info, bool send) {
     size_t argc = 7;
@@ -1731,15 +1748,13 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
     }
     result = send && accepting.waiter == 0
                  ? TA_ERR_NOMEM
-                 : tah_system_post_named(system, address,
-                                         &(tah_message){ .event = &event, .bytes = bytes, .waiter = accepting.waiter,
-                                                         .trace = &trace });
+                 : tah_system_post(system, &(tah_message){ .address = address, .event = &event, .bytes = bytes,
+                                                           .waiter = accepting.waiter, .trace = &trace });
     ta_address_release(address);
+    ta_event_release(&event); /* the post borrows the event */
     if (result != TA_OK) {
-        ta_event_release(&event);
         return tna_accept_failed(env, wrapper, &accepting, result);
     }
-    tah_system_want_turn(system);
     return tna_accept_done(env, wrapper, &accepting);
 }
 
@@ -1925,7 +1940,7 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     }
     tah_system *system = wrapper->system;
     tah_sched_stats sched;
-    tah_sched_read_stats(tah_system_sched(system), &sched);
+    tah_sched_read_stats(tah_system_sched(system), tah_system_core(system), &sched);
     napi_value out = NULL;
     napi_value turn = NULL;
     napi_value lateness = NULL;
@@ -1940,9 +1955,10 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     if (status == napi_ok) status = tna_histogram_object(env, tah_host_metrics_histogram(metrics, TAH_HISTOGRAM_LATENESS),
                                                               &lateness);
     if (status == napi_ok) status = napi_set_named_property(env, out, "lateness", lateness);
-    if (status == napi_ok) status = tna_set_number(env, out, "runnable", (double)sched.runnable);
-    if (status == napi_ok) status = tna_set_number(env, out, "ready", (double)sched.ready);
-    if (status == napi_ok) status = tna_set_number(env, out, "quarantined", (double)sched.quarantined);
+    /* The kernel keeps no queue of actors (napi ADR 0041): core's queue is one, and nothing is quarantined. */
+    if (status == napi_ok) status = tna_set_number(env, out, "runnable", 0.0);
+    if (status == napi_ok) status = tna_set_number(env, out, "ready", (double)sched.queued);
+    if (status == napi_ok) status = tna_set_number(env, out, "quarantined", 0.0);
     if (status == napi_ok) status = tna_set_number(env, out, "overdue", tah_system_overdue_seconds(system));
     if (status == napi_ok) status = napi_create_object(env, &faults);
     for (uint32_t code = 0; status == napi_ok && code < TAH_FAULT_CODES; code += 1u) {
@@ -1963,7 +1979,7 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
         status = tna_histogram_object(env, tah_host_metrics_histogram(metrics, TAH_HISTOGRAM_LOAD), &load);
     }
     tah_loads_stats load_stats;
-    tah_loads_read_stats(tah_system_loads(system), &load_stats);
+    tah_loads_read_stats(tah_system_loads(system), tah_system_core(system), &load_stats);
     if (status == napi_ok) status = napi_set_named_property(env, out, "load", load);
     if (status == napi_ok) status = napi_create_object(env, &loads);
     for (uint32_t outcome = 0; status == napi_ok && outcome < TAH_LOAD_OUTCOMES; outcome += 1u) {
@@ -2029,7 +2045,7 @@ static napi_value tna_stats_method(napi_env env, napi_callback_info info) {
     if (status == napi_ok) status = napi_set_named_property(env, stats, "memory", memory);
     if (status == napi_ok) status = tna_set_number(env, stats, "allocatorCalls", (double)tah_allocator_calls(allocator));
     tah_sched_stats sched;
-    tah_sched_read_stats(tah_system_sched(wrapper->system), &sched);
+    tah_sched_read_stats(tah_system_sched(wrapper->system), tah_system_core(wrapper->system), &sched);
     napi_value messages = NULL;
     if (status == napi_ok) status = napi_create_object(env, &messages);
     if (status == napi_ok) status = tna_set_number(env, messages, "queued", (double)sched.queued);

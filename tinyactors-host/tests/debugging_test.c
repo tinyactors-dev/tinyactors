@@ -1,7 +1,8 @@
 /*
- * What a debugger's pokes need from the scheduler (ADR 0026), driven without
- * Node-API: operator transitions in the envelope (taken, refused, and for
- * another revision), and settling an abandoned macrostep.
+ * What a debugger's pokes need from the kernel (ADR 0026), driven without
+ * Node-API: operator transitions (started at once, refused when the actor is
+ * busy, does not accept them, or runs another revision), and settling an
+ * abandoned macrostep.
  */
 #include "check.h"
 #include <string.h>
@@ -219,9 +220,16 @@ static const char *state_of(tah_system *system, ta_actor_id actor) {
     return text;
 }
 
-static tah_sched_state state(tah_system *system, ta_actor_id actor) {
-    const tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
-    return entry == NULL ? TAH_SCHED_NONE : (tah_sched_state)entry->state;
+static ta_actor_residency residency(tah_system *system, ta_actor_id actor) {
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system->core, actor, &view) == TA_OK);
+    return view.residency;
+}
+
+static uint64_t host_inputs(tah_system *system) {
+    ta_counters counters;
+    ta_system_counters(system->core, &counters);
+    return counters.host_inputs;
 }
 
 static ta_definition_id definition_of(tah_system *system, ta_actor_id actor) {
@@ -230,15 +238,13 @@ static ta_definition_id definition_of(tah_system *system, ta_actor_id actor) {
     return view.definition_id;
 }
 
-/* An operator transition queues behind real mail and reaches deliver; one
- * the actor no longer accepts is a dead letter, not a fault. */
+/* An operator transition does not queue: it starts at once on an idle actor, and the post answers BUSY while
+ * the actor has an input waiting. One the actor does not accept, or for another revision, is INVALID. */
 static void operator_transitions(void) {
     tah_system *system = make_system();
     ta_definition_id steps = define_steps(system);
     ta_actor_id actor = spawn(system, steps);
     settle(system);
-    CHECK(sizeof(tah_sched_entry) == 16u);
-    CHECK(sizeof(tah_envelope) == 104u); /* the jump shares the address's room */
     ta_event_name_id x = name(system, "x");
     ta_event_name_id jump_event = name(system, "operator.goto");
     ta_state_id to_c[] = { 2u };
@@ -246,32 +252,35 @@ static void operator_transitions(void) {
         .definition = steps,
         .transition = { .source = TA_STATE_NONE, .targets = to_c, .target_count = 1u },
     };
-    /* Behind x: x moves a to b first, then the jump moves b to c. */
+    /* Behind x the actor is not idle: the jump is not queued, it is refused with BUSY. */
     CHECK(post(system, actor, x) == TA_OK);
     uint32_t waiter = tah_sched_waiter_take(&system->sched);
-    CHECK(post_jump(system, actor, jump_event, &to_c_from_root, waiter) == TA_OK);
-    const tah_envelope *queued = tah_sched_envelope(&system->sched, tah_sched_lookup(&system->sched, actor)->last);
-    CHECK(queued->has_jump && queued->jump->count == 1u && queued->jump->targets[0] == 2u);
+    CHECK(post_jump(system, actor, jump_event, &to_c_from_root, waiter) == TA_ERR_BUSY);
+    tah_sched_waiter_give(&system->sched, waiter);
     turn_counts counts = settle(system);
+    CHECK(counts.faults == 0u && counts.dead == 0u);
+    CHECK(strcmp(state_of(system, actor), "b") == 0);
+    /* Idle now: x moved a to b first, then the jump moves b to c. */
+    waiter = tah_sched_waiter_take(&system->sched);
+    CHECK(post_jump(system, actor, jump_event, &to_c_from_root, waiter) == TA_OK);
+    CHECK(tah_sched_waiter_state(&system->sched, waiter) == TAH_WAITER_PENDING);
+    counts = settle(system);
     CHECK(counts.faults == 0u && counts.dead == 0u);
     CHECK(strcmp(state_of(system, actor), "c") == 0);
     CHECK(settlement_of(waiter) != NULL && settlement_of(waiter)->kind == TAH_SETTLE_STABLE);
 
-    /* From a: queued behind a jump to c, a is no longer active: refused. */
+    /* From a: a is no longer active, so core refuses the jump; the actor is not harmed. */
     ta_state_id to_b[] = { 1u };
     tah_message_jump from_a = {
         .definition = steps,
         .transition = { .source = 0u, .targets = to_b, .target_count = 1u },
     };
-    CHECK(post(system, actor, name(system, "unknown.event")) == TA_OK); /* ignored: the actor stays in c */
     waiter = tah_sched_waiter_take(&system->sched);
-    CHECK(post_jump(system, actor, jump_event, &from_a, waiter) == TA_OK);
+    CHECK(post_jump(system, actor, jump_event, &from_a, waiter) == TA_ERR_INVALID);
+    tah_sched_waiter_give(&system->sched, waiter);
     counts = settle(system);
-    CHECK(counts.faults == 0u && counts.refused == 1u);
-    CHECK(state(system, actor) == TAH_SCHED_IDLE); /* not quarantined */
+    CHECK(counts.faults == 0u && counts.dead == 0u);
     CHECK(strcmp(state_of(system, actor), "c") == 0);
-    const tah_settlement *refused = settlement_of(waiter);
-    CHECK(refused != NULL && refused->kind == TAH_SETTLE_DEAD && refused->reason == TAH_DEAD_REFUSED);
 
     /* A jump over another revision's state IDs is refused without reaching core. */
     ta_definition_id other = define_chain(system, false);
@@ -279,10 +288,8 @@ static void operator_transitions(void) {
         .definition = other,
         .transition = { .source = TA_STATE_NONE, .targets = to_b, .target_count = 1u },
     };
-    CHECK(post_jump(system, actor, jump_event, &foreign, 0) == TA_OK);
-    counts = settle(system);
-    CHECK(counts.faults == 0u && counts.refused == 1u);
-    CHECK(strcmp(state_of(system, actor), "c") == 0);
+    CHECK(post_jump(system, actor, jump_event, &foreign, 0) == TA_ERR_INVALID);
+    CHECK(host_inputs(system) == 0u);
 
     /* Back to a, by a jump from the root. */
     CHECK(definition_of(system, actor) == steps);
@@ -296,16 +303,11 @@ static void operator_transitions(void) {
     CHECK(counts.faults == 0u && counts.dead == 0u);
     CHECK(strcmp(state_of(system, actor), "a") == 0);
 
-    /* Jumps withdrawn, to a gone actor, or left waiting give their memory back. */
-    uint32_t withdrawn = tah_sched_waiter_take(&system->sched);
-    CHECK(post_jump(system, actor, jump_event, &back, withdrawn) == TA_OK);
-    CHECK(tah_sched_cancel(&system->sched, withdrawn));
-    tah_sched_waiter_give(&system->sched, withdrawn);
+    /* A jump to a gone actor is a dead letter. */
     CHECK(post_jump(system, ta_actor_id_make(900u, 1u), jump_event, &back, 0) == TA_OK);
     counts = settle(system);
     CHECK(counts.dead == 1u);
-    CHECK(post_jump(system, actor, jump_event, &back, 0) == TA_OK); /* left in the mailbox */
-    finish_system(system); /* no leak: the waiting jump went with its envelope */
+    finish_system(system);
 }
 
 /* Abandoning a macrostep that never ends settles napi's state: the send()
@@ -321,7 +323,7 @@ static void abandoned_macrostep(void) {
     for (int index = 0; index < 5; index += 1) {
         turn(system);
     }
-    CHECK(state(system, actor) == TAH_SCHED_RUNNABLE);
+    CHECK(residency(system, actor) == TA_ACTOR_RUNNING);
     CHECK(settlement_of(waiter) == NULL);
 
     /* Paused inside a microstep, core refuses (core ADR 0082); the next
@@ -334,21 +336,21 @@ static void abandoned_macrostep(void) {
     turn(system);
     CHECK(ta_actor_abandon(system->core, actor) == TA_OK);
     CHECK(tah_hook_actor_abandoned(system, actor) == TA_OK);
-    collect(system);
+    CHECK(residency(system, actor) == TA_ACTOR_IDLE);
+    turn(system); /* core reports the abandon; the next go starts another runaway */
     const tah_settlement *abandoned = settlement_of(waiter);
     CHECK(abandoned != NULL && abandoned->kind == TAH_SETTLE_ABANDONED);
-    CHECK(state(system, actor) == TAH_SCHED_READY); /* its next message waits */
-    turn(system); /* the stale runnable entry is skipped; the next go starts another runaway */
-    CHECK(state(system, actor) == TAH_SCHED_RUNNABLE);
-    CHECK(tah_sched_mailbox_count(&system->sched, actor) == 0u);
+    CHECK(residency(system, actor) == TA_ACTOR_RUNNING);
+    CHECK(host_inputs(system) == 1u); /* the second go is the macrostep that runs now */
 
     /* Abandoned with nothing waiting, it stands idle. */
     turn(system);
     CHECK(ta_actor_abandon(system->core, actor) == TA_OK);
     CHECK(tah_hook_actor_abandoned(system, actor) == TA_OK);
-    CHECK(state(system, actor) == TAH_SCHED_IDLE);
+    CHECK(residency(system, actor) == TA_ACTOR_IDLE);
     turn(system);
-    CHECK(state(system, actor) == TAH_SCHED_IDLE);
+    CHECK(residency(system, actor) == TA_ACTOR_IDLE);
+    CHECK(host_inputs(system) == 0u);
     finish_system(system);
 }
 

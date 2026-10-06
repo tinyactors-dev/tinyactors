@@ -1,6 +1,6 @@
 # ADR 0025: A quarantined child tells its parent
 
-**Status:** Accepted and implemented; see the implementation notes. Refines ADR 0008 point 1 and ADR 0021 point 6: a quarantined invoked child is no longer silent to its parent. Needs core ADR 0081.
+**Status:** Accepted and implemented; see the implementation notes. Refines ADR 0008 point 1 and ADR 0021 point 6: a quarantined invoked child is no longer silent to its parent. Needs core ADR 0081. Superseded in part by [napi ADR 0041](0041-host-input-goes-straight-into-core.md) (2026-10-05): no actor is quarantined until ring-proto step 4.5, so no `.quarantined` report is made; a failed start still reports `.failed`, now as an input core admits.
 **Date:** 2026-09-26
 
 ## Context

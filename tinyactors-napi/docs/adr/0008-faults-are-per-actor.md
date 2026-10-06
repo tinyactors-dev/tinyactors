@@ -1,6 +1,6 @@
 # ADR 0008: Faults are per actor
 
-**Status:** Accepted Refined by ADR 0022: a chart's mail to a target that does not exist is `error.communication` in the sender, not a dead letter; mail from JavaScript is unchanged. Refined by ADR 0025: quarantining an invoked child also tells its parent. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md).
+**Status:** Accepted Refined by ADR 0022: a chart's mail to a target that does not exist is `error.communication` in the sender, not a dead letter; mail from JavaScript is unchanged. Refined by ADR 0025: quarantining an invoked child also tells its parent. Its code moved to the host kernel: see [kernel ADR 0001](../../../tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md) section 6 and [ADR 0037](0037-napi-is-a-binding-over-the-host-kernel.md). Superseded in part by [napi ADR 0041](0041-host-input-goes-straight-into-core.md) (2026-10-05): nothing is quarantined until ring-proto step 4.5; a malformed event is refused at the call and a runaway leaves the actor stable; `release()` is partial.
 **Date:** 2026-09-23
 
 ## Context

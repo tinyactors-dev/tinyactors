@@ -1,67 +1,93 @@
 #pragma once
 /*
- * Scheduling (ADRs 0005, 0007, 0008). This module has no Node-API in it, so
- * native tests drive it directly.
+ * Package scheduler is the kernel's half of the application's input: the
+ * code that admits a post into core, remembers what a send() is waiting for,
+ * reads the notices core writes when it runs, and runs the turn
+ * (ADRs 0005, 0007, 0008; tinyactors-core ADR 0099). It has no Node-API in
+ * it, so native tests drive it directly.
  *
- * The scheduling table has one 16-byte entry per slot of core's actor table
- * (ADR 0002). It grows in fixed pages that are never moved or copied. An
- * entry holds host-owned state that core does not have: the generation of the
- * actor the addon knows in that slot, its scheduling state, a flag or two,
- * and the first and last envelope of its mailbox.
+ * What it is for. Core keeps every pending input in one pool and one run
+ * queue (ADR 0099): ta_actor_deliver() admits an event and never runs
+ * anything, ta_run() runs what was admitted, in the order it was admitted.
+ * The scheduler therefore holds no queue of its own. A post goes straight
+ * into core and comes back as a token; ta_run() says what became of each
+ * token in its notices, and the scheduler turns those notices into what the
+ * application hears: a send() that settles, a dead letter, a finished actor,
+ * a runaway. There is no table with an entry per actor, no mailbox, no
+ * ready or runnable queue, and no quarantine: nothing a macrostep does makes
+ * the host stop running the actor (that is core's decision, and its
+ * abandon of a runaway macrostep leaves the actor stable).
  *
- * Mailboxes (ADR 0005): an envelope is a record in the system's envelope
- * store, addressed by a 32-bit index (0 means none). A mailbox is the list
- * threaded through envelopes from the entry's `first` to its `last`; an
- * empty mailbox costs nothing beyond the entry. Freed envelopes go on the
- * store's free list, so after warm-up a post makes no allocator call
- * (ADR 0014). An idle actor that gets mail becomes `ready` and joins the
- * ready queue; an actor in any other state only collects mail. A turn
- * delivers the head envelope of up to `messages` ready actors, acting on
- * ta_actor_deliver()'s result alone (tinyactors-core ADR 0055).
+ * Lifetimes. Each thing here has exactly one.
  *
- * Dead letters: mail whose target is gone or finished moves to the dead
- * list, and each turn reports at most `messages` of them as records, so one
- * dead actor with a deep mailbox cannot make a turn long. Mail for a stale
- * ID is a dead letter at once, so it never joins the mailbox of the slot's
- * next actor.
+ *   - system: the tah_sched control block (embedded in the kernel's system
+ *     record), the vector of waiter records and its free list, the table
+ *     of followed inputs (indexed by ta_input_slot() of the token), the
+ *     verdict ring and the settlement ring. They grow with the most that was
+ *     ever pending and are given back by tah_sched_destroy().
+ *   - record (waiter): a send()'s promise half, from tah_sched_waiter_take()
+ *     until tah_sched_waiter_give(). While it is PENDING it is named by the
+ *     token of its input in the table of followed inputs; SETTLING means the scheduler is
+ *     done with it and the binding gives it back after it settled the promise.
+ *     Its generation changes at each give, so a token JavaScript holds goes
+ *     stale instead of reaching the next send.
+ *   - envelope (a token's life): from a successful tah_sched_post() until the
+ *     notice that ends the input (COMPLETED, REFUSED, or the abandon that
+ *     core reports as COMPLETED) or until tah_sched_cancel() withdraws it.
+ *     The table entry of a token (its waiter, its retained bytes) exists
+ *     exactly that long; core owns the event for that long, so the scheduler copies none
+ *     of it. The only thing the kernel keeps of a message is the token.
+ *   - verdict: the answer to a post that core refused for a reason that is the
+ *     application's business (the target is gone or finished, an address has
+ *     maxWaiting messages waiting). It owns a reference to the event's data
+ *     and to the address, from the post until the next turn turns it into a
+ *     dead-letter record. The ring is the only place a post waits in the
+ *     kernel, and it holds answers, not inputs.
+ *   - turn: the records of a turn (a finished actor, a runaway, a dead
+ *     letter) are made in the turn arena and live until the host has reported
+ *     them (tah_sched_release_records(), called by tah_system_end_turn()); a
+ *     record owns the data of a dead letter until then.
  *
- * The runnable queue holds the actors whose macrostep has something to do:
- * a bootstrap, a delivered event, or a macrostep paused by a budget. An actor
- * stays `runnable` while its macrostep runs, so work that arrives for it then
- * only waits. A queue entry whose actor was destroyed or replaced in the
- * meantime is skipped when it is popped. Core holds the inputs themselves
- * (tinyactors-core ADR 0099): ta_actor_deliver() admits an event into core's
- * pool and ta_run() runs what was admitted, in the order it was admitted, so a
- * resume here is a call of ta_run() whose notices settle every actor they
- * name, not just the one that was popped.
+ * Ownership of a post's event. tah_sched_post() borrows the event: core takes
+ * its own references when it admits the input, and a verdict takes its own.
+ * The caller keeps its references on every result and releases them itself.
  *
- * send() waiters (ADR 0005 point 11): a message may carry a waiter, the
- * native half of a send() promise. While the message is queued the waiter
- * names its envelope; when core accepts the message the waiter moves to the
- * `inflight` map, keyed by the actor that runs the macrostep; when that
- * macrostep ends (stable, done, a fault, or the actor is gone) or the message
- * becomes a dead letter, the scheduler queues a settlement. The Node-API layer
- * pops settlements after the turn and settles the promises. Waiters are
- * reused through a free list, so a send makes no allocator call after
- * warm-up.
+ * When it allocates. Only at the call that admits: the table of followed
+ * inputs grows to the slot of a send()'s token, or of a post with a
+ * retained-bytes estimate when maxRetainedBytes is set (it never shrinks, so
+ * after warm-up nothing allocates), the verdict ring, and core's pool
+ * refill inside ta_actor_deliver(). A plain post of an event with no waiter
+ * allocates nothing after the pool has warmed up: it is one call into core
+ * and a counter. The turn allocates in the turn arena (records) and when a
+ * settlement ring chunk is needed. Every allocation failure leaves nothing
+ * behind: a post whose table entry cannot be made withdraws its input before
+ * it answers TA_ERR_NOMEM, so no token escapes that nothing follows.
  *
- * One turn calls ta_run() for up to `resumes` runnable actors, each call with
- * a microstep budget and an action budget (core ADR 0061); a call that finds
- * the actor already settled by an earlier one does nothing. The turn stops
- * once `resumes` inputs are completed: it drops the entries of actors those
- * calls settled, leaves the first entry that still needs a call and everything
- * behind it in order, so its cost is its inputs plus the entries they settled,
- * never the queue's length. What the turn learns that JavaScript must hear
- * about (an actor finished, an actor faulted) becomes a record in the turn
- * arena; the pump calls the hooks for them after the last core call of the
- * turn (ADR 0007 point 5).
+ * Back-pressure. Core's TA_ERR_FULL is the application's `queue-full`: the
+ * pool is at its watermark. maxQueuedMessages and maxRetainedBytes (ADR 0005
+ * point 9) are enforced here, without a queue: the first bounds the inputs
+ * the application admitted that core has not finished (core's gauge,
+ * ta_counters.host_inputs, plus the verdicts waiting for the next turn), the
+ * second the bytes the binding estimated for the events of those inputs,
+ * counted in a map from token to bytes that exists only while the limit is
+ * set. Both answer TA_ERR_FULL.
+ *
+ * Complexity. A post is O(1) plus core's admission. A notice costs O(1) map
+ * operations. A turn costs the inputs core finishes in it (bounded by
+ * `inputs`) plus the verdicts it reports (bounded by the same), never the
+ * number of actors.
  *
  * Operator transitions (ADR 0026, core ADR 0082): a message may carry one. It
- * queues behind the mail before it, like any message, and reaches
- * ta_actor_deliver() with it. A jump the actor no longer accepts (its source
- * is not active by then, or the actor runs another revision) is a dead letter
- * with reason `refused` and does not quarantine the actor: the operator's
- * input is at fault, not the actor.
+ * does not queue: it starts in core's running slot at once
+ * (ta_actor_transition()), or the post answers TA_ERR_BUSY when the actor is
+ * not idle; a jump the actor does not accept (its definition changed, or its
+ * source is not active) answers TA_ERR_INVALID.
+ *
+ * Usage (what the pump does, in outline):
+ *
+ *     tah_sched_post(&sched, &post);           // admit the application's post
+ *     tah_sched_turn(&sched, &turn_params);    // ta_run, settle the notices
+ *     // then read the turn arena's records and call the hooks
  */
 #include <stdbool.h>
 #include <stdint.h>
@@ -71,37 +97,12 @@
 #include "tinyactors.h"
 #include "watch.h"
 
-#define TAH_SCHED_PAGE_BITS 12u
-#define TAH_SCHED_PAGE_ENTRIES (1u << TAH_SCHED_PAGE_BITS) /* 4,096 entries, 64 KiB */
-
-typedef enum {
-    TAH_SCHED_NONE = 0,    /* no actor the addon knows */
-    TAH_SCHED_IDLE,        /* between macrosteps, nothing to do */
-    TAH_SCHED_READY,       /* has mail, is between macrosteps, and is on the ready queue */
-    TAH_SCHED_RUNNABLE,    /* on the runnable queue */
-    TAH_SCHED_QUARANTINED  /* faulted: out of scheduling until released (ADR 0008) */
-} tah_sched_state;
-
-enum {
-    TAH_SCHED_BACKOFF = 1u << 0,  /* ran out of memory: skip one turn (ADR 0008) */
-    TAH_SCHED_FINISHED = 1u << 1, /* reached a top-level final state */
-    /* A replaying actor (kernel ADR 0006): the replay resumes it itself,
-     * and a turn leaves it alone until it is published. */
-    TAH_SCHED_REPLAYING = 1u << 5,
-    /* READY or RUNNABLE, but on neither queue: putting it back ran out of
-     * memory. The next turn puts it on the queue its state names, and the
-     * scheduler is not quiet until it has. */
-    TAH_SCHED_STRANDED = 1u << 7
-};
-
-typedef struct tah_sched_entry tah_sched_entry;
-
 /* Why a message became a dead letter (ADR 0008). */
 typedef enum {
-    TAH_DEAD_NOT_FOUND = 0, /* no resident actor has the target's ID */
+    TAH_DEAD_NOT_FOUND = 0, /* no resident actor has the target's ID, or the address names nothing */
     TAH_DEAD_DONE,          /* the target reached a top-level final state */
-    TAH_DEAD_DESTROYED,     /* the target was destroyed or unloaded with mail waiting */
-    TAH_DEAD_REFUSED,       /* core refused the message itself (for example a malformed event) */
+    TAH_DEAD_DESTROYED,     /* the target was destroyed or unloaded with the message waiting */
+    TAH_DEAD_REFUSED,       /* core refused the message itself (a replaying actor's time, or an abandoned macrostep) */
     TAH_DEAD_UNLOADED,      /* the target is unloaded (a named address, or an actor unloaded with mail waiting) */
     /* Mail that waited for a loader (napi ADR 0020): */
     TAH_DEAD_REJECTED,      /* the loader answered "not now" */
@@ -113,61 +114,30 @@ typedef enum {
 /* The reason's name as JavaScript sees it ("not-found", "load-timeout", ...). */
 const char *tah_dead_reason_name(tah_dead_reason reason);
 
-typedef struct tah_mailbox tah_mailbox;
-
-/*
- * An invocation's error report that waits in its parent's mailbox (napi ADR
- * 0032 section 3, core ADR 0089 section 4): core takes a report only
- * between macrosteps, so it queues behind the mail before it and reaches
- * ta_actor_report_invoke() in turn. Its envelope's event carries the
- * invocation (`invoke_id`) and the report's data.
- */
-typedef enum {
-    TAH_REPORT_NONE = 0,
-    TAH_REPORT_UNAVAILABLE, /* the service is lost; ends the invocation */
-    TAH_REPORT_QUARANTINED, /* an invoked child faulted; the invocation stays (ADR 0025) */
-    TAH_REPORT_FAILED       /* the service could not start; ends the invocation */
-} tah_report_kind;
-
-/*
- * An operator transition a message carries (core ADR 0082), in one
- * allocation: the definition its state IDs belong to, and the transition.
- */
-typedef struct {
-    ta_definition_id definition;
-    ta_state_id source; /* TA_STATE_NONE: the root */
-    uint32_t count;
-    ta_state_id targets[];
-} tah_jump;
-
-typedef struct tah_envelope tah_envelope;
-
 /* An operator transition to accept with a message (core ADR 0082). */
 typedef struct {
     ta_definition_id definition; /* the definition the state IDs belong to */
     ta_operator_transition transition;
 } tah_message_jump;
 
-/* A message to accept: the target, the event, and what it carries along. */
+/*
+ * A message to admit. Lifetime: call; every pointer is borrowed for the call
+ * and nothing is kept of it but what core and the verdict retain themselves.
+ */
 typedef struct {
-    ta_actor_id target;     /* unused for a named post */
+    ta_actor_id target;     /* the actor, or 0 when `address` is given */
+    ta_address *address;    /* a named target: core resolves it, and makes the message wait when nothing is resident */
     const ta_event *event;
     uint32_t bytes;         /* retained-bytes estimate of its data, 0 for none */
     uint32_t waiter;        /* a send() waiting for it, or 0 */
     const ta_trace_parent *trace; /* its trace parent, or NULL (core ADR 0067) */
-    /* An operator transition, or NULL; only for a target named by ID. The
-     * scheduler copies it. */
+    /* An operator transition, or NULL; only for a target named by ID. */
     const tah_message_jump *jump;
-    /* An error report instead of a message (tah_report_kind); `event`
-     * carries its invocation and data. A report for a gone target is
-     * dropped, never a dead letter. */
-    uint8_t report;
 } tah_message;
 
 typedef enum {
     TAH_WAITER_FREE = 0,
-    TAH_WAITER_QUEUED,   /* its message waits in a mailbox or on the dead list */
-    TAH_WAITER_INFLIGHT, /* core accepted the message; its macrostep runs */
+    TAH_WAITER_PENDING,  /* its input is admitted and not finished; a token names it */
     TAH_WAITER_SETTLING  /* settled or cancelled; the Node-API layer gives it back */
 } tah_waiter_state;
 
@@ -178,7 +148,6 @@ typedef enum {
     TAH_SETTLE_DONE,   /* ... with the actor finished */
     TAH_SETTLE_RUNAWAY, /* ... or reached the microstep limit and was abandoned (core ADR 0099 section 7); the actor is stable */
     TAH_SETTLE_DEAD,   /* the message became a dead letter, or its actor went away */
-    TAH_SETTLE_FAULT,  /* the macrostep failed and the actor is quarantined */
     TAH_SETTLE_ABANDONED /* an operator abandoned the macrostep (core ADR 0082) */
 } tah_settle_kind;
 
@@ -189,16 +158,12 @@ typedef struct {
     /* STABLE, DONE: the message enabled no transition (core ADR 0089
      * section 8), SendResult.consumed false (napi ADR 0032 section 4). */
     uint8_t ignored;
-    ta_result code;  /* FAULT: core's result */
     ta_actor_id actor;
 } tah_settlement;
 
-#define TAH_ENVELOPE_PAGE_BITS 10u
-#define TAH_ENVELOPE_PAGE_ENTRIES (1u << TAH_ENVELOPE_PAGE_BITS) /* 1,024 envelopes */
-
 typedef enum {
     TAH_RECORD_DONE,       /* the actor reached a top-level final state */
-    TAH_RECORD_FAULT,      /* a core call for the actor failed (ADR 0008) */
+    TAH_RECORD_FAULT,      /* a macrostep reached the microstep limit and core abandoned it (ADR 0103 section 8) */
     TAH_RECORD_DEAD_LETTER /* a message whose target is gone or finished */
 } tah_record_kind;
 
@@ -208,11 +173,7 @@ typedef struct tah_turn_record {
     /* DEAD_LETTER to a named target with no actor: its text, copied into the turn arena. */
     bool has_address;
     ta_actor_address address;
-    const char *operation; /* FAULT: "resume", "deliver" */
-    ta_result code;        /* FAULT: core's result */
-    /* FAULT: the macrostep reached the microstep limit and core abandoned it (ADR 0103 section 8). `operation` is
-     * "run" and `code` is unused; the actor is not quarantined, and its parent is not told. */
-    bool runaway;
+    const char *operation; /* FAULT: "run" */
     ta_event_name_id event; /* DEAD_LETTER */
     tah_dead_reason reason; /* DEAD_LETTER */
     /* DEAD_LETTER: the message's data, owned by the record until
@@ -227,32 +188,23 @@ typedef struct tah_turn_record {
 
 /*
  * What the recorder hears from the scheduler (kernel ADR 0006 section 2):
- * a message or report about to be offered to core, and whether core took
- * it; a macrostep that ended; an actor that settled or finished. `message`
- * is the envelope, borrowed for the call. The observer must not call back
- * into the scheduler.
+ * the inputs core takes, the macrosteps that end, the actors that settle or
+ * finish. `event` is borrowed until the next ta_run(). The observer must not
+ * call back into the scheduler.
  */
 typedef enum {
-    TAH_NOTE_DELIVERING, /* ta_actor_deliver() is about to be offered `message` */
-    TAH_NOTE_DELIVERED,  /* ta_actor_deliver() took `message` */
-    TAH_NOTE_UNDELIVERED, /* ... or did not */
-    TAH_NOTE_REPORTING,  /* ta_actor_report_invoke() is about to be offered the report `message` */
-    TAH_NOTE_REPORTED,   /* ta_actor_report_invoke() took the report `message` */
+    /* `actor` took an input (a host input, mail, or an error report) with `event`, admitted at `time`. */
+    TAH_NOTE_TAKEN,
     TAH_NOTE_FINISHED,   /* `actor` reached a top-level final state */
     TAH_NOTE_SETTLED,    /* `actor` ended a macrostep and is stable: its pending sends may have changed */
-    TAH_NOTE_ENDED,      /* `actor`'s macrostep ended: stable, finished, or stopped by a fault (before SETTLED or FINISHED) */
-    /* Mail between sessions never passes through this scheduler: core queues it (core ADR 0099 section 4). When an
-     * observer is installed, core says when it takes such an input; `event` is borrowed until the next ta_run(). */
-    TAH_NOTE_MAIL_TAKEN  /* `actor` took the event of mail (or of a recycled error) from another session */
+    TAH_NOTE_ENDED       /* `actor`'s macrostep ended: stable, or finished (before SETTLED or FINISHED) */
 } tah_note_kind;
 
 typedef struct {
     tah_note_kind kind;
     ta_actor_id actor;
-    ta_address *address;
-    uint32_t envelope;
-    const tah_envelope *message;
-    const ta_event *event; /* MAIL_TAKEN */
+    const ta_event *event; /* TAKEN */
+    ta_time time;          /* TAKEN */
 } tah_sched_note;
 
 typedef struct {
@@ -263,8 +215,13 @@ typedef struct {
 typedef struct tah_sched tah_sched;
 
 typedef struct {
-    uint32_t resumes;    /* ta_run() calls in one turn */
-    uint32_t messages;   /* deliveries in one turn, and dead letters reported */
+    /*
+     * Inputs finished in one turn, and verdicts reported: messageBudget. The
+     * turn asks it between calls of ta_run(), so a turn may finish up to one
+     * call's worth more (the call's notice array and its microstep budget
+     * bound that), never more than a few dozen.
+     */
+    uint32_t inputs;
     uint32_t microsteps; /* core's `budget` for one ta_run() call */
     uint32_t actions;    /* core's `action_budget` for one ta_run() call; 0: no limit */
 } tah_turn_budgets;
@@ -274,171 +231,83 @@ typedef struct {
     ta_arena *arena;   /* the turn arena: records live here */
     bool *inside_core; /* the reentrancy flag (ADR 0013 point 4) */
     tah_turn_budgets budgets;
-    /* Watched sessions and definitions (watch.h); NULL or empty: none. */
-    tah_trace_watch *watch;
-    /* Asked after each resume and delivery: true ends the turn there, and
-     * what is left waits for the next one (napi ADR 0035's staging bound).
-     * NULL: never. */
+    /* Asked after each call into core: true ends the turn there, and what is
+     * left waits for the next one (napi ADR 0035's staging bound). NULL:
+     * never. */
     bool (*stop)(void *context);
     void *stop_context;
     /* Called with stop_context after each call into core that may have traced
-     * (a resume, a delivery, an invocation report): the kernel reads the tel
-     * ring there (core ADR 0098). NULL: nothing. */
+     * (a ta_run call): the kernel reads the tel ring there (core ADR 0098).
+     * NULL: nothing. */
     void (*left_core)(void *context);
     /* Called with stop_context for each LOAD_NEEDED notice of a ta_run() call, after the call returned (core ADR
      * 0099 section 4): core is waiting for an address to become resident. NULL: such notices are ignored. */
     void (*load_needed)(void *context, const ta_run_notice *notice);
 } tah_turn_params;
 
-/* `allocator` for the table and queues, `envelopes` for the envelope store. */
+/* `allocator` for the maps and rings, `envelopes` for the waiter records and verdicts. */
 void tah_sched_init(tah_sched *sched, ta_allocator allocator, ta_allocator envelopes);
 /*
- * Releases every queued message's references. Call it while core is still
- * alive (a named origin is a core handle), before ta_system_destroy().
+ * Releases what the verdicts hold (data, addresses). Call it while core is
+ * still alive (a named origin and an address are core handles), before
+ * ta_system_destroy().
  */
-void tah_sched_discard_mail(tah_sched *sched);
+void tah_sched_discard(tah_sched *sched);
 void tah_sched_destroy(tah_sched *sched);
 
-/* The entry of `slot`, or NULL when its page does not exist. */
-tah_sched_entry *tah_sched_entry_at(const tah_sched *sched, uint32_t slot);
-/* The entry of the actor `actor` names, or NULL when the addon knows another
- * actor (or none) in that slot. */
-tah_sched_entry *tah_sched_lookup(const tah_sched *sched, ta_actor_id actor);
+/*
+ * The limits a post must fit (ADR 0005 point 9), 0 for none. Set once, at
+ * creation, by the kernel from the parameters.
+ */
+void tah_sched_set_limits(tah_sched *sched, uint32_t max_queued, uint64_t max_retained);
 
 /*
- * A new actor (spawned, loaded, reconstructed, prepared): fill its entry and
- * put it on the runnable queue for bootstrap. TA_ERR_NOMEM leaves the table
- * as it was.
- */
-ta_result tah_sched_add(tah_sched *sched, ta_actor_id actor);
-/* The actor is gone (destroyed, unloaded): dead-letter its mailbox and clear its entry. */
-void tah_sched_remove(tah_sched *sched, ta_actor_id actor, tah_dead_reason reason);
-/*
- * A named actor was replaced in place (ROADMAP step 14): the mail still
- * waiting for `from` moves, in order, to the front of `to`'s mailbox, with
- * its send() waiters. That mail was accepted for the address `to` now
- * holds, and it is older than anything queued for `to` directly. An idle
- * `to` becomes ready. TA_ERR_NOT_FOUND when the table knows either actor
- * not; TA_ERR_NOMEM (nothing moved) when `to` cannot join the ready queue.
- */
-typedef struct {
-    ta_actor_id from;
-    ta_actor_id to;
-} tah_sched_transfer_params;
-ta_result tah_sched_transfer(tah_sched *sched, const tah_sched_transfer_params *params);
-
-/*
- * Accepts a message for `message->target` (ADR 0005 point 3). On TA_OK the
- * envelope owns the event's references and the waiter follows the message;
- * otherwise the caller keeps both.
- * - A target the table does not know (stale or unknown ID) or one that has
- *   finished: accepted as a dead letter at once.
- * - TA_ERR_BUSY: the queue is at max_queued, or the message's bytes would
- *   pass max_retained; nothing was accepted.
- * - TA_ERR_NOMEM: nothing was accepted.
- */
-ta_result tah_sched_post(tah_sched *sched, const tah_message *message);
-/*
- * Accepts a message that is a dead letter already: its target is a name the
- * directory has no resident actor for (ADR 0006 point 4). On TA_OK the
- * envelope owns `event`'s references and the `address` reference.
- * TA_ERR_BUSY and TA_ERR_NOMEM as for tah_sched_post().
+ * tah_sched_post admits one message into core and returns at once; it never
+ * runs a macrostep. `post->core` is the system, `post->message` the message
+ * (borrowed). The results:
+ * - TA_OK: admitted. The message is a token core will report (COMPLETED or
+ *   REFUSED), or it became a verdict that the next turn reports as a dead
+ *   letter (the target is not found or has finished; an address already has
+ *   `max_waiting` messages waiting). Its send() waiter, if any, is PENDING
+ *   or about to be settled DEAD by that turn.
+ * - TA_ERR_FULL: core's pool is at its watermark, the target already holds
+ *   65,535 inputs, or maxQueuedMessages or maxRetainedBytes would pass
+ *   (napi `queue-full`). Nothing was accepted.
+ * - TA_ERR_BUSY: an operator transition while the actor, or core's running
+ *   slot, is busy (napi `busy`). Nothing was accepted.
+ * - TA_ERR_INVALID: a malformed event or transition, an event name this
+ *   system never issued, a replaying actor's time (core's caller-error
+ *   answer). The actor is not harmed. Nothing was accepted.
+ * - TA_ERR_NOMEM: a pool, map or ring could not grow. Nothing was accepted
+ *   and nothing remains: an input already admitted is withdrawn first.
+ * The event stays the caller's on every result. Allocates only as the
+ * package comment says.
  */
 typedef struct {
-    ta_address *address;
+    ta_system *core;
     const tah_message *message;
-    tah_dead_reason reason;
-} tah_dead_post;
-ta_result tah_sched_post_dead(tah_sched *sched, const tah_dead_post *post);
-/*
- * Accepts a message into the waiting mailbox `box` of `address` (napi ADR
- * 0020). The envelope takes its own reference to `address`. On TA_OK it
- * owns the event's references and the waiter follows the message, as for
- * tah_sched_post(); the limits of ADR 0005 point 9 count it. TA_ERR_BUSY
- * and TA_ERR_NOMEM as for tah_sched_post().
- */
-typedef struct {
-    tah_mailbox *box;
-    ta_address *address;
-    const tah_message *message;
-} tah_waiting_post;
-ta_result tah_sched_post_waiting(tah_sched *sched, const tah_waiting_post *post);
-/*
- * The actor for the address was loaded: the waiting mail moves, in order,
- * to the front of `to`'s mailbox, with its send() waiters, as replacement
- * moves an incumbent's mail. It is older than anything posted to `to`
- * directly. An idle `to` becomes ready. TA_ERR_NOT_FOUND when the table
- * does not know `to`; TA_ERR_NOMEM (nothing moved) when `to` cannot join
- * the ready queue. `box` is empty afterwards on TA_OK.
- */
-ta_result tah_sched_hand_over(tah_sched *sched, tah_mailbox *box, ta_actor_id to);
-/* The load failed: every waiting message becomes a dead letter with `reason`. */
-void tah_sched_bury_waiting(tah_sched *sched, tah_mailbox *box, tah_dead_reason reason);
-/*
- * Withdraws the envelope at `index` from the waiting mailbox `box` and
- * frees it, as cancelling a send() does for mail in an actor's mailbox (ADR
- * 0005 point 11). False, changing nothing, when `box` does not hold it.
- */
-bool tah_sched_withdraw_waiting(tah_sched *sched, tah_mailbox *box, uint32_t index);
-/* The envelope at `index` (for tests), or NULL. */
-tah_envelope *tah_sched_envelope(const tah_sched *sched, uint32_t index);
-/*
- * Takes `actor` out of scheduling as a fault does (ADR 0008), for a fault
- * the host found outside a core call. True when it was not quarantined
- * before; release() puts it back.
- */
-bool tah_sched_quarantine(tah_sched *sched, ta_actor_id actor);
-/* Messages waiting in `actor`'s mailbox. */
-uint32_t tah_sched_mailbox_count(const tah_sched *sched, ta_actor_id actor);
-/* The scheduling state of `actor`: TAH_SCHED_NONE for one the table does not know. */
-tah_sched_state tah_sched_state_of(const tah_sched *sched, ta_actor_id actor);
+    ta_time time;            /* the input's logical time: core's time now */
+    uint32_t max_waiting;    /* an address's limit on waiting messages, 0 for none */
+} tah_post;
+ta_result tah_sched_post(tah_sched *sched, const tah_post *post);
 
 /*
- * A queued message as a binding lists it (napi's mailbox()): borrowed from
- * the scheduler until it next changes. Walk a mailbox from
- * tah_sched_mailbox_first() through `next`; 0 ends it.
+ * Whether a post of `bytes` would pass the limits now: maxQueuedMessages
+ * against core's gauge of admitted inputs and the verdicts waiting,
+ * maxRetainedBytes against the bytes counted so far. tah_sched_post() asks it;
+ * it is exposed for tests.
  */
-typedef struct {
-    const ta_event *event;
-    const tah_jump *jump; /* its operator transition (core ADR 0082), or NULL */
-    uint32_t waiter;      /* the send() waiting for it, or 0 */
-    uint32_t next;        /* the next envelope in its mailbox, 0 when last */
-} tah_queued_message;
-/* The first envelope in `actor`'s mailbox, 0 when it is empty or unknown. */
-uint32_t tah_sched_mailbox_first(const tah_sched *sched, ta_actor_id actor);
-/* The message in `envelope`, an index a mailbox walk gave. */
-tah_queued_message tah_sched_queued_message(const tah_sched *sched, uint32_t envelope);
+bool tah_sched_full(const tah_sched *sched, const ta_system *core, uint32_t bytes);
 
 /* The scheduler's counters, as a binding reports them (napi's stats() and metrics()). */
 typedef struct {
-    uint32_t runnable;    /* actors on the runnable queue */
-    uint32_t ready;       /* actors on the ready queue */
-    uint32_t quarantined; /* actors in quarantine now */
-    uint32_t queued;      /* accepted messages not yet delivered or reported */
-    uint64_t delivered;   /* messages core accepted */
+    uint32_t queued;      /* inputs the application admitted that core has not finished, and verdicts waiting */
+    uint64_t delivered;   /* messages core admitted, and mail its receivers ran */
     uint64_t dead_letters; /* dead letters reported so far */
     uint64_t dead_by_reason[TAH_DEAD_REASONS]; /* by tah_dead_reason */
-    uint64_t faults[TAH_FAULT_CODES];          /* by -ta_result */
+    uint64_t faults[TAH_FAULT_CODES];          /* by -ta_result: only the runaway counter moves */
 } tah_sched_stats;
-void tah_sched_read_stats(const tah_sched *sched, tah_sched_stats *out);
-/*
- * Core gave `actor` a macrostep to run outside a delivery (for example an
- * invocation reported unavailable, which queues an internal event): an idle
- * or ready actor becomes runnable. A runnable or quarantined actor is left
- * as it is. TA_ERR_NOT_FOUND for an actor the table does not know.
- */
-ta_result tah_sched_wake(tah_sched *sched, ta_actor_id actor);
-/* Puts a quarantined actor back on the runnable queue (ADR 0008). */
-ta_result tah_sched_release(tah_sched *sched, ta_actor_id actor);
-
-/*
- * An operator abandoned the actor's macrostep (core ADR 0082): the send()
- * that follows it settles as ABANDONED, and a runnable actor stands between
- * macrosteps again (ready or idle). Its entry in the runnable queue is
- * skipped when popped. A quarantined one stays quarantined.
- * TA_ERR_NOT_FOUND for an actor the table does not know.
- */
-ta_result tah_sched_abandoned(tah_sched *sched, ta_actor_id actor);
+void tah_sched_read_stats(const tah_sched *sched, const ta_system *core, tah_sched_stats *out);
 
 /*
  * send() waiters. tah_sched_waiter_take() returns a free waiter's index, or
@@ -461,31 +330,54 @@ void tah_sched_waiter_set_host(tah_sched *sched, uint32_t index, void *host);
 void *tah_sched_waiter_host(const tah_sched *sched, uint32_t index);
 uint32_t tah_sched_waiter_generation(const tah_sched *sched, uint32_t index);
 uint32_t tah_sched_next_waiter(const tah_sched *sched, uint32_t after);
-/*
- * Cancels a pending waiter (abort or timeout). A message still in a mailbox
- * is withdrawn, so it is never delivered; one already on the dead list is
- * still reported, without its waiter; one already delivered is not undone.
- * Returns true when the waiter was pending; it is then SETTLING.
- */
-bool tah_sched_cancel(tah_sched *sched, uint32_t index);
+tah_waiter_state tah_sched_waiter_state(const tah_sched *sched, uint32_t index);
 
-/* True when a turn has nothing to do. */
+/*
+ * Cancels a pending waiter (abort or timeout). An input core has not taken
+ * is withdrawn with ta_input_withdraw(), so it is never delivered; one core
+ * is running, or a verdict still waiting for the turn, is not undone (a
+ * verdict is still reported, without its waiter). Returns true when the
+ * waiter was pending; it is then SETTLING. Never allocates.
+ */
+bool tah_sched_cancel(tah_sched *sched, ta_system *core, uint32_t index);
+
+/* True when a send() waits for the input `token` (ta_pending_input.input). Constant time, no allocation. */
+bool tah_sched_awaited(const tah_sched *sched, uint64_t token);
+
+/*
+ * The replay driver (kernel ADR 0006 section 3) runs an actor itself:
+ * notices for an actor in the replaying set are not turned into records, sends
+ * or notes by the turn. Add an actor before its first replayed event and
+ * remove it at tah_replay_events_done(). TA_ERR_NOMEM: nothing changed.
+ */
+ta_result tah_sched_replaying_add(tah_sched *sched, ta_actor_id actor);
+void tah_sched_replaying_remove(tah_sched *sched, ta_actor_id actor);
+bool tah_sched_replaying(const tah_sched *sched, ta_actor_id actor);
+
+/*
+ * True when the scheduler has nothing to do on its own: no verdict waits
+ * for a turn and no settlement waits for the binding. Core's own pending
+ * work (ta_run_pending()) is the kernel's to add.
+ */
 bool tah_sched_quiet(const tah_sched *sched);
 
 /*
- * One bounded turn: resume runnable actors, deliver to ready actors, then
- * report dead letters (ADR 0007 point 1). The turn's records start empty
- * and stay valid until the turn arena is reset. Never fails: a failure is an
- * actor's, and becomes a record.
+ * One bounded turn: report the verdicts, then run core until it has no more
+ * to do or the turn has finished `budgets.inputs` inputs (ADR 0007 point 1).
+ * The turn's records start where the last turn left them and stay valid until
+ * tah_sched_release_records(). Never fails: a failure is an actor's, and
+ * becomes a record.
  */
 void tah_sched_turn(tah_sched *sched, const tah_turn_params *params);
+
 /* The records of the last turn, in the order they happened, until
  * tah_sched_release_records(); NULL when there are none. */
 const tah_turn_record *tah_sched_records(const tah_sched *sched);
 /*
  * Releases what the turn's records own (a dead letter's data) and forgets
- * the records. The turn calls it first, so a caller that runs turns back to
- * back leaks nothing; the host calls it once it has reported them, and
- * close calls it before core goes, since values outlive nothing.
+ * the records. The host calls it once it has reported them, and close calls
+ * it before core goes, since values outlive nothing. The turn does not call
+ * it: a verdict made between two turns is reported once, by the next turn,
+ * whose records the host has not yet released.
  */
 void tah_sched_release_records(tah_sched *sched);

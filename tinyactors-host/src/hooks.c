@@ -2,56 +2,41 @@
 #include "tinyactors_host/recorder.h"
 #include "system_private.h"
 
+/*
+ * The hooks ask for a turn and little else: the inputs of an actor are core's
+ * (a new actor's bootstrap waits in its started queue, a destroyed or unloaded
+ * actor's inputs are refused when ta_run reaches them, a published actor takes
+ * over its incumbent's, an abandoned macrostep is reported by the next
+ * ta_run), so the kernel keeps no entry to fill or clear.
+ */
+
 ta_result tah_hook_actor_created(tah_system *system, ta_actor_id actor) {
-    ta_result result = tah_sched_add(&system->sched, actor);
-    if (result != TA_OK) {
-        system->inside_core = true;
-        (void)ta_actor_destroy(system->core, actor);
-        tah_system_leave_core(system);
-        return result;
-    }
+    (void)actor;
     tah_system_want_turn(system);
     return TA_OK;
 }
 
 ta_result tah_hook_actor_removed(tah_system *system, ta_actor_id actor) {
     tah_recorder_removed(system, actor);
-    tah_sched_remove(&system->sched, actor, TAH_DEAD_DESTROYED);
-    tah_system_want_turn(system); /* its mail is reported as dead letters */
+    tah_system_want_turn(system); /* its inputs are refused, and reported as dead letters */
     return TA_OK;
 }
 
 ta_result tah_hook_actor_unloaded(tah_system *system, ta_actor_id actor) {
-    tah_sched_remove(&system->sched, actor, TAH_DEAD_UNLOADED);
+    (void)actor;
     tah_system_want_turn(system);
     return TA_OK;
 }
 
 ta_result tah_hook_actor_published(tah_system *system, const ta_actor_publish_params *params) {
-    ta_result result = TA_OK;
-    if (params->incumbent != 0) {
-        result = tah_sched_transfer(&system->sched, &(tah_sched_transfer_params){
-                                                        .from = params->incumbent,
-                                                        .to = params->actor,
-                                                    });
-    }
-    /* A replay's invocations were retired as unavailable (core ADR 0089),
-     * which leaves the actor a macrostep to run. */
-    ta_actor_inspection view;
-    if (result == TA_OK && ta_actor_inspect(system->core, params->actor, &view) == TA_OK &&
-        view.macrostep_in_progress) {
-        result = tah_sched_wake(&system->sched, params->actor);
-    }
-    if (result == TA_OK) {
-        tah_system_want_turn(system);
-    }
-    return result;
+    (void)params;
+    /* A replay's invocations were retired as unavailable (core ADR 0089), which leaves the actor a macrostep to run. */
+    tah_system_want_turn(system);
+    return TA_OK;
 }
 
 ta_result tah_hook_actor_abandoned(tah_system *system, ta_actor_id actor) {
-    /* Core abandoned the macrostep whatever the table knows; an actor the
-     * table does not know has nothing to settle. */
-    (void)tah_sched_abandoned(&system->sched, actor);
-    tah_system_want_turn(system); /* the settlement, and mail it may take now */
+    (void)actor;
+    tah_system_want_turn(system); /* the settlement, and the inputs that were behind it */
     return TA_OK;
 }

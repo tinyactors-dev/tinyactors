@@ -113,7 +113,7 @@ async function turnsYieldToTheEventLoop() {
   const log = [];
   const system = createSystem({
     finished: 'retain',
-    parameters: { resumesPerTurn: 100 },
+    parameters: { messageBudget: 100 },
     done: () => {
       if (log[log.length - 1] !== 'turn') {
         log.push('turn');
@@ -213,7 +213,7 @@ async function inAsAValueFaultsAtRunTime() {
 
 // close() rejects a pending flush with `closed`; views of a closed system throw.
 async function closeSettlesFlush() {
-  const system = createSystem({ parameters: { resumesPerTurn: 1 } });
+  const system = createSystem({ parameters: { messageBudget: 1 } });
   const definition = system.define(idleChart());
   const actors = Array.from({ length: 10 }, () => system.spawn(definition));
   const pending = system.flush();
@@ -253,7 +253,7 @@ async function destroyAndReuse() {
 // not stop the pump, and its error surfaces as an uncaught exception.
 async function optionsAndHookErrors() {
   assertCode(() => createSystem({ parameters: { resumeBudget: -1 } }), 'invalid');
-  assertCode(() => createSystem({ parameters: { resumesPerTurn: 0 } }), 'invalid');
+  assertCode(() => createSystem({ parameters: { messageBudget: 0 } }), 'invalid');
   assertCode(() => createSystem({ finished: 'keep' }), 'invalid');
   assertCode(() => createSystem({ done: 'nope' }), 'invalid');
 
@@ -282,16 +282,22 @@ async function optionsAndHookErrors() {
   system.close();
 }
 
-// Memory stays in the scheduling category and returns to zero at close.
+// The kernel keeps no per-actor table (napi ADR 0041): spawning 5,000 actors
+// puts nothing in the scheduling category, and the sends that follow take
+// waiter records and a table of followed inputs, which stay for reuse.
 async function schedulingMemory() {
   const system = createSystem();
   const definition = system.define(idleChart());
+  const actors = [];
   for (let index = 0; index < 5000; index += 1) {
-    system.spawn(definition);
+    actors.push(system.spawn(definition));
   }
   await system.flush();
+  const before = system.stats().memory.scheduling.bytesInUse;
+  assert.ok(before < 64 * 1024, `no table per slot: ${before} bytes for 5,000 actors`);
+  await Promise.all(actors.slice(0, 1000).map((actor) => actor.send('ping'))); // core's pool bounds a burst
   const { scheduling } = system.stats().memory;
-  assert.ok(scheduling.bytesInUse >= 2 * 4096 * 16, 'two table pages for 5,000 slots');
+  assert.ok(scheduling.bytesInUse > before, 'sends take waiters and follow their inputs');
   system.close();
 }
 

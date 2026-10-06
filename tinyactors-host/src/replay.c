@@ -164,9 +164,9 @@ ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *pa
     if (view.published) {
         return TA_ERR_INVALID;
     }
-    tah_sched_entry *entry = tah_sched_lookup(&system->sched, params->actor);
-    if (entry != NULL) {
-        entry->flags |= TAH_SCHED_REPLAYING; /* the replay resumes it, not the scheduler */
+    /* The replay runs it, not the turn: the turn skips its notices (scheduler.h). */
+    if (tah_sched_replaying_add(&system->sched, params->actor) != TA_OK) {
+        return TA_ERR_NOMEM;
     }
     bool finished = false;
     ta_result result = tah_replay_settle(system, params->actor, &finished);
@@ -235,9 +235,6 @@ ta_result tah_replay_event(tah_system *system, const tah_replay_event_params *pa
 ta_result tah_replay_events_done(tah_system *system, ta_actor_id actor) {
     bool finished = false;
     ta_result result = tah_replay_settle(system, actor, &finished);
-    tah_sched_entry *entry = tah_sched_lookup(&system->sched, actor);
-    if (entry != NULL) {
-        entry->flags &= (uint8_t)~TAH_SCHED_REPLAYING;
-    }
+    tah_sched_replaying_remove(&system->sched, actor);
     return result == TA_OK && finished ? TA_ERR_DONE : result;
 }

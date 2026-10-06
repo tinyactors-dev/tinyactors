@@ -151,7 +151,7 @@ static ta_result ta_run_cover(ta_system *system) {
     return ta_envelopes_refill(&system->envelopes, system->envelopes.macrostep_reserve);
 }
 
-/* ta_run_executing: see run.h. */
+/* ta_run_executing: see tinyactors.h. */
 bool ta_run_executing(const ta_system *system) {
     return system->runner.executing;
 }
@@ -199,6 +199,11 @@ static uint64_t ta_run_token(ta_system *system, uint32_t index) {
     }
     system->runner.tokens = sequence;
     return (sequence << TA_INPUT_INDEX_BITS) | index;
+}
+
+/* ta_input_slot: see tinyactors.h. */
+uint32_t ta_input_slot(uint64_t input) {
+    return (uint32_t)(input & TA_INPUT_INDEX_MASK);
 }
 
 /* ta_run_input_decided: see run.h. */
@@ -471,7 +476,8 @@ static void ta_run_refuse(ta_system *system, uint32_t index, ta_refusal_reason r
                                              .input = envelope->input,
                                              .source = (ta_input_source)envelope->source,
                                              .reason = reason,
-                                             .event = &envelope->event });
+                                             .event = &envelope->event,
+                                             .trace = envelope->trace });
     envelope->state = TA_ENVELOPE_DECIDED;
     ta_run_input_decided(system, envelope);
     ta_ilist_push_back(&system->runner.lent, ta_envelopes_link(&system->envelopes), index);
@@ -782,7 +788,8 @@ static bool ta_run_report_cues(ta_system *system, ta_run_notices *out) {
                                                  .source = (ta_input_source)envelope->source,
                                                  .reason = (ta_refusal_reason)envelope->flags,
                                                  .event = &envelope->event,
-                                                 .address = envelope->payload.address });
+                                                 .address = envelope->payload.address,
+                                                 .trace = envelope->trace });
         ta_ilist_push_back(&runner->lent, link, index);
     }
     return false;

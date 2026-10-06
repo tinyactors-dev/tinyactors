@@ -241,7 +241,7 @@ static const tat_method TAT_HOST_METHODS[] = {
      "\"event\":{\"type\":\"string\",\"required\":true},\"data\":{\"type\":\"json\",\"required\":false}}}"},
     {"hosted.turn", tat_hosted_turn_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"limit\":{\"type\":\"u64\",\"required\":false}}}"},
-    {"hosted.mailboxes", tat_hosted_mailboxes_method,
+    {"hosted.pending", tat_hosted_pending_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"actors\":{\"type\":\"json\",\"required\":false}}}"},
     {"hosted.advance", tat_hosted_advance_method,
      "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:hosted\",\"required\":true},\"time\":{\"type\":\"u64\",\"required\":true}}}"},

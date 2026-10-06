@@ -84,11 +84,12 @@ async function staleIDs() {
   system.close();
 }
 
-// A delivery core refuses faults that actor only; a quarantined actor with an
-// empty mailbox stays out of scheduling when mail arrives; release() brings it
-// back. JavaScript cannot post a malformed event, so the test posts an event
-// name core never issued through the native method.
-async function faultsQuarantineAndRelease() {
+// Core admits a post only when it can take it: an event name it never issued
+// is refused at the call with `invalid`, nothing queues, and the actor is
+// not quarantined (napi ADR 0041). Nothing is quarantined, so release() has
+// nothing to release. JavaScript cannot post a malformed event, so the test
+// goes through the native method.
+async function malformedEventsAreRefused() {
   const faults = [];
   const dead = [];
   const system = createSystem({
@@ -99,26 +100,17 @@ async function faultsQuarantineAndRelease() {
   const bad = system.spawn(definition);
   const good = system.spawn(definition);
   await system.flush();
-  nativeOf(system).post(bad.slot, bad.generation, 0x7fffffff);
+  assertCode(() => nativeOf(system).post(bad.slot, bad.generation, 0x7fffffff), 'invalid');
   good.post('x');
+  bad.post('x'); // the actor takes mail as before
   await system.flush();
-  assert.equal(faults.length, 1);
-  assert.ok(faults[0].actor.equals(bad));
-  assert.equal(faults[0].operation, 'deliver');
-  assert.equal(faults[0].code, 'invalid');
-  assert.deepEqual(dead.map((record) => record.reason), ['refused'], 'the refused message, not the mailbox');
+  assert.equal(faults.length, 0);
+  assert.equal(dead.length, 0, 'a refused call is not a dead letter');
   assert.equal(stateOf(good), 'b', 'the other actor ran');
-  assert.equal(bad.inspect().scheduling, 'quarantined');
-
-  bad.post('x'); // an empty mailbox gets mail: the actor stays out
-  await system.flush();
-  assert.equal(bad.inspect().scheduling, 'quarantined');
-  assert.equal(stateOf(bad), 'a');
-  system.release(bad);
-  await system.flush();
   assert.equal(stateOf(bad), 'b');
   assert.equal(bad.inspect().scheduling, 'idle');
-  assert.equal(faults.length, 1);
+  assert.equal(system.stats().messages.queued, 0);
+  assertCode(() => system.release(bad), 'invalid');
   system.close();
 }
 
@@ -286,7 +278,7 @@ async function refusals() {
   await mailBeforeBootstrap();
   await dataIsReleased();
   await staleIDs();
-  await faultsQuarantineAndRelease();
+  await malformedEventsAreRefused();
   await finishedAndDestroyedTargets();
   await backpressure();
   await namesAreInternedOnce();

@@ -88,11 +88,12 @@ async function rejections() {
   pending.destroy();
   await assert.rejects(destroyed, (error) => error.code === 'not-found' && error.detail.reason === 'destroyed');
   await assertRejects(system.send({ family: 'plain', name: 'nobody' }, 'ping'), 'not-found');
-  // A message core refuses quarantines its actor; its send() rejects with the fault's code.
+  // A message core cannot admit (an event name it does not know) rejects with `invalid` at once and
+  // changes nothing: the actor is not quarantined (napi ADR 0041).
   const bad = system.spawn(definition);
   await system.flush();
-  await assertRejects(nativeOf(system).send(bad.slot, bad.generation, 0x7fffffff), 'invalid', /dead letter \(refused\)/);
-  assert.equal(bad.inspect().scheduling, 'quarantined');
+  await assertRejects(nativeOf(system).send(bad.slot, bad.generation, 0x7fffffff), 'invalid');
+  assert.equal(bad.inspect().scheduling, 'idle');
   system.close();
 }
 
@@ -136,14 +137,14 @@ async function timeout() {
   await system.flush();
   const quick = await actor.send('ping', undefined, { timeout: 5000 });
   assert.equal(quick.status, 'stable');
-  // A quarantined actor never runs its mail: the send times out, and the message is withdrawn.
-  const bad = system.spawn(definition);
-  await system.flush();
-  nativeOf(system).post(bad.slot, bad.generation, 0x7fffffff);
-  await system.flush();
-  assert.equal(bad.inspect().scheduling, 'quarantined');
-  await assertRejects(bad.send('ping', undefined, { timeout: 20 }), 'timeout');
+  // A message still queued when its timeout fires is withdrawn: the timer runs before the next pump turn,
+  // because this tick keeps the thread busy for longer than the timeout.
+  const slow = actor.send('ping', undefined, { timeout: 1 });
+  for (const end = Date.now() + 5; Date.now() < end;);
+  await assertRejects(slow, 'timeout');
   assert.equal(system.stats().messages.queued, 0, 'withdrawn');
+  await system.flush();
+  assert.equal(actor.inspect().data.count, 1, 'the withdrawn message never ran');
   assertThrows(() => actor.send('ping', undefined, { timeout: -1 }), 'invalid');
   assertThrows(() => actor.send('ping', undefined, { until: 'later' }), 'invalid');
   system.close();

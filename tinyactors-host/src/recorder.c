@@ -56,10 +56,6 @@ static void tah_recorder_forget_touched(tah_recorder *recorder) {
 }
 
 void tah_recorder_destroy(tah_recorder *recorder) {
-    if (recorder->offering) {
-        tah_recorded_release(&recorder->offered);
-        recorder->offering = false;
-    }
     tah_recorder_clear(&recorder->open);
     tah_recorder_clear(&recorder->records);
     tah_recorder_forget_touched(recorder);
@@ -176,85 +172,6 @@ static void tah_recorder_touch_address(tah_recorder *recorder, ta_address *addre
     }
 }
 
-/* The core reason token of a report envelope (core ADR 0081). */
-static ta_str tah_recorder_reason(uint8_t kind) {
-    switch (kind) {
-    case TAH_REPORT_QUARANTINED: return (ta_str){ .ptr = "quarantined", .len = 11 };
-    case TAH_REPORT_FAILED: return (ta_str){ .ptr = "failed", .len = 6 };
-    default: return (ta_str){ .ptr = "unavailable", .len = 11 };
-    }
-}
-
-/* An invocation's error report as the event the chart takes: error.communication.invoke.<id>.<reason>. */
-static ta_result tah_recorder_report_event(tah_system *system, const tah_envelope *envelope, ta_event *out) {
-    static const char prefix[] = "error.communication.invoke.";
-    ta_str id = { 0 };
-    if (ta_system_invoke_id_text(system->core, envelope->event.invoke_id, &id) != TA_OK) {
-        return TA_ERR_NOT_FOUND;
-    }
-    ta_str reason = tah_recorder_reason(envelope->report);
-    size_t length = sizeof prefix - 1u + id.len + 1u + reason.len;
-    char *text = tah_alloc(system->recorder.allocator, length, 1);
-    if (text == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    tah_mem_copy(text, prefix, sizeof prefix - 1u);
-    tah_mem_copy(text + sizeof prefix - 1u, id.ptr, id.len);
-    text[sizeof prefix - 1u + id.len] = '.';
-    tah_mem_copy(text + sizeof prefix + id.len, reason.ptr, reason.len);
-    *out = (ta_event){ .type = TA_EVENT_PLATFORM, .invoke_id = envelope->event.invoke_id };
-    ta_result result = tah_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)length }, &out->name);
-    tah_free(system->recorder.allocator, &(ta_allocator_free_params){ .ptr = text, .size = length, .alignment = 1 });
-    if (result == TA_OK) {
-        out->data = envelope->event.data;
-        ta_value_retain(&out->data);
-    }
-    return result;
-}
-
-/* A delivery or report about to be offered to core: kept until core takes it or not. */
-static void tah_recorder_offering(tah_system *system, const tah_sched_note *note) {
-    tah_recorder *recorder = &system->recorder;
-    if (recorder->offering) {
-        tah_recorded_release(&recorder->offered);
-        recorder->offering = false;
-    }
-    uint64_t session = 0;
-    ta_address *address = tah_recorder_address_of(system, note->actor, &session);
-    /* An operator's jump (core ADR 0082) is not an event the chart took by
-     * its own transitions: replaying its event would take another path, so
-     * it is not recorded (kernel ADR 0006 section 8, left open). */
-    if (address == NULL || note->message == NULL || note->message->has_jump) {
-        return;
-    }
-    tah_recorded recorded = { .actor = note->actor, .address = address, .at = ta_system_time(system->core),
-                              .session = session };
-    if (note->kind == TAH_NOTE_REPORTING) {
-        if (tah_recorder_report_event(system, note->message, &recorded.event) != TA_OK) {
-            recorder->lost += 1u;
-            return;
-        }
-    } else {
-        ta_event_retain(&note->message->event, &recorded.event);
-    }
-    ta_address_retain(address);
-    recorder->offered = recorded;
-    recorder->offering = true;
-}
-
-/* Core took the offered event: its macrostep is open. */
-static void tah_recorder_taken(tah_recorder *recorder) {
-    if (!recorder->offering) {
-        return;
-    }
-    recorder->offering = false;
-    if (tah_vec_push(&recorder->open, &recorder->offered) != TA_OK) {
-        recorder->lost += 1u;
-        tah_recorded_release(&recorder->offered);
-    }
-    recorder->offered = (tah_recorded){ 0 };
-}
-
 static int64_t tah_recorder_open_index(const tah_recorder *recorder, ta_actor_id actor) {
     for (uint32_t at = 0; at < recorder->open.count; at += 1u) {
         if (((const tah_recorded *)tah_vec_at(&recorder->open, at))->actor == actor) {
@@ -288,20 +205,22 @@ static void tah_recorder_ended(tah_system *system, ta_actor_id actor) {
 }
 
 /*
- * Core took the event of mail from another session (or of a recycled
- * error): its macrostep is open now, and ends with the ENDED note of the same
- * actor. Mail never passes through the scheduler's offer, so the event is
- * read from the notice, which borrows it until the next ta_run().
+ * Core took an input of a recorded actor: its macrostep is open now, and ends
+ * with the ENDED note of the same actor. The event is read from the notice,
+ * which borrows it until the next ta_run(), and so is the time it was
+ * admitted at (a host input's, an error report's), which is what a replay
+ * delivers it at (kernel ADR 0006 section 3). An operator's transition is
+ * not an input core takes through ta_run and is not recorded: replaying its
+ * event would take another path (kernel ADR 0006 section 8, left open).
  */
-static void tah_recorder_mail_taken(tah_system *system, const tah_sched_note *note) {
+static void tah_recorder_taken(tah_system *system, const tah_sched_note *note) {
     tah_recorder *recorder = &system->recorder;
     uint64_t session = 0;
     ta_address *address = tah_recorder_address_of(system, note->actor, &session);
     if (address == NULL || note->event == NULL) {
         return;
     }
-    tah_recorded recorded = { .actor = note->actor, .address = address, .at = ta_system_time(system->core),
-                              .session = session };
+    tah_recorded recorded = { .actor = note->actor, .address = address, .at = note->time, .session = session };
     ta_event_retain(note->event, &recorded.event);
     ta_address_retain(address);
     if (tah_vec_push(&recorder->open, &recorded) != TA_OK) {
@@ -316,22 +235,8 @@ void tah_recorder_note(tah_system *system, const tah_sched_note *note) {
         return;
     }
     switch (note->kind) {
-    case TAH_NOTE_DELIVERING:
-    case TAH_NOTE_REPORTING:
-        tah_recorder_offering(system, note);
-        return;
-    case TAH_NOTE_DELIVERED:
-    case TAH_NOTE_REPORTED:
-        tah_recorder_taken(recorder);
-        return;
-    case TAH_NOTE_MAIL_TAKEN:
-        tah_recorder_mail_taken(system, note);
-        return;
-    case TAH_NOTE_UNDELIVERED:
-        if (recorder->offering) {
-            tah_recorded_release(&recorder->offered);
-            recorder->offering = false;
-        }
+    case TAH_NOTE_TAKEN:
+        tah_recorder_taken(system, note);
         return;
     case TAH_NOTE_ENDED:
         tah_recorder_ended(system, note->actor);

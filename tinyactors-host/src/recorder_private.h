@@ -28,9 +28,6 @@ struct tah_recorder {
     bool enabled;
     ta_allocator allocator;
     tah_vec families;      /* ta_str, each allocated */
-    /* The delivery or report core is being offered, until it takes it or not. */
-    bool offering;
-    tah_recorded offered;
     /* The events whose macrosteps are open, by actor. */
     tah_vec open;          /* tah_recorded */
     /* This turn's records, and the addresses whose wakes it reports. */
