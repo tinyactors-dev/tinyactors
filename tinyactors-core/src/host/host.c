@@ -15,9 +15,7 @@
 #include <tinyactors/address.h>
 #include <tinyactors/host.h>
 
-#include <stdlib.h>
-#include <string.h>
-
+#include "base/memory.h"
 #include "host/host_internal.h"
 
 /* ---- memory ------------------------------------------------------------------------------ */
@@ -37,8 +35,8 @@ int grow(ta_host *host, void **array, uint32_t *capacity, uint32_t need, size_t 
         c *= 2;
     void *grown = host_alloc(host, element * c);
     if (!grown) return 0;
-    if (*capacity) memcpy(grown, *array, element * *capacity);
-    memset((char *)grown + element * *capacity, 0, element * (c - *capacity));
+    if (*capacity) ta_memcpy(grown, *array, element * *capacity);
+    ta_memset((char *)grown + element * *capacity, 0, element * (c - *capacity));
     host_free(host, *array, element * *capacity);
     *array = grown;
     *capacity = c;
@@ -61,7 +59,7 @@ static int buffer_at(ta_host *host, unsigned char **buffer, size_t *capacity, si
 /* ---- small utilities -------------------------------------------------------------- */
 
 static int string_equal(ta_string_view a, const char *b, uint32_t n) {
-    return a.length == n && (!n || memcmp(a.pointer, b, n) == 0);
+    return a.length == n && (!n || ta_memcmp(a.pointer, b, n) == 0);
 }
 
 static ta_string_view chart_key(const ta_image *image, uint32_t chart) {
@@ -100,8 +98,8 @@ static int moved_reserve(ta_host *host, uint32_t extra) {
         host_free(host, values, sizeof(uint32_t) * c);
         return 0;
     }
-    memset(keys, 0, sizeof(uint64_t) * c);
-    memset(values, 0, sizeof(uint32_t) * c);
+    ta_memset(keys, 0, sizeof(uint64_t) * c);
+    ta_memset(values, 0, sizeof(uint32_t) * c);
     uint64_t *old_keys = host->moved_keys;
     uint32_t *old_values = host->moved_values, old_capacity = host->moved_capacity;
     host->moved_keys = keys;
@@ -240,16 +238,16 @@ ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
     ta_host *host =
         (ta_host *)config->allocator.alloc(config->allocator.context, sizeof *host, 8);
     if (!host) return TA_ERROR_NO_MEMORY;
-    memset(host, 0, sizeof *host);
-    memcpy(&host->config, config,
+    ta_memset(host, 0, sizeof *host);
+    ta_memcpy(&host->config, config,
            config->size < sizeof host->config ? config->size : sizeof host->config);
     host->config.size = sizeof host->config;
     if (!host->config.migrate_quantum) host->config.migrate_quantum = 256;
     /* the base URI every segment shares: tinyactors://<system_id>/ */
     uint32_t bl = 0;
-    memcpy(host->base, TA_ADDRESS_SCHEME, 13);
+    ta_memcpy(host->base, TA_ADDRESS_SCHEME, 13);
     bl = 13;
-    memcpy(host->base + bl, config->system_id.pointer, config->system_id.length);
+    ta_memcpy(host->base + bl, config->system_id.pointer, config->system_id.length);
     bl += config->system_id.length;
     host->base[bl++] = '/';
     host->base_length = bl;
@@ -314,7 +312,7 @@ ta_status ta_host_add_image(ta_host *host, const ta_image *image, uint32_t *segm
         !versions_reserve(host, image_charts(image)))
         return TA_ERROR_NO_MEMORY;
     host_segment *segment_record = &host->segments[index];
-    memset(segment_record, 0, sizeof *segment_record);
+    ta_memset(segment_record, 0, sizeof *segment_record);
     segment_record->image = image;
     segment_record->config = host->config.system;
     segment_record->config.size = sizeof segment_record->config;
@@ -377,7 +375,7 @@ ta_status ta_host_segment_info_get(const ta_host *host, uint32_t segment,
     if (segment >= host->segment_count) return TA_ERROR_INVALID;
     const host_segment *segment_record = &host->segments[segment];
     ta_host_segment_info z;
-    memset(&z, 0, sizeof z);
+    ta_memset(&z, 0, sizeof z);
     z.size = sizeof z;
     z.live = (uint32_t)segment_record->live;
     z.image = segment_record->image;
@@ -387,7 +385,7 @@ ta_status ta_host_segment_info_get(const ta_host *host, uint32_t segment,
             z.current += host->versions[v].segment == segment;
     }
     uint32_t n = out->size && out->size < sizeof z ? out->size : (uint32_t)sizeof z;
-    memcpy(out, &z, n);
+    ta_memcpy(out, &z, n);
     out->size = n;
     return TA_OK;
 }
@@ -517,8 +515,8 @@ static void effects_release(ta_host *host) {
     }
     /* move the unseen ones to the front; their strings stay in the pool (it
      * is reset only when no effect is left) */
-    memmove(host->effects, host->effects + seen, keep * sizeof *host->effects);
-    memmove(host->effect_strings, host->effect_strings + seen, keep * sizeof *host->effect_strings);
+    ta_memmove(host->effects, host->effects + seen, keep * sizeof *host->effects);
+    ta_memmove(host->effect_strings, host->effect_strings + seen, keep * sizeof *host->effect_strings);
     host->effect_count = keep;
     host->effects_ready = 0;
 }
@@ -537,8 +535,8 @@ int effects_reserve(ta_host *host, uint32_t count, size_t bytes) {
             return 0;
         }
         if (host->effect_count) {
-            memcpy(effects, host->effects, sizeof *effects * host->effect_count);
-            memcpy(strings, host->effect_strings, sizeof *strings * host->effect_count);
+            ta_memcpy(effects, host->effects, sizeof *effects * host->effect_count);
+            ta_memcpy(strings, host->effect_strings, sizeof *strings * host->effect_count);
         }
         host_free(host, host->effects, sizeof *effects * host->effect_capacity);
         host_free(host, host->effect_strings, sizeof *strings * host->effect_capacity);
@@ -552,7 +550,7 @@ int effects_reserve(ta_host *host, uint32_t count, size_t bytes) {
             c *= 2;
         char *pool = (char *)host_alloc(host, c);
         if (!pool) return 0;
-        if (host->pool_length) memcpy(pool, host->pool, host->pool_length);
+        if (host->pool_length) ta_memcpy(pool, host->pool, host->pool_length);
         host_free(host, host->pool, host->pool_capacity);
         host->pool = pool;
         host->pool_capacity = c;
@@ -564,7 +562,7 @@ int effects_reserve(ta_host *host, uint32_t count, size_t bytes) {
  * effects_reserve for its bytes first. */
 size_t pool_put(ta_host *host, ta_string_view s) {
     if (!s.length || !effects_reserve(host, 0, s.length)) return (size_t)-1;
-    memcpy(host->pool + host->pool_length, s.pointer, s.length);
+    ta_memcpy(host->pool + host->pool_length, s.pointer, s.length);
     host->pool_length += s.length;
     return host->pool_length - s.length;
 }
@@ -573,7 +571,7 @@ size_t pool_put(ta_host *host, ta_string_view s) {
 ta_host_effect *effect_new(ta_host *host, uint32_t kind, uint32_t segment) {
     if (!effects_reserve(host, 1, 0)) return NULL;
     ta_host_effect *effect = &host->effects[host->effect_count];
-    memset(effect, 0, sizeof *effect);
+    ta_memset(effect, 0, sizeof *effect);
     effect->size = sizeof *effect;
     effect->kind = kind;
     effect->segment = segment;
@@ -701,7 +699,7 @@ static ta_status errors_deliver(ta_host *host) {
         if (status != TA_OK) break;
     }
     host->error_count -= done;
-    memmove(host->errors, host->errors + done, host->error_count * sizeof *host->errors);
+    ta_memmove(host->errors, host->errors + done, host->error_count * sizeof *host->errors);
     return status;
 }
 
@@ -767,8 +765,8 @@ static int job_reserve(ta_host *host, migration_job *job, uint32_t extra) {
         return 0;
     }
     if (job->retry_count) {
-        memcpy(retry, job->retry, sizeof(uint64_t) * job->retry_count);
-        memcpy(woken, job->woken, job->retry_count);
+        ta_memcpy(retry, job->retry, sizeof(uint64_t) * job->retry_count);
+        ta_memcpy(woken, job->woken, job->retry_count);
     }
     host_free(host, job->retry, sizeof(uint64_t) * job->retry_capacity);
     host_free(host, job->woken, job->retry_capacity);
@@ -784,11 +782,11 @@ ta_status ta_host_migrate(ta_host *host, ta_string_view name, uint64_t session, 
               sizeof(migration_job)))
         return TA_ERROR_NO_MEMORY;
     migration_job job;
-    memset(&job, 0, sizeof job);
+    ta_memset(&job, 0, sizeof job);
     if (name.length) {
         job.name = (char *)host_alloc(host, name.length);
         if (!job.name) return TA_ERROR_NO_MEMORY;
-        memcpy(job.name, name.pointer, name.length);
+        ta_memcpy(job.name, name.pointer, name.length);
         job.name_length = name.length;
     }
     if (session) {
@@ -1070,7 +1068,7 @@ static int retire(ta_host *host) {
 
 ta_run ta_host_run(ta_host *host, uint32_t budget) {
     ta_run out;
-    memset(&out, 0, sizeof out);
+    ta_memset(&out, 0, sizeof out);
     effects_release(host); /* the previous batch, if not acknowledged */
     uint32_t left = budget;
     int full = 0, fault = 0, exhausted = 0;
@@ -1354,7 +1352,7 @@ ta_status ta_host_adopt(ta_host *host, uint32_t segment, const void *blob, size_
 
 void ta_host_stats_get(const ta_host *host, ta_host_stats *o) {
     ta_host_stats z;
-    memset(&z, 0, sizeof z);
+    ta_memset(&z, 0, sizeof z);
     z.size = sizeof z;
     for (uint32_t i = 0; i < host->segment_count; i++) {
         const host_segment *segment = segment_of(host, i);
@@ -1375,7 +1373,7 @@ void ta_host_stats_get(const ta_host *host, ta_host_stats *o) {
     z.migrated = host->migrated;
     z.retired = host->retired;
     uint32_t n = o->size && o->size < sizeof z ? o->size : (uint32_t)sizeof z;
-    memcpy(o, &z, n);
+    ta_memcpy(o, &z, n);
     o->size = n;
 }
 
@@ -1428,7 +1426,7 @@ uint64_t ta_host_actor_by_name(const ta_host *host, ta_string_view name) {
         const host_segment *segment = segment_of(host, k);
         uint32_t a = segment ? ta_system_actor_by_name(segment->system, name) : 0;
         ta_actor_info actor_info;
-        memset(&actor_info, 0, sizeof actor_info);
+        ta_memset(&actor_info, 0, sizeof actor_info);
         actor_info.size = sizeof actor_info;
         if (a && ta_actor_info_get(segment->system, a, &actor_info) == TA_OK)
             return actor_info.serial;
@@ -1487,9 +1485,9 @@ ta_status ta_host_snapshot(ta_host *host, void *buffer, size_t capacity, size_t 
     if (!buffer) return TA_OK;
     if (capacity < need) return TA_ERROR_NO_MEMORY;
     unsigned char *p = (unsigned char *)buffer;
-    memset(p, 0, need);
+    ta_memset(p, 0, need);
     snapshot_header hd;
-    memset(&hd, 0, sizeof hd);
+    ta_memset(&hd, 0, sizeof hd);
     hd.magic = SNAPSHOT_MAGIC;
     hd.version = SNAPSHOT_VERSION;
     hd.segment_count = host->segment_count;
@@ -1503,12 +1501,12 @@ ta_status ta_host_snapshot(ta_host *host, void *buffer, size_t capacity, size_t 
     hd.retired = host->retired;
     hd.message_sequence = host->message_sequence;
     hd.router_length = rlen;
-    memcpy(p, &hd, sizeof hd);
+    ta_memcpy(p, &hd, sizeof hd);
     p += sizeof hd;
     for (uint32_t i = 0; i < host->segment_count; i++) {
         const host_segment *segment = &host->segments[i];
         snapshot_segment ss;
-        memset(&ss, 0, sizeof ss);
+        ta_memset(&ss, 0, sizeof ss);
         ss.live = (uint32_t)segment->live;
         if (segment->live) {
             ta_image_info image_info;
@@ -1521,7 +1519,7 @@ ta_status ta_host_snapshot(ta_host *host, void *buffer, size_t capacity, size_t 
             ss.config = segment->config;
             ss.config.io_processors = NULL;
         }
-        memcpy(p, &ss, sizeof ss);
+        ta_memcpy(p, &ss, sizeof ss);
         p += sizeof ss;
         if (segment->live) {
             size_t rl = 0;
@@ -1534,7 +1532,7 @@ ta_status ta_host_snapshot(ta_host *host, void *buffer, size_t capacity, size_t 
     for (uint32_t i = 0; i < host->moved_capacity; i++)
         if (host->moved_keys[i] && host->moved_values[i] != TA_NIL) {
             snapshot_moved m = {host->moved_keys[i], host->moved_values[i], 0};
-            memcpy(p, &m, sizeof m);
+            ta_memcpy(p, &m, sizeof m);
             p += sizeof m;
         }
     ta_router_snapshot(host, p, rlen);
@@ -1552,7 +1550,7 @@ static const snapshot_header *snap_check(const void *snap, size_t length) {
     for (uint32_t i = 0; i < hd->segment_count; i++) {
         if (length - offset < sizeof(snapshot_segment)) return NULL;
         snapshot_segment ss;
-        memcpy(&ss, (const unsigned char *)snap + offset, sizeof ss);
+        ta_memcpy(&ss, (const unsigned char *)snap + offset, sizeof ss);
         offset += sizeof ss;
         if (ss.live) {
             if (ss.region_length > length - offset) return NULL;
@@ -1573,7 +1571,7 @@ uint32_t ta_host_snapshot_segments(const void *snap, size_t length, uint64_t *ha
     size_t offset = sizeof *hd;
     for (uint32_t i = 0; i < hd->segment_count; i++) {
         snapshot_segment ss;
-        memcpy(&ss, (const unsigned char *)snap + offset, sizeof ss);
+        ta_memcpy(&ss, (const unsigned char *)snap + offset, sizeof ss);
         if (hashes && i < capacity) hashes[i] = ss.live ? ss.hash : 0;
         offset += sizeof ss + (ss.live ? pad8((size_t)ss.region_length) : 0);
     }
@@ -1600,11 +1598,11 @@ ta_status ta_host_restore(const ta_host_config *config, const ta_image *const *i
     const unsigned char *p = (const unsigned char *)snap + sizeof *hd;
     for (uint32_t i = 0; i < hd->segment_count; i++) {
         snapshot_segment sv;
-        memcpy(&sv, p, sizeof sv);
+        ta_memcpy(&sv, p, sizeof sv);
         const snapshot_segment *ss = &sv;
         p += sizeof sv;
         host_segment *segment = &host->segments[i];
-        memset(segment, 0, sizeof *segment);
+        ta_memset(segment, 0, sizeof *segment);
         host->segment_count = i + 1;
         if (!ss->live) continue;
         ta_image_info image_info;
@@ -1636,7 +1634,7 @@ ta_status ta_host_restore(const ta_host_config *config, const ta_image *const *i
         return restore_failed(host, TA_ERROR_NO_MEMORY);
     for (uint32_t i = 0; i < hd->moved_count; i++) {
         snapshot_moved m;
-        memcpy(&m, p, sizeof m);
+        ta_memcpy(&m, p, sizeof m);
         p += sizeof m;
         moved_put(host, m.session, m.segment);
     }

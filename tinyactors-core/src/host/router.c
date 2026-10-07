@@ -13,9 +13,12 @@
  *
  * Memory through the host's allocator (host_internal.h): a call it refuses
  * returns TA_ERROR_NO_MEMORY with nothing changed, or stops where it was
- * (queues keep what they did not flush or fail). No I/O, no callbacks. */
+ * (queues keep what they did not flush or fail). No C library, no I/O, no
+ * callbacks. */
 #include "host/host_internal.h"
-#include <stdio.h>
+
+#include "base/format.h"
+#include "base/memory.h"
 
 #define DEDUPLICATION_WINDOW 4096u /* message ids remembered per host (FIFO) */
 
@@ -85,20 +88,20 @@ static uint32_t peer_handle(uint32_t slot, uint32_t generation) {
 static struct ta_router *router_of(ta_host *host) {
     if (!host->router) {
         host->router = (struct ta_router *)host_alloc(host, sizeof *host->router);
-        if (host->router) memset(host->router, 0, sizeof *host->router);
+        if (host->router) ta_memset(host->router, 0, sizeof *host->router);
     }
     return host->router;
 }
 
 static int seq(ta_string_view a, const char *b, uint32_t n) {
-    return a.length == n && (!n || memcmp(a.pointer, b, n) == 0);
+    return a.length == n && (!n || ta_memcmp(a.pointer, b, n) == 0);
 }
 
 /* A copy of `s` (s.length bytes, no terminator; NULL when empty or refused). */
 static char *string_copy(ta_host *host, ta_string_view s) {
     if (!s.length) return NULL;
     char *d = (char *)host_alloc(host, s.length);
-    if (d) memcpy(d, s.pointer, s.length);
+    if (d) ta_memcpy(d, s.pointer, s.length);
     return d;
 }
 
@@ -200,7 +203,7 @@ static int descriptor_match(const char *descs, uint32_t dl, ta_string_view name)
         const char *d = descs + s;
         if (n >= 2 && d[n - 2] == '.' && d[n - 1] == '*') n -= 2; /* "a.*" = "a" */
         if (n == 1 && d[0] == '*') return 1;
-        if (name.length >= n && !memcmp(name.pointer, d, n) &&
+        if (name.length >= n && !ta_memcmp(name.pointer, d, n) &&
             (name.length == n || name.pointer[n] == '.'))
             return 1;
     }
@@ -220,7 +223,7 @@ static int allowed(ta_host *host, uint32_t handle, const peer *p, const ta_addre
         if (x->peer && x->peer != handle) continue;
         int any = x->name_length == 1 && x->name[0] == '*';
         int hit = any || (to->kind == TA_ADDRESS_NAME && x->name_length == dl &&
-                          !memcmp(x->name, dec, dl));
+                          !ta_memcmp(x->name, dec, dl));
         if (hit && descriptor_match(x->events, x->events_length, name)) return 1;
     }
     return 0;
@@ -310,12 +313,12 @@ static void q_release(ta_host *host, queued_envelope *q) {
         host->datamodels[q->datamodel].vtable->release(host->datamodels[q->datamodel].datamodel,
                                                        q->data);
     host_free(host, q->buffer, q->buffer_size);
-    memset(q, 0, sizeof *q);
+    ta_memset(q, 0, sizeof *q);
 }
 
 static ta_envelope envelope_of(const queued_envelope *q) {
     ta_envelope envelope;
-    memset(&envelope, 0, sizeof envelope);
+    ta_memset(&envelope, 0, sizeof envelope);
     envelope.size = sizeof envelope;
     const char *p = q->buffer;
     ta_string_view *f[5] = {&envelope.target, &envelope.name, &envelope.sendid, &envelope.origin,
@@ -345,7 +348,7 @@ static ta_status enqueue(ta_host *host, peer *p, const ta_envelope *envelope) {
         uint32_t nc = p->queue_capacity ? p->queue_capacity * 2 : 16;
         queued_envelope *nq = (queued_envelope *)host_alloc(host, sizeof *nq * nc);
         if (!nq) return TA_ERROR_NO_MEMORY;
-        memset(nq, 0, sizeof *nq * nc);
+        ta_memset(nq, 0, sizeof *nq * nc);
         for (uint32_t i = 0; i < p->queue_count; i++)
             nq[i] = p->queue[(p->queue_head + i) % p->queue_capacity];
         host_free(host, p->queue, sizeof *nq * p->queue_capacity);
@@ -367,7 +370,7 @@ static ta_status enqueue(ta_host *host, peer *p, const ta_envelope *envelope) {
     }
     char *w = q->buffer;
     for (int k = 0; k < 5; k++) {
-        if (v[k].length) memcpy(w, v[k].pointer, v[k].length);
+        if (v[k].length) ta_memcpy(w, v[k].pointer, v[k].length);
         q->length[k] = v[k].length;
         w += v[k].length;
     }
@@ -464,22 +467,18 @@ static ta_status forward(ta_host *host, const ta_address *to, const ta_envelope 
     return TA_OK;
 }
 
-/* a message id: the origin and a host-wide counter (unique per origin); buffer has room for
- * TA_ADDRESS_SESSION_MAX + 24 bytes */
+#define MESSAGE_ID_MAX (TA_ADDRESS_SESSION_MAX + 1 + TA_FORMAT_U64_MAX)
+
+/* a message id: the origin and a host-wide counter (unique per origin);
+ * buffer has room for MESSAGE_ID_MAX bytes (an origin longer than a session
+ * address is cut there: the counter alone keeps it unique) */
 static ta_string_view new_msgid(ta_host *host, ta_string_view origin, char *buffer) {
-    uint32_t ml = origin.length < TA_ADDRESS_SESSION_MAX ? origin.length : TA_ADDRESS_SESSION_MAX;
-    if (ml) memcpy(buffer, origin.pointer, ml);
-    buffer[ml++] = '/';
-    char d[24];
-    int nd = 0;
-    uint64_t v = ++host->message_sequence;
-    do {
-        d[nd++] = (char)('0' + v % 10);
-        v /= 10;
-    } while (v);
-    while (nd)
-        buffer[ml++] = d[--nd];
-    return (ta_string_view){buffer, ml};
+    ta_text text = ta_text_init(buffer, MESSAGE_ID_MAX);
+    if (origin.length > TA_ADDRESS_SESSION_MAX) origin.length = TA_ADDRESS_SESSION_MAX;
+    ta_text_append(&text, origin);
+    ta_text_append(&text, (ta_string_view){"/", 1});
+    ta_text_append_u64(&text, ++host->message_sequence);
+    return (ta_string_view){buffer, text.length};
 }
 
 ta_status ta_router_outbound(ta_host *host, uint32_t si, const ta_effect *effect) {
@@ -516,7 +515,7 @@ static ta_status local_deliver(ta_host *host, uint64_t session, const ta_envelop
     *reason = TA_ROUTE_ERROR_UNKNOWN_TARGET;
     if (!session || ta_host_locate(host, session, &si, &actor) != TA_OK) return TA_OK;
     ta_event_in event;
-    memset(&event, 0, sizeof event);
+    ta_memset(&event, 0, sizeof event);
     event.size = sizeof event;
     event.name = envelope->name;
     event.sendid = envelope->sendid;
@@ -534,15 +533,18 @@ static ta_status local_deliver(ta_host *host, uint64_t session, const ta_envelop
 
 /* ---- public API ------------------------------------------------------------------------ */
 
+#define VIEW(literal) {literal, sizeof literal - 1}
+
 ta_string_view ta_host_route_reason(uint32_t reason) {
-    static const char *const names[] = {"ok",      "unknown-target", "unreachable", "denied",
-                                        "expired", "hops",           "malformed"};
-    const char *s = reason < sizeof names / sizeof names[0] ? names[reason] : "unreachable";
-    return (ta_string_view){s, (uint32_t)strlen(s)};
+    static const ta_string_view names[] = {VIEW("ok"),      VIEW("unknown-target"),
+                                           VIEW("unreachable"), VIEW("denied"),
+                                           VIEW("expired"), VIEW("hops"),
+                                           VIEW("malformed")};
+    return reason < sizeof names / sizeof names[0] ? names[reason] : names[TA_ROUTE_ERROR_UNREACHABLE];
 }
 
 void ta_host_error_event(ta_string_view sendid, ta_event_in *event) {
-    memset(event, 0, sizeof *event);
+    ta_memset(event, 0, sizeof *event);
     event->size = sizeof *event;
     event->flags = TA_EVENT_IN_ERROR_COMMUNICATION;
     event->name = (ta_string_view){"error.communication", 19};
@@ -551,7 +553,7 @@ void ta_host_error_event(ta_string_view sendid, ta_event_in *event) {
 
 ta_status ta_host_error_route(ta_host *host, ta_string_view origin, ta_route_request *request) {
     ta_envelope envelope;
-    memset(&envelope, 0, sizeof envelope);
+    ta_memset(&envelope, 0, sizeof envelope);
     envelope.size = sizeof envelope;
     envelope.target = origin;
     envelope.name = (ta_string_view){"error.communication", 19};
@@ -568,7 +570,7 @@ ta_status ta_host_route_begin(ta_host *host, uint32_t from, const ta_envelope *e
     if (!host || !envelope || envelope->size < sizeof *envelope || !request ||
         request->size < sizeof *request)
         return TA_ERROR_INVALID;
-    memset(request, 0, sizeof *request);
+    ta_memset(request, 0, sizeof *request);
     request->size = sizeof *request;
     request->action = TA_ROUTE_REFUSED;
     request->flags = flags;
@@ -645,34 +647,44 @@ ta_status ta_host_route_step(ta_route_request *request, uint64_t result) {
 ta_status ta_host_message_init(ta_host *host, const ta_effect *effect, uint64_t revision,
                                uint32_t index, ta_host_message *message) {
     if (!host || !effect || !message || message->size < sizeof *message) return TA_ERROR_INVALID;
-    memset(message, 0, sizeof *message);
+    ta_memset(message, 0, sizeof *message);
     message->size = sizeof *message;
     ta_envelope *envelope = &message->envelope;
     envelope->size = sizeof *envelope;
+    /* storage: origin | msgid (origin "/" token) | key (session ":" token) | "auto." token */
     char *p = message->storage;
     uint32_t n =
         ta_address_format(host->config.system_id, effect->session, p, TA_ADDRESS_SESSION_MAX);
     if (!n) return TA_ERROR_INVALID;
     envelope->origin = (ta_string_view){p, n};
-    p += n;
-    char token[48];
-    int length =
-        revision
-            ? snprintf(token, sizeof token, "%llu.%u", (unsigned long long)revision, index)
-            : snprintf(token, sizeof token, "%llu", (unsigned long long)++host->message_sequence);
-    n = (uint32_t)snprintf(p, 384, "%.*s/%s", (int)envelope->origin.length,
-                           envelope->origin.pointer, token);
-    envelope->msgid = (ta_string_view){p, n};
-    p += n + 1;
-    n = (uint32_t)snprintf(p, 80, "%llu:%s", (unsigned long long)effect->session, token);
-    message->key = (ta_string_view){p, n};
-    p += n + 1;
+    char token_bytes[2 * TA_FORMAT_U64_MAX + 1];
+    ta_text token = ta_text_init(token_bytes, sizeof token_bytes);
+    if (revision) {
+        ta_text_append_u64(&token, revision);
+        ta_text_append(&token, (ta_string_view){".", 1});
+        ta_text_append_u64(&token, index);
+    } else {
+        ta_text_append_u64(&token, ++host->message_sequence);
+    }
+    ta_string_view token_view = {token_bytes, token.length};
+    ta_text text = ta_text_init(p + n, (uint32_t)sizeof message->storage - n);
+    ta_text_append(&text, envelope->origin);
+    ta_text_append(&text, (ta_string_view){"/", 1});
+    ta_text_append(&text, token_view);
+    envelope->msgid = (ta_string_view){p + n, text.length};
+    uint32_t start = text.length;
+    ta_text_append_u64(&text, effect->session);
+    ta_text_append(&text, (ta_string_view){":", 1});
+    ta_text_append(&text, token_view);
+    message->key = (ta_string_view){p + n + start, text.length - start};
     message->sendid = effect->sendid;
     if (!message->sendid.length) {
-        memcpy(p, "auto.", 5);
-        memcpy(p + 5, token, (size_t)length);
-        message->sendid = (ta_string_view){p, (uint32_t)length + 5};
+        start = text.length;
+        ta_text_append(&text, (ta_string_view){"auto.", 5});
+        ta_text_append(&text, token_view);
+        message->sendid = (ta_string_view){p + n + start, text.length - start};
     }
+    if (token.overflow || text.overflow) return TA_ERROR_INVALID; /* never a cut identity */
     envelope->target = effect->target;
     envelope->name = effect->event;
     envelope->sendid = effect->sendid;
@@ -692,7 +704,7 @@ static size_t json_string(char *out, ta_string_view s) {
         unsigned char c = (unsigned char)s.pointer[i];
         if (c < 32) {
             if (out) {
-                memcpy(out + n, "\\u00", 4);
+                ta_memcpy(out + n, "\\u00", 4);
                 out[n + 4] = hex[c >> 4];
                 out[n + 5] = hex[c & 15];
             }
@@ -712,7 +724,9 @@ static size_t json_string(char *out, ta_string_view s) {
 
 size_t ta_host_envelope_json(const ta_envelope *envelope, ta_string_view data, char *buffer,
                              size_t capacity) {
-    const char *keys[] = {"target", "name", "origin", "origintype", "sendid", "msgid", "dedup"};
+    static const ta_string_view keys[] = {VIEW("target"), VIEW("name"),   VIEW("origin"),
+                                          VIEW("origintype"), VIEW("sendid"), VIEW("msgid"),
+                                          VIEW("dedup")};
     ta_string_view values[] = {envelope->target,           envelope->name,   envelope->origin,
                                envelope->origintype,       envelope->sendid, envelope->msgid,
                                envelope->deduplication_key};
@@ -727,26 +741,28 @@ size_t ta_host_envelope_json(const ta_envelope *envelope, ta_string_view data, c
                 if (out) out[n] = ',';
                 n++;
             }
-            ta_string_view key = {keys[i], (uint32_t)strlen(keys[i])};
-            n += json_string(out ? out + n : NULL, key);
+            n += json_string(out ? out + n : NULL, keys[i]);
             if (out) out[n] = ':';
             n++;
             n += json_string(out ? out + n : NULL, values[i]);
         }
         if (data.length) {
             if (out) {
-                memcpy(out + n, ",\"data\":", 8);
-                memcpy(out + n + 8, data.pointer, data.length);
+                ta_memcpy(out + n, ",\"data\":", 8);
+                ta_memcpy(out + n + 8, data.pointer, data.length);
             }
             n += 8 + data.length;
         }
-        char tail[40];
-        int tl = snprintf(tail, sizeof tail, ",\"hops\":%u}", envelope->hops);
+        char tail_bytes[8 + TA_FORMAT_U64_MAX + 1]; /* ,"hops":<n>} */
+        ta_text tail = ta_text_init(tail_bytes, sizeof tail_bytes);
+        ta_text_append(&tail, (ta_string_view){",\"hops\":", 8});
+        ta_text_append_u64(&tail, envelope->hops);
+        ta_text_append(&tail, (ta_string_view){"}", 1});
         if (out) {
-            memcpy(out + n, tail, (size_t)tl);
-            out[n + (size_t)tl] = 0;
+            ta_memcpy(out + n, tail_bytes, tail.length);
+            out[n + tail.length] = 0;
         }
-        need = n + (size_t)tl;
+        need = n + tail.length;
         if (!buffer || capacity <= need) break;
     }
     return need;
@@ -767,7 +783,7 @@ static void reach_free(ta_host *host, peer *p) {
 /* The announced systems, copied into `out` (reach fields only); nothing
  * kept if refused. */
 static ta_status reach_build(ta_host *host, const ta_string_view *reach, uint32_t n, peer *out) {
-    memset(out, 0, sizeof *out);
+    ta_memset(out, 0, sizeof *out);
     for (uint32_t k = 0; k < n; k++)
         if (!ta_address_system_valid(reach[k])) return TA_ERROR_INVALID;
     if (!n) return TA_OK;
@@ -846,13 +862,13 @@ ta_status ta_host_peer_add(ta_host *host, const ta_peer_config *config, uint32_t
     if (slot == router->peer_count) router->peer_count++; /* (room grown above) */
     peer *p = &router->peers[slot];
     uint32_t generation = p->generation; /* dead slots keep their bumped generation */
-    memset(p, 0, sizeof *p);
+    ta_memset(p, 0, sizeof *p);
     p->generation = generation;
     p->live = 1;
     p->up = 1;
     p->state = TA_PEER_OPEN;
     p->flags = config->flags;
-    memcpy(p->id, config->id.pointer, config->id.length);
+    ta_memcpy(p->id, config->id.pointer, config->id.length);
     p->id_length = config->id.length;
     p->max_queue = config->max_queue ? config->max_queue : 1000;
     p->ttl = config->queue_ttl;
@@ -896,7 +912,7 @@ ta_status ta_host_peer_remove(ta_host *host, uint32_t handle) {
         } else {
             i++;
         }
-    memset(p, 0, sizeof *p);
+    ta_memset(p, 0, sizeof *p);
     p->generation = generation + 1; /* a new peer into this slot gets a different handle */
     return TA_OK;
 }
@@ -1008,7 +1024,7 @@ ta_status ta_host_deliver(ta_host *host, uint32_t from, const ta_envelope *envel
     } else if (request.action == TA_ROUTE_PEER) {
         ta_envelope forwarded = *envelope;
         forwarded.hops = request.hops;
-        char mid[TA_ADDRESS_SESSION_MAX + 24];
+        char mid[MESSAGE_ID_MAX];
         if (!forwarded.msgid.length)
             forwarded.msgid = new_msgid(host, envelope->origin, mid); /* from host code */
         ta_address to;
@@ -1054,7 +1070,7 @@ ta_status ta_host_peer_status(const ta_host *host, uint32_t handle, ta_peer_stat
     peer *p = peer_of((ta_host *)host, handle);
     if (!p) return TA_ERROR_STALE;
     ta_peer_status z;
-    memset(&z, 0, sizeof z);
+    ta_memset(&z, 0, sizeof z);
     z.state = p->state;
     z.queued = p->queue_count;
     z.round_trip_time = p->round_trip_time;
@@ -1066,7 +1082,7 @@ ta_status ta_host_peer_status(const ta_host *host, uint32_t handle, ta_peer_stat
     z.id = (ta_string_view){p->id, p->id_length};
     size_t n = out->size && out->size < sizeof z ? out->size : sizeof z;
     z.size = (uint32_t)n;
-    memcpy(out, &z, n);
+    ta_memcpy(out, &z, n);
     return TA_OK;
 }
 
@@ -1100,9 +1116,9 @@ size_t ta_router_snapshot(const ta_host *host, unsigned char *out, size_t capaci
     uint32_t n = router ? router->seen_count : 0;
     size_t need = 4 + (size_t)n * 8;
     if (out && capacity >= need) {
-        memcpy(out, &n, 4);
+        ta_memcpy(out, &n, 4);
         for (uint32_t i = 0; i < n; i++)
-            memcpy(out + 4 + (size_t)i * 8,
+            ta_memcpy(out + 4 + (size_t)i * 8,
                    &router->seen[(router->seen_head + i) % DEDUPLICATION_WINDOW], 8);
     }
     return need;
@@ -1111,13 +1127,13 @@ size_t ta_router_snapshot(const ta_host *host, unsigned char *out, size_t capaci
 ta_status ta_router_restore(ta_host *host, const unsigned char *p, size_t length) {
     uint32_t n;
     if (length < 4) return TA_ERROR_INVALID;
-    memcpy(&n, p, 4);
+    ta_memcpy(&n, p, 4);
     if (n > DEDUPLICATION_WINDOW || length < 4 + (size_t)n * 8) return TA_ERROR_INVALID;
     if (!n) return TA_OK;
     struct ta_router *router = router_of(host);
     if (!router) return TA_ERROR_NO_MEMORY;
     for (uint32_t i = 0; i < n; i++)
-        memcpy(&router->seen[i], p + 4 + (size_t)i * 8, 8);
+        ta_memcpy(&router->seen[i], p + 4 + (size_t)i * 8, 8);
     router->seen_head = 0;
     router->seen_count = n;
     return TA_OK;

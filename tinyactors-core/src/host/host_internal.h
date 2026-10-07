@@ -11,9 +11,6 @@
 #include <tinyactors/address.h>
 #include <tinyactors/host.h>
 
-#include <stdlib.h>
-#include <string.h>
-
 #define SERIALS_SHIFT   32
 #define EFFECTS_PER_RUN 4096 /* effects per run before TA_RUN_EFFECTS_FULL */
 
