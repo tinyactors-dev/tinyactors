@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test tinyactors-core: every test program under AddressSanitizer and UBSan, the bindings, conformance and the W3C IRP suite on each, the examples, and the freestanding and wasm builds; --full adds every torture scenario and the cross builds"
-#USAGE flag "--full" help="Also run every torture scenario and cross-compile for each release target"
+#USAGE flag "--full" help="Also run every torture scenario, the test programs' exhaustive modes, and cross-compile for each release target"
 #MISE sources=["include/**/*", "src/**/*", "tests/**/*", "third_party/**/*", "bindings/**/*.{c,h,js,mjs,cjs,ts,json}", "tools/**/*", "examples/**/*", "web/**/*", "sgconfig.yml", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml"]
 #MISE outputs={auto=true}
 #MISE depends=["build"]
@@ -13,7 +13,10 @@
 require_relative '../../core'
 require 'open3'
 
-runs = Core::PROGRAMS.map { |program| [program.name, [Core.program_path('dev', program.name), *program.arguments]] }
+full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
+runs = Core::PROGRAMS.map do |program|
+  [program.name, [Core.program_path('dev', program.name), *program.arguments, *(full && program.full ? ['--full'] : [])]]
+end
 # A short self-checking run of the torture chamber (its scenario's
 # expectations); `mise run torture:test` runs every scenario.
 runs << ['torture', [Core.program_path('dev', 'torture-bench'), Core::ROOT.join('tools/torture/scenarios/throughput'),
@@ -42,5 +45,5 @@ puts "tinyactors-core: #{runs.size} test programs pass"
 # tests the release's two wasm modules.
 tasks = [%w[lint], %w[check:freestanding], %w[api --check], %w[wasm:test], %w[w3c], %w[node:test], %w[web:test], %w[conformance:js],
          %w[w3c:js], %w[examples:test], %w[check:wasm]]
-tasks += [%w[torture:test], %w[check:cross]] if ENV['usage_full'] == 'true' || ARGV.include?('--full')
+tasks += [%w[torture:test], %w[check:cross]] if full
 tasks.each { |task| Core.run('mise', 'run', *task) }

@@ -1075,7 +1075,10 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     uint32_t detail = TA_POOL_NONE;
     /* what an earlier run or call could not finish for lack of memory */
     if (host->error_count && errors_deliver(host) != TA_OK) exhausted = 1;
-    if (host->expiry_behind) ta_router_time(host);
+    if (host->expiry_behind) {
+        ta_router_time(host);
+        if (host->expiry_behind) exhausted = 1;
+    }
     for (int round = 0; round < 64 && !full && !exhausted; round++) {
         int ran = 0;
         /* fair shares: a runaway segment must not starve the others */

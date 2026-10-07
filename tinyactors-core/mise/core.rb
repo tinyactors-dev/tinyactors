@@ -142,10 +142,14 @@ module Core
 
   # A test program: its sources, the layers it links, and its defines. Each
   # runs from its own directory under the build, so programs that write files
-  # can run side by side (AGENTS.md, "Tests run in parallel").
-  Program = Struct.new(:name, :sources, :uses, :defines, :arguments, :cxx, keyword_init: true)
+  # can run side by side (AGENTS.md, "Tests run in parallel"). A `full` one
+  # has an exhaustive mode, which `mise run test --full` asks for with
+  # `--full` (AGENTS.md, "Where a new test goes").
+  Program = Struct.new(:name, :sources, :uses, :defines, :arguments, :cxx, :full, keyword_init: true)
 
-  def self.unit(name, *uses, defines: {}) = Program.new(name: name, sources: ["tests/unit/#{name}.c"], uses: uses, defines: defines)
+  def self.unit(name, *uses, defines: {}, full: false)
+    Program.new(name: name, sources: ["tests/unit/#{name}.c"], uses: uses, defines: defines, full: full)
+  end
 
   ECMASCRIPT = %w[datamodel_ecmascript quickjs].freeze
   PROGRAMS = [
@@ -167,6 +171,9 @@ module Core
     unit('test_durable', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_router', 'host', 'runtime', 'compile', *ECMASCRIPT),
+    # The host's memory: accounting, a fixed arena, and refusals (--full: each
+    # allocation of the workload refused in turn).
+    unit('test_host_memory', 'host', 'compile', *ECMASCRIPT, full: true),
     unit('test_address', 'base', 'quickjs', defines: { 'TA_VECTORS' => ROOT.join('tests/conformance/addresses.json') }),
     unit('test_frame', 'base'),
     # The torture chamber's event loop and PostgreSQL wire client.
