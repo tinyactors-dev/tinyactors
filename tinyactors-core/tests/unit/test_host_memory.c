@@ -737,11 +737,57 @@ static void test_published_effects_stay_valid(void) {
     CHECK(m.live_blocks == 0 && m.bad_frees == 0);
 }
 
+/* The string pool is reclaimed even when an effect is always left over at
+ * the ack (one made after ta_host_effects): what the host holds stays
+ * bounded by what is pending, not by everything ever produced. */
+static void test_pool_is_reclaimed_with_effects_pending(void) {
+    test_memory m;
+    memset(&m, 0, sizeof m);
+    ta_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){"h", 1};
+    config.allocator = memory_allocator(&m);
+    ta_host *host = NULL;
+    CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
+    ta_peer_config peer_config;
+    memset(&peer_config, 0, sizeof peer_config);
+    peer_config.size = sizeof peer_config;
+    peer_config.flags = TA_PEER_TRUSTED;
+    peer_config.id = (ta_string_view){"far", 3};
+    uint32_t peer = 0;
+    CHECK_EQUAL(ta_host_peer_add(host, &peer_config, &peer), TA_OK);
+    refused_delivery(host, peer, 0);
+    uint64_t settled = 0;
+    for (int i = 1; i <= 4000; i++) {
+        const ta_host_effect *effects;
+        CHECK_EQUAL(ta_host_effects(host, &effects), 1);
+        refused_delivery(host, peer, i); /* made while the batch is borrowed: kept */
+        ta_host_effects_ack(host);
+        if (i == 100) settled = m.live_bytes;
+    }
+    const ta_host_effect *last;
+    CHECK_EQUAL(ta_host_effects(host, &last), 1); /* the one made last, intact */
+    CHECK(last[0].sendid.length == 9 && memcmp(last[0].sendid.pointer, "send-4000", 9) == 0);
+    char msgid[96];
+    snprintf(msgid, sizeof msgid, "message-%04d-padding-so-the-string-pool-grows-quickly", 4000);
+    CHECK(last[0].msgid.length == strlen(msgid) &&
+          memcmp(last[0].msgid.pointer, msgid, last[0].msgid.length) == 0);
+    if (m.live_bytes != settled)
+        fprintf(stderr, "  held %llu bytes after 100 rounds, %llu after 4000\n",
+                (unsigned long long)settled, (unsigned long long)m.live_bytes);
+    CHECK_EQUAL(m.live_bytes, settled);
+    ta_host_effects_ack(host);
+    ta_host_free(host);
+    CHECK(m.live_blocks == 0 && m.bad_frees == 0);
+}
+
 int main(int argc, char **argv) {
     full_mode = argc > 1 && strcmp(argv[1], "--full") == 0;
     RUN(test_accounting);
     RUN(test_fixed_arena);
     RUN(test_published_effects_stay_valid);
+    RUN(test_pool_is_reclaimed_with_effects_pending);
     RUN(test_refusals);
     TEST_MAIN_END();
 }

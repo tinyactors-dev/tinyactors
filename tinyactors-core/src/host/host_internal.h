@@ -57,8 +57,8 @@ typedef struct effect_strings {
 
 /* error.communication for a sender, not delivered yet: kept while its
  * segment's effects are drained, and after that while its segment cannot
- * take it (no memory). The sendid is in the string pool, which is not reset
- * while any are left. */
+ * take it (no memory). The sendid is in the string pool, which keeps it when
+ * effects_release compacts the pool. */
 typedef struct pending_error {
     uint32_t segment, actor;
     size_t sendid; /* in the pool, (size_t)-1: none */

@@ -506,6 +506,58 @@ static void effects_block_replaced(ta_host *host, void *block, size_t size) {
     host->held_size[host->held_count++] = size;
 }
 
+/* The pool offset of string k (target, event, sendid, aux, msgid) of effect e,
+ * and its length. */
+static size_t *effect_string(ta_host *host, uint32_t e, uint32_t k, uint32_t *length) {
+    const ta_host_effect *effect = &host->effects[e];
+    const ta_string_view *views[5] = {&effect->target, &effect->event, &effect->sendid,
+                                      &effect->auxiliary, &effect->msgid};
+    *length = views[k]->length;
+    return &host->effect_strings[e].offset[k];
+}
+
+/* Move the strings still referenced — the kept effects' and the pending
+ * errors' sendids — to the front of the pool. Both lists are in pool order
+ * (strings are appended as effects and errors are made, and this keeps their
+ * order), so taking them merged, lowest offset first, moves every string
+ * towards the front, over bytes already taken. Nobody borrows them: the kept
+ * effects were made after the last ta_host_effects. */
+static void pool_compact(ta_host *host) {
+    size_t write = 0;
+    uint32_t e = 0, k = 0, r = 0;
+    for (;;) {
+        size_t *slot = NULL;
+        uint32_t length = 0;
+        while (e < host->effect_count) { /* the next effect string in the pool */
+            slot = effect_string(host, e, k, &length);
+            if (*slot != (size_t)-1) break;
+            slot = NULL;
+            if (++k == 5) {
+                k = 0;
+                e++;
+            }
+        }
+        while (r < host->error_count && host->errors[r].sendid == (size_t)-1)
+            r++;
+        pending_error *error = r < host->error_count ? &host->errors[r] : NULL;
+        if (!slot && !error) break;
+        int take_error = error && (!slot || error->sendid < *slot);
+        size_t *at = take_error ? &error->sendid : slot;
+        uint32_t n = take_error ? error->sendid_length : length;
+        TA_ASSERT(write <= *at && *at + n <= host->pool_length);
+        if (write != *at) ta_memmove(host->pool + write, host->pool + *at, n);
+        *at = write;
+        write += n;
+        if (take_error) {
+            r++;
+        } else if (++k == 5) {
+            k = 0;
+            e++;
+        }
+    }
+    host->pool_length = write;
+}
+
 /* Release the effects the host has seen (ta_host_effects): those before
  * effects_ready. Effects made since — by calls between runs, such as
  * ta_host_deliver answering with an `err` — stay for the next batch. The
@@ -523,18 +575,14 @@ static void effects_release(ta_host *host) {
                 host->datamodels[effect->datamodel].datamodel, effect->payload);
     }
     uint32_t keep = host->effect_count - seen;
-    if (!keep) {
-        host->effect_count = 0;
-        if (!host->error_count) host->pool_length = 0; /* pending errors keep their sendids */
-        host->effects_ready = 0;
-        return;
+    if (keep) { /* the unseen ones to the front */
+        ta_memmove(host->effects, host->effects + seen, keep * sizeof *host->effects);
+        ta_memmove(host->effect_strings, host->effect_strings + seen,
+                   keep * sizeof *host->effect_strings);
     }
-    /* move the unseen ones to the front; their strings stay in the pool (it
-     * is reset only when no effect is left) */
-    ta_memmove(host->effects, host->effects + seen, keep * sizeof *host->effects);
-    ta_memmove(host->effect_strings, host->effect_strings + seen, keep * sizeof *host->effect_strings);
     host->effect_count = keep;
     host->effects_ready = 0;
+    pool_compact(host); /* (nothing kept and no error pending: the pool empties) */
 }
 
 int host_effects_reserve(ta_host *host, uint32_t count, size_t bytes) {
