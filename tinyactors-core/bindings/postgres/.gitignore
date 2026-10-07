@@ -2,6 +2,7 @@
 build/
 *.o
 *.so
+*.dylib
 *.bc
 results/
 regression.*
