@@ -48,6 +48,8 @@
 #include "utils/array.h"
 #include "utils/jsonb.h"
 
+#include <sys/resource.h>
+
 #include <tinyactors.h>
 #include <tinyactors/compile.h>
 #include <tinyactors/datamodel_ecmascript.h>
@@ -68,6 +70,7 @@ PG_FUNCTION_INFO_V1(ta_postgres_data_ok);
 PG_FUNCTION_INFO_V1(ta_postgres_envelope);
 PG_FUNCTION_INFO_V1(ta_postgres_repeer);
 PG_FUNCTION_INFO_V1(ta_postgres_error);
+PG_FUNCTION_INFO_V1(ta_postgres_peak_memory);
 
 void _PG_init(void);
 
@@ -1826,6 +1829,20 @@ static Datum spawn_impl(FunctionCallInfo fcinfo) {
 
 Datum ta_postgres_now(PG_FUNCTION_ARGS) {
     PG_RETURN_TIMESTAMPTZ(clock_now());
+}
+
+/* tinyactors._peak_memory(): this backend's peak resident memory in bytes
+ * (getrusage's ru_maxrss: kilobytes on Linux, bytes on macOS), what the
+ * hardening tests bound a processing by. */
+Datum ta_postgres_peak_memory(PG_FUNCTION_ARGS) {
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) != 0) PG_RETURN_NULL();
+#ifdef __APPLE__
+    int64 bytes = (int64)usage.ru_maxrss;
+#else
+    int64 bytes = (int64)usage.ru_maxrss * 1024;
+#endif
+    PG_RETURN_INT64(bytes);
 }
 
 /* tinyactors.system_id(): this database's system id (the setting, or derived) */

@@ -11,8 +11,12 @@ SOCK="$(mktemp -d)"
 rm -rf "$DATA"
 initdb -D "$DATA" -U postgres --auth=trust --no-instructions > /dev/null
 # a ceiling for the throwaway server: a test that fails to bound memory must not
-# take the machine down with it (address space per process, in kB)
-ulimit -v 4000000
+# take the machine down with it (address space per process, in kB). Linux
+# enforces it; macOS refuses to set one, so there the server runs without it
+# (the hardening tests still bound what a processing peaks at).
+if ! ulimit -v 4000000 2> /dev/null; then
+  echo "run.sh: no address-space limit on $(uname -s); the test server runs without the 4 GB ceiling" >&2
+fi
 # pg_stat_statements: harden.py H24 counts the statements an event costs
 pg_ctl -D "$DATA" -o "-p $PORT -k $SOCK -c listen_addresses='' -c fsync=off -c shared_preload_libraries=pg_stat_statements" -l "$DATA/server.log" -w start > /dev/null
 trap 'pg_ctl -D "$DATA" -m fast stop > /dev/null; rm -rf "$SOCK"' EXIT

@@ -74,7 +74,8 @@ def spawn(chart, name=None, input_="{}"):
 
 
 def hwm_sql():
-    return r"SELECT substring(pg_read_file('/proc/self/status') from 'VmHWM:\s+(\d+)')::bigint / 1024;"
+    """The backend's peak resident memory in MB (getrusage: Linux and macOS)."""
+    return "SELECT tinyactors._peak_memory() / 1048576;"
 
 
 def started():

@@ -274,6 +274,11 @@ CREATE FUNCTION tinyactors._repeer() RETURNS void
 CREATE FUNCTION tinyactors._error(origin text, session bigint, sendid text, data jsonb) RETURNS boolean
     LANGUAGE c AS 'MODULE_PATHNAME', 'ta_postgres_error';
 
+-- This backend's peak resident memory in bytes (the hardening tests bound a
+-- processing by it).
+CREATE FUNCTION tinyactors._peak_memory() RETURNS bigint
+    LANGUAGE c VOLATILE AS 'MODULE_PATHNAME', 'ta_postgres_peak_memory';
+
 -- An envelope from another system (docs/protocol.md, "Envelope"): delivered to
 -- a session or @name and processed now, in this transaction. Returns 'ok',
 -- 'duplicate' (its msgid/dedup key was seen within tinyactors.dedup_ttl:
