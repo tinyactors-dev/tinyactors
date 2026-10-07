@@ -183,7 +183,10 @@ static void transcript_add(transcript *t, const ta_host_effect *effect) {
         t->capacity = t->capacity ? t->capacity * 2 : 64;
         t->lines = (char **)realloc(t->lines, sizeof *t->lines * t->capacity);
     }
-    t->lines[t->count++] = strdup(line);
+    size_t length = strlen(line) + 1; /* (strdup is POSIX, not C11) */
+    t->lines[t->count] = (char *)malloc(length);
+    if (!t->lines[t->count]) abort();
+    memcpy(t->lines[t->count++], line, length);
 }
 
 static int line_order(const void *a, const void *b) {
