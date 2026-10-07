@@ -5,6 +5,7 @@
 #include "../support/compile_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
+#include <tinyactors/runtime.h>
 
 #define BASE "tinyactors://h/"
 #define SC(name, body)                                                                             \
@@ -41,6 +42,7 @@ static void world_open(host_world *e, uint32_t max_actors) {
     config.datamodels = &e->binding;
     config.datamodel_count = 1;
     config.migrate_quantum = 3; /* small steps: jobs span several runs */
+    config.allocator = ta_runtime_malloc();
     CHECK_EQUAL(ta_host_new(&config, &e->host), TA_OK);
 }
 
@@ -439,6 +441,7 @@ static void test_snapshot_restore(void) {
     config.system_id = (ta_string_view){"h", 1};
     config.datamodels = &e.binding;
     config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
     const ta_image *images[2] = {&e.image[0], &e.image[1]};
     CHECK_EQUAL(ta_host_restore(&config, images, 1, hs, hl, &e.host),
                 TA_ERROR_INVALID); /* too few */

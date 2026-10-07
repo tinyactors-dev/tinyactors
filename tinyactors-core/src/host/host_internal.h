@@ -1,4 +1,10 @@
-/* host_internal.h — ta_host internals shared by host.c and router.c. */
+/* host_internal.h — ta_host internals shared by host.c and router.c.
+ *
+ * Every block the host owns comes from its config's ta_allocator
+ * (host_alloc) and goes back with its size (host_free): each array keeps
+ * its capacity, each string its length. Whatever must not fail half done
+ * reserves first (effects_reserve, moved_reserve, grow): after the
+ * reservation the step cannot run out of memory. */
 #ifndef TINYACTORS_HOST_HOST_INTERNAL_H
 #define TINYACTORS_HOST_HOST_INTERNAL_H
 
@@ -17,36 +23,47 @@ typedef struct host_segment {
     const ta_image *image;
     ta_system *system;
     void *memory;
+    size_t memory_size;
     ta_system_config config; /* current capacities */
     ta_time deadline;
 } host_segment;
 
 typedef struct chart_version { /* the current version of a chart name */
-    char *name;
-    uint32_t length, segment, chart;
+    ta_string_view name;       /* in the image of `segment` (live while it is current) */
+    uint32_t segment, chart;
 } chart_version;
 
 typedef struct migration_job {
     uint32_t id;
     int active;
-    char *name;
+    char *name; /* name_length bytes, NULL when empty */
     uint32_t name_length;
     uint32_t flags;
     uint64_t session;
     ta_time deadline;
     int walking;
     uint32_t walk_segment, cursor;
-    uint64_t *retry;
+    uint64_t *retry; /* retry and woken: retry_capacity entries each */
     uint8_t *woken;
     uint32_t retry_count, retry_capacity;
     uint32_t migrated, failed;
     uint64_t *left; /* after it ended: stragglers (until the next run) */
-    uint32_t left_count;
+    uint32_t left_count, left_capacity;
 } migration_job;
 
 typedef struct effect_strings {
     size_t offset[5]; /* target, event, sendid, aux, msgid in the string pool (SIZE_MAX: empty) */
 } effect_strings;
+
+/* error.communication for a sender, not delivered yet: kept while its
+ * segment's effects are drained, and after that while its segment cannot
+ * take it (no memory). The sendid is in the string pool, which is not reset
+ * while any are left. */
+typedef struct pending_error {
+    uint32_t segment, actor;
+    size_t sendid; /* in the pool, (size_t)-1: none */
+    uint32_t sendid_length;
+} pending_error;
 
 struct ta_host {
     ta_host_config config;
@@ -60,11 +77,12 @@ struct ta_host {
     uint32_t segment_count, segment_capacity, round_robin;
     chart_version *versions;
     uint32_t version_count, version_capacity;
-    /* session -> segment, for sessions living outside their own range (open addressing) */
+    /* session -> segment, for sessions living outside their own range (open
+     * addressing; a removed entry keeps its key with value TA_NIL) */
     uint64_t *moved_keys;
-    uint32_t *moved_values, moved_capacity, moved_count;
+    uint32_t *moved_values, moved_capacity, moved_count, moved_used;
     ta_time now;
-    /* effects of the current batch */
+    /* effects of the current batch; effects and effect_strings have effect_capacity entries */
     ta_host_effect *effects;
     effect_strings *effect_strings;
     uint32_t effect_count, effect_capacity, effects_ready;
@@ -78,36 +96,41 @@ struct ta_host {
     /* scratch for blobs */
     unsigned char *blob, *blob2;
     size_t blob_capacity, blob2_capacity;
-    /* error.communication for senders of the segment being drained (applied after its ack) */
-    struct {
-        uint32_t actor;
-        size_t session_id; /* in the pool, (size_t)-1: none */
-        uint32_t session_id_length;
-    } *errors;
+    pending_error *errors;
     uint32_t error_count, error_capacity;
     uint64_t routed, migrated, retired;
     struct ta_router *router;  /* other systems (router.c); NULL until a peer exists */
     uint64_t message_sequence; /* outbound message ids */
     uint32_t draining;         /* segment whose effects are being drained (TA_NIL: none) */
+    uint32_t expiry_behind;    /* an expired envelope could not be reported yet */
 };
 
 /* host.c */
-void *grow(void *p, uint32_t *capacity, uint32_t need, size_t elem);
+void *host_alloc(ta_host *h, size_t size);
+void host_free(ta_host *h, void *pointer, size_t size);
+/* Room for `need` elements of `element` bytes in *array (capacity in
+ * *capacity, new ones zeroed); 0 if the allocator refused (*array unchanged). */
+int grow(ta_host *h, void **array, uint32_t *capacity, uint32_t need, size_t element);
+/* Room for `count` more effects and `bytes` more pool bytes; 0 if refused. */
+int effects_reserve(ta_host *h, uint32_t count, size_t bytes);
 size_t pool_put(ta_host *h, ta_string_view s);
 ta_host_effect *effect_new(ta_host *h, uint32_t kind, uint32_t segment);
 void set_effect_strings(ta_host *h, ta_string_view t, ta_string_view event, ta_string_view sid,
                         ta_string_view aux);
 ta_status send_to(ta_host *h, uint32_t si, uint32_t actor, const ta_event_in *event);
-void communication_error(ta_host *h, uint32_t si, uint32_t actor, ta_string_view sendid);
+/* TA_ERROR_NO_MEMORY if it could be neither delivered nor kept; TA_OK otherwise
+ * (also when the actor is gone: nobody to tell). */
+ta_status communication_error(ta_host *h, uint32_t si, uint32_t actor, ta_string_view sendid);
 uint32_t moved_get(const ta_host *h, uint64_t key);
 
 /* router.c */
-/* an SCXML send of segment si to another system (target not ours) */
-void ta_router_outbound(ta_host *h, uint32_t si, const ta_effect *f);
+/* an SCXML send of segment si to another system (target not ours);
+ * TA_ERROR_NO_MEMORY: nothing done, the effect stays for the next drain */
+ta_status ta_router_outbound(ta_host *h, uint32_t si, const ta_effect *f);
 void ta_router_time(ta_host *h);              /* expire queued envelopes */
 ta_time ta_router_deadline(const ta_host *h); /* the next expiry (UINT64_MAX: none) */
 void ta_router_free(ta_host *h);
 size_t ta_router_snapshot(const ta_host *h, unsigned char *out, size_t capacity); /* dedup window */
-int ta_router_restore(ta_host *h, const unsigned char *p, size_t length);
+ta_status ta_router_restore(ta_host *h, const unsigned char *p, size_t length);
 
 #endif /* TINYACTORS_HOST_HOST_INTERNAL_H */

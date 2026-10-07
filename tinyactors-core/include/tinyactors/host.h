@@ -1,5 +1,6 @@
 /* tinyactors/host.h — many systems as one actor system: the policy every embedder
- * would otherwise rebuild, in one place (hosted layer: uses malloc).
+ * would otherwise rebuild, in one place. All its memory, the segments' blocks
+ * included, comes from the ta_allocator in its config (docs/adr/0005).
  *
  * A ta_host owns *segments*: one ta_system per image. All segments share one
  * base URI and one set of datamodel bindings; segment k creates sessions
@@ -32,6 +33,13 @@
  *              TA_EFFECT_WAKE, ta_host_wake).
  *   growth     segments are relocated into bigger blocks when a run or a call
  *              needs it (TA_RUN_EXHAUSTED / TA_ERROR_NO_MEMORY).
+ *   memory     every block comes from config.allocator and goes back to it
+ *              (ta_host_free returns all of them). When it refuses one, a
+ *              call returns TA_ERROR_NO_MEMORY and leaves the host as it
+ *              was; ta_host_run returns TA_RUN_EXHAUSTED (detail: the
+ *              segment's TA_POOL_* that could not grow, or TA_POOL_NONE for
+ *              the host's own memory) and the next run goes on where it
+ *              stopped: nothing is lost or done twice.
  *
  * Calls are synchronous and budgeted like ta_system_run; outcomes are effects
  * (ta_host_effects), borrowed until ta_host_effects_ack or the next
@@ -41,6 +49,7 @@
 #ifndef TINYACTORS_HOST_H
 #define TINYACTORS_HOST_H
 
+#include <tinyactors/allocator.h>
 #include <tinyactors/system.h>
 
 #ifdef __cplusplus
@@ -61,6 +70,8 @@ typedef struct ta_host_config {
         *io_processors; /* host I/O processors (TA_EFFECT_SEND io_processor = index here) */
     uint32_t io_processor_count;
     uint32_t migrate_quantum; /* actors a migration job looks at per run (default 256) */
+    ta_allocator allocator;   /* required: every block the host owns (ta_runtime_malloc() is
+                                 the C library's); requests are aligned to at most 8 */
 } ta_host_config;
 
 TA_API ta_status ta_host_new(const ta_host_config *config, ta_host **out);
@@ -115,10 +126,15 @@ TA_API ta_status ta_host_resume(ta_host *h, uint32_t segment, uint32_t request, 
                                 ta_payload result);
 
 /* ---- running ------------------------------------------------------------------ */
+/* Move every segment's clock; queued envelopes past their TTL fail (an
+ * expiry the allocator leaves no room to report is reported by the next
+ * ta_host_run). */
 TA_API void ta_host_advance_time(ta_host *h, ta_time now);
 /* Run segments with work for up to `budget` fuel in total, deliver sends
  * between them, advance migration jobs, free retired segments. status:
- * TA_RUN_IDLE / TA_RUN_YIELDED / TA_RUN_EFFECTS_FULL / TA_RUN_FAULT;
+ * TA_RUN_IDLE / TA_RUN_YIELDED / TA_RUN_EFFECTS_FULL / TA_RUN_FAULT /
+ * TA_RUN_EXHAUSTED (the allocator refused memory: run again once it has
+ * some; detail as for ta_system_run, TA_POOL_NONE for the host's own);
  * next_deadline: the earliest timer of all segments. */
 TA_API ta_run ta_host_run(ta_host *h, uint32_t budget);
 
@@ -278,9 +294,11 @@ TA_API size_t ta_host_envelope_json(const ta_envelope *environment, ta_string_vi
 TA_API ta_status ta_host_peer_add(ta_host *h, const ta_peer_config *config, uint32_t *peer);
 /* The transport lost the connection (TA_PEER_QUEUE peers keep their routes and
  * queue; others fail at once) or got it back (queued envelopes come out as
- * TA_HOST_EFFECT_PEER effects, in order). */
+ * TA_HOST_EFFECT_PEER effects, in order). TA_ERROR_NO_MEMORY: the envelopes
+ * not flushed or failed yet stay queued; call it again. */
 TA_API ta_status ta_host_peer_up(ta_host *h, uint32_t peer, int up);
-/* Remove a peer and its routes; queued envelopes fail (unreachable). */
+/* Remove a peer and its routes; queued envelopes fail (unreachable).
+ * TA_ERROR_NO_MEMORY: the peer stays, with the envelopes not failed yet. */
 TA_API ta_status ta_host_peer_remove(ta_host *h, uint32_t peer);
 /* Replace what a peer announced it reaches (e.g. after its hello). */
 TA_API ta_status ta_host_peer_reach(ta_host *h, uint32_t peer, const ta_string_view *reach,
@@ -298,7 +316,8 @@ TA_API ta_status ta_host_export(ta_host *h, uint32_t peer, ta_string_view name,
  * duplicates dropped (TA_OK, *outcome = TA_ROUTE_DUPLICATE), then delivered
  * locally or relayed to another peer. A refusal is reported both in *outcome
  * and as a TA_HOST_EFFECT_PEER_ERROR effect addressed back to the peer, so the
- * sender's system can turn it into error.communication. */
+ * sender's system can turn it into error.communication. TA_ERROR_NO_MEMORY:
+ * nothing was done or remembered (delivering it again is not a duplicate). */
 enum { TA_ROUTE_DELIVERED = 0, TA_ROUTE_RELAYED = 1, TA_ROUTE_DUPLICATE = 2, TA_ROUTE_REFUSED = 3 };
 TA_API ta_status ta_host_deliver(ta_host *h, uint32_t peer, const ta_envelope *environment,
                                  uint32_t *outcome);

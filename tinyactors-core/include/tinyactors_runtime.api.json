@@ -490,11 +490,15 @@
         {
           "name": "migrate_quantum",
           "type": "uint32_t"
+        },
+        {
+          "name": "allocator",
+          "type": "ta_allocator"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 120,
+          "size": 144,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -504,11 +508,12 @@
             "datamodels": 96,
             "io_processors": 104,
             "io_processor_count": 112,
-            "migrate_quantum": 116
+            "migrate_quantum": 116,
+            "allocator": 120
           }
         },
         "aarch64": {
-          "size": 120,
+          "size": 144,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -518,11 +523,12 @@
             "datamodels": 96,
             "io_processors": 104,
             "io_processor_count": 112,
-            "migrate_quantum": 116
+            "migrate_quantum": 116,
+            "allocator": 120
           }
         },
         "wasm32": {
-          "size": 104,
+          "size": 120,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -532,7 +538,8 @@
             "datamodels": 88,
             "io_processors": 92,
             "io_processor_count": 96,
-            "migrate_quantum": 100
+            "migrate_quantum": 100,
+            "allocator": 104
           }
         }
       }

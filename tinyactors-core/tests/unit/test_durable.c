@@ -34,6 +34,7 @@
 #include "../support/compile_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
+#include <tinyactors/runtime.h>
 #include <tinyactors/system.h>
 
 /* ---- charts (@HELLO@ and @LOG:label@ are expanded by expand()) ------------------------ */
@@ -886,6 +887,7 @@ static ta_host_config host_config(world *w) {
     config.system = system_config(0);
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
     return config;
 }
 

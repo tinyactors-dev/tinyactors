@@ -41,6 +41,7 @@
 #include <tinyactors.h>
 #include <tinyactors/compile.h>
 #include <tinyactors/host.h>
+#include <tinyactors/runtime.h>
 
 #define SEGMENT_TYPE "tinyactors"
 
@@ -1742,6 +1743,7 @@ static nd_host *host_alloc(napi_env environment, napi_value *argv, ta_host_confi
     config->system.string_bytes = 32768;
     config->datamodels = binding; /* "xstate" (machines), "ecmascript" (SCXML documents) */
     config->datamodel_count = 2;
+    config->allocator = ta_runtime_malloc();
     return host;
 }
 

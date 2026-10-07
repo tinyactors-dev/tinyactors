@@ -6,6 +6,7 @@
 #include "../support/compile_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
+#include <tinyactors/runtime.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -66,6 +67,7 @@ static void open_node(int i, const char *chart) {
     config.system.ticks_per_second = 1000;
     config.datamodels = &n->binding;
     config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
     CHECK_EQUAL(ta_host_new(&config, &n->host), TA_OK);
     size_t length;
     n->bytes = compile_chart("c.scxml", chart, NULL, &length, 0);
@@ -387,6 +389,7 @@ static void test_dedup(void) {
     config.system.ticks_per_second = 1000;
     config.datamodels = &nodes[B].binding;
     config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
     const ta_image *images[1] = {&nodes[B].image};
     CHECK_EQUAL(ta_host_restore(&config, images, 1, snap, length, &nodes[B].host), TA_OK);
     CHECK_EQUAL(ta_datamodel_ecmascript_restore(nodes[B].ecmascript, dsnap, dl),
@@ -610,6 +613,7 @@ static void test_external_storage(void) {
     ta_host_config config = {0};
     config.size = sizeof config;
     config.system_id = (ta_string_view){"db", 2};
+    config.allocator = ta_runtime_malloc();
     ta_host *host;
     CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
     ta_peer_config peer_config = {0};
@@ -693,6 +697,7 @@ static void test_durable_message(void) {
     ta_host_config config = {0};
     config.size = sizeof config;
     config.system_id = (ta_string_view){"db", 2};
+    config.allocator = ta_runtime_malloc();
     ta_host *host;
     CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
     ta_effect effect = {0};
@@ -811,6 +816,7 @@ static void test_system_id(void) {
     config.system.ticks_per_second = 1000;
     config.datamodels = &binding;
     config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
     const char *bad[] = {"", "Orders", "a_b", "-a"};
     for (int k = 0; k < 4; k++) {
         ta_host *host = NULL;

@@ -463,12 +463,16 @@ static ta_status resolve_defined(void *context, ta_string_view base, ta_string_v
     return TA_OK;
 }
 
-static void *compile_alloc(void *context, size_t size, size_t align) {
-    (void)align; /* MAXALIGN */
+/* A ta_allocator over a memory context (the context is its `context`): the
+ * compiler's and the router host's memory lives where PostgreSQL cleans it
+ * up. Out of memory it refuses (NULL) instead of raising an ERROR, so the
+ * library reports TA_ERROR_NO_MEMORY with its state intact. */
+static void *context_alloc(void *context, size_t size, size_t align) {
+    (void)align; /* MAXALIGN, at least the 8 the library asks for */
     return MemoryContextAllocExtended((MemoryContext)context, size ? size : 1,
                                       MCXT_ALLOC_HUGE | MCXT_ALLOC_NO_OOM);
 }
-static void compile_free(void *context, void *p, size_t size) {
+static void context_free(void *context, void *p, size_t size) {
     (void)context;
     (void)size;
     pfree(p);
@@ -491,7 +495,7 @@ Datum ta_postgres_compile(PG_FUNCTION_ARGS) {
     ta_compile_options options;
     memset(&options, 0, sizeof options);
     options.size = sizeof options;
-    options.alloc = (ta_allocator){mcx, compile_alloc, compile_free};
+    options.alloc = (ta_allocator){mcx, context_alloc, context_free};
     options.resolve = resolve_defined;
     ta_compile_result *result = NULL;
     ta_status cst;
@@ -904,7 +908,7 @@ static char *tree_sessions(run *r) {
             actor_info.size = sizeof actor_info;
             if (h[i] == r->actor || ta_actor_info_get(r->system, h[i], &actor_info) != TA_OK)
                 continue;
-            appendStringInfo(&b, "%s" UINT64_FORMAT, k++ ? "," : "", actor_info.serial);
+            appendStringInfo(&b, "%s" UINT64_FORMAT, k++ ? "," : "", (uint64)actor_info.serial);
         }
     appendStringInfoChar(&b, '}');
     return k ? b.data : NULL;
@@ -958,6 +962,8 @@ static ta_host *router_open(void) {
     ta_host_config config = {0};
     config.size = sizeof config;
     config.system_id = system_id();
+    /* freed by ta_host_free in the reset callback, before the context's memory goes */
+    config.allocator = (ta_allocator){CurrentMemoryContext, context_alloc, context_free};
     ta_host *host = NULL;
     host_check(ta_host_new(&config, &host));
     MemoryContextCallback *callback = palloc(sizeof *callback);

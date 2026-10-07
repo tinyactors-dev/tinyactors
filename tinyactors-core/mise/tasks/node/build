@@ -17,7 +17,7 @@
 
 require_relative '../../core'
 
-LAYERS = %w[host system compile].freeze
+LAYERS = %w[host runtime system compile].freeze
 node = Pathname.new(Toolchain::Tool[:node].path)
 node_include = node.join('../../include/node').expand_path
 abort "node:build: no node_api.h in #{node_include}" unless node_include.join('node_api.h').file?

@@ -160,9 +160,9 @@ module Core
     unit('test_e2e', 'runtime', 'test_datamodel', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch }),
     unit('test_hibernate', 'system', 'compile', 'test_datamodel', *ECMASCRIPT),
     unit('test_migrate', 'system', 'compile', 'test_datamodel', *ECMASCRIPT),
-    unit('test_durable', 'host', 'compile', *ECMASCRIPT),
-    unit('test_host', 'host', 'compile', *ECMASCRIPT),
-    unit('test_router', 'host', 'compile', *ECMASCRIPT),
+    unit('test_durable', 'host', 'runtime', 'compile', *ECMASCRIPT),
+    unit('test_host', 'host', 'runtime', 'compile', *ECMASCRIPT),
+    unit('test_router', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_address', 'base', 'quickjs', defines: { 'TA_VECTORS' => ROOT.join('tests/conformance/addresses.json') }),
     unit('test_frame', 'base'),
     # The torture chamber's event loop and PostgreSQL wire client.
@@ -172,7 +172,7 @@ module Core
                 sources: %w[tests/unit/test_torture_postgres.c tools/torture/postgres.c tools/torture/loop.c]),
     # Host conformance (tests/conformance/*.json) through the C host; the JS
     # drivers (tests/conformance/run_js.mjs) run the same scenarios.
-    Program.new(name: 'conformance', sources: %w[tests/conformance/run_c.c], uses: ['host', 'compile', *ECMASCRIPT],
+    Program.new(name: 'conformance', sources: %w[tests/conformance/run_c.c], uses: ['host', 'runtime', 'compile', *ECMASCRIPT],
                 defines: {}, arguments: [ROOT.join('tests/conformance').to_s])
   ].freeze
 

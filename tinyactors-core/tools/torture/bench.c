@@ -491,6 +491,7 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
     host_config.datamodel_count = 2;
     host_config.io_processors = system->io_processors;
     host_config.io_processor_count = system->io_processor_count;
+    host_config.allocator = ta_runtime_malloc();
     if (ta_host_new(&host_config, &system->host) != TA_OK) {
         snprintf(message, capacity, "%s: cannot create the system", name);
         ta_datamodel_ecmascript_free(system->ecmascript);

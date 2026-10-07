@@ -1,11 +1,17 @@
 /* host.c — many systems as one actor system (see include/tinyactors/host.h).
  *
- * Hosted layer (malloc). Segments are ta_systems sharing a base URI with
- * TA_IO_PROCESSOR_SCXML_SHARED on their remote processor (index 0), so sends to a
- * session of another segment come out as TA_EFFECT_SEND effects, which this layer
- * delivers itself. Effects that leave the host are copied (strings into a
- * pool, payloads retained) so segments can be acknowledged right away and
- * keep running; the copies live until ta_host_effects_ack / the next run. */
+ * Segments are ta_systems sharing a base URI with TA_IO_PROCESSOR_SCXML_SHARED
+ * on their remote processor (index 0), so sends to a session of another
+ * segment come out as TA_EFFECT_SEND effects, which this layer delivers
+ * itself. Effects that leave the host are copied (strings into a pool,
+ * payloads retained) so segments can be acknowledged right away and keep
+ * running; the copies live until ta_host_effects_ack / the next run.
+ *
+ * Memory comes from the config's ta_allocator only (host_internal.h). When
+ * it refuses, a call returns TA_ERROR_NO_MEMORY with the host unchanged, and
+ * a run stops where it was (a segment's effects are acknowledged up to the
+ * first one the host could not take) and reports TA_RUN_EXHAUSTED; the next
+ * run goes on from there. */
 #include <tinyactors/address.h>
 #include <tinyactors/host.h>
 
@@ -14,19 +20,45 @@
 
 #include "host/host_internal.h"
 
-/* ---- small utilities -------------------------------------------------------------- */
+/* ---- memory ------------------------------------------------------------------------------ */
 
-void *grow(void *p, uint32_t *capacity, uint32_t need, size_t elem) {
-    if (need <= *capacity) return p;
+void *host_alloc(ta_host *host, size_t size) {
+    return host->config.allocator.alloc(host->config.allocator.context, size, 8);
+}
+
+void host_free(ta_host *host, void *pointer, size_t size) {
+    if (pointer) host->config.allocator.free(host->config.allocator.context, pointer, size);
+}
+
+int grow(ta_host *host, void **array, uint32_t *capacity, uint32_t need, size_t element) {
+    if (need <= *capacity) return 1;
     uint32_t c = *capacity ? *capacity : 8;
     while (c < need)
         c *= 2;
-    void *q = realloc(p, elem * c);
-    if (!q) return NULL;
-    memset((char *)q + elem * *capacity, 0, elem * (c - *capacity));
+    void *grown = host_alloc(host, element * c);
+    if (!grown) return 0;
+    if (*capacity) memcpy(grown, *array, element * *capacity);
+    memset((char *)grown + element * *capacity, 0, element * (c - *capacity));
+    host_free(host, *array, element * *capacity);
+    *array = grown;
     *capacity = c;
-    return q;
+    return 1;
 }
+
+/* A scratch buffer of at least n bytes (its old contents are not kept); 0
+ * if refused (the old one stays). */
+static int buffer_at(ta_host *host, unsigned char **buffer, size_t *capacity, size_t n) {
+    if (n > *capacity) {
+        unsigned char *p = (unsigned char *)host_alloc(host, n);
+        if (!p) return 0;
+        host_free(host, *buffer, *capacity);
+        *buffer = p;
+        *capacity = n;
+    }
+    return 1;
+}
+
+/* ---- small utilities -------------------------------------------------------------- */
 
 static int string_equal(ta_string_view a, const char *b, uint32_t n) {
     return a.length == n && (!n || memcmp(a.pointer, b, n) == 0);
@@ -47,25 +79,55 @@ static uint32_t mhash(uint64_t k, uint32_t capacity) {
     return (uint32_t)((k * 0x9E3779B97F4A7C15ull) >> 32) & (capacity - 1);
 }
 
-static void moved_put(ta_host *host, uint64_t key, uint32_t value) { /* value TA_NIL: remove */
-    if (value != TA_NIL && (host->moved_count + 1) * 2 > host->moved_capacity) {
-        uint32_t oc = host->moved_capacity, nc = oc ? oc * 2 : 64;
-        uint64_t *ok = host->moved_keys;
-        uint32_t *ov = host->moved_values;
-        host->moved_keys = (uint64_t *)calloc(nc, sizeof(uint64_t));
-        host->moved_values = (uint32_t *)calloc(nc, sizeof(uint32_t));
-        host->moved_capacity = nc;
-        host->moved_count = 0;
-        for (uint32_t i = 0; i < oc; i++)
-            if (ok[i] && ov[i] != TA_NIL) moved_put(host, ok[i], ov[i]);
-        free(ok);
-        free(ov);
-    }
-    if (!host->moved_capacity) return;
+static uint32_t moved_slot(const ta_host *host, uint64_t key) {
     uint32_t i = mhash(key, host->moved_capacity);
     while (host->moved_keys[i] && host->moved_keys[i] != key)
         i = (i + 1) & (host->moved_capacity - 1);
-    if (host->moved_keys[i] == key) { /* existing (tombstones keep the key, value TA_NIL) */
+    return i;
+}
+
+/* Room for `extra` more sessions without growing (removed entries are
+ * dropped when the table is rebuilt); 0 if refused (the table unchanged). */
+static int moved_reserve(ta_host *host, uint32_t extra) {
+    if ((uint64_t)(host->moved_used + extra) * 2 <= host->moved_capacity) return 1;
+    uint32_t c = 64;
+    while ((uint64_t)(host->moved_count + extra) * 4 > c)
+        c *= 2;
+    uint64_t *keys = (uint64_t *)host_alloc(host, sizeof(uint64_t) * c);
+    uint32_t *values = (uint32_t *)host_alloc(host, sizeof(uint32_t) * c);
+    if (!keys || !values) {
+        host_free(host, keys, sizeof(uint64_t) * c);
+        host_free(host, values, sizeof(uint32_t) * c);
+        return 0;
+    }
+    memset(keys, 0, sizeof(uint64_t) * c);
+    memset(values, 0, sizeof(uint32_t) * c);
+    uint64_t *old_keys = host->moved_keys;
+    uint32_t *old_values = host->moved_values, old_capacity = host->moved_capacity;
+    host->moved_keys = keys;
+    host->moved_values = values;
+    host->moved_capacity = c;
+    host->moved_count = host->moved_used = 0;
+    for (uint32_t i = 0; i < old_capacity; i++)
+        if (old_keys[i] && old_values[i] != TA_NIL) {
+            uint32_t at = moved_slot(host, old_keys[i]);
+            host->moved_keys[at] = old_keys[i];
+            host->moved_values[at] = old_values[i];
+            host->moved_count++;
+            host->moved_used++;
+        }
+    host_free(host, old_keys, sizeof(uint64_t) * old_capacity);
+    host_free(host, old_values, sizeof(uint32_t) * old_capacity);
+    return 1;
+}
+
+/* value TA_NIL: remove (never allocates). Adding needs moved_reserve(h, 1)
+ * first, or may fail: 0 if refused. */
+static int moved_put(ta_host *host, uint64_t key, uint32_t value) {
+    if (value != TA_NIL && !moved_reserve(host, 1)) return 0;
+    if (!host->moved_capacity) return 1;
+    uint32_t i = moved_slot(host, key);
+    if (host->moved_keys[i] == key) { /* existing (removed ones keep the key, value TA_NIL) */
         if (host->moved_values[i] == TA_NIL && value != TA_NIL) host->moved_count++;
         if (host->moved_values[i] != TA_NIL && value == TA_NIL) host->moved_count--;
         host->moved_values[i] = value;
@@ -73,7 +135,9 @@ static void moved_put(ta_host *host, uint64_t key, uint32_t value) { /* value TA
         host->moved_keys[i] = key;
         host->moved_values[i] = value;
         host->moved_count++;
+        host->moved_used++;
     }
+    return 1;
 }
 
 uint32_t moved_get(const ta_host *host, uint64_t key) {
@@ -88,7 +152,9 @@ uint32_t moved_get(const ta_host *host, uint64_t key) {
 
 /* ---- segments ---------------------------------------------------------------------- */
 
-static int segment_grow(host_segment *segment) {
+/* A bigger block for a segment: TA_OK; TA_ERROR_NO_MEMORY if the allocator
+ * refused it; TA_ERROR_INVALID if it cannot grow (the segment unchanged). */
+static ta_status segment_grow(ta_host *host, host_segment *segment) {
     ta_system_config config = segment->config;
     config.max_actors =
         config.max_actors * 2 > TA_SYSTEM_MAX_ACTORS ? TA_SYSTEM_MAX_ACTORS : config.max_actors * 2;
@@ -101,49 +167,56 @@ static int segment_grow(host_segment *segment) {
     config.instance_bytes = 0; /* derived from max_actors */
     config.string_bytes = config.string_bytes * 2;
     size_t need;
-    if (ta_system_layout(segment->image, &config, &need) != TA_OK) return 0;
-    void *memory = malloc(need);
+    if (ta_system_layout(segment->image, &config, &need) != TA_OK) return TA_ERROR_INVALID;
+    void *memory = host_alloc(host, need);
+    if (!memory) return TA_ERROR_NO_MEMORY;
     ta_system *new_system = NULL;
-    if (!memory ||
-        ta_system_relocate(segment->system, memory, need, &config, &new_system) != TA_OK) {
-        free(memory);
-        return 0;
+    if (ta_system_relocate(segment->system, memory, need, &config, &new_system) != TA_OK) {
+        host_free(host, memory, need);
+        return TA_ERROR_INVALID;
     }
-    free(segment->memory);
+    host_free(host, segment->memory, segment->memory_size);
     segment->memory = memory;
+    segment->memory_size = need;
     segment->system = new_system;
     segment->config = config;
-    return 1;
+    return TA_OK;
 }
 
+static uint32_t image_charts(const ta_image *image) {
+    ta_image_info image_info;
+    image_info.size = sizeof image_info;
+    ta_image_get_info(image, &image_info);
+    return image_info.chart_count;
+}
+
+/* Room in the version table for the charts of every live segment and
+ * `extra` more, so versions_recompute cannot fail; 0 if refused. */
+static int versions_reserve(ta_host *host, uint32_t extra) {
+    uint32_t need = extra;
+    for (uint32_t si = 0; si < host->segment_count; si++)
+        if (host->segments[si].live) need += image_charts(host->segments[si].image);
+    return grow(host, (void **)&host->versions, &host->version_capacity, need,
+                sizeof(chart_version));
+}
+
+/* The current version of every chart name: newer segments win. Needs
+ * versions_reserve for the live segments first. */
 static void versions_recompute(ta_host *host) {
-    for (uint32_t i = 0; i < host->version_count; i++)
-        free(host->versions[i].name);
     host->version_count = 0;
-    for (uint32_t si = 0; si < host->segment_count; si++) { /* newer segments win */
+    for (uint32_t si = 0; si < host->segment_count; si++) {
         host_segment *segment = segment_of(host, si);
         if (!segment) continue;
-        ta_image_info image_info;
-        image_info.size = sizeof image_info;
-        ta_image_get_info(segment->image, &image_info);
-        for (uint32_t c = 0; c < image_info.chart_count; c++) {
+        uint32_t charts = image_charts(segment->image);
+        for (uint32_t c = 0; c < charts; c++) {
             ta_string_view k = chart_key(segment->image, c);
             uint32_t v = 0;
             while (v < host->version_count &&
-                   !string_equal(k, host->versions[v].name, host->versions[v].length))
+                   !string_equal(k, host->versions[v].name.pointer, host->versions[v].name.length))
                 v++;
-            if (v == host->version_count) {
-                chart_version *nv =
-                    (chart_version *)grow(host->versions, &host->version_capacity,
-                                          host->version_count + 1, sizeof(chart_version));
-                if (!nv) return;
-                host->versions = nv;
-                chart_version *e = &host->versions[host->version_count++];
-                e->name = (char *)malloc(k.length + 1);
-                if (k.length) memcpy(e->name, k.pointer, k.length);
-                e->name[k.length] = 0;
-                e->length = k.length;
-            }
+            if (v == host->version_count) host->version_count++;
+            /* the name in the newest segment's image: an older one may be retired and freed */
+            host->versions[v].name = k;
             host->versions[v].segment = si;
             host->versions[v].chart = c;
         }
@@ -152,20 +225,24 @@ static void versions_recompute(ta_host *host) {
 
 static const chart_version *version_of(const ta_host *host, ta_string_view name) {
     for (uint32_t v = 0; v < host->version_count; v++)
-        if (string_equal(name, host->versions[v].name, host->versions[v].length))
+        if (string_equal(name, host->versions[v].name.pointer, host->versions[v].name.length))
             return &host->versions[v];
     return NULL;
 }
 
 ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
     *out = NULL;
-    if (!config || config->datamodel_count > 8 || config->io_processor_count > 16 ||
-        !ta_address_system_valid(config->system_id))
+    if (!config ||
+        config->size < offsetof(ta_host_config, allocator) + sizeof(ta_allocator) ||
+        !config->allocator.alloc || !config->allocator.free || config->datamodel_count > 8 ||
+        config->io_processor_count > 16 || !ta_address_system_valid(config->system_id))
         return TA_ERROR_INVALID;
-    ta_host *host = (ta_host *)calloc(1, sizeof *host);
+    ta_host *host =
+        (ta_host *)config->allocator.alloc(config->allocator.context, sizeof *host, 8);
     if (!host) return TA_ERROR_NO_MEMORY;
+    memset(host, 0, sizeof *host);
     memcpy(&host->config, config,
-           config->size && config->size < sizeof host->config ? config->size : sizeof host->config);
+           config->size < sizeof host->config ? config->size : sizeof host->config);
     host->config.size = sizeof host->config;
     if (!host->config.migrate_quantum) host->config.migrate_quantum = 256;
     /* the base URI every segment shares: tinyactors://<system_id>/ */
@@ -193,6 +270,13 @@ ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
 
 static void effects_release(ta_host *h);
 
+static void job_free(ta_host *host, migration_job *job) {
+    host_free(host, job->name, job->name_length);
+    host_free(host, job->retry, sizeof(uint64_t) * job->retry_capacity);
+    host_free(host, job->woken, job->retry_capacity);
+    host_free(host, job->left, sizeof(uint64_t) * job->left_capacity);
+}
+
 void ta_host_free(ta_host *host) {
     if (!host) return;
     host->effects_ready = host->effect_count; /* all of them */
@@ -201,28 +285,23 @@ void ta_host_free(ta_host *host) {
     for (uint32_t i = 0; i < host->segment_count; i++)
         if (host->segments[i].live) {
             ta_system_deinit(host->segments[i].system);
-            free(host->segments[i].memory);
+            host_free(host, host->segments[i].memory, host->segments[i].memory_size);
         }
-    free(host->segments);
-    for (uint32_t i = 0; i < host->version_count; i++)
-        free(host->versions[i].name);
-    free(host->versions);
-    for (uint32_t i = 0; i < host->job_count; i++) {
-        free(host->jobs[i].name);
-        free(host->jobs[i].retry);
-        free(host->jobs[i].woken);
-        free(host->jobs[i].left);
-    }
-    free(host->jobs);
-    free(host->moved_keys);
-    free(host->moved_values);
-    free(host->effects);
-    free(host->effect_strings);
-    free(host->pool);
-    free(host->blob);
-    free(host->blob2);
-    free(host->errors);
-    free(host);
+    host_free(host, host->segments, sizeof(host_segment) * host->segment_capacity);
+    host_free(host, host->versions, sizeof(chart_version) * host->version_capacity);
+    for (uint32_t i = 0; i < host->job_count; i++)
+        job_free(host, &host->jobs[i]);
+    host_free(host, host->jobs, sizeof(migration_job) * host->job_capacity);
+    host_free(host, host->moved_keys, sizeof(uint64_t) * host->moved_capacity);
+    host_free(host, host->moved_values, sizeof(uint32_t) * host->moved_capacity);
+    host_free(host, host->effects, sizeof(ta_host_effect) * host->effect_capacity);
+    host_free(host, host->effect_strings, sizeof(effect_strings) * host->effect_capacity);
+    host_free(host, host->pool, host->pool_capacity);
+    host_free(host, host->blob, host->blob_capacity);
+    host_free(host, host->blob2, host->blob2_capacity);
+    host_free(host, host->errors, sizeof(pending_error) * host->error_capacity);
+    ta_allocator allocator = host->config.allocator;
+    allocator.free(allocator.context, host, sizeof *host);
 }
 
 static void reserve_serials(ta_host *h, uint32_t index);
@@ -230,10 +309,10 @@ static void reserve_serials(ta_host *h, uint32_t index);
 ta_status ta_host_add_image(ta_host *host, const ta_image *image, uint32_t *segment) {
     uint32_t index = host->segment_count;
     if (index >= (1u << 20)) return TA_ERROR_NO_MEMORY; /* session ids stay exact in a double */
-    host_segment *new_segments = (host_segment *)grow(host->segments, &host->segment_capacity,
-                                                      index + 1, sizeof(host_segment));
-    if (!new_segments) return TA_ERROR_NO_MEMORY;
-    host->segments = new_segments;
+    if (!grow(host, (void **)&host->segments, &host->segment_capacity, index + 1,
+              sizeof(host_segment)) ||
+        !versions_reserve(host, image_charts(image)))
+        return TA_ERROR_NO_MEMORY;
     host_segment *segment_record = &host->segments[index];
     memset(segment_record, 0, sizeof *segment_record);
     segment_record->image = image;
@@ -251,13 +330,14 @@ ta_status ta_host_add_image(ta_host *host, const ta_image *image, uint32_t *segm
     size_t need;
     ta_status status = ta_system_layout(image, &segment_record->config, &need);
     if (status != TA_OK) return status;
-    segment_record->memory = malloc(need);
+    segment_record->memory = host_alloc(host, need);
     if (!segment_record->memory) return TA_ERROR_NO_MEMORY;
+    segment_record->memory_size = need;
     status =
         ta_system_init(segment_record->memory, need, image, &segment_record->config,
                        host->datamodels, host->config.datamodel_count, &segment_record->system);
     if (status != TA_OK) {
-        free(segment_record->memory);
+        host_free(host, segment_record->memory, need);
         segment_record->memory = NULL;
         return status;
     }
@@ -339,7 +419,7 @@ ta_status ta_host_spawn(ta_host *host, uint32_t segment, uint32_t chart, ta_stri
     ta_status status;
     while ((status = ta_system_spawn(segment_record->system, chart, name, params, &actor)) ==
                TA_ERROR_NO_MEMORY &&
-           segment_grow(segment_record)) {
+           segment_grow(host, segment_record) == TA_OK) {
     }
     if (status != TA_OK) return status;
     ta_actor_info actor_info;
@@ -356,7 +436,7 @@ ta_status send_to(ta_host *host, uint32_t si, uint32_t actor, const ta_event_in 
     event_in.target = actor;
     ta_status status;
     while ((status = ta_system_send(segment->system, &event_in)) == TA_ERROR_NO_MEMORY &&
-           segment_grow(segment)) {
+           segment_grow(host, segment) == TA_OK) {
     }
     if (status == TA_OK) segment->busy = 1;
     return status;
@@ -431,7 +511,7 @@ static void effects_release(ta_host *host) {
     uint32_t keep = host->effect_count - seen;
     if (!keep) {
         host->effect_count = 0;
-        host->pool_length = 0;
+        if (!host->error_count) host->pool_length = 0; /* pending errors keep their sendids */
         host->effects_ready = 0;
         return;
     }
@@ -443,32 +523,55 @@ static void effects_release(ta_host *host) {
     host->effects_ready = 0;
 }
 
-size_t pool_put(ta_host *host, ta_string_view s) {
-    if (!s.length) return (size_t)-1;
-    if (host->pool_length + s.length > host->pool_capacity) {
-        size_t c = host->pool_capacity ? host->pool_capacity : 4096;
-        while (c < host->pool_length + s.length)
+int effects_reserve(ta_host *host, uint32_t count, size_t bytes) {
+    uint32_t need = host->effect_count + count;
+    if (need > host->effect_capacity) { /* both arrays together: they share the capacity */
+        uint32_t c = host->effect_capacity ? host->effect_capacity : 8;
+        while (c < need)
             c *= 2;
-        char *p = (char *)realloc(host->pool, c);
-        if (!p) return (size_t)-1;
-        host->pool = p;
+        ta_host_effect *effects = (ta_host_effect *)host_alloc(host, sizeof *effects * c);
+        effect_strings *strings = (effect_strings *)host_alloc(host, sizeof *strings * c);
+        if (!effects || !strings) {
+            host_free(host, effects, sizeof *effects * c);
+            host_free(host, strings, sizeof *strings * c);
+            return 0;
+        }
+        if (host->effect_count) {
+            memcpy(effects, host->effects, sizeof *effects * host->effect_count);
+            memcpy(strings, host->effect_strings, sizeof *strings * host->effect_count);
+        }
+        host_free(host, host->effects, sizeof *effects * host->effect_capacity);
+        host_free(host, host->effect_strings, sizeof *strings * host->effect_capacity);
+        host->effects = effects;
+        host->effect_strings = strings;
+        host->effect_capacity = c;
+    }
+    if (host->pool_length + bytes > host->pool_capacity) {
+        size_t c = host->pool_capacity ? host->pool_capacity : 4096;
+        while (c < host->pool_length + bytes)
+            c *= 2;
+        char *pool = (char *)host_alloc(host, c);
+        if (!pool) return 0;
+        if (host->pool_length) memcpy(pool, host->pool, host->pool_length);
+        host_free(host, host->pool, host->pool_capacity);
+        host->pool = pool;
         host->pool_capacity = c;
     }
+    return 1;
+}
+
+/* A string into the pool: its offset, (size_t)-1 when empty. Needs
+ * effects_reserve for its bytes first. */
+size_t pool_put(ta_host *host, ta_string_view s) {
+    if (!s.length || !effects_reserve(host, 0, s.length)) return (size_t)-1;
     memcpy(host->pool + host->pool_length, s.pointer, s.length);
     host->pool_length += s.length;
     return host->pool_length - s.length;
 }
 
+/* A new effect; NULL only without effects_reserve first. */
 ta_host_effect *effect_new(ta_host *host, uint32_t kind, uint32_t segment) {
-    ta_host_effect *new_effects = (ta_host_effect *)grow(
-        host->effects, &host->effect_capacity, host->effect_count + 1, sizeof *new_effects);
-    if (!new_effects) return NULL;
-    host->effects = new_effects;
-    uint32_t cs = host->effect_capacity;
-    effect_strings *ns =
-        (effect_strings *)realloc(host->effect_strings, sizeof(effect_strings) * cs);
-    if (!ns) return NULL;
-    host->effect_strings = ns;
+    if (!effects_reserve(host, 1, 0)) return NULL;
     ta_host_effect *effect = &host->effects[host->effect_count];
     memset(effect, 0, sizeof *effect);
     effect->size = sizeof *effect;
@@ -508,10 +611,13 @@ static uint64_t root_of(host_segment *segment, uint32_t actor) {
 }
 
 /* copy a segment effect out to the host */
-static void effect_copy(ta_host *host, uint32_t si, const ta_effect *effect,
-                        uint32_t io_processor) {
+static ta_status effect_copy(ta_host *host, uint32_t si, const ta_effect *effect,
+                             uint32_t io_processor) {
+    if (!effects_reserve(host, 1,
+                         (size_t)effect->target.length + effect->event.length +
+                             effect->sendid.length + effect->auxiliary.length))
+        return TA_ERROR_NO_MEMORY;
     ta_host_effect *host_effect = effect_new(host, effect->kind, si);
-    if (!host_effect) return;
     host_effect->actor = effect->actor;
     host_effect->session = effect->session;
     host_effect->root = effect->kind == TA_EFFECT_DONE
@@ -530,6 +636,7 @@ static void effect_copy(ta_host *host, uint32_t si, const ta_effect *effect,
             host->datamodels[effect->datamodel].vtable->retain(
                 host->datamodels[effect->datamodel].datamodel, effect->payload);
     }
+    return TA_OK;
 }
 
 uint32_t ta_host_effects(ta_host *host, const ta_host_effect **out) {
@@ -554,66 +661,87 @@ void ta_host_effects_ack(ta_host *host) {
 
 /* ---- routing ---------------------------------------------------------------------- */
 
-static void communication_error_now(ta_host *host, uint32_t si, uint32_t actor,
-                                    ta_string_view sendid) {
+static ta_status communication_error_now(ta_host *host, uint32_t si, uint32_t actor,
+                                         ta_string_view sendid) {
     ta_event_in event;
     ta_host_error_event(sendid, &event);
-    send_to(host, si, actor, &event);
+    /* a sender that is gone has nobody to tell; only memory is worth retrying */
+    return send_to(host, si, actor, &event) == TA_ERROR_NO_MEMORY ? TA_ERROR_NO_MEMORY : TA_OK;
 }
 
 /* error.communication for a sender. While a segment's effects are being
  * drained it cannot take events (not before its ack): those are kept and
  * delivered right after (drain). */
-void communication_error(ta_host *host, uint32_t si, uint32_t actor, ta_string_view sendid) {
-    if (host->draining != si) {
-        communication_error_now(host, si, actor, sendid);
-        return;
+ta_status communication_error(ta_host *host, uint32_t si, uint32_t actor, ta_string_view sendid) {
+    if (host->draining != si) return communication_error_now(host, si, actor, sendid);
+    if (!grow(host, (void **)&host->errors, &host->error_capacity, host->error_count + 1,
+              sizeof *host->errors) ||
+        !effects_reserve(host, 0, sendid.length))
+        return TA_ERROR_NO_MEMORY;
+    pending_error *error = &host->errors[host->error_count++];
+    error->segment = si;
+    error->actor = actor;
+    error->sendid = pool_put(host, sendid);
+    error->sendid_length = sendid.length;
+    return TA_OK;
+}
+
+/* Deliver the pending errors in order; those from the first one a segment
+ * cannot take (no memory) on stay pending. */
+static ta_status errors_deliver(ta_host *host) {
+    uint32_t done = 0;
+    ta_status status = TA_OK;
+    for (; done < host->error_count; done++) {
+        const pending_error *error = &host->errors[done];
+        if (!segment_of(host, error->segment)) continue;
+        ta_string_view sendid = {
+            error->sendid == (size_t)-1 ? "" : host->pool + error->sendid,
+            error->sendid == (size_t)-1 ? 0 : error->sendid_length};
+        status = communication_error_now(host, error->segment, error->actor, sendid);
+        if (status != TA_OK) break;
     }
-    void *ne =
-        grow(host->errors, &host->error_capacity, host->error_count + 1, sizeof *host->errors);
-    if (!ne) return;
-    host->errors = ne;
-    host->errors[host->error_count].actor = actor;
-    host->errors[host->error_count].session_id = pool_put(host, sendid);
-    host->errors[host->error_count].session_id_length = sendid.length;
-    host->error_count++;
+    host->error_count -= done;
+    memmove(host->errors, host->errors + done, host->error_count * sizeof *host->errors);
+    return status;
 }
 
-/* A send through the remote processor: another segment of ours, or out. */
-static void route_effect(ta_host *host, uint32_t si, const ta_effect *effect) {
-    ta_router_outbound(host, si, effect);
-}
-
-/* Drain a segment's effects: route, copy out, acknowledge. */
-static void drain(ta_host *host, uint32_t si) {
+/* Drain a segment's effects: route, copy out, acknowledge. TA_ERROR_NO_MEMORY:
+ * the effects from the first one the host could not take on are not
+ * acknowledged (they come again with the next drain), or an error for a
+ * sender is still pending. */
+static ta_status drain(ta_host *host, uint32_t si) {
     host_segment *segment = &host->segments[si];
+    ta_system *system = segment->system;
     const ta_effect *effect;
-    uint32_t n = ta_system_effects(segment->system, &effect);
+    uint32_t n = ta_system_effects(system, &effect), done = 0;
+    ta_status status = TA_OK;
     host->draining = si;
-    for (uint32_t i = 0; i < n; i++) {
-        const ta_effect *effect_view = &effect[i];
+    for (; done < n; done++) {
+        const ta_effect *effect_view = &effect[done];
         if (effect_view->kind == TA_EFFECT_SEND && effect_view->io_processor == 0)
-            route_effect(host, si, effect_view);
+            status = ta_router_outbound(host, si, effect_view);
         else if (effect_view->kind == TA_EFFECT_SEND)
-            effect_copy(host, si, effect_view,
-                        effect_view->io_processor == TA_NIL ? TA_NIL
-                                                            : effect_view->io_processor - 1);
+            status = effect_copy(host, si, effect_view,
+                                 effect_view->io_processor == TA_NIL
+                                     ? TA_NIL
+                                     : effect_view->io_processor - 1);
         else
-            effect_copy(host, si, effect_view, TA_NIL);
-        if (effect_view->kind == TA_EFFECT_DONE || effect_view->kind == TA_EFFECT_ERROR)
-            if (moved_get(host, effect_view->session) != TA_NIL)
-                moved_put(host, effect_view->session, TA_NIL);
+            status = effect_copy(host, si, effect_view, TA_NIL);
+        if (status == TA_OK &&
+            (effect_view->kind == TA_EFFECT_DONE || effect_view->kind == TA_EFFECT_ERROR) &&
+            moved_get(host, effect_view->session) != TA_NIL)
+            moved_put(host, effect_view->session, TA_NIL);
+        if (segment->system != system) { /* grown while routing: its effects moved with it */
+            system = segment->system;
+            ta_system_effects(system, &effect);
+        }
+        if (status != TA_OK) break;
     }
-    ta_system_effects_ack(host->segments[si].system,
-                          n); /* (send_to may have grown another segment) */
+    ta_system_effects_ack(system, done);
     host->draining = TA_NIL;
-    for (uint32_t i = 0; i < host->error_count; i++) {
-        ta_string_view sid = {
-            host->errors[i].session_id == (size_t)-1 ? "" : host->pool + host->errors[i].session_id,
-            host->errors[i].session_id == (size_t)-1 ? 0 : host->errors[i].session_id_length};
-        communication_error_now(host, si, host->errors[i].actor, sid);
-    }
-    host->error_count = 0;
+    if (done < n) segment->busy = 1;
+    ta_status delivered = errors_deliver(host);
+    return status != TA_OK ? status : delivered;
 }
 
 /* ---- migration ------------------------------------------------------------------------ */
@@ -624,31 +752,62 @@ static migration_job *job_by_id(const ta_host *host, uint32_t id) {
     return NULL;
 }
 
+/* Room for `extra` more sessions in a job's retry list; 0 if refused. */
+static int job_reserve(ta_host *host, migration_job *job, uint32_t extra) {
+    uint32_t need = job->retry_count + extra;
+    if (need <= job->retry_capacity) return 1;
+    uint32_t c = job->retry_capacity ? job->retry_capacity : 8;
+    while (c < need)
+        c *= 2;
+    uint64_t *retry = (uint64_t *)host_alloc(host, sizeof(uint64_t) * c);
+    uint8_t *woken = (uint8_t *)host_alloc(host, c);
+    if (!retry || !woken) {
+        host_free(host, retry, sizeof(uint64_t) * c);
+        host_free(host, woken, c);
+        return 0;
+    }
+    if (job->retry_count) {
+        memcpy(retry, job->retry, sizeof(uint64_t) * job->retry_count);
+        memcpy(woken, job->woken, job->retry_count);
+    }
+    host_free(host, job->retry, sizeof(uint64_t) * job->retry_capacity);
+    host_free(host, job->woken, job->retry_capacity);
+    job->retry = retry;
+    job->woken = woken;
+    job->retry_capacity = c;
+    return 1;
+}
+
 ta_status ta_host_migrate(ta_host *host, ta_string_view name, uint64_t session, uint32_t flags,
                           ta_time timeout, uint32_t *id) {
-    migration_job *new_jobs = (migration_job *)grow(host->jobs, &host->job_capacity,
-                                                    host->job_count + 1, sizeof(migration_job));
-    if (!new_jobs) return TA_ERROR_NO_MEMORY;
-    host->jobs = new_jobs;
-    migration_job *job = &host->jobs[host->job_count++];
-    memset(job, 0, sizeof *job);
-    job->id = ++host->job_sequence;
-    job->active = 1;
-    job->flags = flags;
-    job->session = session;
-    job->deadline = timeout ? host->now + timeout : 0;
-    job->name = (char *)malloc(name.length + 1);
-    if (name.length) memcpy(job->name, name.pointer, name.length);
-    job->name[name.length] = 0;
-    job->name_length = name.length;
-    job->walking = session == 0;
-    if (session) {
-        job->retry = (uint64_t *)malloc(sizeof(uint64_t));
-        job->woken = (uint8_t *)calloc(1, 1);
-        job->retry[0] = session;
-        job->retry_count = job->retry_capacity = 1;
+    if (!grow(host, (void **)&host->jobs, &host->job_capacity, host->job_count + 1,
+              sizeof(migration_job)))
+        return TA_ERROR_NO_MEMORY;
+    migration_job job;
+    memset(&job, 0, sizeof job);
+    if (name.length) {
+        job.name = (char *)host_alloc(host, name.length);
+        if (!job.name) return TA_ERROR_NO_MEMORY;
+        memcpy(job.name, name.pointer, name.length);
+        job.name_length = name.length;
     }
-    if (id) *id = job->id;
+    if (session) {
+        if (!job_reserve(host, &job, 1)) {
+            job_free(host, &job);
+            return TA_ERROR_NO_MEMORY;
+        }
+        job.retry[0] = session;
+        job.woken[0] = 0;
+        job.retry_count = 1;
+    }
+    job.id = ++host->job_sequence;
+    job.active = 1;
+    job.flags = flags;
+    job.session = session;
+    job.deadline = timeout ? host->now + timeout : 0;
+    job.walking = session == 0;
+    host->jobs[host->job_count++] = job;
+    if (id) *id = job.id;
     return TA_OK;
 }
 
@@ -675,105 +834,105 @@ static const chart_version *candidate(ta_host *host, migration_job *job, uint32_
     return version && version->segment != si ? version : NULL;
 }
 
-static unsigned char *buffer_at(unsigned char **b, size_t *capacity, size_t n) {
-    if (n > *capacity) {
-        unsigned char *p = (unsigned char *)realloc(*b, n);
-        if (!p) return NULL;
-        *b = p;
-        *capacity = n;
+enum { MIGRATE_NO_MEMORY = -3, MIGRATE_SKIP = -2, MIGRATE_FAILED = -1, MIGRATE_LATER = 0 };
+
+/* Adopt an exported blob back where it came from. The export just freed
+ * what it needs there, so this does not need to grow. */
+static void adopt_home(ta_host *host, host_segment *from, const unsigned char *blob,
+                       size_t length) {
+    uint32_t actor;
+    while (ta_system_adopt(from->system, blob, length, &actor) == TA_ERROR_NO_MEMORY &&
+           segment_grow(host, from) == TA_OK) {
     }
-    return *b;
+    from->busy = 1;
 }
 
-/* 1 moved, 0 later (busy / asleep), -1 failed, -2 not a candidate (anymore) */
+/* 1 moved; MIGRATE_LATER (busy / asleep), MIGRATE_FAILED, MIGRATE_SKIP (not a
+ * candidate anymore), MIGRATE_NO_MEMORY (the actor stays where it was; later) */
 static int migrate_one(ta_host *host, migration_job *job, uint64_t session, uint8_t *woken) {
     uint32_t si, actor;
-    if (ta_host_locate(host, session, &si, &actor) != TA_OK) return -2;
+    if (ta_host_locate(host, session, &si, &actor) != TA_OK) return MIGRATE_SKIP;
     ta_actor_info actor_info;
     const chart_version *version = candidate(host, job, si, actor, &actor_info);
-    if (!version) return -2;
+    if (!version) return MIGRATE_SKIP;
     host_segment *from = &host->segments[si], *to = &host->segments[version->segment];
     if (actor_info.state == TA_ACTOR_HIBERNATED) {
         if ((job->flags & TA_HOST_MIGRATE_WAKE) && woken && !*woken) {
-            ta_host_effect *effect =
-                effect_new(host, TA_EFFECT_WAKE, si); /* the host loads the blob */
-            if (effect) {
-                effect->actor = actor;
-                effect->session = effect->root = session;
-                effect->job = job->id;
-                *woken = 1;
-            }
+            if (!effects_reserve(host, 1, 0)) return MIGRATE_NO_MEMORY;
+            ta_host_effect *effect = effect_new(host, TA_EFFECT_WAKE, si); /* the host loads it */
+            effect->actor = actor;
+            effect->session = effect->root = session;
+            effect->job = job->id;
+            *woken = 1;
         }
-        return 0;
+        return MIGRATE_LATER;
     }
-    if (actor_info.invocations) return 0; /* a session tree: not translated; once they finished */
+    if (actor_info.invocations) return MIGRATE_LATER; /* a session tree: once they finished */
+    uint32_t chart = version->chart, tseg = version->segment;
+    ta_string_view key = chart_key(to->image, chart);
+    /* everything the move needs once the actor has left its segment */
+    if (!effects_reserve(host, 1, key.length) || !moved_reserve(host, 1) ||
+        !buffer_at(host, &host->blob, &host->blob_capacity, 4096))
+        return MIGRATE_NO_MEMORY;
     size_t length = 0;
     ta_status status =
-        ta_actor_export(from->system, actor, buffer_at(&host->blob, &host->blob_capacity, 4096),
-                        host->blob_capacity, &length);
-    if (status == TA_ERROR_NO_MEMORY && buffer_at(&host->blob, &host->blob_capacity, length))
+        ta_actor_export(from->system, actor, host->blob, host->blob_capacity, &length);
+    if (status == TA_ERROR_NO_MEMORY) {
+        if (!buffer_at(host, &host->blob, &host->blob_capacity, length)) return MIGRATE_NO_MEMORY;
         status = ta_actor_export(from->system, actor, host->blob, host->blob_capacity, &length);
-    if (status == TA_ERROR_STATE) return 0;
-    if (status != TA_OK) return -1;
+    }
+    if (status == TA_ERROR_STATE) return MIGRATE_LATER;
+    if (status != TA_OK) return MIGRATE_FAILED;
     size_t ml = 0;
-    int moved = 0;
-    uint32_t chart = version->chart, tseg = version->segment;
+    int moved = 0, refused = 0;
     ta_status ms = ta_blob_migrate(from->image, to->image, chart, host->blob, length, NULL, 0, &ml);
-    if (ms == TA_ERROR_NO_MEMORY && buffer_at(&host->blob2, &host->blob2_capacity, ml) &&
-        ta_blob_migrate(from->image, to->image, chart, host->blob, length, host->blob2, ml, &ml) ==
-            TA_OK) {
-        uint32_t na;
-        while ((status = ta_system_adopt(to->system, host->blob2, ml, &na)) == TA_ERROR_NO_MEMORY &&
-               segment_grow(to)) {
+    if (ms == TA_ERROR_NO_MEMORY) {
+        if (!buffer_at(host, &host->blob2, &host->blob2_capacity, ml)) {
+            refused = 1;
+        } else if (ta_blob_migrate(from->image, to->image, chart, host->blob, length, host->blob2,
+                                   ml, &ml) == TA_OK) {
+            uint32_t na;
+            ta_status grown = TA_OK;
+            while ((status = ta_system_adopt(to->system, host->blob2, ml, &na)) ==
+                       TA_ERROR_NO_MEMORY &&
+                   (grown = segment_grow(host, to)) == TA_OK) {
+            }
+            moved = status == TA_OK;
+            refused = !moved && grown == TA_ERROR_NO_MEMORY;
         }
-        moved = status == TA_OK;
     }
     if (!moved) { /* back home, unchanged */
-        uint32_t na;
-        while ((status = ta_system_adopt(from->system, host->blob, length, &na)) ==
-                   TA_ERROR_NO_MEMORY &&
-               segment_grow(from)) {
-        }
-        from->busy = 1;
+        adopt_home(host, from, host->blob, length);
+        if (refused) return MIGRATE_NO_MEMORY;
         /* running invocations (a session tree): migrated once they finished */
-        return ms == TA_ERROR_UNSUPPORTED ? 0 : -1;
+        return ms == TA_ERROR_UNSUPPORTED ? MIGRATE_LATER : MIGRATE_FAILED;
     }
     moved_put(host, session, (uint32_t)(session >> SERIALS_SHIFT) == tseg ? TA_NIL : tseg);
     to->busy = 1;
     host->migrated++;
     ta_host_effect *effect = effect_new(host, TA_HOST_EFFECT_MIGRATED, tseg);
-    if (effect) {
-        uint32_t na = 0;
-        ta_host_locate(host, session, NULL, &na);
-        effect->actor = na;
-        effect->session = effect->root = session;
-        effect->job = job->id;
-        effect->chart = chart;
-        ta_string_view k = chart_key(to->image, chart);
-        set_effect_strings(host, (ta_string_view){0, 0}, k, (ta_string_view){0, 0},
-                           (ta_string_view){0, 0});
-    }
+    uint32_t na = 0;
+    ta_host_locate(host, session, NULL, &na);
+    effect->actor = na;
+    effect->session = effect->root = session;
+    effect->job = job->id;
+    effect->chart = chart;
+    set_effect_strings(host, (ta_string_view){0, 0}, key, (ta_string_view){0, 0},
+                       (ta_string_view){0, 0});
     return 1;
 }
 
+/* Needs job_reserve(h, job, 1) first. */
 static uint32_t retry_push(migration_job *job, uint64_t session) {
     for (uint32_t i = 0; i < job->retry_count; i++)
         if (job->retry[i] == session) return i;
-    uint32_t c = job->retry_capacity;
-    uint64_t *r = (uint64_t *)grow(job->retry, &c, job->retry_count + 1, sizeof(uint64_t));
-    if (!r) return TA_NIL;
-    job->retry = r;
-    uint32_t c2 = job->retry_capacity;
-    uint8_t *w = (uint8_t *)grow(job->woken, &c2, job->retry_count + 1, 1);
-    if (!w) return TA_NIL;
-    job->woken = w;
-    job->retry_capacity = c;
     job->retry[job->retry_count] = session;
     job->woken[job->retry_count] = 0;
     return job->retry_count++;
 }
 
-static void job_end(ta_host *host, migration_job *job) {
+/* End a job: TA_ERROR_NO_MEMORY leaves it active (it ends in a later run). */
+static ta_status job_end(ta_host *host, migration_job *job) {
     if (job->walking) { /* timed out mid-walk: the rest of the candidates are left behind too */
         for (uint32_t si = job->walk_segment; si < host->segment_count; si++) {
             host_segment *segment = segment_of(host, si);
@@ -782,30 +941,37 @@ static void job_end(ta_host *host, migration_job *job) {
             while ((n = ta_system_actors(segment->system, &cur, list, 256)) != 0)
                 for (uint32_t k = 0; k < n; k++) {
                     ta_actor_info actor_info;
-                    if (candidate(host, job, si, list[k], &actor_info))
-                        retry_push(job, actor_info.serial);
+                    if (!candidate(host, job, si, list[k], &actor_info)) continue;
+                    if (!job_reserve(host, job, 1)) return TA_ERROR_NO_MEMORY;
+                    retry_push(job, actor_info.serial); /* (again next time: no duplicates) */
                 }
         }
-        job->walking = 0;
     }
+    if (!effects_reserve(host, 1, 0)) return TA_ERROR_NO_MEMORY;
+    job->walking = 0;
     job->active = 0;
     job->left = job->retry;
     job->left_count = job->retry_count;
+    job->left_capacity = job->retry_capacity;
+    host_free(host, job->woken, job->retry_capacity);
     job->retry = NULL;
-    job->retry_count = job->retry_capacity = 0;
-    free(job->woken);
     job->woken = NULL;
+    job->retry_count = job->retry_capacity = 0;
     ta_host_effect *effect = effect_new(host, TA_HOST_EFFECT_JOB_DONE, TA_NIL);
-    if (effect) {
-        effect->job = job->id;
-        effect->migrated = job->migrated;
-        effect->failed = job->failed;
-        effect->pending = job->left_count;
-    }
+    effect->job = job->id;
+    effect->migrated = job->migrated;
+    effect->failed = job->failed;
+    effect->pending = job->left_count;
+    return TA_OK;
 }
 
-/* Advance a job by up to `quantum` actors. */
-static void job_step(ta_host *host, migration_job *job, uint32_t quantum) {
+/* Advance a job by up to `quantum` actors. TA_ERROR_NO_MEMORY: some actors
+ * could not move for lack of memory, or the job could not end; they are
+ * tried again in the next run. */
+static ta_status job_step(ta_host *host, migration_job *job, uint32_t quantum) {
+    /* every actor the walk looks at may join the retry list */
+    if (job->walking && !job_reserve(host, job, quantum)) return TA_ERROR_NO_MEMORY;
+    ta_status status = TA_OK;
     uint32_t looked = 0;
     while (job->walking && looked < quantum) {
         host_segment *segment = segment_of(host, job->walk_segment);
@@ -831,31 +997,36 @@ static void job_step(ta_host *host, migration_job *job, uint32_t quantum) {
             uint8_t woken = 0;
             int r = migrate_one(host, job, actor_info.serial, &woken);
             if (r > 0) job->migrated++;
-            if (r == -1) job->failed++;
-            if (r == 0) {
+            if (r == MIGRATE_FAILED) job->failed++;
+            if (r == MIGRATE_NO_MEMORY) status = TA_ERROR_NO_MEMORY;
+            if (r == MIGRATE_LATER || r == MIGRATE_NO_MEMORY) {
                 uint32_t at = retry_push(job, actor_info.serial);
-                if (woken && at != TA_NIL) job->woken[at] = 1;
+                if (woken) job->woken[at] = 1;
             }
         }
     }
     uint32_t keep = 0;
     for (uint32_t i = 0; i < job->retry_count; i++) {
-        int r = 0;
+        int r = MIGRATE_LATER;
         if (looked < quantum) {
             r = migrate_one(host, job, job->retry[i], &job->woken[i]);
             looked++;
         }
         if (r > 0) job->migrated++;
-        if (r == -1) job->failed++;
-        if (r == 0) {
+        if (r == MIGRATE_FAILED) job->failed++;
+        if (r == MIGRATE_NO_MEMORY) status = TA_ERROR_NO_MEMORY;
+        if (r == MIGRATE_LATER || r == MIGRATE_NO_MEMORY) {
             job->retry[keep] = job->retry[i];
             job->woken[keep] = job->woken[i];
             keep++;
         }
     }
     job->retry_count = keep;
-    if ((!job->walking && !job->retry_count) || (job->deadline && host->now >= job->deadline))
-        job_end(host, job);
+    if ((!job->walking && !job->retry_count) || (job->deadline && host->now >= job->deadline)) {
+        ta_status ended = job_end(host, job);
+        if (ended != TA_OK) status = ended;
+    }
+    return status;
 }
 
 /* ---- running ------------------------------------------------------------------------- */
@@ -867,7 +1038,10 @@ void ta_host_advance_time(ta_host *host, ta_time now) {
     ta_router_time(host); /* envelopes queued for absent peers past their TTL */
 }
 
-static void retire(ta_host *host) {
+/* Free segments that are no longer current and have no actors. 0 if one
+ * could not be reported (no memory): it is retired in a later run. */
+static int retire(ta_host *host) {
+    int all = 1;
     for (uint32_t si = 0; si < host->segment_count; si++) {
         host_segment *segment = segment_of(host, si);
         if (!segment || segment->busy) continue;
@@ -875,9 +1049,14 @@ static void retire(ta_host *host) {
         for (uint32_t v = 0; v < host->version_count; v++)
             current |= host->versions[v].segment == si;
         if (current || segment_actors(segment)) continue;
+        if (!effects_reserve(host, 1, 0)) {
+            all = 0;
+            continue;
+        }
         ta_system_deinit(segment->system);
-        free(segment->memory);
+        host_free(host, segment->memory, segment->memory_size);
         segment->memory = NULL;
+        segment->memory_size = 0;
         segment->system = NULL;
         segment->live = 0;
         host->retired++;
@@ -886,6 +1065,7 @@ static void retire(ta_host *host) {
                 moved_put(host, host->moved_keys[i], TA_NIL);
         effect_new(host, TA_HOST_EFFECT_SEGMENT_FREED, si);
     }
+    return all;
 }
 
 ta_run ta_host_run(ta_host *host, uint32_t budget) {
@@ -893,8 +1073,12 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     memset(&out, 0, sizeof out);
     effects_release(host); /* the previous batch, if not acknowledged */
     uint32_t left = budget;
-    int full = 0, fault = 0;
-    for (int round = 0; round < 64 && !full; round++) {
+    int full = 0, fault = 0, exhausted = 0;
+    uint32_t detail = TA_POOL_NONE;
+    /* what an earlier run or call could not finish for lack of memory */
+    if (host->error_count && errors_deliver(host) != TA_OK) exhausted = 1;
+    if (host->expiry_behind) ta_router_time(host);
+    for (int round = 0; round < 64 && !full && !exhausted; round++) {
         int ran = 0;
         /* fair shares: a runaway segment must not starve the others */
         uint32_t runnable = 0;
@@ -902,7 +1086,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
             const host_segment *segment = segment_of(host, k);
             runnable += segment && (segment->busy || segment->deadline <= host->now);
         }
-        for (uint32_t k = 0; k < host->segment_count && !full; k++) {
+        for (uint32_t k = 0; k < host->segment_count && !full && !exhausted; k++) {
             uint32_t si = (host->round_robin + k) % host->segment_count;
             host_segment *segment = segment_of(host, si);
             if (!segment || (!segment->busy && segment->deadline > host->now)) continue;
@@ -915,11 +1099,18 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
             segment->deadline = result.next_deadline;
             segment->busy =
                 result.status != TA_RUN_IDLE; /* draining may add work (errors, deliveries) */
-            drain(host, si);
+            if (drain(host, si) != TA_OK) exhausted = 1;
             segment = &host->segments[si];
-            if (result.status == TA_RUN_EXHAUSTED && !segment_grow(segment)) {
-                fault = 1;
-                segment->busy = 0;
+            if (result.status == TA_RUN_EXHAUSTED) {
+                ta_status grown = segment_grow(host, segment);
+                if (grown == TA_ERROR_NO_MEMORY) { /* refused: the same run again later */
+                    exhausted = 1;
+                    detail = result.detail;
+                    segment->busy = 1;
+                } else if (grown != TA_OK) {
+                    fault = 1;
+                    segment->busy = 0;
+                }
             }
             if (result.status == TA_RUN_FAULT) {
                 fault = 1;
@@ -929,7 +1120,8 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
         }
         for (uint32_t i = 0; i < host->job_count && round == 0; i++) /* one quantum per run */
             if (host->jobs[i].active) {
-                job_step(host, &host->jobs[i], host->config.migrate_quantum);
+                if (job_step(host, &host->jobs[i], host->config.migrate_quantum) != TA_OK)
+                    exhausted = 1;
                 ran = 1;
             }
         if (!ran || !left) break;
@@ -947,17 +1139,13 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
         for (uint32_t e = 0; e < host->effect_count; e++)
             ended_now |=
                 host->effects[e].kind == TA_HOST_EFFECT_JOB_DONE && host->effects[e].job == job->id;
-        if (job->active || ended_now) {
+        if (job->active || ended_now)
             host->jobs[kj++] = *job;
-        } else {
-            free(job->name);
-            free(job->retry);
-            free(job->woken);
-            free(job->left);
-        }
+        else
+            job_free(host, job);
     }
     host->job_count = kj;
-    retire(host);
+    if (!retire(host)) exhausted = 1;
     /* yielded: segments have work, or a job has actors left to look at. A job
      * that only waits (busy or sleeping actors) moves on when they change —
      * the next run after an event — or at its timeout (next_deadline). */
@@ -979,19 +1167,19 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     if (qd < out.next_deadline) out.next_deadline = qd;
     out.used = budget - left;
     out.effect_count = host->effect_count;
-    out.status = full    ? TA_RUN_EFFECTS_FULL
-                 : fault ? TA_RUN_FAULT
-                 : busy  ? TA_RUN_YIELDED
-                         : TA_RUN_IDLE;
+    out.detail = exhausted ? detail : TA_POOL_NONE;
+    out.status = full        ? TA_RUN_EFFECTS_FULL
+                 : fault     ? TA_RUN_FAULT
+                 : exhausted ? TA_RUN_EXHAUSTED
+                 : busy      ? TA_RUN_YIELDED
+                             : TA_RUN_IDLE;
     return out;
 }
 
 /* ---- hibernation ----------------------------------------------------------------------- */
 
 uint32_t ta_host_sweep(ta_host *host, uint32_t max_scan, uint64_t *out, uint32_t capacity) {
-    uint32_t n = 0, scanned = 0,
-             *handles = (uint32_t *)malloc(sizeof(uint32_t) * (capacity ? capacity : 1));
-    if (!handles) return 0;
+    uint32_t n = 0, scanned = 0;
     /* each live segment once at most: its share is up to one revolution (no lapping) */
     for (uint32_t visited = 0; visited < host->segment_count && scanned < max_scan && n < capacity;
          visited++) {
@@ -1005,14 +1193,28 @@ uint32_t ta_host_sweep(ta_host *host, uint32_t max_scan, uint64_t *out, uint32_t
             stats.size = sizeof stats;
             ta_system_stats_get(segment->system, &stats);
             uint32_t budget = max_scan - scanned, start = host->sweep_cursor;
+            /* The handles go into the free part of `out`, read as uint32_t:
+             * handle i sits in the first half of the eight bytes session i
+             * takes, so converting from the last to the first overwrites
+             * only handles already converted. */
+            uint32_t *handles = (uint32_t *)(void *)(out + n);
             uint32_t got = ta_system_cold_actors(segment->system, &host->sweep_cursor, budget,
                                                  handles, capacity - n);
-            for (uint32_t i = 0; i < got; i++) {
+            uint32_t kept = got;
+            for (uint32_t i = got; i-- > 0;) {
                 ta_actor_info actor_info;
                 actor_info.size = sizeof actor_info;
-                if (ta_actor_info_get(segment->system, handles[i], &actor_info) == TA_OK)
-                    out[n++] = actor_info.serial;
+                uint32_t handle = handles[i];
+                out[n + i] = ta_actor_info_get(segment->system, handle, &actor_info) == TA_OK
+                                 ? actor_info.serial
+                                 : 0;
             }
+            for (uint32_t i = 0, w = 0; i < got; i++) /* (a session id is never 0) */
+                if (out[n + i])
+                    out[n + w++] = out[n + i];
+                else
+                    kept--;
+            n += kept;
             scanned += budget < stats.actors_capacity ? budget : stats.actors_capacity;
             if (n == capacity) break;              /* the output is full: continue here next time */
             if (host->sweep_cursor > start) break; /* out of budget mid-revolution: continue here */
@@ -1020,7 +1222,6 @@ uint32_t ta_host_sweep(ta_host *host, uint32_t max_scan, uint64_t *out, uint32_t
         host->sweep_segment++;
         host->sweep_cursor = 0;
     }
-    free(handles);
     return n;
 }
 
@@ -1039,7 +1240,7 @@ ta_status ta_host_wake(ta_host *host, uint64_t session, const void *blob, size_t
     if (status != TA_OK) return status;
     host_segment *segment = &host->segments[si];
     while ((status = ta_actor_wake(segment->system, actor, blob, length)) == TA_ERROR_NO_MEMORY &&
-           segment_grow(segment)) {
+           segment_grow(host, segment) == TA_OK) {
     }
     if (status == TA_OK) segment->busy = 1;
     return status;
@@ -1061,7 +1262,8 @@ ta_status ta_host_export_actor(ta_host *host, uint64_t session, void *buffer, si
 }
 
 /* An adopted session lives in segment si: routed there, and its id never handed
- * out by its home segment (one added later is set up past it, reserve_serials). */
+ * out by its home segment (one added later is set up past it, reserve_serials).
+ * Needs moved_reserve first. */
 static void place(ta_host *host, uint32_t si, uint64_t serial) {
     uint32_t home = (uint32_t)(serial >> SERIALS_SHIFT);
     moved_put(host, serial, home == si ? TA_NIL : si);
@@ -1085,11 +1287,14 @@ static int lives_elsewhere(ta_host *host, const host_segment *segment, uint64_t 
 }
 
 /* The sessions of an adopted tree in segment si (root and the sessions it
- * invoked): check (1 if an id lives elsewhere) or place them. */
-static int tree_pass(ta_host *host, uint32_t si, uint32_t root, uint64_t root_serial, int check) {
+ * invoked): check (1 if an id lives elsewhere; *count: how many there are)
+ * or place them. */
+static int tree_pass(ta_host *host, uint32_t si, uint32_t root, uint64_t root_serial, int check,
+                     uint32_t *count) {
     host_segment *segment = &host->segments[si];
     if (check ? lives_elsewhere(host, segment, root_serial) : (place(host, si, root_serial), 0))
         return 1;
+    if (count) *count = 1;
     uint32_t cursor = 0, list[64], n;
     while ((n = ta_system_actors(segment->system, &cursor, list, 64)) != 0)
         for (uint32_t k = 0; k < n; k++) {
@@ -1104,6 +1309,7 @@ static int tree_pass(ta_host *host, uint32_t si, uint32_t root, uint64_t root_se
             if (ci.parent != root) continue;
             if (check ? lives_elsewhere(host, segment, serial) : (place(host, si, serial), 0))
                 return 1;
+            if (count) ++*count;
         }
     return 0;
 }
@@ -1113,28 +1319,33 @@ ta_status ta_host_adopt(ta_host *host, uint32_t segment, const void *blob, size_
     host_segment *segment_record = segment_of(host, segment);
     if (session) *session = 0;
     if (!segment_record) return TA_ERROR_INVALID;
+    /* room to export it again if it cannot stay: a tree exports to the blob it came from */
+    if (!buffer_at(host, &host->blob, &host->blob_capacity, length)) return TA_ERROR_NO_MEMORY;
     uint32_t root = 0;
     ta_status status;
     while ((status = ta_system_adopt(segment_record->system, blob, length, &root)) ==
                TA_ERROR_NO_MEMORY &&
-           segment_grow(segment_record)) {
+           segment_grow(host, segment_record) == TA_OK) {
     }
     if (status != TA_OK) return status;
     ta_actor_info actor_info;
     actor_info.size = sizeof actor_info;
     ta_actor_info_get(segment_record->system, root, &actor_info);
-    if (tree_pass(host, segment, root, actor_info.serial, 1)) {
-        /* one of its sessions lives in another segment: out again, nothing changed */
+    uint32_t count = 0;
+    int elsewhere = tree_pass(host, segment, root, actor_info.serial, 1, &count);
+    if (elsewhere || !moved_reserve(host, count)) {
+        /* one of its sessions lives in another segment, or no room to route
+         * to them: out again, nothing changed */
         size_t n = 0;
-        status = ta_actor_export(segment_record->system, root,
-                                 buffer_at(&host->blob, &host->blob_capacity, length),
-                                 host->blob_capacity, &n);
-        if (status == TA_ERROR_NO_MEMORY && buffer_at(&host->blob, &host->blob_capacity, n))
+        status = ta_actor_export(segment_record->system, root, host->blob, host->blob_capacity,
+                                 &n);
+        if (status == TA_ERROR_NO_MEMORY &&
+            buffer_at(host, &host->blob, &host->blob_capacity, n))
             ta_actor_export(segment_record->system, root, host->blob, host->blob_capacity, &n);
-        return TA_ERROR_STATE;
+        return elsewhere ? TA_ERROR_STATE : TA_ERROR_NO_MEMORY;
     }
     segment_record->busy = 1;
-    tree_pass(host, segment, root, actor_info.serial, 0);
+    tree_pass(host, segment, root, actor_info.serial, 0, NULL);
     if (session) *session = actor_info.serial;
     return TA_OK;
 }
@@ -1205,7 +1416,7 @@ ta_status ta_host_boot(ta_host *host, uint32_t segment) {
         stats.size = sizeof stats;
         ta_system_stats_get(segment_record->system, &stats);
         if (stats.actors + image_info.boot_actor_count <= stats.actors_capacity) break;
-        if (!segment_grow(segment_record)) return TA_ERROR_NO_MEMORY;
+        if (segment_grow(host, segment_record) != TA_OK) return TA_ERROR_NO_MEMORY;
     }
     ta_status r = ta_system_boot(segment_record->system);
     segment_record->busy = 1;
@@ -1369,6 +1580,11 @@ uint32_t ta_host_snapshot_segments(const void *snap, size_t length, uint64_t *ha
     return hd->segment_count;
 }
 
+static ta_status restore_failed(ta_host *host, ta_status status) {
+    ta_host_free(host);
+    return status;
+}
+
 ta_status ta_host_restore(const ta_host_config *config, const ta_image *const *images,
                           uint32_t image_count, const void *snap, size_t length, ta_host **out) {
     *out = NULL;
@@ -1377,12 +1593,9 @@ ta_status ta_host_restore(const ta_host_config *config, const ta_image *const *i
     ta_host *host;
     ta_status status = ta_host_new(config, &host);
     if (status != TA_OK) return status;
-    if (hd->segment_count &&
-        !(host->segments = (host_segment *)grow(host->segments, &host->segment_capacity,
-                                                hd->segment_count, sizeof(host_segment)))) {
-        ta_host_free(host);
-        return TA_ERROR_NO_MEMORY;
-    }
+    if (hd->segment_count && !grow(host, (void **)&host->segments, &host->segment_capacity,
+                                   hd->segment_count, sizeof(host_segment)))
+        return restore_failed(host, TA_ERROR_NO_MEMORY);
     host->now = hd->now;
     const unsigned char *p = (const unsigned char *)snap + sizeof *hd;
     for (uint32_t i = 0; i < hd->segment_count; i++) {
@@ -1397,40 +1610,39 @@ ta_status ta_host_restore(const ta_host_config *config, const ta_image *const *i
         ta_image_info image_info;
         image_info.size = sizeof image_info;
         if (images[i]) ta_image_get_info(images[i], &image_info);
-        if (!images[i] || image_info.content_hash != ss->hash) {
-            ta_host_free(host);
-            return TA_ERROR_INVALID; /* not the image this segment ran */
-        }
+        if (!images[i] || image_info.content_hash != ss->hash)
+            return restore_failed(host, TA_ERROR_INVALID); /* not the image this segment ran */
         segment->image = images[i];
         segment->config = ss->config;
         segment->config.io_processors = host->io_processors;
         segment->config.io_processor_count = host->io_processor_count;
-        segment->memory = malloc((size_t)ss->region_length);
-        status = segment->memory ? ta_system_restore(segment->memory, (size_t)ss->region_length,
-                                                     segment->image, p, (size_t)ss->region_length,
-                                                     &segment->config, host->datamodels,
-                                                     host->config.datamodel_count, &segment->system)
-                                 : TA_ERROR_NO_MEMORY;
+        segment->memory = host_alloc(host, (size_t)ss->region_length);
+        if (!segment->memory) return restore_failed(host, TA_ERROR_NO_MEMORY);
+        segment->memory_size = (size_t)ss->region_length;
+        status = ta_system_restore(segment->memory, (size_t)ss->region_length, segment->image, p,
+                                   (size_t)ss->region_length, &segment->config, host->datamodels,
+                                   host->config.datamodel_count, &segment->system);
         if (status != TA_OK) {
-            free(segment->memory);
+            host_free(host, segment->memory, segment->memory_size);
             segment->memory = NULL;
-            ta_host_free(host);
-            return status;
+            return restore_failed(host, status);
         }
         segment->live = 1;
         segment->busy = 1; /* look at it in the first run */
         segment->deadline = UINT64_MAX;
         p += pad8((size_t)ss->region_length);
     }
+    if (!moved_reserve(host, hd->moved_count) || !versions_reserve(host, 0))
+        return restore_failed(host, TA_ERROR_NO_MEMORY);
     for (uint32_t i = 0; i < hd->moved_count; i++) {
         snapshot_moved m;
         memcpy(&m, p, sizeof m);
         p += sizeof m;
         moved_put(host, m.session, m.segment);
     }
-    if (hd->router_length && !ta_router_restore(host, p, (size_t)hd->router_length)) {
-        ta_host_free(host);
-        return TA_ERROR_INVALID;
+    if (hd->router_length) {
+        status = ta_router_restore(host, p, (size_t)hd->router_length);
+        if (status != TA_OK) return restore_failed(host, status);
     }
     host->message_sequence = hd->message_sequence;
     host->round_robin = hd->segment_count ? hd->round_robin % hd->segment_count : 0;

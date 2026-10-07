@@ -20,6 +20,7 @@
 #include <tinyactors/compile.h>
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
+#include <tinyactors/runtime.h>
 
 #define BASE       "tinyactors://conformance/"
 #define MAX_ACTORS 64
@@ -118,6 +119,7 @@ static ta_host_config host_config(conformance_world *w) {
     config.system.ticks_per_second = 1000; /* ms */
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
     return config;
 }
 

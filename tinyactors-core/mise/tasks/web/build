@@ -4,8 +4,10 @@
 
 require_relative '../../core'
 
+# The binding gives the host the C library's allocator (ta_runtime_malloc in
+# runtime.c); runtime_hosted.c (files, the clock) it does not need.
 sources = %w[base image core system compile host].flat_map { |name| Core::LAYERS.fetch(name).sources } +
-          %w[bindings/shared/binding.c bindings/web/src/glue.c]
+          %w[src/runtime/runtime.c bindings/shared/binding.c bindings/web/src/glue.c]
 output = Core::ROOT.join('bindings/web/tinyactors.wasm')
 target = Toolchain::Target.zig('wasm32-wasi')
 key = Cache.digest('web:build', Cache.tool_id(Toolchain::Tool[:zig].command),
