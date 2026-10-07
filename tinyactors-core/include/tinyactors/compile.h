@@ -7,17 +7,12 @@
 #ifndef TINYACTORS_COMPILE_H
 #define TINYACTORS_COMPILE_H
 
+#include <tinyactors/allocator.h>
 #include <tinyactors/types.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef struct ta_allocator {
-    void *context;
-    void *(*alloc)(void *context, size_t size, size_t align);
-    void (*free)(void *context, void *ptr, size_t size);
-} ta_allocator;
 
 typedef struct ta_diagnostic {
     uint32_t severity; /* TA_DIAGNOSTIC_* */

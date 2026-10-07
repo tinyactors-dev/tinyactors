@@ -162,52 +162,6 @@
     }
   ],
   "types": {
-    "ta_allocator": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "context",
-          "type": "void *"
-        },
-        {
-          "name": "alloc",
-          "type": "void *(*)(void *, size_t, size_t)"
-        },
-        {
-          "name": "free",
-          "type": "void (*)(void *, void *, size_t)"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 24,
-          "align": 8,
-          "offsets": {
-            "context": 0,
-            "alloc": 8,
-            "free": 16
-          }
-        },
-        "aarch64": {
-          "size": 24,
-          "align": 8,
-          "offsets": {
-            "context": 0,
-            "alloc": 8,
-            "free": 16
-          }
-        },
-        "wasm32": {
-          "size": 12,
-          "align": 4,
-          "offsets": {
-            "context": 0,
-            "alloc": 4,
-            "free": 8
-          }
-        }
-      }
-    },
     "ta_diagnostic": {
       "kind": "struct",
       "fields": [

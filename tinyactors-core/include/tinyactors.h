@@ -3,6 +3,7 @@
 #define TINYACTORS_H
 
 #include <tinyactors/types.h>
+#include <tinyactors/allocator.h>
 #include <tinyactors/address.h>
 #include <tinyactors/frame.h>
 #include <tinyactors/image.h>

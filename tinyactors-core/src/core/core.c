@@ -11,6 +11,7 @@
  *      explicit stack in the workspace or by interval/bitset scans.
  */
 #include "core/core_internal.h"
+#include "base/format.h"
 #include "base/memory.h"
 
 struct ta_datamodel_environment {

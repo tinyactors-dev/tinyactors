@@ -10,8 +10,9 @@
 #include "base/config.h"
 
 /* memcmp never lowers to an intrinsic, so it is always a local loop: the
- * freestanding layers then depend on at most memcpy/memset (which GCC/Clang
- * may emit implicitly anyway and which wasm bulk-memory provides). */
+ * freestanding layers then depend on at most memcpy, memset and memmove
+ * (which GCC/Clang may emit implicitly anyway and which wasm bulk-memory
+ * provides). */
 TA_INLINE int ta_memcmp(const void *a, const void *b, size_t n) {
     const unsigned char *x = (const unsigned char *)a, *y = (const unsigned char *)b;
     for (; n; --n, ++x, ++y)
@@ -22,6 +23,7 @@ TA_INLINE int ta_memcmp(const void *a, const void *b, size_t n) {
 #if defined(__GNUC__) || defined(__clang__)
 #define ta_memcpy(d, s, n) __builtin_memcpy((d), (s), (n))
 #define ta_memset(d, c, n) __builtin_memset((d), (c), (n))
+#define ta_memmove(d, s, n) __builtin_memmove((d), (s), (n))
 #else
 TA_INLINE void ta__memcpy(void *d, const void *s, size_t n) {
     unsigned char *dp = (unsigned char *)d;
@@ -34,7 +36,20 @@ TA_INLINE void ta__memset(void *d, int c, size_t n) {
     while (n--)
         *dp++ = (unsigned char)c;
 }
+/* Copies backwards when the destination starts inside the source. */
+TA_INLINE void ta__memmove(void *d, const void *s, size_t n) {
+    unsigned char *dp = (unsigned char *)d;
+    const unsigned char *sp = (const unsigned char *)s;
+    if (dp <= sp || dp >= sp + n) {
+        while (n--)
+            *dp++ = *sp++;
+    } else {
+        while (n--)
+            dp[n] = sp[n];
+    }
+}
 #define ta_memcpy(d, s, n) ta__memcpy((d), (s), (n))
+#define ta_memmove(d, s, n) ta__memmove((d), (s), (n))
 #define ta_memset(d, c, n) ta__memset((d), (c), (n))
 #endif
 

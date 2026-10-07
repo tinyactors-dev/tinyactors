@@ -1,5 +1,6 @@
 /* event_pool.c — refcounted slab strings and shared event records. */
 #include "core/core_internal.h"
+#include "base/format.h"
 #include "base/memory.h"
 
 /* ---- strings ----------------------------------------------------------------- */
@@ -49,18 +50,6 @@ int ta_shared_string_equal(const ta_core *core, uint32_t a, ta_string_view b) {
     ta_string_view x = ta_shared_string_get(core, a);
     return x.length == b.length &&
            (b.length == 0 || ta_memcmp(x.pointer, b.pointer, b.length) == 0);
-}
-
-uint32_t ta_format_u64(char *buffer, uint64_t v) {
-    char temporary[24];
-    uint32_t n = 0;
-    do {
-        temporary[n++] = (char)('0' + (v % 10));
-        v /= 10;
-    } while (v);
-    for (uint32_t i = 0; i < n; i++)
-        buffer[i] = temporary[n - 1 - i];
-    return n;
 }
 
 /* CSS2 time: <number>(s|ms), optional surrounding spaces. */

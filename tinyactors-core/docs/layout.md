@@ -20,6 +20,7 @@ implementation of that layer). Layer dependency rules are in
 │   ├── tinyactors.h           ✅ umbrella for the freestanding ABI
 │   └── tinyactors/
 │       ├── types.h            ✅ ta_string_view, ta_status, TA_NIL, ta_time, ta_expression, ta_payload, TA_API
+│       ├── allocator.h        ✅ ta_allocator: the memory a caller lends the host and the compiler
 │       ├── address.h          ✅ tinyactors:// addresses (parse/format)
 │       ├── frame.h            ✅ length-prefixed link frames on byte streams
 │       ├── image.h            ✅ open/verify image, chart/state/event/expression/data lookup
@@ -27,7 +28,7 @@ implementation of that layer). Layer dependency rules are in
 │       │                         event view, null datamodel
 │       ├── system.h           ✅ the embedding ABI: layout/init/run/send/resume/effects/inspect/snapshot
 │       ├── core.h             ✅ advanced/unstable bare kernel (step function)
-│       ├── compile.h          ✅ compiler API (ta_allocator, diagnostics, source resolver, manifests)
+│       ├── compile.h          ✅ compiler API (diagnostics, source resolver, manifests)
 │       ├── runtime.h          ✅ OS conveniences (malloc, files, resolver, clock, auto-grow)
 │       ├── host.h             ✅ host layer: segments sharing a base URI, routing, versions,
 │       │                         migration jobs, sweep, growth, boot, snapshot/restore (hosted)
@@ -37,7 +38,8 @@ implementation of that layer). Layer dependency rules are in
 ├── src/                       internal headers are included path-qualified ("base/pool.h", -Isrc)
 │   ├── base/                  freestanding building blocks (§2)
 │   │   ├── config.h           ✅ portability macros, TA_ASSERT, ta_pointer_add
-│   │   ├── memory.h           ✅ memcpy/memset builtins, local memcmp (no libc symbols)
+│   │   ├── memory.h           ✅ memcpy/memset/memmove builtins, local memcmp (no libc symbols)
+│   │   ├── format.h           ✅ decimal numbers and bounded text (ta_format_u64, ta_text)
 │   │   ├── arena.[ch]         ✅ bump arena + measure mode
 │   │   ├── pool.[ch]          ✅ fixed-stride pool, u32 indices, generation handles, lazy init, copy
 │   │   ├── slab.[ch]          ✅ page-based half-step size classes (instances, dynamic strings)

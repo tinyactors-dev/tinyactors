@@ -7,6 +7,7 @@
 #ifndef TINYACTORS_RUNTIME_H
 #define TINYACTORS_RUNTIME_H
 
+#include <tinyactors/allocator.h>
 #include <tinyactors/compile.h>
 #include <tinyactors/system.h>
 

@@ -1,6 +1,8 @@
 /* address.c — tinyactors addresses (see include/tinyactors/address.h). Freestanding. */
 #include <tinyactors/address.h>
 
+#include "base/format.h"
+
 static int is_digit(char c) {
     return c >= '0' && c <= '9';
 }
@@ -111,17 +113,12 @@ static uint32_t put(char *buffer, uint32_t capacity, uint32_t at, const char *s,
 uint32_t ta_address_format(ta_string_view system, uint64_t session, char *buffer,
                            uint32_t capacity) {
     if (!session || !ta_address_system_valid(system)) return 0;
-    char digits[20];
-    uint32_t nd = 0;
-    for (uint64_t v = session; v; v /= 10)
-        digits[nd++] = (char)('0' + (int)(v % 10));
-    char rev[20];
-    for (uint32_t k = 0; k < nd; k++)
-        rev[k] = digits[nd - 1 - k];
+    char digits[TA_FORMAT_U64_MAX];
+    uint32_t nd = ta_format_u64(digits, session);
     uint32_t at = put(buffer, capacity, 0, TA_ADDRESS_SCHEME, 13);
     if (at != UINT32_MAX) at = put(buffer, capacity, at, system.pointer, system.length);
     if (at != UINT32_MAX) at = put(buffer, capacity, at, "/#_scxml_", 9);
-    if (at != UINT32_MAX) at = put(buffer, capacity, at, rev, nd);
+    if (at != UINT32_MAX) at = put(buffer, capacity, at, digits, nd);
     return at == UINT32_MAX ? 0 : at;
 }
 

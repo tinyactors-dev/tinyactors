@@ -4,8 +4,10 @@
 #include "../harness/harness.h"
 #include "base/arena.h"
 #include "base/bitset.h"
+#include "base/format.h"
 #include "base/heap.h"
 #include "base/index_queue.h"
+#include "base/memory.h"
 #include "base/pool.h"
 #include "base/slab.h"
 
@@ -286,6 +288,54 @@ static void test_slab(void) {
     CHECK_EQUAL(slab.used_pages, 0);
 }
 
+/* ta_format_u64: every length, the extremes; no terminator written. */
+static void test_format_u64(void) {
+    char buffer[TA_FORMAT_U64_MAX + 1];
+    memset(buffer, '#', sizeof buffer);
+    CHECK_EQUAL(ta_format_u64(buffer, 0), 1u);
+    CHECK(buffer[0] == '0' && buffer[1] == '#');
+    CHECK_EQUAL(ta_format_u64(buffer, UINT64_MAX), TA_FORMAT_U64_MAX);
+    CHECK(memcmp(buffer, "18446744073709551615", 20) == 0 && buffer[20] == '#');
+    uint64_t value = 1;
+    for (uint32_t digits = 1; digits <= 19; digits++, value *= 10) {
+        CHECK_EQUAL(ta_format_u64(buffer, value), digits);
+        CHECK_EQUAL(ta_format_u64(buffer, value * 10 - 1), digits);
+    }
+}
+
+/* ta_text: views and numbers up to the capacity exactly; past it, nothing
+ * more is written and the overflow stays set. */
+static void test_text(void) {
+    char buffer[16];
+    memset(buffer, '#', sizeof buffer);
+    ta_text text = ta_text_init(buffer, 12);
+    ta_text_append(&text, (ta_string_view){"msg/", 4});
+    ta_text_append_u64(&text, 4096);
+    ta_text_append(&text, (ta_string_view){NULL, 0});
+    ta_text_append(&text, (ta_string_view){".7", 2});
+    CHECK_EQUAL(text.length, 10u);
+    CHECK(!text.overflow && memcmp(buffer, "msg/4096.7", 10) == 0);
+    ta_text_append(&text, (ta_string_view){"ab", 2}); /* exactly full */
+    CHECK(!text.overflow && text.length == 12);
+    ta_text_append(&text, (ta_string_view){"c", 1});
+    CHECK(text.overflow && text.length == 12 && buffer[12] == '#');
+    ta_text_append(&text, (ta_string_view){NULL, 0}); /* stays overflowed */
+    CHECK(text.overflow);
+    text = ta_text_init(buffer, 3);
+    ta_text_append_u64(&text, 1234); /* a number is written whole or not at all */
+    CHECK(text.overflow && text.length == 0);
+}
+
+/* ta_memmove: overlapping either way, and the freestanding fallback's
+ * direction choice through the same macro. */
+static void test_memmove(void) {
+    char forward[] = "abcdefgh", backward[] = "abcdefgh";
+    ta_memmove(forward + 2, forward, 5);
+    CHECK(memcmp(forward, "ababcdeh", 8) == 0);
+    ta_memmove(backward, backward + 2, 5);
+    CHECK(memcmp(backward, "cdefgfgh", 8) == 0);
+}
+
 int main(void) {
     RUN(test_arena_measure_matches_init);
     RUN(test_arena_mark_reset);
@@ -296,5 +346,8 @@ int main(void) {
     RUN(test_index_queue);
     RUN(test_heap);
     RUN(test_slab);
+    RUN(test_format_u64);
+    RUN(test_text);
+    RUN(test_memmove);
     TEST_MAIN_END();
 }

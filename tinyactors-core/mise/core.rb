@@ -30,7 +30,7 @@ module Core
 
   LAYERS = [
     Layer.new(name: 'base', uses: [], freestanding: true,
-              sources: %w[address frame arena pool heap slab].map { |s| "src/base/#{s}.c" }),
+              sources: %w[address format frame arena pool heap slab].map { |s| "src/base/#{s}.c" }),
     Layer.new(name: 'image', uses: %w[base], freestanding: true,
               sources: %w[src/image/image.c src/image/event_names.c]),
     Layer.new(name: 'core', uses: %w[image], freestanding: true,
@@ -108,7 +108,7 @@ module Core
 
   LIBRARIES = [
     Library.new(name: 'tinyactors', layers: %w[base image core system basic_http], uses: [], libc: false,
-                headers: %w[types.h address.h frame.h image.h datamodel.h system.h core.h basic_http.h wasm.h]),
+                headers: %w[types.h allocator.h address.h frame.h image.h datamodel.h system.h core.h basic_http.h wasm.h]),
     Library.new(name: 'tinyactors_runtime', layers: %w[compile host runtime], uses: %w[tinyactors], libc: true,
                 headers: %w[compile.h host.h runtime.h]),
     Library.new(name: 'tinyactors_datamodel_ecmascript', layers: %w[datamodel_ecmascript quickjs], uses: %w[tinyactors],

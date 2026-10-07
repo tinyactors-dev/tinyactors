@@ -1,6 +1,7 @@
 /* system.c — system lifetime: one caller-owned region carved by a single
  * function in measure mode (ta_system_layout) and real mode (ta_system_init);
  * actor spawn/reclaim; relocation; snapshot/restore; inspection. */
+#include "base/format.h"
 #include "base/memory.h"
 #include "system/system_internal.h"
 

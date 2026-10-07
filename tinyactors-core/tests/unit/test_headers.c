@@ -1,6 +1,7 @@
 /* Every public header must be self-contained and C89-ABI friendly; this TU
  * includes each one first in its own block (compiled as C and as C++). */
 #include <tinyactors/types.h>
+#include <tinyactors/allocator.h>
 #include <tinyactors/image.h>
 #include <tinyactors/datamodel.h>
 #include <tinyactors/system.h>

@@ -261,7 +261,6 @@ void ta_shared_string_retain(ta_core *core, uint32_t string_ref);
 void ta_shared_string_release(ta_core *core, uint32_t string_ref);
 ta_string_view ta_shared_string_get(const ta_core *core, uint32_t string_ref);
 int ta_shared_string_equal(const ta_core *core, uint32_t a, ta_string_view b);
-uint32_t ta_format_u64(char *buffer, uint64_t v); /* returns length, no NUL */
 int ta_core_parse_duration(ta_string_view s, uint64_t *ns);
 
 /* datamodel helpers */

@@ -100,7 +100,8 @@ read in one sitting and have no dependencies.
 | `ta_bitset` | Inline ops over `u32` words: test/set/clear, and/or/andnot, range-mask, find-next/prev set bit, popcount. `u32` words keep snapshots portable across 32/64-bit hosts. | configuration, exit/entry sets, history, enabled-transition sets, invoke-pending |
 | `ta_index_queue` | Intrusive FIFO of `u32` indices: `{head, tail}` + a `next` field at a known offset inside each record. Zero allocation per enqueue. | internal queues, mailboxes, run queue, per-actor timer lists, free lists |
 | `ta_heap` | 4-ary min-heap of `{due:u64, seq:u32, item:u32}` + back-index for O(log n) removal (`<cancel>`). | timer/delayed-send queue |
-| `ta_memory` | `ta_memcpy/memset/memcmp` mapping to builtins; freestanding fallback. | everything |
+| `ta_memory` | `ta_memcpy/memset/memmove/memcmp` mapping to builtins; freestanding fallback. | everything |
+| `ta_format` | `ta_format_u64` (decimal) and `ta_text`, a bounded writer of views and numbers that records an overflow instead of truncating: what `snprintf` would do, without the C library. | session ids and addresses, generated invoke ids, the host's message ids |
 | `ta_allocator` | `{context, alloc(context, size, align), free(context, ptr, size)}` vtable. **Never used by the core or the system during execution.** | compiler, runtime convenience constructors |
 
 Design rule: **no pointer is ever stored in mutable system memory**, except
