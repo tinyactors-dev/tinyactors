@@ -12,6 +12,9 @@
 #include <tinyactors/host.h>
 
 #define SERIALS_SHIFT   32
+/* blocks the published effects still point into: each doubling of the
+ * effect array or the pool while a batch is borrowed holds one */
+#define HELD_BLOCKS_MAX 64
 #define EFFECTS_PER_RUN 4096 /* effects per run before TA_RUN_EFFECTS_FULL */
 
 typedef struct host_segment {
@@ -85,6 +88,13 @@ struct ta_host {
     uint32_t effect_count, effect_capacity, effects_ready;
     char *pool;
     size_t pool_length, pool_capacity;
+    /* A published batch (ta_host_effects, effects_ready > 0) is borrowed until
+     * the next ack, run or free. Growing the effect array or the pool in the
+     * meantime copies into new blocks and holds the old ones, unchanged,
+     * until then (effects_release frees them). */
+    void *held[HELD_BLOCKS_MAX];
+    size_t held_size[HELD_BLOCKS_MAX];
+    uint32_t held_count;
     /* jobs */
     migration_job *jobs;
     uint32_t job_count, job_capacity, job_sequence;

@@ -667,10 +667,81 @@ static void test_fixed_arena(void) {
     images_close(&im);
 }
 
+/* ---- the borrow of published effects ------------------------------------------------------ */
+
+/* An envelope from `peer` to a session nobody has: refused, and answered
+ * with a TA_HOST_EFFECT_PEER_ERROR effect carrying origin, msgid and sendid. */
+static void refused_delivery(ta_host *host, uint32_t peer, int i) {
+    char msgid[96], sendid[64];
+    snprintf(msgid, sizeof msgid, "message-%04d-padding-so-the-string-pool-grows-quickly", i);
+    snprintf(sendid, sizeof sendid, "send-%04d", i);
+    ta_envelope envelope;
+    memset(&envelope, 0, sizeof envelope);
+    envelope.size = sizeof envelope;
+    envelope.target = (ta_string_view){"tinyactors://h/#_scxml_99", 25};
+    envelope.name = (ta_string_view){"e", 1};
+    envelope.origin = (ta_string_view){"tinyactors://far/#_scxml_7", 26};
+    envelope.msgid = (ta_string_view){msgid, (uint32_t)strlen(msgid)};
+    envelope.sendid = (ta_string_view){sendid, (uint32_t)strlen(sendid)};
+    envelope.datamodel = TA_NIL;
+    uint32_t outcome = 0;
+    CHECK_EQUAL(ta_host_deliver(host, peer, &envelope, &outcome), TA_OK);
+    CHECK_EQUAL(outcome, TA_ROUTE_REFUSED);
+}
+
+/* What ta_host_effects returns stays valid until ta_host_effects_ack or the
+ * next ta_host_run (host.h), even when calls in between make so many effects
+ * that the host's effect array and string pool have to grow. */
+static void test_published_effects_stay_valid(void) {
+    test_memory m;
+    memset(&m, 0, sizeof m);
+    ta_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){"h", 1};
+    config.allocator = memory_allocator(&m);
+    ta_host *host = NULL;
+    CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
+    ta_peer_config peer_config;
+    memset(&peer_config, 0, sizeof peer_config);
+    peer_config.size = sizeof peer_config;
+    peer_config.flags = TA_PEER_TRUSTED;
+    peer_config.id = (ta_string_view){"far", 3};
+    uint32_t peer = 0;
+    CHECK_EQUAL(ta_host_peer_add(host, &peer_config, &peer), TA_OK);
+    for (int i = 0; i < 5; i++)
+        refused_delivery(host, peer, i);
+    const ta_host_effect *borrowed;
+    uint32_t n = ta_host_effects(host, &borrowed);
+    CHECK_EQUAL(n, 5);
+    /* while they are borrowed: hundreds more, past the array's and the pool's capacity */
+    for (int i = 5; i < 400; i++)
+        refused_delivery(host, peer, i);
+    for (uint32_t i = 0; i < n; i++) { /* (ASan: no read of freed memory) */
+        char msgid[96], sendid[64];
+        snprintf(msgid, sizeof msgid, "message-%04u-padding-so-the-string-pool-grows-quickly", i);
+        snprintf(sendid, sizeof sendid, "send-%04u", i);
+        CHECK_EQUAL(borrowed[i].kind, TA_HOST_EFFECT_PEER_ERROR);
+        CHECK(borrowed[i].msgid.length == strlen(msgid) &&
+              memcmp(borrowed[i].msgid.pointer, msgid, borrowed[i].msgid.length) == 0);
+        CHECK(borrowed[i].sendid.length == strlen(sendid) &&
+              memcmp(borrowed[i].sendid.pointer, sendid, borrowed[i].sendid.length) == 0);
+    }
+    ta_host_effects_ack(host); /* the five; the later ones stay for the next batch */
+    const ta_host_effect *next;
+    CHECK_EQUAL(ta_host_effects(host, &next), 395);
+    CHECK(next[0].sendid.length == 9 && memcmp(next[0].sendid.pointer, "send-0005", 9) == 0);
+    CHECK(next[394].sendid.length == 9 && memcmp(next[394].sendid.pointer, "send-0399", 9) == 0);
+    ta_host_effects_ack(host);
+    ta_host_free(host);
+    CHECK(m.live_blocks == 0 && m.bad_frees == 0);
+}
+
 int main(int argc, char **argv) {
     full_mode = argc > 1 && strcmp(argv[1], "--full") == 0;
     RUN(test_accounting);
     RUN(test_fixed_arena);
+    RUN(test_published_effects_stay_valid);
     RUN(test_refusals);
     TEST_MAIN_END();
 }

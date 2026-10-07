@@ -42,8 +42,11 @@
  *              stopped: nothing is lost or done twice.
  *
  * Calls are synchronous and budgeted like ta_system_run; outcomes are effects
- * (ta_host_effects), borrowed until ta_host_effects_ack or the next
- * ta_host_run. Payloads passed in are moved on success and stay the caller's
+ * (ta_host_effects), borrowed until ta_host_effects_ack, the next ta_host_run
+ * or ta_host_free: calls in between that make more effects (ta_host_deliver
+ * answering a peer, ta_host_peer_up flushing a queue, ...) leave the borrowed
+ * records and their strings where they are; the new effects come with the
+ * next ta_host_effects. Payloads passed in are moved on success and stay the caller's
  * on failure. No callbacks besides the datamodel vtables.
  */
 #ifndef TINYACTORS_HOST_H

@@ -494,10 +494,26 @@ ta_status ta_host_resume(ta_host *host, uint32_t segment, uint32_t request, ta_s
 
 /* ---- effects ------------------------------------------------------------------------ */
 
+/* The old block of the effect array or the pool, replaced by a bigger one:
+ * freed now, or held while a published batch still points into it. */
+static void effects_block_replaced(ta_host *host, void *block, size_t size) {
+    if (!block) return;
+    if (!host->effects_ready) {
+        host_free(host, block, size);
+        return;
+    }
+    host->held[host->held_count] = block;
+    host->held_size[host->held_count++] = size;
+}
+
 /* Release the effects the host has seen (ta_host_effects): those before
  * effects_ready. Effects made since — by calls between runs, such as
- * ta_host_deliver answering with an `err` — stay for the next batch. */
+ * ta_host_deliver answering with an `err` — stay for the next batch. The
+ * borrow ends here: the blocks it held are freed. */
 static void effects_release(ta_host *host) {
+    for (uint32_t i = 0; i < host->held_count; i++)
+        host_free(host, host->held[i], host->held_size[i]);
+    host->held_count = 0;
     uint32_t seen = host->effects_ready;
     for (uint32_t i = 0; i < seen; i++) {
         ta_host_effect *effect = &host->effects[i];
@@ -523,7 +539,13 @@ static void effects_release(ta_host *host) {
 
 int host_effects_reserve(ta_host *host, uint32_t count, size_t bytes) {
     uint32_t need = host->effect_count + count;
-    if (need > host->effect_capacity) { /* both arrays together: they share the capacity */
+    int grow_effects = need > host->effect_capacity;
+    int grow_pool = host->pool_length + bytes > host->pool_capacity;
+    /* room to hold both old blocks while a batch is borrowed (refused otherwise) */
+    if (host->effects_ready && host->held_count + (uint32_t)grow_effects + (uint32_t)grow_pool >
+                                   HELD_BLOCKS_MAX)
+        return 0;
+    if (grow_effects) { /* both arrays together: they share the capacity */
         uint32_t c = host->effect_capacity ? host->effect_capacity : 8;
         while (c < need)
             c *= 2;
@@ -538,20 +560,21 @@ int host_effects_reserve(ta_host *host, uint32_t count, size_t bytes) {
             ta_memcpy(effects, host->effects, sizeof *effects * host->effect_count);
             ta_memcpy(strings, host->effect_strings, sizeof *strings * host->effect_count);
         }
-        host_free(host, host->effects, sizeof *effects * host->effect_capacity);
+        /* (effect_strings is the host's own: no borrower points into it) */
+        effects_block_replaced(host, host->effects, sizeof *effects * host->effect_capacity);
         host_free(host, host->effect_strings, sizeof *strings * host->effect_capacity);
         host->effects = effects;
         host->effect_strings = strings;
         host->effect_capacity = c;
     }
-    if (host->pool_length + bytes > host->pool_capacity) {
+    if (grow_pool) {
         size_t c = host->pool_capacity ? host->pool_capacity : 4096;
         while (c < host->pool_length + bytes)
             c *= 2;
         char *pool = (char *)host_alloc(host, c);
         if (!pool) return 0;
         if (host->pool_length) ta_memcpy(pool, host->pool, host->pool_length);
-        host_free(host, host->pool, host->pool_capacity);
+        effects_block_replaced(host, host->pool, host->pool_capacity);
         host->pool = pool;
         host->pool_capacity = c;
     }
