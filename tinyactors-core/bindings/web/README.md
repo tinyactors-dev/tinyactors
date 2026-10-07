@@ -37,6 +37,12 @@ not this development directory.
   compiler (machines compile to SCXML in the page) and `src/glue.c`, the
   procedural interface. It needs no WASI imports: its only imports are the
   datamodel callbacks.
+- It is built for wasm32-wasi, with wasi-libc compiled in. The host and the
+  system need no C library (`libtinyactors`, docs/adr/0005); what still
+  does is the compiler (`malloc`, `snprintf`/`vsnprintf`, `qsort`, string
+  functions), `ta_runtime_malloc` (the host's allocator here), and the
+  binding itself (`bindings/shared/binding.c` and `src/glue.c`: `malloc`,
+  `calloc`, `realloc`, `snprintf`, string functions).
 - The datamodel is plain JavaScript (`native.mjs`). Contexts, events and
   payloads are ordinary JS values behind integer handles, so nothing is
   serialized between JS and wasm on the hot path.

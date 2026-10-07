@@ -189,6 +189,12 @@ to another actor 20%, a timer 16%. `test/harden.py` H24 counts the statements
 an event costs (pg_stat_statements: 5 for a touch, 11 for a send between two
 actors) and fails when one is added or planned per event.
 
+The router host lives in the statement's memory context: its `ta_allocator`
+is `MemoryContextAllocExtended` (without raising on out of memory) and
+`pfree`, so an error or rollback frees it with the context (its reset
+callback calls `ta_host_free` first), and an allocation PostgreSQL refuses is
+`TA_ERROR_NO_MEMORY` from the host rather than an ERROR in the middle of it.
+
 What remains proportional to the population is what should be: disk (about
 700 bytes per small actor with indexes) and the size of the indexes walked by
 primary-key lookups (logarithmic). Reference (`mise run pg:scale`,
