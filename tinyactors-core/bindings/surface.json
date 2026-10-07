@@ -125,7 +125,7 @@
     "ta_runtime_files_new": {"skip": "OS convenience for C hosts (files)"},
     "ta_runtime_free_file": {"skip": "OS convenience for C hosts (files)"},
     "ta_runtime_load_file": {"skip": "OS convenience for C hosts (files)"},
-    "ta_runtime_malloc": {"skip": "OS convenience for C hosts (allocation); the bindings size and grow their systems themselves"},
+    "ta_runtime_malloc": "bind",
     "ta_runtime_now_ns": {"skip": "OS convenience for C hosts (clock); JS hosts supply their platform's clock"},
     "ta_runtime_resolve": {"skip": "OS convenience for C hosts (file resolver)"},
     "ta_runtime_run": {"skip": "OS convenience for C hosts (run with automatic growth); the bindings grow on TA_RUN_EXHAUSTED themselves"},

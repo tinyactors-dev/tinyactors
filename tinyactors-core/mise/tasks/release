@@ -18,11 +18,11 @@
 # amalgamation (with its platform amalgamations) and API description in a
 # source tarball, a static and a shared library for each native release
 # target, and a wasm module for browsers that imports nothing. libtinyactors
-# is the freestanding core; libtinyactors_runtime (the compiler, the host)
-# and libtinyactors_datamodel_ecmascript (the ECMAScript data model, QuickJS
-# inside) are built against the libtinyactors of the same release: their
-# libraries leave its API undefined and their shared libraries name its, and
-# their wasm modules hold it. The stages are in mise/lib/c_release/build.rb;
+# is the freestanding core and host; libtinyactors_runtime (the compiler and
+# the runtime conveniences) and libtinyactors_datamodel_ecmascript (the
+# ECMAScript data model, QuickJS inside) are built against the libtinyactors
+# of the same release: their libraries leave its API undefined and their
+# shared libraries name its, and their wasm modules hold it. The stages are in mise/lib/c_release/build.rb;
 # this file only describes the libraries. The assets land in
 # build/release/<version>/assets/.
 

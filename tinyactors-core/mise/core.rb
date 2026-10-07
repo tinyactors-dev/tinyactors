@@ -40,8 +40,9 @@ module Core
     Layer.new(name: 'compile', uses: %w[image],
               sources: %w[compile_support xml scxml link compile].map { |s| "src/compile/#{s}.c" }),
     # Many systems as one (versions, routing, migration jobs, hibernation
-    # policy); hosted, it uses malloc.
-    Layer.new(name: 'host', uses: %w[system], sources: %w[src/host/host.c src/host/router.c]),
+    # policy). Freestanding: it allocates only through the ta_allocator its
+    # configuration gives it (docs/adr/0005).
+    Layer.new(name: 'host', uses: %w[system], freestanding: true, sources: %w[src/host/host.c src/host/router.c]),
     Layer.new(name: 'runtime', uses: %w[system compile], sources: %w[src/runtime/runtime.c src/runtime/runtime_hosted.c]),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
@@ -62,10 +63,12 @@ module Core
   # header, an amalgamation, a static and a shared library per native target
   # and a wasm module, all built from dist/ (mise run amalgamate):
   #
-  #   tinyactors          the freestanding layers: no C library, no allocation
-  #   tinyactors_runtime  the compiler, the host and the runtime conveniences,
-  #                       on the C library's allocator; built on tinyactors's
-  #                       public API alone
+  #   tinyactors          the freestanding layers: no C library; base through
+  #                       system never allocate; the host allocates only
+  #                       through the ta_allocator it was given
+  #   tinyactors_runtime  the compiler and the runtime conveniences, on the C
+  #                       library's allocator; built on tinyactors's public
+  #                       API alone
   #   tinyactors_datamodel_ecmascript
   #                       the ECMAScript data model with QuickJS inside, opted
   #                       into as a tree-sitter grammar is beside the
@@ -107,10 +110,11 @@ module Core
   end
 
   LIBRARIES = [
-    Library.new(name: 'tinyactors', layers: %w[base image core system basic_http], uses: [], libc: false,
-                headers: %w[types.h allocator.h address.h frame.h image.h datamodel.h system.h core.h basic_http.h wasm.h]),
-    Library.new(name: 'tinyactors_runtime', layers: %w[compile host runtime], uses: %w[tinyactors], libc: true,
-                headers: %w[compile.h host.h runtime.h]),
+    Library.new(name: 'tinyactors', layers: %w[base image core system host basic_http], uses: [], libc: false,
+                headers: %w[types.h allocator.h address.h frame.h image.h datamodel.h system.h core.h host.h
+                            basic_http.h wasm.h]),
+    Library.new(name: 'tinyactors_runtime', layers: %w[compile runtime], uses: %w[tinyactors], libc: true,
+                headers: %w[compile.h runtime.h]),
     Library.new(name: 'tinyactors_datamodel_ecmascript', layers: %w[datamodel_ecmascript quickjs], uses: %w[tinyactors],
                 libc: true, headers: %w[datamodel_ecmascript.h], cflags: QUICKJS_FLAGS)
   ].freeze

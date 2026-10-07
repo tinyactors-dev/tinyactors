@@ -85,8 +85,8 @@ decisions 19 and 20 lay out:
 
 | Library | What it holds | Needs |
 |---|---|---|
-| `libtinyactors` | the freestanding layers: base, image, core, system, basic_http | nothing: no C library, no allocation |
-| `libtinyactors_runtime` | the compiler, the host and the runtime conveniences | `libtinyactors`'s public API, and the C library's allocator, strings, `qsort` and `snprintf` (and files and the clock, except in wasm) |
+| `libtinyactors` | the freestanding layers: base, image, core, system, host, basic_http | no C library; base through system never allocate; the host allocates only through the `ta_allocator` it was given ([ADR 0005](../../docs/adr/0005-freestanding-host.md)) |
+| `libtinyactors_runtime` | the compiler and the runtime conveniences (`ta_runtime_malloc`, a `ta_allocator` for the host) | `libtinyactors`'s public API, and the C library's allocator, strings, `qsort` and `snprintf` (and files and the clock, except in wasm) |
 | `libtinyactors_datamodel_ecmascript` | the ECMAScript data model, QuickJS inside | `libtinyactors`'s public API, and the C library, its math included: a program links `-lm` |
 
 The ECMAScript data model is opted into as a tree-sitter grammar is beside

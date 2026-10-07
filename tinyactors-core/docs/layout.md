@@ -31,7 +31,7 @@ implementation of that layer). Layer dependency rules are in
 │       ├── compile.h          ✅ compiler API (diagnostics, source resolver, manifests)
 │       ├── runtime.h          ✅ OS conveniences (malloc, files, resolver, clock, auto-grow)
 │       ├── host.h             ✅ host layer: segments sharing a base URI, routing, versions,
-│       │                         migration jobs, sweep, growth, boot, snapshot/restore (hosted)
+│       │                         migration jobs, sweep, growth, boot, snapshot/restore
 │       ├── datamodel_ecmascript.h ✅ the ECMAScript datamodel (link libtinyactors_datamodel_ecmascript)
 │       └── basic_http.h       ✅ BasicHTTP Event I/O Processor codec
 │
@@ -82,7 +82,7 @@ implementation of that layer). Layer dependency rules are in
 │   ├── runtime/
 │   │   └── runtime.c          ✅ malloc allocator, files + resolver, clock, grow-by-relocation
 │   │
-│   ├── host/                  the policy every embedder would rebuild, once (hosted; malloc)
+│   ├── host/                  the policy every embedder would rebuild, once (freestanding; its caller's ta_allocator)
 │   │   ├── host_internal.h    ✅ host state shared by host.c and router.c
 │   │   ├── host.c             ✅ segments + session ranges, cross-segment routing, versions and
 │   │   │                         retirement, quantum-bounded migration jobs, CLOCK sweep, growth,

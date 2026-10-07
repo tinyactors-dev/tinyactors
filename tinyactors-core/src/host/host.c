@@ -28,7 +28,7 @@ void host_free(ta_host *host, void *pointer, size_t size) {
     if (pointer) host->config.allocator.free(host->config.allocator.context, pointer, size);
 }
 
-int grow(ta_host *host, void **array, uint32_t *capacity, uint32_t need, size_t element) {
+int host_grow(ta_host *host, void **array, uint32_t *capacity, uint32_t need, size_t element) {
     if (need <= *capacity) return 1;
     uint32_t c = *capacity ? *capacity : 8;
     while (c < need)
@@ -58,7 +58,7 @@ static int buffer_at(ta_host *host, unsigned char **buffer, size_t *capacity, si
 
 /* ---- small utilities -------------------------------------------------------------- */
 
-static int string_equal(ta_string_view a, const char *b, uint32_t n) {
+static int name_equal(ta_string_view a, const char *b, uint32_t n) {
     return a.length == n && (!n || ta_memcmp(a.pointer, b, n) == 0);
 }
 
@@ -138,7 +138,7 @@ static int moved_put(ta_host *host, uint64_t key, uint32_t value) {
     return 1;
 }
 
-uint32_t moved_get(const ta_host *host, uint64_t key) {
+uint32_t host_moved_get(const ta_host *host, uint64_t key) {
     if (!host->moved_capacity) return TA_NIL;
     uint32_t i = mhash(key, host->moved_capacity);
     while (host->moved_keys[i]) {
@@ -194,7 +194,7 @@ static int versions_reserve(ta_host *host, uint32_t extra) {
     uint32_t need = extra;
     for (uint32_t si = 0; si < host->segment_count; si++)
         if (host->segments[si].live) need += image_charts(host->segments[si].image);
-    return grow(host, (void **)&host->versions, &host->version_capacity, need,
+    return host_grow(host, (void **)&host->versions, &host->version_capacity, need,
                 sizeof(chart_version));
 }
 
@@ -210,7 +210,7 @@ static void versions_recompute(ta_host *host) {
             ta_string_view k = chart_key(segment->image, c);
             uint32_t v = 0;
             while (v < host->version_count &&
-                   !string_equal(k, host->versions[v].name.pointer, host->versions[v].name.length))
+                   !name_equal(k, host->versions[v].name.pointer, host->versions[v].name.length))
                 v++;
             if (v == host->version_count) host->version_count++;
             /* the name in the newest segment's image: an older one may be retired and freed */
@@ -223,7 +223,7 @@ static void versions_recompute(ta_host *host) {
 
 static const chart_version *version_of(const ta_host *host, ta_string_view name) {
     for (uint32_t v = 0; v < host->version_count; v++)
-        if (string_equal(name, host->versions[v].name.pointer, host->versions[v].name.length))
+        if (name_equal(name, host->versions[v].name.pointer, host->versions[v].name.length))
             return &host->versions[v];
     return NULL;
 }
@@ -307,7 +307,7 @@ static void reserve_serials(ta_host *h, uint32_t index);
 ta_status ta_host_add_image(ta_host *host, const ta_image *image, uint32_t *segment) {
     uint32_t index = host->segment_count;
     if (index >= (1u << 20)) return TA_ERROR_NO_MEMORY; /* session ids stay exact in a double */
-    if (!grow(host, (void **)&host->segments, &host->segment_capacity, index + 1,
+    if (!host_grow(host, (void **)&host->segments, &host->segment_capacity, index + 1,
               sizeof(host_segment)) ||
         !versions_reserve(host, image_charts(image)))
         return TA_ERROR_NO_MEMORY;
@@ -399,7 +399,7 @@ ta_system *ta_host_system(ta_host *host, uint32_t segment) {
 
 ta_status ta_host_locate(const ta_host *host, uint64_t session, uint32_t *segment,
                          uint32_t *actor) {
-    uint32_t si = moved_get(host, session);
+    uint32_t si = host_moved_get(host, session);
     if (si == TA_NIL) si = (uint32_t)(session >> SERIALS_SHIFT);
     const host_segment *segment_record = segment_of(host, si);
     uint32_t a = segment_record ? ta_system_actor_by_session(segment_record->system, session) : 0;
@@ -428,7 +428,7 @@ ta_status ta_host_spawn(ta_host *host, uint32_t segment, uint32_t chart, ta_stri
     return TA_OK;
 }
 
-ta_status send_to(ta_host *host, uint32_t si, uint32_t actor, const ta_event_in *event) {
+ta_status host_send_to(ta_host *host, uint32_t si, uint32_t actor, const ta_event_in *event) {
     host_segment *segment = &host->segments[si];
     ta_event_in event_in = *event;
     event_in.target = actor;
@@ -443,7 +443,7 @@ ta_status send_to(ta_host *host, uint32_t si, uint32_t actor, const ta_event_in 
 ta_status ta_host_send(ta_host *host, uint64_t session, const ta_event_in *event) {
     uint32_t si, actor;
     ta_status status = ta_host_locate(host, session, &si, &actor);
-    return status == TA_OK ? send_to(host, si, actor, event) : status;
+    return status == TA_OK ? host_send_to(host, si, actor, event) : status;
 }
 
 uint32_t ta_host_send_many(ta_host *host, const uint64_t *sessions, const ta_event_in *events,
@@ -469,7 +469,7 @@ uint32_t ta_host_send_many(ta_host *host, const uint64_t *sessions, const ta_eve
         if (got) segment->busy = 1;
         done += got;
         if (got < k) { /* batch[got] failed: grow and go on, or stop there */
-            if (send_to(host, si, batch[got].target, &batch[got]) != TA_OK) return done;
+            if (host_send_to(host, si, batch[got].target, &batch[got]) != TA_OK) return done;
             done++;
         }
     }
@@ -521,7 +521,7 @@ static void effects_release(ta_host *host) {
     host->effects_ready = 0;
 }
 
-int effects_reserve(ta_host *host, uint32_t count, size_t bytes) {
+int host_effects_reserve(ta_host *host, uint32_t count, size_t bytes) {
     uint32_t need = host->effect_count + count;
     if (need > host->effect_capacity) { /* both arrays together: they share the capacity */
         uint32_t c = host->effect_capacity ? host->effect_capacity : 8;
@@ -559,17 +559,17 @@ int effects_reserve(ta_host *host, uint32_t count, size_t bytes) {
 }
 
 /* A string into the pool: its offset, (size_t)-1 when empty. Needs
- * effects_reserve for its bytes first. */
-size_t pool_put(ta_host *host, ta_string_view s) {
-    if (!s.length || !effects_reserve(host, 0, s.length)) return (size_t)-1;
+ * host_effects_reserve for its bytes first. */
+size_t host_pool_put(ta_host *host, ta_string_view s) {
+    if (!s.length || !host_effects_reserve(host, 0, s.length)) return (size_t)-1;
     ta_memcpy(host->pool + host->pool_length, s.pointer, s.length);
     host->pool_length += s.length;
     return host->pool_length - s.length;
 }
 
-/* A new effect; NULL only without effects_reserve first. */
-ta_host_effect *effect_new(ta_host *host, uint32_t kind, uint32_t segment) {
-    if (!effects_reserve(host, 1, 0)) return NULL;
+/* A new effect; NULL only without host_effects_reserve first. */
+ta_host_effect *host_effect_new(ta_host *host, uint32_t kind, uint32_t segment) {
+    if (!host_effects_reserve(host, 1, 0)) return NULL;
     ta_host_effect *effect = &host->effects[host->effect_count];
     ta_memset(effect, 0, sizeof *effect);
     effect->size = sizeof *effect;
@@ -584,14 +584,14 @@ ta_host_effect *effect_new(ta_host *host, uint32_t kind, uint32_t segment) {
     return effect;
 }
 
-void set_effect_strings(ta_host *host, ta_string_view t, ta_string_view event, ta_string_view sid,
+void host_effect_strings_set(ta_host *host, ta_string_view t, ta_string_view event, ta_string_view sid,
                         ta_string_view aux) {
     effect_strings *strings = &host->effect_strings[host->effect_count - 1];
     ta_host_effect *effect = &host->effects[host->effect_count - 1];
     ta_string_view v[4] = {t, event, sid, aux};
     ta_string_view *dst[4] = {&effect->target, &effect->event, &effect->sendid, &effect->auxiliary};
     for (int k = 0; k < 4; k++) {
-        strings->offset[k] = pool_put(host, v[k]);
+        strings->offset[k] = host_pool_put(host, v[k]);
         dst[k]->length = strings->offset[k] == (size_t)-1 ? 0 : v[k].length;
     }
 }
@@ -611,11 +611,11 @@ static uint64_t root_of(host_segment *segment, uint32_t actor) {
 /* copy a segment effect out to the host */
 static ta_status effect_copy(ta_host *host, uint32_t si, const ta_effect *effect,
                              uint32_t io_processor) {
-    if (!effects_reserve(host, 1,
+    if (!host_effects_reserve(host, 1,
                          (size_t)effect->target.length + effect->event.length +
                              effect->sendid.length + effect->auxiliary.length))
         return TA_ERROR_NO_MEMORY;
-    ta_host_effect *host_effect = effect_new(host, effect->kind, si);
+    ta_host_effect *host_effect = host_effect_new(host, effect->kind, si);
     host_effect->actor = effect->actor;
     host_effect->session = effect->session;
     host_effect->root = effect->kind == TA_EFFECT_DONE
@@ -626,7 +626,7 @@ static ta_status effect_copy(ta_host *host, uint32_t si, const ta_effect *effect
     host_effect->io_processor = io_processor;
     host_effect->flags = effect->flags;
     host_effect->delay_hint = effect->delay_hint;
-    set_effect_strings(host, effect->target, effect->event, effect->sendid, effect->auxiliary);
+    host_effect_strings_set(host, effect->target, effect->event, effect->sendid, effect->auxiliary);
     if (effect->payload && effect->datamodel < host->config.datamodel_count) {
         host_effect->payload = effect->payload;
         host_effect->datamodel = effect->datamodel;
@@ -664,22 +664,22 @@ static ta_status communication_error_now(ta_host *host, uint32_t si, uint32_t ac
     ta_event_in event;
     ta_host_error_event(sendid, &event);
     /* a sender that is gone has nobody to tell; only memory is worth retrying */
-    return send_to(host, si, actor, &event) == TA_ERROR_NO_MEMORY ? TA_ERROR_NO_MEMORY : TA_OK;
+    return host_send_to(host, si, actor, &event) == TA_ERROR_NO_MEMORY ? TA_ERROR_NO_MEMORY : TA_OK;
 }
 
 /* error.communication for a sender. While a segment's effects are being
  * drained it cannot take events (not before its ack): those are kept and
  * delivered right after (drain). */
-ta_status communication_error(ta_host *host, uint32_t si, uint32_t actor, ta_string_view sendid) {
+ta_status host_communication_error(ta_host *host, uint32_t si, uint32_t actor, ta_string_view sendid) {
     if (host->draining != si) return communication_error_now(host, si, actor, sendid);
-    if (!grow(host, (void **)&host->errors, &host->error_capacity, host->error_count + 1,
+    if (!host_grow(host, (void **)&host->errors, &host->error_capacity, host->error_count + 1,
               sizeof *host->errors) ||
-        !effects_reserve(host, 0, sendid.length))
+        !host_effects_reserve(host, 0, sendid.length))
         return TA_ERROR_NO_MEMORY;
     pending_error *error = &host->errors[host->error_count++];
     error->segment = si;
     error->actor = actor;
-    error->sendid = pool_put(host, sendid);
+    error->sendid = host_pool_put(host, sendid);
     error->sendid_length = sendid.length;
     return TA_OK;
 }
@@ -727,7 +727,7 @@ static ta_status drain(ta_host *host, uint32_t si) {
             status = effect_copy(host, si, effect_view, TA_NIL);
         if (status == TA_OK &&
             (effect_view->kind == TA_EFFECT_DONE || effect_view->kind == TA_EFFECT_ERROR) &&
-            moved_get(host, effect_view->session) != TA_NIL)
+            host_moved_get(host, effect_view->session) != TA_NIL)
             moved_put(host, effect_view->session, TA_NIL);
         if (segment->system != system) { /* grown while routing: its effects moved with it */
             system = segment->system;
@@ -778,7 +778,7 @@ static int job_reserve(ta_host *host, migration_job *job, uint32_t extra) {
 
 ta_status ta_host_migrate(ta_host *host, ta_string_view name, uint64_t session, uint32_t flags,
                           ta_time timeout, uint32_t *id) {
-    if (!grow(host, (void **)&host->jobs, &host->job_capacity, host->job_count + 1,
+    if (!host_grow(host, (void **)&host->jobs, &host->job_capacity, host->job_count + 1,
               sizeof(migration_job)))
         return TA_ERROR_NO_MEMORY;
     migration_job job;
@@ -827,7 +827,7 @@ static const chart_version *candidate(ta_host *host, migration_job *job, uint32_
     if (ta_actor_info_get(segment->system, actor, actor_info) != TA_OK || actor_info->parent)
         return NULL;
     ta_string_view k = chart_key(segment->image, actor_info->chart);
-    if (job->name_length && !string_equal(k, job->name, job->name_length)) return NULL;
+    if (job->name_length && !name_equal(k, job->name, job->name_length)) return NULL;
     const chart_version *version = version_of(host, k);
     return version && version->segment != si ? version : NULL;
 }
@@ -856,8 +856,8 @@ static int migrate_one(ta_host *host, migration_job *job, uint64_t session, uint
     host_segment *from = &host->segments[si], *to = &host->segments[version->segment];
     if (actor_info.state == TA_ACTOR_HIBERNATED) {
         if ((job->flags & TA_HOST_MIGRATE_WAKE) && woken && !*woken) {
-            if (!effects_reserve(host, 1, 0)) return MIGRATE_NO_MEMORY;
-            ta_host_effect *effect = effect_new(host, TA_EFFECT_WAKE, si); /* the host loads it */
+            if (!host_effects_reserve(host, 1, 0)) return MIGRATE_NO_MEMORY;
+            ta_host_effect *effect = host_effect_new(host, TA_EFFECT_WAKE, si); /* the host loads it */
             effect->actor = actor;
             effect->session = effect->root = session;
             effect->job = job->id;
@@ -869,7 +869,7 @@ static int migrate_one(ta_host *host, migration_job *job, uint64_t session, uint
     uint32_t chart = version->chart, tseg = version->segment;
     ta_string_view key = chart_key(to->image, chart);
     /* everything the move needs once the actor has left its segment */
-    if (!effects_reserve(host, 1, key.length) || !moved_reserve(host, 1) ||
+    if (!host_effects_reserve(host, 1, key.length) || !moved_reserve(host, 1) ||
         !buffer_at(host, &host->blob, &host->blob_capacity, 4096))
         return MIGRATE_NO_MEMORY;
     size_t length = 0;
@@ -908,14 +908,14 @@ static int migrate_one(ta_host *host, migration_job *job, uint64_t session, uint
     moved_put(host, session, (uint32_t)(session >> SERIALS_SHIFT) == tseg ? TA_NIL : tseg);
     to->busy = 1;
     host->migrated++;
-    ta_host_effect *effect = effect_new(host, TA_HOST_EFFECT_MIGRATED, tseg);
+    ta_host_effect *effect = host_effect_new(host, TA_HOST_EFFECT_MIGRATED, tseg);
     uint32_t na = 0;
     ta_host_locate(host, session, NULL, &na);
     effect->actor = na;
     effect->session = effect->root = session;
     effect->job = job->id;
     effect->chart = chart;
-    set_effect_strings(host, (ta_string_view){0, 0}, key, (ta_string_view){0, 0},
+    host_effect_strings_set(host, (ta_string_view){0, 0}, key, (ta_string_view){0, 0},
                        (ta_string_view){0, 0});
     return 1;
 }
@@ -945,7 +945,7 @@ static ta_status job_end(ta_host *host, migration_job *job) {
                 }
         }
     }
-    if (!effects_reserve(host, 1, 0)) return TA_ERROR_NO_MEMORY;
+    if (!host_effects_reserve(host, 1, 0)) return TA_ERROR_NO_MEMORY;
     job->walking = 0;
     job->active = 0;
     job->left = job->retry;
@@ -955,7 +955,7 @@ static ta_status job_end(ta_host *host, migration_job *job) {
     job->retry = NULL;
     job->woken = NULL;
     job->retry_count = job->retry_capacity = 0;
-    ta_host_effect *effect = effect_new(host, TA_HOST_EFFECT_JOB_DONE, TA_NIL);
+    ta_host_effect *effect = host_effect_new(host, TA_HOST_EFFECT_JOB_DONE, TA_NIL);
     effect->job = job->id;
     effect->migrated = job->migrated;
     effect->failed = job->failed;
@@ -1047,7 +1047,7 @@ static int retire(ta_host *host) {
         for (uint32_t v = 0; v < host->version_count; v++)
             current |= host->versions[v].segment == si;
         if (current || segment_actors(segment)) continue;
-        if (!effects_reserve(host, 1, 0)) {
+        if (!host_effects_reserve(host, 1, 0)) {
             all = 0;
             continue;
         }
@@ -1061,7 +1061,7 @@ static int retire(ta_host *host) {
         for (uint32_t i = 0; i < host->moved_capacity; i++)
             if (host->moved_keys[i] && host->moved_values[i] == si)
                 moved_put(host, host->moved_keys[i], TA_NIL);
-        effect_new(host, TA_HOST_EFFECT_SEGMENT_FREED, si);
+        host_effect_new(host, TA_HOST_EFFECT_SEGMENT_FREED, si);
     }
     return all;
 }
@@ -1253,7 +1253,7 @@ ta_status ta_host_export_actor(ta_host *host, uint64_t session, void *buffer, si
     if (status != TA_OK) return status;
     status = ta_actor_export(host->segments[si].system, actor, buffer, capacity, length);
     if (status == TA_OK) {
-        if (moved_get(host, session) != TA_NIL) moved_put(host, session, TA_NIL);
+        if (host_moved_get(host, session) != TA_NIL) moved_put(host, session, TA_NIL);
         host->segments[si].busy = 1;
     }
     return status;
@@ -1262,7 +1262,7 @@ ta_status ta_host_export_actor(ta_host *host, uint64_t session, void *buffer, si
 /* An adopted session lives in segment si: routed there, and its id never handed
  * out by its home segment (one added later is set up past it, reserve_serials).
  * Needs moved_reserve first. */
-static void place(ta_host *host, uint32_t si, uint64_t serial) {
+static void place_session(ta_host *host, uint32_t si, uint64_t serial) {
     uint32_t home = (uint32_t)(serial >> SERIALS_SHIFT);
     moved_put(host, serial, home == si ? TA_NIL : si);
     host_segment *hs = segment_of(host, home);
@@ -1279,7 +1279,7 @@ static void reserve_serials(ta_host *host, uint32_t index) {
 
 /* A session id that lives in another segment than s (its home, or where it was moved). */
 static int lives_elsewhere(ta_host *host, const host_segment *segment, uint64_t serial) {
-    uint32_t m = moved_get(host, serial);
+    uint32_t m = host_moved_get(host, serial);
     host_segment *o = segment_of(host, m != TA_NIL ? m : (uint32_t)(serial >> SERIALS_SHIFT));
     return o && o != segment && ta_system_actor_by_session(o->system, serial);
 }
@@ -1290,7 +1290,7 @@ static int lives_elsewhere(ta_host *host, const host_segment *segment, uint64_t 
 static int tree_pass(ta_host *host, uint32_t si, uint32_t root, uint64_t root_serial, int check,
                      uint32_t *count) {
     host_segment *segment = &host->segments[si];
-    if (check ? lives_elsewhere(host, segment, root_serial) : (place(host, si, root_serial), 0))
+    if (check ? lives_elsewhere(host, segment, root_serial) : (place_session(host, si, root_serial), 0))
         return 1;
     if (count) *count = 1;
     uint32_t cursor = 0, list[64], n;
@@ -1305,7 +1305,7 @@ static int tree_pass(ta_host *host, uint32_t si, uint32_t root, uint64_t root_se
                    ta_actor_info_get(segment->system, ci.parent, &ci) == TA_OK) {
             }
             if (ci.parent != root) continue;
-            if (check ? lives_elsewhere(host, segment, serial) : (place(host, si, serial), 0))
+            if (check ? lives_elsewhere(host, segment, serial) : (place_session(host, si, serial), 0))
                 return 1;
             if (count) ++*count;
         }
@@ -1591,7 +1591,7 @@ ta_status ta_host_restore(const ta_host_config *config, const ta_image *const *i
     ta_host *host;
     ta_status status = ta_host_new(config, &host);
     if (status != TA_OK) return status;
-    if (hd->segment_count && !grow(host, (void **)&host->segments, &host->segment_capacity,
+    if (hd->segment_count && !host_grow(host, (void **)&host->segments, &host->segment_capacity,
                                    hd->segment_count, sizeof(host_segment)))
         return restore_failed(host, TA_ERROR_NO_MEMORY);
     host->now = hd->now;

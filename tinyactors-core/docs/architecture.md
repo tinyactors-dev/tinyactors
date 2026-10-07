@@ -67,6 +67,15 @@ decision has to be made. Everything else in this document follows from them.
           below runtime / compile
 ```
 
+The host layer (`src/host`, `ta_host`: many systems as one, §15) sits on
+`system` beside `compile`. It is freestanding too, but it allocates: every
+block it owns, the segments' regions included, comes from the
+`ta_allocator` in its configuration, so it needs no C library either
+([ADR 0005](../../docs/adr/0005-freestanding-host.md)). `libtinyactors`
+ships base through system and the host, and promises: **no C library;
+`base` through `system` never allocate; `host` allocates only through the
+`ta_allocator` it was given.**
+
 Each layer is one static library, `libtinyactors_<layer>.a`, and links only
 the layers below it (`mise/core.rb` lists each layer's sources and what it
 uses). Changes relative to the proposed four layers:
@@ -102,7 +111,7 @@ read in one sitting and have no dependencies.
 | `ta_heap` | 4-ary min-heap of `{due:u64, seq:u32, item:u32}` + back-index for O(log n) removal (`<cancel>`). | timer/delayed-send queue |
 | `ta_memory` | `ta_memcpy/memset/memmove/memcmp` mapping to builtins; freestanding fallback. | everything |
 | `ta_format` | `ta_format_u64` (decimal) and `ta_text`, a bounded writer of views and numbers that records an overflow instead of truncating: what `snprintf` would do, without the C library. | session ids and addresses, generated invoke ids, the host's message ids |
-| `ta_allocator` | `{context, alloc(context, size, align), free(context, ptr, size)}` vtable. **Never used by the core or the system during execution.** | compiler, runtime convenience constructors |
+| `ta_allocator` | `{context, alloc(context, size, align), free(context, ptr, size)}` vtable (`tinyactors/allocator.h`). **Never used by the core or the system during execution.** | the host (all of its memory), compiler, runtime convenience constructors |
 
 Design rule: **no pointer is ever stored in mutable system memory**, except
 opaque datamodel handles (which are `uint64_t` and may be indices anyway).
@@ -732,6 +741,13 @@ route is resolved **at fire time** (target may have terminated ⇒
 5. **Growth:** because the region holds only indices and self-relative
    offsets, `ta_system_relocate()` copies it into a larger block with larger
    capacities. The runtime layer does this automatically on `TA_RUN_EXHAUSTED`.
+6. **Host:** a `ta_host` gets every block — its segments' regions, its
+   tables, its effect copies — from the `ta_allocator` in its
+   configuration, and gives each back with its size. When the allocator
+   refuses, a call returns `TA_ERROR_NO_MEMORY` with the host unchanged and
+   `ta_host_run` returns `TA_RUN_EXHAUSTED`; the next run resumes where it
+   stopped, so a bounded allocator (a fixed arena, a database's memory
+   context) is backpressure, not failure.
 
 Sizing example — 100 000 actors of a 64-state chart, 4 workspaces,
 16 384 events, 4 096 timers:
@@ -807,7 +823,7 @@ from the sections above, this list is authoritative:
 | Hibernation | Host-driven (§16.1): `ta_actor_hibernate` / `TA_EFFECT_WAKE` / `ta_actor_wake` / `ta_system_cold_actors`; the system never does I/O. Torture `hibernate`: 2 M ECMAScript sessions with a few thousand resident (see tools/torture/README.md). |
 | JS bindings | One API (`bindings/shared/core.mjs`) over two backends: the N-API addon and `tinyactors.wasm` (web), whose datamodel lives in JS behind integer handles. Hibernation uses the datamodel serialize hooks with a shared tagged-JSON codec. **Links** carry SCXML sends between systems over WebSockets (`tinyactors://<system>/…` addresses, `@systemID` names, replies via `_event.origin`/`self`); the client side of a link is an actor whose state is the connection status. |
 | Snapshot/restore | `ta_system_snapshot` requires a drained outbox; `ta_system_restore` takes an optional config whose host pointers (I/O processors) are re-bound; capacities come from the snapshot. `ta_host_snapshot`/`ta_host_restore` do the same for a whole host (every segment, the moved-session map, the clock; quiescent: effects acknowledged, no migration job). Datamodel state stays the datamodel's: regions refer to instances and payloads by handle, so a datamodel restores its tables at the same handles before the first run — `ta_datamodel_ecmascript_snapshot/_restore` (one `JS_WriteObject` graph: sessions, payloads, `<foreach>` items in progress), the JS bindings' value tables (`system.snapshot()` → bytes, `createSystem({ restore })`). Tested as a real restart (fresh host and datamodel) in `test_host` and the `snapshot` conformance scenario. |
-| Host layer | `ta_host` (`src/host`, hosted) is the policy the bindings and the torture bench used to duplicate: segments (one `ta_system` per image) sharing a base URI, segment k owning sessions k·2³²+1…; cross-segment SCXML routing inside the library; versions = the newest segment per chart name (CGI-style reload, retirement → `TA_HOST_EFFECT_SEGMENT_FREED`); migration jobs advanced one quantum per `ta_host_run` (busy actors retried, hibernated ones woken or waited for, a timeout); the CLOCK sweep across segments; growth by relocation; boot of system images; snapshot/restore; actors leaving for and arriving from other hosts (`ta_host_export_actor` / `ta_host_adopt`: an adopted session is routed to in whatever segment took it, and the segments of its home id range — existing or added later — start past its id; `ta_blob_rebase` moves the blob's delayed sends to another clock first, keeping what they had left). Each run shares its fuel fairly among runnable segments (a runaway segment cannot starve the others). |
+| Host layer | `ta_host` (`src/host`, freestanding: memory only through the `ta_allocator` of its config, ADR 0005) is the policy the bindings and the torture bench used to duplicate: segments (one `ta_system` per image) sharing a base URI, segment k owning sessions k·2³²+1…; cross-segment SCXML routing inside the library; versions = the newest segment per chart name (CGI-style reload, retirement → `TA_HOST_EFFECT_SEGMENT_FREED`); migration jobs advanced one quantum per `ta_host_run` (busy actors retried, hibernated ones woken or waited for, a timeout); the CLOCK sweep across segments; growth by relocation; boot of system images; snapshot/restore; actors leaving for and arriving from other hosts (`ta_host_export_actor` / `ta_host_adopt`: an adopted session is routed to in whatever segment took it, and the segments of its home id range — existing or added later — start past its id; `ta_blob_rebase` moves the blob's delayed sends to another clock first, keeping what they had left). Each run shares its fuel fairly among runnable segments (a runaway segment cannot starve the others). |
 | Remote targets | With a `TA_IO_PROCESSOR_SCXML_REMOTE` processor, only absolute URIs (RFC 3986 scheme) leave the system; any other target the SCXML processor does not know is invalid → `error.execution` (W3C 159, 194). A malformed session id (`#_scxml_foo`) names no session anywhere → `error.communication` at once, in the internal queue (W3C 496, 521); a well-formed unknown one may live in another segment and is handed to the host (whose answer arrives as an external event). |
 | JS bindings: SCXML documents | `fromSCXML(xml, { documents })` runs W3C SCXML documents next to xstate-style machines, in the same system and payload table. The ECMAScript datamodel is `bindings/shared/ecmascript.mjs` with the C datamodel's shared-realm semantics (scope object, strict functions under `with`, read-only system variables); what a script declares at its top level is asked of the engine (the script is compiled as a function body that hands out a reader per candidate name before it runs: a reader that throws found a let/const/class in its temporal dead zone, one returning a function a function declaration, one reaching a trap scope nothing), and such charts run their scripts against a proxy scope that keeps sloppy assignments out of the host's global object; a declaring script's bindings become accessors on the session scope (shared with its functions; const stays const). They are stored like the C datamodel's isolated sessions (`#lex`, `#fns` re-created on restore), refusals naming the variable and line. Limits of one realm: functions called through the scope get it as `this`; closures other than declarations keep their script run's bindings. The W3C suite runs through both backends: 158/158 mandatory, 21 optional (the 12 BasicHTTP tests are skipped: the bindings register no BasicHTTP processor). |
 | JS bindings: images, time | `compileSystem(manifest, { files })` / `loadImage(bytes)` / `system.boot(image)` run compiled system images (`ta_image_boot_actor` lists the boot actors); `createSystem({ clock })` + `system.flush()` run on the host's notion of time (deterministic tests, simulation). |

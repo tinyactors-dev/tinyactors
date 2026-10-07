@@ -9,6 +9,7 @@
 #include <tinyactors/image.h>
 #include <tinyactors/datamodel.h>
 #include <tinyactors/system.h>
+#include <tinyactors/host.h>
 #include <tinyactors/wasm.h>
 
 #endif /* TINYACTORS_H */

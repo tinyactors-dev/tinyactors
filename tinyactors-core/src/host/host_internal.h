@@ -3,7 +3,7 @@
  * Every block the host owns comes from its config's ta_allocator
  * (host_alloc) and goes back with its size (host_free): each array keeps
  * its capacity, each string its length. Whatever must not fail half done
- * reserves first (effects_reserve, moved_reserve, grow): after the
+ * reserves first (host_effects_reserve, moved_reserve, host_grow): after the
  * reservation the step cannot run out of memory. */
 #ifndef TINYACTORS_HOST_HOST_INTERNAL_H
 #define TINYACTORS_HOST_HOST_INTERNAL_H
@@ -107,18 +107,18 @@ void *host_alloc(ta_host *h, size_t size);
 void host_free(ta_host *h, void *pointer, size_t size);
 /* Room for `need` elements of `element` bytes in *array (capacity in
  * *capacity, new ones zeroed); 0 if the allocator refused (*array unchanged). */
-int grow(ta_host *h, void **array, uint32_t *capacity, uint32_t need, size_t element);
+int host_grow(ta_host *h, void **array, uint32_t *capacity, uint32_t need, size_t element);
 /* Room for `count` more effects and `bytes` more pool bytes; 0 if refused. */
-int effects_reserve(ta_host *h, uint32_t count, size_t bytes);
-size_t pool_put(ta_host *h, ta_string_view s);
-ta_host_effect *effect_new(ta_host *h, uint32_t kind, uint32_t segment);
-void set_effect_strings(ta_host *h, ta_string_view t, ta_string_view event, ta_string_view sid,
+int host_effects_reserve(ta_host *h, uint32_t count, size_t bytes);
+size_t host_pool_put(ta_host *h, ta_string_view s);
+ta_host_effect *host_effect_new(ta_host *h, uint32_t kind, uint32_t segment);
+void host_effect_strings_set(ta_host *h, ta_string_view t, ta_string_view event, ta_string_view sid,
                         ta_string_view aux);
-ta_status send_to(ta_host *h, uint32_t si, uint32_t actor, const ta_event_in *event);
+ta_status host_send_to(ta_host *h, uint32_t si, uint32_t actor, const ta_event_in *event);
 /* TA_ERROR_NO_MEMORY if it could be neither delivered nor kept; TA_OK otherwise
  * (also when the actor is gone: nobody to tell). */
-ta_status communication_error(ta_host *h, uint32_t si, uint32_t actor, ta_string_view sendid);
-uint32_t moved_get(const ta_host *h, uint64_t key);
+ta_status host_communication_error(ta_host *h, uint32_t si, uint32_t actor, ta_string_view sendid);
+uint32_t host_moved_get(const ta_host *h, uint64_t key);
 
 /* router.c */
 /* an SCXML send of segment si to another system (target not ours);

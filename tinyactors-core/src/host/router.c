@@ -235,21 +235,21 @@ static int allowed(ta_host *host, uint32_t handle, const peer *p, const ta_addre
 static void effect_message_id(ta_host *host, ta_string_view msgid) {
     effect_strings *strings = &host->effect_strings[host->effect_count - 1];
     ta_host_effect *effect = &host->effects[host->effect_count - 1];
-    strings->offset[4] = pool_put(host, msgid);
+    strings->offset[4] = host_pool_put(host, msgid);
     effect->msgid.length = strings->offset[4] == (size_t)-1 ? 0 : msgid.length;
 }
 
 /* an envelope for the transport (payload moved in on success) */
 static ta_status emit_peer(ta_host *host, uint32_t handle, const ta_envelope *envelope) {
-    if (!effects_reserve(host, 1,
+    if (!host_effects_reserve(host, 1,
                          (size_t)envelope->target.length + envelope->name.length +
                              envelope->sendid.length + envelope->origin.length +
                              envelope->msgid.length))
         return TA_ERROR_NO_MEMORY;
-    ta_host_effect *x = effect_new(host, TA_HOST_EFFECT_PEER, TA_NIL);
+    ta_host_effect *x = host_effect_new(host, TA_HOST_EFFECT_PEER, TA_NIL);
     x->peer = handle;
     x->flags = envelope->hops;
-    set_effect_strings(host, envelope->target, envelope->name, envelope->sendid, envelope->origin);
+    host_effect_strings_set(host, envelope->target, envelope->name, envelope->sendid, envelope->origin);
     effect_message_id(host, envelope->msgid);
     if (envelope->data &&
         envelope->datamodel <
@@ -264,12 +264,12 @@ static ta_status emit_peer(ta_host *host, uint32_t handle, const ta_envelope *en
 
 static ta_status emit_error(ta_host *host, uint32_t handle, ta_string_view origin,
                             ta_string_view msgid, ta_string_view sendid, uint32_t reason) {
-    if (!effects_reserve(host, 1, (size_t)origin.length + msgid.length + sendid.length))
+    if (!host_effects_reserve(host, 1, (size_t)origin.length + msgid.length + sendid.length))
         return TA_ERROR_NO_MEMORY;
-    ta_host_effect *x = effect_new(host, TA_HOST_EFFECT_PEER_ERROR, TA_NIL);
+    ta_host_effect *x = host_effect_new(host, TA_HOST_EFFECT_PEER_ERROR, TA_NIL);
     x->peer = handle;
     x->token = reason;
-    set_effect_strings(host, (ta_string_view){"", 0}, (ta_string_view){"", 0}, sendid, origin);
+    host_effect_strings_set(host, (ta_string_view){"", 0}, (ta_string_view){"", 0}, sendid, origin);
     effect_message_id(host, msgid);
     peer *p = peer_of(host, handle);
     if (p) p->errors++;
@@ -288,7 +288,7 @@ static ta_status local_error(ta_host *host, ta_string_view origin, ta_string_vie
     uint32_t si, actor;
     if (ta_host_locate(host, request.session, &si, &actor) != TA_OK)
         return TA_OK; /* gone: nobody to tell */
-    return communication_error(host, si, actor, sendid);
+    return host_communication_error(host, si, actor, sendid);
 }
 
 /* an error about `e`, which came from `from` (0: from here) */
@@ -485,7 +485,7 @@ ta_status ta_router_outbound(ta_host *host, uint32_t si, const ta_effect *effect
     ta_host_message message;
     message.size = sizeof message;
     if (ta_host_message_init(host, effect, 0, 0, &message) != TA_OK)
-        return communication_error(host, si, effect->actor, effect->sendid);
+        return host_communication_error(host, si, effect->actor, effect->sendid);
     ta_envelope envelope = message.envelope;
     envelope.datamodel = effect->payload && effect->datamodel < host->config.datamodel_count
                              ? effect->datamodel
@@ -525,7 +525,7 @@ static ta_status local_deliver(ta_host *host, uint64_t session, const ta_envelop
             ? envelope->origintype
             : (ta_string_view){"http://www.w3.org/TR/scxml/#SCXMLEventProcessor", 47};
     event.data = envelope->data;
-    ta_status status = send_to(host, si, actor, &event);
+    ta_status status = host_send_to(host, si, actor, &event);
     if (status == TA_ERROR_NO_MEMORY) return status;
     if (status == TA_OK) *reason = 0;
     return TA_OK;
@@ -835,7 +835,7 @@ ta_status ta_host_peer_add(ta_host *host, const ta_peer_config *config, uint32_t
     peer built;
     ta_status status = reach_build(host, config->reach, config->reach_count, &built);
     if (status != TA_OK) return status;
-    if (!grow(host, (void **)&router->peers, &router->peer_capacity, router->peer_count + 1,
+    if (!host_grow(host, (void **)&router->peers, &router->peer_capacity, router->peer_count + 1,
               sizeof(peer))) {
         reach_free(host, &built);
         return TA_ERROR_NO_MEMORY;
@@ -933,7 +933,7 @@ ta_status ta_host_route(ta_host *host, ta_string_view system, uint32_t handle) {
             return TA_OK;
         }
     if (!handle) return TA_OK;
-    if (!grow(host, (void **)&router->routes, &router->route_capacity, router->route_count + 1,
+    if (!host_grow(host, (void **)&router->routes, &router->route_capacity, router->route_count + 1,
               sizeof(route)))
         return TA_ERROR_NO_MEMORY;
     route *x = &router->routes[router->route_count];
@@ -951,7 +951,7 @@ ta_status ta_host_export(ta_host *host, uint32_t handle, ta_string_view name,
     if (handle && !peer_of(host, handle)) return TA_ERROR_STALE;
     struct ta_router *router = router_of(host);
     if (!router) return TA_ERROR_NO_MEMORY;
-    if (!grow(host, (void **)&router->exports, &router->export_capacity, router->export_count + 1,
+    if (!host_grow(host, (void **)&router->exports, &router->export_capacity, router->export_count + 1,
               sizeof(exported)))
         return TA_ERROR_NO_MEMORY;
     exported *x = &router->exports[router->export_count];
