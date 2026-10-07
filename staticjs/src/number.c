@@ -807,7 +807,18 @@ double sjs_number_parse_float(sjs_str s) {
  * specification lets an implementation approximate past 20 digits: V8's
  * (src/numbers/conversions.cc), so that it is Node's. Digits are read into
  * parts while a part's multiplier stays under 2^32 / 36, and each part is
- * added as number * multiplier + part, each operation rounding. */
+ * added as number * multiplier + part.
+ *
+ * How that expression rounds depends on the machine V8 runs on: clang
+ * contracts it into one fused multiply-add where the baseline instruction set
+ * has one (aarch64), and rounds the product and the sum apart where it does
+ * not (x86_64). staticjs rounds as Node does on the same machine; elsewhere
+ * (wasm) as on x86_64. */
+#if defined(__aarch64__)
+#define RADIX_FUSED 1
+#else
+#define RADIX_FUSED 0
+#endif
 static double radix_accumulate(sjs_str digits, uint32_t radix) {
     double number = 0;
     uint32_t i = 0;
@@ -826,8 +837,12 @@ static double radix_accumulate(sjs_str digits, uint32_t radix) {
             multiplier = m;
             i++;
         }
+#if RADIX_FUSED
+        number = __builtin_fma(number, (double)multiplier, (double)part); /* fmadd */
+#else
         double scaled = number * (double)multiplier;
         number = scaled + (double)part;
+#endif
     }
     return number;
 }

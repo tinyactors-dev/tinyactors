@@ -421,11 +421,11 @@ static char *repeated(const nesting *n, int depth) {
                   strlen(n->suffix) + 1;
     char *s = malloc(size);
     if (s == NULL) abort();
-    size_t used = (size_t)sprintf(s, "%s", n->prefix);
-    for (int i = 0; i < depth; i++) used += (size_t)sprintf(s + used, "%s", n->open);
-    used += (size_t)sprintf(s + used, "%s", n->middle);
-    for (int i = 0; i < depth; i++) used += (size_t)sprintf(s + used, "%s", n->close);
-    sprintf(s + used, "%s", n->suffix);
+    size_t used = (size_t)snprintf(s, size, "%s", n->prefix);
+    for (int i = 0; i < depth; i++) used += (size_t)snprintf(s + used, size - used, "%s", n->open);
+    used += (size_t)snprintf(s + used, size - used, "%s", n->middle);
+    for (int i = 0; i < depth; i++) used += (size_t)snprintf(s + used, size - used, "%s", n->close);
+    snprintf(s + used, size - used, "%s", n->suffix);
     return s;
 }
 
@@ -504,9 +504,9 @@ static void test_width(void) {
     char *source = malloc(size);
     if (source == NULL) abort();
 
-    size_t used = (size_t)sprintf(source, "[");
-    for (int i = 0; i < ELEMENTS; i++) used += (size_t)sprintf(source + used, "%sx.k", i > 0 ? "," : "");
-    sprintf(source + used, "]");
+    size_t used = (size_t)snprintf(source, size, "[");
+    for (int i = 0; i < ELEMENTS; i++) used += (size_t)snprintf(source + used, size - used, "%sx.k", i > 0 ? "," : "");
+    snprintf(source + used, size - used, "]");
     tee_init(&t, &allocator, SJS_LIMITS_DEFAULT.max_nesting);
     CHECK(parse_into(&t, whole(source, SJS_GOAL_EXPRESSION), SJS_LIMITS_DEFAULT) == SJS_OK);
     CHECK(!t.matcher.stopped && t.matcher.peak <= 6);
@@ -515,7 +515,7 @@ static void test_width(void) {
     sjs_matcher_free(&t.matcher);
 
     used = 0;
-    for (int i = 0; i < CONSTS; i++) used += (size_t)sprintf(source + used, "export const a%d = x => x.k;\n", i);
+    for (int i = 0; i < CONSTS; i++) used += (size_t)snprintf(source + used, size - used, "export const a%d = x => x.k;\n", i);
     tee_init(&t, &allocator, SJS_LIMITS_DEFAULT.max_nesting);
     CHECK(parse_into(&t, whole(source, SJS_GOAL_MODULE), SJS_LIMITS_DEFAULT) == SJS_OK);
     CHECK(!t.matcher.stopped && t.matcher.peak <= 6 && t.reports == CONSTS);
@@ -523,9 +523,9 @@ static void test_width(void) {
     printf("matcher_test: a module of %d consts, at most %u records\n", CONSTS, t.matcher.peak);
     sjs_matcher_free(&t.matcher);
 
-    used = (size_t)sprintf(source, "`");
-    for (int i = 0; i < SUBSTITUTIONS; i++) used += (size_t)sprintf(source + used, "a${x.k}");
-    sprintf(source + used, "`");
+    used = (size_t)snprintf(source, size, "`");
+    for (int i = 0; i < SUBSTITUTIONS; i++) used += (size_t)snprintf(source + used, size - used, "a${x.k}");
+    snprintf(source + used, size - used, "`");
     tee_init(&t, &allocator, SJS_LIMITS_DEFAULT.max_nesting);
     CHECK(parse_into(&t, whole(source, SJS_GOAL_EXPRESSION), SJS_LIMITS_DEFAULT) == SJS_OK);
     CHECK(!t.matcher.stopped && t.matcher.peak <= 6);

@@ -1022,24 +1022,24 @@ static void test_limits(void) {
      * and a parameter 70 patterns deep. */
     char source[1024];
     char *at = source;
-    at += sprintf(at, "(");
+    at += snprintf(at, sizeof source - (size_t)(at - source), "(");
     for (int i = 0; i < 70; i++) *at++ = '[';
     *at++ = '1';
     for (int i = 0; i < 70; i++) *at++ = ']';
-    sprintf(at, ").length");
+    snprintf(at, sizeof source - (size_t)(at - source), ").length");
     context = new_context(&c, SJS_LIMITS_DEFAULT);
     e.context = context;
     CHECK(evaluate(&e, source, out) == SJS_OK && strcmp(out, "1") == 0);
     at = source;
-    at += sprintf(at, "((");
+    at += snprintf(at, sizeof source - (size_t)(at - source), "((");
     for (int i = 0; i < 70; i++) *at++ = '[';
     *at++ = 'a';
     for (int i = 0; i < 70; i++) *at++ = ']';
-    at += sprintf(at, ") => a)(");
+    at += snprintf(at, sizeof source - (size_t)(at - source), ") => a)(");
     for (int i = 0; i < 70; i++) *at++ = '[';
     *at++ = '7';
     for (int i = 0; i < 70; i++) *at++ = ']';
-    sprintf(at, ")");
+    snprintf(at, sizeof source - (size_t)(at - source), ")");
     CHECK(evaluate(&e, source, out) == SJS_OK && strcmp(out, "7") == 0);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
@@ -1057,9 +1057,9 @@ static void test_limits(void) {
     {
         static char chain[64 * 1024];
         char *end = chain;
-        end += sprintf(end, "(x => { if (x === 0) return 0;");
-        for (int i = 1; i < 1000; i++) end += sprintf(end, " else if (x === %d) { const y = %d; return y; }", i, i);
-        sprintf(end, " return -1; })(999)");
+        end += snprintf(end, sizeof chain - (size_t)(end - chain), "(x => { if (x === 0) return 0;");
+        for (int i = 1; i < 1000; i++) end += snprintf(end, sizeof chain - (size_t)(end - chain), " else if (x === %d) { const y = %d; return y; }", i, i);
+        snprintf(end, sizeof chain - (size_t)(end - chain), " return -1; })(999)");
         CHECK(evaluate(&e, chain, out) == SJS_OK && strcmp(out, "999") == 0);
     }
     CHECK(sjs_context_live_bytes(context) == 0);
@@ -1193,9 +1193,9 @@ static void test_loop_callbacks(void) {
      * 64 elements takes more than 250. */
     char source[1024];
     char *at = source;
-    at += sprintf(at, "[");
-    for (int i = 1; i <= 64; i++) at += sprintf(at, i == 1 ? "%d" : ", %d", i);
-    sprintf(at, "].reduce((acc, x) => { const y = x; return [...acc, y]; }, []).length");
+    at += snprintf(at, sizeof source - (size_t)(at - source), "[");
+    for (int i = 1; i <= 64; i++) at += snprintf(at, sizeof source - (size_t)(at - source), i == 1 ? "%d" : ", %d", i);
+    snprintf(at, sizeof source - (size_t)(at - source), "].reduce((acc, x) => { const y = x; return [...acc, y]; }, []).length");
     CHECK(loop_open(&l, context, source));
     long before = c.allocations;
     CHECK(loop_finish(&l, UINT64_MAX, out) == SJS_RUN_DONE && strcmp(out, "64") == 0);

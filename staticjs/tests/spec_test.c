@@ -430,7 +430,12 @@ static sjs_result compile(const environment *env, const char *source, sjs_goal g
 /* The fuel the last evaluation used. */
 static uint64_t last_fuel = 0;
 
-/* Run a program to its end; the result is the caller's. */
+/* An error's subject, kept past the VM it points into. */
+static char fault_subject[1024];
+
+/* Run a program to its end; the result is the caller's. An error's subject
+ * is copied out of the VM before it is destroyed (staticjs.h: it is valid
+ * until the stage that reported it is destroyed). */
 static sjs_result evaluate(const environment *env, sjs_program *program, uint64_t fuel, sjs_value *result, sjs_error *error) {
     sjs_vm *vm;
     sjs_vm_config config = { env->context };
@@ -447,6 +452,10 @@ static sjs_result evaluate(const environment *env, sjs_program *program, uint64_
             r = sjs_vm_take_result(vm, result);
         } else {
             sjs_vm_error(vm, error);
+            uint32_t length = error->subject.length < sizeof fault_subject ? error->subject.length
+                                                                            : (uint32_t)sizeof fault_subject;
+            if (length) memcpy(fault_subject, error->subject.ptr, length);
+            error->subject = (sjs_str){ fault_subject, length };
             r = SJS_ERR_PROGRAM;
         }
     }

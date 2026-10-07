@@ -155,9 +155,9 @@ parseFloat({})
 [1.2345678901234568e+29,9007199254740992,9007199254740996,1.1111111111111112e+308,Infinity,Infinity,1.2089258196146292e+24,144115188075855870,144115188075855870,18446744073709552000,18014398509481984,1.42724769270596e+45,1.329227995784916e+36,1.2089258196146292e+24,Infinity]
 
 === parseInt in a radix that is not a power of two
-[parseInt("z".repeat(20), 36), parseInt("2".repeat(40), 3), parseInt("zzzzzzzzzzzzz", 36), parseInt("123456789abcdefghij", 20), parseInt("6".repeat(30), 7), parseInt("0".repeat(30) + "1234567890123456789", 36), parseInt("1234567890123456789", 36), parseInt("4".repeat(100), 5), parseInt("z".repeat(250), 36), parseInt("9".repeat(25), 11)]
+[parseInt("z".repeat(20), 36), parseInt("2".repeat(40), 3), parseInt("zzzzzzzzzzzzz", 36), parseInt("123456789abcdefghij", 20), parseInt("6".repeat(30), 7), parseInt("0".repeat(30) + "9876543210zyxwvuts", 36), parseInt("9876543210zyxwvuts", 36), parseInt("4".repeat(100), 5), parseInt("z".repeat(250), 36), parseInt("a".repeat(25), 11)]
 --- value
-[1.3367494538843734e+31,12157665459056929000,170581728179578200000,2.9046426592797785e+23,2.2539340290692256e+25,1.0912240439871393e+28,1.0912240439871393e+28,7.888609052210118e+69,Infinity,9.751235349049536e+25]
+[1.3367494538843734e+31,12157665459056929000,170581728179578200000,2.9046426592797785e+23,2.2539340290692256e+25,2.643860723857985e+27,2.643860723857985e+27,7.888609052210118e+69,Infinity,1.0834705943388373e+26]
 
 === parseInt of primitives that are not strings
 [parseInt(15.99), parseInt(-15.99), parseInt(0.0000005), parseInt(-0.5), parseInt(-0), parseInt(1e21), parseInt(null), parseInt(null, 36), parseInt(undefined, 36), parseInt(true, 36), parseInt(), parseInt(NaN), parseInt(Infinity, 36), parseInt(123, 5), Number.parseInt("08")]
