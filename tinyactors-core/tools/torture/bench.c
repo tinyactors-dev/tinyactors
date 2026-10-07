@@ -43,6 +43,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <sys/sysctl.h>
+#endif
+
 #include "quickjs.h"
 #include <tinyactors.h>
 #include <tinyactors/compile.h>
@@ -1302,8 +1307,43 @@ static JSValue h_mtime(JSContext *context, JSValueConst this_value, int argc, JS
     return JS_NewFloat64(context, ms);
 }
 
-/* ---- the machine (Linux /proc, cgroup v2) ---- */
+/* ---- the machine (Linux: /proc and cgroup v2; macOS: Mach) ---- */
 
+#ifdef __APPLE__
+/* Physical memory, and what the kernel could hand out without swapping:
+ * free pages, and inactive, speculative and purgeable ones it reclaims
+ * first (what Linux's MemAvailable estimates). */
+static double machine_memory_total(void) {
+    uint64_t bytes = 0;
+    size_t size = sizeof bytes;
+    return sysctlbyname("hw.memsize", &bytes, &size, NULL, 0) == 0 ? (double)bytes : 0;
+}
+
+static double machine_memory_available(void) {
+    vm_statistics64_data_t vm;
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    vm_size_t page = 0;
+    mach_port_t host = mach_host_self();
+    if (host_page_size(host, &page) != KERN_SUCCESS ||
+        host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&vm, &count) != KERN_SUCCESS)
+        return 0;
+    return ((double)vm.free_count + vm.inactive_count + vm.speculative_count + vm.purgeable_count) *
+           (double)page;
+}
+
+/* resident memory of this process */
+static double rss_bytes(void) {
+    mach_task_basic_info_data_t info;
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) != KERN_SUCCESS)
+        return 0;
+    return (double)info.resident_size;
+}
+
+static double cgroup_limit(void) {
+    return 0; /* no cgroups */
+}
+#else
 static double meminfo_kb(const char *key) {
     FILE *f = fopen("/proc/meminfo", "r");
     char line[256];
@@ -1359,6 +1399,15 @@ static double rss_bytes(void) {
     if (f) fclose(f);
     return v;
 }
+
+static double machine_memory_total(void) {
+    return meminfo_kb("MemTotal");
+}
+
+static double machine_memory_available(void) {
+    return meminfo_kb("MemAvailable");
+}
+#endif
 
 static JSValue h_rss(JSContext *context, JSValueConst this_value, int argc, JSValueConst *argv) {
     (void)this_value;
@@ -1452,9 +1501,9 @@ static int script_init(void) {
     }
     JS_SetPropertyStr(B.context, h, "params", params);
     JSValue m = JS_NewObject(B.context); /* what this machine offers */
-    JS_SetPropertyStr(B.context, m, "memTotal", JS_NewFloat64(B.context, meminfo_kb("MemTotal")));
+    JS_SetPropertyStr(B.context, m, "memTotal", JS_NewFloat64(B.context, machine_memory_total()));
     JS_SetPropertyStr(B.context, m, "memAvailable",
-                      JS_NewFloat64(B.context, meminfo_kb("MemAvailable")));
+                      JS_NewFloat64(B.context, machine_memory_available()));
     JS_SetPropertyStr(B.context, m, "memoryLimit", JS_NewFloat64(B.context, cgroup_limit()));
     JS_SetPropertyStr(B.context, m, "cpus",
                       JS_NewFloat64(B.context, (double)sysconf(_SC_NPROCESSORS_ONLN)));
