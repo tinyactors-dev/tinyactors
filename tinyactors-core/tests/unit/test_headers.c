@@ -80,7 +80,7 @@ ABI_CHECK(sizeof(ta_trace_record) == 88, trace_record_header_size);
 ABI_CHECK(offsetof(ta_trace_record, key) == 16, trace_record_key_offset);
 ABI_CHECK(offsetof(ta_trace_record, trace) == 40, trace_record_trace_offset);
 ABI_CHECK(offsetof(ta_trace_record, fuel) == 72, trace_record_fuel_offset);
-ABI_CHECK(sizeof(ta_trace_macrostep_begin) == 64, trace_macrostep_begin_size);
+ABI_CHECK(sizeof(ta_trace_macrostep_begin) == 72, trace_macrostep_begin_size);
 ABI_CHECK(sizeof(ta_trace_microstep) == 24, trace_microstep_size);
 ABI_CHECK(sizeof(ta_trace_sent) == 56, trace_sent_size);
 ABI_CHECK(sizeof(ta_trace_invoked) == 24, trace_invoked_size);

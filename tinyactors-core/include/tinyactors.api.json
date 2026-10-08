@@ -1255,7 +1255,7 @@
           "type": "uint32_t"
         },
         {
-          "name": "pad",
+          "name": "name",
           "type": "uint32_t"
         }
       ],
@@ -1265,7 +1265,7 @@
           "align": 4,
           "offsets": {
             "final_state": 0,
-            "pad": 4
+            "name": 4
           }
         },
         "aarch64": {
@@ -1273,7 +1273,7 @@
           "align": 4,
           "offsets": {
             "final_state": 0,
-            "pad": 4
+            "name": 4
           }
         },
         "wasm32": {
@@ -1281,6 +1281,45 @@
           "align": 4,
           "offsets": {
             "final_state": 0,
+            "name": 4
+          }
+        }
+      }
+    },
+    "ta_trace_lifecycle": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "pad": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "pad": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "name": 0,
             "pad": 4
           }
         }
@@ -1324,11 +1363,19 @@
         {
           "name": "payload",
           "type": "uint64_t"
+        },
+        {
+          "name": "actor_name",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 64,
+          "size": 72,
           "align": 8,
           "offsets": {
             "name": 0,
@@ -1339,11 +1386,13 @@
             "datamodel": 20,
             "origin_session": 24,
             "cause": 32,
-            "payload": 56
+            "payload": 56,
+            "actor_name": 64,
+            "pad": 68
           }
         },
         "aarch64": {
-          "size": 64,
+          "size": 72,
           "align": 8,
           "offsets": {
             "name": 0,
@@ -1354,11 +1403,13 @@
             "datamodel": 20,
             "origin_session": 24,
             "cause": 32,
-            "payload": 56
+            "payload": 56,
+            "actor_name": 64,
+            "pad": 68
           }
         },
         "wasm32": {
-          "size": 64,
+          "size": 72,
           "align": 8,
           "offsets": {
             "name": 0,
@@ -1369,7 +1420,9 @@
             "datamodel": 20,
             "origin_session": 24,
             "cause": 32,
-            "payload": 56
+            "payload": 56,
+            "actor_name": 64,
+            "pad": 68
           }
         }
       }
@@ -1433,7 +1486,7 @@
           "type": "uint32_t"
         },
         {
-          "name": "pad",
+          "name": "name",
           "type": "uint32_t"
         }
       ],
@@ -1446,7 +1499,7 @@
             "transition_count": 8,
             "exited_count": 12,
             "entered_count": 16,
-            "pad": 20
+            "name": 20
           }
         },
         "aarch64": {
@@ -1457,7 +1510,7 @@
             "transition_count": 8,
             "exited_count": 12,
             "entered_count": 16,
-            "pad": 20
+            "name": 20
           }
         },
         "wasm32": {
@@ -1468,7 +1521,7 @@
             "transition_count": 8,
             "exited_count": 12,
             "entered_count": 16,
-            "pad": 20
+            "name": 20
           }
         }
       }

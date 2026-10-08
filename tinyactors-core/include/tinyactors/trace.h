@@ -113,9 +113,9 @@ enum {
     TA_TRACE_DROPPED = 1,   /* the records lost since the last one (ta_trace_dropped) */
     TA_TRACE_SPAWNED = 2,   /* ta_trace_spawned */
     TA_TRACE_FINISHED = 3,  /* reached a top-level final state (ta_trace_finished) */
-    TA_TRACE_DESTROYED = 4, /* no body */
-    TA_TRACE_UNLOADED = 5,  /* hibernated; no body */
-    TA_TRACE_LOADED = 6,    /* woken; no body */
+    TA_TRACE_DESTROYED = 4, /* ta_trace_lifecycle */
+    TA_TRACE_UNLOADED = 5,  /* hibernated (ta_trace_lifecycle) */
+    TA_TRACE_LOADED = 6,    /* woken (ta_trace_lifecycle) */
     TA_TRACE_MACROSTEP_BEGIN = 7,
     TA_TRACE_MACROSTEP_END = 8,
     TA_TRACE_MICROSTEP = 9,
@@ -196,8 +196,14 @@ typedef struct ta_trace_spawned {
 
 typedef struct ta_trace_finished {
     uint32_t final_state; /* the top-level <final>, TA_NIL if none */
-    uint32_t pad;
+    uint32_t name;        /* the actor's name (a string) */
 } ta_trace_finished;
+
+/* destroyed, unloaded, loaded */
+typedef struct ta_trace_lifecycle {
+    uint32_t name; /* the actor's name (a string) */
+    uint32_t pad;
+} ta_trace_lifecycle;
 
 /* The event a macrostep took; for the bootstrap `name` is TA_NIL. */
 typedef struct ta_trace_macrostep_begin {
@@ -210,6 +216,8 @@ typedef struct ta_trace_macrostep_begin {
     uint64_t origin_session; /* the sending session, 0 if none */
     ta_step_key cause;       /* the step that sent it; session 0: a host's (all 0: none) */
     uint64_t payload;        /* the event's data with TA_TRACE_VALUES, else 0 */
+    uint32_t actor_name;     /* the actor's name (a string) */
+    uint32_t pad;
 } ta_trace_macrostep_begin;
 
 /* The configuration after a macrostep: `state_count` active states in
@@ -223,7 +231,8 @@ typedef struct ta_trace_macrostep_end {
  * in exit order and entered in entry order follow, in that order. */
 typedef struct ta_trace_microstep {
     uint64_t begin_fuel; /* the fuel clock when it began */
-    uint32_t transition_count, exited_count, entered_count, pad;
+    uint32_t transition_count, exited_count, entered_count;
+    uint32_t name; /* the event its transitions took (a string), TA_NIL: eventless */
 } ta_trace_microstep;
 
 typedef struct ta_trace_condition {

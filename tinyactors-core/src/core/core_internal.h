@@ -119,6 +119,7 @@ struct ta_core {
     uint32_t overrun_max;
     uint32_t overrun;
     uint64_t (*serial_of)(void *system, uint32_t actor);
+    uint32_t (*name_of)(void *system, uint32_t actor); /* string reference, TA_NIL if none */
     void *system;
     /* tracing (docs/adr/0006): the kinds to write (0: none), where, the
      * context pool, and what stamps a record: the fuel clock at the start of
@@ -223,6 +224,8 @@ typedef struct ta_workspace {
     uint32_t trace;       /* the context the step's events share (one reference), TA_NIL */
     uint64_t done_payload; /* exitInterpreter: <donedata> of the top-level final */
     uint64_t trace_fuel;   /* the fuel clock when the microstep began */
+    uint32_t trace_event;  /* the event the microstep took (event pool index), TA_NIL: eventless */
+    uint32_t pad3;
 } ta_workspace;
 
 typedef struct ta_workspace_layout {

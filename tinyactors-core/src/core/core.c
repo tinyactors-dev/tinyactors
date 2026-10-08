@@ -287,6 +287,10 @@ static void trace_microstep(kernel_context *kernel) {
     if (!record) return;
     ta_trace_microstep *micro = (ta_trace_microstep *)ta_trace_record_body(record);
     micro->begin_fuel = workspace->trace_fuel;
+    micro->name = workspace->trace_event == TA_NIL
+                      ? TA_NIL
+                      : ta_event_at(kernel->core, workspace->trace_event)->name;
+    ta_shared_string_retain(kernel->core, micro->name);
     micro->transition_count = workspace->selected_count;
     micro->exited_count = exited;
     micro->entered_count = entered;
@@ -315,6 +319,8 @@ static void trace_macrostep_begin(ta_core *core, ta_instance *instance, uint32_t
     begin->cause.macrostep = context->macrostep;
     begin->cause.microstep = context->microstep;
     begin->name = begin->sendid = begin->origin = begin->datamodel = TA_NIL;
+    begin->actor_name = core->name_of ? core->name_of(core->system, instance->actor) : TA_NIL;
+    ta_shared_string_retain(core, begin->actor_name);
     if (event_index != TA_NIL) {
         const ta_event *event = ta_event_at(core, event_index);
         begin->name = event->name;
@@ -1658,7 +1664,9 @@ static uint32_t micro(kernel_context *kernel) {
 
 /* ---- phase machine ------------------------------------------------------------------- */
 
-static void begin_micro(kernel_context *kernel) {
+/* `event`: the event the transitions were selected for (TA_NIL: eventless) */
+static void begin_micro(kernel_context *kernel, uint32_t event) {
+    kernel->workspace->trace_event = event;
     kernel->workspace->subphase = SUBPHASE_EXIT_COMPUTE;
     kernel->workspace->vm_active = 0;
     kernel->workspace->pad = 0;
@@ -1735,7 +1743,7 @@ uint32_t ta_core_step(ta_core *core, ta_instance *instance, uint32_t *fuel) {
             workspace_at(kernel, kernel->workspace_layout.domains)[0] = 0;
             ta_bitset_zero(workspace_at(kernel, kernel->workspace_layout.exit),
                            kernel->workspace_layout.state_words);
-            begin_micro(kernel);
+            begin_micro(kernel, TA_NIL);
             kernel->workspace->subphase = SUBPHASE_ENTRY_COMPUTE;
             break;
         case PHASE_EVENTLESS:
@@ -1755,7 +1763,7 @@ uint32_t ta_core_step(ta_core *core, ta_instance *instance, uint32_t *fuel) {
             if (!acquire_workspace(kernel)) return TA_STEP_NEED_WORKSPACE;
             select_transitions(kernel, 0, 1);
             if (kernel->workspace->selected_count) {
-                begin_micro(kernel);
+                begin_micro(kernel, TA_NIL);
             } else {
                 release_workspace(kernel);
                 instance->phase = PHASE_INTERNAL;
@@ -1774,7 +1782,7 @@ uint32_t ta_core_step(ta_core *core, ta_instance *instance, uint32_t *fuel) {
             burn(kernel, 1);
             select_transitions(kernel, ta_event_at(core, event_index)->name_id, 0);
             if (kernel->workspace->selected_count) {
-                begin_micro(kernel);
+                begin_micro(kernel, event_index);
             } else {
                 release_workspace(kernel);
                 instance->phase = PHASE_EVENTLESS;
@@ -1878,7 +1886,7 @@ uint32_t ta_core_step(ta_core *core, ta_instance *instance, uint32_t *fuel) {
             }
             select_transitions(kernel, event->name_id, 0);
             if (kernel->workspace->selected_count) {
-                begin_micro(kernel);
+                begin_micro(kernel, instance->current_event);
             } else {
                 release_workspace(kernel);
                 instance->phase = PHASE_EVENTLESS;

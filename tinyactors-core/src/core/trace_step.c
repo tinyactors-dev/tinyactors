@@ -136,9 +136,21 @@ void ta_core_trace_release(ta_core *core, const ta_trace_record *record) {
     case TA_TRACE_SPAWNED:
         ta_shared_string_release(core, ((const ta_trace_spawned *)body)->name);
         break;
+    case TA_TRACE_FINISHED:
+        ta_shared_string_release(core, ((const ta_trace_finished *)body)->name);
+        break;
+    case TA_TRACE_DESTROYED:
+    case TA_TRACE_UNLOADED:
+    case TA_TRACE_LOADED:
+        ta_shared_string_release(core, ((const ta_trace_lifecycle *)body)->name);
+        break;
+    case TA_TRACE_MICROSTEP:
+        ta_shared_string_release(core, ((const ta_trace_microstep *)body)->name);
+        break;
     case TA_TRACE_MACROSTEP_BEGIN: {
         const ta_trace_macrostep_begin *begin = (const ta_trace_macrostep_begin *)body;
         ta_shared_string_release(core, begin->name);
+        ta_shared_string_release(core, begin->actor_name);
         ta_shared_string_release(core, begin->sendid);
         ta_shared_string_release(core, begin->origin);
         trace_release_payload(core, begin->datamodel, begin->payload);

@@ -152,6 +152,12 @@ static uint64_t serial_of(void *sysp, uint32_t actor) {
     return index == TA_NIL ? 0 : ta_actor_at(system, index)->serial;
 }
 
+static uint32_t name_of(void *sysp, uint32_t actor) {
+    ta_system *system = (ta_system *)sysp;
+    uint32_t index = ta_system_resolve_actor(system, actor);
+    return index == TA_NIL ? TA_NIL : ta_actor_at(system, index)->name;
+}
+
 static void rebind(ta_system *system, const ta_image *image) {
     ta_core *core = &system->core;
     core->image_view = *ta_image_view_of(image);
@@ -167,6 +173,7 @@ static void rebind(ta_system *system, const ta_image *image) {
     core->io_processors = system->config.io_processors;
     core->io_processor_count = system->config.io_processor_count;
     core->serial_of = serial_of;
+    core->name_of = name_of;
     core->system = system;
     uint32_t r = system->config.max_events / 8;
     core->reserve = r > 4 ? 4 : r;
@@ -557,9 +564,15 @@ void ta_system_reclaim(ta_system *system, uint32_t index) {
             value = ta_trace_context_value(core, ta_actor_instance(system, actor)->trace);
         value.parent = 0;
         ta_trace_record *record =
-            ta_system_trace_lifecycle(system, index, TA_TRACE_DESTROYED, (uint32_t)sizeof *record,
+            ta_system_trace_lifecycle(system, index, TA_TRACE_DESTROYED,
+                                      (uint32_t)(sizeof *record + sizeof(ta_trace_lifecycle)),
                                       &value, 0, TA_TRACE_STEP_DESTROYED);
-        if (record) ta_trace_record_commit(core->journal, record);
+        if (record) {
+            ta_trace_lifecycle *body = (ta_trace_lifecycle *)ta_trace_record_body(record);
+            body->name = actor->name;
+            ta_shared_string_retain(core, actor->name);
+            ta_trace_record_commit(core->journal, record);
+        }
     }
     if (actor->state == TA_ACTOR_RUNNABLE && unqueue(system, &system->run_queue, index))
         system->runnable_count--;

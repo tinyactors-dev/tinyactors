@@ -459,9 +459,13 @@ static void trace_residency(ta_system *system, uint32_t index, uint32_t kind, ui
     ta_trace_context none;
     ta_memset(&none, 0, sizeof none);
     ta_trace_record *record = ta_system_trace_lifecycle(
-        system, index, kind, (uint32_t)sizeof *record, &none, macrostep,
-        kind == TA_TRACE_UNLOADED ? TA_TRACE_STEP_UNLOADED : TA_TRACE_STEP_LOADED);
-    if (record) ta_trace_record_commit(system->core.journal, record);
+        system, index, kind, (uint32_t)(sizeof *record + sizeof(ta_trace_lifecycle)), &none,
+        macrostep, kind == TA_TRACE_UNLOADED ? TA_TRACE_STEP_UNLOADED : TA_TRACE_STEP_LOADED);
+    if (!record) return;
+    ta_trace_lifecycle *body = (ta_trace_lifecycle *)ta_trace_record_body(record);
+    body->name = ta_actor_at(system, index)->name;
+    ta_shared_string_retain(&system->core, body->name);
+    ta_trace_record_commit(system->core.journal, record);
 }
 
 /* Free the instance of a (blob-written) actor; the record stays, hibernated. */

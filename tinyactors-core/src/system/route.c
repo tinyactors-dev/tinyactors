@@ -676,6 +676,8 @@ void ta_system_done(ta_system *system, uint32_t index, ta_payload done, uint32_t
         if (record) {
             ta_trace_finished *finished = (ta_trace_finished *)ta_trace_record_body(record);
             finished->final_state = final_state;
+            finished->name = actor->name;
+            ta_shared_string_retain(core, actor->name);
             ta_trace_record_commit(core->journal, record);
         }
     }
