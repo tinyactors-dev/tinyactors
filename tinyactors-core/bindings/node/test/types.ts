@@ -196,3 +196,20 @@ system.migrate(undefined, { timeoutMs: 'soon' });
   void first;
   void bytes;
 }
+
+import { decodeTraces, parseTraceparent, formatTraceparent, stepSpanID, TRACE_KINDS, type DecodedSpan, type TraceKind } from '..';
+
+// tracing: a sink, an exporter, traceparents on sends, the trace values
+export function tracing() {
+  const machine = createMachine({ id: 'traced', initial: 'a', states: { a: { on: { go: 'a' } } } });
+  const system = createSystem({ telemetry: { endpoint: 'http://localhost:4318', headers: { a: 'b' } }, traces: { seed: 1n, detail: 'decisions' } });
+  system.setTraceSink((traces: Uint8Array, logs?: Uint8Array) => void [traces, logs], { values: true, parent: 'link', resource: { 'service.name': 's' } });
+  system.configureTraces({ kinds: ['macrostepBegin', 'macrostepEnd'], sample: 0.5 });
+  const actor = createActor(machine, { system, traceparent: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01' }).start();
+  actor.send({ type: 'go' }, { traceparent: formatTraceparent({ traceID: '0af7651916cd43dd8448eb211c80319c', spanID: stepSpanID(1, 1n) }) });
+  system.sendMany([[actor, 'go', { traceparent: undefined }], [actor, 'go']]);
+  const parsed = parseTraceparent('x');
+  const spans: DecodedSpan[] = decodeTraces(new Uint8Array(0));
+  const kinds: readonly TraceKind[] = TRACE_KINDS;
+  void [parsed?.sampled, spans[0]?.startTimeUnixNano, kinds, system.flushTraces()];
+}

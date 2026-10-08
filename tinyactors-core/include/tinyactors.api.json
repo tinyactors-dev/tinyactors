@@ -7208,6 +7208,31 @@
       "implemented": true
     },
     {
+      "name": "ta_host_trace_set",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "h",
+          "type": "ta_host *"
+        },
+        {
+          "name": "kinds",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sample_parts",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sample_whole",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_host_wake",
       "returns": "ta_status",
       "params": [

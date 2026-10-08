@@ -11,6 +11,7 @@ import { createRuntime } from '../shared/core.mjs';
 import { createNative } from './native.mjs';
 
 const bytes = readFileSync(new URL('./tinyactors.wasm', import.meta.url));
+const { httpPost, withNodeTransports } = createRequire(import.meta.url)('../node/transports.js');
 const native = createNative((imports) => new WebAssembly.Instance(new WebAssembly.Module(bytes), imports));
 
 const api = createRuntime({
@@ -22,14 +23,16 @@ const api = createRuntime({
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (h) => clearTimeout(h),
     log: (...args) => console.log(...args),
+    post: httpPost, /* (no environment is read: the application passes an endpoint) */
   },
 });
 
-createRequire(import.meta.url)('../node/transports.js').withNodeTransports(api);
+withNodeTransports(api);
 
 export const {
   createMachine, createActor, createSystem, fromSCXML, SCXMLLogic, compileSystem, loadImage, SystemImage, setup, assign, raise, sendTo, sendParent, log, cancel,
   stateIn, and, or, not, StateMachine, Actor, System, ActorRef, createLink, serveLinks, encodeFrame, FrameDecoder,
   createMemoryStore, encodeValue, decodeValue, parseAddress, formatAddress, encodeWire, decodeWire, createStoreLink,
+  TRACE_KINDS, decodeTraces, parseTraceparent, formatTraceparent, stepSpanID,
 } = api;
 export default api;

@@ -1036,6 +1036,46 @@ static void test_trace_two_segments(void) {
     free(echo_bytes);
 }
 
+/* ta_host_trace_set reaches every segment, and the ones added later. */
+static void test_trace_set(void) {
+    open_node(A, PINGER);
+    uint64_t p = spawn(A, "pinger", "p");
+    settle();
+    begin_seen seen[64];
+    begins(A, seen, 64);
+    CHECK_EQUAL(ta_host_trace_set(nodes[A].host, TA_TRACE_BIT(TA_TRACE_DROPPED), 1, 1), TA_OK);
+    size_t length;
+    void *echo_bytes = compile_chart("e.scxml", ECHO, NULL, &length, 0);
+    ta_image echo_image;
+    CHECK(echo_bytes && ta_image_open(echo_bytes, length, &echo_image) == TA_OK);
+    uint32_t segment;
+    CHECK_EQUAL(ta_host_add_image(nodes[A].host, &echo_image, &segment), TA_OK);
+    uint64_t echo = 0;
+    CHECK_EQUAL(ta_host_spawn(nodes[A].host, segment, 0, (ta_string_view){"echo", 4}, 0,
+                              (ta_string_view){0, 0}, &echo),
+                TA_OK);
+    const char *json = "{\"to\": \"tinyactors://a/@echo\", \"n\": 1}";
+    ta_event_in event;
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.name = (ta_string_view){"go", 2};
+    event.data = ta_datamodel_ecmascript_payload_from_json(
+        nodes[A].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+    CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
+    settle();
+    LOGCHK(A, "pong:1;");
+    CHECK_EQUAL(begins(A, seen, 64), 0); /* neither segment wrote one */
+    CHECK_EQUAL(ta_host_trace_set(nodes[A].host, TA_TRACE_FULL, 1, 1), TA_OK);
+    event.data = ta_datamodel_ecmascript_payload_from_json(
+        nodes[A].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+    CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
+    settle();
+    uint32_t n = begins(A, seen, 64);
+    CHECK(begin_named(seen, n, "go") && begin_named(seen, n, "ping"));
+    close_all();
+    free(echo_bytes);
+}
+
 int main(void) {
     RUN(test_route_status);
     RUN(test_errors_back);
@@ -1055,5 +1095,6 @@ int main(void) {
     RUN(test_trace_across_systems);
     RUN(test_trace_envelope_json);
     RUN(test_trace_two_segments);
+    RUN(test_trace_set);
     TEST_MAIN_END();
 }

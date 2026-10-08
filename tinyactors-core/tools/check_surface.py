@@ -40,7 +40,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "build/surface"
-LIBS = ["src/base/*.c", "src/image/*.c", "src/core/*.c", "src/system/*.c", "src/compile/*.c"]
+LIBS = ["src/base/*.c", "src/image/*.c", "src/trace/*.c", "src/core/*.c", "src/system/*.c", "src/compile/*.c",
+        "src/otlp/*.c"]
 INCLUDES = ["include", "src"]
 CLASSES = ("System", "Actor", "SystemImage")
 # the module each typings file describes (loaded by node to read the runtime surface)

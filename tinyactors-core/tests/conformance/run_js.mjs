@@ -167,6 +167,28 @@ function values() {
   return failures;
 }
 
+/* trace values (docs/adr/0006 in the repository root): the vectors
+ * tests/unit/test_trace.c runs; the binding's functions call the C code */
+function traceValues() {
+  const failures = [];
+  for (const k of JSON.parse(readFileSync(path.join(here, 'span_ids.json'), 'utf8')).keys) {
+    const got = ta.stepSpanID(k.session, BigInt(k.macrostep), k.microstep);
+    if (got !== k.span) failures.push(`span ${k.session}/${k.macrostep}/${k.microstep}: ${got}, expected ${k.span}`);
+  }
+  const v = JSON.parse(readFileSync(path.join(here, 'traceparent.json'), 'utf8'));
+  for (const c of v.valid) {
+    const p = ta.parseTraceparent(c.text);
+    if (!p || p.traceID !== c.trace || p.parentSpanID !== c.parent || p.flags !== c.flags) {
+      failures.push(`should parse: ${JSON.stringify(c.text)}: ${JSON.stringify(p)}`);
+      continue;
+    }
+    const back = ta.formatTraceparent({ traceID: p.traceID, spanID: p.parentSpanID, flags: p.flags });
+    if (back !== (c.format || c.text)) failures.push(`${JSON.stringify(c.text)} formats back as ${back}`);
+  }
+  for (const c of v.invalid) if (ta.parseTraceparent(c.text)) failures.push(`should not parse (${c.why}): ${JSON.stringify(c.text)}`);
+  return failures;
+}
+
 /* link transcripts (docs/protocol.md, Link protocol): this binding's system
  * serves links; the driver plays the peer on a fake transport, feeding `in`
  * frames and matching `out` frames (a subset of fields; "~regex" strings).
@@ -287,6 +309,10 @@ if (!only) {
   console.log(`${failures.length ? 'FAIL' : 'ok  '} ${which.padEnd(4)} values.json (protocol vectors)`);
   for (const x of failures) console.log(`       ${x}`);
   failed += failures.length ? 1 : 0;
+  const traceFailures = traceValues();
+  console.log(`${traceFailures.length ? 'FAIL' : 'ok  '} ${which.padEnd(4)} span_ids.json, traceparent.json (trace vectors)`);
+  for (const x of traceFailures) console.log(`       ${x}`);
+  failed += traceFailures.length ? 1 : 0;
   const ldir = path.join(here, 'links/');
   for (const f of readdirSync(ldir).filter((f) => f.endsWith('.json')).sort()) {
     const sc = JSON.parse(readFileSync(path.join(ldir, f), 'utf8'));

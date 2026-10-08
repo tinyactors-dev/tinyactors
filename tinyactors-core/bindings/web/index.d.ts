@@ -374,6 +374,14 @@ export interface ActorOptions<TInput> {
   systemID?: string;
   /** Receives <log> output (default console.log). */
   logger?: (...args: unknown[]) => void;
+  /** A W3C traceparent: the actor's first step continues that trace. */
+  traceparent?: string;
+}
+
+/** Options of a send from host code. */
+export interface HostSendOptions {
+  /** A W3C traceparent: the step the event starts continues that trace (its span is the parent). */
+  traceparent?: string;
 }
 
 export declare class Actor<M extends AnyActorLogic> {
@@ -386,7 +394,7 @@ export declare class Actor<M extends AnyActorLogic> {
   readonly hibernated: boolean;
   start(): this;
   stop(): this;
-  send(event: EventFrom<M>): void;
+  send(event: EventFrom<M>, options?: HostSendOptions): void;
   getSnapshot(): Snapshot<ContextFrom<M>, OutputFrom<M>>;
   subscribe(observer: Observer<Snapshot<ContextFrom<M>, OutputFrom<M>>>): Subscription;
   subscribe(
@@ -455,6 +463,14 @@ export interface SystemOptions {
   clock?: () => number;
   /** Receives <log> output of actors without their own `logger` (default console.log). */
   logger?: (...args: unknown[]) => void;
+  /** A trace sink from the start, and the trace ID generator's seed. */
+  traces?: TraceSinkOptions & { sink?: TraceSink; seed?: bigint | number };
+  /**
+   * The OTLP/HTTP exporter (merged over what the platform gives: in Node.js
+   * the OTEL_* environment variables; the browser build exports only with an
+   * endpoint given here). `false`: no export.
+   */
+  telemetry?: TelemetryOptions | false;
 }
 
 /**
@@ -466,7 +482,7 @@ export declare class ActorRef {
   readonly id: string;
   readonly address: string;
   readonly system: System;
-  send(event: EventObject | string): void;
+  send(event: EventObject | string, options?: HostSendOptions): void;
 }
 
 /**
@@ -535,7 +551,7 @@ export declare class System implements SystemRef {
    * [actor, event] pairs; returns how many were accepted (actors that ended
    * are skipped).
    */
-  sendMany(items: ReadonlyArray<readonly [AnyActor, EventObject | string]>): number;
+  sendMany(items: ReadonlyArray<readonly [AnyActor, EventObject | string] | readonly [AnyActor, EventObject | string, HostSendOptions]>): number;
   /**
    * The whole system as bytes: every actor (states, contexts and variables,
    * queued events, timers) and what it runs (machine SCXML, documents,
@@ -552,8 +568,21 @@ export declare class System implements SystemRef {
   flush(maxSlices?: number): boolean;
   /** Start the actors a system image declares; returns them by name (also `get(name)`). */
   boot(image: SystemImage): Record<string, AnyActor>;
-  /** Stop every actor, close the system's links, end its timers and free its native memory. */
+  /** Stop every actor, close the system's links, end its timers and free its native memory. Open spans end, marked incomplete. */
   stop(): void;
+  /**
+   * Hand traces to `sink` as OTLP protobuf: after each run, one Uint8Array
+   * holding an ExportTraceServiceRequest (the spans that ended), and one
+   * holding an ExportLogsServiceRequest (failures, <log>) when there are
+   * logs. Post them to an OTLP/HTTP endpoint as they are, or read them with
+   * decodeTraces(). `null` removes the sink. Without a sink or an exporter
+   * core writes no records (traceparents still flow between actors).
+   */
+  setTraceSink(sink: TraceSink | null, options?: TraceSinkOptions): void;
+  /** Change `detail`, `kinds` and `sample` while traces flow; open spans are kept. */
+  configureTraces(options: TraceConfiguration): void;
+  /** Resolves once every export this system started has been posted (or failed). */
+  flushTraces(): Promise<void>;
 }
 
 export interface MigrateOptions {
@@ -736,6 +765,8 @@ export interface Envelope {
   /** A key to drop duplicates by instead of msgid (an idempotency key). */
   dedup?: string;
   hops?: number;
+  /** A W3C traceparent: the step the envelope starts continues that trace (it travels across links). */
+  traceparent?: string;
 }
 
 /** A route's status as the router sees it (docs/protocol.md, "Observability"). */
@@ -913,3 +944,104 @@ export declare function or<TContext = any, TEvent extends EventObject = EventObj
 export declare function not<TContext = any, TEvent extends EventObject = EventObject>(
   guard: Guard<TContext, TEvent>,
 ): CompositeGuard<TContext, TEvent>;
+
+// ---------------------------------------------------------------------------
+// Tracing (docs/adr/0006 in the repository root): core writes the records,
+// C encodes them as OTLP protobuf; no telemetry dependency.
+
+/** Core's trace record kinds, in core's order. */
+export type TraceKind =
+  | 'dropped' | 'spawned' | 'finished' | 'destroyed' | 'unloaded' | 'loaded'
+  | 'macrostepBegin' | 'macrostepEnd' | 'microstep' | 'condition' | 'raised'
+  | 'sent' | 'invoked' | 'cancelled' | 'assign' | 'log' | 'actionFailed';
+
+export declare const TRACE_KINDS: readonly TraceKind[];
+
+export type TraceSink = (traces: Uint8Array, logs?: Uint8Array) => void;
+
+export interface TraceConfiguration {
+  /**
+   * "full" (default): every kind; "decisions": a span per macrostep and
+   * microstep, conditions, raised events, lifecycle spans and failures;
+   * "summary": a span per macrostep, lifecycle spans and failures.
+   */
+  detail?: 'summary' | 'decisions' | 'full';
+  /** The record kinds wanted, overriding `detail`. Core writes no other record. */
+  kinds?: TraceKind[];
+  /**
+   * The ratio (0 to 1, default 1) of the traces this system starts that are
+   * sampled, decided as OpenTelemetry's TraceIDRatioBased does. A
+   * traceparent keeps its caller's decision. Lifecycle spans are kept
+   * whatever the decision.
+   */
+  sample?: number;
+}
+
+export interface TraceSinkOptions extends TraceConfiguration {
+  /** Event data and assigned values as JSON attributes (off by default: they can hold personal data). */
+  values?: boolean;
+  /** Bytes of a value in an attribute, cut there (default 256). */
+  valueLimit?: number;
+  /** "cause" (default): a macrostep's parent is its cause; "link": a root, linked to its cause. */
+  parent?: 'cause' | 'link';
+  /** Failures and <log> as OTLP log records (default true). */
+  logs?: boolean;
+  /** Resource attributes every request carries, such as `service.name`. */
+  resource?: Record<string, string>;
+}
+
+/** The OTLP/HTTP protobuf exporter's settings. */
+export interface TelemetryOptions {
+  /** The base URL: /v1/traces and /v1/logs are added (OTEL_EXPORTER_OTLP_ENDPOINT). */
+  endpoint?: string;
+  /** The traces URL, as it is (OTEL_EXPORTER_OTLP_TRACES_ENDPOINT). */
+  tracesEndpoint?: string;
+  /** The logs URL, as it is; "" sends no logs. */
+  logsEndpoint?: string;
+  /** Headers of every request (OTEL_EXPORTER_OTLP_HEADERS). */
+  headers?: Record<string, string>;
+  /** Resource attributes (OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES). */
+  resource?: Record<string, string>;
+  /** The sampling ratio (OTEL_TRACES_SAMPLER_ARG); a sink's `sample` wins. */
+  sample?: number;
+  /** No export (OTEL_SDK_DISABLED=true). */
+  disabled?: boolean;
+  /** How to post: (url, headers, body) => a promise (default: the platform's HTTP client, or fetch). */
+  post?: (url: string, headers: Record<string, string>, body: Uint8Array) => Promise<void>;
+}
+
+/** A span as decodeTraces() reads it. IDs are lowercase hex. */
+export interface DecodedSpan {
+  traceID: string;
+  spanID: string;
+  parentSpanID?: string;
+  name: string;
+  kind: 'unspecified' | 'internal' | 'server' | 'client' | 'producer' | 'consumer';
+  /** Milliseconds since the epoch. */
+  startTime: number;
+  endTime: number;
+  startTimeUnixNano: bigint;
+  endTimeUnixNano: bigint;
+  attributes: Record<string, unknown>;
+  events: { name: string; time: number; timeUnixNano: bigint; attributes: Record<string, unknown> }[];
+  links: { traceID: string; spanID: string; attributes: Record<string, unknown> }[];
+  status: { code: 'unset' | 'ok' | 'error'; message?: string };
+  resource: { attributes: Record<string, unknown> };
+  /** One scope per (system, chart): its attributes name the chart. */
+  scope: { name: string; version: string; attributes: Record<string, unknown> };
+}
+
+/** Reads OTLP protobuf trace bytes (C's decoder); throws on a malformed message. */
+export declare function decodeTraces(bytes: Uint8Array): DecodedSpan[];
+
+/**
+ * A W3C traceparent's fields, or undefined when it is not a valid one
+ * (C's parser, the one every send uses). Spaces and tabs around it are
+ * ignored; a later version is read by its first four fields.
+ */
+export declare function parseTraceparent(header: string | undefined):
+  { traceID: string; parentSpanID: string; flags: number; sampled: boolean } | undefined;
+/** A traceparent naming `spanID` as the parent; sampled unless `sampled: false` or `flags` says otherwise. */
+export declare function formatTraceparent(span: { traceID: string; spanID: string; sampled?: boolean; flags?: number }): string;
+/** The span ID of a step: its session, macrostep and microstep (0, the default: the macrostep's span). */
+export declare function stepSpanID(session: bigint | number | string, macrostep: bigint | number | string, microstep?: number): string;

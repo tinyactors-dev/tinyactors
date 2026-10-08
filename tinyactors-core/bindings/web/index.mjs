@@ -54,5 +54,6 @@ export const {
   createMachine, createActor, createSystem, fromSCXML, SCXMLLogic, compileSystem, loadImage, SystemImage, setup, assign, raise, sendTo, sendParent, log, cancel,
   stateIn, and, or, not, StateMachine, Actor, System, ActorRef, createLink, serveLinks, encodeFrame, FrameDecoder,
   createMemoryStore, encodeValue, decodeValue, parseAddress, formatAddress, encodeWire, decodeWire, createStoreLink,
+  TRACE_KINDS, decodeTraces, parseTraceparent, formatTraceparent, stepSpanID,
 } = api;
 export default api;

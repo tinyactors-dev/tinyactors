@@ -12,6 +12,8 @@
  * streams itself (docs/protocol.md, "Framing").
  */
 const net = require('net');
+const http = require('http');
+const https = require('https');
 const { webSocketSource } = require('./ws');
 
 /* accepted TCP connections for serveLinks({ accept }) */
@@ -57,4 +59,28 @@ function withNodeTransports(api) {
   return api;
 }
 
-module.exports = { withNodeTransports, tcpSource };
+/* OTLP/HTTP: a POST of protobuf bytes; resolves on a 2xx answer. Kept-alive
+ * connections (idle ones do not keep the process running). */
+const agents = { 'http:': new http.Agent({ keepAlive: true }), 'https:': new https.Agent({ keepAlive: true }) };
+function httpPost(url, headers, body) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const client = target.protocol === 'https:' ? https : http;
+    const request = client.request(
+      target,
+      {
+        method: 'POST',
+        agent: agents[target.protocol],
+        headers: { 'content-type': 'application/x-protobuf', 'content-length': body.length, ...headers },
+      },
+      (response) => {
+        response.resume();
+        response.on('end', () => (response.statusCode >= 200 && response.statusCode < 300 ? resolve() : reject(new Error(`HTTP ${response.statusCode}`))));
+      },
+    );
+    request.on('error', reject);
+    request.end(body);
+  });
+}
+
+module.exports = { withNodeTransports, tcpSource, httpPost };

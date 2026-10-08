@@ -348,6 +348,14 @@ typedef struct nd_host {
     ta_payload cached_payload; /* the payload whose encoding is in cached_encoding (0: none) */
     unsigned char *cached_encoding;
     size_t cached_length, cached_capacity;
+    /* tracing (docs/adr/0006 in the repository root): the wall clock the
+     * runtime gives (() -> ms since the epoch), the encoder, and this turn's
+     * requests (concatenated: protobuf messages of one type merge) */
+    napi_ref clock;
+    ta_otlp *otlp;
+    size_t otlp_length;
+    unsigned char *traces, *logs;
+    size_t traces_length, traces_capacity, logs_length, logs_capacity;
 } nd_host;
 
 static void chart_add(nd_host *host, nd_chart *chart) {
@@ -1085,7 +1093,21 @@ static ta_status nd_capture(void *d, uint64_t handle, ta_datamodel_environment *
                             const ta_datamodel_capture *capture, ta_payload *out) {
     ENTER();
     napi_value v = NULL;
-    if (capture->content != TA_NIL) {
+    if (capture->kind == TA_CAPTURE_VALUE) { /* a trace's value: read, never evaluated */
+        ta_expression_info info;
+        napi_value context_value = get_ref(host->environment, instance->context);
+        if (ta_image_expression(instance->chart->image, instance->chart->chart, capture->content,
+                                &info) != TA_OK ||
+            !context_value) {
+            instance->environment = NULL;
+            return TA_ERROR_EXECUTION;
+        }
+        if (info.source.length == 7 && !memcmp(info.source.pointer, "context", 7))
+            v = context_value;
+        else
+            napi_get_property(host->environment, context_value,
+                              str_value(host->environment, info.source), &v);
+    } else if (capture->content != TA_NIL) {
         v = eval_value(host, instance, capture->content);
     } else {
         napi_create_object(host->environment, &v);
@@ -1102,6 +1124,40 @@ static ta_status nd_capture(void *d, uint64_t handle, ta_datamodel_environment *
     instance->environment = NULL;
     if (!v) return TA_ERROR_EXECUTION;
     *out = payload_new(host, v);
+    return TA_OK;
+}
+
+/* A value as JSON (JSON.stringify), for trace records (TA_OTLP_VALUES): the
+ * encoder cuts it. TA_ERROR_INVALID for what JSON cannot write. */
+static ta_status nd_to_wire(void *d, ta_payload payload, char *buffer, size_t capacity,
+                            size_t *length) {
+    nd_host *host = (nd_host *)d;
+    napi_env environment = host->environment;
+    napi_value global, json, stringify, text, value = payload_get(host, payload);
+    napi_get_global(environment, &global);
+    napi_get_named_property(environment, global, "JSON", &json);
+    napi_get_named_property(environment, json, "stringify", &stringify);
+    if (napi_call_function(environment, json, stringify, 1, &value, &text) != napi_ok) {
+        bool pending = false;
+        napi_is_exception_pending(environment, &pending);
+        if (pending) {
+            napi_value ignored;
+            napi_get_and_clear_last_exception(environment, &ignored);
+        }
+        return TA_ERROR_INVALID;
+    }
+    napi_valuetype t = napi_undefined;
+    napi_typeof(environment, text, &t);
+    if (t != napi_string) return TA_ERROR_INVALID;
+    size_t n = 0;
+    napi_get_value_string_utf8(environment, text, NULL, 0, &n);
+    *length = n;
+    if (n > capacity) return TA_ERROR_NO_MEMORY;
+    char *copy = (char *)malloc(n + 1);
+    if (!copy) return TA_ERROR_NO_MEMORY;
+    napi_get_value_string_utf8(environment, text, copy, n + 1, &n);
+    memcpy(buffer, copy, n);
+    free(copy);
     return TA_OK;
 }
 
@@ -1177,7 +1233,7 @@ static const ta_datamodel_vtable nd_vt = {sizeof(ta_datamodel_vtable),
                                           nd_serialize,
                                           nd_deserialize,
                                           nd_migrate,
-                                          NULL, /* to_wire: links encode JS values in JS */
+                                          nd_to_wire, /* trace values; links encode in JS */
                                           NULL,
                                           nd_payload_serialize,
                                           nd_payload_deserialize};
@@ -1595,7 +1651,7 @@ static const ta_datamodel_vtable e_vt = {sizeof(ta_datamodel_vtable),
                                          e_serialize,
                                          e_deserialize,
                                          e_migrate,
-                                         NULL, /* to_wire: links encode JS values in JS */
+                                         nd_to_wire, /* trace values; links encode in JS */
                                          NULL,
                                          nd_payload_serialize,
                                          nd_payload_deserialize};
@@ -1630,6 +1686,10 @@ static void host_clear(napi_env environment, nd_host *host) {
     set_ref(environment, &host->codec, NULL);
     set_ref(environment, &host->store_error, NULL);
     free(host->cached_encoding);
+    set_ref(environment, &host->clock, NULL);
+    free(host->otlp);
+    free(host->traces);
+    free(host->logs);
     memset(host, 0, sizeof *host);
     host->destroyed = 1;
 }
@@ -1701,8 +1761,9 @@ static napi_value bool_value(napi_env environment, int b) {
  * machines, "ecmascript" for SCXML documents: ecmascript = bindings/shared/ecmascript.mjs)
  * and the ta_host */
 /* A host object from (resolver, codec, base, es); its ta_host config in *c (datamodels in b) */
-static nd_host *host_alloc(napi_env environment, napi_value *argv, ta_host_config *config,
-                           ta_datamodel_binding *binding) {
+/* options: { clock: () => ms since the epoch, seed: [high, low] } (tracing) */
+static nd_host *host_alloc(napi_env environment, napi_value *argv, napi_value options,
+                           ta_host_config *config, ta_datamodel_binding *binding) {
     nd_host *host = (nd_host *)calloc(1, sizeof *host);
     if (!host) return NULL;
     host->environment = environment;
@@ -1727,22 +1788,42 @@ static nd_host *host_alloc(napi_env environment, napi_value *argv, ta_host_confi
     config->datamodels = binding; /* "xstate" (machines), "ecmascript" (SCXML documents) */
     config->datamodel_count = 2;
     config->allocator = ta_runtime_malloc();
+    napi_valuetype t = napi_undefined;
+    if (options) napi_typeof(environment, options, &t);
+    if (t == napi_object) {
+        napi_value clock, seed;
+        napi_valuetype ct = napi_undefined;
+        if (napi_get_named_property(environment, options, "clock", &clock) == napi_ok)
+            napi_typeof(environment, clock, &ct);
+        if (ct == napi_function) host->clock = make_ref(environment, clock);
+        if (napi_get_named_property(environment, options, "seed", &seed) == napi_ok) {
+            bool array = false;
+            napi_is_array(environment, seed, &array);
+            if (array) { /* the trace ID seed, as two 32-bit halves */
+                napi_value high, low;
+                napi_get_element(environment, seed, 0, &high);
+                napi_get_element(environment, seed, 1, &low);
+                config->system.trace_seed =
+                    (uint64_t)get_u32(environment, high) << 32 | get_u32(environment, low);
+            }
+        }
+    }
     return host;
 }
 
 static napi_value js_create_host(napi_env environment, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value argv[4], result;
+    size_t argc = 5;
+    napi_value argv[5], result;
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
     napi_valuetype t = napi_undefined;
     if (argc) napi_typeof(environment, argv[0], &t);
     if (t != napi_function || argc < 4) {
-        napi_throw_type_error(environment, NULL, "createHost(resolver, codec, base, es)");
+        napi_throw_type_error(environment, NULL, "createHost(resolver, codec, base, es, options)");
         return NULL;
     }
     ta_host_config config;
     ta_datamodel_binding binding[2];
-    nd_host *host = host_alloc(environment, argv, &config, binding);
+    nd_host *host = host_alloc(environment, argv, argc > 4 ? argv[4] : NULL, &config, binding);
     if (!host || ta_host_new(&config, &host->host) != TA_OK) {
         if (host) host_finalize(environment, host, NULL);
         napi_throw_error(environment, NULL, "cannot create the actor system");
@@ -1805,8 +1886,8 @@ static napi_value js_chart(napi_env environment, napi_callback_info info) {
  * documents: <data> overrides) are the init payload as is, else { input }; name: the
  * actor's systemID (addressable as tinyactors://<system>/@<name>) */
 static napi_value js_spawn(napi_env environment, napi_callback_info info) {
-    size_t argc = 6;
-    napi_value argv[6], init;
+    size_t argc = 7;
+    napi_value argv[7], init;
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
     nd_host *host = argc >= 3 ? get_host(environment, argv[0]) : NULL;
     if (!host) return NULL;
@@ -1824,10 +1905,16 @@ static napi_value js_spawn(napi_env environment, napi_callback_info info) {
     napi_valuetype nt = napi_undefined;
     if (argc > 5) napi_typeof(environment, argv[5], &nt);
     char *name = nt == napi_string ? get_string(environment, argv[5], &nl) : NULL;
-    ta_status status = ta_host_spawn(
-        host->host, get_u32(environment, argv[1]), get_u32(environment, argv[2]),
-        (ta_string_view){name, (uint32_t)nl}, payload, (ta_string_view){0, 0}, &session);
+    size_t tl = 0; /* the bootstrap's traceparent, if any */
+    napi_valuetype tt = napi_undefined;
+    if (argc > 6) napi_typeof(environment, argv[6], &tt);
+    char *traceparent = tt == napi_string ? get_string(environment, argv[6], &tl) : NULL;
+    ta_status status =
+        ta_host_spawn(host->host, get_u32(environment, argv[1]), get_u32(environment, argv[2]),
+                      (ta_string_view){name, (uint32_t)nl}, payload,
+                      (ta_string_view){traceparent, (uint32_t)tl}, &session);
     free(name);
+    free(traceparent);
     if (status != TA_OK) {
         nd_release(host, payload);
         napi_throw_error(environment, NULL, "cannot spawn the actor");
@@ -1845,28 +1932,33 @@ static ta_status host_send(nd_host *host, uint64_t session, ta_event_in *event) 
 
 /* send(host, session, type, event) -> bool */
 static napi_value js_send(napi_env environment, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value argv[4];
+    size_t argc = 5;
+    napi_value argv[5];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
     nd_host *host = argc >= 4 ? get_host(environment, argv[0]) : NULL;
     if (!host) return NULL;
-    size_t tl;
+    size_t tl, pl = 0;
     char *type = get_string(environment, argv[2], &tl);
+    napi_valuetype pt = napi_undefined;
+    if (argc > 4) napi_typeof(environment, argv[4], &pt);
+    char *traceparent = pt == napi_string ? get_string(environment, argv[4], &pl) : NULL;
     ta_event_in event;
     memset(&event, 0, sizeof event);
     event.size = sizeof event;
     event.name = (ta_string_view){type ? type : "", (uint32_t)(type ? tl : 0)};
     event.data = payload_new(host, argv[3]);
+    event.traceparent = (ta_string_view){traceparent, (uint32_t)pl};
     ta_status status = host_send(host, get_session(environment, argv[1]), &event);
     free(type);
+    free(traceparent);
     return bool_value(environment, status == TA_OK);
 }
 
 /* sendMany(host, sessions[], types[], events[]) -> how many were delivered (batched:
  * ta_host_send_many, one ta_system_send_many per segment run) */
 static napi_value js_send_many(napi_env environment, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value argv[4];
+    size_t argc = 5; /* traceparents: an optional array, one per event */
+    napi_value argv[5];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
     nd_host *host = argc >= 4 ? get_host(environment, argv[0]) : NULL;
     if (!host) return NULL;
@@ -1875,6 +1967,9 @@ static napi_value js_send_many(napi_env environment, napi_callback_info info) {
     uint64_t *sessions = (uint64_t *)malloc(sizeof(uint64_t) * (n ? n : 1));
     ta_event_in *events = (ta_event_in *)calloc(n ? n : 1, sizeof *events);
     char **types = (char **)calloc(n ? n : 1, sizeof(char *));
+    char **traceparents = (char **)calloc(n ? n : 1, sizeof(char *));
+    bool with_traceparents = false;
+    if (argc > 4) napi_is_array(environment, argv[4], &with_traceparents);
     for (uint32_t i = 0; i < n; i++) {
         napi_value v, t, ev;
         napi_get_element(environment, argv[1], i, &v);
@@ -1886,6 +1981,15 @@ static napi_value js_send_many(napi_env environment, napi_callback_info info) {
         events[i].size = sizeof events[i];
         events[i].name = (ta_string_view){types[i] ? types[i] : "", (uint32_t)(types[i] ? tl : 0)};
         events[i].data = payload_new(host, ev);
+        if (with_traceparents) {
+            napi_value tp;
+            napi_valuetype pt = napi_undefined;
+            napi_get_element(environment, argv[4], i, &tp);
+            napi_typeof(environment, tp, &pt);
+            size_t pl = 0;
+            traceparents[i] = pt == napi_string ? get_string(environment, tp, &pl) : NULL;
+            events[i].traceparent = (ta_string_view){traceparents[i], (uint32_t)pl};
+        }
     }
     uint32_t ok = 0;
     for (uint32_t i = 0; i < n;) {
@@ -1898,9 +2002,12 @@ static napi_value js_send_many(napi_env environment, napi_callback_info info) {
             i++;
         }
     }
-    for (uint32_t i = 0; i < n; i++)
+    for (uint32_t i = 0; i < n; i++) {
         free(types[i]);
+        free(traceparents[i]);
+    }
     free(types);
+    free(traceparents);
     free(events);
     free(sessions);
     return num(environment, ok);
@@ -2053,10 +2160,10 @@ static napi_value js_deliver_envelope(napi_env environment, napi_callback_info i
     nd_host *host = argc >= 3 ? get_host(environment, argv[0]) : NULL;
     if (!host) return NULL;
     static const char *const keys[] = {"target", "name",  "origin", "origintype",
-                                       "sendid", "msgid", "dedup"};
-    char *s[7];
-    size_t l[7];
-    for (int i = 0; i < 7; i++)
+                                       "sendid", "msgid", "dedup",  "traceparent"};
+    char *s[8];
+    size_t l[8];
+    for (int i = 0; i < 8; i++)
         s[i] = prop_string(environment, argv[2], keys[i], &l[i]);
 #define V(i) ((ta_string_view){s[i] ? s[i] : "", s[i] ? (uint32_t)l[i] : 0})
     ta_envelope envelope;
@@ -2069,6 +2176,7 @@ static napi_value js_deliver_envelope(napi_env environment, napi_callback_info i
     envelope.sendid = V(4);
     envelope.msgid = V(5);
     envelope.deduplication_key = V(6);
+    envelope.traceparent = V(7);
 #undef V
     napi_value hv, dv;
     napi_valuetype t = napi_undefined;
@@ -2087,7 +2195,7 @@ static napi_value js_deliver_envelope(napi_env environment, napi_callback_info i
     /* the payload moves only when delivered or relayed */
     if (envelope.data && (status != TA_OK || outcome > TA_ROUTE_RELAYED))
         nd_release(host, envelope.data);
-    for (int i = 0; i < 7; i++)
+    for (int i = 0; i < 8; i++)
         free(s[i]);
     return num(environment, status == TA_OK ? (double)outcome : -1);
 }
@@ -2183,6 +2291,488 @@ static void push(napi_env environment, napi_value *arr, uint32_t *n, napi_value 
 /* run(host, budget) -> { status, deadline, used, logs, done, ended, peers, peerErrors,
  *                        errors, wakes, requests, migrated, jobs, freed } (lists only when
  *                        not empty) */
+/* ---- tracing (docs/adr/0006 in the repository root) ------------------------------------------
+ * Every segment's records go into one OTLP encoder after every run, between
+ * two marks of the wall clock the runtime gives (`clock`); each run's
+ * requests are concatenated (protobuf messages of one type merge) and handed
+ * to JavaScript once per call of run(): no object per record or span. */
+
+/* The wall clock, in nanoseconds since the epoch (the runtime's `clock`
+ * returns milliseconds). */
+static uint64_t trace_wall(nd_host *host) {
+    if (!host->clock) return 0;
+    napi_value clock = get_ref(host->environment, host->clock), global, r;
+    napi_get_global(host->environment, &global);
+    double ms = 0;
+    if (napi_call_function(host->environment, global, clock, 0, NULL, &r) == napi_ok)
+        napi_get_value_double(host->environment, r, &ms);
+    return ms > 0 ? (uint64_t)(ms * 1e6) : 0;
+}
+
+static uint64_t trace_fuel(nd_host *host) {
+    ta_host_stats stats;
+    stats.size = sizeof stats;
+    ta_host_stats_get(host->host, &stats);
+    return stats.fuel_clock;
+}
+
+/* Grow a turn buffer to hold `more` bytes more; 0 if refused. */
+static int trace_room(unsigned char **buffer, size_t *length, size_t *capacity, size_t more) {
+    if (*length + more <= *capacity) return 1;
+    size_t c = *capacity ? *capacity : 65536;
+    while (c < *length + more)
+        c *= 2;
+    unsigned char *grown = (unsigned char *)realloc(*buffer, c);
+    if (!grown) return 0;
+    *buffer = grown;
+    *capacity = c;
+    return 1;
+}
+
+/* The staged requests, onto this turn's. */
+static void trace_put(nd_host *host) {
+    size_t size = ta_otlp_traces_size(host->otlp);
+    if (size && trace_room(&host->traces, &host->traces_length, &host->traces_capacity, size))
+        host->traces_length +=
+            ta_otlp_put_traces(host->otlp, host->traces + host->traces_length, size);
+    size = ta_otlp_logs_size(host->otlp);
+    if (size && trace_room(&host->logs, &host->logs_length, &host->logs_capacity, size))
+        host->logs_length += ta_otlp_put_logs(host->otlp, host->logs + host->logs_length, size);
+}
+
+/* A bigger encoder, its open spans and staging moved along; 0 if refused. */
+static int trace_grow(nd_host *host) {
+    ta_otlp_stats stats;
+    stats.size = sizeof stats;
+    ta_otlp_stats_get(host->otlp, &stats);
+    ta_otlp_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.open_spans = stats.open_capacity * 2;
+    config.chunks = stats.chunks_capacity * 2;
+    config.staging_bytes = stats.staging_capacity;
+    config.log_bytes = stats.log_capacity;
+    size_t length = 0;
+    if (ta_otlp_layout(&config, &length) != TA_OK) return 0;
+    void *memory = malloc(length);
+    ta_otlp *moved = NULL;
+    if (!memory || ta_otlp_relocate(host->otlp, memory, length, &config, &moved) != TA_OK) {
+        free(memory);
+        return 0;
+    }
+    free(host->otlp);
+    host->otlp = moved;
+    host->otlp_length = length;
+    return 1;
+}
+
+/* Read every segment's records into the encoder (or let them go without one). */
+static void trace_drain(nd_host *host) {
+    ta_datamodel_binding datamodels[2] = {{&nd_vt, host}, {&e_vt, host}};
+    uint32_t segments = ta_host_segment_count(host->host);
+    for (uint32_t k = 0; k < segments; k++) {
+        ta_system *system = ta_host_system(host->host, k);
+        if (!system) continue;
+        ta_host_segment_info info;
+        info.size = sizeof info;
+        ta_host_segment_info_get(host->host, k, &info);
+        ta_trace_view view;
+        while (ta_system_trace(system, &view)) {
+            if (host->otlp) {
+                ta_otlp_input input;
+                memset(&input, 0, sizeof input);
+                input.size = sizeof input;
+                input.source = k;
+                input.view = view;
+                input.image = info.image;
+                input.datamodels = datamodels;
+                input.datamodel_count = 2;
+                uint32_t cursor = 0, status;
+                while ((status = ta_otlp_read(host->otlp, &input, &cursor)) != TA_OTLP_READ) {
+                    if (status == TA_OTLP_FLUSH)
+                        trace_put(host);
+                    else if (!trace_grow(host))
+                        break; /* no memory: these records are lost */
+                }
+            }
+            ta_system_trace_ack(system, view.length);
+        }
+    }
+}
+
+/* Names of the detail levels' kinds, for traceConfigure. */
+static uint32_t trace_kinds_of(napi_env environment, napi_value options) {
+    napi_value v;
+    napi_valuetype t = napi_undefined;
+    if (napi_get_named_property(environment, options, "kinds", &v) == napi_ok)
+        napi_typeof(environment, v, &t);
+    return t == napi_number ? get_u32(environment, v) : TA_TRACE_FULL;
+}
+
+/* traceConfigure(host, { enabled, kinds, sampleParts, sampleWhole, flags, valueLimit,
+ * resource: [[key, value], ...] }): what core writes, and the encoder that
+ * reads it (none when not enabled: core then writes nothing, contexts still
+ * travel) */
+static napi_value js_trace_configure(napi_env environment, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2], v;
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    nd_host *host = argc >= 2 ? get_host(environment, argv[0]) : NULL;
+    if (!host) return NULL;
+    bool enabled = false;
+    if (napi_get_named_property(environment, argv[1], "enabled", &v) == napi_ok)
+        napi_get_value_bool(environment, v, &enabled);
+    uint32_t kinds = enabled ? trace_kinds_of(environment, argv[1]) : 0;
+    uint32_t parts = 1, whole = 1, flags = 0, value_limit = 0;
+    if (napi_get_named_property(environment, argv[1], "sampleParts", &v) == napi_ok)
+        parts = get_u32(environment, v);
+    if (napi_get_named_property(environment, argv[1], "sampleWhole", &v) == napi_ok)
+        whole = get_u32(environment, v);
+    if (napi_get_named_property(environment, argv[1], "flags", &v) == napi_ok)
+        flags = get_u32(environment, v);
+    if (napi_get_named_property(environment, argv[1], "valueLimit", &v) == napi_ok)
+        value_limit = get_u32(environment, v);
+    if (!whole) parts = 0, whole = 1; /* nothing sampled */
+    /* no destination: no records, but a mask core cannot read as "all" */
+    ta_host_trace_set(host->host, kinds ? kinds : TA_TRACE_BIT(TA_TRACE_DROPPED), parts, whole);
+    if (!enabled) {
+        free(host->otlp);
+        host->otlp = NULL;
+        return undef(environment);
+    }
+    if (!host->otlp) {
+        ta_otlp_config config;
+        memset(&config, 0, sizeof config);
+        config.size = sizeof config;
+        config.flags = flags;
+        config.value_limit = value_limit;
+        size_t length = 0;
+        ta_otlp_layout(&config, &length);
+        void *memory = malloc(length);
+        if (!memory || ta_otlp_init(memory, length, &config, &host->otlp) != TA_OK) {
+            free(memory);
+            host->otlp = NULL;
+            napi_throw_error(environment, NULL, "cannot create the trace encoder");
+            return NULL;
+        }
+        host->otlp_length = length;
+    }
+    ta_otlp_set_flags(host->otlp, flags);
+    if (napi_get_named_property(environment, argv[1], "resource", &v) == napi_ok) {
+        bool array = false;
+        napi_is_array(environment, v, &array);
+        uint32_t n = 0;
+        if (array) napi_get_array_length(environment, v, &n);
+        ta_otlp_attribute *attributes = (ta_otlp_attribute *)calloc(n ? n : 1, sizeof *attributes);
+        char **texts = (char **)calloc(2 * (n ? n : 1), sizeof(char *));
+        for (uint32_t i = 0; i < n; i++) {
+            napi_value pair, key, value;
+            napi_get_element(environment, v, i, &pair);
+            napi_get_element(environment, pair, 0, &key);
+            napi_get_element(environment, pair, 1, &value);
+            size_t kl = 0, vl = 0;
+            texts[2 * i] = get_string(environment, key, &kl);
+            texts[2 * i + 1] = get_string(environment, value, &vl);
+            attributes[i].key = (ta_string_view){texts[2 * i] ? texts[2 * i] : "", (uint32_t)kl};
+            attributes[i].value =
+                (ta_string_view){texts[2 * i + 1] ? texts[2 * i + 1] : "", (uint32_t)vl};
+        }
+        ta_otlp_set_resource(host->otlp, attributes, n);
+        for (uint32_t i = 0; i < 2 * n; i++)
+            free(texts[i]);
+        free(texts);
+        free(attributes);
+    }
+    return undef(environment);
+}
+
+/* traceEnd(host) -> { traces, logs }: every open span ends (incomplete), for
+ * a system going away */
+static napi_value js_trace_end(napi_env environment, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1], out;
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    nd_host *host = argc >= 1 ? get_host(environment, argv[0]) : NULL;
+    if (!host) return NULL;
+    napi_create_object(environment, &out);
+    if (!host->otlp) return out;
+    trace_drain(host);
+    for (int i = 0; i < 64; i++) {
+        ta_otlp_stats stats;
+        stats.size = sizeof stats;
+        ta_otlp_end_all(host->otlp, trace_wall(host));
+        trace_put(host);
+        ta_otlp_stats_get(host->otlp, &stats);
+        if (!stats.open) break;
+    }
+    if (host->traces_length)
+        napi_set_named_property(environment, out, "traces",
+                                bytes_value(environment, host->traces, host->traces_length));
+    if (host->logs_length)
+        napi_set_named_property(environment, out, "traceLogs",
+                                bytes_value(environment, host->logs, host->logs_length));
+    host->traces_length = host->logs_length = 0;
+    return out;
+}
+
+/* ---- trace values: the C implementations, for every binding ---------------------------------- */
+
+static int hex_text(const char *text, size_t length, uint64_t *high, uint64_t *low) {
+    uint64_t parts[2] = {0, 0};
+    if (length != 16 && length != 32) return 0;
+    for (size_t i = 0; i < length; i++) {
+        char c = text[i];
+        uint64_t d = c >= '0' && c <= '9'   ? (uint64_t)(c - '0')
+                     : c >= 'a' && c <= 'f' ? (uint64_t)(c - 'a' + 10)
+                     : c >= 'A' && c <= 'F' ? (uint64_t)(c - 'A' + 10)
+                                            : 16;
+        if (d == 16) return 0;
+        size_t half = length == 32 && i < 16 ? 0 : 1;
+        parts[half] = parts[half] << 4 | d;
+    }
+    *high = parts[0];
+    *low = parts[1];
+    return 1;
+}
+
+static uint64_t decimal_of(napi_env environment, napi_value v) {
+    size_t n = 0;
+    char *text = get_string(environment, v, &n);
+    uint64_t value = 0;
+    for (size_t i = 0; text && i < n && text[i] >= '0' && text[i] <= '9'; i++)
+        value = value * 10 + (uint64_t)(text[i] - '0');
+    free(text);
+    return value;
+}
+
+/* stepSpanID(session, macrostep, microstep) -> 16 hex digits (decimal strings in) */
+static napi_value js_step_span_id(napi_env environment, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value argv[3];
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    if (argc < 3) return NULL;
+    ta_step_key key = {decimal_of(environment, argv[0]), decimal_of(environment, argv[1]),
+                       get_u32(environment, argv[2]), 0};
+    char text[TA_SPAN_ID_TEXT_LENGTH];
+    ta_span_id_format(ta_step_key_span_id(key), text, sizeof text);
+    return str_value(environment, (ta_string_view){text, sizeof text});
+}
+
+/* parseTraceparent(text) -> { traceID, parentSpanID, flags } or null */
+static napi_value js_parse_traceparent(napi_env environment, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1], out;
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    napi_valuetype t = napi_undefined;
+    if (argc) napi_typeof(environment, argv[0], &t);
+    if (t != napi_string) return null_value(environment);
+    size_t n = 0;
+    char *text = get_string(environment, argv[0], &n);
+    ta_trace_context context;
+    ta_status status = ta_traceparent_parse((ta_string_view){text, (uint32_t)n}, &context);
+    free(text);
+    if (status != TA_OK) return null_value(environment);
+    char trace[TA_TRACE_ID_TEXT_LENGTH], parent[TA_SPAN_ID_TEXT_LENGTH];
+    ta_trace_id_format(context.trace, trace, sizeof trace);
+    ta_span_id_format(context.parent, parent, sizeof parent);
+    napi_create_object(environment, &out);
+    napi_set_named_property(environment, out, "traceID",
+                            str_value(environment, (ta_string_view){trace, sizeof trace}));
+    napi_set_named_property(environment, out, "parentSpanID",
+                            str_value(environment, (ta_string_view){parent, sizeof parent}));
+    napi_set_named_property(environment, out, "flags", num(environment, context.flags));
+    return out;
+}
+
+/* formatTraceparent(traceID, spanID, flags) -> text, or null if invalid */
+static napi_value js_format_traceparent(napi_env environment, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value argv[3];
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    if (argc < 3) return null_value(environment);
+    size_t tl = 0, sl = 0;
+    char *trace = get_string(environment, argv[0], &tl),
+         *span = get_string(environment, argv[1], &sl);
+    ta_trace_context context;
+    memset(&context, 0, sizeof context);
+    uint64_t ignored;
+    int ok = trace && span && tl == 32 && sl == 16 &&
+             hex_text(trace, tl, &context.trace.high, &context.trace.low) &&
+             hex_text(span, sl, &ignored, &context.parent);
+    free(trace);
+    free(span);
+    context.flags = get_u32(environment, argv[2]);
+    char text[TA_TRACEPARENT_LENGTH];
+    uint32_t n = ok ? ta_traceparent_format(&context, text, sizeof text) : 0;
+    return n ? str_value(environment, (ta_string_view){text, n}) : null_value(environment);
+}
+
+/* ---- decoding: OTLP traces to plain objects (core.mjs shapes them) ------------------------- */
+
+static napi_value decoded_id(napi_env environment, uint64_t high, uint64_t low, int wide) {
+    char text[TA_TRACE_ID_TEXT_LENGTH];
+    if (wide) {
+        ta_trace_id_format((ta_trace_id){high, low}, text, sizeof text);
+        return str_value(environment, (ta_string_view){text, TA_TRACE_ID_TEXT_LENGTH});
+    }
+    ta_span_id_format(low, text, sizeof text);
+    return str_value(environment, (ta_string_view){text, TA_SPAN_ID_TEXT_LENGTH});
+}
+
+static napi_value decoded_u64(napi_env environment, uint64_t value) {
+    char text[24];
+    int n = snprintf(text, sizeof text, "%llu", (unsigned long long)value);
+    return str_value(environment, (ta_string_view){text, (uint32_t)n});
+}
+
+static napi_value decoded_attributes(napi_env environment, ta_otlp_fields fields);
+
+/* a value: string, boolean, number, { int: "decimal" } beyond 2^53, array,
+ * { list: [[k, v]] }, { bytes: Uint8Array } */
+static napi_value decoded_value(napi_env environment, const ta_otlp_value *value) {
+    napi_value v, wrapper;
+    switch (value->kind) {
+    case TA_OTLP_VALUE_STRING:
+        return str_value(environment, value->bytes);
+    case TA_OTLP_VALUE_BOOL:
+        return bool_value(environment, value->integer != 0);
+    case TA_OTLP_VALUE_INT:
+        if (value->integer >= -9007199254740991LL && value->integer <= 9007199254740991LL)
+            return num(environment, (double)value->integer);
+        napi_create_object(environment, &wrapper);
+        {
+            char text[24];
+            int n = snprintf(text, sizeof text, "%lld", (long long)value->integer);
+            napi_set_named_property(environment, wrapper, "int",
+                                    str_value(environment, (ta_string_view){text, (uint32_t)n}));
+        }
+        return wrapper;
+    case TA_OTLP_VALUE_DOUBLE:
+        return num(environment, value->number);
+    case TA_OTLP_VALUE_ARRAY: {
+        uint32_t at = 0, i = 0;
+        ta_otlp_value item;
+        napi_create_array(environment, &v);
+        while (ta_otlp_next_value(value->items, &at, &item) == 1)
+            napi_set_element(environment, v, i++, decoded_value(environment, &item));
+        return v;
+    }
+    case TA_OTLP_VALUE_LIST:
+        napi_create_object(environment, &wrapper);
+        napi_set_named_property(environment, wrapper, "list",
+                                decoded_attributes(environment, value->items));
+        return wrapper;
+    case TA_OTLP_VALUE_BYTES:
+        napi_create_object(environment, &wrapper);
+        napi_set_named_property(
+            environment, wrapper, "bytes",
+            bytes_value(environment, value->bytes.pointer, value->bytes.length));
+        return wrapper;
+    default:
+        return null_value(environment);
+    }
+}
+
+/* attributes as [[key, value], ...] */
+static napi_value decoded_attributes(napi_env environment, ta_otlp_fields fields) {
+    napi_value list;
+    napi_create_array(environment, &list);
+    uint32_t at = 0, i = 0;
+    ta_string_view key;
+    ta_otlp_value value;
+    while (ta_otlp_next_attribute(fields, &at, &key, &value) == 1) {
+        napi_value pair;
+        napi_create_array_with_length(environment, 2, &pair);
+        napi_set_element(environment, pair, 0, str_value(environment, key));
+        napi_set_element(environment, pair, 1, decoded_value(environment, &value));
+        napi_set_element(environment, list, i++, pair);
+    }
+    return list;
+}
+
+/* decodeTraces(bytes) -> [span], or throws on malformed bytes */
+static napi_value js_decode_traces(napi_env environment, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1], spans;
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    void *bytes = NULL;
+    size_t length = 0;
+    if (argc < 1 || !bytes_of(environment, argv[0], &bytes, &length)) {
+        napi_throw_type_error(environment, NULL, "decodeTraces(bytes: Uint8Array)");
+        return NULL;
+    }
+    napi_create_array(environment, &spans);
+    ta_otlp_cursor cursor;
+    memset(&cursor, 0, sizeof cursor);
+    ta_otlp_span span;
+    int32_t got;
+    uint32_t i = 0;
+    while ((got = ta_otlp_next_span(bytes, length, &cursor, &span)) == 1) {
+        napi_value o, events, links;
+        napi_create_object(environment, &o);
+        napi_set_named_property(environment, o, "traceID",
+                                decoded_id(environment, span.trace.high, span.trace.low, 1));
+        napi_set_named_property(environment, o, "spanID", decoded_id(environment, 0, span.span, 0));
+        if (span.parent)
+            napi_set_named_property(environment, o, "parentSpanID",
+                                    decoded_id(environment, 0, span.parent, 0));
+        napi_set_named_property(environment, o, "name", str_value(environment, span.name));
+        napi_set_named_property(environment, o, "kind", num(environment, span.kind));
+        napi_set_named_property(environment, o, "start", decoded_u64(environment, span.start));
+        napi_set_named_property(environment, o, "end", decoded_u64(environment, span.end));
+        napi_set_named_property(environment, o, "status", num(environment, span.status));
+        if (span.status_message.length)
+            napi_set_named_property(environment, o, "statusMessage",
+                                    str_value(environment, span.status_message));
+        napi_set_named_property(environment, o, "attributes",
+                                decoded_attributes(environment, span.attributes));
+        napi_create_array(environment, &events);
+        uint32_t at = 0, k = 0;
+        ta_otlp_event event;
+        while (ta_otlp_next_event(span.events, &at, &event) == 1) {
+            napi_value e;
+            napi_create_object(environment, &e);
+            napi_set_named_property(environment, e, "name", str_value(environment, event.name));
+            napi_set_named_property(environment, e, "time", decoded_u64(environment, event.time));
+            napi_set_named_property(environment, e, "attributes",
+                                    decoded_attributes(environment, event.attributes));
+            napi_set_element(environment, events, k++, e);
+        }
+        napi_set_named_property(environment, o, "events", events);
+        napi_create_array(environment, &links);
+        at = 0;
+        k = 0;
+        ta_otlp_link link;
+        while (ta_otlp_next_link(span.links, &at, &link) == 1) {
+            napi_value l;
+            napi_create_object(environment, &l);
+            napi_set_named_property(environment, l, "traceID",
+                                    decoded_id(environment, link.trace.high, link.trace.low, 1));
+            napi_set_named_property(environment, l, "spanID",
+                                    decoded_id(environment, 0, link.span, 0));
+            napi_set_named_property(environment, l, "attributes",
+                                    decoded_attributes(environment, link.attributes));
+            napi_set_element(environment, links, k++, l);
+        }
+        napi_set_named_property(environment, o, "links", links);
+        napi_set_named_property(environment, o, "resource",
+                                decoded_attributes(environment, span.resource));
+        napi_set_named_property(environment, o, "scopeName",
+                                str_value(environment, span.scope_name));
+        napi_set_named_property(environment, o, "scopeVersion",
+                                str_value(environment, span.scope_version));
+        napi_set_named_property(environment, o, "scopeAttributes",
+                                decoded_attributes(environment, span.scope_attributes));
+        napi_set_named_property(environment, o, "flags", num(environment, span.flags));
+        napi_set_element(environment, spans, i++, o);
+    }
+    if (got < 0) {
+        napi_throw_error(environment, NULL, "decodeTraces: malformed OTLP protobuf");
+        return NULL;
+    }
+    return spans;
+}
+
 static napi_value js_run(napi_env environment, napi_callback_info info) {
     size_t argc = 2;
     napi_value argv[2], out, v, logs = NULL, done = NULL, sends = NULL, perrs = NULL, errors = NULL,
@@ -2195,7 +2785,10 @@ static napi_value js_run(napi_env environment, napi_callback_info info) {
     uint32_t nl = 0, nd = 0, ns = 0, npe = 0, ne = 0, nw = 0, nr = 0, nm = 0, nj = 0, nf = 0;
     ta_run result;
     for (int round = 0;; round++) {
+        if (host->otlp) ta_otlp_mark(host->otlp, trace_fuel(host), trace_wall(host));
         result = ta_host_run(host->host, budget);
+        if (host->otlp) ta_otlp_mark(host->otlp, trace_fuel(host), trace_wall(host));
+        trace_drain(host); /* before the effects: what they cause comes after */
         const ta_host_effect *effects;
         uint32_t n = ta_host_effects(host->host, &effects);
         for (uint32_t i = 0; i < n; i++) {
@@ -2236,6 +2829,15 @@ static napi_value js_run(napi_env environment, napi_callback_info info) {
                 napi_set_named_property(environment, e, "msgid",
                                         str_value(environment, effect->msgid));
                 napi_set_named_property(environment, e, "hops", num(environment, effect->flags));
+                {
+                    char traceparent[TA_TRACEPARENT_LENGTH];
+                    uint32_t length =
+                        ta_traceparent_format(&effect->trace, traceparent, sizeof traceparent);
+                    if (length)
+                        napi_set_named_property(
+                            environment, e, "traceparent",
+                            str_value(environment, (ta_string_view){traceparent, length}));
+                }
                 push(environment, &sends, &ns, e);
                 break;
             case TA_HOST_EFFECT_PEER_ERROR: /* an `err` back to a peer */
@@ -2357,6 +2959,14 @@ static napi_value js_run(napi_env environment, napi_callback_info info) {
                           wakes, requests, migrated, jobs,  freed};
     for (size_t i = 0; i < sizeof lists / sizeof lists[0]; i++)
         if (lists[i]) napi_set_named_property(environment, out, keys[i], lists[i]);
+    if (host->otlp) trace_put(host); /* the spans that ended in this call */
+    if (host->traces_length)
+        napi_set_named_property(environment, out, "traces",
+                                bytes_value(environment, host->traces, host->traces_length));
+    if (host->logs_length)
+        napi_set_named_property(environment, out, "traceLogs",
+                                bytes_value(environment, host->logs, host->logs_length));
+    host->traces_length = host->logs_length = 0;
     return out;
 }
 
@@ -2972,8 +3582,8 @@ static napi_value prop(napi_env environment, napi_value o, const char *name) {
 /* restore(resolver, codec, base, es, images, host, dm) -> host: images[i] for
  * segment i (null if retired); dm as returned by snapshot() */
 static napi_value js_restore(napi_env environment, napi_callback_info info) {
-    size_t argc = 7;
-    napi_value argv[7], result;
+    size_t argc = 8;
+    napi_value argv[8], result;
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
     void *snap = NULL;
     size_t snap_length = 0;
@@ -2994,7 +3604,7 @@ static napi_value js_restore(napi_env environment, napi_callback_info info) {
     }
     ta_host_config config;
     ta_datamodel_binding binding[2];
-    nd_host *host = host_alloc(environment, argv, &config, binding);
+    nd_host *host = host_alloc(environment, argv, argc > 7 ? argv[7] : NULL, &config, binding);
     void *copy = malloc(snap_length + 8); /* 8-aligned */
     ta_status status = TA_ERROR_NO_MEMORY;
     if (host && copy) {
@@ -3168,6 +3778,14 @@ napi_value ta_js_init(napi_env environment, napi_value exports) {
         {"adopt", NULL, js_adopt, NULL, NULL, NULL, napi_default_method, NULL},
         {"migrate", NULL, js_migrate, NULL, NULL, NULL, napi_default_method, NULL},
         {"resume", NULL, js_resume, NULL, NULL, NULL, napi_default_method, NULL},
+        {"traceConfigure", NULL, js_trace_configure, NULL, NULL, NULL, napi_default_method, NULL},
+        {"traceEnd", NULL, js_trace_end, NULL, NULL, NULL, napi_default_method, NULL},
+        {"stepSpanID", NULL, js_step_span_id, NULL, NULL, NULL, napi_default_method, NULL},
+        {"parseTraceparent", NULL, js_parse_traceparent, NULL, NULL, NULL, napi_default_method,
+         NULL},
+        {"formatTraceparent", NULL, js_format_traceparent, NULL, NULL, NULL, napi_default_method,
+         NULL},
+        {"decodeTraces", NULL, js_decode_traces, NULL, NULL, NULL, napi_default_method, NULL},
     };
     napi_define_properties(environment, exports, sizeof props / sizeof props[0], props);
     return exports;

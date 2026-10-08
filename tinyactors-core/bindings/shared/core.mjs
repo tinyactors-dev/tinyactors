@@ -827,10 +827,11 @@ export function createRuntime({ native, platform }) {
       const m = /@([^/]+)$/.exec(address);
       this.id = m ? m[1] : address;
     }
-    send(event) {
+    /** `options.traceparent`: the step it starts continues that trace. */
+    send(event, options = {}) {
       if (typeof event === 'string') event = { type: event };
       this.system._do(() => {
-        this.system._hostRoute({ target: this.address, name: event.type, data: event });
+        this.system._hostRoute({ target: this.address, name: event.type, data: event, traceparent: options.traceparent });
         this.system._pump();
       });
     }
@@ -1084,6 +1085,222 @@ export function createRuntime({ native, platform }) {
       .replace(/-/g, '')
       .slice(0, 12);
 
+  /* ---------------------------------------------------------------- tracing
+   * Core writes trace records (docs/adr/0006 in the repository root); the
+   * binding's C side encodes them as OTLP protobuf after every run, and this
+   * code hands the bytes to a sink and to an OTLP/HTTP exporter, as they
+   * are: no object per record or span. */
+
+  /** Core's record kinds, in core's order (TA_TRACE_* in tinyactors/trace.h). */
+  const TRACE_KINDS = Object.freeze([
+    'dropped', 'spawned', 'finished', 'destroyed', 'unloaded', 'loaded', 'macrostepBegin', 'macrostepEnd',
+    'microstep', 'condition', 'raised', 'sent', 'invoked', 'cancelled', 'assign', 'log', 'actionFailed',
+  ]);
+  const kindsMask = (kinds) =>
+    kinds.reduce((mask, kind) => {
+      const i = TRACE_KINDS.indexOf(kind);
+      if (i < 0) throw new TypeError(`not a trace kind: ${kind} (one of ${TRACE_KINDS.join(', ')})`);
+      return (mask | (1 << (i + 1))) >>> 0;
+    }, 0);
+  const LIFECYCLE = ['spawned', 'finished', 'destroyed', 'unloaded', 'loaded'];
+  const SUMMARY = [...LIFECYCLE, 'macrostepBegin', 'macrostepEnd', 'actionFailed'];
+  const DECISIONS = [...SUMMARY, 'microstep', 'condition', 'raised'];
+  const DETAIL = {
+    summary: kindsMask(SUMMARY),
+    decisions: kindsMask(DECISIONS),
+    full: kindsMask([...DECISIONS, 'sent', 'invoked', 'cancelled', 'assign', 'log']),
+  };
+  const TRACE_VALUES = 2 ** 31; /* TA_TRACE_VALUES: event data and assigned values */
+  const OTLP_LINK_PARENTS = 1, OTLP_VALUES = 2, OTLP_NO_LOGS = 4; /* TA_OTLP_* */
+  const SAMPLE_WHOLE = 1000000;
+  const EXPORT_DELAY_MS = 250; /* bytes gather this long before a post */
+  const EXPORT_BYTES = 1 << 20; /* or until this many wait */
+  const EXPORT_MAX_BYTES = 16 << 20; /* waiting beyond this is dropped */
+  const FAILURE_LOG_MS = 10000;
+
+  function traceKinds(options) {
+    let kinds;
+    if (options.kinds) kinds = kindsMask(options.kinds);
+    else {
+      kinds = DETAIL[options.detail || 'full'];
+      if (kinds === undefined) throw new TypeError(`detail: "summary", "decisions" or "full", not ${options.detail}`);
+    }
+    return options.values ? (kinds | TRACE_VALUES) >>> 0 : kinds;
+  }
+  function sampleParts(sample) {
+    if (sample === undefined) return SAMPLE_WHOLE;
+    if (typeof sample !== 'number' || !(sample >= 0 && sample <= 1)) throw new RangeError('sample: a ratio from 0 to 1');
+    return Math.round(sample * SAMPLE_WHOLE);
+  }
+  /* the trace ID generator's seed, as two 32-bit halves */
+  function traceSeed(seed) {
+    if (seed === undefined) {
+      const words = new Uint32Array(2);
+      if (globalThis.crypto && globalThis.crypto.getRandomValues) globalThis.crypto.getRandomValues(words);
+      else for (let i = 0; i < 2; i++) words[i] = Math.floor(Math.random() * 2 ** 32);
+      return [words[0], words[1]];
+    }
+    const value = BigInt.asUintN(64, BigInt(seed));
+    return [Number(value >> 32n), Number(value & 0xffffffffn)];
+  }
+  const wallClock = () => (globalThis.performance && performance.timeOrigin ? performance.timeOrigin + performance.now() : Date.now());
+
+  /* concatenated protobuf messages of one type are one message (their repeated fields append) */
+  function concatBytes(parts) {
+    if (parts.length === 1) return parts[0];
+    let n = 0;
+    for (const p of parts) n += p.length;
+    const out = new Uint8Array(n);
+    n = 0;
+    for (const p of parts) {
+      out.set(p, n);
+      n += p.length;
+    }
+    return out;
+  }
+
+  const fetchPost = (url, headers, body) =>
+    globalThis.fetch(url, { method: 'POST', headers: { 'content-type': 'application/x-protobuf', ...headers }, body }).then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    });
+
+  /* Posts OTLP protobuf to /v1/traces and /v1/logs: gathered for a moment,
+   * one request in flight per signal; failures are quiet, logged at most
+   * once every ten seconds. */
+  class Exporter {
+    constructor(options) {
+      const base = options.endpoint ? String(options.endpoint).replace(/\/+$/, '') : '';
+      this.urls = {
+        traces: options.tracesEndpoint || (base && `${base}/v1/traces`),
+        logs: options.logsEndpoint || (base && `${base}/v1/logs`),
+      };
+      this.headers = { ...(options.headers || {}) };
+      this.post = options.post || platform.post || fetchPost;
+      this.waiting = { traces: [], logs: [] };
+      this.bytes = { traces: 0, logs: 0 };
+      this.busy = { traces: false, logs: false };
+      this.timer = null;
+      this.lastFailure = -Infinity;
+      this.posted = 0;
+      this.failed = 0;
+      this.idle = [];
+    }
+    add(signal, bytes) {
+      if (!bytes || !this.urls[signal]) return;
+      if (this.bytes[signal] + bytes.length > EXPORT_MAX_BYTES) return this.fail(new Error(`more than ${EXPORT_MAX_BYTES} bytes waiting`));
+      this.waiting[signal].push(bytes);
+      this.bytes[signal] += bytes.length;
+      if (this.bytes[signal] >= EXPORT_BYTES) this.flush();
+      else if (!this.timer) this.timer = platform.setTimer(() => this.flush(), EXPORT_DELAY_MS);
+    }
+    flush() {
+      platform.clearTimer(this.timer);
+      this.timer = null;
+      for (const signal of ['traces', 'logs']) {
+        if (this.busy[signal] || !this.waiting[signal].length) continue;
+        const body = concatBytes(this.waiting[signal].splice(0));
+        this.bytes[signal] = 0;
+        this.busy[signal] = true;
+        let sent;
+        try {
+          sent = Promise.resolve(this.post(this.urls[signal], this.headers, body));
+        } catch (e) {
+          sent = Promise.reject(e);
+        }
+        sent.then(
+          () => this.posted++,
+          (e) => this.fail(e),
+        ).then(() => {
+          this.busy[signal] = false;
+          if (this.waiting[signal].length) this.flush();
+          else if (!this.busy.traces && !this.busy.logs && !this.waiting.traces.length && !this.waiting.logs.length)
+            for (const resolve of this.idle.splice(0)) resolve();
+        });
+      }
+    }
+    fail(e) {
+      this.failed++;
+      const now = platform.now();
+      if (now - this.lastFailure < FAILURE_LOG_MS) return;
+      this.lastFailure = now;
+      platform.log(`tinyactors: exporting traces failed (${this.failed} so far): ${e && e.message ? e.message : e}`);
+    }
+    /* resolves once nothing waits and nothing is in flight */
+    settled() {
+      this.flush();
+      if (!this.busy.traces && !this.busy.logs) return Promise.resolve();
+      return new Promise((resolve) => this.idle.push(resolve));
+    }
+  }
+
+  const SPAN_KINDS = ['unspecified', 'internal', 'server', 'client', 'producer', 'consumer'];
+  const STATUS_CODES = ['unset', 'ok', 'error'];
+  function decodedValue(v) {
+    if (v === null || typeof v !== 'object') return v;
+    if (Array.isArray(v)) return v.map(decodedValue);
+    if ('int' in v) return BigInt(v.int);
+    if ('list' in v) return decodedAttributes(v.list);
+    if ('bytes' in v) return v.bytes;
+    return v;
+  }
+  function decodedAttributes(pairs) {
+    const out = {};
+    for (const [key, value] of pairs) out[key] = decodedValue(value);
+    return out;
+  }
+  const millis = (ns) => Number(ns / 1000n) / 1000;
+
+  /** Reads OTLP protobuf trace bytes (C's decoder); throws on a malformed message. */
+  function decodeTraces(bytes) {
+    return native.decodeTraces(bytes).map((s) => {
+      const start = BigInt(s.start), end = BigInt(s.end);
+      const span = {
+        traceID: s.traceID,
+        spanID: s.spanID,
+        name: s.name,
+        kind: SPAN_KINDS[s.kind] || 'unspecified',
+        startTime: millis(start),
+        endTime: millis(end),
+        startTimeUnixNano: start,
+        endTimeUnixNano: end,
+        attributes: decodedAttributes(s.attributes),
+        events: s.events.map((e) => {
+          const time = BigInt(e.time);
+          return { name: e.name, time: millis(time), timeUnixNano: time, attributes: decodedAttributes(e.attributes) };
+        }),
+        links: s.links.map((l) => ({ traceID: l.traceID, spanID: l.spanID, attributes: decodedAttributes(l.attributes) })),
+        status: s.statusMessage ? { code: STATUS_CODES[s.status] || 'unset', message: s.statusMessage } : { code: STATUS_CODES[s.status] || 'unset' },
+        resource: { attributes: decodedAttributes(s.resource) },
+        scope: { name: s.scopeName, version: s.scopeVersion, attributes: decodedAttributes(s.scopeAttributes) },
+      };
+      if (s.parentSpanID) span.parentSpanID = s.parentSpanID;
+      return span;
+    });
+  }
+
+  /** A W3C traceparent's fields (C's parser), or undefined when it is not a valid one. */
+  function parseTraceparent(header) {
+    const p = native.parseTraceparent(header);
+    return p ? { traceID: p.traceID, parentSpanID: p.parentSpanID, flags: p.flags, sampled: (p.flags & 1) === 1 } : undefined;
+  }
+
+  /** A traceparent naming `span` as the parent (sampled unless `sampled: false` or `flags` says). */
+  function formatTraceparent({ traceID, spanID, sampled, flags } = {}) {
+    const text = native.formatTraceparent(String(traceID), String(spanID), flags !== undefined ? flags : sampled === false ? 0 : 1);
+    if (text === null) throw new TypeError('formatTraceparent: a 32-digit traceID and a 16-digit spanID, in hex, neither all zeros');
+    return text;
+  }
+
+  const decimal = (v, what) => {
+    const m = /^\D*(\d+)$/.exec(String(v));
+    if (!m) throw new TypeError(`stepSpanID: ${what} is not a number`);
+    return m[1];
+  };
+  /** The span ID of a step (C's mix): session, macrostep, microstep (0: the macrostep's span). */
+  function stepSpanID(session, macrostep, microstep = 0) {
+    return native.stepSpanID(decimal(session, 'session'), decimal(macrostep, 'macrostep'), microstep >>> 0);
+  }
+
   class System {
     constructor(options = {}) {
       this.options = options;
@@ -1130,8 +1347,86 @@ export function createRuntime({ native, platform }) {
       /* the native host: the datamodels and a ta_host — segments, routing between
        * them, versions, migration jobs and the hibernation sweep live in C */
       const callbacks = [(chart, texts) => this._resolve(chart, texts), { encode: (v) => encodeValue(v), decode: (b) => decodeValue(b, this) }, this.id, createEcmascript()];
-      if (restored) this._restoreFrom(restored, callbacks);
-      else this._host = native.createHost(...callbacks);
+      const traces = options.traces || {};
+      const hostOptions = { clock: platform.wallClock || wallClock, seed: traceSeed(traces.seed) };
+      if (restored) this._restoreFrom(restored, callbacks, hostOptions);
+      else this._host = native.createHost(...callbacks, hostOptions);
+      /* tracing: the platform's exporter settings (Node.js: OTEL_* variables), the application's over them */
+      const telemetry = options.telemetry === false ? { disabled: true } : { ...(platform.telemetry || {}), ...(options.telemetry || {}) };
+      this._telemetry = telemetry;
+      this._exporter = !telemetry.disabled && (telemetry.endpoint || telemetry.tracesEndpoint) ? new Exporter(telemetry) : null;
+      this._traceSink = null;
+      this._traceOptions = {};
+      this._traceApply();
+      if (traces.sink) this.setTraceSink(traces.sink, traces);
+    }
+
+    /* ---- tracing ---- */
+
+    /**
+     * Hand traces to `sink` as OTLP protobuf: per run, one Uint8Array with
+     * one ExportTraceServiceRequest (the spans that ended), and one with an
+     * ExportLogsServiceRequest (failures and <log>) or undefined. `null`
+     * removes it. Options: detail ("summary" | "decisions" | "full"), kinds,
+     * values, valueLimit, sample, parent ("cause" | "link"), resource.
+     */
+    setTraceSink(sink, options = {}) {
+      if (sink !== null && sink !== undefined && typeof sink !== 'function') throw new TypeError('setTraceSink(sink: (traces, logs) => void, options)');
+      if (this._stopped) throw new Error('the system was stopped');
+      this._traceSink = sink || null;
+      this._traceOptions = { ...options };
+      delete this._traceOptions.sink;
+      delete this._traceOptions.seed; /* (the seed is given when the system is created: options.traces.seed) */
+      this._traceApply();
+    }
+
+    /** Change detail, kinds and sample while traces flow; open spans are kept. */
+    configureTraces({ detail, kinds, sample } = {}) {
+      if (this._stopped) throw new Error('the system was stopped');
+      const next = { ...this._traceOptions };
+      if (detail !== undefined || kinds !== undefined) {
+        next.detail = detail;
+        next.kinds = kinds;
+      }
+      if (sample !== undefined) next.sample = sample;
+      this._traceOptions = next;
+      this._traceApply();
+    }
+
+    /** Resolves once every trace export this system started has finished. */
+    flushTraces() {
+      return this._exporter ? this._exporter.settled() : Promise.resolve();
+    }
+
+    _traceApply() {
+      const t = this._traceOptions;
+      const exporter = this._exporter;
+      const sample = t.sample !== undefined ? t.sample : this._telemetry.sample;
+      let flags = 0;
+      if (t.parent === 'link') flags |= OTLP_LINK_PARENTS;
+      else if (t.parent !== undefined && t.parent !== 'cause') throw new TypeError('parent: "cause" or "link"');
+      if (t.values) flags |= OTLP_VALUES;
+      if (t.logs === false) flags |= OTLP_NO_LOGS;
+      const resource = { 'service.name': 'tinyactors', ...(this._telemetry.resource || {}), ...(t.resource || {}), 'tinyactors.system.id': this.id };
+      /* with nowhere for records to go core writes none; contexts still flow (traceparents) */
+      native.traceConfigure(this._host, {
+        enabled: !!(this._traceSink || exporter),
+        kinds: traceKinds(t),
+        sampleParts: sampleParts(sample),
+        sampleWhole: SAMPLE_WHOLE,
+        flags,
+        valueLimit: t.valueLimit || 0,
+        resource: Object.entries(resource).map(([k, v]) => [String(k), String(v)]),
+      });
+    }
+
+    _traces(traces, logs) {
+      if (!traces && !logs) return;
+      if (this._exporter) {
+        this._exporter.add('traces', traces);
+        this._exporter.add('logs', logs);
+      }
+      if (this._traceSink) this._traceSink(traces || new Uint8Array(0), logs);
     }
 
     /* ---- system images ---- */
@@ -1254,14 +1549,14 @@ export function createRuntime({ native, platform }) {
       }
     }
 
-    _restoreFrom(rec, callbacks) {
+    _restoreFrom(rec, callbacks, hostOptions) {
       const images = rec.segments.map((info, segment) => {
         if (!info) return null;
         const { image, links } = this._segmentImage(info);
         this._register(segment, info, links);
         return image;
       });
-      this._host = native.restore(...callbacks, images, rec.host, decodeValue(rec.dm, this));
+      this._host = native.restore(...callbacks, images, rec.host, decodeValue(rec.dm, this), hostOptions);
       images.forEach((im, segment) => (this._images[segment] = im || undefined));
       for (const v of rec.versions || []) {
         let machine = null;
@@ -1338,6 +1633,7 @@ export function createRuntime({ native, platform }) {
             msgid: str(msg.msgid),
             dedup: str(msg.dedup),
             hops: Number.isInteger(msg.hops) && msg.hops >= 0 ? msg.hops : 0,
+            traceparent: str(msg.traceparent),
           });
         } else if (msg.t === 'err') {
           const reason = REASONS.indexOf(msg.reason);
@@ -1802,6 +2098,15 @@ export function createRuntime({ native, platform }) {
       platform.clearTimer(this._sweepTimer);
       platform.cancelDefer(this._immediate);
       this._clockTimers = null;
+      if (this._traceSink || this._exporter) {
+        const { traces, logs } = native.traceEnd(this._host); /* open spans end, incomplete */
+        try {
+          this._traces(traces, logs);
+        } catch (e) {
+          platform.log(e);
+        }
+        if (this._exporter) this._exporter.flush();
+      }
       native.destroy(this._host);
       this._actors.clear();
       for (const [, j] of this._jobs) j.resolve({ migrated: 0, failed: 0, pending: [] });
@@ -1818,8 +2123,8 @@ export function createRuntime({ native, platform }) {
       native.advance(this._host, this._now());
       const logic = actor.logic;
       const session = logic.scxml
-        ? native.spawn(this._host, segment, chart, undefined, actor.options.input || {}, actor.options.systemID) /* <data> overrides */
-        : native.spawn(this._host, segment, chart, actor.options.input, undefined, actor.options.systemID);
+        ? native.spawn(this._host, segment, chart, undefined, actor.options.input || {}, actor.options.systemID, actor.options.traceparent) /* <data> overrides */
+        : native.spawn(this._host, segment, chart, actor.options.input, undefined, actor.options.systemID, actor.options.traceparent);
       actor._session = session;
       actor._serial = session;
       actor._live = true;
@@ -1828,27 +2133,30 @@ export function createRuntime({ native, platform }) {
       this._dirty = true;
     }
 
-    _send(actor, event) {
-      native.send(this._host, actor._session, event.type, actor.logic.scxml ? actor.logic._eventData(event) : event);
+    _send(actor, event, traceparent) {
+      native.send(this._host, actor._session, event.type, actor.logic.scxml ? actor.logic._eventData(event) : event, traceparent);
       this._dirty = true;
     }
 
     /** Send many events at once (one native call; batched per segment in C).
-     * `items`: [actor, event] pairs. Returns how many were delivered. */
+     * `items`: [actor, event] or [actor, event, { traceparent }]. Returns how
+     * many were delivered. */
     sendMany(items) {
       const sessions = [];
       const types = [];
       const events = [];
-      for (const [actor, ev] of items) {
+      const traceparents = [];
+      for (const [actor, ev, options] of items) {
         const event = typeof ev === 'string' ? { type: ev } : ev;
         if (!(actor instanceof Actor) || !actor._live || actor._status !== 'active') continue;
         sessions.push(actor._session);
         types.push(event.type);
         events.push(actor.logic.scxml ? actor.logic._eventData(event) : event);
+        traceparents.push((options && options.traceparent) || '');
       }
       let n = 0;
       this._do(() => {
-        n = native.sendMany(this._host, sessions, types, events);
+        n = native.sendMany(this._host, sessions, types, events, traceparents);
         this._dirty = true;
         this._pump();
       });
@@ -1899,6 +2207,7 @@ export function createRuntime({ native, platform }) {
           }
           this._version++;
           this._handle(r);
+          if (r.traces || r.traceLogs) this._traces(r.traces, r.traceLogs);
           this._deadline = r.deadline;
           if (r.status !== 'idle') this._yielded = true;
         }
@@ -2080,13 +2389,14 @@ export function createRuntime({ native, platform }) {
       return this;
     }
 
-    send(event) {
+    /** `options.traceparent`: the step it starts continues that trace (W3C Trace Context). */
+    send(event, options = {}) {
       if (typeof event === 'string') event = { type: event };
       if (!event || typeof event.type !== 'string') throw new TypeError('events must be objects with a string "type"');
       if (!this._started || this._status !== 'active') return;
       this.system._do(() => {
         if (this._status !== 'active') return;
-        this.system._send(this, event);
+        this.system._send(this, event, options.traceparent);
         this.system._pump();
       });
     }
@@ -2282,6 +2592,7 @@ export function createRuntime({ native, platform }) {
       const msg = { t: 'ev', target: p.target, name: p.name, origin: p.origin, msgid: p.msgid, hops: p.hops };
       const fail = (reason) => this.system._fromPeer(this.peer, { t: 'err', origin: p.origin, msgid: p.msgid, sendid: p.sendid, reason });
       if (p.sendid) msg.sendid = p.sendid;
+      if (p.traceparent) msg.traceparent = p.traceparent;
       let text;
       try {
         if (p.data !== undefined) msg.data = this.profile === 'js' ? encodeTagged(p.data) : encodeWire(p.data);
@@ -2817,6 +3128,11 @@ export function createRuntime({ native, platform }) {
     createMemoryStore,
     encodeValue,
     decodeValue,
+    TRACE_KINDS,
+    decodeTraces,
+    parseTraceparent,
+    formatTraceparent,
+    stepSpanID,
   };
 }
 

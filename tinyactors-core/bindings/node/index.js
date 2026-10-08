@@ -5,6 +5,8 @@
  */
 const path = require('path');
 const { createRuntime } = require('../shared/core.mjs');
+const { httpPost } = require('./transports');
+const { telemetryFromEnvironment } = require('./telemetry');
 
 /* The addon: an override, then this tree's build (mise run node:build),
  * then the platform package an install of @tinyactors/node brings
@@ -35,6 +37,9 @@ const platform = {
   setTimer: (fn, ms) => setTimeout(fn, ms),
   clearTimer: (h) => clearTimeout(h),
   log: (...args) => console.log(...args),
+  /* traces go to OTEL_EXPORTER_OTLP_ENDPOINT with no code (createSystem({ telemetry }) wins) */
+  telemetry: telemetryFromEnvironment(process.env),
+  post: httpPost,
 };
 
 /* links in Node also over WebSocket servers ({ server, path } or { port })

@@ -1462,6 +1462,24 @@ ta_status ta_host_adopt(ta_host *host, uint32_t segment, const void *blob, size_
 
 /* ---- inspection ------------------------------------------------------------------------ */
 
+ta_status ta_host_trace_set(ta_host *host, uint32_t kinds, uint32_t sample_parts,
+                            uint32_t sample_whole) {
+    if (host->config.system.tracing == TA_TRACING_DISABLED) return TA_ERROR_STATE;
+    host->config.system.trace_kinds = kinds;
+    host->config.system.trace_sample_parts = sample_parts;
+    host->config.system.trace_sample_whole = sample_whole;
+    for (uint32_t i = 0; i < host->segment_count; i++) {
+        host_segment *segment = segment_of(host, i);
+        if (!segment) continue;
+        segment->config.trace_kinds = kinds;
+        segment->config.trace_sample_parts = sample_parts;
+        segment->config.trace_sample_whole = sample_whole;
+        ta_status status = ta_system_trace_set(segment->system, kinds, sample_parts, sample_whole);
+        if (status != TA_OK) return status;
+    }
+    return TA_OK;
+}
+
 void ta_host_stats_get(const ta_host *host, ta_host_stats *o) {
     ta_host_stats z;
     ta_memset(&z, 0, sizeof z);
