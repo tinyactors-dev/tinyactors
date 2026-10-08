@@ -33,7 +33,7 @@
 #include "system/system_internal.h"
 
 #define HIBERNATION_MAGIC   0x42484154u /* "TAHB" */
-#define HIBERNATION_VERSION 2u
+#define HIBERNATION_VERSION 3u /* 3: the 64-byte instance header (docs/adr/0006) */
 
 typedef struct hibernation_header {
     uint32_t magic, version;
@@ -165,7 +165,7 @@ static uint32_t align4(uint32_t n) {
 /* ---- blob formats ------------------------------------------------------------------ */
 
 #define EXPORT_MAGIC    0x58454154u /* "TAEX" */
-#define EXPORT_VERSION  2u
+#define EXPORT_VERSION  3u /* 3: the 64-byte instance header */
 #define EXPORT_MIGRATED 1u /* translated by ta_blob_migrate: one session, to be upgraded */
 
 typedef struct export_header {
@@ -630,6 +630,7 @@ static ta_status restore(ta_system *system, uint32_t index, uint32_t chart, cons
     instance->current_event = instance->internal_queue_head = instance->internal_queue_tail =
         instance->workspace = TA_NIL;
     instance->datamodel = 0;
+    instance->trace = TA_NIL; /* a blob is written at a stable point, outside every macrostep */
     uint32_t *ids = ta_instance_word(instance, l.invoke_ids);
     for (uint32_t i = 0; i < chart_record->invoke_count; i++)
         ids[i] = TA_NIL;
@@ -808,7 +809,7 @@ static ta_status arm_timers(ta_system *system, uint32_t index, uint32_t chart,
         ta_status status = ta_heap_push(&system->heap, r.due, (uint32_t)(seq0 + r.rank), ti);
         if (status == TA_OK) status = ta_event_set_name(core, event, tx[1], r.name_length);
         event->type = (uint8_t)r.type;
-        event->flags = r.flags;
+        event->flags = (uint16_t)r.flags;
         event->origin = handle;
         if (r.sendid_length != TA_NIL) {
             event->sendid = ta_shared_string_new(core, tx[2], r.sendid_length);

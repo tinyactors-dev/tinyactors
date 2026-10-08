@@ -4,7 +4,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
-const { gunzipSync } = require('node:zlib');
 const { join } = require('node:path');
 const { createNative } = require('../../web/native.mjs');
 const { createEcmascript } = require('../../shared/ecmascript.mjs');
@@ -17,20 +16,48 @@ const native = web
   : require('../build/tinyactors.node');
 const codec = { encode: encodeValue, decode: decodeValue };
 
-test('native: legacy instance handles and suspended foreach survive repeated restore', () => {
-  // Regions are build/architecture-specific, as before the binding unification.
-  const file = web ? 'legacy-snapshot.json.gz' : 'legacy-node-snapshot.json.gz';
-  const fixture = decodeValue(gunzipSync(readFileSync(join(__dirname, 'fixtures', file))));
-  if (web) {
-    assert.equal(fixture.dm.insts[0].handle, fixture.dm.insts[1].handle);
-    assert.equal(fixture.dm.iters.length, 1);
-  } else assert.ok(fixture.dm.pays.some((p) => Array.isArray(p.value) && p.value.length === 1000));
+// A host of two charts, snapshotted while the ECMAScript actor is inside a
+// <foreach> over 1000 items: the xstate actor's id, the ES actor's, the images
+// and the snapshot.
+function suspendedForeach() {
+  const h = native.createHost(resolver, codec, 'snapshot', createEcmascript());
+  const sources = [
+    `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="xstate" initial="idle">
+      <datamodel><data id="count" expr="seed"/></datamodel>
+      <state id="idle"><transition event="STEP"><assign location="count" expr="increment"/></transition></state>
+    </scxml>`,
+    `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" initial="idle">
+      <datamodel><data id="n" expr="7"/><data id="item"/>
+        <data id="items" expr="Array.from({length:1000}, (_,i) => i+1)"/></datamodel>
+      <state id="idle"><onentry><foreach array="items" item="item"><assign location="n" expr="n+item"/></foreach></onentry>
+        <transition event="STEP"><assign location="n" expr="n+3"/></transition></state>
+    </scxml>`,
+  ];
+  const images = sources.map((xml, i) => native.compile([{ name: `chart${i}`, xml }]));
+  native.addImage(h, images[0]);
+  const xstate = native.spawn(h, 0, 0);
+  native.run(h, 10000);
+  native.addImage(h, images[1]);
+  const es = native.spawn(h, 1, 0);
+  const inLoop = (dm) => dm.pays.some((p) => Array.isArray(p.value) && p.value.length === 1000);
+  let snap;
+  for (let i = 0; i < 200 && !(snap && inLoop(snap.dm)); i++) {
+    native.run(h, 1);
+    snap = native.snapshot(h);
+  }
+  assert.ok(inLoop(snap.dm), 'stopped in the <foreach>');
+  native.destroy(h);
+  return { images: images.map((im) => native.imageBytes(im)), xstate, es, ...snap };
+}
+
+test('native: a suspended foreach and instance handles survive repeated restore', () => {
+  const fixture = suspendedForeach();
   const images = fixture.images.map((bytes) => native.openImage(bytes));
-  const restore = (snap) => native.restore(resolver, codec, 'legacy', createEcmascript(), images, snap.host, snap.dm);
+  const restore = (snap) => native.restore(resolver, codec, 'snapshot', createEcmascript(), images, snap.host, snap.dm);
   let h = restore(fixture);
   try {
-    // Resnapshot before the legacy iterator finishes, then reuse low slots for
-    // new instances. Neither may alias the restored ES instance or iterator.
+    // Resnapshot before the iteration finishes, then reuse low slots for new
+    // instances. Neither may alias the restored ES instance or its items.
     const snap = native.snapshot(h);
     native.destroy(h);
     h = restore(snap);
@@ -46,7 +73,8 @@ test('native: legacy instance handles and suspended foreach survive repeated res
     assert.equal(run.errors, undefined);
     assert.equal(native.context(h, fixture.xstate).count, 15);
     assert.equal(native.context(h, fixture.es).n, 500510);
-    assert.deepEqual(native.snapshot(h).dm.iters, []);
+    assert.ok(!native.snapshot(h).dm.pays.some((p) => Array.isArray(p.value) && p.value.length === 1000),
+      'the items are let go when the loop ends');
     const blob = native.hibernate(h, fixture.es);
     assert.ok(blob instanceof Uint8Array);
     assert.equal(native.wake(h, fixture.es, blob), true);

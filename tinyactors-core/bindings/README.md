@@ -51,9 +51,8 @@ buffers therefore survive memory growth and scope cleanup. Nested calls get thei
 own scopes. The cost is more wasm/JS crossings than the former actor-specific
 imports, in exchange for having no second implementation of binding semantics.
 
-Snapshots remain build/architecture-specific. Restore also understands the former
-web backend's separate ECMAScript instance and iterator namespaces. New ES handles
-use a high-word tag so reused unified-table slots cannot alias legacy handles.
-The regression fixtures in `node/test/fixtures` came from the old backends, not
-the implementation being tested. `node:test` and `web:test` run the same procedural
+Snapshots remain build/architecture-specific, and a snapshot of an earlier
+region layout is refused (ADR 0006 in the repository root changed it). ES
+instance and `<foreach>` handles carry a high-word tag over their slot in the
+unified table. `node:test` and `web:test` run the same procedural
 tests; `web:test` also runs the adapter unit tests in `tests/unit/test_js_adapter.mjs`.

@@ -13,6 +13,7 @@
 #include "core/core_internal.h"
 #include "base/format.h"
 #include "base/memory.h"
+#include "trace/record.h"
 
 struct ta_datamodel_environment {
     ta_core *core;
@@ -104,6 +105,7 @@ static int acquire_workspace(kernel_context *kernel) {
         load_workspace(kernel);
         ta_memset(kernel->workspace, 0, sizeof *kernel->workspace);
         kernel->workspace->instruction = TA_NIL;
+        kernel->workspace->trace = TA_NIL;
     }
     load_workspace(kernel);
     return 1;
@@ -123,6 +125,7 @@ static void release_workspace(kernel_context *kernel) {
                                                    kernel->instance->datamodel,
                                                    frame[workspace->foreach_top].iteration);
     }
+    ta_trace_context_release(kernel->core, workspace->trace);
     ta_pool_free(kernel->core->workspaces, kernel->instance->workspace);
     kernel->instance->workspace = TA_NIL;
     kernel->workspace = (ta_workspace *)0;
@@ -164,6 +167,7 @@ static void raise_platform(ta_core *core, ta_instance *instance, const char *nam
         return;
     }
     event->type = TA_EVENT_TYPE_PLATFORM;
+    event->trace = ta_core_step_context(core, instance);
     if (sendid != TA_NIL) {
         ta_shared_string_retain(core, sendid);
         event->sendid = sendid;
@@ -176,7 +180,10 @@ static void raise_platform(ta_core *core, ta_instance *instance, const char *nam
     instance->internal_queue_tail = event_index;
 }
 
+static void trace_action_failed(kernel_context *kernel);
+
 static void error_exec(kernel_context *kernel) {
+    trace_action_failed(kernel);
     raise_platform(kernel->core, kernel->instance, "error.execution", TA_NIL);
 }
 
@@ -195,6 +202,151 @@ static void init_k(kernel_context *kernel, ta_core *core, ta_instance *instance,
     kernel->environment.instance = instance;
     kernel->environment.charge = 0;
     load_workspace(kernel);
+}
+
+/* ---- tracing (docs/adr/0006, section 4): facts, written when asked for --------------- */
+
+/* A record about the current step (the microstep, or with `in_macrostep` the
+ * macrostep), its header filled, or NULL. */
+static ta_trace_record *trace_step(kernel_context *kernel, uint32_t kind, uint32_t size,
+                                   int in_macrostep) {
+    return ta_core_trace_step(kernel->core, kernel->instance, kind, size,
+                              in_macrostep ? 0 : kernel->instance->microstep, kernel->fuel);
+}
+
+static void trace_action_failed(kernel_context *kernel) {
+    ta_trace_record *record =
+        trace_step(kernel, TA_TRACE_ACTION_FAILED,
+                   (uint32_t)(sizeof *record + sizeof(ta_trace_action_failed)), 0);
+    if (!record) return;
+    ta_trace_action_failed *failed = (ta_trace_action_failed *)ta_trace_record_body(record);
+    failed->opcode = kernel->workspace && kernel->workspace->vm_active &&
+                             kernel->workspace->instruction != TA_NIL
+                         ? kernel->core->image_view.code[kernel->workspace->instruction]
+                         : TA_NIL;
+    failed->expression = TA_NIL;
+    ta_trace_record_commit(kernel->core->journal, record);
+}
+
+static void trace_condition(kernel_context *kernel, uint32_t transition, int result) {
+    ta_trace_record *record =
+        trace_step(kernel, TA_TRACE_CONDITION,
+                   (uint32_t)(sizeof *record + sizeof(ta_trace_condition)), 1);
+    if (!record) return;
+    ta_trace_condition *condition = (ta_trace_condition *)ta_trace_record_body(record);
+    condition->transition = transition;
+    condition->result = result ? 1u : 0u;
+    ta_trace_record_commit(kernel->core->journal, record);
+}
+
+/* The configuration after a macrostep, its root left out. */
+static void trace_macrostep_end(kernel_context *kernel) {
+    ta_core *core = kernel->core;
+    if (kernel->instance->trace == TA_NIL) return;
+    if (ta_core_traces(core, TA_TRACE_MACROSTEP_END)) {
+        const uint32_t *config = configuration_words(kernel);
+        uint32_t count = ta_bitset_count(config, kernel->instance_layout.state_words);
+        count -= ta_bitset_test(config, 0) ? 1u : 0u;
+        ta_trace_record *record = trace_step(
+            kernel, TA_TRACE_MACROSTEP_END,
+            (uint32_t)(sizeof *record + sizeof(ta_trace_macrostep_end) + 4u * count), 1);
+        if (record) {
+            ta_trace_macrostep_end *end = (ta_trace_macrostep_end *)ta_trace_record_body(record);
+            end->state_count = count;
+            uint32_t *states = (uint32_t *)(void *)(end + 1), n = 0;
+            for (uint32_t s = ta_bitset_next(config, kernel->state_count, 1); s != TA_NIL;
+                 s = ta_bitset_next(config, kernel->state_count, s + 1))
+                states[n++] = s;
+            ta_trace_record_commit(core->journal, record);
+        }
+    }
+    ta_trace_context_release(core, kernel->instance->trace);
+    kernel->instance->trace = TA_NIL;
+}
+
+/* A microstep, at its end: its transitions, the states it exited (in exit
+ * order) and entered (in entry order). */
+static void trace_microstep(kernel_context *kernel) {
+    if (!ta_core_traces(kernel->core, TA_TRACE_MICROSTEP) || kernel->instance->trace == TA_NIL)
+        return;
+    ta_workspace *workspace = kernel->workspace;
+    const uint32_t *exit = workspace_at(kernel, kernel->workspace_layout.exit),
+                   *entry = workspace_at(kernel, kernel->workspace_layout.entry),
+                   *selected = workspace_at(kernel, kernel->workspace_layout.selected);
+    uint32_t exited = ta_bitset_count(exit, kernel->workspace_layout.state_words),
+             entered = ta_bitset_count(entry, kernel->workspace_layout.state_words);
+    ta_trace_record *record = trace_step(
+        kernel, TA_TRACE_MICROSTEP,
+        (uint32_t)(sizeof *record + sizeof(ta_trace_microstep) +
+                   4u * (workspace->selected_count + exited + entered)),
+        0);
+    if (!record) return;
+    ta_trace_microstep *micro = (ta_trace_microstep *)ta_trace_record_body(record);
+    micro->begin_fuel = workspace->trace_fuel;
+    micro->transition_count = workspace->selected_count;
+    micro->exited_count = exited;
+    micro->entered_count = entered;
+    uint32_t *list = (uint32_t *)(void *)(micro + 1);
+    for (uint32_t i = 0; i < workspace->selected_count; i++)
+        *list++ = selected[i];
+    for (uint32_t s = ta_bitset_previous(exit, kernel->state_count - 1); s != TA_NIL && s != 0;
+         s = ta_bitset_previous(exit, s - 1))
+        *list++ = s;
+    for (uint32_t s = ta_bitset_next(entry, kernel->state_count, 0); s != TA_NIL;
+         s = ta_bitset_next(entry, kernel->state_count, s + 1))
+        *list++ = s;
+    ta_trace_record_commit(kernel->core->journal, record);
+}
+
+/* The event a macrostep takes, or the bootstrap (event TA_NIL). */
+static void trace_macrostep_begin(ta_core *core, ta_instance *instance, uint32_t event_index,
+                                  const uint32_t *fuel) {
+    ta_trace_record *record = ta_core_trace_step(
+        core, instance, TA_TRACE_MACROSTEP_BEGIN,
+        (uint32_t)(sizeof *record + sizeof(ta_trace_macrostep_begin)), 0, fuel);
+    if (!record) return;
+    ta_trace_macrostep_begin *begin = (ta_trace_macrostep_begin *)ta_trace_record_body(record);
+    const ta_trace_entry *context = ta_trace_entry_at(core, instance->trace);
+    begin->cause.session = context->session;
+    begin->cause.macrostep = context->macrostep;
+    begin->cause.microstep = context->microstep;
+    begin->name = begin->sendid = begin->origin = begin->datamodel = TA_NIL;
+    if (event_index != TA_NIL) {
+        const ta_event *event = ta_event_at(core, event_index);
+        begin->name = event->name;
+        begin->name_id = event->name_id;
+        begin->type = event->type;
+        begin->sendid = event->sendid;
+        begin->origin = event->origin_string;
+        begin->origin_session =
+            event->origin && core->serial_of ? core->serial_of(core->system, event->origin) : 0;
+        ta_shared_string_retain(core, begin->name);
+        ta_shared_string_retain(core, begin->sendid);
+        ta_shared_string_retain(core, begin->origin);
+        if (event->payload && event->datamodel < core->datamodel_count) {
+            const ta_datamodel_binding *binding = &core->datamodels[event->datamodel];
+            if (binding->vtable->retain) {
+                binding->vtable->retain(binding->datamodel, event->payload);
+                begin->payload = event->payload;
+                begin->datamodel = event->datamodel;
+            }
+        }
+    }
+    ta_trace_record_commit(core->journal, record);
+}
+
+/* A new macrostep: count it, and take the context of what started it. */
+static void begin_macrostep(ta_core *core, ta_instance *instance, uint32_t event_index,
+                            const uint32_t *fuel) {
+    instance->macrostep++;
+    instance->microstep = 0;
+    ta_trace_context_release(core, instance->trace);
+    instance->trace = TA_NIL;
+    if (event_index != TA_NIL) {
+        instance->trace = ta_event_at(core, event_index)->trace;
+        ta_trace_context_retain(core, instance->trace);
+    }
+    trace_macrostep_begin(core, instance, event_index, fuel);
 }
 
 /* ---- datamodel wrappers ------------------------------------------------------------ */
@@ -459,9 +611,11 @@ static void select_transitions(kernel_context *kernel, uint32_t name_id, int eve
                     if (m == transition->event_count) continue;
                 }
                 burn(kernel, 1);
-                if (transition->condition != TA_NIL &&
-                    !datamodel_condition(kernel, transition->condition))
-                    continue;
+                if (transition->condition != TA_NIL) {
+                    int result = datamodel_condition(kernel, transition->condition);
+                    trace_condition(kernel, ti, result);
+                    if (!result) continue;
+                }
                 if (!ta_bitset_test(transitions_seen, ti)) {
                     ta_bitset_set(transitions_seen, ti);
                     sel[kernel->workspace->selected_count++] = ti;
@@ -730,6 +884,25 @@ static uint32_t generate_id(kernel_context *kernel, const char *prefix, ta_strin
 
 enum { SEND_OK = 0, SEND_ERROR_EXECUTION, SEND_ERROR_COMMUNICATION, SEND_NOMEM };
 
+static void trace_sent(kernel_context *kernel, const ta_event *event, uint32_t target,
+                       uint64_t delay) {
+    ta_core *core = kernel->core;
+    ta_trace_record *record =
+        trace_step(kernel, TA_TRACE_SENT, (uint32_t)(sizeof *record + sizeof(ta_trace_sent)), 0);
+    if (!record) return;
+    ta_trace_sent *sent = (ta_trace_sent *)ta_trace_record_body(record);
+    sent->target = target;
+    sent->name = event->name;
+    sent->name_id = event->name_id;
+    sent->sendid = event->sendid;
+    sent->delay = delay;
+    sent->context = ta_trace_context_value(core, event->trace);
+    ta_shared_string_retain(core, sent->target);
+    ta_shared_string_retain(core, sent->name);
+    ta_shared_string_retain(core, sent->sendid);
+    ta_trace_record_commit(core->journal, record);
+}
+
 /* Execute <send>. Returns a step code, KERNEL_CONTINUE, or VM-level handling. */
 static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
     ta_core *core = kernel->core;
@@ -914,7 +1087,9 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
         event->origin = internal ? 0 : kernel->instance->actor; /* #_internal: no origin */
         event->payload = payload;
         event->datamodel = core->chart_datamodel[kernel->instance->chart];
+        event->trace = ta_core_step_context(core, kernel->instance);
         kernel->workspace->instruction += 2;
+        trace_sent(kernel, event, target, delay);
         if (internal) {
             if (target != TA_NIL && TA_STRING_REF_IS_SLAB(target))
                 ta_shared_string_release(core, target);
@@ -950,6 +1125,47 @@ fail:
     return KERNEL_CONTINUE;
 }
 
+static void trace_cancelled(kernel_context *kernel, uint32_t sendid) {
+    ta_trace_record *record = trace_step(
+        kernel, TA_TRACE_CANCELLED, (uint32_t)(sizeof *record + sizeof(ta_trace_cancelled)), 0);
+    if (!record) return;
+    ta_trace_cancelled *cancelled = (ta_trace_cancelled *)ta_trace_record_body(record);
+    cancelled->sendid = sendid;
+    ta_shared_string_retain(kernel->core, sendid);
+    ta_trace_record_commit(kernel->core->journal, record);
+}
+
+/* An assignment; with TA_TRACE_VALUES, the value assigned, captured as a
+ * payload. The capture is invisible to the chart: a failure leaves the value
+ * out, and the fuel the datamodel reports for it is not charged. */
+static void trace_assign(kernel_context *kernel, uint32_t location) {
+    ta_core *core = kernel->core;
+    ta_trace_record *record =
+        trace_step(kernel, TA_TRACE_ASSIGN, (uint32_t)(sizeof *record + sizeof(ta_trace_assign)), 0);
+    if (!record) return;
+    ta_trace_assign *assign = (ta_trace_assign *)ta_trace_record_body(record);
+    assign->location = location;
+    assign->datamodel = TA_NIL;
+    assign->payload = 0;
+    if ((core->trace_kinds & TA_TRACE_VALUES) && kernel->datamodel->vtable->capture) {
+        ta_datamodel_capture capture;
+        ta_memset(&capture, 0, sizeof capture);
+        capture.kind = TA_CAPTURE_VALUE;
+        capture.content = location;
+        ta_payload value = 0;
+        uint32_t charge_before = kernel->environment.charge;
+        if (kernel->datamodel->vtable->capture(kernel->datamodel->datamodel,
+                                               kernel->instance->datamodel, &kernel->environment,
+                                               &capture, &value) == TA_OK &&
+            value) {
+            assign->payload = value;
+            assign->datamodel = core->chart_datamodel[kernel->instance->chart];
+        }
+        kernel->environment.charge = charge_before;
+    }
+    ta_trace_record_commit(core->journal, record);
+}
+
 /* Run code from workspace->instruction. Returns VM_DONE at END, or a step code. */
 static uint32_t vm(kernel_context *kernel) {
     ta_core *core = kernel->core;
@@ -977,7 +1193,16 @@ static uint32_t vm(kernel_context *kernel) {
             event->type = TA_EVENT_TYPE_INTERNAL; /* internal events have no origin */
             event->name_id = w[0];
             event->name = core->image_view.event_nodes[w[0]].name;
+            event->trace = ta_core_step_context(core, kernel->instance);
             internal_queue_push(kernel, event_index);
+            ta_trace_record *record = trace_step(
+                kernel, TA_TRACE_RAISED, (uint32_t)(sizeof *record + sizeof(ta_trace_raised)), 0);
+            if (record) {
+                ta_trace_raised *raised = (ta_trace_raised *)ta_trace_record_body(record);
+                raised->name = event->name; /* an image string */
+                raised->name_id = event->name_id;
+                ta_trace_record_commit(core->journal, record);
+            }
             kernel->workspace->instruction = p + 2;
             break;
         }
@@ -989,6 +1214,7 @@ static uint32_t vm(kernel_context *kernel) {
         case TA_OPCODE_CANCEL:
             core->out.sendid = w[0]; /* image string: release is a no-op */
             kernel->workspace->instruction = p + 2;
+            trace_cancelled(kernel, w[0]);
             return TA_STEP_CANCEL;
         case TA_OPCODE_CANCEL_EXPRESSION: {
             ta_string_view s;
@@ -1001,6 +1227,7 @@ static uint32_t vm(kernel_context *kernel) {
             if (r == TA_NIL) return TA_STEP_EXHAUSTED;
             core->out.sendid = r;
             kernel->workspace->instruction = p + 2;
+            trace_cancelled(kernel, r);
             return TA_STEP_CANCEL;
         }
         case TA_OPCODE_ASSIGN:
@@ -1013,6 +1240,7 @@ static uint32_t vm(kernel_context *kernel) {
                 abort_block(kernel);
             } else {
                 kernel->workspace->instruction = p + 3;
+                trace_assign(kernel, w[0]);
             }
             break;
         case TA_OPCODE_SCRIPT:
@@ -1223,6 +1451,7 @@ static int enqueue_done(kernel_context *kernel, uint32_t name_id, ta_payload pay
     event->name = kernel->core->image_view.event_nodes[name_id].name;
     event->payload = payload;
     event->datamodel = kernel->core->chart_datamodel[kernel->instance->chart];
+    event->trace = ta_core_step_context(kernel->core, kernel->instance);
     internal_queue_push(kernel, event_index);
     return 1;
 }
@@ -1429,12 +1658,18 @@ static void begin_micro(kernel_context *kernel) {
     kernel->workspace->vm_active = 0;
     kernel->workspace->pad = 0;
     kernel->instance->phase = PHASE_MICROSTEP;
+    kernel->instance->microstep++;
+    /* the events of the microstep get a context of their own */
+    ta_trace_context_release(kernel->core, kernel->workspace->trace);
+    kernel->workspace->trace = TA_NIL;
+    kernel->workspace->trace_fuel = ta_core_trace_fuel(kernel->core, kernel->fuel);
 }
 
 uint32_t ta_core_step(ta_core *core, ta_instance *instance, uint32_t *fuel) {
     kernel_context kk, *kernel = &kk;
     release_temporaries(core);
     core->overrun = 0;
+    core->trace_step_fuel = *fuel;
     core->out.event = TA_NIL;
     core->out.payload = 0;
     init_k(kernel, core, instance, fuel);
@@ -1449,6 +1684,13 @@ uint32_t ta_core_step(ta_core *core, ta_instance *instance, uint32_t *fuel) {
             return TA_STEP_YIELD;
         switch (instance->phase) {
         case PHASE_INIT: {
+            /* the bootstrap is macrostep 1; its context is the one the system
+             * gave the instance */
+            if (!instance->macrostep) {
+                instance->macrostep = 1;
+                instance->microstep = 0;
+                trace_macrostep_begin(core, instance, TA_NIL, fuel);
+            }
             /* Early binding assigns every <data> now. Late binding assigns the
              * root's (the document is entered at start; microstep entry never
              * includes the root) and the rest on their state's first entry. */
@@ -1486,6 +1728,8 @@ uint32_t ta_core_step(ta_core *core, ta_instance *instance, uint32_t *fuel) {
             kernel->workspace->selected_count = 1;
             workspace_at(kernel, kernel->workspace_layout.selected)[0] = kernel->states[0].initial;
             workspace_at(kernel, kernel->workspace_layout.domains)[0] = 0;
+            ta_bitset_zero(workspace_at(kernel, kernel->workspace_layout.exit),
+                           kernel->workspace_layout.state_words);
             begin_micro(kernel);
             kernel->workspace->subphase = SUBPHASE_ENTRY_COMPUTE;
             break;
@@ -1563,6 +1807,7 @@ uint32_t ta_core_step(ta_core *core, ta_instance *instance, uint32_t *fuel) {
                 instance->phase = PHASE_EXIT;
             } else {
                 instance->phase = PHASE_STABLE;
+                trace_macrostep_end(kernel);
                 maybe_detach(kernel);
                 return TA_STEP_STABLE;
             }
@@ -1574,7 +1819,8 @@ uint32_t ta_core_step(ta_core *core, ta_instance *instance, uint32_t *fuel) {
                 break;
             }
             if (instance->internal_queue_head !=
-                TA_NIL) { /* e.g. error.communication reported by the host */
+                TA_NIL) { /* e.g. error.communication reported by the host: a macrostep */
+                begin_macrostep(core, instance, instance->internal_queue_head, fuel);
                 instance->phase = PHASE_EVENTLESS;
                 break;
             }
@@ -1645,8 +1891,10 @@ uint32_t ta_core_step(ta_core *core, ta_instance *instance, uint32_t *fuel) {
             uint32_t final_state = kernel->workspace->final_state;
             ta_payload done = kernel->workspace->done_payload;
             kernel->workspace->done_payload = 0;
+            if (!was_exit) trace_microstep(kernel);
             release_workspace(kernel);
             if (was_exit) {
+                trace_macrostep_end(kernel); /* the configuration is empty now */
                 instance->phase = PHASE_DONE;
                 core->out.payload = done;
                 core->out.final_state = final_state;
@@ -1712,6 +1960,7 @@ ta_status ta_core_instance_init(ta_core *core, ta_instance *instance, uint32_t c
     instance->current_event = instance->internal_queue_head = instance->internal_queue_tail =
         instance->workspace = TA_NIL;
     instance->actor = actor;
+    instance->trace = TA_NIL; /* the system gives the bootstrap its context */
     uint32_t *ids = ta_instance_word(instance, l.invoke_ids);
     for (uint32_t i = 0; i < chart_record->invoke_count; i++)
         ids[i] = TA_NIL;
@@ -1741,6 +1990,8 @@ void ta_core_instance_deinit(ta_core *core, ta_instance *instance) {
         ids[i] = TA_NIL;
     }
     release_workspace(kernel);
+    ta_trace_context_release(core, instance->trace);
+    instance->trace = TA_NIL;
     if (kernel->datamodel->vtable->destroy)
         kernel->datamodel->vtable->destroy(kernel->datamodel->datamodel, instance->datamodel);
     instance->datamodel = 0;
@@ -1750,6 +2001,7 @@ void ta_core_instance_deinit(ta_core *core, ta_instance *instance) {
 ta_status ta_core_deliver(ta_core *core, ta_instance *instance, uint32_t event) {
     if (instance->phase != PHASE_STABLE || (instance->flags & INSTANCE_FLAG_CANCEL))
         return TA_ERROR_STATE;
+    begin_macrostep(core, instance, event, (const uint32_t *)0);
     bind_event(core, instance, event);
     instance->phase = PHASE_EXTERNAL;
     instance->cursor = 0;

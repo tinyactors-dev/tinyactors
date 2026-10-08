@@ -325,9 +325,6 @@ typedef struct nd_host {
     nd_instance *evaluating; /* instance whose expression is being evaluated */
     nd_instance *instances;  /* handle = index + 1 */
     uint32_t instance_count, instance_capacity, free_instance;
-    uint32_t *legacy_ecmascript, legacy_ecmascript_count;
-    napi_ref *legacy_iterations;
-    uint32_t legacy_iteration_count;
     napi_ref *payloads; /* payload = index + 1 */
     uint32_t *refs;
     uint32_t payload_count, payload_capacity, free_payload;
@@ -448,14 +445,11 @@ static nd_instance *I(nd_host *host, uint64_t handle) {
                : NULL;
 }
 
-/* Old wasm snapshots used independent ES instance/iterator tables. Preserve
- * their handles without editing system regions. New ES handles are tagged so
- * reused unified-table slots cannot alias a still-live legacy handle. */
+/* ES instance and <foreach> handles are tagged in their high word: the
+ * slot in the unified table is the rest. */
 #define ECMASCRIPT_HANDLE (UINT64_C(1) << 32)
 static nd_instance *E_I(nd_host *host, uint64_t handle) {
-    return I(host, handle >= ECMASCRIPT_HANDLE              ? handle - ECMASCRIPT_HANDLE
-                   : handle < host->legacy_ecmascript_count ? host->legacy_ecmascript[handle]
-                                                            : handle);
+    return I(host, handle >= ECMASCRIPT_HANDLE ? handle - ECMASCRIPT_HANDLE : handle);
 }
 
 /* Record a pending JS exception against the instance (if any) and clear it. */
@@ -1342,7 +1336,6 @@ static void e_destroy(void *d, uint64_t handle) {
     if (!instance) return;
     if (!host->destroyed && !host->hibernating)
         set_ref(host->environment, &instance->context, e_vars(host, instance));
-    if (handle < host->legacy_ecmascript_count) host->legacy_ecmascript[handle] = 0;
     nd_destroy(d, (uint64_t)(instance - host->instances) + 1); /* the grave, the serial map */
 }
 
@@ -1469,10 +1462,8 @@ static ta_status e_foreach_item(void *d, uint64_t handle, uint64_t iter, uint32_
                                 ta_expression item, ta_expression index) {
     ta_datamodel_environment *environment = NULL;
     E_ENTER();
-    napi_value items = iter >= ECMASCRIPT_HANDLE ? payload_get(host, iter - ECMASCRIPT_HANDLE)
-                       : iter < host->legacy_iteration_count
-                           ? get_ref(host->environment, host->legacy_iterations[iter])
-                           : payload_get(host, iter);
+    napi_value items =
+        payload_get(host, iter >= ECMASCRIPT_HANDLE ? iter - ECMASCRIPT_HANDLE : iter);
     napi_value argv[5] = {self, items, u32_value(host->environment, i),
                           u32_value(host->environment, item),
                           expression_argument(host->environment, index)};
@@ -1483,11 +1474,7 @@ static ta_status e_foreach_item(void *d, uint64_t handle, uint64_t iter, uint32_
 
 static void e_foreach_end(void *d, uint64_t handle, uint64_t iter) {
     (void)handle;
-    nd_host *host = (nd_host *)d;
-    if (iter < host->legacy_iteration_count)
-        set_ref(host->environment, &host->legacy_iterations[iter], NULL);
-    else
-        nd_release(d, iter >= ECMASCRIPT_HANDLE ? iter - ECMASCRIPT_HANDLE : iter);
+    nd_release(d, iter >= ECMASCRIPT_HANDLE ? iter - ECMASCRIPT_HANDLE : iter);
 }
 
 static ta_status e_capture(void *d, uint64_t handle, ta_datamodel_environment *environment,
@@ -1620,10 +1607,6 @@ static void host_clear(napi_env environment, nd_host *host) {
     for (uint32_t i = 0; i < host->instance_count; i++)
         if (host->instances[i].live) instance_free(host, i + 1);
     free(host->instances);
-    free(host->legacy_ecmascript);
-    for (uint32_t i = 0; i < host->legacy_iteration_count; i++)
-        set_ref(environment, &host->legacy_iterations[i], NULL);
-    free(host->legacy_iterations);
     for (uint32_t i = 0; i < host->payload_count; i++)
         if (host->refs[i]) napi_delete_reference(environment, host->payloads[i]);
     free(host->payloads);
@@ -2895,7 +2878,7 @@ static int32_t segment_of(nd_host *host, const ta_image *image) {
  * tables they refer to by handle (plain values: the caller encodes them) */
 static napi_value js_snapshot(napi_env environment, napi_callback_info info) {
     size_t argc = 1;
-    napi_value argv[1], out, dm, instances, pays, iters;
+    napi_value argv[1], out, dm, instances, pays;
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
     nd_host *host = argc ? get_host(environment, argv[0]) : NULL;
     if (!host) return NULL;
@@ -2966,20 +2949,8 @@ static napi_value js_snapshot(napi_env environment, napi_callback_info info) {
         napi_set_named_property(environment, o, "value", get_ref(environment, host->payloads[i]));
         napi_set_element(environment, pays, k++, o);
     }
-    napi_create_array(environment, &iters); /* new <foreach> items live in the payload table */
-    k = 0;
-    for (uint32_t i = 1; i < host->legacy_iteration_count; i++) {
-        if (!host->legacy_iterations[i]) continue;
-        napi_value o;
-        napi_create_object(environment, &o);
-        napi_set_named_property(environment, o, "handle", num(environment, i));
-        napi_set_named_property(environment, o, "items",
-                                get_ref(environment, host->legacy_iterations[i]));
-        napi_set_element(environment, iters, k++, o);
-    }
     napi_set_named_property(environment, dm, "insts", instances);
     napi_set_named_property(environment, dm, "pays", pays);
-    napi_set_named_property(environment, dm, "iters", iters);
     napi_set_named_property(environment, out, "dm", dm);
     return out;
 }
@@ -3078,26 +3049,7 @@ static napi_value js_restore(napi_env environment, napi_callback_info info) {
             host->payloads[i] = (napi_ref)(uintptr_t)host->free_payload;
             host->free_payload = i + 1;
         }
-    /* Legacy wasm iterators are not payloads; keep them until their loops end. */
-    napi_value iters = prop(environment, datamodel, "iters");
-    uint32_t nt = 0;
-    napi_get_array_length(environment, iters, &nt);
-    for (uint32_t k = 0; k < nt; k++) {
-        napi_value e;
-        napi_get_element(environment, iters, k, &e);
-        uint32_t id = prop_u32(environment, e, "handle");
-        if (id >= host->legacy_iteration_count) {
-            host->legacy_iterations =
-                (napi_ref *)realloc(host->legacy_iterations, (id + 1) * sizeof(napi_ref));
-            memset(host->legacy_iterations + host->legacy_iteration_count, 0,
-                   (id + 1 - host->legacy_iteration_count) * sizeof(napi_ref));
-            host->legacy_iteration_count = id + 1;
-        }
-        set_ref(environment, &host->legacy_iterations[id], prop(environment, e, "items"));
-    }
-    /* Reserve the slots addressed directly by system regions. Untagged ES
-     * instances may overlap xstate handles in old wasm snapshots, so append
-     * those instances and remember their separate namespace. */
+    /* Reserve the slots addressed directly by system regions. */
     napi_get_array_length(environment, instances, &ni);
     uint32_t reserved = 0;
     for (uint32_t k = 0; k < ni; k++) {
@@ -3107,12 +3059,10 @@ static napi_value js_restore(napi_env environment, napi_callback_info info) {
         uint32_t slot = (uint32_t)(id >= ECMASCRIPT_HANDLE ? id - ECMASCRIPT_HANDLE : id);
         if (slot > reserved) reserved = slot;
     }
-    host->instance_capacity = reserved + ni;
+    host->instance_capacity = reserved;
     host->instances = (nd_instance *)calloc(host->instance_capacity ? host->instance_capacity : 1,
                                             sizeof(nd_instance));
     host->instance_count = reserved;
-    host->legacy_ecmascript_count = reserved + 1;
-    host->legacy_ecmascript = (uint32_t *)calloc(host->legacy_ecmascript_count, sizeof(uint32_t));
     for (uint32_t k = 0; k < ni; k++) {
         napi_value e;
         napi_get_element(environment, instances, k, &e);
@@ -3132,8 +3082,6 @@ static napi_value js_restore(napi_env environment, napi_callback_info info) {
             if (host->charts[i]->image == images[segment] && host->charts[i]->chart == chart)
                 binding_chart = host->charts[i];
         if (!handle || !binding_chart) continue;
-        if (is_ecmascript && datamodel_handle < ECMASCRIPT_HANDLE)
-            handle = host->legacy_ecmascript[handle] = ++host->instance_count;
         nd_instance *instance = &host->instances[handle - 1];
         memset(instance, 0, sizeof *instance);
         instance->datamodel_handle = datamodel_handle;

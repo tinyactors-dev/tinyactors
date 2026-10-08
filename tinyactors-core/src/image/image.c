@@ -183,6 +183,7 @@ static ta_status verify_chart(const ta_image_view *view, const ta_chart_record *
     CHECK(range_ok(chart->first_expression, chart->expression_count, view->expression_count));
     CHECK(range_ok(chart->first_send, chart->send_count, view->send_count));
     CHECK(range_ok(chart->first_invoke, chart->invoke_count, view->invoke_count));
+    CHECK(chart->invoke_count <= TA_CHART_MAX_INVOKES);
     CHECK(range_ok(chart->first_data, chart->data_count, view->data_count));
     CHECK(range_ok(chart->first_code, chart->code_count, view->code_count));
     CHECK(range_ok(chart->eventless_mask, (chart->state_count + 31) / 32, view->u32_count));

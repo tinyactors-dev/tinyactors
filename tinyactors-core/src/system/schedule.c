@@ -322,7 +322,7 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
         }
         event->invokeid = request->invokeid;
         ta_shared_string_retain(core, event->invokeid);
-        event->invoke_slot = request->slot;
+        event->invoke_slot = (uint16_t)request->slot;
         event->origin = event_in->token | TA_EXTERNAL_INVOKE_BIT;
         event->flags = TA_EVENT_FLAG_FROM_CHILD | TA_EVENT_FLAG_FROM_EXTERNAL_INVOKE;
     }

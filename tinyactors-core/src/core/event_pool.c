@@ -107,8 +107,9 @@ uint32_t ta_event_new(ta_core *core, int reserve_ok) {
     event->datamodel = 0xFF;
     event->name = event->sendid = event->origin_string = event->origintype = event->invokeid =
         TA_NIL;
-    event->invoke_slot = TA_NIL;
+    event->invoke_slot = TA_EVENT_NO_SLOT;
     event->raw = TA_NIL;
+    event->trace = TA_NIL;
     return i;
 }
 
@@ -126,6 +127,7 @@ void ta_event_release(ta_core *core, uint32_t event_index) {
     ta_shared_string_release(core, event->origintype);
     ta_shared_string_release(core, event->invokeid);
     ta_shared_string_release(core, event->raw);
+    ta_trace_context_release(core, event->trace);
     if (event->payload && event->datamodel < core->datamodel_count &&
         core->datamodels[event->datamodel].vtable->release)
         core->datamodels[event->datamodel].vtable->release(

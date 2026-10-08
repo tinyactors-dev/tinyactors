@@ -5,7 +5,9 @@
 
 #include <tinyactors/core.h>
 #include <tinyactors/system.h>
+#include <tinyactors/trace.h>
 #include "base/bitset.h"
+#include "base/journal.h"
 #include "image/records.h"
 #include "base/pool.h"
 #include "base/slab.h"
@@ -39,11 +41,33 @@ typedef struct ta_event {
     uint32_t origin_string; /* string reference (external origin) or NIL */
     uint32_t origintype;    /* string reference or NIL (NIL + origin != 0 => SCXML processor) */
     uint32_t invokeid;      /* string reference or NIL */
-    uint32_t invoke_slot;   /* receiver-side invoke slot or NIL */
-    uint32_t flags;
-    uint32_t raw; /* string reference (I/O-processor raw message) or NIL */
+    uint16_t invoke_slot;   /* receiver-side invoke slot or TA_EVENT_NO_SLOT */
+    uint16_t flags;         /* TA_EVENT_FLAG_* */
+    uint32_t raw;   /* string reference (I/O-processor raw message) or NIL */
+    uint32_t trace; /* the context of the step that caused it (context pool), TA_NIL if untraced */
     uint64_t payload;
 } ta_event;
+/* The trace reference took its four bytes from invoke_slot and flags: an event
+ * costs nothing more with tracing (docs/adr/0006). */
+TA_STATIC_ASSERT(sizeof(ta_event) == 56, event_record_is_56_bytes);
+#define TA_EVENT_NO_SLOT 0xFFFFu
+TA_STATIC_ASSERT(TA_CHART_MAX_INVOKES < TA_EVENT_NO_SLOT, invoke_slots_fit_events);
+
+/* ---- trace contexts -----------------------------------------------------------------
+ * A pool of reference-counted contexts in the system block (docs/adr/0006,
+ * section 5): the trace, the W3C flags and the step that caused what holds
+ * it. The parent span is that step's span (ta_step_key_span_id of the cause;
+ * a host's cause has session 0 and its span ID in `macrostep`). Events, timers
+ * and an instance's current macrostep hold references. */
+typedef struct ta_trace_entry {
+    ta_trace_id trace;
+    uint64_t session, macrostep; /* the cause */
+    uint32_t microstep;
+    uint32_t flags;
+    uint32_t refs;
+    uint32_t pad;
+} ta_trace_entry;
+TA_STATIC_ASSERT(sizeof(ta_trace_entry) == 48, trace_entry_is_48_bytes);
 
 /* ---- step results (public ones from tinyactors/core.h, plus internal) ---------------- */
 enum {
@@ -96,8 +120,17 @@ struct ta_core {
     uint32_t overrun;
     uint64_t (*serial_of)(void *system, uint32_t actor);
     void *system;
-    uint64_t reserved; /* the former system-wide id counter (ids are per session now, in
-                          ta_instance): keeps the region layout of earlier snapshots */
+    /* tracing (docs/adr/0006): the kinds to write (0: none), where, the
+     * context pool, and what stamps a record: the fuel clock at the start of
+     * the current step (the system keeps it), the fuel the step started with,
+     * and the logical time */
+    ta_journal *journal;
+    ta_pool *contexts;
+    uint32_t trace_kinds;
+    uint32_t trace_step_fuel;
+    uint64_t trace_clock;
+    uint64_t trace_now;
+    uint64_t contexts_dropped; /* events left untraced because the pool was full */
     ta_core_out out;
     char scratch[1024]; /* formatting: origins, generated ids, done.invoke names, document keys */
 };
@@ -134,8 +167,13 @@ struct ta_instance {
     uint32_t ids;       /* ids generated so far (idlocation sendids, invokeids): session state, so
                            the ids a session generates depend on nothing else (docs/durability.md) */
     uint64_t datamodel;
+    /* the step counters (docs/adr/0006): macrosteps count from 1 per session,
+     * microsteps from 1 within their macrostep; session state like `ids` */
+    uint64_t macrostep;
+    uint32_t microstep;
+    uint32_t trace; /* the current macrostep's context, TA_NIL outside one or untraced */
 };
-TA_STATIC_ASSERT(sizeof(struct ta_instance) == 48, instance_header_is_48_bytes);
+TA_STATIC_ASSERT(sizeof(struct ta_instance) == 64, instance_header_is_64_bytes);
 
 typedef struct ta_instance_layout {
     uint32_t state_words; /* words per state bitset */
@@ -182,8 +220,9 @@ typedef struct ta_workspace {
     uint32_t stack_top;
     uint32_t auxiliary;
     uint32_t final_state; /* exitInterpreter: the top-level final that ended the session */
-    uint32_t pad2;
+    uint32_t trace;       /* the context the step's events share (one reference), TA_NIL */
     uint64_t done_payload; /* exitInterpreter: <donedata> of the top-level final */
+    uint64_t trace_fuel;   /* the fuel clock when the microstep began */
 } ta_workspace;
 
 typedef struct ta_workspace_layout {
@@ -243,6 +282,37 @@ void ta_core_init_declaration(ta_core *core, ta_instance *in, uint32_t declarati
 /* The datamodel's migrate hook (bindings = 0 if it has none). */
 ta_status ta_core_datamodel_migrate(ta_core *core, ta_instance *in, ta_payload *bindings);
 int ta_core_in_state(const ta_core *core, ta_instance *in, uint32_t state);
+
+/* tracing (core/trace_step.c) */
+/* A new context (one reference), TA_NIL when tracing is off or the pool is
+ * full (counted in contexts_dropped). */
+uint32_t ta_trace_context_new(ta_core *core, ta_trace_id trace, uint32_t flags, ta_step_key cause);
+void ta_trace_context_retain(ta_core *core, uint32_t context);
+void ta_trace_context_release(ta_core *core, uint32_t context);
+TA_INLINE ta_trace_entry *ta_trace_entry_at(const ta_core *core, uint32_t context) {
+    return (ta_trace_entry *)ta_pool_at(core->contexts, context);
+}
+/* The value of a context: its trace, flags, and the cause's span as parent. */
+ta_trace_context ta_trace_context_value(const ta_core *core, uint32_t context);
+/* The context the events a step of `instance` creates get (one reference
+ * for the caller), TA_NIL if its macrostep is untraced. */
+uint32_t ta_core_step_context(ta_core *core, ta_instance *instance);
+/* The step's context as a value (for effects); no trace if untraced. */
+ta_trace_context ta_core_step_trace(const ta_core *core, const ta_instance *instance);
+/* The fuel clock now: inside a step, `fuel` is the step's fuel; outside
+ * one, NULL. */
+uint64_t ta_core_trace_fuel(const ta_core *core, const uint32_t *fuel);
+/* A record of `kind` about the current step of `instance` (`microstep` 0:
+ * about its macrostep), its header filled, or NULL when the kind is off,
+ * the macrostep untraced or the journal full. Commit it with
+ * ta_trace_record_commit. */
+ta_trace_record *ta_core_trace_step(ta_core *core, ta_instance *instance, uint32_t kind,
+                                    uint32_t size, uint32_t microstep, const uint32_t *fuel);
+/* Release what a record holds (strings, payloads), after it was read. */
+void ta_core_trace_release(ta_core *core, const ta_trace_record *record);
+TA_INLINE int ta_core_traces(const ta_core *core, uint32_t kind) {
+    return (core->trace_kinds & TA_TRACE_BIT(kind)) != 0;
+}
 
 /* events */
 uint32_t ta_event_new(ta_core *core, int reserve_ok);

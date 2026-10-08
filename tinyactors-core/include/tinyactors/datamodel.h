@@ -77,7 +77,10 @@ typedef struct ta_datamodel_capture {
     const uint32_t *namelist; /* namelist_count location expr ids */
     const uint32_t *params;   /* param_count pairs {name string id, expr id} */
 } ta_datamodel_capture;
-enum { TA_CAPTURE_SEND = 0, TA_CAPTURE_INVOKE = 1, TA_CAPTURE_DONEDATA = 2 };
+/* TA_CAPTURE_VALUE: the value of `content` alone (a location expression), for a
+ * trace record (docs/adr/0006 in the repository root). It must have no effect
+ * the chart can see; a failure only leaves the value out of the record. */
+enum { TA_CAPTURE_SEND = 0, TA_CAPTURE_INVOKE = 1, TA_CAPTURE_DONEDATA = 2, TA_CAPTURE_VALUE = 3 };
 
 typedef struct ta_datamodel_chart {
     uint32_t size;

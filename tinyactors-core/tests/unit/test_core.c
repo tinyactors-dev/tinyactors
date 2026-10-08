@@ -29,6 +29,12 @@ typedef struct driver {
     char log[8192];
     int sends, invokes, cancels, dones;
     ta_payload done_payload;
+    /* tracing (drv_trace): the journal and the context pool */
+    ta_journal journal;
+    ta_pool contexts;
+    void *journal_memory, *context_memory;
+    unsigned char *context_generations;
+    ta_trace_context last_send; /* the context of the last event sent */
 } driver;
 
 static uint64_t serial_of(void *system, uint32_t actor) {
@@ -122,10 +128,12 @@ static uint32_t drv_run(driver *d, int i, uint32_t fuel_per_call, int max_calls)
     for (int calls = 0; calls < max_calls; calls++) {
         uint32_t fuel = fuel_per_call;
         r = ta_core_step(&d->core, d->instances[i], &fuel);
+        d->core.trace_clock += (fuel_per_call - fuel) + d->core.overrun; /* as the system does */
         ta_core_out *out = &d->core.out;
         switch (r) {
         case TA_STEP_SEND:
             d->sends++;
+            d->last_send = ta_trace_context_value(&d->core, ta_event_at(&d->core, out->event)->trace);
             if (out->route == TA_ROUTE_SELF && d->external_count[i] < 64)
                 d->external_queue[i][d->external_count[i]++] = out->event;
             else
@@ -200,6 +208,38 @@ static const char *drv_config(driver *d, int i) {
     return buffer;
 }
 
+/* Turn tracing on: a journal of `bytes`, a pool of 64 contexts, `kinds`. */
+static void drv_trace(driver *d, uint32_t bytes, uint32_t kinds) {
+    d->journal_memory = aligned_alloc(8, bytes);
+    ta_journal_init(&d->journal, d->journal_memory, bytes);
+    d->context_memory = aligned_alloc(8, ta_pool_slots_bytes(sizeof(ta_trace_entry), 64));
+    d->context_generations = (unsigned char *)malloc(64);
+    ta_pool_init(&d->contexts, d->context_memory, d->context_generations, sizeof(ta_trace_entry), 64);
+    d->core.journal = &d->journal;
+    d->core.contexts = &d->contexts;
+    d->core.trace_kinds = kinds;
+}
+
+/* Read every record (one piece), release what they hold, release them;
+ * returns how many, copying them into out. */
+static uint32_t drv_records(driver *d, ta_trace_record **out, uint32_t capacity) {
+    const unsigned char *bytes;
+    uint32_t length = ta_journal_peek(&d->journal, &bytes), cursor = 0, n = 0;
+    ta_trace_view view = {bytes, length, 0, (const unsigned char *)ta_slab_pointer(&d->slab, 0)};
+    const ta_trace_record *record;
+    while ((record = ta_trace_next(&view, &cursor))) {
+        if (n < capacity) {
+            out[n] = malloc(record->size);
+            memcpy(out[n], record, record->size);
+        }
+        n++;
+        ta_core_trace_release(&d->core, record);
+    }
+    CHECK_EQUAL(cursor, length);
+    ta_journal_release(&d->journal, length);
+    return n;
+}
+
 static void drv_free(driver *d) {
     for (int i = 0; i < d->instance_count; i++) {
         for (int k = 0; k < d->external_count[i]; k++)
@@ -208,6 +248,14 @@ static void drv_free(driver *d) {
         free(d->instances[i]);
     }
     ta_core_release_out(&d->core);
+    if (d->core.journal) {
+        ta_trace_record *none[1];
+        drv_records(d, none, 0);
+        CHECK_EQUAL(d->contexts.used, 0); /* no leaked contexts */
+        free(d->journal_memory);
+        free(d->context_memory);
+        free(d->context_generations);
+    }
     CHECK_EQUAL(d->events.used, 0);    /* no leaked events */
     CHECK_EQUAL(d->workspace.used, 0); /* no leaked workspaces */
     CHECK_EQUAL(d->slab.used_pages, 0);
@@ -559,6 +607,209 @@ static void test_duration_saturates(void) {
     CHECK(ta_core_parse_duration((ta_string_view){"300000000000s", 13}, &ns) && ns == UINT64_MAX);
 }
 
+
+/* ---- tracing (docs/adr/0006, section 4) ------------------------------------------------- */
+
+static const char *state_of(driver *d, uint32_t state) {
+    static char buffer[64];
+    ta_string_view n = ta_image_state_name(&d->image, 0, state);
+    snprintf(buffer, sizeof buffer, "%.*s", (int)n.length, n.pointer);
+    return buffer;
+}
+
+/* The records of a chart with a raise, an assignment, a condition, an
+ * eventless transition with a send, and a final state; and the cause the
+ * kernel stamps on the events it creates. */
+static void test_trace_records(void) {
+    driver d;
+    CHECK(drv_init(&d,
+                   SC("initial='a'><datamodel><data id='x' expr='0'/></datamodel>"
+                      "<state id='a'><onentry><raise event='go'/><assign location='x' expr='1'/>"
+                      "</onentry><transition event='go' target='b'/></state>"
+                      "<state id='b'><transition cond='x == 1' target='c'><send event='ping'/>"
+                      "</transition></state><final id='c'/>"),
+                   1, 32));
+    drv_trace(&d, 1u << 16, TA_TRACE_FULL);
+    ta_instance *instance = drv_spawn(&d, 0);
+    ta_trace_id trace = {0x1111, 0x2222};
+    ta_step_key root = {0, 0, 0, 0};
+    instance->trace = ta_trace_context_new(&d.core, trace, TA_TRACE_FLAG_SAMPLED, root);
+    d.core.trace_clock = 500;
+    d.core.trace_now = 77;
+    CHECK_EQUAL(drv_run(&d, 0, 1000, 100), TA_STEP_DONE);
+    CHECK_EQUAL(instance->macrostep, 1);
+    CHECK_EQUAL(instance->trace, TA_NIL); /* the macrostep's context is let go at its end */
+
+    ta_trace_record *r[32];
+    uint32_t n = drv_records(&d, r, 32);
+    static const uint16_t kinds[] = {
+        TA_TRACE_MACROSTEP_BEGIN, TA_TRACE_RAISED, TA_TRACE_ASSIGN, TA_TRACE_MICROSTEP, /* a */
+        TA_TRACE_MICROSTEP,                                                          /* go */
+        TA_TRACE_CONDITION,       TA_TRACE_SENT,   TA_TRACE_MICROSTEP,               /* -> c */
+        TA_TRACE_MACROSTEP_END};
+    CHECK_EQUAL(n, sizeof kinds / sizeof kinds[0]);
+    for (uint32_t i = 0; i < n && i < sizeof kinds / sizeof kinds[0]; i++) {
+        if (r[i]->kind != kinds[i]) fprintf(stderr, "  record %u: kind %u, expected %u\n", i, r[i]->kind, kinds[i]);
+        CHECK_EQUAL(r[i]->kind, kinds[i]);
+    }
+    if (n != sizeof kinds / sizeof kinds[0]) return;
+    ta_span_id macro = ta_step_key_span_id((ta_step_key){1, 1, 0, 0});
+    uint64_t fuel = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        CHECK(r[i]->trace.high == 0x1111 && r[i]->trace.low == 0x2222);
+        CHECK_EQUAL(r[i]->flags, TA_TRACE_FLAG_SAMPLED);
+        CHECK(r[i]->actor == 1 && r[i]->chart == 0 && r[i]->now == 77);
+        CHECK(r[i]->key.session == 1 && r[i]->key.macrostep == 1);
+        CHECK_EQUAL(r[i]->span, ta_step_key_span_id(r[i]->key));
+        /* steps of the macrostep are its children; the macrostep is a root */
+        CHECK_EQUAL(r[i]->parent, r[i]->key.microstep ? macro : 0);
+        CHECK(r[i]->fuel >= fuel && r[i]->fuel >= 500); /* the fuel clock never goes back */
+        fuel = r[i]->fuel;
+    }
+    const ta_trace_macrostep_begin *begin = ta_trace_body(r[0]);
+    CHECK_EQUAL(begin->name, TA_NIL); /* the bootstrap */
+    CHECK(begin->cause.session == 0 && begin->cause.macrostep == 0);
+    CHECK_EQUAL(r[1]->key.microstep, 1); /* raised while entering a */
+    CHECK_EQUAL(((const ta_trace_raised *)ta_trace_body(r[1]))->name_id,
+                ta_event_name_lookup(&d.core.image_view, "go", 2, &(int){0}));
+    const ta_trace_assign *assign = ta_trace_body(r[2]);
+    CHECK(assign->payload != 0 && assign->datamodel == 0); /* the value, captured */
+    /* microstep 1: the initial transition enters a */
+    const ta_trace_microstep *micro = ta_trace_body(r[3]);
+    const uint32_t *list = ta_trace_list(r[3]);
+    CHECK_EQUAL(r[3]->key.microstep, 1);
+    CHECK(micro->transition_count == 1 && micro->exited_count == 0 && micro->entered_count == 1);
+    CHECK(strcmp(state_of(&d, list[1]), "a") == 0);
+    CHECK(micro->begin_fuel >= 500 && micro->begin_fuel <= r[3]->fuel);
+    /* microstep 2: go exits a and enters b */
+    micro = ta_trace_body(r[4]);
+    list = ta_trace_list(r[4]);
+    CHECK_EQUAL(r[4]->key.microstep, 2);
+    CHECK(micro->transition_count == 1 && micro->exited_count == 1 && micro->entered_count == 1);
+    CHECK(strcmp(state_of(&d, list[1]), "a") == 0 && strcmp(state_of(&d, list[2]), "b") == 0);
+    /* the condition is evaluated for the macrostep, before microstep 3 */
+    const ta_trace_condition *condition = ta_trace_body(r[5]);
+    CHECK_EQUAL(r[5]->key.microstep, 0);
+    CHECK_EQUAL(condition->result, 1);
+    CHECK_EQUAL(condition->transition, ((const uint32_t *)ta_trace_list(r[7]))[0]);
+    /* the send in microstep 3: the new event's cause is that microstep */
+    const ta_trace_sent *sent = ta_trace_body(r[6]);
+    CHECK_EQUAL(r[6]->key.microstep, 3);
+    CHECK(sent->target == TA_NIL && sent->delay == 0);
+    CHECK(sent->context.trace.high == 0x1111 && sent->context.trace.low == 0x2222);
+    CHECK_EQUAL(sent->context.parent, ta_step_key_span_id((ta_step_key){1, 1, 3, 0}));
+    CHECK_EQUAL(d.last_send.parent, sent->context.parent);
+    CHECK_EQUAL(d.last_send.flags, TA_TRACE_FLAG_SAMPLED);
+    /* microstep 3 enters the final state; then the session ends: empty */
+    micro = ta_trace_body(r[7]);
+    list = ta_trace_list(r[7]);
+    CHECK(micro->exited_count == 1 && micro->entered_count == 1);
+    CHECK(strcmp(state_of(&d, list[2]), "c") == 0);
+    CHECK_EQUAL(((const ta_trace_macrostep_end *)ta_trace_body(r[8]))->state_count, 0);
+    for (uint32_t i = 0; i < n; i++)
+        free(r[i]);
+    drv_free(&d);
+}
+
+/* A delivered event starts a macrostep under the event's context; events
+ * raised in it are caused by its microstep. */
+static void test_trace_delivery(void) {
+    driver d;
+    CHECK(drv_init(&d,
+                   SC("initial='idle'><state id='idle'><transition event='poke' target='busy'>"
+                      "<raise event='inner'/></transition></state>"
+                      "<state id='busy'><transition event='inner' target='idle'/></state>"),
+                   1, 32));
+    drv_trace(&d, 1u << 16, TA_TRACE_FULL);
+    ta_instance *instance = drv_spawn(&d, 0);
+    CHECK_EQUAL(drv_run(&d, 0, 1000, 100), TA_STEP_STABLE); /* an untraced bootstrap */
+    ta_trace_record *r[32];
+    CHECK_EQUAL(drv_records(&d, r, 32), 0);
+    drv_send(&d, 0, "poke", NULL);
+    ta_step_key cause = {9, 4, 2, 0};
+    ta_event *poke = ta_event_at(&d.core, d.external_queue[0][0]);
+    poke->trace = ta_trace_context_new(&d.core, (ta_trace_id){7, 8}, TA_TRACE_FLAG_SAMPLED, cause);
+    CHECK_EQUAL(drv_run(&d, 0, 1000, 100), TA_STEP_STABLE);
+    CHECK_EQUAL(instance->macrostep, 2);
+    uint32_t n = drv_records(&d, r, 32);
+    CHECK_EQUAL(n, 5); /* begin, raised, microstep, microstep, end */
+    if (n == 5) {
+        CHECK_EQUAL(r[0]->kind, TA_TRACE_MACROSTEP_BEGIN);
+        const ta_trace_macrostep_begin *begin = ta_trace_body(r[0]);
+        CHECK(begin->cause.session == 9 && begin->cause.macrostep == 4 && begin->cause.microstep == 2);
+        CHECK_EQUAL(r[0]->parent, ta_step_key_span_id(cause));
+        CHECK_EQUAL(begin->type, TA_EVENT_TYPE_EXTERNAL);
+        CHECK_EQUAL(r[0]->key.macrostep, 2);
+        CHECK_EQUAL(r[1]->kind, TA_TRACE_RAISED);
+        CHECK_EQUAL(r[1]->key.microstep, 1);
+        CHECK(r[2]->kind == TA_TRACE_MICROSTEP && r[3]->kind == TA_TRACE_MICROSTEP);
+        const ta_trace_macrostep_end *end = ta_trace_body(r[4]);
+        CHECK_EQUAL(end->state_count, 1);
+        CHECK(strcmp(state_of(&d, ta_trace_list(r[4])[0]), "idle") == 0);
+        for (uint32_t i = 0; i < n; i++)
+            CHECK(r[i]->trace.high == 7 && r[i]->trace.low == 8);
+    }
+    for (uint32_t i = 0; i < n && i < 32; i++)
+        free(r[i]);
+    drv_free(&d);
+}
+
+/* Kinds that are off are not written; contexts still propagate. */
+static void test_trace_unwanted_kinds(void) {
+    driver d;
+    CHECK(drv_init(&d,
+                   SC("initial='a'><state id='a'><onentry><send event='e'/></onentry></state>"),
+                   1, 32));
+    drv_trace(&d, 1u << 16, TA_TRACE_BIT(TA_TRACE_MACROSTEP_END));
+    ta_instance *instance = drv_spawn(&d, 0);
+    instance->trace = ta_trace_context_new(&d.core, (ta_trace_id){1, 2}, 0, (ta_step_key){0, 0, 0, 0});
+    CHECK_EQUAL(drv_run(&d, 0, 1000, 100), TA_STEP_STABLE);
+    ta_trace_record *r[8];
+    uint32_t n = drv_records(&d, r, 8);
+    CHECK_EQUAL(n, 2); /* the bootstrap's end, and the end of the macrostep taking e */
+    for (uint32_t i = 0; i < n && i < 8; i++)
+        CHECK_EQUAL(r[i]->kind, TA_TRACE_MACROSTEP_END);
+    CHECK_EQUAL(d.last_send.trace.low, 2);
+    for (uint32_t i = 0; i < n && i < 8; i++)
+        free(r[i]);
+    drv_free(&d);
+}
+
+/* A journal too small for the records: they are dropped, counted, and the
+ * count comes first once there is room again. */
+static void test_trace_journal_full(void) {
+    driver d;
+    CHECK(drv_init(&d,
+                   SC("initial='a'><state id='a'><transition event='e' target='a'/></state>"), 1, 32));
+    drv_trace(&d, 256, TA_TRACE_FULL); /* room for two records */
+    ta_instance *instance = drv_spawn(&d, 0);
+    instance->trace = ta_trace_context_new(&d.core, (ta_trace_id){1, 2}, 0, (ta_step_key){0, 0, 0, 0});
+    CHECK_EQUAL(drv_run(&d, 0, 1000, 100), TA_STEP_STABLE);
+    CHECK(d.journal.lost > 0);
+    ta_trace_record *r[8];
+    uint32_t n = drv_records(&d, r, 8);
+    CHECK_EQUAL(n, 2); /* begin, microstep; the end was lost */
+    for (uint32_t i = 0; i < n && i < 8; i++)
+        free(r[i]);
+    drv_send(&d, 0, "e", NULL); /* untraced: no records */
+    CHECK_EQUAL(drv_run(&d, 0, 1000, 100), TA_STEP_STABLE);
+    CHECK_EQUAL(drv_records(&d, r, 8), 0);
+    drv_send(&d, 0, "e", NULL);
+    ta_event *e = ta_event_at(&d.core, d.external_queue[0][0]);
+    e->trace = ta_trace_context_new(&d.core, (ta_trace_id){1, 3}, 0, (ta_step_key){0, 0, 0, 0});
+    CHECK_EQUAL(drv_run(&d, 0, 1000, 100), TA_STEP_STABLE);
+    n = drv_records(&d, r, 8);
+    CHECK(n >= 2);
+    if (n >= 2) {
+        CHECK_EQUAL(r[0]->kind, TA_TRACE_DROPPED);
+        CHECK_EQUAL(((const ta_trace_dropped *)ta_trace_body(r[0]))->count, 1);
+        CHECK_EQUAL(r[1]->kind, TA_TRACE_MACROSTEP_BEGIN);
+    }
+    for (uint32_t i = 0; i < n && i < 8; i++)
+        free(r[i]);
+    drv_free(&d);
+}
+
 int main(void) {
     RUN(test_duration_saturates);
     RUN(test_basic_transition);
@@ -573,5 +824,9 @@ int main(void) {
     RUN(test_late_binding_entry);
     RUN(test_send_self_and_cancel);
     RUN(test_toplevel_script);
+    RUN(test_trace_records);
+    RUN(test_trace_delivery);
+    RUN(test_trace_unwanted_kinds);
+    RUN(test_trace_journal_full);
     TEST_MAIN_END();
 }

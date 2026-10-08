@@ -11,6 +11,9 @@
 #include "base/index_queue.h"
 
 #define TA_SYSTEM_MAGIC        0x53594154u /* "TAYS" */
+/* The region's layout: 2 since the step counters and trace references
+ * (docs/adr/0006 in the repository root); a snapshot of another is refused. */
+#define TA_SYSTEM_VERSION 2u
 #define TA_MAX_DATAMODELS      8u
 #define TA_EXTERNAL_INVOKE_BIT (1u << 23) /* in a child handle: external invoke token */
 /* slab byte budgets stay below 4 GiB so page arithmetic cannot overflow u32 */

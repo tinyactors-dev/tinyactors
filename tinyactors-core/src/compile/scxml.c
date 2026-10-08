@@ -1198,6 +1198,8 @@ done:
     chart.send_count = compiler->sends.length - c->first_send;
     chart.first_invoke = c->first_invoke;
     chart.invoke_count = compiler->invokes.length - c->first_invoke;
+    if (chart.invoke_count > TA_CHART_MAX_INVOKES)
+        compile_error(c, root, "a chart may have at most 65534 invocations%s", "");
     chart.first_data = c->first_data;
     chart.data_count = compiler->data.length - c->first_data;
     chart.first_code = c->first_code;

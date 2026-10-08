@@ -100,7 +100,7 @@ void ta_system_deliver(ta_system *system, uint32_t sender, uint32_t event_index,
             ta_shared_string_retain(core, id);
             ta_shared_string_release(core, event->invokeid);
             event->invokeid = id;
-            event->invoke_slot = actor->parent_slot;
+            event->invoke_slot = (uint16_t)actor->parent_slot;
             event->flags |= TA_EVENT_FLAG_FROM_CHILD;
         }
         break;
@@ -639,7 +639,7 @@ void ta_system_done(ta_system *system, uint32_t index, ta_payload done, uint32_t
                 event->origin = self;
                 event->invokeid = id;
                 ta_shared_string_retain(core, id);
-                event->invoke_slot = actor->parent_slot;
+                event->invoke_slot = (uint16_t)actor->parent_slot;
                 event->flags = TA_EVENT_FLAG_FROM_CHILD | TA_EVENT_FLAG_DONE;
                 event->payload = done;
                 event->datamodel = core->chart_datamodel[ta_actor_chart(system, actor)];

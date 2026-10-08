@@ -77,6 +77,10 @@
       "value": 0
     },
     {
+      "name": "TA_CAPTURE_VALUE",
+      "value": 3
+    },
+    {
       "name": "TA_DATAMODEL_EVENT_DETACHABLE",
       "value": 1
     },

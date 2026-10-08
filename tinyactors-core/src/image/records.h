@@ -201,6 +201,9 @@ static const uint8_t ta_opcode_length[TA_OPCODE_MAX_] = {1, 2, 2, 2, 2, 2, 3, 2,
  * jumps of code nested this deep in one linear pass with bounded memory
  * (deeper code from elsewhere still verifies, just more slowly). */
 #define TA_IMAGE_MAX_NESTING 64u
+/* A chart's invocations are numbered in 16 bits (an event's invoke slot,
+ * docs/adr/0006 in the repository root). */
+#define TA_CHART_MAX_INVOKES 0xFFFEu
 
 /* ---- validated host-side view (lives inside public ta_image storage) ---- */
 typedef struct ta_image_view {

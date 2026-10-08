@@ -47,7 +47,11 @@ static void normalize_config(const ta_image_view *view, const ta_system_config *
             uint32_t s = ta_instance_layout_of(&view->charts[i]).size;
             if (s > m) m = s;
         }
-        uint64_t ib = (uint64_t)config->max_actors * slab_class(m);
+        /* whole pages: a page holds TA_SLAB_PAGE / class instances, and the
+         * rest of it is lost (24 B in a page of 96 B instances) */
+        uint32_t per_page = TA_SLAB_PAGE / slab_class(m);
+        if (!per_page) per_page = 1;
+        uint64_t ib = ((uint64_t)config->max_actors + per_page - 1) / per_page * TA_SLAB_PAGE;
         config->instance_bytes = ib > TA_SLAB_MAX_BYTES ? TA_SLAB_MAX_BYTES : (uint32_t)ib;
     }
 }
@@ -249,7 +253,7 @@ ta_status ta_system_init(void *memory, size_t length, const ta_image *image,
     if (!system) return TA_ERROR_NO_MEMORY;
     ta_memset(system, 0, sizeof *system);
     system->magic = TA_SYSTEM_MAGIC;
-    system->version = 1;
+    system->version = TA_SYSTEM_VERSION;
     system->region_size = arena.offset;
     system->config = normalized;
     system->chart_count = view->chart_count;
@@ -816,7 +820,9 @@ ta_status ta_system_restore(void *memory, size_t length, const ta_image *image, 
         snap_length < sizeof(ta_system))
         return TA_ERROR_INVALID;
     const ta_system *old = (const ta_system *)snap;
-    if (old->magic != TA_SYSTEM_MAGIC || old->region_size != snap_length) return TA_ERROR_INVALID;
+    if (old->magic != TA_SYSTEM_MAGIC || old->version != TA_SYSTEM_VERSION ||
+        old->region_size != snap_length)
+        return TA_ERROR_INVALID; /* another layout (docs/durability.md) */
     if (old->core.image_view.hash != view->hash) return TA_ERROR_INVALID; /* different image */
     ta_memcpy(memory, snap, snap_length);
     ta_system *system = (ta_system *)memory;
