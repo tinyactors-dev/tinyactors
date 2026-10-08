@@ -164,6 +164,10 @@ static ta_status segment_grow(ta_host *host, host_segment *segment) {
     config.workspaces = config.workspaces * 2;
     config.instance_bytes = 0; /* derived from max_actors */
     config.string_bytes = config.string_bytes * 2;
+    /* the context pool keeps up with the events (0 is max_events anyway) */
+    config.trace_contexts = config.trace_contexts * 2 > TA_SYSTEM_MAX_POOL
+                                ? TA_SYSTEM_MAX_POOL
+                                : config.trace_contexts * 2;
     size_t need;
     if (ta_system_layout(segment->image, &config, &need) != TA_OK) return TA_ERROR_INVALID;
     void *memory = host_alloc(host, need);
@@ -410,13 +414,13 @@ ta_status ta_host_locate(const ta_host *host, uint64_t session, uint32_t *segmen
 }
 
 ta_status ta_host_spawn(ta_host *host, uint32_t segment, uint32_t chart, ta_string_view name,
-                        ta_payload params, uint64_t *session) {
+                        ta_payload params, ta_string_view traceparent, uint64_t *session) {
     host_segment *segment_record = segment_of(host, segment);
     if (!segment_record) return TA_ERROR_INVALID;
     uint32_t actor = 0;
     ta_status status;
-    while ((status = ta_system_spawn(segment_record->system, chart, name, params, &actor)) ==
-               TA_ERROR_NO_MEMORY &&
+    while ((status = ta_system_spawn(segment_record->system, chart, name, params, traceparent,
+                                     &actor)) == TA_ERROR_NO_MEMORY &&
            segment_grow(host, segment_record) == TA_OK) {
     }
     if (status != TA_OK) return status;

@@ -36,9 +36,8 @@ ta_trace_context ta_trace_context_child(const ta_trace_context *context, ta_step
 
 /* A lowercase hex digit's value plus one, 0 for anything else. */
 static const uint8_t trace_hex_value[256] = {
-    ['0'] = 1,  ['1'] = 2,  ['2'] = 3,  ['3'] = 4,  ['4'] = 5,  ['5'] = 6,
-    ['6'] = 7,  ['7'] = 8,  ['8'] = 9,  ['9'] = 10, ['a'] = 11, ['b'] = 12,
-    ['c'] = 13, ['d'] = 14, ['e'] = 15, ['f'] = 16,
+    ['0'] = 1, ['1'] = 2,  ['2'] = 3,  ['3'] = 4,  ['4'] = 5,  ['5'] = 6,  ['6'] = 7,  ['7'] = 8,
+    ['8'] = 9, ['9'] = 10, ['a'] = 11, ['b'] = 12, ['c'] = 13, ['d'] = 14, ['e'] = 15, ['f'] = 16,
 };
 
 /* `count` lowercase hex digits (at most 16), a digit at a time. */
@@ -101,7 +100,8 @@ ta_status ta_traceparent_parse(ta_string_view text, ta_trace_context *out) {
     uint64_t version = 0, high = 0, low = 0, span = 0, flags = 0;
     if (length < TA_TRACEPARENT_LENGTH || !trace_hex_read(p, 2u, &version) || version == 0xffu ||
         p[2] != '-' || p[35] != '-' || p[52] != '-' || !trace_hex_read16(p + 3, &high) ||
-        !trace_hex_read16(p + 19, &low) || !trace_hex_read16(p + 36, &span) || !trace_hex_read(p + 53, 2u, &flags))
+        !trace_hex_read16(p + 19, &low) || !trace_hex_read16(p + 36, &span) ||
+        !trace_hex_read(p + 53, 2u, &flags))
         return TA_ERROR_INVALID;
     /* version 00 is exactly 55 characters; a later one may carry more after a dash */
     if (length != TA_TRACEPARENT_LENGTH && (version == 0 || p[TA_TRACEPARENT_LENGTH] != '-'))

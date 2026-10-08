@@ -15,7 +15,7 @@ REGRESS_OPTS = --inputdir=test --outputdir=build/regress --load-extension=tinyac
 REPO        := $(abspath ../..)
 TA_BUILD    ?= $(REPO)/build/addon/lib
 TA_LIBS     = $(TA_BUILD)/libtinyactors_host.a $(TA_BUILD)/libtinyactors_system.a $(TA_BUILD)/libtinyactors_core.a $(TA_BUILD)/libtinyactors_compile.a \
-              $(TA_BUILD)/libtinyactors_datamodel_ecmascript.a $(TA_BUILD)/libtinyactors_image.a \
+              $(TA_BUILD)/libtinyactors_datamodel_ecmascript.a $(TA_BUILD)/libtinyactors_image.a $(TA_BUILD)/libtinyactors_trace.a \
               $(TA_BUILD)/libtinyactors_base.a $(TA_BUILD)/libtinyactors_quickjs.a
 PG_CPPFLAGS = -I$(REPO)/include
 PG_CFLAGS   = -std=gnu11 -Wno-declaration-after-statement -Werror

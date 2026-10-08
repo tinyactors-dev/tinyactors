@@ -131,7 +131,8 @@ static void test_limits_and_targeted_grow(void) {
     uint32_t actor = 0;
     ta_status status = TA_OK;
     for (int i = 0; i < 3 && status == TA_OK; i++)
-        status = ta_system_spawn(system, 0, (ta_string_view){"", 0}, 0, &actor);
+        status =
+            ta_system_spawn(system, 0, (ta_string_view){"", 0}, 0, (ta_string_view){0, 0}, &actor);
     CHECK_EQUAL(status, TA_ERROR_NO_MEMORY); /* two actors fit */
     CHECK_EQUAL(ta_runtime_system_grow(&system), TA_OK);
     ta_system_stats stats;
@@ -140,7 +141,9 @@ static void test_limits_and_targeted_grow(void) {
     CHECK_EQUAL(stats.actors_capacity, 4);  /* the full pool doubled ... */
     CHECK_EQUAL(stats.events_capacity, 64); /* ... the idle ones did not */
     CHECK_EQUAL(stats.timers_capacity, 64);
-    CHECK_EQUAL(ta_system_spawn(system, 0, (ta_string_view){"", 0}, 0, &actor), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(system, 0, (ta_string_view){"", 0}, 0, (ta_string_view){0, 0}, &actor),
+        TA_OK);
     ta_runtime_system_free(system);
     free(copy);
 }

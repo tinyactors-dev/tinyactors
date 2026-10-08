@@ -7,6 +7,7 @@
  * the run queue; no event is needed to wake it. */
 #include "base/memory.h"
 #include "system/system_internal.h"
+#include "trace/record.h"
 
 static void run_queue_push_front(ta_system *system, uint32_t index) {
     ta_actor *actor = ta_actor_at(system, index);
@@ -69,9 +70,39 @@ static uint32_t exhausted_pool(const ta_system *system) {
                                                                        : TA_POOL_SLAB;
 }
 
-/* Run one actor for up to `quantum` fuel. Returns a TA_RUN_* status. */
-static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, uint32_t *used,
-                          uint32_t *detail) {
+/* The LOG effect and record of a <log> (core->out.label, .text). */
+static void step_log(ta_system *system, uint32_t index, ta_instance *instance) {
+    ta_core *core = &system->core;
+    ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_LOG, index);
+    uint32_t text = core->out.text.length
+                        ? ta_shared_string_new(core, core->out.text.pointer, core->out.text.length)
+                        : TA_NIL;
+    if (effect) {
+        effect->auxiliary = core->out.label;
+        ta_shared_string_retain(core, effect->auxiliary);
+        effect->event_name = text;
+        ta_shared_string_retain(core, text);
+        effect->trace = ta_core_step_trace(core, instance);
+    }
+    ta_trace_record *record = ta_core_trace_step(core, instance, TA_TRACE_LOG,
+                                                 (uint32_t)(sizeof *record + sizeof(ta_trace_log)),
+                                                 instance->microstep, (const uint32_t *)0);
+    if (record) {
+        ta_trace_log *log = (ta_trace_log *)ta_trace_record_body(record);
+        log->label = core->out.label;
+        ta_shared_string_retain(core, log->label);
+        log->text = text;
+        ta_shared_string_retain(core, text);
+        ta_trace_record_commit(core->journal, record);
+    }
+    ta_shared_string_release(core, text);
+}
+
+/* Run one actor for up to `quantum` fuel. Returns a TA_RUN_* status. The fuel
+ * clock at the start of its turn is `clock`; what the kernel and the system
+ * write is stamped with it plus the fuel used so far. */
+static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, uint64_t clock,
+                          uint32_t *used, uint32_t *detail) {
     ta_core *core = &system->core;
     uint32_t fuel = quantum, debt = 0;
     uint32_t status = TA_RUN_IDLE;
@@ -84,8 +115,10 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
             status = TA_RUN_EFFECTS_FULL;
             break;
         }
+        core->trace_clock = clock + (quantum - fuel) + debt;
         uint32_t rc = ta_core_step(core, instance, &fuel);
         debt += core->overrun;
+        core->trace_clock = clock + (quantum - fuel) + debt;
         int stop = 0;
         switch (rc) {
         case TA_STEP_SEND: {
@@ -121,21 +154,12 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
             ta_system_uninvoke(system, index, &core->out);
             break;
         case TA_STEP_AUTOFORWARD:
-            ta_system_autoforward(system, &core->out);
+            ta_system_autoforward(system, index, &core->out);
             core->out.event = TA_NIL;
             break;
-        case TA_STEP_LOG: {
-            ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_LOG, index);
-            if (effect) {
-                effect->auxiliary = core->out.label;
-                ta_shared_string_retain(core, effect->auxiliary);
-                effect->event_name =
-                    core->out.text.length
-                        ? ta_shared_string_new(core, core->out.text.pointer, core->out.text.length)
-                        : TA_NIL;
-            }
+        case TA_STEP_LOG:
+            step_log(system, index, instance);
             break;
-        }
         case TA_STEP_STABLE: {
             uint32_t event = next_external(system, index);
             if (event == TA_NIL) {
@@ -192,6 +216,12 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
     return status;
 }
 
+/* Outside a run, records are stamped with the system's fuel clock. */
+static void core_trace_clock_sync(ta_system *system) {
+    system->core.trace_clock = system->fuel_clock;
+    system->core.trace_now = system->now;
+}
+
 ta_run ta_system_run(ta_system *system, uint32_t budget) {
     ta_run result;
     ta_memset(&result, 0, sizeof result);
@@ -224,7 +254,7 @@ ta_run ta_system_run(ta_system *system, uint32_t budget) {
         uint32_t q =
             system->config.quantum < budget - used ? system->config.quantum : budget - used;
         uint32_t u = 0;
-        status = run_actor(system, index, q, &u, &result.detail);
+        status = run_actor(system, index, q, system->fuel_clock + used, &u, &result.detail);
         used += u ? u : 1;
         system->stats_turns++;
         if (status != TA_RUN_IDLE) break;
@@ -237,6 +267,8 @@ ta_run ta_system_run(ta_system *system, uint32_t budget) {
         status = TA_RUN_EFFECTS_FULL;
     system->in_call = 0;
     system->stats_fuel += used;
+    system->fuel_clock += used;
+    core_trace_clock_sync(system);
     result.status = status;
     result.used = used;
     result.effect_count = system->effects_length - system->effects_head;
@@ -247,6 +279,7 @@ ta_run ta_system_run(ta_system *system, uint32_t budget) {
 void ta_system_advance_time(ta_system *system, ta_time now) {
     if (system->in_call) return;
     if (now > system->now) system->now = now;
+    core_trace_clock_sync(system);
     ta_system_fire_timers(system);
 }
 
@@ -280,6 +313,10 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
     if (index == TA_NIL) return TA_ERROR_STALE;
     ta_actor *actor = ta_actor_at(system, index);
     if (actor->state == TA_ACTOR_DONE) return TA_ERROR_STALE;
+    /* the macrostep the event starts runs under its traceparent, or in a new trace */
+    ta_string_view traceparent = {(const char *)0, 0};
+    if (event_in->size >= offsetof(ta_event_in, traceparent) + sizeof event_in->traceparent)
+        traceparent = event_in->traceparent;
     if ((event_in->flags & TA_EVENT_IN_ERROR_COMMUNICATION) &&
         actor->state == TA_ACTOR_HIBERNATED) {
         /* parked in the mailbox; moved to the internal queue when woken */
@@ -289,6 +326,8 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
         event->type = TA_EVENT_TYPE_PLATFORM;
         event->flags = TA_EVENT_FLAG_RAISE_ERROR_COMMUNICATION;
         event->sendid = opt_str_plain(core, event_in->sendid);
+        ta_trace_context value;
+        event->trace = ta_system_start_trace(system, traceparent, &value);
         release_payload(system, ta_actor_chart(system, actor), event_in->data);
         ta_system_mailbox_push(system, index, event_index);
         return TA_OK;
@@ -296,7 +335,12 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
     if (event_in->flags & TA_EVENT_IN_ERROR_COMMUNICATION) { /* SCXML: error.communication goes to
                                                           the internal queue */
         uint32_t sid = opt_str_plain(core, event_in->sendid);
-        ta_core_raise_platform(core, ta_actor_instance(system, actor), "error.communication", sid);
+        uint32_t raised = ta_core_raise_platform(core, ta_actor_instance(system, actor),
+                                                 "error.communication", sid);
+        if (raised != TA_NIL && ta_event_at(core, raised)->trace == TA_NIL) {
+            ta_trace_context value;
+            ta_event_at(core, raised)->trace = ta_system_start_trace(system, traceparent, &value);
+        }
         ta_shared_string_release(core, sid);
         release_payload(system, ta_actor_chart(system, actor), event_in->data);
         ta_system_make_runnable(system, index);
@@ -352,6 +396,8 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
         ta_event_release(core, event_index);
         return TA_ERROR_NO_MEMORY;
     }
+    ta_trace_context value;
+    event->trace = ta_system_start_trace(system, traceparent, &value);
     ta_system_mailbox_push(system, index, event_index);
     return TA_OK;
 }

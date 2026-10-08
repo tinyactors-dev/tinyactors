@@ -3,6 +3,7 @@
 #include <tinyactors/address.h>
 #include "base/memory.h"
 #include "system/system_internal.h"
+#include "trace/record.h"
 
 static ta_actor *actor_at(ta_system *system, uint32_t index) {
     return ta_actor_at(system, index);
@@ -15,6 +16,7 @@ static ta_actor *actor_at(ta_system *system, uint32_t index) {
 static void communication_error(ta_system *system, uint32_t sender, uint32_t event_index) {
     ta_core *core = &system->core;
     uint32_t sendid = ta_event_at(core, event_index)->sendid;
+    uint32_t trace = ta_event_at(core, event_index)->trace; /* the error has the send's cause */
     ta_actor *actor =
         sender != TA_NIL && ta_pool_live(&system->actors, sender) ? actor_at(system, sender) : 0;
     if (actor && actor->state == TA_ACTOR_HIBERNATED) {
@@ -25,13 +27,19 @@ static void communication_error(ta_system *system, uint32_t sender, uint32_t eve
             event->flags = TA_EVENT_FLAG_RAISE_ERROR_COMMUNICATION;
             event->sendid = sendid;
             ta_shared_string_retain(core, sendid);
+            event->trace = trace;
+            ta_trace_context_retain(core, trace);
             ta_system_mailbox_push(system, sender, pe);
         } else {
             core->dropped_errors++;
         }
     } else if (actor && actor->state != TA_ACTOR_DONE) {
-        ta_core_raise_platform(core, ta_actor_instance(system, actor), "error.communication",
-                               sendid);
+        uint32_t raised = ta_core_raise_platform(core, ta_actor_instance(system, actor),
+                                                 "error.communication", sendid);
+        if (raised != TA_NIL && ta_event_at(core, raised)->trace == TA_NIL) {
+            ta_event_at(core, raised)->trace = trace;
+            ta_trace_context_retain(core, trace);
+        }
         ta_system_make_runnable(system, sender);
     }
     ta_event_release(core, event_index);
@@ -75,6 +83,7 @@ static int forward_shared(ta_system *system, uint32_t sender, uint32_t event_ind
     ta_shared_string_retain(core, event->sendid);
     effect->payload = event->payload;
     effect->event = event_index;
+    effect->trace = ta_trace_context_value(core, event->trace);
     ta_shared_string_release(core, target);
     return 1;
 }
@@ -113,6 +122,7 @@ void ta_system_deliver(ta_system *system, uint32_t sender, uint32_t event_index,
                 effect->event_name = event->name;
                 ta_shared_string_retain(core, event->name);
                 effect->event = event_index;
+                effect->trace = ta_trace_context_value(core, event->trace);
                 ta_shared_string_release(core, target);
                 return;
             }
@@ -148,6 +158,7 @@ void ta_system_deliver(ta_system *system, uint32_t sender, uint32_t event_index,
         ta_shared_string_retain(core, event->sendid);
         effect->payload = event->payload;
         effect->event = event_index; /* payload stays alive until ack */
+        effect->trace = ta_trace_context_value(core, event->trace);
         return;
     }
     }
@@ -246,6 +257,12 @@ void ta_system_fire_timers(ta_system *system) {
         if (owner != TA_NIL) unlink_timer(system, owner, ti);
         ta_pool_free(&system->timers, ti);
         system->stats_timers++;
+        ta_event *event = ta_event_at(&system->core, timer.event);
+        if (event->trace == TA_NIL) { /* a timer of an untraced send starts a trace */
+            ta_trace_context value;
+            event->trace =
+                ta_system_start_trace(system, (ta_string_view){(const char *)0, 0}, &value);
+        }
         ta_system_deliver(system, owner, timer.event, timer.route, timer.arg, timer.target);
     }
 }
@@ -263,7 +280,7 @@ static uint32_t spawn_child(ta_system *system, uint32_t parent, uint32_t slot, u
     ta_status status;
     uint32_t ph = ta_pool_handle(&system->actors, parent);
     uint32_t c = ta_system_spawn_actor(system, chart, ta_shared_string_get(core, invokeid), payload,
-                                       ph, slot, &status);
+                                       ph, slot, (ta_string_view){(const char *)0, 0}, &status);
     ta_instance *pin = ta_actor_instance(system, actor_at(system, parent));
     if (c == TA_NIL) {
         if (status == TA_ERROR_NO_MEMORY && may_park)
@@ -324,9 +341,10 @@ uint32_t ta_system_retry_pending(ta_system *system) {
         } else {
             ta_status status;
             uint32_t ph = ta_pool_handle(&system->actors, parent);
-            uint32_t c = ta_system_spawn_actor(
-                system, request_record.source, ta_shared_string_get(core, request_record.invokeid),
-                request_record.payload, ph, request_record.slot, &status);
+            uint32_t c = ta_system_spawn_actor(system, request_record.source,
+                                               ta_shared_string_get(core, request_record.invokeid),
+                                               request_record.payload, ph, request_record.slot,
+                                               (ta_string_view){(const char *)0, 0}, &status);
             if (c == TA_NIL && status == TA_ERROR_NO_MEMORY)
                 return ta_pool_free_count(&system->actors) == 0 ? TA_POOL_ACTORS : TA_POOL_SLAB;
             if (c == TA_NIL) {
@@ -347,7 +365,37 @@ uint32_t ta_system_retry_pending(ta_system *system) {
     return TA_POOL_NONE;
 }
 
+/* The invoked record of the invoking step: the invocation, and the child
+ * (0 when the host runs it or it is not running yet). */
+static void trace_invoked(ta_system *system, ta_instance *pin, const ta_core_out *out) {
+    ta_core *core = &system->core;
+    ta_trace_record *record = ta_core_trace_step(
+        core, pin, TA_TRACE_INVOKED, (uint32_t)(sizeof *record + sizeof(ta_trace_invoked)),
+        pin->microstep, (const uint32_t *)0);
+    if (!record) return;
+    ta_trace_invoked *invoked = (ta_trace_invoked *)ta_trace_record_body(record);
+    invoked->type = out->type;
+    invoked->source = out->source;
+    invoked->invokeid = out->invokeid;
+    ta_shared_string_retain(core, invoked->type);
+    ta_shared_string_retain(core, invoked->source);
+    ta_shared_string_retain(core, invoked->invokeid);
+    uint32_t child = ta_core_invoke_child(core, pin, out->slot);
+    uint32_t c = child & TA_EXTERNAL_INVOKE_BIT ? TA_NIL : ta_system_resolve_actor(system, child);
+    invoked->child = c == TA_NIL ? 0 : child;
+    invoked->child_session = c == TA_NIL ? 0 : actor_at(system, c)->serial;
+    ta_trace_record_commit(core->journal, record);
+}
+
+static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *out);
+
 uint32_t ta_system_invoke(ta_system *system, uint32_t parent, const ta_core_out *out) {
+    uint32_t pool = invoke(system, parent, out);
+    trace_invoked(system, ta_actor_instance(system, actor_at(system, parent)), out);
+    return pool;
+}
+
+static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *out) {
     ta_core *core = &system->core;
     ta_actor *pa = actor_at(system, parent);
     ta_instance *pin = ta_actor_instance(system, pa);
@@ -380,6 +428,7 @@ uint32_t ta_system_invoke(ta_system *system, uint32_t parent, const ta_core_out 
         ta_shared_string_retain(core, out->invokeid);
         effect->payload = out->payload;
         effect->datamodel = core->chart_datamodel[ta_actor_chart(system, pa)];
+        effect->trace = ta_core_step_trace(core, pin);
         ta_core_set_invoke_child(core, pin, out->slot, tok | TA_EXTERNAL_INVOKE_BIT);
         return TA_POOL_NONE;
     }
@@ -560,9 +609,11 @@ void ta_system_uninvoke(ta_system *system, uint32_t parent, const ta_core_out *o
     ta_system_make_runnable(system, c);
 }
 
-void ta_system_autoforward(ta_system *system, const ta_core_out *out) {
+void ta_system_autoforward(ta_system *system, uint32_t parent, const ta_core_out *out) {
     ta_core *core = &system->core;
     uint32_t source = out->event;
+    /* the copy is caused by the parent's macrostep, which took the event */
+    ta_instance *pin = ta_actor_instance(system, actor_at(system, parent));
     if (out->child & TA_EXTERNAL_INVOKE_BIT) { /* external invoke: forward via host */
         ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_SEND, TA_NIL);
         if (effect) {
@@ -571,6 +622,7 @@ void ta_system_autoforward(ta_system *system, const ta_core_out *out) {
             ta_shared_string_retain(core, effect->event_name);
             effect->payload = ta_event_at(core, source)->payload;
             effect->event = source;
+            effect->trace = ta_core_step_trace(core, pin);
             return;
         }
         ta_event_release(core, source);
@@ -603,6 +655,7 @@ void ta_system_autoforward(ta_system *system, const ta_core_out *out) {
     else if (n->payload && n->datamodel < core->datamodel_count &&
              core->datamodels[n->datamodel].vtable->release)
         n->payload = 0; /* cannot share without retain: forward without data */
+    n->trace = ta_core_step_context(core, pin);
     ta_event_release(core, source);
     ta_system_mailbox_push(system, c, event_index);
 }
@@ -611,6 +664,21 @@ void ta_system_autoforward(ta_system *system, const ta_core_out *out) {
 void ta_system_done(ta_system *system, uint32_t index, ta_payload done, uint32_t final_state) {
     ta_core *core = &system->core;
     ta_actor *actor = actor_at(system, index);
+    /* the session's end is reported under its last step (the kernel kept its context) */
+    ta_instance *instance = ta_actor_instance(system, actor);
+    {
+        ta_trace_context value = ta_trace_context_value(core, instance->trace);
+        value.parent = 0;
+        ta_trace_record *record =
+            ta_system_trace_lifecycle(system, index, TA_TRACE_FINISHED,
+                                      (uint32_t)(sizeof *record + sizeof(ta_trace_finished)),
+                                      &value, 0, TA_TRACE_STEP_FINISHED);
+        if (record) {
+            ta_trace_finished *finished = (ta_trace_finished *)ta_trace_record_body(record);
+            finished->final_state = final_state;
+            ta_trace_record_commit(core->journal, record);
+        }
+    }
     uint32_t parent = (actor->flags & ACTOR_FLAG_ORPHAN)
                           ? TA_NIL
                           : ta_system_resolve_actor(system, actor->parent);
@@ -643,6 +711,7 @@ void ta_system_done(ta_system *system, uint32_t index, ta_payload done, uint32_t
                 event->flags = TA_EVENT_FLAG_FROM_CHILD | TA_EVENT_FLAG_DONE;
                 event->payload = done;
                 event->datamodel = core->chart_datamodel[ta_actor_chart(system, actor)];
+                event->trace = ta_core_step_context(core, instance);
                 done = 0;
                 ta_system_mailbox_push(system, parent, event_index);
             } else {
@@ -656,6 +725,7 @@ void ta_system_done(ta_system *system, uint32_t index, ta_payload done, uint32_t
             effect->datamodel = core->chart_datamodel[ta_actor_chart(system, actor)];
             effect->target = actor->name;
             ta_shared_string_retain(core, actor->name);
+            effect->trace = ta_core_step_trace(core, instance);
             done = 0;
             if (final_state != TA_NIL) {
                 ta_string_view fs =

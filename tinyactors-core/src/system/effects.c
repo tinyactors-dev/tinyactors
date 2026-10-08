@@ -68,6 +68,7 @@ uint32_t ta_system_effects(ta_system *system, const ta_effect **out) {
         x->datamodel = x->payload && datamodel < system->datamodel_count ? datamodel : TA_NIL;
         x->delay_hint = record->delay;
         x->session = record->serial;
+        x->trace = record->trace;
     }
     *out = effect;
     return n;

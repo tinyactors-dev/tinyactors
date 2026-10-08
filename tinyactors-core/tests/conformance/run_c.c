@@ -518,7 +518,7 @@ static int run_scenario(JSValueConst sc, const char *file) {
                    : (ta_string_view){0, 0};
             if (!im || !link(w, im) || ta_host_chart(w->host, cname, &segment, &chart) != TA_OK ||
                 ta_host_spawn(w->host, segment, chart, (ta_string_view){an, (uint32_t)strlen(an)},
-                              payload(w, input), &session) != TA_OK) {
+                              payload(w, input), (ta_string_view){0, 0}, &session) != TA_OK) {
                 snprintf(fail, sizeof fail, "%s: cannot spawn (%s)", where, w->error);
             } else {
                 conformance_actor *a = &w->actors[w->actor_count++];

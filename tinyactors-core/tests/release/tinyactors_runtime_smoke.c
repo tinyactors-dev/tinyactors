@@ -40,7 +40,7 @@ int main(void) {
     uint32_t actor = 0;
     ta_string_view name = {"smoke", 5};
     if (ta_runtime_system_new(&image, &config, NULL, 0, &system) != TA_OK ||
-        ta_system_spawn(system, 0, name, 0, &actor) != TA_OK) {
+        ta_system_spawn(system, 0, name, 0, (ta_string_view){0, 0}, &actor) != TA_OK) {
         fprintf(stderr, "tinyactors_runtime smoke: no actor\n");
         return 1;
     }

@@ -66,8 +66,7 @@ const ta_trace_record *ta_trace_next(const ta_trace_view *view, uint32_t *cursor
 
 ta_string_view ta_trace_dynamic_string(const ta_trace_view *view, uint32_t reference) {
     ta_string_view out = {(const char *)0, 0};
-    if (reference == TA_NIL || !(reference & TA_TRACE_STRING_DYNAMIC) || !view->strings)
-        return out;
+    if (reference == TA_NIL || !(reference & TA_TRACE_STRING_DYNAMIC) || !view->strings) return out;
     const uint32_t *header = (const uint32_t *)ta_pointer_add(
         view->strings, (int64_t)(reference & ~TA_TRACE_STRING_DYNAMIC) << 3);
     out.length = header[1];

@@ -133,7 +133,8 @@ static uint32_t drv_run(driver *d, int i, uint32_t fuel_per_call, int max_calls)
         switch (r) {
         case TA_STEP_SEND:
             d->sends++;
-            d->last_send = ta_trace_context_value(&d->core, ta_event_at(&d->core, out->event)->trace);
+            d->last_send =
+                ta_trace_context_value(&d->core, ta_event_at(&d->core, out->event)->trace);
             if (out->route == TA_ROUTE_SELF && d->external_count[i] < 64)
                 d->external_queue[i][d->external_count[i]++] = out->event;
             else
@@ -214,7 +215,8 @@ static void drv_trace(driver *d, uint32_t bytes, uint32_t kinds) {
     ta_journal_init(&d->journal, d->journal_memory, bytes);
     d->context_memory = aligned_alloc(8, ta_pool_slots_bytes(sizeof(ta_trace_entry), 64));
     d->context_generations = (unsigned char *)malloc(64);
-    ta_pool_init(&d->contexts, d->context_memory, d->context_generations, sizeof(ta_trace_entry), 64);
+    ta_pool_init(&d->contexts, d->context_memory, d->context_generations, sizeof(ta_trace_entry),
+                 64);
     d->core.journal = &d->journal;
     d->core.contexts = &d->contexts;
     d->core.trace_kinds = kinds;
@@ -607,7 +609,6 @@ static void test_duration_saturates(void) {
     CHECK(ta_core_parse_duration((ta_string_view){"300000000000s", 13}, &ns) && ns == UINT64_MAX);
 }
 
-
 /* ---- tracing (docs/adr/0006, section 4) ------------------------------------------------- */
 
 static const char *state_of(driver *d, uint32_t state) {
@@ -629,7 +630,7 @@ static void test_trace_records(void) {
                       "<state id='b'><transition cond='x == 1' target='c'><send event='ping'/>"
                       "</transition></state><final id='c'/>"),
                    1, 32));
-    drv_trace(&d, 1u << 16, TA_TRACE_FULL);
+    drv_trace(&d, 1u << 16, TA_TRACE_FULL | TA_TRACE_VALUES);
     ta_instance *instance = drv_spawn(&d, 0);
     ta_trace_id trace = {0x1111, 0x2222};
     ta_step_key root = {0, 0, 0, 0};
@@ -638,18 +639,19 @@ static void test_trace_records(void) {
     d.core.trace_now = 77;
     CHECK_EQUAL(drv_run(&d, 0, 1000, 100), TA_STEP_DONE);
     CHECK_EQUAL(instance->macrostep, 1);
-    CHECK_EQUAL(instance->trace, TA_NIL); /* the macrostep's context is let go at its end */
+    CHECK(instance->trace != TA_NIL); /* kept for the system to report the end under */
 
     ta_trace_record *r[32];
     uint32_t n = drv_records(&d, r, 32);
     static const uint16_t kinds[] = {
-        TA_TRACE_MACROSTEP_BEGIN, TA_TRACE_RAISED, TA_TRACE_ASSIGN, TA_TRACE_MICROSTEP, /* a */
-        TA_TRACE_MICROSTEP,                                                          /* go */
-        TA_TRACE_CONDITION,       TA_TRACE_SENT,   TA_TRACE_MICROSTEP,               /* -> c */
+        TA_TRACE_MACROSTEP_BEGIN, TA_TRACE_RAISED, TA_TRACE_ASSIGN,    TA_TRACE_MICROSTEP, /* a */
+        TA_TRACE_MICROSTEP,                                                                /* go */
+        TA_TRACE_CONDITION,       TA_TRACE_SENT,   TA_TRACE_MICROSTEP, /* -> c */
         TA_TRACE_MACROSTEP_END};
     CHECK_EQUAL(n, sizeof kinds / sizeof kinds[0]);
     for (uint32_t i = 0; i < n && i < sizeof kinds / sizeof kinds[0]; i++) {
-        if (r[i]->kind != kinds[i]) fprintf(stderr, "  record %u: kind %u, expected %u\n", i, r[i]->kind, kinds[i]);
+        if (r[i]->kind != kinds[i])
+            fprintf(stderr, "  record %u: kind %u, expected %u\n", i, r[i]->kind, kinds[i]);
         CHECK_EQUAL(r[i]->kind, kinds[i]);
     }
     if (n != sizeof kinds / sizeof kinds[0]) return;
@@ -736,7 +738,8 @@ static void test_trace_delivery(void) {
     if (n == 5) {
         CHECK_EQUAL(r[0]->kind, TA_TRACE_MACROSTEP_BEGIN);
         const ta_trace_macrostep_begin *begin = ta_trace_body(r[0]);
-        CHECK(begin->cause.session == 9 && begin->cause.macrostep == 4 && begin->cause.microstep == 2);
+        CHECK(begin->cause.session == 9 && begin->cause.macrostep == 4 &&
+              begin->cause.microstep == 2);
         CHECK_EQUAL(r[0]->parent, ta_step_key_span_id(cause));
         CHECK_EQUAL(begin->type, TA_EVENT_TYPE_EXTERNAL);
         CHECK_EQUAL(r[0]->key.macrostep, 2);
@@ -757,12 +760,12 @@ static void test_trace_delivery(void) {
 /* Kinds that are off are not written; contexts still propagate. */
 static void test_trace_unwanted_kinds(void) {
     driver d;
-    CHECK(drv_init(&d,
-                   SC("initial='a'><state id='a'><onentry><send event='e'/></onentry></state>"),
+    CHECK(drv_init(&d, SC("initial='a'><state id='a'><onentry><send event='e'/></onentry></state>"),
                    1, 32));
     drv_trace(&d, 1u << 16, TA_TRACE_BIT(TA_TRACE_MACROSTEP_END));
     ta_instance *instance = drv_spawn(&d, 0);
-    instance->trace = ta_trace_context_new(&d.core, (ta_trace_id){1, 2}, 0, (ta_step_key){0, 0, 0, 0});
+    instance->trace =
+        ta_trace_context_new(&d.core, (ta_trace_id){1, 2}, 0, (ta_step_key){0, 0, 0, 0});
     CHECK_EQUAL(drv_run(&d, 0, 1000, 100), TA_STEP_STABLE);
     ta_trace_record *r[8];
     uint32_t n = drv_records(&d, r, 8);
@@ -779,11 +782,12 @@ static void test_trace_unwanted_kinds(void) {
  * count comes first once there is room again. */
 static void test_trace_journal_full(void) {
     driver d;
-    CHECK(drv_init(&d,
-                   SC("initial='a'><state id='a'><transition event='e' target='a'/></state>"), 1, 32));
+    CHECK(drv_init(&d, SC("initial='a'><state id='a'><transition event='e' target='a'/></state>"),
+                   1, 32));
     drv_trace(&d, 256, TA_TRACE_FULL); /* room for two records */
     ta_instance *instance = drv_spawn(&d, 0);
-    instance->trace = ta_trace_context_new(&d.core, (ta_trace_id){1, 2}, 0, (ta_step_key){0, 0, 0, 0});
+    instance->trace =
+        ta_trace_context_new(&d.core, (ta_trace_id){1, 2}, 0, (ta_step_key){0, 0, 0, 0});
     CHECK_EQUAL(drv_run(&d, 0, 1000, 100), TA_STEP_STABLE);
     CHECK(d.journal.lost > 0);
     ta_trace_record *r[8];

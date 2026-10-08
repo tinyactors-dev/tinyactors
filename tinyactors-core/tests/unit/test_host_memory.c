@@ -265,7 +265,8 @@ static ta_status spawn(workload *w, const char *chart, uint64_t *session) {
     ta_status status = ta_host_chart(w->host, (ta_string_view){chart, (uint32_t)strlen(chart)},
                                      &segment, &index);
     if (status != TA_OK) return status;
-    return ta_host_spawn(w->host, segment, index, (ta_string_view){0, 0}, 0, session);
+    return ta_host_spawn(w->host, segment, index, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0},
+                         session);
 }
 
 static ta_host_config workload_config(workload *w) {
@@ -609,14 +610,18 @@ static void test_fixed_arena(void) {
     CHECK_EQUAL(ta_host_add_image(host, &im.image[0], NULL), TA_OK);
     CHECK_EQUAL(ta_host_add_image(host, &im.image[1], NULL), TA_OK);
     uint64_t p = 0, q = 0, extra = 0;
-    CHECK_EQUAL(ta_host_spawn(host, 0, 0, (ta_string_view){0, 0}, 0, &p), TA_OK);
-    CHECK_EQUAL(ta_host_spawn(host, 1, 0, (ta_string_view){0, 0}, 0, &q), TA_OK);
+    CHECK_EQUAL(ta_host_spawn(host, 0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &p),
+                TA_OK);
+    CHECK_EQUAL(ta_host_spawn(host, 1, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &q),
+                TA_OK);
     CHECK(p == 1 && q == (1ull << 32) + 1);
     ta_system_stats stats;
     stats.size = sizeof stats;
     ta_system_stats_get(ta_host_system(host, 0), &stats);
     CHECK_EQUAL(stats.actors_capacity, 1);
-    CHECK_EQUAL(ta_host_spawn(host, 0, 0, (ta_string_view){0, 0}, 0, &extra), TA_OK);
+    CHECK_EQUAL(
+        ta_host_spawn(host, 0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &extra),
+        TA_OK);
     ta_system_stats_get(ta_host_system(host, 0), &stats);
     CHECK(stats.actors_capacity >= 2); /* relocated, inside the arena */
     ta_event_in event;

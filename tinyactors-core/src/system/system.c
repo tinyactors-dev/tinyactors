@@ -4,6 +4,7 @@
 #include "base/format.h"
 #include "base/memory.h"
 #include "system/system_internal.h"
+#include "trace/record.h"
 
 /* ---- configuration ------------------------------------------------------------------ */
 
@@ -41,6 +42,26 @@ static void normalize_config(const ta_image_view *view, const ta_system_config *
     if (!config->quantum) config->quantum = 1000;
     if (!config->ticks_per_second) config->ticks_per_second = 1000000000ull;
     if (!config->string_bytes) config->string_bytes = 16384 + config->max_actors * 16;
+    /* tracing: on by default, at full detail (docs/adr/0006); off carves nothing */
+    if (config->tracing != TA_TRACING_DISABLED) {
+        config->tracing = TA_TRACING_ENABLED;
+        if (!config->trace_kinds) config->trace_kinds = TA_TRACE_FULL;
+        if (!config->trace_bytes) {
+            uint64_t bytes = (uint64_t)config->max_events * TA_TRACE_BYTES_PER_EVENT;
+            config->trace_bytes = bytes > 0x40000000u ? 0x40000000u : (uint32_t)bytes;
+        }
+        if (config->trace_bytes < TA_TRACE_BYTES_MIN) config->trace_bytes = TA_TRACE_BYTES_MIN;
+        if (config->trace_bytes > 0x40000000u) config->trace_bytes = 0x40000000u;
+        config->trace_bytes &= ~(TA_JOURNAL_ALIGN - 1);
+        if (!config->trace_contexts) config->trace_contexts = config->max_events;
+        if (config->trace_contexts > TA_POOL_MAX_CAPACITY)
+            config->trace_contexts = TA_POOL_MAX_CAPACITY;
+        if (!config->trace_sample_whole)
+            config->trace_sample_parts = config->trace_sample_whole = 1;
+    } else {
+        config->trace_kinds = config->trace_bytes = config->trace_contexts = 0;
+        config->trace_sample_parts = config->trace_sample_whole = 0;
+    }
     if (!config->instance_bytes) {
         uint32_t m = 0;
         for (uint32_t i = 0; i < view->chart_count; i++) {
@@ -61,7 +82,7 @@ typedef struct carved {
         timer_generations, heap_nodes, heap_positions, workspace_slots, workspace_generations,
         request_slots, request_generations;
     size_t slab_pages, slab_metadata, effects, effect_views, sessions, chart_datamodels,
-        chart_contexts;
+        chart_contexts, trace_storage, context_slots, context_generations;
     uint32_t workspace_size, page_count, session_capacity;
 } carved;
 
@@ -103,6 +124,11 @@ static void carve(ta_arena *arena, const ta_image_view *view, const ta_system_co
     o->sessions = ta_arena_alloc(arena, sizeof(uint32_t) * o->session_capacity, 4);
     o->chart_datamodels = ta_arena_alloc(arena, view->chart_count, 1);
     o->chart_contexts = ta_arena_alloc(arena, sizeof(void *) * view->chart_count, TA_ALIGN_MAX);
+    /* tracing (0 bytes when it is off) */
+    o->trace_storage = ta_arena_alloc(arena, config->trace_bytes, TA_ALIGN_MAX);
+    o->context_slots = ta_arena_alloc(
+        arena, ta_pool_slots_bytes(sizeof(ta_trace_entry), config->trace_contexts), TA_ALIGN_MAX);
+    o->context_generations = ta_arena_alloc(arena, config->trace_contexts, 1);
 }
 
 ta_status ta_system_layout(const ta_image *image, const ta_system_config *config, size_t *bytes) {
@@ -145,6 +171,14 @@ static void rebind(ta_system *system, const ta_image *image) {
     uint32_t r = system->config.max_events / 8;
     core->reserve = r > 4 ? 4 : r;
     core->overrun_max = system->config.quantum / 2 + 16;
+    int tracing = system->config.tracing == TA_TRACING_ENABLED;
+    core->journal = tracing ? &system->journal : (ta_journal *)0;
+    core->contexts = tracing ? &system->contexts : (ta_pool *)0;
+    core->trace_kinds = tracing ? system->config.trace_kinds : 0;
+    core->trace_clock = system->fuel_clock;
+    core->trace_now = system->now;
+    system->trace_threshold = ta_trace_ratio_threshold(system->config.trace_sample_parts,
+                                                       system->config.trace_sample_whole);
 }
 
 static int string_equal_c_string(ta_string_view a, const char *b) {
@@ -281,6 +315,12 @@ ta_status ta_system_init(void *memory, size_t length, const ta_image *image,
     ta_index_queue_init(&system->workspace_queue);
     ta_index_queue_init(&system->wake_queue);
     set_rels(system, &arena, &o);
+    ta_journal_init(&system->journal, ta_arena_pointer(&arena, o.trace_storage),
+                    normalized.trace_bytes);
+    ta_pool_init(&system->contexts, ta_arena_pointer(&arena, o.context_slots),
+                 (unsigned char *)ta_arena_pointer(&arena, o.context_generations),
+                 sizeof(ta_trace_entry), normalized.trace_contexts);
+    ta_trace_generator_seed(&system->generator, normalized.trace_seed);
     system->effects_capacity = normalized.outbox;
     uint32_t *session = SYSTEM_POINTER(system, sessions_relative, uint32_t);
     for (uint32_t i = 0; i < system->session_capacity; i++)
@@ -403,9 +443,38 @@ void ta_system_actor_variables(ta_system *system, const ta_actor *actor,
     variables->io_processors = buffer->io_processors;
 }
 
+/* The bootstrap's context: a root's starts a trace (or continues the host's
+ * traceparent); an invoked child's is caused by its parent's current step.
+ * Then the spawned record. */
+static void trace_spawn(ta_system *system, uint32_t index, ta_instance *instance, uint32_t parent,
+                        ta_string_view traceparent) {
+    ta_core *core = &system->core;
+    ta_trace_context value;
+    uint32_t parent_index = parent ? ta_system_resolve_actor(system, parent) : TA_NIL;
+    if (parent_index != TA_NIL) {
+        ta_actor *parent_actor = ta_actor_at(system, parent_index);
+        instance->trace = parent_actor->state == TA_ACTOR_HIBERNATED
+                              ? TA_NIL
+                              : ta_core_step_context(core, ta_actor_instance(system, parent_actor));
+        value = ta_trace_context_value(core, instance->trace);
+    } else {
+        instance->trace = ta_system_start_trace(system, traceparent, &value);
+    }
+    ta_actor *actor = ta_actor_at(system, index);
+    ta_trace_record *record = ta_system_trace_lifecycle(
+        system, index, TA_TRACE_SPAWNED, (uint32_t)(sizeof *record + sizeof(ta_trace_spawned)),
+        &value, 0, TA_TRACE_STEP_SPAWNED);
+    if (!record) return;
+    ta_trace_spawned *spawned = (ta_trace_spawned *)ta_trace_record_body(record);
+    spawned->name = actor->name;
+    ta_shared_string_retain(core, actor->name);
+    spawned->parent = parent;
+    ta_trace_record_commit(core->journal, record);
+}
+
 uint32_t ta_system_spawn_actor(ta_system *system, uint32_t chart, ta_string_view name,
                                ta_payload params, uint32_t parent, uint32_t parent_slot,
-                               ta_status *status) {
+                               ta_string_view traceparent, ta_status *status) {
     ta_core *core = &system->core;
     *status = TA_OK;
     if (chart >= system->chart_count) {
@@ -454,6 +523,7 @@ uint32_t ta_system_spawn_actor(ta_system *system, uint32_t chart, ta_string_view
         return TA_NIL;
     }
     ta_system_session_insert(system, index);
+    trace_spawn(system, index, ta_actor_instance(system, actor), parent, traceparent);
     actor->state = TA_ACTOR_IDLE;
     actor->flags |= ACTOR_FLAG_TOUCHED;
     ta_system_make_runnable(system, index);
@@ -479,6 +549,18 @@ static int unqueue(ta_system *system, ta_index_queue *queue, uint32_t index) {
 void ta_system_reclaim(ta_system *system, uint32_t index) {
     ta_core *core = &system->core;
     ta_actor *actor = ta_actor_at(system, index);
+    {
+        /* destroyed: in the trace the session ended in, if it ended traced */
+        ta_trace_context value;
+        ta_memset(&value, 0, sizeof value);
+        if (actor->state != TA_ACTOR_HIBERNATED)
+            value = ta_trace_context_value(core, ta_actor_instance(system, actor)->trace);
+        value.parent = 0;
+        ta_trace_record *record =
+            ta_system_trace_lifecycle(system, index, TA_TRACE_DESTROYED, (uint32_t)sizeof *record,
+                                      &value, 0, TA_TRACE_STEP_DESTROYED);
+        if (record) ta_trace_record_commit(core->journal, record);
+    }
     if (actor->state == TA_ACTOR_RUNNABLE && unqueue(system, &system->run_queue, index))
         system->runnable_count--;
     if (actor->state == TA_ACTOR_WAIT_WORKSPACE) unqueue(system, &system->workspace_queue, index);
@@ -520,17 +602,18 @@ ta_status ta_system_boot(ta_system *system) {
         ta_status status;
         ta_system_spawn_actor(system, view->actors[i].chart,
                               ta_image_view_string(view, view->actors[i].name), 0, 0, TA_NIL,
-                              &status);
+                              (ta_string_view){(const char *)0, 0}, &status);
         if (status != TA_OK) return status;
     }
     return TA_OK;
 }
 
 ta_status ta_system_spawn(ta_system *system, uint32_t chart, ta_string_view name, ta_payload params,
-                          uint32_t *actor) {
+                          ta_string_view traceparent, uint32_t *actor) {
     GUARD(system);
     ta_status status;
-    uint32_t index = ta_system_spawn_actor(system, chart, name, params, 0, TA_NIL, &status);
+    uint32_t index =
+        ta_system_spawn_actor(system, chart, name, params, 0, TA_NIL, traceparent, &status);
     if (actor) *actor = index == TA_NIL ? 0 : ta_pool_handle(&system->actors, index);
     return status;
 }
@@ -586,6 +669,14 @@ void ta_system_stats_get(const ta_system *system, ta_system_stats *o) {
     z.wakes_pending = system->pending_wake_count;
     z.hibernations = system->stats_hibernations;
     z.wakes = system->stats_wakes;
+    z.trace_bytes = system->journal.used;
+    z.trace_bytes_capacity = system->journal.capacity;
+    z.trace_contexts = system->contexts.used;
+    z.trace_contexts_capacity = system->contexts.capacity;
+    z.trace_records = system->journal.written_total;
+    z.trace_records_lost = system->journal.lost_total;
+    z.trace_contexts_dropped = system->core.contexts_dropped;
+    z.fuel_clock = system->fuel_clock;
     uint32_t n = o->size && o->size < sizeof z ? o->size : (uint32_t)sizeof z;
     ta_memcpy(o, &z, n);
     o->size = n;
@@ -618,6 +709,10 @@ uint32_t ta_system_actor_by_name(const ta_system *system, ta_string_view name) {
 
 void ta_system_deinit(ta_system *system) {
     if (!system || system->magic != TA_SYSTEM_MAGIC) return;
+    /* nothing more is traced; what the journal holds is let go */
+    system->core.trace_kinds = 0;
+    for (ta_trace_view view; ta_system_trace(system, &view);)
+        ta_system_trace_ack(system, view.length);
     /* the queues die with the system: drop them first so reclaiming a runnable
      * actor does not unlink it from a (singly linked) queue — O(n) each */
     ta_index_queue_init(&system->run_queue);
@@ -713,10 +808,16 @@ ta_status ta_system_relocate(ta_system *system, void *new_memory, size_t new_len
                              const ta_system_config *new_config, ta_system **out) {
     GUARD(system);
     const ta_image_view *view = &system->core.image_view;
-    ta_system_config config;
-    normalize_config(view, new_config ? new_config : &system->config, &config);
+    ta_system_config config, wanted;
+    normalize_config(view, new_config ? new_config : &system->config, &wanted);
+    /* a system keeps tracing on or off for its life: events hold contexts */
+    wanted.tracing = system->config.tracing;
+    normalize_config(view, &wanted, &config);
     config.io_processors = system->config.io_processors;
     config.io_processor_count = system->config.io_processor_count;
+    if (config.trace_contexts < system->contexts.high_water_mark ||
+        config.trace_bytes < system->journal.used)
+        return TA_ERROR_INVALID;
     if (config.max_actors < system->actors.high_water_mark ||
         config.max_events < system->events.high_water_mark ||
         config.max_timers < system->config.max_timers ||
@@ -754,6 +855,11 @@ ta_status ta_system_relocate(ta_system *system, void *new_memory, size_t new_len
                  (ta_slab_page *)ta_arena_pointer(&arena, o.slab_metadata), o.page_count,
                  &system->slab);
     set_rels(new_system, &arena, &o);
+    ta_journal_copy(&new_system->journal, ta_arena_pointer(&arena, o.trace_storage),
+                    config.trace_bytes, &system->journal);
+    ta_pool_copy(&new_system->contexts, ta_arena_pointer(&arena, o.context_slots),
+                 (unsigned char *)ta_arena_pointer(&arena, o.context_generations),
+                 config.trace_contexts, &system->contexts);
     new_system->effects_capacity = config.outbox;
     ta_effect_record *old_effects = SYSTEM_POINTER(system, effects_relative, ta_effect_record),
                      *new_effects = SYSTEM_POINTER(new_system, effects_relative, ta_effect_record);
@@ -796,13 +902,16 @@ ta_status ta_system_snapshot(const ta_system *system, void *buffer, size_t capac
      * empty between calls, and the datamodel contexts are re-attached by the
      * restore. Only the image hash survives: the restore validates it. */
     ta_system *t = (ta_system *)buffer;
+    ta_journal_clear_unused(&t->journal); /* acknowledged records are dead storage */
     ta_core *core = &t->core;
     uint64_t hash = core->image_view.hash;
     uint32_t dropped = core->dropped_errors, overrun = core->overrun;
+    uint64_t contexts_dropped = core->contexts_dropped;
     ta_memset(core, 0, sizeof *core);
     core->image_view.hash = hash;
     core->dropped_errors = dropped;
     core->overrun = overrun;
+    core->contexts_dropped = contexts_dropped;
     ta_memset(t->datamodels, 0, sizeof t->datamodels); /* host pointers; re-bound on restore */
     t->config.io_processors = (const ta_io_processor_descriptor *)0;
     ta_memset((unsigned char *)buffer + t->chart_contexts_relative, 0,

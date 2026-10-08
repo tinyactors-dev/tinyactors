@@ -845,6 +845,8 @@ static void system_open(run *r, chart_image *ci, uint64_t first_serial) {
     r->config.ticks_per_second = 1000; /* epoch ms */
     r->config.quantum = 100000;
     r->config.first_serial = first_serial;
+    /* the extension has no tracing API yet: nothing would read the records */
+    r->config.tracing = TA_TRACING_DISABLED;
     r->config.io_processors = r->io_processors;
     r->config.io_processor_count = (uint32_t)r->io_processor_count;
     size_t need;
@@ -1802,7 +1804,7 @@ static Datum spawn_impl(FunctionCallInfo fcinfo) {
                                 : 0;
         ta_string_view nm = name ? (ta_string_view){name, (uint32_t)strlen(name)}
                                  : ta_image_chart_name(&ci->image, c);
-        if (ta_system_spawn(r.system, c, nm, params, &r.actor) != TA_OK)
+        if (ta_system_spawn(r.system, c, nm, params, (ta_string_view){0, 0}, &r.actor) != TA_OK)
             ereport(ERROR, (errmsg("tinyactors: cannot start an actor of %s", chart)));
         ta_actor_info actor_info;
         actor_info.size = sizeof actor_info;

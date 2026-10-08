@@ -780,9 +780,9 @@ static JSValue h_spawn(JSContext *context, JSValueConst this_value, int argc, JS
     } else {
         ta_payload payload = argc > 3 ? payload_arg(context, system, argv[3]) : 0;
         uint64_t session = 0;
-        ta_status status =
-            ta_host_spawn(system->host, segment, c,
-                          (ta_string_view){name ? name : "", (uint32_t)nl}, payload, &session);
+        ta_status status = ta_host_spawn(system->host, segment, c,
+                                         (ta_string_view){name ? name : "", (uint32_t)nl}, payload,
+                                         (ta_string_view){0, 0}, &session);
         if (status != TA_OK && payload)
             ta_datamodel_ecmascript_vtable()->release(system->ecmascript, payload);
         r = status == TA_OK ? JS_NewFloat64(context, actor_id(si, session))
@@ -1780,7 +1780,7 @@ static void system_operation(int si, bench_operation *operation) {
         uint64_t session = 0;
         ta_status status = ta_host_spawn(system->host, segment, chart,
                                          (ta_string_view){name, (uint32_t)strlen(name)},
-                                         operation->payload, &session);
+                                         operation->payload, (ta_string_view){0, 0}, &session);
         if (status != TA_OK) {
             system->spawn_failed++;
             release(system, operation->payload); /* a failed spawn leaves it with us */

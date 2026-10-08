@@ -205,7 +205,8 @@ static employee *hire(int dept, int lead) {
     uint32_t actor = 0;
     ta_status status;
     while ((status = ta_system_spawn(simulation_system, 0, (ta_string_view){"", 0},
-                                     json_payload(buffer), &actor)) == TA_ERROR_NO_MEMORY &&
+                                     json_payload(buffer), (ta_string_view){0, 0}, &actor)) ==
+               TA_ERROR_NO_MEMORY &&
            ta_runtime_system_grow(&simulation_system) == TA_OK)
         ;
     if (status != TA_OK) {

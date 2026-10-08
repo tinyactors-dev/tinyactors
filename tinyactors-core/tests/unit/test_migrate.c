@@ -241,8 +241,12 @@ static void test_upgrade_roundtrip(void) {
     world w;
     CHECK(world_open(&w, V1, V2, 1, 0));
     uint32_t a, peer;
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, &a), TA_OK);
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){"peer", 4}, 0, &peer), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
+    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){"peer", 4}, 0,
+                                (ta_string_view){0, 0}, &peer),
+                TA_OK);
     run(&w);
     ta_event_in event;
     memset(&event, 0, sizeof event);
@@ -333,7 +337,9 @@ static void test_failed_adopt_keeps_blob(void) {
     world w;
     CHECK(world_open(&w, V1, V2, 1, 1)); /* the new system has room for one timer */
     uint32_t a, b;
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, &a), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
     run(&w);
     ta_event_in event;
     memset(&event, 0, sizeof event);
@@ -382,7 +388,9 @@ static void test_export_preconditions(void) {
                      V2, 1, 0));
     uint32_t a;
     size_t length;
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, &a), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
     CHECK_EQUAL(ta_actor_export(w.system[0], a, blob, sizeof blob, &length),
                 TA_ERROR_STATE); /* runnable */
     run(&w);
@@ -476,7 +484,9 @@ static void test_session_tree(void) {
     world w;
     CHECK(world_open(&w, TREE, TREE, 1, 8));
     uint32_t a;
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, &a), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
     run(&w);
     CHECK_EQUAL(actors_in(&w, 0), 3u); /* parent, kid, grandchild */
     send_to(&w, 0, a, "ping");
@@ -550,7 +560,9 @@ static void test_session_tree_rollback(void) {
     world w;
     CHECK(world_open(&w, TREE, TREE, 1, 8));
     uint32_t a;
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, &a), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
     run(&w);
     send_to(&w, 0, a, "later"); /* a timer with a payload, in the root */
     size_t length = 0;
@@ -605,7 +617,9 @@ static void test_vanished_child(void) {
     world w;
     CHECK(world_open(&w, TREE, TREE, 1, 8));
     uint32_t a;
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, &a), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
     run(&w);
     ta_actor_info actor_info;
     actor_info.size = sizeof actor_info;
@@ -646,7 +660,9 @@ static void history_case(const char *v2, const char *expect_after_back) {
     world w;
     CHECK(world_open(&w, NULLSC("initial='s'>" HISTORY_CHART), v2, 0, 0));
     uint32_t a, b;
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, &a), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
     run(&w);
     const char *events[] = {"two", "out"};
     for (int i = 0; i < 2; i++) {
@@ -711,7 +727,9 @@ static void test_removed_state_late_binding(void) {
              "<state id='later'><datamodel><data id='lv' expr='5'/></datamodel></state></state>"),
         1, 0));
     uint32_t a, b;
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, &a), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
     run(&w);
     ta_event_in event;
     memset(&event, 0, sizeof event);
@@ -751,7 +769,9 @@ static void test_upgrade_declarations(void) {
              "</transition></state>"),
         1, 0));
     uint32_t a, b;
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, &a), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
     run(&w);
     ta_event_in event;
     memset(&event, 0, sizeof event);
@@ -774,7 +794,9 @@ static void test_failed_send_keeps_payload(void) {
     world w;
     CHECK(world_open(&w, V1, V2, 1, 0));
     uint32_t a;
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, &a), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
     run(&w);
     ta_event_in event;
     memset(&event, 0, sizeof event);
@@ -829,7 +851,9 @@ static void test_generated_ids_unique_across_adopt(void) {
     world w;
     CHECK(world_open(&w, IDS, IDS, 1, 4));
     uint32_t a, b;
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, &a), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
     run(&w);
     ta_event_in event;
     memset(&event, 0, sizeof event);
@@ -874,7 +898,9 @@ static void test_isolated_session_upgrade(void) {
     world w;
     CHECK(world_open(&w, ISO, ISO, 1, 4));
     uint32_t a, b;
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, &a), TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
     run(&w);
     ta_event_in event;
     memset(&event, 0, sizeof event);

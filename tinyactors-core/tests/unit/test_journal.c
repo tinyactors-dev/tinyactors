@@ -92,7 +92,7 @@ static void test_wrapping(void) {
     for (uint32_t i = 0; i < 4; i++)
         CHECK(write_record(&journal, 24, i)); /* 96 bytes */
     uint32_t got[8], read;
-    ta_journal_release(&journal, 48); /* records 0 and 1: [48, 96) left */
+    ta_journal_release(&journal, 48);     /* records 0 and 1: [48, 96) left */
     CHECK(write_record(&journal, 32, 4)); /* fits before the end: [96, 128) */
     CHECK(write_record(&journal, 40, 5)); /* 0 bytes left at the end: wraps to [0, 40) */
     CHECK_EQUAL(journal.wrapped, 1);
@@ -232,12 +232,42 @@ static void test_random(void) {
     CHECK(lost > 0); /* the workload does fill the ring */
 }
 
+/* Dead storage is zeroed for a snapshot; the records stay. */
+static void test_clear_unused(void) {
+    ta_journal journal;
+    memset(storage_a, 0xEE, sizeof storage_a);
+    ta_journal_init(&journal, storage_a, 128);
+    for (uint32_t i = 0; i < 4; i++)
+        CHECK(write_record(&journal, 24, i));
+    ta_journal_release(&journal, 48);
+    CHECK(write_record(&journal, 32, 4));
+    CHECK(write_record(&journal, 16, 5)); /* wrapped: [48, 128) then [0, 16) */
+    ta_journal_clear_unused(&journal);
+    const unsigned char *bytes = (const unsigned char *)storage_a;
+    int dead_zero = 1;
+    for (uint32_t i = 16; i < 48; i++)
+        dead_zero &= bytes[i] == 0;
+    CHECK(dead_zero);
+    uint32_t got[8], read;
+    CHECK_EQUAL(read_piece(&journal, got, 8, &read), 3);
+    ta_journal_release(&journal, read);
+    CHECK_EQUAL(read_piece(&journal, got, 8, &read), 1);
+    CHECK_EQUAL(got[0], 5);
+    ta_journal_release(&journal, read);
+    ta_journal_clear_unused(&journal);
+    dead_zero = 1;
+    for (uint32_t i = 0; i < 128; i++)
+        dead_zero &= bytes[i] == 0;
+    CHECK(dead_zero);
+}
+
 int main(void) {
     RUN(test_write_and_read);
     RUN(test_wrapping);
     RUN(test_full);
     RUN(test_relocation);
     RUN(test_copy);
+    RUN(test_clear_unused);
     RUN(test_random);
     TEST_MAIN_END();
 }

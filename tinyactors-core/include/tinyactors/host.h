@@ -110,9 +110,11 @@ TA_API ta_status ta_host_boot(ta_host *h, uint32_t segment);
 TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
 
 /* ---- actors (by session id, host-wide) -------------------------------------- */
-/* Spawn in (segment, chart) — usually the current version (ta_host_chart). */
+/* Spawn in (segment, chart) — usually the current version (ta_host_chart).
+ * The bootstrap runs under `traceparent` (W3C text) when it parses, else in a
+ * new trace. */
 TA_API ta_status ta_host_spawn(ta_host *h, uint32_t segment, uint32_t chart, ta_string_view name,
-                               ta_payload params, uint64_t *session);
+                               ta_payload params, ta_string_view traceparent, uint64_t *session);
 /* Where a session lives now: segment and actor handle there. */
 TA_API ta_status ta_host_locate(const ta_host *h, uint64_t session, uint32_t *segment,
                                 uint32_t *actor);

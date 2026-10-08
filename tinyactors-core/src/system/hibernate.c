@@ -31,9 +31,10 @@
  * resident with `instance` = chart index. */
 #include "base/memory.h"
 #include "system/system_internal.h"
+#include "trace/record.h"
 
 #define HIBERNATION_MAGIC   0x42484154u /* "TAHB" */
-#define HIBERNATION_VERSION 3u /* 3: the 64-byte instance header (docs/adr/0006) */
+#define HIBERNATION_VERSION 3u          /* 3: the 64-byte instance header (docs/adr/0006) */
 
 typedef struct hibernation_header {
     uint32_t magic, version;
@@ -165,7 +166,7 @@ static uint32_t align4(uint32_t n) {
 /* ---- blob formats ------------------------------------------------------------------ */
 
 #define EXPORT_MAGIC    0x58454154u /* "TAEX" */
-#define EXPORT_VERSION  3u /* 3: the 64-byte instance header */
+#define EXPORT_VERSION  3u          /* 3: the 64-byte instance header */
 #define EXPORT_MIGRATED 1u /* translated by ta_blob_migrate: one session, to be upgraded */
 
 typedef struct export_header {
@@ -440,11 +441,23 @@ static ta_status write_session(ta_system *system, uint32_t index, uint32_t root,
     return TA_OK;
 }
 
+/* A lifecycle record of hibernation (TA_TRACE_UNLOADED, TA_TRACE_LOADED):
+ * outside every macrostep, in a trace of its own. */
+static void trace_residency(ta_system *system, uint32_t index, uint32_t kind, uint64_t macrostep) {
+    ta_trace_context none;
+    ta_memset(&none, 0, sizeof none);
+    ta_trace_record *record = ta_system_trace_lifecycle(
+        system, index, kind, (uint32_t)sizeof *record, &none, macrostep,
+        kind == TA_TRACE_UNLOADED ? TA_TRACE_STEP_UNLOADED : TA_TRACE_STEP_LOADED);
+    if (record) ta_trace_record_commit(system->core.journal, record);
+}
+
 /* Free the instance of a (blob-written) actor; the record stays, hibernated. */
 static void unload(ta_system *system, uint32_t index) {
     ta_core *core = &system->core;
     ta_actor *actor = ta_actor_at(system, index);
     ta_instance *instance = ta_actor_instance(system, actor);
+    trace_residency(system, index, TA_TRACE_UNLOADED, instance->macrostep);
     uint32_t chart = instance->chart;
     const ta_chart_record *chart_record = &core->image_view.charts[chart];
     uint32_t *ids = ta_instance_word(instance, ta_instance_layout_of(chart_record).invoke_ids);
@@ -496,7 +509,11 @@ static void leave(ta_system *system, uint32_t index) {
         ta_pool_free(&system->timers, ti);
     }
     unload(system, index);
+    /* it leaves, it is not destroyed: it goes on where the blob is adopted */
+    uint32_t kinds = core->trace_kinds;
+    core->trace_kinds &= ~TA_TRACE_BIT(TA_TRACE_DESTROYED);
     ta_system_reclaim(system, index);
+    core->trace_kinds = kinds;
 }
 
 ta_status ta_actor_export(ta_system *system, uint32_t actor, void *buffer, size_t capacity,
@@ -709,6 +726,7 @@ ta_status ta_actor_wake(ta_system *system, uint32_t actor, const void *blob, siz
     actor_record->state = TA_ACTOR_IDLE;
     system->hibernated_count--;
     system->stats_wakes++;
+    trace_residency(system, index, TA_TRACE_LOADED, instance->macrostep);
     /* error.communication reported while hibernated belongs to the internal
      * queue (processed before the mailbox, as if raised at the time) */
     uint32_t prev = TA_NIL;
@@ -716,7 +734,12 @@ ta_status ta_actor_wake(ta_system *system, uint32_t actor, const void *blob, siz
         ta_event *event = ta_event_at(core, event_index);
         uint32_t nx = event->next;
         if (event->flags & TA_EVENT_FLAG_RAISE_ERROR_COMMUNICATION) {
-            ta_core_raise_platform(core, instance, "error.communication", event->sendid);
+            uint32_t raised =
+                ta_core_raise_platform(core, instance, "error.communication", event->sendid);
+            if (raised != TA_NIL && ta_event_at(core, raised)->trace == TA_NIL) {
+                ta_event_at(core, raised)->trace = event->trace; /* the failed send's cause */
+                ta_trace_context_retain(core, event->trace);
+            }
             if (prev == TA_NIL)
                 actor_record->mailbox_head = nx;
             else
@@ -878,6 +901,7 @@ static ta_status adopt_member(ta_system *system, const blob_view *view, uint64_t
     }
     ta_system_session_insert(system, index);
     actor->flags |= ACTOR_FLAG_TOUCHED;
+    trace_residency(system, index, TA_TRACE_LOADED, ta_actor_instance(system, actor)->macrostep);
     *index_out = index;
     return TA_OK;
 }
@@ -886,7 +910,10 @@ static ta_status adopt_member(ta_system *system, const blob_view *view, uint64_t
  * sends' payloads stay with the blob. */
 static void unadopt(ta_system *system, uint32_t index) {
     drop_timers(system, ta_actor_at(system, index));
+    uint32_t kinds = system->core.trace_kinds; /* it was never here */
+    system->core.trace_kinds &= ~TA_TRACE_BIT(TA_TRACE_DESTROYED);
     ta_system_reclaim(system, index);
+    system->core.trace_kinds = kinds;
 }
 
 /* the export header of a blob; 0 if it is not one for this image */

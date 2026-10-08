@@ -9,8 +9,7 @@
 /* Dynamic strings in records are the kernel's slab strings. */
 TA_STATIC_ASSERT(TA_STRING_REF_SLAB == TA_TRACE_STRING_DYNAMIC, slab_strings_are_dynamic_strings);
 
-uint32_t ta_trace_context_new(ta_core *core, ta_trace_id trace, uint32_t flags,
-                              ta_step_key cause) {
+uint32_t ta_trace_context_new(ta_core *core, ta_trace_id trace, uint32_t flags, ta_step_key cause) {
     if (!core->contexts) return TA_NIL;
     uint32_t context = ta_pool_alloc(core->contexts);
     if (context == TA_NIL) {
@@ -85,8 +84,7 @@ ta_trace_context ta_core_step_trace(const ta_core *core, const ta_instance *inst
     ta_memset(&value, 0, sizeof value);
     if (instance->trace == TA_NIL) return value;
     const ta_trace_entry *macrostep = ta_trace_entry_at(core, instance->trace);
-    ta_step_key step = {trace_session(core, instance), instance->macrostep, instance->microstep,
-                        0};
+    ta_step_key step = {trace_session(core, instance), instance->macrostep, instance->microstep, 0};
     value.trace = macrostep->trace;
     value.parent = ta_step_key_span_id(step);
     value.flags = macrostep->flags;

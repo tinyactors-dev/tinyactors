@@ -33,8 +33,8 @@ typedef struct ta_journal {
     uint32_t used;            /* committed bytes not yet released (skipped bytes not counted) */
     uint32_t lost;            /* reservations refused since ta_journal_take_lost */
     uint32_t pad;
-    uint64_t lost_total;      /* reservations refused, ever */
-    uint64_t written_total;   /* records committed, ever */
+    uint64_t lost_total;    /* reservations refused, ever */
+    uint64_t written_total; /* records committed, ever */
 } ta_journal;
 
 TA_INLINE uint32_t ta_journal_size(uint32_t size) {
@@ -67,6 +67,10 @@ TA_INLINE uint32_t ta_journal_take_lost(ta_journal *journal) {
     journal->lost = 0;
     return lost;
 }
+
+/* Zero the storage that holds no committed record (released or skipped
+ * bytes), so a copy of it carries no residue. */
+void ta_journal_clear_unused(ta_journal *journal);
 
 /* Copy the committed records into another storage, not overlapping the
  * source's (of any capacity that holds them: at least `used` bytes), oldest

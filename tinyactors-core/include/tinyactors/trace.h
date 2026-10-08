@@ -48,7 +48,7 @@ typedef struct ta_trace_context {
 enum { TA_TRACE_FLAG_SAMPLED = 0x01u, TA_TRACE_FLAG_RANDOM = 0x02u };
 
 /* "00-" 32 hex "-" 16 hex "-" 2 hex */
-#define TA_TRACEPARENT_LENGTH 55u
+#define TA_TRACEPARENT_LENGTH   55u
 #define TA_TRACE_ID_TEXT_LENGTH 32u
 #define TA_SPAN_ID_TEXT_LENGTH  16u
 
@@ -95,7 +95,6 @@ TA_API ta_trace_id ta_trace_generator_next(ta_trace_generator *generator);
 TA_API uint64_t ta_trace_ratio_threshold(uint32_t parts, uint32_t whole);
 TA_API int ta_trace_sampled(ta_trace_id trace, uint64_t threshold);
 
-
 /* ---- the record schema ------------------------------------------------------------------
  *
  * What core and the system write into a system's trace journal, and what a
@@ -132,26 +131,29 @@ enum {
 };
 
 /* Masks of kinds (a system's trace_kinds). TA_TRACE_DROPPED is always
- * written. TA_TRACE_VALUES also captures assigned values as payloads. */
+ * written. TA_TRACE_VALUES adds values: a macrostep's event data, and the
+ * value an assignment assigned (captured as a payload). */
 #define TA_TRACE_BIT(kind) (UINT32_C(1) << (kind))
 #define TA_TRACE_VALUES    (UINT32_C(1) << 31)
-#define TA_TRACE_LIFECYCLE                                                                   \
-    (TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(TA_TRACE_FINISHED) |                    \
-     TA_TRACE_BIT(TA_TRACE_DESTROYED) | TA_TRACE_BIT(TA_TRACE_UNLOADED) |                  \
+#define TA_TRACE_LIFECYCLE                                                                         \
+    (TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(TA_TRACE_FINISHED) |                            \
+     TA_TRACE_BIT(TA_TRACE_DESTROYED) | TA_TRACE_BIT(TA_TRACE_UNLOADED) |                          \
      TA_TRACE_BIT(TA_TRACE_LOADED))
 /* A span per macrostep, lifecycle spans and failures. */
-#define TA_TRACE_SUMMARY                                                                     \
-    (TA_TRACE_LIFECYCLE | TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN) |                         \
+#define TA_TRACE_SUMMARY                                                                           \
+    (TA_TRACE_LIFECYCLE | TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN) |                                 \
      TA_TRACE_BIT(TA_TRACE_MACROSTEP_END) | TA_TRACE_BIT(TA_TRACE_ACTION_FAILED))
 /* And microsteps, conditions and raised events. */
-#define TA_TRACE_DECISIONS                                                                   \
-    (TA_TRACE_SUMMARY | TA_TRACE_BIT(TA_TRACE_MICROSTEP) | TA_TRACE_BIT(TA_TRACE_CONDITION) | \
+#define TA_TRACE_DECISIONS                                                                         \
+    (TA_TRACE_SUMMARY | TA_TRACE_BIT(TA_TRACE_MICROSTEP) | TA_TRACE_BIT(TA_TRACE_CONDITION) |      \
      TA_TRACE_BIT(TA_TRACE_RAISED))
-/* Every kind, with values. */
-#define TA_TRACE_FULL                                                                        \
-    (TA_TRACE_DECISIONS | TA_TRACE_BIT(TA_TRACE_SENT) | TA_TRACE_BIT(TA_TRACE_INVOKED) |    \
-     TA_TRACE_BIT(TA_TRACE_CANCELLED) | TA_TRACE_BIT(TA_TRACE_ASSIGN) |                     \
-     TA_TRACE_BIT(TA_TRACE_LOG) | TA_TRACE_VALUES)
+/* Every kind. Values (event data, assigned values) are asked for apart, with
+ * TA_TRACE_VALUES: they can hold personal data, and a record keeps its value
+ * alive until it is read. */
+#define TA_TRACE_FULL                                                                              \
+    (TA_TRACE_DECISIONS | TA_TRACE_BIT(TA_TRACE_SENT) | TA_TRACE_BIT(TA_TRACE_INVOKED) |           \
+     TA_TRACE_BIT(TA_TRACE_CANCELLED) | TA_TRACE_BIT(TA_TRACE_ASSIGN) |                            \
+     TA_TRACE_BIT(TA_TRACE_LOG))
 
 #define TA_TRACE_STRING_DYNAMIC 0x80000000u
 
@@ -199,15 +201,15 @@ typedef struct ta_trace_finished {
 
 /* The event a macrostep took; for the bootstrap `name` is TA_NIL. */
 typedef struct ta_trace_macrostep_begin {
-    uint32_t name;      /* a string */
-    uint32_t name_id;   /* its event-name node in the image */
-    uint32_t type;      /* TA_EVENT_TYPE_* */
-    uint32_t sendid;    /* a string, TA_NIL if none */
-    uint32_t origin;    /* an external origin (a string), TA_NIL if none */
-    uint32_t datamodel; /* the binding owning `payload`, TA_NIL if none */
+    uint32_t name;           /* a string */
+    uint32_t name_id;        /* its event-name node in the image */
+    uint32_t type;           /* TA_EVENT_TYPE_* */
+    uint32_t sendid;         /* a string, TA_NIL if none */
+    uint32_t origin;         /* an external origin (a string), TA_NIL if none */
+    uint32_t datamodel;      /* the binding owning `payload`, TA_NIL if none */
     uint64_t origin_session; /* the sending session, 0 if none */
     ta_step_key cause;       /* the step that sent it; session 0: a host's (all 0: none) */
-    uint64_t payload;
+    uint64_t payload;        /* the event's data with TA_TRACE_VALUES, else 0 */
 } ta_trace_macrostep_begin;
 
 /* The configuration after a macrostep: `state_count` active states in
@@ -238,8 +240,8 @@ typedef struct ta_trace_sent {
     uint32_t target; /* a string, TA_NIL for the sender itself */
     uint32_t name;   /* a string */
     uint32_t name_id;
-    uint32_t sendid; /* a string, TA_NIL if none */
-    uint64_t delay;  /* nanoseconds */
+    uint32_t sendid;          /* a string, TA_NIL if none */
+    uint64_t delay;           /* nanoseconds */
     ta_trace_context context; /* the new event's; no trace if untraced */
 } ta_trace_sent;
 

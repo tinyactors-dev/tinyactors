@@ -591,11 +591,11 @@ static int world_spawn(world *w, const char *chart, const char *name) {
         uint64_t session;
         return ta_host_chart(w->host, (ta_string_view){chart, (uint32_t)strlen(chart)}, &segment,
                              &c) == TA_OK &&
-               ta_host_spawn(w->host, segment, c, n, 0, &session) == TA_OK;
+               ta_host_spawn(w->host, segment, c, n, 0, (ta_string_view){0, 0}, &session) == TA_OK;
     }
     uint32_t a;
-    return ta_system_spawn(w->systems[0].system, chart_of(w->systems[0].image, chart), n, 0, &a) ==
-           TA_OK;
+    return ta_system_spawn(w->systems[0].system, chart_of(w->systems[0].image, chart), n, 0,
+                           (ta_string_view){0, 0}, &a) == TA_OK;
 }
 
 /* Observable state of every live session, one line each, sorted by path:
@@ -1222,9 +1222,9 @@ static void mini_advance(mini *m, ta_time dt) {
 
 static uint32_t mini_spawn(mini *m, const char *name) {
     uint32_t a = 0;
-    CHECK_EQUAL(
-        ta_system_spawn(m->system, 0, (ta_string_view){name, (uint32_t)strlen(name)}, 0, &a),
-        TA_OK);
+    CHECK_EQUAL(ta_system_spawn(m->system, 0, (ta_string_view){name, (uint32_t)strlen(name)}, 0,
+                                (ta_string_view){0, 0}, &a),
+                TA_OK);
     mini_run(m);
     return a;
 }

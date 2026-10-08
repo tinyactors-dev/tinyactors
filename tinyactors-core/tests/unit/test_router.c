@@ -183,7 +183,8 @@ static uint64_t spawn(int i, const char *chart, const char *name) {
                 TA_OK);
     uint64_t s = 0;
     CHECK_EQUAL(ta_host_spawn(nodes[i].host, segment, c,
-                              (ta_string_view){name, (uint32_t)strlen(name)}, 0, &s),
+                              (ta_string_view){name, (uint32_t)strlen(name)}, 0,
+                              (ta_string_view){0, 0}, &s),
                 TA_OK);
     return s;
 }

@@ -248,7 +248,9 @@ static void test_cold_sweep(void) {
     uint32_t ids[10];
     ids[0] = tsys_actor(&t, "main.scxml");
     for (int i = 1; i < 10; i++)
-        CHECK_EQUAL(ta_system_spawn(t.system, 0, (ta_string_view){"", 0}, 0, &ids[i]), TA_OK);
+        CHECK_EQUAL(ta_system_spawn(t.system, 0, (ta_string_view){"", 0}, 0, (ta_string_view){0, 0},
+                                    &ids[i]),
+                    TA_OK);
     run_all(&t);
     uint32_t cursor = 0, out[16];
     CHECK_EQUAL(ta_system_cold_actors(t.system, &cursor, 64, out, 16), 0); /* all just ran */

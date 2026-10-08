@@ -132,10 +132,16 @@ static int grow_system(ta_system **system_slot, uint32_t pool) {
             ok |= dbl(&config.string_bytes, TA_SLAB_MAX_BYTES);
             ok |= dbl(&config.instance_bytes, TA_SLAB_MAX_BYTES);
         }
+        if (config.tracing == TA_TRACING_ENABLED &&
+            half_full(stats.trace_contexts, stats.trace_contexts_capacity))
+            dbl(&config.trace_contexts, TA_SYSTEM_MAX_POOL);
         break;
     }
     }
     if (!ok) return 0;
+    /* every event can hold a context of its own (docs/adr/0006) */
+    if (config.tracing == TA_TRACING_ENABLED && config.trace_contexts < config.max_events)
+        config.trace_contexts = config.max_events;
     void *block, *region;
     size_t length;
     if (rt_alloc_region(system->core.image, &config, &block, &region, &length) != TA_OK) return 0;

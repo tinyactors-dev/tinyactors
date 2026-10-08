@@ -43,7 +43,7 @@ typedef struct ta_event {
     uint32_t invokeid;      /* string reference or NIL */
     uint16_t invoke_slot;   /* receiver-side invoke slot or TA_EVENT_NO_SLOT */
     uint16_t flags;         /* TA_EVENT_FLAG_* */
-    uint32_t raw;   /* string reference (I/O-processor raw message) or NIL */
+    uint32_t raw;           /* string reference (I/O-processor raw message) or NIL */
     uint32_t trace; /* the context of the step that caused it (context pool), TA_NIL if untraced */
     uint64_t payload;
 } ta_event;
@@ -272,8 +272,10 @@ void ta_core_set_invoke_child(ta_core *core, ta_instance *in, uint32_t slot, uin
 void ta_core_clear_invoke_child(ta_core *core, ta_instance *in, uint32_t slot);
 uint32_t ta_core_invoke_child(ta_core *core, ta_instance *in, uint32_t slot);
 uint32_t ta_core_invoke_id(ta_core *core, ta_instance *in, uint32_t slot);
-/* Raise a platform event (e.g. error.communication) into the internal queue. */
-void ta_core_raise_platform(ta_core *core, ta_instance *in, const char *name, uint32_t sendid);
+/* Raise a platform event (e.g. error.communication) into the internal queue;
+ * returns it (TA_NIL if there was no room). It gets the context of the
+ * instance's current step. */
+uint32_t ta_core_raise_platform(ta_core *core, ta_instance *in, const char *name, uint32_t sendid);
 /* ... with a payload (owned by the instance's datamodel; released on failure). */
 ta_status ta_core_raise_platform_data(ta_core *core, ta_instance *in, const char *name,
                                       ta_payload data);

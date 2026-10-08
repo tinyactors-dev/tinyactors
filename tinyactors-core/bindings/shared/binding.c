@@ -1824,9 +1824,9 @@ static napi_value js_spawn(napi_env environment, napi_callback_info info) {
     napi_valuetype nt = napi_undefined;
     if (argc > 5) napi_typeof(environment, argv[5], &nt);
     char *name = nt == napi_string ? get_string(environment, argv[5], &nl) : NULL;
-    ta_status status =
-        ta_host_spawn(host->host, get_u32(environment, argv[1]), get_u32(environment, argv[2]),
-                      (ta_string_view){name, (uint32_t)nl}, payload, &session);
+    ta_status status = ta_host_spawn(
+        host->host, get_u32(environment, argv[1]), get_u32(environment, argv[2]),
+        (ta_string_view){name, (uint32_t)nl}, payload, (ta_string_view){0, 0}, &session);
     free(name);
     if (status != TA_OK) {
         nd_release(host, payload);

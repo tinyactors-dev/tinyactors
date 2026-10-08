@@ -71,6 +71,21 @@ void ta_journal_release(ta_journal *journal, uint32_t length) {
         journal->head = journal->tail = 0; /* empty: the whole storage is in one piece again */
 }
 
+void ta_journal_clear_unused(ta_journal *journal) {
+    unsigned char *storage = journal_storage(journal);
+    if (!journal->used) {
+        ta_memset(storage, 0, journal->capacity);
+        return;
+    }
+    if (journal->wrapped) { /* [tail, head) and [end, capacity) */
+        ta_memset(storage + journal->tail, 0, journal->head - journal->tail);
+        ta_memset(storage + journal->end, 0, journal->capacity - journal->end);
+    } else { /* [0, head) and [tail, capacity) */
+        ta_memset(storage, 0, journal->head);
+        ta_memset(storage + journal->tail, 0, journal->capacity - journal->tail);
+    }
+}
+
 int ta_journal_copy(ta_journal *destination, void *storage, uint32_t capacity,
                     const ta_journal *source) {
     TA_ASSERT(!source->reserved);

@@ -13,7 +13,7 @@
 #define TA_SYSTEM_MAGIC        0x53594154u /* "TAYS" */
 /* The region's layout: 2 since the step counters and trace references
  * (docs/adr/0006 in the repository root); a snapshot of another is refused. */
-#define TA_SYSTEM_VERSION 2u
+#define TA_SYSTEM_VERSION      2u
 #define TA_MAX_DATAMODELS      8u
 #define TA_EXTERNAL_INVOKE_BIT (1u << 23) /* in a child handle: external invoke token */
 /* slab byte budgets stay below 4 GiB so page arithmetic cannot overflow u32 */
@@ -76,7 +76,8 @@ typedef struct ta_effect_record {
     uint32_t pad;
     uint64_t payload; /* released on ack if `owned` */
     uint64_t delay;
-    uint64_t serial; /* the actor's session id at push time */
+    uint64_t serial;        /* the actor's session id at push time */
+    ta_trace_context trace; /* SEND, INVOKE, LOG, DONE: the step's (docs/adr/0006) */
 } ta_effect_record;
 
 struct ta_system {
@@ -101,6 +102,14 @@ struct ta_system {
     uint64_t now, sequence, next_serial;
     uint64_t stats_delivered, stats_fuel, stats_turns, stats_timers,
         stats_spawned; /* ta_system_stats */
+    /* tracing (docs/adr/0006): the journal and the context pool (carved only
+     * when tracing is on), the generator, the sampling threshold and the fuel
+     * clock records are stamped with */
+    ta_journal journal;
+    ta_pool contexts;
+    ta_trace_generator generator;
+    uint64_t trace_threshold;
+    uint64_t fuel_clock;
     ta_datamodel_binding datamodels[TA_MAX_DATAMODELS + 1];
 };
 
@@ -119,8 +128,11 @@ TA_INLINE uint32_t ta_actor_chart(const ta_system *system, const ta_actor *actor
 
 /* system.c */
 uint32_t ta_system_resolve_actor(const ta_system *s, uint32_t handle); /* index or TA_NIL */
+/* Spawn an actor. A root's bootstrap runs under `traceparent` or in a new
+ * trace; an invoked child's (parent != 0) under the parent's current step. */
 uint32_t ta_system_spawn_actor(ta_system *s, uint32_t chart, ta_string_view name, ta_payload params,
-                               uint32_t parent, uint32_t parent_slot, ta_status *status);
+                               uint32_t parent, uint32_t parent_slot, ta_string_view traceparent,
+                               ta_status *status);
 void ta_system_reclaim(ta_system *s, uint32_t index);
 void ta_system_make_runnable(ta_system *s, uint32_t index);
 void ta_system_mailbox_push(ta_system *s, uint32_t index, uint32_t event);
@@ -135,6 +147,20 @@ void ta_system_actor_variables(ta_system *s, const ta_actor *a, ta_system_variab
 uint32_t ta_system_session_lookup(const ta_system *s, uint64_t serial);
 void ta_system_session_insert(ta_system *s, uint32_t index);
 
+/* trace.c (system): starting traces, lifecycle records */
+/* What a host starts (an input, a spawn, a timer of an untraced send) runs
+ * under `traceparent` when it parses, keeping its sampled flag, else in a new
+ * trace sampled by the system's ratio. Returns a context (one reference), or
+ * TA_NIL when unsampled or tracing is off; `*value` gets the trace either way
+ * (no trace when tracing is off). */
+uint32_t ta_system_start_trace(ta_system *s, ta_string_view traceparent, ta_trace_context *value);
+/* A lifecycle record (TA_TRACE_SPAWNED, ...) of actor `index`, its header
+ * filled: under `context` (a value; a new trace ID if it has none), keyed
+ * (session, macrostep, step). NULL when the kind is off or the journal full. */
+ta_trace_record *ta_system_trace_lifecycle(ta_system *s, uint32_t index, uint32_t kind,
+                                           uint32_t size, const ta_trace_context *context,
+                                           uint64_t macrostep, uint32_t step);
+
 /* route.c */
 /* Route a kernel send: returns 0 on success, else a TA_POOL_* code (exhausted). */
 uint32_t ta_system_route_send(ta_system *s, uint32_t sender, const ta_core_out *o);
@@ -145,7 +171,7 @@ void ta_system_cancel_timers(ta_system *s, uint32_t index);
 void ta_system_fire_timers(ta_system *s);
 uint32_t ta_system_invoke(ta_system *s, uint32_t parent, const ta_core_out *o);
 void ta_system_uninvoke(ta_system *s, uint32_t parent, const ta_core_out *o);
-void ta_system_autoforward(ta_system *s, const ta_core_out *o);
+void ta_system_autoforward(ta_system *s, uint32_t parent, const ta_core_out *o);
 void ta_system_done(ta_system *s, uint32_t index, ta_payload done, uint32_t final_state);
 /* Retry spawns parked by pool exhaustion; returns TA_POOL_* still exhausted. */
 uint32_t ta_system_retry_pending(ta_system *s);

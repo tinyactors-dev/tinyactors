@@ -97,8 +97,8 @@ static void each(JSValueConst root, const char *list, void (*function)(JSValueCo
 
 static void span_vector(JSValueConst e) {
     char span[32];
-    ta_step_key key = {u64_of(e, "session"), u64_of(e, "macrostep"), (uint32_t)u64_of(e, "microstep"),
-                       0};
+    ta_step_key key = {u64_of(e, "session"), u64_of(e, "macrostep"),
+                       (uint32_t)u64_of(e, "microstep"), 0};
     str_of(e, "span", span, sizeof span);
     ta_span_id got = ta_step_key_span_id(key);
     CHECK_EQUAL(got, hex_of(span));
@@ -258,7 +258,6 @@ static void test_sampler(void) {
     CHECK(sampled > 4500 && sampled < 5500);
 }
 
-
 /* ---- the record schema ------------------------------------------------------------------ */
 
 static uint64_t journal_storage[1024];
@@ -282,8 +281,7 @@ static int write_kind(ta_journal *journal, uint32_t kind, uint32_t extra, uint32
     unsigned char *p = ta_trace_record_body(record);
     for (uint32_t i = 0; i < body; i++)
         p[i] = (unsigned char)(n + i);
-    if (kind == TA_TRACE_MACROSTEP_END)
-        ((ta_trace_macrostep_end *)(void *)p)->state_count = extra;
+    if (kind == TA_TRACE_MACROSTEP_END) ((ta_trace_macrostep_end *)(void *)p)->state_count = extra;
     if (kind == TA_TRACE_MICROSTEP) {
         ta_trace_microstep *micro = (ta_trace_microstep *)(void *)p;
         micro->transition_count = extra > 0;
@@ -304,7 +302,8 @@ static void check_kind(const ta_trace_record *record, uint32_t kind, uint32_t ex
     CHECK_EQUAL(record->flags, TA_TRACE_FLAG_SAMPLED);
     CHECK_EQUAL(record->actor, n);
     CHECK_EQUAL(record->chart, n + 1);
-    CHECK(record->key.session == n && record->key.macrostep == n + 1 && record->key.microstep == n + 2);
+    CHECK(record->key.session == n && record->key.macrostep == n + 1 &&
+          record->key.microstep == n + 2);
     CHECK(record->trace.high == n && record->trace.low == n + 3);
     CHECK_EQUAL(record->parent, n + 4);
     CHECK(record->fuel == 1000u + n && record->now == 2000u + n);
@@ -398,7 +397,8 @@ static void test_records_malformed(void) {
     cursor = 0;
     CHECK(ta_trace_next(&view, &cursor) == NULL);
     record->kind = TA_TRACE_MICROSTEP;
-    ((ta_trace_microstep *)ta_trace_record_body(record))->entered_count = 100; /* lists past the size */
+    ((ta_trace_microstep *)ta_trace_record_body(record))->entered_count =
+        100; /* lists past the size */
     cursor = 0;
     CHECK(ta_trace_next(&view, &cursor) == NULL);
     ((ta_trace_microstep *)ta_trace_record_body(record))->entered_count = 3;
@@ -415,11 +415,12 @@ static void test_records_malformed(void) {
 /* Dynamic strings resolve against the view's string storage. */
 static void test_records_strings(void) {
     static uint32_t strings[16];
-    strings[4] = 1;          /* references */
-    strings[5] = 5;          /* length */
+    strings[4] = 1; /* references */
+    strings[5] = 5; /* length */
     memcpy(&strings[6], "hello", 6);
     ta_trace_view view = {NULL, 0, 0, (const unsigned char *)strings};
-    ta_string_view s = ta_trace_dynamic_string(&view, TA_TRACE_STRING_DYNAMIC | 2u); /* 16 bytes in */
+    ta_string_view s =
+        ta_trace_dynamic_string(&view, TA_TRACE_STRING_DYNAMIC | 2u); /* 16 bytes in */
     CHECK(s.length == 5 && memcmp(s.pointer, "hello", 5) == 0);
     CHECK_EQUAL(ta_trace_dynamic_string(&view, 7).length, 0);      /* an image string */
     CHECK_EQUAL(ta_trace_dynamic_string(&view, TA_NIL).length, 0); /* none */

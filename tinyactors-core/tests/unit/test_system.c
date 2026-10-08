@@ -378,6 +378,8 @@ static void test_snapshot_no_residue(void) {
                                                                          slab layout matches */
         tsys_run(&t, 10000, 5);
         CHECK_EQUAL(t.effect_count[TA_EFFECT_DONE], 1); /* actor and its records are freed */
+        for (ta_trace_view view; ta_system_trace(t.system, &view);) /* and its trace, read */
+            ta_system_trace_ack(t.system, view.length);
         size_t length;
         CHECK_EQUAL(ta_system_snapshot(t.system, NULL, 0, &length), TA_OK);
         snap[h] = malloc(length);

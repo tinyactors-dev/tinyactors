@@ -100,7 +100,7 @@ if (x.ta_compile_charts) {
   const system = alloc(4, 4);
   assert.equal(x.ta_runtime_system_new(opened, config, 0, 0, system), 0, 'the system starts');
   const actor = alloc(4, 4);
-  assert.equal(x.ta_system_spawn(u32(system), 0, view('smoke'), 0n, actor), 0, 'the actor spawns');
+  assert.equal(x.ta_system_spawn(u32(system), 0, view('smoke'), 0n, view(''), actor), 0, 'the actor spawns');
   const run = alloc(layout('ta_run').size);
   x.ta_runtime_run(run, system, 1000);
   const event = alloc(layout('ta_event_in').size);

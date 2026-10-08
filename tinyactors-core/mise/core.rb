@@ -38,7 +38,7 @@ module Core
     Layer.new(name: 'core', uses: %w[image trace], freestanding: true,
               sources: %w[core event_pool trace_step datamodel_null].map { |s| "src/core/#{s}.c" }),
     Layer.new(name: 'system', uses: %w[core], freestanding: true,
-              sources: %w[system schedule route hibernate effects].map { |s| "src/system/#{s}.c" }),
+              sources: %w[system schedule route hibernate effects tracing].map { |s| "src/system/#{s}.c" }),
     Layer.new(name: 'compile', uses: %w[image],
               sources: %w[compile_support xml scxml link compile].map { |s| "src/compile/#{s}.c" }),
     # Many systems as one (versions, routing, migration jobs, hibernation
@@ -163,6 +163,7 @@ module Core
     unit('test_compile_scale', 'compile'),
     unit('test_core', 'core', 'compile', 'test_datamodel', *ECMASCRIPT),
     unit('test_system', 'system', 'compile', 'test_datamodel'),
+    unit('test_tracing', 'system', 'compile', 'test_datamodel'),
     unit('test_scenarios', 'system', 'compile', 'test_datamodel'),
     unit('test_runtime', 'runtime', 'test_datamodel', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch }),
     unit('test_datamodel_ecmascript', 'system', 'compile', *ECMASCRIPT,

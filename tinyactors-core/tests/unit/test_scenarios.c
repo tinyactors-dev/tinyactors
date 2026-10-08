@@ -15,7 +15,7 @@ static void s01_external_event(void) {
                        "<state id='on'/>"),
                     NULL, NULL));
     uint32_t a;
-    ta_system_spawn(t.system, 0, (ta_string_view){"lamp", 4}, 0, &a);
+    ta_system_spawn(t.system, 0, (ta_string_view){"lamp", 4}, 0, (ta_string_view){0, 0}, &a);
     tsys_run(&t, 1000, 5);
     CHECK_EQUAL(tsys_send(&t, a, "flip", NULL), TA_OK);
     CHECK_EQUAL(tsys_run(&t, 1000, 5), TA_RUN_IDLE);
@@ -122,7 +122,7 @@ static void s04_many_loopers(void) {
     for (int i = 0; i < 3; i++) {
         char nm[8];
         snprintf(nm, sizeof nm, "L%d", i);
-        ta_system_spawn(t.system, 0, (ta_string_view){nm, 2}, 0, &a[i]);
+        ta_system_spawn(t.system, 0, (ta_string_view){nm, 2}, 0, (ta_string_view){0, 0}, &a[i]);
     }
     for (int i = 0; i < 30; i++) {
         ta_run result = ta_system_run(t.system, 3000);
@@ -158,8 +158,8 @@ static const char *PEER = SC(
     "</state>");
 
 static void peer_setup(test_system *t, uint32_t *a, uint32_t *b) {
-    ta_system_spawn(t->system, 0, (ta_string_view){"A", 1}, 0, a);
-    ta_system_spawn(t->system, 0, (ta_string_view){"B", 1}, 0, b);
+    ta_system_spawn(t->system, 0, (ta_string_view){"A", 1}, 0, (ta_string_view){0, 0}, a);
+    ta_system_spawn(t->system, 0, (ta_string_view){"B", 1}, 0, (ta_string_view){0, 0}, b);
     tsys_run(t, 10000, 5);
     ta_actor_info ib;
     ib.size = sizeof ib;
@@ -366,7 +366,9 @@ static void s12_hundred_thousand(void) {
     CHECK(tsys_create(&t, &config));
     static uint32_t h[100000];
     for (int i = 0; i < 100000; i++)
-        CHECK_EQUAL(ta_system_spawn(t.system, 0, (ta_string_view){"c", 1}, 0, &h[i]), TA_OK);
+        CHECK_EQUAL(ta_system_spawn(t.system, 0, (ta_string_view){"c", 1}, 0,
+                                    (ta_string_view){0, 0}, &h[i]),
+                    TA_OK);
     CHECK_EQUAL(tsys_run(&t, 1u << 30, 10), TA_RUN_IDLE);
     for (int i = 0; i < 100000; i += 100)
         tsys_send(&t, h[i], "poke", NULL);

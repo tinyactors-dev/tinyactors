@@ -107,7 +107,9 @@ static uint64_t spawn(host_world *e, const char *chart) {
         ta_host_chart(e->host, (ta_string_view){chart, (uint32_t)strlen(chart)}, &segment, &c),
         TA_OK);
     uint64_t s = 0;
-    CHECK_EQUAL(ta_host_spawn(e->host, segment, c, (ta_string_view){0, 0}, 0, &s), TA_OK);
+    CHECK_EQUAL(
+        ta_host_spawn(e->host, segment, c, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &s),
+        TA_OK);
     return s;
 }
 

@@ -17,6 +17,7 @@
 
 #include <tinyactors/datamodel.h>
 #include <tinyactors/image.h>
+#include <tinyactors/trace.h>
 #include <tinyactors/types.h>
 
 #ifdef __cplusplus
@@ -78,7 +79,22 @@ typedef struct ta_system_config {
     uint64_t ticks_per_second;
     const ta_io_processor_descriptor *io_processors;
     uint64_t first_serial; /* session ids start after this (default 0: 1, 2, ...) */
+    /* Tracing (docs/adr/0006 in the repository root): on by default, at full
+     * detail. TA_TRACING_DISABLED carves nothing for it. */
+    uint32_t tracing;        /* TA_TRACING_ENABLED (0) / TA_TRACING_DISABLED */
+    uint32_t trace_kinds;    /* TA_TRACE_* kinds to write; 0 = TA_TRACE_FULL (no values) */
+    uint32_t trace_bytes;    /* the trace journal; 0 = 512 per event, at least 64 KiB */
+    uint32_t trace_contexts; /* the pool of trace contexts; 0 = max_events */
+    /* the share of the traces the system starts that are sampled: parts /
+     * whole (TraceIDRatioBased); whole 0 = 1 / 1 */
+    uint32_t trace_sample_parts, trace_sample_whole;
+    uint64_t trace_seed; /* the trace ID generator's seed: the same seed, the same IDs */
 } ta_system_config;
+enum { TA_TRACING_ENABLED = 0, TA_TRACING_DISABLED = 1 };
+/* The default and the smallest journal (TA_TRACE_*_BYTES), and its default
+ * share per event of max_events. */
+#define TA_TRACE_BYTES_MIN       65536u
+#define TA_TRACE_BYTES_PER_EVENT 512u
 
 /* ---- lifetime: one caller-owned memory block ---------------------------- */
 TA_API ta_status ta_system_layout(const ta_image *image, const ta_system_config *config,
@@ -94,8 +110,10 @@ TA_API void ta_system_deinit(ta_system *system);
 
 /* ---- actors ------------------------------------------------------------- */
 TA_API ta_status ta_system_boot(ta_system *system); /* spawn image-defined actors */
+/* Spawn a root actor. Its bootstrap runs under `traceparent` (W3C text) when
+ * it parses, else in a new trace. */
 TA_API ta_status ta_system_spawn(ta_system *system, uint32_t chart, ta_string_view name,
-                                 ta_payload params, uint32_t *actor);
+                                 ta_payload params, ta_string_view traceparent, uint32_t *actor);
 TA_API ta_status ta_system_terminate(ta_system *system, uint32_t actor);
 TA_API uint32_t ta_system_actor_by_name(const ta_system *system, ta_string_view name);
 TA_API uint32_t ta_system_actor_by_session(const ta_system *system,
@@ -127,6 +145,9 @@ typedef struct ta_event_in {
     ta_string_view origintype;
     ta_payload data;    /* moved into the system */
     ta_string_view raw; /* optional raw message (_event.raw) */
+    /* W3C traceparent: the macrostep this event starts runs under it (keeping
+     * its sampled flag); without one, it starts a new trace */
+    ta_string_view traceparent;
 } ta_event_in;
 
 TA_API ta_status ta_system_send(ta_system *system, const ta_event_in *event);
@@ -210,6 +231,10 @@ typedef struct ta_effect {
     uint64_t session;         /* the actor's session id (it may be gone already: DONE, ERROR) */
     uint32_t datamodel; /* index of the datamodel binding that owns `payload`, TA_NIL if none */
     uint32_t pad;
+    /* SEND, INVOKE, LOG, DONE: the step's trace context (its span is
+     * `trace.parent`), so an I/O processor writes a traceparent without
+     * calling core (ta_traceparent_format); no trace if untraced */
+    ta_trace_context trace;
 } ta_effect;
 
 TA_API uint32_t ta_system_effects(ta_system *system, const ta_effect **out);
@@ -267,8 +292,37 @@ typedef struct ta_system_stats {
     uint32_t hibernated; /* actors currently unloaded */
     uint32_t wakes_pending;
     uint64_t hibernations, wakes; /* monotonic */
+    /* tracing: the journal (bytes waiting, its capacity, records written and
+     * lost), the context pool, and contexts not given for a full pool */
+    uint32_t trace_bytes, trace_bytes_capacity;
+    uint32_t trace_contexts, trace_contexts_capacity;
+    uint64_t trace_records, trace_records_lost, trace_contexts_dropped;
+    uint64_t fuel_clock; /* the fuel clock records are stamped with (ta_system_trace_clock) */
 } ta_system_stats;
 TA_API void ta_system_stats_get(const ta_system *system, ta_system_stats *out);
+
+/* ---- tracing (docs/adr/0006 in the repository root) ----------------------
+ * The system writes trace records (tinyactors/trace.h) into a journal in its
+ * block; the host drains them as it drains effects. ta_system_trace returns
+ * the bytes of the oldest records that lie in one piece (0 when there are
+ * none) and fills `view`; the view is valid until the next mutating call.
+ * ta_system_trace_ack releases `bytes` from its start (whole records), and
+ * what they hold; call ta_system_trace again for the rest.
+ *
+ * Records are stamped with the fuel clock (ta_system_stats.fuel_clock), a
+ * counter of the fuel the system used. A host notes its wall clock and the
+ * fuel clock before and after each run, and an encoder (tinyactors/otlp.h)
+ * maps fuel to wall time within the run that holds it.
+ * ta_system_trace_clock moves the clock forward to `at_least` (never back):
+ * a host that runs several systems keeps them on one clock that way. */
+TA_API uint32_t ta_system_trace(ta_system *system, ta_trace_view *view);
+TA_API void ta_system_trace_ack(ta_system *system, uint32_t bytes);
+TA_API void ta_system_trace_clock(ta_system *system, uint64_t at_least);
+/* Change the kinds written and the sampling ratio (as in ta_system_config;
+ * 0 kinds is TA_TRACE_FULL, whole 0 is 1 / 1). TA_ERROR_STATE when tracing
+ * is off. */
+TA_API ta_status ta_system_trace_set(ta_system *system, uint32_t kinds, uint32_t sample_parts,
+                                     uint32_t sample_whole);
 
 /* ---- hibernation (host-driven: the system never does I/O) ----------------
  * An idle actor can be unloaded from RAM: ta_actor_hibernate() writes a blob

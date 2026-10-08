@@ -209,6 +209,41 @@ static void test_heap_bytes(void) {
     ecmascript_close(&t);
 }
 
+/* With values traced, a record keeps an assigned value alive until the host
+ * reads it: acknowledging the records lets it go. */
+static void test_traced_values_are_let_go(void) {
+    ecmascript_system t;
+    CHECK(ecmascript_open(
+        &t,
+        SC("initial='a'><datamodel><data id='big' expr='null'/></datamodel>"
+           "<state id='a'><transition event='grow' target='b'>"
+           "<assign location='big' expr='Array.from({ length: 200000 }, (_, i) => ({ i: i }))'/>"
+           "</transition></state><state id='b'><transition event='shrink' target='a'>"
+           "<assign location='big' expr='null'/></transition></state>"),
+        NULL));
+    CHECK_EQUAL(ta_system_trace_set(t.system, TA_TRACE_FULL | TA_TRACE_VALUES, 1, 1), TA_OK);
+    ecmascript_run(&t);
+    ta_event_in event;
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.target = ta_system_actor_by_name(t.system, (ta_string_view){"es.scxml", 8});
+    event.name = (ta_string_view){"grow", 4};
+    CHECK_EQUAL(ta_system_send(t.system, &event), TA_OK);
+    ecmascript_run(&t);
+    size_t grown = ta_datamodel_ecmascript_heap_bytes(t.ecmascript);
+    event.name = (ta_string_view){"shrink", 6};
+    CHECK_EQUAL(ta_system_send(t.system, &event), TA_OK);
+    ecmascript_run(&t);
+    JSRuntime *runtime = (JSRuntime *)ta_datamodel_ecmascript_js_runtime(t.ecmascript);
+    JS_RunGC(runtime);
+    CHECK(ta_datamodel_ecmascript_heap_bytes(t.ecmascript) > grown / 2); /* the record has it */
+    for (ta_trace_view view; ta_system_trace(t.system, &view);)
+        ta_system_trace_ack(t.system, view.length);
+    JS_RunGC(runtime);
+    CHECK(ta_datamodel_ecmascript_heap_bytes(t.ecmascript) < grown / 2);
+    ecmascript_close(&t);
+}
+
 /* Shared realm (default): ten invoked children of one parent each keep their
  * own variables; implicit globals are errors; In() resolves per session; the
  * same system costs a fraction of the isolated heap. */
@@ -863,6 +898,7 @@ int main(void) {
     RUN(test_runaway_script_interrupted);
     RUN(test_events_payloads_xml);
     RUN(test_heap_bytes);
+    RUN(test_traced_values_are_let_go);
     RUN(test_shared_realm);
     RUN(test_eval_json_variables);
     RUN(test_toplevel_declarations_isolate);
