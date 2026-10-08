@@ -172,8 +172,8 @@ Dir.mktmpdir('changelog-test') do |tmp|
 
   # ADR references.
   check.call('ADR references',
-             Changelog::ADRs.references_in('core ADR 0094 section 2; ADRs 0090 and 0091; otlp ADR 0002'),
-             [['core', '0094'], [nil, '0090'], [nil, '0091'], ['otlp', '0002']])
+             Changelog::ADRs.references_in('core ADR 0094 section 2; ADRs 0090 and 0091; scxml ADR 0002'),
+             [['core', '0094'], [nil, '0090'], [nil, '0091'], ['scxml', '0002']])
 
   # TypeScript: the surface is what a file exports.
   ts = Changelog::Repo.new(dir)

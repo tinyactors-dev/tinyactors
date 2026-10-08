@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Write a release's section of CHANGELOG.md: the agent's summary and upgrading text, and the lists generated from the commits and the API delta; then check it"
-#USAGE arg "<component>" help="core, napi, otlp, scxml or tinyxml"
+#USAGE arg "<component>" help="core, napi, scxml or tinyxml"
 #USAGE arg "<version>" help="The version being released, MAJOR.MINOR.PATCH"
 #USAGE flag "--summary <file>" help="File holding the Summary (required)"
 #USAGE flag "--upgrading <file>" help="File holding the Upgrading text (required when the release breaks something)"

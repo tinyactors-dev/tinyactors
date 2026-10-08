@@ -48,6 +48,8 @@ module Core
     Layer.new(name: 'runtime', uses: %w[system compile], sources: %w[src/runtime/runtime.c src/runtime/runtime_hosted.c]),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
+    # Trace records to OTLP protobuf and back: a codec, like basic_http (docs/adr/0006).
+    Layer.new(name: 'otlp', uses: %w[trace image], freestanding: true, sources: %w[src/otlp/otlp.c src/otlp/decode.c]),
     # The vendored engine only: quickjs-libc (std and os modules, I/O) is not built.
     Layer.new(name: 'quickjs', uses: [], libraries: %w[-lm],
               sources: %w[quickjs libregexp libunicode dtoa].map { |s| "third_party/quickjs-ng/#{s}.c" },
@@ -112,9 +114,10 @@ module Core
   end
 
   LIBRARIES = [
-    Library.new(name: 'tinyactors', layers: %w[base image trace core system host basic_http], uses: [], libc: false,
+    Library.new(name: 'tinyactors', layers: %w[base image trace core system host basic_http otlp], uses: [],
+                libc: false,
                 headers: %w[types.h allocator.h address.h frame.h trace.h image.h datamodel.h system.h core.h host.h
-                            basic_http.h wasm.h]),
+                            basic_http.h otlp.h wasm.h]),
     Library.new(name: 'tinyactors_runtime', layers: %w[compile runtime], uses: %w[tinyactors], libc: true,
                 headers: %w[compile.h runtime.h]),
     Library.new(name: 'tinyactors_datamodel_ecmascript', layers: %w[datamodel_ecmascript quickjs], uses: %w[tinyactors],
@@ -180,6 +183,7 @@ module Core
     unit('test_address', 'base', 'quickjs', defines: { 'TA_VECTORS' => ROOT.join('tests/conformance/addresses.json') }),
     unit('test_frame', 'base'),
     unit('test_journal', 'base'),
+    unit('test_otlp', 'otlp', 'system', 'compile', *ECMASCRIPT),
     unit('test_trace', 'trace', 'quickjs', defines: { 'TA_SPAN_VECTORS' => ROOT.join('tests/conformance/span_ids.json'),
                                                       'TA_TRACEPARENT_VECTORS' => ROOT.join('tests/conformance/traceparent.json') }),
     # The torture chamber's event loop and PostgreSQL wire client.

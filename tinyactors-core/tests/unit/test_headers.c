@@ -13,6 +13,7 @@
 #include <tinyactors/host.h>
 #include <tinyactors/frame.h>
 #include <tinyactors/trace.h>
+#include <tinyactors/otlp.h>
 
 /* ABI layout guards: fields crossing FFI must keep their offsets. */
 #define ABI_CHECK(c, m) typedef char abi_check_##m[(c) ? 1 : -1]
@@ -85,6 +86,10 @@ ABI_CHECK(sizeof(ta_trace_microstep) == 24, trace_microstep_size);
 ABI_CHECK(sizeof(ta_trace_sent) == 56, trace_sent_size);
 ABI_CHECK(sizeof(ta_trace_invoked) == 24, trace_invoked_size);
 ABI_CHECK(sizeof(ta_trace_view) == 8 + 2 * sizeof(void *), trace_view_size);
+ABI_CHECK(offsetof(ta_otlp_config, size) == 0, otlp_config_size_first);
+ABI_CHECK(offsetof(ta_otlp_input, size) == 0, otlp_input_size_first);
+ABI_CHECK(offsetof(ta_otlp_stats, size) == 0, otlp_stats_size_first);
+ABI_CHECK(sizeof(ta_otlp_cursor) == 48, otlp_cursor_size);
 
 int main(void) {
     return 0;

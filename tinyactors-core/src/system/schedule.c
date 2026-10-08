@@ -232,6 +232,10 @@ ta_run ta_system_run(ta_system *system, uint32_t budget) {
         return result;
     }
     system->in_call = 1;
+    /* what this run writes is stamped after the clock its caller noted
+     * before it (docs/adr/0006, section 9) */
+    system->fuel_clock++;
+    system->core.trace_clock = system->fuel_clock;
     ta_system_fire_timers(system);
     uint32_t used = 0, status = TA_RUN_IDLE;
     uint32_t pending = ta_system_retry_pending(system);

@@ -269,6 +269,110 @@
       "value": 0
     },
     {
+      "name": "TA_OTLP_FLUSH",
+      "value": 1
+    },
+    {
+      "name": "TA_OTLP_GROW",
+      "value": 2
+    },
+    {
+      "name": "TA_OTLP_LINK_PARENTS",
+      "value": 1
+    },
+    {
+      "name": "TA_OTLP_NO_LOGS",
+      "value": 4
+    },
+    {
+      "name": "TA_OTLP_READ",
+      "value": 0
+    },
+    {
+      "name": "TA_OTLP_SPAN_CLIENT",
+      "value": 3
+    },
+    {
+      "name": "TA_OTLP_SPAN_CONSUMER",
+      "value": 5
+    },
+    {
+      "name": "TA_OTLP_SPAN_INTERNAL",
+      "value": 1
+    },
+    {
+      "name": "TA_OTLP_SPAN_PRODUCER",
+      "value": 4
+    },
+    {
+      "name": "TA_OTLP_SPAN_SERVER",
+      "value": 2
+    },
+    {
+      "name": "TA_OTLP_SPAN_UNSPECIFIED",
+      "value": 0
+    },
+    {
+      "name": "TA_OTLP_STAGING_BYTES_DEFAULT",
+      "value": 1048576
+    },
+    {
+      "name": "TA_OTLP_STAGING_BYTES_MAX",
+      "value": 1073741824
+    },
+    {
+      "name": "TA_OTLP_STAGING_BYTES_MIN",
+      "value": 65536
+    },
+    {
+      "name": "TA_OTLP_STATUS_ERROR",
+      "value": 2
+    },
+    {
+      "name": "TA_OTLP_STATUS_OK",
+      "value": 1
+    },
+    {
+      "name": "TA_OTLP_STATUS_UNSET",
+      "value": 0
+    },
+    {
+      "name": "TA_OTLP_VALUES",
+      "value": 2
+    },
+    {
+      "name": "TA_OTLP_VALUE_ARRAY",
+      "value": 5
+    },
+    {
+      "name": "TA_OTLP_VALUE_BOOL",
+      "value": 2
+    },
+    {
+      "name": "TA_OTLP_VALUE_BYTES",
+      "value": 7
+    },
+    {
+      "name": "TA_OTLP_VALUE_DOUBLE",
+      "value": 4
+    },
+    {
+      "name": "TA_OTLP_VALUE_EMPTY",
+      "value": 0
+    },
+    {
+      "name": "TA_OTLP_VALUE_INT",
+      "value": 3
+    },
+    {
+      "name": "TA_OTLP_VALUE_LIST",
+      "value": 6
+    },
+    {
+      "name": "TA_OTLP_VALUE_STRING",
+      "value": 1
+    },
+    {
       "name": "TA_PEER_CLOSED",
       "value": 3
     },
@@ -4788,6 +4892,743 @@
           }
         }
       }
+    },
+    "ta_otlp_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "staging_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "log_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "open_spans",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chunks",
+          "type": "uint32_t"
+        },
+        {
+          "name": "scopes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "value_limit",
+          "type": "uint32_t"
+        },
+        {
+          "name": "render_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "resource_bytes",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "staging_bytes": 8,
+            "log_bytes": 12,
+            "open_spans": 16,
+            "chunks": 20,
+            "scopes": 24,
+            "value_limit": 28,
+            "render_bytes": 32,
+            "resource_bytes": 36
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "staging_bytes": 8,
+            "log_bytes": 12,
+            "open_spans": 16,
+            "chunks": 20,
+            "scopes": 24,
+            "value_limit": 28,
+            "render_bytes": 32,
+            "resource_bytes": 36
+          }
+        },
+        "wasm32": {
+          "size": 40,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "staging_bytes": 8,
+            "log_bytes": 12,
+            "open_spans": 16,
+            "chunks": 20,
+            "scopes": 24,
+            "value_limit": 28,
+            "render_bytes": 32,
+            "resource_bytes": 36
+          }
+        }
+      }
+    },
+    "ta_otlp": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "ta_otlp_attribute": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "key",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "value",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 16
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 16
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "key": 0,
+            "value": 8
+          }
+        }
+      }
+    },
+    "ta_otlp_input": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "source",
+          "type": "uint32_t"
+        },
+        {
+          "name": "view",
+          "type": "ta_trace_view"
+        },
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "datamodels",
+          "type": "const ta_datamodel_binding *"
+        },
+        {
+          "name": "datamodel_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "source": 4,
+            "view": 8,
+            "image": 32,
+            "datamodels": 40,
+            "datamodel_count": 48,
+            "pad": 52
+          }
+        },
+        "aarch64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "source": 4,
+            "view": 8,
+            "image": 32,
+            "datamodels": 40,
+            "datamodel_count": 48,
+            "pad": 52
+          }
+        },
+        "wasm32": {
+          "size": 40,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "source": 4,
+            "view": 8,
+            "image": 24,
+            "datamodels": 28,
+            "datamodel_count": 32,
+            "pad": 36
+          }
+        }
+      }
+    },
+    "ta_otlp_stats": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "open",
+          "type": "uint32_t"
+        },
+        {
+          "name": "open_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chunks",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chunks_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "spans",
+          "type": "uint32_t"
+        },
+        {
+          "name": "staging_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "staging_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "log_records",
+          "type": "uint32_t"
+        },
+        {
+          "name": "log_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "log_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "records",
+          "type": "uint64_t"
+        },
+        {
+          "name": "dropped",
+          "type": "uint64_t"
+        },
+        {
+          "name": "skipped",
+          "type": "uint64_t"
+        },
+        {
+          "name": "truncated",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "open": 4,
+            "open_capacity": 8,
+            "chunks": 12,
+            "chunks_capacity": 16,
+            "spans": 20,
+            "staging_bytes": 24,
+            "staging_capacity": 28,
+            "log_records": 32,
+            "log_bytes": 36,
+            "log_capacity": 40,
+            "pad": 44,
+            "records": 48,
+            "dropped": 56,
+            "skipped": 64,
+            "truncated": 72
+          }
+        },
+        "aarch64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "open": 4,
+            "open_capacity": 8,
+            "chunks": 12,
+            "chunks_capacity": 16,
+            "spans": 20,
+            "staging_bytes": 24,
+            "staging_capacity": 28,
+            "log_records": 32,
+            "log_bytes": 36,
+            "log_capacity": 40,
+            "pad": 44,
+            "records": 48,
+            "dropped": 56,
+            "skipped": 64,
+            "truncated": 72
+          }
+        },
+        "wasm32": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "open": 4,
+            "open_capacity": 8,
+            "chunks": 12,
+            "chunks_capacity": 16,
+            "spans": 20,
+            "staging_bytes": 24,
+            "staging_capacity": 28,
+            "log_records": 32,
+            "log_bytes": 36,
+            "log_capacity": 40,
+            "pad": 44,
+            "records": 48,
+            "dropped": 56,
+            "skipped": 64,
+            "truncated": 72
+          }
+        }
+      }
+    },
+    "ta_otlp_fields": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "message",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "field",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "message": 0,
+            "field": 16,
+            "pad": 20
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "message": 0,
+            "field": 16,
+            "pad": 20
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "message": 0,
+            "field": 8,
+            "pad": 12
+          }
+        }
+      }
+    },
+    "ta_otlp_span": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "trace",
+          "type": "ta_trace_id"
+        },
+        {
+          "name": "span",
+          "type": "ta_span_id"
+        },
+        {
+          "name": "parent",
+          "type": "ta_span_id"
+        },
+        {
+          "name": "start",
+          "type": "uint64_t"
+        },
+        {
+          "name": "end",
+          "type": "uint64_t"
+        },
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "status",
+          "type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "status_message",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "attributes",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "events",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "links",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "resource",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "scope_name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "scope_version",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "scope_attributes",
+          "type": "ta_otlp_fields"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 248,
+          "align": 8,
+          "offsets": {
+            "trace": 0,
+            "span": 16,
+            "parent": 24,
+            "start": 32,
+            "end": 40,
+            "kind": 48,
+            "status": 52,
+            "flags": 56,
+            "pad": 60,
+            "name": 64,
+            "status_message": 80,
+            "attributes": 96,
+            "events": 120,
+            "links": 144,
+            "resource": 168,
+            "scope_name": 192,
+            "scope_version": 208,
+            "scope_attributes": 224
+          }
+        },
+        "aarch64": {
+          "size": 248,
+          "align": 8,
+          "offsets": {
+            "trace": 0,
+            "span": 16,
+            "parent": 24,
+            "start": 32,
+            "end": 40,
+            "kind": 48,
+            "status": 52,
+            "flags": 56,
+            "pad": 60,
+            "name": 64,
+            "status_message": 80,
+            "attributes": 96,
+            "events": 120,
+            "links": 144,
+            "resource": 168,
+            "scope_name": 192,
+            "scope_version": 208,
+            "scope_attributes": 224
+          }
+        },
+        "wasm32": {
+          "size": 176,
+          "align": 8,
+          "offsets": {
+            "trace": 0,
+            "span": 16,
+            "parent": 24,
+            "start": 32,
+            "end": 40,
+            "kind": 48,
+            "status": 52,
+            "flags": 56,
+            "pad": 60,
+            "name": 64,
+            "status_message": 72,
+            "attributes": 80,
+            "events": 96,
+            "links": 112,
+            "resource": 128,
+            "scope_name": 144,
+            "scope_version": 152,
+            "scope_attributes": 160
+          }
+        }
+      }
+    },
+    "ta_otlp_cursor": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "at",
+          "type": "uint64_t[6]"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "at": 0
+          }
+        },
+        "aarch64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "at": 0
+          }
+        },
+        "wasm32": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "at": 0
+          }
+        }
+      }
+    },
+    "ta_otlp_value": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "integer",
+          "type": "int64_t"
+        },
+        {
+          "name": "number",
+          "type": "double"
+        },
+        {
+          "name": "bytes",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "items",
+          "type": "ta_otlp_fields"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "pad": 4,
+            "integer": 8,
+            "number": 16,
+            "bytes": 24,
+            "items": 40
+          }
+        },
+        "aarch64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "pad": 4,
+            "integer": 8,
+            "number": 16,
+            "bytes": 24,
+            "items": 40
+          }
+        },
+        "wasm32": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "pad": 4,
+            "integer": 8,
+            "number": 16,
+            "bytes": 24,
+            "items": 32
+          }
+        }
+      }
+    },
+    "ta_otlp_event": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "time",
+          "type": "uint64_t"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "attributes",
+          "type": "ta_otlp_fields"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "time": 0,
+            "name": 8,
+            "attributes": 24
+          }
+        },
+        "aarch64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "time": 0,
+            "name": 8,
+            "attributes": 24
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "time": 0,
+            "name": 8,
+            "attributes": 16
+          }
+        }
+      }
+    },
+    "ta_otlp_link": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "trace",
+          "type": "ta_trace_id"
+        },
+        {
+          "name": "span",
+          "type": "ta_span_id"
+        },
+        {
+          "name": "attributes",
+          "type": "ta_otlp_fields"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "trace": 0,
+            "span": 16,
+            "attributes": 24
+          }
+        },
+        "aarch64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "trace": 0,
+            "span": 16,
+            "attributes": 24
+          }
+        },
+        "wasm32": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "trace": 0,
+            "span": 16,
+            "attributes": 24
+          }
+        }
+      }
     }
   },
   "functions": [
@@ -6805,6 +7646,372 @@
         {
           "name": "sid",
           "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_end_all",
+      "returns": "void",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "wall_ns",
+          "type": "uint64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_init",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "memory",
+          "type": "void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "config",
+          "type": "const ta_otlp_config *"
+        },
+        {
+          "name": "out",
+          "type": "ta_otlp **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_layout",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "config",
+          "type": "const ta_otlp_config *"
+        },
+        {
+          "name": "bytes",
+          "type": "size_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_logs_size",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "const ta_otlp *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_mark",
+      "returns": "void",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "fuel",
+          "type": "uint64_t"
+        },
+        {
+          "name": "wall_ns",
+          "type": "uint64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_next_attribute",
+      "returns": "int32_t",
+      "params": [
+        {
+          "name": "attributes",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "at",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "key",
+          "type": "ta_string_view *"
+        },
+        {
+          "name": "value",
+          "type": "ta_otlp_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_next_event",
+      "returns": "int32_t",
+      "params": [
+        {
+          "name": "events",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "at",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "out",
+          "type": "ta_otlp_event *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_next_link",
+      "returns": "int32_t",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "at",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "out",
+          "type": "ta_otlp_link *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_next_span",
+      "returns": "int32_t",
+      "params": [
+        {
+          "name": "bytes",
+          "type": "const void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "cursor",
+          "type": "ta_otlp_cursor *"
+        },
+        {
+          "name": "out",
+          "type": "ta_otlp_span *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_next_value",
+      "returns": "int32_t",
+      "params": [
+        {
+          "name": "array",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "at",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "value",
+          "type": "ta_otlp_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_put_logs",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "out",
+          "type": "void *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_put_traces",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "out",
+          "type": "void *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_read",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "input",
+          "type": "const ta_otlp_input *"
+        },
+        {
+          "name": "cursor",
+          "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_relocate",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "memory",
+          "type": "void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "config",
+          "type": "const ta_otlp_config *"
+        },
+        {
+          "name": "out",
+          "type": "ta_otlp **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_set_flags",
+      "returns": "void",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_set_resource",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "attributes",
+          "type": "const ta_otlp_attribute *"
+        },
+        {
+          "name": "count",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_stats_get",
+      "returns": "void",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "const ta_otlp *"
+        },
+        {
+          "name": "out",
+          "type": "ta_otlp_stats *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_traces_size",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "const ta_otlp *"
         }
       ],
       "public": true,

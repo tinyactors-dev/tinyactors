@@ -40,6 +40,6 @@ xml.run('build')
 staticjs = Project.new(ROOT.join('staticjs'))
 staticjs.run('build')
 
-# tinyactors-scxml and tinyactors-otlp are parked: they build against the
-# ring-protocol core this repo replaced (tag ring-proto-final), and wait to
-# be ported to the current one (their READMEs say how).
+# tinyactors-scxml is parked: it builds against the ring-protocol core this
+# repo replaced (943b1f31^), and waits to be ported to the current one (its
+# README says how). The OTLP encoder is tinyactors-core's otlp layer now.
