@@ -329,6 +329,9 @@ ta_status ta_host_add_image(ta_host *host, const ta_image *image, uint32_t *segm
     segment_record->config.io_processors = host->io_processors;
     segment_record->config.io_processor_count = host->io_processor_count;
     segment_record->config.first_serial = (uint64_t)index << SERIALS_SHIFT;
+    /* segments draw different trace IDs from one seed */
+    segment_record->config.trace_seed =
+        host->config.system.trace_seed + (uint64_t)index * 0x9E3779B97F4A7C15ull;
     size_t need;
     ta_status status = ta_system_layout(image, &segment_record->config, &need);
     if (status != TA_OK) return status;
@@ -343,6 +346,7 @@ ta_status ta_host_add_image(ta_host *host, const ta_image *image, uint32_t *segm
         segment_record->memory = NULL;
         return status;
     }
+    ta_system_trace_clock(segment_record->system, host->fuel_clock);
     ta_system_advance_time(segment_record->system, host->now);
     segment_record->live = 1;
     segment_record->busy = 1;
@@ -701,6 +705,7 @@ static ta_status effect_copy(ta_host *host, uint32_t si, const ta_effect *effect
     host_effect->io_processor = io_processor;
     host_effect->flags = effect->flags;
     host_effect->delay_hint = effect->delay_hint;
+    host_effect->trace = effect->trace;
     host_effect_strings_set(host, effect->target, effect->event, effect->sendid, effect->auxiliary);
     if (effect->payload && effect->datamodel < host->config.datamodel_count) {
         host_effect->payload = effect->payload;
@@ -1113,6 +1118,22 @@ void ta_host_advance_time(ta_host *host, ta_time now) {
 
 /* Free segments that are no longer current and have no actors. 0 if one
  * could not be reported (no memory): it is retired in a later run. */
+/* Every segment's fuel clock to the host's: what is written between runs, or
+ * by a segment that did not run, is stamped on the one clock. */
+static void clocks_sync(ta_host *host) {
+    for (uint32_t si = 0; si < host->segment_count; si++) {
+        host_segment *segment = segment_of(host, si);
+        if (segment) ta_system_trace_clock(segment->system, host->fuel_clock);
+    }
+}
+
+static uint64_t segment_clock(const host_segment *segment) {
+    ta_system_stats stats;
+    stats.size = sizeof stats;
+    ta_system_stats_get(segment->system, &stats);
+    return stats.fuel_clock;
+}
+
 static int retire(ta_host *host) {
     int all = 1;
     for (uint32_t si = 0; si < host->segment_count; si++) {
@@ -1121,7 +1142,17 @@ static int retire(ta_host *host) {
         int current = 0;
         for (uint32_t v = 0; v < host->version_count; v++)
             current |= host->versions[v].segment == si;
-        if (current || segment_actors(segment)) continue;
+        if (current || segment_actors(segment)) {
+            segment->retiring = 0;
+            continue;
+        }
+        /* its last records (its last actors' ends) are read after this run:
+         * it goes once they were, or a run later if nobody reads them */
+        ta_trace_view view;
+        if (ta_system_trace(segment->system, &view) && !segment->retiring) {
+            segment->retiring = 1;
+            continue;
+        }
         if (!host_effects_reserve(host, 1, 0)) {
             all = 0;
             continue;
@@ -1169,7 +1200,9 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
             if (!left) break;
             uint32_t share = runnable > 1 ? left / runnable : left;
             if (runnable > 1) runnable--;
+            ta_system_trace_clock(segment->system, host->fuel_clock);
             ta_run result = ta_system_run(segment->system, share ? share : 1);
+            host->fuel_clock = segment_clock(segment);
             left = result.used >= left ? 0 : left - result.used;
             ran = 1;
             segment->deadline = result.next_deadline;
@@ -1222,6 +1255,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     }
     host->job_count = kj;
     if (!retire(host)) exhausted = 1;
+    clocks_sync(host);
     /* yielded: segments have work, or a job has actors left to look at. A job
      * that only waits (busy or sleeping actors) moves on when they change —
      * the next run after an event — or at its timeout (next_deadline). */
@@ -1230,7 +1264,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     for (uint32_t i = 0; i < host->segment_count; i++) {
         host_segment *segment = segment_of(host, i);
         if (!segment) continue;
-        busy |= segment->busy;
+        busy |= segment->busy | segment->retiring; /* retired by the next run */
         if (segment->deadline < out.next_deadline) out.next_deadline = segment->deadline;
     }
     for (uint32_t i = 0; i < host->job_count; i++) {
@@ -1445,6 +1479,7 @@ void ta_host_stats_get(const ta_host *host, ta_host_stats *o) {
         z.region_bytes += stats.region_bytes;
         z.delivered += stats.delivered;
     }
+    z.fuel_clock = host->fuel_clock;
     for (uint32_t i = 0; i < host->job_count; i++)
         z.jobs += (uint32_t)host->jobs[i].active;
     z.routed = host->routed;
@@ -1706,6 +1741,8 @@ ta_status ta_host_restore(const ta_host_config *config, const ta_image *const *i
         segment->live = 1;
         segment->busy = 1; /* look at it in the first run */
         segment->deadline = UINT64_MAX;
+        uint64_t clock = segment_clock(segment); /* the host's clock: the latest */
+        if (clock > host->fuel_clock) host->fuel_clock = clock;
         p += pad8((size_t)ss->region_length);
     }
     if (!moved_reserve(host, hd->moved_count) || !versions_reserve(host, 0))
@@ -1727,6 +1764,7 @@ ta_status ta_host_restore(const ta_host_config *config, const ta_image *const *i
     host->migrated = hd->migrated;
     host->retired = hd->retired;
     versions_recompute(host);
+    clocks_sync(host);
     *out = host;
     return TA_OK;
 }

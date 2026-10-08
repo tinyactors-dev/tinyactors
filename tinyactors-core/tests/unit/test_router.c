@@ -156,6 +156,10 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
             envelope.sendid = effect->sendid;
             envelope.origin = effect->auxiliary;
             envelope.msgid = effect->msgid;
+            char traceparent[TA_TRACEPARENT_LENGTH]; /* the transport writes it on the wire */
+            envelope.traceparent.pointer = traceparent;
+            envelope.traceparent.length =
+                ta_traceparent_format(&effect->trace, traceparent, sizeof traceparent);
             envelope.data =
                 json[0] ? ta_datamodel_ecmascript_payload_from_json(
                               nodes[j].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)})
@@ -854,6 +858,184 @@ static void test_system_id(void) {
     close_all();
 }
 
+/* ---- traces across systems (docs/adr/0006 in the repository root, section 7) ------------- */
+
+typedef struct begin_seen {
+    uint64_t session, macrostep, fuel;
+    ta_trace_id trace;
+    ta_span_id parent;
+    char name[32];
+} begin_seen;
+
+/* The macrostep beginnings node i's segments wrote, read and acknowledged. */
+static uint32_t begins(int i, begin_seen *out, uint32_t capacity) {
+    uint32_t n = 0;
+    for (uint32_t k = 0; k < ta_host_segment_count(nodes[i].host); k++) {
+        ta_system *system = ta_host_system(nodes[i].host, k);
+        if (!system) continue;
+        ta_host_segment_info info;
+        info.size = sizeof info;
+        ta_host_segment_info_get(nodes[i].host, k, &info); /* its strings are in its image */
+        ta_trace_view view;
+        while (ta_system_trace(system, &view)) {
+            uint32_t cursor = 0;
+            const ta_trace_record *r;
+            while ((r = ta_trace_next(&view, &cursor)))
+                if (r->kind == TA_TRACE_MACROSTEP_BEGIN && n < capacity) {
+                    const ta_trace_macrostep_begin *b = ta_trace_body(r);
+                    ta_string_view name = b->name == TA_NIL ? (ta_string_view){"", 0}
+                                          : b->name & TA_TRACE_STRING_DYNAMIC
+                                              ? ta_trace_dynamic_string(&view, b->name)
+                                              : ta_image_string(info.image, b->name);
+                    out[n] = (begin_seen){r->key.session, r->key.macrostep, r->fuel,
+                                          r->trace,       r->parent,        ""};
+                    snprintf(out[n].name, sizeof out[n].name, "%.*s", (int)name.length,
+                             name.pointer);
+                    n++;
+                }
+            ta_system_trace_ack(system, view.length);
+        }
+    }
+    return n;
+}
+
+static const begin_seen *begin_named(const begin_seen *b, uint32_t n, const char *name) {
+    for (uint32_t i = 0; i < n; i++)
+        if (!strcmp(b[i].name, name)) return &b[i];
+    return NULL;
+}
+
+/* One input with a traceparent is one trace from a through b (a relay, its
+ * link to c down: the envelope waits in a queue) to c and back. */
+static void test_trace_across_systems(void) {
+    open_node(A, PINGER);
+    open_node(B, ECHO);
+    open_node(C, ECHO);
+    const char *b_reach[1] = {"c"};
+    const char *b_back[1] = {"a"};
+    connect(A, B, TA_PEER_TRUSTED, b_reach, 1);
+    connect(B, A, TA_PEER_TRUSTED, NULL, 0);
+    connect(B, C, TA_PEER_TRUSTED | TA_PEER_QUEUE, NULL, 0);
+    connect(C, B, TA_PEER_TRUSTED, b_back, 1);
+    uint64_t p = spawn(A, "pinger", "p");
+    uint64_t echo = spawn(C, "echo", "echo");
+    settle();
+    begin_seen seen[64];
+    begins(A, seen, 64);
+    begins(C, seen, 64);
+    CHECK_EQUAL(ta_host_peer_up(nodes[B].host, nodes[B].peer[C], 0), TA_OK);
+    link_up[B][C] = 0;
+    const char *parent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    const char *json = "{\"to\": \"tinyactors://c/@echo\", \"n\": 7}";
+    ta_event_in event;
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.name = (ta_string_view){"go", 2};
+    event.traceparent = (ta_string_view){parent, (uint32_t)strlen(parent)};
+    event.data = ta_datamodel_ecmascript_payload_from_json(
+        nodes[A].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+    CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
+    settle();
+    ta_peer_status status;
+    status.size = sizeof status;
+    CHECK_EQUAL(ta_host_peer_status(nodes[B].host, nodes[B].peer[C], &status), TA_OK);
+    CHECK_EQUAL(status.queued, 1u); /* waiting in b's queue */
+    link_up[B][C] = 1;
+    CHECK_EQUAL(ta_host_peer_up(nodes[B].host, nodes[B].peer[C], 1), TA_OK);
+    settle();
+    LOGCHK(A, "pong:7;");
+    begin_seen at_a[16], at_c[16];
+    uint32_t na = begins(A, at_a, 16), nc = begins(C, at_c, 16);
+    const begin_seen *go_at_a = begin_named(at_a, na, "go"),
+                     *ping_at_c = begin_named(at_c, nc, "ping"),
+                     *pong_at_a = begin_named(at_a, na, "pong");
+    CHECK(go_at_a && ping_at_c && pong_at_a);
+    if (go_at_a && ping_at_c && pong_at_a) {
+        CHECK_EQUAL(go_at_a->parent, 0xb7ad6b7169203331ull);
+        CHECK(ping_at_c->trace.high == 0x0af7651916cd43ddull &&
+              ping_at_c->trace.low == 0x8448eb211c80319cull);
+        CHECK(pong_at_a->trace.high == 0x0af7651916cd43ddull &&
+              pong_at_a->trace.low == 0x8448eb211c80319cull);
+        /* each a child of the step that sent it, in the other system */
+        CHECK_EQUAL(ping_at_c->parent,
+                    ta_step_key_span_id((ta_step_key){p, go_at_a->macrostep, 1, 0}));
+        CHECK_EQUAL(pong_at_a->parent,
+                    ta_step_key_span_id((ta_step_key){echo, ping_at_c->macrostep, 1, 0}));
+    }
+    close_all();
+}
+
+/* The envelope's traceparent is on the wire. */
+static void test_trace_envelope_json(void) {
+    ta_envelope envelope;
+    memset(&envelope, 0, sizeof envelope);
+    envelope.size = sizeof envelope;
+    envelope.target = (ta_string_view){"tinyactors://b/@echo", 20};
+    envelope.name = (ta_string_view){"ping", 4};
+    envelope.origin = (ta_string_view){"tinyactors://a/#_scxml_1", 24};
+    envelope.msgid = (ta_string_view){"m1", 2};
+    const char *parent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    envelope.traceparent = (ta_string_view){parent, (uint32_t)strlen(parent)};
+    char json[512];
+    size_t n = ta_host_envelope_json(&envelope, (ta_string_view){0, 0}, json, sizeof json);
+    CHECK(n < sizeof json);
+    json[n < sizeof json ? n : sizeof json - 1] = 0;
+    CHECK(strstr(json,
+                 "\"traceparent\":\"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01\"") !=
+          NULL);
+}
+
+/* Two segments of one host (two images): a send between them keeps the
+ * trace, and both stamp their records on the host's one fuel clock. */
+static void test_trace_two_segments(void) {
+    open_node(A, PINGER);
+    size_t length;
+    void *echo_bytes = compile_chart("e.scxml", ECHO, NULL, &length, 0);
+    ta_image echo_image;
+    CHECK(echo_bytes && ta_image_open(echo_bytes, length, &echo_image) == TA_OK);
+    uint32_t segment;
+    CHECK_EQUAL(ta_host_add_image(nodes[A].host, &echo_image, &segment), TA_OK);
+    CHECK_EQUAL(segment, 1);
+    uint64_t p = spawn(A, "pinger", "p");
+    uint64_t echo = 0;
+    CHECK_EQUAL(ta_host_spawn(nodes[A].host, 1, 0, (ta_string_view){"echo", 4}, 0,
+                              (ta_string_view){0, 0}, &echo),
+                TA_OK);
+    CHECK(echo >> 32 == 1); /* the second segment's sessions */
+    settle();
+    begin_seen seen[64];
+    begins(A, seen, 64);
+    const char *parent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    const char *json = "{\"to\": \"tinyactors://a/@echo\", \"n\": 3}";
+    ta_event_in event;
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.name = (ta_string_view){"go", 2};
+    event.traceparent = (ta_string_view){parent, (uint32_t)strlen(parent)};
+    event.data = ta_datamodel_ecmascript_payload_from_json(
+        nodes[A].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+    CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
+    settle();
+    LOGCHK(A, "pong:3;");
+    uint32_t n = begins(A, seen, 64);
+    const begin_seen *go_seen = begin_named(seen, n, "go"), *ping = begin_named(seen, n, "ping"),
+                     *pong = begin_named(seen, n, "pong");
+    CHECK(go_seen && ping && pong);
+    if (go_seen && ping && pong) {
+        CHECK_EQUAL(ping->session, echo);
+        CHECK_EQUAL(ping->trace.low, 0x8448eb211c80319cull);
+        CHECK_EQUAL(ping->parent, ta_step_key_span_id((ta_step_key){p, go_seen->macrostep, 1, 0}));
+        CHECK_EQUAL(pong->parent, ta_step_key_span_id((ta_step_key){echo, ping->macrostep, 1, 0}));
+        CHECK(go_seen->fuel < ping->fuel && ping->fuel < pong->fuel); /* one clock, in order */
+    }
+    ta_host_stats stats;
+    stats.size = sizeof stats;
+    ta_host_stats_get(nodes[A].host, &stats);
+    CHECK(pong && stats.fuel_clock >= pong->fuel);
+    close_all();
+    free(echo_bytes);
+}
+
 int main(void) {
     RUN(test_route_status);
     RUN(test_errors_back);
@@ -870,5 +1052,8 @@ int main(void) {
     RUN(test_envelope_fields);
     RUN(test_address_grammar);
     RUN(test_system_id);
+    RUN(test_trace_across_systems);
+    RUN(test_trace_envelope_json);
+    RUN(test_trace_two_segments);
     TEST_MAIN_END();
 }

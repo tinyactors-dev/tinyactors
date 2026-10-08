@@ -83,6 +83,7 @@ What travels. One envelope is one SCXML event on its way to one target.
 | `msgid` | string | unique per origin: `<origin>/<counter>` or the origin plus sendid; used for errors, acks and dedup |
 | `hops` | integer | relays passed so far (starts at 0) |
 | `dedup` | string | optional: a key the receiver uses instead of `msgid` to drop duplicates (e.g. an application's idempotency key) |
+| `traceparent` | string | optional: the W3C `traceparent` of the step that sent it; the receiving macrostep runs under it, so one trace crosses systems (ADR 0006 in the repository root) |
 
 Rules:
 

@@ -26,6 +26,7 @@ typedef struct host_segment {
     size_t memory_size;
     ta_system_config config; /* current capacities */
     ta_time deadline;
+    int retiring; /* retired once its trace records were read, or a run later */
 } host_segment;
 
 typedef struct chart_version { /* the current version of a chart name */
@@ -106,6 +107,7 @@ struct ta_host {
     pending_error *errors;
     uint32_t error_count, error_capacity;
     uint64_t routed, migrated, retired;
+    uint64_t fuel_clock;       /* the segments' common fuel clock (docs/adr/0006, section 9) */
     struct ta_router *router;  /* other systems (router.c); NULL until a peer exists */
     uint64_t message_sequence; /* outbound message ids */
     uint32_t draining;         /* segment whose effects are being drained (TA_NIL: none) */

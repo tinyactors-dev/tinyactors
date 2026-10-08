@@ -522,6 +522,120 @@ static void test_relocation(void) {
     tsys_free(&t);
 }
 
+/* ---- durability (docs/adr/0006, section 6) ------------------------------------------- */
+
+#define NULLSC(body)                                                                               \
+    "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='null' " body "</scxml>"
+
+/* a sender (session 1) that pings session 2 on go, and sends itself a tick
+ * in a second on later; a receiver (session 2) */
+static const char *const SENDER = NULLSC(
+    "initial='a'><state id='a'><transition event='go'><send target='#_scxml_2' event='ping'/>"
+    "</transition><transition event='later'><send event='tick' delay='1s'/></transition>"
+    "<transition event='tick' target='b'/></state><state id='b'/>");
+
+static uint32_t wake_requests(test_system *t) {
+    const ta_effect *effect;
+    uint32_t n = ta_system_effects(t->system, &effect), wakes = 0;
+    for (uint32_t i = 0; i < n; i++)
+        wakes += effect[i].kind == TA_EFFECT_WAKE;
+    ta_system_effects_ack(t->system, n);
+    return wakes;
+}
+
+/* An event waits for its hibernated receiver with its context: the
+ * receiver's macrostep is still a child of the sending microstep. */
+static void test_hibernated_receiver(void) {
+    test_system t;
+    ta_system_config config = test_system_config();
+    CHECK(tsys_init(&t, SENDER, NULL, &config));
+    uint32_t a = 0, b = 0;
+    ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a);
+    ta_system_spawn(t.system, 0, (ta_string_view){"b", 1}, 0, (ta_string_view){0, 0}, &b);
+    tsys_run(&t, 10000, 5);
+    static unsigned char blob[4096];
+    size_t length = 0;
+    CHECK_EQUAL(ta_actor_hibernate(t.system, b, blob, sizeof blob, &length), TA_OK);
+    CHECK_EQUAL(send_traced(&t, a, "go", PARENT), TA_OK);
+    ta_system_run(t.system, 10000);
+    CHECK_EQUAL(wake_requests(&t), 1); /* ping waits in b's mailbox */
+    /* the waiting event keeps its context across a snapshot and a restore */
+    size_t snapshot_length = 0;
+    CHECK_EQUAL(ta_system_snapshot(t.system, NULL, 0, &snapshot_length), TA_OK);
+    void *snapshot = malloc(snapshot_length), *memory = malloc(t.memory_length);
+    CHECK_EQUAL(ta_system_snapshot(t.system, snapshot, snapshot_length, &snapshot_length), TA_OK);
+    ta_system *restored = NULL;
+    CHECK_EQUAL(ta_system_restore(memory, t.memory_length, &t.image, snapshot, snapshot_length,
+                                  &config, &t.binding, 1, &restored),
+                TA_OK);
+    free(snapshot);
+    free(t.memory); /* the restored system owns the actors now */
+    t.memory = memory;
+    t.system = restored;
+    CHECK_EQUAL(ta_actor_wake(t.system, b, blob, length), TA_OK);
+    tsys_run(&t, 10000, 5);
+    collect(&t);
+    const ta_trace_record *ping = find(TA_TRACE_MACROSTEP_BEGIN, 2, ~(uint64_t)0, "ping"),
+                          *go = find(TA_TRACE_MACROSTEP_BEGIN, 1, ~(uint64_t)0, "go");
+    CHECK(ping && go);
+    if (ping && go) {
+        CHECK_EQUAL(ping->trace.low, 0x8448eb211c80319cull);
+        CHECK_EQUAL(ping->parent, span_of(1, go->key.macrostep, 1));
+        CHECK_EQUAL(ping->key.macrostep, 2); /* the counters came back with the blob */
+    }
+    const ta_trace_record *unloaded = find(TA_TRACE_UNLOADED, 2, ~(uint64_t)0, NULL),
+                          *loaded = find(TA_TRACE_LOADED, 2, ~(uint64_t)0, NULL);
+    CHECK(unloaded && loaded);
+    if (unloaded && loaded) {
+        CHECK_EQUAL(unloaded->key.microstep, TA_TRACE_STEP_UNLOADED);
+        CHECK_EQUAL(loaded->key.macrostep, 1);
+        CHECK(loaded->span != unloaded->span);
+    }
+    forget();
+    tsys_free(&t);
+}
+
+/* A delayed send leaves with its exported sender and keeps its context
+ * where the sender is adopted. */
+static void test_export_adopt(void) {
+    test_system t, u;
+    ta_system_config config = test_system_config();
+    CHECK(tsys_init(&t, SENDER, NULL, &config));
+    CHECK(tsys_init(&u, SENDER, NULL, &config));
+    uint32_t a = 0;
+    ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a);
+    tsys_run(&t, 10000, 5);
+    CHECK_EQUAL(send_traced(&t, a, "later", PARENT), TA_OK);
+    tsys_run(&t, 10000, 5);
+    collect(&t);
+    const ta_trace_record *later = find(TA_TRACE_MACROSTEP_BEGIN, 1, ~(uint64_t)0, "later");
+    uint64_t macrostep = later ? later->key.macrostep : 0;
+    forget();
+    static unsigned char blob[8192];
+    size_t length = 0;
+    CHECK_EQUAL(ta_actor_export(t.system, a, blob, sizeof blob, &length), TA_OK);
+    uint32_t adopted = 0;
+    CHECK_EQUAL(ta_system_adopt(u.system, blob, length, &adopted), TA_OK);
+    ta_system_advance_time(u.system, 2000);
+    tsys_run(&u, 10000, 5);
+    collect(&u);
+    const ta_trace_record *tick = find(TA_TRACE_MACROSTEP_BEGIN, 1, ~(uint64_t)0, "tick");
+    CHECK(tick != NULL);
+    if (tick) {
+        CHECK_EQUAL(tick->trace.low, 0x8448eb211c80319cull);
+        CHECK_EQUAL(tick->parent, span_of(1, macrostep, 1));
+        CHECK_EQUAL(tick->key.macrostep, macrostep + 1);
+    }
+    CHECK(find(TA_TRACE_LOADED, 1, ~(uint64_t)0, NULL) != NULL);
+    forget();
+    collect(&t);
+    CHECK(find(TA_TRACE_UNLOADED, 1, ~(uint64_t)0, NULL) != NULL);
+    CHECK(find(TA_TRACE_DESTROYED, 1, ~(uint64_t)0, NULL) == NULL); /* it left, it lives on */
+    forget();
+    tsys_free(&t);
+    tsys_free(&u);
+}
+
 int main(void) {
     RUN(test_on_by_default);
     RUN(test_three_actors);
@@ -531,5 +645,7 @@ int main(void) {
     RUN(test_seed);
     RUN(test_partial_ack);
     RUN(test_relocation);
+    RUN(test_hibernated_receiver);
+    RUN(test_export_adopt);
     TEST_MAIN_END();
 }

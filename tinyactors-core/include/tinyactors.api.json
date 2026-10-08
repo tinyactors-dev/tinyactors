@@ -3947,11 +3947,15 @@
         {
           "name": "msgid",
           "type": "ta_string_view"
+        },
+        {
+          "name": "trace",
+          "type": "ta_trace_context"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 168,
+          "size": 200,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3976,11 +3980,12 @@
             "pending": 140,
             "peer": 144,
             "datamodel": 148,
-            "msgid": 152
+            "msgid": 152,
+            "trace": 168
           }
         },
         "aarch64": {
-          "size": 168,
+          "size": 200,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4005,11 +4010,12 @@
             "pending": 140,
             "peer": 144,
             "datamodel": 148,
-            "msgid": 152
+            "msgid": 152,
+            "trace": 168
           }
         },
         "wasm32": {
-          "size": 128,
+          "size": 160,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4034,7 +4040,8 @@
             "pending": 108,
             "peer": 112,
             "datamodel": 116,
-            "msgid": 120
+            "msgid": 120,
+            "trace": 128
           }
         }
       }
@@ -4089,11 +4096,15 @@
         {
           "name": "deduplication_key",
           "type": "ta_string_view"
+        },
+        {
+          "name": "traceparent",
+          "type": "ta_string_view"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 136,
+          "size": 152,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4107,11 +4118,12 @@
             "origin": 72,
             "origintype": 88,
             "msgid": 104,
-            "deduplication_key": 120
+            "deduplication_key": 120,
+            "traceparent": 136
           }
         },
         "aarch64": {
-          "size": 136,
+          "size": 152,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4125,11 +4137,12 @@
             "origin": 72,
             "origintype": 88,
             "msgid": 104,
-            "deduplication_key": 120
+            "deduplication_key": 120,
+            "traceparent": 136
           }
         },
         "wasm32": {
-          "size": 80,
+          "size": 88,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4143,7 +4156,8 @@
             "origin": 48,
             "origintype": 56,
             "msgid": 64,
-            "deduplication_key": 72
+            "deduplication_key": 72,
+            "traceparent": 80
           }
         }
       }
@@ -4357,43 +4371,57 @@
         {
           "name": "storage",
           "type": "char[768]"
+        },
+        {
+          "name": "traceparent",
+          "type": "char[55]"
+        },
+        {
+          "name": "pad2",
+          "type": "uint32_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 944,
+          "size": 1024,
           "align": 8,
           "offsets": {
             "size": 0,
             "pad": 4,
             "envelope": 8,
-            "key": 144,
-            "sendid": 160,
-            "storage": 176
+            "key": 160,
+            "sendid": 176,
+            "storage": 192,
+            "traceparent": 960,
+            "pad2": 1016
           }
         },
         "aarch64": {
+          "size": 1024,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "pad": 4,
+            "envelope": 8,
+            "key": 160,
+            "sendid": 176,
+            "storage": 192,
+            "traceparent": 960,
+            "pad2": 1016
+          }
+        },
+        "wasm32": {
           "size": 944,
           "align": 8,
           "offsets": {
             "size": 0,
             "pad": 4,
             "envelope": 8,
-            "key": 144,
-            "sendid": 160,
-            "storage": 176
-          }
-        },
-        "wasm32": {
-          "size": 872,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "pad": 4,
-            "envelope": 8,
-            "key": 88,
-            "sendid": 96,
-            "storage": 104
+            "key": 96,
+            "sendid": 104,
+            "storage": 112,
+            "traceparent": 880,
+            "pad2": 936
           }
         }
       }
@@ -4539,11 +4567,15 @@
         {
           "name": "retired",
           "type": "uint64_t"
+        },
+        {
+          "name": "fuel_clock",
+          "type": "uint64_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 64,
+          "size": 72,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4556,11 +4588,12 @@
             "delivered": 32,
             "routed": 40,
             "migrated": 48,
-            "retired": 56
+            "retired": 56,
+            "fuel_clock": 64
           }
         },
         "aarch64": {
-          "size": 64,
+          "size": 72,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4573,11 +4606,12 @@
             "delivered": 32,
             "routed": 40,
             "migrated": 48,
-            "retired": 56
+            "retired": 56,
+            "fuel_clock": 64
           }
         },
         "wasm32": {
-          "size": 64,
+          "size": 72,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4590,7 +4624,8 @@
             "delivered": 32,
             "routed": 40,
             "migrated": 48,
-            "retired": 56
+            "retired": 56,
+            "fuel_clock": 64
           }
         }
       }

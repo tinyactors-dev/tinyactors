@@ -166,7 +166,7 @@ static uint32_t align4(uint32_t n) {
 /* ---- blob formats ------------------------------------------------------------------ */
 
 #define EXPORT_MAGIC    0x58454154u /* "TAEX" */
-#define EXPORT_VERSION  3u          /* 3: the 64-byte instance header */
+#define EXPORT_VERSION  3u /* 3: the 64-byte instance header, delayed sends' trace contexts */
 #define EXPORT_MIGRATED 1u /* translated by ta_blob_migrate: one session, to be upgraded */
 
 typedef struct export_header {
@@ -195,6 +195,9 @@ typedef struct blob_timer { /* followed by target, name and sendid text, then th
     uint32_t rank; /* place in the firing order of the tree's delayed sends */
     uint32_t payload_kind, payload_length;
     uint32_t target_length, name_length, sendid_length; /* TA_NIL length: none */
+    uint32_t trace_flags;                               /* its trace context (all 0: none) */
+    uint64_t trace_high, trace_low, cause_session, cause_macrostep;
+    uint32_t cause_microstep, pad;
 } blob_timer;
 
 static int datamodel_payload_bytes(const ta_datamodel_binding *binding) {
@@ -420,6 +423,15 @@ static ta_status write_session(ta_system *system, uint32_t index, uint32_t root,
         }
         r.type = event->type;
         r.flags = event->flags;
+        if (event->trace != TA_NIL) { /* the context goes as a value (docs/durability.md) */
+            const ta_trace_entry *entry = ta_trace_entry_at(core, event->trace);
+            r.trace_high = entry->trace.high;
+            r.trace_low = entry->trace.low;
+            r.trace_flags = entry->flags;
+            r.cause_session = entry->session;
+            r.cause_macrostep = entry->macrostep;
+            r.cause_microstep = entry->microstep;
+        }
         r.target_length = string_ref_length(core, timer->target);
         r.name_length = string_ref_length(core, event->name);
         r.sendid_length = string_ref_length(core, event->sendid);
@@ -834,6 +846,11 @@ static ta_status arm_timers(ta_system *system, uint32_t index, uint32_t chart,
         event->type = (uint8_t)r.type;
         event->flags = (uint16_t)r.flags;
         event->origin = handle;
+        if (r.trace_high || r.trace_low) { /* untraced if the pool is full or tracing is off */
+            ta_trace_id trace = {r.trace_high, r.trace_low};
+            ta_step_key cause = {r.cause_session, r.cause_macrostep, r.cause_microstep, 0};
+            event->trace = ta_trace_context_new(core, trace, r.trace_flags, cause);
+        }
         if (r.sendid_length != TA_NIL) {
             event->sendid = ta_shared_string_new(core, tx[2], r.sendid_length);
             if (event->sendid == TA_NIL) status = TA_ERROR_NO_MEMORY;
@@ -1316,6 +1333,7 @@ ta_status ta_blob_migrate(const ta_image *from_image, const ta_image *to_image, 
         header.workspace = TA_NIL;
     header.actor = 0;
     header.datamodel = 0;
+    header.trace = TA_NIL; /* the step counters go on */
     ta_memcpy(nin, &header, sizeof header);
     for (uint32_t i = 0; i < migration.to_chart_record->invoke_count; i++)
         nin[migration.to_layout.invoke_ids + i] = TA_NIL;

@@ -23,9 +23,9 @@
 #define DEDUPLICATION_WINDOW 4096u /* message ids remembered per host (FIFO) */
 
 typedef struct queued_envelope { /* an envelope waiting for a peer */
-    char *buffer;                /* target | name | sendid | origin | msgid (one allocation) */
+    char *buffer; /* target | name | sendid | origin | msgid | traceparent (one allocation) */
     size_t buffer_size;
-    uint32_t length[5];
+    uint32_t length[6];
     ta_payload data;
     uint32_t datamodel, hops;
     ta_time at;
@@ -249,6 +249,8 @@ static ta_status emit_peer(ta_host *host, uint32_t handle, const ta_envelope *en
     ta_host_effect *x = host_effect_new(host, TA_HOST_EFFECT_PEER, TA_NIL);
     x->peer = handle;
     x->flags = envelope->hops;
+    if (ta_traceparent_parse(envelope->traceparent, &x->trace) != TA_OK) /* none, or not one */
+        ta_memset(&x->trace, 0, sizeof x->trace);
     host_effect_strings_set(host, envelope->target, envelope->name, envelope->sendid, envelope->origin);
     effect_message_id(host, envelope->msgid);
     if (envelope->data &&
@@ -321,9 +323,9 @@ static ta_envelope envelope_of(const queued_envelope *q) {
     ta_memset(&envelope, 0, sizeof envelope);
     envelope.size = sizeof envelope;
     const char *p = q->buffer;
-    ta_string_view *f[5] = {&envelope.target, &envelope.name, &envelope.sendid, &envelope.origin,
-                            &envelope.msgid};
-    for (int k = 0; k < 5; k++) {
+    ta_string_view *f[6] = {&envelope.target, &envelope.name,  &envelope.sendid,
+                            &envelope.origin, &envelope.msgid, &envelope.traceparent};
+    for (int k = 0; k < 6; k++) {
         *f[k] = (ta_string_view){p, q->length[k]};
         p += q->length[k];
     }
@@ -356,10 +358,10 @@ static ta_status enqueue(ta_host *host, peer *p, const ta_envelope *envelope) {
         p->queue_capacity = nc;
         p->queue_head = 0;
     }
-    ta_string_view v[5] = {envelope->target, envelope->name, envelope->sendid, envelope->origin,
-                           envelope->msgid};
+    ta_string_view v[6] = {envelope->target, envelope->name,  envelope->sendid,
+                           envelope->origin, envelope->msgid, envelope->traceparent};
     size_t total = 0;
-    for (int k = 0; k < 5; k++)
+    for (int k = 0; k < 6; k++)
         total += v[k].length;
     queued_envelope *q = &p->queue[(p->queue_head + p->queue_count) % p->queue_capacity];
     q->buffer_size = total ? total : 1;
@@ -369,7 +371,7 @@ static ta_status enqueue(ta_host *host, peer *p, const ta_envelope *envelope) {
         return TA_ERROR_NO_MEMORY;
     }
     char *w = q->buffer;
-    for (int k = 0; k < 5; k++) {
+    for (int k = 0; k < 6; k++) {
         if (v[k].length) ta_memcpy(w, v[k].pointer, v[k].length);
         q->length[k] = v[k].length;
         w += v[k].length;
@@ -525,6 +527,7 @@ static ta_status local_deliver(ta_host *host, uint64_t session, const ta_envelop
             ? envelope->origintype
             : (ta_string_view){"http://www.w3.org/TR/scxml/#SCXMLEventProcessor", 47};
     event.data = envelope->data;
+    event.traceparent = envelope->traceparent; /* the trace crosses systems unbroken */
     ta_status status = host_send_to(host, si, actor, &event);
     if (status == TA_ERROR_NO_MEMORY) return status;
     if (status == TA_OK) *reason = 0;
@@ -691,6 +694,9 @@ ta_status ta_host_message_init(ta_host *host, const ta_effect *effect, uint64_t 
     envelope->origintype = (ta_string_view){"http://www.w3.org/TR/scxml/#SCXMLEventProcessor", 47};
     envelope->data = effect->payload;
     envelope->datamodel = effect->datamodel;
+    envelope->traceparent.pointer = message->traceparent;
+    envelope->traceparent.length =
+        ta_traceparent_format(&effect->trace, message->traceparent, TA_TRACEPARENT_LENGTH);
     return TA_OK;
 }
 
@@ -724,18 +730,23 @@ static size_t json_string(char *out, ta_string_view s) {
 
 size_t ta_host_envelope_json(const ta_envelope *envelope, ta_string_view data, char *buffer,
                              size_t capacity) {
-    static const ta_string_view keys[] = {VIEW("target"), VIEW("name"),   VIEW("origin"),
-                                          VIEW("origintype"), VIEW("sendid"), VIEW("msgid"),
-                                          VIEW("dedup")};
-    ta_string_view values[] = {envelope->target,           envelope->name,   envelope->origin,
-                               envelope->origintype,       envelope->sendid, envelope->msgid,
-                               envelope->deduplication_key};
+    static const ta_string_view keys[] = {VIEW("target"),     VIEW("name"),       VIEW("origin"),
+                                          VIEW("origintype"), VIEW("sendid"),     VIEW("msgid"),
+                                          VIEW("dedup"),      VIEW("traceparent")};
+    ta_string_view values[] = {envelope->target,
+                               envelope->name,
+                               envelope->origin,
+                               envelope->origintype,
+                               envelope->sendid,
+                               envelope->msgid,
+                               envelope->deduplication_key,
+                               envelope->traceparent};
     size_t need = 0;
     for (int pass = 0; pass < 2; pass++) {
         char *out = pass ? buffer : NULL;
         size_t n = 1;
         if (out) out[0] = '{';
-        for (uint32_t i = 0; i < 7; i++) {
+        for (uint32_t i = 0; i < 8; i++) {
             if (i >= 3 && !values[i].length) continue;
             if (i) {
                 if (out) out[n] = ',';

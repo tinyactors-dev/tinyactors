@@ -30,6 +30,8 @@ generates, and when its delayed sends fire.
 | 16 | the continuation inside a macrostep: phase, sub-phase, cursors, workspace (PC, `<foreach>` frames and items) | instance header, workspace pool, datamodel iterators |
 | 17 | pending requests (dynamic `<invoke srcexpr>`, spawns parked by pool exhaustion), external invocations | request pool |
 | 18 | a requested termination / cancellation | actor flags, instance `INSTANCE_FLAG_CANCEL` |
+| 19 | step counters: macrosteps and microsteps (they name the session's spans, ADR 0006) | instance header `macrostep`, `microstep` |
+| 20 | trace contexts of waiting events: the trace, its flags and the step that caused each (delayed sends, mailbox) | context pool, referenced by events |
 
 Not session state, by design:
 
@@ -66,6 +68,8 @@ Not session state, by design:
 | 16 | ✗ not at a stable point | ✗ | ✗ | ✓ (mid-macrostep snapshots are valid) |
 | 17 | ✗ | ✗ (external invocations cannot move) | ✗ | ✓ |
 | 18 | ✓ applied on wake | ✗ | ✗ | ✓ |
+| 19 | ✓ instance header | ✓ instance header | ✓ copied with the header | ✓ |
+| 20 | ✓ stays in the region | ✓ in the blob, as values (re-created on adoption; untraced if the adopting system's pool is full or its tracing is off) | ✓ | ✓ region |
 
 Why the refusals:
 
@@ -157,3 +161,14 @@ library (instance words are copied verbatim).
   exported meanwhile — and into a *hibernated* sender's nonexistent instance
   (memory corruption). The sender now runs at once, or gets the error parked
   in its mailbox and moved to its internal queue on wake.
+
+## Trace state (ADR 0006)
+
+What a session's trace needs is in rows 19 and 20. An instance's own context
+(the current macrostep's) is a region reference and is let go at every stable
+point, so no blob holds one. Records waiting in the journal are not session
+state: they are the host's to read, and a snapshot keeps them with the region;
+a hibernation or an export does not move them. The snapshot format (`ta_system`
+`version`) and the hibernation and export blobs (`HIBERNATION_VERSION`,
+`EXPORT_VERSION`) changed with the 64-byte instance header and the contexts of
+delayed sends: older ones are refused.

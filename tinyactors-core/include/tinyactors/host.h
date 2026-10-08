@@ -174,6 +174,8 @@ typedef struct ta_host_effect {
     uint32_t peer;                      /* PEER, PEER_ERR: the peer handle */
     uint32_t datamodel;                 /* PEER: datamodel index of payload (TA_NIL: none) */
     ta_string_view msgid;               /* PEER, PEER_ERR */
+    ta_trace_context trace; /* as in ta_effect; PEER: the envelope's traceparent (format it
+                               with ta_traceparent_format for the wire) */
 } ta_host_effect;
 TA_API uint32_t ta_host_effects(ta_host *h, const ta_host_effect **out);
 TA_API void ta_host_effects_ack(ta_host *h);
@@ -203,6 +205,8 @@ typedef struct ta_envelope {
     ta_string_view origintype;        /* empty: the SCXML event processor */
     ta_string_view msgid;             /* unique per origin: errors, acks and dedup refer to it */
     ta_string_view deduplication_key; /* optional key for duplicate detection instead of msgid */
+    ta_string_view traceparent;       /* W3C: the sending step's trace (empty: none), kept across
+                                         systems and relays */
 } ta_envelope;
 
 /* Peer flags. */
@@ -286,6 +290,8 @@ typedef struct ta_host_message {
     ta_string_view key;
     ta_string_view sendid;
     char storage[768];
+    char traceparent[TA_TRACEPARENT_LENGTH]; /* envelope.traceparent's bytes */
+    uint32_t pad2;
 } ta_host_message;
 TA_API ta_status ta_host_message_init(ta_host *h, const ta_effect *effect, uint64_t revision,
                                       uint32_t index, ta_host_message *out);
@@ -417,6 +423,9 @@ typedef struct ta_host_stats {
     uint32_t segments; /* live */
     uint32_t actors, hibernated, runnable, jobs;
     uint64_t region_bytes, delivered, routed, migrated, retired;
+    /* the fuel clock every segment's trace records are stamped with: note it,
+     * with the wall clock, before and after each ta_host_run (tinyactors/otlp.h) */
+    uint64_t fuel_clock;
 } ta_host_stats;
 TA_API void ta_host_stats_get(const ta_host *h, ta_host_stats *out);
 /* Enumerate sessions host-wide (cursor starts at 0); returns how many (0 = done). */
