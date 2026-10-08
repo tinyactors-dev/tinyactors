@@ -55,6 +55,8 @@ own shared files, run by every implementation:
 - `values.json` — neutral wire values: `roundtrip` (from wire and back),
   `encode` (a value made by an ECMAScript expression, to the wire), `invalid`
   (C: `test_wire_values` in `tests/unit/test_datamodel_ecmascript.c`).
+- `span_ids.json` and `traceparent.json` — trace values: the span ID of a
+  step key, and W3C `traceparent` text (C: `tests/unit/test_trace.c`).
 - `links/*.json` — link protocol transcripts. The binding's system serves
   links (`serve`: `serveLinks` options) with the `spawn`ed actors; the driver
   plays the peer on a fake transport — once on a text transport (one JSON

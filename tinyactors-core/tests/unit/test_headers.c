@@ -12,6 +12,7 @@
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
 #include <tinyactors/frame.h>
+#include <tinyactors/trace.h>
 
 /* ABI layout guards: fields crossing FFI must keep their offsets. */
 #define ABI_CHECK(c, m) typedef char abi_check_##m[(c) ? 1 : -1]
@@ -65,6 +66,15 @@ ABI_CHECK(offsetof(ta_peer_config, size) == 0, peer_config_size_first);
 ABI_CHECK(offsetof(ta_peer_status, size) == 0, peer_status_size_first);
 ABI_CHECK(offsetof(ta_frame_reader, size) == 0, frame_reader_size_first);
 ABI_CHECK(sizeof(ta_frame_reader) == 24, frame_reader_size);
+/* trace values: plain integers, the same layout on every target */
+ABI_CHECK(sizeof(ta_trace_id) == 16, trace_id_size);
+ABI_CHECK(sizeof(ta_span_id) == 8, span_id_size);
+ABI_CHECK(sizeof(ta_step_key) == 24, step_key_size);
+ABI_CHECK(offsetof(ta_step_key, microstep) == 16, step_key_microstep_offset);
+ABI_CHECK(sizeof(ta_trace_context) == 32, trace_context_size);
+ABI_CHECK(offsetof(ta_trace_context, parent) == 16, trace_context_parent_offset);
+ABI_CHECK(sizeof(ta_trace_generator) == 32, trace_generator_size);
+ABI_CHECK(TA_TRACEPARENT_LENGTH == 55, traceparent_length);
 
 int main(void) {
     return 0;

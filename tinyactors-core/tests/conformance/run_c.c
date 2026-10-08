@@ -726,7 +726,9 @@ int main(int argc, char **argv) {
     while ((de = readdir(d)) && nf < 64) {
         size_t l = strlen(de->d_name);
         /* protocol vectors are run by their own tests (test_address, ...) */
-        if (!strcmp(de->d_name, "addresses.json") || !strcmp(de->d_name, "values.json")) continue;
+        if (!strcmp(de->d_name, "addresses.json") || !strcmp(de->d_name, "values.json") ||
+            !strcmp(de->d_name, "span_ids.json") || !strcmp(de->d_name, "traceparent.json"))
+            continue;
         if (l > 5 && !strcmp(de->d_name + l - 5, ".json")) files[nf++] = strdup(de->d_name);
     }
     closedir(d);

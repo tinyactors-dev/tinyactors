@@ -33,6 +33,8 @@ module Core
               sources: %w[address format frame arena pool heap slab].map { |s| "src/base/#{s}.c" }),
     Layer.new(name: 'image', uses: %w[base], freestanding: true,
               sources: %w[src/image/image.c src/image/event_names.c]),
+    # Trace values and the record schema (docs/adr/0006 in the repository root).
+    Layer.new(name: 'trace', uses: %w[base], freestanding: true, sources: %w[src/trace/trace.c]),
     Layer.new(name: 'core', uses: %w[image], freestanding: true,
               sources: %w[core event_pool datamodel_null].map { |s| "src/core/#{s}.c" }),
     Layer.new(name: 'system', uses: %w[core], freestanding: true,
@@ -110,8 +112,8 @@ module Core
   end
 
   LIBRARIES = [
-    Library.new(name: 'tinyactors', layers: %w[base image core system host basic_http], uses: [], libc: false,
-                headers: %w[types.h allocator.h address.h frame.h image.h datamodel.h system.h core.h host.h
+    Library.new(name: 'tinyactors', layers: %w[base image trace core system host basic_http], uses: [], libc: false,
+                headers: %w[types.h allocator.h address.h frame.h trace.h image.h datamodel.h system.h core.h host.h
                             basic_http.h wasm.h]),
     Library.new(name: 'tinyactors_runtime', layers: %w[compile runtime], uses: %w[tinyactors], libc: true,
                 headers: %w[compile.h runtime.h]),
@@ -176,6 +178,8 @@ module Core
     unit('test_host_memory', 'host', 'compile', *ECMASCRIPT, full: true),
     unit('test_address', 'base', 'quickjs', defines: { 'TA_VECTORS' => ROOT.join('tests/conformance/addresses.json') }),
     unit('test_frame', 'base'),
+    unit('test_trace', 'trace', 'quickjs', defines: { 'TA_SPAN_VECTORS' => ROOT.join('tests/conformance/span_ids.json'),
+                                                      'TA_TRACEPARENT_VECTORS' => ROOT.join('tests/conformance/traceparent.json') }),
     # The torture chamber's event loop and PostgreSQL wire client.
     Program.new(name: 'test_torture_loop', sources: %w[tests/unit/test_torture_loop.c tools/torture/loop.c], uses: [],
                 defines: {}),

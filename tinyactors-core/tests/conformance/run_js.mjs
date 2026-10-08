@@ -114,7 +114,7 @@ let failed = 0;
 
 /* protocol vectors (docs/protocol.md, Conformance): the same files the C
  * implementation runs (tests/unit/test_address.c, ...) */
-const VECTORS = new Set(['addresses.json', 'values.json']);
+const VECTORS = new Set(['addresses.json', 'values.json', 'span_ids.json', 'traceparent.json']);
 function addresses() {
   const v = JSON.parse(readFileSync(path.join(here, 'addresses.json'), 'utf8'));
   const failures = [];
