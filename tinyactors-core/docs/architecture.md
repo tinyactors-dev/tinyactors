@@ -110,6 +110,7 @@ read in one sitting and have no dependencies.
 | `ta_index_queue` | Intrusive FIFO of `u32` indices: `{head, tail}` + a `next` field at a known offset inside each record. Zero allocation per enqueue. | internal queues, mailboxes, run queue, per-actor timer lists, free lists |
 | `ta_heap` | 4-ary min-heap of `{due:u64, seq:u32, item:u32}` + back-index for O(log n) removal (`<cancel>`). | timer/delayed-send queue |
 | `ta_memory` | `ta_memcpy/memset/memmove/memcmp` mapping to builtins; freestanding fallback. | everything |
+| `ta_journal` | Lossy ring of variable-size records: reserve/commit, peek/release, a refused reservation is counted (`lost`), never waits and never overwrites. Self-relative storage ⇒ relocatable with `memcpy`; `ta_journal_copy` moves the records into storage of another size. Knows nothing about what the records mean. | the system's trace records (ADR 0006) |
 | `ta_format` | `ta_format_u64` (decimal) and `ta_text`, a bounded writer of views and numbers that records an overflow instead of truncating: what `snprintf` would do, without the C library. | session ids and addresses, generated invoke ids, the host's message ids |
 | `ta_allocator` | `{context, alloc(context, size, align), free(context, ptr, size)}` vtable (`tinyactors/allocator.h`). **Never used by the core or the system during execution.** | the host (all of its memory), compiler, runtime convenience constructors |
 

@@ -30,7 +30,7 @@ module Core
 
   LAYERS = [
     Layer.new(name: 'base', uses: [], freestanding: true,
-              sources: %w[address format frame arena pool heap slab].map { |s| "src/base/#{s}.c" }),
+              sources: %w[address format frame arena pool heap slab journal].map { |s| "src/base/#{s}.c" }),
     Layer.new(name: 'image', uses: %w[base], freestanding: true,
               sources: %w[src/image/image.c src/image/event_names.c]),
     # Trace values and the record schema (docs/adr/0006 in the repository root).
@@ -178,6 +178,7 @@ module Core
     unit('test_host_memory', 'host', 'compile', *ECMASCRIPT, full: true),
     unit('test_address', 'base', 'quickjs', defines: { 'TA_VECTORS' => ROOT.join('tests/conformance/addresses.json') }),
     unit('test_frame', 'base'),
+    unit('test_journal', 'base'),
     unit('test_trace', 'trace', 'quickjs', defines: { 'TA_SPAN_VECTORS' => ROOT.join('tests/conformance/span_ids.json'),
                                                       'TA_TRACEPARENT_VECTORS' => ROOT.join('tests/conformance/traceparent.json') }),
     # The torture chamber's event loop and PostgreSQL wire client.
