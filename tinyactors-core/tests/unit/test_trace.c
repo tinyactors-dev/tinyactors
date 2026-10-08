@@ -6,6 +6,7 @@
 #include "../harness/harness.h"
 #include <tinyactors/trace.h>
 #include "quickjs.h"
+#include "trace/record.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -257,6 +258,173 @@ static void test_sampler(void) {
     CHECK(sampled > 4500 && sampled < 5500);
 }
 
+
+/* ---- the record schema ------------------------------------------------------------------ */
+
+static uint64_t journal_storage[1024];
+
+/* Writes a record of `kind` with `extra` list entries: the header's fields
+ * from `n`, the body's bytes counting up from `n`. */
+static int write_kind(ta_journal *journal, uint32_t kind, uint32_t extra, uint32_t n) {
+    uint32_t body = ta_trace_body_size(kind);
+    uint32_t size = (uint32_t)sizeof(ta_trace_record) + body + 4u * extra;
+    ta_trace_record *record = ta_trace_record_reserve(journal, kind, size, 1000u + n, 2000u + n);
+    if (!record) return 0;
+    record->flags = TA_TRACE_FLAG_SAMPLED;
+    record->actor = n;
+    record->chart = n + 1;
+    record->key = (ta_step_key){n, n + 1, n + 2, 0};
+    record->trace = (ta_trace_id){n, n + 3};
+    record->span = ta_step_key_span_id(record->key);
+    record->parent = n + 4;
+    record->fuel = 1000u + n;
+    record->now = 2000u + n;
+    unsigned char *p = ta_trace_record_body(record);
+    for (uint32_t i = 0; i < body; i++)
+        p[i] = (unsigned char)(n + i);
+    if (kind == TA_TRACE_MACROSTEP_END)
+        ((ta_trace_macrostep_end *)(void *)p)->state_count = extra;
+    if (kind == TA_TRACE_MICROSTEP) {
+        ta_trace_microstep *micro = (ta_trace_microstep *)(void *)p;
+        micro->transition_count = extra > 0;
+        micro->exited_count = extra > 1;
+        micro->entered_count = extra - micro->transition_count - micro->exited_count;
+    }
+    uint32_t *list = (uint32_t *)(void *)(p + body);
+    for (uint32_t i = 0; i < extra; i++)
+        list[i] = n * 100u + i;
+    ta_trace_record_commit(journal, record);
+    return 1;
+}
+
+static void check_kind(const ta_trace_record *record, uint32_t kind, uint32_t extra, uint32_t n) {
+    CHECK(record != NULL);
+    if (!record) return;
+    CHECK_EQUAL(record->kind, kind);
+    CHECK_EQUAL(record->flags, TA_TRACE_FLAG_SAMPLED);
+    CHECK_EQUAL(record->actor, n);
+    CHECK_EQUAL(record->chart, n + 1);
+    CHECK(record->key.session == n && record->key.macrostep == n + 1 && record->key.microstep == n + 2);
+    CHECK(record->trace.high == n && record->trace.low == n + 3);
+    CHECK_EQUAL(record->parent, n + 4);
+    CHECK(record->fuel == 1000u + n && record->now == 2000u + n);
+    CHECK_EQUAL(record->size % 8, 0);
+    const unsigned char *p = ta_trace_body(record);
+    uint32_t body = ta_trace_body_size(kind);
+    int same = 1;
+    for (uint32_t i = 0; i < body; i++) {
+        if (kind == TA_TRACE_MACROSTEP_END && i < 4) continue; /* the count */
+        if (kind == TA_TRACE_MICROSTEP && i >= 8 && i < 20) continue;
+        same &= p[i] == (unsigned char)(n + i);
+    }
+    CHECK(same);
+    const uint32_t *list = ta_trace_list(record);
+    for (uint32_t i = 0; i < extra; i++)
+        CHECK_EQUAL(list[i], n * 100u + i);
+}
+
+static uint32_t list_entries(uint32_t kind) {
+    return kind == TA_TRACE_MACROSTEP_END ? 3 : kind == TA_TRACE_MICROSTEP ? 5 : 0;
+}
+
+/* Every kind goes in and comes out as it was written. */
+static void test_records_every_kind(void) {
+    ta_journal journal;
+    ta_journal_init(&journal, journal_storage, sizeof journal_storage);
+    for (uint32_t kind = TA_TRACE_SPAWNED; kind < TA_TRACE_KIND_COUNT; kind++)
+        CHECK(write_kind(&journal, kind, list_entries(kind), kind));
+    const unsigned char *bytes;
+    uint32_t length = ta_journal_peek(&journal, &bytes), cursor = 0;
+    ta_trace_view view = {bytes, length, 0, NULL};
+    for (uint32_t kind = TA_TRACE_SPAWNED; kind < TA_TRACE_KIND_COUNT; kind++)
+        check_kind(ta_trace_next(&view, &cursor), kind, list_entries(kind), kind);
+    CHECK(ta_trace_next(&view, &cursor) == NULL);
+    CHECK_EQUAL(cursor, length);
+    /* every body but the lists' heads is 8-aligned in size */
+    for (uint32_t kind = TA_TRACE_DROPPED; kind < TA_TRACE_KIND_COUNT; kind++)
+        CHECK_EQUAL(ta_trace_body_size(kind) % 8, 0);
+    CHECK_EQUAL(ta_trace_body_size(0), 0);
+    CHECK_EQUAL(ta_trace_body_size(TA_TRACE_KIND_COUNT), 0);
+}
+
+/* When the journal lost records, the next record written is preceded by a
+ * TA_TRACE_DROPPED record with their count. */
+static void test_records_dropped(void) {
+    ta_journal journal;
+    ta_journal_init(&journal, journal_storage, 400);
+    uint32_t written = 0;
+    while (write_kind(&journal, TA_TRACE_CONDITION, 0, written))
+        written++;
+    CHECK(!write_kind(&journal, TA_TRACE_RAISED, 0, 50));
+    const unsigned char *bytes;
+    uint32_t length = ta_journal_peek(&journal, &bytes);
+    ta_journal_release(&journal, length);
+    CHECK(write_kind(&journal, TA_TRACE_CANCELLED, 0, 60));
+    length = ta_journal_peek(&journal, &bytes);
+    ta_trace_view view = {bytes, length, 0, NULL};
+    uint32_t cursor = 0;
+    const ta_trace_record *dropped = ta_trace_next(&view, &cursor);
+    CHECK(dropped && dropped->kind == TA_TRACE_DROPPED);
+    if (dropped) {
+        CHECK_EQUAL(((const ta_trace_dropped *)ta_trace_body(dropped))->count, 2);
+        CHECK(dropped->fuel == 1060u && dropped->now == 2060u);
+    }
+    check_kind(ta_trace_next(&view, &cursor), TA_TRACE_CANCELLED, 0, 60);
+    CHECK_EQUAL(journal.lost, 0);
+    CHECK(ta_trace_next(&view, &cursor) == NULL);
+}
+
+/* The reader refuses what is not a record. */
+static void test_records_malformed(void) {
+    ta_journal journal;
+    ta_journal_init(&journal, journal_storage, sizeof journal_storage);
+    CHECK(write_kind(&journal, TA_TRACE_MICROSTEP, 5, 1));
+    const unsigned char *bytes;
+    uint32_t length = ta_journal_peek(&journal, &bytes), cursor;
+    static unsigned char copy[512];
+    memcpy(copy, bytes, length);
+    ta_trace_record *record = (ta_trace_record *)(void *)copy;
+    ta_trace_view view = {copy, length, 0, NULL};
+    cursor = 0;
+    CHECK(ta_trace_next(&view, &cursor) != NULL);
+    view.length = length - 8; /* cut */
+    cursor = 0;
+    CHECK(ta_trace_next(&view, &cursor) == NULL);
+    view.length = length;
+    record->kind = 0;
+    cursor = 0;
+    CHECK(ta_trace_next(&view, &cursor) == NULL);
+    record->kind = TA_TRACE_KIND_COUNT;
+    cursor = 0;
+    CHECK(ta_trace_next(&view, &cursor) == NULL);
+    record->kind = TA_TRACE_MICROSTEP;
+    ((ta_trace_microstep *)ta_trace_record_body(record))->entered_count = 100; /* lists past the size */
+    cursor = 0;
+    CHECK(ta_trace_next(&view, &cursor) == NULL);
+    ((ta_trace_microstep *)ta_trace_record_body(record))->entered_count = 3;
+    record->size = 20; /* below the header */
+    cursor = 0;
+    CHECK(ta_trace_next(&view, &cursor) == NULL);
+    record->size = (uint32_t)length + 4; /* not a multiple of 8 */
+    cursor = 0;
+    CHECK(ta_trace_next(&view, &cursor) == NULL);
+    cursor = 4; /* not at a record */
+    CHECK(ta_trace_next(&view, &cursor) == NULL);
+}
+
+/* Dynamic strings resolve against the view's string storage. */
+static void test_records_strings(void) {
+    static uint32_t strings[16];
+    strings[4] = 1;          /* references */
+    strings[5] = 5;          /* length */
+    memcpy(&strings[6], "hello", 6);
+    ta_trace_view view = {NULL, 0, 0, (const unsigned char *)strings};
+    ta_string_view s = ta_trace_dynamic_string(&view, TA_TRACE_STRING_DYNAMIC | 2u); /* 16 bytes in */
+    CHECK(s.length == 5 && memcmp(s.pointer, "hello", 5) == 0);
+    CHECK_EQUAL(ta_trace_dynamic_string(&view, 7).length, 0);      /* an image string */
+    CHECK_EQUAL(ta_trace_dynamic_string(&view, TA_NIL).length, 0); /* none */
+}
+
 int main(void) {
     JSRuntime *runtime = JS_NewRuntime();
     J = JS_NewContext(runtime);
@@ -267,6 +435,10 @@ int main(void) {
     RUN(test_child_context);
     RUN(test_generator);
     RUN(test_sampler);
+    RUN(test_records_every_kind);
+    RUN(test_records_dropped);
+    RUN(test_records_malformed);
+    RUN(test_records_strings);
     JS_FreeContext(J);
     JS_FreeRuntime(runtime);
     TEST_MAIN_END();

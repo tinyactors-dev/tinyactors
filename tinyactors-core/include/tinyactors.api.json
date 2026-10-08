@@ -497,6 +497,38 @@
       "value": 55
     },
     {
+      "name": "TA_TRACE_ACTION_FAILED",
+      "value": 17
+    },
+    {
+      "name": "TA_TRACE_ASSIGN",
+      "value": 15
+    },
+    {
+      "name": "TA_TRACE_CANCELLED",
+      "value": 14
+    },
+    {
+      "name": "TA_TRACE_CONDITION",
+      "value": 10
+    },
+    {
+      "name": "TA_TRACE_DECISIONS",
+      "value": 135164
+    },
+    {
+      "name": "TA_TRACE_DESTROYED",
+      "value": 4
+    },
+    {
+      "name": "TA_TRACE_DROPPED",
+      "value": 1
+    },
+    {
+      "name": "TA_TRACE_FINISHED",
+      "value": 3
+    },
+    {
       "name": "TA_TRACE_FLAG_RANDOM",
       "value": 2
     },
@@ -505,8 +537,92 @@
       "value": 1
     },
     {
+      "name": "TA_TRACE_FULL",
+      "value": 2147745788
+    },
+    {
       "name": "TA_TRACE_ID_TEXT_LENGTH",
       "value": 32
+    },
+    {
+      "name": "TA_TRACE_INVOKED",
+      "value": 13
+    },
+    {
+      "name": "TA_TRACE_KIND_COUNT",
+      "value": 18
+    },
+    {
+      "name": "TA_TRACE_LIFECYCLE",
+      "value": 124
+    },
+    {
+      "name": "TA_TRACE_LOADED",
+      "value": 6
+    },
+    {
+      "name": "TA_TRACE_LOG",
+      "value": 16
+    },
+    {
+      "name": "TA_TRACE_MACROSTEP_BEGIN",
+      "value": 7
+    },
+    {
+      "name": "TA_TRACE_MACROSTEP_END",
+      "value": 8
+    },
+    {
+      "name": "TA_TRACE_MICROSTEP",
+      "value": 9
+    },
+    {
+      "name": "TA_TRACE_RAISED",
+      "value": 11
+    },
+    {
+      "name": "TA_TRACE_SENT",
+      "value": 12
+    },
+    {
+      "name": "TA_TRACE_SPAWNED",
+      "value": 2
+    },
+    {
+      "name": "TA_TRACE_STEP_DESTROYED",
+      "value": 3
+    },
+    {
+      "name": "TA_TRACE_STEP_FINISHED",
+      "value": 2
+    },
+    {
+      "name": "TA_TRACE_STEP_LOADED",
+      "value": 4294967295
+    },
+    {
+      "name": "TA_TRACE_STEP_SPAWNED",
+      "value": 1
+    },
+    {
+      "name": "TA_TRACE_STEP_UNLOADED",
+      "value": 4294967294
+    },
+    {
+      "name": "TA_TRACE_STRING_DYNAMIC",
+      "value": 2147483648
+    },
+    {
+      "name": "TA_TRACE_SUMMARY",
+      "value": 131580
+    },
+    {
+      "name": "TA_TRACE_UNLOADED",
+      "value": 5
+    },
+    {
+      "name": "TA_TRACE_VALUES",
+      "value": 2147483648
     },
     {
       "name": "TA_VERSION_MAJOR",
@@ -934,6 +1050,826 @@
           "align": 8,
           "offsets": {
             "state": 0
+          }
+        }
+      }
+    },
+    "ta_trace_record": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "uint16_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint16_t"
+        },
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "key",
+          "type": "ta_step_key"
+        },
+        {
+          "name": "trace",
+          "type": "ta_trace_id"
+        },
+        {
+          "name": "span",
+          "type": "ta_span_id"
+        },
+        {
+          "name": "parent",
+          "type": "ta_span_id"
+        },
+        {
+          "name": "fuel",
+          "type": "uint64_t"
+        },
+        {
+          "name": "now",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 88,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "flags": 2,
+            "size": 4,
+            "actor": 8,
+            "chart": 12,
+            "key": 16,
+            "trace": 40,
+            "span": 56,
+            "parent": 64,
+            "fuel": 72,
+            "now": 80
+          }
+        },
+        "aarch64": {
+          "size": 88,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "flags": 2,
+            "size": 4,
+            "actor": 8,
+            "chart": 12,
+            "key": 16,
+            "trace": 40,
+            "span": 56,
+            "parent": 64,
+            "fuel": 72,
+            "now": 80
+          }
+        },
+        "wasm32": {
+          "size": 88,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "flags": 2,
+            "size": 4,
+            "actor": 8,
+            "chart": 12,
+            "key": 16,
+            "trace": 40,
+            "span": 56,
+            "parent": 64,
+            "fuel": 72,
+            "now": 80
+          }
+        }
+      }
+    },
+    "ta_trace_dropped": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "count",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "count": 0
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "count": 0
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "count": 0
+          }
+        }
+      }
+    },
+    "ta_trace_spawned": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": "uint32_t"
+        },
+        {
+          "name": "parent",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "parent": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "parent": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "parent": 4
+          }
+        }
+      }
+    },
+    "ta_trace_finished": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "final_state",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "final_state": 0,
+            "pad": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "final_state": 0,
+            "pad": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "final_state": 0,
+            "pad": 4
+          }
+        }
+      }
+    },
+    "ta_trace_macrostep_begin": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name_id",
+          "type": "uint32_t"
+        },
+        {
+          "name": "type",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sendid",
+          "type": "uint32_t"
+        },
+        {
+          "name": "origin",
+          "type": "uint32_t"
+        },
+        {
+          "name": "datamodel",
+          "type": "uint32_t"
+        },
+        {
+          "name": "origin_session",
+          "type": "uint64_t"
+        },
+        {
+          "name": "cause",
+          "type": "ta_step_key"
+        },
+        {
+          "name": "payload",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "name_id": 4,
+            "type": 8,
+            "sendid": 12,
+            "origin": 16,
+            "datamodel": 20,
+            "origin_session": 24,
+            "cause": 32,
+            "payload": 56
+          }
+        },
+        "aarch64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "name_id": 4,
+            "type": 8,
+            "sendid": 12,
+            "origin": 16,
+            "datamodel": 20,
+            "origin_session": 24,
+            "cause": 32,
+            "payload": 56
+          }
+        },
+        "wasm32": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "name_id": 4,
+            "type": 8,
+            "sendid": 12,
+            "origin": 16,
+            "datamodel": 20,
+            "origin_session": 24,
+            "cause": 32,
+            "payload": 56
+          }
+        }
+      }
+    },
+    "ta_trace_macrostep_end": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "state_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "state_count": 0,
+            "pad": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "state_count": 0,
+            "pad": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "state_count": 0,
+            "pad": 4
+          }
+        }
+      }
+    },
+    "ta_trace_microstep": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "begin_fuel",
+          "type": "uint64_t"
+        },
+        {
+          "name": "transition_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "exited_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "entered_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "begin_fuel": 0,
+            "transition_count": 8,
+            "exited_count": 12,
+            "entered_count": 16,
+            "pad": 20
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "begin_fuel": 0,
+            "transition_count": 8,
+            "exited_count": 12,
+            "entered_count": 16,
+            "pad": 20
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "begin_fuel": 0,
+            "transition_count": 8,
+            "exited_count": 12,
+            "entered_count": 16,
+            "pad": 20
+          }
+        }
+      }
+    },
+    "ta_trace_condition": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "transition",
+          "type": "uint32_t"
+        },
+        {
+          "name": "result",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "transition": 0,
+            "result": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "transition": 0,
+            "result": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "transition": 0,
+            "result": 4
+          }
+        }
+      }
+    },
+    "ta_trace_raised": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name_id",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "name_id": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "name_id": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "name_id": 4
+          }
+        }
+      }
+    },
+    "ta_trace_sent": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "target",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name_id",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sendid",
+          "type": "uint32_t"
+        },
+        {
+          "name": "delay",
+          "type": "uint64_t"
+        },
+        {
+          "name": "context",
+          "type": "ta_trace_context"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "target": 0,
+            "name": 4,
+            "name_id": 8,
+            "sendid": 12,
+            "delay": 16,
+            "context": 24
+          }
+        },
+        "aarch64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "target": 0,
+            "name": 4,
+            "name_id": 8,
+            "sendid": 12,
+            "delay": 16,
+            "context": 24
+          }
+        },
+        "wasm32": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "target": 0,
+            "name": 4,
+            "name_id": 8,
+            "sendid": 12,
+            "delay": 16,
+            "context": 24
+          }
+        }
+      }
+    },
+    "ta_trace_invoked": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type": "uint32_t"
+        },
+        {
+          "name": "source",
+          "type": "uint32_t"
+        },
+        {
+          "name": "invokeid",
+          "type": "uint32_t"
+        },
+        {
+          "name": "child",
+          "type": "uint32_t"
+        },
+        {
+          "name": "child_session",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "source": 4,
+            "invokeid": 8,
+            "child": 12,
+            "child_session": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "source": 4,
+            "invokeid": 8,
+            "child": 12,
+            "child_session": 16
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "source": 4,
+            "invokeid": 8,
+            "child": 12,
+            "child_session": 16
+          }
+        }
+      }
+    },
+    "ta_trace_cancelled": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "sendid",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "sendid": 0,
+            "pad": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "sendid": 0,
+            "pad": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "sendid": 0,
+            "pad": 4
+          }
+        }
+      }
+    },
+    "ta_trace_assign": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "location",
+          "type": "uint32_t"
+        },
+        {
+          "name": "datamodel",
+          "type": "uint32_t"
+        },
+        {
+          "name": "payload",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "location": 0,
+            "datamodel": 4,
+            "payload": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "location": 0,
+            "datamodel": 4,
+            "payload": 8
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "location": 0,
+            "datamodel": 4,
+            "payload": 8
+          }
+        }
+      }
+    },
+    "ta_trace_log": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "label",
+          "type": "uint32_t"
+        },
+        {
+          "name": "text",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "label": 0,
+            "text": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "label": 0,
+            "text": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "label": 0,
+            "text": 4
+          }
+        }
+      }
+    },
+    "ta_trace_action_failed": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "opcode",
+          "type": "uint32_t"
+        },
+        {
+          "name": "expression",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "opcode": 0,
+            "expression": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "opcode": 0,
+            "expression": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "opcode": 0,
+            "expression": 4
+          }
+        }
+      }
+    },
+    "ta_trace_view": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "records",
+          "type": "const unsigned char *"
+        },
+        {
+          "name": "length",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "strings",
+          "type": "const unsigned char *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "records": 0,
+            "length": 8,
+            "pad": 12,
+            "strings": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "records": 0,
+            "length": 8,
+            "pad": 12,
+            "strings": 16
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "records": 0,
+            "length": 4,
+            "pad": 8,
+            "strings": 12
           }
         }
       }
@@ -6199,6 +7135,32 @@
       "implemented": true
     },
     {
+      "name": "ta_trace_body",
+      "returns": "const void *",
+      "params": [
+        {
+          "name": "record",
+          "type": "const ta_trace_record *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_trace_body_size",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_trace_context_child",
       "returns": "ta_trace_context",
       "params": [
@@ -6209,6 +7171,23 @@
         {
           "name": "key",
           "type": "ta_step_key"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_trace_dynamic_string",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "view",
+          "type": "const ta_trace_view *"
+        },
+        {
+          "name": "reference",
+          "type": "uint32_t"
         }
       ],
       "public": true,
@@ -6260,6 +7239,36 @@
         {
           "name": "capacity",
           "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_trace_list",
+      "returns": "const uint32_t *",
+      "params": [
+        {
+          "name": "record",
+          "type": "const ta_trace_record *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_trace_next",
+      "returns": "const ta_trace_record *",
+      "params": [
+        {
+          "name": "view",
+          "type": "const ta_trace_view *"
+        },
+        {
+          "name": "cursor",
+          "type": "uint32_t *"
         }
       ],
       "public": true,

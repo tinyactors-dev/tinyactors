@@ -34,7 +34,7 @@ module Core
     Layer.new(name: 'image', uses: %w[base], freestanding: true,
               sources: %w[src/image/image.c src/image/event_names.c]),
     # Trace values and the record schema (docs/adr/0006 in the repository root).
-    Layer.new(name: 'trace', uses: %w[base], freestanding: true, sources: %w[src/trace/trace.c]),
+    Layer.new(name: 'trace', uses: %w[base], freestanding: true, sources: %w[src/trace/trace.c src/trace/record.c]),
     Layer.new(name: 'core', uses: %w[image], freestanding: true,
               sources: %w[core event_pool datamodel_null].map { |s| "src/core/#{s}.c" }),
     Layer.new(name: 'system', uses: %w[core], freestanding: true,

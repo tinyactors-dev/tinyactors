@@ -95,6 +95,210 @@ TA_API ta_trace_id ta_trace_generator_next(ta_trace_generator *generator);
 TA_API uint64_t ta_trace_ratio_threshold(uint32_t parts, uint32_t whole);
 TA_API int ta_trace_sampled(ta_trace_id trace, uint64_t threshold);
 
+
+/* ---- the record schema ------------------------------------------------------------------
+ *
+ * What core and the system write into a system's trace journal, and what a
+ * reader (the otlp codec, a binding, a C host) reads back with
+ * ta_trace_next. A record is a header and a body; its size is a multiple of
+ * 8, and records follow each other without gaps.
+ *
+ * Names are not copied into records. States, transitions, charts and static
+ * event names are indices into the system's image; strings are references:
+ * an image string id, or, with TA_TRACE_STRING_DYNAMIC set, a dynamic string
+ * in the system's string storage (ta_trace_dynamic_string); TA_NIL is none.
+ * Payloads are datamodel handles, with the index of the datamodel binding
+ * that owns them. Both stay valid while their record is unacknowledged.
+ */
+enum {
+    TA_TRACE_DROPPED = 1,   /* the records lost since the last one (ta_trace_dropped) */
+    TA_TRACE_SPAWNED = 2,   /* ta_trace_spawned */
+    TA_TRACE_FINISHED = 3,  /* reached a top-level final state (ta_trace_finished) */
+    TA_TRACE_DESTROYED = 4, /* no body */
+    TA_TRACE_UNLOADED = 5,  /* hibernated; no body */
+    TA_TRACE_LOADED = 6,    /* woken; no body */
+    TA_TRACE_MACROSTEP_BEGIN = 7,
+    TA_TRACE_MACROSTEP_END = 8,
+    TA_TRACE_MICROSTEP = 9,
+    TA_TRACE_CONDITION = 10,
+    TA_TRACE_RAISED = 11,
+    TA_TRACE_SENT = 12,
+    TA_TRACE_INVOKED = 13,
+    TA_TRACE_CANCELLED = 14,
+    TA_TRACE_ASSIGN = 15,
+    TA_TRACE_LOG = 16,
+    TA_TRACE_ACTION_FAILED = 17,
+    TA_TRACE_KIND_COUNT = 18
+};
+
+/* Masks of kinds (a system's trace_kinds). TA_TRACE_DROPPED is always
+ * written. TA_TRACE_VALUES also captures assigned values as payloads. */
+#define TA_TRACE_BIT(kind) (UINT32_C(1) << (kind))
+#define TA_TRACE_VALUES    (UINT32_C(1) << 31)
+#define TA_TRACE_LIFECYCLE                                                                   \
+    (TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(TA_TRACE_FINISHED) |                    \
+     TA_TRACE_BIT(TA_TRACE_DESTROYED) | TA_TRACE_BIT(TA_TRACE_UNLOADED) |                  \
+     TA_TRACE_BIT(TA_TRACE_LOADED))
+/* A span per macrostep, lifecycle spans and failures. */
+#define TA_TRACE_SUMMARY                                                                     \
+    (TA_TRACE_LIFECYCLE | TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN) |                         \
+     TA_TRACE_BIT(TA_TRACE_MACROSTEP_END) | TA_TRACE_BIT(TA_TRACE_ACTION_FAILED))
+/* And microsteps, conditions and raised events. */
+#define TA_TRACE_DECISIONS                                                                   \
+    (TA_TRACE_SUMMARY | TA_TRACE_BIT(TA_TRACE_MICROSTEP) | TA_TRACE_BIT(TA_TRACE_CONDITION) | \
+     TA_TRACE_BIT(TA_TRACE_RAISED))
+/* Every kind, with values. */
+#define TA_TRACE_FULL                                                                        \
+    (TA_TRACE_DECISIONS | TA_TRACE_BIT(TA_TRACE_SENT) | TA_TRACE_BIT(TA_TRACE_INVOKED) |    \
+     TA_TRACE_BIT(TA_TRACE_CANCELLED) | TA_TRACE_BIT(TA_TRACE_ASSIGN) |                     \
+     TA_TRACE_BIT(TA_TRACE_LOG) | TA_TRACE_VALUES)
+
+#define TA_TRACE_STRING_DYNAMIC 0x80000000u
+
+/* Lifecycle records are outside every macrostep; their step keys are fixed
+ * (session, 0, TA_TRACE_STEP_*), or (session, macrostep, TA_TRACE_STEP_*)
+ * for hibernation, so each has a span ID of its own. */
+#define TA_TRACE_STEP_SPAWNED   1u
+#define TA_TRACE_STEP_FINISHED  2u
+#define TA_TRACE_STEP_DESTROYED 3u
+#define TA_TRACE_STEP_UNLOADED  0xFFFFFFFEu
+#define TA_TRACE_STEP_LOADED    0xFFFFFFFFu
+
+/* The header: 88 bytes. `span` is ta_step_key_span_id(key); `parent` the
+ * span's parent: the cause of a macrostep (0 for a root), the macrostep of a
+ * microstep and of what happened in it. `fuel` is the system's fuel clock
+ * when the record was written (docs/adr/0006, section 9) and `now` its
+ * logical time. */
+typedef struct ta_trace_record {
+    uint16_t kind;  /* TA_TRACE_* */
+    uint16_t flags; /* the trace's W3C flags */
+    uint32_t size;  /* the whole record, header included */
+    uint32_t actor; /* the actor's handle in its system */
+    uint32_t chart; /* its chart in the image */
+    ta_step_key key;
+    ta_trace_id trace;
+    ta_span_id span;
+    ta_span_id parent;
+    uint64_t fuel;
+    uint64_t now;
+} ta_trace_record;
+
+typedef struct ta_trace_dropped {
+    uint64_t count;
+} ta_trace_dropped;
+
+typedef struct ta_trace_spawned {
+    uint32_t name;   /* the actor's name (a string) */
+    uint32_t parent; /* the invoking actor's handle, 0 for a root */
+} ta_trace_spawned;
+
+typedef struct ta_trace_finished {
+    uint32_t final_state; /* the top-level <final>, TA_NIL if none */
+    uint32_t pad;
+} ta_trace_finished;
+
+/* The event a macrostep took; for the bootstrap `name` is TA_NIL. */
+typedef struct ta_trace_macrostep_begin {
+    uint32_t name;      /* a string */
+    uint32_t name_id;   /* its event-name node in the image */
+    uint32_t type;      /* TA_EVENT_TYPE_* */
+    uint32_t sendid;    /* a string, TA_NIL if none */
+    uint32_t origin;    /* an external origin (a string), TA_NIL if none */
+    uint32_t datamodel; /* the binding owning `payload`, TA_NIL if none */
+    uint64_t origin_session; /* the sending session, 0 if none */
+    ta_step_key cause;       /* the step that sent it; session 0: a host's (all 0: none) */
+    uint64_t payload;
+} ta_trace_macrostep_begin;
+
+/* The configuration after a macrostep: `state_count` active states in
+ * document order (the root left out) follow. */
+typedef struct ta_trace_macrostep_end {
+    uint32_t state_count;
+    uint32_t pad;
+} ta_trace_macrostep_end;
+
+/* A microstep: its transitions (chart-local indices), the states it exited
+ * in exit order and entered in entry order follow, in that order. */
+typedef struct ta_trace_microstep {
+    uint64_t begin_fuel; /* the fuel clock when it began */
+    uint32_t transition_count, exited_count, entered_count, pad;
+} ta_trace_microstep;
+
+typedef struct ta_trace_condition {
+    uint32_t transition; /* chart-local */
+    uint32_t result;     /* 1 true, 0 false or failed */
+} ta_trace_condition;
+
+typedef struct ta_trace_raised {
+    uint32_t name; /* a string */
+    uint32_t name_id;
+} ta_trace_raised;
+
+typedef struct ta_trace_sent {
+    uint32_t target; /* a string, TA_NIL for the sender itself */
+    uint32_t name;   /* a string */
+    uint32_t name_id;
+    uint32_t sendid; /* a string, TA_NIL if none */
+    uint64_t delay;  /* nanoseconds */
+    ta_trace_context context; /* the new event's; no trace if untraced */
+} ta_trace_sent;
+
+typedef struct ta_trace_invoked {
+    uint32_t type;     /* a string, TA_NIL for SCXML */
+    uint32_t source;   /* a string, TA_NIL if none */
+    uint32_t invokeid; /* a string */
+    uint32_t child;    /* the child's handle, 0 if the host runs it */
+    uint64_t child_session;
+} ta_trace_invoked;
+
+typedef struct ta_trace_cancelled {
+    uint32_t sendid; /* a string */
+    uint32_t pad;
+} ta_trace_cancelled;
+
+typedef struct ta_trace_assign {
+    uint32_t location;  /* the location expression (chart-local) */
+    uint32_t datamodel; /* the binding owning `payload`, TA_NIL if none */
+    uint64_t payload;   /* the value assigned, 0 without TA_TRACE_VALUES */
+} ta_trace_assign;
+
+typedef struct ta_trace_log {
+    uint32_t label; /* a string, TA_NIL if none */
+    uint32_t text;  /* a string, TA_NIL if none */
+} ta_trace_log;
+
+typedef struct ta_trace_action_failed {
+    uint32_t opcode;     /* the executable content that failed (image opcode) */
+    uint32_t expression; /* its expression, TA_NIL if none */
+} ta_trace_action_failed;
+
+/* A batch of records to read, as a system hands it out (ta_system_trace):
+ * the records, and the storage their dynamic strings are in. */
+typedef struct ta_trace_view {
+    const unsigned char *records;
+    uint32_t length;
+    uint32_t pad;
+    const unsigned char *strings;
+} ta_trace_view;
+
+/* The size of a kind's body, without the lists that follow it; 0 for an
+ * unknown kind. */
+TA_API uint32_t ta_trace_body_size(uint32_t kind);
+/* The record at *cursor (start at 0), advancing it past the record; NULL at
+ * the end, or when the record is malformed (unknown kind, a size too small
+ * for its kind and lists, not a multiple of 8, or past the end). */
+TA_API const ta_trace_record *ta_trace_next(const ta_trace_view *view, uint32_t *cursor);
+/* The body after a record's header. */
+TA_API const void *ta_trace_body(const ta_trace_record *record);
+/* The u32 lists after the body of a MACROSTEP_END (the states) or a
+ * MICROSTEP (transitions, then exited, then entered). */
+TA_API const uint32_t *ta_trace_list(const ta_trace_record *record);
+/* A dynamic string (TA_TRACE_STRING_DYNAMIC set) of a view; an empty view for
+ * anything else (resolve image strings with ta_image_string). Its bytes are
+ * at `strings + (reference & ~TA_TRACE_STRING_DYNAMIC) * 8`: a u32 reference
+ * count, a u32 length, then the bytes and a NUL. */
+TA_API ta_string_view ta_trace_dynamic_string(const ta_trace_view *view, uint32_t reference);
+
 #ifdef __cplusplus
 }
 #endif
