@@ -221,6 +221,12 @@ module Core
   # remain, and anything else fails to compile, on every host.
   FREESTANDING = %w[-ffreestanding -nostdlibinc -fno-builtin-malloc].freeze
 
+  # What the binding surface check compiles with: unoptimized, so the
+  # compiler inlines no call away, without the sanitizers zig adds at -O0,
+  # and each function and datum in a section of its own, for the linker's
+  # dead-code elimination to drop what the binding does not reach.
+  UNOPTIMIZED = %w[-O0 -fno-sanitize=all -ffunction-sections -fdata-sections].freeze
+
   # How a build compiles: `dev` is what the tests run (sanitizers, debug
   # assertions), `release` what the tools and benchmarks run. The sanitizer
   # build is -O1, as sanitizers are usually run: fast enough for the whole
@@ -234,7 +240,11 @@ module Core
     'addon' => { flags: %w[-O2 -DNDEBUG -fvisibility=hidden], link: [], position_independent: true },
     # The test programs as WebAssembly (wasm32-wasi, the pinned zig), run
     # under wasmtime (mise run check:wasm).
-    'wasi' => { flags: %w[-Os], link: [], wasi: true }
+    'wasi' => { flags: %w[-Os], link: [], wasi: true },
+    # The Node.js addon as the binding surface check links it (mise run
+    # surface): for one fixed target, x86_64 Linux ELF with the pinned zig,
+    # so the answer is the same on every host.
+    'surface' => { flags: UNOPTIMIZED, link: [], release: Toolchain::Target.release('x86_64-linux') }
   }.freeze
 
 
@@ -338,6 +348,53 @@ module Core
     libraries = order.flat_map { |name| LAYERS.fetch(name).libraries || [] }.uniq
     link = [*objects, *archives, *libraries, *variant(variant_name)[:link]]
     target.program(link, into: program_path(variant_name, program.name).to_s)
+  end
+
+  # --- the bindings' C parts ----------------------------------------------
+
+  # The Node.js addon (mise run node:build): its own sources, compiled with
+  # the Node-API headers that ship with the pinned node, and the layers it
+  # links.
+  NODE_LAYERS = %w[host runtime system compile otlp].freeze
+  NODE_SOURCES = %w[bindings/node/src/addon.c bindings/shared/binding.c].freeze
+
+  # Builds the addon's layers and compiles its own sources for the build
+  # `variant_name`; answers what links it: its objects, then the archives.
+  def node_addon_inputs(variant_name)
+    node_include = Pathname.new(Toolchain::Tool[:node].path).join('../../include/node').expand_path
+    abort "no node_api.h in #{node_include}" unless node_include.join('node_api.h').file?
+
+    build_layers(variant_name, link_order(NODE_LAYERS))
+    # NAPI_MODULE defines the addon's exported entry points without prototypes.
+    command = [*compile_command(variant_name), '-Wno-missing-prototypes', '-isystem', node_include.to_s,
+               '-DNAPI_VERSION=8', '-DNODE_GYP_MODULE_NAME=tinyactors']
+    objects = NODE_SOURCES.map do |source|
+      object = directory(variant_name).join('objects/node', "#{File.basename(source, '.c')}.o")
+      compile(command, source, object)
+      object.to_s
+    end
+    [*objects, *link_order(NODE_LAYERS).map { |name| archive_path(variant_name, name).to_s }]
+  end
+
+  # The web binding (mise run web:build): a wasm32-wasi reactor of the
+  # runtime and its JS glue, built with the pinned zig. It gives the host the
+  # C library's allocator (ta_runtime_malloc in runtime.c); runtime_hosted.c
+  # (files, the clock) it does not need.
+  def web_sources
+    link_order(%w[host compile otlp]).flat_map { |name| LAYERS.fetch(name).sources } +
+      %w[src/runtime/runtime.c bindings/shared/binding.c bindings/web/src/glue.c]
+  end
+
+  def web_target = Toolchain::Target.zig('wasm32-wasi')
+
+  # Links the web binding's module into `into`, compiled with `flags` (its
+  # optimization) beside the binding's own. A reactor: no main, its exports
+  # named in glue.c.
+  def link_web(into:, flags:)
+    target = web_target
+    target.program(web_sources, into: into.to_s,
+                                flags: [*target.cflags, '-mexec-model=reactor', *flags, '-std=c11', '-Wall', '-Wextra',
+                                        '-Werror', '-Iinclude', '-Isrc', '-Ibindings/web/src'])
   end
 
   # Runs the block for each item on a thread per CPU; the block's own

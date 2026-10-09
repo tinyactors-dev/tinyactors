@@ -52,6 +52,10 @@ module Toolchain
     # The functions and data it defines and exports.
     def exports = Symbols.new(nm('-g', '--defined-only')) - format.linker_defined
 
+    # Everything it defines, local symbols too: in a linked wasm module, the
+    # functions its name section names.
+    def defined = Symbols.new(nm('--defined-only')) - format.linker_defined
+
     # What it leaves for the linker or loader to find.
     def undefined = Symbols.new(nm('-u'))
 

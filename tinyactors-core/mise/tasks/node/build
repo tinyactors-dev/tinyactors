@@ -17,11 +17,6 @@
 
 require_relative '../../core'
 
-LAYERS = %w[host runtime system compile otlp].freeze
-node = Pathname.new(Toolchain::Tool[:node].path)
-node_include = node.join('../../include/node').expand_path
-abort "node:build: no node_api.h in #{node_include}" unless node_include.join('node_api.h').file?
-
 release = ENV['usage_target'].to_s
 release = ARGV[ARGV.index('--target') + 1].to_s if release.empty? && ARGV.include?('--target')
 native = Toolchain::Target.native_releases.map(&:name)
@@ -29,21 +24,12 @@ abort "node:build: #{release} builds no addon; one of #{native.join(', ')}" unle
 variant = release.empty? ? 'addon' : Core.addon_variant(release)
 target = Core.target(variant)
 
-Core.build_layers(variant, Core.link_order(LAYERS))
-# NAPI_MODULE defines the addon's exported entry points without prototypes.
-command = [*Core.compile_command(variant), '-Wno-missing-prototypes', '-isystem', node_include.to_s,
-           '-DNAPI_VERSION=8', '-DNODE_GYP_MODULE_NAME=tinyactors']
-objects = %w[bindings/node/src/addon.c bindings/shared/binding.c].map do |source|
-  object = Core.directory(variant).join('objects/node', "#{File.basename(source, '.c')}.o")
-  Core.compile(command, source, object)
-  object.to_s
-end
-archives = Core.link_order(LAYERS).map { |name| Core.archive_path(variant, name).to_s }
+inputs = Core.node_addon_inputs(variant)
 if release.empty?
   addon = Core::ROOT.join('bindings/node/build/tinyactors.node')
-  target.program([*objects, *archives], into: addon.to_s, flags: target.plugin_flags)
+  target.program(inputs, into: addon.to_s, flags: target.plugin_flags)
 else
   addon = Core::BUILD.join('node', release, 'tinyactors.node')
-  target.plugin([*objects, *archives], into: addon.to_s)
+  target.plugin(inputs, into: addon.to_s)
 end
 puts "node:build: #{addon.relative_path_from(Core::ROOT)}"

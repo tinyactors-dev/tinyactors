@@ -1,10 +1,6 @@
 {
-  "$comment": "What every binding must expose. Checked by tools/check_surface.py (gate 17): each public function of include/tinyactors/*.h is \"bind\" (reachable from every binding below) or skipped with a reason. A new TA_API function fails the gate until it is classified here.",
-  "bindings": {
-    "node": ["bindings/node/src/addon.c", "bindings/shared/binding.c", "src/host/*.c"],
-    "web": ["bindings/web/src/glue.c", "bindings/shared/binding.c", "src/host/*.c"]
-  },
-  "typings": ["bindings/node/index.d.ts", "bindings/web/index.d.ts"],
+  "$comment": "What every binding (the Node.js addon and the web module) must expose. Checked by `mise run surface`, which `mise run test` runs: each public function of include/tinyactors/*.h is \"bind\" (it survives linking every binding with dead-code elimination from its entry points), bound for some bindings with a reason for the others, or skipped with a reason; each typings file declares every runtime export and public class member of the module it describes. A new TA_API function fails the check until it is classified here.",
+  "typings": {"bindings/node/index.d.ts": "bindings/node/index.js", "bindings/web/index.d.ts": "bindings/web/node.mjs"},
   "functions": {
     "ta_address_format": {"skip": "the JS bindings implement the protocol's address grammar themselves (parseAddress/formatAddress in bindings/shared/core.mjs), held to the same vectors as the C parser (tests/conformance/addresses.json)"},
     "ta_address_format_name": {"skip": "the JS bindings implement the protocol's address grammar themselves (parseAddress/formatAddress in bindings/shared/core.mjs), held to the same vectors as the C parser (tests/conformance/addresses.json)"},
@@ -87,6 +83,7 @@
     "ta_datamodel_ecmascript_snapshot": {"skip": "C ECMAScript datamodel; the JS bindings snapshot their own datamodel tables (plain values, encoded with the hibernation codec)"},
     "ta_datamodel_ecmascript_restore": {"skip": "C ECMAScript datamodel; the JS bindings restore their own datamodel tables"},
     "ta_datamodel_ecmascript_last_error": {"skip": "C ECMAScript datamodel; the JS bindings report what they cannot store themselves"},
+    "ta_datamodel_ecmascript_wasm_set_time": {"skip": "the clock of the release's tinyactors_datamodel_ecmascript.wasm (browser_wasm.c); the JS bindings do not load the C ECMAScript datamodel, and their own engine reads the platform's clock"},
 
     "ta_host_new": "bind",
     "ta_host_free": "bind",
@@ -202,6 +199,9 @@
     "ta_actor_wake": "bind",
     "ta_actor_export": "bind",
     "ta_blob_migrate": "bind",
-    "ta_blob_rebase": "bind"
+    "ta_blob_rebase": "bind",
+
+    "ta_wasm_alloc": {"skip": "the allocator of the release's standalone wasm modules, which import nothing (docs/distribution.md); the web binding is a wasm32-wasi reactor that gives JavaScript the C library's malloc (w_alloc/w_free in bindings/web/src/glue.c) and the library ta_runtime_malloc, and the Node.js addon is native, where wasm.h declares nothing"},
+    "ta_wasm_free": {"skip": "the allocator of the release's standalone wasm modules (see ta_wasm_alloc); the web binding frees with the C library (w_free in bindings/web/src/glue.c)"}
   }
 }

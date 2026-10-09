@@ -4,21 +4,14 @@
 
 require_relative '../../core'
 
-# The binding gives the host the C library's allocator (ta_runtime_malloc in
-# runtime.c); runtime_hosted.c (files, the clock) it does not need.
-sources = Core.link_order(%w[host compile otlp]).flat_map { |name| Core::LAYERS.fetch(name).sources } +
-          %w[src/runtime/runtime.c bindings/shared/binding.c bindings/web/src/glue.c]
 output = Core::ROOT.join('bindings/web/tinyactors.wasm')
-target = Toolchain::Target.zig('wasm32-wasi')
 key = Cache.digest('web:build', Cache.tool_id(Toolchain::Tool[:zig].command),
                    Cache.files('src/**/*', 'include/**/*', 'bindings/shared/*.c', 'bindings/web/src/*'))
 if output.file? && Cache.stamped?('web-build', key)
   puts 'web:build: cached (inputs unchanged)'
   exit
 end
-# A reactor: no main, its exports named in glue.c; -s strips its symbols.
-target.program(sources, into: output.to_s,
-                        flags: [*target.cflags, '-mexec-model=reactor', '-Os', '-s', '-std=c11', '-Wall', '-Wextra',
-                                '-Werror', '-Iinclude', '-Isrc', '-Ibindings/web/src'])
+# -s strips its symbols.
+Core.link_web(into: output, flags: %w[-Os -s])
 Cache.stamp('web-build', key)
 puts "web:build: #{output.relative_path_from(Core::ROOT)} (#{output.size} bytes)"
