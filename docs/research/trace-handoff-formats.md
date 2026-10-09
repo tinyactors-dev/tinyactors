@@ -243,3 +243,22 @@ definition, and computing sizes before writing would all make it cheaper.
 7. OTel Arrow Phase 3 proposal: https://github.com/open-telemetry/otel-arrow/issues/3258
 8. otel-arrow README: https://github.com/open-telemetry/otel-arrow
 9. `@opentelemetry/otlp-transformer`: https://www.npmjs.com/package/@opentelemetry/otlp-transformer
+
+## Addendum (2026-10-09): what ADR 0006 measured
+
+Core now writes the records and C encodes OTLP protobuf
+(`tinyactors-core/src/otlp`); the JavaScript bindings get one `Uint8Array`
+per run (ADR 0006, decision 11). The same workload (100,000 actors, one
+`ping` with an assignment each), `tinyactors-core/tools/bench_tracing.mjs`,
+Node 22.23 on an Apple M4 Max:
+
+| Variant | 0.1 (objects per record) | Now, Node addon | Now, wasm |
+|---|---:|---:|---:|
+| Untraced | 2.24M | 327k | 274k |
+| Every kind | 0.20M (9%) | 261k (80%) | 196k (72%) |
+| BEGIN and END only / `summary` | 0.44M (20%) | 295k (90%) | 221k (81%) |
+
+The absolute numbers are not comparable: 0.1's runtime and this one
+differ, and here every event calls the JavaScript datamodel. The ratios
+are the point: protobuf bytes from C cost 10% to 20% of throughput where
+objects cost 80% to 90%, as section 1 predicted.

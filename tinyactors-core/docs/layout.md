@@ -32,6 +32,9 @@ implementation of that layer). Layer dependency rules are in
 │       ├── runtime.h          ✅ OS conveniences (malloc, files, resolver, clock, auto-grow)
 │       ├── host.h             ✅ host layer: segments sharing a base URI, routing, versions,
 │       │                         migration jobs, sweep, growth, boot, snapshot/restore
+│       ├── trace.h            ✅ trace values (IDs, step keys, span IDs, traceparent, generator,
+│       │                         sampling) and the trace record schema (ADR 0006)
+│       ├── otlp.h             ✅ the OTLP codec: trace records -> OTLP protobuf, and decoding
 │       ├── datamodel_ecmascript.h ✅ the ECMAScript datamodel (link libtinyactors_datamodel_ecmascript)
 │       └── basic_http.h       ✅ BasicHTTP Event I/O Processor codec
 │
@@ -46,6 +49,7 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── bitset.h           ✅ u32-word bitsets, range masks, next/previous scans
 │   │   ├── index_queue.h      ✅ intrusive index FIFO
 │   │   ├── heap.[ch]          ✅ 4-ary (due, sequence) heap with removal
+│   │   ├── journal.[ch]       ✅ lossy ring of variable-size records (the trace journal)
 │   │   ├── address.c          ✅ the address grammar (include/tinyactors/address.h)
 │   │   └── frame.c            ✅ link frames (include/tinyactors/frame.h)
 │   │
@@ -54,10 +58,15 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── image.c            ✅ open + full verification (fuzzed), public accessors
 │   │   └── event_names.c      ✅ event trie lookup (dynamic names -> name id)
 │   │
+│   ├── trace/                 freestanding trace values and records (ADR 0006); no state
+│   │   ├── trace.c            ✅ span IDs, traceparent, the xoshiro256** generator, ratio sampling
+│   │   ├── record.[ch]        ✅ the record schema: reserve/commit, walking, bodies, lists, strings
+│   │
 │   ├── core/                  the kernel: pure resumable step function (§7)
 │   │   ├── core_internal.h    ✅ event record, instance/workspace layouts, phases, step contract
 │   │   ├── core.c             ✅ phases, selection, conflicts, exit/entry, history, bytecode VM, invoke
 │   │   ├── event_pool.c       ✅ refcounted slab strings, event records, event views
+│   │   ├── trace_step.c       ✅ the context pool, step records, a step's context for its events
 │   │   └── datamodel_null.c   ✅ the SCXML null datamodel
 │   │
 │   ├── system/                actor VM (§10–§14)
@@ -68,6 +77,7 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── route.c            ✅ SCXML I/O processor routing, timers/<cancel>, invoke/done.invoke,
 │   │   │                         autoforward, requests, pending spawns
 │   │   ├── hibernate.c        ✅ host-driven hibernation: blobs, wake queue → TA_EFFECT_WAKE, CLOCK sweep
+│   │   ├── tracing.c          ✅ starting and sampling traces, lifecycle records, the drain API
 │   │   └── effects.c          ✅ bounded outbox, lazily materialized effect views
 │   │
 │   ├── compile/               hosted; allocates through ta_allocator
@@ -88,6 +98,11 @@ implementation of that layer). Layer dependency rules are in
 │   │   │                         retirement, quantum-bounded migration jobs, CLOCK sweep, growth,
 │   │   │                         boot, whole-host snapshot/restore
 │   │   └── router.c           ✅ envelopes, peers, routes, deduplication (docs/protocol.md)
+│   │
+│   ├── otlp/                  the OTLP codec (freestanding, one block, relocatable; uses trace + image)
+│   │   ├── otlp_internal.h    ✅ the encoder's block, protobuf primitives
+│   │   ├── otlp.c             ✅ records -> spans, span events and log records; staging; scopes
+│   │   └── decode.c           ✅ OTLP protobuf -> span, attribute, value, event and link views
 │   │
 │   ├── datamodel_ecmascript/  SCXML ECMAScript datamodel on quickjs-ng; link it like a
 │   │   └── datamodel_ecmascript.c ✅ tree-sitter language (include/tinyactors/datamodel_ecmascript.h); no I/O
@@ -111,13 +126,14 @@ implementation of that layer). Layer dependency rules are in
 │   │   │                         the PostgreSQL service probe/starter), HTTP+WebSocket server
 │   │   │                         (net.c), PostgreSQL wire client (postgres.c), scenario engine
 │   │   │                         (prelude.js)
-│   │   ├── scenarios/         ✅ throughput · crowd · heavy-data · federation · chaos · capacity ·
+│   │   ├── scenarios/         ✅ throughput · tracing · crowd · heavy-data · federation · chaos · capacity ·
 │   │   │                         campaign · fit · hibernate · reload · postgres · postgres-millions
 │   │   │                         (charts, scripts, generators, mutations, data)
 │   │   └── test/              ✅ JSONL validator + Node WebSocket/dashboard test (`mise run torture:test`)
 │   ├── vendor_quickjs.py      ✅ fetch + verify the pinned quickjs-ng release
 │   ├── amalgamate.py          ✅ dist/tinyactors.h + dist/tinyactors.c single-file distribution
 │   ├── bench_js.mjs           ✅ JS bindings' call cost: Node addon vs wasm (events/s, spawn, hibernate/wake)
+│   ├── bench_tracing.mjs      ✅ what tracing costs the JS bindings (untraced, summary, full, decoded)
 │   ├── w3c/fetch.py           ✅ download the W3C SCXML IRP suite
 │   ├── w3c/convert.py         ✅ .txml -> .scxml via confEcma.xsl (XSLT 2.0, SaxonC)
 │   ├── tac/                   ◻ compiler CLI: scxml/manifest -> .tai, --emit-c, --dump
@@ -127,7 +143,8 @@ implementation of that layer). Layer dependency rules are in
 │   ├── harness/harness.h      ✅ dependency-free test macros
 │   ├── support/               ✅ datamodel_test (ECMAScript-subset test datamodel), compile/system/file helpers
 │   ├── unit/                  ✅ test_{base,image,compile,compile_scale,core,system,scenarios,runtime,e2e,
-│   │                             datamodel_ecmascript,hibernate,migrate,host,router,address,frame,headers};
+│   │                             datamodel_ecmascript,hibernate,migrate,host,router,address,frame,headers,
+│   │                             trace,journal,tracing,otlp};
 │   │                             test_torture_{loop,postgres}; test_durable:
 │   │                             every persistence path vs. a run that never persisted (durability.md)
 │   ├── w3c/run_w3c.c          ✅ IRP runner + BasicHTTP loopback host; with the ECMAScript datamodel

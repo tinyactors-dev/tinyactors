@@ -64,6 +64,83 @@ not this development directory.
   `system.adopt(bytes)` — between processes, and between this binding and
   the Node one: delayed events carry their data as values.
 
+## Traces
+
+Every system carries a trace through every step, as W3C trace contexts:
+an event a step sends, raises, delays or hands to another system over a
+link continues the trace of the step that sent it. Give a `traceparent`
+where an event comes from outside, and the step it starts is a child of
+your span:
+
+```js
+createActor(machine, { system, traceparent: req.headers.traceparent });
+actor.send({ type: 'charge' }, { traceparent });
+system.ref(address).send({ type: 'charge' }, { traceparent });
+system.sendMany([[actor, { type: 'charge' }, { traceparent }]]);
+system.deliver({ target, name: 'charge', traceparent });
+```
+
+Core writes the records (macrosteps, microsteps, conditions, raised and
+sent events, invocations, assignments, logs, failures, and an actor's
+spawn, hibernation, wake and end) and C encodes them as OpenTelemetry's
+OTLP protobuf after every run: the bytes reach JavaScript as one
+`Uint8Array`, never as an object per span. Span names follow
+`scxml.macrostep <event>`, `scxml.microstep <event>`, `scxml.spawned`,
+`scxml.finished`; every span carries `tinyactors.actor.name`,
+`tinyactors.chart.name` and `tinyactors.span.kind`.
+
+**Export with no code.** With an endpoint, a system posts its traces and
+logs to an OTLP/HTTP collector (protobuf; `/v1/traces` and `/v1/logs`
+under the endpoint):
+
+A browser has no environment: the system exports only when the
+application passes an endpoint (posted with `fetch`, so the collector must
+allow the page's origin). In Node.js, `bindings/web/node.mjs` posts with
+Node's HTTP client but reads no environment either; the Node.js addon's
+entry is the one that reads `OTEL_*` variables.
+
+```js
+const system = createSystem({
+  telemetry: {
+    endpoint: 'http://localhost:4318',
+    headers: { authorization: 'Bearer ...' },
+    resource: { 'service.name': 'checkout' },
+    sample: 0.1, // a tenth of the traces this system starts; a traceparent keeps its caller's decision
+  },
+});
+await system.flushTraces(); // what was gathered, posted
+```
+
+Posts gather for a quarter of a second; a failing collector costs a log
+line every ten seconds at most. `telemetry: false` turns export off.
+
+**A sink** takes the bytes instead, for applications that route them
+themselves (a queue, a file, a test):
+
+```js
+system.setTraceSink((traces, logs) => queue.push(traces, logs), {
+  detail: 'full',        // 'summary' | 'decisions' | 'full' (default)
+  kinds: undefined,      // or the record kinds wanted (TRACE_KINDS)
+  values: false,         // event data and assigned values as attributes (they may hold personal data)
+  valueLimit: 256,       // bytes of a value, cut there
+  sample: 1,
+  parent: 'cause',       // or 'link': each macrostep a root, linked to its cause
+  resource: { 'service.name': 'checkout' },
+});
+system.configureTraces({ detail: 'summary', sample: 0.5 }); // while it runs
+```
+
+`createSystem({ traces: { sink, seed, ...options } })` installs it from the
+start; `seed` makes the trace IDs a system starts repeatable (tests). With
+neither a sink nor an endpoint, core writes no records at all; the trace
+contexts still flow, so a sink installed later continues the traces
+already running. `stop()` ends the spans still open, marked incomplete.
+
+`decodeTraces(bytes)` reads OTLP protobuf back as plain spans (tests,
+tools); `parseTraceparent`, `formatTraceparent` and `stepSpanID(session,
+macrostep, microstep)` are the same C functions core uses, so a host
+computes the span ID of any step without seeing its records.
+
 ## Call cost (wasm vs the Node addon)
 
 Every datamodel call and result crosses between JS and wasm through the

@@ -44,14 +44,15 @@ below it ([architecture](tinyactors-core/docs/architecture.md), section 1).
 
 | Layer | Its job, in one line | What it holds | Where |
 |---|---|---|---|
-| **Core** (base, image, core, system) | Decides what an input *means*, and runs actors in one block of memory sized at creation. | Statechart semantics over an immutable compiled image; mailboxes, the run queue and timers in a shared event pool; the SCXML I/O processor; hibernation and live migration. Freestanding: no C library, no malloc, no I/O, no threads, no clock. | `tinyactors-core/src/{base,image,core,system}` |
+| **Core** (base, image, trace, core, system) | Decides what an input *means*, and runs actors in one block of memory sized at creation. | Statechart semantics over an immutable compiled image; mailboxes, the run queue and timers in a shared event pool; the SCXML I/O processor; hibernation and live migration; trace contexts carried by every event, and trace records of every step, drained like effects ([ADR 0006](docs/adr/0006-tracing-is-a-core-feature.md)). Freestanding: no C library, no malloc, no I/O, no threads, no clock. | `tinyactors-core/src/{base,image,trace,core,system}` |
+| **OTLP codec** | Turns trace records into OpenTelemetry's OTLP protobuf, and reads OTLP back. | An encoder in one block sized at creation (open spans, staging), fed by a host after each run; never runs inside one. Freestanding like core. | `tinyactors-core/src/otlp` |
 | **Compiler** | Turns SCXML documents into an image. | XML to SCXML to bytecode, validation and linking. Allocates through an allocator the caller gives it. | `tinyactors-core/src/compile` |
-| **Host** | Runs many systems as one. | Segments per image, routing between them, chart versions, migration jobs, the hibernation sweep, growth by relocation. Freestanding like core: it allocates only through the allocator its caller gives it ([ADR 0005](docs/adr/0005-freestanding-host.md)); the runtime conveniences put the C library's `malloc` behind one. | `tinyactors-core/src/{host,runtime}` |
+| **Host** | Runs many systems as one. | Segments per image, routing between them, chart versions, migration jobs, the hibernation sweep, growth by relocation, one fuel clock and traceparents across segments and systems. Freestanding like core: it allocates only through the allocator its caller gives it ([ADR 0005](docs/adr/0005-freestanding-host.md)); the runtime conveniences put the C library's `malloc` behind one. | `tinyactors-core/src/{host,runtime}` |
 | **Data models** | Evaluate expressions in a language. | The null data model in core; ECMAScript on quickjs-ng, linked like a tree-sitter language. | `tinyactors-core/src/datamodel_ecmascript` |
-| **Language binding** | Decides how values *look* in its language and how they *become* bytes. | Node.js (N-API), browsers and Node.js (WebAssembly), PostgreSQL; one JavaScript API over the first two. | `tinyactors-core/bindings/` |
+| **Language binding** | Decides how values *look* in its language and how they *become* bytes. | Node.js (N-API), browsers and Node.js (WebAssembly), PostgreSQL; one JavaScript API over the first two, which hands OTLP bytes to a sink or posts them to an OTLP/HTTP endpoint. | `tinyactors-core/bindings/` |
 | **Application** | Decides where bytes *live*, and everything that is policy. | Storage for hibernated actors and snapshots; eviction; deployment. | outside this repository |
 
-`libtinyactors` holds core and the host, and promises: **no C library;
+`libtinyactors` holds core, the OTLP codec and the host, and promises: **no C library;
 base through system never allocate; the host allocates only through the
 `ta_allocator` it was given.** The compiler and the runtime conveniences
 (`libtinyactors_runtime`) use the C library.

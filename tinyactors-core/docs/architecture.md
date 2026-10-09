@@ -50,29 +50,43 @@ decision has to be made. Everything else in this document follows from them.
 │ system      (public ABI)      │ compile     (offline or in-process)  │
 │ actors, mailboxes, scheduler, │ XML → SCXML AST → validate → analyze │
 │ timers, SCXML I/O processor,  │ → bytecode → link system → image     │
-│ invoke, effects, inspection   │ (uses ta_allocator; may malloc)      │
-├───────────────────────────────┤                                      │
-│ core        (kernel)          │                                      │
-│ phase machine, selection,     │                                      │
+│ invoke, effects, inspection,  │ (uses ta_allocator; may malloc)      │
+│ trace contexts and sampling,  ├──────────────────────────────────────┤
+│ lifecycle records, draining   │ otlp        trace records + image →  │
+├───────────────────────────────┤ OTLP protobuf; OTLP → span views     │
+│ core        (kernel)          │ (a codec: never inside a run)        │
+│ phase machine, selection,     ├──────────────────────────────────────┤
 │ exit/entry, bytecode VM,      │                                      │
-│ null datamodel                │                                      │
-├───────────────────────────────┴──────────────────────────────────────┤
-│ image       verify + view of the immutable image (shared by all)     │
-├──────────────────────────────────────────────────────────────────────┤
+│ null datamodel, step records  │                                      │
+├───────────────────────────────┴──┬───────────────────────────────────┤
+│ image       verify + view of the │ trace   IDs, step keys, span IDs, │
+│ immutable image (shared by all)  │ traceparent, sampling, records    │
+├──────────────────────────────────┴───────────────────────────────────┤
 │ base        building blocks: arena, pool, slab, bitset, index queue, │
-│             4-ary heap, handles, freestanding mem ops                │
+│             4-ary heap, handles, journal, freestanding mem ops       │
 └──────────────────────────────────────────────────────────────────────┘
           freestanding: no libc, no malloc, no threads, no clock
           ───────────────────────────────────────────────────────
           below runtime / compile
 ```
 
+Tracing ([ADR 0006](../../docs/adr/0006-tracing-is-a-core-feature.md))
+adds two freestanding layers. `trace` (on `base`) holds the values every
+layer and binding shares, trace and span IDs, step keys, the traceparent
+parser, the seeded generator and ratio sampling, and the schema of the
+records; it keeps no state. `otlp` (on `trace` and `image`, never on
+`system`) is a codec, like `basic_http`: a host drains a system's records
+and feeds them to it. The kernel writes the step records and stamps every
+event it creates with its cause; `system` holds the policy (the context
+pool, sampling, lifecycle records, the drain API); `host` carries the
+traceparent across systems.
+
 The host layer (`src/host`, `ta_host`: many systems as one, §15) sits on
 `system` beside `compile`. It is freestanding too, but it allocates: every
 block it owns, the segments' regions included, comes from the
 `ta_allocator` in its configuration, so it needs no C library either
 ([ADR 0005](../../docs/adr/0005-freestanding-host.md)). `libtinyactors`
-ships base through system and the host, and promises: **no C library;
+ships base through system, trace, otlp and the host, and promises: **no C library;
 `base` through `system` never allocate; `host` allocates only through the
 `ta_allocator` it was given.**
 
@@ -602,7 +616,8 @@ ta_status ta_system_relocate(ta_system *, void *new_memory, size_t new_length,
 void      ta_system_deinit(ta_system *);       /* releases datamodel instances/payloads */
 /* actors */
 ta_status ta_system_boot(ta_system *);       /* spawn image-defined actors */
-ta_status ta_system_spawn(ta_system *, uint32_t chart, ta_string_view name, uint64_t params, uint32_t *actor);
+ta_status ta_system_spawn(ta_system *, uint32_t chart, ta_string_view name, uint64_t params,
+                          ta_string_view traceparent, uint32_t *actor);
 ta_status ta_system_terminate(ta_system *, uint32_t actor);
 /* inbound */
 ta_status ta_system_send(ta_system *, const ta_event_in *event);
@@ -615,6 +630,11 @@ uint64_t  ta_system_next_deadline(const ta_system *);         /* UINT64_MAX = no
 /* outbound (batched, borrowed) */
 uint32_t  ta_system_effects(ta_system *, const ta_effect **out);
 void      ta_system_effects_ack(ta_system *, uint32_t n);
+/* trace records (ADR 0006): drained like effects, same lifetime rules */
+uint32_t  ta_system_trace(ta_system *, ta_trace_view *view);     /* bytes of whole records */
+void      ta_system_trace_ack(ta_system *, uint32_t bytes);
+void      ta_system_trace_clock(ta_system *, uint64_t at_least);  /* one clock for many systems */
+ta_status ta_system_trace_set(ta_system *, uint32_t kinds, uint32_t sample_parts, uint32_t sample_whole);
 /* inspection / persistence */
 ta_status ta_actor_info(const ta_system *, uint32_t actor, ta_actor_info *out);
 uint32_t  ta_actor_config(const ta_system *, uint32_t actor, uint32_t *states, uint32_t capacity);
@@ -810,7 +830,7 @@ from the sections above, this list is authoritative:
 | BasicHTTP / sync I/O | `ta_io_processor_descriptor.flags = TA_IO_PROCESSOR_SYNC` makes `run` return `TA_RUN_EFFECTS` right after a send to that processor, so the host can answer within the sender's macrostep; `TA_EVENT_IN_ERROR_COMMUNICATION` places `error.communication` in the sender's **internal** queue; `ta_event_in.raw` becomes `_event.raw`. |
 | Effect field mapping | `LOG`: `auxiliary`=label, `event`=text. `SEND`: `target`, `event`, `sendid`, `payload`, `io_processor`. `INVOKE`: `event`=type, `target`=src, `sendid`=invokeid, `payload`=params, `token`. `DONE`: `target`=actor name, `payload`=donedata, `auxiliary`=id of the top-level `<final>` that ended the session. `REQUEST`: `auxiliary`=src, `token`. Views are materialized when `ta_system_effects` is called. |
 | Exhaustion | Event/slab **and timer** exhaustion makes the kernel return without executing the instruction (retried after growth) — a full timer pool is backpressure (`TA_RUN_EXHAUSTED`, `detail = TA_POOL_TIMERS`), never a dropped `<send delay>`. The `TA_POOL_*` codes are public (`tinyactors/system.h`). `ta_system_deinit` drops the run queues before reclaiming, so tearing down hundreds of thousands of runnable actors is linear. Actor/slab exhaustion while spawning an invoked child parks the spawn as a pending request; `run` returns `TA_RUN_EXHAUSTED` and retries it first next time. `ta_runtime_run` grows by relocation automatically. |
-| Memory | Actor record 48 B; instance = 48 B header + configuration and to-invoke bitsets (+ late-binding / history bitsets only when the chart needs them) + history storage + 2 words per invoke — 56 B for a 2-state chart. Slab classes are half-steps (16, 24, 32, 48, …). Measured: 100 000 actors ⇒ 14.3 MB region (143 B/actor including all pools). |
+| Memory | Actor record 48 B; instance = 64 B header (with the step counters and the current macrostep's trace context, ADR 0006) + configuration and to-invoke bitsets (+ late-binding / history bitsets only when the chart needs them) + history storage + 2 words per invoke — 56 B for a 2-state chart. Slab classes are half-steps (16, 24, 32, 48, …). Measured: 100 000 actors ⇒ 14.3 MB region (143 B/actor including all pools). |
 | Cross-system SCXML | A host processor flagged `TA_IO_PROCESSOR_SCXML_REMOTE` (its `location` = this system's base URI, e.g. `tinyactors://a/`) makes sessions advertise `<base>#_scxml_<id>`; SCXML sends to the own base are delivered locally, other non-`#` SCXML targets become `TA_EFFECT_SEND` for that processor; the host delivers them with `ta_system_actor_by_session()` and an `origin` so replies via `_event.origin` work. Used by the Node binding's segments and the torture chamber. |
 | Datamodel `bind_event` | Receives a `ta_datamodel_environment*` so the datamodel can observe the configuration when an event becomes current (e.g. which finals produced `done.state.*`). |
 | Inspection counters | `ta_system_stats_get()` reports pool occupancy (actors, events, timers, workspaces, slab pages, outbox), runnable count and monotonic counters (delivered events, fuel, turns, timers fired, sessions) in O(1) (the run queue keeps its length). `ta_runtime_system_grow()` doubles the pools that are at least half full (all if none is), saturating at the hard per-system limits `TA_SYSTEM_MAX_ACTORS` (2^23 − 2: 24-bit handles, one bit lent to external invoke tokens) and `TA_SYSTEM_MAX_POOL` (2^24 − 2); it fails instead of "growing" without adding capacity. |
@@ -828,6 +848,7 @@ from the sections above, this list is authoritative:
 | Remote targets | With a `TA_IO_PROCESSOR_SCXML_REMOTE` processor, only absolute URIs (RFC 3986 scheme) leave the system; any other target the SCXML processor does not know is invalid → `error.execution` (W3C 159, 194). A malformed session id (`#_scxml_foo`) names no session anywhere → `error.communication` at once, in the internal queue (W3C 496, 521); a well-formed unknown one may live in another segment and is handed to the host (whose answer arrives as an external event). |
 | JS bindings: SCXML documents | `fromSCXML(xml, { documents })` runs W3C SCXML documents next to xstate-style machines, in the same system and payload table. The ECMAScript datamodel is `bindings/shared/ecmascript.mjs` with the C datamodel's shared-realm semantics (scope object, strict functions under `with`, read-only system variables); what a script declares at its top level is asked of the engine (the script is compiled as a function body that hands out a reader per candidate name before it runs: a reader that throws found a let/const/class in its temporal dead zone, one returning a function a function declaration, one reaching a trap scope nothing), and such charts run their scripts against a proxy scope that keeps sloppy assignments out of the host's global object; a declaring script's bindings become accessors on the session scope (shared with its functions; const stays const). They are stored like the C datamodel's isolated sessions (`#lex`, `#fns` re-created on restore), refusals naming the variable and line. Limits of one realm: functions called through the scope get it as `this`; closures other than declarations keep their script run's bindings. The W3C suite runs through both backends: 158/158 mandatory, 21 optional (the 12 BasicHTTP tests are skipped: the bindings register no BasicHTTP processor). |
 | JS bindings: images, time | `compileSystem(manifest, { files })` / `loadImage(bytes)` / `system.boot(image)` run compiled system images (`ta_image_boot_actor` lists the boot actors); `createSystem({ clock })` + `system.flush()` run on the host's notion of time (deterministic tests, simulation). |
+| Tracing | [ADR 0006](../../docs/adr/0006-tracing-is-a-core-feature.md). The event record stays 56 B: `invoke_slot` and `flags` are 16 bits, and the 4 bytes they gave up hold `trace`, a reference into the context pool (48 B entries, `max_events` of them by default; a full pool leaves the new event untraced and counts it). The instance header holds `macrostep`, `microstep` and the macrostep's context. Records are an 88 B header and a body in the system's journal (`ta_journal`, 512 B per event of `max_events`, at least 64 KiB; lossy: a refused record is counted and a `dropped` record precedes the next one). Strings and payloads in records are retained until `ta_system_trace_ack`. Every record carries the system's fuel clock; a run moves it up by one before it works, and a host maps fuel to wall time by interpolating between marks it takes around each run (`ta_otlp_mark`). `TA_TRACING_DISABLED` carves neither journal nor pool. The host keeps one fuel clock for all its segments (`ta_system_trace_clock`) and carries traceparents in envelopes; `ta_host_trace_set` changes kinds and sampling everywhere. The JS bindings encode with `ta_otlp` in `bindings/shared/binding.c` and hand one `Uint8Array` per run to a sink or an OTLP/HTTP exporter. |
 | Binding surface | `bindings/surface.json` classifies every public C function as bound by every binding or skipped with a reason; `tools/check_surface.py` checks reachability per binding (the function survives linking the binding with dead-code elimination from its entry points) and, by loading each binding and type-checking a generated file, that its `index.d.ts` declares every runtime export and public class member, so neither layer can drift. |
 
 ## 16. Inspection and reconstruction
