@@ -10,10 +10,11 @@
 
 #include "base/journal.h"
 
-/* A record of `size` bytes (header included), its header zeroed but for
- * kind and size, or NULL when the journal has no room (the record is then
- * counted as lost). `fuel` and `now` stamp a TA_TRACE_DROPPED record written
- * first. */
+/* A record of `size` bytes (header included) with its kind and size set,
+ * or NULL when the journal has no room (the record is then counted as
+ * lost). The writer sets every other field of the header (flags and
+ * key.pad are 0) and the body. `fuel` and `now` stamp a TA_TRACE_DROPPED
+ * record written first. */
 ta_trace_record *ta_trace_record_reserve(ta_journal *journal, uint32_t kind, uint32_t size,
                                          uint64_t fuel, uint64_t now);
 /* Commit the record reserved last. */

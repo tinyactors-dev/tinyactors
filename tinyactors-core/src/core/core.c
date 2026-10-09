@@ -351,6 +351,7 @@ static void begin_macrostep(ta_core *core, ta_instance *instance, uint32_t event
                             const uint32_t *fuel) {
     instance->macrostep++;
     instance->microstep = 0;
+    core->span_actor = TA_NIL; /* the span cache (ta_core_trace_step) */
     ta_trace_context_release(core, instance->trace);
     instance->trace = TA_NIL;
     if (event_index != TA_NIL) {

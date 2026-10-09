@@ -5,6 +5,7 @@
 #include "core/core_internal.h"
 #include "base/memory.h"
 #include "trace/record.h"
+#include "trace/span.h"
 
 /* Dynamic strings in records are the kernel's slab strings. */
 TA_STATIC_ASSERT(TA_STRING_REF_SLAB == TA_TRACE_STRING_DYNAMIC, slab_strings_are_dynamic_strings);
@@ -105,7 +106,10 @@ ta_trace_record *ta_core_trace_step(ta_core *core, ta_instance *instance, uint32
         ta_trace_record_reserve(core->journal, kind, size, at, core->trace_now);
     if (!record) return record;
     const ta_trace_entry *macrostep = ta_trace_entry_at(core, instance->trace);
-    uint64_t session = trace_session(core, instance);
+    uint64_t session =
+        instance->actor == core->span_actor && instance->macrostep == core->span_macrostep
+            ? core->span_session
+            : trace_session(core, instance);
     record->flags = (uint16_t)macrostep->flags;
     record->actor = instance->actor;
     record->chart = instance->chart;
@@ -113,12 +117,23 @@ ta_trace_record *ta_core_trace_step(ta_core *core, ta_instance *instance, uint32
     record->key.macrostep = instance->macrostep;
     record->key.microstep = microstep;
     record->trace = macrostep->trace;
-    record->span = ta_step_key_span_id(record->key);
-    if (microstep) {
+    if (session == 0) { /* a bare kernel: no sessions to tell apart */
+        record->span = ta_step_key_span_id(record->key);
         ta_step_key outer = {session, instance->macrostep, 0, 0};
-        record->parent = ta_step_key_span_id(outer);
+        record->parent = microstep ? ta_step_key_span_id(outer) : trace_cause_span(macrostep);
     } else {
-        record->parent = trace_cause_span(macrostep);
+        if (instance->actor != core->span_actor || session != core->span_session ||
+            instance->macrostep != core->span_macrostep) {
+            core->span_actor = instance->actor;
+            core->span_session = session;
+            core->span_macrostep = instance->macrostep;
+            core->span_prefix = ta_step_span_prefix(session, instance->macrostep);
+            core->span_macro = ta_step_span_finish(core->span_prefix, 0);
+            core->span_cause = trace_cause_span(macrostep);
+        }
+        record->span =
+            microstep ? ta_step_span_finish(core->span_prefix, microstep) : core->span_macro;
+        record->parent = microstep ? core->span_macro : core->span_cause;
     }
     record->fuel = at;
     record->now = core->trace_now;
@@ -131,7 +146,7 @@ static void trace_release_payload(ta_core *core, uint32_t datamodel, uint64_t pa
 }
 
 void ta_core_trace_release(ta_core *core, const ta_trace_record *record) {
-    const void *body = ta_trace_body(record);
+    const void *body = record + 1;
     switch (record->kind) {
     case TA_TRACE_SPAWNED:
         ta_shared_string_release(core, ((const ta_trace_spawned *)body)->name);

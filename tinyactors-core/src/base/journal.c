@@ -13,9 +13,7 @@ void ta_journal_init(ta_journal *journal, void *storage, uint32_t capacity) {
     journal->capacity = capacity & ~(TA_JOURNAL_ALIGN - 1);
 }
 
-void *ta_journal_reserve(ta_journal *journal, uint32_t size) {
-    TA_ASSERT(!journal->reserved);
-    size = ta_journal_size(size);
+void *ta_journal_reserve_wrap(ta_journal *journal, uint32_t size) {
     uint32_t at;
     if (!size) return (void *)0;
     if (journal->wrapped) {
@@ -35,20 +33,6 @@ lost:
     journal->lost++;
     journal->lost_total++;
     return (void *)0;
-}
-
-void ta_journal_commit(ta_journal *journal, uint32_t size) {
-    size = ta_journal_size(size);
-    TA_ASSERT(size <= journal->reserved);
-    if (size && journal->at != journal->tail) { /* the reservation wrapped */
-        journal->end = journal->tail;
-        journal->wrapped = 1;
-        journal->tail = 0;
-    }
-    journal->tail += size;
-    journal->used += size;
-    journal->written_total += size ? 1u : 0u;
-    journal->reserved = 0;
 }
 
 uint32_t ta_journal_peek(const ta_journal *journal, const unsigned char **bytes) {

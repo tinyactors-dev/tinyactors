@@ -46,11 +46,34 @@ TA_INLINE uint32_t ta_journal_size(uint32_t size) {
 void ta_journal_init(ta_journal *journal, void *storage, uint32_t capacity);
 
 /* Room for `size` bytes (rounded up to a multiple of 8), or NULL when the
- * ring has none: the reservation is then counted as lost. */
-void *ta_journal_reserve(ta_journal *journal, uint32_t size);
+ * ring has none: the reservation is then counted as lost. Inline where the
+ * record fits before the end (the common case, one record per step
+ * boundary); ta_journal_reserve_wrap does the rest. */
+void *ta_journal_reserve_wrap(ta_journal *journal, uint32_t size);
+TA_INLINE void *ta_journal_reserve(ta_journal *journal, uint32_t size) {
+    TA_ASSERT(!journal->reserved);
+    size = ta_journal_size(size);
+    if (!size || journal->wrapped || journal->capacity - journal->tail < size)
+        return ta_journal_reserve_wrap(journal, size);
+    journal->reserved = size;
+    journal->at = journal->tail;
+    return (unsigned char *)ta_pointer_add(journal, journal->storage_relative) + journal->tail;
+}
 /* Commit the first `size` bytes of the reservation (at most what was
  * reserved; rounded up to a multiple of 8). 0 abandons it. */
-void ta_journal_commit(ta_journal *journal, uint32_t size);
+TA_INLINE void ta_journal_commit(ta_journal *journal, uint32_t size) {
+    size = ta_journal_size(size);
+    TA_ASSERT(size <= journal->reserved);
+    if (size && journal->at != journal->tail) { /* the reservation wrapped */
+        journal->end = journal->tail;
+        journal->wrapped = 1;
+        journal->tail = 0;
+    }
+    journal->tail += size;
+    journal->used += size;
+    journal->written_total += size ? 1u : 0u;
+    journal->reserved = 0;
+}
 
 /* The committed bytes that can be read in one piece: from the oldest record
  * to the end of the records before the wrap, or to the newest. Returns their

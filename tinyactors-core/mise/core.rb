@@ -203,7 +203,7 @@ module Core
     Program.new(name: 'run_w3c', sources: %w[tests/w3c/run_w3c.c], uses: %w[runtime test_datamodel basic_http] + ECMASCRIPT,
                 defines: {}),
     # The torture chamber's host (tools/torture/README.md).
-    Program.new(name: 'torture-bench', uses: %w[host runtime compile] + ECMASCRIPT,
+    Program.new(name: 'torture-bench', uses: %w[host runtime compile otlp] + ECMASCRIPT,
                 sources: %w[bench.c net.c postgres.c loop.c].map { |s| "tools/torture/#{s}" },
                 defines: { 'BENCH_SOURCE_DIR' => ROOT.join('tools/torture'), 'BENCH_WEB_DIR' => ROOT.join('web/torture'),
                            'BENCH_REPO_DIR' => ROOT }),

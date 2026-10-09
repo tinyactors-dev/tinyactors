@@ -5,24 +5,11 @@
 #include <tinyactors/trace.h>
 
 #include "base/config.h"
-
-/* MurmurHash3's 64-bit finalizer: a bijection in which every input bit
- * reaches every output bit; 0 maps to 0. */
-static uint64_t trace_mix64(uint64_t value) {
-    value ^= value >> 33;
-    value *= 0xff51afd7ed558ccdull;
-    value ^= value >> 33;
-    value *= 0xc4ceb9fe1a85ec53ull;
-    value ^= value >> 33;
-    return value;
-}
+#include "trace/span.h"
 
 ta_span_id ta_step_key_span_id(ta_step_key key) {
     if (key.session == 0) return key.macrostep;
-    uint64_t span = trace_mix64(key.session);
-    span = trace_mix64(span ^ key.macrostep);
-    span = trace_mix64(span ^ ((uint64_t)key.microstep | ((uint64_t)1u << 32)));
-    return span == 0 ? 1u : span;
+    return ta_step_span_finish(ta_step_span_prefix(key.session, key.macrostep), key.microstep);
 }
 
 ta_trace_context ta_trace_context_child(const ta_trace_context *context, ta_step_key key) {

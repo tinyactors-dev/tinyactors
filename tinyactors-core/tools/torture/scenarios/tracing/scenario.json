@@ -1,0 +1,55 @@
+{
+  "name": "tracing",
+  "title": "Tracing — ping-pong storms, traced in full",
+  "summary": "The throughput storms with tracing on at full detail: every record read, encoded as OTLP protobuf, and let go.",
+  "description": "The throughput scenario's ping-pong storms and ECMAScript pingers, with every system tracing at full detail (docs/adr/0006 in the repository root): after every slice the bench encodes each segment's records as OTLP protobuf (spans per macrostep and microstep, events per condition, send and assignment), as a host posting them would, and counts the bytes. Compare with `throughput`, or run any scenario with --param tracing=disabled|records|otlp.",
+  "duration": 20,
+  "systems": {
+    "storm": {
+      "charts": [
+        {
+          "name": "storm.scxml",
+          "script": "charts/storm.js",
+          "params": {
+            "children": 16
+          }
+        }
+      ],
+      "config": {
+        "maxActors": 1024,
+        "maxEvents": 8192,
+        "quantum": 400,
+        "tracing": "otlp"
+      }
+    },
+    "echo": {
+      "charts": [
+        "charts/pinger.scxml",
+        "charts/ponger.scxml"
+      ],
+      "config": {
+        "maxActors": 1024,
+        "maxEvents": 8192,
+        "quantum": 400,
+        "tracing": "otlp"
+      }
+    }
+  },
+  "spawn": [
+    {
+      "system": "storm",
+      "chart": "storm",
+      "count": 32,
+      "group": "storms"
+    }
+  ],
+  "scripts": [
+    "scripts/setup.js"
+  ],
+  "expect": [
+    "systems.storm.deliveredTotal > 10000",
+    "systems.echo.deliveredTotal > 1000",
+    "systems.storm.traceRecordsTotal > 10000",
+    "totals.faults == 0"
+  ]
+}

@@ -132,6 +132,13 @@ struct ta_core {
     uint64_t trace_clock;
     uint64_t trace_now;
     uint64_t contexts_dropped; /* events left untraced because the pool was full */
+    /* the macrostep records were last written about: its actor, session and
+     * number, the mix its span IDs share, its span and its cause's. A cache,
+     * cleared whenever a macrostep begins (so an actor handle used again
+     * never finds an earlier actor's session here). */
+    uint32_t span_actor, span_pad;
+    uint64_t span_session, span_macrostep, span_prefix;
+    ta_span_id span_macro, span_cause;
     ta_core_out out;
     char scratch[1024]; /* formatting: origins, generated ids, done.invoke names, document keys */
 };
@@ -332,8 +339,16 @@ void ta_event_view_of(ta_core *core, uint32_t event, ta_event_view *out);
 
 /* strings */
 uint32_t ta_shared_string_new(ta_core *core, const char *p, uint32_t length);
-void ta_shared_string_retain(ta_core *core, uint32_t string_ref);
-void ta_shared_string_release(ta_core *core, uint32_t string_ref);
+/* Only slab strings are counted; image strings and TA_NIL cost a test here,
+ * not a call (trace records hold many of them). */
+void ta_shared_string_retain_slab(ta_core *core, uint32_t string_ref);
+void ta_shared_string_release_slab(ta_core *core, uint32_t string_ref);
+TA_INLINE void ta_shared_string_retain(ta_core *core, uint32_t string_ref) {
+    if (TA_STRING_REF_IS_SLAB(string_ref)) ta_shared_string_retain_slab(core, string_ref);
+}
+TA_INLINE void ta_shared_string_release(ta_core *core, uint32_t string_ref) {
+    if (TA_STRING_REF_IS_SLAB(string_ref)) ta_shared_string_release_slab(core, string_ref);
+}
 ta_string_view ta_shared_string_get(const ta_core *core, uint32_t string_ref);
 int ta_shared_string_equal(const ta_core *core, uint32_t a, ta_string_view b);
 int ta_core_parse_duration(ta_string_view s, uint64_t *ns);

@@ -91,8 +91,9 @@ ta_trace_record *ta_trace_record_reserve(ta_journal *journal, uint32_t kind, uin
     size = ta_journal_size(size);
     ta_trace_record *record = (ta_trace_record *)ta_journal_reserve(journal, size);
     if (!record) return record;
-    ta_memset(record, 0, sizeof *record);
     record->kind = (uint16_t)kind;
+    record->flags = 0;
     record->size = size;
+    record->key.pad = 0;
     return record;
 }

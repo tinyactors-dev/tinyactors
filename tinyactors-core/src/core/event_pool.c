@@ -26,12 +26,11 @@ uint32_t ta_shared_string_new(ta_core *core, const char *p, uint32_t length) {
     return TA_STRING_REF_SLAB | (offset >> 3);
 }
 
-void ta_shared_string_retain(ta_core *core, uint32_t string_ref) {
-    if (TA_STRING_REF_IS_SLAB(string_ref)) sstr_at(core, string_ref)->refs++;
+void ta_shared_string_retain_slab(ta_core *core, uint32_t string_ref) {
+    sstr_at(core, string_ref)->refs++;
 }
 
-void ta_shared_string_release(ta_core *core, uint32_t string_ref) {
-    if (!TA_STRING_REF_IS_SLAB(string_ref)) return;
+void ta_shared_string_release_slab(ta_core *core, uint32_t string_ref) {
     sstr *s = sstr_at(core, string_ref);
     TA_ASSERT(s->refs > 0);
     if (--s->refs == 0) ta_slab_free(core->slab, (string_ref & ~TA_STRING_REF_SLAB) << 3);

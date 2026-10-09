@@ -25,6 +25,13 @@ torture-bench [SCENARIO_DIR] [--scenarios DIR] [--duration S] [--interval MS] [-
   the WebSocket at `/ws`. `--headless` skips the server.
 - `--loop` keeps running past the scenario duration (dashboard demos).
 - `--param KEY=VALUE` (repeatable) reaches scripts as `bench.params` (numbers parsed).
+- `--param tracing=disabled|records|otlp` (and `traceDetail=summary|decisions|full`)
+  sets every system's tracing: `records` (the default) reads and counts each
+  record after every slice, `otlp` also encodes them, `disabled` turns tracing
+  off in the library (`TA_TRACING_DISABLED`). Samples report `traceRecords`,
+  `traceBytes` and `otlpBytes` per second, `traceBusy` (the share of time
+  spent draining), and `traceDropped`; a scenario's `config` takes the same
+  `tracing`, `traceDetail` and `traceBytes`.
 - Exit status 1 when an expectation fails or a script throws.
 
 ## Architecture
@@ -98,6 +105,7 @@ torture-bench [SCENARIO_DIR] [--scenarios DIR] [--duration S] [--interval MS] [-
 | Scenario | Pushes on |
 |---|---|
 | `throughput` | Raw delivery: null-datamodel ping-pong storms (static invoke routing) + ECMAScript pingers answered via `_event.origin` |
+| `tracing` | The `throughput` storms with tracing at full detail: after every slice the bench encodes every system's trace records as OTLP protobuf (`ta_otlp`) and counts the bytes, as a host posting them would (ADR 0006) |
 | `crowd` | 100,000 mostly idle actors, growth by relocation, timer heap, history-based (Markov) events |
 | `heavy-data` | Large ECMAScript datamodels (20k-entry catalogs, journals of schema-generated nested orders), `<foreach>`, bulk imports |
 | `federation` | Three systems addressing each other's actors; kill/restore a system; add a system at run time |

@@ -63,11 +63,16 @@ void ta_system_trace_ack(ta_system *system, uint32_t bytes) {
     ta_trace_view view;
     uint32_t length = ta_system_trace(system, &view), cursor = 0;
     if (bytes > length) bytes = length;
-    view.length = bytes;
-    const ta_trace_record *record;
-    while ((record = ta_trace_next(&view, &cursor)))
+    /* core wrote these records: walked by their sizes, not checked again
+     * as a reader of someone else's bytes would (ta_trace_next) */
+    while (bytes - cursor >= sizeof(ta_trace_record)) {
+        const ta_trace_record *record =
+            (const ta_trace_record *)ta_pointer_add(view.records, cursor);
+        if (record->size > bytes - cursor) break; /* whole records only */
         ta_core_trace_release(&system->core, record);
-    ta_journal_release(&system->journal, cursor); /* whole records only */
+        cursor += record->size;
+    }
+    ta_journal_release(&system->journal, cursor);
 }
 
 void ta_system_trace_clock(ta_system *system, uint64_t at_least) {
