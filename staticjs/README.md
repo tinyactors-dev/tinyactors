@@ -214,7 +214,7 @@ Built-ins:
 | maps | `get` `has` `keys` `values` `entries` `forEach`, `size` |
 | iterators | `toArray` `map` `filter` `reduce` |
 | BigInts | `toString` (radix 2 to 36) |
-| functions | `String` `String.fromCharCode` `String.fromCodePoint` `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Map.groupBy` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` |
+| functions | `String` `String.fromCharCode` `String.fromCodePoint` `String.raw` (called as a function: staticjs has no tagged templates) `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Map.groupBy` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` `encodeURI` `encodeURIComponent` `decodeURI` `decodeURIComponent` |
 | `JSON` | `parse` `stringify` (see "JSON" below) |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum) |
 | constants | `Number.EPSILON` `MAX_SAFE_INTEGER` `MIN_SAFE_INTEGER` `MAX_VALUE` `MIN_VALUE` `POSITIVE_INFINITY` `NEGATIVE_INFINITY` `NaN`; `Math.PI` `E` `LN2` `LN10` `LOG2E` `LOG10E` `SQRT2` `SQRT1_2`: number constants when compiled |
@@ -424,6 +424,15 @@ compare identities, or find something on a prototype.
   calls; with an array replacer naming a key JavaScript reads from a
   prototype; and with a `space` between 0 and 1, or a string cut inside a
   pair (the "JSON" section).
+- `String.raw` with raw strings that are an object or a function, which
+  JavaScript reads by their `length` and indexes (an array or a string is
+  read; a number, a boolean or a BigInt is none, as in JavaScript), and
+  where JavaScript throws: a template without `raw`. `decodeURI` and
+  `decodeURIComponent` of a malformed escape or of escapes that are not
+  UTF-8 (overlong, a surrogate, past U+10FFFF), where JavaScript throws a
+  URIError. The five read text (a raw string, a substitution, what is
+  encoded or decoded) as `String` gives it, so an object faults there, and
+  a BigInt is its digits.
 - An iterator read where something else holds it too (`[[...it], [...it]]`,
   a closure's capture), where JavaScript gives nothing the second time; an
   iterator's `next`, `drop`, `take`, `flatMap`, `some`, `every`, `find` and
@@ -452,9 +461,11 @@ compare identities, or find something on a prototype.
   pair, padding one (`padStart`, `padEnd`) with a pad string cut there,
   `at` or `charAt` of half of one (`charCodeAt` and `codePointAt` give its
   number), `replaceAll` with an empty pattern where it puts text between
-  the halves of one, and `String.fromCharCode` or `String.fromCodePoint`
-  of a half that no other half follows or precedes: staticjs strings
-  cannot hold a lone surrogate.
+  the halves of one, `String.fromCharCode` or `String.fromCodePoint`
+  of a half that no other half follows or precedes, and `String.raw` of a
+  string with a substitution between the halves of one: staticjs strings
+  cannot hold a lone surrogate. So `encodeURI` and `encodeURIComponent`
+  never meet one, where JavaScript throws a URIError.
   An object as a string method's argument that JavaScript turns into a
   string (a pad string, an argument of `concat`, the replacement of
   `replaceAll`), as `+` faults on one, and a BigInt there too: staticjs

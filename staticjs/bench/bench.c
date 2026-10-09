@@ -57,7 +57,9 @@
  * s += ",": each += moves the let to +, MUTATION, L); eval.string.padStart (text, the
  * row ids joined by commas, padded to twice its length with "ab") and
  * eval.string.repeat ("r000000,".repeat(n)) and eval.string.replaceAll
- * (text.replaceAll(",", ";;")), each checked by its length and its ends (L);
+ * (text.replaceAll(",", ";;")) and eval.string.encodeURIComponent
+ * (encodeURIComponent(text), each comma as %2C), each checked by its
+ * length and its ends (L);
  * eval.object.spread-reduce (C);
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
@@ -504,6 +506,11 @@ static const bench_case cases[] = {
     { .name = "eval.string.replaceAll", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "(r => [r.length - text.length - Math.floor(text.length / 8), r.startsWith(\"r000000;;r000001;;\")])"
                 "(text.replaceAll(\",\", \";;\"))",
+      .globals = { { "text", FIX_TEXT, NULL } }, .expect = "[0,true]", .check = CHECK_SAME },
+    /* Each of the n - 1 commas escaped as %2C, every byte read. */
+    { .name = "eval.string.encodeURIComponent", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "(r => [r.length - text.length - 2 * Math.floor(text.length / 8), r.startsWith(\"r000000%2Cr000001%2C\")])"
+                "(encodeURIComponent(text))",
       .globals = { { "text", FIX_TEXT, NULL } }, .expect = "[0,true]", .check = CHECK_SAME },
     /* Strings read as numbers: 15 digits (Clinger's fast path), 17 (the bignum's). */
     { .name = "eval.number.parse", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,

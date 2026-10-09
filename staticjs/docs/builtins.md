@@ -15,7 +15,8 @@ commit must show with `bench-compare` that it costs nothing.
 A built-in is one of two kinds, and the choice decides most of its cost.
 
 - **A leaf** finishes in one C call: `includes`, `slice`, `join`,
-  `Math.max`, `Object.fromEntries`, the set methods, a map's `get` and `has`, `JSON.parse` and
+  `Math.max`, `Object.fromEntries`, the set methods, a map's `get` and `has`, `String.raw`,
+  `encodeURI`, `encodeURIComponent`, `decodeURI`, `decodeURIComponent`, `JSON.parse` and
   `JSON.stringify` (in `src/json.c`, each over an explicit stack). It gets its arguments
   borrowed in a `sjs_leaf_call` and returns an owned `result` and a `cost`.
   `call()` charges the cost, cuts the stack and pushes the result.

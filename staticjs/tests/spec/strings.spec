@@ -668,8 +668,143 @@ String.fromCodePoint("65")
 "é😀日"
 
 === String's other members are not built in
-String.raw
+String.prototype
 --- error unsupported built-in
+
+# String.raw, called as a function: staticjs has no tagged templates
+# (values printed by Node 22).
+
+=== String.raw joins the raw strings with the substitutions between them
+String.raw({ raw: ["a", "b", "c"] }, 1, 2)
+--- value
+"a1b2c"
+
+=== String.raw with fewer substitutions than gaps
+String.raw({ raw: ["a", "b", "c"] }, 1)
+--- value
+"a1bc"
+
+=== String.raw never converts a substitution it does not use
+String.raw({ raw: ["x"] }, {})
+--- value
+"x"
+
+=== String.raw never converts a substitution past the last gap
+String.raw({ raw: ["a", "b"] }, "-", {})
+--- value
+"a-b"
+
+=== String.raw of no raw strings, or of empty ones
+[String.raw({ raw: [] }, 1), String.raw({ raw: [""] }), String.raw({ raw: ["", ""] }, "")]
+--- value
+["","",""]
+
+=== String.raw of a string takes its code units as the raw strings
+String.raw({ raw: "abc" }, "-", "+")
+--- value
+"a-b+c"
+
+=== String.raw of a non-ASCII string
+String.raw({ raw: "é日x" }, 0, 1)
+--- value
+"é0日1x"
+
+=== String.raw of a string puts an empty substitution between the halves of a pair
+String.raw({ raw: "😀" }, "")
+--- value
+"😀"
+
+=== String.raw of a string with no substitutions keeps its pairs
+String.raw({ raw: "😀a" })
+--- value
+"😀a"
+
+=== String.raw faults on text between the halves of a pair (a lone surrogate in JavaScript)
+String.raw({ raw: "😀" }, "x")
+--- fault lone surrogate
+
+=== String.raw converts each substitution as String does
+[String.raw({ raw: ["<", ">"] }, 1.5), String.raw({ raw: ["<", ">"] }, -0), String.raw({ raw: ["<", ">"] }, true), String.raw({ raw: ["<", ">"] }, null), String.raw({ raw: ["<", ">"] }, undefined), String.raw({ raw: ["<", ">"] }), String.raw({ raw: ["<", ">"] }, 10n)]
+--- value
+["<1.5>","<0>","<true>","<null>","<undefined>","<>","<10>"]
+
+=== String.raw converts each raw string as String does
+String.raw({ raw: [1, null, true, 2n] }, "x", "y", "z")
+--- value
+"1xnullytruez2"
+
+=== String.raw of non-ASCII raw strings and substitutions
+String.raw({ raw: ["é", "😀", "日"] }, "日", "é")
+--- value
+"é日😀é日"
+
+=== String.raw keeps backslashes as they are
+String.raw({ raw: ["a\\n", "\\u00e9"] }, "\n")
+--- value
+"a\\n\n\\u00e9"
+
+=== String.raw of a template in a variable, with other keys
+(t => String.raw(t, "b"))({ raw: ["<", ">"], other: 1 })
+--- value
+"<b>"
+
+=== String.raw of a number, a boolean or a BigInt as the raw strings: none
+[String.raw({ raw: 5 }, "x"), String.raw({ raw: true }), String.raw({ raw: 3n })]
+--- value
+["","",""]
+
+=== String.raw is a function
+typeof String.raw
+--- value
+"function"
+
+=== String.raw faults without a template (a TypeError in JavaScript)
+String.raw()
+--- fault no raw strings
+
+=== String.raw faults on a template without raw (a TypeError in JavaScript)
+String.raw({})
+--- fault no raw strings
+
+=== String.raw faults on a null raw (a TypeError in JavaScript)
+String.raw({ raw: null })
+--- fault no raw strings
+
+=== String.raw faults on an undefined raw (a TypeError in JavaScript)
+String.raw({ raw: undefined })
+--- fault no raw strings
+
+=== String.raw faults on a string as the template (a TypeError in JavaScript)
+String.raw("abc")
+--- fault no raw strings
+
+=== String.raw faults on an array as the template (a TypeError in JavaScript)
+String.raw(["a"])
+--- fault no raw strings
+
+=== String.raw faults on null as the template (a TypeError in JavaScript)
+String.raw(null)
+--- fault no raw strings
+
+=== String.raw faults on an object as the raw strings, which JavaScript reads by length
+String.raw({ raw: { length: 2, 0: "a", 1: "b" } })
+--- fault only from an array or a string
+
+=== String.raw faults on a function as the raw strings, which JavaScript reads by length
+String.raw({ raw: x => x })
+--- fault only from an array or a string
+
+=== String.raw faults on an object as a raw string, as String of one does
+String.raw({ raw: [{}] })
+--- fault only primitives
+
+=== String.raw faults on an object as a substitution it uses, as String of one does
+String.raw({ raw: ["a", "b"] }, [1])
+--- fault only primitives
+
+=== String.raw as a tag is refused: staticjs has no tagged templates
+String.raw`a\n${1}b`
+--- error unsupported tagged templates
 
 === String alone as a value
 (f => f(2))(String)
