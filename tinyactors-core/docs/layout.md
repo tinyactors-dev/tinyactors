@@ -267,8 +267,8 @@ Names are whole words; the only abbreviation is the prefix.
 
 ## Distribution forms
 
-Packaging is to be rebuilt on the repository's release machinery
-([distribution.md](distribution.md)); these are the forms the library takes.
+What is released, and how, is in [distribution.md](distribution.md);
+these are the forms the library takes.
 
 1. **Static libraries** — `libtinyactors_<layer>.a`, one per layer.
 2. **Amalgamation** — `tinyactors.c`/`tinyactors.h`, vendored by DB extensions (SQLite,

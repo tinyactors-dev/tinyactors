@@ -12,11 +12,11 @@ drain tagged effects.
   what you can rely on, from one actor to a PostgreSQL table of them
 - [docs/scenarios.md](docs/scenarios.md) — twelve execution walkthroughs
 - [docs/layout.md](docs/layout.md) — file tree, tooling, tasks
-- [docs/distribution.md](docs/distribution.md) — the release artifacts to rebuild: npm, C/pkg-config,
-  and PostgreSQL artifacts, target matrix, installation and package tests
+- [docs/distribution.md](docs/distribution.md) — what is released (`@tinyactors/node`, the C
+  libraries), the release targets and tasks, and the plan for the web and PostgreSQL packages
 
 The release version is `TA_VERSION_MAJOR`, `_MINOR` and `_PATCH` in
-`include/tinyactors/types.h` (currently 0.1.0). The build and its tasks
+`include/tinyactors/types.h` (currently 0.2.0). The build and its tasks
 are Ruby, on the repository's pinned toolchain (`mise/core.rb`,
 [layout.md](docs/layout.md#tasks)):
 
