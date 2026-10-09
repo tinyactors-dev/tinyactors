@@ -117,8 +117,6 @@ implementation of that layer). Layer dependency rules are in
 │   └── datamodel_cgen/        ◻ "C switch" datamodel: expressions compiled to C
 │
 ├── tools/
-│   ├── check_surface.py       ◻ binding surface: C functions × linked bindings, JS API × typings
-│   │                             (to port onto the pinned toolchain; not run yet)
 │   ├── w3c/convert.py         ✅ instantiates the IRP templates (XSLT 2.0, SaxonC via uv)
 │   ├── lint/rules/            ✅ ast-grep rules (no-retired-abbreviations: the naming lint)
 │   ├── torture/               ✅ torture-bench: scenario host (bench.c: systems, router, the
@@ -177,7 +175,7 @@ implementation of that layer). Layer dependency rules are in
 │   ├── README.md              ✅ conventions
 │   ├── surface.json           ✅ every public C function: "bind" (reachable from every binding)
 │   │                             or skipped with a reason; checked with the typings by
-│   │                             tools/check_surface.py (`mise run surface`)
+│   │                             `mise run surface` (mise/tasks/surface)
 │   ├── shared/core.mjs        ✅ the xstate-style JS API, backend-independent (createRuntime):
 │   │                             machines → SCXML, SCXML documents, system images, systems,
 │   │                             actors, hibernation, snapshots, links, codec
@@ -229,6 +227,7 @@ implementation of that layer). Layer dependency rules are in
 | `mise run w3c` | *test* · W3C IRP with the test datamodel (153 mandatory passes at least) and with quickjs-ng in both realm modes: everything not in `tests/w3c/skip.txt` must pass |
 | `mise run node:build` / `node:test` | *test* · the N-API addon; its tests on Node.js and on Bun, and the TypeScript type tests |
 | `mise run web:build` / `web:test` | *test* · the wasm module; the node suite against it, plus its own tests |
+| `mise run surface` | *test* · the binding surface (`bindings/surface.json`): every public C function classified, every bound one surviving the link of the Node addon and of the wasm module with dead-code elimination, every runtime export typed in `index.d.ts` |
 | `mise run conformance:js` | *test* · host conformance through the Node addon and the wasm binding (the C host runs it in `test`) |
 | `mise run w3c:js` | *test* · the IRP suite through the JS bindings; everything not in `tests/w3c/skip-js.txt` must pass |
 | `mise run examples:test` | *test* · access reconciler (invariants), chess (rules + games over links), ui-elements |

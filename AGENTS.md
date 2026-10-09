@@ -88,7 +88,7 @@ Do it at release time, not between releases.
   - one core test program: `tinyactors-core/build/dev/bin/<name>` after
     `mise run build` in `tinyactors-core` (the sanitizer build);
   - one part of core's suite, as a task in `tinyactors-core`: `w3c`,
-    `node:test`, `web:test`, `conformance:js`, `w3c:js`, `examples:test`,
+    `node:test`, `web:test`, `surface`, `conformance:js`, `w3c:js`, `examples:test`,
     `torture:test`, `check:wasm`, `check:freestanding` (`mise tasks` lists
     them);
   - one Node.js binding suite: `node --test test/<suite>.test.js` in

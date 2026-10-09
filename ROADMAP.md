@@ -20,13 +20,7 @@ says why it ended.
    package and the PostgreSQL source archive (PGXN/PGXS); no task builds
    either yet. `tinyactors-core/docs/distribution.md` describes what is
    built and the plan for the two that are not.
-2. **Port the binding surface check** (`tinyactors-core/tools/check_surface.py`)
-   onto the pinned toolchain (`Toolchain::Binary` instead of `cc` and `nm`
-   from PATH) and run it in `mise run test`. Its link recipes no longer
-   build: the node recipe compiles `allocator_wasm.c` for the host, the web
-   recipe misses `ta_runtime_malloc`; `ta_wasm_alloc`, `ta_wasm_free` and
-   `ta_datamodel_ecmascript_wasm_set_time` are not classified.
-3. **Tracing, what is left** after
+2. **Tracing, what is left** after
    [ADR 0006](docs/adr/0006-tracing-is-a-core-feature.md):
    - **metrics:** `metricsToOTLP` (0.1's metrics as OTLP), histograms of
      macrostep durations with **exemplars** pointing at the sampled step
@@ -38,7 +32,7 @@ says why it ended.
      table;
    - **definition logs** (0.1's `tinyactors.definition.*`): a log record
      when a version is linked, retired and freed.
-4. **`tinyactors-scxml`:** decide whether the C SCXML writer is still
+3. **`tinyactors-scxml`:** decide whether the C SCXML writer is still
    wanted (the JavaScript binding writes SCXML itself); if so, port it to
    the compiler's model, and bring its decoder's edge cases into the
    compiler's tests either way. Consider tinyxml for the compiler's XML
