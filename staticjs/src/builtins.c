@@ -21,6 +21,7 @@ static const function_entry FUNCTION_TABLE[] = {
     { "", "String", SJS_BUILTIN_STRING },
     { "String", "fromCharCode", SJS_BUILTIN_STRING_FROM_CHAR_CODE },
     { "String", "fromCodePoint", SJS_BUILTIN_STRING_FROM_CODE_POINT },
+    { "String", "raw", SJS_BUILTIN_STRING_RAW },
     { "", "Boolean", SJS_BUILTIN_BOOLEAN },
     { "Array", "from", SJS_BUILTIN_ARRAY_FROM },
     { "Array", "isArray", SJS_BUILTIN_ARRAY_IS_ARRAY },
@@ -59,7 +60,11 @@ static const function_entry FUNCTION_TABLE[] = {
     { "BigInt", "asUintN", SJS_BUILTIN_BIGINT_AS_UINT_N },
     { "Map", "groupBy", SJS_BUILTIN_MAP_GROUP_BY },
     { "JSON", "parse", SJS_BUILTIN_JSON_PARSE },
-    { "JSON", "stringify", SJS_BUILTIN_JSON_STRINGIFY }
+    { "JSON", "stringify", SJS_BUILTIN_JSON_STRINGIFY },
+    { "", "encodeURI", SJS_BUILTIN_ENCODE_URI },
+    { "", "encodeURIComponent", SJS_BUILTIN_ENCODE_URI_COMPONENT },
+    { "", "decodeURI", SJS_BUILTIN_DECODE_URI },
+    { "", "decodeURIComponent", SJS_BUILTIN_DECODE_URI_COMPONENT }
 };
 
 /*
@@ -198,6 +203,7 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_STRING),
     FUNCTION_VALUE(SJS_BUILTIN_STRING_FROM_CHAR_CODE),
     FUNCTION_VALUE(SJS_BUILTIN_STRING_FROM_CODE_POINT),
+    FUNCTION_VALUE(SJS_BUILTIN_STRING_RAW),
     FUNCTION_VALUE(SJS_BUILTIN_BOOLEAN),
     FUNCTION_VALUE(SJS_BUILTIN_ARRAY_FROM),
     FUNCTION_VALUE(SJS_BUILTIN_ARRAY_IS_ARRAY),
@@ -234,7 +240,11 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_UINT_N),
     FUNCTION_VALUE(SJS_BUILTIN_MAP_GROUP_BY),
     FUNCTION_VALUE(SJS_BUILTIN_JSON_PARSE),
-    FUNCTION_VALUE(SJS_BUILTIN_JSON_STRINGIFY)
+    FUNCTION_VALUE(SJS_BUILTIN_JSON_STRINGIFY),
+    FUNCTION_VALUE(SJS_BUILTIN_ENCODE_URI),
+    FUNCTION_VALUE(SJS_BUILTIN_ENCODE_URI_COMPONENT),
+    FUNCTION_VALUE(SJS_BUILTIN_DECODE_URI),
+    FUNCTION_VALUE(SJS_BUILTIN_DECODE_URI_COMPONENT)
 };
 
 sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name) {
@@ -607,6 +617,11 @@ static sjs_result math(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
 
 /* String.fromCharCode and String.fromCodePoint, at the end of the file. */
 static sjs_result string_from(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+/* String.raw, encodeURI, encodeURIComponent, decodeURI and
+ * decodeURIComponent, at the end of the file. */
+static sjs_result string_raw(sjs_vm *vm, sjs_leaf_call *call);
+static sjs_result uri_encode(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+static sjs_result uri_decode(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* Number, parseInt, parseFloat, isNaN and isFinite, at the end of the file. */
 static sjs_result number_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* Math.sqrt, hypot, fround, clz32 and imul, at the end of the file. */
@@ -623,6 +638,14 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     case SJS_BUILTIN_STRING_FROM_CHAR_CODE:
     case SJS_BUILTIN_STRING_FROM_CODE_POINT:
         return string_from(vm, id, call);
+    case SJS_BUILTIN_STRING_RAW:
+        return string_raw(vm, call);
+    case SJS_BUILTIN_ENCODE_URI:
+    case SJS_BUILTIN_ENCODE_URI_COMPONENT:
+        return uri_encode(vm, id, call);
+    case SJS_BUILTIN_DECODE_URI:
+    case SJS_BUILTIN_DECODE_URI_COMPONENT:
+        return uri_decode(vm, id, call);
     case SJS_BUILTIN_STRING: {
         if (call->count == 0) return new_string(vm, SJS_STR(""), &call->result);
         sjs_string *s;
@@ -3138,4 +3161,244 @@ __attribute__((noinline)) static sjs_result map_change(sjs_vm *vm, sjs_builtin_i
     }
     call->receiver_slot->as.heap = &m->h;
     return r;
+}
+
+/* ------------------------------------------------------------------------
+ * String.raw, encodeURI, encodeURIComponent, decodeURI and
+ * decodeURIComponent: leaves over text.
+ */
+
+/* A value's text as String gives it, for an argument these built-ins turn
+ * into a string: a primitive's own, or a BigInt's digits made into `made`,
+ * which the caller releases (text_release). An object faults, as String
+ * faults on one. */
+typedef struct {
+    sjs_str text;
+    sjs_string *made;   /* NULL when nothing was made */
+    char room[32];
+} value_text;
+
+static sjs_result text_of(sjs_vm *vm, sjs_value v, value_text *t) {
+    t->made = NULL;
+    if (!sjs_is_primitive(v)) return sjs_vm_fault(vm, "staticjs turns only primitives into strings");
+    if (v.kind != SJS_BIGINT) {
+        t->text = sjs_primitive_text(v, t->room);
+        return SJS_OK;
+    }
+    sjs_result r = sjs_to_string(vm->context, v, &t->made);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    t->text = sjs_string_view(t->made);
+    return SJS_OK;
+}
+
+static void text_release(sjs_vm *vm, value_text *t) {
+    if (t->made != NULL) sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &t->made->h));
+    t->made = NULL;
+}
+
+/* Append a value's text to the text being built. */
+static sjs_result build_value(sjs_vm *vm, text_builder *b, sjs_value v) {
+    value_text t;
+    if (text_of(vm, v, &t) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_result r = build_text(vm, b, t.text);
+    text_release(vm, &t);
+    return r;
+}
+
+/* The code units of a string's text, one at a time: a character past
+ * 0xFFFF gives its two halves in turn. */
+typedef struct {
+    sjs_str text;
+    uint32_t at;     /* the byte the next character starts at */
+    uint32_t low;    /* the second half still to give, or 0 */
+} unit_cursor;
+
+static uint32_t next_unit(unit_cursor *u) {
+    if (u->low != 0) {
+        uint32_t low = u->low;
+        u->low = 0;
+        return low;
+    }
+    /* A staticjs string is valid UTF-8, so this never fails. */
+    uint32_t point = (uint32_t)sjs_utf8_next(u->text, &u->at);
+    if (point < 0x10000u) return point;
+    u->low = 0xDC00u + ((point - 0x10000u) & 0x3FFu);
+    return 0xD800u + ((point - 0x10000u) >> 10);
+}
+
+/* String.raw(template, ...substitutions): template.raw's strings, with
+ * each substitution between two of them. raw is an array of primitives,
+ * or a string, whose code units are the strings; a substitution between
+ * the halves of a pair gives a lone surrogate in JavaScript, which faults
+ * (text_builder). A template that is not an object, or has no raw, or a
+ * null or undefined one, is a TypeError in JavaScript and faults; a
+ * number, boolean or BigInt as raw has no length, which JavaScript reads
+ * as none. An object or a function as raw faults: JavaScript reads it by
+ * its length and indexes. Substitutions past the last gap are never
+ * converted, as in JavaScript. Fuel: a unit per raw string and
+ * substitution, and per 16 bytes built. */
+__attribute__((noinline)) static sjs_result string_raw(sjs_vm *vm, sjs_leaf_call *call) {
+    sjs_value t = arg(call, 0);
+    const sjs_entry *e = t.kind == SJS_OBJECT ? sjs_object_find(SJS_AS_OBJECT(t), SJS_STR("raw")) : NULL;
+    sjs_value raw = e != NULL ? e->value : sjs_undefined();
+    if (raw.kind == SJS_UNDEFINED || raw.kind == SJS_NULL) {
+        return sjs_vm_fault(vm, "String.raw: the template has no raw strings (a TypeError in JavaScript)");
+    }
+    uint32_t count;
+    unit_cursor u = { { NULL, 0 }, 0, 0 };
+    if (raw.kind == SJS_ARRAY) {
+        count = SJS_AS_ARRAY(raw)->length;
+    } else if (raw.kind == SJS_STRING) {
+        u.text = sjs_string_view(SJS_AS_STRING(raw));
+        count = SJS_AS_STRING(raw)->utf16_length;
+    } else if (sjs_is_primitive(raw)) {
+        count = 0;
+    } else {
+        return sjs_vm_fault(vm, "String.raw: staticjs reads raw strings only from an array or a string");
+    }
+    if (string_with_room(vm, call, 0) != SJS_OK) return SJS_ERR_PROGRAM;
+    text_builder b = { call, 0 };
+    for (uint32_t i = 0; i < count; i++) {
+        call->cost += 1u;
+        sjs_result r = raw.kind == SJS_ARRAY ? build_value(vm, &b, SJS_AS_ARRAY(raw)->items[i]) : build_unit(vm, &b, next_unit(&u));
+        if (r != SJS_OK) return SJS_ERR_PROGRAM;
+        if (i + 1u == count || i + 1u >= call->count) continue;
+        call->cost += 1u;
+        if (build_value(vm, &b, call->args[i + 1u]) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    return build_end(vm, &b);
+}
+
+/* Whether an encoder keeps an ASCII byte as it is: the unreserved
+ * characters, and for encodeURI (`whole`) the reserved ones and `#`. */
+static bool uri_keeps(uint8_t c, bool whole) {
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return true;
+    switch (c) {
+    case '-': case '_': case '.': case '!': case '~': case '*': case '\'': case '(': case ')':
+        return true;
+    case ';': case '/': case '?': case ':': case '@': case '&': case '=': case '+': case '$': case ',': case '#':
+        return whole;
+    default:
+        return false;
+    }
+}
+
+/* encodeURI(text) and encodeURIComponent(text): each byte of the text's
+ * UTF-8 that the encoder does not keep, as %XX in upper-case hex. That is
+ * JavaScript's escape of each character's UTF-8; a lone surrogate, a
+ * URIError in JavaScript, cannot be in a staticjs string. A string with
+ * nothing to escape is given back as it is. Fuel: a unit per 16 bytes
+ * read, and per 16 bytes written. */
+__attribute__((noinline)) static sjs_result uri_encode(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    static const char hex[] = "0123456789ABCDEF";
+    bool whole = id == SJS_BUILTIN_ENCODE_URI;
+    sjs_value x = arg(call, 0);
+    value_text t;
+    if (text_of(vm, x, &t) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_str s = t.text;
+    call->cost += s.length / 16u;
+    uint64_t bytes = 0;
+    for (uint32_t i = 0; i < s.length; i++) bytes += uri_keeps((uint8_t)s.ptr[i], whole) ? 1u : 3u;
+    sjs_result r = SJS_OK;
+    if (bytes == s.length && x.kind == SJS_STRING) {
+        sjs_ref(x);
+        call->result = x;
+    } else if (string_with_room(vm, call, bytes) != SJS_OK) {
+        r = SJS_ERR_PROGRAM;
+    } else {
+        sjs_string *out = SJS_AS_STRING(call->result);
+        uint32_t run = 0;
+        for (uint32_t i = 0; i < s.length; i++) {
+            uint8_t c = (uint8_t)s.ptr[i];
+            if (uri_keeps(c, whole)) continue;
+            sjs_string_extend(out, (sjs_str){ s.ptr + run, i - run });
+            char escape[3] = { '%', hex[c >> 4], hex[c & 15u] };
+            sjs_string_extend(out, (sjs_str){ escape, 3 });
+            run = i + 1u;
+        }
+        sjs_string_extend(out, (sjs_str){ s.ptr + run, s.length - run });
+    }
+    text_release(vm, &t);
+    return r;
+}
+
+static int32_t hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* The byte the escape %XX at `at` stands for, or -1 if there is none. */
+static int32_t escaped_byte(sjs_str s, uint32_t at) {
+    if (at >= s.length || s.length - at < 3u || s.ptr[at] != '%') return -1;
+    int32_t high = hex_digit(s.ptr[at + 1u]);
+    int32_t low = hex_digit(s.ptr[at + 2u]);
+    return high < 0 || low < 0 ? -1 : high * 16 + low;
+}
+
+/* One character's escapes: its UTF-8 bytes and how many, each escaped in
+ * three bytes of the text. */
+typedef struct {
+    uint8_t bytes[4];
+    uint32_t count;
+} uri_character;
+
+/* The character whose escapes start at `at`, as valid UTF-8 (no overlong
+ * form, no surrogate, nothing past 0x10FFFF); false for a malformed
+ * sequence. */
+static bool uri_character_at(sjs_str s, uint32_t at, uri_character *c) {
+    int32_t first = escaped_byte(s, at);
+    if (first < 0) return false;
+    uint32_t n = first < 0x80 ? 1u : first >= 0xC0 && first < 0xE0 ? 2u : first >= 0xE0 && first < 0xF0 ? 3u : first >= 0xF0 && first < 0xF8 ? 4u : 0u;
+    if (n == 0) return false;
+    c->bytes[0] = (uint8_t)first;
+    for (uint32_t k = 1; k < n; k++) {
+        int32_t next = escaped_byte(s, at + 3u * k);
+        if (next < 0 || (next & 0xC0) != 0x80) return false;
+        c->bytes[k] = (uint8_t)next;
+    }
+    uint32_t end = 0;
+    if (sjs_utf8_next((sjs_str){ (const char *)c->bytes, n }, &end) < 0 || end != n) return false;
+    c->count = n;
+    return true;
+}
+
+/* decodeURI(text) and decodeURIComponent(text): each run of %XX escapes
+ * of a character's UTF-8, in either case, as the character. decodeURI
+ * keeps the escape of a reserved character or `#` as written. A malformed
+ * sequence, a URIError in JavaScript, faults. The result is never longer
+ * than the text. Fuel: a unit per 16 bytes read, and per 16 bytes of room
+ * for the result. */
+__attribute__((noinline)) static sjs_result uri_decode(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    bool whole = id == SJS_BUILTIN_DECODE_URI;
+    value_text t;
+    if (text_of(vm, arg(call, 0), &t) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_str s = t.text;
+    call->cost += s.length / 16u;
+    sjs_result r = string_with_room(vm, call, s.length);
+    uint32_t run = 0;
+    uint32_t i = 0;
+    while (r == SJS_OK && i < s.length) {
+        if (s.ptr[i] != '%') {
+            i++;
+            continue;
+        }
+        sjs_string *out = SJS_AS_STRING(call->result);
+        sjs_string_extend(out, (sjs_str){ s.ptr + run, i - run });
+        uri_character c;
+        if (!uri_character_at(s, i, &c)) {
+            r = sjs_vm_fault(vm, "a malformed URI sequence (a URIError in JavaScript)");
+            break;
+        }
+        /* The reserved characters are what encodeURI keeps and
+         * encodeURIComponent escapes. */
+        bool keep = whole && c.count == 1u && uri_keeps(c.bytes[0], true) && !uri_keeps(c.bytes[0], false);
+        sjs_string_extend(out, keep ? (sjs_str){ s.ptr + i, 3u } : (sjs_str){ (const char *)c.bytes, c.count });
+        i += 3u * c.count;
+        run = i;
+    }
+    if (r == SJS_OK) sjs_string_extend(SJS_AS_STRING(call->result), (sjs_str){ s.ptr + run, s.length - run });
+    text_release(vm, &t);
+    return r == SJS_OK ? SJS_OK : SJS_ERR_PROGRAM;
 }
