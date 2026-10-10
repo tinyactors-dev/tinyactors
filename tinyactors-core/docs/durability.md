@@ -181,3 +181,13 @@ them, and a hibernation or an export leaves them where they were made. A host
 keeps the totals of the segments it retired, by chart name, in its own
 snapshot. The snapshot formats (`ta_system` `version` 3, the host's
 `SNAPSHOT_VERSION` 2) changed with them: older ones are refused.
+
+## Trace policy (ADR 0007)
+
+A context's detail class is in its flags, so it is kept wherever the
+context is: the region, hibernation, and export blobs (which carry the
+flags whole). The compiled rules and their strings are in the region, so a
+snapshot keeps them and a restore runs under them until the host sets
+another policy. An actor's cached name matches (`trace_names`) are in its
+record and are cleared whenever the policy changes; an adopted actor
+computes its own.

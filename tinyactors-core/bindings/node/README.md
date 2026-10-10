@@ -443,6 +443,27 @@ system.setTraceSink((traces, logs) => queue.push(traces, logs), {
 system.configureTraces({ detail: 'summary', sample: 0.5 }); // while it runs
 ```
 
+**Watching and rules** (docs/adr/0007): a watch traces matching steps in
+full, whatever the ratio, and everything they cause, until `stop()` or
+`for` ms (15 minutes by default); rules decide where a trace starts and
+where an actor takes an event, first match wins:
+
+```js
+const watch = system.watchTraces({ actors: [order], names: ['issue/*'], charts: ['checkout'], detail: 'full', values: true });
+watch.stop();
+system.configureTraces({
+  sample: 0.01,
+  rules: [
+    { chart: 'telemetry-sink', detail: 'off' },              // never traced
+    { at: 'start', from: 'host', sample: true, perSecond: 5 }, // up to 5 host inputs a second
+    { chart: 'checkout', sample: 0.1 },                       // consistent with the 1% default
+  ],
+});
+```
+
+A step a rule samples in an unsampled trace begins a new trace. An
+unsampled trace keeps its ID: what it sends carries `traceparent ...-00`.
+
 `createSystem({ traces: { sink, seed, ...options } })` installs it from the
 start; `seed` makes the trace IDs a system starts repeatable (tests). With
 neither a sink nor an endpoint, core writes no records at all; the trace
@@ -487,7 +508,7 @@ ms; 0 only when the system stops) and once more at `stop()`, adding what
 (`start`, `stop`, `send`, `getSnapshot`, `subscribe`, `address`, `hibernated`,
 options `input`, `systemID`, `system`, `logger`, `traceparent`),
 `createSystem({ id, hibernation, clock, logger, restore, machines, traces, telemetry })`,
-`system.setTraceSink()`, `system.configureTraces()`, `system.flushTraces()`,
+`system.setTraceSink()`, `system.configureTraces()`, `system.watchTraces()`, `system.flushTraces()`,
 `system.metrics()`, `metricsToOTLP()`,
 `decodeTraces`, `parseTraceparent`, `formatTraceparent`, `stepSpanID`,
 `system.get()`, `system.ref()`, `system.sendMany()`, `system.hibernate()`,

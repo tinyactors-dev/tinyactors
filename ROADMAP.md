@@ -22,11 +22,13 @@ says why it ended.
    built and the plan for the two that are not.
 2. **Tracing, what is left** after
    [ADR 0006](docs/adr/0006-tracing-is-a-core-feature.md):
-   - **metrics:** `metricsToOTLP` (0.1's metrics as OTLP), histograms of
-     macrostep durations with **exemplars** pointing at the sampled step
-     that produced them;
-   - **watching:** 0.1's `watchTraces` (full detail for chosen sessions,
-     addresses or charts, whatever the sampling);
+   - **metrics** and **watching**: done (2026-10-10,
+     [ADR 0007](docs/adr/0007-metrics-and-trace-policy.md)): per-chart
+     counts, `metrics()`, `metricsToOTLP` and `/v1/metrics`, macrostep
+     duration histograms with exemplars from the encoder, detail classes,
+     trace rules and `watchTraces`. Left from it: `tracestate` for the
+     class across processes; traces for host work and waits (ADR 0007,
+     open questions);
    - **the PostgreSQL extension** traces nothing (`TA_TRACING_DISABLED`):
      drain the journal at the end of a statement, or keep records in a
      table;

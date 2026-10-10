@@ -1,6 +1,6 @@
 # Metrics, and trace policy as data
 
-**Status:** Proposed (2026-10-09; Part 1 reworked the same day after review)
+**Status:** Adopted → [ADR 0007](../adr/0007-metrics-and-trace-policy.md) (2026-10-10; built in commits `e366bd6d`, `b1eeb700`, `360dfea3`, `59d54bcd`, `a6aa8836`, `22b64598`). Where this text and the ADR differ, the ADR says what was built.
 **Touches:** tinyactors-core: `src/system` (per-chart counters, the policy table and its decision points), `src/core` (the step's kind mask, error counts), `src/host` (merging segments, carrying the detail across segments), `src/otlp` (an ExportMetricsServiceRequest writer), `bindings/shared` and `bindings/node` (`metrics()`, `metricsToOTLP`, the `/v1/metrics` exporter, `configureTraces({ rules })`, `watchTraces`). Granary is read, not changed.
 **Builds on:** [ADR 0006](../adr/0006-tracing-is-a-core-feature.md). Carries out ROADMAP "Next" item 2 (metrics, watching).
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
