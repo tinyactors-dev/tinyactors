@@ -12,6 +12,7 @@ ruleId         mise/lib/build_scripts.rb                                 # ast-g
 # its freestanding tiers after the flags.
 Os             tinyxml/**/*                                                # compiler flag -Os
 Os             docs/proposals/packaging.md                                 # compiler flag -Os
+Os             docs/proposals/scxml-in-core.md                             # compiler flag -Os
 Os             tinyactors-core/**/*                                        # compiler flag -Os
 
 # The rule's own examples of what not to write, in AGENTS.md.
