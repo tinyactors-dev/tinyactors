@@ -204,13 +204,26 @@ typedef struct {
 /* Container flags. */
 #define SJS_CONTAINER_UNINDEXED 1u   /* its index failed to allocate: scan it */
 
+/* An array flag: `extra` holds the object of its properties besides its
+ * elements and length: a match result's index, input, groups and indices
+ * (docs/regex.md, 7.2). */
+#define SJS_ARRAY_EXTRA 2u
+
 typedef struct {
     sjs_heap h;
     uint32_t length;
     uint32_t capacity;
-    sjs_index *index;   /* a set's or a map's, or NULL; an array has none */
+    union {
+        sjs_index *index;   /* a set's or a map's, or NULL; an array has none */
+        sjs_heap *extra;    /* an array with SJS_ARRAY_EXTRA: an object (SJS_HEAP_OBJECT) */
+    };
     sjs_value items[];
-} sjs_array;   /* also a set: elements in insertion order; and a map (SJS_HEAP_MAP):
+} sjs_array;
+
+/* Does the array have properties besides its elements (SJS_ARRAY_EXTRA)? */
+static inline bool sjs_array_extra(sjs_value v) {
+    return v.kind == SJS_ARRAY && (v.as.heap->flags & SJS_ARRAY_EXTRA) != 0;
+}   /* also a set: elements in insertion order; and a map (SJS_HEAP_MAP):
                 * its keys and their values alternate, items[2i] and items[2i + 1],
                 * in insertion order, and length and capacity count both; its
                 * index is over the keys, by entry */
@@ -611,6 +624,7 @@ typedef enum {
     SJS_METHOD_STRING_SLICE,
     SJS_METHOD_STRING_SPLIT,
     SJS_METHOD_STRING_MATCH,
+    SJS_METHOD_STRING_MATCH_ALL,
     SJS_METHOD_STRING_REPLACE,
     SJS_METHOD_STRING_SEARCH,
     SJS_METHOD_STRING_STARTS_WITH,
@@ -630,6 +644,7 @@ typedef enum {
     SJS_METHOD_BIGINT_TO_STRING,
     /* Regular expressions (regex_match.c). */
     SJS_METHOD_REGEXP_TEST,
+    SJS_METHOD_REGEXP_EXEC,
     /* Maps. */
     SJS_METHOD_MAP_GET,
     SJS_METHOD_MAP_HAS,

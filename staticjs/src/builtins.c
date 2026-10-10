@@ -116,7 +116,7 @@ static const sjs_name NAMES[] = {
     NAME("endsWith", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_ENDS_WITH, 0),
     NAME_MAP("entries", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, SJS_METHOD_MAP_ENTRIES),
     NAME("every", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_EVERY, 0, 0),
-    NAME_REGEXP("exec", 0),
+    NAME_REGEXP("exec", SJS_METHOD_REGEXP_EXEC),
     NAME_MUTATION("fill", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_FILL), /* MUTATION */
     NAME_ITERATOR("filter", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_FILTER, SJS_METHOD_ITERATOR_FILTER),
     NAME("find", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_FIND, 0, 0),
@@ -152,7 +152,7 @@ static const sjs_name NAMES[] = {
     NAME("localeCompare", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME_ITERATOR("map", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_MAP, SJS_METHOD_ITERATOR_MAP),
     NAME("match", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_MATCH, 0),
-    NAME("matchAll", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("matchAll", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_MATCH_ALL, 0),
     NAME_REGEXP("multiline", 0),
     NAME("next", SJS_NAME_ON_ITERATOR, 0, 0, 0),
     NAME("normalize", SJS_NAME_ON_STRING, 0, 0, 0),
@@ -497,6 +497,7 @@ static sjs_result entries_other(sjs_vm *vm, sjs_leaf_call *call);
 static sjs_result object_listing(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_value o = arg(call, 0);
     if (o.kind != SJS_OBJECT && o.kind != SJS_ARRAY) return sjs_vm_fault(vm, "Object.keys, values and entries take an object or an array");
+    if (sjs_array_extra(o)) return sjs_array_extra_fault(vm);
     uint32_t n = sjs_length(o);
     sjs_array *out;
     if (new_array(vm, n, &out) != SJS_OK) return SJS_ERR_PROGRAM;
@@ -791,9 +792,11 @@ static sjs_result array_join(sjs_vm *vm, sjs_leaf_call *call) {
 }
 
 /* Does the method get its receiver to itself? Only an array nothing else
- * holds: an argument that is the same array counts too. */
-static bool takes_receiver(const sjs_leaf_call *call) {
-    return call->receiver_slot != NULL && call->receiver.kind == SJS_ARRAY && sjs_value_unique(call->receiver);
+ * holds: an argument that is the same array counts too. Not a match result,
+ * whose copy JavaScript gives without its index, input and groups. */
+__attribute__((always_inline)) static inline bool takes_receiver(const sjs_leaf_call *call) {
+    return call->receiver_slot != NULL && call->receiver.kind == SJS_ARRAY && sjs_value_unique(call->receiver) &&
+           (call->receiver.as.heap->flags & SJS_ARRAY_EXTRA) == 0;
 }
 
 /* Move the receiver out of its slot into the result, to change in place.
@@ -1240,7 +1243,9 @@ sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) 
     if (id <= SJS_METHOD_STRING_TRIM_START) return string_method(vm, id, call);
     if (id <= SJS_METHOD_SET_UNION) return set_method(vm, id, call);
     if (id == SJS_METHOD_BIGINT_TO_STRING) return bigint_method(vm, call);
-    if (id == SJS_METHOD_REGEXP_TEST) return regex_method(vm, SJS_REGEX_OP_TEST, call);
+    if (id == SJS_METHOD_REGEXP_TEST || id == SJS_METHOD_REGEXP_EXEC) {
+        return regex_method(vm, id == SJS_METHOD_REGEXP_TEST ? SJS_REGEX_OP_TEST : SJS_REGEX_OP_EXEC, call);
+    }
     return map_method(vm, id, call);
 }
 
@@ -1264,12 +1269,14 @@ static const sjs_array *receiver(sjs_vm *vm, const vm_frame *frame) {
  * result, and the loop ends before its first step. */
 static sjs_result from_list(sjs_vm *vm, sjs_value items, sjs_value *list) {
     sjs_array *a;
-    if (items.kind == SJS_ARRAY) {
+    if (items.kind == SJS_ARRAY && !sjs_array_extra(items)) {
         sjs_ref(items);
         *list = items;
         return SJS_OK;
     }
-    if (items.kind == SJS_SET) {
+    /* A match result's elements, copied: JavaScript's array has no index,
+     * input or groups. */
+    if (items.kind == SJS_SET || items.kind == SJS_ARRAY) {
         const sjs_array *s = SJS_AS_ARRAY(items);
         if (new_array(vm, s->length, &a) != SJS_OK) return SJS_ERR_PROGRAM;
         for (uint32_t i = 0; i < s->length; i++) {
@@ -1916,7 +1923,7 @@ static loop_step sort_step(sjs_vm *vm, vm_frame *frame) {
             /* A receiver nothing else holds takes the order itself: the same
              * elements, so no count changes. The comparator never saw it. */
             sjs_value *held = slot(vm, frame, LOOP_RECEIVER);
-            if (sjs_value_unique(*held)) {
+            if (sjs_value_unique(*held) && !sjs_array_extra(*held)) {
                 sjs_value sorted = *held;
                 *held = sjs_undefined();
                 sjs_copy(SJS_AS_ARRAY(sorted)->items, src, (size_t)n * sizeof(sjs_value));
@@ -2666,6 +2673,8 @@ __attribute__((noinline)) static sjs_result string_method_tail(sjs_vm *vm, sjs_b
         return string_replace(vm, call);
     case SJS_METHOD_STRING_MATCH:
         return regex_method(vm, SJS_REGEX_OP_MATCH, call);
+    case SJS_METHOD_STRING_MATCH_ALL:
+        return regex_method(vm, SJS_REGEX_OP_MATCH_ALL, call);
     case SJS_METHOD_STRING_SEARCH:
         return regex_method(vm, SJS_REGEX_OP_SEARCH, call);
     case SJS_METHOD_STRING_TRIM:

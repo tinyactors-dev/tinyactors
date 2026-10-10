@@ -299,7 +299,10 @@ const numberChecks = {
       const f = flags.replace(/[gy]/g, '');
       const want = new Function('s', `return JSON.stringify([s.search(/${pattern}/${f}), ` +
         `s.replace(/${pattern}/${f}, "<$&|$1|$2>"), s.split(/${pattern}/${f}), s.match(/${pattern}/${f}g), ` +
-        `s.replace(/${pattern}/${f}g, "<$&>"), /${pattern}/${f}.test(s)]);`)(s);
+        `s.replace(/${pattern}/${f}g, "<$&>"), /${pattern}/${f}.test(s), ` +
+        `(m => m && [m.index, [...m], m.groups, m.indices])(/${pattern}/${f}.exec(s)), ` +
+        `[...s.matchAll(/${pattern}/${f}g)].map(m => [m.index, ...m]), ` +
+        `s.replace(/${pattern}/${f}g, (...a) => JSON.stringify(a))]);`)(s);
       regexOutcomes.matched++;
       if (outcome.startsWith('!')) {
         // A fault where JavaScript makes a string with a lone surrogate.

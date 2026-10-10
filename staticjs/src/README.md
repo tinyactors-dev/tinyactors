@@ -37,6 +37,7 @@ Implementation modules. Headers here are private; the public API is
                 program of a Pike VM (`regex_program.h`)
 - `regex_match.c` regular expressions as values: their properties, the Pike VM that
                 matches them, and their methods, each a leaf that hands a long
-                match to a loop frame (SJS_LEAF_LOOP)
+                match to a loop frame (SJS_LEAF_LOOP); match results, arrays
+                with extra properties (SJS_ARRAY_EXTRA)
 - `writer.c`    a value to JavaScript source, into a buffer of any size; JSON's
                 string escapes, which JSON.stringify shares

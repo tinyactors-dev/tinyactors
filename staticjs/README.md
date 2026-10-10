@@ -209,7 +209,8 @@ Built-ins:
 | | |
 |---|---|
 | arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
-| strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `replaceAll` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
+| strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `replace` `replaceAll` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
+| regular expressions | literals (docs/regex.md); `test` `exec`, `source` `flags` `global` `ignoreCase` `multiline` `dotAll` `unicode` `unicodeSets` `sticky` `hasIndices`, `lastIndex` (always 0); with a string: `match` `matchAll` `replace` `replaceAll` `search` `split`. A match runs in time linear in its input, on a Pike automaton paused on fuel like any loop. A match result is an array with `index`, `input`, `groups` and, with `d`, `indices`; a replacement is a string with `$&` `` $` `` `$'` `$$` `$n` `$<name>`, or a function called once per match |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
 | maps | `get` `has` `keys` `values` `entries` `forEach`, `size` |
 | iterators | `toArray` `map` `filter` `reduce` |
@@ -473,8 +474,20 @@ compare identities, or find something on a prototype.
   template; a string as `BigInt.asIntN`'s or `asUintN`'s value, or a
   string as any built-in's number (`toString("16")`), which JavaScript
   converts; a search argument that is not a
-  string (`includes(1)`, `replaceAll(1, "x")`, `split(1)`); a function as
-  `replaceAll`'s replacement.
+  string (`includes(1)`, `replaceAll(1, "x")`, `split(1)`); a function as the
+  replacement of `replace` or `replaceAll` with a string pattern.
+- Of regular expressions (docs/regex.md, 8.5): `exec` or `test` with `g`
+  or `y`, and `match` or `replace` with `y` and without `g`, which change
+  `lastIndex` in JavaScript, and staticjs values do not change; `matchAll`
+  or `replaceAll` without `g`, where JavaScript throws; a match, a group or
+  a piece of `split` that begins or ends between the halves of a surrogate
+  pair, which JavaScript makes into a lone surrogate; a replacement
+  function that returns an object or a BigInt; a non-string argument
+  (`re.test(1)`) or limit (`s.split(re, "2")`) that JavaScript converts;
+  and `Object.keys`, `Object.entries`, an object spread or rest, or
+  `sort` of a match result, as JavaScript would show or keep `index`,
+  `input` and `groups` among its keys. A pattern that would need more
+  states than `max_regex_states` is a limit error.
 
 ## Refused when compiled
 
@@ -531,9 +544,17 @@ is sent, and the compiler, refusing it unless it changes a variable, reads
 on the same way. So a program that is not JavaScript further on, such
 as `([a.b = 1]) => 0`, `a = 1 = 2` or `x => { a b; }`, is a syntax error,
 not unsupported. It stops at the first refusal where it cannot read on: a loop,
-`switch`, `try` or another statement staticjs does not have, a
-regular expression (where it reads ahead without parsing, a `/` that cannot
-divide is one, as after an `if`'s condition), a `/` in a method's body.
+`switch`, `try` or another statement staticjs does not have, a `/` in a
+method's body.
+
+A regular expression literal is read as JavaScript reads it, and its
+pattern is parsed when compiled: what Node refuses is a syntax error, and
+what Node accepts but staticjs does not match is unsupported, and the
+parser reads on. Unsupported are lookahead and lookbehind,
+backreferences, `\p{...}`, the `v` flag, a non-ASCII letter with `i`,
+the forms only Annex B allows (a lone `]` or `{`, an identity escape such
+as `\-`, `` as an octal escape, ...), and `RegExp` (docs/regex.md,
+8.3).
 
 Errors come in the order JavaScript finds them only so far as a stage that
 streams can know it. The compiler stops at the first error it meets; what it

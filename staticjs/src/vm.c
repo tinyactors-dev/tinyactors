@@ -25,6 +25,12 @@ sjs_result sjs_vm_fault(sjs_vm *vm, const char *message) {
     return SJS_ERR_PROGRAM;
 }
 
+static bool array_extra_get(const sjs_array *a, sjs_str name, sjs_value *out);
+
+sjs_result sjs_array_extra_fault(sjs_vm *vm) {
+    return sjs_vm_fault(vm, "this array has properties besides its elements, which this would show or lose");
+}
+
 static sjs_result fault_named(sjs_vm *vm, const char *message, sjs_str subject) {
     sjs_vm_fault(vm, message);
     sjs_error_subject(&vm->error, subject);
@@ -168,6 +174,7 @@ sjs_result sjs_property_get(sjs_vm *vm, sjs_member member, sjs_value *out) {
             *out = sjs_num((double)a->length);
             return SJS_OK;
         }
+        if ((a->h.flags & SJS_ARRAY_EXTRA) != 0 && array_extra_get(a, name, out)) return SJS_OK;
         break;
     }
     case SJS_STRING: {
@@ -314,6 +321,8 @@ static sjs_result in(sjs_vm *vm, const sjs_value *pair, sjs_value *out) {
     } else if (object.kind == SJS_ARRAY && (k->h.flags & SJS_STRING_INDEX) != 0) {
         *out = sjs_boolean(k->index < SJS_AS_ARRAY(object)->length);
     } else if (object.kind == SJS_ARRAY && sjs_str_equal(name, SJS_STR("length"))) {
+        *out = sjs_boolean(true);
+    } else if (sjs_array_extra(object) && sjs_object_find((const sjs_object *)(const void *)SJS_AS_ARRAY(object)->extra, name) != NULL) {
         *out = sjs_boolean(true);
     } else if (on_prototype(object.kind, k)) {
         r = fault_named(vm, "staticjs objects have no prototype", name);
@@ -504,6 +513,7 @@ static sjs_result spread_properties(sjs_vm *vm, sjs_value *object, sjs_value sou
         return SJS_OK;
     }
     if (source.kind == SJS_ARRAY) {
+        if (sjs_array_extra(source)) return sjs_array_extra_fault(vm);
         const sjs_array *a = SJS_AS_ARRAY(source);
         for (uint32_t i = 0; i < a->length; i++) {
             sjs_string *k;
@@ -1051,6 +1061,7 @@ static sjs_result rest_properties(sjs_vm *vm, const excluded_keys *x, sjs_value 
         }
         vm->fuel_used += (uint64_t)o->count * (keys + 1u) / 8u;
     } else if (source.kind == SJS_ARRAY) {
+        if (sjs_array_extra(source)) return sjs_array_extra_fault(vm);
         const sjs_array *a = SJS_AS_ARRAY(source);
         r = sjs_object_make(vm->context, a->length, &rest);
         if (r != SJS_OK) return sjs_vm_fail(vm, r);
@@ -1359,8 +1370,10 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
         sjs_value v = sjs_vm_pop(vm);
         sjs_value *array = stack_top(vm);
         /* The literal is still empty and nothing else holds the array: the
-         * array becomes the literal, which appends what follows in place. */
-        if (v.kind == SJS_ARRAY && SJS_AS_ARRAY(*array)->length == 0 && sjs_value_unique(v)) {
+         * array becomes the literal, which appends what follows in place;
+         * not a match result, whose index, input and groups a spread drops. */
+        if (v.kind == SJS_ARRAY && SJS_AS_ARRAY(*array)->length == 0 && sjs_value_unique(v) &&
+            (v.as.heap->flags & SJS_ARRAY_EXTRA) == 0) {
             sjs_unref(vm->context, *array);
             *array = v;
             return;
@@ -1730,6 +1743,12 @@ __attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t 
     }
     sjs_builtin_id id = (sjs_builtin_id)f.boolean;
     if (id == SJS_METHOD_ARRAY_SORT) {
+        /* MUTATION: a match result sorted in place keeps its index, input and
+         * groups in JavaScript; toSorted's loop gives a plain array. */
+        if (sjs_array_extra(*slot)) {
+            sjs_array_extra_fault(vm);
+            return false;
+        }
         /* toSorted's loop, which takes over a receiver it holds alone; the
          * SORTED after this instruction puts its result back. */
         vm->stack[callee - 1u] = *slot;
@@ -2247,6 +2266,12 @@ __attribute__((noinline)) static void path_call(sjs_vm *vm, path_call_site site)
         return;
     }
     if (id == SJS_METHOD_ARRAY_SORT) {
+        /* MUTATION: a match result sorted in place keeps its index, input and
+         * groups in JavaScript; toSorted's loop gives a plain array. */
+        if (sjs_array_extra(*place)) {
+            sjs_array_extra_fault(vm);
+            return;
+        }
         /* toSorted's loop takes the array over from its place, which holds
          * undefined until PATH_SORTED puts the sorted array back. */
         sjs_vm_release(vm, name);
@@ -2590,4 +2615,15 @@ __attribute__((noinline)) static sjs_result new_map(sjs_vm *vm, sjs_values args,
     }
     *out = map;
     return SJS_OK;
+}
+
+/* A match result's extra property (SJS_ARRAY_EXTRA), referenced into `*out`;
+ * false when it has none of that name. Out of sjs_property_get and at the
+ * end of the file, so that the code before it is laid out as it was. */
+__attribute__((noinline)) static bool array_extra_get(const sjs_array *a, sjs_str name, sjs_value *out) {
+    const sjs_entry *e = sjs_object_find((const sjs_object *)(const void *)a->extra, name);
+    if (e == NULL) return false;
+    *out = e->value;
+    sjs_ref(*out);
+    return true;
 }

@@ -32,8 +32,10 @@ A built-in is one of two kinds, and the choice decides most of its cost.
   (`mise run check-recursion`).
 
 - **A leaf that becomes a loop:** the regular expression methods (`test`,
-  and `search`, `match`, `split`, `replace` and `replaceAll` with a
-  regular expression; `src/regex_match.c`) are leaves by ID. A short match
+  `exec`, and `search`, `match`, `matchAll`, `split`, `replace` and
+  `replaceAll` with a regular expression; `src/regex_match.c`) are leaves
+  by ID. A replacement function always makes the loop, which calls it back
+  (`LOOP_CALL`) after swapping `LOOP_CALLBACK` and `LOOP_SECOND`. A short match
   runs whole in the leaf, in a buffer of the evaluator's; a long one makes
   the leaf return `SJS_LEAF_LOOP` with `call->loop` set, and `call()`
   enters that loop (`SJS_REGEX_LOOP_FIRST` on) on the same slots, so the
