@@ -17,6 +17,7 @@
 
 #include <tinyactors/datamodel.h>
 #include <tinyactors/image.h>
+#include <tinyactors/stats.h>
 #include <tinyactors/trace.h>
 #include <tinyactors/types.h>
 
@@ -270,36 +271,13 @@ typedef struct ta_actor_info {
 TA_API ta_status ta_actor_info_get(const ta_system *system, uint32_t actor, ta_actor_info *out);
 TA_API uint32_t ta_actor_config(const ta_system *system, uint32_t actor, uint32_t *states,
                                 uint32_t capacity);
-/* Pool occupancy and monotonic counters, O(1). Set `size` first. */
-typedef struct ta_system_stats {
-    uint32_t size;
-    uint32_t actors, actors_capacity;
-    uint32_t runnable; /* actors in the run queue */
-    uint32_t events, events_capacity;
-    uint32_t timers, timers_capacity;
-    uint32_t workspaces, workspaces_capacity;
-    uint32_t requests, requests_capacity;
-    uint32_t slab_pages, slab_pages_capacity, slab_page_bytes; /* instances + strings */
-    uint32_t outbox, outbox_capacity;
-    uint32_t pad;
-    uint64_t region_bytes;
-    uint64_t delivered;    /* events placed in mailboxes */
-    uint64_t fuel;         /* work units consumed by ta_system_run */
-    uint64_t turns;        /* actor scheduling turns */
-    uint64_t timers_fired; /* delayed sends that came due */
-    uint64_t spawned;      /* sessions created (last session id) */
-    ta_time now;
-    uint32_t hibernated; /* actors currently unloaded */
-    uint32_t wakes_pending;
-    uint64_t hibernations, wakes; /* monotonic */
-    /* tracing: the journal (bytes waiting, its capacity, records written and
-     * lost), the context pool, and contexts not given for a full pool */
-    uint32_t trace_bytes, trace_bytes_capacity;
-    uint32_t trace_contexts, trace_contexts_capacity;
-    uint64_t trace_records, trace_records_lost, trace_contexts_dropped;
-    uint64_t fuel_clock; /* the fuel clock records are stamped with (ta_system_trace_clock) */
-} ta_system_stats;
+/* Pool occupancy and monotonic counters (tinyactors/stats.h), O(1). Set
+ * `size` first. */
 TA_API void ta_system_stats_get(const ta_system *system, ta_system_stats *out);
+/* What the actors of `chart` did (tinyactors/stats.h), O(1). Set `size`
+ * first. TA_ERROR_INVALID for a chart the image does not have. */
+TA_API ta_status ta_system_chart_stats_get(const ta_system *system, uint32_t chart,
+                                           ta_chart_stats *out);
 
 /* ---- tracing (docs/adr/0006 in the repository root) ----------------------
  * The system writes trace records (tinyactors/trace.h) into a journal in its

@@ -2051,6 +2051,536 @@
         }
       }
     },
+    "ta_system_stats": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "actors",
+          "type": "uint32_t"
+        },
+        {
+          "name": "actors_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "runnable",
+          "type": "uint32_t"
+        },
+        {
+          "name": "events",
+          "type": "uint32_t"
+        },
+        {
+          "name": "events_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "timers",
+          "type": "uint32_t"
+        },
+        {
+          "name": "timers_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "workspaces",
+          "type": "uint32_t"
+        },
+        {
+          "name": "workspaces_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "requests",
+          "type": "uint32_t"
+        },
+        {
+          "name": "requests_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "slab_pages",
+          "type": "uint32_t"
+        },
+        {
+          "name": "slab_pages_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "slab_page_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "outbox",
+          "type": "uint32_t"
+        },
+        {
+          "name": "outbox_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "region_bytes",
+          "type": "uint64_t"
+        },
+        {
+          "name": "delivered",
+          "type": "uint64_t"
+        },
+        {
+          "name": "fuel",
+          "type": "uint64_t"
+        },
+        {
+          "name": "turns",
+          "type": "uint64_t"
+        },
+        {
+          "name": "timers_fired",
+          "type": "uint64_t"
+        },
+        {
+          "name": "spawned",
+          "type": "uint64_t"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        },
+        {
+          "name": "hibernated",
+          "type": "uint32_t"
+        },
+        {
+          "name": "wakes_pending",
+          "type": "uint32_t"
+        },
+        {
+          "name": "hibernations",
+          "type": "uint64_t"
+        },
+        {
+          "name": "wakes",
+          "type": "uint64_t"
+        },
+        {
+          "name": "trace_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "trace_bytes_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "trace_contexts",
+          "type": "uint32_t"
+        },
+        {
+          "name": "trace_contexts_capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "trace_records",
+          "type": "uint64_t"
+        },
+        {
+          "name": "trace_records_lost",
+          "type": "uint64_t"
+        },
+        {
+          "name": "trace_contexts_dropped",
+          "type": "uint64_t"
+        },
+        {
+          "name": "fuel_clock",
+          "type": "uint64_t"
+        },
+        {
+          "name": "traces_started",
+          "type": "uint64_t"
+        },
+        {
+          "name": "traces_sampled",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 216,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "actors": 4,
+            "actors_capacity": 8,
+            "runnable": 12,
+            "events": 16,
+            "events_capacity": 20,
+            "timers": 24,
+            "timers_capacity": 28,
+            "workspaces": 32,
+            "workspaces_capacity": 36,
+            "requests": 40,
+            "requests_capacity": 44,
+            "slab_pages": 48,
+            "slab_pages_capacity": 52,
+            "slab_page_bytes": 56,
+            "outbox": 60,
+            "outbox_capacity": 64,
+            "pad": 68,
+            "region_bytes": 72,
+            "delivered": 80,
+            "fuel": 88,
+            "turns": 96,
+            "timers_fired": 104,
+            "spawned": 112,
+            "now": 120,
+            "hibernated": 128,
+            "wakes_pending": 132,
+            "hibernations": 136,
+            "wakes": 144,
+            "trace_bytes": 152,
+            "trace_bytes_capacity": 156,
+            "trace_contexts": 160,
+            "trace_contexts_capacity": 164,
+            "trace_records": 168,
+            "trace_records_lost": 176,
+            "trace_contexts_dropped": 184,
+            "fuel_clock": 192,
+            "traces_started": 200,
+            "traces_sampled": 208
+          }
+        },
+        "aarch64": {
+          "size": 216,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "actors": 4,
+            "actors_capacity": 8,
+            "runnable": 12,
+            "events": 16,
+            "events_capacity": 20,
+            "timers": 24,
+            "timers_capacity": 28,
+            "workspaces": 32,
+            "workspaces_capacity": 36,
+            "requests": 40,
+            "requests_capacity": 44,
+            "slab_pages": 48,
+            "slab_pages_capacity": 52,
+            "slab_page_bytes": 56,
+            "outbox": 60,
+            "outbox_capacity": 64,
+            "pad": 68,
+            "region_bytes": 72,
+            "delivered": 80,
+            "fuel": 88,
+            "turns": 96,
+            "timers_fired": 104,
+            "spawned": 112,
+            "now": 120,
+            "hibernated": 128,
+            "wakes_pending": 132,
+            "hibernations": 136,
+            "wakes": 144,
+            "trace_bytes": 152,
+            "trace_bytes_capacity": 156,
+            "trace_contexts": 160,
+            "trace_contexts_capacity": 164,
+            "trace_records": 168,
+            "trace_records_lost": 176,
+            "trace_contexts_dropped": 184,
+            "fuel_clock": 192,
+            "traces_started": 200,
+            "traces_sampled": 208
+          }
+        },
+        "wasm32": {
+          "size": 216,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "actors": 4,
+            "actors_capacity": 8,
+            "runnable": 12,
+            "events": 16,
+            "events_capacity": 20,
+            "timers": 24,
+            "timers_capacity": 28,
+            "workspaces": 32,
+            "workspaces_capacity": 36,
+            "requests": 40,
+            "requests_capacity": 44,
+            "slab_pages": 48,
+            "slab_pages_capacity": 52,
+            "slab_page_bytes": 56,
+            "outbox": 60,
+            "outbox_capacity": 64,
+            "pad": 68,
+            "region_bytes": 72,
+            "delivered": 80,
+            "fuel": 88,
+            "turns": 96,
+            "timers_fired": 104,
+            "spawned": 112,
+            "now": 120,
+            "hibernated": 128,
+            "wakes_pending": 132,
+            "hibernations": 136,
+            "wakes": 144,
+            "trace_bytes": 152,
+            "trace_bytes_capacity": 156,
+            "trace_contexts": 160,
+            "trace_contexts_capacity": 164,
+            "trace_records": 168,
+            "trace_records_lost": 176,
+            "trace_contexts_dropped": 184,
+            "fuel_clock": 192,
+            "traces_started": 200,
+            "traces_sampled": 208
+          }
+        }
+      }
+    },
+    "ta_chart_stats": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "actors",
+          "type": "uint32_t"
+        },
+        {
+          "name": "hibernated",
+          "type": "uint32_t"
+        },
+        {
+          "name": "spawned",
+          "type": "uint64_t"
+        },
+        {
+          "name": "ended",
+          "type": "uint64_t"
+        },
+        {
+          "name": "turns",
+          "type": "uint64_t"
+        },
+        {
+          "name": "macrosteps",
+          "type": "uint64_t"
+        },
+        {
+          "name": "fuel",
+          "type": "uint64_t"
+        },
+        {
+          "name": "errors_execution",
+          "type": "uint64_t"
+        },
+        {
+          "name": "errors_communication",
+          "type": "uint64_t"
+        },
+        {
+          "name": "errors_platform",
+          "type": "uint64_t"
+        },
+        {
+          "name": "faults",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 104,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "chart": 4,
+            "name": 8,
+            "actors": 24,
+            "hibernated": 28,
+            "spawned": 32,
+            "ended": 40,
+            "turns": 48,
+            "macrosteps": 56,
+            "fuel": 64,
+            "errors_execution": 72,
+            "errors_communication": 80,
+            "errors_platform": 88,
+            "faults": 96
+          }
+        },
+        "aarch64": {
+          "size": 104,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "chart": 4,
+            "name": 8,
+            "actors": 24,
+            "hibernated": 28,
+            "spawned": 32,
+            "ended": 40,
+            "turns": 48,
+            "macrosteps": 56,
+            "fuel": 64,
+            "errors_execution": 72,
+            "errors_communication": 80,
+            "errors_platform": 88,
+            "faults": 96
+          }
+        },
+        "wasm32": {
+          "size": 96,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "chart": 4,
+            "name": 8,
+            "actors": 16,
+            "hibernated": 20,
+            "spawned": 24,
+            "ended": 32,
+            "turns": 40,
+            "macrosteps": 48,
+            "fuel": 56,
+            "errors_execution": 64,
+            "errors_communication": 72,
+            "errors_platform": 80,
+            "faults": 88
+          }
+        }
+      }
+    },
+    "ta_host_stats": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "segments",
+          "type": "uint32_t"
+        },
+        {
+          "name": "actors",
+          "type": "uint32_t"
+        },
+        {
+          "name": "hibernated",
+          "type": "uint32_t"
+        },
+        {
+          "name": "runnable",
+          "type": "uint32_t"
+        },
+        {
+          "name": "jobs",
+          "type": "uint32_t"
+        },
+        {
+          "name": "region_bytes",
+          "type": "uint64_t"
+        },
+        {
+          "name": "delivered",
+          "type": "uint64_t"
+        },
+        {
+          "name": "routed",
+          "type": "uint64_t"
+        },
+        {
+          "name": "migrated",
+          "type": "uint64_t"
+        },
+        {
+          "name": "retired",
+          "type": "uint64_t"
+        },
+        {
+          "name": "fuel_clock",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "segments": 4,
+            "actors": 8,
+            "hibernated": 12,
+            "runnable": 16,
+            "jobs": 20,
+            "region_bytes": 24,
+            "delivered": 32,
+            "routed": 40,
+            "migrated": 48,
+            "retired": 56,
+            "fuel_clock": 64
+          }
+        },
+        "aarch64": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "segments": 4,
+            "actors": 8,
+            "hibernated": 12,
+            "runnable": 16,
+            "jobs": 20,
+            "region_bytes": 24,
+            "delivered": 32,
+            "routed": 40,
+            "migrated": 48,
+            "retired": 56,
+            "fuel_clock": 64
+          }
+        },
+        "wasm32": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "segments": 4,
+            "actors": 8,
+            "hibernated": 12,
+            "runnable": 16,
+            "jobs": 20,
+            "region_bytes": 24,
+            "delivered": 32,
+            "routed": 40,
+            "migrated": 48,
+            "retired": 56,
+            "fuel_clock": 64
+          }
+        }
+      }
+    },
     "ta_image": {
       "kind": "struct",
       "fields": [
@@ -3566,290 +4096,6 @@
         }
       }
     },
-    "ta_system_stats": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "actors",
-          "type": "uint32_t"
-        },
-        {
-          "name": "actors_capacity",
-          "type": "uint32_t"
-        },
-        {
-          "name": "runnable",
-          "type": "uint32_t"
-        },
-        {
-          "name": "events",
-          "type": "uint32_t"
-        },
-        {
-          "name": "events_capacity",
-          "type": "uint32_t"
-        },
-        {
-          "name": "timers",
-          "type": "uint32_t"
-        },
-        {
-          "name": "timers_capacity",
-          "type": "uint32_t"
-        },
-        {
-          "name": "workspaces",
-          "type": "uint32_t"
-        },
-        {
-          "name": "workspaces_capacity",
-          "type": "uint32_t"
-        },
-        {
-          "name": "requests",
-          "type": "uint32_t"
-        },
-        {
-          "name": "requests_capacity",
-          "type": "uint32_t"
-        },
-        {
-          "name": "slab_pages",
-          "type": "uint32_t"
-        },
-        {
-          "name": "slab_pages_capacity",
-          "type": "uint32_t"
-        },
-        {
-          "name": "slab_page_bytes",
-          "type": "uint32_t"
-        },
-        {
-          "name": "outbox",
-          "type": "uint32_t"
-        },
-        {
-          "name": "outbox_capacity",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        },
-        {
-          "name": "region_bytes",
-          "type": "uint64_t"
-        },
-        {
-          "name": "delivered",
-          "type": "uint64_t"
-        },
-        {
-          "name": "fuel",
-          "type": "uint64_t"
-        },
-        {
-          "name": "turns",
-          "type": "uint64_t"
-        },
-        {
-          "name": "timers_fired",
-          "type": "uint64_t"
-        },
-        {
-          "name": "spawned",
-          "type": "uint64_t"
-        },
-        {
-          "name": "now",
-          "type": "ta_time"
-        },
-        {
-          "name": "hibernated",
-          "type": "uint32_t"
-        },
-        {
-          "name": "wakes_pending",
-          "type": "uint32_t"
-        },
-        {
-          "name": "hibernations",
-          "type": "uint64_t"
-        },
-        {
-          "name": "wakes",
-          "type": "uint64_t"
-        },
-        {
-          "name": "trace_bytes",
-          "type": "uint32_t"
-        },
-        {
-          "name": "trace_bytes_capacity",
-          "type": "uint32_t"
-        },
-        {
-          "name": "trace_contexts",
-          "type": "uint32_t"
-        },
-        {
-          "name": "trace_contexts_capacity",
-          "type": "uint32_t"
-        },
-        {
-          "name": "trace_records",
-          "type": "uint64_t"
-        },
-        {
-          "name": "trace_records_lost",
-          "type": "uint64_t"
-        },
-        {
-          "name": "trace_contexts_dropped",
-          "type": "uint64_t"
-        },
-        {
-          "name": "fuel_clock",
-          "type": "uint64_t"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 200,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "actors": 4,
-            "actors_capacity": 8,
-            "runnable": 12,
-            "events": 16,
-            "events_capacity": 20,
-            "timers": 24,
-            "timers_capacity": 28,
-            "workspaces": 32,
-            "workspaces_capacity": 36,
-            "requests": 40,
-            "requests_capacity": 44,
-            "slab_pages": 48,
-            "slab_pages_capacity": 52,
-            "slab_page_bytes": 56,
-            "outbox": 60,
-            "outbox_capacity": 64,
-            "pad": 68,
-            "region_bytes": 72,
-            "delivered": 80,
-            "fuel": 88,
-            "turns": 96,
-            "timers_fired": 104,
-            "spawned": 112,
-            "now": 120,
-            "hibernated": 128,
-            "wakes_pending": 132,
-            "hibernations": 136,
-            "wakes": 144,
-            "trace_bytes": 152,
-            "trace_bytes_capacity": 156,
-            "trace_contexts": 160,
-            "trace_contexts_capacity": 164,
-            "trace_records": 168,
-            "trace_records_lost": 176,
-            "trace_contexts_dropped": 184,
-            "fuel_clock": 192
-          }
-        },
-        "aarch64": {
-          "size": 200,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "actors": 4,
-            "actors_capacity": 8,
-            "runnable": 12,
-            "events": 16,
-            "events_capacity": 20,
-            "timers": 24,
-            "timers_capacity": 28,
-            "workspaces": 32,
-            "workspaces_capacity": 36,
-            "requests": 40,
-            "requests_capacity": 44,
-            "slab_pages": 48,
-            "slab_pages_capacity": 52,
-            "slab_page_bytes": 56,
-            "outbox": 60,
-            "outbox_capacity": 64,
-            "pad": 68,
-            "region_bytes": 72,
-            "delivered": 80,
-            "fuel": 88,
-            "turns": 96,
-            "timers_fired": 104,
-            "spawned": 112,
-            "now": 120,
-            "hibernated": 128,
-            "wakes_pending": 132,
-            "hibernations": 136,
-            "wakes": 144,
-            "trace_bytes": 152,
-            "trace_bytes_capacity": 156,
-            "trace_contexts": 160,
-            "trace_contexts_capacity": 164,
-            "trace_records": 168,
-            "trace_records_lost": 176,
-            "trace_contexts_dropped": 184,
-            "fuel_clock": 192
-          }
-        },
-        "wasm32": {
-          "size": 200,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "actors": 4,
-            "actors_capacity": 8,
-            "runnable": 12,
-            "events": 16,
-            "events_capacity": 20,
-            "timers": 24,
-            "timers_capacity": 28,
-            "workspaces": 32,
-            "workspaces_capacity": 36,
-            "requests": 40,
-            "requests_capacity": 44,
-            "slab_pages": 48,
-            "slab_pages_capacity": 52,
-            "slab_page_bytes": 56,
-            "outbox": 60,
-            "outbox_capacity": 64,
-            "pad": 68,
-            "region_bytes": 72,
-            "delivered": 80,
-            "fuel": 88,
-            "turns": 96,
-            "timers_fired": 104,
-            "spawned": 112,
-            "now": 120,
-            "hibernated": 128,
-            "wakes_pending": 132,
-            "hibernations": 136,
-            "wakes": 144,
-            "trace_bytes": 152,
-            "trace_bytes_capacity": 156,
-            "trace_contexts": 160,
-            "trace_contexts_capacity": 164,
-            "trace_records": 168,
-            "trace_records_lost": 176,
-            "trace_contexts_dropped": 184,
-            "fuel_clock": 192
-          }
-        }
-      }
-    },
     "ta_core": {
       "kind": "opaque",
       "fields": []
@@ -4674,115 +4920,6 @@
             "errors": 40,
             "duplicates": 48,
             "id": 56
-          }
-        }
-      }
-    },
-    "ta_host_stats": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "segments",
-          "type": "uint32_t"
-        },
-        {
-          "name": "actors",
-          "type": "uint32_t"
-        },
-        {
-          "name": "hibernated",
-          "type": "uint32_t"
-        },
-        {
-          "name": "runnable",
-          "type": "uint32_t"
-        },
-        {
-          "name": "jobs",
-          "type": "uint32_t"
-        },
-        {
-          "name": "region_bytes",
-          "type": "uint64_t"
-        },
-        {
-          "name": "delivered",
-          "type": "uint64_t"
-        },
-        {
-          "name": "routed",
-          "type": "uint64_t"
-        },
-        {
-          "name": "migrated",
-          "type": "uint64_t"
-        },
-        {
-          "name": "retired",
-          "type": "uint64_t"
-        },
-        {
-          "name": "fuel_clock",
-          "type": "uint64_t"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 72,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "segments": 4,
-            "actors": 8,
-            "hibernated": 12,
-            "runnable": 16,
-            "jobs": 20,
-            "region_bytes": 24,
-            "delivered": 32,
-            "routed": 40,
-            "migrated": 48,
-            "retired": 56,
-            "fuel_clock": 64
-          }
-        },
-        "aarch64": {
-          "size": 72,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "segments": 4,
-            "actors": 8,
-            "hibernated": 12,
-            "runnable": 16,
-            "jobs": 20,
-            "region_bytes": 24,
-            "delivered": 32,
-            "routed": 40,
-            "migrated": 48,
-            "retired": 56,
-            "fuel_clock": 64
-          }
-        },
-        "wasm32": {
-          "size": 72,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "segments": 4,
-            "actors": 8,
-            "hibernated": 12,
-            "runnable": 16,
-            "jobs": 20,
-            "region_bytes": 24,
-            "delivered": 32,
-            "routed": 40,
-            "migrated": 48,
-            "retired": 56,
-            "fuel_clock": 64
           }
         }
       }
@@ -6297,6 +6434,27 @@
         {
           "name": "chart",
           "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_chart_stats",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "h",
+          "type": "const ta_host *"
+        },
+        {
+          "name": "out",
+          "type": "ta_chart_stats *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
         }
       ],
       "public": true,
@@ -8185,6 +8343,27 @@
         {
           "name": "system",
           "type": "ta_system *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_chart_stats_get",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_chart_stats *"
         }
       ],
       "public": true,

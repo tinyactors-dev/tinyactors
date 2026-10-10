@@ -110,6 +110,7 @@ struct ta_core {
     uint32_t reserve;               /* event slots reserved for platform error events */
     const uint8_t *chart_datamodel; /* per chart: datamodel binding index */
     void *const *chart_context;     /* per chart: datamodel chart context */
+    ta_chart_stats *chart_stats;    /* per chart: what its actors did (tinyactors/stats.h) */
     const ta_io_processor_descriptor *io_processors;
     uint32_t io_processor_count;
     uint32_t dropped_errors;
@@ -227,8 +228,8 @@ typedef struct ta_workspace {
     uint32_t selected_count;
     uint32_t stack_top;
     uint32_t auxiliary;
-    uint32_t final_state; /* exitInterpreter: the top-level final that ended the session */
-    uint32_t trace;       /* the context the step's events share (one reference), TA_NIL */
+    uint32_t final_state;  /* exitInterpreter: the top-level final that ended the session */
+    uint32_t trace;        /* the context the step's events share (one reference), TA_NIL */
     uint64_t done_payload; /* exitInterpreter: <donedata> of the top-level final */
     uint64_t trace_fuel;   /* the fuel clock when the microstep began */
     uint32_t trace_event;  /* the event the microstep took (event pool index), TA_NIL: eventless */

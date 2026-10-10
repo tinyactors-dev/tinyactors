@@ -19,7 +19,9 @@ uint32_t ta_system_start_trace(ta_system *system, ta_string_view traceparent,
         if (ta_trace_sampled(value->trace, system->trace_threshold))
             value->flags |= TA_TRACE_FLAG_SAMPLED;
     }
+    system->stats_traces_started++;
     if (!(value->flags & TA_TRACE_FLAG_SAMPLED)) return TA_NIL; /* unsampled: no context */
+    system->stats_traces_sampled++;
     return ta_trace_context_new(&system->core, value->trace, value->flags, cause);
 }
 

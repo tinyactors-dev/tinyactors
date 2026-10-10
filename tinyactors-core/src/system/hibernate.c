@@ -488,6 +488,7 @@ static void unload(ta_system *system, uint32_t index) {
     actor->flags &=
         (uint8_t)~(ACTOR_FLAG_IN_WAKE_QUEUE | ACTOR_FLAG_WAKE_SENT | ACTOR_FLAG_TOUCHED);
     system->hibernated_count++;
+    core->chart_stats[chart].hibernated++;
 }
 
 ta_status ta_actor_hibernate(ta_system *system, uint32_t actor, void *buffer, size_t capacity,
@@ -526,10 +527,7 @@ static void leave(ta_system *system, uint32_t index) {
     }
     unload(system, index);
     /* it leaves, it is not destroyed: it goes on where the blob is adopted */
-    uint32_t kinds = core->trace_kinds;
-    core->trace_kinds &= ~TA_TRACE_BIT(TA_TRACE_DESTROYED);
-    ta_system_reclaim(system, index);
-    core->trace_kinds = kinds;
+    ta_system_reclaim(system, index, RECLAIM_LEFT);
 }
 
 ta_status ta_actor_export(ta_system *system, uint32_t actor, void *buffer, size_t capacity,
@@ -742,6 +740,7 @@ ta_status ta_actor_wake(ta_system *system, uint32_t actor, const void *blob, siz
     actor_record->state = TA_ACTOR_IDLE;
     system->hibernated_count--;
     system->stats_wakes++;
+    core->chart_stats[instance->chart].hibernated--;
     trace_residency(system, index, TA_TRACE_LOADED, instance->macrostep);
     /* error.communication reported while hibernated belongs to the internal
      * queue (processed before the mailbox, as if raised at the time) */
@@ -921,6 +920,7 @@ static ta_status adopt_member(ta_system *system, const blob_view *view, uint64_t
         return status;
     }
     ta_system_session_insert(system, index);
+    core->chart_stats[chart].actors++;
     actor->flags |= ACTOR_FLAG_TOUCHED;
     trace_residency(system, index, TA_TRACE_LOADED, ta_actor_instance(system, actor)->macrostep);
     *index_out = index;
@@ -931,10 +931,7 @@ static ta_status adopt_member(ta_system *system, const blob_view *view, uint64_t
  * sends' payloads stay with the blob. */
 static void unadopt(ta_system *system, uint32_t index) {
     drop_timers(system, ta_actor_at(system, index));
-    uint32_t kinds = system->core.trace_kinds; /* it was never here */
-    system->core.trace_kinds &= ~TA_TRACE_BIT(TA_TRACE_DESTROYED);
-    ta_system_reclaim(system, index);
-    system->core.trace_kinds = kinds;
+    ta_system_reclaim(system, index, RECLAIM_LEFT); /* it was never here */
 }
 
 /* the export header of a blob; 0 if it is not one for this image */

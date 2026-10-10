@@ -107,6 +107,11 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
     uint32_t fuel = quantum, debt = 0;
     uint32_t status = TA_RUN_IDLE;
     ta_actor_at(system, index)->flags |= ACTOR_FLAG_TOUCHED;
+    /* the chart's counts (tinyactors/stats.h) move once per turn: the
+     * macrosteps begun are the instance's own counter's difference */
+    const ta_instance *first = ta_actor_instance(system, ta_actor_at(system, index));
+    ta_chart_stats *stats = &core->chart_stats[first->chart];
+    uint64_t macrostep_first = first->macrostep, macrostep_last = macrostep_first;
     for (;;) {
         ta_actor *actor = ta_actor_at(system, index);
         ta_instance *instance = ta_actor_instance(system, actor);
@@ -117,6 +122,7 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
         }
         core->trace_clock = clock + (quantum - fuel) + debt;
         uint32_t rc = ta_core_step(core, instance, &fuel);
+        macrostep_last = instance->macrostep;
         debt += core->overrun;
         core->trace_clock = clock + (quantum - fuel) + debt;
         int stop = 0;
@@ -197,8 +203,9 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
         default: { /* FAULT or unknown: report and reclaim */
             ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_ERROR, index);
             if (effect) effect->flags = core->out.fault;
+            stats->faults++;
             actor->state = TA_ACTOR_DONE;
-            ta_system_reclaim(system, index);
+            ta_system_reclaim(system, index, RECLAIM_ENDED);
             stop = 1;
             break;
         }
@@ -213,6 +220,9 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
         }
     }
     *used = quantum - fuel + debt;
+    stats->turns++;
+    stats->fuel += *used;
+    stats->macrosteps += macrostep_last - macrostep_first;
     return status;
 }
 

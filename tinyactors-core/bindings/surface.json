@@ -139,6 +139,7 @@
     "ta_host_snapshot_segments": {"skip": "the JS bindings record what every segment ran (sources or image bytes) inside their snapshot, so they know the images to supply without asking the blob"},
     "ta_host_restore": "bind",
     "ta_host_stats_get": "bind",
+    "ta_host_chart_stats": "bind",
     "ta_host_actors": "bind",
 
     "ta_image_open": "bind",
@@ -195,6 +196,7 @@
     "ta_system_effects": "bind",
     "ta_system_effects_ack": "bind",
     "ta_system_stats_get": "bind",
+    "ta_system_chart_stats_get": {"skip": "the bindings run a ta_host and read per-chart counts host-wide (ta_host_chart_stats), which sums every segment's with this function"},
     "ta_system_cold_actors": "bind",
     "ta_system_set_next_serial": {"skip": "for hosts that allocate session ids outside the system (the PostgreSQL binding); ta_host partitions ids per segment itself (and keeps them past the ids of sessions it adopted)"},
     "ta_system_snapshot": "bind",

@@ -1,6 +1,7 @@
 /* Every public header must be self-contained and C89-ABI friendly; this TU
  * includes each one first in its own block (compiled as C and as C++). */
 #include <tinyactors/types.h>
+#include <tinyactors/stats.h>
 #include <tinyactors/allocator.h>
 #include <tinyactors/image.h>
 #include <tinyactors/datamodel.h>
@@ -58,6 +59,13 @@ ABI_CHECK(offsetof(ta_host_config, size) == 0, host_config_size_first);
 ABI_CHECK(offsetof(ta_host_effect, size) == 0, host_effect_size_first);
 ABI_CHECK(offsetof(ta_host_segment_info, size) == 0, host_segment_info_size_first);
 ABI_CHECK(offsetof(ta_host_stats, size) == 0, host_stats_size_first);
+ABI_CHECK(offsetof(ta_system_stats, size) == 0, system_stats_size_first);
+/* the stats grow at the end: older readers set a smaller size */
+ABI_CHECK(offsetof(ta_system_stats, traces_started) > offsetof(ta_system_stats, fuel_clock),
+          system_stats_traces_last);
+ABI_CHECK(offsetof(ta_chart_stats, size) == 0, chart_stats_size_first);
+ABI_CHECK(offsetof(ta_chart_stats, actors) == 8 + sizeof(ta_string_view),
+          chart_stats_actors_offset);
 ABI_CHECK(offsetof(ta_route_request, size) == 0, route_request_size_first);
 ABI_CHECK(offsetof(ta_route_request, session) == 24, route_request_session_offset);
 ABI_CHECK(offsetof(ta_host_message, size) == 0, host_message_size_first);

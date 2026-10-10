@@ -10,10 +10,10 @@
 #include "base/heap.h"
 #include "base/index_queue.h"
 
-#define TA_SYSTEM_MAGIC        0x53594154u /* "TAYS" */
+#define TA_SYSTEM_MAGIC 0x53594154u /* "TAYS" */
 /* The region's layout: 2 since the step counters and trace references
  * (docs/adr/0006 in the repository root); a snapshot of another is refused. */
-#define TA_SYSTEM_VERSION      2u
+#define TA_SYSTEM_VERSION      3u
 #define TA_MAX_DATAMODELS      8u
 #define TA_EXTERNAL_INVOKE_BIT (1u << 23) /* in a child handle: external invoke token */
 /* slab byte budgets stay below 4 GiB so page arithmetic cannot overflow u32 */
@@ -93,15 +93,15 @@ struct ta_system {
     uint32_t hibernated_count, pending_wake_count;
     uint64_t stats_hibernations, stats_wakes;
     int64_t effects_relative, effect_views_relative, sessions_relative, chart_datamodels_relative,
-        chart_contexts_relative;
+        chart_contexts_relative, chart_stats_relative;
     uint32_t effects_head, effects_length, effects_capacity;
     uint32_t session_capacity, session_count;
     uint32_t chart_count, datamodel_count;
     uint32_t in_call; /* re-entrancy guard */
     uint32_t pad;
     uint64_t now, sequence, next_serial;
-    uint64_t stats_delivered, stats_fuel, stats_turns, stats_timers,
-        stats_spawned; /* ta_system_stats */
+    uint64_t stats_delivered, stats_fuel, stats_turns, stats_timers, stats_spawned,
+        stats_traces_started, stats_traces_sampled; /* ta_system_stats */
     /* tracing (docs/adr/0006): the journal and the context pool (carved only
      * when tracing is on), the generator, the sampling threshold and the fuel
      * clock records are stamped with */
@@ -133,7 +133,12 @@ uint32_t ta_system_resolve_actor(const ta_system *s, uint32_t handle); /* index 
 uint32_t ta_system_spawn_actor(ta_system *s, uint32_t chart, ta_string_view name, ta_payload params,
                                uint32_t parent, uint32_t parent_slot, ta_string_view traceparent,
                                ta_status *status);
-void ta_system_reclaim(ta_system *s, uint32_t index);
+/* Free an actor and everything it holds. RECLAIM_ENDED: its session ended
+ * here (finished, terminated, faulted): a `destroyed` record, counted as
+ * ended. RECLAIM_LEFT: it lives on elsewhere (exported, or an adoption
+ * undone): neither. */
+enum { RECLAIM_ENDED = 0, RECLAIM_LEFT = 1 };
+void ta_system_reclaim(ta_system *s, uint32_t index, uint32_t how);
 void ta_system_make_runnable(ta_system *s, uint32_t index);
 void ta_system_mailbox_push(ta_system *s, uint32_t index, uint32_t event);
 void ta_system_wake_request(ta_system *s, uint32_t index); /* hibernated actor has work */

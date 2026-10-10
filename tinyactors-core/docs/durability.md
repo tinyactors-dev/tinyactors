@@ -172,3 +172,12 @@ a hibernation or an export does not move them. The snapshot format (`ta_system`
 `version`) and the hibernation and export blobs (`HIBERNATION_VERSION`,
 `EXPORT_VERSION`) changed with the 64-byte instance header and the contexts of
 delayed sends: older ones are refused.
+
+## Per-chart counts (ADR 0007)
+
+The counts of each chart (`ta_chart_stats`) are system state, not session
+state: they live in the region, so relocation and a system snapshot keep
+them, and a hibernation or an export leaves them where they were made. A host
+keeps the totals of the segments it retired, by chart name, in its own
+snapshot. The snapshot formats (`ta_system` `version` 3, the host's
+`SNAPSHOT_VERSION` 2) changed with them: older ones are refused.

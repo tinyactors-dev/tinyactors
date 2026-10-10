@@ -253,6 +253,52 @@ static void test_versions_and_migration(void) {
     CHECK_EQUAL(send(&e, w[0], "pong", NULL), TA_OK);
     run(&e);
     CHECK(strcmp(e.log, "v2 pong;") == 0);
+    /* per-chart counts by name: both versions summed, the freed one's kept */
+    ta_chart_stats charts[4];
+    for (int i = 0; i < 4; i++)
+        charts[i].size = sizeof charts[i];
+    CHECK_EQUAL(ta_host_chart_stats(e.host, charts, 4), 2u);
+    const ta_chart_stats *w_stats = NULL;
+    for (int i = 0; i < 2; i++)
+        if (charts[i].name.length == 1 && charts[i].name.pointer[0] == 'w') w_stats = &charts[i];
+    CHECK(w_stats != NULL);
+    CHECK_EQUAL(w_stats->spawned, 6); /* five in version 1, one in version 2 */
+    CHECK_EQUAL(w_stats->actors, 6);  /* the migrated ones left and arrived: not ended */
+    CHECK_EQUAL(w_stats->ended, 0);
+    CHECK(w_stats->macrosteps >= 13); /* version 1: 5 + 5 + 1; version 2: 1 + 1 at least */
+    ta_chart_stats before = *w_stats;
+    CHECK_EQUAL(ta_host_chart_stats(e.host, charts, 1), 2u); /* room for one: still the count */
+    /* a host snapshot keeps the retired totals */
+    size_t hl = 0, dl = 0;
+    CHECK_EQUAL(ta_host_snapshot(e.host, NULL, 0, &hl), TA_OK);
+    void *hs = malloc(hl);
+    CHECK_EQUAL(ta_host_snapshot(e.host, hs, hl, &hl), TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, NULL, 0, &dl), TA_OK);
+    void *ds = malloc(dl);
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, ds, dl, &dl), TA_OK);
+    ta_host_free(e.host);
+    ta_datamodel_ecmascript_free(e.ecmascript);
+    e.ecmascript = ta_datamodel_ecmascript_new(NULL);
+    e.binding = ta_datamodel_ecmascript_binding(e.ecmascript);
+    ta_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){"h", 1};
+    config.datamodels = &e.binding;
+    config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
+    const ta_image *images[3] = {&e.image[0], &e.image[1], &e.image[2]};
+    CHECK_EQUAL(ta_host_restore(&config, images, 3, hs, hl, &e.host), TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, ds, dl), TA_OK);
+    CHECK_EQUAL(ta_host_chart_stats(e.host, charts, 4), 2u);
+    w_stats = NULL;
+    for (int i = 0; i < 2; i++)
+        if (charts[i].name.length == 1 && charts[i].name.pointer[0] == 'w') w_stats = &charts[i];
+    CHECK(w_stats && w_stats->spawned == before.spawned &&
+          w_stats->macrosteps == before.macrosteps && w_stats->turns == before.turns &&
+          w_stats->actors == before.actors);
+    free(hs);
+    free(ds);
     world_close(&e);
 }
 

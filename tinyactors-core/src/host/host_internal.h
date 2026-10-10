@@ -11,7 +11,7 @@
 #include <tinyactors/address.h>
 #include <tinyactors/host.h>
 
-#define SERIALS_SHIFT   32
+#define SERIALS_SHIFT 32
 /* blocks the published effects still point into: each doubling of the
  * effect array or the pool while a batch is borrowed holds one */
 #define HELD_BLOCKS_MAX 64
@@ -33,6 +33,14 @@ typedef struct chart_version { /* the current version of a chart name */
     ta_string_view name;       /* in the image of `segment` (live while it is current) */
     uint32_t segment, chart;
 } chart_version;
+
+/* The per-chart counts of segments that were retired, by chart name, so a
+ * host-wide count never goes back when a version retires. */
+typedef struct retired_chart {
+    char *name; /* name_length bytes (at least 1 allocated) */
+    uint32_t name_length, pad;
+    ta_chart_stats totals;
+} retired_chart;
 
 typedef struct migration_job {
     uint32_t id;
@@ -107,6 +115,8 @@ struct ta_host {
     pending_error *errors;
     uint32_t error_count, error_capacity;
     uint64_t routed, migrated, retired;
+    retired_chart *retired_charts;
+    uint32_t retired_chart_count, retired_chart_capacity;
     uint64_t fuel_clock;       /* the segments' common fuel clock (docs/adr/0006, section 9) */
     struct ta_router *router;  /* other systems (router.c); NULL until a peer exists */
     uint64_t message_sequence; /* outbound message ids */
@@ -125,7 +135,7 @@ int host_effects_reserve(ta_host *h, uint32_t count, size_t bytes);
 size_t host_pool_put(ta_host *h, ta_string_view s);
 ta_host_effect *host_effect_new(ta_host *h, uint32_t kind, uint32_t segment);
 void host_effect_strings_set(ta_host *h, ta_string_view t, ta_string_view event, ta_string_view sid,
-                        ta_string_view aux);
+                             ta_string_view aux);
 ta_status host_send_to(ta_host *h, uint32_t si, uint32_t actor, const ta_event_in *event);
 /* TA_ERROR_NO_MEMORY if it could be neither delivered nor kept; TA_OK otherwise
  * (also when the actor is gone: nobody to tell). */

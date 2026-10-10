@@ -150,8 +150,23 @@ static uint32_t internal_queue_pop(kernel_context *kernel) {
     return event;
 }
 
+/* Count a platform error raised in an actor of `chart` (tinyactors/stats.h),
+ * whether or not its event finds room: error.execution, error.communication,
+ * error.platform and its descendants. */
+static void count_error(ta_core *core, uint32_t chart, const char *name) {
+    if (!core->chart_stats || name[0] != 'e' || name[5] != '.') return;
+    ta_chart_stats *stats = &core->chart_stats[chart];
+    if (name[6] == 'e')
+        stats->errors_execution++;
+    else if (name[6] == 'c')
+        stats->errors_communication++;
+    else if (name[6] == 'p')
+        stats->errors_platform++;
+}
+
 static uint32_t raise_platform(ta_core *core, ta_instance *instance, const char *name,
                                uint32_t sendid) {
+    count_error(core, instance->chart, name);
     uint32_t event_index = ta_event_new(core, 1);
     if (event_index == TA_NIL) {
         core->dropped_errors++;

@@ -418,16 +418,16 @@ TA_API ta_status ta_host_restore(const ta_host_config *config, const ta_image *c
                                  ta_host **out);
 
 /* ---- inspection ------------------------------------------------------------------ */
-typedef struct ta_host_stats {
-    uint32_t size;
-    uint32_t segments; /* live */
-    uint32_t actors, hibernated, runnable, jobs;
-    uint64_t region_bytes, delivered, routed, migrated, retired;
-    /* the fuel clock every segment's trace records are stamped with: note it,
-     * with the wall clock, before and after each ta_host_run (tinyactors/otlp.h) */
-    uint64_t fuel_clock;
-} ta_host_stats;
+/* The host's counters (tinyactors/stats.h). Set `size` first. */
 TA_API void ta_host_stats_get(const ta_host *h, ta_host_stats *out);
+/* What the actors of each chart name did, summed over every segment with a
+ * chart of that name, the totals of retired segments included, so a count
+ * never goes back when a version retires. Fills up to `capacity` entries
+ * (set each one's `size` first) in the order of the current versions and
+ * returns how many chart names there are; call again with more room when
+ * that is more than `capacity`. Names are valid until the next mutating
+ * call on the host. */
+TA_API uint32_t ta_host_chart_stats(const ta_host *h, ta_chart_stats *out, uint32_t capacity);
 /* What every segment traces, and new segments start with (as
  * ta_system_trace_set). TA_ERROR_STATE when the host's systems do not trace
  * (config.system.tracing). Each segment's records: ta_host_system, then

@@ -3144,6 +3144,39 @@ static napi_value js_stats(napi_env environment, napi_callback_info info) {
         napi_set_element(environment, versions, k++, o);
     }
     napi_set_named_property(environment, out, "versions", versions);
+    /* per chart name, every version summed (tinyactors/stats.h) */
+    uint32_t chart_count = ta_host_chart_stats(host->host, NULL, 0);
+    ta_chart_stats *charts =
+        (ta_chart_stats *)calloc(chart_count ? chart_count : 1, sizeof(ta_chart_stats));
+    for (uint32_t i = 0; i < chart_count; i++)
+        charts[i].size = sizeof charts[i];
+    ta_host_chart_stats(host->host, charts, chart_count);
+    napi_value list;
+    napi_create_array_with_length(environment, chart_count, &list);
+    for (uint32_t i = 0; i < chart_count; i++) {
+        const ta_chart_stats *c = &charts[i];
+        napi_value o;
+        napi_create_object(environment, &o);
+        napi_set_named_property(environment, o, "name", str_value(environment, c->name));
+        napi_set_named_property(environment, o, "actors", num(environment, c->actors));
+        napi_set_named_property(environment, o, "hibernated", num(environment, c->hibernated));
+        napi_set_named_property(environment, o, "spawned", num(environment, (double)c->spawned));
+        napi_set_named_property(environment, o, "ended", num(environment, (double)c->ended));
+        napi_set_named_property(environment, o, "turns", num(environment, (double)c->turns));
+        napi_set_named_property(environment, o, "macrosteps",
+                                num(environment, (double)c->macrosteps));
+        napi_set_named_property(environment, o, "fuel", num(environment, (double)c->fuel));
+        napi_set_named_property(environment, o, "errorsExecution",
+                                num(environment, (double)c->errors_execution));
+        napi_set_named_property(environment, o, "errorsCommunication",
+                                num(environment, (double)c->errors_communication));
+        napi_set_named_property(environment, o, "errorsPlatform",
+                                num(environment, (double)c->errors_platform));
+        napi_set_named_property(environment, o, "faults", num(environment, (double)c->faults));
+        napi_set_element(environment, list, i, o);
+    }
+    free(charts);
+    napi_set_named_property(environment, out, "charts", list);
     return out;
 }
 

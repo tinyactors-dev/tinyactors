@@ -737,5 +737,5 @@ void ta_system_done(ta_system *system, uint32_t index, ta_payload done, uint32_t
         }
     }
     if (done && binding->vtable->release) binding->vtable->release(binding->datamodel, done);
-    ta_system_reclaim(system, index);
+    ta_system_reclaim(system, index, RECLAIM_ENDED);
 }

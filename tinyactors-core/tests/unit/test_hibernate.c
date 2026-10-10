@@ -41,6 +41,13 @@ static size_t hibernate(test_system *t, uint32_t actor, ta_status *status) {
     return length;
 }
 
+static ta_chart_stats chart_stats(ta_system *system) {
+    ta_chart_stats out;
+    out.size = sizeof out;
+    CHECK_EQUAL(ta_system_chart_stats_get(system, 0, &out), TA_OK);
+    return out;
+}
+
 static ta_system_stats stats(ta_system *system) {
     ta_system_stats stats_now;
     stats_now.size = sizeof stats_now;
@@ -78,6 +85,7 @@ static void test_roundtrip_and_single_wake(void) {
     ta_system_stats stats_now = stats(t.system);
     CHECK_EQUAL(stats_now.hibernated, 1);
     CHECK_EQUAL(stats_now.hibernations, 1);
+    CHECK(chart_stats(t.system).actors == 1 && chart_stats(t.system).hibernated == 1);
     CHECK(stats_now.slab_pages <= pages_before);
     ta_actor_info info;
     info.size = sizeof info;
@@ -118,6 +126,8 @@ static void test_roundtrip_and_single_wake(void) {
     CHECK_EQUAL(ta_actor_wake(t.system, a, blob, length), TA_OK);
     stats_now = stats(t.system);
     CHECK(stats_now.hibernated == 0 && stats_now.wakes == 1 && stats_now.wakes_pending == 0);
+    /* the per-chart gauges moved with the relocation and the wake */
+    CHECK(chart_stats(t.system).actors == 1 && chart_stats(t.system).hibernated == 0);
     run_all(&t);
     CHECK(strcmp(t.log, "pong;pong;") == 0);
     CHECK(strcmp(tsys_config(&t, a), "b") == 0);

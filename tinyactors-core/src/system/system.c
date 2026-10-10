@@ -82,7 +82,7 @@ typedef struct carved {
         timer_generations, heap_nodes, heap_positions, workspace_slots, workspace_generations,
         request_slots, request_generations;
     size_t slab_pages, slab_metadata, effects, effect_views, sessions, chart_datamodels,
-        chart_contexts, trace_storage, context_slots, context_generations;
+        chart_contexts, chart_stats, trace_storage, context_slots, context_generations;
     uint32_t workspace_size, page_count, session_capacity;
 } carved;
 
@@ -124,6 +124,8 @@ static void carve(ta_arena *arena, const ta_image_view *view, const ta_system_co
     o->sessions = ta_arena_alloc(arena, sizeof(uint32_t) * o->session_capacity, 4);
     o->chart_datamodels = ta_arena_alloc(arena, view->chart_count, 1);
     o->chart_contexts = ta_arena_alloc(arena, sizeof(void *) * view->chart_count, TA_ALIGN_MAX);
+    o->chart_stats =
+        ta_arena_alloc(arena, sizeof(ta_chart_stats) * view->chart_count, TA_ALIGN_MAX);
     /* tracing (0 bytes when it is off) */
     o->trace_storage = ta_arena_alloc(arena, config->trace_bytes, TA_ALIGN_MAX);
     o->context_slots = ta_arena_alloc(
@@ -168,6 +170,7 @@ static void rebind(ta_system *system, const ta_image *image) {
     core->slab = &system->slab;
     core->datamodels = system->datamodels;
     core->datamodel_count = system->datamodel_count;
+    core->chart_stats = SYSTEM_POINTER(system, chart_stats_relative, ta_chart_stats);
     core->chart_datamodel = SYSTEM_POINTER(system, chart_datamodels_relative, uint8_t);
     core->chart_context = SYSTEM_POINTER(system, chart_contexts_relative, void *);
     core->io_processors = system->config.io_processors;
@@ -277,6 +280,8 @@ static void set_rels(ta_system *system, ta_arena *arena, const carved *o) {
         (int64_t)((intptr_t)ta_arena_pointer(arena, o->chart_datamodels) - (intptr_t)system);
     system->chart_contexts_relative =
         (int64_t)((intptr_t)ta_arena_pointer(arena, o->chart_contexts) - (intptr_t)system);
+    system->chart_stats_relative =
+        (int64_t)((intptr_t)ta_arena_pointer(arena, o->chart_stats) - (intptr_t)system);
     system->session_capacity = o->session_capacity;
 }
 
@@ -530,6 +535,8 @@ uint32_t ta_system_spawn_actor(ta_system *system, uint32_t chart, ta_string_view
         return TA_NIL;
     }
     ta_system_session_insert(system, index);
+    core->chart_stats[chart].actors++;
+    core->chart_stats[chart].spawned++;
     trace_spawn(system, index, ta_actor_instance(system, actor), parent, traceparent);
     actor->state = TA_ACTOR_IDLE;
     actor->flags |= ACTOR_FLAG_TOUCHED;
@@ -553,10 +560,14 @@ static int unqueue(ta_system *system, ta_index_queue *queue, uint32_t index) {
     return 1;
 }
 
-void ta_system_reclaim(ta_system *system, uint32_t index) {
+void ta_system_reclaim(ta_system *system, uint32_t index, uint32_t how) {
     ta_core *core = &system->core;
     ta_actor *actor = ta_actor_at(system, index);
-    {
+    ta_chart_stats *stats = &core->chart_stats[ta_actor_chart(system, actor)];
+    stats->actors--;
+    if (actor->state == TA_ACTOR_HIBERNATED) stats->hibernated--;
+    if (how == RECLAIM_ENDED) {
+        stats->ended++;
         /* destroyed: in the trace the session ended in, if it ended traced */
         ta_trace_context value;
         ta_memset(&value, 0, sizeof value);
@@ -690,9 +701,24 @@ void ta_system_stats_get(const ta_system *system, ta_system_stats *o) {
     z.trace_records_lost = system->journal.lost_total;
     z.trace_contexts_dropped = system->core.contexts_dropped;
     z.fuel_clock = system->fuel_clock;
+    z.traces_started = system->stats_traces_started;
+    z.traces_sampled = system->stats_traces_sampled;
     uint32_t n = o->size && o->size < sizeof z ? o->size : (uint32_t)sizeof z;
     ta_memcpy(o, &z, n);
     o->size = n;
+}
+
+ta_status ta_system_chart_stats_get(const ta_system *system, uint32_t chart, ta_chart_stats *out) {
+    if (chart >= system->chart_count) return TA_ERROR_INVALID;
+    ta_chart_stats z = SYSTEM_POINTER(system, chart_stats_relative, const ta_chart_stats)[chart];
+    z.size = sizeof z;
+    z.chart = chart;
+    z.name =
+        ta_image_view_string(&system->core.image_view, system->core.image_view.charts[chart].name);
+    uint32_t n = out->size && out->size < sizeof z ? out->size : (uint32_t)sizeof z;
+    ta_memcpy(out, &z, n);
+    out->size = n;
+    return TA_OK;
 }
 
 uint32_t ta_system_actor_by_session(const ta_system *system, uint64_t sessionid) {
@@ -737,7 +763,7 @@ void ta_system_deinit(ta_system *system) {
         ta_actor *actor = ta_actor_at(system, i);
         if (actor->state != TA_ACTOR_HIBERNATED) actor->state = TA_ACTOR_IDLE;
         actor->flags &= (uint8_t)~ACTOR_FLAG_IN_WAKE_QUEUE;
-        ta_system_reclaim(system, i);
+        ta_system_reclaim(system, i, RECLAIM_ENDED);
     }
     ta_effect_record *effect = SYSTEM_POINTER(system, effects_relative, ta_effect_record);
     for (uint32_t i = system->effects_head; i < system->effects_length; i++)
@@ -885,6 +911,9 @@ ta_status ta_system_relocate(ta_system *system, void *new_memory, size_t new_len
     ta_memcpy(SYSTEM_POINTER(new_system, chart_contexts_relative, void *),
               SYSTEM_POINTER(system, chart_contexts_relative, void *),
               sizeof(void *) * system->chart_count);
+    ta_memcpy(SYSTEM_POINTER(new_system, chart_stats_relative, ta_chart_stats),
+              SYSTEM_POINTER(system, chart_stats_relative, ta_chart_stats),
+              sizeof(ta_chart_stats) * system->chart_count);
     uint32_t *session = SYSTEM_POINTER(new_system, sessions_relative, uint32_t);
     for (uint32_t i = 0; i < new_system->session_capacity; i++)
         session[i] = TA_NIL;

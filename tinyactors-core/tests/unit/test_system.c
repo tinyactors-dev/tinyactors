@@ -551,6 +551,83 @@ static void test_cross_system(void) {
 
 /* ta_system_send_many sends in order and stops at the first failure: the
  * accepted prefix, so the caller knows which event (and payload) is its own. */
+/* Per-chart counts (tinyactors/stats.h): exact for a small chart, kept by
+ * relocation and by a snapshot. */
+static void test_chart_stats(void) {
+    test_system t;
+    CHECK(
+        tsys_init(&t,
+                  SC("name='counted' initial='idle'><state id='idle'>"
+                     "<transition event='ping'/>"
+                     "<transition event='bad'><send type='nope' event='x'/></transition>"
+                     "<transition event='lost'><send target='#_scxml_foo' event='x'/></transition>"
+                     "<transition event='quit' target='end'/></state><final id='end'/>"),
+                  NULL, NULL));
+    CHECK_EQUAL(ta_system_boot(t.system), TA_OK);
+    uint32_t a = tsys_actor(&t, "counted");
+    tsys_run(&t, 10000, 10);
+    tsys_send(&t, a, "ping", NULL);
+    tsys_send(&t, a, "ping", NULL);
+    tsys_send(&t, a, "bad", NULL);
+    tsys_send(&t, a, "lost", NULL);
+    tsys_run(&t, 10000, 10);
+    ta_chart_stats chart;
+    chart.size = sizeof chart;
+    CHECK_EQUAL(ta_system_chart_stats_get(t.system, 0, &chart), TA_OK);
+    CHECK_EQUAL(chart.size, sizeof chart);
+    CHECK(chart.name.length == 7 && memcmp(chart.name.pointer, "counted", 7) == 0);
+    CHECK(chart.actors == 1 && chart.hibernated == 0 && chart.spawned == 1 && chart.ended == 0);
+    CHECK_EQUAL(chart.macrosteps, 5); /* the bootstrap and four events; raised errors add none */
+    CHECK_EQUAL(chart.errors_execution, 1);
+    CHECK_EQUAL(chart.errors_communication, 1);
+    CHECK_EQUAL(chart.errors_platform, 0);
+    CHECK_EQUAL(chart.faults, 0);
+    ta_system_stats stats;
+    stats.size = sizeof stats;
+    ta_system_stats_get(t.system, &stats);
+    CHECK(chart.turns >= 2 && chart.turns <= stats.turns);
+    CHECK(chart.fuel > 0 && chart.fuel <= stats.fuel);
+    CHECK_EQUAL(ta_system_chart_stats_get(t.system, 1, &chart), TA_ERROR_INVALID);
+    /* a snapshot keeps them */
+    size_t length;
+    CHECK_EQUAL(ta_system_snapshot(t.system, NULL, 0, &length), TA_OK);
+    void *snap = malloc(length), *memory2 = malloc(length);
+    CHECK_EQUAL(ta_system_snapshot(t.system, snap, length, &length), TA_OK);
+    ta_system *copy;
+    CHECK_EQUAL(
+        ta_system_restore(memory2, length, &t.image, snap, length, NULL, &t.binding, 1, &copy),
+        TA_OK);
+    ta_chart_stats restored;
+    restored.size = sizeof restored;
+    CHECK_EQUAL(ta_system_chart_stats_get(copy, 0, &restored), TA_OK);
+    CHECK(restored.macrosteps == 5 && restored.errors_execution == 1 && restored.actors == 1);
+    free(memory2); /* its datamodel handles alias the original's: no deinit */
+    free(snap);
+    /* ... and so does relocation; the end is counted */
+    ta_system_config big = t.system->config;
+    big.max_actors *= 2;
+    size_t need;
+    CHECK_EQUAL(ta_system_layout(&t.image, &big, &need), TA_OK);
+    void *memory3 = malloc(need);
+    ta_system *moved;
+    CHECK_EQUAL(ta_system_relocate(t.system, memory3, need, &big, &moved), TA_OK);
+    free(t.memory);
+    t.memory = memory3;
+    t.system = moved;
+    tsys_send(&t, a, "quit", NULL);
+    tsys_run(&t, 10000, 10);
+    CHECK_EQUAL(ta_system_chart_stats_get(t.system, 0, &chart), TA_OK);
+    CHECK(chart.actors == 0 && chart.ended == 1 && chart.macrosteps == 6);
+    /* an older reader sets a smaller size and gets that much */
+    ta_chart_stats small;
+    memset(&small, 0xAB, sizeof small);
+    small.size = (uint32_t)offsetof(ta_chart_stats, spawned);
+    CHECK_EQUAL(ta_system_chart_stats_get(t.system, 0, &small), TA_OK);
+    CHECK(small.size == offsetof(ta_chart_stats, spawned) &&
+          small.spawned == 0xABABABABABABABABull);
+    tsys_free(&t);
+}
+
 static void test_send_many_prefix(void) {
     test_system t;
     CHECK(tsys_init(&t, ECHO, NULL, NULL));
@@ -580,6 +657,7 @@ int main(void) {
     RUN(test_layout_and_init);
     RUN(test_send_run_effects);
     RUN(test_send_many_prefix);
+    RUN(test_chart_stats);
     RUN(test_backpressure);
     RUN(test_external_io);
     RUN(test_no_spawn_by_send);

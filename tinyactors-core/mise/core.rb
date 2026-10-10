@@ -116,7 +116,7 @@ module Core
   LIBRARIES = [
     Library.new(name: 'tinyactors', layers: %w[base image trace core system host basic_http otlp], uses: [],
                 libc: false,
-                headers: %w[types.h allocator.h address.h frame.h trace.h image.h datamodel.h system.h core.h host.h
+                headers: %w[types.h allocator.h address.h frame.h trace.h stats.h image.h datamodel.h system.h core.h host.h
                             basic_http.h otlp.h wasm.h]),
     Library.new(name: 'tinyactors_runtime', layers: %w[compile runtime], uses: %w[tinyactors], libc: true,
                 headers: %w[compile.h runtime.h]),
