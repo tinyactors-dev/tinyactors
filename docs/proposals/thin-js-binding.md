@@ -132,6 +132,11 @@ function's source for reading only. Hibernation and snapshots store
 values through the codec and refer to charts by name and version, as
 today.
 
+**Text in a native system.** A chart written as XML, or with string
+expressions, carries ECMAScript text. The native implementation compiles
+each text once, when the chart is attached, into a function of the same
+shape as a `c.expr` function, and from then on calls it like one.
+
 **`ecmascript.mjs` is removed.** It evaluates text in the application's
 realm, so it is neither trusted functions nor a sandbox. The W3C suite
 runs under quickjs.
@@ -461,23 +466,19 @@ binding, then the new one, side by side on one machine.
 
 ## 12. Open questions
 
-1. **Text expressions in a native system.** Charts written as XML (or
-   with string expressions) carry ECMAScript text. A native system either
-   refuses them (text charts go to a quickjs system), or compiles each
-   text once into a function, which is what `ecmascript.mjs` did.
-2. **An invoke after its error.** Does the external invoke stay
+1. **An invoke after its error.** Does the external invoke stay
    registered after `error.communication` until the state exits, or should
    the error end it?
-3. **A faulted invoked chart.** The invoker gets no event today
+2. **A faulted invoked chart.** The invoker gets no event today
    (`schedule.c:205`). Whether it should get `error.communication` is a
    core decision.
-4. **`TA_IO_PROCESSOR_SYNC`.** Whether JS I/O processors need it; a JS
+3. **`TA_IO_PROCESSOR_SYNC`.** Whether JS I/O processors need it; a JS
    processor would have to answer synchronously.
-5. **Error data.** SCXML lets an error event carry data (SCXML.md:853);
+4. **Error data.** SCXML lets an error event carry data (SCXML.md:853);
    the core drops what `TA_EVENT_IN_ERROR_COMMUNICATION` brings
    (`schedule.c:370`). Granary's 0.1 errors carried `{ sendID, type,
    error }`.
-6. **The link protocol in C,** later, if a second binding needs links.
+5. **The link protocol in C,** later, if a second binding needs links.
 
 ## 13. Order of work
 
