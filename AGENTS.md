@@ -11,6 +11,14 @@ and core does not handle bytes it has no use for. `tinyactors-core/AGENTS.md`
 has the rules of the C layers themselves (freestanding layers, no pointers
 in system memory, no allocation after init).
 
+**Roles.** Before designing a feature or a change, take the perspectives
+in [docs/roles.md](docs/roles.md) into account: the application developer,
+the operator, the capacity planner, the C embedder, the binding author,
+the maintainers and the observability backend. Say whom the change serves
+first, what already answers their questions, who pays for it (per event,
+per actor, in memory, code size, API surface, work in every binding), and
+what is out of scope. A proposal or ADR states this near its start.
+
 - use `mise run <task> <args>` for every task,
 - define tasks in ./mise/tasks/ as file tasks using `ruby` (version 4, provided by mise)
 
