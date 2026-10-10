@@ -636,6 +636,11 @@ typedef struct sjs_vm sjs_vm;
 
 typedef struct {
     sjs_context *context;
+    /* Run every regular expression match as a loop frame, which pauses
+     * within it, never as one call when the match is short. A program gives
+     * the same values, faults and fuel either way. For tests that compare
+     * the two; false, which a designated initialiser gives, uses both. */
+    bool no_regex_leaf;
 } sjs_vm_config;
 
 typedef struct {

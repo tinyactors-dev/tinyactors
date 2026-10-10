@@ -4,7 +4,9 @@ Status: being implemented, in the order of section 13. Step 1 is done:
 the lexer reads a literal (`L_REGEX`), the parser classifies it
 (`src/regex.c`, `sjs_regex_check`) and sends `SJS_EV_REGEXP`, and the
 compiler makes an `SJS_REGEXP` constant with its source, flags and
-program. Where the implementation departs from this design, section 15
+program. Step 2 is done: the Pike VM (`src/regex_match.c`) runs `test`,
+`search`, `split`, `match` with g, and `replace` and `replaceAll` with a
+string replacement, as a leaf or a loop frame. Where the implementation departs from this design, section 15
 says so. Line numbers below are of the commit this document was written
 against (`dbc0c69e`), before any of it.
 
@@ -1051,4 +1053,30 @@ Each departure below was made because Node or the code said otherwise.
   copies share one group number, so `/(a?){10000}/` costs instructions,
   not slots. Only a pattern that writes many groups has many slots.
 - **The random sweep's tag (11.3)** is `X`, not `R`, which `number_test`
-  already uses for BigInt rounding.
+  already uses for BigInt rounding. Its lines for an exact pattern carry an
+  input and the JSON of the methods' results on it (`search`, `replace`
+  with and without g, `split`, `match` with g, `test`); a fault is checked
+  to be one where Node makes a lone surrogate.
+- **With u, V8 starts a search between the halves of a pair (8.1).** Node
+  22 gives `"a😀".search(/\B/u)` as 2 and `"a😀".split(/\B/u)` cuts the
+  pair: V8 tries every code unit as a search's start, even with u, where
+  the halves are the characters around it for an assertion and nothing
+  can be consumed (`"a😀".search(/\B./u)` is -1). The automaton does the
+  same (`rx_mid_start` in `src/regex_match.c`): only an empty match can
+  start there. `split` does so too, unlike ECMA-262's `@@split`, which
+  steps by code point with u.
+- **How a method becomes a loop (8.6, 9.1).** Every regular expression
+  method is a leaf by its ID. One whose work (code units times threads,
+  times code units again for g and `split`) is below 8,192, and whose
+  state fits the evaluator's 8 KiB buffer, matches whole; any other returns
+  `SJS_LEAF_LOOP`, and `call()` enters the loop of its operation on the same
+  slots. Both charge one unit per step the loop takes (256 instructions
+  visited, finishing the position) and the same work fuel, which
+  `spec_test` checks on every case with a `/`, and `regex_test` on every
+  random input. The loops are tested for in `sjs_loop_step` only where a
+  loop ends, as a test at its top cost the predicate loops 5 to 13%.
+- **`split` with a limit (8.5)** takes a number (`ToUint32`), as
+  JavaScript does; only a limit of another kind faults. `split` with a
+  string still faults on any limit, as before.
+- **A replacement that is a primitive (8.6)** is its text, as `ToString`
+  gives it (`"a".replace(/a/, 1)` is `"1"`); a BigInt or an object faults.

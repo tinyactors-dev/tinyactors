@@ -627,3 +627,296 @@ RegExp("a")
 === a group under a quantifier that copies past max_regex_states
 /(a?){300000}/
 --- error limit max_regex_states
+
+# ---------------------------------------------------------------------------
+# test, search, match with g, split, replace and replaceAll
+
+=== test
+[/ab+c/.test("xxabbbcx"), /ab+c/.test("ac"), /^$/.test(""), /a|b/.test("c")]
+--- value
+[true,false,true,false]
+
+=== anchors, with and without m
+[/^b/.test("a\nb"), /^b/m.test("a\nb"), /a$/.test("a\nb"), /a$/m.test("a\nb"), /a$/m.test("a\rb"), /a$/m.test("a b")]
+--- value
+[false,true,false,true,true,true]
+
+=== the dot, with and without s
+[/a.b/.test("a\nb"), /a.b/s.test("a\nb"), /a.b/.test("a\rb"), /a.b/.test("a b"), /^.$/.test("é")]
+--- value
+[false,true,false,false,true]
+
+=== word boundaries
+["a b".replace(/\b/g, "|"), "ab cd".replace(/\B/g, "|"), "_é".replace(/\b/g, "|")]
+--- value
+["|a| |b|","a|b c|d","|_|é"]
+
+=== class escapes
+["a1 _-é\t".replace(/\d/g, "D"), "a1 _-é\t".replace(/\w/g, "W"), "a1 _-é\t".replace(/\s/g, "S"), "a1 _-é\t".replace(/[\D]/g, "N")]
+--- value
+["aD _-é\t","WW W-é\t","a1S_-éS","N1NNNNN"]
+
+=== white space is what trim removes
+"\t\v\f \u00a0\ufeff\u1680\u2000\u200a\u2028\u2029\u202f\u205f\u3000x\u180e".replace(/\s/g, "")
+--- value
+"x᠎"
+
+=== classes, ranges and negation
+["a-z]B".replace(/[a-z]/g, "."), "a-z]B".replace(/[^a-z]/g, "."), "a-z]B".replace(/[-a]/g, "."), "a]b".replace(/[\]]/g, ".")]
+--- value
+[".-.]B","a.z..","..z]B","a.b"]
+
+=== the empty class and its negation match nothing and anything
+["ab".replace(/[]/g, "."), "a\nb".replace(/[^]/g, ".")]
+--- value
+["ab","..."]
+
+=== escapes of characters
+["\0\n\t\v\f\r".replace(/[\0][\n][\t][\v][\f][\r]/, "ok"), "\x01".replace(/\cA/, "ok"), "\b".replace(/[\b]/, "ok"), "a".replace(/\x61/, "ok"), "a".replace(/a/, "ok")]
+--- value
+["ok","ok","ok","ok","ok"]
+
+=== syntax characters escaped
+"^$\\.*+?()[]{}|/".replace(/\^\$\\\.\*\+\?\(\)\[\]\{\}\|\//, "ok")
+--- value
+"ok"
+
+=== quantifiers, greedy and lazy
+["aaaa".replace(/a{2,3}/, "<$&>"), "aaaa".replace(/a{2,3}?/, "<$&>"), "aaaa".replace(/a*?/, "<$&>"), "aaaa".replace(/a+?/, "<$&>"), "aaaa".replace(/a??/, "<$&>"), "aaaa".replace(/a{2,}/, "<$&>"), "aaaa".replace(/a{0}/, "<$&>")]
+--- value
+["<aaa>a","<aa>aa","<>aaaa","<a>aaa","<>aaaa","<aaaa>","<>aaaa"]
+
+=== alternatives, in order
+["abc".replace(/a|ab|abc/, "<$&>"), "abc".replace(/abc|ab|a/, "<$&>"), "abc".replace(/x||a/, "<$&>")]
+--- value
+["<a>bc","<abc>","<>abc"]
+
+=== captures and their reset at each iteration
+["ab".replace(/(?:(a)|b)+/, "[$1]"), "aba".replace(/(?:(a)|(b))+/, "[$1|$2]"), "aab".replace(/(a|(b))+/, "[$1|$2]")]
+--- value
+["[]","[a|]","[b|b]"]
+
+=== an iteration that matches empty fails
+["b".replace(/(a*)*/, "[$1]"), "b".replace(/(a*)+/, "[$1]"), "a".replace(/(?:a|())*?/, "[$1]"), "b".replace(/(a*)?/, "[$1]"), "b".replace(/(a*){0,3}/, "[$1]"), "b".replace(/(a*){1,2}/, "[$1]")]
+--- value
+["[]b","[]b","[]a","[]b","[]b","[]b"]
+
+=== the minimum count is not checked for empty iterations
+"ab".replace(/(a?){2,}/, "[$&|$1]")
+--- value
+"[a|]b"
+
+=== a thread dropped only with the same registers at the position
+"aa".replace(/(?:a*?|aa)*/, "[$&]")
+--- value
+"[aa]"
+
+=== nested quantifiers that can match empty
+["aaa".replace(/((a*)*)*/, "[$1|$2]"), "abab".replace(/(?:(a)|b|())*/, "[$&|$1|$2]"), "aa".replace(/(a?)*?$/, "[$&|$1]")]
+--- value
+["[aaa|aaa]","[abab||]","[aa|a]"]
+
+=== a pattern that backtracks exponentially, matched in linear time
+/(a+)+$/.test("a".repeat(20) + "b")
+--- value
+false
+
+=== case-insensitive ASCII
+[/abc/i.test("ABC"), /[a-c]+/i.test("BaC"), /[^a]/i.test("A"), "AbC".replace(/b/gi, "x")]
+--- value
+[true,true,false,"AxC"]
+
+=== k and s with i, without u: U+212A and U+017F stay themselves
+[/k/i.test("\u212a"), /s/i.test("\u017f"), /\w/i.test("\u017f"), /[a-z]/i.test("\u212a")]
+--- value
+[false,false,false,false]
+
+=== k and s with i and u: U+212A folds to k, U+017F to s
+[/k/iu.test("\u212a"), /K/iu.test("\u212a"), /s/iu.test("\u017f"), /[a-z]/iu.test("\u212a"), /[^k]/iu.test("\u212a"), /\w/iu.test("\u017f"), /\W/iu.test("\u017f"), /\W/iu.test("\u212a")]
+--- value
+[true,true,true,true,false,true,false,false]
+
+=== \b with i and u follows \w
+["\u017fa".replace(/\b/giu, "|"), "\u017fa".replace(/\b/gi, "|")]
+--- value
+["|ſa|","ſ|a|"]
+
+=== without u, a character outside the BMP is two code units
+[/^.{2}$/.test("😀"), /^.$/.test("😀"), /\uD83D/.test("😀"), /^\uD83D\uDE00$/.test("😀"), "😀x".search(/x/)]
+--- value
+[true,false,true,true,2]
+
+=== with u, a code point
+[/^.$/u.test("😀"), /^\u{1F600}$/u.test("😀"), /[\u{1F600}-\u{1F64F}]/u.test("😃"), /^[😀]$/u.test("😀"), /\uD83D\uDE00/u.test("😀")]
+--- value
+[true,true,true,true,true]
+
+=== with u, V8 tries a search's start between the halves of a pair
+["a😀".search(/\B/u), "😀".search(/\B$/u), "a😀".search(/\B./u)]
+--- value
+[2,2,-1]
+
+=== search gives a UTF-16 index
+["é😀ab".search(/a/), "é😀ab".search(/a/u), "abc".search(/x/)]
+--- value
+[3,3,-1]
+
+=== search with g and y
+["xab".search(/a/g), "xab".search(/a/y), "abc".search(/a/y)]
+--- value
+[1,-1,0]
+
+=== match with g
+["a1b22c333".match(/\d+/g), "abc".match(/x/g), "aaa".match(/(?:)/g), "aXbX".match(/(X)/g)]
+--- value
+[["1","22","333"],null,["","","",""],["X","X"]]
+
+=== match with g and y matches only where the last match ended
+["aab".match(/a/gy), "baa".match(/a/gy)]
+--- value
+[["a","a"],null]
+
+=== match with g steps over a character outside the BMP with u
+["😀".match(/(?:)/gu), "a😀".match(/\B/gu)]
+--- value
+[["",""],["",""]]
+
+=== split on a pattern
+["a, b,c ,d".split(/\s*,\s*/), "aXbXc".split(/(X)/), "abc".split(/(?:)/), "ab".split(/(a)?b/)]
+--- value
+[["a","b","c","d"],["a","X","b","X","c"],["a","b","c"],["","a",""]]
+
+=== split's edges: an empty input, an empty match at the start, a limit
+["".split(/a*/), "".split(/x/), "abc".split(/b/, 1), "abc".split(/(b)/, 2), "abc".split(/x/, 0), "abc".split(/a*?/), "abc".split(/$/), "abc".split(/^/)]
+--- value
+[[],[""],["a"],["a","b"],[],["a","b","c"],["abc"],["abc"]]
+
+=== split ignores g and y
+["a,b".split(/,/g), "a,b".split(/,/y)]
+--- value
+[["a","b"],["a","b"]]
+
+=== split with u keeps a character outside the BMP whole
+"a😀b".split(/(?:)/u)
+--- value
+["a","😀","b"]
+
+=== replace with a pattern, once or with g
+["a-b-c".replace(/-/, "+"), "a-b-c".replace(/-/g, "+"), "abc".replace(/x/, "y"), "abc".replace(/x/g, "y")]
+--- value
+["a+b-c","a+b+c","abc","abc"]
+
+=== replace's $ patterns
+["abc".replace(/b/, "[$$|$&|$`|$']"), "abc".replace(/(b)/, "[$0|$00|$01|$1|$10|$2|$9]"), "abc".replace(/b/, "$"), "abc".replace(/b/, "$x")]
+--- value
+["a[$|b|a|c]c","a[$0|$00|b|b|b0|$2|$9]c","a$c","a$xc"]
+
+=== replace's $nn with many groups
+"abcdefghijkl".replace(/(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)/, "$11-$10-$111")
+--- value
+"k-j-k1l"
+
+=== replace's $<name>
+["2020-01-02".replace(/(?<y>\d+)-(?<m>\d+)-(?<d>\d+)/, "$<d>/$<m>/$<y>"), "ab".replace(/(?<x>a)|(?<y>b)/g, "[$<x>|$<y>|$<z>]"), "ab".replace(/(?<x>a)/, "$<x"), "ab".replace(/(a)/, "$<x>")]
+--- value
+["02/01/2020","[a||][|b|]","$<xb","$<x>b"]
+
+=== replace with g and empty matches
+["aaa".replace(/a*?/g, "-"), "abc".replace(/(?:)/g, "-"), "😀".replace(/(?:)/gu, "-")]
+--- value
+["-a-a-a-","-a-b-c-","-😀-"]
+
+=== replace's replacement is a primitive's text
+["a".replace(/a/, 1), "a".replace(/a/, true), "a".replace(/a/, null), "a".replace(/a/)]
+--- value
+["1","true","null","undefined"]
+
+=== replaceAll with g
+["a.b.c".replaceAll(/\./g, "!"), "abc".replaceAll(/(b)/g, "[$1]")]
+--- value
+["a!b!c","a[b]c"]
+
+=== replace with a string pattern
+["a.b.c".replace(".", "$&$&"), "x".replace("", "-"), "abc".replace("z", "q"), "abc".replace("b", "[$`|$'|$1|$<x>]"), "😀".replace("", "-")]
+--- value
+["a..b.c","-x","abc","a[a|c|$1|$<x>]c","-😀"]
+
+=== the input as it was when nothing matched, a character outside the BMP included
+["😀".replace(/x/, "y"), "😀".replace(/x/g, "y"), "😀".split(/x/)]
+--- value
+["😀","😀",["😀"]]
+
+# ---------------------------------------------------------------------------
+# Faults where JavaScript gives a value
+
+=== test with g faults: JavaScript changes lastIndex
+/a/g.test("a")
+--- fault lastIndex
+
+=== test with y faults: JavaScript changes lastIndex
+/a/y.test("a")
+--- fault lastIndex
+
+=== replace with y and without g faults: JavaScript changes lastIndex
+"a".replace(/a/y, "b")
+--- fault lastIndex
+
+=== match with y and without g faults: JavaScript changes lastIndex
+"a".match(/a/y)
+--- fault lastIndex
+
+=== replaceAll without g: JavaScript throws a TypeError
+"a".replaceAll(/a/, "b")
+--- fault TypeError
+
+=== a match with a string pattern faults, where JavaScript makes a RegExp of it
+"a.b".match(".")
+--- fault regular expression literal
+
+=== a search with a string pattern faults, where JavaScript makes a RegExp of it
+"a.b".search(".")
+--- fault regular expression literal
+
+=== test of a number faults, where JavaScript converts it
+/1/.test(1)
+--- fault against a string
+
+=== split with a limit that is a string faults, where JavaScript converts it
+"a,b".split(/,/, "1")
+--- fault limit
+
+=== replace with a function faults
+"a".replace(/a/, x => x)
+--- fault function's result
+
+=== replace with a string pattern and a function faults
+"a".replace("a", x => x)
+--- fault function's result
+
+=== replace with a BigInt faults, where JavaScript writes it
+"a".replace(/a/, 1n)
+--- fault BigInt
+
+=== replace with an object faults
+"a".replace(/a/, {})
+--- fault only primitives
+
+=== a piece that would cut a pair in two faults, where JavaScript makes a lone surrogate
+"😀".split(/(?:)/)
+--- fault lone surrogate
+
+=== a replacement between the halves of a pair faults
+"😀".replace(/(?:)/g, "-")
+--- fault lone surrogate
+
+=== a match of half a pair faults, where JavaScript makes a lone surrogate
+"😀".match(/./g)
+--- fault lone surrogate
+
+=== V8's empty match between the halves of a pair, with u, faults in a replacement
+"a😀".replace(/\B/u, "-")
+--- fault lone surrogate
+
+=== the methods of a regular expression it does not have yet
+/a/.exec("a")
+--- fault does not have this method

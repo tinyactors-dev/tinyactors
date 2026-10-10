@@ -610,6 +610,9 @@ typedef enum {
     SJS_METHOD_STRING_REPLACE_ALL,
     SJS_METHOD_STRING_SLICE,
     SJS_METHOD_STRING_SPLIT,
+    SJS_METHOD_STRING_MATCH,
+    SJS_METHOD_STRING_REPLACE,
+    SJS_METHOD_STRING_SEARCH,
     SJS_METHOD_STRING_STARTS_WITH,
     SJS_METHOD_STRING_TO_LOWER_CASE,
     SJS_METHOD_STRING_TO_UPPER_CASE,
@@ -625,6 +628,8 @@ typedef enum {
     SJS_METHOD_SET_UNION,
     /* BigInts. */
     SJS_METHOD_BIGINT_TO_STRING,
+    /* Regular expressions (regex_match.c). */
+    SJS_METHOD_REGEXP_TEST,
     /* Maps. */
     SJS_METHOD_MAP_GET,
     SJS_METHOD_MAP_HAS,
@@ -659,7 +664,12 @@ typedef enum {
     /* MUTATION: a map's set, delete and clear (docs/mutation.md). */
     SJS_METHOD_MAP_SET,
     SJS_METHOD_MAP_DELETE,
-    SJS_METHOD_MAP_CLEAR
+    SJS_METHOD_MAP_CLEAR,
+    /* The loops of the regular expression methods: a method whose match is
+     * too long for a leaf goes on as one (regex_match.c), the loop of
+     * SJS_REGEX_LOOP_FIRST plus its sjs_regex_op. Last, so that
+     * sjs_loop_start and sjs_loop_step tell them by one comparison. */
+    SJS_REGEX_LOOP_FIRST
 } sjs_builtin_id;
 
 /* The built-in function `Namespace.name` or bare `name`; NONE if unknown. */

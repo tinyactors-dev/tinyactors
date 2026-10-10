@@ -83,6 +83,9 @@ typedef struct {
 _Static_assert(sizeof(vm_frame) <= 112, "vm_frame grew: check its field order");
 
 #define VM_MEMBER_GUESSES 256u
+/* Words of the evaluator's buffer for a regular expression's match run as
+ * a leaf: one that needs more runs as a loop, its state allocated. */
+#define SJS_REGEX_LEAF_WORDS 2048u
 
 enum { VM_IDLE = 0, VM_RUNNING, VM_DONE, VM_FAULT };
 
@@ -108,6 +111,11 @@ struct sjs_vm {
      * against the key, so instructions of other programs that share a slot
      * cost a scan and nothing else. */
     uint32_t member_guess[VM_MEMBER_GUESSES];
+    /* Regular expressions: every match runs as a loop frame (a test's
+     * switch, sjs_vm_config), and the state of one short enough to run
+     * whole as a leaf (regex_match.c). */
+    bool no_regex_leaf;
+    uint64_t regex_leaf[SJS_REGEX_LEAF_WORDS / 2u];  /* aligned for the job's pointers */
 };
 
 /* Loop frame slots, from base; a kept callback frame's slots follow them.
@@ -148,7 +156,12 @@ typedef struct {
     uint32_t count;
     sjs_value result;      /* set by the built-in; owned */
     uint64_t cost;         /* fuel beyond the call's own unit */
+    uint16_t loop;         /* with SJS_LEAF_LOOP: the loop the call goes on as */
 } sjs_leaf_call;
+
+/* What a leaf returns that hands its call to a loop (call->loop), which
+ * starts from the call's slots as if the method looped (sjs_loop_start). */
+#define SJS_LEAF_LOOP 2
 
 sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* STRING_APPEND: the text of a primitive as String gives it: a string's own,
@@ -220,6 +233,23 @@ sjs_result sjs_vm_to_number(sjs_vm *vm, sjs_value v, double *out);
  * and their getters, and lastIndex, which is 0; undefined for a name
  * RegExp.prototype lacks; a fault for one of its methods read as a value. */
 sjs_result sjs_regex_property(sjs_vm *vm, sjs_member member, sjs_value *out);
+
+/* What a regular expression method computes: re.test(s), s.search(re),
+ * s.match(re), s.split(re, limit), s.replace(re, x) and replaceAll. */
+enum { SJS_REGEX_OP_TEST = 0, SJS_REGEX_OP_SEARCH, SJS_REGEX_OP_MATCH, SJS_REGEX_OP_SPLIT, SJS_REGEX_OP_REPLACE };
+
+typedef struct {
+    sjs_leaf_call *call;
+    uint8_t op;           /* SJS_REGEX_OP_* */
+    bool all;             /* replaceAll, which requires g */
+} sjs_regex_call_params;
+
+/* A method's call: checked, then matched whole, or handed to its loop
+ * (SJS_LEAF_LOOP) when the match is long or needs a callback. */
+sjs_result sjs_regex_call(sjs_vm *vm, sjs_regex_call_params *params);
+/* The loop of a regular expression method (SJS_REGEX_LOOP_FIRST on). */
+sjs_result sjs_regex_loop_start(sjs_vm *vm, vm_frame *frame);
+loop_step sjs_regex_loop_step(sjs_vm *vm, vm_frame *frame);
 
 /* JSON.parse and JSON.stringify (json.c): leaves. */
 sjs_result sjs_json_parse(sjs_vm *vm, sjs_leaf_call *call);

@@ -151,7 +151,7 @@ static const sjs_name NAMES[] = {
     NAME("link", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("localeCompare", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME_ITERATOR("map", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_MAP, SJS_METHOD_ITERATOR_MAP),
-    NAME("match", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("match", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_MATCH, 0),
     NAME("matchAll", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME_REGEXP("multiline", 0),
     NAME("next", SJS_NAME_ON_ITERATOR, 0, 0, 0),
@@ -164,11 +164,11 @@ static const sjs_name NAMES[] = {
     NAME_ITERATOR("reduce", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_REDUCE, SJS_METHOD_ITERATOR_REDUCE),
     NAME("reduceRight", SJS_NAME_ON_ARRAY, 0, 0, 0),
     NAME("repeat", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPEAT, 0),
-    NAME("replace", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("replace", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPLACE, 0),
     NAME("replaceAll", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPLACE_ALL, 0),
     NAME("return", SJS_NAME_ON_ITERATOR, 0, 0, 0),
     NAME_MUTATION("reverse", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_REVERSE), /* MUTATION */
-    NAME("search", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("search", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_SEARCH, 0),
     NAME_MUTATION("set", SJS_NAME_ON_MAP | SJS_NAME_MUTATING, SJS_METHOD_MAP_SET), /* MUTATION */
     NAME_MUTATION("shift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_SHIFT), /* MUTATION */
     NAME("slice", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_SLICE, SJS_METHOD_STRING_SLICE, 0),
@@ -187,7 +187,7 @@ static const sjs_name NAMES[] = {
     NAME("sup", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("symmetricDifference", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_SYMMETRIC_DIFFERENCE),
     NAME("take", SJS_NAME_ON_ITERATOR, 0, 0, 0),
-    NAME_REGEXP("test", 0),
+    NAME_REGEXP("test", SJS_METHOD_REGEXP_TEST),
     NAME_ITERATOR("toArray", SJS_NAME_ON_ITERATOR, 0, SJS_METHOD_ITERATOR_TO_ARRAY),
     NAME("toLocaleLowerCase", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("toLocaleString", SJS_NAME_EVERYWHERE, 0, 0, 0),
@@ -1081,6 +1081,9 @@ static sjs_result string_split(sjs_vm *vm, sjs_str s, sjs_leaf_call *call) {
 
 /* trim and the string methods added after these, at the end of the file. */
 static sjs_result string_method_tail(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+/* The methods that match a regular expression (regex_match.c), and replace
+ * with a string pattern: at the end of the file. */
+static sjs_result regex_method(sjs_vm *vm, uint8_t op, sjs_leaf_call *call);
 
 static sjs_result string_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_str s = sjs_string_view(SJS_AS_STRING(call->receiver));
@@ -1122,6 +1125,7 @@ static sjs_result string_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
         return new_string(vm, (sjs_str){ s.ptr + a, b - a }, &call->result);
     }
     case SJS_METHOD_STRING_SPLIT:
+        if (arg(call, 0).kind == SJS_REGEXP) return regex_method(vm, SJS_REGEX_OP_SPLIT, call);
         return string_split(vm, s, call);
     case SJS_METHOD_STRING_TO_LOWER_CASE:
     case SJS_METHOD_STRING_TO_UPPER_CASE: {
@@ -1236,6 +1240,7 @@ sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) 
     if (id <= SJS_METHOD_STRING_TRIM_START) return string_method(vm, id, call);
     if (id <= SJS_METHOD_SET_UNION) return set_method(vm, id, call);
     if (id == SJS_METHOD_BIGINT_TO_STRING) return bigint_method(vm, call);
+    if (id == SJS_METHOD_REGEXP_TEST) return regex_method(vm, SJS_REGEX_OP_TEST, call);
     return map_method(vm, id, call);
 }
 
@@ -1559,6 +1564,7 @@ static loop_step late_done(sjs_vm *vm, vm_frame *frame);
 static loop_step for_each_call(sjs_vm *vm, vm_frame *frame);
 
 sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
+    if (frame->builtin >= SJS_REGEX_LOOP_FIRST) return sjs_regex_loop_start(vm, frame);
     if (frame->builtin == SJS_BUILTIN_MAP_GROUP_BY || (frame->builtin >= SJS_METHOD_MAP_FOR_EACH && frame->builtin <= SJS_METHOD_ITERATOR_REDUCE)) {
         sjs_result started = late_start(vm, frame);
         if (started != SJS_OK || frame->builtin == SJS_METHOD_MAP_FOR_EACH) return started;
@@ -2013,6 +2019,9 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
         case SJS_METHOD_ARRAY_FIND_LAST:
             return done(vm, frame, sjs_undefined());
         default:
+            /* A regular expression's loop is always here (its index and
+             * length stay 0), off the path of the array loops' steps. */
+            if (frame->builtin >= SJS_REGEX_LOOP_FIRST) return sjs_regex_loop_step(vm, frame);
             return frame->iterated ? late_done(vm, frame) : LOOP_DONE;
         }
     }
@@ -2613,10 +2622,52 @@ static sjs_result string_replace_all(sjs_vm *vm, sjs_leaf_call *call) {
     return build_end(vm, &b);
 }
 
+/* replace(pattern, replacement) with a string pattern: its first match
+ * replaced, or the string itself when there is none. */
+static sjs_result string_replace(sjs_vm *vm, sjs_leaf_call *call) {
+    sjs_str s = sjs_string_view(SJS_AS_STRING(call->receiver));
+    sjs_str pattern;
+    if (string_arg(vm, arg(call, 0), &pattern) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_value with = arg(call, 1);
+    if (with.kind == SJS_FUNCTION) return sjs_vm_fault(vm, "staticjs replaces with a string, not with a function's result");
+    if (text_primitive(vm, with) != SJS_OK) return SJS_ERR_PROGRAM;
+    int64_t at = find_bytes(s, pattern, 0);
+    if (at < 0) {
+        call->result = call->receiver;
+        sjs_ref(call->result);
+        return SJS_OK;
+    }
+    char room[32];
+    replace_match m = { 0 };
+    m.replacement = sjs_primitive_text(with, room);
+    m.matched = pattern;
+    uint32_t end = (uint32_t)at + pattern.length;
+    m.before = (sjs_str){ s.ptr, (uint32_t)at };
+    m.after = (sjs_str){ s.ptr + end, s.length - end };
+    text_builder b = { call, 0 };
+    if (string_with_room(vm, call, s.length) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (build_text(vm, &b, m.before) != SJS_OK || substitute(vm, &b, &m) != SJS_OK || build_text(vm, &b, m.after) != SJS_OK) {
+        return SJS_ERR_PROGRAM;
+    }
+    return build_end(vm, &b);
+}
+
 __attribute__((noinline)) static sjs_result string_method_tail(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     switch (id) {
     case SJS_METHOD_STRING_REPLACE_ALL:
+        if (arg(call, 0).kind == SJS_REGEXP) {
+            call->cost = 0;
+            sjs_regex_call_params params = { call, SJS_REGEX_OP_REPLACE, true };
+            return sjs_regex_call(vm, &params);
+        }
         return string_replace_all(vm, call);
+    case SJS_METHOD_STRING_REPLACE:
+        if (arg(call, 0).kind == SJS_REGEXP) return regex_method(vm, SJS_REGEX_OP_REPLACE, call);
+        return string_replace(vm, call);
+    case SJS_METHOD_STRING_MATCH:
+        return regex_method(vm, SJS_REGEX_OP_MATCH, call);
+    case SJS_METHOD_STRING_SEARCH:
+        return regex_method(vm, SJS_REGEX_OP_SEARCH, call);
     case SJS_METHOD_STRING_TRIM:
     case SJS_METHOD_STRING_TRIM_END:
     case SJS_METHOD_STRING_TRIM_START:
@@ -3421,4 +3472,16 @@ __attribute__((noinline)) static sjs_result uri_decode(sjs_vm *vm, sjs_builtin_i
     if (r == SJS_OK) sjs_string_extend(SJS_AS_STRING(call->result), (sjs_str){ s.ptr + run, s.length - run });
     text_release(vm, &t);
     return r == SJS_OK ? SJS_OK : SJS_ERR_PROGRAM;
+}
+
+/* ------------------------------------------------------------------------
+ * Regular expressions' methods (regex_match.c): a leaf, which hands a long
+ * match to a loop of its own (SJS_LEAF_LOOP).
+ */
+
+__attribute__((noinline)) static sjs_result regex_method(sjs_vm *vm, uint8_t op, sjs_leaf_call *call) {
+    /* The fuel is the match's, alike as a leaf and as a loop. */
+    call->cost = 0;
+    sjs_regex_call_params params = { call, op, false };
+    return sjs_regex_call(vm, &params);
 }

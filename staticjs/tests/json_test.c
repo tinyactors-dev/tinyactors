@@ -536,7 +536,7 @@ static void stringify_call(runner *r, const text *source, gave *out) {
 static void runner_init(runner *r) {
     sjs_context_config config = { { NULL, &counted_vtable }, SJS_LIMITS_DEFAULT };
     if (sjs_context_init(&r->context, &config) != SJS_OK) abort();
-    if (sjs_vm_init(&r->vm, &(sjs_vm_config){ r->context }) != SJS_OK) abort();
+    if (sjs_vm_init(&r->vm, &(sjs_vm_config){ r->context, false }) != SJS_OK) abort();
     static const sjs_str globals[] = { { "t", 1 } };
     sjs_compile_params params = { { r->context, SJS_GOAL_EXPRESSION, globals, 1, { NULL, NULL }, false },
                                   SJS_STR("JSON.stringify(JSON.parse(t))"), NULL };
