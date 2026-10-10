@@ -11,6 +11,15 @@ and core does not handle bytes it has no use for. `tinyactors-core/AGENTS.md`
 has the rules of the C layers themselves (freestanding layers, no pointers
 in system memory, no allocation after init).
 
+**Bindings expose the core, nothing else.** Before designing or changing a
+binding's API, read
+["Designing a binding's API"](tinyactors-core/bindings/README.md#designing-a-bindings-api-expose-the-core-nothing-else):
+inventory the public headers, write the table mapping each API item to the
+core functions behind it, borrow names and call shapes from other
+libraries (xstate) but never their semantics, and invent nothing. The core
+is a complete SCXML implementation: read `src/core`, `src/system` and
+`docs/SCXML.md` before claiming it lacks something.
+
 **Roles.** Before designing a feature or a change, take the perspectives
 in [docs/roles.md](docs/roles.md) into account: the application developer,
 the operator, the capacity planner, the C embedder, the binding author,

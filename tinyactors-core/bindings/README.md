@@ -19,10 +19,55 @@ contributors never download a JVM or .NET SDK.
 | `sqlite/` | — | loadable extension, amalgamation | SQL values / row ids |
 | `postgres/` | postgres dev headers | extension, amalgamation | `Datum` |
 
+## Designing a binding's API: expose the core, nothing else
+
+A binding exposes what the core already does. It is not a port of
+another library, and it is not where features are designed. The
+JavaScript binding grew to 3,500 lines by getting this backwards: it
+started from xstate's API and emulated it on top of SCXML, reimplemented
+C in JavaScript, and left out what the core offers (I/O processors,
+external invokes). Do it in this order:
+
+1. **Inventory the headers first.** List the public functions and effects
+   of `include/tinyactors/*.h` that the binding will drive (usually
+   `host.h`, `image.h`, `compile.h`, `address.h`, `frame.h`, `trace.h`,
+   `otlp.h`).
+2. **Write the mapping table before any code or prose design:** each
+   public API item in the binding's language next to the core functions,
+   effects and flags it calls. An API item with no core function behind
+   it does not belong in the binding. A core function with no API item is
+   either used internally by the binding (say where) or listed as not
+   exposed (say why).
+3. **Borrow shape, never semantics.** Another library (xstate for
+   JavaScript) may suggest names and call shapes: `createActor`, `send`,
+   `getSnapshot`, `subscribe`. What a call does is what the core function
+   behind it does. Never emulate the other library's behaviour, rename
+   the core's events, or lower its concepts (`after`, `always`, `reenter`)
+   onto SCXML. Do not argue over which library's model is right: the
+   mapping table decides.
+4. **The core is a complete SCXML implementation; read it before
+   claiming a gap.** `src/core` and `src/system` implement SCXML's
+   semantics, including I/O processors (`<send type>`), external invokes
+   (`<invoke type>`), sends to invoked services (`#_<invokeid>`), and
+   error events. Before a design says "the core cannot do X", find where
+   SCXML (`docs/SCXML.md`) and the core handle X, and cite the lines.
+5. **A binding invents nothing:** no event names, flags, fields or
+   mechanisms of its own, and no core change to make an API look like
+   another library. A real gap in the core is a separate proposal for the
+   core, not part of a binding's design.
+6. **Narrow and deep.** The native side owns the host block, the run loop,
+   the datamodel and effect delivery, and makes few, large calls. The
+   language side keeps only what needs that language: its values, its
+   promises and streams (stores, transports, I/O processors, invokers),
+   its exporters. Bindings are written by hand; the mapping table, not a
+   generator, keeps them complete.
+
 Rules for every binding:
 
 1. Never re-implement SCXML semantics, queues, routing, timers or invoke
-   lifecycle. If a binding needs it, it belongs in `ta_system`.
+   lifecycle. If a binding needs it, it belongs in `ta_system`. Never keep
+   a twin in the binding's language of anything C already does
+   (addresses, frames, wire formats, trace presets): bind the C.
 2. Drive the system with `send_many` → `run(budget)` → `effects` → `effects_ack`.
    Integrate `next_deadline` with the host event loop.
 3. Copy or retain anything taken from an effect before the next mutating call.
