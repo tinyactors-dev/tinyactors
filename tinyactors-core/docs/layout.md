@@ -82,8 +82,9 @@ implementation of that layer). Layer dependency rules are in
 │   │
 │   ├── compile/               hosted; allocates through ta_allocator
 │   │   ├── compile_internal.h ✅ the compiler's shared state (ta_compiler)
-│   │   ├── compile_support.[ch] ✅ chunk arena, vectors, string map, diagnostics
+│   │   ├── compile_support.[ch] ✅ chunk arena, vectors, string map, diagnostics, default allocator
 │   │   ├── xml.[ch]           ✅ minimal non-validating XML parser (namespaces, CDATA, entities)
+│   │   ├── write.c            ✅ ta_xml_writer: XML from calls, for charts a binding builds
 │   │   ├── scxml.c            ✅ SCXML -> records: states, transitions, domains, bytecode, sends,
 │   │   │                         invokes, data, delays
 │   │   ├── link.c             ✅ string interning, chart queue, event trie, image emission

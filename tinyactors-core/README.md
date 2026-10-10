@@ -34,7 +34,8 @@ datamodel on quickjs-ng (`ta_datamodel_ecmascript`, linked like a tree-sitter
 language) and a BasicHTTP codec (`tinyactors/basic_http.h`). All 191 automatic W3C
 SCXML IRP tests pass (`mise run w3c`). A Node.js binding with an
 xstate-style API lives in [bindings/node](bindings/node) (`mise run node:test`); machines
-compile to readable SCXML and all actors share one native system. The
+compile to readable SCXML (written by `ta_xml_writer`, `tinyactors/compile.h`)
+and all actors share one native system. The
 [torture chamber](tools/torture) (`mise run torture`, `mise run torture:test`) runs
 pathological scenarios — 100k actors, ~1M events/s, large datamodels, systems
 addressing each other's actors, a 50,000-email campaign with one actor per

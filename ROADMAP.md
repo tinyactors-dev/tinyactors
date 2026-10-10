@@ -32,11 +32,12 @@ says why it ended.
      table;
    - **definition logs** (0.1's `tinyactors.definition.*`): a log record
      when a version is linked, retired and freed.
-3. **`tinyactors-scxml`:** decide whether the C SCXML writer is still
-   wanted (the JavaScript binding writes SCXML itself); if so, port it to
-   the compiler's model, and bring its decoder's edge cases into the
-   compiler's tests either way. Consider tinyxml for the compiler's XML
-   reader (`tinyactors-core/src/compile/xml.c`).
+3. **`tinyactors-scxml`.** Done (2026-10-09,
+   [proposal](docs/proposals/scxml-in-core.md)): the parked codec is
+   deleted, its error cases with positions test the compiler, and
+   `ta_xml_writer` (`compile.h`) writes the SCXML of charts a binding
+   builds; the JavaScript bindings use it. The compiler keeps its own XML
+   reader (`src/compile/xml.c`); core does not use tinyxml.
 
 ## Open questions
 
