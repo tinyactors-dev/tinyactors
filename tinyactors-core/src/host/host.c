@@ -232,6 +232,18 @@ static const chart_version *version_of(const ta_host *host, ta_string_view name)
     return NULL;
 }
 
+/* The host's tracing policy: `policy` (size-aware), or the default. */
+static void host_policy_copy(ta_host *host, const ta_trace_policy *policy) {
+    ta_trace_policy_default(&host->trace_policy);
+    if (policy)
+        ta_memcpy(&host->trace_policy, policy,
+                  policy->size && policy->size < sizeof host->trace_policy
+                      ? policy->size
+                      : sizeof host->trace_policy);
+    host->trace_policy.size = sizeof host->trace_policy;
+    host->config.system.trace_policy = &host->trace_policy;
+}
+
 ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
     *out = NULL;
     if (!config || config->size < offsetof(ta_host_config, allocator) + sizeof(ta_allocator) ||
@@ -245,6 +257,7 @@ ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
               config->size < sizeof host->config ? config->size : sizeof host->config);
     host->config.size = sizeof host->config;
     if (!host->config.migrate_quantum) host->config.migrate_quantum = 256;
+    host_policy_copy(host, host->config.system.trace_policy);
     /* the base URI every segment shares: tinyactors://<system_id>/ */
     uint32_t bl = 0;
     ta_memcpy(host->base, TA_ADDRESS_SCHEME, 13);
@@ -1549,19 +1562,13 @@ ta_status ta_host_adopt(ta_host *host, uint32_t segment, const void *blob, size_
 
 /* ---- inspection ------------------------------------------------------------------------ */
 
-ta_status ta_host_trace_set(ta_host *host, uint32_t kinds, uint32_t sample_parts,
-                            uint32_t sample_whole) {
+ta_status ta_host_trace_set(ta_host *host, const ta_trace_policy *policy) {
     if (host->config.system.tracing == TA_TRACING_DISABLED) return TA_ERROR_STATE;
-    host->config.system.trace_kinds = kinds;
-    host->config.system.trace_sample_parts = sample_parts;
-    host->config.system.trace_sample_whole = sample_whole;
+    host_policy_copy(host, policy);
     for (uint32_t i = 0; i < host->segment_count; i++) {
         host_segment *segment = segment_of(host, i);
         if (!segment) continue;
-        segment->config.trace_kinds = kinds;
-        segment->config.trace_sample_parts = sample_parts;
-        segment->config.trace_sample_whole = sample_whole;
-        ta_status status = ta_system_trace_set(segment->system, kinds, sample_parts, sample_whole);
+        ta_status status = ta_system_trace_set(segment->system, &host->trace_policy);
         if (status != TA_OK) return status;
     }
     return TA_OK;
@@ -1746,6 +1753,7 @@ ta_status ta_host_snapshot(ta_host *host, void *buffer, size_t capacity, size_t 
             ss.region_length = rl;
             ss.config = segment->config;
             ss.config.io_processors = NULL;
+            ss.config.trace_policy = NULL; /* the region keeps the segment's policy */
         }
         ta_memcpy(p, &ss, sizeof ss);
         p += sizeof ss;
@@ -1864,6 +1872,7 @@ ta_status ta_host_restore(const ta_host_config *config, const ta_image *const *i
         segment->config = ss->config;
         segment->config.io_processors = host->io_processors;
         segment->config.io_processor_count = host->io_processor_count;
+        segment->config.trace_policy = &host->trace_policy;
         segment->memory = host_alloc(host, (size_t)ss->region_length);
         if (!segment->memory) return restore_failed(host, TA_ERROR_NO_MEMORY);
         segment->memory_size = (size_t)ss->region_length;

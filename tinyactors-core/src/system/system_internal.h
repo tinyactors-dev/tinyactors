@@ -109,6 +109,7 @@ struct ta_system {
     ta_pool contexts;
     ta_trace_generator generator;
     uint64_t trace_threshold;
+    ta_trace_policy policy; /* docs/adr/0007 */
     uint64_t fuel_clock;
     ta_datamodel_binding datamodels[TA_MAX_DATAMODELS + 1];
 };
@@ -159,6 +160,8 @@ void ta_system_session_insert(ta_system *s, uint32_t index);
  * TA_NIL when unsampled or tracing is off; `*value` gets the trace either way
  * (no trace when tracing is off). */
 uint32_t ta_system_start_trace(ta_system *s, ta_string_view traceparent, ta_trace_context *value);
+/* The kernel's masks and the sampling threshold from system->policy. */
+void ta_system_trace_policy_apply(ta_system *system);
 /* A lifecycle record (TA_TRACE_SPAWNED, ...) of actor `index`, its header
  * filled: under `context` (a value; a new trace ID if it has none), keyed
  * (session, macrostep, step). NULL when the kind is off or the journal full. */

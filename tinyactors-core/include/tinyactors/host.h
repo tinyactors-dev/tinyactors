@@ -432,8 +432,7 @@ TA_API uint32_t ta_host_chart_stats(const ta_host *h, ta_chart_stats *out, uint3
  * ta_system_trace_set). TA_ERROR_STATE when the host's systems do not trace
  * (config.system.tracing). Each segment's records: ta_host_system, then
  * ta_system_trace. */
-TA_API ta_status ta_host_trace_set(ta_host *h, uint32_t kinds, uint32_t sample_parts,
-                                   uint32_t sample_whole);
+TA_API ta_status ta_host_trace_set(ta_host *h, const ta_trace_policy *policy);
 /* Enumerate sessions host-wide (cursor starts at 0); returns how many (0 = done). */
 TA_API uint32_t ta_host_actors(const ta_host *h, uint64_t *cursor, uint64_t *out,
                                uint32_t capacity);

@@ -47,6 +47,16 @@ typedef struct ta_trace_context {
  * rightmost 56 bits are random. */
 enum { TA_TRACE_FLAG_SAMPLED = 0x01u, TA_TRACE_FLAG_RANDOM = 0x02u };
 
+/* A context's detail class (docs/adr/0007): bits 8 to 10 of its flags,
+ * above the W3C ones. They are local to a process: a traceparent carries
+ * only the low 8 bits. A system writes the kinds its policy gives the class
+ * of a step's context (ta_trace_policy); a step's events copy the class, so
+ * what a step causes is traced as it is. */
+#define TA_TRACE_DETAILS       8u
+#define TA_TRACE_DETAIL_SHIFT  8u
+#define TA_TRACE_DETAIL(flags) (((flags) >> TA_TRACE_DETAIL_SHIFT) & (TA_TRACE_DETAILS - 1u))
+enum { TA_TRACE_DETAIL_UNSAMPLED = 0, TA_TRACE_DETAIL_SAMPLED = 1, TA_TRACE_DETAIL_WATCHED = 2 };
+
 /* "00-" 32 hex "-" 16 hex "-" 2 hex */
 #define TA_TRACEPARENT_LENGTH   55u
 #define TA_TRACE_ID_TEXT_LENGTH 32u

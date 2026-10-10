@@ -2547,8 +2547,19 @@ static napi_value js_trace_configure(napi_env environment, napi_callback_info in
     if (napi_get_named_property(environment, argv[1], "valueLimit", &v) == napi_ok)
         value_limit = get_u32(environment, v);
     if (!whole) parts = 0, whole = 1; /* nothing sampled */
-    /* no destination: no records, but a mask core cannot read as "all" */
-    ta_host_trace_set(host->host, kinds ? kinds : TA_TRACE_BIT(TA_TRACE_DROPPED), parts, whole);
+    /* no destination: no records (the dropped kind alone), contexts still flow */
+    ta_trace_policy policy;
+    ta_trace_policy_default(&policy);
+    policy.sample_parts = parts;
+    policy.sample_whole = whole;
+    for (uint32_t i = 0; i < TA_TRACE_DETAILS; i++)
+        policy.kinds[i] = TA_TRACE_BIT(TA_TRACE_DROPPED);
+    if (kinds) {
+        policy.kinds[TA_TRACE_DETAIL_UNSAMPLED] = kinds & TA_TRACE_LIFECYCLE;
+        policy.kinds[TA_TRACE_DETAIL_SAMPLED] = kinds;
+        policy.kinds[TA_TRACE_DETAIL_WATCHED] = kinds;
+    }
+    ta_host_trace_set(host->host, &policy);
     if (!enabled) {
         free(host->otlp);
         host->otlp = NULL;

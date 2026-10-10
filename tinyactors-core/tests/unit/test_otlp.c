@@ -84,7 +84,10 @@ static int world_open(world *w, const char *const *charts, uint32_t count,
     system_config.size = sizeof system_config;
     system_config.ticks_per_second = 1000;
     system_config.max_actors = 256;
-    system_config.trace_kinds = TA_TRACE_FULL | TA_TRACE_VALUES;
+    static ta_trace_policy policy;
+    ta_trace_policy_default(&policy);
+    policy.kinds[TA_TRACE_DETAIL_SAMPLED] = TA_TRACE_FULL | TA_TRACE_VALUES;
+    system_config.trace_policy = &policy;
     size_t need;
     ta_system_layout(&w->image, &system_config, &need);
     w->memory = malloc(need);

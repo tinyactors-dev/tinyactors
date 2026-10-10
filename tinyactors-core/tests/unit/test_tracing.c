@@ -14,6 +14,15 @@ typedef struct records {
     uint32_t count;
 } records;
 
+/* The default policy, sampling parts / whole. */
+static const ta_trace_policy *sampling(uint32_t parts, uint32_t whole) {
+    static ta_trace_policy policy;
+    ta_trace_policy_default(&policy);
+    policy.sample_parts = parts;
+    policy.sample_whole = whole;
+    return &policy;
+}
+
 static records seen;
 
 static void name_of(const test_system *t, const ta_trace_view *view, uint32_t reference,
@@ -161,7 +170,7 @@ static void test_on_by_default(void) {
     tsys_run(&untraced, 10000, 5);
     ta_trace_view view;
     CHECK_EQUAL(ta_system_trace(untraced.system, &view), 0);
-    CHECK_EQUAL(ta_system_trace_set(untraced.system, 0, 1, 1), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_system_trace_set(untraced.system, sampling(1, 1)), TA_ERROR_STATE);
     tsys_free(&untraced);
 }
 
@@ -308,7 +317,7 @@ static void test_delayed_send(void) {
                        "<send event='tick' delay='1s'/></transition>"
                        "<transition event='tick' target='b'/></state><state id='b'/>"),
                     NULL, &config));
-    CHECK_EQUAL(ta_system_trace_set(t.system, 0, 0, 1), TA_OK); /* sample nothing */
+    CHECK_EQUAL(ta_system_trace_set(t.system, sampling(0, 1)), TA_OK); /* sample nothing */
     CHECK_EQUAL(
         ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a),
         TA_OK);
@@ -320,7 +329,7 @@ static void test_delayed_send(void) {
     CHECK_EQUAL(count_kind(TA_TRACE_MACROSTEP_BEGIN), 0); /* unsampled */
     CHECK_EQUAL(count_kind(TA_TRACE_SPAWNED), 1);         /* lifecycle: whatever the sampling */
     forget();
-    CHECK_EQUAL(ta_system_trace_set(t.system, 0, 1, 1), TA_OK); /* sample everything again */
+    CHECK_EQUAL(ta_system_trace_set(t.system, sampling(1, 1)), TA_OK); /* sample everything again */
     ta_system_advance_time(t.system, 2000);
     tsys_run(&t, 10000, 5);
     collect(&t);
@@ -328,7 +337,7 @@ static void test_delayed_send(void) {
     CHECK(fired != NULL);
     if (fired) CHECK_EQUAL(fired->parent, 0); /* a new trace, a root */
     forget();
-    CHECK_EQUAL(ta_system_trace_set(t.system, 0, 0, 1), TA_OK);
+    CHECK_EQUAL(ta_system_trace_set(t.system, sampling(0, 1)), TA_OK);
     const char *sampled = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
                *unsampled = "00-0af7651916cd43dd8448eb211c80319d-b7ad6b7169203331-00";
     CHECK_EQUAL(send_traced(&t, a, "x", sampled), TA_OK);
@@ -636,6 +645,69 @@ static void test_export_adopt(void) {
     tsys_free(&u);
 }
 
+/* Detail classes (docs/adr/0007): a sampled trace is TA_TRACE_DETAIL_SAMPLED
+ * and writes that class's kinds; the class is in a record's flags and in an
+ * effect's context, never in traceparent text. */
+static void test_detail_classes(void) {
+    static const ta_io_processor_descriptor processors[] = {
+        {{"http://example.com/out", 22}, {"", 0}, 0, 0}};
+    ta_trace_policy policy;
+    ta_trace_policy_default(&policy);
+    policy.kinds[TA_TRACE_DETAIL_SAMPLED] = TA_TRACE_SUMMARY; /* no microsteps, no sends */
+    test_system t;
+    ta_system_config config = test_system_config();
+    config.io_processors = processors;
+    config.io_processor_count = 1;
+    config.trace_policy = &policy;
+    CHECK(tsys_init(&t,
+                    SC("initial='a'><state id='a'><transition event='go'>"
+                       "<send type='http://example.com/out' target='x' event='out'/>"
+                       "</transition></state>"),
+                    NULL, &config));
+    policy.kinds[TA_TRACE_DETAIL_SAMPLED] = TA_TRACE_FULL; /* copied at init: no effect */
+    uint32_t a = 0;
+    CHECK_EQUAL(
+        ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
+    tsys_run(&t, 10000, 5);
+    CHECK_EQUAL(send_traced(&t, a, "go", PARENT), TA_OK);
+    ta_system_run(t.system, 10000);
+    const ta_effect *effects;
+    CHECK_EQUAL(ta_system_effects(t.system, &effects), 1);
+    CHECK_EQUAL(TA_TRACE_DETAIL(effects[0].trace.flags), TA_TRACE_DETAIL_SAMPLED);
+    char text[TA_TRACEPARENT_LENGTH + 1] = {0};
+    CHECK_EQUAL(ta_traceparent_format(&effects[0].trace, text, sizeof text), TA_TRACEPARENT_LENGTH);
+    CHECK(strcmp(text + 53, "01") == 0); /* the W3C flags alone */
+    ta_system_effects_ack(t.system, 1);
+    collect(&t);
+    uint64_t s = session_of(&t, a);
+    const ta_trace_record *begin = find(TA_TRACE_MACROSTEP_BEGIN, s, 2, "go");
+    CHECK(begin != NULL);
+    if (begin) CHECK_EQUAL(TA_TRACE_DETAIL(begin->flags), TA_TRACE_DETAIL_SAMPLED);
+    CHECK_EQUAL(count_kind(TA_TRACE_MICROSTEP), 0);
+    CHECK_EQUAL(count_kind(TA_TRACE_SENT), 0);
+    CHECK(count_kind(TA_TRACE_MACROSTEP_END) >= 1);
+    forget();
+    /* the same system, another policy: the class now writes every kind */
+    ta_trace_policy_default(&policy);
+    CHECK_EQUAL(ta_system_trace_set(t.system, &policy), TA_OK);
+    CHECK_EQUAL(send_traced(&t, a, "go", PARENT), TA_OK);
+    tsys_run(&t, 10000, 5);
+    collect(&t);
+    CHECK_EQUAL(count_kind(TA_TRACE_MICROSTEP), 1);
+    CHECK_EQUAL(count_kind(TA_TRACE_SENT), 1);
+    forget();
+    /* a class that writes nothing: no step record, lifecycle as its class says */
+    policy.kinds[TA_TRACE_DETAIL_SAMPLED] = 0;
+    CHECK_EQUAL(ta_system_trace_set(t.system, &policy), TA_OK);
+    CHECK_EQUAL(send_traced(&t, a, "go", PARENT), TA_OK);
+    tsys_run(&t, 10000, 5);
+    collect(&t);
+    CHECK_EQUAL(seen.count, 0);
+    forget();
+    tsys_free(&t);
+}
+
 int main(void) {
     RUN(test_on_by_default);
     RUN(test_three_actors);
@@ -647,5 +719,6 @@ int main(void) {
     RUN(test_relocation);
     RUN(test_hibernated_receiver);
     RUN(test_export_adopt);
+    RUN(test_detail_classes);
     TEST_MAIN_END();
 }

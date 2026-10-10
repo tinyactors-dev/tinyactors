@@ -653,6 +653,26 @@
       "value": 4
     },
     {
+      "name": "TA_TRACE_DETAILS",
+      "value": 8
+    },
+    {
+      "name": "TA_TRACE_DETAIL_SAMPLED",
+      "value": 1
+    },
+    {
+      "name": "TA_TRACE_DETAIL_SHIFT",
+      "value": 8
+    },
+    {
+      "name": "TA_TRACE_DETAIL_UNSAMPLED",
+      "value": 0
+    },
+    {
+      "name": "TA_TRACE_DETAIL_WATCHED",
+      "value": 2
+    },
+    {
       "name": "TA_TRACE_DROPPED",
       "value": 1
     },
@@ -3532,6 +3552,10 @@
         }
       }
     },
+    "ta_trace_policy": {
+      "kind": "opaque",
+      "fields": []
+    },
     "ta_system_config": {
       "kind": "struct",
       "fields": [
@@ -3600,10 +3624,6 @@
           "type": "uint32_t"
         },
         {
-          "name": "trace_kinds",
-          "type": "uint32_t"
-        },
-        {
           "name": "trace_bytes",
           "type": "uint32_t"
         },
@@ -3612,12 +3632,12 @@
           "type": "uint32_t"
         },
         {
-          "name": "trace_sample_parts",
+          "name": "pad2",
           "type": "uint32_t"
         },
         {
-          "name": "trace_sample_whole",
-          "type": "uint32_t"
+          "name": "trace_policy",
+          "type": "const ta_trace_policy *"
         },
         {
           "name": "trace_seed",
@@ -3645,11 +3665,10 @@
             "io_processors": 56,
             "first_serial": 64,
             "tracing": 72,
-            "trace_kinds": 76,
-            "trace_bytes": 80,
-            "trace_contexts": 84,
-            "trace_sample_parts": 88,
-            "trace_sample_whole": 92,
+            "trace_bytes": 76,
+            "trace_contexts": 80,
+            "pad2": 84,
+            "trace_policy": 88,
             "trace_seed": 96
           }
         },
@@ -3673,11 +3692,10 @@
             "io_processors": 56,
             "first_serial": 64,
             "tracing": 72,
-            "trace_kinds": 76,
-            "trace_bytes": 80,
-            "trace_contexts": 84,
-            "trace_sample_parts": 88,
-            "trace_sample_whole": 92,
+            "trace_bytes": 76,
+            "trace_contexts": 80,
+            "pad2": 84,
+            "trace_policy": 88,
             "trace_seed": 96
           }
         },
@@ -3701,11 +3719,10 @@
             "io_processors": 56,
             "first_serial": 64,
             "tracing": 72,
-            "trace_kinds": 76,
-            "trace_bytes": 80,
-            "trace_contexts": 84,
-            "trace_sample_parts": 88,
-            "trace_sample_whole": 92,
+            "trace_bytes": 76,
+            "trace_contexts": 80,
+            "pad2": 84,
+            "trace_policy": 88,
             "trace_seed": 96
           }
         }
@@ -8009,16 +8026,8 @@
           "type": "ta_host *"
         },
         {
-          "name": "kinds",
-          "type": "uint32_t"
-        },
-        {
-          "name": "sample_parts",
-          "type": "uint32_t"
-        },
-        {
-          "name": "sample_whole",
-          "type": "uint32_t"
+          "name": "policy",
+          "type": "const ta_trace_policy *"
         }
       ],
       "public": true,
@@ -9614,16 +9623,8 @@
           "type": "ta_system *"
         },
         {
-          "name": "kinds",
-          "type": "uint32_t"
-        },
-        {
-          "name": "sample_parts",
-          "type": "uint32_t"
-        },
-        {
-          "name": "sample_whole",
-          "type": "uint32_t"
+          "name": "policy",
+          "type": "const ta_trace_policy *"
         }
       ],
       "public": true,
@@ -9765,6 +9766,19 @@
         {
           "name": "cursor",
           "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_trace_policy_default",
+      "returns": "void",
+      "params": [
+        {
+          "name": "policy",
+          "type": "ta_trace_policy *"
         }
       ],
       "public": true,

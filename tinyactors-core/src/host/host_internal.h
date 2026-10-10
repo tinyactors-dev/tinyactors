@@ -76,6 +76,7 @@ typedef struct pending_error {
 
 struct ta_host {
     ta_host_config config;
+    ta_trace_policy trace_policy; /* every segment's, and new ones' (config.system points here) */
     char base[TA_ADDRESS_SYSTEM_MAX + 16]; /* tinyactors://<system_id>/ */
     uint32_t base_length;
     ta_datamodel_binding datamodels[8];

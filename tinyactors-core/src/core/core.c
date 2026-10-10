@@ -261,7 +261,7 @@ static void trace_condition(kernel_context *kernel, uint32_t transition, int res
 static void trace_macrostep_end(kernel_context *kernel, int session_ended) {
     ta_core *core = kernel->core;
     if (kernel->instance->trace == TA_NIL) return;
-    if (ta_core_traces(core, TA_TRACE_MACROSTEP_END)) {
+    if (ta_core_kinds_of(core, kernel->instance) & TA_TRACE_BIT(TA_TRACE_MACROSTEP_END)) {
         const uint32_t *config = configuration_words(kernel);
         uint32_t count = ta_bitset_count(config, kernel->instance_layout.state_words);
         count -= ta_bitset_test(config, 0) ? 1u : 0u;
@@ -286,7 +286,7 @@ static void trace_macrostep_end(kernel_context *kernel, int session_ended) {
 /* A microstep, at its end: its transitions, the states it exited (in exit
  * order) and entered (in entry order). */
 static void trace_microstep(kernel_context *kernel) {
-    if (!ta_core_traces(kernel->core, TA_TRACE_MICROSTEP) || kernel->instance->trace == TA_NIL)
+    if (!(ta_core_kinds_of(kernel->core, kernel->instance) & TA_TRACE_BIT(TA_TRACE_MICROSTEP)))
         return;
     ta_workspace *workspace = kernel->workspace;
     const uint32_t *exit = workspace_at(kernel, kernel->workspace_layout.exit),
@@ -348,7 +348,7 @@ static void trace_macrostep_begin(ta_core *core, ta_instance *instance, uint32_t
         ta_shared_string_retain(core, begin->name);
         ta_shared_string_retain(core, begin->sendid);
         ta_shared_string_retain(core, begin->origin);
-        if ((core->trace_kinds & TA_TRACE_VALUES) && event->payload &&
+        if ((ta_core_kinds_of(core, instance) & TA_TRACE_VALUES) && event->payload &&
             event->datamodel < core->datamodel_count) {
             const ta_datamodel_binding *binding = &core->datamodels[event->datamodel];
             if (binding->vtable->retain) {
@@ -1174,7 +1174,8 @@ static void trace_assign(kernel_context *kernel, uint32_t location) {
     assign->location = location;
     assign->datamodel = TA_NIL;
     assign->payload = 0;
-    if ((core->trace_kinds & TA_TRACE_VALUES) && kernel->datamodel->vtable->capture) {
+    if ((ta_core_kinds_of(kernel->core, kernel->instance) & TA_TRACE_VALUES) &&
+        kernel->datamodel->vtable->capture) {
         ta_datamodel_capture capture;
         ta_memset(&capture, 0, sizeof capture);
         capture.kind = TA_CAPTURE_VALUE;

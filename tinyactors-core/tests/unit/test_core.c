@@ -220,6 +220,8 @@ static void drv_trace(driver *d, uint32_t bytes, uint32_t kinds) {
     d->core.journal = &d->journal;
     d->core.contexts = &d->contexts;
     d->core.trace_kinds = kinds;
+    for (uint32_t i = 0; i < TA_TRACE_DETAILS; i++) /* every class: a bare kernel samples nothing */
+        d->core.class_kinds[i] = kinds;
 }
 
 /* Read every record (one piece), release what they hold, release them;

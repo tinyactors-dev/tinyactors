@@ -128,7 +128,8 @@ struct ta_core {
      * and the logical time */
     ta_journal *journal;
     ta_pool *contexts;
-    uint32_t trace_kinds;
+    uint32_t trace_kinds; /* every class's kinds together: 0 writes nothing (docs/adr/0007) */
+    uint32_t class_kinds[TA_TRACE_DETAILS]; /* the kinds of each detail class */
     uint32_t trace_step_fuel;
     uint64_t trace_clock;
     uint64_t trace_now;
@@ -323,8 +324,11 @@ ta_trace_record *ta_core_trace_step(ta_core *core, ta_instance *instance, uint32
                                     uint32_t size, uint32_t microstep, const uint32_t *fuel);
 /* Release what a record holds (strings, payloads), after it was read. */
 void ta_core_trace_release(ta_core *core, const ta_trace_record *record);
-TA_INLINE int ta_core_traces(const ta_core *core, uint32_t kind) {
-    return (core->trace_kinds & TA_TRACE_BIT(kind)) != 0;
+/* The kinds the current macrostep of `instance` writes: its context's
+ * class's (docs/adr/0007), none without a context. */
+TA_INLINE uint32_t ta_core_kinds_of(const ta_core *core, const ta_instance *instance) {
+    if (instance->trace == TA_NIL) return 0;
+    return core->class_kinds[TA_TRACE_DETAIL(ta_trace_entry_at(core, instance->trace)->flags)];
 }
 
 /* events */

@@ -45,6 +45,7 @@
     "ta_system_trace_ack": "bind",
     "ta_system_trace_clock": "bind",
     "ta_system_trace_set": "bind",
+    "ta_trace_policy_default": "bind",
     "ta_trace_body": "bind",
     "ta_trace_dynamic_string": "bind",
     "ta_trace_generator_next": "bind",

@@ -45,7 +45,6 @@ static void normalize_config(const ta_image_view *view, const ta_system_config *
     /* tracing: on by default, at full detail (docs/adr/0006); off carves nothing */
     if (config->tracing != TA_TRACING_DISABLED) {
         config->tracing = TA_TRACING_ENABLED;
-        if (!config->trace_kinds) config->trace_kinds = TA_TRACE_FULL;
         if (!config->trace_bytes) {
             uint64_t bytes = (uint64_t)config->max_events * TA_TRACE_BYTES_PER_EVENT;
             config->trace_bytes = bytes > 0x40000000u ? 0x40000000u : (uint32_t)bytes;
@@ -56,11 +55,8 @@ static void normalize_config(const ta_image_view *view, const ta_system_config *
         if (!config->trace_contexts) config->trace_contexts = config->max_events;
         if (config->trace_contexts > TA_POOL_MAX_CAPACITY)
             config->trace_contexts = TA_POOL_MAX_CAPACITY;
-        if (!config->trace_sample_whole)
-            config->trace_sample_parts = config->trace_sample_whole = 1;
     } else {
-        config->trace_kinds = config->trace_bytes = config->trace_contexts = 0;
-        config->trace_sample_parts = config->trace_sample_whole = 0;
+        config->trace_bytes = config->trace_contexts = 0;
     }
     if (!config->instance_bytes) {
         uint32_t m = 0;
@@ -184,11 +180,9 @@ static void rebind(ta_system *system, const ta_image *image) {
     int tracing = system->config.tracing == TA_TRACING_ENABLED;
     core->journal = tracing ? &system->journal : (ta_journal *)0;
     core->contexts = tracing ? &system->contexts : (ta_pool *)0;
-    core->trace_kinds = tracing ? system->config.trace_kinds : 0;
     core->trace_clock = system->fuel_clock;
     core->trace_now = system->now;
-    system->trace_threshold = ta_trace_ratio_threshold(system->config.trace_sample_parts,
-                                                       system->config.trace_sample_whole);
+    ta_system_trace_policy_apply(system);
 }
 
 static int string_equal_c_string(ta_string_view a, const char *b) {
@@ -302,6 +296,15 @@ ta_status ta_system_init(void *memory, size_t length, const ta_image *image,
     system->version = TA_SYSTEM_VERSION;
     system->region_size = arena.offset;
     system->config = normalized;
+    ta_trace_policy_default(&system->policy);
+    if (normalized.trace_policy) /* copied: the pointer is the caller's */
+        ta_memcpy(&system->policy, normalized.trace_policy,
+                  normalized.trace_policy->size &&
+                          normalized.trace_policy->size < sizeof system->policy
+                      ? normalized.trace_policy->size
+                      : sizeof system->policy);
+    system->policy.size = sizeof system->policy;
+    system->config.trace_policy = (const ta_trace_policy *)0;
     system->chart_count = view->chart_count;
     system->next_serial = normalized.first_serial;
     ta_pool_init(&system->actors, ta_arena_pointer(&arena, o.actor_slots),
@@ -751,6 +754,7 @@ void ta_system_deinit(ta_system *system) {
     if (!system || system->magic != TA_SYSTEM_MAGIC) return;
     /* nothing more is traced; what the journal holds is let go */
     system->core.trace_kinds = 0;
+    ta_memset(system->core.class_kinds, 0, sizeof system->core.class_kinds);
     for (ta_trace_view view; ta_system_trace(system, &view);)
         ta_system_trace_ack(system, view.length);
     /* the queues die with the system: drop them first so reclaiming a runnable

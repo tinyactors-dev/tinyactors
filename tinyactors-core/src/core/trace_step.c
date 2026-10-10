@@ -101,11 +101,13 @@ ta_trace_record *ta_core_trace_step(ta_core *core, ta_instance *instance, uint32
                                     uint32_t size, uint32_t microstep, const uint32_t *fuel) {
     if (!(core->trace_kinds & TA_TRACE_BIT(kind)) || instance->trace == TA_NIL || !core->journal)
         return (ta_trace_record *)0;
+    const ta_trace_entry *macrostep = ta_trace_entry_at(core, instance->trace);
+    if (!(core->class_kinds[TA_TRACE_DETAIL(macrostep->flags)] & TA_TRACE_BIT(kind)))
+        return (ta_trace_record *)0; /* not for this step's class */
     uint64_t at = ta_core_trace_fuel(core, fuel);
     ta_trace_record *record =
         ta_trace_record_reserve(core->journal, kind, size, at, core->trace_now);
     if (!record) return record;
-    const ta_trace_entry *macrostep = ta_trace_entry_at(core, instance->trace);
     uint64_t session =
         instance->actor == core->span_actor && instance->macrostep == core->span_macrostep
             ? core->span_session

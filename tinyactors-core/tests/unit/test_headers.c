@@ -98,6 +98,9 @@ ABI_CHECK(offsetof(ta_otlp_config, size) == 0, otlp_config_size_first);
 ABI_CHECK(offsetof(ta_otlp_input, size) == 0, otlp_input_size_first);
 ABI_CHECK(offsetof(ta_otlp_stats, size) == 0, otlp_stats_size_first);
 ABI_CHECK(offsetof(ta_otlp_stats_input, size) == 0, otlp_stats_input_size_first);
+ABI_CHECK(offsetof(ta_trace_policy, size) == 0, trace_policy_size_first);
+ABI_CHECK(TA_TRACE_DETAIL(0x0100u | TA_TRACE_FLAG_SAMPLED) == TA_TRACE_DETAIL_SAMPLED,
+          trace_detail_above_w3c_flags);
 ABI_CHECK(sizeof(ta_otlp_exemplar) == 40, otlp_exemplar_size);
 ABI_CHECK(sizeof(ta_otlp_cursor) == 48, otlp_cursor_size);
 

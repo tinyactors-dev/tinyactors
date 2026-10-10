@@ -692,6 +692,7 @@ static JSValue h_create_system(JSContext *context, JSValueConst this_value, int 
     }
     ta_system_config config;
     memset(&config, 0, sizeof config);
+    ta_trace_policy trace_policy; /* copied when the host is made */
     size_t memory_limit = 0;
     int trace_mode = TRACE_RECORDS;
     if (argc > 2 && JS_IsObject(argv[2])) {
@@ -710,11 +711,18 @@ static JSValue h_create_system(JSContext *context, JSValueConst this_value, int 
         if (mode && !strcmp(mode, "otlp")) trace_mode = TRACE_OTLP;
         JSValue detail = JS_GetPropertyStr(context, argv[2], "traceDetail");
         const char *level = JS_IsString(detail) ? JS_ToCString(context, detail) : NULL;
-        if (level && !strcmp(level, "summary")) config.trace_kinds = TA_TRACE_SUMMARY;
-        if (level && !strcmp(level, "decisions")) config.trace_kinds = TA_TRACE_DECISIONS;
+        uint32_t kinds = TA_TRACE_FULL;
+        if (level && !strcmp(level, "summary")) kinds = TA_TRACE_SUMMARY;
+        if (level && !strcmp(level, "decisions")) kinds = TA_TRACE_DECISIONS;
         if (level &&
             !strcmp(level, "none")) /* contexts flow, no records (a binding without a sink) */
-            config.trace_kinds = TA_TRACE_BIT(TA_TRACE_DROPPED);
+            kinds = TA_TRACE_BIT(TA_TRACE_DROPPED);
+        ta_trace_policy_default(&trace_policy);
+        trace_policy.kinds[TA_TRACE_DETAIL_SAMPLED] = kinds;
+        trace_policy.kinds[TA_TRACE_DETAIL_UNSAMPLED] = kinds & TA_TRACE_LIFECYCLE;
+        if (kinds == TA_TRACE_BIT(TA_TRACE_DROPPED))
+            trace_policy.kinds[TA_TRACE_DETAIL_UNSAMPLED] = kinds;
+        config.trace_policy = &trace_policy;
         if (mode) JS_FreeCString(context, mode);
         if (level) JS_FreeCString(context, level);
         JS_FreeValue(context, tracing);
@@ -1394,7 +1402,8 @@ static double machine_memory_available(void) {
 static double rss_bytes(void) {
     mach_task_basic_info_data_t info;
     mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
-    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) != KERN_SUCCESS)
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) !=
+        KERN_SUCCESS)
         return 0;
     return (double)info.resident_size;
 }

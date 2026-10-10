@@ -21,6 +21,7 @@ uint32_t ta_system_start_trace(ta_system *system, ta_string_view traceparent,
     }
     system->stats_traces_started++;
     if (!(value->flags & TA_TRACE_FLAG_SAMPLED)) return TA_NIL; /* unsampled: no context */
+    value->flags |= (uint32_t)TA_TRACE_DETAIL_SAMPLED << TA_TRACE_DETAIL_SHIFT;
     system->stats_traces_sampled++;
     return ta_trace_context_new(&system->core, value->trace, value->flags, cause);
 }
@@ -29,7 +30,10 @@ ta_trace_record *ta_system_trace_lifecycle(ta_system *system, uint32_t index, ui
                                            uint32_t size, const ta_trace_context *context,
                                            uint64_t macrostep, uint32_t step) {
     ta_core *core = &system->core;
-    if (!ta_core_traces(core, kind) || !core->journal) return (ta_trace_record *)0;
+    if (!(core->trace_kinds & TA_TRACE_BIT(kind)) ||
+        !(core->class_kinds[TA_TRACE_DETAIL(context->flags)] & TA_TRACE_BIT(kind)) ||
+        !core->journal)
+        return (ta_trace_record *)0;
     ta_trace_record *record =
         ta_trace_record_reserve(core->journal, kind, size, core->trace_clock, core->trace_now);
     if (!record) return record;
@@ -83,15 +87,37 @@ void ta_system_trace_clock(ta_system *system, uint64_t at_least) {
     system->core.trace_clock = system->fuel_clock;
 }
 
-ta_status ta_system_trace_set(ta_system *system, uint32_t kinds, uint32_t sample_parts,
-                              uint32_t sample_whole) {
+void ta_trace_policy_default(ta_trace_policy *policy) {
+    ta_memset(policy, 0, sizeof *policy);
+    policy->size = sizeof *policy;
+    policy->sample_parts = policy->sample_whole = 1;
+    policy->kinds[TA_TRACE_DETAIL_UNSAMPLED] = TA_TRACE_LIFECYCLE;
+    policy->kinds[TA_TRACE_DETAIL_SAMPLED] = TA_TRACE_FULL;
+    policy->kinds[TA_TRACE_DETAIL_WATCHED] = TA_TRACE_FULL;
+}
+
+void ta_system_trace_policy_apply(ta_system *system) {
+    ta_core *core = &system->core;
+    const ta_trace_policy *policy = &system->policy;
+    int tracing = system->config.tracing == TA_TRACING_ENABLED;
+    core->trace_kinds = 0;
+    for (uint32_t i = 0; i < TA_TRACE_DETAILS; i++) {
+        core->class_kinds[i] = tracing ? policy->kinds[i] : 0;
+        core->trace_kinds |= core->class_kinds[i];
+    }
+    system->trace_threshold =
+        policy->sample_whole ? ta_trace_ratio_threshold(policy->sample_parts, policy->sample_whole)
+                             : ta_trace_ratio_threshold(1, 1);
+}
+
+ta_status ta_system_trace_set(ta_system *system, const ta_trace_policy *policy) {
     if (system->in_call) return TA_ERROR_STATE;
     if (system->config.tracing == TA_TRACING_DISABLED) return TA_ERROR_STATE;
-    if (!sample_whole) sample_parts = sample_whole = 1;
-    system->config.trace_kinds = kinds ? kinds : TA_TRACE_FULL;
-    system->config.trace_sample_parts = sample_parts;
-    system->config.trace_sample_whole = sample_whole;
-    system->core.trace_kinds = system->config.trace_kinds;
-    system->trace_threshold = ta_trace_ratio_threshold(sample_parts, sample_whole);
+    ta_trace_policy_default(&system->policy);
+    ta_memcpy(&system->policy, policy,
+              policy->size && policy->size < sizeof system->policy ? policy->size
+                                                                   : sizeof system->policy);
+    system->policy.size = sizeof system->policy;
+    ta_system_trace_policy_apply(system);
     return TA_OK;
 }

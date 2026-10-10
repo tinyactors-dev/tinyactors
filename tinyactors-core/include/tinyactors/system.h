@@ -64,6 +64,8 @@ enum {
 #define TA_SYSTEM_MAX_ACTORS 8388606u  /* 2^23 - 2 */
 #define TA_SYSTEM_MAX_POOL   16777214u /* events, timers, workspaces: 2^24 - 2 */
 
+typedef struct ta_trace_policy ta_trace_policy;
+
 typedef struct ta_system_config {
     uint32_t size;
     uint32_t max_actors;     /* clamped to TA_SYSTEM_MAX_ACTORS; other pools to 2^24 - 2 */
@@ -83,12 +85,12 @@ typedef struct ta_system_config {
     /* Tracing (docs/adr/0006 in the repository root): on by default, at full
      * detail. TA_TRACING_DISABLED carves nothing for it. */
     uint32_t tracing;        /* TA_TRACING_ENABLED (0) / TA_TRACING_DISABLED */
-    uint32_t trace_kinds;    /* TA_TRACE_* kinds to write; 0 = TA_TRACE_FULL (no values) */
     uint32_t trace_bytes;    /* the trace journal; 0 = 512 per event, at least 64 KiB */
     uint32_t trace_contexts; /* the pool of trace contexts; 0 = max_events */
-    /* the share of the traces the system starts that are sampled: parts /
-     * whole (TraceIDRatioBased); whole 0 = 1 / 1 */
-    uint32_t trace_sample_parts, trace_sample_whole;
+    uint32_t pad2;
+    /* what is sampled and which kinds each detail class writes; copied at
+     * init (NULL: ta_trace_policy_default) */
+    const ta_trace_policy *trace_policy;
     uint64_t trace_seed; /* the trace ID generator's seed: the same seed, the same IDs */
 } ta_system_config;
 enum { TA_TRACING_ENABLED = 0, TA_TRACING_DISABLED = 1 };
@@ -296,11 +298,23 @@ TA_API ta_status ta_system_chart_stats_get(const ta_system *system, uint32_t cha
 TA_API uint32_t ta_system_trace(ta_system *system, ta_trace_view *view);
 TA_API void ta_system_trace_ack(ta_system *system, uint32_t bytes);
 TA_API void ta_system_trace_clock(ta_system *system, uint64_t at_least);
-/* Change the kinds written and the sampling ratio (as in ta_system_config;
- * 0 kinds is TA_TRACE_FULL, whole 0 is 1 / 1). TA_ERROR_STATE when tracing
- * is off. */
-TA_API ta_status ta_system_trace_set(ta_system *system, uint32_t kinds, uint32_t sample_parts,
-                                     uint32_t sample_whole);
+/* The tracing policy (docs/adr/0007): the share of the traces the system
+ * starts that are sampled, parts / whole (TraceIDRatioBased on the trace ID;
+ * whole 0 is 1 / 1; a traceparent keeps its caller's decision), and the
+ * kinds each detail class writes (TA_TRACE_DETAIL in trace.h). A sampled
+ * trace the system starts or takes in is TA_TRACE_DETAIL_SAMPLED, an
+ * unsampled one TA_TRACE_DETAIL_UNSAMPLED. */
+struct ta_trace_policy {
+    uint32_t size;
+    uint32_t sample_parts, sample_whole;
+    uint32_t kinds[TA_TRACE_DETAILS]; /* TA_TRACE_* masks, TA_TRACE_VALUES included */
+};
+/* Every trace sampled; unsampled: TA_TRACE_LIFECYCLE (lifecycle records are
+ * written whatever the sampling); sampled and watched: TA_TRACE_FULL. */
+TA_API void ta_trace_policy_default(ta_trace_policy *policy);
+/* Replace the policy between runs; open spans are not affected.
+ * TA_ERROR_STATE when tracing is off. */
+TA_API ta_status ta_system_trace_set(ta_system *system, const ta_trace_policy *policy);
 
 /* ---- hibernation (host-driven: the system never does I/O) ----------------
  * An idle actor can be unloaded from RAM: ta_actor_hibernate() writes a blob

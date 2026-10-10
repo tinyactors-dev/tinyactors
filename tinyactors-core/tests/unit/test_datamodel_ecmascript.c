@@ -221,7 +221,10 @@ static void test_traced_values_are_let_go(void) {
            "</transition></state><state id='b'><transition event='shrink' target='a'>"
            "<assign location='big' expr='null'/></transition></state>"),
         NULL));
-    CHECK_EQUAL(ta_system_trace_set(t.system, TA_TRACE_FULL | TA_TRACE_VALUES, 1, 1), TA_OK);
+    ta_trace_policy policy;
+    ta_trace_policy_default(&policy);
+    policy.kinds[TA_TRACE_DETAIL_SAMPLED] = TA_TRACE_FULL | TA_TRACE_VALUES;
+    CHECK_EQUAL(ta_system_trace_set(t.system, &policy), TA_OK);
     ecmascript_run(&t);
     ta_event_in event;
     memset(&event, 0, sizeof event);
