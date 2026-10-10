@@ -7,7 +7,7 @@
 
 # The npm packages (mise/node_package.rb, docs/adr/0001-packaging-and-releases.md):
 #
-# - @tinyactors/node, staged into build/node/npm/node/: node/ and shared/
+# - @tinyactors/node, staged into build/node/npm/node/: node/
 #   (NodePackage::FILES), README.md and LICENSE, and a package.json made
 #   from bindings/node/package.json, without scripts or devDependencies,
 #   whose main and types point into node/, and with optionalDependencies on

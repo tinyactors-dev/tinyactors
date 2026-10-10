@@ -2,7 +2,7 @@
 /**
  * The OpenTelemetry environment variables, read once, as the exporter
  * settings core.mjs takes (createSystem({ telemetry }) wins over them).
- * Only the Node.js entry reads the environment: bindings/shared and the C
+ * Only the Node.js entry reads the environment: core.mjs and the C
  * layers never do.
  *
  *   OTEL_EXPORTER_OTLP_ENDPOINT         base URL; /v1/traces, /v1/logs and /v1/metrics are added

@@ -5,9 +5,8 @@
 # platform packages, where the release addons and the tarballs go, and the
 # version. The npm packages are
 #
-# - @tinyactors/node: the binding's JavaScript, bindings/node/ and
-#   bindings/shared/ under node/ and shared/ as in the repository, so the
-#   relative imports between them are the same, and optionalDependencies on
+# - @tinyactors/node: the binding's JavaScript, bindings/node/ under node/,
+#   and optionalDependencies on
 #   every platform package at exactly its own version;
 # - @tinyactors/node-<platform>-<arch>: one addon, tinyactors.node, built by
 #   `mise run node:build --target <target>`, with `os` and `cpu` and no
@@ -22,7 +21,6 @@ require_relative 'core'
 
 module NodePackage
   BINDING = Core::ROOT.join('bindings/node')
-  SHARED = Core::ROOT.join('bindings/shared')
   PACKAGE_JSON = BINDING.join('package.json')
   LICENSE = Core::ROOT.join('../LICENSE').expand_path
   SMOKE = BINDING.join('test/smoke')
@@ -42,7 +40,7 @@ module NodePackage
 
   # The files of the main package, relative to bindings/: what index.js and
   # index.d.ts reach.
-  FILES = %w[node/index.js node/index.d.ts node/transports.js node/ws.js node/telemetry.js shared/core.mjs].freeze
+  FILES = %w[node/index.js node/index.d.ts node/core.mjs node/transports.js node/ws.js node/telemetry.js].freeze
 
   module_function
 

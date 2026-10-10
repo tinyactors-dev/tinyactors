@@ -312,10 +312,10 @@ test('Node.js: OTEL_SDK_DISABLED turns the export off', { skip: process.env.TA_B
   });
 });
 
-test('nothing in bindings/shared reads the environment', () => {
-  const shared = path.join(__dirname, '../../shared');
-  for (const file of fs.readdirSync(shared)) {
-    const text = fs.readFileSync(path.join(shared, file), 'utf8');
+test('only the Node.js entry reads the environment (telemetry.js): not the API, the addon or the web binding', () => {
+  const root = path.join(__dirname, '../..');
+  for (const file of ['node/core.mjs', 'node/src/binding.c', 'web/core.mjs', 'web/native.mjs', 'web/index.mjs', 'web/node.mjs']) {
+    const text = fs.readFileSync(path.join(root, file), 'utf8');
     assert.ok(!/process\.env|\bgetenv\s*\(|Deno\.env|Bun\.env/.test(text), `${file} reads the environment`);
   }
 });

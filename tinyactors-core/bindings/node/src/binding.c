@@ -1,9 +1,7 @@
-/* binding.c — the native side of the JavaScript bindings (Node-API).
+/* binding.c — the native side of the Node.js binding (Node-API).
  *
- * Both builds compile this file: the Node.js addon against Node's own
- * Node-API, the web module against the synchronous subset in
- * web/src/node_api.h (implemented by web/native.mjs). core.mjs is the JS
- * API on top; this file owns everything that is not JavaScript-specific.
+ * The addon compiles it against Node's own Node-API; core.mjs is the JS API
+ * on top, and this file owns everything that is not JavaScript-specific.
  *
  * Pure functions (hand-written wrappers of the core's public headers):
  *

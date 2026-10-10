@@ -351,8 +351,9 @@ module CRelease
   # must still import nothing (verify_wasm!): its wasm platform files define
   # whatever WASI functions wasi-libc would import (decision 20). It exports
   # _initialize beside the API, which runs the C library's constructors; a
-  # host calls it once first, as the web binding does.
-  def build_wasm(project, out, uses: [])
+  # host calls it once first, as the web binding does. `link_flags` go to
+  # the linker beside those (the web binding exports its function table).
+  def build_wasm(project, out, uses: [], link_flags: [])
     api_target = Toolchain::Target.release(WASM)
     target = project.libc ? Toolchain::Target.zig('wasm32-wasi') : api_target
     dir = out.join(api_target.name, project.name)
@@ -369,7 +370,7 @@ module CRelease
     end
     exports = [*uses, project].flat_map { |library| api_functions(library, target: api_target) }.uniq.sort
     wasm = target.wasm_module(objects, into: dir.join("#{project.name}.wasm"), exports: exports,
-                                       flags: project.libc ? %w[-mexec-model=reactor] : []).path
+                                       flags: [*(project.libc ? %w[-mexec-model=reactor] : []), *link_flags]).path
     FileUtils.mkdir_p(dir.join('include'))
     [*uses, project].each { |library| FileUtils.cp(library.header, dir.join('include')) }
     { target: api_target, dir: dir, wasm: wasm, extra: [wasm], asset: 'wasm32', exports: exports,

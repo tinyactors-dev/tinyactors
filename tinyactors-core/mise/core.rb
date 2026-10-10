@@ -5,7 +5,6 @@
 # replaces the CMake build the library came with (docs/layout.md): the layers
 # are static archives, built with the pinned toolchain (mise/lib/toolchain/)
 # and reused while their bytes are unchanged (mise/lib/cache.rb).
-require 'digest'
 require 'etc'
 require 'fileutils'
 require 'pathname'
@@ -367,7 +366,7 @@ module Core
   # the Node-API headers that ship with the pinned node, and the layers it
   # links.
   NODE_LAYERS = %w[host runtime system compile otlp datamodel_ecmascript].freeze
-  NODE_SOURCES = %w[bindings/node/src/addon.c bindings/shared/binding.c].freeze
+  NODE_SOURCES = %w[bindings/node/src/addon.c bindings/node/src/binding.c].freeze
 
   # Builds the addon's layers and compiles its own sources for the build
   # `variant_name`; answers what links it: its objects, then the archives.
@@ -387,38 +386,6 @@ module Core
     [*objects, *link_order(NODE_LAYERS).map { |name| archive_path(variant_name, name).to_s }]
   end
 
-  # The web binding (mise run web:build): a wasm32-wasi reactor of the
-  # runtime and its JS glue, built with the pinned zig. It gives the host the
-  # C library's allocator (ta_runtime_malloc in runtime.c); runtime_hosted.c
-  # (files, the clock) it does not need.
-  def web_sources
-    link_order(%w[host compile otlp]).flat_map { |name| LAYERS.fetch(name).sources } +
-      %w[src/runtime/runtime.c src/datamodel_ecmascript/datamodel_ecmascript.c bindings/shared/binding.c
-         bindings/web/src/glue.c]
-  end
-
-  # The ECMAScript engine the web binding's quickjs datamodel runs on, compiled
-  # with its own flags (third_party/ is not held to the project's warnings);
-  # browser_wasm.c gives it a clock and no files in place of WASI imports.
-  def web_engine_sources = [*LAYERS.fetch('quickjs').sources, 'src/datamodel_ecmascript/browser_wasm.c']
-
-  def web_target = Toolchain::Target.zig('wasm32-wasi')
-
-  # Links the web binding's module into `into`, compiled with `flags` (its
-  # optimization) beside the binding's own. A reactor: no main, its exports
-  # named in glue.c.
-  def link_web(into:, flags:)
-    target = web_target
-    objects = web_engine_sources.map do |source|
-      object = BUILD.join('web', Digest::SHA256.hexdigest(flags.join(' '))[0, 12], "#{File.basename(source, '.c')}.o")
-      target.compile(source, into: object.to_s, includes: %w[include third_party/quickjs-ng], flags: [*flags, *QUICKJS_FLAGS])
-      object.to_s
-    end
-    target.program([*web_sources, *objects], into: into.to_s,
-                                             flags: [*target.cflags, '-mexec-model=reactor', *flags, '-std=c11',
-                                                     '-Wall', '-Wextra', '-Werror', '-Iinclude', '-Isrc',
-                                                     '-Ibindings/web/src', '-isystem', 'third_party/quickjs-ng'])
-  end
 
   # Runs the block for each item on a thread per CPU; the block's own
   # commands run as child processes, so the threads only wait.

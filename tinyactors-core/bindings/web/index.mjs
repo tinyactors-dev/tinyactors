@@ -1,26 +1,25 @@
 /**
- * tinyactors for browsers — the same API as the Node.js binding
- * (bindings/shared/core.mjs), over the tinyactors runtime compiled to
- * WebAssembly (tinyactors.wasm).
+ * tinyactors for browsers — the same API as the Node.js binding, over the
+ * tinyactors libraries compiled to WebAssembly (tinyactors.wasm) and driven
+ * from JavaScript (native.mjs).
  *
  *   import { scxml, createSystem, createActor } from './bindings/web/index.mjs';
  */
-import { createRuntime } from '../shared/core.mjs';
+import { createRuntime } from './core.mjs';
 import { createNative } from './native.mjs';
 
 const url = new URL('./tinyactors.wasm', import.meta.url);
-const native = await createNative(async (imports) => {
-  const response = fetch(url);
+const instantiate = async () => {
   if (WebAssembly.instantiateStreaming) {
     try {
-      return (await WebAssembly.instantiateStreaming(response, imports)).instance;
+      return (await WebAssembly.instantiateStreaming(fetch(url), {})).instance;
     } catch {
       /* e.g. served without application/wasm: fall back to bytes */
     }
   }
-  const bytes = await (await fetch(url)).arrayBuffer();
-  return (await WebAssembly.instantiate(bytes, imports)).instance;
-});
+  return (await WebAssembly.instantiate(await (await fetch(url)).arrayBuffer(), {})).instance;
+};
+const native = createNative(await instantiate());
 
 /* setImmediate for browsers: a MessageChannel turn (not clamped like setTimeout) */
 const channel = new MessageChannel();

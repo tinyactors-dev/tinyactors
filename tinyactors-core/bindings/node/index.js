@@ -1,10 +1,10 @@
 'use strict';
 /**
- * tinyactors for Node.js — the API of bindings/shared/core.mjs over the
- * native addon (src/addon.c and bindings/shared/binding.c, against Node-API).
+ * tinyactors for Node.js — the API of core.mjs over the native addon
+ * (src/addon.c and src/binding.c, against Node-API).
  */
 const path = require('path');
-const { createRuntime } = require('../shared/core.mjs');
+const { createRuntime } = require('./core.mjs');
 const { httpPost } = require('./transports');
 const { telemetryFromEnvironment } = require('./telemetry');
 

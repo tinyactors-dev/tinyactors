@@ -75,7 +75,7 @@
     "ta_core_step": {"skip": "kernel-only embedding; the bindings embed ta_system"},
     "ta_core_workspace_size": {"skip": "kernel-only embedding; the bindings embed ta_system"},
     "ta_datamodel_environment_in": "bind",
-    "ta_datamodel_environment_charge": {"skip": "the native datamodel's JavaScript is not metered: the core charges each datamodel call a fixed fuel cost, and the run loop bounds a call by its rounds (RUN_ROUNDS x RUN_BUDGET in bindings/shared/binding.c)"},
+    "ta_datamodel_environment_charge": {"skip": "the native datamodel's JavaScript is not metered: the core charges each datamodel call a fixed fuel cost, and the run loop bounds a call by its rounds (RUN_ROUNDS x RUN_BUDGET in bindings/node/src/binding.c and bindings/web/native.mjs)"},
     "ta_datamodel_environment_chart": {"skip": "the bindings' datamodels keep the chart of each instance themselves"},
     "ta_datamodel_environment_image": {"skip": "the bindings' datamodels keep the image of each instance themselves"},
     "ta_datamodel_null": {"skip": "bound implicitly: ta_system_init adds the null datamodel when the host does not"},
@@ -207,7 +207,7 @@
     "ta_actor_export": "bind",
     "ta_blob_migrate": "bind",
     "ta_blob_rebase": "bind",
-    "ta_wasm_alloc": {"skip": "the allocator of the release's standalone wasm modules, which import nothing (docs/distribution.md); the web binding is a wasm32-wasi reactor that gives JavaScript the C library's malloc (w_alloc/w_free in bindings/web/src/glue.c) and the library ta_runtime_malloc, and the Node.js addon is native, where wasm.h declares nothing"},
-    "ta_wasm_free": {"skip": "the allocator of the release's standalone wasm modules (see ta_wasm_alloc); the web binding frees with the C library (w_free in bindings/web/src/glue.c)"}
+    "ta_wasm_alloc": {"bind": ["web"], "skip": "a wasm module's own allocator: the web binding places what it hands the libraries with it; the Node.js addon is native code and has no wasm memory"},
+    "ta_wasm_free": {"bind": ["web"], "skip": "see ta_wasm_alloc: the web binding gives its blocks back with it; the Node.js addon has no wasm memory"}
   }
 }

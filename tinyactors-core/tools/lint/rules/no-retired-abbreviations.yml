@@ -12,7 +12,7 @@
 #  fmt fn fns eq cstr mem fini st stf trf tgt ctx cfg img imgs hdr mb efx pay runq wsq wakeq hwm
 #  cls dflt hdflt rel off idx msg seg segs cx ch trans
 # Names we do not choose are exempt: the N-API subset mirrored in
-# bindings/web/src/node_api.h (napi_*), PostgreSQL's _PG_init and the POSIX
+# Node's node_api.h (napi_*), PostgreSQL's _PG_init and the POSIX
 # MSG_NOSIGNAL fallback. Uses of other libraries' names are never checked,
 # only declarations. Run with `mise run lint` (part of `mise run ci` and of
 # the completion gate, tools/check_layers.py).

@@ -2,45 +2,46 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 
-test('wasm externals: a system retains its image, then both finalize exactly once', () => {
-  // A separate process enables deterministic GC pressure without changing the
-  // test runner's flags. Observe real C finalizers, not a mock registry.
+// wasm memory is the binding's to give back: a system's blocks on destroy, an
+// image's when nothing holds it (a FinalizationRegistry), and a system holds
+// the images it runs. A separate process gives deterministic GC pressure
+// without changing the test runner's flags.
+test('wasm memory: systems give theirs back on destroy, images live while a system runs them', () => {
   const child = spawnSync(process.execPath, ['--expose-gc', '--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     import { readFileSync } from 'node:fs';
     import { createNative } from ${JSON.stringify(new URL('../native.mjs', import.meta.url).href)};
-    let finalized = 0;
-    const module = new WebAssembly.Module(readFileSync(new URL(${JSON.stringify(new URL('../tinyactors.wasm', import.meta.url).href)})));
-    const native = createNative((imports) => {
-      const instance = new WebAssembly.Instance(module, imports);
-      return { exports: { ...instance.exports, w_finalize(...args) {
-        finalized++;
-        instance.exports.w_finalize(...args);
-      } } };
-    });
-    function createSystem() {
-      // Like core.mjs, callbacks close over their owner, which owns the handle.
-      // Destroy must break these strong-reference cycles before GC can run.
+    const instance = new WebAssembly.Instance(new WebAssembly.Module(readFileSync(new URL(${JSON.stringify(new URL('../tinyactors.wasm', import.meta.url).href)}))), {});
+    const native = createNative(instance);
+    const xml = '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" initial="idle">' +
+      '<datamodel><data id="n" expr="0"/></datamodel><state id="idle"><transition event="inc"><assign location="n" expr="n + 1"/></transition></state></scxml>';
+    const turn = () => new Promise((resolve) => setTimeout(resolve, 2));
+    const callbacks = (owner) => ({ resolve: (source, texts) => texts.map((t) => (t === '0' ? () => 0 : t === 'n + 1' ? (s) => s.n + 1 : t === 'n' ? (s, v) => { s.n = v; } : undefined)), effects: () => owner, sync() {}, ref: (a) => a });
+    const round = (ecmascript) => {
       const owner = {};
-      owner.system = native.createSystem({ resolve: () => { void owner.system; return []; }, effects: () => owner, ref: (a) => a }, { systemID: 'gc' });
-      return owner.system;
+      owner.system = native.createSystem(callbacks(owner), { systemID: 'gc', ecmascript });
+      native.addImage(owner.system, native.compile([{ name: 'gc', xml }], []));
+      const session = native.spawn(owner.system, 0, 0, undefined, undefined, undefined, 0);
+      native.pump(owner.system, 0);
+      for (let i = 0; i < 20; i++) native.send(owner.system, session, 'inc', undefined, undefined, 0);
+      native.destroy(owner.system);
+    };
+    /* a held system keeps its image through collections */
+    const owner = {};
+    owner.system = native.createSystem(callbacks(owner), { systemID: 'held' });
+    native.addImage(owner.system, native.compile([{ name: 'gc', xml }], []));
+    for (let i = 0; i < 5; i++) { global.gc(); await turn(); }
+    const session = native.spawn(owner.system, 0, 0, undefined, undefined, undefined, 0);
+    native.pump(owner.system, 0);
+    assert.ok(session > 0, 'the image a system runs survives collections');
+    native.destroy(owner.system);
+    /* many systems, both datamodels: memory steady */
+    const pages = [];
+    for (let i = 0; i < 300; i++) {
+      round(i % 2 ? 'quickjs' : 'native');
+      if (i % 50 === 49) { for (let k = 0; k < 3; k++) { global.gc(); await turn(); } pages.push(instance.exports.memory.buffer.byteLength / 65536); }
     }
-    let host = createSystem();
-    (() => {
-      const image = native.compile([{ name: 'gc', xml: '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"><state id="idle"/></scxml>' }], []);
-      native.addImage(host, image);
-      native.spawn(host, 0, 0, undefined, undefined, undefined, 0);
-      native.pump(host, 0);
-    })();
-    const turn = () => new Promise((resolve) => setTimeout(resolve, 5));
-    for (let i = 0; i < 5; i++) { global.gc(); await turn(); }
-    assert.equal(finalized, 0, 'the C image reference survives call-scope cleanup');
-    native.destroy(host);
-    host = null;
-    for (let i = 0; i < 100 && finalized < 2; i++) { global.gc(); await turn(); }
-    assert.equal(finalized, 2, 'system and image finalizers both run');
-    for (let i = 0; i < 5; i++) { global.gc(); await turn(); }
-    assert.equal(finalized, 2, 'no double finalization after explicit destroy');
-  `], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(pages.at(-1), pages[1], 'memory grows with every system: ' + pages.join(' '));
+  `], { encoding: 'utf8', timeout: 60000 });
   assert.equal(child.status, 0, child.stderr || String(child.error));
 });

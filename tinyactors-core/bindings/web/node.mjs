@@ -7,12 +7,12 @@
  */
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { createRuntime } from '../shared/core.mjs';
+import { createRuntime } from './core.mjs';
 import { createNative } from './native.mjs';
 
 const bytes = readFileSync(new URL('./tinyactors.wasm', import.meta.url));
 const { httpPost, withNodeTransports } = createRequire(import.meta.url)('../node/transports.js');
-const native = createNative((imports) => new WebAssembly.Instance(new WebAssembly.Module(bytes), imports));
+const native = createNative(new WebAssembly.Instance(new WebAssembly.Module(bytes), {}));
 
 const api = createRuntime({
   native,

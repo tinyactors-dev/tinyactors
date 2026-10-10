@@ -14,10 +14,11 @@
   "files": [
     "index.mjs",
     "node.mjs",
+    "core.mjs",
     "native.mjs",
+    "api.mjs",
     "index.d.ts",
-    "tinyactors.wasm",
-    "src/glue.c"
+    "tinyactors.wasm"
   ],
   "license": "MIT",
   "engines": {

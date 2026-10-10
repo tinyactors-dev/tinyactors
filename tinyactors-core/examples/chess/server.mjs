@@ -41,7 +41,7 @@ const { lobby } = chessActors(ta, system, { records: records && records.ref });
 const lobbyActor = ta.createActor(lobby, { system, systemID: 'lobby' }).start();
 
 const MIME = { '.html': 'text/html', '.mjs': 'text/javascript', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.json': 'application/json' };
-const PUBLIC = ['/examples/chess/', '/bindings/web/', '/bindings/shared/'];
+const PUBLIC = ['/examples/chess/', '/bindings/web/'];
 
 const server = http.createServer(async (req, res) => {
   let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);

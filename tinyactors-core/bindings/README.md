@@ -73,34 +73,44 @@ Rules for every binding:
 3. Copy or retain anything taken from an effect before the next mutating call.
 4. Datamodel vtables are the only callbacks; they must not call `ta_system_*`.
 
-## JavaScript binding seam
+## The JavaScript bindings
 
-`shared/binding.c` is the native side of `shared/core.mjs`: hand-written
-wrappers of the pure functions of the public headers (compile, images,
-addresses, frames, traceparents, OTLP), and a `System` over `ta_host` with
-its datamodel (the native `ecmascript` vtable, or the C one on quickjs-ng
-behind a thin forwarding vtable), its run loop and effect delivery: one
-call per pump hands JavaScript every effect, the sessions whose variables
-changed and the OTLP bytes. Neutral values (`$bytes`, `$ref`) are written
-and read in C, and `TA_EFFECT_REQUEST` is answered in C. Both builds
-compile this exact C source; `core.mjs` holds no actor logic.
+`node/` and `web/` give JavaScript the same API (`core.mjs` in each, the
+same `index.d.ts`) and share no code: each drives the core its own way.
 
-The value seam is the synchronous subset of Node-API. `node/src/addon.c`
-registers the shared core against Node's real API. `web/src/node_api.h`
-declares the subset as wasm imports; `web/native.mjs` supplies objects,
-properties, callbacks, exceptions, strong references and byte buffers.
-`web/src/glue.c` only exports registration, callback/finalizer trampolines
-and allocation. It is not a general Node-API polyfill (no async work, weak
-references, classes, or arbitrary typed arrays).
+**Node.js** (`node/`): `src/binding.c` is the native side of `core.mjs`:
+hand-written wrappers of the pure functions of the public headers
+(compile, images, addresses, frames, traceparents, OTLP), and a `System`
+over `ta_host` with its datamodel (the native `ecmascript` vtable, values
+as Node-API references, or the C one on quickjs-ng behind a thin
+forwarding vtable), its run loop and effect delivery: one call per pump
+hands JavaScript every effect, the sessions whose variables changed and
+the OTLP bytes. `src/addon.c` registers it with Node.
 
-Wasm values live in a per-call handle scope; strong references outlive scopes.
-External handles have GC finalizers. Byte buffers are mirrored into wasm memory
-for the call, synchronized at JS callbacks and copied back before return; output
-buffers therefore survive memory growth and scope cleanup. Nested calls get their
-own scopes.
+**Browsers** (`web/`): no C of its own. `tinyactors.wasm` is the release's
+three libraries (`tinyactors`, `tinyactors_runtime`,
+`tinyactors_datamodel_ecmascript`) linked into one module as the release
+links its modules, importing nothing, exporting the public API and a
+function table (`mise run web:build`). `native.mjs` gives `core.mjs` the
+same calls `binding.c` gives Node's, written in JavaScript over that API:
 
-Hibernation and export blobs of the native datamodel hold neutral values,
-so they move between the Node and web builds. Snapshots remain
-build-specific, and a snapshot of an earlier region layout is refused (ADR
-0006 in the repository root changed it). `node:test` and `web:test` run the same tests;
-`web:test` also runs the adapter unit tests in `tests/unit/test_js_adapter.mjs`.
+- structs are read and written at the wasm32 offsets of `api.mjs`, which
+  web:build generates from the API descriptions; a struct passed by value
+  is a pointer to a copy, one returned by value is written through a
+  pointer given first (the wasm32 C ABI);
+- what it hands the libraries lives in the module's memory
+  (`ta_wasm_alloc`): scratch released after each call, a system's blocks
+  until it is destroyed, an image's until nothing holds it;
+- the JavaScript `ecmascript` datamodel's vtable entries are JavaScript
+  functions, made wasm functions by a small module generated at load and
+  placed in the function table: the core calls them directly, with
+  integer handles for sessions and payloads;
+- the quickjs datamodel is the engine's own vtable, with the few entries
+  the binding needs to see (sessions created, destroyed, bound to an
+  event) in front of the engine's.
+
+Hibernation and export blobs of the native datamodels hold neutral values,
+so they move between the two bindings. Snapshots remain build-specific,
+and a snapshot of an earlier region layout is refused (ADR 0006 in the
+repository root changed it). `node:test` runs the suites against the
+addon, `web:test` the same suites against the web binding.

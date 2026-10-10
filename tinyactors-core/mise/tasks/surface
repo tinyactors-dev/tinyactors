@@ -22,21 +22,23 @@
 #    one per library of Core::LIBRARIES; a header of include/tinyactors/
 #    that no library publishes is an error, since no description reads it.
 #
-# 2. Reachability, decided by the linker. Each binding is compiled from the
-#    sources its real build uses (Core.node_addon_inputs, Core.web_sources),
-#    unoptimized with a section per function (Core::UNOPTIMIZED), and
-#    linked with dead-code elimination from its entry points. A function is
-#    reachable when it survives: some path of calls or function pointers
-#    from an entry point reaches it.
-#    - node: a relocatable link of the addon for x86_64 Linux ELF (the
-#      pinned zig's ld.lld, -r --gc-sections), rooted at
-#      napi_register_module_v1; the N-API functions stay undefined, as the
-#      process that loads the addon provides them. One fixed target, so the
-#      answer is the same on macOS, whose linker garbage-collects only what
-#      it links whole, and on Linux.
-#    - web: the wasm32-wasi reactor, as web:build links it; wasm-ld always
-#      collects garbage, and the exports glue.c names are the roots. Its
-#      functions are read from the module's name section.
+# 2. Reachability.
+#    - node, decided by the linker: the addon is compiled from the sources
+#      its real build uses (Core.node_addon_inputs), unoptimized with a
+#      section per function (Core::UNOPTIMIZED), and linked relocatably for
+#      x86_64 Linux ELF (the pinned zig's ld.lld, -r --gc-sections), rooted
+#      at napi_register_module_v1; the N-API functions stay undefined, as
+#      the process that loads the addon provides them. A function is
+#      reachable when it survives: some path of calls or function pointers
+#      from the entry point reaches it. One fixed target, so the answer is
+#      the same on macOS, whose linker garbage-collects only what it links
+#      whole, and on Linux.
+#    - web, decided by the linker too: its module exports the whole API
+#      (web:build) and JavaScript calls into it, so the roots are the
+#      functions bindings/web/native.mjs calls (`x.ta_...`); the libraries
+#      are compiled unoptimized and linked as web:build links them,
+#      exporting only those, and a function is reachable when it survives
+#      (its functions are read from the module's name section).
 #
 # 3. Typings. Every export of each binding as loaded (bindings/node through
 #    index.js, bindings/web/node.mjs) and every public method, getter and
@@ -85,7 +87,20 @@ def node_functions
         .defined
 end
 
-def web_functions = Core.link_web(into: OUT.join('web.wasm'), flags: Core::UNOPTIMIZED).defined
+# The web module's libraries, compiled unoptimized and linked as web:build
+# links them but exporting only what bindings/web/native.mjs calls: what
+# survives is what the binding reaches.
+def web_functions
+  target = Toolchain::Target.zig('wasm32-wasi')
+  libraries = %w[tinyactors tinyactors_runtime tinyactors_datamodel_ecmascript].map { |name| Core.library(name) }
+  sources = [*libraries.map(&:amalgamation), libraries.last.platform_amalgamation('wasm')]
+  objects = sources.map do |source|
+    target.compile(source, into: OUT.join('web', "#{source.basename('.c')}.o").to_s, includes: [Core::DIST],
+                           flags: [*Core::UNOPTIMIZED, '-g0', *Core::QUICKJS_FLAGS]).path
+  end
+  roots = Core::ROOT.join('bindings/web/native.mjs').read.scan(/\bx\.(ta_\w+)/).flatten.uniq
+  target.wasm_module(objects, into: OUT.join('web.wasm').to_s, exports: roots, flags: %w[-mexec-model=reactor]).defined
+end
 
 LINKS = { 'node' => -> { node_functions }, 'web' => -> { web_functions } }.freeze
 linked = {}

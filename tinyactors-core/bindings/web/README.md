@@ -1,15 +1,16 @@
 # tinyactors for browsers (and anything with WebAssembly)
 
-The same API as the [Node.js binding](../node) — the same `index.d.ts`
-(one shared core, `bindings/shared/core.mjs`) — over the tinyactors runtime
-compiled to WebAssembly.
+The same API as the [Node.js binding](../node) — the same `index.d.ts` —
+on its own implementation: the tinyactors libraries compiled to
+WebAssembly, driven from JavaScript over their C API. The binding has no
+C of its own.
 
 ## Installable distribution
 
 Packages are not built at the moment: the pipeline that made them used
 CMake and is to be rebuilt on the repository's release machinery
 ([distribution](../../docs/distribution.md)). In this repository, `mise run web:build` (in `tinyactors-core`) builds
-`bindings/web/tinyactors.wasm`. The package contains the wasm, shared JS and
+`bindings/web/tinyactors.wasm` and `bindings/web/api.mjs`. The package contains the wasm, its JS and
 the Node transports, with no files needed outside it. `import ... from 'tinyactors-web'` selects the Node or
 browser backend; `tinyactors-web/browser` explicitly selects the browser.
 For an unbundled server, import
@@ -37,30 +38,37 @@ not this development directory.
 </script>
 ```
 
-- `tinyactors.wasm` (about 1.1 MB, 415 KB gzipped) contains the runtime,
-  the host, the compiler (charts compile in the page), the binding
-  (`bindings/shared/binding.c`) and QuickJS for the `quickjs` datamodel,
-  most of its size. It needs no WASI imports: its only imports are the
-  Node-API subset `native.mjs` implements, and the WASI functions QuickJS's
-  C library calls are defined inside it (`src/datamodel_ecmascript/browser_wasm.c`;
-  its clock is set from the page before each run).
-- It is built for wasm32-wasi, with wasi-libc compiled in. The host and the
-  system need no C library (`libtinyactors`, docs/adr/0005); what still
-  does is the compiler, QuickJS, `ta_runtime_malloc` (the host's allocator
-  here), and the binding itself.
-- The `native` datamodel is the same C code as in the Node addon, over the
-  Node-API subset of `native.mjs`: variables and event data are ordinary JS
-  values behind integer handles, so nothing is serialized between JS and
-  wasm on the hot path.
+- `tinyactors.wasm` (about 1.5 MB, 510 KB gzipped) is the release's three
+  libraries — `tinyactors` (the core, the host, the OTLP codec),
+  `tinyactors_runtime` (the compiler: charts compile in the page) and
+  `tinyactors_datamodel_ecmascript` (QuickJS, most of the size) — linked
+  into one module as the release links its wasm modules (`mise run
+  web:build`): one memory, wasi-libc compiled in, importing nothing,
+  exporting the public API and its function table.
+- `native.mjs` drives that API from JavaScript. Structs are read and
+  written at the wasm32 offsets of `api.mjs`, which web:build generates
+  from the API descriptions; what it hands the libraries lives in the
+  module's memory (`ta_wasm_alloc`): scratch released after each call, a
+  system's blocks until it is destroyed, an image's until nothing holds
+  it.
+- Two `ecmascript` datamodels. `native` (the default) is the page's own
+  JavaScript: variables and event data are JS values, `c.expr` functions
+  are called directly, and the vtable entries the core calls are
+  JavaScript functions placed in the module's function table (a small
+  wasm module generated at load turns them into wasm functions), with
+  integer handles for sessions and payloads. `quickjs` is the engine in
+  the module; its clock is set from the page before each run.
+- `core.mjs` is the API, the same as the Node.js binding's.
 - `index.mjs` is for browsers (top-level `await`, `instantiateStreaming`).
   `node.mjs` is the same binding for Node.js: synchronous, and `serveLinks()`
   also accepts `{ server | port }`. Pick it with the `node` export condition.
 - Slices of work are time-boxed (~4 ms) and continue on a `MessageChannel`
   turn, so a busy system never blocks the page.
-- SCXML documents (`fromSCXML`), I/O processors and invokers, system
-  manifests (`system.boot`), snapshots (`system.snapshot()`,
-  `createSystem({ restore })`) and deterministic time (`createSystem({ clock })`
-  + `flush()`) work as in the [Node binding](../node#how-it-works).
+- SCXML documents (`fromSCXML`), I/O processors (synchronous ones too) and
+  invokers, system manifests (`system.boot`), snapshots
+  (`system.snapshot()`, `createSystem({ restore })`) and deterministic time
+  (`createSystem({ clock })` + `flush()`) work as in the
+  [Node binding](../node#how-it-works).
 - Hibernation works here too: `createSystem({ hibernation: { store } })`, with
   a store backed by memory, IndexedDB or anything else (sync or async). Blobs
   are portable between the web and Node bindings.
@@ -193,29 +201,31 @@ ms; 0 only when the system stops) and once more at `stop()`, adding what
 `telemetry.metrics()` returns; `telemetry.metricsEndpoint` names the URL
 (`''` sends none).
 
-## Call cost (wasm vs the Node addon)
+## Call cost
 
-Every datamodel call and result crosses between JS and wasm through the
-N-API-subset adapter (`native.mjs`). `node tools/bench_js.mjs` runs the same
-workloads through both bindings and both datamodels, each in its own
-process (deterministic clock, synchronous flushes; best of three; per
-second, resident MB after). Intel Xeon @ 2.80 GHz, 4 CPUs, Node 22, Linux:
+`node tools/bench_js.mjs` runs the same workloads through both bindings
+and both datamodels, each in its own process (deterministic clock,
+synchronous flushes; best of three; per second, resident MB after).
+Intel Xeon @ 2.80 GHz, 4 CPUs, Node 22, Linux, measured side by side with
+the web binding before this one (the addon's C over a Node-API subset
+emulated in JavaScript):
 
-| workload | node native | node quickjs | web native | web quickjs |
-|---|---:|---:|---:|---:|
-| send, 0 subscribed | 125 k (64) | 106 k (66) | 113 k (69) | 47 k (80) |
-| send, 10 subscribed | 93 k (69) | 27 k (73) | 71 k (70) | 17 k (82) |
-| send, 1000 subscribed | 61 k (110) | 26 k (82) | 51 k (123) | 15 k (89) |
-| sendMany | 137 k (152) | 117 k (108) | 128 k (149) | 72 k (133) |
-| spawn | 90 k (152) | 89 k (113) | 42 k (165) | 60 k (143) |
-| hibernate | 93 k (190) | 31 k (185) | 64 k (581) | 18 k (571) |
-| wake + event | 18 k (190) | 21 k (185) | 16 k (581) | 26 k (571) |
+| workload | web native, before | web native | web quickjs, before | web quickjs | node native | node quickjs |
+|---|---:|---:|---:|---:|---:|---:|
+| send, 0 subscribed | 151 k (71) | 254 k (75) | 69 k (81) | 74 k (106) | 190 k (65) | 150 k (66) |
+| send, 10 subscribed | 100 k (70) | 173 k (77) | 24 k (81) | 25 k (109) | 110 k (70) | 42 k (72) |
+| send, 1000 subscribed | 68 k (124) | 162 k (130) | 23 k (89) | 28 k (136) | 80 k (109) | 39 k (81) |
+| sendMany | 196 k (151) | 606 k (157) | 97 k (133) | 128 k (170) | 279 k (152) | 195 k (107) |
+| spawn | 58 k (166) | 107 k (174) | 93 k (145) | 113 k (197) | 143 k (152) | 182 k (112) |
+| hibernate | 83 k (583) | 122 k (566) | 29 k (574) | 33 k (592) | 120 k (189) | 51 k (185) |
+| wake + event | 31 k (583) | 51 k (566) | 28 k (574) | 46 k (592) | 22 k (189) | 26 k (185) |
 
-A subscribed actor costs a snapshot after each run that changed it; with
+The JavaScript datamodel gains most: a datamodel call is one call from
+wasm into a JavaScript function, with integer arguments, where the
+emulated Node-API took a crossing for every value it touched. A
+subscribed actor costs a snapshot after each run that changed it; with
 quickjs that snapshot copies the variables out of the engine as JSON,
-which is why subscribers cost it more. What remains for the native
-datamodel is mostly the crossings themselves (`wasm-to-js`) and keyed
-property stores into the objects C builds.
+which is why subscribers cost it more.
 
 ## Build & test
 

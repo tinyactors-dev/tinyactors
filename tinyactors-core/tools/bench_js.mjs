@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * The JS bindings' throughput and memory, together: the same workloads
- * through the Node addon (N-API) and the web binding (wasm behind the
- * synchronous N-API-subset adapter, bindings/web/native.mjs), with each
+ * through the Node addon (N-API) and the web binding (the libraries in wasm,
+ * driven by JavaScript over their C API, bindings/web/native.mjs), with each
  * "ecmascript" datamodel (native: JS values and c.expr functions; quickjs:
  * the C datamodel), each in its own process.
  *

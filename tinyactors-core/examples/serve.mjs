@@ -15,7 +15,7 @@ const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const arg = process.argv.indexOf('--port');
 const PORT = Number(arg > 0 ? process.argv[arg + 1] : process.env.PORT || 8000);
 const MIME = { '.html': 'text/html', '.mjs': 'text/javascript', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.json': 'application/json' };
-const PUBLIC = ['/examples/', '/bindings/web/', '/bindings/shared/'];
+const PUBLIC = ['/examples/', '/bindings/web/'];
 
 http
   .createServer(async (req, res) => {

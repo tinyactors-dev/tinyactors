@@ -177,18 +177,18 @@ implementation of that layer). Layer dependency rules are in
 │   ├── surface.json           ✅ every public C function: "bind" (reachable from every binding)
 │   │                             or skipped with a reason; checked with the typings by
 │   │                             `mise run surface` (mise/tasks/surface)
-│   ├── shared/core.mjs        ✅ the JS API, backend-independent (createRuntime): chart helpers
-│   │                             (scxml.chart, c.expr), systems, actors, I/O processors and
-│   │                             invokers, links, store links, tracing
-│   ├── shared/binding.c       ✅ the native side: pure wrappers of the public headers, a System
-│   │                             over ta_host with the native or quickjs ecmascript datamodel,
-│   │                             effects, neutral values; Node-API value seam
-│   ├── node/                  ✅ N-API (C API) addon (src/addon.c) + index.js, index.d.ts, ws.js
-│   │                             (WebSocket server for links); node:test suite incl. hibernation
-│   │                             and links, tsc type tests (`mise run node:test`)
-│   ├── web/                   ✅ wasm/browser binding, same API: src/glue.c → tinyactors.wasm
-│   │                             (zig cc), native.mjs (Node-API value adapter), index.mjs (browsers),
-│   │                             node.mjs (Node); `mise run web:test` runs the node suite on it
+│   ├── node/                  ✅ N-API (C API) addon: src/binding.c (a System over ta_host, the
+│   │                             native or quickjs ecmascript datamodel, effects, neutral values)
+│   │                             and src/addon.c; core.mjs (the JS API: chart helpers, systems,
+│   │                             actors, I/O processors and invokers, links, tracing), index.js,
+│   │                             index.d.ts, ws.js; node:test suite, tsc type tests
+│   │                             (`mise run node:test`)
+│   ├── web/                   ✅ browser binding, the same API on its own: tinyactors.wasm is the
+│   │                             release's three libraries in one module (web:build), native.mjs
+│   │                             drives their C API from JavaScript (structs at api.mjs's wasm32
+│   │                             offsets; the JS datamodel's vtable in the function table),
+│   │                             core.mjs the API, index.mjs (browsers), node.mjs (Node);
+│   │                             `mise run web:test` runs the node suite on it
 │   └── postgres/              ✅ PostgreSQL extension: durable actors as rows, SQL API (define,
 │                                 spawn, send, run, claim/ack/fail), inbox + outbox tables,
 │                                 row-lock concurrency; pg_regress + concurrency tests, test/

@@ -225,7 +225,7 @@ Messages (JSON objects, field `t` is the type):
     Between peers that follow the first rule, this does not happen.
 
   Codecs: `encodeFrame` / `FrameDecoder` in the JS bindings
-  (`bindings/shared/core.mjs`, usable by any transport), and
+  (`core.mjs` of each JavaScript binding, usable by any transport), and
   `ta_frame_header` / `ta_frame_read` for C hosts (`include/tinyactors/frame.h`,
   freestanding: no allocation, the caller's buffer).
 

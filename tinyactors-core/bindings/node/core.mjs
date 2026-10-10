@@ -1,7 +1,8 @@
 /**
- * tinyactors — the JavaScript API of the Node.js and web bindings, a thin
- * layer over binding.c (the `native` interface; docs/proposals/thin-js-binding.md
- * has the mapping of every item to the core functions behind it).
+ * tinyactors — the JavaScript API of the Node.js binding, a thin layer over
+ * its `native` interface (docs/proposals/thin-js-binding.md has the mapping
+ * of every item to the core functions behind it). The web binding has the
+ * same API on its own implementation.
  *
  * The shape borrows xstate's names (createActor, send, getSnapshot,
  * subscribe, system.get); what each call does is what the core does. Charts
@@ -11,9 +12,8 @@
  * through links. Everything else — values, timers, routing, versions,
  * hibernation, migration — is the core's.
  *
- * `native` is binding.c (the Node.js addon, or the wasm module through
- * web/native.mjs); `platform` supplies the clock, timers, deferral, logging
- * and HTTP posts.
+ * `native` is the addon (src/binding.c); `platform` supplies the clock,
+ * timers, deferral, logging and HTTP posts.
  */
 
 export function createRuntime({ native, platform }) {

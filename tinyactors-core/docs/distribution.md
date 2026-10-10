@@ -52,9 +52,8 @@ per native target (decisions 10, 11, 15 and 18). The tasks:
 The packages are `@tinyactors/node` and `@tinyactors/node-<os>-<cpu>` for
 `darwin-arm64`, `darwin-x64`, `linux-x64` and `linux-arm64`. A platform
 package holds its target's addon as `tinyactors.node`, with `os` and `cpu`
-fields and no `libc` field. `@tinyactors/node` holds `bindings/node/` and
-`bindings/shared/` as `node/` and `shared/`, so its relative imports are
-the repository's, and names every platform package as an optional
+fields and no `libc` field. `@tinyactors/node` holds `bindings/node/` as
+`node/`, and names every platform package as an optional
 dependency at exactly its own version. It needs Node.js 22.12 or later. The
 version is `bindings/node/package.json`'s; a release commits the new one. A
 release needs a `CHANGELOG.md` section in `bindings/node/` (component
@@ -192,10 +191,10 @@ The pipeline that built one before (`tools/dist.py`, with CMake and Zig)
 was removed when the build moved to the repository's Ruby toolchain. What
 follows is the plan, as that pipeline built the package.
 
-The package keeps `bindings/shared/` **inside** its package root, so its
-relative imports are the repository's, and holds the CommonJS Node
-transports and WebSocket implementation, with an explicit CommonJS package
-scope. It has no npm runtime dependencies. Do not publish `bindings/web`
+The package holds `bindings/web/` (the module, `api.mjs` with its struct
+layouts, and the JavaScript), and the CommonJS Node transports and
+WebSocket implementation that `node.mjs` loads, with an explicit CommonJS
+package scope. It has no npm runtime dependencies. Do not publish `bindings/web`
 directly; it is a development layout.
 
 The package's main export is conditional: `node.mjs` in Node, `index.mjs`
@@ -207,10 +206,10 @@ import { scxml, createSystem, createActor } from
 ```
 
 Serve the **whole** package, not just `index.mjs`; the entry locates
-`tinyactors.wasm` relative to itself, and imports shared JS. Serve wasm as
-`application/wasm` for streaming compilation (the byte fallback also works).
-Bundlers must preserve or copy that wasm URL. It is a JS-hosted reactor
-with its own adapter, not a standalone WASI executable.
+`tinyactors.wasm` relative to itself. Serve wasm as `application/wasm` for
+streaming compilation (the byte fallback also works). Bundlers must
+preserve or copy that wasm URL. The module is the release's three
+libraries in one, importing nothing, driven by the package's JavaScript.
 
 ## Planned: the PostgreSQL source archive
 
