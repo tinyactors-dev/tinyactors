@@ -3,10 +3,10 @@
 **Status:** Sketch (2026-10-10).
 **Touches:** tinyactors-core: `bindings/shared/core.mjs` (rewritten),
 `bindings/shared/binding.c` (narrowed and deepened),
-`bindings/shared/ecmascript.mjs` (proposed for removal), `bindings/node`,
+`bindings/shared/ecmascript.mjs` (removed), `bindings/node`,
 `bindings/web`, `bindings/surface.json`, `examples/`, `tests/w3c`;
 `src/system` (failed external invokes, snapshots with external invokes,
-actors that stepped, payloads between datamodels), `src/host` (run loop
+actors that stepped), `src/host` (run loop
 policy, containers), `src/trace` (rule parsing by name).
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 
@@ -29,11 +29,10 @@ The proposal:
    in the JS API is SCXML's or the core's, with the same meaning, or a
    plain name for a composite the proposal defines. Nothing is emulated,
    and the binding invents no events, fields or mechanisms.
-2. **The datamodel is chosen per chart,** through SCXML's `datamodel`
-   attribute: a native JS datamodel whose values are JS values and whose
-   expressions are JS functions, for trusted application code at full
-   speed; the quickjs ECMAScript datamodel for untrusted code; staticjs
-   when it is ready (section 3).
+2. **A system chooses its ECMAScript datamodel:** a native one whose
+   values are JS values and whose expressions are JS functions, for
+   trusted application code at full speed, or quickjs for untrusted code;
+   staticjs comes later (section 3).
 3. **Charts are SCXML, written as XML or as JS objects,** because
    JavaScript developers do not read XML. Concise helpers build the
    objects, which go one way: object → writer → SCXML text → compiler.
@@ -63,8 +62,8 @@ The proposal:
   field (`src/lib/ops/feature.ts:65`) but registers none.
 - **Binding author.** Asks: what must I write myself? After this: a native
   datamodel for the language's own values, the codec, timers, and the I/O
-  processor and invoker interfaces. The run loop policy, containers, trace names and payload conversion between
-  datamodels are C.
+  processor and invoker interfaces. The run loop policy, containers and
+  trace names are C.
 - **Maintainers.** One implementation each of addresses, frames, the run
   loop and trace presets. No ECMAScript evaluator in JavaScript beside the
   C one. A JS layer readable in one sitting.
@@ -109,37 +108,39 @@ and does not handle `TA_EFFECT_INVOKE` or `TA_EFFECT_UNINVOKE`.
 
 SCXML leaves the set of datamodels to the platform (the `datamodel`
 attribute); without it the compiler uses the null datamodel
-(`scxml.c:1020`).
+(`scxml.c:1020`). The core gives each chart the first datamodel of its
+system whose name matches (`system.c:221–226`), so a system chooses one
+implementation of `"ecmascript"`:
 
-| `datamodel` | Values | Expressions | For |
+| `createSystem({ ecmascript })` | Values | Expressions | For |
 |---|---|---|---|
-| a native JS datamodel (name to settle, e.g. `"tinyactors:js"`) | JS values held as Node-API references; payloads are references | JS functions, called directly | trusted application code |
-| `"ecmascript"` | quickjs values (`src/datamodel_ecmascript`, in the addon and in the wasm module, or a quickjs-wasi build) | ECMAScript text | untrusted code; the W3C suite |
-| staticjs, later | staticjs values | staticjs text | pure, total guards |
+| `'native'` | JS values held as Node-API references; payloads are references | JS functions, called directly | trusted application code |
+| `'quickjs'` | quickjs values (`src/datamodel_ecmascript`, in the addon and in the wasm module, or a quickjs-wasi build) | ECMAScript text | untrusted code; the W3C suite |
 
-**The native JS datamodel** is the "xstate" vtable with the xstate parts
-removed. A function is called with one argument: an object holding the
-session's variables and `_event`, `_sessionid`, `_name`, `_ioprocessors`
-and `In`. An expression's value is the function's result; a `<script>`
-is a function called for its effects; `<assign location expr>` writes the
-location with the expression's value. Events keep their core names.
-Functions are closures: they can read module constants and call
-application code, because they run in the application's realm. A chart of
-this datamodel cannot be serialized as text: `toSCXML()` shows each
-function's source for reading only. Hibernation and snapshots store values
-through the codec and refer to charts by name and version, as today.
+staticjs comes later as a datamodel of its own name.
 
-**`ecmascript.mjs` has no role left** (proposed): it evaluates text in the
-application's realm, so it is neither trusted functions nor a sandbox.
-The W3C suite runs under quickjs instead.
+**The native implementation** is the "xstate" vtable with the xstate
+parts removed. A function is called with one argument: an object holding
+the session's variables and `_event`, `_sessionid`, `_name`,
+`_ioprocessors` and `In`. An expression's value is the function's result;
+a `<script>` is a function called for its effects; `<assign location
+expr>` writes the location with the expression's value. Events keep their
+core names. Functions are closures: they can read module constants and
+call application code, because they run in the application's realm. A
+chart with functions cannot be serialized as text: `toSCXML()` shows each
+function's source for reading only. Hibernation and snapshots store
+values through the codec and refer to charts by name and version, as
+today.
 
-**Events between datamodels.** Within a system, a payload is a handle of
-the sending chart's datamodel; the receiving datamodel gets it through
-the event view, which carries no datamodel index (`event_pool.c:157`), so
-a quickjs chart would read a native JS handle as its own. The core
-converts at that boundary with the datamodels' `to_wire`/`from_wire`
-(neutral JSON, `datamodel.h:171–183`), which it uses today only between
-systems (section 8).
+**`ecmascript.mjs` is removed.** It evaluates text in the application's
+realm, so it is neither trusted functions nor a sandbox. The W3C suite
+runs under quickjs.
+
+**Values between implementations.** Within a system there is one
+implementation of `"ecmascript"`, so payloads never meet a datamodel that
+did not make them. Systems of different implementations exchange events
+over links, where the core already converts with `to_wire`/`from_wire`
+(neutral JSON, `datamodel.h:171–183`).
 
 ## 4. Charts in JS
 
@@ -154,7 +155,7 @@ The chart object is SCXML's document tree as JS values:
   and `content` are both elements and attributes.
 - **Attributes are the other keys,** under their qualified names
   (`xmlns:conf` included), with string values; any other value is
-  refused. Under the native JS datamodel, an expression attribute may hold
+  refused. In a native system, an expression attribute may hold
   a `c.expr` function instead.
 - **Text** (a `<script>`, a `<content>`, a `<data>`) is `text`; mixed
   content is a `children` list of strings and elements. XML inside a
@@ -202,8 +203,8 @@ expressions are type-checked against it.
 **`c.expr(fn)` marks code.** `fn` takes the session object and is
 destructured the same way in every datamodel:
 
-- in the native JS datamodel the function itself is the expression;
-- in a text datamodel, `fn`'s body becomes the expression's text
+- in a native system the function itself is the expression;
+- under quickjs, `fn`'s body becomes the expression's text
   (`({ attempts }) => attempts + 1` → `attempts + 1`; a block body →
   `(() => { … })()`). Free names other than the destructured ones are not
   checked: a captured constant fails at run time there.
@@ -216,7 +217,7 @@ import { scxml as s } from '@tinyactors/node';
 
 const c = s.chart<{ items: Item[]; attempts: number; reservation: Reservation | null }>();
 
-export const order = c.scxml('order', { initial: 'reserving', datamodel: 'tinyactors:js' },
+export const order = c.scxml('order', { initial: 'reserving', datamodel: 'ecmascript' },
   c.datamodel({ items: c.expr(() => []), attempts: c.expr(() => 0), reservation: c.expr(() => null) }),
 
   c.state('reserving',
@@ -274,7 +275,7 @@ helpers behaves as the same chart written as XML.
 | `actor.send(event, options)` | `system.send(actor.address, event, options)` |
 | `actor.terminate()` | `ta_host_terminate`: the actor stops at the next microstep boundary (`core.c:1767–1772`), running its `<onexit>` handlers |
 | `actor.configuration`, `actor.in(id)` | `ta_actor_config`; `In(id)` |
-| `actor.datamodel` | the session's variables: the live object in the native JS datamodel, a copy (`to_wire`) in others; `null` while hibernated |
+| `actor.datamodel` | the session's variables: the live object in a native system, a copy (`to_wire`) under quickjs; `null` while hibernated |
 | `actor.done` | for a root actor: resolved with the donedata on `TA_EFFECT_DONE`, rejected on `TA_EFFECT_ERROR` for its session. A terminated actor produces no effect (`system.c:678–679`, `route.c:726`), so the binding settles it when `terminate` succeeds. |
 | `actor.observe(fn)` | `fn(actor)` once after each run in which the actor took a step (section 8) |
 | `actor.sessionID`, `actor.name`, `actor.address` | `_sessionid`; `_name`, which the core sets to the actor's name (SCXML: the document's `name`; `system.c:474`); `"<base>#_scxml_<id>"` (`system.h:46–47`) |
@@ -331,14 +332,16 @@ its `<content>`, which SCXML treats alike (`core.c:1418–1426`).
 |---|---|
 | `start({ invokeid, type, src, params }, context)` | `TA_EFFECT_INVOKE`; the binding keys the invoke by segment and token (tokens are per segment) and remembers the invoking session |
 | `context.send(event, data)` | `TA_EVENT_IN_FROM_INVOKE`: the core sets `_event.invokeid` (`schedule.c:392`) |
-| `receive(invokeid, event)`: sends to `#_<invokeid>` without a `type`, and autoforwarded events | `TA_EFFECT_SEND` with the invoke token (`route.c:118–121`, `621–626`) |
+| `receive(invokeid, event)`: sends to `#_<invokeid>`, with the invoke's `type` or without one, and autoforwarded events | with the type: a `TA_EFFECT_SEND` for the I/O processor of that type, with the target `#_<invokeid>` (`core.c:965–1007`); without: a `TA_EFFECT_SEND` with the invoke token (`route.c:118–121`, `621–626`) |
 | `context.done(data)` | `TA_EVENT_IN_INVOKE_DONE`: `done.invoke.<id>` with `data`. The binding then closes the context: SCXML §6.4 forbids events after done, and the core frees the request only at uninvoke (`route.c:585–596`). |
 | `context.fail()`, or `start` or `receive` throws, or a promise rejects | `TA_EVENT_IN_ERROR_COMMUNICATION \| TA_EVENT_IN_FROM_INVOKE`: `error.communication` in the invoking session's internal queue, with `_event.invokeid` (SCXML §3.12.2). The binding closes the context. Section 8. |
 | the invoking state exits | `TA_EFFECT_UNINVOKE`: `signal` aborts; later calls are dropped (SCXML §6.4.3) |
 
-A send to `#_<invokeid>` *with* the invoke's type, SCXML's form in §6.4.4,
-looks for an I/O processor of that type (`core.c:965–971`) and fails with
-`error.execution` (open question 4).
+SCXML §6.4 (`SCXML.md:2096`) sends to an invoked service with the
+`type` of its `<invoke>` and the target `#_<invokeid>`: an invoke type is
+an I/O processor type too. So the binding registers every invoker's type
+as an I/O processor as well, and routes that processor's sends to the
+invoker's `receive`.
 
 An actor with an external invoke in flight is not hibernated, swept or
 exported; the core refuses it (`hibernate.c:136–150`,
@@ -349,14 +352,14 @@ exported; the core refuses it (`hibernate.c:136–150`,
 | Today | Why |
 |---|---|
 | `createMachine`, `setup` and xstate's config (`context`, `input`, `on`, `always`, `after`, `entry`/`exit`, `onDone`, `onError`, `reenter`, relative targets) | charts are SCXML, built with the helpers (section 4) |
-| named guards and actions in `setup` | the native JS datamodel's expressions are functions; other datamodels reach the application through I/O processors and invokers |
+| named guards and actions in `setup` | a native system's expressions are functions; quickjs charts reach the application through I/O processors and invokers |
 | xstate's `assign` merge, `raise` with data or delay, `sendTo`, `sendParent`, `stateIn`, `and`/`or`/`not` | SCXML's `<assign>`, `<raise>`, `<send>` (with `target: '#_parent'`), `In()` and expressions |
 | `getSnapshot`, `.value`, `.matches`, `.status`, `.context`, `.output`, `.hasTag`, `.can`, `subscribe` | `configuration`, `in()`, `datamodel`, `done`, `observe` (section 5) |
 | `getPersistedSnapshot`, `createActor(logic, { snapshot })` | they read without removing; export removes the actor |
 | `createActor` + `start`, `stop`, xstate's system ID option, `system.hibernate()`, `system.reload()` | `system.spawn`, `terminate`, `name`, `sweep`, `addImage` |
 | events as `{ type, ...data }` | `_event.type` is SCXML's event type; an event is a name and data |
 | `fromPromise`, `fromCallback`, `sendBack` | an invoker (section 6) |
-| `ecmascript.mjs` (proposed) | the native JS datamodel and quickjs cover trusted and untrusted code |
+| `ecmascript.mjs` | the native implementation and quickjs cover trusted and untrusted code |
 | `tags`, `meta`, `description`, `inspect`, `toPromise`, `waitFor`, `provide`, the default system, the global machine registry, `linkMachine` | no core or SCXML meaning, or global state |
 
 ## 8. Core changes
@@ -376,11 +379,6 @@ exported; the core refuses it (`hibernate.c:136–150`,
    a macrostep, in a bounded list (an append per macrostep; past the
    bound, "all"). Neither `ta_actor_info` nor the run result says this
    today, and a datamodel hook would miss bootstrap and terminate steps.
-4. **Payloads between datamodels.** When an event's payload belongs to
-   another datamodel than the receiving chart's, the core converts it
-   with `to_wire`/`from_wire`, or delivers the event without data when
-   either lacks them.
-
 ## 9. What moves into C
 
 Each item deletes its JS twin in the same change.
@@ -409,12 +407,12 @@ class of about 40 lines forwards its methods to `native.*(handle, …)`.
 That class is what `index.d.ts` and the `surface` check see.
 
 **The native `System`** owns the host block and grows it on `EXHAUSTED`;
-holds the datamodels (native JS, quickjs) and the codec; runs the pump in
+holds its ECMAScript implementation (native or quickjs) and the codec; runs the pump in
 budgeted slices on a platform `defer` and one platform timer for
 `next_deadline`; and after each run calls the observers of the actors
 that stepped. Effects for JS (sends to I/O processors, invokes and
 uninvokes, logs, done, errors, peer envelopes) go to callbacks given at
-creation, one call each. In the native JS datamodel an evaluation is one
+creation, one call each. In a native system an evaluation is one
 Node-API call with one argument, the session object, built once per
 session and updated per `bind_event`.
 
@@ -439,7 +437,7 @@ About 1350 lines, and no `ecmascript.mjs`.
 **Measuring it.** Before the switchover, add a JS scenario reporting
 throughput and memory together (in `tools/bench_js.mjs` or the torture
 chamber): sends per second and bytes per actor with 0, 10 and 1000
-observed actors, per datamodel, on Node and the web build. Measure today's
+observed actors, native and quickjs, on Node and the web build. Measure today's
 binding, then the new one, side by side on one machine.
 
 ## 11. Decided
@@ -453,8 +451,9 @@ binding, then the new one, side by side on one machine.
   only the shallow part of the API. `surface.json` stays the checklist of
   what the bindings reach.
 - **Charts are SCXML,** as XML or as JS objects built with the helpers.
-- **The datamodel is chosen per chart:** native JS for trusted code,
-  quickjs for untrusted code, staticjs later.
+- **A system chooses its `"ecmascript"` implementation:** native for
+  trusted code, quickjs for untrusted code; staticjs later.
+- **`ecmascript.mjs` is removed.**
 - **`c.expr` without a free-name check,** for now.
 - **Errors are SCXML's.** `error.execution` for errors in the chart,
   `error.communication` for a failed send or invoke, through the core's
@@ -462,24 +461,23 @@ binding, then the new one, side by side on one machine.
 
 ## 12. Open questions
 
-1. **Remove `ecmascript.mjs`?** Proposed in section 3.
-2. **The native JS datamodel's name** in the `datamodel` attribute.
-3. **An invoke after its error.** Does the external invoke stay
+1. **Text expressions in a native system.** Charts written as XML (or
+   with string expressions) carry ECMAScript text. A native system either
+   refuses them (text charts go to a quickjs system), or compiles each
+   text once into a function, which is what `ecmascript.mjs` did.
+2. **An invoke after its error.** Does the external invoke stay
    registered after `error.communication` until the state exits, or should
    the error end it?
-4. **`<send type="<invoke type>" target="#_<id>">`** (SCXML §6.4.4) fails
-   today. Route it to the invoke in the core, or document that sends to an
-   invoke carry no `type`.
-5. **A faulted invoked chart.** The invoker gets no event today
+3. **A faulted invoked chart.** The invoker gets no event today
    (`schedule.c:205`). Whether it should get `error.communication` is a
    core decision.
-6. **`TA_IO_PROCESSOR_SYNC`.** Whether JS I/O processors need it; a JS
+4. **`TA_IO_PROCESSOR_SYNC`.** Whether JS I/O processors need it; a JS
    processor would have to answer synchronously.
-7. **Error data.** SCXML lets an error event carry data (SCXML.md:853);
+5. **Error data.** SCXML lets an error event carry data (SCXML.md:853);
    the core drops what `TA_EVENT_IN_ERROR_COMMUNICATION` brings
    (`schedule.c:370`). Granary's 0.1 errors carried `{ sendID, type,
    error }`.
-8. **The link protocol in C,** later, if a second binding needs links.
+6. **The link protocol in C,** later, if a second binding needs links.
 
 ## 13. Order of work
 
@@ -494,8 +492,8 @@ Each step is one or more commits that pass `mise run test`.
    first.
 7. The chart object, the helpers and `c.expr`, with their unit tests.
 8. The benchmark scenario, measured on today's binding.
-9. The native JS datamodel (from the "xstate" vtable) and quickjs in the
-   binding; `ecmascript.mjs` removed if question 1 says so.
+9. The native ECMAScript implementation (from the "xstate" vtable) and
+   quickjs in the binding; `ecmascript.mjs` removed.
 10. The switchover, in commits: the native `System` and its JS class; the
     actor API; tests and examples migrated; the dropped API deleted;
     `surface.json` and both `index.d.ts` updated. `mise run test:full`.
