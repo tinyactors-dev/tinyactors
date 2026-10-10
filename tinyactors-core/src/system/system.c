@@ -703,6 +703,7 @@ void ta_system_stats_get(const ta_system *system, ta_system_stats *o) {
     z.fuel_clock = system->fuel_clock;
     z.traces_started = system->stats_traces_started;
     z.traces_sampled = system->stats_traces_sampled;
+    z.next_deadline = ta_system_next_deadline(system);
     uint32_t n = o->size && o->size < sizeof z ? o->size : (uint32_t)sizeof z;
     ta_memcpy(o, &z, n);
     o->size = n;

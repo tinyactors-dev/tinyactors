@@ -1120,6 +1120,11 @@ export function createRuntime({ native, platform }) {
   const EXPORT_BYTES = 1 << 20; /* or until this many wait */
   const EXPORT_MAX_BYTES = 16 << 20; /* waiting beyond this is dropped */
   const FAILURE_LOG_MS = 10000;
+  const METRICS_INTERVAL_MS = 60000; /* OTEL_METRIC_EXPORT_INTERVAL's default */
+  const METRIC_KINDS = { sum: 1, gauge: 2, histogram: 3 }; /* TA_OTLP_METRIC_* */
+  const METRIC_KIND_NAMES = ['', 'sum', 'gauge', 'histogram'];
+  /* tinyactors.run.duration: how long one run blocked the host's loop, in seconds */
+  const RUN_BOUNDS = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25];
 
   function traceKinds(options) {
     let kinds;
@@ -1176,12 +1181,14 @@ export function createRuntime({ native, platform }) {
       this.urls = {
         traces: options.tracesEndpoint || (base && `${base}/v1/traces`),
         logs: options.logsEndpoint || (base && `${base}/v1/logs`),
+        metrics: options.metricsEndpoint !== undefined ? options.metricsEndpoint : base && `${base}/v1/metrics`, /* '': none */
       };
       this.headers = { ...(options.headers || {}) };
       this.post = options.post || platform.post || fetchPost;
-      this.waiting = { traces: [], logs: [] };
-      this.bytes = { traces: 0, logs: 0 };
-      this.busy = { traces: false, logs: false };
+      this.waiting = { traces: [], logs: [], metrics: [] };
+      this.bytes = { traces: 0, logs: 0, metrics: 0 };
+      this.busy = { traces: false, logs: false, metrics: false };
+      this.outcome = { posted: 0, failed: 0, dropped: 0 }; /* bytes: tinyactors.telemetry.bytes */
       this.timer = null;
       this.lastFailure = -Infinity;
       this.posted = 0;
@@ -1190,7 +1197,10 @@ export function createRuntime({ native, platform }) {
     }
     add(signal, bytes) {
       if (!bytes || !this.urls[signal]) return;
-      if (this.bytes[signal] + bytes.length > EXPORT_MAX_BYTES) return this.fail(new Error(`more than ${EXPORT_MAX_BYTES} bytes waiting`));
+      if (this.bytes[signal] + bytes.length > EXPORT_MAX_BYTES) {
+        this.outcome.dropped += bytes.length;
+        return this.fail(new Error(`more than ${EXPORT_MAX_BYTES} bytes waiting`));
+      }
       this.waiting[signal].push(bytes);
       this.bytes[signal] += bytes.length;
       if (this.bytes[signal] >= EXPORT_BYTES) this.flush();
@@ -1199,7 +1209,7 @@ export function createRuntime({ native, platform }) {
     flush() {
       platform.clearTimer(this.timer);
       this.timer = null;
-      for (const signal of ['traces', 'logs']) {
+      for (const signal of ['traces', 'logs', 'metrics']) {
         if (this.busy[signal] || !this.waiting[signal].length) continue;
         const body = concatBytes(this.waiting[signal].splice(0));
         this.bytes[signal] = 0;
@@ -1211,13 +1221,18 @@ export function createRuntime({ native, platform }) {
           sent = Promise.reject(e);
         }
         sent.then(
-          () => this.posted++,
-          (e) => this.fail(e),
+          () => {
+            this.posted++;
+            this.outcome.posted += body.length;
+          },
+          (e) => {
+            this.outcome.failed += body.length;
+            this.fail(e);
+          },
         ).then(() => {
           this.busy[signal] = false;
           if (this.waiting[signal].length) this.flush();
-          else if (!this.busy.traces && !this.busy.logs && !this.waiting.traces.length && !this.waiting.logs.length)
-            for (const resolve of this.idle.splice(0)) resolve();
+          else if (this.quiet()) for (const resolve of this.idle.splice(0)) resolve();
         });
       }
     }
@@ -1226,12 +1241,15 @@ export function createRuntime({ native, platform }) {
       const now = platform.now();
       if (now - this.lastFailure < FAILURE_LOG_MS) return;
       this.lastFailure = now;
-      platform.log(`tinyactors: exporting traces failed (${this.failed} so far): ${e && e.message ? e.message : e}`);
+      platform.log(`tinyactors: exporting telemetry failed (${this.failed} so far): ${e && e.message ? e.message : e}`);
+    }
+    quiet() {
+      return Object.keys(this.waiting).every((signal) => !this.busy[signal] && !this.waiting[signal].length);
     }
     /* resolves once nothing waits and nothing is in flight */
     settled() {
       this.flush();
-      if (!this.busy.traces && !this.busy.logs) return Promise.resolve();
+      if (Object.keys(this.busy).every((signal) => !this.busy[signal])) return Promise.resolve();
       return new Promise((resolve) => this.idle.push(resolve));
     }
   }
@@ -1252,6 +1270,68 @@ export function createRuntime({ native, platform }) {
     return out;
   }
   const millis = (ns) => Number(ns / 1000n) / 1000;
+
+  /* A snapshot's metrics as the native writer takes them (binding.c, "metrics"). */
+  function nativeMetrics(metrics) {
+    if (!Array.isArray(metrics)) throw new TypeError('metricsToOTLP: snapshot.metrics must be an array of metrics');
+    return metrics.map((m) => {
+      const kind = METRIC_KINDS[m && m.kind];
+      if (!kind || typeof m.name !== 'string' || !Array.isArray(m.points)) throw new TypeError(`metricsToOTLP: a metric needs a name, a kind ("sum", "gauge" or "histogram") and points`);
+      return {
+        name: m.name,
+        unit: m.unit === undefined ? '' : String(m.unit),
+        kind,
+        points: m.points.map((p) => {
+          const attributes = Object.entries(p.attributes || {}).map(([k, v]) => [String(k), String(v)]);
+          if (kind !== METRIC_KINDS.histogram) return { attributes, value: Number(p.value), integer: Number.isInteger(p.value) };
+          return {
+            attributes,
+            count: p.count,
+            sum: p.sum,
+            min: p.min,
+            max: p.max,
+            bounds: p.bounds || [],
+            buckets: p.buckets || [],
+            exemplars: (p.exemplars || []).map((e) => ({ traceID: e.traceID, spanID: e.spanID, time: e.time, value: e.value })),
+          };
+        }),
+      };
+    });
+  }
+  /* A decoded request (binding.c, "decodeMetrics") as Metric objects. */
+  function snapshotMetrics(decoded) {
+    return decoded.map((m) => ({
+      name: m.name,
+      unit: m.unit,
+      kind: METRIC_KIND_NAMES[m.kind] || 'gauge',
+      points: m.points.map((p) => {
+        const point = { attributes: Object.fromEntries(p.attributes.map(([k, v]) => [k, String(v)])) };
+        if (p.value !== undefined) return { ...point, value: p.value };
+        const out = { ...point, count: p.count, sum: p.sum, bounds: p.bounds, buckets: p.buckets };
+        if (p.min !== undefined) Object.assign(out, { min: p.min, max: p.max });
+        out.exemplars = p.exemplars.map((e) => {
+          let bucket = p.bounds.findIndex((b) => e.value <= b);
+          if (bucket < 0) bucket = p.bounds.length;
+          return { bucket, value: e.value, time: e.time, traceID: e.traceID, spanID: e.spanID };
+        });
+        return out;
+      }),
+    }));
+  }
+  /* Attributes as [[key, value]] of strings. */
+  const resourcePairs = (resource) => Object.entries(resource || {}).map(([k, v]) => [String(k), String(v)]);
+
+  /**
+   * One OTLP ExportMetricsServiceRequest (protobuf, for `/v1/metrics`) of a
+   * metrics snapshot: system.metrics()'s, or one the application builds in
+   * the same shape. Written by the C writer every signal uses.
+   */
+  function metricsToOTLP(snapshot, options = {}) {
+    if (snapshot === null || typeof snapshot !== 'object' || !Array.isArray(snapshot.metrics)) throw new TypeError('metricsToOTLP(snapshot): expected { startTime, time, metrics }');
+    const time = snapshot.time === undefined ? wallClock() : Number(snapshot.time);
+    const start = snapshot.startTime === undefined ? time : Number(snapshot.startTime);
+    return native.metricsToOTLP(nativeMetrics(snapshot.metrics), resourcePairs(options.resource), start, time);
+  }
 
   /** Reads OTLP protobuf trace bytes (C's decoder); throws on a malformed message. */
   function decodeTraces(bytes) {
@@ -1357,11 +1437,79 @@ export function createRuntime({ native, platform }) {
       /* tracing: the platform's exporter settings (Node.js: OTEL_* variables), the application's over them */
       const telemetry = options.telemetry === false ? { disabled: true } : { ...(platform.telemetry || {}), ...(options.telemetry || {}) };
       this._telemetry = telemetry;
-      this._exporter = !telemetry.disabled && (telemetry.endpoint || telemetry.tracesEndpoint) ? new Exporter(telemetry) : null;
+      this._exporter = !telemetry.disabled && (telemetry.endpoint || telemetry.tracesEndpoint || telemetry.metricsEndpoint) ? new Exporter(telemetry) : null;
       this._traceSink = null;
       this._traceOptions = {};
       this._traceApply();
       if (traces.sink) this.setTraceSink(traces.sink, traces);
+      /* metrics (docs/adr/0007): core's counts, pulled; the runs' durations here */
+      this._clock = platform.wallClock || wallClock;
+      this._metricsStart = this._clock();
+      this._runs = { count: 0, sum: 0, min: 0, max: 0, buckets: new Array(RUN_BOUNDS.length + 1).fill(0) };
+      const interval = telemetry.metricsInterval === undefined ? METRICS_INTERVAL_MS : Number(telemetry.metricsInterval);
+      this._metricsTimer = this._exporter && this._exporter.urls.metrics && interval > 0 ? platform.repeat(() => this._exportMetrics(), interval) : null;
+    }
+
+    /* ---- metrics ---- */
+
+    /**
+     * Metrics as plain data: per chart its actors, spawns, ends, macrosteps,
+     * fuel, errors and faults; the pools, memory, the run queue, overdue
+     * timers, delivered events, lost trace records and traces started and
+     * sampled; and how long runs blocked the loop. Counts are cumulative
+     * since `startTime`.
+     */
+    metrics() {
+      if (this._stopped) throw new Error('the system was stopped');
+      const time = this._clock();
+      const bytes = native.metrics(this._host, nativeMetrics(this._ownMetrics()), [], this._metricsStart, time);
+      return { startTime: this._metricsStart, time, metrics: snapshotMetrics(native.decodeMetrics(bytes)) };
+    }
+
+    _recordRun(ms) {
+      const runs = this._runs, seconds = ms / 1000;
+      let bucket = RUN_BOUNDS.findIndex((b) => seconds <= b);
+      if (bucket < 0) bucket = RUN_BOUNDS.length;
+      runs.buckets[bucket]++;
+      runs.min = runs.count ? Math.min(runs.min, seconds) : seconds;
+      runs.max = runs.count ? Math.max(runs.max, seconds) : seconds;
+      runs.count++;
+      runs.sum += seconds;
+    }
+
+    /* the binding's own metrics: the runs, and the exporter's bytes */
+    _ownMetrics() {
+      const r = this._runs;
+      const runs = { attributes: {}, count: r.count, sum: r.sum, bounds: RUN_BOUNDS, buckets: r.buckets.slice(), exemplars: [] };
+      if (r.count) Object.assign(runs, { min: r.min, max: r.max });
+      const own = [{ name: 'tinyactors.run.duration', unit: 's', kind: 'histogram', points: [runs] }];
+      if (this._exporter) {
+        const o = this._exporter.outcome;
+        own.push({
+          name: 'tinyactors.telemetry.bytes',
+          unit: 'By',
+          kind: 'sum',
+          points: Object.keys(o).map((outcome) => ({ attributes: { 'tinyactors.telemetry.outcome': outcome }, value: o[outcome] })),
+        });
+      }
+      return own;
+    }
+
+    _resource() {
+      return { 'service.name': 'tinyactors', ...(this._telemetry.resource || {}), ...(this._traceOptions.resource || {}), 'tinyactors.system.id': this.id };
+    }
+
+    /* one request of every metric to the exporter */
+    _exportMetrics() {
+      if (!this._exporter) return;
+      try {
+        const own = this._ownMetrics();
+        const app = this._telemetry.metrics ? this._telemetry.metrics() || [] : [];
+        const bytes = native.metrics(this._host, nativeMetrics([...own, ...app]), resourcePairs(this._resource()), this._metricsStart, this._clock());
+        this._exporter.add('metrics', bytes);
+      } catch (e) {
+        platform.log(e);
+      }
     }
 
     /* ---- tracing ---- */
@@ -1410,10 +1558,10 @@ export function createRuntime({ native, platform }) {
       else if (t.parent !== undefined && t.parent !== 'cause') throw new TypeError('parent: "cause" or "link"');
       if (t.values) flags |= OTLP_VALUES;
       if (t.logs === false) flags |= OTLP_NO_LOGS;
-      const resource = { 'service.name': 'tinyactors', ...(this._telemetry.resource || {}), ...(t.resource || {}), 'tinyactors.system.id': this.id };
+      const resource = this._resource();
       /* with nowhere for records to go core writes none; contexts still flow (traceparents) */
       native.traceConfigure(this._host, {
-        enabled: !!(this._traceSink || exporter),
+        enabled: !!(this._traceSink || (exporter && (exporter.urls.traces || exporter.urls.logs))),
         kinds: traceKinds(t),
         sampleParts: sampleParts(sample),
         sampleWhole: SAMPLE_WHOLE,
@@ -2101,6 +2249,8 @@ export function createRuntime({ native, platform }) {
       platform.clearTimer(this._sweepTimer);
       platform.cancelDefer(this._immediate);
       this._clockTimers = null;
+      if (this._metricsTimer !== null) platform.clearRepeat(this._metricsTimer);
+      if (this._exporter && this._exporter.urls.metrics) this._exportMetrics(); /* what was counted up to now */
       if (this._traceSink || this._exporter) {
         const { traces, logs } = native.traceEnd(this._host); /* open spans end, incomplete */
         try {
@@ -2203,8 +2353,9 @@ export function createRuntime({ native, platform }) {
           } finally {
             this._running = false;
           }
+          const dt = platform.now() - t0;
+          this._recordRun(dt);
           if (r.status === 'yielded') {
-            const dt = platform.now() - t0;
             if (dt > SLICE_MS) this._budget = Math.max(500, Math.floor(this._budget / 2));
             else if (dt < SLICE_MS / 4) this._budget = Math.min(200000, Math.floor(this._budget * 1.5));
           }
@@ -3133,6 +3284,7 @@ export function createRuntime({ native, platform }) {
     decodeValue,
     TRACE_KINDS,
     decodeTraces,
+    metricsToOTLP,
     parseTraceparent,
     formatTraceparent,
     stepSpanID,

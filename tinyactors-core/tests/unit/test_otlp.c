@@ -931,6 +931,18 @@ static void test_decode_malformed(void) {
             while (ta_otlp_next_event(span.events, &at, &event) == 1)
                 ;
         }
+        memset(&cursor, 0, sizeof cursor);
+        ta_otlp_metric_view metric;
+        for (int k = 0; k < 64 && ta_otlp_next_metric(copy, length, &cursor, &metric) == 1; k++) {
+            uint32_t at = 0;
+            ta_otlp_point_view point;
+            while (ta_otlp_next_point(metric.points, &at, metric.kind, &point) == 1) {
+                uint32_t exemplar_at = 0;
+                ta_otlp_exemplar exemplar;
+                while (ta_otlp_next_exemplar(point.exemplars, &exemplar_at, &exemplar) == 1)
+                    ;
+            }
+        }
         free(copy);
     }
     /* a request cut short is refused */
@@ -950,6 +962,286 @@ static void test_decode_malformed(void) {
     synthetic_close(&t, &w);
 }
 
+/* ---- metrics ---------------------------------------------------------------------------- */
+
+static ta_otlp *metrics_otlp(uint32_t metric_bytes, void **memory) {
+    ta_otlp_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.staging_bytes = TA_OTLP_STAGING_BYTES_MIN;
+    config.open_spans = 4;
+    config.metric_bytes = metric_bytes;
+    size_t bytes;
+    CHECK_EQUAL(ta_otlp_layout(&config, &bytes), TA_OK);
+    *memory = malloc(bytes);
+    ta_otlp *otlp;
+    CHECK_EQUAL(ta_otlp_init(*memory, bytes, &config, &otlp), TA_OK);
+    ta_otlp_attribute resource = {{"service.name", 12}, {"test", 4}};
+    CHECK_EQUAL(ta_otlp_set_resource(otlp, &resource, 1), TA_OK);
+    return otlp;
+}
+
+static unsigned char *metrics_put(ta_otlp *otlp, size_t *length) {
+    *length = ta_otlp_metrics_size(otlp);
+    CHECK(*length > 0);
+    unsigned char *bytes = malloc(*length);
+    CHECK_EQUAL(ta_otlp_put_metrics(otlp, bytes, *length), *length);
+    CHECK_EQUAL(ta_otlp_metrics_size(otlp), 0); /* forgotten once put */
+    return bytes;
+}
+
+/* The metric named `name` of a request (its first), or 0. */
+static int metric_named(const unsigned char *bytes, size_t length, const char *name,
+                        ta_otlp_metric_view *out) {
+    ta_otlp_cursor cursor;
+    memset(&cursor, 0, sizeof cursor);
+    int32_t got;
+    while ((got = ta_otlp_next_metric(bytes, length, &cursor, out)) == 1)
+        if (is(out->name, name)) return 1;
+    CHECK_EQUAL(got, 0);
+    return 0;
+}
+
+static const char *text_attribute(ta_otlp_fields fields, const char *key) {
+    static char text[128];
+    ta_otlp_value v;
+    if (!attribute(fields, key, &v) || v.kind != TA_OTLP_VALUE_STRING) return "";
+    snprintf(text, sizeof text, "%.*s", (int)v.bytes.length, v.bytes.pointer);
+    return text;
+}
+
+/* A sum, a gauge and a histogram with exemplars, written and read back. */
+static void test_metrics_roundtrip(void) {
+    void *memory;
+    ta_otlp *otlp = metrics_otlp(0, &memory);
+    CHECK_EQUAL(ta_otlp_metrics_size(otlp), 0);
+    ta_otlp_attribute chart = {{"tinyactors.chart.name", 21}, {"door", 4}};
+    ta_otlp_point sum_point;
+    memset(&sum_point, 0, sizeof sum_point);
+    sum_point.attributes = &chart;
+    sum_point.attribute_count = 1;
+    sum_point.integer = 42;
+    ta_otlp_metric sum;
+    memset(&sum, 0, sizeof sum);
+    sum.name = (ta_string_view){"tinyactors.macrosteps", 21};
+    sum.unit = (ta_string_view){"{step}", 6};
+    sum.kind = TA_OTLP_METRIC_SUM;
+    sum.points = &sum_point;
+    sum.point_count = 1;
+    sum.start_ns = 1000;
+    sum.time_ns = 2000;
+    CHECK_EQUAL(ta_otlp_add_metric(otlp, &sum), TA_OK);
+    ta_otlp_point gauge_point;
+    memset(&gauge_point, 0, sizeof gauge_point);
+    gauge_point.flags = TA_OTLP_POINT_DOUBLE;
+    gauge_point.number = 0.25;
+    ta_otlp_metric gauge = sum;
+    gauge.name = (ta_string_view){"tinyactors.timers.overdue", 25};
+    gauge.unit = (ta_string_view){"s", 1};
+    gauge.kind = TA_OTLP_METRIC_GAUGE;
+    gauge.points = &gauge_point;
+    CHECK_EQUAL(ta_otlp_add_metric(otlp, &gauge), TA_OK);
+    double bounds[3] = {0.001, 0.01, 0.1};
+    uint64_t buckets[4] = {1, 2, 0, 1};
+    ta_otlp_exemplar exemplar = {
+        {0x0af7651916cd43ddull, 0x8448eb211c80319cull}, 0xb7ad6b7169203331ull, 1500, 0.2};
+    ta_otlp_point histogram_point;
+    memset(&histogram_point, 0, sizeof histogram_point);
+    histogram_point.attributes = &chart;
+    histogram_point.attribute_count = 1;
+    histogram_point.count = 4;
+    histogram_point.sum = 0.2161;
+    histogram_point.min = 0.0001;
+    histogram_point.max = 0.2;
+    histogram_point.bounds = bounds;
+    histogram_point.buckets = buckets;
+    histogram_point.bucket_count = 4;
+    histogram_point.exemplars = &exemplar;
+    histogram_point.exemplar_count = 1;
+    ta_otlp_metric histogram = sum;
+    histogram.name = (ta_string_view){"tinyactors.macrostep.duration", 29};
+    histogram.unit = (ta_string_view){"s", 1};
+    histogram.kind = TA_OTLP_METRIC_HISTOGRAM;
+    histogram.points = &histogram_point;
+    CHECK_EQUAL(ta_otlp_add_metric(otlp, &histogram), TA_OK);
+    ta_otlp_stats stats;
+    stats.size = sizeof stats;
+    ta_otlp_stats_get(otlp, &stats);
+    CHECK_EQUAL(stats.metrics, 3);
+    /* staged metrics move with the block */
+    size_t bytes_needed;
+    ta_otlp_config bigger;
+    memset(&bigger, 0, sizeof bigger);
+    bigger.size = sizeof bigger;
+    bigger.open_spans = 8;
+    CHECK_EQUAL(ta_otlp_layout(&bigger, &bytes_needed), TA_OK);
+    void *moved_memory = malloc(bytes_needed);
+    ta_otlp *moved;
+    CHECK_EQUAL(ta_otlp_relocate(otlp, moved_memory, bytes_needed, &bigger, &moved), TA_OK);
+    free(memory);
+    memory = moved_memory;
+    otlp = moved;
+    size_t length;
+    unsigned char *bytes = metrics_put(otlp, &length);
+
+    ta_otlp_metric_view view;
+    CHECK(metric_named(bytes, length, "tinyactors.macrosteps", &view));
+    CHECK(view.kind == TA_OTLP_METRIC_SUM && view.temporality == 2 && view.monotonic == 1);
+    CHECK(is(view.unit, "{step}") && is(view.scope_name, "tinyactors"));
+    CHECK(strcmp(text_attribute(view.resource, "service.name"), "test") == 0);
+    uint32_t at = 0;
+    ta_otlp_point_view point;
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK(point.integer == 42 && point.flags == 0 && point.start == 1000 && point.time == 2000);
+    CHECK(strcmp(text_attribute(point.attributes, "tinyactors.chart.name"), "door") == 0);
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 0);
+
+    CHECK(metric_named(bytes, length, "tinyactors.timers.overdue", &view));
+    CHECK(view.kind == TA_OTLP_METRIC_GAUGE && view.temporality == 0);
+    at = 0;
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK(point.flags == TA_OTLP_POINT_DOUBLE && point.number == 0.25 && point.start == 0);
+
+    CHECK(metric_named(bytes, length, "tinyactors.macrostep.duration", &view));
+    CHECK(view.kind == TA_OTLP_METRIC_HISTOGRAM && view.temporality == 2);
+    at = 0;
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK(point.count == 4 && point.sum == 0.2161 && point.has_min_max && point.min == 0.0001 &&
+          point.max == 0.2);
+    CHECK(point.buckets.length == 32 && point.bounds.length == 24);
+    uint64_t third;
+    memcpy(&third, point.buckets.pointer + 8, 8);
+    CHECK_EQUAL(third, 2);
+    double bound;
+    memcpy(&bound, point.bounds.pointer + 16, 8);
+    CHECK(bound == 0.1);
+    uint32_t exemplar_at = 0;
+    ta_otlp_exemplar read;
+    CHECK_EQUAL(ta_otlp_next_exemplar(point.exemplars, &exemplar_at, &read), 1);
+    CHECK(read.trace.high == exemplar.trace.high && read.trace.low == exemplar.trace.low &&
+          read.span == exemplar.span && read.time == 1500 && read.value == 0.2);
+    CHECK_EQUAL(ta_otlp_next_exemplar(point.exemplars, &exemplar_at, &read), 0);
+    /* a cut request is refused */
+    ta_otlp_cursor cursor;
+    memset(&cursor, 0, sizeof cursor);
+    CHECK_EQUAL(ta_otlp_next_metric(bytes, length - 3, &cursor, &view), TA_ERROR_INVALID);
+    free(bytes);
+
+    /* a full staging refuses a metric whole, and keeps what it had */
+    ta_otlp_point *many = malloc(2000 * sizeof *many); /* about 120 KB: more than 64 KiB */
+    for (int i = 0; i < 2000; i++)
+        many[i] = sum_point;
+    sum.points = many;
+    sum.point_count = 2000;
+    CHECK_EQUAL(ta_otlp_add_metric(otlp, &sum), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(ta_otlp_metrics_size(otlp), 0);
+    sum.points = &sum_point;
+    free(many);
+    sum.point_count = 1;
+    sum.kind = 9;
+    CHECK_EQUAL(ta_otlp_add_metric(otlp, &sum), TA_ERROR_INVALID);
+    free(memory);
+}
+
+/* The stats of a system and a host, as metrics: names, attributes, sums. */
+static void test_metrics_stats(void) {
+    void *memory;
+    ta_otlp *otlp = metrics_otlp(0, &memory);
+    ta_chart_stats charts[2];
+    memset(charts, 0, sizeof charts);
+    charts[0].name = (ta_string_view){"door", 4};
+    charts[0].actors = 5;
+    charts[0].hibernated = 2;
+    charts[0].macrosteps = 70;
+    charts[0].errors_communication = 3;
+    charts[1].name = (ta_string_view){"lock", 4};
+    charts[1].actors = 1;
+    charts[1].fuel = 900;
+    ta_system_stats systems[2];
+    memset(systems, 0, sizeof systems);
+    systems[0].events = 10;
+    systems[0].events_capacity = 256;
+    systems[0].slab_pages = 2;
+    systems[0].slab_page_bytes = 4096;
+    systems[0].now = 5000;
+    systems[0].next_deadline = 4000;
+    systems[0].traces_started = 9;
+    systems[1].events = 4;
+    systems[1].events_capacity = 256;
+    systems[1].next_deadline = UINT64_MAX;
+    systems[1].traces_started = 1;
+    ta_host_stats host;
+    memset(&host, 0, sizeof host);
+    host.routed = 17;
+    ta_otlp_stats_input input;
+    memset(&input, 0, sizeof input);
+    input.size = sizeof input;
+    input.charts = charts;
+    input.chart_count = 2;
+    input.systems = systems;
+    input.system_count = 2;
+    input.host = &host;
+    input.ticks_per_second = 1000;
+    input.start_ns = 1;
+    input.time_ns = 2;
+    CHECK_EQUAL(ta_otlp_add_stats(otlp, &input), TA_OK);
+    size_t length;
+    unsigned char *bytes = metrics_put(otlp, &length);
+    ta_otlp_metric_view view;
+    ta_otlp_point_view point;
+    uint32_t at = 0, resident = 0, hibernated = 0;
+    CHECK(metric_named(bytes, length, "tinyactors.actors", &view));
+    while (ta_otlp_next_point(view.points, &at, view.kind, &point) == 1)
+        if (!strcmp(text_attribute(point.attributes, "tinyactors.chart.name"), "door")) {
+            if (!strcmp(text_attribute(point.attributes, "tinyactors.actor.state"), "resident"))
+                resident = (uint32_t)point.integer;
+            else
+                hibernated = (uint32_t)point.integer;
+        }
+    CHECK(resident == 3 && hibernated == 2);
+    CHECK(metric_named(bytes, length, "tinyactors.errors", &view));
+    int found = 0;
+    at = 0;
+    while (ta_otlp_next_point(view.points, &at, view.kind, &point) == 1)
+        found += !strcmp(text_attribute(point.attributes, "scxml.error.type"), "communication") &&
+                 !strcmp(text_attribute(point.attributes, "tinyactors.chart.name"), "door") &&
+                 point.integer == 3;
+    CHECK_EQUAL(found, 1);
+    CHECK(metric_named(bytes, length, "tinyactors.pool.usage", &view));
+    at = 0;
+    found = 0;
+    while (ta_otlp_next_point(view.points, &at, view.kind, &point) == 1)
+        found += !strcmp(text_attribute(point.attributes, "tinyactors.pool"), "events") &&
+                 point.integer == 14; /* summed over the systems */
+    CHECK_EQUAL(found, 1);
+    CHECK(metric_named(bytes, length, "tinyactors.memory.usage", &view));
+    at = 0;
+    found = 0;
+    while (ta_otlp_next_point(view.points, &at, view.kind, &point) == 1)
+        found += !strcmp(text_attribute(point.attributes, "tinyactors.memory"), "slab") &&
+                 point.integer == 8192;
+    CHECK_EQUAL(found, 1);
+    CHECK(metric_named(bytes, length, "tinyactors.timers.overdue", &view));
+    at = 0;
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK(point.flags == TA_OTLP_POINT_DOUBLE && point.number == 1.0); /* 1000 ticks late */
+    CHECK(metric_named(bytes, length, "tinyactors.traces", &view));
+    at = 0;
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK(point.integer == 10 && point.start == 1 && point.time == 2);
+    CHECK(metric_named(bytes, length, "tinyactors.messages.routed", &view));
+    at = 0;
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK_EQUAL(point.integer, 17);
+    free(bytes);
+    /* not enough room: nothing is added */
+    free(memory);
+    otlp = metrics_otlp(1024, &memory);
+    CHECK_EQUAL(ta_otlp_add_stats(otlp, &input), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(ta_otlp_metrics_size(otlp), 0);
+    free(memory);
+}
+
 int main(void) {
     RUN(test_granary_vocabulary);
     RUN(test_open_across_runs);
@@ -961,5 +1253,7 @@ int main(void) {
     RUN(test_end_all);
     RUN(test_time);
     RUN(test_decode_malformed);
+    RUN(test_metrics_roundtrip);
+    RUN(test_metrics_stats);
     TEST_MAIN_END();
 }

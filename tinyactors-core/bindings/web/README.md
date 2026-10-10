@@ -89,9 +89,9 @@ OTLP protobuf after every run: the bytes reach JavaScript as one
 `scxml.finished`; every span carries `tinyactors.actor.name`,
 `tinyactors.chart.name` and `tinyactors.span.kind`.
 
-**Export with no code.** With an endpoint, a system posts its traces and
-logs to an OTLP/HTTP collector (protobuf; `/v1/traces` and `/v1/logs`
-under the endpoint):
+**Export with no code.** With an endpoint, a system posts its traces,
+logs and metrics to an OTLP/HTTP collector (protobuf; `/v1/traces`,
+`/v1/logs` and `/v1/metrics` under the endpoint):
 
 A browser has no environment: the system exports only when the
 application passes an endpoint (posted with `fetch`, so the collector must
@@ -140,6 +140,31 @@ already running. `stop()` ends the spans still open, marked incomplete.
 tools); `parseTraceparent`, `formatTraceparent` and `stepSpanID(session,
 macrostep, microstep)` are the same C functions core uses, so a host
 computes the span ID of any step without seeing its records.
+
+## Metrics
+
+`system.metrics()` returns what the system counted, as plain data
+(docs/adr/0007 in the repository root): per chart (`tinyactors.chart.name`)
+its actors (resident and hibernated), spawns, ends, macrosteps, fuel,
+errors (`scxml.error.type`) and faults; the pools and their limits, memory,
+the run queue, how late the earliest timer is, delivered events, lost trace
+records, and the traces started and sampled; and `tinyactors.run.duration`,
+how long each run blocked the loop. Sums are cumulative since
+`startTime`. Core counts once per scheduling turn and where something
+fails, never per event; latencies come from spans (a collector's
+spanmetrics).
+
+```js
+const snapshot = system.metrics(); // { startTime, time, metrics: [{ name, unit, kind, points }] }
+const bytes = metricsToOTLP(snapshot, { resource: { 'service.name': 'checkout' } }); // post to /v1/metrics
+```
+
+`metricsToOTLP` takes any snapshot of that shape, so an application
+encodes its own metrics with the same C writer. With an endpoint, the
+exporter posts `/v1/metrics` every minute (`telemetry.metricsInterval`, in
+ms; 0 only when the system stops) and once more at `stop()`, adding what
+`telemetry.metrics()` returns; `telemetry.metricsEndpoint` names the URL
+(`''` sends none).
 
 ## Call cost (wasm vs the Node addon)
 

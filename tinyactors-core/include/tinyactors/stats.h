@@ -48,6 +48,7 @@ typedef struct ta_system_stats {
      * untraced send; with or without a caller's traceparent), and how many
      * of them were sampled */
     uint64_t traces_started, traces_sampled;
+    ta_time next_deadline; /* the earliest pending delayed send, UINT64_MAX: none */
 } ta_system_stats;
 
 /* What one chart's actors did in one system (ta_system_chart_stats_get), or

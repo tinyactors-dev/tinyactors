@@ -5,8 +5,11 @@
  * Only the Node.js entry reads the environment: bindings/shared and the C
  * layers never do.
  *
- *   OTEL_EXPORTER_OTLP_ENDPOINT         base URL; /v1/traces and /v1/logs are added
+ *   OTEL_EXPORTER_OTLP_ENDPOINT         base URL; /v1/traces, /v1/logs and /v1/metrics are added
  *   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT  the traces URL as it is (wins over the base)
+ *   OTEL_EXPORTER_OTLP_METRICS_ENDPOINT the metrics URL as it is (wins over the base)
+ *   OTEL_METRIC_EXPORT_INTERVAL         ms between metrics exports (default 60000)
+ *   OTEL_METRICS_EXPORTER               "none": no metrics export
  *   OTEL_EXPORTER_OTLP_HEADERS          key=value,key=value (values percent-encoded)
  *   OTEL_SERVICE_NAME                   resource service.name
  *   OTEL_RESOURCE_ATTRIBUTES            key=value,key=value
@@ -44,6 +47,11 @@ function telemetryFromEnvironment(environment) {
   if (traces) telemetry.tracesEndpoint = traces;
   if (base) telemetry.endpoint = base;
   if (traces && !base) telemetry.logsEndpoint = ''; /* a traces URL alone: no logs */
+  const metrics = get('OTEL_EXPORTER_OTLP_METRICS_ENDPOINT');
+  if (metrics) telemetry.metricsEndpoint = metrics;
+  if ((get('OTEL_METRICS_EXPORTER') || '').toLowerCase() === 'none') telemetry.metricsEndpoint = '';
+  const interval = Number(get('OTEL_METRIC_EXPORT_INTERVAL'));
+  if (get('OTEL_METRIC_EXPORT_INTERVAL') && interval >= 0) telemetry.metricsInterval = interval;
   const headers = get('OTEL_EXPORTER_OTLP_HEADERS');
   if (headers) telemetry.headers = keyValues(headers);
   const resource = keyValues(get('OTEL_RESOURCE_ATTRIBUTES'));

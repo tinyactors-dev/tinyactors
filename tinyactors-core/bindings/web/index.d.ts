@@ -583,6 +583,15 @@ export declare class System implements SystemRef {
   configureTraces(options: TraceConfiguration): void;
   /** Resolves once every export this system started has been posted (or failed). */
   flushTraces(): Promise<void>;
+  /**
+   * Metrics as plain data (docs/adr/0007): per chart (`tinyactors.chart.name`)
+   * its actors, spawns, ends, macrosteps, fuel, errors and faults; the
+   * pools, memory, the run queue, overdue timers, delivered events, lost
+   * trace records, traces started and sampled; and how long runs blocked
+   * the loop. Sums are cumulative since `startTime`. Read it from an SDK's
+   * observable instruments, or hand it to metricsToOTLP().
+   */
+  metrics(): MetricsSnapshot;
 }
 
 export interface MigrateOptions {
@@ -998,6 +1007,12 @@ export interface TelemetryOptions {
   tracesEndpoint?: string;
   /** The logs URL, as it is; "" sends no logs. */
   logsEndpoint?: string;
+  /** The metrics URL, as it is; "" sends no metrics (OTEL_EXPORTER_OTLP_METRICS_ENDPOINT, OTEL_METRICS_EXPORTER=none). */
+  metricsEndpoint?: string;
+  /** Milliseconds between metrics exports; 0 exports only when the system stops (OTEL_METRIC_EXPORT_INTERVAL, default 60000). */
+  metricsInterval?: number;
+  /** The application's own metrics, exported with the system's at each interval. */
+  metrics?: () => Metric[];
   /** Headers of every request (OTEL_EXPORTER_OTLP_HEADERS). */
   headers?: Record<string, string>;
   /** Resource attributes (OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES). */
@@ -1009,6 +1024,59 @@ export interface TelemetryOptions {
   /** How to post: (url, headers, body) => a promise (default: the platform's HTTP client, or fetch). */
   post?: (url: string, headers: Record<string, string>, body: Uint8Array) => Promise<void>;
 }
+
+/** A sum's or gauge's value at one set of attributes. */
+export interface MetricPoint {
+  attributes: Record<string, string>;
+  value: number;
+}
+
+/** A bucket's sample, with the span it was measured in. */
+export interface Exemplar {
+  /** The bucket's index in `buckets`. */
+  bucket: number;
+  value: number;
+  /** Milliseconds since the epoch. */
+  time: number;
+  traceID: string;
+  spanID: string;
+}
+
+/** A distribution with explicit bucket bounds (an OTLP Histogram point). */
+export interface HistogramPoint {
+  attributes: Record<string, string>;
+  count: number;
+  sum: number;
+  /** Present once something was recorded. */
+  min?: number;
+  max?: number;
+  /** Inclusive upper bounds; `buckets` has one more entry, for the rest. */
+  bounds: number[];
+  buckets: number[];
+  exemplars: Exemplar[];
+}
+
+/** One metric: a cumulative monotonic sum, a gauge, or a histogram. */
+export type Metric =
+  | { name: string; unit: string; kind: 'sum' | 'gauge'; points: MetricPoint[] }
+  | { name: string; unit: string; kind: 'histogram'; points: HistogramPoint[] };
+
+export interface MetricsSnapshot {
+  /** Milliseconds since the epoch: when the system started counting, and now. */
+  startTime: number;
+  time: number;
+  metrics: Metric[];
+}
+
+/**
+ * One OTLP ExportMetricsServiceRequest (protobuf) of a snapshot, to post to
+ * `/v1/metrics`: system.metrics()'s, or the application's own in the same
+ * shape. `resource` holds the resource's attributes.
+ */
+export declare function metricsToOTLP(
+  snapshot: { startTime?: number; time?: number; metrics: Metric[] },
+  options?: { resource?: Record<string, string> },
+): Uint8Array;
 
 /** A span as decodeTraces() reads it. IDs are lowercase hex. */
 export interface DecodedSpan {

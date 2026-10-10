@@ -1,4 +1,4 @@
-/* tinyactors/otlp.h — trace records to OTLP protobuf, and back (docs/adr/0006
+/* tinyactors/otlp.h — trace records and stats to OTLP protobuf, and back (docs/adr/0006
  * in the repository root, section 8).
  *
  * A codec, like tinyactors/basic_http.h: a host or a binding drains a system's
@@ -32,12 +32,17 @@
  * One request has one ScopeSpans per (system, chart): its scope names the
  * chart. Span IDs are the records' (ta_step_key_span_id), so an ID a host
  * computes for a step names the same span.
+ *
+ * It also writes ExportMetricsServiceRequests (`/v1/metrics`, docs/adr/0007):
+ * a system's and a host's stats (tinyactors/stats.h) as metrics, and
+ * metrics a host or a binding describes itself.
  */
 #ifndef TINYACTORS_OTLP_H
 #define TINYACTORS_OTLP_H
 
 #include <tinyactors/datamodel.h>
 #include <tinyactors/image.h>
+#include <tinyactors/stats.h>
 #include <tinyactors/trace.h>
 #include <tinyactors/types.h>
 
@@ -68,6 +73,8 @@ typedef struct ta_otlp_config {
     uint32_t value_limit;    /* bytes of a value in an attribute, cut there (256) */
     uint32_t render_bytes;   /* a value as the datamodel writes it, before the cut (16 KiB) */
     uint32_t resource_bytes; /* the resource attributes, encoded (4 KiB) */
+    uint32_t metric_bytes;   /* metrics, encoded (64 KiB) */
+    uint32_t pad;
 } ta_otlp_config;
 
 typedef struct ta_otlp ta_otlp;
@@ -138,6 +145,73 @@ TA_API size_t ta_otlp_put_traces(ta_otlp *otlp, void *out, size_t size);
 TA_API size_t ta_otlp_logs_size(const ta_otlp *otlp);
 TA_API size_t ta_otlp_put_logs(ta_otlp *otlp, void *out, size_t size);
 
+/* ---- metrics (docs/adr/0007 in the repository root) ---------------------------
+ * One ExportMetricsServiceRequest (`/v1/metrics`) gathers the metrics added
+ * since the last put, under one scope (`tinyactors`) and the resource of
+ * ta_otlp_set_resource. Sums are cumulative and monotonic; times are
+ * nanoseconds since the Unix epoch. An add is whole or not at all:
+ * TA_ERROR_NO_MEMORY when the staging (metric_bytes) has no room (put the
+ * request, or relocate into a bigger block, and add again). */
+enum { TA_OTLP_METRIC_SUM = 1, TA_OTLP_METRIC_GAUGE = 2, TA_OTLP_METRIC_HISTOGRAM = 3 };
+enum { TA_OTLP_POINT_DOUBLE = 1u << 0 }; /* a sum's or gauge's value is `number`, not `integer` */
+
+/* A link from a point to a trace: the span a value was measured in. */
+typedef struct ta_otlp_exemplar {
+    ta_trace_id trace;
+    ta_span_id span;
+    uint64_t time; /* ns */
+    double value;
+} ta_otlp_exemplar;
+
+typedef struct ta_otlp_point {
+    const ta_otlp_attribute *attributes;
+    uint32_t attribute_count;
+    uint32_t flags; /* TA_OTLP_POINT_* */
+    int64_t integer;
+    double number;
+    /* histograms: `bucket_count` counts, the last above the `bucket_count -
+     * 1` inclusive upper bounds; min and max are written when count > 0 */
+    uint64_t count;
+    double sum, min, max;
+    const double *bounds;
+    const uint64_t *buckets;
+    uint32_t bucket_count, exemplar_count;
+    const ta_otlp_exemplar *exemplars;
+} ta_otlp_point;
+
+typedef struct ta_otlp_metric {
+    ta_string_view name, unit, description;
+    uint32_t kind; /* TA_OTLP_METRIC_* */
+    uint32_t point_count;
+    const ta_otlp_point *points;
+    uint64_t start_ns, time_ns; /* the stream's start (sums, histograms), and now */
+} ta_otlp_metric;
+
+TA_API ta_status ta_otlp_add_metric(ta_otlp *otlp, const ta_otlp_metric *metric);
+
+/* What a system or a host counted (tinyactors/stats.h), as the metrics of
+ * docs/adr/0007: per chart (`tinyactors.chart.name`) its actors, spawns,
+ * ends, macrosteps, fuel, errors and faults; per system the pools, memory,
+ * the run queue, overdue timers, delivered events, lost trace records and
+ * traces started and sampled, `systems` summed; per host the messages
+ * routed and actors migrated. */
+typedef struct ta_otlp_stats_input {
+    uint32_t size;
+    uint32_t chart_count;
+    const ta_chart_stats *charts;
+    const ta_system_stats *systems;
+    uint32_t system_count, pad;
+    const ta_host_stats *host; /* or NULL */
+    uint64_t ticks_per_second; /* the systems' clock (overdue timers) */
+    uint64_t start_ns, time_ns;
+} ta_otlp_stats_input;
+TA_API ta_status ta_otlp_add_stats(ta_otlp *otlp, const ta_otlp_stats_input *input);
+
+/* The size of the ExportMetricsServiceRequest of the metrics added since the
+ * last put (0 when none were), then the request, as for traces. */
+TA_API size_t ta_otlp_metrics_size(const ta_otlp *otlp);
+TA_API size_t ta_otlp_put_metrics(ta_otlp *otlp, void *out, size_t size);
+
 typedef struct ta_otlp_stats {
     uint32_t size;
     uint32_t open, open_capacity;     /* sessions with an open macrostep */
@@ -145,6 +219,7 @@ typedef struct ta_otlp_stats {
     uint32_t spans;                   /* spans staged */
     uint32_t staging_bytes, staging_capacity;
     uint32_t log_records, log_bytes, log_capacity;
+    uint32_t metrics, metric_bytes, metric_capacity; /* metrics staged */
     uint32_t pad;
     uint64_t records;   /* records read */
     uint64_t dropped;   /* records the systems reported lost */
@@ -239,6 +314,35 @@ typedef struct ta_otlp_link {
     ta_otlp_fields attributes;
 } ta_otlp_link;
 TA_API int32_t ta_otlp_next_link(ta_otlp_fields links, uint32_t *at, ta_otlp_link *out);
+
+/* A metric of an ExportMetricsServiceRequest (or MetricsData). */
+typedef struct ta_otlp_metric_view {
+    ta_string_view name, unit, description;
+    uint32_t kind;        /* TA_OTLP_METRIC_*, 0 for one this reader does not know */
+    uint32_t temporality; /* 1 delta, 2 cumulative, 0 none (gauges) */
+    uint32_t monotonic, pad;
+    ta_otlp_fields points;   /* ta_otlp_next_point */
+    ta_otlp_fields resource; /* its resource's attributes */
+    ta_string_view scope_name, scope_version;
+} ta_otlp_metric_view;
+TA_API int32_t ta_otlp_next_metric(const void *bytes, size_t length, ta_otlp_cursor *cursor,
+                                   ta_otlp_metric_view *out);
+
+typedef struct ta_otlp_point_view {
+    uint64_t start, time; /* ns */
+    uint32_t flags;       /* TA_OTLP_POINT_DOUBLE when the value is `number` */
+    uint32_t has_min_max;
+    int64_t integer;
+    double number;
+    uint64_t count; /* histograms */
+    double sum, min, max;
+    ta_string_view buckets, bounds;       /* packed little-endian fixed64 counts and doubles */
+    ta_otlp_fields attributes, exemplars; /* ta_otlp_next_attribute / _exemplar */
+} ta_otlp_point_view;
+/* The next point of a metric (`kind` is the metric's), from *at (start at 0). */
+TA_API int32_t ta_otlp_next_point(ta_otlp_fields points, uint32_t *at, uint32_t kind,
+                                  ta_otlp_point_view *out);
+TA_API int32_t ta_otlp_next_exemplar(ta_otlp_fields exemplars, uint32_t *at, ta_otlp_exemplar *out);
 
 #ifdef __cplusplus
 }

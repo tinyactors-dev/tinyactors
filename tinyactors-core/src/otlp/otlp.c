@@ -1576,6 +1576,9 @@ void ta_otlp_stats_get(const ta_otlp *otlp, ta_otlp_stats *out) {
     stats.log_records = otlp->log_count;
     stats.log_bytes = otlp->logs_used;
     stats.log_capacity = otlp->config.log_bytes;
+    stats.metrics = otlp->metric_count;
+    stats.metric_bytes = otlp->metrics_used;
+    stats.metric_capacity = otlp->config.metric_bytes;
     stats.records = otlp->records;
     stats.dropped = otlp->dropped;
     stats.skipped = otlp->skipped;
@@ -1611,11 +1614,14 @@ static void otlp_normalize(const ta_otlp_config *in, ta_otlp_config *config) {
     if (config->render_bytes < config->value_limit + 4u)
         config->render_bytes = config->value_limit + 4u;
     if (!config->resource_bytes) config->resource_bytes = 4096;
+    if (!config->metric_bytes) config->metric_bytes = 65536;
+    if (config->metric_bytes > TA_OTLP_STAGING_BYTES_MAX)
+        config->metric_bytes = TA_OTLP_STAGING_BYTES_MAX;
 }
 
 typedef struct otlp_carved {
     size_t header, open, index, skips, chunks, spans, entries, scopes, scope_bytes, logs, resource,
-        scratch, render;
+        scratch, render, metrics;
     uint32_t index_capacity, entry_capacity, scratch_bytes;
 } otlp_carved;
 
@@ -1640,6 +1646,7 @@ static void otlp_carve(ta_arena *arena, const ta_otlp_config *config, otlp_carve
     o->resource = ta_arena_alloc(arena, config->resource_bytes, TA_ALIGN_MAX);
     o->scratch = ta_arena_alloc(arena, o->scratch_bytes, TA_ALIGN_MAX);
     o->render = ta_arena_alloc(arena, config->render_bytes, TA_ALIGN_MAX);
+    o->metrics = ta_arena_alloc(arena, config->metric_bytes, TA_ALIGN_MAX);
 }
 
 ta_status ta_otlp_layout(const ta_otlp_config *config, size_t *bytes) {
@@ -1684,6 +1691,7 @@ static ta_otlp *otlp_place(void *memory, size_t length, const ta_otlp_config *co
     otlp->resource_relative = otlp_relative(otlp, &arena, o.resource);
     otlp->scratch_relative = otlp_relative(otlp, &arena, o.scratch);
     otlp->render_relative = otlp_relative(otlp, &arena, o.render);
+    otlp->metrics_relative = otlp_relative(otlp, &arena, o.metrics);
     otlp->chunk_free = TA_NIL;
     return otlp;
 }
@@ -1708,7 +1716,8 @@ ta_status ta_otlp_relocate(ta_otlp *otlp, void *memory, size_t length, const ta_
     if (normalized.open_spans < otlp->open_count || normalized.open_spans < otlp->skip_count ||
         normalized.chunks < otlp->chunk_high || normalized.staging_bytes < otlp->spans_used ||
         entry_capacity < otlp->entry_count || normalized.scopes < otlp->scope_count ||
-        normalized.log_bytes < otlp->logs_used || normalized.resource_bytes < otlp->resource_used)
+        normalized.log_bytes < otlp->logs_used || normalized.resource_bytes < otlp->resource_used ||
+        normalized.metric_bytes < otlp->metrics_used)
         return TA_ERROR_INVALID;
     ta_otlp *moved = otlp_place(memory, length, &normalized);
     if (!moved) return TA_ERROR_NO_MEMORY;
@@ -1727,6 +1736,10 @@ ta_status ta_otlp_relocate(ta_otlp *otlp, void *memory, size_t length, const ta_
               otlp->logs_used);
     ta_memcpy(OTLP_POINTER(moved, resource_relative, void),
               OTLP_POINTER(otlp, resource_relative, void), otlp->resource_used);
+    ta_memcpy(OTLP_POINTER(moved, metrics_relative, void),
+              OTLP_POINTER(otlp, metrics_relative, void), otlp->metrics_used);
+    moved->metrics_used = otlp->metrics_used;
+    moved->metric_count = otlp->metric_count;
     ta_memcpy(OTLP_POINTER(moved, chunks_relative, void), OTLP_POINTER(otlp, chunks_relative, void),
               sizeof(otlp_chunk) * otlp->chunk_high);
     ta_memcpy(OTLP_POINTER(moved, skips_relative, void), OTLP_POINTER(otlp, skips_relative, void),
@@ -1760,4 +1773,503 @@ ta_status ta_otlp_relocate(ta_otlp *otlp, void *memory, size_t length, const ta_
     otlp->magic = 0; /* the old block is dead */
     *out = moved;
     return TA_OK;
+}
+
+/* ---- metrics (docs/adr/0007) ----------------------------------------------------------------
+ * Each added metric is one encoded Metric message in the metrics staging;
+ * a request puts them under one ScopeMetrics. Sizes are computed before
+ * anything is written, so an add is whole or not at all. */
+
+static void otlp_put_double(otlp_out *out, double value) {
+    uint64_t bits;
+    ta_memcpy(&bits, &value, sizeof bits);
+    otlp_put_fixed64(out, bits);
+}
+
+#define OTLP_FIXED_FIELD    9u  /* a tag and 8 bytes */
+#define OTLP_EXEMPLAR_BYTES 46u /* time, value, span ID (8), trace ID (16) */
+
+static uint32_t otlp_string_attribute_size(const ta_otlp_attribute *attribute) {
+    return otlp_key_value_size(attribute->key, otlp_any_string_size(attribute->value.length));
+}
+
+static uint64_t otlp_string_attributes_size(const ta_otlp_attribute *attributes, uint32_t count,
+                                            uint32_t field) {
+    uint64_t size = 0;
+    for (uint32_t i = 0; i < count; i++)
+        size += otlp_field_size(field, otlp_string_attribute_size(&attributes[i]));
+    return size;
+}
+
+static void otlp_string_attributes_put(otlp_out *out, uint32_t field,
+                                       const ta_otlp_attribute *attributes, uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) {
+        const ta_otlp_attribute *attribute = &attributes[i];
+        otlp_put_length(out, field, otlp_string_attribute_size(attribute));
+        otlp_put_length(out, F_KEY_VALUE_KEY, attribute->key.length);
+        otlp_put_bytes(out, attribute->key.pointer, attribute->key.length);
+        otlp_put_length(out, F_KEY_VALUE_VALUE, otlp_any_string_size(attribute->value.length));
+        otlp_put_length(out, F_ANY_STRING, attribute->value.length);
+        otlp_put_bytes(out, attribute->value.pointer, attribute->value.length);
+    }
+}
+
+static void otlp_exemplars_put(otlp_out *out, uint32_t field, const ta_otlp_exemplar *exemplars,
+                               uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) {
+        const ta_otlp_exemplar *exemplar = &exemplars[i];
+        otlp_put_length(out, field, OTLP_EXEMPLAR_BYTES);
+        otlp_put_tag(out, F_EXEMPLAR_TIME, WIRE_I64);
+        otlp_put_fixed64(out, exemplar->time);
+        otlp_put_tag(out, F_EXEMPLAR_DOUBLE, WIRE_I64);
+        otlp_put_double(out, exemplar->value);
+        otlp_put_length(out, F_EXEMPLAR_SPAN_ID, 8);
+        otlp_put_id64(out, exemplar->span);
+        otlp_put_length(out, F_EXEMPLAR_TRACE_ID, 16);
+        otlp_put_id64(out, exemplar->trace.high);
+        otlp_put_id64(out, exemplar->trace.low);
+    }
+}
+
+/* The bytes of one data point (without its field head). */
+static uint64_t otlp_point_size(const ta_otlp_metric *metric, const ta_otlp_point *point) {
+    uint64_t size = 2u * OTLP_FIXED_FIELD; /* start, time (a gauge has no start) */
+    if (metric->kind == TA_OTLP_METRIC_GAUGE) size -= OTLP_FIXED_FIELD;
+    if (metric->kind == TA_OTLP_METRIC_HISTOGRAM) {
+        size += 2u * OTLP_FIXED_FIELD; /* count, sum */
+        size += otlp_field_size(F_HISTOGRAM_BUCKETS, 8u * point->bucket_count);
+        if (point->bucket_count > 1)
+            size += otlp_field_size(F_HISTOGRAM_BOUNDS, 8u * (point->bucket_count - 1u));
+        if (point->count) size += 2u * OTLP_FIXED_FIELD; /* min, max */
+        size += (uint64_t)point->exemplar_count *
+                otlp_field_size(F_HISTOGRAM_EXEMPLARS, OTLP_EXEMPLAR_BYTES);
+        return size + otlp_string_attributes_size(point->attributes, point->attribute_count,
+                                                  F_HISTOGRAM_ATTRIBUTES);
+    }
+    size += OTLP_FIXED_FIELD; /* the value */
+    size +=
+        (uint64_t)point->exemplar_count * otlp_field_size(F_NUMBER_EXEMPLARS, OTLP_EXEMPLAR_BYTES);
+    return size + otlp_string_attributes_size(point->attributes, point->attribute_count,
+                                              F_NUMBER_ATTRIBUTES);
+}
+
+static void otlp_point_put(otlp_out *out, const ta_otlp_metric *metric,
+                           const ta_otlp_point *point) {
+    if (metric->kind == TA_OTLP_METRIC_HISTOGRAM) {
+        otlp_put_tag(out, F_HISTOGRAM_START, WIRE_I64);
+        otlp_put_fixed64(out, metric->start_ns);
+        otlp_put_tag(out, F_HISTOGRAM_TIME, WIRE_I64);
+        otlp_put_fixed64(out, metric->time_ns);
+        otlp_put_tag(out, F_HISTOGRAM_COUNT, WIRE_I64);
+        otlp_put_fixed64(out, point->count);
+        otlp_put_tag(out, F_HISTOGRAM_SUM, WIRE_I64);
+        otlp_put_double(out, point->sum);
+        otlp_put_length(out, F_HISTOGRAM_BUCKETS, 8u * point->bucket_count);
+        for (uint32_t i = 0; i < point->bucket_count; i++)
+            otlp_put_fixed64(out, point->buckets[i]);
+        if (point->bucket_count > 1) {
+            otlp_put_length(out, F_HISTOGRAM_BOUNDS, 8u * (point->bucket_count - 1u));
+            for (uint32_t i = 0; i + 1u < point->bucket_count; i++)
+                otlp_put_double(out, point->bounds[i]);
+        }
+        otlp_exemplars_put(out, F_HISTOGRAM_EXEMPLARS, point->exemplars, point->exemplar_count);
+        otlp_string_attributes_put(out, F_HISTOGRAM_ATTRIBUTES, point->attributes,
+                                   point->attribute_count);
+        if (point->count) {
+            otlp_put_tag(out, F_HISTOGRAM_MIN, WIRE_I64);
+            otlp_put_double(out, point->min);
+            otlp_put_tag(out, F_HISTOGRAM_MAX, WIRE_I64);
+            otlp_put_double(out, point->max);
+        }
+        return;
+    }
+    if (metric->kind == TA_OTLP_METRIC_SUM) {
+        otlp_put_tag(out, F_NUMBER_START, WIRE_I64);
+        otlp_put_fixed64(out, metric->start_ns);
+    }
+    otlp_put_tag(out, F_NUMBER_TIME, WIRE_I64);
+    otlp_put_fixed64(out, metric->time_ns);
+    if (point->flags & TA_OTLP_POINT_DOUBLE) {
+        otlp_put_tag(out, F_NUMBER_DOUBLE, WIRE_I64);
+        otlp_put_double(out, point->number);
+    } else {
+        otlp_put_tag(out, F_NUMBER_INT, WIRE_I64);
+        otlp_put_fixed64(out, (uint64_t)point->integer);
+    }
+    otlp_exemplars_put(out, F_NUMBER_EXEMPLARS, point->exemplars, point->exemplar_count);
+    otlp_string_attributes_put(out, F_NUMBER_ATTRIBUTES, point->attributes, point->attribute_count);
+}
+
+static uint32_t otlp_data_field(uint32_t kind) {
+    return kind == TA_OTLP_METRIC_SUM     ? F_METRIC_SUM
+           : kind == TA_OTLP_METRIC_GAUGE ? F_METRIC_GAUGE
+                                          : F_METRIC_HISTOGRAM;
+}
+
+/* The bytes of the Gauge, Sum or Histogram message. */
+static uint64_t otlp_data_size(const ta_otlp_metric *metric) {
+    uint64_t size = 0;
+    for (uint32_t i = 0; i < metric->point_count; i++) {
+        uint64_t point = otlp_point_size(metric, &metric->points[i]);
+        if (point > 0x7FFFFFFFu) return UINT64_MAX;
+        size += otlp_field_size(F_DATA_POINTS, (uint32_t)point);
+    }
+    if (metric->kind == TA_OTLP_METRIC_SUM) size += 4u; /* temporality, monotonic */
+    if (metric->kind == TA_OTLP_METRIC_HISTOGRAM) size += 2u;
+    return size;
+}
+
+static uint64_t otlp_metric_size(const ta_otlp_metric *metric, uint64_t data) {
+    uint64_t size = otlp_field_size(F_METRIC_NAME, metric->name.length);
+    if (metric->description.length)
+        size += otlp_field_size(F_METRIC_DESCRIPTION, metric->description.length);
+    if (metric->unit.length) size += otlp_field_size(F_METRIC_UNIT, metric->unit.length);
+    return size + otlp_field_size(otlp_data_field(metric->kind), (uint32_t)data);
+}
+
+ta_status ta_otlp_add_metric(ta_otlp *otlp, const ta_otlp_metric *metric) {
+    if (metric->kind < TA_OTLP_METRIC_SUM || metric->kind > TA_OTLP_METRIC_HISTOGRAM)
+        return TA_ERROR_INVALID;
+    for (uint32_t i = 0; i < metric->point_count; i++) {
+        const ta_otlp_point *point = &metric->points[i];
+        if ((point->attribute_count && !point->attributes) ||
+            (point->exemplar_count && !point->exemplars) ||
+            (metric->kind == TA_OTLP_METRIC_HISTOGRAM && point->bucket_count &&
+             (!point->buckets || (point->bucket_count > 1 && !point->bounds))))
+            return TA_ERROR_INVALID;
+    }
+    uint64_t data = otlp_data_size(metric);
+    if (data > 0x7FFFFFFFu) return TA_ERROR_NO_MEMORY;
+    uint64_t body = otlp_metric_size(metric, data);
+    if (body > 0x7FFFFFFFu) return TA_ERROR_NO_MEMORY;
+    uint64_t entry = otlp_field_size(F_SS_ITEMS, (uint32_t)body);
+    if (entry > (uint64_t)otlp->config.metric_bytes - otlp->metrics_used) return TA_ERROR_NO_MEMORY;
+    unsigned char *at = OTLP_POINTER(otlp, metrics_relative, unsigned char) + otlp->metrics_used;
+    otlp_out out = {at, at + entry};
+    otlp_put_length(&out, F_SS_ITEMS, (uint32_t)body);
+    otlp_put_length(&out, F_METRIC_NAME, metric->name.length);
+    otlp_put_bytes(&out, metric->name.pointer, metric->name.length);
+    if (metric->description.length) {
+        otlp_put_length(&out, F_METRIC_DESCRIPTION, metric->description.length);
+        otlp_put_bytes(&out, metric->description.pointer, metric->description.length);
+    }
+    if (metric->unit.length) {
+        otlp_put_length(&out, F_METRIC_UNIT, metric->unit.length);
+        otlp_put_bytes(&out, metric->unit.pointer, metric->unit.length);
+    }
+    otlp_put_length(&out, otlp_data_field(metric->kind), (uint32_t)data);
+    for (uint32_t i = 0; i < metric->point_count; i++) {
+        otlp_put_length(&out, F_DATA_POINTS, (uint32_t)otlp_point_size(metric, &metric->points[i]));
+        otlp_point_put(&out, metric, &metric->points[i]);
+    }
+    if (metric->kind != TA_OTLP_METRIC_GAUGE) {
+        otlp_put_tag(&out, F_TEMPORALITY, WIRE_VARINT);
+        otlp_put_varint(&out, TEMPORALITY_CUMULATIVE);
+    }
+    if (metric->kind == TA_OTLP_METRIC_SUM) {
+        otlp_put_tag(&out, F_MONOTONIC, WIRE_VARINT);
+        otlp_put_varint(&out, 1u);
+    }
+    TA_ASSERT(out.at == out.end);
+    otlp->metrics_used += (uint32_t)entry;
+    otlp->metric_count++;
+    return TA_OK;
+}
+
+/* the metrics' one scope: tinyactors */
+static uint32_t otlp_metrics_scope_size(const ta_otlp *otlp) {
+    uint32_t scope = otlp_field_size(F_SCOPE_NAME, 10) +
+                     otlp_field_size(F_SCOPE_VERSION, (uint32_t)sizeof OTLP_VERSION - 1u);
+    return otlp_field_size(F_RS_SCOPES, otlp_field_size(F_SS_SCOPE, scope) + otlp->metrics_used);
+}
+
+size_t ta_otlp_metrics_size(const ta_otlp *otlp) {
+    if (!otlp->metric_count) return 0;
+    return otlp_field_size(F_REQUEST_RESOURCE,
+                           otlp_resource_size(otlp) + otlp_metrics_scope_size(otlp));
+}
+
+size_t ta_otlp_put_metrics(ta_otlp *otlp, void *buffer, size_t size) {
+    if (!size || size != ta_otlp_metrics_size(otlp)) return 0;
+    otlp_out out = {(unsigned char *)buffer, (unsigned char *)buffer + size};
+    otlp_put_length(&out, F_REQUEST_RESOURCE,
+                    otlp_resource_size(otlp) + otlp_metrics_scope_size(otlp));
+    otlp_put_resource(otlp, &out);
+    uint32_t scope = otlp_field_size(F_SCOPE_NAME, 10) +
+                     otlp_field_size(F_SCOPE_VERSION, (uint32_t)sizeof OTLP_VERSION - 1u);
+    otlp_put_length(&out, F_RS_SCOPES, otlp_field_size(F_SS_SCOPE, scope) + otlp->metrics_used);
+    otlp_put_length(&out, F_SS_SCOPE, scope);
+    otlp_put_length(&out, F_SCOPE_NAME, 10);
+    otlp_put_bytes(&out, "tinyactors", 10);
+    otlp_put_length(&out, F_SCOPE_VERSION, (uint32_t)sizeof OTLP_VERSION - 1u);
+    otlp_put_bytes(&out, OTLP_VERSION, (uint32_t)sizeof OTLP_VERSION - 1u);
+    otlp_put_bytes(&out, OTLP_POINTER(otlp, metrics_relative, unsigned char), otlp->metrics_used);
+    TA_ASSERT(out.at == out.end);
+    otlp->metrics_used = otlp->metric_count = 0;
+    return size;
+}
+
+/* ---- the stats as metrics ---------------------------------------------------------------- */
+
+/* Points gathered in the scratch area, with up to two attributes each. */
+typedef struct otlp_points {
+    ta_otlp_point *points;
+    ta_otlp_attribute *attributes;
+    uint32_t count, capacity;
+    ta_otlp_metric metric;
+} otlp_points;
+
+static void otlp_points_begin(ta_otlp *otlp, otlp_points *gather, const char *name,
+                              const char *unit, uint32_t kind, const ta_otlp_stats_input *input) {
+    gather->points = OTLP_POINTER(otlp, scratch_relative, ta_otlp_point);
+    gather->capacity =
+        otlp->scratch_bytes / (uint32_t)(sizeof(ta_otlp_point) + 2u * sizeof(ta_otlp_attribute));
+    gather->attributes = (ta_otlp_attribute *)(gather->points + gather->capacity);
+    gather->count = 0;
+    ta_memset(&gather->metric, 0, sizeof gather->metric);
+    gather->metric.name.pointer = name;
+    while (name[gather->metric.name.length])
+        gather->metric.name.length++;
+    gather->metric.unit.pointer = unit;
+    while (unit[gather->metric.unit.length])
+        gather->metric.unit.length++;
+    gather->metric.kind = kind;
+    gather->metric.start_ns = input->start_ns;
+    gather->metric.time_ns = input->time_ns;
+}
+
+static ta_status otlp_points_end(ta_otlp *otlp, otlp_points *gather) {
+    gather->metric.points = gather->points;
+    gather->metric.point_count = gather->count;
+    ta_status status = gather->count ? ta_otlp_add_metric(otlp, &gather->metric) : TA_OK;
+    gather->count = 0;
+    return status;
+}
+
+/* One more point; a full scratch area writes what it has as a metric first
+ * (the same name twice: a reader merges them). */
+static ta_status otlp_points_add(ta_otlp *otlp, otlp_points *gather, int64_t integer, double number,
+                                 uint32_t flags, ta_string_view key, ta_string_view value,
+                                 const char *key2, const char *value2) {
+    if (gather->count == gather->capacity) {
+        ta_status status = otlp_points_end(otlp, gather);
+        if (status != TA_OK) return status;
+    }
+    ta_otlp_point *point = &gather->points[gather->count];
+    ta_otlp_attribute *attributes = &gather->attributes[2u * gather->count];
+    ta_memset(point, 0, sizeof *point);
+    point->integer = integer;
+    point->number = number;
+    point->flags = flags;
+    point->attributes = attributes;
+    if (key.length) attributes[point->attribute_count++] = (ta_otlp_attribute){key, value};
+    if (key2) {
+        ta_string_view k = {key2, 0}, v = {value2, 0};
+        while (key2[k.length])
+            k.length++;
+        while (value2[v.length])
+            v.length++;
+        attributes[point->attribute_count++] = (ta_otlp_attribute){k, v};
+    }
+    gather->count++;
+    return TA_OK;
+}
+
+static uint64_t otlp_stats_field(const void *stats, uint32_t offset, uint32_t width) {
+    if (width == 4) {
+        uint32_t value;
+        ta_memcpy(&value, (const unsigned char *)stats + offset, 4);
+        return value;
+    }
+    uint64_t value;
+    ta_memcpy(&value, (const unsigned char *)stats + offset, 8);
+    return value;
+}
+
+#define OTLP_FIELD(type, field)                                                                    \
+    (uint32_t)offsetof(type, field), (uint32_t)sizeof(((type *)0)->field)
+
+/* A series of the stats: a metric name and, for one of several series of a
+ * name, the attribute that tells them apart. Series of one name follow each
+ * other. A width of 0 is a value computed from a system's stats: */
+enum { OTLP_SLAB_USED = 1, OTLP_SLAB_LIMIT = 2, OTLP_OVERDUE = 3 };
+typedef struct otlp_series {
+    const char *name, *unit;
+    uint32_t kind;
+    uint32_t offset, width;
+    const char *key, *value;
+} otlp_series;
+
+static const otlp_series OTLP_CHART_SERIES[] = {
+    {"tinyactors.actors", "{actor}", TA_OTLP_METRIC_GAUGE, OTLP_FIELD(ta_chart_stats, actors),
+     "tinyactors.actor.state", "resident"},
+    {"tinyactors.actors", "{actor}", TA_OTLP_METRIC_GAUGE, OTLP_FIELD(ta_chart_stats, hibernated),
+     "tinyactors.actor.state", "hibernated"},
+    {"tinyactors.actors.spawned", "{actor}", TA_OTLP_METRIC_SUM,
+     OTLP_FIELD(ta_chart_stats, spawned), 0, 0},
+    {"tinyactors.actors.ended", "{actor}", TA_OTLP_METRIC_SUM, OTLP_FIELD(ta_chart_stats, ended), 0,
+     0},
+    {"tinyactors.macrosteps", "{step}", TA_OTLP_METRIC_SUM, OTLP_FIELD(ta_chart_stats, macrosteps),
+     0, 0},
+    {"tinyactors.fuel", "{fuel}", TA_OTLP_METRIC_SUM, OTLP_FIELD(ta_chart_stats, fuel), 0, 0},
+    {"tinyactors.errors", "{error}", TA_OTLP_METRIC_SUM,
+     OTLP_FIELD(ta_chart_stats, errors_execution), "scxml.error.type", "execution"},
+    {"tinyactors.errors", "{error}", TA_OTLP_METRIC_SUM,
+     OTLP_FIELD(ta_chart_stats, errors_communication), "scxml.error.type", "communication"},
+    {"tinyactors.errors", "{error}", TA_OTLP_METRIC_SUM,
+     OTLP_FIELD(ta_chart_stats, errors_platform), "scxml.error.type", "platform"},
+    {"tinyactors.faults", "{actor}", TA_OTLP_METRIC_SUM, OTLP_FIELD(ta_chart_stats, faults), 0, 0},
+};
+
+static const otlp_series OTLP_SYSTEM_SERIES[] = {
+    {"tinyactors.pool.usage", "{item}", TA_OTLP_METRIC_GAUGE, OTLP_FIELD(ta_system_stats, actors),
+     "tinyactors.pool", "actors"},
+    {"tinyactors.pool.usage", "{item}", TA_OTLP_METRIC_GAUGE, OTLP_FIELD(ta_system_stats, events),
+     "tinyactors.pool", "events"},
+    {"tinyactors.pool.usage", "{item}", TA_OTLP_METRIC_GAUGE, OTLP_FIELD(ta_system_stats, timers),
+     "tinyactors.pool", "timers"},
+    {"tinyactors.pool.usage", "{item}", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_system_stats, workspaces), "tinyactors.pool", "workspaces"},
+    {"tinyactors.pool.usage", "{item}", TA_OTLP_METRIC_GAUGE, OTLP_FIELD(ta_system_stats, requests),
+     "tinyactors.pool", "requests"},
+    {"tinyactors.pool.usage", "{item}", TA_OTLP_METRIC_GAUGE, OTLP_FIELD(ta_system_stats, outbox),
+     "tinyactors.pool", "outbox"},
+    {"tinyactors.pool.usage", "{item}", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_system_stats, trace_contexts), "tinyactors.pool", "trace.contexts"},
+    {"tinyactors.pool.limit", "{item}", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_system_stats, actors_capacity), "tinyactors.pool", "actors"},
+    {"tinyactors.pool.limit", "{item}", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_system_stats, events_capacity), "tinyactors.pool", "events"},
+    {"tinyactors.pool.limit", "{item}", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_system_stats, timers_capacity), "tinyactors.pool", "timers"},
+    {"tinyactors.pool.limit", "{item}", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_system_stats, workspaces_capacity), "tinyactors.pool", "workspaces"},
+    {"tinyactors.pool.limit", "{item}", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_system_stats, requests_capacity), "tinyactors.pool", "requests"},
+    {"tinyactors.pool.limit", "{item}", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_system_stats, outbox_capacity), "tinyactors.pool", "outbox"},
+    {"tinyactors.pool.limit", "{item}", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_system_stats, trace_contexts_capacity), "tinyactors.pool", "trace.contexts"},
+    {"tinyactors.memory.usage", "By", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_system_stats, region_bytes), "tinyactors.memory", "region"},
+    {"tinyactors.memory.usage", "By", TA_OTLP_METRIC_GAUGE, OTLP_SLAB_USED, 0, "tinyactors.memory",
+     "slab"},
+    {"tinyactors.memory.usage", "By", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_system_stats, trace_bytes), "tinyactors.memory", "trace.journal"},
+    {"tinyactors.memory.limit", "By", TA_OTLP_METRIC_GAUGE, OTLP_SLAB_LIMIT, 0, "tinyactors.memory",
+     "slab"},
+    {"tinyactors.memory.limit", "By", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_system_stats, trace_bytes_capacity), "tinyactors.memory", "trace.journal"},
+    {"tinyactors.timers.overdue", "s", TA_OTLP_METRIC_GAUGE, OTLP_OVERDUE, 0, 0, 0},
+    {"tinyactors.runnable", "{actor}", TA_OTLP_METRIC_GAUGE, OTLP_FIELD(ta_system_stats, runnable),
+     0, 0},
+    {"tinyactors.events.delivered", "{event}", TA_OTLP_METRIC_SUM,
+     OTLP_FIELD(ta_system_stats, delivered), 0, 0},
+    {"tinyactors.trace.records.lost", "{record}", TA_OTLP_METRIC_SUM,
+     OTLP_FIELD(ta_system_stats, trace_records_lost), 0, 0},
+    {"tinyactors.trace.contexts.dropped", "{context}", TA_OTLP_METRIC_SUM,
+     OTLP_FIELD(ta_system_stats, trace_contexts_dropped), 0, 0},
+    {"tinyactors.traces", "{trace}", TA_OTLP_METRIC_SUM,
+     OTLP_FIELD(ta_system_stats, traces_started), "tinyactors.trace.decision", "started"},
+    {"tinyactors.traces", "{trace}", TA_OTLP_METRIC_SUM,
+     OTLP_FIELD(ta_system_stats, traces_sampled), "tinyactors.trace.decision", "sampled"},
+};
+
+static const otlp_series OTLP_HOST_SERIES[] = {
+    {"tinyactors.messages.routed", "{message}", TA_OTLP_METRIC_SUM,
+     OTLP_FIELD(ta_host_stats, routed), 0, 0},
+    {"tinyactors.actors.migrated", "{actor}", TA_OTLP_METRIC_SUM,
+     OTLP_FIELD(ta_host_stats, migrated), 0, 0},
+};
+
+static int otlp_same(const char *a, const char *b) {
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/* Series of the same name are one metric: write each when its last series is in. */
+static ta_status otlp_series_put(ta_otlp *otlp, const ta_otlp_stats_input *input,
+                                 const otlp_series *series, uint32_t count, const void *stats,
+                                 uint32_t stats_count, uint32_t stats_size, int per_chart) {
+    otlp_points gather;
+    for (uint32_t s = 0; s < count; s++) {
+        const otlp_series *one = &series[s];
+        if (s == 0 || !otlp_same(series[s - 1].name, one->name))
+            otlp_points_begin(otlp, &gather, one->name, one->unit, one->kind, input);
+        if (per_chart) {
+            for (uint32_t c = 0; c < stats_count; c++) {
+                const ta_chart_stats *chart = &((const ta_chart_stats *)stats)[c];
+                uint64_t value = otlp_stats_field(chart, one->offset, one->width);
+                if (one->offset == offsetof(ta_chart_stats, actors)) value -= chart->hibernated;
+                ta_status status = otlp_points_add(otlp, &gather, (int64_t)value, 0, 0,
+                                                   TEXT("tinyactors.chart.name"), chart->name,
+                                                   one->key, one->value);
+                if (status != TA_OK) return status;
+            }
+        } else {
+            uint64_t sum = 0, overdue = 0;
+            for (uint32_t i = 0; i < stats_count; i++) {
+                const void *one_stats = (const unsigned char *)stats + i * stats_size;
+                if (one->width) {
+                    sum += otlp_stats_field(one_stats, one->offset, one->width);
+                    continue;
+                }
+                const ta_system_stats *system = (const ta_system_stats *)one_stats;
+                if (one->offset == OTLP_SLAB_USED)
+                    sum += (uint64_t)system->slab_pages * system->slab_page_bytes;
+                else if (one->offset == OTLP_SLAB_LIMIT)
+                    sum += (uint64_t)system->slab_pages_capacity * system->slab_page_bytes;
+                else if (system->next_deadline != UINT64_MAX &&
+                         system->now > system->next_deadline &&
+                         system->now - system->next_deadline > overdue)
+                    overdue = system->now - system->next_deadline; /* the latest of them */
+            }
+            ta_string_view none = {(const char *)0, 0};
+            double seconds =
+                input->ticks_per_second ? (double)overdue / (double)input->ticks_per_second : 0.0;
+            ta_status status =
+                one->offset == OTLP_OVERDUE && !one->width
+                    ? otlp_points_add(otlp, &gather, 0, seconds, TA_OTLP_POINT_DOUBLE, none, none,
+                                      one->key, one->value)
+                    : otlp_points_add(otlp, &gather, (int64_t)sum, 0, 0, none, none, one->key,
+                                      one->value);
+            if (status != TA_OK) return status;
+        }
+        if (s + 1 == count || !otlp_same(series[s + 1].name, one->name)) {
+            ta_status status = otlp_points_end(otlp, &gather);
+            if (status != TA_OK) return status;
+        }
+    }
+    return TA_OK;
+}
+
+static ta_status otlp_stats_put(ta_otlp *otlp, const ta_otlp_stats_input *input) {
+    ta_status status =
+        otlp_series_put(otlp, input, OTLP_CHART_SERIES,
+                        (uint32_t)(sizeof OTLP_CHART_SERIES / sizeof OTLP_CHART_SERIES[0]),
+                        input->charts, input->chart_count, (uint32_t)sizeof(ta_chart_stats), 1);
+    if (status != TA_OK || !input->system_count) return status;
+    status =
+        otlp_series_put(otlp, input, OTLP_SYSTEM_SERIES,
+                        (uint32_t)(sizeof OTLP_SYSTEM_SERIES / sizeof OTLP_SYSTEM_SERIES[0]),
+                        input->systems, input->system_count, (uint32_t)sizeof(ta_system_stats), 0);
+    if (status != TA_OK || !input->host) return status;
+    return otlp_series_put(otlp, input, OTLP_HOST_SERIES,
+                           (uint32_t)(sizeof OTLP_HOST_SERIES / sizeof OTLP_HOST_SERIES[0]),
+                           input->host, 1, (uint32_t)sizeof(ta_host_stats), 0);
+}
+
+ta_status ta_otlp_add_stats(ta_otlp *otlp, const ta_otlp_stats_input *input) {
+    if ((input->chart_count && !input->charts) || (input->system_count && !input->systems))
+        return TA_ERROR_INVALID;
+    uint32_t used = otlp->metrics_used, count = otlp->metric_count;
+    ta_status status = otlp_stats_put(otlp, input);
+    if (status != TA_OK) { /* whole or not at all */
+        otlp->metrics_used = used;
+        otlp->metric_count = count;
+    }
+    return status;
 }

@@ -1,4 +1,4 @@
-/* decode.c — OTLP protobuf traces to plain views (tinyactors/otlp.h). A
+/* decode.c — OTLP protobuf traces and metrics to plain views (tinyactors/otlp.h). A
  * reader of the wire format: every view points into the bytes given, and
  * unknown fields are skipped, so any producer's requests read. */
 #include "otlp/otlp_internal.h"
@@ -167,20 +167,22 @@ static int decode_read_span(pb span, ta_otlp_span *out) {
     return got < 0 ? -1 : 1;
 }
 
-/* The cursor: at[0] in the request (ResourceSpans), at[1] in the current
- * ResourceSpans (ScopeSpans), at[2] in the current ScopeSpans (spans);
- * at[3], at[4] where the ResourceSpans begins and ends (0, 0: none yet);
- * at[5] where the ScopeSpans begins (high word) and its length (low). */
-int32_t ta_otlp_next_span(const void *bytes, size_t length, ta_otlp_cursor *cursor,
-                          ta_otlp_span *out) {
-    pb request = {(const unsigned char *)bytes, (const unsigned char *)bytes + length};
+/* The next item (a span, a metric) of a request: the cursor's at[0] is in
+ * the request (ResourceSpans / ResourceMetrics), at[1] in the current one
+ * (ScopeSpans / ScopeMetrics), at[2] in the current scope (its items);
+ * at[3], at[4] where the resource's message begins and ends (0, 0: none
+ * yet); at[5] where the scope's message begins (high word) and its length
+ * (low). 1 with the item, its resource's attributes and its scope, 0 at
+ * the end, -1 malformed. */
+static int decode_next_item(pb request, ta_otlp_cursor *cursor, pb *item, ta_otlp_fields *resource,
+                            pb *scope) {
     for (;;) {
         if (cursor->at[3] == 0 && cursor->at[4] == 0) {
-            pb resource_spans;
-            int got = pb_next(request, F_REQUEST_RESOURCE, &cursor->at[0], &resource_spans);
-            if (got <= 0) return got < 0 ? TA_ERROR_INVALID : 0;
-            cursor->at[3] = (uint64_t)(resource_spans.at - request.at);
-            cursor->at[4] = (uint64_t)(resource_spans.end - request.at);
+            pb resource_message;
+            int got = pb_next(request, F_REQUEST_RESOURCE, &cursor->at[0], &resource_message);
+            if (got <= 0) return got;
+            cursor->at[3] = (uint64_t)(resource_message.at - request.at);
+            cursor->at[4] = (uint64_t)(resource_message.end - request.at);
             cursor->at[1] = 0;
             cursor->at[5] = 0;
             if (cursor->at[3] == cursor->at[4]) { /* empty: next */
@@ -188,51 +190,108 @@ int32_t ta_otlp_next_span(const void *bytes, size_t length, ta_otlp_cursor *curs
                 continue;
             }
         }
-        pb resource_spans = {request.at + cursor->at[3], request.at + cursor->at[4]};
+        pb resource_message = {request.at + cursor->at[3], request.at + cursor->at[4]};
         if (cursor->at[5] == 0) {
-            pb scope_spans;
-            int got = pb_next(resource_spans, F_RS_SCOPES, &cursor->at[1], &scope_spans);
-            if (got < 0) return TA_ERROR_INVALID;
+            pb scope_message;
+            int got = pb_next(resource_message, F_RS_SCOPES, &cursor->at[1], &scope_message);
+            if (got < 0) return -1;
             if (!got) {
                 cursor->at[3] = cursor->at[4] = 0;
                 continue;
             }
-            cursor->at[5] = (uint64_t)(scope_spans.at - request.at) << 32 |
-                            (uint64_t)(scope_spans.end - scope_spans.at);
+            cursor->at[5] = (uint64_t)(scope_message.at - request.at) << 32 |
+                            (uint64_t)(scope_message.end - scope_message.at);
             cursor->at[2] = 0;
         }
-        pb scope_spans = {request.at + (cursor->at[5] >> 32),
-                          request.at + (cursor->at[5] >> 32) + (cursor->at[5] & 0xFFFFFFFFu)};
-        pb span;
-        int got = pb_next(scope_spans, F_SS_ITEMS, &cursor->at[2], &span);
-        if (got < 0) return TA_ERROR_INVALID;
+        pb scope_message = {request.at + (cursor->at[5] >> 32),
+                            request.at + (cursor->at[5] >> 32) + (cursor->at[5] & 0xFFFFFFFFu)};
+        int got = pb_next(scope_message, F_SS_ITEMS, &cursor->at[2], item);
+        if (got < 0) return -1;
         if (!got) {
             cursor->at[5] = 0;
             continue;
         }
-        ta_memset(out, 0, sizeof *out);
         uint64_t at = 0;
-        pb resource = {(const unsigned char *)0, (const unsigned char *)0};
-        if (pb_next(resource_spans, F_RS_RESOURCE, &at, &resource) > 0)
-            out->resource = pb_fields(resource, F_RESOURCE_ATTRIBUTES);
+        pb resource_piece = {(const unsigned char *)0, (const unsigned char *)0};
+        ta_memset(resource, 0, sizeof *resource);
+        if (pb_next(resource_message, F_RS_RESOURCE, &at, &resource_piece) > 0)
+            *resource = pb_fields(resource_piece, F_RESOURCE_ATTRIBUTES);
         at = 0;
-        pb scope;
-        if (pb_next(scope_spans, F_SS_SCOPE, &at, &scope) > 0) {
-            out->scope_attributes = pb_fields(scope, F_SCOPE_ATTRIBUTES);
-            pb in = scope;
-            uint32_t field, wire;
-            uint64_t value;
-            pb inner;
-            int scope_got;
-            while ((scope_got = pb_field(&in, &field, &wire, &value, &inner)) > 0) {
-                if (field == F_SCOPE_NAME && wire == WIRE_LENGTH) out->scope_name = pb_view(inner);
-                if (field == F_SCOPE_VERSION && wire == WIRE_LENGTH)
-                    out->scope_version = pb_view(inner);
-            }
-            if (scope_got < 0) return TA_ERROR_INVALID;
-        }
-        return decode_read_span(span, out) > 0 ? 1 : TA_ERROR_INVALID;
+        scope->at = scope->end = (const unsigned char *)0;
+        pb_next(scope_message, F_SS_SCOPE, &at, scope);
+        return 1;
     }
+}
+
+/* The name and version of an InstrumentationScope; 0 when malformed. */
+static int decode_scope(pb scope, ta_string_view *name, ta_string_view *version) {
+    uint32_t field, wire;
+    uint64_t value;
+    pb inner;
+    int got;
+    while ((got = pb_field(&scope, &field, &wire, &value, &inner)) > 0) {
+        if (field == F_SCOPE_NAME && wire == WIRE_LENGTH) *name = pb_view(inner);
+        if (field == F_SCOPE_VERSION && wire == WIRE_LENGTH) *version = pb_view(inner);
+    }
+    return got >= 0;
+}
+
+int32_t ta_otlp_next_span(const void *bytes, size_t length, ta_otlp_cursor *cursor,
+                          ta_otlp_span *out) {
+    pb request = {(const unsigned char *)bytes, (const unsigned char *)bytes + length};
+    pb span, scope;
+    ta_otlp_fields resource;
+    int got = decode_next_item(request, cursor, &span, &resource, &scope);
+    if (got <= 0) return got < 0 ? TA_ERROR_INVALID : 0;
+    ta_memset(out, 0, sizeof *out);
+    out->resource = resource;
+    if (scope.at) {
+        out->scope_attributes = pb_fields(scope, F_SCOPE_ATTRIBUTES);
+        if (!decode_scope(scope, &out->scope_name, &out->scope_version)) return TA_ERROR_INVALID;
+    }
+    return decode_read_span(span, out) > 0 ? 1 : TA_ERROR_INVALID;
+}
+
+int32_t ta_otlp_next_metric(const void *bytes, size_t length, ta_otlp_cursor *cursor,
+                            ta_otlp_metric_view *out) {
+    pb request = {(const unsigned char *)bytes, (const unsigned char *)bytes + length};
+    pb metric, scope;
+    ta_otlp_fields resource;
+    int got = decode_next_item(request, cursor, &metric, &resource, &scope);
+    if (got <= 0) return got < 0 ? TA_ERROR_INVALID : 0;
+    ta_memset(out, 0, sizeof *out);
+    out->resource = resource;
+    if (scope.at && !decode_scope(scope, &out->scope_name, &out->scope_version))
+        return TA_ERROR_INVALID;
+    uint32_t field, wire;
+    uint64_t value;
+    pb inner;
+    while ((got = pb_field(&metric, &field, &wire, &value, &inner)) > 0) {
+        if (wire != WIRE_LENGTH) continue;
+        if (field == F_METRIC_NAME) out->name = pb_view(inner);
+        if (field == F_METRIC_DESCRIPTION) out->description = pb_view(inner);
+        if (field == F_METRIC_UNIT) out->unit = pb_view(inner);
+        if (field == F_METRIC_GAUGE || field == F_METRIC_SUM || field == F_METRIC_HISTOGRAM) {
+            out->kind = field == F_METRIC_SUM     ? TA_OTLP_METRIC_SUM
+                        : field == F_METRIC_GAUGE ? TA_OTLP_METRIC_GAUGE
+                                                  : TA_OTLP_METRIC_HISTOGRAM;
+            out->points = pb_fields(inner, F_DATA_POINTS);
+            pb data = inner;
+            uint32_t data_field, data_wire;
+            uint64_t data_value;
+            pb data_inner;
+            int data_got;
+            while ((data_got = pb_field(&data, &data_field, &data_wire, &data_value, &data_inner)) >
+                   0) {
+                if (data_field == F_TEMPORALITY && data_wire == WIRE_VARINT)
+                    out->temporality = (uint32_t)data_value;
+                if (data_field == F_MONOTONIC && data_wire == WIRE_VARINT)
+                    out->monotonic = data_value != 0;
+            }
+            if (data_got < 0) return TA_ERROR_INVALID;
+        }
+    }
+    return got < 0 ? TA_ERROR_INVALID : 1;
 }
 
 static int32_t decode_next_of(ta_otlp_fields fields, uint32_t *at, pb *out) {
@@ -337,6 +396,74 @@ int32_t ta_otlp_next_link(ta_otlp_fields links, uint32_t *at, ta_otlp_link *out)
         }
         if (field == F_LINK_SPAN_ID && wire == WIRE_LENGTH && inner.end - inner.at == 8)
             out->span = pb_id64(inner.at, inner.end);
+    }
+    return field_got < 0 ? TA_ERROR_INVALID : 1;
+}
+
+static double decode_double(uint64_t bits) {
+    double value;
+    ta_memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
+int32_t ta_otlp_next_point(ta_otlp_fields points, uint32_t *at, uint32_t kind,
+                           ta_otlp_point_view *out) {
+    pb point;
+    int32_t got = decode_next_of(points, at, &point);
+    if (got <= 0) return got;
+    ta_memset(out, 0, sizeof *out);
+    int histogram = kind == TA_OTLP_METRIC_HISTOGRAM;
+    out->attributes = pb_fields(point, histogram ? F_HISTOGRAM_ATTRIBUTES : F_NUMBER_ATTRIBUTES);
+    out->exemplars = pb_fields(point, histogram ? F_HISTOGRAM_EXEMPLARS : F_NUMBER_EXEMPLARS);
+    uint32_t field, wire;
+    uint64_t value;
+    pb inner;
+    int field_got;
+    while ((field_got = pb_field(&point, &field, &wire, &value, &inner)) > 0) {
+        if (field == F_NUMBER_START && wire == WIRE_I64) out->start = value; /* the same in both */
+        if (field == F_NUMBER_TIME && wire == WIRE_I64) out->time = value;
+        if (histogram) {
+            if (field == F_HISTOGRAM_COUNT && wire == WIRE_I64) out->count = value;
+            if (field == F_HISTOGRAM_SUM && wire == WIRE_I64) out->sum = decode_double(value);
+            if (field == F_HISTOGRAM_BUCKETS && wire == WIRE_LENGTH) out->buckets = pb_view(inner);
+            if (field == F_HISTOGRAM_BOUNDS && wire == WIRE_LENGTH) out->bounds = pb_view(inner);
+            if (field == F_HISTOGRAM_MIN && wire == WIRE_I64) {
+                out->min = decode_double(value);
+                out->has_min_max = 1;
+            }
+            if (field == F_HISTOGRAM_MAX && wire == WIRE_I64) out->max = decode_double(value);
+        } else if (field == F_NUMBER_DOUBLE && wire == WIRE_I64) {
+            out->flags = TA_OTLP_POINT_DOUBLE;
+            out->number = decode_double(value);
+        } else if (field == F_NUMBER_INT && wire == WIRE_I64) {
+            out->flags = 0;
+            out->integer = (int64_t)value;
+        }
+    }
+    if (field_got < 0 || (out->buckets.length & 7u) || (out->bounds.length & 7u))
+        return TA_ERROR_INVALID;
+    return 1;
+}
+
+int32_t ta_otlp_next_exemplar(ta_otlp_fields exemplars, uint32_t *at, ta_otlp_exemplar *out) {
+    pb exemplar;
+    int32_t got = decode_next_of(exemplars, at, &exemplar);
+    if (got <= 0) return got;
+    ta_memset(out, 0, sizeof *out);
+    uint32_t field, wire;
+    uint64_t value;
+    pb inner;
+    int field_got;
+    while ((field_got = pb_field(&exemplar, &field, &wire, &value, &inner)) > 0) {
+        if (field == F_EXEMPLAR_TIME && wire == WIRE_I64) out->time = value;
+        if (field == F_EXEMPLAR_DOUBLE && wire == WIRE_I64) out->value = decode_double(value);
+        if (field == F_EXEMPLAR_INT && wire == WIRE_I64) out->value = (double)(int64_t)value;
+        if (field == F_EXEMPLAR_SPAN_ID && wire == WIRE_LENGTH && inner.end - inner.at == 8)
+            out->span = pb_id64(inner.at, inner.end);
+        if (field == F_EXEMPLAR_TRACE_ID && wire == WIRE_LENGTH && inner.end - inner.at == 16) {
+            out->trace.high = pb_id64(inner.at, inner.at + 8);
+            out->trace.low = pb_id64(inner.at + 8, inner.end);
+        }
     }
     return field_got < 0 ? TA_ERROR_INVALID : 1;
 }

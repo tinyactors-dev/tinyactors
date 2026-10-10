@@ -46,6 +46,8 @@ const api = createRuntime({
     cancelDefer: (id) => deferred.delete(id),
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (h) => clearTimeout(h),
+    repeat: (fn, ms) => setInterval(fn, ms),
+    clearRepeat: (h) => clearInterval(h),
     log: (...args) => console.log(...args),
   },
 });
@@ -54,6 +56,6 @@ export const {
   createMachine, createActor, createSystem, fromSCXML, SCXMLLogic, compileSystem, loadImage, SystemImage, setup, assign, raise, sendTo, sendParent, log, cancel,
   stateIn, and, or, not, StateMachine, Actor, System, ActorRef, createLink, serveLinks, encodeFrame, FrameDecoder,
   createMemoryStore, encodeValue, decodeValue, parseAddress, formatAddress, encodeWire, decodeWire, createStoreLink,
-  TRACE_KINDS, decodeTraces, parseTraceparent, formatTraceparent, stepSpanID,
+  TRACE_KINDS, decodeTraces, metricsToOTLP, parseTraceparent, formatTraceparent, stepSpanID,
 } = api;
 export default api;

@@ -281,8 +281,24 @@
       "value": 1
     },
     {
+      "name": "TA_OTLP_METRIC_GAUGE",
+      "value": 2
+    },
+    {
+      "name": "TA_OTLP_METRIC_HISTOGRAM",
+      "value": 3
+    },
+    {
+      "name": "TA_OTLP_METRIC_SUM",
+      "value": 1
+    },
+    {
       "name": "TA_OTLP_NO_LOGS",
       "value": 4
+    },
+    {
+      "name": "TA_OTLP_POINT_DOUBLE",
+      "value": 1
     },
     {
       "name": "TA_OTLP_READ",
@@ -2209,11 +2225,15 @@
         {
           "name": "traces_sampled",
           "type": "uint64_t"
+        },
+        {
+          "name": "next_deadline",
+          "type": "ta_time"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 216,
+          "size": 224,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -2254,11 +2274,12 @@
             "trace_contexts_dropped": 184,
             "fuel_clock": 192,
             "traces_started": 200,
-            "traces_sampled": 208
+            "traces_sampled": 208,
+            "next_deadline": 216
           }
         },
         "aarch64": {
-          "size": 216,
+          "size": 224,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -2299,11 +2320,12 @@
             "trace_contexts_dropped": 184,
             "fuel_clock": 192,
             "traces_started": 200,
-            "traces_sampled": 208
+            "traces_sampled": 208,
+            "next_deadline": 216
           }
         },
         "wasm32": {
-          "size": 216,
+          "size": 224,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -2344,7 +2366,8 @@
             "trace_contexts_dropped": 184,
             "fuel_clock": 192,
             "traces_started": 200,
-            "traces_sampled": 208
+            "traces_sampled": 208,
+            "next_deadline": 216
           }
         }
       }
@@ -5072,11 +5095,19 @@
         {
           "name": "resource_bytes",
           "type": "uint32_t"
+        },
+        {
+          "name": "metric_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 40,
+          "size": 48,
           "align": 4,
           "offsets": {
             "size": 0,
@@ -5088,11 +5119,13 @@
             "scopes": 24,
             "value_limit": 28,
             "render_bytes": 32,
-            "resource_bytes": 36
+            "resource_bytes": 36,
+            "metric_bytes": 40,
+            "pad": 44
           }
         },
         "aarch64": {
-          "size": 40,
+          "size": 48,
           "align": 4,
           "offsets": {
             "size": 0,
@@ -5104,11 +5137,13 @@
             "scopes": 24,
             "value_limit": 28,
             "render_bytes": 32,
-            "resource_bytes": 36
+            "resource_bytes": 36,
+            "metric_bytes": 40,
+            "pad": 44
           }
         },
         "wasm32": {
-          "size": 40,
+          "size": 48,
           "align": 4,
           "offsets": {
             "size": 0,
@@ -5120,7 +5155,9 @@
             "scopes": 24,
             "value_limit": 28,
             "render_bytes": 32,
-            "resource_bytes": 36
+            "resource_bytes": 36,
+            "metric_bytes": 40,
+            "pad": 44
           }
         }
       }
@@ -5242,6 +5279,358 @@
         }
       }
     },
+    "ta_otlp_exemplar": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "trace",
+          "type": "ta_trace_id"
+        },
+        {
+          "name": "span",
+          "type": "ta_span_id"
+        },
+        {
+          "name": "time",
+          "type": "uint64_t"
+        },
+        {
+          "name": "value",
+          "type": "double"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "trace": 0,
+            "span": 16,
+            "time": 24,
+            "value": 32
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "trace": 0,
+            "span": 16,
+            "time": 24,
+            "value": 32
+          }
+        },
+        "wasm32": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "trace": 0,
+            "span": 16,
+            "time": 24,
+            "value": 32
+          }
+        }
+      }
+    },
+    "ta_otlp_point": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "attributes",
+          "type": "const ta_otlp_attribute *"
+        },
+        {
+          "name": "attribute_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "integer",
+          "type": "int64_t"
+        },
+        {
+          "name": "number",
+          "type": "double"
+        },
+        {
+          "name": "count",
+          "type": "uint64_t"
+        },
+        {
+          "name": "sum",
+          "type": "double"
+        },
+        {
+          "name": "min",
+          "type": "double"
+        },
+        {
+          "name": "max",
+          "type": "double"
+        },
+        {
+          "name": "bounds",
+          "type": "const double *"
+        },
+        {
+          "name": "buckets",
+          "type": "const uint64_t *"
+        },
+        {
+          "name": "bucket_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "exemplar_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "exemplars",
+          "type": "const ta_otlp_exemplar *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 96,
+          "align": 8,
+          "offsets": {
+            "attributes": 0,
+            "attribute_count": 8,
+            "flags": 12,
+            "integer": 16,
+            "number": 24,
+            "count": 32,
+            "sum": 40,
+            "min": 48,
+            "max": 56,
+            "bounds": 64,
+            "buckets": 72,
+            "bucket_count": 80,
+            "exemplar_count": 84,
+            "exemplars": 88
+          }
+        },
+        "aarch64": {
+          "size": 96,
+          "align": 8,
+          "offsets": {
+            "attributes": 0,
+            "attribute_count": 8,
+            "flags": 12,
+            "integer": 16,
+            "number": 24,
+            "count": 32,
+            "sum": 40,
+            "min": 48,
+            "max": 56,
+            "bounds": 64,
+            "buckets": 72,
+            "bucket_count": 80,
+            "exemplar_count": 84,
+            "exemplars": 88
+          }
+        },
+        "wasm32": {
+          "size": 88,
+          "align": 8,
+          "offsets": {
+            "attributes": 0,
+            "attribute_count": 4,
+            "flags": 8,
+            "integer": 16,
+            "number": 24,
+            "count": 32,
+            "sum": 40,
+            "min": 48,
+            "max": 56,
+            "bounds": 64,
+            "buckets": 68,
+            "bucket_count": 72,
+            "exemplar_count": 76,
+            "exemplars": 80
+          }
+        }
+      }
+    },
+    "ta_otlp_metric": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "unit",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "description",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "point_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "points",
+          "type": "const ta_otlp_point *"
+        },
+        {
+          "name": "start_ns",
+          "type": "uint64_t"
+        },
+        {
+          "name": "time_ns",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "unit": 16,
+            "description": 32,
+            "kind": 48,
+            "point_count": 52,
+            "points": 56,
+            "start_ns": 64,
+            "time_ns": 72
+          }
+        },
+        "aarch64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "unit": 16,
+            "description": 32,
+            "kind": 48,
+            "point_count": 52,
+            "points": 56,
+            "start_ns": 64,
+            "time_ns": 72
+          }
+        },
+        "wasm32": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "unit": 8,
+            "description": 16,
+            "kind": 24,
+            "point_count": 28,
+            "points": 32,
+            "start_ns": 40,
+            "time_ns": 48
+          }
+        }
+      }
+    },
+    "ta_otlp_stats_input": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chart_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "charts",
+          "type": "const ta_chart_stats *"
+        },
+        {
+          "name": "systems",
+          "type": "const ta_system_stats *"
+        },
+        {
+          "name": "system_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "host",
+          "type": "const ta_host_stats *"
+        },
+        {
+          "name": "ticks_per_second",
+          "type": "uint64_t"
+        },
+        {
+          "name": "start_ns",
+          "type": "uint64_t"
+        },
+        {
+          "name": "time_ns",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "chart_count": 4,
+            "charts": 8,
+            "systems": 16,
+            "system_count": 24,
+            "pad": 28,
+            "host": 32,
+            "ticks_per_second": 40,
+            "start_ns": 48,
+            "time_ns": 56
+          }
+        },
+        "aarch64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "chart_count": 4,
+            "charts": 8,
+            "systems": 16,
+            "system_count": 24,
+            "pad": 28,
+            "host": 32,
+            "ticks_per_second": 40,
+            "start_ns": 48,
+            "time_ns": 56
+          }
+        },
+        "wasm32": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "chart_count": 4,
+            "charts": 8,
+            "systems": 12,
+            "system_count": 16,
+            "pad": 20,
+            "host": 24,
+            "ticks_per_second": 32,
+            "start_ns": 40,
+            "time_ns": 48
+          }
+        }
+      }
+    },
     "ta_otlp_stats": {
       "kind": "struct",
       "fields": [
@@ -5290,6 +5679,18 @@
           "type": "uint32_t"
         },
         {
+          "name": "metrics",
+          "type": "uint32_t"
+        },
+        {
+          "name": "metric_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "metric_capacity",
+          "type": "uint32_t"
+        },
+        {
           "name": "pad",
           "type": "uint32_t"
         },
@@ -5312,7 +5713,7 @@
       ],
       "layout": {
         "x86_64": {
-          "size": 80,
+          "size": 96,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5326,15 +5727,18 @@
             "log_records": 32,
             "log_bytes": 36,
             "log_capacity": 40,
-            "pad": 44,
-            "records": 48,
-            "dropped": 56,
-            "skipped": 64,
-            "truncated": 72
+            "metrics": 44,
+            "metric_bytes": 48,
+            "metric_capacity": 52,
+            "pad": 56,
+            "records": 64,
+            "dropped": 72,
+            "skipped": 80,
+            "truncated": 88
           }
         },
         "aarch64": {
-          "size": 80,
+          "size": 96,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5348,15 +5752,18 @@
             "log_records": 32,
             "log_bytes": 36,
             "log_capacity": 40,
-            "pad": 44,
-            "records": 48,
-            "dropped": 56,
-            "skipped": 64,
-            "truncated": 72
+            "metrics": 44,
+            "metric_bytes": 48,
+            "metric_capacity": 52,
+            "pad": 56,
+            "records": 64,
+            "dropped": 72,
+            "skipped": 80,
+            "truncated": 88
           }
         },
         "wasm32": {
-          "size": 80,
+          "size": 96,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5370,11 +5777,14 @@
             "log_records": 32,
             "log_bytes": 36,
             "log_capacity": 40,
-            "pad": 44,
-            "records": 48,
-            "dropped": 56,
-            "skipped": 64,
-            "truncated": 72
+            "metrics": 44,
+            "metric_bytes": 48,
+            "metric_capacity": 52,
+            "pad": 56,
+            "records": 64,
+            "dropped": 72,
+            "skipped": 80,
+            "truncated": 88
           }
         }
       }
@@ -5763,6 +6173,231 @@
             "trace": 0,
             "span": 16,
             "attributes": 24
+          }
+        }
+      }
+    },
+    "ta_otlp_metric_view": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "unit",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "description",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "temporality",
+          "type": "uint32_t"
+        },
+        {
+          "name": "monotonic",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "points",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "resource",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "scope_name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "scope_version",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 144,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "unit": 16,
+            "description": 32,
+            "kind": 48,
+            "temporality": 52,
+            "monotonic": 56,
+            "pad": 60,
+            "points": 64,
+            "resource": 88,
+            "scope_name": 112,
+            "scope_version": 128
+          }
+        },
+        "aarch64": {
+          "size": 144,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "unit": 16,
+            "description": 32,
+            "kind": 48,
+            "temporality": 52,
+            "monotonic": 56,
+            "pad": 60,
+            "points": 64,
+            "resource": 88,
+            "scope_name": 112,
+            "scope_version": 128
+          }
+        },
+        "wasm32": {
+          "size": 88,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "unit": 8,
+            "description": 16,
+            "kind": 24,
+            "temporality": 28,
+            "monotonic": 32,
+            "pad": 36,
+            "points": 40,
+            "resource": 56,
+            "scope_name": 72,
+            "scope_version": 80
+          }
+        }
+      }
+    },
+    "ta_otlp_point_view": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "start",
+          "type": "uint64_t"
+        },
+        {
+          "name": "time",
+          "type": "uint64_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "has_min_max",
+          "type": "uint32_t"
+        },
+        {
+          "name": "integer",
+          "type": "int64_t"
+        },
+        {
+          "name": "number",
+          "type": "double"
+        },
+        {
+          "name": "count",
+          "type": "uint64_t"
+        },
+        {
+          "name": "sum",
+          "type": "double"
+        },
+        {
+          "name": "min",
+          "type": "double"
+        },
+        {
+          "name": "max",
+          "type": "double"
+        },
+        {
+          "name": "buckets",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "bounds",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "attributes",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "exemplars",
+          "type": "ta_otlp_fields"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 152,
+          "align": 8,
+          "offsets": {
+            "start": 0,
+            "time": 8,
+            "flags": 16,
+            "has_min_max": 20,
+            "integer": 24,
+            "number": 32,
+            "count": 40,
+            "sum": 48,
+            "min": 56,
+            "max": 64,
+            "buckets": 72,
+            "bounds": 88,
+            "attributes": 104,
+            "exemplars": 128
+          }
+        },
+        "aarch64": {
+          "size": 152,
+          "align": 8,
+          "offsets": {
+            "start": 0,
+            "time": 8,
+            "flags": 16,
+            "has_min_max": 20,
+            "integer": 24,
+            "number": 32,
+            "count": 40,
+            "sum": 48,
+            "min": 56,
+            "max": 64,
+            "buckets": 72,
+            "bounds": 88,
+            "attributes": 104,
+            "exemplars": 128
+          }
+        },
+        "wasm32": {
+          "size": 120,
+          "align": 8,
+          "offsets": {
+            "start": 0,
+            "time": 8,
+            "flags": 16,
+            "has_min_max": 20,
+            "integer": 24,
+            "number": 32,
+            "count": 40,
+            "sum": 48,
+            "min": 56,
+            "max": 64,
+            "buckets": 72,
+            "bounds": 80,
+            "attributes": 88,
+            "exemplars": 104
           }
         }
       }
@@ -7836,6 +8471,40 @@
       "implemented": true
     },
     {
+      "name": "ta_otlp_add_metric",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "metric",
+          "type": "const ta_otlp_metric *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_add_stats",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "input",
+          "type": "const ta_otlp_stats_input *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_otlp_end_all",
       "returns": "void",
       "params": [
@@ -7929,6 +8598,19 @@
       "implemented": true
     },
     {
+      "name": "ta_otlp_metrics_size",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "const ta_otlp *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_otlp_next_attribute",
       "returns": "int32_t",
       "params": [
@@ -7975,6 +8657,27 @@
       "implemented": true
     },
     {
+      "name": "ta_otlp_next_exemplar",
+      "returns": "int32_t",
+      "params": [
+        {
+          "name": "exemplars",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "at",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "out",
+          "type": "ta_otlp_exemplar *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_otlp_next_link",
       "returns": "int32_t",
       "params": [
@@ -7989,6 +8692,56 @@
         {
           "name": "out",
           "type": "ta_otlp_link *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_next_metric",
+      "returns": "int32_t",
+      "params": [
+        {
+          "name": "bytes",
+          "type": "const void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "cursor",
+          "type": "ta_otlp_cursor *"
+        },
+        {
+          "name": "out",
+          "type": "ta_otlp_metric_view *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_next_point",
+      "returns": "int32_t",
+      "params": [
+        {
+          "name": "points",
+          "type": "ta_otlp_fields"
+        },
+        {
+          "name": "at",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_otlp_point_view *"
         }
       ],
       "public": true,
@@ -8043,6 +8796,27 @@
     },
     {
       "name": "ta_otlp_put_logs",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "out",
+          "type": "void *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_put_metrics",
       "returns": "size_t",
       "params": [
         {

@@ -36,6 +36,13 @@ const platform = {
   cancelDefer: (h) => clearImmediate(h),
   setTimer: (fn, ms) => setTimeout(fn, ms),
   clearTimer: (h) => clearTimeout(h),
+  /* periodic work that must not keep the process alive (metrics export) */
+  repeat: (fn, ms) => {
+    const handle = setInterval(fn, ms);
+    if (handle.unref) handle.unref();
+    return handle;
+  },
+  clearRepeat: (h) => clearInterval(h),
   log: (...args) => console.log(...args),
   /* traces go to OTEL_EXPORTER_OTLP_ENDPOINT with no code (createSystem({ telemetry }) wins) */
   telemetry: telemetryFromEnvironment(process.env),

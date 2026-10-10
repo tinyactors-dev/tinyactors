@@ -97,6 +97,8 @@ ABI_CHECK(sizeof(ta_trace_view) == 8 + 2 * sizeof(void *), trace_view_size);
 ABI_CHECK(offsetof(ta_otlp_config, size) == 0, otlp_config_size_first);
 ABI_CHECK(offsetof(ta_otlp_input, size) == 0, otlp_input_size_first);
 ABI_CHECK(offsetof(ta_otlp_stats, size) == 0, otlp_stats_size_first);
+ABI_CHECK(offsetof(ta_otlp_stats_input, size) == 0, otlp_stats_input_size_first);
+ABI_CHECK(sizeof(ta_otlp_exemplar) == 40, otlp_exemplar_size);
 ABI_CHECK(sizeof(ta_otlp_cursor) == 48, otlp_cursor_size);
 
 int main(void) {

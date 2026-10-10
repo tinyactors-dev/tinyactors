@@ -197,7 +197,7 @@ system.migrate(undefined, { timeoutMs: 'soon' });
   void bytes;
 }
 
-import { decodeTraces, parseTraceparent, formatTraceparent, stepSpanID, TRACE_KINDS, type DecodedSpan, type TraceKind } from '..';
+import { decodeTraces, parseTraceparent, formatTraceparent, stepSpanID, TRACE_KINDS, metricsToOTLP, type DecodedSpan, type TraceKind, type Metric, type MetricsSnapshot } from '..';
 
 // tracing: a sink, an exporter, traceparents on sends, the trace values
 export function tracing() {
@@ -212,4 +212,10 @@ export function tracing() {
   const spans: DecodedSpan[] = decodeTraces(new Uint8Array(0));
   const kinds: readonly TraceKind[] = TRACE_KINDS;
   void [parsed?.sampled, spans[0]?.startTimeUnixNano, kinds, system.flushTraces()];
+  /* metrics (docs/adr/0007): a snapshot, and OTLP bytes of it */
+  const snapshot: MetricsSnapshot = system.metrics();
+  const first: Metric | undefined = snapshot.metrics[0];
+  const bytes: Uint8Array = metricsToOTLP(snapshot, { resource: { 'service.name': 'x' } });
+  createSystem({ telemetry: { metricsEndpoint: '', metricsInterval: 0, metrics: () => [] } });
+  void [first?.kind, bytes];
 }

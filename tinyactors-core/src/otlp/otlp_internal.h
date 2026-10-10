@@ -60,8 +60,39 @@ enum {
     F_LOG_TRACE_ID = 9,
     F_LOG_SPAN_ID = 10,
     F_LOG_OBSERVED_TIME = 11,
-    F_LOG_EVENT_NAME = 12
+    F_LOG_EVENT_NAME = 12,
+    F_METRIC_NAME = 1, /* Metric */
+    F_METRIC_DESCRIPTION = 2,
+    F_METRIC_UNIT = 3,
+    F_METRIC_GAUGE = 5,
+    F_METRIC_SUM = 7,
+    F_METRIC_HISTOGRAM = 9,
+    F_DATA_POINTS = 1, /* Gauge, Sum, Histogram */
+    F_TEMPORALITY = 2,
+    F_MONOTONIC = 3,
+    F_NUMBER_START = 2, /* NumberDataPoint */
+    F_NUMBER_TIME = 3,
+    F_NUMBER_DOUBLE = 4,
+    F_NUMBER_EXEMPLARS = 5,
+    F_NUMBER_INT = 6,
+    F_NUMBER_ATTRIBUTES = 7,
+    F_HISTOGRAM_START = 2, /* HistogramDataPoint */
+    F_HISTOGRAM_TIME = 3,
+    F_HISTOGRAM_COUNT = 4,
+    F_HISTOGRAM_SUM = 5,
+    F_HISTOGRAM_BUCKETS = 6,
+    F_HISTOGRAM_BOUNDS = 7,
+    F_HISTOGRAM_EXEMPLARS = 8,
+    F_HISTOGRAM_ATTRIBUTES = 9,
+    F_HISTOGRAM_MIN = 11,
+    F_HISTOGRAM_MAX = 12,
+    F_EXEMPLAR_TIME = 2, /* Exemplar */
+    F_EXEMPLAR_DOUBLE = 3,
+    F_EXEMPLAR_SPAN_ID = 4,
+    F_EXEMPLAR_TRACE_ID = 5,
+    F_EXEMPLAR_INT = 6
 };
+enum { TEMPORALITY_CUMULATIVE = 2 };
 enum { WIRE_VARINT = 0, WIRE_I64 = 1, WIRE_LENGTH = 2, WIRE_I32 = 5 };
 
 TA_INLINE uint32_t otlp_varint_size(uint64_t value) {
@@ -141,10 +172,11 @@ struct ta_otlp {
     uint32_t entry_capacity, index_capacity;
     int64_t open_relative, index_relative, skips_relative, chunks_relative, spans_relative,
         entries_relative, scopes_relative, scope_bytes_relative, logs_relative, resource_relative,
-        scratch_relative, render_relative;
+        scratch_relative, render_relative, metrics_relative;
     uint32_t scratch_bytes, open_count, skip_count, chunk_free, chunk_high, chunks_used;
     uint32_t spans_used, entry_count, scope_count, scope_bytes_used, logs_used, log_count;
     uint32_t resource_used, span_count, mark_head, mark_count;
+    uint32_t metrics_used, metric_count;
     uint64_t mark_fuel[OTLP_MARKS], mark_wall[OTLP_MARKS];
     uint64_t records, dropped, skipped, truncated;
 };
