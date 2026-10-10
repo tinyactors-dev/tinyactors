@@ -132,6 +132,46 @@ for (const ecmascript of ['native', 'quickjs']) {
     await until(() => d.getSnapshot().value === 'failed');
     none.stop();
   });
+
+  test(`${ecmascript}: a sync I/O processor answers inside the run, before the sender goes on`, () => {
+    const IO = 'https://shop.dev/io/sync';
+    /* each case sends to the processor, then to itself: only an answer that
+     * comes first (an event back, or error.communication) is taken */
+    const chart = (event) =>
+      fromSCXML(`<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="s${event}" initial="a">
+        <state id="a">
+          <onentry><send type="${IO}" target="here" event="${event}" id="s1"/><send event="after"/></onentry>
+          <transition event="back" target="back"/>
+          <transition event="error.communication" target="failed"/>
+          <transition event="*" target="late"/>
+        </state>
+        <final id="back"/><final id="failed"/><final id="late"/>
+      </scxml>`);
+    const calls = [];
+    const system = createSystem({
+      ecmascript,
+      ioProcessors: {
+        [IO]: {
+          location: 'sync',
+          sync: true,
+          send(m, { system: s }) {
+            calls.push(m.event);
+            if (m.event === 'echo') s.send(m.origin, { type: 'back' });
+            if (m.event === 'refuse') throw new Error('no');
+            if (m.event === 'nest') s.hibernate(s.get('x'));
+          },
+        },
+      },
+    });
+    const echo = createActor(chart('echo'), { system }).start();
+    assert.equal(echo.getSnapshot().value, 'back', 'the event back comes before the sender\'s next send');
+    const refuse = createActor(chart('refuse'), { system }).start();
+    assert.equal(refuse.getSnapshot().value, 'failed', 'error.communication on the internal queue');
+    const nest = createActor(chart('nest'), { system }).start();
+    assert.equal(nest.getSnapshot().value, 'failed', 'other calls into the system throw inside a sync send');
+    assert.deepEqual(calls, ['echo', 'refuse', 'nest']);
+    system.stop();
+  });
 }
 
 test('stopping the system aborts its invocations and I/O signals', async () => {

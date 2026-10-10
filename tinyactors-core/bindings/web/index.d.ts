@@ -133,6 +133,13 @@ export interface IOMessage {
 export interface IOProcessor {
   /** shown in _ioprocessors */
   location?: string;
+  /**
+   * TA_IO_PROCESSOR_SYNC: send() runs inside the run, right after the <send>,
+   * before the sender goes on; events it sends (system.send, actor.send,
+   * deliver) and a throw (error.communication, on the sender's internal
+   * queue) come first. Other calls into the system throw there.
+   */
+  sync?: boolean;
   /** a throw or a rejection: error.communication for the sender */
   send(message: IOMessage, context: { system: System; signal: AbortSignal; traceparent?: string }): void | Promise<unknown>;
 }

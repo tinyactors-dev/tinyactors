@@ -628,7 +628,8 @@ export function createRuntime({ native, platform }) {
      *   systemID      its id in addresses (tinyactors://<systemID>/...)
      *   ecmascript    'native' (JS values, c.expr functions) or 'quickjs' (the C datamodel)
      *   clock         () => ms: time moves only in flush()
-     *   ioProcessors  { [type]: { location, send(message, context) } }
+     *   ioProcessors  { [type]: { location, sync, send(message, context) } }; a sync
+     *                 processor's send runs inside the run, before the sender goes on
      *   invokers      { [type]: { start(invocation, context), receive?(invokeid, event) } }
      *   logger        (label, text) => void, for <log> and exceptions in expressions
      *   hibernation   { store }: get/set/delete of blobs by session (a Map will do)
@@ -660,6 +661,7 @@ export function createRuntime({ native, platform }) {
       this._links = new Set();
       this._queue = [];
       this._busy = false;
+      this._syncing = false; /* inside a sync I/O processor's send: input goes in at once */
       this._stopped = false;
       this._timer = null;
       this._immediate = null;
@@ -671,13 +673,22 @@ export function createRuntime({ native, platform }) {
        * (an invoker's type too: SCXML sends to an invoked service with its type) */
       const processors = options.ioProcessors || {};
       const invokers = options.invokers || {};
-      this._io = Object.entries(processors).map(([type, p]) => ({ type, location: p.location === undefined ? '' : String(p.location), processor: p, invoker: invokers[type] }));
+      this._io = Object.entries(processors).map(([type, p]) => ({ type, location: p.location === undefined ? '' : String(p.location), sync: !!p.sync, processor: p, invoker: invokers[type] }));
       for (const [type, invoker] of Object.entries(invokers)) if (!processors[type]) this._io.push({ type, location: '', invoker });
       this._invokers = invokers;
       if (this._io.length > 16) throw new RangeError('at most 16 I/O processors and invokers');
       const callbacks = {
         resolve: (source, texts, kinds) => this._resolve(source, texts, kinds),
         effects: (effects, changed, traces, logs) => this._effects(effects, changed, traces, logs),
+        /* a send to a sync processor, inside the run: what it sends comes before the sender goes on */
+        sync: (e) => {
+          this._syncing = true;
+          try {
+            this._ioSend(e);
+          } finally {
+            this._syncing = false;
+          }
+        },
         ref: (address) => this.ref(address),
         clock: platform.wallClock || wallClock,
       };
@@ -685,7 +696,7 @@ export function createRuntime({ native, platform }) {
       const config = {
         systemID: this.id,
         ecmascript: this._ecmascript,
-        ioProcessors: this._io.map(({ type, location }) => ({ type, location })),
+        ioProcessors: this._io.map(({ type, location, sync }) => ({ type, location, sync })),
         seed: traceSeed(traces.seed),
         ...(options.capacities || {}),
       };
@@ -724,6 +735,7 @@ export function createRuntime({ native, platform }) {
 
     _do(fn) {
       if (this._stopped) return;
+      if (this._syncing) return fn(); /* send, post, deliver: the pump that called it goes on */
       if (this._busy) {
         this._queue.push(fn);
         return;
@@ -766,6 +778,7 @@ export function createRuntime({ native, platform }) {
 
     /* a run code from binding.c: -2 more work now, -1 idle, else the next deadline */
     _run(code) {
+      if (this._syncing) return;
       if (code === -2) {
         if (this._immediate === null && !this.options.clock) this._immediate = platform.defer(() => {
           this._immediate = null;

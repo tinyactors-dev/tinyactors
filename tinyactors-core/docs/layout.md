@@ -148,8 +148,8 @@ implementation of that layer). Layer dependency rules are in
 │   │                             every persistence path vs. a run that never persisted (durability.md)
 │   ├── w3c/run_w3c.c          ✅ IRP runner + BasicHTTP loopback host; with the ECMAScript datamodel
 │   │                             all 191 tests pass (skip.txt is empty); irp/ is fetched, gitignored
-│   ├── w3c/run_js.mjs         ✅ the same suite through the JS bindings (node + wasm): 158/158
-│   │                             mandatory; skip-js.txt lists the BasicHTTP tests
+│   ├── w3c/run_js.mjs         ✅ the same suite through the JS bindings (node + wasm): all 191,
+│   │                             with a synchronous BasicHTTP loopback I/O processor
 │   ├── conformance/           ✅ host conformance: JSON scenarios (spawn, send, sendMany, timers,
 │   │                             hibernate, snapshot/restore, reload/migrate, requests) run by
 │   │                             run_c.c (C host), run_js.mjs (node, web) — `mise run conformance`
@@ -230,7 +230,7 @@ implementation of that layer). Layer dependency rules are in
 | `mise run web:build` / `web:test` | *test* · the wasm module; the node suite against it, plus its own tests |
 | `mise run surface` | *test* · the binding surface (`bindings/surface.json`): every public C function classified, every bound one surviving the link of the Node addon and of the wasm module with dead-code elimination, every runtime export typed in `index.d.ts` |
 | `mise run conformance:js` | *test* · host conformance through the Node addon and the wasm binding (the C host runs it in `test`) |
-| `mise run w3c:js` | *test* · the IRP suite through the JS bindings; everything not in `tests/w3c/skip-js.txt` must pass |
+| `mise run w3c:js` | *test* · the IRP suite through the JS bindings; all 191 tests must pass |
 | `mise run examples:test` | *test* · access reconciler (invariants), chess (rules + games over links), ui-elements |
 | `mise run check:wasm` | *test* · the test programs built for wasm32-wasi, run under wasmtime |
 | `mise run torture:test` | *full* · every torture scenario headless (postgres only when PostgreSQL answers), plus the dashboard server test |

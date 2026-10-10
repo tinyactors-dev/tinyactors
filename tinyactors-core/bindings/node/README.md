@@ -137,6 +137,14 @@ const system = createSystem({
 
 An invocation's `signal` aborts when its state exits or the system stops.
 
+A processor with `sync: true` (`TA_IO_PROCESSOR_SYNC`) is called inside the
+run, right after the `<send>` and before the sender's next action. What its
+`send()` sends to the system (`system.send`, `actor.send`, `deliver`) comes
+first, and a throw is `error.communication` on the sender's internal queue,
+as SCXML wants for the BasicHTTP processor. Other calls into the system
+throw while it runs. A returned promise is still asynchronous: its
+rejection arrives later, as for any processor.
+
 ## Hibernation
 
 Idle actors can be unloaded and brought back on demand. The system never does

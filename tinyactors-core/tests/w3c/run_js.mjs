@@ -6,8 +6,8 @@
  * judged by the "Outcome" log the W3C stylesheet places in the pass/fail
  * final states — the same judgment as tests/w3c/run_w3c.c.
  *
- *   node tests/w3c/run_js.mjs <converted-dir> [--binding node|web] [--skip FILE]
- *                             [--require-all] [--only ID] [--timeout MS]
+ *   node tests/w3c/run_js.mjs <converted-dir> [--binding node|web] [--require-all]
+ *                             [--only ID] [--timeout MS]
  *
  * Tests run concurrently on real time (delays are short in the suite).
  */
@@ -22,7 +22,7 @@ const opt = (name, def) => {
 };
 const dir = args[0];
 if (!dir || dir.startsWith('--')) {
-  console.error('usage: run_js.mjs <converted-dir> [--binding node|web] [--skip FILE] [--require-all] [--only ID]');
+  console.error('usage: run_js.mjs <converted-dir> [--binding node|web] [--require-all] [--only ID]');
   process.exit(2);
 }
 const which = opt('--binding', 'node');
@@ -33,14 +33,6 @@ const ta =
   which === 'web'
     ? await import(path.join(root, 'bindings/web/node.mjs'))
     : createRequire(import.meta.url)(path.join(root, 'bindings/node'));
-
-const skipText = opt('--skip', null) ? readFileSync(opt('--skip'), 'utf8') : '';
-const skip = new Map(
-  skipText
-    .split('\n')
-    .filter((l) => l.trim() && !l.startsWith('#'))
-    .map((l) => [l.split(/\s+/)[0], l.replace(/^\S+\s*/, '')]),
-);
 
 const tests = readFileSync(path.join(dir, 'index.txt'), 'utf8')
   .split('\n')
@@ -59,6 +51,10 @@ const BASIC_HTTP = 'http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor';
 const LOCATION = 'http://localhost:8080/scxml';
 const basicHTTP = {
   location: LOCATION,
+  /* the outcome comes before the sender goes on: an unreachable target is
+   * error.communication on its internal queue (577), the POST arrives before
+   * the session's next send (201) */
+  sync: true,
   send(m, { system }) {
     if (m.target !== LOCATION) throw new Error('unreachable');
     const text = (v) => (typeof v === 'string' ? v : JSON.stringify(v));
@@ -68,7 +64,7 @@ const basicHTTP = {
     const raw = `POST /scxml HTTP/1.1\r\nHost: localhost:8080\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: ${body.length}\r\n\r\n${body}`;
     const named = fields.find(([k]) => k === '_scxmleventname');
     const data = Object.fromEntries(fields.filter(([k]) => k !== '_scxmleventname'));
-    setImmediate(() => system.send(m.origin, { type: named ? named[1] : 'HTTP.POST', ...data }, { origin: LOCATION, origintype: BASIC_HTTP, raw }));
+    system.send(m.origin, { type: named ? named[1] : 'HTTP.POST', ...data }, { origin: LOCATION, origintype: BASIC_HTTP, raw });
   },
 };
 
@@ -115,17 +111,14 @@ function run(t) {
 const counts = { mandatory: {}, optional: {} };
 const failures = [];
 const results = await Promise.all(
-  tests.map(async (t) => {
-    if (skip.has(t.id)) return { t, r: { result: 'skip' } };
-    return { t, r: await run(t) };
-  }),
+  tests.map(async (t) => ({ t, r: await run(t) })),
 );
 for (const { t, r } of results.sort((a, b) => Number(a.t.id) - Number(b.t.id))) {
   const c = counts[t.conf] || (counts[t.conf] = {});
   c[r.result] = (c[r.result] || 0) + 1;
-  if (r.result !== 'pass' && r.result !== 'skip') failures.push(`${t.id} ${t.conf} ${r.result}${r.detail ? ` (${r.detail})` : ''}`);
+  if (r.result !== 'pass') failures.push(`${t.id} ${t.conf} ${r.result}${r.detail ? ` (${r.detail})` : ''}`);
 }
-const line = (k) => `${k}: ${['pass', 'FAIL', 'COMPILE', 'TIMEOUT', 'skip'].map((r) => `${counts[k][r] || 0} ${r === 'pass' ? 'pass' : r.toLowerCase()}`).join(', ')}`;
+const line = (k) => `${k}: ${['pass', 'FAIL', 'COMPILE', 'TIMEOUT'].map((r) => `${counts[k][r] || 0} ${r === 'pass' ? 'pass' : r.toLowerCase()}`).join(', ')}`;
 console.log(`W3C IRP via the ${which} binding (the C ECMAScript datamodel)`);
 console.log(line('mandatory'));
 console.log(line('optional'));
