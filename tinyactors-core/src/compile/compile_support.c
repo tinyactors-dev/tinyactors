@@ -1,7 +1,24 @@
 #include "compile/compile_support.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+static void *default_alloc(void *context, size_t size, size_t align) {
+    (void)context;
+    (void)align; /* malloc alignment suffices (<= 16) */
+    return malloc(size ? size : 1);
+}
+static void default_free(void *context, void *p, size_t size) {
+    (void)context;
+    (void)size;
+    free(p);
+}
+
+ta_allocator ta_compile_default_allocator(void) {
+    ta_allocator allocator = {NULL, default_alloc, default_free};
+    return allocator;
+}
 
 struct ta_chunk_arena_chunk {
     ta_chunk_arena_chunk *next;

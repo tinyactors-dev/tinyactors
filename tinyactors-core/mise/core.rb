@@ -40,7 +40,7 @@ module Core
     Layer.new(name: 'system', uses: %w[core], freestanding: true,
               sources: %w[system schedule route hibernate effects tracing].map { |s| "src/system/#{s}.c" }),
     Layer.new(name: 'compile', uses: %w[image],
-              sources: %w[compile_support xml scxml link compile].map { |s| "src/compile/#{s}.c" }),
+              sources: %w[compile_support xml scxml link compile write].map { |s| "src/compile/#{s}.c" }),
     # Many systems as one (versions, routing, migration jobs, hibernation
     # policy). Freestanding: it allocates only through the ta_allocator its
     # configuration gives it (docs/adr/0005).

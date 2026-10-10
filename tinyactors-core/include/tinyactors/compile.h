@@ -1,4 +1,5 @@
-/* tinyactors/compile.h — SCXML parser, validator, static analysis, image linker.
+/* tinyactors/compile.h — SCXML parser, validator, static analysis, image linker,
+ * and an XML writer for charts a binding builds.
  *
  * Usable offline (the `tac` CLI) or in-process (e.g. a Python binding that
  * loads .scxml at runtime). Unlike the runtime layers it allocates, through
@@ -82,6 +83,34 @@ TA_API ta_status ta_compile_system(const ta_compile_options *opt, const ta_sourc
 TA_API ta_string_view ta_compile_image(const ta_compile_result *r); /* bytes of the .tai */
 TA_API uint32_t ta_compile_diagnostics(const ta_compile_result *r, const ta_diagnostic **out);
 TA_API void ta_compile_free(ta_compile_result *r);
+
+/* XML from calls, for charts and manifests a binding builds instead of
+ * writing XML text itself: it escapes, indents two spaces per element level
+ * and checks nesting, and knows no SCXML. Give the text to
+ * ta_compile_charts / ta_compile_system, which validate it; their
+ * diagnostics' lines and columns point into it. After an error, every later
+ * call returns the same error.
+ *
+ * An attribute is quoted with ", or with ' when its value holds " and no ';
+ * text is written where it is given, without indentation. */
+typedef struct ta_xml_writer ta_xml_writer;
+
+/* allocator NULL: the C library's malloc, as for ta_compile_options. */
+TA_API ta_status ta_xml_writer_new(const ta_allocator *allocator, ta_xml_writer **out);
+/* TA_ERROR_INVALID: not an XML name. TA_ERROR_STATE: a second root. */
+TA_API ta_status ta_xml_writer_open(ta_xml_writer *writer, ta_string_view name);
+/* TA_ERROR_STATE: no open element, or after its first child or text.
+ * TA_ERROR_INVALID: not an XML name, or a control character in the value. */
+TA_API ta_status ta_xml_writer_attribute(ta_xml_writer *writer, ta_string_view name,
+                                         ta_string_view value);
+/* TA_ERROR_STATE: no open element. TA_ERROR_INVALID: a control character. */
+TA_API ta_status ta_xml_writer_text(ta_xml_writer *writer, ta_string_view text);
+/* TA_ERROR_STATE: no open element. */
+TA_API ta_status ta_xml_writer_close(ta_xml_writer *writer);
+/* The document, valid until ta_xml_writer_free.
+ * TA_ERROR_STATE: no root, or an element still open. */
+TA_API ta_status ta_xml_writer_finish(ta_xml_writer *writer, ta_string_view *out);
+TA_API void ta_xml_writer_free(ta_xml_writer *writer);
 
 #ifdef __cplusplus
 }

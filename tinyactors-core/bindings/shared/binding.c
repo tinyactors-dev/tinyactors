@@ -12,6 +12,7 @@
  * their session id (a double: exact below 2^53) for their whole life.
  *
  *   compile([{name, xml}]) -> image           chartIndex(image, source) -> chart or -1
+ *   writeXML(ops, strings) -> xml             (an el() tree, written by ta_xml_writer)
  *   createHost(resolver, codec, base) -> host addImage(host, image) -> segment
  *   chart(host, name) -> [segment, chart]|null  (the current version of a chart name)
  *   spawn(host, segment, chart, input) -> session
@@ -224,6 +225,73 @@ out:
         free(owned[i]);
     free(owned);
     free(source);
+    return result;
+}
+
+/* writeXML(ops: Uint8Array, strings: string[]) -> string: XML from an element
+ * tree (core.mjs's el()), through ta_xml_writer. ops: 1 open (takes a name
+ * from `strings`), 2 attribute (a name and a value), 3 text (one), 4 close;
+ * each takes its strings in order. */
+static napi_value js_write_xml(napi_env environment, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2], result = NULL;
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    napi_typedarray_type type;
+    size_t count = 0, offset = 0;
+    void *data = NULL;
+    napi_value buffer;
+    bool is_array = false;
+    if (argc < 2 ||
+        napi_get_typedarray_info(environment, argv[0], &type, &count, &data, &buffer, &offset) !=
+            napi_ok ||
+        type != napi_uint8_array || napi_is_array(environment, argv[1], &is_array) != napi_ok ||
+        !is_array) {
+        napi_throw_type_error(environment, NULL, "writeXML(ops: Uint8Array, strings: string[])");
+        return NULL;
+    }
+    const uint8_t *ops = (const uint8_t *)data;
+    uint32_t string_count = 0, next = 0;
+    napi_get_array_length(environment, argv[1], &string_count);
+    ta_xml_writer *writer = NULL;
+    if (ta_xml_writer_new(NULL, &writer) != TA_OK) {
+        napi_throw_error(environment, NULL, "writeXML: out of memory");
+        return NULL;
+    }
+    ta_status status = TA_OK;
+    for (size_t i = 0; i < count && status == TA_OK; i++) {
+        uint32_t needs = ops[i] == 1 || ops[i] == 3 ? 1 : ops[i] == 2 ? 2 : 0;
+        char *text[2] = {NULL, NULL};
+        ta_string_view view[2] = {{NULL, 0}, {NULL, 0}};
+        if (ops[i] < 1 || ops[i] > 4 || next + needs > string_count) status = TA_ERROR_INVALID;
+        for (uint32_t k = 0; k < needs && status == TA_OK; k++) {
+            napi_value element;
+            size_t length = 0;
+            napi_get_element(environment, argv[1], next++, &element);
+            text[k] = get_string(environment, element, &length);
+            if (!text[k]) status = TA_ERROR_INVALID;
+            view[k] = (ta_string_view){text[k], (uint32_t)length};
+        }
+        if (status == TA_OK) {
+            if (ops[i] == 1) status = ta_xml_writer_open(writer, view[0]);
+            if (ops[i] == 2) status = ta_xml_writer_attribute(writer, view[0], view[1]);
+            if (ops[i] == 3) status = ta_xml_writer_text(writer, view[0]);
+            if (ops[i] == 4) status = ta_xml_writer_close(writer);
+        }
+        free(text[0]);
+        free(text[1]);
+    }
+    ta_string_view xml = {NULL, 0};
+    if (status == TA_OK) status = ta_xml_writer_finish(writer, &xml);
+    if (status == TA_OK)
+        result = str_value(environment, xml);
+    else
+        napi_throw_error(environment, NULL,
+                         status == TA_ERROR_NO_MEMORY
+                             ? "writeXML: out of memory"
+                             : "writeXML: not a well-formed element tree (an element or "
+                               "attribute name that is not an XML name, a control character, "
+                               "or an attribute after content)");
+    ta_xml_writer_free(writer);
     return result;
 }
 
@@ -3736,6 +3804,7 @@ static napi_value js_restore(napi_env environment, napi_callback_info info) {
 napi_value ta_js_init(napi_env environment, napi_value exports) {
     napi_property_descriptor props[] = {
         {"compile", NULL, js_compile, NULL, NULL, NULL, napi_default_method, NULL},
+        {"writeXML", NULL, js_write_xml, NULL, NULL, NULL, napi_default_method, NULL},
         {"chartIndex", NULL, js_chart_index, NULL, NULL, NULL, napi_default_method, NULL},
         {"states", NULL, js_states, NULL, NULL, NULL, napi_default_method, NULL},
         {"compileSystem", NULL, js_compile_system, NULL, NULL, NULL, napi_default_method, NULL},

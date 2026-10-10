@@ -324,6 +324,10 @@
       "kind": "opaque",
       "fields": []
     },
+    "ta_xml_writer": {
+      "kind": "opaque",
+      "fields": []
+    },
     "ta_runtime_files": {
       "kind": "opaque",
       "fields": []
@@ -613,6 +617,121 @@
         {
           "name": "out",
           "type": "ta_system **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_xml_writer_attribute",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_xml_writer *"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "value",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_xml_writer_close",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_xml_writer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_xml_writer_finish",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_xml_writer *"
+        },
+        {
+          "name": "out",
+          "type": "ta_string_view *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_xml_writer_free",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_xml_writer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_xml_writer_new",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "allocator",
+          "type": "const ta_allocator *"
+        },
+        {
+          "name": "out",
+          "type": "ta_xml_writer **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_xml_writer_open",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_xml_writer *"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_xml_writer_text",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_xml_writer *"
+        },
+        {
+          "name": "text",
+          "type": "ta_string_view"
         }
       ],
       "public": true,

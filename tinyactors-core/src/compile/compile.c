@@ -3,7 +3,6 @@
  * names, emit and self-verify the image. */
 #include "compile/compile_internal.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 struct ta_compile_result {
@@ -14,19 +13,8 @@ struct ta_compile_result {
     ta_chunk_arena arena;
 };
 
-static void *default_alloc(void *context, size_t size, size_t align) {
-    (void)context;
-    (void)align; /* malloc alignment suffices (<= 16) */
-    return malloc(size ? size : 1);
-}
-static void default_free(void *context, void *p, size_t size) {
-    (void)context;
-    (void)size;
-    free(p);
-}
-
 static ta_compile_result *result_new(const ta_compile_options *options) {
-    ta_allocator allocator = {NULL, default_alloc, default_free};
+    ta_allocator allocator = ta_compile_default_allocator();
     if (options && options->alloc.alloc && options->alloc.free) allocator = options->alloc;
     ta_compile_result *result =
         (ta_compile_result *)allocator.alloc(allocator.context, sizeof *result, 8);

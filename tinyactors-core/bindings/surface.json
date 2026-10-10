@@ -57,6 +57,13 @@
     "ta_compile_free": "bind",
     "ta_compile_image": "bind",
     "ta_compile_system": "bind",
+    "ta_xml_writer_attribute": "bind",
+    "ta_xml_writer_close": "bind",
+    "ta_xml_writer_finish": "bind",
+    "ta_xml_writer_free": "bind",
+    "ta_xml_writer_new": "bind",
+    "ta_xml_writer_open": "bind",
+    "ta_xml_writer_text": "bind",
 
     "ta_core_deliver": {"skip": "kernel-only embedding (bring your own scheduler); the bindings embed ta_system"},
     "ta_core_instance_size": {"skip": "kernel-only embedding; the bindings embed ta_system"},

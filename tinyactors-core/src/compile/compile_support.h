@@ -8,6 +8,9 @@
 #include "base/config.h"
 #include <tinyactors/compile.h>
 
+/* The C library's malloc, for callers that pass no allocator. */
+ta_allocator ta_compile_default_allocator(void);
+
 /* ---- chunked arena -------------------------------------------------------- */
 typedef struct ta_chunk_arena_chunk ta_chunk_arena_chunk;
 typedef struct ta_chunk_arena {

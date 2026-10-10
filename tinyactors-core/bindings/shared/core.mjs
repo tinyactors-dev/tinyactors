@@ -67,31 +67,33 @@ export function createRuntime({ native, platform }) {
 
   const toArray = (x) => (x === undefined ? [] : Array.isArray(x) ? x : [x]);
   const norm = (s) => String(s).replace(/\s+/g, ' ').trim();
-  const escText = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-
-  function attrText(v) {
-    const s = String(v);
-    if (s.includes('"') && !s.includes("'")) return `'${escText(s)}'`;
-    return `"${escText(s).replace(/"/g, '&quot;')}"`;
-  }
-
   /** el('state', { id: 'a' }, ...children) — attributes with undefined values are dropped */
   function el(tag, attrs, ...children) {
     return { tag, attrs: attrs || {}, children: children.flat(Infinity).filter(Boolean) };
   }
 
-  function serialize(node, indent = '') {
-    if (typeof node === 'string') return indent + escText(node);
-    const attrs = Object.entries(node.attrs)
-      .filter(([, v]) => v !== undefined)
-      .map(([k, v]) => ` ${k}=${attrText(v)}`)
-      .join('');
-    const open = `${indent}<${node.tag}${attrs}`;
-    if (!node.children.length) return `${open}/>`;
-    if (node.children.length === 1 && typeof node.children[0] === 'string')
-      return `${open}>${escText(node.children[0])}</${node.tag}>`;
-    const inner = node.children.map((c) => serialize(c, indent + '  ')).join('\n');
-    return `${open}>\n${inner}\n${indent}</${node.tag}>`;
+  /** The XML of an el() tree, written by C (ta_xml_writer): 1 opens an element
+   * (its name), 2 adds an attribute (name, value), 3 text, 4 closes. */
+  function serialize(root) {
+    const ops = [];
+    const strings = [];
+    (function walk(node) {
+      if (typeof node === 'string') {
+        ops.push(3);
+        strings.push(node);
+        return;
+      }
+      ops.push(1);
+      strings.push(node.tag);
+      for (const [k, v] of Object.entries(node.attrs)) {
+        if (v === undefined) continue;
+        ops.push(2);
+        strings.push(k, String(v));
+      }
+      node.children.forEach(walk);
+      ops.push(4);
+    })(root);
+    return native.writeXML(Uint8Array.from(ops), strings);
   }
 
   /* ---------------------------------------------------------------- compiler */
@@ -691,10 +693,11 @@ export function createRuntime({ native, platform }) {
       if (typeof xml !== 'string') throw new TypeError('fromSCXML(xml): xml must be a string');
       this.xml = xml;
       this.documents = options.documents || {};
-      const m = /<scxml\b[^>]*?\sname\s*=\s*(["'])(.*?)\1/.exec(xml);
-      this.id = options.id || (m && m[2]) || 'scxml';
       this.scxml = true;
       this._compiled = null;
+      /* the chart's name is its <scxml name>, else its source name */
+      const { name } = this._compile();
+      this.id = options.id || (name !== '__main' && name) || 'scxml';
     }
     toSCXML() {
       return this.xml;
@@ -708,7 +711,7 @@ export function createRuntime({ native, platform }) {
       const docs = files.filter((f) => /<scxml[\s>]/.test(f.xml));
       const image = native.compile([{ name: '__main', xml: this.xml }, ...docs], files);
       const main = native.chartIndex(image, '__main');
-      const dm = native.imageInfo(image).charts[main].datamodel;
+      const { datamodel: dm, name } = native.imageInfo(image).charts[main];
       if (dm && dm !== 'ecmascript' && dm !== 'null') throw new Error(`fromSCXML: the "${dm}" datamodel is not supported (use "ecmascript" or "null")`);
       const states = native.states(image, main);
       const nodes = states.map((s) => ({ id: s.id, key: s.id, type: STATE_KINDS[s.kind] || 'atomic', children: [], tags: [] }));
@@ -721,7 +724,7 @@ export function createRuntime({ native, platform }) {
           walk(k, p);
         }
       })(nodes[0], '');
-      this._compiled = { xml: this.xml, registry: new Map(), chart: { root: nodes[0], nodes: byPath }, sources: docs, files };
+      this._compiled = { xml: this.xml, name, registry: new Map(), chart: { root: nodes[0], nodes: byPath }, sources: docs, files };
       return this._compiled;
     }
     _eventData(event) {

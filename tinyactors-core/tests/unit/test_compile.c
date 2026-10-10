@@ -540,6 +540,136 @@ static void test_manifest(void) {
     ta_compile_free(result);
 }
 
+/* ---- ta_xml_writer ---------------------------------------------------------- */
+
+static ta_string_view view_of(const char *text) {
+    ta_string_view view = {text, (uint32_t)strlen(text)};
+    return view;
+}
+
+static int text_is(ta_string_view text, const char *expected) {
+    int same = text.length == strlen(expected) && memcmp(text.pointer, expected, text.length) == 0;
+    if (!same) fprintf(stderr, "  wrote: [%.*s]\n", (int)text.length, text.pointer);
+    return same;
+}
+
+/* <name a="value"...>: attributes are name/value pairs, NULL-terminated */
+static void open_with(ta_xml_writer *writer, const char *name, const char *const *attributes) {
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of(name)), TA_OK);
+    for (; attributes && attributes[0]; attributes += 2)
+        CHECK_EQUAL(ta_xml_writer_attribute(writer, view_of(attributes[0]), view_of(attributes[1])),
+                    TA_OK);
+}
+
+static void test_xml_writer(void) {
+    ta_xml_writer *writer;
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    open_with(writer, "scxml",
+              (const char *const[]){"xmlns", "http://www.w3.org/2005/07/scxml", "initial", "a",
+                                    "datamodel", "ecmascript", NULL});
+    open_with(writer, "state", (const char *const[]){"id", "a", NULL});
+    open_with(writer, "onentry", NULL);
+    open_with(writer, "log", (const char *const[]){"expr", "x < 1 && y > \"2\"", NULL});
+    ta_xml_writer_close(writer);
+    open_with(writer, "log", (const char *const[]){"expr", "'a' + \"b\"\n", NULL});
+    ta_xml_writer_close(writer);
+    open_with(writer, "script", NULL);
+    CHECK_EQUAL(ta_xml_writer_text(writer, view_of("if (a < b && c]]> d) {}\r\n")), TA_OK);
+    ta_xml_writer_close(writer);
+    ta_xml_writer_close(writer);
+    open_with(writer, "transition", (const char *const[]){"event", "go", "target", "b", NULL});
+    ta_xml_writer_close(writer);
+    ta_xml_writer_close(writer);
+    open_with(writer, "final", (const char *const[]){"id", "b", NULL});
+    ta_xml_writer_close(writer);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    ta_string_view text;
+    CHECK_EQUAL(ta_xml_writer_finish(writer, &text), TA_OK);
+    const char *expected =
+        "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" initial=\"a\" datamodel=\"ecmascript\">\n"
+        "  <state id=\"a\">\n"
+        "    <onentry>\n"
+        "      <log expr='x &lt; 1 &amp;&amp; y > \"2\"'/>\n"
+        "      <log expr=\"'a' + &quot;b&quot;&#10;\"/>\n"
+        "      <script>if (a &lt; b &amp;&amp; c]]&gt; d) {}&#13;\n</script>\n"
+        "    </onentry>\n"
+        "    <transition event=\"go\" target=\"b\"/>\n"
+        "  </state>\n"
+        "  <final id=\"b\"/>\n"
+        "</scxml>";
+    CHECK(text_is(text, expected));
+
+    /* the text compiles to the same image as the same chart written by hand */
+    const char *by_hand =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' initial='a' datamodel='ecmascript'>"
+        "<state id='a'><onentry><log expr='x &lt; 1 &amp;&amp; y &gt; \"2\"'/>"
+        "<log expr=\"&apos;a&apos; + &quot;b&quot;&#10;\"/>"
+        "<script>if (a &lt; b &amp;&amp; c]]&gt; d) {}&#13;\n</script></onentry>"
+        "<transition event='go' target='b'/></state><final id='b'/></scxml>";
+    char *written = (char *)malloc(text.length + 1);
+    memcpy(written, text.pointer, text.length);
+    written[text.length] = 0;
+    size_t length_written = 0, length_by_hand = 0;
+    void *image_written = compile_chart("c.scxml", written, NULL, &length_written, 0);
+    void *image_by_hand = compile_chart("c.scxml", by_hand, NULL, &length_by_hand, 0);
+    CHECK(image_written && image_by_hand);
+    if (image_written && image_by_hand) {
+        ta_image image;
+        CHECK_EQUAL(ta_image_open(image_written, length_written, &image), TA_OK);
+        ta_expression_info first, second;
+        CHECK_EQUAL(ta_image_expression(&image, 0, 0, &first), TA_OK);
+        CHECK(text_is(first.source, "x < 1 && y > \"2\""));
+        ta_image by_hand_image;
+        CHECK_EQUAL(ta_image_open(image_by_hand, length_by_hand, &by_hand_image), TA_OK);
+        CHECK_EQUAL(ta_image_expression_count(&image, 0),
+                    ta_image_expression_count(&by_hand_image, 0));
+        for (uint32_t e = 0; e < ta_image_expression_count(&image, 0); e++) {
+            CHECK_EQUAL(ta_image_expression(&image, 0, e, &first), TA_OK);
+            CHECK_EQUAL(ta_image_expression(&by_hand_image, 0, e, &second), TA_OK);
+            CHECK(first.kind == second.kind && first.source.length == second.source.length &&
+                  memcmp(first.source.pointer, second.source.pointer, first.source.length) == 0);
+        }
+        CHECK_EQUAL(ta_image_state_count(&image, 0), ta_image_state_count(&by_hand_image, 0));
+    }
+    free(image_written);
+    free(image_by_hand);
+    free(written);
+    ta_xml_writer_free(writer);
+
+    /* refused calls; the first error sticks */
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("a")), TA_ERROR_STATE);
+    ta_xml_writer_free(writer);
+    const char *bad_names[] = {"", "1a", "a b", "a<", "-a"};
+    for (size_t i = 0; i < sizeof bad_names / sizeof bad_names[0]; i++) {
+        CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+        CHECK_EQUAL(ta_xml_writer_open(writer, view_of(bad_names[i])), TA_ERROR_INVALID);
+        ta_xml_writer_free(writer);
+    }
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("s:scxml")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_attribute(writer, view_of("x"), view_of("a\001")), TA_ERROR_INVALID);
+    ta_xml_writer_free(writer);
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("a")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_text(writer, view_of("t")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_attribute(writer, view_of("x"), view_of("1")), TA_ERROR_STATE);
+    ta_xml_writer_free(writer);
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("a")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_finish(writer, &text), TA_ERROR_STATE); /* <a> is open */
+    ta_xml_writer_free(writer);
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_finish(writer, &text), TA_ERROR_STATE); /* no root */
+    ta_xml_writer_free(writer);
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("a")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("b")), TA_ERROR_STATE); /* a second root */
+    CHECK_EQUAL(ta_xml_writer_finish(writer, &text), TA_ERROR_STATE);
+    ta_xml_writer_free(writer);
+}
 int main(void) {
     RUN(test_structure);
     RUN(test_errors);
@@ -551,5 +681,6 @@ int main(void) {
     RUN(test_namespaces);
     RUN(test_generated_ids);
     RUN(test_abort);
+    RUN(test_xml_writer);
     TEST_MAIN_END();
 }
