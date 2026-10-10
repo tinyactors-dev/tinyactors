@@ -190,6 +190,66 @@ static void test_errors(void) {
         "<scxml><state id='a'><history id='h'/><state id='b'/></state></scxml>", "default"));
 }
 
+/* Where an error is reported: the start of the element it is about (these
+ * cases come from the tests of the SCXML codec tinyactors-scxml held). */
+#define NS "xmlns=\"http://www.w3.org/2005/07/scxml\""
+typedef struct position_case {
+    const char *document;
+    const char *message; /* a part of the error's message */
+    uint32_t line, column;
+} position_case;
+
+static const position_case POSITION_CASES[] = {
+    {"<scxml " NS ">\n  <state>\n</scxml>", "mismatched end tag", 3, 1},
+    {"<other/>", "root element", 1, 1},
+    {"<scxml " NS "><state><onentry><bogus/></onentry></state></scxml>", "unknown executable", 1,
+     64},
+    {"<scxml " NS "><state><onentry><raise/></onentry></state></scxml>", "requires 'event'", 1, 64},
+    {"<scxml " NS "><state><onentry><send event=\"a\" eventexpr=\"b\"/></onentry></state></scxml>",
+     "both event and eventexpr", 1, 64},
+    {"<scxml " NS "><state><transition type=\"sideways\"/></state></scxml>",
+     "invalid transition type", 1, 55},
+    {"<scxml " NS "><state><onentry><if cond=\"c\"><else/><elseif cond=\"d\"/></if></onentry>"
+     "</state></scxml>",
+     "<elseif> after <else>", 1, 84},
+    {"<scxml " NS "><datamodel><data id=\"x\" src=\"file:missing\"/></datamodel><final/></scxml>",
+     "requires a resolver", 1, 59},
+    {"<scxml " NS " name=\"c\">\n  <state id=\"idle\">\n    <transition event=\"go\" "
+     "target=\"idel\"/>\n  </state>\n</scxml>",
+     "unknown state id 'idel'", 3, 5},
+    {"<scxml " NS " name=\"c\">\n  <state id=\"a\"/>\n  <state id=\"a\"/>\n</scxml>",
+     "duplicate state id", 3, 3},
+    {"<scxml " NS " name=\"c\">\n  <state id=\"s\">\n    <onentry><send event=\"e\" "
+     "delay=\"soon\"/></onentry>\n  </state>\n</scxml>",
+     "invalid delay", 3, 14},
+};
+
+static void test_error_positions(void) {
+    for (size_t i = 0; i < sizeof POSITION_CASES / sizeof POSITION_CASES[0]; i++) {
+        const position_case *item = &POSITION_CASES[i];
+        ta_compile_options options;
+        memset(&options, 0, sizeof options);
+        options.size = sizeof options;
+        ta_source source = {{"bad.scxml", 9}, {item->document, (uint32_t)strlen(item->document)}};
+        ta_compile_result *result = NULL;
+        CHECK_EQUAL(ta_compile_charts(&options, &source, 1, &result), TA_ERROR_INVALID);
+        const ta_diagnostic *diagnostic;
+        uint32_t count = ta_compile_diagnostics(result, &diagnostic);
+        int found = 0;
+        for (uint32_t k = 0; k < count; k++) {
+            char message[256];
+            snprintf(message, sizeof message, "%.*s", (int)diagnostic[k].message.length,
+                     diagnostic[k].message.pointer);
+            if (diagnostic[k].severity == TA_DIAGNOSTIC_ERROR && strstr(message, item->message) &&
+                diagnostic[k].line == item->line && diagnostic[k].column == item->column)
+                found = 1;
+        }
+        if (!found) print_diagnostics(result);
+        CHECK(found);
+        ta_compile_free(result);
+    }
+}
+
 /* Copies `text` to `p` and answers the end, for documents sized up front. */
 static char *append(char *p, const char *text) {
     size_t length = strlen(text);
@@ -483,6 +543,7 @@ static void test_manifest(void) {
 int main(void) {
     RUN(test_structure);
     RUN(test_errors);
+    RUN(test_error_positions);
     RUN(test_durations);
     RUN(test_manifest);
     RUN(test_limits);

@@ -70,10 +70,6 @@ Two rules follow from the table:
 - `tinyactors-core/` is the runtime: the C layers above, its bindings
   (`bindings/`), the torture chamber (`tools/torture/`), and examples.
 - `tinyxml/` is a freestanding XML reader and writer.
-- `tinyactors-scxml/` (an SCXML codec over tinyxml) is parked: it was
-  written for the earlier core, kept at commit `943b1f31^` (the parent of the
-  commit that replaced it; the tag `ring-proto-final` the ADRs name was not
-  pushed), and waits to be ported to this one.
 - `tinyparse/` is a freestanding parser runtime and its CLI: grammar data
   in, a streaming parser and a syntax tree out, or a generated C parser.
 - `staticjs/` is a pure, total subset of JavaScript: the language of a

@@ -42,7 +42,7 @@ require 'toolchain'
 #   profile's flags: a hand-edited or deleted archive is rebuilt, and one
 #   profile's run never perturbs another's cache record.
 module CRelease
-  # One C library. `prefix` is its symbol prefix (`ta`, `txml`, `ta_scxml`).
+  # One C library. `prefix` is its symbol prefix (`ta`, `txml`).
   # `includes` are the directories its header and amalgamation need beyond
   # their own: those of the libraries it builds on (the codec's core and
   # txml).

@@ -36,8 +36,6 @@ steps = [
   ['tinyparse', ['mise', 'run', *flags.call(*(full ? ['--full'] : []))], root.join('tinyparse')],
   # --full: every spec case with each of its allocations failing.
   ['staticjs', ['mise', 'run', *flags.call(*(full ? ['--full'] : []))], root.join('staticjs')]
-  # tinyactors-scxml is parked until it is ported to the current core
-  # (mise/tasks/build).
 ]
 
 clock = -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }

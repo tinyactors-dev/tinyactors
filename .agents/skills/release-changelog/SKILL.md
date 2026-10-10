@@ -1,6 +1,6 @@
 ---
 name: release-changelog
-description: Write the changelog section for a release of tinyactors-core, tinyactors-napi, tinyactors-scxml or tinyxml, and stop for the maintainer's review before the release. Use when asked to cut or prepare a release, write or update a CHANGELOG.md, summarize what changed since the last release, or when a release task fails on "is not fit to release". Releases only; do not use it to draft a changelog between releases.
+description: Write the changelog section for a release of tinyactors-core, tinyactors-napi or tinyxml, and stop for the maintainer's review before the release. Use when asked to cut or prepare a release, write or update a CHANGELOG.md, summarize what changed since the last release, or when a release task fails on "is not fit to release". Releases only; do not use it to draft a changelog between releases.
 ---
 
 # Release changelog
@@ -17,7 +17,7 @@ releases.
 
 ## Steps
 
-Work in the order below. Components: `core`, `host`, `napi`, `scxml`,
+Work in the order below. Components: `core`, `host`, `napi`,
 `tinyxml`.
 
 1. **Scope.** Ask which component and, if not said, whether the maintainer
@@ -130,7 +130,7 @@ Work in the order below. Components: `core`, `host`, `napi`, `scxml`,
    commit does not make the section stale. Then the release task, which runs
    `changelog:check` first and puts the section in the GitHub release:
 
-   - core, scxml, tinyxml: `mise run //<directory>:release -- <version>`
+   - core, tinyxml: `mise run //<directory>:release -- <version>`
    - napi: `mise run //tinyactors-napi:release -- <version>`
 
    Without `--publish` these are dry runs; show what they report, and let the
@@ -153,7 +153,7 @@ Work in the order below. Components: `core`, `host`, `napi`, `scxml`,
   component whose directory it touches. A `feat(core,napi)` commit is in both
   changelogs. Wrong scopes in commit subjects give a wrong packet; say so in
   your report when you see one.
-- The packet's API delta for core, scxml and tinyxml comes from the
+- The packet's API delta for core and tinyxml comes from the
   checked-in `include/*.api.json` at the last release and at `HEAD`; for napi
   from the declarations `index.d.ts` exports; for the host from its headers.
   Struct layout changes (size, offset) count as changes: they break the ABI.

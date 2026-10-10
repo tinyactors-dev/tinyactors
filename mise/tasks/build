@@ -39,7 +39,3 @@ xml.run('build')
 # A sibling library like tinyxml: nothing builds against it yet.
 staticjs = Project.new(ROOT.join('staticjs'))
 staticjs.run('build')
-
-# tinyactors-scxml is parked: it builds against the ring-protocol core this
-# repo replaced (943b1f31^), and waits to be ported to the current one (its
-# README says how). The OTLP encoder is tinyactors-core's otlp layer now.

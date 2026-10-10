@@ -44,8 +44,6 @@ module Changelog
     # releases keep that line of tags.
     Component.new(name: 'napi', dir: 'tinyactors-core/bindings/node', scopes: %w[napi node],
                   api_files: %w[index.d.ts], api_ignore: nil, tag_prefix: 'tinyactors-napi/'),
-    Component.new(name: 'scxml', dir: 'tinyactors-scxml', scopes: %w[scxml],
-                  api_json: 'include/ta_scxml.api.json', api_ignore: VERSION_MACROS),
     Component.new(name: 'tinyxml', dir: 'tinyxml', scopes: %w[tinyxml txml],
                   api_json: 'include/txml.api.json', api_ignore: VERSION_MACROS)
   ].freeze

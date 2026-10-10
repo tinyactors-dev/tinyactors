@@ -27,7 +27,7 @@ in system memory, no allocation after init).
 
 ## Releases and changelogs
 
-Each component (core, napi, scxml, tinyxml) has a `CHANGELOG.md` in
+Each component (core, napi, tinyxml) has a `CHANGELOG.md` in
 its directory, and a release of it needs a section there that passes
 `mise run changelog:check <component>`
 ([ADR 0002](docs/adr/0002-changelogs.md)). To prepare a release, use the
@@ -65,9 +65,6 @@ Do it at release time, not between releases.
   | `staticjs`                          | staticjs                                 |
   | root `mise/lib`, `mise.toml`        | all of them                              |
   | docs, READMEs, ADRs only            | none (the acronym check still runs)      |
-
-  `tinyactors-scxml` is parked (README.md): no test runs it until it is
-  ported to the current core.
 
   When you add a directory a project's tests read, add it to that
   project's `#MISE sources`, or a change there will not rerun them.

@@ -32,7 +32,6 @@ around a typedef's tag). Check each description:
 ```sh
 mise run //tinyactors-core:api --check
 mise run //tinyxml:api --check
-mise run //tinyactors-scxml:api --check
 ```
 
 If a check fails, look at the difference before regenerating. A new node

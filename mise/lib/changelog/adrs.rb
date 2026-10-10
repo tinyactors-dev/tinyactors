@@ -7,7 +7,7 @@ module Changelog
     Note = Struct.new(:label, :path, :text, keyword_init: true)
 
     # "core ADR 0094", "ADRs 0090 and 0091", "scxml ADR 0002 section 2".
-    REFERENCE = /(?:\b(?<qualifier>core|napi|scxml|tinyxml)\s+)?\bADRs?\s+(?<numbers>\d{4}(?:(?:,\s*|\s+and\s+|\s*,\s*and\s+)\d{4})*)/i
+    REFERENCE = /(?:\b(?<qualifier>core|napi|tinyxml)\s+)?\bADRs?\s+(?<numbers>\d{4}(?:(?:,\s*|\s+and\s+|\s*,\s*and\s+)\d{4})*)/i
     LIMIT = 3000
 
     module_function
