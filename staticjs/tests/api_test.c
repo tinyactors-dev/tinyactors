@@ -14,6 +14,12 @@
 
 static int failures = 0;
 
+/* The fuel of test_regex_fuel's matches, pinned. */
+#define REGEX_FUEL_TEST 14
+#define REGEX_FUEL_REPLACE 31
+#define REGEX_FUEL_SPLIT 27
+#define REGEX_FUEL_SEARCH 707
+
 #define CHECK(condition)                                                        \
     do {                                                                        \
         if (!(condition)) {                                                     \
@@ -93,7 +99,7 @@ static sjs_result evaluate(const env *e, const char *source, char *out) {
         return r;
     }
     sjs_vm *vm;
-    sjs_vm_config config = { e->context };
+    sjs_vm_config config = { e->context, false };
     r = sjs_vm_init(&vm, &config);
     if (r != SJS_OK) {
         sjs_program_release(program);
@@ -329,7 +335,7 @@ static void test_modules(void) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context };
+    sjs_vm_config config = { context, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -819,7 +825,7 @@ static void test_writer_resumes(void) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context };
+    sjs_vm_config config = { context, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -862,7 +868,7 @@ static void test_fuel_pinned(sjs_context *context) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context };
+    sjs_vm_config config = { context, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -889,7 +895,7 @@ static uint64_t fuel_of(sjs_context *context, const char *source) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context };
+    sjs_vm_config config = { context, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -910,6 +916,45 @@ static void test_to_spliced_fuel(sjs_context *context) {
     CHECK(copied == 31);
 }
 
+/* A regular expression's match charges for the instructions it visits and
+ * the slots it copies (docs/regex.md, 9.1), pinned here; it grows linearly
+ * with the input, a pattern that backtracks exponentially included; and an
+ * evaluation pauses within it. */
+static void test_regex_fuel(sjs_context *context) {
+    CHECK(fuel_of(context, "/ab+c/.test('xxabbbcx')") == REGEX_FUEL_TEST);
+    CHECK(fuel_of(context, "'a1b22c333'.replace(/(\\d)+/g, '<$1>')") == REGEX_FUEL_REPLACE);
+    CHECK(fuel_of(context, "'a, b,c ,d'.split(/\\s*,\\s*/)") == REGEX_FUEL_SPLIT);
+    CHECK(fuel_of(context, "'x'.repeat(1000).search(/y/)") == REGEX_FUEL_SEARCH);
+    uint64_t small = fuel_of(context, "/(a+)+$/.test('a'.repeat(2000) + 'b')");
+    uint64_t large = fuel_of(context, "/(a+)+$/.test('a'.repeat(4000) + 'b')");
+    CHECK(large > small * 3 / 2 && large < small * 2 + 64);
+    /* Paused after every unit, a long match pauses within itself, and costs
+     * what it costs run whole. */
+    const char *source = "'ab'.repeat(500).replace(/b/g, 'c').length";
+    uint64_t whole = fuel_of(context, source);
+    sjs_program *program;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
+                                  { source, (uint32_t)strlen(source) }, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    sjs_vm *vm;
+    sjs_vm_config config = { context, false };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    sjs_run_params run = { program, NULL, 0 };
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    sjs_run status;
+    uint64_t pauses = 0;
+    while ((status = sjs_vm_run(vm, 1)) == SJS_RUN_PAUSED) pauses++;
+    CHECK(status == SJS_RUN_DONE && sjs_vm_fuel_used(vm) == whole && pauses > 20);
+    sjs_value v;
+    CHECK(sjs_vm_take_result(vm, &v) == SJS_OK && v.kind == SJS_NUMBER && v.as.number == 1000);
+    sjs_vm_destroy(vm);
+    sjs_program_release(program);
+    /* An automaton past max_regex_states is a limit when it compiles. */
+    sjs_error error;
+    sjs_compile_params limit = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false }, SJS_STR("/a{1000000}/"), &error };
+    CHECK(sjs_compile(&limit, &program) == SJS_ERR_PROGRAM && error.code == SJS_ERROR_LIMIT);
+}
+
 /* A set's lookups go through its index, so combining two sets costs fuel in
  * proportion to their sizes, not their product. */
 static void test_set_fuel_linear(sjs_context *context) {
@@ -925,7 +970,7 @@ static void test_set_fuel_linear(sjs_context *context) {
         for (uint32_t i = 0; i < 2000; i++) CHECK(sjs_set_add(context, &sets[s], sjs_number(i + s * 1000.0)) == SJS_OK);
     }
     sjs_vm *vm;
-    sjs_vm_config config = { context };
+    sjs_vm_config config = { context, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, sets, 2 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -953,7 +998,7 @@ static void test_fuel_and_reset(void) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context };
+    sjs_vm_config config = { context, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -975,6 +1020,7 @@ static void test_fuel_and_reset(void) {
     sjs_vm_destroy(vm);
     sjs_program_release(program);
     test_fuel_pinned(context);
+    test_regex_fuel(context);
     test_to_spliced_fuel(context);
     test_set_fuel_linear(context);
     CHECK(sjs_context_live_bytes(context) == 0);
@@ -1116,7 +1162,7 @@ static bool loop_open(loop_run *l, sjs_context *context, const char *source) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     l->context = context;
     if (sjs_compile(&params, &l->program) != SJS_OK) return false;
-    sjs_vm_config config = { context };
+    sjs_vm_config config = { context, false };
     return sjs_vm_init(&l->vm, &config) == SJS_OK;
 }
 
@@ -1324,7 +1370,7 @@ static void test_reuse_leaves_others_alone(void) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context };
+    sjs_vm_config config = { context, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, globals, 2 };
     for (int i = 0; i < 2; i++) {
@@ -1455,7 +1501,7 @@ static shaped_run run_shaped(shaped_source s) {
                                   { s.source, (uint32_t)strlen(s.source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     loop_run l = { context, program, NULL };
-    sjs_vm_config config = { context };
+    sjs_vm_config config = { context, false };
     CHECK(sjs_vm_init(&l.vm, &config) == SJS_OK);
     loop_finish(&l, UINT64_MAX, result.out);
     result.fuel = sjs_vm_fuel_used(l.vm);
@@ -2001,7 +2047,7 @@ static size_t live_of(sjs_context *context, const char *source) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context };
+    sjs_vm_config config = { context, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -2585,7 +2631,7 @@ static uint64_t map_lookup_fuel(sjs_context *context, sjs_value map) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     if (sjs_compile(&params, &program) != SJS_OK) return 0;
     sjs_vm *vm;
-    sjs_vm_config config = { context };
+    sjs_vm_config config = { context, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, &map, 1 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);

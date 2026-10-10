@@ -795,8 +795,11 @@ static bool call(sjs_vm *vm, uint32_t argc, uint8_t flags) {
         if (sjs_builtin_loops(id)) return enter_loop(vm, id, (call_site){ callee, argc, bottom });
         leaf.receiver = vm->stack[callee - 1];
         leaf.receiver_slot = &vm->stack[callee - 1];
-        if (sjs_builtin_call(vm, id, &leaf) != SJS_OK) {
+        sjs_result r = sjs_builtin_call(vm, id, &leaf);
+        if (r != SJS_OK) {
             sjs_vm_release(vm, leaf.result);
+            /* A leaf that goes on as a loop: a long match. */
+            if (r == SJS_LEAF_LOOP) return enter_loop(vm, (sjs_builtin_id)leaf.loop, (call_site){ callee, argc, bottom });
             return false;
         }
     } else if (f.as.heap->type == SJS_HEAP_CLOSURE) {
@@ -1558,6 +1561,7 @@ sjs_result sjs_vm_init(sjs_vm **out, const sjs_vm_config *config) {
     if (vm == NULL) return SJS_ERR_NOMEM;
     sjs_zero(vm, sizeof *vm);
     vm->context = context;
+    vm->no_regex_leaf = config->no_regex_leaf;
     vm->stack_capacity = context->limits.max_stack;
     vm->frame_capacity = context->limits.max_frames;
     vm->stack = sjs_mem_alloc(a, (size_t)vm->stack_capacity * sizeof(sjs_value));

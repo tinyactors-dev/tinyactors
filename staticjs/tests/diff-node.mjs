@@ -293,6 +293,21 @@ const numberChecks = {
       return outcome === 'syntax' ? null : `/${pattern}/${flags}: staticjs says ${outcome}, JavaScript refuses it (${error.message})`;
     }
     if (outcome === 'syntax') return `/${pattern}/${flags}: staticjs says syntax error, but JavaScript reads it`;
+    if (input !== '-') {
+      // The methods on an input, as regex_test's program calls them.
+      const s = JSON.parse(input);
+      const f = flags.replace(/[gy]/g, '');
+      const want = new Function('s', `return JSON.stringify([s.search(/${pattern}/${f}), ` +
+        `s.replace(/${pattern}/${f}, "<$&|$1|$2>"), s.split(/${pattern}/${f}), s.match(/${pattern}/${f}g), ` +
+        `s.replace(/${pattern}/${f}g, "<$&>"), /${pattern}/${f}.test(s)]);`)(s);
+      regexOutcomes.matched++;
+      if (outcome.startsWith('!')) {
+        // A fault where JavaScript makes a string with a lone surrogate.
+        regexOutcomes.lone++;
+        return /\\ud[89a-f][0-9a-f]{2}/.test(want) ? null : `/${pattern}/${flags} on ${input}: staticjs faults (${outcome}), JavaScript ${want}`;
+      }
+      return JSON.parse(outcome) === want ? null : `/${pattern}/${flags} on ${input}: staticjs ${JSON.parse(outcome)}, JavaScript ${want}`;
+    }
     regexOutcomes[outcome] = (regexOutcomes[outcome] ?? 0) + 1;
     if (outcome === 'exact' || outcome === 'unsupported' || outcome === 'limit') return null;
     return `/${pattern}/${flags}: an unknown outcome ${outcome}`;
@@ -306,7 +321,7 @@ const numberChecks = {
   },
 };
 const jsonOutcomes = { value: 0, '!S': 0, '!O': 0 };
-const regexOutcomes = { exact: 0, unsupported: 0, syntax: 0 };
+const regexOutcomes = { exact: 0, unsupported: 0, syntax: 0, matched: 0, lone: 0 };
 if (numbers) {
   for (const line of readFileSync(numbers, 'utf8').split('\n')) {
     if (!line) continue;
@@ -335,7 +350,8 @@ const numberSummary = [
     `${jsonOutcomes['!S']} SyntaxErrors where JavaScript throws one, ${jsonOutcomes['!O']} faults of staticjs's own not compared)`],
   ['K', 'JSON.stringify calls, with replacers and spaces, give what JavaScript does'],
   ['X', `random regular expression literals classify as JavaScript reads them (${regexOutcomes.exact} exact, ` +
-    `${regexOutcomes.unsupported} unsupported, ${regexOutcomes.syntax} syntax errors)`],
+    `${regexOutcomes.unsupported} unsupported, ${regexOutcomes.syntax} syntax errors), and match on ` +
+    `${regexOutcomes.matched} inputs as JavaScript does (${regexOutcomes.lone} faults where it makes a lone surrogate)`],
 ].filter(([tag]) => counts.has(tag)).map(([tag, what]) => `${counts.get(tag)} ${what}`).join(', ');
 
 if (failures.length > 0) {

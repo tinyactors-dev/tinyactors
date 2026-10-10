@@ -15,7 +15,9 @@
  * Each case also runs once more whole with matching off (no_shapes,
  * docs/matcher.md): it must compile to the same program but for the shapes,
  * give the same outcome, tag no function, and use no less fuel than the run
- * with shapes.
+ * with shapes. A case whose source holds a `/` runs once more whole with
+ * every regular expression match a loop frame (no_regex_leaf): the same
+ * outcome, and the same fuel.
  *
  * With --full, each case is also run once for every allocation it makes,
  * with that allocation failing: each such run must end with an out-of-memory
@@ -190,6 +192,7 @@ typedef struct {
     uint32_t chunk;
     uint64_t fuel;
     bool no_shapes;
+    bool no_regex_leaf;
 } mode;
 
 static const char *code_name(sjs_error_code code) {
@@ -429,6 +432,8 @@ static sjs_result compile(const environment *env, const char *source, sjs_goal g
 
 /* The fuel the last evaluation used. */
 static uint64_t last_fuel = 0;
+/* The next evaluation runs every regular expression match as a loop. */
+static bool evaluate_no_regex_leaf = false;
 
 /* An error's subject, kept past the VM it points into. */
 static char fault_subject[1024];
@@ -438,7 +443,7 @@ static char fault_subject[1024];
  * until the stage that reported it is destroyed). */
 static sjs_result evaluate(const environment *env, sjs_program *program, uint64_t fuel, sjs_value *result, sjs_error *error) {
     sjs_vm *vm;
-    sjs_vm_config config = { env->context };
+    sjs_vm_config config = { env->context, evaluate_no_regex_leaf };
     sjs_result made = sjs_vm_init(&vm, &config);
     if (made != SJS_OK) return made;
     sjs_run_params params = { program, env->globals, env->global_count };
@@ -582,7 +587,9 @@ static void run_case(const environment *env, const spec_case *c, mode m, outcome
     describe_shapes(program, out->shapes, sizeof out->shapes);
     out->program = hash_program(program);
     sjs_value value;
+    evaluate_no_regex_leaf = m.no_regex_leaf;
     r = evaluate(env, program, m.fuel, &value, &error);
+    evaluate_no_regex_leaf = false;
     out->fuel = last_fuel;
     sjs_program_release(program);
     if (r != SJS_OK && r != SJS_ERR_PROGRAM) {
@@ -660,7 +667,7 @@ static int load_modules(const environment *env, const registry *from, registry *
         sjs_program *program;
         sjs_error error = { 0 };
         sjs_value exports;
-        if (compile(env, from->entries[i].source, SJS_GOAL_MODULE, (mode){ 4096, 0, false }, &program, &error) != SJS_OK) return 0;
+        if (compile(env, from->entries[i].source, SJS_GOAL_MODULE, (mode){ 4096, 0, false, false }, &program, &error) != SJS_OK) return 0;
         sjs_result r = evaluate(env, program, UINT64_MAX, &exports, &error);
         sjs_program_release(program);
         if (r != SJS_OK || !register_module(env->context, into, from->entries[i].name, from->entries[i].source, exports)) return 0;
@@ -695,7 +702,7 @@ static int sweep(const spec_case *c, const outcome *expected, const char *file, 
             names[i] = (sjs_str){ c->global_names[i], (uint32_t)strlen(c->global_names[i]) };
             sjs_program *program;
             sjs_error error = { 0 };
-            if (compile(&env, c->global_sources[i], SJS_GOAL_EXPRESSION, (mode){ 4096, 0, false }, &program, &error) != SJS_OK) {
+            if (compile(&env, c->global_sources[i], SJS_GOAL_EXPRESSION, (mode){ 4096, 0, false, false }, &program, &error) != SJS_OK) {
                 ok = 0;
                 break;
             }
@@ -709,7 +716,7 @@ static int sweep(const spec_case *c, const outcome *expected, const char *file, 
             with.global_names = names;
             with.globals = values;
             with.global_count = (uint32_t)c->global_count;
-            run_case(&with, c, (mode){ 1u << 30, UINT64_MAX, false }, &got);
+            run_case(&with, c, (mode){ 1u << 30, UINT64_MAX, false, false }, &got);
             if (strcmp(got.text, expected->text) == 0) {
                 done = 1;
             } else if (!is_memory_failure(got.text)) {
@@ -750,7 +757,7 @@ static void finish_case(environment *env, spec_case *c, const char *file, tally 
         names[i] = (sjs_str){ c->global_names[i], (uint32_t)strlen(c->global_names[i]) };
         sjs_program *program;
         sjs_error error = { 0 };
-        if (compile(&plain, c->global_sources[i], SJS_GOAL_EXPRESSION, (mode){ 4096, 0, false }, &program, &error) != SJS_OK ||
+        if (compile(&plain, c->global_sources[i], SJS_GOAL_EXPRESSION, (mode){ 4096, 0, false, false }, &program, &error) != SJS_OK ||
             evaluate(&plain, program, UINT64_MAX, &values[i], &error) != SJS_OK) {
             fprintf(stderr, "%s:%d: %s: @global %s does not evaluate\n", file, c->line, c->name, c->global_names[i]);
             t->failed++;
@@ -766,11 +773,21 @@ static void finish_case(environment *env, spec_case *c, const char *file, tally 
     static outcome bytes;
     static outcome chunks;
     static outcome plain_run;
-    run_case(&with, c, (mode){ 1u << 30, UINT64_MAX, false }, &whole);
-    run_case(&with, c, (mode){ 1, 1, false }, &bytes);
-    run_case(&with, c, (mode){ 7, 13, false }, &chunks);
-    run_case(&with, c, (mode){ 1u << 30, UINT64_MAX, true }, &plain_run);
+    run_case(&with, c, (mode){ 1u << 30, UINT64_MAX, false, false }, &whole);
+    run_case(&with, c, (mode){ 1, 1, false, false }, &bytes);
+    run_case(&with, c, (mode){ 7, 13, false, false }, &chunks);
+    run_case(&with, c, (mode){ 1u << 30, UINT64_MAX, true, false }, &plain_run);
+    /* A source with a slash may match a regular expression: once more with
+     * every match a loop, which must give the same outcome and fuel. */
+    static outcome loops;
+    bool slashed = strchr(c->source, '/') != NULL;
+    if (slashed) run_case(&with, c, (mode){ 1u << 30, UINT64_MAX, false, true }, &loops);
     int ok = check(c, &whole, file);
+    if (ok && slashed && (strcmp(whole.text, loops.text) != 0 || whole.fuel != loops.fuel)) {
+        fprintf(stderr, "%s:%d: %s: with every match a loop\n  leaf:  %s (fuel %llu)\n  loops: %s (fuel %llu)\n", file, c->line,
+                c->name, whole.text, (unsigned long long)whole.fuel, loops.text, (unsigned long long)loops.fuel);
+        ok = 0;
+    }
     if (ok && c->has_shapes && strcmp(whole.shapes, c->shapes) != 0) {
         fprintf(stderr, "%s:%d: %s: shapes\n  expected: %s\n  got:      %s\n", file, c->line, c->name, c->shapes, whole.shapes);
         ok = 0;
@@ -817,7 +834,7 @@ static void finish_case(environment *env, spec_case *c, const char *file, tally 
         sjs_program *program;
         sjs_error error = { 0 };
         sjs_value exports;
-        if (compile(env, c->source, SJS_GOAL_MODULE, (mode){ 4096, 0, false }, &program, &error) == SJS_OK) {
+        if (compile(env, c->source, SJS_GOAL_MODULE, (mode){ 4096, 0, false, false }, &program, &error) == SJS_OK) {
             if (evaluate(env, program, UINT64_MAX, &exports, &error) == SJS_OK &&
                 register_module(env->context, env->modules, c->module_name, c->source, exports)) {
                 /* registered */

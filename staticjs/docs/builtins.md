@@ -31,6 +31,18 @@ A built-in is one of two kinds, and the choice decides most of its cost.
   evaluation resumable on fuel and keeps the C call graph acyclic
   (`mise run check-recursion`).
 
+- **A leaf that becomes a loop:** the regular expression methods (`test`,
+  and `search`, `match`, `split`, `replace` and `replaceAll` with a
+  regular expression; `src/regex_match.c`) are leaves by ID. A short match
+  runs whole in the leaf, in a buffer of the evaluator's; a long one makes
+  the leaf return `SJS_LEAF_LOOP` with `call->loop` set, and `call()`
+  enters that loop (`SJS_REGEX_LOOP_FIRST` on) on the same slots, so the
+  match pauses like any loop. Both charge the same fuel: the leaf counts
+  the steps the loop would take. `sjs_loop_start` tells these loops by one
+  comparison; `sjs_loop_step` reaches them from the switch where a loop
+  ends, as their index and length stay 0, because a test at its top made
+  the predicate loops 5 to 13% slower (`findIndex` -13%, `filter` -12%).
+
 Make it a leaf unless JavaScript calls a function. A closure callback runs
 in one frame that the loop keeps from its first call to its end
 (`sjs_vm_call_back` in `src/vm.c`): each element writes the arguments into

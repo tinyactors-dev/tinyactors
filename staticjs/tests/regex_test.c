@@ -231,6 +231,157 @@ static sjs_error_code classify(sjs_context *context, const text *source, uint32_
 
 static int failures = 0;
 
+/* ------------------------------------------------------------------------
+ * Matching: the methods a pattern can be used with, on random inputs
+ */
+
+static const char *const PIECES[] = { "a", "b", "A", "B", "é", "😀", "\n", " ", "_", "1", "ſ", "K", "ab", "aa", "\r\n" };
+
+static void input(text *t) {
+    uint32_t n = below(8);
+    for (uint32_t i = 0; i < n; i++) put(t, PIECES[below((uint32_t)(sizeof PIECES / sizeof PIECES[0]))]);
+}
+
+/* The program: each method on the global s, as JSON. The flags lose g and
+ * y, which test, search and replace without g fault on or change, and the
+ * global methods get g. */
+static void methods_source(text *src, const text *pat, const text *flag) {
+    text f = { 0 };
+    for (size_t i = 0; i < flag->length; i++) {
+        if (flag->ptr[i] != 'g' && flag->ptr[i] != 'y') put_bytes(&f, &flag->ptr[i], 1);
+    }
+    const char *fs = f.ptr == NULL ? "" : f.ptr;
+    char head[64];
+    put(src, "JSON.stringify([s.search(/");
+    put_bytes(src, pat->ptr, pat->length);
+    snprintf(head, sizeof head, "/%s), s.replace(/", fs);
+    put(src, head);
+    put_bytes(src, pat->ptr, pat->length);
+    snprintf(head, sizeof head, "/%s, \"<$&|$1|$2>\"), s.split(/", fs);
+    put(src, head);
+    put_bytes(src, pat->ptr, pat->length);
+    snprintf(head, sizeof head, "/%s), s.match(/", fs);
+    put(src, head);
+    put_bytes(src, pat->ptr, pat->length);
+    snprintf(head, sizeof head, "/%sg), s.replace(/", fs);
+    put(src, head);
+    put_bytes(src, pat->ptr, pat->length);
+    snprintf(head, sizeof head, "/%sg, \"<$&>\"), /", fs);
+    put(src, head);
+    put_bytes(src, pat->ptr, pat->length);
+    snprintf(head, sizeof head, "/%s.test(s)])", fs);
+    put(src, head);
+    free(f.ptr);
+}
+
+/* What a run gave: the result's text, or a fault's message. */
+typedef struct {
+    bool fault;
+    text out;
+    uint64_t fuel;
+} ran;
+
+typedef struct {
+    sjs_context *context;
+    sjs_program *program;
+    bool loops;         /* every match a loop frame */
+    uint64_t fuel;      /* per sjs_vm_run */
+} runner;
+
+static void run(const runner *r, const text *s, ran *out) {
+    out->out.length = 0;
+    out->fault = false;
+    sjs_vm *vm;
+    sjs_vm_config config = { r->context, r->loops };
+    if (sjs_vm_init(&vm, &config) != SJS_OK) abort();
+    sjs_value global;
+    if (sjs_string_new(r->context, (sjs_str){ s->ptr == NULL ? "" : s->ptr, (uint32_t)s->length }, &global) != SJS_OK) abort();
+    sjs_run_params params = { r->program, &global, 1 };
+    if (sjs_vm_start(vm, &params) != SJS_OK) abort();
+    sjs_run state;
+    do {
+        state = sjs_vm_run(vm, r->fuel);
+    } while (state == SJS_RUN_PAUSED);
+    if (state == SJS_RUN_DONE) {
+        sjs_value result;
+        if (sjs_vm_take_result(vm, &result) != SJS_OK || result.kind != SJS_STRING) abort();
+        sjs_str t = sjs_string_text(result);
+        put_bytes(&out->out, t.ptr, t.length);
+        sjs_release(r->context, result);
+    } else {
+        sjs_error error;
+        sjs_vm_error(vm, &error);
+        out->fault = true;
+        put(&out->out, "!");
+        put_bytes(&out->out, error.message.ptr, error.message.length);
+    }
+    out->fuel = sjs_vm_fuel_used(vm);
+    sjs_release(r->context, global);
+    sjs_vm_destroy(vm);
+}
+
+static sjs_program *compile_methods(sjs_context *context, const text *source) {
+    static const sjs_str names[] = { { "s", 1 } };
+    sjs_program *program;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, names, 1, { NULL, NULL }, false },
+                                  { source->ptr, (uint32_t)source->length }, NULL };
+    if (sjs_compile(&params, &program) != SJS_OK) return NULL;
+    return program;
+}
+
+/* Each method on a few inputs: printed for diff-node, or run as a leaf, as
+ * loops, and as loops paused after every unit of fuel, which must agree. */
+static void match_inputs(sjs_context *context, const text *pat, const text *flag, bool print) {
+    text source = { 0 };
+    methods_source(&source, pat, flag);
+    sjs_program *program = compile_methods(context, &source);
+    if (program == NULL) {
+        if (failures++ < 20) fprintf(stderr, "regex_test: does not compile: %s\n", source.ptr);
+        free(source.ptr);
+        return;
+    }
+    text s = { 0 };
+    text line = { 0 };
+    ran leaf = { 0 };
+    ran loops = { 0 };
+    ran paused = { 0 };
+    for (int k = 0; k < 3; k++) {
+        s.length = 0;
+        input(&s);
+        run(&(runner){ context, program, false, UINT64_MAX }, &s, &leaf);
+        if (print) {
+            line.length = 0;
+            put(&line, "X ");
+            put_quoted(&line, pat->ptr, pat->length);
+            put(&line, "\t");
+            put_bytes(&line, flag->ptr == NULL ? "" : flag->ptr, flag->length);
+            put(&line, "\t");
+            put_quoted(&line, s.ptr == NULL ? "" : s.ptr, s.length);
+            put(&line, "\t");
+            if (leaf.fault) put_bytes(&line, leaf.out.ptr, leaf.out.length);
+            else put_quoted(&line, leaf.out.ptr, leaf.out.length);
+            puts(line.ptr);
+            continue;
+        }
+        run(&(runner){ context, program, true, UINT64_MAX }, &s, &loops);
+        run(&(runner){ context, program, true, 1 }, &s, &paused);
+        bool same = leaf.out.length == loops.out.length && memcmp(leaf.out.ptr, loops.out.ptr, leaf.out.length) == 0 &&
+                    leaf.out.length == paused.out.length && memcmp(leaf.out.ptr, paused.out.ptr, leaf.out.length) == 0;
+        if ((!same || leaf.fuel != loops.fuel) && failures++ < 20) {
+            fprintf(stderr, "regex_test: %s on %s\n  leaf:   %s (fuel %llu)\n  loops:  %s (fuel %llu)\n  paused: %s\n", source.ptr,
+                    s.ptr == NULL ? "" : s.ptr, leaf.out.ptr, (unsigned long long)leaf.fuel, loops.out.ptr,
+                    (unsigned long long)loops.fuel, paused.out.ptr);
+        }
+    }
+    sjs_program_release(program);
+    free(source.ptr);
+    free(s.ptr);
+    free(line.ptr);
+    free(leaf.out.ptr);
+    free(loops.out.ptr);
+    free(paused.out.ptr);
+}
+
 static void check(long count, bool print) {
     sjs_context *context;
     sjs_context_config config = { { NULL, &counted_vtable }, SJS_LIMITS_DEFAULT };
@@ -251,6 +402,7 @@ static void check(long count, bool print) {
         put_bytes(&source, flag.ptr == NULL ? "" : flag.ptr, flag.length);
         if (getenv("REGEX_TEST_TRACE") != NULL) fprintf(stderr, "%s\n", source.ptr);
         sjs_error_code code = classify(context, &source, 0);
+        if (code == SJS_ERROR_NONE) match_inputs(context, &pat, &flag, print);
         if (!print) {
             sjs_error_code bytes = classify(context, &source, 1);
             if (bytes != code) {
