@@ -9,7 +9,7 @@
 /* Where a container is: its opening is written, and then each item. A
  * map's item is an entry, `[key,value]`: its key (W_ITEM_VALUE), then the
  * comma and its value (W_ENTRY_VALUE), then its `]` (W_ENTRY_END). */
-enum { W_START = 0, W_ITEM, W_ITEM_VALUE, W_KEY_COLON, W_VALUE, W_ENTRY_VALUE, W_ENTRY_END };
+enum { W_START = 0, W_ITEM, W_ITEM_VALUE, W_KEY_COLON, W_VALUE, W_ENTRY_VALUE, W_ENTRY_END, W_EXTRA, W_EXTRA_END };
 
 typedef struct {
     sjs_value value;
@@ -163,7 +163,8 @@ static sjs_result next(sjs_writer *w, bool *more) {
             break;
         }
         case SJS_ARRAY:
-            say(w, "[");
+            /* A match result: its elements, then its other properties. */
+            say(w, sjs_array_extra(v) ? "Object.assign([" : "[");
             f->phase = W_ITEM;
             return SJS_OK;
         case SJS_SET:
@@ -208,8 +209,20 @@ static sjs_result next(sjs_writer *w, bool *more) {
     }
     uint32_t count = v.kind == SJS_ITERATOR ? sjs_iterator_count(SJS_AS_ITERATOR(v)) : sjs_length(v);
     switch (f->phase) {
+    case W_EXTRA:
+        say(w, "],");
+        f->phase = W_EXTRA_END;
+        return push(w, sjs_heap_value(SJS_OBJECT, SJS_AS_ARRAY(v)->extra));
+    case W_EXTRA_END:
+        say(w, ")");
+        w->stack.length -= (uint32_t)sizeof(wframe);
+        return SJS_OK;
     case W_ITEM:
         if (f->index == count) {
+            if (sjs_array_extra(v)) {
+                f->phase = W_EXTRA;
+                return SJS_OK;
+            }
             if (v.kind == SJS_ITERATOR) say(w, "].values()");
             else say(w, v.kind == SJS_ARRAY ? "]" : (v.kind == SJS_SET || v.kind == SJS_MAP ? "])" : "}"));
             w->stack.length -= (uint32_t)sizeof(wframe);

@@ -6,7 +6,9 @@ the lexer reads a literal (`L_REGEX`), the parser classifies it
 compiler makes an `SJS_REGEXP` constant with its source, flags and
 program. Step 2 is done: the Pike VM (`src/regex_match.c`) runs `test`,
 `search`, `split`, `match` with g, and `replace` and `replaceAll` with a
-string replacement, as a leaf or a loop frame. Where the implementation departs from this design, section 15
+string replacement, as a leaf or a loop frame. Step 3's match results are
+done: `exec`, `match` without g, `matchAll`, `d` indices, `$<name>`, and
+`replace` with a function, a loop that calls back. Where the implementation departs from this design, section 15
 says so. Line numbers below are of the commit this document was written
 against (`dbc0c69e`), before any of it.
 
@@ -1080,3 +1082,28 @@ Each departure below was made because Node or the code said otherwise.
   string still faults on any limit, as before.
 - **A replacement that is a primitive (8.6)** is its text, as `ToString`
   gives it (`"a".replace(/a/, 1)` is `"1"`); a BigInt or an object faults.
+- **Match results (7.2)** are arrays with a flag (`SJS_ARRAY_EXTRA` in
+  `src/internal.h`) and an object of their extra properties in the place
+  of the field a set's array uses; no array path reads that field, so the
+  flag costs only the checks named here. `sjs_property_get` reads the
+  object after an index and `length`; `in` finds its keys. `Object.keys`,
+  `Object.entries`, `Object.values`, an object spread or rest, and `sort`
+  fault, with a message that names no built-in ("this array has properties
+  besides its elements"): the first four would show the keys, and `sort`,
+  which changes the array in place in JavaScript and keeps them, takes
+  over or copies its receiver here. Paths that make a new array (`slice`,
+  `map`, `concat`, an array spread, `Array.from`) copy the elements only,
+  and a copy-on-write path never takes over such an array. `groups` holds
+  the named groups in the order of the groups, as V8 does.
+- **`matchAll` (8.6)** finds every match in its loop and gives an iterator
+  over the array of their results, rather than matching as the iterator
+  is read. The result is the same, as nothing can run between two reads
+  that changes the string or the regex; the memory is all the results at
+  once.
+- **A replacement function (8.6)** always makes `replace` a loop: the leaf
+  hands any call with a function to the loop before it matches, and the
+  loop's first step swaps `LOOP_CALLBACK` and `LOOP_SECOND`. The function
+  gets the match, each group (`undefined` for one that did not match), the
+  index in code units, the input and, when any group has a name, the groups
+  object. Its result is written as `ToString` gives it, without `$`
+  patterns; an object, an array or a BigInt faults.

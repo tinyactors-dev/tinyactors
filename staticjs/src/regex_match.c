@@ -478,9 +478,12 @@ static bool rx_search_run(rx_search *s, uint64_t budget) {
 #define RX_MATCH SJS_REGEX_OP_MATCH
 #define RX_SPLIT SJS_REGEX_OP_SPLIT
 #define RX_REPLACE SJS_REGEX_OP_REPLACE
+#define RX_EXEC SJS_REGEX_OP_EXEC
+#define RX_MATCH_ALL SJS_REGEX_OP_MATCH_ALL
 
-/* What a step of the work comes to. */
-enum { RX_MORE = 0, RX_DONE, RX_FAULT };
+/* What a step of the work comes to: RX_CALL, a replacement's function to
+ * call with the match (a loop's only). */
+enum { RX_MORE = 0, RX_DONE, RX_FAULT, RX_CALL };
 
 /* Instructions a loop step visits, finishing the position it is at. */
 #define RX_STEP_VISITS 256u
@@ -491,7 +494,8 @@ typedef struct {
     bool global;
     bool done;
     bool started;             /* a loop's first step is done */
-    bool beyond;              /* the next search would start past the end */
+    bool callback;            /* replace: with a function, in LOOP_CALLBACK */
+    bool awaiting;            /* replace: the function was called with the match, its result is on the stack */
     uint32_t from;            /* where the next search starts */
     uint32_t last;            /* the text copied up to (replace), the piece's start (split) */
     uint32_t limit;           /* split: the pieces it may give */
@@ -589,6 +593,180 @@ static sjs_result rx_push_piece(rx_work *w, uint32_t a, uint32_t b) {
     sjs_value v;
     if (rx_piece(w, (rx_span){ a, b }, &v) != SJS_OK) return SJS_ERR_PROGRAM;
     return rx_push(w, v);
+}
+
+/* ------------------------------------------------------------------------
+ * Match results (docs/regex.md, 7.2): an array of the match and each
+ * group's text, with index, input and groups, and with d indices, as
+ * properties of its own besides its elements (SJS_ARRAY_EXTRA).
+ */
+
+/* Put `value` (taken over) under the key `name` of the object at `*o`. */
+typedef struct {
+    sjs_str name;
+    sjs_value value;
+} rx_property;
+
+static sjs_result rx_put(sjs_vm *vm, sjs_object **o, rx_property p) {
+    sjs_string *key;
+    sjs_result r = sjs_string_intern(vm->context, p.name, &key);
+    if (r == SJS_OK) {
+        r = sjs_object_put_key(vm->context, o, (sjs_put){ key, p.value });
+        if (r != SJS_OK) sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &key->h));
+    }
+    if (r != SJS_OK) {
+        sjs_unref(vm->context, p.value);
+        return sjs_vm_fail(vm, r);
+    }
+    return SJS_OK;
+}
+
+/* What a group gives: its text, or with d its [start, end] in code units;
+ * undefined when it did not match. */
+typedef struct {
+    uint32_t group;
+    bool indices;
+} rx_group_part;
+
+static sjs_result rx_group_value(rx_work *w, rx_group_part part, sjs_value *out) {
+    const uint32_t *best = w->job->s.best;
+    uint32_t a = best[2u * part.group];
+    uint32_t b = best[2u * part.group + 1u];
+    *out = sjs_undefined();
+    if (a == RX_UNSET) return SJS_OK;
+    if (!part.indices) return rx_piece(w, (rx_span){ a, b }, out);
+    sjs_array *pair;
+    sjs_result r = sjs_array_make(w->vm->context, 2, &pair);
+    if (r != SJS_OK) return sjs_vm_fail(w->vm, r);
+    pair->items[0] = sjs_num((double)rx_index(w->job, a));
+    pair->items[1] = sjs_num((double)rx_index(w->job, b));
+    pair->length = 2;
+    w->job->extra += 2u;
+    *out = sjs_heap_value(SJS_ARRAY, &pair->h);
+    return SJS_OK;
+}
+
+/* Each builder below gives its value, or on failure releases what it made
+ * and faults. */
+
+/* The groups object: each named group's part, in the groups' order; or
+ * undefined when no group has a name. */
+static sjs_result rx_groups(rx_work *w, bool indices, sjs_value *out) {
+    const sjs_regexp *re = w->job->s.re;
+    *out = sjs_undefined();
+    if (!re->named) return SJS_OK;
+    sjs_object *o;
+    sjs_result r = sjs_object_make(w->vm->context, re->groups, &o);
+    if (r != SJS_OK) return sjs_vm_fail(w->vm, r);
+    for (uint32_t g = 1; g <= re->groups; g++) {
+        const rx_group_name *n = &re->names[g - 1u];
+        if (n->length == 0) continue;
+        sjs_value v;
+        r = rx_group_value(w, (rx_group_part){ g, indices }, &v);
+        if (r == SJS_OK) r = rx_put(w->vm, &o, (rx_property){ { re->text + n->offset, n->length }, v });
+        if (r != SJS_OK) {
+            sjs_unref(w->vm->context, sjs_heap_value(SJS_OBJECT, &o->h));
+            return SJS_ERR_PROGRAM;
+        }
+        w->job->extra++;
+    }
+    *out = sjs_heap_value(SJS_OBJECT, &o->h);
+    return SJS_OK;
+}
+
+/* An array of each group's part, the whole match first. */
+static sjs_result rx_parts(rx_work *w, bool indices, sjs_value *out) {
+    const sjs_regexp *re = w->job->s.re;
+    uint32_t n = re->groups + 1u;
+    sjs_array *a;
+    sjs_result r = sjs_array_make(w->vm->context, n, &a);
+    if (r != SJS_OK) return sjs_vm_fail(w->vm, r);
+    for (uint32_t g = 0; g < n; g++) {
+        sjs_value v;
+        if (rx_group_value(w, (rx_group_part){ g, indices }, &v) != SJS_OK) {
+            sjs_unref(w->vm->context, sjs_heap_value(SJS_ARRAY, &a->h));
+            return SJS_ERR_PROGRAM;
+        }
+        a->items[a->length++] = v;
+    }
+    w->job->extra += n;
+    *out = sjs_heap_value(SJS_ARRAY, &a->h);
+    return SJS_OK;
+}
+
+/* Give an array an empty object of extra properties, with room for
+ * `capacity`; releasing the array releases it. */
+typedef struct {
+    sjs_value array;
+    uint32_t capacity;
+} rx_extra_room;
+
+static sjs_result rx_extra_new(sjs_vm *vm, rx_extra_room room) {
+    sjs_object *o;
+    sjs_result r = sjs_object_make(vm->context, room.capacity, &o);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    sjs_array *a = SJS_AS_ARRAY(room.array);
+    a->h.flags |= SJS_ARRAY_EXTRA;
+    a->extra = &o->h;
+    return SJS_OK;
+}
+
+/* Put a property among an array's extra ones; takes over the value. */
+typedef struct {
+    sjs_value array;
+    rx_property property;
+} rx_extra_put;
+
+static sjs_result rx_put_extra(sjs_vm *vm, rx_extra_put put) {
+    sjs_array *a = SJS_AS_ARRAY(put.array);
+    sjs_object *o = (sjs_object *)(void *)a->extra;
+    sjs_result r = rx_put(vm, &o, put.property);
+    a->extra = &o->h;
+    return r;
+}
+
+/* indices with d: each group's [start, end], and groups of them. */
+static sjs_result rx_indices(rx_work *w, sjs_value *out) {
+    sjs_value indices;
+    sjs_value groups;
+    if (rx_parts(w, true, &indices) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (rx_extra_new(w->vm, (rx_extra_room){ indices, 1 }) != SJS_OK || rx_groups(w, true, &groups) != SJS_OK ||
+        rx_put_extra(w->vm, (rx_extra_put){ indices, { SJS_STR("groups"), groups } }) != SJS_OK) {
+        sjs_unref(w->vm->context, indices);
+        return SJS_ERR_PROGRAM;
+    }
+    *out = indices;
+    return SJS_OK;
+}
+
+/* The match result of the last search, as exec gives it. */
+static sjs_result rx_result(rx_work *w, sjs_value *out) {
+    rx_job *j = w->job;
+    sjs_vm *vm = w->vm;
+    bool d = (j->s.re->flags & SJS_REGEX_HAS_INDICES) != 0;
+    sjs_value result;
+    if (rx_parts(w, false, &result) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_value input = sjs_heap_value(SJS_STRING, (sjs_heap *)(uintptr_t)&j->input->h);
+    sjs_value groups;
+    sjs_value indices;
+    sjs_result r = rx_extra_new(vm, (rx_extra_room){ result, d ? 4u : 3u });
+    if (r == SJS_OK) r = rx_put_extra(vm, (rx_extra_put){ result, { SJS_STR("index"), sjs_num((double)rx_index(j, j->s.best[0])) } });
+    if (r == SJS_OK) {
+        sjs_ref(input);
+        r = rx_put_extra(vm, (rx_extra_put){ result, { SJS_STR("input"), input } });
+    }
+    if (r == SJS_OK) r = rx_groups(w, false, &groups);
+    if (r == SJS_OK) r = rx_put_extra(vm, (rx_extra_put){ result, { SJS_STR("groups"), groups } });
+    if (r == SJS_OK && d) {
+        r = rx_indices(w, &indices);
+        if (r == SJS_OK) r = rx_put_extra(vm, (rx_extra_put){ result, { SJS_STR("indices"), indices } });
+    }
+    if (r != SJS_OK) {
+        sjs_unref(vm->context, result);
+        return SJS_ERR_PROGRAM;
+    }
+    *out = result;
+    return SJS_OK;
 }
 
 /* The text being built (replace): appended in place to the string the
@@ -740,6 +918,44 @@ static uint8_t rx_finish(rx_work *w, sjs_value result) {
     return RX_DONE;
 }
 
+/* After a match's replacement: the rest of the input once, or the next
+ * search with g. */
+static uint8_t rx_replacement_done(rx_work *w) {
+    rx_job *j = w->job;
+    const uint32_t *best = j->s.best;
+    uint32_t end = (uint32_t)j->input->length << 1;
+    j->last = best[1];
+    if (!j->global) {
+        if (rx_build_range(w, j->last, end) != SJS_OK || rx_build_end(w) != SJS_OK) return RX_FAULT;
+        j->done = true;
+        return RX_DONE;
+    }
+    j->from = best[1] == best[0] ? rx_advance_from(j, best[1]) : best[1];
+    if (j->from == RX_BEYOND) {
+        if (rx_build_end(w) != SJS_OK) return RX_FAULT;
+        j->done = true;
+        return RX_DONE;
+    }
+    return RX_MORE;
+}
+
+/* The replacement function's result (taken over), as ToString gives it of a
+ * primitive; an object or a BigInt faults (docs/regex.md, 8.5). */
+static uint8_t rx_replaced(rx_work *w, sjs_value result) {
+    char room[32];
+    sjs_result r = SJS_OK;
+    if (!sjs_is_primitive(result)) {
+        r = sjs_vm_fault(w->vm, "staticjs turns only primitives into strings");
+    } else if (result.kind == SJS_BIGINT) {
+        r = sjs_vm_fault(w->vm, "staticjs turns a BigInt into a string only with String, toString, + or a template");
+    } else {
+        r = rx_build_text(w, sjs_primitive_text(result, room));
+    }
+    sjs_vm_release(w->vm, result);
+    if (r != SJS_OK) return RX_FAULT;
+    return rx_replacement_done(w);
+}
+
 /* What a method makes of a search that ended: RX_MORE to search again. */
 static uint8_t rx_searched(rx_work *w) {
     rx_job *j = w->job;
@@ -751,6 +967,29 @@ static uint8_t rx_searched(rx_work *w) {
         return rx_finish(w, sjs_boolean(s->matched));
     case RX_SEARCH:
         return rx_finish(w, sjs_num(s->matched ? (double)rx_index(j, best[0]) : -1.0));
+    case RX_EXEC: {
+        sjs_value result = sjs_null();
+        if (s->matched && rx_result(w, &result) != SJS_OK) return RX_FAULT;
+        return rx_finish(w, result);
+    }
+    case RX_MATCH_ALL: {
+        if (!s->matched) {
+            /* An iterator of the results, read once, as an iterator is. */
+            sjs_value it;
+            sjs_result r = sjs_iterator_make(w->vm->context, (sjs_iterator_spec){ sjs_undefined(), *w->out, SJS_ITERATE_VALUES }, &it);
+            if (r != SJS_OK) {
+                sjs_vm_fail(w->vm, r);
+                return RX_FAULT;
+            }
+            *w->out = it;
+            j->done = true;
+            return RX_DONE;
+        }
+        sjs_value result;
+        if (rx_result(w, &result) != SJS_OK || rx_push(w, result) != SJS_OK) return RX_FAULT;
+        j->from = best[1] == best[0] ? rx_advance_from(j, best[1]) : best[1];
+        return RX_MORE;
+    }
     case RX_MATCH:
         if (!s->matched) {
             if (SJS_AS_ARRAY(*w->out)->length != 0) {
@@ -814,20 +1053,13 @@ static uint8_t rx_searched(rx_work *w) {
             return RX_DONE;
         }
         if (rx_build_range(w, j->last, best[0]) != SJS_OK) return RX_FAULT;
+        if (j->callback) {
+            /* The function's result comes back on the stack (rx_replaced). */
+            j->awaiting = true;
+            return RX_CALL;
+        }
         if (rx_substitute(w) != SJS_OK) return RX_FAULT;
-        j->last = best[1];
-        if (!j->global) {
-            if (rx_build_range(w, j->last, end) != SJS_OK || rx_build_end(w) != SJS_OK) return RX_FAULT;
-            j->done = true;
-            return RX_DONE;
-        }
-        j->from = best[1] == best[0] ? rx_advance_from(j, best[1]) : best[1];
-        if (j->from == RX_BEYOND) {
-            if (rx_build_end(w) != SJS_OK) return RX_FAULT;
-            j->done = true;
-            return RX_DONE;
-        }
-        return RX_MORE;
+        return rx_replacement_done(w);
     }
 }
 
@@ -853,7 +1085,7 @@ static uint8_t rx_step(rx_work *w) {
         outcome = rx_searched(w);
     }
     rx_charge(w);
-    if (outcome == RX_FAULT) return RX_FAULT;
+    if (outcome == RX_FAULT || outcome == RX_CALL) return outcome;
     return j->done ? RX_DONE : RX_MORE;
 }
 
@@ -878,7 +1110,7 @@ typedef struct {
 static rx_operands rx_operands_of(rx_call_site site) {
     sjs_value first = site.args.count > 0 ? site.args.ptr[0] : sjs_undefined();
     sjs_value second = site.args.count > 1 ? site.args.ptr[1] : sjs_undefined();
-    if (site.op == RX_TEST) return (rx_operands){ site.receiver, first, second };
+    if (site.op == RX_TEST || site.op == RX_EXEC) return (rx_operands){ site.receiver, first, second };
     return (rx_operands){ first, site.receiver, second };
 }
 
@@ -894,13 +1126,14 @@ static sjs_result rx_job_start(rx_work *w, const rx_method *m, uint32_t *words) 
     rx_job *j = w->job;
     const sjs_regexp *re = SJS_AS_REGEXP(m->operands.regexp);
     const sjs_string *input = SJS_AS_STRING(m->operands.input);
-    j->op = m->op;
+    /* match without g is exec. */
+    j->op = m->op == RX_MATCH && (re->flags & SJS_REGEX_GLOBAL) == 0 ? RX_EXEC : m->op;
     j->input = input;
     j->s.re = re;
     j->s.in = (rx_input){ (const uint8_t *)input->bytes, input->length, (input->h.flags & SJS_STRING_ASCII) != 0,
                           (re->flags & (SJS_REGEX_UNICODE | SJS_REGEX_UNICODE_SETS)) != 0 };
     j->s.fold_unicode = (re->flags & SJS_REGEX_IGNORE_CASE) != 0 && j->s.in.unicode;
-    j->global = (re->flags & SJS_REGEX_GLOBAL) != 0 && (m->op == RX_MATCH || m->op == RX_REPLACE);
+    j->global = (re->flags & SJS_REGEX_GLOBAL) != 0 && (m->op == RX_MATCH || m->op == RX_REPLACE || m->op == RX_MATCH_ALL);
     j->s.sticky = (re->flags & SJS_REGEX_STICKY) != 0 && m->op != RX_SPLIT;
     /* split too: ECMA-262's @@split tries a sticky match at each code
      * point's start, but V8 searches as exec does (Node 22:
@@ -908,13 +1141,15 @@ static sjs_result rx_job_start(rx_work *w, const rx_method *m, uint32_t *words) 
     j->s.mid_starts = j->s.in.unicode;
     rx_search_layout(&j->s, words);
     sjs_result r = SJS_OK;
-    if (m->op == RX_MATCH || m->op == RX_SPLIT) {
+    if (j->op == RX_MATCH || j->op == RX_SPLIT || j->op == RX_MATCH_ALL) {
         sjs_array *a;
         r = sjs_array_make(w->vm->context, 4, &a);
         if (r == SJS_OK) *w->out = sjs_heap_value(SJS_ARRAY, &a->h);
     } else if (m->op == RX_REPLACE) {
-        /* A primitive's text, as ToString gives it. */
-        j->replacement = sjs_primitive_text(m->operands.second, j->room);
+        /* A function, called with each match; or a primitive's text, as
+         * ToString gives it. */
+        j->callback = m->operands.second.kind == SJS_FUNCTION;
+        if (!j->callback) j->replacement = sjs_primitive_text(m->operands.second, j->room);
         sjs_string *s;
         r = sjs_string_make(w->vm->context, SJS_STR(""), &s);
         if (r == SJS_OK) {
@@ -965,7 +1200,7 @@ static bool rx_method_check(sjs_vm *vm, const rx_method *m) {
     uint32_t flags = SJS_AS_REGEXP(o->regexp)->flags;
     bool global = (flags & SJS_REGEX_GLOBAL) != 0;
     bool sticky = (flags & SJS_REGEX_STICKY) != 0;
-    if (m->op == RX_TEST && (global || sticky)) {
+    if ((m->op == RX_TEST || m->op == RX_EXEC) && (global || sticky)) {
         sjs_vm_fault(vm, "a regular expression with g or y changes its lastIndex when it matches, and staticjs values do not change");
         return false;
     }
@@ -973,7 +1208,7 @@ static bool rx_method_check(sjs_vm *vm, const rx_method *m) {
         sjs_vm_fault(vm, "a regular expression with y and without g changes its lastIndex when it matches, and staticjs values do not change");
         return false;
     }
-    if (m->all && !global) {
+    if ((m->all || m->op == RX_MATCH_ALL) && !global) {
         sjs_vm_fault(vm, "JavaScript throws a TypeError for a regular expression without g here");
         return false;
     }
@@ -981,10 +1216,7 @@ static bool rx_method_check(sjs_vm *vm, const rx_method *m) {
         sjs_vm_fault(vm, "staticjs splits with a limit that is a number");
         return false;
     }
-    if (m->op == RX_REPLACE && o->second.kind == SJS_FUNCTION) {
-        sjs_vm_fault(vm, "staticjs replaces with a string, not with a function's result");
-        return false;
-    }
+    if (m->op == RX_REPLACE && o->second.kind == SJS_FUNCTION && o->second.internal == SJS_INTERNAL_NONE) return true;
     if (m->op == RX_REPLACE && !sjs_is_primitive(o->second)) {
         sjs_vm_fault(vm, "staticjs turns only primitives into strings");
         return false;
@@ -1005,10 +1237,13 @@ sjs_result sjs_regex_call(sjs_vm *vm, sjs_regex_call_params *params) {
     if (!rx_method_check(vm, &m)) return SJS_ERR_PROGRAM;
     const sjs_regexp *re = SJS_AS_REGEXP(m.operands.regexp);
     uint64_t units = (uint64_t)SJS_AS_STRING(m.operands.input)->utf16_length + 1u;
-    bool repeats = ((re->flags & SJS_REGEX_GLOBAL) != 0 && (m.op == RX_MATCH || m.op == RX_REPLACE)) || m.op == RX_SPLIT;
+    bool repeats = ((re->flags & SJS_REGEX_GLOBAL) != 0 && (m.op == RX_MATCH || m.op == RX_REPLACE || m.op == RX_MATCH_ALL)) ||
+                   m.op == RX_SPLIT;
     uint64_t work = units * re->threads * 2u * (repeats ? units : 1u);
     uint64_t words = rx_job_words(re);
-    if (vm->no_regex_leaf || work > RX_LEAF_WORK || words > SJS_REGEX_LEAF_WORDS) {
+    /* A replacement function is called back, which only a loop can. */
+    bool callback = m.op == RX_REPLACE && m.operands.second.kind == SJS_FUNCTION;
+    if (vm->no_regex_leaf || callback || work > RX_LEAF_WORK || words > SJS_REGEX_LEAF_WORDS) {
         call->loop = (uint16_t)(SJS_REGEX_LOOP_FIRST + m.op);
         return SJS_LEAF_LOOP;
     }
@@ -1050,7 +1285,41 @@ sjs_result sjs_regex_loop_start(sjs_vm *vm, vm_frame *frame) {
     sjs_zero(frame->scratch, (size_t)values * sizeof(sjs_value));
     uint32_t *block = (uint32_t *)(void *)frame->scratch;
     rx_work w = { vm, (rx_job *)(void *)block, &slots[LOOP_OUTPUT] };
-    return rx_job_start(&w, &m, block + (sizeof(rx_job) + 3u) / 4u);
+    if (rx_job_start(&w, &m, block + (sizeof(rx_job) + 3u) / 4u) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (w.job->callback) {
+        /* The function where a loop's callback is (sjs_vm_call_back), the
+         * regular expression, which the job reads, beside it. */
+        sjs_value swap = slots[LOOP_CALLBACK];
+        slots[LOOP_CALLBACK] = slots[LOOP_SECOND];
+        slots[LOOP_SECOND] = swap;
+    }
+    return SJS_OK;
+}
+
+/* Call the replacement function with the match: its text, each group's
+ * (undefined for one that did not match), its index, the input, and the
+ * groups object when a group has a name. */
+static loop_step rx_call_back(rx_work *w, vm_frame *frame) {
+    rx_job *j = w->job;
+    sjs_value args;
+    if (rx_parts(w, false, &args) != SJS_OK) return LOOP_FAULT;
+    sjs_array *a = SJS_AS_ARRAY(args);
+    sjs_result r = sjs_array_grow(w->vm->context, &a, 3);
+    args.as.heap = &a->h;
+    sjs_value groups = sjs_undefined();
+    if (r == SJS_OK && j->s.re->named) r = rx_groups(w, false, &groups);
+    if (r != SJS_OK) {
+        sjs_unref(w->vm->context, args);
+        if (w->vm->status != VM_FAULT) sjs_vm_fail(w->vm, r);
+        return LOOP_FAULT;
+    }
+    a->items[a->length++] = sjs_num((double)rx_index(j, j->s.best[0]));
+    a->items[a->length++] = sjs_heap_value(SJS_STRING, (sjs_heap *)(uintptr_t)&j->input->h);
+    sjs_ref(a->items[a->length - 1u]);
+    if (j->s.re->named) a->items[a->length++] = groups;
+    bool called = sjs_vm_call_back(w->vm, frame, (sjs_values){ a->items, a->length });
+    sjs_unref(w->vm->context, args);
+    return called ? LOOP_CALL : LOOP_FAULT;
 }
 
 loop_step sjs_regex_loop_step(sjs_vm *vm, vm_frame *frame) {
@@ -1059,8 +1328,14 @@ loop_step sjs_regex_loop_step(sjs_vm *vm, vm_frame *frame) {
      * the frame here from its end (builtins.c). */
     uint8_t outcome = w.job->started ? RX_MORE : rx_split_empty(&w);
     w.job->started = true;
+    if (w.job->awaiting) {
+        /* The replacement function returned: its result is on top. */
+        w.job->awaiting = false;
+        outcome = rx_replaced(&w, sjs_vm_pop(vm));
+    }
     if (outcome == RX_MORE) outcome = rx_step(&w);
     rx_charge(&w);
+    if (outcome == RX_CALL) return rx_call_back(&w, frame);
     if (outcome == RX_FAULT) return LOOP_FAULT;
     return outcome == RX_DONE ? LOOP_DONE : LOOP_AGAIN;
 }

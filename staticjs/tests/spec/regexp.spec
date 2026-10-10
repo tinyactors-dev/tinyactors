@@ -885,10 +885,6 @@ false
 "a,b".split(/,/, "1")
 --- fault limit
 
-=== replace with a function faults
-"a".replace(/a/, x => x)
---- fault function's result
-
 === replace with a string pattern and a function faults
 "a".replace("a", x => x)
 --- fault function's result
@@ -917,6 +913,380 @@ false
 "a😀".replace(/\B/u, "-")
 --- fault lone surrogate
 
-=== the methods of a regular expression it does not have yet
-/a/.exec("a")
---- fault does not have this method
+
+# ---------------------------------------------------------------------------
+# Match results: exec, match without g, matchAll (docs/regex.md, 7.2).
+
+=== exec gives a match result: the match, each group, index, input, groups
+/(a)(b)?c/.exec("xxacd")
+--- value
+Object.assign(["ac","a",undefined],{"index":2,"input":"xxacd","groups":undefined})
+
+=== exec gives null when nothing matches
+/z/.exec("abc")
+--- value
+null
+
+=== match without g is exec
+"xxacd".match(/(a)(b)?c/)
+--- value
+Object.assign(["ac","a",undefined],{"index":2,"input":"xxacd","groups":undefined})
+
+=== match without g gives null when nothing matches
+"abc".match(/z/)
+--- value
+null
+
+=== the properties of a match result
+(() => { const m = /b(c)/.exec("abcd"); return [m.index, m.input, m.groups, m.length, m[0], m[1], m[2]]; })()
+--- value
+[1,"abcd",undefined,2,"bc","c",undefined]
+
+=== named groups
+/(?<year>\d{4})-(?<month>\d{2})/.exec("on 2024-05-17")
+--- value
+Object.assign(["2024-05","2024","05"],{"index":3,"input":"on 2024-05-17","groups":{"year":"2024","month":"05"}})
+
+=== a named group's value through groups
+(() => { const m = "on 2024-05-17".match(/(?<year>\d{4})-(?<month>\d{2})/); return m.groups.year + "/" + m.groups.month; })()
+--- value
+"2024/05"
+
+=== a named group that did not match is undefined in groups
+/(?<a>x)|(?<b>y)/.exec("y").groups
+--- value
+{"a":undefined,"b":"y"}
+
+=== a group in a repetition keeps its last iteration
+/(?:(a)|b)+/.exec("ab")
+--- value
+Object.assign(["ab",undefined],{"index":0,"input":"ab","groups":undefined})
+
+=== indices with d
+/a(?<z>b)?(c)/d.exec("xxac")
+--- value
+Object.assign(["ac",undefined,"c"],{"index":2,"input":"xxac","groups":{"z":undefined},"indices":Object.assign([[2,4],undefined,[3,4]],{"groups":{"z":undefined}})})
+
+=== indices without a named group
+/(a)(b)/d.exec("zab").indices
+--- value
+Object.assign([[1,3],[1,2],[2,3]],{"groups":undefined})
+
+=== indices are in UTF-16 code units
+/b/d.exec("😀b").indices
+--- value
+Object.assign([[2,3]],{"groups":undefined})
+
+=== index is in UTF-16 code units
+"😀😀x".match(/x/).index
+--- value
+4
+
+=== an empty match
+/(?:)/.exec("abc")
+--- value
+Object.assign([""],{"index":0,"input":"abc","groups":undefined})
+
+=== a match result is an array
+(() => { const m = /a/.exec("a"); return [Array.isArray(m), m.length, m.map(x => x + "!")]; })()
+--- value
+[true,1,["a!"]]
+
+=== a match result spread into an array keeps its elements only
+[.../(a)(b)/.exec("ab")]
+--- value
+["ab","a","b"]
+
+=== destructuring a match result
+(() => { const [all, first, second] = /(\w)(\w)/.exec("xy"); return all + first + second; })()
+--- value
+"xyxy"
+
+=== JSON.stringify of a match result writes its elements
+JSON.stringify(/(a)(b)?/.exec("a"))
+--- value
+"[\"a\",\"a\",null]"
+
+=== slice of a match result is a plain array
+/(a)(b)/.exec("ab").slice(1)
+--- value
+["a","b"]
+
+=== concat of a match result is a plain array
+/(a)/.exec("a").concat(["z"])
+--- value
+["a","a","z"]
+
+=== the in operator finds index
+"index" in /a/.exec("a")
+--- value
+true
+
+=== the in operator on a match result's element
+0 in /a/.exec("a")
+--- value
+true
+
+=== a property a match result lacks is undefined
+/a/.exec("a").lastIndex
+--- value
+undefined
+
+=== an array method read as a value faults
+/a/.exec("a").map
+--- fault does not read them
+
+=== matchAll gives an iterator of match results
+[..."a1b22c".matchAll(/\d+/g)]
+--- value
+[Object.assign(["1"],{"index":1,"input":"a1b22c","groups":undefined}),Object.assign(["22"],{"index":3,"input":"a1b22c","groups":undefined})]
+
+=== matchAll, with groups
+[..."k=v; x=y".matchAll(/(?<key>\w)=(?<value>\w)/g)].map(m => m.groups.key + m.groups.value + m.index)
+--- value
+["kv0","xy5"]
+
+=== matchAll with no match
+[..."abc".matchAll(/z/g)]
+--- value
+[]
+
+=== matchAll over empty matches
+[..."ab".matchAll(/(?:)/g)].map(m => m.index)
+--- value
+[0,1,2]
+
+=== matchAll read by reduce
+[..."a1b2".matchAll(/[a-z](\d)/g)].reduce((s, m) => s + m[1], "")
+--- value
+"12"
+
+=== matchAll with u over a pair
+[..."😀a".matchAll(/./gu)].map(m => m[0] + m.index)
+--- value
+["😀0","a2"]
+
+=== match with g and d gives strings
+"aXbX".match(/X/gd)
+--- value
+["X","X"]
+
+# ---------------------------------------------------------------------------
+# Faults where a match result would show its extra properties in another
+# order, and where JavaScript writes lastIndex (7.3).
+
+=== Object.keys of a match result faults
+Object.keys(/a/.exec("a"))
+--- fault besides its elements
+
+=== Object.entries of a match result faults
+Object.entries(/a/.exec("a"))
+--- fault besides its elements
+
+=== a match result spread into an object faults
+({.../a/.exec("a")})
+--- fault besides its elements
+
+=== an object rest of a match result faults
+(() => { const {index, ...rest} = /a/.exec("a"); return rest; })()
+--- fault besides its elements
+
+=== sorting a match result faults
+(() => { let m = /(b)(a)/.exec("ba"); m.sort(); return m; })()
+--- fault besides its elements
+
+=== exec with g faults
+/a/g.exec("a")
+--- fault g or y
+
+=== exec with y faults
+/a/y.exec("a")
+--- fault g or y
+
+=== match with y and without g faults
+"a".match(/a/y)
+--- fault y and without g
+
+=== replace with y and without g faults
+"a".replace(/a/y, "b")
+--- fault y and without g
+
+=== matchAll without g faults, as JavaScript throws
+"a".matchAll(/a/)
+--- fault g
+
+=== exec of a number faults, where JavaScript converts it
+/1/.exec(1)
+--- fault string
+
+# ---------------------------------------------------------------------------
+# replace with a function (8.6): called once per match with the match, each
+# group, the index, the input, and groups when a group has a name.
+
+=== replace with a function
+"a1b2".replace(/\d/, d => "<" + d + ">")
+--- value
+"a<1>b2"
+
+=== replace with a function and g
+"a1b22".replace(/\d+/g, d => String(Number(d) * 2))
+--- value
+"a2b44"
+
+=== replaceAll with a function
+"a.b.c".replaceAll(/\./g, () => "-")
+--- value
+"a-b-c"
+
+=== the function receives each group, the index and the input
+"xaby".replace(/(a)(c)?(b)/, (m, p1, p2, p3, i, s) => [m, p1, p2, p3, i, s].join("|"))
+--- value
+"xab|a||b|1|xabyy"
+
+=== the function's arguments, all of them
+"xab".replace(/(a)(b)/, (...args) => JSON.stringify(args))
+--- value
+"x[\"ab\",\"a\",\"b\",1,\"xab\"]"
+
+=== with a named group the last argument is groups
+"2024-05".replace(/(?<y>\d+)-(?<m>\d+)/, (...args) => JSON.stringify(args))
+--- value
+"[\"2024-05\",\"2024\",\"05\",0,\"2024-05\",{\"y\":\"2024\",\"m\":\"05\"}]"
+
+=== groups in the function
+"2024-05".replace(/(?<y>\d+)-(?<m>\d+)/, (all, y, m, i, s, g) => g.m + "/" + g.y)
+--- value
+"05/2024"
+
+=== the function's result as a number
+"abc".replace(/b/, () => 42)
+--- value
+"a42c"
+
+=== the function's result as undefined
+"abc".replace(/b/, () => {})
+--- value
+"aundefinedc"
+
+=== the function's result as null, true and a number with a fraction
+["a", "b", "c"].map((x, i) => x.replace(/./, () => [null, true, 1.5][i])).join()
+--- value
+"null,true,1.5"
+
+=== the function returns a string with dollar signs, written as it is
+"abc".replace(/b/, () => "$&$1$$")
+--- value
+"a$&$1$$c"
+
+=== replace with a function over empty matches
+"abc".replace(/(?:)/g, (m, i) => String(i))
+--- value
+"0a1b2c3"
+
+=== replace with a function and no match does not call it
+"abc".replace(/z/g, () => ({}))
+--- value
+"abc"
+
+=== the function sees variables around it
+(() => { const words = { a: "one", b: "two" }; return "a b c".replace(/\w/g, w => words[w] ?? w); })()
+--- value
+"one two c"
+
+=== the function calls replace itself
+"ab cd".replace(/\w+/g, w => w.replace(/./, c => c.toUpperCase()))
+--- value
+"Ab Cd"
+
+=== a function that returns an object faults, where JavaScript converts it
+"a".replace(/a/, () => ({}))
+--- fault only primitives
+
+=== a function that returns a BigInt faults, where JavaScript writes it
+"a".replace(/a/, () => 1n)
+--- fault BigInt
+
+=== a function that returns an array faults, where JavaScript joins it
+"a".replace(/a/, () => [1])
+--- fault only primitives
+
+# ---------------------------------------------------------------------------
+# replace with $n and $<name>.
+
+=== replace with $<name>
+"2024-05".replace(/(?<y>\d+)-(?<m>\d+)/, "$<m>/$<y>")
+--- value
+"05/2024"
+
+=== $<name> of a group that did not match is empty
+"b".replace(/(?<a>a)?b/, "[$<a>]")
+--- value
+"[]"
+
+=== $<name> of a name that does not exist is empty
+"b".replace(/(?<a>b)/, "[$<z>]")
+--- value
+"[]"
+
+=== $<name> without named groups is written as it is
+"b".replace(/(b)/, "[$<a>]")
+--- value
+"[$<a>]"
+
+=== $<name> without a closing bracket is written as it is
+"b".replace(/(?<a>b)/, "[$<a]")
+--- value
+"[$<a]"
+
+=== two-digit groups
+"abcdefghijk".replace(/(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)/, "$11-$10-$1-$01-$012")
+--- value
+"k-j-a-a-a2"
+
+=== a group number past the last is written as it is
+"ab".replace(/(a)(b)/, "$3-$23-$0")
+--- value
+"$3-b3-$0"
+
+=== Object.values of a match result faults
+Object.values(/a/.exec("a"))
+--- fault besides its elements
+
+=== Array.from of a match result is a plain array
+Array.from(/(a)(b)/.exec("ab"))
+--- value
+["ab","a","b"]
+
+=== toSorted of a match result without a compare function faults, as on any array
+/(b)(a)/.exec("ba").toSorted()
+--- fault compare function
+
+=== toSorted with a compare function of a match result is a plain array
+/(b)(a)/.exec("ba").toSorted((x, y) => x < y ? -1 : 1)
+--- value
+["a","b","ba"]
+
+=== with of a match result is a plain array
+/(b)(a)/.exec("ba").with(0, "z")
+--- value
+["z","b","a"]
+
+=== a match result in a variable, used twice
+(() => { const m = /(a)/.exec("xa"); return [m.index, m, m.map(x => x)]; })()
+--- value
+[1,Object.assign(["a","a"],{"index":1,"input":"xa","groups":undefined}),["a","a"]]
+
+=== the groups of indices
+/(?<z>b)/d.exec("ab").indices.groups
+--- value
+{"z":[1,2]}
+
+=== a match result as a property of an object
+({ m: /(a)/.exec("a") })
+--- value
+{"m":Object.assign(["a","a"],{"index":0,"input":"a","groups":undefined})}
+
+=== a match result in an array
+[/a/.exec("a"), /b/.exec("a")]
+--- value
+[Object.assign(["a"],{"index":0,"input":"a","groups":undefined}),null]

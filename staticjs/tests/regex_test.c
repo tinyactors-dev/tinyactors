@@ -251,7 +251,7 @@ static void methods_source(text *src, const text *pat, const text *flag) {
         if (flag->ptr[i] != 'g' && flag->ptr[i] != 'y') put_bytes(&f, &flag->ptr[i], 1);
     }
     const char *fs = f.ptr == NULL ? "" : f.ptr;
-    char head[64];
+    char head[128];
     put(src, "JSON.stringify([s.search(/");
     put_bytes(src, pat->ptr, pat->length);
     snprintf(head, sizeof head, "/%s), s.replace(/", fs);
@@ -269,7 +269,16 @@ static void methods_source(text *src, const text *pat, const text *flag) {
     snprintf(head, sizeof head, "/%sg, \"<$&>\"), /", fs);
     put(src, head);
     put_bytes(src, pat->ptr, pat->length);
-    snprintf(head, sizeof head, "/%s.test(s)])", fs);
+    snprintf(head, sizeof head, "/%s.test(s), (m => m && [m.index, [...m], m.groups, m.indices])(/", fs);
+    put(src, head);
+    put_bytes(src, pat->ptr, pat->length);
+    snprintf(head, sizeof head, "/%s.exec(s)), [...s.matchAll(/", fs);
+    put(src, head);
+    put_bytes(src, pat->ptr, pat->length);
+    snprintf(head, sizeof head, "/%sg)].map(m => [m.index, ...m]), s.replace(/", fs);
+    put(src, head);
+    put_bytes(src, pat->ptr, pat->length);
+    snprintf(head, sizeof head, "/%sg, (...a) => JSON.stringify(a))])", fs);
     put(src, head);
     free(f.ptr);
 }

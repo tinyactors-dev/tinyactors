@@ -235,8 +235,16 @@ sjs_result sjs_vm_to_number(sjs_vm *vm, sjs_value v, double *out);
 sjs_result sjs_regex_property(sjs_vm *vm, sjs_member member, sjs_value *out);
 
 /* What a regular expression method computes: re.test(s), s.search(re),
- * s.match(re), s.split(re, limit), s.replace(re, x) and replaceAll. */
-enum { SJS_REGEX_OP_TEST = 0, SJS_REGEX_OP_SEARCH, SJS_REGEX_OP_MATCH, SJS_REGEX_OP_SPLIT, SJS_REGEX_OP_REPLACE };
+ * s.match(re), s.split(re, limit), s.replace(re, x) and replaceAll,
+ * re.exec(s) and s.matchAll(re). */
+enum {
+    SJS_REGEX_OP_TEST = 0, SJS_REGEX_OP_SEARCH, SJS_REGEX_OP_MATCH, SJS_REGEX_OP_SPLIT, SJS_REGEX_OP_REPLACE,
+    SJS_REGEX_OP_EXEC, SJS_REGEX_OP_MATCH_ALL
+};
+
+/* The fault for a use of an array with extra properties (sjs_array_extra)
+ * that would show them or lose them; sjs_property_get reads them. */
+sjs_result sjs_array_extra_fault(sjs_vm *vm);
 
 typedef struct {
     sjs_leaf_call *call;

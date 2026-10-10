@@ -71,6 +71,8 @@ static void lookup_free(sjs_context *context, sjs_index *index) {
     if (index != NULL) sjs_mem_free(&context->counting, index, lookup_size(index->mask));
 }
 
+static void drop_side(sjs_context *context, sjs_heap **work, sjs_array *a);
+
 /* Free everything on the worklist, and what it alone held. */
 static void drain(sjs_context *context, sjs_heap *work) {
     while (work != NULL) {
@@ -82,7 +84,7 @@ static void drain(sjs_context *context, sjs_heap *work) {
         case SJS_HEAP_MAP: {   /* a map's keys and values alike */
             sjs_array *a = (sjs_array *)(void *)h;
             for (uint32_t i = 0; i < a->length; i++) drop(context, &work, a->items[i]);
-            lookup_free(context, a->index);
+            drop_side(context, &work, a);
             break;
         }
         case SJS_HEAP_OBJECT: {
@@ -1147,4 +1149,13 @@ sjs_result sjs_iterator_make(sjs_context *context, sjs_iterator_spec spec, sjs_v
 uint32_t sjs_iterator_count(const sjs_iterator *it) {
     if (it->items.kind == SJS_ARRAY) return SJS_AS_ARRAY(it->items)->length;
     return SJS_AS_ARRAY(it->source)->length / 2u;
+}
+
+/* What an array, a set or a map holds beside its items: a set's or a map's
+ * index, freed, or a match result's extra properties (SJS_ARRAY_EXTRA),
+ * dropped. Out of drain and at the end of the file, so that the code before
+ * it is laid out as it was. */
+__attribute__((noinline)) static void drop_side(sjs_context *context, sjs_heap **work, sjs_array *a) {
+    if (a->h.type == SJS_HEAP_ARRAY && (a->h.flags & SJS_ARRAY_EXTRA) != 0) drop_heap(context, work, a->extra);
+    else lookup_free(context, a->index);
 }
