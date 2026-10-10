@@ -260,8 +260,12 @@ void ta_system_fire_timers(ta_system *system) {
         ta_event *event = ta_event_at(&system->core, timer.event);
         if (event->trace == TA_NIL) { /* a timer of an untraced send starts a trace */
             ta_trace_context value;
-            event->trace =
-                ta_system_start_trace(system, (ta_string_view){(const char *)0, 0}, &value);
+            ta_trace_ask ask = {
+                TA_TRACE_AT_START, TA_TRACE_FROM_TIMER, owner,
+                owner == TA_NIL ? TA_NIL : ta_actor_chart(system, ta_actor_at(system, owner)),
+                timer.event};
+            event->trace = ta_system_start_trace(system, (ta_string_view){(const char *)0, 0}, 0,
+                                                 &ask, &value);
         }
         ta_system_deliver(system, owner, timer.event, timer.route, timer.arg, timer.target);
     }

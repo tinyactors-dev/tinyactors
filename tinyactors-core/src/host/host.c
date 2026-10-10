@@ -232,16 +232,48 @@ static const chart_version *version_of(const ta_host *host, ta_string_view name)
     return NULL;
 }
 
-/* The host's tracing policy: `policy` (size-aware), or the default. */
-static void host_policy_copy(ta_host *host, const ta_trace_policy *policy) {
-    ta_trace_policy_default(&host->trace_policy);
+/* The host's tracing policy: `policy` (size-aware) with a copy of its rules
+ * and their strings, or the default. 0 if the allocator refused (the old
+ * one stays). */
+static int host_policy_copy(ta_host *host, const ta_trace_policy *policy) {
+    ta_trace_policy copy;
+    ta_trace_policy_default(&copy);
     if (policy)
-        ta_memcpy(&host->trace_policy, policy,
-                  policy->size && policy->size < sizeof host->trace_policy
-                      ? policy->size
-                      : sizeof host->trace_policy);
-    host->trace_policy.size = sizeof host->trace_policy;
+        ta_memcpy(&copy, policy,
+                  policy->size && policy->size < sizeof copy ? policy->size : sizeof copy);
+    copy.size = sizeof copy;
+    if (!(policy && policy->size >= offsetof(ta_trace_policy, rules) + sizeof policy->rules &&
+          copy.rules))
+        copy.rule_count = 0;
+    size_t bytes = sizeof(ta_trace_rule) * copy.rule_count;
+    for (uint32_t i = 0; i < copy.rule_count; i++)
+        bytes += (size_t)copy.rules[i].chart.length + copy.rules[i].actor.length +
+                 copy.rules[i].event.length;
+    void *block = NULL;
+    if (copy.rule_count) {
+        block = host_alloc(host, bytes);
+        if (!block) return 0;
+        ta_trace_rule *rules = (ta_trace_rule *)block;
+        char *text = (char *)(rules + copy.rule_count);
+        for (uint32_t i = 0; i < copy.rule_count; i++) {
+            rules[i] = copy.rules[i];
+            ta_string_view *views[3] = {&rules[i].chart, &rules[i].actor, &rules[i].event};
+            for (int k = 0; k < 3; k++) {
+                if (views[k]->length) ta_memcpy(text, views[k]->pointer, views[k]->length);
+                views[k]->pointer = text;
+                text += views[k]->length;
+            }
+        }
+        copy.rules = rules;
+    } else {
+        copy.rules = NULL;
+    }
+    host_free(host, host->trace_rules, host->trace_rules_bytes);
+    host->trace_rules = block;
+    host->trace_rules_bytes = bytes;
+    host->trace_policy = copy;
     host->config.system.trace_policy = &host->trace_policy;
+    return 1;
 }
 
 ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
@@ -257,7 +289,10 @@ ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
               config->size < sizeof host->config ? config->size : sizeof host->config);
     host->config.size = sizeof host->config;
     if (!host->config.migrate_quantum) host->config.migrate_quantum = 256;
-    host_policy_copy(host, host->config.system.trace_policy);
+    if (!host_policy_copy(host, host->config.system.trace_policy)) {
+        config->allocator.free(config->allocator.context, host, sizeof *host);
+        return TA_ERROR_NO_MEMORY;
+    }
     /* the base URI every segment shares: tinyactors://<system_id>/ */
     uint32_t bl = 0;
     ta_memcpy(host->base, TA_ADDRESS_SCHEME, 13);
@@ -317,6 +352,7 @@ void ta_host_free(ta_host *host) {
         host_free(host, host->retired_charts[i].name,
                   host->retired_charts[i].name_length ? host->retired_charts[i].name_length : 1);
     host_free(host, host->retired_charts, sizeof(retired_chart) * host->retired_chart_capacity);
+    host_free(host, host->trace_rules, host->trace_rules_bytes);
     ta_allocator allocator = host->config.allocator;
     allocator.free(allocator.context, host, sizeof *host);
 }
@@ -1564,7 +1600,7 @@ ta_status ta_host_adopt(ta_host *host, uint32_t segment, const void *blob, size_
 
 ta_status ta_host_trace_set(ta_host *host, const ta_trace_policy *policy) {
     if (host->config.system.tracing == TA_TRACING_DISABLED) return TA_ERROR_STATE;
-    host_policy_copy(host, policy);
+    if (!host_policy_copy(host, policy)) return TA_ERROR_NO_MEMORY;
     for (uint32_t i = 0; i < host->segment_count; i++) {
         host_segment *segment = segment_of(host, i);
         if (!segment) continue;

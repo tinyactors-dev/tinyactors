@@ -99,6 +99,74 @@ test('detail, kinds and sampling change while traces flow; lifecycle spans stay'
   system.stop();
 });
 
+test('watchTraces: one actor in full, whatever the ratio, and what it causes; stop() ends it', async () => {
+  const c = collector();
+  const system = createSystem({ traces: { sink: c.sink, sample: 0, detail: 'summary' } });
+  const b = createActor(pong, { system }).start();
+  const a = createActor(ping, { system, input: { peer: b } }).start();
+  const other = createActor(pong, { system }).start();
+  await settle();
+  const watch = system.watchTraces({ actors: [a] });
+  a.send({ type: 'go' });
+  other.send({ type: 'ping' });
+  await settle();
+  const spans = c.spans();
+  const go = spans.find((s) => s.name === 'scxml.macrostep go');
+  assert.ok(go, 'the watched actor is traced although nothing is sampled');
+  assert.ok(spans.some((s) => s.name.startsWith('scxml.microstep') && s.traceID === go.traceID), 'in full: its microsteps');
+  const caused = spans.filter((s) => s.name === 'scxml.macrostep ping');
+  assert.equal(caused.length, 1, 'what it caused is traced, the other actor is not');
+  assert.equal(caused[0].traceID, go.traceID);
+  watch.stop();
+  watch.stop(); /* once is enough */
+  const before = c.spans().length;
+  a.send({ type: 'go' });
+  await settle();
+  assert.ok(!c.spans().slice(before).some((s) => s.name.startsWith('scxml.macrostep')), 'after stop(): sampled as before');
+  system.stop();
+});
+
+test('watchTraces by chart, with values, ends by itself', async () => {
+  const c = collector();
+  const system = createSystem({ traces: { sink: c.sink, sample: 0 } });
+  const b = createActor(pong, { system }).start();
+  await settle();
+  system.watchTraces({ charts: ['pong'], values: true, for: 50 });
+  b.send({ type: 'ping', n: 1 });
+  await settle();
+  const pinged = c.spans().find((s) => s.name === 'scxml.macrostep ping');
+  assert.ok(pinged);
+  assert.match(String(pinged.attributes['scxml.event.data']), /"n":1/, 'values for the watched class');
+  await new Promise((r) => setTimeout(r, 120));
+  const before = c.spans().length;
+  b.send({ type: 'ping' });
+  await settle();
+  assert.ok(!c.spans().slice(before).some((s) => s.name.startsWith('scxml.macrostep')), 'the watch ended');
+  assert.throws(() => system.watchTraces({}), TypeError);
+  system.stop();
+});
+
+test('rules: a chart never traced, another at a ratio; malformed rules change nothing', async () => {
+  const c = collector();
+  const system = createSystem({ traces: { sink: c.sink } });
+  system.configureTraces({ rules: [{ chart: 'pong', at: 'take', detail: 'off' }] });
+  const b = createActor(pong, { system }).start();
+  const a = createActor(ping, { system, input: { peer: b } }).start();
+  a.send({ type: 'go' });
+  await settle();
+  const spans = c.spans();
+  assert.ok(spans.some((s) => s.name === 'scxml.macrostep go'));
+  assert.ok(!spans.some((s) => s.name === 'scxml.macrostep ping'), 'pong writes nothing');
+  assert.throws(() => system.configureTraces({ rules: [{ from: 'nowhere' }] }), TypeError);
+  assert.throws(() => system.configureTraces({ rules: [{ detail: 'loud' }] }), TypeError);
+  assert.throws(() => system.configureTraces({ rules: Array.from({ length: 70 }, () => ({ sample: true })) }), /more rules/);
+  const before = c.spans().length;
+  a.send({ type: 'go' });
+  await settle();
+  assert.ok(!c.spans().slice(before).some((s) => s.name === 'scxml.macrostep ping'), 'the earlier rules still hold');
+  system.stop();
+});
+
 test('without a sink or an exporter no record is written, and traceparents still flow', async () => {
   const system = createSystem({ telemetry: false });
   const b = createActor(pong, { system }).start();

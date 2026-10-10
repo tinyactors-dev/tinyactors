@@ -194,16 +194,16 @@ TA_API void ta_host_effects_ack(ta_host *h);
  * target. Views are borrowed for the call. */
 typedef struct ta_envelope {
     uint32_t size;
-    uint32_t hops;         /* relays passed so far */
-    ta_string_view target; /* address */
-    ta_string_view name;   /* event name */
-    ta_payload data;       /* datamodel payload (moved on success; the caller's on failure) */
-    uint32_t datamodel;    /* datamodel index of `data` (ta_host_config.datamodels) */
-    uint32_t pad;
-    ta_string_view sendid;            /* the sender's sendid (may be empty) */
-    ta_string_view origin;            /* the sending session's address */
-    ta_string_view origintype;        /* empty: the SCXML event processor */
-    ta_string_view msgid;             /* unique per origin: errors, acks and dedup refer to it */
+    uint32_t hops;             /* relays passed so far */
+    ta_string_view target;     /* address */
+    ta_string_view name;       /* event name */
+    ta_payload data;           /* datamodel payload (moved on success; the caller's on failure) */
+    uint32_t datamodel;        /* datamodel index of `data` (ta_host_config.datamodels) */
+    uint32_t trace_flags;      /* local to this process: the sender's detail class (ta_event_in) */
+    ta_string_view sendid;     /* the sender's sendid (may be empty) */
+    ta_string_view origin;     /* the sending session's address */
+    ta_string_view origintype; /* empty: the SCXML event processor */
+    ta_string_view msgid;      /* unique per origin: errors, acks and dedup refer to it */
     ta_string_view deduplication_key; /* optional key for duplicate detection instead of msgid */
     ta_string_view traceparent;       /* W3C: the sending step's trace (empty: none), kept across
                                          systems and relays */

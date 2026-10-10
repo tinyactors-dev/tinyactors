@@ -38,7 +38,7 @@ module Core
     Layer.new(name: 'core', uses: %w[image trace], freestanding: true,
               sources: %w[core event_pool trace_step datamodel_null].map { |s| "src/core/#{s}.c" }),
     Layer.new(name: 'system', uses: %w[core], freestanding: true,
-              sources: %w[system schedule route hibernate effects tracing].map { |s| "src/system/#{s}.c" }),
+              sources: %w[system schedule route hibernate effects tracing policy].map { |s| "src/system/#{s}.c" }),
     Layer.new(name: 'compile', uses: %w[image],
               sources: %w[compile_support xml scxml link compile write].map { |s| "src/compile/#{s}.c" }),
     # Many systems as one (versions, routing, migration jobs, hibernation

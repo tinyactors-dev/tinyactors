@@ -55,8 +55,10 @@ static void normalize_config(const ta_image_view *view, const ta_system_config *
         if (!config->trace_contexts) config->trace_contexts = config->max_events;
         if (config->trace_contexts > TA_POOL_MAX_CAPACITY)
             config->trace_contexts = TA_POOL_MAX_CAPACITY;
+        if (!config->trace_rules) config->trace_rules = 16;
+        if (config->trace_rules > 255) config->trace_rules = 255;
     } else {
-        config->trace_bytes = config->trace_contexts = 0;
+        config->trace_bytes = config->trace_contexts = config->trace_rules = 0;
     }
     if (!config->instance_bytes) {
         uint32_t m = 0;
@@ -78,7 +80,8 @@ typedef struct carved {
         timer_generations, heap_nodes, heap_positions, workspace_slots, workspace_generations,
         request_slots, request_generations;
     size_t slab_pages, slab_metadata, effects, effect_views, sessions, chart_datamodels,
-        chart_contexts, chart_stats, trace_storage, context_slots, context_generations;
+        chart_contexts, chart_stats, trace_storage, context_slots, context_generations, rules,
+        chart_points;
     uint32_t workspace_size, page_count, session_capacity;
 } carved;
 
@@ -127,6 +130,9 @@ static void carve(ta_arena *arena, const ta_image_view *view, const ta_system_co
     o->context_slots = ta_arena_alloc(
         arena, ta_pool_slots_bytes(sizeof(ta_trace_entry), config->trace_contexts), TA_ALIGN_MAX);
     o->context_generations = ta_arena_alloc(arena, config->trace_contexts, 1);
+    o->rules =
+        ta_arena_alloc(arena, sizeof(ta_trace_rule_compiled) * config->trace_rules, TA_ALIGN_MAX);
+    o->chart_points = ta_arena_alloc(arena, config->trace_rules ? view->chart_count : 0, 1);
 }
 
 ta_status ta_system_layout(const ta_image *image, const ta_system_config *config, size_t *bytes) {
@@ -276,6 +282,10 @@ static void set_rels(ta_system *system, ta_arena *arena, const carved *o) {
         (int64_t)((intptr_t)ta_arena_pointer(arena, o->chart_contexts) - (intptr_t)system);
     system->chart_stats_relative =
         (int64_t)((intptr_t)ta_arena_pointer(arena, o->chart_stats) - (intptr_t)system);
+    system->rules_relative =
+        (int64_t)((intptr_t)ta_arena_pointer(arena, o->rules) - (intptr_t)system);
+    system->chart_points_relative =
+        (int64_t)((intptr_t)ta_arena_pointer(arena, o->chart_points) - (intptr_t)system);
     system->session_capacity = o->session_capacity;
 }
 
@@ -305,6 +315,9 @@ ta_status ta_system_init(void *memory, size_t length, const ta_image *image,
                       : sizeof system->policy);
     system->policy.size = sizeof system->policy;
     system->config.trace_policy = (const ta_trace_policy *)0;
+    ta_trace_policy given = system->policy;
+    system->policy.rules = (const ta_trace_rule *)0; /* compiled below, once the slab is there */
+    system->policy.rule_count = 0;
     system->chart_count = view->chart_count;
     system->next_serial = normalized.first_serial;
     ta_pool_init(&system->actors, ta_arena_pointer(&arena, o.actor_slots),
@@ -345,6 +358,10 @@ ta_status ta_system_init(void *memory, size_t length, const ta_image *image,
     rebind(system, image);
     status = attach_charts(system, image);
     if (status != TA_OK) return status;
+    if (normalized.tracing == TA_TRACING_ENABLED) {
+        status = ta_system_trace_rules_set(system, &given);
+        if (status != TA_OK) return status;
+    }
     system->core.out.target = system->core.out.source = system->core.out.type =
         system->core.out.sendid = TA_NIL;
     system->core.out.label = TA_NIL;
@@ -473,7 +490,8 @@ static void trace_spawn(ta_system *system, uint32_t index, ta_instance *instance
                               : ta_core_step_context(core, ta_actor_instance(system, parent_actor));
         value = ta_trace_context_value(core, instance->trace);
     } else {
-        instance->trace = ta_system_start_trace(system, traceparent, &value);
+        ta_trace_ask ask = {TA_TRACE_AT_START, TA_TRACE_FROM_SPAWN, index, instance->chart, TA_NIL};
+        instance->trace = ta_system_start_trace(system, traceparent, 0, &ask, &value);
     }
     ta_actor *actor = ta_actor_at(system, index);
     ta_trace_record *record = ta_system_trace_lifecycle(
@@ -859,8 +877,9 @@ ta_status ta_system_relocate(ta_system *system, void *new_memory, size_t new_len
     normalize_config(view, &wanted, &config);
     config.io_processors = system->config.io_processors;
     config.io_processor_count = system->config.io_processor_count;
+    config.trace_policy = (const ta_trace_policy *)0; /* the system keeps its own */
     if (config.trace_contexts < system->contexts.high_water_mark ||
-        config.trace_bytes < system->journal.used)
+        config.trace_bytes < system->journal.used || config.trace_rules < system->rule_count)
         return TA_ERROR_INVALID;
     if (config.max_actors < system->actors.high_water_mark ||
         config.max_events < system->events.high_water_mark ||
@@ -919,6 +938,12 @@ ta_status ta_system_relocate(ta_system *system, void *new_memory, size_t new_len
     ta_memcpy(SYSTEM_POINTER(new_system, chart_stats_relative, ta_chart_stats),
               SYSTEM_POINTER(system, chart_stats_relative, ta_chart_stats),
               sizeof(ta_chart_stats) * system->chart_count);
+    ta_memcpy(SYSTEM_POINTER(new_system, rules_relative, ta_trace_rule_compiled),
+              SYSTEM_POINTER(system, rules_relative, ta_trace_rule_compiled),
+              sizeof(ta_trace_rule_compiled) * system->rule_count);
+    if (config.trace_rules)
+        ta_memcpy(SYSTEM_POINTER(new_system, chart_points_relative, uint8_t),
+                  SYSTEM_POINTER(system, chart_points_relative, uint8_t), system->chart_count);
     uint32_t *session = SYSTEM_POINTER(new_system, sessions_relative, uint32_t);
     for (uint32_t i = 0; i < new_system->session_capacity; i++)
         session[i] = TA_NIL;

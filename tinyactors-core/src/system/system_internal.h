@@ -28,8 +28,9 @@ enum {
     ACTOR_FLAG_IN_WAKE_QUEUE = 1u
         << 3, /* hibernated, in the wake queue (TA_EFFECT_WAKE not yet emitted) */
     ACTOR_FLAG_WAKE_SENT = 1u
-        << 4,                    /* hibernated, TA_EFFECT_WAKE emitted, waiting for ta_actor_wake */
-    ACTOR_FLAG_TOUCHED = 1u << 5 /* ran since the last ta_system_cold_actors sweep */
+        << 4, /* hibernated, TA_EFFECT_WAKE emitted, waiting for ta_actor_wake */
+    ACTOR_FLAG_TOUCHED = 1u << 5,    /* ran since the last ta_system_cold_actors sweep */
+    ACTOR_FLAG_TRACE_NAMES = 1u << 6 /* trace_names says which name rules match it (policy.c) */
 };
 /* Hibernated actors (state TA_ACTOR_HIBERNATED) have no instance: `instance`
  * holds the chart index instead, `next` links the wake queue. */
@@ -38,8 +39,8 @@ typedef struct ta_actor {
     uint32_t next; /* run queue / workspace-wait queue link */
     uint8_t state; /* TA_ACTOR_* */
     uint8_t flags;
-    uint16_t pad;
-    uint32_t instance; /* slab offset of the instance */
+    uint16_t trace_names; /* bit i: the policy's i-th rule with an actor name matches its name */
+    uint32_t instance;    /* slab offset of the instance */
     uint32_t mailbox_head, mailbox_tail, mailbox_length;
     uint32_t parent; /* actor handle (0 = none) */
     uint32_t parent_slot;
@@ -109,7 +110,9 @@ struct ta_system {
     ta_pool contexts;
     ta_trace_generator generator;
     uint64_t trace_threshold;
-    ta_trace_policy policy; /* docs/adr/0007 */
+    ta_trace_policy policy; /* docs/adr/0007; its rules are compiled (rules_relative) */
+    int64_t rules_relative, chart_points_relative;
+    uint32_t rule_count, rule_points; /* rule_points: TA_TRACE_AT_* any rule is asked at */
     uint64_t fuel_clock;
     ta_datamodel_binding datamodels[TA_MAX_DATAMODELS + 1];
 };
@@ -159,9 +162,46 @@ void ta_system_session_insert(ta_system *s, uint32_t index);
  * trace sampled by the system's ratio. Returns a context (one reference), or
  * TA_NIL when unsampled or tracing is off; `*value` gets the trace either way
  * (no trace when tracing is off). */
-uint32_t ta_system_start_trace(ta_system *s, ta_string_view traceparent, ta_trace_context *value);
 /* The kernel's masks and the sampling threshold from system->policy. */
 void ta_system_trace_policy_apply(ta_system *system);
+
+/* ---- the policy's rules (policy.c, docs/adr/0007) ---- */
+/* A rule as a system holds it: names resolved to indices, strings in the slab. */
+typedef struct ta_trace_rule_compiled {
+    uint8_t at, sample, detail, name_bit; /* detail 0xFF: keep; name_bit 0xFF: no actor name */
+    uint32_t from;
+    uint32_t chart;                  /* TA_NIL: any; TA_NIL - 1: a chart this image lacks */
+    uint32_t event_first, event_end; /* the event trie's interval; TA_NIL: any */
+    uint32_t event_text;             /* a descriptor not in the trie (slab string), TA_NIL */
+    uint32_t actor, actor_prefix;    /* the actor's name (slab string), TA_NIL; a prefix? */
+    uint32_t per_second, burst;
+    uint64_t session;
+    uint64_t threshold;
+    uint64_t tokens, refilled; /* the rate limit: ticks of credit, and when last refilled */
+} ta_trace_rule_compiled;
+/* What a decision point knows. */
+typedef struct ta_trace_ask {
+    uint32_t at, from;
+    uint32_t actor; /* actor index, TA_NIL */
+    uint32_t chart; /* TA_NIL without an actor */
+    uint32_t event; /* event pool index, TA_NIL */
+} ta_trace_ask;
+/* Apply the first matching rule at ask->at to *flags (a context's: W3C and
+ * the class) for `trace`; 0 when none matched (nothing changed). */
+int ta_system_trace_rules(ta_system *system, const ta_trace_ask *ask, ta_trace_id trace,
+                          uint32_t *flags);
+/* Compile policy->rules into the system (the old ones' strings let go). */
+ta_status ta_system_trace_rules_set(ta_system *system, const ta_trace_policy *policy);
+/* An actor took event `event`: the take rules decide again (the event's context
+ * replaced when the decision changes). */
+void ta_system_trace_take(ta_system *system, uint32_t index, uint32_t event);
+/* Start a trace for what `ask` describes (TA_TRACE_AT_START): under
+ * `traceparent` (with the sender's local `trace_flags`) or a new trace ID,
+ * sampled as the policy and its rules say. The context, TA_NIL when
+ * unsampled; *value its value. */
+uint32_t ta_system_start_trace(ta_system *s, ta_string_view traceparent, uint32_t trace_flags,
+                               const ta_trace_ask *ask, ta_trace_context *value);
+
 /* A lifecycle record (TA_TRACE_SPAWNED, ...) of actor `index`, its header
  * filled: under `context` (a value; a new trace ID if it has none), keyed
  * (session, macrostep, step). NULL when the kind is off or the journal full. */

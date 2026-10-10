@@ -1849,6 +1849,7 @@ static nd_host *host_alloc(napi_env environment, napi_value *argv, napi_value op
     config->system_id = (ta_string_view){host->base + 13, (uint32_t)bl};
     config->system.size = sizeof config->system;
     config->system.ticks_per_second = 1000; /* ms */
+    config->system.trace_rules = 64;        /* watches add rules (docs/adr/0007) */
     config->system.max_actors = 64;
     config->system.max_events = 256;
     config->system.max_timers = 64;
@@ -2514,19 +2515,31 @@ static void otlp_resource_set(napi_env environment, ta_otlp *otlp, napi_value pa
     attributes_free(&attributes);
 }
 
-/* Names of the detail levels' kinds, for traceConfigure. */
-static uint32_t trace_kinds_of(napi_env environment, napi_value options) {
+static double named_double(napi_env environment, napi_value object, const char *name);
+static uint32_t named_length(napi_env environment, napi_value object, const char *name,
+                             napi_value *array);
+static uint64_t decimal_of(napi_env environment, napi_value v);
+
+/* A view of a string property (an empty one without it); the text is the
+ * caller's to free. */
+static ta_string_view named_text(napi_env environment, napi_value object, const char *name,
+                                 char **text) {
     napi_value v;
     napi_valuetype t = napi_undefined;
-    if (napi_get_named_property(environment, options, "kinds", &v) == napi_ok)
+    size_t length = 0;
+    *text = NULL;
+    if (napi_get_named_property(environment, object, name, &v) == napi_ok)
         napi_typeof(environment, v, &t);
-    return t == napi_number ? get_u32(environment, v) : TA_TRACE_FULL;
+    if (t == napi_string) *text = get_string(environment, v, &length);
+    return (ta_string_view){*text ? *text : "", (uint32_t)length};
 }
 
-/* traceConfigure(host, { enabled, kinds, sampleParts, sampleWhole, flags, valueLimit,
- * resource: [[key, value], ...] }): what core writes, and the encoder that
- * reads it (none when not enabled: core then writes nothing, contexts still
- * travel) */
+/* traceConfigure(host, { enabled, classes: [8 kind masks], sampleParts, sampleWhole,
+ * rules: [{ at, chart, actor, event, session (decimal), from, sample, parts,
+ * whole, detail (-1: keep), perSecond, burst }], flags, valueLimit, resource:
+ * [[key, value], ...] }): what core writes (docs/adr/0007), and the encoder
+ * that reads it (none when not enabled: core then writes nothing, contexts
+ * still travel) */
 static napi_value js_trace_configure(napi_env environment, napi_callback_info info) {
     size_t argc = 2;
     napi_value argv[2], v;
@@ -2536,7 +2549,6 @@ static napi_value js_trace_configure(napi_env environment, napi_callback_info in
     bool enabled = false;
     if (napi_get_named_property(environment, argv[1], "enabled", &v) == napi_ok)
         napi_get_value_bool(environment, v, &enabled);
-    uint32_t kinds = enabled ? trace_kinds_of(environment, argv[1]) : 0;
     uint32_t parts = 1, whole = 1, flags = 0, value_limit = 0;
     if (napi_get_named_property(environment, argv[1], "sampleParts", &v) == napi_ok)
         parts = get_u32(environment, v);
@@ -2552,14 +2564,54 @@ static napi_value js_trace_configure(napi_env environment, napi_callback_info in
     ta_trace_policy_default(&policy);
     policy.sample_parts = parts;
     policy.sample_whole = whole;
-    for (uint32_t i = 0; i < TA_TRACE_DETAILS; i++)
-        policy.kinds[i] = TA_TRACE_BIT(TA_TRACE_DROPPED);
-    if (kinds) {
-        policy.kinds[TA_TRACE_DETAIL_UNSAMPLED] = kinds & TA_TRACE_LIFECYCLE;
-        policy.kinds[TA_TRACE_DETAIL_SAMPLED] = kinds;
-        policy.kinds[TA_TRACE_DETAIL_WATCHED] = kinds;
+    napi_value classes;
+    bool is_array = false;
+    if (napi_get_named_property(environment, argv[1], "classes", &classes) == napi_ok)
+        napi_is_array(environment, classes, &is_array);
+    for (uint32_t i = 0; i < TA_TRACE_DETAILS; i++) {
+        uint32_t kinds = 0;
+        if (enabled && is_array && napi_get_element(environment, classes, i, &v) == napi_ok)
+            kinds = get_u32(environment, v);
+        policy.kinds[i] = kinds ? kinds : TA_TRACE_BIT(TA_TRACE_DROPPED);
     }
-    ta_host_trace_set(host->host, &policy);
+    napi_value rules_js;
+    uint32_t rule_count = named_length(environment, argv[1], "rules", &rules_js);
+    ta_trace_rule *rules = (ta_trace_rule *)calloc(rule_count ? rule_count : 1, sizeof *rules);
+    char **texts = (char **)calloc(3 * (rule_count ? rule_count : 1), sizeof(char *));
+    for (uint32_t i = 0; i < rule_count; i++) {
+        napi_value rule;
+        napi_get_element(environment, rules_js, i, &rule);
+        ta_trace_rule *r = &rules[i];
+        r->size = sizeof *r;
+        r->at = (uint32_t)named_double(environment, rule, "at");
+        r->chart = named_text(environment, rule, "chart", &texts[3 * i]);
+        r->actor = named_text(environment, rule, "actor", &texts[3 * i + 1]);
+        r->event = named_text(environment, rule, "event", &texts[3 * i + 2]);
+        if (napi_get_named_property(environment, rule, "session", &v) == napi_ok)
+            r->session = decimal_of(environment, v);
+        r->from = (uint32_t)named_double(environment, rule, "from");
+        r->sample = (uint32_t)named_double(environment, rule, "sample");
+        r->sample_parts = (uint32_t)named_double(environment, rule, "parts");
+        r->sample_whole = (uint32_t)named_double(environment, rule, "whole");
+        double detail = named_double(environment, rule, "detail");
+        r->detail = detail < 0 ? TA_NIL : (uint32_t)detail;
+        r->per_second = (uint32_t)named_double(environment, rule, "perSecond");
+        r->burst = (uint32_t)named_double(environment, rule, "burst");
+    }
+    policy.rules = rules;
+    policy.rule_count = rule_count;
+    ta_status status = ta_host_trace_set(host->host, &policy);
+    for (uint32_t i = 0; i < 3 * rule_count; i++)
+        free(texts[i]);
+    free(texts);
+    free(rules);
+    if (status == TA_ERROR_NO_MEMORY || status == TA_ERROR_INVALID) {
+        napi_throw_error(environment, NULL,
+                         status == TA_ERROR_NO_MEMORY
+                             ? "traces: more rules than a system holds (64), or no memory"
+                             : "traces: a rule is malformed, or names more than 16 actors");
+        return NULL;
+    }
     if (!enabled) {
         free(host->otlp);
         host->otlp = NULL;

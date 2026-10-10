@@ -708,6 +708,124 @@ static void test_detail_classes(void) {
     tsys_free(&t);
 }
 
+/* A round of CHAIN: spawn A (which invokes B, which invokes C), send it
+ * `go` without a traceparent, run until it is done. Returns A's session. */
+static uint64_t chain_round(test_system *t) {
+    uint32_t a = 0;
+    CHECK_EQUAL(
+        ta_system_spawn(t->system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
+    tsys_run(t, 100000, 10);
+    uint64_t session = session_of(t, a);
+    CHECK_EQUAL(send_traced(t, a, "go", NULL), TA_OK);
+    tsys_run(t, 100000, 10);
+    collect(t);
+    return session;
+}
+
+/* Rules (docs/adr/0007): with nothing sampled, a rule at take samples B's
+ * steps, in full, and what they cause (C's, the replies); a rate limit lets
+ * one trace through per second of logical time; a rule at start samples a
+ * host input by its event; a rule drops one chart's steps from sampled
+ * traces. */
+static void test_rules(void) {
+    ta_trace_rule watch;
+    memset(&watch, 0, sizeof watch);
+    watch.size = sizeof watch;
+    watch.at = TA_TRACE_AT_TAKE;
+    watch.actor = (ta_string_view){"b", 1};
+    watch.sample = TA_TRACE_SAMPLE;
+    watch.detail = TA_TRACE_DETAIL_WATCHED;
+    ta_trace_policy policy;
+    ta_trace_policy_default(&policy);
+    policy.sample_parts = 0; /* nothing sampled ... */
+    policy.kinds[TA_TRACE_DETAIL_SAMPLED] = TA_TRACE_SUMMARY;
+    policy.rules = &watch; /* ... but B */
+    policy.rule_count = 1;
+    test_system t;
+    ta_system_config config = test_system_config();
+    config.trace_policy = &policy;
+    CHECK(tsys_init(&t, CHAIN, NULL, &config));
+    uint64_t sa = chain_round(&t), sb = sa + 1, sc = sa + 2;
+    CHECK(find(TA_TRACE_MACROSTEP_BEGIN, sa, 2, "go") == NULL); /* A's input: unsampled */
+    const ta_trace_record *b = find(TA_TRACE_MACROSTEP_BEGIN, sb, ~(uint64_t)0, "ping"),
+                          *c = find(TA_TRACE_MACROSTEP_BEGIN, sc, ~(uint64_t)0, "ping"),
+                          *back = find(TA_TRACE_MACROSTEP_BEGIN, sa, ~(uint64_t)0, "pong");
+    CHECK(b && c && back);
+    if (b && c && back) {
+        CHECK_EQUAL(TA_TRACE_DETAIL(b->flags), TA_TRACE_DETAIL_WATCHED);
+        CHECK_EQUAL(b->parent, 0); /* a new trace: what sent it was not traced */
+        CHECK(c->trace.low == b->trace.low && back->trace.low == b->trace.low);
+        CHECK_EQUAL(TA_TRACE_DETAIL(c->flags), TA_TRACE_DETAIL_WATCHED); /* caused: watched too */
+        CHECK_EQUAL(c->parent, span_of(sb, b->key.macrostep, 1));
+    }
+    CHECK(count_kind(TA_TRACE_MICROSTEP) >= 3); /* the watched class writes every kind */
+    ta_system_stats stats;
+    stats.size = sizeof stats;
+    ta_system_stats_get(t.system, &stats);
+    CHECK(stats.traces_sampled >= 1 && stats.traces_started > stats.traces_sampled);
+    forget();
+
+    /* at most one trace a second (logical time) */
+    watch.per_second = 1;
+    CHECK_EQUAL(ta_system_trace_set(t.system, &policy), TA_OK);
+    chain_round(&t);
+    CHECK(count_kind(TA_TRACE_MACROSTEP_BEGIN) > 0);
+    forget();
+    chain_round(&t);
+    CHECK_EQUAL(count_kind(TA_TRACE_MACROSTEP_BEGIN), 0); /* the bucket is empty */
+    forget();
+    ta_system_advance_time(t.system, 2 * config.ticks_per_second);
+    chain_round(&t);
+    CHECK(count_kind(TA_TRACE_MACROSTEP_BEGIN) > 0);
+    forget();
+
+    /* at start, by event: A's `go` is sampled, at the default class */
+    memset(&watch, 0, sizeof watch);
+    watch.size = sizeof watch;
+    watch.at = TA_TRACE_AT_START;
+    watch.event = (ta_string_view){"go.*", 4};
+    watch.sample = TA_TRACE_SAMPLE;
+    watch.detail = TA_NIL;
+    CHECK_EQUAL(ta_system_trace_set(t.system, &policy), TA_OK);
+    sa = chain_round(&t);
+    const ta_trace_record *go = find(TA_TRACE_MACROSTEP_BEGIN, sa, 2, "go");
+    CHECK(go != NULL);
+    if (go) CHECK_EQUAL(TA_TRACE_DETAIL(go->flags), TA_TRACE_DETAIL_SAMPLED);
+    CHECK_EQUAL(count_kind(TA_TRACE_MICROSTEP), 0); /* the sampled class: summary */
+    forget();
+
+    /* everything sampled, but C's steps dropped */
+    memset(&watch, 0, sizeof watch);
+    watch.size = sizeof watch;
+    watch.at = TA_TRACE_AT_TAKE;
+    watch.chart = (ta_string_view){"c", 1};
+    watch.sample = TA_TRACE_DROP;
+    watch.detail = TA_NIL;
+    policy.sample_parts = 1;
+    CHECK_EQUAL(ta_system_trace_set(t.system, &policy), TA_OK);
+    sa = chain_round(&t);
+    CHECK(find(TA_TRACE_MACROSTEP_BEGIN, sa + 1, ~(uint64_t)0, "ping") != NULL);
+    CHECK(find(TA_TRACE_MACROSTEP_BEGIN, sa + 2, ~(uint64_t)0, "ping") == NULL);
+    forget();
+
+    /* malformed rules change nothing */
+    watch.detail = TA_TRACE_DETAILS;
+    CHECK_EQUAL(ta_system_trace_set(t.system, &policy), TA_ERROR_INVALID);
+    watch.detail = TA_NIL;
+    ta_trace_rule many[17];
+    for (int i = 0; i < 17; i++) {
+        many[i] = watch;
+        many[i].actor = (ta_string_view){"x*", 2};
+    }
+    policy.rules = many;
+    policy.rule_count = 17;
+    CHECK_EQUAL(ta_system_trace_set(t.system, &policy), TA_ERROR_NO_MEMORY); /* 16 by default */
+    policy.rule_count = 16;
+    CHECK_EQUAL(ta_system_trace_set(t.system, &policy), TA_OK);
+    tsys_free(&t);
+}
+
 int main(void) {
     RUN(test_on_by_default);
     RUN(test_three_actors);
@@ -720,5 +838,6 @@ int main(void) {
     RUN(test_hibernated_receiver);
     RUN(test_export_adopt);
     RUN(test_detail_classes);
+    RUN(test_rules);
     TEST_MAIN_END();
 }

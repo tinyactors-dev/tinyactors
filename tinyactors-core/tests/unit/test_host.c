@@ -147,6 +147,64 @@ static ta_status send(host_world *e, uint64_t session, const char *name, const c
             "<state id='b'><transition event='error.platform.upgrade'>"                            \
             "<log expr=\"'upgraded in b'\"/></transition></state>")
 
+/* The class of a step's trace in segment `si`'s MACROSTEP_BEGIN of `name`
+ * (records read and acknowledged), or -1. */
+static int begin_class(host_world *e, uint32_t si, const char *name) {
+    int found = -1;
+    ta_system *system = ta_host_system(e->host, si);
+    ta_trace_view view;
+    while (ta_system_trace(system, &view)) {
+        uint32_t cursor = 0;
+        const ta_trace_record *record;
+        while ((record = ta_trace_next(&view, &cursor)))
+            if (record->kind == TA_TRACE_MACROSTEP_BEGIN) {
+                const ta_trace_macrostep_begin *begin = ta_trace_body(record);
+                ta_string_view n = ta_trace_dynamic_string(&view, begin->name);
+                if (!n.length && begin->name != TA_NIL)
+                    n = ta_image_string(&e->image[si], begin->name);
+                if (n.length == strlen(name) && !memcmp(n.pointer, name, n.length))
+                    found = (int)TA_TRACE_DETAIL(record->flags);
+            }
+        ta_system_trace_ack(system, view.length);
+    }
+    return found;
+}
+
+/* A watched step's class crosses segments with what it sends (docs/adr/0007). */
+static void test_class_across_segments(void) {
+    host_world e;
+    world_open(&e, 8);
+    world_add(&e, W1);
+    world_add(&e, ECHO);
+    ta_trace_rule watch;
+    memset(&watch, 0, sizeof watch);
+    watch.size = sizeof watch;
+    watch.at = TA_TRACE_AT_TAKE;
+    watch.chart = (ta_string_view){"w", 1};
+    watch.event = (ta_string_view){"ask", 3};
+    watch.sample = TA_TRACE_SAMPLE;
+    watch.detail = TA_TRACE_DETAIL_WATCHED;
+    ta_trace_policy policy;
+    ta_trace_policy_default(&policy);
+    policy.rules = &watch;
+    policy.rule_count = 1;
+    CHECK_EQUAL(ta_host_trace_set(e.host, &policy), TA_OK);
+    watch.chart = (ta_string_view){"x", 1}; /* the host keeps its own copy */
+    uint64_t w = spawn(&e, "w"), echo = spawn(&e, "echo");
+    run(&e);
+    begin_class(&e, 0, "");
+    begin_class(&e, 1, "");
+    char message[128];
+    snprintf(message, sizeof message, "{\"to\": \"" BASE "#_scxml_%llu\"}",
+             (unsigned long long)echo);
+    CHECK_EQUAL(send(&e, w, "ask", message), TA_OK);
+    run(&e);
+    CHECK(strcmp(e.log, "pong:1;") == 0);
+    CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_WATCHED); /* echo's, in segment 1 */
+    CHECK_EQUAL(begin_class(&e, 0, "pong"), TA_TRACE_DETAIL_WATCHED); /* and back */
+    world_close(&e);
+}
+
 static void test_routing_between_segments(void) {
     host_world e;
     world_open(&e, 8);
@@ -643,6 +701,7 @@ int main(void) {
     RUN(test_bad_targets);
     RUN(test_fair_segments);
     RUN(test_routing_between_segments);
+    RUN(test_class_across_segments);
     RUN(test_versions_and_migration);
     RUN(test_migration_wake_and_timeout);
     RUN(test_migration_waits_for_invocations);

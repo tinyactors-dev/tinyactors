@@ -629,6 +629,14 @@
       "value": 15
     },
     {
+      "name": "TA_TRACE_AT_START",
+      "value": 1
+    },
+    {
+      "name": "TA_TRACE_AT_TAKE",
+      "value": 2
+    },
+    {
       "name": "TA_TRACE_BYTES_MIN",
       "value": 65536
     },
@@ -673,6 +681,10 @@
       "value": 2
     },
     {
+      "name": "TA_TRACE_DROP",
+      "value": 2
+    },
+    {
       "name": "TA_TRACE_DROPPED",
       "value": 1
     },
@@ -689,6 +701,30 @@
       "value": 1
     },
     {
+      "name": "TA_TRACE_FROM_ACTOR",
+      "value": 2
+    },
+    {
+      "name": "TA_TRACE_FROM_HOST",
+      "value": 1
+    },
+    {
+      "name": "TA_TRACE_FROM_SAMPLED",
+      "value": 16
+    },
+    {
+      "name": "TA_TRACE_FROM_SPAWN",
+      "value": 8
+    },
+    {
+      "name": "TA_TRACE_FROM_TIMER",
+      "value": 4
+    },
+    {
+      "name": "TA_TRACE_FROM_UNSAMPLED",
+      "value": 32
+    },
+    {
       "name": "TA_TRACE_FULL",
       "value": 262140
     },
@@ -699,6 +735,10 @@
     {
       "name": "TA_TRACE_INVOKED",
       "value": 13
+    },
+    {
+      "name": "TA_TRACE_KEEP",
+      "value": 0
     },
     {
       "name": "TA_TRACE_KIND_COUNT",
@@ -729,8 +769,20 @@
       "value": 9
     },
     {
+      "name": "TA_TRACE_NAME_RULES",
+      "value": 16
+    },
+    {
       "name": "TA_TRACE_RAISED",
       "value": 11
+    },
+    {
+      "name": "TA_TRACE_RATIO",
+      "value": 3
+    },
+    {
+      "name": "TA_TRACE_SAMPLE",
+      "value": 1
     },
     {
       "name": "TA_TRACE_SENT",
@@ -3632,7 +3684,7 @@
           "type": "uint32_t"
         },
         {
-          "name": "pad2",
+          "name": "trace_rules",
           "type": "uint32_t"
         },
         {
@@ -3667,7 +3719,7 @@
             "tracing": 72,
             "trace_bytes": 76,
             "trace_contexts": 80,
-            "pad2": 84,
+            "trace_rules": 84,
             "trace_policy": 88,
             "trace_seed": 96
           }
@@ -3694,7 +3746,7 @@
             "tracing": 72,
             "trace_bytes": 76,
             "trace_contexts": 80,
-            "pad2": 84,
+            "trace_rules": 84,
             "trace_policy": 88,
             "trace_seed": 96
           }
@@ -3721,7 +3773,7 @@
             "tracing": 72,
             "trace_bytes": 76,
             "trace_contexts": 80,
-            "pad2": 84,
+            "trace_rules": 84,
             "trace_policy": 88,
             "trace_seed": 96
           }
@@ -3774,11 +3826,19 @@
         {
           "name": "traceparent",
           "type": "ta_string_view"
+        },
+        {
+          "name": "trace_flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 120,
+          "size": 128,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3791,11 +3851,13 @@
             "origintype": 64,
             "data": 80,
             "raw": 88,
-            "traceparent": 104
+            "traceparent": 104,
+            "trace_flags": 120,
+            "pad": 124
           }
         },
         "aarch64": {
-          "size": 120,
+          "size": 128,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3808,11 +3870,13 @@
             "origintype": 64,
             "data": 80,
             "raw": 88,
-            "traceparent": 104
+            "traceparent": 104,
+            "trace_flags": 120,
+            "pad": 124
           }
         },
         "wasm32": {
-          "size": 72,
+          "size": 80,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3825,7 +3889,9 @@
             "origintype": 40,
             "data": 48,
             "raw": 56,
-            "traceparent": 64
+            "traceparent": 64,
+            "trace_flags": 72,
+            "pad": 76
           }
         }
       }
@@ -4132,6 +4198,122 @@
             "datamodel_instance": 40,
             "invocations": 48,
             "pad": 52
+          }
+        }
+      }
+    },
+    "ta_trace_rule": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "at",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chart",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "actor",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "event",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "session",
+          "type": "uint64_t"
+        },
+        {
+          "name": "from",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sample",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sample_parts",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sample_whole",
+          "type": "uint32_t"
+        },
+        {
+          "name": "detail",
+          "type": "uint32_t"
+        },
+        {
+          "name": "per_second",
+          "type": "uint32_t"
+        },
+        {
+          "name": "burst",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 96,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "at": 4,
+            "chart": 8,
+            "actor": 24,
+            "event": 40,
+            "session": 56,
+            "from": 64,
+            "sample": 68,
+            "sample_parts": 72,
+            "sample_whole": 76,
+            "detail": 80,
+            "per_second": 84,
+            "burst": 88
+          }
+        },
+        "aarch64": {
+          "size": 96,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "at": 4,
+            "chart": 8,
+            "actor": 24,
+            "event": 40,
+            "session": 56,
+            "from": 64,
+            "sample": 68,
+            "sample_parts": 72,
+            "sample_whole": 76,
+            "detail": 80,
+            "per_second": 84,
+            "burst": 88
+          }
+        },
+        "wasm32": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "at": 4,
+            "chart": 8,
+            "actor": 16,
+            "event": 24,
+            "session": 32,
+            "from": 40,
+            "sample": 44,
+            "sample_parts": 48,
+            "sample_whole": 52,
+            "detail": 56,
+            "per_second": 60,
+            "burst": 64
           }
         }
       }
@@ -4517,7 +4699,7 @@
           "type": "uint32_t"
         },
         {
-          "name": "pad",
+          "name": "trace_flags",
           "type": "uint32_t"
         },
         {
@@ -4556,7 +4738,7 @@
             "name": 24,
             "data": 40,
             "datamodel": 48,
-            "pad": 52,
+            "trace_flags": 52,
             "sendid": 56,
             "origin": 72,
             "origintype": 88,
@@ -4575,7 +4757,7 @@
             "name": 24,
             "data": 40,
             "datamodel": 48,
-            "pad": 52,
+            "trace_flags": 52,
             "sendid": 56,
             "origin": 72,
             "origintype": 88,
@@ -4594,7 +4776,7 @@
             "name": 16,
             "data": 24,
             "datamodel": 32,
-            "pad": 36,
+            "trace_flags": 36,
             "sendid": 40,
             "origin": 48,
             "origintype": 56,

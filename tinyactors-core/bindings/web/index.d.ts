@@ -579,8 +579,13 @@ export declare class System implements SystemRef {
    * core writes no records (traceparents still flow between actors).
    */
   setTraceSink(sink: TraceSink | null, options?: TraceSinkOptions): void;
-  /** Change `detail`, `kinds` and `sample` while traces flow; open spans are kept. */
+  /** Change `detail`, `kinds`, `sample` and `rules` while traces flow; open spans are kept. */
   configureTraces(options: TraceConfiguration): void;
+  /**
+   * Trace matching steps in full, sampled whatever the ratio, and what they
+   * cause (docs/adr/0007), until stop() or `for` ms.
+   */
+  watchTraces(watch: TraceWatch): { stop(): void };
   /** Resolves once every export this system started has been posted (or failed). */
   flushTraces(): Promise<void>;
   /**
@@ -984,6 +989,58 @@ export interface TraceConfiguration {
    * whatever the decision.
    */
   sample?: number;
+  /**
+   * Decisions where something new starts (docs/adr/0007): when a trace
+   * starts and when an actor takes an event. At each point the first rule
+   * that matches decides, and what the step causes follows it. Watches come
+   * first.
+   */
+  rules?: TraceRule[];
+}
+
+/** The detail a rule or a watch gives the traces it samples. */
+export type TraceDetail = 'summary' | 'decisions' | 'full' | 'off' | { kinds: TraceKind[]; values?: boolean };
+
+export interface TraceRule {
+  /** Where it is asked (default: both). */
+  at?: 'start' | 'take' | ('start' | 'take')[];
+  /** A chart's name (a machine's id), or the machine. */
+  chart?: string | { id: string };
+  /** An actor's name; a trailing "*" makes it a prefix. */
+  actor?: string;
+  /** An event descriptor, SCXML's prefix rule ("error", "webhook.*"). */
+  event?: string;
+  session?: number | string;
+  from?: TraceOrigin | TraceOrigin[];
+  /** true: sample; false: do not; a ratio: sample that share (by trace ID). */
+  sample?: boolean | number;
+  /** The detail of what it samples (default: as sampled traces). */
+  detail?: TraceDetail;
+  /** Event data and assigned values for what it samples. */
+  values?: boolean;
+  /** Matches at most this often (per second of the system's clock). */
+  perSecond?: number;
+  burst?: number;
+}
+
+export type TraceOrigin = 'host' | 'actor' | 'timer' | 'spawn' | 'sampled' | 'unsampled';
+
+export interface TraceWatch {
+  actors?: { readonly id?: string }[];
+  sessions?: (number | string)[];
+  /** Actor names; a trailing "*" makes one a prefix. */
+  names?: string[];
+  /** Chart names (machine ids). */
+  charts?: string[];
+  /** Event descriptors. */
+  events?: string[];
+  /** Default "full". */
+  detail?: TraceDetail;
+  values?: boolean;
+  /** Milliseconds until it ends by itself (default 15 minutes; Infinity: until stop()). */
+  for?: number;
+  /** At most this many new traces a second. */
+  perSecond?: number;
 }
 
 export interface TraceSinkOptions extends TraceConfiguration {

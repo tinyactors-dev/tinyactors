@@ -87,7 +87,7 @@ typedef struct ta_system_config {
     uint32_t tracing;        /* TA_TRACING_ENABLED (0) / TA_TRACING_DISABLED */
     uint32_t trace_bytes;    /* the trace journal; 0 = 512 per event, at least 64 KiB */
     uint32_t trace_contexts; /* the pool of trace contexts; 0 = max_events */
-    uint32_t pad2;
+    uint32_t trace_rules;    /* the policy's rules a system holds; 0 = 16 (at most 255) */
     /* what is sampled and which kinds each detail class writes; copied at
      * init (NULL: ta_trace_policy_default) */
     const ta_trace_policy *trace_policy;
@@ -151,6 +151,10 @@ typedef struct ta_event_in {
     /* W3C traceparent: the macrostep this event starts runs under it (keeping
      * its sampled flag); without one, it starts a new trace */
     ta_string_view traceparent;
+    /* with a traceparent from another system of this process: the sender's
+     * context flags above the W3C byte (its detail class: ta_effect.trace.flags) */
+    uint32_t trace_flags;
+    uint32_t pad;
 } ta_event_in;
 
 TA_API ta_status ta_system_send(ta_system *system, const ta_event_in *event);
@@ -304,16 +308,51 @@ TA_API void ta_system_trace_clock(ta_system *system, uint64_t at_least);
  * kinds each detail class writes (TA_TRACE_DETAIL in trace.h). A sampled
  * trace the system starts or takes in is TA_TRACE_DETAIL_SAMPLED, an
  * unsampled one TA_TRACE_DETAIL_UNSAMPLED. */
+/* Rules decide again where something new starts (docs/adr/0007): when a
+ * trace starts (a host input, a spawn, a timer of an untraced send) and
+ * when an actor takes an external event. At each point the first rule that
+ * matches decides; what it decides travels with the context to everything
+ * the step causes. Empty views and zeros match anything. */
+enum { TA_TRACE_AT_START = 1u, TA_TRACE_AT_TAKE = 2u };
+enum { TA_TRACE_KEEP = 0, TA_TRACE_SAMPLE = 1, TA_TRACE_DROP = 2, TA_TRACE_RATIO = 3 };
+enum {
+    TA_TRACE_FROM_HOST = 1u << 0,     /* an input from the host */
+    TA_TRACE_FROM_ACTOR = 1u << 1,    /* an event an actor sent */
+    TA_TRACE_FROM_TIMER = 1u << 2,    /* a delayed send of an untraced step */
+    TA_TRACE_FROM_SPAWN = 1u << 3,    /* a root actor's bootstrap */
+    TA_TRACE_FROM_SAMPLED = 1u << 4,  /* the trace so far is sampled */
+    TA_TRACE_FROM_UNSAMPLED = 1u << 5 /* ... is not (or there is none) */
+};
+#define TA_TRACE_NAME_RULES 16u /* rules with an actor name a policy may hold */
+typedef struct ta_trace_rule {
+    uint32_t size;
+    uint32_t at;          /* TA_TRACE_AT_*: where it is asked (0: both) */
+    ta_string_view chart; /* a chart's name; a system without it never matches */
+    ta_string_view actor; /* an actor's name; a trailing '*' makes it a prefix */
+    ta_string_view event; /* an event descriptor, SCXML's prefix rule ("error", "webhook.*") */
+    uint64_t session;
+    uint32_t from;   /* TA_TRACE_FROM_*: any of them (0: anything) */
+    uint32_t sample; /* TA_TRACE_KEEP, _SAMPLE, _DROP, _RATIO (parts / whole of the trace ID) */
+    uint32_t sample_parts, sample_whole;
+    uint32_t detail;            /* the class a sampled trace gets; TA_NIL: keep its own */
+    uint32_t per_second, burst; /* matches at most this often (logical time); 0: no limit */
+} ta_trace_rule;
+
 struct ta_trace_policy {
     uint32_t size;
     uint32_t sample_parts, sample_whole;
     uint32_t kinds[TA_TRACE_DETAILS]; /* TA_TRACE_* masks, TA_TRACE_VALUES included */
+    uint32_t rule_count;              /* at most ta_system_config.trace_rules */
+    const ta_trace_rule *rules;       /* copied by ta_system_trace_set */
 };
 /* Every trace sampled; unsampled: TA_TRACE_LIFECYCLE (lifecycle records are
  * written whatever the sampling); sampled and watched: TA_TRACE_FULL. */
 TA_API void ta_trace_policy_default(ta_trace_policy *policy);
 /* Replace the policy between runs; open spans are not affected.
- * TA_ERROR_STATE when tracing is off. */
+ * TA_ERROR_STATE when tracing is off; TA_ERROR_NO_MEMORY for more rules
+ * than trace_rules, or no room for their strings (nothing changes);
+ * TA_ERROR_INVALID for a malformed rule or more than TA_TRACE_NAME_RULES
+ * with an actor name. */
 TA_API ta_status ta_system_trace_set(ta_system *system, const ta_trace_policy *policy);
 
 /* ---- hibernation (host-driven: the system never does I/O) ----------------

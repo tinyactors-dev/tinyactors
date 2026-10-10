@@ -5,12 +5,13 @@
 #include "system/system_internal.h"
 #include "trace/record.h"
 
-uint32_t ta_system_start_trace(ta_system *system, ta_string_view traceparent,
-                               ta_trace_context *value) {
+uint32_t ta_system_start_trace(ta_system *system, ta_string_view traceparent, uint32_t trace_flags,
+                               const ta_trace_ask *ask, ta_trace_context *value) {
     ta_memset(value, 0, sizeof *value);
     if (system->config.tracing == TA_TRACING_DISABLED) return TA_NIL;
     ta_step_key cause = {0, 0, 0, 0};
-    if (traceparent.length && ta_traceparent_parse(traceparent, value) == TA_OK) {
+    int parsed = traceparent.length && ta_traceparent_parse(traceparent, value) == TA_OK;
+    if (parsed) {
         cause.macrostep = value->parent; /* a host's cause: its span ID */
     } else {
         value->trace = ta_trace_generator_next(&system->generator);
@@ -20,8 +21,18 @@ uint32_t ta_system_start_trace(ta_system *system, ta_string_view traceparent,
             value->flags |= TA_TRACE_FLAG_SAMPLED;
     }
     system->stats_traces_started++;
+    int sampled = (value->flags & TA_TRACE_FLAG_SAMPLED) != 0;
+    if (sampled) /* the sender's class when another system of this process sent it */
+        value->flags |= (parsed && TA_TRACE_DETAIL(trace_flags) ? TA_TRACE_DETAIL(trace_flags)
+                                                                : TA_TRACE_DETAIL_SAMPLED)
+                        << TA_TRACE_DETAIL_SHIFT;
+    if (ask && (system->rule_points & TA_TRACE_AT_START)) {
+        ta_trace_ask start = *ask;
+        start.at = TA_TRACE_AT_START;
+        start.from |= sampled ? TA_TRACE_FROM_SAMPLED : TA_TRACE_FROM_UNSAMPLED;
+        ta_system_trace_rules(system, &start, value->trace, &value->flags);
+    }
     if (!(value->flags & TA_TRACE_FLAG_SAMPLED)) return TA_NIL; /* unsampled: no context */
-    value->flags |= (uint32_t)TA_TRACE_DETAIL_SAMPLED << TA_TRACE_DETAIL_SHIFT;
     system->stats_traces_sampled++;
     return ta_trace_context_new(&system->core, value->trace, value->flags, cause);
 }
@@ -113,11 +124,16 @@ void ta_system_trace_policy_apply(ta_system *system) {
 ta_status ta_system_trace_set(ta_system *system, const ta_trace_policy *policy) {
     if (system->in_call) return TA_ERROR_STATE;
     if (system->config.tracing == TA_TRACING_DISABLED) return TA_ERROR_STATE;
-    ta_trace_policy_default(&system->policy);
-    ta_memcpy(&system->policy, policy,
-              policy->size && policy->size < sizeof system->policy ? policy->size
-                                                                   : sizeof system->policy);
+    ta_trace_policy given;
+    ta_trace_policy_default(&given);
+    ta_memcpy(&given, policy,
+              policy->size && policy->size < sizeof given ? policy->size : sizeof given);
+    ta_status status = ta_system_trace_rules_set(system, &given); /* whole or nothing */
+    if (status != TA_OK) return status;
+    system->policy = given;
     system->policy.size = sizeof system->policy;
+    system->policy.rules = (const ta_trace_rule *)0; /* compiled into the system */
+    system->policy.rule_count = 0;
     ta_system_trace_policy_apply(system);
     return TA_OK;
 }

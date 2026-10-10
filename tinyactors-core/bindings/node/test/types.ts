@@ -218,4 +218,7 @@ export function tracing() {
   const bytes: Uint8Array = metricsToOTLP(snapshot, { resource: { 'service.name': 'x' } });
   createSystem({ telemetry: { metricsEndpoint: '', metricsInterval: 0, metrics: () => [] } });
   void [first?.kind, bytes];
+  system.configureTraces({ rules: [{ chart: 'pong', at: 'take', detail: 'off' }, { event: 'error.*', sample: true, perSecond: 5 }] });
+  const watch = system.watchTraces({ names: ['issue/*'], detail: { kinds: ['macrostepBegin'], values: true }, for: Infinity });
+  watch.stop();
 }

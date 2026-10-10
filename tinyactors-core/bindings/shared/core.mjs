@@ -1121,6 +1121,59 @@ export function createRuntime({ native, platform }) {
   const EXPORT_MAX_BYTES = 16 << 20; /* waiting beyond this is dropped */
   const FAILURE_LOG_MS = 10000;
   const METRICS_INTERVAL_MS = 60000; /* OTEL_METRIC_EXPORT_INTERVAL's default */
+  /* trace policy (docs/adr/0007): classes, and rules as core takes them */
+  const DETAILS = 8; /* TA_TRACE_DETAILS: 0 unsampled, 1 sampled, 2..7 for rules and watches */
+  const RULE_AT = { start: 1, take: 2 }; /* TA_TRACE_AT_* */
+  const RULE_FROM = { host: 1, actor: 2, timer: 4, spawn: 8, sampled: 16, unsampled: 32 }; /* TA_TRACE_FROM_* */
+  const RULE_KEEP = 0, RULE_SAMPLE = 1, RULE_DROP = 2, RULE_RATIO = 3; /* TA_TRACE_KEEP ... */
+  const WATCH_MS = 15 * 60 * 1000; /* a watch ends by itself after this, unless told otherwise */
+  const LIFECYCLE_MASK = kindsMask(LIFECYCLE);
+  /* the kinds of a rule's or a watch's detail: "summary" | "decisions" | "full" | "off" | { kinds, values } */
+  function detailKinds(detail, values) {
+    let kinds;
+    if (detail === 'off') kinds = 0;
+    else if (detail === undefined) kinds = DETAIL.full;
+    else if (typeof detail === 'string') {
+      kinds = DETAIL[detail];
+      if (kinds === undefined) throw new TypeError(`detail: "summary", "decisions", "full" or "off", not ${detail}`);
+    } else if (detail && Array.isArray(detail.kinds)) {
+      kinds = kindsMask(detail.kinds);
+      values = values || detail.values;
+    } else throw new TypeError('detail: "summary", "decisions", "full", "off" or { kinds, values }');
+    return (values ? kinds | TRACE_VALUES : kinds) >>> 0;
+  }
+  const bitsOf = (names, table, what) =>
+    [].concat(names === undefined ? [] : names).reduce((bits, name) => {
+      if (!(name in table)) throw new TypeError(`${what}: one of ${Object.keys(table).join(', ')}, not ${name}`);
+      return bits | table[name];
+    }, 0);
+  /* a rule as traceConfigure takes it; `classOf` gives a detail its class */
+  function nativeRule(rule, classOf) {
+    if (rule === null || typeof rule !== 'object') throw new TypeError('a trace rule is an object');
+    let sample = RULE_KEEP, parts = 0, whole = 0;
+    if (rule.sample === true) sample = RULE_SAMPLE;
+    else if (rule.sample === false) sample = RULE_DROP;
+    else if (rule.sample !== undefined) {
+      sample = RULE_RATIO;
+      parts = sampleParts(rule.sample);
+      whole = SAMPLE_WHOLE;
+    }
+    const chart = rule.chart && typeof rule.chart === 'object' ? rule.chart.id : rule.chart;
+    return {
+      at: bitsOf(rule.at, RULE_AT, 'at'),
+      chart: chart === undefined ? '' : String(chart),
+      actor: rule.actor === undefined ? '' : String(rule.actor),
+      event: rule.event === undefined ? '' : String(rule.event),
+      session: rule.session === undefined ? '0' : String(rule.session),
+      from: bitsOf(rule.from, RULE_FROM, 'from'),
+      sample,
+      parts,
+      whole,
+      detail: rule.detail === undefined ? -1 : classOf(detailKinds(rule.detail, rule.values)),
+      perSecond: rule.perSecond || 0,
+      burst: rule.burst || 0,
+    };
+  }
   const METRIC_KINDS = { sum: 1, gauge: 2, histogram: 3 }; /* TA_OTLP_METRIC_* */
   const METRIC_KIND_NAMES = ['', 'sum', 'gauge', 'histogram'];
   /* tinyactors.run.duration: how long one run blocked the host's loop, in seconds */
@@ -1440,6 +1493,7 @@ export function createRuntime({ native, platform }) {
       this._exporter = !telemetry.disabled && (telemetry.endpoint || telemetry.tracesEndpoint || telemetry.metricsEndpoint) ? new Exporter(telemetry) : null;
       this._traceSink = null;
       this._traceOptions = {};
+      this._watches = []; /* watchTraces: their rules come first */
       this._traceApply();
       if (traces.sink) this.setTraceSink(traces.sink, traces);
       /* metrics (docs/adr/0007): core's counts, pulled; the runs' durations here */
@@ -1532,7 +1586,7 @@ export function createRuntime({ native, platform }) {
     }
 
     /** Change detail, kinds and sample while traces flow; open spans are kept. */
-    configureTraces({ detail, kinds, sample } = {}) {
+    configureTraces({ detail, kinds, sample, rules } = {}) {
       if (this._stopped) throw new Error('the system was stopped');
       const next = { ...this._traceOptions };
       if (detail !== undefined || kinds !== undefined) {
@@ -1540,8 +1594,56 @@ export function createRuntime({ native, platform }) {
         next.kinds = kinds;
       }
       if (sample !== undefined) next.sample = sample;
+      if (rules !== undefined) next.rules = rules;
+      const previous = this._traceOptions;
       this._traceOptions = next;
-      this._traceApply();
+      try {
+        this._traceApply();
+      } catch (e) {
+        this._traceOptions = previous;
+        this._traceApply();
+        throw e;
+      }
+    }
+
+    /**
+     * Trace matching steps in full, sampled whatever the ratio, and what they
+     * cause (docs/adr/0007): steps of these actors, sessions, actor names
+     * (a trailing "*" a prefix), charts, or events. Ends after `for` ms (15
+     * minutes; Infinity: until stop()). At most `perSecond` new traces a second.
+     */
+    watchTraces({ actors = [], sessions = [], names = [], charts = [], events = [], detail = 'full', values = false, for: ms = WATCH_MS, perSecond } = {}) {
+      if (this._stopped) throw new Error('the system was stopped');
+      const spec = { detail, values };
+      const watch = (match) => ({ ...match, at: ['start', 'take'], sample: true, detail: spec.detail, values: spec.values, perSecond });
+      const rules = [
+        ...actors.map((a) => watch({ session: a && a._session !== undefined ? a._session : a })),
+        ...sessions.map((session) => watch({ session })),
+        ...names.map((actor) => watch({ actor })),
+        ...charts.map((chart) => watch({ chart })),
+        ...events.map((event) => watch({ event })),
+      ];
+      if (!rules.length) throw new TypeError('watchTraces: name actors, sessions, names, charts or events');
+      const entry = { rules, timer: null };
+      this._watches.push(entry);
+      try {
+        this._traceApply();
+      } catch (e) {
+        this._watches.splice(this._watches.indexOf(entry), 1);
+        this._traceApply();
+        throw e;
+      }
+      const handle = {
+        stop: () => {
+          const at = this._watches.indexOf(entry);
+          if (at < 0) return;
+          this._watches.splice(at, 1);
+          if (entry.timer !== null) platform.clearRepeat(entry.timer);
+          if (!this._stopped) this._traceApply();
+        },
+      };
+      if (ms !== Infinity && ms > 0) entry.timer = platform.repeat(() => handle.stop(), ms);
+      return handle;
     }
 
     /** Resolves once every trace export this system started has finished. */
@@ -1559,12 +1661,27 @@ export function createRuntime({ native, platform }) {
       if (t.values) flags |= OTLP_VALUES;
       if (t.logs === false) flags |= OTLP_NO_LOGS;
       const resource = this._resource();
+      /* classes: 0 unsampled (lifecycle only), 1 sampled, 2..7 what rules and watches ask for */
+      const kinds = traceKinds(t);
+      const classes = [kinds & LIFECYCLE_MASK, kinds];
+      const classOf = (mask) => {
+        let at = classes.indexOf(mask, 2);
+        if (at < 0) {
+          if (classes.length === DETAILS) throw new RangeError('traces: rules and watches ask for more than 6 different details');
+          at = classes.push(mask) - 1;
+        }
+        return at;
+      };
+      const rules = [...this._watches.flatMap((w) => w.rules), ...(t.rules || [])].map((rule) => nativeRule(rule, classOf));
+      if (classes.some((mask) => mask & TRACE_VALUES)) flags |= OTLP_VALUES;
+      while (classes.length < DETAILS) classes.push(0);
       /* with nowhere for records to go core writes none; contexts still flow (traceparents) */
       native.traceConfigure(this._host, {
         enabled: !!(this._traceSink || (exporter && (exporter.urls.traces || exporter.urls.logs))),
-        kinds: traceKinds(t),
+        classes: classes.map((mask) => mask >>> 0),
         sampleParts: sampleParts(sample),
         sampleWhole: SAMPLE_WHOLE,
+        rules,
         flags,
         valueLimit: t.valueLimit || 0,
         resource: Object.entries(resource).map(([k, v]) => [String(k), String(v)]),

@@ -171,8 +171,10 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
             if (event == TA_NIL) {
                 actor->state = TA_ACTOR_IDLE;
                 stop = 1;
-            } else if (ta_core_deliver(core, instance, event) != TA_OK) {
-                ta_event_release(core, event);
+            } else {
+                if (system->rule_points & TA_TRACE_AT_TAKE) /* the take rules decide again */
+                    ta_system_trace_take(system, index, event);
+                if (ta_core_deliver(core, instance, event) != TA_OK) ta_event_release(core, event);
             }
             break;
         }
@@ -331,6 +333,12 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
     ta_string_view traceparent = {(const char *)0, 0};
     if (event_in->size >= offsetof(ta_event_in, traceparent) + sizeof event_in->traceparent)
         traceparent = event_in->traceparent;
+    uint32_t trace_flags =
+        event_in->size >= offsetof(ta_event_in, trace_flags) + sizeof event_in->trace_flags
+            ? event_in->trace_flags
+            : 0;
+    ta_trace_ask ask = {TA_TRACE_AT_START, TA_TRACE_FROM_HOST, index, ta_actor_chart(system, actor),
+                        TA_NIL};
     if ((event_in->flags & TA_EVENT_IN_ERROR_COMMUNICATION) &&
         actor->state == TA_ACTOR_HIBERNATED) {
         /* parked in the mailbox; moved to the internal queue when woken */
@@ -341,7 +349,8 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
         event->flags = TA_EVENT_FLAG_RAISE_ERROR_COMMUNICATION;
         event->sendid = opt_str_plain(core, event_in->sendid);
         ta_trace_context value;
-        event->trace = ta_system_start_trace(system, traceparent, &value);
+        ask.event = event_index;
+        event->trace = ta_system_start_trace(system, traceparent, trace_flags, &ask, &value);
         release_payload(system, ta_actor_chart(system, actor), event_in->data);
         ta_system_mailbox_push(system, index, event_index);
         return TA_OK;
@@ -353,7 +362,9 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
                                                  "error.communication", sid);
         if (raised != TA_NIL && ta_event_at(core, raised)->trace == TA_NIL) {
             ta_trace_context value;
-            ta_event_at(core, raised)->trace = ta_system_start_trace(system, traceparent, &value);
+            ask.event = raised;
+            ta_event_at(core, raised)->trace =
+                ta_system_start_trace(system, traceparent, trace_flags, &ask, &value);
         }
         ta_shared_string_release(core, sid);
         release_payload(system, ta_actor_chart(system, actor), event_in->data);
@@ -411,7 +422,8 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
         return TA_ERROR_NO_MEMORY;
     }
     ta_trace_context value;
-    event->trace = ta_system_start_trace(system, traceparent, &value);
+    ask.event = event_index;
+    event->trace = ta_system_start_trace(system, traceparent, trace_flags, &ask, &value);
     ta_system_mailbox_push(system, index, event_index);
     return TA_OK;
 }

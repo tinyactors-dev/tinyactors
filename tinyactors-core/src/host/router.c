@@ -47,7 +47,7 @@ typedef struct peer {
 } peer;
 
 typedef struct route { /* configured: system id -> peer */
-    char *system; /* `length` bytes */
+    char *system;      /* `length` bytes */
     uint32_t length, peer;
 } route;
 
@@ -229,7 +229,6 @@ static int allowed(ta_host *host, uint32_t handle, const peer *p, const ta_addre
     return 0;
 }
 
-
 /* ---- effects ------------------------------------------------------------------------ */
 
 static void effect_message_id(ta_host *host, ta_string_view msgid) {
@@ -242,16 +241,17 @@ static void effect_message_id(ta_host *host, ta_string_view msgid) {
 /* an envelope for the transport (payload moved in on success) */
 static ta_status emit_peer(ta_host *host, uint32_t handle, const ta_envelope *envelope) {
     if (!host_effects_reserve(host, 1,
-                         (size_t)envelope->target.length + envelope->name.length +
-                             envelope->sendid.length + envelope->origin.length +
-                             envelope->msgid.length))
+                              (size_t)envelope->target.length + envelope->name.length +
+                                  envelope->sendid.length + envelope->origin.length +
+                                  envelope->msgid.length))
         return TA_ERROR_NO_MEMORY;
     ta_host_effect *x = host_effect_new(host, TA_HOST_EFFECT_PEER, TA_NIL);
     x->peer = handle;
     x->flags = envelope->hops;
     if (ta_traceparent_parse(envelope->traceparent, &x->trace) != TA_OK) /* none, or not one */
         ta_memset(&x->trace, 0, sizeof x->trace);
-    host_effect_strings_set(host, envelope->target, envelope->name, envelope->sendid, envelope->origin);
+    host_effect_strings_set(host, envelope->target, envelope->name, envelope->sendid,
+                            envelope->origin);
     effect_message_id(host, envelope->msgid);
     if (envelope->data &&
         envelope->datamodel <
@@ -528,6 +528,7 @@ static ta_status local_deliver(ta_host *host, uint64_t session, const ta_envelop
             : (ta_string_view){"http://www.w3.org/TR/scxml/#SCXMLEventProcessor", 47};
     event.data = envelope->data;
     event.traceparent = envelope->traceparent; /* the trace crosses systems unbroken */
+    event.trace_flags = envelope->trace_flags; /* and keeps its detail class in this process */
     ta_status status = host_send_to(host, si, actor, &event);
     if (status == TA_ERROR_NO_MEMORY) return status;
     if (status == TA_OK) *reason = 0;
@@ -539,11 +540,11 @@ static ta_status local_deliver(ta_host *host, uint64_t session, const ta_envelop
 #define VIEW(literal) {literal, sizeof literal - 1}
 
 ta_string_view ta_host_route_reason(uint32_t reason) {
-    static const ta_string_view names[] = {VIEW("ok"),      VIEW("unknown-target"),
-                                           VIEW("unreachable"), VIEW("denied"),
-                                           VIEW("expired"), VIEW("hops"),
-                                           VIEW("malformed")};
-    return reason < sizeof names / sizeof names[0] ? names[reason] : names[TA_ROUTE_ERROR_UNREACHABLE];
+    static const ta_string_view names[] = {
+        VIEW("ok"),      VIEW("unknown-target"), VIEW("unreachable"), VIEW("denied"),
+        VIEW("expired"), VIEW("hops"),           VIEW("malformed")};
+    return reason < sizeof names / sizeof names[0] ? names[reason]
+                                                   : names[TA_ROUTE_ERROR_UNREACHABLE];
 }
 
 void ta_host_error_event(ta_string_view sendid, ta_event_in *event) {
@@ -694,6 +695,7 @@ ta_status ta_host_message_init(ta_host *host, const ta_effect *effect, uint64_t 
     envelope->origintype = (ta_string_view){"http://www.w3.org/TR/scxml/#SCXMLEventProcessor", 47};
     envelope->data = effect->payload;
     envelope->datamodel = effect->datamodel;
+    envelope->trace_flags = effect->trace.flags & ~(uint32_t)0xFFu;
     envelope->traceparent.pointer = message->traceparent;
     envelope->traceparent.length =
         ta_traceparent_format(&effect->trace, message->traceparent, TA_TRACEPARENT_LENGTH);
@@ -847,7 +849,7 @@ ta_status ta_host_peer_add(ta_host *host, const ta_peer_config *config, uint32_t
     ta_status status = reach_build(host, config->reach, config->reach_count, &built);
     if (status != TA_OK) return status;
     if (!host_grow(host, (void **)&router->peers, &router->peer_capacity, router->peer_count + 1,
-              sizeof(peer))) {
+                   sizeof(peer))) {
         reach_free(host, &built);
         return TA_ERROR_NO_MEMORY;
     }
@@ -945,7 +947,7 @@ ta_status ta_host_route(ta_host *host, ta_string_view system, uint32_t handle) {
         }
     if (!handle) return TA_OK;
     if (!host_grow(host, (void **)&router->routes, &router->route_capacity, router->route_count + 1,
-              sizeof(route)))
+                   sizeof(route)))
         return TA_ERROR_NO_MEMORY;
     route *x = &router->routes[router->route_count];
     x->system = string_copy(host, system);
@@ -962,8 +964,8 @@ ta_status ta_host_export(ta_host *host, uint32_t handle, ta_string_view name,
     if (handle && !peer_of(host, handle)) return TA_ERROR_STALE;
     struct ta_router *router = router_of(host);
     if (!router) return TA_ERROR_NO_MEMORY;
-    if (!host_grow(host, (void **)&router->exports, &router->export_capacity, router->export_count + 1,
-              sizeof(exported)))
+    if (!host_grow(host, (void **)&router->exports, &router->export_capacity,
+                   router->export_count + 1, sizeof(exported)))
         return TA_ERROR_NO_MEMORY;
     exported *x = &router->exports[router->export_count];
     x->peer = handle;
@@ -1046,8 +1048,8 @@ ta_status ta_host_deliver(ta_host *host, uint32_t from, const ta_envelope *envel
     }
     if (handled == TA_ROUTE_REFUSED) {
         int local = 0;
-        status = from ? emit_error(host, from, envelope->origin, envelope->msgid,
-                                   envelope->sendid, reason)
+        status = from ? emit_error(host, from, envelope->origin, envelope->msgid, envelope->sendid,
+                                   reason)
                       : local_error(host, envelope->origin, envelope->sendid, &local);
         if (status != TA_OK) return status;
     }
@@ -1130,7 +1132,7 @@ size_t ta_router_snapshot(const ta_host *host, unsigned char *out, size_t capaci
         ta_memcpy(out, &n, 4);
         for (uint32_t i = 0; i < n; i++)
             ta_memcpy(out + 4 + (size_t)i * 8,
-                   &router->seen[(router->seen_head + i) % DEDUPLICATION_WINDOW], 8);
+                      &router->seen[(router->seen_head + i) % DEDUPLICATION_WINDOW], 8);
     }
     return need;
 }
