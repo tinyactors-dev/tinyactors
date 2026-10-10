@@ -3,10 +3,12 @@
 **Status:** Sketch (2026-10-10).
 **Touches:** tinyactors-core: `bindings/shared/core.mjs` (rewritten),
 `bindings/shared/binding.c` (narrowed and deepened),
-`bindings/shared/ecmascript.mjs`, `bindings/node`, `bindings/web`,
-`bindings/surface.json`, `examples/`, `tests/w3c`; `src/system` (errors
-for failed external invokes, snapshots with external invokes), `src/host`
-(run loop policy, containers), `src/trace` (rule parsing by name).
+`bindings/shared/ecmascript.mjs` (proposed for removal), `bindings/node`,
+`bindings/web`, `bindings/surface.json`, `examples/`, `tests/w3c`;
+`src/compile` (the parse as a tree, raw markup in the writer),
+`src/system` (failed external invokes, snapshots with external invokes,
+actors that stepped, payloads between datamodels), `src/host` (run loop
+policy, containers), `src/trace` (rule parsing by name).
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 
 ## Summary
@@ -25,70 +27,65 @@ uses through the 0.1 API.
 The proposal:
 
 1. **The core and SCXML semantics are the source of truth.** Every name
-   in the JS API is SCXML's or the core's, with the same meaning. Nothing
-   is emulated, and the binding invents no events, fields or mechanisms.
-2. **Charts are SCXML, in two syntaxes.** XML, and a chart object: the
-   same elements and attributes as plain JS objects, because JavaScript
-   developers do not read XML. The two are lossless in both directions;
-   the W3C suite run through both proves it (section 3).
-3. **The application reaches charts only through SCXML's extension
-   points:** I/O processors for `<send type>` and invokers for
-   `<invoke type>`, registered on the system (section 5). There are no
-   application functions in a chart's scope: conditions and assignments
-   are ECMAScript over the chart's own data, so the JS and C datamodels
-   keep the same semantics.
-4. **Put the deep layer in C, inside the binding.** `binding.c` gets a
-   `System` that owns the host block, the datamodel, the pump, the timer,
-   and notification of actors that stepped. JavaScript does not drive the
-   run loop.
-5. **Move what is free of JavaScript further down,** into `src/host` and
-   `src/trace`, and bind `address.h` and `frame.h` instead of keeping JS
-   twins.
+   in the JS API is SCXML's or the core's, with the same meaning, or a
+   plain name for a composite the proposal defines. Nothing is emulated,
+   and the binding invents no events, fields or mechanisms.
+2. **The datamodel is chosen per chart,** through SCXML's `datamodel`
+   attribute: a native JS datamodel whose values are JS values and whose
+   expressions are JS functions, for trusted application code at full
+   speed; the quickjs ECMAScript datamodel for untrusted code; staticjs
+   when it is ready (section 3).
+3. **Charts are SCXML, written as XML or as JS objects,** because
+   JavaScript developers do not read XML. Concise helpers build the
+   objects; `c.expr(fn)` marks code. The W3C suite run through both forms
+   proves they mean the same (section 4).
+4. **Expose SCXML's extension points:** I/O processors for `<send type>`
+   and invokers for `<invoke type>`, registered on the system (section 6).
+5. **Put the deep layer in C, inside the binding,** and move what is free
+   of JavaScript further down (sections 8 and 9).
 6. **Keep JavaScript for what Node-API is bad at:** promises and streams
-   (stores, transports, I/O processors, invokers, the OTLP exporter), plus
-   the ECMAScript evaluator.
+   (stores, transports, I/O processors, invokers, the OTLP exporter).
 
 ## 1. Whom it serves, who pays
 
 - **Application developer, first.** Asks: what does my chart do? Why did
   this condition fail? How does my chart reach the outside world? Why is
-  a send slow with many subscribers? Gets: charts as JS objects that mean
-  exactly what the SCXML specification says, convertible to and from XML;
-  the outside world through I/O processors and invokers, the mechanism
-  SCXML defines for it; a send whose cost does not grow with the number
-  of observed actors. Loses: xstate's config language, application
-  functions inside charts, xstate's snapshot (section 6).
+  a send slow with many subscribers? Gets: charts in JS whose code is real
+  JS (type-checked, closures and imports work) when the chart is trusted;
+  a sandbox when it is not; the outside world through I/O processors and
+  invokers; a send whose cost does not grow with the number of observed
+  actors. Loses: xstate's config language and snapshot (section 7).
 - **Granary, the reference application** (`docs/roles.md`), gets back the
   extension point it builds on: its I/O processors (the GitHub outbox,
   `src/lib/server/io/github.ts:42`; catch-up,
   `src/lib/server/github/catchup.ts:106`; the processors in
-  `src/lib/ops/io/`) reply to the sender's address, which section 5
-  provides as `origin`. It types an `Invoker` field
-  (`src/lib/ops/feature.ts:65`) but registers none.
-- **Binding author.** Asks: what must I write myself? After this: the
-  datamodel's value handling, the codec, timers, and the I/O processor and
-  invoker interfaces in the language's terms. The run loop policy,
-  containers and trace names are C; the chart object's mapping is a fixed
-  table any binding can copy.
+  `src/lib/ops/io/`). They reply to the sender, use an abort signal and
+  carry the trace context, which section 6 provides. It types an `Invoker`
+  field (`src/lib/ops/feature.ts:65`) but registers none.
+- **Binding author.** Asks: what must I write myself? After this: a native
+  datamodel for the language's own values, the codec, timers, and the I/O
+  processor and invoker interfaces. Parsing SCXML into a tree, the run
+  loop policy, containers, trace names and payload conversion between
+  datamodels are C.
 - **Maintainers.** One implementation each of addresses, frames, the run
-  loop and trace presets. One datamodel vtable instead of two, with the
-  same semantics as the C datamodel. A JS layer readable in one sitting.
+  loop and trace presets. No ECMAScript evaluator in JavaScript beside the
+  C one. A JS layer readable in one sitting.
 - **Capacity planner.** The JS binding's per-event cost becomes a measured
-  number (section 9).
+  number (section 10).
 
 **Who pays.**
 
-- *C embedder:* nothing per event or per actor. The core changes (section
-  7) widen an existing inbound flag and refuse one more snapshot case.
-- *Maintainers:* a switchover commit that replaces `core.mjs` and migrates
-  every test and both examples, and a few hundred lines of C with tests.
-- *Application code:* the examples are rewritten as chart objects plus I/O
-  processors.
+- *C embedder:* the core changes (section 8) cost nothing per event when
+  unused, except recording which actors stepped: one bounded list per
+  run, an append per macrostep. A long-lived external invoke blocks host
+  snapshots for as long as it runs.
+- *Maintainers:* a few hundred lines of C with tests; a switchover of
+  `core.mjs` in several commits; every test and both examples migrated.
+- *Application code:* the examples are rewritten with the helpers.
 
-**Out of scope.** Replacing `ecmascript.mjs` with quickjs. The link
-protocol stays in JavaScript (section 8). Dynamic children, and invoking a
-chart of another segment (`src` resolves within the invoker's image),
-which would both need core features.
+**Out of scope.** The link protocol stays in JavaScript (section 9).
+Dynamic children, and invoking a chart of another segment (`src` resolves
+within the invoker's image), which would both need core features.
 
 ## 2. What is there today
 
@@ -97,218 +94,305 @@ which would both need core features.
 | xstate emulation | ~700 | `Compiler` (251–629); a tokenizer that splits function *source text* so each `assign` property becomes an `<assign>` (117–249); target resolution; `after` lowering; `stateValue`/`flattenValue`; `linkMachine`, link status as a compiled xstate machine |
 | Duplicates C | ~450 | addresses (1034–1089, "the JS twin of address.h"); `FrameDecoder` (3412–3498, `frame.h`); wire and base64 (947–1009, also `WIRE_JS` in `datamodel_ecmascript.c`); trace kind order and presets (1091–1207, `trace.h`); segment and version maps mirroring `ta_host_chart` (2208–2297); `REASONS` (`ta_host_route_reason`) |
 | Free of JS, not in C | ~450 | link hello/caps/reach/resume (2803–3168); snapshot and export containers (1751–1857, 1970–2049); detail-class allocation; invoke `src` lookup |
-| Binding work | ~1900 | `System` glue, hibernation I/O, OTLP exporter, store link, tagged values, transports |
+| Binding work | ~1900 | `System` glue, hibernation I/O, OTLP exporter, store link (3170–3410), tagged values, transports |
 
-`binding.c` carries the runtime half of the emulation: a second datamodel
-vtable that renames `done.invoke.*` to `xstate.done.actor.*`, calls
-`Object.assign` through Node-API once per assigned property, allocates an
-`{context, event, input}` and a `$` object per evaluation, and parses the
-session serial back out of the `sessionid` string. It reads
-`_ioprocessors` (`binding.c:1406`) but offers no way to register an I/O
-processor, and does not handle `TA_EFFECT_INVOKE` or `TA_EFFECT_UNINVOKE`.
+`binding.c` holds two datamodel vtables. The "xstate" one keeps payloads
+as Node-API references and calls one JS function per expression, which is
+the right shape, but renames `done.invoke.*` to `xstate.done.actor.*`,
+calls `Object.assign` through Node-API once per assigned property,
+allocates an `{context, event, input}` and a `$` object per evaluation,
+and parses the session serial out of the `sessionid` string. The
+"ecmascript" one forwards to `ecmascript.mjs`, an ECMAScript evaluator in
+JavaScript (`new Function` in the application's realm). The binding reads
+`_ioprocessors` (`binding.c:1406`) but cannot register an I/O processor,
+and does not handle `TA_EFFECT_INVOKE` or `TA_EFFECT_UNINVOKE`.
 
-## 3. Charts: SCXML as JS objects
+## 3. Datamodels
 
-The chart object is SCXML's document tree as JavaScript values, under a
-mechanical mapping:
+SCXML leaves the set of datamodels to the platform (the `datamodel`
+attribute); without it the compiler uses the null datamodel
+(`scxml.c:1020`).
 
-- **One object per element:** `tag` is the element's name, `children`
-  its child elements. Neither is an SCXML attribute name, so they cannot
-  clash with one; the element name cannot be a key itself, because
-  `datamodel`, `initial` and `content` are both elements and attributes.
-- **Attributes are the other keys,** under SCXML's names and with SCXML's
-  values, every one of them, including the expression forms (`eventexpr`,
-  `targetexpr`, `typeexpr`, `delayexpr`, `srcexpr`, `sendidexpr`,
-  `idlocation`, `namelist`) and `binding`, `autoforward`, `type`. A value
-  is the attribute's text: expressions are ECMAScript text, as in XML.
-  Text content (a `<script>`, a `<content>`, a `<data>`) is `text`; XML
-  content (elements of another namespace in a `<content>` or `<data>`,
-  which the datamodel parses as a DOM) is `xml`, kept as markup.
-- **Children are arrays in document order.** Where SCXML's semantics
-  depend on order (states, transitions, executable content, several
-  `<onentry>` blocks), the array keeps it.
-- **Everything SCXML has:** `<scxml>`, `<state>`, `<parallel>`,
-  `<final>`, `<history>` with its default `<transition>`, `<initial>`,
-  `<transition>`, `<onentry>`, `<onexit>`, `<datamodel>` and `<data>`
-  (with `expr`, `src` or content) on any state, `<invoke>` (several per
-  state) with `<param>`, `<content>` and `<finalize>`, `<donedata>`, and
-  the executable content `<raise>`, `<send>`, `<cancel>`, `<assign>`,
-  `<log>`, `<script>`, `<if>`/`<elseif>`/`<else>` and `<foreach>`.
+| `datamodel` | Values | Expressions | For |
+|---|---|---|---|
+| a native JS datamodel (name to settle, e.g. `"tinyactors:js"`) | JS values held as Node-API references; payloads are references | JS functions, called directly | trusted application code |
+| `"ecmascript"` | quickjs values (`src/datamodel_ecmascript`, in the addon and in the wasm module, or a quickjs-wasi build) | ECMAScript text | untrusted code; the W3C suite |
+| staticjs, later | staticjs values | staticjs text | pure, total guards |
 
-The compiler (object → SCXML through `ta_xml_writer_*`) and the reader
-(SCXML → object, from the compiler's parse) follow these rules alone;
-TypeScript types describe each element's attributes and children. The
-door:
+**The native JS datamodel** is the "xstate" vtable with the xstate parts
+removed. A function is called with one argument: an object holding the
+session's variables and `_event`, `_sessionid`, `_name`, `_ioprocessors`
+and `In`. An expression's value is the function's result; a `<script>`
+is a function called for its effects; `<assign location expr>` writes the
+location with the expression's value. Events keep their core names.
+Functions are closures: they can read module constants and call
+application code, because they run in the application's realm. A chart of
+this datamodel cannot be serialized as text: `toSCXML()` shows each
+function's source for reading only. Hibernation and snapshots store values
+through the codec and refer to charts by name and version, as today.
+
+**`ecmascript.mjs` has no role left** (proposed): it evaluates text in the
+application's realm, so it is neither trusted functions nor a sandbox.
+The W3C suite runs under quickjs instead.
+
+**Events between datamodels.** Within a system, a payload is a handle of
+the sending chart's datamodel; the receiving datamodel gets it through
+the event view, which carries no datamodel index (`event_pool.c:157`), so
+a quickjs chart would read a native JS handle as its own. The core
+converts at that boundary with the datamodels' `to_wire`/`from_wire`
+(neutral JSON, `datamodel.h:171–183`), which it uses today only between
+systems (section 8).
+
+## 4. Charts in JS
+
+### The chart object
+
+The chart object is SCXML's document tree as JS values:
+
+- **One object per element:** `tag` is the element's qualified name
+  (`'state'`, or `'conf:pass'` for a foreign element), `children` its
+  child elements in document order. Neither is an SCXML attribute name;
+  the element name cannot be a key itself, because `datamodel`, `initial`
+  and `content` are both elements and attributes.
+- **Attributes are the other keys,** under their qualified names
+  (`xmlns:conf` included), with string values; any other value is
+  refused. Under the native JS datamodel, an expression attribute may hold
+  a `c.expr` function instead.
+- **Text** (a `<script>`, a `<content>`, a `<data>`) is `text`; mixed
+  content is a `children` list of strings and elements. An inline child
+  chart (`<invoke><content><scxml>…`) is an `scxml` object in
+  `children`.
+- **Comments and the XML declaration are dropped:** the object keeps the
+  document's meaning, not its formatting.
+
+Two C additions make this a layer of its own rather than JS code
+duplicating C:
+
+- **Reading.** `ta_compile_parse` (new, `src/compile`) returns the
+  compiler's parse as a tree (namespaces resolved, attributes, text and
+  children in order). The binding turns it into objects. Today the parser
+  is internal (`src/compile/xml.h`).
+- **Writing.** Objects go through `ta_xml_writer_*`, which gains a call
+  for raw markup and an option not to indent inside `<content>` and
+  `<data>`, where whitespace is part of the value.
+
+Diagnostics point at lines of the generated XML (`compile.h:86–91`); the
+binding records which object each written line came from and reports the
+object's path.
+
+### Helpers
+
+One namespace, one function per SCXML element, named after the element
+(`s.if` and `s.else` are valid property names, though not importable
+names). Each helper takes its element's identifying attributes as
+positional strings, then an optional attributes object, then children.
+Strings are positional, a plain object is attributes, an object with
+`tag` is a child. Every positional also works as a named attribute, so
+the expression forms (`eventexpr`, `targetexpr`, …) stay available.
+
+| Helper | Positional |
+|---|---|
+| `scxml` | `name` |
+| `state`, `parallel`, `final`, `history`, `invoke` | `id` |
+| `transition` | `event`, `target` (eventless: `null` event) |
+| `data`, `param` | `id` / `name`, `expr` |
+| `assign` | `location`, `expr` |
+| `raise`, `send` | `event` |
+| `cancel` | `sendid` |
+| `log` | `label`, `expr` |
+| `if`, `elseif` | `cond` |
+| `foreach` | `array`, `item` |
+| `script`, `content` | text |
+
+`s.datamodel({ items: '[]' })` is a map from `<data>` ids to expressions.
+`s.chart<Data>()` returns the same helpers typed for a datamodel, so
+expressions are type-checked against it.
+
+**`c.expr(fn)` marks code.** `fn` takes the session object and is
+destructured the same way in every datamodel:
+
+- in the native JS datamodel the function itself is the expression;
+- in a text datamodel, `fn`'s body becomes the expression's text
+  (`({ attempts }) => attempts + 1` → `attempts + 1`; a block body →
+  `(() => { … })()`). Free names other than the destructured ones are not
+  checked: a captured constant fails at run time there.
+
+Writes go through `assign`, which means the same in every datamodel; a
+function that assigns to a destructured name changes only its local.
 
 ```js
-import { chart } from '@tinyactors/node';
+import { scxml as s } from '@tinyactors/node';
 
-const door = chart({
-  tag: 'scxml', name: 'door', initial: 'closed', datamodel: 'ecmascript',
-  children: [
-    { tag: 'datamodel', children: [
-      { tag: 'data', id: 'opens', expr: '0' },
-      { tag: 'data', id: 'locked', expr: 'false' },
-    ] },
-    { tag: 'state', id: 'closed', children: [
-      { tag: 'transition', event: 'open', cond: '!locked', target: 'opened', children: [
-        { tag: 'assign', location: 'opens', expr: 'opens + 1' },
-        { tag: 'send', event: 'opened', type: 'https://granary.dev/io/audit', namelist: 'opens' },
-      ] },
-    ] },
-    { tag: 'state', id: 'opened', children: [
-      { tag: 'onentry', children: [{ tag: 'send', event: 'close', delay: '5s', id: 'autoClose' }] },
-      { tag: 'onexit', children: [{ tag: 'cancel', sendid: 'autoClose' }] },
-      { tag: 'transition', event: 'close', target: 'closed' },
-    ] },
-  ],
-});
+const c = s.chart<{ items: Item[]; attempts: number; reservation: Reservation | null }>();
+
+export const order = c.scxml('order', { initial: 'reserving', datamodel: 'tinyactors:js' },
+  c.datamodel({ items: c.expr(() => []), attempts: c.expr(() => 0), reservation: c.expr(() => null) }),
+
+  c.state('reserving',
+    c.onentry(c.assign('attempts', c.expr(({ attempts }) => attempts + 1))),
+    c.invoke('stock', { type: STOCK, src: 'reserve', namelist: 'items' }),
+    c.transition('done.invoke.stock', 'paying',
+      c.assign('reservation', c.expr(({ _event }) => _event.data))),
+    c.transition('error.communication', { cond: c.expr(({ _event }) => _event.invokeid === 'stock') },
+      c.if(c.expr(({ attempts }) => attempts < MAX_RETRIES),
+        c.send('retry', { delay: '2s' }),
+      c.else(),
+        c.raise('gave.up'))),
+    c.transition('retry', 'reserving'),
+    c.transition('gave.up', 'failed'),
+  ),
+
+  c.state('paying',
+    c.onentry(
+      c.foreach('items', 'item', c.log('charging', c.expr(({ item }) => item.sku))),
+      c.send('charge', { type: PAYMENTS, target: 'stripe' },
+        c.param('reservation', 'reservation'),
+        c.param('amount', c.expr(({ items }) => items.reduce((s, i) => s + i.price, 0))))),
+    c.transition('payment.ok', 'done'),
+    c.transition('payment.declined', 'failed'),
+    c.transition('error.communication', 'failed'),
+  ),
+
+  c.final('done', c.donedata(c.param('reservation', 'reservation'))),
+  c.final('failed'),
+);
 ```
 
-This is the same document as:
+### Images and documents
 
-```xml
-<scxml name="door" initial="closed" datamodel="ecmascript">
-  <datamodel><data id="opens" expr="0"/><data id="locked" expr="false"/></datamodel>
-  <state id="closed">
-    <transition event="open" cond="!locked" target="opened">
-      <assign location="opens" expr="opens + 1"/>
-      <send event="opened" type="https://granary.dev/io/audit" namelist="opens"/>
-    </transition>
-  </state>
-  <state id="opened">
-    <onentry><send event="close" delay="5s" id="autoClose"/></onentry>
-    <onexit><cancel sendid="autoClose"/></onexit>
-    <transition event="close" target="closed"/>
-  </state>
-</scxml>
-```
+`chart()` and `fromSCXML()` give one chart. `system.addImage(charts, {
+documents })` compiles several into one image (`ta_compile_charts`):
+`<invoke src>` resolves within it, and `documents` answers `<data src>`,
+`<script src>` and `<invoke src>` at compile time (`scxml.c:202–216`).
 
-`chart(object)` and `fromSCXML(xml)` give the same thing; `.toSCXML()`
-and `.toObject()` convert either way.
+### Proving both forms mean the same
 
-**Lossless, proven by the W3C suite.** `tests/w3c/run_js.mjs` runs every
-W3C chart twice more: converted to an object and back to XML, and
-compiled from the object directly. Both must pass exactly the tests the
-XML passes. A unit test checks object → XML → object is the identity.
+`tests/w3c/run_js.mjs` reads each converted W3C chart (`.txml` through
+XSLT into `build/w3c/ecma`) and runs it three ways under the
+`"ecmascript"` datamodel: as XML, as XML → object → XML, and compiled from
+the object. All three must pass exactly the same tests. A unit test checks
+object → XML → object is the identity.
 
-The chart object is a syntax, not a second language: it adds no element,
-attribute, default or meaning, and the compiler reports errors at the
-element's path in the object as it reports lines in XML.
-
-## 4. Actors and systems
-
-Core vocabulary, with SCXML's names for what SCXML defines.
+## 5. Actors and systems
 
 | JS | Core and SCXML |
 |---|---|
-| `createSystem({ systemID, clock, ioProcessors, invokers, hibernation, restore, … })` | `ta_host_new` (`system_id`, `io_processors` in `ta_host_config`) |
-| `system.spawn(chart, { name, params })` → `Actor` | `ta_host_spawn`: the actor starts at once. `params` overwrite the `<data>` of the same id, as invoke params do. Every actor has a name: the given one, else the chart's name (`system.c:531–536`). |
-| `system.get(name)` | `ta_host_actor_by_name`: an actor with that name, which may be any actor of a chart of that name |
-| `actor.send(event, data)` | `ta_host_send`; the session sees `_event` as SCXML defines it (`name`, `type`, `sendid`, `origin`, `origintype`, `invokeid`, `data`, and `raw` when given) |
+| `createSystem({ systemID, clock, ioProcessors, invokers, log, hibernation, restore, … })` | `ta_host_new` (`system_id`, `io_processors`); `log` receives `TA_EFFECT_LOG` |
+| `system.addImage(charts, { documents })` | `ta_compile_charts`, `ta_host_add_image`; a chart name already loaded gets a new version (hot reload) |
+| `system.spawn(chart, { name, params })` → `Actor` | `ta_host_spawn`: the actor starts at once. `params` overwrite the `<data>` of the same id. Every actor has a name: the given one, else the chart's (`system.c:531–536`); names are not unique. |
+| `system.get(name)` | `ta_host_actor_by_name`: the live actor with that name in the newest segment with the lowest slot, invoked children included (`system.c:760–769`) |
+| `system.send(address, event, { data, sendid, origin, origintype, raw, traceparent })` | one `ta_event_in`, delivered locally (`ta_host_send`) or through the router |
+| `actor.send(event, options)` | `system.send(actor.address, event, options)` |
 | `actor.terminate()` | `ta_host_terminate`: the actor stops at the next microstep boundary (`core.c:1767–1772`), running its `<onexit>` handlers |
-| `actor.configuration` | the active state ids (`ta_actor_config`) |
-| `actor.in(id)` | `In(id)` |
-| `actor.datamodel` | the session's variables |
-| `actor.done` | a promise for a root actor: resolved with the donedata on its `TA_EFFECT_DONE`, rejected on a `TA_EFFECT_ERROR` for its session (a fault; the actor was reclaimed) |
-| `actor.subscribe(observer)` | `observer(actor)` is called once after each slice in which the actor took a step; several steps of one slice are seen once |
-| `actor.sessionID`, `actor.name`, `actor.address` | `_sessionid`; `_name`, which the core sets to the actor's name (SCXML says the document's `name`; the core differs, `system.c:474`); its `tinyactors://` address |
+| `actor.configuration`, `actor.in(id)` | `ta_actor_config`; `In(id)` |
+| `actor.datamodel` | the session's variables: the live object in the native JS datamodel, a copy (`to_wire`) in others; `null` while hibernated |
+| `actor.done` | for a root actor: resolved with the donedata on `TA_EFFECT_DONE`, rejected on `TA_EFFECT_ERROR` for its session. A terminated actor produces no effect (`system.c:678–679`, `route.c:726`), so the binding settles it when `terminate` succeeds. |
+| `actor.observe(fn)` | `fn(actor)` once after each run in which the actor took a step (section 8) |
+| `actor.sessionID`, `actor.name`, `actor.address` | `_sessionid`; `_name`, which the core sets to the actor's name (SCXML: the document's `name`; `system.c:474`); `"<base>#_scxml_<id>"` (`system.h:46–47`) |
 | `actor.export()` → blob | `ta_host_export_actor`: the actor **leaves** the system |
 | `system.adopt(blob)` | `ta_host_adopt`: refused while the blob's session exists |
-| `system.snapshot()`, `createSystem({ restore })` | `ta_host_snapshot` / `ta_host_restore`, the whole host |
-| `system.hibernate()`, `hibernation: { store }` | `ta_host_sweep`, `ta_host_hibernate`, `ta_host_wake` |
-| `system.reload(chart)`, `system.migrate(…)` | `ta_host_add_image`, `ta_host_migrate` |
-| `system.flush()` | with a `clock` option: advance the logical clock and run until idle |
+| `system.snapshot()`, `createSystem({ restore })` | `ta_host_snapshot` / `ta_host_restore` |
+| `system.sweep()`, `hibernation: { store }` | `ta_host_sweep`, `ta_host_hibernate`, `ta_host_wake` |
+| `system.migrate(…)` | `ta_host_migrate` |
+| `system.flush()` | with a `clock` option: `ta_host_advance_time` to the next deadline and run until idle, repeated |
 
 Event names are the core's: `done.invoke.<id>`, `done.state.<id>`,
 `error.execution`, `error.communication`, `error.platform.upgrade`. The
 binding adds none and renames none.
 
-## 5. I/O processors and invokers
-
-SCXML gives a host two extension points. The core implements both; the
-binding reports back only through inbound flags the core defines.
+## 6. I/O processors and invokers
 
 ```js
 createSystem({
-  systemID: 'granary',
+  systemID: 'shop',
   ioProcessors: {
-    'https://granary.dev/io/github': {
-      location: 'github',
-      send({ target, event, sendid, data, origin }, system) { … },
+    'https://shop.dev/io/payments': {
+      location: 'payments',
+      async send({ target, event, sendid, data, origin }, { system, signal, traceparent }) { … },
     },
   },
   invokers: {
-    'https://granary.dev/invoke/fetch': {
-      start({ invokeid, src, params }, { send, done, fail, signal }) { … },
-      // optional: receive(event) for sends to #_<invokeid>
+    'https://shop.dev/invoke/stock': {
+      start({ invokeid, type, src, params }, { send, done, fail, signal, traceparent }) { … },
+      receive(invokeid, event) { … },   // optional
     },
   },
 });
 ```
 
 **I/O processors** (`<send type="…">`). Registered at creation:
-`ta_host_config.io_processors` is fixed for the host's life (it is given
-again at restore). The host adds its own processor at index 0 and allows
-16 in all (`host.c:283`). Each appears in `_ioprocessors` with its
-`location`.
+`ta_host_config.io_processors` is fixed for the host's life (and given
+again at restore). There may be 16; the host's own processor comes first
+and never reaches JS (`host.c:283`, `:855`). Each appears in
+`_ioprocessors` with its `location`, the same for every session
+(`system.h:34`).
 
 | Processor | Core |
 |---|---|
-| `send(message, system)`: `target`, `event`, `sendid`, `data`, and `origin`, the sender's address | a `TA_EFFECT_SEND` whose `io_processor` is this processor's index; a send with a `type` goes to its processor whatever the `target` (`core.c:1003–1007`) |
-| it throws, or its promise rejects | `TA_EVENT_IN_ERROR_COMMUNICATION` with the `sendid`: `error.communication` in the sender's internal queue (SCXML §6.2). A late failure starts a macrostep of its own (`core.c:1847–1852`). |
-| `system.get(…).send(…)`, or a send to `origin` | an event into the system; an address of another system goes through the router |
+| `send(message, context)`: `target`, `event`, `sendid`, `data`; `origin`, the sender's address, built from the effect's `session`; `context.traceparent` from the effect's trace context; `context.signal` aborts when the system stops | a `TA_EFFECT_SEND` with this processor's index; a send with a `type` goes to its processor whatever the `target` (`core.c:1005–1007`) |
+| it throws, or its promise rejects | `TA_EVENT_IN_ERROR_COMMUNICATION` with the `sendid`: `error.communication` in the sending session's internal queue (SCXML §6.2); a late failure starts a macrostep of its own (`core.c:1847–1852`) |
+| a reply: `context.system.send(origin, event, { data, traceparent })` | section 5 |
 
 **Invokers** (`<invoke type="…">`). The `type` is a URI the application
 chooses (SCXML §6.4); the core turns any `<invoke>` with a non-SCXML type
-into an external invoke (`src/system/route.c:405`).
+into an external invoke (`route.c:405`). `src` is the invoke's `src` or
+its `<content>`, which SCXML treats alike (`core.c:1418–1426`).
 
 | Invoker | Core |
 |---|---|
-| `start({ invokeid, type, src, params }, ctx)` | `TA_EFFECT_INVOKE` (`event` = type, `target` = src, `sendid` = invokeid, `payload` = params); the binding keys it by segment and token, since tokens are per segment |
-| `ctx.send(event, data)` | `TA_EVENT_IN_FROM_INVOKE`: the core sets `_event.invokeid` (`schedule.c:392`) |
-| `receive(event)`: sends to `#_<invokeid>`, and autoforwarded events | `TA_EFFECT_SEND` carrying the invoke token (`route.c:118–121`, `621–626`) |
-| `ctx.done(data)` | `TA_EVENT_IN_INVOKE_DONE`: `done.invoke.<id>` with `data` |
-| `ctx.fail()`, or `start` throws or its promise rejects | `TA_EVENT_IN_ERROR_COMMUNICATION \| TA_EVENT_IN_FROM_INVOKE`: `error.communication` in the invoker's internal queue with `_event.invokeid` set (SCXML §3.12.2: errors arising from `<invoke>`). Needs the core change in section 7. |
-| the invoking state exits | `TA_EFFECT_UNINVOKE`: `signal` aborts; the request is freed (`route.c:585–596`), so later `send`, `done` or `fail` calls are dropped (SCXML §6.4) |
+| `start({ invokeid, type, src, params }, context)` | `TA_EFFECT_INVOKE`; the binding keys the invoke by segment and token (tokens are per segment) and remembers the invoking session |
+| `context.send(event, data)` | `TA_EVENT_IN_FROM_INVOKE`: the core sets `_event.invokeid` (`schedule.c:392`) |
+| `receive(invokeid, event)`: sends to `#_<invokeid>` without a `type`, and autoforwarded events | `TA_EFFECT_SEND` with the invoke token (`route.c:118–121`, `621–626`) |
+| `context.done(data)` | `TA_EVENT_IN_INVOKE_DONE`: `done.invoke.<id>` with `data`. The binding then closes the context: SCXML §6.4 forbids events after done, and the core frees the request only at uninvoke (`route.c:585–596`). |
+| `context.fail()`, or `start` or `receive` throws, or a promise rejects | `TA_EVENT_IN_ERROR_COMMUNICATION \| TA_EVENT_IN_FROM_INVOKE`: `error.communication` in the invoking session's internal queue, with `_event.invokeid` (SCXML §3.12.2). The binding closes the context. Section 8. |
+| the invoking state exits | `TA_EFFECT_UNINVOKE`: `signal` aborts; later calls are dropped (SCXML §6.4.3) |
+
+A send to `#_<invokeid>` *with* the invoke's type, SCXML's form in §6.4.4,
+looks for an I/O processor of that type (`core.c:965–971`) and fails with
+`error.execution` (open question 4).
 
 An actor with an external invoke in flight is not hibernated, swept or
 exported; the core refuses it (`hibernate.c:136–150`,
-`system.h:404–405`). A whole-host snapshot is refused too (section 7).
+`system.h:404–405`). Snapshots are refused too (section 8).
 
-## 6. What goes
+## 7. What goes
 
 | Today | Why |
 |---|---|
-| `createMachine`, `setup` and xstate's config (`context`, `input`, `on`, `always`, `after`, `entry`/`exit`, `onDone`, `onError`, `reenter`, relative targets, `type: 'parallel'`) | the chart object is SCXML's tree under SCXML's names (section 3) |
-| inline functions, named guards and actions | the application reaches a chart through I/O processors and invokers (section 5); functions in a session's scope would be a feature only the JS datamodel has |
-| `assign` (xstate), `raise`, `sendTo`, `sendParent`, `cancel`, `log`, `stateIn`, `and`/`or`/`not` builders | executable content and `cond` text in the chart object |
-| `getSnapshot`, `.value`, `.matches`, `.status`, `.context`, `.output`, `.hasTag`, `.can` | `configuration`, `in()`, `datamodel`, `done` (section 4); xstate's status values do not exist in the core |
-| `getPersistedSnapshot`, `createActor(logic, { snapshot })` | they read without removing; the core's export removes the actor. `export` and `adopt` say what happens. |
-| `createActor` + `start`, `stop`, xstate's system ID option | `system.spawn`, `terminate`, `name` |
+| `createMachine`, `setup` and xstate's config (`context`, `input`, `on`, `always`, `after`, `entry`/`exit`, `onDone`, `onError`, `reenter`, relative targets) | charts are SCXML, built with the helpers (section 4) |
+| named guards and actions in `setup` | the native JS datamodel's expressions are functions; other datamodels reach the application through I/O processors and invokers |
+| xstate's `assign` merge, `raise` with data or delay, `sendTo`, `sendParent`, `stateIn`, `and`/`or`/`not` | SCXML's `<assign>`, `<raise>`, `<send>` (with `target: '#_parent'`), `In()` and expressions |
+| `getSnapshot`, `.value`, `.matches`, `.status`, `.context`, `.output`, `.hasTag`, `.can`, `subscribe` | `configuration`, `in()`, `datamodel`, `done`, `observe` (section 5) |
+| `getPersistedSnapshot`, `createActor(logic, { snapshot })` | they read without removing; export removes the actor |
+| `createActor` + `start`, `stop`, xstate's system ID option, `system.hibernate()`, `system.reload()` | `system.spawn`, `terminate`, `name`, `sweep`, `addImage` |
 | events as `{ type, ...data }` | `_event.type` is SCXML's event type; an event is a name and data |
-| `fromPromise`, `fromCallback`, `sendBack` | an invoker (section 5) |
-| `tags`, `meta`, `description`, `inspect`, `toPromise`, `waitFor`, `provide` | no core or SCXML meaning; `actor.done`, `subscribe` and traces cover the uses |
-| the implicit default system, the global machine registry, `linkMachine` | global state, or a chart used as plumbing |
+| `fromPromise`, `fromCallback`, `sendBack` | an invoker (section 6) |
+| `ecmascript.mjs` (proposed) | the native JS datamodel and quickjs cover trusted and untrusted code |
+| `tags`, `meta`, `description`, `inspect`, `toPromise`, `waitFor`, `provide`, the default system, the global machine registry, `linkMachine` | no core or SCXML meaning, or global state |
 
-## 7. Core changes
+## 8. Core changes
 
-1. **A failed external invoke.** `TA_EVENT_IN_ERROR_COMMUNICATION`
-   reports a failed `TA_EFFECT_SEND` and ignores the token
-   (`schedule.c:358`). With `TA_EVENT_IN_FROM_INVOKE` as well, it reports
-   a failed invoke: the token is checked first, as for other invoke
-   events (`schedule.c:383–390`, and before the hibernated branch at
-   `:342`), a stale token is refused, and the raised `error.communication`
-   gets the invoke's `invokeid` (`ta_core_raise_platform` takes only a
-   `sendid`, `core.c:2069`). The flag alone keeps its meaning: a failed
-   send to `#_<invokeid>` carries the invoke token too
-   (`system.h:211–212`).
-2. **Snapshots with external invokes in flight.** `ta_host_snapshot`
-   checks pending effects and migration jobs (`host.c:1733–1735`), not
-   external invokes; a restored host would hold invokes no service
-   answers. Refuse it with `TA_ERROR_STATE`, as hibernation and export do.
+1. **A failed external invoke.** `TA_EVENT_IN_ERROR_COMMUNICATION` with
+   `TA_EVENT_IN_FROM_INVOKE`: the system layer checks the token as for
+   other invoke events (`schedule.c:383–390`, before the hibernated branch
+   at `:342`), refuses a stale one, and sets `invokeid` on the event
+   `ta_core_raise_platform` returns (`core.c:2069`); `src/core` is
+   unchanged. The flag alone keeps its meaning: a failed send to
+   `#_<invokeid>` carries the invoke token too (`system.h:211–212`).
+2. **Snapshots with external invokes in flight** are refused with
+   `TA_ERROR_STATE`, in `ta_system_snapshot` (`system.c:962–966`) and so
+   in `ta_host_snapshot` (`host.c:1733–1735`): a restored system would
+   hold invokes no service answers.
+3. **Actors that stepped.** `ta_host_run` reports the sessions that took
+   a macrostep, in a bounded list (an append per macrostep; past the
+   bound, "all"). Neither `ta_actor_info` nor the run result says this
+   today, and a datamodel hook would miss bootstrap and terminate steps.
+4. **Payloads between datamodels.** When an event's payload belongs to
+   another datamodel than the receiving chart's, the core converts it
+   with `to_wire`/`from_wire`, or delivers the event without data when
+   either lacks them.
 
-## 8. What moves into C
+## 9. What moves into C
 
 Each item deletes its JS twin in the same change.
 
@@ -316,118 +400,116 @@ Each item deletes its JS twin in the same change.
    `surface.json` today).
 2. **Run loop policy.** Retrying while `EFFECTS_FULL`, draining traces
    into the encoder before effects, `root_session`, job state: a new
-   `ta_host_pump(host, now, budget, out)`, usable by every binding.
+   `ta_host_pump(host, now, budget, out)`.
 3. **Containers.** System snapshot and actor export records become a
    C-defined layout around an opaque datamodel section. `adopt` finds a
-   segment by `ta_image_get_info.content_hash`, not by re-encoding JSON.
+   segment by `ta_image_get_info.content_hash`.
 4. **Image lookups.** The current version per chart name comes from
-   `ta_host_chart`; the segment and version maps in JS go. Invoke `src`
-   resolves within the invoker's image.
+   `ta_host_chart`; the segment and version maps in JS go.
 5. **Trace names.** Rule and detail parsing by name, presets, class
    allocation: the binding passes the user's object as JSON text.
+6. **The parse tree and raw markup** (section 4).
 
-The link protocol (hello, capabilities, reach, resumption, ~325 lines) is
-also free of JavaScript, but it is the largest piece and only JavaScript
-uses it today. It stays in JS, rewritten over the C address and frame code,
-and without `linkMachine`.
+The link protocol (hello, capabilities, reach, resumption) is free of
+JavaScript too, but only JavaScript uses it today. It stays in JS,
+rewritten over the C address and frame code, without `linkMachine`.
 
-## 9. The native seam and the JS layer
+## 10. The native seam and the JS layer
 
 `binding.c` stays procedural: a `System` is a native handle, and a JS
 class of about 40 lines forwards its methods to `native.*(handle, …)`.
-That class is what `index.d.ts` and the `surface` check see. A Node-API
-class would not make the seam deeper, and it would grow the web build's
-Node-API subset (`napi_define_class`, wrapping) for no gain.
+That class is what `index.d.ts` and the `surface` check see.
 
 **The native `System`** owns the host block and grows it on `EXHAUSTED`;
-holds the one datamodel vtable (over `ecmascript.mjs`, which keeps the C
-datamodel's semantics) and the codec; runs the pump in budgeted slices on
-a platform `defer` and one platform timer for `next_deadline`, both passed
-in at creation; and after each slice calls the observers of actors that
-stepped, once each. Effects for JS (sends to registered I/O processors,
-invokes and uninvokes, logs, done, errors, peer envelopes) go to callbacks
-given at creation, one call each. An evaluation is one call into
-`ecmascript.mjs`; `_event` is built once per `bind_event`.
+holds the datamodels (native JS, quickjs) and the codec; runs the pump in
+budgeted slices on a platform `defer` and one platform timer for
+`next_deadline`; and after each run calls the observers of the actors
+that stepped. Effects for JS (sends to I/O processors, invokes and
+uninvokes, logs, done, errors, peer envelopes) go to callbacks given at
+creation, one call each. In the native JS datamodel an evaluation is one
+Node-API call with one argument, the session object, built once per
+session and updated per `bind_event`.
 
-**Pure functions,** about fifteen, written by hand: compile, image info,
-addresses, traceparent, span IDs, decoding traces and metrics, frames.
+**Pure functions,** about fifteen, written by hand: compile, parse, image
+info, addresses, traceparent, span IDs, decoding traces and metrics,
+frames.
 
 **What remains in `core.mjs`:**
 
-- the chart object: the mapping table, object → SCXML, SCXML → object:
-  about 250 lines;
-- `createSystem`, `Actor` over the native `System`: about 150;
-- I/O processors and invokers: about 100;
-- stores and hibernation I/O, the tagged value codec: about 200;
-- links and the store link over transports: about 300;
-- the OTLP exporter and telemetry options: about 150.
+| Part | Lines |
+|---|---|
+| the chart object: parse tree → objects, objects → writer calls, line → path for diagnostics | ~250 |
+| the helpers, `c.expr`, from one element table that also generates the TypeScript types | ~100 |
+| `createSystem`, `Actor` over the native `System` | ~150 |
+| I/O processors and invokers | ~150 |
+| stores and hibernation I/O, the tagged value codec | ~200 |
+| links (today ~365 lines) and the store link (~240), over the C address and frame code | ~500 |
+| the OTLP exporter and telemetry options | ~150 |
 
-About 1150 lines, plus `ecmascript.mjs`.
+About 1500 lines, and no `ecmascript.mjs`.
 
 **Measuring it.** Before the switchover, add a JS scenario reporting
 throughput and memory together (in `tools/bench_js.mjs` or the torture
 chamber): sends per second and bytes per actor with 0, 10 and 1000
-observed actors, on Node and the web build. Measure today's binding, then
-the new one, side by side on one machine.
+observed actors, per datamodel, on Node and the web build. Measure today's
+binding, then the new one, side by side on one machine.
 
-## 10. Decided
+## 11. Decided
 
 - **Keep `bindings/shared`.** One `binding.c` compiled as the Node-API
-  addon and as the wasm module, one `core.mjs` over both. Two bindings,
-  one per target, would duplicate the datamodel, the payload tables and
-  the pump.
+  addon and as the wasm module, one `core.mjs` over both.
 - **No wasm everywhere.** Node keeps the native addon.
-- **A procedural seam behind a small JS class** (section 9).
+- **A procedural seam behind a small JS class.**
 - **Hand-written bindings.** Generating them from `surface.json` would
   need parameter annotations the types do not carry and would generate
-  only the shallow part of the API; a 1:1 binding of `system.h` and
-  `host.h` would put memory management and the run loop back in
-  JavaScript. `surface.json` stays the checklist of what the bindings
-  reach.
-- **Charts are SCXML,** as XML or as the lossless chart object.
-- **The application reaches charts through I/O processors and invokers
-  only.**
+  only the shallow part of the API. `surface.json` stays the checklist of
+  what the bindings reach.
+- **Charts are SCXML,** as XML or as JS objects built with the helpers.
+- **The datamodel is chosen per chart:** native JS for trusted code,
+  quickjs for untrusted code, staticjs later.
+- **`c.expr` without a free-name check,** for now.
 - **Errors are SCXML's.** `error.execution` for errors in the chart,
   `error.communication` for a failed send or invoke, through the core's
-  existing effect-error path.
+  inbound error path.
 
-## 11. Open questions
+## 12. Open questions
 
-1. **An invoke after its error.** Does the external invoke stay
-   registered after `error.communication` until the state exits, or
-   should the error end it? SCXML only says the error goes on the queue.
-2. **A faulted invoked chart.** The invoker gets no event today
+1. **Remove `ecmascript.mjs`?** Proposed in section 3.
+2. **The native JS datamodel's name** in the `datamodel` attribute.
+3. **An invoke after its error.** Does the external invoke stay
+   registered after `error.communication` until the state exits, or should
+   the error end it?
+4. **`<send type="<invoke type>" target="#_<id>">`** (SCXML §6.4.4) fails
+   today. Route it to the invoke in the core, or document that sends to an
+   invoke carry no `type`.
+5. **A faulted invoked chart.** The invoker gets no event today
    (`schedule.c:205`). Whether it should get `error.communication` is a
    core decision.
-3. **Actors that ended.** What the binding can still read after
-   `TA_EFFECT_DONE`, a fault or `terminate`, and whether terminating a
-   root actor produces an effect `actor.done` can settle on.
-4. **`TA_IO_PROCESSOR_SYNC`.** Whether JS I/O processors need it: the run
-   returns after such a send so the outcome lands in the sender's
-   macrostep, which a JS processor would have to answer synchronously.
-5. **Error data.** SCXML lets an error event carry data (SCXML.md:853);
-   the core drops the data given with `TA_EVENT_IN_ERROR_COMMUNICATION`
+6. **`TA_IO_PROCESSOR_SYNC`.** Whether JS I/O processors need it; a JS
+   processor would have to answer synchronously.
+7. **Error data.** SCXML lets an error event carry data (SCXML.md:853);
+   the core drops what `TA_EVENT_IN_ERROR_COMMUNICATION` brings
    (`schedule.c:370`). Granary's 0.1 errors carried `{ sendID, type,
-   error }`. Keep dropping it, or let the core pass it on.
-6. **The link protocol in C,** later, if a second binding needs links.
+   error }`.
+8. **The link protocol in C,** later, if a second binding needs links.
 
-## 12. Order of work
+## 13. Order of work
 
-Each step is a commit that passes `mise run test`.
+Each step is one or more commits that pass `mise run test`.
 
 1. Bind `address.h` and `frame.h`; delete the JS twins.
 2. `ta_host_pump`; `binding.c`'s `run` calls it.
 3. Containers and adoption by content hash in C.
 4. Trace policy by name in C.
-5. The core changes of section 7, with C tests.
-6. The chart object: the mapping table, both conversions, and the W3C
-   round trip (section 3), on today's binding.
-7. The benchmark scenario, measured on today's binding.
-8. The switchover: the native `System`, one datamodel, I/O processors and
-   invokers in `binding.c`; the new `core.mjs`; tests and examples
-   migrated; the dropped API deleted; `surface.json` and both
-   `index.d.ts` updated. `mise run test:full`.
-9. Measure again; record both in the commit message.
-
-Steps 1–7 shrink today's `core.mjs` or build beside it, so the switchover
-is binding work only.
+5. The core changes of section 8, each with C tests.
+6. I/O processors and invokers on today's binding, so granary can move
+   first.
+7. `ta_compile_parse` and raw markup in the writer; the chart object, the
+   helpers and `c.expr`; the W3C run in three forms.
+8. The benchmark scenario, measured on today's binding.
+9. The native JS datamodel (from the "xstate" vtable) and quickjs in the
+   binding; `ecmascript.mjs` removed if question 1 says so.
+10. The switchover, in commits: the native `System` and its JS class; the
+    actor API; tests and examples migrated; the dropped API deleted;
+    `surface.json` and both `index.d.ts` updated. `mise run test:full`.
+11. Measure again; record both in the commit message.
