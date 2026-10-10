@@ -162,7 +162,7 @@ static int begin_class(host_world *e, uint32_t si, const char *name) {
                 ta_string_view n = ta_trace_dynamic_string(&view, begin->name);
                 if (!n.length && begin->name != TA_NIL)
                     n = ta_image_string(&e->image[si], begin->name);
-                if (n.length == strlen(name) && !memcmp(n.pointer, name, n.length))
+                if (n.length && n.length == strlen(name) && !memcmp(n.pointer, name, n.length))
                     found = (int)TA_TRACE_DETAIL(record->flags);
             }
         ta_system_trace_ack(system, view.length);
