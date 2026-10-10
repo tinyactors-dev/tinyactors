@@ -150,21 +150,21 @@ void ta_system_trace_take(ta_system *system, uint32_t index, uint32_t event_inde
     }
     ask.from = (event->origin ? TA_TRACE_FROM_ACTOR : TA_TRACE_FROM_HOST) |
                (flags & TA_TRACE_FLAG_SAMPLED ? TA_TRACE_FROM_SAMPLED : TA_TRACE_FROM_UNSAMPLED);
-    if (context == TA_NIL) { /* untraced so far: a new trace, if a rule samples it */
-        trace = ta_trace_generator_next(&system->generator);
-        flags = TA_TRACE_FLAG_RANDOM;
-    }
+    if (context == TA_NIL) /* no context (a full pool): as if unsampled */
+        trace = ta_trace_generator_next(&system->generator), flags = TA_TRACE_FLAG_RANDOM;
     uint32_t decided = flags;
     if (!ta_system_trace_rules(system, &ask, trace, &decided) || decided == flags) return;
-    uint32_t replaced = TA_NIL;
-    if (decided & TA_TRACE_FLAG_SAMPLED) {
-        if (context == TA_NIL) {
-            system->stats_traces_started++;
-            system->stats_traces_sampled++;
-        }
-        replaced = ta_trace_context_new(core, trace, decided, cause);
-        if (replaced == TA_NIL) return; /* no room: it stays as it was */
+    if ((decided & TA_TRACE_FLAG_SAMPLED) && !(flags & TA_TRACE_FLAG_SAMPLED)) {
+        /* sampled from here on: a new trace, its root this step, so no span
+         * names a parent that was never reported (docs/adr/0007) */
+        trace = ta_trace_generator_next(&system->generator);
+        decided |= TA_TRACE_FLAG_RANDOM;
+        ta_memset(&cause, 0, sizeof cause);
+        system->stats_traces_started++;
+        system->stats_traces_sampled++;
     }
+    uint32_t replaced = ta_trace_context_new(core, trace, decided, cause);
+    if (replaced == TA_NIL) return;          /* no room: it stays as it was */
     ta_trace_context_release(core, context); /* the sending step's other events keep theirs */
     event->trace = replaced;
 }

@@ -274,9 +274,11 @@
         return { name: c.name, text: c.text };
       });
       const config = { ioprocessors: (scenario && scenario.ioprocessors) || [], ...(def.config || {}) };
-      /* --param tracing=disabled|records|otlp, traceDetail=summary|decisions|full: every system (comparisons) */
+      /* --param tracing=disabled|records|otlp, traceDetail=summary|decisions|full,
+       * traceSample=0..1: every system (comparisons) */
       if (bench.params.tracing) config.tracing = String(bench.params.tracing);
       if (bench.params.traceDetail) config.traceDetail = String(bench.params.traceDetail);
+      if (bench.params.traceSample !== undefined) config.traceSample = Number(bench.params.traceSample);
       const index = H.createSystem(name, charts, config);
       systems.set(name, { index, name, charts: charts.map((c) => c.name) });
       return name;

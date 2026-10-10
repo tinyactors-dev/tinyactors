@@ -25,7 +25,8 @@ torture-bench [SCENARIO_DIR] [--scenarios DIR] [--duration S] [--interval MS] [-
   the WebSocket at `/ws`. `--headless` skips the server.
 - `--loop` keeps running past the scenario duration (dashboard demos).
 - `--param KEY=VALUE` (repeatable) reaches scripts as `bench.params` (numbers parsed).
-- `--param tracing=disabled|records|otlp` (and `traceDetail=summary|decisions|full`)
+- `--param tracing=disabled|records|otlp` (and `traceDetail=summary|decisions|full`,
+  `traceSample=0..1`: the share of the traces each system starts that is sampled)
   sets every system's tracing: `records` (the default) reads and counts each
   record after every slice, `otlp` also encodes them, `disabled` turns tracing
   off in the library (`TA_TRACING_DISABLED`). Samples report `traceRecords`,

@@ -328,14 +328,18 @@ static void test_delayed_send(void) {
     s = session_of(&t, a);
     CHECK_EQUAL(count_kind(TA_TRACE_MACROSTEP_BEGIN), 0); /* unsampled */
     CHECK_EQUAL(count_kind(TA_TRACE_SPAWNED), 1);         /* lifecycle: whatever the sampling */
+    const ta_trace_record *spawned = find(TA_TRACE_SPAWNED, s, ~(uint64_t)0, NULL);
+    if (spawned) /* in its unsampled trace, which has an ID of its own (docs/adr/0007) */
+        CHECK((spawned->trace.high || spawned->trace.low) &&
+              !(spawned->flags & TA_TRACE_FLAG_SAMPLED));
     forget();
     CHECK_EQUAL(ta_system_trace_set(t.system, sampling(1, 1)), TA_OK); /* sample everything again */
     ta_system_advance_time(t.system, 2000);
     tsys_run(&t, 10000, 5);
     collect(&t);
-    const ta_trace_record *fired = find(TA_TRACE_MACROSTEP_BEGIN, s, 3, "tick");
-    CHECK(fired != NULL);
-    if (fired) CHECK_EQUAL(fired->parent, 0); /* a new trace, a root */
+    /* the delayed send kept its unsampled trace (docs/adr/0007): the ratio
+     * decides when a trace starts, not when its events arrive */
+    CHECK(find(TA_TRACE_MACROSTEP_BEGIN, s, 3, "tick") == NULL);
     forget();
     CHECK_EQUAL(ta_system_trace_set(t.system, sampling(0, 1)), TA_OK);
     const char *sampled = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
@@ -708,6 +712,45 @@ static void test_detail_classes(void) {
     tsys_free(&t);
 }
 
+/* An unsampled trace keeps its ID (docs/adr/0007): what its steps send
+ * carries it with the sampled flag clear, so a service downstream continues
+ * the caller's decision. */
+static void test_unsampled_propagates(void) {
+    static const ta_io_processor_descriptor processors[] = {
+        {{"http://example.com/out", 22}, {"", 0}, 0, 0}};
+    test_system t;
+    ta_system_config config = test_system_config();
+    config.io_processors = processors;
+    config.io_processor_count = 1;
+    config.trace_policy = sampling(0, 1);
+    CHECK(tsys_init(&t,
+                    SC("initial='a'><state id='a'><transition event='go'>"
+                       "<send type='http://example.com/out' target='x' event='out'/>"
+                       "</transition></state>"),
+                    NULL, &config));
+    uint32_t a = 0;
+    CHECK_EQUAL(
+        ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a),
+        TA_OK);
+    tsys_run(&t, 10000, 5);
+    const char *unsampled = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00";
+    CHECK_EQUAL(send_traced(&t, a, "go", unsampled), TA_OK);
+    ta_system_run(t.system, 10000);
+    const ta_effect *effects;
+    CHECK_EQUAL(ta_system_effects(t.system, &effects), 1);
+    CHECK_EQUAL(effects[0].trace.trace.low, 0x8448eb211c80319cull); /* the caller's trace */
+    CHECK_EQUAL(effects[0].trace.flags & TA_TRACE_FLAG_SAMPLED, 0);
+    CHECK_EQUAL(TA_TRACE_DETAIL(effects[0].trace.flags), TA_TRACE_DETAIL_UNSAMPLED);
+    char text[TA_TRACEPARENT_LENGTH + 1] = {0};
+    CHECK_EQUAL(ta_traceparent_format(&effects[0].trace, text, sizeof text), TA_TRACEPARENT_LENGTH);
+    CHECK(strcmp(text + 53, "00") == 0);
+    ta_system_effects_ack(t.system, 1);
+    collect(&t);
+    CHECK_EQUAL(count_kind(TA_TRACE_MACROSTEP_BEGIN), 0); /* nothing of it recorded */
+    forget();
+    tsys_free(&t);
+}
+
 /* A round of CHAIN: spawn A (which invokes B, which invokes C), send it
  * `go` without a traceparent, run until it is done. Returns A's session. */
 static uint64_t chain_round(test_system *t) {
@@ -839,5 +882,6 @@ int main(void) {
     RUN(test_export_adopt);
     RUN(test_detail_classes);
     RUN(test_rules);
+    RUN(test_unsampled_propagates);
     TEST_MAIN_END();
 }

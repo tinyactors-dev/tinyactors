@@ -722,6 +722,14 @@ static JSValue h_create_system(JSContext *context, JSValueConst this_value, int 
         trace_policy.kinds[TA_TRACE_DETAIL_UNSAMPLED] = kinds & TA_TRACE_LIFECYCLE;
         if (kinds == TA_TRACE_BIT(TA_TRACE_DROPPED))
             trace_policy.kinds[TA_TRACE_DETAIL_UNSAMPLED] = kinds;
+        JSValue sample = JS_GetPropertyStr(context, argv[2], "traceSample");
+        double ratio = 1;
+        if (JS_IsNumber(sample) && JS_ToFloat64(context, &ratio, sample) == 0 && ratio >= 0 &&
+            ratio <= 1) {
+            trace_policy.sample_parts = (uint32_t)(ratio * 1000000.0);
+            trace_policy.sample_whole = 1000000;
+        }
+        JS_FreeValue(context, sample);
         config.trace_policy = &trace_policy;
         if (mode) JS_FreeCString(context, mode);
         if (level) JS_FreeCString(context, level);

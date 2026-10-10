@@ -32,8 +32,9 @@ uint32_t ta_system_start_trace(ta_system *system, ta_string_view traceparent, ui
         start.from |= sampled ? TA_TRACE_FROM_SAMPLED : TA_TRACE_FROM_UNSAMPLED;
         ta_system_trace_rules(system, &start, value->trace, &value->flags);
     }
-    if (!(value->flags & TA_TRACE_FLAG_SAMPLED)) return TA_NIL; /* unsampled: no context */
-    system->stats_traces_sampled++;
+    /* unsampled too: its trace ID flows (traceparent ...-00), its class writes
+     * what the policy gives unsampled traces (lifecycle records) */
+    if (value->flags & TA_TRACE_FLAG_SAMPLED) system->stats_traces_sampled++;
     return ta_trace_context_new(&system->core, value->trace, value->flags, cause);
 }
 
