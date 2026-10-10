@@ -5,7 +5,6 @@
 `bindings/shared/binding.c` (narrowed and deepened),
 `bindings/shared/ecmascript.mjs` (proposed for removal), `bindings/node`,
 `bindings/web`, `bindings/surface.json`, `examples/`, `tests/w3c`;
-`src/compile` (the parse as a tree, raw markup in the writer),
 `src/system` (failed external invokes, snapshots with external invokes,
 actors that stepped, payloads between datamodels), `src/host` (run loop
 policy, containers), `src/trace` (rule parsing by name).
@@ -37,8 +36,8 @@ The proposal:
    when it is ready (section 3).
 3. **Charts are SCXML, written as XML or as JS objects,** because
    JavaScript developers do not read XML. Concise helpers build the
-   objects; `c.expr(fn)` marks code. The W3C suite run through both forms
-   proves they mean the same (section 4).
+   objects, which go one way: object → writer → SCXML text → compiler.
+   `c.expr(fn)` marks code (section 4).
 4. **Expose SCXML's extension points:** I/O processors for `<send type>`
    and invokers for `<invoke type>`, registered on the system (section 6).
 5. **Put the deep layer in C, inside the binding,** and move what is free
@@ -64,8 +63,7 @@ The proposal:
   field (`src/lib/ops/feature.ts:65`) but registers none.
 - **Binding author.** Asks: what must I write myself? After this: a native
   datamodel for the language's own values, the codec, timers, and the I/O
-  processor and invoker interfaces. Parsing SCXML into a tree, the run
-  loop policy, containers, trace names and payload conversion between
+  processor and invoker interfaces. The run loop policy, containers, trace names and payload conversion between
   datamodels are C.
 - **Maintainers.** One implementation each of addresses, frames, the run
   loop and trace presets. No ECMAScript evaluator in JavaScript beside the
@@ -159,22 +157,15 @@ The chart object is SCXML's document tree as JS values:
   refused. Under the native JS datamodel, an expression attribute may hold
   a `c.expr` function instead.
 - **Text** (a `<script>`, a `<content>`, a `<data>`) is `text`; mixed
-  content is a `children` list of strings and elements. An inline child
-  chart (`<invoke><content><scxml>…`) is an `scxml` object in
-  `children`.
-- **Comments and the XML declaration are dropped:** the object keeps the
-  document's meaning, not its formatting.
+  content is a `children` list of strings and elements. XML inside a
+  `<content>` or `<data>`, and an inline child chart
+  (`<invoke><content><scxml>…`), are elements in `children` like any
+  other.
 
-Two C additions make this a layer of its own rather than JS code
-duplicating C:
-
-- **Reading.** `ta_compile_parse` (new, `src/compile`) returns the
-  compiler's parse as a tree (namespaces resolved, attributes, text and
-  children in order). The binding turns it into objects. Today the parser
-  is internal (`src/compile/xml.h`).
-- **Writing.** Objects go through `ta_xml_writer_*`, which gains a call
-  for raw markup and an option not to indent inside `<content>` and
-  `<data>`, where whitespace is part of the value.
+The chart object goes one way. The binding writes it through
+`ta_xml_writer_*` (no binding writes or escapes XML) and compiles the
+text; `fromSCXML(xml)` compiles XML as it is, as the core always has. No
+SCXML is read back into objects.
 
 Diagnostics point at lines of the generated XML (`compile.h:86–91`); the
 binding records which object each written line came from and reports the
@@ -265,13 +256,11 @@ documents })` compiles several into one image (`ta_compile_charts`):
 `<invoke src>` resolves within it, and `documents` answers `<data src>`,
 `<script src>` and `<invoke src>` at compile time (`scxml.c:202–216`).
 
-### Proving both forms mean the same
+### Testing it
 
-`tests/w3c/run_js.mjs` reads each converted W3C chart (`.txml` through
-XSLT into `build/w3c/ecma`) and runs it three ways under the
-`"ecmascript"` datamodel: as XML, as XML → object → XML, and compiled from
-the object. All three must pass exactly the same tests. A unit test checks
-object → XML → object is the identity.
+The mapping is mechanical, so unit tests cover it: each helper and each
+attribute form writes the expected XML, and a chart built with the
+helpers behaves as the same chart written as XML.
 
 ## 5. Actors and systems
 
@@ -408,7 +397,6 @@ Each item deletes its JS twin in the same change.
    `ta_host_chart`; the segment and version maps in JS go.
 5. **Trace names.** Rule and detail parsing by name, presets, class
    allocation: the binding passes the user's object as JSON text.
-6. **The parse tree and raw markup** (section 4).
 
 The link protocol (hello, capabilities, reach, resumption) is free of
 JavaScript too, but only JavaScript uses it today. It stays in JS,
@@ -430,7 +418,7 @@ creation, one call each. In the native JS datamodel an evaluation is one
 Node-API call with one argument, the session object, built once per
 session and updated per `bind_event`.
 
-**Pure functions,** about fifteen, written by hand: compile, parse, image
+**Pure functions,** about fifteen, written by hand: compile, image
 info, addresses, traceparent, span IDs, decoding traces and metrics,
 frames.
 
@@ -438,7 +426,7 @@ frames.
 
 | Part | Lines |
 |---|---|
-| the chart object: parse tree → objects, objects → writer calls, line → path for diagnostics | ~250 |
+| the chart object: objects → writer calls, line → path for diagnostics | ~100 |
 | the helpers, `c.expr`, from one element table that also generates the TypeScript types | ~100 |
 | `createSystem`, `Actor` over the native `System` | ~150 |
 | I/O processors and invokers | ~150 |
@@ -446,7 +434,7 @@ frames.
 | links (today ~365 lines) and the store link (~240), over the C address and frame code | ~500 |
 | the OTLP exporter and telemetry options | ~150 |
 
-About 1500 lines, and no `ecmascript.mjs`.
+About 1350 lines, and no `ecmascript.mjs`.
 
 **Measuring it.** Before the switchover, add a JS scenario reporting
 throughput and memory together (in `tools/bench_js.mjs` or the torture
@@ -504,8 +492,7 @@ Each step is one or more commits that pass `mise run test`.
 5. The core changes of section 8, each with C tests.
 6. I/O processors and invokers on today's binding, so granary can move
    first.
-7. `ta_compile_parse` and raw markup in the writer; the chart object, the
-   helpers and `c.expr`; the W3C run in three forms.
+7. The chart object, the helpers and `c.expr`, with their unit tests.
 8. The benchmark scenario, measured on today's binding.
 9. The native JS datamodel (from the "xstate" vtable) and quickjs in the
    binding; `ecmascript.mjs` removed if question 1 says so.
