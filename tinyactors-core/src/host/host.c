@@ -1313,7 +1313,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     ta_memset(&out, 0, sizeof out);
     effects_release(host); /* the previous batch, if not acknowledged */
     uint32_t left = budget;
-    int full = 0, fault = 0, exhausted = 0;
+    int full = 0, fault = 0, exhausted = 0, sync = 0;
     uint32_t detail = TA_POOL_NONE;
     /* what an earlier run or call could not finish for lack of memory */
     if (host->error_count && errors_deliver(host) != TA_OK) exhausted = 1;
@@ -1321,7 +1321,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
         ta_router_time(host);
         if (host->expiry_behind) exhausted = 1;
     }
-    for (int round = 0; round < 64 && !full && !exhausted; round++) {
+    for (int round = 0; round < 64 && !full && !exhausted && !sync; round++) {
         int ran = 0;
         /* fair shares: a runaway segment must not starve the others */
         uint32_t runnable = 0;
@@ -1329,7 +1329,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
             const host_segment *segment = segment_of(host, k);
             runnable += segment && (segment->busy || segment->deadline <= host->now);
         }
-        for (uint32_t k = 0; k < host->segment_count && !full && !exhausted; k++) {
+        for (uint32_t k = 0; k < host->segment_count && !full && !exhausted && !sync; k++) {
             uint32_t si = (host->round_robin + k) % host->segment_count;
             host_segment *segment = segment_of(host, si);
             if (!segment || (!segment->busy && segment->deadline > host->now)) continue;
@@ -1361,6 +1361,8 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
                 fault = 1;
                 segment->busy = 0;
             }
+            /* a TA_IO_PROCESSOR_SYNC send: the caller answers it before the sender goes on */
+            if (result.status == TA_RUN_EFFECTS) sync = 1;
             if (host->effect_count >= EFFECTS_PER_RUN) full = 1;
         }
         for (uint32_t i = 0; i < host->job_count && round == 0; i++) /* one quantum per run */
@@ -1369,7 +1371,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
                     exhausted = 1;
                 ran = 1;
             }
-        if (!ran || !left) break;
+        if (!ran || !left || sync) break;
         int more = 0;
         for (uint32_t i = 0; i < host->segment_count; i++)
             more |= host->segments[i].live && host->segments[i].busy;
@@ -1415,6 +1417,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     out.effect_count = host->effect_count;
     out.detail = exhausted ? detail : TA_POOL_NONE;
     out.status = full        ? TA_RUN_EFFECTS_FULL
+                 : sync      ? TA_RUN_EFFECTS
                  : fault     ? TA_RUN_FAULT
                  : exhausted ? TA_RUN_EXHAUSTED
                  : busy      ? TA_RUN_YIELDED

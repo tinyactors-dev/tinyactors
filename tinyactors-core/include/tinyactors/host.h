@@ -139,7 +139,11 @@ TA_API void ta_host_advance_time(ta_host *h, ta_time now);
  * between them, advance migration jobs, free retired segments. status:
  * TA_RUN_IDLE / TA_RUN_YIELDED / TA_RUN_EFFECTS_FULL / TA_RUN_FAULT /
  * TA_RUN_EXHAUSTED (the allocator refused memory: run again once it has
- * some; detail as for ta_system_run, TA_POOL_NONE for the host's own);
+ * some; detail as for ta_system_run, TA_POOL_NONE for the host's own) /
+ * TA_RUN_EFFECTS (the run stopped right after a send to a
+ * TA_IO_PROCESSOR_SYNC processor, the last effect of its segment: answer it
+ * — ta_host_send of events or of TA_EVENT_IN_ERROR_COMMUNICATION to the
+ * sender — and run again; the sender goes on only then);
  * next_deadline: the earliest timer of all segments. */
 TA_API ta_run ta_host_run(ta_host *h, uint32_t budget);
 

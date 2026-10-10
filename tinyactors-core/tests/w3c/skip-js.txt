@@ -1,9 +1,0 @@
-# W3C IRP tests excluded from `mise run w3c:js` (the JavaScript bindings), one per line:
-#   <test id> <reason>
-# All mandatory tests run. The runner registers a BasicHTTP Event I/O
-# Processor on a loopback (SCXML Appendix D.2), as an application would; these
-# two optional tests need its outcome inside the sender's macrostep
-# (TA_IO_PROCESSOR_SYNC), and the JS bindings call I/O processors after a run.
-# The C runner (`mise run w3c:ecmascript`) covers them.
-201 BasicHTTP before the next event the session sends (TA_IO_PROCESSOR_SYNC)
-577 error.communication on the internal queue for a send without a target (TA_IO_PROCESSOR_SYNC)

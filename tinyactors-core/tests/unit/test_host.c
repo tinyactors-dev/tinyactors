@@ -28,7 +28,8 @@ typedef struct host_world {
     size_t blob_length;
 } host_world;
 
-static void world_open(host_world *e, uint32_t max_actors) {
+static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor_descriptor *io,
+                       uint32_t io_count) {
     memset(e, 0, sizeof *e);
     e->ecmascript = ta_datamodel_ecmascript_new(NULL);
     e->binding = ta_datamodel_ecmascript_binding(e->ecmascript);
@@ -42,6 +43,8 @@ static void world_open(host_world *e, uint32_t max_actors) {
     config.datamodels = &e->binding;
     config.datamodel_count = 1;
     config.migrate_quantum = 3; /* small steps: jobs span several runs */
+    config.io_processors = io;
+    config.io_processor_count = io_count;
     config.allocator = ta_runtime_malloc();
     CHECK_EQUAL(ta_host_new(&config, &e->host), TA_OK);
 }
@@ -173,7 +176,7 @@ static int begin_class(host_world *e, uint32_t si, const char *name) {
 /* A watched step's class crosses segments with what it sends (docs/adr/0007). */
 static void test_class_across_segments(void) {
     host_world e;
-    world_open(&e, 8);
+    world_open(&e, 8, NULL, 0);
     world_add(&e, W1);
     world_add(&e, ECHO);
     ta_trace_rule watch;
@@ -207,7 +210,7 @@ static void test_class_across_segments(void) {
 
 static void test_routing_between_segments(void) {
     host_world e;
-    world_open(&e, 8);
+    world_open(&e, 8, NULL, 0);
     uint32_t s0 = world_add(&e, W1), s1 = world_add(&e, ECHO);
     CHECK(s0 == 0 && s1 == 1);
     uint64_t w = spawn(&e, "w"), echo = spawn(&e, "echo");
@@ -271,7 +274,7 @@ static void test_routing_between_segments(void) {
 
 static void test_versions_and_migration(void) {
     host_world e;
-    world_open(&e, 16);
+    world_open(&e, 16, NULL, 0);
     world_add(&e, W1);
     world_add(&e, ECHO);
     uint64_t w[5];
@@ -362,7 +365,7 @@ static void test_versions_and_migration(void) {
 
 static void test_migration_wake_and_timeout(void) {
     host_world e;
-    world_open(&e, 16);
+    world_open(&e, 16, NULL, 0);
     world_add(&e, W1);
     uint64_t a = spawn(&e, "w"), b = spawn(&e, "w");
     run(&e);
@@ -423,7 +426,7 @@ static void test_migration_wake_and_timeout(void) {
 
 static void test_migration_waits_for_invocations(void) {
     host_world e;
-    world_open(&e, 16);
+    world_open(&e, 16, NULL, 0);
     world_add(&e, P1);
     uint64_t p = spawn(&e, "p");
     run(&e);
@@ -452,7 +455,7 @@ static void test_migration_waits_for_invocations(void) {
 /* a segment with a runaway actor gets a share of each run, not all of it */
 static void test_fair_segments(void) {
     host_world e;
-    world_open(&e, 16);
+    world_open(&e, 16, NULL, 0);
     world_add(&e, SC("loop", "initial='a'><state id='a'><transition target='b'/></state>"
                              "<state id='b'><transition target='a'/></state>"));
     world_add(&e,
@@ -476,7 +479,7 @@ static void test_fair_segments(void) {
  * (error.communication in the internal queue, before external events) */
 static void test_bad_targets(void) {
     host_world e;
-    world_open(&e, 16);
+    world_open(&e, 16, NULL, 0);
     world_add(&e, SC("t",
                      "initial='a'><state id='a'><onentry>"
                      "<send target='baz' event='x'/><send event='after'/></onentry>"
@@ -496,12 +499,59 @@ static void test_bad_targets(void) {
     world_close(&e);
 }
 
+/* TA_IO_PROCESSOR_SYNC through the host: the run stops right after the send,
+ * and what the host answers (an error, or an event back) comes before what
+ * the sender does next — the BasicHTTP cases of W3C 577 and 201 */
+#define IO_TYPE "http://example.com/io"
+static void test_sync_io_processor(void) {
+    ta_io_processor_descriptor io = {
+        {IO_TYPE, (uint32_t)strlen(IO_TYPE)}, {"http://example.com/", 19}, TA_IO_PROCESSOR_SYNC, 0};
+    for (int answer = 0; answer < 2; answer++) { /* 0: error.communication, 1: an event back */
+        host_world e;
+        world_open(&e, 16, &io, 1);
+        world_add(&e,
+                  SC("s", "initial='a'><state id='a'><onentry>"
+                          "<send type='" IO_TYPE "' target='out' event='first' id='s1'/>"
+                          "<send event='after'/><log expr=\"'next'\"/></onentry>"
+                          "<transition event='error.communication' target='ok'/>"
+                          "<transition event='back' target='ok'/>"
+                          "<transition event='*' target='bad'/></state>"
+                          "<state id='ok'><onentry><log expr=\"'ok:' + _event.name\"/></onentry>"
+                          "</state><state id='bad'><onentry>"
+                          "<log expr=\"'bad:' + _event.name\"/></onentry></state>"));
+        uint64_t session = spawn(&e, "s");
+        ta_run result = ta_host_run(e.host, 100000);
+        CHECK_EQUAL(result.status, TA_RUN_EFFECTS);
+        const ta_host_effect *effects;
+        uint32_t n = ta_host_effects(e.host, &effects);
+        CHECK(n >= 1);
+        CHECK_EQUAL(effects[n - 1].kind, TA_EFFECT_SEND);
+        CHECK_EQUAL(effects[n - 1].io_processor, 0);
+        CHECK_EQUAL(effects[n - 1].session, session);
+        drain(&e);
+        CHECK(strcmp(e.log, "") == 0); /* the sender has not gone on */
+        if (answer == 0) {
+            ta_event_in event;
+            memset(&event, 0, sizeof event);
+            event.size = sizeof event;
+            event.flags = TA_EVENT_IN_ERROR_COMMUNICATION;
+            event.sendid = (ta_string_view){"s1", 2};
+            CHECK_EQUAL(ta_host_send(e.host, session, &event), TA_OK);
+        } else {
+            CHECK_EQUAL(send(&e, session, "back", NULL), TA_OK);
+        }
+        run(&e);
+        CHECK(strcmp(e.log, answer == 0 ? "next;ok:error.communication;" : "next;ok:back;") == 0);
+        world_close(&e);
+    }
+}
+
 /* a whole host to bytes and back, as after a process restart: a fresh
  * datamodel restored from its own snapshot, the host from its own; timers,
  * queued events with payloads, variables, sessions and routing go on */
 static void test_snapshot_restore(void) {
     host_world e;
-    world_open(&e, 16);
+    world_open(&e, 16, NULL, 0);
     world_add(&e, SC("c", "initial='a'><datamodel><data id='n' expr='0'/><data id='peer' expr='0'/>"
                           "</datamodel>"
                           "<state id='a'><onentry><send event='tick' delay='100ms'/></onentry>"
@@ -590,8 +640,8 @@ static void test_snapshot_restore(void) {
 
 static void test_export_adopt_between_hosts(void) {
     host_world a, b;
-    world_open(&a, 8);
-    world_open(&b, 8);
+    world_open(&a, 8, NULL, 0);
+    world_open(&b, 8, NULL, 0);
     world_add(&a, ECHO);
     world_add(&a, MOVER); /* segment 1 in a, 0 in b */
     world_add(&b, MOVER);
@@ -649,8 +699,8 @@ static void test_export_adopt_between_hosts(void) {
  * root — already lives in another segment of the adopting host. */
 static void test_adopt_tree_collision(void) {
     host_world a, b;
-    world_open(&a, 8);
-    world_open(&b, 8);
+    world_open(&a, 8, NULL, 0);
+    world_open(&b, 8, NULL, 0);
     world_add(&a, P1); /* segment 0 in a, 1 in b */
     world_add(&b, ECHO);
     world_add(&b, P1);
@@ -699,6 +749,7 @@ int main(void) {
     RUN(test_adopt_tree_collision);
     RUN(test_snapshot_restore);
     RUN(test_bad_targets);
+    RUN(test_sync_io_processor);
     RUN(test_fair_segments);
     RUN(test_routing_between_segments);
     RUN(test_class_across_segments);
