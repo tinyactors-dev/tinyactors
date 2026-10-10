@@ -1,0 +1,26 @@
+#!/usr/bin/env ruby
+#MISE description="Example: the access reconciler (examples/access-reconciler), 10,000 people for 30 simulated days on the release build"
+#USAGE flag "--employees <count>" default="10000" help="People employed at the start"
+#USAGE flag "--days <days>" default="30" help="Simulated days"
+#USAGE flag "--seed <seed>" help="Another deterministic run"
+#USAGE flag "--check" help="Check the invariants at the end; fail when one does not hold"
+#USAGE flag "--quiet" help="Leave out the daily report"
+#USAGE flag "--trace" help="Print every event the host delivers, and the chart's logs, to stderr (TRACE=1)"
+# vim:ft=ruby
+
+# The program is a tool of the release build (Core::TOOLS):
+# build/release/bin/access-reconciler, built here with only the layers it links.
+
+require_relative '../../core'
+
+program = Core::TOOLS.find { |tool| tool.name == 'access-reconciler' }
+Core.build_layers('release', Core.link_order(program.uses))
+Core.build_program('release', program)
+
+option = ->(name) { ENV["usage_#{name}"].to_s }
+arguments = ['--employees', option.call('employees'), '--days', option.call('days')]
+arguments.push('--seed', option.call('seed')) unless option.call('seed').empty?
+arguments << '--check' if option.call('check') == 'true'
+arguments << '--quiet' if option.call('quiet') == 'true'
+env = option.call('trace') == 'true' ? { 'TRACE' => '1' } : {}
+exec(env, Core.program_path('release', 'access-reconciler').to_s, *arguments, chdir: Core::ROOT.to_s)

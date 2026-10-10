@@ -50,12 +50,13 @@ address, data and timers and receiving `error.platform.upgrade` with their
 previous bindings. [examples/access-reconciler](examples/access-reconciler) is a
 Kubernetes-style controller per employee that keeps SaaS access in line with HR
 (joiners, movers, leavers, approvals, drift, outages), simulated for 30 days
-with invariants checked (`mise run examples:test`). The same JavaScript API
+with invariants checked (`mise run example:access-reconciler --check`). The same JavaScript API
 runs in browsers: [bindings/web](bindings/web) is the runtime compiled to
 WebAssembly (~52 KB gzipped). **Links** connect systems, so browser actors talk
 to server actors transparently, and the link's status is itself an actor.
-Examples: [UI elements backed by actors](examples/ui-elements) and
-[multiplayer chess](examples/chess) (lobby, join by code, server-hosted games).
+Examples: [UI elements backed by actors](examples/ui-elements)
+(`mise run example:ui`) and [multiplayer chess](examples/chess) (lobby, join
+by code, server-hosted games; `mise run example:chess`).
 See
 [architecture.md §15](docs/architecture.md#15-implementation-status-and-deviations-from-this-design)
 for what differs from the original design.

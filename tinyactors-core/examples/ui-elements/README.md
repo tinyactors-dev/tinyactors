@@ -5,8 +5,12 @@ Custom elements whose behaviour lives in statecharts running in the page
 logic, only static files.
 
 ```sh
-mise run example:ui            # http://localhost:8000/examples/ui-elements/
+mise run example:ui                # builds the wasm, serves http://localhost:8000/examples/ui-elements/
+mise run example:ui --port 9000    # another port (--port 0: any free one)
 ```
+
+Run it in `tinyactors-core`. The server (`examples/serve.mjs`) stays in the
+foreground and prints the page's URL; Ctrl-C stops it.
 
 Each element (`customElements.define(...)` in `elements.mjs`) owns one actor and
 does three things: it clones its `<template>`, forwards DOM events to the actor
@@ -113,7 +117,7 @@ deep prefixes, count/operator composition, aborts, insert repeat, macro replay,
 undo, mark, composition history, keymap migration and stale/failed saves.
 `elements.test.mjs` exercises DOM event wiring, rendering, selection, paste,
 composition, binding edits, migration and disconnect/reconnect. Run just these
-tests after `mise run web:build` with:
+tests in `tinyactors-core`, after `mise run web:build`, with:
 
 ```sh
 mise exec -- node --test examples/ui-elements/test/*.test.mjs

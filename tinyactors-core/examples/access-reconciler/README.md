@@ -14,10 +14,16 @@ grants. It runs on one `ta_system`. The person's controller is an SCXML chart
 ([host/sim.c](host/sim.c)) simulates the rest of the world deterministically.
 
 ```sh
-mise run examples:test                       # 1,500 people, 30 days, invariants checked
-build/release/examples/access-reconciler --employees 10000 --days 30
-TRACE=1 build/dev/examples/access-reconciler --employees 50 --days 5   # every event
+mise run example:access-reconciler                       # 10,000 people, 30 days (release build)
+mise run example:access-reconciler --employees 1500 --check --quiet   # invariants checked
+mise run example:access-reconciler --employees 50 --days 5 --trace    # every event
 ```
+
+Run these in `tinyactors-core`. The task builds the program
+(`build/release/bin/access-reconciler`) and runs it; `--seed` gives another
+deterministic run, and `--trace` sets `TRACE=1`. `mise run examples:test`
+runs it with 1,500 people for 30 days, invariants checked, on the sanitizer
+build (`build/dev/bin/access-reconciler`).
 
 ## Kubernetes concepts, mapped
 

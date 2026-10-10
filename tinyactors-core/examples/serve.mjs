@@ -3,7 +3,7 @@
  * A static server for the browser examples (correct MIME types for .mjs and
  * .wasm). Serves examples/ and the web binding from the repository.
  *
- *   mise run web:build && node examples/serve.mjs [--port 8000]
+ *   mise run example:ui [--port 8000]   (or: mise run web:build && node examples/serve.mjs)
  *   open http://localhost:8000/examples/ui-elements/
  */
 import http from 'node:http';
@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const arg = process.argv.indexOf('--port');
-const PORT = Number(process.env.PORT || (arg > 0 ? process.argv[arg + 1] : 8000));
+const PORT = Number(arg > 0 ? process.argv[arg + 1] : process.env.PORT || 8000);
 const MIME = { '.html': 'text/html', '.mjs': 'text/javascript', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.json': 'application/json' };
 const PUBLIC = ['/examples/', '/bindings/web/', '/bindings/shared/'];
 
@@ -39,4 +39,6 @@ http
       res.end(path.endsWith('.wasm') ? 'not built: run `mise run web:build`' : 'not found');
     }
   })
-  .listen(PORT, () => console.log(`examples: http://localhost:${PORT}/examples/ui-elements/`));
+  .listen(PORT, function () {
+    console.log(`examples: http://localhost:${this.address().port}/examples/ui-elements/`);
+  });

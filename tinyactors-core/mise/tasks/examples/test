@@ -1,12 +1,52 @@
 #!/usr/bin/env ruby
-#MISE description="Examples: the access-reconciler simulation (invariants), chess (rules perft, lobby and games over real links) and the ui-elements machines"
+#MISE description="Examples: the access-reconciler simulation (invariants), chess (rules perft, lobby and games over real links) and the ui-elements machines; each example:* task starts and answers"
 #MISE depends=["build", "node:build", "web:build"]
 # vim:ft=ruby
 
 require_relative '../../core'
+require 'net/http'
+require 'timeout'
 
 reconciler = Core.program_path('dev', 'access-reconciler')
 Core.run(reconciler, '--employees', '1500', '--days', '30', '--check', '--quiet')
 Core.run(reconciler, '--employees', '400', '--days', '21', '--seed', '7', '--check', '--quiet')
 node = Core.node_packages
 Core.run('node', '--test', *Dir[Core::ROOT.join('examples/{chess,ui-elements}/test/*.test.mjs').to_s].sort, chdir: node)
+
+# The commands the examples' READMEs give: each example:* task runs. A server
+# listens on a port the system picks (--port 0), prints its URL, and must
+# serve its page and the web binding's wasm module; then it is stopped.
+def check_server(task, *arguments, page:)
+  command = ['mise', 'run', task, '--port', '0', *arguments]
+  output = IO.popen(command, err: %i[child out], chdir: Core::ROOT.to_s, pgroup: true)
+  seen = +''
+  port = Timeout.timeout(180) do
+    seen << output.gets.to_s until (found = seen[%r{http://localhost:(\d+)/}, 1]) || output.eof?
+    found
+  end
+  abort "#{task}: printed no URL:\n#{seen}" unless port
+  Net::HTTP.start('localhost', port.to_i, open_timeout: 10, read_timeout: 10) do |http|
+    { page => 'text/html', '/bindings/web/tinyactors.wasm' => 'application/wasm' }.each do |path, type|
+      response = http.get(path)
+      next if response.code == '200' && response['content-type'] == type
+
+      abort "#{task}: GET #{path} answered #{response.code} #{response['content-type']}, not 200 #{type}"
+    end
+  end
+  puts "ok   mise run #{task}: #{page} and the wasm module are served"
+rescue Timeout::Error
+  abort "#{task}: printed no URL within 180 s:\n#{seen}"
+ensure
+  if output
+    begin
+      Process.kill('TERM', -output.pid)
+    rescue Errno::ESRCH
+      nil
+    end
+    output.close
+  end
+end
+
+check_server('example:ui', page: '/examples/ui-elements/')
+check_server('example:chess', '--no-pg', page: '/examples/chess/client/')
+Core.run('mise', 'run', 'example:access-reconciler', '--employees', '100', '--days', '4', '--check', '--quiet')

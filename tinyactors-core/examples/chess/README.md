@@ -4,8 +4,12 @@ A complete multiplayer game where every moving part is an actor, and the
 browser and the server talk *actor to actor* through a link.
 
 ```sh
-mise run example:chess        # builds the wasm + addon, serves http://localhost:8080/
+mise run example:chess                # builds the addon and the wasm, serves http://localhost:8080/
+mise run example:chess --port 9000    # another port (--port 0: any free one)
 ```
+
+Run it in `tinyactors-core`. The server stays in the foreground; Ctrl-C stops
+it.
 
 Open it in two windows: create a game in one, enter the five-letter code (or
 open the share link) in the other. Open it a third time with the same code to
@@ -89,6 +93,10 @@ browsers (`announce: [databaseID]`). The standings are plain rows:
 SELECT datamodel->'standings' FROM tinyactors.actors WHERE name = 'records';
 ```
 
-`node examples/chess/server.mjs --no-pg` runs without it.
-`examples/chess/test/e2e.test.mjs` plays two games this way (skipped when
-PostgreSQL is not running).
+The server looks for PostgreSQL on 127.0.0.1, port 54320 (`TA_PG_PORT`),
+database `tinyactors` (`CHESS_DB`). When nothing answers there, it says so
+(`chess: no PostgreSQL on port 54320, no game records`) and runs without
+records: the games work the same, and players get no `RECORD`.
+`mise run example:chess --no-pg` leaves PostgreSQL out even when it is
+running. `examples/chess/test/e2e.test.mjs` plays two games with records
+(skipped when PostgreSQL is not running).

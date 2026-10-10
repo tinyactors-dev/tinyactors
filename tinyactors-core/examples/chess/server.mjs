@@ -5,8 +5,8 @@
  * and talk to these actors as if they were local. The same HTTP server serves
  * the client and the web binding.
  *
- *   mise run web:build && node examples/chess/server.mjs [--port 8080] [--no-pg]
- *   (or: mise run example:chess)
+ *   mise run example:chess [--port 8080] [--no-pg]
+ *   (or: mise run node:build ::: web:build, then node examples/chess/server.mjs)
  *
  * With PostgreSQL running (mise run pg:start; TA_PG_PORT, CHESS_DB), finished
  * games and players' standings are kept by an actor in the database
@@ -25,7 +25,7 @@ import { connectRecords } from './records.mjs';
 const ta = createRequire(import.meta.url)('../../bindings/node');
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const arg = process.argv.indexOf('--port');
-const PORT = Number(process.env.PORT || (arg > 0 ? process.argv[arg + 1] : 8080));
+const PORT = Number(arg > 0 ? process.argv[arg + 1] : process.env.PORT || 8080);
 
 /* idle games are unloaded from memory and come back when someone moves or joins */
 const system = ta.createSystem({ id: 'chess', hibernation: { store: ta.createMemoryStore(), sweepMs: 60_000 } });
@@ -35,6 +35,7 @@ const records =
     ? await connectRecords(ta, system, { port: PG_PORT, database: process.env.CHESS_DB || 'tinyactors' })
     : null;
 if (records) console.log(`chess: game records in PostgreSQL (tinyactors://${records.link.id}/@records)`);
+else console.log(process.argv.includes('--no-pg') ? 'chess: no game records (--no-pg)' : `chess: no PostgreSQL on port ${PG_PORT}, no game records (mise run pg:start keeps them)`);
 const { lobby } = chessActors(ta, system, { records: records && records.ref });
 const lobbyActor = ta.createActor(lobby, { system, systemID: 'lobby' }).start();
 
@@ -76,4 +77,4 @@ const links = ta.serveLinks(system, {
   exports: { '*': 'CREATE JOIN MOVE RESIGN' },
   announce: records ? [records.link.id] : false, /* browsers accept RECORDs from the database */
 });
-server.listen(PORT, () => console.log(`chess: http://localhost:${PORT}/  (links on /link, stats on /stats)`));
+server.listen(PORT, () => console.log(`chess: http://localhost:${server.address().port}/  (links on /link, stats on /stats)`));
