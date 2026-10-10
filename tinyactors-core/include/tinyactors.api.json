@@ -3609,8 +3609,71 @@
       }
     },
     "ta_trace_policy": {
-      "kind": "opaque",
-      "fields": []
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sample_parts",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sample_whole",
+          "type": "uint32_t"
+        },
+        {
+          "name": "kinds",
+          "type": "uint32_t[8]"
+        },
+        {
+          "name": "rule_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "rules",
+          "type": "const ta_trace_rule *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "sample_parts": 4,
+            "sample_whole": 8,
+            "kinds": 12,
+            "rule_count": 44,
+            "rules": 48
+          }
+        },
+        "aarch64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "sample_parts": 4,
+            "sample_whole": 8,
+            "kinds": 12,
+            "rule_count": 44,
+            "rules": 48
+          }
+        },
+        "wasm32": {
+          "size": 52,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "sample_parts": 4,
+            "sample_whole": 8,
+            "kinds": 12,
+            "rule_count": 44,
+            "rules": 48
+          }
+        }
+      }
     },
     "ta_system_config": {
       "kind": "struct",

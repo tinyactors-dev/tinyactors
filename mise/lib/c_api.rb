@@ -154,10 +154,19 @@ module CAPI
 
     private
 
+    # The record or enum a typedef names: its complete definition when the
+    # typedef comes before it (`typedef struct x x;` ... `struct x {...};`).
     def record_of(node)
       walk(node) do |inner|
         decl = inner['decl'] || inner['ownedTagDecl']
-        return @nodes[decl['id']] || decl if decl && %w[RecordDecl EnumDecl].include?(decl['kind'])
+        next unless decl && %w[RecordDecl EnumDecl].include?(decl['kind'])
+
+        found = @nodes[decl['id']] || decl
+        return found if found['completeDefinition'] || found['kind'] != 'RecordDecl'
+
+        return @nodes.values.find do |other|
+          other['kind'] == 'RecordDecl' && other['name'] == found['name'] && other['completeDefinition']
+        end || found
       end
       nil
     end
