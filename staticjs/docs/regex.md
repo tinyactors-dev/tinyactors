@@ -1,11 +1,12 @@
 # Regular expressions: a linear-time automaton run as a loop frame
 
-Status: design only. Nothing here is implemented. staticjs refuses every
-regular expression today, as `unsupported` ("staticjs has no regular
-expressions": `src/parser.c:1492-1495`, and in the lookahead scans at
-`parser.c:1015-1017` and `2548-2549`; spec cases in
-`tests/spec/errors.spec:210`, `statements.spec:584-674`,
-`patterns.spec:960-966`).
+Status: being implemented, in the order of section 13. Step 1 is done:
+the lexer reads a literal (`L_REGEX`), the parser classifies it
+(`src/regex.c`, `sjs_regex_check`) and sends `SJS_EV_REGEXP`, and the
+compiler makes an `SJS_REGEXP` constant with its source, flags and
+program. Where the implementation departs from this design, section 15
+says so. Line numbers below are of the commit this document was written
+against (`dbc0c69e`), before any of it.
 
 This document designs how staticjs could accept a subset of ECMAScript
 regular expressions and match them exactly as Node 22 does, or fault, or
@@ -1007,3 +1008,47 @@ the examples of 5.1 and 5.2.
 
 **Estimated:** every performance figure and default limit in sections 2,
 9 and 12.
+
+---
+
+## 15. Where the implementation departs from this design
+
+Each departure below was made because Node or the code said otherwise.
+
+- **Classified by the parser, not the compiler (6.4).** The parser calls
+  `sjs_regex_check` on each literal as it arrives. A syntax error in a
+  pattern makes the whole program a SyntaxError in JavaScript, and the
+  parser reads on after a refusal to find one (it sends no events once
+  refusing, so the compiler would never see a later literal). An
+  unsupported pattern is refused like any other construct staticjs leaves
+  out, and read on. The compiler compiles only exact literals.
+- **The decision about a `/` is made where the parser stands (6.1, 6.2).**
+  `regex_starts` sets the lexer's `regex_next` while the `/` is the newest
+  token queued, and the parser waits; the lexer's REGEXP token then takes
+  the slash's place in the queue (`on_token`). Besides the operand
+  position and the two scans, two lookaheads had to learn it: the first
+  token of an expression statement (`statement_token` peeked past the
+  slash) and a label's name (`labelled_statement`). A slash reached any
+  other way is refused as unsupported ("cannot tell where this regular
+  expression ends") rather than lexed wrongly; no spec case reaches it.
+- **`\p{...}` with u or v (8.3, 8.4)** is unsupported only for a name Node
+  22 accepts: `src/regex.c` keeps those names (filtered in Node 22.23.2 from
+  `unicode-property-value-aliases-ecmascript` 3.0.0), and any other name is
+  a syntax error, as in Node.
+- **The v flag (8.3)** is unsupported, but its class syntax (nested
+  classes, `&&`, `--`, `\q{...}`, the reserved punctuators, negated classes
+  that may hold strings) is read, so that what Node refuses with v is a
+  syntax error here too.
+- **Group names (6.4)** of ASCII letters, digits, `$` and `_` are read
+  exactly; a name with an escape or a character that is not ASCII is
+  unsupported, as staticjs's own names are ASCII (the lexer refuses others
+  the same way). Such a name also turns off the check that a `\k<name>`
+  names a group, which is then refused as unsupported.
+- **A quantifier's count** is clamped to 2^31 - 1 before `{n,m}` is
+  checked for order, as V8 does: `/a{2147483648,2147483647}/` is valid in
+  Node, `/a{4294967296,1}/` is not.
+- **`(a?)` under a quantifier (9.3)** does not multiply the slots: its
+  copies share one group number, so `/(a?){10000}/` costs instructions,
+  not slots. Only a pattern that writes many groups has many slots.
+- **The random sweep's tag (11.3)** is `X`, not `R`, which `number_test`
+  already uses for BigInt rounding.

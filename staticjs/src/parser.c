@@ -19,10 +19,16 @@
  * pattern it decides as soon as a token no pattern takes appears, so `(a +
  * b)` is an expression at `+`; a default value or a computed key it only
  * balances, to the `,` or the bracket that ends it. There a `/` that cannot
- * divide begins a regular expression, whose body the lexer cannot read, so
- * the scan stops and refuses it. It keeps what each bracket it balances is,
- * as the end of an if's condition or of a block statement is the start of a
- * statement, where a `/` cannot divide.
+ * divide begins a regular expression: the scan says so while the lexer hands
+ * it the `/`, before the lexer reads on, and the lexer reads the literal as
+ * one token, which takes the slash's place (regex_starts). It keeps what
+ * each bracket it balances is, as the end of an if's condition or of a block
+ * statement is the start of a statement, where a `/` cannot divide.
+ *
+ * Wherever else a `/` begins an operand, the parser decides the same way,
+ * when the `/` arrives, and waits for the literal's token. A literal is
+ * classified when it arrives (regex.c): a syntax error, JavaScript staticjs
+ * leaves out (refused, and read on), or an SJS_EV_REGEXP.
  *
  * Events wait in a held list where the source and the evaluation order
  * differ. A const holds its pattern until its value has been sent. A
@@ -54,6 +60,7 @@
  * cannot read past.
  */
 #include "syntax.h"
+#include "regex.h"
 
 typedef struct {
     uint8_t kind;
@@ -776,13 +783,14 @@ static bool scan_closes(const queued_token *t) {
 
 /* Can `t` end an operand, so that a `/` after it divides? Where the parser
  * reads ahead without parsing, this tells a division from a regular
- * expression, whose body the lexer cannot read: `(a = /'/) => a`. */
+ * expression, which the lexer must read as one: `(a = /'/) => a`. */
 static bool ends_operand(const queued_token *t) {
     switch (t->kind) {
     case SJS_TOKEN_NUMBER:
     case SJS_TOKEN_STRING:
     case SJS_TOKEN_TEMPLATE:
     case SJS_TOKEN_TEMPLATE_TAIL:
+    case SJS_TOKEN_REGEXP:
         return true;
     case SJS_TOKEN_NAME:
         return t->keyword == SJS_K_NONE || t->keyword == SJS_K_TRUE || t->keyword == SJS_K_FALSE ||
@@ -799,6 +807,19 @@ static bool ends_operand(const queued_token *t) {
 static bool is_slash(const sjs_parser *p, const queued_token *t) {
     return is_punctuator(t, SJS_P_SLASH) ||
            (is_punctuator(t, SJS_P_ASSIGN_OPERATOR) && sjs_str_equal(token_text(p, t), SJS_STR("/=")));
+}
+
+/* The slash `t` begins a regular expression. The lexer has read no byte past
+ * it, as the parser decides while the lexer hands it over (the newest token
+ * queued): the lexer reads the literal next, and its token takes the
+ * slash's place in the queue (on_token). Until then the parser waits. */
+static handled regex_starts(sjs_parser *p, const queued_token *t) {
+    uint32_t n = SJS_BUF_COUNT(p->queue, queued_token);
+    if (n == 0 || SJS_BUF_AT(p->queue, queued_token, n - 1u).at.offset != t->at.offset) {
+        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs cannot tell where this regular expression ends" });
+    }
+    p->lexer.regex_next = is_punctuator(t, SJS_P_SLASH) ? 1u : 2u;
+    return H_WAIT;
 }
 
 static bool word_listed(sjs_str word, const char *const *list, uint32_t count) {
@@ -1013,9 +1034,13 @@ static decision decide_paren(sjs_parser *p, const queued_token *paren, uint32_t 
         if (s->region != SCAN_PATTERN) {
             bracket_seen seen = scan_seen(p);
             if (scan_starts_regex(p, t, &seen)) {
-                s->paren = 0;
-                parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no regular expressions" });
-                return D_FAILED;
+                /* Its token takes the slash's place, and the scan reads it
+                 * as it reads a string. */
+                if (regex_starts(p, t) == H_STOP) {
+                    s->paren = 0;
+                    return D_FAILED;
+                }
+                return D_WAIT;
             }
             s->trailing = 0;
             d = scan_region(p, t);
@@ -1109,6 +1134,7 @@ static bool starts_operand(sjs_parser *p, const queued_token *t) {
     case SJS_TOKEN_STRING:
     case SJS_TOKEN_TEMPLATE:
     case SJS_TOKEN_TEMPLATE_HEAD:
+    case SJS_TOKEN_REGEXP:
         return true;
     case SJS_TOKEN_NAME:
         return word_starts_operand(p, t);
@@ -1217,6 +1243,8 @@ static bool statement_goes_on(sjs_parser *p, const queued_token *t, const queued
  * statement starts with is a syntax error. */
 static handled refuse_statement(sjs_parser *p, const queued_token *t, const char *message) {
     if (!starts_statement(p, t)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected a statement" });
+    /* A statement a slash begins begins with a regular expression. */
+    if (is_slash(p, t)) return regex_starts(p, t);
     if (t->kind == SJS_TOKEN_NAME || t->kind == SJS_TOKEN_PUNCTUATOR) {
         const queued_token *next = peek(p, 1);
         if (next == NULL) return H_WAIT;
@@ -1421,6 +1449,34 @@ static handled postfix_update(sjs_parser *p, const queued_token *t) {
     return send_event(p, counted(SJS_EV_UPDATE, op, operand_place(p, t->at)));
 }
 
+/* A regular expression literal: its flags and body read and classified
+ * (regex.c). Exact, it is a REGEXP event; unsupported, it is refused and
+ * read on, as JavaScript staticjs leaves out; a syntax error stops. */
+static handled regex_literal(sjs_parser *p, const queued_token *t) {
+    sjs_str text = token_text(p, t);
+    uint32_t slash = text.length;
+    while (slash > 0 && text.ptr[slash - 1u] != '/') slash--;
+    sjs_regex_literal literal = { { text.ptr, slash > 0 ? slash - 1u : 0 }, 0 };
+    if (!sjs_regex_flags((sjs_str){ text.ptr + slash, text.length - slash }, &literal.flags)) {
+        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "invalid regular expression flags" });
+    }
+    sjs_regex_verdict verdict;
+    if (sjs_regex_check((sjs_regex_env){ &p->allocator, p->limits }, literal, &verdict) != SJS_OK) return fail_memory(p);
+    switch (verdict.outcome) {
+    case SJS_REGEX_SYNTAX:
+        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, verdict.message });
+    case SJS_REGEX_LIMIT:
+        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_LIMIT, verdict.message });
+    case SJS_REGEX_UNSUPPORTED:
+        return refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, verdict.message });
+    default: {
+        sjs_event e = texted(SJS_EV_REGEXP, literal.body, own_place(p, t->at));
+        e.count = literal.flags;
+        return send(p, &e);
+    }
+    }
+}
+
 static handled operand(sjs_parser *p, const queued_token *t) {
     frame *f = top_frame(p);
     switch (t->kind) {
@@ -1444,6 +1500,9 @@ static handled operand(sjs_parser *p, const queued_token *t) {
     }
     case SJS_TOKEN_NAME:
         return operand_name(p, t);
+    case SJS_TOKEN_REGEXP:
+        p->expect = E_OPERATOR;
+        return regex_literal(p, t);
     case SJS_TOKEN_PUNCTUATOR:
         break;
     default:
@@ -1491,9 +1550,7 @@ static handled operand(sjs_parser *p, const queued_token *t) {
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "... spreads only into an array, a call or an object" });
     case SJS_P_SLASH:
     case SJS_P_ASSIGN_OPERATOR:
-        if (t->punctuator == SJS_P_SLASH || sjs_str_equal(token_text(p, t), SJS_STR("/="))) {
-            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no regular expressions" });
-        }
+        if (is_slash(p, t)) return regex_starts(p, t);
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression" });
     case SJS_P_PLUS_PLUS:
     case SJS_P_MINUS_MINUS:
@@ -2545,9 +2602,7 @@ static handled cover_initializer(sjs_parser *p, const queued_token *t) {
             seen.before = i >= 2u ? peek(p, i - 2u) : NULL;
             seen.prev = peek(p, i - 1u);
             seen.open = SJS_BUF_AT(p->scan_brackets, uint8_t, depth - 1u);
-            if (scan_starts_regex(p, next, &seen)) {
-                return parse_fail(p, next, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no regular expressions" });
-            }
+            if (scan_starts_regex(p, next, &seen)) return regex_starts(p, next);
             if (scan_opens(next)) {
                 if (!scan_bracket(p, depth, bracket_kind(p, next, &seen))) return H_STOP;
                 depth++;
@@ -2968,10 +3023,14 @@ static handled labelled_statement(sjs_parser *p, const queued_token *t, bool sin
         if (i + 2u > p->limits.max_lookahead) {
             return parse_fail(p, t, (sjs_problem){ SJS_ERROR_LIMIT, "the parser needs to see further ahead than max_lookahead" });
         }
+        /* The name first: what follows a token that is not one (a slash
+         * that begins a regular expression) is not read ahead. */
         const queued_token *name = peek(p, i);
+        if (name == NULL) return H_WAIT;
+        if (!label_word(p, name)) break;
         const queued_token *colon = peek(p, i + 1u);
-        if (name == NULL || colon == NULL) return H_WAIT;
-        if (!label_word(p, name) || !is_punctuator(colon, SJS_P_COLON)) break;
+        if (colon == NULL) return H_WAIT;
+        if (!is_punctuator(colon, SJS_P_COLON)) break;
         i += 2u;
     }
     uint8_t declares = declaration_at(p, i, true);
@@ -3064,7 +3123,9 @@ static handled statement_token(sjs_parser *p, const queued_token *t, bool single
      * end it is refused unless its expression, as a whole, is a call, which
      * the compiler accepts if it changes a variable (end_expression_statement).
      * Restore: refuse here, as `refuse(p, t, expression_statement)`, and push
-     * the frame with no_node(t->at). */
+     * the frame with no_node(t->at). A slash begins a regular expression,
+     * read before the token after it is looked at. */
+    if (is_slash(p, t)) return regex_starts(p, t);
     if (t->kind == SJS_TOKEN_NAME || t->kind == SJS_TOKEN_PUNCTUATOR) {
         const queued_token *next = peek(p, 1);
         if (next == NULL) return H_WAIT;
@@ -3763,8 +3824,23 @@ static sjs_result run(sjs_parser *p) {
     return SJS_OK;
 }
 
-static sjs_result on_token(void *self, const sjs_token *token) {
+static sjs_result on_token(void *self, const sjs_token *arrived) {
     sjs_parser *p = self;
+    sjs_token merged = *arrived;
+    const sjs_token *token = arrived;
+    if (arrived->kind == SJS_TOKEN_REGEXP) {
+        /* It takes the place of the slash that began it, the newest token
+         * queued (regex_starts), with the slash's position and line break. */
+        uint32_t n = SJS_BUF_COUNT(p->queue, queued_token);
+        if (n > p->head) {
+            queued_token slash = SJS_BUF_AT(p->queue, queued_token, n - 1u);
+            p->queue.length -= (uint32_t)sizeof(queued_token);
+            p->queue_text.length = slash.text_offset;
+            merged.newline_before = slash.newline_before;
+            merged.at = slash.at;
+            token = &merged;
+        }
+    }
     queued_token q = { 0 };
     q.kind = token->kind;
     q.punctuator = token->punctuator;

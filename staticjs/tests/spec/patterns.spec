@@ -957,13 +957,14 @@ a = x => 1
 (x => { return 1, 2; })()
 --- error unsupported comma
 
-=== a regular expression in a default value
-((a = /'/) => 1)
---- error unsupported regular expressions
+=== a regular expression in a default value, read ahead as one token
+((a = /'/) => a.source)()
+--- value
+"'"
 
 === a regular expression in a shorthand default of an assignment pattern
 ({a = 1, b = /'/} = {})
---- error unsupported regular expressions
+--- error unsupported assignment
 
 === a generator method
 ({*a(){}})

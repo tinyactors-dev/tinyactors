@@ -15,8 +15,12 @@ enum {
     L_LINE_COMMENT,
     L_BLOCK_COMMENT,
     L_BOM,
+    L_REGEX,
     L_FAILED
 };
+
+/* Substates of a regular expression literal. */
+enum { R_BODY = 0, R_ESCAPE, R_FLAGS, R_FLAG_UTF8 };
 
 /* Substates of a number. */
 enum { N_ZERO = 0, N_INTEGER, N_FRACTION, N_EXPONENT_START, N_EXPONENT_SIGN, N_EXPONENT, N_RADIX, N_LEGACY, N_BIGINT };
@@ -153,6 +157,16 @@ static step emit(sjs_lexer *lexer, sjs_token *token) {
         lexer->state = L_FAILED;
         return STOP;
     }
+    if (lexer->regex_next != 0) {
+        /* The parser read the `/` just handed to it as the start of a
+         * regular expression: its body comes next, from the slash on. */
+        uint8_t equals = lexer->regex_next == 2u ? '=' : 0;
+        lexer->regex_next = 0;
+        lexer->state = L_REGEX;
+        lexer->substate = R_BODY;
+        lexer->regex_class = false;
+        if (equals != 0) return text_append(lexer, &equals, 1);
+    }
     return TAKEN;
 }
 
@@ -262,10 +276,76 @@ static step punctuator_byte(sjs_lexer *lexer, uint8_t c) {
         }
     }
     /* The byte does not extend what is held: emit the longest punctuator,
-     * and read the byte again against what remains. */
+     * and read the byte again against what remains (or as the first of a
+     * regular expression's body, which the punctuator began). */
     if (flush_punctuator(lexer) == STOP) return STOP;
-    if (lexer->punctuator_length == 0) lexer->state = L_START;
+    if (lexer->punctuator_length == 0 && lexer->state != L_REGEX) lexer->state = L_START;
     return AGAIN;
+}
+
+/* ------------------------------------------------------------------------
+ * Regular expression literals, after the `/` the parser said begins one:
+ * the body to an unescaped `/` outside a class, then the flags. The body
+ * may hold any character but a line terminator. The token's text is the
+ * body, a `/` and the flags; the parser classifies them (regex.c).
+ */
+
+static bool is_line_end_point(uint32_t point) {
+    return point == 0x2028u || point == 0x2029u;
+}
+
+static step end_regex(sjs_lexer *lexer) {
+    sjs_token token = { 0 };
+    token.kind = SJS_TOKEN_REGEXP;
+    token.text = (sjs_str){ (const char *)lexer->text.ptr, lexer->text.length };
+    return emit(lexer, &token);
+}
+
+static step regex_byte(sjs_lexer *lexer, uint8_t c) {
+    if (lexer->substate == R_FLAGS) {
+        if (is_name_part(c)) return text_append(lexer, &c, 1);
+        if (c == '\\') return lex_fail(lexer, SJS_ERROR_SYNTAX, "invalid regular expression flags");
+        if (c >= 0x80u) {
+            lexer->substate = R_FLAG_UTF8;
+            return TAKEN;
+        }
+        if (end_regex(lexer) == STOP) return STOP;
+        return AGAIN;
+    }
+    if (lexer->substate == R_FLAG_UTF8) {
+        /* A character after the flags that is not ASCII: one JavaScript
+         * would read as a flag, or after a literal, is a syntax error; white
+         * space is JavaScript that staticjs does not read there. */
+        if (lexer->utf8_need != 0) return TAKEN;
+        uint32_t point = lexer->utf8_point;
+        if (sjs_is_white_space(point)) {
+            if (end_regex(lexer) == STOP) return STOP;
+            return lex_fail(lexer, SJS_ERROR_UNSUPPORTED, "outside strings, templates and comments staticjs reads ASCII");
+        }
+        return lex_fail(lexer, SJS_ERROR_SYNTAX, "invalid regular expression flags");
+    }
+    if (c == '\n' || c == '\r') return lex_fail_at_start(lexer, SJS_ERROR_SYNTAX, "a regular expression cannot span lines");
+    if (c >= 0x80u && lexer->utf8_need == 0 && is_line_end_point(lexer->utf8_point)) {
+        return lex_fail_at_start(lexer, SJS_ERROR_SYNTAX, "a regular expression cannot span lines");
+    }
+    if (lexer->substate == R_ESCAPE) {
+        lexer->substate = R_BODY;
+        return text_append(lexer, &c, 1);
+    }
+    if (c == '\\') {
+        lexer->substate = R_ESCAPE;
+        return text_append(lexer, &c, 1);
+    }
+    if (lexer->regex_class) {
+        if (c == ']') lexer->regex_class = false;
+        return text_append(lexer, &c, 1);
+    }
+    if (c == '[') lexer->regex_class = true;
+    if (c == '/') {
+        lexer->substate = R_FLAGS;
+        return text_append(lexer, &c, 1);
+    }
+    return text_append(lexer, &c, 1);
 }
 
 /* ------------------------------------------------------------------------
@@ -781,6 +861,8 @@ static step lex_byte(sjs_lexer *lexer, uint8_t c) {
         return template_byte(lexer, c);
     case L_PUNCTUATOR:
         return punctuator_byte(lexer, c);
+    case L_REGEX:
+        return regex_byte(lexer, c);
     case L_LINE_COMMENT:
         if (c == '\n' || c == '\r') {
             lexer->state = L_START;
@@ -908,6 +990,13 @@ sjs_result sjs_lexer_finish(sjs_lexer *lexer) {
         break;
     case L_PUNCTUATOR:
         while (s != STOP && lexer->punctuator_length > 0) s = flush_punctuator(lexer);
+        /* A `/` at the end that begins a regular expression has no body. */
+        if (s != STOP && lexer->state == L_REGEX) s = lex_fail_at_start(lexer, SJS_ERROR_SYNTAX, "the source ends inside a regular expression");
+        break;
+    case L_REGEX:
+        if (lexer->substate == R_FLAGS) s = end_regex(lexer);
+        else if (lexer->substate == R_FLAG_UTF8) s = lex_fail(lexer, SJS_ERROR_SYNTAX, "invalid regular expression flags");
+        else s = lex_fail_at_start(lexer, SJS_ERROR_SYNTAX, "the source ends inside a regular expression");
         break;
     case L_STRING:
         s = lex_fail_at_start(lexer, SJS_ERROR_SYNTAX, "the source ends inside a string");

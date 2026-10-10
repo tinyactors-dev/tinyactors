@@ -583,11 +583,11 @@ y = 1; return 0; })
 
 === a regular expression after an if's condition, read ahead
 (f = () => { if (x) /'/.test(y) }) => f
---- error unsupported regular expressions
+--- error unsupported expression statement
 
 === a regular expression after a block statement, read ahead
 (f = () => { {} /'/.test(y) }) => f
---- error unsupported regular expressions
+--- error unsupported expression statement
 
 === a division after an object literal, read ahead
 ((f = () => ({}) / 2) => 1)()
@@ -667,8 +667,8 @@ if (true) {}
 
 === a regular expression after a loop's head, read ahead
 (f = () => { while (x) /'/.test(y) }) => f
---- error unsupported regular expressions
+--- error unsupported loops
 
 === a regular expression after a try statement, read ahead
 (f = () => { try {} finally {} /'/.test(y) }) => f
---- error unsupported regular expressions
+--- error unsupported exceptions
