@@ -1245,6 +1245,59 @@ static void test_metrics_stats(void) {
     free(memory);
 }
 
+/* With TA_OTLP_SPAN_METRICS the encoder keeps each chart's macrostep
+ * durations; their exemplars are spans it wrote. */
+static void test_span_metrics(void) {
+    const char *charts[] = {
+        SC("door", "initial='a'><state id='a'><transition event='go'/></state>")};
+    world w;
+    ta_otlp_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.flags = TA_OTLP_SPAN_METRICS;
+    CHECK(world_open(&w, charts, 1, &config));
+    uint32_t a = world_spawn(&w, "door", NULL);
+    world_settle(&w);
+    for (int i = 0; i < 3; i++)
+        world_send(&w, a, "go", NULL, NULL);
+    world_settle(&w);
+    world_flush(&w);
+    ta_otlp_stats stats;
+    stats.size = sizeof stats;
+    ta_otlp_stats_get(w.otlp, &stats);
+    CHECK(stats.span_metric_charts == 1 && stats.span_metric_capacity == 64);
+    CHECK_EQUAL(ta_otlp_add_span_metrics(w.otlp, w.otlp, 1, 2), TA_OK);
+    size_t length;
+    unsigned char *bytes = metrics_put(w.otlp, &length);
+    ta_otlp_metric_view view;
+    CHECK(metric_named(bytes, length, "tinyactors.macrostep.duration", &view));
+    CHECK(view.kind == TA_OTLP_METRIC_HISTOGRAM && is(view.unit, "s"));
+    uint32_t at = 0;
+    ta_otlp_point_view point;
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK(strcmp(text_attribute(point.attributes, "tinyactors.chart.name"), "door") == 0);
+    CHECK_EQUAL(point.count, 4); /* the bootstrap and three events */
+    CHECK(point.buckets.length == 8 * 11 && point.bounds.length == 8 * 10 && point.has_min_max);
+    uint32_t exemplar_at = 0;
+    ta_otlp_exemplar exemplar;
+    CHECK_EQUAL(ta_otlp_next_exemplar(point.exemplars, &exemplar_at, &exemplar), 1);
+    CHECK(span_by_id(&w, exemplar.span) != NULL); /* a span that was written */
+    free(bytes);
+    /* without the flag, nothing is kept */
+    ta_otlp_set_flags(w.otlp, 0);
+    world_send(&w, a, "go", NULL, NULL);
+    world_settle(&w);
+    world_flush(&w);
+    CHECK_EQUAL(ta_otlp_add_span_metrics(w.otlp, w.otlp, 1, 2), TA_OK);
+    bytes = metrics_put(w.otlp, &length);
+    CHECK(metric_named(bytes, length, "tinyactors.macrostep.duration", &view));
+    at = 0;
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK_EQUAL(point.count, 4);
+    free(bytes);
+    world_close(&w);
+}
+
 int main(void) {
     RUN(test_granary_vocabulary);
     RUN(test_open_across_runs);
@@ -1258,5 +1311,6 @@ int main(void) {
     RUN(test_decode_malformed);
     RUN(test_metrics_roundtrip);
     RUN(test_metrics_stats);
+    RUN(test_span_metrics);
     TEST_MAIN_END();
 }

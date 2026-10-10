@@ -152,6 +152,18 @@ typedef struct otlp_skip { /* a macrostep a drop ended: its later records are sk
     uint64_t session, macrostep;
 } otlp_skip;
 
+/* The macrostep durations of one (system, chart) (TA_OTLP_SPAN_METRICS). */
+#define OTLP_DURATION_BUCKETS 11u
+#define OTLP_CHART_NAME_BYTES 64u
+typedef struct otlp_duration {
+    uint32_t source, chart, name_length, pad;
+    char name[OTLP_CHART_NAME_BYTES];
+    uint64_t count;
+    double sum, min, max;
+    uint64_t buckets[OTLP_DURATION_BUCKETS];
+    ta_otlp_exemplar exemplars[OTLP_DURATION_BUCKETS]; /* time 0: none */
+} otlp_duration;
+
 typedef struct otlp_entry { /* a finished span in the staging */
     uint32_t at, length, next;
     uint32_t pad;
@@ -172,11 +184,11 @@ struct ta_otlp {
     uint32_t entry_capacity, index_capacity;
     int64_t open_relative, index_relative, skips_relative, chunks_relative, spans_relative,
         entries_relative, scopes_relative, scope_bytes_relative, logs_relative, resource_relative,
-        scratch_relative, render_relative, metrics_relative;
+        scratch_relative, render_relative, metrics_relative, durations_relative;
     uint32_t scratch_bytes, open_count, skip_count, chunk_free, chunk_high, chunks_used;
     uint32_t spans_used, entry_count, scope_count, scope_bytes_used, logs_used, log_count;
     uint32_t resource_used, span_count, mark_head, mark_count;
-    uint32_t metrics_used, metric_count;
+    uint32_t metrics_used, metric_count, duration_count, pad2;
     uint64_t mark_fuel[OTLP_MARKS], mark_wall[OTLP_MARKS];
     uint64_t records, dropped, skipped, truncated;
 };

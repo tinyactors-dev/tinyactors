@@ -1070,6 +1070,12 @@ export interface TelemetryOptions {
   metricsInterval?: number;
   /** The application's own metrics, exported with the system's at each interval. */
   metrics?: () => Metric[];
+  /**
+   * `tinyactors.macrostep.duration` per chart, from the macrostep spans the
+   * encoder writes, each bucket's exemplar a span: the recorded steps'
+   * distribution (a collector's spanmetrics does the same). Default false.
+   */
+  spanMetrics?: boolean;
   /** Headers of every request (OTEL_EXPORTER_OTLP_HEADERS). */
   headers?: Record<string, string>;
   /** Resource attributes (OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES). */

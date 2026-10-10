@@ -1220,6 +1220,51 @@ static uint32_t otlp_read_begin(const otlp_reading *reading, otlp_scratch *scrat
     return TA_OTLP_READ;
 }
 
+/* ---- macrostep durations (TA_OTLP_SPAN_METRICS, docs/adr/0007) ------------------------------ */
+
+static const double OTLP_DURATION_BOUNDS[OTLP_DURATION_BUCKETS - 1u] = {
+    0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.25, 1.0};
+
+static otlp_duration *otlp_durations(const ta_otlp *otlp) {
+    return OTLP_POINTER(otlp, durations_relative, otlp_duration);
+}
+
+/* A macrostep span that ended at `end` (wall ns): into its chart's histogram;
+ * a chart past the table's capacity is not kept. */
+static void otlp_duration_add(const otlp_reading *reading, const otlp_open *open, uint64_t end) {
+    ta_otlp *otlp = reading->otlp;
+    otlp_duration *table = otlp_durations(otlp), *entry = (otlp_duration *)0;
+    for (uint32_t i = 0; i < otlp->duration_count && !entry; i++)
+        if (table[i].source == open->source && table[i].chart == open->chart) entry = &table[i];
+    if (!entry) {
+        if (otlp->duration_count == otlp->config.span_metric_charts) return;
+        entry = &table[otlp->duration_count++];
+        ta_memset(entry, 0, sizeof *entry);
+        entry->source = open->source;
+        entry->chart = open->chart;
+        ta_string_view name = {"", 0};
+        if (open->chart < reading->view->chart_count)
+            name = ta_image_view_string(reading->view, reading->view->charts[open->chart].name);
+        entry->name_length =
+            name.length < OTLP_CHART_NAME_BYTES ? name.length : OTLP_CHART_NAME_BYTES;
+        if (entry->name_length) ta_memcpy(entry->name, name.pointer, entry->name_length);
+    }
+    double seconds = (double)(end > open->macro.start ? end - open->macro.start : 1u) / 1e9;
+    uint32_t bucket = 0;
+    while (bucket + 1u < OTLP_DURATION_BUCKETS && seconds > OTLP_DURATION_BOUNDS[bucket])
+        bucket++;
+    entry->buckets[bucket]++;
+    entry->min = entry->count ? (seconds < entry->min ? seconds : entry->min) : seconds;
+    entry->max = entry->count ? (seconds > entry->max ? seconds : entry->max) : seconds;
+    entry->count++;
+    entry->sum += seconds;
+    ta_otlp_exemplar *exemplar = &entry->exemplars[bucket]; /* the latest span in the bucket */
+    exemplar->trace = open->macro.trace;
+    exemplar->span = open->macro.span_id;
+    exemplar->time = end;
+    exemplar->value = seconds;
+}
+
 static uint32_t otlp_read_end(const otlp_reading *reading, otlp_scratch *scratch,
                               const ta_trace_record *record, uint64_t time, uint32_t source) {
     ta_otlp *otlp = reading->otlp;
@@ -1257,6 +1302,7 @@ static uint32_t otlp_read_end(const otlp_reading *reading, otlp_scratch *scratch
                         open->source, open->chart, time);
     otlp_span_stage(reading, &open->macro, &open->common, fields, TEXT("macrostep"), open->source,
                     open->chart, time);
+    if (otlp->config.flags & TA_OTLP_SPAN_METRICS) otlp_duration_add(reading, open, time);
     otlp_open_remove(otlp, open);
     return TA_OTLP_READ;
 }
@@ -1579,6 +1625,8 @@ void ta_otlp_stats_get(const ta_otlp *otlp, ta_otlp_stats *out) {
     stats.metrics = otlp->metric_count;
     stats.metric_bytes = otlp->metrics_used;
     stats.metric_capacity = otlp->config.metric_bytes;
+    stats.span_metric_charts = otlp->duration_count;
+    stats.span_metric_capacity = otlp->config.span_metric_charts;
     stats.records = otlp->records;
     stats.dropped = otlp->dropped;
     stats.skipped = otlp->skipped;
@@ -1615,13 +1663,15 @@ static void otlp_normalize(const ta_otlp_config *in, ta_otlp_config *config) {
         config->render_bytes = config->value_limit + 4u;
     if (!config->resource_bytes) config->resource_bytes = 4096;
     if (!config->metric_bytes) config->metric_bytes = 65536;
+    if (!config->span_metric_charts) config->span_metric_charts = 64;
+    if (config->span_metric_charts > 65536u) config->span_metric_charts = 65536u;
     if (config->metric_bytes > TA_OTLP_STAGING_BYTES_MAX)
         config->metric_bytes = TA_OTLP_STAGING_BYTES_MAX;
 }
 
 typedef struct otlp_carved {
     size_t header, open, index, skips, chunks, spans, entries, scopes, scope_bytes, logs, resource,
-        scratch, render, metrics;
+        scratch, render, metrics, durations;
     uint32_t index_capacity, entry_capacity, scratch_bytes;
 } otlp_carved;
 
@@ -1647,6 +1697,8 @@ static void otlp_carve(ta_arena *arena, const ta_otlp_config *config, otlp_carve
     o->scratch = ta_arena_alloc(arena, o->scratch_bytes, TA_ALIGN_MAX);
     o->render = ta_arena_alloc(arena, config->render_bytes, TA_ALIGN_MAX);
     o->metrics = ta_arena_alloc(arena, config->metric_bytes, TA_ALIGN_MAX);
+    o->durations =
+        ta_arena_alloc(arena, sizeof(otlp_duration) * config->span_metric_charts, TA_ALIGN_MAX);
 }
 
 ta_status ta_otlp_layout(const ta_otlp_config *config, size_t *bytes) {
@@ -1692,6 +1744,7 @@ static ta_otlp *otlp_place(void *memory, size_t length, const ta_otlp_config *co
     otlp->scratch_relative = otlp_relative(otlp, &arena, o.scratch);
     otlp->render_relative = otlp_relative(otlp, &arena, o.render);
     otlp->metrics_relative = otlp_relative(otlp, &arena, o.metrics);
+    otlp->durations_relative = otlp_relative(otlp, &arena, o.durations);
     otlp->chunk_free = TA_NIL;
     return otlp;
 }
@@ -1717,7 +1770,8 @@ ta_status ta_otlp_relocate(ta_otlp *otlp, void *memory, size_t length, const ta_
         normalized.chunks < otlp->chunk_high || normalized.staging_bytes < otlp->spans_used ||
         entry_capacity < otlp->entry_count || normalized.scopes < otlp->scope_count ||
         normalized.log_bytes < otlp->logs_used || normalized.resource_bytes < otlp->resource_used ||
-        normalized.metric_bytes < otlp->metrics_used)
+        normalized.metric_bytes < otlp->metrics_used ||
+        normalized.span_metric_charts < otlp->duration_count)
         return TA_ERROR_INVALID;
     ta_otlp *moved = otlp_place(memory, length, &normalized);
     if (!moved) return TA_ERROR_NO_MEMORY;
@@ -1738,6 +1792,10 @@ ta_status ta_otlp_relocate(ta_otlp *otlp, void *memory, size_t length, const ta_
               OTLP_POINTER(otlp, resource_relative, void), otlp->resource_used);
     ta_memcpy(OTLP_POINTER(moved, metrics_relative, void),
               OTLP_POINTER(otlp, metrics_relative, void), otlp->metrics_used);
+    ta_memcpy(OTLP_POINTER(moved, durations_relative, void),
+              OTLP_POINTER(otlp, durations_relative, void),
+              sizeof(otlp_duration) * otlp->duration_count);
+    moved->duration_count = otlp->duration_count;
     moved->metrics_used = otlp->metrics_used;
     moved->metric_count = otlp->metric_count;
     ta_memcpy(OTLP_POINTER(moved, chunks_relative, void), OTLP_POINTER(otlp, chunks_relative, void),
@@ -2272,4 +2330,48 @@ ta_status ta_otlp_add_stats(ta_otlp *otlp, const ta_otlp_stats_input *input) {
         otlp->metric_count = count;
     }
     return status;
+}
+
+ta_status ta_otlp_add_span_metrics(ta_otlp *into, const ta_otlp *from, uint64_t start_ns,
+                                   uint64_t time_ns) {
+    uint32_t count = from->duration_count;
+    if (!count) return TA_OK;
+    /* points, attributes and exemplars in the scratch area of `into` */
+    ta_otlp_exemplar *exemplars = OTLP_POINTER(into, scratch_relative, ta_otlp_exemplar);
+    ta_otlp_point *points = (ta_otlp_point *)(exemplars + count * OTLP_DURATION_BUCKETS);
+    ta_otlp_attribute *attributes = (ta_otlp_attribute *)(points + count);
+    uint64_t need = (uint64_t)count * (sizeof *points + sizeof *attributes +
+                                       OTLP_DURATION_BUCKETS * sizeof *exemplars);
+    if (need > into->scratch_bytes) return TA_ERROR_NO_MEMORY;
+    const otlp_duration *table = otlp_durations(from);
+    for (uint32_t i = 0; i < count; i++) {
+        const otlp_duration *entry = &table[i];
+        ta_otlp_point *point = &points[i];
+        ta_memset(point, 0, sizeof *point);
+        attributes[i].key = TEXT("tinyactors.chart.name");
+        attributes[i].value = (ta_string_view){entry->name, entry->name_length};
+        point->attributes = &attributes[i];
+        point->attribute_count = 1;
+        point->count = entry->count;
+        point->sum = entry->sum;
+        point->min = entry->min;
+        point->max = entry->max;
+        point->bounds = OTLP_DURATION_BOUNDS;
+        point->buckets = entry->buckets;
+        point->bucket_count = OTLP_DURATION_BUCKETS;
+        ta_otlp_exemplar *kept = &exemplars[i * OTLP_DURATION_BUCKETS];
+        point->exemplars = kept;
+        for (uint32_t b = 0; b < OTLP_DURATION_BUCKETS; b++)
+            if (entry->exemplars[b].time) kept[point->exemplar_count++] = entry->exemplars[b];
+    }
+    ta_otlp_metric metric;
+    ta_memset(&metric, 0, sizeof metric);
+    metric.name = TEXT("tinyactors.macrostep.duration");
+    metric.unit = TEXT("s");
+    metric.kind = TA_OTLP_METRIC_HISTOGRAM;
+    metric.points = points;
+    metric.point_count = count;
+    metric.start_ns = start_ns;
+    metric.time_ns = time_ns;
+    return ta_otlp_add_metric(into, &metric);
 }

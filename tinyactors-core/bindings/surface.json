@@ -15,6 +15,7 @@
 
     "ta_host_trace_set": "bind",
     "ta_otlp_add_metric": "bind",
+    "ta_otlp_add_span_metrics": "bind",
     "ta_otlp_add_stats": "bind",
     "ta_otlp_end_all": "bind",
     "ta_otlp_init": "bind",

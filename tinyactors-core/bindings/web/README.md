@@ -151,8 +151,10 @@ the run queue, how late the earliest timer is, delivered events, lost trace
 records, and the traces started and sampled; and `tinyactors.run.duration`,
 how long each run blocked the loop. Sums are cumulative since
 `startTime`. Core counts once per scheduling turn and where something
-fails, never per event; latencies come from spans (a collector's
-spanmetrics).
+fails, never per event; latencies come from spans: a collector's
+spanmetrics, or `telemetry.spanMetrics: true`, which adds
+`tinyactors.macrostep.duration` per chart from the macrostep spans the
+encoder writes, each bucket's exemplar one of those spans.
 
 ```js
 const snapshot = system.metrics(); // { startTime, time, metrics: [{ name, unit, kind, points }] }

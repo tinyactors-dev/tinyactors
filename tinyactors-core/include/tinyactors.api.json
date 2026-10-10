@@ -317,6 +317,10 @@
       "value": 1
     },
     {
+      "name": "TA_OTLP_SPAN_METRICS",
+      "value": 8
+    },
+    {
       "name": "TA_OTLP_SPAN_PRODUCER",
       "value": 4
     },
@@ -5300,7 +5304,7 @@
           "type": "uint32_t"
         },
         {
-          "name": "pad",
+          "name": "span_metric_charts",
           "type": "uint32_t"
         }
       ],
@@ -5320,7 +5324,7 @@
             "render_bytes": 32,
             "resource_bytes": 36,
             "metric_bytes": 40,
-            "pad": 44
+            "span_metric_charts": 44
           }
         },
         "aarch64": {
@@ -5338,7 +5342,7 @@
             "render_bytes": 32,
             "resource_bytes": 36,
             "metric_bytes": 40,
-            "pad": 44
+            "span_metric_charts": 44
           }
         },
         "wasm32": {
@@ -5356,7 +5360,7 @@
             "render_bytes": 32,
             "resource_bytes": 36,
             "metric_bytes": 40,
-            "pad": 44
+            "span_metric_charts": 44
           }
         }
       }
@@ -5890,6 +5894,14 @@
           "type": "uint32_t"
         },
         {
+          "name": "span_metric_charts",
+          "type": "uint32_t"
+        },
+        {
+          "name": "span_metric_capacity",
+          "type": "uint32_t"
+        },
+        {
           "name": "pad",
           "type": "uint32_t"
         },
@@ -5912,7 +5924,7 @@
       ],
       "layout": {
         "x86_64": {
-          "size": 96,
+          "size": 104,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5929,15 +5941,17 @@
             "metrics": 44,
             "metric_bytes": 48,
             "metric_capacity": 52,
-            "pad": 56,
-            "records": 64,
-            "dropped": 72,
-            "skipped": 80,
-            "truncated": 88
+            "span_metric_charts": 56,
+            "span_metric_capacity": 60,
+            "pad": 64,
+            "records": 72,
+            "dropped": 80,
+            "skipped": 88,
+            "truncated": 96
           }
         },
         "aarch64": {
-          "size": 96,
+          "size": 104,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5954,15 +5968,17 @@
             "metrics": 44,
             "metric_bytes": 48,
             "metric_capacity": 52,
-            "pad": 56,
-            "records": 64,
-            "dropped": 72,
-            "skipped": 80,
-            "truncated": 88
+            "span_metric_charts": 56,
+            "span_metric_capacity": 60,
+            "pad": 64,
+            "records": 72,
+            "dropped": 80,
+            "skipped": 88,
+            "truncated": 96
           }
         },
         "wasm32": {
-          "size": 96,
+          "size": 104,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5979,11 +5995,13 @@
             "metrics": 44,
             "metric_bytes": 48,
             "metric_capacity": 52,
-            "pad": 56,
-            "records": 64,
-            "dropped": 72,
-            "skipped": 80,
-            "truncated": 88
+            "span_metric_charts": 56,
+            "span_metric_capacity": 60,
+            "pad": 64,
+            "records": 72,
+            "dropped": 80,
+            "skipped": 88,
+            "truncated": 96
           }
         }
       }
@@ -8672,6 +8690,31 @@
         {
           "name": "metric",
           "type": "const ta_otlp_metric *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_add_span_metrics",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "into",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "from",
+          "type": "const ta_otlp *"
+        },
+        {
+          "name": "start_ns",
+          "type": "uint64_t"
+        },
+        {
+          "name": "time_ns",
+          "type": "uint64_t"
         }
       ],
       "public": true,

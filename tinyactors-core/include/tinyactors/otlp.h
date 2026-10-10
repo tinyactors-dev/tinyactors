@@ -58,7 +58,9 @@ extern "C" {
 enum {
     TA_OTLP_LINK_PARENTS = 1u << 0, /* a macrostep is a root, linked to its cause */
     TA_OTLP_VALUES = 1u << 1,       /* event data and assigned values in attributes */
-    TA_OTLP_NO_LOGS = 1u << 2       /* write no log records */
+    TA_OTLP_NO_LOGS = 1u << 2,      /* write no log records */
+    TA_OTLP_SPAN_METRICS = 1u
+        << 3 /* keep macrostep durations per chart (ta_otlp_add_span_metrics) */
 };
 
 /* Capacities; 0 is the default. */
@@ -74,7 +76,7 @@ typedef struct ta_otlp_config {
     uint32_t render_bytes;   /* a value as the datamodel writes it, before the cut (16 KiB) */
     uint32_t resource_bytes; /* the resource attributes, encoded (4 KiB) */
     uint32_t metric_bytes;   /* metrics, encoded (64 KiB) */
-    uint32_t pad;
+    uint32_t span_metric_charts; /* charts whose macrostep durations it keeps (64) */
 } ta_otlp_config;
 
 typedef struct ta_otlp ta_otlp;
@@ -207,6 +209,15 @@ typedef struct ta_otlp_stats_input {
 } ta_otlp_stats_input;
 TA_API ta_status ta_otlp_add_stats(ta_otlp *otlp, const ta_otlp_stats_input *input);
 
+/* With TA_OTLP_SPAN_METRICS, the encoder keeps, per (system, chart), a
+ * histogram of the durations of the macrostep spans it writes, in seconds,
+ * each bucket's exemplar the latest span that fell in it. This adds them to
+ * `into` (it may be `from`) as `tinyactors.macrostep.duration`, cumulative
+ * since `start_ns`, a point per chart (`tinyactors.chart.name`). They are
+ * the recorded macrosteps': under sampling, a distribution, not a count. */
+TA_API ta_status ta_otlp_add_span_metrics(ta_otlp *into, const ta_otlp *from, uint64_t start_ns,
+                                          uint64_t time_ns);
+
 /* The size of the ExportMetricsServiceRequest of the metrics added since the
  * last put (0 when none were), then the request, as for traces. */
 TA_API size_t ta_otlp_metrics_size(const ta_otlp *otlp);
@@ -220,6 +231,7 @@ typedef struct ta_otlp_stats {
     uint32_t staging_bytes, staging_capacity;
     uint32_t log_records, log_bytes, log_capacity;
     uint32_t metrics, metric_bytes, metric_capacity; /* metrics staged */
+    uint32_t span_metric_charts, span_metric_capacity;
     uint32_t pad;
     uint64_t records;   /* records read */
     uint64_t dropped;   /* records the systems reported lost */

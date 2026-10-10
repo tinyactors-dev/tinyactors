@@ -3154,6 +3154,13 @@ static napi_value metrics_request(napi_env environment, nd_host *host, napi_valu
         free(charts);
         free(systems);
         if (!otlp) goto refused;
+        /* the trace encoder's macrostep durations (TA_OTLP_SPAN_METRICS) */
+        while (host->otlp &&
+               (status = ta_otlp_add_span_metrics(otlp, host->otlp, start_ns, time_ns)) ==
+                   TA_ERROR_NO_MEMORY &&
+               (otlp = metrics_grow(otlp, &length)) != NULL)
+            ;
+        if (!otlp) goto refused;
     }
     bool array = false;
     uint32_t n = 0;

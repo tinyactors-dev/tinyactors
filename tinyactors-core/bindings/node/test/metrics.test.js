@@ -121,6 +121,23 @@ test('a metrics endpoint alone exports metrics and records no traces', async () 
   );
 });
 
+test('spanMetrics: macrostep durations per chart, with exemplars that are spans', async () => {
+  const traces = [];
+  const system = createSystem({ telemetry: { spanMetrics: true }, traces: { sink: (b) => traces.push(b) } });
+  const a = createActor(counter, { system }).start();
+  for (let i = 0; i < 3; i++) a.send({ type: 'add' });
+  await settle();
+  const durations = point(system.metrics(), 'tinyactors.macrostep.duration', { 'tinyactors.chart.name': 'counter' });
+  assert.equal(durations.count, 4);
+  assert.ok(durations.exemplars.length >= 1);
+  const spans = traces.flatMap((b) => t.decodeTraces(b));
+  assert.ok(spans.some((s) => s.spanID === durations.exemplars[0].spanID), 'the exemplar is a span');
+  system.stop();
+  const plain = createSystem();
+  assert.ok(!plain.metrics().metrics.some((m) => m.name === 'tinyactors.macrostep.duration'), 'off by default');
+  plain.stop();
+});
+
 test('Node.js: OTEL_* metrics variables', { skip: process.env.TA_BINDING === 'web' && 'the web build reads no environment' }, () => {
   const { telemetryFromEnvironment } = require('../telemetry');
   assert.deepEqual(telemetryFromEnvironment({ OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'http://x/m', OTEL_METRIC_EXPORT_INTERVAL: '5000' }), {

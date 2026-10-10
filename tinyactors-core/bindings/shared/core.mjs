@@ -1114,7 +1114,7 @@ export function createRuntime({ native, platform }) {
     full: kindsMask([...DECISIONS, 'sent', 'invoked', 'cancelled', 'assign', 'log']),
   };
   const TRACE_VALUES = 2 ** 31; /* TA_TRACE_VALUES: event data and assigned values */
-  const OTLP_LINK_PARENTS = 1, OTLP_VALUES = 2, OTLP_NO_LOGS = 4; /* TA_OTLP_* */
+  const OTLP_LINK_PARENTS = 1, OTLP_VALUES = 2, OTLP_NO_LOGS = 4, OTLP_SPAN_METRICS = 8; /* TA_OTLP_* */
   const SAMPLE_WHOLE = 1000000;
   const EXPORT_DELAY_MS = 250; /* bytes gather this long before a post */
   const EXPORT_BYTES = 1 << 20; /* or until this many wait */
@@ -1660,6 +1660,7 @@ export function createRuntime({ native, platform }) {
       else if (t.parent !== undefined && t.parent !== 'cause') throw new TypeError('parent: "cause" or "link"');
       if (t.values) flags |= OTLP_VALUES;
       if (t.logs === false) flags |= OTLP_NO_LOGS;
+      if (this._telemetry.spanMetrics) flags |= OTLP_SPAN_METRICS; /* tinyactors.macrostep.duration */
       const resource = this._resource();
       /* classes: 0 unsampled (lifecycle only), 1 sampled, 2..7 what rules and watches ask for */
       const kinds = traceKinds(t);
