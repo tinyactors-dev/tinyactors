@@ -28,7 +28,7 @@
 #endif
 
 #define SJS_VERSION_MAJOR 0
-#define SJS_VERSION_MINOR 5
+#define SJS_VERSION_MINOR 6
 #define SJS_VERSION_PATCH 0
 /* (major << 16) | (minor << 8) | patch; sjs_version() answers it for the library linked. */
 #define SJS_VERSION ((SJS_VERSION_MAJOR << 16) | (SJS_VERSION_MINOR << 8) | SJS_VERSION_PATCH)
@@ -82,7 +82,7 @@ typedef enum {
     /* Not JavaScript. */
     SJS_ERROR_SYNTAX,
     /* JavaScript, but outside staticjs: a loop, an assignment, a regular
-     * expression, a name that refers to itself. */
+     * expression's lookahead, a name that refers to itself. */
     SJS_ERROR_UNSUPPORTED,
     /* A name that is not bound anywhere, or bound twice. */
     SJS_ERROR_NAME,
@@ -141,6 +141,10 @@ typedef struct {
     uint32_t max_string_bytes;  /* bytes of one string value */
     uint32_t max_bigint_bits;   /* bits of one BigInt's magnitude: 2^max_bigint_bits - 1 is the
                                  * largest; an operation whose result is larger faults */
+    uint32_t max_regex_states;  /* what one regular expression's automaton may hold at once:
+                                 * its instructions, times 2 to the depth of its loops that can
+                                 * match empty, times the slots of each thread; a literal past
+                                 * it is refused when compiled */
 } sjs_limits;
 
 #define SJS_LIMITS_DEFAULT                     \
@@ -154,7 +158,8 @@ typedef struct {
         .max_frames = 256u,                    \
         .max_value_items = 1024u * 1024u,      \
         .max_string_bytes = 16u * 1024u * 1024u, \
-        .max_bigint_bits = 256u * 1024u })
+        .max_bigint_bits = 256u * 1024u,       \
+        .max_regex_states = 1024u * 1024u })
 
 /* The library's version, SJS_VERSION of the header it was built from. */
 SJS_API uint32_t sjs_version(void);
@@ -192,7 +197,8 @@ typedef enum {
     SJS_SET,
     SJS_MAP,
     SJS_ITERATOR,   /* a map's keys(), values() or entries(), or an iterator's map() or filter() */
-    SJS_FUNCTION
+    SJS_FUNCTION,
+    SJS_REGEXP      /* a regular expression literal: an object, immutable; its lastIndex is 0 */
 } sjs_kind;
 
 typedef struct sjs_heap sjs_heap;
@@ -450,6 +456,9 @@ typedef enum {
     SJS_EV_EXPORT_FROM,      /* a re-export; text: the module; count: an sjs_import_kind */
     SJS_EV_BIGINT,           /* a BigInt literal; text: its digits, without a prefix, a
                               * separator or the `n`; count: their radix, 2, 8, 10 or 16 */
+    SJS_EV_REGEXP,           /* a regular expression literal; text: its body, between the
+                              * slashes, as written; count: its flags, a set of bits in the
+                              * order "dgimsuvy" (d is 1, y is 128) */
     /* The end of the program. */
     SJS_EV_END
 } sjs_event_kind;

@@ -81,6 +81,7 @@
  * let").
  */
 #include "matcher.h"
+#include "regex.h"
 
 /* Kinds of binding. */
 enum { B_LOCAL = 0, B_CONSTANT };
@@ -631,6 +632,23 @@ static sjs_result bigint_constant(sjs_compiler *c, const sjs_event *e) {
     return op32(c, ins(SJS_OP_CONSTANT, index, e->at));
 }
 
+/* A regular expression literal, compiled once, as a constant of the
+ * program (docs/regex.md, 7.1): no program can tell one value from a new
+ * object per evaluation, as === on objects faults and lastIndex never
+ * changes. */
+static sjs_result regex_constant(sjs_compiler *c, const sjs_event *e) {
+    sjs_value value;
+    sjs_result r = sjs_regex_compile(c->context, (sjs_regex_literal){ e->text, e->count }, &value);
+    if (r == SJS_ERR_LIMIT) {
+        return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_LIMIT, "a regular expression needs more states than max_regex_states" });
+    }
+    if (r == SJS_ERR_PROGRAM) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_SYNTAX, "the regular expression is not one staticjs compiles" });
+    uint32_t index;
+    if (r == SJS_OK) r = value_constant(c, value, &index);
+    if (r != SJS_OK) return fail_result(c, r, e->at);
+    return op32(c, ins(SJS_OP_CONSTANT, index, e->at));
+}
+
 static sjs_result string_constant(sjs_compiler *c, const sjs_event *e, uint32_t *index) {
     sjs_str text = e->text;
     sjs_position at = e->at;
@@ -1144,6 +1162,11 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
         uint32_t index;
         if (value_constant(c, sjs_builtin_value(id), &index) != SJS_OK) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_MEMORY, "out of memory" });
         return op32(c, ins(SJS_OP_CONSTANT, index, e->at));
+    }
+    /* RegExp is JavaScript's, bound in every program: patterns made when the
+     * program runs are left out (docs/regex.md, 12.4). */
+    if (sjs_str_equal(e->text, SJS_STR("RegExp"))) {
+        return fail_name(c, e, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no RegExp: write a regular expression literal" });
     }
     /* Bound nowhere: reported at the end, after any syntax error. */
     if (!c->unbound) {
@@ -2685,6 +2708,8 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
         return number_constant(c, e->number, e->at);
     case SJS_EV_BIGINT:
         return bigint_constant(c, e);
+    case SJS_EV_REGEXP:
+        return regex_constant(c, e);
     case SJS_EV_STRING: {
         uint32_t index;
         if (string_constant(c, e, &index) != SJS_OK) return SJS_ERR_PROGRAM;

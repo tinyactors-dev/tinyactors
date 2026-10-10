@@ -216,6 +216,11 @@ sjs_result sjs_property_get(sjs_vm *vm, sjs_member member, sjs_value *out);
 /* ToNumber, for the values it does not need to parse. */
 sjs_result sjs_vm_to_number(sjs_vm *vm, sjs_value v, double *out);
 
+/* A property of a regular expression (regex_match.c): its source, its flags
+ * and their getters, and lastIndex, which is 0; undefined for a name
+ * RegExp.prototype lacks; a fault for one of its methods read as a value. */
+sjs_result sjs_regex_property(sjs_vm *vm, sjs_member member, sjs_value *out);
+
 /* JSON.parse and JSON.stringify (json.c): leaves. */
 sjs_result sjs_json_parse(sjs_vm *vm, sjs_leaf_call *call);
 sjs_result sjs_json_stringify(sjs_vm *vm, sjs_leaf_call *call);

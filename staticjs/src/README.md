@@ -30,5 +30,11 @@ Implementation modules. Headers here are private; the public API is
                 the methods that change a variable the function owns
                 (../docs/mutation.md)
 - `json.c`      JSON.parse and JSON.stringify: leaves, each over an explicit stack
+- `regex.h`     regular expressions (../docs/regex.md): what the parser, compiler,
+                evaluator and writer share
+- `regex.c`     a literal's pattern read iteratively, each construct classified
+                (exact, unsupported, syntax), and an exact one compiled to the
+                program of a Pike VM (`regex_program.h`)
+- `regex_match.c` regular expressions as values: their properties
 - `writer.c`    a value to JavaScript source, into a buffer of any size; JSON's
                 string escapes, which JSON.stringify shares

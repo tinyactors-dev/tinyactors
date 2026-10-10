@@ -4,7 +4,7 @@
  * explicit stack. The text is JSON where JSON can say it, and is always a
  * JavaScript expression that evaluates to an equal value.
  */
-#include "internal.h"
+#include "regex.h"
 
 /* Where a container is: its opening is written, and then each item. A
  * map's item is an entry, `[key,value]`: its key (W_ITEM_VALUE), then the
@@ -28,6 +28,7 @@ struct sjs_writer {
     sjs_str string;
     uint32_t string_at;
     sjs_buf digits;        /* a BigInt's, while they are written; its `n` follows */
+    sjs_buf literal;       /* a regular expression's, while it is written */
     bool failed;
 };
 
@@ -56,6 +57,7 @@ void sjs_writer_destroy(sjs_writer *writer) {
     const sjs_allocator *a = &writer->context->counting;
     sjs_buf_free(a, &writer->stack);
     sjs_buf_free(a, &writer->digits);
+    sjs_buf_free(a, &writer->literal);
     sjs_mem_free(a, writer, sizeof *writer);
 }
 
@@ -180,6 +182,21 @@ static sjs_result next(sjs_writer *w, bool *more) {
             say(w, "[");
             f->phase = W_ITEM;
             return SJS_OK;
+        case SJS_REGEXP: {
+            /* As its literal: /source/flags, the flags in their order. */
+            const sjs_allocator *a = &w->context->counting;
+            char flags[8];
+            sjs_str source = sjs_regex_source(v.as.heap);
+            uint32_t n = sjs_regex_flag_text(sjs_regex_flag_set(v.as.heap), flags);
+            sjs_result r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)"/", 1 });
+            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)source.ptr, source.length });
+            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)"/", 1 });
+            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)flags, n });
+            if (r != SJS_OK) return r;
+            w->pending = w->literal.ptr;
+            w->pending_length = w->literal.length;
+            break;
+        }
         default:
             if (w->function_text.length == 0) return SJS_ERR_INVALID;
             w->pending = (const uint8_t *)w->function_text.ptr;
@@ -261,6 +278,7 @@ sjs_result sjs_writer_write(sjs_writer *writer, sjs_buffer *buffer) {
             say(w, "n");
             continue;
         }
+        if (w->literal.ptr != NULL) sjs_buf_free(&w->context->counting, &w->literal);
         bool more;
         sjs_result r = next(w, &more);
         if (r != SJS_OK) {

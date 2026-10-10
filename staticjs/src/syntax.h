@@ -14,7 +14,8 @@ typedef enum {
     SJS_TOKEN_TEMPLATE_HEAD,  /* `...${ */
     SJS_TOKEN_TEMPLATE_MIDDLE,/* }...${ */
     SJS_TOKEN_TEMPLATE_TAIL,  /* }...` */
-    SJS_TOKEN_PUNCTUATOR
+    SJS_TOKEN_PUNCTUATOR,
+    SJS_TOKEN_REGEXP          /* a regular expression literal: its text is the body, a `/`, the flags */
 } sjs_token_kind;
 
 typedef enum {
@@ -97,6 +98,11 @@ typedef struct {
     bool last_separator;
     /* Braces: 0 for `{`, 1 for the `${` of a template. */
     sjs_buf braces;
+    /* Set by the parser while it handles a `/` (1) or `/=` (2) token that
+     * begins a regular expression: the lexer then reads the literal's body
+     * and flags, the `=` of `/=` first, as one SJS_TOKEN_REGEXP. */
+    uint8_t regex_next;
+    bool regex_class;       /* in the body: inside [...] */
 } sjs_lexer;
 
 sjs_result sjs_lexer_init(sjs_lexer *lexer);

@@ -1,0 +1,290 @@
+/*
+ * Regular expressions on random patterns (docs/regex.md, 11.3).
+ *
+ *   regex_test                 2,000 random literals, each compiled from its
+ *                              source pushed whole and a byte at a time: both
+ *                              must classify it alike, and nothing leaks
+ *   regex_test --print COUNT   lines for diff-node to compare with Node, each
+ *                              a tag, a space, then fields separated by tabs:
+ *     X <pattern> <flags> - <class>
+ *                              COUNT random literals /pattern/flags, the
+ *                              pattern as a JSON string, and how staticjs
+ *                              classifies the literal: exact, unsupported or
+ *                              syntax. Node must refuse every syntax one with
+ *                              a SyntaxError and read every other.
+ *
+ * Patterns come from a grammar over a small alphabet that reaches the edges
+ * of the classification (docs/regex.md, section 8): Annex B forms, the
+ * escapes of each mode, classes and ranges, groups, names and references,
+ * lookaround, property escapes, quantifiers and their errors, every flag.
+ * The inputs are deterministic (xorshift64). With REGEX_TEST_TRACE set in
+ * the environment, each literal goes to stderr before it is compiled, to
+ * find one that stops the program.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "staticjs.h"
+
+static uint64_t state = 0x9E3779B97F4A7C15ull;
+
+static uint64_t next(void) {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    return state;
+}
+
+static uint32_t below(uint32_t n) {
+    return (uint32_t)(next() % n);
+}
+
+/* ------------------------------------------------------------------------
+ * Text
+ */
+
+typedef struct {
+    char *ptr;
+    size_t length;
+    size_t capacity;
+} text;
+
+static void put_bytes(text *t, const char *bytes, size_t n) {
+    if (t->length + n + 1 > t->capacity) {
+        size_t capacity = t->capacity < 256 ? 256 : t->capacity;
+        while (capacity < t->length + n + 1) capacity *= 2;
+        t->ptr = realloc(t->ptr, capacity);
+        if (t->ptr == NULL) abort();
+        t->capacity = capacity;
+    }
+    memcpy(t->ptr + t->length, bytes, n);
+    t->length += n;
+    t->ptr[t->length] = '\0';
+}
+
+static void put(text *t, const char *s) {
+    put_bytes(t, s, strlen(s));
+}
+
+/* As a JSON string. */
+static void put_quoted(text *t, const char *s, size_t n) {
+    put(t, "\"");
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '"' || c == '\\') {
+            char e[3] = { '\\', (char)c, 0 };
+            put(t, e);
+        } else if (c < 0x20) {
+            char e[8];
+            snprintf(e, sizeof e, "\\u%04x", c);
+            put(t, e);
+        } else {
+            put_bytes(t, (const char *)&s[i], 1);
+        }
+    }
+    put(t, "\"");
+}
+
+/* ------------------------------------------------------------------------
+ * Patterns
+ */
+
+/* Atoms every mode reads, and then the edges. */
+static const char *const COMMON[] = {
+    "a", "b", "A", "é", "😀", "\\n", ".", "\\d", "\\w", "\\s", "\\D", "\\W", "\\S", "\\.", "\\/", "\\\\", "\\*",
+    "[ab]", "[^a]", "[a-c]", "[é😀]", "[\\b]", "\\u0061", "\\x61", "\\0", "\\b", "\\B", "^", "$", "ſ", "K", "_", "1",
+    " ", "\\cA", "[^\\W]", "[\\d]", "[^\\s]", "[_a-cA]", "\\u00e9",
+};
+
+static const char *const ATOMS[] = {
+    "a", "b", "A", "é", "😀", "\\n", ".", "\\d", "\\w", "\\s", "\\D", "\\W", "\\S", "\\.", "\\/", "\\\\", "\\*",
+    "[ab]", "[^a]", "[a-c]", "[é😀]", "[😀-😁]", "[\\d-z]", "[a-\\w]", "[]", "[^]", "[\\b]", "[\\-]", "[a\\-z]", "[z-a]",
+    "[\\B]", "[\\k]", "[\\c1]", "[\\0]", "[\\00]", "[\\1]", "[^\\W]", "[[a]", "[a]]", "[(]", "[a&&b]", "[a--b]",
+    "[\\q{ab}]", "[^\\q{ab}]", "[[a]--[b]]", "[a-z&&b]", "[!!]",
+    "\\u0061", "\\u00e9", "\\uD83D\\uDE00", "\\uD83D", "\\x61", "\\x6", "\\u{61}", "\\u{1F600}", "\\u{110000}", "\\u",
+    "\\0", "\\00", "\\08", "\\1", "\\2", "\\8", "\\k<n>", "\\k<q>", "\\k", "\\c", "\\cA", "\\ca", "\\c1", "\\-", "\\a",
+    "\\p{L}", "\\P{Lu}", "\\p{Script=Latin}", "\\p{sc=Foo}", "\\p{Foo}", "\\p{RGI_Emoji}", "\\pL", "\\p",
+    "{", "}", "]", "{1}", "{,2}", "\\b", "\\B", "^", "$", "(?=a)", "(?!a)", "(?<=a)", "(?<!a)", "(?i:a)", "(?a)",
+    "\\q", "ſ", "K", "_", "1", " ",
+};
+
+static void pattern(text *t, uint32_t depth);
+
+static void atom(text *t, uint32_t depth) {
+    uint32_t k = below(depth > 3 ? 4 : 10);
+    if (k < 6 || depth > 3) {
+        if (below(6) == 0) put(t, ATOMS[below((uint32_t)(sizeof ATOMS / sizeof ATOMS[0]))]);
+        else put(t, COMMON[below((uint32_t)(sizeof COMMON / sizeof COMMON[0]))]);
+        return;
+    }
+    static const char *const opens[] = { "(", "(?:", "(?<n>", "(?<m>", "(", "(?:", "(?<n>", "(?=" };
+    put(t, opens[below(8)]);
+    pattern(t, depth + 1);
+    if (below(60) != 0) put(t, ")");
+}
+
+static void quantifier(text *t) {
+    static const char *const q[] = { "*", "+", "?", "{2}", "{1,2}", "{0,}", "{0,1}", "{3}", "*?", "+?", "??", "{1,2}?",
+                                     "{2,1}", "**", "{2147483648,2147483647}", "{1" };
+    put(t, q[below(below(8) == 0 ? (uint32_t)(sizeof q / sizeof q[0]) : 12u)]);
+}
+
+static void pattern(text *t, uint32_t depth) {
+    uint32_t terms = below(4) + (depth == 0 ? 1 : 0);
+    for (uint32_t i = 0; i < terms; i++) {
+        atom(t, depth);
+        if (below(3) == 0) quantifier(t);
+        if (below(9) == 0) put(t, "|");
+    }
+}
+
+static void flags(text *t) {
+    static const char letters[] = "dgimsuvy";
+    for (uint32_t k = 0; k < 8; k++) {
+        if (below(k == 2 || k == 5 ? 3 : k == 6 ? 12 : 7) == 0) put_bytes(t, &letters[k], 1);
+    }
+    if (below(80) == 0) put(t, "g");
+    if (below(120) == 0) put(t, "x");
+}
+
+/* A literal's body: not empty, and not one a JavaScript lexer reads as a
+ * comment or ends early (a raw `/` is escaped by the atoms). */
+static void body(text *t) {
+    pattern(t, 0);
+    if (t->length == 0 || t->ptr[0] == '*') {
+        text fixed = { 0 };
+        put(&fixed, "a");
+        put_bytes(&fixed, t->ptr == NULL ? "" : t->ptr, t->length);
+        t->length = 0;
+        put_bytes(t, fixed.ptr, fixed.length);
+        free(fixed.ptr);
+    }
+}
+
+/* ------------------------------------------------------------------------
+ * Classifying a literal by compiling it
+ */
+
+static long live = 0;
+
+static void *counted_alloc(void *self, size_t size, size_t alignment) {
+    (void)self;
+    (void)alignment;
+    void *p = malloc(size);
+    if (p != NULL) live++;
+    return p;
+}
+
+static void counted_free(void *self, const sjs_allocator_free_params *params) {
+    (void)self;
+    if (params->ptr != NULL) live--;
+    free(params->ptr);
+}
+
+static const sjs_allocator_vtable counted_vtable = { counted_alloc, counted_free };
+
+static const char *code_name(sjs_error_code code) {
+    switch (code) {
+    case SJS_ERROR_NONE: return "exact";
+    case SJS_ERROR_SYNTAX: return "syntax";
+    case SJS_ERROR_UNSUPPORTED: return "unsupported";
+    case SJS_ERROR_LIMIT: return "limit";
+    case SJS_ERROR_MEMORY: return "memory";
+    default: return "other";
+    }
+}
+
+/* Compile `source`, pushed in chunks of `chunk` bytes (0: whole). */
+static sjs_error_code classify(sjs_context *context, const text *source, uint32_t chunk) {
+    sjs_compiler *compiler;
+    sjs_compiler_config config = { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false };
+    if (sjs_compiler_init(&compiler, &config) != SJS_OK) abort();
+    sjs_parser *parser;
+    sjs_parser_config pc = { { NULL, &counted_vtable }, SJS_LIMITS_DEFAULT, SJS_GOAL_EXPRESSION, sjs_compiler_sink(compiler) };
+    if (sjs_parser_init(&parser, &pc) != SJS_OK) abort();
+    sjs_result r = SJS_OK;
+    size_t step = chunk == 0 ? source->length : chunk;
+    for (size_t i = 0; r == SJS_OK && i < source->length; i += step) {
+        size_t n = source->length - i < step ? source->length - i : step;
+        r = sjs_parser_push(parser, (sjs_bytes){ (const uint8_t *)source->ptr + i, (uint32_t)n });
+    }
+    if (r == SJS_OK) r = sjs_parser_finish(parser);
+    sjs_error_code code = SJS_ERROR_NONE;
+    sjs_error error;
+    if (r != SJS_OK) {
+        if (sjs_parser_error(parser, &error) == SJS_OK) code = error.code;
+        else if (sjs_compiler_error(compiler, &error) == SJS_OK) code = error.code;
+        else code = SJS_ERROR_FAULT;
+    } else {
+        sjs_program *program;
+        if (sjs_compiler_finish(compiler, &program) != SJS_OK) {
+            code = sjs_compiler_error(compiler, &error) == SJS_OK ? error.code : SJS_ERROR_FAULT;
+        } else {
+            sjs_program_release(program);
+        }
+    }
+    sjs_parser_destroy(parser);
+    sjs_compiler_destroy(compiler);
+    return code;
+}
+
+static int failures = 0;
+
+static void check(long count, bool print) {
+    sjs_context *context;
+    sjs_context_config config = { { NULL, &counted_vtable }, SJS_LIMITS_DEFAULT };
+    if (sjs_context_init(&context, &config) != SJS_OK) abort();
+    text pat = { 0 };
+    text flag = { 0 };
+    text source = { 0 };
+    text line = { 0 };
+    for (long i = 0; i < count; i++) {
+        pat.length = 0;
+        flag.length = 0;
+        source.length = 0;
+        body(&pat);
+        flags(&flag);
+        put(&source, "/");
+        put_bytes(&source, pat.ptr, pat.length);
+        put(&source, "/");
+        put_bytes(&source, flag.ptr == NULL ? "" : flag.ptr, flag.length);
+        if (getenv("REGEX_TEST_TRACE") != NULL) fprintf(stderr, "%s\n", source.ptr);
+        sjs_error_code code = classify(context, &source, 0);
+        if (!print) {
+            sjs_error_code bytes = classify(context, &source, 1);
+            if (bytes != code) {
+                if (failures++ < 20) fprintf(stderr, "regex_test: %s is %s whole and %s a byte at a time\n", source.ptr, code_name(code), code_name(bytes));
+            }
+            continue;
+        }
+        line.length = 0;
+        put(&line, "X ");
+        put_quoted(&line, pat.ptr, pat.length);
+        put(&line, "\t");
+        put_bytes(&line, flag.ptr == NULL ? "" : flag.ptr, flag.length);
+        put(&line, "\t-\t");
+        put(&line, code_name(code));
+        puts(line.ptr);
+    }
+    free(pat.ptr);
+    free(flag.ptr);
+    free(source.ptr);
+    free(line.ptr);
+    sjs_context_destroy(context);
+    if (live != 0) {
+        fprintf(stderr, "regex_test: %ld allocations left behind\n", live);
+        failures++;
+    }
+}
+
+int main(int argc, char **argv) {
+    bool print = argc == 3 && strcmp(argv[1], "--print") == 0;
+    check(print ? atol(argv[2]) : 2000, print);
+    if (failures != 0) {
+        fprintf(stderr, "regex_test: %d failure(s)\n", failures);
+        return 1;
+    }
+    if (!print) printf("regex_test: random literals classify alike, pushed whole and a byte at a time\n");
+    return 0;
+}

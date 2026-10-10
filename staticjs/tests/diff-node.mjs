@@ -11,10 +11,11 @@
 //
 //   node --experimental-vm-modules tests/diff-node.mjs tests/spec [numbers.txt]
 //
-// numbers.txt, if given, holds the lines number_test --print and
-// json_test --print write: what staticjs computed from an input (a double
-// formatted, a decimal read, a JSON document read and written, ...), each
-// of which must be what Node computes from it.
+// numbers.txt, if given, holds the lines number_test --print, json_test
+// --print and regex_test --print write: what staticjs computed from an input
+// (a double formatted, a decimal read, a JSON document read and written, a
+// regular expression classified or matched, ...), each of which must be
+// what Node computes from it.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import vm from 'node:vm';
@@ -28,7 +29,14 @@ function show(v) {
   if (typeof v === 'bigint') return `${v}n`;
   if (typeof v === 'string') return JSON.stringify(v);
   if (typeof v === 'function') return '<function>';
-  if (Array.isArray(v)) return '[' + v.map(show).join(',') + ']';
+  if (v instanceof RegExp) return String(v);
+  if (Array.isArray(v)) {
+    // A match result: an array with properties of its own besides its elements.
+    const extra = Object.keys(v).filter((k) => !/^(0|[1-9][0-9]*)$/.test(k));
+    const items = '[' + v.map(show).join(',') + ']';
+    if (extra.length === 0) return items;
+    return 'Object.assign(' + items + ',{' + extra.map((k) => JSON.stringify(k) + ':' + show(v[k])).join(',') + '})';
+  }
   if (v instanceof Set) return 'new Set([' + [...v].map(show).join(',') + '])';
   if (v instanceof Map) return 'new Map([' + [...v].map(([k, x]) => '[' + show(k) + ',' + show(x) + ']').join(',') + '])';
   if (v instanceof Iterator) return '[' + [...v].map(show).join(',') + '].values()';
@@ -273,6 +281,22 @@ const numberChecks = {
     if (want.startsWith('!')) return `JSON.parse: staticjs ${ours}, JavaScript throws ${want}`;
     return JSON.parse(ours) === want ? null : `JSON.parse: staticjs ${ours}, JavaScript ${JSON.stringify(want)}`;
   },
+  X(rest) { // <pattern> <flags> <input> <outcome>: the literal /pattern/flags
+    const [quoted, flags, input, outcome] = rest.split('\t');
+    const pattern = JSON.parse(quoted);
+    let re;
+    try {
+      re = new Function(`return /${pattern}/${flags};`)();
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) return `/${pattern}/${flags}: Node throws ${error}`;
+      regexOutcomes.syntax++;
+      return outcome === 'syntax' ? null : `/${pattern}/${flags}: staticjs says ${outcome}, JavaScript refuses it (${error.message})`;
+    }
+    if (outcome === 'syntax') return `/${pattern}/${flags}: staticjs says syntax error, but JavaScript reads it`;
+    regexOutcomes[outcome] = (regexOutcomes[outcome] ?? 0) + 1;
+    if (outcome === 'exact' || outcome === 'unsupported' || outcome === 'limit') return null;
+    return `/${pattern}/${flags}: an unknown outcome ${outcome}`;
+  },
   K(rest) { // <source> <text>: JSON.stringify(value, replacer, space), never a fault
     const [source, ours] = rest.split('\t');
     const want = new Function(`return (${JSON.parse(source)}\n);`)();
@@ -282,6 +306,7 @@ const numberChecks = {
   },
 };
 const jsonOutcomes = { value: 0, '!S': 0, '!O': 0 };
+const regexOutcomes = { exact: 0, unsupported: 0, syntax: 0 };
 if (numbers) {
   for (const line of readFileSync(numbers, 'utf8').split('\n')) {
     if (!line) continue;
@@ -309,6 +334,8 @@ const numberSummary = [
   ['E', `mutated JSON documents read as JSON.parse reads them (${jsonOutcomes.value} read, ` +
     `${jsonOutcomes['!S']} SyntaxErrors where JavaScript throws one, ${jsonOutcomes['!O']} faults of staticjs's own not compared)`],
   ['K', 'JSON.stringify calls, with replacers and spaces, give what JavaScript does'],
+  ['X', `random regular expression literals classify as JavaScript reads them (${regexOutcomes.exact} exact, ` +
+    `${regexOutcomes.unsupported} unsupported, ${regexOutcomes.syntax} syntax errors)`],
 ].filter(([tag]) => counts.has(tag)).map(([tag, what]) => `${counts.get(tag)} ${what}`).join(', ');
 
 if (failures.length > 0) {

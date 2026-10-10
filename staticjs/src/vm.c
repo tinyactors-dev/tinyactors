@@ -91,6 +91,8 @@ static bool on_prototype(uint8_t kind, const sjs_string *key) {
         return (n->flags & SJS_NAME_ON_MAP) != 0;
     case SJS_ITERATOR:
         return (n->flags & SJS_NAME_ON_ITERATOR) != 0;
+    case SJS_REGEXP:
+        return (n->flags & SJS_NAME_ON_REGEXP) != 0;
     default:
         return (n->flags & SJS_NAME_OBJECT) != 0;
     }
@@ -203,7 +205,8 @@ static sjs_result method(sjs_vm *vm, sjs_member member, sjs_value *out) {
     case SJS_SET:
     case SJS_BIGINT:
     case SJS_MAP:
-    case SJS_ITERATOR: {
+    case SJS_ITERATOR:
+    case SJS_REGEXP: {
         const sjs_name *n = sjs_name_of(key);
         sjs_builtin_id id = sjs_method_of(n, receiver.kind);
         if (id == SJS_BUILTIN_NONE) {
@@ -2453,6 +2456,7 @@ __attribute__((noinline)) static sjs_result order_fault(sjs_vm *vm, sjs_value a,
 __attribute__((noinline)) static sjs_result property_other(sjs_vm *vm, sjs_member member, sjs_value *out) {
     sjs_value object = member.object;
     sjs_str name = sjs_string_view(member.key);
+    if (object.kind == SJS_REGEXP) return sjs_regex_property(vm, member, out);
     if (object.kind != SJS_MAP && object.kind != SJS_ITERATOR) {
         return fault_named(vm, "staticjs reads properties of objects, arrays, strings, sets, maps and iterators", name);
     }

@@ -531,16 +531,19 @@ static bool json_omitted(sjs_value v) {
     return v.kind == SJS_UNDEFINED || v.kind == SJS_FUNCTION;
 }
 
-/* A map, a set or an iterator: an object with no own enumerable property,
- * `{}`. A key of an array replacer that JavaScript would find on its
- * prototype (a method, or size) faults. */
+/* A map, a set, an iterator or a regular expression: an object with no own
+ * enumerable property, `{}`. A key of an array replacer that JavaScript
+ * would find on its prototype (a method, size, a flag's getter) or as an
+ * own property that is not enumerable (lastIndex) faults. */
 static sjs_result json_empty(json_writer *w, sjs_value v) {
     if (w->keys != NULL) {
-        uint8_t flag = v.kind == SJS_MAP ? SJS_NAME_ON_MAP : v.kind == SJS_SET ? SJS_NAME_ON_SET : SJS_NAME_ON_ITERATOR;
+        uint8_t flag = v.kind == SJS_MAP ? SJS_NAME_ON_MAP : v.kind == SJS_SET ? SJS_NAME_ON_SET
+                     : v.kind == SJS_REGEXP ? SJS_NAME_ON_REGEXP : SJS_NAME_ON_ITERATOR;
+        sjs_str own = v.kind == SJS_REGEXP ? SJS_STR("lastIndex") : v.kind != SJS_ITERATOR ? SJS_STR("size") : SJS_STR("");
         for (uint32_t i = 0; i < w->keys->length; i++) {
             const sjs_string *key = SJS_AS_STRING(w->keys->items[i]);
             const sjs_name *name = sjs_name_of(key);
-            if ((name != NULL && (name->flags & flag) != 0) || (v.kind != SJS_ITERATOR && sjs_str_equal(sjs_string_view(key), SJS_STR("size")))) {
+            if ((name != NULL && (name->flags & flag) != 0) || (own.length > 0 && sjs_str_equal(sjs_string_view(key), own))) {
                 sjs_vm_fault(w->vm, "JSON.stringify would read this key of its list from a prototype");
                 sjs_error_subject(&w->vm->error, sjs_string_view(key));
                 return SJS_ERR_PROGRAM;

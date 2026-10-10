@@ -154,7 +154,8 @@ enum {
     SJS_HEAP_BUILTIN,
     SJS_HEAP_BIGINT,
     SJS_HEAP_MAP,
-    SJS_HEAP_ITERATOR
+    SJS_HEAP_ITERATOR,
+    SJS_HEAP_REGEXP    /* a regular expression: one block holding no references (regex_program.h) */
 };
 
 /* refs of a value that is never freed: built-in functions. */
@@ -679,12 +680,13 @@ sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name);
 #define SJS_NAME_ON_MAP 32u    /* on Map.prototype (or Object.prototype) */
 #define SJS_NAME_ON_ITERATOR 64u /* on a map's iterator's prototype or an iterator helper's, up to
                                   * Iterator.prototype (or Object.prototype) */
+#define SJS_NAME_ON_REGEXP 128u /* on RegExp.prototype (or Object.prototype) */
 
 typedef struct {
     sjs_str name;
     uint8_t flags;      /* SJS_NAME_* */
-    uint8_t methods[6]; /* the staticjs method on an array, a string, a set, a BigInt, a map, an
-                         * iterator; 0 if none */
+    uint8_t methods[7]; /* the staticjs method on an array, a string, a set, a BigInt, a map, an
+                         * iterator, a regular expression; 0 if none */
     uint8_t mutation;   /* MUTATION: the method that changes its receiver, of the one kind
                          * that has it (SJS_METHOD_MUTATION_FIRST on); 0 if none */
 } sjs_name;

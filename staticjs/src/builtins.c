@@ -74,22 +74,27 @@ static const function_entry FUNCTION_TABLE[] = {
  * names a method changing its receiver; with the staticjs method each kind
  * has by that name. Sorted by bytes, for sjs_name_id's binary search.
  */
-#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set, 0, 0, 0 }, 0 }
+#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set, 0, 0, 0, 0 }, 0 }
 /* A name with a BigInt method too: toString. */
-#define NAME_BIGINT(text, flags, bigint) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, bigint, 0, 0 }, 0 }
+#define NAME_BIGINT(text, flags, bigint) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, bigint, 0, 0, 0 }, 0 }
 /* A name with a map's method: on a set too, and maps'. */
-#define NAME_MAP(text, flags, set, map) { { text, sizeof(text) - 1u }, flags, { 0, 0, set, 0, map, 0 }, 0 }
+#define NAME_MAP(text, flags, set, map) { { text, sizeof(text) - 1u }, flags, { 0, 0, set, 0, map, 0, 0 }, 0 }
 /* A name with an iterator's method: on an array too, and iterators'. */
-#define NAME_ITERATOR(text, flags, array, iterator) { { text, sizeof(text) - 1u }, flags, { array, 0, 0, 0, 0, iterator }, 0 }
+#define NAME_ITERATOR(text, flags, array, iterator) { { text, sizeof(text) - 1u }, flags, { array, 0, 0, 0, 0, iterator, 0 }, 0 }
+/* A name on RegExp.prototype, with the regular expressions' method of the
+ * name (docs/regex.md), or 0. */
+#define NAME_REGEXP(text, regexp) { { text, sizeof(text) - 1u }, SJS_NAME_ON_REGEXP, { 0, 0, 0, 0, 0, 0, regexp }, 0 }
 /* MUTATION: a name with a method that changes its receiver. Restore: NAME(text, flags, 0, 0, 0). */
-#define NAME_MUTATION(text, flags, mutation) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0, 0, 0 }, mutation }
+#define NAME_MUTATION(text, flags, mutation) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0, 0, 0, 0 }, mutation }
+/* A name of Object.prototype, which every kind of value's prototype holds. */
+#define SJS_NAME_EVERYWHERE (SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR | SJS_NAME_ON_REGEXP)
 
 static const sjs_name NAMES[] = {
-    NAME("__defineGetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, 0, 0, 0),
-    NAME("__defineSetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, 0, 0, 0),
-    NAME("__lookupGetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, 0, 0, 0),
-    NAME("__lookupSetter__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, 0, 0, 0),
-    NAME("__proto__", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, 0, 0, 0),
+    NAME("__defineGetter__", SJS_NAME_EVERYWHERE, 0, 0, 0),
+    NAME("__defineSetter__", SJS_NAME_EVERYWHERE, 0, 0, 0),
+    NAME("__lookupGetter__", SJS_NAME_EVERYWHERE, 0, 0, 0),
+    NAME("__lookupSetter__", SJS_NAME_EVERYWHERE, 0, 0, 0),
+    NAME("__proto__", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME_MUTATION("add", SJS_NAME_ON_SET | SJS_NAME_MUTATING, SJS_METHOD_SET_ADD), /* MUTATION */
     NAME("anchor", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("at", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_AT, SJS_METHOD_STRING_AT, 0),
@@ -100,15 +105,18 @@ static const sjs_name NAMES[] = {
     NAME("charCodeAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CHAR_CODE_AT, 0),
     NAME_MUTATION("clear", SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_MUTATING, SJS_METHOD_SET_CLEAR), /* MUTATION */
     NAME("codePointAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CODE_POINT_AT, 0),
+    NAME_REGEXP("compile", 0),
     NAME("concat", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_CONCAT, SJS_METHOD_STRING_CONCAT, 0),
-    NAME("constructor", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, 0, 0, 0),
+    NAME("constructor", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME("copyWithin", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
     NAME_MUTATION("delete", SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_MUTATING, SJS_METHOD_SET_DELETE), /* MUTATION */
     NAME("difference", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_DIFFERENCE),
+    NAME_REGEXP("dotAll", 0),
     NAME("drop", SJS_NAME_ON_ITERATOR, 0, 0, 0),
     NAME("endsWith", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_ENDS_WITH, 0),
     NAME_MAP("entries", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, SJS_METHOD_MAP_ENTRIES),
     NAME("every", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_EVERY, 0, 0),
+    NAME_REGEXP("exec", 0),
     NAME_MUTATION("fill", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_FILL), /* MUTATION */
     NAME_ITERATOR("filter", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_FILTER, SJS_METHOD_ITERATOR_FILTER),
     NAME("find", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_FIND, 0, 0),
@@ -116,19 +124,23 @@ static const sjs_name NAMES[] = {
     NAME("findLast", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FIND_LAST, 0, 0),
     NAME("findLastIndex", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FIND_LAST_INDEX, 0, 0),
     NAME("fixed", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME_REGEXP("flags", 0),
     NAME("flat", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_FLAT, 0, 0),
     NAME("flatMap", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_FLAT_MAP, 0, 0),
     NAME("fontcolor", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("fontsize", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME_MAP("forEach", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, 0, SJS_METHOD_MAP_FOR_EACH),
     NAME_MAP("get", SJS_NAME_ON_MAP, 0, SJS_METHOD_MAP_GET),
+    NAME_REGEXP("global", 0),
     NAME_MAP("has", SJS_NAME_ON_SET | SJS_NAME_ON_MAP, SJS_METHOD_SET_HAS, SJS_METHOD_MAP_HAS),
-    NAME("hasOwnProperty", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, 0, 0, 0),
+    NAME_REGEXP("hasIndices", 0),
+    NAME("hasOwnProperty", SJS_NAME_EVERYWHERE, 0, 0, 0),
+    NAME_REGEXP("ignoreCase", 0),
     NAME("includes", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_INCLUDES, SJS_METHOD_STRING_INCLUDES, 0),
     NAME("indexOf", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_INDEX_OF, SJS_METHOD_STRING_INDEX_OF, 0),
     NAME("intersection", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_INTERSECTION),
     NAME("isDisjointFrom", SJS_NAME_ON_SET, 0, 0, 0),
-    NAME("isPrototypeOf", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, 0, 0, 0),
+    NAME("isPrototypeOf", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME("isSubsetOf", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_IS_SUBSET_OF),
     NAME("isSupersetOf", SJS_NAME_ON_SET, 0, 0, 0),
     NAME("isWellFormed", SJS_NAME_ON_STRING, 0, 0, 0),
@@ -141,12 +153,13 @@ static const sjs_name NAMES[] = {
     NAME_ITERATOR("map", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_MAP, SJS_METHOD_ITERATOR_MAP),
     NAME("match", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("matchAll", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME_REGEXP("multiline", 0),
     NAME("next", SJS_NAME_ON_ITERATOR, 0, 0, 0),
     NAME("normalize", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("padEnd", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_PAD_END, 0),
     NAME("padStart", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_PAD_START, 0),
     NAME_MUTATION("pop", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_POP), /* MUTATION */
-    NAME("propertyIsEnumerable", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, 0, 0, 0),
+    NAME("propertyIsEnumerable", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME_MUTATION("push", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_PUSH), /* MUTATION */
     NAME_ITERATOR("reduce", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_REDUCE, SJS_METHOD_ITERATOR_REDUCE),
     NAME("reduceRight", SJS_NAME_ON_ARRAY, 0, 0, 0),
@@ -162,9 +175,11 @@ static const sjs_name NAMES[] = {
     NAME("small", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("some", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_SOME, 0, 0),
     NAME_MUTATION("sort", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_SORT), /* MUTATION */
+    NAME_REGEXP("source", 0),
     NAME_MUTATION("splice", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_SPLICE), /* MUTATION */
     NAME("split", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_SPLIT, 0),
     NAME("startsWith", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_STARTS_WITH, 0),
+    NAME_REGEXP("sticky", 0),
     NAME("strike", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("sub", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("substr", SJS_NAME_ON_STRING, 0, 0, 0),
@@ -172,15 +187,16 @@ static const sjs_name NAMES[] = {
     NAME("sup", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("symmetricDifference", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_SYMMETRIC_DIFFERENCE),
     NAME("take", SJS_NAME_ON_ITERATOR, 0, 0, 0),
+    NAME_REGEXP("test", 0),
     NAME_ITERATOR("toArray", SJS_NAME_ON_ITERATOR, 0, SJS_METHOD_ITERATOR_TO_ARRAY),
     NAME("toLocaleLowerCase", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("toLocaleString", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, 0, 0, 0),
+    NAME("toLocaleString", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME("toLocaleUpperCase", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("toLowerCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_LOWER_CASE, 0),
     NAME("toReversed", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_REVERSED, 0, 0),
     NAME("toSorted", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SORTED, 0, 0),
     NAME("toSpliced", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SPLICED, 0, 0),
-    NAME_BIGINT("toString", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, SJS_METHOD_BIGINT_TO_STRING),
+    NAME_BIGINT("toString", SJS_NAME_EVERYWHERE, SJS_METHOD_BIGINT_TO_STRING),
     NAME("toUpperCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_UPPER_CASE, 0),
     NAME("toWellFormed", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("trim", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM, 0),
@@ -188,9 +204,11 @@ static const sjs_name NAMES[] = {
     NAME("trimLeft", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("trimRight", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("trimStart", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM_START, 0),
+    NAME_REGEXP("unicode", 0),
+    NAME_REGEXP("unicodeSets", 0),
     NAME("union", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_UNION),
     NAME_MUTATION("unshift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_UNSHIFT), /* MUTATION */
-    NAME("valueOf", SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, 0, 0, 0),
+    NAME("valueOf", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME_MAP("values", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, SJS_METHOD_MAP_VALUES),
     NAME("with", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_WITH, 0, 0)
 };
@@ -305,6 +323,8 @@ sjs_builtin_id sjs_method_of(const sjs_name *name, uint8_t kind) {
         return (sjs_builtin_id)name->methods[4];
     case SJS_ITERATOR:
         return (sjs_builtin_id)name->methods[5];
+    case SJS_REGEXP:
+        return (sjs_builtin_id)name->methods[6];
     default:
         return SJS_BUILTIN_NONE;
     }

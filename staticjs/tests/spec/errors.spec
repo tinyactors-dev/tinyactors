@@ -207,9 +207,9 @@ x => y = 1
 1 == 1
 --- error unsupported === and !== only
 
-=== a regular expression
-/ab+c/.test("abc")
---- error unsupported regular expressions
+=== a regular expression with a lookahead
+/a(?=b)/.test("ab")
+--- error unsupported lookahead
 
 === a function expression
 (function () { return 1; })

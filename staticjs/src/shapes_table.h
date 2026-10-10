@@ -181,6 +181,7 @@ static const shape_event shape_events[SJS_EV_END + 1] = {
     [SJS_EV_EXPORT_NAME] = { SHAPE_LEAF, 0, 1, 0, 0, 0 },
     [SJS_EV_EXPORT_FROM] = { SHAPE_LEAF, 0, 1, 0, 0, 0 },
     [SJS_EV_BIGINT] = { SHAPE_LEAF, 0, 0, 0, 0, 0 },
+    [SJS_EV_REGEXP] = { SHAPE_LEAF, 0, 0, 0, 0, 0 },
     [SJS_EV_END] = { SHAPE_CLOSE, 0, 0, 0, 0, 0 },
 };
 
