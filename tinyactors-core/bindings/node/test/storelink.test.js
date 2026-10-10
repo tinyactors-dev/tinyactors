@@ -6,7 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { createMachine, createActor, createSystem, createLink, createStoreLink, serveLinks, assign, sendTo } = require('./binding');
+const { scxml, createActor, createSystem, createLink, createStoreLink, serveLinks } = require('./binding');
 
 const PORT = Number(process.env.TA_PG_PORT || 54320);
 const DB = 'tinyactors_storelink';
@@ -49,17 +49,18 @@ async function freshDatabase(pg) {
 }
 
 /* counts totals and notes; error.communication too */
-const client = createMachine({
-  id: 'client',
-  context: { totals: [], notes: [], errors: 0 },
-  on: {
-    ADD: { actions: sendTo(({ event }) => event.to, ({ event }) => ({ type: 'add', amount: event.amount, tag: event.tag })) },
-    // from an SCXML document, <param>s arrive as event.data
-    total: { actions: assign({ totals: ({ context, event }) => [...context.totals, [event.data.tag, event.data.n]] }) },
-    note: { actions: assign({ notes: ({ context, event }) => [...context.notes, event.data.text] }) },
-    'error.communication': { actions: assign({ errors: ({ context }) => context.errors + 1 }) },
-  },
-});
+const c = scxml.chart();
+const client = c.scxml('client', { initial: 's', datamodel: 'ecmascript' },
+  c.datamodel({ totals: [], notes: [], errors: 0 }),
+  c.state('s',
+    c.transition('ADD', undefined, c.send('add', { targetexpr: 'String(_event.data.to)' }, c.param('amount', '_event.data.amount'), c.param('tag', '_event.data.tag'))),
+    c.transition('total', undefined, c.script('totals.push([_event.data.tag, _event.data.n])')),
+    c.transition('note', undefined, c.script('notes.push(_event.data.text)')),
+    c.transition('error.communication', undefined, c.assign('errors', 'errors + 1'))));
+
+/* forwards add to the counter in PostgreSQL */
+const forward = c.scxml('forward', { initial: 's', datamodel: 'ecmascript' },
+  c.state('s', c.transition('add', undefined, c.send('add', { target: 'tinyactors://vault/@counter' }, c.param('amount', '_event.data.amount'), c.param('tag', '_event.data.tag')))));
 
 test('store link: envelopes in and out of PostgreSQL, errors both ways, relaying to a browser', async (t) => {
   const pg = await pgwire();
@@ -68,7 +69,7 @@ test('store link: envelopes in and out of PostgreSQL, errors both ways, relaying
   const q1 = await pg.connect({ port: PORT, database: DB });
   const q2 = await pg.connect({ port: PORT, database: DB });
 
-  const web = createSystem({ id: 'web' });
+  const web = createSystem({ systemID: 'web' });
   const store = createStoreLink(web, { query: q1.query, listen: q2.listen, pollMs: 0 });
   await store.ready;
   assert.equal(store.id, 'vault');
@@ -103,17 +104,13 @@ test('store link: envelopes in and out of PostgreSQL, errors both ways, relaying
   // browser -> (link) -> web -> (store link) -> PostgreSQL, and the reply straight back to the browser
   const served = serveLinks(web, { port: 0, exports: ['*'], announce: true });
   await until(() => served.port);
-  const browser = createSystem({ id: 'tab-1' });
+  const browser = createSystem({ systemID: 'tab-1' });
   const link = createLink(browser, { url: `ws://127.0.0.1:${served.port}/link`, name: 'web', pingMs: 0 });
-  await until(() => link.getSnapshot().value === 'open');
+  await link.opened;
   const b = createActor(client, { system: browser }).start();
   // web announced the browser to the database (tinyactors.hello), so its envelopes come to web
   await until(async () => (await db.query(`SELECT reach FROM tinyactors.peers WHERE id = 'web'`))[0]?.reach === '{tab-1}');
   // the browser asks a web actor; it forwards to the counter in PostgreSQL with the browser as origin
-  const forward = createMachine({
-    id: 'forward',
-    on: { add: { actions: sendTo(() => counter, ({ event }) => ({ type: 'add', amount: event.amount, tag: event.tag })) } },
-  });
   createActor(forward, { system: web, systemID: 'forward' }).start();
   // the database replies to the origin: the forwarder (web), so ask it to tell the browser instead
   await db.query(`SELECT tinyactors.send('counter', 'tell', $1::jsonb)`, [JSON.stringify({ to: b.address, text: 'hello from postgres' })]);

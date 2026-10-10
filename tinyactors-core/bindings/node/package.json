@@ -1,14 +1,13 @@
 {
   "name": "@tinyactors/node",
   "version": "0.2.0",
-  "description": "xstate-style state machines and actors on the tinyactors SCXML runtime (N-API addon); hibernation, links",
+  "description": "SCXML statecharts and actors on the tinyactors runtime (N-API addon): charts in JS, I/O processors, invokers, hibernation, links",
   "keywords": [
     "actor",
     "actors",
     "statechart",
     "scxml",
     "state-machine",
-    "xstate",
     "napi",
     "bun"
   ],

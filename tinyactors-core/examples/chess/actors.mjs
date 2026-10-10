@@ -1,235 +1,157 @@
 /**
- * The chess server's actors (pure machine definitions; give them the API of
- * either binding and the system to start games in).
+ * The chess server's actors, as charts (give them the API of either binding
+ * and the system to start games in).
  *
- *   lobby      systemID "lobby". CREATE {player, name} opens a game with a
- *              fresh join code; JOIN {code, player, name} routes to it (or
- *              answers NO_SUCH_GAME); LIST answers GAMES. Games report back
+ *   lobby      systemID "lobby". CREATE {name} opens a game with a fresh join
+ *              code; JOIN {code, name} routes to it (or answers
+ *              NO_SUCH_GAME); LIST answers GAMES. Games report back
  *              (GAME_OPENED / GAME_STARTED / GAME_OVER / GAME_GONE).
- *   game       systemID "game:<CODE>". Two players (refs to their actors in
- *              the browsers, reached over the link), any number of
- *              spectators. MOVE {from, to, promotion, player} is checked
- *              against the rules and the player's colour; every change is
- *              broadcast as STATE. Idle games expire. A finished game is
- *              reported to `options.records` (an ActorRef — the records actor
- *              in PostgreSQL, records.scxml) as game.over.
+ *   game       systemID "game:<CODE>". Two players (the addresses of their
+ *              actors in the browsers, reached over the link), any number of
+ *              spectators. MOVE {from, to, promotion} is checked against the
+ *              rules and the player's colour; every change is broadcast as
+ *              STATE. Idle games expire. A finished game is reported to
+ *              `options.records` (an ActorRef — the records actor in
+ *              PostgreSQL, records.scxml) as game.over.
  *
- * Players are ActorRefs carried in events (`player: self` on the client) —
- * the server answers them through the link without knowing it is one.
+ * A player is whoever sent the event (_event.origin): the server answers it
+ * through the link without knowing it is one. The lobby passes the player
+ * on when it forwards a JOIN.
  */
 import { START, fromFEN, toFEN, play, status } from './chess.mjs';
 
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; /* no 0/O, 1/I/L */
+const OVER = ['checkmate', 'stalemate', 'draw'];
 
-export function chessActors({ createMachine, createActor, assign, sendTo }, system, options = {}) {
+export function chessActors({ scxml, createActor }, system, options = {}) {
   const idleMs = options.idleMs || 30 * 60 * 1000;
   const waitMs = options.waitMs || 10 * 60 * 1000;
   const keepMs = options.keepMs || 10 * 60 * 1000;
   const random = options.random || Math.random;
+  const c = scxml.chart();
 
-  const same = (a, b) => !!a && !!b && a.address === b.address;
-  const colorOf = (context, player) => (same(context.players.w, player) ? 'w' : same(context.players.b, player) ? 'b' : null);
-  const view = (context, extra = {}) => ({
+  const colorOf = (players, player) => (players.w === player ? 'w' : players.b === player ? 'b' : null);
+  const view = (s, you) => ({
     type: 'STATE',
-    code: context.code,
-    fen: toFEN(context.pos),
-    status: context.status,
-    names: context.names,
-    lastMove: context.lastMove,
-    moves: context.moves.length,
-    spectators: context.spectators.length,
-    ...extra,
+    code: s.code,
+    fen: toFEN(s.pos),
+    status: s.status,
+    names: s.names,
+    lastMove: s.lastMove,
+    moves: s.moves.length,
+    spectators: s.spectators.length,
+    you,
   });
-  const everyone = (context) => [context.players.w, context.players.b, ...context.spectators].filter(Boolean);
+  /* host code may send to any number of actors (a <send> addresses one) */
+  const broadcast = c.script(c.expr((s) => {
+    for (const p of [s.players.w, s.players.b, ...s.spectators].filter(Boolean)) system.send(p, view(s, colorOf(s.players, p) || 'spectator'));
+  }));
   /* a finished game goes on record (in PostgreSQL, when the server has it) */
-  const report = ({ context }) => {
-    if (!options.records || !context.players.b) return;
-    const { w, b } = context.players;
-    options.records.send({ type: 'game.over', code: context.code, names: context.names, status: context.status, moves: context.moves.length, players: { w, b } });
-  };
-  /* host code may send to any number of refs (sendTo addresses one) */
-  const broadcast = ({ context }) => {
-    for (const p of everyone(context)) p.send(view(context, { you: colorOf(context, p) || 'spectator' }));
-  };
+  const report = c.script(c.expr((s) => {
+    if (!options.records || !s.players.b) return;
+    options.records.send({ type: 'game.over', code: s.code, names: s.names, status: s.status, moves: s.moves.length, players: s.players });
+  }));
+  /* a <send> of an event object to an address computed from the session */
+  const tell = (to, event) =>
+    c.send(undefined, { eventexpr: c.expr((s) => event(s).type), targetexpr: c.expr(to) }, c.content(c.expr(event)));
+  const player = ({ _event }) => _event.data.player || _event.origin;
+  const self = ({ _sessionid }) => `tinyactors://${system.id}/#_scxml_${_sessionid}`;
+  const timer = (name, ms) => [c.onentry(c.send(name, { delay: `${ms}ms`, id: name })), c.onexit(c.cancel(name))];
+  const toLobby = (event) => tell(({ lobby }) => lobby, event);
+  const joined = (color) => tell(player, (s) => ({ type: 'JOINED', code: s.code, color: color(s) }));
+  const spectate = [
+    c.assign('spectators', c.expr((s) => [...s.spectators, player(s)])),
+    tell(player, (s) => ({ type: 'SPECTATING', code: s.code })),
+    broadcast,
+  ];
 
-  const game = createMachine(
-    {
-      id: 'game',
-      context: ({ input }) => ({
-        code: input.code,
-        lobby: input.lobby,
-        pos: fromFEN(START),
-        players: { w: input.host, b: null },
-        names: { w: input.hostName, b: null },
-        spectators: [],
-        moves: [],
-        lastMove: null,
-        status: { state: 'waiting' },
-      }),
-      initial: 'waiting',
-      states: {
-        waiting: {
-          entry: [
-            sendTo(({ context }) => context.players.w, ({ context, self }) => ({ type: 'JOINED', code: context.code, color: 'w', game: self })),
-            sendTo(({ context }) => context.lobby, ({ context }) => ({ type: 'GAME_OPENED', code: context.code, host: context.names.w })),
-          ],
-          on: {
-            JOIN: [
-              {
-                guard: ({ context, event }) => same(context.players.w, event.player),
-                actions: sendTo(({ event }) => event.player, ({ context, self }) => ({ type: 'JOINED', code: context.code, color: 'w', game: self })),
-              },
-              {
-                target: 'playing',
-                actions: [
-                  assign(({ context, event }) => ({
-                    players: { ...context.players, b: event.player },
-                    names: { ...context.names, b: event.name || 'Black' },
-                    status: { state: 'playing' },
-                  })),
-                  sendTo(({ event }) => event.player, ({ context, self }) => ({ type: 'JOINED', code: context.code, color: 'b', game: self })),
-                  sendTo(({ context }) => context.lobby, ({ context }) => ({ type: 'GAME_STARTED', code: context.code, players: context.names })),
-                ],
-              },
-            ],
-          },
-          after: { wait: 'abandoned' },
-        },
-        playing: {
-          entry: broadcast,
-          on: {
-            MOVE: [
-              {
-                guard: 'legal',
-                target: 'playing',
-                reenter: true, /* restarts the idle timer, broadcasts */
-                actions: [
-                  assign({
-                    pos: ({ context, event }) => play(context.pos, event),
-                    moves: ({ context, event }) => [...context.moves, `${event.from}${event.to}${event.promotion || ''}`],
-                    lastMove: ({ event }) => ({ from: event.from, to: event.to }),
-                  }),
-                  assign({ status: ({ context }) => status(context.pos) }),
-                ],
-              },
-              {
-                actions: sendTo(
-                  ({ event }) => event.player,
-                  ({ context, event }) => ({
-                    type: 'REJECTED',
-                    move: { from: event.from, to: event.to },
-                    reason: colorOf(context, event.player) !== context.pos.turn ? 'not your turn' : 'illegal move',
-                  }),
-                ),
-              },
-            ],
-            RESIGN: {
-              guard: ({ context, event }) => colorOf(context, event.player) !== null,
-              target: 'over',
-              actions: assign(({ context, event }) => ({
-                status: { state: 'resigned', winner: colorOf(context, event.player) === 'w' ? 'b' : 'w' },
-              })),
-            },
-            JOIN: [
-              {
-                guard: ({ context, event }) => colorOf(context, event.player) !== null, /* a player reconnecting */
-                actions: [
-                  sendTo(({ event }) => event.player, ({ context, event, self }) => ({ type: 'JOINED', code: context.code, color: colorOf(context, event.player), game: self })),
-                  broadcast,
-                ],
-              },
-              {
-                actions: [
-                  assign(({ context, event }) => ({ spectators: [...context.spectators, event.player] })),
-                  sendTo(({ event }) => event.player, ({ context, self }) => ({ type: 'SPECTATING', code: context.code, game: self })),
-                  broadcast,
-                ],
-              },
-            ],
-          },
-          always: { guard: ({ context }) => ['checkmate', 'stalemate', 'draw'].includes(context.status.state), target: 'over' },
-          after: { idle: { target: 'over', actions: assign({ status: { state: 'abandoned' } }) } },
-        },
-        over: {
-          entry: [broadcast, report, sendTo(({ context }) => context.lobby, ({ context }) => ({ type: 'GAME_OVER', code: context.code, status: context.status }))],
-          on: {
-            JOIN: {
-              actions: [
-                assign(({ context, event }) => ({ spectators: [...context.spectators, event.player] })),
-                sendTo(({ event }) => event.player, ({ context, self }) => ({ type: 'SPECTATING', code: context.code, game: self })),
-                broadcast,
-              ],
-            },
-          },
-          after: { keep: 'gone' },
-        },
-        abandoned: { always: 'gone' },
-        gone: { type: 'final', entry: sendTo(({ context }) => context.lobby, ({ context }) => ({ type: 'GAME_GONE', code: context.code })) },
-      },
-    },
-    {
-      guards: {
-        legal: ({ context, event }) => colorOf(context, event.player) === context.pos.turn && play(context.pos, event) !== null,
-      },
-      delays: { wait: waitMs, idle: idleMs, keep: keepMs },
-    },
-  );
+  const game = c.scxml('game', { initial: 'waiting', datamodel: 'ecmascript' },
+    /* input: code, lobby, host (an address), hostName */
+    c.datamodel({
+      code: null,
+      lobby: null,
+      host: null,
+      hostName: 'White',
+      pos: c.expr(() => fromFEN(START)),
+      players: c.expr(({ host }) => ({ w: host, b: null })),
+      names: c.expr(({ hostName }) => ({ w: hostName, b: null })),
+      spectators: [],
+      moves: [],
+      lastMove: null,
+      status: c.expr(() => ({ state: 'waiting' })),
+    }),
+    c.state('waiting',
+      c.onentry(
+        tell(({ players }) => players.w, (s) => ({ type: 'JOINED', code: s.code, color: 'w' })),
+        toLobby((s) => ({ type: 'GAME_OPENED', code: s.code, host: s.names.w }))),
+      ...timer('wait', waitMs),
+      c.transition('JOIN', undefined, { cond: c.expr((s) => s.players.w === player(s)) }, joined(() => 'w')),
+      c.transition('JOIN', 'playing',
+        c.assign('players', c.expr((s) => ({ ...s.players, b: player(s) }))),
+        c.assign('names', c.expr((s) => ({ ...s.names, b: s._event.data.name || 'Black' }))),
+        c.assign('status', c.expr(() => ({ state: 'playing' }))),
+        joined(() => 'b'),
+        toLobby((s) => ({ type: 'GAME_STARTED', code: s.code, players: s.names }))),
+      c.transition('wait', 'abandoned')),
+    c.state('playing',
+      c.onentry(broadcast),
+      ...timer('idle', idleMs),
+      /* a legal move re-enters the state: the idle timer restarts, everyone hears */
+      c.transition('MOVE', 'playing', { cond: c.expr((s) => colorOf(s.players, player(s)) === s.pos.turn && play(s.pos, s._event.data) !== null) },
+        c.assign('pos', c.expr((s) => play(s.pos, s._event.data))),
+        c.assign('moves', c.expr(({ moves, _event: { data } }) => [...moves, `${data.from}${data.to}${data.promotion || ''}`])),
+        c.assign('lastMove', c.expr(({ _event: { data } }) => ({ from: data.from, to: data.to }))),
+        c.assign('status', c.expr((s) => status(s.pos)))),
+      c.transition('MOVE', undefined,
+        tell(player, (s) => ({
+          type: 'REJECTED',
+          move: { from: s._event.data.from, to: s._event.data.to },
+          reason: colorOf(s.players, player(s)) !== s.pos.turn ? 'not your turn' : 'illegal move',
+        }))),
+      c.transition('RESIGN', 'over', { cond: c.expr((s) => colorOf(s.players, player(s)) !== null) },
+        c.assign('status', c.expr((s) => ({ state: 'resigned', winner: colorOf(s.players, player(s)) === 'w' ? 'b' : 'w' })))),
+      /* a player reconnecting, or a spectator */
+      c.transition('JOIN', undefined, { cond: c.expr((s) => colorOf(s.players, player(s)) !== null) }, joined((s) => colorOf(s.players, player(s))), broadcast),
+      c.transition('JOIN', undefined, ...spectate),
+      c.transition(undefined, 'over', { cond: c.expr((s) => OVER.includes(s.status.state)) }),
+      c.transition('idle', 'over', c.assign('status', c.expr(() => ({ state: 'abandoned' }))))),
+    c.state('over',
+      c.onentry(broadcast, report, toLobby((s) => ({ type: 'GAME_OVER', code: s.code, status: s.status }))),
+      ...timer('keep', keepMs),
+      c.transition('JOIN', undefined, ...spectate),
+      c.transition('keep', 'gone')),
+    c.state('abandoned', c.transition(undefined, 'gone')),
+    c.final('gone', c.onentry(toLobby((s) => ({ type: 'GAME_GONE', code: s.code })))));
 
-  const newCode = () => {
+  const newCode = (games) => {
     for (;;) {
-      let c = '';
-      for (let i = 0; i < 5; i++) c += CODE_CHARS[Math.floor(random() * CODE_CHARS.length)];
-      if (!system.get(`game:${c}`)) return c;
+      let code = '';
+      for (let i = 0; i < 5; i++) code += CODE_CHARS[Math.floor(random() * CODE_CHARS.length)];
+      if (!games[code]) return code;
     }
   };
+  const codeOf = ({ _event }) => String(_event.data.code || '').trim().toUpperCase();
+  const record = (update) => c.assign('games', c.expr((s) => ({ ...s.games, [s._event.data.code]: { ...s.games[s._event.data.code], ...update(s) } })));
 
-  const lobby = createMachine(
-    {
-      id: 'lobby',
-      context: { games: {} },
-      initial: 'open',
-      states: {
-        open: {
-          on: {
-            CREATE: { actions: 'openGame' },
-            JOIN: [
-              {
-                guard: ({ context, event }) => !!context.games[String(event.code || '').toUpperCase()],
-                actions: sendTo(
-                  ({ system: s, event }) => s.get(`game:${String(event.code).toUpperCase()}`),
-                  ({ event }) => ({ type: 'JOIN', player: event.player, name: event.name }),
-                ),
-              },
-              { actions: sendTo(({ event }) => event.player, ({ event }) => ({ type: 'NO_SUCH_GAME', code: event.code })) },
-            ],
-            LIST: {
-              actions: sendTo(
-                ({ event }) => event.player,
-                ({ context }) => ({ type: 'GAMES', games: Object.values(context.games).filter((g) => g.state === 'waiting') }),
-              ),
-            },
-            GAME_OPENED: { actions: assign(({ context, event }) => ({ games: { ...context.games, [event.code]: { code: event.code, host: event.host, state: 'waiting' } } })) },
-            GAME_STARTED: { actions: assign(({ context, event }) => ({ games: { ...context.games, [event.code]: { ...context.games[event.code], players: event.players, state: 'playing' } } })) },
-            GAME_OVER: { actions: assign(({ context, event }) => ({ games: { ...context.games, [event.code]: { ...context.games[event.code], state: 'over', result: event.status } } })) },
-            GAME_GONE: {
-              actions: assign({
-                games: ({ context, event }) => Object.fromEntries(Object.entries(context.games).filter(([code]) => code !== event.code)),
-              }),
-            },
-          },
-        },
-      },
-    },
-    {
-      actions: {
-        /* a game is an actor of its own, found by its code */
-        openGame: ({ event, self }) => {
-          const code = newCode();
-          createActor(game, { system, systemID: `game:${code}`, input: { code, lobby: self, host: event.player, hostName: event.name || 'White' } }).start();
-        },
-      },
-    },
-  );
+  const lobby = c.scxml('lobby', { initial: 'open', datamodel: 'ecmascript' },
+    c.datamodel({ games: c.expr(() => ({})) }),
+    c.state('open',
+      /* a game is an actor of its own, found by its code */
+      c.transition('CREATE', undefined, c.script(c.expr((s) => {
+        const code = newCode(s.games);
+        s.games[code] = { code, state: 'starting' };
+        createActor(game, { system, systemID: `game:${code}`, input: { code, lobby: self(s), host: s._event.origin, hostName: s._event.data.name || 'White' } }).start();
+      }))),
+      c.transition('JOIN', undefined, { cond: c.expr((s) => !!(s.games[codeOf(s)] && s.games[codeOf(s)].address)) },
+        tell((s) => s.games[codeOf(s)].address, (s) => ({ type: 'JOIN', player: s._event.origin, name: s._event.data.name }))),
+      c.transition('JOIN', undefined, tell(({ _event }) => _event.origin, (s) => ({ type: 'NO_SUCH_GAME', code: codeOf(s) }))),
+      c.transition('LIST', undefined,
+        tell(({ _event }) => _event.origin, (s) => ({ type: 'GAMES', games: Object.values(s.games).filter((g) => g.state === 'waiting') }))),
+      c.transition('GAME_OPENED', undefined, record(({ _event }) => ({ code: _event.data.code, host: _event.data.host, state: 'waiting', address: _event.origin }))),
+      c.transition('GAME_STARTED', undefined, record(({ _event }) => ({ players: _event.data.players, state: 'playing' }))),
+      c.transition('GAME_OVER', undefined, record(({ _event }) => ({ state: 'over', result: _event.data.status }))),
+      c.transition('GAME_GONE', undefined,
+        c.assign('games', c.expr(({ games, _event }) => Object.fromEntries(Object.entries(games).filter(([code]) => code !== _event.data.code)))))));
 
   return { lobby, game };
 }

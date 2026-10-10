@@ -202,7 +202,7 @@ The package's main export is conditional: `node.mjs` in Node, `index.mjs`
 in browsers. With an unbundled static server:
 
 ```js
-import { createMachine, createActor } from
+import { scxml, createSystem, createActor } from
   './node_modules/tinyactors-web/bindings/web/index.mjs';
 ```
 

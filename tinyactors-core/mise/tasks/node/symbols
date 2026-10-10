@@ -9,7 +9,8 @@
 # - Node-API functions; the process that loads the addon provides them.
 #   The addon compiles with NAPI_VERSION=8, so node_api.h declares nothing
 #   newer, and -Werror fails a call to anything else.
-# - On Linux, the libc functions in LINUX_LIBC and nothing else, and no
+# - On Linux, the libc functions in LINUX_LIBC and QuickJS's
+#   (Core::ECMASCRIPT_LIBC, for the quickjs datamodel) and nothing else, and no
 #   DT_NEEDED entry at all: the addon links no C library, so it binds to the
 #   libc Node itself runs on. Each function here has the same name,
 #   arguments and types in glibc and musl; a new one fails the check until
@@ -23,10 +24,7 @@
 
 require_relative '../../node_package'
 
-LINUX_LIBC = %w[
-  bcmp calloc free malloc memcmp memcpy memmove memset qsort realloc snprintf strchr strcmp strlen strncmp
-  vsnprintf
-].freeze
+LINUX_LIBC = (%w[bcmp memcmp memcpy memset strncmp malloc_usable_size] + Core::ECMASCRIPT_LIBC + %w[qsort]).uniq.freeze
 
 # libSystem symbols a macOS addon may import beyond LINUX_LIBC, each for a
 # reason that holds on every macOS the addon supports.
@@ -38,8 +36,8 @@ DARWIN_EXTRA = {
 LIBC = {
   'x86_64-linux' => LINUX_LIBC,
   'aarch64-linux' => LINUX_LIBC,
-  'x86_64-macos' => LINUX_LIBC - %w[bcmp] + DARWIN_EXTRA.keys,
-  'aarch64-macos' => LINUX_LIBC - %w[bcmp] + DARWIN_EXTRA.keys
+  'x86_64-macos' => LINUX_LIBC - %w[bcmp malloc_usable_size] + %w[malloc_size] + DARWIN_EXTRA.keys,
+  'aarch64-macos' => LINUX_LIBC - %w[bcmp malloc_usable_size] + %w[malloc_size] + DARWIN_EXTRA.keys
 }.freeze
 
 EXPORTS = %w[napi_register_module_v1 node_api_module_get_api_version_v1].freeze

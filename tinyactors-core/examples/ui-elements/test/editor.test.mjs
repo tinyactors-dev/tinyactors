@@ -1,16 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as ta from '../../../bindings/web/node.mjs';
-import { editorMachine, keyEvent, keyName, swapKeymap } from '../editor-machine.mjs';
+import { editorChart, keyEvent, keyName, swapKeymap } from '../editor-chart.mjs';
 
 function editor(t, input = {}, options = {}) {
   let now = 0;
   const system = ta.createSystem({ clock: () => now });
   t.after(() => system.stop());
-  const actor = ta.createActor(editorMachine(ta, options), { system, input }).start();
-  const snapshot = () => { system.flush(); const s = actor.getSnapshot(); assert.equal(s.error, undefined); return s; };
+  const chart = editorChart(ta, options);
+  const actor = ta.createActor(chart, { system, input }).start();
+  /* the regions' states: the top state is the parallel state "editor" */
+  const snapshot = () => { system.flush(); const s = actor.getSnapshot(); assert.equal(s.error, undefined); return { ...s, value: s.value.editor }; };
   return {
-    actor, system, snapshot, c: () => snapshot().context,
+    actor, system, chart, snapshot, c: () => snapshot().context,
     keys: (...keys) => { for (const key of keys) { actor.send(keyEvent(key)); snapshot(); } },
     tick: (ms) => { now += ms; system.flush(); snapshot(); },
   };
@@ -169,7 +171,7 @@ test('editor: keys are hierarchical event names; the chart matches classes of ke
   const e = editor(t, { text: '' });
   e.keys('i', 'é', '🙂', '"', '.', '7', 'x');
   assert.equal(e.c().text, 'é🙂".7x');
-  const scxml = e.actor.logic.toSCXML();
+  const scxml = e.chart.xml;
   for (const d of ['"stroke.char"', '"stroke.char.digit"', '"stroke.char.digit.0"', '"stroke.char.letter.d"', '"stroke"', '"key"'])
     assert.ok(scxml.includes(`event=${d}`), `a transition on ${d}`);
   assert.doesNotMatch(scxml, /cond="[^"]*event\.key/, 'no guard inspects the key');

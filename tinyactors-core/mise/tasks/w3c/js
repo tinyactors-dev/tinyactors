@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="W3C SCXML IRP through the JS bindings (the Node.js addon and the wasm module), with bindings/shared's ECMAScript datamodel: every test not in tests/w3c/skip-js.txt must pass"
+#MISE description="W3C SCXML IRP through the JS bindings (the Node.js addon and the wasm module), with the C ECMAScript datamodel (ecmascript: quickjs): every test not in tests/w3c/skip-js.txt must pass"
 #MISE depends=["node:build", "web:build"]
 # vim:ft=ruby
 

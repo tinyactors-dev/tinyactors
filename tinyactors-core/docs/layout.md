@@ -177,12 +177,12 @@ implementation of that layer). Layer dependency rules are in
 │   ├── surface.json           ✅ every public C function: "bind" (reachable from every binding)
 │   │                             or skipped with a reason; checked with the typings by
 │   │                             `mise run surface` (mise/tasks/surface)
-│   ├── shared/core.mjs        ✅ the xstate-style JS API, backend-independent (createRuntime):
-│   │                             machines → SCXML, SCXML documents, system images, systems,
-│   │                             actors, hibernation, snapshots, links, codec
-│   ├── shared/ecmascript.mjs  ✅ the SCXML ECMAScript datamodel in JS (both backends)
-│   ├── shared/binding.c       ✅ one procedural C backend: datamodels, handles, effects,
-│   │                             host/router calls, hibernation and snapshots; Node-API value seam
+│   ├── shared/core.mjs        ✅ the JS API, backend-independent (createRuntime): chart helpers
+│   │                             (scxml.chart, c.expr), systems, actors, I/O processors and
+│   │                             invokers, links, store links, tracing
+│   ├── shared/binding.c       ✅ the native side: pure wrappers of the public headers, a System
+│   │                             over ta_host with the native or quickjs ecmascript datamodel,
+│   │                             effects, neutral values; Node-API value seam
 │   ├── node/                  ✅ N-API (C API) addon (src/addon.c) + index.js, index.d.ts, ws.js
 │   │                             (WebSocket server for links); node:test suite incl. hibernation
 │   │                             and links, tsc type tests (`mise run node:test`)

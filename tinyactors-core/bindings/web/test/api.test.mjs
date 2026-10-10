@@ -19,16 +19,20 @@ test('every declared function and class is exported', () => {
   for (const name of declared) assert.equal(typeof web[name], 'function', name);
 });
 
-test('machines compile and run on the wasm runtime', () => {
-  const m = web.createMachine({ id: 'w', initial: 'a', context: { n: 0 }, states: { a: { on: { GO: { target: 'b', actions: web.assign({ n: 1 }) } } }, b: {} } });
-  const a = web.createActor(m).start();
+test('charts compile and run on the wasm runtime', () => {
+  const c = web.scxml.chart();
+  const chart = c.scxml('w', { initial: 'a', datamodel: 'ecmascript' }, c.datamodel({ n: 0 }),
+    c.state('a', c.transition('GO', 'b', c.assign('n', c.expr(() => 1)))), c.state('b'));
+  const system = web.createSystem();
+  const a = web.createActor(chart, { system }).start();
   a.send({ type: 'GO' });
   assert.equal(a.getSnapshot().value, 'b');
   assert.equal(a.getSnapshot().context.n, 1);
-  assert.match(m.toSCXML(), /<scxml/);
+  assert.match(chart.xml, /<scxml/);
+  system.stop();
 });
 
-test('actors move between the Node addon and wasm (export/adopt), delayed data as values', async (t) => {
+test('actors move between the Node addon and wasm (export/adopt), delayed data as values, the same image', async (t) => {
   const { createRequire } = await import('node:module');
   let node;
   try {
@@ -44,11 +48,12 @@ test('actors move between the Node addon and wasm (export/adopt), delayed data a
   <state id="done"/></scxml>`;
   for (const [from, to] of [[node, web], [web, node]]) {
     let t = 0, u = 500;
-    const a = from.createSystem({ clock: () => t });
-    const actor = from.createActor(from.fromSCXML(xml, { id: 'm' }), { system: a }).start();
+    const a = from.createSystem({ clock: () => t, ecmascript: 'quickjs' });
+    const actor = from.createActor(from.fromSCXML(xml, { name: 'm' }), { system: a }).start();
     a.flush();
     t = 40;
-    const b = to.createSystem({ clock: () => u });
+    const b = to.createSystem({ clock: () => u, ecmascript: 'quickjs' });
+    b.load([to.fromSCXML(xml, { name: 'm' })]);
     const moved = b.adopt(a.export(actor));
     u += 59;
     b.flush();
@@ -56,9 +61,7 @@ test('actors move between the Node addon and wasm (export/adopt), delayed data a
     u += 1;
     b.flush();
     assert.equal(moved.getSnapshot().value, 'done');
-    const { got, hits, hit } = moved.getSnapshot().context;
-    assert.deepEqual({ got, hits }, { got: { list: [1, 2] }, hits: 1 });
-    assert.equal(typeof hit, 'function', 're-created');
+    assert.deepEqual(moved.getSnapshot().context, { got: { list: [1, 2] } });
     a.stop();
     b.stop();
   }

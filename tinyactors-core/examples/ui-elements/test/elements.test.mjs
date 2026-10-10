@@ -157,7 +157,7 @@ test('elements: every custom element is defined and owns a running actor while c
   for (const name of registry.keys()) {
     const el = mount(name, { name: 'f', words: 'a,b' });
     assert.equal(el.actor.getSnapshot().status, 'active', name);
-    assert.equal(el.actor.logic.id, name.slice(3), `${name} runs the ${name.slice(3)} machine`);
+    assert.equal(el.actor.chart.name, name.slice(3), `${name} runs the ${name.slice(3)} chart`);
     const actor = el.actor;
     el.disconnectedCallback();
     assert.equal(el.actor, null);
@@ -250,5 +250,5 @@ test('editor element: Ctrl keys are normalized, Tab is not trapped, binding edit
 test('elements: page polling remains live through the editor tests', () => {
   assert.equal(intervals.size, 1);
   for (const poll of intervals.values()) poll();
-  assert.match(document.getElementById('stats').textContent, /^\d+ actors · \d+ hibernated · \d+ woken so far$/);
+  assert.match(document.getElementById('stats').textContent, /^\d+ actors · \d+ hibernated$/);
 });

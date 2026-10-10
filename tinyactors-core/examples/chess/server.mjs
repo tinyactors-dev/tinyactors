@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * The chess server: a lobby actor and one actor per game, in one tinyactors
- * system (Node.js N-API binding). Browsers link in over a WebSocket (/link)
+ * The chess server: a lobby actor and one actor per game (charts, actors.mjs),
+ * in one tinyactors system (Node.js N-API binding). Browsers link in over a WebSocket (/link)
  * and talk to these actors as if they were local. The same HTTP server serves
  * the client and the web binding.
  *
@@ -27,8 +27,9 @@ const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const arg = process.argv.indexOf('--port');
 const PORT = Number(arg > 0 ? process.argv[arg + 1] : process.env.PORT || 8080);
 
-/* idle games are unloaded from memory and come back when someone moves or joins */
-const system = ta.createSystem({ id: 'chess', hibernation: { store: ta.createMemoryStore(), sweepMs: 60_000 } });
+/* idle games are unloaded from memory every minute and come back when someone moves or joins */
+const system = ta.createSystem({ systemID: 'chess', hibernation: { store: new Map() } });
+setInterval(() => system.sweep(), 60_000).unref();
 const PG_PORT = Number(process.env.TA_PG_PORT || 54320);
 const records =
   !process.argv.includes('--no-pg') && (await available({ port: PG_PORT }))

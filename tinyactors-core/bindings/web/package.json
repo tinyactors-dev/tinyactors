@@ -1,7 +1,7 @@
 {
   "name": "tinyactors-web",
   "version": "0.1.0",
-  "description": "xstate-style state machines and actors on the tinyactors SCXML runtime compiled to WebAssembly (browsers, Node.js); same API as the Node.js binding",
+  "description": "SCXML statecharts and actors on the tinyactors runtime compiled to WebAssembly (browsers, Node.js); same API as the Node.js binding",
   "type": "module",
   "types": "index.d.ts",
   "exports": {

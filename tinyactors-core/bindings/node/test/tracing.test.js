@@ -10,7 +10,8 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const t = require('./binding');
-const { createMachine, createActor, createSystem, createLink, serveLinks, sendTo, assign, decodeTraces } = t;
+const { scxml, createActor, createSystem, createLink, serveLinks, decodeTraces } = t;
+const h = scxml.chart();
 
 const until = async (cond, ms = 3000) => {
   const t0 = Date.now();
@@ -38,18 +39,12 @@ function collector() {
   };
 }
 
-const pong = createMachine({
-  id: 'pong',
-  initial: 'idle',
-  context: { n: 0 },
-  states: { idle: { on: { ping: { actions: assign({ n: ({ context }) => context.n + 1 }) } } } },
-});
-const ping = createMachine({
-  id: 'ping',
-  initial: 'idle',
-  context: ({ input }) => ({ peer: input.peer }),
-  states: { idle: { on: { go: { actions: sendTo(({ context }) => context.peer, { type: 'ping' }) } } } },
-});
+const pong = h.scxml('pong', { initial: 'idle', datamodel: 'ecmascript' },
+  h.datamodel({ n: 0 }),
+  h.state('idle', h.transition('ping', undefined, h.assign('n', h.expr(({ n }) => n + 1)))));
+const ping = h.scxml('ping', { initial: 'idle', datamodel: 'ecmascript' },
+  h.datamodel({ peer: null }),
+  h.state('idle', h.transition('go', undefined, h.send('ping', { targetexpr: 'String(peer)' }))));
 
 test('one trace: a traceparent from the host runs through every step it causes', async () => {
   const c = collector();
@@ -185,7 +180,9 @@ test('without a sink or an exporter no record is written, and traceparents still
 test('a span still open when the system stops ends, marked incomplete', async () => {
   const c = collector();
   const system = createSystem({ traces: { sink: c.sink } });
-  const slow = createMachine({ id: 'slow', initial: 'a', states: { a: { after: { 100000: 'b' } }, b: {} } });
+  const slow = h.scxml('slow', { initial: 'a', datamodel: 'ecmascript' },
+    h.state('a', h.onentry(h.send('later', { delay: '100s' })), h.transition('later', 'b')),
+    h.state('b'));
   createActor(slow, { system }).start();
   await settle();
   system.stop();
@@ -194,11 +191,11 @@ test('a span still open when the system stops ends, marked incomplete', async ()
 
 test('a trace crosses a link: the envelope carries the traceparent', async () => {
   const c = collector();
-  const server = createSystem({ id: 'trace-server', traces: { sink: c.sink } });
+  const server = createSystem({ systemID: 'trace-server', traces: { sink: c.sink } });
   createActor(pong, { system: server, systemID: 'pong' }).start();
   const served = serveLinks(server, { port: 0, exports: ['pong'] });
   await until(() => served.port);
-  const client = createSystem({ id: 'trace-client', telemetry: false });
+  const client = createSystem({ systemID: 'trace-client', telemetry: false });
   const link = createLink(client, { url: `ws://127.0.0.1:${served.port}/link`, name: 'trace-server' });
   const a = createActor(ping, { system: client, input: { peer: link.get('pong') } }).start();
   a.send({ type: 'go' }, { traceparent: PARENT });
@@ -212,7 +209,7 @@ test('a trace crosses a link: the envelope carries the traceparent', async () =>
 
 test('host sends: deliver(), ActorRef.send() and sendMany() take a traceparent', async () => {
   const c = collector();
-  const system = createSystem({ id: 'trace-host', traces: { sink: c.sink } });
+  const system = createSystem({ systemID: 'trace-host', traces: { sink: c.sink } });
   const b = createActor(pong, { system, systemID: 'pong' }).start();
   const traces = ['1', '2', '3'].map((d) => `00-${d.repeat(32)}-${'a'.repeat(16)}-01`);
   system.deliver({ target: 'tinyactors://trace-host/@pong', name: 'ping', traceparent: traces[0] });
@@ -278,8 +275,9 @@ test('posting fails quietly', async () => {
 test('Node.js: OTEL_* variables export with no code', { skip: process.env.TA_BINDING === 'web' && 'the web build reads no environment' }, async () => {
   const r = await receiver();
   const script = `
-    const { createMachine, createActor, createSystem } = require(${JSON.stringify(path.join(__dirname, '..'))});
-    const m = createMachine({ id: 'env', initial: 'a', states: { a: { on: { go: 'b' } }, b: {} } });
+    const { scxml, createActor, createSystem } = require(${JSON.stringify(path.join(__dirname, '..'))});
+    const c = scxml.chart();
+    const m = c.scxml('env', { initial: 'a' }, c.state('a', c.transition('go', 'b')), c.state('b'));
     const system = createSystem();
     createActor(m, { system }).start().send({ type: 'go' });
     setTimeout(() => { system.stop(); system.flushTraces(); }, 20);`;

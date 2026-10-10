@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 
-test('wasm externals: a host retains its image, then both finalize exactly once', () => {
+test('wasm externals: a system retains its image, then both finalize exactly once', () => {
   // A separate process enables deterministic GC pressure without changing the
   // test runner's flags. Observe real C finalizers, not a mock registry.
   const child = spawnSync(process.execPath, ['--expose-gc', '--input-type=module', '-e', `
@@ -18,20 +18,19 @@ test('wasm externals: a host retains its image, then both finalize exactly once'
         instance.exports.w_finalize(...args);
       } } };
     });
-    function createHost() {
+    function createSystem() {
       // Like core.mjs, callbacks close over their owner, which owns the handle.
       // Destroy must break these strong-reference cycles before GC can run.
       const owner = {};
-      owner.host = native.createHost(() => { void owner.host; return []; },
-        { decode: () => owner }, 'gc', {});
-      return owner.host;
+      owner.system = native.createSystem({ resolve: () => { void owner.system; return []; }, effects: () => owner, ref: (a) => a }, { systemID: 'gc' });
+      return owner.system;
     }
-    let host = createHost();
+    let host = createSystem();
     (() => {
-      const image = native.compile([{ name: 'gc', xml: '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="xstate"><state id="idle"/></scxml>' }]);
+      const image = native.compile([{ name: 'gc', xml: '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"><state id="idle"/></scxml>' }], []);
       native.addImage(host, image);
-      native.spawn(host, 0, 0);
-      native.run(host, 10000);
+      native.spawn(host, 0, 0, undefined, undefined, undefined, 0);
+      native.pump(host, 0);
     })();
     const turn = () => new Promise((resolve) => setTimeout(resolve, 5));
     for (let i = 0; i < 5; i++) { global.gc(); await turn(); }
@@ -39,7 +38,7 @@ test('wasm externals: a host retains its image, then both finalize exactly once'
     native.destroy(host);
     host = null;
     for (let i = 0; i < 100 && finalized < 2; i++) { global.gc(); await turn(); }
-    assert.equal(finalized, 2, 'host and image finalizers both run');
+    assert.equal(finalized, 2, 'system and image finalizers both run');
     for (let i = 0; i < 5; i++) { global.gc(); await turn(); }
     assert.equal(finalized, 2, 'no double finalization after explicit destroy');
   `], { encoding: 'utf8', timeout: 10000 });

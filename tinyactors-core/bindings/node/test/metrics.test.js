@@ -6,16 +6,15 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const t = require('./binding');
-const { createMachine, createActor, createSystem, assign, metricsToOTLP } = t;
+const { scxml, createActor, createSystem, metricsToOTLP } = t;
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
-const counter = createMachine({
-  id: 'counter',
-  initial: 'idle',
-  context: { n: 0 },
-  states: { idle: { on: { add: { actions: assign({ n: ({ context }) => context.n + 1 }) }, stop: 'done' } }, done: { type: 'final' } },
-});
+const h = scxml.chart();
+const counter = h.scxml('counter', { initial: 'idle', datamodel: 'ecmascript' },
+  h.datamodel({ n: 0 }),
+  h.state('idle', h.transition('add', undefined, h.assign('n', 'n + 1')), h.transition('stop', 'done')),
+  h.final('done'));
 
 const point = (snapshot, name, attributes = {}) => {
   const metric = snapshot.metrics.find((m) => m.name === name);

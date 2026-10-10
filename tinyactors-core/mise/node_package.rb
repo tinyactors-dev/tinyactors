@@ -42,7 +42,7 @@ module NodePackage
 
   # The files of the main package, relative to bindings/: what index.js and
   # index.d.ts reach.
-  FILES = %w[node/index.js node/index.d.ts node/transports.js node/ws.js shared/core.mjs shared/ecmascript.mjs].freeze
+  FILES = %w[node/index.js node/index.d.ts node/transports.js node/ws.js node/telemetry.js shared/core.mjs].freeze
 
   module_function
 

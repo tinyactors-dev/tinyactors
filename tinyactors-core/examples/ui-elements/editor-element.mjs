@@ -1,5 +1,5 @@
 import * as ta from '../../bindings/web/index.mjs';
-import { editorMachine, keyBindings, keyEvent, swapKeymap } from './editor-machine.mjs';
+import { editorChart, keyBindings, keyEvent, swapKeymap } from './editor-chart.mjs';
 
 export class TaEditor extends HTMLElement {
   constructor() {
@@ -62,14 +62,15 @@ export class TaEditor extends HTMLElement {
       this.upgrade({ escape: keys.join(' ') });
     });
     this.$('.inspector').addEventListener('click', (event) => {
-      if (event.target.closest('button')) this.dispatchEvent(new CustomEvent('inspect-chart', { bubbles: true, composed: true, detail: this.actor }));
+      if (event.target.closest('button')) this.dispatchEvent(new CustomEvent('inspect-chart', { bubbles: true, composed: true, detail: this.chart }));
     });
   }
 
   connectedCallback() {
     if (this.actor) return;
     this.system = ta.createSystem();
-    this.actor = ta.createActor(editorMachine(ta, this.options), { system: this.system }).start();
+    this.chart = editorChart(ta, this.options);
+    this.actor = ta.createActor(this.chart, { system: this.system }).start();
     this.toggleAttribute('debug', document.body.classList.contains('show-states'));
     this.subscription = this.actor.subscribe((snapshot) => this.render(snapshot));
     this.render(this.actor.getSnapshot());
@@ -93,6 +94,7 @@ export class TaEditor extends HTMLElement {
       const options = { ...this.options, ...changes };
       await swapKeymap(ta, this.system, this.actor, options);
       this.options = options;
+      this.chart = editorChart(ta, options); /* the version it runs now, for the inspector */
       this.$('.migration').textContent = `Chart v${this.actor.getSnapshot().context.version} · same actor, buffer & undo history`;
       this.render(this.actor.getSnapshot());
     } catch (error) {
@@ -105,7 +107,7 @@ export class TaEditor extends HTMLElement {
   }
 
   render(snapshot) {
-    const c = snapshot.context, state = snapshot.value;
+    const c = snapshot.context, state = snapshot.value.editor; /* the regions of the parallel state */
     const area = this.$('textarea');
     if (!this.composing) {
       const top = area.scrollTop, left = area.scrollLeft;

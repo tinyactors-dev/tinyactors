@@ -1,7 +1,7 @@
 'use strict';
 /**
- * tinyactors for Node.js — the xstate-style API (bindings/shared/core.mjs)
- * over the native addon written against the N-API C API (src/addon.c).
+ * tinyactors for Node.js — the API of bindings/shared/core.mjs over the
+ * native addon (src/addon.c and bindings/shared/binding.c, against Node-API).
  */
 const path = require('path');
 const { createRuntime } = require('../shared/core.mjs');

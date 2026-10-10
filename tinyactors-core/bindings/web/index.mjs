@@ -1,10 +1,9 @@
 /**
- * tinyactors for browsers — the same xstate-style API as the Node.js binding
+ * tinyactors for browsers — the same API as the Node.js binding
  * (bindings/shared/core.mjs), over the tinyactors runtime compiled to
- * WebAssembly (tinyactors.wasm, ~50 KB gzipped). The datamodel's values are
- * plain JavaScript values; machines compile to readable SCXML in the browser.
+ * WebAssembly (tinyactors.wasm).
  *
- *   import { createMachine, createActor, createLink } from './bindings/web/index.mjs';
+ *   import { scxml, createSystem, createActor } from './bindings/web/index.mjs';
  */
 import { createRuntime } from '../shared/core.mjs';
 import { createNative } from './native.mjs';
@@ -53,9 +52,8 @@ const api = createRuntime({
 });
 
 export const {
-  createMachine, createActor, createSystem, fromSCXML, SCXMLLogic, compileSystem, loadImage, SystemImage, setup, assign, raise, sendTo, sendParent, log, cancel,
-  stateIn, and, or, not, StateMachine, Actor, System, ActorRef, createLink, serveLinks, encodeFrame, FrameDecoder,
-  createMemoryStore, encodeValue, decodeValue, parseAddress, formatAddress, encodeWire, decodeWire, createStoreLink,
-  TRACE_KINDS, decodeTraces, metricsToOTLP, parseTraceparent, formatTraceparent, stepSpanID,
+  scxml, fromSCXML, Chart, createSystem, System, createActor, Actor, ActorRef, toPromise, loadImage, Image,
+  createLink, serveLinks, createStoreLink, parseAddress, formatAddress, encodeFrame, FrameDecoder,
+  parseTraceparent, formatTraceparent, stepSpanID, decodeTraces, metricsToOTLP, TRACE_KINDS,
 } = api;
 export default api;

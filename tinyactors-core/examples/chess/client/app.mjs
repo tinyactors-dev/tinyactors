@@ -2,16 +2,18 @@
  * The chess client: a tinyactors system in the browser (web binding), linked
  * to the server's system. The player is an actor (player.mjs); the lobby and
  * the game are actors on the server, reached through the link as if local.
- * The UI renders snapshots: the player's for the game, the link's for the
- * connection pill.
+ * The UI renders snapshots: the player's for the game, the router's status of
+ * the link for the connection pill.
  */
-import { createSystem, createActor, createLink, createMachine, assign, sendTo } from '../../../bindings/web/index.mjs';
-import { playerMachine } from './player.mjs';
+import * as ta from '../../../bindings/web/index.mjs';
+import { playerChart, screenOf } from './player.mjs';
+
+const { createSystem, createActor, createLink } = ta;
 import './board.mjs';
 
 const template = (id) => document.importNode(document.getElementById(id).content, true);
 
-/** <link-status> — the link actor's snapshot: connecting / open (rtt) / reconnecting / closed */
+/** <link-status> — the router's view of the link (ta_host_peer_status): connecting / open (rtt) / reconnecting / closed */
 class LinkStatus extends HTMLElement {
   constructor() {
     super();
@@ -19,16 +21,17 @@ class LinkStatus extends HTMLElement {
   }
   watch(link) {
     const label = this.shadowRoot.querySelector('.label');
-    const render = (s) => {
-      const c = s.context;
-      this.dataset.state = s.value;
+    const render = () => {
+      const s = link.status();
+      if (!s) return;
+      this.dataset.state = s.state;
       label.textContent =
-        s.value === 'open' ? `connected${c.rtt !== null ? ` · ${Math.round(c.rtt)} ms` : ''}`
-        : s.value === 'reconnecting' ? `reconnecting (attempt ${c.attempts})${c.queued ? ` · ${c.queued} queued` : ''}`
-        : s.value;
+        s.state === 'open' ? `connected${s.rtt ? ` · ${Math.round(s.rtt)} ms` : ''}`
+        : s.state === 'reconnecting' ? `reconnecting (attempt ${s.attempts})${s.queued ? ` · ${s.queued} queued` : ''}`
+        : s.state;
     };
-    render(link.getSnapshot());
-    link.subscribe(render);
+    render();
+    setInterval(render, 500);
   }
 }
 customElements.define('link-status', LinkStatus);
@@ -42,13 +45,13 @@ class ChessApp extends HTMLElement {
      * addresses, so the game still reaches us and we can rejoin it */
     let id = sessionStorage.getItem('chess.system');
     if (!id) sessionStorage.setItem('chess.system', (id = crypto.randomUUID().replace(/-/g, '').slice(0, 12)));
-    const system = createSystem({ id });
+    const system = createSystem({ systemID: id });
     const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/link`;
     const link = createLink(system, { url, name: 'chess' });
     $('link-status').watch(link);
 
     const name = localStorage.getItem('chess.name') || `Player ${Math.floor(Math.random() * 900 + 100)}`;
-    const player = createActor(playerMachine({ createMachine, assign, sendTo }), { system, input: { lobby: link.get('lobby'), name } }).start();
+    const player = createActor(playerChart(ta), { system, input: { lobby: link.get('lobby').address, name } }).start();
     window.chess = { system, link, player }; /* for the console */
 
     $('#name').value = name;
@@ -75,21 +78,20 @@ class ChessApp extends HTMLElement {
     const code = new URLSearchParams(location.search).get('code') || sessionStorage.getItem('chess.code');
     if (code) {
       $('#code').value = code;
-      const join = (s) => {
-        if (s.value !== 'open' || this.autojoined || player.getSnapshot().value !== 'lobby') return;
-        this.autojoined = true;
+      link.opened.then(() => {
+        if (screenOf(player.getSnapshot().value) !== 'lobby') return;
         player.send({ type: 'JOIN', code, name: nameNow() });
-      };
-      join(link.getSnapshot());
-      link.subscribe(join);
+      });
     }
     player.subscribe((s) => {
-      if (['waiting', 'playing', 'watching'].includes(s.value) && s.context.code) sessionStorage.setItem('chess.code', s.context.code);
-      if (s.value === 'lobby' || s.value === 'over') sessionStorage.removeItem('chess.code');
+      const value = screenOf(s.value);
+      if (['waiting', 'playing', 'watching'].includes(value) && s.context.code) sessionStorage.setItem('chess.code', s.context.code);
+      if (value === 'lobby' || value === 'over') sessionStorage.removeItem('chess.code');
     });
 
-    const render = (s) => {
-      const c = s.context;
+    const render = (snapshot) => {
+      const c = snapshot.context;
+      const s = { value: screenOf(snapshot.value) };
       const screen = { lobby: 'lobby', creating: 'lobby', joining: 'lobby', waiting: 'waiting', playing: 'game', watching: 'game', over: 'game' }[s.value];
       for (const el of this.querySelectorAll('[data-screen]')) el.hidden = el.dataset.screen !== screen;
       $('#busy').hidden = !['creating', 'joining'].includes(s.value);

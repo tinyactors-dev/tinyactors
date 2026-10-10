@@ -15,8 +15,8 @@ foreground and prints the page's URL; Ctrl-C stops it.
 Each element (`customElements.define(...)` in `elements.mjs`) owns one actor and
 does three things: it clones its `<template>`, forwards DOM events to the actor
 as events, and renders the actor's snapshot. The editor's behaviour is in
-`editor-machine.mjs`; the smaller examples use `machines.mjs`. Tests drive
-these exact machines on the web binding's wasm runtime in Node.
+`editor-chart.mjs`; the smaller examples use `charts.mjs`. Tests drive
+these exact charts on the web binding's wasm runtime in Node.
 
 ## The centerpiece: an editor whose keymap is a chart
 
@@ -53,7 +53,7 @@ one, `d10w`) comes before `stroke.char.digit` (a count), and both come before
 
 **The keymap is live code, compiled from data.** Switch Vim ↔ Emacs, or change
 the insert escape binding to `j k l m` and click **Compile & migrate**. This
-uses `system.reload()` and `system.migrate(actor)`, not stop/spawn or a buffer
+uses `system.load(chart)` and `system.migrate(actor)`, not stop/spawn or a buffer
 copy into a new editor. The address shown under the form stays identical;
 text, cursor, undo/redo and an in-flight save remain intact. Pending prefixes
 are canceled (literal insert prefixes are flushed), insert transactions are
@@ -97,7 +97,7 @@ below still demonstrates actual hibernation.
 
 ## Smaller building blocks
 
-| Element | The machine shows |
+| Element | The chart shows |
 |---|---|
 | `<ta-toggle>` | guards (`disabled` ignores clicks), events from attributes |
 | `<ta-counter>` | bounds; press-and-hold auto-repeat with delayed transitions (`after`) that stops at the bound |
@@ -107,7 +107,7 @@ below still demonstrates actual hibernation.
 | 200 × `<ta-counter>` | hibernation in the browser: counters scrolled out of view are unloaded from the wasm runtime into a store (`system.hibernate(actor)`). Use one and it wakes up with its value. |
 
 **Show states** also reveals each smaller element's current state. Click a
-state to see the SCXML the machine compiled to.
+state to see the SCXML the chart compiles to.
 
 ## Tests
 

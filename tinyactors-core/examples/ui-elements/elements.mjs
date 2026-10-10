@@ -1,22 +1,23 @@
 /**
- * Custom elements backed by actors. Every element owns an actor (a machine
- * from machines.mjs) in one tinyactors system that runs in the page
+ * Custom elements backed by actors. Every element owns an actor (a chart
+ * from charts.mjs) in one tinyactors system that runs in the page
  * (WebAssembly); the element forwards DOM events as actor events and renders
  * the actor's snapshot — nothing else. Each element clones its <template>.
  *
  * Off-screen counters are hibernated (unloaded from the wasm memory into a
  * store) and wake up by themselves when they are used again.
  */
-import { createSystem, createActor, createMemoryStore, createMachine, assign, sendTo, raise } from '../../bindings/web/index.mjs';
-import { uiMachines } from './machines.mjs';
+import * as ta from '../../bindings/web/index.mjs';
+import { uiCharts } from './charts.mjs';
 import { TaEditor } from './editor-element.mjs';
 
-export const system = createSystem({ id: 'ui', hibernation: { store: createMemoryStore(), sweepMs: 0 } });
-const machines = uiMachines({ createMachine, assign, sendTo, raise });
+const { createSystem, createActor } = ta;
+export const system = createSystem({ systemID: 'ui', hibernation: { store: new Map() } });
+const charts = uiCharts(ta);
 
 /** Clones <template id=localName>, owns an actor, renders its snapshots. */
 class ActorElement extends HTMLElement {
-  static machine = null;
+  static chart = null;
   constructor() {
     super();
     this.attachShadow({ mode: 'open' }).append(document.importNode(document.getElementById(this.localName).content, true));
@@ -27,10 +28,10 @@ class ActorElement extends HTMLElement {
   }
   connectedCallback() {
     if (this.actor) return;
-    this.actor = createActor(machines[this.constructor.machine], { system, input: this.input() }).start();
+    this.actor = createActor(charts[this.constructor.chart], { system, input: this.input() }).start();
     this.wire();
     const chip = this.$('.state');
-    if (chip) chip.addEventListener('click', () => showSCXML(this.actor));
+    if (chip) chip.addEventListener('click', () => showSCXML(this.actor.chart));
     this.toggleAttribute('debug', document.body.classList.contains('show-states'));
     const draw = (s) => {
       if (chip) chip.textContent = JSON.stringify(s.value).replace(/"/g, '') + (this.actor.hibernated ? ' · hibernated' : '');
@@ -49,7 +50,7 @@ class ActorElement extends HTMLElement {
 }
 
 class TaToggle extends ActorElement {
-  static machine = 'toggle';
+  static chart = 'toggle';
   static observedAttributes = ['disabled'];
   input() {
     return { disabled: this.hasAttribute('disabled') };
@@ -71,7 +72,7 @@ class TaToggle extends ActorElement {
 }
 
 class TaCounter extends ActorElement {
-  static machine = 'counter';
+  static chart = 'counter';
   input() {
     const num = (k, d) => (this.hasAttribute(k) ? Number(this.getAttribute(k)) : d);
     return { value: num('value', 0), min: num('min', -Infinity), max: num('max', Infinity), step: num('step', 1) };
@@ -99,7 +100,7 @@ class TaCounter extends ActorElement {
 }
 
 class TaSearch extends ActorElement {
-  static machine = 'search';
+  static chart = 'search';
   input() {
     return { words: (this.getAttribute('words') || '').split(',').map((w) => w.trim()).filter(Boolean) };
   }
@@ -141,9 +142,9 @@ class TaSearch extends ActorElement {
 }
 
 class TaForm extends ActorElement {
-  static machine = 'form';
+  static chart = 'form';
   input() {
-    return { fields: [...this.querySelectorAll('ta-field')].map((f) => f.getAttribute('name')) };
+    return { names: [...this.querySelectorAll('ta-field')].map((f) => f.getAttribute('name')) };
   }
   wire() {
     this.$('form').addEventListener('submit', (e) => {
@@ -163,7 +164,7 @@ class TaForm extends ActorElement {
 }
 
 class TaField extends ActorElement {
-  static machine = 'field';
+  static chart = 'field';
   input() {
     /* the field reports to its form's actor (actor-to-actor, inside the page) */
     const form = this.closest('ta-form');
@@ -186,7 +187,7 @@ class TaField extends ActorElement {
 }
 
 class TaDialog extends ActorElement {
-  static machine = 'dialog';
+  static chart = 'dialog';
   wire() {
     this.$('.open').addEventListener('click', () => this.send('OPEN'));
     this.$('.close').addEventListener('click', () => this.send('CLOSE'));
@@ -202,10 +203,10 @@ for (const [name, cls] of Object.entries({ 'ta-editor': TaEditor, 'ta-toggle': T
   customElements.define(name, cls);
 
 /* ---- "show states": every element shows its state; click one for its SCXML */
-function showSCXML(actor) {
+function showSCXML(chart) {
   const d = document.getElementById('scxml');
-  d.querySelector('h2').textContent = `${actor.logic.id} — the SCXML this element runs`;
-  d.querySelector('pre').textContent = actor.logic.toSCXML();
+  d.querySelector('h2').textContent = `${chart.name} — the SCXML this element runs`;
+  d.querySelector('pre').textContent = chart.xml;
   d.showModal();
 }
 document.addEventListener('inspect-chart', (event) => showSCXML(event.detail));
@@ -225,12 +226,19 @@ for (let i = 1; i <= 200; i++) {
 }
 const seen = new IntersectionObserver(
   (entries) => {
-    for (const e of entries) if (!e.isIntersecting && e.target.actor) system.hibernate(e.target.actor);
+    for (const e of entries) {
+      if (e.isIntersecting || !e.target.actor) continue;
+      try {
+        system.hibernate(e.target.actor);
+      } catch {
+        /* busy (a held button repeating): it stays */
+      }
+    }
   },
   { root: many },
 );
 for (const c of many.children) seen.observe(c);
 setInterval(() => {
-  const st = system.stats().reduce((a, s) => ({ actors: a.actors + s.actors, hibernated: a.hibernated + s.hibernated, wakes: s.wakes }), { actors: 0, hibernated: 0, wakes: 0 });
-  document.getElementById('stats').textContent = `${st.actors} actors · ${st.hibernated} hibernated · ${st.wakes} woken so far`;
+  const st = system.stats();
+  document.getElementById('stats').textContent = `${st.actors} actors · ${st.hibernated} hibernated`;
 }, 300);

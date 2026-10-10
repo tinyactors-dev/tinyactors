@@ -8,7 +8,7 @@ contributors never download a JVM or .NET SDK.
 |-----------|---------------------------|-------|---------------------|
 | `python/` | python, uv | amalgamation via setuptools/CFFI | Python objects (`PyObject *` behind `ta_payload`) |
 | `ruby/` | ruby | amalgamation, native ext | `VALUE` |
-| `node/` ✅ | node | N-API (C API) addon, xstate-style API + index.d.ts | napi values (context/events as napi refs; readable expressions resolved to functions per chart); one native system per `System` |
+| `node/` ✅ | node | N-API (C API) addon, the host's API + index.d.ts | napi values (variables and event data as napi refs; `c.expr` functions and expression text resolved to functions per chart), or the C ECMAScript datamodel; one `ta_host` per `System` |
 | `rust/` | rust | `cc` crate on the amalgamation, `-sys` + safe crate | Rust closures / enum values |
 | `go/` | go | cgo on the amalgamation | handle table (cgo forbids Go pointers in C) |
 | `java/` | java (+ gradle) | JNI or Panama FFM | handle table |
@@ -75,29 +75,32 @@ Rules for every binding:
 
 ## JavaScript binding seam
 
-`shared/binding.c` implements the procedural backend used by `shared/core.mjs`:
-both datamodel vtables, payload/instance ownership, compilation, effect collection,
-router peers, hibernation, snapshots, migration and stats. Add host operations here
-once. Both builds compile this exact C source; neither adapter contains actor logic.
+`shared/binding.c` is the native side of `shared/core.mjs`: hand-written
+wrappers of the pure functions of the public headers (compile, images,
+addresses, frames, traceparents, OTLP), and a `System` over `ta_host` with
+its datamodel (the native `ecmascript` vtable, or the C one on quickjs-ng
+behind a thin forwarding vtable), its run loop and effect delivery: one
+call per pump hands JavaScript every effect, the sessions whose variables
+changed and the OTLP bytes. Neutral values (`$bytes`, `$ref`) are written
+and read in C, and `TA_EFFECT_REQUEST` is answered in C. Both builds
+compile this exact C source; `core.mjs` holds no actor logic.
 
-The value seam is the synchronous subset of Node-API already used by the native
-binding. `node/src/addon.c` registers the shared core against Node's real API.
-`web/src/node_api.h` declares the subset as wasm imports; `web/native.mjs` supplies
-objects, properties, callbacks, exceptions, strong references and byte buffers.
-`web/src/glue.c` only exports registration, callback/finalizer trampolines and
-allocation. This avoids another value vtable and leaves Node's native call path
-unchanged. It is not a general Node-API polyfill (no async work, weak references,
-classes, or arbitrary typed arrays).
+The value seam is the synchronous subset of Node-API. `node/src/addon.c`
+registers the shared core against Node's real API. `web/src/node_api.h`
+declares the subset as wasm imports; `web/native.mjs` supplies objects,
+properties, callbacks, exceptions, strong references and byte buffers.
+`web/src/glue.c` only exports registration, callback/finalizer trampolines
+and allocation. It is not a general Node-API polyfill (no async work, weak
+references, classes, or arbitrary typed arrays).
 
 Wasm values live in a per-call handle scope; strong references outlive scopes.
 External handles have GC finalizers. Byte buffers are mirrored into wasm memory
 for the call, synchronized at JS callbacks and copied back before return; output
 buffers therefore survive memory growth and scope cleanup. Nested calls get their
-own scopes. The cost is more wasm/JS crossings than the former actor-specific
-imports, in exchange for having no second implementation of binding semantics.
+own scopes.
 
-Snapshots remain build/architecture-specific, and a snapshot of an earlier
-region layout is refused (ADR 0006 in the repository root changed it). ES
-instance and `<foreach>` handles carry a high-word tag over their slot in the
-unified table. `node:test` and `web:test` run the same procedural
-tests; `web:test` also runs the adapter unit tests in `tests/unit/test_js_adapter.mjs`.
+Hibernation and export blobs of the native datamodel hold neutral values,
+so they move between the Node and web builds. Snapshots remain
+build-specific, and a snapshot of an earlier region layout is refused (ADR
+0006 in the repository root changed it). `node:test` and `web:test` run the same tests;
+`web:test` also runs the adapter unit tests in `tests/unit/test_js_adapter.mjs`.

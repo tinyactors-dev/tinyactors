@@ -1,8 +1,8 @@
 # tinyactors for browsers (and anything with WebAssembly)
 
-The same xstate-style API as the [Node.js binding](../node) — the same
-`index.d.ts` (one shared core, `bindings/shared/core.mjs`) — over the tinyactors
-runtime compiled to WebAssembly.
+The same API as the [Node.js binding](../node) — the same `index.d.ts`
+(one shared core, `bindings/shared/core.mjs`) — over the tinyactors runtime
+compiled to WebAssembly.
 
 ## Installable distribution
 
@@ -20,49 +20,53 @@ not this development directory.
 
 ```html
 <script type="module">
-  import { createMachine, createActor, createSystem, createLink } from './bindings/web/index.mjs';
+  import { scxml, createActor, createSystem, createLink } from './bindings/web/index.mjs';
 
-  const toggle = createMachine({ id: 'toggle', initial: 'off', states: { off: { on: { TOGGLE: 'on' } }, on: { on: { TOGGLE: 'off' } } } });
-  const actor = createActor(toggle).start();
+  const c = scxml.chart();
+  const toggle = c.scxml('toggle', { initial: 'off' },
+    c.state('off', c.transition('TOGGLE', 'on')),
+    c.state('on', c.transition('TOGGLE', 'off')));
+  const system = createSystem();
+  const actor = createActor(toggle, { system }).start();
   actor.subscribe((s) => console.log(s.value));
   actor.send({ type: 'TOGGLE' });
 
   // talk to actors on a server
-  const link = createLink(createSystem(), { url: `wss://${location.host}/link`, name: 'server' });
-  link.subscribe((s) => console.log('link', s.value, s.context.rtt));
+  const link = createLink(system, { url: `wss://${location.host}/link`, name: 'server' });
+  link.opened.then(() => console.log('link', link.status()));
 </script>
 ```
 
-- `tinyactors.wasm` (~125 KB, ~52 KB gzipped) contains the runtime, the
-  compiler (machines compile to SCXML in the page) and `src/glue.c`, the
-  procedural interface. It needs no WASI imports: its only imports are the
-  datamodel callbacks.
+- `tinyactors.wasm` (about 1.1 MB, 415 KB gzipped) contains the runtime,
+  the host, the compiler (charts compile in the page), the binding
+  (`bindings/shared/binding.c`) and QuickJS for the `quickjs` datamodel,
+  most of its size. It needs no WASI imports: its only imports are the
+  Node-API subset `native.mjs` implements, and the WASI functions QuickJS's
+  C library calls are defined inside it (`src/datamodel_ecmascript/browser_wasm.c`;
+  its clock is set from the page before each run).
 - It is built for wasm32-wasi, with wasi-libc compiled in. The host and the
   system need no C library (`libtinyactors`, docs/adr/0005); what still
-  does is the compiler (`malloc`, `snprintf`/`vsnprintf`, `qsort`, string
-  functions), `ta_runtime_malloc` (the host's allocator here), and the
-  binding itself (`bindings/shared/binding.c` and `src/glue.c`: `malloc`,
-  `calloc`, `realloc`, `snprintf`, string functions).
-- The datamodel is plain JavaScript (`native.mjs`). Contexts, events and
-  payloads are ordinary JS values behind integer handles, so nothing is
-  serialized between JS and wasm on the hot path.
+  does is the compiler, QuickJS, `ta_runtime_malloc` (the host's allocator
+  here), and the binding itself.
+- The `native` datamodel is the same C code as in the Node addon, over the
+  Node-API subset of `native.mjs`: variables and event data are ordinary JS
+  values behind integer handles, so nothing is serialized between JS and
+  wasm on the hot path.
 - `index.mjs` is for browsers (top-level `await`, `instantiateStreaming`).
   `node.mjs` is the same binding for Node.js: synchronous, and `serveLinks()`
   also accepts `{ server | port }`. Pick it with the `node` export condition.
 - Slices of work are time-boxed (~4 ms) and continue on a `MessageChannel`
   turn, so a busy system never blocks the page.
-- SCXML documents (`fromSCXML`), system images (`compileSystem`,
-  `loadImage`, `system.boot`), snapshots (`system.snapshot()`,
+- SCXML documents (`fromSCXML`), I/O processors and invokers, system
+  manifests (`system.boot`), snapshots (`system.snapshot()`,
   `createSystem({ restore })`) and deterministic time (`createSystem({ clock })`
-  + `flush()`) work as in the [Node binding](../node#scxml-documents);
-  snapshots and images are portable between the two.
+  + `flush()`) work as in the [Node binding](../node#how-it-works).
 - Hibernation works here too: `createSystem({ hibernation: { store } })`, with
   a store backed by memory, IndexedDB or anything else (sync or async). Blobs
   are portable between the web and Node bindings.
-
 - Actors move between systems with `system.export(actor)` and
   `system.adopt(bytes)` — between processes, and between this binding and
-  the Node one: delayed events carry their data as values.
+  the Node one.
 
 ## Traces
 
@@ -73,7 +77,7 @@ where an event comes from outside, and the step it starts is a child of
 your span:
 
 ```js
-createActor(machine, { system, traceparent: req.headers.traceparent });
+createActor(chart, { system, traceparent: req.headers.traceparent });
 actor.send({ type: 'charge' }, { traceparent });
 system.ref(address).send({ type: 'charge' }, { traceparent });
 system.sendMany([[actor, { type: 'charge' }, { traceparent }]]);
@@ -193,34 +197,24 @@ ms; 0 only when the system stops) and once more at `stop()`, adding what
 
 Every datamodel call and result crosses between JS and wasm through the
 N-API-subset adapter (`native.mjs`). `node tools/bench_js.mjs` runs the same
-workloads through both bindings, each in its own process (deterministic
-clock, synchronous flushes; best of three; ops/s). Orb, 4 vCPUs, Node 26:
+workloads through both bindings and both datamodels, each in its own
+process (deterministic clock, synchronous flushes; best of three; per
+second, resident MB after). Intel Xeon @ 2.80 GHz, 4 CPUs, Node 22, Linux:
 
-| workload | node, before | web, before | node | web | web / node |
-|---|---:|---:|---:|---:|---:|
-| machine: `actor.send()` per event | 221 k | 58 k | 440 k | 303 k | 0.69 |
-| machine: `sendMany`, 1000 per call | 830 k | 214 k | 908 k | 855 k | 0.94 |
-| SCXML document: `actor.send()` (cond, assign, script) | 123 k | 33 k | 165 k | 162 k | 0.98 |
-| spawn (`createActor().start()`) | 105 k | 44 k | 138 k | 126 k | 0.91 |
-| hibernate (SCXML actors, one by one) | 142 k | 65 k | 147 k | 149 k | 1.01 |
-| wake + event (`sendMany` to hibernated actors) | 53 k | 18 k | 55 k | 56 k | 1.02 |
+| workload | node native | node quickjs | web native | web quickjs |
+|---|---:|---:|---:|---:|
+| send, 0 subscribed | 125 k (64) | 106 k (66) | 113 k (69) | 47 k (80) |
+| send, 10 subscribed | 93 k (69) | 27 k (73) | 71 k (70) | 17 k (82) |
+| send, 1000 subscribed | 61 k (110) | 26 k (82) | 51 k (123) | 15 k (89) |
+| sendMany | 137 k (152) | 117 k (108) | 128 k (149) | 72 k (133) |
+| spawn | 90 k (152) | 89 k (113) | 42 k (165) | 60 k (143) |
+| hibernate | 93 k (190) | 31 k (185) | 64 k (581) | 18 k (571) |
+| wake + event | 18 k (190) | 21 k (185) | 16 k (581) | 26 k (571) |
 
-"Before" is the adapter as first written (web at 0.26–0.46 of Node). What
-made the difference, hottest first:
-
-- views of wasm memory (`DataView`, `Uint8Array`) were made per access —
-  every handle read and out-parameter write; now made again only after the
-  memory grew;
-- property names (C string literals) were decoded with `TextDecoder` on
-  every `napi_*_named_property`; now once per address, internalized;
-- `native.run` built 11 result arrays and set 14 properties per run, mostly
-  empty (on wasm, ~40 crossings for every event sent); it now lists only
-  what happened (this also sped up the Node addon);
-- strings: short ASCII without `TextDecoder`, UTF-8 lengths without encoding;
-  no rest/spread arrays per call, no byte-mirror syncs when nothing is
-  mirrored, no frame copies per callback.
-
-What remains is mostly the crossings themselves (`wasm-to-js`) and keyed
+A subscribed actor costs a snapshot after each run that changed it; with
+quickjs that snapshot copies the variables out of the engine as JSON,
+which is why subscribers cost it more. What remains for the native
+datamodel is mostly the crossings themselves (`wasm-to-js`) and keyed
 property stores into the objects C builds.
 
 ## Build & test

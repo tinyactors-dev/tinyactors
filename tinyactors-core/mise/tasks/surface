@@ -40,7 +40,7 @@
 #
 # 3. Typings. Every export of each binding as loaded (bindings/node through
 #    index.js, bindings/web/node.mjs) and every public method, getter and
-#    static of its System, Actor and SystemImage classes is declared in its
+#    static of its System, Actor and Image classes is declared in its
 #    index.d.ts: the pinned tsc checks a generated file that refers to each.
 #
 # Generated files are in build/surface/.
@@ -53,7 +53,7 @@ verbose = ENV['usage_verbose'] == 'true' || ARGV.include?('-v') || ARGV.include?
 Dir.chdir(Core::ROOT)
 OUT = Core::BUILD.join('surface')
 FileUtils.mkdir_p(OUT)
-CLASSES = %w[System Actor SystemImage].freeze
+CLASSES = %w[System Actor Image].freeze
 
 manifest = JSON.parse(Core::ROOT.join('bindings/surface.json').read)
 problems = []

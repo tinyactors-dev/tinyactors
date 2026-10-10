@@ -5,6 +5,7 @@
 # replaces the CMake build the library came with (docs/layout.md): the layers
 # are static archives, built with the pinned toolchain (mise/lib/toolchain/)
 # and reused while their bytes are unchanged (mise/lib/cache.rb).
+require 'digest'
 require 'etc'
 require 'fileutils'
 require 'pathname'
@@ -157,6 +158,16 @@ module Core
   end
 
   ECMASCRIPT = %w[datamodel_ecmascript quickjs].freeze
+  # The C library functions QuickJS calls, in the ECMAScript library and in
+  # the Node.js addon: allocation (malloc_usable_size, which glibc and musl
+  # both have; libSystem's malloc_size on macOS), strings and numbers, the
+  # clock and local time for Date, stdio for its debugging dumps, and the
+  # math library, which glibc keeps in libm: a program links -lm (ADR 0001,
+  # decision 20), and Node.js already has.
+  ECMASCRIPT_LIBC = %w[abort acos acosh asin asinh atan atan2 atanh calloc cbrt ceil clock_gettime cos cosh exp expm1
+                       floor fmod fprintf fputc free frexp fwrite gettimeofday hypot localtime_r log log10 log1p log2
+                       malloc memchr memmove modf pow printf realloc round scalbn sin sinh snprintf sscanf strchr
+                       strcmp strlen strrchr strstr strtod tan tanh trunc vsnprintf].freeze
   PROGRAMS = [
     unit('test_base', 'base'),
     unit('test_headers', 'base'),
@@ -355,7 +366,7 @@ module Core
   # The Node.js addon (mise run node:build): its own sources, compiled with
   # the Node-API headers that ship with the pinned node, and the layers it
   # links.
-  NODE_LAYERS = %w[host runtime system compile otlp].freeze
+  NODE_LAYERS = %w[host runtime system compile otlp datamodel_ecmascript].freeze
   NODE_SOURCES = %w[bindings/node/src/addon.c bindings/shared/binding.c].freeze
 
   # Builds the addon's layers and compiles its own sources for the build
@@ -382,8 +393,14 @@ module Core
   # (files, the clock) it does not need.
   def web_sources
     link_order(%w[host compile otlp]).flat_map { |name| LAYERS.fetch(name).sources } +
-      %w[src/runtime/runtime.c bindings/shared/binding.c bindings/web/src/glue.c]
+      %w[src/runtime/runtime.c src/datamodel_ecmascript/datamodel_ecmascript.c bindings/shared/binding.c
+         bindings/web/src/glue.c]
   end
+
+  # The ECMAScript engine the web binding's quickjs datamodel runs on, compiled
+  # with its own flags (third_party/ is not held to the project's warnings);
+  # browser_wasm.c gives it a clock and no files in place of WASI imports.
+  def web_engine_sources = [*LAYERS.fetch('quickjs').sources, 'src/datamodel_ecmascript/browser_wasm.c']
 
   def web_target = Toolchain::Target.zig('wasm32-wasi')
 
@@ -392,9 +409,15 @@ module Core
   # named in glue.c.
   def link_web(into:, flags:)
     target = web_target
-    target.program(web_sources, into: into.to_s,
-                                flags: [*target.cflags, '-mexec-model=reactor', *flags, '-std=c11', '-Wall', '-Wextra',
-                                        '-Werror', '-Iinclude', '-Isrc', '-Ibindings/web/src'])
+    objects = web_engine_sources.map do |source|
+      object = BUILD.join('web', Digest::SHA256.hexdigest(flags.join(' '))[0, 12], "#{File.basename(source, '.c')}.o")
+      target.compile(source, into: object.to_s, includes: %w[include third_party/quickjs-ng], flags: [*flags, *QUICKJS_FLAGS])
+      object.to_s
+    end
+    target.program([*web_sources, *objects], into: into.to_s,
+                                             flags: [*target.cflags, '-mexec-model=reactor', *flags, '-std=c11',
+                                                     '-Wall', '-Wextra', '-Werror', '-Iinclude', '-Isrc',
+                                                     '-Ibindings/web/src', '-isystem', 'third_party/quickjs-ng'])
   end
 
   # Runs the block for each item on a thread per CPU; the block's own

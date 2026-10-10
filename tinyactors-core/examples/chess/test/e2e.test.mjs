@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import * as web from '../../../bindings/web/node.mjs';
 import { chessActors } from '../actors.mjs';
-import { playerMachine } from '../client/player.mjs';
+import { playerChart, screenOf } from '../client/player.mjs';
 import { connectRecords } from '../records.mjs';
 import { available, connect } from '../../../tools/pgwire.mjs';
 
@@ -32,7 +32,7 @@ test('postgres: finished games are kept in PostgreSQL; standings come back to th
   await admin.query(`ALTER DATABASE ${DB} SET tinyactors.system_id = 'chess-db'`);
   await admin.end();
 
-  const sys = server.createSystem({ id: 'chess' });
+  const sys = server.createSystem({ systemID: 'chess' });
   const records = await connectRecords(server, sys, { port: PORT, database: DB });
   assert.equal(records.link.id, 'chess-db');
   const { lobby } = chessActors(server, sys, { records: records.ref });
@@ -42,10 +42,10 @@ test('postgres: finished games are kept in PostgreSQL; standings come back to th
   const url = `ws://127.0.0.1:${served.port}/link`;
 
   const browser = (name) => {
-    const system = web.createSystem({ id: name });
+    const system = web.createSystem({ systemID: name });
     const link = web.createLink(system, { url, name: 'chess' });
-    const player = web.createActor(playerMachine(web), { system, input: { lobby: link.get('lobby'), name } }).start();
-    return { system, link, player, ctx: () => player.getSnapshot().context, value: () => player.getSnapshot().value };
+    const player = web.createActor(playerChart(web), { system, input: { lobby: link.get('lobby').address, name } }).start();
+    return { system, link, player, ctx: () => player.getSnapshot().context, value: () => screenOf(player.getSnapshot().value) };
   };
   const play = async (white, black) => {
     white.player.send({ type: 'CREATE' });
@@ -83,7 +83,6 @@ test('postgres: finished games are kept in PostgreSQL; standings come back to th
   assert.deepEqual(games[0].status, { state: 'checkmate', winner: 'b' });
 
   for (const b of [ann, ben]) b.link.close();
-  await until(() => [ann, ben].every((b) => b.link.getSnapshot().value === 'closed'), 'links to close');
   await served.close();
   for (const b of [ann, ben]) b.system.stop();
   await records.close();

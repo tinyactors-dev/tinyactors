@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
  * W3C SCXML IRP runner for the JavaScript bindings: every converted test runs
- * as `fromSCXML(document, { documents })` in its own system, with the
- * ECMAScript datamodel of bindings/shared/ecmascript.mjs, and is judged by the
- * "Outcome" log the W3C stylesheet places in the pass/fail final states —
- * the same judgment as tests/w3c/run_w3c.c (the C datamodel).
+ * as `fromSCXML(document, { documents })` in its own system, with the C
+ * ECMAScript datamodel (createSystem({ ecmascript: 'quickjs' })), and is
+ * judged by the "Outcome" log the W3C stylesheet places in the pass/fail
+ * final states — the same judgment as tests/w3c/run_w3c.c.
  *
  *   node tests/w3c/run_js.mjs <converted-dir> [--binding node|web] [--skip FILE]
  *                             [--require-all] [--only ID] [--timeout MS]
@@ -51,6 +51,27 @@ const tests = readFileSync(path.join(dir, 'index.txt'), 'utf8')
   })
   .filter((t) => !only || t.id === only);
 
+/* A BasicHTTP Event I/O Processor (SCXML Appendix D.2) on a loopback: what a
+ * session sends to its location comes back to it as an HTTP POST would
+ * (form fields, _scxmleventname, the raw message) — the application's part,
+ * as the C runner's host plays it (tests/w3c/run_w3c.c). */
+const BASIC_HTTP = 'http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor';
+const LOCATION = 'http://localhost:8080/scxml';
+const basicHTTP = {
+  location: LOCATION,
+  send(m, { system }) {
+    if (m.target !== LOCATION) throw new Error('unreachable');
+    const text = (v) => (typeof v === 'string' ? v : JSON.stringify(v));
+    const fields = m.data && typeof m.data === 'object' ? Object.entries(m.data).map(([k, v]) => [k, text(v)]) : [];
+    if (m.event) fields.unshift(['_scxmleventname', m.event]);
+    const body = typeof m.data === 'string' ? encodeURIComponent(m.data) : fields.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+    const raw = `POST /scxml HTTP/1.1\r\nHost: localhost:8080\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: ${body.length}\r\n\r\n${body}`;
+    const named = fields.find(([k]) => k === '_scxmleventname');
+    const data = Object.fromEntries(fields.filter(([k]) => k !== '_scxmleventname'));
+    setImmediate(() => system.send(m.origin, { type: named ? named[1] : 'HTTP.POST', ...data }, { origin: LOCATION, origintype: BASIC_HTTP, raw }));
+  },
+};
+
 function run(t) {
   return new Promise((resolve) => {
     let logic;
@@ -63,7 +84,7 @@ function run(t) {
     } catch (e) {
       return resolve({ result: 'COMPILE', detail: e.message.split('\n').slice(0, 3).join(' ') });
     }
-    const system = ta.createSystem();
+    const system = ta.createSystem({ ecmascript: 'quickjs', ioProcessors: { [BASIC_HTTP]: basicHTTP } });
     const log = [];
     let settled = false;
     const finish = (result, detail) => {
@@ -84,9 +105,7 @@ function run(t) {
       if (label === 'Outcome') finish(message === 'pass' ? 'pass' : 'FAIL');
     };
     try {
-      const actor = ta.createActor(logic, { system, logger });
-      actor.subscribe({ error: (e) => only && console.error('    error', e) });
-      actor.start();
+      ta.createActor(logic, { system, logger }).start();
     } catch (e) {
       finish('COMPILE', e.message);
     }
@@ -107,7 +126,7 @@ for (const { t, r } of results.sort((a, b) => Number(a.t.id) - Number(b.t.id))) 
   if (r.result !== 'pass' && r.result !== 'skip') failures.push(`${t.id} ${t.conf} ${r.result}${r.detail ? ` (${r.detail})` : ''}`);
 }
 const line = (k) => `${k}: ${['pass', 'FAIL', 'COMPILE', 'TIMEOUT', 'skip'].map((r) => `${counts[k][r] || 0} ${r === 'pass' ? 'pass' : r.toLowerCase()}`).join(', ')}`;
-console.log(`W3C IRP via the ${which} binding (ECMAScript datamodel in JS)`);
+console.log(`W3C IRP via the ${which} binding (the C ECMAScript datamodel)`);
 console.log(line('mandatory'));
 console.log(line('optional'));
 for (const f of failures) console.log(`  ${f}`);

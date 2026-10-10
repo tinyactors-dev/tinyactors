@@ -6,15 +6,9 @@ const assert = require('node:assert/strict');
 const net = require('node:net');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { createMachine, createActor, createSystem, createLink, serveLinks, assign, sendTo, encodeFrame, FrameDecoder } = require('./binding');
+const { scxml, createActor, createSystem, createLink, serveLinks, encodeFrame, FrameDecoder } = require('./binding');
+const { echo, caller, until } = require('./charts');
 
-const until = async (cond, ms = 4000) => {
-  const t0 = Date.now();
-  while (!cond()) {
-    if (Date.now() - t0 > ms) throw new Error('timed out');
-    await new Promise((r) => setTimeout(r, 5));
-  }
-};
 const concat = (parts) => Uint8Array.from(parts.flatMap((p) => [...p]));
 /* feed `bytes` to a decoder in pieces cut at `cuts`; all frames out */
 const feed = (decoder, bytes, cuts) => {
@@ -72,28 +66,12 @@ test('frames: a frame above max_frame is refused as malformed and skipped, the s
   assert.equal(good, '{}');
 });
 
-/* answers PING {from, tag} with PONG {tag} */
-const echo = createMachine({
-  id: 'echo',
-  on: { PING: { actions: sendTo(({ event }) => event.from, ({ event }) => ({ type: 'PONG', tag: event.tag })) } },
-});
-/* CALL {to, tag, pad?} sends PING; counts PONGs and error.communication */
-const caller = createMachine({
-  id: 'caller',
-  context: { pongs: [], errors: [] },
-  on: {
-    CALL: { actions: sendTo(({ event }) => event.to, ({ self, event }) => ({ type: 'PING', from: self, tag: event.tag, pad: event.pad })) },
-    PONG: { actions: assign({ pongs: ({ context, event }) => [...context.pongs, event.tag] }) },
-    'error.communication': { actions: assign({ errors: ({ context, event }) => [...context.errors, event.sendid || 'error'] }) },
-  },
-});
-
 test('links over TCP: length-prefixed frames both ways; envelopes above the peer max_frame fail as malformed', async () => {
-  const server = createSystem({ id: 'srv-tcp' });
+  const server = createSystem({ systemID: 'srv-tcp' });
   createActor(echo, { system: server, systemID: 'echo' }).start();
   const served = serveLinks(server, { tcp: { port: 0, host: '127.0.0.1' }, exports: { echo: 'PING' }, maxFrame: 512 });
   await until(() => served.port);
-  const client = createSystem({ id: 'cli-tcp' });
+  const client = createSystem({ systemID: 'cli-tcp' });
   const link = createLink(client, { tcp: { port: served.port }, name: 'srv-tcp', pingMs: 20 });
   const c = createActor(caller, { system: client }).start();
   c.send({ type: 'CALL', to: link.get('echo'), tag: 'a' });
@@ -101,7 +79,7 @@ test('links over TCP: length-prefixed frames both ways; envelopes above the peer
   await until(() => c.getSnapshot().context.pongs.length === 2);
   assert.deepEqual(c.getSnapshot().context.pongs, ['a', 'b']);
   assert.equal(served.status('cli-tcp').state, 'open');
-  await until(() => link.getSnapshot().context.rtt !== null); // ping/pong over frames
+  await until(() => link.status().rtt > 0 || link.status().sent > 0); // ping/pong over frames
 
   // the server announced max_frame 512: a bigger envelope never leaves, its sender learns why
   c.send({ type: 'CALL', to: link.get('echo'), tag: 'big', pad: 'p'.repeat(600) });
@@ -120,7 +98,7 @@ test('links over TCP: length-prefixed frames both ways; envelopes above the peer
   raw.write(junk.subarray(0, 1000));
   raw.write(concat([junk.subarray(1000), encodeFrame(JSON.stringify({ t: 'hello', v: 1, id: 'raw', reach: [] }))]));
   await until(() => got.length === 1);
-  assert.deepEqual(JSON.parse(got[0]), { t: 'hello', v: 1, id: 'srv-tcp', reach: [], caps: { profile: 'js', ordered: true, acks: false, max_frame: 512 } });
+  assert.deepEqual(JSON.parse(got[0]), { t: 'hello', v: 1, id: 'srv-tcp', reach: [], caps: { profile: 'neutral', ordered: true, acks: false, max_frame: 512 } });
   raw.destroy();
 
   link.close();
@@ -130,12 +108,12 @@ test('links over TCP: length-prefixed frames both ways; envelopes above the peer
 });
 
 test('links over TCP: a dropped connection reconnects and resumes the same peer', async () => {
-  const server = createSystem({ id: 'srv-tcp2' });
+  const server = createSystem({ systemID: 'srv-tcp2' });
   const echoes = createActor(echo, { system: server, systemID: 'echo' }).start();
   const served = serveLinks(server, { tcp: { port: 0, host: '127.0.0.1' }, exports: ['echo'], resumeMs: 5000 });
   await until(() => served.port);
   const sockets = [];
-  const client = createSystem({ id: 'cli-tcp2' });
+  const client = createSystem({ systemID: 'cli-tcp2' });
   const link = createLink(client, {
     name: 'srv-tcp2',
     pingMs: 0,
@@ -149,7 +127,7 @@ test('links over TCP: a dropped connection reconnects and resumes the same peer'
   c.send({ type: 'CALL', to: link.get('echo'), tag: 'before' });
   await until(() => c.getSnapshot().context.pongs.length === 1);
   sockets.at(-1).destroy();
-  await until(() => link.getSnapshot().value === 'reconnecting');
+  await until(() => link.status().state === 'reconnecting');
   c.send({ type: 'CALL', to: link.get('echo'), tag: 'while-away' }); // queued by the client's router
   await until(() => c.getSnapshot().context.pongs.length === 2, 5000);
   assert.deepEqual(c.getSnapshot().context.pongs, ['before', 'while-away']);
@@ -163,12 +141,13 @@ test('links over TCP: a dropped connection reconnects and resumes the same peer'
 });
 
 test("links over a child process's stdio: two systems, envelopes both ways", async () => {
-  const parent = createSystem({ id: 'parent' });
+  const parent = createSystem({ systemID: 'parent' });
   createActor(echo, { system: parent, systemID: 'echo' }).start();
-  const inbox = createActor(
-    createMachine({ id: 'inbox', context: { got: [] }, on: { GOT: { actions: assign({ got: ({ context, event }) => [...context.got, event.tag] }) } } }),
-    { system: parent, systemID: 'inbox' },
-  ).start();
+  const c = scxml.chart();
+  const inboxChart = c.scxml('inbox', { initial: 's', datamodel: 'ecmascript' },
+    c.datamodel({ got: [] }),
+    c.state('s', c.transition('GOT', undefined, c.script('got.push(_event.data.tag)'))));
+  const inbox = createActor(inboxChart, { system: parent, systemID: 'inbox' }).start();
   const child = spawn(process.execPath, [path.join(__dirname, 'fixtures/stdio-peer.js')], { stdio: ['pipe', 'pipe', 'inherit'] });
   const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
   const served = serveLinks(parent, { trusted: true, accept: (on) => on({ readable: child.stdout, writable: child.stdin }) });
@@ -178,10 +157,10 @@ test("links over a child process's stdio: two systems, envelopes both ways", asy
   assert.deepEqual(inbox.getSnapshot().context.got, ['from-kid']);
   assert.deepEqual(served.connections(), ['kid']);
   // the parent calls the child's echo
-  const c = createActor(caller, { system: parent }).start();
-  c.send({ type: 'CALL', to: parent.ref('tinyactors://kid/@echo'), tag: 'from-parent' });
-  await until(() => c.getSnapshot().context.pongs.length === 1);
-  assert.deepEqual(c.getSnapshot().context.pongs, ['from-parent']);
+  const call = createActor(caller, { system: parent }).start();
+  call.send({ type: 'CALL', to: 'tinyactors://kid/@echo', tag: 'from-parent' });
+  await until(() => call.getSnapshot().context.pongs.length === 1);
+  assert.deepEqual(call.getSnapshot().context.pongs, ['from-parent']);
   assert.equal(served.status('kid').state, 'open');
 
   // closing the link ends the child's stdin: it exits

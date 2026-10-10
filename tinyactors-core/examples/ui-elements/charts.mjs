@@ -1,160 +1,99 @@
 /**
- * The machines behind the custom elements (no DOM here: the elements render
- * snapshots and send events; tests drive the same machines directly).
+ * The charts behind the custom elements (no DOM here: the elements render
+ * snapshots and send events; tests drive the same charts directly).
  * Pass the API of a binding; `t` scales the timings (tests use small ones).
  */
-export function uiMachines({ createMachine, assign, sendTo, raise }, t = {}) {
+export function uiCharts({ scxml }, t = {}) {
   const ms = { repeatDelay: 400, repeatEvery: 70, debounce: 250, latency: 300, dialog: 180, submit: 600, ...t };
+  const c = scxml.chart();
+  const after = (event, delay) => [c.onentry(c.send(event, { delay: `${delay}ms`, id: event })), c.onexit(c.cancel(event))];
 
-  /* <ta-toggle> — on/off, can be disabled */
-  const toggle = createMachine({
-    id: 'toggle',
-    context: ({ input }) => ({ disabled: !!input?.disabled }),
-    initial: 'off',
-    on: { DISABLE: { actions: assign({ disabled: true }) }, ENABLE: { actions: assign({ disabled: false }) } },
-    states: {
-      off: { on: { TOGGLE: { guard: ({ context }) => !context.disabled, target: 'on' } } },
-      on: { on: { TOGGLE: { guard: ({ context }) => !context.disabled, target: 'off' } } },
-    },
-  });
+  /* <ta-toggle> — on/off, can be disabled (input: disabled) */
+  const disabling = [c.transition('DISABLE', undefined, c.assign('disabled', 'true')), c.transition('ENABLE', undefined, c.assign('disabled', 'false'))];
+  const toggle = c.scxml('toggle', { initial: 'off', datamodel: 'ecmascript' },
+    c.datamodel({ disabled: false }),
+    c.state('off', c.transition('TOGGLE', 'on', { cond: '!disabled' }), disabling),
+    c.state('on', c.transition('TOGGLE', 'off', { cond: '!disabled' }), disabling));
 
-  /* <ta-counter> — bounded, auto-repeats while a button is held */
-  const step = (dir) =>
-    assign(({ context }) => ({ value: Math.min(context.max, Math.max(context.min, context.value + dir * context.step)) }));
-  const counter = createMachine(
-    {
-      id: 'counter',
-      context: ({ input = {} }) => ({ value: input.value ?? 0, min: input.min ?? -Infinity, max: input.max ?? Infinity, step: input.step ?? 1, dir: 1 }),
-      initial: 'idle',
-      states: {
-        idle: {
-          on: {
-            INC: { actions: step(1) },
-            DEC: { actions: step(-1) },
-            PRESS: { target: 'held', actions: [assign({ dir: ({ event }) => event.dir }), 'stepDir'] },
-          },
-        },
-        held: {
-          on: { RELEASE: 'idle' },
-          after: { repeatDelay: 'repeating' },
-        },
-        repeating: {
-          on: { RELEASE: 'idle' },
-          after: { repeatEvery: { target: 'repeating', reenter: true, actions: 'stepDir' } },
-          always: { guard: 'atBound', target: 'idle' },
-        },
-      },
-    },
-    {
-      actions: { stepDir: assign(({ context }) => ({ value: Math.min(context.max, Math.max(context.min, context.value + context.dir * context.step)) })) },
-      guards: { atBound: ({ context }) => (context.dir > 0 ? context.value >= context.max : context.value <= context.min) },
-      delays: { repeatDelay: ms.repeatDelay, repeatEvery: ms.repeatEvery },
-    },
-  );
+  /* <ta-counter> — bounded, auto-repeats while a button is held (input: value, min, max, step) */
+  const step = (dir) => c.assign('value', c.expr(({ value, min, max, step: by }) => Math.min(max, Math.max(min, value + dir * by))));
+  const stepDir = c.assign('value', c.expr(({ value, min, max, step: by, dir }) => Math.min(max, Math.max(min, value + dir * by))));
+  const counter = c.scxml('counter', { initial: 'idle', datamodel: 'ecmascript' },
+    c.datamodel({ value: 0, min: '-Infinity', max: 'Infinity', step: 1, dir: 1 }),
+    c.state('idle',
+      c.transition('INC', undefined, step(1)),
+      c.transition('DEC', undefined, step(-1)),
+      c.transition('PRESS', 'held', c.assign('dir', '_event.data.dir'), stepDir)),
+    c.state('held',
+      after('repeatDelay', ms.repeatDelay),
+      c.transition('RELEASE', 'idle'),
+      c.transition('repeatDelay', 'repeating')),
+    c.state('repeating',
+      after('repeatEvery', ms.repeatEvery),
+      c.transition('RELEASE', 'idle'),
+      c.transition('repeatEvery', 'repeating', stepDir),
+      c.transition(undefined, 'idle', { cond: c.expr(({ dir, value, min, max }) => (dir > 0 ? value >= max : value <= min)) })));
 
   /* <ta-search> — debounced autocomplete over a slow "server"; stale answers are
-   * dropped (each request has an id), arrow keys move, Enter picks */
-  const search = createMachine(
-    {
-      id: 'search',
-      context: ({ input = {} }) => ({ words: input.words || [], query: '', results: [], active: -1, picked: null, request: 0 }),
-      initial: 'idle',
-      on: {
-        TYPE: { target: '.debouncing', reenter: true, actions: assign({ query: ({ event }) => event.value, active: -1 }) },
-        CLEAR: { target: '.idle', actions: assign({ query: '', results: [], active: -1 }) },
-      },
-      states: {
-        idle: {},
-        debouncing: {
-          after: { debounce: [{ guard: ({ context }) => !context.query.trim(), target: 'idle', actions: assign({ results: [] }) }, { target: 'searching' }] },
-        },
-        searching: {
-          entry: [
-            assign({ request: ({ context }) => context.request + 1 }),
-            raise(({ context }) => ({ type: 'RESULTS', request: context.request, results: context.words.filter((w) => w.toLowerCase().includes(context.query.toLowerCase())).slice(0, 8) }), { delay: 'latency' }),
-          ],
-          on: {
-            RESULTS: [
-              { guard: ({ context, event }) => event.request === context.request, target: 'open', actions: assign({ results: ({ event }) => event.results }) },
-              {}, /* a stale answer: ignore */
-            ],
-          },
-        },
-        open: {
-          on: {
-            DOWN: { actions: assign({ active: ({ context }) => Math.min(context.results.length - 1, context.active + 1) }) },
-            UP: { actions: assign({ active: ({ context }) => Math.max(-1, context.active - 1) }) },
-            PICK: {
-              guard: ({ context, event }) => (event.index ?? context.active) >= 0 && (event.index ?? context.active) < context.results.length,
-              target: 'idle',
-              actions: [
-                assign({ picked: ({ context, event }) => context.results[event.index ?? context.active] }),
-                assign({ query: ({ context }) => context.picked, results: [], active: -1 }),
-              ],
-            },
-            ESCAPE: { target: 'idle', actions: assign({ results: [], active: -1 }) },
-          },
-        },
-      },
-    },
-    { delays: { debounce: ms.debounce, latency: ms.latency } },
-  );
+   * dropped (each request has a number), arrow keys move, Enter picks (input: words) */
+  const typing = [
+    c.transition('TYPE', 'debouncing', c.assign('query', '_event.data.value'), c.assign('active', '-1')),
+    c.transition('CLEAR', 'idle', c.assign('query', '""'), c.assign('results', '[]'), c.assign('active', '-1')),
+  ];
+  const search = c.scxml('search', { initial: 'idle', datamodel: 'ecmascript' },
+    c.datamodel({ words: [], query: '""', results: [], active: -1, picked: null, request: 0 }),
+    c.state('idle', typing),
+    c.state('debouncing',
+      after('debounce', ms.debounce),
+      typing,
+      c.transition('debounce', 'idle', { cond: '!query.trim()' }, c.assign('results', '[]')),
+      c.transition('debounce', 'searching')),
+    c.state('searching',
+      c.onentry(
+        c.assign('request', 'request + 1'),
+        c.send('RESULTS', { delay: `${ms.latency}ms` },
+          c.content(c.expr(({ request, words, query }) => ({ request, results: words.filter((w) => w.toLowerCase().includes(query.toLowerCase())).slice(0, 8) }))))),
+      typing,
+      /* an answer to an earlier request is stale: no transition takes it */
+      c.transition('RESULTS', 'open', { cond: '_event.data.request === request' }, c.assign('results', '_event.data.results'))),
+    c.state('open',
+      typing,
+      c.transition('DOWN', undefined, c.assign('active', 'Math.min(results.length - 1, active + 1)')),
+      c.transition('UP', undefined, c.assign('active', 'Math.max(-1, active - 1)')),
+      c.transition('PICK', 'idle', { cond: c.expr(({ results, active, _event }) => (_event.data.index ?? active) >= 0 && (_event.data.index ?? active) < results.length) },
+        c.assign('picked', c.expr(({ results, active, _event }) => results[_event.data.index ?? active])),
+        c.assign('query', 'picked'), c.assign('results', '[]'), c.assign('active', '-1')),
+      c.transition('ESCAPE', 'idle', c.assign('results', '[]'), c.assign('active', '-1'))));
 
-  /* <ta-field> — validates itself and tells its form (actor to actor) */
-  const field = createMachine({
-    id: 'field',
-    context: ({ input }) => ({ name: input.name, rule: input.rule, value: '', error: null, form: input.form }),
-    initial: 'pristine',
-    states: {
-      pristine: { on: { INPUT: { target: 'editing', actions: ['update', 'report'] } } },
-      editing: {
-        on: { INPUT: { actions: ['update', 'report'] }, BLUR: 'checked' },
-      },
-      checked: { on: { INPUT: { actions: ['update', 'report'] } } },
-    },
-  }, {
-    actions: {
-      update: assign(({ context, event }) => ({ value: event.value, error: validate(context.rule, event.value) })),
-      report: sendTo(({ context }) => context.form, ({ context }) => ({ type: 'FIELD', name: context.name, valid: !context.error, value: context.value })),
-    },
-  });
+  /* <ta-field> — validates itself and tells its form, actor to actor (input: name, rule, form) */
+  const update = [
+    c.assign('value', '_event.data.value'),
+    c.assign('error', c.expr(({ rule, value }) => validate(rule, value))),
+    c.send('FIELD', { targetexpr: 'String(form)' }, c.content(c.expr(({ name, error, value }) => ({ name, valid: !error, value })))),
+  ];
+  const field = c.scxml('field', { initial: 'pristine', datamodel: 'ecmascript' },
+    c.datamodel({ name: '""', rule: '""', value: '""', error: null, form: null }),
+    c.state('pristine', c.transition('INPUT', 'editing', update)),
+    c.state('editing', c.transition('INPUT', undefined, update), c.transition('BLUR', 'checked')),
+    c.state('checked', c.transition('INPUT', undefined, update)));
 
-  /* <ta-form> — enabled when every field is valid; submitting takes a while */
-  const form = createMachine(
-    {
-      id: 'form',
-      context: ({ input }) => ({ fields: Object.fromEntries((input.fields || []).map((n) => [n, { valid: false, value: '' }])), sent: null }),
-      initial: 'editing',
-      states: {
-        editing: {
-          on: {
-            FIELD: { actions: assign(({ context, event }) => ({ fields: { ...context.fields, [event.name]: { valid: event.valid, value: event.value } } })) },
-            SUBMIT: { guard: 'allValid', target: 'submitting' },
-          },
-        },
-        submitting: {
-          after: { submit: { target: 'done', actions: assign(({ context }) => ({ sent: Object.fromEntries(Object.entries(context.fields).map(([k, f]) => [k, f.value])) })) } },
-        },
-        done: { on: { RESET: { target: 'editing' } } },
-      },
-    },
-    { guards: { allValid: ({ context }) => Object.values(context.fields).every((f) => f.valid) }, delays: { submit: ms.submit } },
-  );
+  /* <ta-form> — enabled when every field is valid; submitting takes a while (input: names) */
+  const form = c.scxml('form', { initial: 'editing', datamodel: 'ecmascript' },
+    c.datamodel({ names: [], fields: c.expr(({ names }) => Object.fromEntries(names.map((n) => [n, { valid: false, value: '' }]))), sent: null }),
+    c.state('editing',
+      c.transition('FIELD', undefined, c.assign('fields', c.expr(({ fields, _event: { data } }) => ({ ...fields, [data.name]: { valid: data.valid, value: data.value } })))),
+      c.transition('SUBMIT', 'submitting', { cond: c.expr(({ fields }) => Object.values(fields).every((f) => f.valid)) })),
+    c.state('submitting',
+      after('submitted', ms.submit),
+      c.transition('submitted', 'done', c.assign('sent', c.expr(({ fields }) => Object.fromEntries(Object.entries(fields).map(([k, f]) => [k, f.value])))))),
+    c.state('done', c.transition('RESET', 'editing')));
 
   /* <ta-dialog> — opening and closing take time (the element animates them) */
-  const dialog = createMachine(
-    {
-      id: 'dialog',
-      initial: 'closed',
-      states: {
-        closed: { on: { OPEN: 'opening' } },
-        opening: { after: { anim: 'open' }, on: { CLOSE: 'closing' } },
-        open: { on: { CLOSE: 'closing', ESCAPE: 'closing' } },
-        closing: { after: { anim: 'closed' }, on: { OPEN: 'opening' } },
-      },
-    },
-    { delays: { anim: ms.dialog } },
-  );
+  const dialog = c.scxml('dialog', { initial: 'closed', datamodel: 'ecmascript' },
+    c.state('closed', c.transition('OPEN', 'opening')),
+    c.state('opening', after('opened', ms.dialog), c.transition('opened', 'open'), c.transition('CLOSE', 'closing')),
+    c.state('open', c.transition('CLOSE', 'closing'), c.transition('ESCAPE', 'closing')),
+    c.state('closing', after('closed', ms.dialog), c.transition('closed', 'closed'), c.transition('OPEN', 'opening')));
 
   return { toggle, counter, search, field, form, dialog };
 }

@@ -6,7 +6,7 @@ require_relative '../../core'
 
 output = Core::ROOT.join('bindings/web/tinyactors.wasm')
 key = Cache.digest('web:build', Cache.tool_id(Toolchain::Tool[:zig].command),
-                   Cache.files('src/**/*', 'include/**/*', 'bindings/shared/*.c', 'bindings/web/src/*'))
+                   Cache.files('src/**/*', 'include/**/*', 'third_party/quickjs-ng/*', 'bindings/shared/*.c', 'bindings/web/src/*'))
 if output.file? && Cache.stamped?('web-build', key)
   puts 'web:build: cached (inputs unchanged)'
   exit

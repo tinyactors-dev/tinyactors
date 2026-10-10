@@ -62,14 +62,6 @@ end
 # Darwin's clang also calls bzero and the fortified __memcpy_chk.
 RUNTIME_LIBC = %w[calloc clock_gettime fclose fopen fread free fseek ftell malloc memmove qsort realloc snprintf strchr
                   strcmp strlen strncmp vsnprintf].freeze
-# QuickJS's: allocation (malloc_usable_size, which glibc and musl both
-# have; libSystem's malloc_size on macOS), strings and numbers, the clock and
-# local time for Date, stdio for its debugging dumps, and the math library,
-# which glibc keeps in libm: a program links -lm (decision 20).
-ECMASCRIPT_LIBC = %w[abort acos acosh asin asinh atan atan2 atanh calloc cbrt ceil clock_gettime cos cosh exp expm1
-                     floor fmod fprintf fputc free frexp fwrite gettimeofday hypot localtime_r log log10 log1p log2
-                     malloc memchr memmove modf pow printf realloc round scalbn sin sinh snprintf sscanf strchr
-                     strcmp strlen strrchr strstr strtod tan tanh trunc vsnprintf].freeze
 DARWIN = %w[bzero __memcpy_chk].freeze
 libc = lambda do |list, linux_only: [], darwin_only: []|
   ->(target) { target.format.links_libc ? list + DARWIN + darwin_only : list + linux_only }
@@ -95,7 +87,7 @@ CRelease.release(
       sources: [ecmascript.header, ecmascript.amalgamation, ecmascript.platform_amalgamation('wasm'), ecmascript.api],
       notices: { 'LICENSE.quickjs' => Core::ROOT.join('third_party/quickjs-ng/LICENSE') },
       wasm_test: ->(wasm) { ['node', tests_dir.join('wasm/release_test.mjs'), wasm, core.api, ecmascript.api] },
-      libc_imports: libc.call(ECMASCRIPT_LIBC, linux_only: %w[malloc_usable_size], darwin_only: %w[malloc_size])
+      libc_imports: libc.call(Core::ECMASCRIPT_LIBC, linux_only: %w[malloc_usable_size], darwin_only: %w[malloc_size])
     )
   ],
   directory: 'tinyactors-core',

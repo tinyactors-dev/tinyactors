@@ -1,11 +1,13 @@
 # A thin JavaScript binding over a deep native one
 
-**Status:** Sketch (2026-10-10).
+**Status:** Adopted → implemented in `tinyactors-core/bindings` (2026-10-10:
+`refactor(core,napi)!: a thin JavaScript binding over a deep native one`).
 **Touches:** tinyactors-core: `bindings/shared/core.mjs` (rewritten),
 `bindings/shared/binding.c` (narrowed and deepened),
 `bindings/shared/ecmascript.mjs` (removed), `bindings/node`,
 `bindings/web`, `bindings/surface.json`, `examples/`, `tests/w3c`.
-**Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
+**History:** the binding's READMEs and `index.d.ts` describe what was built; this
+file is no longer edited.
 
 ## Summary
 

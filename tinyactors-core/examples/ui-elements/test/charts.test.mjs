@@ -1,12 +1,14 @@
-// The element machines, driven directly (the elements only render snapshots
+// The element charts, driven directly (the elements only render snapshots
 // and forward DOM events). Runs on the web (wasm) binding, like the page.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as ta from '../../../bindings/web/node.mjs';
-import { uiMachines } from '../machines.mjs';
+import { uiCharts } from '../charts.mjs';
 
 const T = { repeatDelay: 30, repeatEvery: 10, debounce: 20, latency: 30, dialog: 15, submit: 20 };
-const m = uiMachines(ta, T);
+const m = uiCharts(ta, T);
+const system = ta.createSystem();
+test.after(() => system.stop());
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (cond, what, limit = 2000) => {
   const t0 = Date.now();
@@ -17,7 +19,7 @@ const until = async (cond, what, limit = 2000) => {
 };
 
 test('toggle: on/off, disabled', () => {
-  const a = ta.createActor(m.toggle).start();
+  const a = ta.createActor(m.toggle, { system }).start();
   a.send({ type: 'TOGGLE' });
   assert.equal(a.getSnapshot().value, 'on');
   a.send({ type: 'DISABLE' });
@@ -29,7 +31,7 @@ test('toggle: on/off, disabled', () => {
 });
 
 test('counter: bounds, and auto-repeat while held', async () => {
-  const a = ta.createActor(m.counter, { input: { value: 5, min: 0, max: 10 } }).start();
+  const a = ta.createActor(m.counter, { system, input: { value: 5, min: 0, max: 10 } }).start();
   a.send({ type: 'INC' });
   assert.equal(a.getSnapshot().context.value, 6);
   a.send({ type: 'PRESS', dir: 1 }); /* one step at once, then repeats */
@@ -48,7 +50,7 @@ test('counter: bounds, and auto-repeat while held', async () => {
 
 test('search: debounce, stale answers dropped, keyboard', async () => {
   const words = ['apple', 'apricot', 'avocado', 'banana', 'blueberry', 'cherry', 'grape', 'grapefruit'];
-  const a = ta.createActor(m.search, { input: { words } }).start();
+  const a = ta.createActor(m.search, { system, input: { words } }).start();
   a.send({ type: 'TYPE', value: 'a' });
   a.send({ type: 'TYPE', value: 'ap' }); /* restarts the debounce */
   assert.equal(a.getSnapshot().value, 'debouncing');
@@ -66,8 +68,7 @@ test('search: debounce, stale answers dropped, keyboard', async () => {
 });
 
 test('form: fields report to the form actor; submit only when valid', async () => {
-  const system = ta.createSystem();
-  const form = ta.createActor(m.form, { system, input: { fields: ['name', 'email'] } }).start();
+  const form = ta.createActor(m.form, { system, input: { names: ['name', 'email'] } }).start();
   const name = ta.createActor(m.field, { system, input: { name: 'name', rule: 'name', form } }).start();
   const email = ta.createActor(m.field, { system, input: { name: 'email', rule: 'email', form } }).start();
   name.send({ type: 'INPUT', value: 'Ada' });
@@ -80,11 +81,10 @@ test('form: fields report to the form actor; submit only when valid', async () =
   assert.equal(form.getSnapshot().value, 'submitting');
   await until(() => form.getSnapshot().value === 'done', 'submitted');
   assert.deepEqual(form.getSnapshot().context.sent, { name: 'Ada', email: 'ada@example.org' });
-  system.stop();
 });
 
 test('dialog: timed opening and closing', async () => {
-  const a = ta.createActor(m.dialog).start();
+  const a = ta.createActor(m.dialog, { system }).start();
   a.send({ type: 'OPEN' });
   assert.equal(a.getSnapshot().value, 'opening');
   await until(() => a.getSnapshot().value === 'open', 'open');
@@ -92,8 +92,8 @@ test('dialog: timed opening and closing', async () => {
   await until(() => a.getSnapshot().value === 'closed', 'closed');
 });
 
-test('machines read well as SCXML', () => {
-  const xml = m.search.toSCXML();
+test('charts read well as SCXML', () => {
+  const xml = m.search.xml;
   assert.match(xml, /<state id="debouncing">/);
   assert.doesNotMatch(xml, /expr="[a-z]{1,3}:\d+"/);
 });

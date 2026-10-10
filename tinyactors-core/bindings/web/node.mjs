@@ -37,9 +37,8 @@ const api = createRuntime({
 withNodeTransports(api);
 
 export const {
-  createMachine, createActor, createSystem, fromSCXML, SCXMLLogic, compileSystem, loadImage, SystemImage, setup, assign, raise, sendTo, sendParent, log, cancel,
-  stateIn, and, or, not, StateMachine, Actor, System, ActorRef, createLink, serveLinks, encodeFrame, FrameDecoder,
-  createMemoryStore, encodeValue, decodeValue, parseAddress, formatAddress, encodeWire, decodeWire, createStoreLink,
-  TRACE_KINDS, decodeTraces, metricsToOTLP, parseTraceparent, formatTraceparent, stepSpanID,
+  scxml, fromSCXML, Chart, createSystem, System, createActor, Actor, ActorRef, toPromise, loadImage, Image,
+  createLink, serveLinks, createStoreLink, parseAddress, formatAddress, encodeFrame, FrameDecoder,
+  parseTraceparent, formatTraceparent, stepSpanID, decodeTraces, metricsToOTLP, TRACE_KINDS,
 } = api;
 export default api;

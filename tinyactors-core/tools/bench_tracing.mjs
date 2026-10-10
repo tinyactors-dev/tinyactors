@@ -47,14 +47,12 @@ if (!binding || !variant) {
 
 const require = createRequire(import.meta.url);
 const api = binding === 'web' ? await import('../bindings/web/node.mjs') : require('../bindings/node');
-const { createMachine, createActor, createSystem, assign, decodeTraces } = api;
+const { scxml, createActor, createSystem, decodeTraces } = api;
 
-const machine = createMachine({
-  id: 'counter',
-  initial: 'idle',
-  context: { n: 0 },
-  states: { idle: { on: { ping: { actions: assign({ n: ({ context }) => context.n + 1 }) } } } },
-});
+const c = scxml.chart();
+const machine = c.scxml('counter', { initial: 'idle', datamodel: 'ecmascript' },
+  c.datamodel({ n: 0 }),
+  c.state('idle', c.transition('ping', undefined, c.assign('n', c.expr(({ n }) => n + 1)))));
 
 let bytes = 0;
 let decoded = 0;
@@ -62,7 +60,7 @@ const sink = (traces, logs) => {
   bytes += traces.length + (logs ? logs.length : 0);
   if (variant === 'full+decode') decoded += decodeTraces(traces).length;
 };
-const system = createSystem({ clock: () => 0, telemetry: false });
+const system = createSystem({ clock: () => 0, telemetry: false, capacities: { maxActors: actors + 16 } });
 if (variant !== 'untraced') system.setTraceSink(sink, { detail: variant === 'summary' ? 'summary' : 'full' });
 const all = Array.from({ length: actors }, () => createActor(machine, { system }).start());
 system.flush(1e9);

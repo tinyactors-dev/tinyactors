@@ -22,7 +22,7 @@ watch.
 │  (client/player.mjs)       │                     │   └ starts ─▶ game "game:K7QXN"   │
 │        ▲                   │◀─ JOINED, STATE ────┤ game actor (actors.mjs)           │
 │        └── MOVE/RESIGN ────┼────────────────────▶│   rules: chess.mjs (pure)         │
-│ link actor: connecting /   │                     │   idle games hibernate            │
+│ link status: connecting /  │                     │   idle games hibernate            │
 │ open / reconnecting/closed │                     └───────────────────────────────────┘
 └────────────────────────────┘
 ```
@@ -39,15 +39,16 @@ watch.
   `REJECTED` with a reason. Every change is broadcast as `STATE` to both
   players and all spectators. A game left unplayed for 30 minutes ends as
   abandoned; a finished game stays visible for 10 minutes.
-- **Players are references to actors in browsers.** The client puts `player:
-  self` into its events; on the server that arrives as an `ActorRef`, and
-  `sendTo(({ event }) => event.player, …)` answers it across the link. The
-  game replies with `game: self`, so the client then talks to its game
+- **Players are addresses of actors in browsers.** A player is whoever sent
+  the event (`_event.origin`, an address in the browser's system); the game
+  answers with `<send targetexpr>` to that address, across the link. The
+  lobby passes the player on when it forwards a `JOIN`. The client keeps
+  the origin of `JOINED` as its game's address and then talks to its game
   directly. Neither side knows the other is remote.
-- **The link is an actor too.** The status pill in the corner renders its
-  snapshot: connecting, open with the round-trip time, reconnecting with the
-  attempt and queue length, or closed. Moves made while the link is down are
-  queued and delivered when it reopens.
+- **The link status** is the router's view of the link (`link.status()`):
+  the pill in the corner shows connecting, open with the round-trip time,
+  reconnecting with the attempt and queue length, or closed. Moves made
+  while the link is down are queued and delivered when it reopens.
 - **Reloading** keeps you in the game. The client's system id is kept per tab
   (`sessionStorage`), so your actors keep their addresses. The client rejoins
   its game code, and the game recognizes the returning player.
@@ -62,9 +63,9 @@ watch.
 | File | |
 |---|---|
 | `chess.mjs` | rules: legal moves (castling, en passant, promotion, pins), check, mate, stalemate, 50-move and insufficient-material draws; FEN; perft-validated |
-| `actors.mjs` | the lobby and game machines (pure; given a binding's API and a system) |
+| `actors.mjs` | the lobby and game charts (pure; given a binding's API and a system) |
 | `server.mjs` | the server: one tinyactors system, `serveLinks(system, { server, path: '/link', exports })` (browsers may send only the game's events), static files |
-| `client/player.mjs` | the player machine (pure, also driven by the tests) |
+| `client/player.mjs` | the player chart (pure, also driven by the tests) |
 | `client/app.mjs`, `client/board.mjs`, `client/index.html` | custom elements cloning `<template>`s: `<chess-app>`, `<chess-board>`, `<link-status>` |
 | `test/chess.test.mjs` | perft: start position (depth 3), "Kiwipete" (depth 3: 97,862), en-passant endgame (depth 4), promotions; mate, stalemate |
 | `test/game.test.mjs` | the whole flow over real WebSockets: the server on the N-API binding, three "browsers" on the wasm binding |
@@ -84,7 +85,7 @@ datamodel), reached through a store link ([records.mjs](records.mjs),
 ```
 
 When a game ends, the game actor sends `game.over` with both players'
-references; the records actor updates its rows and sends each player
+addresses; the records actor updates its rows and sends each player
 `RECORD {wins, losses, draws, games}` — addressed to the player actor in the
 browser, relayed by the server, which announced only the database to the
 browsers (`announce: [databaseID]`). The standings are plain rows:

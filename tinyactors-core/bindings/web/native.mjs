@@ -195,7 +195,7 @@ export function createNative(instantiate) {
         const name = read(p) ? string(read(p)) : values[read(p + 4)];
         const flags = read(p + 24);
         Object.defineProperty(values[v], name, {
-          value: callback(read(p + 8), read(p + 28), name),
+          value: read(p + 8) ? callback(read(p + 8), read(p + 28), name) : values[read(p + 20)],
           writable: !!(flags & 1), enumerable: !!(flags & 2), configurable: !!(flags & 4),
         });
       }

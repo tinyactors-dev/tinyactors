@@ -2,8 +2,9 @@
 /**
  * Host conformance driver for the JavaScript bindings (see README.md here):
  * runs every scenario through the public API — createSystem({ clock }) on
- * simulated time, fromSCXML, sendMany, hibernate with a memory store,
- * snapshot/restore, reload/migrate — and checks the expectations.
+ * simulated time, fromSCXML, sendMany, hibernate into a Map, snapshot/restore,
+ * load/migrate — under both "ecmascript" datamodels (native and quickjs), and
+ * checks the expectations.
  *
  *   node tests/conformance/run_js.mjs [--binding node|web] [dir] [--only name] [-v]
  */
@@ -30,27 +31,34 @@ const leaves = (v) =>
   typeof v === 'string' ? [v] : Object.entries(v || {}).flatMap(([k, sub]) => (typeof sub === 'string' || (sub && Object.keys(sub).length) ? leaves(sub) : [k]));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-async function run(sc) {
+async function run(sc, ecmascript) {
   const docs = Object.fromEntries(Object.entries(sc.documents).map(([k, v]) => [k, Array.isArray(v) ? v.join('\n') : v]));
   let now = 0;
   const logs = [];
-  const store = ta.createMemoryStore();
-  const options = { id: 'conformance', clock: () => now, logger: (...a) => logs.push(String(a.length > 1 ? a[1] : a[0])), hibernation: { store, sweepMs: 0 } };
+  const store = new Map();
+  /* <log> output (an exception in an expression is reported with its Error: a diagnostic, not output) */
+  const logger = (...a) => a[1] instanceof Error || logs.push(String(a.length > 1 ? a[1] : a[0]));
+  const options = { systemID: 'conformance', ecmascript, clock: () => now, logger, hibernation: { store } };
   let system = ta.createSystem(options);
   const actors = new Map(); /* name -> Actor (kept after it finished) */
   const snapshots = {};
-  const logicOf = (doc, extra = []) => ta.fromSCXML(docs[doc], { documents: Object.fromEntries(extra.map((d) => [d, docs[d]])) });
+  const charts = new Map(); /* document -> chart (the same chart object: the same version) */
+  const chartOf = (doc, extra = []) => {
+    if (!charts.has(doc)) charts.set(doc, ta.fromSCXML(docs[doc], { documents: Object.fromEntries(extra.map((d) => [d, docs[d]])) }));
+    return charts.get(doc);
+  };
   const actor = (name) => {
     const a = actors.get(name);
     if (!a) throw new Error(`no actor "${name}"`);
     return a;
   };
   const subst = (v) => {
-    if (typeof v === 'string' && v.startsWith('@')) return `#_scxml_${actor(v.slice(1)).address.split('#_scxml_')[1]}`;
+    if (typeof v === 'string' && v.startsWith('@')) return `#_scxml_${actor(v.slice(1)).sessionID}`;
     if (Array.isArray(v)) return v.map(subst);
     if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, subst(x)]));
     return v;
   };
+  const event = (name, data) => ({ type: name, ...subst(data || {}) });
   const settle = async () => {
     for (let i = 0; i < 50; i++) {
       system.flush();
@@ -65,19 +73,19 @@ async function run(sc) {
     const where = `step ${step} ${JSON.stringify(s).slice(0, 80)}`;
     try {
       if (s.spawn) {
-        actors.set(s.as, ta.createActor(logicOf(s.spawn, s.documents), { system, systemID: s.as, input: s.input }).start());
-      } else if (s.send) actor(s.send).send({ type: s.event, data: subst(s.data) });
-      else if (s.sendMany) system.sendMany(s.sendMany.map((i) => [actor(i.to), { type: i.event, data: subst(i.data) }]));
+        actors.set(s.as, ta.createActor(chartOf(s.spawn, s.documents), { system, systemID: s.as, input: s.input }).start());
+      } else if (s.send) actor(s.send).send(event(s.event, s.data));
+      else if (s.sendMany) system.sendMany(s.sendMany.map((i) => [actor(i.to), event(i.event, i.data)]));
       else if (s.advance !== undefined) now += s.advance;
       else if (s.hibernate) {
         await settle();
-        if (system.hibernate(actor(s.hibernate)) !== 1) throw new Error(`${s.hibernate} could not be hibernated`);
+        system.hibernate(actor(s.hibernate));
       } else if (s.snapshot) snapshots[s.snapshot] = system.snapshot();
       else if (s.restore) {
         system.stop();
         system = ta.createSystem({ ...options, restore: snapshots[s.restore] });
         for (const n of [...actors.keys()]) system.get(n) ? actors.set(n, system.get(n)) : actors.delete(n);
-      } else if (s.reload) system.reload(logicOf(s.reload, s.documents));
+      } else if (s.reload) system.load([ta.fromSCXML(docs[s.reload], { documents: Object.fromEntries((s.documents || []).map((d) => [d, docs[d]])) })]);
       else if (s.migrate) {
         const m = system.migrate(undefined, s.migrate);
         await settle();
@@ -140,30 +148,53 @@ if (!only) {
   failed += failures.length ? 1 : 0;
 }
 
-/* neutral values (docs/protocol.md, Values): the vectors the C datamodel runs too */
-function values() {
+/* neutral values (docs/protocol.md, Values): the vectors the C datamodel runs
+ * too, through a link: the peer sends `wire` to an actor that sends its data
+ * back (roundtrip), or the value of an expression (encode, invalid); the
+ * datamodel reads and writes the wire (from_wire, to_wire) */
+const ECHO = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="echo" initial="s">
+  <state id="s">
+    <transition event="rt"><send event="back" targetexpr="_event.origin"><content expr="_event.data"/></send></transition>
+    <transition event="enc"><send event="back" targetexpr="_event.origin"><content expr="eval(_event.data.expr)"/></send></transition>
+    <transition event="error.communication"><log label="lost" expr="'lost'"/></transition>
+  </state></scxml>`;
+async function values(ecmascript) {
   const v = JSON.parse(readFileSync(path.join(here, 'values.json'), 'utf8'));
   const failures = [];
-  const sys = ta.createSystem({ id: 'vectors' });
+  const logs = [];
+  const system = ta.createSystem({ systemID: 'vectors', ecmascript, logger: (l, t) => logs.push(t) });
+  ta.createActor(ta.fromSCXML(ECHO), { system, systemID: 'echo' }).start();
+  let accept = null;
+  const served = ta.serveLinks(system, { trusted: true, resumeMs: 0, accept: (on) => void (accept = on) });
+  const out = [];
+  const conn = textStream(accept, out);
+  conn.in({ t: 'hello', v: 1, id: 'peer', reach: [] });
+  out.splice(0);
+  let msgid = 0;
+  const ask = async (name, data) => {
+    conn.in({ t: 'ev', target: 'tinyactors://vectors/@echo', name, data, origin: 'tinyactors://peer/#_scxml_1', msgid: `m${++msgid}`, hops: 0 });
+    for (let i = 0; i < 5 && !out.length; i++) await new Promise((r) => setImmediate(r));
+    const got = out.splice(0);
+    return got.length === 1 && got[0].t === 'ev' ? got[0] : null;
+  };
   for (const c of v.roundtrip) {
-    const got = JSON.stringify(ta.encodeWire(ta.decodeWire(c.wire, sys)));
-    const want = JSON.stringify(c.back !== undefined ? c.back : c.wire);
+    const frame = await ask('rt', c.wire);
+    const got = frame && JSON.stringify(frame.data);
+    const want = JSON.stringify(ecmascript === 'quickjs' && c.backEcmascript !== undefined ? c.backEcmascript : c.back !== undefined ? c.back : c.wire);
     if (got !== want) failures.push(`roundtrip "${c.name}": ${got}, expected ${want}`);
   }
   for (const c of v.encode) {
-    const got = JSON.stringify(ta.encodeWire(new Function(`return (${c.ecmascript});`)()));
+    const frame = await ask('enc', { expr: `(${c.ecmascript})` });
+    const got = frame && JSON.stringify(frame.data);
     if (got !== JSON.stringify(c.wire)) failures.push(`encode "${c.name}": ${got}, expected ${JSON.stringify(c.wire)}`);
   }
   for (const c of v.invalid) {
-    let threw = false;
-    try {
-      ta.encodeWire(new Function(`return (${c.ecmascript});`)());
-    } catch {
-      threw = true;
-    }
-    if (!threw) failures.push(`invalid "${c.name}": encoded`);
+    logs.splice(0);
+    if (await ask('enc', { expr: `(${c.ecmascript})` })) failures.push(`invalid "${c.name}": sent`);
+    else if (!logs.includes('lost')) failures.push(`invalid "${c.name}": no error.communication`);
   }
-  sys.stop();
+  await served.close();
+  system.stop();
   return failures;
 }
 
@@ -253,7 +284,7 @@ async function transcript(sc, framed) {
   const docs = Object.fromEntries(Object.entries(sc.documents).map(([k, v]) => [k, v.join('\n')]));
   let now = 0;
   const logs = [];
-  const system = ta.createSystem({ id: sc.system, clock: () => now, logger: (...a) => logs.push(String(a.length > 1 ? a[1] : a[0])) });
+  const system = ta.createSystem({ systemID: sc.system, clock: () => now, logger: (...a) => logs.push(String(a.length > 1 ? a[1] : a[0])) });
   for (const s of sc.spawn) ta.createActor(ta.fromSCXML(docs[s.doc]), { system, systemID: s.as }).start();
   let accept = null;
   const served = ta.serveLinks(system, { ...sc.serve, accept: (on) => void (accept = on) });
@@ -304,11 +335,14 @@ async function transcript(sc, framed) {
   return failures;
 }
 
+const DATAMODELS = ['native', 'quickjs'];
 if (!only) {
-  const failures = values();
-  console.log(`${failures.length ? 'FAIL' : 'ok  '} ${which.padEnd(4)} values.json (protocol vectors)`);
-  for (const x of failures) console.log(`       ${x}`);
-  failed += failures.length ? 1 : 0;
+  for (const ecmascript of DATAMODELS) {
+    const failures = await values(ecmascript);
+    console.log(`${failures.length ? 'FAIL' : 'ok  '} ${which.padEnd(4)} ${ecmascript.padEnd(7)} values.json (protocol vectors)`);
+    for (const x of failures) console.log(`       ${x}`);
+    failed += failures.length ? 1 : 0;
+  }
   const traceFailures = traceValues();
   console.log(`${traceFailures.length ? 'FAIL' : 'ok  '} ${which.padEnd(4)} span_ids.json, traceparent.json (trace vectors)`);
   for (const x of traceFailures) console.log(`       ${x}`);
@@ -329,9 +363,11 @@ const files = readdirSync(dir).filter((f) => f.endsWith('.json') && !VECTORS.has
 for (const f of files) {
   const sc = JSON.parse(readFileSync(path.join(dir, f), 'utf8'));
   if (only && sc.name !== only) continue;
-  const failures = await run(sc);
-  console.log(`${failures.length ? 'FAIL' : 'ok  '} ${which.padEnd(4)} ${sc.name}`);
-  for (const x of failures) console.log(`       ${x}`);
-  failed += failures.length ? 1 : 0;
+  for (const ecmascript of DATAMODELS) {
+    const failures = await run(sc, ecmascript);
+    console.log(`${failures.length ? 'FAIL' : 'ok  '} ${which.padEnd(4)} ${ecmascript.padEnd(7)} ${sc.name}`);
+    for (const x of failures) console.log(`       ${x}`);
+    failed += failures.length ? 1 : 0;
+  }
 }
 process.exit(failed ? 1 : 0);
