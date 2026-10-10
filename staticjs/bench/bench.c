@@ -60,6 +60,10 @@
  * (text.replaceAll(",", ";;")) and eval.string.encodeURIComponent
  * (encodeURIComponent(text), each comma as %2C), each checked by its
  * length and its ends (L);
+ * eval.regex.test (/^(?:r\d{6},)*r\d{6}$/ and /r\d{6};/ on text: [true,false]),
+ * .replace (text.replace(/r(\d+)/g, "$1"), checked by its length and start),
+ * .split (text.split(/[,;]/): n pieces) and .redos (/(a+)+$/ on n a's and a
+ * b: false), each the same value at every size, Node's at the smoke size (L);
  * eval.object.spread-reduce (C);
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
@@ -512,6 +516,22 @@ static const bench_case cases[] = {
       .source = "(r => [r.length - text.length - 2 * Math.floor(text.length / 8), r.startsWith(\"r000000%2Cr000001%2C\")])"
                 "(encodeURIComponent(text))",
       .globals = { { "text", FIX_TEXT, NULL } }, .expect = "[0,true]", .check = CHECK_SAME },
+    /* Regular expressions (docs/regex.md, 12.1), on the n row ids joined by
+     * commas: a whole-string test, a replacement with g and $1, a split on
+     * a class, and /(a+)+$/ on n a's and a b, exponential for a
+     * backtracker and linear here. */
+    { .name = "eval.regex.test", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "[/^(?:r\\d{6},)*r\\d{6}$/.test(text), /r\\d{6};/.test(text)]",
+      .globals = { { "text", FIX_TEXT, NULL } }, .expect = "[true,false]", .check = CHECK_SAME },
+    { .name = "eval.regex.replace", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "(r => [8 * r.length - 7 * text.length, r.startsWith(\"000000,000001,\")])(text.replace(/r(\\d+)/g, \"$1\"))",
+      .globals = { { "text", FIX_TEXT, NULL } }, .expect = "[-1,true]", .check = CHECK_SAME },
+    { .name = "eval.regex.split", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "(p => [8 * p.length - text.length, p[0], p[p.length - 1].length])(text.split(/[,;]/))",
+      .globals = { { "text", FIX_TEXT, NULL } }, .expect = "[1,\"r000000\",7]", .check = CHECK_SAME },
+    { .name = "eval.regex.redos", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "/(a+)+$/.test(\"a\".repeat(xs.length) + \"b\")",
+      .globals = { { "xs", FIX_XS, NULL } }, .expect = "false", .check = CHECK_SAME },
     /* Strings read as numbers: 15 digits (Clinger's fast path), 17 (the bignum's). */
     { .name = "eval.number.parse", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "texts.map(Number)", .globals = { { "texts", FIX_NUMBER_TEXTS, NULL } },
