@@ -1108,3 +1108,14 @@ Each departure below was made because Node or the code said otherwise.
   index in code units, the input and, when any group has a name, the groups
   object. Its result is written as `ToString` gives it, without `$`
   patterns; an object, an array or a BigInt faults.
+- **The literal-prefix skip (12.1, item 1) leaves fuel as it was.** Section
+  9.1 lets an optimization lower fuel; here none does, so that fuel stays a
+  property of the pattern and the input, not of the build. A program whose
+  start is SAVEs then one ASCII character (with or without i) has, where no
+  thread is alive, a start thread at each position that dies on that
+  character. Over a run of ASCII bytes that cannot begin a match, the
+  search passes the positions without following them, adds the
+  instructions and slot copies following them would have counted, and
+  stops where the budget of a step would have stopped it. It does not use
+  `find_bytes`, and it compares one byte: a literal of several characters
+  is skipped to its first.
