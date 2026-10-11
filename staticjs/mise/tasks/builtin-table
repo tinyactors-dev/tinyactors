@@ -1,0 +1,31 @@
+#!/usr/bin/env ruby
+#MISE description="Build staticjs's name-table tool and run it: `dump` prints every built-in name, no argument starts a REPL"
+# vim:ft=ruby
+
+# Builds tools/builtin_table.c against the library (mise run build first)
+# and runs it with the arguments given: `mise run builtin-table dump`
+# prints the whole table, one entry per line; `mise run builtin-table`
+# reads names from stdin and prints each entry or "not registered".
+
+require_relative '../staticjs'
+require 'cache'
+require 'fileutils'
+
+abort 'builtin-table: mise run build failed' unless system('mise', 'run', 'build', chdir: StaticJS::ROOT.to_s)
+
+target = Toolchain::Target.host
+command = [*target.compile_command, *StaticJS::WARNINGS, *StaticJS::INCLUDES].freeze
+source = Pathname.new('tools/builtin_table.c')
+object = StaticJS::OBJECTS.join('builtin_table.o')
+binary = StaticJS::BUILD.join('builtin_table')
+FileUtils.mkdir_p(StaticJS::OBJECTS)
+
+outcome, output = Cache.compile(command, source, object)
+if outcome == :failed
+  puts (command + ['-c', source.to_s]).shelljoin
+  abort output
+end
+puts output unless output.empty?
+target.program([object.to_s, StaticJS.library.to_s], into: binary.to_s)
+
+exec(binary.to_s, *ARGV, chdir: StaticJS::ROOT.to_s)

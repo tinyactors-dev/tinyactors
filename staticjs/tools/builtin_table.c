@@ -1,0 +1,120 @@
+/*
+ * Prints staticjs's built-in name table, the one builtins.c registers and
+ * sjs_name_id searches: every name, the receivers it has a method for, and
+ * the method's ID. For the list of what is built and what is not, see
+ * docs/builtins-status.md.
+ *
+ *   builtin-table dump     every entry, one per line, in the table's order
+ *   builtin-table          a REPL: reads a name per line from stdin and
+ *                          prints its entry, or "not registered"
+ *
+ * An entry is four tab-separated fields:
+ *   name      the property name
+ *   flags     the SJS_NAME_* bits, as words, comma separated, or "-"
+ *   methods   kind=method-id for each receiver kind with a method, or "-"
+ *   mutation  the method ID that changes its receiver, or "-"
+ *
+ * Method IDs are the numbers of sjs_builtin_id; the C names are not kept at
+ * run time, so they are not printed.
+ */
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "../src/internal.h"
+
+typedef struct {
+    uint32_t bit;
+    const char *word;
+} flag_word;
+
+static const flag_word FLAG_WORDS[] = {
+    { SJS_NAME_OBJECT, "object" },     { SJS_NAME_ON_ARRAY, "array" },   { SJS_NAME_ON_STRING, "string" },
+    { SJS_NAME_ON_SET, "set" },        { SJS_NAME_ON_MAP, "map" },       { SJS_NAME_ON_ITERATOR, "iterator" },
+    { SJS_NAME_ON_REGEXP, "regexp" },  { SJS_NAME_MUTATING, "mutating" },
+};
+
+/* The receiver kinds in the order of a name's method slots, with their labels. */
+static const struct {
+    sjs_kind kind;
+    const char *label;
+} KINDS[] = {
+    { SJS_ARRAY, "array" },   { SJS_STRING, "string" }, { SJS_SET, "set" },         { SJS_BIGINT, "bigint" },
+    { SJS_MAP, "map" },       { SJS_ITERATOR, "iterator" }, { SJS_REGEXP, "regexp" },
+};
+
+static void print_entry(const sjs_name *entry) {
+    printf("%.*s\t", (int)entry->name.length, entry->name.ptr);
+
+    int any = 0;
+    for (size_t i = 0; i < sizeof FLAG_WORDS / sizeof FLAG_WORDS[0]; i++) {
+        if ((entry->flags & FLAG_WORDS[i].bit) == 0) continue;
+        printf("%s%s", any ? "," : "", FLAG_WORDS[i].word);
+        any = 1;
+    }
+    printf("%s\t", any ? "" : "-");
+
+    any = 0;
+    for (size_t i = 0; i < sizeof KINDS / sizeof KINDS[0]; i++) {
+        sjs_builtin_id id = sjs_method_of(entry, KINDS[i].kind);
+        if (id == SJS_BUILTIN_NONE) continue;
+        printf("%s%s=%u", any ? "," : "", KINDS[i].label, (unsigned)id);
+        any = 1;
+    }
+    printf("%s\t", any ? "" : "-");
+
+    sjs_builtin_id mutation = sjs_mutation_named(entry);
+    if (mutation == SJS_BUILTIN_NONE) printf("-\n");
+    else printf("%u\n", (unsigned)mutation);
+}
+
+static int dump(void) {
+    uint32_t count;
+    const sjs_name *names = sjs_names(&count);
+    for (uint32_t i = 0; i < count; i++) print_entry(&names[i]);
+    return 0;
+}
+
+/* Reads one line into `text`, without its line break and trailing blanks.
+ * Returns the length, or -1 at end of input. */
+static long read_name(char *text, size_t size) {
+    if (fgets(text, (int)size, stdin) == NULL) return -1;
+    size_t length = strlen(text);
+    while (length > 0 && (text[length - 1] == '\n' || text[length - 1] == '\r' || text[length - 1] == ' ' ||
+                          text[length - 1] == '\t'))
+        text[--length] = '\0';
+    size_t start = 0;
+    while (text[start] == ' ' || text[start] == '\t') start++;
+    memmove(text, text + start, length - start + 1u);
+    return (long)(length - start);
+}
+
+static int repl(void) {
+    char text[256];
+    int interactive = isatty(0);
+    uint32_t count;
+    const sjs_name *names = sjs_names(&count);
+    (void)count;
+    for (;;) {
+        if (interactive) {
+            printf("> ");
+            fflush(stdout);
+        }
+        long length = read_name(text, sizeof text);
+        if (length < 0) break;
+        if (length == 0) continue;
+        sjs_str key = { text, (uint32_t)length };
+        uint16_t id = sjs_name_id(key);
+        if (id == 0) printf("not registered\n");
+        else print_entry(&names[id - 1u]);
+    }
+    if (interactive) printf("\n");
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc == 1) return repl();
+    if (argc == 2 && strcmp(argv[1], "dump") == 0) return dump();
+    fprintf(stderr, "usage: builtin-table [dump]\n");
+    return 2;
+}
