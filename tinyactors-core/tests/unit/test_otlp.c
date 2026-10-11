@@ -1353,6 +1353,16 @@ static void test_batch(void) {
     CHECK_EQUAL(stats.waiting, 16u * TA_OTLP_BATCH_BYTES);
     CHECK_EQUAL(ta_otlp_batch_next(batch, 400, 0, &signal, &body), 1);
     CHECK(signal == TA_OTLP_METRICS && body.length == 16u * TA_OTLP_BATCH_BYTES);
+    /* an exporter that goes away takes what waits, also behind the post in flight */
+    CHECK_EQUAL(ta_otlp_batch_add(batch, TA_OTLP_METRICS, "late", 4, 500), TA_OK);
+    CHECK_EQUAL(ta_otlp_batch_add(batch, TA_OTLP_LOGS, "log", 3, 500), TA_OK);
+    int drained = 0;
+    while (ta_otlp_batch_next(batch, 500, TA_OTLP_BATCH_DRAIN, &signal, &body)) {
+        CHECK((signal == TA_OTLP_METRICS && body.length == 4 && !memcmp(body.pointer, "late", 4)) ||
+              (signal == TA_OTLP_LOGS && body.length == 3));
+        drained++;
+    }
+    CHECK_EQUAL(drained, 2);
     ta_otlp_batch_free(batch);
 }
 

@@ -145,14 +145,14 @@ napi_value js_export_drain(napi_env environment, napi_callback_info info) {
     uint32_t signal, k = 0;
     ta_string_view body;
     ta_time now = links_now(system);
-    while (system->exporter && ta_otlp_batch_next(system->exporter, now, 1, &signal, &body)) {
+    while (system->exporter &&
+           ta_otlp_batch_next(system->exporter, now, TA_OTLP_BATCH_DRAIN, &signal, &body)) {
         napi_value e;
         napi_create_object(environment, &e);
         set(environment, e, "signal",
             str_value(environment, view_of(signal_names[signal], strlen(signal_names[signal]))));
         set(environment, e, "body", bytes_value(environment, body.pointer, body.length));
         napi_set_element(environment, out, k++, e);
-        ta_otlp_batch_done(system->exporter, signal, 1, now);
     }
     return out;
 }

@@ -325,6 +325,14 @@
       "value": 250
     },
     {
+      "name": "TA_OTLP_BATCH_DRAIN",
+      "value": 2
+    },
+    {
+      "name": "TA_OTLP_BATCH_FLUSH",
+      "value": 1
+    },
+    {
       "name": "TA_OTLP_BATCH_MAX",
       "value": 16777216
     },

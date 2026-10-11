@@ -86,6 +86,14 @@ int ta_otlp_batch_next(ta_otlp_batch *batch, ta_time now, int flush, uint32_t *s
                        ta_string_view *body) {
     for (uint32_t i = 0; i < TA_OTLP_SIGNALS; i++) {
         batch_signal *s = &batch->signals[i];
+        if (flush == TA_OTLP_BATCH_DRAIN && s->length > s->posting) {
+            /* given up here (also behind a post in flight): the caller posts it */
+            *signal = i;
+            *body = (ta_string_view){(const char *)s->bytes + s->posting,
+                                     (uint32_t)(s->length - s->posting)};
+            s->length = s->posting;
+            return 1;
+        }
         if (!batch_due(s, now, flush)) continue;
         s->in_flight = 1;
         s->posting = s->length;

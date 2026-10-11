@@ -379,8 +379,12 @@ TA_API void ta_otlp_batch_free(ta_otlp_batch *batch);
  * or no memory), counted, and a failure (ta_otlp_batch_report). */
 TA_API ta_status ta_otlp_batch_add(ta_otlp_batch *batch, uint32_t signal, const void *bytes,
                                    size_t length, ta_time now);
-/* The next body due by `now` (all waiting ones when `flush`): 1 with its
- * signal and bytes (valid until ta_otlp_batch_done for it), 0 when none. */
+/* The next body due by `now`: 1 with its signal and bytes (valid until
+ * ta_otlp_batch_done for it), 0 when none. `flush`: every waiting body is
+ * due. TA_OTLP_BATCH_DRAIN: every waiting body, also behind a post in
+ * flight, given up by the batch (for an exporter that goes away: no
+ * ta_otlp_batch_done for them; valid until the next ta_otlp_batch_add). */
+enum { TA_OTLP_BATCH_FLUSH = 1, TA_OTLP_BATCH_DRAIN = 2 };
 TA_API int ta_otlp_batch_next(ta_otlp_batch *batch, ta_time now, int flush, uint32_t *signal,
                               ta_string_view *body);
 /* The post of a signal's body ended: `posted` 1 when it did. */
