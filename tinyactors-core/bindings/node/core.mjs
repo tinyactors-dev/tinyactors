@@ -543,10 +543,6 @@ export function createRuntime({ native, platform }) {
       this._actors = new Map(); /* session -> Actor the application holds */
       this._invocations = new Map(); /* `${segment}:${token}` and `${session}#${invokeid}` -> invocation */
       this._jobs = new Map(); /* migration job -> { resolve, moved } */
-      this._hibernated = new Set();
-      this._pending = new Map(); /* session -> blob while the store writes it */
-      this._waking = new Set();
-      this._woken = []; /* [session, blob] loaded, to wake */
       this._store = options.hibernation ? options.hibernation.store : null;
       if (this._store && typeof this._store.get !== 'function') throw new TypeError('hibernation: { store } with get, set and delete');
       this._peers = new Map(); /* router peer -> transport connection */
@@ -1030,61 +1026,41 @@ export function createRuntime({ native, platform }) {
       const snapshot = actor ? actor._snapshot() : null;
       let blob;
       try {
-        blob = native.hibernate(this._sys, session);
+        blob = native.hibernate(this._sys, session); /* kept by the addon until stored */
       } catch (e) {
         if (strict) throw e;
         return false;
       }
       if (actor) actor._cached = snapshot;
-      this._hibernated.add(session);
-      this._pending.set(session, blob);
       const key = String(session);
-      const done = () => this._pending.get(session) === blob && this._pending.delete(session);
+      const stored = () => {
+        if (this._stopped || !native.stored(this._sys, session)) return;
+        const d = this._store.delete(key); /* it woke from the addon's copy meanwhile */
+        if (d && typeof d.then === 'function') d.catch(() => {});
+      };
       const w = this._store.set(key, blob);
-      if (w && typeof w.then === 'function') w.then(done, (e) => platform.log('hibernation store:', e));
-      else done();
+      if (w && typeof w.then === 'function') w.then(stored, (e) => platform.log('hibernation store:', e));
+      else stored();
       return true;
     }
 
-    /* TA_EFFECT_WAKE: load the blob (it has work, or a migration wants it);
-     * the blobs loaded meanwhile go back in together, with one run */
+    /* TA_EFFECT_WAKE: load the blob (the addon asks once; one it still held it woke itself) */
     _wake(session) {
-      if (this._waking.has(session) || !this._store) return;
-      this._waking.add(session);
       const key = String(session);
-      const finish = (blob) => {
-        this._waking.delete(session);
+      const wake = (blob) => {
         if (this._stopped) return;
         if (!blob) return platform.log(`tinyactors: cannot wake actor ${key} (no blob in the store)`);
-        this._woken.push([session, blob]);
-        if (this._woken.length === 1) this._wakeAll();
-      };
-      const blob = this._pending.get(session) || this._store.get(key);
-      if (blob && typeof blob.then === 'function')
-        blob.then(finish, (e) => {
-          this._waking.delete(session);
-          platform.log('hibernation store:', e);
-        });
-      else finish(blob);
-    }
-
-    _wakeAll() {
-      for (const [session, blob] of this._woken.splice(0)) {
-        /* awake before the run: subscribers hear of it with a fresh snapshot */
-        this._hibernated.delete(session);
-        this._pending.delete(session);
-        const actor = this._actors.get(session);
-        if (actor) actor._cached = null;
         try {
           native.wake(this._sys, session, blob);
         } catch (e) {
-          platform.log(`tinyactors: ${e.message}`);
-          continue;
+          return platform.log(`tinyactors: ${e.message}`);
         }
-        const d = this._store.delete(String(session));
+        const d = this._store.delete(key);
         if (d && typeof d.then === 'function') d.catch(() => {});
-      }
-      native.pump(this._sys);
+      };
+      const blob = this._store.get(key);
+      if (blob && typeof blob.then === 'function') blob.then(wake, (e) => platform.log('hibernation store:', e));
+      else wake(blob);
     }
 
     /* ---- moving actors, versions, snapshots */
@@ -1417,7 +1393,7 @@ export function createRuntime({ native, platform }) {
     }
 
     get hibernated() {
-      return this.system._hibernated.has(this._session);
+      return !!this._session && !this.system._stopped && native.hibernated(this.system._sys, this._session);
     }
 
     /** Spawn it (ta_host_spawn): its chart's current version, `input` overriding its <data>. */
@@ -1453,7 +1429,10 @@ export function createRuntime({ native, platform }) {
     _snapshot() {
       const { _status: status, _output: output, _error: error } = this;
       if (status !== 'active') return { value: this._final === undefined ? {} : this._final, context: this._context, status, output, error };
-      if (this._cached) return this._cached;
+      if (this._cached) {
+        if (this.hibernated) return this._cached;
+        this._cached = null; /* awake again */
+      }
       const system = this.system;
       if (!this._session || system._stopped) return { value: {}, context: undefined, status, output, error };
       const context = native.context(system._sys, this._session);

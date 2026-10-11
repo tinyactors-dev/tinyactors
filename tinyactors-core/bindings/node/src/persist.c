@@ -60,6 +60,111 @@ static ta_status write_blob(nd_system *system, blob_writer writer, uint64_t sess
     return status;
 }
 
+/* ---- hibernated actors in flight: a blob until the store has it, a wake asked */
+
+static nd_parked *parked_find(nd_system *system, uint64_t session) {
+    for (uint32_t i = 0; i < system->parked_count; i++)
+        if (system->parked[i].session == session) return &system->parked[i];
+    return NULL;
+}
+
+static nd_parked *parked_add(nd_system *system, uint64_t session) {
+    nd_parked *p = parked_find(system, session);
+    if (p) return p;
+    grow((void **)&system->parked, &system->parked_capacity, system->parked_count + 1,
+         sizeof(nd_parked));
+    p = &system->parked[system->parked_count++];
+    memset(p, 0, sizeof *p);
+    p->session = session;
+    return p;
+}
+
+static void parked_drop(nd_system *system, nd_parked *p) {
+    set_ref(system->environment, &p->blob, NULL);
+    *p = system->parked[--system->parked_count];
+}
+
+void parked_clear(nd_system *system) {
+    for (uint32_t i = 0; i < system->parked_count; i++)
+        set_ref(system->environment, &system->parked[i].blob, NULL);
+    free(system->parked);
+    free(system->wake_held);
+}
+
+/* A TA_EFFECT_WAKE: 1 when the caller is to load the blob (once per actor);
+ * a blob still held is woken from after the run's effects (wake_held). */
+int wake_effect(nd_system *system, uint64_t session) {
+    nd_parked *p = parked_find(system, session);
+    if (p && p->blob) {
+        grow((void **)&system->wake_held, &system->wake_held_capacity, system->wake_held_count + 1,
+             sizeof(uint64_t));
+        system->wake_held[system->wake_held_count++] = session;
+        return 0;
+    }
+    if (p && p->waking) return 0;
+    parked_add(system, session)->waking = 1;
+    return 1;
+}
+
+static ta_status wake_from(nd_system *system, uint64_t session, const void *data, size_t n) {
+    void *aligned = malloc(n ? n : 1); /* the blob is read in place */
+    if (!aligned) abort();
+    memcpy(aligned, data, n);
+    int was = enter(system);
+    ta_status status = ta_host_wake(system->host, session, aligned, n);
+    leave(system, was);
+    free(aligned);
+    return status;
+}
+
+void wake_held(nd_system *system) {
+    system->more = 1; /* their work runs in this pump */
+    for (uint32_t k = 0; k < system->wake_held_count; k++) {
+        nd_parked *p = parked_find(system, system->wake_held[k]);
+        void *data = NULL;
+        size_t n = 0;
+        if (p && p->blob &&
+            bytes_of(system->environment, get_ref(system->environment, p->blob), &data, &n))
+            wake_from(system, p->session, data, n);
+        if (p) { /* stored() says the store's copy is stale */
+            set_ref(system->environment, &p->blob, NULL);
+            p->woken = 1;
+        }
+    }
+    system->wake_held_count = 0;
+}
+
+/* stored(system, session) -> true when the actor woke meanwhile: delete the store's copy */
+napi_value js_stored(napi_env environment, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    nd_system *system = argc >= 2 ? get_system(environment, argv[0]) : NULL;
+    if (!system) return NULL;
+    nd_parked *p = parked_find(system, get_session(environment, argv[1]));
+    int stale = p && p->woken;
+    if (p && !p->waking)
+        parked_drop(system, p);
+    else if (p)
+        set_ref(environment, &p->blob, NULL);
+    return bool_value(environment, stale);
+}
+
+/* hibernated(system, session) -> whether the actor is hibernated (its blob elsewhere) */
+napi_value js_hibernated(napi_env environment, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    nd_system *system = argc >= 2 ? get_system(environment, argv[0]) : NULL;
+    if (!system) return NULL;
+    ta_system *segment_system;
+    uint32_t segment = 0;
+    ta_actor_info actor_info;
+    int actor =
+        locate(system, get_session(environment, argv[1]), &segment_system, &segment, &actor_info);
+    return bool_value(environment, actor && actor_info.state == TA_ACTOR_HIBERNATED);
+}
+
 /* hibernate(system, session) -> blob; throws (saying why) when it cannot */
 napi_value js_hibernate(napi_env environment, napi_callback_info info) {
     size_t argc = 2;
@@ -71,13 +176,18 @@ napi_value js_hibernate(napi_env environment, napi_callback_info info) {
     ta_status status =
         write_blob(system, write_hibernate, get_session(environment, argv[1]), &blob);
     napi_value r = status == TA_OK ? bytes_value(environment, blob.bytes, blob.length) : NULL;
+    nd_parked *p = r ? parked_add(system, get_session(environment, argv[1])) : NULL;
+    if (p) {
+        set_ref(environment, &p->blob, r);
+        p->woken = 0;
+    }
     if (status != TA_OK)
         throw_status(environment, "cannot hibernate the actor", status, system->error);
     free(blob.bytes);
     return r;
 }
 
-/* wake(system, session, blob): the actor is back; its work runs with the next pump */
+/* wake(system, session, blob): the actor is back and its work runs */
 napi_value js_wake(napi_env environment, napi_callback_info info) {
     size_t argc = 3;
     napi_value argv[3];
@@ -90,18 +200,15 @@ napi_value js_wake(napi_env environment, napi_callback_info info) {
         napi_throw_type_error(environment, NULL, "wake(system, session, blob: Uint8Array)");
         return NULL;
     }
-    void *aligned = malloc(n ? n : 1); /* the blob is read in place */
-    if (!aligned) abort();
-    memcpy(aligned, data, n);
-    int was = enter(system);
-    ta_status status = ta_host_wake(system->host, get_session(environment, argv[1]), aligned, n);
-    leave(system, was);
-    free(aligned);
+    uint64_t session = get_session(environment, argv[1]);
+    nd_parked *p = parked_find(system, session);
+    if (p) parked_drop(system, p);
+    ta_status status = wake_from(system, session, data, n);
     if (status != TA_OK) {
         throw_status(environment, "cannot wake the actor", status, NULL);
         return NULL;
     }
-    return undef(environment); /* its work runs with the next pump */
+    return input_done(system, undef(environment)); /* its work runs now */
 }
 
 /* exportActor(system, session) -> blob: the actor leaves; its delayed sends

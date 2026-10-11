@@ -39,6 +39,10 @@
  *   inspect(system, session) -> { segment, chart, state, states } | null
  *   stateValue(system, session) -> its configuration as a nested state value
  *   context(system, session) -> the session's variables
+ *   hibernate(system, session) -> blob, kept until stored(system, session); a wake for
+ *     it while kept wakes it from that blob, and stored() then returns true: the
+ *     store's copy is stale
+ *   wake(system, session, blob), hibernated(system, session) -> bool
  *   snapshot(system) -> one blob (ta_host_snapshot_pack); snapshotContents(blob) ->
  *     { systemID, ecmascript, now, images }
  *   sweep, hibernate, wake, exportActor, adopt, migrate, stats, peer*,
@@ -152,6 +156,13 @@ typedef struct nd_failure { /* an exception in an expression */
     napi_ref error;
 } nd_failure;
 
+typedef struct nd_parked { /* a hibernated actor's blob until the store has it, or a wake asked */
+    uint64_t session;
+    napi_ref blob; /* NULL once stored */
+    int waking;    /* the caller was asked to load it (a "wake" effect) */
+    int woken;     /* woken from the held blob before it was stored: stored() says delete */
+} nd_parked;
+
 typedef struct nd_system {
     napi_env environment; /* of the current native call */
     ta_host *host;
@@ -199,6 +210,10 @@ typedef struct nd_system {
     uint32_t grave_count, grave_capacity;
     nd_failure *failures;
     uint32_t failure_count, failure_capacity;
+    nd_parked *parked; /* hibernated actors in flight (persist.c) */
+    uint32_t parked_count, parked_capacity;
+    uint64_t *wake_held; /* woken from their held blobs after a run's effects */
+    uint32_t wake_held_count, wake_held_capacity;
     napi_ref *images; /* per segment: the image, until TA_HOST_EFFECT_SEGMENT_FREED */
     uint32_t image_count, image_capacity;
     text wire;       /* scratch for neutral values */
@@ -343,6 +358,11 @@ napi_value js_later(napi_env environment, napi_callback_info info);
 napi_value js_state_value(napi_env environment, napi_callback_info info);
 napi_value js_snapshot_contents(napi_env environment, napi_callback_info info);
 napi_value js_watch(napi_env environment, napi_callback_info info);
+napi_value js_stored(napi_env environment, napi_callback_info info);
+napi_value js_hibernated(napi_env environment, napi_callback_info info);
+int wake_effect(nd_system *system, uint64_t session);
+void wake_held(nd_system *system);
+void parked_clear(nd_system *system);
 napi_value js_unwatch(napi_env environment, napi_callback_info info);
 napi_value trace_kind_names(napi_env environment);
 napi_value js_terminate(napi_env environment, napi_callback_info info);

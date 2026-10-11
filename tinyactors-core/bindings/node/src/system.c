@@ -163,6 +163,7 @@ static void system_clear(napi_env environment, nd_system *system) {
     free(system->keys);
     free(system->sessions);
     free(system->changed);
+    parked_clear(system);
     for (uint32_t i = 0; i < system->later_count; i++)
         set_ref(environment, &system->later[i], NULL);
     free(system->later);
@@ -373,9 +374,11 @@ static void effect_out(nd_system *system, const ta_host_effect *effect) {
         set(environment, e, "segment", num(environment, effect->segment));
         set(environment, e, "token", num(environment, effect->token));
         break;
-    case TA_EFFECT_WAKE:
-        e = effect_new(system, "wake");
-        set(environment, e, "session", num(environment, (double)effect->session));
+    case TA_EFFECT_WAKE: /* the caller loads the blob, unless it is still held */
+        if (wake_effect(system, effect->session)) {
+            e = effect_new(system, "wake");
+            set(environment, e, "session", num(environment, (double)effect->session));
+        }
         break;
     case TA_EFFECT_REQUEST:
         answer_request(system, effect);
@@ -489,6 +492,7 @@ static double pump_once(nd_system *system) {
         for (uint32_t i = 0; i < n; i++)
             effect_out(system, &effects[i]);
         ta_host_effects_ack(system->host);
+        if (system->wake_held_count) wake_held(system); /* their work runs in the next round */
         /* TA_RUN_EFFECTS: the senders wait; callbacks.sync answers each send now,
          * feeding the host (send, post, deliver) before the next run */
         napi_value sync_list = system->sync_list;
