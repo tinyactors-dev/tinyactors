@@ -1,7 +1,7 @@
 /* trace.c — the trace encoder (ta_otlp), its policy, and decoding traces (binding.h). */
 #include "binding.h"
 
-/* ---- decoding: OTLP traces to plain objects (core.mjs shapes them) ------------------------- */
+/* ---- decoding: OTLP traces as the API's spans ----------------------------------------------- */
 
 napi_value decoded_id(napi_env environment, uint64_t high, uint64_t low, int wide) {
     char text[TA_TRACE_ID_TEXT_LENGTH];
@@ -13,16 +13,10 @@ napi_value decoded_id(napi_env environment, uint64_t high, uint64_t low, int wid
     return str_value(environment, (ta_string_view){text, TA_SPAN_ID_TEXT_LENGTH});
 }
 
-static napi_value decoded_u64(napi_env environment, uint64_t value) {
-    char text[24];
-    int n = snprintf(text, sizeof text, "%llu", (unsigned long long)value);
-    return str_value(environment, (ta_string_view){text, (uint32_t)n});
-}
-
-/* a value: string, boolean, number, { int: "decimal" } beyond 2^53, array,
- * { list: [[k, v]] }, { bytes: Uint8Array } */
+/* a value: string, boolean, number (a BigInt beyond 2^53), array, an object of a
+ * key-value list, a Uint8Array of bytes */
 napi_value decoded_value(napi_env environment, const ta_otlp_value *value) {
-    napi_value v, wrapper;
+    napi_value v;
     switch (value->kind) {
     case TA_OTLP_VALUE_STRING:
         return str_value(environment, value->bytes);
@@ -31,14 +25,8 @@ napi_value decoded_value(napi_env environment, const ta_otlp_value *value) {
     case TA_OTLP_VALUE_INT:
         if (value->integer >= -9007199254740991LL && value->integer <= 9007199254740991LL)
             return num(environment, (double)value->integer);
-        napi_create_object(environment, &wrapper);
-        {
-            char text[24];
-            int n = snprintf(text, sizeof text, "%lld", (long long)value->integer);
-            napi_set_named_property(environment, wrapper, "int",
-                                    str_value(environment, (ta_string_view){text, (uint32_t)n}));
-        }
-        return wrapper;
+        napi_create_bigint_int64(environment, value->integer, &v);
+        return v;
     case TA_OTLP_VALUE_DOUBLE:
         return num(environment, value->number);
     case TA_OTLP_VALUE_ARRAY: {
@@ -50,36 +38,40 @@ napi_value decoded_value(napi_env environment, const ta_otlp_value *value) {
         return v;
     }
     case TA_OTLP_VALUE_LIST:
-        napi_create_object(environment, &wrapper);
-        napi_set_named_property(environment, wrapper, "list",
-                                decoded_attributes(environment, value->items));
-        return wrapper;
+        return decoded_attributes(environment, value->items);
     case TA_OTLP_VALUE_BYTES:
-        napi_create_object(environment, &wrapper);
-        napi_set_named_property(
-            environment, wrapper, "bytes",
-            bytes_value(environment, value->bytes.pointer, value->bytes.length));
-        return wrapper;
+        return bytes_value(environment, value->bytes.pointer, value->bytes.length);
     default:
         return null_value(environment);
     }
 }
 
-/* attributes as [[key, value], ...] */
+/* attributes as an object */
 napi_value decoded_attributes(napi_env environment, ta_otlp_fields fields) {
-    napi_value list;
-    napi_create_array(environment, &list);
-    uint32_t at = 0, i = 0;
+    napi_value o;
+    napi_create_object(environment, &o);
+    uint32_t at = 0;
     ta_string_view key;
     ta_otlp_value value;
-    while (ta_otlp_next_attribute(fields, &at, &key, &value) == 1) {
-        napi_value pair;
-        napi_create_array_with_length(environment, 2, &pair);
-        napi_set_element(environment, pair, 0, str_value(environment, key));
-        napi_set_element(environment, pair, 1, decoded_value(environment, &value));
-        napi_set_element(environment, list, i++, pair);
-    }
-    return list;
+    while (ta_otlp_next_attribute(fields, &at, &key, &value) == 1)
+        napi_set_property(environment, o, str_value(environment, key),
+                          decoded_value(environment, &value));
+    return o;
+}
+
+/* a time of ns since the epoch: ms as a number, and the ns as a BigInt (`nano`) */
+static void decoded_time(napi_env environment, napi_value o, const char *ms, const char *nano,
+                         uint64_t ns) {
+    napi_value big;
+    napi_create_bigint_uint64(environment, ns, &big);
+    set(environment, o, ms, num(environment, (double)(ns / 1000u) / 1000.0));
+    set(environment, o, nano, big);
+}
+
+static napi_value decoded_name(napi_env environment, const char *const *names, uint32_t count,
+                               uint32_t i) {
+    const char *name = names[i < count ? i : 0];
+    return str_value(environment, view_of(name, strlen(name)));
 }
 
 /* decodeTraces(bytes) -> [span], or throws on malformed bytes */
@@ -93,6 +85,9 @@ napi_value js_decode_traces(napi_env environment, napi_callback_info info) {
         napi_throw_type_error(environment, NULL, "decodeTraces(bytes: Uint8Array)");
         return NULL;
     }
+    static const char *const kinds[] = {"unspecified", "internal", "server",
+                                        "client",      "producer", "consumer"};
+    static const char *const codes[] = {"unset", "ok", "error"};
     napi_create_array(environment, &spans);
     ta_otlp_cursor cursor;
     memset(&cursor, 0, sizeof cursor);
@@ -100,37 +95,29 @@ napi_value js_decode_traces(napi_env environment, napi_callback_info info) {
     int32_t got;
     uint32_t i = 0;
     while ((got = ta_otlp_next_span(bytes, length, &cursor, &span)) == 1) {
-        napi_value o, events, links;
+        napi_value o, events, links, status, resource, scope;
         napi_create_object(environment, &o);
-        napi_set_named_property(environment, o, "traceID",
-                                decoded_id(environment, span.trace.high, span.trace.low, 1));
-        napi_set_named_property(environment, o, "spanID", decoded_id(environment, 0, span.span, 0));
+        set(environment, o, "traceID", decoded_id(environment, span.trace.high, span.trace.low, 1));
+        set(environment, o, "spanID", decoded_id(environment, 0, span.span, 0));
         if (span.parent)
-            napi_set_named_property(environment, o, "parentSpanID",
-                                    decoded_id(environment, 0, span.parent, 0));
-        napi_set_named_property(environment, o, "name", str_value(environment, span.name));
-        napi_set_named_property(environment, o, "kind", num(environment, span.kind));
-        napi_set_named_property(environment, o, "start", decoded_u64(environment, span.start));
-        napi_set_named_property(environment, o, "end", decoded_u64(environment, span.end));
-        napi_set_named_property(environment, o, "status", num(environment, span.status));
-        if (span.status_message.length)
-            napi_set_named_property(environment, o, "statusMessage",
-                                    str_value(environment, span.status_message));
-        napi_set_named_property(environment, o, "attributes",
-                                decoded_attributes(environment, span.attributes));
+            set(environment, o, "parentSpanID", decoded_id(environment, 0, span.parent, 0));
+        set(environment, o, "name", str_value(environment, span.name));
+        set(environment, o, "kind", decoded_name(environment, kinds, 6, span.kind));
+        decoded_time(environment, o, "startTime", "startTimeUnixNano", span.start);
+        decoded_time(environment, o, "endTime", "endTimeUnixNano", span.end);
+        set(environment, o, "attributes", decoded_attributes(environment, span.attributes));
         napi_create_array(environment, &events);
         uint32_t at = 0, k = 0;
         ta_otlp_event event;
         while (ta_otlp_next_event(span.events, &at, &event) == 1) {
             napi_value e;
             napi_create_object(environment, &e);
-            napi_set_named_property(environment, e, "name", str_value(environment, event.name));
-            napi_set_named_property(environment, e, "time", decoded_u64(environment, event.time));
-            napi_set_named_property(environment, e, "attributes",
-                                    decoded_attributes(environment, event.attributes));
+            set(environment, e, "name", str_value(environment, event.name));
+            decoded_time(environment, e, "time", "timeUnixNano", event.time);
+            set(environment, e, "attributes", decoded_attributes(environment, event.attributes));
             napi_set_element(environment, events, k++, e);
         }
-        napi_set_named_property(environment, o, "events", events);
+        set(environment, o, "events", events);
         napi_create_array(environment, &links);
         at = 0;
         k = 0;
@@ -138,24 +125,27 @@ napi_value js_decode_traces(napi_env environment, napi_callback_info info) {
         while (ta_otlp_next_link(span.links, &at, &link) == 1) {
             napi_value l;
             napi_create_object(environment, &l);
-            napi_set_named_property(environment, l, "traceID",
-                                    decoded_id(environment, link.trace.high, link.trace.low, 1));
-            napi_set_named_property(environment, l, "spanID",
-                                    decoded_id(environment, 0, link.span, 0));
-            napi_set_named_property(environment, l, "attributes",
-                                    decoded_attributes(environment, link.attributes));
+            set(environment, l, "traceID",
+                decoded_id(environment, link.trace.high, link.trace.low, 1));
+            set(environment, l, "spanID", decoded_id(environment, 0, link.span, 0));
+            set(environment, l, "attributes", decoded_attributes(environment, link.attributes));
             napi_set_element(environment, links, k++, l);
         }
-        napi_set_named_property(environment, o, "links", links);
-        napi_set_named_property(environment, o, "resource",
-                                decoded_attributes(environment, span.resource));
-        napi_set_named_property(environment, o, "scopeName",
-                                str_value(environment, span.scope_name));
-        napi_set_named_property(environment, o, "scopeVersion",
-                                str_value(environment, span.scope_version));
-        napi_set_named_property(environment, o, "scopeAttributes",
-                                decoded_attributes(environment, span.scope_attributes));
-        napi_set_named_property(environment, o, "flags", num(environment, span.flags));
+        set(environment, o, "links", links);
+        napi_create_object(environment, &status);
+        set(environment, status, "code", decoded_name(environment, codes, 3, span.status));
+        if (span.status_message.length)
+            set(environment, status, "message", str_value(environment, span.status_message));
+        set(environment, o, "status", status);
+        napi_create_object(environment, &resource);
+        set(environment, resource, "attributes", decoded_attributes(environment, span.resource));
+        set(environment, o, "resource", resource);
+        napi_create_object(environment, &scope);
+        set(environment, scope, "name", str_value(environment, span.scope_name));
+        set(environment, scope, "version", str_value(environment, span.scope_version));
+        set(environment, scope, "attributes",
+            decoded_attributes(environment, span.scope_attributes));
+        set(environment, o, "scope", scope);
         napi_set_element(environment, spans, i++, o);
     }
     if (got < 0) {

@@ -322,23 +322,6 @@ export function createRuntime({ native, platform }) {
   }
 
 
-  const SPAN_KINDS = ['unspecified', 'internal', 'server', 'client', 'producer', 'consumer'];
-  const STATUS_CODES = ['unset', 'ok', 'error'];
-  function decodedValue(v) {
-    if (v === null || typeof v !== 'object') return v;
-    if (Array.isArray(v)) return v.map(decodedValue);
-    if ('int' in v) return BigInt(v.int);
-    if ('list' in v) return decodedAttributes(v.list);
-    if ('bytes' in v) return v.bytes;
-    return v;
-  }
-  function decodedAttributes(pairs) {
-    const out = {};
-    for (const [key, value] of pairs) out[key] = decodedValue(value);
-    return out;
-  }
-  const millis = (ns) => Number(ns / 1000n) / 1000;
-
   /** One OTLP ExportMetricsServiceRequest (protobuf, for /v1/metrics) of a metrics snapshot (ta_otlp_add_metric). */
   function metricsToOTLP(snapshot, options = {}) {
     if (snapshot === null || typeof snapshot !== 'object' || !Array.isArray(snapshot.metrics)) throw new TypeError('metricsToOTLP(snapshot): expected { startTime, time, metrics }');
@@ -348,38 +331,10 @@ export function createRuntime({ native, platform }) {
   }
 
   /** Reads OTLP protobuf trace bytes (the ta_otlp_next_* readers); throws on a malformed message. */
-  function decodeTraces(bytes) {
-    return native.decodeTraces(bytes).map((s) => {
-      const start = BigInt(s.start), end = BigInt(s.end);
-      const span = {
-        traceID: s.traceID,
-        spanID: s.spanID,
-        name: s.name,
-        kind: SPAN_KINDS[s.kind] || 'unspecified',
-        startTime: millis(start),
-        endTime: millis(end),
-        startTimeUnixNano: start,
-        endTimeUnixNano: end,
-        attributes: decodedAttributes(s.attributes),
-        events: s.events.map((e) => {
-          const time = BigInt(e.time);
-          return { name: e.name, time: millis(time), timeUnixNano: time, attributes: decodedAttributes(e.attributes) };
-        }),
-        links: s.links.map((l) => ({ traceID: l.traceID, spanID: l.spanID, attributes: decodedAttributes(l.attributes) })),
-        status: s.statusMessage ? { code: STATUS_CODES[s.status] || 'unset', message: s.statusMessage } : { code: STATUS_CODES[s.status] || 'unset' },
-        resource: { attributes: decodedAttributes(s.resource) },
-        scope: { name: s.scopeName, version: s.scopeVersion, attributes: decodedAttributes(s.scopeAttributes) },
-      };
-      if (s.parentSpanID) span.parentSpanID = s.parentSpanID;
-      return span;
-    });
-  }
+  const decodeTraces = (bytes) => native.decodeTraces(bytes);
 
   /* --------------------------------------------------------------- systems */
 
-  /* a snapshot: a magic line, the header's length (4 bytes), the header (JSON), then its blobs */
-  const ROUTE_OUTCOMES = ['delivered', 'relayed', 'duplicate', 'refused'];
-  const REASONS = ['', 'unknown-target', 'unreachable', 'denied', 'expired', 'hops', 'malformed'];
 
   class System {
     /**
@@ -417,7 +372,6 @@ export function createRuntime({ native, platform }) {
       this._stopped = false;
       this._timer = null; /* the one timer the addon arms (callbacks.schedule) */
       this._immediate = null;
-      this._clockTimers = [];
       this._abort = new AbortController();
       /* I/O processors and invokers: one entry of ta_host_config.io_processors each
        * (an invoker's type too: SCXML sends to an invoked service with its type) */
@@ -497,36 +451,8 @@ export function createRuntime({ native, platform }) {
      */
     flush(maxRounds = 10000) {
       if (this._stopped) return false;
-      for (let i = 0; i < maxRounds; i++) {
-        this._expire();
-        if (native.pump(this._sys) !== -2) {
-          if (!this._clockTimers.some((t) => t.at <= this._now())) return true;
-        }
-      }
+      for (let i = 0; i < maxRounds; i++) if (native.pump(this._sys) !== -2) return true;
       return false;
-    }
-
-    /* Run `fn` when this system's clock passes `at`; returns a cancel function
-     * (link resumption, whose window follows the router's queue TTL). */
-    _at(at, fn) {
-      if (!this.options.clock) {
-        const t = platform.setTimer(fn, Math.max(0, at - this._now()));
-        if (t && typeof t.unref === 'function') t.unref();
-        return () => platform.clearTimer(t);
-      }
-      const entry = { at, fn };
-      this._clockTimers.push(entry);
-      return () => {
-        const i = this._clockTimers.indexOf(entry);
-        if (i >= 0) this._clockTimers.splice(i, 1);
-      };
-    }
-
-    _expire() {
-      const now = this._now();
-      const due = this._clockTimers.filter((t) => t.at <= now);
-      this._clockTimers = this._clockTimers.filter((t) => t.at > now);
-      for (const t of due) t.fn();
     }
 
     /* ---- charts */
@@ -697,7 +623,7 @@ export function createRuntime({ native, platform }) {
       if (!envelope || typeof envelope.target !== 'string' || typeof envelope.name !== 'string') throw new TypeError('deliver({ target, name, ... })');
       if (this._stopped) return 'refused';
       if (native.later(this._sys, () => this.deliver(envelope))) return 'queued';
-      return ROUTE_OUTCOMES[native.deliver(this._sys, 0, { origin: formatAddress(this.id, 'host'), ...envelope })] || 'refused';
+      return native.deliver(this._sys, 0, { origin: formatAddress(this.id, 'host'), ...envelope });
     }
 
     /** A reference to the actor at `address`: an Actor of this system, else an ActorRef. */
@@ -1050,7 +976,6 @@ export function createRuntime({ native, platform }) {
       this._stopped = true;
       platform.clearTimer(this._timer);
       if (this._immediate !== null) platform.cancelDefer(this._immediate);
-      this._clockTimers = [];
       this._abort.abort();
       for (const inv of native.invocations(this._sys)) if (inv.controller) inv.controller.abort();
       native.destroy(this._sys); /* from an effect handler: when the pump ends */
@@ -1602,7 +1527,7 @@ export function createRuntime({ native, platform }) {
           }
           t.out.shift();
           if (msg.t === 'ev' && r !== 'ok' && r !== 'duplicate')
-            message({ t: 'err', origin: msg.origin, msgid: msg.msgid, sendid: msg.sendid, reason: REASONS.includes(r) ? r : 'unreachable' });
+            message({ t: 'err', origin: msg.origin, msgid: msg.msgid, sendid: msg.sendid, reason: typeof r === 'string' ? r : 'unreachable' }); /* the link layer knows the reasons */
         }
       } finally {
         pumping = false;

@@ -966,7 +966,7 @@ napi_value js_post(napi_env environment, napi_callback_info info) {
 }
 
 /* deliver(system, peer, { target, name, data | wire, origin, origintype, sendid, msgid,
- * dedup, hops, traceparent }) -> outcome (TA_ROUTE_*), -1 if it failed */
+ * dedup, hops, traceparent }) -> 'delivered', 'relayed', 'duplicate' or 'refused' */
 napi_value js_deliver(napi_env environment, napi_callback_info info) {
     size_t argc = 3;
     napi_value argv[3];
@@ -1006,7 +1006,9 @@ napi_value js_deliver(napi_env environment, napi_callback_info info) {
     for (int i = 0; i < 9; i++)
         free(texts[i]);
     if (pending) return NULL;
-    return input_done(system, num(environment, status == TA_OK ? (double)outcome : -1));
+    static const char *const outcomes[] = {"delivered", "relayed", "duplicate", "refused"};
+    const char *name = status == TA_OK && outcome < 4 ? outcomes[outcome] : "refused";
+    return input_done(system, str_value(environment, view_of(name, strlen(name))));
 }
 
 /* pump(system, fired) -> run code: run what is due (after a spawn, boot or adopt;
