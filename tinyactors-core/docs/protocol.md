@@ -252,8 +252,11 @@ An `ev` message is the envelope itself plus `t`:
 **Implementations.** In C the router is `ta_host` and a transport is a loop
 around three calls: `ta_host_peer_add` when a connection says hello,
 `ta_host_deliver` / `ta_host_peer_error` for incoming `ev` / `err`, and the
-`TA_HOST_EFFECT_PEER` / `TA_HOST_EFFECT_PEER_ERROR` effects for outgoing ones. The JS
-bindings implement the WebSocket transport on top of it (`createLink`,
+`TA_HOST_EFFECT_PEER` / `TA_HOST_EFFECT_PEER_ERROR` effects for outgoing ones.
+`ta_links` (`include/tinyactors/link.h`) speaks this link protocol over any
+message transport: hellos and reach, pings, reconnects with backoff,
+resumption and exports; its caller only moves text and says what its
+transports did. The JS bindings run their transports on it: WebSockets (`createLink`,
 `serveLinks` with `exports`, `trusted` / `trust(hello)`, `resumeMs`,
 `queueTTLMs`, `announce`), and byte-stream transports with the same options:
 TCP in Node (`tcp: { host, port }`), and any duplex byte stream, such as a

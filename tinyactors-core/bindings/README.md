@@ -75,24 +75,33 @@ Rules for every binding:
 
 ## The JavaScript bindings
 
-`node/` and `web/` give JavaScript the same API (`core.mjs` in each, the
-same `index.d.ts`) and share no code: each drives the core its own way.
+`node/` and `web/` give JavaScript the same API: one `core.mjs` (the
+web package carries a copy that `mise run web:build` makes) over a
+`native` object, and the same `index.d.ts`. `core.mjs` holds what is
+JavaScript's: the chart builder, actors, the one timer, I/O processors and
+invokers, transports (sockets, streams) and the exporter's posts. What is
+free of any language is core's (ADR 0008 in the repository root): the run
+loop's policy, the link protocol (`src/link`), the exporter's batching
+(`ta_otlp_batch`), trace options and watches, snapshots.
 
-**Node.js** (`node/`): `src/*.c` (one C file per topic, `binding.h` between them) is the native side of `core.mjs`:
+**Node.js** (`node/`): `src/*.c` (one C file per topic, `binding.h` between them) is `native`:
 hand-written wrappers of the pure functions of the public headers
 (compile, images, addresses, frames, traceparents, OTLP), and a `System`
 over `ta_host` with its datamodel (the native `ecmascript` vtable, values
 as Node-API references, or the C one on quickjs-ng behind a thin
 forwarding vtable), its run loop and effect delivery: one call per pump
-hands JavaScript every effect, the sessions whose variables changed and
-the OTLP bytes. `src/addon.c` registers it with Node.
+hands JavaScript every effect (link frames and posts among them), the
+sessions whose variables changed and the OTLP bytes, and
+`callbacks.schedule` arms JavaScript's one timer. `src/addon.c`
+registers it with Node.
 
 **Browsers** (`web/`): no C of its own. `tinyactors.wasm` is the release's
 three libraries (`tinyactors`, `tinyactors_runtime`,
 `tinyactors_datamodel_ecmascript`) linked into one module as the release
 links its modules, importing nothing, exporting the public API and a
-function table (`mise run web:build`). `native.mjs` gives `core.mjs` the
-same calls the addon gives Node's, written in JavaScript over that API:
+function table (`mise run web:build`). `native.mjs` is the addon's twin:
+the same functions, topic by topic, with the same results, written in
+JavaScript over that API:
 
 - structs are read and written at the wasm32 offsets of `api.mjs`, which
   web:build generates from the API descriptions; a struct passed by value

@@ -34,7 +34,10 @@ implementation of that layer). Layer dependency rules are in
 │       │                         migration jobs, sweep, growth, boot, snapshot/restore
 │       ├── trace.h            ✅ trace values (IDs, step keys, span IDs, traceparent, generator,
 │       │                         sampling) and the trace record schema (ADR 0006)
-│       ├── otlp.h             ✅ the OTLP codec: trace records -> OTLP protobuf, and decoding
+│       ├── link.h             ✅ the link protocol over the caller's transports (hello, ev, err,
+│       │                         ping, reconnects, resumption, exports; ADR 0008)
+│       ├── otlp.h             ✅ the OTLP codec: trace records -> OTLP protobuf, and decoding;
+│       │                         the exporter's batching (ta_otlp_batch)
 │       ├── datamodel_ecmascript.h ✅ the ECMAScript datamodel (link libtinyactors_datamodel_ecmascript)
 │       └── basic_http.h       ✅ BasicHTTP Event I/O Processor codec
 │
@@ -51,7 +54,8 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── heap.[ch]          ✅ 4-ary (due, sequence) heap with removal
 │   │   ├── journal.[ch]       ✅ lossy ring of variable-size records (the trace journal)
 │   │   ├── address.c          ✅ the address grammar (include/tinyactors/address.h)
-│   │   └── frame.c            ✅ link frames (include/tinyactors/frame.h)
+│   │   ├── frame.c            ✅ link frames (include/tinyactors/frame.h)
+│   │   └── json.[ch]          ✅ reading JSON in place and writing JSON strings (host, link)
 │   │
 │   ├── image/                 shared by compiler (writer) and runtime (reader)
 │   │   ├── records.h          ✅ on-disk records, bytecode opcodes, validated view
@@ -100,10 +104,15 @@ implementation of that layer). Layer dependency rules are in
 │   │   │                         boot, whole-host snapshot/restore
 │   │   └── router.c           ✅ envelopes, peers, routes, deduplication (docs/protocol.md)
 │   │
+│   ├── link/                  the link protocol (freestanding; uses host)
+│   │   └── link.c             ✅ links and servers, hellos, reach, pings, backoff, resumption,
+│   │                             exports (include/tinyactors/link.h)
+│   │
 │   ├── otlp/                  the OTLP codec (freestanding, one block, relocatable; uses trace + image)
 │   │   ├── otlp_internal.h    ✅ the encoder's block, protobuf primitives
 │   │   ├── otlp.c             ✅ records -> spans, span events and log records; staging; scopes
-│   │   └── decode.c           ✅ OTLP protobuf -> span, attribute, value, event and link views
+│   │   ├── decode.c           ✅ OTLP protobuf -> span, attribute, value, event and link views
+│   │   └── batch.c            ✅ the exporter's batches: delay, size, cap, counts (ta_otlp_batch)
 │   │
 │   ├── datamodel_ecmascript/  SCXML ECMAScript datamodel on quickjs-ng; link it like a
 │   │   └── datamodel_ecmascript.c ✅ tree-sitter language (include/tinyactors/datamodel_ecmascript.h); no I/O
@@ -178,16 +187,18 @@ implementation of that layer). Layer dependency rules are in
 │   │                             or skipped with a reason; checked with the typings by
 │   │                             `mise run surface` (mise/tasks/surface)
 │   ├── node/                  ✅ N-API (C API) addon: src/*.c, one file per topic
-│   │                             (system, datamodel, quickjs, values, images, persist, router,
-│   │                             trace, metrics, pure, addon; binding.h between them); core.mjs (the JS API: chart helpers, systems,
-│   │                             actors, I/O processors and invokers, links, tracing), index.js,
+│   │                             (addon, values, images, pure, datamodel, quickjs, system, invoke,
+│   │                             persist, link, export, trace, metrics; binding.h between them):
+│   │                             the run loop, links, export and tracing are core's; core.mjs (the
+│   │                             JS API: chart helpers, actors, the timer, I/O processors and
+│   │                             invokers, transports, posts), index.js,
 │   │                             index.d.ts, ws.js; node:test suite, tsc type tests
 │   │                             (`mise run node:test`)
-│   ├── web/                   ✅ browser binding, the same API on its own: tinyactors.wasm is the
-│   │                             release's three libraries in one module (web:build), native.mjs
-│   │                             drives their C API from JavaScript (structs at api.mjs's wasm32
-│   │                             offsets; the JS datamodel's vtable in the function table),
-│   │                             core.mjs the API, index.mjs (browsers), node.mjs (Node);
+│   ├── web/                   ✅ browser binding, the same API: tinyactors.wasm is the release's
+│   │                             three libraries in one module (web:build), native.mjs the addon's
+│   │                             twin over their C API (structs at api.mjs's wasm32 offsets; the
+│   │                             JS datamodel's vtable in the function table), core.mjs node's
+│   │                             (copied by web:build), index.mjs (browsers), node.mjs (Node);
 │   │                             `mise run web:test` runs the node suite on it
 │   └── postgres/              ✅ PostgreSQL extension: durable actors as rows, SQL API (define,
 │                                 spawn, send, run, claim/ack/fail), inbox + outbox tables,

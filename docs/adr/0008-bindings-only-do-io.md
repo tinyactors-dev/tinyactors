@@ -1,6 +1,6 @@
 # ADR 0008: Bindings do I/O; what is free of any language moves to core
 
-**Status:** Accepted (2026-10-11).
+**Status:** Accepted (2026-10-11); implemented (2026-10-11).
 **Date:** 2026-10-11
 
 ## Whom it serves first, and who pays

@@ -3,8 +3,8 @@
 SCXML statecharts and actors on the tinyactors runtime. The addon is written
 against the **Node-API C API** (`node_api.h`, no C++ wrapper) and links the
 tinyactors static libraries. The JavaScript API lives in `core.mjs`, a thin
-layer over the addon (`src/*.c`, one C file per topic). The [web binding](../web) has the
-same API (the same `index.d.ts`) on its own implementation, so the same
+layer over the addon (`src/*.c`, one C file per topic). The [web binding](../web) runs the
+same `core.mjs` (and the same `index.d.ts`) over the addon's wasm twin, so the same
 code runs in Node.js and in browsers. Node.js ≥ 22.12 (`require()` of the
 ES-module core).
 
@@ -275,9 +275,10 @@ reference (`{"$ref": address}`) and arrives as an `ActorRef` (with `send()`
 and `address`); `system.ref(address)` creates one. `system.stop()` stops all
 actors, closes the system's links and frees its native memory.
 
-Routing is done by the native router (`ta_host`, docs/protocol.md), not in
-JS: every link connection is one router *peer*, and the binding only moves
-frames (link protocol v1: `hello`, `ev`, `err`, `ping`/`pong`). What that
+Routing is done by the native router (`ta_host`, docs/protocol.md), and the
+link protocol (v1: `hello`, `ev`, `err`, `ping`/`pong`; reconnects,
+resumption, exports) by core's `ta_links`, not in JS: every link
+connection is one router *peer*, and the binding only moves frames. What that
 gives you:
 
 - **Policy.** A served peer is untrusted unless `trusted: true` or
