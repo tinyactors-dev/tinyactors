@@ -216,7 +216,7 @@ static void test_class_across_segments(void) {
     ta_run result = ta_host_run(e.host, 1000);
     drain(&e);
     CHECK_EQUAL(result.next_deadline, 500u);
-    ta_host_advance_time(e.host, 500);
+    ta_host_advance_time(e.host, (ta_host_time){500, 0});
     CHECK_EQUAL(ta_host_trace_unwatch(e.host, id), TA_ERROR_STALE);
     CHECK_EQUAL(send(&e, w, "ask", message), TA_OK);
     run(&e);
@@ -417,7 +417,7 @@ static void test_migration_wake_and_timeout(void) {
     e.blob_length = length;
     world_add(&e, W2);
     /* without wake, with a timeout: b moves, a is left behind and reported */
-    ta_host_advance_time(e.host, 1000);
+    ta_host_advance_time(e.host, (ta_host_time){1000, 0});
     uint32_t job;
     CHECK_EQUAL(
         ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 50}, &job),
@@ -427,7 +427,7 @@ static void test_migration_wake_and_timeout(void) {
     drain(&e);
     run(&e);
     CHECK_EQUAL(e.last_job, 0u); /* not over yet: a waits */
-    ta_host_advance_time(e.host, 1060);
+    ta_host_advance_time(e.host, (ta_host_time){1060, 0});
     run(&e);
     CHECK_EQUAL(e.last_job, job);
     CHECK(e.last_done.migrated == 1 && e.last_done.pending == 1);
@@ -632,7 +632,7 @@ static void test_snapshot_restore(void) {
     char peer[64];
     snprintf(peer, sizeof peer, "{\"k\": 3, \"peer\": %llu}", (unsigned long long)echo);
     CHECK_EQUAL(send(&e, c, "add", peer), TA_OK); /* not run before the snapshot */
-    ta_host_advance_time(e.host, 50);
+    ta_host_advance_time(e.host, (ta_host_time){50, 0});
     size_t hl = 0, dl = 0;
     ta_buffer written = {NULL, 0, 0};
     CHECK_EQUAL(ta_host_snapshot(e.host, &written), TA_ERROR_NO_MEMORY);
@@ -680,7 +680,7 @@ static void test_snapshot_restore(void) {
     e.log[0] = 0;
     run(&e); /* the queued event, with its payload */
     CHECK(strcmp(e.log, "n=5;") == 0);
-    ta_host_advance_time(e.host, 120); /* the delayed send, armed before the snapshot */
+    ta_host_advance_time(e.host, (ta_host_time){120, 0}); /* the delayed send, armed before the snapshot */
     run(&e);
     if (strcmp(e.log, "n=5;ticked:5;done;")) fprintf(stderr, "  log: %s\n", e.log);
     CHECK(strcmp(e.log, "n=5;ticked:5;done;") == 0); /* routed to the other segment and back */
@@ -717,7 +717,7 @@ static void test_export_adopt_between_hosts(void) {
     uint64_t s = spawn(&a, "mover");
     CHECK_EQUAL(s, (1ull << 32) + 1);
     run(&a); /* its delayed send is due at 100 */
-    ta_host_advance_time(a.host, 30);
+    ta_host_advance_time(a.host, (ta_host_time){30, 0});
     run(&a);
     size_t length = 0;
     ta_buffer written = {NULL, 0, 0};
@@ -734,7 +734,7 @@ static void test_export_adopt_between_hosts(void) {
     CHECK_EQUAL(ta_blob_rebase((ta_memory){blob, 9}, 0, 0), TA_ERROR_INVALID);
     CHECK_EQUAL(ta_blob_rebase((ta_memory){blob, length}, 30, 1000),
                 TA_OK); /* 70 ms left, on b's clock */
-    ta_host_advance_time(b.host, 1000);
+    ta_host_advance_time(b.host, (ta_host_time){1000, 0});
     uint64_t got = 0;
     CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){0, 0, {blob, length}}, &got), TA_OK);
     CHECK_EQUAL(got, s);
@@ -745,10 +745,10 @@ static void test_export_adopt_between_hosts(void) {
     CHECK_EQUAL(ta_host_locate(b.host, s, &location), TA_OK);
     segment = location.segment;
     CHECK_EQUAL(segment, 0);
-    ta_host_advance_time(b.host, 1069);
+    ta_host_advance_time(b.host, (ta_host_time){1069, 0});
     run(&b);
     CHECK(strcmp(b.log, "") == 0);
-    ta_host_advance_time(b.host, 1070);
+    ta_host_advance_time(b.host, (ta_host_time){1070, 0});
     run(&b);
     CHECK(strcmp(b.log, "tick:42;") == 0); /* the payload, as a value of b's datamodel */
     CHECK_EQUAL(send(&b, s, "ping", NULL), TA_OK);

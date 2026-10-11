@@ -321,6 +321,11 @@ ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
         host->io_processors[1 + i] = config->io_processors[i];
     host->io_processor_count = 1 + config->io_processor_count;
     host->draining = TA_NIL;
+    ta_status status = host_telemetry_init(host);
+    if (status != TA_OK) {
+        ta_host_free(host);
+        return status;
+    }
     *out = host;
     return TA_OK;
 }
@@ -362,6 +367,7 @@ void ta_host_free(ta_host *host) {
                   host->retired_charts[i].name_length ? host->retired_charts[i].name_length : 1);
     host_free(host, host->retired_charts, sizeof(retired_chart) * host->retired_chart_capacity);
     host_free(host, host->trace_rules, host->trace_rules_bytes);
+    host_telemetry_free(host);
     rules_free(host, &host->trace_options);
     for (uint32_t i = 0; i < host->watch_count; i++)
         rules_free(host, &host->watches[i].rules);
@@ -1299,11 +1305,12 @@ static ta_status job_step(ta_host *host, migration_job *job, uint32_t quantum) {
 
 static void watches_expire(ta_host *host);
 
-void ta_host_advance_time(ta_host *host, ta_time now) {
+void ta_host_advance_time(ta_host *host, ta_host_time now) {
     if (host->running) return; /* not during a run (host.h) */
-    host->now = now;
+    host->now = now.monotonic;
+    host_telemetry_mark(host, now.wall_ns);
     for (uint32_t i = 0; i < host->segment_count; i++)
-        if (host->segments[i].live) ta_system_advance_time(host->segments[i].system, now);
+        if (host->segments[i].live) ta_system_advance_time(host->segments[i].system, now.monotonic);
     ta_router_time(host); /* envelopes queued for absent peers past their TTL */
     if (host->watch_count) watches_expire(host);
 }
@@ -1459,6 +1466,8 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
         return out;
     }
     effects_release(host); /* the previous batch, if not acknowledged */
+    host_telemetry_drain(host); /* records written up to the last ta_host_advance_time */
+    host_telemetry_effects(host);
     uint32_t left = budget;
     int full = 0, fault = 0, exhausted = 0, sync = 0;
     uint32_t detail = TA_POOL_NONE;
@@ -1564,6 +1573,9 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     if (qd < out.next_deadline) out.next_deadline = qd;
     for (uint32_t i = 0; i < host->watch_count; i++) /* watches end then */
         if (host->watches[i].until < out.next_deadline) out.next_deadline = host->watches[i].until;
+    host_telemetry_note(host);
+    ta_time flush = host_telemetry_deadline(host); /* a request is ready then */
+    if (flush < out.next_deadline) out.next_deadline = flush;
     out.used = budget - left;
     out.effect_count = host->effect_count;
     out.detail = exhausted ? detail : TA_POOL_NONE;

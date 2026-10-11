@@ -53,6 +53,7 @@
 #define TINYACTORS_HOST_H
 
 #include <tinyactors/allocator.h>
+#include <tinyactors/otlp.h>
 #include <tinyactors/system.h>
 
 #ifdef __cplusplus
@@ -60,6 +61,25 @@ extern "C" {
 #endif
 
 typedef struct ta_host ta_host;
+
+/* The host's OTLP encoder (docs/adr/0009 in the repository root, decision 6).
+ * With otlp.size 0 the host has none: it reads no trace records, and the
+ * caller may read each segment's journal itself (ta_host_system,
+ * ta_system_trace). With one, the host reads every segment's records inside
+ * ta_host_run, encodes them, and says when a request is ready
+ * (TA_HOST_EFFECT_TRACES, TA_HOST_EFFECT_LOGS); nobody else reads the
+ * journals. The encoder's block comes from the host's allocator and grows
+ * when its open spans, chunks or scopes are full. */
+typedef struct ta_host_telemetry {
+    ta_otlp_config otlp;               /* capacities and TA_OTLP_* flags; size 0: no encoder */
+    ta_time flush_interval;            /* host clock (ta_host_time.monotonic): a request is
+                                          ready this long after its first span or log record
+                                          was staged; 0: only when the staging is full */
+    const ta_otlp_attribute *resource; /* every request's resource (`service.name`, ...),
+                                          copied */
+    uint32_t resource_count;
+    uint32_t pad;
+} ta_host_telemetry;
 
 typedef struct ta_host_config {
     uint32_t size;
@@ -75,6 +95,7 @@ typedef struct ta_host_config {
     uint32_t migrate_quantum; /* actors a migration job looks at per run (default 256) */
     ta_allocator allocator;   /* required: every block the host owns (ta_runtime_malloc() is
                                  the C library's); requests are aligned to at most 8 */
+    ta_host_telemetry telemetry; /* the OTLP encoder (zeroed: none) */
 } ta_host_config;
 
 TA_API ta_status ta_host_new(const ta_host_config *config, ta_host **out);
@@ -163,10 +184,20 @@ TA_API ta_status ta_host_terminate(ta_host *h, uint64_t session);
 TA_API ta_status ta_host_resume(ta_host *h, const ta_resume *resume);
 
 /* ---- running ------------------------------------------------------------------ */
+/* The host's clocks: `monotonic` drives timers, deadlines and TTLs (the
+ * unit of <send delay>, as ta_system_advance_time); `wall_ns` is the time
+ * of day, nanoseconds since the Unix epoch, that span times are
+ * interpolated from (0: unknown). Neither goes back. */
+typedef struct ta_host_time {
+    ta_time monotonic;
+    uint64_t wall_ns;
+} ta_host_time;
 /* Move every segment's clock; queued envelopes past their TTL fail (an
  * expiry the allocator leaves no room to report is reported by the next
- * ta_host_run). */
-TA_API void ta_host_advance_time(ta_host *h, ta_time now);
+ * ta_host_run). With an encoder, the trace records written since the last
+ * call are stamped between its wall time and this one: call it before each
+ * run. */
+TA_API void ta_host_advance_time(ta_host *h, ta_host_time now);
 /* Run segments with work for up to `budget` fuel in total, deliver sends
  * between them, advance migration jobs, free retired segments. status:
  * TA_RUN_IDLE / TA_RUN_YIELDED / TA_RUN_EFFECTS_FULL / TA_RUN_FAULT /
@@ -187,8 +218,14 @@ enum {
     /* the router (docs/protocol.md): */
     TA_HOST_EFFECT_PEER = 19,      /* send an envelope to `peer`: target, event, sendid, payload,
                                   aux = origin, msgid, hops (in `flags`) */
-    TA_HOST_EFFECT_PEER_ERROR = 20 /* send an `err` to `peer`: aux = origin, msgid, sendid,
+    TA_HOST_EFFECT_PEER_ERROR = 20, /* send an `err` to `peer`: aux = origin, msgid, sendid,
                                 token = reason */
+    /* the encoder (ta_host_telemetry): a request is ready, because the
+     * staging is full or flush_interval passed since its first record; take
+     * it with ta_host_traces (ta_host_logs). At most one of each kind is
+     * outstanding: the next comes after a take. */
+    TA_HOST_EFFECT_TRACES = 21,
+    TA_HOST_EFFECT_LOGS = 22
 };
 typedef struct ta_host_effect {
     uint32_t size;
@@ -215,6 +252,18 @@ typedef struct ta_host_effect {
 } ta_host_effect;
 TA_API uint32_t ta_host_effects(ta_host *h, const ta_host_effect **out);
 TA_API void ta_host_effects_ack(ta_host *h);
+
+/* ---- telemetry ------------------------------------------------------------------ */
+/* The ExportTraceServiceRequest (`/v1/traces`, application/x-protobuf) of
+ * the spans staged so far, written into `out` (length 0 when there are
+ * none); the trace records written since the last run are read first. The
+ * spans leave the staging only on TA_OK: TA_ERROR_NO_MEMORY means nothing
+ * changed and out->length is what the request needs. Posting it, retrying
+ * and capping what waits are the caller's. TA_ERROR_STATE during a run or
+ * without an encoder (ta_host_telemetry). ta_host_logs: the same for the
+ * ExportLogsServiceRequest (`/v1/logs`). */
+TA_API ta_status ta_host_traces(ta_host *h, ta_buffer *out);
+TA_API ta_status ta_host_logs(ta_host *h, ta_buffer *out);
 
 /* ---- the router: other systems (docs/protocol.md, Routing) -------------------------
  * A peer is another system as seen through one transport connection (a link,

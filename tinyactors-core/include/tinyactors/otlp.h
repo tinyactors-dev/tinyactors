@@ -1,8 +1,9 @@
 /* tinyactors/otlp.h — trace records and stats to OTLP protobuf, and back (docs/adr/0006
  * in the repository root, section 8).
  *
- * A codec, like tinyactors/basic_http.h: a host or a binding drains a system's
- * trace records (ta_system_trace) and feeds them to the encoder, which turns
+ * A codec, like tinyactors/basic_http.h: the host (ta_host_telemetry in
+ * tinyactors/host.h) drains its systems' trace records (ta_system_trace)
+ * and feeds them to the encoder, which turns
  * them into spans and log records and writes one ExportTraceServiceRequest
  * (`/v1/traces`) and one ExportLogsServiceRequest (`/v1/logs`) into memory
  * the caller owns. It never runs inside ta_system_run, does no I/O and keeps

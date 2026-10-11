@@ -573,7 +573,7 @@ static void world_send(world *w, const char *root, const char *event_name, const
 
 static void world_advance(world *w, ta_time dt) {
     w->now += dt;
-    if (w->host) ta_host_advance_time(w->host, w->now);
+    if (w->host) ta_host_advance_time(w->host, (ta_host_time){w->now, 0});
     for (int i = 0; !w->host && i < w->system_count; i++)
         ta_system_advance_time(w->systems[i].system, w->now);
 }
@@ -1104,7 +1104,7 @@ static void world_init_host(world *w, const char *label) {
     CHECK_EQUAL(ta_host_new(&config, &w->host), TA_OK);
     CHECK_EQUAL(ta_host_add_image(w->host, &test_images[0], &segment), TA_OK);
     w->segment_image[segment] = 0;
-    ta_host_advance_time(w->host, 0);
+    ta_host_advance_time(w->host, (ta_host_time){0, 0});
 }
 
 static void world_init(world *w, const char *label) {

@@ -471,7 +471,7 @@ static void test_route_status_queue(void) {
     CHECK_EQUAL(ta_host_peer_status(nodes[A].host, nodes[A].peer[B], &status), TA_OK);
     CHECK_EQUAL(status.state, TA_PEER_RECONNECTING);
     CHECK_EQUAL(status.queued, 2u);
-    ta_host_advance_time(nodes[A].host, 300);
+    ta_host_advance_time(nodes[A].host, (ta_host_time){300, 0});
     CHECK_EQUAL(ta_host_peer_status(nodes[A].host, nodes[A].peer[B], &status), TA_OK);
     CHECK_EQUAL(status.lag, 300u);
     link_up[A][B] = 1;
@@ -489,7 +489,7 @@ static void test_route_status_queue(void) {
         CHECK_EQUAL(result.next_deadline, (ta_time)(300 + 1000 + 1));
         ta_host_effects_ack(nodes[A].host);
     }
-    ta_host_advance_time(nodes[A].host, 300 + 1001);
+    ta_host_advance_time(nodes[A].host, (ta_host_time){300 + 1001, 0});
     settle();
     LOGCHK(A, "comm:p1;");
     /* a full queue fails at once */

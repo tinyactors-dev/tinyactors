@@ -196,8 +196,7 @@ typedef struct bench_system {
     uint64_t migrated, migrate_pending, migrate_failed, retired;
     /* tracing (docs/adr/0006 in the repository root): what the bench does with
      * the records after every slice */
-    int trace_mode; /* TRACE_DISABLED, TRACE_RECORDS (read them), TRACE_OTLP (encode them) */
-    ta_otlp *otlp;
+    int trace_mode; /* TRACE_DISABLED, TRACE_RECORDS (read them), TRACE_OTLP (the host encodes them) */
     unsigned char *otlp_out;
     uint32_t otlp_out_capacity;
     uint64_t trace_records, trace_bytes, otlp_bytes, previous_trace_records, previous_trace_bytes,
@@ -348,7 +347,6 @@ static void system_free(bench_system *system) {
     for (uint32_t i = 0; i < system->job_count; i++)
         JS_FreeValue(B.context, system->jobs[i].callbacks);
     free(system->jobs);
-    free(system->otlp);
     free(system->otlp_out);
     if (system->host)
         ta_host_free(system->host); /* before the runtime its datamodel instances live in */
@@ -481,21 +479,6 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
     system->config.ticks_per_second = 1000000; /* µs */
     system->trace_mode = trace_mode;
     if (trace_mode == TRACE_DISABLED) system->config.tracing = TA_TRACING_DISABLED;
-    if (trace_mode == TRACE_OTLP) {
-        ta_otlp_config otlp_config;
-        memset(&otlp_config, 0, sizeof otlp_config);
-        otlp_config.size = sizeof otlp_config;
-        size_t length = 0;
-        void *memory = ta_otlp_layout(&otlp_config, &length) == TA_OK ? malloc(length) : NULL;
-        if (!memory ||
-            ta_otlp_init((ta_memory){memory, length}, &otlp_config, &system->otlp) != TA_OK) {
-            free(memory);
-            ta_datamodel_ecmascript_free(system->ecmascript);
-            memset(system, 0, sizeof *system);
-            snprintf(message, capacity, "%s: cannot create the OTLP encoder", name);
-            return -1;
-        }
-    }
     system->memory_limit = memory_limit;
     ta_host_config host_config;
     memset(&host_config, 0, sizeof host_config);
@@ -508,19 +491,20 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
     host_config.io_processors = system->io_processors;
     host_config.io_processor_count = system->io_processor_count;
     host_config.allocator = ta_runtime_malloc();
+    if (trace_mode == TRACE_OTLP) /* the host's encoder, defaults; flushed after every slice */
+        host_config.telemetry.otlp.size = sizeof host_config.telemetry.otlp;
     if (ta_host_new(&host_config, &system->host) != TA_OK) {
         snprintf(message, capacity, "%s: cannot create the system", name);
-        free(system->otlp);
         ta_datamodel_ecmascript_free(system->ecmascript);
         memset(system, 0, sizeof *system);
         return -1;
     }
-    ta_host_advance_time(system->host, (ta_time)(B.now * 1000));
+    ta_host_advance_time(system->host,
+                         (ta_host_time){(ta_time)(B.now * 1000), ta_runtime_now_ns()});
     if (system_add_version(system, source, n, message, capacity) < 0) {
         ta_host_free(system->host);
         ta_datamodel_ecmascript_free(system->ecmascript);
         free(system->images);
-        free(system->otlp);
         memset(system, 0, sizeof *system);
         return -1;
     }
@@ -1086,7 +1070,7 @@ static void system_stats(bench_system *system_state, ta_system_stats *sum) {
 static JSValue stats_object(JSContext *context, bench_system *system) {
     ta_system_stats stats;
     system_stats(system, &stats);
-    if (!system->otlp && stats.trace_records > system->trace_records)
+    if (stats.trace_records > system->trace_records)
         system->trace_records = stats.trace_records; /* records only: core counts them */
     JSValue o = JS_NewObject(context);
 #define F(k, v) JS_SetPropertyStr(context, o, k, JS_NewFloat64(context, (double)(v)))
@@ -2121,6 +2105,8 @@ static JSValue h_hibernate(JSContext *context, JSValueConst this_value, int argc
                                             (uint32_t)(scan > 4e9 ? 4e9 : scan)));
 }
 
+static int trace_flush(bench_system *system);
+
 static void drain_effects(int si) {
     bench_system *system = &B.system[si];
     const ta_host_effect *effects;
@@ -2145,6 +2131,10 @@ static void drain_effects(int si) {
             break;
         case TA_HOST_EFFECT_PEER_ERROR:
             deliver_remote_error(system, effect);
+            break;
+        case TA_HOST_EFFECT_TRACES: /* the staging filled during the run */
+        case TA_HOST_EFFECT_LOGS:
+            trace_flush(system);
             break;
         case TA_EFFECT_SEND:
             if (effect->io_processor == IO_BENCH) {
@@ -2234,20 +2224,19 @@ static void drain_effects(int si) {
     free(batch);
 }
 
-/* The staged OTLP requests, encoded and let go (a host would post them). */
+/* The host's OTLP requests, taken and let go (a binding would post them). */
 static int trace_flush(bench_system *system) {
     for (int i = 0; i < 2; i++) {
         ta_buffer out = {system->otlp_out, system->otlp_out_capacity, 0};
         ta_status status =
-            i ? ta_otlp_put_logs(system->otlp, &out) : ta_otlp_put_traces(system->otlp, &out);
+            i ? ta_host_logs(system->host, &out) : ta_host_traces(system->host, &out);
         if (status == TA_ERROR_NO_MEMORY) { /* the request needs more room than we have */
             unsigned char *grown = (unsigned char *)realloc(system->otlp_out, out.length);
             if (!grown) return 0;
             system->otlp_out = grown;
             system->otlp_out_capacity = (uint32_t)out.length;
             out = (ta_buffer){grown, out.length, 0};
-            status =
-                i ? ta_otlp_put_logs(system->otlp, &out) : ta_otlp_put_traces(system->otlp, &out);
+            status = i ? ta_host_logs(system->host, &out) : ta_host_traces(system->host, &out);
         }
         if (status == TA_OK) system->otlp_bytes += out.length;
     }
@@ -2258,47 +2247,23 @@ static int trace_flush(bench_system *system) {
 static void trace_drain(bench_system *system) {
     if (system->trace_mode == TRACE_DISABLED) return;
     uint64_t started = ta_runtime_now_ns();
-    ta_datamodel_binding datamodels[2] = {ta_datamodel_ecmascript_binding(system->ecmascript),
-                                          {ta_datamodel_null(), NULL}};
-    for (uint32_t k = 0; k < ta_host_segment_count(system->host); k++) {
-        ta_system *segment = ta_host_system(system->host, k);
-        if (!segment) continue;
-        ta_host_segment_info info;
-        info.size = sizeof info;
-        ta_host_segment_info_get(system->host, k, &info);
-        ta_trace_view view;
-        while (ta_system_trace(segment, &view)) {
-            system->trace_bytes += view.length;
-            if (system->otlp) {
-                ta_otlp_input input;
-                memset(&input, 0, sizeof input);
-                input.size = sizeof input;
-                input.source = k;
-                input.view = view;
-                input.image = info.image;
-                input.datamodels = datamodels;
-                input.datamodel_count = 2;
-                uint32_t cursor = 0, status;
-                while ((status = ta_otlp_read(system->otlp, &input, &cursor)) != TA_OTLP_READ)
-                    if (status != TA_OTLP_FLUSH || !trace_flush(system)) break;
+    if (system->trace_mode == TRACE_OTLP) { /* the host reads them; take until nothing is left */
+        uint64_t before;
+        do {
+            before = system->otlp_bytes;
+        } while (trace_flush(system) && system->otlp_bytes != before);
+    } else {
+        for (uint32_t k = 0; k < ta_host_segment_count(system->host); k++) {
+            ta_system *segment = ta_host_system(system->host, k);
+            if (!segment) continue;
+            ta_trace_view view;
+            while (ta_system_trace(segment, &view)) {
+                system->trace_bytes += view.length;
+                ta_system_trace_ack(segment, view.length);
             }
-            if (system->otlp) { /* the encoder read them; count them as a reader would */
-                uint32_t cursor = 0;
-                while (ta_trace_next(&view, &cursor))
-                    system->trace_records++;
-            }
-            ta_system_trace_ack(segment, view.length);
         }
     }
-    if (system->otlp) trace_flush(system);
     system->trace_ms += (double)(ta_runtime_now_ns() - started) / 1e6;
-}
-
-static uint64_t host_fuel(bench_system *system) {
-    ta_host_stats stats;
-    stats.size = sizeof stats;
-    ta_host_stats_get(system->host, &stats);
-    return stats.fuel_clock;
 }
 
 static void run_systems(void) {
@@ -2308,12 +2273,14 @@ static void run_systems(void) {
         cursor = (cursor + 1) % MAX_SYSTEMS;
         bench_system *system = &B.system[i];
         if (!system->live) continue;
-        ta_host_advance_time(system->host, (ta_time)(B.now * 1000));
+        ta_host_advance_time(system->host,
+                             (ta_host_time){(ta_time)(B.now * 1000), ta_runtime_now_ns()});
         if (!system->busy && system->deadline > (uint64_t)(B.now * 1000)) continue;
         uint64_t t = ta_runtime_now_ns();
-        if (system->otlp) ta_otlp_mark(system->otlp, host_fuel(system), t);
         ta_run result = ta_host_run(system->host, BUDGET);
-        if (system->otlp) ta_otlp_mark(system->otlp, host_fuel(system), ta_runtime_now_ns());
+        if (system->trace_mode == TRACE_OTLP) /* the run's records end at this wall time */
+            ta_host_advance_time(system->host,
+                                 (ta_host_time){(ta_time)(B.now * 1000), ta_runtime_now_ns()});
         trace_drain(system);
         system->busy_ms += (double)(ta_runtime_now_ns() - t) / 1e6;
         system->busy = 0; /* operations of this batch may make it busy again */
@@ -2356,7 +2323,7 @@ static void sample(void) {
         ta_system_stats stats;
         system_stats(system, &stats);
         /* records only: written and acknowledged, not read; core counts them */
-        if (!system->otlp && stats.trace_records > system->trace_records)
+        if (stats.trace_records > system->trace_records)
             system->trace_records = stats.trace_records;
         double delivered = (double)(stats.delivered - system->previous.delivered) / dt;
         double fuel = (double)(stats.fuel - system->previous.fuel) / dt;

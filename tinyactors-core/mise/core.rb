@@ -44,7 +44,7 @@ module Core
     # Many systems as one (versions, routing, migration jobs, hibernation
     # policy). Freestanding: it allocates only through the ta_allocator its
     # configuration gives it (docs/adr/0005).
-    Layer.new(name: 'host', uses: %w[system], freestanding: true, sources: %w[src/host/host.c src/host/router.c]),
+    Layer.new(name: 'host', uses: %w[system otlp], freestanding: true, sources: %w[src/host/host.c src/host/router.c src/host/telemetry.c]),
     Layer.new(name: 'runtime', uses: %w[system compile], sources: %w[src/runtime/runtime.c src/runtime/runtime_hosted.c]),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
@@ -194,6 +194,7 @@ module Core
     unit('test_journal', 'base'),
     unit('test_cbor', 'base'),
     unit('test_host_inputs', 'host', 'runtime', 'compile', *ECMASCRIPT),
+    unit('test_host_telemetry', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_otlp', 'otlp', 'system', 'compile', *ECMASCRIPT),
     unit('test_trace', 'trace', 'quickjs', defines: { 'TA_SPAN_VECTORS' => ROOT.join('tests/conformance/span_ids.json'),
                                                       'TA_TRACEPARENT_VECTORS' => ROOT.join('tests/conformance/traceparent.json') }),

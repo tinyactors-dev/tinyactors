@@ -364,7 +364,7 @@ static void workload_run(workload *w) {
     ta_payload data = json(w, "{\"to\": \"tinyactors://slower/@y\"}");
     RETRY(m, TA_OK, send_event(w, workers[0], "ask", data));
     run_idle(w, w->host);
-    ta_host_advance_time(w->host, 100); /* (what it cannot report, the next run does) */
+    ta_host_advance_time(w->host, (ta_host_time){100, 0}); /* (what it cannot report, the next run does) */
     run_idle(w, w->host);
 
     /* delivery from a peer, deduplicated */

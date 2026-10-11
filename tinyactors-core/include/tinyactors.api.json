@@ -269,6 +269,10 @@
       "value": 17
     },
     {
+      "name": "TA_HOST_EFFECT_LOGS",
+      "value": 22
+    },
+    {
       "name": "TA_HOST_EFFECT_MIGRATED",
       "value": 16
     },
@@ -283,6 +287,10 @@
     {
       "name": "TA_HOST_EFFECT_SEGMENT_FREED",
       "value": 18
+    },
+    {
+      "name": "TA_HOST_EFFECT_TRACES",
+      "value": 21
     },
     {
       "name": "TA_HOST_MIGRATE_WAKE",
@@ -5142,1617 +5150,6 @@
       "kind": "opaque",
       "fields": []
     },
-    "ta_host": {
-      "kind": "opaque",
-      "fields": []
-    },
-    "ta_host_config": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "datamodel_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "system_id",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "system",
-          "type": "ta_system_config"
-        },
-        {
-          "name": "datamodels",
-          "type": "const ta_datamodel_binding *"
-        },
-        {
-          "name": "io_processors",
-          "type": "const ta_io_processor_descriptor *"
-        },
-        {
-          "name": "io_processor_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "migrate_quantum",
-          "type": "uint32_t"
-        },
-        {
-          "name": "allocator",
-          "type": "ta_allocator"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 176,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "datamodel_count": 4,
-            "system_id": 8,
-            "system": 24,
-            "datamodels": 128,
-            "io_processors": 136,
-            "io_processor_count": 144,
-            "migrate_quantum": 148,
-            "allocator": 152
-          }
-        },
-        "aarch64": {
-          "size": 176,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "datamodel_count": 4,
-            "system_id": 8,
-            "system": 24,
-            "datamodels": 128,
-            "io_processors": 136,
-            "io_processor_count": 144,
-            "migrate_quantum": 148,
-            "allocator": 152
-          }
-        },
-        "wasm32": {
-          "size": 152,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "datamodel_count": 4,
-            "system_id": 8,
-            "system": 16,
-            "datamodels": 120,
-            "io_processors": 124,
-            "io_processor_count": 128,
-            "migrate_quantum": 132,
-            "allocator": 136
-          }
-        }
-      }
-    },
-    "ta_host_chart_ref": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "segment",
-          "type": "uint32_t"
-        },
-        {
-          "name": "chart",
-          "type": "uint32_t"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 8,
-          "align": 4,
-          "offsets": {
-            "segment": 0,
-            "chart": 4
-          }
-        },
-        "aarch64": {
-          "size": 8,
-          "align": 4,
-          "offsets": {
-            "segment": 0,
-            "chart": 4
-          }
-        },
-        "wasm32": {
-          "size": 8,
-          "align": 4,
-          "offsets": {
-            "segment": 0,
-            "chart": 4
-          }
-        }
-      }
-    },
-    "ta_host_segment_info": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "live",
-          "type": "uint32_t"
-        },
-        {
-          "name": "actors",
-          "type": "uint32_t"
-        },
-        {
-          "name": "current",
-          "type": "uint32_t"
-        },
-        {
-          "name": "image",
-          "type": "const ta_image *"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 24,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "live": 4,
-            "actors": 8,
-            "current": 12,
-            "image": 16
-          }
-        },
-        "aarch64": {
-          "size": 24,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "live": 4,
-            "actors": 8,
-            "current": 12,
-            "image": 16
-          }
-        },
-        "wasm32": {
-          "size": 20,
-          "align": 4,
-          "offsets": {
-            "size": 0,
-            "live": 4,
-            "actors": 8,
-            "current": 12,
-            "image": 16
-          }
-        }
-      }
-    },
-    "ta_host_location": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "segment",
-          "type": "uint32_t"
-        },
-        {
-          "name": "actor",
-          "type": "uint32_t"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 8,
-          "align": 4,
-          "offsets": {
-            "segment": 0,
-            "actor": 4
-          }
-        },
-        "aarch64": {
-          "size": 8,
-          "align": 4,
-          "offsets": {
-            "segment": 0,
-            "actor": 4
-          }
-        },
-        "wasm32": {
-          "size": 8,
-          "align": 4,
-          "offsets": {
-            "segment": 0,
-            "actor": 4
-          }
-        }
-      }
-    },
-    "ta_host_effect": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "kind",
-          "type": "uint32_t"
-        },
-        {
-          "name": "segment",
-          "type": "uint32_t"
-        },
-        {
-          "name": "actor",
-          "type": "uint32_t"
-        },
-        {
-          "name": "session",
-          "type": "uint64_t"
-        },
-        {
-          "name": "root",
-          "type": "uint64_t"
-        },
-        {
-          "name": "token",
-          "type": "uint32_t"
-        },
-        {
-          "name": "io_processor",
-          "type": "uint32_t"
-        },
-        {
-          "name": "flags",
-          "type": "uint32_t"
-        },
-        {
-          "name": "job",
-          "type": "uint32_t"
-        },
-        {
-          "name": "target",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "event",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "sendid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "auxiliary",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "payload",
-          "type": "ta_payload"
-        },
-        {
-          "name": "delay_hint",
-          "type": "ta_time"
-        },
-        {
-          "name": "chart",
-          "type": "uint32_t"
-        },
-        {
-          "name": "migrated",
-          "type": "uint32_t"
-        },
-        {
-          "name": "failed",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pending",
-          "type": "uint32_t"
-        },
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "datamodel",
-          "type": "uint32_t"
-        },
-        {
-          "name": "msgid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "trace",
-          "type": "ta_trace_context"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 200,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "kind": 4,
-            "segment": 8,
-            "actor": 12,
-            "session": 16,
-            "root": 24,
-            "token": 32,
-            "io_processor": 36,
-            "flags": 40,
-            "job": 44,
-            "target": 48,
-            "event": 64,
-            "sendid": 80,
-            "auxiliary": 96,
-            "payload": 112,
-            "delay_hint": 120,
-            "chart": 128,
-            "migrated": 132,
-            "failed": 136,
-            "pending": 140,
-            "peer": 144,
-            "datamodel": 148,
-            "msgid": 152,
-            "trace": 168
-          }
-        },
-        "aarch64": {
-          "size": 200,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "kind": 4,
-            "segment": 8,
-            "actor": 12,
-            "session": 16,
-            "root": 24,
-            "token": 32,
-            "io_processor": 36,
-            "flags": 40,
-            "job": 44,
-            "target": 48,
-            "event": 64,
-            "sendid": 80,
-            "auxiliary": 96,
-            "payload": 112,
-            "delay_hint": 120,
-            "chart": 128,
-            "migrated": 132,
-            "failed": 136,
-            "pending": 140,
-            "peer": 144,
-            "datamodel": 148,
-            "msgid": 152,
-            "trace": 168
-          }
-        },
-        "wasm32": {
-          "size": 160,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "kind": 4,
-            "segment": 8,
-            "actor": 12,
-            "session": 16,
-            "root": 24,
-            "token": 32,
-            "io_processor": 36,
-            "flags": 40,
-            "job": 44,
-            "target": 48,
-            "event": 56,
-            "sendid": 64,
-            "auxiliary": 72,
-            "payload": 80,
-            "delay_hint": 88,
-            "chart": 96,
-            "migrated": 100,
-            "failed": 104,
-            "pending": 108,
-            "peer": 112,
-            "datamodel": 116,
-            "msgid": 120,
-            "trace": 128
-          }
-        }
-      }
-    },
-    "ta_envelope": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "hops",
-          "type": "uint32_t"
-        },
-        {
-          "name": "target",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "name",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "data",
-          "type": "ta_payload"
-        },
-        {
-          "name": "datamodel",
-          "type": "uint32_t"
-        },
-        {
-          "name": "trace_flags",
-          "type": "uint32_t"
-        },
-        {
-          "name": "sendid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "origin",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "origintype",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "msgid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "deduplication_key",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "traceparent",
-          "type": "ta_string_view"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 152,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "hops": 4,
-            "target": 8,
-            "name": 24,
-            "data": 40,
-            "datamodel": 48,
-            "trace_flags": 52,
-            "sendid": 56,
-            "origin": 72,
-            "origintype": 88,
-            "msgid": 104,
-            "deduplication_key": 120,
-            "traceparent": 136
-          }
-        },
-        "aarch64": {
-          "size": 152,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "hops": 4,
-            "target": 8,
-            "name": 24,
-            "data": 40,
-            "datamodel": 48,
-            "trace_flags": 52,
-            "sendid": 56,
-            "origin": 72,
-            "origintype": 88,
-            "msgid": 104,
-            "deduplication_key": 120,
-            "traceparent": 136
-          }
-        },
-        "wasm32": {
-          "size": 88,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "hops": 4,
-            "target": 8,
-            "name": 16,
-            "data": 24,
-            "datamodel": 32,
-            "trace_flags": 36,
-            "sendid": 40,
-            "origin": 48,
-            "origintype": 56,
-            "msgid": 64,
-            "deduplication_key": 72,
-            "traceparent": 80
-          }
-        }
-      }
-    },
-    "ta_peer_config": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "flags",
-          "type": "uint32_t"
-        },
-        {
-          "name": "id",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "reach",
-          "type": "ta_string_list"
-        },
-        {
-          "name": "max_queue",
-          "type": "uint32_t"
-        },
-        {
-          "name": "queue_ttl",
-          "type": "ta_time"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 56,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "flags": 4,
-            "id": 8,
-            "reach": 24,
-            "max_queue": 40,
-            "queue_ttl": 48
-          }
-        },
-        "aarch64": {
-          "size": 56,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "flags": 4,
-            "id": 8,
-            "reach": 24,
-            "max_queue": 40,
-            "queue_ttl": 48
-          }
-        },
-        "wasm32": {
-          "size": 40,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "flags": 4,
-            "id": 8,
-            "reach": 16,
-            "max_queue": 24,
-            "queue_ttl": 32
-          }
-        }
-      }
-    },
-    "ta_route_request": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "action",
-          "type": "uint32_t"
-        },
-        {
-          "name": "reason",
-          "type": "uint32_t"
-        },
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "hops",
-          "type": "uint32_t"
-        },
-        {
-          "name": "flags",
-          "type": "uint32_t"
-        },
-        {
-          "name": "from",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        },
-        {
-          "name": "session",
-          "type": "uint64_t"
-        },
-        {
-          "name": "system",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "name",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "peer_id",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "origin",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "key",
-          "type": "ta_string_view"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 120,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "action": 4,
-            "reason": 8,
-            "peer": 12,
-            "hops": 16,
-            "flags": 20,
-            "from": 24,
-            "pad": 28,
-            "session": 32,
-            "system": 40,
-            "name": 56,
-            "peer_id": 72,
-            "origin": 88,
-            "key": 104
-          }
-        },
-        "aarch64": {
-          "size": 120,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "action": 4,
-            "reason": 8,
-            "peer": 12,
-            "hops": 16,
-            "flags": 20,
-            "from": 24,
-            "pad": 28,
-            "session": 32,
-            "system": 40,
-            "name": 56,
-            "peer_id": 72,
-            "origin": 88,
-            "key": 104
-          }
-        },
-        "wasm32": {
-          "size": 80,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "action": 4,
-            "reason": 8,
-            "peer": 12,
-            "hops": 16,
-            "flags": 20,
-            "from": 24,
-            "pad": 28,
-            "session": 32,
-            "system": 40,
-            "name": 48,
-            "peer_id": 56,
-            "origin": 64,
-            "key": 72
-          }
-        }
-      }
-    },
-    "ta_host_message": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "index",
-          "type": "uint32_t"
-        },
-        {
-          "name": "revision",
-          "type": "uint64_t"
-        },
-        {
-          "name": "envelope",
-          "type": "ta_envelope"
-        },
-        {
-          "name": "key",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "sendid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "storage",
-          "type": "char[768]"
-        },
-        {
-          "name": "traceparent",
-          "type": "char[55]"
-        },
-        {
-          "name": "pad2",
-          "type": "uint32_t"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 1032,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "index": 4,
-            "revision": 8,
-            "envelope": 16,
-            "key": 168,
-            "sendid": 184,
-            "storage": 200,
-            "traceparent": 968,
-            "pad2": 1024
-          }
-        },
-        "aarch64": {
-          "size": 1032,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "index": 4,
-            "revision": 8,
-            "envelope": 16,
-            "key": 168,
-            "sendid": 184,
-            "storage": 200,
-            "traceparent": 968,
-            "pad2": 1024
-          }
-        },
-        "wasm32": {
-          "size": 952,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "index": 4,
-            "revision": 8,
-            "envelope": 16,
-            "key": 104,
-            "sendid": 112,
-            "storage": 120,
-            "traceparent": 888,
-            "pad2": 944
-          }
-        }
-      }
-    },
-    "ta_export_rule": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        },
-        {
-          "name": "name",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "events",
-          "type": "ta_string_view"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 40,
-          "align": 8,
-          "offsets": {
-            "peer": 0,
-            "pad": 4,
-            "name": 8,
-            "events": 24
-          }
-        },
-        "aarch64": {
-          "size": 40,
-          "align": 8,
-          "offsets": {
-            "peer": 0,
-            "pad": 4,
-            "name": 8,
-            "events": 24
-          }
-        },
-        "wasm32": {
-          "size": 24,
-          "align": 4,
-          "offsets": {
-            "peer": 0,
-            "pad": 4,
-            "name": 8,
-            "events": 16
-          }
-        }
-      }
-    },
-    "ta_peer_error": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "reason",
-          "type": "uint32_t"
-        },
-        {
-          "name": "origin",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "msgid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "sendid",
-          "type": "ta_string_view"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 56,
-          "align": 8,
-          "offsets": {
-            "peer": 0,
-            "reason": 4,
-            "origin": 8,
-            "msgid": 24,
-            "sendid": 40
-          }
-        },
-        "aarch64": {
-          "size": 56,
-          "align": 8,
-          "offsets": {
-            "peer": 0,
-            "reason": 4,
-            "origin": 8,
-            "msgid": 24,
-            "sendid": 40
-          }
-        },
-        "wasm32": {
-          "size": 32,
-          "align": 4,
-          "offsets": {
-            "peer": 0,
-            "reason": 4,
-            "origin": 8,
-            "msgid": 16,
-            "sendid": 24
-          }
-        }
-      }
-    },
-    "ta_peer_status": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "state",
-          "type": "uint32_t"
-        },
-        {
-          "name": "queued",
-          "type": "uint32_t"
-        },
-        {
-          "name": "round_trip_time",
-          "type": "uint32_t"
-        },
-        {
-          "name": "lag",
-          "type": "ta_time"
-        },
-        {
-          "name": "sent",
-          "type": "uint64_t"
-        },
-        {
-          "name": "received",
-          "type": "uint64_t"
-        },
-        {
-          "name": "errors",
-          "type": "uint64_t"
-        },
-        {
-          "name": "duplicates",
-          "type": "uint64_t"
-        },
-        {
-          "name": "id",
-          "type": "ta_string_view"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 72,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "state": 4,
-            "queued": 8,
-            "round_trip_time": 12,
-            "lag": 16,
-            "sent": 24,
-            "received": 32,
-            "errors": 40,
-            "duplicates": 48,
-            "id": 56
-          }
-        },
-        "aarch64": {
-          "size": 72,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "state": 4,
-            "queued": 8,
-            "round_trip_time": 12,
-            "lag": 16,
-            "sent": 24,
-            "received": 32,
-            "errors": 40,
-            "duplicates": 48,
-            "id": 56
-          }
-        },
-        "wasm32": {
-          "size": 64,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "state": 4,
-            "queued": 8,
-            "round_trip_time": 12,
-            "lag": 16,
-            "sent": 24,
-            "received": 32,
-            "errors": 40,
-            "duplicates": 48,
-            "id": 56
-          }
-        }
-      }
-    },
-    "ta_host_migration": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "name",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "session",
-          "type": "uint64_t"
-        },
-        {
-          "name": "flags",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        },
-        {
-          "name": "timeout",
-          "type": "ta_time"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 40,
-          "align": 8,
-          "offsets": {
-            "name": 0,
-            "session": 16,
-            "flags": 24,
-            "pad": 28,
-            "timeout": 32
-          }
-        },
-        "aarch64": {
-          "size": 40,
-          "align": 8,
-          "offsets": {
-            "name": 0,
-            "session": 16,
-            "flags": 24,
-            "pad": 28,
-            "timeout": 32
-          }
-        },
-        "wasm32": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "name": 0,
-            "session": 8,
-            "flags": 16,
-            "pad": 20,
-            "timeout": 24
-          }
-        }
-      }
-    },
-    "ta_host_adoption": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "segment",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        },
-        {
-          "name": "blob",
-          "type": "ta_bytes"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 24,
-          "align": 8,
-          "offsets": {
-            "segment": 0,
-            "pad": 4,
-            "blob": 8
-          }
-        },
-        "aarch64": {
-          "size": 24,
-          "align": 8,
-          "offsets": {
-            "segment": 0,
-            "pad": 4,
-            "blob": 8
-          }
-        },
-        "wasm32": {
-          "size": 16,
-          "align": 4,
-          "offsets": {
-            "segment": 0,
-            "pad": 4,
-            "blob": 8
-          }
-        }
-      }
-    },
-    "ta_host_snapshot_input": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "snapshot",
-          "type": "ta_bytes"
-        },
-        {
-          "name": "images",
-          "type": "const ta_image *const *"
-        },
-        {
-          "name": "image_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "snapshot": 0,
-            "images": 16,
-            "image_count": 24,
-            "pad": 28
-          }
-        },
-        "aarch64": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "snapshot": 0,
-            "images": 16,
-            "image_count": 24,
-            "pad": 28
-          }
-        },
-        "wasm32": {
-          "size": 20,
-          "align": 4,
-          "offsets": {
-            "snapshot": 0,
-            "images": 8,
-            "image_count": 12,
-            "pad": 16
-          }
-        }
-      }
-    },
-    "ta_datamodel_state": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "datamodel",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "state",
-          "type": "ta_bytes"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "datamodel": 0,
-            "state": 16
-          }
-        },
-        "aarch64": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "datamodel": 0,
-            "state": 16
-          }
-        },
-        "wasm32": {
-          "size": 16,
-          "align": 4,
-          "offsets": {
-            "datamodel": 0,
-            "state": 8
-          }
-        }
-      }
-    },
-    "ta_host_snapshot_contents": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "image_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "system_id",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "datamodel",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "time",
-          "type": "ta_time"
-        },
-        {
-          "name": "host",
-          "type": "const void *"
-        },
-        {
-          "name": "host_length",
-          "type": "size_t"
-        },
-        {
-          "name": "state",
-          "type": "const void *"
-        },
-        {
-          "name": "state_length",
-          "type": "size_t"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 80,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "image_count": 4,
-            "system_id": 8,
-            "datamodel": 24,
-            "time": 40,
-            "host": 48,
-            "host_length": 56,
-            "state": 64,
-            "state_length": 72
-          }
-        },
-        "aarch64": {
-          "size": 80,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "image_count": 4,
-            "system_id": 8,
-            "datamodel": 24,
-            "time": 40,
-            "host": 48,
-            "host_length": 56,
-            "state": 64,
-            "state_length": 72
-          }
-        },
-        "wasm32": {
-          "size": 48,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "image_count": 4,
-            "system_id": 8,
-            "datamodel": 16,
-            "time": 24,
-            "host": 32,
-            "host_length": 36,
-            "state": 40,
-            "state_length": 44
-          }
-        }
-      }
-    },
-    "ta_host_trace_options": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "flags",
-          "type": "uint32_t"
-        },
-        {
-          "name": "kinds",
-          "type": "uint32_t"
-        },
-        {
-          "name": "sample_parts",
-          "type": "uint32_t"
-        },
-        {
-          "name": "sample_whole",
-          "type": "uint32_t"
-        },
-        {
-          "name": "rule_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "rules",
-          "type": "const ta_trace_rule *"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "flags": 4,
-            "kinds": 8,
-            "sample_parts": 12,
-            "sample_whole": 16,
-            "rule_count": 20,
-            "rules": 24
-          }
-        },
-        "aarch64": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "flags": 4,
-            "kinds": 8,
-            "sample_parts": 12,
-            "sample_whole": 16,
-            "rule_count": 20,
-            "rules": 24
-          }
-        },
-        "wasm32": {
-          "size": 28,
-          "align": 4,
-          "offsets": {
-            "size": 0,
-            "flags": 4,
-            "kinds": 8,
-            "sample_parts": 12,
-            "sample_whole": 16,
-            "rule_count": 20,
-            "rules": 24
-          }
-        }
-      }
-    },
-    "ta_host_watch": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "rules",
-          "type": "const ta_trace_rule *"
-        },
-        {
-          "name": "rule_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        },
-        {
-          "name": "until",
-          "type": "ta_time"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 24,
-          "align": 8,
-          "offsets": {
-            "rules": 0,
-            "rule_count": 8,
-            "pad": 12,
-            "until": 16
-          }
-        },
-        "aarch64": {
-          "size": 24,
-          "align": 8,
-          "offsets": {
-            "rules": 0,
-            "rule_count": 8,
-            "pad": 12,
-            "until": 16
-          }
-        },
-        "wasm32": {
-          "size": 24,
-          "align": 8,
-          "offsets": {
-            "rules": 0,
-            "rule_count": 4,
-            "pad": 8,
-            "until": 16
-          }
-        }
-      }
-    },
-    "ta_http_field": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "name",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "value",
-          "type": "ta_string_view"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "name": 0,
-            "value": 16
-          }
-        },
-        "aarch64": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "name": 0,
-            "value": 16
-          }
-        },
-        "wasm32": {
-          "size": 16,
-          "align": 4,
-          "offsets": {
-            "name": 0,
-            "value": 8
-          }
-        }
-      }
-    },
-    "ta_http_post": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "url",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "event",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "fields",
-          "type": "const ta_http_field *"
-        },
-        {
-          "name": "field_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        },
-        {
-          "name": "body",
-          "type": "ta_string_view"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 64,
-          "align": 8,
-          "offsets": {
-            "url": 0,
-            "event": 16,
-            "fields": 32,
-            "field_count": 40,
-            "pad": 44,
-            "body": 48
-          }
-        },
-        "aarch64": {
-          "size": 64,
-          "align": 8,
-          "offsets": {
-            "url": 0,
-            "event": 16,
-            "fields": 32,
-            "field_count": 40,
-            "pad": 44,
-            "body": 48
-          }
-        },
-        "wasm32": {
-          "size": 36,
-          "align": 4,
-          "offsets": {
-            "url": 0,
-            "event": 8,
-            "fields": 16,
-            "field_count": 20,
-            "pad": 24,
-            "body": 28
-          }
-        }
-      }
-    },
-    "ta_http_request": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "method",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "target",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "body",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "event",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "field_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "fields",
-          "type": "ta_http_field[32]"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 1096,
-          "align": 8,
-          "offsets": {
-            "method": 0,
-            "target": 16,
-            "body": 32,
-            "event": 48,
-            "field_count": 64,
-            "fields": 72
-          }
-        },
-        "aarch64": {
-          "size": 1096,
-          "align": 8,
-          "offsets": {
-            "method": 0,
-            "target": 16,
-            "body": 32,
-            "event": 48,
-            "field_count": 64,
-            "fields": 72
-          }
-        },
-        "wasm32": {
-          "size": 548,
-          "align": 4,
-          "offsets": {
-            "method": 0,
-            "target": 8,
-            "body": 16,
-            "event": 24,
-            "field_count": 32,
-            "fields": 36
-          }
-        }
-      }
-    },
     "ta_otlp_config": {
       "kind": "struct",
       "fields": [
@@ -8154,6 +6551,1723 @@
           }
         }
       }
+    },
+    "ta_host": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "ta_host_telemetry": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp_config"
+        },
+        {
+          "name": "flush_interval",
+          "type": "ta_time"
+        },
+        {
+          "name": "resource",
+          "type": "const ta_otlp_attribute *"
+        },
+        {
+          "name": "resource_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "otlp": 0,
+            "flush_interval": 48,
+            "resource": 56,
+            "resource_count": 64,
+            "pad": 68
+          }
+        },
+        "aarch64": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "otlp": 0,
+            "flush_interval": 48,
+            "resource": 56,
+            "resource_count": 64,
+            "pad": 68
+          }
+        },
+        "wasm32": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "otlp": 0,
+            "flush_interval": 48,
+            "resource": 56,
+            "resource_count": 60,
+            "pad": 64
+          }
+        }
+      }
+    },
+    "ta_host_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "datamodel_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "system_id",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "system",
+          "type": "ta_system_config"
+        },
+        {
+          "name": "datamodels",
+          "type": "const ta_datamodel_binding *"
+        },
+        {
+          "name": "io_processors",
+          "type": "const ta_io_processor_descriptor *"
+        },
+        {
+          "name": "io_processor_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "migrate_quantum",
+          "type": "uint32_t"
+        },
+        {
+          "name": "allocator",
+          "type": "ta_allocator"
+        },
+        {
+          "name": "telemetry",
+          "type": "ta_host_telemetry"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 248,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "datamodel_count": 4,
+            "system_id": 8,
+            "system": 24,
+            "datamodels": 128,
+            "io_processors": 136,
+            "io_processor_count": 144,
+            "migrate_quantum": 148,
+            "allocator": 152,
+            "telemetry": 176
+          }
+        },
+        "aarch64": {
+          "size": 248,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "datamodel_count": 4,
+            "system_id": 8,
+            "system": 24,
+            "datamodels": 128,
+            "io_processors": 136,
+            "io_processor_count": 144,
+            "migrate_quantum": 148,
+            "allocator": 152,
+            "telemetry": 176
+          }
+        },
+        "wasm32": {
+          "size": 224,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "datamodel_count": 4,
+            "system_id": 8,
+            "system": 16,
+            "datamodels": 120,
+            "io_processors": 124,
+            "io_processor_count": 128,
+            "migrate_quantum": 132,
+            "allocator": 136,
+            "telemetry": 152
+          }
+        }
+      }
+    },
+    "ta_host_chart_ref": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "segment",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "chart": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "chart": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "chart": 4
+          }
+        }
+      }
+    },
+    "ta_host_segment_info": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "live",
+          "type": "uint32_t"
+        },
+        {
+          "name": "actors",
+          "type": "uint32_t"
+        },
+        {
+          "name": "current",
+          "type": "uint32_t"
+        },
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "live": 4,
+            "actors": 8,
+            "current": 12,
+            "image": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "live": 4,
+            "actors": 8,
+            "current": 12,
+            "image": 16
+          }
+        },
+        "wasm32": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "live": 4,
+            "actors": 8,
+            "current": 12,
+            "image": 16
+          }
+        }
+      }
+    },
+    "ta_host_location": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "segment",
+          "type": "uint32_t"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "actor": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "actor": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "actor": 4
+          }
+        }
+      }
+    },
+    "ta_host_time": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "monotonic",
+          "type": "ta_time"
+        },
+        {
+          "name": "wall_ns",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "monotonic": 0,
+            "wall_ns": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "monotonic": 0,
+            "wall_ns": 8
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "monotonic": 0,
+            "wall_ns": 8
+          }
+        }
+      }
+    },
+    "ta_host_effect": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "segment",
+          "type": "uint32_t"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "session",
+          "type": "uint64_t"
+        },
+        {
+          "name": "root",
+          "type": "uint64_t"
+        },
+        {
+          "name": "token",
+          "type": "uint32_t"
+        },
+        {
+          "name": "io_processor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "job",
+          "type": "uint32_t"
+        },
+        {
+          "name": "target",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "event",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "sendid",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "auxiliary",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "payload",
+          "type": "ta_payload"
+        },
+        {
+          "name": "delay_hint",
+          "type": "ta_time"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "migrated",
+          "type": "uint32_t"
+        },
+        {
+          "name": "failed",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pending",
+          "type": "uint32_t"
+        },
+        {
+          "name": "peer",
+          "type": "uint32_t"
+        },
+        {
+          "name": "datamodel",
+          "type": "uint32_t"
+        },
+        {
+          "name": "msgid",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "trace",
+          "type": "ta_trace_context"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 200,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "kind": 4,
+            "segment": 8,
+            "actor": 12,
+            "session": 16,
+            "root": 24,
+            "token": 32,
+            "io_processor": 36,
+            "flags": 40,
+            "job": 44,
+            "target": 48,
+            "event": 64,
+            "sendid": 80,
+            "auxiliary": 96,
+            "payload": 112,
+            "delay_hint": 120,
+            "chart": 128,
+            "migrated": 132,
+            "failed": 136,
+            "pending": 140,
+            "peer": 144,
+            "datamodel": 148,
+            "msgid": 152,
+            "trace": 168
+          }
+        },
+        "aarch64": {
+          "size": 200,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "kind": 4,
+            "segment": 8,
+            "actor": 12,
+            "session": 16,
+            "root": 24,
+            "token": 32,
+            "io_processor": 36,
+            "flags": 40,
+            "job": 44,
+            "target": 48,
+            "event": 64,
+            "sendid": 80,
+            "auxiliary": 96,
+            "payload": 112,
+            "delay_hint": 120,
+            "chart": 128,
+            "migrated": 132,
+            "failed": 136,
+            "pending": 140,
+            "peer": 144,
+            "datamodel": 148,
+            "msgid": 152,
+            "trace": 168
+          }
+        },
+        "wasm32": {
+          "size": 160,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "kind": 4,
+            "segment": 8,
+            "actor": 12,
+            "session": 16,
+            "root": 24,
+            "token": 32,
+            "io_processor": 36,
+            "flags": 40,
+            "job": 44,
+            "target": 48,
+            "event": 56,
+            "sendid": 64,
+            "auxiliary": 72,
+            "payload": 80,
+            "delay_hint": 88,
+            "chart": 96,
+            "migrated": 100,
+            "failed": 104,
+            "pending": 108,
+            "peer": 112,
+            "datamodel": 116,
+            "msgid": 120,
+            "trace": 128
+          }
+        }
+      }
+    },
+    "ta_envelope": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "hops",
+          "type": "uint32_t"
+        },
+        {
+          "name": "target",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "data",
+          "type": "ta_payload"
+        },
+        {
+          "name": "datamodel",
+          "type": "uint32_t"
+        },
+        {
+          "name": "trace_flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sendid",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "origin",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "origintype",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "msgid",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "deduplication_key",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "traceparent",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 152,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "hops": 4,
+            "target": 8,
+            "name": 24,
+            "data": 40,
+            "datamodel": 48,
+            "trace_flags": 52,
+            "sendid": 56,
+            "origin": 72,
+            "origintype": 88,
+            "msgid": 104,
+            "deduplication_key": 120,
+            "traceparent": 136
+          }
+        },
+        "aarch64": {
+          "size": 152,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "hops": 4,
+            "target": 8,
+            "name": 24,
+            "data": 40,
+            "datamodel": 48,
+            "trace_flags": 52,
+            "sendid": 56,
+            "origin": 72,
+            "origintype": 88,
+            "msgid": 104,
+            "deduplication_key": 120,
+            "traceparent": 136
+          }
+        },
+        "wasm32": {
+          "size": 88,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "hops": 4,
+            "target": 8,
+            "name": 16,
+            "data": 24,
+            "datamodel": 32,
+            "trace_flags": 36,
+            "sendid": 40,
+            "origin": 48,
+            "origintype": 56,
+            "msgid": 64,
+            "deduplication_key": 72,
+            "traceparent": 80
+          }
+        }
+      }
+    },
+    "ta_peer_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "id",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "reach",
+          "type": "ta_string_list"
+        },
+        {
+          "name": "max_queue",
+          "type": "uint32_t"
+        },
+        {
+          "name": "queue_ttl",
+          "type": "ta_time"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "id": 8,
+            "reach": 24,
+            "max_queue": 40,
+            "queue_ttl": 48
+          }
+        },
+        "aarch64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "id": 8,
+            "reach": 24,
+            "max_queue": 40,
+            "queue_ttl": 48
+          }
+        },
+        "wasm32": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "id": 8,
+            "reach": 16,
+            "max_queue": 24,
+            "queue_ttl": 32
+          }
+        }
+      }
+    },
+    "ta_route_request": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "action",
+          "type": "uint32_t"
+        },
+        {
+          "name": "reason",
+          "type": "uint32_t"
+        },
+        {
+          "name": "peer",
+          "type": "uint32_t"
+        },
+        {
+          "name": "hops",
+          "type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "from",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "session",
+          "type": "uint64_t"
+        },
+        {
+          "name": "system",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "peer_id",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "origin",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "key",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 120,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "action": 4,
+            "reason": 8,
+            "peer": 12,
+            "hops": 16,
+            "flags": 20,
+            "from": 24,
+            "pad": 28,
+            "session": 32,
+            "system": 40,
+            "name": 56,
+            "peer_id": 72,
+            "origin": 88,
+            "key": 104
+          }
+        },
+        "aarch64": {
+          "size": 120,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "action": 4,
+            "reason": 8,
+            "peer": 12,
+            "hops": 16,
+            "flags": 20,
+            "from": 24,
+            "pad": 28,
+            "session": 32,
+            "system": 40,
+            "name": 56,
+            "peer_id": 72,
+            "origin": 88,
+            "key": 104
+          }
+        },
+        "wasm32": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "action": 4,
+            "reason": 8,
+            "peer": 12,
+            "hops": 16,
+            "flags": 20,
+            "from": 24,
+            "pad": 28,
+            "session": 32,
+            "system": 40,
+            "name": 48,
+            "peer_id": 56,
+            "origin": 64,
+            "key": 72
+          }
+        }
+      }
+    },
+    "ta_host_message": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        },
+        {
+          "name": "revision",
+          "type": "uint64_t"
+        },
+        {
+          "name": "envelope",
+          "type": "ta_envelope"
+        },
+        {
+          "name": "key",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "sendid",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "storage",
+          "type": "char[768]"
+        },
+        {
+          "name": "traceparent",
+          "type": "char[55]"
+        },
+        {
+          "name": "pad2",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 1032,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "index": 4,
+            "revision": 8,
+            "envelope": 16,
+            "key": 168,
+            "sendid": 184,
+            "storage": 200,
+            "traceparent": 968,
+            "pad2": 1024
+          }
+        },
+        "aarch64": {
+          "size": 1032,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "index": 4,
+            "revision": 8,
+            "envelope": 16,
+            "key": 168,
+            "sendid": 184,
+            "storage": 200,
+            "traceparent": 968,
+            "pad2": 1024
+          }
+        },
+        "wasm32": {
+          "size": 952,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "index": 4,
+            "revision": 8,
+            "envelope": 16,
+            "key": 104,
+            "sendid": 112,
+            "storage": 120,
+            "traceparent": 888,
+            "pad2": 944
+          }
+        }
+      }
+    },
+    "ta_export_rule": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "peer",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "events",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "peer": 0,
+            "pad": 4,
+            "name": 8,
+            "events": 24
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "peer": 0,
+            "pad": 4,
+            "name": 8,
+            "events": 24
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "peer": 0,
+            "pad": 4,
+            "name": 8,
+            "events": 16
+          }
+        }
+      }
+    },
+    "ta_peer_error": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "peer",
+          "type": "uint32_t"
+        },
+        {
+          "name": "reason",
+          "type": "uint32_t"
+        },
+        {
+          "name": "origin",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "msgid",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "sendid",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "peer": 0,
+            "reason": 4,
+            "origin": 8,
+            "msgid": 24,
+            "sendid": 40
+          }
+        },
+        "aarch64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "peer": 0,
+            "reason": 4,
+            "origin": 8,
+            "msgid": 24,
+            "sendid": 40
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 4,
+          "offsets": {
+            "peer": 0,
+            "reason": 4,
+            "origin": 8,
+            "msgid": 16,
+            "sendid": 24
+          }
+        }
+      }
+    },
+    "ta_peer_status": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "state",
+          "type": "uint32_t"
+        },
+        {
+          "name": "queued",
+          "type": "uint32_t"
+        },
+        {
+          "name": "round_trip_time",
+          "type": "uint32_t"
+        },
+        {
+          "name": "lag",
+          "type": "ta_time"
+        },
+        {
+          "name": "sent",
+          "type": "uint64_t"
+        },
+        {
+          "name": "received",
+          "type": "uint64_t"
+        },
+        {
+          "name": "errors",
+          "type": "uint64_t"
+        },
+        {
+          "name": "duplicates",
+          "type": "uint64_t"
+        },
+        {
+          "name": "id",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "state": 4,
+            "queued": 8,
+            "round_trip_time": 12,
+            "lag": 16,
+            "sent": 24,
+            "received": 32,
+            "errors": 40,
+            "duplicates": 48,
+            "id": 56
+          }
+        },
+        "aarch64": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "state": 4,
+            "queued": 8,
+            "round_trip_time": 12,
+            "lag": 16,
+            "sent": 24,
+            "received": 32,
+            "errors": 40,
+            "duplicates": 48,
+            "id": 56
+          }
+        },
+        "wasm32": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "state": 4,
+            "queued": 8,
+            "round_trip_time": 12,
+            "lag": 16,
+            "sent": 24,
+            "received": 32,
+            "errors": 40,
+            "duplicates": 48,
+            "id": 56
+          }
+        }
+      }
+    },
+    "ta_host_migration": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "session",
+          "type": "uint64_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "timeout",
+          "type": "ta_time"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "session": 16,
+            "flags": 24,
+            "pad": 28,
+            "timeout": 32
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "session": 16,
+            "flags": 24,
+            "pad": 28,
+            "timeout": 32
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "session": 8,
+            "flags": 16,
+            "pad": 20,
+            "timeout": 24
+          }
+        }
+      }
+    },
+    "ta_host_adoption": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "segment",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "blob",
+          "type": "ta_bytes"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "segment": 0,
+            "pad": 4,
+            "blob": 8
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "segment": 0,
+            "pad": 4,
+            "blob": 8
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "pad": 4,
+            "blob": 8
+          }
+        }
+      }
+    },
+    "ta_host_snapshot_input": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "snapshot",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "images",
+          "type": "const ta_image *const *"
+        },
+        {
+          "name": "image_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "snapshot": 0,
+            "images": 16,
+            "image_count": 24,
+            "pad": 28
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "snapshot": 0,
+            "images": 16,
+            "image_count": 24,
+            "pad": 28
+          }
+        },
+        "wasm32": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "snapshot": 0,
+            "images": 8,
+            "image_count": 12,
+            "pad": 16
+          }
+        }
+      }
+    },
+    "ta_datamodel_state": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "datamodel",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "state",
+          "type": "ta_bytes"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "datamodel": 0,
+            "state": 16
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "datamodel": 0,
+            "state": 16
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "datamodel": 0,
+            "state": 8
+          }
+        }
+      }
+    },
+    "ta_host_snapshot_contents": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "image_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "system_id",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "datamodel",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "time",
+          "type": "ta_time"
+        },
+        {
+          "name": "host",
+          "type": "const void *"
+        },
+        {
+          "name": "host_length",
+          "type": "size_t"
+        },
+        {
+          "name": "state",
+          "type": "const void *"
+        },
+        {
+          "name": "state_length",
+          "type": "size_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "image_count": 4,
+            "system_id": 8,
+            "datamodel": 24,
+            "time": 40,
+            "host": 48,
+            "host_length": 56,
+            "state": 64,
+            "state_length": 72
+          }
+        },
+        "aarch64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "image_count": 4,
+            "system_id": 8,
+            "datamodel": 24,
+            "time": 40,
+            "host": 48,
+            "host_length": 56,
+            "state": 64,
+            "state_length": 72
+          }
+        },
+        "wasm32": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "image_count": 4,
+            "system_id": 8,
+            "datamodel": 16,
+            "time": 24,
+            "host": 32,
+            "host_length": 36,
+            "state": 40,
+            "state_length": 44
+          }
+        }
+      }
+    },
+    "ta_host_trace_options": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "kinds",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sample_parts",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sample_whole",
+          "type": "uint32_t"
+        },
+        {
+          "name": "rule_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "rules",
+          "type": "const ta_trace_rule *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "kinds": 8,
+            "sample_parts": 12,
+            "sample_whole": 16,
+            "rule_count": 20,
+            "rules": 24
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "kinds": 8,
+            "sample_parts": 12,
+            "sample_whole": 16,
+            "rule_count": 20,
+            "rules": 24
+          }
+        },
+        "wasm32": {
+          "size": 28,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "kinds": 8,
+            "sample_parts": 12,
+            "sample_whole": 16,
+            "rule_count": 20,
+            "rules": 24
+          }
+        }
+      }
+    },
+    "ta_host_watch": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "rules",
+          "type": "const ta_trace_rule *"
+        },
+        {
+          "name": "rule_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "until",
+          "type": "ta_time"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "rules": 0,
+            "rule_count": 8,
+            "pad": 12,
+            "until": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "rules": 0,
+            "rule_count": 8,
+            "pad": 12,
+            "until": 16
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "rules": 0,
+            "rule_count": 4,
+            "pad": 8,
+            "until": 16
+          }
+        }
+      }
+    },
+    "ta_http_field": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "value",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "value": 16
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "value": 16
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "value": 8
+          }
+        }
+      }
+    },
+    "ta_http_post": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "url",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "event",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "fields",
+          "type": "const ta_http_field *"
+        },
+        {
+          "name": "field_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "body",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "url": 0,
+            "event": 16,
+            "fields": 32,
+            "field_count": 40,
+            "pad": 44,
+            "body": 48
+          }
+        },
+        "aarch64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "url": 0,
+            "event": 16,
+            "fields": 32,
+            "field_count": 40,
+            "pad": 44,
+            "body": 48
+          }
+        },
+        "wasm32": {
+          "size": 36,
+          "align": 4,
+          "offsets": {
+            "url": 0,
+            "event": 8,
+            "fields": 16,
+            "field_count": 20,
+            "pad": 24,
+            "body": 28
+          }
+        }
+      }
+    },
+    "ta_http_request": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "method",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "target",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "body",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "event",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "field_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "fields",
+          "type": "ta_http_field[32]"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 1096,
+          "align": 8,
+          "offsets": {
+            "method": 0,
+            "target": 16,
+            "body": 32,
+            "event": 48,
+            "field_count": 64,
+            "fields": 72
+          }
+        },
+        "aarch64": {
+          "size": 1096,
+          "align": 8,
+          "offsets": {
+            "method": 0,
+            "target": 16,
+            "body": 32,
+            "event": 48,
+            "field_count": 64,
+            "fields": 72
+          }
+        },
+        "wasm32": {
+          "size": 548,
+          "align": 4,
+          "offsets": {
+            "method": 0,
+            "target": 8,
+            "body": 16,
+            "event": 24,
+            "field_count": 32,
+            "fields": 36
+          }
+        }
+      }
     }
   },
   "functions": [
@@ -8912,7 +9026,7 @@
         },
         {
           "name": "now",
-          "type": "ta_time"
+          "type": "ta_host_time"
         }
       ],
       "public": true,
@@ -9175,6 +9289,23 @@
         {
           "name": "out",
           "type": "ta_host_location *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_logs",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "h",
+          "type": "ta_host *"
+        },
+        {
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -9830,6 +9961,23 @@
         {
           "name": "id",
           "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_traces",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "h",
+          "type": "ta_host *"
+        },
+        {
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,

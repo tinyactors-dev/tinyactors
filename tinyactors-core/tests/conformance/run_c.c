@@ -582,7 +582,7 @@ static int run_scenario(JSValueConst sc, const char *file) {
             double ms = 0;
             JS_ToFloat64(J, &ms, v);
             w->now += (ta_time)ms;
-            ta_host_advance_time(w->host, w->now);
+            ta_host_advance_time(w->host, (ta_host_time){w->now, 0});
         } else if (has(s, "hibernate")) {
             JSValue v = get(s, "hibernate");
             char *an = str_of(v);
