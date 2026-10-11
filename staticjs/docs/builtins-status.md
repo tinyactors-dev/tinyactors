@@ -42,7 +42,7 @@ the host injects in the same way. UTC is the default everywhere.
 
 | Name | Status | Note |
 |---|---|---|
-| constructor, `size`, `add`, `has`, `delete`, `clear`, `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom` | built | |
+| constructor, `size`, `add`, `has`, `delete`, `clear`, `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom` | built | The set methods take only a set as their argument: a map, which JavaScript reads as set-like (its keys), faults (`builtins.spec`). |
 | `keys`, `values`, `entries` on a set | named, not built | Each faults ("staticjs does not have this method"), so the iterator helpers cannot start from a set; spread the set into an array instead. |
 | `forEach` on a set | named, not built | The README lists `forEach` for maps only; check with `builtin-table`. |
 
