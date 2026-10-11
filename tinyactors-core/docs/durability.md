@@ -1,8 +1,13 @@
 # Durable state of a session
 
 One definition of what a session *is* when it is not running, and of what
-every persistence path keeps of it. A path that drops part of it changes what
-the session does next; `tests/unit/test_durable.c` checks that none does.
+every path that takes it out of a running system and back keeps of it:
+hibernation, export, migration and snapshots. None of them is a durability
+mechanism: hibernation and snapshots take actors out of memory for a while
+(and snapshots let a host be inspected), export moves actors to another host.
+Durability is the application's (a database, as in the PostgreSQL design).
+A path that drops part of it changes what the session does next;
+`tests/unit/test_durable.c` checks that none does.
 
 ## The inventory
 
@@ -81,8 +86,11 @@ Why the refusals:
 - **Export needs every session idle with empty queues** (14–18): queued events
   and requests are in flight *to* the session; the host runs the system first
   (the next `ta_system_run` drains them) and exports then.
-- **Snapshots** are the region bytes plus the datamodel's own snapshot; they
-  need a drained outbox (`ta_system_snapshot`) or a quiescent host (effects
+- **Snapshots** are for inspection and for taking a host out of memory for a
+  while, never for durability or backups: a snapshot is raw region memory,
+  valid for the same build of the library only. They are the region bytes
+  plus the datamodel's own snapshot; they need a drained outbox
+  (`ta_system_snapshot`) or a quiescent host (effects
   acknowledged, no migration job: `ta_host_snapshot`). Hibernation blobs stay
   with the host and are not part of a snapshot.
 - **Migration** changes the chart, so it is observable by design: the session

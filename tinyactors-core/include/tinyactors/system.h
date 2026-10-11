@@ -247,7 +247,7 @@ typedef struct ta_effect {
 TA_API uint32_t ta_system_effects(ta_system *system, const ta_effect **out);
 TA_API void ta_system_effects_ack(ta_system *system, uint32_t n);
 
-/* ---- inspection / persistence ------------------------------------------- */
+/* ---- inspection / snapshots --------------------------------------------- */
 enum {
     TA_ACTOR_FREE = 0,
     TA_ACTOR_IDLE = 1,

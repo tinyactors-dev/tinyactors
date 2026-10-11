@@ -145,8 +145,8 @@ global is assumed.
 - **Duplicates**: every envelope has a `msgid`, so any receiver *can* drop
   duplicates. A system keeps a **dedup window** (the last N message ids, or a
   time-bounded table) on routes that may repeat. The window is part of the
-  system's durable state where the system is durable (snapshots, the
-  database).
+  system's state: a snapshot keeps it, and a durable system (a database)
+  stores it with its actors.
 - **No distributed transactions.** A cross-system send is never part of a
   transaction spanning two systems. Applications that need "my write and the
   event, atomically" use the local system's mechanism (in PostgreSQL:

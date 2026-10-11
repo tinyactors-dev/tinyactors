@@ -154,7 +154,7 @@ implementation of that layer). Layer dependency rules are in
 │   │                             datamodel_ecmascript,hibernate,migrate,host,router,address,frame,headers,
 │   │                             trace,journal,tracing,otlp};
 │   │                             test_torture_{loop,postgres}; test_durable:
-│   │                             every persistence path vs. a run that never persisted (durability.md)
+│   │                             every path out of memory vs. a run that never left it (durability.md)
 │   ├── w3c/run_w3c.c          ✅ IRP runner + BasicHTTP loopback host; with the ECMAScript datamodel
 │   │                             all 191 tests pass (skip.txt is empty); irp/ is fetched, gitignored
 │   ├── w3c/run_js.mjs         ✅ the same suite through the JS bindings (node + wasm): all 191,
@@ -208,7 +208,7 @@ implementation of that layer). Layer dependency rules are in
 │
 └── docs/
     ├── architecture.md        ✅ (§15: implementation status and deviations)
-    ├── durability.md          ✅ a session's durable state, and what each persistence path keeps
+    ├── durability.md          ✅ a session's state, and what each path out of memory keeps
     ├── postgres.md            ✅ the PostgreSQL binding's design: transactions, locking, outbox
     ├── concurrency.md         ✅ concurrency and parallelism, from one actor to PostgreSQL
     ├── scenarios.md           ✅ (executed by tests/unit/test_scenarios.c)

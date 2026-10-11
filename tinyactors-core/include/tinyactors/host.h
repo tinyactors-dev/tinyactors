@@ -405,6 +405,8 @@ TA_API ta_status ta_host_adopt(ta_host *h, uint32_t segment, const void *blob, s
 /* ---- snapshot / restore -------------------------------------------------------------
  * A snapshot is the whole host — every segment's region (actors, queues,
  * timers, continuations), the moved-session map, the clock — as one blob.
+ * It is for inspection and for taking a host out of memory for a while, not
+ * for durability or backups: it holds raw region memory (see below).
  * It needs a quiescent host: effects acknowledged and no migration job
  * running (TA_ERROR_STATE otherwise). With buffer NULL (or capacity too small:
  * TA_ERROR_NO_MEMORY) *length is the size needed.
