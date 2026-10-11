@@ -185,6 +185,24 @@ Errors: `missing`, `type`, `stale`.
    "mailbox": 0, "invocations": 0}}
 ```
 
+### `actor.context`
+
+A session's variables: each `<data>` of its chart, in the order the chart
+declares them, as neutral values (the datamodel's `to_wire`;
+docs/protocol.md, "Values"). Param: `session` (uint, required).
+
+Result: `{"variables": {<data id>: <value>, ...}}`. A variable the datamodel
+cannot read or write as a neutral value is `undefined` or `null`.
+
+Errors: `missing`, `type`, `stale`; `state` (-32002) when the actor is
+hibernated, or its datamodel does not show variables (no `variable` entry in
+its vtable, as with a binding's own datamodel, which keeps its scope).
+
+```
+{"method": "actor.context", "params": {"session": 1}}
+→ {"result": {"variables": {"n": 2, "who": "bob", "nothing": null}}}
+```
+
 ### `state`
 
 A session's configuration as a nested state value, in the shape of xstate's

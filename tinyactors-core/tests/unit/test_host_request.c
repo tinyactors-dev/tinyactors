@@ -10,8 +10,9 @@
 
 #define CHART                                                                                      \
     "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='pinged' "         \
-    "initial='s'><state id='s'><transition event='ping' target='t'/></state>"                     \
-    "<state id='t'/></scxml>"
+    "initial='s'><datamodel><data id='n' expr='1'/><data id='who' expr=\"'bob'\"/>"              \
+    "<data id='nothing'/></datamodel><state id='s'><transition event='ping' target='t'>"         \
+    "<assign location='n' expr='n + 1'/></transition></state><state id='t'/></scxml>"
 
 static void *compile_pinged(size_t *length) {
     ta_compile_options options;
@@ -318,10 +319,48 @@ static void test_spans_and_metrics(void) {
     world_close(&w);
 }
 
+static void test_actor_context(void) {
+    world w;
+    world_open(&w, 0);
+    settle(&w);
+    static host_ask a;
+    ta_cbor_writer *writer = ask_begin(&a, "actor.context", 1);
+    ta_cbor_write_text(writer, ta_string("session"));
+    ta_cbor_write_uint(writer, w.session);
+    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
+    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":1,\"who\":\"bob\",\"nothing\":null}}")));
+    ta_event_in event;
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.name = (ta_string_view){"ping", 4};
+    event.session = w.session;
+    CHECK_EQUAL(ta_host_send(w.host, &event), TA_OK);
+    settle(&w);
+    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
+    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":2,\"who\":\"bob\",\"nothing\":null}}")));
+    /* measured: the reply that does not fit changes nothing and says its size */
+    ta_buffer request = {a.request, sizeof a.request, 0};
+    CHECK_EQUAL(ta_cbor_finish(&a.writer, &request), TA_OK);
+    ta_buffer out = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_request(w.host, (ta_bytes){a.request, request.length}, &out), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(out.length, a.answer.length);
+    /* no such session; no session */
+    writer = ask_begin(&a, "actor.context", 1);
+    ta_cbor_write_text(writer, ta_string("session"));
+    ta_cbor_write_uint(writer, 99);
+    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
+    CHECK(reply_is(a.text, ERROR("-32001", "stale", "params.session", "no such session in this host")));
+    ask_begin(&a, "actor.context", 0);
+    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
+    CHECK(reply_is(a.text, ERROR("-32602", "missing", "params.session", "session is the actor's session id")));
+    world_close(&w);
+}
+
 int main(void) {
     RUN(test_refused_requests);
     RUN(test_stats_actors_actor_state);
     RUN(test_trace_configure_and_watch);
     RUN(test_spans_and_metrics);
+    RUN(test_actor_context);
     TEST_MAIN_END();
 }

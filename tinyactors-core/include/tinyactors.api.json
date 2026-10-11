@@ -3947,11 +3947,15 @@
         {
           "name": "payload_deserialize",
           "type": "ta_status (*)(void *, const void *, size_t, ta_payload *)"
+        },
+        {
+          "name": "variable",
+          "type": "ta_status (*)(void *, uint64_t, ta_string_view, ta_payload *)"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 232,
+          "size": 240,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3983,11 +3987,12 @@
             "to_wire": 200,
             "from_wire": 208,
             "payload_serialize": 216,
-            "payload_deserialize": 224
+            "payload_deserialize": 224,
+            "variable": 232
           }
         },
         "aarch64": {
-          "size": 232,
+          "size": 240,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4019,11 +4024,12 @@
             "to_wire": 200,
             "from_wire": 208,
             "payload_serialize": 216,
-            "payload_deserialize": 224
+            "payload_deserialize": 224,
+            "variable": 232
           }
         },
         "wasm32": {
-          "size": 120,
+          "size": 124,
           "align": 4,
           "offsets": {
             "size": 0,
@@ -4055,7 +4061,8 @@
             "to_wire": 104,
             "from_wire": 108,
             "payload_serialize": 112,
-            "payload_deserialize": 116
+            "payload_deserialize": 116,
+            "variable": 120
           }
         }
       }

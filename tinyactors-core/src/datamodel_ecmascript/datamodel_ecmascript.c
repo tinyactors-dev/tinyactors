@@ -3123,6 +3123,12 @@ static ta_status ecmascript_migrate(void *datamodel, uint64_t handle,
     WITH_ENVIRONMENT(ecmascript_migrate_(datamodel, handle, environment, bindings));
 }
 
+static ta_status ecmascript_variable(void *datamodel, uint64_t handle, ta_string_view name,
+                                     ta_payload *out) {
+    *out = ta_datamodel_ecmascript_payload_eval((ta_datamodel_ecmascript *)datamodel, handle, name);
+    return *out ? TA_OK : TA_ERROR_INVALID;
+}
+
 static const ta_datamodel_vtable ecmascript_vtable = {sizeof(ta_datamodel_vtable),
                                                       0,
                                                       "ecmascript",
@@ -3152,7 +3158,8 @@ static const ta_datamodel_vtable ecmascript_vtable = {sizeof(ta_datamodel_vtable
                                                       ecmascript_to_wire,
                                                       ecmascript_from_wire,
                                                       ecmascript_payload_serialize,
-                                                      ecmascript_payload_deserialize};
+                                                      ecmascript_payload_deserialize,
+                                                      ecmascript_variable};
 
 /* ---- counting allocator: O(1) heap size (JS_ComputeMemoryUsage walks every object) -- */
 

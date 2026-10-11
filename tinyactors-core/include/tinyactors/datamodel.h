@@ -195,6 +195,13 @@ typedef struct ta_datamodel_vtable {
                                    size_t *length);
     ta_status (*payload_deserialize)(void *datamodel, const void *buffer, size_t length,
                                      ta_payload *out);
+
+    /* A variable for inspection (optional; the actor.context request,
+     * docs/requests.md): the value of the location `name` (a <data> id) in
+     * `instance`, as a new payload (one reference). It must have no effect the
+     * chart can see. TA_ERROR_INVALID when the instance has no such value. */
+    ta_status (*variable)(void *datamodel, uint64_t instance, ta_string_view name,
+                          ta_payload *out);
 } ta_datamodel_vtable;
 
 /* Binding of a datamodel implementation to a system. */
