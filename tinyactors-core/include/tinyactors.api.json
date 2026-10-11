@@ -6651,67 +6651,7 @@
       "kind": "opaque",
       "fields": []
     },
-    "ta_host_telemetry": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "otlp",
-          "type": "ta_otlp_config"
-        },
-        {
-          "name": "flush_interval",
-          "type": "ta_time"
-        },
-        {
-          "name": "resource",
-          "type": "const ta_otlp_attribute *"
-        },
-        {
-          "name": "resource_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 72,
-          "align": 8,
-          "offsets": {
-            "otlp": 0,
-            "flush_interval": 48,
-            "resource": 56,
-            "resource_count": 64,
-            "pad": 68
-          }
-        },
-        "aarch64": {
-          "size": 72,
-          "align": 8,
-          "offsets": {
-            "otlp": 0,
-            "flush_interval": 48,
-            "resource": 56,
-            "resource_count": 64,
-            "pad": 68
-          }
-        },
-        "wasm32": {
-          "size": 72,
-          "align": 8,
-          "offsets": {
-            "otlp": 0,
-            "flush_interval": 48,
-            "resource": 56,
-            "resource_count": 60,
-            "pad": 64
-          }
-        }
-      }
-    },
-    "ta_host_config": {
+    "ta_host_environment": {
       "kind": "struct",
       "fields": [
         {
@@ -6723,99 +6663,57 @@
           "type": "uint32_t"
         },
         {
-          "name": "system_id",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "system",
-          "type": "ta_system_config"
-        },
-        {
           "name": "datamodels",
           "type": "const ta_datamodel_binding *"
-        },
-        {
-          "name": "io_processors",
-          "type": "const ta_io_processor_descriptor *"
-        },
-        {
-          "name": "io_processor_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "migrate_quantum",
-          "type": "uint32_t"
         },
         {
           "name": "allocator",
           "type": "ta_allocator"
         },
         {
-          "name": "telemetry",
-          "type": "ta_host_telemetry"
+          "name": "trace_policy",
+          "type": "const ta_trace_policy *"
         },
         {
-          "name": "max_subscriptions",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
+          "name": "error",
+          "type": "ta_buffer *"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 256,
+          "size": 56,
           "align": 8,
           "offsets": {
             "size": 0,
             "datamodel_count": 4,
-            "system_id": 8,
-            "system": 24,
-            "datamodels": 128,
-            "io_processors": 136,
-            "io_processor_count": 144,
-            "migrate_quantum": 148,
-            "allocator": 152,
-            "telemetry": 176,
-            "max_subscriptions": 248,
-            "pad": 252
+            "datamodels": 8,
+            "allocator": 16,
+            "trace_policy": 40,
+            "error": 48
           }
         },
         "aarch64": {
-          "size": 256,
+          "size": 56,
           "align": 8,
           "offsets": {
             "size": 0,
             "datamodel_count": 4,
-            "system_id": 8,
-            "system": 24,
-            "datamodels": 128,
-            "io_processors": 136,
-            "io_processor_count": 144,
-            "migrate_quantum": 148,
-            "allocator": 152,
-            "telemetry": 176,
-            "max_subscriptions": 248,
-            "pad": 252
+            "datamodels": 8,
+            "allocator": 16,
+            "trace_policy": 40,
+            "error": 48
           }
         },
         "wasm32": {
-          "size": 232,
-          "align": 8,
+          "size": 32,
+          "align": 4,
           "offsets": {
             "size": 0,
             "datamodel_count": 4,
-            "system_id": 8,
-            "system": 16,
-            "datamodels": 120,
-            "io_processors": 124,
-            "io_processor_count": 128,
-            "migrate_quantum": 132,
-            "allocator": 136,
-            "telemetry": 152,
-            "max_subscriptions": 224,
-            "pad": 228
+            "datamodels": 8,
+            "allocator": 12,
+            "trace_policy": 24,
+            "error": 28
           }
         }
       }
@@ -7902,6 +7800,10 @@
       "kind": "struct",
       "fields": [
         {
+          "name": "config",
+          "type": "ta_bytes"
+        },
+        {
           "name": "snapshot",
           "type": "ta_bytes"
         },
@@ -7920,33 +7822,36 @@
       ],
       "layout": {
         "x86_64": {
-          "size": 32,
+          "size": 48,
           "align": 8,
           "offsets": {
-            "snapshot": 0,
-            "images": 16,
-            "image_count": 24,
-            "pad": 28
+            "config": 0,
+            "snapshot": 16,
+            "images": 32,
+            "image_count": 40,
+            "pad": 44
           }
         },
         "aarch64": {
-          "size": 32,
+          "size": 48,
           "align": 8,
           "offsets": {
-            "snapshot": 0,
-            "images": 16,
-            "image_count": 24,
-            "pad": 28
+            "config": 0,
+            "snapshot": 16,
+            "images": 32,
+            "image_count": 40,
+            "pad": 44
           }
         },
         "wasm32": {
-          "size": 20,
+          "size": 28,
           "align": 4,
           "offsets": {
-            "snapshot": 0,
-            "images": 8,
-            "image_count": 12,
-            "pad": 16
+            "config": 0,
+            "snapshot": 8,
+            "images": 16,
+            "image_count": 20,
+            "pad": 24
           }
         }
       }
@@ -9054,6 +8959,27 @@
       "implemented": true
     },
     {
+      "name": "ta_host_create",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "config",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "environment",
+          "type": "const ta_host_environment *"
+        },
+        {
+          "name": "out",
+          "type": "ta_host **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_host_deliver",
       "returns": "int32_t",
       "params": [
@@ -9375,23 +9301,6 @@
       "implemented": true
     },
     {
-      "name": "ta_host_new",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "config",
-          "type": "const ta_host_config *"
-        },
-        {
-          "name": "out",
-          "type": "ta_host **"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
       "name": "ta_host_peer_add",
       "returns": "ta_status",
       "params": [
@@ -9556,8 +9465,8 @@
       "returns": "ta_status",
       "params": [
         {
-          "name": "config",
-          "type": "const ta_host_config *"
+          "name": "environment",
+          "type": "const ta_host_environment *"
         },
         {
           "name": "input",

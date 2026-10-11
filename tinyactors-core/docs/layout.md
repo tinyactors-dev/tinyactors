@@ -101,7 +101,7 @@ implementation of that layer). Layer dependency rules are in
 │   │   │                         boot, whole-host snapshot/restore
 │   │   ├── router.c           ✅ envelopes, peers, routes, deduplication (docs/protocol.md)
 │   │   ├── telemetry.c        ✅ the host's OTLP encoder, or the null one (traces, logs, metrics)
-│   │   └── request.c          ✅ ta_host_request: the rarely called API as CBOR (docs/requests.md)
+│   │   └── request.c          ✅ ta_host_request: the rarely called API as CBOR (docs/requests.md); the host's CBOR config (docs/host-config.md)
 │   │
 │   ├── otlp/                  the OTLP codec (freestanding, one block, relocatable; uses trace + image)
 │   │   ├── otlp_internal.h    ✅ the encoder's block, protobuf primitives

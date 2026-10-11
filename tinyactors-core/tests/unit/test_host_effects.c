@@ -3,6 +3,7 @@
  * carrying the token of the invoke that started it. */
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
+#include "../support/host_config.h"
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
@@ -48,7 +49,7 @@ static void world_open(world *w) {
     memset(w, 0, sizeof *w);
     w->ecmascript = ta_datamodel_ecmascript_new(NULL);
     w->binding = ta_datamodel_ecmascript_binding(w->ecmascript);
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"h", 1};
@@ -57,7 +58,7 @@ static void world_open(world *w) {
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
-    CHECK_EQUAL(ta_host_new(&config, &w->host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     size_t length;
     w->image_bytes = compile_caller(&length);
     CHECK(w->image_bytes != NULL);

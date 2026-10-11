@@ -280,22 +280,16 @@ static int host_policy_copy(ta_host *host, const ta_trace_policy *policy) {
 
 static void rules_free(ta_host *host, host_rules *r);
 
-ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
+/* A host from its config, read and checked (host_config_read): the strings
+ * it keeps are copied, the rest of the config is not looked at again. */
+static ta_status host_new(const host_config *config, ta_host **out) {
     *out = NULL;
-    if (!config || config->size < offsetof(ta_host_config, allocator) + sizeof(ta_allocator) ||
-        !config->allocator.alloc || !config->allocator.free || config->datamodel_count > 8 ||
-        config->io_processor_count > 16 || !ta_address_system_valid(config->system_id))
-        return TA_ERROR_INVALID;
     ta_host *host = (ta_host *)config->allocator.alloc(config->allocator.context, sizeof *host, 8);
     if (!host) return TA_ERROR_NO_MEMORY;
     ta_memset(host, 0, sizeof *host);
-    ta_memcpy(&host->config, config,
-              config->size < sizeof host->config ? config->size : sizeof host->config);
-    host->config.size = sizeof host->config;
+    host->config = *config;
     if (!host->config.migrate_quantum) host->config.migrate_quantum = 256;
-    if (config->size < offsetof(ta_host_config, max_subscriptions) + sizeof(uint32_t) ||
-        !host->config.max_subscriptions)
-        host->config.max_subscriptions = 64;
+    if (!host->config.max_subscriptions) host->config.max_subscriptions = 64;
     host->trace_kinds = host->config.system.trace_policy
                             ? host->config.system.trace_policy->kinds[TA_TRACE_DETAIL_SAMPLED]
                             : TA_TRACE_FULL;
@@ -320,17 +314,67 @@ ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
     host->io_processors[0].type = (ta_string_view){"tinyactors", 10};
     host->io_processors[0].location = (ta_string_view){host->base, host->base_length};
     host->io_processors[0].flags = TA_IO_PROCESSOR_SCXML_REMOTE | TA_IO_PROCESSOR_SCXML_SHARED;
+    /* the processors' strings: one block, kept until ta_host_free */
+    size_t text = 0;
     for (uint32_t i = 0; i < config->io_processor_count; i++)
-        host->io_processors[1 + i] = config->io_processors[i];
+        text += config->io_processors[i].type.length + config->io_processors[i].location.length;
+    if (text) {
+        host->io_processor_text = (char *)host_alloc(host, text);
+        if (!host->io_processor_text) {
+            ta_host_free(host);
+            return TA_ERROR_NO_MEMORY;
+        }
+        host->io_processor_text_length = text;
+    }
+    char *at = host->io_processor_text;
+    for (uint32_t i = 0; i < config->io_processor_count; i++) {
+        ta_io_processor_descriptor *d = &host->io_processors[1 + i];
+        *d = config->io_processors[i];
+        ta_memcpy(at, d->type.pointer, d->type.length);
+        d->type.pointer = at;
+        at += d->type.length;
+        ta_memcpy(at, d->location.pointer, d->location.length);
+        d->location.pointer = at;
+        at += d->location.length;
+    }
+    host->config.io_processors = (const ta_io_processor_descriptor *)0; /* the config's: gone */
     host->io_processor_count = 1 + config->io_processor_count;
     host->draining = TA_NIL;
     ta_status status = host_telemetry_init(host);
+    host->config.telemetry.resource = (const ta_otlp_attribute *)0; /* copied: the config's */
+    host->config.telemetry.resource_count = 0;
     if (status != TA_OK) {
         ta_host_free(host);
         return status;
     }
     *out = host;
     return TA_OK;
+}
+
+/* The config read from CBOR plus the environment's pointers. */
+static ta_status host_config_of(ta_bytes cbor, const ta_host_environment *environment,
+                                const host_config_input *storage, host_config *config) {
+    if (!environment || environment->size < sizeof *environment || !environment->allocator.alloc ||
+        !environment->allocator.free || environment->datamodel_count > 8)
+        return TA_ERROR_INVALID;
+    host_config_input input = {cbor, environment->error, storage->resource, storage->io_processors};
+    ta_status status = host_config_read(&input, config);
+    if (status != TA_OK) return status;
+    config->allocator = environment->allocator;
+    config->datamodels = environment->datamodels;
+    config->datamodel_count = environment->datamodel_count;
+    config->system.trace_policy = environment->trace_policy;
+    return TA_OK;
+}
+
+ta_status ta_host_create(ta_bytes cbor, const ta_host_environment *environment, ta_host **out) {
+    ta_otlp_attribute resource[HOST_CONFIG_RESOURCE];
+    ta_io_processor_descriptor processors[HOST_CONFIG_IO_PROCESSORS];
+    host_config_input storage = {{0, 0}, (ta_buffer *)0, resource, processors};
+    host_config config;
+    *out = NULL;
+    ta_status status = host_config_of(cbor, environment, &storage, &config);
+    return status == TA_OK ? host_new(&config, out) : status;
 }
 
 static void effects_release(ta_host *h);
@@ -367,6 +411,7 @@ void ta_host_free(ta_host *host) {
     host_free(host, host->errors, sizeof(pending_error) * host->error_capacity);
     if (host->subscriptions)
         host_free(host, host->subscriptions, sizeof(uint64_t) * host->config.max_subscriptions);
+    if (host->io_processor_text) host_free(host, host->io_processor_text, host->io_processor_text_length);
     for (uint32_t i = 0; i < host->retired_chart_count; i++)
         host_free(host, host->retired_charts[i].name,
                   host->retired_charts[i].name_length ? host->retired_charts[i].name_length : 1);
@@ -2288,8 +2333,8 @@ static ta_status restore_failed(ta_host *host, ta_status status) {
     return status;
 }
 
-ta_status ta_host_restore(const ta_host_config *config, const ta_host_snapshot_input *input,
-                          ta_host **out) {
+ta_status ta_host_restore(const ta_host_environment *environment,
+                          const ta_host_snapshot_input *input, ta_host **out) {
     const ta_image *const *images = input->images;
     uint32_t image_count = input->image_count;
     const void *snap = input->snapshot.pointer;
@@ -2297,8 +2342,14 @@ ta_status ta_host_restore(const ta_host_config *config, const ta_host_snapshot_i
     *out = NULL;
     const snapshot_header *hd = snap_check(snap, length);
     if (!hd || image_count < hd->segment_count) return TA_ERROR_INVALID;
+    ta_otlp_attribute resource[HOST_CONFIG_RESOURCE];
+    ta_io_processor_descriptor processors[HOST_CONFIG_IO_PROCESSORS];
+    host_config_input storage = {{0, 0}, (ta_buffer *)0, resource, processors};
+    host_config config;
+    ta_status status = host_config_of(input->config, environment, &storage, &config);
+    if (status != TA_OK) return status;
     ta_host *host;
-    ta_status status = ta_host_new(config, &host);
+    status = host_new(&config, &host);
     if (status != TA_OK) return status;
     if (hd->segment_count && !host_grow(host, (void **)&host->segments, &host->segment_capacity,
                                         hd->segment_count, sizeof(host_segment)))

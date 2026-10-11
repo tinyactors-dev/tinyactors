@@ -39,6 +39,7 @@ typedef struct request {
     ta_cbor_document *document;
     cbor_output out;
     uint32_t id;   /* the request's "id" token; TA_NIL: none */
+    const char *prefix; /* of a field's path: "params." (a request) or "" (a config) */
     int refused;   /* an error reply was written */
     char path[96]; /* where the error is, for {"error": {"data": {"path"}}} */
 } request;
@@ -132,8 +133,11 @@ static void request_path_member(request *r, const char *member) {
  * a list; "" for the request as a whole. */
 static void request_path_view(request *r, const char *outer, uint32_t index, ta_string_view field) {
     ta_text text = ta_text_init(r->path, sizeof r->path - 1);
-    if (outer || field.length) ta_text_append(&text, request_text_of("params."));
-    if (outer) {
+    if (outer || field.length) ta_text_append(&text, request_text_of(r->prefix));
+    if (outer && index == TA_NIL) { /* a field of the map `outer` */
+        ta_text_append(&text, request_text_of(outer));
+        if (field.length) ta_text_append(&text, request_text_of("."));
+    } else if (outer) {
         ta_text_append(&text, request_text_of(outer));
         ta_text_append(&text, request_text_of("["));
         ta_text_append_u64(&text, index);
@@ -169,7 +173,8 @@ static int request_keys_known(request *r, uint32_t map, const char *outer, uint3
             }
         if (!found) {
             request_path_view(r, outer, index, key);
-            request_refuse(r, "unknown", "params has a field this method does not take");
+            request_refuse(r, "unknown", r->prefix[0] ? "params has a field this method does not take"
+                                                      : "the config has a field the host does not take");
             return 0;
         }
         at = ta_cbor_next(r->document, ta_cbor_next(r->document, at));
@@ -942,6 +947,7 @@ ta_status ta_host_request(ta_host *host, ta_bytes bytes, ta_buffer *reply) {
     r.host = host;
     r.document = &document;
     r.id = TA_NIL;
+    r.prefix = "params.";
     r.out = (cbor_output){(unsigned char *)reply->pointer, reply->pointer ? reply->capacity : 0, 0};
     ta_status status = ta_cbor_decode(&document);
     if (status == TA_ERROR_NO_MEMORY) {
@@ -960,4 +966,252 @@ ta_status ta_host_request(ta_host *host, ta_bytes bytes, ta_buffer *reply) {
     }
     reply->length = r.out.length;
     return request_fits(&r) ? TA_OK : TA_ERROR_NO_MEMORY;
+}
+
+/* ---- the host's config (ta_host_create, docs/host-config.md) ------------------------- */
+
+typedef struct config_number {
+    const char *name;
+    uint32_t offset; /* in the struct the table is for */
+    uint32_t wide;   /* uint64_t; else uint32_t */
+} config_number;
+
+#define CONFIG_U32(name, type, field) {name, (uint32_t)offsetof(type, field), 0}
+#define CONFIG_U64(name, type, field) {name, (uint32_t)offsetof(type, field), 1}
+
+static const config_number SYSTEM_NUMBERS[] = {
+    CONFIG_U32("maxActors", ta_system_config, max_actors),
+    CONFIG_U32("maxEvents", ta_system_config, max_events),
+    CONFIG_U32("maxTimers", ta_system_config, max_timers),
+    CONFIG_U32("workspaces", ta_system_config, workspaces),
+    CONFIG_U32("maxRequests", ta_system_config, max_requests),
+    CONFIG_U32("outbox", ta_system_config, outbox),
+    CONFIG_U32("quantum", ta_system_config, quantum),
+    CONFIG_U32("instanceBytes", ta_system_config, instance_bytes),
+    CONFIG_U32("stringBytes", ta_system_config, string_bytes),
+    CONFIG_U64("ticksPerSecond", ta_system_config, ticks_per_second),
+    CONFIG_U32("traceBytes", ta_system_config, trace_bytes),
+    CONFIG_U32("traceContexts", ta_system_config, trace_contexts),
+    CONFIG_U32("traceRules", ta_system_config, trace_rules),
+    CONFIG_U64("traceSeed", ta_system_config, trace_seed),
+};
+
+static const config_number OTLP_NUMBERS[] = {
+    CONFIG_U32("stagingBytes", ta_otlp_config, staging_bytes),
+    CONFIG_U32("logBytes", ta_otlp_config, log_bytes),
+    CONFIG_U32("openSpans", ta_otlp_config, open_spans),
+    CONFIG_U32("chunks", ta_otlp_config, chunks),
+    CONFIG_U32("scopes", ta_otlp_config, scopes),
+    CONFIG_U32("valueLimit", ta_otlp_config, value_limit),
+    CONFIG_U32("renderBytes", ta_otlp_config, render_bytes),
+    CONFIG_U32("resourceBytes", ta_otlp_config, resource_bytes),
+    CONFIG_U32("metricBytes", ta_otlp_config, metric_bytes),
+    CONFIG_U32("spanMetricCharts", ta_otlp_config, span_metric_charts),
+};
+
+/* The numbers of `table` found in the map at `map` (`scope`: its name) into `base`. */
+static int config_read_numbers(request *r, uint32_t map, const char *scope, const config_number *table,
+                               uint32_t count, void *base) {
+    for (uint32_t i = 0; i < count; i++) {
+        uint64_t value;
+        request_path_set(r, scope, TA_NIL, table[i].name);
+        if (!request_read_uint(r, request_member(r, map, table[i].name), 0, &value)) return 0;
+        if (!table[i].wide && value > UINT32_MAX) {
+            request_refuse(r, "range", "the number is at most 4294967295");
+            return 0;
+        }
+        unsigned char *at = (unsigned char *)base + table[i].offset;
+        if (table[i].wide) ta_memcpy(at, &value, sizeof value);
+        else {
+            uint32_t narrow = (uint32_t)value;
+            ta_memcpy(at, &narrow, sizeof narrow);
+        }
+    }
+    return 1;
+}
+
+/* A map, or absent (TA_NIL). */
+static int config_read_map(request *r, uint32_t at, const char *name) {
+    if (at == TA_NIL || request_token(r, at)->kind == TA_CBOR_MAP) return 1;
+    request_path_set(r, NULL, 0, name);
+    request_refuse(r, "type", "expected a map");
+    return 0;
+}
+
+static int config_read_system(request *r, uint32_t map, ta_system_config *system) {
+    static const char *const fields[] = {"maxActors",     "maxEvents",   "maxTimers",  "workspaces",
+                                         "maxRequests",   "outbox",      "quantum",    "instanceBytes",
+                                         "stringBytes",   "ticksPerSecond", "tracing", "traceBytes",
+                                         "traceContexts", "traceRules",  "traceSeed",  NULL};
+    ta_memset(system, 0, sizeof *system);
+    system->size = sizeof *system;
+    if (map == TA_NIL) return 1;
+    if (!request_keys_known(r, map, "system", TA_NIL, fields)) return 0;
+    if (!config_read_numbers(r, map, "system", SYSTEM_NUMBERS,
+                             sizeof SYSTEM_NUMBERS / sizeof SYSTEM_NUMBERS[0], system))
+        return 0;
+    int tracing;
+    request_path_set(r, "system", TA_NIL, "tracing");
+    if (!request_read_bool(r, request_member(r, map, "tracing"), 1, &tracing)) return 0;
+    system->tracing = tracing ? TA_TRACING_ENABLED : TA_TRACING_DISABLED;
+    return 1;
+}
+
+static int config_read_io_processors(request *r, uint32_t list, ta_io_processor_descriptor *out,
+                                     uint32_t *count) {
+    static const char *const fields[] = {"type", "location", "sync", NULL};
+    *count = 0;
+    if (list == TA_NIL) return 1;
+    request_path_set(r, NULL, 0, "ioProcessors");
+    if (request_token(r, list)->kind != TA_CBOR_ARRAY) {
+        request_refuse(r, "type", "ioProcessors is a list");
+        return 0;
+    }
+    if (request_token(r, list)->count > HOST_CONFIG_IO_PROCESSORS) {
+        request_refuse(r, "limit", "a host has at most 16 I/O processors");
+        return 0;
+    }
+    uint32_t at = list + 1;
+    for (uint32_t i = 0; i < request_token(r, list)->count; i++, at = ta_cbor_next(r->document, at)) {
+        ta_io_processor_descriptor *d = &out[i];
+        int sync;
+        ta_memset(d, 0, sizeof *d);
+        request_path_set(r, "ioProcessors", i, "");
+        if (request_token(r, at)->kind != TA_CBOR_MAP) {
+            request_refuse(r, "type", "an I/O processor is a map");
+            return 0;
+        }
+        if (!request_keys_known(r, at, "ioProcessors", i, fields)) return 0;
+        uint32_t type = request_member(r, at, "type");
+        request_path_set(r, "ioProcessors", i, "type");
+        if (type == TA_NIL) {
+            request_refuse(r, "missing", "type is the I/O processor's URI");
+            return 0;
+        }
+        if (!request_read_text(r, type, &d->type)) return 0;
+        request_path_set(r, "ioProcessors", i, "location");
+        if (!request_read_text(r, request_member(r, at, "location"), &d->location)) return 0;
+        request_path_set(r, "ioProcessors", i, "sync");
+        if (!request_read_bool(r, request_member(r, at, "sync"), 0, &sync)) return 0;
+        d->flags = sync ? TA_IO_PROCESSOR_SYNC : 0;
+    }
+    *count = request_token(r, list)->count;
+    return 1;
+}
+
+static int config_read_telemetry(request *r, uint32_t map, ta_otlp_attribute *resource,
+                                 host_telemetry *telemetry) {
+    static const char *const fields[] = {"stagingBytes",  "logBytes",     "openSpans",   "chunks",
+                                         "scopes",        "valueLimit",   "renderBytes", "resourceBytes",
+                                         "metricBytes",   "spanMetricCharts", "linkParents", "values",
+                                         "logs",          "flushInterval", "resource",   NULL};
+    ta_memset(telemetry, 0, sizeof *telemetry);
+    if (map == TA_NIL) return 1; /* no encoder */
+    if (!request_keys_known(r, map, "telemetry", TA_NIL, fields)) return 0;
+    telemetry->otlp.size = sizeof telemetry->otlp;
+    if (!config_read_numbers(r, map, "telemetry", OTLP_NUMBERS,
+                             sizeof OTLP_NUMBERS / sizeof OTLP_NUMBERS[0], &telemetry->otlp))
+        return 0;
+    int link_parents, values, logs;
+    request_path_set(r, "telemetry", TA_NIL, "linkParents");
+    if (!request_read_bool(r, request_member(r, map, "linkParents"), 0, &link_parents)) return 0;
+    request_path_set(r, "telemetry", TA_NIL, "values");
+    if (!request_read_bool(r, request_member(r, map, "values"), 0, &values)) return 0;
+    request_path_set(r, "telemetry", TA_NIL, "logs");
+    if (!request_read_bool(r, request_member(r, map, "logs"), 1, &logs)) return 0;
+    telemetry->otlp.flags = (link_parents ? TA_OTLP_LINK_PARENTS : 0u) | (values ? TA_OTLP_VALUES : 0u) |
+                            (logs ? 0u : TA_OTLP_NO_LOGS);
+    request_path_set(r, "telemetry", TA_NIL, "flushInterval");
+    if (!request_read_uint(r, request_member(r, map, "flushInterval"), 0, &telemetry->flush_interval))
+        return 0;
+    uint32_t attributes = request_member(r, map, "resource");
+    request_path_set(r, "telemetry", TA_NIL, "resource");
+    if (attributes == TA_NIL) return 1;
+    if (request_token(r, attributes)->kind != TA_CBOR_MAP) {
+        request_refuse(r, "type", "resource is a map of text to text");
+        return 0;
+    }
+    if (request_token(r, attributes)->count > HOST_CONFIG_RESOURCE) {
+        request_refuse(r, "limit", "a resource has at most 32 attributes");
+        return 0;
+    }
+    uint32_t at = attributes + 1;
+    for (uint32_t i = 0; i < request_token(r, attributes)->count; i++) {
+        uint32_t value = ta_cbor_next(r->document, at);
+        if (request_token(r, at)->kind != TA_CBOR_TEXT || request_token(r, value)->kind != TA_CBOR_TEXT) {
+            request_refuse(r, "type", "resource is a map of text to text");
+            return 0;
+        }
+        resource[i].key = ta_cbor_string(r->document, at);
+        resource[i].value = ta_cbor_string(r->document, value);
+        at = ta_cbor_next(r->document, value);
+    }
+    telemetry->resource = resource;
+    telemetry->resource_count = request_token(r, attributes)->count;
+    return 1;
+}
+
+static int config_read(request *r, const host_config_input *input, host_config *config) {
+    static const char *const fields[] = {"systemID",       "system",           "ioProcessors",
+                                         "migrateQuantum", "maxSubscriptions", "telemetry", NULL};
+    if (!request_keys_known(r, 0, NULL, 0, fields)) return 0;
+    uint32_t id = request_member(r, 0, "systemID");
+    request_path_set(r, NULL, 0, "systemID");
+    if (id == TA_NIL) {
+        request_refuse(r, "missing", "systemID names this system in its addresses");
+        return 0;
+    }
+    if (!request_read_text(r, id, &config->system_id)) return 0;
+    if (!ta_address_system_valid(config->system_id)) {
+        request_refuse(r, "range", "systemID is not a valid system id (docs/protocol.md, Addresses)");
+        return 0;
+    }
+    uint32_t system = request_member(r, 0, "system"), telemetry = request_member(r, 0, "telemetry");
+    if (!config_read_map(r, system, "system") || !config_read_map(r, telemetry, "telemetry")) return 0;
+    if (!config_read_system(r, system, &config->system)) return 0;
+    if (!config_read_io_processors(r, request_member(r, 0, "ioProcessors"), input->io_processors,
+                                   &config->io_processor_count))
+        return 0;
+    config->io_processors = input->io_processors;
+    uint64_t number;
+    request_path_set(r, NULL, 0, "migrateQuantum");
+    if (!request_read_uint(r, request_member(r, 0, "migrateQuantum"), 0, &number)) return 0;
+    if (number > UINT32_MAX) {
+        request_refuse(r, "range", "migrateQuantum is at most 4294967295");
+        return 0;
+    }
+    config->migrate_quantum = (uint32_t)number;
+    request_path_set(r, NULL, 0, "maxSubscriptions");
+    if (!request_read_uint(r, request_member(r, 0, "maxSubscriptions"), 0, &number)) return 0;
+    if (number > (1u << 20)) {
+        request_refuse(r, "range", "maxSubscriptions is at most 1048576");
+        return 0;
+    }
+    config->max_subscriptions = (uint32_t)number;
+    return config_read_telemetry(r, telemetry, input->resource, &config->telemetry);
+}
+
+ta_status host_config_read(const host_config_input *input, host_config *config) {
+    ta_cbor_token tokens[TA_HOST_REQUEST_TOKENS];
+    ta_cbor_document document = {input->cbor, tokens, TA_HOST_REQUEST_TOKENS, 0};
+    ta_buffer *error = input->error;
+    request r;
+    ta_memset(&r, 0, sizeof r);
+    ta_memset(config, 0, sizeof *config);
+    r.document = &document;
+    r.id = TA_NIL;
+    r.prefix = "";
+    r.out = (cbor_output){error ? (unsigned char *)error->pointer : (unsigned char *)0,
+                          error && error->pointer ? error->capacity : 0, 0};
+    ta_status status = ta_cbor_decode(&document);
+    if (status == TA_ERROR_NO_MEMORY)
+        request_refuse_with(&r, REQUEST_LIMIT, "limit", "a config has at most 256 items");
+    else if (status != TA_OK)
+        request_refuse_with(&r, REQUEST_PARSE, "malformed", "the config is not one well-formed CBOR item");
+    else if (tokens[0].kind != TA_CBOR_MAP)
+        request_refuse_with(&r, REQUEST_INVALID, "type", "a config is a map");
+    else
+        config_read(&r, input, config);
+    if (error) error->length = r.refused ? r.out.length : 0;
+    return r.refused ? TA_ERROR_INVALID : TA_OK;
 }

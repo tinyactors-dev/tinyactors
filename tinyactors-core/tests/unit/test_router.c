@@ -8,6 +8,7 @@
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 #include "../support/host_request.h"
+#include "../support/host_config.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -60,7 +61,7 @@ static void open_node(int i, const char *chart) {
     memset(n, 0, sizeof *n);
     n->ecmascript = ta_datamodel_ecmascript_new(NULL);
     n->binding = ta_datamodel_ecmascript_binding(n->ecmascript);
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){IDS[i], 1};
@@ -69,7 +70,7 @@ static void open_node(int i, const char *chart) {
     config.datamodels = &n->binding;
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
-    CHECK_EQUAL(ta_host_new(&config, &n->host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &n->host), TA_OK);
     size_t length;
     n->bytes = compile_chart("c.scxml", chart, NULL, &length, 0);
     CHECK(n->bytes && ta_image_open((ta_bytes){n->bytes, length}, &n->image) == TA_OK);
@@ -393,7 +394,7 @@ static void test_dedup(void) {
     ta_datamodel_ecmascript_free(nodes[B].ecmascript);
     nodes[B].ecmascript = ta_datamodel_ecmascript_new(NULL);
     nodes[B].binding = ta_datamodel_ecmascript_binding(nodes[B].ecmascript);
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"b", 1};
@@ -403,8 +404,7 @@ static void test_dedup(void) {
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
     const ta_image *images[1] = {&nodes[B].image};
-    CHECK_EQUAL(ta_host_restore(&config, &(ta_host_snapshot_input){{snap, length}, images, 1, 0},
-                                &nodes[B].host),
+    CHECK_EQUAL(test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {snap, length}, images, 1, 0}, &nodes[B].host),
                 TA_OK);
     CHECK_EQUAL(ta_datamodel_ecmascript_restore(nodes[B].ecmascript, (ta_bytes){dsnap, dl}),
                 TA_OK); /* after the charts attached */
@@ -619,12 +619,12 @@ static void test_host_code_msgid(void) {
 /* A database has no resident segments. Its lookup and unique-index results
  * drive the same router, and refused input must never reserve a dedup key. */
 static void test_external_storage(void) {
-    ta_host_config config = {0};
+    test_host_config config = {0};
     config.size = sizeof config;
     config.system_id = (ta_string_view){"db", 2};
     config.allocator = ta_runtime_malloc();
     ta_host *host;
-    CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
     ta_peer_config peer_config = {0};
     peer_config.size = sizeof peer_config;
     peer_config.id = (ta_string_view){"web", 3};
@@ -719,12 +719,12 @@ static void test_external_storage(void) {
 }
 
 static void test_durable_message(void) {
-    ta_host_config config = {0};
+    test_host_config config = {0};
     config.size = sizeof config;
     config.system_id = (ta_string_view){"db", 2};
     config.allocator = ta_runtime_malloc();
     ta_host *host;
-    CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
     ta_effect effect = {0};
     effect.size = sizeof effect;
     effect.session = 42;
@@ -745,7 +745,7 @@ static void test_durable_message(void) {
     CHECK_EQUAL(ta_host_message_init(host, &effect, &b), TA_OK);
     CHECK(memcmp(a.envelope.msgid.pointer, b.envelope.msgid.pointer, a.envelope.msgid.length));
     ta_host_free(host);
-    CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
     b.revision = 17;
     b.index = 3;
     CHECK_EQUAL(ta_host_message_init(host, &effect, &b), TA_OK);
@@ -831,7 +831,7 @@ static void test_address_grammar(void) {
 static void test_system_id(void) {
     ta_datamodel_ecmascript *ecmascript = ta_datamodel_ecmascript_new(NULL);
     ta_datamodel_binding binding = ta_datamodel_ecmascript_binding(ecmascript);
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system.size = sizeof config.system;
@@ -843,7 +843,7 @@ static void test_system_id(void) {
     for (int k = 0; k < 4; k++) {
         ta_host *host = NULL;
         config.system_id = (ta_string_view){bad[k], (uint32_t)strlen(bad[k])};
-        CHECK(ta_host_new(&config, &host) != TA_OK);
+        CHECK(test_host_new(&config, &host) != TA_OK);
         CHECK(host == NULL);
     }
     ta_datamodel_ecmascript_free(ecmascript);

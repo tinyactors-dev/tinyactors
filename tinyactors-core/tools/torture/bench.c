@@ -55,6 +55,7 @@
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 #include "net.h"
+#include "../../tests/support/host_config.h" /* the config as CBOR */
 
 #ifndef BENCH_SOURCE_DIR
 #define BENCH_SOURCE_DIR "."
@@ -80,7 +81,7 @@
  * stops a session. Unknown charts/sessions raise error.communication. */
 #define SYSTEM_TYPE  "http://tinyactors.dev/torture/#SystemEventProcessor"
 #define SYSTEM_SHORT "system"
-/* host I/O processors of every system (ta_host_config.io_processors; TA_EFFECT_SEND.io_processor):
+/* host I/O processors of every system (the config's ioProcessors; TA_EFFECT_SEND.io_processor):
  * SCXML sends to other systems come out of their router as TA_HOST_EFFECT_PEER */
 #define IO_BENCH  0
 #define IO_SYSTEM 1 /* and 2 (short form) */
@@ -480,7 +481,7 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
     system->trace_mode = trace_mode;
     if (trace_mode == TRACE_DISABLED) system->config.tracing = TA_TRACING_DISABLED;
     system->memory_limit = memory_limit;
-    ta_host_config host_config;
+    test_host_config host_config;
     memset(&host_config, 0, sizeof host_config);
     host_config.size = sizeof host_config;
     host_config.system_id = (ta_string_view){system->base + 13, (uint32_t)strlen(system->base) -
@@ -493,7 +494,7 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
     host_config.allocator = ta_runtime_malloc();
     if (trace_mode == TRACE_OTLP) /* the host's encoder, defaults; flushed after every slice */
         host_config.telemetry.otlp.size = sizeof host_config.telemetry.otlp;
-    if (ta_host_new(&host_config, &system->host) != TA_OK) {
+    if (test_host_new(&host_config, &system->host) != TA_OK) {
         snprintf(message, capacity, "%s: cannot create the system", name);
         ta_datamodel_ecmascript_free(system->ecmascript);
         memset(system, 0, sizeof *system);

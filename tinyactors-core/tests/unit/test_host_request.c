@@ -7,6 +7,7 @@
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 #include "../support/host_request.h"
+#include "../support/host_config.h"
 
 #define CHART                                                                                      \
     "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='pinged' "         \
@@ -48,7 +49,7 @@ static void world_open(world *w, int encoder) {
     memset(w, 0, sizeof *w);
     w->ecmascript = ta_datamodel_ecmascript_new(NULL);
     w->binding = ta_datamodel_ecmascript_binding(w->ecmascript);
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"h", 1};
@@ -60,7 +61,7 @@ static void world_open(world *w, int encoder) {
     config.allocator = ta_runtime_malloc();
     config.max_subscriptions = 1;
     if (encoder) config.telemetry.otlp.size = sizeof config.telemetry.otlp;
-    CHECK_EQUAL(ta_host_new(&config, &w->host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     size_t length;
     w->image_bytes = compile_pinged(&length);
     CHECK(w->image_bytes != NULL);
@@ -424,6 +425,121 @@ static void test_subscribe(void) {
     world_close(&w);
 }
 
+/* ta_host_create with raw config bytes: the status, and the error reply's
+ * diagnostic text in `text` ("" when none was written). */
+static ta_status create(const void *bytes, size_t length, char *text, ta_host **host) {
+    static unsigned char error[512];
+    ta_buffer reply = {error, sizeof error, 0};
+    ta_host_environment environment;
+    memset(&environment, 0, sizeof environment);
+    environment.size = sizeof environment;
+    environment.allocator = ta_runtime_malloc();
+    environment.error = &reply;
+    ta_status status = ta_host_create((ta_bytes){bytes, length}, &environment, host);
+    text[0] = 0;
+    ta_buffer diagnostic = {text, 1023, 0};
+    if (reply.length && ta_cbor_diagnostic((ta_bytes){error, reply.length}, &diagnostic) == TA_OK)
+        text[diagnostic.length] = 0;
+    return status;
+}
+
+#define CREATE(literal, text, host) create(literal, sizeof literal - 1, text, host)
+#define CONFIG_ERROR(code, reason, path, message) ERROR(code, reason, path, message)
+
+static void test_create(void) {
+    char text[1024];
+    ta_host *host = NULL;
+    /* everything the config holds */
+    static ta_cbor_token tokens[128];
+    static char strings[1024];
+    static unsigned char bytes[1024];
+    ta_cbor_writer w;
+    memset(&w, 0, sizeof w);
+    w.document.tokens = tokens;
+    w.document.capacity = 128;
+    w.strings = (ta_buffer){strings, sizeof strings, 0};
+    ta_cbor_write_map(&w, 6);
+    ta_cbor_write_text(&w, ta_string("systemID"));
+    ta_cbor_write_text(&w, ta_string("orders"));
+    ta_cbor_write_text(&w, ta_string("system"));
+    ta_cbor_write_map(&w, 3);
+    ta_cbor_write_text(&w, ta_string("maxActors"));
+    ta_cbor_write_uint(&w, 8);
+    ta_cbor_write_text(&w, ta_string("ticksPerSecond"));
+    ta_cbor_write_uint(&w, 1000);
+    ta_cbor_write_text(&w, ta_string("tracing"));
+    ta_cbor_write_simple(&w, TA_CBOR_FALSE);
+    ta_cbor_write_text(&w, ta_string("ioProcessors"));
+    ta_cbor_write_array(&w, 1);
+    ta_cbor_write_map(&w, 3);
+    ta_cbor_write_text(&w, ta_string("type"));
+    ta_cbor_write_text(&w, ta_string("http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor"));
+    ta_cbor_write_text(&w, ta_string("location"));
+    ta_cbor_write_text(&w, ta_string("http://localhost:8080/"));
+    ta_cbor_write_text(&w, ta_string("sync"));
+    ta_cbor_write_simple(&w, TA_CBOR_TRUE);
+    ta_cbor_write_text(&w, ta_string("migrateQuantum"));
+    ta_cbor_write_uint(&w, 16);
+    ta_cbor_write_text(&w, ta_string("maxSubscriptions"));
+    ta_cbor_write_uint(&w, 4);
+    ta_cbor_write_text(&w, ta_string("telemetry"));
+    ta_cbor_write_map(&w, 3);
+    ta_cbor_write_text(&w, ta_string("stagingBytes"));
+    ta_cbor_write_uint(&w, TA_OTLP_STAGING_BYTES_MIN);
+    ta_cbor_write_text(&w, ta_string("logs"));
+    ta_cbor_write_simple(&w, TA_CBOR_FALSE);
+    ta_cbor_write_text(&w, ta_string("resource"));
+    ta_cbor_write_map(&w, 1);
+    ta_cbor_write_text(&w, ta_string("service.name"));
+    ta_cbor_write_text(&w, ta_string("orders"));
+    ta_buffer config = {bytes, sizeof bytes, 0};
+    CHECK_EQUAL(ta_cbor_finish(&w, &config), TA_OK);
+    CHECK_EQUAL(create(bytes, config.length, text, &host), TA_OK);
+    CHECK(host != NULL && text[0] == 0);
+    memset(bytes, 0, sizeof bytes); /* nothing points into the config afterwards */
+    static host_ask a;
+    ask_begin(&a, "stats", 0);
+    CHECK_EQUAL(ask_send(host, &a), TA_OK);
+    CHECK_EQUAL(ask_uint(&a, ask_field(&a, 0, "host"), "segments"), 0u);
+    ta_buffer traces = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_traces(host, &traces), TA_OK); /* an encoder: nothing staged */
+    ta_host_free(host);
+    /* the smallest config */
+    CHECK_EQUAL(CREATE("\xa1\x68systemID\x61h", text, &host), TA_OK);
+    ta_host_free(host);
+    /* refused, and why */
+    CHECK_EQUAL(CREATE("\xff", text, &host), TA_ERROR_INVALID);
+    CHECK(host == NULL);
+    CHECK(reply_is(text, CONFIG_ERROR("-32700", "malformed", "", "the config is not one well-formed CBOR item")));
+    CHECK_EQUAL(CREATE("\x01", text, &host), TA_ERROR_INVALID);
+    CHECK(reply_is(text, CONFIG_ERROR("-32600", "type", "", "a config is a map")));
+    CHECK_EQUAL(CREATE("\xa0", text, &host), TA_ERROR_INVALID);
+    CHECK(reply_is(text, CONFIG_ERROR("-32602", "missing", "systemID",
+                                      "systemID names this system in its addresses")));
+    CHECK_EQUAL(CREATE("\xa1\x68systemID\x63" "a/b", text, &host), TA_ERROR_INVALID);
+    CHECK(reply_is(text, CONFIG_ERROR("-32602", "range", "systemID",
+                                      "systemID is not a valid system id (docs/protocol.md, Addresses)")));
+    CHECK_EQUAL(CREATE("\xa2\x68systemID\x61h\x61x\x01", text, &host), TA_ERROR_INVALID);
+    CHECK(reply_is(text, CONFIG_ERROR("-32602", "unknown", "x",
+                                      "the config has a field the host does not take")));
+    CHECK_EQUAL(CREATE("\xa2\x68systemID\x61h\x66system\xa1\x69maxActors\x61" "8", text, &host),
+                TA_ERROR_INVALID);
+    CHECK(reply_is(text, CONFIG_ERROR("-32602", "type", "system.maxActors", "expected an unsigned integer")));
+    CHECK_EQUAL(CREATE("\xa2\x68systemID\x61h\x6cioProcessors\x81\xa0", text, &host), TA_ERROR_INVALID);
+    CHECK(reply_is(text, CONFIG_ERROR("-32602", "missing", "ioProcessors[0].type",
+                                      "type is the I/O processor's URI")));
+    CHECK_EQUAL(CREATE("\xa2\x68systemID\x61h\x69telemetry\xa1\x68resource\xa1\x61k\x01", text, &host),
+                TA_ERROR_INVALID);
+    CHECK(reply_is(text, CONFIG_ERROR("-32602", "type", "telemetry.resource",
+                                      "resource is a map of text to text")));
+    /* without an error buffer: refused all the same */
+    ta_host_environment environment;
+    memset(&environment, 0, sizeof environment);
+    environment.size = sizeof environment;
+    environment.allocator = ta_runtime_malloc();
+    CHECK_EQUAL(ta_host_create((ta_bytes){"\xa0", 1}, &environment, &host), TA_ERROR_INVALID);
+}
+
 int main(void) {
     RUN(test_refused_requests);
     RUN(test_stats_actors_actor_state);
@@ -431,5 +547,6 @@ int main(void) {
     RUN(test_spans_and_metrics);
     RUN(test_actor_context);
     RUN(test_subscribe);
+    RUN(test_create);
     TEST_MAIN_END();
 }

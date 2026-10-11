@@ -9,6 +9,7 @@
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 #include "../support/host_request.h"
+#include "../support/host_config.h"
 
 #define SC(name, body)                                                                             \
     "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='" name "' " body  \
@@ -92,7 +93,7 @@ static void world_open(world *w, uint32_t max_events) {
     w->vtable = *w->binding.vtable;
     w->vtable.script = script;
     w->binding.vtable = &w->vtable;
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"h", 1};
@@ -103,7 +104,7 @@ static void world_open(world *w, uint32_t max_events) {
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
-    CHECK_EQUAL(ta_host_new(&config, &w->host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     size_t length;
     w->image_bytes = compile_both(&length);
     CHECK(w->image_bytes != NULL);

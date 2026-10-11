@@ -62,7 +62,7 @@ ABI_CHECK(TA_IO_PROCESSOR_SCXML_SHARED == 4, io_processor_shared_flag);
 ABI_CHECK(offsetof(ta_state_info, size) == 0, state_info_size_first);
 ABI_CHECK(offsetof(ta_actor_info, size) == 0, actor_info_size_first);
 ABI_CHECK(sizeof(ta_actor_info) == 56, actor_info_size);
-ABI_CHECK(offsetof(ta_host_config, size) == 0, host_config_size_first);
+ABI_CHECK(offsetof(ta_host_environment, size) == 0, host_environment_size_first);
 ABI_CHECK(offsetof(ta_host_effect, size) == 0, host_effect_size_first);
 ABI_CHECK(offsetof(ta_host_segment_info, size) == 0, host_segment_info_size_first);
 ABI_CHECK(offsetof(ta_host_stats, size) == 0, host_stats_size_first);

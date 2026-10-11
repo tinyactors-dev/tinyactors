@@ -1,4 +1,4 @@
-/* The host's OTLP encoder (host.h, ta_host_telemetry; docs/adr/0009 in the
+/* The host's OTLP encoder (the config's "telemetry", docs/host-config.md; docs/adr/0009 in the
  * repository root, decision 6): records are read inside ta_host_run, a
  * TA_HOST_EFFECT_TRACES effect says a request is ready, and ta_host_traces
  * writes it into the caller's buffer. */
@@ -8,6 +8,7 @@
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 #include "../support/host_request.h"
+#include "../support/host_config.h"
 
 /* Every `ping` is a macrostep with a log record. */
 #define CHART                                                                                      \
@@ -64,7 +65,7 @@ static ta_status assign(void *datamodel, uint64_t instance, ta_datamodel_environ
 }
 
 /* telemetry: NULL for a host without an encoder */
-static void world_open(world *w, const ta_host_telemetry *telemetry) {
+static void world_open(world *w, const test_host_telemetry *telemetry) {
     memset(w, 0, sizeof *w);
     current = w;
     w->ecmascript = ta_datamodel_ecmascript_new(NULL);
@@ -72,7 +73,7 @@ static void world_open(world *w, const ta_host_telemetry *telemetry) {
     w->vtable = *w->binding.vtable;
     w->vtable.assign = assign;
     w->binding.vtable = &w->vtable;
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"h", 1};
@@ -83,7 +84,7 @@ static void world_open(world *w, const ta_host_telemetry *telemetry) {
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
     if (telemetry) config.telemetry = *telemetry;
-    CHECK_EQUAL(ta_host_new(&config, &w->host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     size_t length;
     w->image_bytes = compile_pinged(&length);
     CHECK(w->image_bytes != NULL);
@@ -139,8 +140,8 @@ static uint32_t span_count(const void *bytes, size_t length) {
     return n;
 }
 
-static ta_host_telemetry encoder(ta_time flush_interval) {
-    ta_host_telemetry telemetry;
+static test_host_telemetry encoder(ta_time flush_interval) {
+    test_host_telemetry telemetry;
     memset(&telemetry, 0, sizeof telemetry);
     telemetry.otlp.size = sizeof telemetry.otlp;
     telemetry.flush_interval = flush_interval;
@@ -149,7 +150,7 @@ static ta_host_telemetry encoder(ta_time flush_interval) {
 
 /* Records are read inside the run; ta_host_traces takes the spans once. */
 static void test_drain_and_take(void) {
-    ta_host_telemetry telemetry = encoder(0);
+    test_host_telemetry telemetry = encoder(0);
     world w;
     world_open(&w, &telemetry);
     advance(&w, 10);
@@ -174,7 +175,7 @@ static void test_drain_and_take(void) {
 
 /* TA_ERROR_NO_MEMORY says what the request needs and leaves the spans. */
 static void test_take_sizing(void) {
-    ta_host_telemetry telemetry = encoder(0);
+    test_host_telemetry telemetry = encoder(0);
     world w;
     world_open(&w, &telemetry);
     advance(&w, 10);
@@ -200,7 +201,7 @@ static void test_take_sizing(void) {
 
 /* The flush interval is a deadline of the run; when it passes, one effect. */
 static void test_flush_deadline(void) {
-    ta_host_telemetry telemetry = encoder(100);
+    test_host_telemetry telemetry = encoder(100);
     world w;
     world_open(&w, &telemetry);
     advance(&w, 10);
@@ -243,7 +244,7 @@ static void test_flush_deadline(void) {
 
 /* A full staging is a TRACES effect without an interval. */
 static void test_staging_full(void) {
-    ta_host_telemetry telemetry = encoder(0);
+    test_host_telemetry telemetry = encoder(0);
     telemetry.otlp.staging_bytes = TA_OTLP_STAGING_BYTES_MIN;
     telemetry.otlp.flags = TA_OTLP_NO_LOGS;
     world w;
@@ -266,7 +267,7 @@ static void test_staging_full(void) {
 /* The bytes are what a caller reading the journals into its own encoder,
  * with the same marks, would write. */
 static void test_same_bytes(void) {
-    ta_host_telemetry telemetry = encoder(0);
+    test_host_telemetry telemetry = encoder(0);
     world a, b;
     world_open(&b, NULL);
     world_open(&a, &telemetry);
@@ -345,7 +346,7 @@ static void test_same_bytes(void) {
 
 /* Refused inside a run; without an encoder, refused and the journals are the caller's. */
 static void test_refusals(void) {
-    ta_host_telemetry telemetry = encoder(0);
+    test_host_telemetry telemetry = encoder(0);
     world w;
     world_open(&w, &telemetry);
     w.during_run = TA_OK;

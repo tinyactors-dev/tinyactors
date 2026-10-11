@@ -20,6 +20,7 @@
 #include <tinyactors/compile.h>
 #include <tinyactors/datamodel_ecmascript.h>
 #include "../support/payload_text.h"
+#include "../support/host_config.h"
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 
@@ -111,8 +112,8 @@ static void host_open(conformance_world *w) {
     w->ecmascript = ta_datamodel_ecmascript_new(NULL);
     w->binding = ta_datamodel_ecmascript_binding(w->ecmascript);
 }
-static ta_host_config host_config(conformance_world *w) {
-    ta_host_config config;
+static test_host_config host_config(conformance_world *w) {
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"conformance", 11};
@@ -496,8 +497,8 @@ static int run_scenario(JSValueConst sc, const char *file) {
     memset(w, 0, sizeof *w);
     w->documents = get(sc, "documents");
     host_open(w);
-    ta_host_config config = host_config(w);
-    ta_host_new(&config, &w->host);
+    test_host_config config = host_config(w);
+    test_host_new(&config, &w->host);
     JSValue steps = get(sc, "steps"), name = get(sc, "name");
     char *sname = str_of(name);
     char fail[8192] = "";
@@ -638,13 +639,7 @@ static int run_scenario(JSValueConst sc, const char *file) {
             for (uint32_t s2 = 0; s2 < w->segment_count; s2++)
                 images[s2] = &w->segments[s2]->image;
             if (k == w->snapshot_count ||
-                ta_host_restore(
-                    &config,
-                    &(ta_host_snapshot_input){{w->snapshot_host[k], w->snapshot_host_length[k]},
-                                              images,
-                                              w->segment_count,
-                                              0},
-                    &w->host) != TA_OK ||
+                test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {w->snapshot_host[k], w->snapshot_host_length[k]}, images, w->segment_count, 0}, &w->host) != TA_OK ||
                 ta_datamodel_ecmascript_restore(
                     w->ecmascript,
                     (ta_bytes){w->snapshot_datamodel[k], w->snapshot_datamodel_length[k]}) != TA_OK)

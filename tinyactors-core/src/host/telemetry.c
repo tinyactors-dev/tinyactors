@@ -1,9 +1,9 @@
 /* The host's OTLP encoder (docs/adr/0009 in the repository root, decision 6):
  * every segment's trace records go into one ta_otlp inside ta_host_run, and
  * an effect says when a request is ready for ta_host_traces or ta_host_logs.
- * Without an encoder (ta_host_telemetry.otlp.size 0) the host gets the null
+ * Without an encoder (host_telemetry.otlp.size 0: the config has no "telemetry") the host gets the null
  * encoder: every operation does nothing, as datamodel_null.c does for charts.
- * The choice is made once, at ta_host_new; nothing below asks again. */
+ * The choice is made once, at ta_host_create; nothing below asks again. */
 #include "base/memory.h"
 #include "host/host_internal.h"
 
@@ -16,7 +16,7 @@ static void encoder_capacities(ta_otlp_config *config) {
 static const host_encoder encoder_null, encoder_otlp;
 
 ta_status host_telemetry_init(ta_host *host) {
-    const ta_host_telemetry *telemetry = &host->config.telemetry;
+    const host_telemetry *telemetry = &host->config.telemetry;
     host->encoder = &encoder_null;
     if (!telemetry->otlp.size) return TA_OK;
     ta_otlp_config config;

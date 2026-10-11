@@ -38,6 +38,7 @@
 #include <tinyactors/runtime.h>
 #include <tinyactors/system.h>
 #include "../support/host_request.h"
+#include "../support/host_config.h"
 
 /* ---- charts (@HELLO@ and @LOG:label@ are expanded by expand()) ------------------------ */
 
@@ -926,8 +927,8 @@ static int snapshot_restore(world *w) {
 /* ---- the host world: the same chain through ta_host -------------------------------------------
  */
 
-static ta_host_config host_config(world *w) {
-    ta_host_config config;
+static test_host_config host_config(world *w) {
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"d", 1};
@@ -1085,9 +1086,9 @@ static int host_snapshot_restore(world *w) {
     ta_host_free(w->host);
     ta_datamodel_ecmascript_free(w->ecmascript);
     datamodel_new(w);
-    ta_host_config config = host_config(w);
+    test_host_config config = host_config(w);
     ta_status status =
-        ta_host_restore(&config, &(ta_host_snapshot_input){{hs, hl}, images, ns, 0}, &w->host);
+        test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, images, ns, 0}, &w->host);
     if (status == TA_OK)
         status = ta_datamodel_ecmascript_restore(w->ecmascript, (ta_bytes){ds, dl});
     free(hs);
@@ -1100,9 +1101,9 @@ static void world_init_host(world *w, const char *label) {
     memset(w, 0, sizeof *w);
     w->label = label;
     datamodel_new(w);
-    ta_host_config config = host_config(w);
+    test_host_config config = host_config(w);
     uint32_t segment;
-    CHECK_EQUAL(ta_host_new(&config, &w->host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     CHECK_EQUAL(ta_host_add_image(w->host, &test_images[0], &segment), TA_OK);
     w->segment_image[segment] = 0;
     ta_host_advance_time(w->host, (ta_host_time){0, 0});

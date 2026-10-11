@@ -17,6 +17,44 @@
 #define HELD_BLOCKS_MAX 64
 #define EFFECTS_PER_RUN 4096 /* effects per run before TA_RUN_EFFECTS_FULL */
 
+/* The host's config, read from ta_host_create's CBOR (docs/host-config.md)
+ * and its environment. Strings point into memory the host owns. */
+typedef struct host_telemetry {
+    ta_otlp_config otlp;               /* size 0: no encoder */
+    ta_time flush_interval;            /* host clock; 0: only when the staging is full */
+    const ta_otlp_attribute *resource; /* copied by host_telemetry_init */
+    uint32_t resource_count;
+    uint32_t pad;
+} host_telemetry;
+
+typedef struct host_config {
+    uint32_t datamodel_count;
+    uint32_t io_processor_count;
+    ta_string_view system_id;
+    ta_system_config system; /* capacities of each new segment; io_processors and
+                                first_serial are set by the host layer */
+    const ta_datamodel_binding *datamodels;
+    const ta_io_processor_descriptor *io_processors;
+    uint32_t migrate_quantum;   /* default 256 */
+    uint32_t max_subscriptions; /* default 64 */
+    ta_allocator allocator;
+    host_telemetry telemetry;
+} host_config;
+
+/* The config of ta_host_create: `cbor` read into `config` (strings point
+ * into `cbor`; resource attributes into `resource`, HOST_CONFIG_RESOURCE of
+ * them). TA_ERROR_INVALID with the error reply written into `error` (when
+ * set). In request.c, which reads requests the same way. */
+#define HOST_CONFIG_RESOURCE 32u
+#define HOST_CONFIG_IO_PROCESSORS 16u
+typedef struct host_config_input {
+    ta_bytes cbor;
+    ta_buffer *error;
+    ta_otlp_attribute *resource;              /* HOST_CONFIG_RESOURCE */
+    ta_io_processor_descriptor *io_processors; /* HOST_CONFIG_IO_PROCESSORS */
+} host_config_input;
+ta_status host_config_read(const host_config_input *input, host_config *config);
+
 typedef struct host_segment {
     int live;
     int busy;
@@ -87,7 +125,7 @@ typedef struct host_watch {
 } host_watch;
 
 struct ta_host {
-    ta_host_config config;
+    host_config config;
     /* inside ta_system_run, where a datamodel may call back: only the inputs
      * (spawn, send, send_many, terminate) and lookups are taken, nothing
      * grows, every other call is TA_ERROR_STATE (host.h, "During a run") */
@@ -100,6 +138,8 @@ struct ta_host {
     uint32_t trace_flags, trace_kinds, trace_parts, trace_whole;
     host_watch *watches;
     uint32_t watch_count, watch_capacity, watch_sequence;
+    char *io_processor_text; /* the strings of io_processors[1..] */
+    size_t io_processor_text_length;
     uint64_t *subscriptions; /* actor.subscribe: config.max_subscriptions sessions, allocated
                                 with the first subscription (never during a run) */
     uint32_t subscription_count;
@@ -238,7 +278,7 @@ struct cbor_output;
 ta_status host_state_value(const ta_host *h, uint64_t session, struct cbor_output *out);
 
 /* telemetry.c: what the run loop asks of the encoder, chosen once at
- * ta_host_new (the OTLP encoder, or the null one: all of it does nothing) */
+ * ta_host_create (the OTLP encoder, or the null one: all of it does nothing) */
 typedef struct host_encoder {
     void (*mark)(ta_host *h, uint64_t wall_ns); /* ta_host_advance_time */
     void (*drain)(ta_host *h);                  /* journals into the encoder */

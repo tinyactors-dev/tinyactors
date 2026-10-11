@@ -7,6 +7,7 @@
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 #include "../support/host_request.h"
+#include "../support/host_config.h"
 
 #define BASE "tinyactors://h/"
 #define SC(name, body)                                                                             \
@@ -34,7 +35,7 @@ static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor
     memset(e, 0, sizeof *e);
     e->ecmascript = ta_datamodel_ecmascript_new(NULL);
     e->binding = ta_datamodel_ecmascript_binding(e->ecmascript);
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"h", 1};
@@ -47,7 +48,7 @@ static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor
     config.io_processors = io;
     config.io_processor_count = io_count;
     config.allocator = ta_runtime_malloc();
-    CHECK_EQUAL(ta_host_new(&config, &e->host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &e->host), TA_OK);
 }
 
 static uint32_t world_add(host_world *e, const char *text) {
@@ -404,7 +405,7 @@ static void test_versions_and_migration(void) {
     ta_datamodel_ecmascript_free(e.ecmascript);
     e.ecmascript = ta_datamodel_ecmascript_new(NULL);
     e.binding = ta_datamodel_ecmascript_binding(e.ecmascript);
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"h", 1};
@@ -413,7 +414,7 @@ static void test_versions_and_migration(void) {
     config.allocator = ta_runtime_malloc();
     const ta_image *images[3] = {&e.image[0], &e.image[1], &e.image[2]};
     CHECK_EQUAL(
-        ta_host_restore(&config, &(ta_host_snapshot_input){{hs, hl}, images, 3, 0}, &e.host),
+        test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, images, 3, 0}, &e.host),
         TA_OK);
     CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, (ta_bytes){ds, dl}), TA_OK);
     CHECK_EQUAL(host_chart_stats_fill(e.host, charts, 4), 2u);
@@ -680,7 +681,7 @@ static void test_snapshot_restore(void) {
     ta_datamodel_ecmascript_free(e.ecmascript);
     e.ecmascript = ta_datamodel_ecmascript_new(NULL);
     e.binding = ta_datamodel_ecmascript_binding(e.ecmascript);
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"h", 1};
@@ -689,14 +690,14 @@ static void test_snapshot_restore(void) {
     config.allocator = ta_runtime_malloc();
     const ta_image *images[2] = {&e.image[0], &e.image[1]};
     CHECK_EQUAL(
-        ta_host_restore(&config, &(ta_host_snapshot_input){{hs, hl}, images, 1, 0}, &e.host),
+        test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, images, 1, 0}, &e.host),
         TA_ERROR_INVALID); /* too few */
     const ta_image *swapped[2] = {&e.image[1], &e.image[0]};
     CHECK_EQUAL(
-        ta_host_restore(&config, &(ta_host_snapshot_input){{hs, hl}, swapped, 2, 0}, &e.host),
+        test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, swapped, 2, 0}, &e.host),
         TA_ERROR_INVALID); /* wrong ones */
     CHECK_EQUAL(
-        ta_host_restore(&config, &(ta_host_snapshot_input){{hs, hl}, images, 2, 0}, &e.host),
+        test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, images, 2, 0}, &e.host),
         TA_OK);
     CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, (ta_bytes){ds, dl}), TA_OK);
     CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, (ta_bytes){ds, dl}),
@@ -952,7 +953,7 @@ static void test_snapshot_pack(void) {
     memset(&f, 0, sizeof f);
     f.ecmascript = ta_datamodel_ecmascript_new(NULL);
     f.binding = ta_datamodel_ecmascript_binding(f.ecmascript);
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = contents.system_id;
@@ -964,10 +965,7 @@ static void test_snapshot_pack(void) {
     ta_image opened;
     CHECK_EQUAL(ta_image_open((ta_bytes){image.pointer, image.length}, &opened), TA_OK);
     const ta_image *images[1] = {&opened};
-    CHECK_EQUAL(ta_host_restore(
-                    &config,
-                    &(ta_host_snapshot_input){{contents.host, contents.host_length}, images, 1, 0},
-                    &f.host),
+    CHECK_EQUAL(test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {contents.host, contents.host_length}, images, 1, 0}, &f.host),
                 TA_OK);
     CHECK_EQUAL(ta_datamodel_ecmascript_restore(f.ecmascript, (ta_bytes){state, dl}), TA_OK);
     CHECK_EQUAL(ta_host_locate(f.host, session, &(ta_host_location){0, 0}), TA_OK);

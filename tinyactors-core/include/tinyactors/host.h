@@ -1,6 +1,6 @@
 /* tinyactors/host.h — many systems as one actor system: the policy every embedder
  * would otherwise rebuild, in one place. All its memory, the segments' blocks
- * included, comes from the ta_allocator in its config (docs/adr/0005).
+ * included, comes from the ta_allocator of its environment (docs/adr/0005).
  *
  * A ta_host owns *segments*: one ta_system per image. All segments share one
  * base URI and one set of datamodel bindings; segment k creates sessions
@@ -62,45 +62,29 @@ extern "C" {
 
 typedef struct ta_host ta_host;
 
-/* The host's OTLP encoder (docs/adr/0009 in the repository root, decision 6).
- * With otlp.size 0 the host has none: it reads no trace records, and the
- * caller may read each segment's journal itself (ta_host_system,
- * ta_system_trace). With one, the host reads every segment's records inside
- * ta_host_run, encodes them, and says when a request is ready
- * (TA_HOST_EFFECT_TRACES, TA_HOST_EFFECT_LOGS); nobody else reads the
- * journals. The encoder's block comes from the host's allocator and grows
- * when its open spans, chunks or scopes are full. */
-typedef struct ta_host_telemetry {
-    ta_otlp_config otlp;               /* capacities and TA_OTLP_* flags; size 0: no encoder */
-    ta_time flush_interval;            /* host clock (ta_host_time.monotonic): a request is
-                                          ready this long after its first span or log record
-                                          was staged; 0: only when the staging is full */
-    const ta_otlp_attribute *resource; /* every request's resource (`service.name`, ...),
-                                          copied */
-    uint32_t resource_count;
-    uint32_t pad;
-} ta_host_telemetry;
-
-typedef struct ta_host_config {
+/* A new host. `config` is CBOR (docs/host-config.md): the system id, the
+ * capacities of each segment, the host's I/O processors, the OTLP encoder
+ * (docs/adr/0009 in the repository root, decision 6), and the limits of the
+ * host; it is read during the call and nothing points into it afterwards.
+ * `environment` holds what cannot be data: the allocator, the datamodels and
+ * a trace policy (borrowed for as long as the host lives, except the policy,
+ * which is copied).
+ * TA_ERROR_INVALID: the config is not one the host takes; when
+ * environment->error is set, the reply of a refused request is written there
+ * ({"error": {"code", "message", "data": {"reason", "path"}}},
+ * docs/requests.md). TA_ERROR_NO_MEMORY: the allocator refused. */
+typedef struct ta_host_environment {
     uint32_t size;
-    uint32_t datamodel_count;
-    ta_string_view system_id;               /* this system's id (docs/protocol.md, Addresses): its
-                                       addresses are tinyactors://<system_id>/...; required */
-    ta_system_config system;                /* capacities of each new segment (grown as needed);
-                                               io_processors and first_serial are set by the host layer */
-    const ta_datamodel_binding *datamodels; /* datamodels, shared by every segment */
-    const ta_io_processor_descriptor
-        *io_processors; /* host I/O processors (TA_EFFECT_SEND io_processor = index here) */
-    uint32_t io_processor_count;
-    uint32_t migrate_quantum; /* actors a migration job looks at per run (default 256) */
-    ta_allocator allocator;   /* required: every block the host owns (ta_runtime_malloc() is
-                                 the C library's); requests are aligned to at most 8 */
-    ta_host_telemetry telemetry; /* the OTLP encoder (zeroed: none) */
-    uint32_t max_subscriptions;  /* sessions actor.subscribe watches at once (default 64) */
-    uint32_t pad;
-} ta_host_config;
-
-TA_API ta_status ta_host_new(const ta_host_config *config, ta_host **out);
+    uint32_t datamodel_count;               /* at most 8 */
+    const ta_datamodel_binding *datamodels; /* shared by every segment */
+    ta_allocator allocator; /* required: every block the host owns (ta_runtime_malloc() is
+                               the C library's); requests are aligned to at most 8 */
+    const ta_trace_policy *trace_policy; /* what each segment traces at first (NULL:
+                                            ta_trace_policy_default); copied */
+    ta_buffer *error;                    /* optional: why the config was refused */
+} ta_host_environment;
+TA_API ta_status ta_host_create(ta_bytes config, const ta_host_environment *environment,
+                                ta_host **out);
 TA_API void ta_host_free(ta_host *h);
 
 /* ---- segments and versions ----------------------------------------------- */
@@ -214,7 +198,7 @@ enum {
                                   aux = origin, msgid, hops (in `flags`) */
     TA_HOST_EFFECT_PEER_ERROR = 20, /* send an `err` to `peer`: aux = origin, msgid, sendid,
                                 token = reason */
-    /* the encoder (ta_host_telemetry): a request is ready, because the
+    /* the encoder (the config's "telemetry"): a request is ready, because the
      * staging is full or flush_interval passed since its first record; take
      * it with ta_host_traces (ta_host_logs). At most one of each kind is
      * outstanding: the next comes after a take. */
@@ -233,7 +217,7 @@ typedef struct ta_host_effect {
     uint64_t session;      /* the actor's session id (0: none) */
     uint64_t root;         /* the session of its host-spawned ancestor (attribution) */
     uint32_t token;        /* request / invoke token (per segment) */
-    uint32_t io_processor; /* TA_EFFECT_SEND: index in ta_host_config.io_processors */
+    uint32_t io_processor; /* TA_EFFECT_SEND: index in the config's ioProcessors */
     uint32_t flags;        /* PEER: hops */
     uint32_t job;
     ta_string_view target, event, sendid, auxiliary; /* as in ta_effect; MIGRATED: event = chart
@@ -299,7 +283,7 @@ TA_API ta_string_view ta_host_effect_text(ta_host *h, uint32_t index, uint32_t f
  * spans leave the staging only on TA_OK: TA_ERROR_NO_MEMORY means nothing
  * changed and out->length is what the request needs. Posting it, retrying
  * and capping what waits are the caller's. TA_ERROR_STATE during a run or
- * without an encoder (ta_host_telemetry). ta_host_logs: the same for the
+ * without an encoder (the config's "telemetry"). ta_host_logs: the same for the
  * ExportLogsServiceRequest (`/v1/logs`). */
 TA_API ta_status ta_host_traces(ta_host *h, ta_buffer *out);
 TA_API ta_status ta_host_logs(ta_host *h, ta_buffer *out);
@@ -322,7 +306,7 @@ typedef struct ta_envelope {
     ta_string_view target;     /* address */
     ta_string_view name;       /* event name */
     ta_payload data;           /* datamodel payload (moved on success; the caller's on failure) */
-    uint32_t datamodel;        /* datamodel index of `data` (ta_host_config.datamodels) */
+    uint32_t datamodel;        /* datamodel index of `data` (ta_host_environment.datamodels) */
     uint32_t trace_flags;      /* local to this process: the sender's detail class (ta_event_in) */
     ta_string_view sendid;     /* the sender's sendid (may be empty) */
     ta_string_view origin;     /* the sending session's address */
@@ -551,15 +535,16 @@ TA_API uint32_t ta_host_snapshot_segments(ta_bytes snapshot, ta_uint64_array has
  * must be the image segment i ran (same content hash) or NULL if it was
  * retired; the image bytes must stay valid as with ta_host_add_image. */
 typedef struct ta_host_snapshot_input {
+    ta_bytes config; /* as for ta_host_create */
     ta_bytes snapshot;
     const ta_image *const *images;
     uint32_t image_count;
     uint32_t pad;
 } ta_host_snapshot_input;
-/* A new host (config as for ta_host_new) running the snapshot. Charts are
- * attached to the datamodels again during the call. */
-TA_API ta_status ta_host_restore(const ta_host_config *config, const ta_host_snapshot_input *input,
-                                 ta_host **out);
+/* A new host (input->config and environment as for ta_host_create) running
+ * the snapshot. Charts are attached to the datamodels again during the call. */
+TA_API ta_status ta_host_restore(const ta_host_environment *environment,
+                                 const ta_host_snapshot_input *input, ta_host **out);
 /* The datamodels' state as the caller keeps it, labelled with their name. */
 typedef struct ta_datamodel_state {
     ta_string_view datamodel;
@@ -603,7 +588,7 @@ TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_buffer *reply)
  * docs/adr/0007), written into `out`: per chart, per segment and the host's
  * own. There is no metrics timer or effect: call it when the application
  * wants them. TA_ERROR_NO_MEMORY: out->length is what it needs. TA_ERROR_STATE
- * during a run or without an encoder (ta_host_telemetry). */
+ * during a run or without an encoder (the config's "telemetry"). */
 TA_API ta_status ta_host_metrics(ta_host *h, ta_buffer *out);
 
 #ifdef __cplusplus

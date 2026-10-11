@@ -21,6 +21,7 @@
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
 #include "../support/host_request.h"
+#include "../support/host_config.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -273,8 +274,8 @@ static ta_status spawn(workload *w, const char *chart, uint64_t *session) {
         session);
 }
 
-static ta_host_config workload_config(workload *w) {
-    ta_host_config config;
+static test_host_config workload_config(workload *w) {
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"h", 1};
@@ -301,9 +302,9 @@ static void workload_run(workload *w) {
     test_memory *m = w->memory;
     w->ecmascript = ta_datamodel_ecmascript_new(NULL);
     w->binding = ta_datamodel_ecmascript_binding(w->ecmascript);
-    ta_host_config config = workload_config(w);
+    test_host_config config = workload_config(w);
     m->phase = "new";
-    RETRY(m, TA_OK, ta_host_new(&config, &w->host));
+    RETRY(m, TA_OK, test_host_new(&config, &w->host));
     if (!w->host) return;
     add_image(w, 0); /* w, version 1 */
     add_image(w, 1); /* echo */
@@ -445,14 +446,13 @@ static void workload_run(workload *w) {
     copy.ecmascript = ta_datamodel_ecmascript_new(NULL);
     copy.binding = ta_datamodel_ecmascript_binding(copy.ecmascript);
     memset(&copy.effects, 0, sizeof copy.effects);
-    ta_host_config restored_config = workload_config(&copy);
+    test_host_config restored_config = workload_config(&copy);
     const ta_image *restored_images[3] = {&w->images->image[0], &w->images->image[1],
                                           &w->images->image[2]};
     uint64_t live = m->live_blocks;
     ta_host *restored = NULL;
     RETRY(m, TA_OK,
-          ta_host_restore(&restored_config,
-                          &(ta_host_snapshot_input){{hs, hl}, restored_images, 3, 0}, &restored));
+          test_host_restore(&restored_config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, restored_images, 3, 0}, &restored));
     CHECK(restored != NULL && m->live_blocks > live);
     if (restored) {
         CHECK_EQUAL(ta_datamodel_ecmascript_restore(copy.ecmascript, (ta_bytes){ds, dl}), TA_OK);
@@ -547,21 +547,25 @@ static void test_accounting(void) {
     /* a host that only came and went */
     test_memory m;
     memset(&m, 0, sizeof m);
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"h", 1};
     config.allocator = memory_allocator(&m);
     ta_host *host = NULL;
-    CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
     ta_host_free(host);
     CHECK(m.count == 1 && m.live_blocks == 0 && m.bad_frees == 0);
     /* an allocator is required */
     config.allocator.alloc = NULL;
-    CHECK_EQUAL(ta_host_new(&config, &host), TA_ERROR_INVALID);
-    config.size = (uint32_t)offsetof(ta_host_config, allocator);
-    config.allocator = memory_allocator(&m);
-    CHECK_EQUAL(ta_host_new(&config, &host), TA_ERROR_INVALID);
+    CHECK_EQUAL(test_host_new(&config, &host), TA_ERROR_INVALID);
+    /* so is an environment that says how big it is */
+    ta_host_environment environment;
+    memset(&environment, 0, sizeof environment);
+    environment.allocator = memory_allocator(&m);
+    CHECK_EQUAL(ta_host_create((ta_bytes){"\xa1\x68systemIDah", 12}, &environment, &host),
+                TA_ERROR_INVALID);
+    CHECK(m.count == 1 && m.live_blocks == 0);
     images_close(&im);
 }
 
@@ -611,7 +615,7 @@ static void test_fixed_arena(void) {
     const char *const texts[3] = {PINGER, PONGER, PINGER2};
     images_open(&im, texts);
     ta_datamodel_binding binding = {ta_datamodel_null(), NULL};
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"h", 1};
@@ -622,7 +626,7 @@ static void test_fixed_arena(void) {
     config.datamodel_count = 1;
     config.allocator = (ta_allocator){&a, arena_alloc, arena_free};
     ta_host *host = NULL;
-    CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
     CHECK_EQUAL(ta_host_add_image(host, &im.image[0], NULL), TA_OK);
     CHECK_EQUAL(ta_host_add_image(host, &im.image[1], NULL), TA_OK);
     uint64_t p = 0, q = 0, extra = 0;
@@ -691,7 +695,7 @@ static void test_fixed_arena(void) {
     static unsigned char small[4096];
     arena tiny = {small, sizeof small, 0, 0};
     config.allocator = (ta_allocator){&tiny, arena_alloc, arena_free};
-    CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
     CHECK_EQUAL(ta_host_add_image(host, &im.image[0], NULL), TA_ERROR_NO_MEMORY);
     CHECK_EQUAL(ta_host_segment_count(host), 0);
     ta_host_free(host);
@@ -725,13 +729,13 @@ static void refused_delivery(ta_host *host, uint32_t peer, int i) {
 static void test_published_effects_stay_valid(void) {
     test_memory m;
     memset(&m, 0, sizeof m);
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"h", 1};
     config.allocator = memory_allocator(&m);
     ta_host *host = NULL;
-    CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
     ta_peer_config peer_config;
     memset(&peer_config, 0, sizeof peer_config);
     peer_config.size = sizeof peer_config;
@@ -773,13 +777,13 @@ static void test_published_effects_stay_valid(void) {
 static void test_pool_is_reclaimed_with_effects_pending(void) {
     test_memory m;
     memset(&m, 0, sizeof m);
-    ta_host_config config;
+    test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
     config.system_id = (ta_string_view){"h", 1};
     config.allocator = memory_allocator(&m);
     ta_host *host = NULL;
-    CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
+    CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
     ta_peer_config peer_config;
     memset(&peer_config, 0, sizeof peer_config);
     peer_config.size = sizeof peer_config;
