@@ -2790,7 +2790,7 @@ static sjs_result string_replace(sjs_vm *vm, sjs_leaf_call *call) {
  * from the end when negative, an undefined length runs to the end. Both by
  * UTF-16 code unit, converting their arguments as slice does. A cut
  * between the halves of a pair faults, as staticjs strings cannot hold a
- * lone surrogate. */
+ * lone surrogate, unless it is empty. */
 static sjs_result string_substring(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     const sjs_string *string = SJS_AS_STRING(call->receiver);
     uint32_t units = string->utf16_length;
@@ -2814,6 +2814,8 @@ static sjs_result string_substring(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call 
         to = end < (double)from ? from : end > (double)units ? units : (uint32_t)end;
     }
     sjs_str s = sjs_string_view(string);
+    /* An empty cut takes no half of a pair, even between the halves. */
+    if (from == to) return new_string(vm, (sjs_str){ s.ptr, 0 }, &call->result);
     uint32_t a = from;
     uint32_t b = to;
     if (!(string->h.flags & SJS_STRING_ASCII) && (!utf16_to_byte(s, from, &a) || !utf16_to_byte(s, to, &b))) {
