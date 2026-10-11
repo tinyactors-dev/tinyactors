@@ -167,6 +167,10 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
             step_log(system, index, instance);
             break;
         case TA_STEP_STABLE: {
+            if (actor->flags & ACTOR_FLAG_WATCHED) { /* once per watch (ta_actor_watch) */
+                if (ta_system_effect_push(system, TA_EFFECT_CHANGED, index))
+                    actor->flags &= (uint8_t)~ACTOR_FLAG_WATCHED;
+            }
             uint32_t event = next_external(system, index);
             if (event == TA_NIL) {
                 actor->state = TA_ACTOR_IDLE;

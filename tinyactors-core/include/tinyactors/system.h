@@ -231,7 +231,8 @@ enum {
     TA_EFFECT_LOG = 5,
     TA_EFFECT_DONE = 6, /* top-level actor reached a final state; payload = donedata */
     TA_EFFECT_ERROR = 7,
-    TA_EFFECT_WAKE = 8 /* a hibernated actor has work: load its blob, call ta_actor_wake() */
+    TA_EFFECT_WAKE = 8, /* a hibernated actor has work: load its blob, call ta_actor_wake() */
+    TA_EFFECT_CHANGED = 9 /* a watched actor finished a macrostep (ta_actor_watch) */
 };
 enum { TA_EFFECT_FLAG_NEEDS_RESPONSE = 1u << 0 };
 /* Field use per kind (unused fields are empty / 0):
@@ -301,6 +302,12 @@ typedef struct ta_actor_info {
     uint32_t pad;
 } ta_actor_info;
 
+/* Watch an actor (on: 1) or stop (0): when a watched actor finishes its
+ * next macrostep, a TA_EFFECT_CHANGED is emitted and the watch ends, so an
+ * actor costs one effect per watch however many macrosteps it runs. Watch it
+ * again for the next. Unwatched actors cost nothing. TA_ERROR_STALE for an
+ * actor that is gone or hibernated. */
+TA_API ta_status ta_actor_watch(ta_system *system, uint32_t actor, uint32_t on);
 /* Set out->size first (sizeof(ta_actor_info)); exactly that much is written. */
 TA_API ta_status ta_actor_info_get(const ta_system *system, uint32_t actor, ta_actor_info *out);
 /* The actor's active states (up to states.capacity); returns how many it has. */

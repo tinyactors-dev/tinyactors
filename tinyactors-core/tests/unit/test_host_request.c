@@ -58,6 +58,7 @@ static void world_open(world *w, int encoder) {
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
+    config.max_subscriptions = 1;
     if (encoder) config.telemetry.otlp.size = sizeof config.telemetry.otlp;
     CHECK_EQUAL(ta_host_new(&config, &w->host), TA_OK);
     size_t length;
@@ -356,11 +357,79 @@ static void test_actor_context(void) {
     world_close(&w);
 }
 
+/* Run until idle; the CHANGED effects for `session` it made. */
+static uint32_t changed(world *w, uint64_t session) {
+    uint32_t count = 0;
+    ta_run result;
+    do {
+        result = ta_host_run(w->host, 1000000);
+        const ta_host_effect *effects;
+        uint32_t n = ta_host_effects(w->host, &effects);
+        for (uint32_t i = 0; i < n; i++)
+            count += effects[i].kind == TA_EFFECT_CHANGED && effects[i].session == session;
+        ta_host_effects_ack(w->host);
+    } while (result.status != TA_RUN_IDLE);
+    return count;
+}
+
+static void ping(world *w, uint64_t session) {
+    ta_event_in event;
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.name = (ta_string_view){"ping", 4};
+    event.session = session;
+    CHECK_EQUAL(ta_host_send(w->host, &event), TA_OK);
+}
+
+static const char *subscription(world *w, const char *method, uint64_t session) {
+    static host_ask a;
+    ta_cbor_writer *writer = ask_begin(&a, method, 1);
+    ta_cbor_write_text(writer, ta_string("session"));
+    ta_cbor_write_uint(writer, session);
+    return ask_send(w->host, &a) == TA_OK ? a.text : "(status)";
+}
+
+static void test_subscribe(void) {
+    world w;
+    world_open(&w, 0);
+    settle(&w);
+    ta_spawn spawn;
+    memset(&spawn, 0, sizeof spawn);
+    spawn.segment = w.segment;
+    uint64_t other;
+    CHECK_EQUAL(ta_host_spawn(w.host, &spawn, &other), TA_OK);
+    settle(&w);
+    CHECK(reply_is(subscription(&w, "actor.subscribe", w.session), RESULT("{}")));
+    CHECK(reply_is(subscription(&w, "actor.subscribe", w.session), RESULT("{}"))); /* again: one */
+    CHECK_EQUAL(changed(&w, w.session), 0u); /* nothing ran */
+    ping(&w, w.session);
+    ping(&w, w.session); /* two macrosteps, one run: one CHANGED */
+    ping(&w, other);     /* not subscribed: none */
+    CHECK_EQUAL(changed(&w, w.session), 1u);
+    ping(&w, other);
+    CHECK_EQUAL(changed(&w, other), 0u);
+    ping(&w, w.session);
+    CHECK_EQUAL(changed(&w, w.session), 1u); /* the next run watches it again */
+    /* the host holds one subscription (max_subscriptions) */
+    CHECK(reply_is(subscription(&w, "actor.subscribe", other),
+                   ERROR("-32003", "limit", "",
+                         "the host watches as many sessions as it holds (maxSubscriptions)")));
+    CHECK(reply_is(subscription(&w, "actor.subscribe", 99),
+                   ERROR("-32001", "stale", "params.session", "no such session in this host")));
+    CHECK(reply_is(subscription(&w, "actor.unsubscribe", w.session), RESULT("{}")));
+    ping(&w, w.session);
+    CHECK_EQUAL(changed(&w, w.session), 0u);
+    CHECK(reply_is(subscription(&w, "actor.unsubscribe", w.session),
+                   ERROR("-32001", "stale", "params.session", "the session is not subscribed")));
+    world_close(&w);
+}
+
 int main(void) {
     RUN(test_refused_requests);
     RUN(test_stats_actors_actor_state);
     RUN(test_trace_configure_and_watch);
     RUN(test_spans_and_metrics);
     RUN(test_actor_context);
+    RUN(test_subscribe);
     TEST_MAIN_END();
 }

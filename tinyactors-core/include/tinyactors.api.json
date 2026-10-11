@@ -145,6 +145,10 @@
       "value": 1
     },
     {
+      "name": "TA_EFFECT_CHANGED",
+      "value": 9
+    },
+    {
       "name": "TA_EFFECT_DONE",
       "value": 6
     },
@@ -6749,11 +6753,19 @@
         {
           "name": "telemetry",
           "type": "ta_host_telemetry"
+        },
+        {
+          "name": "max_subscriptions",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 248,
+          "size": 256,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -6765,11 +6777,13 @@
             "io_processor_count": 144,
             "migrate_quantum": 148,
             "allocator": 152,
-            "telemetry": 176
+            "telemetry": 176,
+            "max_subscriptions": 248,
+            "pad": 252
           }
         },
         "aarch64": {
-          "size": 248,
+          "size": 256,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -6781,11 +6795,13 @@
             "io_processor_count": 144,
             "migrate_quantum": 148,
             "allocator": 152,
-            "telemetry": 176
+            "telemetry": 176,
+            "max_subscriptions": 248,
+            "pad": 252
           }
         },
         "wasm32": {
-          "size": 224,
+          "size": 232,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -6797,7 +6813,9 @@
             "io_processor_count": 128,
             "migrate_quantum": 132,
             "allocator": 136,
-            "telemetry": 152
+            "telemetry": 152,
+            "max_subscriptions": 224,
+            "pad": 228
           }
         }
       }
@@ -8334,6 +8352,27 @@
         {
           "name": "blob",
           "type": "ta_bytes"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_actor_watch",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "ta_system *"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "on",
+          "type": "uint32_t"
         }
       ],
       "public": true,

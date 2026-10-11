@@ -96,6 +96,8 @@ typedef struct ta_host_config {
     ta_allocator allocator;   /* required: every block the host owns (ta_runtime_malloc() is
                                  the C library's); requests are aligned to at most 8 */
     ta_host_telemetry telemetry; /* the OTLP encoder (zeroed: none) */
+    uint32_t max_subscriptions;  /* sessions actor.subscribe watches at once (default 64) */
+    uint32_t pad;
 } ta_host_config;
 
 TA_API ta_status ta_host_new(const ta_host_config *config, ta_host **out);
@@ -218,6 +220,10 @@ enum {
      * outstanding: the next comes after a take. */
     TA_HOST_EFFECT_TRACES = 21,
     TA_HOST_EFFECT_LOGS = 22
+    /* TA_EFFECT_CHANGED (9, tinyactors/system.h): a session subscribed with
+     * the actor.subscribe request finished a macrostep in this run; at most
+     * one per session per run, and none for other sessions. Read its state
+     * or context with a request after the run. */
 };
 typedef struct ta_host_effect {
     uint32_t size;

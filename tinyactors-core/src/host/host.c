@@ -293,6 +293,9 @@ ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
               config->size < sizeof host->config ? config->size : sizeof host->config);
     host->config.size = sizeof host->config;
     if (!host->config.migrate_quantum) host->config.migrate_quantum = 256;
+    if (config->size < offsetof(ta_host_config, max_subscriptions) + sizeof(uint32_t) ||
+        !host->config.max_subscriptions)
+        host->config.max_subscriptions = 64;
     host->trace_kinds = host->config.system.trace_policy
                             ? host->config.system.trace_policy->kinds[TA_TRACE_DETAIL_SAMPLED]
                             : TA_TRACE_FULL;
@@ -362,6 +365,8 @@ void ta_host_free(ta_host *host) {
     host_free(host, host->blob, host->blob_capacity);
     host_free(host, host->blob2, host->blob2_capacity);
     host_free(host, host->errors, sizeof(pending_error) * host->error_capacity);
+    if (host->subscriptions)
+        host_free(host, host->subscriptions, sizeof(uint64_t) * host->config.max_subscriptions);
     for (uint32_t i = 0; i < host->retired_chart_count; i++)
         host_free(host, host->retired_charts[i].name,
                   host->retired_charts[i].name_length ? host->retired_charts[i].name_length : 1);
@@ -489,6 +494,51 @@ ta_status host_locate(const ta_host *host, uint64_t session, uint32_t *segment, 
     if (segment) *segment = si;
     if (actor) *actor = a;
     return TA_OK;
+}
+
+/* ---- subscriptions (actor.subscribe) --------------------------------------------------- */
+
+static uint32_t subscription_find(const ta_host *host, uint64_t session) {
+    for (uint32_t i = 0; i < host->subscription_count; i++)
+        if (host->subscriptions[i] == session) return i;
+    return TA_NIL;
+}
+
+ta_status host_subscribe(ta_host *host, uint64_t session) {
+    if (host_locate(host, session, NULL, NULL) != TA_OK) return TA_ERROR_STALE;
+    if (subscription_find(host, session) != TA_NIL) return TA_OK;
+    if (host->subscription_count == host->config.max_subscriptions) return TA_ERROR_STATE;
+    if (!host->subscriptions) { /* the whole table, once, with the first (never during a run) */
+        host->subscriptions =
+            (uint64_t *)host_alloc(host, sizeof(uint64_t) * host->config.max_subscriptions);
+        if (!host->subscriptions) return TA_ERROR_NO_MEMORY;
+    }
+    host->subscriptions[host->subscription_count++] = session;
+    return TA_OK;
+}
+
+ta_status host_unsubscribe(ta_host *host, uint64_t session) {
+    uint32_t i = subscription_find(host, session), segment, actor;
+    if (i == TA_NIL) return TA_ERROR_STALE;
+    host->subscriptions[i] = host->subscriptions[--host->subscription_count];
+    if (host_locate(host, session, &segment, &actor) == TA_OK)
+        ta_actor_watch(segment_of(host, segment)->system, actor, 0);
+    return TA_OK;
+}
+
+/* Before a run: watch every subscribed session again (its watch ends with
+ * the CHANGED of the last run, or the actor was woken or moved since);
+ * sessions that ended leave the list. */
+static void subscriptions_arm(ta_host *host) {
+    for (uint32_t i = 0; i < host->subscription_count;) {
+        uint32_t segment, actor;
+        if (host_locate(host, host->subscriptions[i], &segment, &actor) != TA_OK) {
+            host->subscriptions[i] = host->subscriptions[--host->subscription_count];
+            continue;
+        }
+        ta_actor_watch(segment_of(host, segment)->system, actor, 1); /* hibernated: next time */
+        i++;
+    }
 }
 
 /* ---- state values ---------------------------------------------------------------------- */
@@ -991,7 +1041,10 @@ static ta_status drain(ta_host *host, uint32_t si) {
     host->draining = si;
     for (; done < n; done++) {
         const ta_effect *effect_view = &effect[done];
-        if (effect_view->kind == TA_EFFECT_SEND && effect_view->io_processor == 0)
+        if (effect_view->kind == TA_EFFECT_CHANGED &&
+            subscription_find(host, effect_view->session) == TA_NIL)
+            status = TA_OK; /* unsubscribed since it was watched */
+        else if (effect_view->kind == TA_EFFECT_SEND && effect_view->io_processor == 0)
             status = ta_router_outbound(host, si, effect_view);
         else if (effect_view->kind == TA_EFFECT_SEND)
             status = effect_copy(
@@ -1477,6 +1530,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     effects_release(host); /* the previous batch, if not acknowledged */
     host->encoder->drain(host); /* records written up to the last ta_host_advance_time */
     host->encoder->effects(host);
+    subscriptions_arm(host);
     uint32_t left = budget;
     int full = 0, fault = 0, exhausted = 0, sync = 0;
     uint32_t detail = TA_POOL_NONE;

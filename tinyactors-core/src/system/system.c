@@ -815,6 +815,16 @@ void ta_system_deinit(ta_system *system) {
 
 /* ---- inspection ---------------------------------------------------------------------------- */
 
+ta_status ta_actor_watch(ta_system *system, uint32_t actor, uint32_t on) {
+    uint32_t index = ta_system_resolve_actor(system, actor);
+    if (index == TA_NIL) return TA_ERROR_STALE;
+    ta_actor *actor_record = ta_actor_at(system, index);
+    if (actor_record->state == TA_ACTOR_HIBERNATED) return TA_ERROR_STALE;
+    if (on) actor_record->flags |= ACTOR_FLAG_WATCHED;
+    else actor_record->flags &= (uint8_t)~ACTOR_FLAG_WATCHED;
+    return TA_OK;
+}
+
 ta_status ta_actor_info_get(const ta_system *system, uint32_t actor, ta_actor_info *out) {
     uint32_t index = ta_system_resolve_actor(system, actor);
     if (index == TA_NIL) return TA_ERROR_STALE;

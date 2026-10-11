@@ -100,6 +100,9 @@ struct ta_host {
     uint32_t trace_flags, trace_kinds, trace_parts, trace_whole;
     host_watch *watches;
     uint32_t watch_count, watch_capacity, watch_sequence;
+    uint64_t *subscriptions; /* actor.subscribe: config.max_subscriptions sessions, allocated
+                                with the first subscription (never during a run) */
+    uint32_t subscription_count;
     char base[TA_ADDRESS_SYSTEM_MAX + 16]; /* tinyactors://<system_id>/ */
     uint32_t base_length;
     ta_datamodel_binding datamodels[8];
@@ -174,6 +177,12 @@ ta_host_effect *host_effect_new(ta_host *h, uint32_t kind, uint32_t segment);
 void host_effect_strings_set(ta_host *h, ta_string_view t, ta_string_view event, ta_string_view sid,
                              ta_string_view aux);
 ta_status host_send_to(ta_host *h, uint32_t si, uint32_t actor, const ta_event_in *event);
+/* actor.subscribe / actor.unsubscribe (docs/requests.md): TA_ERROR_STALE for
+ * a session that is not here (subscribe) or not subscribed (unsubscribe);
+ * TA_ERROR_STATE when config.max_subscriptions are taken; TA_ERROR_NO_MEMORY
+ * when the allocator refused the table. */
+ta_status host_subscribe(ta_host *h, uint64_t session);
+ta_status host_unsubscribe(ta_host *h, uint64_t session);
 /* ta_host_locate, for callers that want either half (NULL: not wanted). */
 ta_status host_locate(const ta_host *h, uint64_t session, uint32_t *segment, uint32_t *actor);
 /* TA_ERROR_NO_MEMORY if it could be neither delivered nor kept; TA_OK otherwise

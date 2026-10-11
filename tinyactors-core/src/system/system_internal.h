@@ -30,7 +30,8 @@ enum {
     ACTOR_FLAG_WAKE_SENT = 1u
         << 4, /* hibernated, TA_EFFECT_WAKE emitted, waiting for ta_actor_wake */
     ACTOR_FLAG_TOUCHED = 1u << 5,    /* ran since the last ta_system_cold_actors sweep */
-    ACTOR_FLAG_TRACE_NAMES = 1u << 6 /* trace_names says which name rules match it (policy.c) */
+    ACTOR_FLAG_TRACE_NAMES = 1u << 6, /* trace_names says which name rules match it (policy.c) */
+    ACTOR_FLAG_WATCHED = 1u << 7 /* ta_actor_watch: TA_EFFECT_CHANGED at its next stable point */
 };
 /* Hibernated actors (state TA_ACTOR_HIBERNATED) have no instance: `instance`
  * holds the chart index instead, `next` links the wake queue. */

@@ -203,6 +203,24 @@ its vtable, as with a binding's own datamodel, which keeps its scope).
 → {"result": {"variables": {"n": 2, "who": "bob", "nothing": null}}}
 ```
 
+### `actor.subscribe`, `actor.unsubscribe`
+
+`actor.subscribe` asks for a `TA_EFFECT_CHANGED` effect each run in which
+the session finished a macrostep: at most one per session per run, after
+which the binding reads what it needs (`state`, `actor.context`). Other
+sessions cost nothing. Subscribing twice is one subscription; a session that
+ends leaves the list. `actor.unsubscribe` stops it. Param: `session` (uint,
+required). Result: `{}`.
+
+Errors: `missing`, `type`, `stale` (subscribe: no such session;
+unsubscribe: not subscribed), `limit` (-32003: the host holds
+`maxSubscriptions`, 64 by default).
+
+```
+{"method": "actor.subscribe", "params": {"session": 1}}
+→ {"result": {}}
+```
+
 ### `state`
 
 A session's configuration as a nested state value, in the shape of xstate's

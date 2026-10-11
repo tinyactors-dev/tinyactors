@@ -631,6 +631,40 @@ static void request_run_state(request *r, uint32_t map) {
     }
 }
 
+/* actor.subscribe: CHANGED effects for the session from the next run on. */
+static void request_run_actor_subscribe(request *r, uint32_t map) {
+    static const char *const fields[] = {"session", NULL};
+    uint64_t session;
+    uint32_t segment, actor;
+    if (!request_keys_known(r, map, NULL, 0, fields)) return;
+    if (!request_read_session(r, map, &session, &segment, &actor)) return;
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 0);
+    if (!request_fits(r)) return;
+    request_path_set(r, NULL, 0, "");
+    ta_status status = host_subscribe(r->host, session);
+    if (status == TA_ERROR_STATE)
+        request_refuse(r, "limit", "the host watches as many sessions as it holds (maxSubscriptions)");
+    else if (status != TA_OK)
+        request_refuse(r, "memory", "the host's allocator refused room for subscriptions");
+}
+
+static void request_run_actor_unsubscribe(request *r, uint32_t map) {
+    static const char *const fields[] = {"session", NULL};
+    uint64_t session;
+    if (!request_keys_known(r, map, NULL, 0, fields)) return;
+    uint32_t at = request_member(r, map, "session");
+    request_path_set(r, NULL, 0, "session");
+    if (at == TA_NIL) {
+        request_refuse(r, "missing", "session is the actor's session id");
+        return;
+    }
+    if (!request_read_uint(r, at, 0, &session)) return;
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 0);
+    if (!request_fits(r)) return;
+    if (host_unsubscribe(r->host, session) != TA_OK)
+        request_refuse(r, "stale", "the session is not subscribed");
+}
+
 /* A payload's neutral value (to_wire) straight into the reply; null when the
  * datamodel cannot write it. */
 static void request_put_payload(request *r, const ta_datamodel_binding *binding, ta_payload payload) {
@@ -842,6 +876,8 @@ static const request_method REQUEST_METHODS[] = {
     {"actors", request_run_actors},
     {"actor", request_run_actor},
     {"actor.context", request_run_actor_context},
+    {"actor.subscribe", request_run_actor_subscribe},
+    {"actor.unsubscribe", request_run_actor_unsubscribe},
     {"state", request_run_state},
 };
 
