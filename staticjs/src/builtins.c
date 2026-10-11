@@ -25,6 +25,7 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
     { "Object", "entries", SJS_BUILTIN_OBJECT_ENTRIES },
     { "Object", "fromEntries", SJS_BUILTIN_OBJECT_FROM_ENTRIES },
     { "Object", "groupBy", SJS_BUILTIN_OBJECT_GROUP_BY },
+    { "Object", "hasOwn", SJS_BUILTIN_OBJECT_HAS_OWN },
     { "Number", "isInteger", SJS_BUILTIN_NUMBER_IS_INTEGER },
     { "Number", "isSafeInteger", SJS_BUILTIN_NUMBER_IS_SAFE_INTEGER },
     { "Number", "isFinite", SJS_BUILTIN_NUMBER_IS_FINITE },
@@ -227,6 +228,7 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_ENTRIES),
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_FROM_ENTRIES),
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_GROUP_BY),
+    FUNCTION_VALUE(SJS_BUILTIN_OBJECT_HAS_OWN),
     FUNCTION_VALUE(SJS_BUILTIN_NUMBER_IS_INTEGER),
     FUNCTION_VALUE(SJS_BUILTIN_NUMBER_IS_SAFE_INTEGER),
     FUNCTION_VALUE(SJS_BUILTIN_NUMBER_IS_FINITE),
@@ -591,6 +593,49 @@ static sjs_result from_entries(sjs_vm *vm, sjs_leaf_call *call) {
     return SJS_OK;
 }
 
+/* Does the value `o` have the own property `key`? JavaScript's ToObject
+ * makes a string's indices and length its own, an array's elements and
+ * length, a function's length and name and a regular expression's
+ * lastIndex; a number, a boolean, a BigInt, a set, a map and an iterator
+ * have none. */
+static bool own_key(sjs_value o, const sjs_string *key) {
+    sjs_str name = sjs_string_view(key);
+    bool index = (key->h.flags & SJS_STRING_INDEX) != 0;
+    switch (o.kind) {
+    case SJS_OBJECT:
+        return sjs_object_find(SJS_AS_OBJECT(o), name) != NULL;
+    case SJS_ARRAY: {
+        const sjs_array *a = SJS_AS_ARRAY(o);
+        if (index) return key->index < a->length;
+        if (sjs_str_equal(name, SJS_STR("length"))) return true;
+        return sjs_array_extra(o) && sjs_object_find((const sjs_object *)(const void *)a->extra, name) != NULL;
+    }
+    case SJS_STRING:
+        if (index) return key->index < SJS_AS_STRING(o)->utf16_length;
+        return sjs_str_equal(name, SJS_STR("length"));
+    case SJS_FUNCTION:
+        return sjs_str_equal(name, SJS_STR("length")) || sjs_str_equal(name, SJS_STR("name"));
+    case SJS_REGEXP:
+        return sjs_str_equal(name, SJS_STR("lastIndex"));
+    default:
+        return false;
+    }
+}
+
+/* Object.hasOwn(o, key): the key as ToPropertyKey gives it, from a
+ * primitive only, as an object's would come from its toString. */
+static sjs_result has_own(sjs_vm *vm, sjs_leaf_call *call) {
+    sjs_value o = arg(call, 0);
+    if (o.kind == SJS_UNDEFINED || o.kind == SJS_NULL) return sjs_vm_fault(vm, "Object.hasOwn takes a value that is not undefined or null");
+    sjs_string *k;
+    sjs_result r = sjs_to_key(vm->context, arg(call, 1), &k);
+    if (r == SJS_ERR_PROGRAM) return sjs_vm_fault(vm, "a key must be a primitive");
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    call->result = sjs_boolean(own_key(o, k));
+    sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+    return SJS_OK;
+}
+
 static sjs_result math(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     if (id == SJS_BUILTIN_MATH_MIN || id == SJS_BUILTIN_MATH_MAX) {
         bool max = id == SJS_BUILTIN_MATH_MAX;
@@ -706,6 +751,8 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
         return object_listing(vm, id, call);
     case SJS_BUILTIN_OBJECT_FROM_ENTRIES:
         return from_entries(vm, call);
+    case SJS_BUILTIN_OBJECT_HAS_OWN:
+        return has_own(vm, call);
     case SJS_BUILTIN_NUMBER_IS_INTEGER:
         call->result = sjs_boolean(x.kind == SJS_NUMBER && sjs_number_is_integer(x.as.number));
         return SJS_OK;

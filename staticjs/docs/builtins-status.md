@@ -26,8 +26,7 @@ the host injects in the same way. UTC is the default everywhere.
 
 | Name | Status | Note |
 |---|---|---|
-| `keys`, `values`, `entries`, `fromEntries`, `groupBy` | built | |
-| `hasOwn` | to build | |
+| `keys`, `values`, `entries`, `fromEntries`, `groupBy`, `hasOwn` | built | |
 | `assign` | to build | Mutates its target; falls under the owned-mutation rules. |
 | `freeze`, `isFrozen`, `seal`, `isSealed` | build later | Pending a decision on writes to a frozen object. |
 | `is` | refused | Listed in `docs/extending.md` as a case not to write. |
