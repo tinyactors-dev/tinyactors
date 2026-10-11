@@ -81,6 +81,66 @@
       "value": 3
     },
     {
+      "name": "TA_CBOR_ARRAY",
+      "value": 5
+    },
+    {
+      "name": "TA_CBOR_BYTES",
+      "value": 3
+    },
+    {
+      "name": "TA_CBOR_DEPTH_MAX",
+      "value": 64
+    },
+    {
+      "name": "TA_CBOR_FALSE",
+      "value": 20
+    },
+    {
+      "name": "TA_CBOR_FLOAT",
+      "value": 9
+    },
+    {
+      "name": "TA_CBOR_MAP",
+      "value": 6
+    },
+    {
+      "name": "TA_CBOR_NEGINT",
+      "value": 2
+    },
+    {
+      "name": "TA_CBOR_NULL",
+      "value": 22
+    },
+    {
+      "name": "TA_CBOR_SIMPLE",
+      "value": 8
+    },
+    {
+      "name": "TA_CBOR_TAG",
+      "value": 7
+    },
+    {
+      "name": "TA_CBOR_TAG_URI",
+      "value": 32
+    },
+    {
+      "name": "TA_CBOR_TEXT",
+      "value": 4
+    },
+    {
+      "name": "TA_CBOR_TRUE",
+      "value": 21
+    },
+    {
+      "name": "TA_CBOR_UINT",
+      "value": 1
+    },
+    {
+      "name": "TA_CBOR_UNDEFINED",
+      "value": 23
+    },
+    {
       "name": "TA_DATAMODEL_EVENT_DETACHABLE",
       "value": 1
     },
@@ -885,6 +945,91 @@
         }
       }
     },
+    "ta_bytes": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "pointer",
+          "type": "const void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "length": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "length": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "pointer": 0,
+            "length": 4
+          }
+        }
+      }
+    },
+    "ta_buffer": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "pointer",
+          "type": "void *"
+        },
+        {
+          "name": "capacity",
+          "type": "size_t"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 8,
+            "length": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 8,
+            "length": 16
+          }
+        },
+        "wasm32": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 4,
+            "length": 8
+          }
+        }
+      }
+    },
     "ta_status": {
       "kind": "alias",
       "type": "int32_t"
@@ -1010,6 +1155,151 @@
             "local": 16,
             "name": 24,
             "session": 32
+          }
+        }
+      }
+    },
+    "ta_cbor_token": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "value",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "count": 4,
+            "value": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "count": 4,
+            "value": 8
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "count": 4,
+            "value": 8
+          }
+        }
+      }
+    },
+    "ta_cbor_document": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "bytes",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "tokens",
+          "type": "ta_cbor_token *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "count",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "bytes": 0,
+            "tokens": 16,
+            "capacity": 24,
+            "count": 28
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "bytes": 0,
+            "tokens": 16,
+            "capacity": 24,
+            "count": 28
+          }
+        },
+        "wasm32": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "bytes": 0,
+            "tokens": 8,
+            "capacity": 12,
+            "count": 16
+          }
+        }
+      }
+    },
+    "ta_cbor_writer": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "document",
+          "type": "ta_cbor_document"
+        },
+        {
+          "name": "strings",
+          "type": "ta_buffer"
+        },
+        {
+          "name": "status",
+          "type": "ta_status"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "document": 0,
+            "strings": 32,
+            "status": 56
+          }
+        },
+        "aarch64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "document": 0,
+            "strings": 32,
+            "status": 56
+          }
+        },
+        "wasm32": {
+          "size": 36,
+          "align": 4,
+          "offsets": {
+            "document": 0,
+            "strings": 20,
+            "status": 32
           }
         }
       }
@@ -7078,6 +7368,261 @@
         {
           "name": "to",
           "type": "ta_time"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_decode",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "document",
+          "type": "ta_cbor_document *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_encode",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "document",
+          "type": "const ta_cbor_document *"
+        },
+        {
+          "name": "out",
+          "type": "ta_buffer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_finish",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        },
+        {
+          "name": "out",
+          "type": "ta_buffer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_member",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "document",
+          "type": "const ta_cbor_document *"
+        },
+        {
+          "name": "map",
+          "type": "uint32_t"
+        },
+        {
+          "name": "key",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_next",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "document",
+          "type": "const ta_cbor_document *"
+        },
+        {
+          "name": "at",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_string",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "document",
+          "type": "const ta_cbor_document *"
+        },
+        {
+          "name": "at",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_write_array",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        },
+        {
+          "name": "items",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_write_bytes",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        },
+        {
+          "name": "bytes",
+          "type": "ta_bytes"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_write_float",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        },
+        {
+          "name": "value",
+          "type": "double"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_write_int",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        },
+        {
+          "name": "value",
+          "type": "int64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_write_map",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        },
+        {
+          "name": "pairs",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_write_simple",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        },
+        {
+          "name": "simple",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_write_tag",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        },
+        {
+          "name": "tag",
+          "type": "uint64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_write_text",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        },
+        {
+          "name": "text",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_write_uint",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        },
+        {
+          "name": "value",
+          "type": "uint64_t"
         }
       ],
       "public": true,

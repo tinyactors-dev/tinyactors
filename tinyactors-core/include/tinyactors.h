@@ -5,6 +5,7 @@
 #include <tinyactors/types.h>
 #include <tinyactors/allocator.h>
 #include <tinyactors/address.h>
+#include <tinyactors/cbor.h>
 #include <tinyactors/trace.h>
 #include <tinyactors/image.h>
 #include <tinyactors/datamodel.h>

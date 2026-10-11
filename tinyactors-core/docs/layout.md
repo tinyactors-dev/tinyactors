@@ -19,9 +19,10 @@ implementation of that layer). Layer dependency rules are in
 ├── include/                   public ABI — the only headers bindings ever see (<tinyactors/system.h>)
 │   ├── tinyactors.h           ✅ umbrella for the freestanding ABI
 │   └── tinyactors/
-│       ├── types.h            ✅ ta_string_view, ta_status, TA_NIL, ta_time, ta_expression, ta_payload, TA_API
+│       ├── types.h            ✅ ta_string_view, ta_bytes, ta_buffer, ta_status, TA_NIL, ta_time, ta_expression, ta_payload, TA_API
 │       ├── allocator.h        ✅ ta_allocator: the memory a caller lends the host and the compiler
 │       ├── address.h          ✅ tinyactors:// addresses (parse/format)
+│       ├── cbor.h             ✅ CBOR as token lists in caller memory (ADR 0009)
 │       ├── image.h            ✅ open/verify image, chart/state/event/expression/data lookup
 │       ├── datamodel.h        ✅ datamodel vtable, ta_datamodel_environment queries, system variables,
 │       │                         event view, null datamodel
@@ -50,6 +51,7 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── heap.[ch]          ✅ 4-ary (due, sequence) heap with removal
 │   │   ├── journal.[ch]       ✅ lossy ring of variable-size records (the trace journal)
 │   │   ├── address.c          ✅ the address grammar (include/tinyactors/address.h)
+│   │   ├── cbor.c             ✅ CBOR to and from token lists (include/tinyactors/cbor.h)
 │   │   └── json.[ch]          ✅ writing JSON strings (the host's state value)
 │   │
 │   ├── image/                 shared by compiler (writer) and runtime (reader)
@@ -138,7 +140,7 @@ implementation of that layer). Layer dependency rules are in
 │   ├── harness/harness.h      ✅ dependency-free test macros
 │   ├── support/               ✅ datamodel_test (ECMAScript-subset test datamodel), compile/system/file helpers
 │   ├── unit/                  ✅ test_{base,image,compile,compile_scale,core,system,scenarios,runtime,e2e,
-│   │                             datamodel_ecmascript,hibernate,migrate,host,router,address,headers,
+│   │                             datamodel_ecmascript,hibernate,migrate,host,router,address,cbor,headers,
 │   │                             trace,journal,tracing,otlp};
 │   │                             test_torture_loop; test_durable:
 │   │                             every path out of memory vs. a run that never left it (durability.md)

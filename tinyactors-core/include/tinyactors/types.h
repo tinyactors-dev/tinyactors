@@ -49,6 +49,31 @@ typedef struct ta_string_view {
     uint32_t length;
 } ta_string_view;
 
+/* A view of a NUL-terminated string (freestanding: no strlen). */
+static inline ta_string_view ta_string(const char *text) {
+    uint32_t length = 0;
+    while (text[length])
+        length++;
+    ta_string_view view;
+    view.pointer = text;
+    view.length = length;
+    return view;
+}
+
+/* Borrowed bytes. */
+typedef struct ta_bytes {
+    const void *pointer;
+    size_t length;
+} ta_bytes;
+
+/* A buffer the caller lends a call that writes for it. The call writes from
+ * the start and sets `length` to what it wrote; on TA_ERROR_NO_MEMORY,
+ * `length` is the capacity it needs and the contents are not usable. */
+typedef struct ta_buffer {
+    void *pointer;
+    size_t capacity, length;
+} ta_buffer;
+
 /* Status codes. Negative = error. */
 typedef int32_t ta_status;
 enum {

@@ -30,7 +30,7 @@ module Core
 
   LAYERS = [
     Layer.new(name: 'base', uses: [], freestanding: true,
-              sources: %w[address format json arena pool heap slab journal].map { |s| "src/base/#{s}.c" }),
+              sources: %w[address cbor format json arena pool heap slab journal].map { |s| "src/base/#{s}.c" }),
     Layer.new(name: 'image', uses: %w[base], freestanding: true,
               sources: %w[src/image/image.c src/image/event_names.c]),
     # Trace values and the record schema (docs/adr/0006 in the repository root).
@@ -116,7 +116,7 @@ module Core
   LIBRARIES = [
     Library.new(name: 'tinyactors', layers: %w[base image trace core system host basic_http otlp], uses: [],
                 libc: false,
-                headers: %w[types.h allocator.h address.h trace.h stats.h image.h datamodel.h system.h core.h host.h
+                headers: %w[types.h allocator.h address.h cbor.h trace.h stats.h image.h datamodel.h system.h core.h host.h
                             basic_http.h otlp.h wasm.h]),
     Library.new(name: 'tinyactors_runtime', layers: %w[compile runtime], uses: %w[tinyactors], libc: true,
                 headers: %w[compile.h runtime.h]),
@@ -192,6 +192,7 @@ module Core
     unit('test_host_memory', 'host', 'compile', *ECMASCRIPT, full: true),
     unit('test_address', 'base', 'quickjs', defines: { 'TA_VECTORS' => ROOT.join('tests/conformance/addresses.json') }),
     unit('test_journal', 'base'),
+    unit('test_cbor', 'base'),
     unit('test_otlp', 'otlp', 'system', 'compile', *ECMASCRIPT),
     unit('test_trace', 'trace', 'quickjs', defines: { 'TA_SPAN_VECTORS' => ROOT.join('tests/conformance/span_ids.json'),
                                                       'TA_TRACEPARENT_VECTORS' => ROOT.join('tests/conformance/traceparent.json') }),

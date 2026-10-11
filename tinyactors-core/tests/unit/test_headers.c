@@ -1,6 +1,7 @@
 /* Every public header must be self-contained and C89-ABI friendly; this TU
  * includes each one first in its own block (compiled as C and as C++). */
 #include <tinyactors/types.h>
+#include <tinyactors/cbor.h>
 #include <tinyactors/stats.h>
 #include <tinyactors/allocator.h>
 #include <tinyactors/image.h>
@@ -38,6 +39,10 @@ ABI_CHECK(offsetof(ta_compile_options, abort_flag) ==
                   sizeof(void *),
           compile_options_abort_offset);
 ABI_CHECK(TA_ERROR_ABORTED == -9, status_aborted);
+ABI_CHECK(sizeof(ta_cbor_token) == 16, cbor_token_fixed);
+ABI_CHECK(offsetof(ta_cbor_token, value) == 8, cbor_token_value_offset);
+ABI_CHECK(offsetof(ta_buffer, length) == 2 * sizeof(size_t) && sizeof(ta_buffer) == 3 * sizeof(void *),
+          buffer_layout);
 ABI_CHECK(offsetof(ta_datamodel_vtable, migrate) > offsetof(ta_datamodel_vtable, deserialize),
           vtable_optional_hooks_last);
 ABI_CHECK(offsetof(ta_datamodel_vtable, to_wire) > offsetof(ta_datamodel_vtable, migrate),
