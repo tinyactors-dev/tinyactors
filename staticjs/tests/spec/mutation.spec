@@ -3830,3 +3830,180 @@ new Map().set(1, 2)
 === delete of a map's property faults
 (() => { const m = new Map([["x", 1]]); delete m.x; return m; })()
 --- fault deletes properties of objects
+
+# Object.assign(x, ...sources) of a variable the function owns changes the
+# variable's object in place (docs/mutation.md, "Object.assign"), by the
+# rules of a mutation: refused when compiled if x was captured, copied,
+# passed or stored, and a fault when it runs unless the slot holds the
+# value alone. Each fault and refusal here is where Node gives a value.
+
+=== Object.assign changes a variable's object, as a statement
+(() => { const o = {a: 1}; Object.assign(o, {b: 2}); return o; })()
+--- value
+{"a":1,"b":2}
+
+=== Object.assign returns its target
+(() => { const o = {}; const r = Object.assign(o, {a: 1}); return r.a; })()
+--- value
+1
+
+=== Object.assign's result and the variable are the same object
+(() => { const o = {x: 0}; const r = Object.assign(o, {a: 1}); return [r, o]; })()
+--- value
+[{"x":0,"a":1},{"x":0,"a":1}]
+
+=== Object.assign of a variable, returned
+(() => { const o = {x: 0}; return Object.assign(o, {x: 1}, {y: 2}); })()
+--- value
+{"x":1,"y":2}
+
+=== Object.assign of a variable with no sources
+(() => { const o = {a: 1}; Object.assign(o); return o; })()
+--- value
+{"a":1}
+
+=== Object.assign of a variable with sources that put nothing
+(() => { const o = {a: 1}; Object.assign(o, null, undefined, 1, "", [], {}); return o; })()
+--- value
+{"a":1}
+
+=== Object.assign of a variable, twice
+(() => { const o = {}; Object.assign(o, {a: 1, b: 1}); Object.assign(o, {a: 2}, {c: 3}); return o; })()
+--- value
+{"a":2,"b":1,"c":3}
+
+=== Object.assign of a variable overwrites in order and puts index keys first
+(() => { const o = {b: 1, a: 2}; Object.assign(o, {2: "x", a: 3, 1: "y"}, {b: 4, z: 5}); return [o, Object.keys(o)]; })()
+--- value
+[{"1":"y","2":"x","b":4,"a":3,"z":5},["1","2","b","a","z"]]
+
+=== Object.assign of a variable from a string and an array
+(() => { const o = {k: 1}; Object.assign(o, "hé", ["x"]); return o; })()
+--- value
+{"0":"x","1":"é","k":1}
+
+=== Object.assign of a variable with spread sources
+(() => { const o = {}; Object.assign(o, ...[{a: 1}, {b: 2}], {c: 3}); return o; })()
+--- value
+{"a":1,"b":2,"c":3}
+
+=== Object.assign of a variable reads it in its sources
+(() => { const o = {a: 1}; Object.assign(o, {b: o.a + 1}, {c: Object.keys(o).length}); return o; })()
+--- value
+{"a":1,"b":2,"c":1}
+
+=== Object.assign of a variable, then reading the source
+(() => { const a = {x: 1}; const o = {}; Object.assign(o, a); return [o, a]; })()
+--- value
+[{"x":1},{"x":1}]
+
+=== Object.assign of a variable, then changing the target leaves the source
+(() => { const src = {a: {n: 1}}; const o = {}; Object.assign(o, src); o.b = 2; o.a = 3; return [o, src]; })()
+--- value
+[{"a":3,"b":2},{"a":{"n":1}}]
+
+=== Object.assign of a variable, then pushing to it changes nothing else
+(() => { const xs = [1]; const o = {}; Object.assign(o, {xs: xs}); return [o, xs]; })()
+--- value
+[{"xs":[1]},[1]]
+
+=== Object.assign of a let
+(() => { let o = {}; Object.assign(o, {a: 1}); o = Object.assign({}, o, {b: 2}); Object.assign(o, {c: 3}); return o; })()
+--- value
+{"a":1,"b":2,"c":3}
+
+=== Object.assign of a parameter nothing else holds
+(o => Object.assign(o, {a: 1}))({b: 0})
+--- value
+{"b":0,"a":1}
+
+=== Object.assign of a parameter, read after
+(o => [Object.assign(o, {b: 1}), o])({a: 1})
+--- value
+[{"a":1,"b":1},{"a":1,"b":1}]
+
+=== Object.assign as reduce's accumulator
+[{a: 1}, {b: 2}, {a: 3}].reduce((acc, x) => Object.assign(acc, x), {})
+--- value
+{"a":3,"b":2}
+
+=== Object.assign as reduce's accumulator, with a statement
+[["a", 1], ["b", 2]].reduce((acc, [k, v]) => { Object.assign(acc, {[k]: v}); return acc; }, {z: 0})
+--- value
+{"z":0,"a":1,"b":2}
+
+=== Object.assign of a variable in a block
+(() => { const o = {}; if (true) { Object.assign(o, {a: 1}); } return o; })()
+--- value
+{"a":1}
+
+=== Object.assign of a variable, then a property assigned
+(() => { const o = {}; Object.assign(o, {a: {}}); o.a.b = 1; return o; })()
+--- value
+{"a":{"b":1}}
+
+=== Object.assign of a large variable's object
+(() => { const o = {k1: 1, k2: 2, k3: 3, k4: 4, k5: 5, k6: 6, k7: 7, k8: 8, k9: 9}; Object.assign(o, {k5: "five", k10: 10, 3: "three"}); return [o.k5, o.k10, o[3], Object.keys(o)]; })()
+--- value
+["five",10,"three",["3","k1","k2","k3","k4","k5","k6","k7","k8","k9","k10"]]
+
+=== Object.assign of a variable whose value is held elsewhere faults
+(x => [(o => Object.assign(o, {b: 1}))(x), x])({a: 1})
+--- fault held elsewhere too
+
+=== Object.assign of a variable whose nested value is shared, then changing it, faults
+(() => { const src = {a: {n: 1}}; const o = {}; Object.assign(o, src); o.a.n = 5; return [o, src]; })()
+--- fault held elsewhere
+
+=== Object.assign of a variable into itself faults
+(() => { const o = {a: 1}; Object.assign(o, o); return o; })()
+--- fault held elsewhere too
+
+=== Object.assign of a variable that a source holds faults
+(() => { const o = {}; Object.assign(o, {self: o}); return Object.keys(o); })()
+--- fault held elsewhere too
+
+=== Object.assign of an array variable faults
+(() => { const xs = [1]; Object.assign(xs, {0: 2}); return xs; })()
+--- fault puts properties only into an object
+
+=== Object.assign of a map variable faults
+(() => { const m = new Map(); Object.assign(m, {a: 1}); return m.size; })()
+--- fault puts properties only into an object
+
+=== Object.assign of a number variable faults
+(() => { const n = 1; return Object.assign(n, {a: 1}).a; })()
+--- fault takes an object as its target
+
+=== Object.assign of an array variable with nothing to put gives it
+(() => { const xs = [1]; Object.assign(xs, null); return xs; })()
+--- value
+[1]
+
+=== Object.assign of a variable copied before is refused
+(() => { const o = {}; const p = o; Object.assign(o, {a: 1}); return p; })()
+--- error unsupported copied before
+
+=== Object.assign of a variable passed before is refused
+(() => { const o = {}; const n = Object.keys(o); Object.assign(o, {a: 1}); return [n, o]; })()
+--- error unsupported passed to a function before
+
+=== Object.assign of a variable whose result was kept, then changed again, is refused
+(() => { const o = {}; const r = Object.assign(o, {a: 1}); Object.assign(o, {b: 2}); return r; })()
+--- error unsupported copied before
+
+=== Object.assign of a captured variable is refused
+(() => { const o = {}; return [1].map(x => Object.assign(o, {a: x})); })()
+--- error unsupported a function captured this one
+
+=== Object.assign of a variable captured after is refused
+(() => { const o = {}; Object.assign(o, {a: 1}); const f = () => o; return f(); })()
+--- error unsupported a function captured this one
+
+=== Object.assign of a member as a statement is refused
+(() => { const o = {inner: {}}; Object.assign(o.inner, {a: 1}); return o; })()
+--- error unsupported expression statement has no effect
+
+=== Object.assign of a fresh object as a statement is refused
+(() => { Object.assign({}, {a: 1}); return 1; })()
+--- error unsupported expression statement has no effect

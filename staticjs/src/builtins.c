@@ -26,6 +26,7 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
     { "Object", "fromEntries", SJS_BUILTIN_OBJECT_FROM_ENTRIES },
     { "Object", "groupBy", SJS_BUILTIN_OBJECT_GROUP_BY },
     { "Object", "hasOwn", SJS_BUILTIN_OBJECT_HAS_OWN },
+    { "Object", "assign", SJS_BUILTIN_OBJECT_ASSIGN },
     { "Number", "isInteger", SJS_BUILTIN_NUMBER_IS_INTEGER },
     { "Number", "isSafeInteger", SJS_BUILTIN_NUMBER_IS_SAFE_INTEGER },
     { "Number", "isFinite", SJS_BUILTIN_NUMBER_IS_FINITE },
@@ -229,6 +230,7 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_FROM_ENTRIES),
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_GROUP_BY),
     FUNCTION_VALUE(SJS_BUILTIN_OBJECT_HAS_OWN),
+    FUNCTION_VALUE(SJS_BUILTIN_OBJECT_ASSIGN),
     FUNCTION_VALUE(SJS_BUILTIN_NUMBER_IS_INTEGER),
     FUNCTION_VALUE(SJS_BUILTIN_NUMBER_IS_SAFE_INTEGER),
     FUNCTION_VALUE(SJS_BUILTIN_NUMBER_IS_FINITE),
@@ -636,6 +638,33 @@ static sjs_result has_own(sjs_vm *vm, sjs_leaf_call *call) {
     return SJS_OK;
 }
 
+/* Object.assign(target, ...sources) called as any function is: on a
+ * target that no variable of the function owns (`Object.assign({}, a, b)`;
+ * a variable's is OBJECT_ASSIGN, docs/mutation.md). JavaScript changes the
+ * target and gives it back, so this needs a target that nothing else holds
+ * (sjs_value_unique), which no program can see change: the result is a copy
+ * of it with the sources put. With nothing to put, the target as it is. */
+static sjs_result assign_call(sjs_vm *vm, sjs_leaf_call *call) {
+    sjs_value target = arg(call, 0);
+    sjs_values sources = { call->args + 1, call->count > 1u ? call->count - 1u : 0u };
+    if (sjs_is_primitive(target)) return sjs_vm_fault(vm, "Object.assign takes an object as its target, where JavaScript would make one of a primitive");
+    if (!sjs_assign_puts(sources)) {
+        sjs_ref(target);
+        call->result = target;
+        return SJS_OK;
+    }
+    if (target.kind != SJS_OBJECT) return sjs_vm_fault(vm, "staticjs's Object.assign puts properties only into an object");
+    if (!sjs_value_unique(target)) {
+        return sjs_vm_fault(vm, "Object.assign changes its target, and something else holds this one: staticjs changes a value only through a variable of the function that holds it alone");
+    }
+    sjs_object *o;
+    sjs_result r = sjs_object_copy(vm->context, SJS_AS_OBJECT(target), &o);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    call->result = sjs_heap_value(SJS_OBJECT, &o->h);
+    call->cost = o->count;
+    return sjs_vm_object_assign(vm, &call->result, sources);
+}
+
 static sjs_result math(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     if (id == SJS_BUILTIN_MATH_MIN || id == SJS_BUILTIN_MATH_MAX) {
         bool max = id == SJS_BUILTIN_MATH_MAX;
@@ -753,6 +782,8 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
         return from_entries(vm, call);
     case SJS_BUILTIN_OBJECT_HAS_OWN:
         return has_own(vm, call);
+    case SJS_BUILTIN_OBJECT_ASSIGN:
+        return assign_call(vm, call);
     case SJS_BUILTIN_NUMBER_IS_INTEGER:
         call->result = sjs_boolean(x.kind == SJS_NUMBER && sjs_number_is_integer(x.as.number));
         return SJS_OK;

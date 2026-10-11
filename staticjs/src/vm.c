@@ -1770,6 +1770,38 @@ __attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t 
     return sjs_vm_push(vm, leaf.result);
 }
 
+/* MUTATION: OBJECT_ASSIGN: [callee, reference, sources], Object.assign of
+ * a variable the function owns (docs/mutation.md, "Object.assign"). When a
+ * source has a property to put, the variable's value must be an object
+ * with one holder, the variable; with none, Object.assign gives its target
+ * as it is, which any value but a primitive may be (JavaScript makes an
+ * object of a primitive). Then a copy of the value, as a method that
+ * returns its receiver gives it. */
+__attribute__((noinline)) static bool assign_variable(sjs_vm *vm, uint32_t argc, uint8_t flags) {
+    if ((flags & SJS_CALL_SPREAD) != 0 && !expand_spread(vm, &argc)) return false;
+    uint32_t reference = vm->sp - argc - 1u;
+    uint32_t at = vm->stack[reference].boolean;
+    sjs_value *slot = &vm->stack[at];
+    sjs_values sources = { &vm->stack[reference + 1u], argc };
+    if (sjs_is_primitive(*slot)) {
+        sjs_vm_fault(vm, "Object.assign takes an object as its target, where JavaScript would make one of a primitive");
+        return false;
+    }
+    if (sjs_assign_puts(sources)) {
+        if (slot->kind != SJS_OBJECT) {
+            sjs_vm_fault(vm, "staticjs's Object.assign puts properties only into an object");
+            return false;
+        }
+        if (!sjs_value_unique(*slot)) {
+            sjs_vm_fault(vm, "staticjs changes a value only while one variable holds it, and this one is held elsewhere too");
+            return false;
+        }
+        if (sjs_vm_object_assign(vm, slot, sources) != SJS_OK) return false;
+    }
+    cut(vm, reference - 1u);
+    return push_receiver(vm, at, false);
+}
+
 /* MUTATION: assignment to a property or an element (docs/mutation.md,
  * "Assignment"), through a path of keys from a variable's slot. */
 static void path_op(sjs_vm *vm, uint32_t keys, uint8_t mode);
@@ -1807,6 +1839,10 @@ __attribute__((noinline)) static void execute_other(sjs_vm *vm, vm_frame *f) {
     case SJS_OP_MUTATE:
         f->pc = pc + 3;
         mutate(vm, sjs_read16(code + pc), code[pc + 2]);
+        return;
+    case SJS_OP_OBJECT_ASSIGN: /* MUTATION: Object.assign of a variable */
+        f->pc = pc + 3;
+        assign_variable(vm, sjs_read16(code + pc), code[pc + 2]);
         return;
     case SJS_OP_SORTED: {
         /* The variable, undefined while toSorted's loop sorted its value,
@@ -2626,4 +2662,67 @@ __attribute__((noinline)) static bool array_extra_get(const sjs_array *a, sjs_st
     *out = e->value;
     sjs_ref(*out);
     return true;
+}
+
+/* ------------------------------------------------------------------------
+ * Object.assign's puts (builtins.c calls them for a target nothing else
+ * holds, and OBJECT_ASSIGN for a variable's), at the end of the file, so
+ * that the code before it is laid out as it was.
+ */
+
+bool sjs_assign_puts(sjs_values sources) {
+    for (uint32_t i = 0; i < sources.count; i++) {
+        sjs_value s = sources.ptr[i];
+        if ((s.kind == SJS_OBJECT || s.kind == SJS_ARRAY) && sjs_length(s) != 0) return true;
+        if (sjs_array_extra(s)) return true;
+        if (s.kind == SJS_STRING && SJS_AS_STRING(s)->length != 0) return true;
+    }
+    return false;
+}
+
+/* A string's characters, by UTF-16 index, as ToObject makes them its own
+ * properties. A character outside the BMP is two of them, each half of it,
+ * which a staticjs string cannot hold. */
+static sjs_result assign_string(sjs_vm *vm, sjs_value *target, const sjs_string *s) {
+    sjs_str text = sjs_string_view(s);
+    uint32_t units = 0;
+    uint32_t i = 0;
+    vm->fuel_used += s->utf16_length;
+    while (i < text.length) {
+        uint32_t start = i;
+        if (sjs_utf8_next(text, &i) >= 0x10000) return sjs_vm_fault(vm, "Object.assign would put half of a character outside the BMP, which a staticjs string cannot hold");
+        sjs_string *key;
+        sjs_result r = sjs_string_from_number(vm->context, (double)units, &key);
+        if (r != SJS_OK) return sjs_vm_fail(vm, r);
+        sjs_string *c;
+        r = sjs_string_make(vm->context, (sjs_str){ text.ptr + start, i - start }, &c);
+        if (r != SJS_OK) {
+            sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &key->h));
+            return sjs_vm_fail(vm, r);
+        }
+        if (object_put(vm, target, (sjs_put){ key, sjs_heap_value(SJS_STRING, &c->h) }) != SJS_OK) return SJS_ERR_PROGRAM;
+        units++;
+    }
+    return SJS_OK;
+}
+
+/* Each source's own enumerable properties, as a spread into an object puts
+ * them (spread_properties): an object's keys, an array's indices, and none
+ * of undefined, null, a number, a boolean, a BigInt, a set, a map, an
+ * iterator, a function or a regular expression; and a string's characters.
+ * No object holds the key __proto__, whose setter JavaScript's assign would
+ * call (object_spread says why). */
+sjs_result sjs_vm_object_assign(sjs_vm *vm, sjs_value *target, sjs_values sources) {
+    for (uint32_t i = 0; i < sources.count; i++) {
+        sjs_value s = sources.ptr[i];
+        sjs_result r;
+        if (s.kind == SJS_STRING) {
+            r = assign_string(vm, target, SJS_AS_STRING(s));
+        } else {
+            if (s.kind == SJS_OBJECT || s.kind == SJS_ARRAY) vm->fuel_used += sjs_length(s);
+            r = spread_properties(vm, target, s);
+        }
+        if (r != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    return SJS_OK;
 }

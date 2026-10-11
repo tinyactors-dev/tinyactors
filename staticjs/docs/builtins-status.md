@@ -27,7 +27,7 @@ the host injects in the same way. UTC is the default everywhere.
 | Name | Status | Note |
 |---|---|---|
 | `keys`, `values`, `entries`, `fromEntries`, `groupBy`, `hasOwn` | built | |
-| `assign` | to build | Mutates its target; falls under the owned-mutation rules. |
+| `assign` | built | Mutates its target, under the owned-mutation rules (`docs/mutation.md`, "Object.assign"): a variable the function owns, or a target nothing else holds; faults on a shared target, an array, map or function target with something to put, and a primitive target. |
 | `freeze`, `isFrozen`, `seal`, `isSealed` | build later | Pending a decision on writes to a frozen object. |
 | `is` | refused | Listed in `docs/extending.md` as a case not to write. |
 | `create`, `getPrototypeOf`, `setPrototypeOf`, `defineProperty`, `defineProperties`, `getOwnPropertyDescriptor`, `getOwnPropertyDescriptors`, `getOwnPropertyNames`, `getOwnPropertySymbols`, `preventExtensions`, `isExtensible` | not registered | Refused: prototype machinery. staticjs has no prototype chains and no property descriptors. |
