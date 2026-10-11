@@ -1,7 +1,9 @@
 /* The host's OTLP encoder (docs/adr/0009 in the repository root, decision 6):
  * every segment's trace records go into one ta_otlp inside ta_host_run, and
  * an effect says when a request is ready for ta_host_traces or ta_host_logs.
- * Without an encoder (ta_host_telemetry.otlp.size 0) none of this runs. */
+ * Without an encoder (ta_host_telemetry.otlp.size 0) the host gets the null
+ * encoder: every operation does nothing, as datamodel_null.c does for charts.
+ * The choice is made once, at ta_host_new; nothing below asks again. */
 #include "base/memory.h"
 #include "host/host_internal.h"
 
@@ -11,8 +13,11 @@ static void encoder_capacities(ta_otlp_config *config) {
     if (!config->scopes) config->scopes = 64;
 }
 
+static const host_encoder encoder_null, encoder_otlp;
+
 ta_status host_telemetry_init(ta_host *host) {
     const ta_host_telemetry *telemetry = &host->config.telemetry;
+    host->encoder = &encoder_null;
     if (!telemetry->otlp.size) return TA_OK;
     ta_otlp_config config;
     ta_memset(&config, 0, sizeof config);
@@ -36,6 +41,7 @@ ta_status host_telemetry_init(ta_host *host) {
     host->otlp_config = config;
     host->otlp_memory = memory;
     host->otlp_bytes = bytes;
+    host->encoder = &encoder_otlp;
     return TA_OK;
 }
 
@@ -45,8 +51,8 @@ void host_telemetry_free(ta_host *host) {
     host->otlp_memory = NULL;
 }
 
-void host_telemetry_mark(ta_host *host, uint64_t wall_ns) {
-    if (host->otlp) ta_otlp_mark(host->otlp, host->fuel_clock, wall_ns);
+static void otlp_mark(ta_host *host, uint64_t wall_ns) {
+    ta_otlp_mark(host->otlp, host->fuel_clock, wall_ns);
 }
 
 /* Open spans, chunks or scopes are full: twice as many in a new block. */
@@ -73,8 +79,7 @@ static int encoder_grow(ta_host *host) {
 /* Read every segment's records into the encoder. It stops where the staging
  * is full (a request must be taken first) or the encoder cannot grow; the
  * records left stay in their journals. */
-void host_telemetry_drain(ta_host *host) {
-    if (!host->otlp) return;
+static void otlp_drain(ta_host *host) {
     ta_otlp_input input;
     ta_memset(&input, 0, sizeof input);
     input.size = sizeof input;
@@ -107,8 +112,7 @@ static int staged(const ta_host *host, uint32_t kind) {
 }
 
 /* After a run's drain: a ready request of each kind becomes an effect. */
-void host_telemetry_effects(ta_host *host) {
-    if (!host->otlp) return;
+static void otlp_effects(ta_host *host) {
     int spans = staged(host, TA_HOST_EFFECT_TRACES), logs = staged(host, TA_HOST_EFFECT_LOGS);
     if (!spans && !logs) {
         host->staging_full = 0;
@@ -131,8 +135,8 @@ void host_telemetry_effects(ta_host *host) {
 /* After a run: records waiting in a journal count as staged from now, so
  * their flush interval is a deadline of the run (they are read by the next
  * run, after the ta_host_advance_time that stamps them). */
-void host_telemetry_note(ta_host *host) {
-    if (!host->otlp || host->staged) return;
+static void otlp_note(ta_host *host) {
+    if (host->staged) return;
     for (uint32_t si = 0; si < host->segment_count; si++) {
         ta_trace_view view;
         if (host->segments[si].live && ta_system_trace(host->segments[si].system, &view)) {
@@ -144,16 +148,15 @@ void host_telemetry_note(ta_host *host) {
 }
 
 /* When the staged records' flush interval ends (UINT64_MAX: no deadline). */
-ta_time host_telemetry_deadline(const ta_host *host) {
+static ta_time otlp_deadline(const ta_host *host) {
     ta_time interval = host->config.telemetry.flush_interval;
-    if (!host->otlp || !host->staged || !interval) return UINT64_MAX;
+    if (!host->staged || !interval) return UINT64_MAX;
     if (host->traces_pending && host->logs_pending) return UINT64_MAX;
     return host->staged_since + interval;
 }
 
-static ta_status take(ta_host *host, uint32_t kind, ta_buffer *out) {
-    if (host->running || !host->otlp) return TA_ERROR_STATE;
-    host_telemetry_drain(host);
+static ta_status otlp_take(ta_host *host, uint32_t kind, ta_buffer *out) {
+    otlp_drain(host);
     ta_status status = kind == TA_HOST_EFFECT_TRACES ? ta_otlp_put_traces(host->otlp, out)
                                                      : ta_otlp_put_logs(host->otlp, out);
     if (status != TA_OK) return status;
@@ -167,10 +170,31 @@ static ta_status take(ta_host *host, uint32_t kind, ta_buffer *out) {
     return TA_OK;
 }
 
+static const host_encoder encoder_otlp = {otlp_mark, otlp_drain, otlp_effects,
+                                          otlp_note, otlp_deadline, otlp_take};
+
+/* ---- the null encoder: no encoder memory was given --------------------------- */
+/* The journals stay with the caller, nothing is staged, no effect and no
+ * deadline; a take is TA_ERROR_STATE (host.h). */
+static void null_mark(ta_host *host, uint64_t wall_ns) { (void)host, (void)wall_ns; }
+static void null_run(ta_host *host) { (void)host; }
+static ta_time null_deadline(const ta_host *host) {
+    (void)host;
+    return UINT64_MAX;
+}
+static ta_status null_take(ta_host *host, uint32_t kind, ta_buffer *out) {
+    (void)host, (void)kind, (void)out;
+    return TA_ERROR_STATE;
+}
+static const host_encoder encoder_null = {null_mark, null_run, null_run,
+                                          null_run, null_deadline, null_take};
+
 ta_status ta_host_traces(ta_host *host, ta_buffer *out) {
-    return take(host, TA_HOST_EFFECT_TRACES, out);
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
+    return host->encoder->take(host, TA_HOST_EFFECT_TRACES, out);
 }
 
 ta_status ta_host_logs(ta_host *host, ta_buffer *out) {
-    return take(host, TA_HOST_EFFECT_LOGS, out);
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
+    return host->encoder->take(host, TA_HOST_EFFECT_LOGS, out);
 }

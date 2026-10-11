@@ -1308,7 +1308,7 @@ static void watches_expire(ta_host *host);
 void ta_host_advance_time(ta_host *host, ta_host_time now) {
     if (host->running) return; /* not during a run (host.h) */
     host->now = now.monotonic;
-    host_telemetry_mark(host, now.wall_ns);
+    host->encoder->mark(host, now.wall_ns);
     for (uint32_t i = 0; i < host->segment_count; i++)
         if (host->segments[i].live) ta_system_advance_time(host->segments[i].system, now.monotonic);
     ta_router_time(host); /* envelopes queued for absent peers past their TTL */
@@ -1466,8 +1466,8 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
         return out;
     }
     effects_release(host); /* the previous batch, if not acknowledged */
-    host_telemetry_drain(host); /* records written up to the last ta_host_advance_time */
-    host_telemetry_effects(host);
+    host->encoder->drain(host); /* records written up to the last ta_host_advance_time */
+    host->encoder->effects(host);
     uint32_t left = budget;
     int full = 0, fault = 0, exhausted = 0, sync = 0;
     uint32_t detail = TA_POOL_NONE;
@@ -1573,8 +1573,8 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     if (qd < out.next_deadline) out.next_deadline = qd;
     for (uint32_t i = 0; i < host->watch_count; i++) /* watches end then */
         if (host->watches[i].until < out.next_deadline) out.next_deadline = host->watches[i].until;
-    host_telemetry_note(host);
-    ta_time flush = host_telemetry_deadline(host); /* a request is ready then */
+    host->encoder->note(host);
+    ta_time flush = host->encoder->deadline(host); /* a request is ready then */
     if (flush < out.next_deadline) out.next_deadline = flush;
     out.used = budget - left;
     out.effect_count = host->effect_count;

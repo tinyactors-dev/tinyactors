@@ -146,7 +146,9 @@ struct ta_host {
     uint64_t message_sequence; /* outbound message ids */
     uint32_t draining;         /* segment whose effects are being drained (TA_NIL: none) */
     uint32_t expiry_behind;    /* an expired envelope could not be reported yet */
-    /* the OTLP encoder (telemetry.c; NULL: none) and its block */
+    /* the encoder's operations (telemetry.c: the OTLP one, or the null one
+     * when no encoder memory was given), the OTLP encoder and its block */
+    const struct host_encoder *encoder;
     ta_otlp *otlp;
     void *otlp_memory;
     size_t otlp_bytes;
@@ -180,13 +182,18 @@ uint32_t host_moved_get(const ta_host *h, uint64_t key);
 /* router.c */
 /* an SCXML send of segment si to another system (target not ours);
  * TA_ERROR_NO_MEMORY: nothing done, the effect stays for the next drain */
+/* telemetry.c: what the run loop asks of the encoder, chosen once at
+ * ta_host_new (the OTLP encoder, or the null one: all of it does nothing) */
+typedef struct host_encoder {
+    void (*mark)(ta_host *h, uint64_t wall_ns); /* ta_host_advance_time */
+    void (*drain)(ta_host *h);                  /* journals into the encoder */
+    void (*effects)(ta_host *h);                /* a ready request becomes an effect */
+    void (*note)(ta_host *h);                   /* after a run: records left count as staged */
+    ta_time (*deadline)(const ta_host *h);      /* the flush interval's end (UINT64_MAX: none) */
+    ta_status (*take)(ta_host *h, uint32_t kind, ta_buffer *out); /* ta_host_traces, _logs */
+} host_encoder;
 ta_status host_telemetry_init(ta_host *h);
 void host_telemetry_free(ta_host *h);
-void host_telemetry_mark(ta_host *h, uint64_t wall_ns);
-void host_telemetry_drain(ta_host *h);
-void host_telemetry_effects(ta_host *h);
-void host_telemetry_note(ta_host *h);
-ta_time host_telemetry_deadline(const ta_host *h);
 
 ta_status ta_router_outbound(ta_host *h, uint32_t si, const ta_effect *f);
 void ta_router_time(ta_host *h);              /* expire queued envelopes */
