@@ -210,7 +210,7 @@ Built-ins:
 |---|---|
 | arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
 | strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `replace` `replaceAll` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
-| regular expressions | literals (docs/regex.md); `test` `exec`, `source` `flags` `global` `ignoreCase` `multiline` `dotAll` `unicode` `unicodeSets` `sticky` `hasIndices`, `lastIndex` (always 0); with a string: `match` `matchAll` `replace` `replaceAll` `search` `split`. A match runs in time linear in its input, on a Pike automaton paused on fuel like any loop. A match result is an array with `index`, `input`, `groups` and, with `d`, `indices`; a replacement is a string with `$&` `` $` `` `$'` `$$` `$n` `$<name>`, or a function called once per match |
+| regular expressions | literals (docs/regex.md); `test` `exec`, `source` `flags` `global` `ignoreCase` `multiline` `dotAll` `unicode` `unicodeSets` `sticky` `hasIndices`, `lastIndex` (always 0); with a string: `match` `matchAll` `search` (with a regular expression only), `replace` `replaceAll` `split` (with one or a string; `split` takes a limit, a number, with a regular expression only). A match runs in time linear in its input, on a Pike automaton paused on fuel like any loop; where no thread is alive, a pattern that begins with an ASCII character, or with `^` past the start, skips the bytes that cannot begin a match, charging the fuel following them would. A match result is an array with `index`, `input`, `groups` and, with `d`, `indices`; a replacement is a string with `$&` `` $` `` `$'` `$$` `$n` `$<name>`, a primitive written as `String` writes it, or a function called once per match. A regular expression is written as `/source/flags`, `typeof` gives `"object"`, `JSON.stringify` `{}`, and a property it does not have `undefined` |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf`, `size` |
 | maps | `get` `has` `keys` `values` `entries` `forEach`, `size` |
 | iterators | `toArray` `map` `filter` `reduce` |
@@ -479,15 +479,26 @@ compare identities, or find something on a prototype.
 - Of regular expressions (docs/regex.md, 8.5): `exec` or `test` with `g`
   or `y`, and `match` or `replace` with `y` and without `g`, which change
   `lastIndex` in JavaScript, and staticjs values do not change; `matchAll`
-  or `replaceAll` without `g`, where JavaScript throws; a match, a group or
-  a piece of `split` that begins or ends between the halves of a surrogate
-  pair, which JavaScript makes into a lone surrogate; a replacement
-  function that returns an object or a BigInt; a non-string argument
-  (`re.test(1)`) or limit (`s.split(re, "2")`) that JavaScript converts;
-  and `Object.keys`, `Object.entries`, an object spread or rest, or
-  `sort` of a match result, as JavaScript would show or keep `index`,
-  `input` and `groups` among its keys. A pattern that would need more
-  states than `max_regex_states` is a limit error.
+  or `replaceAll` without `g`, whatever the other flags, where JavaScript
+  throws a TypeError; `match`, `matchAll` or `search` with anything but a
+  regular expression (`"a.b".match(".")`), of which JavaScript makes one;
+  a match, a group or a piece of `split` that begins or ends between the
+  halves of a surrogate pair, which JavaScript makes into a lone
+  surrogate; a replacement that is an object or a BigInt, or a
+  replacement function that returns one (an array included); a
+  non-string argument (`re.test(1)`) or a limit that is not a number
+  (`s.split(re, "2")`) that JavaScript converts; `Object.keys`,
+  `Object.values`, `Object.entries`, an object spread or rest, or `sort`
+  of a match result, as JavaScript would show or keep `index`, `input` and
+  `groups` among its keys. A regular expression is an object: `===` on
+  two, `String(re)`, `re.toString()`, `"" + re` and `` `${re}` `` (which
+  JavaScript writes as `/source/flags`), `Object.keys(re)`, `in` on one,
+  `JSON.stringify` with a list of keys that names a property of
+  `RegExp.prototype` (`source`, `flags`, ...) or `lastIndex`, an assignment to its properties, and one as a map key, a
+  set member or a computed key fault; so does reading one of its methods
+  (`re.exec`) or another name of `RegExp.prototype` (`re.compile`)
+  without calling it. A pattern that would need more states than
+  `max_regex_states` is a limit error when compiled.
 
 ## Refused when compiled
 
@@ -551,10 +562,12 @@ A regular expression literal is read as JavaScript reads it, and its
 pattern is parsed when compiled: what Node refuses is a syntax error, and
 what Node accepts but staticjs does not match is unsupported, and the
 parser reads on. Unsupported are lookahead and lookbehind,
-backreferences, `\p{...}`, the `v` flag, a non-ASCII letter with `i`,
+backreferences, `\p{...}` (of a name Node knows; another is a syntax
+error, as in Node), the `v` flag, a non-ASCII letter with `i`, a group
+name that is not ASCII letters, digits, `$` and `_` (and then `\k<...>`),
 the forms only Annex B allows (a lone `]` or `{`, an identity escape such
-as `\-`, `` as an octal escape, ...), and `RegExp` (docs/regex.md,
-8.3).
+as `\-`, `\1` with no group 1 as an octal escape, ...), and `RegExp` and
+`new RegExp` (docs/regex.md, 8.3).
 
 Errors come in the order JavaScript finds them only so far as a stage that
 streams can know it. The compiler stops at the first error it meets; what it
