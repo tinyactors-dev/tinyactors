@@ -49,12 +49,12 @@ static ta_status write_blob(nd_system *system, blob_writer writer, uint64_t sess
     ta_status status = TA_ERROR_NO_MEMORY;
     system->error[0] = 0;
     system->keep_quiet = 1;
-    system->running = 1;
+    int was = enter(system);
     for (int attempt = 0; attempt < 8 && status == TA_ERROR_NO_MEMORY; attempt++) {
         if (!text_room(out, length > out->capacity ? length : 4096)) break;
         status = writer(system, session, out->bytes, out->capacity, &length);
     }
-    system->running = 0;
+    leave(system, was);
     system->keep_quiet = 0;
     out->length = status == TA_OK ? length : 0;
     return status;
@@ -93,30 +93,30 @@ napi_value js_wake(napi_env environment, napi_callback_info info) {
     void *aligned = malloc(n ? n : 1); /* the blob is read in place */
     if (!aligned) abort();
     memcpy(aligned, data, n);
-    system->running = 1;
+    int was = enter(system);
     ta_status status = ta_host_wake(system->host, get_session(environment, argv[1]), aligned, n);
-    system->running = 0;
+    leave(system, was);
     free(aligned);
     if (status != TA_OK) {
         throw_status(environment, "cannot wake the actor", status, NULL);
         return NULL;
     }
-    return undef(environment);
+    return undef(environment); /* its work runs with the next pump */
 }
 
-/* exportActor(system, session, now) -> blob: the actor leaves; its delayed sends
+/* exportActor(system, session) -> blob: the actor leaves; its delayed sends
  * are due relative to time 0 (ta_blob_rebase), so any clock adopts it */
 napi_value js_export_actor(napi_env environment, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value argv[3];
+    size_t argc = 2;
+    napi_value argv[2];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *system = argc >= 3 ? get_system(environment, argv[0]) : NULL;
+    nd_system *system = argc >= 2 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
     text blob = {0};
-    ta_host_advance_time(system->host, (ta_time)now_of(environment, argv[2]));
+    ta_time now = (ta_time)system_now(system);
+    ta_host_advance_time(system->host, now);
     ta_status status = write_blob(system, write_export, get_session(environment, argv[1]), &blob);
-    if (status == TA_OK)
-        status = ta_blob_rebase(blob.bytes, blob.length, (ta_time)now_of(environment, argv[2]), 0);
+    if (status == TA_OK) status = ta_blob_rebase(blob.bytes, blob.length, now, 0);
     napi_value r = status == TA_OK ? bytes_value(environment, blob.bytes, blob.length) : NULL;
     if (status != TA_OK)
         throw_status(environment, "cannot export the actor", status, system->error);
@@ -124,28 +124,27 @@ napi_value js_export_actor(napi_env environment, napi_callback_info info) {
     return r;
 }
 
-/* adopt(system, blob, now) -> [session, run code]: into the newest segment whose image the
- * blob belongs to */
+/* adopt(system, blob) -> session: into the newest segment whose image the blob belongs to */
 napi_value js_adopt(napi_env environment, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value argv[3], r;
+    size_t argc = 2;
+    napi_value argv[2];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *system = argc >= 3 ? get_system(environment, argv[0]) : NULL;
+    nd_system *system = argc >= 2 ? get_system(environment, argv[0]) : NULL;
     void *data = NULL;
     size_t n = 0;
     if (!system) return NULL;
     if (!bytes_of(environment, argv[1], &data, &n)) {
-        napi_throw_type_error(environment, NULL, "adopt(system, blob: Uint8Array, now)");
+        napi_throw_type_error(environment, NULL, "adopt(system, blob: Uint8Array)");
         return NULL;
     }
     void *copy = malloc(n ? n : 1);
     if (!copy) abort();
     memcpy(copy, data, n);
-    ta_time now = (ta_time)now_of(environment, argv[2]);
+    ta_time now = (ta_time)system_now(system);
     ta_status status = ta_blob_rebase(copy, n, 0, now);
     uint64_t session = 0;
     ta_host_advance_time(system->host, now);
-    system->running = 1;
+    int was = enter(system);
     for (uint32_t k = ta_host_segment_count(system->host); status == TA_OK && k-- > 0;) {
         ta_host_segment_info segment_info;
         segment_info.size = sizeof segment_info;
@@ -155,19 +154,14 @@ napi_value js_adopt(napi_env environment, napi_callback_info info) {
         if (status != TA_ERROR_INVALID) break;
         status = TA_OK;
     }
-    system->running = 0;
+    leave(system, was);
     free(copy);
     if (status != TA_OK || !session) {
         throw_status(environment, "cannot adopt the actor",
                      status == TA_OK ? TA_ERROR_INVALID : status, "");
         return NULL;
     }
-    double code = pump(system, (double)now);
-    if (!code_value(environment, code)) return NULL;
-    napi_create_array_with_length(environment, 2, &r);
-    napi_set_element(environment, r, 0, num(environment, (double)session));
-    napi_set_element(environment, r, 1, num(environment, code));
-    return r;
+    return num(environment, (double)session); /* it goes on with the next pump */
 }
 
 /* migrate(system, name, session, wake, timeout) -> job */

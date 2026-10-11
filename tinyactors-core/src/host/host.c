@@ -468,6 +468,112 @@ ta_status ta_host_locate(const ta_host *host, uint64_t session, uint32_t *segmen
     return TA_OK;
 }
 
+/* ---- state values ---------------------------------------------------------------------- */
+
+typedef struct value_writer {
+    char *buffer;
+    size_t capacity, length;
+} value_writer;
+
+static void value_put(value_writer *w, const char *text, size_t length) {
+    for (size_t i = 0; i < length; i++, w->length++)
+        if (w->length < w->capacity) w->buffer[w->length] = text[i];
+}
+
+static void value_id(value_writer *w, ta_string_view id) {
+    char quoted[256];
+    size_t n = host_json_string(NULL, id);
+    if (n <= sizeof quoted) {
+        host_json_string(quoted, id);
+        value_put(w, quoted, n);
+    } else { /* rare: escaped byte by byte */
+        value_put(w, "\"", 1);
+        for (uint32_t i = 0; i < id.length; i++) {
+            ta_string_view one = {id.pointer + i, 1};
+            char escaped[8];
+            size_t k = host_json_string(escaped, one);
+            value_put(w, escaped + 1, k - 2);
+        }
+        value_put(w, "\"", 1);
+    }
+}
+
+/* An open state while the configuration is written: its kind, whether it
+ * wrote an active child yet, whether its value is wrapped in {"id": ...}. */
+typedef struct value_frame {
+    uint8_t kind, children, wrapped;
+} value_frame;
+
+static void value_close(value_writer *w, const value_frame *frame) {
+    if (frame->kind == TA_STATE_COMPOUND) {
+        if (!frame->children) value_put(w, "{}", 2);
+        if (frame->wrapped) value_put(w, "}", 1);
+    } else if (frame->kind == TA_STATE_PARALLEL) {
+        value_put(w, frame->wrapped ? "}}" : "}", frame->wrapped ? 2 : 1);
+    }
+}
+
+size_t ta_host_state_value(const ta_host *host, uint64_t session, char *buffer,
+                           size_t capacity) {
+    uint32_t si = 0, actor = 0, states[TA_STATE_VALUE_STATES];
+    if (ta_host_locate(host, session, &si, &actor) != TA_OK) return 0;
+    const host_segment *segment_record = segment_of(host, si);
+    ta_actor_info info;
+    info.size = sizeof info;
+    if (ta_actor_info_get(segment_record->system, actor, &info) != TA_OK) return 0;
+    uint32_t count = ta_actor_config(segment_record->system, actor, states, TA_STATE_VALUE_STATES);
+    if (count > TA_STATE_VALUE_STATES) return 0;
+    for (uint32_t i = 1; i < count; i++) /* document order: a parent before its children */
+        for (uint32_t j = i; j > 0 && states[j - 1] > states[j]; j--) {
+            uint32_t t = states[j];
+            states[j] = states[j - 1];
+            states[j - 1] = t;
+        }
+    value_writer w = {buffer, capacity, 0};
+    value_frame frames[256]; /* by depth (ta_state_info.depth < 256); the root acts compound */
+    frames[0] = (value_frame){TA_STATE_COMPOUND, 0, 0};
+    uint32_t top = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        ta_state_info state;
+        state.size = sizeof state;
+        if (states[i] == 0 ||
+            ta_image_state_info(segment_record->image, info.chart, states[i], &state) != TA_OK ||
+            state.depth == 0 || state.depth > 255 || state.kind == TA_STATE_HISTORY_SHALLOW ||
+            state.kind == TA_STATE_HISTORY_DEEP)
+            continue;
+        while (top >= state.depth)
+            value_close(&w, &frames[top--]);
+        if (top + 1 != state.depth) continue; /* its parent is not active: not a configuration */
+        value_frame *parent = &frames[top];
+        int in_parallel = parent->kind == TA_STATE_PARALLEL;
+        if (in_parallel) {
+            if (parent->children) value_put(&w, ",", 1);
+            value_id(&w, state.id);
+            value_put(&w, ":", 1);
+        }
+        parent->children = 1;
+        value_frame frame = {(uint8_t)state.kind, 0, (uint8_t)!in_parallel};
+        if (state.kind == TA_STATE_COMPOUND || state.kind == TA_STATE_PARALLEL) {
+            if (!in_parallel) {
+                value_put(&w, "{", 1);
+                value_id(&w, state.id);
+                value_put(&w, ":", 1);
+            }
+            if (state.kind == TA_STATE_PARALLEL) value_put(&w, "{", 1);
+        } else if (in_parallel) {
+            value_put(&w, "{}", 2);
+        } else {
+            value_id(&w, state.id);
+        }
+        frames[++top] = frame;
+    }
+    while (top > 0)
+        value_close(&w, &frames[top--]);
+    if (!frames[0].children) value_put(&w, "{}", 2);
+    if (w.length < capacity) buffer[w.length] = 0;
+    return w.length;
+}
+
 ta_status ta_host_spawn(ta_host *host, uint32_t segment, uint32_t chart, ta_string_view name,
                         ta_payload params, ta_string_view traceparent, uint64_t *session) {
     host_segment *segment_record = segment_of(host, segment);

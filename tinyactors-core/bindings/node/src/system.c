@@ -163,6 +163,9 @@ static void system_clear(napi_env environment, nd_system *system) {
     free(system->keys);
     free(system->sessions);
     free(system->changed);
+    for (uint32_t i = 0; i < system->later_count; i++)
+        set_ref(environment, &system->later[i], NULL);
+    free(system->later);
     for (uint32_t i = 0; i < 2 * IO_PROCESSORS_MAX; i++)
         free(system->io_text[i]);
     set_ref(environment, &system->resolve, NULL);
@@ -170,6 +173,8 @@ static void system_clear(napi_env environment, nd_system *system) {
     set_ref(environment, &system->sync, NULL);
     set_ref(environment, &system->refs, NULL);
     set_ref(environment, &system->clock, NULL);
+    set_ref(environment, &system->schedule, NULL);
+    set_ref(environment, &system->now, NULL);
     set_ref(environment, &system->in_function, NULL);
     free(system->wire.bytes);
     free(system->otlp);
@@ -205,41 +210,53 @@ nd_system *get_system(napi_env environment, napi_value v) {
         return NULL;
     }
     nd_system *system = (nd_system *)p;
-    if (!system->host) {
+    if (!system->host || system->stopping) {
         napi_throw_error(environment, NULL, "the system was stopped");
         return NULL;
     }
-    if (system->running) {
-        napi_throw_error(environment, NULL, "the system is running (calls into it do not nest)");
+    if (system->running == 1) {
+        napi_throw_error(environment, NULL,
+                         "the system is running (an expression cannot call into its system)");
         return NULL;
     }
     system->environment = environment;
     return system;
 }
 
-/* For calls that feed the host (send, post, deliver, actorByName): also inside a
- * synchronous I/O processor's send (running 3), between two runs of a pump. */
-static nd_system *get_system_input(napi_env environment, napi_value v) {
+/* later(system, fn) -> true when called from inside a run (an expression
+ * calling into its system): fn is called between two runs, in order with the
+ * others; false otherwise (the caller goes on at once). */
+napi_value js_later(napi_env environment, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
     void *p = NULL;
-    if (type_of(environment, v) == napi_external &&
-        napi_get_value_external(environment, v, &p) == napi_ok && p &&
-        ((nd_system *)p)->running == 3 && ((nd_system *)p)->host) {
-        ((nd_system *)p)->environment = environment;
-        return (nd_system *)p;
-    }
-    return get_system(environment, v);
+    if (argc < 2 || type_of(environment, argv[0]) != napi_external ||
+        napi_get_value_external(environment, argv[0], &p) != napi_ok || !p)
+        return bool_value(environment, 0);
+    nd_system *system = (nd_system *)p;
+    if (system->running != 1 || !system->host || system->stopping)
+        return bool_value(environment, 0);
+    grow((void **)&system->later, &system->later_capacity, system->later_count + 1,
+         sizeof(napi_ref));
+    system->later[system->later_count++] = make_ref(environment, argv[1]);
+    return bool_value(environment, 1);
 }
 
-/* For calls that only read (inspect, context): also while effects are being delivered. */
-static nd_system *get_system_reading(napi_env environment, napi_value v) {
-    void *p = NULL;
-    if (type_of(environment, v) == napi_external &&
-        napi_get_value_external(environment, v, &p) == napi_ok && p &&
-        ((nd_system *)p)->running == 2 && ((nd_system *)p)->host) {
-        ((nd_system *)p)->environment = environment;
-        return (nd_system *)p;
+/* The calls kept during the last run, in order; what one throws is `*thrown`. */
+static void call_later(nd_system *system, napi_value *thrown) {
+    napi_env environment = system->environment;
+    for (uint32_t k = 0; k < system->later_count; k++) { /* calls made meanwhile go in at once */
+        napi_value f = get_ref(environment, system->later[k]);
+        set_ref(environment, &system->later[k], NULL);
+        if (!call(environment, f, 0, NULL)) {
+            if (!*thrown)
+                napi_get_and_clear_last_exception(environment, thrown);
+            else
+                clear_exception(environment);
+        }
     }
-    return get_system(environment, v);
+    system->later_count = 0;
 }
 
 /* ---- the run loop -------------------------------------------------------------------------- */
@@ -443,11 +460,12 @@ static void effect_out(nd_system *system, const ta_host_effect *effect) {
 #define RUN_BUDGET 10000u
 #define RUN_ROUNDS 16
 
-/* Run until idle (or RUN_ROUNDS runs); every effect, the changed sessions and
- * the traces go to callbacks.effects at once. Returns the run code. */
-double pump(nd_system *system, double now) {
-    if (system->running == 3) return -2; /* inside a synchronous send: the pump goes on */
+/* One pass: ta_host_run in rounds until idle (or RUN_ROUNDS runs); every
+ * effect, the changed sessions and the traces go to callbacks.effects at once.
+ * Returns the run code, NaN when callbacks.effects threw. */
+static double pump_once(nd_system *system) {
     napi_env environment = system->environment;
+    double now = system_now(system);
     ta_host_advance_time(system->host, now > 0 ? (ta_time)now : 0);
     system->running = 1;
     system->pump++;
@@ -484,8 +502,11 @@ double pump(nd_system *system, double now) {
             if (!call(environment, get_ref(environment, system->sync), 1, &e))
                 napi_get_and_clear_last_exception(environment, &thrown);
         }
+        if (system->later_count && !thrown) call_later(system, &thrown); /* (running 3) */
         system->running = 1;
-        if (thrown || result.status == TA_RUN_IDLE || result.status == TA_RUN_FAULT) break;
+        if (thrown || system->stopping || result.status == TA_RUN_IDLE ||
+            result.status == TA_RUN_FAULT)
+            break;
     }
     for (uint32_t i = 0; i < system->failure_count; i++) { /* exceptions in expressions */
         napi_value e = effect_new(system, "exception");
@@ -517,27 +538,106 @@ double pump(nd_system *system, double now) {
         napi_value argv[4] = {
             list ? list : undef(environment), changed ? changed : undef(environment),
             traces ? traces : undef(environment), logs ? logs : undef(environment)};
-        system->running = 2; /* the sink may not call in: core.mjs queues */
+        system->running = 2; /* inputs from the handlers go in: the pump goes on */
         napi_value r = call(environment, get_ref(environment, system->effects), 4, argv);
         system->running = 0;
-        if (!r) return 0; /* the exception propagates */
+        if (!r) return NAN; /* the exception propagates */
     }
     if (thrown) {
         napi_throw(environment, thrown);
-        return 0;
+        return NAN;
     }
     if (result.status != TA_RUN_IDLE) return -2;
     return result.next_deadline == UINT64_MAX ? -1 : (double)result.next_deadline;
 }
 
-napi_value code_value(napi_env environment, double code) {
-    bool pending = false;
-    napi_is_exception_pending(environment, &pending);
-    return pending ? NULL : num(environment, code);
+/* Arm the caller's one timer for a run code (callbacks.schedule): 0 to run
+ * soon, -1 for nothing to do, else the delay to the next deadline. A caller's
+ * own clock (callbacks.now) arms nothing: time moves when it pumps. */
+static void arm(nd_system *system, double code) {
+    if (system->now || !system->schedule || system->stopping) return;
+    if (code == system->armed) return;
+    system->armed = code;
+    double delay = code == -2 ? 0 : code < 0 ? -1 : code - system_now(system);
+    napi_value argv[1] = {num(system->environment, delay < 0 && code >= 0 ? 0 : delay)};
+    call(system->environment, get_ref(system->environment, system->schedule), 1, argv);
 }
 
-double now_of(napi_env environment, napi_value v) {
-    return type_of(environment, v) == napi_number ? get_double(environment, v) : 0;
+static const double run_bounds[RUN_BUCKETS - 1] = {0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25};
+
+static void run_record(nd_system *system, double seconds) {
+    uint32_t bucket = 0;
+    while (bucket < RUN_BUCKETS - 1 && seconds > run_bounds[bucket])
+        bucket++;
+    system->run_buckets[bucket]++;
+    system->run_min = system->run_count && system->run_min < seconds ? system->run_min : seconds;
+    system->run_max = system->run_count && system->run_max > seconds ? system->run_max : seconds;
+    system->run_count++;
+    system->run_sum += seconds;
+}
+
+/* Run until idle: passes of RUN_ROUNDS runs, again while effect handlers
+ * gave the host input (at most RUN_ROUNDS passes, then the timer goes on);
+ * then the timer is armed. Returns the run code; NaN when an effect handler
+ * threw (the exception is pending). Inside a pump it only notes more work. */
+double pump(nd_system *system) {
+    if (system->running) {
+        system->more = 1;
+        return -2;
+    }
+    uint64_t started = ta_runtime_now_ns();
+    double code = -2;
+    for (int pass = 0; pass < RUN_ROUNDS; pass++) {
+        system->more = 0;
+        code = pump_once(system);
+        if (code != code || system->stopping || !system->more) break;
+        code = -2;
+    }
+    run_record(system, (double)(ta_runtime_now_ns() - started) / 1e9);
+    if (system->stopping) {
+        system_destroy(system->environment, system);
+        return -1;
+    }
+    if (code == code) arm(system, system->more ? -2 : code);
+    return code;
+}
+
+/* After an input: from outside, the pump runs now; from an effect handler or
+ * a synchronous send, the pump that is running goes on. Returns `result`, or
+ * NULL when the pump threw. */
+napi_value input_done(nd_system *system, napi_value result) {
+    if (system->running) {
+        system->more = 1;
+        return result;
+    }
+    pump(system);
+    bool pending = false;
+    napi_is_exception_pending(system->environment, &pending);
+    return pending ? NULL : result;
+}
+
+/* A host call that runs JavaScript (charts attach, blobs are written): no calls in meanwhile. */
+int enter(nd_system *system) {
+    int was = system->running;
+    system->running = 1;
+    return was;
+}
+
+void leave(nd_system *system, int was) {
+    system->running = was;
+}
+
+/* The system's time in ms: the caller's clock (callbacks.now), else the monotonic one. */
+double system_now(nd_system *system) {
+    if (system->now) {
+        napi_value r =
+            call(system->environment, get_ref(system->environment, system->now), 0, NULL);
+        double ms = r && type_of(system->environment, r) == napi_number
+                        ? get_double(system->environment, r)
+                        : 0;
+        return ms > 0 ? ms : 0;
+    }
+    return (double)(ta_runtime_now_ns() - system->time_base) / 1e6;
 }
 
 /* ---- creating a system ---------------------------------------------------------------------- */
@@ -565,6 +665,13 @@ nd_system *system_new(napi_env environment, napi_value callbacks, napi_value opt
     system->refs = make_ref(environment, property(environment, callbacks, "ref"));
     if (type_of(environment, property(environment, callbacks, "clock")) == napi_function)
         system->clock = make_ref(environment, property(environment, callbacks, "clock"));
+    if (type_of(environment, property(environment, callbacks, "schedule")) == napi_function)
+        system->schedule = make_ref(environment, property(environment, callbacks, "schedule"));
+    if (type_of(environment, property(environment, callbacks, "now")) == napi_function)
+        system->now = make_ref(environment, property(environment, callbacks, "now"));
+    system->armed = -3;
+    double start = property_double(environment, options, "now"); /* a restored system's time */
+    system->time_base = ta_runtime_now_ns() - (uint64_t)(start > 0 ? start * 1e6 : 0);
     napi_value in;
     napi_create_function(environment, "In", NAPI_AUTO_LENGTH, js_in, system, &in);
     system->in_function = make_ref(environment, in);
@@ -669,9 +776,9 @@ napi_value js_add_image(napi_env environment, napi_callback_info info) {
     nd_image *image = system ? get_image(environment, argv[1]) : NULL;
     if (!image) return NULL;
     uint32_t segment = 0;
-    system->running = 1; /* charts attach: resolve() runs JavaScript */
+    int was = enter(system); /* charts attach: resolve() runs JavaScript */
     ta_status status = ta_host_add_image(system->host, &image->image, &segment);
-    system->running = 0;
+    leave(system, was);
     if (status != TA_OK) {
         napi_throw_error(environment, NULL, "cannot add the image");
         return NULL;
@@ -701,27 +808,27 @@ napi_value js_chart(napi_env environment, napi_callback_info info) {
 }
 
 napi_value js_boot(napi_env environment, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value argv[3];
+    size_t argc = 2;
+    napi_value argv[2];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
     nd_system *system = argc >= 2 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
-    system->running = 1;
-    ta_host_advance_time(system->host, argc > 2 ? (ta_time)now_of(environment, argv[2]) : 0);
+    ta_host_advance_time(system->host, (ta_time)system_now(system));
+    int was = enter(system);
     ta_status status = ta_host_boot(system->host, get_u32(environment, argv[1]));
-    system->running = 0;
+    leave(system, was);
     if (status != TA_OK) {
         napi_throw_error(environment, NULL, "cannot boot the image");
         return NULL;
     }
-    return undef(environment);
+    return undef(environment); /* the actors start with the next pump */
 }
 
 napi_value js_actor_by_name(napi_env environment, napi_callback_info info) {
     size_t argc = 2;
     napi_value argv[2];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *system = argc >= 2 ? get_system_input(environment, argv[0]) : NULL;
+    nd_system *system = argc >= 2 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
     size_t nl = 0;
     char *name = get_string(environment, argv[1], &nl);
@@ -751,13 +858,13 @@ char *optional_string(napi_env environment, napi_value v, size_t *n) {
     return type_of(environment, v) == napi_string ? get_string(environment, v, n) : NULL;
 }
 
-/* spawn(system, segment, chart, name, input, traceparent, now) -> session (the
- * bootstrap runs with the next pump) */
+/* spawn(system, segment, chart, name, input, traceparent) -> session: the
+ * bootstrap runs with the next pump (the caller knows the session first) */
 napi_value js_spawn(napi_env environment, napi_callback_info info) {
-    size_t argc = 7;
-    napi_value argv[7];
+    size_t argc = 6;
+    napi_value argv[6];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *system = argc >= 7 ? get_system(environment, argv[0]) : NULL;
+    nd_system *system = argc >= 6 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
     ta_payload input = payload_of_value(system, argv[4]);
     bool pending = false;
@@ -767,7 +874,7 @@ napi_value js_spawn(napi_env environment, napi_callback_info info) {
     char *name = optional_string(environment, argv[3], &nl),
          *traceparent = optional_string(environment, argv[5], &tl);
     uint64_t session = 0;
-    ta_host_advance_time(system->host, (ta_time)now_of(environment, argv[6]));
+    ta_host_advance_time(system->host, (ta_time)system_now(system));
     ta_status status =
         ta_host_spawn(system->host, get_u32(environment, argv[1]), get_u32(environment, argv[2]),
                       view_of(name, nl), input, view_of(traceparent, tl), &session);
@@ -778,15 +885,15 @@ napi_value js_spawn(napi_env environment, napi_callback_info info) {
         napi_throw_error(environment, NULL, "cannot spawn the actor");
         return NULL;
     }
-    return num(environment, (double)session);
+    return num(environment, (double)session); /* it starts with the next pump */
 }
 
-/* send(system, session, name, data, traceparent, now) -> run code: one event, then the run loop */
+/* send(system, session, name, data, traceparent): one event, then the run loop */
 napi_value js_send(napi_env environment, napi_callback_info info) {
-    size_t argc = 6;
-    napi_value argv[6];
+    size_t argc = 5;
+    napi_value argv[5];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *system = argc >= 6 ? get_system_input(environment, argv[0]) : NULL;
+    nd_system *system = argc >= 5 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
     size_t nl = 0, tl = 0;
     char *name = get_string(environment, argv[2], &nl),
@@ -806,15 +913,15 @@ napi_value js_send(napi_env environment, napi_callback_info info) {
     free(name);
     free(traceparent);
     if (pending) return NULL;
-    return code_value(environment, pump(system, now_of(environment, argv[5])));
+    return input_done(system, undef(environment));
 }
 
-/* sendMany(system, sessions, names, datas, traceparents, now) -> [accepted, run code] */
+/* sendMany(system, sessions, names, datas, traceparents) -> accepted */
 napi_value js_send_many(napi_env environment, napi_callback_info info) {
-    size_t argc = 6;
-    napi_value argv[6];
+    size_t argc = 5;
+    napi_value argv[5];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *system = argc >= 6 ? get_system_input(environment, argv[0]) : NULL;
+    nd_system *system = argc >= 5 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
     uint32_t n = array_length(environment, argv[1]);
     uint64_t *sessions = (uint64_t *)calloc(n + 1, sizeof(uint64_t));
@@ -861,22 +968,16 @@ napi_value js_send_many(napi_env environment, napi_callback_info info) {
     bool pending = false;
     napi_is_exception_pending(environment, &pending);
     if (pending) return NULL;
-    double code = pump(system, now_of(environment, argv[5]));
-    if (!code_value(environment, code)) return NULL;
-    napi_value r;
-    napi_create_array_with_length(environment, 2, &r);
-    napi_set_element(environment, r, 0, num(environment, delivered));
-    napi_set_element(environment, r, 1, num(environment, code));
-    return r;
+    return input_done(system, num(environment, delivered));
 }
 
 /* post(system, session, { name, data, wire, sendid, origin, origintype, raw, traceparent,
- * flags, token }, now) -> run code: an event with every field of ta_event_in */
+ * flags, token }): an event with every field of ta_event_in */
 napi_value js_post(napi_env environment, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value argv[4];
+    size_t argc = 3;
+    napi_value argv[3];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *system = argc >= 4 ? get_system_input(environment, argv[0]) : NULL;
+    nd_system *system = argc >= 3 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
     napi_value o = argv[2];
     size_t lengths[7] = {0};
@@ -907,16 +1008,16 @@ napi_value js_post(napi_env environment, napi_callback_info info) {
     for (int i = 0; i < 7; i++)
         free(texts[i]);
     if (pending) return NULL;
-    return code_value(environment, pump(system, now_of(environment, argv[3])));
+    return input_done(system, undef(environment));
 }
 
 /* deliver(system, peer, { target, name, data | wire, origin, origintype, sendid, msgid,
- * dedup, hops, traceparent }, now) -> outcome (TA_ROUTE_*), -1 if it failed */
+ * dedup, hops, traceparent }) -> outcome (TA_ROUTE_*), -1 if it failed */
 napi_value js_deliver(napi_env environment, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value argv[4];
+    size_t argc = 3;
+    napi_value argv[3];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *system = argc >= 4 ? get_system_input(environment, argv[0]) : NULL;
+    nd_system *system = argc >= 3 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
     napi_value o = argv[2];
     static const char *const names[] = {"target", "name",  "origin",      "origintype", "sendid",
@@ -943,7 +1044,7 @@ napi_value js_deliver(napi_env environment, napi_callback_info info) {
     uint32_t outcome = 0;
     bool pending = false;
     napi_is_exception_pending(environment, &pending);
-    ta_host_advance_time(system->host, (ta_time)now_of(environment, argv[3]));
+    ta_host_advance_time(system->host, (ta_time)system_now(system));
     ta_status status =
         pending ? TA_ERROR_INVALID
                 : ta_host_deliver(system->host, get_u32(environment, argv[1]), &envelope, &outcome);
@@ -951,23 +1052,55 @@ napi_value js_deliver(napi_env environment, napi_callback_info info) {
     for (int i = 0; i < 9; i++)
         free(texts[i]);
     if (pending) return NULL;
-    double code = pump(system, now_of(environment, argv[3]));
-    if (!code_value(environment, code)) return NULL;
-    napi_value r;
-    napi_create_array_with_length(environment, 2, &r);
-    napi_set_element(environment, r, 0, num(environment, status == TA_OK ? (double)outcome : -1));
-    napi_set_element(environment, r, 1, num(environment, code));
-    return r;
+    return input_done(system, num(environment, status == TA_OK ? (double)outcome : -1));
 }
 
-/* pump(system, now) -> run code */
+/* pump(system, fired) -> run code: run what is due (after a spawn, boot or adopt;
+ * when the caller's clock moved); `fired`: callbacks.schedule's timer went off */
 napi_value js_pump(napi_env environment, napi_callback_info info) {
     size_t argc = 2;
     napi_value argv[2];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *system = argc >= 2 ? get_system(environment, argv[0]) : NULL;
+    nd_system *system = argc >= 1 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
-    return code_value(environment, pump(system, now_of(environment, argv[1])));
+    bool fired = false;
+    if (argc > 1) napi_get_value_bool(environment, argv[1], &fired);
+    if (fired) system->armed = -3; /* the timer is no longer armed */
+    double code = pump(system);
+    return code == code ? num(environment, code) : NULL;
+}
+
+/* now(system) -> the system's time (ms) */
+napi_value js_now(napi_env environment, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1];
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    nd_system *system = argc >= 1 ? get_system(environment, argv[0]) : NULL;
+    return system ? num(environment, system_now(system)) : NULL;
+}
+
+/* runs(system) -> { count, sum, min, max, bounds, buckets }: the pumps' durations (s) */
+napi_value js_runs(napi_env environment, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1], o, bounds, buckets;
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    nd_system *system = argc >= 1 ? get_system(environment, argv[0]) : NULL;
+    if (!system) return NULL;
+    napi_create_object(environment, &o);
+    napi_create_array_with_length(environment, RUN_BUCKETS - 1, &bounds);
+    napi_create_array_with_length(environment, RUN_BUCKETS, &buckets);
+    for (uint32_t i = 0; i < RUN_BUCKETS; i++) {
+        if (i < RUN_BUCKETS - 1)
+            napi_set_element(environment, bounds, i, num(environment, run_bounds[i]));
+        napi_set_element(environment, buckets, i, num(environment, (double)system->run_buckets[i]));
+    }
+    set(environment, o, "count", num(environment, (double)system->run_count));
+    set(environment, o, "sum", num(environment, system->run_sum));
+    set(environment, o, "min", num(environment, system->run_min));
+    set(environment, o, "max", num(environment, system->run_max));
+    set(environment, o, "bounds", bounds);
+    set(environment, o, "buckets", buckets);
+    return o;
 }
 
 napi_value js_terminate(napi_env environment, napi_callback_info info) {
@@ -976,8 +1109,10 @@ napi_value js_terminate(napi_env environment, napi_callback_info info) {
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
     nd_system *system = argc >= 2 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
-    return bool_value(environment,
-                      ta_host_terminate(system->host, get_session(environment, argv[1])) == TA_OK);
+    return input_done(
+        system,
+        bool_value(environment,
+                   ta_host_terminate(system->host, get_session(environment, argv[1])) == TA_OK));
 }
 
 int locate(nd_system *system, uint64_t session, ta_system **segment_system, uint32_t *segment,
@@ -999,7 +1134,7 @@ napi_value js_inspect(napi_env environment, napi_callback_info info) {
     size_t argc = 2;
     napi_value argv[2], o, states;
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *system = argc >= 2 ? get_system_reading(environment, argv[0]) : NULL;
+    nd_system *system = argc >= 2 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
     ta_system *segment_system;
     uint32_t segment = 0, configuration[256];
@@ -1020,12 +1155,30 @@ napi_value js_inspect(napi_env environment, napi_callback_info info) {
     return o;
 }
 
+/* stateValue(system, session) -> its configuration as a state value (ta_host_state_value) */
+napi_value js_state_value(napi_env environment, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    nd_system *system = argc >= 2 ? get_system(environment, argv[0]) : NULL;
+    if (!system) return NULL;
+    uint64_t session = get_session(environment, argv[1]);
+    char small[512];
+    size_t length = ta_host_state_value(system->host, session, small, sizeof small);
+    char *json = length < sizeof small ? small : (char *)malloc(length + 1);
+    if (!json) abort();
+    if (json != small) ta_host_state_value(system->host, session, json, length + 1);
+    napi_value text = str_value(environment, view_of(length ? json : "{}", length ? length : 2));
+    if (json != small) free(json);
+    return call_global(environment, "JSON", "parse", 1, &text);
+}
+
 /* context(system, session) -> the session's variables (native: its scope) */
 napi_value js_context(napi_env environment, napi_callback_info info) {
     size_t argc = 2;
     napi_value argv[2];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *system = argc >= 2 ? get_system_reading(environment, argv[0]) : NULL;
+    nd_system *system = argc >= 2 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
     ta_system *segment_system;
     uint32_t segment = 0;
@@ -1141,9 +1294,9 @@ napi_value js_destroy(napi_env environment, napi_callback_info info) {
     if (!argc || napi_get_value_external(environment, argv[0], &p) != napi_ok || !p)
         return undef(environment);
     nd_system *system = (nd_system *)p;
-    if (system->running) {
-        napi_throw_error(environment, NULL, "the system is running");
-        return NULL;
+    if (system->running) { /* from an effect handler: the host goes when the pump ends */
+        system->stopping = 1;
+        return undef(environment);
     }
     system_destroy(environment, system);
     return undef(environment);

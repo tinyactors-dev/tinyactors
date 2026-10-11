@@ -133,6 +133,7 @@ void host_free(ta_host *h, void *pointer, size_t size);
 /* Room for `need` elements of `element` bytes in *array (capacity in
  * *capacity, new ones zeroed); 0 if the allocator refused (*array unchanged). */
 int host_grow(ta_host *h, void **array, uint32_t *capacity, uint32_t need, size_t element);
+size_t host_json_string(char *out, ta_string_view s);
 /* Room for `count` more effects and `bytes` more pool bytes; 0 if refused. */
 int host_effects_reserve(ta_host *h, uint32_t count, size_t bytes);
 size_t host_pool_put(ta_host *h, ta_string_view s);

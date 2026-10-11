@@ -702,8 +702,8 @@ ta_status ta_host_message_init(ta_host *host, const ta_effect *effect, uint64_t 
     return TA_OK;
 }
 
-/* The wire shape lives here; bindings only encode/decode the data value. */
-static size_t json_string(char *out, ta_string_view s) {
+/* A JSON string (quoted, escaped) into `out` (NULL: only measured); returns its length. */
+size_t host_json_string(char *out, ta_string_view s) {
     size_t n = 0;
     if (out) out[n] = '"';
     n++;
@@ -754,10 +754,10 @@ size_t ta_host_envelope_json(const ta_envelope *envelope, ta_string_view data, c
                 if (out) out[n] = ',';
                 n++;
             }
-            n += json_string(out ? out + n : NULL, keys[i]);
+            n += host_json_string(out ? out + n : NULL, keys[i]);
             if (out) out[n] = ':';
             n++;
-            n += json_string(out ? out + n : NULL, values[i]);
+            n += host_json_string(out ? out + n : NULL, values[i]);
         }
         if (data.length) {
             if (out) {

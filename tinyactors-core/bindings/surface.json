@@ -112,6 +112,7 @@
     "ta_host_actor_by_name": "bind",
     "ta_host_spawn": "bind",
     "ta_host_locate": "bind",
+    "ta_host_state_value": {"bind": ["node"], "skip": "the web binding's JavaScript computes state values until it becomes the wasm twin of the addon (docs/adr/0008-bindings-only-do-io.md)"},
     "ta_host_send": "bind",
     "ta_host_send_many": "bind",
     "ta_host_terminate": "bind",

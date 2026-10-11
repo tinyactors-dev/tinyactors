@@ -744,7 +744,40 @@ static void test_adopt_tree_collision(void) {
     world_close(&b);
 }
 
+/* configurations as nested state values: atomic, compound, parallel regions
+ * (an atomic region is {}), a missing session, a short buffer */
+static void test_state_value(void) {
+    host_world e;
+    world_open(&e, 16, NULL, 0);
+    world_add(&e, SC("v", "initial='top'><state id='top' initial='p'>"
+                          "<parallel id='p'><state id='r1' initial='x'><state id='x'>"
+                          "<transition event='go' target='y'/></state><state id='y'/></state>"
+                          "<state id='r2'/><state id='r3' initial='k'><state id='k' initial='k1'>"
+                          "<history id='h'><transition target='k1'/></history><state id='k1'/></state></state></parallel>"
+                          "<transition event='flat' target='flat'/></state>"
+                          "<state id='flat'/>"));
+    uint64_t session = spawn(&e, "v");
+    run(&e);
+    char value[256];
+    size_t n = ta_host_state_value(e.host, session, value, sizeof value);
+    CHECK(strcmp(value, "{\"top\":{\"p\":{\"r1\":\"x\",\"r2\":{},\"r3\":{\"k\":\"k1\"}}}}") == 0);
+    CHECK_EQUAL(n, strlen(value));
+    CHECK_EQUAL(ta_host_state_value(e.host, session, value, 4), n); /* measured, cut short */
+    CHECK_EQUAL(ta_host_state_value(e.host, session, NULL, 0), n);
+    CHECK_EQUAL(send(&e, session, "go", NULL), TA_OK);
+    run(&e);
+    ta_host_state_value(e.host, session, value, sizeof value);
+    CHECK(strcmp(value, "{\"top\":{\"p\":{\"r1\":\"y\",\"r2\":{},\"r3\":{\"k\":\"k1\"}}}}") == 0);
+    CHECK_EQUAL(send(&e, session, "flat", NULL), TA_OK);
+    run(&e);
+    ta_host_state_value(e.host, session, value, sizeof value);
+    CHECK(strcmp(value, "\"flat\"") == 0);
+    CHECK_EQUAL(ta_host_state_value(e.host, session + 1000, value, sizeof value), 0u);
+    world_close(&e);
+}
+
 int main(void) {
+    RUN(test_state_value);
     RUN(test_export_adopt_between_hosts);
     RUN(test_adopt_tree_collision);
     RUN(test_snapshot_restore);

@@ -356,7 +356,6 @@ export function createRuntime({ native, platform }) {
   const METRIC_KINDS = { sum: K.OTLP_METRIC_SUM, gauge: K.OTLP_METRIC_GAUGE, histogram: K.OTLP_METRIC_HISTOGRAM };
   const METRIC_KIND_NAMES = Object.fromEntries(Object.entries(METRIC_KINDS).map(([k, v]) => [v, k]));
   /* tinyactors.run.duration: how long one run blocked the host's loop, in seconds */
-  const RUN_BOUNDS = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25];
 
   function traceKinds(options) {
     let kinds;
@@ -646,11 +645,9 @@ export function createRuntime({ native, platform }) {
       this._charts = new Map(); /* Chart -> its name in this system */
       this._sources = new Map(); /* source name -> Chart */
       this._segments = []; /* by segment: its Image */
-      this._trees = new Map(); /* `${segment}:${chart}` -> the state tree */
       this._actors = new Map(); /* session -> Actor the application holds */
       this._invocations = new Map(); /* `${segment}:${token}` and `${session}#${invokeid}` -> invocation */
       this._jobs = new Map(); /* migration job -> { resolve, moved } */
-      this._settle = []; /* run once the system is idle */
       this._hibernated = new Set();
       this._pending = new Map(); /* session -> blob while the store writes it */
       this._waking = new Set();
@@ -659,15 +656,10 @@ export function createRuntime({ native, platform }) {
       if (this._store && typeof this._store.get !== 'function') throw new TypeError('hibernation: { store } with get, set and delete');
       this._peers = new Map(); /* router peer -> transport connection */
       this._links = new Set();
-      this._queue = [];
-      this._busy = false;
-      this._syncing = false; /* inside a sync I/O processor's send: input goes in at once */
       this._stopped = false;
-      this._timer = null;
+      this._timer = null; /* the one timer the addon arms (callbacks.schedule) */
       this._immediate = null;
-      this._deadline = -1;
       this._clockTimers = [];
-      this._t0 = platform.now();
       this._abort = new AbortController();
       /* I/O processors and invokers: one entry of ta_host_config.io_processors each
        * (an invoker's type too: SCXML sends to an invoked service with its type) */
@@ -681,17 +673,12 @@ export function createRuntime({ native, platform }) {
         resolve: (source, texts, kinds) => this._resolve(source, texts, kinds),
         effects: (effects, changed, traces, logs) => this._effects(effects, changed, traces, logs),
         /* a send to a sync processor, inside the run: what it sends comes before the sender goes on */
-        sync: (e) => {
-          this._syncing = true;
-          try {
-            this._ioSend(e);
-          } finally {
-            this._syncing = false;
-          }
-        },
+        sync: (e) => this._ioSend(e),
         ref: (address) => this.ref(address),
+        schedule: (ms) => this._schedule(ms),
         clock: platform.wallClock || wallClock,
       };
+      if (options.clock) callbacks.now = options.clock; /* own clock: time moves in flush() */
       const traces = options.traces || {};
       const config = {
         systemID: this.id,
@@ -704,7 +691,7 @@ export function createRuntime({ native, platform }) {
         const { header, blobs } = restored;
         const images = blobs.slice(2).map((b) => (b ? native.openImage(b) : null));
         images.forEach((image, segment) => image && this._register(segment, new Image(image), options.charts || []));
-        this._t0 = platform.now() - header.now;
+        config.now = header.now;
         this._sys = native.restoreSystem(callbacks, config, images, blobs[0], blobs[1]);
       } else {
         this._sys = native.createSystem(callbacks, config);
@@ -720,83 +707,29 @@ export function createRuntime({ native, platform }) {
       if (traces.sink) this.setTraceSink(traces.sink, traces);
       this._clock = platform.wallClock || wallClock;
       this._metricsStart = this._clock();
-      this._runs = { count: 0, sum: 0, min: 0, max: 0, buckets: new Array(RUN_BOUNDS.length + 1).fill(0) };
       const interval = telemetry.metricsInterval === undefined ? METRICS_INTERVAL_MS : Number(telemetry.metricsInterval);
       this._metricsTimer = this._exporter && this._exporter.urls.metrics && interval > 0 ? platform.repeat(() => this._exportMetrics(), interval) : null;
-      if (restored) this._do(() => this._run(native.pump(this._sys, this._now())));
+      if (restored) native.pump(this._sys);
     }
 
-    /* ---- the run loop: calls never nest; a call made while one runs (from an
-     * effect handler, a c.expr function) is queued and made right after it */
+    /* ---- the run loop is the addon's (src/system.c): it arms this one timer */
 
     _now() {
-      return this.options.clock ? this.options.clock() : platform.now() - this._t0;
+      return native.now(this._sys);
     }
 
-    _do(fn) {
-      if (this._stopped) return;
-      if (this._syncing) return fn(); /* send, post, deliver: the pump that called it goes on */
-      if (this._busy) {
-        this._queue.push(fn);
-        return;
-      }
-      this._busy = true;
-      const started = platform.now();
-      try {
-        fn();
-      } finally {
-        this._busy = false;
-        this._recordRun(platform.now() - started);
-      }
-      while (this._queue.length && !this._stopped) {
-        const next = this._queue.shift();
-        this._busy = true;
-        const t0 = platform.now();
-        try {
-          next();
-        } catch (e) {
-          platform.log(e);
-        } finally {
-          this._busy = false;
-          this._recordRun(platform.now() - t0);
-        }
-      }
-    }
-
-    /* tinyactors.run.duration: how long a call into the system blocked the loop */
-    _recordRun(ms) {
-      const runs = this._runs, seconds = ms / 1000;
-      if (!runs) return;
-      let bucket = RUN_BOUNDS.findIndex((b) => seconds <= b);
-      if (bucket < 0) bucket = RUN_BOUNDS.length;
-      runs.buckets[bucket]++;
-      runs.min = runs.count ? Math.min(runs.min, seconds) : seconds;
-      runs.max = runs.count ? Math.max(runs.max, seconds) : seconds;
-      runs.count++;
-      runs.sum += seconds;
-    }
-
-    /* a run code from the addon (src/system.c): -2 more work now, -1 idle, else the next deadline */
-    _run(code) {
-      if (this._syncing) return;
-      if (code === -2) {
-        if (this._immediate === null && !this.options.clock) this._immediate = platform.defer(() => {
-          this._immediate = null;
-          this._do(() => this._run(native.pump(this._sys, this._now())));
-        });
-        return;
-      }
-      if (this._settle.length) for (const f of this._settle.splice(0)) platform.defer(f);
-      if (code === this._deadline && this._timer !== null) return;
-      this._deadline = code;
+    /* callbacks.schedule: 0 run soon, -1 nothing to do, else in `ms` */
+    _schedule(ms) {
       platform.clearTimer(this._timer);
       this._timer = null;
-      if (code < 0 || this.options.clock) return; /* own clock: flush() moves time */
-      this._timer = platform.setTimer(() => {
-        this._timer = null;
-        this._deadline = -1;
-        this._do(() => this._run(native.pump(this._sys, this._now())));
-      }, Math.max(0, code - this._now()));
+      if (this._immediate !== null) platform.cancelDefer(this._immediate);
+      this._immediate = null;
+      const tick = () => {
+        this._timer = this._immediate = null;
+        if (!this._stopped) native.pump(this._sys, true);
+      };
+      if (ms === 0) this._immediate = platform.defer(tick);
+      else if (ms > 0) this._timer = platform.setTimer(tick, ms);
     }
 
     /**
@@ -805,13 +738,10 @@ export function createRuntime({ native, platform }) {
      * how time moves: advance the clock, then flush(). Returns true when idle.
      */
     flush(maxRounds = 10000) {
-      if (this._busy || this._stopped) return false;
+      if (this._stopped) return false;
       for (let i = 0; i < maxRounds; i++) {
         this._expire();
-        let code = -1;
-        this._do(() => (code = native.pump(this._sys, this._now())));
-        if (code !== -2) {
-          this._run(code);
+        if (native.pump(this._sys) !== -2) {
           if (!this._clockTimers.some((t) => t.at <= this._now())) return true;
         }
       }
@@ -870,7 +800,7 @@ export function createRuntime({ native, platform }) {
     /** Compile charts into one image (ta_compile_charts) and add it (ta_host_add_image):
      * their names (<scxml name>) get these versions. `documents` answer src attributes. */
     load(charts, options = {}) {
-      this._compile(charts, options, (add) => this._do(add));
+      this._compile(charts, options, (add) => add());
     }
 
     /* compile, then `add` the image: now (inside a run of _do) or through _do */
@@ -913,46 +843,15 @@ export function createRuntime({ native, platform }) {
       const handle = native.compileSystem(String(manifest), Object.entries(options.documents || {}).map(([name, xml]) => ({ name, xml })));
       const image = new Image(handle);
       const out = {};
-      this._do(() => {
-        const segment = native.addImage(this._sys, handle);
-        this._register(segment, image, []);
-        native.boot(this._sys, segment, this._now());
-        for (const { name } of image.actors) {
-          const session = native.actorByName(this._sys, name);
-          if (session) out[name] = this._keep(session, { systemID: name });
-        }
-        this._run(native.pump(this._sys, this._now()));
-      });
+      const segment = native.addImage(this._sys, handle);
+      this._register(segment, image, []);
+      native.boot(this._sys, segment);
+      for (const { name } of image.actors) {
+        const session = native.actorByName(this._sys, name);
+        if (session) out[name] = this._keep(session, { systemID: name });
+      }
+      native.pump(this._sys);
       return out;
-    }
-
-    /* the state tree of a chart: states with their children */
-    _tree(segment, chart) {
-      const key = `${segment}:${chart}`;
-      let tree = this._trees.get(key);
-      if (tree) return tree;
-      const image = this._segments[segment];
-      if (!image) return null;
-      tree = image._info.charts[chart].states.map((s) => ({ id: s.id, kind: s.kind, children: [] }));
-      image._info.charts[chart].states.forEach((s, i) => s.parent >= 0 && tree[s.parent].children.push(i));
-      this._trees.set(key, tree);
-      return tree;
-    }
-
-    /* a configuration as a state value: an atomic state's id, { compound: value }, { parallel: { region: value } } */
-    _value(info) {
-      const tree = info && this._tree(info.segment, info.chart);
-      if (!tree || !info.states.length) return {};
-      const active = new Set(info.states);
-      const kids = (i) => tree[i].children.filter((k) => active.has(k) && tree[k].kind !== K.STATE_HISTORY_SHALLOW && tree[k].kind !== K.STATE_HISTORY_DEEP);
-      const leaf = (i) => !tree[i].children.some((k) => tree[k].kind !== K.STATE_HISTORY_SHALLOW && tree[k].kind !== K.STATE_HISTORY_DEEP);
-      const value = (i) => {
-        if (tree[i].kind === K.STATE_PARALLEL) return Object.fromEntries(kids(i).map((k) => [tree[k].id, leaf(k) ? {} : value(k)]));
-        const k = kids(i)[0];
-        if (k === undefined) return {};
-        return leaf(k) ? tree[k].id : { [tree[k].id]: value(k) };
-      };
-      return value(0);
     }
 
     /* ---- actors */
@@ -970,16 +869,15 @@ export function createRuntime({ native, platform }) {
     }
 
     _spawn(actor) {
-      this._do(() => {
-        const chart = actor.chart;
-        if (!this._charts.has(chart)) this._compile([chart], {}, (add) => add());
-        const at = native.chart(this._sys, this._charts.get(chart));
-        if (!at) throw new Error(`no chart named "${this._charts.get(chart)}"`);
-        const o = actor.options;
-        actor._session = native.spawn(this._sys, at[0], at[1], o.systemID, o.input, o.traceparent, this._now());
-        this._actors.set(actor._session, actor);
-        this._run(native.pump(this._sys, this._now()));
-      });
+      if (native.later(this._sys, () => this._spawn(actor))) return; /* from an expression */
+      const chart = actor.chart;
+      if (!this._charts.has(chart)) this._compile([chart], {}, (add) => add());
+      const at = native.chart(this._sys, this._charts.get(chart));
+      if (!at) throw new Error(`no chart named "${this._charts.get(chart)}"`);
+      const o = actor.options;
+      actor._session = native.spawn(this._sys, at[0], at[1], o.systemID, o.input, o.traceparent);
+      this._actors.set(actor._session, actor);
+      native.pump(this._sys);
     }
 
     /** The actor spawned with `systemID` (ta_host_actor_by_name). */
@@ -1014,13 +912,8 @@ export function createRuntime({ native, platform }) {
         datas.push(event);
         traceparents.push((options && options.traceparent) || undefined);
       }
-      let n = 0;
-      this._do(() => {
-        const [accepted, code] = native.sendMany(this._sys, sessions, names, datas, traceparents, this._now());
-        n = accepted;
-        this._run(code);
-      });
-      return n;
+      if (this._stopped || native.later(this._sys, () => this.sendMany(items))) return 0;
+      return native.sendMany(this._sys, sessions, names, datas, traceparents);
     }
 
     /**
@@ -1034,10 +927,9 @@ export function createRuntime({ native, platform }) {
       const a = parseAddress(target);
       if (!a) throw new TypeError(`send: not an address: ${target}`);
       if (a.system !== this.id) return this.deliver({ target, name: event.type, data: event, ...options });
-      this._do(() => {
-        const session = a.kind === 'session' ? Number(a.session) : native.actorByName(this._sys, a.name);
-        this._run(native.post(this._sys, session, { ...options, name: String(event.type), data: event }, this._now()));
-      });
+      if (this._stopped || native.later(this._sys, () => this.send(address, event, options))) return undefined;
+      const session = a.kind === 'session' ? Number(a.session) : native.actorByName(this._sys, a.name);
+      native.post(this._sys, session, { ...options, name: String(event.type), data: event });
       return undefined;
     }
 
@@ -1045,13 +937,9 @@ export function createRuntime({ native, platform }) {
      * 'delivered', 'relayed', 'duplicate', 'refused' ('queued' inside a run). */
     deliver(envelope) {
       if (!envelope || typeof envelope.target !== 'string' || typeof envelope.name !== 'string') throw new TypeError('deliver({ target, name, ... })');
-      let out = 'queued';
-      this._do(() => {
-        const [outcome, code] = native.deliver(this._sys, 0, { origin: formatAddress(this.id, 'host'), ...envelope }, this._now());
-        out = ROUTE_OUTCOMES[outcome] || 'refused';
-        this._run(code);
-      });
-      return out;
+      if (this._stopped) return 'refused';
+      if (native.later(this._sys, () => this.deliver(envelope))) return 'queued';
+      return ROUTE_OUTCOMES[native.deliver(this._sys, 0, { origin: formatAddress(this.id, 'host'), ...envelope })] || 'refused';
     }
 
     /** A reference to the actor at `address`: an Actor of this system, else an ActorRef. */
@@ -1129,12 +1017,11 @@ export function createRuntime({ native, platform }) {
           if (!job) break;
           this._jobs.delete(e.job);
           const pending = e.pending.map((s) => this._actors.get(s) || this.ref(formatAddress(this.id, s)));
-          this._settle.push(() => job.resolve({ migrated: e.migrated, failed: e.failed, pending }));
+          platform.defer(() => job.resolve({ migrated: e.migrated, failed: e.failed, pending }));
           break;
         }
         case 'freed':
           this._segments[e.segment] = undefined;
-          for (const key of this._trees.keys()) if (key.startsWith(`${e.segment}:`)) this._trees.delete(key);
           break;
         case 'peer': {
           const conn = this._peers.get(e.peer);
@@ -1154,7 +1041,7 @@ export function createRuntime({ native, platform }) {
     /* ---- I/O processors and invokers */
 
     _post(session, fields) {
-      this._do(() => this._run(native.post(this._sys, session, fields, this._now())));
+      if (!this._stopped) native.post(this._sys, session, fields);
     }
 
     /* TA_EFFECT_SEND for an I/O processor, or for an invoked service */
@@ -1233,20 +1120,17 @@ export function createRuntime({ native, platform }) {
      */
     sweep(max = 0) {
       if (!this._store) throw new Error('createSystem({ hibernation: { store } }) is needed to hibernate');
-      if (this._busy || this._stopped) return 0;
+      if (this._stopped) return 0;
       let n = 0;
-      this._do(() => {
-        for (const session of native.sweep(this._sys, max)) if (this._hibernate(session, false)) n++;
-      });
+      for (const session of native.sweep(this._sys, max)) if (this._hibernate(session, false)) n++;
       return n;
     }
 
     /** Hibernate one actor now (throws, saying why, when it cannot be). */
     hibernate(actor) {
       if (!this._store) throw new Error('createSystem({ hibernation: { store } }) is needed to hibernate');
-      let ok = false;
-      this._do(() => (ok = this._hibernate(actor._session, true)));
-      return ok;
+      if (this._stopped) return false;
+      return this._hibernate(actor._session, true);
     }
 
     _hibernate(session, strict) {
@@ -1281,7 +1165,7 @@ export function createRuntime({ native, platform }) {
         if (this._stopped) return;
         if (!blob) return platform.log(`tinyactors: cannot wake actor ${key} (no blob in the store)`);
         this._woken.push([session, blob]);
-        if (this._woken.length === 1) this._do(() => this._wakeAll());
+        if (this._woken.length === 1) this._wakeAll();
       };
       const blob = this._pending.get(session) || this._store.get(key);
       if (blob && typeof blob.then === 'function')
@@ -1308,7 +1192,7 @@ export function createRuntime({ native, platform }) {
         const d = this._store.delete(String(session));
         if (d && typeof d.then === 'function') d.catch(() => {});
       }
-      this._run(native.pump(this._sys, this._now()));
+      native.pump(this._sys);
     }
 
     /* ---- moving actors, versions, snapshots */
@@ -1320,9 +1204,8 @@ export function createRuntime({ native, platform }) {
      */
     export(actor) {
       if (!(actor instanceof Actor) || actor.system !== this) throw new TypeError('export() expects an actor of this system');
-      if (this._busy) throw new Error('export() cannot run inside a run');
       const snapshot = actor._snapshot();
-      const blob = native.exportActor(this._sys, actor._session, this._now());
+      const blob = native.exportActor(this._sys, actor._session);
       this._actors.delete(actor._session);
       actor._halt(snapshot);
       return blob;
@@ -1330,13 +1213,8 @@ export function createRuntime({ native, platform }) {
 
     /** Take in an actor another system exported (ta_host_adopt): the same session, states and variables. */
     adopt(blob) {
-      if (this._busy) throw new Error('adopt() cannot run inside a run');
-      let actor;
-      this._do(() => {
-        const [session, code] = native.adopt(this._sys, blob, this._now());
-        actor = this._keep(session);
-        this._run(code);
-      });
+      const actor = this._keep(native.adopt(this._sys, blob));
+      native.pump(this._sys);
       return actor;
     }
 
@@ -1358,12 +1236,9 @@ export function createRuntime({ native, platform }) {
         session = target._session;
       } else if (target instanceof Chart) name = this._charts.get(target) || target.name || '';
       else if (target !== undefined && target !== null) name = String(target);
-      let done;
-      this._do(() => {
-        const job = native.migrate(this._sys, name, session, !!wake, timeoutMs);
-        done = new Promise((resolve) => this._jobs.set(job, { resolve, moved: 0 }));
-        this._run(native.pump(this._sys, this._now()));
-      });
+      const job = native.migrate(this._sys, name, session, !!wake, timeoutMs);
+      const done = new Promise((resolve) => this._jobs.set(job, { resolve, moved: 0 }));
+      native.pump(this._sys);
       return { done };
     }
 
@@ -1373,7 +1248,6 @@ export function createRuntime({ native, platform }) {
      * moment (no migration); hibernated actors stay in the store.
      */
     snapshot() {
-      if (this._busy) throw new Error('snapshot() cannot run inside a run');
       const s = native.snapshot(this._sys);
       const images = s.segments.map((image) => (image ? native.imageBytes(image) : null));
       return pack({ systemID: this.id, ecmascript: this._ecmascript, now: this._now() }, [s.host, s.datamodel, ...images]);
@@ -1389,34 +1263,26 @@ export function createRuntime({ native, platform }) {
      * only move envelopes between it and the wire */
 
     _fromPeer(peer, msg) {
-      this._do(() => {
-        if (!this._peers.has(peer)) return;
-        if (msg.t === 'ev') {
-          const str = (v) => (typeof v === 'string' ? v : '');
-          const [, code] = native.deliver(
-            this._sys,
-            peer,
-            {
-              target: str(msg.target),
-              name: str(msg.name),
-              wire: msg.data === undefined ? undefined : JSON.stringify(msg.data),
-              origin: str(msg.origin),
-              origintype: str(msg.origintype),
-              sendid: str(msg.sendid),
-              msgid: str(msg.msgid),
-              dedup: str(msg.dedup),
-              hops: Number.isInteger(msg.hops) && msg.hops >= 0 ? msg.hops : 0,
-              traceparent: str(msg.traceparent),
-            },
-            this._now(),
-          );
-          this._run(code);
-        } else if (msg.t === 'err') {
-          const reason = REASONS.indexOf(msg.reason);
-          native.peerError(this._sys, peer, String(msg.origin || ''), String(msg.msgid || ''), String(msg.sendid || ''), reason > 0 ? reason : K.ROUTE_ERROR_UNREACHABLE);
-          this._run(native.pump(this._sys, this._now()));
-        }
-      });
+      if (this._stopped || !this._peers.has(peer)) return;
+      if (msg.t === 'ev') {
+        const str = (v) => (typeof v === 'string' ? v : '');
+        native.deliver(this._sys, peer, {
+          target: str(msg.target),
+          name: str(msg.name),
+          wire: msg.data === undefined ? undefined : JSON.stringify(msg.data),
+          origin: str(msg.origin),
+          origintype: str(msg.origintype),
+          sendid: str(msg.sendid),
+          msgid: str(msg.msgid),
+          dedup: str(msg.dedup),
+          hops: Number.isInteger(msg.hops) && msg.hops >= 0 ? msg.hops : 0,
+          traceparent: str(msg.traceparent),
+        });
+      } else if (msg.t === 'err') {
+        const reason = REASONS.indexOf(msg.reason);
+        native.peerError(this._sys, peer, String(msg.origin || ''), String(msg.msgid || ''), String(msg.sendid || ''), reason > 0 ? reason : K.ROUTE_ERROR_UNREACHABLE);
+        native.pump(this._sys);
+      }
     }
 
     _attach(conn) {
@@ -1428,23 +1294,21 @@ export function createRuntime({ native, platform }) {
     }
 
     _peerHello(conn, reach) {
-      this._do(() => {
-        native.peerReach(this._sys, conn.peer, reach);
-        native.peerUp(this._sys, conn.peer, true);
-        this._run(native.pump(this._sys, this._now()));
-        this._announce();
-      });
+      if (this._stopped) return;
+      native.peerReach(this._sys, conn.peer, reach);
+      native.peerUp(this._sys, conn.peer, true);
+      native.pump(this._sys);
+      this._announce();
     }
 
     _peerDown(conn, remove) {
-      this._do(() => {
-        if (remove) {
-          native.peerRemove(this._sys, conn.peer); /* queued envelopes fail: error.communication */
-          this._detach(conn);
-        } else native.peerUp(this._sys, conn.peer, false);
-        this._run(native.pump(this._sys, this._now()));
-        this._announce();
-      });
+      if (this._stopped) return;
+      if (remove) {
+        native.peerRemove(this._sys, conn.peer); /* queued envelopes fail: error.communication */
+        this._detach(conn);
+      } else native.peerUp(this._sys, conn.peer, false);
+      native.pump(this._sys);
+      this._announce();
     }
 
     /* the systems reachable through us, as announced to `conn` */
@@ -1470,7 +1334,7 @@ export function createRuntime({ native, platform }) {
      * end, invocations are aborted. The system cannot be used afterwards.
      */
     stop() {
-      if (this._stopped || this._busy) return;
+      if (this._stopped) return;
       for (const c of [...this._links]) c.disconnect();
       if (this._metricsTimer !== null) platform.clearRepeat(this._metricsTimer);
       if (this._exporter && this._exporter.urls.metrics) this._exportMetrics(); /* what was counted up to now */
@@ -1491,7 +1355,7 @@ export function createRuntime({ native, platform }) {
       this._abort.abort();
       for (const inv of new Set(this._invocations.values())) inv.controller.abort();
       this._invocations.clear();
-      native.destroy(this._sys);
+      native.destroy(this._sys); /* from an effect handler: when the pump ends */
       for (const actor of [...this._actors.values()]) actor._halt(null);
       this._actors.clear();
       for (const [, j] of this._jobs) j.resolve({ migrated: 0, failed: 0, pending: [] });
@@ -1509,8 +1373,8 @@ export function createRuntime({ native, platform }) {
     }
 
     _ownMetrics() {
-      const r = this._runs;
-      const runs = { attributes: {}, count: r.count, sum: r.sum, bounds: RUN_BOUNDS, buckets: r.buckets.slice(), exemplars: [] };
+      const r = native.runs(this._sys);
+      const runs = { attributes: {}, count: r.count, sum: r.sum, bounds: r.bounds, buckets: r.buckets, exemplars: [] };
       if (r.count) Object.assign(runs, { min: r.min, max: r.max });
       const own = [{ name: 'tinyactors.run.duration', unit: 's', kind: 'histogram', points: [runs] }];
       if (this._exporter) {
@@ -1724,23 +1588,20 @@ export function createRuntime({ native, platform }) {
       if (typeof event === 'string') event = { type: event };
       if (!event || typeof event.type !== 'string') throw new TypeError('events are objects with a string "type"');
       const system = this.system;
-      system._do(() => {
-        if (this._status !== 'active' || !this._session) return;
-        system._run(native.send(system._sys, this._session, event.type, event, options.traceparent, system._now()));
-      });
+      if (system._stopped || native.later(system._sys, () => this.send(event, options))) return;
+      if (this._status !== 'active' || !this._session) return;
+      native.send(system._sys, this._session, event.type, event, options.traceparent);
     }
 
     /** Stop it (ta_host_terminate). */
     stop() {
       const system = this.system;
-      system._do(() => {
-        if (this._status !== 'active' || !this._session) return;
-        const snapshot = this._snapshot();
-        system._actors.delete(this._session);
-        native.terminate(system._sys, this._session);
-        this._halt(snapshot);
-        system._run(native.pump(system._sys, system._now()));
-      });
+      if (system._stopped || native.later(system._sys, () => this.stop())) return this;
+      if (this._status !== 'active' || !this._session) return this;
+      const snapshot = this._snapshot();
+      system._actors.delete(this._session);
+      this._halt(snapshot);
+      native.terminate(system._sys, this._session);
       return this;
     }
 
@@ -1750,9 +1611,8 @@ export function createRuntime({ native, platform }) {
       if (this._cached) return this._cached;
       const system = this.system;
       if (!this._session || system._stopped) return { value: {}, context: undefined, status, output, error };
-      const info = native.inspect(system._sys, this._session);
       const context = native.context(system._sys, this._session);
-      return { value: system._value(info), context: system._ecmascript === 'native' && context ? { ...context } : context, status, output, error };
+      return { value: native.stateValue(system._sys, this._session), context: system._ecmascript === 'native' && context ? { ...context } : context, status, output, error };
     }
 
     /** { value, context, status, output, error }: computed when called. */
@@ -2043,7 +1903,7 @@ export function createRuntime({ native, platform }) {
     if (!options.url && !options.transport) throw new TypeError('createLink: { url } or { transport } needed');
     const conn = new LinkConn(system, options);
     const opened = new Promise((resolve) => conn.opened.push(resolve));
-    system._do(() => conn.connect());
+    conn.connect();
     return {
       name: conn.alias,
       opened,

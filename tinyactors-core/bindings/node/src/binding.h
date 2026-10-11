@@ -21,32 +21,43 @@
  *
  *   createSystem(callbacks, config) / restoreSystem(callbacks, config, images, host, datamodel)
  *     callbacks: { resolve(source, texts, kinds) -> functions (native ecmascript),
- *                  effects(effects, changed, traces, logs), ref(address) -> value,
+ *                  effects(effects, changed, traces, logs), sync(effect), ref(address) -> value,
+ *                  schedule(ms) (0: run soon, -1: nothing to do, else in ms: call pump),
+ *                  now() -> ms (optional: a clock of the caller's; time then moves only in pump),
  *                  clock() -> ms since the epoch (trace times) }
+ *     config.now: the system's time to start at (a restored system's)
  *   addImage(system, image) -> segment, chart(system, name) -> [segment, chart] | null
  *   boot(system, segment), actorByName(system, name), actors(system)
- *   spawn(system, segment, chart, name, input, traceparent, now) -> session
- *   send(system, session, name, data, traceparent, now) -> run code
- *   sendMany(system, sessions, names, datas, traceparents, now) -> [accepted, run code]
+ *   spawn(system, segment, chart, name, input, traceparent) -> session
+ *   send(system, session, name, data, traceparent)
+ *   sendMany(system, sessions, names, datas, traceparents) -> accepted
  *   post(system, session, { name, data, sendid, origin, origintype, raw, traceparent,
- *        flags, token }, now) -> run code              ta_host_send with every field
- *   deliver(system, peer, envelope, now) -> outcome    ta_host_deliver
- *   pump(system, now) -> run code                      the run loop on its own
- *   terminate(system, session, now)
+ *        flags, token })                               ta_host_send with every field
+ *   deliver(system, peer, envelope) -> outcome         ta_host_deliver
+ *   pump(system) -> run code, now(system) -> ms, runs(system) -> run durations
+ *   terminate(system, session)
  *   inspect(system, session) -> { segment, chart, state, states } | null
+ *   stateValue(system, session) -> its configuration as a nested state value
  *   context(system, session) -> the session's variables
  *   sweep, hibernate, wake, exportActor, adopt, migrate, snapshot, stats, peer*,
  *   route, exportName, traceConfigure, traceEnd, metrics, destroy
  *
  * The run loop (pump): ta_host_advance_time, then ta_host_run in rounds
  * until idle or the round limit; every effect goes into one array, handed
- * to callbacks.effects once per call with the sessions whose datamodel saw
- * an event (changed) and the OTLP bytes of the runs. The run code: -2 more
+ * to callbacks.effects once per round of rounds with the sessions whose
+ * datamodel saw an event (changed) and the OTLP bytes of the runs. Then it
+ * arms the caller's one timer (callbacks.schedule). The run code: -2 more
  * work is runnable now, -1 idle without timers, else the next deadline (ms).
  * TA_EFFECT_REQUEST (an <invoke src> that is not a chart of its image) is
  * answered here (ta_host_resume): the chart of that source name in the
- * segment's image, if any. Calls are never nested: JavaScript does not call
- * into a System while it runs (core.mjs queues such calls).
+ * segment's image, if any.
+ *
+ * Calls into a System: an input (send, spawn, deliver, ...) made from
+ * outside runs the pump at once. While effects are delivered the host is
+ * between runs, so an input from an effect handler or a synchronous I/O
+ * processor goes straight into the host and the pump goes on. From inside
+ * a run (an expression) calls are refused; core.mjs hands them to
+ * later(system, fn), which calls them between two runs.
  *
  * The native "ecmascript" datamodel: values are JS values held by
  * references. A session's variables are one object, its scope: <data> ids
@@ -59,6 +70,7 @@
 #ifndef TINYACTORS_NODE_BINDING_H
 #define TINYACTORS_NODE_BINDING_H
 
+#include <math.h>
 #include <node_api.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +82,7 @@
 #include <tinyactors/runtime.h>
 
 #define IO_PROCESSORS_MAX 16u
+#define RUN_BUCKETS       8 /* run durations: 7 bounds, then the rest */
 
 /* the quickjs datamodel's own vtable (src/datamodel_ecmascript) */
 #define Q(system) ((system)->quickjs_vtable)
@@ -144,7 +157,7 @@ typedef struct nd_system {
     ta_datamodel_ecmascript *quickjs;
     const ta_datamodel_vtable *quickjs_vtable;
     ta_datamodel_binding binding;
-    napi_ref resolve, effects, sync, refs, clock, in_function;
+    napi_ref resolve, effects, sync, refs, clock, in_function, schedule, now;
     char system_id[TA_ADDRESS_SYSTEM_MAX + 1];
     ta_io_processor_descriptor io[IO_PROCESSORS_MAX];
     char *io_text[2 * IO_PROCESSORS_MAX];
@@ -163,8 +176,19 @@ typedef struct nd_system {
     nd_session *sessions;
     uint32_t map_capacity, map_count;
     /* the run loop */
+    /* running: 0 between calls, 1 in a run (no calls in), 2 delivering effects,
+     * 3 in a synchronous I/O processor's send (2, 3: inputs go in, the pump goes on) */
     int running, keep_quiet; /* keep_quiet: destroy() is not a session's end (hibernate, export) */
+    int more;                /* an input came in while effects were delivered */
+    napi_ref *later;         /* calls from inside a run, made after it (later()) */
+    uint32_t later_count, later_capacity;
+    int stopping; /* destroy() during a pump: the host goes when it ends */
     uint32_t pump;
+    double armed;       /* the run code callbacks.schedule last heard; -3: none */
+    uint64_t time_base; /* ns of the monotonic clock at the system's time 0 */
+    /* tinyactors.run.duration: how long each pump held the thread (RUN_BOUNDS) */
+    uint64_t run_count, run_buckets[RUN_BUCKETS];
+    double run_sum, run_min, run_max;
     napi_value effect_list, sync_list; /* sync_list: sends to TA_IO_PROCESSOR_SYNC processors */
     uint32_t effect_count, sync_count;
     uint64_t *changed;
@@ -286,9 +310,11 @@ void chart_remove(nd_system *system, nd_chart *chart);
 nd_chart *chart_new(const ta_datamodel_chart *chart);
 void system_finalize(napi_env environment, void *data, void *hint);
 nd_system *get_system(napi_env environment, napi_value v);
-double pump(nd_system *system, double now);
-napi_value code_value(napi_env environment, double code);
-double now_of(napi_env environment, napi_value v);
+double pump(nd_system *system);
+double system_now(nd_system *system);
+napi_value input_done(nd_system *system, napi_value result);
+int enter(nd_system *system);
+void leave(nd_system *system, int was);
 nd_system *system_new(napi_env environment, napi_value callbacks, napi_value options,
                       ta_host_config *config);
 napi_value system_value(napi_env environment, nd_system *system);
@@ -306,6 +332,10 @@ napi_value js_send_many(napi_env environment, napi_callback_info info);
 napi_value js_post(napi_env environment, napi_callback_info info);
 napi_value js_deliver(napi_env environment, napi_callback_info info);
 napi_value js_pump(napi_env environment, napi_callback_info info);
+napi_value js_now(napi_env environment, napi_callback_info info);
+napi_value js_runs(napi_env environment, napi_callback_info info);
+napi_value js_later(napi_env environment, napi_callback_info info);
+napi_value js_state_value(napi_env environment, napi_callback_info info);
 napi_value js_terminate(napi_env environment, napi_callback_info info);
 int locate(nd_system *system, uint64_t session, ta_system **segment_system, uint32_t *segment,
            ta_actor_info *info);

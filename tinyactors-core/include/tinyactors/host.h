@@ -118,6 +118,15 @@ TA_API ta_status ta_host_spawn(ta_host *h, uint32_t segment, uint32_t chart, ta_
 /* Where a session lives now: segment and actor handle there. */
 TA_API ta_status ta_host_locate(const ta_host *h, uint64_t session, uint32_t *segment,
                                 uint32_t *actor);
+/* A session's configuration as a nested state value, in JSON (the shape of
+ * xstate's `value`): an atomic state's id ("s"), a compound state with its
+ * active child ({"c": ...}), a parallel state with each region ({"p": {"r1":
+ * ..., "r2": {}}}), {} for none. Writes at most `capacity` bytes (and a NUL
+ * when there is room); returns the length, 0 when there is no such session
+ * or its configuration has more than TA_STATE_VALUE_STATES states. */
+enum { TA_STATE_VALUE_STATES = 1024 };
+TA_API size_t ta_host_state_value(const ta_host *h, uint64_t session, char *buffer,
+                                  size_t capacity);
 /* An event for a session (event->target is ignored). */
 TA_API ta_status ta_host_send(ta_host *h, uint64_t session, const ta_event_in *event);
 /* Batch (runs of events for the same segment go through ta_system_send_many):

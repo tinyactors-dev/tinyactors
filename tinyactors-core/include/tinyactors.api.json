@@ -573,6 +573,10 @@
       "value": 2
     },
     {
+      "name": "TA_STATE_VALUE_STATES",
+      "value": 1024
+    },
+    {
       "name": "TA_STEP_CANCEL",
       "value": 3
     },
@@ -8198,6 +8202,31 @@
         {
           "name": "session",
           "type": "uint64_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_state_value",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "h",
+          "type": "const ta_host *"
+        },
+        {
+          "name": "session",
+          "type": "uint64_t"
+        },
+        {
+          "name": "buffer",
+          "type": "char *"
+        },
+        {
+          "name": "capacity",
+          "type": "size_t"
         }
       ],
       "public": true,
