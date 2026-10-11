@@ -137,7 +137,7 @@ static const sjs_name NAMES[] = {
     NAME("isPrototypeOf", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME("isSubsetOf", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_IS_SUBSET_OF),
     NAME("isSupersetOf", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_IS_SUPERSET_OF),
-    NAME("isWellFormed", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("isWellFormed", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_IS_WELL_FORMED, 0),
     NAME("italics", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("join", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_JOIN, 0, 0),
     NAME_MAP("keys", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, SJS_METHOD_MAP_KEYS),
@@ -176,8 +176,8 @@ static const sjs_name NAMES[] = {
     NAME_REGEXP("sticky", 0),
     NAME("strike", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("sub", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("substr", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("substring", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("substr", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_SUBSTR, 0),
+    NAME("substring", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_SUBSTRING, 0),
     NAME("sup", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("symmetricDifference", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_SYMMETRIC_DIFFERENCE),
     NAME("take", SJS_NAME_ON_ITERATOR, 0, 0, 0),
@@ -192,7 +192,7 @@ static const sjs_name NAMES[] = {
     NAME("toSpliced", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SPLICED, 0, 0),
     NAME_BIGINT("toString", SJS_NAME_EVERYWHERE, SJS_METHOD_BIGINT_TO_STRING),
     NAME("toUpperCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_UPPER_CASE, 0),
-    NAME("toWellFormed", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("toWellFormed", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_WELL_FORMED, 0),
     NAME("trim", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM, 0),
     NAME("trimEnd", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM_END, 0),
     NAME("trimLeft", SJS_NAME_ON_STRING, 0, 0, 0),
@@ -2671,6 +2671,43 @@ static sjs_result string_replace(sjs_vm *vm, sjs_leaf_call *call) {
     return build_end(vm, &b);
 }
 
+/* substring(start, end): both ToIntegerOrInfinity, clamped to [0, length],
+ * and swapped when start is past end. substr(start, length): start counts
+ * from the end when negative, an undefined length runs to the end. Both by
+ * UTF-16 code unit, converting their arguments as slice does. A cut
+ * between the halves of a pair faults, as staticjs strings cannot hold a
+ * lone surrogate. */
+static sjs_result string_substring(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    const sjs_string *string = SJS_AS_STRING(call->receiver);
+    uint32_t units = string->utf16_length;
+    double start = 0;
+    double second = (double)units;
+    if (to_integer(vm, arg(call, 0), &start) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (arg(call, 1).kind != SJS_UNDEFINED && to_integer(vm, arg(call, 1), &second) != SJS_OK) return SJS_ERR_PROGRAM;
+    uint32_t from;
+    uint32_t to;
+    if (id == SJS_METHOD_STRING_SUBSTRING) {
+        from = start < 0 ? 0 : start > (double)units ? units : (uint32_t)start;
+        to = second < 0 ? 0 : second > (double)units ? units : (uint32_t)second;
+        if (to < from) {
+            uint32_t swap = from;
+            from = to;
+            to = swap;
+        }
+    } else {
+        from = relative(start, units);
+        double end = (double)from + second;
+        to = end < (double)from ? from : end > (double)units ? units : (uint32_t)end;
+    }
+    sjs_str s = sjs_string_view(string);
+    uint32_t a = from;
+    uint32_t b = to;
+    if (!(string->h.flags & SJS_STRING_ASCII) && (!utf16_to_byte(s, from, &a) || !utf16_to_byte(s, to, &b))) {
+        return sjs_vm_fault(vm, "this cut would leave half of a character outside the BMP: a lone surrogate");
+    }
+    return new_string(vm, (sjs_str){ s.ptr + a, b - a }, &call->result);
+}
+
 __attribute__((noinline)) static sjs_result string_method_tail(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     switch (id) {
     case SJS_METHOD_STRING_REPLACE_ALL:
@@ -2703,6 +2740,17 @@ __attribute__((noinline)) static sjs_result string_method_tail(sjs_vm *vm, sjs_b
     case SJS_METHOD_STRING_PAD_END:
     case SJS_METHOD_STRING_PAD_START:
         return string_pad(vm, id, call);
+    case SJS_METHOD_STRING_SUBSTR:
+    case SJS_METHOD_STRING_SUBSTRING:
+        return string_substring(vm, id, call);
+    case SJS_METHOD_STRING_IS_WELL_FORMED:
+        /* A staticjs string cannot hold a lone surrogate. */
+        call->cost = 0;
+        call->result = sjs_boolean(true);
+        return SJS_OK;
+    case SJS_METHOD_STRING_TO_WELL_FORMED:
+        call->cost = 0;
+        return same_string(call);
     default: /* REPEAT */
         return string_repeat(vm, call);
     }

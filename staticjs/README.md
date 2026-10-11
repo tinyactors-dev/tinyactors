@@ -209,7 +209,7 @@ Built-ins:
 | | |
 |---|---|
 | arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
-| strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `padEnd` `padStart` `repeat` `replace` `replaceAll` `slice` `split` `startsWith` `toLowerCase` `toUpperCase` `trim` `trimEnd` `trimStart`, `length`, indexing |
+| strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `isWellFormed` `padEnd` `padStart` `repeat` `replace` `replaceAll` `slice` `split` `startsWith` `substr` `substring` `toLowerCase` `toUpperCase` `toWellFormed` `trim` `trimEnd` `trimStart`, `length`, indexing |
 | regular expressions | literals (docs/regex.md); `test` `exec`, `source` `flags` `global` `ignoreCase` `multiline` `dotAll` `unicode` `unicodeSets` `sticky` `hasIndices`, `lastIndex` (always 0); with a string: `match` `matchAll` `search` (with a regular expression only), `replace` `replaceAll` `split` (with one or a string; `split` takes a limit, a number, with a regular expression only). A match runs in time linear in its input, on a Pike automaton paused on fuel like any loop; where no thread is alive, a pattern that begins with an ASCII character, or with `^` past the start, skips the bytes that cannot begin a match, charging the fuel following them would. A match result is an array with `index`, `input`, `groups` and, with `d`, `indices`; a replacement is a string with `$&` `` $` `` `$'` `$$` `$n` `$<name>`, a primitive written as `String` writes it, or a function called once per match. A regular expression is written as `/source/flags`, `typeof` gives `"object"`, `JSON.stringify` `{}`, and a property it does not have `undefined` |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf` `isSupersetOf` `isDisjointFrom`, `size` |
 | maps | `get` `has` `keys` `values` `entries` `forEach`, `size` |
@@ -458,8 +458,9 @@ compare identities, or find something on a prototype.
   `Object.prototype` has, as reading it faults; `++` of anything but a
   number, which JavaScript converts.
 - `toSorted()` without a compare function; `toLowerCase()` of a string
-  that is not ASCII; slicing a string through the middle of a surrogate
-  pair, padding one (`padStart`, `padEnd`) with a pad string cut there,
+  that is not ASCII; cutting a string through the middle of a surrogate
+  pair (`slice`, `substring`, `substr`), padding one (`padStart`,
+  `padEnd`) with a pad string cut there,
   `at` or `charAt` of half of one (`charCodeAt` and `codePointAt` give its
   number), `replaceAll` with an empty pattern where it puts text between
   the halves of one, `String.fromCharCode` or `String.fromCodePoint`
