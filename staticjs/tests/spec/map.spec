@@ -356,7 +356,8 @@ Map.prototype
 
 # Iteration: keys(), values() and entries() give iterators, which a spread,
 # Array.from, new Set, new Map, Object.fromEntries, an array pattern and
-# their own toArray, map, filter and reduce take. An iterator yields its
+# their own toArray, map, filter, reduce, some, every, find, forEach,
+# flatMap, take and drop take. An iterator yields its
 # values once in JavaScript; staticjs reads one only where nothing else holds
 # it, so no program can read one twice, and it holds its map, which cannot
 # change while it lives. The writer writes one as `[...].values()`.
@@ -496,18 +497,6 @@ new Map().keys().next
 new Map().values().toString
 --- fault does not read them
 
-=== the helpers staticjs leaves out fault
-[new Map([[1, 2]]).keys().some(x => x > 1)]
---- fault does not have this method
-
-=== drop and take fault
-new Map([[1, 2]]).keys().take(1).toArray()
---- fault does not have this method
-
-=== an iterator's forEach faults
-new Map([[1, 2]]).keys().forEach(x => x)
---- fault does not have this method
-
 === an iterator's map
 @shapes - PLUCK(k)
 (() => { const m = new Map([[1, {k: "a"}], [2, {k: "b"}]]); return m.values().map(v => v.k).toArray(); })()
@@ -592,6 +581,416 @@ new Map([[1, 2]]).keys().map(5)
 === a helper's callback faults at its element
 new Map([[1, {k: 2}], [3, null]]).values().map(v => v.k).toArray()
 --- fault of null
+
+# An iterator's some, every and find: the array's loops of their names
+# over what the iterator yields, with the value and a counter, stopping at
+# the first element that decides them.
+
+=== an iterator's some
+@shapes ELEMENT_COMPARE(GREATER, 4)
+new Map([[1, 1], [2, 5], [3, 2]]).values().some(v => v > 4)
+--- value
+true
+
+=== an iterator's some that finds nothing
+@shapes ELEMENT_COMPARE(GREATER, 9)
+new Map([[1, 1], [2, 5]]).values().some(v => v > 9)
+--- value
+false
+
+=== an empty iterator's some, every and find
+[new Map().keys().some(k => true), new Map().keys().every(k => false), new Map().keys().find(k => true) === undefined]
+--- value
+[false,true,true]
+
+=== an iterator's some is called with the value and a counter only
+new Map([["a", 1], ["b", 2]]).keys().some((k, i, rest) => i === 1 && rest === undefined && k === "b")
+--- value
+true
+
+=== an iterator's some stops at the first true answer
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 1)
+new Map([[1, {k: 1}], [2, null]]).values().some(v => v.k === 1)
+--- value
+true
+
+=== an iterator's some stops before an element its callback faults on
+new Map([[1, {k: 1}], [2, null]]).values().some((v, i) => v.k === 1)
+--- value
+true
+
+=== an iterator's some faults at the element its callback faults on
+new Map([[1, {k: 2}], [2, null]]).values().some((v, i) => v.k === 1)
+--- fault of null
+
+=== an iterator's some takes falsy answers that are not booleans
+[new Map([[1, 0], [2, ""], [3, null], [4, NaN], [5, undefined]]).values().some(v => v), new Map([[1, 0], [2, {}]]).values().some(v => v), new Map([[1, 0], [2, "x"]]).values().some(v => v), new Map([[1, 0], [2, []]]).values().some(v => v)]
+--- value
+[false,true,true,true]
+
+=== an iterator's some over entries
+new Map([[1, 1], [2, 3]]).entries().some(([k, v]) => k === v)
+--- value
+true
+
+=== an iterator's some over a helper's result
+@shapes - ELEMENT_COMPARE(STRICT_EQUAL, 4)
+new Map([[1, 1], [2, 2], [3, 3]]).keys().map(k => k * 2).some(x => x === 4)
+--- value
+true
+
+=== an iterator's some whose callback is not a function faults
+new Map([[1, 2]]).keys().some(5)
+--- fault not a function
+
+=== an iterator's some of an iterator held elsewhere faults
+@shapes - ELEMENT_COMPARE(STRICT_EQUAL, 1) ELEMENT_COMPARE(STRICT_EQUAL, 1)
+(() => { const it = new Map([[1, 2]]).keys(); const a = it.some(k => k === 1); return [a, it.some(k => k === 1)]; })()
+--- fault once
+
+=== an iterator's every
+@shapes ELEMENT_COMPARE(GREATER, 0) ELEMENT_COMPARE(GREATER, 0)
+[new Map([[1, 1], [2, 5]]).values().every(v => v > 0), new Map([[1, 1], [2, -5]]).values().every(v => v > 0)]
+--- value
+[true,false]
+
+=== an iterator's every stops at the first false answer
+@shapes PLUCK(k)
+new Map([[1, {k: 0}], [2, null]]).values().every(v => v.k)
+--- value
+false
+
+=== an iterator's every by a key stops at the first false answer
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 1)
+new Map([[1, {k: 0}], [2, null]]).values().every(v => v.k === 1)
+--- value
+false
+
+=== an iterator's every takes truthy answers that are not booleans
+[new Map([[1, 1], [2, "x"], [3, {}], [4, []], [5, -1]]).values().every(v => v), new Map([[1, 1], [2, NaN]]).values().every(v => v), new Map([[1, 1], [2, ""]]).values().every(v => v)]
+--- value
+[true,false,false]
+
+=== an iterator's every is called with the value and a counter only
+new Map([["a", 1], ["b", 2], ["c", 3]]).keys().every((k, i, rest) => rest === undefined && i < 3)
+--- value
+true
+
+=== an iterator's every whose callback faults
+new Map([[1, {k: 1}], [2, null]]).values().every((v, i) => v.k === 1)
+--- fault of null
+
+=== an iterator's find
+@shapes KEY_COMPARE(n, STRICT_EQUAL, 2)
+new Map([["a", {n: 1, id: "a"}], ["b", {n: 2, id: "b"}], ["c", {n: 2, id: "c"}]]).values().find(v => v.n === 2)
+--- value
+{"n":2,"id":"b"}
+
+=== an iterator's find that finds nothing
+@shapes ELEMENT_COMPARE(GREATER, 9)
+new Map([[1, 1], [2, 2]]).keys().find(k => k > 9) === undefined
+--- value
+true
+
+=== an iterator's find gives the value, not the answer
+new Map([[1, 0], [2, 7], [3, 8]]).values().find((v, i) => i > 0)
+--- value
+7
+
+=== an iterator's find stops at the first element it finds
+new Map([[1, {k: 1}], [2, null]]).values().find((v, i) => v.k)
+--- value
+{"k":1}
+
+=== an iterator's find is called with the value and a counter only
+new Map([["a", 1], ["b", 2]]).entries().find(([k, v], i, rest) => i === 1 && rest === undefined)
+--- value
+["b",2]
+
+=== an iterator's find over a helper's result
+@shapes ELEMENT_COMPARE(STRICT_NOT_EQUAL, 20) ELEMENT_COMPARE(GREATER, 10)
+new Map([[1, 10], [2, 20], [3, 30]]).values().filter(v => v !== 20).find(v => v > 10)
+--- value
+30
+
+# An iterator's forEach: the callback with the value and a counter for each
+# value, its results dropped; it gives undefined.
+
+=== an iterator's forEach gives undefined
+new Map([[1, 2], [3, 4]]).values().forEach(v => v * 2)
+--- value
+undefined
+
+=== an empty iterator's forEach
+new Map().values().forEach(v => v.k.j)
+--- value
+undefined
+
+=== an iterator's forEach is called with the value and a counter only
+new Map([["a", {k: 1}], ["b", {k: 2}]]).values().forEach((v, i, rest) => { if (rest !== undefined || i > 1) return v.missing.deep; return v.k; })
+--- value
+undefined
+
+=== an iterator's forEach faults at the element its callback faults on
+@shapes PLUCK(k)
+new Map([[1, {k: 1}], [2, null]]).values().forEach(v => v.k)
+--- fault of null
+
+=== an iterator's forEach over a helper's result
+new Map([[1, 2], [3, 4]]).keys().map(k => ({ k })).forEach(o => o.k * 2)
+--- value
+undefined
+
+=== an iterator's forEach whose callback is not a function faults
+new Map([[1, 2]]).keys().forEach(null)
+--- fault not a function
+
+=== an iterator's forEach of an iterator held elsewhere faults
+(() => { const it = new Map([[1, 2]]).keys(); const u = it.forEach(k => k); return [u, [...it]]; })()
+--- fault once
+
+# An iterator's flatMap: the callback's answer for each value, iterated:
+# an array, a set, a map or an iterator. JavaScript throws for a primitive,
+# a string included, and for an object that is not iterable; staticjs
+# faults on both.
+
+=== an iterator's flatMap of arrays
+new Map([[1, "a"], [2, "b"]]).keys().flatMap(k => [k, k * 10]).toArray()
+--- value
+[1,10,2,20]
+
+=== an iterator's flatMap gives an iterator
+new Map([[1, "a"], [2, "b"]]).values().flatMap(v => [v, v])
+--- value
+["a","a","b","b"].values()
+
+=== an iterator's flatMap flattens one level
+new Map([[1, 1], [2, 2]]).keys().flatMap(k => [[k], [k, [k]]]).toArray()
+--- value
+[[1],[1,[1]],[2],[2,[2]]]
+
+=== an iterator's flatMap of sets
+new Map([[1, 1], [2, 2]]).keys().flatMap(k => new Set([k, k, k + 10])).toArray()
+--- value
+[1,11,2,12]
+
+=== an iterator's flatMap of maps gives their entries
+new Map([[1, "a"], [2, "b"]]).entries().flatMap(([k, v]) => new Map([[v, k], [k, v]])).toArray()
+--- value
+[["a",1],[1,"a"],["b",2],[2,"b"]]
+
+=== an iterator's flatMap of iterators
+new Map([[1, 1], [2, 2]]).keys().flatMap(k => new Map([[k, "x"], [k + 10, "y"]]).keys()).toArray()
+--- value
+[1,11,2,12]
+
+=== an iterator's flatMap of an iterator's helpers
+@shapes - - ELEMENT_COMPARE(STRICT_NOT_EQUAL, 20)
+new Map([[1, 1], [2, 2]]).keys().flatMap(k => new Map([[k, 1], [k + 1, 2]]).keys().map(x => x * 10).filter(x => x !== 20)).toArray()
+--- value
+[10,30]
+
+=== an iterator's flatMap of empty answers
+[new Map([[1, 1], [2, 2]]).keys().flatMap(k => []).toArray(), new Map().keys().flatMap(k => [k]).toArray(), new Map([[1, 1]]).keys().flatMap(k => new Set()).toArray(), new Map([[1, 1]]).keys().flatMap(k => new Map().entries()).toArray()]
+--- value
+[[],[],[],[]]
+
+=== an iterator's flatMap of a match result takes its elements
+new Map([["a1", 1], ["b2", 2]]).keys().flatMap(k => k.match(/[0-9]/)).toArray()
+--- value
+["1","2"]
+
+=== an iterator's flatMap keeps the order of the values and their answers
+new Map([[3, 1], [1, 2], [2, 3]]).keys().flatMap((k, i) => i === 1 ? [] : [k, i]).toArray()
+--- value
+[3,0,2,2]
+
+=== an iterator's flatMap is called with the value and a counter only
+new Map([["a", 1], ["b", 2]]).keys().flatMap((k, i, rest) => [k, i, rest]).toArray()
+--- value
+["a",0,undefined,"b",1,undefined]
+
+=== an iterator's flatMap over a helper's result, and a helper over flatMap's
+@shapes ELEMENT_COMPARE(STRICT_NOT_EQUAL, 2) - -
+new Map([[1, 1], [2, 2], [3, 3]]).keys().filter(k => k !== 2).flatMap(k => [k, -k]).map(x => x * 2).toArray()
+--- value
+[2,-2,6,-6]
+
+=== an iterator's flatMap of a number faults
+new Map([[1, 1]]).keys().flatMap(k => k).toArray()
+--- fault flatMap's callback returns
+
+=== an iterator's flatMap of a string faults, as JavaScript throws
+new Map([[1, 1]]).keys().flatMap(k => "ab").toArray()
+--- fault flatMap's callback returns
+
+=== an iterator's flatMap of an object faults, as JavaScript throws
+new Map([[1, 1]]).keys().flatMap(k => ({ k })).toArray()
+--- fault flatMap's callback returns
+
+=== an iterator's flatMap of null and undefined faults
+new Map([[1, 1]]).keys().flatMap(k => null).toArray()
+--- fault flatMap's callback returns
+
+=== an iterator's flatMap whose callback faults
+@shapes PLUCK(k)
+new Map([[1, {k: [1]}], [2, null]]).values().flatMap(v => v.k).toArray()
+--- fault of null
+
+=== an iterator's flatMap whose callback is not a function faults
+new Map([[1, 1]]).keys().flatMap([1])
+--- fault not a function
+
+=== an iterator's flatMap of an iterator the callback holds faults, where JavaScript reads it once
+(() => { const it = new Map([[1, 2]]).keys(); return new Map([[1, 1], [2, 2]]).keys().flatMap(k => it).toArray(); })()
+--- fault once
+
+=== an iterator's flatMap's result read twice faults
+(() => { const it = new Map([[1, 2]]).keys().flatMap(k => [k]); return [[...it], [...it]]; })()
+--- fault once
+
+# take(limit) and drop(limit): an iterator of the first `limit` values, or
+# of the rest. The limit is ToNumber'd: null is 0, true is 1, a fraction is
+# cut toward zero, and Infinity takes or drops everything. NaN (undefined
+# among them) and a negative limit throw a RangeError in JavaScript and
+# fault; a string or an object, which JavaScript converts, faults.
+
+=== take
+new Map([[1, "a"], [2, "b"], [3, "c"]]).keys().take(2)
+--- value
+[1,2].values()
+
+=== take of each iterator
+(() => { const m = new Map([[1, "a"], [2, "b"], [3, "c"]]); return [m.keys().take(1).toArray(), m.values().take(2).toArray(), m.entries().take(2).toArray()]; })()
+--- value
+[[1],["a","b"],[[1,"a"],[2,"b"]]]
+
+=== drop of each iterator
+(() => { const m = new Map([[1, "a"], [2, "b"], [3, "c"]]); return [m.keys().drop(1).toArray(), m.values().drop(2).toArray(), m.entries().drop(1).toArray()]; })()
+--- value
+[[2,3],["c"],[[2,"b"],[3,"c"]]]
+
+=== take and drop of nothing and of everything
+(() => { const m = new Map([[1, "a"], [2, "b"]]); return [m.keys().take(0).toArray(), m.keys().take(2).toArray(), m.keys().take(5).toArray(), m.keys().drop(0).toArray(), m.keys().drop(2).toArray(), m.keys().drop(5).toArray()]; })()
+--- value
+[[],[1,2],[1,2],[1,2],[],[]]
+
+=== take and drop of an empty iterator
+[new Map().keys().take(3).toArray(), new Map().entries().drop(3).toArray(), new Map().values().take(0)]
+--- value
+[[],[],[].values()]
+
+=== take and drop by Infinity
+(() => { const m = new Map([[1, "a"], [2, "b"]]); return [m.keys().take(Infinity).toArray(), m.keys().drop(Infinity).toArray()]; })()
+--- value
+[[1,2],[]]
+
+=== take and drop cut a fraction toward zero
+(() => { const m = new Map([[1, "a"], [2, "b"], [3, "c"]]); return [m.keys().take(1.9).toArray(), m.keys().drop(1.5).toArray(), m.keys().take(-0.5).toArray(), m.keys().drop(-0.9).toArray(), m.keys().take(-0).toArray()]; })()
+--- value
+[[1],[2,3],[],[1,2,3],[]]
+
+=== take and drop of null, true and false
+(() => { const m = new Map([[1, "a"], [2, "b"], [3, "c"]]); return [m.keys().take(null).toArray(), m.keys().take(true).toArray(), m.keys().drop(true).toArray(), m.keys().drop(false).toArray()]; })()
+--- value
+[[],[1],[2,3],[1,2,3]]
+
+=== take of a large limit
+new Map([[1, 1]]).keys().take(1e300).toArray()
+--- value
+[1]
+
+=== take and drop of a helper's result
+@shapes ELEMENT_COMPARE(STRICT_NOT_EQUAL, 2) -
+new Map([[1, 1], [2, 2], [3, 3], [4, 4]]).keys().filter(k => k !== 2).map(k => k * 10).drop(1).take(1).toArray()
+--- value
+[30]
+
+=== a helper of take and drop's result
+@shapes - SUM(false)
+new Map([[1, 1], [2, 2], [3, 3], [4, 4]]).values().drop(1).take(2).map(v => v * 2).reduce((a, x) => a + x, 0)
+--- value
+10
+
+=== take, then some, every and find
+@shapes - ELEMENT_COMPARE(STRICT_EQUAL, 3) ELEMENT_COMPARE(LESS, 3) ELEMENT_COMPARE(GREATER, 1)
+(() => { const m = new Map([[1, 1], [2, 2], [3, 3]]); return [m.keys().take(2).some(k => k === 3), m.keys().take(2).every(k => k < 3), m.keys().drop(1).find(k => k > 1)]; })()
+--- value
+[false,true,2]
+
+=== take and drop's result spread and destructured
+(() => { const [a, ...b] = new Map([[1, 1], [2, 2], [3, 3]]).keys().drop(0); return [a, b, [...new Map([[1, 2]]).values().take(1)], Math.max(...new Map([[1, 4], [2, 9]]).values().take(5))]; })()
+--- value
+[1,[2,3],[2],9]
+
+=== take of NaN faults
+new Map([[1, 1]]).keys().take(NaN)
+--- fault RangeError
+
+=== take of nothing faults, as undefined is NaN
+new Map([[1, 1]]).keys().take()
+--- fault RangeError
+
+=== drop of undefined faults
+new Map([[1, 1]]).keys().drop(undefined)
+--- fault RangeError
+
+=== take of a negative limit faults
+new Map([[1, 1]]).keys().take(-1)
+--- fault RangeError
+
+=== drop of -Infinity faults
+new Map([[1, 1]]).keys().drop(-Infinity)
+--- fault RangeError
+
+=== take of a string faults, where JavaScript converts it
+new Map([[1, 1], [2, 2]]).keys().take("1").toArray()
+--- fault converts only numbers
+
+=== drop of an array faults, where JavaScript converts it
+new Map([[1, 1], [2, 2]]).keys().drop([1]).toArray()
+--- fault converts only numbers
+
+=== take of a BigInt faults
+new Map([[1, 1]]).keys().take(1n)
+--- fault BigInt
+
+=== take of an iterator held elsewhere faults
+(() => { const it = new Map([[1, 2]]).keys(); const a = it.take(1); return [[...a], [...it]]; })()
+--- fault once
+
+=== take's result read twice faults
+(() => { const it = new Map([[1, 2]]).keys().drop(0); return [[...it], [...it]]; })()
+--- fault once
+
+# Laziness: JavaScript's helpers are lazy, and staticjs's map, filter and
+# flatMap run to the end when called. A callback changes nothing, so the
+# values are JavaScript's; a callback that faults on a value JavaScript
+# never asks it for faults in staticjs, where JavaScript gives a value.
+
+=== an eager map before take gives JavaScript's values
+new Map([[1, 1], [2, 2], [3, 3]]).values().map(v => v * 2).take(2).toArray()
+--- value
+[2,4]
+
+=== an eager map before take faults on a value take never reads
+@shapes PLUCK(k)
+new Map([[1, {k: 1}], [2, null]]).values().map(v => v.k).take(1).toArray()
+--- fault of null
+
+=== an eager map before some faults on a value some never reaches
+@shapes PLUCK(k) ELEMENT_COMPARE(STRICT_EQUAL, 1)
+new Map([[1, {k: 1}], [2, null]]).values().map(v => v.k).some(x => x === 1)
+--- fault of null
+
+=== an eager filter before find faults on a value find never reaches
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 1) -
+new Map([[1, {k: 1}], [2, null]]).values().filter(v => v.k === 1).find(v => true)
+--- fault of null
+
+=== an eager flatMap before take faults on a value take never reads
+new Map([[1, [1]], [2, 5]]).values().flatMap(v => v).take(1).toArray()
+--- fault flatMap's callback returns
 
 # forEach: a loop, whose callback gets (value, key, map) and whose result is
 # undefined; it cannot change anything outside, so it only faults or gives

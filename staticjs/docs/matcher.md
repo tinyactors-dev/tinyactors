@@ -1263,7 +1263,7 @@ callback gets (element, index) and nothing else: a third parameter reads
 undefined, not the array, because Array.from passes no array (as
 Object.groupBy). Fuel: 2 per element against 4.
 
-### 7.3C `Map.groupBy`, and an iterator's map, filter and reduce
+### 7.3C `Map.groupBy`, and an iterator's helpers
 
 `Map.groupBy(items, x => x.k)` is a fourth consumer of PLUCK, with no new
 rule: 7.3A's step, into a map instead of an object. The plucked value must
@@ -1272,11 +1272,13 @@ be a primitive group_key_ok accepts, as for Object.groupBy; a BigInt or a
 whose answer the same group step takes, so only speed differs. Fuel: 2 per
 element against 4.
 
-An iterator's `map`, `filter` and `reduce` (`m.values().map(v => v.k)`) add
-no row: the loop's start makes the array of what the iterator yields and
-runs the array's MAP, FILTER or REDUCE loop over it (`iterated`), so their
-rows apply as they are, PLUCK, KEY_COMPARE, ELEMENT_COMPARE, SUM and
-SUM_KEY. The callback gets (value, counter), and reduce's (accumulator,
+An iterator's `map`, `filter`, `reduce`, `some`, `every` and `find`
+(`m.values().map(v => v.k)`) add no row: the loop's start makes the array
+of what the iterator yields and runs the array's MAP, FILTER, REDUCE,
+SOME, EVERY or FIND loop over it (`iterated`), so their rows apply as they
+are, PLUCK, KEY_COMPARE, ELEMENT_COMPARE, SUM and SUM_KEY. Its `forEach`
+and `flatMap` run no shape, as a map's forEach and the array's flatMap
+run none. The callback gets (value, counter), and reduce's (accumulator,
 value, counter), as JavaScript's helpers pass them; a C path never builds
 them.
 
@@ -1890,7 +1892,7 @@ are charged. The changes common to all three items:
 - **`shape_start` takes a table** from built-in to the shapes it runs.
   MAP runs PLUCK; TO_SORTED runs COMPARE_BY_KEY and COMPARE_NUMERIC;
   FILTER, FIND, FIND_INDEX, FIND_LAST, FIND_LAST_INDEX, SOME and EVERY run KEY_COMPARE and
-  ELEMENT_COMPARE; REDUCE runs SUM and SUM_KEY. `Object.groupBy` runs PLUCK, as MAP does (7.3A), and so do `Array.from` (7.3B) and `Map.groupBy` (7.3C), and an iterator's map, filter and reduce run as MAP, FILTER and REDUCE. The table replaces the
+  ELEMENT_COMPARE; REDUCE runs SUM and SUM_KEY. `Object.groupBy` runs PLUCK, as MAP does (7.3A), and so do `Array.from` (7.3B) and `Map.groupBy` (7.3C), and an iterator's map, filter, reduce, some, every and find run as MAP, FILTER, REDUCE, SOME, EVERY and FIND. The table replaces the
   conditional chain, which three more cases would make unreadable.
   **Implemented with item 1** as `shape_runners`, rows of `{ builtin,
   shape }` that `shape_start` scans; a switch on the shape then reads its

@@ -368,9 +368,10 @@ sjs_result sjs_set_insert(sjs_context *context, sjs_array **set, sjs_value eleme
 bool sjs_set_contains(const sjs_array *set, sjs_value element);
 /*
  * An iterator (SJS_ITERATOR): a map's keys(), values() or entries(), which
- * yields from the map, or what an iterator's map() or filter() gave, which
- * yields `items`. It holds the map either way, so the map cannot change
- * while it lives, as a JavaScript iterator would see the change. Immutable:
+ * yields from the map, or what an iterator's map(), filter(), flatMap(),
+ * take() or drop() gave, which yields `items`. It holds the map either way,
+ * so the map cannot change while it lives, as a JavaScript iterator would
+ * see the change. Immutable:
  * a program reads one only where nothing else holds it (sjs_iterator_items),
  * so no program can read one twice.
  */
@@ -659,13 +660,20 @@ typedef enum {
     SJS_METHOD_MAP_ENTRIES,
     /* Iterators. */
     SJS_METHOD_ITERATOR_TO_ARRAY,
+    SJS_METHOD_ITERATOR_TAKE,
+    SJS_METHOD_ITERATOR_DROP,
     /* Loops over maps and iterators, which sjs_loop_start hands to
      * late_start first: from SJS_METHOD_MAP_FOR_EACH to
-     * SJS_METHOD_ITERATOR_REDUCE. */
+     * SJS_METHOD_ITERATOR_FLAT_MAP. */
     SJS_METHOD_MAP_FOR_EACH,
     SJS_METHOD_ITERATOR_MAP,
     SJS_METHOD_ITERATOR_FILTER,
     SJS_METHOD_ITERATOR_REDUCE,
+    SJS_METHOD_ITERATOR_SOME,
+    SJS_METHOD_ITERATOR_EVERY,
+    SJS_METHOD_ITERATOR_FIND,
+    SJS_METHOD_ITERATOR_FOR_EACH,
+    SJS_METHOD_ITERATOR_FLAT_MAP,
     /* MUTATION: methods that change their receiver, called only through a
      * reference to the variable that owns it (SJS_OP_MUTATE), never through
      * sjs_builtin_call. Arrays', then sets', then step 3's. */
