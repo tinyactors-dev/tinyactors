@@ -1079,3 +1079,8 @@ String.fromCodePoint(0x110000)
 ["", "abc", "héllo", "a😀b", "😀"].map((s) => [s.isWellFormed(), s.toWellFormed(), s.toWellFormed() === s, s.isWellFormed(1, 2)])
 --- value
 [[true,"",true,true],[true,"abc",true,true],[true,"héllo",true,true],[true,"a😀b",true,true],[true,"😀",true,true]]
+
+=== an empty substring or substr between the halves of a pair
+["😀".substring(1, 1), "a😀b😀".substr(2, 0), "a😀b😀".substr(2, NaN), "a😀b😀".substr(5, -1), "a😀b".substring(2, 2), "😀".substr(1, 0)]
+--- value
+["","","","","",""]
