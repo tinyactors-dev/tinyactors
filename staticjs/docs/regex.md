@@ -1130,3 +1130,21 @@ Each departure below was made because Node or the code said otherwise.
   runner would still have to count every copy it no longer makes, and
   what it would save beyond the anchored start is the closure's stack and
   stamps for one thread, which no bench row isolates.
+- **No predicate shape (10, 12.1) yet: the rules cannot express it.** Every
+  form of it, `x => re.test(x)` and `x => /lit/.test(x)` alike, is a call:
+  its pattern is a CALL_BEGIN bracket whose first child, the callee
+  `re.test`, comes before the bracket opens. The generator refuses that
+  (`mise/shapes.rb`: "takes the node(s) before it as its first children,
+  which the matcher does not keep"; `docs/matcher.md` 4.3) for every rule
+  but a rewrite's, whose anchored lane matches such brackets only because
+  its rules bind nothing and hand nothing up, which a shape must (the
+  element's name, the regex operand). This settles the question section
+  10 left open: the rules on CALL_BEGIN in `src/shapes.rules` are a
+  rewrite's (MUTATE_PATH), so the refusal applies to callback shapes. The
+  shape needs `docs/matcher.md` 11.9.2 ([brackets]) first, then, for
+  `re` read from outside, 11.9.3 ([names]), and an operand on the REGEXP
+  event for a literal. Neither is built, so `eval.regex.filter` still
+  calls its callback for each row.
+- **No lazy DFA (12.3).** It was to come only once the skips were in and
+  a row asked for it; none has been measured against one, so it is not
+  built.
