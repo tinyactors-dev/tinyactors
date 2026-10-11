@@ -109,8 +109,7 @@ the host injects in the same way. UTC is the default everywhere.
 
 | Name | Status | Note |
 |---|---|---|
-| `toArray`, `map`, `filter`, `reduce` | built | |
-| `take`, `drop`, `flatMap`, `some`, `every`, `find`, `forEach` | to build | Registered; no method yet. Each calls back, so each follows the callback pattern in `docs/extending.md`. |
+| `toArray`, `map`, `filter`, `reduce`, `take`, `drop`, `flatMap`, `some`, `every`, `find`, `forEach` | built | Run when called, not lazily: a callback of `map`, `filter` or `flatMap` can fault on a value a later `take`, `some`, `every` or `find` would not read. `take` and `drop` fault on a string or an object limit. |
 | `next`, `return` | named, not built | Not in the agreed plan. Calling `next` by hand advances a held iterator, which is a mutation of a held value. |
 
 ## RegExp
