@@ -14,3 +14,4 @@ __pycache__/
 /.amp/STOP
 /bindings/web/tinyactors.wasm
 /bindings/web/api.mjs
+/bindings/web/core.mjs

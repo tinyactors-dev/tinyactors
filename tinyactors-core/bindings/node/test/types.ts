@@ -48,6 +48,8 @@ void stats.charts[0].macrosteps;
 const { done } = system.migrate('door', { wake: true });
 void done.then((r) => r.migrated + r.failed);
 const bytes: Uint8Array = system.snapshot();
+const watch: number = system.watchTraces({ charts: ['door'], for: Infinity });
+system.unwatchTraces(watch);
 createSystem({ restore: bytes, charts: [door] });
 const link = createLink(system, { url: 'ws://localhost/link', name: 'server' });
 void link.opened.then(() => link.get('lobby').send({ type: 'JOIN' }));

@@ -26,9 +26,10 @@ Following [docs/roles.md](../roles.md):
   datamodels' semantics.
 - **Who pays:**
   - nothing per event or per actor;
-  - code size: about 2,000 lines of C in core, against roughly 2,000
-    lines of JavaScript removed from Node and the whole of `native.mjs`
-    removed from the web binding;
+  - code size: about 2,000 lines of C in core. Node's `core.mjs` went
+    from 2,432 to 1,651 lines, and the web binding's copy of it is
+    removed; `native.mjs` is rewritten as the addon's twin (3,558 lines,
+    against 2,802 before);
   - API surface: new host functions (state value, snapshot container,
     watches), a new `src/link` layer, and an exporter batcher in
     `src/otlp`;
@@ -147,8 +148,14 @@ The JavaScript on top (`core.mjs`) keeps:
   - the JavaScript datamodel's vtable (through the function table);
   - effect delivery;
   - sockets and `fetch`.
-- **`native.mjs` and the copy of `core.mjs` are deleted.** The web binding
-  passes the Node.js suites with `TA_BINDING=web`.
+- **The JavaScript file is `native.mjs`, written by hand as the addon's
+  twin**: the same functions as `bindings/node/src/*.c`, topic by topic,
+  over the module's exports instead of Node-API. Compiling the addon's C
+  to wasm against an emulated Node-API (emnapi) was the alternative; it
+  was not chosen.
+- **The copy of `core.mjs` is deleted.** `mise run web:build` copies the
+  Node.js binding's file into the package. The web binding passes the
+  Node.js suites with `TA_BINDING=web`.
 
 ## Inventory
 

@@ -434,13 +434,13 @@ system.configureTraces({ detail: 'summary', sample: 0.5 }); // while it runs
 ```
 
 **Watching and rules** (docs/adr/0007): a watch traces matching steps in
-full, whatever the ratio, and everything they cause, until `stop()` or
+full, whatever the ratio, and everything they cause, until `unwatchTraces(id)` or
 `for` ms (15 minutes by default); rules decide where a trace starts and
 where an actor takes an event, first match wins:
 
 ```js
 const watch = system.watchTraces({ actors: [order], names: ['issue/*'], charts: ['checkout'], detail: 'full', values: true });
-watch.stop();
+system.unwatchTraces(watch);
 system.configureTraces({
   sample: 0.01,
   rules: [

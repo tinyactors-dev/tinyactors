@@ -10,7 +10,7 @@ C of its own.
 Packages are not built at the moment: the pipeline that made them used
 CMake and is to be rebuilt on the repository's release machinery
 ([distribution](../../docs/distribution.md)). In this repository, `mise run web:build` (in `tinyactors-core`) builds
-`bindings/web/tinyactors.wasm` and `bindings/web/api.mjs`. The package contains the wasm, its JS and
+`bindings/web/tinyactors.wasm`, `bindings/web/api.mjs` and `bindings/web/core.mjs`. The package contains the wasm, its JS and
 the Node transports, with no files needed outside it. `import ... from 'tinyactors-web'` selects the Node or
 browser backend; `tinyactors-web/browser` explicitly selects the browser.
 For an unbundled server, import
@@ -45,7 +45,12 @@ not this development directory.
   into one module as the release links its wasm modules (`mise run
   web:build`): one memory, wasi-libc compiled in, importing nothing,
   exporting the public API and its function table.
-- `native.mjs` drives that API from JavaScript. Structs are read and
+- `native.mjs` is the wasm twin of the Node.js addon (`../node/src/*.c`):
+  the same functions, topic by topic, with the same results, over the
+  module's exports instead of Node-API. The run loop, links, the
+  exporter's batching, trace policy, watches, snapshots and metrics are
+  core's (`ta_host`, `ta_links`, `ta_otlp_batch`); it provides memory, the
+  clock and the JavaScript datamodel. Structs are read and
   written at the wasm32 offsets of `api.mjs`, which web:build generates
   from the API descriptions; what it hands the libraries lives in the
   module's memory (`ta_wasm_alloc`): scratch released after each call, a
@@ -58,12 +63,13 @@ not this development directory.
   wasm module generated at load turns them into wasm functions), with
   integer handles for sessions and payloads. `quickjs` is the engine in
   the module; its clock is set from the page before each run.
-- `core.mjs` is the API, the same as the Node.js binding's.
+- `core.mjs` is the API: a copy of the Node.js binding's, made by
+  `mise run web:build`, so both bindings run the same file.
 - `index.mjs` is for browsers (top-level `await`, `instantiateStreaming`).
   `node.mjs` is the same binding for Node.js: synchronous, and `serveLinks()`
   also accepts `{ server | port }`. Pick it with the `node` export condition.
-- Slices of work are time-boxed (~4 ms) and continue on a `MessageChannel`
-  turn, so a busy system never blocks the page.
+- A pump runs at most 16 rounds of 10,000 steps, then the rest continues
+  on a `MessageChannel` turn, so a busy system never blocks the page.
 - SCXML documents (`fromSCXML`), I/O processors (synchronous ones too) and
   invokers, system manifests (`system.boot`), snapshots
   (`system.snapshot()`, `createSystem({ restore })`) and deterministic time
@@ -143,13 +149,13 @@ system.configureTraces({ detail: 'summary', sample: 0.5 }); // while it runs
 ```
 
 **Watching and rules** (docs/adr/0007): a watch traces matching steps in
-full, whatever the ratio, and everything they cause, until `stop()` or
+full, whatever the ratio, and everything they cause, until `unwatchTraces(id)` or
 `for` ms (15 minutes by default); rules decide where a trace starts and
 where an actor takes an event, first match wins:
 
 ```js
 const watch = system.watchTraces({ actors: [order], names: ['issue/*'], charts: ['checkout'], detail: 'full', values: true });
-watch.stop();
+system.unwatchTraces(watch);
 system.configureTraces({
   sample: 0.01,
   rules: [

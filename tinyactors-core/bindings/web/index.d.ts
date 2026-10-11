@@ -366,7 +366,8 @@ export declare class System {
     values?: boolean;
     for?: number;
     perSecond?: number;
-  }): { stop(): void };
+  }): number;
+  unwatchTraces(id: number): void;
   flushTraces(): Promise<void>;
   stop(): void;
 }

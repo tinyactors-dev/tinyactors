@@ -94,7 +94,7 @@ test('detail, kinds and sampling change while traces flow; lifecycle spans stay'
   system.stop();
 });
 
-test('watchTraces: one actor in full, whatever the ratio, and what it causes; stop() ends it', async () => {
+test('watchTraces: one actor in full, whatever the ratio, and what it causes; unwatchTraces(id) ends it', async () => {
   const c = collector();
   const system = createSystem({ traces: { sink: c.sink, sample: 0, detail: 'summary' } });
   const b = createActor(pong, { system }).start();
@@ -102,6 +102,7 @@ test('watchTraces: one actor in full, whatever the ratio, and what it causes; st
   const other = createActor(pong, { system }).start();
   await settle();
   const watch = system.watchTraces({ actors: [a] });
+  assert.equal(typeof watch, 'number');
   a.send({ type: 'go' });
   other.send({ type: 'ping' });
   await settle();
@@ -112,12 +113,12 @@ test('watchTraces: one actor in full, whatever the ratio, and what it causes; st
   const caused = spans.filter((s) => s.name === 'scxml.macrostep ping');
   assert.equal(caused.length, 1, 'what it caused is traced, the other actor is not');
   assert.equal(caused[0].traceID, go.traceID);
-  watch.stop();
-  watch.stop(); /* once is enough */
+  system.unwatchTraces(watch);
+  system.unwatchTraces(watch); /* once is enough */
   const before = c.spans().length;
   a.send({ type: 'go' });
   await settle();
-  assert.ok(!c.spans().slice(before).some((s) => s.name.startsWith('scxml.macrostep')), 'after stop(): sampled as before');
+  assert.ok(!c.spans().slice(before).some((s) => s.name.startsWith('scxml.macrostep')), 'after unwatchTraces(): sampled as before');
   system.stop();
 });
 

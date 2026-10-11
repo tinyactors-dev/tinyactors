@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Build the web binding's WebAssembly module (bindings/web/tinyactors.wasm): the release's three libraries in one module, as the release builds them, exporting the public API and its function table; and bindings/web/api.mjs, their wasm32 layouts"
+#MISE description="Build the web binding's WebAssembly module (bindings/web/tinyactors.wasm): the release's three libraries in one module, as the release builds them, exporting the public API and its function table; bindings/web/api.mjs, their wasm32 layouts; and bindings/web/core.mjs, the Node.js binding's API layer"
 #MISE depends=["amalgamate"]
 # vim:ft=ruby
 
@@ -12,6 +12,7 @@
 # field types, constants and function signatures of the three API
 # descriptions.
 
+require 'fileutils'
 require 'json'
 require_relative '../../core'
 
@@ -21,6 +22,9 @@ ecmascript = Core.release_project(Core.library('tinyactors_datamodel_ecmascript'
 web = Core::ROOT.join('bindings/web')
 output = web.join('tinyactors.wasm')
 api_output = web.join('api.mjs')
+# The API layer is the Node.js binding's (one file for both bindings, ADR
+# 0008): the web package carries a copy, made with each build.
+FileUtils.cp(Core::ROOT.join('bindings/node/core.mjs'), web.join('core.mjs'))
 apis = [core, runtime, ecmascript].map(&:api)
 key = Cache.digest('web:build', Cache.tool_id(Toolchain::Tool[:zig].command),
                    Cache.files('dist/*.c', 'dist/*.h', 'include/*.api.json', 'mise/tasks/web/build'),

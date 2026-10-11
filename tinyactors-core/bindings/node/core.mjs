@@ -1048,7 +1048,8 @@ export function createRuntime({ native, platform }) {
      * Trace matching steps in full, sampled whatever the ratio, and what they
      * cause (docs/adr/0007): steps of these actors, sessions, actor names (a
      * trailing "*" a prefix), charts, or events. Ends after `for` ms (15
-     * minutes; Infinity: until stop()). At most `perSecond` new traces a second.
+     * minutes; Infinity: until unwatchTraces(id)). At most `perSecond` new
+     * traces a second. Returns the watch's id (ta_host_trace_watch).
      */
     watchTraces({ actors = [], sessions = [], names = [], charts = [], events = [], ...options } = {}) {
       if (this._stopped) throw new Error('the system was stopped');
@@ -1059,7 +1060,12 @@ export function createRuntime({ native, platform }) {
         charts: charts.map((c) => (c instanceof Chart ? c.name : c)),
         events,
       });
-      return { stop: () => !this._stopped && native.unwatch(this._sys, id) };
+      return id;
+    }
+
+    /** End a watch now (ta_host_trace_unwatch); one that ended is ignored. */
+    unwatchTraces(id) {
+      if (!this._stopped) native.unwatch(this._sys, id);
     }
 
     /** Resolves once every trace export this system started has finished. */

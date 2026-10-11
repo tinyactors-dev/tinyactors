@@ -1,6 +1,8 @@
 /**
- * The web binding's native layer: what core.mjs calls `native`, in
- * JavaScript over the public C API of tinyactors.wasm (the release's
+ * The web binding's native layer: what core.mjs calls `native`, the wasm
+ * twin of the Node.js addon (bindings/node/src/*.c, docs/adr/0008): the same
+ * functions with the same results, in JavaScript over the public C API of
+ * tinyactors.wasm (the release's
  * tinyactors, tinyactors_runtime and tinyactors_datamodel_ecmascript in one
  * module; mise run web:build). There is no C of the binding's own: structs
  * are read and written at the wasm32 offsets of api.mjs (generated from the
@@ -621,8 +623,27 @@ export function createNative(instance) {
       });
     },
     decodeTraces,
-    decodeMetrics,
     metricsToOTLP: (metrics, resource, start, time) => metricsRequest(null, metrics, resource, start, time),
+    /* the kinds' names, in core's order from 1 (ta_trace_kind_name) */
+    traceKinds: Object.freeze(Array.from({ length: K.TRACE_KIND_COUNT - 1 }, (_, i) => stringOfImage(x.ta_trace_kind_name, i + 1))),
+    /* snapshotContents(blob) -> { systemID, ecmascript, now, images: [image | null] } */
+    snapshotContents(bytes) {
+      const b = asBytes(bytes);
+      return scoped(() => {
+        const p = b ? bytesIn(b) : 0;
+        const contents = zeroed(size('ta_host_snapshot_contents'));
+        const C = offsets('ta_host_snapshot_contents');
+        setU32(contents, size('ta_host_snapshot_contents'));
+        if (!p || x.ta_host_snapshot_unpack(p, b.length, contents) !== OK) throw new TypeError('not a system snapshot (system.snapshot())');
+        const images = [];
+        const length = out32();
+        for (let i = 0; i < u32(contents + C.image_count); i++) {
+          const q = x.ta_host_snapshot_image(p, b.length, i, length);
+          images.push(q ? new NativeImage(copyOut(q, u32(length))) : null);
+        }
+        return { systemID: view(contents + C.system_id), ecmascript: view(contents + C.datamodel), now: n64(contents + C.time), images };
+      });
+    },
   };
 
   const traceID = (p) => {
@@ -641,7 +662,7 @@ export function createNative(instance) {
     return n ? text(t, n) : undefined;
   };
 
-  /* ---- decoding OTLP (core.mjs shapes the results) */
+  /* ---- decoding OTLP: the API's spans and metrics (the addon's src/trace.c, src/metrics.c) */
   const fieldsSize = size('ta_otlp_fields');
   /* a copy of a ta_otlp_fields value in scratch (passed by value) */
   const fieldsCopy = (p) => {
@@ -649,17 +670,18 @@ export function createNative(instance) {
     bytesAt().copyWithin(q, p, p + fieldsSize);
     return q;
   };
+  /* a value: string, boolean, number (a BigInt beyond 2^53), array, an object of a list, a Uint8Array */
   function decodedValue(v) {
     const kind = u32(v + at('ta_otlp_value', 'kind'));
     switch (kind) {
       case K.OTLP_VALUE_STRING:
         return view(v + at('ta_otlp_value', 'bytes'));
       case K.OTLP_VALUE_BOOL:
-        return dv.getBigInt64(v + at('ta_otlp_value', 'integer'), true) !== 0n;
+        return (fresh(), dv.getBigInt64(v + at('ta_otlp_value', 'integer'), true) !== 0n);
       case K.OTLP_VALUE_INT: {
         fresh();
         const i = dv.getBigInt64(v + at('ta_otlp_value', 'integer'), true);
-        return i >= -9007199254740991n && i <= 9007199254740991n ? Number(i) : { int: String(i) };
+        return i >= -9007199254740991n && i <= 9007199254740991n ? Number(i) : i;
       }
       case K.OTLP_VALUE_DOUBLE:
         return f64(v + at('ta_otlp_value', 'number'));
@@ -672,26 +694,38 @@ export function createNative(instance) {
         return list;
       }
       case K.OTLP_VALUE_LIST:
-        return { list: decodedAttributes(v + at('ta_otlp_value', 'items')) };
+        return decodedAttributes(v + at('ta_otlp_value', 'items'));
       case K.OTLP_VALUE_BYTES: {
         const b = v + at('ta_otlp_value', 'bytes');
-        return { bytes: copyOut(u32(b), u32(b + 4)) };
+        return copyOut(u32(b), u32(b + 4));
       }
       default:
         return null;
     }
   }
-  function decodedAttributes(fieldsAt) {
+  /* attributes as an object (`text`: values as text, as metrics have them) */
+  function decodedAttributes(fieldsAt, text) {
     return scoped(() => {
       const fields = fieldsCopy(fieldsAt);
-      const list = [];
+      const out = {};
       const cursor = out32();
       const key = zeroed(8, 4);
       const value = zeroed(size('ta_otlp_value'));
-      while (x.ta_otlp_next_attribute(fields, cursor, key, value) === 1) list.push([view(key), decodedValue(value)]);
-      return list;
+      while (x.ta_otlp_next_attribute(fields, cursor, key, value) === 1) {
+        const v = decodedValue(value);
+        out[view(key)] = text ? String(v) : v;
+      }
+      return out;
     });
   }
+  const SPAN_KINDS = ['unspecified', 'internal', 'server', 'client', 'producer', 'consumer'];
+  const STATUS_CODES = ['unset', 'ok', 'error'];
+  /* ms and the BigInt ns of a time at p (ns since the epoch) */
+  const timeOf = (o, ms, nano, p) => {
+    const ns = u64(p);
+    o[ms] = Number(ns / 1000n) / 1000;
+    o[nano] = ns;
+  };
   function decodeTraces(bytes) {
     const b = asBytes(bytes);
     if (!b) throw new TypeError('decodeTraces(bytes: Uint8Array)');
@@ -707,19 +741,21 @@ export function createNative(instance) {
         const parent = u64(span + S.parent);
         if (parent) o.parentSpanID = spanID(parent);
         o.name = view(span + S.name);
-        o.kind = u32(span + S.kind);
-        o.start = String(u64(span + S.start));
-        o.end = String(u64(span + S.end));
-        o.status = u32(span + S.status);
-        if (viewLength(span + S.status_message)) o.statusMessage = view(span + S.status_message);
+        o.kind = SPAN_KINDS[u32(span + S.kind)] || 'unspecified';
+        timeOf(o, 'startTime', 'startTimeUnixNano', span + S.start);
+        timeOf(o, 'endTime', 'endTimeUnixNano', span + S.end);
         o.attributes = decodedAttributes(span + S.attributes);
         o.events = scoped(() => {
           const events = [];
           const list = fieldsCopy(span + S.events);
           const c = out32();
           const e = zeroed(size('ta_otlp_event'));
-          while (x.ta_otlp_next_event(list, c, e) === 1)
-            events.push({ name: view(e + at('ta_otlp_event', 'name')), time: String(u64(e + at('ta_otlp_event', 'time'))), attributes: decodedAttributes(e + at('ta_otlp_event', 'attributes')) });
+          while (x.ta_otlp_next_event(list, c, e) === 1) {
+            const event = { name: view(e + at('ta_otlp_event', 'name')) };
+            timeOf(event, 'time', 'timeUnixNano', e + at('ta_otlp_event', 'time'));
+            event.attributes = decodedAttributes(e + at('ta_otlp_event', 'attributes'));
+            events.push(event);
+          }
           return events;
         });
         o.links = scoped(() => {
@@ -731,11 +767,10 @@ export function createNative(instance) {
             links.push({ traceID: traceID(l + at('ta_otlp_link', 'trace')), spanID: spanID(u64(l + at('ta_otlp_link', 'span'))), attributes: decodedAttributes(l + at('ta_otlp_link', 'attributes')) });
           return links;
         });
-        o.resource = decodedAttributes(span + S.resource);
-        o.scopeName = view(span + S.scope_name);
-        o.scopeVersion = view(span + S.scope_version);
-        o.scopeAttributes = decodedAttributes(span + S.scope_attributes);
-        o.flags = u32(span + S.flags);
+        const code = STATUS_CODES[u32(span + S.status)] || 'unset';
+        o.status = viewLength(span + S.status_message) ? { code, message: view(span + S.status_message) } : { code };
+        o.resource = { attributes: decodedAttributes(span + S.resource) };
+        o.scope = { name: view(span + S.scope_name), version: view(span + S.scope_version), attributes: decodedAttributes(span + S.scope_attributes) };
         spans.push(o);
       }
       if (got < 0) throw new Error('decodeTraces: malformed OTLP protobuf');
@@ -749,26 +784,26 @@ export function createNative(instance) {
     for (let i = 0; i < n; i++) list.push(counts ? n64(base + 8 * i) : f64(base + 8 * i));
     return list;
   };
-  function decodeMetrics(bytes) {
-    const b = asBytes(bytes);
-    if (!b) throw new TypeError('decodeMetrics(bytes: Uint8Array)');
+  const METRIC_KINDS = ['', 'sum', 'gauge', 'histogram'];
+  /* a metrics request as the API's metrics */
+  function metricsValue(bytes) {
     return scoped(() => {
-      const p = bytesIn(b);
+      const p = bytesIn(bytes);
       const cursor = zeroed(size('ta_otlp_cursor'));
       const metric = zeroed(size('ta_otlp_metric_view'));
       const M = offsets('ta_otlp_metric_view');
       const P = offsets('ta_otlp_point_view');
       const metrics = [];
       let got;
-      while ((got = x.ta_otlp_next_metric(p, b.length, cursor, metric)) === 1) {
+      while ((got = x.ta_otlp_next_metric(p, bytes.length, cursor, metric)) === 1) {
         const kind = u32(metric + M.kind);
-        const o = { name: view(metric + M.name), unit: view(metric + M.unit), kind, points: [] };
+        const o = { name: view(metric + M.name), unit: view(metric + M.unit), kind: METRIC_KINDS[kind] || 'gauge', points: [] };
         const m = mark();
         const list = fieldsCopy(metric + M.points);
         const c = out32();
         const point = zeroed(size('ta_otlp_point_view'));
         while ((got = x.ta_otlp_next_point(list, c, kind, point)) === 1) {
-          const q = { attributes: decodedAttributes(point + P.attributes) };
+          const q = { attributes: decodedAttributes(point + P.attributes, true) };
           if (kind === K.OTLP_METRIC_HISTOGRAM) {
             q.count = n64(point + P.count);
             q.sum = f64(point + P.sum);
@@ -784,8 +819,12 @@ export function createNative(instance) {
               const xc = out32();
               const e = zeroed(size('ta_otlp_exemplar'));
               const E = offsets('ta_otlp_exemplar');
-              while (x.ta_otlp_next_exemplar(xs, xc, e) === 1)
-                exemplars.push({ traceID: traceID(e + E.trace), spanID: spanID(u64(e + E.span)), time: n64(e + E.time) / 1e6, value: f64(e + E.value) });
+              while (x.ta_otlp_next_exemplar(xs, xc, e) === 1) {
+                const value = f64(e + E.value);
+                let bucket = q.bounds.findIndex((bound) => value <= bound);
+                if (bucket < 0) bucket = q.bounds.length;
+                exemplars.push({ traceID: traceID(e + E.trace), spanID: spanID(u64(e + E.span)), time: n64(e + E.time) / 1e6, value, bucket });
+              }
               return exemplars;
             });
           } else {
@@ -798,7 +837,7 @@ export function createNative(instance) {
         if (got < 0) break;
         metrics.push(o);
       }
-      if (got < 0) throw new Error('decodeMetrics: malformed OTLP protobuf');
+      if (got < 0) throw new Error('metrics: malformed OTLP protobuf');
       return metrics;
     });
   }
@@ -847,9 +886,9 @@ export function createNative(instance) {
       x.ta_otlp_stats_get(otlp, stats);
       return Object.fromEntries(Object.entries(offsets('ta_otlp_stats')).map(([field, offset]) => [field, u32(stats + offset)]));
     });
-  /* [[key, value], ...] as ta_otlp_attribute[] in scratch */
+  /* attributes ({ key: value } or [[key, value], ...]) as ta_otlp_attribute[] in scratch */
   const attributesIn = (pairs) => {
-    const list = Array.isArray(pairs) ? pairs : [];
+    const list = Array.isArray(pairs) ? pairs : pairs && typeof pairs === 'object' ? Object.entries(pairs) : [];
     const p = scratch(size('ta_otlp_attribute') * (list.length || 1), 4);
     list.forEach(([k, v], i) => {
       putView(p + size('ta_otlp_attribute') * i, String(k));
@@ -860,8 +899,11 @@ export function createNative(instance) {
   const hexPair = (s) => (/^[0-9a-fA-F]{32}$/.test(s) ? [BigInt(`0x${s.slice(0, 16)}`), BigInt(`0x${s.slice(16)}`)] : null);
   const hex64 = (s) => (/^[0-9a-fA-F]{16}$/.test(s) ? BigInt(`0x${s}`) : null);
 
-  /* a metric of core.mjs onto an encoder */
+  /* a metric of the API ({ name, unit, kind: "sum" | "gauge" | "histogram", points }) onto an
+   * encoder; ERROR.INVALID when it is malformed */
   function metricAdd(otlp, metric, start, time) {
+    const kind = metric && typeof metric === 'object' ? METRIC_KINDS.indexOf(metric.kind) : -1;
+    if (kind < 1 || typeof metric.name !== 'string' || !Array.isArray(metric.points)) return ERROR.INVALID;
     return scoped(() => {
       const points = Array.isArray(metric.points) ? metric.points : [];
       const PT = offsets('ta_otlp_point');
@@ -871,7 +913,7 @@ export function createNative(instance) {
         const [attributes, count] = attributesIn(point.attributes);
         setU32(p + PT.attributes, attributes);
         setU32(p + PT.attribute_count, count);
-        if (point.integer) {
+        if (Number.isSafeInteger(point.value)) {
           fresh();
           dv.setBigInt64(p + PT.integer, BigInt(Math.trunc(point.value || 0)), true);
         } else {
@@ -910,7 +952,7 @@ export function createNative(instance) {
       const m = zeroed(size('ta_otlp_metric'));
       putView(m + M.name, metric.name === undefined ? '' : String(metric.name));
       putView(m + M.unit, metric.unit === undefined ? '' : String(metric.unit));
-      setU32(m + M.kind, metric.kind >>> 0);
+      setU32(m + M.kind, kind);
       setU32(m + M.points, array);
       setU32(m + M.point_count, points.length);
       setU64(m + M.start_ns, start);
@@ -974,7 +1016,7 @@ export function createNative(instance) {
       for (const metric of Array.isArray(metrics) ? metrics : []) {
         let status;
         while ((status = metricAdd(encoder.otlp, metric, start, time)) === ERROR.NO_MEMORY) grow();
-        if (status !== OK) throw new TypeError('metricsToOTLP: a metric is malformed');
+        if (status !== OK) throw new TypeError('metricsToOTLP: a metric needs a name, a kind ("sum", "gauge" or "histogram") and points');
       }
       return scoped(() => {
         const n = x.ta_otlp_metrics_size(encoder.otlp);
@@ -987,13 +1029,14 @@ export function createNative(instance) {
     }
   }
 
-  return { ...pure, ...systems({ x, K, u8: bytesAt, u32, i32, setU32, u64, n64, setU64, text, copyOut, view, viewLength, malloc, free, allocBytes, scratch, zeroed, mark, release, scoped, utf8, putView, viewOf, bytesIn, out32, out64, asBytes, tableFunctions, NativeImage, imageOf, imageHash, chartSource, sourceName, stringOfImage, traceparentOf, otlpNew, otlpRelocate, otlpStats, attributesIn, metricsRequest, hashText }) };
+  return { ...pure, ...systems({ x, K, u8: bytesAt, u32, i32, setU32, u64, n64, setU64, text, copyOut, view, viewLength, malloc, free, allocBytes, scratch, zeroed, mark, release, scoped, utf8, putView, viewOf, bytesIn, out32, out64, asBytes, tableFunctions, NativeImage, imageOf, imageHash, chartSource, sourceName, stringOfImage, traceparentOf, otlpNew, otlpRelocate, otlpStats, attributesIn, metricsRequest, metricsValue, hashText }) };
 }
 
 /* ---- systems: a ta_host, its datamodel, its run loop ---------------------------------------- */
 
 function systems(m) {
-  const { x, K, u32, i32, setU32, u64, n64, setU64, text, copyOut, view, malloc, free, scratch, zeroed, mark, release, scoped, putView, viewOf, bytesIn, out32, out64, asBytes, tableFunctions, NativeImage, imageOf, imageHash, chartSource, sourceName, stringOfImage, traceparentOf, otlpNew, otlpRelocate, otlpStats, attributesIn, metricsRequest, hashText } = m;
+  const { x, K, u32, i32, setU32, u64, n64, setU64, text, copyOut, view, malloc, free, scratch, zeroed, mark, release, scoped, putView, viewOf, bytesIn, out32, out64, asBytes, tableFunctions, NativeImage, imageOf, imageHash, chartSource, sourceName, stringOfImage, traceparentOf, otlpNew, otlpRelocate, otlpStats, attributesIn, metricsRequest, metricsValue, hashText, viewLength } = m;
+  const bytesAt = m.u8;
   const EFFECT = offsets('ta_host_effect');
   const EFFECT_SIZE = size('ta_host_effect');
   const EVENT_IN = offsets('ta_event_in');
@@ -1651,33 +1694,53 @@ function systems(m) {
     else engine('release')(sys.quickjs, BigInt(p));
   };
 
-  /* ---- system handles */
-  const systemOf = (handle, allow = 0) => {
+  /* ---- system handles (bindings/node/src/system.c) */
+  /* The system of a call: refused once it stopped, and from inside a run (an
+   * expression calling into its system; later() queues such calls). From an
+   * effect handler (running 2) or a synchronous send (running 3) inputs go
+   * in and the pump that is running goes on. */
+  const systemOf = (handle) => {
     const sys = handle && handle.__system;
     if (!sys) throw new TypeError('expected a system handle');
-    if (!sys.host) throw new Error('the system was stopped');
-    if (sys.running && sys.running !== allow) throw new Error('the system is running (calls into it do not nest)');
+    if (!sys.host || sys.stopping) throw new Error('the system was stopped');
+    if (sys.running === 1) throw new Error('the system is running (an expression cannot call into its system)');
     return sys;
   };
-  const reading = (handle) => systemOf(handle, 2);
-  const input = (handle) => systemOf(handle, 3);
+  const session = (v) => {
+    const d = Number(v);
+    return d > 0 ? BigInt(Math.trunc(d)) : 0n;
+  };
+  const decimal = (v) => BigInt(String(v).replace(/[^0-9].*$/, '') || 0);
+  const ticks = (ms) => BigInt(Math.max(0, Math.trunc(Number(ms) || 0)));
+  const NEVER = 0xffffffffffffffffn;
 
+  /* config: { systemID, ecmascript: 'native' | 'quickjs', ioProcessors: [{ type, location, sync }],
+   * maxActors, maxEvents, maxTimers, stringBytes, seed: [high, low], maxOps, memoryLimit, now } */
   function systemNew(callbacks, options) {
-    const id = String(options.systemID || '');
+    const id = typeof options.systemID === 'string' ? options.systemID : '';
     if (!scoped(() => x.ta_address_system_valid(viewOf(id)))) throw new TypeError('createSystem: systemID is not a valid system id (docs/protocol.md)');
     const key = nextKey++;
+    const start = typeof options.now === 'number' && options.now > 0 ? options.now : 0; /* a restored system's time */
     const sys = {
       key,
+      id,
       host: 0,
       callbacks,
       native: options.ecmascript !== 'quickjs',
       quickjs: 0,
       running: 0,
+      more: false,
+      stopping: false,
+      armed: -3,
+      timeBase: performance.now() - start,
+      later: [],
       keepQuiet: false,
       pump: 0,
       changed: [],
       graves: [],
       failures: [],
+      effectList: null,
+      syncList: [],
       instances: [],
       freeInstance: 0,
       liveInstances: 0,
@@ -1691,10 +1754,22 @@ function systems(m) {
       sessions: new Map(),
       images: [],
       io: [],
-      error: '',
+      invocations: [],
+      parked: new Map(),
+      wakeHeld: [],
+      jobs: new Map(),
+      links: 0,
+      exporter: 0,
+      exportSignals: 0,
+      exportFlush: 0,
       otlp: null,
+      otlpFlags: 0,
+      watchValues: false,
+      traceSink: false,
       traces: [],
       logs: [],
+      runs: { buckets: new Array(RUN_BOUNDS.length + 1).fill(0), count: 0, sum: 0, min: 0, max: 0 },
+      error: '',
       evaluating: null,
       blocks: [],
     };
@@ -1713,8 +1788,8 @@ function systems(m) {
       sys.quickjs = scoped(() => {
         const config = zeroed(size('ta_datamodel_ecmascript_config'));
         setU32(config, size('ta_datamodel_ecmascript_config'));
-        setU32(config + at('ta_datamodel_ecmascript_config', 'max_ops'), options.maxOps >>> 0);
-        setU32(config + at('ta_datamodel_ecmascript_config', 'memory_limit'), options.memoryLimit >>> 0);
+        setU32(config + at('ta_datamodel_ecmascript_config', 'max_ops'), typeof options.maxOps === 'number' ? options.maxOps >>> 0 : 0);
+        setU32(config + at('ta_datamodel_ecmascript_config', 'memory_limit'), typeof options.memoryLimit === 'number' ? options.memoryLimit >>> 0 : 0);
         return x.ta_datamodel_ecmascript_new(config);
       });
       if (!sys.quickjs) throw new Error('cannot create the quickjs datamodel');
@@ -1727,44 +1802,53 @@ function systems(m) {
     setU32(binding + 4, datamodel);
     sys.blocks.push(binding);
     sys.binding = binding;
+    /* strings that live as long as the system */
+    const kept = (s) => {
+      const bytes = encoder.encode(s);
+      const q = malloc(bytes.length || 1, 1);
+      bytesAt().set(bytes, q);
+      sys.blocks.push(q);
+      return [q, bytes.length];
+    };
     /* I/O processors: descriptors whose strings live as long as the system */
-    const io = (options.ioProcessors || []).slice(0, IO_PROCESSORS_MAX);
+    const io = (Array.isArray(options.ioProcessors) ? options.ioProcessors : []).slice(0, IO_PROCESSORS_MAX);
     const descriptors = malloc(size('ta_io_processor_descriptor') * (io.length || 1), 8);
     sys.blocks.push(descriptors);
     io.forEach((entry, i) => {
       const p = descriptors + size('ta_io_processor_descriptor') * i;
-      for (const [field, value] of [['type', entry.type], ['location', entry.location]]) {
-        const bytes = encoder.encode(String(value === undefined ? '' : value));
-        const q = malloc(bytes.length || 1, 1);
-        m.u8().set(bytes, q);
-        sys.blocks.push(q);
+      const type = typeof entry.type === 'string' ? entry.type : '';
+      const location = typeof entry.location === 'string' ? entry.location : '';
+      for (const [field, value] of [['type', type], ['location', location]]) {
+        const [q, n] = kept(value);
         setU32(p + at('ta_io_processor_descriptor', field), q);
-        setU32(p + at('ta_io_processor_descriptor', field) + 4, bytes.length);
+        setU32(p + at('ta_io_processor_descriptor', field) + 4, n);
       }
-      setU32(p + at('ta_io_processor_descriptor', 'flags'), entry.sync ? K.IO_PROCESSOR_SYNC : 0);
+      setU32(p + at('ta_io_processor_descriptor', 'flags'), entry.sync === true ? K.IO_PROCESSOR_SYNC : 0);
       setU32(p + at('ta_io_processor_descriptor', 'pad'), 0);
-      sys.io.push({ sync: !!entry.sync, type: String(entry.type), location: String(entry.location === undefined ? '' : entry.location) });
+      sys.io.push({ sync: entry.sync === true, type, location });
     });
-    const idBytes = encoder.encode(id);
-    const idPointer = malloc(idBytes.length || 1, 1);
-    m.u8().set(idBytes, idPointer);
-    sys.blocks.push(idPointer);
+    const [idPointer, idLength] = kept(id);
+    sys.idView = malloc(8, 4); /* the system id as a ta_string_view (the links' config) */
+    sys.blocks.push(sys.idView);
+    setU32(sys.idView, idPointer);
+    setU32(sys.idView + 4, idLength);
     const config = malloc(size('ta_host_config'), 8);
     sys.blocks.push(config);
-    m.u8().fill(0, config, config + size('ta_host_config'));
+    bytesAt().fill(0, config, config + size('ta_host_config'));
     const H = offsets('ta_host_config');
     const S = H.system;
     const SC = offsets('ta_system_config');
+    const count = (v, otherwise) => (typeof v === 'number' && v > 0 ? v >>> 0 : otherwise);
     setU32(config + H.size, size('ta_host_config'));
     setU32(config + H.system_id, idPointer);
-    setU32(config + H.system_id + 4, idBytes.length);
+    setU32(config + H.system_id + 4, idLength);
     setU32(config + S + SC.size, size('ta_system_config'));
     setU64(config + S + SC.ticks_per_second, 1000n); /* ms */
     setU32(config + S + SC.trace_rules, 64); /* watches add rules (docs/adr/0007) */
-    setU32(config + S + SC.max_actors, options.maxActors > 0 ? options.maxActors : 64);
-    setU32(config + S + SC.max_events, options.maxEvents > 0 ? options.maxEvents : 256);
-    setU32(config + S + SC.max_timers, options.maxTimers > 0 ? options.maxTimers : 64);
-    setU32(config + S + SC.string_bytes, options.stringBytes > 0 ? options.stringBytes : 32768);
+    setU32(config + S + SC.max_actors, count(options.maxActors, 64));
+    setU32(config + S + SC.max_events, count(options.maxEvents, 256));
+    setU32(config + S + SC.max_timers, count(options.maxTimers, 64));
+    setU32(config + S + SC.string_bytes, count(options.stringBytes, 32768));
     if (Array.isArray(options.seed) && options.seed.length === 2) setU64(config + S + SC.trace_seed, (BigInt(options.seed[0] >>> 0) << 32n) | BigInt(options.seed[1] >>> 0));
     setU32(config + H.datamodels, binding);
     setU32(config + H.datamodel_count, 1);
@@ -1775,9 +1859,17 @@ function systems(m) {
     return sys;
   }
 
+  /* Free the host and everything of the system now: callbacks can close over
+   * the JS owner of the handle. Migrations end with nothing moved. */
   function systemDestroy(sys) {
     if (!sys.host && !sys.binding) return;
     sys.keepQuiet = true;
+    for (const resolve of sys.jobs.values()) resolve({ migrated: 0, failed: 0, pending: [] });
+    sys.jobs.clear();
+    if (sys.links) x.ta_links_free(sys.links);
+    sys.links = 0;
+    if (sys.exporter) x.ta_otlp_batch_free(sys.exporter);
+    sys.exporter = 0;
     if (sys.host) x.ta_host_free(sys.host);
     sys.host = 0;
     if (sys.quickjs) x.ta_datamodel_ecmascript_free(sys.quickjs);
@@ -1793,10 +1885,46 @@ function systems(m) {
     sys.payloads = [];
     sys.charts.clear();
     sys.sessions.clear();
+    sys.invocations = [];
+    sys.parked.clear();
+    sys.later = [];
+    sys.callbacks = null;
   }
   const handleOf = (sys) => ({ __system: sys });
 
-  /* ---- tracing */
+  /* The system's time in ms: the caller's clock (callbacks.now), else the monotonic one. */
+  const systemNow = (sys) => {
+    if (sys.callbacks.now) {
+      const ms = sys.callbacks.now();
+      return typeof ms === 'number' && ms > 0 ? ms : 0;
+    }
+    return performance.now() - sys.timeBase;
+  };
+  const tickNow = (sys) => ticks(systemNow(sys));
+
+  /* later(system, fn) -> true when called from inside a run (an expression
+   * calling into its system): fn is called between two runs, in order with the
+   * others; false otherwise (the caller goes on at once). */
+  const later = (handle, fn) => {
+    const sys = handle && handle.__system;
+    if (!sys || sys.running !== 1 || !sys.host || sys.stopping) return false;
+    sys.later.push(fn);
+    return true;
+  };
+  /* the calls kept during the last run, in order; the first one thrown is returned */
+  const callLater = (sys) => {
+    let thrown = null;
+    for (const f of sys.later.splice(0)) {
+      try {
+        f();
+      } catch (error) {
+        if (!thrown) thrown = { error };
+      }
+    }
+    return thrown;
+  };
+
+  /* ---- tracing (src/trace.c) */
   const traceWall = (sys) => {
     const ms = sys.callbacks.clock ? Number(sys.callbacks.clock()) : 0;
     return ms > 0 ? BigInt(Math.trunc(ms * 1e6)) : 0n;
@@ -1842,7 +1970,7 @@ function systems(m) {
           if (sys.otlp) {
             setU32(input_, size('ta_otlp_input'));
             setU32(input_ + I.source, k);
-            m.u8().copyWithin(input_ + I.view, view_, view_ + size('ta_trace_view'));
+            bytesAt().copyWithin(input_ + I.view, view_, view_ + size('ta_trace_view'));
             setU32(input_ + I.image, u32(segmentInfo + at('ta_host_segment_info', 'image')));
             setU32(input_ + I.datamodels, sys.binding);
             setU32(input_ + I.datamodel_count, 1);
@@ -1869,8 +1997,334 @@ function systems(m) {
     return out;
   };
 
-  /* ---- the run loop */
-  const effectBase = (kind, e) => ({ kind, session: n64(e + EFFECT.session) });
+  /* ---- the trace options of the API, as the host takes them (ta_host_trace_options) */
+  const SAMPLE_WHOLE = 1000000;
+  const WATCH_MS = 15 * 60 * 1000; /* a watch ends by itself after this, unless told */
+  const RULE_AT = [['start', K.TRACE_AT_START], ['take', K.TRACE_AT_TAKE]];
+  const RULE_FROM = [['host', K.TRACE_FROM_HOST], ['actor', K.TRACE_FROM_ACTOR], ['timer', K.TRACE_FROM_TIMER], ['spawn', K.TRACE_FROM_SPAWN], ['sampled', K.TRACE_FROM_SAMPLED], ['unsampled', K.TRACE_FROM_UNSAMPLED]];
+  /* names (one, or an array of them) as bits of `table` */
+  const bitsOf = (v, table, what) => {
+    let bits = 0;
+    if (v === undefined) return bits;
+    for (const name of Array.isArray(v) ? v : [v]) {
+      const entry = typeof name === 'string' && table.find(([n]) => n === name);
+      if (!entry) throw new TypeError(`${what}: one of ${table.slice(0, 3).map(([n]) => n).join(', ')}${table.length > 3 ? ', ...' : ''}`);
+      bits |= entry[1];
+    }
+    return bits >>> 0;
+  };
+  /* an array of kind names as a mask (ta_trace_kind_by_name) */
+  const kindsMask = (names) => {
+    let mask = 0;
+    for (const name of names) {
+      const kind = typeof name === 'string' ? scoped(() => x.ta_trace_kind_by_name(viewOf(name))) : 0;
+      if (!kind) throw new TypeError('not a trace kind (see TRACE_KINDS)');
+      mask |= 1 << kind;
+    }
+    return mask >>> 0;
+  };
+  const DETAIL_ANY = 'detail: "summary", "decisions", "full", "off" or { kinds, values }';
+  /* a detail's kinds: "summary" | "decisions" | "full" | "off" | { kinds, values }; full
+   * when undefined; `top`: the system's own detail, where "off" is no detail */
+  const detailKinds = (detail, kinds, values, top) => {
+    let out;
+    if (Array.isArray(kinds)) out = kindsMask(kinds);
+    else if (detail === undefined) out = K.TRACE_FULL;
+    else if (typeof detail === 'string') {
+      out = scoped(() => {
+        const o = out32();
+        return x.ta_trace_detail_by_name(viewOf(detail), o) === OK ? u32(o) : null;
+      });
+      if (out === null || (top && detail === 'off')) throw new TypeError(top ? 'detail: "summary", "decisions" or "full"' : 'detail: "summary", "decisions", "full" or "off"');
+    } else if (detail && typeof detail === 'object') {
+      if (!Array.isArray(detail.kinds)) throw new TypeError(DETAIL_ANY);
+      out = kindsMask(detail.kinds);
+      values = values || detail.values === true;
+    } else throw new TypeError(DETAIL_ANY);
+    return (values ? out | K.TRACE_VALUES : out) >>> 0;
+  };
+  /* a ratio from 0 to 1 as parts of SAMPLE_WHOLE (all of them when undefined) */
+  const sampleParts = (v) => {
+    if (v === undefined) return SAMPLE_WHOLE;
+    const ratio = typeof v === 'number' ? v : -1;
+    if (!(ratio >= 0 && ratio <= 1)) throw new RangeError('sample: a ratio from 0 to 1');
+    return Math.trunc(ratio * SAMPLE_WHOLE + 0.5);
+  };
+  const numberOr0 = (v) => (typeof v === 'number' ? v : 0);
+  /* a rule of the API ({ at, from, chart, actor, event, session, sample, detail, values,
+   * perSecond, burst }) as the fields of a ta_trace_rule */
+  const ruleOf = (rule) => {
+    if (!rule || typeof rule !== 'object') throw new TypeError('a trace rule is an object');
+    const r = { sample: 0, parts: 0, whole: 0, session: 0n, detail: NIL };
+    if (typeof rule.sample === 'boolean') r.sample = rule.sample ? K.TRACE_SAMPLE : K.TRACE_DROP;
+    else if (rule.sample !== undefined) {
+      r.sample = K.TRACE_RATIO;
+      r.whole = SAMPLE_WHOLE;
+      r.parts = sampleParts(rule.sample);
+    }
+    for (const field of ['chart', 'actor', 'event']) r[field] = typeof rule[field] === 'string' ? rule[field] : '';
+    if (rule.session !== undefined) r.session = decimal(rule.session);
+    r.at = bitsOf(rule.at, RULE_AT, 'at');
+    r.from = bitsOf(rule.from, RULE_FROM, 'from');
+    if (rule.detail !== undefined) r.detail = detailKinds(rule.detail, undefined, rule.values === true, false);
+    r.perSecond = numberOr0(rule.perSecond) >>> 0;
+    r.burst = numberOr0(rule.burst) >>> 0;
+    return r;
+  };
+  /* rules as a ta_trace_rule array in scratch */
+  const rulesIn = (rules) => {
+    const R = offsets('ta_trace_rule');
+    const array = zeroed(size('ta_trace_rule') * (rules.length || 1));
+    rules.forEach((r, i) => {
+      const p = array + size('ta_trace_rule') * i;
+      setU32(p + R.size, size('ta_trace_rule'));
+      setU32(p + R.at, r.at);
+      for (const field of ['chart', 'actor', 'event']) putView(p + R[field], r[field]);
+      setU64(p + R.session, r.session);
+      setU32(p + R.from, r.from);
+      setU32(p + R.sample, r.sample);
+      setU32(p + R.sample_parts, r.parts);
+      setU32(p + R.sample_whole, r.whole);
+      setU32(p + R.detail, r.detail);
+      setU32(p + R.per_second, r.perSecond);
+      setU32(p + R.burst, r.burst);
+    });
+    return array;
+  };
+  const traceStatusError = (status) =>
+    new Error(status === ERROR.NO_MEMORY ? 'traces: more rules than a system holds (64), more than 6 different details in rules and watches, or no memory' : 'traces: a rule is malformed, or names more than 16 actors');
+  /* the encoder's flags with what the watches need (their values) */
+  const encoderFlags = (sys) => {
+    if (sys.otlp) x.ta_otlp_set_flags(sys.otlp.otlp, (sys.otlpFlags | (sys.watchValues ? K.OTLP_VALUES : 0)) >>> 0);
+  };
+
+  /* ---- external invocations (src/invoke.c) */
+  const invocationAt = (sys, segment, token) => sys.invocations.find((inv) => inv.segment === segment && inv.token === token);
+  const invocationDrop = (sys, inv) => {
+    const i = sys.invocations.indexOf(inv);
+    if (i >= 0) {
+      sys.invocations[i] = sys.invocations[sys.invocations.length - 1];
+      sys.invocations.pop();
+    }
+  };
+  /* TA_EFFECT_INVOKE: a new invocation { session, segment, token, invokeid }, kept */
+  const invocationNew = (sys, e) => {
+    const object = { session: n64(e + EFFECT.session), segment: u32(e + EFFECT.segment), token: u32(e + EFFECT.token), invokeid: view(e + EFFECT.sendid) };
+    sys.invocations.push({ segment: object.segment, token: object.token, session: object.session, invokeid: object.invokeid, object });
+    return object;
+  };
+  /* the invocation a TA_EFFECT_SEND is for (an invoked service, or "#_<invokeid>"), if any */
+  const invocationOfSend = (sys, e, target) => {
+    let inv;
+    const token = u32(e + EFFECT.token);
+    if (u32(e + EFFECT.io_processor) === NIL && token) inv = invocationAt(sys, u32(e + EFFECT.segment), token);
+    if (!inv && target.length > 2 && target.startsWith('#_')) {
+      const session = n64(e + EFFECT.session);
+      inv = sys.invocations.find((c) => c.session === session && c.invokeid === target.slice(2));
+    }
+    return inv ? inv.object : undefined;
+  };
+
+  /* ---- hibernated actors in flight: a blob until the store has it, a wake asked (src/persist.c) */
+  const parkedAdd = (sys, session) => {
+    let p = sys.parked.get(session);
+    if (!p) sys.parked.set(session, (p = { blob: null, waking: false, woken: false }));
+    return p;
+  };
+  /* A TA_EFFECT_WAKE: true when the caller is to load the blob (once per actor);
+   * a blob still held is woken from after the run's effects (wakeHeld) */
+  const wakeEffect = (sys, session) => {
+    const p = sys.parked.get(session);
+    if (p && p.blob) {
+      sys.wakeHeld.push(session);
+      return false;
+    }
+    if (p && p.waking) return false;
+    parkedAdd(sys, session).waking = true;
+    return true;
+  };
+  /* ta_host_wake with no calls in meanwhile (charts attach, blobs are read) */
+  const wakeFrom = (sys, sessionID, bytes) => {
+    const was = sys.running;
+    sys.running = 1;
+    try {
+      return scoped(() => x.ta_host_wake(sys.host, BigInt(sessionID), bytesIn(bytes), bytes.length));
+    } finally {
+      sys.running = was;
+    }
+  };
+  const wakeHeld = (sys) => {
+    sys.more = true; /* their work runs in this pump */
+    for (const s of sys.wakeHeld.splice(0)) {
+      const p = sys.parked.get(s);
+      if (!p) continue;
+      if (p.blob) wakeFrom(sys, s, p.blob);
+      p.blob = null; /* stored() says the store's copy is stale */
+      p.woken = true;
+    }
+  };
+
+  /* ---- links (src/link.c) */
+  const LINK_OPERATIONS = ['', 'send', 'close', 'open', 'hello'];
+  /* the system's links, made with the first one */
+  const linksOf = (sys) => {
+    if (sys.links) return sys.links;
+    sys.links = scoped(() => {
+      const L = offsets('ta_links_config');
+      const config = zeroed(size('ta_links_config'));
+      setU32(config + L.size, size('ta_links_config'));
+      setU32(config + L.host, sys.host);
+      bytesAt().copyWithin(config + L.system_id, sys.idView, sys.idView + 8);
+      setU32(config + L.datamodels, sys.binding);
+      setU32(config + L.datamodel_count, 1);
+      x.ta_runtime_malloc(config + L.allocator);
+      const out = out32();
+      return x.ta_links_new(config, out) === OK ? u32(out) : 0;
+    });
+    if (!sys.links) throw new Error('links: no memory');
+    return sys.links;
+  };
+  /* what the links asked of the transports, as effects { kind: 'link', op, connection, text } */
+  const linksOutput = (sys) => {
+    if (!sys.links) return;
+    scoped(() => {
+      const out = out32();
+      const n = x.ta_links_output(sys.links, out);
+      const O = offsets('ta_link_output');
+      for (let i = 0; i < n; i++) {
+        const p = u32(out) + size('ta_link_output') * i;
+        const kind = u32(p + O.kind);
+        const e = { kind: 'link', op: LINK_OPERATIONS[kind] || '', connection: u32(p + O.connection) };
+        if (viewLength(p + O.text)) e.text = view(p + O.text);
+        sys.effectList.push(e);
+      }
+      x.ta_links_output_ack(sys.links);
+    });
+  };
+  /* the router's view of a peer (ta_host_peer_status), or null when it is gone */
+  const peerStatus = (sys, peer) =>
+    scoped(() => {
+      const P = offsets('ta_peer_status');
+      const s = zeroed(size('ta_peer_status'));
+      setU32(s, size('ta_peer_status'));
+      if (!peer || x.ta_host_peer_status(sys.host, peer, s) !== OK) return null;
+      return {
+        id: view(s + P.id),
+        state: ['connecting', 'open', 'reconnecting', 'closed'][u32(s + P.state) & 3],
+        queued: u32(s + P.queued),
+        rtt: u32(s + P.round_trip_time),
+        lag: n64(s + P.lag),
+        sent: n64(s + P.sent),
+        received: n64(s + P.received),
+        errors: n64(s + P.errors),
+        duplicates: n64(s + P.duplicates),
+      };
+    });
+  /* string views of an array of strings, in scratch */
+  const viewsIn = (list) => {
+    const p = scratch(8 * (list.length || 1), 4);
+    list.forEach((s, i) => putView(p + 8 * i, typeof s === 'string' ? s : ''));
+    return p;
+  };
+  /* { trusted, judge, announce (true or ids), maxQueue, queueTTLMs, resumeMs, pingMs,
+   * maxFrame, name, credential (JSON text), exports: [[name, events], ...] } */
+  const linkOpen = (handle, o, server) => {
+    const sys = systemOf(handle);
+    const links = linksOf(sys);
+    const status = scoped(() => {
+      const L = offsets('ta_link_options');
+      const p = zeroed(size('ta_link_options'));
+      setU32(p + L.size, size('ta_link_options'));
+      let flags = 0;
+      if (o.trusted === true) flags |= K.LINK_TRUSTED;
+      if (o.judge === true) flags |= K.LINK_JUDGE;
+      if (Array.isArray(o.announce) || o.announce === true) flags |= K.LINK_ANNOUNCE;
+      setU32(p + L.flags, flags);
+      setU32(p + L.max_queue, numberOr0(o.maxQueue) >>> 0);
+      setU64(p + L.queue_ttl, ticks(o.queueTTLMs));
+      setU64(p + L.resume, ticks(o.resumeMs));
+      setU64(p + L.ping_interval, ticks(o.pingMs));
+      setU32(p + L.max_frame, numberOr0(o.maxFrame) >>> 0);
+      putView(p + L.name, typeof o.name === 'string' ? o.name : '');
+      putView(p + L.credential, typeof o.credential === 'string' ? o.credential : '');
+      if (Array.isArray(o.announce)) {
+        setU32(p + L.announce, viewsIn(o.announce));
+        setU32(p + L.announce_count, o.announce.length);
+      }
+      const exports = Array.isArray(o.exports) ? o.exports : [];
+      setU32(p + L.exports, viewsIn(exports.map((pair) => pair && pair[0])));
+      setU32(p + L.export_events, viewsIn(exports.map((pair) => pair && pair[1])));
+      setU32(p + L.export_count, exports.length);
+      const out = out32();
+      const s = server ? x.ta_links_serve(links, p, out) : x.ta_links_connect(links, p, tickNow(sys), out);
+      return s === OK ? { handle: u32(out) } : { status: s };
+    });
+    if (status.status !== undefined) throw new Error(status.status === ERROR.INVALID ? 'createLink: name is not a system id' : 'links: cannot add the peer');
+    return status.handle; /* the next pump asks for a link's transport */
+  };
+  /* the system and its links of a call (system, handle, ...) */
+  const linksCall = (handle) => {
+    const sys = systemOf(handle);
+    linksOf(sys);
+    return sys;
+  };
+
+  /* ---- the exporter (src/export.c) */
+  const SIGNALS = ['traces', 'logs', 'metrics'];
+  /* bytes of a signal for the exporter, when it posts that signal */
+  const exporterAdd = (sys, signal, bytes) => {
+    if (sys.exporter && bytes && bytes.length && sys.exportSignals & (1 << signal)) scoped(() => x.ta_otlp_batch_add(sys.exporter, signal, bytesIn(bytes), bytes.length, tickNow(sys)));
+  };
+  /* the bodies of ta_otlp_batch_next (mode: 0, flush, drain) as { signal, body } */
+  const exporterNext = (sys, mode, each) => {
+    if (!sys.exporter) return;
+    scoped(() => {
+      const signal = out32();
+      const body = zeroed(8, 4);
+      const now = tickNow(sys);
+      while (x.ta_otlp_batch_next(sys.exporter, now, mode, signal, body)) each({ signal: SIGNALS[u32(signal)], body: copyOut(u32(body), u32(body + 4)) });
+    });
+  };
+  /* the bodies due (all of them when flushing), as effects { kind: 'post', signal, body } */
+  const exporterOutput = (sys) => {
+    exporterNext(sys, sys.exportFlush, (post) => sys.effectList.push({ kind: 'post', ...post }));
+    sys.exportFlush = 0;
+  };
+  const exporterDeadline = (sys) => (sys.exporter ? x.ta_otlp_batch_deadline(sys.exporter) : NEVER);
+
+  /* ---- metrics (src/metrics.c) */
+  const RUN_BOUNDS = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25];
+  const runRecord = (sys, seconds) => {
+    const runs = sys.runs;
+    let bucket = 0;
+    while (bucket < RUN_BOUNDS.length && seconds > RUN_BOUNDS[bucket]) bucket++;
+    runs.buckets[bucket]++;
+    runs.min = runs.count && runs.min < seconds ? runs.min : seconds;
+    runs.max = runs.count && runs.max > seconds ? runs.max : seconds;
+    runs.count++;
+    runs.sum += seconds;
+  };
+  /* the binding's own metrics: tinyactors.run.duration (how long each pump held the
+   * thread) and, with an exporter, tinyactors.telemetry.bytes by outcome */
+  const ownMetrics = (sys) => {
+    const runs = sys.runs;
+    const metrics = [{ name: 'tinyactors.run.duration', unit: 's', kind: 'histogram', points: [{ count: runs.count, sum: runs.sum, min: runs.min, max: runs.max, bounds: RUN_BOUNDS, buckets: runs.buckets }] }];
+    if (sys.exporter) {
+      const stats = exportStats(sys);
+      metrics.push({ name: 'tinyactors.telemetry.bytes', unit: 'By', kind: 'sum', points: ['posted', 'failed', 'dropped'].map((outcome) => ({ attributes: { 'tinyactors.telemetry.outcome': outcome }, value: stats[outcome] })) });
+    }
+    return metrics;
+  };
+  const exportStats = (sys) =>
+    scoped(() => {
+      const B = offsets('ta_otlp_batch_stats');
+      const stats = zeroed(size('ta_otlp_batch_stats'));
+      setU32(stats, size('ta_otlp_batch_stats'));
+      if (sys.exporter) x.ta_otlp_batch_stats_get(sys.exporter, stats);
+      return { posted: n64(stats + B.posted), failed: n64(stats + B.failed), dropped: n64(stats + B.dropped), waiting: n64(stats + B.waiting), inFlight: u32(stats + B.in_flight) };
+    });
+
+  /* ---- the run loop (src/system.c) */
   const graveContext = (sys, serial) => {
     for (const [s, context] of sys.graves) if (s === serial) return context;
     return undefined;
@@ -1892,10 +2346,24 @@ function systems(m) {
       }
       x.ta_host_resume(sys.host, segment, u32(e + EFFECT.token), chart === NIL ? ERROR.INVALID : OK, chart === NIL ? 0n : BigInt(chart + 1));
     });
+  /* TA_HOST_EFFECT_JOB_DONE: migrate()'s promise */
+  const jobDone = (sys, e) => {
+    const job = u32(e + EFFECT.job);
+    const resolve = sys.jobs.get(job);
+    if (!resolve) return;
+    sys.jobs.delete(job);
+    const pending = scoped(() => {
+      const n = x.ta_host_job_pending(sys.host, job, 0, 0);
+      const buffer = scratch(8 * (n || 1), 8);
+      const k = x.ta_host_job_pending(sys.host, job, buffer, n);
+      return Array.from({ length: k }, (_, i) => n64(buffer + 8 * i));
+    });
+    resolve({ migrated: u32(e + EFFECT.migrated), failed: u32(e + EFFECT.failed), pending });
+  };
   const traceparentAt = (e) => traceparentOf(e + EFFECT.trace);
-  function effectOut(sys, e, list, syncList) {
-    const kind = u32(e + EFFECT.kind);
-    switch (kind) {
+  function effectOut(sys, e) {
+    const list = sys.effectList;
+    switch (u32(e + EFFECT.kind)) {
       case K.EFFECT_LOG:
         list.push({ kind: 'log', session: n64(e + EFFECT.session), root: n64(e + EFFECT.root), label: view(e + EFFECT.auxiliary), text: view(e + EFFECT.event) });
         break;
@@ -1911,20 +2379,24 @@ function systems(m) {
       }
       case K.EFFECT_SEND: {
         const io = u32(e + EFFECT.io_processor);
-        /* a synchronous processor's send is answered before the next run */
-        (io < sys.io.length && sys.io[io].sync ? syncList : list).push({
+        const target = view(e + EFFECT.target);
+        const out = {
           kind: 'send',
           session: n64(e + EFFECT.session),
           root: n64(e + EFFECT.root),
           segment: u32(e + EFFECT.segment),
           token: u32(e + EFFECT.token),
           ioProcessor: io === NIL ? -1 : io,
-          target: view(e + EFFECT.target),
+          target,
           event: view(e + EFFECT.event),
           sendid: view(e + EFFECT.sendid),
           data: valueOfPayload(sys, n64(e + EFFECT.payload), u32(e + EFFECT.datamodel)),
           traceparent: traceparentAt(e),
-        });
+        };
+        const receiving = invocationOfSend(sys, e, target); /* an invoked service */
+        if (receiving) out.invocation = receiving;
+        /* a synchronous processor's send is answered before the next run (pump) */
+        (io < sys.io.length && sys.io[io].sync ? sys.syncList : list).push(out);
         break;
       }
       case K.EFFECT_INVOKE:
@@ -1938,86 +2410,60 @@ function systems(m) {
           invokeid: view(e + EFFECT.sendid),
           params: valueOfPayload(sys, n64(e + EFFECT.payload), u32(e + EFFECT.datamodel)),
           traceparent: traceparentAt(e),
+          invocation: invocationNew(sys, e),
         });
         break;
-      case K.EFFECT_UNINVOKE:
-        list.push({ kind: 'uninvoke', session: n64(e + EFFECT.session), segment: u32(e + EFFECT.segment), token: u32(e + EFFECT.token) });
+      case K.EFFECT_UNINVOKE: {
+        /* an invocation core.mjs knows of */
+        const inv = invocationAt(sys, u32(e + EFFECT.segment), u32(e + EFFECT.token));
+        if (!inv) break;
+        invocationDrop(sys, inv);
+        list.push({ kind: 'uninvoke', invocation: inv.object });
         break;
-      case K.EFFECT_WAKE:
-        list.push(effectBase('wake', e));
+      }
+      case K.EFFECT_WAKE: {
+        /* the caller loads the blob, unless it is still held */
+        const session = n64(e + EFFECT.session);
+        if (wakeEffect(sys, session)) list.push({ kind: 'wake', session });
         break;
+      }
       case K.EFFECT_REQUEST:
         answerRequest(sys, e);
         break;
-      case K.HOST_EFFECT_MIGRATED:
-        list.push({ kind: 'migrated', session: n64(e + EFFECT.session), segment: u32(e + EFFECT.segment), chart: u32(e + EFFECT.chart), job: u32(e + EFFECT.job) });
+      case K.HOST_EFFECT_JOB_DONE:
+        jobDone(sys, e);
         break;
-      case K.HOST_EFFECT_JOB_DONE: {
-        const job = u32(e + EFFECT.job);
-        const pending = scoped(() => {
-          const n = x.ta_host_job_pending(sys.host, job, 0, 0);
-          const buffer = scratch(8 * (n || 1), 8);
-          const k = x.ta_host_job_pending(sys.host, job, buffer, n);
-          return Array.from({ length: k }, (_, i) => n64(buffer + 8 * i));
-        });
-        list.push({ kind: 'job', job, migrated: u32(e + EFFECT.migrated), failed: u32(e + EFFECT.failed), pending });
-        break;
-      }
       case K.HOST_EFFECT_SEGMENT_FREED: {
         const segment = u32(e + EFFECT.segment);
         sys.images[segment] = undefined;
         list.push({ kind: 'freed', segment });
         break;
       }
-      case K.HOST_EFFECT_PEER: {
-        /* an envelope for a transport, as neutral JSON */
-        const data = wireOfPayload(sys, n64(e + EFFECT.payload), u32(e + EFFECT.datamodel));
-        const out = { kind: 'peer', peer: u32(e + EFFECT.peer), origin: view(e + EFFECT.auxiliary), msgid: view(e + EFFECT.msgid), sendid: view(e + EFFECT.sendid), target: view(e + EFFECT.target) };
-        scoped(() => {
-          const V = offsets('ta_envelope');
-          const envelope = zeroed(size('ta_envelope'));
-          setU32(envelope + V.size, size('ta_envelope'));
-          setU32(envelope + V.hops, u32(e + EFFECT.flags));
-          for (const [to, from] of [['target', 'target'], ['name', 'event'], ['sendid', 'sendid'], ['origin', 'auxiliary'], ['msgid', 'msgid']]) {
-            setU32(envelope + V[to], u32(e + EFFECT[from]));
-            setU32(envelope + V[to] + 4, u32(e + EFFECT[from] + 4));
-          }
-          putView(envelope + V.traceparent, traceparentAt(e) || '');
-          const encoded = viewOf(data || '');
-          const length = x.ta_host_envelope_json(envelope, encoded, 0, 0);
-          const buffer = scratch(length + 1, 1);
-          x.ta_host_envelope_json(envelope, encoded, buffer, length + 1);
-          out.envelope = text(buffer, length);
-        });
-        if (n64(e + EFFECT.payload) && !data) out.malformed = true;
-        list.push(out);
-        break;
-      }
-      case K.HOST_EFFECT_PEER_ERROR:
-        list.push({ kind: 'peerError', peer: u32(e + EFFECT.peer), origin: view(e + EFFECT.auxiliary), msgid: view(e + EFFECT.msgid), sendid: view(e + EFFECT.sendid), reason: u32(e + EFFECT.token) });
-        break;
       default:
         break;
     }
   }
 
-  /* Run until idle (or RUN_ROUNDS runs); every effect, the changed sessions and
-   * the traces go to callbacks.effects at once. Returns the run code. */
-  function pump(sys, now) {
-    if (sys.running === 3) return -2; /* inside a synchronous send: the pump goes on */
-    x.ta_host_advance_time(sys.host, BigInt(Math.max(0, Math.trunc(now || 0))));
+  /* One pass: ta_host_run in rounds until idle (or RUN_ROUNDS runs); every
+   * effect, the changed sessions and the traces go to callbacks.effects at once.
+   * Returns the run code; throws what callbacks.effects or callbacks.sync threw. */
+  function pumpOnce(sys) {
+    const now = tickNow(sys);
+    x.ta_host_advance_time(sys.host, now);
+    if (sys.links) x.ta_links_time(sys.links, now);
     sys.running = 1;
     sys.pump++;
+    sys.effectList = [];
+    sys.syncList = [];
     sys.changed = [];
-    const list = [];
-    let thrown;
+    let thrown = null; /* by callbacks.sync: rethrown once the pump is done */
     let status = K.RUN_IDLE;
     let deadline = 0n;
     if (sys.quickjs) x.ta_datamodel_ecmascript_wasm_set_time(Number(traceWall(sys)) / 1e6); /* the module has no clock of its own */
     const m0 = mark();
-    const run = scratch(size('ta_run'), 8);
-    const effects = out32();
     try {
+      const run = scratch(size('ta_run'), 8);
+      const effects = out32();
       for (let round = 0; round < RUN_ROUNDS; round++) {
         if (sys.otlp) x.ta_otlp_mark(sys.otlp.otlp, traceFuel(sys), traceWall(sys));
         x.ta_host_run(run, sys.host, RUN_BUDGET);
@@ -2025,84 +2471,171 @@ function systems(m) {
         deadline = u64(run + at('ta_run', 'next_deadline'));
         if (sys.otlp) x.ta_otlp_mark(sys.otlp.otlp, traceFuel(sys), traceWall(sys));
         traceDrain(sys); /* before the effects: what they cause comes after */
-        const syncList = [];
         const n = x.ta_host_effects(sys.host, effects);
         const base = u32(effects);
-        for (let i = 0; i < n; i++) effectOut(sys, base + EFFECT_SIZE * i, list, syncList);
+        for (let i = 0; i < n; i++) {
+          const e = base + EFFECT_SIZE * i;
+          if (!sys.links || !x.ta_links_effect(sys.links, e, now)) effectOut(sys, e);
+        }
         x.ta_host_effects_ack(sys.host);
+        if (sys.links && x.ta_links_deadline(sys.links) <= now) {
+          x.ta_links_time(sys.links, now); /* refused envelopes: errors back */
+          sys.more = true;
+        }
+        if (sys.wakeHeld.length) wakeHeld(sys); /* their work runs in the next round */
         /* TA_RUN_EFFECTS: the senders wait; callbacks.sync answers each send now,
          * feeding the host (send, post, deliver) before the next run */
+        const syncList = sys.syncList;
+        sys.syncList = [];
         sys.running = 3;
         for (const e of syncList) {
+          if (thrown) break;
           try {
             sys.callbacks.sync(e);
           } catch (error) {
-            thrown = error;
-            break;
+            thrown = { error };
           }
         }
+        if (sys.later.length && !thrown) thrown = callLater(sys); /* (running 3) */
         sys.running = 1;
-        if (thrown !== undefined || status === K.RUN_IDLE || status === K.RUN_FAULT) break;
+        if (thrown || sys.stopping || status === K.RUN_IDLE || status === K.RUN_FAULT) break;
       }
+    } catch (error) {
+      sys.running = 0;
+      throw error;
     } finally {
       release(m0);
-      sys.running = 0;
     }
-    for (const [serial, error] of sys.failures) list.push({ kind: 'exception', session: serial, error });
+    const list = sys.effectList;
+    for (const [serial, error] of sys.failures) list.push({ kind: 'exception', session: serial, error }); /* exceptions in expressions */
     sys.failures = [];
     sys.graves = [];
+    const changed = sys.changed.length ? sys.changed : undefined;
     if (sys.otlp) tracePut(sys); /* the spans that ended in this call */
-    const traces = concat(sys.traces);
-    const logs = concat(sys.logs);
+    const traceBytes = concat(sys.traces);
+    const logBytes = concat(sys.logs);
     sys.traces = [];
     sys.logs = [];
-    const changed = sys.changed.length ? sys.changed : undefined;
+    exporterAdd(sys, K.OTLP_TRACES, traceBytes);
+    exporterAdd(sys, K.OTLP_LOGS, logBytes);
+    const traces = sys.traceSink ? traceBytes : undefined;
+    const logs = sys.traceSink ? logBytes : undefined;
+    linksOutput(sys); /* what the transports are to do */
+    exporterOutput(sys); /* and the exporter's posts */
+    sys.effectList = null;
+    sys.running = 0;
     if (list.length || changed || traces || logs) {
-      sys.running = 2; /* the sink may not call in: core.mjs queues */
+      sys.running = 2; /* inputs from the handlers go in: the pump goes on */
       try {
         sys.callbacks.effects(list.length ? list : undefined, changed, traces, logs);
       } finally {
         sys.running = 0;
       }
     }
-    if (thrown !== undefined) throw thrown;
+    if (thrown) throw thrown.error;
     if (status !== K.RUN_IDLE) return -2;
-    return deadline === 0xffffffffffffffffn ? -1 : Number(deadline);
+    return deadline === NEVER ? -1 : Number(deadline);
   }
+
+  /* Arm the caller's one timer for a run code (callbacks.schedule): 0 to run
+   * soon, -1 for nothing to do, else the delay to the next deadline. A caller's
+   * own clock (callbacks.now) arms nothing: time moves when it pumps. */
+  const arm = (sys, code) => {
+    if (sys.callbacks.now || !sys.callbacks.schedule || sys.stopping) return;
+    if (code === sys.armed) return;
+    sys.armed = code;
+    const delay = code === -2 ? 0 : code < 0 ? -1 : code - systemNow(sys);
+    sys.callbacks.schedule(delay < 0 && code >= 0 ? 0 : delay);
+  };
+
+  /* Run until idle: passes of RUN_ROUNDS runs, again while effect handlers
+   * gave the host input (at most RUN_ROUNDS passes, then the timer goes on);
+   * then the timer is armed. Returns the run code; throws what an effect
+   * handler threw. Inside a pump it only notes more work. */
+  function pump(sys) {
+    if (sys.running) {
+      sys.more = true;
+      return -2;
+    }
+    const started = performance.now();
+    let code = -2;
+    let failed = null;
+    try {
+      for (let pass = 0; pass < RUN_ROUNDS; pass++) {
+        sys.more = false;
+        code = pumpOnce(sys);
+        if (sys.stopping || !sys.more) break;
+        code = -2;
+      }
+    } catch (error) {
+      failed = { error };
+    }
+    runRecord(sys, (performance.now() - started) / 1000);
+    if (sys.stopping) {
+      systemDestroy(sys);
+      if (failed) throw failed.error;
+      return -1;
+    }
+    if (failed) throw failed.error;
+    /* pings, reconnects, resumption windows; posts due */
+    const linkDue = sys.links ? x.ta_links_deadline(sys.links) : NEVER;
+    const postDue = exporterDeadline(sys);
+    const due = linkDue < postDue ? linkDue : postDue;
+    if (due !== NEVER && (code === -1 || (code >= 0 && Number(due) < code))) code = Number(due);
+    arm(sys, sys.more ? -2 : code);
+    return code;
+  }
+
+  /* After an input: from outside, the pump runs now; from an effect handler or
+   * a synchronous send, the pump that is running goes on. */
+  const inputDone = (sys, result) => {
+    if (sys.running) sys.more = true;
+    else pump(sys);
+    return result;
+  };
+  /* a host call that runs JavaScript (charts attach, blobs are written): no calls in meanwhile */
+  const entered = (sys, f) => {
+    const was = sys.running;
+    sys.running = 1;
+    try {
+      return f();
+    } finally {
+      sys.running = was;
+    }
+  };
 
   /* an event's fields at p (a ta_event_in) */
   const eventIn = (p, fields) => {
-    m.u8().fill(0, p, p + size('ta_event_in'));
+    bytesAt().fill(0, p, p + size('ta_event_in'));
     setU32(p + EVENT_IN.size, size('ta_event_in'));
     for (const field of ['name', 'sendid', 'origin', 'origintype', 'raw', 'traceparent']) if (typeof fields[field] === 'string') putView(p + EVENT_IN[field], fields[field]);
-    setU32(p + EVENT_IN.flags, fields.flags >>> 0);
-    setU32(p + EVENT_IN.token, fields.token >>> 0);
-    setU64(p + EVENT_IN.data, fields.data || 0);
+    setU32(p + EVENT_IN.flags, numberOr0(fields.flags) >>> 0);
+    setU32(p + EVENT_IN.token, numberOr0(fields.token) >>> 0);
+    setU64(p + EVENT_IN.data, BigInt(fields.data || 0));
     return p;
   };
-  const session = (v) => BigInt(Math.trunc(Number(v) || 0));
-  const time = (now) => BigInt(Math.max(0, Math.trunc(Number(now) || 0)));
+  const optional = (s) => (typeof s === 'string' ? s : undefined);
 
   /* a blob through a call that sizes it first (length = needed on TA_ERROR_NO_MEMORY) */
   const writeBlob = (sys, writer) => {
     sys.error = '';
     sys.keepQuiet = true;
-    sys.running = 1;
     try {
-      return scoped(() => {
-        let capacity = 4096;
-        const length = out32();
-        for (let attempt = 0; attempt < 8; attempt++) {
-          const buffer = scratch(capacity, 8);
-          const status = writer(buffer, capacity, length);
-          if (status === OK) return [OK, buffer, u32(length)];
-          if (status !== ERROR.NO_MEMORY) return [status];
-          capacity = Math.max(u32(length), capacity * 2);
-        }
-        return [ERROR.NO_MEMORY];
-      });
+      return entered(sys, () =>
+        scoped(() => {
+          let capacity = 4096;
+          const length = out32();
+          for (let attempt = 0; attempt < 8; attempt++) {
+            const buffer = scratch(capacity, 8);
+            const status = writer(buffer, capacity, length);
+            if (status === OK) return [OK, copyOut(buffer, u32(length))];
+            if (status !== ERROR.NO_MEMORY) return [status];
+            capacity = Math.max(u32(length), capacity * 2);
+          }
+          return [ERROR.NO_MEMORY];
+        }),
+      );
     } finally {
-      sys.running = 0;
       sys.keepQuiet = false;
     }
   };
@@ -2124,7 +2657,8 @@ function systems(m) {
     scoped(() => {
       const segment = out32();
       const actor = out32();
-      if (!sessionID || x.ta_host_locate(sys.host, session(sessionID), segment, actor) !== OK) return null;
+      const s = session(sessionID);
+      if (!s || x.ta_host_locate(sys.host, s, segment, actor) !== OK) return null;
       const system = x.ta_host_system(sys.host, u32(segment));
       const info = zeroed(size('ta_actor_info'));
       setU32(info, size('ta_actor_info'));
@@ -2144,9 +2678,10 @@ function systems(m) {
     });
   const segmentImage = (sys, segment) =>
     scoped(() => {
+      const S = offsets('ta_host_segment_info');
       const info = zeroed(size('ta_host_segment_info'));
       setU32(info, size('ta_host_segment_info'));
-      return x.ta_host_segment_info_get(sys.host, segment, info) === OK ? { live: !!u32(info + 4), actors: u32(info + 8), current: u32(info + 12), image: u32(info + 16) } : null;
+      return x.ta_host_segment_info_get(sys.host, segment, info) === OK ? { live: !!u32(info + S.live), actors: u32(info + S.actors), current: u32(info + S.current), image: u32(info + S.image) } : null;
     });
 
   /* the native datamodel's tables as neutral JSON: {"i": [[handle, serial, hash,
@@ -2174,6 +2709,7 @@ function systems(m) {
     for (const c of sys.charts.values()) if (c.hash === hash && c.chart === chart) return c;
     return null;
   };
+  /* the native datamodel's tables back at their handles */
   const nativeRestore = (sys, json) => {
     const tables = valueOfWire(json, sys.callbacks.ref);
     if (!tables) return ERROR.INVALID;
@@ -2208,64 +2744,115 @@ function systems(m) {
       }
     return OK;
   };
+  /* a snapshot's parts (ta_host_snapshot_unpack): the blob copied into memory, freed by the caller */
+  const snapshotIn = (bytes) => {
+    const b = asBytes(bytes);
+    if (!b) return null;
+    const pack = malloc(b.length || 1, 8); /* aligned for the records read in place */
+    bytesAt().set(b, pack);
+    const C = offsets('ta_host_snapshot_contents');
+    const contents = scoped(() => {
+      const p = zeroed(size('ta_host_snapshot_contents'));
+      setU32(p, size('ta_host_snapshot_contents'));
+      if (x.ta_host_snapshot_unpack(pack, b.length, p) !== OK) return null;
+      return {
+        systemID: view(p + C.system_id),
+        ecmascript: view(p + C.datamodel),
+        now: n64(p + C.time),
+        imageCount: u32(p + C.image_count),
+        host: u32(p + C.host),
+        hostLength: u32(p + C.host_length),
+        state: u32(p + C.state),
+        stateLength: u32(p + C.state_length),
+      };
+    });
+    if (!contents) {
+      free(pack);
+      return null;
+    }
+    return { pack, length: b.length, ...contents };
+  };
+  const snapshotImages = (snapshot) =>
+    scoped(() => {
+      const images = [];
+      const length = out32();
+      for (let i = 0; i < snapshot.imageCount; i++) {
+        const q = x.ta_host_snapshot_image(snapshot.pack, snapshot.length, i, length);
+        images.push(q ? new NativeImage(copyOut(q, u32(length))) : null);
+      }
+      return images;
+    });
+
+  function actorsOf(sys) {
+    return scoped(() => {
+      const out = [];
+      const cursor = out64();
+      const batch = scratch(8 * 256, 8);
+      let n;
+      while ((n = x.ta_host_actors(sys.host, cursor, batch, 256)) > 0) for (let i = 0; i < n; i++) out.push(n64(batch + 8 * i));
+      return out;
+    });
+  }
 
   return {
     /* createSystem(callbacks, config) -> system */
     createSystem(callbacks, config) {
+      if (!callbacks || !config) throw new TypeError('createSystem(callbacks, config)');
       const sys = systemNew(callbacks, config);
-      const host = out32();
-      if (x.ta_host_new(sys.config, host) !== OK) {
+      const host = scoped(() => {
+        const out = out32();
+        return x.ta_host_new(sys.config, out) === OK ? u32(out) : 0;
+      });
+      if (!host) {
         systemDestroy(sys);
         throw new Error('cannot create the system');
       }
-      sys.host = u32(host);
+      sys.host = host;
       return handleOf(sys);
     },
 
-    /* restoreSystem(callbacks, config, images: [image | null], host, datamodel) -> system */
-    restoreSystem(callbacks, config, images, hostBytes, datamodelBytes) {
-      const hb = asBytes(hostBytes);
-      const db = asBytes(datamodelBytes);
-      if (!hb || !db) throw new TypeError('restoreSystem(callbacks, config, images, host, datamodel)');
-      const snapshot = malloc(hb.length, 8); /* the snapshot's records are read in place */
-      m.u8().set(hb, snapshot);
+    /* restoreSystem(callbacks, config, images: [image | null], snapshot) -> system */
+    restoreSystem(callbacks, config, images, bytes) {
+      const snapshot = snapshotIn(bytes);
+      if (!snapshot || !callbacks || !config) throw new TypeError('restoreSystem(callbacks, config, images, snapshot)');
+      const list = Array.isArray(images) ? images : [];
+      const host = malloc(snapshot.hostLength || 1, 8); /* the snapshot's records are read in place */
+      bytesAt().copyWithin(host, snapshot.host, snapshot.host + snapshot.hostLength);
       try {
+        /* the images it needs: one per segment, by content hash (0: retired) */
         const hashes = scoped(() => {
-          const n = x.ta_host_snapshot_segments(snapshot, hb.length, 0, 0);
+          const n = x.ta_host_snapshot_segments(host, snapshot.hostLength, 0, 0);
           const buffer = scratch(8 * (n || 1), 8);
-          if (n) x.ta_host_snapshot_segments(snapshot, hb.length, buffer, n);
+          if (n) x.ta_host_snapshot_segments(host, snapshot.hostLength, buffer, n);
           return Array.from({ length: n }, (_, k) => u64(buffer + 8 * k));
         });
-        if (!hashes.length) throw new TypeError('restore: not a host snapshot');
         hashes.forEach((hash, k) => {
-          const image = images[k];
+          const image = list[k];
           if (hash && (!(image instanceof NativeImage) || imageHash(image.image) !== hash))
             throw new Error(`restore: segment ${k} ran the image ${hashText(hash)}, which is not among the images given`);
         });
+        if (!hashes.length) throw new TypeError('restore: not a host snapshot');
         const sys = systemNew(callbacks, config);
         let status;
         let step = "the host's snapshot does not match these images or this build";
         sys.running = 1;
         try {
           status = scoped(() => {
-            const list = scratch(4 * (images.length || 1), 4);
-            images.forEach((image, k) => {
-              setU32(list + 4 * k, image instanceof NativeImage ? image.image : 0);
+            const array = scratch(4 * (list.length || 1), 4);
+            list.forEach((image, k) => {
+              setU32(array + 4 * k, image instanceof NativeImage ? image.image : 0);
               if (image instanceof NativeImage) sys.images[k] = image;
             });
-            const host = out32();
-            const s = x.ta_host_restore(sys.config, list, images.length, snapshot, hb.length, host);
-            sys.host = u32(host);
+            const out = out32();
+            const s = x.ta_host_restore(sys.config, array, list.length, host, snapshot.hostLength, out);
+            sys.host = s === OK ? u32(out) : 0;
             return s;
           });
           if (status === OK) {
             step = "the datamodel's snapshot does not match";
-            if (sys.native) status = nativeRestore(sys, decoder.decode(db));
+            if (sys.native) status = nativeRestore(sys, text(snapshot.state, snapshot.stateLength));
             else {
-              status = scoped(() => {
-                const p = bytesIn(db);
-                return x.ta_datamodel_ecmascript_restore(sys.quickjs, p, db.length);
-              });
+              status = x.ta_datamodel_ecmascript_restore(sys.quickjs, snapshot.state, snapshot.stateLength);
               /* what the binding knows of each session */
               for (const s of status === OK ? actorsOf(sys) : []) {
                 const where = locate(sys, s);
@@ -2283,7 +2870,18 @@ function systems(m) {
         }
         return handleOf(sys);
       } finally {
-        free(snapshot);
+        free(host);
+        free(snapshot.pack);
+      }
+    },
+    /* snapshotContents(blob) -> { systemID, ecmascript, now, images: [image | null] } */
+    snapshotContents(bytes) {
+      const snapshot = snapshotIn(bytes);
+      if (!snapshot) throw new TypeError('not a system snapshot (system.snapshot())');
+      try {
+        return { systemID: snapshot.systemID, ecmascript: snapshot.ecmascript, now: snapshot.now, images: snapshotImages(snapshot) };
+      } finally {
+        free(snapshot.pack);
       }
     },
 
@@ -2291,17 +2889,14 @@ function systems(m) {
     addImage(handle, image) {
       const sys = systemOf(handle);
       imageOf(image);
-      sys.running = 1; /* charts attach: resolve() runs JavaScript */
-      let status;
-      const segment = out32();
-      try {
-        status = x.ta_host_add_image(sys.host, image.image, segment);
-      } finally {
-        sys.running = 0;
-      }
-      if (status !== OK) throw new Error('cannot add the image');
-      sys.images[u32(segment)] = image;
-      return u32(segment);
+      const segment = scoped(() => {
+        const out = out32();
+        /* charts attach: resolve() runs JavaScript */
+        return entered(sys, () => x.ta_host_add_image(sys.host, image.image, out)) === OK ? u32(out) : -1;
+      });
+      if (segment < 0) throw new Error('cannot add the image');
+      sys.images[segment] = image;
+      return segment;
     },
     /* chart(system, name) -> [segment, chart] of the current version, or null */
     chart(handle, name) {
@@ -2309,58 +2904,53 @@ function systems(m) {
       return scoped(() => {
         const segment = out32();
         const chart = out32();
-        return x.ta_host_chart(sys.host, viewOf(String(name)), segment, chart) === OK ? [u32(segment), u32(chart)] : null;
+        return typeof name === 'string' && x.ta_host_chart(sys.host, viewOf(name), segment, chart) === OK ? [u32(segment), u32(chart)] : null;
       });
     },
-    boot(handle, segment, now) {
+    /* boot(system, segment): the actors start with the next pump */
+    boot(handle, segment) {
       const sys = systemOf(handle);
-      sys.running = 1;
-      let status;
-      try {
-        x.ta_host_advance_time(sys.host, time(now));
-        status = x.ta_host_boot(sys.host, segment >>> 0);
-      } finally {
-        sys.running = 0;
-      }
-      if (status !== OK) throw new Error('cannot boot the image');
+      x.ta_host_advance_time(sys.host, tickNow(sys));
+      if (entered(sys, () => x.ta_host_boot(sys.host, segment >>> 0)) !== OK) throw new Error('cannot boot the image');
     },
-    actorByName: (handle, name) => {
-      const sys = input(handle);
-      return scoped(() => Number(x.ta_host_actor_by_name(sys.host, viewOf(String(name)))));
+    actorByName(handle, name) {
+      const sys = systemOf(handle);
+      return typeof name === 'string' ? scoped(() => Number(x.ta_host_actor_by_name(sys.host, viewOf(name)))) : 0;
     },
+    /* actors(system) -> every session, host-wide */
     actors: (handle) => actorsOf(systemOf(handle)),
 
-    /* spawn(system, segment, chart, name, input, traceparent, now) -> session */
-    spawn(handle, segment, chart, name, inputValue, traceparent, now) {
+    /* spawn(system, segment, chart, name, input, traceparent) -> session: the
+     * bootstrap runs with the next pump (the caller knows the session first) */
+    spawn(handle, segment, chart, name, inputValue, traceparent) {
       const sys = systemOf(handle);
       const data = payloadOfValue(sys, inputValue);
       return scoped(() => {
         const out = out64();
-        x.ta_host_advance_time(sys.host, time(now));
-        const status = x.ta_host_spawn(sys.host, segment >>> 0, chart >>> 0, viewOf(typeof name === 'string' ? name : undefined), BigInt(data), viewOf(typeof traceparent === 'string' ? traceparent : undefined), out);
+        x.ta_host_advance_time(sys.host, tickNow(sys));
+        const status = x.ta_host_spawn(sys.host, segment >>> 0, chart >>> 0, viewOf(optional(name)), BigInt(data), viewOf(optional(traceparent)), out);
         if (status !== OK) {
           payloadDrop(sys, data);
           throw new Error('cannot spawn the actor');
         }
-        return n64(out);
+        return n64(out); /* it starts with the next pump */
       });
     },
-    /* send(system, session, name, data, traceparent, now) -> run code */
-    send(handle, sessionID, name, data, traceparent, now) {
-      const sys = input(handle);
+    /* send(system, session, name, data, traceparent): one event, then the run loop */
+    send(handle, sessionID, name, data, traceparent) {
+      const sys = systemOf(handle);
       const payload = payloadOfValue(sys, data);
       scoped(() => {
-        const event = eventIn(scratch(size('ta_event_in'), 8), { name: String(name), traceparent: typeof traceparent === 'string' ? traceparent : undefined, data: payload });
+        const event = eventIn(scratch(size('ta_event_in'), 8), { name: typeof name === 'string' ? name : '', traceparent: optional(traceparent), data: payload });
         if (x.ta_host_send(sys.host, session(sessionID), event) !== OK) payloadDrop(sys, payload);
       });
-      return pump(sys, now);
+      return inputDone(sys, undefined);
     },
-    /* sendMany(system, sessions, names, datas, traceparents, now) -> [accepted, run code] */
-    sendMany(handle, sessions, names, datas, traceparents, now) {
-      const sys = input(handle);
+    /* sendMany(system, sessions, names, datas, traceparents) -> accepted */
+    sendMany(handle, sessions, names, datas, traceparents) {
+      const sys = systemOf(handle);
       const n = sessions.length;
-      let delivered = 0;
-      scoped(() => {
+      const delivered = scoped(() => {
         const ids = scratch(8 * (n || 1), 8);
         const events = scratch(size('ta_event_in') * (n || 1), 8);
         const payloads = [];
@@ -2369,40 +2959,42 @@ function systems(m) {
             const payload = payloadOfValue(sys, datas[i]);
             payloads.push(payload);
             setU64(ids + 8 * i, session(sessions[i]));
-            eventIn(events + size('ta_event_in') * i, { name: String(names[i]), traceparent: typeof traceparents[i] === 'string' ? traceparents[i] : undefined, data: payload });
+            eventIn(events + size('ta_event_in') * i, { name: typeof names[i] === 'string' ? names[i] : '', traceparent: optional(traceparents[i]), data: payload });
           }
         } catch (error) {
           for (const p of payloads) payloadDrop(sys, p);
           throw error;
         }
         let accepted = 0;
-        const refused = new Set();
+        let refused = 0;
         while (accepted < n) {
           /* a refused event is skipped (its session is gone) */
           accepted += x.ta_host_send_many(sys.host, ids + 8 * accepted, events + size('ta_event_in') * accepted, n - accepted);
           if (accepted < n) {
             payloadDrop(sys, payloads[accepted]);
-            refused.add(accepted);
+            refused++;
             accepted++;
           }
         }
-        delivered = n - refused.size;
+        return n - refused;
       });
-      return [delivered, pump(sys, now)];
+      return inputDone(sys, delivered);
     },
-    /* post(system, session, { name, data | wire, sendid, origin, origintype, raw, traceparent, flags, token }, now) -> run code */
-    post(handle, sessionID, fields, now) {
-      const sys = input(handle);
+    /* post(system, session, { name, data, wire, sendid, origin, origintype, raw, traceparent,
+     * flags, token }): an event with every field of ta_event_in */
+    post(handle, sessionID, fields) {
+      const sys = systemOf(handle);
       const payload = typeof fields.wire === 'string' ? payloadOfWire(sys, fields.wire, false) : payloadOfValue(sys, fields.data);
       scoped(() => {
         const event = eventIn(scratch(size('ta_event_in'), 8), { ...fields, data: payload });
         if (x.ta_host_send(sys.host, session(sessionID), event) !== OK) payloadDrop(sys, payload);
       });
-      return pump(sys, now);
+      return inputDone(sys, undefined);
     },
-    /* deliver(system, peer, { target, name, data | wire, origin, origintype, sendid, msgid, dedup, hops, traceparent }, now) -> [outcome, run code] */
-    deliver(handle, peer, fields, now) {
-      const sys = input(handle);
+    /* deliver(system, peer, { target, name, data | wire, origin, origintype, sendid, msgid,
+     * dedup, hops, traceparent }) -> 'delivered', 'relayed', 'duplicate' or 'refused' */
+    deliver(handle, peer, fields) {
+      const sys = systemOf(handle);
       const payload = typeof fields.wire === 'string' ? payloadOfWire(sys, fields.wire, false) : payloadOfValue(sys, fields.data);
       const outcome = scoped(() => {
         const V = offsets('ta_envelope');
@@ -2410,24 +3002,33 @@ function systems(m) {
         setU32(envelope + V.size, size('ta_envelope'));
         for (const [field, name] of [['target', 'target'], ['name', 'name'], ['origin', 'origin'], ['origintype', 'origintype'], ['sendid', 'sendid'], ['msgid', 'msgid'], ['deduplication_key', 'dedup'], ['traceparent', 'traceparent']])
           if (typeof fields[name] === 'string') putView(envelope + V[field], fields[name]);
-        setU32(envelope + V.hops, fields.hops >>> 0);
-        setU64(envelope + V.data, payload);
+        setU32(envelope + V.hops, numberOr0(fields.hops) >>> 0);
+        setU64(envelope + V.data, BigInt(payload));
         const out = out32();
-        x.ta_host_advance_time(sys.host, time(now));
+        x.ta_host_advance_time(sys.host, tickNow(sys));
         const status = x.ta_host_deliver(sys.host, peer >>> 0, envelope, out);
         if (status !== OK) payloadDrop(sys, payload);
         return status === OK ? u32(out) : -1;
       });
-      return [outcome, pump(sys, now)];
+      return inputDone(sys, ['delivered', 'relayed', 'duplicate', 'refused'][outcome] || 'refused');
     },
-    pump: (handle, now) => pump(systemOf(handle), now),
-    terminate: (handle, sessionID) => {
+    /* pump(system, fired) -> run code: run what is due (after a spawn, boot or adopt;
+     * when the caller's clock moved); `fired`: callbacks.schedule's timer went off */
+    pump(handle, fired) {
       const sys = systemOf(handle);
-      return x.ta_host_terminate(sys.host, session(sessionID)) === OK;
+      if (fired === true) sys.armed = -3; /* the timer is no longer armed */
+      return pump(sys);
+    },
+    /* now(system) -> the system's time (ms) */
+    now: (handle) => systemNow(systemOf(handle)),
+    later,
+    terminate(handle, sessionID) {
+      const sys = systemOf(handle);
+      return inputDone(sys, x.ta_host_terminate(sys.host, session(sessionID)) === OK);
     },
     /* inspect(system, session) -> { segment, chart, state, parent, states } | null */
     inspect(handle, sessionID) {
-      const sys = reading(handle);
+      const sys = systemOf(handle);
       const where = locate(sys, sessionID);
       if (!where) return null;
       const states = scoped(() => {
@@ -2437,9 +3038,26 @@ function systems(m) {
       });
       return { segment: where.segment, chart: where.chart, state: where.state, parent: where.parent, states };
     },
+    /* stateValue(system, session) -> its configuration as a state value (ta_host_state_value) */
+    stateValue(handle, sessionID) {
+      const sys = systemOf(handle);
+      const json = scoped(() => {
+        const s = session(sessionID);
+        let capacity = 512;
+        let buffer = scratch(capacity, 1);
+        let length = x.ta_host_state_value(sys.host, s, buffer, capacity);
+        if (length >= capacity) {
+          capacity = length + 1;
+          buffer = scratch(capacity, 1);
+          length = x.ta_host_state_value(sys.host, s, buffer, capacity);
+        }
+        return length ? text(buffer, length) : '{}';
+      });
+      return JSON.parse(json);
+    },
     /* context(system, session) -> the session's variables (native: its scope) */
     context(handle, sessionID) {
-      const sys = reading(handle);
+      const sys = systemOf(handle);
       const where = locate(sys, sessionID);
       if (!where || !where.instance) return undefined;
       if (sys.native) {
@@ -2450,6 +3068,7 @@ function systems(m) {
       return segment ? quickjsVariables(sys, where.instance, segment.image, where.chart) : undefined;
     },
 
+    /* ---- hibernation, moving actors, migration (src/persist.c) */
     sweep(handle, max) {
       const sys = systemOf(handle);
       max = max >>> 0 || 1 << 30;
@@ -2463,50 +3082,68 @@ function systems(m) {
     /* hibernate(system, session) -> blob; throws (saying why) when it cannot */
     hibernate(handle, sessionID) {
       const sys = systemOf(handle);
-      const [status, buffer, length] = writeBlob(sys, (b, c, l) => x.ta_host_hibernate(sys.host, session(sessionID), b, c, l));
+      const s = session(sessionID);
+      const [status, blob] = writeBlob(sys, (b, c, l) => x.ta_host_hibernate(sys.host, s, b, c, l));
       if (status !== OK) throw statusError('cannot hibernate the actor', status, sys.error);
-      return copyOut(buffer, length);
+      const p = parkedAdd(sys, Number(s));
+      p.blob = blob;
+      p.woken = false;
+      return blob;
     },
-    /* wake(system, session, blob): the actor is back; its work runs with the next pump */
+    /* stored(system, session) -> true when the actor woke meanwhile: delete the store's copy */
+    stored(handle, sessionID) {
+      const sys = systemOf(handle);
+      const key = Number(session(sessionID));
+      const p = sys.parked.get(key);
+      const stale = !!(p && p.woken);
+      if (p && !p.waking) sys.parked.delete(key);
+      else if (p) p.blob = null;
+      return stale;
+    },
+    /* hibernated(system, session) -> whether the actor is hibernated (its blob elsewhere) */
+    hibernated(handle, sessionID) {
+      const where = locate(systemOf(handle), sessionID);
+      return !!where && where.state === K.ACTOR_HIBERNATED;
+    },
+    /* wake(system, session, blob): the actor is back and its work runs */
     wake(handle, sessionID, blob) {
       const sys = systemOf(handle);
       const b = asBytes(blob);
       if (!b) throw new TypeError('wake(system, session, blob: Uint8Array)');
-      sys.running = 1;
-      let status;
-      try {
-        status = scoped(() => x.ta_host_wake(sys.host, session(sessionID), bytesIn(b), b.length));
-      } finally {
-        sys.running = 0;
-      }
+      const key = Number(session(sessionID));
+      sys.parked.delete(key);
+      const status = wakeFrom(sys, key, b);
       if (status !== OK) throw statusError('cannot wake the actor', status);
+      return inputDone(sys, undefined); /* its work runs now */
     },
-    /* exportActor(system, session, now) -> blob: its delayed sends are due relative to time 0 */
-    exportActor(handle, sessionID, now) {
+    /* exportActor(system, session) -> blob: the actor leaves; its delayed sends
+     * are due relative to time 0 (ta_blob_rebase), so any clock adopts it */
+    exportActor(handle, sessionID) {
       const sys = systemOf(handle);
-      x.ta_host_advance_time(sys.host, time(now));
-      const [status, buffer, length] = writeBlob(sys, (b, c, l) => x.ta_host_export_actor(sys.host, session(sessionID), b, c, l));
+      const now = tickNow(sys);
+      x.ta_host_advance_time(sys.host, now);
+      const s = session(sessionID);
+      const [status, blob] = writeBlob(sys, (b, c, l) => x.ta_host_export_actor(sys.host, s, b, c, l));
       if (status !== OK) throw statusError('cannot export the actor', status, sys.error);
       return scoped(() => {
-        const p = bytesIn(copyOut(buffer, length));
-        const rebased = x.ta_blob_rebase(p, length, time(now), 0n);
+        const p = bytesIn(blob);
+        const rebased = x.ta_blob_rebase(p, blob.length, now, 0n);
         if (rebased !== OK) throw statusError('cannot export the actor', rebased, sys.error);
-        return copyOut(p, length);
+        return copyOut(p, blob.length);
       });
     },
-    /* adopt(system, blob, now) -> [session, run code]: into the newest segment whose image the blob belongs to */
-    adopt(handle, blob, now) {
+    /* adopt(system, blob) -> session: into the newest segment whose image the blob belongs to */
+    adopt(handle, blob) {
       const sys = systemOf(handle);
       const b = asBytes(blob);
-      if (!b) throw new TypeError('adopt(system, blob: Uint8Array, now)');
-      let adopted = 0;
+      if (!b) throw new TypeError('adopt(system, blob: Uint8Array)');
+      const now = tickNow(sys);
       let status = OK;
-      x.ta_host_advance_time(sys.host, time(now));
-      sys.running = 1;
-      try {
+      x.ta_host_advance_time(sys.host, now);
+      const adopted = entered(sys, () =>
         scoped(() => {
           const p = bytesIn(b);
-          status = x.ta_blob_rebase(p, b.length, 0n, time(now));
+          status = x.ta_blob_rebase(p, b.length, 0n, now);
           const out = out64();
           for (let k = x.ta_host_segment_count(sys.host); status === OK && k-- > 0; ) {
             const segment = segmentImage(sys, k);
@@ -2515,37 +3152,36 @@ function systems(m) {
             if (status !== ERROR.INVALID) break;
             status = OK;
           }
-          adopted = n64(out);
-        });
-      } finally {
-        sys.running = 0;
-      }
+          return n64(out);
+        }),
+      );
       if (status !== OK || !adopted) throw statusError('cannot adopt the actor', status === OK ? ERROR.INVALID : status, '');
-      return [adopted, pump(sys, now)];
+      return adopted; /* it goes on with the next pump */
     },
-    /* migrate(system, name, session, wake, timeout) -> job */
+    /* migrate(system, name, session, wake, timeout) -> Promise<{ migrated, failed, pending:
+     * [sessions] }>, settled when the job ends (with the next pumps) */
     migrate(handle, name, sessionID, wakeThem, timeout) {
       const sys = systemOf(handle);
-      return scoped(() => {
-        const job = out32();
-        const status = x.ta_host_migrate(sys.host, viewOf(typeof name === 'string' ? name : undefined), session(sessionID), wakeThem ? K.HOST_MIGRATE_WAKE : 0, time(timeout), job);
+      const job = scoped(() => {
+        const out = out32();
+        const status = x.ta_host_migrate(sys.host, viewOf(optional(name)), session(sessionID), wakeThem === true ? K.HOST_MIGRATE_WAKE : 0, ticks(timeout), out);
         if (status !== OK) throw new Error('cannot start the migration');
-        return u32(job);
+        return u32(out);
       });
+      return new Promise((resolve) => sys.jobs.set(job, resolve));
     },
+    /* uninvoked(system, segment, token): the service ended (done, fail, no invoker) */
+    uninvoked(handle, segment, token) {
+      const sys = systemOf(handle);
+      const inv = invocationAt(sys, segment >>> 0, token >>> 0);
+      if (inv) invocationDrop(sys, inv);
+    },
+    /* invocations(system) -> the invocations kept (to abort when the system stops) */
+    invocations: (handle) => systemOf(handle).invocations.map((inv) => inv.object),
 
-    /* snapshot(system) -> { host, datamodel, segments: [image | null] } (quiescent: no migration) */
+    /* snapshot(system) -> blob (ta_host_snapshot_pack; quiescent: no migration) */
     snapshot(handle) {
       const sys = systemOf(handle);
-      const host = scoped(() => {
-        const length = out32();
-        let status = x.ta_host_snapshot(sys.host, 0, 0, length);
-        if (status !== OK && status !== ERROR.NO_MEMORY) throw statusError('snapshot', status, '');
-        const buffer = scratch(u32(length), 8);
-        status = x.ta_host_snapshot(sys.host, buffer, u32(length), length);
-        if (status !== OK) throw statusError('snapshot', status, '');
-        return copyOut(buffer, u32(length));
-      });
       sys.error = '';
       let datamodel;
       if (sys.native) datamodel = encoder.encode(nativeSnapshot(sys));
@@ -2558,19 +3194,23 @@ function systems(m) {
             status = x.ta_datamodel_ecmascript_snapshot(sys.quickjs, buffer, u32(length) + 1, length);
             if (status === OK) return copyOut(buffer, u32(length));
           }
-          throw statusError('snapshot', status, scoped(() => {
-            const p = x.ta_datamodel_ecmascript_last_error(sys.quickjs);
-            let n = 0;
-            while (m.u8()[p + n]) n++;
-            return text(p, n);
-          }));
+          const p = x.ta_datamodel_ecmascript_last_error(sys.quickjs);
+          let n = 0;
+          while (bytesAt()[p + n]) n++;
+          throw statusError('snapshot', status, text(p, n));
         });
-      const segments = [];
-      for (let k = 0, n = x.ta_host_segment_count(sys.host); k < n; k++) {
-        const segment = segmentImage(sys, k);
-        segments.push(segment && segment.live && sys.images[k] ? sys.images[k] : null);
-      }
-      return { host, datamodel, segments };
+      return scoped(() => {
+        const label = viewOf(sys.native ? 'native' : 'quickjs');
+        const state = bytesIn(datamodel);
+        const length = out32();
+        let status = x.ta_host_snapshot_pack(sys.host, label, state, datamodel.length, 0, 0, length);
+        if (status === ERROR.NO_MEMORY) {
+          const buffer = scratch(u32(length) || 1, 8);
+          status = x.ta_host_snapshot_pack(sys.host, label, state, datamodel.length, buffer, u32(length), length);
+          if (status === OK) return copyOut(buffer, u32(length));
+        }
+        throw statusError('snapshot', status === OK ? ERROR.INVALID : status, sys.error);
+      });
     },
 
     /* stats(system) -> { actors, ..., charts: [...], segments: [...] } */
@@ -2643,129 +3283,182 @@ function systems(m) {
     destroy(handle) {
       const sys = handle && handle.__system;
       if (!sys) return;
-      if (sys.running) throw new Error('the system is running');
+      if (sys.running) {
+        /* from an effect handler: the host goes when the pump ends */
+        sys.stopping = true;
+        return;
+      }
       systemDestroy(sys);
     },
 
-    /* ---- the router: peers, routes, policy */
-    /* peerAdd(host, id, reach[], flags, maxQueue, queueTTLMs) -> peer handle (0: refused) */
-    peerAdd(handle, id, reach, flags, maxQueue, queueTTL) {
-      const sys = systemOf(handle);
+    /* ---- links */
+    /* linkConnect(system, options) -> link: the next pump asks for its transport (an "open" effect) */
+    linkConnect: (handle, options) => linkOpen(handle, options, false),
+    /* linkServe(system, options) -> server */
+    linkServe: (handle, options) => linkOpen(handle, options, true),
+    /* linkAccept(system, server) -> connection: a transport the server took */
+    linkAccept(handle, server) {
+      const sys = linksCall(handle);
       return scoped(() => {
-        const P = offsets('ta_peer_config');
-        const c = zeroed(size('ta_peer_config'));
-        const list = Array.isArray(reach) ? reach : [];
-        const views = scratch(8 * (list.length || 1), 4);
-        list.forEach((r, i) => putView(views + 8 * i, String(r)));
-        setU32(c + P.size, size('ta_peer_config'));
-        setU32(c + P.flags, flags >>> 0);
-        putView(c + P.id, String(id));
-        setU32(c + P.reach, views);
-        setU32(c + P.reach_count, list.length);
-        setU32(c + P.max_queue, maxQueue >>> 0);
-        setU64(c + P.queue_ttl, time(queueTTL));
-        const peer = out32();
-        return x.ta_host_peer_add(sys.host, c, peer) === OK ? u32(peer) : 0;
+        const out = out32();
+        return x.ta_links_accept(sys.links, server >>> 0, out) === OK ? u32(out) : null;
       });
     },
-    peerUp: (handle, peer, up) => x.ta_host_peer_up(systemOf(handle).host, peer >>> 0, up ? 1 : 0) === OK,
-    peerRemove: (handle, peer) => x.ta_host_peer_remove(systemOf(handle).host, peer >>> 0) === OK,
-    peerReach(handle, peer, reach) {
-      const sys = systemOf(handle);
-      return scoped(() => {
-        const list = Array.isArray(reach) ? reach : [];
-        const views = scratch(8 * (list.length || 1), 4);
-        list.forEach((r, i) => putView(views + 8 * i, String(r)));
-        return x.ta_host_peer_reach(sys.host, peer >>> 0, views, list.length) === OK;
+    /* linkOpened(system, connection) */
+    linkOpened(handle, connection) {
+      const sys = linksCall(handle);
+      x.ta_links_opened(sys.links, connection >>> 0, tickNow(sys));
+      return inputDone(sys, undefined);
+    },
+    /* linkReceived(system, connection, text) -> whether the link is open (its hello came) */
+    linkReceived(handle, connection, message) {
+      const sys = linksCall(handle);
+      const now = tickNow(sys);
+      x.ta_host_advance_time(sys.host, now);
+      if (typeof message === 'string') scoped(() => x.ta_links_received(sys.links, connection >>> 0, viewOf(message), now));
+      const open = scoped(() => {
+        const status = zeroed(size('ta_link_status'));
+        setU32(status, size('ta_link_status'));
+        return x.ta_links_status(sys.links, connection >>> 0, status) === OK && !!u32(status + at('ta_link_status', 'open'));
       });
+      return inputDone(sys, open);
     },
-    route: (handle, system, peer) => scoped(() => x.ta_host_route(systemOf(handle).host, viewOf(String(system)), peer >>> 0) === OK),
-    exportName: (handle, peer, name, events) => scoped(() => x.ta_host_export(systemOf(handle).host, peer >>> 0, viewOf(String(name)), viewOf(String(events))) === OK),
-    peerError: (handle, peer, origin, msgid, sendid, reason) =>
-      scoped(() => x.ta_host_peer_error(systemOf(handle).host, peer >>> 0, viewOf(origin == null ? '' : String(origin)), viewOf(msgid == null ? '' : String(msgid)), viewOf(sendid == null ? '' : String(sendid)), reason >>> 0) === OK),
-    peerRoundTripTime: (handle, peer, ms) => {
-      x.ta_host_peer_round_trip_time(systemOf(handle).host, peer >>> 0, ms >>> 0);
+    /* linkDropped(system, connection, why) */
+    linkDropped(handle, connection, why) {
+      const sys = linksCall(handle);
+      scoped(() => x.ta_links_dropped(sys.links, connection >>> 0, viewOf(typeof why === 'string' ? why : ''), tickNow(sys)));
+      return inputDone(sys, undefined);
     },
-    /* peerStatus(host, peer) -> { id, state, queued, rtt, lag, sent, received, errors, duplicates } | null */
-    peerStatus(handle, peer) {
-      const sys = systemOf(handle);
+    /* linkAdmit(system, connection, verdict): a judged hello (0 refuse, 1 admit, 2 trusted) */
+    linkAdmit(handle, connection, verdict) {
+      const sys = linksCall(handle);
+      x.ta_links_admit(sys.links, connection >>> 0, verdict >>> 0, tickNow(sys));
+      return inputDone(sys, undefined);
+    },
+    /* linkClose(system, handle): a link, a server or a connection */
+    linkClose(handle, link) {
+      const sys = linksCall(handle);
+      x.ta_links_close(sys.links, link >>> 0, tickNow(sys));
+      return inputDone(sys, undefined);
+    },
+    /* linkStatus(system, connection) -> the router's view of its peer with { open,
+     * remote, attempts, error }, or null */
+    linkStatus(handle, connection) {
+      const sys = linksCall(handle);
+      const status = scoped(() => {
+        const L = offsets('ta_link_status');
+        const p = zeroed(size('ta_link_status'));
+        setU32(p, size('ta_link_status'));
+        if (x.ta_links_status(sys.links, connection >>> 0, p) !== OK) return null;
+        return { peer: u32(p + L.peer), open: !!u32(p + L.open), remote: view(p + L.remote), attempts: u32(p + L.attempts), error: viewLength(p + L.error) ? view(p + L.error) : null };
+      });
+      if (!status) return null;
+      const o = peerStatus(sys, status.peer) || {};
+      o.open = status.open;
+      o.remote = status.remote;
+      o.attempts = status.attempts;
+      o.error = status.error;
+      return o;
+    },
+    /* linkConnections(system, server) -> its connections that said hello (also while away) */
+    linkConnections(handle, server) {
+      const sys = linksCall(handle);
       return scoped(() => {
-        const P = offsets('ta_peer_status');
-        const s = zeroed(size('ta_peer_status'));
-        setU32(s, size('ta_peer_status'));
-        if (x.ta_host_peer_status(sys.host, peer >>> 0, s) !== OK) return null;
-        return {
-          id: view(s + P.id),
-          state: ['connecting', 'open', 'reconnecting', 'closed'][u32(s + P.state) & 3],
-          queued: u32(s + P.queued),
-          rtt: u32(s + P.round_trip_time),
-          lag: n64(s + P.lag),
-          sent: n64(s + P.sent),
-          received: n64(s + P.received),
-          errors: n64(s + P.errors),
-          duplicates: n64(s + P.duplicates),
-        };
+        const n = x.ta_links_connections(sys.links, server >>> 0, 0, 0);
+        const buffer = scratch(4 * (n || 1), 4);
+        const k = x.ta_links_connections(sys.links, server >>> 0, buffer, n);
+        return Array.from({ length: k }, (_, i) => u32(buffer + 4 * i));
       });
     },
 
-    /* ---- tracing and metrics */
-    /* traceConfigure(host, { enabled, classes, sampleParts, sampleWhole, rules, flags, valueLimit, resource }) */
-    traceConfigure(handle, options) {
+    /* ---- tracing */
+    /* traceConfigure(system, { enabled, detail, kinds, values, sample, rules, parent, logs,
+     * spanMetrics, valueLimit, sink, resource }): what the systems write (ta_host_trace_set)
+     * and the encoder that reads it (none when not enabled: then no records are
+     * written; traceparents still travel) */
+    traceConfigure(handle, o) {
       const sys = systemOf(handle);
-      const enabled = !!options.enabled;
-      let parts = options.sampleParts === undefined ? 1 : options.sampleParts >>> 0;
-      let whole = options.sampleWhole === undefined ? 1 : options.sampleWhole >>> 0;
-      if (!whole) [parts, whole] = [0, 1]; /* nothing sampled */
+      const enabled = o.enabled === true;
+      const values = o.values === true;
+      const kinds = detailKinds(o.detail, o.kinds, values, true);
+      const parts = sampleParts(o.sample);
+      let flags = 0;
+      if (o.parent !== undefined && o.parent !== 'link' && o.parent !== 'cause') throw new TypeError('parent: "cause" or "link"');
+      if (o.parent === 'link') flags |= K.OTLP_LINK_PARENTS;
+      if (values) flags |= K.OTLP_VALUES;
+      if (o.logs === false) flags |= K.OTLP_NO_LOGS;
+      if (o.spanMetrics === true) flags |= K.OTLP_SPAN_METRICS;
+      const rules = (Array.isArray(o.rules) ? o.rules : []).map(ruleOf);
+      for (const r of rules) if (r.detail !== NIL && r.detail & K.TRACE_VALUES) flags |= K.OTLP_VALUES;
       const status = scoped(() => {
-        /* ta_host_trace_set takes each rule's detail as kinds and gives them classes itself */
         const P = offsets('ta_host_trace_options');
-        const host = zeroed(size('ta_host_trace_options'));
-        const classes = Array.isArray(options.classes) ? options.classes : [];
-        setU32(host + P.size, size('ta_host_trace_options'));
-        setU32(host + P.flags, enabled ? 0 : K.HOST_TRACE_NO_RECORDS);
-        setU32(host + P.kinds, classes[1] >>> 0);
-        setU32(host + P.sample_parts, parts);
-        setU32(host + P.sample_whole, whole);
-        const rules = Array.isArray(options.rules) ? options.rules : [];
-        const R = offsets('ta_trace_rule');
-        const array = zeroed(size('ta_trace_rule') * (rules.length || 1));
-        rules.forEach((rule, i) => {
-          const r = array + size('ta_trace_rule') * i;
-          setU32(r + R.size, size('ta_trace_rule'));
-          setU32(r + R.at, rule.at >>> 0);
-          for (const field of ['chart', 'actor', 'event']) putView(r + R[field], typeof rule[field] === 'string' ? rule[field] : '');
-          if (rule.session !== undefined) setU64(r + R.session, BigInt(String(rule.session).replace(/[^0-9].*$/, '') || 0));
-          setU32(r + R.from, rule.from >>> 0);
-          setU32(r + R.sample, rule.sample >>> 0);
-          setU32(r + R.sample_parts, rule.parts >>> 0);
-          setU32(r + R.sample_whole, rule.whole >>> 0);
-          setU32(r + R.detail, rule.detail < 0 || rule.detail === undefined ? NIL : classes[rule.detail] >>> 0);
-          setU32(r + R.per_second, rule.perSecond >>> 0);
-          setU32(r + R.burst, rule.burst >>> 0);
-        });
-        setU32(host + P.rules, array);
-        setU32(host + P.rule_count, rules.length);
-        return x.ta_host_trace_set(sys.host, host);
+        const options = zeroed(size('ta_host_trace_options'));
+        setU32(options + P.size, size('ta_host_trace_options'));
+        setU32(options + P.flags, enabled ? 0 : K.HOST_TRACE_NO_RECORDS);
+        setU32(options + P.kinds, kinds);
+        setU32(options + P.sample_parts, parts);
+        setU32(options + P.sample_whole, SAMPLE_WHOLE);
+        setU32(options + P.rules, rulesIn(rules));
+        setU32(options + P.rule_count, rules.length);
+        return x.ta_host_trace_set(sys.host, options);
       });
-      if (status === ERROR.NO_MEMORY) throw new Error('traces: more rules than a system holds (64), or no memory');
-      if (status === ERROR.INVALID) throw new Error('traces: a rule is malformed, or names more than 16 actors');
+      if (status !== OK) throw traceStatusError(status);
+      sys.otlpFlags = flags >>> 0;
+      sys.traceSink = o.sink === true;
       if (!enabled) {
         if (sys.otlp) free(sys.otlp.memory);
         sys.otlp = null;
         return;
       }
       if (!sys.otlp) {
-        sys.otlp = otlpNew({ flags: options.flags >>> 0, value_limit: options.valueLimit >>> 0 });
+        sys.otlp = otlpNew({ flags: sys.otlpFlags, value_limit: numberOr0(o.valueLimit) >>> 0 });
         if (!sys.otlp) throw new Error('cannot create the trace encoder');
       }
-      x.ta_otlp_set_flags(sys.otlp.otlp, options.flags >>> 0);
-      if (options.resource)
+      encoderFlags(sys);
+      if (o.resource !== undefined)
         scoped(() => {
-          const [attributes, count] = attributesIn(options.resource);
+          const [attributes, count] = attributesIn(o.resource);
           x.ta_otlp_set_resource(sys.otlp.otlp, attributes, count);
         });
     },
-    /* traceEnd(host) -> { traces, traceLogs }: every open span ends (incomplete) */
+    /* watch(system, { sessions, names, charts, events, detail, values, perSecond, for: ms })
+     * -> id: steps matching any of them are traced in full detail, sampled whatever
+     * the ratio, with what they cause, until `for` ms of the system's time passed
+     * (15 minutes; Infinity: until unwatch) */
+    watch(handle, o) {
+      const sys = systemOf(handle);
+      const values = o.values === true;
+      let kinds = o.detail === undefined ? K.TRACE_FULL : detailKinds(o.detail, undefined, values, false);
+      if (values) kinds = (kinds | K.TRACE_VALUES) >>> 0;
+      const lists = ['sessions', 'names', 'charts', 'events'].map((name) => (Array.isArray(o[name]) ? o[name] : []));
+      const rules = [];
+      lists.forEach((list, k) => {
+        for (const item of list) {
+          const r = { at: K.TRACE_AT_START | K.TRACE_AT_TAKE, from: 0, sample: K.TRACE_SAMPLE, parts: 0, whole: 0, detail: kinds, perSecond: numberOr0(o.perSecond) >>> 0, burst: 0, session: 0n, chart: '', actor: '', event: '' };
+          if (k === 0) r.session = decimal(item);
+          else r[['', 'actor', 'chart', 'event'][k]] = typeof item === 'string' ? item : '';
+          rules.push(r);
+        }
+      });
+      if (!rules.length) throw new TypeError('watchTraces: name actors, sessions, names, charts or events');
+      const ms = typeof o.for === 'number' ? o.for : WATCH_MS;
+      const until = ms > 0 && ms < 1e15 ? ticks(systemNow(sys) + ms) : NEVER;
+      const result = scoped(() => {
+        const out = out32();
+        const status = x.ta_host_trace_watch(sys.host, rulesIn(rules), rules.length, until, out);
+        return status === OK ? { id: u32(out) } : { status };
+      });
+      if (result.status !== undefined) throw traceStatusError(result.status);
+      if (values) sys.watchValues = true;
+      encoderFlags(sys);
+      return inputDone(sys, result.id); /* its end is a deadline now */
+    },
+    /* unwatch(system, id): the watch ends now */
+    unwatch(handle, id) {
+      x.ta_host_trace_unwatch(systemOf(handle).host, id >>> 0);
+    },
+    /* traceEnd(system) -> { traces, traceLogs }: every open span ends (incomplete), for
+     * a system going away */
     traceEnd(handle) {
       const sys = systemOf(handle);
       const out = {};
@@ -2778,24 +3471,88 @@ function systems(m) {
       }
       const traces = concat(sys.traces);
       const logs = concat(sys.logs);
-      if (traces) out.traces = traces;
-      if (logs) out.traceLogs = logs;
       sys.traces = [];
       sys.logs = [];
+      exporterAdd(sys, K.OTLP_TRACES, traces);
+      exporterAdd(sys, K.OTLP_LOGS, logs);
+      if (traces) out.traces = traces;
+      if (logs) out.traceLogs = logs;
       return out;
     },
-    /* metrics(host, metrics, resource, startMs, timeMs) -> Uint8Array */
-    metrics: (handle, metrics, resource, start, timeMs) => metricsRequest(systemOf(handle), metrics, resource, start, timeMs),
-  };
 
-  function actorsOf(sys) {
-    return scoped(() => {
+    /* ---- the exporter */
+    /* exporter(system, { traces, logs, metrics }): which signals core.mjs posts (none: no exporter) */
+    exporter(handle, o) {
+      const sys = systemOf(handle);
+      let signals = 0;
+      SIGNALS.forEach((name, i) => {
+        if (o[name] === true) signals |= 1 << i;
+      });
+      sys.exportSignals = signals;
+      if (!signals) {
+        if (sys.exporter) x.ta_otlp_batch_free(sys.exporter);
+        sys.exporter = 0;
+        return;
+      }
+      if (!sys.exporter)
+        sys.exporter = scoped(() => {
+          const allocator = zeroed(size('ta_allocator'));
+          x.ta_runtime_malloc(allocator);
+          const out = out32();
+          return x.ta_otlp_batch_new(allocator, out) === OK ? u32(out) : 0;
+        });
+      if (!sys.exporter) throw new Error('cannot create the exporter');
+    },
+    /* exportAdd(system, signal, bytes): bytes for the exporter (metrics) */
+    exportAdd(handle, signal, bytes) {
+      const sys = systemOf(handle);
+      const b = asBytes(bytes);
+      if (SIGNALS.includes(signal) && b) exporterAdd(sys, SIGNALS.indexOf(signal), b);
+      return inputDone(sys, undefined); /* posts due go out */
+    },
+    /* exportFlush(system): post everything waiting now */
+    exportFlush(handle) {
+      const sys = systemOf(handle);
+      sys.exportFlush = K.OTLP_BATCH_FLUSH;
+      return inputDone(sys, undefined);
+    },
+    /* posted(system, signal, ok) -> the failures so far when one is worth a log line now, else 0 */
+    posted(handle, signal, ok) {
+      const sys = systemOf(handle);
+      const k = SIGNALS.indexOf(signal);
+      if (!sys.exporter || k < 0) return 0;
+      const now = tickNow(sys);
+      x.ta_otlp_batch_done(sys.exporter, k, ok === true ? 1 : 0, now);
+      const failures = scoped(() => {
+        const out = out64();
+        return x.ta_otlp_batch_report(sys.exporter, now, out) ? n64(out) : 0;
+      });
+      return inputDone(sys, failures); /* what waited goes */
+    },
+    /* exportStats(system) -> { posted, failed, dropped, waiting, inFlight } (bytes) */
+    exportStats: (handle) => exportStats(systemOf(handle)),
+    /* exportDrain(system) -> [{ signal, body }]: everything waiting, for a system that goes */
+    exportDrain(handle) {
+      const sys = systemOf(handle);
       const out = [];
-      const cursor = out64();
-      const batch = scratch(8 * 256, 8);
-      let n;
-      while ((n = x.ta_host_actors(sys.host, cursor, batch, 256)) > 0) for (let i = 0; i < n; i++) out.push(n64(batch + 8 * i));
+      exporterNext(sys, K.OTLP_BATCH_DRAIN, (post) => out.push(post));
       return out;
-    });
-  }
+    },
+
+    /* ---- metrics */
+    /* metricsSnapshot(system, startMs, timeMs) -> { startTime, time, metrics }: the host's
+     * counts and the binding's own, as the API's metrics */
+    metricsSnapshot(handle, start, time) {
+      const sys = systemOf(handle);
+      return { startTime: start, time, metrics: metricsValue(metricsRequest(sys, ownMetrics(sys), [], start, time)) };
+    },
+    /* metricsExport(system, metrics, resource, startMs, timeMs): the host's counts, the
+     * binding's own and the application's `metrics` go to the exporter (/v1/metrics) */
+    metricsExport(handle, metrics, resource, start, time) {
+      const sys = systemOf(handle);
+      const bytes = metricsRequest(sys, [...ownMetrics(sys), ...(Array.isArray(metrics) ? metrics : [])], resource, start, time);
+      exporterAdd(sys, K.OTLP_METRICS, bytes);
+      return inputDone(sys, undefined); /* due posts go out */
+    },
+  };
 }
