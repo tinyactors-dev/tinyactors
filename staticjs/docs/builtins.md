@@ -15,16 +15,18 @@ commit must show with `bench-compare` that it costs nothing.
 A built-in is one of two kinds, and the choice decides most of its cost.
 
 - **A leaf** finishes in one C call: `includes`, `slice`, `join`,
-  `Math.max`, `Object.fromEntries`, the set methods, a map's `get` and `has`, `String.raw`,
+  `Math.max`, `Object.fromEntries`, the set methods, a map's `get` and `has`, an iterator's `take` and `drop`, `String.raw`,
   `encodeURI`, `encodeURIComponent`, `decodeURI`, `decodeURIComponent`, `JSON.parse` and
   `JSON.stringify` (in `src/json.c`, each over an explicit stack). It gets its arguments
   borrowed in a `sjs_leaf_call` and returns an owned `result` and a `cost`.
   `call()` charges the cost, cuts the stack and pushes the result.
 - **A loop** calls a callback: `map`, `filter`, `reduce`, `some`, `every`,
   `find`, `findIndex`, `findLast`, `findLastIndex`, `flatMap`, `toSorted`, `Object.groupBy`, `Array.from` (with a mapper), `Map.groupBy`, a map's
-  `forEach`, an iterator's `map`, `filter` and `reduce` (which run as the
-  array's loops of their names over what the iterator yields:
-  `late_start`). It is a frame on the
+  `forEach`, an iterator's `map`, `filter`, `reduce`, `some`, `every`,
+  `find` and `flatMap` (which run as the array's loops of their names over
+  what the iterator yields: `late_start`; `flatMap` with its own step,
+  `flatten_iterated`) and its `forEach` (a map's forEach's loop). It is a
+  frame on the
   evaluator's stack (`FRAME_LOOP`). `sjs_loop_start` sets it up, and
   `sjs_loop_step` either calls the callback once (`LOOP_CALL`) or finishes
   (`LOOP_DONE`). A callback never runs on the C stack. That keeps an
@@ -259,7 +261,8 @@ an order, `c` a literal), `(a, x) => a + x` is SUM and `(a, x) => a +
 x.key` is SUM_KEY. A loop built-in may run such a callback in C, as `map`
 does with PLUCK (so do `Object.groupBy`, `Array.from` and `Map.groupBy`, and an iterator's `map`, which runs as map), `toSorted` with COMPARE_BY_KEY and COMPARE_NUMERIC (and so `sort`, which is its loop: docs/mutation.md),
 `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `some` and `every` with
-KEY_COMPARE and ELEMENT_COMPARE, and `reduce` with SUM and SUM_KEY
+KEY_COMPARE and ELEMENT_COMPARE (and an iterator's `filter`, `find`,
+`some` and `every`, which run as those), and `reduce` with SUM and SUM_KEY (an iterator's too)
 (`pluck_step`, `sort_by_key`, `sort_numbers`, `predicate_step` and
 `sum_step` in `src/builtins.c`). The tag only
 says what the bytecode computes; the bytecode is still there, and the C

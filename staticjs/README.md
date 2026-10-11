@@ -213,7 +213,7 @@ Built-ins:
 | regular expressions | literals (docs/regex.md); `test` `exec`, `source` `flags` `global` `ignoreCase` `multiline` `dotAll` `unicode` `unicodeSets` `sticky` `hasIndices`, `lastIndex` (always 0); with a string: `match` `matchAll` `search` (with a regular expression only), `replace` `replaceAll` `split` (with one or a string; `split` takes a limit, a number, with a regular expression only). A match runs in time linear in its input, on a Pike automaton paused on fuel like any loop; where no thread is alive, a pattern that begins with an ASCII character, or with `^` past the start, skips the bytes that cannot begin a match, charging the fuel following them would. A match result is an array with `index`, `input`, `groups` and, with `d`, `indices`; a replacement is a string with `$&` `` $` `` `$'` `$$` `$n` `$<name>`, a primitive written as `String` writes it, or a function called once per match. A regular expression is written as `/source/flags`, `typeof` gives `"object"`, `JSON.stringify` `{}`, and a property it does not have `undefined` |
 | sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf` `isSupersetOf` `isDisjointFrom`, `size` |
 | maps | `get` `has` `keys` `values` `entries` `forEach`, `size` |
-| iterators | `toArray` `map` `filter` `reduce` |
+| iterators | `toArray` `map` `filter` `reduce` `some` `every` `find` `forEach` `flatMap` `take` `drop` |
 | BigInts | `toString` (radix 2 to 36) |
 | functions | `String` `String.fromCharCode` `String.fromCodePoint` `String.raw` (called as a function: staticjs has no tagged templates) `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Map.groupBy` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` `encodeURI` `encodeURIComponent` `decodeURI` `decodeURIComponent` |
 | `JSON` | `parse` `stringify` (see "JSON" below) |
@@ -318,10 +318,13 @@ an embedder builds and reads maps with `sjs_map_new`, `sjs_map_set`,
 **Iterators.** `m.keys()`, `m.values()` and `m.entries()` give an iterator
 (the value kind `SJS_ITERATOR`, `typeof` `"object"`), which a spread,
 `Array.from`, `new Set`, `new Map`, `Object.fromEntries`, an array pattern
-and its own `toArray()` take, and whose `map`, `filter` and `reduce` run as
-the array's loops of those names, with their shapes, over what it yields:
-the callback gets the value and a counter, and `map` and `filter` give
-iterators. A JavaScript iterator yields its values once and is then empty;
+and its own `toArray()` take, and whose `map`, `filter`, `reduce`, `some`,
+`every`, `find` and `flatMap` run as the array's loops of those names,
+with their shapes, over what it yields (`forEach` as a map's): the
+callback gets the value and a counter, and `map`, `filter` and `flatMap`
+give iterators. `flatMap`'s callback returns an array, a set, a map or an
+iterator. `take(n)` and `drop(n)` give an iterator of the first `n` values
+or of the rest. A JavaScript iterator yields its values once and is then empty;
 a staticjs value cannot change. So staticjs reads an iterator only where
 nothing else holds it (`sjs_value_unique`, as for updating a value in
 place): a temporary (`[...m.keys()]`), or a variable's last read, which
@@ -333,9 +336,11 @@ else holds. An iterator also holds its map, so the map cannot change while
 the iterator lives (owned mutation faults: "held elsewhere"), as a
 JavaScript iterator would yield what changed. The helpers are lazy in
 JavaScript, but their callbacks change nothing, so running them at once
-gives the same values. `next`, `drop`, `take`, `flatMap`, `some`, `every`,
-`find` and an iterator's `forEach` fault ("does not have this method"); a
-property an iterator lacks is `undefined`. The writer writes an iterator as
+gives the same values; a callback of `map`, `filter` or `flatMap` runs on
+every value, also those a later `take`, `some`, `every` or `find` never
+reads, so it can fault where JavaScript gives a value. `some`, `every` and
+`find` stop at the first value that decides them. `next` faults ("does not
+have this method"); a property an iterator lacks is `undefined`. The writer writes an iterator as
 `[...].values()`, an iterator that yields the same values.
 
 `m.set(key, value)`, `m.delete(key)` and `m.clear()` change a map a
@@ -436,8 +441,11 @@ compare identities, or find something on a prototype.
   a BigInt is its digits.
 - An iterator read where something else holds it too (`[[...it], [...it]]`,
   a closure's capture), where JavaScript gives nothing the second time; an
-  iterator's `next`, `drop`, `take`, `flatMap`, `some`, `every`, `find` and
-  `forEach`; `Map.groupBy` of anything but an array, as `Object.groupBy`.
+  iterator's `next`; a callback of an iterator's `map`, `filter` or
+  `flatMap` that faults on a value a later `take`, `some`, `every` or
+  `find` would not read, as staticjs runs them to the end; `take` and
+  `drop` of a string or an object, which JavaScript converts to a number;
+  `Map.groupBy` of anything but an array, as `Object.groupBy`.
 - A property JavaScript finds on `Object.prototype` (`toString`,
   `__proto__`); reading a method without calling it, by name, through a
   pattern or with `in`: any method of an array, a string, a set or a map, those
