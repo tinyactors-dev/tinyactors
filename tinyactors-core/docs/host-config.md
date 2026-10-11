@@ -1,11 +1,36 @@
 # Host config
 
 `ta_host_create(config, environment, &host)` (`include/tinyactors/host.h`)
-takes the host's config as one CBOR map
-([ADR 0009](../../docs/adr/0009-one-host-two-queues.md), decision 9). The
-host reads it during the call; nothing points into it afterwards. What
-cannot be data is in `ta_host_environment`: the allocator, the datamodels,
-a trace policy, and an optional buffer for the error reply.
+takes the host in two parts: its config as one CBOR map, and a
+`ta_host_environment` struct of pointers. The host reads the config during
+the call; nothing points into it afterwards.
+
+## Why two parts
+
+What can be written as data is in the config. What cannot is in the
+environment.
+
+| Part | What | Why there |
+|---|---|---|
+| config (CBOR) | the system id, the segments' capacities, the I/O processors, the encoder, the host's limits | plain values: numbers, text, lists and maps. Every binding builds them from its own language's data with one CBOR module, as it builds requests. |
+| environment (struct) | the allocator, the datamodels, a trace policy, the error buffer | pointers and callbacks: memory and functions in the caller's process. Bytes cannot carry them. |
+
+**One shape for every binding.** A C struct of capacities and options
+grows a field with every release, and each binding then needs code for
+it: a converter from its language's object to the struct. A CBOR map is
+the shape a binding already writes for requests. A new key needs no new
+code in a binding that passes the application's map through.
+
+**Core validates and fills defaults.** The host knows which keys it
+takes, their types and their limits, and it reports a refusal the way it
+answers a request: a code, a reason, a path such as `system.maxActors`,
+and a message. A binding does not check the config, does not keep its own
+defaults, and does not write its own error messages. Each binding then
+behaves the same, and a default changes in one place.
+
+**A failed creation answers like a request.** There is no host yet to ask,
+so the reply goes into `environment->error`, a buffer the caller lends
+(see *Errors*). Without it, the caller still gets the status.
 
 Keys are camelCase, as in [requests](requests.md). An absent key is its
 default; a key the host does not take is refused. Examples are in CBOR
@@ -30,25 +55,56 @@ diagnostic notation.
 | `maxSubscriptions` | uint, at most 2^20 | `64` | sessions `actor.subscribe` watches at once |
 | `telemetry` | map | absent: no encoder | the OTLP encoder, below |
 
+Why these defaults:
+
+- **`systemID` has none.** It is part of every address this system hands
+  out and of every envelope it sends, so two systems must never share one
+  by accident. Only the application can choose it.
+- **`system`: the system's own defaults.** A 0 or an absent key means
+  `ta_system_config`'s default, so a host and a system created alone have
+  the same capacities, and the numbers are kept in one place.
+- **`ioProcessors`: none.** Core does no I/O. A processor is something the
+  binding serves, so the binding names the ones it has.
+- **`migrateQuantum`: 256.** A migration job works between runs. 256 actors
+  per run keep a run short while a large segment still moves in a few
+  thousand runs.
+- **`maxSubscriptions`: 64.** Subscriptions are for things a person
+  watches: a UI or a debugger, not every actor. The table is allocated once,
+  with the first subscription, so the limit bounds the memory: 8 bytes per
+  slot.
+- **`telemetry`: absent.** An encoder takes memory for its staging and
+  needs a binding that takes its effects and posts the bytes. A host that
+  does not export pays nothing (a null encoder).
+
 `system` (each a uint; 0 or absent: the system's default,
 `ta_system_config` in `tinyactors/system.h`): `maxActors`, `maxEvents`,
 `maxTimers`, `workspaces`, `maxRequests`, `outbox`, `quantum`,
 `instanceBytes`, `stringBytes`, `ticksPerSecond`, `traceBytes`,
 `traceContexts`, `traceRules`, `traceSeed`; and `tracing` (bool, default
-`true`).
+`true`: the trace records are written, so a binding can turn on export or a
+watch later without making the host again).
 
 `telemetry` (present: the host has an encoder and gives
 `TA_HOST_EFFECT_TRACES` and `TA_HOST_EFFECT_LOGS`):
 - uints, 0 or absent for the encoder's default (`ta_otlp_config` in
-  `tinyactors/otlp.h`): `stagingBytes`, `logBytes`, `openSpans`, `chunks`,
-  `scopes`, `valueLimit`, `renderBytes`, `resourceBytes`, `metricBytes`,
-  `spanMetricCharts`;
+  `tinyactors/otlp.h`, for the same reason as `system`): `stagingBytes`,
+  `logBytes`, `openSpans`, `chunks`, `scopes`, `valueLimit`, `renderBytes`,
+  `resourceBytes`, `metricBytes`, `spanMetricCharts`;
 - `flushInterval` (uint, host clock): a request is ready this long after its
-  first record was staged; 0 or absent: only when the staging is full;
-- `linkParents` (bool, `false`), `values` (bool, `false`), `logs` (bool,
-  `true`);
+  first record was staged; 0 or absent: only when the staging is full. The
+  host has no idea how often a backend wants data; a full staging is the
+  one moment it must act;
+- `linkParents` (bool, `false`): a macrostep is a root span linked to its
+  cause, instead of its child. Off, one trace shows a whole conversation
+  between actors, which is what most backends draw;
+- `values` (bool, `false`): event data and assigned values in the spans.
+  They can hold personal data, so an operator turns them on knowingly
+  (ADR 0006 in the repository root);
+- `logs` (bool, `true`): `<log>` and failed actions as log records. They
+  are few and they are what an operator looks for first;
 - `resource`: a map of text to text, at most 32 attributes, on every
-  request (`service.name`, ...).
+  request (`service.name`, ...). None by default: only the application
+  knows its name.
 
 ## Errors
 
