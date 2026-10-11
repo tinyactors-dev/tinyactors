@@ -176,7 +176,7 @@ static int begin_class(host_world *e, uint32_t si, const char *name) {
     return found;
 }
 
-/* {"op": "trace.watch"}: a rule for chart's "ask" events taken, sampled at
+/* {"method": "trace.watch"}: a rule for chart's "ask" events taken, sampled at
  * `detail` (with values); seconds < 0: no end. Its id, UINT64_MAX when refused. */
 static uint64_t watch(ta_host *host, const char *chart, const char *detail, int values,
                       double seconds) {
@@ -204,7 +204,7 @@ static uint64_t watch(ta_host *host, const char *chart, const char *detail, int 
     return ask_uint(&a, 0, "id");
 }
 
-/* {"op": "trace.unwatch"}: whether the reply's text is `expected`. */
+/* {"method": "trace.unwatch"}: whether the reply's text is `expected`. */
 static int unwatch(ta_host *host, uint64_t id, const char *expected) {
     static host_ask a;
     ta_cbor_writer *w = ask_begin(&a, "trace.unwatch", 1);
@@ -235,8 +235,8 @@ static void test_class_across_segments(void) {
     CHECK(strcmp(e.log, "pong:1;") == 0);
     CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_WATCHED); /* echo's, in segment 1 */
     CHECK_EQUAL(begin_class(&e, 0, "pong"), TA_TRACE_DETAIL_WATCHED); /* and back */
-    CHECK(unwatch(e.host, id, "{}"));
-    CHECK(unwatch(e.host, id, "{\"error\":{\"code\":\"stale\",\"path\":\"id\",\"message\":\"no such watch: it ended or never was\"}}"));
+    CHECK(unwatch(e.host, id, "{\"result\":{}}"));
+    CHECK(unwatch(e.host, id, "{\"error\":{\"code\":-32001,\"message\":\"no such watch: it ended or never was\",\"data\":{\"reason\":\"stale\",\"path\":\"params.id\"}}}"));
     CHECK_EQUAL(send(&e, w, "ask", message), TA_OK);
     run(&e);
     CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_SAMPLED);
@@ -246,7 +246,7 @@ static void test_class_across_segments(void) {
     drain(&e);
     CHECK_EQUAL(result.next_deadline, 500u);
     ta_host_advance_time(e.host, (ta_host_time){500, 0});
-    CHECK(unwatch(e.host, id, "{\"error\":{\"code\":\"stale\",\"path\":\"id\",\"message\":\"no such watch: it ended or never was\"}}"));
+    CHECK(unwatch(e.host, id, "{\"error\":{\"code\":-32001,\"message\":\"no such watch: it ended or never was\",\"data\":{\"reason\":\"stale\",\"path\":\"params.id\"}}}"));
     CHECK_EQUAL(send(&e, w, "ask", message), TA_OK);
     run(&e);
     CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_SAMPLED);
@@ -898,7 +898,7 @@ static void test_state_value(void) {
     CHECK_EQUAL(ask_state(e.host, session, value, sizeof value), TA_OK);
     CHECK(strcmp(value, "\"flat\"") == 0);
     CHECK_EQUAL(ask_state(e.host, session + 1000, value, sizeof value), TA_OK);
-    CHECK(strstr(value, "\"code\":\"stale\"") != NULL);
+    CHECK(strstr(value, "\"reason\":\"stale\"") != NULL);
     world_close(&e);
 }
 

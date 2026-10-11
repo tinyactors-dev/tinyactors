@@ -540,11 +540,12 @@ TA_API ta_status ta_host_snapshot_unpack(ta_bytes pack, ta_host_snapshot_content
 TA_API ta_bytes ta_host_snapshot_image(ta_bytes pack, uint32_t i);
 
 /* ---- requests: the rarely called API (docs/requests.md) --------------------------
- * One CBOR map in, naming its operation in "op"; one CBOR map out: the
- * result, or {"error": {"code", "path", "message"}} for a request the host
- * refuses. Trace configuration, watches, stats, inspection, state values and
- * decoded spans are requests; docs/requests.md lists every operation, its
- * fields, defaults and errors.
+ * JSON-RPC's shape without its "jsonrpc" member, in CBOR: one map in,
+ * {"method", "params", "id"}; one map out, {"id", "result"} or {"id",
+ * "error": {"code", "message", "data": {"reason", "path"}}} for a request the
+ * host refuses ("id" only when the request had one). Trace configuration,
+ * watches, stats, inspection, state values and decoded spans are methods;
+ * docs/requests.md lists every method, its params, defaults and errors.
  * TA_OK: `reply` holds the reply (a result or an error). TA_ERROR_NO_MEMORY:
  * nothing was applied and reply->length is what the reply needs; grow and
  * ask again. TA_ERROR_STATE during a run (nothing written). A request is

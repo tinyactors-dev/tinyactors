@@ -23,19 +23,24 @@ typedef struct host_ask {
     ta_buffer answer; /* the reply's bytes (answer.length) */
     ta_cbor_token reply_tokens[4096];
     ta_cbor_document document; /* the reply, decoded */
+    uint32_t result;           /* the reply's "result" token; TA_NIL for an error reply */
     char text[1 << 16];        /* the reply in diagnostic notation */
 } host_ask;
 
-/* A request {"op": op, ...}: `fields` more pairs follow, written with
- * ta_cbor_write_* on the returned writer. */
-TEST_UNUSED static ta_cbor_writer *ask_begin(host_ask *a, const char *operation, uint32_t fields) {
+/* A request {"method": method, "params": {...}}: `params` pairs follow,
+ * written with ta_cbor_write_* on the returned writer (none: no "params"). */
+TEST_UNUSED static ta_cbor_writer *ask_begin(host_ask *a, const char *method, uint32_t params) {
     memset(&a->writer, 0, sizeof a->writer);
     a->writer.document.tokens = a->tokens;
     a->writer.document.capacity = 128;
     a->writer.strings = (ta_buffer){a->strings, sizeof a->strings, 0};
-    ta_cbor_write_map(&a->writer, fields + 1);
-    ta_cbor_write_text(&a->writer, ta_string("op"));
-    ta_cbor_write_text(&a->writer, ta_string(operation));
+    ta_cbor_write_map(&a->writer, params ? 2 : 1);
+    ta_cbor_write_text(&a->writer, ta_string("method"));
+    ta_cbor_write_text(&a->writer, ta_string(method));
+    if (params) {
+        ta_cbor_write_text(&a->writer, ta_string("params"));
+        ta_cbor_write_map(&a->writer, params);
+    }
     return &a->writer;
 }
 
@@ -51,6 +56,7 @@ TEST_UNUSED static ta_status ask_send(ta_host *host, host_ask *a) {
     if (status != TA_OK) return status;
     a->document = (ta_cbor_document){{a->reply, a->answer.length}, a->reply_tokens, 4096, 0};
     if (ta_cbor_decode(&a->document) != TA_OK) return TA_ERROR_INVALID;
+    a->result = ta_cbor_member(&a->document, 0, ta_string("result"));
     ta_buffer text = {a->text, sizeof a->text - 1, 0};
     if (ta_cbor_diagnostic((ta_bytes){a->reply, a->answer.length}, &text) != TA_OK)
         return TA_ERROR_INVALID;
@@ -58,8 +64,9 @@ TEST_UNUSED static ta_status ask_send(ta_host *host, host_ask *a) {
     return TA_OK;
 }
 
-/* The token of reply field `key` (in the map at `map`, 0: the reply). */
+/* The token of result field `key` (in the map at `map`, 0: the result). */
 TEST_UNUSED static uint32_t ask_field(const host_ask *a, uint32_t map, const char *key) {
+    if (map == 0) map = a->result;
     return ta_cbor_member(&a->document, map, ta_string(key));
 }
 
@@ -70,7 +77,7 @@ TEST_UNUSED static uint64_t ask_uint(const host_ask *a, uint32_t map, const char
     return a->document.tokens[at].value;
 }
 
-/* {"op": "stats"}: one of the host's counters ("actors", "routed", ...). */
+/* {"method": "stats"}: one of the host's counters ("actors", "routed", ...). */
 TEST_UNUSED static uint64_t host_stat(ta_host *host, const char *field) {
     static host_ask a;
     ask_begin(&a, "stats", 0);
@@ -79,7 +86,7 @@ TEST_UNUSED static uint64_t host_stat(ta_host *host, const char *field) {
     return stats == TA_NIL ? UINT64_MAX : ask_uint(&a, stats, field);
 }
 
-/* {"op": "state", "session": session}: the reply's "value" in diagnostic
+/* {"method": "state", "params": {"session": session}}: the result's "value" in diagnostic
  * notation into text (cut to fit), or the error reply's text; the status of
  * ta_host_request. */
 TEST_UNUSED static ta_status ask_state(ta_host *host, uint64_t session, char *text,
@@ -92,10 +99,10 @@ TEST_UNUSED static ta_status ask_state(ta_host *host, uint64_t session, char *te
     if (capacity) text[0] = 0;
     if (status != TA_OK) return status;
     const char *value = a.text;
-    if (strncmp(value, "{\"value\":", 9) == 0) {
-        value += 9;
+    if (strncmp(value, "{\"result\":{\"value\":", 19) == 0) {
+        value += 19;
         size_t n = strlen(value);
-        if (n && value[n - 1] == '}') n--;
+        if (n >= 2 && value[n - 1] == '}' && value[n - 2] == '}') n -= 2;
         if (n >= capacity) n = capacity ? capacity - 1 : 0;
         memcpy(text, value, n);
         if (capacity) text[n] = 0;
@@ -106,7 +113,7 @@ TEST_UNUSED static ta_status ask_state(ta_host *host, uint64_t session, char *te
     return TA_OK;
 }
 
-/* {"op": "stats"}'s "host" map as a ta_host_stats (out->size: set by this). */
+/* {"method": "stats"}'s "host" map as a ta_host_stats (out->size: set by this). */
 TEST_UNUSED static void host_stats_fill(ta_host *host, ta_host_stats *out) {
     static host_ask a;
     memset(out, 0, sizeof *out);
@@ -127,7 +134,7 @@ TEST_UNUSED static void host_stats_fill(ta_host *host, ta_host_stats *out) {
     out->fuel_clock = ask_uint(&a, m, "fuelClock");
 }
 
-/* {"op": "stats"}'s "charts" into out (up to capacity); returns how many
+/* {"method": "stats"}'s "charts" into out (up to capacity); returns how many
  * there are. Names point into a reply buffer the next call reuses. */
 TEST_UNUSED static uint32_t host_chart_stats_fill(ta_host *host, ta_chart_stats *out,
                                                   uint32_t capacity) {
@@ -157,7 +164,7 @@ TEST_UNUSED static uint32_t host_chart_stats_fill(ta_host *host, ta_chart_stats 
     return count;
 }
 
-/* {"op": "actors"}: up to out.capacity sessions from *cursor (0 to start);
+/* {"method": "actors"}: up to out.capacity sessions from *cursor (0 to start);
  * returns how many, 0 when every session was listed. */
 TEST_UNUSED static uint32_t host_actors_page(ta_host *host, uint64_t *cursor, ta_uint64_array out) {
     static host_ask a;

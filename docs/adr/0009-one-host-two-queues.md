@@ -80,6 +80,17 @@ next deadline.
 TA_API ta_status ta_host_request(ta_host *host, ta_bytes request, ta_buffer *reply);
 ```
 
+**Amended (2026-10-11), after step 5d:** requests take JSON-RPC 2.0's
+shape without its `"jsonrpc"` member, so that a JSON-RPC transport is a thin
+mapping: `{"method", "params", "id"}` in, `{"id", "result"}` or
+`{"id", "error": {"code", "message", "data"}}` out, still CBOR. Error codes
+are integers, JSON-RPC's own where they fit (-32700, -32600, -32601,
+-32602) and -32001 to -32099 for the host's conditions; the reason and the
+path of the refused member go in `data`. Unlike JSON-RPC, a request without
+an id still gets a reply. Methods are named `area.verb` (`trace.watch`,
+`trace.spans.decode`). `tinyactors-core/docs/requests.md` lists the methods
+and says how to add one.
+
 ### 3. CBOR as token lists, in caller memory
 
 `src/base/cbor` and `include/tinyactors/cbor.h` (RFC 8949):

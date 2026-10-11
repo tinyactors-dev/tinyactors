@@ -53,6 +53,8 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
 - Scheduler yields must never change SCXML-observable state (`_event`,
   queue order). Only semantic transitions touch `instance.current_event`.
 - Every building block gets a unit test in `tests/unit/`.
+- A rarely called host operation is a method of `ta_host_request`: follow
+  "Adding a method" in `docs/requests.md` for what belongs there and how.
 - Names are whole words (docs/layout.md, "Naming"): the product is
   `tinyactors` (`<tinyactors/system.h>`, `libtinyactors_<layer>.a`), `ta_` /
   `TA_` is the only short prefix, files carry no prefix, internal includes are
