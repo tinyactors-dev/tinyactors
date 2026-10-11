@@ -631,6 +631,15 @@ static bool own_key(sjs_value o, const sjs_string *key) {
     }
 }
 
+/* String, Boolean, Number and BigInt as values: JavaScript's own a
+ * prototype and their statics besides length and name, which own_key does
+ * not list, so Object.hasOwn faults on any other key of theirs. */
+static bool has_statics(sjs_value o) {
+    if (o.kind != SJS_FUNCTION || o.as.heap->type != SJS_HEAP_BUILTIN) return false;
+    sjs_builtin_id id = (sjs_builtin_id)((const sjs_builtin_function *)(const void *)o.as.heap)->id;
+    return id == SJS_BUILTIN_STRING || id == SJS_BUILTIN_BOOLEAN || id == SJS_BUILTIN_NUMBER || id == SJS_BUILTIN_BIGINT;
+}
+
 /* Object.hasOwn(o, key): the key as ToPropertyKey gives it, from a
  * primitive only, as an object's would come from its toString. */
 static sjs_result has_own(sjs_vm *vm, sjs_leaf_call *call) {
@@ -640,6 +649,10 @@ static sjs_result has_own(sjs_vm *vm, sjs_leaf_call *call) {
     sjs_result r = sjs_to_key(vm->context, arg(call, 1), &k);
     if (r == SJS_ERR_PROGRAM) return sjs_vm_fault(vm, "a key must be a primitive");
     if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    if (has_statics(o) && !own_key(o, k)) {
+        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+        return sjs_vm_fault(vm, "Object.hasOwn of String, Boolean, Number or BigInt reads only length and name: JavaScript gives them a prototype and statics");
+    }
     call->result = sjs_boolean(own_key(o, k));
     sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
     return SJS_OK;
