@@ -176,6 +176,25 @@ length.
 `at-most-three-parameters` and `buffers-are-ta-buffer`
 (`tinyactors-core/tools/lint/rules/`).
 
+## No serialization on the hot path
+
+The calls made per event take and give C structs: spawn, send, send_many,
+terminate, deliver, advance_time, resume, run, and the effects and their ack
+([ADR 0009](docs/adr/0009-one-host-two-queues.md), decision 2 and its cost
+table). CBOR is for two things only:
+
+- **rarely called calls:** `ta_host_request` and the host's config;
+- **a process boundary:** bytes that leave or enter the process (an
+  envelope for another system, OTLP, blobs). The encoding sits beside the
+  struct call (`ta_host_envelope` writes a PEER effect as CBOR; a decoder
+  fills a `ta_envelope`, and `ta_host_deliver` still takes the struct), so
+  a caller in the same process never encodes.
+
+Before changing a call's input or output to bytes, find its callers inside
+core (`git grep`, ast-grep). If core calls it per event, as the router calls
+`ta_host_deliver` for every routed send, it stays a struct. A brief for
+such a change states the cost per event, which must be nothing.
+
 ## Acronyms
 
 An acronym in code is spelled in ALL CAPITALS or all lowercase, never
