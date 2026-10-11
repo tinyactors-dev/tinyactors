@@ -680,15 +680,6 @@ static void request_put_payload(request *r, const ta_datamodel_binding *binding,
     else request_put_null(r);
 }
 
-/* The datamodel binding that runs `chart` of `image`: its vtable's name is
- * the chart's datamodel attribute. */
-static const ta_datamodel_binding *request_datamodel(request *r, const ta_image *image, uint32_t chart) {
-    ta_string_view name = ta_image_chart_datamodel(image, chart);
-    for (uint32_t i = 0; i < r->host->config.datamodel_count; i++)
-        if (request_text_is(name, r->host->datamodels[i].vtable->name)) return &r->host->datamodels[i];
-    return (const ta_datamodel_binding *)0;
-}
-
 static void request_run_actor_context(request *r, uint32_t map) {
     static const char *const fields[] = {"session", NULL};
     uint64_t session;
@@ -699,7 +690,7 @@ static void request_run_actor_context(request *r, uint32_t map) {
     info.size = sizeof info;
     ta_actor_info_get(ta_host_system(r->host, segment), actor, &info);
     const ta_image *image = r->host->segments[segment].image;
-    const ta_datamodel_binding *binding = request_datamodel(r, image, info.chart);
+    const ta_datamodel_binding *binding = host_chart_datamodel(r->host, segment, info.chart);
     request_path_set(r, NULL, 0, "session");
     if (!binding || binding->vtable->size < sizeof(ta_datamodel_vtable) || !binding->vtable->variable ||
         !binding->vtable->to_wire) {

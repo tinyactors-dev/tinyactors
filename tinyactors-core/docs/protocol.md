@@ -98,9 +98,24 @@ any order and refuses a map with an unknown key, a repeated key or a value
 of the wrong type: such bytes are not an envelope, and nobody is answered.
 
 The data is wrapped (RFC 8949, tag 24: an encoded CBOR data item) so that a
-router reads the envelope without reading the value: only the datamodel
-that takes it decodes it. Data that is not one neutral value is
-`malformed`, and the sender is answered (see *Errors*).
+router reads the envelope without reading the value. Only the datamodel
+that takes it decodes it:
+
+- **Reading the bytes** checks that the data is one well-formed CBOR item
+  and keeps it as bytes (`ta_envelope.wire`). Nothing is decoded yet,
+  because the target is not known yet.
+- **Local delivery** decodes it with the datamodel of the chart the target
+  session runs (`from_wire`). A host with several datamodels never decodes
+  a value with another one's reader, and never translates between them.
+- **A relay** never decodes it: the `TA_HOST_EFFECT_PEER` effect carries the
+  bytes as they arrived (`wire`), and so does a queue for a peer that is
+  down, and `ta_host_envelope` writes them out unchanged.
+
+Data that is not one well-formed item, or that the target's datamodel cannot
+read as a neutral value, is `malformed`, and the sender is answered (see
+*Errors*). Where that is found depends on the fault: bytes that are not CBOR
+are refused by the first host that reads them; a value the target cannot
+read is refused by the target's host, after any relays.
 
 ```
 {"target": "tinyactors://b/@echo", "name": "ping", "data": 24(h'a1616e01'),
@@ -128,7 +143,8 @@ Rules:
   `ta_host_peer_error` take them whole, so a new field never breaks an
   argument list. A transport between two hosts in one process fills them
   from the `TA_HOST_EFFECT_PEER` and `TA_HOST_EFFECT_PEER_ERROR` effects and
-  never writes bytes. A transport between processes writes each effect with
+  never writes bytes (a relayed value it copies from the effect's `wire` to
+  the envelope's `wire`, still undecoded). A transport between processes writes each effect with
   `ta_host_envelope` and, on the other side, reads the bytes with
   `ta_host_envelope_read` or `ta_host_peer_error_read` before delivering
   them: one encode and one decode per hop, none inside a process.

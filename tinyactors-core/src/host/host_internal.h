@@ -99,7 +99,7 @@ typedef struct migration_job {
 } migration_job;
 
 /* target, event, sendid, aux, msgid, origintype, deduplication_key */
-#define EFFECT_STRINGS 7
+#define EFFECT_STRINGS 8
 typedef struct effect_strings {
     size_t offset[EFFECT_STRINGS]; /* in the string pool (SIZE_MAX: empty) */
 } effect_strings;
@@ -216,6 +216,10 @@ int host_grow(ta_host *h, void **array, uint32_t *capacity, uint32_t need, size_
 int host_effects_reserve(ta_host *h, uint32_t count, size_t bytes);
 size_t host_pool_put(ta_host *h, ta_string_view s);
 ta_host_effect *host_effect_new(ta_host *h, uint32_t kind, uint32_t segment);
+/* The binding that runs `chart` of segment `segment` (its vtable's name is
+ * the chart's datamodel attribute); NULL if the host has none by that name. */
+const ta_datamodel_binding *host_chart_datamodel(const ta_host *h, uint32_t segment,
+                                                 uint32_t chart);
 void host_effect_strings_set(ta_host *h, ta_string_view t, ta_string_view event, ta_string_view sid,
                              ta_string_view aux);
 ta_status host_send_to(ta_host *h, uint32_t si, uint32_t actor, const ta_event_in *event);

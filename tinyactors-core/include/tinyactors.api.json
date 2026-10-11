@@ -257,6 +257,10 @@
       "value": 37
     },
     {
+      "name": "TA_EFFECT_FIELD_WIRE",
+      "value": 40
+    },
+    {
       "name": "TA_EFFECT_FLAG_NEEDS_RESPONSE",
       "value": 1
     },
@@ -7009,11 +7013,15 @@
         {
           "name": "trace",
           "type": "ta_trace_context"
+        },
+        {
+          "name": "wire",
+          "type": "ta_string_view"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 232,
+          "size": 248,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7041,11 +7049,12 @@
             "msgid": 152,
             "origintype": 168,
             "deduplication_key": 184,
-            "trace": 200
+            "trace": 200,
+            "wire": 232
           }
         },
         "aarch64": {
-          "size": 232,
+          "size": 248,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7073,11 +7082,12 @@
             "msgid": 152,
             "origintype": 168,
             "deduplication_key": 184,
-            "trace": 200
+            "trace": 200,
+            "wire": 232
           }
         },
         "wasm32": {
-          "size": 176,
+          "size": 184,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7105,7 +7115,8 @@
             "msgid": 120,
             "origintype": 128,
             "deduplication_key": 136,
-            "trace": 144
+            "trace": 144,
+            "wire": 176
           }
         }
       }
@@ -7164,11 +7175,15 @@
         {
           "name": "traceparent",
           "type": "ta_string_view"
+        },
+        {
+          "name": "wire",
+          "type": "ta_bytes"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 152,
+          "size": 168,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7183,11 +7198,12 @@
             "origintype": 88,
             "msgid": 104,
             "deduplication_key": 120,
-            "traceparent": 136
+            "traceparent": 136,
+            "wire": 152
           }
         },
         "aarch64": {
-          "size": 152,
+          "size": 168,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7202,11 +7218,12 @@
             "origintype": 88,
             "msgid": 104,
             "deduplication_key": 120,
-            "traceparent": 136
+            "traceparent": 136,
+            "wire": 152
           }
         },
         "wasm32": {
-          "size": 88,
+          "size": 96,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7221,7 +7238,8 @@
             "origintype": 56,
             "msgid": 64,
             "deduplication_key": 72,
-            "traceparent": 80
+            "traceparent": 80,
+            "wire": 88
           }
         }
       }
@@ -7458,48 +7476,48 @@
       ],
       "layout": {
         "x86_64": {
-          "size": 1032,
+          "size": 1048,
           "align": 8,
           "offsets": {
             "size": 0,
             "index": 4,
             "revision": 8,
             "envelope": 16,
-            "key": 168,
-            "sendid": 184,
-            "storage": 200,
-            "traceparent": 968,
-            "pad2": 1024
+            "key": 184,
+            "sendid": 200,
+            "storage": 216,
+            "traceparent": 984,
+            "pad2": 1040
           }
         },
         "aarch64": {
-          "size": 1032,
+          "size": 1048,
           "align": 8,
           "offsets": {
             "size": 0,
             "index": 4,
             "revision": 8,
             "envelope": 16,
-            "key": 168,
-            "sendid": 184,
-            "storage": 200,
-            "traceparent": 968,
-            "pad2": 1024
+            "key": 184,
+            "sendid": 200,
+            "storage": 216,
+            "traceparent": 984,
+            "pad2": 1040
           }
         },
         "wasm32": {
-          "size": 952,
+          "size": 960,
           "align": 8,
           "offsets": {
             "size": 0,
             "index": 4,
             "revision": 8,
             "envelope": 16,
-            "key": 104,
-            "sendid": 112,
-            "storage": 120,
-            "traceparent": 888,
-            "pad2": 944
+            "key": 112,
+            "sendid": 120,
+            "storage": 128,
+            "traceparent": 896,
+            "pad2": 952
           }
         }
       }

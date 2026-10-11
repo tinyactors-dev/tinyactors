@@ -54,6 +54,8 @@ typedef struct node {
 } node;
 
 static node nodes[N];
+/* a node's datamodel vtable, when a test counts its calls (NULL: ECMAScript's) */
+static const ta_datamodel_vtable *vtable_for[N];
 static int link_up[N][N]; /* the test transport between i and j */
 static int dropped;       /* envelopes the transport lost (link down, no queue) */
 static int over_bytes;    /* the transport crosses a process boundary: CBOR envelopes */
@@ -63,6 +65,7 @@ static void open_node(int i, const char *chart) {
     memset(n, 0, sizeof *n);
     n->ecmascript = ta_datamodel_ecmascript_new(NULL);
     n->binding = ta_datamodel_ecmascript_binding(n->ecmascript);
+    if (vtable_for[i]) n->binding.vtable = vtable_for[i];
     test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
@@ -88,6 +91,7 @@ static void close_all(void) {
         memset(&nodes[i], 0, sizeof nodes[i]); /* nodes a test did not open stay closed */
     }
     memset(link_up, 0, sizeof link_up);
+    memset(vtable_for, 0, sizeof vtable_for);
     dropped = 0;
     over_bytes = 0;
 }
@@ -170,7 +174,7 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
             /* across: the payload as a neutral value, CBOR (separate datamodels) */
             unsigned char cbor[1024];
             ta_buffer wire = {cbor, sizeof cbor, 0};
-            if (effect->payload)
+            if (effect->payload && !effect->wire.length)
                 CHECK_EQUAL(ta_datamodel_ecmascript_payload_to_cbor(nodes[i].ecmascript,
                                                                     effect->payload, &wire),
                             TA_OK);
@@ -196,6 +200,7 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
                 CHECK_EQUAL(ta_datamodel_ecmascript_payload_from_cbor(
                                 nodes[j].ecmascript, (ta_bytes){cbor, wire.length}, &envelope.data),
                             TA_OK);
+            envelope.wire = (ta_bytes){effect->wire.pointer, effect->wire.length}; /* relayed */
             int32_t outcome = ta_host_deliver(nodes[j].host, nodes[j].peer[i], &envelope);
             CHECK(outcome >= 0);
             if (outcome != TA_ROUTE_DELIVERED && outcome != TA_ROUTE_RELAYED && envelope.data)
@@ -1241,8 +1246,9 @@ static void test_envelope_bytes(void) {
                 TA_OK);
     CHECK_EQUAL(envelope.hops, 1u);
     CHECK(envelope.msgid.length == 2 && !memcmp(envelope.msgid.pointer, "m1", 2));
-    CHECK(envelope.data != 0 && envelope.datamodel == 0);
-    ta_datamodel_ecmascript_vtable()->release(nodes[B].ecmascript, envelope.data);
+    /* the value is not decoded: the target's datamodel reads it */
+    CHECK(envelope.data == 0 && envelope.datamodel == TA_NIL);
+    CHECK(envelope.wire.length == 4 && !memcmp(envelope.wire.pointer, "\xa1\x61\x6e\x01", 4));
     ta_datamodel_ecmascript_vtable()->release(nodes[A].ecmascript, effect.payload);
 
     effect.kind = TA_HOST_EFFECT_PEER_ERROR;
@@ -1293,7 +1299,8 @@ static void test_envelope_bytes(void) {
                                       (ta_bytes){bad_data_prefix, sizeof bad_data_prefix - 1},
                                       &envelope),
                 TA_ERROR_INVALID);
-    CHECK(envelope.size == sizeof envelope && !envelope.target.length && !envelope.data);
+    CHECK(envelope.size == sizeof envelope && !envelope.target.length && !envelope.data &&
+          !envelope.wire.length);
     ta_run result = ta_host_run(nodes[B].host, 1000);
     (void)result;
     ta_host_effects_ack(nodes[B].host);
@@ -1307,6 +1314,189 @@ static void test_envelope_bytes(void) {
     CHECK_EQUAL(errors, 1u);
     ta_host_effects_ack(nodes[B].host);
     close_all();
+}
+
+/* ---- which datamodel decodes a value that arrived as bytes ---------------------------------- */
+
+static int from_wire_calls[N + 1], to_wire_calls[N + 1]; /* N: the second datamodel of c */
+static ta_datamodel_vtable counted[N + 1];
+
+#define COUNTED(k)                                                                                 \
+    static ta_status from_wire_##k(void *datamodel, ta_bytes cbor, ta_payload *out) {             \
+        from_wire_calls[k]++;                                                                      \
+        return ta_datamodel_ecmascript_vtable()->from_wire(datamodel, cbor, out);                  \
+    }                                                                                              \
+    static ta_status to_wire_##k(void *datamodel, ta_payload p, ta_buffer *out) {                 \
+        to_wire_calls[k]++;                                                                        \
+        return ta_datamodel_ecmascript_vtable()->to_wire(datamodel, p, out);                       \
+    }
+COUNTED(0)
+COUNTED(1)
+COUNTED(2)
+
+/* the null datamodel, reading values (it keeps none: the event has no data) */
+static ta_status null_from_wire(void *datamodel, ta_bytes cbor, ta_payload *out) {
+    (void)datamodel;
+    (void)cbor;
+    from_wire_calls[N]++;
+    *out = 0;
+    return TA_OK;
+}
+
+static void count_calls(void) {
+    ta_status (*from[N])(void *, ta_bytes, ta_payload *) = {from_wire_0, from_wire_1, from_wire_2};
+    ta_status (*to[N])(void *, ta_payload, ta_buffer *) = {to_wire_0, to_wire_1, to_wire_2};
+    for (int i = 0; i < N; i++) {
+        counted[i] = *ta_datamodel_ecmascript_vtable();
+        counted[i].from_wire = from[i];
+        counted[i].to_wire = to[i];
+        vtable_for[i] = &counted[i];
+    }
+    counted[N] = *ta_datamodel_null();
+    counted[N].size = sizeof counted[N];
+    counted[N].from_wire = null_from_wire;
+    memset(from_wire_calls, 0, sizeof from_wire_calls);
+    memset(to_wire_calls, 0, sizeof to_wire_calls);
+}
+
+#define QUIET                                                                                      \
+    "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='null' name='quiet' "              \
+    "initial='s'><state id='s'><transition event='ping' target='done'/></state>"                  \
+    "<final id='done'/></scxml>"
+
+/* c runs two datamodels: ECMAScript (echo) and null (quiet) */
+static void open_two_datamodels(void) {
+    node *n = &nodes[C];
+    open_node(C, ECHO);
+    ta_host_free(n->host);
+    ta_datamodel_binding bindings[2] = {n->binding, {&counted[N], NULL}};
+    test_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){IDS[C], 1};
+    config.system.size = sizeof config.system;
+    config.system.ticks_per_second = 1000;
+    config.datamodels = bindings;
+    config.datamodel_count = 2;
+    config.allocator = ta_runtime_malloc();
+    CHECK_EQUAL(test_host_new(&config, &n->host), TA_OK);
+    uint32_t segment;
+    CHECK_EQUAL(ta_host_add_image(n->host, &n->image, &segment), TA_OK);
+    static ta_image quiet;
+    static void *quiet_bytes;
+    size_t length;
+    free(quiet_bytes);
+    quiet_bytes = compile_chart("q.scxml", QUIET, NULL, &length, 0);
+    CHECK(quiet_bytes && ta_image_open((ta_bytes){quiet_bytes, length}, &quiet) == TA_OK);
+    CHECK_EQUAL(ta_host_add_image(n->host, &quiet, &segment), TA_OK);
+}
+
+static void decode_at_target(int bytes) {
+    count_calls();
+    open_node(A, PINGER);
+    open_node(B, ECHO);
+    open_two_datamodels();
+    over_bytes = bytes;
+    const char *b_reach[1] = {"c"};
+    const char *b_back[1] = {"a"};
+    connect(A, B, TA_PEER_TRUSTED, b_reach, 1);
+    connect(B, A, TA_PEER_TRUSTED, NULL, 0);
+    connect(B, C, TA_PEER_TRUSTED | TA_PEER_QUEUE, NULL, 0);
+    connect(C, B, TA_PEER_TRUSTED, b_back, 1);
+    uint64_t p = spawn(A, "pinger", "p");
+    spawn(C, "echo", "echo");
+    uint64_t quiet = spawn(C, "quiet", "quiet");
+    settle();
+
+    /* a ping to c and its pong back, relayed through b both ways */
+    go(A, p, "tinyactors://c/@echo", 1);
+    LOGCHK(A, "pong:1;");
+    CHECK_EQUAL(from_wire_calls[B], 0); /* the relay reads no value */
+    CHECK_EQUAL(to_wire_calls[B], 0);
+    if (bytes) {
+        CHECK_EQUAL(from_wire_calls[C], 1); /* the ping, by echo's ECMAScript */
+        CHECK_EQUAL(from_wire_calls[A], 1); /* the pong */
+        CHECK_EQUAL(to_wire_calls[A], 2); /* ta_host_envelope: its length, then the value */
+        CHECK_EQUAL(to_wire_calls[C], 2);
+    } else { /* within a process: payloads only (the test transport converts) */
+        CHECK_EQUAL(from_wire_calls[C] + from_wire_calls[A] + to_wire_calls[A] + to_wire_calls[C],
+                    0);
+    }
+    CHECK_EQUAL(from_wire_calls[N], 0);
+
+    /* to the null chart (bytes only: the struct transport above converts with
+     * ECMAScript): c's null datamodel reads it, not ECMAScript, and the quiet
+     * chart takes the ping and ends */
+    if (bytes) {
+        int ecmascript_before = from_wire_calls[C];
+        go(A, p, "tinyactors://c/@quiet", 2);
+        CHECK_EQUAL(from_wire_calls[N], 1);
+        CHECK_EQUAL(from_wire_calls[C], ecmascript_before);
+        CHECK_EQUAL(from_wire_calls[B], 0);
+        ta_host_location location;
+        CHECK(ta_host_locate(nodes[C].host, quiet, &location) != TA_OK);
+    }
+    (void)quiet;
+
+    /* c is down: b queues the relayed value as it arrived, and sends it on */
+    CHECK_EQUAL(ta_host_peer_up(nodes[B].host, nodes[B].peer[C], 0), TA_OK);
+    nodes[A].log[0] = 0;
+    go(A, p, "tinyactors://c/@echo", 3);
+    LOGCHK(A, "");
+    CHECK_EQUAL(ta_host_peer_up(nodes[B].host, nodes[B].peer[C], 1), TA_OK);
+    settle();
+    LOGCHK(A, "pong:3;");
+    CHECK_EQUAL(from_wire_calls[B], 0);
+
+    if (bytes) {
+        /* a value no datamodel reads (tag 99): b forwards it, c refuses it as
+         * malformed, and the error goes back to the origin */
+        char origin[64];
+        int ol = snprintf(origin, sizeof origin, "tinyactors://a/#_scxml_%llu",
+                          (unsigned long long)p);
+        unsigned char envelope_bytes[256];
+        ta_cbor_token tokens[16];
+        char strings[256];
+        ta_cbor_writer w = {{{0, 0}, tokens, 16, 0}, {strings, sizeof strings, 0}, TA_OK};
+        ta_cbor_write_map(&w, 6);
+        ta_cbor_write_text(&w, ta_string("target"));
+        ta_cbor_write_text(&w, ta_string("tinyactors://c/@echo"));
+        ta_cbor_write_text(&w, ta_string("name"));
+        ta_cbor_write_text(&w, ta_string("ping"));
+        ta_cbor_write_text(&w, ta_string("data"));
+        ta_cbor_write_tag(&w, 24);
+        ta_cbor_write_bytes(&w, (ta_bytes){"\xd8\x63\x00", 3}); /* 99(0) */
+        ta_cbor_write_text(&w, ta_string("sendid"));
+        ta_cbor_write_text(&w, ta_string("p9"));
+        ta_cbor_write_text(&w, ta_string("origin"));
+        ta_cbor_write_text(&w, (ta_string_view){origin, (uint32_t)ol});
+        ta_cbor_write_text(&w, ta_string("msgid"));
+        ta_cbor_write_text(&w, ta_string("bad-1"));
+        ta_buffer out = {envelope_bytes, sizeof envelope_bytes, 0};
+        CHECK_EQUAL(ta_cbor_finish(&w, &out), TA_OK);
+        ta_envelope envelope;
+        CHECK_EQUAL(ta_host_envelope_read(nodes[B].host, (ta_bytes){envelope_bytes, out.length},
+                                          &envelope),
+                    TA_OK);
+        CHECK(envelope.wire.length == 3 && !envelope.data);
+        nodes[A].log[0] = 0;
+        CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope),
+                    TA_ROUTE_RELAYED);
+        settle();
+        CHECK_EQUAL(from_wire_calls[B], 0); /* forwarded without judging */
+        ta_peer_status status;
+        status.size = sizeof status;
+        CHECK_EQUAL(ta_host_peer_status(nodes[C].host, nodes[C].peer[B], &status), TA_OK);
+        CHECK_EQUAL(status.errors, 1u);   /* c answered: malformed */
+        LOGCHK(A, "comm:p9;");            /* and the origin heard of it */
+        LOGCHK(C, "");                    /* echo never saw it */
+    }
+    close_all();
+}
+
+static void test_decode_at_target(void) {
+    decode_at_target(1);
+    decode_at_target(0);
 }
 
 int main(void) {
@@ -1330,5 +1520,6 @@ int main(void) {
     RUN(test_trace_two_segments);
     RUN(test_trace_set);
     RUN(test_envelope_bytes);
+    RUN(test_decode_at_target);
     TEST_MAIN_END();
 }

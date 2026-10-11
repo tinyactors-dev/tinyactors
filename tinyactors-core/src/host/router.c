@@ -25,10 +25,12 @@
 
 #define DEDUPLICATION_WINDOW 4096u /* message ids remembered per host (FIFO) */
 
+enum { QUEUED_FIELDS = 9 };
 typedef struct queued_envelope { /* an envelope waiting for a peer */
-    char *buffer; /* target | name | sendid | origin | msgid | traceparent (one allocation) */
+    char *buffer; /* target | name | sendid | origin | msgid | traceparent | origintype |
+                     dedup key | wire (one allocation) */
     size_t buffer_size;
-    uint32_t length[6];
+    uint32_t length[QUEUED_FIELDS];
     ta_payload data;
     uint32_t datamodel, hops;
     ta_time at;
@@ -255,7 +257,7 @@ static ta_status emit_peer(ta_host *host, uint32_t handle, const ta_envelope *en
                               (size_t)envelope->target.length + envelope->name.length +
                                   envelope->sendid.length + envelope->origin.length +
                                   envelope->msgid.length + envelope->origintype.length +
-                                  envelope->deduplication_key.length))
+                                  envelope->deduplication_key.length + envelope->wire.length))
         return TA_ERROR_NO_MEMORY;
     ta_host_effect *x = host_effect_new(host, TA_HOST_EFFECT_PEER, TA_NIL);
     x->peer = handle;
@@ -267,6 +269,10 @@ static ta_status emit_peer(ta_host *host, uint32_t handle, const ta_envelope *en
     effect_string_put(host, 4, envelope->msgid, &x->msgid);
     effect_string_put(host, 5, envelope->origintype, &x->origintype);
     effect_string_put(host, 6, envelope->deduplication_key, &x->deduplication_key);
+    /* a value that arrived as bytes leaves as the same bytes: never decoded here */
+    effect_string_put(host, 7, (ta_string_view){(const char *)envelope->wire.pointer,
+                                                (uint32_t)envelope->wire.length},
+                      &x->wire);
     if (envelope->data &&
         envelope->datamodel <
             host->config.datamodel_count) { /* the effect owns the payload until ack */
@@ -337,12 +343,17 @@ static ta_envelope envelope_of(const queued_envelope *q) {
     ta_memset(&envelope, 0, sizeof envelope);
     envelope.size = sizeof envelope;
     const char *p = q->buffer;
-    ta_string_view *f[6] = {&envelope.target, &envelope.name,  &envelope.sendid,
-                            &envelope.origin, &envelope.msgid, &envelope.traceparent};
-    for (int k = 0; k < 6; k++) {
+    ta_string_view wire = {0, 0};
+    ta_string_view *f[QUEUED_FIELDS] = {&envelope.target,     &envelope.name,
+                                        &envelope.sendid,     &envelope.origin,
+                                        &envelope.msgid,      &envelope.traceparent,
+                                        &envelope.origintype, &envelope.deduplication_key,
+                                        &wire};
+    for (int k = 0; k < QUEUED_FIELDS; k++) {
         *f[k] = (ta_string_view){p, q->length[k]};
         p += q->length[k];
     }
+    envelope.wire = (ta_bytes){wire.pointer, wire.length};
     envelope.data = q->data;
     envelope.datamodel = q->datamodel;
     envelope.hops = q->hops;
@@ -372,10 +383,14 @@ static ta_status enqueue(ta_host *host, peer *p, const ta_envelope *envelope) {
         p->queue_capacity = nc;
         p->queue_head = 0;
     }
-    ta_string_view v[6] = {envelope->target, envelope->name,  envelope->sendid,
-                           envelope->origin, envelope->msgid, envelope->traceparent};
+    ta_string_view v[QUEUED_FIELDS] = {
+        envelope->target,     envelope->name,
+        envelope->sendid,     envelope->origin,
+        envelope->msgid,      envelope->traceparent,
+        envelope->origintype, envelope->deduplication_key,
+        {(const char *)envelope->wire.pointer, (uint32_t)envelope->wire.length}};
     size_t total = 0;
-    for (int k = 0; k < 6; k++)
+    for (int k = 0; k < QUEUED_FIELDS; k++)
         total += v[k].length;
     queued_envelope *q = &p->queue[(p->queue_head + p->queue_count) % p->queue_capacity];
     q->buffer_size = total ? total : 1;
@@ -385,7 +400,7 @@ static ta_status enqueue(ta_host *host, peer *p, const ta_envelope *envelope) {
         return TA_ERROR_NO_MEMORY;
     }
     char *w = q->buffer;
-    for (int k = 0; k < 6; k++) {
+    for (int k = 0; k < QUEUED_FIELDS; k++) {
         if (v[k].length) ta_memcpy(w, v[k].pointer, v[k].length);
         q->length[k] = v[k].length;
         w += v[k].length;
@@ -523,6 +538,31 @@ ta_status ta_router_outbound(ta_host *host, uint32_t si, const ta_effect *effect
 
 /* ---- local delivery -------------------------------------------------------------------- */
 
+/* The value of an envelope that arrived as bytes, read by the datamodel of
+ * the chart the target session runs: values are never decoded by another
+ * datamodel, nor before the target is known. *reason: MALFORMED when that
+ * datamodel cannot read it (or reads no values). */
+static ta_status wire_decode(ta_host *host, uint32_t si, uint32_t actor, ta_bytes wire,
+                             ta_payload *out, const ta_datamodel_binding **binding,
+                             uint32_t *reason) {
+    ta_actor_info info;
+    info.size = sizeof info;
+    ta_actor_info_get(ta_host_system(host, si), actor, &info);
+    *binding = host_chart_datamodel(host, si, info.chart);
+    int reads = *binding && (*binding)->vtable->size >= offsetof(ta_datamodel_vtable, from_wire) +
+                                                          sizeof(*binding)->vtable->from_wire &&
+                (*binding)->vtable->from_wire;
+    ta_status status = reads
+                           ? (*binding)->vtable->from_wire((*binding)->datamodel, wire, out)
+                           : TA_ERROR_INVALID;
+    if (status == TA_ERROR_NO_MEMORY) return status;
+    if (status != TA_OK) {
+        *out = 0;
+        *reason = TA_ROUTE_ERROR_MALFORMED;
+    }
+    return TA_OK;
+}
+
 /* *reason: 0 delivered, or why not; TA_ERROR_NO_MEMORY: the target's segment
  * could not grow (nothing delivered) */
 static ta_status local_deliver(ta_host *host, uint64_t session, const ta_envelope *envelope,
@@ -530,6 +570,16 @@ static ta_status local_deliver(ta_host *host, uint64_t session, const ta_envelop
     uint32_t si, actor;
     *reason = TA_ROUTE_ERROR_UNKNOWN_TARGET;
     if (!session || host_locate(host, session, &si, &actor) != TA_OK) return TA_OK;
+    ta_payload data = envelope->data;
+    const ta_datamodel_binding *decoded = (const ta_datamodel_binding *)0;
+    if (envelope->wire.length) { /* from bytes: only now is the reader known */
+        *reason = 0;
+        ta_status status =
+            wire_decode(host, si, actor, envelope->wire, &data, &decoded, reason);
+        if (status != TA_OK) return status;
+        if (*reason) return TA_OK;
+        *reason = TA_ROUTE_ERROR_UNKNOWN_TARGET;
+    }
     ta_event_in event;
     ta_memset(&event, 0, sizeof event);
     event.size = sizeof event;
@@ -540,10 +590,12 @@ static ta_status local_deliver(ta_host *host, uint64_t session, const ta_envelop
         envelope->origintype.length
             ? envelope->origintype
             : SCXML_EVENT_PROCESSOR;
-    event.data = envelope->data;
+    event.data = data;
     event.traceparent = envelope->traceparent; /* the trace crosses systems unbroken */
     event.trace_flags = envelope->trace_flags; /* and keeps its detail class in this process */
     ta_status status = host_send_to(host, si, actor, &event);
+    if (status != TA_OK && data && decoded && decoded->vtable->release)
+        decoded->vtable->release(decoded->datamodel, data); /* ours: the caller had bytes */
     if (status == TA_ERROR_NO_MEMORY) return status;
     if (status == TA_OK) *reason = 0;
     return TA_OK;
@@ -1029,15 +1081,6 @@ ta_status ta_host_peer_error(ta_host *host, const ta_peer_error *error) {
 
 /* ---- envelopes across a process boundary: CBOR (docs/protocol.md, Envelope) ----------- */
 
-/* The datamodel that holds an envelope's data between the bytes and the
- * router: the host's first that reads and writes neutral values. A host runs
- * one datamodel in practice; values are never translated between two. */
-static uint32_t envelope_wire_datamodel(const ta_host *host) {
-    for (uint32_t i = 0; i < host->config.datamodel_count; i++)
-        if (host->datamodels[i].vtable->from_wire && host->datamodels[i].vtable->to_wire) return i;
-    return TA_NIL;
-}
-
 enum { ENVELOPE_CBOR_TAG_ENCODED = 24 }; /* RFC 8949 §3.4.5.1: an encoded CBOR data item */
 
 /* The keys, in the order an envelope is written. */
@@ -1125,18 +1168,17 @@ ta_status ta_host_envelope_read(ta_host *host, ta_bytes cbor, ta_envelope *out) 
     out->traceparent = views[ENVELOPE_KEY_TRACEPARENT];
     out->datamodel = TA_NIL;
     if (!(seen & (1u << ENVELOPE_KEY_DATA))) return TA_OK;
-    uint32_t model = envelope_wire_datamodel(host);
-    ta_status status = TA_ERROR_INVALID;
-    if (model != TA_NIL)
-        status = host->datamodels[model].vtable->from_wire(
-            host->datamodels[model].datamodel, (ta_bytes){views[ENVELOPE_KEY_DATA].pointer, views[ENVELOPE_KEY_DATA].length},
-            &out->data);
-    if (status == TA_OK) {
-        out->datamodel = model;
+    /* not decoded: the target's datamodel reads it, a relay forwards it. One
+     * well-formed item is checked here (the decoder validates all of it while
+     * it counts the tokens it would need; none are kept). */
+    ta_bytes wire = {views[ENVELOPE_KEY_DATA].pointer, views[ENVELOPE_KEY_DATA].length};
+    ta_cbor_token token;
+    ta_cbor_document value = {wire, &token, 1, 0};
+    ta_status status = ta_cbor_decode(&value);
+    if (wire.length && (status == TA_OK || status == TA_ERROR_NO_MEMORY)) {
+        out->wire = wire;
         return TA_OK;
     }
-    out->data = 0;
-    if (status == TA_ERROR_NO_MEMORY) return status;
     out->target = (ta_string_view){0, 0}; /* ta_host_deliver refuses it as malformed */
     return TA_ERROR_INVALID;
 }
@@ -1180,12 +1222,15 @@ ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_buffe
         envelope_put_text(&o, ENVELOPE_KEY_ORIGIN, effect->auxiliary);
         envelope_put_text(&o, ENVELOPE_KEY_MSGID, effect->msgid);
     } else {
-        /* the value first: its length is the byte string's head */
+        /* the value first: its length is the byte string's head. A relayed
+         * value is the bytes it arrived as; otherwise the datamodel writes it */
         const ta_datamodel_binding *binding =
-            effect->payload && effect->datamodel < host->config.datamodel_count
+            !effect->wire.length && effect->payload &&
+                    effect->datamodel < host->config.datamodel_count
                 ? &host->datamodels[effect->datamodel]
                 : (const ta_datamodel_binding *)0;
-        size_t value = 0;
+        int has_data = binding || effect->wire.length;
+        size_t value = effect->wire.length;
         if (binding) {
             if (!binding->vtable->to_wire) return TA_ERROR_INVALID;
             ta_buffer probe = {(void *)0, 0, 0};
@@ -1202,21 +1247,25 @@ ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_buffe
         if (origintype.length == SCXML_EVENT_PROCESSOR.length &&
             !ta_memcmp(origintype.pointer, SCXML_EVENT_PROCESSOR.pointer, origintype.length))
             origintype.length = 0;
-        uint32_t pairs = 2u + !!binding + !!effect->sendid.length + !!effect->auxiliary.length +
+        uint32_t pairs = 2u + !!has_data + !!effect->sendid.length + !!effect->auxiliary.length +
                          !!origintype.length + !!effect->msgid.length + !!effect->flags +
                          !!effect->deduplication_key.length + !!trace.length;
         cbor_output_head(&o, CBOR_MAJOR_MAP, pairs);
         envelope_put_text(&o, ENVELOPE_KEY_TARGET, effect->target);
         envelope_put_text(&o, ENVELOPE_KEY_NAME, effect->event);
-        if (binding) {
+        if (has_data) {
             cbor_output_text(&o, ENVELOPE_KEYS[ENVELOPE_KEY_DATA]);
             cbor_output_head(&o, CBOR_MAJOR_TAG, ENVELOPE_CBOR_TAG_ENCODED);
             cbor_output_head(&o, CBOR_MAJOR_BYTES, value);
             if (o.length + value <= o.capacity) {
-                ta_buffer data = {o.bytes + o.length, value, 0};
-                ta_status status =
-                    binding->vtable->to_wire(binding->datamodel, effect->payload, &data);
-                if (status != TA_OK) return TA_ERROR_INVALID;
+                if (!binding) {
+                    ta_memcpy(o.bytes + o.length, effect->wire.pointer, value);
+                } else {
+                    ta_buffer data = {o.bytes + o.length, value, 0};
+                    ta_status status =
+                        binding->vtable->to_wire(binding->datamodel, effect->payload, &data);
+                    if (status != TA_OK) return TA_ERROR_INVALID;
+                }
             }
             o.length += value;
         }

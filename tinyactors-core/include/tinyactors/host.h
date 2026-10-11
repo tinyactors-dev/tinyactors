@@ -233,13 +233,16 @@ typedef struct ta_host_effect {
     ta_string_view deduplication_key;   /* PEER: the envelope's dedup key (may be empty) */
     ta_trace_context trace; /* as in ta_effect; PEER: the envelope's traceparent (format it
                                with ta_traceparent_format for the wire) */
+    ta_string_view wire; /* PEER relaying an envelope that arrived as bytes: its value as CBOR,
+                            as it arrived (bytes, not text; payload is 0). Copy it to
+                            ta_envelope.wire */
 } ta_host_effect;
 TA_API uint32_t ta_host_effects(ta_host *h, const ta_host_effect **out);
 TA_API void ta_host_effects_ack(ta_host *h);
 
 /* A field of effect `index` of the batch ta_host_effects published, so that a
  * binding reads effects without knowing ta_host_effect's layout. Numbers:
- * KIND .. PEER; text: TARGET .. DEDUPLICATION_KEY. An index past the batch, a field
+ * KIND .. PEER; text: TARGET .. WIRE (WIRE's view holds bytes). An index past the batch, a field
  * the effect kind does not set, or a text field asked as a number (or the
  * reverse) answers 0 or an empty view. Text is borrowed like the effect
  * (until the ack, the next run or ta_host_free); TRACEPARENT's text is
@@ -275,7 +278,8 @@ enum {
     TA_EFFECT_FIELD_MSGID = 36,
     TA_EFFECT_FIELD_TRACEPARENT = 37, /* W3C text of `trace`; empty when untraced */
     TA_EFFECT_FIELD_ORIGINTYPE = 38,
-    TA_EFFECT_FIELD_DEDUPLICATION_KEY = 39
+    TA_EFFECT_FIELD_DEDUPLICATION_KEY = 39,
+    TA_EFFECT_FIELD_WIRE = 40 /* PEER: the relayed value's CBOR (bytes in the view) */
 };
 TA_API uint64_t ta_host_effect_number(const ta_host *h, uint32_t index, uint32_t field);
 TA_API ta_string_view ta_host_effect_text(ta_host *h, uint32_t index, uint32_t field);
@@ -319,6 +323,9 @@ typedef struct ta_envelope {
     ta_string_view deduplication_key; /* optional key for duplicate detection instead of msgid */
     ta_string_view traceparent;       /* W3C: the sending step's trace (empty: none), kept across
                                          systems and relays */
+    ta_bytes wire; /* the value as CBOR, borrowed for the call (ta_host_envelope_read): set this
+                      or `data`, never both. The target's datamodel decodes it; a relay
+                      forwards it as it is */
 } ta_envelope;
 
 /* Peer flags. */
@@ -353,6 +360,9 @@ enum {
  * commit together; aborting the transaction also aborts the request.
  * PEER carries the next hop; an empty handle with a peer_id is a durable route
  * waiting for hello. LOCAL carries a resolved session, ready for an inbox.
+ * An envelope with `wire` (it arrived as bytes) is never decoded here: the
+ * caller keeps the value's CBOR as it is, for the session's own datamodel to
+ * read with from_wire when the event is delivered, as ta_host_deliver does.
  * PEERS (only with TA_ROUTE_ASK_PEERS): the next hop depends on the peers the
  * caller has not loaded yet; add them (ta_host_peer_add) and begin again
  * without the flag. Local sends never need them.
@@ -446,7 +456,12 @@ TA_API ta_status ta_host_export(ta_host *h, const ta_export_rule *rule);
  * (negative). A refusal is reported both as TA_ROUTE_REFUSED and as a
  * TA_HOST_EFFECT_PEER_ERROR effect addressed back to the peer, so the
  * sender's system can turn it into error.communication. TA_ERROR_NO_MEMORY:
- * nothing was done or remembered (delivering it again is not a duplicate). */
+ * nothing was done or remembered (delivering it again is not a duplicate).
+ * The envelope's value is `data` (a payload, as from this process) or `wire`
+ * (CBOR, as from ta_host_envelope_read). `wire` is decoded only on local
+ * delivery, by the target session's datamodel (its chart's): a value it
+ * cannot read is refused as TA_ROUTE_ERROR_MALFORMED. A relay forwards `wire`
+ * as it is and decodes nothing; the PEER effect carries it until the ack. */
 enum { TA_ROUTE_DELIVERED = 0, TA_ROUTE_RELAYED = 1, TA_ROUTE_DUPLICATE = 2, TA_ROUTE_REFUSED = 3 };
 TA_API int32_t ta_host_deliver(ta_host *h, uint32_t peer, const ta_envelope *envelope);
 /* An `err` from a peer about an envelope this host sent: the origin session
@@ -468,24 +483,24 @@ TA_API ta_status ta_host_peer_error(ta_host *h, const ta_peer_error *error);
  * sets `peer`) and passes it to ta_host_peer_error.
  *
  * ta_host_envelope: the effect's envelope (its data written by the
- * datamodel's to_wire) or error envelope, into `out`. The effect keeps its
+ * datamodel's to_wire, or a relayed `wire` copied as it is) or error envelope,
+ * into `out`. The effect keeps its
  * payload, borrowed until the ack. TA_ERROR_NO_MEMORY: out->length is what
  * it needs (the bytes in `out` are not an envelope); TA_ERROR_INVALID: another effect kind,
  * or data that is not a neutral value; TA_ERROR_STATE during a run. */
 TA_API ta_status ta_host_envelope(ta_host *h, const ta_host_effect *effect, ta_buffer *out);
 /* An envelope from bytes: views into `cbor` (keep the bytes until the
- * ta_host_deliver); its data, if any, read with from_wire by the host's
- * first datamodel that reads and writes neutral values, into out->data (one
- * reference: ta_host_deliver moves it on success; on a failure it stays the
- * caller's, to release with that datamodel, out->datamodel). TA_OK.
+ * ta_host_deliver). Its data, if any, is not decoded: out->wire points at the
+ * value's CBOR, checked to be one well-formed item, and out->data stays 0.
+ * ta_host_deliver decodes it with the target's datamodel, or a relay forwards
+ * it. Nothing is allocated, so there is nothing to release. TA_OK.
  * TA_ERROR_INVALID with out->size 0: not an envelope (not CBOR, not a map,
  * an unknown or repeated key, a wrong type, an error envelope); nothing to
  * answer, drop it. TA_ERROR_INVALID with out->size set: an envelope whose
- * data is not a neutral value; out holds no target and no data, so
- * ta_host_deliver of it refuses it as malformed (TA_ROUTE_ERROR_MALFORMED)
+ * data is not one well-formed CBOR item; out holds no target and no value,
+ * so ta_host_deliver of it refuses it as malformed (TA_ROUTE_ERROR_MALFORMED)
  * and answers the sender with a TA_HOST_EFFECT_PEER_ERROR, as for any
- * malformed envelope. TA_ERROR_NO_MEMORY: the datamodel could not hold the
- * data; nothing was made. TA_ERROR_STATE during a run. */
+ * malformed envelope. TA_ERROR_STATE during a run. */
 TA_API ta_status ta_host_envelope_read(ta_host *h, ta_bytes cbor, ta_envelope *out);
 /* An error envelope from bytes: views into `cbor`; out->peer is left for the
  * caller to set. TA_ERROR_INVALID: not an error envelope. */

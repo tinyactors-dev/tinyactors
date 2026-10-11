@@ -760,8 +760,8 @@ static void effects_block_replaced(ta_host *host, void *block, size_t size) {
 static size_t *effect_string(ta_host *host, uint32_t e, uint32_t k, uint32_t *length) {
     const ta_host_effect *effect = &host->effects[e];
     const ta_string_view *views[EFFECT_STRINGS] = {
-        &effect->target, &effect->event,      &effect->sendid,           &effect->auxiliary,
-        &effect->msgid,  &effect->origintype, &effect->deduplication_key};
+        &effect->target, &effect->event,      &effect->sendid,            &effect->auxiliary,
+        &effect->msgid,  &effect->origintype, &effect->deduplication_key, &effect->wire};
     *length = views[k]->length;
     return &host->effect_strings[e].offset[k];
 }
@@ -889,6 +889,19 @@ size_t host_pool_put(ta_host *host, ta_string_view s) {
 }
 
 /* A new effect; NULL only without host_effects_reserve first. */
+const ta_datamodel_binding *host_chart_datamodel(const ta_host *host, uint32_t segment,
+                                                 uint32_t chart) {
+    ta_string_view name = ta_image_chart_datamodel(host->segments[segment].image, chart);
+    for (uint32_t i = 0; i < host->config.datamodel_count; i++) {
+        const char *want = host->datamodels[i].vtable->name;
+        uint32_t length = 0;
+        while (want[length]) length++;
+        if (length == name.length && ta_memcmp(want, name.pointer, length) == 0)
+            return &host->datamodels[i];
+    }
+    return (const ta_datamodel_binding *)0;
+}
+
 ta_host_effect *host_effect_new(ta_host *host, uint32_t kind, uint32_t segment) {
     if (!host_effects_reserve(host, 1, 0)) return NULL;
     ta_host_effect *effect = &host->effects[host->effect_count];
@@ -969,8 +982,8 @@ uint32_t ta_host_effects(ta_host *host, const ta_host_effect **out) {
     for (uint32_t i = 0; i < host->effect_count; i++) {
         ta_host_effect *effect = &host->effects[i];
         ta_string_view *dst[EFFECT_STRINGS] = {
-            &effect->target, &effect->event,      &effect->sendid,           &effect->auxiliary,
-            &effect->msgid,  &effect->origintype, &effect->deduplication_key};
+            &effect->target, &effect->event,      &effect->sendid,            &effect->auxiliary,
+            &effect->msgid,  &effect->origintype, &effect->deduplication_key, &effect->wire};
         for (int k = 0; k < EFFECT_STRINGS; k++)
             dst[k]->pointer = host->effect_strings[i].offset[k] == (size_t)-1
                                   ? ""
@@ -1017,6 +1030,7 @@ ta_string_view ta_host_effect_text(ta_host *host, uint32_t index, uint32_t field
     case TA_EFFECT_FIELD_MSGID: return effect->msgid;
     case TA_EFFECT_FIELD_ORIGINTYPE: return effect->origintype;
     case TA_EFFECT_FIELD_DEDUPLICATION_KEY: return effect->deduplication_key;
+    case TA_EFFECT_FIELD_WIRE: return effect->wire;
     case TA_EFFECT_FIELD_TRACEPARENT: {
         ta_buffer out = {host->effect_traceparent, sizeof host->effect_traceparent, 0};
         if (ta_traceparent_format(&effect->trace, &out) != TA_OK) return none;
