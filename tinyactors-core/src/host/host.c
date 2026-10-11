@@ -883,6 +883,50 @@ uint32_t ta_host_effects(ta_host *host, const ta_host_effect **out) {
     return host->effect_count;
 }
 
+uint64_t ta_host_effect_number(const ta_host *host, uint32_t index, uint32_t field) {
+    if (index >= host->effects_ready) return 0;
+    const ta_host_effect *effect = &host->effects[index];
+    switch (field) {
+    case TA_EFFECT_FIELD_KIND: return effect->kind;
+    case TA_EFFECT_FIELD_SEGMENT: return effect->segment;
+    case TA_EFFECT_FIELD_ACTOR: return effect->actor;
+    case TA_EFFECT_FIELD_SESSION: return effect->session;
+    case TA_EFFECT_FIELD_ROOT: return effect->root;
+    case TA_EFFECT_FIELD_TOKEN: return effect->token;
+    case TA_EFFECT_FIELD_IO_PROCESSOR: return effect->io_processor;
+    case TA_EFFECT_FIELD_FLAGS: return effect->flags;
+    case TA_EFFECT_FIELD_JOB: return effect->job;
+    case TA_EFFECT_FIELD_PAYLOAD: return effect->payload;
+    case TA_EFFECT_FIELD_DATAMODEL: return effect->datamodel;
+    case TA_EFFECT_FIELD_DELAY_HINT: return effect->delay_hint;
+    case TA_EFFECT_FIELD_CHART: return effect->chart;
+    case TA_EFFECT_FIELD_MIGRATED: return effect->migrated;
+    case TA_EFFECT_FIELD_FAILED: return effect->failed;
+    case TA_EFFECT_FIELD_PENDING: return effect->pending;
+    case TA_EFFECT_FIELD_PEER: return effect->peer;
+    default: return 0;
+    }
+}
+
+ta_string_view ta_host_effect_text(ta_host *host, uint32_t index, uint32_t field) {
+    ta_string_view none = {"", 0};
+    if (index >= host->effects_ready) return none;
+    const ta_host_effect *effect = &host->effects[index];
+    switch (field) {
+    case TA_EFFECT_FIELD_TARGET: return effect->target;
+    case TA_EFFECT_FIELD_EVENT: return effect->event;
+    case TA_EFFECT_FIELD_SENDID: return effect->sendid;
+    case TA_EFFECT_FIELD_AUXILIARY: return effect->auxiliary;
+    case TA_EFFECT_FIELD_MSGID: return effect->msgid;
+    case TA_EFFECT_FIELD_TRACEPARENT: {
+        ta_buffer out = {host->effect_traceparent, sizeof host->effect_traceparent, 0};
+        if (ta_traceparent_format(&effect->trace, &out) != TA_OK) return none;
+        return (ta_string_view){host->effect_traceparent, (uint32_t)out.length};
+    }
+    default: return none;
+    }
+}
+
 void ta_host_effects_ack(ta_host *host) {
     if (host->running) return; /* not during a run (host.h) */
     effects_release(host);

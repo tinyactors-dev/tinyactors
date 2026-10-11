@@ -245,6 +245,47 @@ typedef struct ta_host_effect {
 TA_API uint32_t ta_host_effects(ta_host *h, const ta_host_effect **out);
 TA_API void ta_host_effects_ack(ta_host *h);
 
+/* A field of effect `index` of the batch ta_host_effects published, so that a
+ * binding reads effects without knowing ta_host_effect's layout. Numbers:
+ * KIND .. PEER; text: TARGET .. TRACEPARENT. An index past the batch, a field
+ * the effect kind does not set, or a text field asked as a number (or the
+ * reverse) answers 0 or an empty view. Text is borrowed like the effect
+ * (until the ack, the next run or ta_host_free); TRACEPARENT's text is
+ * written for the call and lasts until the next ta_host_effect_text.
+ *
+ * A send to a service the host runs (an SCXML <send target="#_<invokeid>">
+ * to an external invocation) is a TA_EFFECT_SEND with IO_PROCESSOR
+ * TA_NIL and TOKEN the invocation's token: the TOKEN of the
+ * TA_EFFECT_INVOKE that started the service, in the same SEGMENT. A binding
+ * keys its services by (segment, token); it never matches invoke ids. */
+enum {
+    TA_EFFECT_FIELD_KIND = 1,
+    TA_EFFECT_FIELD_SEGMENT = 2,
+    TA_EFFECT_FIELD_ACTOR = 3,
+    TA_EFFECT_FIELD_SESSION = 4,
+    TA_EFFECT_FIELD_ROOT = 5,
+    TA_EFFECT_FIELD_TOKEN = 6,
+    TA_EFFECT_FIELD_IO_PROCESSOR = 7, /* TA_NIL: a send to an invoked service */
+    TA_EFFECT_FIELD_FLAGS = 8,
+    TA_EFFECT_FIELD_JOB = 9,
+    TA_EFFECT_FIELD_PAYLOAD = 10, /* the payload handle (ta_payload) */
+    TA_EFFECT_FIELD_DATAMODEL = 11,
+    TA_EFFECT_FIELD_DELAY_HINT = 12,
+    TA_EFFECT_FIELD_CHART = 13,
+    TA_EFFECT_FIELD_MIGRATED = 14,
+    TA_EFFECT_FIELD_FAILED = 15,
+    TA_EFFECT_FIELD_PENDING = 16,
+    TA_EFFECT_FIELD_PEER = 17,
+    TA_EFFECT_FIELD_TARGET = 32,
+    TA_EFFECT_FIELD_EVENT = 33,
+    TA_EFFECT_FIELD_SENDID = 34,
+    TA_EFFECT_FIELD_AUXILIARY = 35,
+    TA_EFFECT_FIELD_MSGID = 36,
+    TA_EFFECT_FIELD_TRACEPARENT = 37 /* W3C text of `trace`; empty when untraced */
+};
+TA_API uint64_t ta_host_effect_number(const ta_host *h, uint32_t index, uint32_t field);
+TA_API ta_string_view ta_host_effect_text(ta_host *h, uint32_t index, uint32_t field);
+
 /* ---- telemetry ------------------------------------------------------------------ */
 /* The ExportTraceServiceRequest (`/v1/traces`, application/x-protobuf) of
  * the spans staged so far, written into `out` (length 0 when there are

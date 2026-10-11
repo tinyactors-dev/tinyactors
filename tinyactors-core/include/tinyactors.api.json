@@ -153,6 +153,98 @@
       "value": 7
     },
     {
+      "name": "TA_EFFECT_FIELD_ACTOR",
+      "value": 3
+    },
+    {
+      "name": "TA_EFFECT_FIELD_AUXILIARY",
+      "value": 35
+    },
+    {
+      "name": "TA_EFFECT_FIELD_CHART",
+      "value": 13
+    },
+    {
+      "name": "TA_EFFECT_FIELD_DATAMODEL",
+      "value": 11
+    },
+    {
+      "name": "TA_EFFECT_FIELD_DELAY_HINT",
+      "value": 12
+    },
+    {
+      "name": "TA_EFFECT_FIELD_EVENT",
+      "value": 33
+    },
+    {
+      "name": "TA_EFFECT_FIELD_FAILED",
+      "value": 15
+    },
+    {
+      "name": "TA_EFFECT_FIELD_FLAGS",
+      "value": 8
+    },
+    {
+      "name": "TA_EFFECT_FIELD_IO_PROCESSOR",
+      "value": 7
+    },
+    {
+      "name": "TA_EFFECT_FIELD_JOB",
+      "value": 9
+    },
+    {
+      "name": "TA_EFFECT_FIELD_KIND",
+      "value": 1
+    },
+    {
+      "name": "TA_EFFECT_FIELD_MIGRATED",
+      "value": 14
+    },
+    {
+      "name": "TA_EFFECT_FIELD_MSGID",
+      "value": 36
+    },
+    {
+      "name": "TA_EFFECT_FIELD_PAYLOAD",
+      "value": 10
+    },
+    {
+      "name": "TA_EFFECT_FIELD_PEER",
+      "value": 17
+    },
+    {
+      "name": "TA_EFFECT_FIELD_PENDING",
+      "value": 16
+    },
+    {
+      "name": "TA_EFFECT_FIELD_ROOT",
+      "value": 5
+    },
+    {
+      "name": "TA_EFFECT_FIELD_SEGMENT",
+      "value": 2
+    },
+    {
+      "name": "TA_EFFECT_FIELD_SENDID",
+      "value": 34
+    },
+    {
+      "name": "TA_EFFECT_FIELD_SESSION",
+      "value": 4
+    },
+    {
+      "name": "TA_EFFECT_FIELD_TARGET",
+      "value": 32
+    },
+    {
+      "name": "TA_EFFECT_FIELD_TOKEN",
+      "value": 6
+    },
+    {
+      "name": "TA_EFFECT_FIELD_TRACEPARENT",
+      "value": 37
+    },
+    {
       "name": "TA_EFFECT_FLAG_NEEDS_RESPONSE",
       "value": 1
     },
@@ -8930,6 +9022,48 @@
         {
           "name": "envelope",
           "type": "const ta_envelope *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_effect_number",
+      "returns": "uint64_t",
+      "params": [
+        {
+          "name": "h",
+          "type": "const ta_host *"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        },
+        {
+          "name": "field",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_effect_text",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "h",
+          "type": "ta_host *"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        },
+        {
+          "name": "field",
+          "type": "uint32_t"
         }
       ],
       "public": true,

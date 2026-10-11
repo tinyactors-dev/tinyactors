@@ -196,6 +196,7 @@ module Core
     unit('test_host_inputs', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host_telemetry', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host_request', 'host', 'runtime', 'compile', *ECMASCRIPT),
+    unit('test_host_effects', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_otlp', 'otlp', 'system', 'compile', *ECMASCRIPT),
     unit('test_trace', 'trace', 'quickjs', defines: { 'TA_SPAN_VECTORS' => ROOT.join('tests/conformance/span_ids.json'),
                                                       'TA_TRACEPARENT_VECTORS' => ROOT.join('tests/conformance/traceparent.json') }),
