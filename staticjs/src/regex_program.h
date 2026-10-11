@@ -60,7 +60,8 @@ typedef struct {
 enum {
     RX_LEAD_NONE = 0,
     RX_LEAD_CHAR,      /* CHAR of an ASCII character: lead_char */
-    RX_LEAD_FOLD       /* CHAR_FOLD of an ASCII letter: lead_char, lowercase */
+    RX_LEAD_FOLD,      /* CHAR_FOLD of an ASCII letter: lead_char, lowercase */
+    RX_LEAD_START      /* ASSERT ^ without m */
 };
 
 /* A class: its ranges, sorted and disjoint, from `start` in the ranges. */

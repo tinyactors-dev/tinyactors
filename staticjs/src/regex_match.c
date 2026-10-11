@@ -395,10 +395,12 @@ static void rx_mid_start(rx_search *s) {
  * Skipping. Where a search has no thread and no match, a program led by an
  * ASCII character (RX_LEAD_CHAR, RX_LEAD_FOLD) starts a thread at each
  * position that its closure takes over the leading SAVEs to the character
- * and that dies there unless the input has that character. Over a run of
- * ASCII bytes that cannot begin a match, the search passes each position
- * without following it, and counts what following it would have visited
- * and copied, so that fuel and the budget's stopping points are the same
+ * and that dies there unless the input has that character; one led by ^
+ * (RX_LEAD_START), a thread that dies at the ^ at every position but the
+ * first, whether or not other threads are alive. Over a run of ASCII bytes
+ * that cannot begin a match, the search passes each position without
+ * following it, and counts what following it would have visited and
+ * copied, so that fuel and the budget's stopping points are the same
  * (docs/regex.md, 12.1).
  */
 
@@ -409,10 +411,6 @@ typedef struct {
     uint64_t copies;
 } rx_cost;
 
-static bool rx_lead_can(const sjs_regexp *re, uint8_t b) {
-    return b == re->lead_char || (re->lead == RX_LEAD_FOLD && (b | 0x20u) == re->lead_char);
-}
-
 /* The positions rx_search_run passes before its budget stops it, when each
  * visits `per` instructions: it checks after each one. */
 static uint64_t rx_budget_positions(const rx_search *s, uint64_t per, uint64_t until) {
@@ -421,12 +419,15 @@ static uint64_t rx_budget_positions(const rx_search *s, uint64_t per, uint64_t u
 }
 
 /* The ASCII bytes from `byte` on, at most `most`, that cannot begin a
- * match. */
+ * match: any but the leading character (either case of it with i), and
+ * after the start with ^ any. */
 static uint32_t rx_lead_run(const rx_search *s, uint32_t byte, uint64_t most) {
     const uint8_t *t = s->in.text;
     uint32_t end = s->in.length - byte < most ? s->in.length : byte + (uint32_t)most;
+    uint32_t lead = s->re->lead == RX_LEAD_START ? 0x100u : s->re->lead_char;
+    uint32_t fold = s->re->lead == RX_LEAD_FOLD ? 0x20u : 0u;
     uint32_t i = byte;
-    while (i < end && t[i] < 0x80u && !rx_lead_can(s->re, t[i])) i++;
+    while (i < end && t[i] < 0x80u && (t[i] | fold) != lead) i++;
     return i - byte;
 }
 
@@ -460,19 +461,26 @@ static void rx_search_begin(rx_search *s, uint32_t start) {
 static bool rx_search_run(rx_search *s, uint64_t budget) {
     uint64_t until = s->visits + budget;
     uint32_t n = s->re->slots;
-    bool led = s->re->lead == RX_LEAD_CHAR || s->re->lead == RX_LEAD_FOLD;
+    uint8_t lead = s->re->lead;
     for (;;) {
-        if (led && s->ccount == 0 && !s->matched && !s->sticky) {
+        if (lead != RX_LEAD_NONE && s->ccount == 0 && !s->matched && !s->sticky && (lead != RX_LEAD_START || s->pos > 0)) {
             /* Each position: the start's closure (its SAVEs and the
-             * character) and its thread's step, which fails. */
+             * character or the ^) and, led by a character, its thread's
+             * step, which fails; or, after ^, nothing more. */
             rx_cost pass = { 0, s->re->lead_saves + 2u, 2u * (uint64_t)n };
+            if (lead == RX_LEAD_START) pass = (rx_cost){ 0, s->re->lead_saves + 1u, n };
             pass.positions = rx_lead_run(s, s->pos >> 1, rx_budget_positions(s, pass.visits, until));
             if (pass.positions > 0) {
                 if (rx_pass(s, &pass, until)) return false;
                 continue;
             }
         }
-        if (!s->matched && (!s->sticky || s->pos == s->start)) {
+        if (!s->matched && (!s->sticky || s->pos == s->start) && lead == RX_LEAD_START && s->pos > 0) {
+            /* A thread from here dies at ^, after the SAVEs before it: only
+             * the start reaches them, so it changes nothing but the count. */
+            s->copies += n;
+            s->visits += s->re->lead_saves + 1u;
+        } else if (!s->matched && (!s->sticky || s->pos == s->start)) {
             /* A thread from here, after every thread from earlier. */
             for (uint32_t k = 0; k < n; k++) s->cur[k] = RX_UNSET;
             s->copies += n;
