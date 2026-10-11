@@ -276,6 +276,8 @@ static int host_policy_copy(ta_host *host, const ta_trace_policy *policy) {
     return 1;
 }
 
+static void rules_free(ta_host *host, host_rules *r);
+
 ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
     *out = NULL;
     if (!config || config->size < offsetof(ta_host_config, allocator) + sizeof(ta_allocator) ||
@@ -289,6 +291,11 @@ ta_status ta_host_new(const ta_host_config *config, ta_host **out) {
               config->size < sizeof host->config ? config->size : sizeof host->config);
     host->config.size = sizeof host->config;
     if (!host->config.migrate_quantum) host->config.migrate_quantum = 256;
+    host->trace_kinds = host->config.system.trace_policy
+                            ? host->config.system.trace_policy->kinds[TA_TRACE_DETAIL_SAMPLED]
+                            : TA_TRACE_FULL;
+    host->trace_parts = 1;
+    host->trace_whole = 1;
     if (!host_policy_copy(host, host->config.system.trace_policy)) {
         config->allocator.free(config->allocator.context, host, sizeof *host);
         return TA_ERROR_NO_MEMORY;
@@ -353,6 +360,10 @@ void ta_host_free(ta_host *host) {
                   host->retired_charts[i].name_length ? host->retired_charts[i].name_length : 1);
     host_free(host, host->retired_charts, sizeof(retired_chart) * host->retired_chart_capacity);
     host_free(host, host->trace_rules, host->trace_rules_bytes);
+    rules_free(host, &host->trace_options);
+    for (uint32_t i = 0; i < host->watch_count; i++)
+        rules_free(host, &host->watches[i].rules);
+    host_free(host, host->watches, sizeof(host_watch) * host->watch_capacity);
     ta_allocator allocator = host->config.allocator;
     allocator.free(allocator.context, host, sizeof *host);
 }
@@ -1266,11 +1277,14 @@ static ta_status job_step(ta_host *host, migration_job *job, uint32_t quantum) {
 
 /* ---- running ------------------------------------------------------------------------- */
 
+static void watches_expire(ta_host *host);
+
 void ta_host_advance_time(ta_host *host, ta_time now) {
     host->now = now;
     for (uint32_t i = 0; i < host->segment_count; i++)
         if (host->segments[i].live) ta_system_advance_time(host->segments[i].system, now);
     ta_router_time(host); /* envelopes queued for absent peers past their TTL */
+    if (host->watch_count) watches_expire(host);
 }
 
 /* Free segments that are no longer current and have no actors. 0 if one
@@ -1519,6 +1533,8 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     }
     ta_time qd = ta_router_deadline(host); /* queued envelopes expire then */
     if (qd < out.next_deadline) out.next_deadline = qd;
+    for (uint32_t i = 0; i < host->watch_count; i++) /* watches end then */
+        if (host->watches[i].until < out.next_deadline) out.next_deadline = host->watches[i].until;
     out.used = budget - left;
     out.effect_count = host->effect_count;
     out.detail = exhausted ? detail : TA_POOL_NONE;
@@ -1707,8 +1723,44 @@ ta_status ta_host_adopt(ta_host *host, uint32_t segment, const void *blob, size_
 
 /* ---- inspection ------------------------------------------------------------------------ */
 
-ta_status ta_host_trace_set(ta_host *host, const ta_trace_policy *policy) {
-    if (host->config.system.tracing == TA_TRACING_DISABLED) return TA_ERROR_STATE;
+/* ---- tracing: options and watches make the policy ------------------------------------- */
+
+static void rules_free(ta_host *host, host_rules *r) {
+    host_free(host, r->rules, r->bytes);
+    r->rules = NULL;
+    r->count = 0;
+    r->bytes = 0;
+}
+
+/* The host's copy of `count` rules and their strings. */
+static int rules_copy(ta_host *host, const ta_trace_rule *rules, uint32_t count, host_rules *out) {
+    out->rules = NULL;
+    out->count = 0;
+    out->bytes = 0;
+    if (!count || !rules) return 1;
+    size_t bytes = sizeof(ta_trace_rule) * count;
+    for (uint32_t i = 0; i < count; i++)
+        bytes += (size_t)rules[i].chart.length + rules[i].actor.length + rules[i].event.length;
+    ta_trace_rule *copy = (ta_trace_rule *)host_alloc(host, bytes);
+    if (!copy) return 0;
+    char *text = (char *)(copy + count);
+    for (uint32_t i = 0; i < count; i++) {
+        copy[i] = rules[i];
+        copy[i].size = sizeof copy[i];
+        ta_string_view *views[3] = {&copy[i].chart, &copy[i].actor, &copy[i].event};
+        for (int k = 0; k < 3; k++) {
+            if (views[k]->length) ta_memcpy(text, views[k]->pointer, views[k]->length);
+            views[k]->pointer = text;
+            text += views[k]->length;
+        }
+    }
+    out->rules = copy;
+    out->count = count;
+    out->bytes = bytes;
+    return 1;
+}
+
+static ta_status policy_apply(ta_host *host, const ta_trace_policy *policy) {
     if (!host_policy_copy(host, policy)) return TA_ERROR_NO_MEMORY;
     for (uint32_t i = 0; i < host->segment_count; i++) {
         host_segment *segment = segment_of(host, i);
@@ -1717,6 +1769,127 @@ ta_status ta_host_trace_set(ta_host *host, const ta_trace_policy *policy) {
         if (status != TA_OK) return status;
     }
     return TA_OK;
+}
+
+/* The policy of the options and the watches (newest first, then the options'
+ * rules), each different detail a class of its own; set in every segment. */
+static ta_status trace_compose(ta_host *host) {
+    uint32_t total = host->trace_options.count;
+    for (uint32_t w = 0; w < host->watch_count; w++)
+        total += host->watches[w].rules.count;
+    ta_trace_rule *rules = NULL;
+    if (total && !(rules = (ta_trace_rule *)host_alloc(host, sizeof(ta_trace_rule) * total)))
+        return TA_ERROR_NO_MEMORY;
+    uint32_t classes[TA_TRACE_DETAILS] = {0}, count = 2, k = 0;
+    classes[TA_TRACE_DETAIL_UNSAMPLED] = host->trace_kinds & TA_TRACE_LIFECYCLE;
+    classes[TA_TRACE_DETAIL_SAMPLED] = host->trace_kinds;
+    for (uint32_t w = host->watch_count; w-- > 0;)
+        for (uint32_t i = 0; i < host->watches[w].rules.count; i++)
+            rules[k++] = host->watches[w].rules.rules[i];
+    for (uint32_t i = 0; i < host->trace_options.count; i++)
+        rules[k++] = host->trace_options.rules[i];
+    ta_status status = TA_OK;
+    for (uint32_t i = 0; i < total && status == TA_OK; i++) {
+        if (rules[i].detail == TA_NIL) continue;
+        uint32_t c = 2;
+        while (c < count && classes[c] != rules[i].detail)
+            c++;
+        if (c == count) {
+            if (count == TA_TRACE_DETAILS) status = TA_ERROR_NO_MEMORY;
+            else classes[count++] = rules[i].detail;
+        }
+        rules[i].detail = c;
+    }
+    if (status == TA_OK) {
+        ta_trace_policy policy;
+        ta_trace_policy_default(&policy);
+        policy.sample_parts = host->trace_parts;
+        policy.sample_whole = host->trace_whole;
+        /* with nowhere for records to go the systems write none (dropped alone) */
+        for (uint32_t i = 0; i < TA_TRACE_DETAILS; i++)
+            policy.kinds[i] = !(host->trace_flags & TA_HOST_TRACE_NO_RECORDS) && classes[i]
+                                  ? classes[i]
+                                  : TA_TRACE_BIT(TA_TRACE_DROPPED);
+        policy.rules = rules;
+        policy.rule_count = total;
+        status = policy_apply(host, &policy);
+    }
+    host_free(host, rules, sizeof(ta_trace_rule) * total);
+    return status;
+}
+
+ta_status ta_host_trace_set(ta_host *host, const ta_host_trace_options *options) {
+    if (host->config.system.tracing == TA_TRACING_DISABLED) return TA_ERROR_STATE;
+    if (!options || options->size < sizeof *options) return TA_ERROR_INVALID;
+    host_rules rules, before = host->trace_options;
+    if (!rules_copy(host, options->rules, options->rule_count, &rules)) return TA_ERROR_NO_MEMORY;
+    uint32_t was[4] = {host->trace_flags, host->trace_kinds, host->trace_parts, host->trace_whole};
+    host->trace_options = rules;
+    host->trace_flags = options->flags;
+    host->trace_kinds = options->kinds;
+    host->trace_parts = options->sample_parts;
+    host->trace_whole = options->sample_whole;
+    ta_status status = trace_compose(host);
+    if (status != TA_OK) { /* as it was */
+        rules_free(host, &host->trace_options);
+        host->trace_options = before;
+        host->trace_flags = was[0];
+        host->trace_kinds = was[1];
+        host->trace_parts = was[2];
+        host->trace_whole = was[3];
+        trace_compose(host);
+        return status;
+    }
+    rules_free(host, &before);
+    return TA_OK;
+}
+
+ta_status ta_host_trace_watch(ta_host *host, const ta_trace_rule *rules, uint32_t count,
+                              ta_time until, uint32_t *id) {
+    if (host->config.system.tracing == TA_TRACING_DISABLED) return TA_ERROR_STATE;
+    if (!host_grow(host, (void **)&host->watches, &host->watch_capacity, host->watch_count + 1,
+                   sizeof(host_watch)))
+        return TA_ERROR_NO_MEMORY;
+    host_watch *watch = &host->watches[host->watch_count];
+    if (!rules_copy(host, rules, count, &watch->rules)) return TA_ERROR_NO_MEMORY;
+    watch->id = ++host->watch_sequence;
+    watch->until = until;
+    host->watch_count++;
+    ta_status status = trace_compose(host);
+    if (status != TA_OK) {
+        rules_free(host, &host->watches[--host->watch_count].rules);
+        trace_compose(host);
+        return status;
+    }
+    if (id) *id = watch->id;
+    return TA_OK;
+}
+
+static void watch_remove(ta_host *host, uint32_t at) {
+    rules_free(host, &host->watches[at].rules);
+    for (uint32_t i = at + 1; i < host->watch_count; i++)
+        host->watches[i - 1] = host->watches[i];
+    host->watch_count--;
+}
+
+ta_status ta_host_trace_unwatch(ta_host *host, uint32_t id) {
+    for (uint32_t i = 0; i < host->watch_count; i++)
+        if (host->watches[i].id == id) {
+            watch_remove(host, i);
+            return trace_compose(host);
+        }
+    return TA_ERROR_STALE;
+}
+
+/* Watches whose time is up end (ta_host_advance_time). */
+static void watches_expire(ta_host *host) {
+    int ended = 0;
+    for (uint32_t i = host->watch_count; i-- > 0;)
+        if (host->watches[i].until <= host->now) {
+            watch_remove(host, i);
+            ended = 1;
+        }
+    if (ended) trace_compose(host);
 }
 
 void ta_host_stats_get(const ta_host *host, ta_host_stats *o) {

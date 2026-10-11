@@ -2717,16 +2717,15 @@ function systems(m) {
       let whole = options.sampleWhole === undefined ? 1 : options.sampleWhole >>> 0;
       if (!whole) [parts, whole] = [0, 1]; /* nothing sampled */
       const status = scoped(() => {
-        const P = offsets('ta_trace_policy');
-        const policy = zeroed(size('ta_trace_policy'));
-        x.ta_trace_policy_default(policy);
-        setU32(policy + P.sample_parts, parts);
-        setU32(policy + P.sample_whole, whole);
+        /* ta_host_trace_set takes each rule's detail as kinds and gives them classes itself */
+        const P = offsets('ta_host_trace_options');
+        const host = zeroed(size('ta_host_trace_options'));
         const classes = Array.isArray(options.classes) ? options.classes : [];
-        for (let i = 0; i < K.TRACE_DETAILS; i++) {
-          const kinds = enabled ? classes[i] >>> 0 : 0;
-          setU32(policy + P.kinds + 4 * i, kinds || 1 << K.TRACE_DROPPED);
-        }
+        setU32(host + P.size, size('ta_host_trace_options'));
+        setU32(host + P.flags, enabled ? 0 : K.HOST_TRACE_NO_RECORDS);
+        setU32(host + P.kinds, classes[1] >>> 0);
+        setU32(host + P.sample_parts, parts);
+        setU32(host + P.sample_whole, whole);
         const rules = Array.isArray(options.rules) ? options.rules : [];
         const R = offsets('ta_trace_rule');
         const array = zeroed(size('ta_trace_rule') * (rules.length || 1));
@@ -2740,13 +2739,13 @@ function systems(m) {
           setU32(r + R.sample, rule.sample >>> 0);
           setU32(r + R.sample_parts, rule.parts >>> 0);
           setU32(r + R.sample_whole, rule.whole >>> 0);
-          setU32(r + R.detail, rule.detail < 0 || rule.detail === undefined ? NIL : rule.detail >>> 0);
+          setU32(r + R.detail, rule.detail < 0 || rule.detail === undefined ? NIL : classes[rule.detail] >>> 0);
           setU32(r + R.per_second, rule.perSecond >>> 0);
           setU32(r + R.burst, rule.burst >>> 0);
         });
-        setU32(policy + P.rules, array);
-        setU32(policy + P.rule_count, rules.length);
-        return x.ta_host_trace_set(sys.host, policy);
+        setU32(host + P.rules, array);
+        setU32(host + P.rule_count, rules.length);
+        return x.ta_host_trace_set(sys.host, host);
       });
       if (status === ERROR.NO_MEMORY) throw new Error('traces: more rules than a system holds (64), or no memory');
       if (status === ERROR.INVALID) throw new Error('traces: a rule is malformed, or names more than 16 actors');

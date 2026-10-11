@@ -205,6 +205,8 @@ typedef struct nd_system {
     char error[512]; /* why the last serialize failed */
     /* tracing (docs/adr/0006 in the repository root) */
     ta_otlp *otlp;
+    uint32_t otlp_flags; /* the encoder's (traceConfigure) */
+    int watch_values;    /* a watch asked for values: the encoder writes them */
     size_t otlp_length;
     unsigned char *traces, *logs;
     size_t traces_length, traces_capacity, logs_length, logs_capacity;
@@ -340,6 +342,9 @@ napi_value js_runs(napi_env environment, napi_callback_info info);
 napi_value js_later(napi_env environment, napi_callback_info info);
 napi_value js_state_value(napi_env environment, napi_callback_info info);
 napi_value js_snapshot_contents(napi_env environment, napi_callback_info info);
+napi_value js_watch(napi_env environment, napi_callback_info info);
+napi_value js_unwatch(napi_env environment, napi_callback_info info);
+napi_value trace_kind_names(napi_env environment);
 napi_value js_terminate(napi_env environment, napi_callback_info info);
 int locate(nd_system *system, uint64_t session, ta_system **segment_system, uint32_t *segment,
            ta_actor_info *info);

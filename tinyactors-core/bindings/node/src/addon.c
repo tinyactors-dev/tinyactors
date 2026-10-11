@@ -348,12 +348,15 @@ napi_value ta_js_init(napi_env environment, napi_value exports) {
         METHOD("peerRoundTripTime", js_peer_round_trip_time),
         METHOD("peerStatus", js_peer_status),
         METHOD("traceConfigure", js_trace_configure),
+        METHOD("watch", js_watch),
+        METHOD("unwatch", js_unwatch),
         METHOD("traceEnd", js_trace_end),
         METHOD("metrics", js_metrics),
         METHOD("destroy", js_destroy),
     };
     napi_define_properties(environment, exports, sizeof props / sizeof props[0], props);
     set(environment, exports, "constants", constants_value(environment));
+    set(environment, exports, "traceKinds", trace_kind_names(environment));
     return exports;
 }
 

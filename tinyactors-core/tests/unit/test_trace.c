@@ -426,9 +426,28 @@ static void test_records_strings(void) {
     CHECK_EQUAL(ta_trace_dynamic_string(&view, TA_NIL).length, 0); /* none */
 }
 
+/* kind and detail names, as the bindings spell them */
+static void test_names(void) {
+    for (uint32_t kind = 1; kind < TA_TRACE_KIND_COUNT; kind++)
+        CHECK_EQUAL(ta_trace_kind_by_name(ta_trace_kind_name(kind)), kind);
+    ta_string_view begin = ta_trace_kind_name(TA_TRACE_MACROSTEP_BEGIN);
+    CHECK(begin.length == 14 && !memcmp(begin.pointer, "macrostepBegin", 14));
+    CHECK_EQUAL(ta_trace_kind_name(0).length, 0u);
+    CHECK_EQUAL(ta_trace_kind_name(TA_TRACE_KIND_COUNT).length, 0u);
+    CHECK_EQUAL(ta_trace_kind_by_name((ta_string_view){"nonsense", 8}), 0u);
+    CHECK_EQUAL(ta_trace_kind_by_name((ta_string_view){"", 0}), 0u);
+    uint32_t kinds = 7;
+    CHECK_EQUAL(ta_trace_detail_by_name((ta_string_view){"decisions", 9}, &kinds), TA_OK);
+    CHECK_EQUAL(kinds, TA_TRACE_DECISIONS);
+    CHECK_EQUAL(ta_trace_detail_by_name((ta_string_view){"off", 3}, &kinds), TA_OK);
+    CHECK_EQUAL(kinds, 0u);
+    CHECK_EQUAL(ta_trace_detail_by_name((ta_string_view){"loud", 4}, &kinds), TA_ERROR_INVALID);
+}
+
 int main(void) {
     JSRuntime *runtime = JS_NewRuntime();
     J = JS_NewContext(runtime);
+    RUN(test_names);
     RUN(test_span_ids);
     RUN(test_traceparent_vectors);
     RUN(test_traceparent_every_byte);

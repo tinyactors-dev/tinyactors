@@ -74,11 +74,28 @@ typedef struct pending_error {
     uint32_t sendid_length;
 } pending_error;
 
+typedef struct host_rules { /* trace rules and their strings, the host's copy */
+    ta_trace_rule *rules;
+    uint32_t count;
+    size_t bytes;
+} host_rules;
+
+typedef struct host_watch {
+    uint32_t id;
+    ta_time until;
+    host_rules rules;
+} host_watch;
+
 struct ta_host {
     ta_host_config config;
     ta_trace_policy trace_policy; /* every segment's, and new ones' (config.system points here) */
     void *trace_rules;            /* its rules and their strings, the host's copy */
     size_t trace_rules_bytes;
+    /* ta_host_trace_set's options and the watches, from which the policy is made */
+    host_rules trace_options; /* rule.detail: kinds */
+    uint32_t trace_flags, trace_kinds, trace_parts, trace_whole;
+    host_watch *watches;
+    uint32_t watch_count, watch_capacity, watch_sequence;
     char base[TA_ADDRESS_SYSTEM_MAX + 16]; /* tinyactors://<system_id>/ */
     uint32_t base_length;
     ta_datamodel_binding datamodels[8];

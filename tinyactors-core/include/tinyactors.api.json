@@ -249,6 +249,14 @@
       "value": 1
     },
     {
+      "name": "TA_HOST_TRACE_DETAILS",
+      "value": 6
+    },
+    {
+      "name": "TA_HOST_TRACE_NO_RECORDS",
+      "value": 1
+    },
+    {
       "name": "TA_IO_PROCESSOR_SCXML_REMOTE",
       "value": 2
     },
@@ -5305,6 +5313,80 @@
         }
       }
     },
+    "ta_host_trace_options": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "kinds",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sample_parts",
+          "type": "uint32_t"
+        },
+        {
+          "name": "sample_whole",
+          "type": "uint32_t"
+        },
+        {
+          "name": "rule_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "rules",
+          "type": "const ta_trace_rule *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "kinds": 8,
+            "sample_parts": 12,
+            "sample_whole": 16,
+            "rule_count": 20,
+            "rules": 24
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "kinds": 8,
+            "sample_parts": 12,
+            "sample_whole": 16,
+            "rule_count": 20,
+            "rules": 24
+          }
+        },
+        "wasm32": {
+          "size": 28,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "kinds": 8,
+            "sample_parts": 12,
+            "sample_whole": 16,
+            "rule_count": 20,
+            "rules": 24
+          }
+        }
+      }
+    },
     "ta_http_field": {
       "kind": "struct",
       "fields": [
@@ -8489,8 +8571,54 @@
           "type": "ta_host *"
         },
         {
-          "name": "policy",
-          "type": "const ta_trace_policy *"
+          "name": "options",
+          "type": "const ta_host_trace_options *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_trace_unwatch",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "h",
+          "type": "ta_host *"
+        },
+        {
+          "name": "id",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_trace_watch",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "h",
+          "type": "ta_host *"
+        },
+        {
+          "name": "rules",
+          "type": "const ta_trace_rule *"
+        },
+        {
+          "name": "count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "until",
+          "type": "ta_time"
+        },
+        {
+          "name": "id",
+          "type": "uint32_t *"
         }
       ],
       "public": true,
@@ -10180,6 +10308,23 @@
       "implemented": true
     },
     {
+      "name": "ta_trace_detail_by_name",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "kinds",
+          "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_trace_dynamic_string",
       "returns": "ta_string_view",
       "params": [
@@ -10240,6 +10385,32 @@
         },
         {
           "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_trace_kind_by_name",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_trace_kind_name",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "kind",
           "type": "uint32_t"
         }
       ],

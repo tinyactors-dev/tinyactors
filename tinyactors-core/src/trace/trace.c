@@ -5,6 +5,7 @@
 #include <tinyactors/trace.h>
 
 #include "base/config.h"
+#include "base/memory.h"
 #include "trace/span.h"
 
 ta_span_id ta_step_key_span_id(ta_step_key key) {
@@ -194,4 +195,50 @@ uint64_t ta_trace_ratio_threshold(uint32_t parts, uint32_t whole) {
 
 int ta_trace_sampled(ta_trace_id trace, uint64_t threshold) {
     return (trace.low & (TRACE_RANDOM_BITS - 1u)) >= threshold;
+}
+
+/* ---- names ----------------------------------------------------------------------------- */
+
+static const char *const kind_names[TA_TRACE_KIND_COUNT] = {
+    "",       "dropped",        "spawned",      "finished",  "destroyed", "unloaded",
+    "loaded", "macrostepBegin", "macrostepEnd", "microstep", "condition", "raised",
+    "sent",   "invoked",        "cancelled",    "assign",    "log",       "actionFailed"};
+
+static uint32_t name_length(const char *name) {
+    uint32_t n = 0;
+    while (name[n])
+        n++;
+    return n;
+}
+
+static int name_is(ta_string_view name, const char *text) {
+    uint32_t n = name_length(text);
+    return name.length == n && (n == 0 || ta_memcmp(name.pointer, text, n) == 0);
+}
+
+ta_string_view ta_trace_kind_name(uint32_t kind) {
+    const char *name = kind < TA_TRACE_KIND_COUNT ? kind_names[kind] : "";
+    return (ta_string_view){name, name_length(name)};
+}
+
+uint32_t ta_trace_kind_by_name(ta_string_view name) {
+    for (uint32_t kind = 1; kind < TA_TRACE_KIND_COUNT; kind++)
+        if (name.length && name_is(name, kind_names[kind])) return kind;
+    return 0;
+}
+
+ta_status ta_trace_detail_by_name(ta_string_view name, uint32_t *kinds) {
+    static const struct {
+        const char *name;
+        uint32_t kinds;
+    } details[] = {{"summary", TA_TRACE_SUMMARY},
+                   {"decisions", TA_TRACE_DECISIONS},
+                   {"full", TA_TRACE_FULL},
+                   {"off", 0}};
+    for (uint32_t i = 0; i < sizeof details / sizeof details[0]; i++)
+        if (name_is(name, details[i].name)) {
+            *kinds = details[i].kinds;
+            return TA_OK;
+        }
+    return TA_ERROR_INVALID;
 }

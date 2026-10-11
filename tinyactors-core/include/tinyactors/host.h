@@ -467,11 +467,37 @@ TA_API void ta_host_stats_get(const ta_host *h, ta_host_stats *out);
  * that is more than `capacity`. Names are valid until the next mutating
  * call on the host. */
 TA_API uint32_t ta_host_chart_stats(const ta_host *h, ta_chart_stats *out, uint32_t capacity);
-/* What every segment traces, and new segments start with (as
- * ta_system_trace_set). TA_ERROR_STATE when the host's systems do not trace
- * (config.system.tracing). Each segment's records: ta_host_system, then
+/* What every segment traces, and new segments start with (docs/adr/0007).
+ * Rules and watches name the kinds they give (rule.detail: TA_TRACE_* masks
+ * with TA_TRACE_VALUES, TA_NIL to keep the trace's own); the host gives each
+ * different detail a class of the policy (ta_trace_policy) it sets in every
+ * segment: class 0 the lifecycle kinds of `kinds`, class 1 `kinds`, then one
+ * per detail the watches and rules ask for. A watch's rules come before the
+ * options' rules, newer watches first.
+ * TA_ERROR_STATE when the host's systems do not trace
+ * (config.system.tracing); TA_ERROR_NO_MEMORY for more than
+ * TA_HOST_TRACE_DETAILS different details, more rules than a system holds
+ * (config.system.trace_rules) or no memory; TA_ERROR_INVALID for a malformed
+ * rule. Nothing changes then. Each segment's records: ta_host_system, then
  * ta_system_trace. */
-TA_API ta_status ta_host_trace_set(ta_host *h, const ta_trace_policy *policy);
+enum { TA_HOST_TRACE_NO_RECORDS = 1u << 0 }; /* no records (traceparents still flow) */
+#define TA_HOST_TRACE_DETAILS (TA_TRACE_DETAILS - 2u)
+typedef struct ta_host_trace_options {
+    uint32_t size;
+    uint32_t flags;                      /* TA_HOST_TRACE_* */
+    uint32_t kinds;                      /* what a sampled trace writes */
+    uint32_t sample_parts, sample_whole; /* as ta_trace_policy */
+    uint32_t rule_count;
+    const ta_trace_rule *rules; /* copied */
+} ta_host_trace_options;
+TA_API ta_status ta_host_trace_set(ta_host *h, const ta_host_trace_options *options);
+/* A watch: rules (as in ta_host_trace_options) that hold until the host's
+ * time reaches `until` (UINT64_MAX: until ta_host_trace_unwatch). The time a
+ * watch ends is a deadline of ta_host_run. Errors as ta_host_trace_set. */
+TA_API ta_status ta_host_trace_watch(ta_host *h, const ta_trace_rule *rules, uint32_t count,
+                                     ta_time until, uint32_t *id);
+/* End a watch early; TA_ERROR_STALE when it has ended. */
+TA_API ta_status ta_host_trace_unwatch(ta_host *h, uint32_t id);
 /* Enumerate sessions host-wide (cursor starts at 0); returns how many (0 = done). */
 TA_API uint32_t ta_host_actors(const ta_host *h, uint64_t *cursor, uint64_t *out,
                                uint32_t capacity);

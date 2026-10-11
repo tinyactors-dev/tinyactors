@@ -286,91 +286,14 @@ export function createRuntime({ native, platform }) {
    * hands the bytes to a sink and to an OTLP/HTTP exporter, as they are. */
 
   /** Core's record kinds, in core's order (TA_TRACE_* in tinyactors/trace.h, from 1). */
-  const TRACE_KINDS = Object.freeze([
-    'dropped', 'spawned', 'finished', 'destroyed', 'unloaded', 'loaded', 'macrostepBegin', 'macrostepEnd',
-    'microstep', 'condition', 'raised', 'sent', 'invoked', 'cancelled', 'assign', 'log', 'actionFailed',
-  ]);
-  if (TRACE_KINDS.length + 1 !== K.TRACE_KIND_COUNT) throw new Error('tinyactors: the trace kinds of this build differ from core.mjs');
-  const kindsMask = (kinds) =>
-    kinds.reduce((mask, kind) => {
-      const i = TRACE_KINDS.indexOf(kind);
-      if (i < 0) throw new TypeError(`not a trace kind: ${kind} (one of ${TRACE_KINDS.join(', ')})`);
-      return (mask | (1 << (i + 1))) >>> 0;
-    }, 0);
-  const DETAIL = { summary: K.TRACE_SUMMARY >>> 0, decisions: K.TRACE_DECISIONS >>> 0, full: K.TRACE_FULL >>> 0 };
-  const SAMPLE_WHOLE = 1000000;
+  const TRACE_KINDS = native.traceKinds;
   const EXPORT_DELAY_MS = 250; /* bytes gather this long before a post */
   const EXPORT_BYTES = 1 << 20; /* or until this many wait */
   const EXPORT_MAX_BYTES = 16 << 20; /* waiting beyond this is dropped */
   const FAILURE_LOG_MS = 10000;
   const METRICS_INTERVAL_MS = 60000; /* OTEL_METRIC_EXPORT_INTERVAL's default */
-  const RULE_AT = { start: K.TRACE_AT_START, take: K.TRACE_AT_TAKE };
-  const RULE_FROM = { host: K.TRACE_FROM_HOST, actor: K.TRACE_FROM_ACTOR, timer: K.TRACE_FROM_TIMER, spawn: K.TRACE_FROM_SPAWN, sampled: K.TRACE_FROM_SAMPLED, unsampled: K.TRACE_FROM_UNSAMPLED };
-  const WATCH_MS = 15 * 60 * 1000; /* a watch ends by itself after this, unless told otherwise */
-  /* the kinds of a rule's or a watch's detail: "summary" | "decisions" | "full" | "off" | { kinds, values } */
-  function detailKinds(detail, values) {
-    let kinds;
-    if (detail === 'off') kinds = 0;
-    else if (detail === undefined) kinds = DETAIL.full;
-    else if (typeof detail === 'string') {
-      kinds = DETAIL[detail];
-      if (kinds === undefined) throw new TypeError(`detail: "summary", "decisions", "full" or "off", not ${detail}`);
-    } else if (detail && Array.isArray(detail.kinds)) {
-      kinds = kindsMask(detail.kinds);
-      values = values || detail.values;
-    } else throw new TypeError('detail: "summary", "decisions", "full", "off" or { kinds, values }');
-    return (values ? kinds | K.TRACE_VALUES : kinds) >>> 0;
-  }
-  const bitsOf = (names, table, what) =>
-    [].concat(names === undefined ? [] : names).reduce((bits, name) => {
-      if (!(name in table)) throw new TypeError(`${what}: one of ${Object.keys(table).join(', ')}, not ${name}`);
-      return bits | table[name];
-    }, 0);
-  /* a rule as traceConfigure takes it; `classOf` gives a detail its class */
-  function nativeRule(rule, classOf) {
-    if (rule === null || typeof rule !== 'object') throw new TypeError('a trace rule is an object');
-    let sample = K.TRACE_KEEP, parts = 0, whole = 0;
-    if (rule.sample === true) sample = K.TRACE_SAMPLE;
-    else if (rule.sample === false) sample = K.TRACE_DROP;
-    else if (rule.sample !== undefined) {
-      sample = K.TRACE_RATIO;
-      parts = sampleParts(rule.sample);
-      whole = SAMPLE_WHOLE;
-    }
-    const chart = rule.chart instanceof Chart ? rule.chart.name : rule.chart;
-    return {
-      at: bitsOf(rule.at, RULE_AT, 'at'),
-      chart: chart === undefined ? '' : String(chart),
-      actor: rule.actor === undefined ? '' : String(rule.actor),
-      event: rule.event === undefined ? '' : String(rule.event),
-      session: rule.session === undefined ? '0' : String(rule.session),
-      from: bitsOf(rule.from, RULE_FROM, 'from'),
-      sample,
-      parts,
-      whole,
-      detail: rule.detail === undefined ? -1 : classOf(detailKinds(rule.detail, rule.values)),
-      perSecond: rule.perSecond || 0,
-      burst: rule.burst || 0,
-    };
-  }
   const METRIC_KINDS = { sum: K.OTLP_METRIC_SUM, gauge: K.OTLP_METRIC_GAUGE, histogram: K.OTLP_METRIC_HISTOGRAM };
   const METRIC_KIND_NAMES = Object.fromEntries(Object.entries(METRIC_KINDS).map(([k, v]) => [v, k]));
-  /* tinyactors.run.duration: how long one run blocked the host's loop, in seconds */
-
-  function traceKinds(options) {
-    let kinds;
-    if (options.kinds) kinds = kindsMask(options.kinds);
-    else {
-      kinds = DETAIL[options.detail || 'full'];
-      if (kinds === undefined) throw new TypeError(`detail: "summary", "decisions" or "full", not ${options.detail}`);
-    }
-    return options.values ? (kinds | K.TRACE_VALUES) >>> 0 : kinds;
-  }
-  function sampleParts(sample) {
-    if (sample === undefined) return SAMPLE_WHOLE;
-    if (typeof sample !== 'number' || !(sample >= 0 && sample <= 1)) throw new RangeError('sample: a ratio from 0 to 1');
-    return Math.round(sample * SAMPLE_WHOLE);
-  }
   /* the trace ID generator's seed, as two 32-bit halves */
   function traceSeed(seed) {
     if (seed === undefined) {
@@ -672,7 +595,6 @@ export function createRuntime({ native, platform }) {
       this._exporter = !telemetry.disabled && (telemetry.endpoint || telemetry.tracesEndpoint || telemetry.metricsEndpoint) ? new Exporter(telemetry) : null;
       this._traceSink = null;
       this._traceOptions = {};
-      this._watches = [];
       this._traceApply();
       if (traces.sink) this.setTraceSink(traces.sink, traces);
       this._clock = platform.wallClock || wallClock;
@@ -1315,7 +1237,6 @@ export function createRuntime({ native, platform }) {
         }
         if (this._exporter) this._exporter.flush();
       }
-      for (const w of this._watches) if (w.timer !== null) platform.clearRepeat(w.timer);
       this._stopped = true;
       platform.clearTimer(this._timer);
       if (this._immediate !== null) platform.cancelDefer(this._immediate);
@@ -1418,37 +1339,16 @@ export function createRuntime({ native, platform }) {
      * trailing "*" a prefix), charts, or events. Ends after `for` ms (15
      * minutes; Infinity: until stop()). At most `perSecond` new traces a second.
      */
-    watchTraces({ actors = [], sessions = [], names = [], charts = [], events = [], detail = 'full', values = false, for: ms = WATCH_MS, perSecond } = {}) {
+    watchTraces({ actors = [], sessions = [], names = [], charts = [], events = [], ...options } = {}) {
       if (this._stopped) throw new Error('the system was stopped');
-      const watch = (match) => ({ ...match, at: ['start', 'take'], sample: true, detail, values, perSecond });
-      const rules = [
-        ...actors.map((a) => watch({ session: a instanceof Actor ? a._session : a })),
-        ...sessions.map((session) => watch({ session })),
-        ...names.map((actor) => watch({ actor })),
-        ...charts.map((chart) => watch({ chart })),
-        ...events.map((event) => watch({ event })),
-      ];
-      if (!rules.length) throw new TypeError('watchTraces: name actors, sessions, names, charts or events');
-      const entry = { rules, timer: null };
-      this._watches.push(entry);
-      try {
-        this._traceApply();
-      } catch (e) {
-        this._watches.splice(this._watches.indexOf(entry), 1);
-        this._traceApply();
-        throw e;
-      }
-      const handle = {
-        stop: () => {
-          const at = this._watches.indexOf(entry);
-          if (at < 0) return;
-          this._watches.splice(at, 1);
-          if (entry.timer !== null) platform.clearRepeat(entry.timer);
-          if (!this._stopped) this._traceApply();
-        },
-      };
-      if (ms !== Infinity && ms > 0) entry.timer = platform.repeat(() => handle.stop(), ms);
-      return handle;
+      const id = native.watch(this._sys, {
+        ...options,
+        sessions: [...actors.map((a) => (a instanceof Actor ? a._session : a)), ...sessions],
+        names,
+        charts: charts.map((c) => (c instanceof Chart ? c.name : c)),
+        events,
+      });
+      return { stop: () => !this._stopped && native.unwatch(this._sys, id) };
     }
 
     /** Resolves once every trace export this system started has finished. */
@@ -1459,36 +1359,13 @@ export function createRuntime({ native, platform }) {
     _traceApply() {
       const t = this._traceOptions;
       const exporter = this._exporter;
-      const sample = t.sample !== undefined ? t.sample : this._telemetry.sample;
-      let flags = 0;
-      if (t.parent === 'link') flags |= K.OTLP_LINK_PARENTS;
-      else if (t.parent !== undefined && t.parent !== 'cause') throw new TypeError('parent: "cause" or "link"');
-      if (t.values) flags |= K.OTLP_VALUES;
-      if (t.logs === false) flags |= K.OTLP_NO_LOGS;
-      if (this._telemetry.spanMetrics) flags |= K.OTLP_SPAN_METRICS;
-      /* classes: 0 unsampled (lifecycle only), 1 sampled, 2..7 what rules and watches ask for */
-      const kinds = traceKinds(t);
-      const classes = [kinds & K.TRACE_LIFECYCLE, kinds];
-      const classOf = (mask) => {
-        let at = classes.indexOf(mask, 2);
-        if (at < 0) {
-          if (classes.length === K.TRACE_DETAILS) throw new RangeError('traces: rules and watches ask for more than 6 different details');
-          at = classes.push(mask) - 1;
-        }
-        return at;
-      };
-      const rules = [...this._watches.flatMap((w) => w.rules), ...(t.rules || [])].map((rule) => nativeRule(rule, classOf));
-      if (classes.some((mask) => mask & K.TRACE_VALUES)) flags |= K.OTLP_VALUES;
-      while (classes.length < K.TRACE_DETAILS) classes.push(0);
       /* with nowhere for records to go core writes none; contexts still flow (traceparents) */
       native.traceConfigure(this._sys, {
+        ...t,
         enabled: !!(this._traceSink || (exporter && (exporter.urls.traces || exporter.urls.logs))),
-        classes: classes.map((mask) => mask >>> 0),
-        sampleParts: sampleParts(sample),
-        sampleWhole: SAMPLE_WHOLE,
-        rules,
-        flags,
-        valueLimit: t.valueLimit || 0,
+        sample: t.sample !== undefined ? t.sample : this._telemetry.sample,
+        rules: (t.rules || []).map((r) => (r && r.chart instanceof Chart ? { ...r, chart: r.chart.name } : r)),
+        spanMetrics: !!this._telemetry.spanMetrics,
         resource: Object.entries(this._resource()).map(([k, v]) => [String(k), String(v)]),
       });
     }

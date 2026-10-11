@@ -186,12 +186,9 @@ static void test_class_across_segments(void) {
     watch.chart = (ta_string_view){"w", 1};
     watch.event = (ta_string_view){"ask", 3};
     watch.sample = TA_TRACE_SAMPLE;
-    watch.detail = TA_TRACE_DETAIL_WATCHED;
-    ta_trace_policy policy;
-    ta_trace_policy_default(&policy);
-    policy.rules = &watch;
-    policy.rule_count = 1;
-    CHECK_EQUAL(ta_host_trace_set(e.host, &policy), TA_OK);
+    watch.detail = TA_TRACE_FULL; /* a detail of its own: the first class after sampled */
+    uint32_t id = 0;
+    CHECK_EQUAL(ta_host_trace_watch(e.host, &watch, 1, UINT64_MAX, &id), TA_OK);
     watch.chart = (ta_string_view){"x", 1}; /* the host keeps its own copy */
     uint64_t w = spawn(&e, "w"), echo = spawn(&e, "echo");
     run(&e);
@@ -205,6 +202,30 @@ static void test_class_across_segments(void) {
     CHECK(strcmp(e.log, "pong:1;") == 0);
     CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_WATCHED); /* echo's, in segment 1 */
     CHECK_EQUAL(begin_class(&e, 0, "pong"), TA_TRACE_DETAIL_WATCHED); /* and back */
+    CHECK_EQUAL(ta_host_trace_unwatch(e.host, id), TA_OK);
+    CHECK_EQUAL(ta_host_trace_unwatch(e.host, id), TA_ERROR_STALE);
+    CHECK_EQUAL(send(&e, w, "ask", message), TA_OK);
+    run(&e);
+    CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_SAMPLED);
+    /* a watch with an end: a deadline of the run, then gone */
+    watch.chart = (ta_string_view){"w", 1};
+    CHECK_EQUAL(ta_host_trace_watch(e.host, &watch, 1, 500, &id), TA_OK);
+    ta_run result = ta_host_run(e.host, 1000);
+    drain(&e);
+    CHECK_EQUAL(result.next_deadline, 500u);
+    ta_host_advance_time(e.host, 500);
+    CHECK_EQUAL(ta_host_trace_unwatch(e.host, id), TA_ERROR_STALE);
+    CHECK_EQUAL(send(&e, w, "ask", message), TA_OK);
+    run(&e);
+    CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_SAMPLED);
+    /* more different details than the classes hold */
+    uint32_t ids[TA_HOST_TRACE_DETAILS];
+    for (uint32_t i = 0; i < TA_HOST_TRACE_DETAILS; i++) {
+        watch.detail = TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(i + 2);
+        CHECK_EQUAL(ta_host_trace_watch(e.host, &watch, 1, UINT64_MAX, &ids[i]), TA_OK);
+    }
+    watch.detail = TA_TRACE_BIT(TA_TRACE_FINISHED);
+    CHECK_EQUAL(ta_host_trace_watch(e.host, &watch, 1, UINT64_MAX, &id), TA_ERROR_NO_MEMORY);
     world_close(&e);
 }
 

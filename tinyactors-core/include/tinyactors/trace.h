@@ -140,6 +140,15 @@ enum {
     TA_TRACE_KIND_COUNT = 18
 };
 
+/* A kind's name as the bindings' APIs spell it ("dropped", "spawned", ...,
+ * "macrostepBegin", "actionFailed"); empty for no kind. */
+TA_API ta_string_view ta_trace_kind_name(uint32_t kind);
+/* The kind a name spells; 0 when it spells none. */
+TA_API uint32_t ta_trace_kind_by_name(ta_string_view name);
+/* The kinds of a detail by its name: "summary", "decisions", "full"
+ * (TA_TRACE_SUMMARY, ...) or "off" (0). TA_ERROR_INVALID for another name. */
+TA_API ta_status ta_trace_detail_by_name(ta_string_view name, uint32_t *kinds);
+
 /* Masks of kinds (a system's trace_kinds). TA_TRACE_DROPPED is always
  * written. TA_TRACE_VALUES adds values: a macrostep's event data, and the
  * value an assignment assigned (captured as a payload). */

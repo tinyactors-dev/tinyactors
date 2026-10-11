@@ -1043,11 +1043,12 @@ static void test_trace_set(void) {
     settle();
     begin_seen seen[64];
     begins(A, seen, 64);
-    ta_trace_policy policy;
-    ta_trace_policy_default(&policy);
-    for (uint32_t i = 0; i < TA_TRACE_DETAILS; i++)
-        policy.kinds[i] = TA_TRACE_BIT(TA_TRACE_DROPPED);
-    CHECK_EQUAL(ta_host_trace_set(nodes[A].host, &policy), TA_OK);
+    ta_host_trace_options options;
+    memset(&options, 0, sizeof options);
+    options.size = sizeof options;
+    options.flags = TA_HOST_TRACE_NO_RECORDS;
+    options.kinds = TA_TRACE_FULL;
+    CHECK_EQUAL(ta_host_trace_set(nodes[A].host, &options), TA_OK);
     size_t length;
     void *echo_bytes = compile_chart("e.scxml", ECHO, NULL, &length, 0);
     ta_image echo_image;
@@ -1069,8 +1070,8 @@ static void test_trace_set(void) {
     settle();
     LOGCHK(A, "pong:1;");
     CHECK_EQUAL(begins(A, seen, 64), 0); /* neither segment wrote one */
-    ta_trace_policy_default(&policy);
-    CHECK_EQUAL(ta_host_trace_set(nodes[A].host, &policy), TA_OK);
+    options.flags = 0;
+    CHECK_EQUAL(ta_host_trace_set(nodes[A].host, &options), TA_OK);
     event.data = ta_datamodel_ecmascript_payload_from_json(
         nodes[A].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
     CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
