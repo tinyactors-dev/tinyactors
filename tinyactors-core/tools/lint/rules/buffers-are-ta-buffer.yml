@@ -1,0 +1,37 @@
+# Bytes cross the public headers as ta_bytes (input or result) or
+# ta_buffer * (output), never as a loose pointer and length:
+# `void *buffer, size_t capacity, size_t *length`, `const void *bytes,
+# size_t length`, or a returned `const void *` with a `size_t *length`
+# (AGENTS.md, "At most three parameters"; docs/adr/0009 in the repository
+# root, decision 8). ta_wasm_free is an allocator's free (pointer, size,
+# alignment), called from JavaScript with plain wasm numbers, not bytes.
+# Run with `mise run lint`.
+id: buffers-are-ta-buffer
+language: c
+severity: error
+message: "bytes cross the public API as ta_bytes or ta_buffer *, not a pointer and a length (ADR 0009)"
+files:
+  - include/**/*.h
+rule:
+  all:
+    - inside:
+        kind: declaration
+        stopBy: end
+        has: {field: type, regex: '^TA_API$'}
+    - not:
+        inside: {kind: declaration, stopBy: end, regex: '\bta_wasm_free\('}
+    - any:
+        # a byte pointer followed by its capacity or length
+        - kind: parameter_declaration
+          regex: '^(const\s+)?(void|char|unsigned\s+char|uint8_t)\s*\*'
+          precedes:
+            stopBy: {kind: parameter_declaration}
+            kind: parameter_declaration
+            regex: '^(const\s+)?(size_t|uint32_t)\s*\*?\s*\w*$'
+        # a returned byte pointer whose length comes back through a parameter
+        - kind: parameter_declaration
+          regex: '^(size_t|uint32_t)\s*\*'
+          inside:
+            kind: declaration
+            stopBy: end
+            regex: '^TA_API\s+(const\s+)?(void|char|unsigned\s+char|uint8_t)\s*\*'

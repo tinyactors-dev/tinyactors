@@ -299,7 +299,7 @@ static int ecmascript_open(ecmascript_test *x, const char *chart) {
     memset(x, 0, sizeof *x);
     test_system *t = &x->test_system;
     t->bytes = compile_chart("es.scxml", chart, NULL, &t->length, 0);
-    if (!t->bytes || ta_image_open(t->bytes, t->length, &t->image) != TA_OK) return 0;
+    if (!t->bytes || ta_image_open((ta_bytes){t->bytes, t->length}, &t->image) != TA_OK) return 0;
     x->ecmascript = ta_datamodel_ecmascript_new(NULL);
     t->binding = ta_datamodel_ecmascript_binding(x->ecmascript);
     ta_system_config config = test_system_config();

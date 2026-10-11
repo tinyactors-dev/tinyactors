@@ -194,7 +194,7 @@ static conformance_image *image_for(conformance_world *w, const char *document,
         im->bytes = malloc(bytes.length + 8);
         memcpy(im->bytes, bytes.pointer, bytes.length);
         im->length = bytes.length;
-        if (ta_image_open(im->bytes, im->length, &im->image) == TA_OK) {
+        if (ta_image_open((ta_bytes){im->bytes, im->length}, &im->image) == TA_OK) {
             w->image_count++;
         } else {
             free(im->bytes);

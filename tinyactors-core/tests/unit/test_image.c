@@ -27,7 +27,7 @@ static void test_valid_and_lookup(void) {
     unsigned char *b = (unsigned char *)compile_chart("t.scxml", CHART, NULL, &length, 0);
     CHECK(b != NULL);
     ta_image image;
-    CHECK_EQUAL(ta_image_open(b, length, &image), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){b, length}, &image), TA_OK);
     const ta_image_view *view = ta_image_view_of(&image);
     int exact = 0;
     uint32_t xy = ta_event_name_lookup(view, "x.y", 3, &exact);
@@ -61,7 +61,7 @@ static void test_state_info(void) {
         NULL, &length, 0);
     CHECK(b != NULL);
     ta_image image;
-    CHECK_EQUAL(ta_image_open(b, length, &image), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){b, length}, &image), TA_OK);
     ta_state_info state_info;
     CHECK_EQUAL(ta_image_state_info(&image, (ta_chart_item){0, 0}, &state_info), TA_OK);
     CHECK(state_info.size == sizeof state_info && state_info.parent == TA_NIL &&
@@ -97,12 +97,12 @@ static void test_rejects(void) {
     ta_image image;
 
     memcpy(w, b, length);
-    CHECK_EQUAL(ta_image_open(w, length - 8, &image), TA_ERROR_INVALID); /* truncated */
+    CHECK_EQUAL(ta_image_open((ta_bytes){w, length - 8}, &image), TA_ERROR_INVALID); /* truncated */
     memcpy(w + 1, b, length);
-    CHECK_EQUAL(ta_image_open(w + 1, length, &image), TA_ERROR_INVALID); /* misaligned */
+    CHECK_EQUAL(ta_image_open((ta_bytes){w + 1, length}, &image), TA_ERROR_INVALID); /* misaligned */
     memcpy(w, b, length);
     w[length / 2] ^= 0x40;
-    CHECK_EQUAL(ta_image_open(w, length, &image), TA_ERROR_INVALID); /* hash mismatch */
+    CHECK_EQUAL(ta_image_open((ta_bytes){w, length}, &image), TA_ERROR_INVALID); /* hash mismatch */
 
     /* structurally invalid but correctly hashed images */
     const ta_section_record *ss = section(b, TA_SECTION_STATES);
@@ -111,22 +111,22 @@ static void test_rejects(void) {
     memcpy(w, b, length);
     ((ta_state_record *)(void *)(w + ss->offset))[1].parent = 99;
     rehash(w, length);
-    CHECK_EQUAL(ta_image_open(w, length, &image), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_image_open((ta_bytes){w, length}, &image), TA_ERROR_INVALID);
 
     memcpy(w, b, length);
     ((uint32_t *)(void *)(w + cs->offset))[0] = 200; /* bad opcode */
     rehash(w, length);
-    CHECK_EQUAL(ta_image_open(w, length, &image), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_image_open((ta_bytes){w, length}, &image), TA_ERROR_INVALID);
 
     memcpy(w, b, length);
     *(uint32_t *)(void *)(w + ts->offset) = 0x7FFFFFF0u; /* string length past section */
     rehash(w, length);
-    CHECK_EQUAL(ta_image_open(w, length, &image), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_image_open((ta_bytes){w, length}, &image), TA_ERROR_INVALID);
 
     memcpy(w, b, length);
     ((ta_header_record *)(void *)w)->section_count = 1000;
     rehash(w, length);
-    CHECK_EQUAL(ta_image_open(w, length, &image), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_image_open((ta_bytes){w, length}, &image), TA_ERROR_INVALID);
 
     /* the view is cleared on failure */
     const ta_image_view *view = ta_image_view_of(&image);
@@ -140,7 +140,7 @@ static ta_status open_copy(const unsigned char *w, size_t length) {
     memcpy(c, w, length);
     rehash(c, length);
     ta_image image;
-    ta_status status = ta_image_open(c, length, &image);
+    ta_status status = ta_image_open((ta_bytes){c, length}, &image);
     free(c);
     return status;
 }
@@ -294,7 +294,7 @@ static void test_fuzz_mutations(void) {
         }
         rehash(w, length);
         ta_image image;
-        if (ta_image_open(w, length, &image) == TA_OK) {
+        if (ta_image_open((ta_bytes){w, length}, &image) == TA_OK) {
             accepted++;
             const ta_image_view *view = ta_image_view_of(&image);
             /* touch every string and event node through public accessors */

@@ -19,7 +19,7 @@ static int ecmascript_open(ecmascript_system *t, const char *chart,
     memset(t, 0, sizeof *t);
     size_t length;
     t->bytes = compile_chart("es.scxml", chart, NULL, &length, 0);
-    if (!t->bytes || ta_image_open(t->bytes, length, &t->image) != TA_OK) return 0;
+    if (!t->bytes || ta_image_open((ta_bytes){t->bytes, length}, &t->image) != TA_OK) return 0;
     t->ecmascript = ta_datamodel_ecmascript_new(ecmascript_config);
     ta_datamodel_binding binding = ta_datamodel_ecmascript_binding(t->ecmascript);
     ta_system_config config;
@@ -608,7 +608,7 @@ static void cycle(ta_datamodel_ecmascript *ecmascript, const ta_image *image) {
 static void *image_of_text(const char *text, ta_image *image) {
     size_t length;
     void *bytes = compile_chart("es.scxml", text, NULL, &length, 0);
-    CHECK(bytes && ta_image_open(bytes, length, image) == TA_OK);
+    CHECK(bytes && ta_image_open((ta_bytes){bytes, length}, image) == TA_OK);
     return bytes;
 }
 

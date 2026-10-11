@@ -386,7 +386,7 @@ static void *compile_image(const char *name, ta_source *source, uint32_t n, ta_i
     void *b = malloc(bytes.length + 8);
     memcpy(b, bytes.pointer, bytes.length);
     ta_compile_free(result);
-    if (ta_image_open(b, bytes.length, image) != TA_OK) {
+    if (ta_image_open((ta_bytes){b, bytes.length}, image) != TA_OK) {
         snprintf(message, capacity, "%s: invalid image", name);
         free(b);
         return NULL;

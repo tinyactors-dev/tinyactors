@@ -168,8 +168,13 @@ A function in `tinyactors-core`'s public headers takes at most three
 parameters. Group the rest in a struct, as `ta_cbor_document`, `ta_buffer`
 and the host's request calls do
 ([ADR 0009](docs/adr/0009-one-host-two-queues.md)). When a function needs
-a fourth, change it in place to take a struct. The `host.h` functions that
-take more today are regrouped in ADR 0009's host step; do not add to them.
+a fourth, change it in place to take a struct. Bytes cross the public API
+as `ta_bytes` (input) or `ta_buffer *` (output), never as a pointer and a
+length.
+
+`mise run lint` in `tinyactors-core` enforces both, with the ast-grep rules
+`at-most-three-parameters` and `buffers-are-ta-buffer`
+(`tinyactors-core/tools/lint/rules/`).
 
 ## Acronyms
 

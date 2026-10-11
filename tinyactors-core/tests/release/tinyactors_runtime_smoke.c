@@ -26,7 +26,7 @@ int main(void) {
     }
     ta_string_view bytes = ta_compile_image(compiled);
     ta_image image;
-    if (ta_image_open(bytes.pointer, bytes.length, &image) != TA_OK) {
+    if (ta_image_open((ta_bytes){bytes.pointer, bytes.length}, &image) != TA_OK) {
         fprintf(stderr, "tinyactors_runtime smoke: the image did not open\n");
         return 1;
     }

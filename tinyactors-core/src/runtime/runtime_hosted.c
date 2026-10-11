@@ -21,9 +21,8 @@
 
 /* ---- files -------------------------------------------------------------------------- */
 
-ta_status ta_runtime_load_file(const char *path, void **bytes, size_t *length) {
-    *bytes = NULL;
-    *length = 0;
+ta_status ta_runtime_load_file(const char *path, ta_bytes *out) {
+    *out = (ta_bytes){0};
     FILE *f = fopen(path, "rb");
     if (!f) return TA_ERROR_INVALID;
     if (fseek(f, 0, SEEK_END) != 0) {
@@ -47,14 +46,12 @@ ta_status ta_runtime_load_file(const char *path, void **bytes, size_t *length) {
         return TA_ERROR_INVALID;
     }
     buffer[n] = 0; /* convenient for text files; not counted in length */
-    *bytes = buffer;
-    *length = (size_t)n;
+    *out = (ta_bytes){buffer, (size_t)n};
     return TA_OK;
 }
 
-void ta_runtime_free_file(void *bytes, size_t length) {
-    (void)length;
-    free(bytes);
+void ta_runtime_free_file(ta_bytes bytes) {
+    free((void *)bytes.pointer);
 }
 
 struct ta_runtime_files {
@@ -101,9 +98,8 @@ ta_status ta_runtime_resolve(void *context, const ta_resolve_request *request, t
     if (dir) memcpy(path, base.pointer, dir);
     memcpy(path + dir, source.pointer, source.length);
     path[dir + source.length] = 0;
-    void *bytes;
-    size_t length;
-    ta_status status = ta_runtime_load_file(path, &bytes, &length);
+    ta_bytes bytes;
+    ta_status status = ta_runtime_load_file(path, &bytes);
     if (status != TA_OK) {
         free(path);
         return status;
@@ -115,19 +111,19 @@ ta_status ta_runtime_resolve(void *context, const ta_resolve_request *request, t
         char **nn = (char **)realloc(files->names, nc * sizeof(char *));
         if (nn) files->names = nn;
         if (!nt || !nn) {
-            free(bytes);
+            ta_runtime_free_file(bytes);
             free(path);
             return TA_ERROR_NO_MEMORY;
         }
         files->capacity = nc;
     }
-    files->texts[files->count] = (char *)bytes;
+    files->texts[files->count] = (char *)bytes.pointer;
     files->names[files->count] = path;
     files->count++;
     out->name.pointer = path;
     out->name.length = (uint32_t)strlen(path);
-    out->text.pointer = (const char *)bytes;
-    out->text.length = (uint32_t)length;
+    out->text.pointer = (const char *)bytes.pointer;
+    out->text.length = (uint32_t)bytes.length;
     return TA_OK;
 }
 
@@ -135,9 +131,8 @@ ta_status ta_runtime_compile_file(const char *path, int manifest, ta_compile_res
     *out = NULL;
     ta_runtime_files *files = ta_runtime_files_new();
     if (!files) return TA_ERROR_NO_MEMORY;
-    void *text;
-    size_t length;
-    ta_status status = ta_runtime_load_file(path, &text, &length);
+    ta_bytes text;
+    ta_status status = ta_runtime_load_file(path, &text);
     if (status != TA_OK) {
         ta_runtime_files_free(files);
         return status;
@@ -151,11 +146,11 @@ ta_status ta_runtime_compile_file(const char *path, int manifest, ta_compile_res
     ta_source source;
     source.name.pointer = path;
     source.name.length = (uint32_t)strlen(path);
-    source.text.pointer = (const char *)text;
-    source.text.length = (uint32_t)length;
+    source.text.pointer = (const char *)text.pointer;
+    source.text.length = (uint32_t)text.length;
     status = manifest ? ta_compile_system(&options, &source, out)
                       : ta_compile_charts(&options, (ta_source_list){&source, 1}, out);
-    ta_runtime_free_file(text, length);
+    ta_runtime_free_file(text);
     ta_runtime_files_free(files);
     return status;
 }

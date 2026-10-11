@@ -21,7 +21,7 @@ int main(void) {
     }
     static const unsigned char not_an_image[64];
     ta_image image;
-    if (ta_image_open(not_an_image, sizeof not_an_image, &image) == TA_OK) {
+    if (ta_image_open((ta_bytes){not_an_image, sizeof not_an_image}, &image) == TA_OK) {
         fprintf(stderr, "tinyactors smoke: an image of zeros was accepted\n");
         return 1;
     }

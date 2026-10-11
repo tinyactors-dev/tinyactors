@@ -12,14 +12,13 @@ static void test_alloc_files_clock(void) {
     CHECK(p != NULL && ((uintptr_t)p & 7u) == 0);
     allocator.free(allocator.context, p, 100);
 
-    void *bytes;
-    size_t length;
-    CHECK_EQUAL(ta_runtime_load_file(fixture_path("does-not-exist"), &bytes, &length),
-                TA_ERROR_INVALID);
+    ta_bytes bytes;
+    CHECK_EQUAL(ta_runtime_load_file(fixture_path("does-not-exist"), &bytes), TA_ERROR_INVALID);
     CHECK(fixture_write("hello.txt", "hello"));
-    CHECK_EQUAL(ta_runtime_load_file(fixture_path("hello.txt"), &bytes, &length), TA_OK);
-    CHECK(length == 5 && memcmp(bytes, "hello", 5) == 0 && ((uintptr_t)bytes & 7u) == 0);
-    ta_runtime_free_file(bytes, length);
+    CHECK_EQUAL(ta_runtime_load_file(fixture_path("hello.txt"), &bytes), TA_OK);
+    CHECK(bytes.length == 5 && memcmp(bytes.pointer, "hello", 5) == 0 &&
+          ((uintptr_t)bytes.pointer & 7u) == 0);
+    ta_runtime_free_file(bytes);
 
     ta_time t0 = ta_runtime_now_ns(), t1 = ta_runtime_now_ns();
     CHECK(t1 >= t0 && t0 > 0);
@@ -39,7 +38,7 @@ static void test_compile_file_with_source(void) {
     void *copy = aligned_alloc(8, (image_view.length + 7) & ~(size_t)7);
     memcpy(copy, image_view.pointer, image_view.length);
     ta_image image;
-    CHECK_EQUAL(ta_image_open(copy, image_view.length, &image), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){copy, image_view.length}, &image), TA_OK);
     ta_image_info info;
     ta_image_get_info(&image, &info);
     CHECK_EQUAL(info.chart_count, 2); /* child resolved relative to the parent */
@@ -69,7 +68,7 @@ static void test_growable_system(void) {
     memcpy(copy, bytes.pointer, bytes.length);
     ta_compile_free(result);
     ta_image image;
-    CHECK_EQUAL(ta_image_open(copy, bytes.length, &image), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){copy, bytes.length}, &image), TA_OK);
     datamodel_test *datamodel = datamodel_test_new();
     ta_datamodel_binding binding = datamodel_test_binding(datamodel);
     ta_system_config config;
@@ -107,7 +106,7 @@ static void test_limits_and_targeted_grow(void) {
     memcpy(copy, bytes.pointer, bytes.length);
     ta_compile_free(result);
     ta_image image;
-    CHECK_EQUAL(ta_image_open(copy, bytes.length, &image), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){copy, bytes.length}, &image), TA_OK);
 
     ta_system_config huge, max;
     memset(&huge, 0, sizeof huge);

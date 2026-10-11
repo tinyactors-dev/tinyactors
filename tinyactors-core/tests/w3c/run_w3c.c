@@ -167,9 +167,10 @@ static void http_deliver(ta_system *system, ta_datamodel_ecmascript *ecmascript,
 }
 
 static char *slurp(const char *path, size_t *length) {
-    void *b;
-    if (ta_runtime_load_file(path, &b, length) != TA_OK) return NULL;
-    return (char *)b;
+    ta_bytes b;
+    if (ta_runtime_load_file(path, &b) != TA_OK) return NULL;
+    *length = b.length;
+    return (char *)b.pointer;
 }
 
 static test_outcome run_one(const char *dir, const char *start, const char *deps, int verbose) {
@@ -209,7 +210,7 @@ static test_outcome run_one(const char *dir, const char *start, const char *deps
     ta_compile_result *result;
     ta_status cst = ta_compile_charts(&options, (ta_source_list){source, n}, &result);
     for (uint32_t i = 0; i < n; i++)
-        ta_runtime_free_file(texts[i], 0);
+        ta_runtime_free_file((ta_bytes){texts[i], 0});
     ta_runtime_files_free(files);
     if (cst != TA_OK) {
         if (verbose) {
@@ -229,7 +230,7 @@ static test_outcome run_one(const char *dir, const char *start, const char *deps
     memcpy(copy, bytes.pointer, bytes.length);
     ta_compile_free(result);
     ta_image image;
-    if (ta_image_open(copy, bytes.length, &image) != TA_OK) {
+    if (ta_image_open((ta_bytes){copy, bytes.length}, &image) != TA_OK) {
         free(copy);
         return R_COMPILE;
     }
@@ -367,7 +368,7 @@ int main(int argc, char **argv) {
         fflush(stdout);
     }
     fclose(f);
-    if (skips) ta_runtime_free_file(skips, sl);
+    if (skips) ta_runtime_free_file((ta_bytes){skips, sl});
     printf("datamodel: %s; skipped: %d\n",
            !use_ecmascript    ? "test subset"
            : ecmascript_realm ? "ecmascript (quickjs-ng, isolated realms)"

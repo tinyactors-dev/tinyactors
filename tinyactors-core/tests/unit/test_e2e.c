@@ -109,7 +109,7 @@ static void test_supervisor_workers(void) {
     memcpy(copy, bytes.pointer, bytes.length);
     ta_compile_free(result);
     ta_image image;
-    CHECK_EQUAL(ta_image_open(copy, bytes.length, &image), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){copy, bytes.length}, &image), TA_OK);
 
     static char t1[8192], t2[8192];
     uint64_t end1, end2;

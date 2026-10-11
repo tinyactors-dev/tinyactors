@@ -54,7 +54,7 @@ static uint32_t world_add(host_world *e, const char *text) {
     int i = e->image_count++;
     e->image_bytes[i] = compile_chart("c.scxml", text, NULL, &length, 0);
     CHECK(e->image_bytes[i] != NULL);
-    CHECK_EQUAL(ta_image_open(e->image_bytes[i], length, &e->image[i]), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){e->image_bytes[i], length}, &e->image[i]), TA_OK);
     uint32_t segment = 0;
     CHECK_EQUAL(ta_host_add_image(e->host, &e->image[i], &segment), TA_OK);
     return segment;
@@ -901,10 +901,10 @@ static void test_snapshot_pack(void) {
     CHECK(contents.state_length == 5 && !memcmp(contents.state, "state", 5));
     CHECK_EQUAL(contents.image_count, 1u);
     CHECK_EQUAL(((uintptr_t)contents.host & 7u), 0u);
-    size_t original = 0;
     ta_bytes image = ta_host_snapshot_image((ta_bytes){pack, length}, 0);
-    const void *bytes = ta_image_bytes(&e.image[0], &original);
-    CHECK(image.pointer && image.length == original && !memcmp(image.pointer, bytes, original));
+    ta_bytes original = ta_image_bytes(&e.image[0]);
+    CHECK(image.pointer && image.length == original.length &&
+          !memcmp(image.pointer, original.pointer, original.length));
     ta_bytes none = ta_host_snapshot_image((ta_bytes){pack, length}, 1);
     CHECK(none.pointer == NULL && none.length == 0);
     CHECK_EQUAL(ta_host_snapshot_unpack((ta_bytes){pack, length - 8}, &contents), TA_ERROR_INVALID);
@@ -934,7 +934,7 @@ static void test_snapshot_pack(void) {
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
     ta_image opened;
-    CHECK_EQUAL(ta_image_open(image.pointer, image.length, &opened), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){image.pointer, image.length}, &opened), TA_OK);
     const ta_image *images[1] = {&opened};
     CHECK_EQUAL(ta_host_restore(
                     &config,

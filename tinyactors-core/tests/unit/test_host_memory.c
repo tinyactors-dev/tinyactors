@@ -154,7 +154,7 @@ static void images_open(images *im, const char *const texts[3]) {
         size_t length;
         im->bytes[i] = compile_chart("c.scxml", texts[i], NULL, &length, 0);
         CHECK(im->bytes[i] != NULL);
-        CHECK_EQUAL(ta_image_open(im->bytes[i], length, &im->image[i]), TA_OK);
+        CHECK_EQUAL(ta_image_open((ta_bytes){im->bytes[i], length}, &im->image[i]), TA_OK);
     }
 }
 

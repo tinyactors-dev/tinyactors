@@ -108,7 +108,7 @@ static ta_status finish(ta_compiler *compiler, ta_compile_result *result) {
                            "out of memory");
     if (result->image && !compiler->diagnostics.errors) {
         ta_image check;
-        if (ta_image_open(result->image, result->length, &check) != TA_OK)
+        if (ta_image_open((ta_bytes){result->image, result->length}, &check) != TA_OK)
             ta_diagnostics_add(&compiler->diagnostics, TA_DIAGNOSTIC_ERROR, NULL, 0, 0,
                                "internal error: emitted image failed verification");
     }

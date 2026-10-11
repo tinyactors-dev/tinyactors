@@ -548,11 +548,7 @@
       "params": [
         {
           "name": "bytes",
-          "type": "void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "type": "ta_bytes"
         }
       ],
       "public": true,
@@ -569,12 +565,8 @@
           "type": "const char *"
         },
         {
-          "name": "bytes",
-          "type": "void **"
-        },
-        {
-          "name": "length",
-          "type": "size_t *"
+          "name": "out",
+          "type": "ta_bytes *"
         }
       ],
       "public": true,

@@ -22,8 +22,14 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   wasm32-wasi and runs them under wasmtime.
 - `mise run w3c` runs the W3C IRP suite (downloaded and converted on first
   use); every test not listed in `tests/w3c/skip.txt` must pass.
-- `mise run lint` is the naming lint (ast-grep; always invoke `ast-grep`,
-  never `sg`, which is shadow-utils' group tool in orbs).
+- `mise run lint` runs every ast-grep rule in `tools/lint/rules/` over the
+  C sources, after their tests in `tools/lint/tests/` (always invoke
+  `ast-grep`, never `sg`, which is shadow-utils' group tool in orbs). A new
+  rule file is picked up without editing a list:
+  - `no-retired-abbreviations`: names are whole words;
+  - `at-most-three-parameters`: a public function takes at most three;
+  - `buffers-are-ta-buffer`: bytes cross the public API as `ta_bytes` or
+    `ta_buffer *`, not a pointer and a length (ADR 0009, decision 8).
 - `mise run torture` opens the torture chamber with its dashboard.
 - `third_party/` is vendored (`mise run vendor-quickjs`): never edit or
   format it.

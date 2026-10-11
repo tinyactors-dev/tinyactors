@@ -272,7 +272,7 @@ static int compile_images(void) {
             ta_string_view b = ta_compile_image(result);
             test_image_bytes[k] = aligned_alloc(8, (b.length + 7) & ~(size_t)7);
             memcpy(test_image_bytes[k], b.pointer, b.length);
-            ok = ta_image_open(test_image_bytes[k], b.length, &test_images[k]) == TA_OK;
+            ok = ta_image_open((ta_bytes){test_image_bytes[k], b.length}, &test_images[k]) == TA_OK;
         }
         ta_compile_free(result);
     }
@@ -1228,7 +1228,7 @@ static int mini_open(mini *m, const char *chart) {
     size_t length;
     m->bytes = compile_chart("m.scxml", text, NULL, &length, 0);
     free(text);
-    if (!m->bytes || ta_image_open(m->bytes, length, &m->image) != TA_OK) return 0;
+    if (!m->bytes || ta_image_open((ta_bytes){m->bytes, length}, &m->image) != TA_OK) return 0;
     m->ecmascript = ta_datamodel_ecmascript_new(NULL);
     m->binding = ta_datamodel_ecmascript_binding(m->ecmascript);
     return mini_system(m, 0);

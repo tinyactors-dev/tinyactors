@@ -47,7 +47,7 @@ static int driver_init_datamodel(driver *d, const char *chart, uint32_t workspac
     memset(d, 0, sizeof *d);
     size_t length;
     d->bytes = compile_chart("t.scxml", chart, NULL, &length, 0);
-    if (!d->bytes || ta_image_open(d->bytes, length, &d->image) != TA_OK) return 0;
+    if (!d->bytes || ta_image_open((ta_bytes){d->bytes, length}, &d->image) != TA_OK) return 0;
     if (ecmascript) {
         d->ecmascript = ta_datamodel_ecmascript_new(NULL);
         d->binding[0] = ta_datamodel_ecmascript_binding(d->ecmascript);

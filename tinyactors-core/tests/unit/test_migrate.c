@@ -63,7 +63,7 @@ static int world_open(world *w, const char *v1, const char *v2, int ecmascript, 
     for (int i = 0; i < 2; i++) {
         size_t length;
         w->bytes[i] = compile_chart("w.scxml", sources[i], NULL, &length, 0);
-        if (!w->bytes[i] || ta_image_open(w->bytes[i], length, &w->image[i]) != TA_OK) return 0;
+        if (!w->bytes[i] || ta_image_open((ta_bytes){w->bytes[i], length}, &w->image[i]) != TA_OK) return 0;
         ta_system_config config = config_for(w, (uint64_t)i << 32, i ? timers2 : 0);
         size_t ml;
         if (ta_system_layout(&w->image[i], &config, &ml) != TA_OK) return 0;

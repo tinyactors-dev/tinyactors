@@ -71,7 +71,7 @@ static void open_node(int i, const char *chart) {
     CHECK_EQUAL(ta_host_new(&config, &n->host), TA_OK);
     size_t length;
     n->bytes = compile_chart("c.scxml", chart, NULL, &length, 0);
-    CHECK(n->bytes && ta_image_open(n->bytes, length, &n->image) == TA_OK);
+    CHECK(n->bytes && ta_image_open((ta_bytes){n->bytes, length}, &n->image) == TA_OK);
     uint32_t segment;
     CHECK_EQUAL(ta_host_add_image(n->host, &n->image, &segment), TA_OK);
 }
@@ -990,7 +990,7 @@ static void test_trace_two_segments(void) {
     size_t length;
     void *echo_bytes = compile_chart("e.scxml", ECHO, NULL, &length, 0);
     ta_image echo_image;
-    CHECK(echo_bytes && ta_image_open(echo_bytes, length, &echo_image) == TA_OK);
+    CHECK(echo_bytes && ta_image_open((ta_bytes){echo_bytes, length}, &echo_image) == TA_OK);
     uint32_t segment;
     CHECK_EQUAL(ta_host_add_image(nodes[A].host, &echo_image, &segment), TA_OK);
     CHECK_EQUAL(segment, 1);
@@ -1053,7 +1053,7 @@ static void test_trace_set(void) {
     size_t length;
     void *echo_bytes = compile_chart("e.scxml", ECHO, NULL, &length, 0);
     ta_image echo_image;
-    CHECK(echo_bytes && ta_image_open(echo_bytes, length, &echo_image) == TA_OK);
+    CHECK(echo_bytes && ta_image_open((ta_bytes){echo_bytes, length}, &echo_image) == TA_OK);
     uint32_t segment;
     CHECK_EQUAL(ta_host_add_image(nodes[A].host, &echo_image, &segment), TA_OK);
     uint64_t echo = 0;

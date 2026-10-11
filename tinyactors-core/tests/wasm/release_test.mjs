@@ -97,8 +97,10 @@ if (x.ta_compile_charts) {
   const image = alloc(layout('ta_string_view').size);
   x.ta_compile_image(image, u32(result));
   const opened = alloc(layout('ta_image').size);
-  assert.equal(x.ta_image_open(u32(image + offset('ta_string_view', 'pointer')),
-    u32(image + offset('ta_string_view', 'length')), opened), 0, 'the image opens');
+  const imageBytes = alloc(layout('ta_bytes').size);
+    setU32(imageBytes + offset('ta_bytes', 'pointer'), u32(image + offset('ta_string_view', 'pointer')));
+    setU32(imageBytes + offset('ta_bytes', 'length'), u32(image + offset('ta_string_view', 'length')));
+  assert.equal(x.ta_image_open(imageBytes, opened), 0, 'the image opens');
   const config = alloc(layout('ta_system_config').size);
   setU32(config + offset('ta_system_config', 'size'), layout('ta_system_config').size);
   setU32(config + offset('ta_system_config', 'ticks_per_second'), 1000);

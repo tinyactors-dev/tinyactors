@@ -155,7 +155,7 @@ section_table[n]: { kind:u32, off:u32, size:u32, count:u32 }
 sections...      (each 8-aligned, all references are u32 offsets/indices)
 ```
 
-All integers little-endian. `ta_image_open(bytes, length, &view)` bounds-checks
+All integers little-endian. `ta_image_open((ta_bytes){bytes, length}, &view)` bounds-checks
 every offset/index/range once (fuzzed), so untrusted images are safe and the
 hot path does no checks. The view is a stack/host struct of section base
 pointers; the blob itself is never written (ROM/flash/mmap/`PROGMEM`-able,
@@ -605,7 +605,7 @@ and mark it runnable; they never execute the target.
 
 ```c
 /* image */
-ta_status ta_image_open(const void *bytes, size_t length, ta_image *out);
+ta_status ta_image_open(ta_bytes bytes, ta_image *out);
 uint32_t  ta_image_chart_by_name(const ta_image *, ta_string_view name);
 /* system lifetime: one caller-owned block */
 ta_status ta_system_layout(const ta_image *, const ta_system_config *, size_t *bytes);

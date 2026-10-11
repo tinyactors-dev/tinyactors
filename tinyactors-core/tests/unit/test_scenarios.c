@@ -88,7 +88,7 @@ static void s03_infinite_loop_fair(void) {
     memcpy(t.bytes, image.pointer, image.length);
     t.length = image.length;
     ta_compile_free(result);
-    CHECK_EQUAL(ta_image_open(t.bytes, t.length, &t.image), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){t.bytes, t.length}, &t.image), TA_OK);
     t.datamodel = datamodel_test_new();
     t.binding = datamodel_test_binding(t.datamodel);
     CHECK(tsys_create(&t, &config));

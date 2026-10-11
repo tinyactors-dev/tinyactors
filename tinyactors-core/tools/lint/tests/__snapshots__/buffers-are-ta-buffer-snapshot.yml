@@ -1,0 +1,110 @@
+id: buffers-are-ta-buffer
+snapshots:
+  TA_API const void *ta_image_bytes(const ta_image *image, size_t *length);:
+    labels:
+    - source: size_t *length
+      style: primary
+      start: 57
+      end: 71
+    - source: TA_API
+      style: secondary
+      start: 0
+      end: 6
+    - source: TA_API const void *ta_image_bytes(const ta_image *image, size_t *length);
+      style: secondary
+      start: 0
+      end: 73
+    - source: TA_API const void *ta_image_bytes(const ta_image *image, size_t *length);
+      style: secondary
+      start: 0
+      end: 73
+  TA_API size_t ta_otlp_put_traces(ta_otlp *otlp, void *out, size_t size);:
+    labels:
+    - source: void *out
+      style: primary
+      start: 48
+      end: 57
+    - source: TA_API
+      style: secondary
+      start: 0
+      end: 6
+    - source: TA_API size_t ta_otlp_put_traces(ta_otlp *otlp, void *out, size_t size);
+      style: secondary
+      start: 0
+      end: 72
+    - source: size_t size
+      style: secondary
+      start: 59
+      end: 70
+  TA_API ta_status ta_actor_wake(ta_system *system, const void *blob, size_t length);:
+    labels:
+    - source: const void *blob
+      style: primary
+      start: 50
+      end: 66
+    - source: TA_API
+      style: secondary
+      start: 0
+      end: 6
+    - source: TA_API ta_status ta_actor_wake(ta_system *system, const void *blob, size_t length);
+      style: secondary
+      start: 0
+      end: 83
+    - source: size_t length
+      style: secondary
+      start: 68
+      end: 81
+  TA_API ta_status ta_host_snapshot(ta_host *h, void *buffer, size_t capacity);:
+    labels:
+    - source: void *buffer
+      style: primary
+      start: 46
+      end: 58
+    - source: TA_API
+      style: secondary
+      start: 0
+      end: 6
+    - source: TA_API ta_status ta_host_snapshot(ta_host *h, void *buffer, size_t capacity);
+      style: secondary
+      start: 0
+      end: 77
+    - source: size_t capacity
+      style: secondary
+      start: 60
+      end: 75
+  TA_API ta_status ta_parse(const uint8_t *bytes, size_t length, ta_buffer *out);:
+    labels:
+    - source: const uint8_t *bytes
+      style: primary
+      start: 26
+      end: 46
+    - source: TA_API
+      style: secondary
+      start: 0
+      end: 6
+    - source: TA_API ta_status ta_parse(const uint8_t *bytes, size_t length, ta_buffer *out);
+      style: secondary
+      start: 0
+      end: 79
+    - source: size_t length
+      style: secondary
+      start: 48
+      end: 61
+  TA_API uint32_t ta_address_name_decode(ta_string_view name, char *buffer, uint32_t capacity);:
+    labels:
+    - source: char *buffer
+      style: primary
+      start: 60
+      end: 72
+    - source: TA_API
+      style: secondary
+      start: 0
+      end: 6
+    - source: TA_API uint32_t ta_address_name_decode(ta_string_view name, char *buffer, uint32_t capacity);
+      style: secondary
+      start: 0
+      end: 93
+    - source: uint32_t capacity
+      style: secondary
+      start: 74
+      end: 91

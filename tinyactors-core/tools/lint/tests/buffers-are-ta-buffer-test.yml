@@ -1,0 +1,17 @@
+id: buffers-are-ta-buffer
+valid:
+  - "TA_API ta_status ta_host_snapshot(ta_host *h, ta_buffer *out);"
+  - "TA_API ta_status ta_host_wake(ta_host *h, uint64_t session, ta_bytes blob);"
+  - "TA_API ta_status ta_host_actor(ta_host *h, uint32_t segment, uint64_t *session);"
+  - "TA_API ta_string_view ta_cbor_string(const ta_cbor_document *document, uint32_t at);"
+  - "static size_t helper(void *buffer, size_t capacity);"
+  - "TA_API void ta_wasm_free(void *pointer, size_t size, size_t alignment);"
+  - "TA_API ta_bytes ta_image_bytes(const ta_image *image);"
+  - "TA_API const char *ta_name(const ta_image *image, uint32_t index);"
+invalid:
+  - "TA_API ta_status ta_host_snapshot(ta_host *h, void *buffer, size_t capacity);"
+  - "TA_API uint32_t ta_address_name_decode(ta_string_view name, char *buffer, uint32_t capacity);"
+  - "TA_API ta_status ta_actor_wake(ta_system *system, const void *blob, size_t length);"
+  - "TA_API size_t ta_otlp_put_traces(ta_otlp *otlp, void *out, size_t size);"
+  - "TA_API ta_status ta_parse(const uint8_t *bytes, size_t length, ta_buffer *out);"
+  - "TA_API const void *ta_image_bytes(const ta_image *image, size_t *length);"

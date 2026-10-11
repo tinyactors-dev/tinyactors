@@ -33,7 +33,7 @@ TEST_UNUSED static int tsys_open_image(test_system *t, const char *name, const c
                                        const test_file *files) {
     memset(t, 0, sizeof *t);
     t->bytes = compile_chart(name, chart, files, &t->length, 0);
-    if (!t->bytes || ta_image_open(t->bytes, t->length, &t->image) != TA_OK) return 0;
+    if (!t->bytes || ta_image_open((ta_bytes){t->bytes, t->length}, &t->image) != TA_OK) return 0;
     t->datamodel = datamodel_test_new();
     t->binding = datamodel_test_binding(t->datamodel);
     return 1;

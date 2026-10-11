@@ -2332,10 +2332,8 @@ ta_status ta_host_snapshot_pack(ta_host *host, const ta_datamodel_state *content
                    pack_align(datamodel.length) + pack_align(host_length) +
                    pack_align(state_length);
     for (uint32_t i = 0; i < count; i++) {
-        size_t n = 0;
         const host_segment *segment = segment_of(host, i);
-        if (segment && segment->live) ta_image_bytes(segment->image, &n);
-        total += pack_align(n);
+        if (segment && segment->live) total += pack_align(ta_image_bytes(segment->image).length);
     }
     destination->length = total;
     if (destination->capacity < total) return TA_ERROR_NO_MEMORY;
@@ -2360,13 +2358,12 @@ ta_status ta_host_snapshot_pack(ta_host *host, const ta_datamodel_state *content
     if (state_length) ta_memcpy(out + at, state, state_length);
     at += pack_align(state_length);
     for (uint32_t i = 0; i < count; i++) {
-        size_t n = 0;
-        const void *bytes = NULL;
+        ta_bytes bytes = {0};
         const host_segment *segment = segment_of(host, i);
-        if (segment && segment->live) bytes = ta_image_bytes(segment->image, &n);
-        pack_u64(out + PACK_FIXED + 8u * i, n);
-        if (n) ta_memcpy(out + at, bytes, n);
-        at += pack_align(n);
+        if (segment && segment->live) bytes = ta_image_bytes(segment->image);
+        pack_u64(out + PACK_FIXED + 8u * i, bytes.length);
+        if (bytes.length) ta_memcpy(out + at, bytes.pointer, bytes.length);
+        at += pack_align(bytes.length);
     }
     return TA_OK;
 }

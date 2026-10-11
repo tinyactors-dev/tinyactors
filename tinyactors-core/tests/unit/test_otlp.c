@@ -76,7 +76,7 @@ static int world_open(world *w, const char *const *charts, uint32_t count,
     memset(w, 0, sizeof *w);
     size_t length;
     w->bytes = compile_charts(charts, count, &length);
-    if (!w->bytes || ta_image_open(w->bytes, length, &w->image) != TA_OK) return 0;
+    if (!w->bytes || ta_image_open((ta_bytes){w->bytes, length}, &w->image) != TA_OK) return 0;
     w->ecmascript = ta_datamodel_ecmascript_new(NULL);
     w->binding = ta_datamodel_ecmascript_binding(w->ecmascript);
     ta_system_config system_config;
@@ -594,7 +594,7 @@ static void synthetic_open(synthetic *t, uint32_t open_spans) {
                                     "</state><state id='b'/>")};
     size_t length;
     t->image_bytes = compile_charts(charts, 1, &length);
-    CHECK(t->image_bytes && ta_image_open(t->image_bytes, length, &t->image) == TA_OK);
+    CHECK(t->image_bytes && ta_image_open((ta_bytes){t->image_bytes, length}, &t->image) == TA_OK);
     ta_otlp_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;

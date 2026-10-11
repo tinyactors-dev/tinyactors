@@ -57,7 +57,7 @@ static void test_structure(void) {
     CHECK(bytes != NULL);
     if (!bytes) return;
     ta_image image;
-    CHECK_EQUAL(ta_image_open(bytes, length, &image), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){bytes, length}, &image), TA_OK);
     const ta_image_view *view = ta_image_view_of(&image);
     CHECK_EQUAL(view->chart_count, 3); /* demo, worker (linked), inline */
     ta_string_view datamodel = ta_image_chart_datamodel(&image, 0);
@@ -367,7 +367,7 @@ static void test_deep_inline_documents(void) {
     CHECK(b != NULL);
     if (b) {
         ta_image image;
-        CHECK_EQUAL(ta_image_open(b, length, &image), TA_OK);
+        CHECK_EQUAL(ta_image_open((ta_bytes){b, length}, &image), TA_OK);
         const ta_image_view *view = ta_image_view_of(&image);
         CHECK_EQUAL(view->chart_count, 61);
         CHECK_EQUAL(view->invoke_count, 60);
@@ -392,7 +392,7 @@ static void test_namespaces(void) {
     CHECK(b != NULL);
     if (!b) return;
     ta_image image;
-    CHECK_EQUAL(ta_image_open(b, length, &image), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){b, length}, &image), TA_OK);
     CHECK_EQUAL(ta_image_state_count(&image, 0), 6); /* root a b b1 b2 f */
     CHECK(sid_of(&image, 0, "b2") != TA_NIL);
     CHECK_EQUAL(sid_of(&image, 0, "b3"), TA_NIL);    /* s: rebound to urn:x */
@@ -416,7 +416,7 @@ static void test_generated_ids(void) {
     CHECK(b != NULL);
     if (!b) return;
     ta_image image;
-    CHECK_EQUAL(ta_image_open(b, length, &image), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){b, length}, &image), TA_OK);
     static const char *const want[] = {"",       "_ta_s3", "_ta_s2", "_ta_s4",
                                        "_ta_s1", "_ta_s5", "_ta_s6", "_ta_s7"};
     for (uint32_t i = 0; i < 8; i++) {
@@ -525,7 +525,7 @@ static void test_manifest(void) {
     void *copy = aligned_alloc(8, (bytes.length + 7) & ~7u);
     memcpy(copy, bytes.pointer, bytes.length);
     ta_image image;
-    CHECK_EQUAL(ta_image_open(copy, bytes.length, &image), TA_OK);
+    CHECK_EQUAL(ta_image_open((ta_bytes){copy, bytes.length}, &image), TA_OK);
     ta_image_info info;
     ta_image_get_info(&image, &info);
     CHECK_EQUAL(info.chart_count, 2);
@@ -619,12 +619,12 @@ static void test_xml_writer(void) {
     CHECK(image_written && image_by_hand);
     if (image_written && image_by_hand) {
         ta_image image;
-        CHECK_EQUAL(ta_image_open(image_written, length_written, &image), TA_OK);
+        CHECK_EQUAL(ta_image_open((ta_bytes){image_written, length_written}, &image), TA_OK);
         ta_expression_info first, second;
         CHECK_EQUAL(ta_image_expression(&image, (ta_chart_item){0, 0}, &first), TA_OK);
         CHECK(text_is(first.source, "x < 1 && y > \"2\""));
         ta_image by_hand_image;
-        CHECK_EQUAL(ta_image_open(image_by_hand, length_by_hand, &by_hand_image), TA_OK);
+        CHECK_EQUAL(ta_image_open((ta_bytes){image_by_hand, length_by_hand}, &by_hand_image), TA_OK);
         CHECK_EQUAL(ta_image_expression_count(&image, 0),
                     ta_image_expression_count(&by_hand_image, 0));
         for (uint32_t e = 0; e < ta_image_expression_count(&image, 0); e++) {
