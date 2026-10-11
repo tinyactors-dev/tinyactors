@@ -989,6 +989,15 @@ static void test_set_fuel_linear(sjs_context *context) {
     sjs_program_release(program);
 }
 
+/* An iterator's flatMap charges a unit for each element it copies out of
+ * an array its callback returns, so a callback that returns one large
+ * array again and again pays for each copy. */
+static void test_iterator_flat_map_fuel(sjs_context *context) {
+    uint64_t one = fuel_of(context, "(xs => new Map([[1, 1], [2, 2]]).keys().flatMap(k => xs).toArray().length)('x'.split(''))");
+    uint64_t many = fuel_of(context, "(xs => new Map([[1, 1], [2, 2]]).keys().flatMap(k => xs).toArray().length)('x'.repeat(1000).split(''))");
+    CHECK(many - one >= 2 * 999);
+}
+
 static void test_fuel_and_reset(void) {
     counting c = { 0 };
     sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
@@ -1023,6 +1032,7 @@ static void test_fuel_and_reset(void) {
     test_regex_fuel(context);
     test_to_spliced_fuel(context);
     test_set_fuel_linear(context);
+    test_iterator_flat_map_fuel(context);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
 }
