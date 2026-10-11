@@ -69,7 +69,8 @@
  * .exec (each row's id matched with two groups, one named, and the named
  * group read from the match result: n strings) and .filter (the rows whose
  * id a literal pattern tests true, r => /^r\d{5}[05]$/.test(r.id): n / 5
- * rows) (L);
+ * rows) and .literal (/;r\d+/ and /;R\d/i on text, whose first character
+ * never occurs there: [false,false]) (L);
  * eval.object.spread-reduce (C);
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
@@ -561,6 +562,9 @@ static const bench_case cases[] = {
       .expect = "[{\"id\":\"r000000\",\"kwh\":0,\"priority\":0,\"tags\":[\"a\",\"b\"]},"
                 "{\"id\":\"r000005\",\"kwh\":18.5,\"priority\":1,\"tags\":[\"a\",\"b\"]}]",
       .check = CHECK_FILTER_FIFTH },
+    { .name = "eval.regex.literal", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "[/;r\\d+/.test(text), /;R\\d/i.test(text)]",
+      .globals = { { "text", FIX_TEXT, NULL } }, .expect = "[false,false]", .check = CHECK_SAME },
     { .name = "eval.regex.redos", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "/(a+)+$/.test(\"a\".repeat(xs.length) + \"b\")",
       .globals = { { "xs", FIX_XS, NULL } }, .expect = "false", .check = CHECK_SAME },
