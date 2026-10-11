@@ -142,16 +142,13 @@ napi_value js_peer_round_trip_time(napi_env environment, napi_callback_info info
 
 /* peerStatus(host, peer) -> { id, state, queued, rtt, lag, sent, received, errors,
  * duplicates } | null */
-napi_value js_peer_status(napi_env environment, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value argv[2], o;
-    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *host = argc >= 2 ? get_system(environment, argv[0]) : NULL;
-    if (!host) return NULL;
+/* the router's view of a peer (ta_host_peer_status) as an object; null when it is gone */
+napi_value peer_status_value(napi_env environment, nd_system *host, uint32_t peer) {
+    napi_value o;
     ta_peer_status status;
     memset(&status, 0, sizeof status);
     status.size = sizeof status;
-    if (ta_host_peer_status(host->host, get_u32(environment, argv[1]), &status) != TA_OK)
+    if (!peer || ta_host_peer_status(host->host, peer, &status) != TA_OK)
         return null_value(environment);
     static const char *const states[] = {"connecting", "open", "reconnecting", "closed"};
     napi_create_object(environment, &o);
@@ -169,6 +166,15 @@ napi_value js_peer_status(napi_env environment, napi_callback_info info) {
     napi_set_named_property(environment, o, "duplicates",
                             num(environment, (double)status.duplicates));
     return o;
+}
+
+napi_value js_peer_status(napi_env environment, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    nd_system *host = argc >= 2 ? get_system(environment, argv[0]) : NULL;
+    if (!host) return NULL;
+    return peer_status_value(environment, host, get_u32(environment, argv[1]));
 }
 
 /* constants: the numbers of the public headers core.mjs needs (trace kinds and

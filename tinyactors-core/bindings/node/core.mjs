@@ -545,7 +545,12 @@ export function createRuntime({ native, platform }) {
       this._store = options.hibernation ? options.hibernation.store : null;
       if (this._store && typeof this._store.get !== 'function') throw new TypeError('hibernation: { store } with get, set and delete');
       this._peers = new Map(); /* router peer -> transport connection */
-      this._links = new Set();
+      this._links = new Set(); /* store links */
+      this._transports = new Map(); /* link connection -> its transport */
+      this._linkOpeners = new Map(); /* link -> () => a new transport */
+      this._linkOpened = new Map(); /* link -> resolves its `opened` */
+      this._linkServers = new Map(); /* accepted connection -> its server */
+      this._linkJudges = new Map(); /* server -> trust(hello) */
       this._stopped = false;
       this._timer = null; /* the one timer the addon arms (callbacks.schedule) */
       this._immediate = null;
@@ -897,6 +902,9 @@ export function createRuntime({ native, platform }) {
         case 'freed':
           this._segments[e.segment] = undefined;
           break;
+        case 'link':
+          this._linkEffect(e);
+          break;
         case 'peer': {
           const conn = this._peers.get(e.peer);
           if (conn) conn.envelope(e);
@@ -1135,6 +1143,60 @@ export function createRuntime({ native, platform }) {
       }
     }
 
+    /* what the links (src/link) ask of the transports */
+    _linkEffect(e) {
+      const t = this._transports.get(e.connection);
+      if (e.op === 'send') {
+        if (t) t.send(e.text);
+      } else if (e.op === 'close') {
+        this._transports.delete(e.connection);
+        if (t) t.close();
+      } else if (e.op === 'open') {
+        const open = this._linkOpeners.get(e.connection);
+        if (!open) return;
+        let transport;
+        try {
+          transport = open();
+        } catch (err) {
+          const why = String(err && err.message ? err.message : err);
+          platform.defer(() => !this._stopped && native.linkDropped(this._sys, e.connection, why));
+          return;
+        }
+        this._linkWire(e.connection, transport);
+        transport.onopen = () => this._transports.get(e.connection) === transport && !this._stopped && native.linkOpened(this._sys, e.connection);
+      } else if (e.op === 'hello') {
+        const trust = this._linkJudges.get(this._linkServers.get(e.connection));
+        let verdict = 0;
+        try {
+          verdict = trust && trust(JSON.parse(e.text)) ? 2 : 1;
+        } catch (err) {
+          platform.log(err);
+        }
+        native.linkAdmit(this._sys, e.connection, verdict);
+      }
+    }
+
+    /* a transport carries `connection`'s messages */
+    _linkWire(connection, t) {
+      this._transports.set(connection, t);
+      t.onmessage = (ev) => {
+        if (this._transports.get(connection) !== t || this._stopped) return;
+        if (!native.linkReceived(this._sys, connection, String(ev.data))) return;
+        const opened = this._linkOpened.get(connection);
+        if (opened) {
+          this._linkOpened.delete(connection);
+          opened();
+        }
+      };
+      t.onclose = () => {
+        if (this._transports.get(connection) !== t) return;
+        this._transports.delete(connection);
+        this._linkServers.delete(connection);
+        if (!this._stopped) native.linkDropped(this._sys, connection, 'connection closed');
+      };
+      t.onerror = () => {}; /* followed by onclose */
+    }
+
     _attach(conn) {
       this._peers.set(conn.peer, conn);
     }
@@ -1186,6 +1248,8 @@ export function createRuntime({ native, platform }) {
     stop() {
       if (this._stopped) return;
       for (const c of [...this._links]) c.disconnect();
+      for (const t of this._transports.values()) t.close(); /* the links go with the system */
+      this._transports.clear();
       if (this._metricsTimer !== null) platform.clearRepeat(this._metricsTimer);
       if (this._exporter && this._exporter.urls.metrics) this._exportMetrics(); /* what was counted up to now */
       if (this._traceSink || this._exporter) {
@@ -1518,206 +1582,46 @@ export function createRuntime({ native, platform }) {
 
   /* ----------------------------------------------------------------- links
    * A link carries envelopes between two systems over a WebSocket-like
-   * transport, speaking the link protocol v1 (docs/protocol.md, "Link
-   * protocol"): hello {v, id, reach, caps, cred}, ev (an envelope), err,
-   * ping/pong. Routing is the native router's: each connection is one router
-   * peer (ta_host_peer_*); this code moves frames between it and the wire.
-   * Envelopes come out of the addon as neutral JSON (ta_host_envelope_json). */
-  const LINK_V = 1;
-  const parseFrame = (text) => {
-    try {
-      const m = JSON.parse(text);
-      return m && typeof m === 'object' && typeof m.t === 'string' ? m : null;
-    } catch {
-      return null;
-    }
-  };
-  const systemIDValid = (id) => native.systemIDValid(id);
-  const reachOf = (msg) => (Array.isArray(msg.reach) ? msg.reach.filter(systemIDValid) : []);
+   * transport (docs/protocol.md, "Link protocol"). The protocol is core's
+   * (src/link: hellos, reach, pings, reconnects, resumption, exports); this
+   * code opens transports and moves their text ("link" effects one way,
+   * native.link* calls the other). */
 
-  /* what both sides of a link share: frames and envelopes */
-  class PeerConn {
-    constructor(system, options) {
-      this.system = system;
-      this.options = options;
-      this.ws = null;
-      this.open = false;
-      this.peer = 0; /* the router's handle */
-      this.remoteID = null;
-      this.reach = [];
-      this.announce = !!options.announce;
-      this.announced = null;
-      this.maxFrame = options.maxFrame || K.FRAME_MAX; /* what we accept, announced in our hello */
-      this.peerMax = K.FRAME_MAX; /* what the peer accepts (its hello's caps.max_frame) */
-    }
-    negotiate(msg) {
-      const caps = msg.caps && typeof msg.caps === 'object' ? msg.caps : {};
-      this.peerMax = Number.isInteger(caps.max_frame) && caps.max_frame > 0 ? caps.max_frame : K.FRAME_MAX;
-    }
-    send(msg) {
-      this.ws.send(JSON.stringify(msg));
-    }
-    hello() {
-      const reach = this.announce ? this.system._reachFor(this) : [];
-      const key = reach.join(' ');
-      if (this.announced === key) return;
-      this.announced = key;
-      const msg = { t: 'hello', v: LINK_V, id: this.system.id, reach, caps: { profile: 'neutral', ordered: true, acks: false, max_frame: this.maxFrame } };
-      if (this.options.credential !== undefined) msg.cred = this.options.credential;
-      this.send(msg);
-    }
-    /* a TA_HOST_EFFECT_PEER effect: the envelope goes out on the wire */
-    envelope(e) {
-      const fail = (reason) => this.system._fromPeer(this.peer, { t: 'err', origin: e.origin, msgid: e.msgid, sendid: e.sendid, reason });
-      if (e.malformed || !e.envelope) return fail('malformed'); /* data that is no neutral value */
-      const text = `{"t":"ev",${e.envelope.slice(1)}`;
-      if (text.length * 3 > this.peerMax && utf8.encode(text).length > this.peerMax) return fail('malformed');
-      if (!this.post(null, text)) fail('unreachable');
-    }
-    post(msg, text = JSON.stringify(msg)) {
-      if (!this.open || !this.ws) return false;
-      this.ws.send(text);
-      return true;
-    }
-    /* frames every connection handles alike; false: not one of them */
-    common(ws, msg) {
-      if (msg.t === 'hello') return false;
-      if (msg.t === 'ping') ws.send(JSON.stringify({ t: 'pong', at: msg.at }));
-      else if ((msg.t === 'ev' || msg.t === 'err') && this.peer && this.remoteID) this.system._fromPeer(this.peer, msg);
-      return true; /* pong is the caller's; ack and unknown types are ignored */
-    }
-  }
-
-  /* the client side: reconnects with a backoff while not closed */
-  class LinkConn extends PeerConn {
-    constructor(system, options) {
-      super(system, options);
-      this.alias = options.name || 'remote';
-      if (!systemIDValid(this.alias)) throw new TypeError(`createLink: name "${this.alias}" is not a system id`);
-      this.closed = false;
-      this.pinger = null;
-      this.retry = null;
-      this.attempts = 0;
-      this.error = null;
-      this.opened = [];
-      const flags = (options.trusted === false ? 0 : K.PEER_TRUSTED) | (options.maxQueue !== 0 ? K.PEER_QUEUE : 0);
-      this.peer = native.peerAdd(system._sys, this.alias, [], flags, options.maxQueue || 1000, options.queueTTLMs || 0);
-      if (!this.peer) throw new Error(`createLink: cannot add a peer "${this.alias}"`);
-      native.peerUp(system._sys, this.peer, false); /* not connected yet: envelopes queue */
-      system._attach(this);
-      system._links.add(this);
-    }
-    connect() {
-      this.retry = null;
-      if (this.closed) return;
-      let ws;
-      try {
-        ws = this.options.transport ? asTransport(this.options.transport(), this.maxFrame) : new WebSocket(this.options.url);
-      } catch (e) {
-        this.ws = null;
-        platform.defer(() => this.dropped(null, String(e && e.message ? e.message : e)));
-        return;
-      }
-      this.ws = ws;
-      this.announced = null;
-      ws.onopen = () => this.hello();
-      ws.onmessage = (ev) => this.message(ws, String(ev.data));
-      ws.onclose = () => this.dropped(ws, 'connection closed');
-      ws.onerror = () => {}; /* followed by onclose */
-    }
-    message(ws, text) {
-      if (ws !== this.ws) return;
-      const msg = parseFrame(text);
-      if (!msg || this.common(ws, msg)) {
-        if (msg && msg.t === 'pong' && typeof msg.at === 'number') native.peerRoundTripTime(this.system._sys, this.peer, Math.max(0, Math.round(this.system._now() - msg.at)));
-        return;
-      }
-      if (msg.v !== LINK_V || !systemIDValid(msg.id)) {
-        ws.close();
-        return;
-      }
-      const first = !this.open;
-      this.remoteID = msg.id;
-      this.reach = reachOf(msg);
-      this.negotiate(msg);
-      this.open = true;
-      this.attempts = 0;
-      this.error = null;
-      this.system._peerHello(this, [msg.id, ...this.reach]);
-      if (!first) return;
-      for (const resolve of this.opened.splice(0)) resolve();
-      const every = this.options.pingMs === undefined ? 5000 : this.options.pingMs;
-      if (every > 0) {
-        const ping = () => this.ws === ws && ws.send(JSON.stringify({ t: 'ping', at: this.system._now() }));
-        ping();
-        this.pinger = platform.repeat(ping, every);
-      }
-    }
-    /* our name for the server (the link's alias) becomes its own id on the wire */
-    envelope(e) {
-      if (this.remoteID && this.alias !== this.remoteID && e.envelope) {
-        const a = parseAddress(e.target);
-        if (a && a.system === this.alias) {
-          const env = JSON.parse(e.envelope);
-          env.target = `tinyactors://${this.remoteID}/${a.local}`;
-          return super.envelope({ ...e, envelope: JSON.stringify(env) });
-        }
-      }
-      return super.envelope(e);
-    }
-    dropped(ws, error) {
-      if (ws !== this.ws) return;
-      this.ws = null;
-      this.open = false;
-      if (this.pinger !== null) platform.clearRepeat(this.pinger);
-      this.pinger = null;
-      if (this.closed) return;
-      this.error = error;
-      this.system._peerDown(this, false);
-      this.attempts++;
-      const ms = Math.min(30000, 250 * 2 ** Math.min(this.attempts - 1, 7));
-      this.retry = this.system._at(this.system._now() + ms, () => this.connect());
-    }
-    disconnect() {
-      if (this.closed) return;
-      this.closed = true;
-      this.open = false;
-      if (this.pinger !== null) platform.clearRepeat(this.pinger);
-      if (this.retry) this.retry();
-      const ws = this.ws;
-      this.ws = null;
-      if (ws) ws.close();
-      this.system._links.delete(this);
-      if (!this.system._stopped) this.system._peerDown(this, true);
-    }
-  }
-
-  const peerStatus = (system, conn, extra = {}) => {
-    const s = conn.peer && !system._stopped ? native.peerStatus(system._sys, conn.peer) : null;
-    return s ? { ...s, ...extra } : null;
-  };
-
-  /**
-   * Link `system` to another system (a browser to its server): { url } (a
+  /** Link `system` to another system (a browser to its server): { url } (a
    * WebSocket) or { transport: () => a WebSocket-like object or a byte
    * stream }, `name` (our name for it), trusted, maxQueue, queueTTLMs,
    * announce, pingMs, credential, maxFrame. Returns { name, opened, get,
-   * status, close }.
-   */
+   * status, close }. */
   function createLink(system, options = {}) {
     if (!(system instanceof System)) throw new TypeError('createLink(system, options): system expected');
     if (!options.url && !options.transport) throw new TypeError('createLink: { url } or { transport } needed');
-    const conn = new LinkConn(system, options);
-    const opened = new Promise((resolve) => conn.opened.push(resolve));
-    conn.connect();
+    const name = options.name || 'remote';
+    if (!native.systemIDValid(name)) throw new TypeError(`createLink: name "${name}" is not a system id`);
+    const maxFrame = options.maxFrame || K.FRAME_MAX;
+    const link = native.linkConnect(system._sys, {
+      name,
+      trusted: options.trusted !== false,
+      maxQueue: options.maxQueue === undefined ? 1000 : options.maxQueue,
+      queueTTLMs: options.queueTTLMs || 0,
+      announce: options.announce,
+      pingMs: options.pingMs === undefined ? 5000 : options.pingMs,
+      credential: options.credential === undefined ? undefined : JSON.stringify(options.credential),
+      maxFrame,
+    });
+    const opened = new Promise((resolve) => system._linkOpened.set(link, resolve));
+    system._linkOpeners.set(link, () => (options.transport ? asTransport(options.transport(), maxFrame) : new WebSocket(options.url)));
+    native.pump(system._sys); /* asks for its transport */
     return {
-      name: conn.alias,
+      name,
       opened,
       /** A reference to `systemID` (an actor name) on the other side. */
-      get: (systemID) => system.ref(formatAddress(conn.alias, systemID)),
+      get: (systemID) => system.ref(formatAddress(name, systemID)),
       /** The router's view of the peer (ta_host_peer_status), and the last error. */
-      status: () => peerStatus(system, conn, { error: conn.error, attempts: conn.attempts }),
-      close: () => conn.disconnect(),
+      status: () => (system._stopped ? null : native.linkStatus(system._sys, link)),
+      close: () => {
+        system._linkOpeners.delete(link);
+        if (!system._stopped) native.linkClose(system._sys, link);
+      },
     };
   }
 
@@ -1738,94 +1642,69 @@ export function createRuntime({ native, platform }) {
    */
   function serveLinks(system, options = {}) {
     if (typeof options.accept !== 'function') throw new TypeError('serveLinks(system, { accept }) needs an accept function here');
-    const conns = new Set();
-    const byID = new Map(); /* remote system id -> its connection (also while it is away) */
-    const expiry = new Map(); /* remote system id -> cancels the end of its resumption window */
-    const resumeMs = options.resumeMs === undefined ? 30000 : options.resumeMs;
-    const rules = exportsOf(options.exports);
-    const trusts = (hello) => (typeof options.trust === 'function' ? !!options.trust(hello) : !!options.trusted);
-    const server = { closed: false };
-    const forget = (c) => {
-      const cancel = expiry.get(c.remoteID);
-      if (cancel) cancel();
-      expiry.delete(c.remoteID);
-      if (byID.get(c.remoteID) === c) byID.delete(c.remoteID);
-      system._peerDown(c, true);
-    };
-    const hello = (c, ws, msg) => {
-      if (msg.v !== LINK_V || !systemIDValid(msg.id) || msg.id === system.id) return ws.close();
-      c.reach = reachOf(msg);
-      c.negotiate(msg);
-      if (c.peer) return system._peerHello(c, c.reach); /* a repeated hello: new reach */
-      c.remoteID = msg.id;
-      const before = byID.get(msg.id);
-      if (before) {
-        /* the same system again: the newer connection wins and resumes its peer */
-        const cancel = expiry.get(msg.id);
-        if (cancel) cancel();
-        expiry.delete(msg.id);
-        if (before.ws && before.ws !== ws) {
-          const old = before.ws;
-          before.ws = null;
-          before.open = false;
-          conns.delete(before);
-          old.close();
-        }
-        c.peer = before.peer;
-      } else {
-        const flags = (trusts(msg) ? K.PEER_TRUSTED : 0) | (resumeMs > 0 ? K.PEER_QUEUE : 0);
-        c.peer = native.peerAdd(system._sys, msg.id, c.reach, flags, options.maxQueue || 1000, resumeMs);
-        if (!c.peer) return ws.close();
-        for (const [name, events] of rules) native.exportName(system._sys, c.peer, name, events);
-      }
-      byID.set(msg.id, c);
-      system._attach(c);
-      c.open = true;
-      c.hello();
-      system._peerHello(c, c.reach);
-    };
-    const onConnection = (transport) => {
-      const ws = asTransport(transport, options.maxFrame || K.FRAME_MAX);
-      if (server.closed) return ws.close();
-      const c = new PeerConn(system, options);
-      c.ws = ws;
-      conns.add(c);
-      ws.onmessage = (ev) => {
-        if (c.ws !== ws) return;
-        const msg = parseFrame(String(ev.data));
-        if (msg && !c.common(ws, msg)) hello(c, ws, msg);
-      };
-      ws.onclose = () => {
-        conns.delete(c);
-        if (c.ws !== ws) return; /* replaced by a newer connection */
-        c.ws = null;
-        c.open = false;
-        if (!c.peer || byID.get(c.remoteID) !== c) return;
-        if (resumeMs > 0 && !server.closed) {
-          system._peerDown(c, false); /* queue for it until it is back or resumeMs passed */
-          const id = c.remoteID;
-          expiry.set(id, system._at(system._now() + resumeMs, () => byID.get(id) === c && !c.ws && forget(c)));
-        } else forget(c);
-      };
-    };
-    const stop = options.accept(onConnection);
+    const maxFrame = options.maxFrame || K.FRAME_MAX;
+    const server = native.linkServe(system._sys, {
+      trusted: !!options.trusted,
+      judge: typeof options.trust === 'function',
+      announce: options.announce,
+      exports: exportsOf(options.exports),
+      resumeMs: options.resumeMs === undefined ? 30000 : options.resumeMs,
+      maxQueue: options.maxQueue || 1000,
+      maxFrame,
+    });
+    if (typeof options.trust === 'function') system._linkJudges.set(server, options.trust);
+    let closed = false;
+    const stop = options.accept((transport) => {
+      const t = asTransport(transport, maxFrame);
+      if (closed || system._stopped) return t.close();
+      const connection = native.linkAccept(system._sys, server);
+      if (!connection) return t.close();
+      system._linkServers.set(connection, server);
+      system._linkWire(connection, t);
+    });
+    const statuses = () => (system._stopped ? [] : native.linkConnections(system._sys, server).map((c) => native.linkStatus(system._sys, c)).filter(Boolean));
     return {
-      connections: () => [...conns].filter((c) => c.open).map((c) => c.remoteID),
-      status: (id) => (byID.get(id) ? peerStatus(system, byID.get(id)) : null),
+      connections: () => statuses().filter((s) => s.open).map((s) => s.remote),
+      status: (id) => statuses().find((s) => s.remote === id) || null,
       close: async () => {
-        server.closed = true;
-        for (const c of [...conns]) {
-          const ws = c.ws;
-          c.ws = null;
-          c.open = false;
-          if (ws) ws.close();
-        }
-        conns.clear();
-        for (const c of [...byID.values()]) if (!system._stopped) forget(c);
+        closed = true;
+        system._linkJudges.delete(server);
+        if (!system._stopped) native.linkClose(system._sys, server);
         if (typeof stop === 'function') await stop();
       },
     };
   }
+
+  /* ------------------------------------------------------- store link peers
+   * A store link is one router peer whose transport is SQL (below). */
+  const LINK_V = 1;
+  const systemIDValid = (id) => native.systemIDValid(id);
+
+  class PeerConn {
+    constructor(system, options) {
+      this.system = system;
+      this.options = options;
+      this.open = false;
+      this.peer = 0; /* the router's handle */
+      this.remoteID = null;
+      this.reach = [];
+      this.announce = !!options.announce;
+      this.announced = null;
+      this.maxFrame = options.maxFrame || K.FRAME_MAX;
+    }
+    hello() {
+      const reach = this.announce ? this.system._reachFor(this) : [];
+      const key = reach.join(' ');
+      if (this.announced === key) return;
+      this.announced = key;
+      this.send({ t: 'hello', v: LINK_V, id: this.system.id, reach, caps: { profile: 'neutral', ordered: true, acks: false, max_frame: this.maxFrame } });
+    }
+  }
+
+  const peerStatus = (system, conn, extra = {}) => {
+    const s = conn.peer && !system._stopped ? native.peerStatus(system._sys, conn.peer) : null;
+    return s ? { ...s, ...extra } : null;
+  };
 
   /* A byte stream as a link transport (the WebSocket-like shape links use): a
    * Node-style duplex (a net.Socket) or a { readable, writable } pair (a child

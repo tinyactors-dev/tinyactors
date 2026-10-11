@@ -269,6 +269,46 @@
       "value": 1
     },
     {
+      "name": "TA_LINK_ADMIT",
+      "value": 1
+    },
+    {
+      "name": "TA_LINK_ADMIT_TRUSTED",
+      "value": 2
+    },
+    {
+      "name": "TA_LINK_ANNOUNCE",
+      "value": 2
+    },
+    {
+      "name": "TA_LINK_CLOSE",
+      "value": 2
+    },
+    {
+      "name": "TA_LINK_HELLO",
+      "value": 4
+    },
+    {
+      "name": "TA_LINK_JUDGE",
+      "value": 4
+    },
+    {
+      "name": "TA_LINK_OPEN",
+      "value": 3
+    },
+    {
+      "name": "TA_LINK_REFUSE",
+      "value": 0
+    },
+    {
+      "name": "TA_LINK_SEND",
+      "value": 1
+    },
+    {
+      "name": "TA_LINK_TRUSTED",
+      "value": 1
+    },
+    {
       "name": "TA_NIL",
       "value": 4294967295
     },
@@ -5387,6 +5427,313 @@
         }
       }
     },
+    "ta_links": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "ta_links_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "host",
+          "type": "ta_host *"
+        },
+        {
+          "name": "system_id",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "datamodels",
+          "type": "const ta_datamodel_binding *"
+        },
+        {
+          "name": "datamodel_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "allocator",
+          "type": "ta_allocator"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "host": 8,
+            "system_id": 16,
+            "datamodels": 32,
+            "datamodel_count": 40,
+            "allocator": 48
+          }
+        },
+        "aarch64": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "host": 8,
+            "system_id": 16,
+            "datamodels": 32,
+            "datamodel_count": 40,
+            "allocator": 48
+          }
+        },
+        "wasm32": {
+          "size": 36,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "host": 4,
+            "system_id": 8,
+            "datamodels": 16,
+            "datamodel_count": 20,
+            "allocator": 24
+          }
+        }
+      }
+    },
+    "ta_link_options": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "credential",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "max_queue",
+          "type": "uint32_t"
+        },
+        {
+          "name": "queue_ttl",
+          "type": "ta_time"
+        },
+        {
+          "name": "resume",
+          "type": "ta_time"
+        },
+        {
+          "name": "ping_interval",
+          "type": "ta_time"
+        },
+        {
+          "name": "max_frame",
+          "type": "uint32_t"
+        },
+        {
+          "name": "announce",
+          "type": "const ta_string_view *"
+        },
+        {
+          "name": "announce_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "exports",
+          "type": "const ta_string_view *"
+        },
+        {
+          "name": "export_events",
+          "type": "const ta_string_view *"
+        },
+        {
+          "name": "export_count",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 120,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "name": 8,
+            "credential": 24,
+            "max_queue": 40,
+            "queue_ttl": 48,
+            "resume": 56,
+            "ping_interval": 64,
+            "max_frame": 72,
+            "announce": 80,
+            "announce_count": 88,
+            "exports": 96,
+            "export_events": 104,
+            "export_count": 112
+          }
+        },
+        "aarch64": {
+          "size": 120,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "name": 8,
+            "credential": 24,
+            "max_queue": 40,
+            "queue_ttl": 48,
+            "resume": 56,
+            "ping_interval": 64,
+            "max_frame": 72,
+            "announce": 80,
+            "announce_count": 88,
+            "exports": 96,
+            "export_events": 104,
+            "export_count": 112
+          }
+        },
+        "wasm32": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "flags": 4,
+            "name": 8,
+            "credential": 16,
+            "max_queue": 24,
+            "queue_ttl": 32,
+            "resume": 40,
+            "ping_interval": 48,
+            "max_frame": 56,
+            "announce": 60,
+            "announce_count": 64,
+            "exports": 68,
+            "export_events": 72,
+            "export_count": 76
+          }
+        }
+      }
+    },
+    "ta_link_output": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "connection",
+          "type": "uint32_t"
+        },
+        {
+          "name": "text",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "connection": 4,
+            "text": 8
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "connection": 4,
+            "text": 8
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "kind": 0,
+            "connection": 4,
+            "text": 8
+          }
+        }
+      }
+    },
+    "ta_link_status": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "open",
+          "type": "uint32_t"
+        },
+        {
+          "name": "peer",
+          "type": "uint32_t"
+        },
+        {
+          "name": "attempts",
+          "type": "uint32_t"
+        },
+        {
+          "name": "remote",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "error",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "open": 4,
+            "peer": 8,
+            "attempts": 12,
+            "remote": 16,
+            "error": 32
+          }
+        },
+        "aarch64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "open": 4,
+            "peer": 8,
+            "attempts": 12,
+            "remote": 16,
+            "error": 32
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "open": 4,
+            "peer": 8,
+            "attempts": 12,
+            "remote": 16,
+            "error": 24
+          }
+        }
+      }
+    },
     "ta_http_field": {
       "kind": "struct",
       "fields": [
@@ -9081,6 +9428,347 @@
         {
           "name": "sid",
           "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_accept",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        },
+        {
+          "name": "server",
+          "type": "uint32_t"
+        },
+        {
+          "name": "connection",
+          "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_admit",
+      "returns": "void",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        },
+        {
+          "name": "connection",
+          "type": "uint32_t"
+        },
+        {
+          "name": "verdict",
+          "type": "uint32_t"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_close",
+      "returns": "void",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        },
+        {
+          "name": "handle",
+          "type": "uint32_t"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_connect",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        },
+        {
+          "name": "options",
+          "type": "const ta_link_options *"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        },
+        {
+          "name": "link",
+          "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_connections",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "links",
+          "type": "const ta_links *"
+        },
+        {
+          "name": "server",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_deadline",
+      "returns": "ta_time",
+      "params": [
+        {
+          "name": "links",
+          "type": "const ta_links *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_dropped",
+      "returns": "void",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        },
+        {
+          "name": "connection",
+          "type": "uint32_t"
+        },
+        {
+          "name": "why",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_effect",
+      "returns": "int",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        },
+        {
+          "name": "effect",
+          "type": "const ta_host_effect *"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_free",
+      "returns": "void",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_new",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "config",
+          "type": "const ta_links_config *"
+        },
+        {
+          "name": "out",
+          "type": "ta_links **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_opened",
+      "returns": "void",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        },
+        {
+          "name": "connection",
+          "type": "uint32_t"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_output",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        },
+        {
+          "name": "out",
+          "type": "const ta_link_output **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_output_ack",
+      "returns": "void",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_received",
+      "returns": "void",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        },
+        {
+          "name": "connection",
+          "type": "uint32_t"
+        },
+        {
+          "name": "text",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_serve",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        },
+        {
+          "name": "options",
+          "type": "const ta_link_options *"
+        },
+        {
+          "name": "server",
+          "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_status",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "links",
+          "type": "const ta_links *"
+        },
+        {
+          "name": "connection",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_link_status *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_links_time",
+      "returns": "void",
+      "params": [
+        {
+          "name": "links",
+          "type": "ta_links *"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
         }
       ],
       "public": true,

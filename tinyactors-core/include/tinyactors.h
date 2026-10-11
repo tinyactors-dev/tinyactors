@@ -11,6 +11,7 @@
 #include <tinyactors/datamodel.h>
 #include <tinyactors/system.h>
 #include <tinyactors/host.h>
+#include <tinyactors/link.h>
 #include <tinyactors/otlp.h>
 #include <tinyactors/wasm.h>
 

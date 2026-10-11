@@ -30,7 +30,7 @@ module Core
 
   LAYERS = [
     Layer.new(name: 'base', uses: [], freestanding: true,
-              sources: %w[address format frame arena pool heap slab journal].map { |s| "src/base/#{s}.c" }),
+              sources: %w[address format frame json arena pool heap slab journal].map { |s| "src/base/#{s}.c" }),
     Layer.new(name: 'image', uses: %w[base], freestanding: true,
               sources: %w[src/image/image.c src/image/event_names.c]),
     # Trace values and the record schema (docs/adr/0006 in the repository root).
@@ -45,6 +45,8 @@ module Core
     # policy). Freestanding: it allocates only through the ta_allocator its
     # configuration gives it (docs/adr/0005).
     Layer.new(name: 'host', uses: %w[system], freestanding: true, sources: %w[src/host/host.c src/host/router.c]),
+    # The link protocol between systems over the caller's transports (docs/adr/0008).
+    Layer.new(name: 'link', uses: %w[host], freestanding: true, sources: %w[src/link/link.c]),
     Layer.new(name: 'runtime', uses: %w[system compile], sources: %w[src/runtime/runtime.c src/runtime/runtime_hosted.c]),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
@@ -114,10 +116,10 @@ module Core
   end
 
   LIBRARIES = [
-    Library.new(name: 'tinyactors', layers: %w[base image trace core system host basic_http otlp], uses: [],
+    Library.new(name: 'tinyactors', layers: %w[base image trace core system host link basic_http otlp], uses: [],
                 libc: false,
                 headers: %w[types.h allocator.h address.h frame.h trace.h stats.h image.h datamodel.h system.h core.h host.h
-                            basic_http.h otlp.h wasm.h]),
+                            link.h basic_http.h otlp.h wasm.h]),
     Library.new(name: 'tinyactors_runtime', layers: %w[compile runtime], uses: %w[tinyactors], libc: true,
                 headers: %w[compile.h runtime.h]),
     Library.new(name: 'tinyactors_datamodel_ecmascript', layers: %w[datamodel_ecmascript quickjs], uses: %w[tinyactors],
@@ -187,6 +189,7 @@ module Core
     unit('test_durable', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_router', 'host', 'runtime', 'compile', *ECMASCRIPT),
+    unit('test_link', 'link', 'runtime', 'compile', *ECMASCRIPT),
     # The host's memory: accounting, a fixed arena, and refusals (--full: each
     # allocation of the workload refused in turn).
     unit('test_host_memory', 'host', 'compile', *ECMASCRIPT, full: true),
@@ -365,8 +368,8 @@ module Core
   # The Node.js addon (mise run node:build): its own sources, compiled with
   # the Node-API headers that ship with the pinned node, and the layers it
   # links.
-  NODE_LAYERS = %w[host runtime system compile otlp datamodel_ecmascript].freeze
-  NODE_SOURCES = %w[addon values images pure datamodel quickjs system persist router trace metrics].map { |name| "bindings/node/src/#{name}.c" }.freeze
+  NODE_LAYERS = %w[host link runtime system compile otlp datamodel_ecmascript].freeze
+  NODE_SOURCES = %w[addon values images pure datamodel quickjs system persist router link trace metrics].map { |name| "bindings/node/src/#{name}.c" }.freeze
 
   # Builds the addon's layers and compiles its own sources for the build
   # `variant_name`; answers what links it: its objects, then the archives.

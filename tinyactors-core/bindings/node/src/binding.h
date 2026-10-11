@@ -215,7 +215,8 @@ typedef struct nd_system {
     uint32_t grave_count, grave_capacity;
     nd_failure *failures;
     uint32_t failure_count, failure_capacity;
-    nd_job *jobs; /* migrations under way (persist.c) */
+    ta_links *links; /* links to other systems (link.c), made with the first */
+    nd_job *jobs;    /* migrations under way (persist.c) */
     uint32_t job_count, job_capacity;
     nd_parked *parked; /* hibernated actors in flight (persist.c) */
     uint32_t parked_count, parked_capacity;
@@ -372,6 +373,21 @@ void wake_held(nd_system *system);
 void parked_clear(nd_system *system);
 void job_done(nd_system *system, const ta_host_effect *effect);
 void jobs_clear(nd_system *system);
+napi_value effect_new(nd_system *system, const char *kind);
+napi_value peer_status_value(napi_env environment, nd_system *host, uint32_t peer);
+void links_free(nd_system *system);
+ta_time links_now(nd_system *system);
+void links_output(nd_system *system);
+napi_value js_link_connect(napi_env environment, napi_callback_info info);
+napi_value js_link_serve(napi_env environment, napi_callback_info info);
+napi_value js_link_accept(napi_env environment, napi_callback_info info);
+napi_value js_link_opened(napi_env environment, napi_callback_info info);
+napi_value js_link_received(napi_env environment, napi_callback_info info);
+napi_value js_link_dropped(napi_env environment, napi_callback_info info);
+napi_value js_link_admit(napi_env environment, napi_callback_info info);
+napi_value js_link_close(napi_env environment, napi_callback_info info);
+napi_value js_link_status(napi_env environment, napi_callback_info info);
+napi_value js_link_connections(napi_env environment, napi_callback_info info);
 napi_value js_unwatch(napi_env environment, napi_callback_info info);
 napi_value trace_kind_names(napi_env environment);
 napi_value js_terminate(napi_env environment, napi_callback_info info);

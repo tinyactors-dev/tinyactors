@@ -18,6 +18,7 @@
 #include "host/host_internal.h"
 
 #include "base/format.h"
+#include "base/json.h"
 #include "base/memory.h"
 
 #define DEDUPLICATION_WINDOW 4096u /* message ids remembered per host (FIFO) */
@@ -702,34 +703,6 @@ ta_status ta_host_message_init(ta_host *host, const ta_effect *effect, uint64_t 
     return TA_OK;
 }
 
-/* A JSON string (quoted, escaped) into `out` (NULL: only measured); returns its length. */
-size_t host_json_string(char *out, ta_string_view s) {
-    size_t n = 0;
-    if (out) out[n] = '"';
-    n++;
-    const char hex[] = "0123456789abcdef";
-    for (uint32_t i = 0; i < s.length; i++) {
-        unsigned char c = (unsigned char)s.pointer[i];
-        if (c < 32) {
-            if (out) {
-                ta_memcpy(out + n, "\\u00", 4);
-                out[n + 4] = hex[c >> 4];
-                out[n + 5] = hex[c & 15];
-            }
-            n += 6;
-        } else {
-            if (c == '"' || c == '\\') {
-                if (out) out[n] = '\\';
-                n++;
-            }
-            if (out) out[n] = (char)c;
-            n++;
-        }
-    }
-    if (out) out[n] = '"';
-    return n + 1;
-}
-
 size_t ta_host_envelope_json(const ta_envelope *envelope, ta_string_view data, char *buffer,
                              size_t capacity) {
     static const ta_string_view keys[] = {VIEW("target"),     VIEW("name"),       VIEW("origin"),
@@ -754,10 +727,10 @@ size_t ta_host_envelope_json(const ta_envelope *envelope, ta_string_view data, c
                 if (out) out[n] = ',';
                 n++;
             }
-            n += host_json_string(out ? out + n : NULL, keys[i]);
+            n += ta_json_write_string(out ? out + n : NULL, keys[i]);
             if (out) out[n] = ':';
             n++;
-            n += host_json_string(out ? out + n : NULL, values[i]);
+            n += ta_json_write_string(out ? out + n : NULL, values[i]);
         }
         if (data.length) {
             if (out) {

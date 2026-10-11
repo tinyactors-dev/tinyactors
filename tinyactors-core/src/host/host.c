@@ -15,6 +15,7 @@
 #include <tinyactors/address.h>
 #include <tinyactors/host.h>
 
+#include "base/json.h"
 #include "base/memory.h"
 #include "host/host_internal.h"
 
@@ -493,16 +494,16 @@ static void value_put(value_writer *w, const char *text, size_t length) {
 
 static void value_id(value_writer *w, ta_string_view id) {
     char quoted[256];
-    size_t n = host_json_string(NULL, id);
+    size_t n = ta_json_write_string(NULL, id);
     if (n <= sizeof quoted) {
-        host_json_string(quoted, id);
+        ta_json_write_string(quoted, id);
         value_put(w, quoted, n);
     } else { /* rare: escaped byte by byte */
         value_put(w, "\"", 1);
         for (uint32_t i = 0; i < id.length; i++) {
             ta_string_view one = {id.pointer + i, 1};
             char escaped[8];
-            size_t k = host_json_string(escaped, one);
+            size_t k = ta_json_write_string(escaped, one);
             value_put(w, escaped + 1, k - 2);
         }
         value_put(w, "\"", 1);
