@@ -518,3 +518,81 @@ Infinity.toExponential("x")
 === toFixed of a BigInt receiver
 (1n).toFixed(2)
 --- fault does not have this method
+
+# Review of toFixed, toExponential and toPrecision: negative values that
+# round to zero, the 1e21 boundary, values just around a half, subnormals,
+# large integers, every kind of digit count, and the order of the checks.
+
+=== toFixed of negative values that round to zero keep the sign
+[(-0.0000001).toFixed(2), (-0.004).toFixed(2), (-0.005).toFixed(2), (-0.0050000000000000001).toFixed(2), (-1e-300).toFixed(0), (-5e-324).toFixed(100).length, (-0.49999999999999994).toFixed(0)]
+--- value
+["-0.00","-0.00","-0.01","-0.01","-0",103,"-0"]
+
+=== toFixed, toPrecision and toExponential around 1e21
+[(999999999999999868928).toFixed(2), (1e21 - 65536).toFixed(0), (1e21).toFixed(0), (1e21 + 131072).toFixed(2), (-999999999999999868928).toFixed(1), (999999999999999868928).toPrecision(21), (999999999999999868928).toPrecision(22), (1e21).toPrecision(21), (1e21).toExponential(20)]
+--- value
+["999999999999999868928.00","1e+21","1e+21","1.0000000000000001e+21","-999999999999999868928.0","999999999999999868928","999999999999999868928.0","1.00000000000000000000e+21","1.00000000000000000000e+21"]
+
+=== toFixed of a value just above and just below a half
+[(0.5000000000000001).toFixed(0), (0.49999999999999994).toFixed(0), (1.0000000000000002).toFixed(15), (0.9999999999999999).toFixed(15), (0.9999999999999999).toFixed(16), (0.0004999999999999999).toFixed(3), (0.095).toFixed(2), (0.0095).toFixed(3)]
+--- value
+["1","0","1.000000000000000","1.000000000000000","0.9999999999999999","0.000","0.10","0.009"]
+
+=== the three methods of subnormals and the smallest normal
+[(2.2250738585072014e-308).toExponential(5), (2.225073858507201e-308).toPrecision(17), (4.94e-322).toExponential(), (5e-324).toPrecision(100).length, (2.2250738585072014e-308).toFixed(100)]
+--- value
+["2.22507e-308","2.2250738585072009e-308","4.94e-322",106,"0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"]
+
+=== the three methods of large integers
+[(9007199254740993).toPrecision(17), (9007199254740992).toExponential(), (123456789012345680000).toFixed(2), (1000000000000000128).toFixed(0), (1000000000000000128).toPrecision(21), (6.02214076e23).toPrecision(3), (1e100).toFixed(2), (1.5e300).toPrecision(2)]
+--- value
+["9007199254740992.0","9.007199254740992e+15","123456789012345683968.00","1000000000000000128","1000000000000000128.00","6.02e+23","1e+100","1.5e+300"]
+
+=== the three methods with every digit count from a fixed list
+[0, 1, 2, 5, 17, 20, 50, 100].map((d) => [(1 / 3).toFixed(d), (2 / 3).toExponential(d), (123.456).toPrecision(d === 0 ? 1 : d)])
+--- value
+[["0","7e-1","1e+2"],["0.3","6.7e-1","1e+2"],["0.33","6.67e-1","1.2e+2"],["0.33333","6.66667e-1","123.46"],["0.33333333333333331","6.66666666666666630e-1","123.45600000000000"],["0.33333333333333331483","6.66666666666666629659e-1","123.45600000000000307"],["0.33333333333333331482961625624739099293947219848633","6.66666666666666629659232512494781985878944396972656e-1","123.45600000000000306954461848363280296325683593750"],["0.3333333333333333148296162562473909929394721984863281250000000000000000000000000000000000000000000000","6.6666666666666662965923251249478198587894439697265625000000000000000000000000000000000000000000000000e-1","123.4560000000000030695446184836328029632568359375000000000000000000000000000000000000000000000000000"]]
+
+=== the three methods, with digits from a callback's counter
+[1.23456, -2.5, 0.000123].map((x, i) => [x.toFixed(i), x.toExponential(i), x.toPrecision(i + 1)])
+--- value
+[["1","1e+0","1"],["-2.5","-2.5e+0","-2.5"],["0.00","1.23e-4","0.000123"]]
+
+=== the methods' digits as booleans, null, -0 and fractions
+[(2.5).toFixed(true), (2.5).toFixed(false), (2.5).toExponential(false), (2.5).toPrecision(true), (2.5).toFixed(0.9), (2.5).toFixed(-0.9), (2.5).toExponential(-0), (2.5).toPrecision(1.9), (2.5).toFixed(100.5).length]
+--- value
+["2.5","3","3e+0","3","3","3","3e+0","3",102]
+
+=== toFixed of a BigInt digit count
+(1.5).toFixed(1n)
+--- fault JavaScript throws a TypeError where a
+
+=== toPrecision of a BigInt precision
+(1.5).toPrecision(1n)
+--- fault JavaScript throws a TypeError where a
+
+=== toExponential of NaN with a BigInt digit count
+NaN.toExponential(1n)
+--- fault JavaScript throws a TypeError where a
+
+=== toPrecision of Infinity with a negative precision, which it never checks
+[Infinity.toPrecision(-1), NaN.toPrecision(0), (-Infinity).toPrecision(1e9)]
+--- value
+["Infinity","NaN","-Infinity"]
+
+=== toFixed of -Infinity digits
+(1).toFixed(-Infinity)
+--- fault JavaScript throws a RangeError for toFixed's
+
+=== toExponential of Infinity digits on a finite value
+(1).toExponential(Infinity)
+--- fault JavaScript throws a RangeError for toExponential's
+
+=== toPrecision of -0.5, which is 0
+(1).toPrecision(-0.5)
+--- fault JavaScript throws a RangeError for toPrecision's
+
+=== toFixed of 100.9, which is 100
+(1).toFixed(100.9).length
+--- value
+102

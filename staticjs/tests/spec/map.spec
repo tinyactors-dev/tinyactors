@@ -1144,3 +1144,101 @@ new Map([[{}, 1]])
 === an iterator read twice
 (() => { const m = new Map([[1, 2]]); const it = m.keys(); const a = [...it]; return [a, [...it]]; })()
 --- fault
+
+# Review of an iterator's take, drop, flatMap, some, every, find and forEach,
+# and of a set's isSupersetOf and isDisjointFrom: limits of every kind,
+# callbacks that return odd values, the counter, early stops, iterators read
+# twice, and sets with a hash index.
+
+=== take and drop limits of every kind of number
+(() => { const m = new Map([["a", 1], ["b", 2], ["c", 3]]); return [null, true, false, Infinity, -0, 0.5, 1.9, 2.5, 4294967296, 1e21].map((n) => [m.values().take(n).toArray(), m.keys().drop(n).toArray()]); })()
+--- value
+[[[],["a","b","c"]],[[1],["b","c"]],[[],["a","b","c"]],[[1,2,3],[]],[[],["a","b","c"]],[[],["a","b","c"]],[[1],["b","c"]],[[1,2],["c"]],[[1,2,3],[]],[[1,2,3],[]]]
+
+=== take and drop of map entries past an index
+(() => { const m = new Map(Array.from({ length: 20 }, (_, i) => [i, i * i])); return [m.values().drop(15).take(3).toArray(), m.entries().drop(18).toArray(), m.keys().take(4294967295).toArray().length]; })()
+--- value
+[[225,256,289],[[18,324],[19,361]],20]
+
+=== take, drop and the helpers chained
+new Map([[1, 1], [2, 2], [3, 3], [4, 4]]).values().filter((x) => x % 2 === 0).flatMap((x) => [x, -x]).drop(1).take(2).toArray()
+--- value
+[-2,4]
+
+=== some, every and find with callbacks that return odd values
+(() => { const m = new Map([["a", 1], ["b", 2]]); return [() => 0, () => "", () => NaN, () => null, () => undefined, () => ({}), () => [], () => -0, () => 0n, () => 1n].map((f) => [m.values().some(f), m.values().every(f), m.values().find(f)]); })()
+--- value
+[[false,false,undefined],[false,false,undefined],[false,false,undefined],[false,false,undefined],[false,false,undefined],[true,true,1],[true,true,1],[false,false,undefined],[false,false,undefined],[true,true,1]]
+
+=== some, every and find on an empty iterator call nothing
+[new Map().values().some(() => true), new Map().values().every(() => false), new Map().values().find(() => true), new Map().values().forEach(() => 1)]
+--- value
+[false,true,undefined,undefined]
+
+=== some, every and find stop before a callback that would fault
+[new Map([["a", 1], ["b", "x"]]).values().some((x) => x * 1 === 1), new Map([["a", 1], ["b", "x"]]).values().every((x) => x * 1 === 2), new Map([["a", 1], ["b", 2], ["c", "x"]]).values().find((x) => x * 1 === 2)]
+--- value
+[true,false,2]
+
+=== the helpers' counter after filter and drop
+[new Map([["a", 1], ["b", 2], ["c", 3]]).values().filter((x) => x > 1).flatMap((x, i) => [i]).toArray(), new Map([["a", 1], ["b", 2], ["c", 3]]).values().drop(1).find((x, i) => i === 1), new Map([["a", 1], ["b", 2]]).values().flatMap((x, i) => [i, x]).toArray()]
+--- value
+[[0,1],3,[0,1,1,2]]
+
+=== flatMap of what each kind of iterable callback result yields
+[new Map([[1, 1], [2, 2]]).values().flatMap((x) => new Map([[x, x * 10]]).values()).toArray(), new Map([[1, 1], [2, 2]]).values().flatMap((x) => new Map([[x, 1], [x + 1, 2]]).keys().take(1)).toArray(), new Map([[1, 1]]).values().flatMap(() => new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).toArray(), new Map([[1, 1]]).values().flatMap(() => [[1], [2, [3]]]).toArray(), new Map([["a", 1]]).entries().flatMap((e) => e).toArray()]
+--- value
+[[10,20],[1,2],[1,2,3,4,5,6,7,8,9,10],[[1],[2,[3]]],["a",1]]
+
+=== flatMap of a captured array, read each time
+(() => { const a = [1, 2]; const r = new Map([[1, 1], [2, 2]]).values().flatMap(() => a).toArray(); return [a, r]; })()
+--- value
+[[1,2],[1,2,1,2]]
+
+=== take, drop and some of a regular expression's matches
+["a1b2c3".matchAll(/[0-9]/g).take(2).map((m) => m[0]).toArray(), "a1b2c3".matchAll(/[0-9]/g).drop(2).map((m) => m.index).toArray(), "a1b2c3".matchAll(/[0-9]/g).some((m) => m[0] === "2")]
+--- value
+[["1","2"],[5],true]
+
+=== take of an iterator read before
+(() => { const it = new Map([[1, 1], [2, 2]]).values(); const a = it.take(1).toArray(); return [a, it.toArray()]; })()
+--- fault an iterator yields its values once
+
+=== some of an iterator read after
+(() => { const it = new Map([[1, 1], [2, 2], [3, 3]]).values(); const a = it.some((x) => x === 1); return [a, it.toArray()]; })()
+--- fault an iterator yields its values once
+
+=== flatMap whose callback returns the same iterator each time
+(() => { const it = new Map([[7, 7]]).values(); return new Map([[1, 1], [2, 2]]).values().flatMap(() => it).toArray(); })()
+--- fault an iterator yields its values once
+
+=== flatMap whose callback returns a string
+new Map([[1, 1]]).values().flatMap(() => "ab").toArray()
+--- fault flatMap's callback returns an array, a
+
+=== take of a string limit on an empty iterator
+new Map().values().take("1").toArray()
+--- fault staticjs converts only numbers, booleans, null
+
+=== drop of -1 on an empty iterator
+new Map().values().drop(-1).toArray()
+--- fault take and drop take a limit
+
+=== isSupersetOf and isDisjointFrom with a hash index on either side
+(() => { const big = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]); const evens = new Set([2, 4, 6, 8, 10, 12, 14, 16, 18, 20]); const far = new Set([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1]); return [big.isSupersetOf(evens), evens.isSupersetOf(big), big.isDisjointFrom(far), far.isDisjointFrom(evens), evens.isDisjointFrom(new Set([21])), big.isSupersetOf(far), new Set([1]).isSupersetOf(big), new Set([21]).isDisjointFrom(big)]; })()
+--- value
+[true,false,false,true,true,false,false,true]
+
+=== isSupersetOf and isDisjointFrom by SameValueZero
+[new Set([0]).isSupersetOf(new Set([-0])), new Set([NaN]).isSupersetOf(new Set([NaN])), new Set([1]).isDisjointFrom(new Set(["1"])), new Set([1n]).isDisjointFrom(new Set([1])), new Set([null]).isSupersetOf(new Set([undefined])), new Set(["a😀"]).isSupersetOf(new Set(["a😀"]))]
+--- value
+[true,true,true,true,false,true]
+
+=== isSupersetOf and isDisjointFrom of a set and itself, and after changes
+(() => { const s = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]); s.delete(5); s.delete(12); s.add(13); return [s.isSupersetOf(s), s.isDisjointFrom(s), s.isSupersetOf(new Set([5])), s.isDisjointFrom(new Set([5, 12])), s.isSupersetOf(new Set([13, 1, 11]))]; })()
+--- value
+[true,false,false,true,true]
+
+=== isDisjointFrom of an array
+new Set([1]).isDisjointFrom([1])
+--- fault staticjs combines a set only with
