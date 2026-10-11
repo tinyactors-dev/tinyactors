@@ -95,7 +95,7 @@ struct ta_host {
     ta_trace_policy trace_policy; /* every segment's, and new ones' (config.system points here) */
     void *trace_rules;            /* its rules and their strings, the host's copy */
     size_t trace_rules_bytes;
-    /* ta_host_trace_set's options and the watches, from which the policy is made */
+    /* host_trace_set's options and the watches, from which the policy is made */
     host_rules trace_options; /* rule.detail: kinds */
     uint32_t trace_flags, trace_kinds, trace_parts, trace_whole;
     host_watch *watches;
@@ -157,6 +157,7 @@ struct ta_host {
     uint32_t staging_full; /* a read stopped at a full staging */
     uint32_t staged;       /* something is staged, since staged_since */
     ta_time staged_since;
+    uint64_t wall_ns, wall_start_ns; /* the latest wall time, and the first (metrics) */
 };
 
 /* host.c */
@@ -182,6 +183,50 @@ uint32_t host_moved_get(const ta_host *h, uint64_t key);
 /* router.c */
 /* an SCXML send of segment si to another system (target not ours);
  * TA_ERROR_NO_MEMORY: nothing done, the effect stays for the next drain */
+/* The rarely called host operations, behind ta_host_request (request.c).
+ * Trace options: what every segment traces, and new segments start with
+ * (docs/adr/0007). Rules and watches name the kinds they give (rule.detail:
+ * TA_TRACE_* masks with TA_TRACE_VALUES, TA_NIL to keep the trace's own);
+ * the host gives each different detail a class of the policy it sets in
+ * every segment: class 0 the lifecycle kinds of `kinds`, class 1 `kinds`,
+ * then one per detail the watches and rules ask for. A watch's rules come
+ * before the options' rules, newer watches first. TA_ERROR_STATE when the
+ * host's systems do not trace; TA_ERROR_NO_MEMORY for more than
+ * HOST_TRACE_DETAILS different details, more rules than a system holds or
+ * no memory; TA_ERROR_INVALID for a malformed rule. Nothing changes then. */
+enum { HOST_TRACE_NO_RECORDS = 1u << 0 }; /* no records (traceparents still flow) */
+#define HOST_TRACE_DETAILS (TA_TRACE_DETAILS - 2u)
+typedef struct host_trace_options {
+    uint32_t size;
+    uint32_t flags;                      /* HOST_TRACE_* */
+    uint32_t kinds;                      /* what a sampled trace writes */
+    uint32_t sample_parts, sample_whole; /* as ta_trace_policy */
+    uint32_t rule_count;
+    const ta_trace_rule *rules; /* copied */
+} host_trace_options;
+ta_status host_trace_set(ta_host *h, const host_trace_options *options);
+/* A watch: rules that hold until the host's time reaches `until`
+ * (UINT64_MAX: until host_trace_unwatch); its end is a deadline of
+ * ta_host_run. Errors as host_trace_set. */
+typedef struct host_watch_rules {
+    const ta_trace_rule *rules; /* copied */
+    uint32_t rule_count;
+    uint32_t pad;
+    ta_time until;
+} host_watch_rules;
+ta_status host_trace_watch(ta_host *h, const host_watch_rules *watch, uint32_t *id);
+ta_status host_trace_unwatch(ta_host *h, uint32_t id); /* TA_ERROR_STALE: it has ended */
+void host_stats_get(const ta_host *h, ta_host_stats *out);
+/* Per chart name, over every segment and retired version (ta_chart_stats);
+ * fills up to `capacity` and returns how many names there are. */
+uint32_t host_chart_stats(const ta_host *h, ta_chart_stats *out, uint32_t capacity);
+/* Sessions host-wide from *cursor (0 to start); returns how many (0: done). */
+uint32_t host_actors(const ta_host *h, uint64_t *cursor, ta_uint64_array out);
+/* A session's state value (docs/requests.md, "state"). */
+enum { HOST_STATE_VALUE_STATES = 1024 };
+struct cbor_output;
+ta_status host_state_value(const ta_host *h, uint64_t session, struct cbor_output *out);
+
 /* telemetry.c: what the run loop asks of the encoder, chosen once at
  * ta_host_new (the OTLP encoder, or the null one: all of it does nothing) */
 typedef struct host_encoder {
@@ -191,6 +236,7 @@ typedef struct host_encoder {
     void (*note)(ta_host *h);                   /* after a run: records left count as staged */
     ta_time (*deadline)(const ta_host *h);      /* the flush interval's end (UINT64_MAX: none) */
     ta_status (*take)(ta_host *h, uint32_t kind, ta_buffer *out); /* ta_host_traces, _logs */
+    ta_status (*metrics)(ta_host *h, ta_buffer *out);             /* ta_host_metrics */
 } host_encoder;
 ta_status host_telemetry_init(ta_host *h);
 void host_telemetry_free(ta_host *h);

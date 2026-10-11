@@ -53,6 +53,8 @@ void host_telemetry_free(ta_host *host) {
 
 static void otlp_mark(ta_host *host, uint64_t wall_ns) {
     ta_otlp_mark(host->otlp, host->fuel_clock, wall_ns);
+    if (!host->wall_start_ns) host->wall_start_ns = wall_ns;
+    host->wall_ns = wall_ns;
 }
 
 /* Open spans, chunks or scopes are full: twice as many in a new block. */
@@ -170,8 +172,51 @@ static ta_status otlp_take(ta_host *host, uint32_t kind, ta_buffer *out) {
     return TA_OK;
 }
 
-static const host_encoder encoder_otlp = {otlp_mark, otlp_drain, otlp_effects,
-                                          otlp_note, otlp_deadline, otlp_take};
+/* The counters now as metrics (docs/adr/0007): per chart, per segment and
+ * the host's own. Metrics staged by a call whose request did not fit are put
+ * again as they are, not added twice. */
+static ta_status otlp_metrics(ta_host *host, ta_buffer *out) {
+    ta_otlp_stats encoder;
+    encoder.size = sizeof encoder;
+    ta_otlp_stats_get(host->otlp, &encoder);
+    if (!encoder.metrics) {
+        uint32_t live = 0, charts = host_chart_stats(host, NULL, 0);
+        for (uint32_t si = 0; si < host->segment_count; si++)
+            live += host->segments[si].live != 0;
+        size_t bytes = sizeof(ta_system_stats) * live + sizeof(ta_chart_stats) * charts;
+        unsigned char *block = bytes ? host_alloc(host, bytes) : NULL;
+        if (bytes && !block) return TA_ERROR_NO_MEMORY;
+        ta_system_stats *systems = (ta_system_stats *)(void *)block;
+        ta_chart_stats *chart_stats =
+            (ta_chart_stats *)(void *)(block + sizeof(ta_system_stats) * live);
+        uint32_t n = 0;
+        for (uint32_t si = 0; si < host->segment_count; si++)
+            if (host->segments[si].live) {
+                systems[n].size = sizeof systems[n];
+                ta_system_stats_get(host->segments[si].system, &systems[n++]);
+            }
+        for (uint32_t c = 0; c < charts; c++)
+            chart_stats[c].size = sizeof chart_stats[c];
+        host_chart_stats(host, chart_stats, charts);
+        ta_host_stats stats;
+        stats.size = sizeof stats;
+        host_stats_get(host, &stats);
+        uint64_t tps = host->config.system.ticks_per_second;
+        ta_otlp_stats_input input = {sizeof input, charts, chart_stats, systems, live, 0, &stats,
+                                     tps ? tps : 1000000000ull, host->wall_start_ns,
+                                     host->wall_ns};
+        ta_status status = ta_otlp_add_stats(host->otlp, &input);
+        if (bytes) host_free(host, block, bytes);
+        if (status != TA_OK) {
+            out->length = 0;
+            return status;
+        }
+    }
+    return ta_otlp_put_metrics(host->otlp, out);
+}
+
+static const host_encoder encoder_otlp = {otlp_mark,     otlp_drain, otlp_effects, otlp_note,
+                                          otlp_deadline, otlp_take,  otlp_metrics};
 
 /* ---- the null encoder: no encoder memory was given --------------------------- */
 /* The journals stay with the caller, nothing is staged, no effect and no
@@ -183,15 +228,26 @@ static ta_time null_deadline(const ta_host *host) {
     return UINT64_MAX;
 }
 static ta_status null_take(ta_host *host, uint32_t kind, ta_buffer *out) {
-    (void)host, (void)kind, (void)out;
+    (void)host, (void)kind;
+    out->length = 0;
     return TA_ERROR_STATE;
 }
-static const host_encoder encoder_null = {null_mark, null_run, null_run,
-                                          null_run, null_deadline, null_take};
+static ta_status null_metrics(ta_host *host, ta_buffer *out) {
+    (void)host;
+    out->length = 0;
+    return TA_ERROR_STATE;
+}
+static const host_encoder encoder_null = {null_mark, null_run,      null_run,  null_run,
+                                          null_deadline, null_take, null_metrics};
 
 ta_status ta_host_traces(ta_host *host, ta_buffer *out) {
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     return host->encoder->take(host, TA_HOST_EFFECT_TRACES, out);
+}
+
+ta_status ta_host_metrics(ta_host *host, ta_buffer *out) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
+    return host->encoder->metrics(host, out);
 }
 
 ta_status ta_host_logs(ta_host *host, ta_buffer *out) {

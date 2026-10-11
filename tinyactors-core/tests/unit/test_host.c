@@ -6,6 +6,7 @@
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
+#include "../support/host_request.h"
 
 #define BASE "tinyactors://h/"
 #define SC(name, body)                                                                             \
@@ -175,24 +176,53 @@ static int begin_class(host_world *e, uint32_t si, const char *name) {
     return found;
 }
 
+/* {"op": "trace.watch"}: a rule for chart's "ask" events taken, sampled at
+ * `detail` (with values); seconds < 0: no end. Its id, UINT64_MAX when refused. */
+static uint64_t watch(ta_host *host, const char *chart, const char *detail, int values,
+                      double seconds) {
+    static host_ask a;
+    ta_cbor_writer *w = ask_begin(&a, "trace.watch", seconds < 0 ? 2 : 2);
+    ta_cbor_write_text(w, ta_string("rules"));
+    ta_cbor_write_array(w, 1);
+    ta_cbor_write_map(w, 6);
+    ta_cbor_write_text(w, ta_string("at"));
+    ta_cbor_write_text(w, ta_string("take"));
+    ta_cbor_write_text(w, ta_string("chart"));
+    ta_cbor_write_text(w, ta_string(chart));
+    ta_cbor_write_text(w, ta_string("event"));
+    ta_cbor_write_text(w, ta_string("ask"));
+    ta_cbor_write_text(w, ta_string("sample"));
+    ta_cbor_write_text(w, ta_string("sample"));
+    ta_cbor_write_text(w, ta_string("detail"));
+    ta_cbor_write_text(w, ta_string(detail));
+    ta_cbor_write_text(w, ta_string("values"));
+    ta_cbor_write_simple(w, values ? TA_CBOR_TRUE : TA_CBOR_FALSE);
+    ta_cbor_write_text(w, ta_string("seconds"));
+    if (seconds < 0) ta_cbor_write_simple(w, TA_CBOR_NULL);
+    else ta_cbor_write_float(w, seconds);
+    if (ask_send(host, &a) != TA_OK) return UINT64_MAX;
+    return ask_uint(&a, 0, "id");
+}
+
+/* {"op": "trace.unwatch"}: whether the reply's text is `expected`. */
+static int unwatch(ta_host *host, uint64_t id, const char *expected) {
+    static host_ask a;
+    ta_cbor_writer *w = ask_begin(&a, "trace.unwatch", 1);
+    ta_cbor_write_text(w, ta_string("id"));
+    ta_cbor_write_uint(w, id);
+    if (ask_send(host, &a) != TA_OK) return 0;
+    if (strcmp(a.text, expected) != 0) fprintf(stderr, "  reply: %s\n", a.text);
+    return strcmp(a.text, expected) == 0;
+}
+
 /* A watched step's class crosses segments with what it sends (docs/adr/0007). */
 static void test_class_across_segments(void) {
     host_world e;
     world_open(&e, 8, NULL, 0);
     world_add(&e, W1);
     world_add(&e, ECHO);
-    ta_trace_rule watch;
-    memset(&watch, 0, sizeof watch);
-    watch.size = sizeof watch;
-    watch.at = TA_TRACE_AT_TAKE;
-    watch.chart = (ta_string_view){"w", 1};
-    watch.event = (ta_string_view){"ask", 3};
-    watch.sample = TA_TRACE_SAMPLE;
-    watch.detail = TA_TRACE_FULL; /* a detail of its own: the first class after sampled */
-    uint32_t id = 0;
-    CHECK_EQUAL(ta_host_trace_watch(e.host, &(ta_host_watch){&watch, 1, 0, UINT64_MAX}, &id),
-                TA_OK);
-    watch.chart = (ta_string_view){"x", 1}; /* the host keeps its own copy */
+    uint64_t id = watch(e.host, "w", "full", 0, -1.0);
+    CHECK(id != UINT64_MAX);
     uint64_t w = spawn(&e, "w"), echo = spawn(&e, "echo");
     run(&e);
     begin_class(&e, 0, "");
@@ -205,33 +235,27 @@ static void test_class_across_segments(void) {
     CHECK(strcmp(e.log, "pong:1;") == 0);
     CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_WATCHED); /* echo's, in segment 1 */
     CHECK_EQUAL(begin_class(&e, 0, "pong"), TA_TRACE_DETAIL_WATCHED); /* and back */
-    CHECK_EQUAL(ta_host_trace_unwatch(e.host, id), TA_OK);
-    CHECK_EQUAL(ta_host_trace_unwatch(e.host, id), TA_ERROR_STALE);
+    CHECK(unwatch(e.host, id, "{}"));
+    CHECK(unwatch(e.host, id, "{\"error\":{\"code\":\"stale\",\"path\":\"id\",\"message\":\"no such watch: it ended or never was\"}}"));
     CHECK_EQUAL(send(&e, w, "ask", message), TA_OK);
     run(&e);
     CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_SAMPLED);
     /* a watch with an end: a deadline of the run, then gone */
-    watch.chart = (ta_string_view){"w", 1};
-    CHECK_EQUAL(ta_host_trace_watch(e.host, &(ta_host_watch){&watch, 1, 0, 500}, &id), TA_OK);
+    id = watch(e.host, "w", "full", 0, 0.5); /* 500 ticks at 1000 a second */
     ta_run result = ta_host_run(e.host, 1000);
     drain(&e);
     CHECK_EQUAL(result.next_deadline, 500u);
     ta_host_advance_time(e.host, (ta_host_time){500, 0});
-    CHECK_EQUAL(ta_host_trace_unwatch(e.host, id), TA_ERROR_STALE);
+    CHECK(unwatch(e.host, id, "{\"error\":{\"code\":\"stale\",\"path\":\"id\",\"message\":\"no such watch: it ended or never was\"}}"));
     CHECK_EQUAL(send(&e, w, "ask", message), TA_OK);
     run(&e);
     CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_SAMPLED);
-    /* more different details than the classes hold */
-    uint32_t ids[TA_HOST_TRACE_DETAILS];
-    for (uint32_t i = 0; i < TA_HOST_TRACE_DETAILS; i++) {
-        watch.detail = TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(i + 2);
-        CHECK_EQUAL(
-            ta_host_trace_watch(e.host, &(ta_host_watch){&watch, 1, 0, UINT64_MAX}, &ids[i]),
-            TA_OK);
-    }
-    watch.detail = TA_TRACE_BIT(TA_TRACE_FINISHED);
-    CHECK_EQUAL(ta_host_trace_watch(e.host, &(ta_host_watch){&watch, 1, 0, UINT64_MAX}, &id),
-                TA_ERROR_NO_MEMORY);
+    /* more different details than the classes hold: four presets, with
+     * values and without, are eight */
+    static const char *const presets[] = {"summary", "decisions", "full", "off"};
+    for (uint32_t i = 0; i < 6; i++)
+        CHECK(watch(e.host, "w", presets[i % 4], i >= 4, -1.0) != UINT64_MAX);
+    CHECK(watch(e.host, "w", presets[2], 1, -1.0) == UINT64_MAX);
     world_close(&e);
 }
 
@@ -253,7 +277,7 @@ static void test_routing_between_segments(void) {
     CHECK_EQUAL(e.routed_out_count, 0);
     ta_host_stats stats;
     stats.size = sizeof stats;
-    ta_host_stats_get(e.host, &stats);
+    host_stats_fill(e.host, &stats);
     CHECK(stats.routed == 2 && stats.segments == 2 && stats.actors == 2);
 
     /* nobody has that session: error.communication; another system without a
@@ -288,12 +312,12 @@ static void test_routing_between_segments(void) {
     }
     CHECK_EQUAL(ta_host_send_many(e.host, events, 40), 40);
     run(&e);
-    ta_host_stats_get(e.host, &stats);
+    host_stats_fill(e.host, &stats);
     CHECK_EQUAL(stats.actors, 42);
     /* enumeration, in chunks */
     uint64_t cursor = 0, out[16];
     uint32_t total = 0, got;
-    while ((got = ta_host_actors(e.host, &cursor, (ta_uint64_array){out, 16})) != 0)
+    while ((got = host_actors_page(e.host, &cursor, (ta_uint64_array){out, 16})) != 0)
         total += got;
     CHECK_EQUAL(total, 42);
     world_close(&e);
@@ -349,7 +373,7 @@ static void test_versions_and_migration(void) {
     ta_chart_stats charts[4];
     for (int i = 0; i < 4; i++)
         charts[i].size = sizeof charts[i];
-    CHECK_EQUAL(ta_host_chart_stats(e.host, charts, 4), 2u);
+    CHECK_EQUAL(host_chart_stats_fill(e.host, charts, 4), 2u);
     const ta_chart_stats *w_stats = NULL;
     for (int i = 0; i < 2; i++)
         if (charts[i].name.length == 1 && charts[i].name.pointer[0] == 'w') w_stats = &charts[i];
@@ -359,7 +383,7 @@ static void test_versions_and_migration(void) {
     CHECK_EQUAL(w_stats->ended, 0);
     CHECK(w_stats->macrosteps >= 13); /* version 1: 5 + 5 + 1; version 2: 1 + 1 at least */
     ta_chart_stats before = *w_stats;
-    CHECK_EQUAL(ta_host_chart_stats(e.host, charts, 1), 2u); /* room for one: still the count */
+    CHECK_EQUAL(host_chart_stats_fill(e.host, charts, 1), 2u); /* room for one: still the count */
     /* a host snapshot keeps the retired totals */
     size_t hl = 0, dl = 0;
     ta_buffer written = {NULL, 0, 0};
@@ -392,7 +416,7 @@ static void test_versions_and_migration(void) {
         ta_host_restore(&config, &(ta_host_snapshot_input){{hs, hl}, images, 3, 0}, &e.host),
         TA_OK);
     CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, (ta_bytes){ds, dl}), TA_OK);
-    CHECK_EQUAL(ta_host_chart_stats(e.host, charts, 4), 2u);
+    CHECK_EQUAL(host_chart_stats_fill(e.host, charts, 4), 2u);
     w_stats = NULL;
     for (int i = 0; i < 2; i++)
         if (charts[i].name.length == 1 && charts[i].name.pointer[0] == 'w') w_stats = &charts[i];
@@ -686,7 +710,7 @@ static void test_snapshot_restore(void) {
     CHECK(strcmp(e.log, "n=5;ticked:5;done;") == 0); /* routed to the other segment and back */
     ta_host_stats stats;
     stats.size = sizeof stats;
-    ta_host_stats_get(e.host, &stats);
+    host_stats_fill(e.host, &stats);
     CHECK(stats.routed >= 2 && stats.segments == 2);
     free(hs);
     free(ds);
@@ -787,7 +811,7 @@ static void test_adopt_tree_collision(void) {
     uint64_t root = spawn(&a, "p");
     run(&a);
     uint64_t ids[4], cursor = 0;
-    CHECK_EQUAL(ta_host_actors(a.host, &cursor, (ta_uint64_array){ids, 4}), 2u);
+    CHECK_EQUAL(host_actors_page(a.host, &cursor, (ta_uint64_array){ids, 4}), 2u);
     uint64_t kid = ids[0] == root ? ids[1] : ids[0];
     CHECK_EQUAL(root, 1u);
     CHECK_EQUAL(kid, 2u);
@@ -815,7 +839,7 @@ static void test_adopt_tree_collision(void) {
     CHECK_EQUAL(ta_host_locate(b.host, root, &(ta_host_location){0, 0}), TA_ERROR_STALE);
     ta_host_stats stats;
     stats.size = sizeof stats;
-    ta_host_stats_get(b.host, &stats);
+    host_stats_fill(b.host, &stats);
     CHECK_EQUAL(stats.actors, 1u);
     /* once session 2 has left b, the tree moves in */
     written = (ta_buffer){temporary, capacity, 0};
@@ -846,31 +870,35 @@ static void test_state_value(void) {
     uint64_t session = spawn(&e, "v");
     run(&e);
     char value[256];
-    ta_buffer out = {value, sizeof value - 1, 0}; /* room for a terminator */
-    CHECK_EQUAL(ta_host_state_value(e.host, session, &out), TA_OK);
-    value[out.length] = 0;
-    size_t n = out.length;
+    CHECK_EQUAL(ask_state(e.host, session, value, sizeof value), TA_OK);
     CHECK(strcmp(value, "{\"top\":{\"p\":{\"r1\":\"x\",\"r2\":{},\"r3\":{\"k\":\"k1\"}}}}") == 0);
-    CHECK_EQUAL(n, strlen(value));
-    out = (ta_buffer){value, 4, 0};
-    CHECK_EQUAL(ta_host_state_value(e.host, session, &out), TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(out.length, n); /* measured, cut short */
+    /* a reply that does not fit: measured, nothing written past the room */
+    static host_ask a;
+    ta_cbor_writer *w = ask_begin(&a, "state", 1);
+    ta_cbor_write_text(w, ta_string("session"));
+    ta_cbor_write_uint(w, session);
+    CHECK_EQUAL(ask_send(e.host, &a), TA_OK);
+    size_t n = a.answer.length;
+    ta_buffer request = {a.request, sizeof a.request, 0};
+    CHECK_EQUAL(ta_cbor_finish(&a.writer, &request), TA_OK);
+    ta_buffer out = {value, 4, 0};
+    CHECK_EQUAL(ta_host_request(e.host, (ta_bytes){a.request, request.length}, &out),
+                TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(out.length, n);
     out = (ta_buffer){NULL, 0, 0};
-    CHECK_EQUAL(ta_host_state_value(e.host, session, &out), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(ta_host_request(e.host, (ta_bytes){a.request, request.length}, &out),
+                TA_ERROR_NO_MEMORY);
     CHECK_EQUAL(out.length, n);
     CHECK_EQUAL(send(&e, session, "go", NULL), TA_OK);
     run(&e);
-    out = (ta_buffer){value, sizeof value - 1, 0};
-    CHECK_EQUAL(ta_host_state_value(e.host, session, &out), TA_OK);
-    value[out.length] = 0;
+    CHECK_EQUAL(ask_state(e.host, session, value, sizeof value), TA_OK);
     CHECK(strcmp(value, "{\"top\":{\"p\":{\"r1\":\"y\",\"r2\":{},\"r3\":{\"k\":\"k1\"}}}}") == 0);
     CHECK_EQUAL(send(&e, session, "flat", NULL), TA_OK);
     run(&e);
-    out = (ta_buffer){value, sizeof value - 1, 0};
-    CHECK_EQUAL(ta_host_state_value(e.host, session, &out), TA_OK);
-    value[out.length] = 0;
+    CHECK_EQUAL(ask_state(e.host, session, value, sizeof value), TA_OK);
     CHECK(strcmp(value, "\"flat\"") == 0);
-    CHECK_EQUAL(ta_host_state_value(e.host, session + 1000, &out), TA_ERROR_INVALID);
+    CHECK_EQUAL(ask_state(e.host, session + 1000, value, sizeof value), TA_OK);
+    CHECK(strstr(value, "\"code\":\"stale\"") != NULL);
     world_close(&e);
 }
 

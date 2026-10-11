@@ -20,6 +20,7 @@
 #include "../support/compile_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
+#include "../support/host_request.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -457,8 +458,8 @@ static void workload_run(workload *w) {
         CHECK_EQUAL(ta_datamodel_ecmascript_restore(copy.ecmascript, (ta_bytes){ds, dl}), TA_OK);
         ta_host_stats a, b;
         a.size = b.size = sizeof a;
-        ta_host_stats_get(w->host, &a);
-        ta_host_stats_get(restored, &b);
+        host_stats_fill(w->host, &a);
+        host_stats_fill(restored, &b);
         CHECK(a.actors == b.actors && a.segments == b.segments);
         run_idle(&copy, restored);
         ta_host_free(restored);
@@ -652,7 +653,7 @@ static void test_fixed_arena(void) {
         ta_host_effects_ack(host);
     ta_host_stats host_stats;
     host_stats.size = sizeof host_stats;
-    ta_host_stats_get(host, &host_stats);
+    host_stats_fill(host, &host_stats);
     CHECK_EQUAL(host_stats.routed, 2); /* ping and pong, between the segments */
     ta_actor_info info;
     info.size = sizeof info;

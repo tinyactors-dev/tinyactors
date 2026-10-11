@@ -8,6 +8,7 @@
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
+#include "../support/host_request.h"
 
 #define SC(name, body)                                                                             \
     "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='" name "' " body  \
@@ -265,7 +266,8 @@ static void refused(world *w) {
     ta_buffer out = {bytes, sizeof bytes, 0};
     CHECK_EQUAL(ta_host_hibernate(w->host, w->listener, &out), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_snapshot(w->host, &out), TA_ERROR_STATE);
-    CHECK_EQUAL(ta_host_state_value(w->host, w->listener, &out), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_host_request(w->host, (ta_bytes){"\xa1\x62op\x65stats", 9}, &out),
+                TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_export_actor(w->host, w->listener, &out), TA_ERROR_STATE);
     uint32_t segment;
     CHECK_EQUAL(ta_host_add_image(w->host, &w->image, &segment), TA_ERROR_STATE);

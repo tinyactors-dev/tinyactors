@@ -7,6 +7,7 @@
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
+#include "../support/host_request.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -1031,25 +1032,27 @@ static void test_trace_two_segments(void) {
     }
     ta_host_stats stats;
     stats.size = sizeof stats;
-    ta_host_stats_get(nodes[A].host, &stats);
+    host_stats_fill(nodes[A].host, &stats);
     CHECK(pong && stats.fuel_clock >= pong->fuel);
     close_all();
     free(echo_bytes);
 }
 
-/* ta_host_trace_set reaches every segment, and the ones added later. */
+/* trace.configure reaches every segment, and the ones added later. */
 static void test_trace_set(void) {
     open_node(A, PINGER);
     uint64_t p = spawn(A, "pinger", "p");
     settle();
     begin_seen seen[64];
     begins(A, seen, 64);
-    ta_host_trace_options options;
-    memset(&options, 0, sizeof options);
-    options.size = sizeof options;
-    options.flags = TA_HOST_TRACE_NO_RECORDS;
-    options.kinds = TA_TRACE_FULL;
-    CHECK_EQUAL(ta_host_trace_set(nodes[A].host, &options), TA_OK);
+    static host_ask ask; /* full detail, but no records */
+    ta_cbor_writer *configure = ask_begin(&ask, "trace.configure", 2);
+    ta_cbor_write_text(configure, ta_string("detail"));
+    ta_cbor_write_text(configure, ta_string("full"));
+    ta_cbor_write_text(configure, ta_string("records"));
+    ta_cbor_write_simple(configure, TA_CBOR_FALSE);
+    CHECK_EQUAL(ask_send(nodes[A].host, &ask), TA_OK);
+    CHECK(strcmp(ask.text, "{}") == 0);
     size_t length;
     void *echo_bytes = compile_chart("e.scxml", ECHO, NULL, &length, 0);
     ta_image echo_image;
@@ -1074,8 +1077,11 @@ static void test_trace_set(void) {
     settle();
     LOGCHK(A, "pong:1;");
     CHECK_EQUAL(begins(A, seen, 64), 0); /* neither segment wrote one */
-    options.flags = 0;
-    CHECK_EQUAL(ta_host_trace_set(nodes[A].host, &options), TA_OK);
+    configure = ask_begin(&ask, "trace.configure", 1); /* records again */
+    ta_cbor_write_text(configure, ta_string("detail"));
+    ta_cbor_write_text(configure, ta_string("full"));
+    CHECK_EQUAL(ask_send(nodes[A].host, &ask), TA_OK);
+    CHECK(strcmp(ask.text, "{}") == 0);
     event.data = ta_datamodel_ecmascript_payload_eval(
         nodes[A].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
     event.session = p;

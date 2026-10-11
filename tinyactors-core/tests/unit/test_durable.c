@@ -37,6 +37,7 @@
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 #include <tinyactors/system.h>
+#include "../support/host_request.h"
 
 /* ---- charts (@HELLO@ and @LOG:label@ are expanded by expand()) ------------------------ */
 
@@ -970,7 +971,7 @@ static int host_run(world *w) {
         }
         ta_host_stats stats;
         stats.size = sizeof stats;
-        ta_host_stats_get(w->host, &stats);
+        host_stats_fill(w->host, &stats);
         if (!n && result.status == TA_RUN_IDLE && !stats.jobs) return 1;
     }
     fprintf(stderr, "  %s: does not settle\n", w->label);
@@ -1013,7 +1014,7 @@ static int host_migrate(world *w) {
      * its invocations to finish: it would keep the job open) */
     uint64_t cursor = 0, sessions[64];
     uint32_t n;
-    while ((n = ta_host_actors(w->host, &cursor, (ta_uint64_array){sessions, 64})) != 0)
+    while ((n = host_actors_page(w->host, &cursor, (ta_uint64_array){sessions, 64})) != 0)
         for (uint32_t i = 0; i < n; i++) {
             ta_host_location location;
             uint32_t job;
@@ -1037,7 +1038,7 @@ static int host_migrate(world *w) {
 static int host_hibernate_some(world *w) {
     uint64_t cursor = 0, sessions[64];
     uint32_t n;
-    while ((n = ta_host_actors(w->host, &cursor, (ta_uint64_array){sessions, 64})) != 0)
+    while ((n = host_actors_page(w->host, &cursor, (ta_uint64_array){sessions, 64})) != 0)
         for (uint32_t k = 0; k < n; k++) {
             if (rnd() % 3 == 0) continue;
             size_t length = 0;
@@ -1565,7 +1566,7 @@ static int run_seed(int seed, int steps) {
     {
         ta_host_stats host_stats;
         host_stats.size = sizeof host_stats;
-        ta_host_stats_get(hst->host, &host_stats);
+        host_stats_fill(hst->host, &host_stats);
         ran.host_migrated += host_stats.migrated;
     }
     ran.hibernated += (unsigned long)per->hibernation_count;

@@ -7,6 +7,7 @@
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
+#include "../support/host_request.h"
 
 /* Every `ping` is a macrostep with a log record. */
 #define CHART                                                                                      \
@@ -285,7 +286,7 @@ static void test_same_bytes(void) {
             if (k == 1) {
                 ta_host_stats stats;
                 stats.size = sizeof stats;
-                ta_host_stats_get(b.host, &stats);
+                host_stats_fill(b.host, &stats);
                 ta_otlp_mark(otlp, stats.fuel_clock, 1700000000000000000ull + t);
                 ta_system *system = ta_host_system(b.host, b.segment);
                 ta_otlp_input input;
@@ -315,7 +316,7 @@ static void test_same_bytes(void) {
     {
         ta_host_stats stats;
         stats.size = sizeof stats;
-        ta_host_stats_get(b.host, &stats);
+        host_stats_fill(b.host, &stats);
         ta_otlp_mark(otlp, stats.fuel_clock, 1700000000000000000ull + 50);
         ta_system *system = ta_host_system(b.host, b.segment);
         ta_otlp_input input;

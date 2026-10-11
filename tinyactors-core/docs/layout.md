@@ -52,7 +52,7 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── journal.[ch]       ✅ lossy ring of variable-size records (the trace journal)
 │   │   ├── address.c          ✅ the address grammar (include/tinyactors/address.h)
 │   │   ├── cbor.c             ✅ CBOR to and from token lists (include/tinyactors/cbor.h)
-│   │   └── json.[ch]          ✅ writing JSON strings (the host's state value)
+│   │   ├── cbor_output.h      ✅ CBOR written item by item into a buffer (the host's replies)
 │   │
 │   ├── image/                 shared by compiler (writer) and runtime (reader)
 │   │   ├── records.h          ✅ on-disk records, bytecode opcodes, validated view
@@ -99,7 +99,9 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── host.c             ✅ segments + session ranges, cross-segment routing, versions and
 │   │   │                         retirement, quantum-bounded migration jobs, CLOCK sweep, growth,
 │   │   │                         boot, whole-host snapshot/restore
-│   │   └── router.c           ✅ envelopes, peers, routes, deduplication (docs/protocol.md)
+│   │   ├── router.c           ✅ envelopes, peers, routes, deduplication (docs/protocol.md)
+│   │   ├── telemetry.c        ✅ the host's OTLP encoder, or the null one (traces, logs, metrics)
+│   │   └── request.c          ✅ ta_host_request: the rarely called API as CBOR (docs/requests.md)
 │   │
 │   ├── otlp/                  the OTLP codec (freestanding, one block, relocatable; uses trace + image)
 │   │   ├── otlp_internal.h    ✅ the encoder's block, protobuf primitives

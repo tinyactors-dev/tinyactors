@@ -6,7 +6,6 @@
 #include "base/bitset.h"
 #include "base/format.h"
 #include "base/heap.h"
-#include "base/json.h"
 #include "base/index_queue.h"
 #include "base/memory.h"
 #include "base/pool.h"
@@ -337,19 +336,7 @@ static void test_memmove(void) {
     CHECK(memcmp(backward, "cdefgfgh", 8) == 0);
 }
 
-#define VIEW_OF(text) ((ta_string_view){(text), (uint32_t)strlen(text)})
-
-/* a JSON string for the state value: quotes, backslashes and control
- * characters escaped, measured without writing */
-static void test_json(void) {
-    char written[32];
-    size_t n = ta_json_write_string(written, VIEW_OF("a\"b\\\x01"));
-    CHECK(n == 14 && !memcmp(written, "\"a\\\"b\\\\\\u0001\"", 14));
-    CHECK_EQUAL(ta_json_write_string(NULL, VIEW_OF("a\"b\\\x01")), n);
-}
-
 int main(void) {
-    RUN(test_json);
     RUN(test_arena_measure_matches_init);
     RUN(test_arena_mark_reset);
     RUN(test_freed_storage_is_zeroed);

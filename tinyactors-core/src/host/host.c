@@ -15,7 +15,7 @@
 #include <tinyactors/address.h>
 #include <tinyactors/host.h>
 
-#include "base/json.h"
+#include "base/cbor_output.h"
 #include "base/memory.h"
 #include "host/host_internal.h"
 
@@ -493,71 +493,30 @@ ta_status host_locate(const ta_host *host, uint64_t session, uint32_t *segment, 
 
 /* ---- state values ---------------------------------------------------------------------- */
 
-typedef struct value_writer {
-    char *buffer;
-    size_t capacity, length;
-} value_writer;
-
-static void value_put(value_writer *w, const char *text, size_t length) {
-    for (size_t i = 0; i < length; i++, w->length++)
-        if (w->length < w->capacity) w->buffer[w->length] = text[i];
-}
-
-static void value_id(value_writer *w, ta_string_view id) {
-    char quoted[256];
-    size_t n = ta_json_write_string(NULL, id);
-    if (n <= sizeof quoted) {
-        ta_json_write_string(quoted, id);
-        value_put(w, quoted, n);
-    } else { /* rare: escaped byte by byte */
-        value_put(w, "\"", 1);
-        for (uint32_t i = 0; i < id.length; i++) {
-            ta_string_view one = {id.pointer + i, 1};
-            char escaped[8];
-            size_t k = ta_json_write_string(escaped, one);
-            value_put(w, escaped + 1, k - 2);
-        }
-        value_put(w, "\"", 1);
-    }
-}
-
-/* An open state while the configuration is written: its kind, whether it
- * wrote an active child yet, whether its value is wrapped in {"id": ...}. */
-typedef struct value_frame {
-    uint8_t kind, children, wrapped;
-} value_frame;
-
-static void value_close(value_writer *w, const value_frame *frame) {
-    if (frame->kind == TA_STATE_COMPOUND) {
-        if (!frame->children) value_put(w, "{}", 2);
-        if (frame->wrapped) value_put(w, "}", 1);
-    } else if (frame->kind == TA_STATE_PARALLEL) {
-        value_put(w, frame->wrapped ? "}}" : "}", frame->wrapped ? 2 : 1);
-    }
-}
-
-ta_status ta_host_state_value(const ta_host *host, uint64_t session, ta_buffer *out) {
-    uint32_t si = 0, actor = 0, states[TA_STATE_VALUE_STATES];
-    out->length = 0;
-    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
+/* A session's configuration as a state value (docs/requests.md, "state"):
+ * the active states in document order, each written once its parent is,
+ * so every map's count is known before its items. TA_ERROR_INVALID when
+ * there is no such session or its configuration has more than
+ * HOST_STATE_VALUE_STATES states. */
+ta_status host_state_value(const ta_host *host, uint64_t session, cbor_output *out) {
+    uint32_t si = 0, actor = 0, states[HOST_STATE_VALUE_STATES];
+    uint8_t depths[HOST_STATE_VALUE_STATES], kinds[HOST_STATE_VALUE_STATES];
     if (host_locate(host, session, &si, &actor) != TA_OK) return TA_ERROR_INVALID;
     const host_segment *segment_record = segment_of(host, si);
     ta_actor_info info;
     info.size = sizeof info;
     if (ta_actor_info_get(segment_record->system, actor, &info) != TA_OK) return TA_ERROR_INVALID;
     uint32_t count = ta_actor_config(segment_record->system, actor,
-                                     (ta_uint32_array){states, TA_STATE_VALUE_STATES});
-    if (count > TA_STATE_VALUE_STATES) return TA_ERROR_INVALID;
+                                     (ta_uint32_array){states, HOST_STATE_VALUE_STATES});
+    if (count > HOST_STATE_VALUE_STATES) return TA_ERROR_INVALID;
     for (uint32_t i = 1; i < count; i++) /* document order: a parent before its children */
         for (uint32_t j = i; j > 0 && states[j - 1] > states[j]; j--) {
             uint32_t t = states[j];
             states[j] = states[j - 1];
             states[j - 1] = t;
         }
-    value_writer w = {(char *)out->pointer, out->capacity, 0};
-    value_frame frames[256]; /* by depth (ta_state_info.depth < 256); the root acts compound */
-    frames[0] = (value_frame){TA_STATE_COMPOUND, 0, 0};
-    uint32_t top = 0;
+    /* the states of the configuration: those whose parent is active too */
+    uint32_t kept = 0, top = 0;
     for (uint32_t i = 0; i < count; i++) {
         ta_state_info state;
         state.size = sizeof state;
@@ -567,37 +526,43 @@ ta_status ta_host_state_value(const ta_host *host, uint64_t session, ta_buffer *
             state.depth == 0 || state.depth > 255 || state.kind == TA_STATE_HISTORY_SHALLOW ||
             state.kind == TA_STATE_HISTORY_DEEP)
             continue;
-        while (top >= state.depth)
-            value_close(&w, &frames[top--]);
-        if (top + 1 != state.depth) continue; /* its parent is not active: not a configuration */
-        value_frame *parent = &frames[top];
-        int in_parallel = parent->kind == TA_STATE_PARALLEL;
-        if (in_parallel) {
-            if (parent->children) value_put(&w, ",", 1);
-            value_id(&w, state.id);
-            value_put(&w, ":", 1);
-        }
-        parent->children = 1;
-        value_frame frame = {(uint8_t)state.kind, 0, (uint8_t)!in_parallel};
-        if (state.kind == TA_STATE_COMPOUND || state.kind == TA_STATE_PARALLEL) {
-            if (!in_parallel) {
-                value_put(&w, "{", 1);
-                value_id(&w, state.id);
-                value_put(&w, ":", 1);
-            }
-            if (state.kind == TA_STATE_PARALLEL) value_put(&w, "{", 1);
-        } else if (in_parallel) {
-            value_put(&w, "{}", 2);
-        } else {
-            value_id(&w, state.id);
-        }
-        frames[++top] = frame;
+        if (state.depth > top + 1) continue; /* its parent is not active: not a configuration */
+        top = state.depth;
+        states[kept] = states[i];
+        depths[kept] = (uint8_t)state.depth;
+        kinds[kept++] = (uint8_t)state.kind;
     }
-    while (top > 0)
-        value_close(&w, &frames[top--]);
-    if (!frames[0].children) value_put(&w, "{}", 2);
-    out->length = w.length;
-    return w.length <= out->capacity ? TA_OK : TA_ERROR_NO_MEMORY;
+    if (!kept) {
+        cbor_output_head(out, CBOR_MAJOR_MAP, 0);
+        return TA_OK;
+    }
+    uint8_t parents[256]; /* the kind of the state open at each depth; the root acts compound */
+    parents[0] = TA_STATE_COMPOUND;
+    for (uint32_t i = 0; i < kept; i++) {
+        ta_state_info state;
+        state.size = sizeof state;
+        ta_image_state_info(segment_record->image, (ta_chart_item){info.chart, states[i]}, &state);
+        uint32_t depth = depths[i];
+        int in_parallel = parents[depth - 1] == TA_STATE_PARALLEL;
+        if (in_parallel) cbor_output_text(out, state.id);
+        if (kinds[i] == TA_STATE_COMPOUND || kinds[i] == TA_STATE_PARALLEL) {
+            if (!in_parallel) {
+                cbor_output_head(out, CBOR_MAJOR_MAP, 1);
+                cbor_output_text(out, state.id);
+            }
+            uint32_t children = 0;
+            for (uint32_t j = i + 1; j < kept && depths[j] > depth; j++)
+                children += depths[j] == depth + 1;
+            if (kinds[i] == TA_STATE_PARALLEL) cbor_output_head(out, CBOR_MAJOR_MAP, children);
+            else if (!children) cbor_output_head(out, CBOR_MAJOR_MAP, 0);
+        } else if (in_parallel) {
+            cbor_output_head(out, CBOR_MAJOR_MAP, 0);
+        } else {
+            cbor_output_text(out, state.id);
+        }
+        parents[depth] = kinds[i];
+    }
+    return TA_OK;
 }
 
 ta_status ta_host_spawn(ta_host *host, const ta_spawn *spawn, uint64_t *session) {
@@ -1388,7 +1353,7 @@ static int retired_fold(ta_host *host, const host_segment *segment) {
     return 1;
 }
 
-uint32_t ta_host_chart_stats(const ta_host *host, ta_chart_stats *out, uint32_t capacity) {
+uint32_t host_chart_stats(const ta_host *host, ta_chart_stats *out, uint32_t capacity) {
     for (uint32_t v = 0; v < host->version_count && v < capacity; v++) {
         ta_string_view name = host->versions[v].name;
         ta_chart_stats z;
@@ -1856,7 +1821,7 @@ static ta_status trace_compose(ta_host *host) {
         policy.sample_whole = host->trace_whole;
         /* with nowhere for records to go the systems write none (dropped alone) */
         for (uint32_t i = 0; i < TA_TRACE_DETAILS; i++)
-            policy.kinds[i] = !(host->trace_flags & TA_HOST_TRACE_NO_RECORDS) && classes[i]
+            policy.kinds[i] = !(host->trace_flags & HOST_TRACE_NO_RECORDS) && classes[i]
                                   ? classes[i]
                                   : TA_TRACE_BIT(TA_TRACE_DROPPED);
         policy.rules = rules;
@@ -1867,7 +1832,7 @@ static ta_status trace_compose(ta_host *host) {
     return status;
 }
 
-ta_status ta_host_trace_set(ta_host *host, const ta_host_trace_options *options) {
+ta_status host_trace_set(ta_host *host, const host_trace_options *options) {
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     if (host->config.system.tracing == TA_TRACING_DISABLED) return TA_ERROR_STATE;
     if (!options || options->size < sizeof *options) return TA_ERROR_INVALID;
@@ -1894,7 +1859,7 @@ ta_status ta_host_trace_set(ta_host *host, const ta_host_trace_options *options)
     return TA_OK;
 }
 
-ta_status ta_host_trace_watch(ta_host *host, const ta_host_watch *request, uint32_t *id) {
+ta_status host_trace_watch(ta_host *host, const host_watch_rules *request, uint32_t *id) {
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     const ta_trace_rule *rules = request->rules;
     uint32_t count = request->rule_count;
@@ -1925,7 +1890,7 @@ static void watch_remove(ta_host *host, uint32_t at) {
     host->watch_count--;
 }
 
-ta_status ta_host_trace_unwatch(ta_host *host, uint32_t id) {
+ta_status host_trace_unwatch(ta_host *host, uint32_t id) {
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     for (uint32_t i = 0; i < host->watch_count; i++)
         if (host->watches[i].id == id) {
@@ -1946,7 +1911,7 @@ static void watches_expire(ta_host *host) {
     if (ended) trace_compose(host);
 }
 
-void ta_host_stats_get(const ta_host *host, ta_host_stats *o) {
+void host_stats_get(const ta_host *host, ta_host_stats *o) {
     ta_host_stats z;
     ta_memset(&z, 0, sizeof z);
     z.size = sizeof z;
@@ -1974,7 +1939,7 @@ void ta_host_stats_get(const ta_host *host, ta_host_stats *o) {
     o->size = n;
 }
 
-uint32_t ta_host_actors(const ta_host *host, uint64_t *cursor, ta_uint64_array sessions) {
+uint32_t host_actors(const ta_host *host, uint64_t *cursor, ta_uint64_array sessions) {
     uint64_t *out = sessions.pointer;
     uint32_t capacity = sessions.capacity;
     uint32_t si = (uint32_t)(*cursor >> 32), c = (uint32_t)*cursor, n = 0;

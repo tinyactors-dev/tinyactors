@@ -165,14 +165,6 @@ typedef struct ta_host_location {
     uint32_t actor;
 } ta_host_location;
 TA_API ta_status ta_host_locate(const ta_host *h, uint64_t session, ta_host_location *out);
-/* A session's configuration as a nested state value, in JSON (the shape of
- * xstate's `value`): an atomic state's id ("s"), a compound state with its
- * active child ({"c": ...}), a parallel state with each region ({"p": {"r1":
- * ..., "r2": {}}}), {} for none, written into `out` (ta_buffer, no
- * terminator). TA_ERROR_INVALID when there is no such session or its
- * configuration has more than TA_STATE_VALUE_STATES states. */
-enum { TA_STATE_VALUE_STATES = 1024 };
-TA_API ta_status ta_host_state_value(const ta_host *h, uint64_t session, ta_buffer *out);
 /* An event for the session event->session (event->target is ignored). */
 TA_API ta_status ta_host_send(ta_host *h, const ta_event_in *event);
 /* Batch (runs of events for the same segment go through ta_system_send_many):
@@ -547,55 +539,24 @@ TA_API ta_status ta_host_snapshot_unpack(ta_bytes pack, ta_host_snapshot_content
 /* Segment i's image in the blob; empty for a retired one. */
 TA_API ta_bytes ta_host_snapshot_image(ta_bytes pack, uint32_t i);
 
-/* ---- inspection ------------------------------------------------------------------ */
-/* The host's counters (tinyactors/stats.h). Set `size` first. */
-TA_API void ta_host_stats_get(const ta_host *h, ta_host_stats *out);
-/* What the actors of each chart name did, summed over every segment with a
- * chart of that name, the totals of retired segments included, so a count
- * never goes back when a version retires. Fills up to `capacity` entries
- * (set each one's `size` first) in the order of the current versions and
- * returns how many chart names there are; call again with more room when
- * that is more than `capacity`. Names are valid until the next mutating
- * call on the host. */
-TA_API uint32_t ta_host_chart_stats(const ta_host *h, ta_chart_stats *out, uint32_t capacity);
-/* What every segment traces, and new segments start with (docs/adr/0007).
- * Rules and watches name the kinds they give (rule.detail: TA_TRACE_* masks
- * with TA_TRACE_VALUES, TA_NIL to keep the trace's own); the host gives each
- * different detail a class of the policy (ta_trace_policy) it sets in every
- * segment: class 0 the lifecycle kinds of `kinds`, class 1 `kinds`, then one
- * per detail the watches and rules ask for. A watch's rules come before the
- * options' rules, newer watches first.
- * TA_ERROR_STATE when the host's systems do not trace
- * (config.system.tracing); TA_ERROR_NO_MEMORY for more than
- * TA_HOST_TRACE_DETAILS different details, more rules than a system holds
- * (config.system.trace_rules) or no memory; TA_ERROR_INVALID for a malformed
- * rule. Nothing changes then. Each segment's records: ta_host_system, then
- * ta_system_trace. */
-enum { TA_HOST_TRACE_NO_RECORDS = 1u << 0 }; /* no records (traceparents still flow) */
-#define TA_HOST_TRACE_DETAILS (TA_TRACE_DETAILS - 2u)
-typedef struct ta_host_trace_options {
-    uint32_t size;
-    uint32_t flags;                      /* TA_HOST_TRACE_* */
-    uint32_t kinds;                      /* what a sampled trace writes */
-    uint32_t sample_parts, sample_whole; /* as ta_trace_policy */
-    uint32_t rule_count;
-    const ta_trace_rule *rules; /* copied */
-} ta_host_trace_options;
-TA_API ta_status ta_host_trace_set(ta_host *h, const ta_host_trace_options *options);
-/* A watch: rules (as in ta_host_trace_options) that hold until the host's
- * time reaches `until` (UINT64_MAX: until ta_host_trace_unwatch). The time a
- * watch ends is a deadline of ta_host_run. Errors as ta_host_trace_set. */
-typedef struct ta_host_watch {
-    const ta_trace_rule *rules; /* copied */
-    uint32_t rule_count;
-    uint32_t pad;
-    ta_time until;
-} ta_host_watch;
-TA_API ta_status ta_host_trace_watch(ta_host *h, const ta_host_watch *watch, uint32_t *id);
-/* End a watch early; TA_ERROR_STALE when it has ended. */
-TA_API ta_status ta_host_trace_unwatch(ta_host *h, uint32_t id);
-/* Enumerate sessions host-wide (cursor starts at 0); returns how many (0 = done). */
-TA_API uint32_t ta_host_actors(const ta_host *h, uint64_t *cursor, ta_uint64_array out);
+/* ---- requests: the rarely called API (docs/requests.md) --------------------------
+ * One CBOR map in, naming its operation in "op"; one CBOR map out: the
+ * result, or {"error": {"code", "path", "message"}} for a request the host
+ * refuses. Trace configuration, watches, stats, inspection, state values and
+ * decoded spans are requests; docs/requests.md lists every operation, its
+ * fields, defaults and errors.
+ * TA_OK: `reply` holds the reply (a result or an error). TA_ERROR_NO_MEMORY:
+ * nothing was applied and reply->length is what the reply needs; grow and
+ * ask again. TA_ERROR_STATE during a run (nothing written). A request is
+ * decoded into at most TA_HOST_REQUEST_TOKENS tokens, on the stack. */
+enum { TA_HOST_REQUEST_TOKENS = 256 };
+TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_buffer *reply);
+/* The host's counters now, as an ExportMetricsServiceRequest (`/v1/metrics`,
+ * docs/adr/0007), written into `out`: per chart, per segment and the host's
+ * own. There is no metrics timer or effect: call it when the application
+ * wants them. TA_ERROR_NO_MEMORY: out->length is what it needs. TA_ERROR_STATE
+ * during a run or without an encoder (ta_host_telemetry). */
+TA_API ta_status ta_host_metrics(ta_host *h, ta_buffer *out);
 
 #ifdef __cplusplus
 }

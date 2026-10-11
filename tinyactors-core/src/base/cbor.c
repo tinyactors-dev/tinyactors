@@ -4,6 +4,7 @@
  * items each open container still has, so nothing recurses. */
 #include <tinyactors/cbor.h>
 
+#include "base/cbor_output.h"
 #include "base/format.h"
 #include "base/memory.h"
 
@@ -294,19 +295,14 @@ uint32_t ta_cbor_member(const ta_cbor_document *document, uint32_t map, ta_strin
 
 /* ---- encoding ---------------------------------------------------------------- */
 
-typedef struct cbor_output {
-    unsigned char *bytes;
-    size_t capacity, length; /* length goes on counting past capacity */
-} cbor_output;
-
-static void output_bytes(cbor_output *output, const void *bytes, size_t length) {
+void cbor_output_bytes(cbor_output *output, const void *bytes, size_t length) {
     if (output->length <= output->capacity && length <= output->capacity - output->length)
         ta_memcpy(output->bytes + output->length, bytes, length);
     output->length += length;
 }
 
 /* A head with `argument` in its shortest form. */
-static void output_head(cbor_output *output, uint32_t major, uint64_t argument) {
+void cbor_output_head(cbor_output *output, uint32_t major, uint64_t argument) {
     unsigned char head[9];
     size_t width;
     uint32_t info;
@@ -318,16 +314,16 @@ static void output_head(cbor_output *output, uint32_t major, uint64_t argument) 
     head[0] = (unsigned char)(major << 5 | info);
     for (size_t k = 0; k < width; k++)
         head[1 + k] = (unsigned char)(argument >> (8 * (width - 1 - k)));
-    output_bytes(output, head, 1 + width);
+    cbor_output_bytes(output, head, 1 + width);
 }
 
 /* A float in the shortest width that holds it exactly. */
-static void output_float(cbor_output *output, uint64_t bits) {
+void cbor_output_float(cbor_output *output, uint64_t bits) {
     uint32_t half;
     double value = bits_double(bits);
     if (value != value) { /* every NaN is the canonical one */
         static const unsigned char nan[3] = {0xF9, 0x7E, 0x00};
-        output_bytes(output, nan, 3);
+        cbor_output_bytes(output, nan, 3);
         return;
     }
     unsigned char head[9];
@@ -349,7 +345,7 @@ static void output_float(cbor_output *output, uint64_t bits) {
     }
     for (size_t k = 0; k < width; k++)
         head[1 + k] = (unsigned char)(bits >> (8 * (width - 1 - k)));
-    output_bytes(output, head, 1 + width);
+    cbor_output_bytes(output, head, 1 + width);
 }
 
 ta_status ta_cbor_encode(const ta_cbor_document *document, ta_buffer *out) {
@@ -364,34 +360,34 @@ ta_status ta_cbor_encode(const ta_cbor_document *document, ta_buffer *out) {
         const ta_cbor_token *token = &document->tokens[at++];
         uint64_t children = 0;
         switch (token->kind) {
-        case TA_CBOR_UINT: output_head(&output, MAJOR_UINT, token->value); break;
-        case TA_CBOR_NEGINT: output_head(&output, MAJOR_NEGINT, token->value); break;
+        case TA_CBOR_UINT: cbor_output_head(&output, MAJOR_UINT, token->value); break;
+        case TA_CBOR_NEGINT: cbor_output_head(&output, MAJOR_NEGINT, token->value); break;
         case TA_CBOR_BYTES:
         case TA_CBOR_TEXT:
             if (token->value > document->bytes.length || token->count > document->bytes.length - token->value)
                 return TA_ERROR_INVALID;
             if (token->kind == TA_CBOR_TEXT && !utf8_valid(bytes + token->value, token->count))
                 return TA_ERROR_INVALID;
-            output_head(&output, token->kind == TA_CBOR_TEXT ? MAJOR_TEXT : MAJOR_BYTES, token->count);
-            output_bytes(&output, bytes + token->value, token->count);
+            cbor_output_head(&output, token->kind == TA_CBOR_TEXT ? MAJOR_TEXT : MAJOR_BYTES, token->count);
+            cbor_output_bytes(&output, bytes + token->value, token->count);
             break;
         case TA_CBOR_ARRAY:
-            output_head(&output, MAJOR_ARRAY, token->count);
+            cbor_output_head(&output, MAJOR_ARRAY, token->count);
             children = token->count;
             break;
         case TA_CBOR_MAP:
-            output_head(&output, MAJOR_MAP, token->count);
+            cbor_output_head(&output, MAJOR_MAP, token->count);
             children = (uint64_t)token->count * 2;
             break;
         case TA_CBOR_TAG:
-            output_head(&output, MAJOR_TAG, token->value);
+            cbor_output_head(&output, MAJOR_TAG, token->value);
             children = 1;
             break;
         case TA_CBOR_SIMPLE:
             if (token->value > 0xFF || (token->value >= 24 && token->value < 32)) return TA_ERROR_INVALID;
-            output_head(&output, MAJOR_SIMPLE, token->value);
+            cbor_output_head(&output, MAJOR_SIMPLE, token->value);
             break;
-        case TA_CBOR_FLOAT: output_float(&output, token->value); break;
+        case TA_CBOR_FLOAT: cbor_output_float(&output, token->value); break;
         default: return TA_ERROR_INVALID;
         }
         if (children) {
