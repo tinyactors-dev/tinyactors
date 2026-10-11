@@ -485,8 +485,8 @@ static void unload(ta_system *system, uint32_t index) {
     ta_slab_free(&system->slab, actor->instance);
     actor->instance = chart;
     actor->state = TA_ACTOR_HIBERNATED;
-    actor->flags &=
-        (uint8_t)~(ACTOR_FLAG_IN_WAKE_QUEUE | ACTOR_FLAG_WAKE_SENT | ACTOR_FLAG_TOUCHED);
+    actor->flags &= (uint8_t)~(ACTOR_FLAG_IN_WAKE_QUEUE | ACTOR_FLAG_WAKE_SENT | ACTOR_FLAG_TOUCHED |
+                               ACTOR_FLAG_WATCHED); /* a watch ends here (ta_actor_watch) */
     system->hibernated_count++;
     core->chart_stats[chart].hibernated++;
 }

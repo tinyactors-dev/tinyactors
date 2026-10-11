@@ -305,8 +305,9 @@ typedef struct ta_actor_info {
 /* Watch an actor (on: 1) or stop (0): when a watched actor finishes its
  * next macrostep, a TA_EFFECT_CHANGED is emitted and the watch ends, so an
  * actor costs one effect per watch however many macrosteps it runs. Watch it
- * again for the next. Unwatched actors cost nothing. TA_ERROR_STALE for an
- * actor that is gone or hibernated. */
+ * again for the next. Hibernating the actor ends its watch too; waking it
+ * does not bring the watch back. Unwatched actors cost nothing.
+ * TA_ERROR_STALE for an actor that is gone or hibernated. */
 TA_API ta_status ta_actor_watch(ta_system *system, uint32_t actor, uint32_t on);
 /* Set out->size first (sizeof(ta_actor_info)); exactly that much is written. */
 TA_API ta_status ta_actor_info_get(const ta_system *system, uint32_t actor, ta_actor_info *out);

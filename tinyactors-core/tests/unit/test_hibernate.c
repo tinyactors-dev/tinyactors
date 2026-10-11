@@ -10,6 +10,7 @@
 /* Run until idle; record which actors asked to be woken. */
 static uint32_t wakes[64];
 static int wakes_seen;
+static int changed_seen; /* TA_EFFECT_CHANGED (ta_actor_watch) */
 
 static void drain_all(test_system *t) {
     const ta_effect *effect;
@@ -18,6 +19,7 @@ static void drain_all(test_system *t) {
         if (effect[i].kind == TA_EFFECT_WAKE && wakes_seen < 64)
             wakes[wakes_seen++] = effect[i].actor;
         if (effect[i].kind == TA_EFFECT_LOG) tsys_drain_one(t, &effect[i]);
+        if (effect[i].kind == TA_EFFECT_CHANGED) changed_seen++;
         if (effect[i].kind < 8) t->effect_count[effect[i].kind]++;
     }
     ta_system_effects_ack(t->system, n);
@@ -147,6 +149,35 @@ static void test_roundtrip_and_single_wake(void) {
     /* finalizing with a hibernated actor and a pending wake leaks nothing */
     hibernate(&t, a, &status);
     CHECK_EQUAL(tsys_send(&t, a, "ping", NULL), TA_OK);
+    tsys_free(&t);
+}
+
+/* A watch ends when the actor hibernates: waking it does not bring back a
+ * watch its host may have dropped meanwhile (docs/requests.md,
+ * actor.subscribe); the host watches it again before its next run. */
+static void test_watch_ends_with_hibernation(void) {
+    test_system t;
+    CHECK(tsys_init(&t,
+                    NULLSC("initial='a'><state id='a'><transition event='ping'>"
+                           "<log expr=\"'pong'\"/></transition></state>"),
+                    NULL, NULL));
+    CHECK_EQUAL(ta_system_boot(t.system), TA_OK);
+    uint32_t a = tsys_actor(&t, "main.scxml");
+    run_all(&t);
+    changed_seen = 0;
+    CHECK_EQUAL(ta_actor_watch(t.system, a, 1), TA_OK);
+    ta_status status;
+    size_t length = hibernate(&t, a, &status);
+    CHECK_EQUAL(status, TA_OK);
+    CHECK_EQUAL(ta_actor_watch(t.system, a, 1), TA_ERROR_STALE); /* hibernated */
+    CHECK_EQUAL(ta_actor_wake(t.system, a, (ta_bytes){blob, length}), TA_OK);
+    CHECK_EQUAL(tsys_send(&t, a, "ping", NULL), TA_OK);
+    run_all(&t);
+    CHECK_EQUAL(changed_seen, 0); /* the watch did not survive */
+    CHECK_EQUAL(ta_actor_watch(t.system, a, 1), TA_OK);
+    CHECK_EQUAL(tsys_send(&t, a, "ping", NULL), TA_OK);
+    run_all(&t);
+    CHECK_EQUAL(changed_seen, 1); /* watched again */
     tsys_free(&t);
 }
 
@@ -425,6 +456,7 @@ static void test_ecmascript_unsupported(void) {
 
 int main(void) {
     RUN(test_roundtrip_and_single_wake);
+    RUN(test_watch_ends_with_hibernation);
     RUN(test_timer_wakes_actor);
     RUN(test_children_cancel_terminate);
     RUN(test_error_communication_order);

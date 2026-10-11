@@ -44,11 +44,13 @@ typedef struct world {
     uint64_t session;
 } world;
 
-/* encoder: give the host an OTLP encoder */
-static void world_open(world *w, int encoder) {
+/* encoder: give the host an OTLP encoder; vtable: the ECMAScript datamodel's
+ * entries as given (NULL: as they are) */
+static void world_open(world *w, int encoder, const ta_datamodel_vtable *vtable) {
     memset(w, 0, sizeof *w);
     w->ecmascript = ta_datamodel_ecmascript_new(NULL);
     w->binding = ta_datamodel_ecmascript_binding(w->ecmascript);
+    if (vtable) w->binding.vtable = vtable;
     test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
@@ -116,7 +118,7 @@ static int reply_is(const char *got, const char *expected) {
 
 static void test_refused_requests(void) {
     world w;
-    world_open(&w, 0);
+    world_open(&w, 0, NULL);
     CHECK(reply_is(RAW(&w, "\xff"), ERROR("-32700", "malformed", "",
                                          "the request is not one well-formed CBOR item")));
     CHECK(reply_is(RAW(&w, "\x01"), ERROR("-32600", "type", "", "a request is a map")));
@@ -151,7 +153,7 @@ static void test_refused_requests(void) {
 
 static void test_stats_actors_actor_state(void) {
     world w;
-    world_open(&w, 0);
+    world_open(&w, 0, NULL);
     settle(&w);
     static host_ask a;
     ask_begin(&a, "stats", 0);
@@ -203,7 +205,7 @@ static void test_stats_actors_actor_state(void) {
 
 static void test_trace_configure_and_watch(void) {
     world w;
-    world_open(&w, 0);
+    world_open(&w, 0, NULL);
     static host_ask a;
     ta_cbor_writer *writer = ask_begin(&a, "trace.configure", 2);
     ta_cbor_write_text(writer, ta_string("detail"));
@@ -268,7 +270,7 @@ static void test_trace_configure_and_watch(void) {
 
 static void test_spans_and_metrics(void) {
     world w;
-    world_open(&w, 1);
+    world_open(&w, 1, NULL);
     settle(&w);
     static unsigned char traces[1 << 16];
     ta_buffer out = {traces, sizeof traces, 0};
@@ -315,7 +317,7 @@ static void test_spans_and_metrics(void) {
     CHECK_EQUAL(ta_host_metrics(w.host, &metrics), TA_OK); /* again: counted anew */
     CHECK(metrics.length > 0);
     world_close(&w);
-    world_open(&w, 0);
+    world_open(&w, 0, NULL);
     metrics = (ta_buffer){metric_bytes, sizeof metric_bytes, 0};
     CHECK_EQUAL(ta_host_metrics(w.host, &metrics), TA_ERROR_STATE); /* no encoder */
     world_close(&w);
@@ -323,7 +325,7 @@ static void test_spans_and_metrics(void) {
 
 static void test_actor_context(void) {
     world w;
-    world_open(&w, 0);
+    world_open(&w, 0, NULL);
     settle(&w);
     static host_ask a;
     ta_cbor_writer *writer = ask_begin(&a, "actor.context", 1);
@@ -355,6 +357,32 @@ static void test_actor_context(void) {
     ask_begin(&a, "actor.context", 0);
     CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
     CHECK(reply_is(a.text, ERROR("-32602", "missing", "params.session", "session is the actor's session id")));
+    /* hibernated: wake it first */
+    static unsigned char blob[1 << 16];
+    ta_buffer hibernated = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
+    writer = ask_begin(&a, "actor.context", 1);
+    ta_cbor_write_text(writer, ta_string("session"));
+    ta_cbor_write_uint(writer, w.session);
+    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
+    CHECK(reply_is(a.text, ERROR("-32002", "state", "params.session", "the actor is hibernated: wake it first")));
+    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, hibernated.length}), TA_OK);
+    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
+    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":2,\"who\":\"bob\",\"nothing\":null}}")));
+    world_close(&w);
+
+    /* a datamodel that does not show its variables (no `variable` entry) */
+    static ta_datamodel_vtable hidden;
+    hidden = *ta_datamodel_ecmascript_vtable();
+    hidden.variable = NULL;
+    world_open(&w, 0, &hidden);
+    settle(&w);
+    writer = ask_begin(&a, "actor.context", 1);
+    ta_cbor_write_text(writer, ta_string("session"));
+    ta_cbor_write_uint(writer, w.session);
+    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
+    CHECK(reply_is(a.text, ERROR("-32002", "state", "params.session",
+                                 "the actor's datamodel does not show its variables")));
     world_close(&w);
 }
 
@@ -392,7 +420,7 @@ static const char *subscription(world *w, const char *method, uint64_t session) 
 
 static void test_subscribe(void) {
     world w;
-    world_open(&w, 0);
+    world_open(&w, 0, NULL);
     settle(&w);
     ta_spawn spawn;
     memset(&spawn, 0, sizeof spawn);
@@ -422,6 +450,23 @@ static void test_subscribe(void) {
     CHECK_EQUAL(changed(&w, w.session), 0u);
     CHECK(reply_is(subscription(&w, "actor.unsubscribe", w.session),
                    ERROR("-32001", "stale", "params.session", "the session is not subscribed")));
+
+    /* across hibernation: the subscription is the host's, the watch the actor's */
+    static unsigned char blob[1 << 16];
+    ta_buffer hibernated = {blob, sizeof blob, 0};
+    CHECK(reply_is(subscription(&w, "actor.subscribe", w.session), RESULT("{}")));
+    CHECK_EQUAL(changed(&w, w.session), 0u); /* armed, nothing ran */
+    CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
+    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, hibernated.length}), TA_OK);
+    ping(&w, w.session);
+    CHECK_EQUAL(changed(&w, w.session), 1u); /* still subscribed: watched again */
+    hibernated = (ta_buffer){blob, sizeof blob, 0};
+    CHECK_EQUAL(changed(&w, w.session), 0u); /* armed again */
+    CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
+    CHECK(reply_is(subscription(&w, "actor.unsubscribe", w.session), RESULT("{}")));
+    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, hibernated.length}), TA_OK);
+    ping(&w, w.session);
+    CHECK_EQUAL(changed(&w, w.session), 0u); /* unsubscribed while hibernated: no watch woke */
     world_close(&w);
 }
 

@@ -212,6 +212,13 @@ sessions cost nothing. Subscribing twice is one subscription; a session that
 ends leaves the list. `actor.unsubscribe` stops it. Param: `session` (uint,
 required). Result: `{}`.
 
+Hibernation does not end a subscription. The subscription is the host's;
+what makes the effect is a watch on the actor, which the host sets again
+before every run and which ends when the actor hibernates. So a hibernated
+session can be subscribed and unsubscribed; once woken, it gets `CHANGED`
+effects from its next run on if it is still subscribed then, and none if it
+is not.
+
 Errors: `missing`, `type`, `stale` (subscribe: no such session;
 unsubscribe: not subscribed), `limit` (-32003: the host holds
 `maxSubscriptions`, 64 by default).
