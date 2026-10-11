@@ -201,7 +201,15 @@ typedef struct {
     uint8_t mutate_path;
     uint8_t append;        /* MUTATION: K_ASSIGN: the matcher reported APPEND */
     uint32_t reads;        /* MUTATION: K_ASSIGN: its root's binding.reads at ASSIGN */
+    /* MUTATION: K_CALL of Object.assign: AT_* (assign_argument), and where
+     * its first argument's code starts. */
+    uint8_t assigns;
+    uint32_t target_pc;
 } construct;
+
+/* MUTATION: construct.assigns: a call of Object.assign before its first
+ * argument ends, and one whose first argument is a variable it changes. */
+enum { AT_NONE = 0, AT_PENDING, AT_VARIABLE };
 
 /* An array or object pattern being compiled. An object pattern keeps its
  * keys, for a rest element to leave out: the constants of the static ones,
@@ -1985,6 +1993,32 @@ static sjs_result object_end(sjs_compiler *c, const sjs_event *e) {
  * Events
  */
 
+/* MUTATION: the variable `read` read just before, the receiver of a
+ * mutation, if the function owns it: its read becomes a RECEIVER. Refused
+ * when the variable is a global, an import or a capture, or was copied,
+ * passed or stored before (false). */
+static bool claim_receiver(sjs_compiler *c, const name_read *read) {
+    if (read->kind == NR_GLOBAL) {
+        refuse_later(c, read->at, (refusal){ "staticjs changes only a value a variable of the function holds, and this is a global", c->globals[read->which] });
+        return false;
+    }
+    sjs_str name = binding_name(c, read->which);
+    if (read->kind == NR_IMPORT) {
+        refuse_later(c, read->at, (refusal){ "staticjs changes only a value a variable of the function holds, and this is an import", name });
+        return false;
+    }
+    binding *b = &SJS_BUF_AT(c->bindings, binding, read->which);
+    const char *why = read->kind == NR_CAPTURE ? refused_captured : refused_use(b->use);
+    if (why != NULL) {
+        refuse_later(c, read->at, (refusal){ why, name });
+        return false;
+    }
+    b->use |= USE_MUTATED;
+    b->changed_at = read->pc + 1u;
+    c->code.ptr[read->pc] = SJS_OP_RECEIVER;
+    return true;
+}
+
 /* MUTATION: `x.m(` where m names a method that changes its receiver
  * (sjs_mutation_of), the GET_MEMBER of m at c->last_op. A mutation when x
  * is a variable this function owns, read just before, or the value a
@@ -2000,24 +2034,7 @@ static bool mutation_begin(sjs_compiler *c, construct *k) {
     const name_read *read = &c->last_name;
     const mutation_site *chain = &c->last_mutation;
     if (read->end == member && c->last_label <= read->pc && read->kind != NR_NONE) {
-        if (read->kind == NR_GLOBAL) {
-            refuse_later(c, read->at, (refusal){ "staticjs changes only a value a variable of the function holds, and this is a global", c->globals[read->which] });
-            return false;
-        }
-        sjs_str name = binding_name(c, read->which);
-        if (read->kind == NR_IMPORT) {
-            refuse_later(c, read->at, (refusal){ "staticjs changes only a value a variable of the function holds, and this is an import", name });
-            return false;
-        }
-        binding *b = &SJS_BUF_AT(c->bindings, binding, read->which);
-        const char *why = read->kind == NR_CAPTURE ? refused_captured : refused_use(b->use);
-        if (why != NULL) {
-            refuse_later(c, read->at, (refusal){ why, name });
-            return false;
-        }
-        b->use |= USE_MUTATED;
-        b->changed_at = read->pc + 1u;
-        c->code.ptr[read->pc] = SJS_OP_RECEIVER;
+        if (!claim_receiver(c, read)) return false;
         k->receiver = read->which;
     } else if (chain->end == member && c->last_label <= chain->pc && chain->returns && chain->keys == 0) { /* MUTATION: keys, a path's chain is its own */
         /* The receiver goes on as the reference it was. */
@@ -2053,6 +2070,49 @@ static sjs_result mutation_end(sjs_compiler *c, const construct *k, const sjs_ev
     c->last_mutation = (mutation_site){ pc, here(c), k->receiver, k->returns, 0, 0 }; /* MUTATION: no keys */
     forget_read(c, current(c)->function_scope, SJS_BUF_AT(c->bindings, binding, k->receiver).index);
     if (k->returns) c->pending_read = k->receiver + 1u;
+    return SJS_OK;
+}
+
+/* MUTATION: Object.assign(x, ...sources) where x is a variable the
+ * function owns, read as the whole first argument (docs/mutation.md,
+ * "Object.assign"): the read becomes a RECEIVER, by the rules of a
+ * mutation, and the call an OBJECT_ASSIGN after the sources, which changes
+ * the variable's object in place. Any other first argument is an ordinary
+ * call's, which changes nothing a program can see (assign_call). CALL_BEGIN
+ * notes a callee that is Object.assign's constant; its first ARGUMENT (or
+ * SPREAD_ARGUMENT) decides, before note_use would count the read as passed. */
+static bool assign_callee(const sjs_compiler *c) {
+    if (!c->last_op_valid || c->last_label > c->last_op || c->code.ptr[c->last_op] != SJS_OP_CONSTANT) return false;
+    sjs_value v = SJS_BUF_AT(c->constants, sjs_value, sjs_read32(c->code.ptr + c->last_op + 1u));
+    return v.kind == SJS_FUNCTION && v.as.heap == sjs_builtin_value(SJS_BUILTIN_OBJECT_ASSIGN).as.heap;
+}
+
+static void assign_argument(sjs_compiler *c, const sjs_event *e) {
+    construct *k = top_construct(c);
+    if (k == NULL || k->kind != K_CALL || k->assigns != AT_PENDING) return;
+    k->assigns = AT_NONE;
+    const name_read *read = &c->last_name;
+    if (e->kind != SJS_EV_ARGUMENT || read->pc != k->target_pc || read->end != here(c) || c->last_label > read->pc ||
+        read->kind == NR_NONE || !claim_receiver(c, read)) {
+        return;
+    }
+    k->assigns = AT_VARIABLE;
+    k->receiver = read->which;
+    c->pending_read = 0;
+}
+
+/* OBJECT_ASSIGN, after the sources. As mutation_end: no read among them
+ * moves the variable's value, and the copy of it the call gives is a read
+ * whose use the next event tells. */
+static sjs_result object_assign_end(sjs_compiler *c, const construct *k, const sjs_event *e) {
+    if (op(c, SJS_OP_OBJECT_ASSIGN, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    uint32_t pc = c->last_op;
+    if (u16(c, (uint16_t)(e->count - 1u)) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (u8(c, k->spread ? SJS_CALL_SPREAD : 0u) != SJS_OK) return SJS_ERR_PROGRAM;
+    c->last_op_valid = false;
+    c->last_mutation = (mutation_site){ pc, here(c), k->receiver, 0, 0, 0 };
+    forget_read(c, current(c)->function_scope, SJS_BUF_AT(c->bindings, binding, k->receiver).index);
+    c->pending_read = k->receiver + 1u;
     return SJS_OK;
 }
 
@@ -2179,6 +2239,11 @@ static sjs_result call_begin(sjs_compiler *c, const sjs_event *e) {
     k.held = c->call_holds_path ? 1u : 0u;
     c->call_holds_path = false;
     if (k.held && top_path(c)->root.kind == NR_OWN) k.root_use = SJS_BUF_AT(c->bindings, binding, top_path(c)->root.which).use;
+    /* MUTATION: Object.assign, whose first argument may be a variable it changes. */
+    if (assign_callee(c)) {
+        k.assigns = AT_PENDING;
+        k.target_pc = here(c);
+    }
     /* `a.b(...)` and `a[b](...)` call with a receiver. */
     if (c->last_op_valid && c->last_label <= c->last_op) {
         uint8_t *last = c->code.ptr + c->last_op;
@@ -2202,6 +2267,7 @@ static sjs_result call_end(sjs_compiler *c, const sjs_event *e, uint8_t opcode) 
     construct k = pop_construct(c);
     if (e->count > UINT16_MAX) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_LIMIT, "a call has too many arguments" });
     if (k.mutate) return mutation_end(c, &k, e); /* MUTATION */
+    if (k.assigns == AT_VARIABLE) return object_assign_end(c, &k, e); /* MUTATION: Object.assign */
     if (k.held || k.mutate_path) { /* MUTATION: a method called on a path */
         sjs_result r = path_mutation_end(c, &k, e);
         if (r != SJS_OK || k.mutate_path) return r;
@@ -2697,6 +2763,7 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
         if (value_constant(c, sjs_builtin_value(id), &index) != SJS_OK) return compile_fail(c, c->space_at, (sjs_problem){ SJS_ERROR_MEMORY, "out of memory" });
         if (op32(c, ins(SJS_OP_CONSTANT, index, c->space_at)) != SJS_OK) return SJS_ERR_PROGRAM;
     }
+    if (e->kind == SJS_EV_ARGUMENT || e->kind == SJS_EV_SPREAD_ARGUMENT) assign_argument(c, e); /* MUTATION: Object.assign */
     if (c->pending_read != 0) note_use(c, e->kind); /* MUTATION */
     if (c->paths.length != 0) paths_before(c, e); /* MUTATION */
     if (c->space != NS_NONE && e->kind != SJS_EV_MEMBER) {

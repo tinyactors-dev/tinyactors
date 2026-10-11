@@ -1095,6 +1095,21 @@ sjs_result sjs_map_copy(sjs_context *context, const sjs_array *map, sjs_array **
     return SJS_OK;
 }
 
+sjs_result sjs_object_copy(sjs_context *context, const sjs_object *object, sjs_object **out) {
+    const sjs_object *o = object;
+    sjs_result r = object_alloc(context, o->count < 4u ? 4u : o->count, out);
+    if (r != SJS_OK) return r;
+    sjs_object *c = *out;
+    for (uint32_t i = 0; i < o->count; i++) {
+        sjs_ref(sjs_heap_value(SJS_STRING, &o->entries[i].key->h));
+        sjs_ref(o->entries[i].value);
+        c->entries[i] = o->entries[i];
+    }
+    c->count = o->count;
+    if (c->count >= SJS_INDEX_FROM) lookup_build(context, &c->h);
+    return SJS_OK;
+}
+
 sjs_result sjs_map_new(sjs_context *context, uint32_t capacity, sjs_value *out) {
     if (context == NULL || out == NULL) return SJS_ERR_INVALID;
     sjs_array *a;

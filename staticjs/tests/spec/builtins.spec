@@ -1111,3 +1111,172 @@ Object.hasOwn({a: 1}, ["a"])
 === Object.hasOwn faults on an object key even on a number
 Object.hasOwn(1, {})
 --- fault a key must be a primitive
+
+# Object.assign called as any function is: its target is not a variable the
+# function owns (that is a mutation, in mutation.spec), so it must be a
+# value nothing else holds, which no program can see change. Faults where
+# JavaScript would wrap a primitive target, or put into an array, a map or a
+# function, or change a target something else holds (Node gives a value
+# there).
+
+=== Object.assign into a new object
+Object.assign({}, {a: 1}, {b: 2})
+--- value
+{"a":1,"b":2}
+
+=== Object.assign with no sources gives its target
+[Object.assign({}), Object.assign({a: 1}), Object.assign([1, 2]), Object.assign(new Set([1])), Object.assign(new Map([[1, 2]]))]
+--- value
+[{},{"a":1},[1,2],new Set([1]),new Map([[1,2]])]
+
+=== Object.assign with sources that put nothing gives its target
+[Object.assign({a: 1}, null, undefined, 5, true, 1n, ""), Object.assign([1], {}, []), Object.assign(new Set([1]), null)]
+--- value
+[{"a":1},[1],new Set([1])]
+
+=== Object.assign overwrites in source order, a key keeping its place
+Object.assign({a: 1, b: 2}, {b: 3, c: 4}, {a: 5}, {d: 6, c: 7})
+--- value
+{"a":5,"b":3,"c":7,"d":6}
+
+=== Object.assign puts array-index keys first, ascending
+[Object.assign({b: 1}, {2: "x", a: 2, 1: "y"}), Object.assign({10: 1, z: 2}, {9: 3, 100: 4, y: 5}), Object.keys(Object.assign({b: 1, a: 2}, {"01": 0, 0: 1}))]
+--- value
+[{"1":"y","2":"x","b":1,"a":2},{"9":3,"10":1,"100":4,"z":2,"y":5},["0","b","a","01"]]
+
+=== Object.assign skips null and undefined sources and puts nothing for numbers, booleans and BigInts
+Object.assign({}, null, {a: 1}, undefined, 2, false, 3n, {b: 2})
+--- value
+{"a":1,"b":2}
+
+=== Object.assign of a string source puts its characters
+[Object.assign({}, "ab"), Object.assign({x: 1}, "", "é!"), Object.assign({0: "z", 5: "q"}, "abc")]
+--- value
+[{"0":"a","1":"b"},{"0":"é","1":"!","x":1},{"0":"a","1":"b","2":"c","5":"q"}]
+
+=== Object.assign of an array source puts its indices, not its length
+[Object.assign({}, ["a", "b"]), Object.assign({length: 5}, [1]), Object.assign({1: "x", k: 0}, [], [true, null, undefined])]
+--- value
+[{"0":"a","1":"b"},{"0":1,"length":5},{"0":true,"1":null,"2":undefined,"k":0}]
+
+=== Object.assign of sets, maps, functions, regular expressions and iterators puts nothing
+Object.assign({k: 1}, new Map([["a", 1]]), new Set([1]), x => x, Math.max, /a/g, new Map([["a", 1]]).keys())
+--- value
+{"k":1}
+
+=== Object.assign keeps nested values
+(o => [o, o.a.b])(Object.assign({}, {a: {b: [1, {c: 2}]}}, {d: [3]}))
+--- value
+[{"a":{"b":[1,{"c":2}]},"d":[3]},[1,{"c":2}]]
+
+=== Object.assign of many sources
+Object.assign({}, {a: 1}, {b: 2}, {c: 3}, {d: 4}, {e: 5}, {f: 6}, {g: 7}, {h: 8}, {i: 9}, {j: 10}, {a: 11}, {k: 12})
+--- value
+{"a":11,"b":2,"c":3,"d":4,"e":5,"f":6,"g":7,"h":8,"i":9,"j":10,"k":12}
+
+=== Object.assign into a large object, through its index
+(o => [o.k3, o.k12, o.k20, Object.keys(o)])(Object.assign(Object.fromEntries([["k1", 1], ["k2", 2], ["k3", 3], ["k4", 4], ["k5", 5], ["k6", 6], ["k7", 7], ["k8", 8], ["k9", 9], ["k10", 10], ["k11", 11], ["k12", 12]]), {k3: "c", k20: 20, 7: "seven", k12: "l"}))
+--- value
+["c","l",20,["7","k1","k2","k3","k4","k5","k6","k7","k8","k9","k10","k11","k12","k20"]]
+
+=== Object.assign from a large source
+Object.assign({z: 0, k5: "old"}, Object.fromEntries([["k1", 1], ["k2", 2], ["k3", 3], ["k4", 4], ["k5", 5], ["k6", 6], ["k7", 7], ["k8", 8], ["k9", 9], ["k10", 10]]))
+--- value
+{"z":0,"k5":5,"k1":1,"k2":2,"k3":3,"k4":4,"k6":6,"k7":7,"k8":8,"k9":9,"k10":10}
+
+=== Object.assign with spread sources
+Object.assign({}, ...[{a: 1}, {b: 2}], {c: 3}, ...[])
+--- value
+{"a":1,"b":2,"c":3}
+
+=== Object.assign with spread arguments, the target among them
+Object.assign(...[{a: 1}, {b: 2}])
+--- value
+{"a":1,"b":2}
+
+=== Object.assign into what a function returns
+Object.assign((() => ({a: 1}))(), {b: 2})
+--- value
+{"a":1,"b":2}
+
+=== Object.assign leaves its sources as they were
+(a => [Object.assign({}, a, {x: 2}), a])({x: 1, y: [1]})
+--- value
+[{"x":2,"y":[1]},{"x":1,"y":[1]}]
+
+=== Object.assign of an object holding undefined and -0
+Object.assign({a: 1}, {a: undefined, b: -0, c: NaN})
+--- value
+{"a":undefined,"b":-0,"c":NaN}
+
+=== Object.assign in map, each target new
+[{a: 1}, {a: 2}].map(x => Object.assign({}, x, {b: x.a * 2}))
+--- value
+[{"a":1,"b":2},{"a":2,"b":4}]
+
+=== Object.assign as a value
+(f => f({}, {a: 1}))(Object.assign)
+--- value
+{"a":1}
+
+=== Object.assign of non-ASCII keys and values
+Object.assign({"ключ": 1}, {"é": "ü", "ключ": "значение", "😀": "x"})
+--- value
+{"ключ":"значение","é":"ü","😀":"x"}
+
+=== Object.assign faults on an undefined target
+Object.assign(undefined, {a: 1})
+--- fault takes an object as its target
+
+=== Object.assign faults on a null target
+Object.assign(null)
+--- fault takes an object as its target
+
+=== Object.assign faults with no arguments
+Object.assign()
+--- fault takes an object as its target
+
+=== Object.assign faults on a number target, which JavaScript wraps
+Object.assign(1, {a: 1})
+--- fault takes an object as its target
+
+=== Object.assign faults on a string target, even with nothing to put
+Object.assign("ab")
+--- fault takes an object as its target
+
+=== Object.assign faults on an array target with something to put
+Object.assign([1, 2], [3])
+--- fault puts properties only into an object
+
+=== Object.assign faults on a map target with something to put
+Object.assign(new Map(), {a: 1})
+--- fault puts properties only into an object
+
+=== Object.assign faults on a function target with something to put
+Object.assign(x => x, {a: 1}).a
+--- fault puts properties only into an object
+
+=== Object.assign into a member of an object nothing else holds
+(o => Object.assign(o.inner, {a: 1}))({inner: {}})
+--- value
+{"a":1}
+
+=== Object.assign faults on a target something else holds
+(o => [Object.assign(o.inner, {a: 1}), o])({inner: {}})
+--- fault something else holds this one
+
+=== Object.assign through a value faults on a target a callback's array holds
+[{a: 1}].map(x => (f => f(x, {b: 2}))(Object.assign))
+--- fault something else holds this one
+
+=== Object.assign faults on a match result as a source
+Object.assign({}, "ab".match(/b/))
+--- fault properties besides its elements
+
+=== Object.assign faults on a character outside the BMP
+Object.assign({}, "a😀")
+--- fault half of a character outside the BMP
+
+=== Object.assign faults on a __proto__ key from JSON.parse
+Object.assign({}, JSON.parse('{"__proto__": {"a": 1}}'))
+--- fault JSON.parse would make an object with the key __proto__

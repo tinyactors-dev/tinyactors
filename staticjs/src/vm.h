@@ -199,6 +199,14 @@ typedef struct {
     uint32_t count;
 } sjs_values;
 
+/* Object.assign: does any of its sources have a property to put? */
+bool sjs_assign_puts(sjs_values sources);
+/* Object.assign's sources put, in order, into the object at `*target`,
+ * which the caller holds alone and which may move: a key the object has
+ * keeps its place, a new one goes in as a put does. A unit of fuel per
+ * property. */
+sjs_result sjs_vm_object_assign(sjs_vm *vm, sjs_value *target, sjs_values sources);
+
 /* Call a loop's callback with `args` (borrowed). A closure runs in a frame
  * kept for the whole loop, its arguments written into its parameters; a
  * built-in or a native is called as any call is, its result on top. False on

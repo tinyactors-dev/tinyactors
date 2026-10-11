@@ -31,8 +31,10 @@ variable (`o.items.push(x)`, `s.byID[k].tags.add(t)`), which the shape
 rules recognise and the compiler rewrites into the path machinery of step
 2 ("Methods through a path", below); appending to a `let` (`s += x`),
 whose value moves to the `+`, which extends a string nothing else holds
-("Appending to a let", below); and a map's `set`, `delete` and `clear`,
-on a variable or a path, by the same rules (README.md, "Maps").
+("Appending to a let", below); a map's `set`, `delete` and `clear`,
+on a variable or a path, by the same rules (README.md, "Maps"); and
+`Object.assign(x, ...sources)` of such a variable ("Object.assign",
+below).
 
 ## The methods
 
@@ -479,6 +481,61 @@ o.a[k].push(x)    RECEIVER o, CONSTANT "a", <k> PATH_INDEX, PATH_METHOD "push", 
 o.a.sort(f)       RECEIVER o, CONSTANT "a", PATH_METHOD "sort", <f>, PATH_CALL 1, 1, PATH_SORTED 1
 ```
 
+## Object.assign
+
+`Object.assign(target, ...sources)` puts each source's own enumerable
+properties into its target and returns the target itself. It is a function,
+not a method, so its target is its first argument:
+
+- **A variable the function owns** (`Object.assign(o, a, b)`, the whole
+  first argument a name): a mutation of it, by the rules above. The
+  compiler refuses a global, an import, a capture (before or after) and a
+  variable copied, passed or stored before, with step 1's messages; the read
+  of the variable becomes a RECEIVER, which holds nothing, and the call an
+  `OBJECT_ASSIGN` after the sources, which puts them into the slot's object
+  in place. Such a call may be a statement. It gives a copy of the
+  variable's value, as a method that returns its receiver does, so
+  `const r = Object.assign(o, x)` copies `o`, and a later mutation of `o` is
+  refused. A reduce's accumulator is one: `(acc, x) => Object.assign(acc,
+  x)` changes the accumulator the callback holds alone.
+- **Any other target** (`Object.assign({}, a, b)`, `Object.assign(f(), a)`,
+  `Object.assign(o.inner, a)`, or the function called through a value): an
+  ordinary call, which needs a target that nothing else holds
+  (`sjs_value_unique`), and gives a copy of it with the sources put. Nothing
+  else can see that target, so no program can tell the copy from the
+  target changed. That part is not mutation: it changes nothing a program
+  can see. A target something else holds faults ("something else holds
+  this one"). As a statement it is refused, as any call that changes no
+  variable is.
+
+**Semantics**, as Node's: the sources in order, a later one's key replacing
+an earlier one's value in its place and a new key going in as a put does
+(array indices first, ascending, then the others in insertion order, as
+JavaScript orders an object's keys); `null` and `undefined` sources are
+skipped, and a number, a boolean, a BigInt, a set, a map, an iterator, a
+function and a regular expression put nothing (none has own enumerable
+properties); an array puts its indices, not its length; a string its
+characters by UTF-16 index. Values are shared, not copied: after the call
+the target and the source hold the same nested values, which are then held
+twice, so changing one in place faults ("held elsewhere"), while a new
+value assigned to the target's key leaves the source as it was.
+
+**Faults when it runs**, where Node gives a value: a primitive target
+(JavaScript makes an object of it), even with nothing to put; with
+something to put, a target that is not an object (an array, a map, a set, a
+function: staticjs puts properties only into an object), a variable's value
+held elsewhere too (`Object.assign(o, o)`, `Object.assign(o, {self: o})`,
+a parameter whose argument the caller still holds); a match result as a
+source, whose index, input and groups a put would need
+(`sjs_array_extra_fault`); and a string source with a character outside the
+BMP, whose halves a staticjs string cannot hold. With nothing to put
+(no sources, or only ones that put nothing), the target is given as it is,
+whatever holds it. No object holds the key `__proto__`, whose setter
+JavaScript's assign would call (`object_spread` in `src/vm.c` says why).
+
+Fuel: a unit per property put, and for an ordinary call a unit per key of
+the target it copies.
+
 ## Removal
 
 Removing an item from a set or an object, and shrinking a container that
@@ -687,6 +744,21 @@ A map's `set`, `delete` and `clear`:
 | `src/shapes.rules` | `chaining() <- MEMBER{key: "set"}` (`mise run shapes` rewrites `src/shapes_table.h`) |
 | `tests/api_test.c` | `test_mutation_map_removal`, `test_mutation_map_removal_out_of_memory` |
 | `bench/bench.c` | `eval.map.set-reduce`, `CHECK_MAP_N` |
+
+Object.assign of a variable:
+
+| File | What is tagged |
+|---|---|
+| `src/internal.h` | `SJS_OP_OBJECT_ASSIGN` |
+| `src/compiler.c` | `construct.assigns` and `.target_pc`, and `AT_*`; `claim_receiver`, split out of `mutation_begin` (restore its body there); `assign_callee` to `object_assign_end`, and their lines in `call_begin`, `call_end` and `event()` |
+| `src/vm.c` | `assign_variable`, and its case in `execute_other` |
+
+Without them, `Object.assign` of a variable is an ordinary call, which
+faults when it has something to put, as the variable holds the target too.
+`Object.assign` itself (`assign_call` in `src/builtins.c`), the puts at the
+end of `src/vm.c` (`sjs_vm_object_assign`, `sjs_assign_puts`) and
+`sjs_object_copy` are not mutation, and stay; so do its cases in
+`tests/spec/builtins.spec`.
 
 The rest of maps (values, `new Map`, `get`, `has`, `size`, iteration,
 `forEach`, `Map.groupBy`) is not mutation, and stays.

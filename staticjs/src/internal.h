@@ -409,6 +409,8 @@ const sjs_value *sjs_map_find(const sjs_array *map, sjs_value key);
 sjs_result sjs_map_put(sjs_context *context, sjs_array **map, const sjs_map_entry *entry);
 /* A copy of a map, its index rebuilt. */
 sjs_result sjs_map_copy(sjs_context *context, const sjs_array *map, sjs_array **out);
+/* A copy of an object, its index rebuilt. */
+sjs_result sjs_object_copy(sjs_context *context, const sjs_object *object, sjs_object **out);
 /* MUTATION: removal from a set or an object the caller holds alone, which
  * may move as it shrinks (value.c, "removal"): whether the item was there,
  * and the fuel the removal costs. */
@@ -552,6 +554,7 @@ typedef enum {
     SJS_BUILTIN_OBJECT_FROM_ENTRIES,
     SJS_BUILTIN_OBJECT_GROUP_BY,
     SJS_BUILTIN_OBJECT_HAS_OWN,
+    SJS_BUILTIN_OBJECT_ASSIGN,
     SJS_BUILTIN_NUMBER_IS_INTEGER,
     SJS_BUILTIN_NUMBER_IS_SAFE_INTEGER,
     SJS_BUILTIN_NUMBER_IS_FINITE,
@@ -844,6 +847,11 @@ typedef enum {
     SJS_OP_PATH_SORTED,    /* u16 n, u8 flags (CHAIN): after a PATH_CALL of sort, [reference,
                             * n keys, sorted] the sorted array back in its place; then as
                             * PATH_CALL gives it */
+    /* MUTATION: Object.assign of a variable the function owns
+     * (docs/mutation.md, "Object.assign"). */
+    SJS_OP_OBJECT_ASSIGN,  /* u16 argc, u8 flags (SPREAD): [callee, reference, argc sources]
+                            * put into the slot's object, held by the slot alone; then a
+                            * copy of the slot's value */
     /* Not mutation: maps, which execute()'s default case reaches as it does
      * mutation's instructions, so that the evaluator's loop compiles as it
      * did. */
