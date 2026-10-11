@@ -4111,3 +4111,9 @@ new Map().set(1, 2)
 === Object.assign of a variable whose nested value the source holds
 (() => { const p = { x: [1] }; const o = {}; Object.assign(o, p); o.x.push(2); return [o, p]; })()
 --- fault staticjs changes a value only while
+
+# JavaScript gives {"a":1,"b":2}: the inner call gives a copy of o, which o
+# still holds, so the outer call's target is held twice.
+=== Object.assign of the result of Object.assign on a variable faults
+(() => { const o = {}; return Object.assign(Object.assign(o, { a: 1 }), { b: 2 }); })()
+--- fault something else holds this one

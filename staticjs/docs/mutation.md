@@ -525,7 +525,9 @@ value assigned to the target's key leaves the source as it was.
 something to put, a target that is not an object (an array, a map, a set, a
 function: staticjs puts properties only into an object), a variable's value
 held elsewhere too (`Object.assign(o, o)`, `Object.assign(o, {self: o})`,
-a parameter whose argument the caller still holds); a match result as a
+a parameter whose argument the caller still holds), and so a nested call
+whose target is the copy an inner call on a variable gives
+(`Object.assign(Object.assign(o, a), b)`: `o` still holds the value); a match result as a
 source, whose index, input and groups a put would need
 (`sjs_array_extra_fault`); and a string source with a character outside the
 BMP, whose halves a staticjs string cannot hold. With nothing to put
