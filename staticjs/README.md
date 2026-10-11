@@ -27,7 +27,10 @@ through `Math.sqrt` and `Math.fround`; argument lists through `Math.hypot`;
 and pairs through `Math.clz32` and `Math.imul`; and BigInts of 1 to 20
 limbs through `+ - * / % **` and comparison, compared with doubles, and
 written as `String(x)` and `toString(radix)`, read back, rounded as
-`Number(x)` and wrapped by `BigInt.asIntN` and `asUintN` (`number_test
+`Number(x)` and wrapped by `BigInt.asIntN` and `asUintN`, and a fixed
+list of 100 doubles (ties, values just under and over a half, subnormals,
+1e21 and the largest double) through `toFixed`, `toExponential` and
+`toPrecision` with 24 counts of digits each, 0 to 100 (`number_test
 --print`); and random JSON documents read by `JSON.parse` and written back
 by `JSON.stringify`, the same documents with a byte or two changed (a
 SyntaxError where JavaScript throws one), and `JSON.stringify` calls with
@@ -215,6 +218,7 @@ Built-ins:
 | maps | `get` `has` `keys` `values` `entries` `forEach`, `size` |
 | iterators | `toArray` `map` `filter` `reduce` `some` `every` `find` `forEach` `flatMap` `take` `drop` |
 | BigInts | `toString` (radix 2 to 36) |
+| numbers | `toFixed` `toExponential` `toPrecision`: the exact decimal value of the double, rounded half up, as V8 gives it; digits 0 to 100 (precision 1 to 100), else a fault where JavaScript throws a RangeError |
 | functions | `String` `String.fromCharCode` `String.fromCodePoint` `String.raw` (called as a function: staticjs has no tagged templates) `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Map.groupBy` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Object.hasOwn` `Object.assign` (see "Owned mutation" below) `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` `encodeURI` `encodeURIComponent` `decodeURI` `decodeURIComponent` |
 | `JSON` | `parse` `stringify` (see "JSON" below) |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum) |

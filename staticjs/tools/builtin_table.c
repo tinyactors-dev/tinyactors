@@ -46,7 +46,7 @@ static const struct {
     const char *label;
 } KINDS[] = {
     { SJS_ARRAY, "array" },   { SJS_STRING, "string" }, { SJS_SET, "set" },         { SJS_BIGINT, "bigint" },
-    { SJS_MAP, "map" },       { SJS_ITERATOR, "iterator" }, { SJS_REGEXP, "regexp" },
+    { SJS_MAP, "map" },       { SJS_ITERATOR, "iterator" }, { SJS_REGEXP, "regexp" }, { SJS_NUMBER, "number" },
 };
 
 static void print_entry(const sjs_name *entry) {

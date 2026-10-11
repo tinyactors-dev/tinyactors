@@ -87,6 +87,23 @@ static inline bool sjs_is_white_space(uint32_t p) {
 
 /* Number::toString(10): at most 25 bytes, written to `out`. */
 uint32_t sjs_number_format(double value, char *out);
+/* Number.prototype.toFixed, toExponential and toPrecision of `value`, with
+ * `digits` already in range (0 to 100; 1 to 100 for toPrecision), or -1 for
+ * an undefined argument of toExponential or toPrecision: the decimal value
+ * of the double exactly, rounded half up. At most SJS_NUMBER_DIGITS_MAX
+ * bytes, written to `out`. */
+#define SJS_NUMBER_DIGITS_MAX 128u
+typedef enum {
+    SJS_DIGITS_FIXED,
+    SJS_DIGITS_EXPONENTIAL,
+    SJS_DIGITS_PRECISION
+} sjs_digits_mode;
+typedef struct {
+    double value;
+    int32_t digits;
+    sjs_digits_mode mode;
+} sjs_number_digits;
+uint32_t sjs_number_format_digits(sjs_number_digits d, char *out);
 /* JavaScript's % (truncating remainder, exact). */
 double sjs_number_remainder(double x, double y);
 double sjs_number_trunc(double x);
@@ -653,6 +670,10 @@ typedef enum {
     SJS_METHOD_SET_UNION,
     /* BigInts. */
     SJS_METHOD_BIGINT_TO_STRING,
+    /* Numbers. */
+    SJS_METHOD_NUMBER_TO_EXPONENTIAL,
+    SJS_METHOD_NUMBER_TO_FIXED,
+    SJS_METHOD_NUMBER_TO_PRECISION,
     /* Regular expressions (regex_match.c). */
     SJS_METHOD_REGEXP_TEST,
     SJS_METHOD_REGEXP_EXEC,
@@ -737,8 +758,8 @@ const sjs_function_entry *sjs_functions(uint32_t *count);
 typedef struct {
     sjs_str name;
     uint8_t flags;      /* SJS_NAME_* */
-    uint8_t methods[7]; /* the staticjs method on an array, a string, a set, a BigInt, a map, an
-                         * iterator, a regular expression; 0 if none */
+    uint8_t methods[8]; /* the staticjs method on an array, a string, a set, a BigInt, a map, an
+                         * iterator, a regular expression, a number; 0 if none */
     uint8_t mutation;   /* MUTATION: the method that changes its receiver, of the one kind
                          * that has it (SJS_METHOD_MUTATION_FIRST on); 0 if none */
 } sjs_name;

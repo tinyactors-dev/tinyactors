@@ -352,3 +352,169 @@ parseInt([1])
 === isNaN of a string
 isNaN("x")
 --- fault
+
+# A number's toFixed, toExponential and toPrecision: the exact decimal value
+# of the double, rounded half up (the larger n of two as near). Faults where
+# JavaScript throws a RangeError, and on an argument it would coerce from a
+# string or an object.
+=== toFixed rounds the exact value half up
+[(1.005).toFixed(2), (1.045).toFixed(2), (1.255).toFixed(2), (8.345).toFixed(2), (10.235).toFixed(2), (9.995).toFixed(2), (99.995).toFixed(2), (4.35).toFixed(1), (0.125).toFixed(2), (0.375).toFixed(2), (2.5).toFixed(0), (-2.5).toFixed(0), (0.5).toFixed(0), (1.5).toFixed(0), (123.456).toFixed(1), (0.0005).toFixed(3), (0.00005).toFixed(4)]
+--- value
+["1.00","1.04","1.25","8.35","10.23","9.99","100.00","4.3","0.13","0.38","3","-3","1","2","123.5","0.001","0.0001"]
+
+=== toFixed of zero, -0, small and large values
+[(0).toFixed(2), (-0).toFixed(2), (-0.0001).toFixed(2), (-0.5).toFixed(0), (0.000001).toFixed(7), (1e-7).toFixed(6), (1e-7).toFixed(7), (1e21).toFixed(2), (-1e21).toFixed(3), (999999999999999900000).toFixed(2), (9007199254740993).toFixed(1), (1.7976931348623157e308).toFixed(2)]
+--- value
+["0.00","0.00","-0.00","-1","0.0000010","0.000000","0.0000001","1e+21","-1e+21","999999999999999868928.00","9007199254740992.0","1.7976931348623157e+308"]
+
+=== toFixed with many digits
+[(0.1).toFixed(20), (0.1).toFixed(100), (5e-324).toFixed(100), (1.5).toFixed(100), (123.456).toFixed(50)]
+--- value
+["0.10000000000000000555","0.1000000000000000055511151231257827021181583404541015625000000000000000000000000000000000000000000000","0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","1.5000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","123.45600000000000306954461848363280296325683593750000"]
+
+=== toFixed of NaN and the infinities
+[NaN.toFixed(2), Infinity.toFixed(0), (-Infinity).toFixed(100), NaN.toFixed()]
+--- value
+["NaN","Infinity","-Infinity","NaN"]
+
+=== toFixed converts its argument without coercing an object
+[(1.5).toFixed(), (1.5).toFixed(undefined), (1.5).toFixed(null), (1.5).toFixed(true), (1.5).toFixed(false), (1.5).toFixed(2.9), (1.5).toFixed(-0.5), (1.5).toFixed(-0), (1.5).toFixed(NaN), (1.25).toFixed(1.99)]
+--- value
+["2","2","2","1.5","2","1.50","2","2","2","1.3"]
+
+=== toExponential with no digits gives the shortest digits
+[(123.456).toExponential(), (0).toExponential(), (-0).toExponential(), (5e-324).toExponential(), (0.1 + 0.2).toExponential(), (1e21).toExponential(), (-1.7976931348623157e308).toExponential(), (100).toExponential(), (1.5).toExponential(undefined)]
+--- value
+["1.23456e+2","0e+0","0e+0","5e-324","3.0000000000000004e-1","1e+21","-1.7976931348623157e+308","1e+2","1.5e+0"]
+
+=== toExponential rounds the exact value half up
+[(123.456).toExponential(2), (-0).toExponential(2), (5e-324).toExponential(3), (1.7976931348623157e308).toExponential(20), (1.25).toExponential(1), (1.35).toExponential(1), (-1.5).toExponential(0), (9.5).toExponential(0), (99.5).toExponential(1), (0.000123).toExponential(1), (123.456).toExponential(100)]
+--- value
+["1.23e+2","0.00e+0","4.941e-324","1.79769313486231570815e+308","1.3e+0","1.4e+0","-2e+0","1e+1","1.0e+2","1.2e-4","1.2345600000000000306954461848363280296325683593750000000000000000000000000000000000000000000000000000e+2"]
+
+=== toExponential of NaN and the infinities, whatever the digits
+[NaN.toExponential(), Infinity.toExponential(-1), (-Infinity).toExponential(101), NaN.toExponential(1e9), Infinity.toExponential(-Infinity)]
+--- value
+["NaN","Infinity","-Infinity","NaN","Infinity"]
+
+=== toExponential converts its argument without coercing an object
+[(1.5).toExponential(null), (1.5).toExponential(true), (1.5).toExponential(NaN), (1.5).toExponential(2.7), (1.5).toExponential(-0.9)]
+--- value
+["2e+0","1.5e+0","2e+0","1.50e+0","2e+0"]
+
+=== toPrecision chooses the fixed or the exponential form
+[(123.456).toPrecision(), (123.456).toPrecision(1), (123.456).toPrecision(2), (123.456).toPrecision(4), (123.456).toPrecision(10), (0.000001234).toPrecision(2), (0.0000001234).toPrecision(2), (123456).toPrecision(2), (123456).toPrecision(6), (1e21).toPrecision(3), (1e21).toPrecision(22), (99.99).toPrecision(3), (999.5).toPrecision(3), (0.00001).toPrecision(1)]
+--- value
+["123.456","1e+2","1.2e+2","123.5","123.4560000","0.0000012","1.2e-7","1.2e+5","123456","1.00e+21","1000000000000000000000","100","1.00e+3","0.00001"]
+
+=== toPrecision rounds the exact value half up
+[(2.5).toPrecision(1), (-2.5).toPrecision(1), (1.005).toPrecision(3), (1.45).toPrecision(2), (5e-324).toPrecision(1), (5e-324).toPrecision(3), (1.7976931348623157e308).toPrecision(5), (0).toPrecision(3), (-0).toPrecision(1), (1.5).toPrecision(100), (0.1).toPrecision(21)]
+--- value
+["3","-3","1.00","1.4","5e-324","4.94e-324","1.7977e+308","0.00","0","1.500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","0.100000000000000005551"]
+
+=== toPrecision of NaN and the infinities, whatever the precision
+[NaN.toPrecision(0), Infinity.toPrecision(101), (-Infinity).toPrecision(), NaN.toPrecision(), Infinity.toPrecision(null)]
+--- value
+["NaN","Infinity","-Infinity","NaN","Infinity"]
+
+=== toPrecision converts its argument without coercing an object
+[(1.5).toPrecision(undefined), (1.5).toPrecision(true), (1.5).toPrecision(2.9), (1.5).toPrecision(1.5)]
+--- value
+["1.5","2","1.5","2"]
+
+=== the methods on numbers in variables and callbacks
+[1.005, 2.5, -0.5, 1e21].map(x => [x.toFixed(1), x.toExponential(1), x.toPrecision(1)])
+--- value
+[["1.0","1.0e+0","1"],["2.5","2.5e+0","3"],["-0.5","-5.0e-1","-0.5"],["1e+21","1.0e+21","1e+21"]]
+
+=== toFixed of more than 100 digits
+(1).toFixed(101)
+--- fault RangeError
+
+=== toFixed of negative digits
+(1).toFixed(-1)
+--- fault RangeError
+
+=== toFixed of Infinity digits
+(1).toFixed(Infinity)
+--- fault RangeError
+
+=== toFixed checks its digits before NaN and the infinities
+Infinity.toFixed(101)
+--- fault RangeError
+
+=== toFixed checks its digits before NaN
+NaN.toFixed(-1)
+--- fault RangeError
+
+=== toExponential of negative digits
+(1).toExponential(-1)
+--- fault RangeError
+
+=== toExponential of more than 100 digits
+(-1).toExponential(101)
+--- fault RangeError
+
+=== toPrecision of 0
+(1).toPrecision(0)
+--- fault RangeError
+
+=== toPrecision of more than 100
+(1).toPrecision(101)
+--- fault RangeError
+
+=== toPrecision of null, which is 0
+(1.5).toPrecision(null)
+--- fault RangeError
+
+=== toPrecision of NaN, which is 0
+(1.5).toPrecision(NaN)
+--- fault RangeError
+
+=== toFixed of a string, which JavaScript converts
+(1).toFixed("2")
+--- fault converts only numbers
+
+=== toExponential of a string, which JavaScript converts
+(1).toExponential("2")
+--- fault converts only numbers
+
+=== toPrecision of a string, which JavaScript converts
+(1).toPrecision("2")
+--- fault converts only numbers
+
+=== toExponential of Infinity with a string, which JavaScript converts
+Infinity.toExponential("x")
+--- fault converts only numbers
+
+=== toFixed of an array, which JavaScript coerces
+(1).toFixed([2])
+--- fault converts only numbers
+
+=== toFixed of an object
+(1).toFixed({})
+--- fault converts only numbers
+
+=== toFixed of a BigInt
+(1).toFixed(1n)
+--- fault BigInt would become a number
+
+=== toFixed read as a value
+(1).toFixed
+--- fault reads properties
+
+=== toString of a number, which staticjs does not have
+(1.5).toString()
+--- fault on numbers only those that format digits
+
+=== toLocaleString of a number
+(1.5).toLocaleString()
+--- fault on numbers only those that format digits
+
+=== toFixed of a string
+"1.5".toFixed(2)
+--- fault does not have this method
+
+=== toFixed of a BigInt receiver
+(1n).toFixed(2)
+--- fault does not have this method

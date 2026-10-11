@@ -261,6 +261,12 @@ const numberChecks = {
     if (hexBigInt(signed) !== i) return `BigInt.asIntN(${bits}, ${a}): staticjs ${signed}, JavaScript ${i.toString(16)}`;
     return hexBigInt(unsigned) === u ? null : `BigInt.asUintN(${bits}, ${a}): staticjs ${unsigned}, JavaScript ${u.toString(16)}`;
   },
+  P(rest) { // <method> <bits> <digits> <text>: toFixed (f), toExponential (e), toPrecision (p)
+    const [method, bits, digits, text] = rest.split(' ');
+    const name = { f: 'toFixed', e: 'toExponential', p: 'toPrecision' }[method];
+    const theirs = toDouble(bits)[name](digits === 'u' ? undefined : Number(digits));
+    return text === theirs ? null : `${toDouble(bits)}.${name}(${digits === 'u' ? '' : digits}): staticjs ${text}, JavaScript ${theirs}`;
+  },
   J(rest) { // <document> <text>: JSON.stringify(JSON.parse(document)), never a fault
     const [document, ours] = rest.split('\t');
     const want = JSON.stringify(JSON.parse(JSON.parse(document)));
@@ -348,6 +354,7 @@ const numberSummary = [
   ['M', 'BigInts compare with doubles as JavaScript does'],
   ['R', 'BigInts round to Number(x)'],
   ['A', 'BigInts wrap as BigInt.asIntN and asUintN do'],
+  ['P', 'doubles of a fixed list give toFixed, toExponential and toPrecision as JavaScript does'],
   ['J', 'random JSON documents give JSON.stringify(JSON.parse(t))'],
   ['E', `mutated JSON documents read as JSON.parse reads them (${jsonOutcomes.value} read, ` +
     `${jsonOutcomes['!S']} SyntaxErrors where JavaScript throws one, ${jsonOutcomes['!O']} faults of staticjs's own not compared)`],
