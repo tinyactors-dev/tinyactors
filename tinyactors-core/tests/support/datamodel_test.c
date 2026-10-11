@@ -740,8 +740,9 @@ static ta_string_view expression_source(test_instance *instance, ta_expression e
                                         uint32_t *kind) {
     ta_expression_info info;
     ta_string_view none = {"", 0};
-    if (ta_image_expression(instance->chart_context->image, instance->chart_context->chart,
-                            expression, &info) != TA_OK)
+    if (ta_image_expression(instance->chart_context->image,
+                            (ta_chart_item){instance->chart_context->chart, expression},
+                            &info) != TA_OK)
         return none;
     if (kind) *kind = info.kind;
     return info.source;
@@ -807,8 +808,8 @@ static ta_status t_create(void *d, void *context, const ta_datamodel_system_vari
         ta_image_data_count(instance->chart_context->image, instance->chart_context->chart);
     for (uint32_t i = 0; i < nd; i++) {
         ta_data_info data_info;
-        ta_image_data(instance->chart_context->image, instance->chart_context->chart, i,
-                      &data_info);
+        ta_image_data(instance->chart_context->image,
+                      (ta_chart_item){instance->chart_context->chart, i}, &data_info);
         declare(datamodel, instance, data_info.id.pointer, data_info.id.length);
     }
     /* invoke params override matching <data> ids (stored as "_init") */
@@ -838,7 +839,8 @@ static ta_status t_init_data(void *d, uint64_t h, ta_datamodel_environment *envi
     datamodel_test *datamodel = (datamodel_test *)d;
     test_instance *instance = I(datamodel, h);
     ta_data_info data_info;
-    if (ta_image_data(instance->chart_context->image, instance->chart_context->chart, declaration,
+    if (ta_image_data(instance->chart_context->image,
+                      (ta_chart_item){instance->chart_context->chart, declaration},
                       &data_info) != TA_OK)
         return TA_ERROR_EXECUTION;
     test_variable *variable =

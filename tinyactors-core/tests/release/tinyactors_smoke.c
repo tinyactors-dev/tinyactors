@@ -10,7 +10,8 @@
 int main(void) {
     char buffer[TA_ADDRESS_SESSION_MAX];
     ta_string_view system = {"smoke", 5};
-    uint32_t length = ta_address_format(system, 42, buffer, sizeof buffer);
+    ta_buffer out = {buffer, sizeof buffer, 0};
+    uint32_t length = ta_address_format(system, 42, &out) == TA_OK ? (uint32_t)out.length : 0;
     ta_address address;
     ta_string_view text = {buffer, length};
     if (length == 0 || ta_address_parse(text, &address) != TA_OK || address.session != 42 ||

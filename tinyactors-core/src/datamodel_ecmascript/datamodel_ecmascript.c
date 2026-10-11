@@ -156,8 +156,9 @@ static ta_string_view expression_source(ecmascript_instance *instance, ta_expres
                                         uint32_t *kind) {
     ta_expression_info info;
     ta_string_view none = {"", 0};
-    if (ta_image_expression(instance->chart_context->image, instance->chart_context->chart,
-                            expression, &info) != TA_OK)
+    if (ta_image_expression(instance->chart_context->image,
+                            (ta_chart_item){instance->chart_context->chart, expression},
+                            &info) != TA_OK)
         return none;
     if (kind) *kind = info.kind;
     return info.source;
@@ -975,7 +976,7 @@ static ta_status chart_analyze(ta_datamodel_ecmascript *ecmascript, ecmascript_c
     ta_status status = TA_OK;
     for (uint32_t e = 0; e < chart->expression_count && status == TA_OK; e++) {
         ta_expression_info info;
-        if (ta_image_expression(chart->image, chart->chart, e, &info) != TA_OK ||
+        if (ta_image_expression(chart->image, (ta_chart_item){chart->chart, e}, &info) != TA_OK ||
             info.kind != TA_EXPRESSION_SCRIPT || !may_declare(info.source))
             continue;
         if (!base_names(ecmascript) || (!shared.context && !scratch_new(ecmascript, &shared))) {
@@ -1012,7 +1013,8 @@ static uint32_t function_line(JSContext *context, const ecmascript_chart *chart,
     JS_FreeValue(context, fv);
     clear_exception(context);
     ta_expression_info info;
-    if (!ok || ln < 2 || ta_image_expression(chart->image, chart->chart, id, &info) != TA_OK ||
+    if (!ok || ln < 2 ||
+        ta_image_expression(chart->image, (ta_chart_item){chart->chart, id}, &info) != TA_OK ||
         !info.line)
         return 0;
     return info.line + (uint32_t)(ln - 2);
@@ -1265,7 +1267,7 @@ static ta_status ecmascript_create(void *datamodel, void *chart_context,
     for (uint32_t i = 0; i < nd; i++) { /* declared from the start (late binding: undefined);
                                            configurable: a live migration may drop them */
         ta_data_info data_info;
-        ta_image_data(chart->image, chart->chart, i, &data_info);
+        ta_image_data(chart->image, (ta_chart_item){chart->chart, i}, &data_info);
         JS_DefinePropertyValueStr(context, g, data_info.id.pointer, JS_UNDEFINED, JS_PROP_C_W_E);
     }
     JS_FreeValue(context, g);
@@ -1330,7 +1332,8 @@ static ta_status ecmascript_init_data_(void *datamodel, uint64_t handle,
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
     ENTER(ecmascript, handle, environment);
     ta_data_info data_info;
-    if (ta_image_data(instance->chart_context->image, instance->chart_context->chart, declaration,
+    if (ta_image_data(instance->chart_context->image,
+                      (ta_chart_item){instance->chart_context->chart, declaration},
                       &data_info) != TA_OK)
         return TA_ERROR_EXECUTION;
     JSValue v = JS_UNDEFINED;
@@ -1657,7 +1660,7 @@ static int is_data_id(const ecmascript_chart *chart, const char *name) {
     size_t l = strlen(name);
     for (uint32_t d = 0; d < nd; d++) {
         ta_data_info data_info;
-        if (ta_image_data(chart->image, chart->chart, d, &data_info) == TA_OK &&
+        if (ta_image_data(chart->image, (ta_chart_item){chart->chart, d}, &data_info) == TA_OK &&
             data_info.id.length == l && !memcmp(data_info.id.pointer, name, l))
             return 1;
     }
@@ -3291,9 +3294,8 @@ const char *ta_datamodel_ecmascript_last_error(const ta_datamodel_ecmascript *ec
  * An isolated session's scope is an ArrayBuffer: its own blob, written in its
  * own context (its values belong to its realm), with its system variables and
  * invoke params inside. */
-ta_status ta_datamodel_ecmascript_snapshot(ta_datamodel_ecmascript *ecmascript, void *buffer,
-                                           size_t capacity, size_t *length) {
-    *length = 0;
+ta_status ta_datamodel_ecmascript_snapshot(ta_datamodel_ecmascript *ecmascript, ta_buffer *out) {
+    out->length = 0;
     ecmascript->error[0] = 0;
     JSContext *context = shared_realm(ecmascript);
     if (!context) return TA_ERROR_NO_MEMORY;
@@ -3373,10 +3375,10 @@ ta_status ta_datamodel_ecmascript_snapshot(ta_datamodel_ecmascript *ecmascript, 
                 set_error(ecmascript, "the datamodel's payloads cannot be stored");
             status = TA_ERROR_UNSUPPORTED; /* e.g. functions in the data */
         } else {
-            *length = sz;
-            if (buffer && sz <= capacity)
-                memcpy(buffer, bytes, sz);
-            else if (buffer)
+            out->length = sz;
+            if (sz <= out->capacity)
+                memcpy(out->pointer, bytes, sz);
+            else
                 status = TA_ERROR_NO_MEMORY;
             js_free(context, bytes);
         }
@@ -3400,8 +3402,9 @@ static ecmascript_chart *chart_by_hash(ta_datamodel_ecmascript *ecmascript, cons
     return NULL;
 }
 
-ta_status ta_datamodel_ecmascript_restore(ta_datamodel_ecmascript *ecmascript, const void *buffer,
-                                          size_t length) {
+ta_status ta_datamodel_ecmascript_restore(ta_datamodel_ecmascript *ecmascript, ta_bytes snapshot) {
+    const void *buffer = snapshot.pointer;
+    size_t length = snapshot.length;
     for (uint32_t i = 0; i < ecmascript->instance_count; i++)
         if (ecmascript->instances[i] && ecmascript->instances[i]->live) return TA_ERROR_STATE;
     for (uint32_t i = 0; i < ecmascript->payload_count; i++)

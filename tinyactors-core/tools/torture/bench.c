@@ -369,7 +369,7 @@ static void *compile_image(const char *name, ta_source *source, uint32_t n, ta_i
     memset(&options, 0, sizeof options);
     options.size = sizeof options;
     ta_compile_result *result = NULL;
-    if (ta_compile_charts(&options, source, n, &result) != TA_OK) {
+    if (ta_compile_charts(&options, (ta_source_list){source, n}, &result) != TA_OK) {
         const ta_diagnostic *diagnostic;
         uint32_t nd = ta_compile_diagnostics(result, &diagnostic);
         snprintf(message, capacity, "%s: compile failed", name);
@@ -487,7 +487,8 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
         otlp_config.size = sizeof otlp_config;
         size_t length = 0;
         void *memory = ta_otlp_layout(&otlp_config, &length) == TA_OK ? malloc(length) : NULL;
-        if (!memory || ta_otlp_init(memory, length, &otlp_config, &system->otlp) != TA_OK) {
+        if (!memory ||
+            ta_otlp_init((ta_memory){memory, length}, &otlp_config, &system->otlp) != TA_OK) {
             free(memory);
             ta_datamodel_ecmascript_free(system->ecmascript);
             memset(system, 0, sizeof *system);
@@ -774,20 +775,19 @@ static uint32_t find_chart(const ta_image *image, const char *name, size_t lengt
 
 /* The chart called `name` in the current version: <scxml name>, else a source
  * name (e.g. "delivery.scxml"). */
-static int system_chart(bench_system *system, const char *name, size_t length, uint32_t *segment,
-                        uint32_t *chart) {
-    if (ta_host_chart(system->host, (ta_string_view){name, (uint32_t)length}, segment, chart) ==
-        TA_OK)
+static int system_chart(bench_system *system, const char *name, size_t length,
+                        ta_host_chart_ref *out) {
+    if (ta_host_chart(system->host, (ta_string_view){name, (uint32_t)length}, out) == TA_OK)
         return 1;
     for (uint32_t i = system->image_count; i-- > 0;) {
         if (!system->images[i]) continue;
         uint32_t c = find_chart(&system->images[i]->image, name, length);
         if (c == TA_NIL) continue;
         /* the current version of that chart's name, if it has one */
-        if (ta_host_chart(system->host, ta_image_chart_name(&system->images[i]->image, c), segment,
-                          chart) != TA_OK) {
-            *segment = i;
-            *chart = c;
+        if (ta_host_chart(system->host, ta_image_chart_name(&system->images[i]->image, c), out) !=
+            TA_OK) {
+            out->segment = i;
+            out->chart = c;
         }
         return 1;
     }
@@ -818,17 +818,19 @@ static JSValue h_spawn(JSContext *context, JSValueConst this_value, int argc, JS
     const char *chart = JS_ToCStringLen(context, &cl, argv[1]);
     const char *name =
         argc > 2 && JS_IsString(argv[2]) ? JS_ToCStringLen(context, &nl, argv[2]) : NULL;
-    uint32_t segment = 0, c = 0;
+    ta_host_chart_ref ref = {0, 0};
     JSValue r;
-    if (!chart || !system_chart(system, chart, cl, &segment, &c)) {
+    if (!chart || !system_chart(system, chart, cl, &ref)) {
         r = JS_ThrowTypeError(context, "spawn: no chart \"%s\" in system %s", chart ? chart : "?",
                               system->name);
     } else {
         ta_payload payload = argc > 3 ? payload_arg(context, system, argv[3]) : 0;
         uint64_t session = 0;
-        ta_status status = ta_host_spawn(system->host, segment, c,
-                                         (ta_string_view){name ? name : "", (uint32_t)nl}, payload,
-                                         (ta_string_view){0, 0}, &session);
+        ta_status status = ta_host_spawn(
+            system->host,
+            &(ta_spawn){ref.segment, ref.chart, (ta_string_view){name ? name : "", (uint32_t)nl},
+                        payload, (ta_string_view){0, 0}},
+            &session);
         if (status != TA_OK && payload)
             ta_datamodel_ecmascript_vtable()->release(system->ecmascript, payload);
         r = status == TA_OK ? JS_NewFloat64(context, actor_id(si, session))
@@ -848,7 +850,8 @@ static ta_status send_one(bench_system *system, uint64_t session, const char *na
     event.size = sizeof event;
     event.name = (ta_string_view){name, (uint32_t)nl};
     event.data = payload;
-    ta_status status = ta_host_send(system->host, session, &event);
+    event.session = session;
+    ta_status status = ta_host_send(system->host, &event);
     if (status != TA_OK && payload)
         ta_datamodel_ecmascript_vtable()->release(system->ecmascript, payload);
     if (status == TA_OK) system->host_sent++;
@@ -908,7 +911,8 @@ static void communication_error_to(bench_system *system, uint64_t session, const
     event.size = sizeof event;
     event.flags = TA_EVENT_IN_ERROR_COMMUNICATION;
     if (sendid) event.sendid = (ta_string_view){sendid, (uint32_t)strlen(sendid)};
-    ta_host_send(system->host, session, &event);
+    event.session = session;
+    ta_host_send(system->host, &event);
     system->busy = 1;
 }
 
@@ -942,11 +946,12 @@ static JSValue h_address(JSContext *context, JSValueConst this_value, int argc,
     bench_system *system;
     uint64_t h;
     if (argc < 1 || !split_id(context, argv[0], &system, &h)) return JS_UNDEFINED;
-    if (ta_host_locate(system->host, h, NULL, NULL) != TA_OK) return JS_UNDEFINED;
+    if (ta_host_locate(system->host, h, &(ta_host_location){0, 0}) != TA_OK) return JS_UNDEFINED;
     char buffer[TA_ADDRESS_SESSION_MAX];
-    uint32_t n =
-        ta_address_format((ta_string_view){system->base + 13, (uint32_t)strlen(system->base) - 14},
-                          h, buffer, sizeof buffer);
+    ta_buffer out = {buffer, sizeof buffer, 0};
+    ta_address_format((ta_string_view){system->base + 13, (uint32_t)strlen(system->base) - 14}, h,
+                      &out);
+    size_t n = out.length;
     return JS_NewStringLen(context, buffer, n);
 }
 
@@ -954,8 +959,9 @@ static JSValue h_alive(JSContext *context, JSValueConst this_value, int argc, JS
     (void)this_value;
     bench_system *system;
     uint64_t h;
-    return JS_NewBool(context, argc && split_id(context, argv[0], &system, &h) &&
-                                   ta_host_locate(system->host, h, NULL, NULL) == TA_OK);
+    return JS_NewBool(context,
+                      argc && split_id(context, argv[0], &system, &h) &&
+                          ta_host_locate(system->host, h, &(ta_host_location){0, 0}) == TA_OK);
 }
 
 static JSValue h_now(JSContext *context, JSValueConst this_value, int argc, JSValueConst *argv) {
@@ -1251,9 +1257,11 @@ static JSValue h_migrate(JSContext *context, JSValueConst this_value, int argc,
         callback = JS_GetPropertyStr(context, opt, "onDone");
     }
     uint32_t id = 0;
-    ta_status status =
-        ta_host_migrate(system->host, (ta_string_view){0, 0}, 0, wake ? TA_HOST_MIGRATE_WAKE : 0,
-                        timeout_ms > 0 ? (ta_time)(timeout_ms * 1000) : 0, &id);
+    ta_status status = ta_host_migrate(
+        system->host,
+        &(ta_host_migration){(ta_string_view){0, 0}, 0, wake ? TA_HOST_MIGRATE_WAKE : 0, 0,
+                             timeout_ms > 0 ? (ta_time)(timeout_ms * 1000) : 0},
+        &id);
     if (status != TA_OK) {
         JS_FreeValue(context, callback);
         return JS_ThrowTypeError(context, "migrate failed (%d)", status);
@@ -1793,8 +1801,9 @@ static void deliver_remote(bench_system *from, const ta_host_effect *effect) {
     int fi = (int)(from - B.system);
     if (!to) { /* the peer went away meanwhile */
         from->remote_fail++;
-        ta_host_peer_error(from->host, effect->peer, effect->auxiliary, effect->msgid,
-                           effect->sendid, TA_ROUTE_ERROR_UNREACHABLE);
+        ta_host_peer_error(from->host,
+                           &(ta_peer_error){effect->peer, TA_ROUTE_ERROR_UNREACHABLE,
+                                            effect->auxiliary, effect->msgid, effect->sendid});
         return;
     }
     size_t length = 0;
@@ -1813,8 +1822,7 @@ static void deliver_remote(bench_system *from, const ta_host_effect *effect) {
         envelope.data = 0;
     envelope.datamodel = 0; /* the ECMAScript datamodel */
     free(cbor);
-    uint32_t outcome;
-    ta_host_deliver(to->host, to->peer_of[fi], &envelope, &outcome);
+    int32_t outcome = ta_host_deliver(to->host, to->peer_of[fi], &envelope);
     if (outcome == TA_ROUTE_DELIVERED || outcome == TA_ROUTE_RELAYED) {
         from->remote_out++;
         to->remote_in++;
@@ -1831,8 +1839,9 @@ static void deliver_remote_error(bench_system *from, const ta_host_effect *effec
     int ti = peer_index(from, effect->peer);
     if (ti < 0) return;
     bench_system *to = &B.system[ti];
-    ta_host_peer_error(to->host, to->peer_of[(int)(from - B.system)], effect->auxiliary,
-                       effect->msgid, effect->sendid, effect->token);
+    ta_host_peer_error(to->host,
+                       &(ta_peer_error){to->peer_of[(int)(from - B.system)], effect->token,
+                                        effect->auxiliary, effect->msgid, effect->sendid});
     to->remote_fail++;
     to->busy = 1;
 }
@@ -1846,8 +1855,8 @@ static void system_operation(int si, bench_operation *operation) {
             t += 2;
         else if (!strncmp(t, "file:", 5))
             t += 5;
-        uint32_t segment = 0, chart = 0;
-        if (!system_chart(system, t, strlen(t), &segment, &chart)) {
+        ta_host_chart_ref ref = {0, 0};
+        if (!system_chart(system, t, strlen(t), &ref)) {
             system->spawn_failed++;
             release(system, operation->payload);
             communication_error_to(system, operation->actor, operation->sendid);
@@ -1855,9 +1864,11 @@ static void system_operation(int si, bench_operation *operation) {
         }
         const char *name = operation->sendid ? operation->sendid : "";
         uint64_t session = 0;
-        ta_status status = ta_host_spawn(system->host, segment, chart,
-                                         (ta_string_view){name, (uint32_t)strlen(name)},
-                                         operation->payload, (ta_string_view){0, 0}, &session);
+        ta_status status = ta_host_spawn(system->host,
+                                         &(ta_spawn){ref.segment, ref.chart,
+                                                     (ta_string_view){name, (uint32_t)strlen(name)},
+                                                     operation->payload, (ta_string_view){0, 0}},
+                                         &session);
         if (status != TA_OK) {
             system->spawn_failed++;
             release(system, operation->payload); /* a failed spawn leaves it with us */
@@ -1903,7 +1914,8 @@ static void done_spawn(bench_system *system, bench_operation *operation) {
     event.origin = (ta_string_view){origin, (uint32_t)strlen(origin)};
     event.origintype = (ta_string_view){SYSTEM_TYPE, (uint32_t)strlen(SYSTEM_TYPE)};
     event.data = operation->payload;
-    if (ta_host_send(system->host, operation->actor, &event) != TA_OK)
+    event.session = operation->actor;
+    if (ta_host_send(system->host, &event) != TA_OK)
         release(system, operation->payload); /* spawner gone */
     system->busy = 1;
     system->spawn_done++;
@@ -2024,21 +2036,23 @@ static uint32_t hib_sweep(bench_system *system, uint32_t max, uint32_t scan) {
     static uint64_t cold[4096];
     uint32_t done = 0;
     for (;;) {
-        uint32_t n = ta_host_sweep(system->host, scan, cold, 4096);
+        uint32_t n = ta_host_sweep(system->host, scan, (ta_uint64_array){cold, 4096});
         for (uint32_t k = 0; k < n && done < max; k++) {
             size_t length = 0;
             if (!hibernation_buffer) {
                 hibernation_buffer_capacity = 1 << 16;
                 hibernation_buffer = (unsigned char *)malloc(hibernation_buffer_capacity);
             }
-            ta_status status = ta_host_hibernate(system->host, cold[k], hibernation_buffer,
-                                                 hibernation_buffer_capacity, &length);
+            ta_buffer written = {hibernation_buffer, hibernation_buffer_capacity, 0};
+            ta_status status = ta_host_hibernate(system->host, cold[k], &written);
+            length = written.length;
             if (status == TA_ERROR_NO_MEMORY && length > hibernation_buffer_capacity) {
                 hibernation_buffer_capacity = length * 2;
                 hibernation_buffer =
                     (unsigned char *)realloc(hibernation_buffer, hibernation_buffer_capacity);
-                status = ta_host_hibernate(system->host, cold[k], hibernation_buffer,
-                                           hibernation_buffer_capacity, &length);
+                written = (ta_buffer){hibernation_buffer, hibernation_buffer_capacity, 0};
+                status = ta_host_hibernate(system->host, cold[k], &written);
+                length = written.length;
             }
             if (status != TA_OK) continue; /* e.g. functions in its data: stays resident */
             bench_hibernate *hibernation = hib_find(system, cold[k], 1);
@@ -2048,7 +2062,7 @@ static uint32_t hib_sweep(bench_system *system, uint32_t max, uint32_t scan) {
                                     : -1;
             system->hibernation_write_ns += ta_runtime_now_ns() - t;
             if (w != (ssize_t)length) { /* cannot persist: take it back at once */
-                ta_host_wake(system->host, cold[k], hibernation_buffer, length);
+                ta_host_wake(system->host, cold[k], (ta_bytes){hibernation_buffer, length});
                 system->hibernations_failed++;
                 continue;
             }
@@ -2079,7 +2093,8 @@ static void hib_wake(bench_system *system, uint64_t session) {
         bench_log("error", system->name, "wake: short read", 16);
         return;
     }
-    ta_status status = ta_host_wake(system->host, session, hibernation_buffer, hibernation->length);
+    ta_status status =
+        ta_host_wake(system->host, session, (ta_bytes){hibernation_buffer, hibernation->length});
     if (status != TA_OK) {
         char m[64];
         snprintf(m, sizeof m, "wake failed (%d)", status);
@@ -2221,17 +2236,20 @@ static void drain_effects(int si) {
 
 /* The staged OTLP requests, encoded and let go (a host would post them). */
 static int trace_flush(bench_system *system) {
-    size_t sizes[2] = {ta_otlp_traces_size(system->otlp), ta_otlp_logs_size(system->otlp)};
     for (int i = 0; i < 2; i++) {
-        if (!sizes[i]) continue;
-        if (sizes[i] > system->otlp_out_capacity) {
-            unsigned char *grown = (unsigned char *)realloc(system->otlp_out, sizes[i]);
+        ta_buffer out = {system->otlp_out, system->otlp_out_capacity, 0};
+        ta_status status =
+            i ? ta_otlp_put_logs(system->otlp, &out) : ta_otlp_put_traces(system->otlp, &out);
+        if (status == TA_ERROR_NO_MEMORY) { /* the request needs more room than we have */
+            unsigned char *grown = (unsigned char *)realloc(system->otlp_out, out.length);
             if (!grown) return 0;
             system->otlp_out = grown;
-            system->otlp_out_capacity = (uint32_t)sizes[i];
+            system->otlp_out_capacity = (uint32_t)out.length;
+            out = (ta_buffer){grown, out.length, 0};
+            status =
+                i ? ta_otlp_put_logs(system->otlp, &out) : ta_otlp_put_traces(system->otlp, &out);
         }
-        system->otlp_bytes += i ? ta_otlp_put_logs(system->otlp, system->otlp_out, sizes[i])
-                                : ta_otlp_put_traces(system->otlp, system->otlp_out, sizes[i]);
+        if (status == TA_OK) system->otlp_bytes += out.length;
     }
     return 1;
 }

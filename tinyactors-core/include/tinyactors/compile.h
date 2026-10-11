@@ -29,8 +29,14 @@ typedef struct ta_source {
     ta_string_view text;
 } ta_source;
 
-/* Resolves static src="" (invoke/data/script) at compile time. */
-typedef ta_status (*ta_resolve_function)(void *context, ta_string_view base, ta_string_view source,
+/* What a static src="" (invoke/data/script) asks for: `source` as written,
+ * in the document named `base`. */
+typedef struct ta_resolve_request {
+    ta_string_view base;
+    ta_string_view source;
+} ta_resolve_request;
+/* Resolves static src="" at compile time. */
+typedef ta_status (*ta_resolve_function)(void *context, const ta_resolve_request *request,
                                          ta_source *out);
 
 /* Optional datamodel compile-time hook: validate expressions and emit an AOT
@@ -74,8 +80,12 @@ typedef struct ta_compile_result ta_compile_result;
  * name. At most 200 diagnostics are kept.
  *
  * One or more charts -> image (first chart is the default boot chart). */
-TA_API ta_status ta_compile_charts(const ta_compile_options *opt, const ta_source *charts,
-                                   uint32_t n, ta_compile_result **out);
+typedef struct ta_source_list {
+    const ta_source *pointer;
+    uint32_t count;
+} ta_source_list;
+TA_API ta_status ta_compile_charts(const ta_compile_options *opt, ta_source_list charts,
+                                   ta_compile_result **out);
 /* System manifest (charts, boot actors, links, io_processors) -> image. */
 TA_API ta_status ta_compile_system(const ta_compile_options *opt, const ta_source *manifest,
                                    ta_compile_result **out);

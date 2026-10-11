@@ -491,13 +491,13 @@ static void unload(ta_system *system, uint32_t index) {
     core->chart_stats[chart].hibernated++;
 }
 
-ta_status ta_actor_hibernate(ta_system *system, uint32_t actor, void *buffer, size_t capacity,
-                             size_t *length) {
+ta_status ta_actor_hibernate(ta_system *system, uint32_t actor, ta_buffer *out) {
     if (system->in_call) return TA_ERROR_STATE;
     uint32_t index = ta_system_resolve_actor(system, actor);
     if (index == TA_NIL) return TA_ERROR_STALE;
     ta_status status = hibernatable(system, index);
-    if (status == TA_OK) status = write_hib(system, index, buffer, capacity, length);
+    if (status == TA_OK)
+        status = write_hib(system, index, out->pointer, out->capacity, &out->length);
     if (status != TA_OK) return status;
     unload(system, index);
     system->stats_hibernations++;
@@ -530,9 +530,11 @@ static void leave(ta_system *system, uint32_t index) {
     ta_system_reclaim(system, index, RECLAIM_LEFT);
 }
 
-ta_status ta_actor_export(ta_system *system, uint32_t actor, void *buffer, size_t capacity,
-                          size_t *length) {
+ta_status ta_actor_export(ta_system *system, uint32_t actor, ta_buffer *destination) {
     if (system->in_call) return TA_ERROR_STATE;
+    void *buffer = destination->pointer;
+    size_t capacity = destination->capacity;
+    size_t *length = &destination->length;
     uint32_t root = ta_system_resolve_actor(system, actor);
     if (root == TA_NIL) return TA_ERROR_STALE;
     if (ta_actor_at(system, root)->parent)
@@ -704,8 +706,10 @@ static ta_status restore(ta_system *system, uint32_t index, uint32_t chart, cons
     return TA_OK;
 }
 
-ta_status ta_actor_wake(ta_system *system, uint32_t actor, const void *blob, size_t length) {
+ta_status ta_actor_wake(ta_system *system, uint32_t actor, ta_bytes bytes) {
     if (system->in_call) return TA_ERROR_STATE;
+    const void *blob = bytes.pointer;
+    size_t length = bytes.length;
     ta_core *core = &system->core;
     uint32_t index = ta_system_resolve_actor(system, actor);
     if (index == TA_NIL) return TA_ERROR_STALE;
@@ -944,8 +948,10 @@ static int read_exp(const void *blob, size_t length, uint64_t image_hash, export
            (!(h->flags & EXPORT_MIGRATED) || h->session_count == 1);
 }
 
-ta_status ta_system_adopt(ta_system *system, const void *blob, size_t length, uint32_t *actor) {
+ta_status ta_system_adopt(ta_system *system, ta_bytes bytes, uint32_t *actor) {
     if (system->in_call) return TA_ERROR_STATE;
+    const void *blob = bytes.pointer;
+    size_t length = bytes.length;
     ta_core *core = &system->core;
     if (actor) *actor = 0;
     export_header th;
@@ -1052,7 +1058,9 @@ ta_status ta_system_adopt(ta_system *system, const void *blob, size_t length, ui
 
 /* ---- another clock: shift the due times of a blob's delayed sends ---------------------- */
 
-ta_status ta_blob_rebase(void *blob, size_t length, ta_time from, ta_time to) {
+ta_status ta_blob_rebase(ta_memory bytes, ta_time from, ta_time to) {
+    void *blob = bytes.pointer;
+    size_t length = bytes.length;
     export_header th;
     if (!blob || length < sizeof th) return TA_ERROR_INVALID;
     ta_memcpy(&th, blob, sizeof th);
@@ -1188,7 +1196,8 @@ static int string_equal_(ta_string_view a, ta_string_view b) {
 static int old_declares(const migration_context *migration, ta_string_view id) {
     for (uint32_t i = 0; i < migration->from_chart_record->data_count; i++) {
         ta_data_info data_info;
-        if (ta_image_data(migration->from_image, migration->from_chart, i, &data_info) == TA_OK &&
+        if (ta_image_data(migration->from_image, (ta_chart_item){migration->from_chart, i},
+                          &data_info) == TA_OK &&
             string_equal_(data_info.id, id))
             return 1;
     }
@@ -1241,9 +1250,14 @@ static void translate_history(const migration_context *migration, const unsigned
     }
 }
 
-ta_status ta_blob_migrate(const ta_image *from_image, const ta_image *to_image, uint32_t to_chart,
-                          const void *blob, size_t length, void *out, size_t capacity,
-                          size_t *out_length) {
+ta_status ta_blob_migrate(const ta_blob_migration *request, ta_buffer *destination) {
+    const ta_image *from_image = request->from_image, *to_image = request->to_image;
+    uint32_t to_chart = request->to_chart;
+    const void *blob = request->blob.pointer;
+    size_t length = request->blob.length;
+    void *out = destination->pointer;
+    size_t capacity = destination->capacity;
+    size_t *out_length = &destination->length;
     migration_context migration;
     blob_view view;
     export_header eh;
@@ -1274,7 +1288,7 @@ ta_status ta_blob_migrate(const ta_image *from_image, const ta_image *to_image, 
     uint32_t new_count = 0; /* <data> the new chart adds (at most this many to initialize) */
     for (uint32_t d = 0; d < migration.to_chart_record->data_count; d++) {
         ta_data_info di;
-        if (ta_image_data(to_image, migration.to_chart, d, &di) == TA_OK &&
+        if (ta_image_data(to_image, (ta_chart_item){migration.to_chart, d}, &di) == TA_OK &&
             !old_declares(&migration, di.id))
             new_count++;
     }
@@ -1359,7 +1373,7 @@ ta_status ta_blob_migrate(const ta_image *from_image, const ta_image *to_image, 
     q += view.timers_bytes;
     for (uint32_t d = 0; d < migration.to_chart_record->data_count; d++) {
         ta_data_info di;
-        if (ta_image_data(to_image, migration.to_chart, d, &di) != TA_OK ||
+        if (ta_image_data(to_image, (ta_chart_item){migration.to_chart, d}, &di) != TA_OK ||
             old_declares(&migration, di.id))
             continue;
         if (migration.to_chart_record->binding == TA_BINDING_LATE &&
@@ -1409,8 +1423,8 @@ void ta_system_emit_wakes(ta_system *system) {
     }
 }
 
-uint32_t ta_system_cold_actors(ta_system *system, uint32_t *cursor, uint32_t max_scan,
-                               uint32_t *out, uint32_t capacity) {
+uint32_t ta_system_cold_actors(ta_system *system, ta_sweep *sweep, ta_uint32_array out) {
+    uint32_t *cursor = &sweep->cursor, max_scan = sweep->max_scan, capacity = out.capacity;
     uint32_t high_water_mark = system->actors.high_water_mark, n = 0, i = *cursor;
     if (!high_water_mark || system->in_call) return 0;
     if (max_scan > high_water_mark)
@@ -1423,7 +1437,7 @@ uint32_t ta_system_cold_actors(ta_system *system, uint32_t *cursor, uint32_t max
         if (actor->flags & ACTOR_FLAG_TOUCHED)
             actor->flags &= (uint8_t)~ACTOR_FLAG_TOUCHED; /* second chance */
         else if (hibernatable(system, i) == TA_OK)
-            out[n++] = ta_pool_handle(&system->actors, i);
+            out.pointer[n++] = ta_pool_handle(&system->actors, i);
     }
     *cursor = i >= high_water_mark ? 0 : i;
     return n;

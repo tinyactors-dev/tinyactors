@@ -84,13 +84,12 @@ typedef struct ta_otlp ta_otlp;
 
 /* The bytes ta_otlp_init needs for `config`. */
 TA_API ta_status ta_otlp_layout(const ta_otlp_config *config, size_t *bytes);
-TA_API ta_status ta_otlp_init(void *memory, size_t length, const ta_otlp_config *config,
-                              ta_otlp **out);
+TA_API ta_status ta_otlp_init(ta_memory memory, const ta_otlp_config *config, ta_otlp **out);
 /* Move into another block with other capacities (at least what is in use):
- * what is open and staged moves with it. TA_ERROR_INVALID if it would not
- * fit. The old block is dead afterwards. */
-TA_API ta_status ta_otlp_relocate(ta_otlp *otlp, void *memory, size_t length,
-                                  const ta_otlp_config *config, ta_otlp **out);
+ * what is open and staged moves with it, and *otlp is the encoder in its new
+ * block. TA_ERROR_INVALID if it would not fit. The old block is dead
+ * afterwards. */
+TA_API ta_status ta_otlp_relocate(ta_otlp **otlp, ta_memory memory, const ta_otlp_config *config);
 
 /* A resource attribute (`service.name`, ...): strings. */
 typedef struct ta_otlp_attribute {
@@ -140,14 +139,12 @@ TA_API uint32_t ta_otlp_read(ta_otlp *otlp, const ta_otlp_input *input, uint32_t
  * encoder or the system is going away. They go into the next request. */
 TA_API void ta_otlp_end_all(ta_otlp *otlp, uint64_t wall_ns);
 
-/* The size of the ExportTraceServiceRequest of the spans that ended since
- * the last put (0 when none did), then the request itself, written into
- * `out` of exactly that size; the spans are forgotten. A size that is not
- * the current one writes nothing (0). The same for log records. */
-TA_API size_t ta_otlp_traces_size(const ta_otlp *otlp);
-TA_API size_t ta_otlp_put_traces(ta_otlp *otlp, void *out, size_t size);
-TA_API size_t ta_otlp_logs_size(const ta_otlp *otlp);
-TA_API size_t ta_otlp_put_logs(ta_otlp *otlp, void *out, size_t size);
+/* The ExportTraceServiceRequest of the spans that ended since the last put,
+ * written into `out` (ta_buffer; length 0 when none did); the spans are
+ * forgotten only on TA_OK, so TA_ERROR_NO_MEMORY asks for room and nothing
+ * changes. The same for log records. */
+TA_API ta_status ta_otlp_put_traces(ta_otlp *otlp, ta_buffer *out);
+TA_API ta_status ta_otlp_put_logs(ta_otlp *otlp, ta_buffer *out);
 
 /* ---- metrics (docs/adr/0007 in the repository root) ---------------------------
  * One ExportMetricsServiceRequest (`/v1/metrics`) gathers the metrics added
@@ -214,16 +211,14 @@ TA_API ta_status ta_otlp_add_stats(ta_otlp *otlp, const ta_otlp_stats_input *inp
 /* With TA_OTLP_SPAN_METRICS, the encoder keeps, per (system, chart), a
  * histogram of the durations of the macrostep spans it writes, in seconds,
  * each bucket's exemplar the latest span that fell in it. This adds them to
- * `into` (it may be `from`) as `tinyactors.macrostep.duration`, cumulative
- * since `start_ns`, a point per chart (`tinyactors.chart.name`). They are
- * the recorded macrosteps': under sampling, a distribution, not a count. */
-TA_API ta_status ta_otlp_add_span_metrics(ta_otlp *into, const ta_otlp *from, uint64_t start_ns,
-                                          uint64_t time_ns);
+ * its metrics as `tinyactors.macrostep.duration`, cumulative since
+ * `start_ns`, a point per chart (`tinyactors.chart.name`). They are the
+ * recorded macrosteps': under sampling, a distribution, not a count. */
+TA_API ta_status ta_otlp_add_span_metrics(ta_otlp *otlp, uint64_t start_ns, uint64_t time_ns);
 
-/* The size of the ExportMetricsServiceRequest of the metrics added since the
- * last put (0 when none were), then the request, as for traces. */
-TA_API size_t ta_otlp_metrics_size(const ta_otlp *otlp);
-TA_API size_t ta_otlp_put_metrics(ta_otlp *otlp, void *out, size_t size);
+/* The ExportMetricsServiceRequest of the metrics added since the last put,
+ * as for traces. */
+TA_API ta_status ta_otlp_put_metrics(ta_otlp *otlp, ta_buffer *out);
 
 typedef struct ta_otlp_stats {
     uint32_t size;
@@ -261,7 +256,7 @@ enum { TA_OTLP_STATUS_UNSET = 0, TA_OTLP_STATUS_OK = 1, TA_OTLP_STATUS_ERROR = 2
 typedef struct ta_otlp_fields {
     ta_string_view message;
     uint32_t field;
-    uint32_t pad;
+    uint32_t kind; /* a metric's points: the metric's TA_OTLP_METRIC_* */
 } ta_otlp_fields;
 
 typedef struct ta_otlp_span {
@@ -286,8 +281,7 @@ typedef struct ta_otlp_cursor {
 
 /* The next span of an ExportTraceServiceRequest (or TracesData): 1, or 0 at
  * the end, or TA_ERROR_INVALID when the bytes are malformed. */
-TA_API int32_t ta_otlp_next_span(const void *bytes, size_t length, ta_otlp_cursor *cursor,
-                                 ta_otlp_span *out);
+TA_API int32_t ta_otlp_next_span(ta_bytes request, ta_otlp_cursor *cursor, ta_otlp_span *out);
 
 enum {
     TA_OTLP_VALUE_EMPTY = 0,
@@ -308,10 +302,14 @@ typedef struct ta_otlp_value {
     ta_otlp_fields items; /* ARRAY, LIST */
 } ta_otlp_value;
 
+typedef struct ta_otlp_key_value {
+    ta_string_view key;
+    ta_otlp_value value;
+} ta_otlp_key_value;
 /* The next attribute, from *at (start at 0): 1, 0 at the end, or
  * TA_ERROR_INVALID. */
-TA_API int32_t ta_otlp_next_attribute(ta_otlp_fields attributes, uint32_t *at, ta_string_view *key,
-                                      ta_otlp_value *value);
+TA_API int32_t ta_otlp_next_attribute(ta_otlp_fields attributes, uint32_t *at,
+                                      ta_otlp_key_value *out);
 /* The next value of an array. */
 TA_API int32_t ta_otlp_next_value(ta_otlp_fields array, uint32_t *at, ta_otlp_value *value);
 
@@ -339,7 +337,7 @@ typedef struct ta_otlp_metric_view {
     ta_otlp_fields resource; /* its resource's attributes */
     ta_string_view scope_name, scope_version;
 } ta_otlp_metric_view;
-TA_API int32_t ta_otlp_next_metric(const void *bytes, size_t length, ta_otlp_cursor *cursor,
+TA_API int32_t ta_otlp_next_metric(ta_bytes request, ta_otlp_cursor *cursor,
                                    ta_otlp_metric_view *out);
 
 typedef struct ta_otlp_point_view {
@@ -353,9 +351,8 @@ typedef struct ta_otlp_point_view {
     ta_string_view buckets, bounds;       /* packed little-endian fixed64 counts and doubles */
     ta_otlp_fields attributes, exemplars; /* ta_otlp_next_attribute / _exemplar */
 } ta_otlp_point_view;
-/* The next point of a metric (`kind` is the metric's), from *at (start at 0). */
-TA_API int32_t ta_otlp_next_point(ta_otlp_fields points, uint32_t *at, uint32_t kind,
-                                  ta_otlp_point_view *out);
+/* The next point of a metric (points.kind is the metric's), from *at (start at 0). */
+TA_API int32_t ta_otlp_next_point(ta_otlp_fields points, uint32_t *at, ta_otlp_point_view *out);
 TA_API int32_t ta_otlp_next_exemplar(ta_otlp_fields exemplars, uint32_t *at, ta_otlp_exemplar *out);
 
 #ifdef __cplusplus

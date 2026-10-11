@@ -79,7 +79,9 @@ static void test_growable_system(void) {
     config.string_bytes = 64; /* far too small: 40 dynamic event names */
     config.max_actors = 2;
     ta_system *system;
-    CHECK_EQUAL(ta_runtime_system_new(&image, &config, &binding, 1, &system), TA_OK);
+    CHECK_EQUAL(
+        ta_runtime_system_new(&(ta_system_setup){{0, 0}, &image, &config, &binding, 1, 0}, &system),
+        TA_OK);
     CHECK_EQUAL(ta_system_boot(system), TA_OK);
     ta_run run = ta_runtime_run(&system, 1000000);
     CHECK_EQUAL(run.status, TA_RUN_IDLE);
@@ -126,13 +128,15 @@ static void test_limits_and_targeted_grow(void) {
     config.max_events = 64;
     config.max_timers = 64;
     ta_system *system;
-    CHECK_EQUAL(ta_runtime_system_new(&image, &config, NULL, 0, &system), TA_OK);
+    CHECK_EQUAL(
+        ta_runtime_system_new(&(ta_system_setup){{0, 0}, &image, &config, NULL, 0, 0}, &system),
+        TA_OK);
     CHECK_EQUAL(ta_system_boot(system), TA_OK);
     uint32_t actor = 0;
     ta_status status = TA_OK;
     for (int i = 0; i < 3 && status == TA_OK; i++)
-        status =
-            ta_system_spawn(system, 0, (ta_string_view){"", 0}, 0, (ta_string_view){0, 0}, &actor);
+        status = ta_system_spawn(
+            system, &(ta_spawn){0, 0, (ta_string_view){"", 0}, 0, (ta_string_view){0, 0}}, &actor);
     CHECK_EQUAL(status, TA_ERROR_NO_MEMORY); /* two actors fit */
     CHECK_EQUAL(ta_runtime_system_grow(&system), TA_OK);
     ta_system_stats stats;
@@ -142,7 +146,8 @@ static void test_limits_and_targeted_grow(void) {
     CHECK_EQUAL(stats.events_capacity, 64); /* ... the idle ones did not */
     CHECK_EQUAL(stats.timers_capacity, 64);
     CHECK_EQUAL(
-        ta_system_spawn(system, 0, (ta_string_view){"", 0}, 0, (ta_string_view){0, 0}, &actor),
+        ta_system_spawn(
+            system, &(ta_spawn){0, 0, (ta_string_view){"", 0}, 0, (ta_string_view){0, 0}}, &actor),
         TA_OK);
     ta_runtime_system_free(system);
     free(copy);

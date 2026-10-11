@@ -84,9 +84,13 @@ TA_API void ta_host_free(ta_host *h);
 /* A new segment running `image` (the bytes must stay valid until
  * TA_HOST_EFFECT_SEGMENT_FREED for it, or ta_host_free). */
 TA_API ta_status ta_host_add_image(ta_host *h, const ta_image *image, uint32_t *segment);
+/* A chart in the host: the segment that runs it and its index there. */
+typedef struct ta_host_chart_ref {
+    uint32_t segment;
+    uint32_t chart;
+} ta_host_chart_ref;
 /* The current version of chart `name` (<scxml name>, else its source name). */
-TA_API ta_status ta_host_chart(const ta_host *h, ta_string_view name, uint32_t *segment,
-                               uint32_t *chart);
+TA_API ta_status ta_host_chart(const ta_host *h, ta_string_view name, ta_host_chart_ref *out);
 typedef struct ta_host_segment_info {
     uint32_t size;
     uint32_t live;    /* 0 once freed */
@@ -110,34 +114,32 @@ TA_API ta_status ta_host_boot(ta_host *h, uint32_t segment);
 TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
 
 /* ---- actors (by session id, host-wide) -------------------------------------- */
-/* Spawn in (segment, chart) — usually the current version (ta_host_chart).
- * The bootstrap runs under `traceparent` (W3C text) when it parses, else in a
- * new trace. */
-TA_API ta_status ta_host_spawn(ta_host *h, uint32_t segment, uint32_t chart, ta_string_view name,
-                               ta_payload params, ta_string_view traceparent, uint64_t *session);
-/* Where a session lives now: segment and actor handle there. */
-TA_API ta_status ta_host_locate(const ta_host *h, uint64_t session, uint32_t *segment,
-                                uint32_t *actor);
+/* Spawn in (spawn->segment, spawn->chart) — usually the current version
+ * (ta_host_chart). */
+TA_API ta_status ta_host_spawn(ta_host *h, const ta_spawn *spawn, uint64_t *session);
+/* Where a session lives now: its segment and its actor handle there. */
+typedef struct ta_host_location {
+    uint32_t segment;
+    uint32_t actor;
+} ta_host_location;
+TA_API ta_status ta_host_locate(const ta_host *h, uint64_t session, ta_host_location *out);
 /* A session's configuration as a nested state value, in JSON (the shape of
  * xstate's `value`): an atomic state's id ("s"), a compound state with its
  * active child ({"c": ...}), a parallel state with each region ({"p": {"r1":
- * ..., "r2": {}}}), {} for none. Writes at most `capacity` bytes (and a NUL
- * when there is room); returns the length, 0 when there is no such session
- * or its configuration has more than TA_STATE_VALUE_STATES states. */
+ * ..., "r2": {}}}), {} for none, written into `out` (ta_buffer, no
+ * terminator). TA_ERROR_INVALID when there is no such session or its
+ * configuration has more than TA_STATE_VALUE_STATES states. */
 enum { TA_STATE_VALUE_STATES = 1024 };
-TA_API size_t ta_host_state_value(const ta_host *h, uint64_t session, char *buffer,
-                                  size_t capacity);
-/* An event for a session (event->target is ignored). */
-TA_API ta_status ta_host_send(ta_host *h, uint64_t session, const ta_event_in *event);
+TA_API ta_status ta_host_state_value(const ta_host *h, uint64_t session, ta_buffer *out);
+/* An event for the session event->session (event->target is ignored). */
+TA_API ta_status ta_host_send(ta_host *h, const ta_event_in *event);
 /* Batch (runs of events for the same segment go through ta_system_send_many):
  * sends in order and stops at the first failure, returning the length of the
  * accepted prefix; events[returned] failed and its payload stays the caller's. */
-TA_API uint32_t ta_host_send_many(ta_host *h, const uint64_t *sessions, const ta_event_in *events,
-                                  uint32_t n);
+TA_API uint32_t ta_host_send_many(ta_host *h, const ta_event_in *events, uint32_t n);
 TA_API ta_status ta_host_terminate(ta_host *h, uint64_t session);
-/* Answer a TA_EFFECT_REQUEST of a segment (see ta_system_resume). */
-TA_API ta_status ta_host_resume(ta_host *h, uint32_t segment, uint32_t request, ta_status status,
-                                ta_payload result);
+/* Answer a TA_EFFECT_REQUEST of segment resume->segment (see ta_system_resume). */
+TA_API ta_status ta_host_resume(ta_host *h, const ta_resume *resume);
 
 /* ---- running ------------------------------------------------------------------ */
 /* Move every segment's clock; queued envelopes past their TTL fail (an
@@ -229,11 +231,10 @@ enum {
 };
 typedef struct ta_peer_config {
     uint32_t size;
-    uint32_t flags;              /* TA_PEER_* */
-    ta_string_view id;           /* the peer's own system id */
-    const ta_string_view *reach; /* further systems reachable through it (announced) */
-    uint32_t reach_count;
-    uint32_t max_queue; /* TA_PEER_QUEUE: envelopes kept while down (default 1000) */
+    uint32_t flags;       /* TA_PEER_* */
+    ta_string_view id;    /* the peer's own system id */
+    ta_string_list reach; /* further systems reachable through it (announced) */
+    uint32_t max_queue;   /* TA_PEER_QUEUE: envelopes kept while down (default 1000) */
     ta_time queue_ttl;  /* TA_PEER_QUEUE: ticks an envelope may wait (0 = forever) */
 } ta_peer_config;
 
@@ -275,12 +276,16 @@ enum {
 typedef struct ta_route_request {
     uint32_t size;
     uint32_t action, reason, peer;
-    uint32_t hops, flags;
+    uint32_t hops;
+    uint32_t flags; /* in: TA_ROUTE_* for ta_host_route_begin */
+    uint32_t from;  /* in: the peer the envelope came from (0: this host's own code) */
+    uint32_t pad;
     uint64_t session;
     ta_string_view system, name, peer_id, origin, key; /* name is percent encoded */
 } ta_route_request;
-TA_API ta_status ta_host_route_begin(ta_host *h, uint32_t peer, const ta_envelope *environment,
-                                     uint32_t flags, ta_route_request *request);
+/* Set request->size, ->flags and ->from first; the rest is written. */
+TA_API ta_status ta_host_route_begin(ta_host *h, const ta_envelope *envelope,
+                                     ta_route_request *request);
 /* LOOKUP: session=0 means missing. DEDUP: session=0 means already present. */
 TA_API ta_status ta_host_route_step(ta_route_request *request, uint64_t session);
 TA_API ta_string_view ta_host_route_reason(uint32_t reason);
@@ -295,10 +300,12 @@ TA_API ta_status ta_host_error_route(ta_host *h, ta_string_view origin, ta_route
  * target/name/explicit sendid borrow the effect. `sendid` includes a generated
  * fallback for transports whose outbox requires one; envelope.sendid preserves
  * the SCXML sendid, including its absence.
- * Persist the revision with the actor, in the same transaction as its outbox. */
+ * Persist the revision with the actor, in the same transaction as its outbox.
+ * Set size, revision and index first; the rest is written. */
 typedef struct ta_host_message {
     uint32_t size;
-    uint32_t pad;
+    uint32_t index;    /* in: the effect's index (with a revision) */
+    uint64_t revision; /* in: durable processing number; 0: a host counter */
     ta_envelope envelope;
     ta_string_view key;
     ta_string_view sendid;
@@ -306,8 +313,8 @@ typedef struct ta_host_message {
     char traceparent[TA_TRACEPARENT_LENGTH]; /* envelope.traceparent's bytes */
     uint32_t pad2;
 } ta_host_message;
-TA_API ta_status ta_host_message_init(ta_host *h, const ta_effect *effect, uint64_t revision,
-                                      uint32_t index, ta_host_message *out);
+TA_API ta_status ta_host_message_init(ta_host *h, const ta_effect *effect,
+                                      ta_host_message *message);
 
 /* Add a peer (connected). Its id and reach become routes to it; an id that
  * already has a peer replaces it (the newer connection wins). */
@@ -320,31 +327,39 @@ TA_API ta_status ta_host_peer_up(ta_host *h, uint32_t peer, int up);
 /* Remove a peer and its routes; queued envelopes fail (unreachable).
  * TA_ERROR_NO_MEMORY: the peer stays, with the envelopes not failed yet. */
 TA_API ta_status ta_host_peer_remove(ta_host *h, uint32_t peer);
-/* Replace what a peer announced it reaches (e.g. after its hello). */
-TA_API ta_status ta_host_peer_reach(ta_host *h, uint32_t peer, const ta_string_view *reach,
-                                    uint32_t n);
+/* Replace what a peer announced it reaches. */
+TA_API ta_status ta_host_peer_reach(ta_host *h, uint32_t peer, ta_string_list reach);
 /* A configured route: envelopes for `system` go to `peer` (0: remove). */
 TA_API ta_status ta_host_route(ta_host *h, ta_string_view system, uint32_t peer);
 /* Policy for untrusted peers: export a local @name (or "*" for every name and
  * session) to `peer` (0: to every peer), optionally limited to event names
  * matching `events` (SCXML event descriptors; empty: all). */
-TA_API ta_status ta_host_export(ta_host *h, uint32_t peer, ta_string_view name,
-                                ta_string_view events);
+typedef struct ta_export_rule {
+    uint32_t peer;
+    uint32_t pad;
+    ta_string_view name;
+    ta_string_view events;
+} ta_export_rule;
+TA_API ta_status ta_host_export(ta_host *h, const ta_export_rule *rule);
 
 /* An envelope from `peer` (0: from this host's own code, no checks):
  * origin validated against the peer's announced systems, policy applied,
- * duplicates dropped (TA_OK, *outcome = TA_ROUTE_DUPLICATE), then delivered
- * locally or relayed to another peer. A refusal is reported both in *outcome
- * and as a TA_HOST_EFFECT_PEER_ERROR effect addressed back to the peer, so the
+ * duplicates dropped (TA_ROUTE_DUPLICATE), then delivered locally or relayed
+ * to another peer. Returns the outcome, TA_ROUTE_* (0 or more), or an error
+ * (negative). A refusal is reported both as TA_ROUTE_REFUSED and as a
+ * TA_HOST_EFFECT_PEER_ERROR effect addressed back to the peer, so the
  * sender's system can turn it into error.communication. TA_ERROR_NO_MEMORY:
  * nothing was done or remembered (delivering it again is not a duplicate). */
 enum { TA_ROUTE_DELIVERED = 0, TA_ROUTE_RELAYED = 1, TA_ROUTE_DUPLICATE = 2, TA_ROUTE_REFUSED = 3 };
-TA_API ta_status ta_host_deliver(ta_host *h, uint32_t peer, const ta_envelope *environment,
-                                 uint32_t *outcome);
-/* An `err` from `peer` about an envelope this host sent: the origin session
+TA_API int32_t ta_host_deliver(ta_host *h, uint32_t peer, const ta_envelope *envelope);
+/* An `err` from a peer about an envelope this host sent: the origin session
  * gets error.communication (with the sendid); relayed errors go back further. */
-TA_API ta_status ta_host_peer_error(ta_host *h, uint32_t peer, ta_string_view origin,
-                                    ta_string_view msgid, ta_string_view sendid, uint32_t reason);
+typedef struct ta_peer_error {
+    uint32_t peer;   /* the peer it came from */
+    uint32_t reason; /* TA_ROUTE_ERROR_* */
+    ta_string_view origin, msgid, sendid;
+} ta_peer_error;
+TA_API ta_status ta_host_peer_error(ta_host *h, const ta_peer_error *error);
 /* A round trip the transport measured (ms), for the route status. */
 TA_API void ta_host_peer_round_trip_time(ta_host *h, uint32_t peer, uint32_t ms);
 
@@ -363,23 +378,25 @@ TA_API ta_status ta_host_peer_status(const ta_host *h, uint32_t peer, ta_peer_st
 
 /* ---- migration ---------------------------------------------------------------- */
 enum { TA_HOST_MIGRATE_WAKE = 1u << 0 };
-/* Move actors of older versions to the current version of their chart:
- * `name` empty = every chart; session != 0: only that actor. timeout: system
- * ticks from now (0 = none). */
-TA_API ta_status ta_host_migrate(ta_host *h, ta_string_view name, uint64_t session, uint32_t flags,
-                                 ta_time timeout, uint32_t *job);
+/* Move actors of older versions to the current version of their chart. */
+typedef struct ta_host_migration {
+    ta_string_view name; /* empty: every chart */
+    uint64_t session;    /* != 0: only that actor */
+    uint32_t flags;      /* TA_HOST_MIGRATE_* */
+    uint32_t pad;
+    ta_time timeout; /* system ticks from now (0 = none) */
+} ta_host_migration;
+TA_API ta_status ta_host_migrate(ta_host *h, const ta_host_migration *migration, uint32_t *job);
 /* Sessions a finished job left behind (valid until the next ta_host_run). */
-TA_API uint32_t ta_host_job_pending(const ta_host *h, uint32_t job, uint64_t *out,
-                                    uint32_t capacity);
+TA_API uint32_t ta_host_job_pending(const ta_host *h, uint32_t job, ta_uint64_array out);
 
 /* ---- hibernation (the host stores the blobs) ------------------------------------ */
-/* CLOCK sweep over all segments: up to `max_scan` slots, at most `capacity`
- * sessions that did not run since the previous sweep and could be
- * hibernated now. */
-TA_API uint32_t ta_host_sweep(ta_host *h, uint32_t max_scan, uint64_t *out, uint32_t capacity);
-TA_API ta_status ta_host_hibernate(ta_host *h, uint64_t session, void *buffer, size_t capacity,
-                                   size_t *length);
-TA_API ta_status ta_host_wake(ta_host *h, uint64_t session, const void *blob, size_t length);
+/* CLOCK sweep over all segments: up to `max_scan` slots, at most
+ * out.capacity sessions that did not run since the previous sweep and could
+ * be hibernated now. */
+TA_API uint32_t ta_host_sweep(ta_host *h, uint32_t max_scan, ta_uint64_array out);
+TA_API ta_status ta_host_hibernate(ta_host *h, uint64_t session, ta_buffer *out);
+TA_API ta_status ta_host_wake(ta_host *h, uint64_t session, ta_bytes blob);
 
 /* ---- moving actors between hosts (another process, a restart) --------------------
  * ta_host_export_actor: ta_actor_export of the root actor `session` wherever it
@@ -393,10 +410,13 @@ TA_API ta_status ta_host_wake(ta_host *h, uint64_t session, const void *blob, si
  * *session: the root's id.
  * Delayed sends keep their due times: for hosts with separate clocks, ta_blob_rebase
  * the blob first. */
-TA_API ta_status ta_host_export_actor(ta_host *h, uint64_t session, void *buffer, size_t capacity,
-                                      size_t *length);
-TA_API ta_status ta_host_adopt(ta_host *h, uint32_t segment, const void *blob, size_t length,
-                               uint64_t *session);
+TA_API ta_status ta_host_export_actor(ta_host *h, uint64_t session, ta_buffer *out);
+typedef struct ta_host_adoption {
+    uint32_t segment;
+    uint32_t pad;
+    ta_bytes blob;
+} ta_host_adoption;
+TA_API ta_status ta_host_adopt(ta_host *h, const ta_host_adoption *adoption, uint64_t *session);
 
 /* ---- snapshot / restore -------------------------------------------------------------
  * A snapshot is the whole host — every segment's region (actors, queues,
@@ -404,8 +424,7 @@ TA_API ta_status ta_host_adopt(ta_host *h, uint32_t segment, const void *blob, s
  * It is for inspection and for taking a host out of memory for a while, not
  * for durability or backups: it holds raw region memory (see below).
  * It needs a quiescent host: effects acknowledged and no migration job
- * running (TA_ERROR_STATE otherwise). With buffer NULL (or capacity too small:
- * TA_ERROR_NO_MEMORY) *length is the size needed.
+ * running (TA_ERROR_STATE otherwise). Written into `out` (ta_buffer).
  *
  * Datamodel state is not in it: regions refer to datamodel instances and
  * payloads by handle, and the host restores its datamodels so those handles
@@ -414,28 +433,34 @@ TA_API ta_status ta_host_adopt(ta_host *h, uint32_t segment, const void *blob, s
  * ta_datamodel_ecmascript_snapshot/_restore). Images are supplied again, one per
  * segment (NULL for retired ones); ta_host_snapshot_segments tells which.
  * Snapshots are for the same build of the library (regions are raw memory). */
-TA_API ta_status ta_host_snapshot(ta_host *h, void *buffer, size_t capacity, size_t *length);
+TA_API ta_status ta_host_snapshot(ta_host *h, ta_buffer *out);
 /* The segments a snapshot has: returns their number; hashes[i] is segment i's
  * image content hash (ta_image_info.content_hash), 0 for a retired segment.
  * 0 if the blob is not a host snapshot. */
-TA_API uint32_t ta_host_snapshot_segments(const void *snap, size_t length, uint64_t *hashes,
-                                          uint32_t capacity);
-/* A new host (config as for ta_host_new) running the snapshot. images[i] must be
- * the image segment i ran (same content hash) or NULL if it was retired; the
- * image bytes must stay valid as with ta_host_add_image. Charts are attached
- * to the datamodels again during the call. */
-TA_API ta_status ta_host_restore(const ta_host_config *config, const ta_image *const *images,
-                                 uint32_t image_count, const void *snap, size_t length,
+TA_API uint32_t ta_host_snapshot_segments(ta_bytes snapshot, ta_uint64_array hashes);
+/* A snapshot to restore and the image of each of its segments: images[i]
+ * must be the image segment i ran (same content hash) or NULL if it was
+ * retired; the image bytes must stay valid as with ta_host_add_image. */
+typedef struct ta_host_snapshot_input {
+    ta_bytes snapshot;
+    const ta_image *const *images;
+    uint32_t image_count;
+    uint32_t pad;
+} ta_host_snapshot_input;
+/* A new host (config as for ta_host_new) running the snapshot. Charts are
+ * attached to the datamodels again during the call. */
+TA_API ta_status ta_host_restore(const ta_host_config *config, const ta_host_snapshot_input *input,
                                  ta_host **out);
+/* The datamodels' state as the caller keeps it, labelled with their name. */
+typedef struct ta_datamodel_state {
+    ta_string_view datamodel;
+    ta_bytes state;
+} ta_datamodel_state;
 /* A whole system in one blob: the host's snapshot (ta_host_snapshot), the
- * datamodels' state as the caller gives it, labelled `datamodel`, and the
- * image of every live segment, with the system id and the host's time.
- * TA_ERROR_NO_MEMORY with *length = the bytes needed when capacity is too
- * small; otherwise as ta_host_snapshot. The blob's parts are 8-aligned when
- * the blob is. */
-TA_API ta_status ta_host_snapshot_pack(ta_host *h, ta_string_view datamodel, const void *state,
-                                       size_t state_length, void *buffer, size_t capacity,
-                                       size_t *length);
+ * datamodels' state, and the image of every live segment, with the system
+ * id and the host's time, written into `out` (ta_buffer); otherwise as
+ * ta_host_snapshot. The blob's parts are 8-aligned when the blob is. */
+TA_API ta_status ta_host_snapshot_pack(ta_host *h, const ta_datamodel_state *state, ta_buffer *out);
 typedef struct ta_host_snapshot_contents {
     uint32_t size;
     uint32_t image_count; /* segments; ta_host_snapshot_image gives each one's image */
@@ -448,11 +473,9 @@ typedef struct ta_host_snapshot_contents {
 } ta_host_snapshot_contents;
 /* The parts of a blob of ta_host_snapshot_pack (views into it). Set
  * out->size first. TA_ERROR_INVALID when it is not one. */
-TA_API ta_status ta_host_snapshot_unpack(const void *pack, size_t length,
-                                         ta_host_snapshot_contents *out);
-/* Segment i's image in the blob; NULL (and *image_length 0) for a retired one. */
-TA_API const void *ta_host_snapshot_image(const void *pack, size_t length, uint32_t i,
-                                          size_t *image_length);
+TA_API ta_status ta_host_snapshot_unpack(ta_bytes pack, ta_host_snapshot_contents *out);
+/* Segment i's image in the blob; empty for a retired one. */
+TA_API ta_bytes ta_host_snapshot_image(ta_bytes pack, uint32_t i);
 
 /* ---- inspection ------------------------------------------------------------------ */
 /* The host's counters (tinyactors/stats.h). Set `size` first. */
@@ -492,13 +515,17 @@ TA_API ta_status ta_host_trace_set(ta_host *h, const ta_host_trace_options *opti
 /* A watch: rules (as in ta_host_trace_options) that hold until the host's
  * time reaches `until` (UINT64_MAX: until ta_host_trace_unwatch). The time a
  * watch ends is a deadline of ta_host_run. Errors as ta_host_trace_set. */
-TA_API ta_status ta_host_trace_watch(ta_host *h, const ta_trace_rule *rules, uint32_t count,
-                                     ta_time until, uint32_t *id);
+typedef struct ta_host_watch {
+    const ta_trace_rule *rules; /* copied */
+    uint32_t rule_count;
+    uint32_t pad;
+    ta_time until;
+} ta_host_watch;
+TA_API ta_status ta_host_trace_watch(ta_host *h, const ta_host_watch *watch, uint32_t *id);
 /* End a watch early; TA_ERROR_STALE when it has ended. */
 TA_API ta_status ta_host_trace_unwatch(ta_host *h, uint32_t id);
 /* Enumerate sessions host-wide (cursor starts at 0); returns how many (0 = done). */
-TA_API uint32_t ta_host_actors(const ta_host *h, uint64_t *cursor, uint64_t *out,
-                               uint32_t capacity);
+TA_API uint32_t ta_host_actors(const ta_host *h, uint64_t *cursor, ta_uint64_array out);
 
 #ifdef __cplusplus
 }

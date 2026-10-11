@@ -817,7 +817,8 @@ static void otlp_assign_attributes(const otlp_reading *reading, otlp_out *out,
                                    const ta_trace_record *record) {
     const ta_trace_assign *assign = (const ta_trace_assign *)ta_trace_body(record);
     ta_expression_info info;
-    if (ta_image_expression(reading->input->image, record->chart, assign->location, &info) == TA_OK)
+    if (ta_image_expression(reading->input->image, (ta_chart_item){record->chart, assign->location},
+                            &info) == TA_OK)
         otlp_kv_string(reading->otlp, out, F_EVENT_ATTRIBUTES, TEXT("scxml.location"), info.source);
     otlp_kv_value(reading, out, F_EVENT_ATTRIBUTES, TEXT("scxml.value"),
                   TEXT("scxml.value.truncated"), assign->datamodel, assign->payload);
@@ -1523,7 +1524,7 @@ static uint64_t otlp_traces_body(const ta_otlp *otlp) {
     return body;
 }
 
-size_t ta_otlp_traces_size(const ta_otlp *otlp) {
+static size_t otlp_traces_size(const ta_otlp *otlp) {
     if (!otlp->span_count) return 0;
     return otlp_field_size(F_REQUEST_RESOURCE, (uint32_t)otlp_traces_body(otlp));
 }
@@ -1538,9 +1539,13 @@ static void otlp_spans_forget(ta_otlp *otlp) {
     otlp->span_count = 0;
 }
 
-size_t ta_otlp_put_traces(ta_otlp *otlp, void *buffer, size_t size) {
-    if (!size || size != ta_otlp_traces_size(otlp)) return 0;
-    otlp_out out = {(unsigned char *)buffer, (unsigned char *)buffer + size};
+ta_status ta_otlp_put_traces(ta_otlp *otlp, ta_buffer *destination) {
+    size_t size = otlp_traces_size(otlp);
+    destination->length = size;
+    if (!size) return TA_OK;
+    if (destination->capacity < size) return TA_ERROR_NO_MEMORY;
+    unsigned char *buffer = (unsigned char *)destination->pointer;
+    otlp_out out = {buffer, buffer + size};
     otlp_put_length(&out, F_REQUEST_RESOURCE, (uint32_t)otlp_traces_body(otlp));
     otlp_put_resource(otlp, &out);
     const unsigned char *spans = OTLP_POINTER(otlp, spans_relative, unsigned char);
@@ -1558,7 +1563,7 @@ size_t ta_otlp_put_traces(ta_otlp *otlp, void *buffer, size_t size) {
     }
     TA_ASSERT(out.at == out.end);
     otlp_spans_forget(otlp);
-    return size;
+    return TA_OK;
 }
 
 /* the logs' one scope: tinyactors */
@@ -1568,15 +1573,19 @@ static uint32_t otlp_logs_scope_size(const ta_otlp *otlp) {
     return otlp_field_size(F_RS_SCOPES, otlp_field_size(F_SS_SCOPE, scope) + otlp->logs_used);
 }
 
-size_t ta_otlp_logs_size(const ta_otlp *otlp) {
+static size_t otlp_logs_size(const ta_otlp *otlp) {
     if (!otlp->log_count) return 0;
     return otlp_field_size(F_REQUEST_RESOURCE,
                            otlp_resource_size(otlp) + otlp_logs_scope_size(otlp));
 }
 
-size_t ta_otlp_put_logs(ta_otlp *otlp, void *buffer, size_t size) {
-    if (!size || size != ta_otlp_logs_size(otlp)) return 0;
-    otlp_out out = {(unsigned char *)buffer, (unsigned char *)buffer + size};
+ta_status ta_otlp_put_logs(ta_otlp *otlp, ta_buffer *destination) {
+    size_t size = otlp_logs_size(otlp);
+    destination->length = size;
+    if (!size) return TA_OK;
+    if (destination->capacity < size) return TA_ERROR_NO_MEMORY;
+    unsigned char *buffer = (unsigned char *)destination->pointer;
+    otlp_out out = {buffer, buffer + size};
     otlp_put_length(&out, F_REQUEST_RESOURCE,
                     otlp_resource_size(otlp) + otlp_logs_scope_size(otlp));
     otlp_put_resource(otlp, &out);
@@ -1591,7 +1600,7 @@ size_t ta_otlp_put_logs(ta_otlp *otlp, void *buffer, size_t size) {
     otlp_put_bytes(&out, OTLP_POINTER(otlp, logs_relative, unsigned char), otlp->logs_used);
     TA_ASSERT(out.at == out.end);
     otlp->logs_used = otlp->log_count = 0;
-    return size;
+    return TA_OK;
 }
 
 ta_status ta_otlp_set_resource(ta_otlp *otlp, const ta_otlp_attribute *attributes, uint32_t count) {
@@ -1757,20 +1766,19 @@ static ta_otlp *otlp_place(void *memory, size_t length, const ta_otlp_config *co
     return otlp;
 }
 
-ta_status ta_otlp_init(void *memory, size_t length, const ta_otlp_config *config, ta_otlp **out) {
+ta_status ta_otlp_init(ta_memory memory, const ta_otlp_config *config, ta_otlp **out) {
     *out = (ta_otlp *)0;
-    if (!memory) return TA_ERROR_INVALID;
+    if (!memory.pointer) return TA_ERROR_INVALID;
     ta_otlp_config normalized;
     otlp_normalize(config, &normalized);
-    ta_otlp *otlp = otlp_place(memory, length, &normalized);
+    ta_otlp *otlp = otlp_place(memory.pointer, memory.length, &normalized);
     if (!otlp) return TA_ERROR_NO_MEMORY;
     *out = otlp;
     return TA_OK;
 }
 
-ta_status ta_otlp_relocate(ta_otlp *otlp, void *memory, size_t length, const ta_otlp_config *config,
-                           ta_otlp **out) {
-    *out = (ta_otlp *)0;
+ta_status ta_otlp_relocate(ta_otlp **relocated, ta_memory memory, const ta_otlp_config *config) {
+    ta_otlp *otlp = *relocated;
     ta_otlp_config normalized;
     otlp_normalize(config ? config : &otlp->config, &normalized);
     uint32_t entry_capacity = normalized.staging_bytes / 64u + 16u;
@@ -1781,7 +1789,7 @@ ta_status ta_otlp_relocate(ta_otlp *otlp, void *memory, size_t length, const ta_
         normalized.metric_bytes < otlp->metrics_used ||
         normalized.span_metric_charts < otlp->duration_count)
         return TA_ERROR_INVALID;
-    ta_otlp *moved = otlp_place(memory, length, &normalized);
+    ta_otlp *moved = otlp_place(memory.pointer, memory.length, &normalized);
     if (!moved) return TA_ERROR_NO_MEMORY;
     /* the staging, the scopes, the logs, the resource and the chunks move as
      * they are (indices stay); the open sessions are added again (the index
@@ -1837,7 +1845,7 @@ ta_status ta_otlp_relocate(ta_otlp *otlp, void *memory, size_t length, const ta_
         *added = *open; /* chains keep their chunk indices */
     }
     otlp->magic = 0; /* the old block is dead */
-    *out = moved;
+    *relocated = moved;
     return TA_OK;
 }
 
@@ -2049,15 +2057,19 @@ static uint32_t otlp_metrics_scope_size(const ta_otlp *otlp) {
     return otlp_field_size(F_RS_SCOPES, otlp_field_size(F_SS_SCOPE, scope) + otlp->metrics_used);
 }
 
-size_t ta_otlp_metrics_size(const ta_otlp *otlp) {
+static size_t otlp_metrics_size(const ta_otlp *otlp) {
     if (!otlp->metric_count) return 0;
     return otlp_field_size(F_REQUEST_RESOURCE,
                            otlp_resource_size(otlp) + otlp_metrics_scope_size(otlp));
 }
 
-size_t ta_otlp_put_metrics(ta_otlp *otlp, void *buffer, size_t size) {
-    if (!size || size != ta_otlp_metrics_size(otlp)) return 0;
-    otlp_out out = {(unsigned char *)buffer, (unsigned char *)buffer + size};
+ta_status ta_otlp_put_metrics(ta_otlp *otlp, ta_buffer *destination) {
+    size_t size = otlp_metrics_size(otlp);
+    destination->length = size;
+    if (!size) return TA_OK;
+    if (destination->capacity < size) return TA_ERROR_NO_MEMORY;
+    unsigned char *buffer = (unsigned char *)destination->pointer;
+    otlp_out out = {buffer, buffer + size};
     otlp_put_length(&out, F_REQUEST_RESOURCE,
                     otlp_resource_size(otlp) + otlp_metrics_scope_size(otlp));
     otlp_put_resource(otlp, &out);
@@ -2072,7 +2084,7 @@ size_t ta_otlp_put_metrics(ta_otlp *otlp, void *buffer, size_t size) {
     otlp_put_bytes(&out, OTLP_POINTER(otlp, metrics_relative, unsigned char), otlp->metrics_used);
     TA_ASSERT(out.at == out.end);
     otlp->metrics_used = otlp->metric_count = 0;
-    return size;
+    return TA_OK;
 }
 
 /* ---- the stats as metrics ---------------------------------------------------------------- */
@@ -2340,18 +2352,17 @@ ta_status ta_otlp_add_stats(ta_otlp *otlp, const ta_otlp_stats_input *input) {
     return status;
 }
 
-ta_status ta_otlp_add_span_metrics(ta_otlp *into, const ta_otlp *from, uint64_t start_ns,
-                                   uint64_t time_ns) {
-    uint32_t count = from->duration_count;
+ta_status ta_otlp_add_span_metrics(ta_otlp *otlp, uint64_t start_ns, uint64_t time_ns) {
+    uint32_t count = otlp->duration_count;
     if (!count) return TA_OK;
-    /* points, attributes and exemplars in the scratch area of `into` */
-    ta_otlp_exemplar *exemplars = OTLP_POINTER(into, scratch_relative, ta_otlp_exemplar);
+    /* points, attributes and exemplars in its scratch area */
+    ta_otlp_exemplar *exemplars = OTLP_POINTER(otlp, scratch_relative, ta_otlp_exemplar);
     ta_otlp_point *points = (ta_otlp_point *)(exemplars + count * OTLP_DURATION_BUCKETS);
     ta_otlp_attribute *attributes = (ta_otlp_attribute *)(points + count);
     uint64_t need = (uint64_t)count * (sizeof *points + sizeof *attributes +
                                        OTLP_DURATION_BUCKETS * sizeof *exemplars);
-    if (need > into->scratch_bytes) return TA_ERROR_NO_MEMORY;
-    const otlp_duration *table = otlp_durations(from);
+    if (need > otlp->scratch_bytes) return TA_ERROR_NO_MEMORY;
+    const otlp_duration *table = otlp_durations(otlp);
     for (uint32_t i = 0; i < count; i++) {
         const otlp_duration *entry = &table[i];
         ta_otlp_point *point = &points[i];
@@ -2381,5 +2392,5 @@ ta_status ta_otlp_add_span_metrics(ta_otlp *into, const ta_otlp *from, uint64_t 
     metric.point_count = count;
     metric.start_ns = start_ns;
     metric.time_ns = time_ns;
-    return ta_otlp_add_metric(into, &metric);
+    return ta_otlp_add_metric(otlp, &metric);
 }

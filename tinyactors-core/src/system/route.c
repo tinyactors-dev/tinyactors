@@ -520,9 +520,11 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
     return TA_POOL_NONE;
 }
 
-ta_status ta_system_resume(ta_system *system, uint32_t request, ta_status status,
-                           ta_payload result) {
+ta_status ta_system_resume(ta_system *system, const ta_resume *resume) {
     if (system->in_call) return TA_ERROR_STATE;
+    uint32_t request = resume->request;
+    ta_status status = resume->status;
+    ta_payload result = resume->result;
     ta_core *core = &system->core;
     uint32_t ri = ta_pool_resolve(&system->requests, request);
     if (ri == TA_NIL) return TA_ERROR_STALE;

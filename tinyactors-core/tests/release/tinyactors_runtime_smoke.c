@@ -20,7 +20,7 @@ int main(void) {
     options.alloc = ta_runtime_malloc();
     ta_source source = {{"smoke.scxml", 11}, {CHART, sizeof CHART - 1}};
     ta_compile_result *compiled = NULL;
-    if (ta_compile_charts(&options, &source, 1, &compiled) != TA_OK) {
+    if (ta_compile_charts(&options, (ta_source_list){&source, 1}, &compiled) != TA_OK) {
         fprintf(stderr, "tinyactors_runtime smoke: the chart did not compile\n");
         return 1;
     }
@@ -39,8 +39,10 @@ int main(void) {
     ta_system *system = NULL;
     uint32_t actor = 0;
     ta_string_view name = {"smoke", 5};
-    if (ta_runtime_system_new(&image, &config, NULL, 0, &system) != TA_OK ||
-        ta_system_spawn(system, 0, name, 0, (ta_string_view){0, 0}, &actor) != TA_OK) {
+    if (ta_runtime_system_new(&(ta_system_setup){{0, 0}, &image, &config, NULL, 0, 0}, &system) !=
+            TA_OK ||
+        ta_system_spawn(system, &(ta_spawn){0, 0, name, 0, (ta_string_view){0, 0}}, &actor) !=
+            TA_OK) {
         fprintf(stderr, "tinyactors_runtime smoke: no actor\n");
         return 1;
     }

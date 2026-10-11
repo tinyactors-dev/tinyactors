@@ -62,15 +62,15 @@ static ta_status rt_alloc_region(const ta_image *image, const ta_system_config *
     return TA_OK;
 }
 
-ta_status ta_runtime_system_new(const ta_image *image, const ta_system_config *config,
-                                const ta_datamodel_binding *datamodels, uint32_t datamodel_count,
-                                ta_system **out) {
+ta_status ta_runtime_system_new(const ta_system_setup *setup, ta_system **out) {
     void *block, *region;
     size_t length;
     *out = NULL;
-    ta_status status = rt_alloc_region(image, config, &block, &region, &length);
+    ta_status status = rt_alloc_region(setup->image, setup->config, &block, &region, &length);
     if (status != TA_OK) return status;
-    status = ta_system_init(region, length, image, config, datamodels, datamodel_count, out);
+    ta_system_setup placed = *setup;
+    placed.memory = (ta_memory){region, length};
+    status = ta_system_init(&placed, out);
     if (status != TA_OK || (void *)*out != region) { /* malloc is 16-aligned: system == region */
         if (*out) ta_system_deinit(*out);
         free(block);
@@ -145,8 +145,8 @@ static int grow_system(ta_system **system_slot, uint32_t pool) {
     void *block, *region;
     size_t length;
     if (rt_alloc_region(system->core.image, &config, &block, &region, &length) != TA_OK) return 0;
-    ta_system *new_system;
-    if (ta_system_relocate(system, region, length, &config, &new_system) != TA_OK ||
+    ta_system *new_system = system;
+    if (ta_system_relocate(&new_system, (ta_memory){region, length}, &config) != TA_OK ||
         (void *)new_system != region) {
         free(block);
         return 0;

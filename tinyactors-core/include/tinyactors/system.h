@@ -100,23 +100,38 @@ enum { TA_TRACING_ENABLED = 0, TA_TRACING_DISABLED = 1 };
 #define TA_TRACE_BYTES_PER_EVENT 512u
 
 /* ---- lifetime: one caller-owned memory block ---------------------------- */
+/* A system to create: the block it lives in, the image it runs, its
+ * capacities and the datamodels its charts use (borrowed for as long as
+ * the system lives). */
+typedef struct ta_system_setup {
+    ta_memory memory; /* ta_system_layout bytes (ta_runtime_system_new: unused) */
+    const ta_image *image;
+    const ta_system_config *config; /* ta_system_restore: host pointers only, may be NULL */
+    const ta_datamodel_binding *datamodels;
+    uint32_t datamodel_count;
+    uint32_t pad;
+} ta_system_setup;
 TA_API ta_status ta_system_layout(const ta_image *image, const ta_system_config *config,
                                   size_t *bytes);
-TA_API ta_status ta_system_init(void *memory, size_t length, const ta_image *image,
-                                const ta_system_config *config,
-                                const ta_datamodel_binding *datamodels, uint32_t datamodel_count,
-                                ta_system **out);
-/* Move into a bigger block with bigger capacities (memcpy + fix-up). */
-TA_API ta_status ta_system_relocate(ta_system *system, void *new_memory, size_t new_length,
-                                    const ta_system_config *new_config, ta_system **out);
+TA_API ta_status ta_system_init(const ta_system_setup *setup, ta_system **out);
+/* Move into a bigger block with bigger capacities (memcpy + fix-up); on
+ * TA_OK *system is the system in its new block. */
+TA_API ta_status ta_system_relocate(ta_system **system, ta_memory memory,
+                                    const ta_system_config *config);
 TA_API void ta_system_deinit(ta_system *system);
 
 /* ---- actors ------------------------------------------------------------- */
 TA_API ta_status ta_system_boot(ta_system *system); /* spawn image-defined actors */
-/* Spawn a root actor. Its bootstrap runs under `traceparent` (W3C text) when
- * it parses, else in a new trace. */
-TA_API ta_status ta_system_spawn(ta_system *system, uint32_t chart, ta_string_view name,
-                                 ta_payload params, ta_string_view traceparent, uint32_t *actor);
+/* A root actor to spawn. Its bootstrap runs under `traceparent` (W3C text)
+ * when it parses, else in a new trace. */
+typedef struct ta_spawn {
+    uint32_t segment; /* ta_host_spawn: the segment (ta_host_chart); ta_system_spawn: unused */
+    uint32_t chart;
+    ta_string_view name;
+    ta_payload params; /* moved into the system on success */
+    ta_string_view traceparent;
+} ta_spawn;
+TA_API ta_status ta_system_spawn(ta_system *system, const ta_spawn *spawn, uint32_t *actor);
 TA_API ta_status ta_system_terminate(ta_system *system, uint32_t actor);
 TA_API uint32_t ta_system_actor_by_name(const ta_system *system, ta_string_view name);
 TA_API uint32_t ta_system_actor_by_session(const ta_system *system,
@@ -126,8 +141,7 @@ TA_API uint32_t ta_system_actor_by_session(const ta_system *system,
  * more). A call scans slots until it found capacity actors (one byte per free
  * slot); a whole walk is O(slots in use so far). Take chunks (e.g. 256) and
  * resume later to keep the host's loop responsive. */
-TA_API uint32_t ta_system_actors(const ta_system *system, uint32_t *cursor, uint32_t *out,
-                                 uint32_t capacity);
+TA_API uint32_t ta_system_actors(const ta_system *system, uint32_t *cursor, ta_uint32_array out);
 
 /* ---- inbound ------------------------------------------------------------ */
 enum {
@@ -141,7 +155,8 @@ typedef struct ta_event_in {
     uint32_t size;
     uint32_t target; /* actor handle */
     uint32_t flags;
-    uint32_t token; /* invoke token / send token, depending on flags */
+    uint32_t token;   /* invoke token / send token, depending on flags */
+    uint64_t session; /* ta_host_send, _send_many: the target session (target is ignored) */
     ta_string_view name;
     ta_string_view sendid;
     ta_string_view origin;
@@ -162,8 +177,15 @@ TA_API ta_status ta_system_send(ta_system *system, const ta_event_in *event);
  * accepted prefix. events[returned] failed (its payload stays the caller's: on
  * TA_ERROR_NO_MEMORY grow and continue from it, else release it and skip it). */
 TA_API uint32_t ta_system_send_many(ta_system *system, const ta_event_in *events, uint32_t n);
-TA_API ta_status ta_system_resume(ta_system *system, uint32_t request, ta_status status,
-                                  ta_payload result);
+/* The answer to a TA_EFFECT_REQUEST. */
+typedef struct ta_resume {
+    uint32_t segment; /* ta_host_resume: the segment of the effect; ta_system_resume: unused */
+    uint32_t request; /* the effect's token */
+    ta_status status;
+    uint32_t pad;
+    ta_payload result; /* moved into the system on success */
+} ta_resume;
+TA_API ta_status ta_system_resume(ta_system *system, const ta_resume *resume);
 
 /* ---- execution ---------------------------------------------------------- */
 enum {
@@ -198,7 +220,7 @@ TA_API ta_time ta_system_next_deadline(const ta_system *system);
 /* ---- outbound effects (batched, borrowed) ------------------------------- */
 enum {
     TA_EFFECT_SEND = 1,     /* external send (fire-and-forget) */
-    TA_EFFECT_REQUEST = 2,  /* needs ta_system_resume(token, ...) */
+    TA_EFFECT_REQUEST = 2,  /* needs ta_system_resume (ta_resume.request = token) */
     TA_EFFECT_INVOKE = 3,   /* start external invoke (token = invoke token) */
     TA_EFFECT_UNINVOKE = 4, /* cancel external invoke */
     TA_EFFECT_LOG = 5,
@@ -211,7 +233,8 @@ enum { TA_EFFECT_FLAG_NEEDS_RESPONSE = 1u << 0 };
  *   SEND      target, event (name), sendid, payload, io_processor; token = external
  *             invoke token when sending to an external invoke ("#_<id>")
  *   REQUEST   aux = unresolved invoke src; answer with
- *             ta_system_resume(token, TA_OK, chart_index + 1) or an error
+ *             ta_system_resume with {.request = token, .status = TA_OK,
+ *             .result = chart_index + 1} or an error
  *   INVOKE    event = type, target = src, sendid = invokeid, payload = params;
  *             report back with ta_event_in{.token, TA_EVENT_IN_FROM_INVOKE /
  *             TA_EVENT_IN_INVOKE_DONE}
@@ -275,8 +298,8 @@ typedef struct ta_actor_info {
 
 /* Set out->size first (sizeof(ta_actor_info)); exactly that much is written. */
 TA_API ta_status ta_actor_info_get(const ta_system *system, uint32_t actor, ta_actor_info *out);
-TA_API uint32_t ta_actor_config(const ta_system *system, uint32_t actor, uint32_t *states,
-                                uint32_t capacity);
+/* The actor's active states (up to states.capacity); returns how many it has. */
+TA_API uint32_t ta_actor_config(const ta_system *system, uint32_t actor, ta_uint32_array states);
 /* Pool occupancy and monotonic counters (tinyactors/stats.h), O(1). Set
  * `size` first. */
 TA_API void ta_system_stats_get(const ta_system *system, ta_system_stats *out);
@@ -371,21 +394,24 @@ TA_API ta_status ta_system_trace_set(ta_system *system, const ta_trace_policy *p
  * ta_actor_hibernate: TA_ERROR_STATE unless the actor is idle at a stable
  * point with empty queues, no invoked children and no pending request;
  * TA_ERROR_UNSUPPORTED if its datamodel cannot serialize it; TA_ERROR_NO_MEMORY if
- * capacity is too small (*length = bytes needed; nothing changes).
+ * `out` is too small (ta_buffer: nothing changes).
  * ta_actor_wake: TA_ERROR_INVALID if the blob does not belong to this actor
  * (session id, chart, image); TA_ERROR_NO_MEMORY if the system needs to grow first
  * (ta_runtime_system_grow, then retry); TA_ERROR_STATE if it is not hibernated.
  * A woken actor can be hibernated again; old blobs are then stale (the host
  * keeps the latest).
  * ta_system_cold_actors: a CLOCK sweep for the host's eviction policy. Scans
- * up to max_scan actor slots from *cursor (wrapping), clears each actor's
- * "ran since the last sweep" bit and reports actors that did not run since
- * the previous sweep and could be hibernated now. Returns the count. */
-TA_API ta_status ta_actor_hibernate(ta_system *system, uint32_t actor, void *buffer,
-                                    size_t capacity, size_t *length);
-TA_API ta_status ta_actor_wake(ta_system *system, uint32_t actor, const void *blob, size_t length);
-TA_API uint32_t ta_system_cold_actors(ta_system *system, uint32_t *cursor, uint32_t max_scan,
-                                      uint32_t *out, uint32_t capacity);
+ * up to sweep->max_scan actor slots from sweep->cursor (wrapping, and moves
+ * it), clears each actor's "ran since the last sweep" bit and reports actors
+ * that did not run since the previous sweep and could be hibernated now.
+ * Returns the count. */
+typedef struct ta_sweep {
+    uint32_t cursor; /* where the sweep goes on (start at 0) */
+    uint32_t max_scan;
+} ta_sweep;
+TA_API ta_status ta_actor_hibernate(ta_system *system, uint32_t actor, ta_buffer *out);
+TA_API ta_status ta_actor_wake(ta_system *system, uint32_t actor, ta_bytes blob);
+TA_API uint32_t ta_system_cold_actors(ta_system *system, ta_sweep *sweep, ta_uint32_array out);
 
 /* ---- moving and upgrading actors (hot reload; the host does the I/O) -----
  * ta_actor_export: like ta_actor_hibernate, but the actor leaves the system:
@@ -403,11 +429,11 @@ TA_API uint32_t ta_system_cold_actors(ta_system *system, uint32_t *cursor, uint3
  * idle at a stable point with an empty mailbox and no pending request, and
  * awake (not hibernated); invocations the host carries out (external
  * invokes) cannot move: TA_ERROR_STATE. TA_ERROR_UNSUPPORTED if a datamodel
- * cannot serialize a session; TA_ERROR_NO_MEMORY if capacity is too small (*length = bytes
- * needed; nothing changes).
+ * cannot serialize a session; TA_ERROR_NO_MEMORY if `out` is too small (ta_buffer;
+ * nothing changes).
  *
  * ta_blob_migrate: translate an exported blob of chart `from` (of image
- * `from_img`) to chart `to_chart` of `to_img`. Pure: no system involved.
+ * `from_image`) to chart `to_chart` of `to_image`. Pure: no system involved.
  * States are matched by id; the new configuration is completed to a legal
  * one (missing ancestors added, compound states without an active child
  * enter their initial states, parallel states all regions, extra children
@@ -415,8 +441,8 @@ TA_API uint32_t ta_system_cold_actors(ta_system *system, uint32_t *cursor, uint3
  * the same parent; late-binding data flags follow their states. <data> of the
  * new chart whose id the old chart did not declare is listed for
  * initialization on adoption. `out` must be 4-byte aligned. TA_ERROR_NO_MEMORY if
- * capacity is too small (*out_length = bytes needed), TA_ERROR_INVALID if the blob does
- * not belong to from_img, TA_ERROR_UNSUPPORTED for a session tree (an actor
+ * it is too small (ta_buffer), TA_ERROR_INVALID if the blob does
+ * not belong to from_image, TA_ERROR_UNSUPPORTED for a session tree (an actor
  * with running invocations is not translated; it can be moved unchanged, and
  * migrated once its invocations have finished).
  *
@@ -439,14 +465,16 @@ TA_API uint32_t ta_system_cold_actors(ta_system *system, uint32_t *cursor, uint3
  * exporter's clock at export and the adopter's now, so every delayed send
  * keeps the time it had left. TA_ERROR_INVALID if the blob is malformed
  * (nothing changes then). */
-TA_API ta_status ta_actor_export(ta_system *system, uint32_t actor, void *buffer, size_t capacity,
-                                 size_t *length);
-TA_API ta_status ta_blob_migrate(const ta_image *from_image, const ta_image *to_image,
-                                 uint32_t to_chart, const void *blob, size_t length, void *out,
-                                 size_t capacity, size_t *out_length);
-TA_API ta_status ta_system_adopt(ta_system *system, const void *blob, size_t length,
-                                 uint32_t *actor);
-TA_API ta_status ta_blob_rebase(void *blob, size_t length, ta_time from, ta_time to);
+TA_API ta_status ta_actor_export(ta_system *system, uint32_t actor, ta_buffer *out);
+typedef struct ta_blob_migration {
+    const ta_image *from_image, *to_image;
+    uint32_t to_chart;
+    uint32_t pad;
+    ta_bytes blob; /* exported from a system running from_image */
+} ta_blob_migration;
+TA_API ta_status ta_blob_migrate(const ta_blob_migration *migration, ta_buffer *out);
+TA_API ta_status ta_system_adopt(ta_system *system, ta_bytes blob, uint32_t *actor);
+TA_API ta_status ta_blob_rebase(ta_memory blob, ta_time from, ta_time to);
 
 /* Sessions created from now on (spawns, invocations) get ids after `serial`.
  * For hosts that keep sessions outside the system and allocate their ids
@@ -455,18 +483,15 @@ TA_API ta_status ta_blob_rebase(void *blob, size_t length, ta_time from, ta_time
  * handed out. */
 TA_API ta_status ta_system_set_next_serial(ta_system *system, uint64_t serial);
 
-TA_API ta_status ta_system_snapshot(const ta_system *system, void *buffer, size_t capacity,
-                                    size_t *length);
+TA_API ta_status ta_system_snapshot(const ta_system *system, ta_buffer *out);
 /* Deterministic: only real state is written — dead pool/slab/heap/outbox
  * storage is zero, never host-heap residue, and host pointers (the datamodel
  * contexts) are dropped; the restore re-attaches them. */
-/* `host` (may be NULL) re-supplies host pointers such as io_processors; capacities
- * come from the snapshot. Datamodel instance handles stored in the snapshot
- * must be valid for `datamodels` (the host restores its datamodel state). */
-TA_API ta_status ta_system_restore(void *memory, size_t length, const ta_image *image,
-                                   const void *snap, size_t snap_length,
-                                   const ta_system_config *host,
-                                   const ta_datamodel_binding *datamodels, uint32_t datamodel_count,
+/* setup->config (may be NULL) re-supplies host pointers such as
+ * io_processors; capacities come from the snapshot. Datamodel instance
+ * handles stored in the snapshot must be valid for setup->datamodels (the
+ * host restores its datamodel state). */
+TA_API ta_status ta_system_restore(const ta_system_setup *setup, ta_bytes snapshot,
                                    ta_system **out);
 
 #ifdef __cplusplus

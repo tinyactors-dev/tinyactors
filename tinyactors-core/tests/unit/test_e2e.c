@@ -53,7 +53,9 @@ static void run_trace(const ta_image *image, uint32_t quantum, char *trace, size
     config.max_actors = 2; /* grows to 4 on demand */
     config.max_events = 4;
     ta_system *system;
-    CHECK_EQUAL(ta_runtime_system_new(image, &config, &binding, 1, &system), TA_OK);
+    CHECK_EQUAL(
+        ta_runtime_system_new(&(ta_system_setup){{0, 0}, image, &config, &binding, 1, 0}, &system),
+        TA_OK);
     CHECK_EQUAL(ta_system_boot(system), TA_OK);
     trace[0] = 0;
     uint64_t now = 0;

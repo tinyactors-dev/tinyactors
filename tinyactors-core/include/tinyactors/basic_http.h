@@ -26,12 +26,19 @@ typedef struct ta_http_field {
     ta_string_view name, value; /* decoded (outbound: raw values to encode) */
 } ta_http_field;
 
-/* Build a POST request. Returns the message length, or 0 if `capacity` is too small
- * or the URL is not http://host[:port]/path. `fields` may be NULL; `body`
- * (used when fields are empty) is percent-encoded. */
-TA_API size_t ta_http_encode_post(ta_string_view url, ta_string_view event,
-                                  const ta_http_field *fields, uint32_t field_count,
-                                  ta_string_view body, char *out, size_t capacity);
+/* A POST request to build. `fields` may be NULL; `body` (used when fields
+ * are empty) is percent-encoded. */
+typedef struct ta_http_post {
+    ta_string_view url; /* http://host[:port]/path */
+    ta_string_view event;
+    const ta_http_field *fields;
+    uint32_t field_count;
+    uint32_t pad;
+    ta_string_view body;
+} ta_http_post;
+/* Write the request into `out` (ta_buffer). TA_ERROR_INVALID if the URL is
+ * not http://host[:port]/path. */
+TA_API ta_status ta_http_encode_post(const ta_http_post *post, ta_buffer *out);
 
 typedef struct ta_http_request {
     ta_string_view method, target, body;
@@ -40,10 +47,9 @@ typedef struct ta_http_request {
     ta_http_field fields[32]; /* decoded form fields except _scxmleventname */
 } ta_http_request;
 
-/* Parse a request; decoded strings are written into `scratch` (needs at most
- * `length` bytes). Returns 0 on success, -1 if malformed. */
-TA_API int ta_http_parse_request(const char *message, size_t length, char *scratch,
-                                 size_t scratch_capacity, ta_http_request *out);
+/* Parse a request; decoded strings are written into `scratch` (ta_buffer;
+ * it needs at most the message's length). TA_ERROR_INVALID if malformed. */
+TA_API ta_status ta_http_parse_request(ta_bytes message, ta_buffer *scratch, ta_http_request *out);
 
 #ifdef __cplusplus
 }

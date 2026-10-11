@@ -4,7 +4,9 @@
  *   - only fixed-width integers, pointers and {pointer, length} views cross the ABI;
  *   - enums are passed as uint32_t, never as C enum types inside structs;
  *   - every extensible struct starts with `uint32_t size` (= sizeof by caller);
- *   - ids/handles are uint32_t; 0 is never a valid handle.
+ *   - ids/handles are uint32_t; 0 is never a valid handle;
+ *   - a function takes at most three parameters: what travels together is
+ *     grouped in a struct (ta_bytes, ta_buffer, ta_spawn, ...).
  */
 #ifndef TINYACTORS_TYPES_H
 #define TINYACTORS_TYPES_H
@@ -74,6 +76,27 @@ typedef struct ta_buffer {
     size_t capacity, length;
 } ta_buffer;
 
+/* A block of memory the caller owns and lends: a system's or an encoder's
+ * region, or bytes a call changes in place. */
+typedef struct ta_memory {
+    void *pointer;
+    size_t length;
+} ta_memory;
+/* Room for up to `capacity` items a call writes for its caller; the call
+ * returns how many it wrote (or how many there are, as it documents). */
+typedef struct ta_uint32_array {
+    uint32_t *pointer;
+    uint32_t capacity;
+} ta_uint32_array;
+typedef struct ta_uint64_array {
+    uint64_t *pointer;
+    uint32_t capacity;
+} ta_uint64_array;
+/* `count` strings a call reads (borrowed for the call). */
+typedef struct ta_string_list {
+    const ta_string_view *pointer;
+    uint32_t count;
+} ta_string_list;
 /* Status codes. Negative = error. */
 typedef int32_t ta_status;
 enum {

@@ -23,15 +23,20 @@ static void test_layout_and_init(void) {
     CHECK(need > sizeof(ta_system));
     unsigned char *memory = (unsigned char *)malloc(need + 16);
     ta_system *system = NULL;
-    CHECK_EQUAL(ta_system_init(memory + 3, need - 8, &t.image, &config, &t.binding, 1, &system),
+    CHECK_EQUAL(ta_system_init(
+                    &(ta_system_setup){{memory + 3, need - 8}, &t.image, &config, &t.binding, 1, 0},
+                    &system),
                 TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(ta_system_init(memory + 3, need, &t.image, &config, &t.binding, 1, &system),
-                TA_OK); /* misaligned ok */
+    CHECK_EQUAL(
+        ta_system_init(&(ta_system_setup){{memory + 3, need}, &t.image, &config, &t.binding, 1, 0},
+                       &system),
+        TA_OK); /* misaligned ok */
     CHECK(system != NULL);
     ta_system_deinit(system);
     /* missing datamodel implementation */
-    CHECK_EQUAL(ta_system_init(memory, need, &t.image, &config, NULL, 0, &system),
-                TA_ERROR_UNSUPPORTED);
+    CHECK_EQUAL(
+        ta_system_init(&(ta_system_setup){{memory, need}, &t.image, &config, NULL, 0, 0}, &system),
+        TA_ERROR_UNSUPPORTED);
     free(memory);
     tsys_free(&t);
     fprintf(stderr, "  region for 64 actors (defaults): %zu bytes\n", need);
@@ -261,8 +266,9 @@ static void test_external_invoke_and_request(void) {
     uint32_t kid = ta_image_chart_by_name(&t.image, (ta_string_view){"kid.scxml", 9});
     CHECK(kid == TA_NIL); /* only linked if statically referenced */
     /* resolve to chart 0 (main) would recurse; resolve with an error instead */
-    CHECK_EQUAL(ta_system_resume(t.system, req, TA_ERROR_INVALID, 0), TA_OK);
-    CHECK_EQUAL(ta_system_resume(t.system, req, TA_OK, 1), TA_ERROR_STALE); /* already answered */
+    CHECK_EQUAL(ta_system_resume(t.system, &(ta_resume){0, req, TA_ERROR_INVALID, 0, 0}), TA_OK);
+    CHECK_EQUAL(ta_system_resume(t.system, &(ta_resume){0, req, TA_OK, 0, 1}),
+                TA_ERROR_STALE); /* already answered */
     tsys_run(&t, 100000, 5);
     CHECK(strcmp(tsys_config(&t, a), "b") == 0); /* error.execution, no done.invoke.dyn */
     tsys_free(&t);
@@ -292,8 +298,8 @@ static void test_exhaustion_and_relocate(void) {
     size_t need;
     CHECK_EQUAL(ta_system_layout(&t.image, &big, &need), TA_OK);
     void *memory2 = malloc(need);
-    ta_system *s2;
-    CHECK_EQUAL(ta_system_relocate(t.system, memory2, need, &big, &s2), TA_OK);
+    ta_system *s2 = t.system;
+    CHECK_EQUAL(ta_system_relocate(&s2, (ta_memory){memory2, need}, &big), TA_OK);
     free(t.memory);
     t.memory = memory2;
     t.system = s2;
@@ -327,8 +333,8 @@ static void test_timer_exhaustion(void) {
     size_t need;
     CHECK_EQUAL(ta_system_layout(&t.image, &big, &need), TA_OK);
     void *memory2 = malloc(need);
-    ta_system *s2;
-    CHECK_EQUAL(ta_system_relocate(t.system, memory2, need, &big, &s2), TA_OK);
+    ta_system *s2 = t.system;
+    CHECK_EQUAL(ta_system_relocate(&s2, (ta_memory){memory2, need}, &big), TA_OK);
     free(t.memory);
     t.memory = memory2;
     t.system = s2;
@@ -364,8 +370,10 @@ static void test_snapshot_no_residue(void) {
         CHECK_EQUAL(ta_system_layout(&t.image, &config, &need), TA_OK);
         unsigned char *memory = (unsigned char *)malloc(need);
         memset(memory, h ? 0x5C : 0xA5, need); /* native-heap residue, made visible */
-        CHECK_EQUAL(ta_system_init(memory, need, &t.image, &config, &t.binding, 1, &t.system),
-                    TA_OK);
+        CHECK_EQUAL(
+            ta_system_init(&(ta_system_setup){{memory, need}, &t.image, &config, &t.binding, 1, 0},
+                           &t.system),
+            TA_OK);
         t.memory = memory;
         t.memory_length = need;
         CHECK_EQUAL(ta_system_boot(t.system), TA_OK);
@@ -380,11 +388,13 @@ static void test_snapshot_no_residue(void) {
         CHECK_EQUAL(t.effect_count[TA_EFFECT_DONE], 1); /* actor and its records are freed */
         for (ta_trace_view view; ta_system_trace(t.system, &view);) /* and its trace, read */
             ta_system_trace_ack(t.system, view.length);
-        size_t length;
-        CHECK_EQUAL(ta_system_snapshot(t.system, NULL, 0, &length), TA_OK);
+        ta_buffer out = {NULL, 0, 0};
+        CHECK_EQUAL(ta_system_snapshot(t.system, &out), TA_ERROR_NO_MEMORY);
+        size_t length = out.length;
         snap[h] = malloc(length);
-        slen[h] = length;
-        CHECK_EQUAL(ta_system_snapshot(t.system, snap[h], length, &slen[h]), TA_OK);
+        out = (ta_buffer){snap[h], length, 0};
+        CHECK_EQUAL(ta_system_snapshot(t.system, &out), TA_OK);
+        slen[h] = out.length;
         unsigned char poison = h ? 0x5C : 0xA5;
         int run = 0, bad = 0;
         for (size_t i = 0; i < length; i++) {
@@ -412,10 +422,12 @@ static void test_snapshot_restore(void) {
     tsys_run(&t, 10000, 5);
     tsys_send(&t, a, "ping", "{v: 'x'}");
     tsys_send(&t, a, "ping", "{v: 'y'}"); /* queued in the mailbox at snapshot time */
-    size_t length;
-    CHECK_EQUAL(ta_system_snapshot(t.system, NULL, 0, &length), TA_OK);
+    ta_buffer out = {NULL, 0, 0};
+    CHECK_EQUAL(ta_system_snapshot(t.system, &out), TA_ERROR_NO_MEMORY);
+    size_t length = out.length;
     void *snap = malloc(length);
-    CHECK_EQUAL(ta_system_snapshot(t.system, snap, length, &length), TA_OK);
+    out = (ta_buffer){snap, length, 0};
+    CHECK_EQUAL(ta_system_snapshot(t.system, &out), TA_OK);
     /* the original continues ... */
     tsys_run(&t, 10000, 5);
     CHECK(strcmp(t.log, "ping=x;ping=y;") == 0);
@@ -423,7 +435,8 @@ static void test_snapshot_restore(void) {
     void *memory2 = malloc(length);
     ta_system *s2;
     CHECK_EQUAL(
-        ta_system_restore(memory2, length, &t.image, snap, length, NULL, &t.binding, 1, &s2),
+        ta_system_restore(&(ta_system_setup){{memory2, length}, &t.image, NULL, &t.binding, 1, 0},
+                          (ta_bytes){snap, length}, &s2),
         TA_OK);
     t.log[0] = 0;
     ta_system *orig = t.system;
@@ -589,13 +602,16 @@ static void test_chart_stats(void) {
     CHECK(chart.fuel > 0 && chart.fuel <= stats.fuel);
     CHECK_EQUAL(ta_system_chart_stats_get(t.system, 1, &chart), TA_ERROR_INVALID);
     /* a snapshot keeps them */
-    size_t length;
-    CHECK_EQUAL(ta_system_snapshot(t.system, NULL, 0, &length), TA_OK);
+    ta_buffer out = {NULL, 0, 0};
+    CHECK_EQUAL(ta_system_snapshot(t.system, &out), TA_ERROR_NO_MEMORY);
+    size_t length = out.length;
     void *snap = malloc(length), *memory2 = malloc(length);
-    CHECK_EQUAL(ta_system_snapshot(t.system, snap, length, &length), TA_OK);
+    out = (ta_buffer){snap, length, 0};
+    CHECK_EQUAL(ta_system_snapshot(t.system, &out), TA_OK);
     ta_system *copy;
     CHECK_EQUAL(
-        ta_system_restore(memory2, length, &t.image, snap, length, NULL, &t.binding, 1, &copy),
+        ta_system_restore(&(ta_system_setup){{memory2, length}, &t.image, NULL, &t.binding, 1, 0},
+                          (ta_bytes){snap, length}, &copy),
         TA_OK);
     ta_chart_stats restored;
     restored.size = sizeof restored;
@@ -609,8 +625,8 @@ static void test_chart_stats(void) {
     size_t need;
     CHECK_EQUAL(ta_system_layout(&t.image, &big, &need), TA_OK);
     void *memory3 = malloc(need);
-    ta_system *moved;
-    CHECK_EQUAL(ta_system_relocate(t.system, memory3, need, &big, &moved), TA_OK);
+    ta_system *moved = t.system;
+    CHECK_EQUAL(ta_system_relocate(&moved, (ta_memory){memory3, need}, &big), TA_OK);
     free(t.memory);
     t.memory = memory3;
     t.system = moved;

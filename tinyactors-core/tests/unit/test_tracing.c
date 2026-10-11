@@ -132,7 +132,8 @@ static void test_on_by_default(void) {
     size_t on = t.memory_length;
     uint32_t a = 0;
     CHECK_EQUAL(
-        ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(t.system,
+                        &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     tsys_run(&t, 10000, 5);
     CHECK_EQUAL(send_traced(&t, a, "e", NULL), TA_OK);
@@ -164,8 +165,10 @@ static void test_on_by_default(void) {
     CHECK(untraced.memory_length < on);
     ta_system_stats_get(untraced.system, &stats);
     CHECK(stats.trace_bytes_capacity == 0 && stats.trace_contexts_capacity == 0);
-    CHECK_EQUAL(ta_system_spawn(untraced.system, 0, (ta_string_view){"a", 1}, 0,
-                                (ta_string_view){PARENT, (uint32_t)strlen(PARENT)}, &a),
+    CHECK_EQUAL(ta_system_spawn(untraced.system,
+                                &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0,
+                                            (ta_string_view){PARENT, (uint32_t)strlen(PARENT)}},
+                                &a),
                 TA_OK);
     tsys_run(&untraced, 10000, 5);
     ta_trace_view view;
@@ -195,7 +198,8 @@ static void test_three_actors(void) {
     CHECK(tsys_init(&t, CHAIN, NULL, &config));
     uint32_t a = 0;
     CHECK_EQUAL(
-        ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(t.system,
+                        &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     tsys_run(&t, 100000, 10);
     collect(&t);
@@ -289,7 +293,8 @@ static void test_delayed_send(void) {
                     NULL, &config));
     uint32_t a = 0;
     CHECK_EQUAL(
-        ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(t.system,
+                        &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     tsys_run(&t, 10000, 5);
     CHECK_EQUAL(send_traced(&t, a, "go", PARENT), TA_OK);
@@ -319,7 +324,8 @@ static void test_delayed_send(void) {
                     NULL, &config));
     CHECK_EQUAL(ta_system_trace_set(t.system, sampling(0, 1)), TA_OK); /* sample nothing */
     CHECK_EQUAL(
-        ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(t.system,
+                        &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     tsys_run(&t, 10000, 5);
     CHECK_EQUAL(send_traced(&t, a, "go", NULL), TA_OK);
@@ -366,9 +372,11 @@ static void test_full_pool(void) {
                     NULL, &config));
     uint32_t actors[6];
     for (int i = 0; i < 6; i++)
-        CHECK_EQUAL(ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0,
-                                    (ta_string_view){0, 0}, &actors[i]),
-                    TA_OK);
+        CHECK_EQUAL(
+            ta_system_spawn(t.system,
+                            &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}},
+                            &actors[i]),
+            TA_OK);
     for (int i = 0; i < 6; i++)
         CHECK_EQUAL(send_traced(&t, actors[i], "e", NULL), TA_OK);
     CHECK_EQUAL(tsys_run(&t, 100000, 10), TA_RUN_IDLE);
@@ -403,7 +411,8 @@ static void test_effects(void) {
                     NULL, &config));
     uint32_t a = 0;
     CHECK_EQUAL(
-        ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(t.system,
+                        &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     tsys_run(&t, 10000, 5);
     CHECK_EQUAL(send_traced(&t, a, "go", PARENT), TA_OK);
@@ -419,7 +428,9 @@ static void test_effects(void) {
         CHECK_EQUAL(effects[i].trace.flags & TA_TRACE_FLAG_SAMPLED, TA_TRACE_FLAG_SAMPLED);
     }
     char text[TA_TRACEPARENT_LENGTH + 1] = {0};
-    CHECK_EQUAL(ta_traceparent_format(&effects[1].trace, text, sizeof text), TA_TRACEPARENT_LENGTH);
+    CHECK_EQUAL(
+        ta_traceparent_format(&effects[1].trace, &(ta_buffer){text, TA_TRACEPARENT_LENGTH, 0}),
+        TA_OK);
     ta_trace_context back;
     CHECK_EQUAL(ta_traceparent_parse((ta_string_view){text, TA_TRACEPARENT_LENGTH}, &back), TA_OK);
     CHECK_EQUAL(back.parent, span_of(s, 2, 1));
@@ -442,7 +453,9 @@ static void test_seed(void) {
             config.trace_seed = seeded ? 42 : 7;
             CHECK(tsys_init(&t, SC("initial='a'><state id='a'/>"), NULL, &config));
             uint32_t a = 0;
-            ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a);
+            ta_system_spawn(t.system,
+                            &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}},
+                            &a);
             tsys_run(&t, 10000, 5);
             collect(&t);
             const ta_trace_record *boot =
@@ -469,7 +482,8 @@ static void test_partial_ack(void) {
     CHECK(tsys_init(&t, SC("initial='a'><state id='a'><transition event='e' target='a'/></state>"),
                     NULL, &config));
     uint32_t a = 0;
-    ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a);
+    ta_system_spawn(t.system,
+                    &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}}, &a);
     tsys_run(&t, 10000, 5);
     ta_trace_view view;
     uint32_t length = ta_system_trace(t.system, &view), cursor = 0;
@@ -510,7 +524,8 @@ static void test_relocation(void) {
                        "<transition event='tick' target='b'/></state><state id='b'/>"),
                     NULL, &config));
     uint32_t a = 0;
-    ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a);
+    ta_system_spawn(t.system,
+                    &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}}, &a);
     tsys_run(&t, 10000, 5);
     send_traced(&t, a, "go", PARENT);
     tsys_run(&t, 10000, 5); /* the tick waits, with its context, and records wait */
@@ -519,8 +534,8 @@ static void test_relocation(void) {
     size_t need;
     CHECK_EQUAL(ta_system_layout(&t.image, &bigger, &need), TA_OK);
     void *memory = malloc(need);
-    ta_system *moved;
-    CHECK_EQUAL(ta_system_relocate(t.system, memory, need, &bigger, &moved), TA_OK);
+    ta_system *moved = t.system;
+    CHECK_EQUAL(ta_system_relocate(&moved, (ta_memory){memory, need}, &bigger), TA_OK);
     free(t.memory);
     t.memory = memory;
     t.system = moved;
@@ -563,29 +578,39 @@ static void test_hibernated_receiver(void) {
     ta_system_config config = test_system_config();
     CHECK(tsys_init(&t, SENDER, NULL, &config));
     uint32_t a = 0, b = 0;
-    ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a);
-    ta_system_spawn(t.system, 0, (ta_string_view){"b", 1}, 0, (ta_string_view){0, 0}, &b);
+    ta_system_spawn(t.system,
+                    &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}}, &a);
+    ta_system_spawn(t.system,
+                    &(ta_spawn){0, 0, (ta_string_view){"b", 1}, 0, (ta_string_view){0, 0}}, &b);
     tsys_run(&t, 10000, 5);
     static unsigned char blob[4096];
     size_t length = 0;
-    CHECK_EQUAL(ta_actor_hibernate(t.system, b, blob, sizeof blob, &length), TA_OK);
+    ta_buffer written = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_hibernate(t.system, b, &written), TA_OK);
+    length = written.length;
     CHECK_EQUAL(send_traced(&t, a, "go", PARENT), TA_OK);
     ta_system_run(t.system, 10000);
     CHECK_EQUAL(wake_requests(&t), 1); /* ping waits in b's mailbox */
     /* the waiting event keeps its context across a snapshot and a restore */
     size_t snapshot_length = 0;
-    CHECK_EQUAL(ta_system_snapshot(t.system, NULL, 0, &snapshot_length), TA_OK);
+    written = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_system_snapshot(t.system, &written), TA_ERROR_NO_MEMORY);
+    snapshot_length = written.length;
     void *snapshot = malloc(snapshot_length), *memory = malloc(t.memory_length);
-    CHECK_EQUAL(ta_system_snapshot(t.system, snapshot, snapshot_length, &snapshot_length), TA_OK);
+    written = (ta_buffer){snapshot, snapshot_length, 0};
+    CHECK_EQUAL(ta_system_snapshot(t.system, &written), TA_OK);
+    snapshot_length = written.length;
     ta_system *restored = NULL;
-    CHECK_EQUAL(ta_system_restore(memory, t.memory_length, &t.image, snapshot, snapshot_length,
-                                  &config, &t.binding, 1, &restored),
-                TA_OK);
+    CHECK_EQUAL(
+        ta_system_restore(
+            &(ta_system_setup){{memory, t.memory_length}, &t.image, &config, &t.binding, 1, 0},
+            (ta_bytes){snapshot, snapshot_length}, &restored),
+        TA_OK);
     free(snapshot);
     free(t.memory); /* the restored system owns the actors now */
     t.memory = memory;
     t.system = restored;
-    CHECK_EQUAL(ta_actor_wake(t.system, b, blob, length), TA_OK);
+    CHECK_EQUAL(ta_actor_wake(t.system, b, (ta_bytes){blob, length}), TA_OK);
     tsys_run(&t, 10000, 5);
     collect(&t);
     const ta_trace_record *ping = find(TA_TRACE_MACROSTEP_BEGIN, 2, ~(uint64_t)0, "ping"),
@@ -616,7 +641,8 @@ static void test_export_adopt(void) {
     CHECK(tsys_init(&t, SENDER, NULL, &config));
     CHECK(tsys_init(&u, SENDER, NULL, &config));
     uint32_t a = 0;
-    ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a);
+    ta_system_spawn(t.system,
+                    &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}}, &a);
     tsys_run(&t, 10000, 5);
     CHECK_EQUAL(send_traced(&t, a, "later", PARENT), TA_OK);
     tsys_run(&t, 10000, 5);
@@ -626,9 +652,11 @@ static void test_export_adopt(void) {
     forget();
     static unsigned char blob[8192];
     size_t length = 0;
-    CHECK_EQUAL(ta_actor_export(t.system, a, blob, sizeof blob, &length), TA_OK);
+    ta_buffer written = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(t.system, a, &written), TA_OK);
+    length = written.length;
     uint32_t adopted = 0;
-    CHECK_EQUAL(ta_system_adopt(u.system, blob, length, &adopted), TA_OK);
+    CHECK_EQUAL(ta_system_adopt(u.system, (ta_bytes){blob, length}, &adopted), TA_OK);
     ta_system_advance_time(u.system, 2000);
     tsys_run(&u, 10000, 5);
     collect(&u);
@@ -671,7 +699,8 @@ static void test_detail_classes(void) {
     policy.kinds[TA_TRACE_DETAIL_SAMPLED] = TA_TRACE_FULL; /* copied at init: no effect */
     uint32_t a = 0;
     CHECK_EQUAL(
-        ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(t.system,
+                        &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     tsys_run(&t, 10000, 5);
     CHECK_EQUAL(send_traced(&t, a, "go", PARENT), TA_OK);
@@ -680,7 +709,9 @@ static void test_detail_classes(void) {
     CHECK_EQUAL(ta_system_effects(t.system, &effects), 1);
     CHECK_EQUAL(TA_TRACE_DETAIL(effects[0].trace.flags), TA_TRACE_DETAIL_SAMPLED);
     char text[TA_TRACEPARENT_LENGTH + 1] = {0};
-    CHECK_EQUAL(ta_traceparent_format(&effects[0].trace, text, sizeof text), TA_TRACEPARENT_LENGTH);
+    CHECK_EQUAL(
+        ta_traceparent_format(&effects[0].trace, &(ta_buffer){text, TA_TRACEPARENT_LENGTH, 0}),
+        TA_OK);
     CHECK(strcmp(text + 53, "01") == 0); /* the W3C flags alone */
     ta_system_effects_ack(t.system, 1);
     collect(&t);
@@ -730,7 +761,8 @@ static void test_unsampled_propagates(void) {
                     NULL, &config));
     uint32_t a = 0;
     CHECK_EQUAL(
-        ta_system_spawn(t.system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(t.system,
+                        &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     tsys_run(&t, 10000, 5);
     const char *unsampled = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00";
@@ -742,7 +774,9 @@ static void test_unsampled_propagates(void) {
     CHECK_EQUAL(effects[0].trace.flags & TA_TRACE_FLAG_SAMPLED, 0);
     CHECK_EQUAL(TA_TRACE_DETAIL(effects[0].trace.flags), TA_TRACE_DETAIL_UNSAMPLED);
     char text[TA_TRACEPARENT_LENGTH + 1] = {0};
-    CHECK_EQUAL(ta_traceparent_format(&effects[0].trace, text, sizeof text), TA_TRACEPARENT_LENGTH);
+    CHECK_EQUAL(
+        ta_traceparent_format(&effects[0].trace, &(ta_buffer){text, TA_TRACEPARENT_LENGTH, 0}),
+        TA_OK);
     CHECK(strcmp(text + 53, "00") == 0);
     ta_system_effects_ack(t.system, 1);
     collect(&t);
@@ -756,7 +790,8 @@ static void test_unsampled_propagates(void) {
 static uint64_t chain_round(test_system *t) {
     uint32_t a = 0;
     CHECK_EQUAL(
-        ta_system_spawn(t->system, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(t->system,
+                        &(ta_spawn){0, 0, (ta_string_view){"a", 1}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     tsys_run(t, 100000, 10);
     uint64_t session = session_of(t, a);

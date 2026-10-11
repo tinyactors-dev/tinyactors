@@ -37,9 +37,9 @@ static uint32_t run_all(test_system *t) {
 static unsigned char blob[1 << 16];
 
 static size_t hibernate(test_system *t, uint32_t actor, ta_status *status) {
-    size_t length = 0;
-    *status = ta_actor_hibernate(t->system, actor, blob, sizeof blob, &length);
-    return length;
+    ta_buffer out = {blob, sizeof blob, 0};
+    *status = ta_actor_hibernate(t->system, actor, &out);
+    return out.length;
 }
 
 static ta_chart_stats chart_stats(ta_system *system) {
@@ -75,9 +75,9 @@ static void test_roundtrip_and_single_wake(void) {
     CHECK(strcmp(tsys_config(&t, a), "b") == 0);
     uint32_t pages_before = stats(t.system).slab_pages;
 
-    size_t need = 0;
-    CHECK_EQUAL(ta_actor_hibernate(t.system, a, blob, 8, &need),
-                TA_ERROR_NO_MEMORY); /* too small */
+    ta_buffer small = {blob, 8, 0};
+    CHECK_EQUAL(ta_actor_hibernate(t.system, a, &small), TA_ERROR_NO_MEMORY); /* too small */
+    size_t need = small.length;
     CHECK(need > 8);
     ta_status status;
     size_t length = hibernate(&t, a, &status);
@@ -93,7 +93,8 @@ static void test_roundtrip_and_single_wake(void) {
     CHECK_EQUAL(ta_actor_info_get(t.system, a, &info), TA_OK);
     CHECK_EQUAL(info.state, TA_ACTOR_HIBERNATED);
     CHECK(strcmp(tsys_config(&t, a), "") == 0); /* the configuration is in the blob */
-    CHECK_EQUAL(ta_actor_hibernate(t.system, a, blob, sizeof blob, &need), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_actor_hibernate(t.system, a, &(ta_buffer){blob, sizeof blob, 0}),
+                TA_ERROR_STATE);
 
     /* events wait in the mailbox; one wake request however many arrive */
     wakes_seen = 0;
@@ -109,8 +110,8 @@ static void test_roundtrip_and_single_wake(void) {
     unsigned char bad[1 << 10];
     memcpy(bad, blob, length < sizeof bad ? length : sizeof bad);
     bad[32] ^= 1; /* serial */
-    CHECK_EQUAL(ta_actor_wake(t.system, a, bad, length), TA_ERROR_INVALID);
-    CHECK_EQUAL(ta_actor_wake(t.system, a, blob, 10), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_actor_wake(t.system, a, (ta_bytes){bad, length}), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_actor_wake(t.system, a, (ta_bytes){blob, 10}), TA_ERROR_INVALID);
 
     /* relocation keeps the hibernated actor (and its mailbox) */
     ta_system_config config = t.system->config;
@@ -118,13 +119,13 @@ static void test_roundtrip_and_single_wake(void) {
     size_t nl;
     CHECK_EQUAL(ta_system_layout(&t.image, &config, &nl), TA_OK);
     void *nm = malloc(nl);
-    ta_system *new_system;
-    CHECK_EQUAL(ta_system_relocate(t.system, nm, nl, &config, &new_system), TA_OK);
+    ta_system *new_system = t.system;
+    CHECK_EQUAL(ta_system_relocate(&new_system, (ta_memory){nm, nl}, &config), TA_OK);
     free(t.memory);
     t.memory = nm;
     t.system = new_system;
 
-    CHECK_EQUAL(ta_actor_wake(t.system, a, blob, length), TA_OK);
+    CHECK_EQUAL(ta_actor_wake(t.system, a, (ta_bytes){blob, length}), TA_OK);
     stats_now = stats(t.system);
     CHECK(stats_now.hibernated == 0 && stats_now.wakes == 1 && stats_now.wakes_pending == 0);
     /* the per-chart gauges moved with the relocation and the wake */
@@ -132,12 +133,13 @@ static void test_roundtrip_and_single_wake(void) {
     run_all(&t);
     CHECK(strcmp(t.log, "pong;pong;") == 0);
     CHECK(strcmp(tsys_config(&t, a), "b") == 0);
-    CHECK_EQUAL(ta_actor_wake(t.system, a, blob, length), TA_ERROR_STATE); /* not hibernated */
+    CHECK_EQUAL(ta_actor_wake(t.system, a, (ta_bytes){blob, length}),
+                TA_ERROR_STATE); /* not hibernated */
 
     /* again, and woken proactively by the host (no request was needed) */
     hibernate(&t, a, &status);
     CHECK_EQUAL(status, TA_OK);
-    CHECK_EQUAL(ta_actor_wake(t.system, a, blob, length), TA_OK);
+    CHECK_EQUAL(ta_actor_wake(t.system, a, (ta_bytes){blob, length}), TA_OK);
     CHECK_EQUAL(tsys_send(&t, a, "tick", NULL), TA_OK);
     run_all(&t);
     CHECK(strcmp(tsys_config(&t, a), "c") == 0);
@@ -165,7 +167,7 @@ static void test_timer_wakes_actor(void) {
     ta_system_advance_time(t.system, 100);
     run_all(&t);
     CHECK_EQUAL(wakes_seen, 1);
-    CHECK_EQUAL(ta_actor_wake(t.system, a, blob, length), TA_OK);
+    CHECK_EQUAL(ta_actor_wake(t.system, a, (ta_bytes){blob, length}), TA_OK);
     run_all(&t);
     CHECK(strcmp(t.log, "fired;") == 0);
     tsys_free(&t);
@@ -203,7 +205,7 @@ static void test_children_cancel_terminate(void) {
     CHECK_EQUAL(wakes_seen, 1);
     CHECK(wakes_seen == 1 && wakes[0] == kid);
     CHECK_EQUAL(stats(t.system).actors, 2); /* still waiting for its blob */
-    CHECK_EQUAL(ta_actor_wake(t.system, kid, blob, length), TA_OK);
+    CHECK_EQUAL(ta_actor_wake(t.system, kid, (ta_bytes){blob, length}), TA_OK);
     run_all(&t);
     CHECK_EQUAL(stats(t.system).actors, 1);
     CHECK(strcmp(t.log, "") == 0); /* cancelled: no done.invoke */
@@ -215,7 +217,7 @@ static void test_children_cancel_terminate(void) {
     CHECK_EQUAL(ta_system_terminate(t.system, p), TA_OK);
     run_all(&t);
     CHECK_EQUAL(wakes_seen, 1);
-    CHECK_EQUAL(ta_actor_wake(t.system, p, blob, length), TA_OK);
+    CHECK_EQUAL(ta_actor_wake(t.system, p, (ta_bytes){blob, length}), TA_OK);
     run_all(&t);
     CHECK_EQUAL(stats(t.system).actors, 0);
     tsys_free(&t);
@@ -245,7 +247,7 @@ static void test_error_communication_order(void) {
     event.sendid = (ta_string_view){"s1", 2};
     CHECK_EQUAL(ta_system_send(t.system, &event), TA_OK);
     run_all(&t);
-    CHECK_EQUAL(ta_actor_wake(t.system, a, blob, length), TA_OK);
+    CHECK_EQUAL(ta_actor_wake(t.system, a, (ta_bytes){blob, length}), TA_OK);
     run_all(&t);
     CHECK(strcmp(t.log, "err;ext;") == 0);
     tsys_free(&t);
@@ -259,24 +261,30 @@ static void test_cold_sweep(void) {
     uint32_t ids[10];
     ids[0] = tsys_actor(&t, "main.scxml");
     for (int i = 1; i < 10; i++)
-        CHECK_EQUAL(ta_system_spawn(t.system, 0, (ta_string_view){"", 0}, 0, (ta_string_view){0, 0},
-                                    &ids[i]),
-                    TA_OK);
+        CHECK_EQUAL(
+            ta_system_spawn(t.system,
+                            &(ta_spawn){0, 0, (ta_string_view){"", 0}, 0, (ta_string_view){0, 0}},
+                            &ids[i]),
+            TA_OK);
     run_all(&t);
-    uint32_t cursor = 0, out[16];
-    CHECK_EQUAL(ta_system_cold_actors(t.system, &cursor, 64, out, 16), 0); /* all just ran */
-    CHECK_EQUAL(ta_system_cold_actors(t.system, &cursor, 64, out, 16), 10);
+    uint32_t out[16];
+    ta_sweep sweep = {0, 64};
+    ta_uint32_array cold = {out, 16};
+    CHECK_EQUAL(ta_system_cold_actors(t.system, &sweep, cold), 0); /* all just ran */
+    CHECK_EQUAL(ta_system_cold_actors(t.system, &sweep, cold), 10);
     CHECK_EQUAL(tsys_send(&t, ids[3], "x", NULL), TA_OK);
     run_all(&t);
-    uint32_t n = ta_system_cold_actors(t.system, &cursor, 64, out, 16);
+    uint32_t n = ta_system_cold_actors(t.system, &sweep, cold);
     CHECK_EQUAL(n, 9);
     for (uint32_t i = 0; i < n; i++)
         CHECK(out[i] != ids[3]);
     /* bounded scan: max_scan slots, the cursor carries on */
-    cursor = 0;
-    CHECK_EQUAL(ta_system_cold_actors(t.system, &cursor, 4, out, 16), 4);
-    CHECK_EQUAL(cursor, 4);
-    CHECK_EQUAL(ta_system_cold_actors(t.system, &cursor, 64, out, 2), 2); /* capacity */
+    sweep = (ta_sweep){0, 4};
+    CHECK_EQUAL(ta_system_cold_actors(t.system, &sweep, cold), 4);
+    CHECK_EQUAL(sweep.cursor, 4);
+    sweep.max_scan = 64;
+    CHECK_EQUAL(ta_system_cold_actors(t.system, &sweep, (ta_uint32_array){out, 2}),
+                2); /* capacity */
     tsys_free(&t);
 }
 
@@ -297,8 +305,10 @@ static int ecmascript_open(ecmascript_test *x, const char *chart) {
     ta_system_config config = test_system_config();
     if (ta_system_layout(&t->image, &config, &t->memory_length) != TA_OK) return 0;
     t->memory = malloc(t->memory_length);
-    return ta_system_init(t->memory, t->memory_length, &t->image, &config, &t->binding, 1,
-                          &t->system) == TA_OK &&
+    return ta_system_init(
+               &(ta_system_setup){
+                   {t->memory, t->memory_length}, &t->image, &config, &t->binding, 1, 0},
+               &t->system) == TA_OK &&
            ta_system_boot(t->system) == TA_OK;
 }
 
@@ -368,7 +378,7 @@ static void test_ecmascript_state_survives(void) {
     /* the scope and its values are freed (QuickJS keeps its arenas, so the
      * datamodel's malloc-level heap_bytes only shrinks in arena steps) */
     CHECK(js_malloc_size(x.ecmascript) < before - 1000);
-    CHECK_EQUAL(ta_actor_wake(t->system, a, blob, length), TA_OK);
+    CHECK_EQUAL(ta_actor_wake(t->system, a, (ta_bytes){blob, length}), TA_OK);
     /* the same _event (still "add"), data, and system variables */
     CHECK(strcmp(ecmascript_eval(&x, a, "_event.name + ':' + _event.data.v"), "\"add:3\"") == 0);
     CHECK(strcmp(ecmascript_eval(&x, a, "_sessionid"), sid) == 0);
@@ -408,7 +418,7 @@ static void test_ecmascript_unsupported(void) {
     CHECK_EQUAL(status, TA_OK);
     if (status != TA_OK)
         fprintf(stderr, "  %s\n", ta_datamodel_ecmascript_last_error(x.ecmascript));
-    CHECK_EQUAL(ta_actor_wake(x.test_system.system, a, blob, length), TA_OK);
+    CHECK_EQUAL(ta_actor_wake(x.test_system.system, a, (ta_bytes){blob, length}), TA_OK);
     CHECK(strcmp(ecmascript_eval(&x, a, "inc()"), "2") == 0);
     ecmascript_close(&x);
 }

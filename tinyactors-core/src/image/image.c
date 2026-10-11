@@ -445,8 +445,8 @@ ta_string_view ta_image_state_name(const ta_image *image, uint32_t chart, uint32
     return ta_image_view_string(view, view->states[view->charts[chart].first_state + state].id);
 }
 
-ta_status ta_image_state_info(const ta_image *image, uint32_t chart, uint32_t state,
-                              ta_state_info *out) {
+ta_status ta_image_state_info(const ta_image *image, ta_chart_item item, ta_state_info *out) {
+    uint32_t chart = item.chart, state = item.index;
     const ta_image_view *view = ta_image_view_of(image);
     if (chart >= view->chart_count || state >= view->charts[chart].state_count)
         return TA_ERROR_INVALID;
@@ -459,12 +459,12 @@ ta_status ta_image_state_info(const ta_image *image, uint32_t chart, uint32_t st
     return TA_OK;
 }
 
-ta_status ta_image_boot_actor(const ta_image *image, uint32_t i, ta_string_view *name,
-                              uint32_t *chart) {
+ta_status ta_image_boot_actor(const ta_image *image, uint32_t i, ta_boot_actor *out) {
     const ta_image_view *view = ta_image_view_of(image);
     if (i >= view->actor_count) return TA_ERROR_INVALID;
-    if (name) *name = ta_image_view_string(view, view->actors[i].name);
-    if (chart) *chart = view->actors[i].chart;
+    out->name = ta_image_view_string(view, view->actors[i].name);
+    out->chart = view->actors[i].chart;
+    out->pad = 0;
     return TA_OK;
 }
 
@@ -496,8 +496,9 @@ uint32_t ta_image_expression_count(const ta_image *image, uint32_t chart) {
     return chart < view->chart_count ? view->charts[chart].expression_count : 0;
 }
 
-ta_status ta_image_expression(const ta_image *image, uint32_t chart, ta_expression expression,
-                              ta_expression_info *out) {
+ta_status ta_image_expression(const ta_image *image, ta_chart_item item, ta_expression_info *out) {
+    uint32_t chart = item.chart;
+    ta_expression expression = item.index;
     const ta_image_view *view = ta_image_view_of(image);
     if (chart >= view->chart_count || expression >= view->charts[chart].expression_count)
         return TA_ERROR_INVALID;
@@ -524,7 +525,8 @@ uint32_t ta_image_data_count(const ta_image *image, uint32_t chart) {
     return chart < view->chart_count ? view->charts[chart].data_count : 0;
 }
 
-ta_status ta_image_data(const ta_image *image, uint32_t chart, uint32_t index, ta_data_info *out) {
+ta_status ta_image_data(const ta_image *image, ta_chart_item item, ta_data_info *out) {
+    uint32_t chart = item.chart, index = item.index;
     const ta_image_view *view = ta_image_view_of(image);
     if (chart >= view->chart_count || index >= view->charts[chart].data_count)
         return TA_ERROR_INVALID;

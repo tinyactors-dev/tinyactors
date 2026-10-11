@@ -109,10 +109,20 @@ static void trace_hex_write(char *out, uint64_t value, uint32_t digits) {
         out[i] = digit[(value >> (4u * (digits - 1u - i))) & 0xfu];
 }
 
-uint32_t ta_traceparent_format(const ta_trace_context *context, char *buffer, uint32_t capacity) {
-    if (!context || (context->trace.high == 0 && context->trace.low == 0) || !context->parent ||
-        !buffer || capacity < TA_TRACEPARENT_LENGTH)
-        return 0;
+/* The fixed-length forms below: TA_ERROR_NO_MEMORY with the length they
+ * need when it does not fit. */
+static int trace_room(ta_buffer *out, size_t length) {
+    out->length = length;
+    return out->capacity >= length;
+}
+
+ta_status ta_traceparent_format(const ta_trace_context *context, ta_buffer *out) {
+    if (!context || (context->trace.high == 0 && context->trace.low == 0) || !context->parent) {
+        out->length = 0;
+        return TA_ERROR_INVALID;
+    }
+    if (!trace_room(out, TA_TRACEPARENT_LENGTH)) return TA_ERROR_NO_MEMORY;
+    char *buffer = (char *)out->pointer;
     buffer[0] = '0';
     buffer[1] = '0';
     buffer[2] = '-';
@@ -122,20 +132,20 @@ uint32_t ta_traceparent_format(const ta_trace_context *context, char *buffer, ui
     trace_hex_write(buffer + 36, context->parent, 16u);
     buffer[52] = '-';
     trace_hex_write(buffer + 53, context->flags & 0xffu, 2u);
-    return TA_TRACEPARENT_LENGTH;
+    return TA_OK;
 }
 
-uint32_t ta_trace_id_format(ta_trace_id trace, char *buffer, uint32_t capacity) {
-    if (!buffer || capacity < TA_TRACE_ID_TEXT_LENGTH) return 0;
-    trace_hex_write(buffer, trace.high, 16u);
-    trace_hex_write(buffer + 16, trace.low, 16u);
-    return TA_TRACE_ID_TEXT_LENGTH;
+ta_status ta_trace_id_format(ta_trace_id trace, ta_buffer *out) {
+    if (!trace_room(out, TA_TRACE_ID_TEXT_LENGTH)) return TA_ERROR_NO_MEMORY;
+    trace_hex_write((char *)out->pointer, trace.high, 16u);
+    trace_hex_write((char *)out->pointer + 16, trace.low, 16u);
+    return TA_OK;
 }
 
-uint32_t ta_span_id_format(ta_span_id span, char *buffer, uint32_t capacity) {
-    if (!buffer || capacity < TA_SPAN_ID_TEXT_LENGTH) return 0;
-    trace_hex_write(buffer, span, 16u);
-    return TA_SPAN_ID_TEXT_LENGTH;
+ta_status ta_span_id_format(ta_span_id span, ta_buffer *out) {
+    if (!trace_room(out, TA_SPAN_ID_TEXT_LENGTH)) return TA_ERROR_NO_MEMORY;
+    trace_hex_write((char *)out->pointer, span, 16u);
+    return TA_OK;
 }
 
 /* ---- the generator: xoshiro256**, seeded through trace_splitmix64 -------------------------- */

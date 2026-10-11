@@ -78,14 +78,12 @@ TA_API ta_trace_context ta_trace_context_child(const ta_trace_context *context, 
  * fields when a dash follows the flags. `out->parent` is the caller's span. */
 TA_API ta_status ta_traceparent_parse(ta_string_view text, ta_trace_context *out);
 /* Write version 00, the trace ID, `parent` and the flags' low byte
- * (TA_TRACEPARENT_LENGTH bytes, no terminator). Returns the length, or 0 if
- * the context has no trace or no parent, or capacity is too small. */
-TA_API uint32_t ta_traceparent_format(const ta_trace_context *context, char *buffer,
-                                      uint32_t capacity);
-/* Lowercase hex, no terminator: 32 digits for a trace ID, 16 for a span ID.
- * Return the length, or 0 if capacity is too small. */
-TA_API uint32_t ta_trace_id_format(ta_trace_id trace, char *buffer, uint32_t capacity);
-TA_API uint32_t ta_span_id_format(ta_span_id span, char *buffer, uint32_t capacity);
+ * (TA_TRACEPARENT_LENGTH bytes, no terminator) into `out` (ta_buffer).
+ * TA_ERROR_INVALID if the context has no trace or no parent. */
+TA_API ta_status ta_traceparent_format(const ta_trace_context *context, ta_buffer *out);
+/* Lowercase hex, no terminator: 32 digits for a trace ID, 16 for a span ID. */
+TA_API ta_status ta_trace_id_format(ta_trace_id trace, ta_buffer *out);
+TA_API ta_status ta_span_id_format(ta_span_id span, ta_buffer *out);
 
 /* The seeded trace ID generator: xoshiro256** whose state is seeded through
  * splitmix64, so a seed gives the same IDs on every host. The state is the

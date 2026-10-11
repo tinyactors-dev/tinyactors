@@ -42,8 +42,10 @@ TEST_UNUSED static int tsys_open_image(test_system *t, const char *name, const c
 TEST_UNUSED static int tsys_create(test_system *t, const ta_system_config *config) {
     if (ta_system_layout(&t->image, config, &t->memory_length) != TA_OK) return 0;
     t->memory = malloc(t->memory_length);
-    return ta_system_init(t->memory, t->memory_length, &t->image, config, &t->binding, 1,
-                          &t->system) == TA_OK;
+    return ta_system_init(
+               &(ta_system_setup){
+                   {t->memory, t->memory_length}, &t->image, config, &t->binding, 1, 0},
+               &t->system) == TA_OK;
 }
 
 TEST_UNUSED static int tsys_init(test_system *t, const char *chart, const test_file *files,
@@ -124,7 +126,7 @@ TEST_UNUSED static const char *tsys_config(test_system *t, uint32_t actor) {
     info.size = sizeof info;
     buffer[0] = 0;
     if (ta_actor_info_get(t->system, actor, &info) != TA_OK) return "<gone>";
-    uint32_t n = ta_actor_config(t->system, actor, states, 128);
+    uint32_t n = ta_actor_config(t->system, actor, (ta_uint32_array){states, 128});
     for (uint32_t i = 0; i < n && i < 128; i++) {
         ta_string_view nm = ta_image_state_name(&t->image, info.chart, states[i]);
         size_t l = strlen(buffer);

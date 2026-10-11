@@ -216,8 +216,10 @@ static int allowed(ta_host *host, uint32_t handle, const peer *p, const ta_addre
     if (p->flags & TA_PEER_TRUSTED) return 1;
     struct ta_router *router = host->router;
     char dec[256];
-    uint32_t dl =
-        to->kind == TA_ADDRESS_NAME ? ta_address_name_decode(to->name, dec, sizeof dec) : 0;
+    ta_buffer decoded = {dec, sizeof dec, 0};
+    uint32_t dl = to->kind == TA_ADDRESS_NAME && ta_address_name_decode(to->name, &decoded) == TA_OK
+                      ? (uint32_t)decoded.length
+                      : 0;
     for (uint32_t i = 0; i < router->export_count; i++) {
         const exported *x = &router->exports[i];
         if (x->peer && x->peer != handle) continue;
@@ -288,7 +290,7 @@ static ta_status local_error(ta_host *host, ta_string_view origin, ta_string_vie
         return TA_OK;
     *handled = 1;
     uint32_t si, actor;
-    if (ta_host_locate(host, request.session, &si, &actor) != TA_OK)
+    if (host_locate(host, request.session, &si, &actor) != TA_OK)
         return TA_OK; /* gone: nobody to tell */
     return host_communication_error(host, si, actor, sendid);
 }
@@ -486,7 +488,9 @@ static ta_string_view new_msgid(ta_host *host, ta_string_view origin, char *buff
 ta_status ta_router_outbound(ta_host *host, uint32_t si, const ta_effect *effect) {
     ta_host_message message;
     message.size = sizeof message;
-    if (ta_host_message_init(host, effect, 0, 0, &message) != TA_OK)
+    message.revision = 0;
+    message.index = 0;
+    if (ta_host_message_init(host, effect, &message) != TA_OK)
         return host_communication_error(host, si, effect->actor, effect->sendid);
     ta_envelope envelope = message.envelope;
     envelope.datamodel = effect->payload && effect->datamodel < host->config.datamodel_count
@@ -496,15 +500,13 @@ ta_status ta_router_outbound(ta_host *host, uint32_t si, const ta_effect *effect
     if (envelope.data && host->datamodels[envelope.datamodel].vtable->retain)
         host->datamodels[envelope.datamodel].vtable->retain(
             host->datamodels[envelope.datamodel].datamodel, envelope.data);
-    uint32_t outcome;
-    ta_status status = ta_host_deliver(host, 0, &envelope, &outcome);
-    if (status == TA_OK && outcome == TA_ROUTE_DELIVERED) host->routed++;
-    if (status == TA_OK && (outcome == TA_ROUTE_DELIVERED || outcome == TA_ROUTE_RELAYED))
-        return TA_OK;
+    int32_t outcome = ta_host_deliver(host, 0, &envelope);
+    if (outcome == TA_ROUTE_DELIVERED) host->routed++;
+    if (outcome == TA_ROUTE_DELIVERED || outcome == TA_ROUTE_RELAYED) return TA_OK;
     if (envelope.data && host->datamodels[envelope.datamodel].vtable->release)
         host->datamodels[envelope.datamodel].vtable->release(
             host->datamodels[envelope.datamodel].datamodel, envelope.data);
-    return status == TA_ERROR_NO_MEMORY ? status : TA_OK;
+    return outcome == TA_ERROR_NO_MEMORY ? TA_ERROR_NO_MEMORY : TA_OK;
 }
 
 /* ---- local delivery -------------------------------------------------------------------- */
@@ -515,7 +517,7 @@ static ta_status local_deliver(ta_host *host, uint64_t session, const ta_envelop
                                uint32_t *reason) {
     uint32_t si, actor;
     *reason = TA_ROUTE_ERROR_UNKNOWN_TARGET;
-    if (!session || ta_host_locate(host, session, &si, &actor) != TA_OK) return TA_OK;
+    if (!session || host_locate(host, session, &si, &actor) != TA_OK) return TA_OK;
     ta_event_in event;
     ta_memset(&event, 0, sizeof event);
     event.size = sizeof event;
@@ -561,7 +563,9 @@ ta_status ta_host_error_route(ta_host *host, ta_string_view origin, ta_route_req
     envelope.size = sizeof envelope;
     envelope.target = origin;
     envelope.name = (ta_string_view){"error.communication", 19};
-    ta_status status = ta_host_route_begin(host, 0, &envelope, TA_ROUTE_LOCAL_ONLY, request);
+    request->flags = TA_ROUTE_LOCAL_ONLY;
+    request->from = 0;
+    ta_status status = ta_host_route_begin(host, &envelope, request);
     if (status == TA_OK && request->name.length) {
         request->action = TA_ROUTE_REFUSED;
         request->reason = TA_ROUTE_ERROR_MALFORMED;
@@ -569,15 +573,17 @@ ta_status ta_host_error_route(ta_host *host, ta_string_view origin, ta_route_req
     return status;
 }
 
-ta_status ta_host_route_begin(ta_host *host, uint32_t from, const ta_envelope *envelope,
-                              uint32_t flags, ta_route_request *request) {
+ta_status ta_host_route_begin(ta_host *host, const ta_envelope *envelope,
+                              ta_route_request *request) {
     if (!host || !envelope || envelope->size < sizeof *envelope || !request ||
         request->size < sizeof *request)
         return TA_ERROR_INVALID;
+    uint32_t flags = request->flags, from = request->from;
     ta_memset(request, 0, sizeof *request);
     request->size = sizeof *request;
     request->action = TA_ROUTE_REFUSED;
     request->flags = flags;
+    request->from = from;
     peer *p = from ? peer_of(host, from) : NULL;
     if (from && !p) return TA_ERROR_STALE;
     ta_address to, org;
@@ -648,18 +654,22 @@ ta_status ta_host_route_step(ta_route_request *request, uint64_t result) {
     return TA_OK;
 }
 
-ta_status ta_host_message_init(ta_host *host, const ta_effect *effect, uint64_t revision,
-                               uint32_t index, ta_host_message *message) {
+ta_status ta_host_message_init(ta_host *host, const ta_effect *effect, ta_host_message *message) {
     if (!host || !effect || !message || message->size < sizeof *message) return TA_ERROR_INVALID;
+    uint64_t revision = message->revision;
+    uint32_t index = message->index;
     ta_memset(message, 0, sizeof *message);
     message->size = sizeof *message;
+    message->revision = revision;
+    message->index = index;
     ta_envelope *envelope = &message->envelope;
     envelope->size = sizeof *envelope;
     /* storage: origin | msgid (origin "/" token) | key (session ":" token) | "auto." token */
     char *p = message->storage;
-    uint32_t n =
-        ta_address_format(host->config.system_id, effect->session, p, TA_ADDRESS_SESSION_MAX);
-    if (!n) return TA_ERROR_INVALID;
+    ta_buffer origin = {p, TA_ADDRESS_SESSION_MAX, 0};
+    if (ta_address_format(host->config.system_id, effect->session, &origin) != TA_OK)
+        return TA_ERROR_INVALID;
+    uint32_t n = (uint32_t)origin.length;
     envelope->origin = (ta_string_view){p, n};
     char token_bytes[2 * TA_FORMAT_U64_MAX + 1];
     ta_text token = ta_text_init(token_bytes, sizeof token_bytes);
@@ -696,9 +706,10 @@ ta_status ta_host_message_init(ta_host *host, const ta_effect *effect, uint64_t 
     envelope->data = effect->payload;
     envelope->datamodel = effect->datamodel;
     envelope->trace_flags = effect->trace.flags & ~(uint32_t)0xFFu;
+    ta_buffer traceparent = {message->traceparent, TA_TRACEPARENT_LENGTH, 0};
     envelope->traceparent.pointer = message->traceparent;
     envelope->traceparent.length =
-        ta_traceparent_format(&effect->trace, message->traceparent, TA_TRACEPARENT_LENGTH);
+        ta_traceparent_format(&effect->trace, &traceparent) == TA_OK ? TA_TRACEPARENT_LENGTH : 0;
     return TA_OK;
 }
 
@@ -748,12 +759,11 @@ static void reach_install(ta_host *host, peer *p, peer *built) {
     p->reach_capacity = built->reach_capacity;
 }
 
-ta_status ta_host_peer_reach(ta_host *host, uint32_t handle, const ta_string_view *reach,
-                             uint32_t n) {
+ta_status ta_host_peer_reach(ta_host *host, uint32_t handle, ta_string_list reach) {
     peer *p = peer_of(host, handle);
     if (!p) return TA_ERROR_STALE;
     peer built;
-    ta_status status = reach_build(host, reach, n, &built);
+    ta_status status = reach_build(host, reach.pointer, reach.count, &built);
     if (status != TA_OK) return status;
     reach_install(host, p, &built);
     return TA_OK;
@@ -767,7 +777,7 @@ ta_status ta_host_peer_add(ta_host *host, const ta_peer_config *config, uint32_t
     if (!router) return TA_ERROR_NO_MEMORY;
     /* everything the new peer needs, before the one it replaces goes */
     peer built;
-    ta_status status = reach_build(host, config->reach, config->reach_count, &built);
+    ta_status status = reach_build(host, config->reach.pointer, config->reach.count, &built);
     if (status != TA_OK) return status;
     if (!host_grow(host, (void **)&router->peers, &router->peer_capacity, router->peer_count + 1,
                    sizeof(peer))) {
@@ -879,8 +889,9 @@ ta_status ta_host_route(ta_host *host, ta_string_view system, uint32_t handle) {
     return TA_OK;
 }
 
-ta_status ta_host_export(ta_host *host, uint32_t handle, ta_string_view name,
-                         ta_string_view events) {
+ta_status ta_host_export(ta_host *host, const ta_export_rule *rule) {
+    uint32_t handle = rule->peer;
+    ta_string_view name = rule->name, events = rule->events;
     if (!name.length) return TA_ERROR_INVALID;
     if (handle && !peer_of(host, handle)) return TA_ERROR_STALE;
     struct ta_router *router = router_of(host);
@@ -903,11 +914,7 @@ ta_status ta_host_export(ta_host *host, uint32_t handle, ta_string_view name,
     return TA_OK;
 }
 
-ta_status ta_host_deliver(ta_host *host, uint32_t from, const ta_envelope *envelope,
-                          uint32_t *outcome) {
-    uint32_t dummy;
-    if (!outcome) outcome = &dummy;
-    *outcome = TA_ROUTE_REFUSED;
+int32_t ta_host_deliver(ta_host *host, uint32_t from, const ta_envelope *envelope) {
     if (!envelope || envelope->size < sizeof(ta_envelope)) return TA_ERROR_INVALID;
     peer *p = NULL;
     if (from) {
@@ -916,7 +923,9 @@ ta_status ta_host_deliver(ta_host *host, uint32_t from, const ta_envelope *envel
     }
     ta_route_request request;
     request.size = sizeof request;
-    ta_status status = ta_host_route_begin(host, from, envelope, 0, &request);
+    request.flags = 0;
+    request.from = from;
+    ta_status status = ta_host_route_begin(host, envelope, &request);
     if (status != TA_OK) return status;
     if (request.action == TA_ROUTE_LOOKUP) {
         uint64_t session = request.session;
@@ -926,12 +935,13 @@ ta_status ta_host_deliver(ta_host *host, uint32_t from, const ta_envelope *envel
                 name = (char *)host_alloc(host, request.name.length);
                 if (!name) return TA_ERROR_NO_MEMORY;
             }
-            uint32_t length = ta_address_name_decode(request.name, name, request.name.length);
-            session = ta_host_actor_by_name(host, (ta_string_view){name, length});
+            ta_buffer decoded = {name, request.name.length, 0};
+            ta_address_name_decode(request.name, &decoded);
+            session = ta_host_actor_by_name(host, (ta_string_view){name, (uint32_t)decoded.length});
             if (name != small) host_free(host, name, request.name.length);
         }
         uint32_t si, actor;
-        if (!session || ta_host_locate(host, session, &si, &actor) != TA_OK) session = 0;
+        if (!session || host_locate(host, session, &si, &actor) != TA_OK) session = 0;
         ta_host_route_step(&request, session);
     }
     struct ta_router *router = NULL;
@@ -945,8 +955,7 @@ ta_status ta_host_deliver(ta_host *host, uint32_t from, const ta_envelope *envel
             p->received++;
             p->duplicates++;
         }
-        *outcome = TA_ROUTE_DUPLICATE;
-        return TA_OK;
+        return TA_ROUTE_DUPLICATE;
     }
     /* what follows either succeeds or, refused memory, leaves nothing behind:
      * the envelope is remembered (dedup) and counted only once handled */
@@ -976,12 +985,12 @@ ta_status ta_host_deliver(ta_host *host, uint32_t from, const ta_envelope *envel
     }
     if (router) dedup_remember(router, request.origin, request.key);
     if (p) p->received++;
-    *outcome = handled;
-    return TA_OK;
+    return (int32_t)handled;
 }
 
-ta_status ta_host_peer_error(ta_host *host, uint32_t from, ta_string_view origin,
-                             ta_string_view msgid, ta_string_view sendid, uint32_t reason) {
+ta_status ta_host_peer_error(ta_host *host, const ta_peer_error *error) {
+    uint32_t from = error->peer, reason = error->reason;
+    ta_string_view origin = error->origin, msgid = error->msgid, sendid = error->sendid;
     peer *p = peer_of(host, from);
     if (!p) return TA_ERROR_STALE;
     int handled;

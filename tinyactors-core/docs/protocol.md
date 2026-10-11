@@ -101,7 +101,7 @@ Rules:
   sent it is durable by that system's own definition: after the macrostep for
   an in-memory system, after `COMMIT` for a database.
 - **One shape inbound.** Every implementation accepts envelopes whole —
-  C: `ta_host_deliver(const ta_envelope *)`; JS: `system.deliver(envelope)`;
+  C: `ta_host_deliver(host, peer, const ta_envelope *)`; JS: `system.deliver(envelope)`;
   SQL: `tinyactors.deliver(envelope jsonb)` — so a new field never breaks an
   argument list.
 

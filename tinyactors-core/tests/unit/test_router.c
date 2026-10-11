@@ -97,8 +97,7 @@ static uint32_t connect(int i, int j, uint32_t flags, const char *const *reach,
     ta_string_view r[4];
     for (uint32_t k = 0; k < reach_count; k++)
         r[k] = (ta_string_view){reach[k], (uint32_t)strlen(reach[k])};
-    peer_config.reach = r;
-    peer_config.reach_count = reach_count;
+    peer_config.reach = (ta_string_list){r, reach_count};
     peer_config.max_queue = 4;
     peer_config.queue_ttl = 1000;
     CHECK_EQUAL(ta_host_peer_add(nodes[i].host, &peer_config, &nodes[i].peer[j]), TA_OK);
@@ -138,8 +137,9 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
                 continue;
             }
             if (effect->kind == TA_HOST_EFFECT_PEER_ERROR) {
-                ta_host_peer_error(nodes[j].host, nodes[j].peer[i], effect->auxiliary,
-                                   effect->msgid, effect->sendid, effect->token);
+                ta_host_peer_error(nodes[j].host, &(ta_peer_error){nodes[j].peer[i], effect->token,
+                                                                   effect->auxiliary, effect->msgid,
+                                                                   effect->sendid});
                 continue;
             }
             /* across: the payload as a neutral value, CBOR (separate datamodels) */
@@ -161,14 +161,16 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
             char traceparent[TA_TRACEPARENT_LENGTH]; /* the transport writes it on the wire */
             envelope.traceparent.pointer = traceparent;
             envelope.traceparent.length =
-                ta_traceparent_format(&effect->trace, traceparent, sizeof traceparent);
+                ta_traceparent_format(&effect->trace,
+                                      &(ta_buffer){traceparent, sizeof traceparent, 0}) == TA_OK
+                    ? TA_TRACEPARENT_LENGTH
+                    : 0;
             if (wire.length)
                 CHECK_EQUAL(ta_datamodel_ecmascript_payload_from_cbor(
                                 nodes[j].ecmascript, (ta_bytes){cbor, wire.length}, &envelope.data),
                             TA_OK);
-            uint32_t outcome;
-            CHECK_EQUAL(ta_host_deliver(nodes[j].host, nodes[j].peer[i], &envelope, &outcome),
-                        TA_OK);
+            int32_t outcome = ta_host_deliver(nodes[j].host, nodes[j].peer[i], &envelope);
+            CHECK(outcome >= 0);
             if (outcome != TA_ROUTE_DELIVERED && outcome != TA_ROUTE_RELAYED && envelope.data)
                 ta_datamodel_ecmascript_vtable()->release(nodes[j].ecmascript, envelope.data);
         }
@@ -183,14 +185,16 @@ static void settle(void) {
 }
 
 static uint64_t spawn(int i, const char *chart, const char *name) {
-    uint32_t segment, c;
-    CHECK_EQUAL(ta_host_chart(nodes[i].host, (ta_string_view){chart, (uint32_t)strlen(chart)},
-                              &segment, &c),
-                TA_OK);
+    ta_host_chart_ref ref;
+    CHECK_EQUAL(
+        ta_host_chart(nodes[i].host, (ta_string_view){chart, (uint32_t)strlen(chart)}, &ref),
+        TA_OK);
     uint64_t s = 0;
-    CHECK_EQUAL(ta_host_spawn(nodes[i].host, segment, c,
-                              (ta_string_view){name, (uint32_t)strlen(name)}, 0,
-                              (ta_string_view){0, 0}, &s),
+    CHECK_EQUAL(ta_host_spawn(nodes[i].host,
+                              &(ta_spawn){ref.segment, ref.chart,
+                                          (ta_string_view){name, (uint32_t)strlen(name)}, 0,
+                                          (ta_string_view){0, 0}},
+                              &s),
                 TA_OK);
     return s;
 }
@@ -204,7 +208,8 @@ static void go(int i, uint64_t session, const char *to, int n) {
     event.name = (ta_string_view){"go", 2};
     event.data = ta_datamodel_ecmascript_payload_eval(
         nodes[i].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
-    CHECK_EQUAL(ta_host_send(nodes[i].host, session, &event), TA_OK);
+    event.session = session;
+    CHECK_EQUAL(ta_host_send(nodes[i].host, &event), TA_OK);
     settle();
 }
 
@@ -275,26 +280,23 @@ static void test_origin_validation(void) {
     envelope.origin =
         (ta_string_view){"tinyactors://c/#_scxml_1", 24}; /* forged: a speaks for "a" only */
     envelope.msgid = (ta_string_view){"m1", 2};
-    uint32_t outcome;
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_REFUSED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_REFUSED);
     /* once a announces c, it may */
     const ta_string_view reach[1] = {{"c", 1}};
-    CHECK_EQUAL(ta_host_peer_reach(nodes[B].host, nodes[B].peer[A], reach, 1), TA_OK);
+    CHECK_EQUAL(ta_host_peer_reach(nodes[B].host, nodes[B].peer[A], (ta_string_list){reach, 1}),
+                TA_OK);
     envelope.msgid = (ta_string_view){"m2", 2};
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_DELIVERED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_DELIVERED);
     /* a peer can never speak for us */
     const ta_string_view me[1] = {{"b", 1}};
-    CHECK_EQUAL(ta_host_peer_reach(nodes[B].host, nodes[B].peer[A], me, 1), TA_OK);
+    CHECK_EQUAL(ta_host_peer_reach(nodes[B].host, nodes[B].peer[A], (ta_string_list){me, 1}),
+                TA_OK);
     envelope.origin = (ta_string_view){"tinyactors://b/#_scxml_1", 24};
     envelope.msgid = (ta_string_view){"m3", 2};
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_REFUSED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_REFUSED);
     /* malformed */
     envelope.target = (ta_string_view){"nonsense", 8};
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_REFUSED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_REFUSED);
     close_all();
 }
 
@@ -310,8 +312,9 @@ static void test_policy(void) {
     spawn(B, "echo", "secret");
     go(A, p, "tinyactors://b/@echo", 1);
     LOGCHK(A, "comm:p1;"); /* denied: nothing exported */
-    CHECK_EQUAL(ta_host_export(nodes[B].host, nodes[B].peer[A], (ta_string_view){"echo", 4},
-                               (ta_string_view){"ping", 4}),
+    CHECK_EQUAL(ta_host_export(nodes[B].host,
+                               &(ta_export_rule){nodes[B].peer[A], 0, (ta_string_view){"echo", 4},
+                                                 (ta_string_view){"ping", 4}}),
                 TA_OK);
     nodes[A].log[0] = 0;
     go(A, p, "tinyactors://b/@echo", 2);
@@ -325,19 +328,16 @@ static void test_policy(void) {
     envelope.name = (ta_string_view){"other", 5};
     envelope.origin = (ta_string_view){"tinyactors://a/#_scxml_1", 24};
     envelope.msgid = (ta_string_view){"x1", 2};
-    uint32_t outcome;
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_REFUSED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_REFUSED);
     /* "*" exports everything; untrusted peers still cannot relay through b */
-    CHECK_EQUAL(ta_host_export(nodes[B].host, 0, (ta_string_view){"*", 1}, (ta_string_view){"", 0}),
+    CHECK_EQUAL(ta_host_export(nodes[B].host, &(ta_export_rule){0, 0, (ta_string_view){"*", 1},
+                                                                (ta_string_view){"", 0}}),
                 TA_OK);
     envelope.msgid = (ta_string_view){"x2", 2};
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_DELIVERED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_DELIVERED);
     envelope.target = (ta_string_view){"tinyactors://c/@echo", 20};
     envelope.msgid = (ta_string_view){"x3", 2};
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_REFUSED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_REFUSED);
     close_all();
 }
 
@@ -356,19 +356,14 @@ static void test_dedup(void) {
     envelope.name = (ta_string_view){"other", 5};
     envelope.origin = (ta_string_view){"tinyactors://a/#_scxml_1", 24};
     envelope.msgid = (ta_string_view){"tinyactors://a/#_scxml_1/7", 26};
-    uint32_t outcome;
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_DELIVERED);
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_DUPLICATE);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_DELIVERED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_DUPLICATE);
     /* a dedup key overrides the message id: same key, new msgid -> duplicate */
     envelope.deduplication_key = (ta_string_view){"order-17", 8};
     envelope.msgid = (ta_string_view){"m-a", 3};
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_DELIVERED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_DELIVERED);
     envelope.msgid = (ta_string_view){"m-b", 3};
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_DUPLICATE);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_DUPLICATE);
     settle();
     LOGCHK(B, "other;other;");
     ta_peer_status status;
@@ -377,13 +372,22 @@ static void test_dedup(void) {
     CHECK_EQUAL(status.duplicates, 2u);
     /* the window survives a snapshot of the host (restored as after a restart) */
     size_t length = 0;
-    CHECK_EQUAL(ta_host_snapshot(nodes[B].host, NULL, 0, &length), TA_OK);
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot(nodes[B].host, &written), TA_ERROR_NO_MEMORY);
+    length = written.length;
     void *snap = aligned_alloc(8, (length + 7) & ~(size_t)7);
-    CHECK_EQUAL(ta_host_snapshot(nodes[B].host, snap, length, &length), TA_OK);
+    written = (ta_buffer){snap, length, 0};
+    CHECK_EQUAL(ta_host_snapshot(nodes[B].host, &written), TA_OK);
+    length = written.length;
     size_t dl = 0;
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(nodes[B].ecmascript, NULL, 0, &dl), TA_OK);
+    written = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(nodes[B].ecmascript, &written),
+                TA_ERROR_NO_MEMORY);
+    dl = written.length;
     void *dsnap = malloc(dl);
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(nodes[B].ecmascript, dsnap, dl, &dl), TA_OK);
+    written = (ta_buffer){dsnap, dl, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(nodes[B].ecmascript, &written), TA_OK);
+    dl = written.length;
     ta_host_free(nodes[B].host);
     ta_datamodel_ecmascript_free(nodes[B].ecmascript);
     nodes[B].ecmascript = ta_datamodel_ecmascript_new(NULL);
@@ -398,19 +402,20 @@ static void test_dedup(void) {
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
     const ta_image *images[1] = {&nodes[B].image};
-    CHECK_EQUAL(ta_host_restore(&config, images, 1, snap, length, &nodes[B].host), TA_OK);
-    CHECK_EQUAL(ta_datamodel_ecmascript_restore(nodes[B].ecmascript, dsnap, dl),
+    CHECK_EQUAL(ta_host_restore(&config, &(ta_host_snapshot_input){{snap, length}, images, 1, 0},
+                                &nodes[B].host),
+                TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(nodes[B].ecmascript, (ta_bytes){dsnap, dl}),
                 TA_OK); /* after the charts attached */
     free(snap);
     free(dsnap);
     connect(B, A, TA_PEER_TRUSTED, NULL, 0); /* the transport reconnects */
     envelope.msgid = (ta_string_view){"tinyactors://a/#_scxml_1/7", 26};
     envelope.deduplication_key = (ta_string_view){NULL, 0};
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_DUPLICATE); /* still remembered */
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_DUPLICATE);
+    /* still remembered */
     envelope.msgid = (ta_string_view){"tinyactors://a/#_scxml_1/8", 26};
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_DELIVERED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_DELIVERED);
     (void)e;
     close_all();
 }
@@ -442,9 +447,7 @@ static void test_relay(void) {
     envelope.name = (ta_string_view){"ping", 4};
     envelope.origin = (ta_string_view){"tinyactors://a/#_scxml_1", 24};
     envelope.msgid = (ta_string_view){"h1", 2};
-    uint32_t outcome;
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_REFUSED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_REFUSED);
     close_all();
 }
 
@@ -552,19 +555,19 @@ static void test_stale_handle(void) {
     CHECK_EQUAL(ta_host_peer_up(nodes[A].host, old, 1), TA_ERROR_STALE);
     CHECK_EQUAL(ta_host_peer_remove(nodes[A].host, old), TA_ERROR_STALE);
     CHECK_EQUAL(ta_host_route(nodes[A].host, (ta_string_view){"b", 1}, old), TA_ERROR_STALE);
-    CHECK_EQUAL(
-        ta_host_export(nodes[A].host, old, (ta_string_view){"echo", 4}, (ta_string_view){"", 0}),
-        TA_ERROR_STALE);
+    CHECK_EQUAL(ta_host_export(nodes[A].host, &(ta_export_rule){old, 0, (ta_string_view){"echo", 4},
+                                                                (ta_string_view){"", 0}}),
+                TA_ERROR_STALE);
     ta_envelope envelope;
     memset(&envelope, 0, sizeof envelope);
     envelope.size = sizeof envelope;
     envelope.target = (ta_string_view){"tinyactors://b/@echo", 20};
     envelope.name = (ta_string_view){"ping", 4};
     envelope.origin = (ta_string_view){"tinyactors://a/@host", 20};
-    uint32_t outcome;
-    CHECK_EQUAL(ta_host_deliver(nodes[A].host, old, &envelope, &outcome), TA_ERROR_STALE);
-    CHECK_EQUAL(ta_host_peer_error(nodes[A].host, old, envelope.origin, envelope.msgid,
-                                   (ta_string_view){"", 0}, TA_ROUTE_ERROR_UNREACHABLE),
+    CHECK_EQUAL(ta_host_deliver(nodes[A].host, old, &envelope), TA_ERROR_STALE);
+    CHECK_EQUAL(ta_host_peer_error(nodes[A].host, &(ta_peer_error){old, TA_ROUTE_ERROR_UNREACHABLE,
+                                                                   envelope.origin, envelope.msgid,
+                                                                   (ta_string_view){"", 0}}),
                 TA_ERROR_STALE);
     ta_host_peer_round_trip_time(nodes[A].host, old,
                                  5); /* a stale handle is a silent no-op, like before */
@@ -597,9 +600,7 @@ static void test_host_code_msgid(void) {
     envelope.origin = (ta_string_view){"tinyactors://a/@host", 20};
     char seen[2][64] = {"", ""};
     for (int k = 0; k < 2; k++) {
-        uint32_t outcome = 99;
-        CHECK_EQUAL(ta_host_deliver(nodes[A].host, 0, &envelope, &outcome), TA_OK);
-        CHECK_EQUAL(outcome, TA_ROUTE_RELAYED);
+        CHECK_EQUAL(ta_host_deliver(nodes[A].host, 0, &envelope), TA_ROUTE_RELAYED);
         const ta_host_effect *effect;
         uint32_t n = ta_host_effects(nodes[A].host, &effect);
         for (uint32_t i = 0; i < n; i++)
@@ -637,13 +638,17 @@ static void test_external_storage(void) {
     envelope.deduplication_key = (ta_string_view){"order-17", 8};
     ta_route_request request;
     request.size = sizeof request;
-    CHECK_EQUAL(ta_host_route_begin(host, peer, &envelope, 0, &request), TA_OK);
+    request.from = peer;
+    request.flags = 0;
+    CHECK_EQUAL(ta_host_route_begin(host, &envelope, &request), TA_OK);
     CHECK_EQUAL(request.reason, TA_ROUTE_ERROR_DENIED);
     CHECK_EQUAL(request.key.length, 0u);
-    CHECK_EQUAL(
-        ta_host_export(host, peer, (ta_string_view){"ledger", 6}, (ta_string_view){"pay", 3}),
-        TA_OK);
-    CHECK_EQUAL(ta_host_route_begin(host, peer, &envelope, 0, &request), TA_OK);
+    CHECK_EQUAL(ta_host_export(host, &(ta_export_rule){peer, 0, (ta_string_view){"ledger", 6},
+                                                       (ta_string_view){"pay", 3}}),
+                TA_OK);
+    request.from = peer;
+    request.flags = 0;
+    CHECK_EQUAL(ta_host_route_begin(host, &envelope, &request), TA_OK);
     CHECK_EQUAL(request.action, TA_ROUTE_LOOKUP);
     CHECK_EQUAL(ta_host_route_step(&request, 91), TA_OK);
     CHECK_EQUAL(request.action, TA_ROUTE_DEDUPLICATE);
@@ -652,42 +657,54 @@ static void test_external_storage(void) {
     CHECK_EQUAL(request.action, TA_ROUTE_DUPLICATE);
     CHECK_EQUAL(ta_host_route_step(&request, 1), TA_ERROR_STATE);
     envelope.msgid = (ta_string_view){"m2", 2};
-    CHECK_EQUAL(ta_host_route_begin(host, peer, &envelope, 0, &request), TA_OK);
+    request.from = peer;
+    request.flags = 0;
+    CHECK_EQUAL(ta_host_route_begin(host, &envelope, &request), TA_OK);
     CHECK_EQUAL(ta_host_route_step(&request, 0), TA_OK);
     CHECK_EQUAL(request.reason, TA_ROUTE_ERROR_UNKNOWN_TARGET);
     envelope.hops = TA_ROUTE_MAX_HOPS;
-    CHECK_EQUAL(ta_host_route_begin(host, peer, &envelope, 0, &request), TA_OK);
+    request.from = peer;
+    request.flags = 0;
+    CHECK_EQUAL(ta_host_route_begin(host, &envelope, &request), TA_OK);
     CHECK_EQUAL(ta_host_route_step(&request, 92), TA_OK);
     CHECK_EQUAL(ta_host_route_step(&request, 1), TA_OK);
     CHECK_EQUAL(request.action, TA_ROUTE_LOCAL);
     CHECK_EQUAL(request.session, 92u);
     envelope.hops++;
-    CHECK_EQUAL(ta_host_route_begin(host, peer, &envelope, 0, &request), TA_OK);
+    request.from = peer;
+    request.flags = 0;
+    CHECK_EQUAL(ta_host_route_begin(host, &envelope, &request), TA_OK);
     CHECK_EQUAL(request.reason, TA_ROUTE_ERROR_HOPS);
     envelope.hops = 0;
     envelope.origin = (ta_string_view){"tinyactors://db/#_scxml_7", 25};
-    CHECK_EQUAL(ta_host_route_begin(host, peer, &envelope, 0, &request), TA_OK);
+    request.from = peer;
+    request.flags = 0;
+    CHECK_EQUAL(ta_host_route_begin(host, &envelope, &request), TA_OK);
     CHECK_EQUAL(request.reason, TA_ROUTE_ERROR_DENIED);
     envelope.target = (ta_string_view){"tinyactors://missing/@x", 23};
-    CHECK_EQUAL(ta_host_route_begin(host, 0, &envelope, 0, &request), TA_OK);
+    request.from = 0;
+    request.flags = 0;
+    CHECK_EQUAL(ta_host_route_begin(host, &envelope, &request), TA_OK);
     CHECK_EQUAL(request.reason, TA_ROUTE_ERROR_UNREACHABLE);
-    CHECK_EQUAL(ta_host_route_begin(host, 0, &envelope, TA_ROUTE_DURABLE, &request), TA_OK);
+    request.from = 0;
+    request.flags = TA_ROUTE_DURABLE;
+    CHECK_EQUAL(ta_host_route_begin(host, &envelope, &request), TA_OK);
     CHECK_EQUAL(request.action, TA_ROUTE_PEER);
     CHECK(request.peer_id.length == 7 && !memcmp(request.peer_id.pointer, "missing", 7));
     CHECK_EQUAL(request.hops, 0u);
     /* a store that loads its peers only when a next hop needs them */
-    CHECK_EQUAL(
-        ta_host_route_begin(host, 0, &envelope, TA_ROUTE_DURABLE | TA_ROUTE_ASK_PEERS, &request),
-        TA_OK);
+    request.from = 0;
+    request.flags = TA_ROUTE_DURABLE | TA_ROUTE_ASK_PEERS;
+    CHECK_EQUAL(ta_host_route_begin(host, &envelope, &request), TA_OK);
     CHECK_EQUAL(request.action, TA_ROUTE_PEERS);
-    CHECK_EQUAL(
-        ta_host_route_begin(host, 0, &envelope, TA_ROUTE_LOCAL_ONLY | TA_ROUTE_ASK_PEERS, &request),
-        TA_OK);
+    request.from = 0;
+    request.flags = TA_ROUTE_LOCAL_ONLY | TA_ROUTE_ASK_PEERS;
+    CHECK_EQUAL(ta_host_route_begin(host, &envelope, &request), TA_OK);
     CHECK_EQUAL(request.reason, TA_ROUTE_ERROR_UNREACHABLE);
     envelope.target = (ta_string_view){"tinyactors://db/#_scxml_92", 26};
-    CHECK_EQUAL(
-        ta_host_route_begin(host, 0, &envelope, TA_ROUTE_DURABLE | TA_ROUTE_ASK_PEERS, &request),
-        TA_OK);
+    request.from = 0;
+    request.flags = TA_ROUTE_DURABLE | TA_ROUTE_ASK_PEERS;
+    CHECK_EQUAL(ta_host_route_begin(host, &envelope, &request), TA_OK);
     CHECK_EQUAL(request.action, TA_ROUTE_LOOKUP);
     CHECK_EQUAL(request.session, 92u);
     envelope.target = (ta_string_view){"tinyactors://missing/@x", 23};
@@ -716,15 +733,21 @@ static void test_durable_message(void) {
     ta_host_message a, b;
     a.size = sizeof a;
     b.size = sizeof b;
-    CHECK_EQUAL(ta_host_message_init(host, &effect, 17, 3, &a), TA_OK);
+    a.revision = 17;
+    a.index = 3;
+    CHECK_EQUAL(ta_host_message_init(host, &effect, &a), TA_OK);
     CHECK(a.key.length == 7 && !memcmp(a.key.pointer, "42:17.3", 7));
     CHECK(a.envelope.msgid.length == 31 &&
           !memcmp(a.envelope.msgid.pointer, "tinyactors://db/#_scxml_42/17.3", 31));
-    CHECK_EQUAL(ta_host_message_init(host, &effect, 17, 4, &b), TA_OK);
+    b.revision = 17;
+    b.index = 4;
+    CHECK_EQUAL(ta_host_message_init(host, &effect, &b), TA_OK);
     CHECK(memcmp(a.envelope.msgid.pointer, b.envelope.msgid.pointer, a.envelope.msgid.length));
     ta_host_free(host);
     CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
-    CHECK_EQUAL(ta_host_message_init(host, &effect, 17, 3, &b), TA_OK);
+    b.revision = 17;
+    b.index = 3;
+    CHECK_EQUAL(ta_host_message_init(host, &effect, &b), TA_OK);
     CHECK(!memcmp(a.envelope.msgid.pointer, b.envelope.msgid.pointer, a.envelope.msgid.length));
 #define VIEW_IS(view, text) ((view).length == strlen(text) && !memcmp((view).pointer, text, strlen(text)))
     CHECK(VIEW_IS(a.envelope.target, "tinyactors://web/@x"));
@@ -764,9 +787,7 @@ static void test_envelope_fields(void) {
     envelope.origin = (ta_string_view){"tinyactors://a/#_scxml_7", 24};
     envelope.origintype = (ta_string_view){"urn:x-test", 10};
     envelope.msgid = (ta_string_view){"e1", 2};
-    uint32_t outcome;
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_DELIVERED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_DELIVERED);
     settle();
     LOGCHK(B, "look|42|s-9|tinyactors://a/#_scxml_7|urn:x-test;");
     close_all();
@@ -791,16 +812,13 @@ static void test_address_grammar(void) {
     envelope.origin = (ta_string_view){"tinyactors://a/#_scxml_18446744073709551615", 43};
     envelope.msgid = (ta_string_view){"g1", 2};
     envelope.target = (ta_string_view){"tinyactors://b/@%65cho", 22};
-    uint32_t outcome;
-    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_DELIVERED);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_DELIVERED);
     const char *bad[] = {"tinyactors://b/#_scxml_01", "tinyactors://b/#_scxml_18446744073709551616",
                          "tinyactors://b/@ech%6", "tinyactors://B/@echo"};
     for (int k = 0; k < 4; k++) {
         envelope.target = (ta_string_view){bad[k], (uint32_t)strlen(bad[k])};
         envelope.msgid = (ta_string_view){bad[k], (uint32_t)strlen(bad[k])};
-        CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope, &outcome), TA_OK);
-        CHECK_EQUAL(outcome, TA_ROUTE_REFUSED);
+        CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_REFUSED);
     }
     settle();
     LOGCHK(B, "other;");
@@ -840,7 +858,8 @@ static void test_system_id(void) {
     event.name = (ta_string_view){"go", 2};
     event.data = ta_datamodel_ecmascript_payload_eval(
         nodes[A].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
-    CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
+    event.session = p;
+    CHECK_EQUAL(ta_host_send(nodes[A].host, &event), TA_OK);
     ta_host_run(nodes[A].host, 100000);
     const ta_host_effect *effect;
     uint32_t n = ta_host_effects(nodes[A].host, &effect);
@@ -932,7 +951,8 @@ static void test_trace_across_systems(void) {
     event.traceparent = (ta_string_view){parent, (uint32_t)strlen(parent)};
     event.data = ta_datamodel_ecmascript_payload_eval(
         nodes[A].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
-    CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
+    event.session = p;
+    CHECK_EQUAL(ta_host_send(nodes[A].host, &event), TA_OK);
     settle();
     ta_peer_status status;
     status.size = sizeof status;
@@ -976,9 +996,11 @@ static void test_trace_two_segments(void) {
     CHECK_EQUAL(segment, 1);
     uint64_t p = spawn(A, "pinger", "p");
     uint64_t echo = 0;
-    CHECK_EQUAL(ta_host_spawn(nodes[A].host, 1, 0, (ta_string_view){"echo", 4}, 0,
-                              (ta_string_view){0, 0}, &echo),
-                TA_OK);
+    CHECK_EQUAL(
+        ta_host_spawn(nodes[A].host,
+                      &(ta_spawn){1, 0, (ta_string_view){"echo", 4}, 0, (ta_string_view){0, 0}},
+                      &echo),
+        TA_OK);
     CHECK(echo >> 32 == 1); /* the second segment's sessions */
     settle();
     begin_seen seen[64];
@@ -992,7 +1014,8 @@ static void test_trace_two_segments(void) {
     event.traceparent = (ta_string_view){parent, (uint32_t)strlen(parent)};
     event.data = ta_datamodel_ecmascript_payload_eval(
         nodes[A].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
-    CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
+    event.session = p;
+    CHECK_EQUAL(ta_host_send(nodes[A].host, &event), TA_OK);
     settle();
     LOGCHK(A, "pong:3;");
     uint32_t n = begins(A, seen, 64);
@@ -1034,8 +1057,10 @@ static void test_trace_set(void) {
     uint32_t segment;
     CHECK_EQUAL(ta_host_add_image(nodes[A].host, &echo_image, &segment), TA_OK);
     uint64_t echo = 0;
-    CHECK_EQUAL(ta_host_spawn(nodes[A].host, segment, 0, (ta_string_view){"echo", 4}, 0,
-                              (ta_string_view){0, 0}, &echo),
+    CHECK_EQUAL(ta_host_spawn(
+                    nodes[A].host,
+                    &(ta_spawn){segment, 0, (ta_string_view){"echo", 4}, 0, (ta_string_view){0, 0}},
+                    &echo),
                 TA_OK);
     const char *json = "{\"to\": \"tinyactors://a/@echo\", \"n\": 1}";
     ta_event_in event;
@@ -1044,7 +1069,8 @@ static void test_trace_set(void) {
     event.name = (ta_string_view){"go", 2};
     event.data = ta_datamodel_ecmascript_payload_eval(
         nodes[A].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
-    CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
+    event.session = p;
+    CHECK_EQUAL(ta_host_send(nodes[A].host, &event), TA_OK);
     settle();
     LOGCHK(A, "pong:1;");
     CHECK_EQUAL(begins(A, seen, 64), 0); /* neither segment wrote one */
@@ -1052,7 +1078,8 @@ static void test_trace_set(void) {
     CHECK_EQUAL(ta_host_trace_set(nodes[A].host, &options), TA_OK);
     event.data = ta_datamodel_ecmascript_payload_eval(
         nodes[A].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
-    CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
+    event.session = p;
+    CHECK_EQUAL(ta_host_send(nodes[A].host, &event), TA_OK);
     settle();
     uint32_t n = begins(A, seen, 64);
     CHECK(begin_named(seen, n, "go") && begin_named(seen, n, "ping"));

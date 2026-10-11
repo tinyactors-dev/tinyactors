@@ -241,12 +241,8 @@
           "type": "ta_datamodel_ecmascript *"
         },
         {
-          "name": "buffer",
-          "type": "const void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "name": "snapshot",
+          "type": "ta_bytes"
         }
       ],
       "public": true,
@@ -279,16 +275,8 @@
           "type": "ta_datamodel_ecmascript *"
         },
         {
-          "name": "buffer",
-          "type": "void *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
-        },
-        {
-          "name": "length",
-          "type": "size_t *"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,

@@ -101,7 +101,9 @@ static void span_vector(JSValueConst e) {
     ta_span_id got = ta_step_key_span_id(key);
     CHECK_EQUAL(got, hex_of(span));
     char text[17] = {0};
-    CHECK_EQUAL(ta_span_id_format(got, text, 16), 16);
+    ta_buffer out = {text, 16, 0};
+    CHECK_EQUAL(ta_span_id_format(got, &out), TA_OK);
+    CHECK_EQUAL(out.length, 16);
     CHECK(strcmp(text, span) == 0);
 }
 
@@ -131,11 +133,15 @@ static void valid_vector(JSValueConst e) {
     CHECK_EQUAL(context.flags, u64_of(e, "flags"));
     const char *want = str_of(e, "format", format, sizeof format) ? format : text;
     char out[TA_TRACEPARENT_LENGTH + 1] = {0};
-    CHECK_EQUAL(ta_traceparent_format(&context, out, sizeof out), TA_TRACEPARENT_LENGTH);
+    ta_buffer written = {out, TA_TRACEPARENT_LENGTH, 0};
+    CHECK_EQUAL(ta_traceparent_format(&context, &written), TA_OK);
+    CHECK_EQUAL(written.length, TA_TRACEPARENT_LENGTH);
     if (strcmp(out, want) != 0) fprintf(stderr, "  formats as %s, expected %s\n", out, want);
     CHECK(strcmp(out, want) == 0);
     char id[33] = {0};
-    CHECK_EQUAL(ta_trace_id_format(context.trace, id, 32), 32);
+    written = (ta_buffer){id, 32, 0};
+    CHECK_EQUAL(ta_trace_id_format(context.trace, &written), TA_OK);
+    CHECK_EQUAL(written.length, 32);
     CHECK(strcmp(id, trace) == 0);
 }
 
@@ -189,14 +195,19 @@ static void test_traceparent_every_byte(void) {
 
 static void test_format_refusals(void) {
     char out[TA_TRACEPARENT_LENGTH];
+    ta_buffer room = {out, sizeof out, 0};
     ta_trace_context none = {{0, 0}, 1, 1, 0};
-    CHECK_EQUAL(ta_traceparent_format(&none, out, sizeof out), 0); /* no trace */
+    CHECK_EQUAL(ta_traceparent_format(&none, &room), TA_ERROR_INVALID); /* no trace */
     ta_trace_context no_parent = {{1, 2}, 0, 1, 0};
-    CHECK_EQUAL(ta_traceparent_format(&no_parent, out, sizeof out), 0);
+    CHECK_EQUAL(ta_traceparent_format(&no_parent, &room), TA_ERROR_INVALID);
     ta_trace_context ok = {{1, 2}, 3, 1, 0};
-    CHECK_EQUAL(ta_traceparent_format(&ok, out, sizeof out - 1), 0); /* too small */
-    CHECK_EQUAL(ta_trace_id_format(ok.trace, out, 31), 0);
-    CHECK_EQUAL(ta_span_id_format(3, out, 15), 0);
+    ta_buffer small = {out, sizeof out - 1, 0};
+    CHECK_EQUAL(ta_traceparent_format(&ok, &small), TA_ERROR_NO_MEMORY); /* too small */
+    CHECK_EQUAL(small.length, TA_TRACEPARENT_LENGTH);                    /* what it needs */
+    small.capacity = 31;
+    CHECK_EQUAL(ta_trace_id_format(ok.trace, &small), TA_ERROR_NO_MEMORY);
+    small.capacity = 15;
+    CHECK_EQUAL(ta_span_id_format(3, &small), TA_ERROR_NO_MEMORY);
     CHECK_EQUAL(ta_traceparent_parse(S("x"), NULL), TA_ERROR_INVALID);
 }
 

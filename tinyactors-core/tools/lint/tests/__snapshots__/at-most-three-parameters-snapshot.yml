@@ -1,0 +1,46 @@
+id: at-most-three-parameters
+snapshots:
+  TA_API const void *ta_pointer(const void *a, size_t b, uint32_t c, size_t *d);:
+    labels:
+    - source: ta_pointer(const void *a, size_t b, uint32_t c, size_t *d)
+      style: primary
+      start: 19
+      end: 77
+    - source: TA_API
+      style: secondary
+      start: 0
+      end: 6
+    - source: TA_API const void *ta_pointer(const void *a, size_t b, uint32_t c, size_t *d);
+      style: secondary
+      start: 0
+      end: 78
+    - source: size_t *d
+      style: secondary
+      start: 67
+      end: 76
+    - source: (const void *a, size_t b, uint32_t c, size_t *d)
+      style: secondary
+      start: 29
+      end: 77
+  TA_API ta_status ta_four(ta_system *system, uint32_t a, void *b, size_t c);:
+    labels:
+    - source: ta_four(ta_system *system, uint32_t a, void *b, size_t c)
+      style: primary
+      start: 17
+      end: 74
+    - source: TA_API
+      style: secondary
+      start: 0
+      end: 6
+    - source: TA_API ta_status ta_four(ta_system *system, uint32_t a, void *b, size_t c);
+      style: secondary
+      start: 0
+      end: 75
+    - source: size_t c
+      style: secondary
+      start: 65
+      end: 73
+    - source: (ta_system *system, uint32_t a, void *b, size_t c)
+      style: secondary
+      start: 24
+      end: 74

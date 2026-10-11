@@ -202,13 +202,13 @@ static const ta_xml_node *child(const ta_xml_node *node, const char *name) {
 static int fetch_source(chart_builder *builder, const ta_xml_node *at, const char *source,
                         ta_source *out) {
     const ta_compile_options *options = builder->compiler->options;
-    ta_string_view base = {builder->file, (uint32_t)strlen(builder->file)};
-    ta_string_view s = {source, (uint32_t)strlen(source)};
+    ta_resolve_request request = {{builder->file, (uint32_t)strlen(builder->file)},
+                                  {source, (uint32_t)strlen(source)}};
     if (!options->resolve) {
         compile_error(builder, at, "src=\"%s\" requires a resolver", source);
         return 0;
     }
-    if (options->resolve(options->resolve_context, base, s, out) != TA_OK) {
+    if (options->resolve(options->resolve_context, &request, out) != TA_OK) {
         compile_error(builder, at, "cannot resolve src=\"%s\"", source);
         return 0;
     }

@@ -87,13 +87,17 @@ static void valid(JSValueConst e) {
         CHECK_EQUAL(address.kind, TA_ADDRESS_SESSION);
         CHECK_EQUAL(address.session, strtoull(session, NULL, 10));
         char back[TA_ADDRESS_SESSION_MAX]; /* formats back to the same text */
-        uint32_t n = ta_address_format(address.system, address.session, back, sizeof back);
+        ta_buffer out = {back, sizeof back, 0};
+        CHECK_EQUAL(ta_address_format(address.system, address.session, &out), TA_OK);
+        size_t n = out.length;
         CHECK(n == strlen(text) && !memcmp(back, text, n));
     } else {
         str_of(e, "name", name, sizeof name);
         CHECK_EQUAL(address.kind, TA_ADDRESS_NAME);
         char dec[256];
-        uint32_t n = ta_address_name_decode(address.name, dec, sizeof dec);
+        ta_buffer out = {dec, sizeof dec, 0};
+        CHECK_EQUAL(ta_address_name_decode(address.name, &out), TA_OK);
+        size_t n = out.length;
         CHECK(n == strlen(name) && !memcmp(dec, name, n));
         if (!(n == strlen(name) && !memcmp(dec, name, n)))
             fprintf(stderr, "  name of %s: %.*s, want %s\n", text, (int)n, dec, name);
@@ -119,12 +123,14 @@ static void format(JSValueConst e) {
     str_of(e, "system", system, sizeof system);
     str_of(e, "text", want, sizeof want);
     char out[512];
-    uint32_t n;
+    ta_buffer written = {out, sizeof out, 0};
     if (str_of(e, "session", session, sizeof session))
-        n = ta_address_format(S(system), strtoull(session, NULL, 10), out, sizeof out);
+        CHECK_EQUAL(ta_address_format(S(system), strtoull(session, NULL, 10), &written), TA_OK);
     else
-        n = ta_address_format_name(S(system), S(str_of(e, "name", name, sizeof name)), out,
-                                   sizeof out);
+        CHECK_EQUAL(
+            ta_address_format_name(S(system), S(str_of(e, "name", name, sizeof name)), &written),
+            TA_OK);
+    size_t n = written.length;
     CHECK(n == strlen(want) && !memcmp(out, want, n));
     if (!(n == strlen(want) && !memcmp(out, want, n)))
         fprintf(stderr, "  format: %.*s, want %s\n", (int)n, out, want);
@@ -157,18 +163,21 @@ static void test_edges(void) {
         system[i] = (i % 64 == 63) ? '.' : 'a';
     system[TA_ADDRESS_SYSTEM_MAX] = 0;
     CHECK(ta_address_system_valid(S(system)));
-    uint32_t n = ta_address_format(S(system), UINT64_MAX, buffer, sizeof buffer);
-    CHECK_EQUAL(n, sizeof buffer);
-    CHECK_EQUAL(ta_address_parse((ta_string_view){buffer, n}, &address), TA_OK);
+    ta_buffer out = {buffer, sizeof buffer, 0};
+    CHECK_EQUAL(ta_address_format(S(system), UINT64_MAX, &out), TA_OK);
+    CHECK_EQUAL(out.length, sizeof buffer);
+    CHECK_EQUAL(ta_address_parse((ta_string_view){buffer, (uint32_t)out.length}, &address), TA_OK);
     CHECK_EQUAL(address.session, UINT64_MAX);
     /* too long a system id; too small a buffer; session 0 */
     char longer[TA_ADDRESS_SYSTEM_MAX + 2];
     memset(longer, 'a', sizeof longer - 1);
     longer[sizeof longer - 1] = 0;
     CHECK(!ta_address_system_valid(S(longer)));
-    CHECK_EQUAL(ta_address_format(S("a"), 1, buffer, 10), 0u);
-    CHECK_EQUAL(ta_address_format(S("a"), 0, buffer, sizeof buffer), 0u);
-    CHECK_EQUAL(ta_address_format_name(S("a"), S(""), buffer, sizeof buffer), 0u);
+    ta_buffer small = {buffer, 10, 0};
+    CHECK_EQUAL(ta_address_format(S("a"), 1, &small), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(small.length, 24u); /* what it needs: tinyactors://a/#_scxml_1 */
+    CHECK_EQUAL(ta_address_format(S("a"), 0, &out), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_address_format_name(S("a"), S(""), &out), TA_ERROR_INVALID);
     CHECK_EQUAL(ta_address_parse((ta_string_view){NULL, 0}, &address), TA_ERROR_INVALID);
     /* parse_local */
     CHECK_EQUAL(ta_address_parse_local(S("#_scxml_5"), &address), TA_OK);

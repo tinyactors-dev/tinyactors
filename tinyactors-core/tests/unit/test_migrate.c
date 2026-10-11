@@ -68,8 +68,9 @@ static int world_open(world *w, const char *v1, const char *v2, int ecmascript, 
         size_t ml;
         if (ta_system_layout(&w->image[i], &config, &ml) != TA_OK) return 0;
         w->memory[i] = malloc(ml);
-        if (ta_system_init(w->memory[i], ml, &w->image[i], &config, &w->binding, 1,
-                           &w->system[i]) != TA_OK)
+        if (ta_system_init(
+                &(ta_system_setup){{w->memory[i], ml}, &w->image[i], &config, &w->binding, 1, 0},
+                &w->system[i]) != TA_OK)
             return 0;
     }
     return 1;
@@ -168,7 +169,7 @@ static const char *config_of(world *w, int i, uint32_t actor) {
     actor_info.size = sizeof actor_info;
     buffer[0] = 0;
     if (ta_actor_info_get(w->system[i], actor, &actor_info) != TA_OK) return "<gone>";
-    uint32_t n = ta_actor_config(w->system[i], actor, states, 64);
+    uint32_t n = ta_actor_config(w->system[i], actor, (ta_uint32_array){states, 64});
     for (uint32_t k = 0; k < n && k < 64; k++) {
         ta_string_view nm = ta_image_state_name(&w->image[i], actor_info.chart, states[k]);
         size_t l = strlen(buffer);
@@ -196,11 +197,17 @@ static uint32_t mig[1 << 14]; /* 4-aligned */
 /* export from system 0, translate to image 1's chart 0, adopt into system 1 */
 static ta_status move_and_upgrade(world *w, uint32_t actor, uint32_t *out) {
     size_t length, ml;
-    ta_status status = ta_actor_export(w->system[0], actor, blob, sizeof blob, &length);
+    ta_buffer migrated;
+    ta_buffer written = {blob, sizeof blob, 0};
+    ta_status status = ta_actor_export(w->system[0], actor, &written);
+    length = written.length;
     if (status != TA_OK) return status;
-    status = ta_blob_migrate(&w->image[0], &w->image[1], 0, blob, length, mig, sizeof mig, &ml);
+    migrated = (ta_buffer){mig, sizeof mig, 0};
+    status = ta_blob_migrate(&(ta_blob_migration){&w->image[0], &w->image[1], 0, 0, {blob, length}},
+                             &migrated);
+    ml = migrated.length;
     if (status != TA_OK) return status;
-    return ta_system_adopt(w->system[1], mig, ml, out);
+    return ta_system_adopt(w->system[1], (ta_bytes){mig, ml}, out);
 }
 
 /* ---- the whole path, with the ECMAScript datamodel ---- */
@@ -243,11 +250,14 @@ static void test_upgrade_roundtrip(void) {
     CHECK(world_open(&w, V1, V2, 1, 0));
     uint32_t a, peer;
     CHECK_EQUAL(
-        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
-    CHECK_EQUAL(ta_system_spawn(w.system[0], 0, (ta_string_view){"peer", 4}, 0,
-                                (ta_string_view){0, 0}, &peer),
-                TA_OK);
+    CHECK_EQUAL(
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){"peer", 4}, 0, (ta_string_view){0, 0}},
+                        &peer),
+        TA_OK);
     run(&w);
     ta_event_in event;
     memset(&event, 0, sizeof event);
@@ -276,12 +286,13 @@ static void test_upgrade_roundtrip(void) {
     CHECK_EQUAL(actor_info.serial, 1); /* same session id, same address */
     {                                  /* enumeration finds it whatever its session range */
         uint32_t list[4], cursor = 0, n = 0, got;
-        while ((got = ta_system_actors(w.system[1], &cursor, list + n, 1)) != 0)
+        while ((got = ta_system_actors(w.system[1], &cursor, (ta_uint32_array){list + n, 1})) != 0)
             n += got;
         CHECK(n == 1 && list[0] == b);
         cursor = 0;
-        CHECK_EQUAL(ta_system_actors(w.system[0], &cursor, list, 4), 1); /* peer */
-        CHECK_EQUAL(ta_system_actors(w.system[0], &cursor, list, 4), 0);
+        CHECK_EQUAL(ta_system_actors(w.system[0], &cursor, (ta_uint32_array){list, 4}),
+                    1); /* peer */
+        CHECK_EQUAL(ta_system_actors(w.system[0], &cursor, (ta_uint32_array){list, 4}), 0);
     }
 
     run(&w);
@@ -325,10 +336,14 @@ static void test_upgrade_roundtrip(void) {
 
     /* the session exists: adopting the same blob again is refused */
     size_t ml;
-    CHECK_EQUAL(ta_actor_export(w.system[1], b, blob, sizeof blob, &ml), TA_OK);
-    CHECK_EQUAL(ta_system_adopt(w.system[1], blob, ml, &b), TA_OK); /* back, unmigrated */
-    CHECK_EQUAL(ta_system_adopt(w.system[1], blob, ml, &b), TA_ERROR_STATE);
-    CHECK_EQUAL(ta_system_adopt(w.system[0], blob, ml, &b), TA_ERROR_INVALID); /* other image */
+    ta_buffer written = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(w.system[1], b, &written), TA_OK);
+    ml = written.length;
+    CHECK_EQUAL(ta_system_adopt(w.system[1], (ta_bytes){blob, ml}, &b),
+                TA_OK); /* back, unmigrated */
+    CHECK_EQUAL(ta_system_adopt(w.system[1], (ta_bytes){blob, ml}, &b), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_system_adopt(w.system[0], (ta_bytes){blob, ml}, &b),
+                TA_ERROR_INVALID); /* other image */
     world_close(&w);
 }
 
@@ -339,7 +354,8 @@ static void test_failed_adopt_keeps_blob(void) {
     CHECK(world_open(&w, V1, V2, 1, 1)); /* the new system has room for one timer */
     uint32_t a, b;
     CHECK_EQUAL(
-        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     run(&w);
     ta_event_in event;
@@ -350,28 +366,45 @@ static void test_failed_adopt_keeps_blob(void) {
     CHECK_EQUAL(ta_system_send(w.system[0], &event), TA_OK);
     run(&w);
     size_t length, ml;
+    ta_buffer migrated;
     { /* hibernation keeps the data too (declared variables are configurable) */
         size_t hl;
-        CHECK_EQUAL(ta_actor_hibernate(w.system[0], a, blob, sizeof blob, &hl), TA_OK);
-        CHECK_EQUAL(ta_actor_wake(w.system[0], a, blob, hl), TA_OK);
+        ta_buffer written = {blob, sizeof blob, 0};
+        CHECK_EQUAL(ta_actor_hibernate(w.system[0], a, &written), TA_OK);
+        hl = written.length;
+        CHECK_EQUAL(ta_actor_wake(w.system[0], a, (ta_bytes){blob, hl}), TA_OK);
         CHECK(strcmp(eval(&w, 0, a, "JSON.stringify([count, gone])"), "\"[1,\\\"bye\\\"]\"") == 0);
     }
-    CHECK_EQUAL(ta_actor_export(w.system[0], a, blob, sizeof blob, &length), TA_OK);
-    CHECK_EQUAL(ta_blob_migrate(&w.image[0], &w.image[1], 0, blob, length, mig, 8, &ml),
-                TA_ERROR_NO_MEMORY);
+    ta_buffer written = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(w.system[0], a, &written), TA_OK);
+    length = written.length;
+    migrated = (ta_buffer){mig, 8, 0};
+    CHECK_EQUAL(
+        ta_blob_migrate(&(ta_blob_migration){&w.image[0], &w.image[1], 0, 0, {blob, length}},
+                        &migrated),
+        TA_ERROR_NO_MEMORY);
+    ml = migrated.length;
     CHECK(ml > 8);
-    CHECK_EQUAL(ta_blob_migrate(&w.image[0], &w.image[1], 0, blob, length, (unsigned char *)mig + 1,
-                                sizeof mig - 4, &ml),
-                TA_ERROR_INVALID); /* unaligned output */
-    CHECK_EQUAL(ta_blob_migrate(&w.image[0], &w.image[1], 0, blob, length, mig, sizeof mig, &ml),
-                TA_OK);
-    CHECK_EQUAL(ta_system_adopt(w.system[1], mig, ml, &b), TA_ERROR_NO_MEMORY); /* two timers */
+    migrated = (ta_buffer){(unsigned char *)mig + 1, sizeof mig - 4, 0};
+    CHECK_EQUAL(
+        ta_blob_migrate(&(ta_blob_migration){&w.image[0], &w.image[1], 0, 0, {blob, length}},
+                        &migrated),
+        TA_ERROR_INVALID);
+    ml = migrated.length; /* unaligned output */
+    migrated = (ta_buffer){mig, sizeof mig, 0};
+    CHECK_EQUAL(
+        ta_blob_migrate(&(ta_blob_migration){&w.image[0], &w.image[1], 0, 0, {blob, length}},
+                        &migrated),
+        TA_OK);
+    ml = migrated.length;
+    CHECK_EQUAL(ta_system_adopt(w.system[1], (ta_bytes){mig, ml}, &b),
+                TA_ERROR_NO_MEMORY); /* two timers */
     ta_system_stats s1;
     s1.size = sizeof s1;
     ta_system_stats_get(w.system[1], &s1);
     CHECK(s1.actors == 0 && s1.timers == 0 && s1.events == 0);
     /* the original blob goes back home; the payload of the tick is still valid */
-    CHECK_EQUAL(ta_system_adopt(w.system[0], blob, length, &a), TA_OK);
+    CHECK_EQUAL(ta_system_adopt(w.system[0], (ta_bytes){blob, length}, &a), TA_OK);
     CHECK_STR(config_of(&w, 0, a), "p,r1,b,r2,y");
     CHECK(strcmp(eval(&w, 0, a, "count"), "1") == 0);
     advance(&w, 100);
@@ -388,19 +421,19 @@ static void test_export_preconditions(void) {
                           "initial='k'><state id='k'/></scxml></content></invoke></state>"),
                      V2, 1, 0));
     uint32_t a;
-    size_t length;
     CHECK_EQUAL(
-        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
-    CHECK_EQUAL(ta_actor_export(w.system[0], a, blob, sizeof blob, &length),
-                TA_ERROR_STATE); /* runnable */
+    ta_buffer written = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(w.system[0], a, &written), TA_ERROR_STATE); /* runnable */
     run(&w);
     uint32_t index = ta_system_resolve_actor(w.system[0], a);
     uint32_t kid = ta_core_invoke_child(
         &w.system[0]->core, ta_actor_instance(w.system[0], ta_actor_at(w.system[0], index)), 0);
     CHECK(kid != 0);
-    CHECK_EQUAL(ta_actor_export(w.system[0], kid, blob, sizeof blob, &length),
-                TA_ERROR_STATE); /* parent */
+    written = (ta_buffer){blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(w.system[0], kid, &written), TA_ERROR_STATE); /* parent */
     /* a session in the tree is busy: the whole tree stays */
     ta_event_in event;
     memset(&event, 0, sizeof event);
@@ -408,11 +441,12 @@ static void test_export_preconditions(void) {
     event.target = kid;
     event.name = (ta_string_view){"poke", 4};
     CHECK_EQUAL(ta_system_send(w.system[0], &event), TA_OK);
-    CHECK_EQUAL(ta_actor_export(w.system[0], a, blob, sizeof blob, &length), TA_ERROR_STATE);
+    written = (ta_buffer){blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(w.system[0], a, &written), TA_ERROR_STATE);
     run(&w);
-    CHECK_EQUAL(ta_actor_export(w.system[0], a, blob, sizeof blob, &length),
-                TA_OK); /* with its child */
-    CHECK_EQUAL(ta_actor_export(w.system[0], 12345, blob, sizeof blob, &length), TA_ERROR_STALE);
+    written = (ta_buffer){blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(w.system[0], a, &written), TA_OK); /* with its child */
+    CHECK_EQUAL(ta_actor_export(w.system[0], 12345, &written), TA_ERROR_STALE);
     world_close(&w);
 }
 
@@ -486,7 +520,8 @@ static void test_session_tree(void) {
     CHECK(world_open(&w, TREE, TREE, 1, 8));
     uint32_t a;
     CHECK_EQUAL(
-        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     run(&w);
     CHECK_EQUAL(actors_in(&w, 0), 3u); /* parent, kid, grandchild */
@@ -498,22 +533,29 @@ static void test_session_tree(void) {
     CHECK(before[1] && before[2]);
 
     size_t length = 0;
-    CHECK_EQUAL(ta_actor_export(w.system[0], a, NULL, 0, &length), TA_ERROR_NO_MEMORY);
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_actor_export(w.system[0], a, &written), TA_ERROR_NO_MEMORY);
+    length = written.length;
     CHECK_EQUAL(actors_in(&w, 0), 3u); /* nothing changed */
-    CHECK_EQUAL(ta_actor_export(w.system[0], a, blob, sizeof blob, &length), TA_OK);
+    written = (ta_buffer){blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(w.system[0], a, &written), TA_OK);
+    length = written.length;
     CHECK_EQUAL(actors_in(&w, 0), 0u); /* the whole tree left */
     uint32_t sessions;                 /* the export header: magic, version, number of sessions */
     memcpy(&sessions, blob + 8, 4);
     CHECK_EQUAL(sessions, 3u);
-    size_t ml;
-    CHECK_EQUAL(ta_blob_migrate(&w.image[0], &w.image[1], 0, blob, length, mig, sizeof mig, &ml),
-                TA_ERROR_UNSUPPORTED);
+    ta_buffer migrated;
+    migrated = (ta_buffer){mig, sizeof mig, 0};
+    CHECK_EQUAL(
+        ta_blob_migrate(&(ta_blob_migration){&w.image[0], &w.image[1], 0, 0, {blob, length}},
+                        &migrated),
+        TA_ERROR_UNSUPPORTED);
 
     uint32_t b;
-    CHECK_EQUAL(ta_system_adopt(w.system[1], blob, length, &b), TA_OK);
+    CHECK_EQUAL(ta_system_adopt(w.system[1], (ta_bytes){blob, length}, &b), TA_OK);
     CHECK_EQUAL(actors_in(&w, 1), 3u);
     uint32_t again;
-    CHECK_EQUAL(ta_system_adopt(w.system[1], blob, length, &again),
+    CHECK_EQUAL(ta_system_adopt(w.system[1], (ta_bytes){blob, length}, &again),
                 TA_ERROR_STATE); /* its sessions exist */
     CHECK_EQUAL(again, 0u);
     uint64_t after[3];
@@ -539,10 +581,12 @@ static void test_session_tree(void) {
     CHECK_STR(config_of(&w, 1, b), "b");
     CHECK_EQUAL(actors_in(&w, 1), 1u); /* the kid and its child finished */
     /* now a single session again: it can be migrated */
-    CHECK_EQUAL(ta_actor_export(w.system[1], b, blob, sizeof blob, &length), TA_OK);
+    written = (ta_buffer){blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(w.system[1], b, &written), TA_OK);
+    length = written.length;
     memcpy(&sessions, blob + 8, 4);
     CHECK_EQUAL(sessions, 1u);
-    CHECK_EQUAL(ta_system_adopt(w.system[0], blob, length, &a), TA_OK);
+    CHECK_EQUAL(ta_system_adopt(w.system[0], (ta_bytes){blob, length}, &a), TA_OK);
     world_close(&w);
 }
 
@@ -562,12 +606,15 @@ static void test_session_tree_rollback(void) {
     CHECK(world_open(&w, TREE, TREE, 1, 8));
     uint32_t a;
     CHECK_EQUAL(
-        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     run(&w);
     send_to(&w, 0, a, "later"); /* a timer with a payload, in the root */
     size_t length = 0;
-    CHECK_EQUAL(ta_actor_export(w.system[0], a, blob, sizeof blob, &length), TA_OK);
+    ta_buffer written = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(w.system[0], a, &written), TA_OK);
+    length = written.length;
     static ta_datamodel_vtable vtable;
     real_vt = w.binding.vtable;
     vtable = *w.binding.vtable;
@@ -579,11 +626,14 @@ static void test_session_tree_rollback(void) {
         CHECK_EQUAL(ta_system_layout(&w.image[1], &config, &need), TA_OK);
         void *memory = malloc(need);
         ta_system *system;
-        CHECK_EQUAL(ta_system_init(memory, need, &w.image[1], &config, &fb, 1, &system), TA_OK);
+        CHECK_EQUAL(
+            ta_system_init(&(ta_system_setup){{memory, need}, &w.image[1], &config, &fb, 1, 0},
+                           &system),
+            TA_OK);
         deser_calls = 0;
         deser_fail_at = k;
         uint32_t b;
-        ta_status status = ta_system_adopt(system, blob, length, &b);
+        ta_status status = ta_system_adopt(system, (ta_bytes){blob, length}, &b);
         ta_system_stats stats;
         stats.size = sizeof stats;
         ta_system_stats_get(system, &stats);
@@ -599,13 +649,13 @@ static void test_session_tree_rollback(void) {
         }
         deser_fail_at = 0;
         if (status == TA_OK)
-            CHECK_EQUAL(ta_actor_export(system, b, blob, sizeof blob, &length), TA_OK);
+            CHECK_EQUAL(ta_actor_export(system, b, &(ta_buffer){blob, sizeof blob, 0}), TA_OK);
         ta_system_deinit(system);
         free(memory);
     }
     /* the blob is still whole: it goes home, and the timer fires there */
     uint32_t b;
-    CHECK_EQUAL(ta_system_adopt(w.system[0], blob, length, &b), TA_OK);
+    CHECK_EQUAL(ta_system_adopt(w.system[0], (ta_bytes){blob, length}, &b), TA_OK);
     w.log[0] = 0;
     advance(&w, 5000);
     CHECK_STR(w.log, "pong 1;");
@@ -619,7 +669,8 @@ static void test_vanished_child(void) {
     CHECK(world_open(&w, TREE, TREE, 1, 8));
     uint32_t a;
     CHECK_EQUAL(
-        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     run(&w);
     ta_actor_info actor_info;
@@ -635,11 +686,13 @@ static void test_vanished_child(void) {
     CHECK_EQUAL(ta_actor_info_get(w.system[0], a, &actor_info), TA_OK);
     CHECK_EQUAL(actor_info.invocations, 0u);
     size_t length;
-    CHECK_EQUAL(ta_actor_export(w.system[0], a, blob, sizeof blob, &length), TA_OK);
+    ta_buffer written = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(w.system[0], a, &written), TA_OK);
+    length = written.length;
     uint32_t sessions;
     memcpy(&sessions, blob + 8, 4);
     CHECK_EQUAL(sessions, 1u);
-    CHECK_EQUAL(ta_system_adopt(w.system[1], blob, length, &a), TA_OK);
+    CHECK_EQUAL(ta_system_adopt(w.system[1], (ta_bytes){blob, length}, &a), TA_OK);
     /* a smaller declared size gets exactly that much */
     unsigned char part[64];
     memset(part, 0xAB, sizeof part);
@@ -662,7 +715,8 @@ static void history_case(const char *v2, const char *expect_after_back) {
     CHECK(world_open(&w, NULLSC("initial='s'>" HISTORY_CHART), v2, 0, 0));
     uint32_t a, b;
     CHECK_EQUAL(
-        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     run(&w);
     const char *events[] = {"two", "out"};
@@ -729,7 +783,8 @@ static void test_removed_state_late_binding(void) {
         1, 0));
     uint32_t a, b;
     CHECK_EQUAL(
-        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     run(&w);
     ta_event_in event;
@@ -771,7 +826,8 @@ static void test_upgrade_declarations(void) {
         1, 0));
     uint32_t a, b;
     CHECK_EQUAL(
-        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     run(&w);
     ta_event_in event;
@@ -796,7 +852,8 @@ static void test_failed_send_keeps_payload(void) {
     CHECK(world_open(&w, V1, V2, 1, 0));
     uint32_t a;
     CHECK_EQUAL(
-        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     run(&w);
     ta_event_in event;
@@ -823,8 +880,8 @@ static void test_failed_send_keeps_payload(void) {
     size_t nl;
     CHECK_EQUAL(ta_system_layout(&w.image[0], &config, &nl), TA_OK);
     void *nm = malloc(nl);
-    ta_system *new_system;
-    CHECK_EQUAL(ta_system_relocate(w.system[0], nm, nl, &config, &new_system), TA_OK);
+    ta_system *new_system = w.system[0];
+    CHECK_EQUAL(ta_system_relocate(&new_system, (ta_memory){nm, nl}, &config), TA_OK);
     free(w.memory[0]);
     w.memory[0] = nm;
     w.system[0] = new_system;
@@ -853,7 +910,8 @@ static void test_generated_ids_unique_across_adopt(void) {
     CHECK(world_open(&w, IDS, IDS, 1, 4));
     uint32_t a, b;
     CHECK_EQUAL(
-        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     run(&w);
     ta_event_in event;
@@ -864,8 +922,10 @@ static void test_generated_ids_unique_across_adopt(void) {
     CHECK_EQUAL(ta_system_send(w.system[0], &event), TA_OK);
     run(&w);
     size_t length;
-    CHECK_EQUAL(ta_actor_export(w.system[0], a, blob, sizeof blob, &length), TA_OK);
-    CHECK_EQUAL(ta_system_adopt(w.system[1], blob, length, &b), TA_OK);
+    ta_buffer written = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(w.system[0], a, &written), TA_OK);
+    length = written.length;
+    CHECK_EQUAL(ta_system_adopt(w.system[1], (ta_bytes){blob, length}, &b), TA_OK);
     event.target = b;
     CHECK_EQUAL(ta_system_send(w.system[1], &event), TA_OK);
     run(&w);
@@ -900,7 +960,8 @@ static void test_isolated_session_upgrade(void) {
     CHECK(world_open(&w, ISO, ISO, 1, 4));
     uint32_t a, b;
     CHECK_EQUAL(
-        ta_system_spawn(w.system[0], 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &a),
+        ta_system_spawn(w.system[0],
+                        &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &a),
         TA_OK);
     run(&w);
     ta_event_in event;
@@ -912,8 +973,7 @@ static void test_isolated_session_upgrade(void) {
     run(&w);
     CHECK_EQUAL(move_and_upgrade(&w, a, &b), TA_OK);
     run(&w);
-    size_t length;
-    CHECK_EQUAL(ta_actor_export(w.system[1], b, NULL, 0, &length),
+    CHECK_EQUAL(ta_actor_export(w.system[1], b, &(ta_buffer){NULL, 0, 0}),
                 TA_ERROR_NO_MEMORY); /* storable */
     event.target = b;
     CHECK_EQUAL(ta_system_send(w.system[1], &event), TA_OK);

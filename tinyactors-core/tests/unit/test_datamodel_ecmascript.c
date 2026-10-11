@@ -28,7 +28,8 @@ static int ecmascript_open(ecmascript_system *t, const char *chart,
     size_t need;
     ta_system_layout(&t->image, &config, &need);
     t->memory = malloc(need);
-    return ta_system_init(t->memory, need, &t->image, &config, &binding, 1, &t->system) == TA_OK &&
+    return ta_system_init(&(ta_system_setup){{t->memory, need}, &t->image, &config, &binding, 1, 0},
+                          &t->system) == TA_OK &&
            ta_system_boot(t->system) == TA_OK;
 }
 
@@ -401,10 +402,11 @@ static unsigned char store_blob[1 << 20];
 
 /* hibernate and wake the chart's actor: TA_OK or why not */
 static ta_status ecmascript_store(ecmascript_system *t) {
-    size_t length = 0;
-    ta_status status =
-        ta_actor_hibernate(t->system, ecmascript_actor(t), store_blob, sizeof store_blob, &length);
-    if (status == TA_OK) status = ta_actor_wake(t->system, ecmascript_actor(t), store_blob, length);
+    ta_buffer written = {store_blob, sizeof store_blob, 0};
+    ta_status status = ta_actor_hibernate(t->system, ecmascript_actor(t), &written);
+    if (status == TA_OK)
+        status =
+            ta_actor_wake(t->system, ecmascript_actor(t), (ta_bytes){store_blob, written.length});
     return status;
 }
 
@@ -466,9 +468,8 @@ static void test_store_declarations(void) {
     ecmascript_send(&t, "add", "{\"k\": 2}");
     CHECK_EQUAL(ecmascript_store(&t), TA_OK);
     check_store_state(&t, "19", "\"a,5,1,1,2\"", "5");
-    CHECK_EQUAL(ta_actor_hibernate(t.system, ecmascript_actor(&t), store_blob, sizeof store_blob,
-                                   &(size_t){0}),
-                TA_OK);
+    ta_buffer written = {store_blob, sizeof store_blob, 0};
+    CHECK_EQUAL(ta_actor_hibernate(t.system, ecmascript_actor(&t), &written), TA_OK);
     ecmascript_close(&t); /* hibernated sessions are freed with the system */
 }
 
@@ -483,8 +484,8 @@ static void refused(const char *chart, const char *want1, const char *want2) {
     CHECK(!want2 || strstr(why, want2) != NULL);
     if (!strstr(why, want1) || (want2 && !strstr(why, want2))) fprintf(stderr, "  why: %s\n", why);
     CHECK_JS(&t, "1 + 1", "2"); /* still there */
-    size_t length = 0;          /* a snapshot of the datamodel says the same */
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(t.ecmascript, NULL, 0, &length),
+    /* a snapshot of the datamodel says the same */
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(t.ecmascript, &(ta_buffer){NULL, 0, 0}),
                 TA_ERROR_UNSUPPORTED);
     CHECK(strstr(ta_datamodel_ecmascript_last_error(t.ecmascript), want1) != NULL);
     ecmascript_close(&t);
@@ -527,15 +528,19 @@ static void test_snapshot_isolated(void) {
     actor_info.size = sizeof actor_info;
     CHECK_EQUAL(ta_actor_info_get(t.system, a, &actor_info), TA_OK);
     size_t length = 0;
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(t.ecmascript, NULL, 0, &length), TA_OK);
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(t.ecmascript, &written), TA_ERROR_NO_MEMORY);
+    length = written.length;
     void *snap = malloc(length);
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(t.ecmascript, snap, length, &length), TA_OK);
+    written = (ta_buffer){snap, length, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(t.ecmascript, &written), TA_OK);
+    length = written.length;
     ta_datamodel_ecmascript *ecmascript2 = ta_datamodel_ecmascript_new(NULL);
     const ta_datamodel_vtable *vtable = ta_datamodel_ecmascript_vtable();
     ta_datamodel_chart chart = {sizeof chart, actor_info.chart, &t.image, TA_BINDING_EARLY, 0};
     void *cc = NULL;
     CHECK_EQUAL(vtable->chart_attach(ecmascript2, &chart, &cc), TA_OK);
-    CHECK_EQUAL(ta_datamodel_ecmascript_restore(ecmascript2, snap, length), TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(ecmascript2, (ta_bytes){snap, length}), TA_OK);
     static const char *const want[][2] = {
         {"total + ':' + items.join() + ':' + LIMIT + ':' + later", "\"15:a,5:3:2\""},
         {"add(1) + ':' + self() + ':' + _sessionid", "\"16:true:1\""},
@@ -550,7 +555,9 @@ static void test_snapshot_isolated(void) {
         if (n == (size_t)-1 || strcmp(buffer, want[i][1])) fprintf(stderr, "  got %s\n", buffer);
     }
     /* stored again from the restored datamodel */
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(ecmascript2, NULL, 0, &length), TA_OK);
+    written = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(ecmascript2, &written), TA_ERROR_NO_MEMORY);
+    length = written.length;
     vtable->destroy(ecmascript2, actor_info.datamodel_instance);
     vtable->chart_detach(ecmascript2, cc);
     ta_datamodel_ecmascript_free(ecmascript2);
@@ -572,7 +579,8 @@ static ta_system *system_for(const ta_image *image, ta_datamodel_binding *bindin
     ta_system *system = NULL;
     if (ta_system_layout(image, &config, &need) != TA_OK) return NULL;
     *memory = malloc(need);
-    if (ta_system_init(*memory, need, image, &config, binding, 1, &system) != TA_OK ||
+    if (ta_system_init(&(ta_system_setup){{*memory, need}, image, &config, binding, 1, 0},
+                       &system) != TA_OK ||
         ta_system_boot(system) != TA_OK)
         return NULL;
     return system;
@@ -828,7 +836,7 @@ static void test_abort_flag_and_fuel(void) {
     stop = 0;
     {
         uint32_t a = ta_system_actor_by_name(t.system, (ta_string_view){"es.scxml", 8}), states[8];
-        uint32_t n = ta_actor_config(t.system, a, states, 8);
+        uint32_t n = ta_actor_config(t.system, a, (ta_uint32_array){states, 8});
         CHECK(n == 1 && states[0] == ta_image_state_by_name(&t.image, 0, (ta_string_view){"b", 1}));
     }
     ecmascript_close(&t);
@@ -886,14 +894,18 @@ static void test_deep_value_not_stored(void) {
     ecmascript_run(&t);
     static unsigned char blob[1 << 20];
     size_t length = 0;
-    CHECK_EQUAL(ta_actor_hibernate(t.system, a, blob, sizeof blob, &length), TA_ERROR_UNSUPPORTED);
+    ta_buffer written = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_hibernate(t.system, a, &written), TA_ERROR_UNSUPPORTED);
+    length = written.length;
     CHECK(strstr(ta_datamodel_ecmascript_last_error(t.ecmascript),
                  "variable 'deep' cannot be stored") != NULL);
     event.name = (ta_string_view){"shallow", 7};
     CHECK_EQUAL(ta_system_send(t.system, &event), TA_OK);
     ecmascript_run(&t);
-    CHECK_EQUAL(ta_actor_hibernate(t.system, a, blob, sizeof blob, &length), TA_OK);
-    CHECK_EQUAL(ta_actor_wake(t.system, a, blob, length), TA_OK);
+    written = (ta_buffer){blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_hibernate(t.system, a, &written), TA_OK);
+    length = written.length;
+    CHECK_EQUAL(ta_actor_wake(t.system, a, (ta_bytes){blob, length}), TA_OK);
     ecmascript_close(&t);
 }
 

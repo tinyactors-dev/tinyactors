@@ -157,7 +157,8 @@ static double compile_time(void (*generate)(string_buffer *, int), int n, int do
     for (int rep = 0; rep < 3; rep++) {
         ta_compile_result *result = NULL;
         double t0 = now();
-        *ok = ta_compile_charts(&options, source, (uint32_t)document_count, &result) == TA_OK;
+        *ok = ta_compile_charts(&options, (ta_source_list){source, (uint32_t)document_count},
+                                &result) == TA_OK;
         double t = now() - t0;
         ta_compile_free(result);
         if (t < best) best = t;

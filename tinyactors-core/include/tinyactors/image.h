@@ -64,12 +64,21 @@ enum {
     TA_STATE_HISTORY_SHALLOW = 4,
     TA_STATE_HISTORY_DEEP = 5
 };
-TA_API ta_status ta_image_state_info(const ta_image *image, uint32_t chart, uint32_t state,
+/* An item of a chart: a state, a <data> declaration or an expression. */
+typedef struct ta_chart_item {
+    uint32_t chart;
+    uint32_t index;
+} ta_chart_item;
+TA_API ta_status ta_image_state_info(const ta_image *image, ta_chart_item state,
                                      ta_state_info *out);
-/* The i-th actor a system image boots (<system><actor name chart/>, i <
- * ta_image_info.boot_actor_count): its name and chart. */
-TA_API ta_status ta_image_boot_actor(const ta_image *image, uint32_t i, ta_string_view *name,
-                                     uint32_t *chart);
+/* An actor a system image boots (<system><actor name chart/>). */
+typedef struct ta_boot_actor {
+    ta_string_view name;
+    uint32_t chart;
+    uint32_t pad;
+} ta_boot_actor;
+/* The i-th actor a system image boots (i < ta_image_info.boot_actor_count). */
+TA_API ta_status ta_image_boot_actor(const ta_image *image, uint32_t i, ta_boot_actor *out);
 /* Resolve a string id found in image tables (e.g. ta_datamodel_capture params). */
 TA_API ta_string_view ta_image_string(const ta_image *image, uint32_t sid);
 
@@ -81,8 +90,7 @@ typedef struct ta_data_info {
     uint32_t state; /* owning state */
 } ta_data_info;
 TA_API uint32_t ta_image_data_count(const ta_image *image, uint32_t chart);
-TA_API ta_status ta_image_data(const ta_image *image, uint32_t chart, uint32_t index,
-                               ta_data_info *out);
+TA_API ta_status ta_image_data(const ta_image *image, ta_chart_item data, ta_data_info *out);
 
 /* Expression table access for datamodels (chart_attach / AOT compilers). */
 typedef struct ta_expression_info {
@@ -99,7 +107,8 @@ enum {
     TA_EXPRESSION_CONTENT = 6
 };
 TA_API uint32_t ta_image_expression_count(const ta_image *image, uint32_t chart);
-TA_API ta_status ta_image_expression(const ta_image *image, uint32_t chart, ta_expression e,
+/* expression.index: the ta_expression */
+TA_API ta_status ta_image_expression(const ta_image *image, ta_chart_item expression,
                                      ta_expression_info *out);
 /* Optional datamodel-specific AOT section for (datamodel name, chart). */
 TA_API ta_string_view ta_image_ahead_of_time_section(const ta_image *image, uint32_t chart,

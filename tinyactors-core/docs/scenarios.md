@@ -134,7 +134,7 @@ Parent P in state `s` with `<invoke id="w" src="worker.scxml"/>`.
    `A = WAIT_EXTERNAL`, `A.pending_req = r`. A is not in the run queue; its mailbox
    keeps accepting events (not processed: RTC).
 2. `run` returns; host drains effects, starts async I/O.
-3. Later: `ta_system_resume(system, request, TA_OK, payload_or_chart)` → validates the
+3. Later: `ta_system_resume(system, &(ta_resume){.request = request, .status = TA_OK, .result = payload_or_chart})` → validates the
    handle generation, stores the result in the kernel's output slot,
    `A = RUNNABLE`. The kernel continues the exact sub-phase.
 4. Error result ⇒ the kernel raises the spec-appropriate error event

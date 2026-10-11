@@ -47,18 +47,17 @@ TA_API ta_status ta_address_parse(ta_string_view text, ta_address *out);
 TA_API ta_status ta_address_parse_local(ta_string_view local, ta_address *out);
 /* Is `system` a valid system id? */
 TA_API int ta_address_system_valid(ta_string_view system);
-/* Write "tinyactors://<system>/#_scxml_<session>" into buffer (no terminator).
- * Returns the length, or 0 if the system id is invalid, session is 0 or capacity
- * is too small (TA_ADDRESS_SESSION_MAX always suffices). */
-TA_API uint32_t ta_address_format(ta_string_view system, uint64_t session, char *buffer,
-                                  uint32_t capacity);
+/* Write "tinyactors://<system>/#_scxml_<session>" into `out` (no terminator;
+ * ta_buffer). TA_ERROR_INVALID if the system id is invalid or session is 0;
+ * TA_ERROR_NO_MEMORY when it does not fit (TA_ADDRESS_SESSION_MAX always
+ * does). */
+TA_API ta_status ta_address_format(ta_string_view system, uint64_t session, ta_buffer *out);
 /* Write "tinyactors://<system>/@<name>", percent-encoding `name` (any bytes).
- * Returns the length, or 0 if invalid or capacity is too small. */
-TA_API uint32_t ta_address_format_name(ta_string_view system, ta_string_view name, char *buffer,
-                                       uint32_t capacity);
-/* Decode a parsed name's percent-encodings into buffer. Returns the length, or
- * 0 if capacity is too small (a decoded name is never longer than its encoding). */
-TA_API uint32_t ta_address_name_decode(ta_string_view name, char *buffer, uint32_t capacity);
+ * TA_ERROR_INVALID for an invalid system id or an empty name. */
+TA_API ta_status ta_address_format_name(ta_string_view system, ta_string_view name, ta_buffer *out);
+/* Decode a parsed name's percent-encodings into `out` (a decoded name is
+ * never longer than its encoding). */
+TA_API ta_status ta_address_name_decode(ta_string_view name, ta_buffer *out);
 
 #ifdef __cplusplus
 }

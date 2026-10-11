@@ -33,18 +33,16 @@ TA_API ta_time ta_runtime_now_ns(void);
 typedef struct ta_runtime_files ta_runtime_files;
 TA_API ta_runtime_files *ta_runtime_files_new(void);
 TA_API void ta_runtime_files_free(ta_runtime_files *files);
-TA_API ta_status ta_runtime_resolve(void *files, ta_string_view base, ta_string_view source,
-                                    ta_source *out);
+TA_API ta_status ta_runtime_resolve(void *files, const ta_resolve_request *request, ta_source *out);
 
 /* Compile an .scxml file (or a <system> manifest if `manifest` != 0). */
 TA_API ta_status ta_runtime_compile_file(const char *path, int manifest, ta_compile_result **out);
 
 #endif
 
-/* malloc'd system that relocates into a larger block on TA_RUN_EXHAUSTED. */
-TA_API ta_status ta_runtime_system_new(const ta_image *image, const ta_system_config *config,
-                                       const ta_datamodel_binding *datamodels,
-                                       uint32_t datamodel_count, ta_system **out);
+/* malloc'd system that relocates into a larger block on TA_RUN_EXHAUSTED
+ * (setup->memory is not used: the runtime allocates the block). */
+TA_API ta_status ta_runtime_system_new(const ta_system_setup *setup, ta_system **out);
 /* Like ta_system_run, but grows the system (updating *system) instead of
  * returning TA_RUN_EXHAUSTED, as long as memory is available. */
 TA_API ta_run ta_runtime_run(ta_system **system, uint32_t budget);

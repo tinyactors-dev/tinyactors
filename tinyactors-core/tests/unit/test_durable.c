@@ -263,8 +263,8 @@ static int compile_images(void) {
         memset(&options, 0, sizeof options);
         options.size = sizeof options;
         ta_compile_result *result = NULL;
-        ta_status status =
-            ta_compile_charts(&options, source, (uint32_t)N_CHARTS + (uint32_t)k, &result);
+        ta_status status = ta_compile_charts(
+            &options, (ta_source_list){source, (uint32_t)N_CHARTS + (uint32_t)k}, &result);
         if (status != TA_OK) {
             print_diagnostics(result);
             ok = 0;
@@ -371,8 +371,13 @@ static int system_new(world *w, int k, uint64_t first_serial) {
     if (ta_system_layout(&test_images[k], &config, &w->systems[i].length) != TA_OK) return -1;
     w->systems[i].memory = aligned_alloc(64, (w->systems[i].length + 63) & ~(size_t)63);
     w->systems[i].image = k;
-    if (ta_system_init(w->systems[i].memory, w->systems[i].length, &test_images[k], &config,
-                       &w->binding, 1, &w->systems[i].system) != TA_OK)
+    if (ta_system_init(&(ta_system_setup){{w->systems[i].memory, w->systems[i].length},
+                                          &test_images[k],
+                                          &config,
+                                          &w->binding,
+                                          1,
+                                          0},
+                       &w->systems[i].system) != TA_OK)
         return -1;
     ta_system_advance_time(w->systems[i].system, w->now);
     return i;
@@ -456,8 +461,9 @@ static int wake(world *w, int si, uint32_t actor) {
     if (ta_actor_info_get(w->systems[si].system, actor, &actor_info) != TA_OK) return 0;
     for (int i = 0; i < w->hibernation_count; i++)
         if (w->hibernations[i].serial == actor_info.serial) {
-            ta_status status = ta_actor_wake(w->systems[si].system, actor, w->hibernations[i].blob,
-                                             w->hibernations[i].length);
+            ta_status status =
+                ta_actor_wake(w->systems[si].system, actor,
+                              (ta_bytes){w->hibernations[i].blob, w->hibernations[i].length});
             if (status != TA_OK)
                 fprintf(stderr, "  wake %llu: %d\n", (unsigned long long)actor_info.serial, status);
             return status == TA_OK;
@@ -559,8 +565,9 @@ static void world_send(world *w, const char *root, const char *event_name, const
     if (json)
         event.data = ta_datamodel_ecmascript_payload_eval(
             w->ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
-    ta_status status = w->host ? ta_host_send(w->host, session, &event)
-                               : ta_system_send(w->systems[si].system, &event);
+    event.session = session;
+    ta_status status =
+        w->host ? ta_host_send(w->host, &event) : ta_system_send(w->systems[si].system, &event);
     CHECK_EQUAL(status, TA_OK);
 }
 
@@ -588,15 +595,19 @@ static void host_sync(world *w) {
 static int world_spawn(world *w, const char *chart, const char *name) {
     ta_string_view n = {name, (uint32_t)strlen(name)};
     if (w->host) {
-        uint32_t segment, c;
+        ta_host_chart_ref ref;
         uint64_t session;
-        return ta_host_chart(w->host, (ta_string_view){chart, (uint32_t)strlen(chart)}, &segment,
-                             &c) == TA_OK &&
-               ta_host_spawn(w->host, segment, c, n, 0, (ta_string_view){0, 0}, &session) == TA_OK;
+        return ta_host_chart(w->host, (ta_string_view){chart, (uint32_t)strlen(chart)}, &ref) ==
+                   TA_OK &&
+               ta_host_spawn(w->host,
+                             &(ta_spawn){ref.segment, ref.chart, n, 0, (ta_string_view){0, 0}},
+                             &session) == TA_OK;
     }
     uint32_t a;
-    return ta_system_spawn(w->systems[0].system, chart_of(w->systems[0].image, chart), n, 0,
-                           (ta_string_view){0, 0}, &a) == TA_OK;
+    return ta_system_spawn(
+               w->systems[0].system,
+               &(ta_spawn){0, chart_of(w->systems[0].image, chart), n, 0, (ta_string_view){0, 0}},
+               &a) == TA_OK;
 }
 
 /* Observable state of every live session, one line each, sorted by path:
@@ -617,7 +628,7 @@ static int observe(world *w, line *out, int capacity) {
         ta_system *system = w->systems[i].system;
         const ta_image *image = &test_images[w->systems[i].image];
         uint32_t cursor = 0, actors[64], na;
-        while ((na = ta_system_actors(system, &cursor, actors, 64)) != 0) {
+        while ((na = ta_system_actors(system, &cursor, (ta_uint32_array){actors, 64})) != 0) {
             for (uint32_t k = 0; k < na && n < capacity; k++) {
                 ta_actor_info actor_info;
                 actor_info.size = sizeof actor_info;
@@ -630,7 +641,8 @@ static int observe(world *w, line *out, int capacity) {
                     string_buffer_format(&l->text, "H");
                     continue;
                 }
-                uint32_t states[128], ns = ta_actor_config(system, actors[k], states, 128);
+                uint32_t states[128],
+                    ns = ta_actor_config(system, actors[k], (ta_uint32_array){states, 128});
                 for (uint32_t j = 0; j < ns && j < 128; j++) {
                     ta_string_view nm = ta_image_state_name(image, actor_info.chart, states[j]);
                     string_buffer_format(&l->text, "%s%.*s", j ? "," : "", (int)nm.length,
@@ -642,7 +654,9 @@ static int observe(world *w, line *out, int capacity) {
                 uint32_t nd = ta_image_data_count(image, actor_info.chart);
                 for (uint32_t d = 0; d < nd; d++) {
                     ta_data_info data_info;
-                    if (ta_image_data(image, actor_info.chart, d, &data_info) != TA_OK) continue;
+                    if (ta_image_data(image, (ta_chart_item){actor_info.chart, d}, &data_info) !=
+                        TA_OK)
+                        continue;
                     string_buffer_format(&ex, "%s%.*s: %.*s", d ? ", " : "",
                                          (int)data_info.id.length, data_info.id.pointer,
                                          (int)data_info.id.length, data_info.id.pointer);
@@ -691,7 +705,8 @@ static uint32_t rnd(void) {
 static int wake_all(world *w) {
     for (int i = 0; i < w->system_count; i++) {
         uint32_t cursor = 0, actors[64], na;
-        while ((na = ta_system_actors(w->systems[i].system, &cursor, actors, 64)) != 0)
+        while ((na = ta_system_actors(w->systems[i].system, &cursor,
+                                      (ta_uint32_array){actors, 64})) != 0)
             for (uint32_t k = 0; k < na; k++) {
                 ta_actor_info actor_info;
                 actor_info.size = sizeof actor_info;
@@ -717,7 +732,8 @@ static int move_all(world *w, int *migrated) {
     for (int i = 0; i < w->system_count; i++) {
         ta_system *system = w->systems[i].system;
         for (;;) { /* roots, until the system is empty */
-            uint32_t cursor = 0, actors[64], na = ta_system_actors(system, &cursor, actors, 64),
+            uint32_t cursor = 0, actors[64],
+                     na = ta_system_actors(system, &cursor, (ta_uint32_array){actors, 64}),
                      root = 0;
             ta_actor_info actor_info;
             actor_info.size = sizeof actor_info;
@@ -734,14 +750,18 @@ static int move_all(world *w, int *migrated) {
                 ta_image_chart_name(&test_images[w->systems[i].image], actor_info.chart);
             snprintf(blobs[nb].chart, sizeof blobs[nb].chart, "%.*s", (int)cn.length, cn.pointer);
             size_t length = 0;
-            ta_status status = ta_actor_export(system, root, NULL, 0, &length);
+            ta_buffer written = {NULL, 0, 0};
+            ta_status status = ta_actor_export(system, root, &written);
+            length = written.length;
             if (status != TA_ERROR_NO_MEMORY) {
                 fprintf(stderr, "  export (size): %d\n", status);
                 return 0;
             }
             blobs[nb].data = aligned_alloc(8, (length + 7) & ~(size_t)7);
             blobs[nb].image = w->systems[i].image;
-            status = ta_actor_export(system, root, blobs[nb].data, length, &blobs[nb].length);
+            written = (ta_buffer){blobs[nb].data, length, 0};
+            status = ta_actor_export(system, root, &written);
+            blobs[nb].length = written.length;
             if (status != TA_OK) {
                 fprintf(stderr, "  export: %d\n", status);
                 free(blobs[nb].data);
@@ -766,12 +786,21 @@ static int move_all(world *w, int *migrated) {
         if (to != blobs[b].image) {
             uint32_t chart = chart_of(to, blobs[b].chart);
             size_t ml = 0;
-            ta_status status = ta_blob_migrate(&test_images[blobs[b].image], &test_images[to],
-                                               chart, p, length, NULL, 0, &ml);
+            ta_buffer translated;
+            translated = (ta_buffer){NULL, 0, 0};
+            ta_status status = ta_blob_migrate(
+                &(ta_blob_migration){
+                    &test_images[blobs[b].image], &test_images[to], chart, 0, {p, length}},
+                &translated);
+            ml = translated.length;
             if (status == TA_ERROR_NO_MEMORY) {
                 mig = aligned_alloc(8, (ml + 7) & ~(size_t)7);
-                status = ta_blob_migrate(&test_images[blobs[b].image], &test_images[to], chart, p,
-                                         length, mig, ml, &ml);
+                translated = (ta_buffer){mig, ml, 0};
+                status = ta_blob_migrate(
+                    &(ta_blob_migration){
+                        &test_images[blobs[b].image], &test_images[to], chart, 0, {p, length}},
+                    &translated);
+                ml = translated.length;
             }
             if (status == TA_OK) {
                 p = mig;
@@ -787,7 +816,7 @@ static int move_all(world *w, int *migrated) {
                 return 0;
             }
         }
-        ta_status status = ta_system_adopt(w->systems[to].system, p, length, NULL);
+        ta_status status = ta_system_adopt(w->systems[to].system, (ta_bytes){p, length}, NULL);
         free(mig);
         free(blobs[b].data);
         if (status != TA_OK) {
@@ -805,21 +834,25 @@ static int hibernate_some(world *w) {
     for (int i = 0; i < w->system_count; i++) {
         ta_system *system = w->systems[i].system;
         uint32_t cursor = 0, actors[64], na;
-        while ((na = ta_system_actors(system, &cursor, actors, 64)) != 0)
+        while ((na = ta_system_actors(system, &cursor, (ta_uint32_array){actors, 64})) != 0)
             for (uint32_t k = 0; k < na; k++) {
                 if (rnd() % 3 == 0) continue;
                 ta_actor_info actor_info;
                 actor_info.size = sizeof actor_info;
                 if (ta_actor_info_get(system, actors[k], &actor_info) != TA_OK) return 0;
                 size_t length = 0;
-                ta_status status = ta_actor_hibernate(system, actors[k], NULL, 0, &length);
+                ta_buffer written = {NULL, 0, 0};
+                ta_status status = ta_actor_hibernate(system, actors[k], &written);
+                length = written.length;
                 if (status == TA_ERROR_STATE) continue; /* busy or has invoked children */
                 if (status != TA_ERROR_NO_MEMORY) {
                     fprintf(stderr, "  hibernate (size): %d\n", status);
                     return 0;
                 }
                 void *p = malloc(length);
-                status = ta_actor_hibernate(system, actors[k], p, length, &length);
+                written = (ta_buffer){p, length, 0};
+                status = ta_actor_hibernate(system, actors[k], &written);
+                length = written.length;
                 if (status != TA_OK || hib_put(w, actor_info.serial, p, length) != TA_OK) {
                     fprintf(stderr, "  hibernate: %d\n", status);
                     free(p);
@@ -837,15 +870,20 @@ static int snapshot_restore(world *w) {
     size_t lens[MAX_SYSTEMS];
     int images[MAX_SYSTEMS], n = w->system_count;
     for (int i = 0; i < n; i++) {
-        if (ta_system_snapshot(w->systems[i].system, NULL, 0, &lens[i]) != TA_OK) return 0;
+        ta_buffer written = {NULL, 0, 0};
+        if (ta_system_snapshot(w->systems[i].system, &written) != TA_ERROR_NO_MEMORY) return 0;
+        lens[i] = written.length;
         snaps[i] = aligned_alloc(64, (lens[i] + 63) & ~(size_t)63);
-        if (ta_system_snapshot(w->systems[i].system, snaps[i], lens[i], &lens[i]) != TA_OK)
-            return 0;
+        written = (ta_buffer){snaps[i], lens[i], 0};
+        if (ta_system_snapshot(w->systems[i].system, &written) != TA_OK) return 0;
+        lens[i] = written.length;
         images[i] = w->systems[i].image;
     }
     size_t dl = 0;
-    ta_status status = ta_datamodel_ecmascript_snapshot(w->ecmascript, NULL, 0, &dl);
-    if (status != TA_OK) {
+    ta_buffer written = {NULL, 0, 0};
+    ta_status status = ta_datamodel_ecmascript_snapshot(w->ecmascript, &written);
+    dl = written.length;
+    if (status != TA_ERROR_NO_MEMORY) {
         fprintf(stderr, "  datamodel snapshot: %d %s\n", status,
                 ta_datamodel_ecmascript_last_error(w->ecmascript));
         for (int i = 0; i < n; i++)
@@ -853,7 +891,9 @@ static int snapshot_restore(world *w) {
         return 0;
     }
     void *dsnap = malloc(dl ? dl : 1);
-    if (ta_datamodel_ecmascript_snapshot(w->ecmascript, dsnap, dl, &dl) != TA_OK) return 0;
+    written = (ta_buffer){dsnap, dl, 0};
+    if (ta_datamodel_ecmascript_snapshot(w->ecmascript, &written) != TA_OK) return 0;
+    dl = written.length;
     system_free_all(w);
     ta_datamodel_ecmascript_free(w->ecmascript);
     datamodel_new(w);
@@ -862,8 +902,13 @@ static int snapshot_restore(world *w) {
         w->systems[i].length = lens[i];
         w->systems[i].memory = aligned_alloc(64, (lens[i] + 63) & ~(size_t)63);
         w->systems[i].image = images[i];
-        status = ta_system_restore(w->systems[i].memory, lens[i], &test_images[images[i]], snaps[i],
-                                   lens[i], &config, &w->binding, 1, &w->systems[i].system);
+        status = ta_system_restore(&(ta_system_setup){{w->systems[i].memory, lens[i]},
+                                                      &test_images[images[i]],
+                                                      &config,
+                                                      &w->binding,
+                                                      1,
+                                                      0},
+                                   (ta_bytes){snaps[i], lens[i]}, &w->systems[i].system);
         free(snaps[i]);
         if (status != TA_OK) {
             fprintf(stderr, "  system restore: %d\n", status);
@@ -871,7 +916,7 @@ static int snapshot_restore(world *w) {
         }
         w->system_count = i + 1;
     }
-    status = ta_datamodel_ecmascript_restore(w->ecmascript, dsnap, dl);
+    status = ta_datamodel_ecmascript_restore(w->ecmascript, (ta_bytes){dsnap, dl});
     free(dsnap);
     if (status != TA_OK) fprintf(stderr, "  datamodel restore: %d\n", status);
     return status == TA_OK;
@@ -912,8 +957,9 @@ static int host_run(world *w) {
             for (int i = 0; i < w->hibernation_count && !found; i++)
                 if (w->hibernations[i].serial == wakes[k]) {
                     found = 1;
-                    ta_status status = ta_host_wake(w->host, wakes[k], w->hibernations[i].blob,
-                                                    w->hibernations[i].length);
+                    ta_status status = ta_host_wake(
+                        w->host, wakes[k],
+                        (ta_bytes){w->hibernations[i].blob, w->hibernations[i].length});
                     if (status != TA_OK) {
                         fprintf(stderr, "  host wake %llu: %d\n", (unsigned long long)wakes[k],
                                 status);
@@ -935,7 +981,8 @@ static int host_wake_all(world *w) {
     host_sync(w);
     for (int i = 0; i < w->system_count; i++) {
         uint32_t cursor = 0, actors[64], na;
-        while ((na = ta_system_actors(w->systems[i].system, &cursor, actors, 64)) != 0)
+        while ((na = ta_system_actors(w->systems[i].system, &cursor,
+                                      (ta_uint32_array){actors, 64})) != 0)
             for (uint32_t k = 0; k < na; k++) {
                 ta_actor_info actor_info;
                 actor_info.size = sizeof actor_info;
@@ -945,8 +992,9 @@ static int host_wake_all(world *w) {
                 int found = 0;
                 for (int b = 0; b < w->hibernation_count && !found; b++)
                     if (w->hibernations[b].serial == actor_info.serial)
-                        found = ta_host_wake(w->host, actor_info.serial, w->hibernations[b].blob,
-                                             w->hibernations[b].length) == TA_OK;
+                        found = ta_host_wake(w->host, actor_info.serial,
+                                             (ta_bytes){w->hibernations[b].blob,
+                                                        w->hibernations[b].length}) == TA_OK;
                 if (!found) return 0;
             }
     }
@@ -965,17 +1013,22 @@ static int host_migrate(world *w) {
      * its invocations to finish: it would keep the job open) */
     uint64_t cursor = 0, sessions[64];
     uint32_t n;
-    while ((n = ta_host_actors(w->host, &cursor, sessions, 64)) != 0)
+    while ((n = ta_host_actors(w->host, &cursor, (ta_uint64_array){sessions, 64})) != 0)
         for (uint32_t i = 0; i < n; i++) {
-            uint32_t sg, actor, job;
+            ta_host_location location;
+            uint32_t job;
             ta_actor_info actor_info;
             actor_info.size = sizeof actor_info;
-            if (ta_host_locate(w->host, sessions[i], &sg, &actor) != TA_OK || sg == segment ||
-                ta_actor_info_get(ta_host_system(w->host, sg), actor, &actor_info) != TA_OK ||
+            if (ta_host_locate(w->host, sessions[i], &location) != TA_OK ||
+                location.segment == segment ||
+                ta_actor_info_get(ta_host_system(w->host, location.segment), location.actor,
+                                  &actor_info) != TA_OK ||
                 actor_info.parent || actor_info.invocations)
                 continue;
-            if (ta_host_migrate(w->host, (ta_string_view){0, 0}, sessions[i], TA_HOST_MIGRATE_WAKE,
-                                0, &job) != TA_OK)
+            if (ta_host_migrate(w->host,
+                                &(ta_host_migration){(ta_string_view){0, 0}, sessions[i],
+                                                     TA_HOST_MIGRATE_WAKE, 0, 0},
+                                &job) != TA_OK)
                 return 0;
         }
     return host_run(w);
@@ -984,16 +1037,19 @@ static int host_migrate(world *w) {
 static int host_hibernate_some(world *w) {
     uint64_t cursor = 0, sessions[64];
     uint32_t n;
-    while ((n = ta_host_actors(w->host, &cursor, sessions, 64)) != 0)
+    while ((n = ta_host_actors(w->host, &cursor, (ta_uint64_array){sessions, 64})) != 0)
         for (uint32_t k = 0; k < n; k++) {
             if (rnd() % 3 == 0) continue;
             size_t length = 0;
-            ta_status status = ta_host_hibernate(w->host, sessions[k], NULL, 0, &length);
+            ta_buffer written = {NULL, 0, 0};
+            ta_status status = ta_host_hibernate(w->host, sessions[k], &written);
+            length = written.length;
             if (status == TA_ERROR_STATE) continue;
             if (status != TA_ERROR_NO_MEMORY) return 0;
             void *p = malloc(length);
-            if (ta_host_hibernate(w->host, sessions[k], p, length, &length) != TA_OK ||
-                hib_put(w, sessions[k], p, length) != TA_OK) {
+            written = (ta_buffer){p, length, 0};
+            if (ta_host_hibernate(w->host, sessions[k], &written) != TA_OK ||
+                hib_put(w, sessions[k], p, written.length) != TA_OK) {
                 free(p);
                 return 0;
             }
@@ -1003,12 +1059,20 @@ static int host_hibernate_some(world *w) {
 
 static int host_snapshot_restore(world *w) {
     size_t hl = 0, dl = 0;
-    if (ta_host_snapshot(w->host, NULL, 0, &hl) != TA_OK) return 0;
+    ta_buffer written = {NULL, 0, 0};
+    if (ta_host_snapshot(w->host, &written) != TA_ERROR_NO_MEMORY) return 0;
+    hl = written.length;
     void *hs = aligned_alloc(8, (hl + 7) & ~(size_t)7);
-    if (ta_host_snapshot(w->host, hs, hl, &hl) != TA_OK) return 0;
-    if (ta_datamodel_ecmascript_snapshot(w->ecmascript, NULL, 0, &dl) != TA_OK) return 0;
+    written = (ta_buffer){hs, hl, 0};
+    if (ta_host_snapshot(w->host, &written) != TA_OK) return 0;
+    hl = written.length;
+    written = (ta_buffer){NULL, 0, 0};
+    if (ta_datamodel_ecmascript_snapshot(w->ecmascript, &written) != TA_ERROR_NO_MEMORY) return 0;
+    dl = written.length;
     void *ds = malloc(dl ? dl : 1);
-    if (ta_datamodel_ecmascript_snapshot(w->ecmascript, ds, dl, &dl) != TA_OK) return 0;
+    written = (ta_buffer){ds, dl, 0};
+    if (ta_datamodel_ecmascript_snapshot(w->ecmascript, &written) != TA_OK) return 0;
+    dl = written.length;
     const ta_image *images[MAX_SYSTEMS];
     uint32_t ns = ta_host_segment_count(w->host);
     for (uint32_t i = 0; i < ns; i++) {
@@ -1021,8 +1085,10 @@ static int host_snapshot_restore(world *w) {
     ta_datamodel_ecmascript_free(w->ecmascript);
     datamodel_new(w);
     ta_host_config config = host_config(w);
-    ta_status status = ta_host_restore(&config, images, ns, hs, hl, &w->host);
-    if (status == TA_OK) status = ta_datamodel_ecmascript_restore(w->ecmascript, ds, dl);
+    ta_status status =
+        ta_host_restore(&config, &(ta_host_snapshot_input){{hs, hl}, images, ns, 0}, &w->host);
+    if (status == TA_OK)
+        status = ta_datamodel_ecmascript_restore(w->ecmascript, (ta_bytes){ds, dl});
     free(hs);
     free(ds);
     if (status != TA_OK) fprintf(stderr, "  host restore: %d\n", status);
@@ -1148,7 +1214,9 @@ static int mini_system(mini *m, uint64_t first_serial) {
     size_t length;
     if (ta_system_layout(&m->image, &config, &length) != TA_OK) return 0;
     m->memory = aligned_alloc(64, (length + 63) & ~(size_t)63);
-    if (ta_system_init(m->memory, length, &m->image, &config, &m->binding, 1, &m->system) != TA_OK)
+    if (ta_system_init(
+            &(ta_system_setup){{m->memory, length}, &m->image, &config, &m->binding, 1, 0},
+            &m->system) != TA_OK)
         return 0;
     ta_system_advance_time(m->system, m->now);
     return 1;
@@ -1199,8 +1267,9 @@ static void mini_run(mini *m) {
         }
         ta_system_effects_ack(m->system, n);
         if (wake)
-            CHECK_EQUAL(ta_actor_wake(m->system, wake, m->hibernations, m->hibernation_length),
-                        TA_OK);
+            CHECK_EQUAL(
+                ta_actor_wake(m->system, wake, (ta_bytes){m->hibernations, m->hibernation_length}),
+                TA_OK);
         if (!n && !wake && result.status == TA_RUN_IDLE) return;
     }
 }
@@ -1223,8 +1292,10 @@ static void mini_advance(mini *m, ta_time dt) {
 
 static uint32_t mini_spawn(mini *m, const char *name) {
     uint32_t a = 0;
-    CHECK_EQUAL(ta_system_spawn(m->system, 0, (ta_string_view){name, (uint32_t)strlen(name)}, 0,
-                                (ta_string_view){0, 0}, &a),
+    CHECK_EQUAL(ta_system_spawn(m->system,
+                                &(ta_spawn){0, 0, (ta_string_view){name, (uint32_t)strlen(name)}, 0,
+                                            (ta_string_view){0, 0}},
+                                &a),
                 TA_OK);
     mini_run(m);
     return a;
@@ -1232,22 +1303,29 @@ static uint32_t mini_spawn(mini *m, const char *name) {
 
 static void mini_hibernate(mini *m, uint32_t a) {
     size_t length = 0;
-    CHECK_EQUAL(ta_actor_hibernate(m->system, a, NULL, 0, &length), TA_ERROR_NO_MEMORY);
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_actor_hibernate(m->system, a, &written), TA_ERROR_NO_MEMORY);
+    length = written.length;
     free(m->hibernations);
     m->hibernations = malloc(length);
-    CHECK_EQUAL(ta_actor_hibernate(m->system, a, m->hibernations, length, &m->hibernation_length),
-                TA_OK);
+    written = (ta_buffer){m->hibernations, length, 0};
+    CHECK_EQUAL(ta_actor_hibernate(m->system, a, &written), TA_OK);
+    m->hibernation_length = written.length;
 }
 
 /* export a root, replace system and datamodel host, adopt */
 static uint32_t mini_move(mini *m, uint32_t a, uint64_t first_serial) {
     size_t length = 0;
-    CHECK_EQUAL(ta_actor_export(m->system, a, NULL, 0, &length), TA_ERROR_NO_MEMORY);
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_actor_export(m->system, a, &written), TA_ERROR_NO_MEMORY);
+    length = written.length;
     void *b = malloc(length);
-    CHECK_EQUAL(ta_actor_export(m->system, a, b, length, &length), TA_OK);
+    written = (ta_buffer){b, length, 0};
+    CHECK_EQUAL(ta_actor_export(m->system, a, &written), TA_OK);
+    length = written.length;
     CHECK(mini_new_host(m, first_serial));
     uint32_t na = 0;
-    CHECK_EQUAL(ta_system_adopt(m->system, b, length, &na), TA_OK);
+    CHECK_EQUAL(ta_system_adopt(m->system, (ta_bytes){b, length}, &na), TA_OK);
     free(b);
     return na;
 }
@@ -1293,8 +1371,7 @@ static void test_failed_delayed_send(void) {
         actor_info.size = sizeof actor_info;
         CHECK_EQUAL(ta_actor_info_get(m.system, a, &actor_info), TA_OK);
         CHECK_EQUAL(actor_info.state, TA_ACTOR_IDLE);
-        size_t length = 0;
-        CHECK_EQUAL(ta_actor_export(m.system, a, NULL, 0, &length),
+        CHECK_EQUAL(ta_actor_export(m.system, a, &(ta_buffer){NULL, 0, 0}),
                     TA_ERROR_NO_MEMORY); /* storable */
         mini_close(&m);
     }
@@ -1366,7 +1443,8 @@ static void test_invoke_params_survive(void) {
         CHECK(mini_open(&m, PARAMS_CHART));
         uint32_t a = mini_spawn(&m, "p");
         if (path == 0) { /* hibernate the child */
-            uint32_t cursor = 0, actors[4], n = ta_system_actors(m.system, &cursor, actors, 4);
+            uint32_t cursor = 0, actors[4],
+                     n = ta_system_actors(m.system, &cursor, (ta_uint32_array){actors, 4});
             CHECK_EQUAL(n, 2);
             for (uint32_t k = 0; k < n; k++)
                 if (actors[k] != a) mini_hibernate(&m, actors[k]);

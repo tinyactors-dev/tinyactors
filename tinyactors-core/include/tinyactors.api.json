@@ -1030,6 +1030,162 @@
         }
       }
     },
+    "ta_memory": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "pointer",
+          "type": "void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "length": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "length": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "pointer": 0,
+            "length": 4
+          }
+        }
+      }
+    },
+    "ta_uint32_array": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "pointer",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 4
+          }
+        }
+      }
+    },
+    "ta_uint64_array": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "pointer",
+          "type": "uint64_t *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 4
+          }
+        }
+      }
+    },
+    "ta_string_list": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "pointer",
+          "type": "const ta_string_view *"
+        },
+        {
+          "name": "count",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "count": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "count": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "pointer": 0,
+            "count": 4
+          }
+        }
+      }
+    },
     "ta_status": {
       "kind": "alias",
       "type": "int32_t"
@@ -3061,6 +3217,91 @@
         }
       }
     },
+    "ta_chart_item": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "chart": 0,
+            "index": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "chart": 0,
+            "index": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "chart": 0,
+            "index": 4
+          }
+        }
+      }
+    },
+    "ta_boot_actor": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "chart": 16,
+            "pad": 20
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "chart": 16,
+            "pad": 20
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "chart": 8,
+            "pad": 12
+          }
+        }
+      }
+    },
     "ta_data_info": {
       "kind": "struct",
       "fields": [
@@ -4062,6 +4303,133 @@
         }
       }
     },
+    "ta_system_setup": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "memory",
+          "type": "ta_memory"
+        },
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "config",
+          "type": "const ta_system_config *"
+        },
+        {
+          "name": "datamodels",
+          "type": "const ta_datamodel_binding *"
+        },
+        {
+          "name": "datamodel_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "memory": 0,
+            "image": 16,
+            "config": 24,
+            "datamodels": 32,
+            "datamodel_count": 40,
+            "pad": 44
+          }
+        },
+        "aarch64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "memory": 0,
+            "image": 16,
+            "config": 24,
+            "datamodels": 32,
+            "datamodel_count": 40,
+            "pad": 44
+          }
+        },
+        "wasm32": {
+          "size": 28,
+          "align": 4,
+          "offsets": {
+            "memory": 0,
+            "image": 8,
+            "config": 12,
+            "datamodels": 16,
+            "datamodel_count": 20,
+            "pad": 24
+          }
+        }
+      }
+    },
+    "ta_spawn": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "segment",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "params",
+          "type": "ta_payload"
+        },
+        {
+          "name": "traceparent",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "segment": 0,
+            "chart": 4,
+            "name": 8,
+            "params": 24,
+            "traceparent": 32
+          }
+        },
+        "aarch64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "segment": 0,
+            "chart": 4,
+            "name": 8,
+            "params": 24,
+            "traceparent": 32
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "segment": 0,
+            "chart": 4,
+            "name": 8,
+            "params": 16,
+            "traceparent": 24
+          }
+        }
+      }
+    },
     "ta_event_in": {
       "kind": "struct",
       "fields": [
@@ -4080,6 +4448,10 @@
         {
           "name": "token",
           "type": "uint32_t"
+        },
+        {
+          "name": "session",
+          "type": "uint64_t"
         },
         {
           "name": "name",
@@ -4120,60 +4492,123 @@
       ],
       "layout": {
         "x86_64": {
-          "size": 128,
+          "size": 136,
           "align": 8,
           "offsets": {
             "size": 0,
             "target": 4,
             "flags": 8,
             "token": 12,
-            "name": 16,
-            "sendid": 32,
-            "origin": 48,
-            "origintype": 64,
-            "data": 80,
-            "raw": 88,
-            "traceparent": 104,
-            "trace_flags": 120,
-            "pad": 124
+            "session": 16,
+            "name": 24,
+            "sendid": 40,
+            "origin": 56,
+            "origintype": 72,
+            "data": 88,
+            "raw": 96,
+            "traceparent": 112,
+            "trace_flags": 128,
+            "pad": 132
           }
         },
         "aarch64": {
-          "size": 128,
+          "size": 136,
           "align": 8,
           "offsets": {
             "size": 0,
             "target": 4,
             "flags": 8,
             "token": 12,
-            "name": 16,
-            "sendid": 32,
-            "origin": 48,
-            "origintype": 64,
-            "data": 80,
-            "raw": 88,
-            "traceparent": 104,
-            "trace_flags": 120,
-            "pad": 124
+            "session": 16,
+            "name": 24,
+            "sendid": 40,
+            "origin": 56,
+            "origintype": 72,
+            "data": 88,
+            "raw": 96,
+            "traceparent": 112,
+            "trace_flags": 128,
+            "pad": 132
           }
         },
         "wasm32": {
-          "size": 80,
+          "size": 88,
           "align": 8,
           "offsets": {
             "size": 0,
             "target": 4,
             "flags": 8,
             "token": 12,
-            "name": 16,
-            "sendid": 24,
-            "origin": 32,
-            "origintype": 40,
-            "data": 48,
-            "raw": 56,
-            "traceparent": 64,
-            "trace_flags": 72,
-            "pad": 76
+            "session": 16,
+            "name": 24,
+            "sendid": 32,
+            "origin": 40,
+            "origintype": 48,
+            "data": 56,
+            "raw": 64,
+            "traceparent": 72,
+            "trace_flags": 80,
+            "pad": 84
+          }
+        }
+      }
+    },
+    "ta_resume": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "segment",
+          "type": "uint32_t"
+        },
+        {
+          "name": "request",
+          "type": "uint32_t"
+        },
+        {
+          "name": "status",
+          "type": "ta_status"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "result",
+          "type": "ta_payload"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "segment": 0,
+            "request": 4,
+            "status": 8,
+            "pad": 12,
+            "result": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "segment": 0,
+            "request": 4,
+            "status": 8,
+            "pad": 12,
+            "result": 16
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "segment": 0,
+            "request": 4,
+            "status": 8,
+            "pad": 12,
+            "result": 16
           }
         }
       }
@@ -4600,6 +5035,105 @@
         }
       }
     },
+    "ta_sweep": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "cursor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_scan",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "cursor": 0,
+            "max_scan": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "cursor": 0,
+            "max_scan": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "cursor": 0,
+            "max_scan": 4
+          }
+        }
+      }
+    },
+    "ta_blob_migration": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "from_image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "to_image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "to_chart",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "blob",
+          "type": "ta_bytes"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "from_image": 0,
+            "to_image": 8,
+            "to_chart": 16,
+            "pad": 20,
+            "blob": 24
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "from_image": 0,
+            "to_image": 8,
+            "to_chart": 16,
+            "pad": 20,
+            "blob": 24
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "from_image": 0,
+            "to_image": 4,
+            "to_chart": 8,
+            "pad": 12,
+            "blob": 16
+          }
+        }
+      }
+    },
     "ta_core": {
       "kind": "opaque",
       "fields": []
@@ -4700,6 +5234,45 @@
         }
       }
     },
+    "ta_host_chart_ref": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "segment",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "chart": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "chart": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "chart": 4
+          }
+        }
+      }
+    },
     "ta_host_segment_info": {
       "kind": "struct",
       "fields": [
@@ -4756,6 +5329,45 @@
             "actors": 8,
             "current": 12,
             "image": 16
+          }
+        }
+      }
+    },
+    "ta_host_location": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "segment",
+          "type": "uint32_t"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "actor": 4
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "actor": 4
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "actor": 4
           }
         }
       }
@@ -5086,11 +5698,7 @@
         },
         {
           "name": "reach",
-          "type": "const ta_string_view *"
-        },
-        {
-          "name": "reach_count",
-          "type": "uint32_t"
+          "type": "ta_string_list"
         },
         {
           "name": "max_queue",
@@ -5103,29 +5711,27 @@
       ],
       "layout": {
         "x86_64": {
-          "size": 48,
+          "size": 56,
           "align": 8,
           "offsets": {
             "size": 0,
             "flags": 4,
             "id": 8,
             "reach": 24,
-            "reach_count": 32,
-            "max_queue": 36,
-            "queue_ttl": 40
+            "max_queue": 40,
+            "queue_ttl": 48
           }
         },
         "aarch64": {
-          "size": 48,
+          "size": 56,
           "align": 8,
           "offsets": {
             "size": 0,
             "flags": 4,
             "id": 8,
             "reach": 24,
-            "reach_count": 32,
-            "max_queue": 36,
-            "queue_ttl": 40
+            "max_queue": 40,
+            "queue_ttl": 48
           }
         },
         "wasm32": {
@@ -5136,7 +5742,6 @@
             "flags": 4,
             "id": 8,
             "reach": 16,
-            "reach_count": 20,
             "max_queue": 24,
             "queue_ttl": 32
           }
@@ -5171,6 +5776,14 @@
           "type": "uint32_t"
         },
         {
+          "name": "from",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
           "name": "session",
           "type": "uint64_t"
         },
@@ -5197,7 +5810,7 @@
       ],
       "layout": {
         "x86_64": {
-          "size": 112,
+          "size": 120,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5206,16 +5819,18 @@
             "peer": 12,
             "hops": 16,
             "flags": 20,
-            "session": 24,
-            "system": 32,
-            "name": 48,
-            "peer_id": 64,
-            "origin": 80,
-            "key": 96
+            "from": 24,
+            "pad": 28,
+            "session": 32,
+            "system": 40,
+            "name": 56,
+            "peer_id": 72,
+            "origin": 88,
+            "key": 104
           }
         },
         "aarch64": {
-          "size": 112,
+          "size": 120,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5224,16 +5839,18 @@
             "peer": 12,
             "hops": 16,
             "flags": 20,
-            "session": 24,
-            "system": 32,
-            "name": 48,
-            "peer_id": 64,
-            "origin": 80,
-            "key": 96
+            "from": 24,
+            "pad": 28,
+            "session": 32,
+            "system": 40,
+            "name": 56,
+            "peer_id": 72,
+            "origin": 88,
+            "key": 104
           }
         },
         "wasm32": {
-          "size": 72,
+          "size": 80,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5242,12 +5859,14 @@
             "peer": 12,
             "hops": 16,
             "flags": 20,
-            "session": 24,
-            "system": 32,
-            "name": 40,
-            "peer_id": 48,
-            "origin": 56,
-            "key": 64
+            "from": 24,
+            "pad": 28,
+            "session": 32,
+            "system": 40,
+            "name": 48,
+            "peer_id": 56,
+            "origin": 64,
+            "key": 72
           }
         }
       }
@@ -5260,8 +5879,12 @@
           "type": "uint32_t"
         },
         {
-          "name": "pad",
+          "name": "index",
           "type": "uint32_t"
+        },
+        {
+          "name": "revision",
+          "type": "uint64_t"
         },
         {
           "name": "envelope",
@@ -5290,45 +5913,161 @@
       ],
       "layout": {
         "x86_64": {
-          "size": 1024,
+          "size": 1032,
           "align": 8,
           "offsets": {
             "size": 0,
-            "pad": 4,
-            "envelope": 8,
-            "key": 160,
-            "sendid": 176,
-            "storage": 192,
-            "traceparent": 960,
-            "pad2": 1016
+            "index": 4,
+            "revision": 8,
+            "envelope": 16,
+            "key": 168,
+            "sendid": 184,
+            "storage": 200,
+            "traceparent": 968,
+            "pad2": 1024
           }
         },
         "aarch64": {
-          "size": 1024,
+          "size": 1032,
           "align": 8,
           "offsets": {
             "size": 0,
-            "pad": 4,
-            "envelope": 8,
-            "key": 160,
-            "sendid": 176,
-            "storage": 192,
-            "traceparent": 960,
-            "pad2": 1016
+            "index": 4,
+            "revision": 8,
+            "envelope": 16,
+            "key": 168,
+            "sendid": 184,
+            "storage": 200,
+            "traceparent": 968,
+            "pad2": 1024
           }
         },
         "wasm32": {
-          "size": 944,
+          "size": 952,
           "align": 8,
           "offsets": {
             "size": 0,
+            "index": 4,
+            "revision": 8,
+            "envelope": 16,
+            "key": 104,
+            "sendid": 112,
+            "storage": 120,
+            "traceparent": 888,
+            "pad2": 944
+          }
+        }
+      }
+    },
+    "ta_export_rule": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "peer",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "events",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "peer": 0,
             "pad": 4,
-            "envelope": 8,
-            "key": 96,
-            "sendid": 104,
-            "storage": 112,
-            "traceparent": 880,
-            "pad2": 936
+            "name": 8,
+            "events": 24
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "peer": 0,
+            "pad": 4,
+            "name": 8,
+            "events": 24
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "peer": 0,
+            "pad": 4,
+            "name": 8,
+            "events": 16
+          }
+        }
+      }
+    },
+    "ta_peer_error": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "peer",
+          "type": "uint32_t"
+        },
+        {
+          "name": "reason",
+          "type": "uint32_t"
+        },
+        {
+          "name": "origin",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "msgid",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "sendid",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "peer": 0,
+            "reason": 4,
+            "origin": 8,
+            "msgid": 24,
+            "sendid": 40
+          }
+        },
+        "aarch64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "peer": 0,
+            "reason": 4,
+            "origin": 8,
+            "msgid": 24,
+            "sendid": 40
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 4,
+          "offsets": {
+            "peer": 0,
+            "reason": 4,
+            "origin": 8,
+            "msgid": 16,
+            "sendid": 24
           }
         }
       }
@@ -5424,6 +6163,204 @@
             "errors": 40,
             "duplicates": 48,
             "id": 56
+          }
+        }
+      }
+    },
+    "ta_host_migration": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "session",
+          "type": "uint64_t"
+        },
+        {
+          "name": "flags",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "timeout",
+          "type": "ta_time"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "session": 16,
+            "flags": 24,
+            "pad": 28,
+            "timeout": 32
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "session": 16,
+            "flags": 24,
+            "pad": 28,
+            "timeout": 32
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "session": 8,
+            "flags": 16,
+            "pad": 20,
+            "timeout": 24
+          }
+        }
+      }
+    },
+    "ta_host_adoption": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "segment",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "blob",
+          "type": "ta_bytes"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "segment": 0,
+            "pad": 4,
+            "blob": 8
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "segment": 0,
+            "pad": 4,
+            "blob": 8
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "segment": 0,
+            "pad": 4,
+            "blob": 8
+          }
+        }
+      }
+    },
+    "ta_host_snapshot_input": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "snapshot",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "images",
+          "type": "const ta_image *const *"
+        },
+        {
+          "name": "image_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "snapshot": 0,
+            "images": 16,
+            "image_count": 24,
+            "pad": 28
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "snapshot": 0,
+            "images": 16,
+            "image_count": 24,
+            "pad": 28
+          }
+        },
+        "wasm32": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "snapshot": 0,
+            "images": 8,
+            "image_count": 12,
+            "pad": 16
+          }
+        }
+      }
+    },
+    "ta_datamodel_state": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "datamodel",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "state",
+          "type": "ta_bytes"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "datamodel": 0,
+            "state": 16
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "datamodel": 0,
+            "state": 16
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "datamodel": 0,
+            "state": 8
           }
         }
       }
@@ -5590,6 +6527,59 @@
         }
       }
     },
+    "ta_host_watch": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "rules",
+          "type": "const ta_trace_rule *"
+        },
+        {
+          "name": "rule_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "until",
+          "type": "ta_time"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "rules": 0,
+            "rule_count": 8,
+            "pad": 12,
+            "until": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "rules": 0,
+            "rule_count": 8,
+            "pad": 12,
+            "until": 16
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "rules": 0,
+            "rule_count": 4,
+            "pad": 8,
+            "until": 16
+          }
+        }
+      }
+    },
     "ta_http_field": {
       "kind": "struct",
       "fields": [
@@ -5625,6 +6615,73 @@
           "offsets": {
             "name": 0,
             "value": 8
+          }
+        }
+      }
+    },
+    "ta_http_post": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "url",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "event",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "fields",
+          "type": "const ta_http_field *"
+        },
+        {
+          "name": "field_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "body",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "url": 0,
+            "event": 16,
+            "fields": 32,
+            "field_count": 40,
+            "pad": 44,
+            "body": 48
+          }
+        },
+        "aarch64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "url": 0,
+            "event": 16,
+            "fields": 32,
+            "field_count": 40,
+            "pad": 44,
+            "body": 48
+          }
+        },
+        "wasm32": {
+          "size": 36,
+          "align": 4,
+          "offsets": {
+            "url": 0,
+            "event": 8,
+            "fields": 16,
+            "field_count": 20,
+            "pad": 24,
+            "body": 28
           }
         }
       }
@@ -6458,7 +7515,7 @@
           "type": "uint32_t"
         },
         {
-          "name": "pad",
+          "name": "kind",
           "type": "uint32_t"
         }
       ],
@@ -6469,7 +7526,7 @@
           "offsets": {
             "message": 0,
             "field": 16,
-            "pad": 20
+            "kind": 20
           }
         },
         "aarch64": {
@@ -6478,7 +7535,7 @@
           "offsets": {
             "message": 0,
             "field": 16,
-            "pad": 20
+            "kind": 20
           }
         },
         "wasm32": {
@@ -6487,7 +7544,7 @@
           "offsets": {
             "message": 0,
             "field": 8,
-            "pad": 12
+            "kind": 12
           }
         }
       }
@@ -6738,6 +7795,45 @@
             "number": 16,
             "bytes": 24,
             "items": 32
+          }
+        }
+      }
+    },
+    "ta_otlp_key_value": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "key",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "value",
+          "type": "ta_otlp_value"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 16
+          }
+        },
+        "aarch64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 16
+          }
+        },
+        "wasm32": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 8
           }
         }
       }
@@ -7075,11 +8171,7 @@
         },
         {
           "name": "states",
-          "type": "uint32_t *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "type": "ta_uint32_array"
         }
       ],
       "public": true,
@@ -7099,16 +8191,8 @@
           "type": "uint32_t"
         },
         {
-          "name": "buffer",
-          "type": "void *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
-        },
-        {
-          "name": "length",
-          "type": "size_t *"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -7128,16 +8212,8 @@
           "type": "uint32_t"
         },
         {
-          "name": "buffer",
-          "type": "void *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
-        },
-        {
-          "name": "length",
-          "type": "size_t *"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -7179,11 +8255,7 @@
         },
         {
           "name": "blob",
-          "type": "const void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "type": "ta_bytes"
         }
       ],
       "public": true,
@@ -7192,7 +8264,7 @@
     },
     {
       "name": "ta_address_format",
-      "returns": "uint32_t",
+      "returns": "ta_status",
       "params": [
         {
           "name": "system",
@@ -7203,12 +8275,8 @@
           "type": "uint64_t"
         },
         {
-          "name": "buffer",
-          "type": "char *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -7217,7 +8285,7 @@
     },
     {
       "name": "ta_address_format_name",
-      "returns": "uint32_t",
+      "returns": "ta_status",
       "params": [
         {
           "name": "system",
@@ -7228,12 +8296,8 @@
           "type": "ta_string_view"
         },
         {
-          "name": "buffer",
-          "type": "char *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -7242,19 +8306,15 @@
     },
     {
       "name": "ta_address_name_decode",
-      "returns": "uint32_t",
+      "returns": "ta_status",
       "params": [
         {
           "name": "name",
           "type": "ta_string_view"
         },
         {
-          "name": "buffer",
-          "type": "char *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -7313,36 +8373,12 @@
       "returns": "ta_status",
       "params": [
         {
-          "name": "from_image",
-          "type": "const ta_image *"
-        },
-        {
-          "name": "to_image",
-          "type": "const ta_image *"
-        },
-        {
-          "name": "to_chart",
-          "type": "uint32_t"
-        },
-        {
-          "name": "blob",
-          "type": "const void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "name": "migration",
+          "type": "const ta_blob_migration *"
         },
         {
           "name": "out",
-          "type": "void *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
-        },
-        {
-          "name": "out_length",
-          "type": "size_t *"
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -7355,11 +8391,7 @@
       "params": [
         {
           "name": "blob",
-          "type": "void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "type": "ta_memory"
         },
         {
           "name": "from",
@@ -7821,11 +8853,7 @@
         },
         {
           "name": "out",
-          "type": "uint64_t *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "type": "ta_uint64_array"
         }
       ],
       "public": true,
@@ -7862,16 +8890,8 @@
           "type": "ta_host *"
         },
         {
-          "name": "segment",
-          "type": "uint32_t"
-        },
-        {
-          "name": "blob",
-          "type": "const void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "name": "adoption",
+          "type": "const ta_host_adoption *"
         },
         {
           "name": "session",
@@ -7929,12 +8949,8 @@
           "type": "ta_string_view"
         },
         {
-          "name": "segment",
-          "type": "uint32_t *"
-        },
-        {
-          "name": "chart",
-          "type": "uint32_t *"
+          "name": "out",
+          "type": "ta_host_chart_ref *"
         }
       ],
       "public": true,
@@ -7964,7 +8980,7 @@
     },
     {
       "name": "ta_host_deliver",
-      "returns": "ta_status",
+      "returns": "int32_t",
       "params": [
         {
           "name": "h",
@@ -7975,12 +8991,8 @@
           "type": "uint32_t"
         },
         {
-          "name": "environment",
+          "name": "envelope",
           "type": "const ta_envelope *"
-        },
-        {
-          "name": "outcome",
-          "type": "uint32_t *"
         }
       ],
       "public": true,
@@ -8064,16 +9076,8 @@
           "type": "ta_host *"
         },
         {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "name",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "events",
-          "type": "ta_string_view"
+          "name": "rule",
+          "type": "const ta_export_rule *"
         }
       ],
       "public": true,
@@ -8093,16 +9097,8 @@
           "type": "uint64_t"
         },
         {
-          "name": "buffer",
-          "type": "void *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
-        },
-        {
-          "name": "length",
-          "type": "size_t *"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -8135,16 +9131,8 @@
           "type": "uint64_t"
         },
         {
-          "name": "buffer",
-          "type": "void *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
-        },
-        {
-          "name": "length",
-          "type": "size_t *"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -8165,11 +9153,7 @@
         },
         {
           "name": "out",
-          "type": "uint64_t *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "type": "ta_uint64_array"
         }
       ],
       "public": true,
@@ -8189,12 +9173,8 @@
           "type": "uint64_t"
         },
         {
-          "name": "segment",
-          "type": "uint32_t *"
-        },
-        {
-          "name": "actor",
-          "type": "uint32_t *"
+          "name": "out",
+          "type": "ta_host_location *"
         }
       ],
       "public": true,
@@ -8214,15 +9194,7 @@
           "type": "const ta_effect *"
         },
         {
-          "name": "revision",
-          "type": "uint64_t"
-        },
-        {
-          "name": "index",
-          "type": "uint32_t"
-        },
-        {
-          "name": "out",
+          "name": "message",
           "type": "ta_host_message *"
         }
       ],
@@ -8239,20 +9211,8 @@
           "type": "ta_host *"
         },
         {
-          "name": "name",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "session",
-          "type": "uint64_t"
-        },
-        {
-          "name": "flags",
-          "type": "uint32_t"
-        },
-        {
-          "name": "timeout",
-          "type": "ta_time"
+          "name": "migration",
+          "type": "const ta_host_migration *"
         },
         {
           "name": "job",
@@ -8310,24 +9270,8 @@
           "type": "ta_host *"
         },
         {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "origin",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "msgid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "sendid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "reason",
-          "type": "uint32_t"
+          "name": "error",
+          "type": "const ta_peer_error *"
         }
       ],
       "public": true,
@@ -8348,11 +9292,7 @@
         },
         {
           "name": "reach",
-          "type": "const ta_string_view *"
-        },
-        {
-          "name": "n",
-          "type": "uint32_t"
+          "type": "ta_string_list"
         }
       ],
       "public": true,
@@ -8448,20 +9388,8 @@
           "type": "const ta_host_config *"
         },
         {
-          "name": "images",
-          "type": "const ta_image *const *"
-        },
-        {
-          "name": "image_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "snap",
-          "type": "const void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "name": "input",
+          "type": "const ta_host_snapshot_input *"
         },
         {
           "name": "out",
@@ -8481,20 +9409,8 @@
           "type": "ta_host *"
         },
         {
-          "name": "segment",
-          "type": "uint32_t"
-        },
-        {
-          "name": "request",
-          "type": "uint32_t"
-        },
-        {
-          "name": "status",
-          "type": "ta_status"
-        },
-        {
-          "name": "result",
-          "type": "ta_payload"
+          "name": "resume",
+          "type": "const ta_resume *"
         }
       ],
       "public": true,
@@ -8531,16 +9447,8 @@
           "type": "ta_host *"
         },
         {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "environment",
+          "name": "envelope",
           "type": "const ta_envelope *"
-        },
-        {
-          "name": "flags",
-          "type": "uint32_t"
         },
         {
           "name": "request",
@@ -8641,10 +9549,6 @@
           "type": "ta_host *"
         },
         {
-          "name": "session",
-          "type": "uint64_t"
-        },
-        {
           "name": "event",
           "type": "const ta_event_in *"
         }
@@ -8660,10 +9564,6 @@
         {
           "name": "h",
           "type": "ta_host *"
-        },
-        {
-          "name": "sessions",
-          "type": "const uint64_t *"
         },
         {
           "name": "events",
@@ -8687,16 +9587,8 @@
           "type": "ta_host *"
         },
         {
-          "name": "buffer",
-          "type": "void *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
-        },
-        {
-          "name": "length",
-          "type": "size_t *"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -8705,23 +9597,15 @@
     },
     {
       "name": "ta_host_snapshot_image",
-      "returns": "const void *",
+      "returns": "ta_bytes",
       "params": [
         {
           "name": "pack",
-          "type": "const void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "type": "ta_bytes"
         },
         {
           "name": "i",
           "type": "uint32_t"
-        },
-        {
-          "name": "image_length",
-          "type": "size_t *"
         }
       ],
       "public": true,
@@ -8737,28 +9621,12 @@
           "type": "ta_host *"
         },
         {
-          "name": "datamodel",
-          "type": "ta_string_view"
-        },
-        {
           "name": "state",
-          "type": "const void *"
+          "type": "const ta_datamodel_state *"
         },
         {
-          "name": "state_length",
-          "type": "size_t"
-        },
-        {
-          "name": "buffer",
-          "type": "void *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
-        },
-        {
-          "name": "length",
-          "type": "size_t *"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -8770,20 +9638,12 @@
       "returns": "uint32_t",
       "params": [
         {
-          "name": "snap",
-          "type": "const void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "name": "snapshot",
+          "type": "ta_bytes"
         },
         {
           "name": "hashes",
-          "type": "uint64_t *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "type": "ta_uint64_array"
         }
       ],
       "public": true,
@@ -8796,11 +9656,7 @@
       "params": [
         {
           "name": "pack",
-          "type": "const void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "type": "ta_bytes"
         },
         {
           "name": "out",
@@ -8820,24 +9676,8 @@
           "type": "ta_host *"
         },
         {
-          "name": "segment",
-          "type": "uint32_t"
-        },
-        {
-          "name": "chart",
-          "type": "uint32_t"
-        },
-        {
-          "name": "name",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "params",
-          "type": "ta_payload"
-        },
-        {
-          "name": "traceparent",
-          "type": "ta_string_view"
+          "name": "spawn",
+          "type": "const ta_spawn *"
         },
         {
           "name": "session",
@@ -8850,7 +9690,7 @@
     },
     {
       "name": "ta_host_state_value",
-      "returns": "size_t",
+      "returns": "ta_status",
       "params": [
         {
           "name": "h",
@@ -8861,12 +9701,8 @@
           "type": "uint64_t"
         },
         {
-          "name": "buffer",
-          "type": "char *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -8904,11 +9740,7 @@
         },
         {
           "name": "out",
-          "type": "uint64_t *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "type": "ta_uint64_array"
         }
       ],
       "public": true,
@@ -8992,16 +9824,8 @@
           "type": "ta_host *"
         },
         {
-          "name": "rules",
-          "type": "const ta_trace_rule *"
-        },
-        {
-          "name": "count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "until",
-          "type": "ta_time"
+          "name": "watch",
+          "type": "const ta_host_watch *"
         },
         {
           "name": "id",
@@ -9026,11 +9850,7 @@
         },
         {
           "name": "blob",
-          "type": "const void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "type": "ta_bytes"
         }
       ],
       "public": true,
@@ -9039,35 +9859,15 @@
     },
     {
       "name": "ta_http_encode_post",
-      "returns": "size_t",
+      "returns": "ta_status",
       "params": [
         {
-          "name": "url",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "event",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "fields",
-          "type": "const ta_http_field *"
-        },
-        {
-          "name": "field_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "body",
-          "type": "ta_string_view"
+          "name": "post",
+          "type": "const ta_http_post *"
         },
         {
           "name": "out",
-          "type": "char *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -9076,23 +9876,15 @@
     },
     {
       "name": "ta_http_parse_request",
-      "returns": "int",
+      "returns": "ta_status",
       "params": [
         {
           "name": "message",
-          "type": "const char *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "type": "ta_bytes"
         },
         {
           "name": "scratch",
-          "type": "char *"
-        },
-        {
-          "name": "scratch_capacity",
-          "type": "size_t"
+          "type": "ta_buffer *"
         },
         {
           "name": "out",
@@ -9137,12 +9929,8 @@
           "type": "uint32_t"
         },
         {
-          "name": "name",
-          "type": "ta_string_view *"
-        },
-        {
-          "name": "chart",
-          "type": "uint32_t *"
+          "name": "out",
+          "type": "ta_boot_actor *"
         }
       ],
       "public": true,
@@ -9243,12 +10031,8 @@
           "type": "const ta_image *"
         },
         {
-          "name": "chart",
-          "type": "uint32_t"
-        },
-        {
-          "name": "index",
-          "type": "uint32_t"
+          "name": "data",
+          "type": "ta_chart_item"
         },
         {
           "name": "out",
@@ -9302,12 +10086,8 @@
           "type": "const ta_image *"
         },
         {
-          "name": "chart",
-          "type": "uint32_t"
-        },
-        {
-          "name": "e",
-          "type": "ta_expression"
+          "name": "expression",
+          "type": "ta_chart_item"
         },
         {
           "name": "out",
@@ -9420,12 +10200,8 @@
           "type": "const ta_image *"
         },
         {
-          "name": "chart",
-          "type": "uint32_t"
-        },
-        {
           "name": "state",
-          "type": "uint32_t"
+          "type": "ta_chart_item"
         },
         {
           "name": "out",
@@ -9496,12 +10272,8 @@
       "returns": "ta_status",
       "params": [
         {
-          "name": "into",
+          "name": "otlp",
           "type": "ta_otlp *"
-        },
-        {
-          "name": "from",
-          "type": "const ta_otlp *"
         },
         {
           "name": "start_ns",
@@ -9556,11 +10328,7 @@
       "params": [
         {
           "name": "memory",
-          "type": "void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "type": "ta_memory"
         },
         {
           "name": "config",
@@ -9593,19 +10361,6 @@
       "implemented": true
     },
     {
-      "name": "ta_otlp_logs_size",
-      "returns": "size_t",
-      "params": [
-        {
-          "name": "otlp",
-          "type": "const ta_otlp *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
       "name": "ta_otlp_mark",
       "returns": "void",
       "params": [
@@ -9627,19 +10382,6 @@
       "implemented": true
     },
     {
-      "name": "ta_otlp_metrics_size",
-      "returns": "size_t",
-      "params": [
-        {
-          "name": "otlp",
-          "type": "const ta_otlp *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
       "name": "ta_otlp_next_attribute",
       "returns": "int32_t",
       "params": [
@@ -9652,12 +10394,8 @@
           "type": "uint32_t *"
         },
         {
-          "name": "key",
-          "type": "ta_string_view *"
-        },
-        {
-          "name": "value",
-          "type": "ta_otlp_value *"
+          "name": "out",
+          "type": "ta_otlp_key_value *"
         }
       ],
       "public": true,
@@ -9732,12 +10470,8 @@
       "returns": "int32_t",
       "params": [
         {
-          "name": "bytes",
-          "type": "const void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "name": "request",
+          "type": "ta_bytes"
         },
         {
           "name": "cursor",
@@ -9765,10 +10499,6 @@
           "type": "uint32_t *"
         },
         {
-          "name": "kind",
-          "type": "uint32_t"
-        },
-        {
           "name": "out",
           "type": "ta_otlp_point_view *"
         }
@@ -9782,12 +10512,8 @@
       "returns": "int32_t",
       "params": [
         {
-          "name": "bytes",
-          "type": "const void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "name": "request",
+          "type": "ta_bytes"
         },
         {
           "name": "cursor",
@@ -9825,7 +10551,7 @@
     },
     {
       "name": "ta_otlp_put_logs",
-      "returns": "size_t",
+      "returns": "ta_status",
       "params": [
         {
           "name": "otlp",
@@ -9833,11 +10559,7 @@
         },
         {
           "name": "out",
-          "type": "void *"
-        },
-        {
-          "name": "size",
-          "type": "size_t"
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -9846,7 +10568,7 @@
     },
     {
       "name": "ta_otlp_put_metrics",
-      "returns": "size_t",
+      "returns": "ta_status",
       "params": [
         {
           "name": "otlp",
@@ -9854,11 +10576,7 @@
         },
         {
           "name": "out",
-          "type": "void *"
-        },
-        {
-          "name": "size",
-          "type": "size_t"
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -9867,7 +10585,7 @@
     },
     {
       "name": "ta_otlp_put_traces",
-      "returns": "size_t",
+      "returns": "ta_status",
       "params": [
         {
           "name": "otlp",
@@ -9875,11 +10593,7 @@
         },
         {
           "name": "out",
-          "type": "void *"
-        },
-        {
-          "name": "size",
-          "type": "size_t"
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -9913,23 +10627,15 @@
       "params": [
         {
           "name": "otlp",
-          "type": "ta_otlp *"
+          "type": "ta_otlp **"
         },
         {
           "name": "memory",
-          "type": "void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "type": "ta_memory"
         },
         {
           "name": "config",
           "type": "const ta_otlp_config *"
-        },
-        {
-          "name": "out",
-          "type": "ta_otlp **"
         }
       ],
       "public": true,
@@ -9992,33 +10698,16 @@
       "implemented": true
     },
     {
-      "name": "ta_otlp_traces_size",
-      "returns": "size_t",
-      "params": [
-        {
-          "name": "otlp",
-          "type": "const ta_otlp *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
       "name": "ta_span_id_format",
-      "returns": "uint32_t",
+      "returns": "ta_status",
       "params": [
         {
           "name": "span",
           "type": "ta_span_id"
         },
         {
-          "name": "buffer",
-          "type": "char *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -10086,11 +10775,7 @@
         },
         {
           "name": "out",
-          "type": "uint32_t *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "type": "ta_uint32_array"
         }
       ],
       "public": true,
@@ -10107,11 +10792,7 @@
         },
         {
           "name": "blob",
-          "type": "const void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
+          "type": "ta_bytes"
         },
         {
           "name": "actor",
@@ -10182,20 +10863,12 @@
           "type": "ta_system *"
         },
         {
-          "name": "cursor",
-          "type": "uint32_t *"
-        },
-        {
-          "name": "max_scan",
-          "type": "uint32_t"
+          "name": "sweep",
+          "type": "ta_sweep *"
         },
         {
           "name": "out",
-          "type": "uint32_t *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "type": "ta_uint32_array"
         }
       ],
       "public": true,
@@ -10254,28 +10927,8 @@
       "returns": "ta_status",
       "params": [
         {
-          "name": "memory",
-          "type": "void *"
-        },
-        {
-          "name": "length",
-          "type": "size_t"
-        },
-        {
-          "name": "image",
-          "type": "const ta_image *"
-        },
-        {
-          "name": "config",
-          "type": "const ta_system_config *"
-        },
-        {
-          "name": "datamodels",
-          "type": "const ta_datamodel_binding *"
-        },
-        {
-          "name": "datamodel_count",
-          "type": "uint32_t"
+          "name": "setup",
+          "type": "const ta_system_setup *"
         },
         {
           "name": "out",
@@ -10326,23 +10979,15 @@
       "params": [
         {
           "name": "system",
-          "type": "ta_system *"
-        },
-        {
-          "name": "new_memory",
-          "type": "void *"
-        },
-        {
-          "name": "new_length",
-          "type": "size_t"
-        },
-        {
-          "name": "new_config",
-          "type": "const ta_system_config *"
-        },
-        {
-          "name": "out",
           "type": "ta_system **"
+        },
+        {
+          "name": "memory",
+          "type": "ta_memory"
+        },
+        {
+          "name": "config",
+          "type": "const ta_system_config *"
         }
       ],
       "public": true,
@@ -10354,36 +10999,12 @@
       "returns": "ta_status",
       "params": [
         {
-          "name": "memory",
-          "type": "void *"
+          "name": "setup",
+          "type": "const ta_system_setup *"
         },
         {
-          "name": "length",
-          "type": "size_t"
-        },
-        {
-          "name": "image",
-          "type": "const ta_image *"
-        },
-        {
-          "name": "snap",
-          "type": "const void *"
-        },
-        {
-          "name": "snap_length",
-          "type": "size_t"
-        },
-        {
-          "name": "host",
-          "type": "const ta_system_config *"
-        },
-        {
-          "name": "datamodels",
-          "type": "const ta_datamodel_binding *"
-        },
-        {
-          "name": "datamodel_count",
-          "type": "uint32_t"
+          "name": "snapshot",
+          "type": "ta_bytes"
         },
         {
           "name": "out",
@@ -10403,16 +11024,8 @@
           "type": "ta_system *"
         },
         {
-          "name": "request",
-          "type": "uint32_t"
-        },
-        {
-          "name": "status",
-          "type": "ta_status"
-        },
-        {
-          "name": "result",
-          "type": "ta_payload"
+          "name": "resume",
+          "type": "const ta_resume *"
         }
       ],
       "public": true,
@@ -10500,16 +11113,8 @@
           "type": "const ta_system *"
         },
         {
-          "name": "buffer",
-          "type": "void *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
-        },
-        {
-          "name": "length",
-          "type": "size_t *"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -10525,20 +11130,8 @@
           "type": "ta_system *"
         },
         {
-          "name": "chart",
-          "type": "uint32_t"
-        },
-        {
-          "name": "name",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "params",
-          "type": "ta_payload"
-        },
-        {
-          "name": "traceparent",
-          "type": "ta_string_view"
+          "name": "spawn",
+          "type": "const ta_spawn *"
         },
         {
           "name": "actor",
@@ -10760,19 +11353,15 @@
     },
     {
       "name": "ta_trace_id_format",
-      "returns": "uint32_t",
+      "returns": "ta_status",
       "params": [
         {
           "name": "trace",
           "type": "ta_trace_id"
         },
         {
-          "name": "buffer",
-          "type": "char *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -10884,19 +11473,15 @@
     },
     {
       "name": "ta_traceparent_format",
-      "returns": "uint32_t",
+      "returns": "ta_status",
       "params": [
         {
           "name": "context",
           "type": "const ta_trace_context *"
         },
         {
-          "name": "buffer",
-          "type": "char *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,

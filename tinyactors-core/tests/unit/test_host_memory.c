@@ -257,16 +257,19 @@ static ta_status send_event(workload *w, uint64_t session, const char *name, ta_
     event.size = sizeof event;
     event.name = (ta_string_view){name, (uint32_t)strlen(name)};
     event.data = data;
-    return ta_host_send(w->host, session, &event);
+    event.session = session;
+    return ta_host_send(w->host, &event);
 }
 
 static ta_status spawn(workload *w, const char *chart, uint64_t *session) {
-    uint32_t segment, index;
-    ta_status status = ta_host_chart(w->host, (ta_string_view){chart, (uint32_t)strlen(chart)},
-                                     &segment, &index);
+    ta_host_chart_ref ref;
+    ta_status status =
+        ta_host_chart(w->host, (ta_string_view){chart, (uint32_t)strlen(chart)}, &ref);
     if (status != TA_OK) return status;
-    return ta_host_spawn(w->host, segment, index, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0},
-                         session);
+    return ta_host_spawn(
+        w->host,
+        &(ta_spawn){ref.segment, ref.chart, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}},
+        session);
 }
 
 static ta_host_config workload_config(workload *w) {
@@ -376,11 +379,8 @@ static void workload_run(workload *w) {
     envelope.origin = (ta_string_view){"tinyactors://far/#_scxml_9", 26};
     envelope.msgid = (ta_string_view){"far-1", 5};
     envelope.datamodel = TA_NIL;
-    uint32_t outcome = 0;
-    RETRY(m, TA_OK, ta_host_deliver(w->host, far, &envelope, &outcome));
-    CHECK_EQUAL(outcome, TA_ROUTE_DELIVERED);
-    RETRY(m, TA_OK, ta_host_deliver(w->host, far, &envelope, &outcome));
-    CHECK_EQUAL(outcome, TA_ROUTE_DUPLICATE);
+    RETRY(m, TA_ROUTE_DELIVERED, ta_host_deliver(w->host, far, &envelope));
+    RETRY(m, TA_ROUTE_DUPLICATE, ta_host_deliver(w->host, far, &envelope));
     /* to a name nobody has, longer than the decoding buffer on the stack: an
      * error back to the peer */
     char name[320] = BASE "@";
@@ -388,8 +388,7 @@ static void workload_run(workload *w) {
     memset(name + prefix, 'n', 300);
     envelope.target = (ta_string_view){name, (uint32_t)(prefix + 300)};
     envelope.msgid = (ta_string_view){"far-2", 5};
-    RETRY(m, TA_OK, ta_host_deliver(w->host, far, &envelope, &outcome));
-    CHECK_EQUAL(outcome, TA_ROUTE_REFUSED);
+    RETRY(m, TA_ROUTE_REFUSED, ta_host_deliver(w->host, far, &envelope));
     collect(w, w->host);
     run_idle(w, w->host);
 
@@ -397,36 +396,50 @@ static void workload_run(workload *w) {
     add_image(w, 2);
     m->phase = "migration";
     uint32_t job = 0;
-    RETRY(m, TA_OK, ta_host_migrate(w->host, (ta_string_view){"w", 1}, 0, 0, 0, &job));
+    RETRY(
+        m, TA_OK,
+        ta_host_migrate(w->host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 0}, &job));
     run_idle(w, w->host);
 
     /* hibernation, export and adoption */
     m->phase = "hibernation";
     static unsigned char blob[1 << 16];
     size_t length = 0;
-    RETRY(m, TA_OK, ta_host_hibernate(w->host, workers[1], blob, sizeof blob, &length));
-    RETRY(m, TA_OK, ta_host_wake(w->host, workers[1], blob, length));
+    ta_buffer written = {blob, sizeof blob, 0};
+    RETRY(m, TA_OK, ta_host_hibernate(w->host, workers[1], &written));
+    length = written.length;
+    RETRY(m, TA_OK, ta_host_wake(w->host, workers[1], (ta_bytes){blob, length}));
     run_idle(w, w->host);
     m->phase = "adoption";
-    RETRY(m, TA_OK, ta_host_export_actor(w->host, workers[2], blob, sizeof blob, &length));
+    written = (ta_buffer){blob, sizeof blob, 0};
+    RETRY(m, TA_OK, ta_host_export_actor(w->host, workers[2], &written));
+    length = written.length;
     uint64_t adopted = 0;
-    RETRY(m, TA_OK, ta_host_adopt(w->host, 2, blob, length, &adopted));
+    RETRY(m, TA_OK, ta_host_adopt(w->host, &(ta_host_adoption){2, 0, {blob, length}}, &adopted));
     CHECK_EQUAL(adopted, workers[2]);
     run_idle(w, w->host);
     m->phase = "sweep";
     uint64_t cold[8];
-    ta_host_sweep(w->host, 64, cold, 8);
-    ta_host_sweep(w->host, 64, cold, 8);
+    ta_host_sweep(w->host, 64, (ta_uint64_array){cold, 8});
+    ta_host_sweep(w->host, 64, (ta_uint64_array){cold, 8});
 
     /* restore: a second host from a snapshot of this one */
     m->phase = "restore";
     size_t hl = 0, dl = 0;
-    CHECK_EQUAL(ta_host_snapshot(w->host, NULL, 0, &hl), TA_OK);
+    written = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot(w->host, &written), TA_ERROR_NO_MEMORY);
+    hl = written.length;
     void *hs = malloc(hl);
-    CHECK_EQUAL(ta_host_snapshot(w->host, hs, hl, &hl), TA_OK);
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w->ecmascript, NULL, 0, &dl), TA_OK);
+    written = (ta_buffer){hs, hl, 0};
+    CHECK_EQUAL(ta_host_snapshot(w->host, &written), TA_OK);
+    hl = written.length;
+    written = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w->ecmascript, &written), TA_ERROR_NO_MEMORY);
+    dl = written.length;
     void *ds = malloc(dl);
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w->ecmascript, ds, dl, &dl), TA_OK);
+    written = (ta_buffer){ds, dl, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w->ecmascript, &written), TA_OK);
+    dl = written.length;
     workload copy = *w;
     copy.ecmascript = ta_datamodel_ecmascript_new(NULL);
     copy.binding = ta_datamodel_ecmascript_binding(copy.ecmascript);
@@ -436,10 +449,12 @@ static void workload_run(workload *w) {
                                           &w->images->image[2]};
     uint64_t live = m->live_blocks;
     ta_host *restored = NULL;
-    RETRY(m, TA_OK, ta_host_restore(&restored_config, restored_images, 3, hs, hl, &restored));
+    RETRY(m, TA_OK,
+          ta_host_restore(&restored_config,
+                          &(ta_host_snapshot_input){{hs, hl}, restored_images, 3, 0}, &restored));
     CHECK(restored != NULL && m->live_blocks > live);
     if (restored) {
-        CHECK_EQUAL(ta_datamodel_ecmascript_restore(copy.ecmascript, ds, dl), TA_OK);
+        CHECK_EQUAL(ta_datamodel_ecmascript_restore(copy.ecmascript, (ta_bytes){ds, dl}), TA_OK);
         ta_host_stats a, b;
         a.size = b.size = sizeof a;
         ta_host_stats_get(w->host, &a);
@@ -610,25 +625,29 @@ static void test_fixed_arena(void) {
     CHECK_EQUAL(ta_host_add_image(host, &im.image[0], NULL), TA_OK);
     CHECK_EQUAL(ta_host_add_image(host, &im.image[1], NULL), TA_OK);
     uint64_t p = 0, q = 0, extra = 0;
-    CHECK_EQUAL(ta_host_spawn(host, 0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &p),
+    CHECK_EQUAL(ta_host_spawn(
+                    host, &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &p),
                 TA_OK);
-    CHECK_EQUAL(ta_host_spawn(host, 1, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &q),
+    CHECK_EQUAL(ta_host_spawn(
+                    host, &(ta_spawn){1, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &q),
                 TA_OK);
     CHECK(p == 1 && q == (1ull << 32) + 1);
     ta_system_stats stats;
     stats.size = sizeof stats;
     ta_system_stats_get(ta_host_system(host, 0), &stats);
     CHECK_EQUAL(stats.actors_capacity, 1);
-    CHECK_EQUAL(
-        ta_host_spawn(host, 0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &extra),
-        TA_OK);
+    CHECK_EQUAL(ta_host_spawn(host,
+                              &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}},
+                              &extra),
+                TA_OK);
     ta_system_stats_get(ta_host_system(host, 0), &stats);
     CHECK(stats.actors_capacity >= 2); /* relocated, inside the arena */
     ta_event_in event;
     memset(&event, 0, sizeof event);
     event.size = sizeof event;
     event.name = (ta_string_view){"go", 2};
-    CHECK_EQUAL(ta_host_send(host, p, &event), TA_OK);
+    event.session = p;
+    CHECK_EQUAL(ta_host_send(host, &event), TA_OK);
     for (int i = 0; i < 20 && ta_host_run(host, 100000).status != TA_RUN_IDLE; i++)
         ta_host_effects_ack(host);
     ta_host_stats host_stats;
@@ -638,12 +657,17 @@ static void test_fixed_arena(void) {
     ta_actor_info info;
     info.size = sizeof info;
     uint32_t segment, actor;
-    CHECK_EQUAL(ta_host_locate(host, p, &segment, &actor), TA_OK);
+    ta_host_location location;
+    CHECK_EQUAL(ta_host_locate(host, p, &location), TA_OK);
+    segment = location.segment;
+    actor = location.actor;
     CHECK_EQUAL(ta_actor_info_get(ta_host_system(host, segment), actor, &info), TA_OK);
     /* a new version of p, and p moves to it in state b */
     CHECK_EQUAL(ta_host_add_image(host, &im.image[2], NULL), TA_OK);
     uint32_t job = 0;
-    CHECK_EQUAL(ta_host_migrate(host, (ta_string_view){"p", 1}, 0, 0, 0, &job), TA_OK);
+    CHECK_EQUAL(
+        ta_host_migrate(host, &(ta_host_migration){(ta_string_view){"p", 1}, 0, 0, 0, 0}, &job),
+        TA_OK);
     int moved = 0;
     for (int i = 0; i < 20; i++) {
         ta_run result = ta_host_run(host, 100000);
@@ -655,7 +679,9 @@ static void test_fixed_arena(void) {
         if (result.status == TA_RUN_IDLE) break;
     }
     CHECK_EQUAL(moved, 2); /* p and extra */
-    CHECK_EQUAL(ta_host_locate(host, p, &segment, NULL), TA_OK);
+
+    CHECK_EQUAL(ta_host_locate(host, p, &location), TA_OK);
+    segment = location.segment;
     CHECK_EQUAL(segment, 2);
     CHECK(a.used > 0 && a.used <= sizeof buffer);
     ta_host_free(host);
@@ -689,9 +715,7 @@ static void refused_delivery(ta_host *host, uint32_t peer, int i) {
     envelope.msgid = (ta_string_view){msgid, (uint32_t)strlen(msgid)};
     envelope.sendid = (ta_string_view){sendid, (uint32_t)strlen(sendid)};
     envelope.datamodel = TA_NIL;
-    uint32_t outcome = 0;
-    CHECK_EQUAL(ta_host_deliver(host, peer, &envelope, &outcome), TA_OK);
-    CHECK_EQUAL(outcome, TA_ROUTE_REFUSED);
+    CHECK_EQUAL(ta_host_deliver(host, peer, &envelope), TA_ROUTE_REFUSED);
 }
 
 /* What ta_host_effects returns stays valid until ta_host_effects_ack or the

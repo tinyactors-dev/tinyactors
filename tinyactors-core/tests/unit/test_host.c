@@ -105,14 +105,15 @@ static uint32_t run(host_world *e) {
 }
 
 static uint64_t spawn(host_world *e, const char *chart) {
-    uint32_t segment, c;
-    CHECK_EQUAL(
-        ta_host_chart(e->host, (ta_string_view){chart, (uint32_t)strlen(chart)}, &segment, &c),
-        TA_OK);
+    ta_host_chart_ref ref;
+    CHECK_EQUAL(ta_host_chart(e->host, (ta_string_view){chart, (uint32_t)strlen(chart)}, &ref),
+                TA_OK);
     uint64_t s = 0;
-    CHECK_EQUAL(
-        ta_host_spawn(e->host, segment, c, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}, &s),
-        TA_OK);
+    CHECK_EQUAL(ta_host_spawn(e->host,
+                              &(ta_spawn){ref.segment, ref.chart, (ta_string_view){0, 0}, 0,
+                                          (ta_string_view){0, 0}},
+                              &s),
+                TA_OK);
     return s;
 }
 
@@ -124,7 +125,8 @@ static ta_status send(host_world *e, uint64_t session, const char *name, const c
     event.data = json ? ta_datamodel_ecmascript_payload_eval(
                             e->ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)})
                       : 0;
-    ta_status status = ta_host_send(e->host, session, &event);
+    event.session = session;
+    ta_status status = ta_host_send(e->host, &event);
     if (status != TA_OK && event.data)
         ta_datamodel_ecmascript_vtable()->release(e->ecmascript, event.data);
     return status;
@@ -188,7 +190,8 @@ static void test_class_across_segments(void) {
     watch.sample = TA_TRACE_SAMPLE;
     watch.detail = TA_TRACE_FULL; /* a detail of its own: the first class after sampled */
     uint32_t id = 0;
-    CHECK_EQUAL(ta_host_trace_watch(e.host, &watch, 1, UINT64_MAX, &id), TA_OK);
+    CHECK_EQUAL(ta_host_trace_watch(e.host, &(ta_host_watch){&watch, 1, 0, UINT64_MAX}, &id),
+                TA_OK);
     watch.chart = (ta_string_view){"x", 1}; /* the host keeps its own copy */
     uint64_t w = spawn(&e, "w"), echo = spawn(&e, "echo");
     run(&e);
@@ -209,7 +212,7 @@ static void test_class_across_segments(void) {
     CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_SAMPLED);
     /* a watch with an end: a deadline of the run, then gone */
     watch.chart = (ta_string_view){"w", 1};
-    CHECK_EQUAL(ta_host_trace_watch(e.host, &watch, 1, 500, &id), TA_OK);
+    CHECK_EQUAL(ta_host_trace_watch(e.host, &(ta_host_watch){&watch, 1, 0, 500}, &id), TA_OK);
     ta_run result = ta_host_run(e.host, 1000);
     drain(&e);
     CHECK_EQUAL(result.next_deadline, 500u);
@@ -222,10 +225,13 @@ static void test_class_across_segments(void) {
     uint32_t ids[TA_HOST_TRACE_DETAILS];
     for (uint32_t i = 0; i < TA_HOST_TRACE_DETAILS; i++) {
         watch.detail = TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(i + 2);
-        CHECK_EQUAL(ta_host_trace_watch(e.host, &watch, 1, UINT64_MAX, &ids[i]), TA_OK);
+        CHECK_EQUAL(
+            ta_host_trace_watch(e.host, &(ta_host_watch){&watch, 1, 0, UINT64_MAX}, &ids[i]),
+            TA_OK);
     }
     watch.detail = TA_TRACE_BIT(TA_TRACE_FINISHED);
-    CHECK_EQUAL(ta_host_trace_watch(e.host, &watch, 1, UINT64_MAX, &id), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(ta_host_trace_watch(e.host, &(ta_host_watch){&watch, 1, 0, UINT64_MAX}, &id),
+                TA_ERROR_NO_MEMORY);
     world_close(&e);
 }
 
@@ -272,22 +278,22 @@ static void test_routing_between_segments(void) {
     CHECK_EQUAL(e.routed_out_count, 1);
 
     /* growth: more actors than the configured 8, spawned and messaged */
-    uint64_t sessions[40];
+
     ta_event_in events[40];
     for (int i = 0; i < 40; i++) {
-        sessions[i] = spawn(&e, "echo");
         memset(&events[i], 0, sizeof events[i]);
         events[i].size = sizeof events[i];
         events[i].name = (ta_string_view){"noop", 4};
+        events[i].session = spawn(&e, "echo");
     }
-    CHECK_EQUAL(ta_host_send_many(e.host, sessions, events, 40), 40);
+    CHECK_EQUAL(ta_host_send_many(e.host, events, 40), 40);
     run(&e);
     ta_host_stats_get(e.host, &stats);
     CHECK_EQUAL(stats.actors, 42);
     /* enumeration, in chunks */
     uint64_t cursor = 0, out[16];
     uint32_t total = 0, got;
-    while ((got = ta_host_actors(e.host, &cursor, out, 16)) != 0)
+    while ((got = ta_host_actors(e.host, &cursor, (ta_uint64_array){out, 16})) != 0)
         total += got;
     CHECK_EQUAL(total, 42);
     world_close(&e);
@@ -307,14 +313,16 @@ static void test_versions_and_migration(void) {
     CHECK_EQUAL(send(&e, w[4], "sleep", NULL), TA_OK);
     run(&e);
     uint32_t s2 = world_add(&e, W2); /* a new version of "w" */
-    uint32_t segment, chart;
-    CHECK_EQUAL(ta_host_chart(e.host, (ta_string_view){"w", 1}, &segment, &chart), TA_OK);
-    CHECK_EQUAL(segment, s2);
+    ta_host_chart_ref ref;
+    CHECK_EQUAL(ta_host_chart(e.host, (ta_string_view){"w", 1}, &ref), TA_OK);
+    CHECK_EQUAL(ref.segment, s2);
     uint64_t fresh = spawn(&e, "w"); /* new actors: the new version */
     CHECK_EQUAL(fresh >> 32, s2);
     e.log[0] = 0;
     uint32_t job;
-    CHECK_EQUAL(ta_host_migrate(e.host, (ta_string_view){0, 0}, 0, 0, 0, &job), TA_OK);
+    CHECK_EQUAL(
+        ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){0, 0}, 0, 0, 0, 0}, &job),
+        TA_OK);
     CHECK_EQUAL(ta_host_run(e.host, 100000).status, TA_RUN_YIELDED);
     drain(&e);
     CHECK_EQUAL(e.migrated_count, 3); /* one quantum per run */
@@ -323,7 +331,9 @@ static void test_versions_and_migration(void) {
     CHECK(e.last_job == job && e.last_done.migrated == 5 && e.last_done.pending == 0);
     CHECK(strstr(e.log, "upgraded:1;") && strstr(e.log, "upgraded in b;")); /* states by id */
     uint32_t at;
-    CHECK_EQUAL(ta_host_locate(e.host, w[0], &at, NULL), TA_OK);
+    ta_host_location location;
+    CHECK_EQUAL(ta_host_locate(e.host, w[0], &location), TA_OK);
+    at = location.segment;
     CHECK_EQUAL(at, s2);           /* same session id, another segment */
     CHECK_EQUAL(e.freed_count, 1); /* version 1: superseded and empty */
     ta_host_segment_info segment_info;
@@ -352,12 +362,20 @@ static void test_versions_and_migration(void) {
     CHECK_EQUAL(ta_host_chart_stats(e.host, charts, 1), 2u); /* room for one: still the count */
     /* a host snapshot keeps the retired totals */
     size_t hl = 0, dl = 0;
-    CHECK_EQUAL(ta_host_snapshot(e.host, NULL, 0, &hl), TA_OK);
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot(e.host, &written), TA_ERROR_NO_MEMORY);
+    hl = written.length;
     void *hs = malloc(hl);
-    CHECK_EQUAL(ta_host_snapshot(e.host, hs, hl, &hl), TA_OK);
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, NULL, 0, &dl), TA_OK);
+    written = (ta_buffer){hs, hl, 0};
+    CHECK_EQUAL(ta_host_snapshot(e.host, &written), TA_OK);
+    hl = written.length;
+    written = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, &written), TA_ERROR_NO_MEMORY);
+    dl = written.length;
     void *ds = malloc(dl);
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, ds, dl, &dl), TA_OK);
+    written = (ta_buffer){ds, dl, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, &written), TA_OK);
+    dl = written.length;
     ta_host_free(e.host);
     ta_datamodel_ecmascript_free(e.ecmascript);
     e.ecmascript = ta_datamodel_ecmascript_new(NULL);
@@ -370,8 +388,10 @@ static void test_versions_and_migration(void) {
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
     const ta_image *images[3] = {&e.image[0], &e.image[1], &e.image[2]};
-    CHECK_EQUAL(ta_host_restore(&config, images, 3, hs, hl, &e.host), TA_OK);
-    CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, ds, dl), TA_OK);
+    CHECK_EQUAL(
+        ta_host_restore(&config, &(ta_host_snapshot_input){{hs, hl}, images, 3, 0}, &e.host),
+        TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, (ta_bytes){ds, dl}), TA_OK);
     CHECK_EQUAL(ta_host_chart_stats(e.host, charts, 4), 2u);
     w_stats = NULL;
     for (int i = 0; i < 2; i++)
@@ -391,13 +411,17 @@ static void test_migration_wake_and_timeout(void) {
     uint64_t a = spawn(&e, "w"), b = spawn(&e, "w");
     run(&e);
     size_t length = 0;
-    CHECK_EQUAL(ta_host_hibernate(e.host, a, e.blob, sizeof e.blob, &length), TA_OK);
+    ta_buffer written = {e.blob, sizeof e.blob, 0};
+    CHECK_EQUAL(ta_host_hibernate(e.host, a, &written), TA_OK);
+    length = written.length;
     e.blob_length = length;
     world_add(&e, W2);
     /* without wake, with a timeout: b moves, a is left behind and reported */
     ta_host_advance_time(e.host, 1000);
     uint32_t job;
-    CHECK_EQUAL(ta_host_migrate(e.host, (ta_string_view){"w", 1}, 0, 0, 50, &job), TA_OK);
+    CHECK_EQUAL(
+        ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 50}, &job),
+        TA_OK);
     ta_run result = ta_host_run(e.host, 100000);
     CHECK(result.next_deadline <= 1050); /* idle, but due at the timeout */
     drain(&e);
@@ -408,25 +432,31 @@ static void test_migration_wake_and_timeout(void) {
     CHECK_EQUAL(e.last_job, job);
     CHECK(e.last_done.migrated == 1 && e.last_done.pending == 1);
     uint64_t left[4];
-    CHECK_EQUAL(ta_host_job_pending(e.host, job, left, 4), 1); /* until the next run */
+    CHECK_EQUAL(ta_host_job_pending(e.host, job, (ta_uint64_array){left, 4}),
+                1); /* until the next run */
     CHECK_EQUAL(left[0], a);
     CHECK_EQUAL(e.wake_count, 0);
     /* with wake: the host is asked for the blob, then a moves */
-    CHECK_EQUAL(ta_host_migrate(e.host, (ta_string_view){0, 0}, a, TA_HOST_MIGRATE_WAKE, 0, &job),
-                TA_OK);
+    CHECK_EQUAL(
+        ta_host_migrate(e.host,
+                        &(ta_host_migration){(ta_string_view){0, 0}, a, TA_HOST_MIGRATE_WAKE, 0, 0},
+                        &job),
+        TA_OK);
     run(&e);
     CHECK(e.wake_count == 1 && e.wake_session == a);
-    CHECK_EQUAL(ta_host_wake(e.host, a, e.blob, e.blob_length), TA_OK);
+    CHECK_EQUAL(ta_host_wake(e.host, a, (ta_bytes){e.blob, e.blob_length}), TA_OK);
     run(&e);
     CHECK(e.last_job == job && e.last_done.migrated == 1 && e.last_done.pending == 0);
     uint32_t at;
-    CHECK_EQUAL(ta_host_locate(e.host, a, &at, NULL), TA_OK);
+    ta_host_location location;
+    CHECK_EQUAL(ta_host_locate(e.host, a, &location), TA_OK);
+    at = location.segment;
     CHECK_EQUAL(at, 1u);
     (void)b;
     /* the sweep reports actors that did not run since the previous sweep */
     uint64_t cold[8];
-    ta_host_sweep(e.host, 1000, cold, 8);
-    uint32_t n = ta_host_sweep(e.host, 1000, cold, 8);
+    ta_host_sweep(e.host, 1000, (ta_uint64_array){cold, 8});
+    uint32_t n = ta_host_sweep(e.host, 1000, (ta_uint64_array){cold, 8});
     CHECK(n >= 1);
     world_close(&e);
 }
@@ -451,17 +481,22 @@ static void test_migration_waits_for_invocations(void) {
     world_add(&e, P1);
     uint64_t p = spawn(&e, "p");
     run(&e);
-    uint32_t segment, actor;
-    CHECK_EQUAL(ta_host_locate(e.host, p, &segment, &actor), TA_OK);
+    uint32_t actor;
+    ta_host_location location;
+    CHECK_EQUAL(ta_host_locate(e.host, p, &location), TA_OK);
+    actor = location.actor;
     world_add(&e, P2);
     uint32_t job;
-    CHECK_EQUAL(ta_host_migrate(e.host, (ta_string_view){"p", 1}, 0, 0, 0, &job), TA_OK);
+    CHECK_EQUAL(
+        ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"p", 1}, 0, 0, 0, 0}, &job),
+        TA_OK);
     for (int i = 0; i < 5; i++)
         run(&e);
     CHECK_EQUAL(e.migrated_count, 0); /* waiting: its kid runs */
     CHECK_EQUAL(e.last_job, 0u);
     uint32_t again;
-    CHECK_EQUAL(ta_host_locate(e.host, p, NULL, &again), TA_OK);
+    CHECK_EQUAL(ta_host_locate(e.host, p, &location), TA_OK);
+    again = location.actor;
     CHECK_EQUAL(again, actor); /* left alone meanwhile: not exported and re-adopted */
     e.log[0] = 0;
     CHECK_EQUAL(send(&e, p, "finish", NULL), TA_OK);
@@ -557,7 +592,8 @@ static void test_sync_io_processor(void) {
             event.size = sizeof event;
             event.flags = TA_EVENT_IN_ERROR_COMMUNICATION;
             event.sendid = (ta_string_view){"s1", 2};
-            CHECK_EQUAL(ta_host_send(e.host, session, &event), TA_OK);
+            event.session = session;
+            CHECK_EQUAL(ta_host_send(e.host, &event), TA_OK);
         } else {
             CHECK_EQUAL(send(&e, session, "back", NULL), TA_OK);
         }
@@ -598,14 +634,22 @@ static void test_snapshot_restore(void) {
     CHECK_EQUAL(send(&e, c, "add", peer), TA_OK); /* not run before the snapshot */
     ta_host_advance_time(e.host, 50);
     size_t hl = 0, dl = 0;
-    CHECK_EQUAL(ta_host_snapshot(e.host, NULL, 0, &hl), TA_OK);
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot(e.host, &written), TA_ERROR_NO_MEMORY);
+    hl = written.length;
     void *hs = malloc(hl);
-    CHECK_EQUAL(ta_host_snapshot(e.host, hs, hl, &hl), TA_OK);
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, NULL, 0, &dl), TA_OK);
+    written = (ta_buffer){hs, hl, 0};
+    CHECK_EQUAL(ta_host_snapshot(e.host, &written), TA_OK);
+    hl = written.length;
+    written = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, &written), TA_ERROR_NO_MEMORY);
+    dl = written.length;
     void *ds = malloc(dl);
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, ds, dl, &dl), TA_OK);
+    written = (ta_buffer){ds, dl, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, &written), TA_OK);
+    dl = written.length;
     uint64_t hashes[4];
-    CHECK_EQUAL(ta_host_snapshot_segments(hs, hl, hashes, 4), 2u);
+    CHECK_EQUAL(ta_host_snapshot_segments((ta_bytes){hs, hl}, (ta_uint64_array){hashes, 4}), 2u);
     CHECK(hashes[0] != 0 && hashes[1] != 0);
     /* "restart": everything goes; the images are loaded again */
     ta_host_free(e.host);
@@ -620,14 +664,18 @@ static void test_snapshot_restore(void) {
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
     const ta_image *images[2] = {&e.image[0], &e.image[1]};
-    CHECK_EQUAL(ta_host_restore(&config, images, 1, hs, hl, &e.host),
-                TA_ERROR_INVALID); /* too few */
+    CHECK_EQUAL(
+        ta_host_restore(&config, &(ta_host_snapshot_input){{hs, hl}, images, 1, 0}, &e.host),
+        TA_ERROR_INVALID); /* too few */
     const ta_image *swapped[2] = {&e.image[1], &e.image[0]};
-    CHECK_EQUAL(ta_host_restore(&config, swapped, 2, hs, hl, &e.host),
-                TA_ERROR_INVALID); /* wrong ones */
-    CHECK_EQUAL(ta_host_restore(&config, images, 2, hs, hl, &e.host), TA_OK);
-    CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, ds, dl), TA_OK);
-    CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, ds, dl),
+    CHECK_EQUAL(
+        ta_host_restore(&config, &(ta_host_snapshot_input){{hs, hl}, swapped, 2, 0}, &e.host),
+        TA_ERROR_INVALID); /* wrong ones */
+    CHECK_EQUAL(
+        ta_host_restore(&config, &(ta_host_snapshot_input){{hs, hl}, images, 2, 0}, &e.host),
+        TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, (ta_bytes){ds, dl}), TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, (ta_bytes){ds, dl}),
                 TA_ERROR_STATE); /* not fresh any more */
     e.log[0] = 0;
     run(&e); /* the queued event, with its payload */
@@ -672,22 +720,30 @@ static void test_export_adopt_between_hosts(void) {
     ta_host_advance_time(a.host, 30);
     run(&a);
     size_t length = 0;
-    CHECK_EQUAL(ta_host_export_actor(a.host, s, NULL, 0, &length), TA_ERROR_NO_MEMORY);
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_export_actor(a.host, s, &written), TA_ERROR_NO_MEMORY);
+    length = written.length;
     size_t capacity = 2 * length + 4096;
     unsigned char *blob = (unsigned char *)malloc(capacity);
-    CHECK_EQUAL(ta_host_export_actor(a.host, s, blob, capacity, &length), TA_OK);
-    CHECK_EQUAL(ta_host_locate(a.host, s, NULL, NULL), TA_ERROR_STALE); /* it left */
-    CHECK_EQUAL(ta_host_adopt(b.host, 0, blob, 7, NULL), TA_ERROR_INVALID);
-    CHECK_EQUAL(ta_blob_rebase(blob, 9, 0, 0), TA_ERROR_INVALID);
-    CHECK_EQUAL(ta_blob_rebase(blob, length, 30, 1000), TA_OK); /* 70 ms left, on b's clock */
+    written = (ta_buffer){blob, capacity, 0};
+    CHECK_EQUAL(ta_host_export_actor(a.host, s, &written), TA_OK);
+    length = written.length;
+    CHECK_EQUAL(ta_host_locate(a.host, s, &(ta_host_location){0, 0}), TA_ERROR_STALE); /* it left */
+    CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){0, 0, {blob, 7}}, NULL),
+                TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_blob_rebase((ta_memory){blob, 9}, 0, 0), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_blob_rebase((ta_memory){blob, length}, 30, 1000),
+                TA_OK); /* 70 ms left, on b's clock */
     ta_host_advance_time(b.host, 1000);
     uint64_t got = 0;
-    CHECK_EQUAL(ta_host_adopt(b.host, 0, blob, length, &got), TA_OK);
+    CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){0, 0, {blob, length}}, &got), TA_OK);
     CHECK_EQUAL(got, s);
-    CHECK_EQUAL(ta_host_adopt(b.host, 0, blob, length, &got),
+    CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){0, 0, {blob, length}}, &got),
                 TA_ERROR_STATE); /* it is here already */
     uint32_t segment = 9;
-    CHECK_EQUAL(ta_host_locate(b.host, s, &segment, NULL), TA_OK);
+    ta_host_location location;
+    CHECK_EQUAL(ta_host_locate(b.host, s, &location), TA_OK);
+    segment = location.segment;
     CHECK_EQUAL(segment, 0);
     ta_host_advance_time(b.host, 1069);
     run(&b);
@@ -703,9 +759,12 @@ static void test_export_adopt_between_hosts(void) {
     uint64_t fresh = spawn(&b, "echo");
     CHECK(fresh > s && (fresh >> 32) == 1);
     /* back to a, into its home segment, from a blob that is overdue there */
-    CHECK_EQUAL(ta_host_export_actor(b.host, s, blob, capacity, &length), TA_OK);
-    CHECK_EQUAL(ta_host_adopt(a.host, 1, blob, length, &got), TA_OK);
-    CHECK_EQUAL(ta_host_locate(a.host, s, &segment, NULL), TA_OK);
+    written = (ta_buffer){blob, capacity, 0};
+    CHECK_EQUAL(ta_host_export_actor(b.host, s, &written), TA_OK);
+    length = written.length;
+    CHECK_EQUAL(ta_host_adopt(a.host, &(ta_host_adoption){1, 0, {blob, length}}, &got), TA_OK);
+    CHECK_EQUAL(ta_host_locate(a.host, s, &location), TA_OK);
+    segment = location.segment;
     CHECK_EQUAL(segment, 1);
     a.log[0] = 0;
     CHECK_EQUAL(send(&a, s, "ping", NULL), TA_OK);
@@ -728,36 +787,43 @@ static void test_adopt_tree_collision(void) {
     uint64_t root = spawn(&a, "p");
     run(&a);
     uint64_t ids[4], cursor = 0;
-    CHECK_EQUAL(ta_host_actors(a.host, &cursor, ids, 4), 2u);
+    CHECK_EQUAL(ta_host_actors(a.host, &cursor, (ta_uint64_array){ids, 4}), 2u);
     uint64_t kid = ids[0] == root ? ids[1] : ids[0];
     CHECK_EQUAL(root, 1u);
     CHECK_EQUAL(kid, 2u);
     size_t capacity = 65536, length = 0;
     unsigned char *blob = (unsigned char *)malloc(capacity),
                   *temporary = (unsigned char *)malloc(capacity);
-    CHECK_EQUAL(ta_host_export_actor(a.host, root, blob, capacity, &length), TA_OK);
+    ta_buffer written = {blob, capacity, 0};
+    CHECK_EQUAL(ta_host_export_actor(a.host, root, &written), TA_OK);
+    length = written.length;
     /* b: session 2 lives in segment 0, session 1 does not */
     CHECK_EQUAL(spawn(&b, "echo"), 1u);
     CHECK_EQUAL(spawn(&b, "echo"), 2u);
     run(&b);
-    size_t n = 0;
-    CHECK_EQUAL(ta_host_export_actor(b.host, 1, temporary, capacity, &n), TA_OK);
+    written = (ta_buffer){temporary, capacity, 0};
+    CHECK_EQUAL(ta_host_export_actor(b.host, 1, &written), TA_OK);
     uint64_t got = 9;
-    CHECK_EQUAL(ta_host_adopt(b.host, 1, blob, length, &got), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){1, 0, {blob, length}}, &got),
+                TA_ERROR_STATE);
     CHECK_EQUAL(got, 0u);
     uint32_t segment = 9;
-    CHECK_EQUAL(ta_host_locate(b.host, kid, &segment, NULL), TA_OK);
+    ta_host_location location;
+    CHECK_EQUAL(ta_host_locate(b.host, kid, &location), TA_OK);
+    segment = location.segment;
     CHECK_EQUAL(segment, 0); /* still the echo */
-    CHECK_EQUAL(ta_host_locate(b.host, root, NULL, NULL), TA_ERROR_STALE);
+    CHECK_EQUAL(ta_host_locate(b.host, root, &(ta_host_location){0, 0}), TA_ERROR_STALE);
     ta_host_stats stats;
     stats.size = sizeof stats;
     ta_host_stats_get(b.host, &stats);
     CHECK_EQUAL(stats.actors, 1u);
     /* once session 2 has left b, the tree moves in */
-    CHECK_EQUAL(ta_host_export_actor(b.host, kid, temporary, capacity, &n), TA_OK);
-    CHECK_EQUAL(ta_host_adopt(b.host, 1, blob, length, &got), TA_OK);
+    written = (ta_buffer){temporary, capacity, 0};
+    CHECK_EQUAL(ta_host_export_actor(b.host, kid, &written), TA_OK);
+    CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){1, 0, {blob, length}}, &got), TA_OK);
     CHECK_EQUAL(got, root);
-    CHECK_EQUAL(ta_host_locate(b.host, kid, &segment, NULL), TA_OK);
+    CHECK_EQUAL(ta_host_locate(b.host, kid, &location), TA_OK);
+    segment = location.segment;
     CHECK_EQUAL(segment, 1);
     free(blob);
     free(temporary);
@@ -780,20 +846,31 @@ static void test_state_value(void) {
     uint64_t session = spawn(&e, "v");
     run(&e);
     char value[256];
-    size_t n = ta_host_state_value(e.host, session, value, sizeof value);
+    ta_buffer out = {value, sizeof value - 1, 0}; /* room for a terminator */
+    CHECK_EQUAL(ta_host_state_value(e.host, session, &out), TA_OK);
+    value[out.length] = 0;
+    size_t n = out.length;
     CHECK(strcmp(value, "{\"top\":{\"p\":{\"r1\":\"x\",\"r2\":{},\"r3\":{\"k\":\"k1\"}}}}") == 0);
     CHECK_EQUAL(n, strlen(value));
-    CHECK_EQUAL(ta_host_state_value(e.host, session, value, 4), n); /* measured, cut short */
-    CHECK_EQUAL(ta_host_state_value(e.host, session, NULL, 0), n);
+    out = (ta_buffer){value, 4, 0};
+    CHECK_EQUAL(ta_host_state_value(e.host, session, &out), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(out.length, n); /* measured, cut short */
+    out = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_host_state_value(e.host, session, &out), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(out.length, n);
     CHECK_EQUAL(send(&e, session, "go", NULL), TA_OK);
     run(&e);
-    ta_host_state_value(e.host, session, value, sizeof value);
+    out = (ta_buffer){value, sizeof value - 1, 0};
+    CHECK_EQUAL(ta_host_state_value(e.host, session, &out), TA_OK);
+    value[out.length] = 0;
     CHECK(strcmp(value, "{\"top\":{\"p\":{\"r1\":\"y\",\"r2\":{},\"r3\":{\"k\":\"k1\"}}}}") == 0);
     CHECK_EQUAL(send(&e, session, "flat", NULL), TA_OK);
     run(&e);
-    ta_host_state_value(e.host, session, value, sizeof value);
+    out = (ta_buffer){value, sizeof value - 1, 0};
+    CHECK_EQUAL(ta_host_state_value(e.host, session, &out), TA_OK);
+    value[out.length] = 0;
     CHECK(strcmp(value, "\"flat\"") == 0);
-    CHECK_EQUAL(ta_host_state_value(e.host, session + 1000, value, sizeof value), 0u);
+    CHECK_EQUAL(ta_host_state_value(e.host, session + 1000, &out), TA_ERROR_INVALID);
     world_close(&e);
 }
 
@@ -807,33 +884,42 @@ static void test_snapshot_pack(void) {
     run(&e);
     size_t length = 0;
     ta_string_view label = {"label", 5};
-    CHECK_EQUAL(ta_host_snapshot_pack(e.host, label, "state", 5, NULL, 0, &length),
+    ta_buffer packed = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot_pack(e.host, &(ta_datamodel_state){label, {"state", 5}}, &packed),
                 TA_ERROR_NO_MEMORY);
+    length = packed.length;
     uint64_t *pack = calloc(length / 8 + 1, 8);
-    CHECK_EQUAL(ta_host_snapshot_pack(e.host, label, "state", 5, pack, length, &length), TA_OK);
+    packed = (ta_buffer){pack, length, 0};
+    CHECK_EQUAL(ta_host_snapshot_pack(e.host, &(ta_datamodel_state){label, {"state", 5}}, &packed),
+                TA_OK);
+    length = packed.length;
     ta_host_snapshot_contents contents;
     contents.size = sizeof contents;
-    CHECK_EQUAL(ta_host_snapshot_unpack(pack, length, &contents), TA_OK);
+    CHECK_EQUAL(ta_host_snapshot_unpack((ta_bytes){pack, length}, &contents), TA_OK);
     CHECK(contents.system_id.length == 1 && contents.system_id.pointer[0] == 'h');
     CHECK(contents.datamodel.length == 5 && !memcmp(contents.datamodel.pointer, "label", 5));
     CHECK(contents.state_length == 5 && !memcmp(contents.state, "state", 5));
     CHECK_EQUAL(contents.image_count, 1u);
     CHECK_EQUAL(((uintptr_t)contents.host & 7u), 0u);
-    size_t image_length = 0, original = 0;
-    const void *image = ta_host_snapshot_image(pack, length, 0, &image_length);
+    size_t original = 0;
+    ta_bytes image = ta_host_snapshot_image((ta_bytes){pack, length}, 0);
     const void *bytes = ta_image_bytes(&e.image[0], &original);
-    CHECK(image && image_length == original && !memcmp(image, bytes, original));
-    size_t none = 9;
-    CHECK(ta_host_snapshot_image(pack, length, 1, &none) == NULL && none == 0);
-    CHECK_EQUAL(ta_host_snapshot_unpack(pack, length - 8, &contents), TA_ERROR_INVALID);
-    CHECK_EQUAL(ta_host_snapshot_unpack(contents.host, contents.host_length, &contents),
+    CHECK(image.pointer && image.length == original && !memcmp(image.pointer, bytes, original));
+    ta_bytes none = ta_host_snapshot_image((ta_bytes){pack, length}, 1);
+    CHECK(none.pointer == NULL && none.length == 0);
+    CHECK_EQUAL(ta_host_snapshot_unpack((ta_bytes){pack, length - 8}, &contents), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_host_snapshot_unpack((ta_bytes){contents.host, contents.host_length}, &contents),
                 TA_ERROR_INVALID);
-    ta_host_snapshot_unpack(pack, length, &contents);
+    ta_host_snapshot_unpack((ta_bytes){pack, length}, &contents);
     /* restored from its parts: the datamodel's own snapshot is the caller's */
     size_t dl = 0;
-    ta_datamodel_ecmascript_snapshot(e.ecmascript, NULL, 0, &dl);
+    ta_buffer written = {NULL, 0, 0};
+    ta_datamodel_ecmascript_snapshot(e.ecmascript, &written);
+    dl = written.length;
     void *state = malloc(dl);
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, state, dl, &dl), TA_OK);
+    written = (ta_buffer){state, dl, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, &written), TA_OK);
+    dl = written.length;
     host_world f;
     memset(&f, 0, sizeof f);
     f.ecmascript = ta_datamodel_ecmascript_new(NULL);
@@ -848,12 +934,15 @@ static void test_snapshot_pack(void) {
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
     ta_image opened;
-    CHECK_EQUAL(ta_image_open(image, image_length, &opened), TA_OK);
+    CHECK_EQUAL(ta_image_open(image.pointer, image.length, &opened), TA_OK);
     const ta_image *images[1] = {&opened};
-    CHECK_EQUAL(ta_host_restore(&config, images, 1, contents.host, contents.host_length, &f.host),
+    CHECK_EQUAL(ta_host_restore(
+                    &config,
+                    &(ta_host_snapshot_input){{contents.host, contents.host_length}, images, 1, 0},
+                    &f.host),
                 TA_OK);
-    CHECK_EQUAL(ta_datamodel_ecmascript_restore(f.ecmascript, state, dl), TA_OK);
-    CHECK_EQUAL(ta_host_locate(f.host, session, NULL, NULL), TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(f.ecmascript, (ta_bytes){state, dl}), TA_OK);
+    CHECK_EQUAL(ta_host_locate(f.host, session, &(ta_host_location){0, 0}), TA_OK);
     ta_host_free(f.host);
     ta_datamodel_ecmascript_free(f.ecmascript);
     free(state);

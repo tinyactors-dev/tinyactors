@@ -119,9 +119,10 @@ static void http_send(ta_datamodel_ecmascript *ecmascript, const ta_effect *effe
         snprintf(text, sizeof text, "%.*s", (int)(l - 2), json + 1);
         body = (ta_string_view){text, (uint32_t)strlen(text)};
     }
-    pd->message_length = ta_http_encode_post(effect->target, effect->event, fields, nf, body,
-                                             pd->message, sizeof pd->message);
-    if (!pd->message_length) pd->error = 1;
+    ta_http_post post = {effect->target, effect->event, fields, nf, 0, body};
+    ta_buffer out = {pd->message, sizeof pd->message, 0};
+    if (ta_http_encode_post(&post, &out) != TA_OK) pd->error = 1;
+    pd->message_length = out.length;
 }
 
 static void http_deliver(ta_system *system, ta_datamodel_ecmascript *ecmascript,
@@ -138,8 +139,8 @@ static void http_deliver(ta_system *system, ta_datamodel_ecmascript *ecmascript,
     }
     char scratch[8192];
     ta_http_request request;
-    if (ta_http_parse_request(pd->message, pd->message_length, scratch, sizeof scratch, &request) !=
-        0)
+    if (ta_http_parse_request((ta_bytes){pd->message, pd->message_length},
+                              &(ta_buffer){scratch, sizeof scratch, 0}, &request) != TA_OK)
         return;
     char json[8192];
     size_t n = 0;
@@ -206,7 +207,7 @@ static test_outcome run_one(const char *dir, const char *start, const char *deps
     options.resolve = ta_runtime_resolve;
     options.resolve_context = files;
     ta_compile_result *result;
-    ta_status cst = ta_compile_charts(&options, source, n, &result);
+    ta_status cst = ta_compile_charts(&options, (ta_source_list){source, n}, &result);
     for (uint32_t i = 0; i < n; i++)
         ta_runtime_free_file(texts[i], 0);
     ta_runtime_files_free(files);
@@ -252,7 +253,8 @@ static test_outcome run_one(const char *dir, const char *start, const char *deps
     static pending pend[16];
     ta_system *system;
     test_outcome res = R_TIMEOUT;
-    if (ta_runtime_system_new(&image, &config, &binding, 1, &system) != TA_OK) {
+    if (ta_runtime_system_new(&(ta_system_setup){{0, 0}, &image, &config, &binding, 1, 0},
+                              &system) != TA_OK) {
         if (datamodel) datamodel_test_free(datamodel);
         if (ecmascript) ta_datamodel_ecmascript_free(ecmascript);
         free(copy);

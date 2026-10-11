@@ -63,7 +63,7 @@ static void test_state_info(void) {
     ta_image image;
     CHECK_EQUAL(ta_image_open(b, length, &image), TA_OK);
     ta_state_info state_info;
-    CHECK_EQUAL(ta_image_state_info(&image, 0, 0, &state_info), TA_OK);
+    CHECK_EQUAL(ta_image_state_info(&image, (ta_chart_item){0, 0}, &state_info), TA_OK);
     CHECK(state_info.size == sizeof state_info && state_info.parent == TA_NIL &&
           state_info.depth == 0);
     uint32_t p = ta_image_state_by_name(&image, 0, (ta_string_view){"p", 1});
@@ -71,21 +71,22 @@ static void test_state_info(void) {
     uint32_t x = ta_image_state_by_name(&image, 0, (ta_string_view){"x", 1});
     uint32_t h = ta_image_state_by_name(&image, 0, (ta_string_view){"h", 1});
     uint32_t f = ta_image_state_by_name(&image, 0, (ta_string_view){"f", 1});
-    CHECK_EQUAL(ta_image_state_info(&image, 0, p, &state_info), TA_OK);
+    CHECK_EQUAL(ta_image_state_info(&image, (ta_chart_item){0, p}, &state_info), TA_OK);
     CHECK(state_info.parent == 0 && state_info.kind == TA_STATE_PARALLEL && state_info.depth == 1);
     CHECK(state_info.id.length == 1 && state_info.id.pointer[0] == 'p');
-    CHECK_EQUAL(ta_image_state_info(&image, 0, r1, &state_info), TA_OK);
+    CHECK_EQUAL(ta_image_state_info(&image, (ta_chart_item){0, r1}, &state_info), TA_OK);
     CHECK(state_info.parent == p && state_info.kind == TA_STATE_COMPOUND && state_info.depth == 2 &&
           r1 > p);
-    CHECK_EQUAL(ta_image_state_info(&image, 0, x, &state_info), TA_OK);
+    CHECK_EQUAL(ta_image_state_info(&image, (ta_chart_item){0, x}, &state_info), TA_OK);
     CHECK(state_info.parent == r1 && state_info.kind == TA_STATE_ATOMIC && state_info.depth == 3);
-    CHECK_EQUAL(ta_image_state_info(&image, 0, h, &state_info), TA_OK);
+    CHECK_EQUAL(ta_image_state_info(&image, (ta_chart_item){0, h}, &state_info), TA_OK);
     CHECK(state_info.parent == r1 && state_info.kind == TA_STATE_HISTORY_DEEP);
-    CHECK_EQUAL(ta_image_state_info(&image, 0, f, &state_info), TA_OK);
+    CHECK_EQUAL(ta_image_state_info(&image, (ta_chart_item){0, f}, &state_info), TA_OK);
     CHECK(state_info.parent == 0 && state_info.kind == TA_STATE_FINAL);
-    CHECK_EQUAL(ta_image_state_info(&image, 0, ta_image_state_count(&image, 0), &state_info),
+    CHECK_EQUAL(ta_image_state_info(&image, (ta_chart_item){0, ta_image_state_count(&image, 0)},
+                                    &state_info),
                 TA_ERROR_INVALID);
-    CHECK_EQUAL(ta_image_state_info(&image, 1, 0, &state_info), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_image_state_info(&image, (ta_chart_item){1, 0}, &state_info), TA_ERROR_INVALID);
     free(b);
 }
 

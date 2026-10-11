@@ -103,47 +103,54 @@ ta_status ta_address_parse(ta_string_view t, ta_address *out) {
     return status;
 }
 
-static uint32_t put(char *buffer, uint32_t capacity, uint32_t at, const char *s, uint32_t n) {
-    if (at > capacity || n > capacity - at) return UINT32_MAX;
+/* Append n bytes at `at` while they fit, and count them either way, so a
+ * call that runs out of room still learns the length it needs. */
+static size_t put(ta_buffer *out, size_t at, const char *s, uint32_t n) {
+    char *bytes = (char *)out->pointer;
     for (uint32_t i = 0; i < n; i++)
-        buffer[at + i] = s[i];
+        if (at + i < out->capacity) bytes[at + i] = s[i];
     return at + n;
 }
 
-uint32_t ta_address_format(ta_string_view system, uint64_t session, char *buffer,
-                           uint32_t capacity) {
-    if (!session || !ta_address_system_valid(system)) return 0;
-    char digits[TA_FORMAT_U64_MAX];
-    uint32_t nd = ta_format_u64(digits, session);
-    uint32_t at = put(buffer, capacity, 0, TA_ADDRESS_SCHEME, 13);
-    if (at != UINT32_MAX) at = put(buffer, capacity, at, system.pointer, system.length);
-    if (at != UINT32_MAX) at = put(buffer, capacity, at, "/#_scxml_", 9);
-    if (at != UINT32_MAX) at = put(buffer, capacity, at, digits, nd);
-    return at == UINT32_MAX ? 0 : at;
+static ta_status finish(ta_buffer *out, size_t at) {
+    out->length = at;
+    return at <= out->capacity ? TA_OK : TA_ERROR_NO_MEMORY;
 }
 
-uint32_t ta_address_format_name(ta_string_view system, ta_string_view name, char *buffer,
-                                uint32_t capacity) {
-    if (!ta_address_system_valid(system) || !name.pointer || !name.length) return 0;
+ta_status ta_address_format(ta_string_view system, uint64_t session, ta_buffer *out) {
+    out->length = 0;
+    if (!session || !ta_address_system_valid(system)) return TA_ERROR_INVALID;
+    char digits[TA_FORMAT_U64_MAX];
+    uint32_t nd = ta_format_u64(digits, session);
+    size_t at = put(out, 0, TA_ADDRESS_SCHEME, 13);
+    at = put(out, at, system.pointer, system.length);
+    at = put(out, at, "/#_scxml_", 9);
+    at = put(out, at, digits, nd);
+    return finish(out, at);
+}
+
+ta_status ta_address_format_name(ta_string_view system, ta_string_view name, ta_buffer *out) {
+    out->length = 0;
+    if (!ta_address_system_valid(system) || !name.pointer || !name.length) return TA_ERROR_INVALID;
     static const char hexd[] = "0123456789ABCDEF";
-    uint32_t at = put(buffer, capacity, 0, TA_ADDRESS_SCHEME, 13);
-    if (at != UINT32_MAX) at = put(buffer, capacity, at, system.pointer, system.length);
-    if (at != UINT32_MAX) at = put(buffer, capacity, at, "/@", 2);
-    for (uint32_t i = 0; i < name.length && at != UINT32_MAX; i++) {
+    size_t at = put(out, 0, TA_ADDRESS_SCHEME, 13);
+    at = put(out, at, system.pointer, system.length);
+    at = put(out, at, "/@", 2);
+    for (uint32_t i = 0; i < name.length; i++) {
         char c = name.pointer[i];
         if (is_unreserved(c)) {
-            at = put(buffer, capacity, at, &c, 1);
+            at = put(out, at, &c, 1);
         } else {
             unsigned char u = (unsigned char)c;
             char e[3] = {'%', hexd[u >> 4], hexd[u & 15]};
-            at = put(buffer, capacity, at, e, 3);
+            at = put(out, at, e, 3);
         }
     }
-    return at == UINT32_MAX ? 0 : at;
+    return finish(out, at);
 }
 
-uint32_t ta_address_name_decode(ta_string_view name, char *buffer, uint32_t capacity) {
-    uint32_t at = 0;
+ta_status ta_address_name_decode(ta_string_view name, ta_buffer *out) {
+    size_t at = 0;
     for (uint32_t i = 0; i < name.length; i++) {
         char c = name.pointer[i];
         if (c == '%' && name.length - i >= 3 && is_hex(name.pointer[i + 1]) &&
@@ -151,8 +158,7 @@ uint32_t ta_address_name_decode(ta_string_view name, char *buffer, uint32_t capa
             c = (char)(hex_value(name.pointer[i + 1]) * 16 + hex_value(name.pointer[i + 2]));
             i += 2;
         }
-        if (at >= capacity) return 0;
-        buffer[at++] = c;
+        at = put(out, at, &c, 1);
     }
-    return at;
+    return finish(out, at);
 }

@@ -55,7 +55,11 @@ const pages = [];
 for (let round = 0; round < 500; round++) {
   const system = view('wasm');
   const buffer = alloc(constants.TA_ADDRESS_SESSION_MAX, 1);
-  const length = x.ta_address_format(system, BigInt(round + 1), buffer, constants.TA_ADDRESS_SESSION_MAX);
+  const out = alloc(layout('ta_buffer').size);
+  setU32(out + offset('ta_buffer', 'pointer'), buffer);
+  setU32(out + offset('ta_buffer', 'capacity'), constants.TA_ADDRESS_SESSION_MAX);
+  assert.equal(x.ta_address_format(system, BigInt(round + 1), out), 0);
+  const length = u32(out + offset('ta_buffer', 'length'));
   assert.ok(length > 0);
   const text = alloc(layout('ta_string_view').size);
   setU32(text + offset('ta_string_view', 'pointer'), buffer);
@@ -67,7 +71,7 @@ for (let round = 0; round < 500; round++) {
     assert.equal(decoder.decode(new Uint8Array(x.memory.buffer, buffer, length)), 'tinyactors://wasm/#_scxml_1');
   }
   for (const [pointer, size, align] of [[address, layout('ta_address').size, 8], [text, layout('ta_string_view').size, 8],
-    [buffer, constants.TA_ADDRESS_SESSION_MAX, 1]]) x.ta_wasm_free(pointer, size, align);
+    [buffer, constants.TA_ADDRESS_SESSION_MAX, 1], [out, layout('ta_buffer').size, 8]]) x.ta_wasm_free(pointer, size, align);
   x.ta_wasm_free(u32(system + offset('ta_string_view', 'pointer')), 4, 1);
   x.ta_wasm_free(system, layout('ta_string_view').size, 8);
   pages.push(x.memory.buffer.byteLength / 65536);
@@ -86,7 +90,10 @@ if (x.ta_compile_charts) {
   view('smoke.scxml', source + offset('ta_source', 'name'));
   view(chart, source + offset('ta_source', 'text'));
   const result = alloc(4, 4);
-  assert.equal(x.ta_compile_charts(options, source, 1, result), 0, 'the chart compiles');
+  const sources = alloc(layout('ta_source_list').size);
+    setU32(sources + offset('ta_source_list', 'pointer'), source);
+    setU32(sources + offset('ta_source_list', 'count'), 1);
+    assert.equal(x.ta_compile_charts(options, sources, result), 0, 'the chart compiles');
   const image = alloc(layout('ta_string_view').size);
   x.ta_compile_image(image, u32(result));
   const opened = alloc(layout('ta_image').size);
@@ -98,9 +105,15 @@ if (x.ta_compile_charts) {
   setU32(config + offset('ta_system_config', 'max_actors'), 1);
   setU32(config + offset('ta_system_config', 'max_events'), 4);
   const system = alloc(4, 4);
-  assert.equal(x.ta_runtime_system_new(opened, config, 0, 0, system), 0, 'the system starts');
+  const setup = alloc(layout('ta_system_setup').size);
+    setU32(setup + offset('ta_system_setup', 'image'), opened);
+    setU32(setup + offset('ta_system_setup', 'config'), config);
+    assert.equal(x.ta_runtime_system_new(setup, system), 0, 'the system starts');
   const actor = alloc(4, 4);
-  assert.equal(x.ta_system_spawn(u32(system), 0, view('smoke'), 0n, view(''), actor), 0, 'the actor spawns');
+  const spawn = alloc(layout('ta_spawn').size);
+    view('smoke', spawn + offset('ta_spawn', 'name'));
+    view('', spawn + offset('ta_spawn', 'traceparent'));
+    assert.equal(x.ta_system_spawn(u32(system), spawn, actor), 0, 'the actor spawns');
   const run = alloc(layout('ta_run').size);
   x.ta_runtime_run(run, system, 1000);
   const event = alloc(layout('ta_event_in').size);

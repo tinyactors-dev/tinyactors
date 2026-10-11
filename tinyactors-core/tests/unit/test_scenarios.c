@@ -15,7 +15,8 @@ static void s01_external_event(void) {
                        "<state id='on'/>"),
                     NULL, NULL));
     uint32_t a;
-    ta_system_spawn(t.system, 0, (ta_string_view){"lamp", 4}, 0, (ta_string_view){0, 0}, &a);
+    ta_system_spawn(t.system,
+                    &(ta_spawn){0, 0, (ta_string_view){"lamp", 4}, 0, (ta_string_view){0, 0}}, &a);
     tsys_run(&t, 1000, 5);
     CHECK_EQUAL(tsys_send(&t, a, "flip", NULL), TA_OK);
     CHECK_EQUAL(tsys_run(&t, 1000, 5), TA_RUN_IDLE);
@@ -122,7 +123,8 @@ static void s04_many_loopers(void) {
     for (int i = 0; i < 3; i++) {
         char nm[8];
         snprintf(nm, sizeof nm, "L%d", i);
-        ta_system_spawn(t.system, 0, (ta_string_view){nm, 2}, 0, (ta_string_view){0, 0}, &a[i]);
+        ta_system_spawn(
+            t.system, &(ta_spawn){0, 0, (ta_string_view){nm, 2}, 0, (ta_string_view){0, 0}}, &a[i]);
     }
     for (int i = 0; i < 30; i++) {
         ta_run result = ta_system_run(t.system, 3000);
@@ -158,8 +160,10 @@ static const char *PEER = SC(
     "</state>");
 
 static void peer_setup(test_system *t, uint32_t *a, uint32_t *b) {
-    ta_system_spawn(t->system, 0, (ta_string_view){"A", 1}, 0, (ta_string_view){0, 0}, a);
-    ta_system_spawn(t->system, 0, (ta_string_view){"B", 1}, 0, (ta_string_view){0, 0}, b);
+    ta_system_spawn(t->system,
+                    &(ta_spawn){0, 0, (ta_string_view){"A", 1}, 0, (ta_string_view){0, 0}}, a);
+    ta_system_spawn(t->system,
+                    &(ta_spawn){0, 0, (ta_string_view){"B", 1}, 0, (ta_string_view){0, 0}}, b);
     tsys_run(t, 10000, 5);
     ta_actor_info ib;
     ib.size = sizeof ib;
@@ -270,7 +274,8 @@ static void s08_async_request(void) {
     CHECK(strcmp(tsys_var(&t, a, "n"), "2") == 0);
     uint32_t job = ta_image_chart_by_name(&t.image, (ta_string_view){"job.scxml", 9});
     CHECK(job != TA_NIL);
-    CHECK_EQUAL(ta_system_resume(t.system, req, TA_OK, (ta_payload)job + 1), TA_OK);
+    CHECK_EQUAL(ta_system_resume(t.system, &(ta_resume){0, req, TA_OK, 0, (ta_payload)job + 1}),
+                TA_OK);
     tsys_run(&t, 100000, 5);
     CHECK(strcmp(tsys_config(&t, a), "b") == 0);
     CHECK(strcmp(tsys_var(&t, a, "res"), "ok") == 0);
@@ -366,9 +371,11 @@ static void s12_hundred_thousand(void) {
     CHECK(tsys_create(&t, &config));
     static uint32_t h[100000];
     for (int i = 0; i < 100000; i++)
-        CHECK_EQUAL(ta_system_spawn(t.system, 0, (ta_string_view){"c", 1}, 0,
-                                    (ta_string_view){0, 0}, &h[i]),
-                    TA_OK);
+        CHECK_EQUAL(
+            ta_system_spawn(t.system,
+                            &(ta_spawn){0, 0, (ta_string_view){"c", 1}, 0, (ta_string_view){0, 0}},
+                            &h[i]),
+            TA_OK);
     CHECK_EQUAL(tsys_run(&t, 1u << 30, 10), TA_RUN_IDLE);
     for (int i = 0; i < 100000; i += 100)
         tsys_send(&t, h[i], "poke", NULL);
@@ -376,7 +383,7 @@ static void s12_hundred_thousand(void) {
     int busy = 0;
     for (int i = 0; i < 100000; i++) {
         uint32_t states[4];
-        ta_actor_config(t.system, h[i], states, 4);
+        ta_actor_config(t.system, h[i], (ta_uint32_array){states, 4});
         busy += states[0] == 2; /* state 'busy' */
     }
     CHECK_EQUAL(busy, 1000);

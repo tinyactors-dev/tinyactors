@@ -609,20 +609,17 @@ ta_status ta_image_open(const void *bytes, size_t length, ta_image *out);
 uint32_t  ta_image_chart_by_name(const ta_image *, ta_string_view name);
 /* system lifetime: one caller-owned block */
 ta_status ta_system_layout(const ta_image *, const ta_system_config *, size_t *bytes);
-ta_status ta_system_init(void *memory, size_t length, const ta_image *, const ta_system_config *,
-                         const ta_datamodel_binding *datamodels, uint32_t datamodel_count, ta_system **out);
-ta_status ta_system_relocate(ta_system *, void *new_memory, size_t new_length,
-                             const ta_system_config *new_config, ta_system **out);
+ta_status ta_system_init(const ta_system_setup *, ta_system **out); /* block, image, config, datamodels */
+ta_status ta_system_relocate(ta_system **, ta_memory new_memory, const ta_system_config *new_config);
 void      ta_system_deinit(ta_system *);       /* releases datamodel instances/payloads */
 /* actors */
 ta_status ta_system_boot(ta_system *);       /* spawn image-defined actors */
-ta_status ta_system_spawn(ta_system *, uint32_t chart, ta_string_view name, uint64_t params,
-                          ta_string_view traceparent, uint32_t *actor);
+ta_status ta_system_spawn(ta_system *, const ta_spawn *, uint32_t *actor); /* chart, name, params */
 ta_status ta_system_terminate(ta_system *, uint32_t actor);
 /* inbound */
 ta_status ta_system_send(ta_system *, const ta_event_in *event);
 uint32_t  ta_system_send_many(ta_system *, const ta_event_in *events, uint32_t n);
-ta_status ta_system_resume(ta_system *, uint32_t request, ta_status status, uint64_t payload);
+ta_status ta_system_resume(ta_system *, const ta_resume *); /* request, status, result */
 /* execution */
 ta_run    ta_system_run(ta_system *, uint32_t budget);      /* tagged outcome */
 void      ta_system_advance_time(ta_system *, uint64_t now);
@@ -639,12 +636,10 @@ ta_status ta_system_trace_set(ta_system *, const ta_trace_policy *policy); /* cl
 ta_status ta_system_chart_stats_get(const ta_system *, uint32_t chart, ta_chart_stats *out);
 /* inspection / snapshots */
 ta_status ta_actor_info(const ta_system *, uint32_t actor, ta_actor_info *out);
-uint32_t  ta_actor_config(const ta_system *, uint32_t actor, uint32_t *states, uint32_t capacity);
+uint32_t  ta_actor_config(const ta_system *, uint32_t actor, ta_uint32_array states);
 ta_string_view    ta_image_state_name(const ta_image *, uint32_t chart, uint32_t state);
-ta_status ta_system_snapshot(const ta_system *, void *buffer, size_t capacity, size_t *length);
-ta_status ta_system_restore(void *memory, size_t length, const ta_image *, const void *snap, size_t n,
-                            const ta_system_config *host, const ta_datamodel_binding *datamodels,
-                            uint32_t datamodel_count, ta_system **out);
+ta_status ta_system_snapshot(const ta_system *, ta_buffer *out);
+ta_status ta_system_restore(const ta_system_setup *, ta_bytes snapshot, ta_system **out);
 ```
 
 ### 11.3 Lifetime rules (the only ones)
@@ -827,7 +822,7 @@ from the sections above, this list is authoritative:
 | Forced termination | `ta_system_terminate` and parent cancellation take effect at the next **microstep** boundary (not only at stability), so a runaway eventless loop can be stopped. A cancelled child runs `exitInterpreter` (onexit) and produces no `done.invoke`. |
 | Cancelled invocations | Events of a still-running child are purged from the parent's mailbox when the invocation is cancelled; a child that already finished keeps its queued events (incl. `done.invoke`) deliverable (W3C test 236). |
 | `_event` view lifetime | Strings in `ta_event_view` are valid only during `bind_event`; `data` stays valid until the next bind. `origin` of SCXML sessions is formatted on demand (`#_scxml_<serial>`); internal events have no origin. |
-| Requests | `TA_EFFECT_REQUEST` is used for dynamic `<invoke srcexpr>` that names no chart in the image; answer with `ta_system_resume(token, TA_OK, chart_index + 1)`. The actor is **not** blocked meanwhile (invoke is asynchronous). `srcexpr` values `file:x.scxml` / `./x.scxml` resolve to linked charts named `x.scxml`. |
+| Requests | `TA_EFFECT_REQUEST` is used for dynamic `<invoke srcexpr>` that names no chart in the image; answer with `ta_system_resume` and `{.request = token, .status = TA_OK, .result = chart_index + 1}`. The actor is **not** blocked meanwhile (invoke is asynchronous). `srcexpr` values `file:x.scxml` / `./x.scxml` resolve to linked charts named `x.scxml`. |
 | Dynamic documents | Images are immutable, so `<invoke><content expr>` resolves the document *text* against SCXML documents that appear literally in the image (e.g. inside `<assign>`/`<data>`), which the compiler precompiles under their whitespace-normalized text; anything else becomes a host request. |
 | BasicHTTP / sync I/O | `ta_io_processor_descriptor.flags = TA_IO_PROCESSOR_SYNC` makes `run` return `TA_RUN_EFFECTS` right after a send to that processor, so the host can answer within the sender's macrostep (`ta_host_run` stops there too and reports `TA_RUN_EFFECTS`; the JS bindings call a `sync: true` processor's `send` before the next run); `TA_EVENT_IN_ERROR_COMMUNICATION` places `error.communication` in the sender's **internal** queue; `ta_event_in.raw` becomes `_event.raw`. |
 | Effect field mapping | `LOG`: `auxiliary`=label, `event`=text. `SEND`: `target`, `event`, `sendid`, `payload`, `io_processor`. `INVOKE`: `event`=type, `target`=src, `sendid`=invokeid, `payload`=params, `token`. `DONE`: `target`=actor name, `payload`=donedata, `auxiliary`=id of the top-level `<final>` that ended the session. `REQUEST`: `auxiliary`=src, `token`. Views are materialized when `ta_system_effects` is called. |
@@ -882,7 +877,7 @@ without changing SCXML semantics. The host owns the policy and the storage.
  └──────────────────────────────────┘  to host └───────────────────────────┘
 ```
 
-- `ta_actor_hibernate(system, actor, buffer, capacity, &length)`: only at a stable point
+- `ta_actor_hibernate(system, actor, &buffer)`: only at a stable point
   (idle, empty mailbox and internal queue, no workspace, no invoked children —
   they read the parent's invoke slots — no pending request). Writes
   `header | instance words | invoke ids (text) | datamodel bytes` and frees

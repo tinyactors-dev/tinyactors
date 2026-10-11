@@ -123,8 +123,10 @@ static ta_status finish(ta_compiler *compiler, ta_compile_result *result) {
     return failed ? TA_ERROR_INVALID : TA_OK;
 }
 
-ta_status ta_compile_charts(const ta_compile_options *options, const ta_source *charts, uint32_t n,
+ta_status ta_compile_charts(const ta_compile_options *options, ta_source_list list,
                             ta_compile_result **out) {
+    const ta_source *charts = list.pointer;
+    uint32_t n = list.count;
     *out = NULL;
     ta_compile_result *result = result_new(options);
     if (!result) return TA_ERROR_NO_MEMORY;
@@ -186,10 +188,10 @@ ta_status ta_compile_system(const ta_compile_options *options, const ta_source *
             const char *source = ta_xml_attribute_value(node, "src");
             const char *name = ta_xml_attribute_value(node, "name");
             ta_source s;
-            ta_string_view base = {file, (uint32_t)strlen(file)};
-            ta_string_view sv = {source, source ? (uint32_t)strlen(source) : 0};
+            ta_resolve_request request = {{file, (uint32_t)strlen(file)},
+                                          {source, source ? (uint32_t)strlen(source) : 0}};
             if (!source || !options || !options->resolve ||
-                options->resolve(options->resolve_context, base, sv, &s) != TA_OK) {
+                options->resolve(options->resolve_context, &request, &s) != TA_OK) {
                 ta_diagnostics_add(&compiler.diagnostics, TA_DIAGNOSTIC_ERROR, file, node->line,
                                    node->column, "cannot resolve chart src");
                 break;

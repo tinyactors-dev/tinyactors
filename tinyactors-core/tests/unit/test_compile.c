@@ -158,14 +158,18 @@ static void test_structure(void) {
 
     /* expressions carry their kind and source */
     ta_expression_info expression_info;
-    CHECK_EQUAL(ta_image_expression(&image, 0, transition->condition, &expression_info), TA_OK);
+    CHECK_EQUAL(
+        ta_image_expression(&image, (ta_chart_item){0, transition->condition}, &expression_info),
+        TA_OK);
     CHECK_EQUAL(expression_info.kind, TA_EXPRESSION_CONDITION);
     CHECK(expression_info.source.length == 5 &&
           memcmp(expression_info.source.pointer, "x > 1", 5) == 0);
     ta_data_info data_info;
-    CHECK_EQUAL(ta_image_data(&image, 0, 1, &data_info), TA_OK);
+    CHECK_EQUAL(ta_image_data(&image, (ta_chart_item){0, 1}, &data_info), TA_OK);
     CHECK(data_info.id.length == 1 && data_info.id.pointer[0] == 'y');
-    CHECK_EQUAL(ta_image_expression(&image, 0, data_info.expression, &expression_info), TA_OK);
+    CHECK_EQUAL(
+        ta_image_expression(&image, (ta_chart_item){0, data_info.expression}, &expression_info),
+        TA_OK);
     CHECK_EQUAL(expression_info.kind, TA_EXPRESSION_CONTENT);
     CHECK(expression_info.source.length == 6 &&
           memcmp(expression_info.source.pointer, "[1, 2]", 6) == 0);
@@ -232,7 +236,8 @@ static void test_error_positions(void) {
         options.size = sizeof options;
         ta_source source = {{"bad.scxml", 9}, {item->document, (uint32_t)strlen(item->document)}};
         ta_compile_result *result = NULL;
-        CHECK_EQUAL(ta_compile_charts(&options, &source, 1, &result), TA_ERROR_INVALID);
+        CHECK_EQUAL(ta_compile_charts(&options, (ta_source_list){&source, 1}, &result),
+                    TA_ERROR_INVALID);
         const ta_diagnostic *diagnostic;
         uint32_t count = ta_compile_diagnostics(result, &diagnostic);
         int found = 0;
@@ -340,7 +345,8 @@ static void test_limits(void) {
     memset(&options, 0, sizeof options);
     ta_source source = {{"dup.scxml", 9}, {d, (uint32_t)strlen(d)}};
     ta_compile_result *result = NULL;
-    CHECK_EQUAL(ta_compile_charts(&options, &source, 1, &result), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_compile_charts(&options, (ta_source_list){&source, 1}, &result),
+                TA_ERROR_INVALID);
     const ta_diagnostic *diagnostic;
     CHECK_EQUAL(ta_compile_diagnostics(result, &diagnostic), 200);
     CHECK(diagnostic[198].severity == TA_DIAGNOSTIC_ERROR && diagnostic[198].line == 200);
@@ -423,10 +429,9 @@ static void test_generated_ids(void) {
 /* The host's abort flag stops a compile: before it starts, from inside it
  * (here: set by the resolver), and is ignored when `size` does not cover it. */
 static volatile int abort_now;
-static ta_status abort_resolve(void *context, ta_string_view base, ta_string_view source,
-                               ta_source *out) {
+static ta_status abort_resolve(void *context, const ta_resolve_request *request, ta_source *out) {
     abort_now = 1;
-    return test_resolve(context, base, source, out);
+    return test_resolve(context, request, out);
 }
 
 static ta_status compile_with_flag(uint32_t size, ta_resolve_function resolve, const char *document,
@@ -438,7 +443,7 @@ static ta_status compile_with_flag(uint32_t size, ta_resolve_function resolve, c
     options.resolve_context = (void *)FILES;
     options.abort_flag = &abort_now;
     ta_source source = {{"demo.scxml", 10}, {document, (uint32_t)strlen(document)}};
-    return ta_compile_charts(&options, &source, 1, result);
+    return ta_compile_charts(&options, (ta_source_list){&source, 1}, result);
 }
 
 static void test_abort(void) {
@@ -529,13 +534,12 @@ static void test_manifest(void) {
     const ta_image_view *view = ta_image_view_of(&image);
     CHECK_EQUAL(view->actors[1].chart, 1);
     /* the public view of the boot list */
-    ta_string_view name;
-    uint32_t chart = 99;
-    CHECK_EQUAL(ta_image_boot_actor(&image, 1, &name, &chart), TA_OK);
-    CHECK(name.length == 2 && memcmp(name.pointer, "p2", 2) == 0 && chart == 1);
-    CHECK_EQUAL(ta_image_boot_actor(&image, 2, &name, &chart), TA_OK);
-    CHECK(name.length == 2 && memcmp(name.pointer, "p3", 2) == 0 && chart == 0);
-    CHECK_EQUAL(ta_image_boot_actor(&image, 3, &name, &chart), TA_ERROR_INVALID);
+    ta_boot_actor actor = {{NULL, 0}, 99, 0};
+    CHECK_EQUAL(ta_image_boot_actor(&image, 1, &actor), TA_OK);
+    CHECK(actor.name.length == 2 && memcmp(actor.name.pointer, "p2", 2) == 0 && actor.chart == 1);
+    CHECK_EQUAL(ta_image_boot_actor(&image, 2, &actor), TA_OK);
+    CHECK(actor.name.length == 2 && memcmp(actor.name.pointer, "p3", 2) == 0 && actor.chart == 0);
+    CHECK_EQUAL(ta_image_boot_actor(&image, 3, &actor), TA_ERROR_INVALID);
     free(copy);
     ta_compile_free(result);
 }
@@ -617,15 +621,15 @@ static void test_xml_writer(void) {
         ta_image image;
         CHECK_EQUAL(ta_image_open(image_written, length_written, &image), TA_OK);
         ta_expression_info first, second;
-        CHECK_EQUAL(ta_image_expression(&image, 0, 0, &first), TA_OK);
+        CHECK_EQUAL(ta_image_expression(&image, (ta_chart_item){0, 0}, &first), TA_OK);
         CHECK(text_is(first.source, "x < 1 && y > \"2\""));
         ta_image by_hand_image;
         CHECK_EQUAL(ta_image_open(image_by_hand, length_by_hand, &by_hand_image), TA_OK);
         CHECK_EQUAL(ta_image_expression_count(&image, 0),
                     ta_image_expression_count(&by_hand_image, 0));
         for (uint32_t e = 0; e < ta_image_expression_count(&image, 0); e++) {
-            CHECK_EQUAL(ta_image_expression(&image, 0, e, &first), TA_OK);
-            CHECK_EQUAL(ta_image_expression(&by_hand_image, 0, e, &second), TA_OK);
+            CHECK_EQUAL(ta_image_expression(&image, (ta_chart_item){0, e}, &first), TA_OK);
+            CHECK_EQUAL(ta_image_expression(&by_hand_image, (ta_chart_item){0, e}, &second), TA_OK);
             CHECK(first.kind == second.kind && first.source.length == second.source.length &&
                   memcmp(first.source.pointer, second.source.pointer, first.source.length) == 0);
         }

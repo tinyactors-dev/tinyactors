@@ -289,9 +289,13 @@ static void set_rels(ta_system *system, ta_arena *arena, const carved *o) {
     system->session_capacity = o->session_capacity;
 }
 
-ta_status ta_system_init(void *memory, size_t length, const ta_image *image,
-                         const ta_system_config *config, const ta_datamodel_binding *datamodels,
-                         uint32_t datamodel_count, ta_system **out) {
+ta_status ta_system_init(const ta_system_setup *setup, ta_system **out) {
+    void *memory = setup->memory.pointer;
+    size_t length = setup->memory.length;
+    const ta_image *image = setup->image;
+    const ta_system_config *config = setup->config;
+    const ta_datamodel_binding *datamodels = setup->datamodels;
+    uint32_t datamodel_count = setup->datamodel_count;
     const ta_image_view *view = ta_image_view_of(image);
     *out = (ta_system *)0;
     if (!memory || !view->base) return TA_ERROR_INVALID;
@@ -653,12 +657,11 @@ ta_status ta_system_boot(ta_system *system) {
     return TA_OK;
 }
 
-ta_status ta_system_spawn(ta_system *system, uint32_t chart, ta_string_view name, ta_payload params,
-                          ta_string_view traceparent, uint32_t *actor) {
+ta_status ta_system_spawn(ta_system *system, const ta_spawn *spawn, uint32_t *actor) {
     GUARD(system);
     ta_status status;
-    uint32_t index =
-        ta_system_spawn_actor(system, chart, name, params, 0, TA_NIL, traceparent, &status);
+    uint32_t index = ta_system_spawn_actor(system, spawn->chart, spawn->name, spawn->params, 0,
+                                           TA_NIL, spawn->traceparent, &status);
     if (actor) *actor = index == TA_NIL ? 0 : ta_pool_handle(&system->actors, index);
     return status;
 }
@@ -748,11 +751,10 @@ uint32_t ta_system_actor_by_session(const ta_system *system, uint64_t sessionid)
     return index == TA_NIL ? 0 : ta_pool_handle(&system->actors, index);
 }
 
-uint32_t ta_system_actors(const ta_system *system, uint32_t *cursor, uint32_t *out,
-                          uint32_t capacity) {
+uint32_t ta_system_actors(const ta_system *system, uint32_t *cursor, ta_uint32_array out) {
     uint32_t n = 0, i = *cursor;
-    for (; i < system->actors.high_water_mark && n < capacity; i++)
-        if (ta_pool_live(&system->actors, i)) out[n++] = ta_pool_handle(&system->actors, i);
+    for (; i < system->actors.high_water_mark && n < out.capacity; i++)
+        if (ta_pool_live(&system->actors, i)) out.pointer[n++] = ta_pool_handle(&system->actors, i);
     *cursor = i;
     return n;
 }
@@ -848,8 +850,7 @@ ta_status ta_actor_info_get(const ta_system *system, uint32_t actor, ta_actor_in
     return TA_OK;
 }
 
-uint32_t ta_actor_config(const ta_system *system, uint32_t actor, uint32_t *states,
-                         uint32_t capacity) {
+uint32_t ta_actor_config(const ta_system *system, uint32_t actor, ta_uint32_array states) {
     uint32_t index = ta_system_resolve_actor(system, actor);
     if (index == TA_NIL) return 0;
     const ta_actor *actor_record = ta_actor_at(system, index);
@@ -858,7 +859,7 @@ uint32_t ta_actor_config(const ta_system *system, uint32_t actor, uint32_t *stat
     uint32_t n = 0, ns = system->core.image_view.charts[instance->chart].state_count;
     for (uint32_t state = 1; state < ns; state++)
         if (ta_core_in_state(&system->core, instance, state)) {
-            if (n < capacity) states[n] = state;
+            if (n < states.capacity) states.pointer[n] = state;
             n++;
         }
     return n;
@@ -866,9 +867,12 @@ uint32_t ta_actor_config(const ta_system *system, uint32_t actor, uint32_t *stat
 
 /* ---- relocation ------------------------------------------------------------------------------ */
 
-ta_status ta_system_relocate(ta_system *system, void *new_memory, size_t new_length,
-                             const ta_system_config *new_config, ta_system **out) {
+ta_status ta_system_relocate(ta_system **relocated, ta_memory memory,
+                             const ta_system_config *new_config) {
+    ta_system *system = *relocated;
     GUARD(system);
+    void *new_memory = memory.pointer;
+    size_t new_length = memory.length;
     const ta_image_view *view = &system->core.image_view;
     ta_system_config config, wanted;
     normalize_config(view, new_config ? new_config : &system->config, &wanted);
@@ -952,21 +956,20 @@ ta_status ta_system_relocate(ta_system *system, void *new_memory, size_t new_len
     for (uint32_t i = 0; i < new_system->actors.high_water_mark; i++)
         if (ta_pool_live(&new_system->actors, i)) ta_system_session_insert(new_system, i);
     system->magic = 0; /* the old region is dead */
-    *out = new_system;
+    *relocated = new_system;
     return TA_OK;
 }
 
 /* ---- snapshot / restore ------------------------------------------------------------------------
  */
 
-ta_status ta_system_snapshot(const ta_system *system, void *buffer, size_t capacity,
-                             size_t *length) {
+ta_status ta_system_snapshot(const ta_system *system, ta_buffer *out) {
     if (system->in_call) return TA_ERROR_STATE;
     if (system->effects_length != system->effects_head)
         return TA_ERROR_STATE; /* drain effects first */
-    *length = (size_t)system->region_size;
-    if (!buffer) return TA_OK;
-    if (capacity < system->region_size) return TA_ERROR_NO_MEMORY;
+    out->length = (size_t)system->region_size;
+    if (out->capacity < system->region_size) return TA_ERROR_NO_MEMORY;
+    void *buffer = out->pointer;
     ta_memcpy(buffer, system, (size_t)system->region_size);
     /* Only real state goes into the blob. Everything rebind() recomputes from
      * the image, config and datamodel bindings is derived (host and
@@ -991,10 +994,13 @@ ta_status ta_system_snapshot(const ta_system *system, void *buffer, size_t capac
     return TA_OK;
 }
 
-ta_status ta_system_restore(void *memory, size_t length, const ta_image *image, const void *snap,
-                            size_t snap_length, const ta_system_config *host,
-                            const ta_datamodel_binding *datamodels, uint32_t datamodel_count,
-                            ta_system **out) {
+ta_status ta_system_restore(const ta_system_setup *setup, ta_bytes snapshot, ta_system **out) {
+    void *memory = setup->memory.pointer;
+    size_t length = setup->memory.length;
+    const ta_image *image = setup->image;
+    const void *snap = snapshot.pointer;
+    size_t snap_length = snapshot.length;
+    const ta_system_config *host = setup->config;
     *out = (ta_system *)0;
     const ta_image_view *view = ta_image_view_of(image);
     if (((uintptr_t)memory & (TA_ALIGN_MAX - 1)) || length < snap_length ||
@@ -1011,7 +1017,7 @@ ta_status ta_system_restore(void *memory, size_t length, const ta_image *image, 
     system->config.io_processors =
         host ? host->io_processors : (const ta_io_processor_descriptor *)0;
     system->config.io_processor_count = host ? host->io_processor_count : 0;
-    ta_status status = bind_datamodels(system, image, datamodels, datamodel_count);
+    ta_status status = bind_datamodels(system, image, setup->datamodels, setup->datamodel_count);
     if (status != TA_OK) return status;
     rebind(system, image);
     status = attach_charts(system, image);

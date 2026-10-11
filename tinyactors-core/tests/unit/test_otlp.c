@@ -40,7 +40,7 @@ typedef struct world {
 static void world_otlp(world *w, const ta_otlp_config *config) {
     CHECK_EQUAL(ta_otlp_layout(config, &w->otlp_length), TA_OK);
     w->otlp_memory = malloc(w->otlp_length);
-    CHECK_EQUAL(ta_otlp_init(w->otlp_memory, w->otlp_length, config, &w->otlp), TA_OK);
+    CHECK_EQUAL(ta_otlp_init((ta_memory){w->otlp_memory, w->otlp_length}, config, &w->otlp), TA_OK);
     ta_otlp_attribute service = {{"service.name", 12}, {"test", 4}};
     CHECK_EQUAL(ta_otlp_set_resource(w->otlp, &service, 1), TA_OK);
 }
@@ -59,7 +59,7 @@ static void *compile_charts(const char *const *charts, uint32_t count, size_t *l
     }
     ta_compile_result *result = NULL;
     void *copy = NULL;
-    if (ta_compile_charts(&options, sources, count, &result) == TA_OK) {
+    if (ta_compile_charts(&options, (ta_source_list){sources, count}, &result) == TA_OK) {
         ta_string_view image = ta_compile_image(result);
         copy = aligned_alloc(8, (image.length + 7) & ~(size_t)7);
         memcpy(copy, image.pointer, image.length);
@@ -91,8 +91,9 @@ static int world_open(world *w, const char *const *charts, uint32_t count,
     size_t need;
     ta_system_layout(&w->image, &system_config, &need);
     w->memory = malloc(need);
-    if (ta_system_init(w->memory, need, &w->image, &system_config, &w->binding, 1, &w->system) !=
-        TA_OK)
+    if (ta_system_init(
+            &(ta_system_setup){{w->memory, need}, &w->image, &system_config, &w->binding, 1, 0},
+            &w->system) != TA_OK)
         return 0;
     world_otlp(w, config);
     w->wall = 1700000000000000000ull;
@@ -100,26 +101,31 @@ static int world_open(world *w, const char *const *charts, uint32_t count,
 }
 
 static void world_flush(world *w) {
-    size_t size = ta_otlp_traces_size(w->otlp);
+    ta_buffer room = {NULL, 0, 0};
+    ta_otlp_put_traces(w->otlp, &room); /* nothing to put, or how much room it needs */
+    size_t size = room.length;
     if (size && w->request_count < REQUESTS) {
         unsigned char *bytes = malloc(size);
-        CHECK_EQUAL(ta_otlp_put_traces(w->otlp, bytes, size - 1), 0); /* not its size */
-        CHECK_EQUAL(ta_otlp_put_traces(w->otlp, bytes, size), size);
-        CHECK_EQUAL(ta_otlp_traces_size(w->otlp), 0);
+        CHECK_EQUAL(ta_otlp_put_traces(w->otlp, &(ta_buffer){bytes, size - 1, 0}),
+                    TA_ERROR_NO_MEMORY); /* not its size */
+        CHECK_EQUAL(ta_otlp_put_traces(w->otlp, &(ta_buffer){bytes, size, 0}), TA_OK);
+        CHECK_EQUAL(ta_otlp_put_traces(w->otlp, &(ta_buffer){NULL, 0, 0}), TA_OK);
         w->request_lengths[w->request_count] = size;
         w->requests[w->request_count++] = bytes;
         ta_otlp_cursor cursor;
         memset(&cursor, 0, sizeof cursor);
         int32_t got;
-        while (w->span_count < SPANS &&
-               (got = ta_otlp_next_span(bytes, size, &cursor, &w->spans[w->span_count])) == 1)
+        while (w->span_count < SPANS && (got = ta_otlp_next_span((ta_bytes){bytes, size}, &cursor,
+                                                                 &w->spans[w->span_count])) == 1)
             w->span_count++;
         CHECK(w->span_count == SPANS || got == 0);
     }
-    size = ta_otlp_logs_size(w->otlp);
+    room = (ta_buffer){NULL, 0, 0};
+    ta_otlp_put_logs(w->otlp, &room);
+    size = room.length;
     if (size && w->log_count < REQUESTS) {
         unsigned char *bytes = malloc(size);
-        CHECK_EQUAL(ta_otlp_put_logs(w->otlp, bytes, size), size);
+        CHECK_EQUAL(ta_otlp_put_logs(w->otlp, &(ta_buffer){bytes, size, 0}), TA_OK);
         w->log_lengths[w->log_count] = size;
         w->logs[w->log_count++] = bytes;
     }
@@ -155,8 +161,8 @@ static void world_read(world *w) {
                 size_t length;
                 CHECK_EQUAL(ta_otlp_layout(&bigger, &length), TA_OK);
                 void *memory = malloc(length);
-                ta_otlp *moved;
-                CHECK_EQUAL(ta_otlp_relocate(w->otlp, memory, length, &bigger, &moved), TA_OK);
+                ta_otlp *moved = w->otlp;
+                CHECK_EQUAL(ta_otlp_relocate(&moved, (ta_memory){memory, length}, &bigger), TA_OK);
                 free(w->otlp_memory);
                 w->otlp_memory = memory;
                 w->otlp = moved;
@@ -210,9 +216,12 @@ static uint32_t world_spawn(world *w, const char *name, const char *traceparent)
     CHECK_EQUAL(
         ta_system_spawn(
             w->system,
-            ta_image_chart_by_name(&w->image, (ta_string_view){name, (uint32_t)strlen(name)}),
-            (ta_string_view){name, (uint32_t)strlen(name)}, 0,
-            (ta_string_view){traceparent, traceparent ? (uint32_t)strlen(traceparent) : 0}, &actor),
+            &(ta_spawn){
+                0,
+                ta_image_chart_by_name(&w->image, (ta_string_view){name, (uint32_t)strlen(name)}),
+                (ta_string_view){name, (uint32_t)strlen(name)}, 0,
+                (ta_string_view){traceparent, traceparent ? (uint32_t)strlen(traceparent) : 0}},
+            &actor),
         TA_OK);
     return actor;
 }
@@ -246,12 +255,11 @@ static int is(ta_string_view view, const char *text) {
 
 static int attribute(ta_otlp_fields fields, const char *key, ta_otlp_value *out) {
     uint32_t at = 0;
-    ta_string_view k;
-    ta_otlp_value v;
+    ta_otlp_key_value pair;
     int32_t got;
-    while ((got = ta_otlp_next_attribute(fields, &at, &k, &v)) == 1)
-        if (is(k, key)) {
-            *out = v;
+    while ((got = ta_otlp_next_attribute(fields, &at, &pair)) == 1)
+        if (is(pair.key, key)) {
+            *out = pair.value;
             return 1;
         }
     CHECK(got == 0);
@@ -595,7 +603,7 @@ static void synthetic_open(synthetic *t, uint32_t open_spans) {
     size_t bytes;
     CHECK_EQUAL(ta_otlp_layout(&config, &bytes), TA_OK);
     t->memory = malloc(bytes);
-    CHECK_EQUAL(ta_otlp_init(t->memory, bytes, &config, &t->otlp), TA_OK);
+    CHECK_EQUAL(ta_otlp_init((ta_memory){t->memory, bytes}, &config, &t->otlp), TA_OK);
     ta_otlp_mark(t->otlp, 0, 1000000000ull);
     ta_otlp_mark(t->otlp, 1000, 1000001000ull); /* a nanosecond a unit of fuel */
 }
@@ -743,9 +751,11 @@ static void test_fixed_bytes(void) {
     input.view = (ta_trace_view){bytes, length, 0, NULL};
     input.image = &t.image;
     CHECK_EQUAL(ta_otlp_read(t.otlp, &input, &cursor), TA_OTLP_READ);
-    size_t size = ta_otlp_traces_size(t.otlp);
+    ta_buffer room = {NULL, 0, 0};
+    ta_otlp_put_traces(t.otlp, &room); /* nothing to put, or how much room it needs */
+    size_t size = room.length;
     unsigned char *request = malloc(size);
-    CHECK_EQUAL(ta_otlp_put_traces(t.otlp, request, size), size);
+    CHECK_EQUAL(ta_otlp_put_traces(t.otlp, &(ta_buffer){request, size, 0}), TA_OK);
     uint64_t hash = 0xcbf29ce484222325ull; /* FNV-1a of the request */
     for (size_t i = 0; i < size; i++)
         hash = (hash ^ request[i]) * 0x100000001b3ull;
@@ -785,14 +795,14 @@ static void test_grow(void) {
     bigger.open_spans = 2;
     bigger.staging_bytes = TA_OTLP_STAGING_BYTES_MIN;
     static uint64_t small[2];
-    ta_otlp *refused;
-    CHECK_EQUAL(ta_otlp_relocate(t.otlp, small, sizeof small, &bigger, &refused),
+    ta_otlp *refused = t.otlp;
+    CHECK_EQUAL(ta_otlp_relocate(&refused, (ta_memory){small, sizeof small}, &bigger),
                 TA_ERROR_NO_MEMORY);
     size_t need;
     CHECK_EQUAL(ta_otlp_layout(&bigger, &need), TA_OK);
     void *memory = malloc(need);
-    ta_otlp *moved;
-    CHECK_EQUAL(ta_otlp_relocate(t.otlp, memory, need, &bigger, &moved), TA_OK);
+    ta_otlp *moved = t.otlp;
+    CHECK_EQUAL(ta_otlp_relocate(&moved, (ta_memory){memory, need}, &bigger), TA_OK);
     free(t.memory);
     t.memory = memory;
     t.otlp = moved;
@@ -923,11 +933,11 @@ static void test_decode_malformed(void) {
         ta_otlp_cursor cursor;
         memset(&cursor, 0, sizeof cursor);
         ta_otlp_span span;
-        for (int k = 0; k < 64 && ta_otlp_next_span(copy, length, &cursor, &span) == 1; k++) {
+        for (int k = 0; k < 64 && ta_otlp_next_span((ta_bytes){copy, length}, &cursor, &span) == 1;
+             k++) {
             uint32_t at = 0;
-            ta_string_view key;
-            ta_otlp_value value;
-            while (ta_otlp_next_attribute(span.attributes, &at, &key, &value) == 1)
+            ta_otlp_key_value pair;
+            while (ta_otlp_next_attribute(span.attributes, &at, &pair) == 1)
                 ;
             ta_otlp_event event;
             at = 0;
@@ -936,10 +946,11 @@ static void test_decode_malformed(void) {
         }
         memset(&cursor, 0, sizeof cursor);
         ta_otlp_metric_view metric;
-        for (int k = 0; k < 64 && ta_otlp_next_metric(copy, length, &cursor, &metric) == 1; k++) {
+        for (int k = 0;
+             k < 64 && ta_otlp_next_metric((ta_bytes){copy, length}, &cursor, &metric) == 1; k++) {
             uint32_t at = 0;
             ta_otlp_point_view point;
-            while (ta_otlp_next_point(metric.points, &at, metric.kind, &point) == 1) {
+            while (ta_otlp_next_point(metric.points, &at, &point) == 1) {
                 uint32_t exemplar_at = 0;
                 ta_otlp_exemplar exemplar;
                 while (ta_otlp_next_exemplar(point.exemplars, &exemplar_at, &exemplar) == 1)
@@ -960,8 +971,9 @@ static void test_decode_malformed(void) {
     ta_otlp_cursor cursor;
     memset(&cursor, 0, sizeof cursor);
     ta_otlp_span span;
-    CHECK_EQUAL(ta_otlp_next_span(w.requests[0], w.request_lengths[0] - 3, &cursor, &span),
-                TA_ERROR_INVALID);
+    CHECK_EQUAL(
+        ta_otlp_next_span((ta_bytes){w.requests[0], w.request_lengths[0] - 3}, &cursor, &span),
+        TA_ERROR_INVALID);
     synthetic_close(&t, &w);
 }
 
@@ -978,18 +990,21 @@ static ta_otlp *metrics_otlp(uint32_t metric_bytes, void **memory) {
     CHECK_EQUAL(ta_otlp_layout(&config, &bytes), TA_OK);
     *memory = malloc(bytes);
     ta_otlp *otlp;
-    CHECK_EQUAL(ta_otlp_init(*memory, bytes, &config, &otlp), TA_OK);
+    CHECK_EQUAL(ta_otlp_init((ta_memory){*memory, bytes}, &config, &otlp), TA_OK);
     ta_otlp_attribute resource = {{"service.name", 12}, {"test", 4}};
     CHECK_EQUAL(ta_otlp_set_resource(otlp, &resource, 1), TA_OK);
     return otlp;
 }
 
 static unsigned char *metrics_put(ta_otlp *otlp, size_t *length) {
-    *length = ta_otlp_metrics_size(otlp);
+    ta_buffer room = {NULL, 0, 0};
+    ta_otlp_put_metrics(otlp, &room);
+    *length = room.length;
     CHECK(*length > 0);
     unsigned char *bytes = malloc(*length);
-    CHECK_EQUAL(ta_otlp_put_metrics(otlp, bytes, *length), *length);
-    CHECK_EQUAL(ta_otlp_metrics_size(otlp), 0); /* forgotten once put */
+    CHECK_EQUAL(ta_otlp_put_metrics(otlp, &(ta_buffer){bytes, *length, 0}), TA_OK);
+    CHECK_EQUAL(ta_otlp_put_metrics(otlp, &(ta_buffer){NULL, 0, 0}),
+                TA_OK); /* forgotten once put */
     return bytes;
 }
 
@@ -999,7 +1014,7 @@ static int metric_named(const unsigned char *bytes, size_t length, const char *n
     ta_otlp_cursor cursor;
     memset(&cursor, 0, sizeof cursor);
     int32_t got;
-    while ((got = ta_otlp_next_metric(bytes, length, &cursor, out)) == 1)
+    while ((got = ta_otlp_next_metric((ta_bytes){bytes, length}, &cursor, out)) == 1)
         if (is(out->name, name)) return 1;
     CHECK_EQUAL(got, 0);
     return 0;
@@ -1017,7 +1032,7 @@ static const char *text_attribute(ta_otlp_fields fields, const char *key) {
 static void test_metrics_roundtrip(void) {
     void *memory;
     ta_otlp *otlp = metrics_otlp(0, &memory);
-    CHECK_EQUAL(ta_otlp_metrics_size(otlp), 0);
+    CHECK_EQUAL(ta_otlp_put_metrics(otlp, &(ta_buffer){NULL, 0, 0}), TA_OK);
     ta_otlp_attribute chart = {{"tinyactors.chart.name", 21}, {"door", 4}};
     ta_otlp_point sum_point;
     memset(&sum_point, 0, sizeof sum_point);
@@ -1079,8 +1094,8 @@ static void test_metrics_roundtrip(void) {
     bigger.open_spans = 8;
     CHECK_EQUAL(ta_otlp_layout(&bigger, &bytes_needed), TA_OK);
     void *moved_memory = malloc(bytes_needed);
-    ta_otlp *moved;
-    CHECK_EQUAL(ta_otlp_relocate(otlp, moved_memory, bytes_needed, &bigger, &moved), TA_OK);
+    ta_otlp *moved = otlp;
+    CHECK_EQUAL(ta_otlp_relocate(&moved, (ta_memory){moved_memory, bytes_needed}, &bigger), TA_OK);
     free(memory);
     memory = moved_memory;
     otlp = moved;
@@ -1094,21 +1109,21 @@ static void test_metrics_roundtrip(void) {
     CHECK(strcmp(text_attribute(view.resource, "service.name"), "test") == 0);
     uint32_t at = 0;
     ta_otlp_point_view point;
-    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, &point), 1);
     CHECK(point.integer == 42 && point.flags == 0 && point.start == 1000 && point.time == 2000);
     CHECK(strcmp(text_attribute(point.attributes, "tinyactors.chart.name"), "door") == 0);
-    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 0);
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, &point), 0);
 
     CHECK(metric_named(bytes, length, "tinyactors.timers.overdue", &view));
     CHECK(view.kind == TA_OTLP_METRIC_GAUGE && view.temporality == 0);
     at = 0;
-    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, &point), 1);
     CHECK(point.flags == TA_OTLP_POINT_DOUBLE && point.number == 0.25 && point.start == 0);
 
     CHECK(metric_named(bytes, length, "tinyactors.macrostep.duration", &view));
     CHECK(view.kind == TA_OTLP_METRIC_HISTOGRAM && view.temporality == 2);
     at = 0;
-    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, &point), 1);
     CHECK(point.count == 4 && point.sum == 0.2161 && point.has_min_max && point.min == 0.0001 &&
           point.max == 0.2);
     CHECK(point.buckets.length == 32 && point.bounds.length == 24);
@@ -1127,7 +1142,8 @@ static void test_metrics_roundtrip(void) {
     /* a cut request is refused */
     ta_otlp_cursor cursor;
     memset(&cursor, 0, sizeof cursor);
-    CHECK_EQUAL(ta_otlp_next_metric(bytes, length - 3, &cursor, &view), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_otlp_next_metric((ta_bytes){bytes, length - 3}, &cursor, &view),
+                TA_ERROR_INVALID);
     free(bytes);
 
     /* a full staging refuses a metric whole, and keeps what it had */
@@ -1137,7 +1153,7 @@ static void test_metrics_roundtrip(void) {
     sum.points = many;
     sum.point_count = 2000;
     CHECK_EQUAL(ta_otlp_add_metric(otlp, &sum), TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(ta_otlp_metrics_size(otlp), 0);
+    CHECK_EQUAL(ta_otlp_put_metrics(otlp, &(ta_buffer){NULL, 0, 0}), TA_OK);
     sum.points = &sum_point;
     free(many);
     sum.point_count = 1;
@@ -1194,7 +1210,7 @@ static void test_metrics_stats(void) {
     ta_otlp_point_view point;
     uint32_t at = 0, resident = 0, hibernated = 0;
     CHECK(metric_named(bytes, length, "tinyactors.actors", &view));
-    while (ta_otlp_next_point(view.points, &at, view.kind, &point) == 1)
+    while (ta_otlp_next_point(view.points, &at, &point) == 1)
         if (!strcmp(text_attribute(point.attributes, "tinyactors.chart.name"), "door")) {
             if (!strcmp(text_attribute(point.attributes, "tinyactors.actor.state"), "resident"))
                 resident = (uint32_t)point.integer;
@@ -1205,7 +1221,7 @@ static void test_metrics_stats(void) {
     CHECK(metric_named(bytes, length, "tinyactors.errors", &view));
     int found = 0;
     at = 0;
-    while (ta_otlp_next_point(view.points, &at, view.kind, &point) == 1)
+    while (ta_otlp_next_point(view.points, &at, &point) == 1)
         found += !strcmp(text_attribute(point.attributes, "scxml.error.type"), "communication") &&
                  !strcmp(text_attribute(point.attributes, "tinyactors.chart.name"), "door") &&
                  point.integer == 3;
@@ -1213,35 +1229,35 @@ static void test_metrics_stats(void) {
     CHECK(metric_named(bytes, length, "tinyactors.pool.usage", &view));
     at = 0;
     found = 0;
-    while (ta_otlp_next_point(view.points, &at, view.kind, &point) == 1)
+    while (ta_otlp_next_point(view.points, &at, &point) == 1)
         found += !strcmp(text_attribute(point.attributes, "tinyactors.pool"), "events") &&
                  point.integer == 14; /* summed over the systems */
     CHECK_EQUAL(found, 1);
     CHECK(metric_named(bytes, length, "tinyactors.memory.usage", &view));
     at = 0;
     found = 0;
-    while (ta_otlp_next_point(view.points, &at, view.kind, &point) == 1)
+    while (ta_otlp_next_point(view.points, &at, &point) == 1)
         found += !strcmp(text_attribute(point.attributes, "tinyactors.memory"), "slab") &&
                  point.integer == 8192;
     CHECK_EQUAL(found, 1);
     CHECK(metric_named(bytes, length, "tinyactors.timers.overdue", &view));
     at = 0;
-    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, &point), 1);
     CHECK(point.flags == TA_OTLP_POINT_DOUBLE && point.number == 1.0); /* 1000 ticks late */
     CHECK(metric_named(bytes, length, "tinyactors.traces", &view));
     at = 0;
-    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, &point), 1);
     CHECK(point.integer == 10 && point.start == 1 && point.time == 2);
     CHECK(metric_named(bytes, length, "tinyactors.messages.routed", &view));
     at = 0;
-    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, &point), 1);
     CHECK_EQUAL(point.integer, 17);
     free(bytes);
     /* not enough room: nothing is added */
     free(memory);
     otlp = metrics_otlp(1024, &memory);
     CHECK_EQUAL(ta_otlp_add_stats(otlp, &input), TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(ta_otlp_metrics_size(otlp), 0);
+    CHECK_EQUAL(ta_otlp_put_metrics(otlp, &(ta_buffer){NULL, 0, 0}), TA_OK);
     free(memory);
 }
 
@@ -1266,7 +1282,7 @@ static void test_span_metrics(void) {
     stats.size = sizeof stats;
     ta_otlp_stats_get(w.otlp, &stats);
     CHECK(stats.span_metric_charts == 1 && stats.span_metric_capacity == 64);
-    CHECK_EQUAL(ta_otlp_add_span_metrics(w.otlp, w.otlp, 1, 2), TA_OK);
+    CHECK_EQUAL(ta_otlp_add_span_metrics(w.otlp, 1, 2), TA_OK);
     size_t length;
     unsigned char *bytes = metrics_put(w.otlp, &length);
     ta_otlp_metric_view view;
@@ -1274,7 +1290,7 @@ static void test_span_metrics(void) {
     CHECK(view.kind == TA_OTLP_METRIC_HISTOGRAM && is(view.unit, "s"));
     uint32_t at = 0;
     ta_otlp_point_view point;
-    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, &point), 1);
     CHECK(strcmp(text_attribute(point.attributes, "tinyactors.chart.name"), "door") == 0);
     CHECK_EQUAL(point.count, 4); /* the bootstrap and three events */
     CHECK(point.buckets.length == 8 * 11 && point.bounds.length == 8 * 10 && point.has_min_max);
@@ -1288,11 +1304,11 @@ static void test_span_metrics(void) {
     world_send(&w, a, "go", NULL, NULL);
     world_settle(&w);
     world_flush(&w);
-    CHECK_EQUAL(ta_otlp_add_span_metrics(w.otlp, w.otlp, 1, 2), TA_OK);
+    CHECK_EQUAL(ta_otlp_add_span_metrics(w.otlp, 1, 2), TA_OK);
     bytes = metrics_put(w.otlp, &length);
     CHECK(metric_named(bytes, length, "tinyactors.macrostep.duration", &view));
     at = 0;
-    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, view.kind, &point), 1);
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, &point), 1);
     CHECK_EQUAL(point.count, 4);
     free(bytes);
     world_close(&w);

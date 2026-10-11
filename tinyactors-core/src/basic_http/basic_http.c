@@ -1,20 +1,16 @@
 /* basic_http.c — BasicHTTP message codec (see tinyactors/basic_http.h). */
 #include <tinyactors/basic_http.h>
 
+/* Writes while there is room and counts either way, so a request that does
+ * not fit still learns the length it needs. */
 typedef struct string_buffer {
     char *data;
     size_t length, capacity;
-    int overflow;
 } string_buffer;
 
 static void buffer_put(string_buffer *b, const char *s, size_t n) {
-    for (size_t i = 0; i < n; i++) {
-        if (b->length + 1 >= b->capacity) {
-            b->overflow = 1;
-            return;
-        }
-        b->data[b->length++] = s[i];
-    }
+    for (size_t i = 0; i < n; i++, b->length++)
+        if (b->length < b->capacity) b->data[b->length] = s[i];
 }
 static void puts_(string_buffer *b, const char *s) {
     size_t n = 0;
@@ -55,20 +51,23 @@ static size_t encoded_length(ta_string_view s) {
     return n;
 }
 
-size_t ta_http_encode_post(ta_string_view url, ta_string_view event, const ta_http_field *fields,
-                           uint32_t field_count, ta_string_view body, char *out, size_t capacity) {
+ta_status ta_http_encode_post(const ta_http_post *post, ta_buffer *out) {
+    ta_string_view url = post->url, event = post->event, body = post->body;
+    const ta_http_field *fields = post->fields;
+    uint32_t field_count = post->field_count;
     const char *pre = "http://";
     uint32_t i = 0;
+    out->length = 0;
     while (pre[i] && i < url.length && url.pointer[i] == pre[i])
         i++;
-    if (pre[i]) return 0;
+    if (pre[i]) return TA_ERROR_INVALID;
     uint32_t hs = i;
     while (i < url.length && url.pointer[i] != '/')
         i++;
     ta_string_view host = {url.pointer + hs, i - hs};
     ta_string_view path = {i < url.length ? url.pointer + i : "/",
                            i < url.length ? url.length - i : 1};
-    if (!host.length) return 0;
+    if (!host.length) return TA_ERROR_INVALID;
     /* body length first (Content-Length) */
     size_t blen = 0;
     int form = field_count || event.length;
@@ -81,7 +80,7 @@ size_t ta_http_encode_post(ta_string_view url, ta_string_view event, const ta_ht
     } else {
         blen = encoded_length(body);
     }
-    string_buffer b = {out, 0, capacity, 0};
+    string_buffer b = {(char *)out->pointer, 0, out->capacity};
     puts_(&b, "POST ");
     buffer_put(&b, path.pointer, path.length);
     puts_(&b, " HTTP/1.1\r\nHost: ");
@@ -106,9 +105,8 @@ size_t ta_http_encode_post(ta_string_view url, ta_string_view event, const ta_ht
     } else {
         put_enc(&b, body);
     }
-    if (b.overflow) return 0;
-    out[b.length] = 0;
-    return b.length;
+    out->length = b.length;
+    return b.length <= out->capacity ? TA_OK : TA_ERROR_NO_MEMORY;
 }
 
 static int hexval(char c) {
@@ -146,21 +144,24 @@ static int equals(ta_string_view a, const char *b) {
     return 1;
 }
 
-int ta_http_parse_request(const char *message, size_t length, char *scratch, size_t capacity,
-                          ta_http_request *out) {
+ta_status ta_http_parse_request(ta_bytes bytes, ta_buffer *work, ta_http_request *out) {
+    const char *message = (const char *)bytes.pointer;
+    size_t length = bytes.length;
+    char *scratch = (char *)work->pointer;
+    size_t capacity = work->capacity;
     size_t i = 0, used = 0;
     out->field_count = 0;
     out->event.pointer = 0;
     out->event.length = 0;
     while (i < length && message[i] != ' ')
         i++;
-    if (i == 0 || i >= length) return -1;
+    if (i == 0 || i >= length) return TA_ERROR_INVALID;
     out->method.pointer = message;
     out->method.length = (uint32_t)i;
     size_t ts = ++i;
     while (i < length && message[i] != ' ')
         i++;
-    if (i >= length) return -1;
+    if (i >= length) return TA_ERROR_INVALID;
     out->target.pointer = message + ts;
     out->target.length = (uint32_t)(i - ts);
     /* headers end at CRLFCRLF */
@@ -171,7 +172,7 @@ int ta_http_parse_request(const char *message, size_t length, char *scratch, siz
             body = k + 4;
             break;
         }
-    if (!body) return -1;
+    if (!body) return TA_ERROR_INVALID;
     out->body.pointer = message + body;
     out->body.length = (uint32_t)(length - body);
     /* form fields (a body without '=' is opaque content) */
@@ -209,5 +210,6 @@ int ta_http_parse_request(const char *message, size_t length, char *scratch, siz
             scratch[used++] = out->method.pointer[k];
         out->event = event;
     }
-    return used <= capacity ? 0 : -1;
+    work->length = used;
+    return used <= capacity ? TA_OK : TA_ERROR_NO_MEMORY;
 }

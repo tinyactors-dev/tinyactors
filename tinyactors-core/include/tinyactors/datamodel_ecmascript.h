@@ -105,14 +105,14 @@ TA_API ta_payload ta_datamodel_ecmascript_payload_eval(ta_datamodel_ecmascript *
  * whose regions refer to them by handle. One object graph (JS_WriteObject:
  * shared references and cycles are kept); an isolated session is a blob of
  * its own inside it. What cannot be stored (see Hibernation) reports
- * TA_ERROR_UNSUPPORTED (ta_datamodel_ecmascript_last_error says why). With buffer NULL (or capacity
- * too small: TA_ERROR_NO_MEMORY) *length is the size needed. Restore into a fresh datamodel (no
+ * TA_ERROR_UNSUPPORTED (ta_datamodel_ecmascript_last_error says why). Written into `out`
+ * (ta_buffer). Restore into a fresh datamodel (no
  * sessions or payloads yet: TA_ERROR_STATE) after the system/host restore attached the charts;
  * sessions find their chart by image content hash and chart index (TA_ERROR_INVALID if missing). */
-TA_API ta_status ta_datamodel_ecmascript_snapshot(ta_datamodel_ecmascript *ecmascript, void *buffer,
-                                                  size_t capacity, size_t *length);
+TA_API ta_status ta_datamodel_ecmascript_snapshot(ta_datamodel_ecmascript *ecmascript,
+                                                  ta_buffer *out);
 TA_API ta_status ta_datamodel_ecmascript_restore(ta_datamodel_ecmascript *ecmascript,
-                                                 const void *buffer, size_t length);
+                                                 ta_bytes snapshot);
 /* Why the last serialize (hibernate/export) or snapshot of this datamodel
  * reported TA_ERROR_UNSUPPORTED, naming the variable and, for functions, the
  * line in the document — e.g. "variable 'helper' cannot be stored: it holds a

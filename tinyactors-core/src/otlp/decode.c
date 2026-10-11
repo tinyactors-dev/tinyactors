@@ -236,9 +236,9 @@ static int decode_scope(pb scope, ta_string_view *name, ta_string_view *version)
     return got >= 0;
 }
 
-int32_t ta_otlp_next_span(const void *bytes, size_t length, ta_otlp_cursor *cursor,
-                          ta_otlp_span *out) {
-    pb request = {(const unsigned char *)bytes, (const unsigned char *)bytes + length};
+int32_t ta_otlp_next_span(ta_bytes bytes, ta_otlp_cursor *cursor, ta_otlp_span *out) {
+    pb request = {(const unsigned char *)bytes.pointer,
+                  (const unsigned char *)bytes.pointer + bytes.length};
     pb span, scope;
     ta_otlp_fields resource;
     int got = decode_next_item(request, cursor, &span, &resource, &scope);
@@ -252,9 +252,9 @@ int32_t ta_otlp_next_span(const void *bytes, size_t length, ta_otlp_cursor *curs
     return decode_read_span(span, out) > 0 ? 1 : TA_ERROR_INVALID;
 }
 
-int32_t ta_otlp_next_metric(const void *bytes, size_t length, ta_otlp_cursor *cursor,
-                            ta_otlp_metric_view *out) {
-    pb request = {(const unsigned char *)bytes, (const unsigned char *)bytes + length};
+int32_t ta_otlp_next_metric(ta_bytes bytes, ta_otlp_cursor *cursor, ta_otlp_metric_view *out) {
+    pb request = {(const unsigned char *)bytes.pointer,
+                  (const unsigned char *)bytes.pointer + bytes.length};
     pb metric, scope;
     ta_otlp_fields resource;
     int got = decode_next_item(request, cursor, &metric, &resource, &scope);
@@ -276,6 +276,7 @@ int32_t ta_otlp_next_metric(const void *bytes, size_t length, ta_otlp_cursor *cu
                         : field == F_METRIC_GAUGE ? TA_OTLP_METRIC_GAUGE
                                                   : TA_OTLP_METRIC_HISTOGRAM;
             out->points = pb_fields(inner, F_DATA_POINTS);
+            out->points.kind = out->kind;
             pb data = inner;
             uint32_t data_field, data_wire;
             uint64_t data_value;
@@ -334,11 +335,12 @@ static int32_t decode_read_value(pb any, ta_otlp_value *value) {
     return got < 0 ? TA_ERROR_INVALID : 1;
 }
 
-int32_t ta_otlp_next_attribute(ta_otlp_fields attributes, uint32_t *at, ta_string_view *key,
-                               ta_otlp_value *value) {
+int32_t ta_otlp_next_attribute(ta_otlp_fields attributes, uint32_t *at, ta_otlp_key_value *out) {
     pb pair;
     int32_t got = decode_next_of(attributes, at, &pair);
     if (got <= 0) return got;
+    ta_string_view *key = &out->key;
+    ta_otlp_value *value = &out->value;
     key->pointer = "";
     key->length = 0;
     ta_memset(value, 0, sizeof *value);
@@ -406,13 +408,12 @@ static double decode_double(uint64_t bits) {
     return value;
 }
 
-int32_t ta_otlp_next_point(ta_otlp_fields points, uint32_t *at, uint32_t kind,
-                           ta_otlp_point_view *out) {
+int32_t ta_otlp_next_point(ta_otlp_fields points, uint32_t *at, ta_otlp_point_view *out) {
     pb point;
     int32_t got = decode_next_of(points, at, &point);
     if (got <= 0) return got;
     ta_memset(out, 0, sizeof *out);
-    int histogram = kind == TA_OTLP_METRIC_HISTOGRAM;
+    int histogram = points.kind == TA_OTLP_METRIC_HISTOGRAM;
     out->attributes = pb_fields(point, histogram ? F_HISTOGRAM_ATTRIBUTES : F_NUMBER_ATTRIBUTES);
     out->exemplars = pb_fields(point, histogram ? F_HISTOGRAM_EXEMPLARS : F_NUMBER_EXEMPLARS);
     uint32_t field, wire;

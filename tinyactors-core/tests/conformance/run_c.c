@@ -186,7 +186,8 @@ static conformance_image *image_for(conformance_world *w, const char *document,
     options.size = sizeof options;
     ta_compile_result *result = NULL;
     conformance_image *im = NULL;
-    if (ta_compile_charts(&options, source, n, &result) == TA_OK && w->image_count < MAX_IMAGES) {
+    if (ta_compile_charts(&options, (ta_source_list){source, n}, &result) == TA_OK &&
+        w->image_count < MAX_IMAGES) {
         ta_string_view bytes = ta_compile_image(result);
         im = &w->images[w->image_count];
         snprintf(im->key, sizeof im->key, "%s", key);
@@ -255,8 +256,8 @@ static void answer_request(conformance_world *w, uint32_t segment, uint32_t toke
     uint32_t chart = segment < w->segment_count
                          ? ta_image_chart_by_name(&w->segments[segment]->image, source)
                          : TA_NIL;
-    ta_host_resume(w->host, segment, token, chart == TA_NIL ? TA_ERROR_INVALID : TA_OK,
-                   chart == TA_NIL ? 0 : (ta_payload)chart + 1);
+    ta_host_resume(w->host, &(ta_resume){segment, token, chart == TA_NIL ? TA_ERROR_INVALID : TA_OK,
+                                         0, chart == TA_NIL ? 0 : (ta_payload)chart + 1});
 }
 
 /* run until idle at the current time: logs, done outputs, wakes, requests, jobs */
@@ -305,7 +306,7 @@ static void settle(conformance_world *w) {
         ta_host_effects_ack(w->host);
         for (uint32_t i = 0; i < nw; i++) { /* the host reads the blob back */
             conformance_blob *b = stored(w, wakes[i]);
-            if (b && ta_host_wake(w->host, b->session, b->bytes, b->length) == TA_OK) {
+            if (b && ta_host_wake(w->host, b->session, (ta_bytes){b->bytes, b->length}) == TA_OK) {
                 free(b->bytes);
                 *b = w->store[--w->store_count];
             }
@@ -357,18 +358,20 @@ static ta_event_in event_in(const char *name) {
 
 /* the actor's atomic states, sorted, as JSON */
 static char *states_json(conformance_world *w, conformance_actor *a) {
-    uint32_t segment, act;
+    ta_host_location location;
     JSValue arr = JS_NewArray(J);
-    if (ta_host_locate(w->host, a->session, &segment, &act) == TA_OK) {
-        ta_system *system = ta_host_system(w->host, segment);
+    if (ta_host_locate(w->host, a->session, &location) == TA_OK) {
+        ta_system *system = ta_host_system(w->host, location.segment);
         ta_actor_info actor_info;
         memset(&actor_info, 0, sizeof actor_info);
         actor_info.size = sizeof actor_info;
-        ta_actor_info_get(system, act, &actor_info);
-        uint32_t states[256], n = ta_actor_config(system, act, states, 256), k = 0;
+        ta_actor_info_get(system, location.actor, &actor_info);
+        uint32_t states[256],
+            n = ta_actor_config(system, location.actor, (ta_uint32_array){states, 256}), k = 0;
         for (uint32_t i = 0; i < n && i < 256; i++) {
             ta_state_info state_info;
-            if (ta_image_state_info(&w->segments[segment]->image, actor_info.chart, states[i],
+            if (ta_image_state_info(&w->segments[location.segment]->image,
+                                    (ta_chart_item){actor_info.chart, states[i]},
                                     &state_info) != TA_OK)
                 continue;
             if (state_info.kind == TA_STATE_ATOMIC || state_info.kind == TA_STATE_FINAL)
@@ -509,7 +512,7 @@ static int run_scenario(JSValueConst sc, const char *file) {
                     input = get(s, "input");
             char *document = str_of(d), *an = str_of(as);
             conformance_image *im = image_for(w, document, documents);
-            uint32_t segment, chart;
+            ta_host_chart_ref ref;
             uint64_t session = 0;
             ta_string_view cname =
                 im ? ta_image_chart_name(
@@ -517,9 +520,12 @@ static int run_scenario(JSValueConst sc, const char *file) {
                          ta_image_chart_by_name(
                              &im->image, (ta_string_view){document, (uint32_t)strlen(document)}))
                    : (ta_string_view){0, 0};
-            if (!im || !link(w, im) || ta_host_chart(w->host, cname, &segment, &chart) != TA_OK ||
-                ta_host_spawn(w->host, segment, chart, (ta_string_view){an, (uint32_t)strlen(an)},
-                              payload(w, input), (ta_string_view){0, 0}, &session) != TA_OK) {
+            if (!im || !link(w, im) || ta_host_chart(w->host, cname, &ref) != TA_OK ||
+                ta_host_spawn(w->host,
+                              &(ta_spawn){ref.segment, ref.chart,
+                                          (ta_string_view){an, (uint32_t)strlen(an)},
+                                          payload(w, input), (ta_string_view){0, 0}},
+                              &session) != TA_OK) {
                 snprintf(fail, sizeof fail, "%s: cannot spawn (%s)", where, w->error);
             } else {
                 conformance_actor *a = &w->actors[w->actor_count++];
@@ -538,7 +544,8 @@ static int run_scenario(JSValueConst sc, const char *file) {
             conformance_actor *a = actor_of(w, tn);
             ta_event_in e = event_in(en);
             e.data = payload(w, data);
-            if (!a || ta_host_send(w->host, a->session, &e) != TA_OK)
+            if (a) e.session = a->session;
+            if (!a || ta_host_send(w->host, &e) != TA_OK)
                 snprintf(fail, sizeof fail, "%s: cannot send", where);
             free(tn);
             free(en);
@@ -548,7 +555,6 @@ static int run_scenario(JSValueConst sc, const char *file) {
         } else if (has(s, "sendMany")) {
             JSValue list = get(s, "sendMany");
             uint32_t k = length_of(list);
-            uint64_t sessions[64];
             ta_event_in events[64];
             char *names[64];
             for (uint32_t j = 0; j < k && j < 64; j++) {
@@ -557,16 +563,16 @@ static int run_scenario(JSValueConst sc, const char *file) {
                 char *tn = str_of(to);
                 names[j] = str_of(event_value);
                 conformance_actor *a = actor_of(w, tn);
-                sessions[j] = a ? a->session : 0;
                 events[j] = event_in(names[j]);
                 events[j].data = payload(w, data);
+                events[j].session = a ? a->session : 0;
                 free(tn);
                 JS_FreeValue(J, to);
                 JS_FreeValue(J, event_value);
                 JS_FreeValue(J, data);
                 JS_FreeValue(J, it);
             }
-            if (ta_host_send_many(w->host, sessions, events, k) != k)
+            if (ta_host_send_many(w->host, events, k) != k)
                 snprintf(fail, sizeof fail, "%s: send_many accepted fewer", where);
             for (uint32_t j = 0; j < k && j < 64; j++)
                 free(names[j]);
@@ -582,16 +588,16 @@ static int run_scenario(JSValueConst sc, const char *file) {
             char *an = str_of(v);
             conformance_actor *a = actor_of(w, an);
             static unsigned char buffer[1 << 16];
-            size_t length = 0;
+            ta_buffer written = {buffer, sizeof buffer, 0};
             if (!a || w->store_count >= MAX_ACTORS ||
-                ta_host_hibernate(w->host, a->session, buffer, sizeof buffer, &length) != TA_OK) {
+                ta_host_hibernate(w->host, a->session, &written) != TA_OK) {
                 snprintf(fail, sizeof fail, "%s: could not hibernate", where);
             } else { /* the host's store */
                 conformance_blob *b = &w->store[w->store_count++];
                 b->session = a->session;
-                b->bytes = malloc(length);
-                memcpy(b->bytes, buffer, length);
-                b->length = length;
+                b->bytes = malloc(written.length);
+                memcpy(b->bytes, buffer, written.length);
+                b->length = written.length;
             }
             free(an);
             JS_FreeValue(J, v);
@@ -600,17 +606,21 @@ static int run_scenario(JSValueConst sc, const char *file) {
             char *id = str_of(v);
             uint32_t k = w->snapshot_count++;
             snprintf(w->snapshot_name[k], sizeof w->snapshot_name[k], "%s", id);
-            ta_host_snapshot(w->host, NULL, 0, &w->snapshot_host_length[k]);
+            ta_buffer written = {NULL, 0, 0};
+            ta_host_snapshot(w->host, &written);
+            w->snapshot_host_length[k] = written.length;
             w->snapshot_host[k] = malloc(w->snapshot_host_length[k]);
-            ta_datamodel_ecmascript_snapshot(w->ecmascript, NULL, 0,
-                                             &w->snapshot_datamodel_length[k]);
+            written = (ta_buffer){NULL, 0, 0};
+            ta_datamodel_ecmascript_snapshot(w->ecmascript, &written);
+            w->snapshot_datamodel_length[k] = written.length;
             w->snapshot_datamodel[k] = malloc(w->snapshot_datamodel_length[k]);
-            if (ta_host_snapshot(w->host, w->snapshot_host[k], w->snapshot_host_length[k],
-                                 &w->snapshot_host_length[k]) != TA_OK ||
-                ta_datamodel_ecmascript_snapshot(w->ecmascript, w->snapshot_datamodel[k],
-                                                 w->snapshot_datamodel_length[k],
-                                                 &w->snapshot_datamodel_length[k]) != TA_OK)
+            written = (ta_buffer){w->snapshot_host[k], w->snapshot_host_length[k], 0};
+            ta_buffer datamodel = {w->snapshot_datamodel[k], w->snapshot_datamodel_length[k], 0};
+            if (ta_host_snapshot(w->host, &written) != TA_OK ||
+                ta_datamodel_ecmascript_snapshot(w->ecmascript, &datamodel) != TA_OK)
                 snprintf(fail, sizeof fail, "%s: snapshot failed", where);
+            w->snapshot_host_length[k] = written.length;
+            w->snapshot_datamodel_length[k] = datamodel.length;
             free(id);
             JS_FreeValue(J, v);
         } else if (has(s, "restore")) {
@@ -628,10 +638,16 @@ static int run_scenario(JSValueConst sc, const char *file) {
             for (uint32_t s2 = 0; s2 < w->segment_count; s2++)
                 images[s2] = &w->segments[s2]->image;
             if (k == w->snapshot_count ||
-                ta_host_restore(&config, images, w->segment_count, w->snapshot_host[k],
-                                w->snapshot_host_length[k], &w->host) != TA_OK ||
-                ta_datamodel_ecmascript_restore(w->ecmascript, w->snapshot_datamodel[k],
-                                                w->snapshot_datamodel_length[k]) != TA_OK)
+                ta_host_restore(
+                    &config,
+                    &(ta_host_snapshot_input){{w->snapshot_host[k], w->snapshot_host_length[k]},
+                                              images,
+                                              w->segment_count,
+                                              0},
+                    &w->host) != TA_OK ||
+                ta_datamodel_ecmascript_restore(
+                    w->ecmascript,
+                    (ta_bytes){w->snapshot_datamodel[k], w->snapshot_datamodel_length[k]}) != TA_OK)
                 snprintf(fail, sizeof fail, "%s: restore failed", where);
             free(id);
             JS_FreeValue(J, v);
@@ -649,8 +665,10 @@ static int run_scenario(JSValueConst sc, const char *file) {
             if (!JS_IsUndefined(to)) JS_ToFloat64(J, &tmo, to);
             uint32_t job;
             w->job_done = 0;
-            if (ta_host_migrate(w->host, (ta_string_view){0, 0}, 0,
-                                JS_ToBool(J, wake) ? TA_HOST_MIGRATE_WAKE : 0, (ta_time)tmo,
+            if (ta_host_migrate(w->host,
+                                &(ta_host_migration){(ta_string_view){0, 0}, 0,
+                                                     JS_ToBool(J, wake) ? TA_HOST_MIGRATE_WAKE : 0,
+                                                     0, (ta_time)tmo},
                                 &job) != TA_OK)
                 snprintf(fail, sizeof fail, "%s: cannot migrate", where);
             for (int r = 0; r < 100 && !w->job_done && !fail[0]; r++)

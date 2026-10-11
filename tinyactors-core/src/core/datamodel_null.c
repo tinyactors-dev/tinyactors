@@ -57,7 +57,8 @@ static ta_status null_condition(void *datamodel, uint64_t instance,
     const ta_image *image = ta_datamodel_environment_image(environment);
     uint32_t chart = ta_datamodel_environment_chart(environment);
     ta_expression_info info;
-    if (ta_image_expression(image, chart, expression, &info) != TA_OK) return TA_ERROR_EXECUTION;
+    if (ta_image_expression(image, (ta_chart_item){chart, expression}, &info) != TA_OK)
+        return TA_ERROR_EXECUTION;
     uint32_t state = parse_in(image, chart, info.source);
     if (state == TA_NIL) return TA_ERROR_EXECUTION;
     *out = ta_datamodel_environment_in(environment, state);
@@ -83,9 +84,10 @@ static ta_status null_log(void *datamodel, uint64_t instance, ta_datamodel_envir
     (void)datamodel;
     (void)instance;
     ta_expression_info info;
-    if (ta_image_expression(ta_datamodel_environment_image(environment),
-                            ta_datamodel_environment_chart(environment), expression,
-                            &info) != TA_OK)
+    if (ta_image_expression(
+            ta_datamodel_environment_image(environment),
+            (ta_chart_item){ta_datamodel_environment_chart(environment), expression},
+            &info) != TA_OK)
         return TA_ERROR_EXECUTION;
     ta_string_view s = info.source;
     while (s.length && is_space(s.pointer[0])) {

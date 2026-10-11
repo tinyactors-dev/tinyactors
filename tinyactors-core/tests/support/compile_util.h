@@ -17,9 +17,9 @@ typedef struct test_file {
 } test_file;
 
 /* In-memory resolver over a NULL-terminated test_file array. */
-TEST_UNUSED static ta_status test_resolve(void *context, ta_string_view base, ta_string_view source,
+TEST_UNUSED static ta_status test_resolve(void *context, const ta_resolve_request *request,
                                           ta_source *out) {
-    (void)base;
+    ta_string_view source = request->source;
     for (const test_file *f = (const test_file *)context; f && f->name; f++)
         if (strlen(f->name) == source.length &&
             memcmp(f->name, source.pointer, source.length) == 0) {
@@ -54,7 +54,7 @@ TEST_UNUSED static void *compile_chart(const char *name, const char *text, const
     options.resolve_context = (void *)files;
     ta_source source = {{name, (uint32_t)strlen(name)}, {text, (uint32_t)strlen(text)}};
     ta_compile_result *result = NULL;
-    ta_status status = ta_compile_charts(&options, &source, 1, &result);
+    ta_status status = ta_compile_charts(&options, (ta_source_list){&source, 1}, &result);
     void *copy = NULL;
     if (status == TA_OK) {
         ta_string_view image = ta_compile_image(result);
@@ -75,7 +75,7 @@ TEST_UNUSED static int compile_error_contains(const char *text, const char *need
     options.size = sizeof options;
     ta_source source = {{"bad.scxml", 9}, {text, (uint32_t)strlen(text)}};
     ta_compile_result *result = NULL;
-    ta_status status = ta_compile_charts(&options, &source, 1, &result);
+    ta_status status = ta_compile_charts(&options, (ta_source_list){&source, 1}, &result);
     int found = 0;
     const ta_diagnostic *diagnostic;
     uint32_t n = ta_compile_diagnostics(result, &diagnostic);

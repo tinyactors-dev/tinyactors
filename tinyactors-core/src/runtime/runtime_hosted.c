@@ -78,9 +78,9 @@ void ta_runtime_files_free(ta_runtime_files *files) {
     free(files);
 }
 
-ta_status ta_runtime_resolve(void *context, ta_string_view base, ta_string_view source,
-                             ta_source *out) {
+ta_status ta_runtime_resolve(void *context, const ta_resolve_request *request, ta_source *out) {
     ta_runtime_files *files = (ta_runtime_files *)context;
+    ta_string_view base = request->base, source = request->source;
     /* accept file: URIs */
     if (source.length > 7 && memcmp(source.pointer, "file://", 7) == 0) {
         source.pointer += 7;
@@ -154,7 +154,7 @@ ta_status ta_runtime_compile_file(const char *path, int manifest, ta_compile_res
     source.text.pointer = (const char *)text;
     source.text.length = (uint32_t)length;
     status = manifest ? ta_compile_system(&options, &source, out)
-                      : ta_compile_charts(&options, &source, 1, out);
+                      : ta_compile_charts(&options, (ta_source_list){&source, 1}, out);
     ta_runtime_free_file(text, length);
     ta_runtime_files_free(files);
     return status;

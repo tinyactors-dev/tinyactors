@@ -157,6 +157,8 @@ ta_host_effect *host_effect_new(ta_host *h, uint32_t kind, uint32_t segment);
 void host_effect_strings_set(ta_host *h, ta_string_view t, ta_string_view event, ta_string_view sid,
                              ta_string_view aux);
 ta_status host_send_to(ta_host *h, uint32_t si, uint32_t actor, const ta_event_in *event);
+/* ta_host_locate, for callers that want either half (NULL: not wanted). */
+ta_status host_locate(const ta_host *h, uint64_t session, uint32_t *segment, uint32_t *actor);
 /* TA_ERROR_NO_MEMORY if it could be neither delivered nor kept; TA_OK otherwise
  * (also when the actor is gone: nobody to tell). */
 ta_status host_communication_error(ta_host *h, uint32_t si, uint32_t actor, ta_string_view sendid);
