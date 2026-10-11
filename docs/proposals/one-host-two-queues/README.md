@@ -1,6 +1,6 @@
 # One host, two queues
 
-**Status:** Proposed (2026-10-11). Supersedes [ADR 0008](../../adr/0008-bindings-only-do-io.md) if adopted.
+**Status:** Adopted → [ADR 0009](../../adr/0009-one-host-two-queues.md) (2026-10-11), which supersedes [ADR 0008](../../adr/0008-bindings-only-do-io.md).
 
 The core already has the interface every binding needs: `ta_host` takes inputs and gives effects, and holds them until they are acknowledged. The bindings grew because we put more objects beside the host for them to wire, and because rich data crossed as one C struct per topic. This proposal makes the host the only interface, moves rich data into one encoding the core owns, and starts the bindings again from nothing.
 
@@ -327,7 +327,7 @@ Core speaks no transport protocol, and nothing replaces the link protocol: envel
 | `src/link`, `link.h`                                                                                       | 2     | 1,251  | the link protocol disappears completely; nothing replaces it                                                                                                                                                                                                 |
 | `src/otlp/batch.c` and `ta_otlp_batch`                                                                     | 1     | 161    | the encoder’s staging already batches; posting policy is I/O                                                                                                                                                                                                 |
 | `src/base/json.*`                                                                                          | 2     | 284    | JSON leaves core                                                                                                                                                                                                                                             |
-| `src/base/frame.c`, `frame.h`                                                                              | 2     | 115    | framing is transport (open decision)                                                                                                                                                                                                                         |
+| `src/base/frame.c`, `frame.h`                                                                              | 2     | 115    | framing is transport                                                                                                                                                                                                                         |
 | JS runners: `tests/conformance/run_js.mjs`, `tests/w3c/run_js.mjs`, `tools/bench_*.mjs`                    | 4     | 714    | they drive the deleted bindings                                                                                                                                                                                                                              |
 | mise tasks: `node:*`, `web:*`, `pg:*`, `example:*`, `examples:test`, `conformance:js`, `w3c:js`, `surface` | —     | —      | with what they build and test                                                                                                                                                                                                                                |
 
@@ -374,11 +374,11 @@ Each binding is a project at the repository root with its own `mise.toml`. Recom
 
 ### One datamodel per host in the API.
 
-Mixing datamodels in a host is not supported, yet `ta_host_config` takes an array of up to eight and every effect and envelope carries a datamodel index. Making the config take one binding would let those indices go. Suggested, not decided.
+Decided otherwise: `ta_host_config` keeps its array of datamodels and every effect and envelope keeps its datamodel index. Core does not translate values between charts that use different datamodels ([ADR 0009](../../adr/0009-one-host-two-queues.md), decision 7).
 
 ### At most three parameters.
 
-Group the rest in structs, as the CBOR and request functions above do. Worth recording in `AGENTS.md`; it is not written there yet.
+Group the rest in structs, as the CBOR and request functions above do. Recorded in `AGENTS.md` with ADR 0009.
 
 ## Order of work, in commits that each pass the tests
 
