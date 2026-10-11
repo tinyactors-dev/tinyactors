@@ -14,8 +14,7 @@ no transport protocol: the link protocol, its framing and store links were
 deleted, with the bindings that ran them. An envelope leaves a host as a
 `TA_HOST_EFFECT_PEER` effect and arrives as `ta_host_deliver`; how it travels
 is the application's. Where this document still names `hello`, `err`, links
-or the JS bindings, it describes what they did; the rewrite comes with the
-CBOR values of ADR 0009.
+or the JS bindings, it describes what they did.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -108,26 +107,34 @@ Rules:
 
 ## Values
 
-Event data on the wire is a **neutral value**: JSON (RFC 8259), plus two
-extensions every language can represent:
+Event data between systems is a **neutral value**: one CBOR item (RFC 8949),
+of these kinds:
 
-| JSON | meaning |
+| CBOR | meaning |
 |---|---|
-| `{"$ref": "<address>"}` | an actor reference; the receiver turns it into its own reference type (JS `ActorRef`, a string elsewhere) |
-| `{"$bytes": "<base64>"}` | a byte string (RFC 4648, standard alphabet, padded) |
-| `{"$": {…}}` | an object that itself has a key starting with `$`: the inner object, taken literally |
+| unsigned and negative integers | integers, -2^64 … 2^64-1, exactly |
+| floats (half, single, double) | numbers that are not integers, -0.0, NaN, ±Infinity |
+| text strings | text (UTF-8) |
+| byte strings | bytes |
+| arrays | arrays |
+| maps with text keys | objects; a key that is not text makes the value invalid |
+| `false`, `true`, `null`, `undefined` | themselves |
+| tag 32 on a text string | an actor reference: its address; the receiver turns it into its own reference type, or a string when it has none |
 
-Nothing else is special. Numbers are JSON numbers (integers beyond 2^53 are
-written as strings by convention of the application). Datamodels convert
-between their own values and neutral values (`to_wire` / `from_wire` in the
-datamodel vtable): only the datamodel knows a `PyObject *`, a Ruby `VALUE`, a
-napi value or a quickjs value.
+Nothing else is a neutral value: another tag, another simple value, or an
+indefinite length is refused. A key starting with `$` is an ordinary key.
+Writers use the shortest form of every integer, length and float, and write
+NaN as `f9 7e00` (`ta_cbor_encode`); map keys stay in the order written.
 
-**Profiles.** Two peers may agree on a richer encoding in `hello` (e.g. the
-`js` profile: `undefined`, `Map`, `Set`, `Date`, shared references and cycles,
-as the JS bindings encode them), or on none at all for an in-process route
-between systems sharing one datamodel host. The default, and what every
-implementation must support, is neutral.
+Datamodels convert between their own values and neutral values (`to_wire` /
+`from_wire` in the datamodel vtable): only the datamodel knows a `PyObject *`,
+a Ruby `VALUE` or a quickjs value. The ECMAScript datamodel writes what
+`JSON.stringify` keeps, with numbers, BigInts and bytes exact: an integer
+within ±(2^53-1) as an integer and any other number as a float, a BigInt as
+an integer (past 64 bits it is not a neutral value), and an `ArrayBuffer`, a
+typed array or a `DataView` as bytes; it reads integers past 2^53 as BigInts,
+bytes as a `Uint8Array` and a reference as its address. `ta_cbor_diagnostic`
+writes a value as text, for logs and traces.
 
 ## Delivery
 
@@ -282,8 +289,8 @@ Event I/O Processor, outside this protocol.
 
 - `tests/conformance/addresses.json` — address parsing and formatting
   vectors; run by the C parser (`tests/unit/test_address.c`).
-- `tests/conformance/values.json` — neutral value vectors; run in C
-  (`tests/unit/test_datamodel_ecmascript.c`).
+- `tests/conformance/values.txt` — neutral value vectors, CBOR in hex with
+  its diagnostic notation; run in C (`tests/unit/test_datamodel_ecmascript.c`).
 - `tests/unit/test_router.c` — the router: routes, relaying, hop limit,
   origin validation, policy, errors, dedup, route status.
 

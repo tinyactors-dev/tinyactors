@@ -19,6 +19,7 @@
 #include <tinyactors.h>
 #include <tinyactors/compile.h>
 #include <tinyactors/datamodel_ecmascript.h>
+#include "../support/payload_text.h"
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 
@@ -284,7 +285,7 @@ static void settle(conformance_world *w) {
                     a->done = 1;
                     if (effect->payload) {
                         char buffer[4096];
-                        ta_datamodel_ecmascript_payload_to_json(w->ecmascript, effect->payload,
+                        payload_text(w->ecmascript, effect->payload,
                                                                 buffer, sizeof buffer);
                         a->output = strdup(buffer);
                     }
@@ -335,8 +336,8 @@ static ta_payload payload(conformance_world *w, JSValueConst data) {
     JSValue v = JS_Call(J, f, JS_UNDEFINED, 2, argv);
     char *json = json_of(v);
     ta_payload payload_value =
-        json ? ta_datamodel_ecmascript_payload_from_json(
-                   w->ecmascript, (ta_string_view){json, (uint32_t)strlen(json)})
+        json ? ta_datamodel_ecmascript_payload_eval(
+                   w->ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)})
              : 0;
     free(json);
     JS_FreeValue(J, v);

@@ -799,8 +799,8 @@ static ta_payload payload_arg(JSContext *context, bench_system *system, JSValueC
     size_t length;
     const char *json = JS_ToCStringLen(context, &length, v); /* already JSON text */
     if (!json) return 0;
-    ta_payload payload = ta_datamodel_ecmascript_payload_from_json(
-        datamodel_of(system), (ta_string_view){json, (uint32_t)length});
+    ta_payload payload = ta_datamodel_ecmascript_payload_eval(
+        datamodel_of(system), 0, (ta_string_view){json, (uint32_t)length});
     JS_FreeCString(context, json);
     return payload;
 }
@@ -889,8 +889,9 @@ static JSValue h_send_many(JSContext *context, JSValueConst this_value, int argc
         uint64_t h;
         if (split_id(context, v, &system, &h)) {
             ta_payload payload = json
-                                     ? ta_datamodel_ecmascript_payload_from_json(
-                                           system->ecmascript, (ta_string_view){json, (uint32_t)jl})
+                                     ? ta_datamodel_ecmascript_payload_eval(
+                                           system->ecmascript, 0,
+                                           (ta_string_view){json, (uint32_t)jl})
                                      : 0;
             ok += send_one(system, h, name, nl, payload) == TA_OK;
         }
@@ -1658,17 +1659,42 @@ static char *dup_str(ta_string_view v) {
     return p;
 }
 
-static char *payload_json(ta_datamodel_ecmascript *ecmascript, ta_payload payload) {
+/* A payload as CBOR (malloc'd; NULL without one or on failure). */
+static unsigned char *payload_cbor(ta_datamodel_ecmascript *ecmascript, ta_payload payload,
+                                   size_t *length) {
     if (!payload) return NULL;
-    char small[4096];
-    size_t n = ta_datamodel_ecmascript_payload_to_json(ecmascript, payload, small, sizeof small);
-    if (n == (size_t)-1) return NULL;
-    char *out = (char *)malloc(n + 1);
-    if (n < sizeof small)
-        memcpy(out, small, n + 1);
-    else
-        ta_datamodel_ecmascript_payload_to_json(ecmascript, payload, out, n + 1);
-    return out;
+    ta_buffer out = {NULL, 0, 0};
+    if (ta_datamodel_ecmascript_payload_to_cbor(ecmascript, payload, &out) != TA_ERROR_NO_MEMORY)
+        return NULL;
+    out.pointer = malloc(out.length ? out.length : 1);
+    out.capacity = out.length;
+    if (!out.pointer || ta_datamodel_ecmascript_payload_to_cbor(ecmascript, payload, &out) != TA_OK) {
+        free(out.pointer);
+        return NULL;
+    }
+    *length = out.length;
+    return (unsigned char *)out.pointer;
+}
+
+/* A payload as text for the scenario scripts: CBOR diagnostic notation, which
+ * reads as JSON for the values scenarios send (malloc'd; NULL without one). */
+static char *payload_json(ta_datamodel_ecmascript *ecmascript, ta_payload payload) {
+    size_t length = 0;
+    unsigned char *cbor = payload_cbor(ecmascript, payload, &length);
+    if (!cbor) return NULL;
+    ta_buffer out = {NULL, 0, 0};
+    ta_cbor_diagnostic((ta_bytes){cbor, length}, &out);
+    char *text = (char *)malloc(out.length + 1);
+    out.pointer = text;
+    out.capacity = out.length;
+    if (!text || ta_cbor_diagnostic((ta_bytes){cbor, length}, &out) != TA_OK) {
+        free(text);
+        free(cbor);
+        return NULL;
+    }
+    text[out.length] = 0;
+    free(cbor);
+    return text;
 }
 
 static bench_operation *operation_push(int kind, uint64_t actor) {
@@ -1730,7 +1756,7 @@ static int spawn_take(bench_system *system, uint64_t session, bench_spawn *out) 
  * trusted peer of every other; an envelope one router hands out
  * (TA_HOST_EFFECT_PEER) goes into the other system's router (ta_host_deliver),
  * an error back (TA_HOST_EFFECT_PEER_ERROR) into the sender's (ta_host_peer_error).
- * Payloads cross as neutral JSON: the systems have separate datamodels. */
+ * Payloads cross as neutral values, CBOR: the systems have separate datamodels. */
 static void peers_connect(int si) {
     bench_system *system = &B.system[si];
     for (int k = 0; k < MAX_SYSTEMS; k++) {
@@ -1771,7 +1797,8 @@ static void deliver_remote(bench_system *from, const ta_host_effect *effect) {
                            effect->sendid, TA_ROUTE_ERROR_UNREACHABLE);
         return;
     }
-    char *json = payload_json(from->ecmascript, effect->payload);
+    size_t length = 0;
+    unsigned char *cbor = payload_cbor(from->ecmascript, effect->payload, &length);
     ta_envelope envelope;
     memset(&envelope, 0, sizeof envelope);
     envelope.size = sizeof envelope;
@@ -1781,11 +1808,11 @@ static void deliver_remote(bench_system *from, const ta_host_effect *effect) {
     envelope.sendid = effect->sendid;
     envelope.origin = effect->auxiliary;
     envelope.msgid = effect->msgid;
-    envelope.data = json ? ta_datamodel_ecmascript_payload_from_json(
-                               to->ecmascript, (ta_string_view){json, (uint32_t)strlen(json)})
-                         : 0;
+    if (!cbor || ta_datamodel_ecmascript_payload_from_cbor(to->ecmascript, (ta_bytes){cbor, length},
+                                                           &envelope.data) != TA_OK)
+        envelope.data = 0;
     envelope.datamodel = 0; /* the ECMAScript datamodel */
-    free(json);
+    free(cbor);
     uint32_t outcome;
     ta_host_deliver(to->host, to->peer_of[fi], &envelope, &outcome);
     if (outcome == TA_ROUTE_DELIVERED || outcome == TA_ROUTE_RELAYED) {

@@ -81,6 +81,18 @@ TA_API uint32_t ta_cbor_member(const ta_cbor_document *document, uint32_t map, t
  * TA_ERROR_NO_MEMORY: out->length is the capacity it needs. */
 TA_API ta_status ta_cbor_encode(const ta_cbor_document *document, ta_buffer *out);
 
+/* ---- diagnostic notation --------------------------------------------------- */
+/* One item as text (RFC 8949 §8), compact: no spaces, so a value made of
+ * maps, arrays, text, integers, true, false and null reads as its JSON.
+ * Text is escaped as JSON escapes it; bytes are h'00ff'; a tag is 32("…");
+ * a float is the shortest decimal that reads back as it, with a point or an
+ * exponent (1.0, 0.1, 1.0e+300), or NaN, Infinity, -Infinity; other simple
+ * values are simple(16).
+ * TA_ERROR_NO_MEMORY: out holds the text's first out->capacity bytes and
+ * out->length is the capacity it needs. TA_ERROR_INVALID and
+ * TA_ERROR_UNSUPPORTED as for ta_cbor_decode. For logs, traces and tests. */
+TA_API ta_status ta_cbor_diagnostic(ta_bytes cbor, ta_buffer *out);
+
 /* ---- writing tokens from C ------------------------------------------------- */
 /* A document being built: tokens go to `document`, their text and bytes to
  * `strings`, and a text or byte token's value is its offset in `strings`.

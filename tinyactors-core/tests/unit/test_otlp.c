@@ -225,8 +225,8 @@ static void world_send(world *w, uint32_t actor, const char *name, const char *j
     event.target = actor;
     event.name = (ta_string_view){name, (uint32_t)strlen(name)};
     if (json)
-        event.data = ta_datamodel_ecmascript_payload_from_json(
-            w->ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+        event.data = ta_datamodel_ecmascript_payload_eval(
+            w->ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
     if (traceparent)
         event.traceparent = (ta_string_view){traceparent, (uint32_t)strlen(traceparent)};
     CHECK_EQUAL(ta_system_send(w->system, &event), TA_OK);

@@ -4,6 +4,7 @@
  * items each open container still has, so nothing recurses. */
 #include <tinyactors/cbor.h>
 
+#include "base/format.h"
 #include "base/memory.h"
 
 enum {
@@ -400,6 +401,357 @@ ta_status ta_cbor_encode(const ta_cbor_document *document, ta_buffer *out) {
         }
     }
     if (at != document->count) return TA_ERROR_INVALID; /* tokens after the item */
+    out->length = output.length;
+    return output.length > output.capacity ? TA_ERROR_NO_MEMORY : TA_OK;
+}
+
+/* ---- diagnostic notation ----------------------------------------------------- */
+
+/* Text that may be cut: what fits is written, and length goes on counting. */
+static void output_text(cbor_output *output, const char *text, size_t length) {
+    if (output->length < output->capacity) {
+        size_t room = output->capacity - output->length;
+        ta_memcpy(output->bytes + output->length, text, length < room ? length : room);
+    }
+    output->length += length;
+}
+
+static void output_cstring(cbor_output *output, const char *text) {
+    size_t length = 0;
+    while (text[length])
+        length++;
+    output_text(output, text, length);
+}
+
+static void output_decimal(cbor_output *output, uint64_t value) {
+    char digits[TA_FORMAT_U64_MAX];
+    output_text(output, digits, ta_format_u64(digits, value));
+}
+
+static const char HEX[] = "0123456789abcdef";
+
+/* A text string in quotes, escaped as JSON escapes it. */
+static void output_quoted(cbor_output *output, const unsigned char *text, size_t length) {
+    output_text(output, "\"", 1);
+    for (size_t k = 0; k < length; k++) {
+        unsigned char c = text[k];
+        const char *escape = c == '"'    ? "\\\""
+                             : c == '\\' ? "\\\\"
+                             : c == '\b' ? "\\b"
+                             : c == '\f' ? "\\f"
+                             : c == '\n' ? "\\n"
+                             : c == '\r' ? "\\r"
+                             : c == '\t' ? "\\t"
+                                         : 0;
+        if (escape) {
+            output_cstring(output, escape);
+        } else if (c < 0x20) {
+            char unicode[6] = {'\\', 'u', '0', '0', HEX[c >> 4], HEX[c & 15]};
+            output_text(output, unicode, 6);
+        } else {
+            output_text(output, (const char *)&c, 1);
+        }
+    }
+    output_text(output, "\"", 1);
+}
+
+/* ---- shortest decimals: Steele and White's free-format algorithm (Dragon4),
+ * over integers of fixed size: the digits of a double that read back as it,
+ * as few as there are. */
+
+/* An unsigned integer of up to 44 32-bit words, least significant first:
+ * room for 2^1076 × 10, the largest any step below makes. */
+#define BIG_WORDS 44
+typedef struct big {
+    uint32_t word[BIG_WORDS];
+    uint32_t length; /* words in use; the top one is not 0 */
+} big;
+
+static void big_from(big *b, uint64_t value) {
+    b->word[0] = (uint32_t)value;
+    b->word[1] = (uint32_t)(value >> 32);
+    b->length = value >> 32 ? 2 : value ? 1 : 0;
+}
+
+static void big_multiply(big *b, uint32_t factor) {
+    uint64_t carry = 0;
+    for (uint32_t i = 0; i < b->length; i++) {
+        uint64_t product = (uint64_t)b->word[i] * factor + carry;
+        b->word[i] = (uint32_t)product;
+        carry = product >> 32;
+    }
+    if (carry && b->length < BIG_WORDS) b->word[b->length++] = (uint32_t)carry;
+}
+
+static void big_shift(big *b, uint32_t bits) {
+    for (; bits >= 16; bits -= 16)
+        big_multiply(b, 1u << 16);
+    if (bits) big_multiply(b, 1u << bits);
+}
+
+static int big_compare(const big *a, const big *b) {
+    if (a->length != b->length) return a->length < b->length ? -1 : 1;
+    for (uint32_t i = a->length; i-- > 0;)
+        if (a->word[i] != b->word[i]) return a->word[i] < b->word[i] ? -1 : 1;
+    return 0;
+}
+
+static void big_add(big *out, const big *a, const big *b) {
+    const big *longer = a->length >= b->length ? a : b, *shorter = longer == a ? b : a;
+    uint64_t carry = 0;
+    for (uint32_t i = 0; i < longer->length; i++) {
+        uint64_t sum = (uint64_t)longer->word[i] + (i < shorter->length ? shorter->word[i] : 0) + carry;
+        out->word[i] = (uint32_t)sum;
+        carry = sum >> 32;
+    }
+    out->length = longer->length;
+    if (carry && out->length < BIG_WORDS) out->word[out->length++] = (uint32_t)carry;
+}
+
+/* a -= b, for a >= b */
+static void big_subtract(big *a, const big *b) {
+    int64_t borrow = 0;
+    for (uint32_t i = 0; i < a->length; i++) {
+        int64_t difference = (int64_t)a->word[i] - (i < b->length ? b->word[i] : 0) - borrow;
+        borrow = difference < 0;
+        a->word[i] = (uint32_t)(difference + (borrow ? (int64_t)1 << 32 : 0));
+    }
+    while (a->length && !a->word[a->length - 1])
+        a->length--;
+}
+
+/* The shortest digits that read back as the positive, finite double `bits`
+ * (at most 17), with *point where the decimal point goes: the value is
+ * 0.digits × 10^point. Returns how many digits. */
+static uint32_t float_shortest(uint64_t bits, char *digits, int32_t *point) {
+    uint64_t fraction = bits & UINT64_C(0xFFFFFFFFFFFFF);
+    int32_t biased = (int32_t)((bits >> 52) & 0x7FF);
+    uint64_t f = biased ? fraction | UINT64_C(1) << 52 : fraction;
+    int32_t e = biased ? biased - 1075 : -1074;
+    int even = !(f & 1);
+    /* at a power of two the next double down is half as far as the next up */
+    int lower_closer = !fraction && biased > 1;
+    /* value = r / s; the doubles around it are half of m_minus, m_plus away */
+    big r, s, m_plus, m_minus, t;
+    if (e >= 0) {
+        big_from(&r, f);
+        big_shift(&r, (uint32_t)e + 1 + (uint32_t)lower_closer);
+        big_from(&s, lower_closer ? 4 : 2);
+        big_from(&m_minus, 1);
+        big_shift(&m_minus, (uint32_t)e);
+        big_from(&m_plus, 1);
+        big_shift(&m_plus, (uint32_t)e + (uint32_t)lower_closer);
+    } else {
+        big_from(&r, f);
+        big_shift(&r, 1 + (uint32_t)lower_closer);
+        big_from(&s, 1);
+        big_shift(&s, (uint32_t)(1 - e + lower_closer));
+        big_from(&m_minus, 1);
+        big_from(&m_plus, lower_closer ? 2 : 1);
+    }
+    /* an estimate of k = ceil(log10(value)), then corrected */
+    uint32_t width = 0;
+    for (uint64_t x = f; x; x >>= 1)
+        width++;
+    double estimate = (double)(e + (int32_t)width - 1) * 0.30102999566398114 + 1;
+    int32_t k = (int32_t)estimate - (estimate < 0 && (double)(int32_t)estimate != estimate);
+    for (int32_t i = 0; i < (k < 0 ? -k : k); i++) {
+        if (k >= 0) {
+            big_multiply(&s, 10);
+        } else {
+            big_multiply(&r, 10);
+            big_multiply(&m_plus, 10);
+            big_multiply(&m_minus, 10);
+        }
+    }
+    for (;;) { /* too small a k: the value reaches 10^k */
+        big_add(&t, &r, &m_plus);
+        int high = big_compare(&t, &s);
+        if (high < 0 || (high == 0 && !even)) break;
+        big_multiply(&s, 10);
+        k++;
+    }
+    for (;;) { /* too large a k: the value stays below 10^(k-1) */
+        big_add(&t, &r, &m_plus);
+        big_multiply(&t, 10);
+        int high = big_compare(&t, &s);
+        if (high > 0 || (high == 0 && even)) break;
+        big_multiply(&r, 10);
+        big_multiply(&m_plus, 10);
+        big_multiply(&m_minus, 10);
+        k--;
+    }
+    *point = k;
+    uint32_t count = 0;
+    for (;;) {
+        big_multiply(&r, 10);
+        big_multiply(&m_plus, 10);
+        big_multiply(&m_minus, 10);
+        uint32_t digit = 0;
+        while (big_compare(&r, &s) >= 0) {
+            big_subtract(&r, &s);
+            digit++;
+        }
+        int low_compare = big_compare(&r, &m_minus);
+        big_add(&t, &r, &m_plus);
+        int high_compare = big_compare(&t, &s);
+        int low = low_compare < 0 || (even && low_compare == 0);
+        int high = high_compare > 0 || (even && high_compare == 0);
+        if (low && high) { /* both read back: the nearer one */
+            big_add(&t, &r, &r);
+            if (big_compare(&t, &s) >= 0) digit++;
+        } else if (high) {
+            digit++;
+        }
+        digits[count++] = (char)('0' + digit);
+        if (low || high || count == 17) break;
+    }
+    return count;
+}
+
+/* A float in diagnostic notation: the shortest decimal that reads back as
+ * it, with a point or an exponent (1.0, 0.1, 1.0e+300); NaN, Infinity. */
+static void output_float_text(cbor_output *output, uint64_t bits) {
+    uint32_t biased = (uint32_t)((bits >> 52) & 0x7FF);
+    uint64_t fraction = bits & UINT64_C(0xFFFFFFFFFFFFF);
+    if (biased == 0x7FF && fraction) {
+        output_cstring(output, "NaN");
+        return;
+    }
+    if (bits >> 63) output_text(output, "-", 1);
+    if (biased == 0x7FF) {
+        output_cstring(output, "Infinity");
+        return;
+    }
+    if (!biased && !fraction) {
+        output_cstring(output, "0.0");
+        return;
+    }
+    char digits[17];
+    int32_t point;
+    int32_t length = (int32_t)float_shortest(bits & ~(UINT64_C(1) << 63), digits, &point);
+    if (point > 21 || point < -5) { /* d.ddde±x */
+        output_text(output, digits, 1);
+        output_text(output, ".", 1);
+        if (length > 1) output_text(output, digits + 1, (size_t)(length - 1));
+        else output_text(output, "0", 1);
+        output_text(output, point - 1 < 0 ? "e-" : "e+", 2);
+        output_decimal(output, (uint64_t)(point - 1 < 0 ? 1 - point : point - 1));
+    } else if (point >= length) { /* an integer: ddd000.0 */
+        output_text(output, digits, (size_t)length);
+        for (int32_t k = length; k < point; k++)
+            output_text(output, "0", 1);
+        output_text(output, ".0", 2);
+    } else if (point > 0) { /* dd.ddd */
+        output_text(output, digits, (size_t)point);
+        output_text(output, ".", 1);
+        output_text(output, digits + point, (size_t)(length - point));
+    } else { /* 0.000ddd */
+        output_text(output, "0.", 2);
+        for (int32_t k = 0; k < -point; k++)
+            output_text(output, "0", 1);
+        output_text(output, digits, (size_t)length);
+    }
+}
+
+ta_status ta_cbor_diagnostic(ta_bytes cbor, ta_buffer *out) {
+    cbor_reader reader = {(const unsigned char *)cbor.pointer, cbor.length, 0};
+    cbor_output output = {(unsigned char *)out->pointer, out->pointer ? out->capacity : 0, 0};
+    /* per open container: what closes it, and the items it has seen */
+    char closer[TA_CBOR_DEPTH_MAX];
+    uint64_t seen[TA_CBOR_DEPTH_MAX];
+    cbor_nesting nesting;
+    nesting.depth = 0;
+    out->length = 0;
+    for (;;) {
+        if (nesting.depth) { /* the separator before this item */
+            uint32_t top = nesting.depth - 1;
+            if (closer[top] == ']' && seen[top]) output_text(&output, ",", 1);
+            if (closer[top] == '}' && seen[top]) output_text(&output, seen[top] & 1 ? ":" : ",", 1);
+            seen[top]++;
+        }
+        if (reader.at == reader.length) return TA_ERROR_INVALID; /* truncated */
+        uint32_t initial = reader.bytes[reader.at++];
+        uint32_t major = initial >> 5, info = initial & 0x1F;
+        uint64_t argument = 0, children = 0;
+        if (info == INFO_INDEFINITE)
+            return major >= MAJOR_BYTES && major <= MAJOR_MAP ? TA_ERROR_UNSUPPORTED : TA_ERROR_INVALID;
+        ta_status status = read_argument(&reader, info, &argument);
+        if (status != TA_OK) return status;
+        char open = 0;
+        switch (major) {
+        case MAJOR_UINT: output_decimal(&output, argument); break;
+        case MAJOR_NEGINT:
+            if (argument == UINT64_MAX) output_cstring(&output, "-18446744073709551616");
+            else output_text(&output, "-", 1), output_decimal(&output, argument + 1);
+            break;
+        case MAJOR_BYTES:
+        case MAJOR_TEXT:
+            if (argument > reader.length - reader.at) return TA_ERROR_INVALID;
+            if (major == MAJOR_TEXT) {
+                if (!utf8_valid(reader.bytes + reader.at, (size_t)argument)) return TA_ERROR_INVALID;
+                output_quoted(&output, reader.bytes + reader.at, (size_t)argument);
+            } else {
+                output_text(&output, "h'", 2);
+                for (uint64_t k = 0; k < argument; k++) {
+                    char pair[2] = {HEX[reader.bytes[reader.at + k] >> 4], HEX[reader.bytes[reader.at + k] & 15]};
+                    output_text(&output, pair, 2);
+                }
+                output_text(&output, "'", 1);
+            }
+            reader.at += (size_t)argument;
+            break;
+        case MAJOR_ARRAY:
+        case MAJOR_MAP:
+            children = major == MAJOR_MAP ? argument * 2 : argument;
+            if (argument > UINT32_MAX || children > reader.length - reader.at) return TA_ERROR_INVALID;
+            output_text(&output, major == MAJOR_MAP ? "{" : "[", 1);
+            open = major == MAJOR_MAP ? '}' : ']';
+            if (!children) output_text(&output, &open, 1);
+            break;
+        case MAJOR_TAG:
+            output_decimal(&output, argument);
+            output_text(&output, "(", 1);
+            children = 1;
+            open = ')';
+            break;
+        default: /* MAJOR_SIMPLE */
+            if (info >= INFO_TWO_BYTES) {
+                output_float_text(&output, info == INFO_TWO_BYTES    ? half_widen((uint32_t)argument)
+                                           : info == INFO_FOUR_BYTES ? single_widen((uint32_t)argument)
+                                                                     : argument);
+            } else if (info == INFO_ONE_BYTE && argument < 32) {
+                return TA_ERROR_INVALID;
+            } else {
+                static const char *const NAMES[4] = {"false", "true", "null", "undefined"};
+                if (argument >= TA_CBOR_FALSE && argument <= TA_CBOR_UNDEFINED) {
+                    output_cstring(&output, NAMES[argument - TA_CBOR_FALSE]);
+                } else {
+                    output_cstring(&output, "simple(");
+                    output_decimal(&output, argument);
+                    output_text(&output, ")", 1);
+                }
+            }
+            break;
+        }
+        if (children) {
+            if (nesting_open(&nesting, children) != TA_OK) return TA_ERROR_INVALID;
+            closer[nesting.depth - 1] = open;
+            seen[nesting.depth - 1] = 0;
+            continue;
+        }
+        /* the item is complete: close every container it completes */
+        int done = 1;
+        while (nesting.depth) {
+            if (--nesting.remaining[nesting.depth - 1]) {
+                done = 0;
+                break;
+            }
+            output_text(&output, &closer[--nesting.depth], 1);
+        }
+        if (done) break;
+    }
+    if (reader.at != reader.length) return TA_ERROR_INVALID; /* bytes after the item */
     out->length = output.length;
     return output.length > output.capacity ? TA_ERROR_NO_MEMORY : TA_OK;
 }

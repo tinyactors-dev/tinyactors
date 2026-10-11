@@ -4,6 +4,7 @@
 #include "system/system_internal.h"
 #include "../support/system_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
+#include "../support/payload_text.h"
 #include "quickjs.h"
 
 /* Run until idle; record which actors asked to be woken. */
@@ -309,7 +310,7 @@ static const char *ecmascript_eval(ecmascript_test *x, uint32_t actor, const cha
     uint64_t instance =
         ta_actor_instance(x->test_system.system, ta_actor_at(x->test_system.system, index))
             ->datamodel;
-    if (ta_datamodel_ecmascript_eval_json(
+    if (eval_text(
             x->ecmascript, instance, (ta_string_view){expression, (uint32_t)strlen(expression)},
             buffer, sizeof buffer) == (size_t)-1)
         return "<error>";
@@ -355,7 +356,7 @@ static void test_ecmascript_state_survives(void) {
     event.target = a;
     event.name = (ta_string_view){"add", 3};
     event.data =
-        ta_datamodel_ecmascript_payload_from_json(x.ecmascript, (ta_string_view){"{\"v\": 3}", 8});
+        ta_datamodel_ecmascript_payload_eval(x.ecmascript, 0, (ta_string_view){"{\"v\": 3}", 8});
     CHECK_EQUAL(ta_system_send(t->system, &event), TA_OK);
     run_all(t);
     char sid[64];

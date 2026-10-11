@@ -121,8 +121,8 @@ static ta_status send(host_world *e, uint64_t session, const char *name, const c
     memset(&event, 0, sizeof event);
     event.size = sizeof event;
     event.name = (ta_string_view){name, (uint32_t)strlen(name)};
-    event.data = json ? ta_datamodel_ecmascript_payload_from_json(
-                            e->ecmascript, (ta_string_view){json, (uint32_t)strlen(json)})
+    event.data = json ? ta_datamodel_ecmascript_payload_eval(
+                            e->ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)})
                       : 0;
     ta_status status = ta_host_send(e->host, session, &event);
     if (status != TA_OK && event.data)

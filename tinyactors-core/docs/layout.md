@@ -138,7 +138,7 @@ implementation of that layer). Layer dependency rules are in
 │
 ├── tests/
 │   ├── harness/harness.h      ✅ dependency-free test macros
-│   ├── support/               ✅ datamodel_test (ECMAScript-subset test datamodel), compile/system/file helpers
+│   ├── support/               ✅ datamodel_test (ECMAScript-subset test datamodel), compile/system/file helpers, payloads as text
 │   ├── unit/                  ✅ test_{base,image,compile,compile_scale,core,system,scenarios,runtime,e2e,
 │   │                             datamodel_ecmascript,hibernate,migrate,host,router,address,cbor,headers,
 │   │                             trace,journal,tracing,otlp};

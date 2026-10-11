@@ -268,7 +268,7 @@ typedef struct ta_actor_info {
     uint32_t current_event_name; /* name id or TA_NIL */
     uint64_t serial;             /* _sessionid */
     uint64_t datamodel_instance; /* its datamodel instance handle (0 while hibernated), for
-                             datamodel-side inspection such as ta_datamodel_ecmascript_eval_json */
+                             datamodel-side inspection such as ta_datamodel_ecmascript_payload_eval */
     uint32_t invocations; /* running invocations (SCXML sessions it invoked, external ones) */
     uint32_t pad;
 } ta_actor_info;

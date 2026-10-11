@@ -184,7 +184,7 @@ struct ta_otlp {
     uint32_t entry_capacity, index_capacity;
     int64_t open_relative, index_relative, skips_relative, chunks_relative, spans_relative,
         entries_relative, scopes_relative, scope_bytes_relative, logs_relative, resource_relative,
-        scratch_relative, render_relative, metrics_relative, durations_relative;
+        scratch_relative, render_relative, text_relative, metrics_relative, durations_relative;
     uint32_t scratch_bytes, open_count, skip_count, chunk_free, chunk_high, chunks_used;
     uint32_t spans_used, entry_count, scope_count, scope_bytes_used, logs_used, log_count;
     uint32_t resource_used, span_count, mark_head, mark_count;

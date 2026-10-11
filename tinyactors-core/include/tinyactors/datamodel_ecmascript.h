@@ -84,24 +84,21 @@ TA_API void ta_datamodel_ecmascript_free(ta_datamodel_ecmascript *ecmascript);
 TA_API const ta_datamodel_vtable *ta_datamodel_ecmascript_vtable(void); /* name: "ecmascript" */
 TA_API ta_datamodel_binding ta_datamodel_ecmascript_binding(ta_datamodel_ecmascript *es);
 
-/* Host helpers. JSON in/out; returned lengths exclude the NUL; output is
- * truncated to `capacity` (always NUL-terminated when capacity > 0). */
-TA_API ta_payload ta_datamodel_ecmascript_payload_from_json(ta_datamodel_ecmascript *ecmascript,
-                                                            ta_string_view json);
-TA_API size_t ta_datamodel_ecmascript_payload_to_json(ta_datamodel_ecmascript *ecmascript,
-                                                      ta_payload p, char *buffer, size_t capacity);
-/* A payload from an ECMAScript expression evaluated outside any session (e.g.
- * "new Uint8Array([1, 2])"); 0 on error. One reference, released by the system
- * or with the vtable's release. Neutral wire values: the vtable's to_wire /
- * from_wire (docs/protocol.md, "Values"). */
+/* Host helpers. Neutral values as CBOR (docs/protocol.md, "Values"): the
+ * vtable's to_wire and from_wire, callable without it. */
+TA_API ta_status ta_datamodel_ecmascript_payload_to_cbor(ta_datamodel_ecmascript *ecmascript,
+                                                         ta_payload p, ta_buffer *out);
+TA_API ta_status ta_datamodel_ecmascript_payload_from_cbor(ta_datamodel_ecmascript *ecmascript,
+                                                           ta_bytes cbor, ta_payload *out);
+/* A payload from an ECMAScript expression; 0 on error. With instance 0 it
+ * is evaluated outside any session (e.g. "new Uint8Array([1, 2])"); else in
+ * that session's datamodel (the instance handle as seen by the datamodel,
+ * e.g. for inspection or debugging), where a variable's name reads it
+ * without compiling. One reference, released by the system or with the
+ * vtable's release. */
 TA_API ta_payload ta_datamodel_ecmascript_payload_eval(ta_datamodel_ecmascript *ecmascript,
+                                                       uint64_t instance,
                                                        ta_string_view expression);
-/* Evaluate an expression in a session's datamodel (instance handle as seen
- * by the datamodel, e.g. for inspection/debugging) and return it as JSON;
- * returns (size_t)-1 on error. */
-TA_API size_t ta_datamodel_ecmascript_eval_json(ta_datamodel_ecmascript *ecmascript,
-                                                uint64_t instance, ta_string_view expression,
-                                                char *buffer, size_t capacity);
 /* Snapshot / restore of the whole datamodel — every session's variables and
  * _event, every payload and <foreach> in progress, at their handles — for
  * restoring a system or host snapshot (ta_system_restore, ta_host_restore),

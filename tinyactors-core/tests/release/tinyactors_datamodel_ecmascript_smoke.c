@@ -20,17 +20,20 @@ int main(void) {
     }
     static const char EXPRESSION[] = "({sum: [1, 2, 3].reduce((a, b) => a + b), text: 'é'.normalize('NFD').length})";
     ta_string_view expression = {EXPRESSION, sizeof EXPRESSION - 1};
-    ta_payload payload = ta_datamodel_ecmascript_payload_eval(ecmascript, expression);
-    char json[128];
-    size_t length = payload ? ta_datamodel_ecmascript_payload_to_json(ecmascript, payload, json, sizeof json) : 0;
-    if (payload == 0 || length == (size_t)-1 || strcmp(json, "{\"sum\":6,\"text\":2}") != 0) {
-        fprintf(stderr, "tinyactors_datamodel_ecmascript smoke: got %s\n", payload ? json : "no payload");
+    ta_payload payload = ta_datamodel_ecmascript_payload_eval(ecmascript, 0, expression);
+    /* {"sum": 6, "text": 2} as CBOR */
+    static const unsigned char EXPECTED[] = {0xa2, 0x63, 's', 'u', 'm', 0x06, 0x64, 't', 'e', 'x', 't', 0x02};
+    unsigned char cbor[64];
+    ta_buffer out = {cbor, sizeof cbor, 0};
+    ta_status status = payload ? ta_datamodel_ecmascript_payload_to_cbor(ecmascript, payload, &out) : TA_ERROR_INVALID;
+    if (status != TA_OK || out.length != sizeof EXPECTED || memcmp(cbor, EXPECTED, sizeof EXPECTED) != 0) {
+        fprintf(stderr, "tinyactors_datamodel_ecmascript smoke: got status %d, %zu bytes\n", (int)status, out.length);
         return 1;
     }
     ta_datamodel_binding binding = ta_datamodel_ecmascript_binding(ecmascript);
     binding.vtable->release(binding.datamodel, payload);
     ta_datamodel_ecmascript_free(ecmascript);
-    printf("tinyactors_datamodel_ecmascript %d.%d.%d: QuickJS evaluated %s\n", TA_VERSION_MAJOR, TA_VERSION_MINOR,
-           TA_VERSION_PATCH, json);
+    printf("tinyactors_datamodel_ecmascript %d.%d.%d: QuickJS evaluated {\"sum\":6,\"text\":2}\n", TA_VERSION_MAJOR,
+           TA_VERSION_MINOR, TA_VERSION_PATCH);
     return 0;
 }

@@ -180,7 +180,7 @@ module Core
     unit('test_scenarios', 'system', 'compile', 'test_datamodel'),
     unit('test_runtime', 'runtime', 'test_datamodel', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch }),
     unit('test_datamodel_ecmascript', 'system', 'compile', *ECMASCRIPT,
-         defines: { 'TA_VALUES' => ROOT.join('tests/conformance/values.json') }),
+         defines: { 'TA_VALUES' => ROOT.join('tests/conformance/values.txt') }),
     unit('test_e2e', 'runtime', 'test_datamodel', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch }),
     unit('test_hibernate', 'system', 'compile', 'test_datamodel', *ECMASCRIPT),
     unit('test_migrate', 'system', 'compile', 'test_datamodel', *ECMASCRIPT),

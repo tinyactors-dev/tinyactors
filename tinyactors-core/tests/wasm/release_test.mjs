@@ -127,14 +127,19 @@ if (x.ta_datamodel_ecmascript_new) {
   setU32(config + offset('ta_datamodel_ecmascript_config', 'size'), layout('ta_datamodel_ecmascript_config').size);
   const ecmascript = x.ta_datamodel_ecmascript_new(config);
   assert.notEqual(ecmascript, 0, 'the data model starts');
-  const payload = x.ta_datamodel_ecmascript_payload_eval(ecmascript,
+  const payload = x.ta_datamodel_ecmascript_payload_eval(ecmascript, 0n,
     view("({sum: [1, 2, 3].reduce((a, b) => a + b), year: new Date().getUTCFullYear(), now: Date.now()})"));
   assert.notEqual(payload, 0n, 'the expression evaluates');
-  const buffer = alloc(256, 1);
-  const length = x.ta_datamodel_ecmascript_payload_to_json(ecmascript, payload, buffer, 256);
-  const json = decoder.decode(new Uint8Array(x.memory.buffer, buffer, length));
-  assert.deepEqual(JSON.parse(json), { sum: 6, year: 2026, now: when });
+  const out = alloc(layout('ta_buffer').size);
+  setU32(out + offset('ta_buffer', 'pointer'), alloc(256, 1));
+  setU32(out + offset('ta_buffer', 'capacity'), 256);
+  assert.equal(x.ta_datamodel_ecmascript_payload_to_cbor(ecmascript, payload, out), 0, 'the value is written');
+  const cbor = new Uint8Array(x.memory.buffer, u32(out + offset('ta_buffer', 'pointer')),
+    u32(out + offset('ta_buffer', 'length')));
+  const hex = Array.from(cbor, (b) => b.toString(16).padStart(2, '0')).join('');
+  // {"sum": 6, "year": 2026, "now": 1767225600000}
+  assert.equal(hex, 'a36373756d066479656172' + '1907ea' + '636e6f77' + '1b0000019b76daa800');
   x.ta_datamodel_ecmascript_free(ecmascript);
-  results.push(`QuickJS evaluated ${json}, its clock the host's`);
+  results.push(`QuickJS evaluated h'${hex}', its clock the host's`);
 }
 console.log(`${modulePath.split('/').at(-1)}: ${results.join('; ')}`);

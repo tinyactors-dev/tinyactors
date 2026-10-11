@@ -105,35 +105,6 @@
       "implemented": true
     },
     {
-      "name": "ta_datamodel_ecmascript_eval_json",
-      "returns": "size_t",
-      "params": [
-        {
-          "name": "ecmascript",
-          "type": "ta_datamodel_ecmascript *"
-        },
-        {
-          "name": "instance",
-          "type": "uint64_t"
-        },
-        {
-          "name": "expression",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "buffer",
-          "type": "char *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
       "name": "ta_datamodel_ecmascript_free",
       "returns": "void",
       "params": [
@@ -207,6 +178,10 @@
           "type": "ta_datamodel_ecmascript *"
         },
         {
+          "name": "instance",
+          "type": "uint64_t"
+        },
+        {
           "name": "expression",
           "type": "ta_string_view"
         }
@@ -216,16 +191,20 @@
       "implemented": true
     },
     {
-      "name": "ta_datamodel_ecmascript_payload_from_json",
-      "returns": "ta_payload",
+      "name": "ta_datamodel_ecmascript_payload_from_cbor",
+      "returns": "ta_status",
       "params": [
         {
           "name": "ecmascript",
           "type": "ta_datamodel_ecmascript *"
         },
         {
-          "name": "json",
-          "type": "ta_string_view"
+          "name": "cbor",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "out",
+          "type": "ta_payload *"
         }
       ],
       "public": true,
@@ -233,8 +212,8 @@
       "implemented": true
     },
     {
-      "name": "ta_datamodel_ecmascript_payload_to_json",
-      "returns": "size_t",
+      "name": "ta_datamodel_ecmascript_payload_to_cbor",
+      "returns": "ta_status",
       "params": [
         {
           "name": "ecmascript",
@@ -245,12 +224,8 @@
           "type": "ta_payload"
         },
         {
-          "name": "buffer",
-          "type": "char *"
-        },
-        {
-          "name": "capacity",
-          "type": "size_t"
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,

@@ -142,11 +142,13 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
                                    effect->msgid, effect->sendid, effect->token);
                 continue;
             }
-            /* across: payload as JSON (separate datamodels) */
-            char json[1024] = "";
+            /* across: the payload as a neutral value, CBOR (separate datamodels) */
+            unsigned char cbor[1024];
+            ta_buffer wire = {cbor, sizeof cbor, 0};
             if (effect->payload)
-                ta_datamodel_ecmascript_payload_to_json(nodes[i].ecmascript, effect->payload, json,
-                                                        sizeof json);
+                CHECK_EQUAL(ta_datamodel_ecmascript_payload_to_cbor(nodes[i].ecmascript,
+                                                                    effect->payload, &wire),
+                            TA_OK);
             ta_envelope envelope;
             memset(&envelope, 0, sizeof envelope);
             envelope.size = sizeof envelope;
@@ -160,10 +162,10 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
             envelope.traceparent.pointer = traceparent;
             envelope.traceparent.length =
                 ta_traceparent_format(&effect->trace, traceparent, sizeof traceparent);
-            envelope.data =
-                json[0] ? ta_datamodel_ecmascript_payload_from_json(
-                              nodes[j].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)})
-                        : 0;
+            if (wire.length)
+                CHECK_EQUAL(ta_datamodel_ecmascript_payload_from_cbor(
+                                nodes[j].ecmascript, (ta_bytes){cbor, wire.length}, &envelope.data),
+                            TA_OK);
             uint32_t outcome;
             CHECK_EQUAL(ta_host_deliver(nodes[j].host, nodes[j].peer[i], &envelope, &outcome),
                         TA_OK);
@@ -200,8 +202,8 @@ static void go(int i, uint64_t session, const char *to, int n) {
     memset(&event, 0, sizeof event);
     event.size = sizeof event;
     event.name = (ta_string_view){"go", 2};
-    event.data = ta_datamodel_ecmascript_payload_from_json(
-        nodes[i].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+    event.data = ta_datamodel_ecmascript_payload_eval(
+        nodes[i].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
     CHECK_EQUAL(ta_host_send(nodes[i].host, session, &event), TA_OK);
     settle();
 }
@@ -756,7 +758,7 @@ static void test_envelope_fields(void) {
     envelope.size = sizeof envelope;
     envelope.target = (ta_string_view){"tinyactors://b/@f", 17};
     envelope.name = (ta_string_view){"look", 4};
-    envelope.data = ta_datamodel_ecmascript_payload_from_json(nodes[B].ecmascript,
+    envelope.data = ta_datamodel_ecmascript_payload_eval(nodes[B].ecmascript, 0,
                                                               (ta_string_view){"{\"x\": 42}", 9});
     envelope.sendid = (ta_string_view){"s-9", 3};
     envelope.origin = (ta_string_view){"tinyactors://a/#_scxml_7", 24};
@@ -836,8 +838,8 @@ static void test_system_id(void) {
     memset(&event, 0, sizeof event);
     event.size = sizeof event;
     event.name = (ta_string_view){"go", 2};
-    event.data = ta_datamodel_ecmascript_payload_from_json(
-        nodes[A].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+    event.data = ta_datamodel_ecmascript_payload_eval(
+        nodes[A].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
     CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
     ta_host_run(nodes[A].host, 100000);
     const ta_host_effect *effect;
@@ -928,8 +930,8 @@ static void test_trace_across_systems(void) {
     event.size = sizeof event;
     event.name = (ta_string_view){"go", 2};
     event.traceparent = (ta_string_view){parent, (uint32_t)strlen(parent)};
-    event.data = ta_datamodel_ecmascript_payload_from_json(
-        nodes[A].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+    event.data = ta_datamodel_ecmascript_payload_eval(
+        nodes[A].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
     CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
     settle();
     ta_peer_status status;
@@ -988,8 +990,8 @@ static void test_trace_two_segments(void) {
     event.size = sizeof event;
     event.name = (ta_string_view){"go", 2};
     event.traceparent = (ta_string_view){parent, (uint32_t)strlen(parent)};
-    event.data = ta_datamodel_ecmascript_payload_from_json(
-        nodes[A].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+    event.data = ta_datamodel_ecmascript_payload_eval(
+        nodes[A].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
     CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
     settle();
     LOGCHK(A, "pong:3;");
@@ -1040,16 +1042,16 @@ static void test_trace_set(void) {
     memset(&event, 0, sizeof event);
     event.size = sizeof event;
     event.name = (ta_string_view){"go", 2};
-    event.data = ta_datamodel_ecmascript_payload_from_json(
-        nodes[A].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+    event.data = ta_datamodel_ecmascript_payload_eval(
+        nodes[A].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
     CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
     settle();
     LOGCHK(A, "pong:1;");
     CHECK_EQUAL(begins(A, seen, 64), 0); /* neither segment wrote one */
     options.flags = 0;
     CHECK_EQUAL(ta_host_trace_set(nodes[A].host, &options), TA_OK);
-    event.data = ta_datamodel_ecmascript_payload_from_json(
-        nodes[A].ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+    event.data = ta_datamodel_ecmascript_payload_eval(
+        nodes[A].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
     CHECK_EQUAL(ta_host_send(nodes[A].host, p, &event), TA_OK);
     settle();
     uint32_t n = begins(A, seen, 64);

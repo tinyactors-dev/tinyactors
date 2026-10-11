@@ -3601,11 +3601,11 @@
         },
         {
           "name": "to_wire",
-          "type": "ta_status (*)(void *, ta_payload, char *, size_t, size_t *)"
+          "type": "ta_status (*)(void *, ta_payload, ta_buffer *)"
         },
         {
           "name": "from_wire",
-          "type": "ta_status (*)(void *, ta_string_view, ta_payload *)"
+          "type": "ta_status (*)(void *, ta_bytes, ta_payload *)"
         },
         {
           "name": "payload_serialize",
@@ -7381,6 +7381,23 @@
         {
           "name": "document",
           "type": "ta_cbor_document *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_diagnostic",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "cbor",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,

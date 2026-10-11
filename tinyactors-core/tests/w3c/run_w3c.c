@@ -16,6 +16,7 @@
 
 #include "../support/datamodel_test.h"
 #include <tinyactors/datamodel_ecmascript.h>
+#include "../support/payload_text.h"
 #include <tinyactors/basic_http.h>
 #include <tinyactors/runtime.h>
 
@@ -107,7 +108,7 @@ static void http_send(ta_datamodel_ecmascript *ecmascript, const ta_effect *effe
     }
     char json[4096] = "";
     if (effect->payload && ecmascript)
-        ta_datamodel_ecmascript_payload_to_json(ecmascript, effect->payload, json, sizeof json);
+        payload_text(ecmascript, effect->payload, json, sizeof json);
     ta_http_field fields[32];
     char store[4096];
     uint32_t nf = json[0] == '{' ? json_fields(json, fields, 32, store, sizeof store) : 0;
@@ -159,8 +160,8 @@ static void http_deliver(ta_system *system, ta_datamodel_ecmascript *ecmascript,
     event.origintype = (ta_string_view){TA_BASIC_HTTP_TYPE, (uint32_t)strlen(TA_BASIC_HTTP_TYPE)};
     event.raw = (ta_string_view){pd->message, (uint32_t)pd->message_length};
     if (ecmascript)
-        event.data = ta_datamodel_ecmascript_payload_from_json(
-            ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+        event.data = ta_datamodel_ecmascript_payload_eval(
+            ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
     ta_system_send(system, &event);
 }
 

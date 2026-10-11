@@ -429,6 +429,113 @@ static void test_float_widths(void) {
     CHECK(round_trip("fbfff0000000000000", "f9fc00"));
 }
 
+/* Diagnostic notation: compact, so JSON-shaped values read as their JSON. */
+static int diagnostic_is(const char *hex, const char *expected) {
+    size_t length = unhex(hex, message);
+    char text[256];
+    ta_buffer out = {text, sizeof text - 1, 0};
+    ta_status status = ta_cbor_diagnostic((ta_bytes){message, length}, &out);
+    if (status != TA_OK) {
+        fprintf(stderr, "  %s: status %d\n", hex, (int)status);
+        return 0;
+    }
+    text[out.length] = 0;
+    if (strcmp(text, expected) != 0) {
+        fprintf(stderr, "  %s: %s, expected %s\n", hex, text, expected);
+        return 0;
+    }
+    return 1;
+}
+
+static void test_diagnostic(void) {
+    static const char *const cases[][2] = {
+        {"00", "0"},
+        {"1903e8", "1000"},
+        {"1bffffffffffffffff", "18446744073709551615"},
+        {"3bffffffffffffffff", "-18446744073709551616"},
+        {"20", "-1"},
+        {"3903e7", "-1000"},
+        {"f90000", "0.0"},
+        {"f98000", "-0.0"},
+        {"f93c00", "1.0"},
+        {"fb3ff199999999999a", "1.1"},
+        {"f93e00", "1.5"},
+        {"f97bff", "65504.0"},
+        {"fa47c35000", "100000.0"},
+        {"fa7f7fffff", "3.4028234663852886e+38"},
+        {"fb7e37e43c8800759c", "1.0e+300"},
+        {"f90001", "5.960464477539063e-8"},
+        {"f90400", "0.00006103515625"},
+        {"f9c400", "-4.0"},
+        {"fbc010666666666666", "-4.1"},
+        {"fb3fb999999999999a", "0.1"},
+        {"fb3ddb7cdfd9d7bdbb", "1.0e-10"},
+        {"fb444b1ae4d6e2ef50", "1.0e+21"},
+        {"fb4415af1d78b58c40", "100000000000000000000.0"},
+        {"fb4340000000000001", "9007199254740994.0"},
+        {"fb409f607e6b74df04", "2008.1234567891233"},
+        {"fb3fd5555555555555", "0.3333333333333333"},
+        {"fb7fefffffffffffff", "1.7976931348623157e+308"},
+        {"fb0010000000000000", "2.2250738585072014e-308"},
+        {"fb3ff0000000000001", "1.0000000000000002"},
+        {"fb4000000000000000", "2.0"},
+        {"fa3f800001", "1.0000001192092896"},
+        {"fb0000000000000001", "5.0e-324"},
+        {"f97c00", "Infinity"},
+        {"f97e00", "NaN"},
+        {"f9fc00", "-Infinity"},
+        {"f4", "false"},
+        {"f5", "true"},
+        {"f6", "null"},
+        {"f7", "undefined"},
+        {"f0", "simple(16)"},
+        {"f8ff", "simple(255)"},
+        {"c074323031332d30332d32315432303a30343a30305a", "0(\"2013-03-21T20:04:00Z\")"},
+        {"d82063746131", "32(\"ta1\")"},
+        {"d74401020304", "23(h'01020304')"},
+        {"40", "h''"},
+        {"4401020304", "h'01020304'"},
+        {"60", "\"\""},
+        {"6161", "\"a\""},
+        {"62225c", "\"\\\"\\\\\""},
+        {"62c3bc", "\"\xc3\xbc\""},
+        {"63010a09", "\"\\u0001\\n\\t\""},
+        {"80", "[]"},
+        {"83010203", "[1,2,3]"},
+        {"8301820203820405", "[1,[2,3],[4,5]]"},
+        {"a0", "{}"},
+        {"a201020304", "{1:2,3:4}"},
+        {"a26161016162820203", "{\"a\":1,\"b\":[2,3]}"},
+        {"826161a161626163", "[\"a\",{\"b\":\"c\"}]"},
+        {"81a0", "[{}]"},
+        {"a1616180", "{\"a\":[]}"},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++)
+        CHECK(diagnostic_is(cases[i][0], cases[i][1]));
+
+    /* too small: the first bytes, and the length it needs */
+    size_t length = unhex("83010203", message);
+    char text[4];
+    ta_buffer out = {text, 3, 0};
+    CHECK_EQUAL(ta_cbor_diagnostic((ta_bytes){message, length}, &out), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(out.length, 7);
+    CHECK(memcmp(text, "[1,", 3) == 0);
+    ta_buffer measure = {NULL, 0, 0};
+    CHECK_EQUAL(ta_cbor_diagnostic((ta_bytes){message, length}, &measure), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(measure.length, 7);
+
+    /* what decoding refuses */
+    ta_buffer any = {text, sizeof text, 0};
+    length = unhex("8201", message);
+    CHECK_EQUAL(ta_cbor_diagnostic((ta_bytes){message, length}, &any), TA_ERROR_INVALID);
+    length = unhex("9f01ff", message);
+    CHECK_EQUAL(ta_cbor_diagnostic((ta_bytes){message, length}, &any), TA_ERROR_UNSUPPORTED);
+    length = unhex("62c328", message);
+    CHECK_EQUAL(ta_cbor_diagnostic((ta_bytes){message, length}, &any), TA_ERROR_INVALID);
+    length = unhex("0101", message);
+    CHECK_EQUAL(ta_cbor_diagnostic((ta_bytes){message, length}, &any), TA_ERROR_INVALID);
+}
+
 int main(void) {
     RUN(test_appendix_a_round_trips);
     RUN(test_appendix_a_values);
@@ -440,5 +547,6 @@ int main(void) {
     RUN(test_member_and_next);
     RUN(test_writer);
     RUN(test_float_widths);
+    RUN(test_diagnostic);
     TEST_MAIN_END();
 }

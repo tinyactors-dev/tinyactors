@@ -3,6 +3,7 @@
 #include "system/system_internal.h"
 #include "../support/compile_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
+#include "../support/payload_text.h"
 #include "quickjs.h"
 
 typedef struct ecmascript_system {
@@ -60,7 +61,7 @@ static const char *ecmascript_eval(ecmascript_system *t, const char *expression)
         actor_info.datamodel_instance; /* the public way to the datamodel instance */
     uint32_t index = ta_system_resolve_actor(t->system, a);
     CHECK_EQUAL(instance, ta_actor_instance(t->system, ta_actor_at(t->system, index))->datamodel);
-    if (ta_datamodel_ecmascript_eval_json(
+    if (eval_text(
             t->ecmascript, instance, (ta_string_view){expression, (uint32_t)strlen(expression)},
             buffer, sizeof buffer) == (size_t)-1)
         return "<error>";
@@ -163,16 +164,16 @@ static void test_events_payloads_xml(void) {
     event.size = sizeof event;
     event.target = ta_system_actor_by_name(t.system, (ta_string_view){"es.scxml", 8});
     event.name = (ta_string_view){"host", 4};
-    event.data = ta_datamodel_ecmascript_payload_from_json(
-        t.ecmascript, (ta_string_view){"{\"a\": \"hi-\"}", 12});
+    event.data = ta_datamodel_ecmascript_payload_eval(
+        t.ecmascript, 0, (ta_string_view){"{\"a\": \"hi-\"}", 12});
     CHECK(event.data != 0);
     CHECK_EQUAL(ta_system_send(t.system, &event), TA_OK);
     ecmascript_run(&t);
     CHECK(strcmp(ecmascript_eval(&t, "got"), "\"hi-external\"") == 0);
     char json[64];
     ta_payload payload =
-        ta_datamodel_ecmascript_payload_from_json(t.ecmascript, (ta_string_view){"[1,\"two\"]", 9});
-    CHECK(ta_datamodel_ecmascript_payload_to_json(t.ecmascript, payload, json, sizeof json) == 9);
+        ta_datamodel_ecmascript_payload_eval(t.ecmascript, 0, (ta_string_view){"[1,\"two\"]", 9});
+    CHECK(payload_text(t.ecmascript, payload, json, sizeof json) == 9);
     CHECK(strcmp(json, "[1,\"two\"]") == 0);
     ta_datamodel_ecmascript_vtable()->release(t.ecmascript, payload);
     ecmascript_close(&t);
@@ -308,9 +309,9 @@ static const char *realm_of(ecmascript_system *t) {
            "catch (e) { return 'shared'; } })()");
 }
 
-/* eval_json of a session variable reads it (no compiling); anything else is
+/* payload_eval of a session variable reads it (no compiling); anything else is
  * evaluated as an expression in the session's scope, as before */
-static void test_eval_json_variables(void) {
+static void test_eval_variables(void) {
     ecmascript_system t;
     CHECK(ecmascript_open(
         &t,
@@ -326,7 +327,7 @@ static void test_eval_json_variables(void) {
     snprintf(undef, sizeof undef, "%s", ecmascript_eval(&t, "undefined"));
     CHECK(strcmp(ecmascript_eval(&t, "u"), undef) == 0);
     CHECK(strcmp(ecmascript_eval(&t, "obj.k"), "[1,2]") == 0);
-    CHECK(strcmp(ecmascript_eval(&t, "Infinity"), "null") == 0); /* a builtin, not the session's */
+    CHECK(strcmp(ecmascript_eval(&t, "Infinity"), "Infinity") == 0); /* a builtin, not the session's */
     CHECK(strcmp(ecmascript_eval(&t, "true"), "true") == 0);
     CHECK(strcmp(ecmascript_eval(&t, "missing"), "<error>") == 0);
     ecmascript_close(&t);
@@ -390,8 +391,8 @@ static void ecmascript_send(ecmascript_system *t, const char *name, const char *
     event.target = ecmascript_actor(t);
     event.name = (ta_string_view){name, (uint32_t)strlen(name)};
     if (json)
-        event.data = ta_datamodel_ecmascript_payload_from_json(
-            t->ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+        event.data = ta_datamodel_ecmascript_payload_eval(
+            t->ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
     CHECK_EQUAL(ta_system_send(t->system, &event), TA_OK);
     ecmascript_run(t);
 }
@@ -542,7 +543,7 @@ static void test_snapshot_isolated(void) {
          "\"ReferenceError\""}};
     char buffer[256];
     for (int i = 0; i < 3; i++) {
-        size_t n = ta_datamodel_ecmascript_eval_json(
+        size_t n = eval_text(
             ecmascript2, actor_info.datamodel_instance,
             (ta_string_view){want[i][0], (uint32_t)strlen(want[i][0])}, buffer, sizeof buffer);
         CHECK(n != (size_t)-1 && strcmp(buffer, want[i][1]) == 0);
@@ -672,9 +673,9 @@ static void test_system_per_actor(void) {
     ta_datamodel_ecmascript_free(ecmascript); /* JS_FreeRuntime asserts nothing leaked */
 }
 
-/* ---- neutral wire values against the shared vectors (tests/conformance/values.json) --- */
+/* ---- neutral values against the shared vectors (tests/conformance/values.txt) ---------- */
 #ifndef TA_VALUES
-#define TA_VALUES "tests/conformance/values.json"
+#define TA_VALUES "tests/conformance/values.txt"
 #endif
 
 static char *slurp_file(const char *path, size_t *length) {
@@ -694,42 +695,65 @@ static char *slurp_file(const char *path, size_t *length) {
     return b;
 }
 
-/* JSON text of v (a vector, in context J), canonical as JSON.stringify writes it */
-static char *json_of(JSContext *J, JSValueConst v) {
-    JSValue s = JS_JSONStringify(J, v, JS_UNDEFINED, JS_UNDEFINED);
-    size_t n = 0;
-    const char *c = JS_ToCStringLen(J, &n, s);
-    char *out = (char *)malloc(n + 1);
-    memcpy(out, c, n);
-    out[n] = 0;
-    JS_FreeCString(J, c);
-    JS_FreeValue(J, s);
-    return out;
+/* One case of values.txt: its kind and name, and the lines read so far. */
+typedef struct values_case {
+    char kind[16], name[128], expression[256];
+    unsigned char cbor[256], back[256];
+    size_t cbor_length, back_length;
+    int has_cbor, has_back;
+} values_case;
+
+static size_t values_hex(const char *hex, unsigned char *out, size_t capacity) {
+    size_t length = 0;
+    for (; hex[0] && hex[1] && length < capacity; hex += 2) {
+        unsigned value = 0;
+        for (int k = 0; k < 2; k++)
+            value = value * 16 + (unsigned)(hex[k] <= '9' ? hex[k] - '0' : (hex[k] | 0x20) - 'a' + 10);
+        out[length++] = (unsigned char)value;
+    }
+    return length;
 }
 
-/* to_wire of p, re-stringified in J (so whitespace never matters) */
-static char *wire_of(JSContext *J, ta_datamodel_ecmascript *ecmascript, ta_payload payload,
-                     ta_status *status) {
+static void values_run(ta_datamodel_ecmascript *ecmascript, const values_case *c) {
     const ta_datamodel_vtable *vtable = ta_datamodel_ecmascript_vtable();
-    size_t length = 0;
-    char small[4];
-    *status = vtable->to_wire(ecmascript, payload, small, sizeof small, &length);
-    char *buffer = (char *)malloc(length + 1);
-    if (*status == TA_ERROR_NO_MEMORY)
-        *status = vtable->to_wire(ecmascript, payload, buffer, length, &length);
-    else if (*status == TA_OK)
-        memcpy(buffer, small, length);
-    if (*status != TA_OK) {
-        free(buffer);
-        return NULL;
+    ta_payload payload = 0;
+    if (!strcmp(c->kind, "roundtrip") || !strcmp(c->kind, "malformed")) {
+        ta_status status =
+            vtable->from_wire(ecmascript, (ta_bytes){c->cbor, c->cbor_length}, &payload);
+        if (!strcmp(c->kind, "malformed")) {
+            if (status != TA_ERROR_INVALID) fprintf(stderr, "  values.txt \"%s\" was read\n", c->name);
+            CHECK_EQUAL(status, TA_ERROR_INVALID);
+            CHECK(payload == 0);
+            return;
+        }
+        CHECK_EQUAL(status, TA_OK);
+    } else {
+        payload = ta_datamodel_ecmascript_payload_eval(
+            ecmascript, 0, (ta_string_view){c->expression, (uint32_t)strlen(c->expression)});
+        CHECK(payload != 0);
     }
-    buffer[length] = 0; /* JS_ParseJSON wants a terminated buffer */
-    JSValue v = JS_ParseJSON(J, buffer, length, "<wire>");
-    free(buffer);
-    CHECK(!JS_IsException(v));
-    char *out = json_of(J, v);
-    JS_FreeValue(J, v);
-    return out;
+    unsigned char written[256];
+    ta_buffer out = {written, sizeof written, 0};
+    ta_status status = vtable->to_wire(ecmascript, payload, &out);
+    if (!strcmp(c->kind, "invalid")) {
+        CHECK_EQUAL(status, TA_ERROR_INVALID);
+    } else {
+        const unsigned char *want = c->has_back ? c->back : c->cbor;
+        size_t length = c->has_back ? c->back_length : c->cbor_length;
+        int same = status == TA_OK && out.length == length && !memcmp(written, want, length);
+        if (!same) {
+            fprintf(stderr, "  values.txt %s \"%s\": status %d, got ", c->kind, c->name, (int)status);
+            for (size_t k = 0; status == TA_OK && k < out.length; k++)
+                fprintf(stderr, "%02x", written[k]);
+            fprintf(stderr, "\n");
+        }
+        CHECK(same);
+        /* too small: the length it needs, and nothing more */
+        ta_buffer small = {written, length ? length - 1 : 0, 0};
+        if (length) CHECK_EQUAL(vtable->to_wire(ecmascript, payload, &small), TA_ERROR_NO_MEMORY);
+        if (length) CHECK_EQUAL(small.length, length);
+    }
+    if (payload) vtable->release(ecmascript, payload);
 }
 
 static void test_wire_values(void) {
@@ -737,75 +761,53 @@ static void test_wire_values(void) {
     char *text = slurp_file(TA_VALUES, &n);
     CHECK(text != NULL);
     if (!text) return;
-    JSRuntime *rt = JS_NewRuntime();
-    JSContext *J = JS_NewContext(rt);
-    JSValue root = JS_ParseJSON(J, text, n, "values.json");
-    CHECK(!JS_IsException(root));
     ta_datamodel_ecmascript *ecmascript = ta_datamodel_ecmascript_new(NULL);
     const ta_datamodel_vtable *vtable = ta_datamodel_ecmascript_vtable();
     CHECK(vtable->size >= offsetof(ta_datamodel_vtable, from_wire) + sizeof vtable->from_wire);
-    const char *lists[] = {"roundtrip", "encode", "invalid"};
-    int cases = 0;
-    for (int l = 0; l < 3; l++) {
-        JSValue arr = JS_GetPropertyStr(J, root, lists[l]);
-        int64_t length = 0;
-        JS_GetLength(J, arr, &length);
-        CHECK(length > 0);
-        for (int64_t i = 0; i < length; i++, cases++) {
-            JSValue c = JS_GetPropertyUint32(J, arr, (uint32_t)i);
-            JSValue name = JS_GetPropertyStr(J, c, "name");
-            const char *nm = JS_ToCString(J, name);
-            JSValue want = JS_GetPropertyStr(J, c, l == 0 ? "backEcmascript" : "wire");
-            if (l == 0 && JS_IsUndefined(want)) want = JS_GetPropertyStr(J, c, "back");
-            if (l == 0 && JS_IsUndefined(want)) want = JS_GetPropertyStr(J, c, "wire");
-            ta_payload payload = 0;
-            if (l == 0) { /* from_wire, then back */
-                JSValue w = JS_GetPropertyStr(J, c, "wire");
-                char *in = json_of(J, w);
-                JS_FreeValue(J, w);
-                CHECK_EQUAL(vtable->from_wire(ecmascript,
-                                              (ta_string_view){in, (uint32_t)strlen(in)}, &payload),
-                            TA_OK);
-                free(in);
-            } else {
-                JSValue source = JS_GetPropertyStr(J, c, "ecmascript");
-                const char *e = JS_ToCString(J, source);
-                payload = ta_datamodel_ecmascript_payload_eval(
-                    ecmascript, (ta_string_view){e, (uint32_t)strlen(e)});
-                JS_FreeCString(J, e);
-                JS_FreeValue(J, source);
-            }
-            ta_status status;
-            char *got = wire_of(J, ecmascript, payload, &status);
-            if (l == 2) {
-                CHECK_EQUAL(status, TA_ERROR_INVALID);
-            } else {
-                char *exp = json_of(J, want);
-                if (!got || strcmp(got, exp) != 0)
-                    fprintf(stderr, "  values.json %s \"%s\": got %s, expected %s\n", lists[l], nm,
-                            got ? got : "(error)", exp);
-                CHECK(got && strcmp(got, exp) == 0);
-                free(exp);
-            }
-            free(got);
-            if (payload) vtable->release(ecmascript, payload);
-            JS_FreeValue(J, want);
-            JS_FreeCString(J, nm);
-            JS_FreeValue(J, name);
-            JS_FreeValue(J, c);
+    values_case c;
+    memset(&c, 0, sizeof c);
+    int cases = 0, diagnostics = 0, last_back = 0;
+    for (char *line = strtok(text, "\n"); line; line = strtok(NULL, "\n")) {
+        if (line[0] == '#' || !line[0]) continue;
+        char *space = strchr(line, ' ');
+        if (!space) continue;
+        *space = 0;
+        const char *rest = space + 1;
+        if (!strcmp(line, "cbor")) {
+            c.cbor_length = values_hex(rest, c.cbor, sizeof c.cbor);
+            c.has_cbor = 1;
+            last_back = 0;
+        } else if (!strcmp(line, "back")) {
+            c.back_length = values_hex(rest, c.back, sizeof c.back);
+            c.has_back = 1;
+            last_back = 1;
+        } else if (!strcmp(line, "ecmascript")) {
+            snprintf(c.expression, sizeof c.expression, "%s", rest);
+        } else if (!strcmp(line, "diag")) {
+            char got[512];
+            ta_buffer out = {got, sizeof got - 1, 0};
+            ta_bytes bytes = last_back ? (ta_bytes){c.back, c.back_length}
+                                       : (ta_bytes){c.cbor, c.cbor_length};
+            CHECK_EQUAL(ta_cbor_diagnostic(bytes, &out), TA_OK);
+            got[out.length < sizeof got - 1 ? out.length : sizeof got - 1] = 0;
+            if (strcmp(got, rest))
+                fprintf(stderr, "  values.txt \"%s\": diagnostic %s, expected %s\n", c.name, got,
+                        rest);
+            CHECK(strcmp(got, rest) == 0);
+            diagnostics++;
+        } else { /* a new case: run the one before */
+            if (c.kind[0]) values_run(ecmascript, &c), cases++;
+            memset(&c, 0, sizeof c);
+            snprintf(c.kind, sizeof c.kind, "%s", line);
+            snprintf(c.name, sizeof c.name, "%s", rest);
+            CHECK(!strcmp(line, "roundtrip") || !strcmp(line, "encode") ||
+                  !strcmp(line, "invalid") || !strcmp(line, "malformed"));
         }
-        JS_FreeValue(J, arr);
     }
-    CHECK(cases > 10);
-    /* malformed text */
-    ta_payload bad = 0;
-    CHECK_EQUAL(vtable->from_wire(ecmascript, (ta_string_view){"{nope", 5}, &bad),
-                TA_ERROR_INVALID);
-    CHECK(bad == 0);
+    if (c.kind[0]) values_run(ecmascript, &c), cases++;
+    CHECK(cases > 30);
+    CHECK(diagnostics > 20);
     ta_datamodel_ecmascript_free(ecmascript);
-    JS_FreeValue(J, root);
-    JS_FreeContext(J);
-    JS_FreeRuntime(rt);
     free(text);
 }
 
@@ -903,7 +905,7 @@ int main(void) {
     RUN(test_heap_bytes);
     RUN(test_traced_values_are_let_go);
     RUN(test_shared_realm);
-    RUN(test_eval_json_variables);
+    RUN(test_eval_variables);
     RUN(test_toplevel_declarations_isolate);
     RUN(test_store_declarations);
     RUN(test_store_refuses_precisely);

@@ -9,6 +9,8 @@
  * staging (TA_OTLP_FLUSH) or a full table (TA_OTLP_GROW) loses nothing. */
 #include "otlp/otlp_internal.h"
 
+#include <tinyactors/cbor.h>
+
 #include "base/arena.h"
 #include "base/format.h"
 #include "base/memory.h"
@@ -226,9 +228,10 @@ static void otlp_kv_transitions(const otlp_reading *reading, otlp_out *out, uint
                  count);
 }
 
-/* A value as text: what the datamodel's to_wire writes, cut at value_limit
- * (at a character boundary). Returns its length, *cut = 1 if it was cut;
- * 0 without a value or a datamodel that can write it. */
+/* A value as text: what the datamodel's to_wire writes, in CBOR diagnostic
+ * notation (ta_cbor_diagnostic), cut at value_limit (at a character
+ * boundary). Returns its length, *cut = 1 if it was cut; 0 without a value
+ * or a datamodel that can write it. */
 static uint32_t otlp_render_value(const otlp_reading *reading, uint32_t datamodel, uint64_t payload,
                                   const char **text, int *cut) {
     ta_otlp *otlp = reading->otlp;
@@ -239,18 +242,21 @@ static uint32_t otlp_render_value(const otlp_reading *reading, uint32_t datamode
     if (vtable->size < offsetof(ta_datamodel_vtable, to_wire) + sizeof vtable->to_wire ||
         !vtable->to_wire)
         return 0;
-    char *render = OTLP_POINTER(otlp, render_relative, char);
-    size_t length = 0;
-    ta_status status = vtable->to_wire(input->datamodels[datamodel].datamodel, payload, render,
-                                       otlp->config.render_bytes, &length);
-    if (status != TA_OK || length > otlp->config.render_bytes) {
+    ta_buffer cbor = {OTLP_POINTER(otlp, render_relative, char), otlp->config.render_bytes, 0};
+    ta_status status = vtable->to_wire(input->datamodels[datamodel].datamodel, payload, &cbor);
+    if (status != TA_OK || cbor.length > cbor.capacity) {
         if (status == TA_ERROR_NO_MEMORY) *cut = 1; /* too big to write at all */
         return 0;
     }
-    *text = render;
-    if (length > otlp->config.value_limit) {
+    char *rendered = OTLP_POINTER(otlp, text_relative, char);
+    ta_buffer out = {rendered, otlp->config.value_limit, 0};
+    status = ta_cbor_diagnostic((ta_bytes){cbor.pointer, cbor.length}, &out);
+    if (status != TA_OK && status != TA_ERROR_NO_MEMORY) return 0;
+    *text = rendered;
+    size_t length = out.length;
+    if (status == TA_ERROR_NO_MEMORY) {
         length = otlp->config.value_limit;
-        while (length && ((unsigned char)render[length] & 0xC0u) == 0x80u) /* not mid-character */
+        while (length && ((unsigned char)rendered[length] & 0xC0u) == 0x80u) /* not mid-character */
             length--;
         *cut = 1;
     }
@@ -1671,7 +1677,7 @@ static void otlp_normalize(const ta_otlp_config *in, ta_otlp_config *config) {
 
 typedef struct otlp_carved {
     size_t header, open, index, skips, chunks, spans, entries, scopes, scope_bytes, logs, resource,
-        scratch, render, metrics, durations;
+        scratch, render, text, metrics, durations;
     uint32_t index_capacity, entry_capacity, scratch_bytes;
 } otlp_carved;
 
@@ -1696,6 +1702,7 @@ static void otlp_carve(ta_arena *arena, const ta_otlp_config *config, otlp_carve
     o->resource = ta_arena_alloc(arena, config->resource_bytes, TA_ALIGN_MAX);
     o->scratch = ta_arena_alloc(arena, o->scratch_bytes, TA_ALIGN_MAX);
     o->render = ta_arena_alloc(arena, config->render_bytes, TA_ALIGN_MAX);
+    o->text = ta_arena_alloc(arena, (size_t)config->value_limit + 1u, TA_ALIGN_MAX);
     o->metrics = ta_arena_alloc(arena, config->metric_bytes, TA_ALIGN_MAX);
     o->durations =
         ta_arena_alloc(arena, sizeof(otlp_duration) * config->span_metric_charts, TA_ALIGN_MAX);
@@ -1743,6 +1750,7 @@ static ta_otlp *otlp_place(void *memory, size_t length, const ta_otlp_config *co
     otlp->resource_relative = otlp_relative(otlp, &arena, o.resource);
     otlp->scratch_relative = otlp_relative(otlp, &arena, o.scratch);
     otlp->render_relative = otlp_relative(otlp, &arena, o.render);
+    otlp->text_relative = otlp_relative(otlp, &arena, o.text);
     otlp->metrics_relative = otlp_relative(otlp, &arena, o.metrics);
     otlp->durations_relative = otlp_relative(otlp, &arena, o.durations);
     otlp->chunk_free = TA_NIL;

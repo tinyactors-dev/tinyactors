@@ -247,8 +247,8 @@ static void run_idle(workload *w, ta_host *host) {
 }
 
 static ta_payload json(workload *w, const char *text) {
-    return ta_datamodel_ecmascript_payload_from_json(
-        w->ecmascript, (ta_string_view){text, (uint32_t)strlen(text)});
+    return ta_datamodel_ecmascript_payload_eval(
+        w->ecmascript, 0, (ta_string_view){text, (uint32_t)strlen(text)});
 }
 
 static ta_status send_event(workload *w, uint64_t session, const char *name, ta_payload data) {

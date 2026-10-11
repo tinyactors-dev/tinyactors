@@ -13,6 +13,7 @@
  *   - In('id') is a global function answered by the SCXML kernel;
  *   - payloads are JS values shared by all sessions of the runtime.
  */
+#include <tinyactors/cbor.h>
 #include <tinyactors/datamodel_ecmascript.h>
 
 #include <stdarg.h>
@@ -99,7 +100,6 @@ struct ta_datamodel_ecmascript {
     uint32_t chart_count, chart_capacity;
     uint32_t idle_count; /* charts nobody uses, kept for their compiled expressions */
     uint64_t clock;      /* idle order */
-    JSValue wire;        /* neutral values: { to, from } in aux (JS_UNDEFINED until used) */
     JSValue base;        /* names of a fresh global object, in aux (JS_UNDEFINED until used) */
     JSValue explain; /* finds what in a value cannot be stored, in aux (JS_UNDEFINED until used) */
     char error[512]; /* why the last serialize/snapshot failed */
@@ -2565,119 +2565,500 @@ static ta_status ecmascript_migrate_(void *datamodel, uint64_t handle,
 }
 
 /* ---- neutral values (docs/protocol.md, "Values") ----------------------------------------
- * JSON plus {"$ref": address}, {"$bytes": base64} and {"$": {...}}. ECMAScript has
- * no reference type: references arrive as their address (a string). Bytes are
- * Uint8Array. Done in JS in the aux context: one helper object, made on first use. */
-static const char WIRE_JS[] =
-    "(function(){'use strict';"
-    "const A='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';"
-    "const tag=(v)=>Object.prototype.toString.call(v);"
-    "function b64(b){let o='';for(let i=0;i<b.length;i+=3){const n=(b[i]<<16)|((b[i+1]||0)<<8)|"
-    "(b[i+2]||0);o+=A[n>>18]+A[(n>>12)&63]+(i+1<b.length?A[(n>>6)&63]:'=')+(i+2<b.length?A[n&63]:'="
-    "');}"
-    "return o;}"
-    "function unb64(s){const c=s.replace(/=+$/,'');const out=new Uint8Array((c.length*3)>>2);"
-    "let bits=0,acc=0,j=0;for(const ch of c){const x=A.indexOf(ch);if(x<0)throw new "
-    "TypeError('base64');"
-    "acc=(acc<<6)|x;bits+=6;if(bits>=8){bits-=8;out[j++]=(acc>>bits)&255;}}return out;}"
-    "const seen=new Set();"
-    "function enc(v){switch(typeof v){case 'undefined':case 'function':case 'symbol':return "
-    "undefined;"
-    "case 'number':return Number.isFinite(v)?v:null;case 'bigint':return String(v);"
-    "case 'string':case 'boolean':return v;}"
-    "if(v===null)return null;"
-    "if(ArrayBuffer.isView(v))return {$bytes:b64(new "
-    "Uint8Array(v.buffer,v.byteOffset,v.byteLength))};"
-    "if(tag(v)==='[object ArrayBuffer]')return {$bytes:b64(new Uint8Array(v))};"
-    "if(typeof v.toJSON==='function')return enc(v.toJSON());"
-    "if(seen.has(v))throw new TypeError('a cyclic value is not a neutral value');seen.add(v);"
-    "let out;if(Array.isArray(v)){out=v.map((x)=>{const e=enc(x);return e===undefined?null:e;});}"
-    "else{const o={};let d=false;for(const k of Object.keys(v)){const e=enc(v[k]);"
-    "if(e!==undefined){o[k]=e;if(k[0]==='$')d=true;}}out=d?{$:o}:o;}"
-    "seen.delete(v);return out;}"
-    "function dec(v){if(v===null||typeof v!=='object')return v;if(Array.isArray(v))return "
-    "v.map(dec);"
-    "const k=Object.keys(v);if(k.length===1){const x=v[k[0]];"
-    "if(k[0]==='$ref'&&typeof x==='string')return x;"
-    "if(k[0]==='$bytes'&&typeof x==='string')return unb64(x);"
-    "if(k[0]==='$'&&x&&typeof x==='object'&&!Array.isArray(x)){const o={};"
-    "for(const kk of Object.keys(x))o[kk]=dec(x[kk]);return o;}}"
-    "const o={};for(const kk of k)o[kk]=dec(v[kk]);return o;}"
-    "return {to(v){seen.clear();const e=enc(v);return JSON.stringify(e===undefined?null:e);},"
-    "from(t){return dec(JSON.parse(t));}};})()";
+ * CBOR, written from a value's tokens and read back from them. A value is
+ * what JSON.stringify keeps (undefined, functions and symbols are dropped from
+ * objects and are null in arrays and at the top; toJSON is called), with
+ * numbers, bytes and BigInts exact: an integer within ±(2^53-1) is a CBOR
+ * integer, any other number (-0, NaN, ±Infinity, fractions, larger
+ * integers) a float; a BigInt within -2^64 … 2^64-1 an integer; an
+ * ArrayBuffer, a typed array or a DataView its bytes. Keys starting with "$"
+ * are not special. ECMAScript has no reference type: a reference (tag 32)
+ * arrives as its address, a string. Read back, an integer within ±(2^53-1)
+ * is a number and any other a BigInt; bytes are a Uint8Array. */
 
-static JSValue wire_function(ta_datamodel_ecmascript *ecmascript, const char *name) {
-    if (JS_IsUndefined(ecmascript->wire)) {
-        ecmascript->operations = 0;
-        ecmascript->wire = JS_Eval(ecmascript->auxiliary, WIRE_JS, sizeof WIRE_JS - 1, "<wire>",
-                                   JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(ecmascript->wire)) {
-            clear_exception(ecmascript->auxiliary);
-            ecmascript->wire = JS_UNDEFINED;
-            return JS_UNDEFINED;
-        }
-    }
-    return JS_GetPropertyStr(ecmascript->auxiliary, ecmascript->wire, name);
+typedef struct wire_builder {
+    ta_cbor_token *tokens;
+    uint32_t count, capacity;
+    char *strings;
+    size_t length, room;
+    ta_status status;
+    ta_cbor_token small_tokens[64];
+    char small_strings[1024];
+} wire_builder;
+
+static void wire_builder_init(wire_builder *b) {
+    b->tokens = b->small_tokens;
+    b->count = 0;
+    b->capacity = sizeof b->small_tokens / sizeof b->small_tokens[0];
+    b->strings = b->small_strings;
+    b->length = 0;
+    b->room = sizeof b->small_strings;
+    b->status = TA_OK;
 }
 
-static ta_status ecmascript_to_wire(void *datamodel, ta_payload payload, char *buffer,
-                                    size_t capacity, size_t *length) {
-    ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
-    JSValue f = wire_function(ecmascript, "to");
-    if (JS_IsUndefined(f)) return TA_ERROR_NO_MEMORY;
-    ecmascript->operations = 0;
-    JSValue arg = payload_get(ecmascript, payload);
-    JSValue r = JS_Call(ecmascript->auxiliary, f, ecmascript->wire, 1, &arg);
-    JS_FreeValue(ecmascript->auxiliary, f);
-    if (JS_IsException(r)) {
-        clear_exception(ecmascript->auxiliary);
+static void wire_builder_free(wire_builder *b) {
+    if (b->tokens != b->small_tokens) free(b->tokens);
+    if (b->strings != b->small_strings) free(b->strings);
+}
+
+/* Grow a buffer that starts in the builder itself. */
+static void *wire_grow(void *pointer, void *small, size_t used, size_t *room, size_t need) {
+    size_t grown = *room;
+    while (grown < need)
+        grown *= 2;
+    void *bigger = malloc(grown);
+    if (!bigger) return NULL;
+    memcpy(bigger, pointer, used);
+    if (pointer != small) free(pointer);
+    *room = grown;
+    return bigger;
+}
+
+/* Append a token; its index, or TA_NIL (status set). */
+static uint32_t wire_token(wire_builder *b, uint32_t kind, uint32_t count, uint64_t value) {
+    if (b->status != TA_OK) return TA_NIL;
+    if (b->count == b->capacity) {
+        size_t room = (size_t)b->capacity * sizeof(ta_cbor_token);
+        ta_cbor_token *t = (ta_cbor_token *)wire_grow(b->tokens, b->small_tokens,
+                                                      b->count * sizeof(ta_cbor_token), &room,
+                                                      room + sizeof(ta_cbor_token));
+        if (!t || room / sizeof(ta_cbor_token) > UINT32_MAX) {
+            b->status = TA_ERROR_NO_MEMORY;
+            return TA_NIL;
+        }
+        b->tokens = t;
+        b->capacity = (uint32_t)(room / sizeof(ta_cbor_token));
+    }
+    b->tokens[b->count] = (ta_cbor_token){kind, count, value};
+    return b->count++;
+}
+
+static void wire_string(wire_builder *b, uint32_t kind, const void *pointer, size_t length) {
+    if (b->status != TA_OK) return;
+    if (length > UINT32_MAX) {
+        b->status = TA_ERROR_INVALID;
+        return;
+    }
+    if (b->room - b->length < length) {
+        char *s = (char *)wire_grow(b->strings, b->small_strings, b->length, &b->room,
+                                    b->length + length);
+        if (!s) {
+            b->status = TA_ERROR_NO_MEMORY;
+            return;
+        }
+        b->strings = s;
+    }
+    if (length) memcpy(b->strings + b->length, pointer, length);
+    wire_token(b, kind, (uint32_t)length, b->length);
+    b->length += length;
+}
+
+/* A BigInt as a CBOR integer, if it is one (-2^64 … 2^64-1). */
+static void wire_bigint(wire_builder *b, JSContext *context, JSValueConst v) {
+    size_t length = 0;
+    const char *text = JS_ToCStringLen(context, &length, v); /* decimal */
+    if (!text) {
+        clear_exception(context);
+        b->status = TA_ERROR_NO_MEMORY;
+        return;
+    }
+    int negative = text[0] == '-';
+    const char *digits = text + negative;
+    size_t count = length - (size_t)negative;
+    uint64_t magnitude = 0;
+    int fits = 1;
+    for (size_t k = 0; k < count && fits; k++) {
+        uint64_t digit = (uint64_t)(digits[k] - '0');
+        if (magnitude > (UINT64_MAX - digit) / 10) fits = 0;
+        else magnitude = magnitude * 10 + digit;
+    }
+    int lowest = negative && count == 20 && !memcmp(digits, "18446744073709551616", 20);
+    JS_FreeCString(context, text);
+    if (lowest) wire_token(b, TA_CBOR_NEGINT, 0, UINT64_MAX);
+    else if (!fits) b->status = TA_ERROR_INVALID; /* not a neutral value */
+    else if (!negative) wire_token(b, TA_CBOR_UINT, 0, magnitude);
+    else wire_token(b, TA_CBOR_NEGINT, 0, magnitude - 1);
+}
+
+static void wire_number(wire_builder *b, double d) {
+    uint64_t bits;
+    memcpy(&bits, &d, sizeof bits);
+    const double safe = 9007199254740991.0; /* 2^53 - 1 */
+    if (d >= -safe && d <= safe && d == (double)(int64_t)d && bits != UINT64_C(1) << 63) {
+        int64_t i = (int64_t)d;
+        if (i >= 0) wire_token(b, TA_CBOR_UINT, 0, (uint64_t)i);
+        else wire_token(b, TA_CBOR_NEGINT, 0, (uint64_t)(-(i + 1)));
+    } else {
+        wire_token(b, TA_CBOR_FLOAT, 0, bits);
+    }
+}
+
+/* The bytes of `buffer` from `offset`, `length` of them. */
+static void wire_buffer_bytes(wire_builder *b, JSContext *context, JSValueConst buffer,
+                              size_t offset, size_t length) {
+    size_t size = 0;
+    uint8_t *bytes = JS_GetArrayBuffer(context, &size, buffer);
+    if (!bytes || offset > size || length > size - offset) { /* detached */
+        clear_exception(context);
+        b->status = TA_ERROR_INVALID;
+        return;
+    }
+    wire_string(b, TA_CBOR_BYTES, bytes + offset, length);
+}
+
+/* Write v; 1 when written, 0 when it is dropped (undefined, a function, a
+ * symbol), -1 on failure (b->status). */
+static int wire_write(wire_builder *b, JSContext *context, JSValueConst v, uint32_t depth) {
+    if (b->status != TA_OK) return -1;
+    if (depth > TA_CBOR_DEPTH_MAX) { /* a cycle, or too deep for a neutral value */
+        b->status = TA_ERROR_INVALID;
+        return -1;
+    }
+    if (JS_IsUndefined(v) || JS_IsSymbol(v) || JS_IsFunction(context, v)) return 0;
+    if (JS_IsNull(v)) {
+        wire_token(b, TA_CBOR_SIMPLE, 0, TA_CBOR_NULL);
+    } else if (JS_IsBool(v)) {
+        wire_token(b, TA_CBOR_SIMPLE, 0, JS_ToBool(context, v) ? TA_CBOR_TRUE : TA_CBOR_FALSE);
+    } else if (JS_IsNumber(v)) {
+        double d = 0;
+        JS_ToFloat64(context, &d, v);
+        wire_number(b, d);
+    } else if (JS_IsBigInt(v)) {
+        wire_bigint(b, context, v);
+    } else if (JS_IsString(v)) {
+        size_t length = 0;
+        const char *text = JS_ToCStringLen(context, &length, v);
+        if (!text) {
+            clear_exception(context);
+            b->status = TA_ERROR_NO_MEMORY;
+            return -1;
+        }
+        wire_string(b, TA_CBOR_TEXT, text, length);
+        JS_FreeCString(context, text);
+    } else if (JS_IsArrayBuffer(v)) {
+        size_t size = 0;
+        JS_GetArrayBuffer(context, &size, v);
+        wire_buffer_bytes(b, context, v, 0, size);
+    } else if (JS_GetTypedArrayType(v) >= 0) {
+        size_t offset = 0, length = 0, element = 0;
+        JSValue buffer = JS_GetTypedArrayBuffer(context, v, &offset, &length, &element);
+        if (JS_IsException(buffer)) {
+            clear_exception(context);
+            b->status = TA_ERROR_INVALID;
+            return -1;
+        }
+        wire_buffer_bytes(b, context, buffer, offset, length);
+        JS_FreeValue(context, buffer);
+    } else if (JS_IsDataView(v)) {
+        JSValue buffer = JS_GetPropertyStr(context, v, "buffer");
+        JSValue offset = JS_GetPropertyStr(context, v, "byteOffset");
+        JSValue length = JS_GetPropertyStr(context, v, "byteLength");
+        int64_t o = 0, l = 0;
+        JS_ToInt64(context, &o, offset);
+        JS_ToInt64(context, &l, length);
+        wire_buffer_bytes(b, context, buffer, (size_t)o, (size_t)l);
+        JS_FreeValue(context, buffer);
+        JS_FreeValue(context, offset);
+        JS_FreeValue(context, length);
+    } else {
+        JSValue to_json = JS_GetPropertyStr(context, v, "toJSON");
+        if (JS_IsException(to_json)) {
+            clear_exception(context);
+            b->status = TA_ERROR_INVALID;
+            return -1;
+        }
+        if (JS_IsFunction(context, to_json)) {
+            JSValue r = JS_Call(context, to_json, v, 0, NULL);
+            JS_FreeValue(context, to_json);
+            if (JS_IsException(r)) {
+                clear_exception(context);
+                b->status = TA_ERROR_INVALID;
+                return -1;
+            }
+            int written = wire_write(b, context, r, depth + 1);
+            JS_FreeValue(context, r);
+            return written;
+        }
+        JS_FreeValue(context, to_json);
+        if (JS_IsArray(v)) {
+            int64_t length = 0;
+            if (JS_GetLength(context, v, &length) < 0 || length > UINT32_MAX) {
+                clear_exception(context);
+                b->status = TA_ERROR_INVALID;
+                return -1;
+            }
+            wire_token(b, TA_CBOR_ARRAY, (uint32_t)length, 0);
+            for (int64_t i = 0; i < length && b->status == TA_OK; i++) {
+                JSValue item = JS_GetPropertyUint32(context, v, (uint32_t)i);
+                if (JS_IsException(item)) {
+                    clear_exception(context);
+                    b->status = TA_ERROR_INVALID;
+                    break;
+                }
+                if (!wire_write(b, context, item, depth + 1))
+                    wire_token(b, TA_CBOR_SIMPLE, 0, TA_CBOR_NULL);
+                JS_FreeValue(context, item);
+            }
+        } else {
+            JSPropertyEnum *properties;
+            uint32_t count;
+            if (JS_GetOwnPropertyNames(context, &properties, &count, v,
+                                       JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0) {
+                clear_exception(context);
+                b->status = TA_ERROR_INVALID;
+                return -1;
+            }
+            uint32_t map = wire_token(b, TA_CBOR_MAP, 0, 0);
+            for (uint32_t i = 0; i < count && b->status == TA_OK; i++) {
+                JSValue item = JS_GetProperty(context, v, properties[i].atom);
+                if (JS_IsException(item)) {
+                    clear_exception(context);
+                    b->status = TA_ERROR_INVALID;
+                    break;
+                }
+                uint32_t mark = b->count;
+                size_t strings = b->length;
+                size_t length = 0;
+                const char *key = JS_AtomToCStringLen(context, &length, properties[i].atom);
+                if (!key) {
+                    b->status = TA_ERROR_NO_MEMORY;
+                } else {
+                    wire_string(b, TA_CBOR_TEXT, key, length);
+                    JS_FreeCString(context, key);
+                    if (wire_write(b, context, item, depth + 1) == 0) { /* dropped: so is its key */
+                        b->count = mark;
+                        b->length = strings;
+                    } else if (b->status == TA_OK) {
+                        b->tokens[map].count++;
+                    }
+                }
+                JS_FreeValue(context, item);
+            }
+            JS_FreePropertyEnum(context, properties, count);
+        }
+    }
+    return b->status == TA_OK ? 1 : -1;
+}
+
+ta_status ta_datamodel_ecmascript_payload_to_cbor(ta_datamodel_ecmascript *ecmascript,
+                                                  ta_payload payload, ta_buffer *out) {
+    out->length = 0;
+    if (!payload || payload > ecmascript->payload_count || !ecmascript->payload_refs[payload - 1])
         return TA_ERROR_INVALID;
+    ecmascript->operations = 0;
+    JS_UpdateStackTop(ecmascript->runtime);
+    wire_builder *b = (wire_builder *)malloc(sizeof *b);
+    if (!b) return TA_ERROR_NO_MEMORY;
+    wire_builder_init(b);
+    if (!wire_write(b, ecmascript->auxiliary, ecmascript->payloads[payload - 1], 0))
+        wire_token(b, TA_CBOR_SIMPLE, 0, TA_CBOR_NULL);
+    ta_status status = b->status;
+    if (status == TA_OK) {
+        ta_cbor_document document = {{b->strings, b->length}, b->tokens, b->capacity, b->count};
+        status = ta_cbor_encode(&document, out);
     }
-    size_t n = 0;
-    const char *c = JS_ToCStringLen(ecmascript->auxiliary, &n, r);
-    JS_FreeValue(ecmascript->auxiliary, r);
-    if (!c) {
-        clear_exception(ecmascript->auxiliary);
-        return TA_ERROR_NO_MEMORY;
-    }
-    *length = n;
-    ta_status status = n <= capacity ? TA_OK : TA_ERROR_NO_MEMORY;
-    if (status == TA_OK && n) memcpy(buffer, c, n);
-    JS_FreeCString(ecmascript->auxiliary, c);
+    wire_builder_free(b);
+    free(b);
     return status;
 }
 
-static ta_status ecmascript_from_wire(void *datamodel, ta_string_view json, ta_payload *out) {
-    ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
+/* The integer -1 - n, past what a number holds exactly: a BigInt. */
+static JSValue wire_negative_bigint(JSContext *context, uint64_t n) {
+    if (n <= (uint64_t)INT64_MAX) return JS_NewBigInt64(context, -1 - (int64_t)n);
+    char text[24];
+    int length = snprintf(text, sizeof text, "-%llu", (unsigned long long)n);
+    for (int k = length - 1; k > 0; k--) { /* n + 1, in decimal */
+        if (text[k] != '9') {
+            text[k]++;
+            break;
+        }
+        text[k] = '0';
+        if (k == 1) { /* all nines: one digit more */
+            memmove(text + 2, text + 1, (size_t)length);
+            text[1] = '1';
+        }
+    }
+    JSValue global = JS_GetGlobalObject(context);
+    JSValue constructor = JS_GetPropertyStr(context, global, "BigInt");
+    JSValue argument = JS_NewString(context, text);
+    JSValue r = JS_Call(context, constructor, JS_UNDEFINED, 1, &argument);
+    JS_FreeValue(context, argument);
+    JS_FreeValue(context, constructor);
+    JS_FreeValue(context, global);
+    return r;
+}
+
+/* The value at tokens[*at], moving *at past it; JS_EXCEPTION when it is not
+ * a neutral value. */
+static JSValue wire_read(JSContext *context, const ta_cbor_document *document, uint32_t *at) {
+    const ta_cbor_token *token = &document->tokens[(*at)++];
+    const uint64_t safe = UINT64_C(9007199254740991); /* 2^53 - 1 */
+    switch (token->kind) {
+    case TA_CBOR_UINT:
+        return token->value <= safe ? JS_NewInt64(context, (int64_t)token->value)
+                                    : JS_NewBigUint64(context, token->value);
+    case TA_CBOR_NEGINT:
+        return token->value < safe ? JS_NewInt64(context, -1 - (int64_t)token->value)
+                                   : wire_negative_bigint(context, token->value);
+    case TA_CBOR_BYTES: {
+        ta_string_view bytes = ta_cbor_string(document, *at - 1);
+        return JS_NewUint8ArrayCopy(context, (const uint8_t *)bytes.pointer, bytes.length);
+    }
+    case TA_CBOR_TEXT: {
+        ta_string_view text = ta_cbor_string(document, *at - 1);
+        return JS_NewStringLen(context, text.pointer, text.length);
+    }
+    case TA_CBOR_ARRAY: {
+        JSValue array = JS_NewArray(context);
+        for (uint32_t i = 0; i < token->count && !JS_IsException(array); i++) {
+            JSValue item = wire_read(context, document, at);
+            if (JS_IsException(item) ||
+                JS_DefinePropertyValueUint32(context, array, i, item, JS_PROP_C_W_E) < 0) {
+                JS_FreeValue(context, array);
+                array = JS_EXCEPTION;
+            }
+        }
+        return array;
+    }
+    case TA_CBOR_MAP: {
+        JSValue object = JS_NewObject(context);
+        for (uint32_t i = 0; i < token->count && !JS_IsException(object); i++) {
+            if (document->tokens[*at].kind != TA_CBOR_TEXT) { /* keys are text */
+                JS_FreeValue(context, object);
+                return JS_EXCEPTION;
+            }
+            ta_string_view key = ta_cbor_string(document, (*at)++);
+            JSValue item = wire_read(context, document, at);
+            JSAtom atom = JS_IsException(item) ? JS_ATOM_NULL
+                                               : JS_NewAtomLen(context, key.pointer, key.length);
+            if (atom == JS_ATOM_NULL ||
+                JS_DefinePropertyValue(context, object, atom, item, JS_PROP_C_W_E) < 0) {
+                if (atom == JS_ATOM_NULL) JS_FreeValue(context, item);
+                JS_FreeValue(context, object);
+                object = JS_EXCEPTION;
+            }
+            if (atom != JS_ATOM_NULL) JS_FreeAtom(context, atom);
+        }
+        return object;
+    }
+    case TA_CBOR_TAG: /* an actor reference: its address */
+        if (token->value != TA_CBOR_TAG_URI || document->tokens[*at].kind != TA_CBOR_TEXT)
+            return JS_EXCEPTION;
+        return wire_read(context, document, at);
+    case TA_CBOR_SIMPLE:
+        switch (token->value) {
+        case TA_CBOR_FALSE: return JS_FALSE;
+        case TA_CBOR_TRUE: return JS_TRUE;
+        case TA_CBOR_NULL: return JS_NULL;
+        case TA_CBOR_UNDEFINED: return JS_UNDEFINED;
+        default: return JS_EXCEPTION;
+        }
+    case TA_CBOR_FLOAT: {
+        double d;
+        memcpy(&d, &token->value, sizeof d);
+        return JS_NewFloat64(context, d);
+    }
+    default: return JS_EXCEPTION;
+    }
+}
+
+ta_status ta_datamodel_ecmascript_payload_from_cbor(ta_datamodel_ecmascript *ecmascript,
+                                                    ta_bytes cbor, ta_payload *out) {
     *out = 0;
-    JSValue f = wire_function(ecmascript, "from");
-    if (JS_IsUndefined(f)) return TA_ERROR_NO_MEMORY;
+    ta_cbor_token small[64];
+    ta_cbor_document document = {cbor, small, sizeof small / sizeof small[0], 0};
+    ta_status status = ta_cbor_decode(&document);
+    if (status == TA_ERROR_NO_MEMORY) {
+        document.tokens = (ta_cbor_token *)malloc(document.count * sizeof(ta_cbor_token));
+        if (!document.tokens) return TA_ERROR_NO_MEMORY;
+        document.capacity = document.count;
+        status = ta_cbor_decode(&document);
+    }
+    if (status != TA_OK) {
+        if (document.tokens != small) free(document.tokens);
+        return status == TA_ERROR_NO_MEMORY ? status : TA_ERROR_INVALID;
+    }
     ecmascript->operations = 0;
-    JSValue arg =
-        JS_NewStringLen(ecmascript->auxiliary, json.pointer ? json.pointer : "", json.length);
-    JSValue r = JS_Call(ecmascript->auxiliary, f, ecmascript->wire, 1, &arg);
-    JS_FreeValue(ecmascript->auxiliary, arg);
-    JS_FreeValue(ecmascript->auxiliary, f);
-    if (JS_IsException(r)) {
+    JS_UpdateStackTop(ecmascript->runtime);
+    uint32_t at = 0;
+    JSValue v = wire_read(ecmascript->auxiliary, &document, &at);
+    if (document.tokens != small) free(document.tokens);
+    if (JS_IsException(v)) {
         clear_exception(ecmascript->auxiliary);
         return TA_ERROR_INVALID;
     }
-    *out = payload_new(ecmascript, r);
+    *out = payload_new(ecmascript, v);
     if (*out) return TA_OK;
-    JS_FreeValue(ecmascript->auxiliary, r);
+    JS_FreeValue(ecmascript->auxiliary, v);
     return TA_ERROR_NO_MEMORY;
 }
 
+static ta_status ecmascript_to_wire(void *datamodel, ta_payload payload, ta_buffer *out) {
+    return ta_datamodel_ecmascript_payload_to_cbor((ta_datamodel_ecmascript *)datamodel, payload,
+                                                   out);
+}
+
+static ta_status ecmascript_from_wire(void *datamodel, ta_bytes cbor, ta_payload *out) {
+    return ta_datamodel_ecmascript_payload_from_cbor((ta_datamodel_ecmascript *)datamodel, cbor,
+                                                     out);
+}
+
+/* An expression in a session: a variable of a shared-realm session is read
+ * (a host storing <data> after every event; no compiling: the scope has a
+ * null prototype, so an own name is what with(__s) would find, literals
+ * excepted); anything else is evaluated in the session's scope. */
+static JSValue eval_in_session(ta_datamodel_ecmascript *ecmascript, ecmascript_instance *instance,
+                               ta_string_view expression) {
+    ecmascript->current = instance;
+    JSAtom a = JS_ATOM_NULL;
+    char name[256];
+    if (instance->chart_context->shared && is_identifier(expression) &&
+        expression.length < sizeof name) {
+        memcpy(name, expression.pointer, expression.length);
+        name[expression.length] = 0;
+        if (strcmp(name, "true") && strcmp(name, "false") && strcmp(name, "null") &&
+            strcmp(name, "this"))
+            a = JS_NewAtom(instance->context, name);
+        if (a != JS_ATOM_NULL &&
+            JS_GetOwnProperty(instance->context, NULL, instance->scope, a) != 1) {
+            JS_FreeAtom(instance->context, a);
+            a = JS_ATOM_NULL;
+        }
+    }
+    if (a != JS_ATOM_NULL) {
+        JSValue v = JS_GetProperty(instance->context, instance->scope, a);
+        JS_FreeAtom(instance->context, a);
+        return v;
+    }
+    if (!instance->chart_context->shared)
+        return eval_wrapped(instance->context, "(\n", expression, "\n)", JS_EVAL_TYPE_GLOBAL);
+    JSValue f = eval_wrapped(instance->context, "(function(__s){with(__s){return (\n", expression,
+                             "\n);}})", JS_EVAL_TYPE_GLOBAL);
+    JSValue v = JS_IsException(f)
+                    ? f
+                    : JS_Call(instance->context, f, JS_UNDEFINED, 1, (JSValueConst *)&instance->scope);
+    JS_FreeValue(instance->context, f);
+    return v;
+}
+
 ta_payload ta_datamodel_ecmascript_payload_eval(ta_datamodel_ecmascript *ecmascript,
+                                                uint64_t instance_handle,
                                                 ta_string_view expression) {
+    ecmascript_instance *instance = NULL;
+    if (instance_handle) {
+        instance = I(ecmascript, instance_handle);
+        if (!instance || !instance->live) return 0;
+    }
     ecmascript->operations = 0;
-    JSValue v = eval_wrapped(ecmascript->auxiliary, "(\n", expression, "\n)", JS_EVAL_TYPE_GLOBAL);
+    JSContext *context = instance ? instance->context : ecmascript->auxiliary;
+    JSValue v = instance ? eval_in_session(ecmascript, instance, expression)
+                         : eval_wrapped(context, "(\n", expression, "\n)", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(v)) {
-        clear_exception(ecmascript->auxiliary);
+        clear_exception(context);
         return 0;
     }
     ta_payload payload = payload_new(ecmascript, v);
-    if (!payload) JS_FreeValue(ecmascript->auxiliary, v);
+    if (!payload) JS_FreeValue(context, v);
     return payload;
 }
 
@@ -2854,7 +3235,7 @@ ta_datamodel_ecmascript *ta_datamodel_ecmascript_new(const ta_datamodel_ecmascri
         ecmascript->abort_flag = config->abort_flag;
     JS_SetRuntimeOpaque(ecmascript->runtime, ecmascript);
     ecmascript->auxiliary = JS_NewContext(ecmascript->runtime);
-    ecmascript->wire = ecmascript->base = ecmascript->explain = JS_UNDEFINED;
+    ecmascript->base = ecmascript->explain = JS_UNDEFINED;
     ecmascript->payload_free = ecmascript->iteration_free = ecmascript->free_slot = NONE;
     return ecmascript;
 }
@@ -2874,7 +3255,6 @@ void ta_datamodel_ecmascript_free(ta_datamodel_ecmascript *ecmascript) {
     for (uint32_t i = 0; i < ecmascript->chart_count; i++)
         chart_free(ecmascript, ecmascript->charts[i]);
     if (ecmascript->shared) JS_FreeContext(ecmascript->shared);
-    JS_FreeValue(ecmascript->auxiliary, ecmascript->wire);
     JS_FreeValue(ecmascript->auxiliary, ecmascript->base);
     JS_FreeValue(ecmascript->auxiliary, ecmascript->explain);
     JS_FreeContext(ecmascript->auxiliary);
@@ -2903,98 +3283,6 @@ void *ta_datamodel_ecmascript_js_runtime(ta_datamodel_ecmascript *ecmascript) {
 
 const char *ta_datamodel_ecmascript_last_error(const ta_datamodel_ecmascript *ecmascript) {
     return ecmascript ? ecmascript->error : "";
-}
-
-ta_payload ta_datamodel_ecmascript_payload_from_json(ta_datamodel_ecmascript *ecmascript,
-                                                     ta_string_view json) {
-    char *buffer = (char *)malloc(json.length + 1);
-    if (!buffer) return 0;
-    memcpy(buffer, json.pointer, json.length);
-    buffer[json.length] = 0;
-    JSValue v = JS_ParseJSON(ecmascript->auxiliary, buffer, json.length, "<host>");
-    free(buffer);
-    if (JS_IsException(v)) {
-        clear_exception(ecmascript->auxiliary);
-        return 0;
-    }
-    ta_payload payload = payload_new(ecmascript, v);
-    if (!payload) JS_FreeValue(ecmascript->auxiliary, v);
-    return payload;
-}
-
-static size_t json_out(JSContext *context, JSValue v, char *buffer, size_t capacity) {
-    JSValue s = JS_JSONStringify(context, v, JS_UNDEFINED, JS_UNDEFINED);
-    if (JS_IsException(s)) {
-        clear_exception(context);
-        return (size_t)-1;
-    }
-    size_t length = 0;
-    const char *c = JS_IsUndefined(s) ? NULL : JS_ToCStringLen(context, &length, s);
-    if (!c) {
-        c = "undefined";
-        length = 9;
-    }
-    if (capacity) {
-        size_t n = length < capacity - 1 ? length : capacity - 1;
-        memcpy(buffer, c, n);
-        buffer[n] = 0;
-    }
-    if (!JS_IsUndefined(s)) JS_FreeCString(context, c);
-    JS_FreeValue(context, s);
-    return length;
-}
-
-size_t ta_datamodel_ecmascript_payload_to_json(ta_datamodel_ecmascript *ecmascript,
-                                               ta_payload payload, char *buffer, size_t capacity) {
-    return json_out(ecmascript->auxiliary, payload_get(ecmascript, payload), buffer, capacity);
-}
-
-size_t ta_datamodel_ecmascript_eval_json(ta_datamodel_ecmascript *ecmascript,
-                                         uint64_t instance_handle, ta_string_view expression,
-                                         char *buffer, size_t capacity) {
-    ecmascript_instance *instance = I(ecmascript, instance_handle);
-    if (!instance || !instance->live) return (size_t)-1;
-    ecmascript->operations = 0;
-    ecmascript->current = instance;
-    JSValue v;
-    JSAtom a = JS_ATOM_NULL;
-    char name[256];
-    if (instance->chart_context->shared && is_identifier(expression) &&
-        expression.length < sizeof name) {
-        /* one of the session's variables (a host storing <data> after every
-         * event): read it, no compiling — the scope has a null prototype, so
-         * an own name is what with(__s) would find (literals excepted) */
-        memcpy(name, expression.pointer, expression.length);
-        name[expression.length] = 0;
-        if (strcmp(name, "true") && strcmp(name, "false") && strcmp(name, "null") &&
-            strcmp(name, "this"))
-            a = JS_NewAtom(instance->context, name);
-        if (a != JS_ATOM_NULL &&
-            JS_GetOwnProperty(instance->context, NULL, instance->scope, a) != 1) {
-            JS_FreeAtom(instance->context, a);
-            a = JS_ATOM_NULL;
-        }
-    }
-    if (a != JS_ATOM_NULL) {
-        v = JS_GetProperty(instance->context, instance->scope, a);
-        JS_FreeAtom(instance->context, a);
-    } else if (instance->chart_context->shared) {
-        JSValue f = eval_wrapped(instance->context, "(function(__s){with(__s){return (\n",
-                                 expression, "\n);}})", JS_EVAL_TYPE_GLOBAL);
-        v = JS_IsException(f)
-                ? f
-                : JS_Call(instance->context, f, JS_UNDEFINED, 1, (JSValueConst *)&instance->scope);
-        JS_FreeValue(instance->context, f);
-    } else {
-        v = eval_wrapped(instance->context, "(\n", expression, "\n)", JS_EVAL_TYPE_GLOBAL);
-    }
-    if (JS_IsException(v)) {
-        clear_exception(instance->context);
-        return (size_t)-1;
-    }
-    size_t n = json_out(instance->context, v, buffer, capacity);
-    JS_FreeValue(instance->context, v);
-    return n;
 }
 
 /* ---- snapshot / restore of the whole datamodel ------------------------------------------ */

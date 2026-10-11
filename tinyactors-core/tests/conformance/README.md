@@ -45,8 +45,10 @@ Beside the scenarios, the cross-system protocol (`docs/protocol.md`) has its
 own shared files, run by every implementation:
 
 - `addresses.json` — address parsing/formatting (C: `tests/unit/test_address.c`).
-- `values.json` — neutral wire values: `roundtrip` (from wire and back),
-  `encode` (a value made by an ECMAScript expression, to the wire), `invalid`
-  (C: `test_wire_values` in `tests/unit/test_datamodel_ecmascript.c`).
+- `values.txt` — neutral values as CBOR, in hex with their diagnostic
+  notation: `roundtrip` (from wire and back), `encode` (a value made by an
+  ECMAScript expression, to the wire), `invalid` (not a neutral value) and
+  `malformed` (not read) (C: `test_wire_values` in
+  `tests/unit/test_datamodel_ecmascript.c`).
 - `span_ids.json` and `traceparent.json` — trace values: the span ID of a
   step key, and W3C `traceparent` text (C: `tests/unit/test_trace.c`).

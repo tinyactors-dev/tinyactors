@@ -74,7 +74,7 @@ typedef struct ta_otlp_config {
     uint32_t chunks;         /* 256-byte chunks for what open spans gathered (8 per open span) */
     uint32_t scopes;         /* charts one request names (64) */
     uint32_t value_limit;    /* bytes of a value in an attribute, cut there (256) */
-    uint32_t render_bytes;   /* a value as the datamodel writes it, before the cut (16 KiB) */
+    uint32_t render_bytes;   /* a value as the datamodel writes it (CBOR), before the cut (16 KiB) */
     uint32_t resource_bytes; /* the resource attributes, encoded (4 KiB) */
     uint32_t metric_bytes;   /* metrics, encoded (64 KiB) */
     uint32_t span_metric_charts; /* charts whose macrostep durations it keeps (64) */
@@ -112,7 +112,8 @@ TA_API void ta_otlp_mark(ta_otlp *otlp, uint64_t fuel, uint64_t wall_ns);
 
 /* Records of one system to read. `source` names the system (a host's
  * segment index): with `image`, its records' charts and strings. The
- * datamodel bindings render values (their to_wire) with TA_OTLP_VALUES. */
+ * datamodel bindings render values with TA_OTLP_VALUES: their to_wire, as
+ * CBOR diagnostic notation (ta_cbor_diagnostic). */
 typedef struct ta_otlp_input {
     uint32_t size;
     uint32_t source;

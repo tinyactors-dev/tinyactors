@@ -6,6 +6,7 @@
 #include "system/system_internal.h"
 #include "../support/system_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
+#include "../support/payload_text.h"
 
 #define CHECK_STR(got, want)                                                                       \
     do {                                                                                           \
@@ -182,7 +183,7 @@ static const char *eval(world *w, int i, uint32_t actor, const char *expression)
     if (index == TA_NIL) return "<gone>";
     uint64_t instance =
         ta_actor_instance(w->system[i], ta_actor_at(w->system[i], index))->datamodel;
-    if (ta_datamodel_ecmascript_eval_json(
+    if (eval_text(
             w->ecmascript, instance, (ta_string_view){expression, (uint32_t)strlen(expression)},
             buffer, sizeof buffer) == (size_t)-1)
         return "<error>";
@@ -298,8 +299,8 @@ static void test_upgrade_roundtrip(void) {
     event.size = sizeof event;
     event.target = peer;
     event.name = (ta_string_view){"ask", 3};
-    event.data = ta_datamodel_ecmascript_payload_from_json(
-        w.ecmascript, (ta_string_view){"{\"to\": \"" BASE "#_scxml_1\"}",
+    event.data = ta_datamodel_ecmascript_payload_eval(
+        w.ecmascript, 0, (ta_string_view){"{\"to\": \"" BASE "#_scxml_1\"}",
                                        (uint32_t)strlen("{\"to\": \"" BASE "#_scxml_1\"}")});
     CHECK_EQUAL(ta_system_send(w.system[0], &event), TA_OK);
     run(&w);
@@ -307,8 +308,8 @@ static void test_upgrade_roundtrip(void) {
 
     /* an address nobody has: error.communication through the host */
     w.log[0] = 0;
-    event.data = ta_datamodel_ecmascript_payload_from_json(
-        w.ecmascript, (ta_string_view){"{\"to\": \"" BASE "#_scxml_99\"}",
+    event.data = ta_datamodel_ecmascript_payload_eval(
+        w.ecmascript, 0, (ta_string_view){"{\"to\": \"" BASE "#_scxml_99\"}",
                                        (uint32_t)strlen("{\"to\": \"" BASE "#_scxml_99\"}")});
     CHECK_EQUAL(ta_system_send(w.system[0], &event), TA_OK);
     run(&w);
@@ -806,7 +807,7 @@ static void test_failed_send_keeps_payload(void) {
     ta_status status = TA_OK;
     int sent = 0;
     while (status == TA_OK && sent < 100000) { /* fill the event pool (the actor does not run) */
-        event.data = ta_datamodel_ecmascript_payload_from_json(w.ecmascript,
+        event.data = ta_datamodel_ecmascript_payload_eval(w.ecmascript, 0,
                                                                (ta_string_view){"{\"k\": 1}", 8});
         status = ta_system_send(w.system[0], &event);
         sent++;
@@ -814,7 +815,7 @@ static void test_failed_send_keeps_payload(void) {
     CHECK_EQUAL(status, TA_ERROR_NO_MEMORY);
     char buffer[64];
     size_t n =
-        ta_datamodel_ecmascript_payload_to_json(w.ecmascript, event.data, buffer, sizeof buffer);
+        payload_text(w.ecmascript, event.data, buffer, sizeof buffer);
     CHECK(n != (size_t)-1 && n < sizeof buffer &&
           strstr(buffer, "\"k\""));                /* still ours, still valid */
     ta_system_config config = w.system[0]->config; /* grow, retry with the same handle */
@@ -831,9 +832,9 @@ static void test_failed_send_keeps_payload(void) {
     /* stale target: also not consumed */
     event.target = 12345;
     event.data =
-        ta_datamodel_ecmascript_payload_from_json(w.ecmascript, (ta_string_view){"{\"k\": 2}", 8});
+        ta_datamodel_ecmascript_payload_eval(w.ecmascript, 0, (ta_string_view){"{\"k\": 2}", 8});
     CHECK_EQUAL(ta_system_send(w.system[0], &event), TA_ERROR_STALE);
-    n = ta_datamodel_ecmascript_payload_to_json(w.ecmascript, event.data, buffer, sizeof buffer);
+    n = payload_text(w.ecmascript, event.data, buffer, sizeof buffer);
     CHECK(n != (size_t)-1 && strstr(buffer, "2"));
     ta_datamodel_ecmascript_vtable()->release(w.ecmascript, event.data);
     world_close(&w);

@@ -169,18 +169,18 @@ typedef struct ta_datamodel_vtable {
     ta_status (*migrate)(void *datamodel, uint64_t instance, ta_datamodel_environment *environment,
                          ta_payload *bindings);
 
-    /* Neutral values (optional; docs/protocol.md, "Values"): event data on the
-     * wire between systems is JSON plus {"$ref": address}, {"$bytes": base64}
-     * and {"$": {...}} (an object with keys starting with "$", literally).
-     * to_wire: write payload p as neutral JSON text (UTF-8, no terminator) to
-     * buffer; *length = bytes needed; TA_ERROR_NO_MEMORY if capacity is too small (call again),
-     * TA_ERROR_INVALID if p cannot be a neutral value (a cycle, a function).
-     * from_wire: a new payload (one reference) from neutral JSON text;
-     * TA_ERROR_INVALID if it does not parse. Transports between systems use
-     * them; within a system payloads never leave the datamodel. */
-    ta_status (*to_wire)(void *datamodel, ta_payload p, char *buffer, size_t capacity,
-                         size_t *length);
-    ta_status (*from_wire)(void *datamodel, ta_string_view json, ta_payload *out);
+    /* Neutral values (optional; docs/protocol.md, "Values"): event data
+     * between systems, and in traces, is one CBOR item (RFC 8949): integers,
+     * floats, text, bytes, arrays, maps with text keys, true, false, null,
+     * undefined, and an actor reference as tag 32 on its address.
+     * to_wire: write payload p as CBOR into `out` (on TA_ERROR_NO_MEMORY
+     * out->length is the capacity it needs; call again), TA_ERROR_INVALID
+     * if p cannot be a neutral value (a cycle, nested too deep).
+     * from_wire: a new payload (one reference) from CBOR; TA_ERROR_INVALID if
+     * it is not one well-formed neutral value. Transports between systems
+     * use them; within a system payloads never leave the datamodel. */
+    ta_status (*to_wire)(void *datamodel, ta_payload p, ta_buffer *out);
+    ta_status (*from_wire)(void *datamodel, ta_bytes cbor, ta_payload *out);
 
     /* Payloads in blobs (optional; docs/durability.md). ta_actor_export
      * writes the payload of every pending delayed send with

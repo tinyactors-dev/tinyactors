@@ -33,6 +33,7 @@
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
+#include "../support/payload_text.h"
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 #include <tinyactors/system.h>
@@ -485,7 +486,7 @@ static void observe_effect(world *w, uint32_t kind, uint64_t session, ta_string_
                           (int)event.length, event.pointer ? event.pointer : "");
     } else {
         char data[2048] = "";
-        if (payload && ta_datamodel_ecmascript_payload_to_json(w->ecmascript, payload, data,
+        if (payload && payload_text(w->ecmascript, payload, data,
                                                                sizeof data) == (size_t)-1)
             snprintf(data, sizeof data, "<payload?>");
         length = snprintf(buffer, sizeof buffer, "fx%u:%.*s:%.*s:%.*s:%s", kind, (int)target.length,
@@ -556,8 +557,8 @@ static void world_send(world *w, const char *root, const char *event_name, const
     event.target = a;
     event.name = (ta_string_view){event_name, (uint32_t)strlen(event_name)};
     if (json)
-        event.data = ta_datamodel_ecmascript_payload_from_json(
-            w->ecmascript, (ta_string_view){json, (uint32_t)strlen(json)});
+        event.data = ta_datamodel_ecmascript_payload_eval(
+            w->ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
     ta_status status = w->host ? ta_host_send(w->host, session, &event)
                                : ta_system_send(w->systems[si].system, &event);
     CHECK_EQUAL(status, TA_OK);
@@ -651,7 +652,7 @@ static int observe(world *w, line *out, int capacity) {
                 const char *expressions[2] = {ex.data, event};
                 for (int e = 0; e < 2; e++) {
                     static char buffer[1 << 16];
-                    size_t r = ta_datamodel_ecmascript_eval_json(
+                    size_t r = eval_text(
                         w->ecmascript, actor_info.datamodel_instance,
                         (ta_string_view){expressions[e], (uint32_t)strlen(expressions[e])}, buffer,
                         sizeof buffer);

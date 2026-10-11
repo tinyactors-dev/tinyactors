@@ -1,0 +1,179 @@
+# Neutral values (docs/protocol.md, "Values"): event data between systems,
+# as CBOR. Run by tests/unit/test_datamodel_ecmascript.c against the
+# ECMAScript datamodel (quickjs-ng). A datamodel in another language passes
+# the roundtrip and malformed cases but those named "ECMAScript: ...";
+# encode and invalid cases are written in ECMAScript.
+#
+# A case is a line "<kind> <name>" and the lines after it:
+#   cbor <hex>          the value, as CBOR
+#   back <hex>          roundtrip: what to_wire writes, when it is not `cbor`
+#   diag <text>         the cbor or back line before it in diagnostic notation
+#                       (ta_cbor_diagnostic), checked too
+#   ecmascript <expr>   a value made by this ECMAScript expression
+# The kinds:
+#   roundtrip   from_wire of `cbor`, then to_wire, writes `back` (or `cbor`)
+#   encode      to_wire of the `ecmascript` value writes `cbor`
+#   invalid     to_wire of the `ecmascript` value is TA_ERROR_INVALID
+#   malformed   from_wire of `cbor` is TA_ERROR_INVALID
+#
+# Integers within ±(2^53-1) are numbers in ECMAScript and others BigInts, so
+# every integer comes back as itself. ECMAScript has no reference type: a
+# reference (tag 32) arrives as its address, and goes back as text. It has
+# no integer type either: a float holding an integer comes back as one.
+
+roundtrip scalars
+cbor 8901f9c10000f5f4f66064746578746fc3bc6ec3af63c3b864c3a920e29c93
+diag [1,-2.5,0,true,false,null,"","text","ünïcødé ✓"]
+
+roundtrip nested
+cbor a26161a161628201a16163806164a0
+diag {"a":{"b":[1,{"c":[]}]},"d":{}}
+
+roundtrip integers past 2^53 are exact
+cbor 861b001fffffffffffff3b001ffffffffffffe1b00200000000000001bffffffffffffffff3b80000000000000003bffffffffffffffff
+diag [9007199254740991,-9007199254740991,9007199254740992,18446744073709551615,-9223372036854775809,-18446744073709551616]
+
+roundtrip floats
+cbor 88fb3fb999999999999af93e00f9c100f98000f97e00f97c00f9fc00fb7e37e43c8800759c
+diag [0.1,1.5,-2.5,-0.0,NaN,Infinity,-Infinity,1.0e+300]
+
+roundtrip ECMAScript: a float holding an integer is an integer
+cbor 82f93c00fa47c35000
+diag [1.0,100000.0]
+back 82011a000186a0
+diag [1,100000]
+
+roundtrip bytes
+cbor 44000102ff
+diag h'000102ff'
+
+roundtrip empty bytes
+cbor 40
+diag h''
+
+roundtrip bytes in data
+cbor a26466696c654568656c6c6f616e05
+diag {"file":h'68656c6c6f',"n":5}
+
+roundtrip keys starting with $ are plain
+cbor a2642472656661786124a1662462797465736441413d3d
+diag {"$ref":"x","$":{"$bytes":"AA=="}}
+
+roundtrip ECMAScript: an actor reference is its address
+cbor a166706c61796572d820781e74696e796163746f72733a2f2f7461622d3766332f235f7363786d6c5f34
+diag {"player":32("tinyactors://tab-7f3/#_scxml_4")}
+back a166706c61796572781e74696e796163746f72733a2f2f7461622d3766332f235f7363786d6c5f34
+diag {"player":"tinyactors://tab-7f3/#_scxml_4"}
+
+roundtrip ECMAScript: undefined at the top is null
+cbor f7
+diag undefined
+back f6
+
+encode undefined properties are dropped
+ecmascript ({a: undefined, b: 1})
+cbor a1616201
+diag {"b":1}
+
+encode undefined in arrays is null
+ecmascript [undefined, 1]
+cbor 82f601
+diag [null,1]
+
+encode undefined at the top is null
+ecmascript undefined
+cbor f6
+diag null
+
+encode non-finite numbers are floats
+ecmascript [NaN, Infinity, -Infinity]
+cbor 83f97e00f97c00f9fc00
+diag [NaN,Infinity,-Infinity]
+
+encode -0 is a float
+ecmascript -0
+cbor f98000
+diag -0.0
+
+encode a number past 2^53 is a float
+ecmascript 2 ** 53 + 2
+cbor fb4340000000000001
+diag 9007199254740994.0
+
+encode a BigInt is an integer
+ecmascript [12345678901234567890n, -5n, -(2n ** 64n)]
+cbor 831bab54a98ceb1f0ad2243bffffffffffffffff
+diag [12345678901234567890,-5,-18446744073709551616]
+
+encode Uint8Array as bytes
+ecmascript new Uint8Array([0, 1, 2, 255])
+cbor 44000102ff
+diag h'000102ff'
+
+encode ArrayBuffer as bytes
+ecmascript new Uint8Array([7, 8]).buffer
+cbor 420708
+diag h'0708'
+
+encode a view's own bytes
+ecmascript new DataView(new Uint8Array([1, 2, 3, 4]).buffer, 1, 2)
+cbor 420203
+diag h'0203'
+
+encode keys starting with $ are plain
+ecmascript ({$x: 1, y: {$z: 2}})
+cbor a2622478016179a162247a02
+diag {"$x":1,"y":{"$z":2}}
+
+encode keys in the order Object.keys gives
+ecmascript ({b: 1, 2: 0, a: 2})
+cbor a3613200616201616102
+diag {"2":0,"b":1,"a":2}
+
+encode Date as its JSON form
+ecmascript new Date(0)
+cbor 7818313937302d30312d30315430303a30303a30302e3030305a
+diag "1970-01-01T00:00:00.000Z"
+
+encode functions are dropped
+ecmascript ({f() {}, g: 1})
+cbor a1616701
+diag {"g":1}
+
+encode shared (acyclic) references are copied
+ecmascript (() => { const s = {k: 1}; return [s, s]; })()
+cbor 82a1616b01a1616b01
+diag [{"k":1},{"k":1}]
+
+invalid cycles
+ecmascript (() => { const o = {}; o.self = o; return o; })()
+
+invalid a BigInt past 64 bits
+ecmascript 2n ** 64n
+
+invalid nested deeper than 64
+ecmascript (() => { let v = 0; for (let i = 0; i < 65; i++) v = [v]; return v; })()
+
+malformed a key that is not text
+cbor a10102
+
+malformed a tag other than 32
+cbor c11a514b67b0
+
+malformed tag 32 on a number
+cbor d82001
+
+malformed a simple value other than false, true, null, undefined
+cbor f0
+
+malformed truncated
+cbor 8201
+
+malformed text that is not UTF-8
+cbor 62c328
+
+malformed bytes after the item
+cbor 0101
+
+malformed an indefinite length
+cbor 9fff
