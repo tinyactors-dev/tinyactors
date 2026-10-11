@@ -5,6 +5,7 @@
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
+#include <tinyactors/cbor.h>
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 #include "../support/host_request.h"
@@ -55,6 +56,7 @@ typedef struct node {
 static node nodes[N];
 static int link_up[N][N]; /* the test transport between i and j */
 static int dropped;       /* envelopes the transport lost (link down, no queue) */
+static int over_bytes;    /* the transport crosses a process boundary: CBOR envelopes */
 
 static void open_node(int i, const char *chart) {
     node *n = &nodes[i];
@@ -87,6 +89,7 @@ static void close_all(void) {
     }
     memset(link_up, 0, sizeof link_up);
     dropped = 0;
+    over_bytes = 0;
 }
 
 static uint32_t connect(int i, int j, uint32_t flags, const char *const *reach,
@@ -136,6 +139,26 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
             busy = 1;
             if (!link_up[i][j]) {
                 dropped++;
+                continue;
+            }
+            if (over_bytes) { /* ta_host_envelope, then the read on the other side */
+                unsigned char bytes[2048];
+                ta_buffer written = {bytes, sizeof bytes, 0};
+                CHECK_EQUAL(ta_host_envelope(nodes[i].host, effect, &written), TA_OK);
+                ta_bytes wire = {bytes, written.length};
+                if (effect->kind == TA_HOST_EFFECT_PEER_ERROR) {
+                    ta_peer_error error;
+                    CHECK_EQUAL(ta_host_peer_error_read(wire, &error), TA_OK);
+                    error.peer = nodes[j].peer[i];
+                    CHECK_EQUAL(ta_host_peer_error(nodes[j].host, &error), TA_OK);
+                    continue;
+                }
+                ta_envelope envelope;
+                CHECK_EQUAL(ta_host_envelope_read(nodes[j].host, wire, &envelope), TA_OK);
+                int32_t outcome = ta_host_deliver(nodes[j].host, nodes[j].peer[i], &envelope);
+                CHECK(outcome >= 0);
+                if (outcome != TA_ROUTE_DELIVERED && outcome != TA_ROUTE_RELAYED && envelope.data)
+                    ta_datamodel_ecmascript_vtable()->release(nodes[j].ecmascript, envelope.data);
                 continue;
             }
             if (effect->kind == TA_HOST_EFFECT_PEER_ERROR) {
@@ -1093,6 +1116,139 @@ static void test_trace_set(void) {
     free(echo_bytes);
 }
 
+/* across a process boundary: envelopes and errors as CBOR (ta_host_envelope,
+ * ta_host_envelope_read, ta_host_peer_error_read) */
+static void diagnostic_is(ta_bytes cbor, const char *want) {
+    char text[1024];
+    ta_buffer written = {text, sizeof text - 1, 0};
+    CHECK_EQUAL(ta_cbor_diagnostic(cbor, &written), TA_OK);
+    text[written.length] = 0;
+    CHECK(strcmp(text, want) == 0);
+    if (strcmp(text, want)) fprintf(stderr, "  diagnostic %s\n  want       %s\n", text, want);
+}
+
+static void test_envelope_bytes(void) {
+    /* the round trip, by session, by name, errors back and relayed */
+    open_node(A, PINGER);
+    open_node(B, ECHO);
+    open_node(C, ECHO);
+    over_bytes = 1;
+    const char *b_reach[1] = {"c"};
+    const char *b_back[1] = {"a"};
+    connect(A, B, TA_PEER_TRUSTED, b_reach, 1);
+    connect(B, A, TA_PEER_TRUSTED, NULL, 0);
+    connect(B, C, TA_PEER_TRUSTED, NULL, 0);
+    connect(C, B, TA_PEER_TRUSTED, b_back, 1);
+    uint64_t p = spawn(A, "pinger", "p");
+    spawn(B, "echo", "echo");
+    spawn(C, "echo", "echo");
+    go(A, p, "tinyactors://b/@echo", 1);
+    go(A, p, "tinyactors://c/@echo", 2);   /* relayed through b: hops */
+    go(A, p, "tinyactors://b/@nobody", 3); /* an error envelope back */
+    go(A, p, "tinyactors://c/@nobody", 4); /* relayed back through b */
+    LOGCHK(A, "pong:1;pong:2;comm:p1;comm:p1;");
+
+    /* the bytes of an envelope and of an error envelope */
+    ta_host_effect effect;
+    memset(&effect, 0, sizeof effect);
+    effect.size = sizeof effect;
+    effect.kind = TA_HOST_EFFECT_PEER;
+    effect.target = (ta_string_view){"tinyactors://b/@echo", 20};
+    effect.event = (ta_string_view){"ping", 4};
+    effect.sendid = (ta_string_view){"p1", 2};
+    effect.auxiliary = (ta_string_view){"tinyactors://a/#_scxml_1", 24};
+    effect.msgid = (ta_string_view){"m1", 2};
+    effect.flags = 1;
+    effect.payload = ta_datamodel_ecmascript_payload_eval(nodes[A].ecmascript, 0,
+                                                          (ta_string_view){"({n: 1})", 8});
+    effect.datamodel = 0;
+    unsigned char bytes[512];
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_envelope(nodes[A].host, &effect, &written), TA_ERROR_NO_MEMORY);
+    size_t needed = written.length;
+    written = (ta_buffer){bytes, needed - 1, 0};
+    CHECK_EQUAL(ta_host_envelope(nodes[A].host, &effect, &written), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(written.length, needed);
+    written = (ta_buffer){bytes, sizeof bytes, 0};
+    CHECK_EQUAL(ta_host_envelope(nodes[A].host, &effect, &written), TA_OK);
+    CHECK_EQUAL(written.length, needed);
+    diagnostic_is((ta_bytes){bytes, written.length},
+                  "{\"target\":\"tinyactors://b/@echo\",\"name\":\"ping\",\"data\":24(h'a1616e01'),"
+                  "\"sendid\":\"p1\",\"origin\":\"tinyactors://a/#_scxml_1\",\"msgid\":\"m1\","
+                  "\"hops\":1}");
+    ta_envelope envelope;
+    CHECK_EQUAL(ta_host_envelope_read(nodes[B].host, (ta_bytes){bytes, written.length}, &envelope),
+                TA_OK);
+    CHECK_EQUAL(envelope.hops, 1u);
+    CHECK(envelope.msgid.length == 2 && !memcmp(envelope.msgid.pointer, "m1", 2));
+    CHECK(envelope.data != 0 && envelope.datamodel == 0);
+    ta_datamodel_ecmascript_vtable()->release(nodes[B].ecmascript, envelope.data);
+    ta_datamodel_ecmascript_vtable()->release(nodes[A].ecmascript, effect.payload);
+
+    effect.kind = TA_HOST_EFFECT_PEER_ERROR;
+    effect.token = TA_ROUTE_ERROR_UNKNOWN_TARGET;
+    written = (ta_buffer){bytes, sizeof bytes, 0};
+    CHECK_EQUAL(ta_host_envelope(nodes[A].host, &effect, &written), TA_OK);
+    diagnostic_is((ta_bytes){bytes, written.length},
+                  "{\"error\":\"unknown-target\",\"sendid\":\"p1\","
+                  "\"origin\":\"tinyactors://a/#_scxml_1\",\"msgid\":\"m1\"}");
+    ta_peer_error error;
+    CHECK_EQUAL(ta_host_peer_error_read((ta_bytes){bytes, written.length}, &error), TA_OK);
+    CHECK_EQUAL(error.reason, (uint32_t)TA_ROUTE_ERROR_UNKNOWN_TARGET);
+    CHECK(error.origin.length == 24 && error.sendid.length == 2 && error.msgid.length == 2);
+    /* an error envelope is not an envelope, and the reverse */
+    CHECK_EQUAL(ta_host_envelope_read(nodes[B].host, (ta_bytes){bytes, written.length}, &envelope),
+                TA_ERROR_INVALID);
+    CHECK_EQUAL(envelope.size, 0u);
+    effect.kind = TA_EFFECT_LOG;
+    CHECK_EQUAL(ta_host_envelope(nodes[A].host, &effect, &written), TA_ERROR_INVALID);
+
+    /* not envelopes: nothing to answer */
+    static const unsigned char not_cbor[] = {0xff};
+    static const unsigned char not_map[] = {0x01};
+    static const unsigned char unknown_key[] = {0xa1, 0x63, 'f', 'o', 'o', 0x01};
+    static const unsigned char bad_type[] = {0xa1, 0x64, 'h', 'o', 'p', 's', 0x61, 'x'};
+    static const unsigned char bad_reason[] = {0xa2, 0x65, 'e', 'r', 'r', 'o', 'r', 0x61, 'x',
+                                               0x66, 'o', 'r', 'i', 'g', 'i', 'n', 0x61, 'o'};
+    const ta_bytes bad[] = {{not_cbor, sizeof not_cbor},
+                            {not_map, sizeof not_map},
+                            {unknown_key, sizeof unknown_key},
+                            {bad_type, sizeof bad_type}};
+    for (uint32_t k = 0; k < sizeof bad / sizeof bad[0]; k++) {
+        CHECK_EQUAL(ta_host_envelope_read(nodes[B].host, bad[k], &envelope), TA_ERROR_INVALID);
+        CHECK_EQUAL(envelope.size, 0u);
+        CHECK_EQUAL(ta_host_peer_error_read(bad[k], &error), TA_ERROR_INVALID);
+    }
+    CHECK_EQUAL(ta_host_peer_error_read((ta_bytes){bad_reason, sizeof bad_reason}, &error),
+                TA_ERROR_INVALID);
+
+    /* data that is not a neutral value: refused as malformed, answered */
+    static const char bad_data_prefix[] = "\xa5"
+                                          "\x66" "target" "\x74" "tinyactors://b/@echo"
+                                          "\x64" "name" "\x65" "other"
+                                          "\x64" "data" "\xd8\x18\x41\xff"
+                                          "\x66" "origin" "\x78\x18" "tinyactors://a/#_scxml_1"
+                                          "\x65" "msgid" "\x62" "m9";
+    CHECK_EQUAL(ta_host_envelope_read(nodes[B].host,
+                                      (ta_bytes){bad_data_prefix, sizeof bad_data_prefix - 1},
+                                      &envelope),
+                TA_ERROR_INVALID);
+    CHECK(envelope.size == sizeof envelope && !envelope.target.length && !envelope.data);
+    ta_run result = ta_host_run(nodes[B].host, 1000);
+    (void)result;
+    ta_host_effects_ack(nodes[B].host);
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_REFUSED);
+    const ta_host_effect *effects;
+    uint32_t n = ta_host_effects(nodes[B].host, &effects), errors = 0;
+    for (uint32_t k = 0; k < n; k++)
+        if (effects[k].kind == TA_HOST_EFFECT_PEER_ERROR &&
+            effects[k].token == TA_ROUTE_ERROR_MALFORMED)
+            errors++;
+    CHECK_EQUAL(errors, 1u);
+    ta_host_effects_ack(nodes[B].host);
+    close_all();
+}
+
 int main(void) {
     RUN(test_route_status);
     RUN(test_errors_back);
@@ -1112,5 +1268,6 @@ int main(void) {
     RUN(test_trace_across_systems);
     RUN(test_trace_two_segments);
     RUN(test_trace_set);
+    RUN(test_envelope_bytes);
     TEST_MAIN_END();
 }

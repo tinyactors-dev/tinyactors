@@ -79,18 +79,41 @@ name compares by its decoded bytes.
 
 What travels. One envelope is one SCXML event on its way to one target.
 
-| field | type | meaning |
+| key | CBOR type | meaning |
 |---|---|---|
-| `target` | address | where it goes |
-| `name` | string | the event name (`_event.name`) |
-| `data` | value | the event data (`_event.data`), see *Values*; may be absent |
-| `sendid` | string | the sender's `sendid` (`_event.sendid`), if any |
-| `origin` | address | the sending session (`_event.origin`); replies go here |
-| `origintype` | string | `http://www.w3.org/TR/scxml/#SCXMLEventProcessor` |
-| `msgid` | string | unique per origin: `<origin>/<counter>` or the origin plus sendid; used for errors, acks and dedup |
-| `hops` | integer | relays passed so far (starts at 0) |
-| `dedup` | string | optional: a key the receiver uses instead of `msgid` to drop duplicates (e.g. an application's idempotency key) |
-| `traceparent` | string | optional: the W3C `traceparent` of the step that sent it; the receiving macrostep runs under it, so one trace crosses systems (ADR 0006 in the repository root) |
+| `target` | text, an address | where it goes (required) |
+| `name` | text | the event name (`_event.name`, required) |
+| `data` | tag 24 on a byte string | the event data (`_event.data`), one neutral value (see *Values*) encoded inside; absent: none |
+| `sendid` | text | the sender's `sendid` (`_event.sendid`), if any |
+| `origin` | text, an address | the sending session (`_event.origin`); replies go here |
+| `origintype` | text | absent: `http://www.w3.org/TR/scxml/#SCXMLEventProcessor` |
+| `msgid` | text | unique per origin: `<origin>/<counter>` or the origin plus sendid; used for errors, acks and dedup |
+| `hops` | unsigned integer | relays passed so far (absent: 0) |
+| `dedup` | text | optional: a key the receiver uses instead of `msgid` to drop duplicates (e.g. an application's idempotency key) |
+| `traceparent` | text | optional: the W3C `traceparent` of the step that sent it; the receiving macrostep runs under it, so one trace crosses systems (ADR 0006 in the repository root) |
+
+An envelope is a CBOR map with text keys. A writer puts the keys in the
+order of this table and leaves out the empty ones. A reader takes them in
+any order and refuses a map with an unknown key, a repeated key or a value
+of the wrong type: such bytes are not an envelope, and nobody is answered.
+
+The data is wrapped (RFC 8949, tag 24: an encoded CBOR data item) so that a
+router reads the envelope without reading the value: only the datamodel
+that takes it decodes it. Data that is not one neutral value is
+`malformed`, and the sender is answered (see *Errors*).
+
+```
+{"target": "tinyactors://b/@echo", "name": "ping", "data": 24(h'a1616e01'),
+ "sendid": "p1", "origin": "tinyactors://a/#_scxml_1", "msgid": "m1", "hops": 1}
+```
+
+The data is `{"n": 1}`. An error envelope (see *Errors*) has the key
+`error`, the reason, and only `sendid`, `origin` and `msgid` besides:
+
+```
+{"error": "unknown-target", "sendid": "p1", "origin": "tinyactors://a/#_scxml_1",
+ "msgid": "m1"}
+```
 
 Rules:
 
@@ -100,10 +123,15 @@ Rules:
 - **Send after commit.** An envelope leaves a system only once the step that
   sent it is durable by that system's own definition: after the macrostep for
   an in-memory system, after `COMMIT` for a database.
-- **One shape inbound.** Every implementation accepts envelopes whole —
-  C: `ta_host_deliver(host, peer, const ta_envelope *)`; JS: `system.deliver(envelope)`;
-  SQL: `tinyactors.deliver(envelope jsonb)` — so a new field never breaks an
-  argument list.
+- **CBOR only between processes.** In C, an envelope is a `ta_envelope` and
+  an error a `ta_peer_error`, and `ta_host_deliver` and
+  `ta_host_peer_error` take them whole, so a new field never breaks an
+  argument list. A transport between two hosts in one process fills them
+  from the `TA_HOST_EFFECT_PEER` and `TA_HOST_EFFECT_PEER_ERROR` effects and
+  never writes bytes. A transport between processes writes each effect with
+  `ta_host_envelope` and, on the other side, reads the bytes with
+  `ta_host_envelope_read` or `ta_host_peer_error_read` before delivering
+  them: one encode and one decode per hop, none inside a process.
 
 ## Values
 
@@ -182,10 +210,10 @@ receives SCXML's `error.communication` (with the `sendid`):
 | `hops` | the hop limit was exceeded (a routing loop) |
 | `malformed` | the envelope or its value does not parse |
 
-On a link, the error travels as an `err` message carrying the `msgid`, the
-`sendid`, the `origin` and the reason; the router at the origin turns it into
-`error.communication` for that session. In a store link the same happens
-through `fail()`. Errors about errors are never sent.
+Between systems, the error travels as an error envelope carrying the
+`msgid`, the `sendid`, the `origin` and the reason (see *Envelope*); the
+router at the origin turns it into `error.communication` for that session.
+Errors about errors are never sent.
 
 ## Routing
 

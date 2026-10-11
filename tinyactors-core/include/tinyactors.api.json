@@ -9073,6 +9073,48 @@
       "implemented": true
     },
     {
+      "name": "ta_host_envelope",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "h",
+          "type": "ta_host *"
+        },
+        {
+          "name": "effect",
+          "type": "const ta_host_effect *"
+        },
+        {
+          "name": "out",
+          "type": "ta_buffer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_envelope_read",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "h",
+          "type": "ta_host *"
+        },
+        {
+          "name": "cbor",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "out",
+          "type": "ta_envelope *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_host_error_event",
       "returns": "void",
       "params": [
@@ -9332,6 +9374,23 @@
         {
           "name": "error",
           "type": "const ta_peer_error *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_peer_error_read",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "cbor",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "out",
+          "type": "ta_peer_error *"
         }
       ],
       "public": true,

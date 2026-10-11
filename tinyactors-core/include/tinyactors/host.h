@@ -453,6 +453,39 @@ typedef struct ta_peer_error {
     ta_string_view origin, msgid, sendid;
 } ta_peer_error;
 TA_API ta_status ta_host_peer_error(ta_host *h, const ta_peer_error *error);
+
+/* Envelopes across a process boundary (docs/protocol.md, Envelope): CBOR.
+ * Within a process, a transport fills ta_envelope and ta_peer_error from the
+ * effects directly; no bytes are written. Across one, the sender writes each
+ * TA_HOST_EFFECT_PEER and TA_HOST_EFFECT_PEER_ERROR effect with
+ * ta_host_envelope and sends the bytes to the effect's peer; the receiver
+ * reads an envelope with ta_host_envelope_read and passes it to
+ * ta_host_deliver, and an error envelope with ta_host_peer_error_read (it
+ * sets `peer`) and passes it to ta_host_peer_error.
+ *
+ * ta_host_envelope: the effect's envelope (its data written by the
+ * datamodel's to_wire) or error envelope, into `out`. The effect keeps its
+ * payload, borrowed until the ack. TA_ERROR_NO_MEMORY: out->length is what
+ * it needs (the bytes in `out` are not an envelope); TA_ERROR_INVALID: another effect kind,
+ * or data that is not a neutral value; TA_ERROR_STATE during a run. */
+TA_API ta_status ta_host_envelope(ta_host *h, const ta_host_effect *effect, ta_buffer *out);
+/* An envelope from bytes: views into `cbor` (keep the bytes until the
+ * ta_host_deliver); its data, if any, read with from_wire by the host's
+ * first datamodel that reads and writes neutral values, into out->data (one
+ * reference: ta_host_deliver moves it on success; on a failure it stays the
+ * caller's, to release with that datamodel, out->datamodel). TA_OK.
+ * TA_ERROR_INVALID with out->size 0: not an envelope (not CBOR, not a map,
+ * an unknown or repeated key, a wrong type, an error envelope); nothing to
+ * answer, drop it. TA_ERROR_INVALID with out->size set: an envelope whose
+ * data is not a neutral value; out holds no target and no data, so
+ * ta_host_deliver of it refuses it as malformed (TA_ROUTE_ERROR_MALFORMED)
+ * and answers the sender with a TA_HOST_EFFECT_PEER_ERROR, as for any
+ * malformed envelope. TA_ERROR_NO_MEMORY: the datamodel could not hold the
+ * data; nothing was made. TA_ERROR_STATE during a run. */
+TA_API ta_status ta_host_envelope_read(ta_host *h, ta_bytes cbor, ta_envelope *out);
+/* An error envelope from bytes: views into `cbor`; out->peer is left for the
+ * caller to set. TA_ERROR_INVALID: not an error envelope. */
+TA_API ta_status ta_host_peer_error_read(ta_bytes cbor, ta_peer_error *out);
 /* A round trip the transport measured (ms), for the route status. */
 TA_API void ta_host_peer_round_trip_time(ta_host *h, uint32_t peer, uint32_t ms);
 

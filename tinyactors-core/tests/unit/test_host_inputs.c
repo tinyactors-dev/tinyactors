@@ -267,6 +267,17 @@ static void refused(world *w) {
     ta_buffer out = {bytes, sizeof bytes, 0};
     CHECK_EQUAL(ta_host_hibernate(w->host, w->listener, &out), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_snapshot(w->host, &out), TA_ERROR_STATE);
+    { /* envelopes across a process boundary */
+        static const unsigned char envelope[] = {0xa2, 0x66, 't', 'a', 'r', 'g', 'e', 't', 0x61, 'x',
+                                                 0x64, 'n',  'a', 'm', 'e', 0x61, 'e'};
+        ta_envelope read;
+        CHECK_EQUAL(ta_host_envelope_read(w->host, (ta_bytes){envelope, sizeof envelope}, &read),
+                    TA_ERROR_STATE);
+        ta_host_effect effect;
+        memset(&effect, 0, sizeof effect);
+        effect.kind = TA_HOST_EFFECT_PEER;
+        CHECK_EQUAL(ta_host_envelope(w->host, &effect, &out), TA_ERROR_STATE);
+    }
     CHECK_EQUAL(ta_host_request(w->host, (ta_bytes){"\xa1\x62op\x65stats", 9}, &out),
                 TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_export_actor(w->host, w->listener, &out), TA_ERROR_STATE);

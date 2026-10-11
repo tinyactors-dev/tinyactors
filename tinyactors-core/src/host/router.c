@@ -17,8 +17,11 @@
  * callbacks. */
 #include "host/host_internal.h"
 
+#include "base/cbor_output.h"
 #include "base/format.h"
 #include "base/memory.h"
+
+#include <tinyactors/cbor.h>
 
 #define DEDUPLICATION_WINDOW 4096u /* message ids remembered per host (FIFO) */
 
@@ -1013,6 +1016,207 @@ ta_status ta_host_peer_error(ta_host *host, const ta_peer_error *error) {
     uint32_t back = route_for(host, o.system);
     if (back && back != from) return emit_error(host, back, origin, msgid, sendid, reason);
     return TA_OK;
+}
+
+/* ---- envelopes across a process boundary: CBOR (docs/protocol.md, Envelope) ----------- */
+
+/* The datamodel that holds an envelope's data between the bytes and the
+ * router: the host's first that reads and writes neutral values. A host runs
+ * one datamodel in practice; values are never translated between two. */
+static uint32_t envelope_wire_datamodel(const ta_host *host) {
+    for (uint32_t i = 0; i < host->config.datamodel_count; i++)
+        if (host->datamodels[i].vtable->from_wire && host->datamodels[i].vtable->to_wire) return i;
+    return TA_NIL;
+}
+
+enum { ENVELOPE_CBOR_TAG_ENCODED = 24 }; /* RFC 8949 §3.4.5.1: an encoded CBOR data item */
+
+/* The keys, in the order an envelope is written. */
+enum {
+    ENVELOPE_KEY_ERROR,
+    ENVELOPE_KEY_TARGET,
+    ENVELOPE_KEY_NAME,
+    ENVELOPE_KEY_DATA,
+    ENVELOPE_KEY_SENDID,
+    ENVELOPE_KEY_ORIGIN,
+    ENVELOPE_KEY_ORIGINTYPE,
+    ENVELOPE_KEY_MSGID,
+    ENVELOPE_KEY_HOPS,
+    ENVELOPE_KEY_DEDUP,
+    ENVELOPE_KEY_TRACEPARENT,
+    ENVELOPE_KEY_COUNT
+};
+static const ta_string_view ENVELOPE_KEYS[ENVELOPE_KEY_COUNT] = {
+    VIEW("error"), VIEW("target"),     VIEW("name"),  VIEW("data"), VIEW("sendid"),     VIEW("origin"),
+    VIEW("origintype"), VIEW("msgid"), VIEW("hops"),  VIEW("dedup"), VIEW("traceparent")};
+
+static uint32_t envelope_key_index(ta_string_view key) {
+    for (uint32_t k = 0; k < ENVELOPE_KEY_COUNT; k++)
+        if (ENVELOPE_KEYS[k].length == key.length && !ta_memcmp(ENVELOPE_KEYS[k].pointer, key.pointer, key.length))
+            return k;
+    return TA_NIL;
+}
+
+static void envelope_put_text(cbor_output *out, uint32_t key, ta_string_view value) {
+    if (!value.length) return;
+    cbor_output_text(out, ENVELOPE_KEYS[key]);
+    cbor_output_text(out, value);
+}
+
+/* The keys of `bytes` into views (views[KEY_DATA]: the value's bytes, from
+ * its tag-24 byte string) and *hops; the set of keys seen, 0 if it is not an
+ * envelope's map (not CBOR, an unknown or repeated key, a wrong type). */
+static uint32_t envelope_fields(ta_bytes bytes, ta_string_view *views, uint32_t *hops) {
+    ta_cbor_token tokens[2 * ENVELOPE_KEY_COUNT + 2];
+    ta_cbor_document d = {bytes, tokens, sizeof tokens / sizeof tokens[0], 0};
+    if (ta_cbor_decode(&d) != TA_OK || tokens[0].kind != TA_CBOR_MAP) return 0;
+    uint32_t seen = 0;
+    for (uint32_t at = 1, pair = 0; pair < tokens[0].count; pair++) {
+        if (tokens[at].kind != TA_CBOR_TEXT) return 0;
+        uint32_t key = envelope_key_index(ta_cbor_string(&d, at));
+        if (key == TA_NIL || (seen & (1u << key))) return 0;
+        seen |= 1u << key;
+        at = ta_cbor_next(&d, at);
+        const ta_cbor_token *value = &tokens[at];
+        if (key == ENVELOPE_KEY_HOPS) {
+            if (value->kind != TA_CBOR_UINT || value->value > UINT32_MAX) return 0;
+            *hops = (uint32_t)value->value;
+        } else if (key == ENVELOPE_KEY_DATA) {
+            if (value->kind != TA_CBOR_TAG || value->value != ENVELOPE_CBOR_TAG_ENCODED ||
+                value[1].kind != TA_CBOR_BYTES)
+                return 0;
+            views[key] = ta_cbor_string(&d, at + 1);
+        } else {
+            if (value->kind != TA_CBOR_TEXT) return 0;
+            views[key] = ta_cbor_string(&d, at);
+        }
+        at = ta_cbor_next(&d, at);
+    }
+    return seen;
+}
+
+ta_status ta_host_envelope_read(ta_host *host, ta_bytes cbor, ta_envelope *out) {
+    if (!host || !out) return TA_ERROR_INVALID;
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
+    ta_memset(out, 0, sizeof *out);
+    ta_string_view views[ENVELOPE_KEY_COUNT];
+    ta_memset(views, 0, sizeof views);
+    uint32_t hops = 0;
+    uint32_t seen = envelope_fields(cbor, views, &hops);
+    if (!seen || (seen & (1u << ENVELOPE_KEY_ERROR))) return TA_ERROR_INVALID; /* nobody to answer */
+    out->size = sizeof *out;
+    out->hops = hops;
+    out->target = views[ENVELOPE_KEY_TARGET];
+    out->name = views[ENVELOPE_KEY_NAME];
+    out->sendid = views[ENVELOPE_KEY_SENDID];
+    out->origin = views[ENVELOPE_KEY_ORIGIN];
+    out->origintype = views[ENVELOPE_KEY_ORIGINTYPE];
+    out->msgid = views[ENVELOPE_KEY_MSGID];
+    out->deduplication_key = views[ENVELOPE_KEY_DEDUP];
+    out->traceparent = views[ENVELOPE_KEY_TRACEPARENT];
+    out->datamodel = TA_NIL;
+    if (!(seen & (1u << ENVELOPE_KEY_DATA))) return TA_OK;
+    uint32_t model = envelope_wire_datamodel(host);
+    ta_status status = TA_ERROR_INVALID;
+    if (model != TA_NIL)
+        status = host->datamodels[model].vtable->from_wire(
+            host->datamodels[model].datamodel, (ta_bytes){views[ENVELOPE_KEY_DATA].pointer, views[ENVELOPE_KEY_DATA].length},
+            &out->data);
+    if (status == TA_OK) {
+        out->datamodel = model;
+        return TA_OK;
+    }
+    out->data = 0;
+    if (status == TA_ERROR_NO_MEMORY) return status;
+    out->target = (ta_string_view){0, 0}; /* ta_host_deliver refuses it as malformed */
+    return TA_ERROR_INVALID;
+}
+
+ta_status ta_host_peer_error_read(ta_bytes cbor, ta_peer_error *out) {
+    if (!out) return TA_ERROR_INVALID;
+    ta_string_view views[ENVELOPE_KEY_COUNT];
+    ta_memset(views, 0, sizeof views);
+    uint32_t hops = 0;
+    uint32_t seen = envelope_fields(cbor, views, &hops);
+    uint32_t allowed = (1u << ENVELOPE_KEY_ERROR) | (1u << ENVELOPE_KEY_SENDID) | (1u << ENVELOPE_KEY_ORIGIN) | (1u << ENVELOPE_KEY_MSGID);
+    if (!(seen & (1u << ENVELOPE_KEY_ERROR)) || (seen & ~allowed) || !views[ENVELOPE_KEY_ORIGIN].length)
+        return TA_ERROR_INVALID;
+    uint32_t reason = 0;
+    for (uint32_t r = TA_ROUTE_ERROR_UNKNOWN_TARGET; r <= TA_ROUTE_ERROR_MALFORMED; r++) {
+        ta_string_view name = ta_host_route_reason(r);
+        if (name.length == views[ENVELOPE_KEY_ERROR].length &&
+            !ta_memcmp(name.pointer, views[ENVELOPE_KEY_ERROR].pointer, name.length))
+            reason = r;
+    }
+    if (!reason) return TA_ERROR_INVALID;
+    out->reason = reason;
+    out->origin = views[ENVELOPE_KEY_ORIGIN];
+    out->msgid = views[ENVELOPE_KEY_MSGID];
+    out->sendid = views[ENVELOPE_KEY_SENDID];
+    return TA_OK;
+}
+
+ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_buffer *out) {
+    if (!host || !effect || !out ||
+        (effect->kind != TA_HOST_EFFECT_PEER && effect->kind != TA_HOST_EFFECT_PEER_ERROR))
+        return TA_ERROR_INVALID;
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
+    size_t capacity = out->pointer ? out->capacity : 0;
+    cbor_output o = {(unsigned char *)out->pointer, capacity, 0};
+    if (effect->kind == TA_HOST_EFFECT_PEER_ERROR) {
+        cbor_output_head(&o, CBOR_MAJOR_MAP, 1u + !!effect->sendid.length +
+                                                 !!effect->auxiliary.length + !!effect->msgid.length);
+        envelope_put_text(&o, ENVELOPE_KEY_ERROR, ta_host_route_reason(effect->token));
+        envelope_put_text(&o, ENVELOPE_KEY_SENDID, effect->sendid);
+        envelope_put_text(&o, ENVELOPE_KEY_ORIGIN, effect->auxiliary);
+        envelope_put_text(&o, ENVELOPE_KEY_MSGID, effect->msgid);
+    } else {
+        /* the value first: its length is the byte string's head */
+        const ta_datamodel_binding *binding =
+            effect->payload && effect->datamodel < host->config.datamodel_count
+                ? &host->datamodels[effect->datamodel]
+                : (const ta_datamodel_binding *)0;
+        size_t value = 0;
+        if (binding) {
+            if (!binding->vtable->to_wire) return TA_ERROR_INVALID;
+            ta_buffer probe = {(void *)0, 0, 0};
+            ta_status status = binding->vtable->to_wire(binding->datamodel, effect->payload, &probe);
+            if (status != TA_OK && status != TA_ERROR_NO_MEMORY) return status;
+            value = probe.length;
+        }
+        char traceparent[TA_TRACEPARENT_LENGTH];
+        ta_buffer written = {traceparent, sizeof traceparent, 0};
+        ta_string_view trace = {traceparent, 0};
+        if (ta_traceparent_format(&effect->trace, &written) == TA_OK)
+            trace.length = (uint32_t)written.length;
+        uint32_t pairs = 2u + !!binding + !!effect->sendid.length + !!effect->auxiliary.length +
+                         !!effect->msgid.length + !!effect->flags + !!trace.length;
+        cbor_output_head(&o, CBOR_MAJOR_MAP, pairs);
+        envelope_put_text(&o, ENVELOPE_KEY_TARGET, effect->target);
+        envelope_put_text(&o, ENVELOPE_KEY_NAME, effect->event);
+        if (binding) {
+            cbor_output_text(&o, ENVELOPE_KEYS[ENVELOPE_KEY_DATA]);
+            cbor_output_head(&o, CBOR_MAJOR_TAG, ENVELOPE_CBOR_TAG_ENCODED);
+            cbor_output_head(&o, CBOR_MAJOR_BYTES, value);
+            if (o.length + value <= o.capacity) {
+                ta_buffer data = {o.bytes + o.length, value, 0};
+                ta_status status =
+                    binding->vtable->to_wire(binding->datamodel, effect->payload, &data);
+                if (status != TA_OK) return TA_ERROR_INVALID;
+            }
+            o.length += value;
+        }
+        envelope_put_text(&o, ENVELOPE_KEY_SENDID, effect->sendid);
+        envelope_put_text(&o, ENVELOPE_KEY_ORIGIN, effect->auxiliary);
+        envelope_put_text(&o, ENVELOPE_KEY_MSGID, effect->msgid);
+        if (effect->flags) {
+            cbor_output_text(&o, ENVELOPE_KEYS[ENVELOPE_KEY_HOPS]);
+            cbor_output_uint(&o, effect->flags);
+        }
+        envelope_put_text(&o, ENVELOPE_KEY_TRACEPARENT, trace);
+    }
+    out->length = o.length;
+    return o.length <= capacity ? TA_OK : TA_ERROR_NO_MEMORY;
 }
 
 void ta_host_peer_round_trip_time(ta_host *host, uint32_t handle, uint32_t ms) {
