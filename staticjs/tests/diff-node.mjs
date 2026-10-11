@@ -11,14 +11,28 @@
 //
 //   node --experimental-vm-modules tests/diff-node.mjs tests/spec [numbers.txt]
 //
+// Temporal is the vendored temporal-polyfill 1.0.5 (tests/vendor/temporal-polyfill),
+// run in a context of its own: Node 22 has no Temporal, and the draft behind
+// --harmony-temporal gives wrong values. Every case sees it as the global
+// Temporal.
+//
 // numbers.txt, if given, holds the lines number_test --print, json_test
 // --print and regex_test --print write: what staticjs computed from an input
 // (a double formatted, a decimal read, a JSON document read and written, a
 // regular expression classified or matched, ...), each of which must be
 // what Node computes from it.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+
+const polyfill = join(dirname(fileURLToPath(import.meta.url)), 'vendor', 'temporal-polyfill', 'global.js');
+const temporalContext = vm.createContext({});
+vm.runInContext(readFileSync(polyfill, 'utf8'), temporalContext, { filename: polyfill });
+globalThis.Temporal = temporalContext.Temporal;
+// The Temporal types, each written as its type's from() of its string.
+const temporalTypes = ['PlainDate', 'PlainTime', 'PlainDateTime', 'Instant', 'Duration', 'ZonedDateTime',
+  'PlainYearMonth', 'PlainMonthDay'];
 
 // What sjs_writer writes for a value.
 function show(v) {
@@ -29,6 +43,10 @@ function show(v) {
   if (typeof v === 'bigint') return `${v}n`;
   if (typeof v === 'string') return JSON.stringify(v);
   if (typeof v === 'function') return '<function>';
+  // A Temporal value: Temporal.PlainDate.from("2024-01-31"), its type's from()
+  // of what its toString() gives with no options.
+  const type = temporalTypes.find((t) => v instanceof Temporal[t]);
+  if (type) return `Temporal.${type}.from(${JSON.stringify(v.toString())})`;
   if (v instanceof RegExp) return String(v);
   if (Array.isArray(v)) {
     // A match result: an array with properties of its own besides its elements.
