@@ -1119,3 +1119,14 @@ Each departure below was made because Node or the code said otherwise.
   stops where the budget of a step would have stopped it. It does not use
   `find_bytes`, and it compares one byte: a literal of several characters
   is skipped to its first.
+- **Of 12.1's item 2, only the anchored start is built.** A program whose
+  start is SAVEs then `^` without m has, at every position but the first,
+  a start thread that dies at the `^`; only the start reaches those
+  instructions, so the search counts that closure without following it,
+  whatever other threads are alive, and with none alive passes runs of
+  ASCII bytes as the literal-prefix skip does. A one-pass program run as
+  a single thread, without slot copies, is not built: fuel counts the
+  instructions and slot copies of the Pike VM itself, so a single-thread
+  runner would still have to count every copy it no longer makes, and
+  what it would save beyond the anchored start is the closure's stack and
+  stamps for one thread, which no bench row isolates.
