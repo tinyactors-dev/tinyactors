@@ -689,6 +689,15 @@ typedef enum {
 
 /* The built-in function `Namespace.name` or bare `name`; NONE if unknown. */
 sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name);
+/* One entry of the table sjs_builtin_lookup searches: the namespace ("" for
+ * a global), the name, and the ID. */
+typedef struct {
+    const char *space;
+    const char *name;
+    uint16_t id;
+} sjs_function_entry;
+/* Every entry, in the table's order, and how many (for builtin-table). */
+const sjs_function_entry *sjs_functions(uint32_t *count);
 
 /*
  * A name JavaScript finds on a prototype, or that names a method that would
