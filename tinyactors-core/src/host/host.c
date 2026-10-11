@@ -2070,3 +2070,151 @@ ta_status ta_host_restore(const ta_host_config *config, const ta_image *const *i
     *out = host;
     return TA_OK;
 }
+
+/* ---- whole-system snapshots ------------------------------------------------------------- */
+
+/* "tinyactors-snapshot 3\n", 2 zero bytes; u32 system id length, u32 datamodel name
+ * length; u64 time; u64 host length, u64 state length; u32 image count, u32 0; u64
+ * image lengths; then the system id, the datamodel name, the host snapshot, the
+ * state and the images, each from an 8-byte boundary. Little-endian. */
+static const char pack_magic[24] = "tinyactors-snapshot 3\n";
+#define PACK_FIXED 64u
+
+static size_t pack_align(size_t n) {
+    return (n + 7u) & ~(size_t)7u;
+}
+
+static void pack_u64(unsigned char *out, uint64_t v) {
+    for (int i = 0; i < 8; i++)
+        out[i] = (unsigned char)(v >> (8 * i));
+}
+
+static void pack_u32(unsigned char *out, uint32_t v) {
+    for (int i = 0; i < 4; i++)
+        out[i] = (unsigned char)(v >> (8 * i));
+}
+
+static uint64_t unpack_u64(const unsigned char *in) {
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--)
+        v = v << 8 | in[i];
+    return v;
+}
+
+static uint32_t unpack_u32(const unsigned char *in) {
+    uint32_t v = 0;
+    for (int i = 3; i >= 0; i--)
+        v = v << 8 | in[i];
+    return v;
+}
+
+ta_status ta_host_snapshot_pack(ta_host *host, ta_string_view datamodel, const void *state,
+                                size_t state_length, void *buffer, size_t capacity,
+                                size_t *length) {
+    size_t host_length = 0;
+    ta_status status = ta_host_snapshot(host, NULL, 0, &host_length);
+    if (status != TA_OK && status != TA_ERROR_NO_MEMORY) return status;
+    uint32_t count = host->segment_count;
+    ta_string_view id = {host->base + 13, 0}; /* tinyactors://<id>/ */
+    while (id.pointer[id.length] && id.pointer[id.length] != '/')
+        id.length++;
+    size_t total = pack_align(PACK_FIXED + 8u * count) + pack_align(id.length) +
+                   pack_align(datamodel.length) + pack_align(host_length) +
+                   pack_align(state_length);
+    for (uint32_t i = 0; i < count; i++) {
+        size_t n = 0;
+        const host_segment *segment = segment_of(host, i);
+        if (segment && segment->live) ta_image_bytes(segment->image, &n);
+        total += pack_align(n);
+    }
+    *length = total;
+    if (!buffer || capacity < total) return TA_ERROR_NO_MEMORY;
+    unsigned char *out = (unsigned char *)buffer;
+    ta_memset(out, 0, total);
+    ta_memcpy(out, pack_magic, sizeof pack_magic);
+    pack_u32(out + 24, id.length);
+    pack_u32(out + 28, datamodel.length);
+    pack_u64(out + 32, host->now);
+    pack_u64(out + 40, host_length);
+    pack_u64(out + 48, state_length);
+    pack_u32(out + 56, count);
+    size_t at = pack_align(PACK_FIXED + 8u * count);
+    ta_memcpy(out + at, id.pointer, id.length);
+    at += pack_align(id.length);
+    ta_memcpy(out + at, datamodel.pointer, datamodel.length);
+    at += pack_align(datamodel.length);
+    status = ta_host_snapshot(host, out + at, host_length, &host_length);
+    if (status != TA_OK) return status;
+    at += pack_align(host_length);
+    if (state_length) ta_memcpy(out + at, state, state_length);
+    at += pack_align(state_length);
+    for (uint32_t i = 0; i < count; i++) {
+        size_t n = 0;
+        const void *bytes = NULL;
+        const host_segment *segment = segment_of(host, i);
+        if (segment && segment->live) bytes = ta_image_bytes(segment->image, &n);
+        pack_u64(out + PACK_FIXED + 8u * i, n);
+        if (n) ta_memcpy(out + at, bytes, n);
+        at += pack_align(n);
+    }
+    return TA_OK;
+}
+
+/* The part from `at` (8-aligned) of `n` bytes, if it lies in the pack. */
+static int pack_part(size_t length, size_t *at, uint64_t n, size_t *offset) {
+    if (n > length || *at > length - n) return 0;
+    *offset = *at;
+    *at += pack_align((size_t)n);
+    return 1;
+}
+
+ta_status ta_host_snapshot_unpack(const void *pack, size_t length,
+                                  ta_host_snapshot_contents *out) {
+    const unsigned char *in = (const unsigned char *)pack;
+    if (!in || length < PACK_FIXED || ta_memcmp(in, pack_magic, sizeof pack_magic) != 0)
+        return TA_ERROR_INVALID;
+    uint32_t count = unpack_u32(in + 56);
+    if (count > (length - PACK_FIXED) / 8u) return TA_ERROR_INVALID;
+    size_t at = pack_align(PACK_FIXED + 8u * count), id = 0, name = 0, host = 0, state = 0;
+    uint64_t host_length = unpack_u64(in + 40), state_length = unpack_u64(in + 48);
+    if (!pack_part(length, &at, unpack_u32(in + 24), &id) ||
+        !pack_part(length, &at, unpack_u32(in + 28), &name) ||
+        !pack_part(length, &at, host_length, &host) ||
+        !pack_part(length, &at, state_length, &state))
+        return TA_ERROR_INVALID;
+    for (uint32_t i = 0; i < count; i++) {
+        size_t image = 0;
+        if (!pack_part(length, &at, unpack_u64(in + PACK_FIXED + 8u * i), &image))
+            return TA_ERROR_INVALID;
+    }
+    uint32_t size = out->size < sizeof *out ? out->size : (uint32_t)sizeof *out;
+    ta_host_snapshot_contents contents;
+    ta_memset(&contents, 0, sizeof contents);
+    contents.size = size;
+    contents.image_count = count;
+    contents.system_id = (ta_string_view){(const char *)in + id, unpack_u32(in + 24)};
+    contents.datamodel = (ta_string_view){(const char *)in + name, unpack_u32(in + 28)};
+    contents.time = unpack_u64(in + 32);
+    contents.host = in + host;
+    contents.host_length = (size_t)host_length;
+    contents.state = in + state;
+    contents.state_length = (size_t)state_length;
+    ta_memcpy(out, &contents, size);
+    return TA_OK;
+}
+
+const void *ta_host_snapshot_image(const void *pack, size_t length, uint32_t i,
+                                   size_t *image_length) {
+    ta_host_snapshot_contents contents;
+    contents.size = sizeof contents;
+    *image_length = 0;
+    if (ta_host_snapshot_unpack(pack, length, &contents) != TA_OK || i >= contents.image_count)
+        return NULL;
+    const unsigned char *in = (const unsigned char *)pack;
+    size_t at = (size_t)((const unsigned char *)contents.state - in) +
+                pack_align(contents.state_length);
+    for (uint32_t k = 0; k < i; k++)
+        at += pack_align((size_t)unpack_u64(in + PACK_FIXED + 8u * k));
+    *image_length = (size_t)unpack_u64(in + PACK_FIXED + 8u * i);
+    return *image_length ? in + at : NULL;
+}

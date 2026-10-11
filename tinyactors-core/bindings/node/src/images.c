@@ -9,7 +9,7 @@ static void image_finalize(napi_env environment, void *data, void *hint) {
     free(image);
 }
 
-static napi_value image_value(napi_env environment, const void *bytes, size_t length) {
+napi_value image_value(napi_env environment, const void *bytes, size_t length) {
     nd_image *image = (nd_image *)calloc(1, sizeof *image);
     napi_value r = NULL;
     if (!image || !(image->bytes = malloc(length + 8))) {

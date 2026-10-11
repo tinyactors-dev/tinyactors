@@ -32,6 +32,8 @@ typedef struct ta_image_info {
 /* Bounds-checks every section/offset/index once. Safe on untrusted input. */
 TA_API ta_status ta_image_open(const void *bytes, size_t length, ta_image *out);
 TA_API void ta_image_get_info(const ta_image *image, ta_image_info *out);
+/* The bytes the image was opened from (ta_image_open). */
+TA_API const void *ta_image_bytes(const ta_image *image, size_t *length);
 
 TA_API uint32_t ta_image_chart_by_name(const ta_image *image,
                                        ta_string_view name); /* TA_NIL if absent */

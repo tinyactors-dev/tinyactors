@@ -429,6 +429,32 @@ TA_API uint32_t ta_host_snapshot_segments(const void *snap, size_t length, uint6
 TA_API ta_status ta_host_restore(const ta_host_config *config, const ta_image *const *images,
                                  uint32_t image_count, const void *snap, size_t length,
                                  ta_host **out);
+/* A whole system in one blob: the host's snapshot (ta_host_snapshot), the
+ * datamodels' state as the caller gives it, labelled `datamodel`, and the
+ * image of every live segment, with the system id and the host's time.
+ * TA_ERROR_NO_MEMORY with *length = the bytes needed when capacity is too
+ * small; otherwise as ta_host_snapshot. The blob's parts are 8-aligned when
+ * the blob is. */
+TA_API ta_status ta_host_snapshot_pack(ta_host *h, ta_string_view datamodel, const void *state,
+                                       size_t state_length, void *buffer, size_t capacity,
+                                       size_t *length);
+typedef struct ta_host_snapshot_contents {
+    uint32_t size;
+    uint32_t image_count; /* segments; ta_host_snapshot_image gives each one's image */
+    ta_string_view system_id, datamodel;
+    ta_time time; /* the host's time when it was packed */
+    const void *host; /* for ta_host_restore */
+    size_t host_length;
+    const void *state; /* the datamodels' state, as given to ta_host_snapshot_pack */
+    size_t state_length;
+} ta_host_snapshot_contents;
+/* The parts of a blob of ta_host_snapshot_pack (views into it). Set
+ * out->size first. TA_ERROR_INVALID when it is not one. */
+TA_API ta_status ta_host_snapshot_unpack(const void *pack, size_t length,
+                                         ta_host_snapshot_contents *out);
+/* Segment i's image in the blob; NULL (and *image_length 0) for a retired one. */
+TA_API const void *ta_host_snapshot_image(const void *pack, size_t length, uint32_t i,
+                                          size_t *image_length);
 
 /* ---- inspection ------------------------------------------------------------------ */
 /* The host's counters (tinyactors/stats.h). Set `size` first. */

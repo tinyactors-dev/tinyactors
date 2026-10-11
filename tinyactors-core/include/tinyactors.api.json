@@ -5217,6 +5217,94 @@
         }
       }
     },
+    "ta_host_snapshot_contents": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "image_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "system_id",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "datamodel",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "time",
+          "type": "ta_time"
+        },
+        {
+          "name": "host",
+          "type": "const void *"
+        },
+        {
+          "name": "host_length",
+          "type": "size_t"
+        },
+        {
+          "name": "state",
+          "type": "const void *"
+        },
+        {
+          "name": "state_length",
+          "type": "size_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "image_count": 4,
+            "system_id": 8,
+            "datamodel": 24,
+            "time": 40,
+            "host": 48,
+            "host_length": 56,
+            "state": 64,
+            "state_length": 72
+          }
+        },
+        "aarch64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "image_count": 4,
+            "system_id": 8,
+            "datamodel": 24,
+            "time": 40,
+            "host": 48,
+            "host_length": 56,
+            "state": 64,
+            "state_length": 72
+          }
+        },
+        "wasm32": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "image_count": 4,
+            "system_id": 8,
+            "datamodel": 16,
+            "time": 24,
+            "host": 32,
+            "host_length": 36,
+            "state": 40,
+            "state_length": 44
+          }
+        }
+      }
+    },
     "ta_http_field": {
       "kind": "struct",
       "fields": [
@@ -8147,6 +8235,68 @@
       "implemented": true
     },
     {
+      "name": "ta_host_snapshot_image",
+      "returns": "const void *",
+      "params": [
+        {
+          "name": "pack",
+          "type": "const void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "i",
+          "type": "uint32_t"
+        },
+        {
+          "name": "image_length",
+          "type": "size_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_snapshot_pack",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "h",
+          "type": "ta_host *"
+        },
+        {
+          "name": "datamodel",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "state",
+          "type": "const void *"
+        },
+        {
+          "name": "state_length",
+          "type": "size_t"
+        },
+        {
+          "name": "buffer",
+          "type": "void *"
+        },
+        {
+          "name": "capacity",
+          "type": "size_t"
+        },
+        {
+          "name": "length",
+          "type": "size_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_host_snapshot_segments",
       "returns": "uint32_t",
       "params": [
@@ -8165,6 +8315,27 @@
         {
           "name": "capacity",
           "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_snapshot_unpack",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "pack",
+          "type": "const void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_host_snapshot_contents *"
         }
       ],
       "public": true,
@@ -8457,6 +8628,23 @@
         {
           "name": "chart",
           "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_bytes",
+      "returns": "const void *",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "length",
+          "type": "size_t *"
         }
       ],
       "public": true,

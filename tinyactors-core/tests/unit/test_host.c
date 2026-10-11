@@ -776,7 +776,72 @@ static void test_state_value(void) {
     world_close(&e);
 }
 
+/* a whole system in one blob: the host snapshot, the datamodel's state and the
+ * images, read back by ta_host_snapshot_unpack and restored from */
+static void test_snapshot_pack(void) {
+    host_world e;
+    world_open(&e, 16, NULL, 0);
+    world_add(&e, ECHO);
+    uint64_t session = spawn(&e, "echo");
+    run(&e);
+    size_t length = 0;
+    ta_string_view label = {"label", 5};
+    CHECK_EQUAL(ta_host_snapshot_pack(e.host, label, "state", 5, NULL, 0, &length),
+                TA_ERROR_NO_MEMORY);
+    uint64_t *pack = calloc(length / 8 + 1, 8);
+    CHECK_EQUAL(ta_host_snapshot_pack(e.host, label, "state", 5, pack, length, &length), TA_OK);
+    ta_host_snapshot_contents contents;
+    contents.size = sizeof contents;
+    CHECK_EQUAL(ta_host_snapshot_unpack(pack, length, &contents), TA_OK);
+    CHECK(contents.system_id.length == 1 && contents.system_id.pointer[0] == 'h');
+    CHECK(contents.datamodel.length == 5 && !memcmp(contents.datamodel.pointer, "label", 5));
+    CHECK(contents.state_length == 5 && !memcmp(contents.state, "state", 5));
+    CHECK_EQUAL(contents.image_count, 1u);
+    CHECK_EQUAL(((uintptr_t)contents.host & 7u), 0u);
+    size_t image_length = 0, original = 0;
+    const void *image = ta_host_snapshot_image(pack, length, 0, &image_length);
+    const void *bytes = ta_image_bytes(&e.image[0], &original);
+    CHECK(image && image_length == original && !memcmp(image, bytes, original));
+    size_t none = 9;
+    CHECK(ta_host_snapshot_image(pack, length, 1, &none) == NULL && none == 0);
+    CHECK_EQUAL(ta_host_snapshot_unpack(pack, length - 8, &contents), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_host_snapshot_unpack(contents.host, contents.host_length, &contents),
+                TA_ERROR_INVALID);
+    ta_host_snapshot_unpack(pack, length, &contents);
+    /* restored from its parts: the datamodel's own snapshot is the caller's */
+    size_t dl = 0;
+    ta_datamodel_ecmascript_snapshot(e.ecmascript, NULL, 0, &dl);
+    void *state = malloc(dl);
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, state, dl, &dl), TA_OK);
+    host_world f;
+    memset(&f, 0, sizeof f);
+    f.ecmascript = ta_datamodel_ecmascript_new(NULL);
+    f.binding = ta_datamodel_ecmascript_binding(f.ecmascript);
+    ta_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = contents.system_id;
+    config.system.size = sizeof config.system;
+    config.system.ticks_per_second = 1000;
+    config.datamodels = &f.binding;
+    config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
+    ta_image opened;
+    CHECK_EQUAL(ta_image_open(image, image_length, &opened), TA_OK);
+    const ta_image *images[1] = {&opened};
+    CHECK_EQUAL(ta_host_restore(&config, images, 1, contents.host, contents.host_length, &f.host),
+                TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(f.ecmascript, state, dl), TA_OK);
+    CHECK_EQUAL(ta_host_locate(f.host, session, NULL, NULL), TA_OK);
+    ta_host_free(f.host);
+    ta_datamodel_ecmascript_free(f.ecmascript);
+    free(state);
+    free(pack);
+    world_close(&e);
+}
+
 int main(void) {
+    RUN(test_snapshot_pack);
     RUN(test_state_value);
     RUN(test_export_adopt_between_hosts);
     RUN(test_adopt_tree_collision);

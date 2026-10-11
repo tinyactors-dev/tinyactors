@@ -59,6 +59,7 @@ ABI_CHECK(offsetof(ta_host_config, size) == 0, host_config_size_first);
 ABI_CHECK(offsetof(ta_host_effect, size) == 0, host_effect_size_first);
 ABI_CHECK(offsetof(ta_host_segment_info, size) == 0, host_segment_info_size_first);
 ABI_CHECK(offsetof(ta_host_stats, size) == 0, host_stats_size_first);
+ABI_CHECK(offsetof(ta_host_snapshot_contents, size) == 0, host_snapshot_contents_size_first);
 ABI_CHECK(offsetof(ta_system_stats, size) == 0, system_stats_size_first);
 /* the stats grow at the end: older readers set a smaller size */
 ABI_CHECK(offsetof(ta_system_stats, traces_started) > offsetof(ta_system_stats, fuel_clock),

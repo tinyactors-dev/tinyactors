@@ -336,6 +336,7 @@ napi_value ta_js_init(napi_env environment, napi_value exports) {
         METHOD("adopt", js_adopt),
         METHOD("migrate", js_migrate),
         METHOD("snapshot", js_snapshot),
+        METHOD("snapshotContents", js_snapshot_contents),
         METHOD("stats", js_stats),
         METHOD("peerAdd", js_peer_add),
         METHOD("peerUp", js_peer_up),

@@ -300,6 +300,12 @@ static ta_status verify_chart(const ta_image_view *view, const ta_chart_record *
         view->nfield = section->count;                                                             \
         break
 
+const void *ta_image_bytes(const ta_image *image, size_t *length) {
+    const ta_image_view *view = (const ta_image_view *)(const void *)image;
+    *length = view->size;
+    return view->base;
+}
+
 ta_status ta_image_open(const void *bytes, size_t length, ta_image *out) {
     ta_image_view *view = (ta_image_view *)(void *)out;
     const unsigned char *b = (const unsigned char *)bytes;

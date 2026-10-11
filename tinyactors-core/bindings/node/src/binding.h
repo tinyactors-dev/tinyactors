@@ -19,7 +19,7 @@
  * A System: one ta_host, its datamodel ("ecmascript": the native one below,
  * or the C one, quickjs-ng), its run loop and effect delivery.
  *
- *   createSystem(callbacks, config) / restoreSystem(callbacks, config, images, host, datamodel)
+ *   createSystem(callbacks, config) / restoreSystem(callbacks, config, images, snapshot)
  *     callbacks: { resolve(source, texts, kinds) -> functions (native ecmascript),
  *                  effects(effects, changed, traces, logs), sync(effect), ref(address) -> value,
  *                  schedule(ms) (0: run soon, -1: nothing to do, else in ms: call pump),
@@ -39,7 +39,9 @@
  *   inspect(system, session) -> { segment, chart, state, states } | null
  *   stateValue(system, session) -> its configuration as a nested state value
  *   context(system, session) -> the session's variables
- *   sweep, hibernate, wake, exportActor, adopt, migrate, snapshot, stats, peer*,
+ *   snapshot(system) -> one blob (ta_host_snapshot_pack); snapshotContents(blob) ->
+ *     { systemID, ecmascript, now, images }
+ *   sweep, hibernate, wake, exportActor, adopt, migrate, stats, peer*,
  *   route, exportName, traceConfigure, traceEnd, metrics, destroy
  *
  * The run loop (pump): ta_host_advance_time, then ta_host_run in rounds
@@ -258,6 +260,7 @@ ta_status wire_of(napi_env environment, napi_value v, text *t);
 napi_value value_of_wire(napi_env environment, ta_string_view json, napi_value refs);
 
 /* images.c */
+napi_value image_value(napi_env environment, const void *bytes, size_t length);
 nd_image *get_image(napi_env environment, napi_value v);
 ta_string_view source_name(ta_string_view source);
 napi_value js_compile(napi_env environment, napi_callback_info info);
@@ -336,6 +339,7 @@ napi_value js_now(napi_env environment, napi_callback_info info);
 napi_value js_runs(napi_env environment, napi_callback_info info);
 napi_value js_later(napi_env environment, napi_callback_info info);
 napi_value js_state_value(napi_env environment, napi_callback_info info);
+napi_value js_snapshot_contents(napi_env environment, napi_callback_info info);
 napi_value js_terminate(napi_env environment, napi_callback_info info);
 int locate(nd_system *system, uint64_t session, ta_system **segment_system, uint32_t *segment,
            ta_actor_info *info);

@@ -238,22 +238,13 @@ static ta_status native_snapshot(nd_system *system, text *t) {
 /* snapshot(system) -> { host, datamodel, segments: [image | null] } (quiescent: no migration) */
 napi_value js_snapshot(napi_env environment, napi_callback_info info) {
     size_t argc = 1;
-    napi_value argv[1], out, segments;
+    napi_value argv[1];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
     nd_system *system = argc >= 1 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
-    size_t length = 0;
-    ta_status status = ta_host_snapshot(system->host, NULL, 0, &length);
-    void *host =
-        status == TA_OK || status == TA_ERROR_NO_MEMORY ? malloc(length ? length : 1) : NULL;
-    if (host) status = ta_host_snapshot(system->host, host, length, &length);
-    if (!host || status != TA_OK) {
-        free(host);
-        throw_status(environment, "snapshot", status == TA_OK ? TA_ERROR_NO_MEMORY : status, "");
-        return NULL;
-    }
     text datamodel = {0};
     system->error[0] = 0;
+    ta_status status;
     if (system->native) {
         status = native_snapshot(system, &datamodel);
     } else {
@@ -267,29 +258,72 @@ napi_value js_snapshot(napi_env environment, napi_callback_info info) {
             snprintf(system->error, sizeof system->error, "%s",
                      ta_datamodel_ecmascript_last_error(system->quickjs));
     }
-    if (status != TA_OK) {
-        free(host);
-        free(datamodel.bytes);
-        throw_status(environment, "snapshot", status, system->error);
+    ta_string_view label = system->native ? view_of("native", 6) : view_of("quickjs", 7);
+    size_t length = 0;
+    void *pack = NULL;
+    if (status == TA_OK) {
+        status = ta_host_snapshot_pack(system->host, label, datamodel.bytes, datamodel.length, NULL,
+                                       0, &length);
+        if (status == TA_ERROR_NO_MEMORY && (pack = malloc(length ? length : 1)))
+            status = ta_host_snapshot_pack(system->host, label, datamodel.bytes, datamodel.length,
+                                           pack, length, &length);
+    }
+    free(datamodel.bytes);
+    napi_value r = status == TA_OK ? bytes_value(environment, pack, length) : NULL;
+    free(pack);
+    if (status != TA_OK) throw_status(environment, "snapshot", status, system->error);
+    return r;
+}
+
+/* The blob read in place (it is 8-aligned and lives until the call returns). */
+static int snapshot_of(napi_env environment, napi_value v, void **copy, size_t *length,
+                       ta_host_snapshot_contents *contents) {
+    void *data = NULL;
+    size_t n = 0;
+    *copy = NULL;
+    *length = 0;
+    if (!bytes_of(environment, v, &data, &n)) return 0;
+    *copy = malloc(n ? n : 1); /* aligned for the records read in place */
+    if (!*copy) abort();
+    memcpy(*copy, data, n);
+    contents->size = sizeof *contents;
+    *length = n;
+    if (ta_host_snapshot_unpack(*copy, n, contents) == TA_OK) return 1;
+    free(*copy);
+    *copy = NULL;
+    return 0;
+}
+
+/* snapshotContents(blob) -> { systemID, ecmascript, now, images: [image | null] } */
+napi_value js_snapshot_contents(napi_env environment, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1], o, images;
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    void *copy = NULL;
+    size_t length = 0;
+    ta_host_snapshot_contents contents;
+    if (argc < 1 || !snapshot_of(environment, argv[0], &copy, &length, &contents)) {
+        napi_throw_type_error(environment, NULL, "not a system snapshot (system.snapshot())");
         return NULL;
     }
-    napi_create_object(environment, &out);
-    set(environment, out, "host", bytes_value(environment, host, length));
-    set(environment, out, "datamodel", bytes_value(environment, datamodel.bytes, datamodel.length));
-    free(host);
-    free(datamodel.bytes);
-    uint32_t count = ta_host_segment_count(system->host);
-    napi_create_array_with_length(environment, count, &segments);
-    for (uint32_t k = 0; k < count; k++) {
-        ta_host_segment_info segment_info;
-        segment_info.size = sizeof segment_info;
-        int live = ta_host_segment_info_get(system->host, k, &segment_info) == TA_OK &&
-                   segment_info.live && k < system->image_count && system->images[k];
-        napi_set_element(environment, segments, k,
-                         live ? get_ref(environment, system->images[k]) : null_value(environment));
+    napi_create_object(environment, &o);
+    set(environment, o, "systemID", str_value(environment, contents.system_id));
+    set(environment, o, "ecmascript", str_value(environment, contents.datamodel));
+    set(environment, o, "now", num(environment, (double)contents.time));
+    napi_create_array_with_length(environment, contents.image_count, &images);
+    for (uint32_t i = 0; i < contents.image_count; i++) {
+        size_t n = 0;
+        const void *bytes = ta_host_snapshot_image(copy, length, i, &n);
+        napi_value image = bytes ? image_value(environment, bytes, n) : null_value(environment);
+        if (!image) {
+            free(copy);
+            return NULL;
+        }
+        napi_set_element(environment, images, i, image);
     }
-    set(environment, out, "segments", segments);
-    return out;
+    set(environment, o, "images", images);
+    free(copy);
+    return o;
 }
 
 static nd_chart *chart_by_hash(nd_system *system, uint64_t hash, uint32_t chart) {
@@ -401,17 +435,20 @@ static ta_status native_restore(nd_system *system, ta_string_view json) {
 
 /* restoreSystem(callbacks, config, images: [image | null], host, datamodel) -> system */
 napi_value js_restore_system(napi_env environment, napi_callback_info info) {
-    size_t argc = 5;
-    napi_value argv[5];
+    size_t argc = 4;
+    napi_value argv[4];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    void *host = NULL, *datamodel = NULL;
-    size_t hl = 0, dl = 0;
-    if (argc < 5 || !bytes_of(environment, argv[3], &host, &hl) ||
-        !bytes_of(environment, argv[4], &datamodel, &dl)) {
+    void *pack = NULL;
+    size_t pack_length = 0;
+    ta_host_snapshot_contents contents;
+    if (argc < 4 || !snapshot_of(environment, argv[3], &pack, &pack_length, &contents)) {
         napi_throw_type_error(environment, NULL,
-                              "restoreSystem(callbacks, config, images, host, datamodel)");
+                              "restoreSystem(callbacks, config, images, snapshot)");
         return NULL;
     }
+    const void *datamodel = contents.state;
+    size_t hl = contents.host_length, dl = contents.state_length;
+    const void *host = contents.host;
     uint32_t n = array_length(environment, argv[2]);
     void *aligned = malloc(hl ? hl : 1); /* the snapshot's records are read in place */
     if (!aligned) abort();
@@ -438,6 +475,7 @@ napi_value js_restore_system(napi_env environment, napi_callback_info info) {
                 (unsigned long long)hashes[k]);
             free(hashes);
             free(aligned);
+            free(pack);
             napi_throw_error(environment, NULL, message);
             return NULL;
         }
@@ -445,6 +483,7 @@ napi_value js_restore_system(napi_env environment, napi_callback_info info) {
     free(hashes);
     if (!segments) {
         free(aligned);
+        free(pack);
         napi_throw_type_error(environment, NULL, "restore: not a host snapshot");
         return NULL;
     }
@@ -452,6 +491,7 @@ napi_value js_restore_system(napi_env environment, napi_callback_info info) {
     nd_system *system = system_new(environment, argv[0], argv[1], &config);
     if (!system) {
         free(aligned);
+        free(pack);
         return NULL;
     }
     const ta_image **images = (const ta_image **)calloc(n + 1, sizeof *images);
@@ -494,6 +534,7 @@ napi_value js_restore_system(napi_env environment, napi_callback_info info) {
     }
     system->running = 0;
     free(images);
+    free(pack);
     if (status != TA_OK) {
         system_finalize(environment, system, NULL);
         char message[160];

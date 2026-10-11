@@ -590,34 +590,6 @@ export function createRuntime({ native, platform }) {
   /* --------------------------------------------------------------- systems */
 
   /* a snapshot: a magic line, the header's length (4 bytes), the header (JSON), then its blobs */
-  const SNAPSHOT_MAGIC = utf8.encode('tinyactors-snapshot 2\n');
-  function pack(header, blobs) {
-    const head = utf8.encode(JSON.stringify({ ...header, blobs: blobs.map((b) => (b ? b.length : -1)) }));
-    const total = SNAPSHOT_MAGIC.length + 4 + head.length + blobs.reduce((n, b) => n + (b ? b.length : 0), 0);
-    const out = new Uint8Array(total);
-    let at = 0;
-    out.set(SNAPSHOT_MAGIC, at);
-    at += SNAPSHOT_MAGIC.length;
-    new DataView(out.buffer).setUint32(at, head.length);
-    at += 4;
-    out.set(head, at);
-    at += head.length;
-    for (const b of blobs) if (b) out.set(b, (at += b.length) - b.length);
-    return out;
-  }
-  function unpack(bytes) {
-    const bad = () => new TypeError('not a system snapshot (system.snapshot())');
-    if (!(bytes instanceof Uint8Array) || bytes.length < SNAPSHOT_MAGIC.length + 4) throw bad();
-    for (let i = 0; i < SNAPSHOT_MAGIC.length; i++) if (bytes[i] !== SNAPSHOT_MAGIC[i]) throw bad();
-    let at = SNAPSHOT_MAGIC.length;
-    const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(at);
-    at += 4;
-    const header = JSON.parse(new TextDecoder().decode(bytes.subarray(at, at + length)));
-    at += length;
-    const blobs = header.blobs.map((n) => (n < 0 ? null : bytes.subarray(at, (at += n))));
-    return { header, blobs };
-  }
-
   const ROUTE_OUTCOMES = ['delivered', 'relayed', 'duplicate', 'refused'];
   const REASONS = ['', 'unknown-target', 'unreachable', 'denied', 'expired', 'hops', 'malformed'];
 
@@ -638,9 +610,9 @@ export function createRuntime({ native, platform }) {
      */
     constructor(options = {}) {
       this.options = options;
-      const restored = options.restore ? unpack(options.restore) : null;
-      this.id = (restored && restored.header.systemID) || options.systemID || randomID();
-      this._ecmascript = (restored && restored.header.ecmascript) || options.ecmascript || 'native';
+      const restored = options.restore ? native.snapshotContents(options.restore) : null;
+      this.id = (restored && restored.systemID) || options.systemID || randomID();
+      this._ecmascript = (restored && restored.ecmascript) || options.ecmascript || 'native';
       if (this._ecmascript !== 'native' && this._ecmascript !== 'quickjs') throw new TypeError('ecmascript: "native" or "quickjs"');
       this._charts = new Map(); /* Chart -> its name in this system */
       this._sources = new Map(); /* source name -> Chart */
@@ -688,11 +660,9 @@ export function createRuntime({ native, platform }) {
         ...(options.capacities || {}),
       };
       if (restored) {
-        const { header, blobs } = restored;
-        const images = blobs.slice(2).map((b) => (b ? native.openImage(b) : null));
-        images.forEach((image, segment) => image && this._register(segment, new Image(image), options.charts || []));
-        config.now = header.now;
-        this._sys = native.restoreSystem(callbacks, config, images, blobs[0], blobs[1]);
+        restored.images.forEach((image, segment) => image && this._register(segment, new Image(image), options.charts || []));
+        config.now = restored.now;
+        this._sys = native.restoreSystem(callbacks, config, restored.images, options.restore);
       } else {
         this._sys = native.createSystem(callbacks, config);
       }
@@ -1243,14 +1213,12 @@ export function createRuntime({ native, platform }) {
     }
 
     /**
-     * The whole system as bytes (ta_host_snapshot, and the datamodel's
-     * state): restore with createSystem({ restore, charts }). Needs a quiet
+     * The whole system as bytes (ta_host_snapshot_pack: the host, the datamodel's
+     * state and the images): restore with createSystem({ restore, charts }). Needs a quiet
      * moment (no migration); hibernated actors stay in the store.
      */
     snapshot() {
-      const s = native.snapshot(this._sys);
-      const images = s.segments.map((image) => (image ? native.imageBytes(image) : null));
-      return pack({ systemID: this.id, ecmascript: this._ecmascript, now: this._now() }, [s.host, s.datamodel, ...images]);
+      return native.snapshot(this._sys);
     }
 
     /** The host's counters and each chart's (ta_host_stats_get, ta_host_chart_stats). */
