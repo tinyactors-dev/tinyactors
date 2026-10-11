@@ -755,12 +755,13 @@ static void effects_block_replaced(ta_host *host, void *block, size_t size) {
     host->held_size[host->held_count++] = size;
 }
 
-/* The pool offset of string k (target, event, sendid, aux, msgid) of effect e,
+/* The pool offset of string k (EFFECT_STRINGS, in that order) of effect e,
  * and its length. */
 static size_t *effect_string(ta_host *host, uint32_t e, uint32_t k, uint32_t *length) {
     const ta_host_effect *effect = &host->effects[e];
-    const ta_string_view *views[5] = {&effect->target, &effect->event, &effect->sendid,
-                                      &effect->auxiliary, &effect->msgid};
+    const ta_string_view *views[EFFECT_STRINGS] = {
+        &effect->target, &effect->event,      &effect->sendid,           &effect->auxiliary,
+        &effect->msgid,  &effect->origintype, &effect->deduplication_key};
     *length = views[k]->length;
     return &host->effect_strings[e].offset[k];
 }
@@ -781,7 +782,7 @@ static void pool_compact(ta_host *host) {
             slot = effect_string(host, e, k, &length);
             if (*slot != (size_t)-1) break;
             slot = NULL;
-            if (++k == 5) {
+            if (++k == EFFECT_STRINGS) {
                 k = 0;
                 e++;
             }
@@ -799,7 +800,7 @@ static void pool_compact(ta_host *host) {
         write += n;
         if (take_error) {
             r++;
-        } else if (++k == 5) {
+        } else if (++k == EFFECT_STRINGS) {
             k = 0;
             e++;
         }
@@ -898,7 +899,7 @@ ta_host_effect *host_effect_new(ta_host *host, uint32_t kind, uint32_t segment) 
     effect->job = TA_NIL;
     effect->chart = TA_NIL;
     effect->datamodel = TA_NIL;
-    for (int k = 0; k < 5; k++)
+    for (int k = 0; k < EFFECT_STRINGS; k++)
         host->effect_strings[host->effect_count].offset[k] = (size_t)-1;
     host->effect_count++;
     return effect;
@@ -967,9 +968,10 @@ uint32_t ta_host_effects(ta_host *host, const ta_host_effect **out) {
         host->effect_count; /* these are seen now: released by the next ack or run */
     for (uint32_t i = 0; i < host->effect_count; i++) {
         ta_host_effect *effect = &host->effects[i];
-        ta_string_view *dst[5] = {&effect->target, &effect->event, &effect->sendid,
-                                  &effect->auxiliary, &effect->msgid};
-        for (int k = 0; k < 5; k++)
+        ta_string_view *dst[EFFECT_STRINGS] = {
+            &effect->target, &effect->event,      &effect->sendid,           &effect->auxiliary,
+            &effect->msgid,  &effect->origintype, &effect->deduplication_key};
+        for (int k = 0; k < EFFECT_STRINGS; k++)
             dst[k]->pointer = host->effect_strings[i].offset[k] == (size_t)-1
                                   ? ""
                                   : host->pool + host->effect_strings[i].offset[k];
@@ -1013,6 +1015,8 @@ ta_string_view ta_host_effect_text(ta_host *host, uint32_t index, uint32_t field
     case TA_EFFECT_FIELD_SENDID: return effect->sendid;
     case TA_EFFECT_FIELD_AUXILIARY: return effect->auxiliary;
     case TA_EFFECT_FIELD_MSGID: return effect->msgid;
+    case TA_EFFECT_FIELD_ORIGINTYPE: return effect->origintype;
+    case TA_EFFECT_FIELD_DEDUPLICATION_KEY: return effect->deduplication_key;
     case TA_EFFECT_FIELD_TRACEPARENT: {
         ta_buffer out = {host->effect_traceparent, sizeof host->effect_traceparent, 0};
         if (ta_traceparent_format(&effect->trace, &out) != TA_OK) return none;

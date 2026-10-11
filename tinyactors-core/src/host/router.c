@@ -234,13 +234,19 @@ static int allowed(ta_host *host, uint32_t handle, const peer *p, const ta_addre
     return 0;
 }
 
+/* The origintype of an envelope without one; the wire leaves it out. */
+#define SCXML_EVENT_PROCESSOR                                                                    \
+    ((ta_string_view){"http://www.w3.org/TR/scxml/#SCXMLEventProcessor", 47})
+
 /* ---- effects ------------------------------------------------------------------------ */
 
-static void effect_message_id(ta_host *host, ta_string_view msgid) {
+/* String k (EFFECT_STRINGS) of the newest effect, past the four
+ * host_effect_strings_set writes. */
+static void effect_string_put(ta_host *host, uint32_t k, ta_string_view value,
+                              ta_string_view *view) {
     effect_strings *strings = &host->effect_strings[host->effect_count - 1];
-    ta_host_effect *effect = &host->effects[host->effect_count - 1];
-    strings->offset[4] = host_pool_put(host, msgid);
-    effect->msgid.length = strings->offset[4] == (size_t)-1 ? 0 : msgid.length;
+    strings->offset[k] = host_pool_put(host, value);
+    view->length = strings->offset[k] == (size_t)-1 ? 0 : value.length;
 }
 
 /* an envelope for the transport (payload moved in on success) */
@@ -248,7 +254,8 @@ static ta_status emit_peer(ta_host *host, uint32_t handle, const ta_envelope *en
     if (!host_effects_reserve(host, 1,
                               (size_t)envelope->target.length + envelope->name.length +
                                   envelope->sendid.length + envelope->origin.length +
-                                  envelope->msgid.length))
+                                  envelope->msgid.length + envelope->origintype.length +
+                                  envelope->deduplication_key.length))
         return TA_ERROR_NO_MEMORY;
     ta_host_effect *x = host_effect_new(host, TA_HOST_EFFECT_PEER, TA_NIL);
     x->peer = handle;
@@ -257,7 +264,9 @@ static ta_status emit_peer(ta_host *host, uint32_t handle, const ta_envelope *en
         ta_memset(&x->trace, 0, sizeof x->trace);
     host_effect_strings_set(host, envelope->target, envelope->name, envelope->sendid,
                             envelope->origin);
-    effect_message_id(host, envelope->msgid);
+    effect_string_put(host, 4, envelope->msgid, &x->msgid);
+    effect_string_put(host, 5, envelope->origintype, &x->origintype);
+    effect_string_put(host, 6, envelope->deduplication_key, &x->deduplication_key);
     if (envelope->data &&
         envelope->datamodel <
             host->config.datamodel_count) { /* the effect owns the payload until ack */
@@ -277,7 +286,7 @@ static ta_status emit_error(ta_host *host, uint32_t handle, ta_string_view origi
     x->peer = handle;
     x->token = reason;
     host_effect_strings_set(host, (ta_string_view){"", 0}, (ta_string_view){"", 0}, sendid, origin);
-    effect_message_id(host, msgid);
+    effect_string_put(host, 4, msgid, &x->msgid);
     peer *p = peer_of(host, handle);
     if (p) p->errors++;
     return TA_OK;
@@ -530,7 +539,7 @@ static ta_status local_deliver(ta_host *host, uint64_t session, const ta_envelop
     event.origintype =
         envelope->origintype.length
             ? envelope->origintype
-            : (ta_string_view){"http://www.w3.org/TR/scxml/#SCXMLEventProcessor", 47};
+            : SCXML_EVENT_PROCESSOR;
     event.data = envelope->data;
     event.traceparent = envelope->traceparent; /* the trace crosses systems unbroken */
     event.trace_flags = envelope->trace_flags; /* and keeps its detail class in this process */
@@ -708,7 +717,7 @@ ta_status ta_host_message_init(ta_host *host, const ta_effect *effect, ta_host_m
     envelope->target = effect->target;
     envelope->name = effect->event;
     envelope->sendid = effect->sendid;
-    envelope->origintype = (ta_string_view){"http://www.w3.org/TR/scxml/#SCXMLEventProcessor", 47};
+    envelope->origintype = SCXML_EVENT_PROCESSOR;
     envelope->data = effect->payload;
     envelope->datamodel = effect->datamodel;
     envelope->trace_flags = effect->trace.flags & ~(uint32_t)0xFFu;
@@ -1189,8 +1198,13 @@ ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_buffe
         ta_string_view trace = {traceparent, 0};
         if (ta_traceparent_format(&effect->trace, &written) == TA_OK)
             trace.length = (uint32_t)written.length;
+        ta_string_view origintype = effect->origintype; /* the default stays off the wire */
+        if (origintype.length == SCXML_EVENT_PROCESSOR.length &&
+            !ta_memcmp(origintype.pointer, SCXML_EVENT_PROCESSOR.pointer, origintype.length))
+            origintype.length = 0;
         uint32_t pairs = 2u + !!binding + !!effect->sendid.length + !!effect->auxiliary.length +
-                         !!effect->msgid.length + !!effect->flags + !!trace.length;
+                         !!origintype.length + !!effect->msgid.length + !!effect->flags +
+                         !!effect->deduplication_key.length + !!trace.length;
         cbor_output_head(&o, CBOR_MAJOR_MAP, pairs);
         envelope_put_text(&o, ENVELOPE_KEY_TARGET, effect->target);
         envelope_put_text(&o, ENVELOPE_KEY_NAME, effect->event);
@@ -1208,11 +1222,13 @@ ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_buffe
         }
         envelope_put_text(&o, ENVELOPE_KEY_SENDID, effect->sendid);
         envelope_put_text(&o, ENVELOPE_KEY_ORIGIN, effect->auxiliary);
+        envelope_put_text(&o, ENVELOPE_KEY_ORIGINTYPE, origintype);
         envelope_put_text(&o, ENVELOPE_KEY_MSGID, effect->msgid);
         if (effect->flags) {
             cbor_output_text(&o, ENVELOPE_KEYS[ENVELOPE_KEY_HOPS]);
             cbor_output_uint(&o, effect->flags);
         }
+        envelope_put_text(&o, ENVELOPE_KEY_DEDUP, effect->deduplication_key);
         envelope_put_text(&o, ENVELOPE_KEY_TRACEPARENT, trace);
     }
     out->length = o.length;

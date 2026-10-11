@@ -173,6 +173,10 @@
       "value": 11
     },
     {
+      "name": "TA_EFFECT_FIELD_DEDUPLICATION_KEY",
+      "value": 39
+    },
+    {
       "name": "TA_EFFECT_FIELD_DELAY_HINT",
       "value": 12
     },
@@ -207,6 +211,10 @@
     {
       "name": "TA_EFFECT_FIELD_MSGID",
       "value": 36
+    },
+    {
+      "name": "TA_EFFECT_FIELD_ORIGINTYPE",
+      "value": 38
     },
     {
       "name": "TA_EFFECT_FIELD_PAYLOAD",
@@ -6991,13 +6999,21 @@
           "type": "ta_string_view"
         },
         {
+          "name": "origintype",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "deduplication_key",
+          "type": "ta_string_view"
+        },
+        {
           "name": "trace",
           "type": "ta_trace_context"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 200,
+          "size": 232,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7023,11 +7039,13 @@
             "peer": 144,
             "datamodel": 148,
             "msgid": 152,
-            "trace": 168
+            "origintype": 168,
+            "deduplication_key": 184,
+            "trace": 200
           }
         },
         "aarch64": {
-          "size": 200,
+          "size": 232,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7053,11 +7071,13 @@
             "peer": 144,
             "datamodel": 148,
             "msgid": 152,
-            "trace": 168
+            "origintype": 168,
+            "deduplication_key": 184,
+            "trace": 200
           }
         },
         "wasm32": {
-          "size": 160,
+          "size": 176,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7083,7 +7103,9 @@
             "peer": 112,
             "datamodel": 116,
             "msgid": 120,
-            "trace": 128
+            "origintype": 128,
+            "deduplication_key": 136,
+            "trace": 144
           }
         }
       }

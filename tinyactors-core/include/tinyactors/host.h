@@ -229,6 +229,8 @@ typedef struct ta_host_effect {
     uint32_t peer;                      /* PEER, PEER_ERR: the peer handle */
     uint32_t datamodel;                 /* PEER: datamodel index of payload (TA_NIL: none) */
     ta_string_view msgid;               /* PEER, PEER_ERR */
+    ta_string_view origintype;          /* PEER: the envelope's origintype (may be empty) */
+    ta_string_view deduplication_key;   /* PEER: the envelope's dedup key (may be empty) */
     ta_trace_context trace; /* as in ta_effect; PEER: the envelope's traceparent (format it
                                with ta_traceparent_format for the wire) */
 } ta_host_effect;
@@ -237,7 +239,7 @@ TA_API void ta_host_effects_ack(ta_host *h);
 
 /* A field of effect `index` of the batch ta_host_effects published, so that a
  * binding reads effects without knowing ta_host_effect's layout. Numbers:
- * KIND .. PEER; text: TARGET .. TRACEPARENT. An index past the batch, a field
+ * KIND .. PEER; text: TARGET .. DEDUPLICATION_KEY. An index past the batch, a field
  * the effect kind does not set, or a text field asked as a number (or the
  * reverse) answers 0 or an empty view. Text is borrowed like the effect
  * (until the ack, the next run or ta_host_free); TRACEPARENT's text is
@@ -271,7 +273,9 @@ enum {
     TA_EFFECT_FIELD_SENDID = 34,
     TA_EFFECT_FIELD_AUXILIARY = 35,
     TA_EFFECT_FIELD_MSGID = 36,
-    TA_EFFECT_FIELD_TRACEPARENT = 37 /* W3C text of `trace`; empty when untraced */
+    TA_EFFECT_FIELD_TRACEPARENT = 37, /* W3C text of `trace`; empty when untraced */
+    TA_EFFECT_FIELD_ORIGINTYPE = 38,
+    TA_EFFECT_FIELD_DEDUPLICATION_KEY = 39
 };
 TA_API uint64_t ta_host_effect_number(const ta_host *h, uint32_t index, uint32_t field);
 TA_API ta_string_view ta_host_effect_text(ta_host *h, uint32_t index, uint32_t field);

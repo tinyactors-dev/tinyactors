@@ -182,7 +182,9 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
             envelope.name = effect->event;
             envelope.sendid = effect->sendid;
             envelope.origin = effect->auxiliary;
+            envelope.origintype = effect->origintype;
             envelope.msgid = effect->msgid;
+            envelope.deduplication_key = effect->deduplication_key;
             char traceparent[TA_TRACEPARENT_LENGTH]; /* the transport writes it on the wire */
             envelope.traceparent.pointer = traceparent;
             envelope.traceparent.length =
@@ -473,6 +475,64 @@ static void test_relay(void) {
     envelope.msgid = (ta_string_view){"h1", 2};
     CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_REFUSED);
     close_all();
+}
+
+/* a relay keeps the dedup key and the origintype: the PEER effect carries
+ * them, and a duplicate by key is caught at the far end (struct or CBOR) */
+static void relay_keeps_envelope(int bytes) {
+    open_node(A, PINGER);
+    open_node(B, ECHO);
+    open_node(C, ECHO);
+    over_bytes = bytes;
+    const char *b_reach[1] = {"c"};
+    const char *b_back[1] = {"a"};
+    connect(A, B, TA_PEER_TRUSTED, b_reach, 1);
+    connect(B, A, TA_PEER_TRUSTED, NULL, 0);
+    connect(B, C, TA_PEER_TRUSTED, NULL, 0);
+    connect(C, B, TA_PEER_TRUSTED, b_back, 1);
+    spawn(C, "echo", "echo");
+    settle();
+    ta_envelope envelope;
+    memset(&envelope, 0, sizeof envelope);
+    envelope.size = sizeof envelope;
+    envelope.target = (ta_string_view){"tinyactors://c/@echo", 20};
+    envelope.name = (ta_string_view){"other", 5};
+    envelope.origin = (ta_string_view){"tinyactors://a/#_scxml_1", 24};
+    envelope.origintype = (ta_string_view){"urn:x-test", 10};
+    envelope.msgid = (ta_string_view){"r1", 2};
+    envelope.deduplication_key = (ta_string_view){"order-9", 7};
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_RELAYED);
+    settle();
+    envelope.msgid = (ta_string_view){"r2", 2}; /* a new msgid, the same key */
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_RELAYED);
+    settle();
+    LOGCHK(C, "other;");
+    ta_peer_status status;
+    status.size = sizeof status;
+    CHECK_EQUAL(ta_host_peer_status(nodes[C].host, nodes[C].peer[B], &status), TA_OK);
+    CHECK_EQUAL(status.duplicates, 1u);
+    /* the effect and its accessors (taken here, so not forwarded) */
+    envelope.msgid = (ta_string_view){"r3", 2};
+    CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_RELAYED);
+    {
+        const ta_host_effect *effects;
+        uint32_t n = ta_host_effects(nodes[B].host, &effects);
+        CHECK_EQUAL(n, 1u);
+        CHECK_EQUAL(effects[0].kind, (uint32_t)TA_HOST_EFFECT_PEER);
+        ta_string_view origintype =
+            ta_host_effect_text(nodes[B].host, 0, TA_EFFECT_FIELD_ORIGINTYPE);
+        ta_string_view key =
+            ta_host_effect_text(nodes[B].host, 0, TA_EFFECT_FIELD_DEDUPLICATION_KEY);
+        CHECK(origintype.length == 10 && !memcmp(origintype.pointer, "urn:x-test", 10));
+        CHECK(key.length == 7 && !memcmp(key.pointer, "order-9", 7));
+        CHECK_EQUAL(effects[0].flags, 1u); /* hops */
+    }
+    close_all();
+}
+
+static void test_relay_keeps_envelope(void) {
+    relay_keeps_envelope(0);
+    relay_keeps_envelope(1);
 }
 
 /* a peer that is down: queue (in order, up to max_queue, until the TTL),
@@ -1256,6 +1316,7 @@ int main(void) {
     RUN(test_policy);
     RUN(test_dedup);
     RUN(test_relay);
+    RUN(test_relay_keeps_envelope);
     RUN(test_route_status_queue);
     RUN(test_relay_routes);
     RUN(test_stale_handle);

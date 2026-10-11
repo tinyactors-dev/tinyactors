@@ -98,8 +98,10 @@ typedef struct migration_job {
     uint32_t left_count, left_capacity;
 } migration_job;
 
+/* target, event, sendid, aux, msgid, origintype, deduplication_key */
+#define EFFECT_STRINGS 7
 typedef struct effect_strings {
-    size_t offset[5]; /* target, event, sendid, aux, msgid in the string pool (SIZE_MAX: empty) */
+    size_t offset[EFFECT_STRINGS]; /* in the string pool (SIZE_MAX: empty) */
 } effect_strings;
 
 /* error.communication for a sender, not delivered yet: kept while its
