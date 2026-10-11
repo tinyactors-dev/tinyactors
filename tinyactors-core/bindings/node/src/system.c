@@ -125,19 +125,6 @@ static void payload_drop(nd_system *system, ta_payload payload) {
 }
 
 /* A payload as neutral JSON in system->wire (empty: none or not neutral). */
-static ta_string_view wire_of_payload(nd_system *system, ta_payload payload, uint32_t datamodel) {
-    system->wire.length = 0;
-    if (!payload || datamodel == TA_NIL) return view_of(NULL, 0);
-    size_t length = 0;
-    for (int attempt = 0; attempt < 4; attempt++) {
-        if (!text_room(&system->wire, system->wire.capacity ? 0 : 4096)) break;
-        ta_status status = system->binding.vtable->to_wire(system, payload, system->wire.bytes,
-                                                           system->wire.capacity, &length);
-        if (status == TA_OK) return view_of(system->wire.bytes, length);
-        if (status != TA_ERROR_NO_MEMORY || !text_room(&system->wire, length + 1)) break;
-    }
-    return view_of(NULL, 0);
-}
 
 /* ---- System handles ------------------------------------------------------------------------ */
 
@@ -393,49 +380,6 @@ static void effect_out(nd_system *system, const ta_host_effect *effect) {
             set_ref(environment, &system->images[effect->segment], NULL);
         e = effect_new(system, "freed");
         set(environment, e, "segment", num(environment, effect->segment));
-        break;
-    case TA_HOST_EFFECT_PEER: { /* an envelope for a transport, as neutral JSON */
-        char traceparent[TA_TRACEPARENT_LENGTH];
-        uint32_t tl = ta_traceparent_format(&effect->trace, traceparent, sizeof traceparent);
-        ta_string_view data = wire_of_payload(system, effect->payload, effect->datamodel);
-        char *data_copy = data.length ? (char *)malloc(data.length) : NULL;
-        if (data_copy) memcpy(data_copy, data.pointer, data.length);
-        ta_envelope envelope;
-        memset(&envelope, 0, sizeof envelope);
-        envelope.size = sizeof envelope;
-        envelope.hops = effect->flags;
-        envelope.target = effect->target;
-        envelope.name = effect->event;
-        envelope.sendid = effect->sendid;
-        envelope.origin = effect->auxiliary;
-        envelope.msgid = effect->msgid;
-        envelope.traceparent = view_of(traceparent, tl);
-        ta_string_view encoded = view_of(data_copy, data_copy ? data.length : 0);
-        size_t length = ta_host_envelope_json(&envelope, encoded, NULL, 0);
-        char *json = (char *)malloc(length + 1);
-        e = effect_new(system, "peer");
-        set(environment, e, "peer", num(environment, effect->peer));
-        set(environment, e, "origin", str_value(environment, effect->auxiliary));
-        set(environment, e, "msgid", str_value(environment, effect->msgid));
-        set(environment, e, "sendid", str_value(environment, effect->sendid));
-        set(environment, e, "target", str_value(environment, effect->target));
-        if (json) {
-            ta_host_envelope_json(&envelope, encoded, json, length + 1);
-            set(environment, e, "envelope", str_value(environment, view_of(json, length)));
-        }
-        if (effect->payload && !data.length)
-            set(environment, e, "malformed", bool_value(environment, 1));
-        free(json);
-        free(data_copy);
-        break;
-    }
-    case TA_HOST_EFFECT_PEER_ERROR:
-        e = effect_new(system, "peerError");
-        set(environment, e, "peer", num(environment, effect->peer));
-        set(environment, e, "origin", str_value(environment, effect->auxiliary));
-        set(environment, e, "msgid", str_value(environment, effect->msgid));
-        set(environment, e, "sendid", str_value(environment, effect->sendid));
-        set(environment, e, "reason", num(environment, effect->token));
         break;
     default:
         break;

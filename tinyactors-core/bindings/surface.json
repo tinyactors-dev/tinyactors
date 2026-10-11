@@ -158,7 +158,7 @@
     "ta_host_peer_up": "bind",
     "ta_host_peer_remove": "bind",
     "ta_host_peer_reach": "bind",
-    "ta_host_route": "bind",
+    "ta_host_route": {"bind": ["web"], "skip": "configured routes have no JavaScript API: links route by the reach their hellos announce (src/link); the web binding drops it when it becomes the addon's wasm twin (docs/adr/0008-bindings-only-do-io.md)"},
     "ta_host_export": "bind",
     "ta_host_deliver": "bind",
     "ta_host_peer_error": "bind",

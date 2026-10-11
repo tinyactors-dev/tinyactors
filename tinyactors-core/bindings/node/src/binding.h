@@ -45,8 +45,8 @@
  *   wake(system, session, blob), hibernated(system, session) -> bool
  *   snapshot(system) -> one blob (ta_host_snapshot_pack); snapshotContents(blob) ->
  *     { systemID, ecmascript, now, images }
- *   sweep, hibernate, wake, exportActor, adopt, migrate, stats, peer*,
- *   route, exportName, traceConfigure, traceEnd, metrics, destroy
+ *   sweep, hibernate, wake, exportActor, adopt, migrate, stats, link*, traceConfigure,
+ *   watch, unwatch, traceEnd, metrics, destroy
  *
  * The run loop (pump): ta_host_advance_time, then ta_host_run in rounds
  * until idle or the round limit; every effect goes into one array, handed
@@ -374,7 +374,6 @@ void parked_clear(nd_system *system);
 void job_done(nd_system *system, const ta_host_effect *effect);
 void jobs_clear(nd_system *system);
 napi_value effect_new(nd_system *system, const char *kind);
-napi_value peer_status_value(napi_env environment, nd_system *host, uint32_t peer);
 void links_free(nd_system *system);
 ta_time links_now(nd_system *system);
 void links_output(nd_system *system);
@@ -397,7 +396,6 @@ napi_value js_inspect(napi_env environment, napi_callback_info info);
 napi_value js_context(napi_env environment, napi_callback_info info);
 napi_value js_stats(napi_env environment, napi_callback_info info);
 napi_value js_destroy(napi_env environment, napi_callback_info info);
-ta_string_view *get_strs(napi_env environment, napi_value arr, uint32_t *n);
 
 /* persist.c */
 napi_value js_sweep(napi_env environment, napi_callback_info info);
@@ -409,18 +407,6 @@ napi_value js_migrate(napi_env environment, napi_callback_info info);
 napi_value js_snapshot(napi_env environment, napi_callback_info info);
 napi_value js_restore_system(napi_env environment, napi_callback_info info);
 
-/* router.c */
-void strs_free(ta_string_view *s, uint32_t n);
-napi_value js_peer_add(napi_env environment, napi_callback_info info);
-napi_value js_peer_up(napi_env environment, napi_callback_info info);
-napi_value js_peer_remove(napi_env environment, napi_callback_info info);
-napi_value js_peer_reach(napi_env environment, napi_callback_info info);
-napi_value js_route(napi_env environment, napi_callback_info info);
-napi_value js_export(napi_env environment, napi_callback_info info);
-napi_value js_peer_error(napi_env environment, napi_callback_info info);
-napi_value js_peer_round_trip_time(napi_env environment, napi_callback_info info);
-napi_value js_peer_status(napi_env environment, napi_callback_info info);
-void constant(napi_env environment, napi_value o, const char *name, double value);
 
 /* trace.c */
 napi_value decoded_id(napi_env environment, uint64_t high, uint64_t low, int wide);

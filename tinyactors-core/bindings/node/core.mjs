@@ -544,8 +544,7 @@ export function createRuntime({ native, platform }) {
       this._invocations = new Map(); /* `${segment}:${token}` and `${session}#${invokeid}` -> invocation */
       this._store = options.hibernation ? options.hibernation.store : null;
       if (this._store && typeof this._store.get !== 'function') throw new TypeError('hibernation: { store } with get, set and delete');
-      this._peers = new Map(); /* router peer -> transport connection */
-      this._links = new Set(); /* store links */
+      this._links = new Set(); /* store links, closed with the system */
       this._transports = new Map(); /* link connection -> its transport */
       this._linkOpeners = new Map(); /* link -> () => a new transport */
       this._linkOpened = new Map(); /* link -> resolves its `opened` */
@@ -905,16 +904,6 @@ export function createRuntime({ native, platform }) {
         case 'link':
           this._linkEffect(e);
           break;
-        case 'peer': {
-          const conn = this._peers.get(e.peer);
-          if (conn) conn.envelope(e);
-          break;
-        }
-        case 'peerError': {
-          const conn = this._peers.get(e.peer);
-          if (conn) conn.post({ t: 'err', origin: e.origin, msgid: e.msgid, sendid: e.sendid, reason: REASONS[e.reason] || 'unreachable' });
-          break;
-        }
         default:
           break;
       }
@@ -1116,32 +1105,8 @@ export function createRuntime({ native, platform }) {
       return native.stats(this._sys);
     }
 
-    /* ---- other systems: routing is the native router's (ta_host: peers, routes,
-     * relaying, origin checks, policy, dedup — docs/protocol.md); transports
-     * only move envelopes between it and the wire */
-
-    _fromPeer(peer, msg) {
-      if (this._stopped || !this._peers.has(peer)) return;
-      if (msg.t === 'ev') {
-        const str = (v) => (typeof v === 'string' ? v : '');
-        native.deliver(this._sys, peer, {
-          target: str(msg.target),
-          name: str(msg.name),
-          wire: msg.data === undefined ? undefined : JSON.stringify(msg.data),
-          origin: str(msg.origin),
-          origintype: str(msg.origintype),
-          sendid: str(msg.sendid),
-          msgid: str(msg.msgid),
-          dedup: str(msg.dedup),
-          hops: Number.isInteger(msg.hops) && msg.hops >= 0 ? msg.hops : 0,
-          traceparent: str(msg.traceparent),
-        });
-      } else if (msg.t === 'err') {
-        const reason = REASONS.indexOf(msg.reason);
-        native.peerError(this._sys, peer, String(msg.origin || ''), String(msg.msgid || ''), String(msg.sendid || ''), reason > 0 ? reason : K.ROUTE_ERROR_UNREACHABLE);
-        native.pump(this._sys);
-      }
-    }
+    /* ---- other systems: routing is the native router's and the link
+     * protocol core's (src/link); transports only move text */
 
     /* what the links (src/link) ask of the transports */
     _linkEffect(e) {
@@ -1195,50 +1160,6 @@ export function createRuntime({ native, platform }) {
         if (!this._stopped) native.linkDropped(this._sys, connection, 'connection closed');
       };
       t.onerror = () => {}; /* followed by onclose */
-    }
-
-    _attach(conn) {
-      this._peers.set(conn.peer, conn);
-    }
-
-    _detach(conn) {
-      if (this._peers.get(conn.peer) === conn) this._peers.delete(conn.peer);
-    }
-
-    _peerHello(conn, reach) {
-      if (this._stopped) return;
-      native.peerReach(this._sys, conn.peer, reach);
-      native.peerUp(this._sys, conn.peer, true);
-      native.pump(this._sys);
-      this._announce();
-    }
-
-    _peerDown(conn, remove) {
-      if (this._stopped) return;
-      if (remove) {
-        native.peerRemove(this._sys, conn.peer); /* queued envelopes fail: error.communication */
-        this._detach(conn);
-      } else native.peerUp(this._sys, conn.peer, false);
-      native.pump(this._sys);
-      this._announce();
-    }
-
-    /* the systems reachable through us, as announced to `conn` */
-    _reachFor(conn) {
-      const out = new Set();
-      for (const c of new Set(this._peers.values())) {
-        if (c === conn || !c.open || !c.remoteID) continue;
-        out.add(c.remoteID);
-        for (const r of c.reach) out.add(r);
-      }
-      out.delete(this.id);
-      if (conn.remoteID) out.delete(conn.remoteID);
-      const only = Array.isArray(conn.options.announce) ? new Set(conn.options.announce) : null;
-      return [...out].filter((id) => !only || only.has(id)).sort();
-    }
-
-    _announce() {
-      for (const c of new Set(this._peers.values())) if (c.announce && c.open) c.hello();
     }
 
     /**
@@ -1675,37 +1596,6 @@ export function createRuntime({ native, platform }) {
     };
   }
 
-  /* ------------------------------------------------------- store link peers
-   * A store link is one router peer whose transport is SQL (below). */
-  const LINK_V = 1;
-  const systemIDValid = (id) => native.systemIDValid(id);
-
-  class PeerConn {
-    constructor(system, options) {
-      this.system = system;
-      this.options = options;
-      this.open = false;
-      this.peer = 0; /* the router's handle */
-      this.remoteID = null;
-      this.reach = [];
-      this.announce = !!options.announce;
-      this.announced = null;
-      this.maxFrame = options.maxFrame || K.FRAME_MAX;
-    }
-    hello() {
-      const reach = this.announce ? this.system._reachFor(this) : [];
-      const key = reach.join(' ');
-      if (this.announced === key) return;
-      this.announced = key;
-      this.send({ t: 'hello', v: LINK_V, id: this.system.id, reach, caps: { profile: 'neutral', ordered: true, acks: false, max_frame: this.maxFrame } });
-    }
-  }
-
-  const peerStatus = (system, conn, extra = {}) => {
-    const s = conn.peer && !system._stopped ? native.peerStatus(system._sys, conn.peer) : null;
-    return s ? { ...s, ...extra } : null;
-  };
-
   /* A byte stream as a link transport (the WebSocket-like shape links use): a
    * Node-style duplex (a net.Socket) or a { readable, writable } pair (a child
    * process's stdio). Anything with send() is a transport already. */
@@ -1766,157 +1656,113 @@ export function createRuntime({ native, platform }) {
    * A store link connects the system to a database of actors (docs/protocol.md,
    * "Store links": PostgreSQL's tinyactors extension) through SQL, with the
    * caller's client: `query(sql, params) -> Promise<rows>` and optionally
-   * `listen(channel, onPayload) -> unlisten`. The database is one router peer:
-   * envelopes for it go in with tinyactors.deliver(envelope) (in order,
-   * retried until the database takes them: at-least-once, the database drops
-   * repeats by msgid); envelopes from it are claimed from its outbox
-   * (claim_for) when it NOTIFYs or every pollMs, handed to the router and acked. */
-  class StoreConn extends PeerConn {
-    constructor(system, options) {
-      super(system, { ...options, announce: options.announce !== false });
-      this.query = options.query;
-      this.remoteID = options.id || null;
-      this.worker = options.worker || `${system.id}/${randomID()}`;
-      this.batch = options.batch || 100;
-      this.out = []; /* frames for the database, in order */
-      this.peerMax = Infinity; /* rows, not frames */
-      this.pumping = false;
-      this.draining = false;
-      this.again = false;
-      this.closed = false;
-      this.error = null;
-      this.idle = [];
-      this.poller = null;
-    }
-    async start() {
-      if (!this.remoteID) {
-        const r = await this.query('SELECT tinyactors.system_id() AS id', []);
-        this.remoteID = r[0].id;
-      }
-      if (!systemIDValid(this.remoteID)) throw new TypeError(`createStoreLink: "${this.remoteID}" is not a system id`);
-      const flags = (this.options.trusted === false ? 0 : K.PEER_TRUSTED) | K.PEER_QUEUE;
-      this.peer = native.peerAdd(this.system._sys, this.remoteID, [], flags, this.options.maxQueue || 10000, this.options.queueTTLMs || 0);
-      if (!this.peer) throw new Error(`createStoreLink: cannot add a peer "${this.remoteID}"`);
-      this.system._attach(this);
-      this.system._links.add(this);
-      this.open = true;
-      this.hello(); /* tinyactors.hello(): what we reach is claimed by us */
-      this.system._peerHello(this, []);
-      if (this.options.listen) {
-        this.unlisten = await this.options.listen('tinyactors_outbox', (payload) => {
-          if (payload === this.system.id) this.drain();
-        });
-      }
-      const every = this.options.pollMs === undefined ? 1000 : this.options.pollMs;
-      if (every > 0) this.poller = platform.repeat(() => this.drain(), every);
-      await this.drain();
-    }
-    send(msg) {
-      this.out.push(msg);
-      this.pump();
-    }
-    post(msg) {
-      if (this.closed) return false;
-      this.send(msg);
-      return true;
-    }
-    envelope(e) {
-      if (e.malformed || !e.envelope) return this.system._fromPeer(this.peer, { t: 'err', origin: e.origin, msgid: e.msgid, sendid: e.sendid, reason: 'malformed' });
-      if (!this.post({ t: 'ev', envelope: e.envelope, origin: e.origin, msgid: e.msgid, sendid: e.sendid }))
-        this.system._fromPeer(this.peer, { t: 'err', origin: e.origin, msgid: e.msgid, sendid: e.sendid, reason: 'unreachable' });
-    }
-    async pump() {
-      if (this.pumping) return;
-      this.pumping = true;
-      try {
-        while (this.out.length && !this.closed) {
-          const msg = this.out[0];
-          let r;
-          try {
-            r = await this.sql(msg);
-          } catch (e) {
-            this.failed(e); /* down: keep it, try again later */
-            await new Promise((ok) => platform.setTimer(ok, 500));
-            continue;
-          }
-          this.out.shift();
-          this.recovered();
-          if (msg.t === 'ev' && r !== 'ok' && r !== 'duplicate')
-            this.system._fromPeer(this.peer, { t: 'err', origin: msg.origin, msgid: msg.msgid, sendid: msg.sendid, reason: REASONS.includes(r) ? r : 'unreachable' });
-        }
-      } finally {
-        this.pumping = false;
-        this.settled();
-      }
-    }
-    async sql(msg) {
+   * `listen(channel, onPayload) -> unlisten`. It is a link (src/link) whose
+   * transport is SQL: frames out become tinyactors.hello, tinyactors.deliver
+   * (in order, retried until the database takes them: at-least-once, the
+   * database drops repeats by msgid) and tinyactors.deliver_error; envelopes
+   * the database has for us are claimed (claim_for) when it NOTIFYs or every
+   * pollMs, come in as frames and are acked. The database's hello is its
+   * system id. */
+  function storeTransport(system, options, id) {
+    const query = options.query;
+    const batch = options.batch || 100;
+    const worker = options.worker || `${system.id}/${randomID()}`;
+    const t = { onopen: null, onmessage: null, onclose: null, onerror: null, open: false, error: null, out: [], idle: [] };
+    let pumping = false, draining = false, again = false;
+    const message = (m) => t.open && t.onmessage && t.onmessage({ data: JSON.stringify(m) });
+    const lost = () => queueMicrotask(() => t.onclose && t.onclose({}));
+    const down = (e) => {
+      t.error = String(e && e.message ? e.message : e);
+      if (!t.open) return;
+      t.open = false; /* the link reconnects; a frame not taken is sent again first */
+      lost();
+    };
+    t.settled = () => {
+      if (!pumping && !draining && !t.out.length) for (const ok of t.idle.splice(0)) ok();
+    };
+    /* the link asks for a transport: the same one, again */
+    t.connect = () => {
+      t.open = true;
+      queueMicrotask(() => {
+        if (!t.open) return;
+        if (t.onopen) t.onopen({});
+        message({ t: 'hello', v: 1, id, reach: [], caps: { max_frame: 0x7fffffff } });
+        t.error = null;
+        t.pump();
+        t.drain();
+      });
+      return t;
+    };
+    t.send = (text) => {
+      t.out.push(JSON.parse(text));
+      t.pump();
+    };
+    t.close = () => {
+      if (!t.open) return;
+      t.open = false;
+      lost();
+    };
+    const sql = async (msg) => {
       if (msg.t === 'hello') {
-        const r = await this.query('SELECT tinyactors.hello($1, $2::text[]) AS id', [msg.id, `{${msg.reach.join(',')}}`]);
+        /* what we reach is claimed by us */
+        const r = await query('SELECT tinyactors.hello($1, $2::text[]) AS id', [system.id, `{${msg.reach.join(',')}}`]);
         return r[0] && r[0].id;
       }
       if (msg.t === 'ev') {
         /* as this system: the database checks the origin against what we announced */
-        const r = await this.query('SELECT tinyactors.deliver($1::jsonb, $2) AS r', [msg.envelope, this.system.id]);
+        const { t: _, ...envelope } = msg;
+        const r = await query('SELECT tinyactors.deliver($1::jsonb, $2) AS r', [JSON.stringify(envelope), system.id]);
         return r[0] && r[0].r;
       }
-      if (msg.t === 'err') await this.query('SELECT tinyactors.deliver_error($1::jsonb)', [JSON.stringify({ origin: msg.origin, msgid: msg.msgid, sendid: msg.sendid, reason: msg.reason })]);
+      if (msg.t === 'err') await query('SELECT tinyactors.deliver_error($1::jsonb)', [JSON.stringify({ origin: msg.origin, msgid: msg.msgid, sendid: msg.sendid, reason: msg.reason })]);
       return null;
-    }
+    };
+    t.pump = async () => {
+      if (pumping) return;
+      pumping = true;
+      try {
+        while (t.out.length && t.open) {
+          const msg = t.out[0];
+          let r;
+          try {
+            r = await sql(msg);
+          } catch (e) {
+            down(e); /* kept: sent again when the link is back */
+            break;
+          }
+          t.out.shift();
+          if (msg.t === 'ev' && r !== 'ok' && r !== 'duplicate')
+            message({ t: 'err', origin: msg.origin, msgid: msg.msgid, sendid: msg.sendid, reason: REASONS.includes(r) ? r : 'unreachable' });
+        }
+      } finally {
+        pumping = false;
+        t.settled();
+      }
+    };
     /* claim what the database has for us (and the systems we announced) */
-    async drain() {
-      if (this.closed || !this.peer) return;
-      if (this.draining) {
-        this.again = true;
+    t.drain = async () => {
+      if (!t.open) return;
+      if (draining) {
+        again = true;
         return;
       }
-      this.draining = true;
+      draining = true;
       try {
         do {
-          this.again = false;
-          const rows = await this.query('SELECT id, envelope FROM tinyactors.claim_for($1, $2, $3)', [this.system.id, this.batch, this.worker]);
-          for (const row of rows) {
-            const env = typeof row.envelope === 'string' ? JSON.parse(row.envelope) : row.envelope;
-            this.system._fromPeer(this.peer, { ...env, t: 'ev' });
-          }
-          if (rows.length) await this.query('SELECT tinyactors.ack(id) FROM unnest($1::bigint[]) AS id', [`{${rows.map((r) => r.id).join(',')}}`]);
-          if (rows.length === this.batch) this.again = true;
-          this.recovered();
-        } while (this.again && !this.closed);
+          again = false;
+          const rows = await query('SELECT id, envelope FROM tinyactors.claim_for($1, $2, $3)', [system.id, batch, worker]);
+          for (const row of rows) message({ ...(typeof row.envelope === 'string' ? JSON.parse(row.envelope) : row.envelope), t: 'ev' });
+          if (rows.length) await query('SELECT tinyactors.ack(id) FROM unnest($1::bigint[]) AS id', [`{${rows.map((r) => r.id).join(',')}}`]);
+          if (rows.length === batch) again = true;
+        } while (again && t.open);
       } catch (e) {
-        this.failed(e);
+        down(e);
       } finally {
-        this.draining = false;
-        this.settled();
+        draining = false;
+        t.settled();
       }
-    }
-    failed(e) {
-      this.error = String(e && e.message ? e.message : e);
-      if (this.open) {
-        this.open = false;
-        this.system._peerDown(this, false); /* the router queues meanwhile */
-      }
-    }
-    recovered() {
-      if (this.open || this.closed) return;
-      this.open = true;
-      this.error = null;
-      this.announced = null;
-      this.hello();
-      this.system._peerHello(this, []);
-    }
-    settled() {
-      if (!this.pumping && !this.draining && !this.out.length) for (const ok of this.idle.splice(0)) ok();
-    }
-    disconnect() {
-      if (this.closed) return;
-      this.closed = true;
-      this.open = false;
-      if (this.poller !== null) platform.clearRepeat(this.poller);
-      if (this.unlisten) Promise.resolve(this.unlisten()).catch(() => {});
-      this.system._links.delete(this);
-      if (!this.system._stopped) this.system._peerDown(this, true);
-      this.settled();
-    }
+    };
+    return t;
   }
 
   /** Connect `system` to a database of actors (PostgreSQL + the tinyactors extension) through
@@ -1924,27 +1770,60 @@ export function createRuntime({ native, platform }) {
   function createStoreLink(system, options = {}) {
     if (!(system instanceof System)) throw new TypeError('createStoreLink(system, options): system expected');
     if (typeof options.query !== 'function') throw new TypeError('createStoreLink: { query(sql, params) } is needed');
-    const conn = new StoreConn(system, options);
-    const ready = conn.start();
+    let id = options.id || null;
+    let link = null, transport = null, poller = null, unlisten = null, closed = false;
+    const close = async () => {
+      if (closed) return;
+      closed = true;
+      system._links.delete(store);
+      if (poller !== null) platform.clearRepeat(poller);
+      if (link) link.close();
+      if (unlisten) await Promise.resolve(unlisten()).catch(() => {});
+    };
+    const store = { disconnect: close };
+    const ready = (async () => {
+      if (!id) id = (await options.query('SELECT tinyactors.system_id() AS id', []))[0].id;
+      if (!native.systemIDValid(id)) throw new TypeError(`createStoreLink: "${id}" is not a system id`);
+      transport = storeTransport(system, options, id);
+      link = createLink(system, {
+        name: id,
+        transport: () => transport.connect(),
+        trusted: options.trusted !== false,
+        maxQueue: options.maxQueue || 10000,
+        queueTTLMs: options.queueTTLMs || 0,
+        announce: options.announce !== false,
+        pingMs: 0,
+        maxFrame: 0x7fffffff,
+      });
+      system._links.add(store);
+      if (options.listen) unlisten = await options.listen('tinyactors_outbox', (payload) => payload === system.id && transport.drain());
+      const every = options.pollMs === undefined ? 1000 : options.pollMs;
+      if (every > 0) poller = platform.repeat(() => transport.drain(), every);
+      await link.opened;
+      await transport.drain();
+    })();
     ready.catch(() => {});
     return {
       get id() {
-        return conn.remoteID;
+        return id;
       },
       ready,
       /** Claim and deliver what the database has for us now. */
-      drain: () => ready.then(() => conn.drain()),
+      drain: () => ready.then(() => transport.drain()),
       /** Resolves once everything handed to the link reached the database and nothing is being claimed. */
       flush: () =>
         ready.then(
           () =>
             new Promise((ok) => {
-              conn.idle.push(ok);
-              conn.settled();
+              transport.idle.push(ok);
+              transport.settled();
             }),
         ),
-      status: () => peerStatus(system, conn, { error: conn.error, pending: conn.out.length }),
-      close: async () => conn.disconnect(),
+      status: () => {
+        const s = link && link.status();
+        return s ? { ...s, error: transport.error, pending: transport.out.length } : null;
+      },
+      close,
     };
   }
 

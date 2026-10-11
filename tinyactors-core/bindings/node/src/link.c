@@ -4,6 +4,32 @@
 
 #include <tinyactors/link.h>
 
+/* the router's view of a peer (ta_host_peer_status) as an object; null when it is gone */
+static napi_value peer_status_value(napi_env environment, nd_system *host, uint32_t peer) {
+    napi_value o;
+    ta_peer_status status;
+    memset(&status, 0, sizeof status);
+    status.size = sizeof status;
+    if (!peer || ta_host_peer_status(host->host, peer, &status) != TA_OK)
+        return null_value(environment);
+    static const char *const states[] = {"connecting", "open", "reconnecting", "closed"};
+    napi_create_object(environment, &o);
+    napi_set_named_property(environment, o, "id", str_value(environment, status.id));
+    napi_set_named_property(
+        environment, o, "state",
+        str_value(environment, (ta_string_view){states[status.state & 3],
+                                                (uint32_t)strlen(states[status.state & 3])}));
+    napi_set_named_property(environment, o, "queued", num(environment, status.queued));
+    napi_set_named_property(environment, o, "rtt", num(environment, status.round_trip_time));
+    napi_set_named_property(environment, o, "lag", num(environment, (double)status.lag));
+    napi_set_named_property(environment, o, "sent", num(environment, (double)status.sent));
+    napi_set_named_property(environment, o, "received", num(environment, (double)status.received));
+    napi_set_named_property(environment, o, "errors", num(environment, (double)status.errors));
+    napi_set_named_property(environment, o, "duplicates",
+                            num(environment, (double)status.duplicates));
+    return o;
+}
+
 /* the system's links, made with the first one */
 static ta_links *links_of(nd_system *system) {
     if (system->links) return system->links;

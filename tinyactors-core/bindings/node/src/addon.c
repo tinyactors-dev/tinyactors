@@ -225,6 +225,12 @@ ta_string_view view_of(const char *p, size_t n) {
     return (ta_string_view){p ? p : "", (uint32_t)n};
 }
 
+/* constants: the numbers of the public headers core.mjs needs (trace kinds and
+ * presets, flags), so no JavaScript twin keeps them */
+static void constant(napi_env environment, napi_value o, const char *name, double value) {
+    set(environment, o, name, num(environment, value));
+}
+
 static napi_value constants_value(napi_env environment) {
     napi_value o;
     napi_create_object(environment, &o);
@@ -340,15 +346,6 @@ napi_value ta_js_init(napi_env environment, napi_value exports) {
         METHOD("snapshot", js_snapshot),
         METHOD("snapshotContents", js_snapshot_contents),
         METHOD("stats", js_stats),
-        METHOD("peerAdd", js_peer_add),
-        METHOD("peerUp", js_peer_up),
-        METHOD("peerRemove", js_peer_remove),
-        METHOD("peerReach", js_peer_reach),
-        METHOD("route", js_route),
-        METHOD("exportName", js_export),
-        METHOD("peerError", js_peer_error),
-        METHOD("peerRoundTripTime", js_peer_round_trip_time),
-        METHOD("peerStatus", js_peer_status),
         METHOD("linkConnect", js_link_connect),
         METHOD("linkServe", js_link_serve),
         METHOD("linkAccept", js_link_accept),
