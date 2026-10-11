@@ -4,15 +4,21 @@
  * the method's ID. For the list of what is built and what is not, see
  * docs/builtins-status.md.
  *
- *   builtin-table dump     every entry, one per line, in the table's order
+ *   builtin-table dump     every entry, one per line, in the table's order,
+ *                          then the function table after a header line
  *   builtin-table          a REPL: reads a name per line from stdin and
- *                          prints its entry, or "not registered"
+ *                          prints its name entry and its function entries,
+ *                          or "not registered"
  *
- * An entry is four tab-separated fields:
+ * A name entry is four tab-separated fields:
  *   name      the property name
  *   flags     the SJS_NAME_* bits, as words, comma separated, or "-"
  *   methods   kind=method-id for each receiver kind with a method, or "-"
  *   mutation  the method ID that changes its receiver, or "-"
+ *
+ * A function entry is three: the receiver ("" for a global), the name and
+ * the built-in ID. The function section starts with the header line
+ * "# functions (receiver, name, id)".
  *
  * Method IDs are the numbers of sjs_builtin_id; the C names are not kept at
  * run time, so they are not printed.
@@ -68,10 +74,23 @@ static void print_entry(const sjs_name *entry) {
     else printf("%u\n", (unsigned)mutation);
 }
 
+/* A function-table entry: the receiver ("" for a global), the name, the ID. */
+static void print_function(const sjs_function_entry *entry) {
+    printf("%s\t%s\t%u\n", entry->space, entry->name, (unsigned)entry->id);
+}
+
+static void print_function_header(void) {
+    printf("# functions (receiver, name, id)\n");
+}
+
 static int dump(void) {
     uint32_t count;
     const sjs_name *names = sjs_names(&count);
     for (uint32_t i = 0; i < count; i++) print_entry(&names[i]);
+    uint32_t functions;
+    const sjs_function_entry *table = sjs_functions(&functions);
+    print_function_header();
+    for (uint32_t i = 0; i < functions; i++) print_function(&table[i]);
     return 0;
 }
 
@@ -94,7 +113,8 @@ static int repl(void) {
     int interactive = isatty(0);
     uint32_t count;
     const sjs_name *names = sjs_names(&count);
-    (void)count;
+    uint32_t functions;
+    const sjs_function_entry *table = sjs_functions(&functions);
     for (;;) {
         if (interactive) {
             printf("> ");
@@ -103,10 +123,21 @@ static int repl(void) {
         long length = read_name(text, sizeof text);
         if (length < 0) break;
         if (length == 0) continue;
-        sjs_str key = { text, (uint32_t)length };
-        uint16_t id = sjs_name_id(key);
-        if (id == 0) printf("not registered\n");
-        else print_entry(&names[id - 1u]);
+        uint16_t id = sjs_name_id((sjs_str){ text, (uint32_t)length });
+        int found = 0;
+        if (id != 0) {
+            print_entry(&names[id - 1u]);
+            found = 1;
+        }
+        int header = 0;
+        for (uint32_t i = 0; i < functions; i++) {
+            if (strcmp(table[i].name, text) != 0) continue;
+            if (!header) print_function_header();
+            print_function(&table[i]);
+            header = 1;
+            found = 1;
+        }
+        if (!found) printf("not registered\n");
     }
     if (interactive) printf("\n");
     return 0;

@@ -11,7 +11,9 @@ require_relative '../staticjs'
 require 'cache'
 require 'fileutils'
 
-abort 'builtin-table: mise run build failed' unless system('mise', 'run', 'build', chdir: StaticJS::ROOT.to_s)
+# The build's own report goes to stderr: stdout is the table, and nothing else.
+abort 'builtin-table: mise run build failed' unless system('mise', 'run', 'build', chdir: StaticJS::ROOT.to_s,
+                                                                    out: $stderr)
 
 target = Toolchain::Target.host
 command = [*target.compile_command, *StaticJS::WARNINGS, *StaticJS::INCLUDES].freeze

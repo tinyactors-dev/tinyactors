@@ -11,13 +11,7 @@
  * Tables
  */
 
-typedef struct {
-    const char *space;
-    const char *name;
-    uint16_t id;
-} function_entry;
-
-static const function_entry FUNCTION_TABLE[] = {
+static const sjs_function_entry FUNCTION_TABLE[] = {
     { "", "String", SJS_BUILTIN_STRING },
     { "String", "fromCharCode", SJS_BUILTIN_STRING_FROM_CHAR_CODE },
     { "String", "fromCodePoint", SJS_BUILTIN_STRING_FROM_CODE_POINT },
@@ -272,6 +266,11 @@ sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name) {
         }
     }
     return SJS_BUILTIN_NONE;
+}
+
+const sjs_function_entry *sjs_functions(uint32_t *count) {
+    *count = sizeof FUNCTION_TABLE / sizeof FUNCTION_TABLE[0];
+    return FUNCTION_TABLE;
 }
 
 /* Which of `a` and `b` sorts first by bytes: negative, 0 or positive. */
