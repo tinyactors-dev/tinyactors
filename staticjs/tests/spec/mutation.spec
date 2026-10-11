@@ -4007,3 +4007,107 @@ new Map().set(1, 2)
 === Object.assign of a fresh object as a statement is refused
 (() => { Object.assign({}, {a: 1}); return 1; })()
 --- error unsupported expression statement has no effect
+
+# Review of Object.assign of a variable: its result held, copies and
+# captures, a target that is also a source, reduce's accumulators,
+# parameters, a hash index, and variables destructuring, pop, get and an
+# element give.
+
+=== Object.assign of a variable, its result changed later
+(() => { const o = { a: 1 }; const p = Object.assign(o, { b: 2 }); p.c = 3; return [o, p]; })()
+--- fault staticjs changes a value only while
+
+=== Object.assign of a variable, its result assigned into later
+(() => { const o = { a: 1 }; const p = Object.assign(o, { b: 2 }); Object.assign(p, { c: 3 }); return [o, p]; })()
+--- fault staticjs changes a value only while
+
+=== Object.assign of a variable, then of the variable whose copy is held
+(() => { const o = { a: 1 }; const p = Object.assign(o, { b: 2 }); Object.assign(o, { c: 3 }); return [o, p]; })()
+--- error unsupported it alone, and this one was copied before
+
+=== Object.assign of a variable copied before
+(() => { const o = { a: 1 }; const q = o; Object.assign(o, { b: 2 }); return q; })()
+--- error unsupported it alone, and this one was copied before
+
+=== Object.assign of a variable stored in an array before
+(() => { const o = { a: 1 }; const arr = [o]; Object.assign(o, { b: 2 }); return arr; })()
+--- error unsupported stored in an array or an object before
+
+=== Object.assign of a variable into itself
+(() => { const o = { a: 1 }; Object.assign(o, o); return o; })()
+--- fault staticjs changes a value only while
+
+=== Object.assign of an empty variable into itself puts nothing
+(() => { const o = {}; Object.assign(o, o); return o; })()
+--- value
+{}
+
+=== Object.assign of a variable, then of itself as a later source
+(() => { const o = { a: 1 }; Object.assign(o, { b: 2 }, o); return o; })()
+--- fault staticjs changes a value only while
+
+=== Object.assign of a variable within its own sources
+(() => { const o = { a: 0 }; Object.assign(o, Object.assign(o, { a: 1 })); return o; })()
+--- fault staticjs changes a value only while
+
+=== Object.assign of a captured variable
+(() => { const o = {}; const f = () => Object.assign(o, { a: 1 }); f(); return o; })()
+--- error unsupported this one: build the value with reduce instead
+
+=== Object.assign of a variable a later arrow captures
+(() => { const o = {}; Object.assign(o, { a: 1 }); const f = () => o.a; return [f(), o]; })()
+--- error unsupported this one: build the value with reduce instead
+
+=== Object.assign of a reduce accumulator whose initial value is held
+(() => { const init = {}; const r = ["a", "b"].reduce((acc, x) => Object.assign(acc, { [x]: 1 }), init); return [init, r]; })()
+--- fault staticjs changes a value only while
+
+=== Object.assign of a callback's parameter whose element the array holds
+(() => { const arr = [{ a: 1 }, { a: 2 }]; const r = arr.map((o) => Object.assign(o, { b: 2 })); return [arr, r]; })()
+--- fault staticjs changes a value only while
+
+=== Object.assign of a parameter whose argument the caller holds
+(() => { const f = (o = {}) => { Object.assign(o, { a: 1 }); return o; }; const x = {}; const r = f(x); return [x, r]; })()
+--- fault staticjs changes a value only while
+
+=== Object.assign of a parameter with a default, called twice
+(() => { const f = (o = {}) => { Object.assign(o, { a: 1 }); return o; }; return [f(), f()]; })()
+--- value
+[{"a":1},{"a":1}]
+
+=== Object.assign of an object literal in a callback, fresh each call
+[1, 2, 3].map((x) => { const o = { k: 0 }; Object.assign(o, { k: o.k + x }); return o; })
+--- value
+[{"k":1},{"k":2},{"k":3}]
+
+=== Object.assign of a reduce accumulator past a hash index
+"abcdefghijkl".split("").reduce((acc, c, i) => Object.assign(acc, { [c]: i }), {})
+--- value
+{"a":0,"b":1,"c":2,"d":3,"e":4,"f":5,"g":6,"h":7,"i":8,"j":9,"k":10,"l":11}
+
+=== Object.assign of reduce accumulators, one reduce for each element
+[1, 2].map((n) => [1, 2, 3].slice(0, n).reduce((acc, x) => Object.assign(acc, { [x]: x }), {}))
+--- value
+[{"1":1},{"1":1,"2":2}]
+
+=== Object.assign of a variable past a hash index
+(() => { const o = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7 }; Object.assign(o, { h: 8 }, { i: 9 }, { j: 10, a: 0 }); return [o, o.a, o.j, o.e, Object.hasOwn(o, "i")]; })()
+--- value
+[{"a":0,"b":2,"c":3,"d":4,"e":5,"f":6,"g":7,"h":8,"i":9,"j":10},0,10,5,true]
+
+=== Object.assign of variables a destructuring or a pop gives
+(() => { const [g] = [{ a: 1 }]; Object.assign(g, { b: 2 }); const arr = [{ c: 1 }]; const h = arr.pop(); Object.assign(h, { d: 2 }); const { a, ...rest } = { a: 1, b: { c: 1 } }; Object.assign(rest, { z: 2 }); return [g, h, arr, rest]; })()
+--- value
+[{"a":1,"b":2},{"c":1,"d":2},[],{"b":{"c":1},"z":2}]
+
+=== Object.assign of a variable an array element gives
+(() => { const arr = [{ a: 1 }]; const g = arr[0]; Object.assign(g, { b: 2 }); return [g, arr]; })()
+--- fault staticjs changes a value only while
+
+=== Object.assign of a variable a map's get gives
+(() => { const m = new Map([["k", { a: 1 }]]); const g = m.get("k"); Object.assign(g, { b: 2 }); return [g, m.get("k")]; })()
+--- fault staticjs changes a value only while
+
+=== Object.assign of a variable whose nested value the source holds
+(() => { const p = { x: [1] }; const o = {}; Object.assign(o, p); o.x.push(2); return [o, p]; })()
+--- fault staticjs changes a value only while
