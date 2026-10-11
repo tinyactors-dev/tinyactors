@@ -288,8 +288,6 @@ export function createRuntime({ native, platform }) {
   /** Core's record kinds, in core's order (TA_TRACE_* in tinyactors/trace.h, from 1). */
   const TRACE_KINDS = native.traceKinds;
   const METRICS_INTERVAL_MS = 60000; /* OTEL_METRIC_EXPORT_INTERVAL's default */
-  const METRIC_KINDS = { sum: K.OTLP_METRIC_SUM, gauge: K.OTLP_METRIC_GAUGE, histogram: K.OTLP_METRIC_HISTOGRAM };
-  const METRIC_KIND_NAMES = Object.fromEntries(Object.entries(METRIC_KINDS).map(([k, v]) => [v, k]));
   /* the trace ID generator's seed, as two 32-bit halves */
   function traceSeed(seed) {
     if (seed === undefined) {
@@ -341,62 +339,12 @@ export function createRuntime({ native, platform }) {
   }
   const millis = (ns) => Number(ns / 1000n) / 1000;
 
-  /* Metrics as the native writer takes them (src/metrics.c, "metrics"). */
-  function nativeMetrics(metrics) {
-    if (!Array.isArray(metrics)) throw new TypeError('metricsToOTLP: snapshot.metrics must be an array of metrics');
-    return metrics.map((m) => {
-      const kind = METRIC_KINDS[m && m.kind];
-      if (!kind || typeof m.name !== 'string' || !Array.isArray(m.points)) throw new TypeError('metricsToOTLP: a metric needs a name, a kind ("sum", "gauge" or "histogram") and points');
-      return {
-        name: m.name,
-        unit: m.unit === undefined ? '' : String(m.unit),
-        kind,
-        points: m.points.map((p) => {
-          const attributes = Object.entries(p.attributes || {}).map(([k, v]) => [String(k), String(v)]);
-          if (kind !== METRIC_KINDS.histogram) return { attributes, value: Number(p.value), integer: Number.isInteger(p.value) };
-          return {
-            attributes,
-            count: p.count,
-            sum: p.sum,
-            min: p.min,
-            max: p.max,
-            bounds: p.bounds || [],
-            buckets: p.buckets || [],
-            exemplars: (p.exemplars || []).map((e) => ({ traceID: e.traceID, spanID: e.spanID, time: e.time, value: e.value })),
-          };
-        }),
-      };
-    });
-  }
-  /* A decoded request (src/metrics.c, "decodeMetrics") as Metric objects. */
-  function snapshotMetrics(decoded) {
-    return decoded.map((m) => ({
-      name: m.name,
-      unit: m.unit,
-      kind: METRIC_KIND_NAMES[m.kind] || 'gauge',
-      points: m.points.map((p) => {
-        const point = { attributes: Object.fromEntries(p.attributes.map(([k, v]) => [k, String(v)])) };
-        if (p.value !== undefined) return { ...point, value: p.value };
-        const out = { ...point, count: p.count, sum: p.sum, bounds: p.bounds, buckets: p.buckets };
-        if (p.min !== undefined) Object.assign(out, { min: p.min, max: p.max });
-        out.exemplars = p.exemplars.map((e) => {
-          let bucket = p.bounds.findIndex((b) => e.value <= b);
-          if (bucket < 0) bucket = p.bounds.length;
-          return { bucket, value: e.value, time: e.time, traceID: e.traceID, spanID: e.spanID };
-        });
-        return out;
-      }),
-    }));
-  }
-  /* Attributes as [[key, value]] of strings. */
-  const resourcePairs = (resource) => Object.entries(resource || {}).map(([k, v]) => [String(k), String(v)]);
-
   /** One OTLP ExportMetricsServiceRequest (protobuf, for /v1/metrics) of a metrics snapshot (ta_otlp_add_metric). */
   function metricsToOTLP(snapshot, options = {}) {
     if (snapshot === null || typeof snapshot !== 'object' || !Array.isArray(snapshot.metrics)) throw new TypeError('metricsToOTLP(snapshot): expected { startTime, time, metrics }');
     const time = snapshot.time === undefined ? wallClock() : Number(snapshot.time);
     const start = snapshot.startTime === undefined ? time : Number(snapshot.startTime);
-    return native.metricsToOTLP(nativeMetrics(snapshot.metrics), resourcePairs(options.resource), start, time);
+    return native.metricsToOTLP(snapshot.metrics, options.resource || {}, start, time);
   }
 
   /** Reads OTLP protobuf trace bytes (the ta_otlp_next_* readers); throws on a malformed message. */
@@ -1122,27 +1070,7 @@ export function createRuntime({ native, platform }) {
     /** Metrics as plain data: per chart, the pools and memory, the run queue, traces. */
     metrics() {
       if (this._stopped) throw new Error('the system was stopped');
-      const time = this._clock();
-      const bytes = native.metrics(this._sys, nativeMetrics(this._ownMetrics()), [], this._metricsStart, time);
-      return { startTime: this._metricsStart, time, metrics: snapshotMetrics(native.decodeMetrics(bytes)) };
-    }
-
-    _ownMetrics() {
-      const r = native.runs(this._sys);
-      const runs = { attributes: {}, count: r.count, sum: r.sum, bounds: r.bounds, buckets: r.buckets, exemplars: [] };
-      if (r.count) Object.assign(runs, { min: r.min, max: r.max });
-      const own = [{ name: 'tinyactors.run.duration', unit: 's', kind: 'histogram', points: [runs] }];
-      if (this._exporter) {
-        const stats = native.exportStats(this._sys);
-        const o = { posted: stats.posted, failed: stats.failed, dropped: stats.dropped };
-        own.push({
-          name: 'tinyactors.telemetry.bytes',
-          unit: 'By',
-          kind: 'sum',
-          points: Object.keys(o).map((outcome) => ({ attributes: { 'tinyactors.telemetry.outcome': outcome }, value: o[outcome] })),
-        });
-      }
-      return own;
+      return native.metricsSnapshot(this._sys, this._metricsStart, this._clock());
     }
 
     _resource() {
@@ -1152,10 +1080,8 @@ export function createRuntime({ native, platform }) {
     _exportMetrics() {
       if (!this._exporter) return;
       try {
-        const own = this._ownMetrics();
         const app = this._telemetry.metrics ? this._telemetry.metrics() || [] : [];
-        const bytes = native.metrics(this._sys, nativeMetrics([...own, ...app]), resourcePairs(this._resource()), this._metricsStart, this._clock());
-        native.exportAdd(this._sys, 'metrics', bytes);
+        native.metricsExport(this._sys, app, this._resource(), this._metricsStart, this._clock());
       } catch (e) {
         platform.log(e);
       }
@@ -1264,7 +1190,7 @@ export function createRuntime({ native, platform }) {
         sample: t.sample !== undefined ? t.sample : this._telemetry.sample,
         rules: (t.rules || []).map((r) => (r && r.chart instanceof Chart ? { ...r, chart: r.chart.name } : r)),
         spanMetrics: !!this._telemetry.spanMetrics,
-        resource: Object.entries(this._resource()).map(([k, v]) => [String(k), String(v)]),
+        resource: this._resource(),
       });
     }
 

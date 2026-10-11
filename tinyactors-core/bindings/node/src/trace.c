@@ -21,7 +21,7 @@ static napi_value decoded_u64(napi_env environment, uint64_t value) {
 
 /* a value: string, boolean, number, { int: "decimal" } beyond 2^53, array,
  * { list: [[k, v]] }, { bytes: Uint8Array } */
-static napi_value decoded_value(napi_env environment, const ta_otlp_value *value) {
+napi_value decoded_value(napi_env environment, const ta_otlp_value *value) {
     napi_value v, wrapper;
     switch (value->kind) {
     case TA_OTLP_VALUE_STRING:
@@ -266,19 +266,31 @@ void trace_drain(nd_system *host) {
     }
 }
 
+/* Attributes as an object ({ key: value }, values as text) or as [[key, value], ...]. */
 void attributes_of(napi_env environment, napi_value pairs, js_attributes *out) {
     bool array = false;
     napi_is_array(environment, pairs, &array);
     uint32_t n = 0;
-    if (array) napi_get_array_length(environment, pairs, &n);
+    napi_value keys = NULL;
+    if (array)
+        napi_get_array_length(environment, pairs, &n);
+    else if (type_of(environment, pairs) == napi_object &&
+             napi_get_property_names(environment, pairs, &keys) == napi_ok)
+        napi_get_array_length(environment, keys, &n);
     out->count = n;
     out->list = (ta_otlp_attribute *)calloc(n ? n : 1, sizeof *out->list);
     out->texts = (char **)calloc(2 * (n ? n : 1), sizeof(char *));
     for (uint32_t i = 0; i < n; i++) {
         napi_value pair, key, value;
-        napi_get_element(environment, pairs, i, &pair);
-        napi_get_element(environment, pair, 0, &key);
-        napi_get_element(environment, pair, 1, &value);
+        if (array) {
+            napi_get_element(environment, pairs, i, &pair);
+            napi_get_element(environment, pair, 0, &key);
+            napi_get_element(environment, pair, 1, &value);
+        } else {
+            napi_get_element(environment, keys, i, &key);
+            napi_get_property(environment, pairs, key, &value);
+        }
+        napi_coerce_to_string(environment, value, &value);
         size_t kl = 0, vl = 0;
         out->texts[2 * i] = get_string(environment, key, &kl);
         out->texts[2 * i + 1] = get_string(environment, value, &vl);

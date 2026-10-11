@@ -13,7 +13,7 @@
  *   parseAddress(text), formatAddress(system, local)   ta_address_*
  *   frameHeader(length), frameReader(max), frameRead   ta_frame_*
  *   parseTraceparent, formatTraceparent, stepSpanID    ta_traceparent_*, ta_step_key_span_id
- *   decodeTraces, decodeMetrics, metricsToOTLP         ta_otlp_next_*, ta_otlp_add_metric
+ *   decodeTraces, metricsToOTLP                        ta_otlp_next_*, ta_otlp_add_metric
  *   constants                                          numeric constants of the headers
  *
  * A System: one ta_host, its datamodel ("ecmascript": the native one below,
@@ -34,7 +34,7 @@
  *   post(system, session, { name, data, sendid, origin, origintype, raw, traceparent,
  *        flags, token })                               ta_host_send with every field
  *   deliver(system, peer, envelope) -> outcome         ta_host_deliver
- *   pump(system) -> run code, now(system) -> ms, runs(system) -> run durations
+ *   pump(system) -> run code, now(system) -> ms
  *   terminate(system, session)
  *   inspect(system, session) -> { segment, chart, state, states } | null
  *   stateValue(system, session) -> its configuration as a nested state value
@@ -46,7 +46,7 @@
  *   snapshot(system) -> one blob (ta_host_snapshot_pack); snapshotContents(blob) ->
  *     { systemID, ecmascript, now, images }
  *   sweep, hibernate, wake, exportActor, adopt, migrate, stats, link*, traceConfigure,
- *   watch, unwatch, traceEnd, metrics, destroy
+ *   watch, unwatch, traceEnd, metricsSnapshot, metricsExport, destroy
  *
  * The run loop (pump): ta_host_advance_time, then ta_host_run in rounds
  * until idle or the round limit; every effect goes into one array, handed
@@ -88,7 +88,8 @@
 #include <tinyactors/runtime.h>
 
 #define IO_PROCESSORS_MAX 16u
-#define RUN_BUCKETS       8 /* run durations: 7 bounds, then the rest */
+#define RUN_BUCKETS       8                      /* run durations: 7 bounds, then the rest */
+extern const double run_bounds[RUN_BUCKETS - 1]; /* seconds (system.c) */
 
 /* the quickjs datamodel's own vtable (src/datamodel_ecmascript) */
 #define Q(system) ((system)->quickjs_vtable)
@@ -365,7 +366,6 @@ napi_value js_post(napi_env environment, napi_callback_info info);
 napi_value js_deliver(napi_env environment, napi_callback_info info);
 napi_value js_pump(napi_env environment, napi_callback_info info);
 napi_value js_now(napi_env environment, napi_callback_info info);
-napi_value js_runs(napi_env environment, napi_callback_info info);
 napi_value js_later(napi_env environment, napi_callback_info info);
 napi_value js_state_value(napi_env environment, napi_callback_info info);
 napi_value js_snapshot_contents(napi_env environment, napi_callback_info info);
@@ -423,6 +423,7 @@ napi_value js_restore_system(napi_env environment, napi_callback_info info);
 
 /* trace.c */
 napi_value decoded_id(napi_env environment, uint64_t high, uint64_t low, int wide);
+napi_value decoded_value(napi_env environment, const ta_otlp_value *value);
 napi_value decoded_attributes(napi_env environment, ta_otlp_fields fields);
 napi_value js_decode_traces(napi_env environment, napi_callback_info info);
 uint64_t trace_wall(nd_system *host);
@@ -438,9 +439,9 @@ napi_value js_trace_end(napi_env environment, napi_callback_info info);
 /* metrics.c */
 double named_double(napi_env environment, napi_value object, const char *name);
 uint32_t named_length(napi_env environment, napi_value object, const char *name, napi_value *array);
-napi_value js_metrics(napi_env environment, napi_callback_info info);
+napi_value js_metrics_snapshot(napi_env environment, napi_callback_info info);
+napi_value js_metrics_export(napi_env environment, napi_callback_info info);
 napi_value js_metrics_to_otlp(napi_env environment, napi_callback_info info);
-napi_value js_decode_metrics(napi_env environment, napi_callback_info info);
 
 /* datamodel.c, quickjs.c: the datamodels' vtables */
 extern const ta_datamodel_vtable native_vtable, quickjs_vtable;

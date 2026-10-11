@@ -19,10 +19,27 @@ uint32_t named_length(napi_env environment, napi_value object, const char *name,
     return n;
 }
 
-/* A metric of core.mjs onto `otlp`. */
+static const char *const metric_kinds[] = {"", "sum", "gauge", "histogram"};
+
+/* A metric of the API ({ name, unit, kind: "sum" | "gauge" | "histogram", points:
+ * [{ attributes: { key: value }, value } | { attributes, count, sum, min, max, bounds,
+ * buckets, exemplars }] }) onto `otlp`; TA_ERROR_INVALID when it is malformed. */
 static ta_status metric_add(napi_env environment, ta_otlp *otlp, napi_value metric,
                             uint64_t start_ns, uint64_t time_ns) {
     napi_value v, points_js;
+    size_t kind_length = 0;
+    char *kind_text = type_of(environment, metric) == napi_object
+                          ? property_string(environment, metric, "kind", &kind_length)
+                          : NULL;
+    uint32_t kind = 0;
+    for (uint32_t k = 1; kind_text && k < 4; k++)
+        if (!strcmp(kind_text, metric_kinds[k])) kind = k;
+    free(kind_text);
+    bool has_points = false;
+    if (kind) napi_is_array(environment, property(environment, metric, "points"), &has_points);
+    if (!kind || type_of(environment, property(environment, metric, "name")) != napi_string ||
+        !has_points)
+        return TA_ERROR_INVALID;
     size_t name_length = 0, unit_length = 0;
     char *name = NULL, *unit = NULL;
     if (napi_get_named_property(environment, metric, "name", &v) == napi_ok)
@@ -42,10 +59,9 @@ static ta_status metric_add(napi_env environment, ta_otlp *otlp, napi_value metr
             attributes_of(environment, list, &attributes[i]);
         points[i].attributes = attributes[i].list;
         points[i].attribute_count = attributes[i].count;
-        bool integer = false;
-        if (napi_get_named_property(environment, point, "integer", &v) == napi_ok)
-            napi_get_value_bool(environment, v, &integer);
         double value = named_double(environment, point, "value");
+        int integer = value == value && value >= -9007199254740991.0 &&
+                      value <= 9007199254740991.0 && value == (double)(int64_t)value;
         if (integer)
             points[i].integer = (int64_t)value;
         else {
@@ -105,7 +121,7 @@ static ta_status metric_add(napi_env environment, ta_otlp *otlp, napi_value metr
     memset(&m, 0, sizeof m);
     m.name = (ta_string_view){name ? name : "", (uint32_t)name_length};
     m.unit = (ta_string_view){unit ? unit : "", (uint32_t)unit_length};
-    m.kind = (uint32_t)named_double(environment, metric, "kind");
+    m.kind = kind;
     m.points = points;
     m.point_count = n;
     m.start_ns = start_ns;
@@ -175,6 +191,52 @@ static ta_otlp *metrics_grow(ta_otlp *otlp, size_t *length) {
     return NULL;
 }
 
+/* The addon's own metrics: tinyactors.run.duration (how long each pump held the
+ * thread) and, with an exporter, tinyactors.telemetry.bytes by outcome. */
+static ta_status own_metrics(nd_system *host, ta_otlp *otlp, uint64_t start_ns, uint64_t time_ns) {
+    ta_otlp_point runs;
+    memset(&runs, 0, sizeof runs);
+    runs.count = host->run_count;
+    runs.sum = host->run_sum;
+    runs.min = host->run_min;
+    runs.max = host->run_max;
+    runs.bounds = run_bounds;
+    runs.buckets = host->run_buckets;
+    runs.bucket_count = RUN_BUCKETS;
+    ta_otlp_metric m;
+    memset(&m, 0, sizeof m);
+    m.name = view_of("tinyactors.run.duration", 23);
+    m.unit = view_of("s", 1);
+    m.kind = TA_OTLP_METRIC_HISTOGRAM;
+    m.points = &runs;
+    m.point_count = 1;
+    m.start_ns = start_ns;
+    m.time_ns = time_ns;
+    ta_status status = ta_otlp_add_metric(otlp, &m);
+    if (status != TA_OK || !host->exporter) return status;
+    ta_otlp_batch_stats stats;
+    stats.size = sizeof stats;
+    ta_otlp_batch_stats_get(host->exporter, &stats);
+    static const char *const outcomes[] = {"posted", "failed", "dropped"};
+    uint64_t values[] = {stats.posted, stats.failed, stats.dropped};
+    ta_otlp_attribute attributes[3];
+    ta_otlp_point points[3];
+    memset(points, 0, sizeof points);
+    for (int i = 0; i < 3; i++) {
+        attributes[i].key = view_of("tinyactors.telemetry.outcome", 28);
+        attributes[i].value = view_of(outcomes[i], strlen(outcomes[i]));
+        points[i].attributes = &attributes[i];
+        points[i].attribute_count = 1;
+        points[i].integer = (int64_t)values[i];
+    }
+    m.name = view_of("tinyactors.telemetry.bytes", 26);
+    m.unit = view_of("By", 2);
+    m.kind = TA_OTLP_METRIC_SUM;
+    m.points = points;
+    m.point_count = 3;
+    return ta_otlp_add_metric(otlp, &m);
+}
+
 /* The request of `metrics` (an array as above) and, with a host, its stats;
  * the resource is [[key, value]]; times in ms since the epoch. */
 static napi_value metrics_request(napi_env environment, nd_system *host, napi_value metrics,
@@ -229,6 +291,10 @@ static napi_value metrics_request(napi_env environment, nd_system *host, napi_va
                (otlp = metrics_grow(otlp, &length)) != NULL)
             ;
         if (!otlp) goto refused;
+        while ((status = own_metrics(host, otlp, start_ns, time_ns)) == TA_ERROR_NO_MEMORY &&
+               (otlp = metrics_grow(otlp, &length)) != NULL)
+            ;
+        if (!otlp) goto refused;
     }
     bool array = false;
     uint32_t n = 0;
@@ -245,7 +311,9 @@ static napi_value metrics_request(napi_env environment, nd_system *host, napi_va
         if (!otlp) goto refused;
         if (status != TA_OK) {
             free(otlp);
-            napi_throw_type_error(environment, NULL, "metricsToOTLP: a metric is malformed");
+            napi_throw_type_error(environment, NULL,
+                                  "metricsToOTLP: a metric needs a name, a kind (\"sum\", "
+                                  "\"gauge\" or \"histogram\") and points");
             return NULL;
         }
     }
@@ -265,9 +333,36 @@ refused:
     return NULL;
 }
 
-/* metrics(host, metrics, resource, startMs, timeMs) -> Uint8Array: the host's
- * stats and `metrics` */
-napi_value js_metrics(napi_env environment, napi_callback_info info) {
+static napi_value metrics_value(napi_env environment, const void *bytes, size_t length);
+
+/* metricsSnapshot(system, startMs, timeMs) -> { startTime, time, metrics }: the host's
+ * counts and the addon's own, as the API's metrics */
+napi_value js_metrics_snapshot(napi_env environment, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value argv[3], o, none;
+    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
+    nd_system *host = argc >= 3 ? get_system(environment, argv[0]) : NULL;
+    if (!host) return NULL;
+    double start = 0, time = 0;
+    napi_get_value_double(environment, argv[1], &start);
+    napi_get_value_double(environment, argv[2], &time);
+    napi_create_array(environment, &none);
+    napi_value bytes = metrics_request(environment, host, none, none, start, time);
+    void *data = NULL;
+    size_t length = 0;
+    if (!bytes || !bytes_of(environment, bytes, &data, &length)) return NULL;
+    napi_value metrics = metrics_value(environment, data, length);
+    if (!metrics) return NULL;
+    napi_create_object(environment, &o);
+    set(environment, o, "startTime", num(environment, start));
+    set(environment, o, "time", num(environment, time));
+    set(environment, o, "metrics", metrics);
+    return o;
+}
+
+/* metricsExport(system, metrics, resource, startMs, timeMs): the host's counts, the
+ * addon's own and the application's `metrics` go to the exporter (/v1/metrics) */
+napi_value js_metrics_export(napi_env environment, napi_callback_info info) {
     size_t argc = 5;
     napi_value argv[5];
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
@@ -276,7 +371,12 @@ napi_value js_metrics(napi_env environment, napi_callback_info info) {
     double start = 0, time = 0;
     napi_get_value_double(environment, argv[3], &start);
     napi_get_value_double(environment, argv[4], &time);
-    return metrics_request(environment, host, argv[1], argv[2], start, time);
+    napi_value bytes = metrics_request(environment, host, argv[1], argv[2], start, time);
+    void *data = NULL;
+    size_t length = 0;
+    if (!bytes || !bytes_of(environment, bytes, &data, &length)) return NULL;
+    exporter_add(host, TA_OTLP_METRICS, data, length);
+    return input_done(host, undef(environment)); /* due posts go out */
 }
 
 /* metricsToOTLP(metrics, resource, startMs, timeMs) -> Uint8Array */
@@ -308,17 +408,24 @@ static napi_value doubles_value(napi_env environment, ta_string_view packed, int
     return list;
 }
 
-/* decodeMetrics(bytes) -> [{ name, unit, kind, points: [...] }], or throws */
-napi_value js_decode_metrics(napi_env environment, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value argv[1], metrics;
-    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    void *bytes = NULL;
-    size_t length = 0;
-    if (argc < 1 || !bytes_of(environment, argv[0], &bytes, &length)) {
-        napi_throw_type_error(environment, NULL, "decodeMetrics(bytes: Uint8Array)");
-        return NULL;
+/* attributes as an object of text values */
+static napi_value attributes_value(napi_env environment, ta_otlp_fields fields) {
+    napi_value o;
+    napi_create_object(environment, &o);
+    uint32_t at = 0;
+    ta_string_view key;
+    ta_otlp_value value;
+    while (ta_otlp_next_attribute(fields, &at, &key, &value) == 1) {
+        napi_value v = decoded_value(environment, &value);
+        napi_coerce_to_string(environment, v, &v);
+        napi_set_property(environment, o, str_value(environment, key), v);
     }
+    return o;
+}
+
+/* a metrics request as the API's metrics: [{ name, unit, kind, points }], or throws */
+static napi_value metrics_value(napi_env environment, const void *bytes, size_t length) {
+    napi_value metrics;
     napi_create_array(environment, &metrics);
     ta_otlp_cursor cursor;
     memset(&cursor, 0, sizeof cursor);
@@ -330,7 +437,9 @@ napi_value js_decode_metrics(napi_env environment, napi_callback_info info) {
         napi_create_object(environment, &o);
         napi_set_named_property(environment, o, "name", str_value(environment, view.name));
         napi_set_named_property(environment, o, "unit", str_value(environment, view.unit));
-        napi_set_named_property(environment, o, "kind", num(environment, view.kind));
+        const char *kind = view.kind < 4 && view.kind ? metric_kinds[view.kind] : "gauge";
+        napi_set_named_property(environment, o, "kind",
+                                str_value(environment, view_of(kind, strlen(kind))));
         napi_create_array(environment, &points);
         uint32_t at = 0, k = 0;
         ta_otlp_point_view point;
@@ -338,7 +447,7 @@ napi_value js_decode_metrics(napi_env environment, napi_callback_info info) {
             napi_value p, exemplars;
             napi_create_object(environment, &p);
             napi_set_named_property(environment, p, "attributes",
-                                    decoded_attributes(environment, point.attributes));
+                                    attributes_value(environment, point.attributes));
             if (view.kind == TA_OTLP_METRIC_HISTOGRAM) {
                 napi_set_named_property(environment, p, "count",
                                         num(environment, (double)point.count));
@@ -366,6 +475,13 @@ napi_value js_decode_metrics(napi_env environment, napi_callback_info info) {
                                             num(environment, (double)exemplar.time / 1e6));
                     napi_set_named_property(environment, x, "value",
                                             num(environment, exemplar.value));
+                    uint32_t bucket = 0, bounds = point.bounds.length / 8u; /* its bucket */
+                    for (; bucket < bounds; bucket++) {
+                        double bound;
+                        memcpy(&bound, point.bounds.pointer + 8u * bucket, sizeof bound);
+                        if (exemplar.value <= bound) break;
+                    }
+                    napi_set_named_property(environment, x, "bucket", num(environment, bucket));
                     napi_set_element(environment, exemplars, e++, x);
                 }
                 napi_set_named_property(environment, p, "exemplars", exemplars);
@@ -382,7 +498,7 @@ napi_value js_decode_metrics(napi_env environment, napi_callback_info info) {
         napi_set_element(environment, metrics, i++, o);
     }
     if (got < 0) {
-        napi_throw_error(environment, NULL, "decodeMetrics: malformed OTLP protobuf");
+        napi_throw_error(environment, NULL, "metrics: malformed OTLP protobuf");
         return NULL;
     }
     return metrics;

@@ -313,7 +313,6 @@ napi_value ta_js_init(napi_env environment, napi_value exports) {
         METHOD("parseTraceparent", js_parse_traceparent),
         METHOD("formatTraceparent", js_format_traceparent),
         METHOD("decodeTraces", js_decode_traces),
-        METHOD("decodeMetrics", js_decode_metrics),
         METHOD("metricsToOTLP", js_metrics_to_otlp),
         METHOD("createSystem", js_create_system),
         METHOD("restoreSystem", js_restore_system),
@@ -329,7 +328,6 @@ napi_value ta_js_init(napi_env environment, napi_value exports) {
         METHOD("deliver", js_deliver),
         METHOD("pump", js_pump),
         METHOD("now", js_now),
-        METHOD("runs", js_runs),
         METHOD("later", js_later),
         METHOD("terminate", js_terminate),
         METHOD("inspect", js_inspect),
@@ -366,7 +364,8 @@ napi_value ta_js_init(napi_env environment, napi_value exports) {
         METHOD("watch", js_watch),
         METHOD("unwatch", js_unwatch),
         METHOD("traceEnd", js_trace_end),
-        METHOD("metrics", js_metrics),
+        METHOD("metricsSnapshot", js_metrics_snapshot),
+        METHOD("metricsExport", js_metrics_export),
         METHOD("destroy", js_destroy),
     };
     napi_define_properties(environment, exports, sizeof props / sizeof props[0], props);

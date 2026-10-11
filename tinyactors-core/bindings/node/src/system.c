@@ -505,7 +505,7 @@ static void arm(nd_system *system, double code) {
     call(system->environment, get_ref(system->environment, system->schedule), 1, argv);
 }
 
-static const double run_bounds[RUN_BUCKETS - 1] = {0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25};
+const double run_bounds[RUN_BUCKETS - 1] = {0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25};
 
 static void run_record(nd_system *system, double seconds) {
     uint32_t bucket = 0;
@@ -1026,30 +1026,6 @@ napi_value js_now(napi_env environment, napi_callback_info info) {
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
     nd_system *system = argc >= 1 ? get_system(environment, argv[0]) : NULL;
     return system ? num(environment, system_now(system)) : NULL;
-}
-
-/* runs(system) -> { count, sum, min, max, bounds, buckets }: the pumps' durations (s) */
-napi_value js_runs(napi_env environment, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value argv[1], o, bounds, buckets;
-    napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
-    nd_system *system = argc >= 1 ? get_system(environment, argv[0]) : NULL;
-    if (!system) return NULL;
-    napi_create_object(environment, &o);
-    napi_create_array_with_length(environment, RUN_BUCKETS - 1, &bounds);
-    napi_create_array_with_length(environment, RUN_BUCKETS, &buckets);
-    for (uint32_t i = 0; i < RUN_BUCKETS; i++) {
-        if (i < RUN_BUCKETS - 1)
-            napi_set_element(environment, bounds, i, num(environment, run_bounds[i]));
-        napi_set_element(environment, buckets, i, num(environment, (double)system->run_buckets[i]));
-    }
-    set(environment, o, "count", num(environment, (double)system->run_count));
-    set(environment, o, "sum", num(environment, system->run_sum));
-    set(environment, o, "min", num(environment, system->run_min));
-    set(environment, o, "max", num(environment, system->run_max));
-    set(environment, o, "bounds", bounds);
-    set(environment, o, "buckets", buckets);
-    return o;
 }
 
 napi_value js_terminate(napi_env environment, napi_callback_info info) {
