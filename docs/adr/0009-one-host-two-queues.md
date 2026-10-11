@@ -93,6 +93,13 @@ TA_API ta_status ta_host_request(ta_host *host, ta_bytes request, ta_buffer *rep
 - freestanding, no allocation; indefinite lengths are unsupported and
   nesting is limited.
 
+**Amended (2026-10-11), after step 3:** the encoder follows RFC 8949
+§4.2.1 except key order: map pairs are written in token order, not sorted,
+since sorting needs memory or a quadratic pass. Core writes the keys of its
+own replies in a fixed order, so request and reply vectors still compare
+byte for byte. NaN is written as `f97e00`, as dCBOR requires; the encoding
+is not dCBOR otherwise (no sorted keys, no numeric reduction).
+
 A binding walks the token list in its own language. It needs one generic
 CBOR module and no CBOR library, and pays one call across per message, not
 one per item. The C API is in the proposal.
