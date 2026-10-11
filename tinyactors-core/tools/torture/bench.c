@@ -55,7 +55,7 @@
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 #include "net.h"
-#include "../../tests/support/host_config.h" /* the config as CBOR */
+#include "bench_host_config.h" /* the config as CBOR */
 
 #ifndef BENCH_SOURCE_DIR
 #define BENCH_SOURCE_DIR "."
@@ -481,7 +481,7 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
     system->trace_mode = trace_mode;
     if (trace_mode == TRACE_DISABLED) system->config.tracing = TA_TRACING_DISABLED;
     system->memory_limit = memory_limit;
-    test_host_config host_config;
+    bench_host_config host_config;
     memset(&host_config, 0, sizeof host_config);
     host_config.size = sizeof host_config;
     host_config.system_id = (ta_string_view){system->base + 13, (uint32_t)strlen(system->base) -
@@ -494,7 +494,7 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
     host_config.allocator = ta_runtime_malloc();
     if (trace_mode == TRACE_OTLP) /* the host's encoder, defaults; flushed after every slice */
         host_config.telemetry.otlp.size = sizeof host_config.telemetry.otlp;
-    if (test_host_new(&host_config, &system->host) != TA_OK) {
+    if (bench_host_new(&host_config, &system->host) != TA_OK) {
         snprintf(message, capacity, "%s: cannot create the system", name);
         ta_datamodel_ecmascript_free(system->ecmascript);
         memset(system, 0, sizeof *system);
