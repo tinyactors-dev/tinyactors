@@ -35,6 +35,8 @@
  *   compile.module.synthetic.*          power.js repeated, exports renamed, to >= 32 KiB
  *   compile.guard.event.*               pending.has(_event.data.id) && _event.name === "notify.ack"
  *   compile.guard.counter.whole         ({...counts, acked: counts.acked + 1})
+ *   compile.regex                       twelve typical patterns (an e-mail, a date,
+ *                                       a version, a URL, ...), each tested once
  *
  * eval (unit eval; fuelPerOp): compiled once; each op starts a kept vm,
  * runs it, takes the result and releases it.
@@ -63,7 +65,11 @@
  * eval.regex.test (/^(?:r\d{6},)*r\d{6}$/ and /r\d{6};/ on text: [true,false]),
  * .replace (text.replace(/r(\d+)/g, "$1"), checked by its length and start),
  * .split (text.split(/[,;]/): n pieces) and .redos (/(a+)+$/ on n a's and a
- * b: false), each the same value at every size, Node's at the smoke size (L);
+ * b: false), each the same value at every size, Node's at the smoke size, and
+ * .exec (each row's id matched with two groups, one named, and the named
+ * group read from the match result: n strings) and .filter (the rows whose
+ * id a literal pattern tests true, r => /^r\d{5}[05]$/.test(r.id): n / 5
+ * rows) (L);
  * eval.object.spread-reduce (C);
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
@@ -271,6 +277,7 @@ typedef enum {
     CHECK_NONE = 0,
     CHECK_ARRAY_N,
     CHECK_FILTER_QUARTER,
+    CHECK_FILTER_FIFTH,  /* an array of n / 5 elements */
     CHECK_SUM_XS,
     CHECK_SUM_KWH,
     CHECK_PIPELINE,
@@ -396,6 +403,22 @@ static const bench_case cases[] = {
       .globals = EVENT_GLOBALS, .expect = "true" },
     { .name = "compile.guard.counter.whole", .unit = UNIT_BYTE, .op = OP_COMPILE, .source = GUARD_COUNTER,
       .globals = COUNTS_GLOBALS, .expect = COUNTER_VALUE },
+    /* Lexing, classifying and compiling patterns; evaluated only to check them. */
+    { .name = "compile.regex", .unit = UNIT_BYTE, .op = OP_COMPILE,
+      .source = "[/^[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)+$/.test(\"ada.lovelace+notes@example.org\"), "
+                "/^\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d+)?)?(?:Z|[+-]\\d{2}:\\d{2})?)?$/"
+                ".test(\"2024-02-29T13:45:00.250Z\"), "
+                "/^(?<major>0|[1-9]\\d*)\\.(?<minor>0|[1-9]\\d*)\\.(?<patch>0|[1-9]\\d*)$/.test(\"1.20.03\"), "
+                "/^#?(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(\"#C0FFEE\"), "
+                "/^https?:\\/\\/[^\\s\\/$.?#][^\\s]*$/i.test(\"https://example.org/a?b=c#d\"), "
+                "/^(?:\\+?\\d{1,3}[ -]?)?\\(?\\d{3}\\)?[ -]?\\d{3}[ -]?\\d{4}$/.test(\"+1 (555) 010-4477\"), "
+                "/^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$/.test(\"notify.ack\"), "
+                "/^notify\\.(?:ack|nack|timeout)$/.test(\"notify.retry\"), "
+                "/^[A-Z]{2}\\d{2}[A-Z0-9]{11,30}$/.test(\"DE89370400440532013000\"), "
+                "/^\\s*$/.test(\" \\t \"), "
+                "/\\b(?:error|fail(?:ed|ure)?)\\b/i.test(\"Job FAILED at step 3\"), "
+                "/^[^,]*,[^,]*$/.test(\"a,b,c\")]",
+      .expect = "[true,true,false,true,true,true,true,false,true,true,true,false]" },
 
     /* eval: the data model's hot path */
     { .name = "eval.guard.size", .unit = UNIT_EVAL, .op = OP_EVAL, .sizes = SIZES_ONE, .smoke = 1,
@@ -529,6 +552,15 @@ static const bench_case cases[] = {
     { .name = "eval.regex.split", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "(p => [8 * p.length - text.length, p[0], p[p.length - 1].length])(text.split(/[,;]/))",
       .globals = { { "text", FIX_TEXT, NULL } }, .expect = "[1,\"r000000\",7]", .check = CHECK_SAME },
+    { .name = "eval.regex.exec", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.map(r => /^r(\\d{3})(?<lo>\\d{3})$/.exec(r.id).groups.lo)", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = "[\"000\",\"001\",\"002\",\"003\",\"004\",\"005\",\"006\",\"007\",\"008\",\"009\"]",
+      .check = CHECK_ARRAY_N },
+    { .name = "eval.regex.filter", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "rows.filter(r => /^r\\d{5}[05]$/.test(r.id))", .globals = { { "rows", FIX_ROWS, NULL } },
+      .expect = "[{\"id\":\"r000000\",\"kwh\":0,\"priority\":0,\"tags\":[\"a\",\"b\"]},"
+                "{\"id\":\"r000005\",\"kwh\":18.5,\"priority\":1,\"tags\":[\"a\",\"b\"]}]",
+      .check = CHECK_FILTER_FIFTH },
     { .name = "eval.regex.redos", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "/(a+)+$/.test(\"a\".repeat(xs.length) + \"b\")",
       .globals = { { "xs", FIX_XS, NULL } }, .expect = "false", .check = CHECK_SAME },
@@ -1283,6 +1315,7 @@ static bool check_value(bench_run *run, sjs_value value) {
     case CHECK_NONE: return true;
     case CHECK_ARRAY_N: return expect_shape(run, value, (bench_shape){ SJS_ARRAY, n });
     case CHECK_FILTER_QUARTER: return expect_shape(run, value, (bench_shape){ SJS_ARRAY, (n + 1u) / 4u });
+    case CHECK_FILTER_FIFTH: return expect_shape(run, value, (bench_shape){ SJS_ARRAY, n / 5u });
     case CHECK_SUM_XS: return expect_number(run, value, (double)n * (double)(n - 1u) / 4.0);
     case CHECK_SUM_KWH: {
         /* In the order reduce adds them, so rounded the same way. */
