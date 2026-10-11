@@ -3769,6 +3769,9 @@ __attribute__((noinline)) static bool flatten_iterated(sjs_vm *vm, vm_frame *fra
     if (r.kind == SJS_ARRAY || r.kind == SJS_SET) {
         sjs_ref(r);
         list = SJS_AS_ARRAY(r);
+        /* A unit per element copied, as a map's entries and an iterator's
+         * values are charged where they are read. */
+        vm->fuel_used += list->length;
     } else if (r.kind == SJS_MAP) {
         got = sjs_map_entries(vm, SJS_AS_ARRAY(r), &list);
     } else if (r.kind == SJS_ITERATOR) {
