@@ -1280,3 +1280,83 @@ Object.assign({}, "a😀")
 === Object.assign faults on a __proto__ key from JSON.parse
 Object.assign({}, JSON.parse('{"__proto__": {"a": 1}}'))
 --- fault JSON.parse would make an object with the key __proto__
+
+# Review of Object.hasOwn and of Object.assign called on a target no
+# variable owns: every kind of value and key, a hash index, and the faults.
+
+=== Object.hasOwn of each kind of value
+[Object.hasOwn([10, 20], 1), Object.hasOwn([10, 20], "length"), Object.hasOwn([10, 20], 2), Object.hasOwn([10], -0), Object.hasOwn([10], "01"), Object.hasOwn([10], 4294967295), Object.hasOwn("a😀", 2), Object.hasOwn("a😀", 3), Object.hasOwn("", "length"), Object.hasOwn(5, "toFixed"), Object.hasOwn(true, "valueOf"), Object.hasOwn(1n, "toString"), Object.hasOwn(/a/g, "lastIndex"), Object.hasOwn(/a/g, "source"), Object.hasOwn(new Set([1]), "size"), Object.hasOwn(new Map([[1, 2]]), 1), Object.hasOwn(new Map([[1, 2]]).keys(), "next")]
+--- value
+[true,true,false,true,false,false,true,false,true,false,false,false,true,false,false,false,false]
+
+=== Object.hasOwn of keys that ToPropertyKey converts
+(() => { const o = { 0: 2, "": 3, "-0": 4, "1.5": 5, undefined: 6, null: 7, true: 8, NaN: 9, Infinity: 10 }; return [0, -0, "", "-0", 1.5, undefined, null, true, false, NaN, Infinity, -Infinity, 1n, 0n].map((k) => Object.hasOwn(o, k)); })()
+--- value
+[true,true,true,true,true,true,true,true,false,true,true,false,false,true]
+
+=== Object.hasOwn of a function's and a match result's own keys
+[Object.hasOwn((a, b) => a, "length"), Object.hasOwn((a) => a, "name"), Object.hasOwn((a) => a, "prototype"), Object.hasOwn(Math.max, "length"), Object.hasOwn(Math.max, "prototype"), Object.hasOwn("ab".match(/b/), "index"), Object.hasOwn("ab".match(/b/), "groups"), Object.hasOwn(/(?<x>a)/.exec("a"), "groups"), Object.hasOwn(/a/d.exec("a"), "indices"), Object.hasOwn(/a/.exec("a"), "indices")]
+--- value
+[true,true,false,true,false,true,true,true,true,false]
+
+=== Object.hasOwn with a hash index
+(() => { const o = { a0: 0, a1: 1, a2: 2, a3: 3, a4: 4, a5: 5, a6: 6, a7: 7, a8: 8, a9: 9 }; return [Object.hasOwn(o, "a9"), Object.hasOwn(o, "a5"), Object.hasOwn(o, "a10"), Object.hasOwn(o, "constructor"), Object.hasOwn(o, "__proto__")]; })()
+--- value
+[true,true,false,false,false]
+
+=== Object.hasOwn of a key undefined, with no key given
+[Object.hasOwn({ undefined: 1 }), Object.hasOwn({})]
+--- value
+[true,false]
+
+=== Object.hasOwn of an array key, which JavaScript converts
+Object.hasOwn([10], [0])
+--- fault a key must be a primitive
+
+=== Object.hasOwn of no value
+Object.hasOwn()
+--- fault Object.hasOwn takes a value that is
+
+=== Object.assign of fresh targets
+[Object.assign({ a: 1 }, { b: 2 }, { a: 3 }), Object.assign({}, { a: { b: 1 } }).a, Object.assign({}, ...[{ a: 1 }, { b: 2 }]), Object.assign({ b: 1, 1: 1 }, { 0: 0, a: 2, b: 3 }), Object.assign({}, "ab", [5]), Object.assign({}, 1, true, null, undefined, 1n, "", new Set([1]), new Map([[1, 2]]), /a/g), Object.assign({ a: 1 }, { a: undefined })]
+--- value
+[{"a":3,"b":2},{"b":1},{"a":1,"b":2},{"0":0,"1":1,"b":3,"a":2},{"0":5,"1":"b"},{},{"a":undefined}]
+
+=== Object.assign of fresh targets with a hash index
+(() => { const src = { a0: 0, a1: 1, a2: 2, a3: 3, a4: 4, a5: 5, a6: 6, a7: 7, a8: 8, a9: 9 }; const r = Object.assign({ a3: "x" }, src, { a3: "y" }); return [src, r.a3, r.a9, Object.keys(r)]; })()
+--- value
+[{"a0":0,"a1":1,"a2":2,"a3":3,"a4":4,"a5":5,"a6":6,"a7":7,"a8":8,"a9":9},"y",9,["a3","a0","a1","a2","a4","a5","a6","a7","a8","a9"]]
+
+=== Object.assign of a target a function returns, and of a copy
+(() => { const mk = () => ({ a: 1 }); const base = { k: 0 }; return [Object.assign(mk(), { b: 2 }), Object.assign({ ...base }, { y: 2 }), base, [1, 2].map((x) => Object.assign({}, base, { x })), Object.assign(JSON.parse("{}"), { a: 1 }), Object.assign(Object.fromEntries([["a", 1]]), { b: 2 })]; })()
+--- value
+[{"a":1,"b":2},{"k":0,"y":2},{"k":0},[{"k":0,"x":1},{"k":0,"x":2}],{"a":1},{"a":1,"b":2}]
+
+=== Object.assign of a target something else holds
+(() => { const shared = { a: 1 }; const get = () => shared; const r = Object.assign(get(), { b: 2 }); return [shared, r]; })()
+--- fault Object.assign changes its target, and something
+
+=== Object.assign of a target and a source that both hold it
+(() => { const o = { z: 1 }; const r = Object.assign(...[o, { b: 2 }]); return [o, r]; })()
+--- fault Object.assign changes its target, and something
+
+=== Object.assign with nothing to put gives an array target as it is
+(() => { const a = [1]; const r = Object.assign(a, {}, "", null); return [a, r]; })()
+--- value
+[[1],[1]]
+
+=== Object.assign into an array, with something to put
+Object.assign([1, 2], { 0: 9 })
+--- fault staticjs's Object.assign puts properties only into
+
+=== Object.assign of a string source outside the BMP
+Object.assign({}, "a😀")
+--- fault Object.assign would put half of a
+
+=== Object.assign of a number target, with nothing to put
+Object.assign(1, {})
+--- fault Object.assign takes an object as its
+
+=== Object.assign of no target
+Object.assign()
+--- fault Object.assign takes an object as its

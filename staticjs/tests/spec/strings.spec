@@ -1034,3 +1034,48 @@ String.fromCodePoint(0x110000)
 (s => [s.substring(1), s.substr(1, 2), s.isWellFormed(), s.toWellFormed() + s])("a😀b")
 --- value
 ["😀b","😀",true,"a😀ba😀b"]
+
+# Review of substring, substr, isWellFormed and toWellFormed: every kind of
+# number argument, non-ASCII and astral text, and the faults.
+
+=== substring and substr with every kind of number argument
+["abcdef".substring(NaN, 3), "abcdef".substring(-Infinity, Infinity), "abcdef".substring(4, -1), "abcdef".substring(1.9, 4.9), "abcdef".substring(4294967296, 2), "abcdef".substring(1e21), "abcdef".substring(-0, 2), "abcdef".substring(true, null), "abcdef".substring(undefined, undefined), "abcdef".substring(5, 5)]
+--- value
+["abc","abcdef","abcd","bcd","cdef","","ab","a","abcdef",""]
+
+=== substr with every kind of number argument
+["abcdef".substr(NaN, 3), "abcdef".substr(-Infinity, 2), "abcdef".substr(-2), "abcdef".substr(-7, 2), "abcdef".substr(2, -1), "abcdef".substr(2, Infinity), "abcdef".substr(2, -Infinity), "abcdef".substr(1.9, 2.9), "abcdef".substr(6, 1), "abcdef".substr(100), "abcdef".substr(2, null), "abcdef".substr(2, NaN), "abcdef".substr(true, true), "abcdef".substr(-4294967296)]
+--- value
+["abc","ab","ef","ab","","cdef","","bc","","","","","b","abcdef"]
+
+=== substring and substr of non-ASCII text by UTF-16 unit
+["héllo wörld".substring(1, 8), "héllo wörld".substr(-5, 3), "日本語テキスト".substring(5, 2), "日本語テキスト".substr(3), "a😀b😀".substring(0, 1), "a😀b😀".substring(3, 4), "a😀b😀".substr(1, 2), "a😀b😀".substring(6, 1), "a😀b😀".substr(-2)]
+--- value
+["éllo wö","wör","語テキ","テキスト","a","b","😀","😀b😀","😀"]
+
+=== substring and substr of the empty string
+["".substring(0, 5), "".substr(-1, 2), "".substring(NaN), "".substr(Infinity)]
+--- value
+["","","",""]
+
+=== substr with a length that a cut through a pair would need
+"a😀b".substr(0, 2)
+--- fault this cut would leave half of
+
+=== substring from the start of the second pair
+"a😀b😀".substring(4)
+--- value
+"😀"
+
+=== substring of a string argument, which JavaScript converts
+"abc".substring("1")
+--- fault staticjs converts only numbers, booleans, null
+
+=== substr of a BigInt start
+"abc".substr(1n)
+--- fault JavaScript throws a TypeError where a
+
+=== isWellFormed and toWellFormed of every kind of string
+["", "abc", "héllo", "a😀b", "😀"].map((s) => [s.isWellFormed(), s.toWellFormed(), s.toWellFormed() === s, s.isWellFormed(1, 2)])
+--- value
+[[true,"",true,true],[true,"abc",true,true],[true,"héllo",true,true],[true,"a😀b",true,true],[true,"😀",true,true]]
