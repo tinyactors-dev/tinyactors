@@ -308,10 +308,6 @@ typedef struct ta_host_message {
 } ta_host_message;
 TA_API ta_status ta_host_message_init(ta_host *h, const ta_effect *effect, uint64_t revision,
                                       uint32_t index, ta_host_message *out);
-/* Neutral JSON envelope; data is already encoded by the datamodel (empty:
- * absent). Returns required bytes excluding NUL; writes only if capacity>length. */
-TA_API size_t ta_host_envelope_json(const ta_envelope *environment, ta_string_view data,
-                                    char *buffer, size_t capacity);
 
 /* Add a peer (connected). Its id and reach become routes to it; an id that
  * already has a peer replaces it (the newer connection wins). */

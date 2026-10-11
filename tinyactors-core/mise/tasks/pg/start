@@ -1,8 +1,0 @@
-#!/usr/bin/env ruby
-#MISE description="PostgreSQL binding: run an instance with the extension for development (127.0.0.1:54320, database tinyactors)"
-#MISE depends=["pg:build"]
-# vim:ft=ruby
-
-require_relative '../../core'
-
-Core.run('bash', 'scripts/start.sh', chdir: Core::ROOT.join('bindings/postgres'))

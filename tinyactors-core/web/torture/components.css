@@ -680,63 +680,6 @@ a {
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-/* ---- external services (tb-service) */
-.service-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-bottom: var(--space-3);
-}
-.service-head .panel-title {
-  margin-bottom: 0;
-}
-.service-facts {
-  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
-  gap: var(--space-3);
-  margin-bottom: 0;
-}
-.service-actions {
-  margin-top: var(--space-3);
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-.service-actions .hint {
-  margin: 0;
-}
-.service-how code {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-.services {
-  display: grid;
-  gap: var(--space-4);
-  margin-bottom: var(--space-6);
-}
-.chips li.needs {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--text);
-}
-.chips li.needs::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-3);
-}
-.chips li.needs[data-tone="ok"]::before {
-  background: var(--ok);
-}
-.chips li.needs[data-tone="warn"]::before {
-  background: var(--warn);
-}
-.chips li.needs[data-tone="danger"]::before {
-  background: var(--danger);
-}
 .meters {
   display: grid;
   grid-template-columns: 1fr 1fr;

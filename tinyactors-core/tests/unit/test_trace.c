@@ -1,8 +1,6 @@
 /* ta_trace values: span IDs, traceparent text, the generator and sampling,
  * against the shared vectors tests/conformance/span_ids.json and
- * traceparent.json (the JS bindings run the same files through
- * tests/conformance/run_js.mjs). The vectors are read with quickjs (JSON
- * only). */
+ * traceparent.json. The vectors are read with quickjs (JSON only). */
 #include "../harness/harness.h"
 #include <tinyactors/trace.h>
 #include "quickjs.h"

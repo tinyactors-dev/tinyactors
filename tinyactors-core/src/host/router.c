@@ -18,7 +18,6 @@
 #include "host/host_internal.h"
 
 #include "base/format.h"
-#include "base/json.h"
 #include "base/memory.h"
 
 #define DEDUPLICATION_WINDOW 4096u /* message ids remembered per host (FIFO) */
@@ -701,57 +700,6 @@ ta_status ta_host_message_init(ta_host *host, const ta_effect *effect, uint64_t 
     envelope->traceparent.length =
         ta_traceparent_format(&effect->trace, message->traceparent, TA_TRACEPARENT_LENGTH);
     return TA_OK;
-}
-
-size_t ta_host_envelope_json(const ta_envelope *envelope, ta_string_view data, char *buffer,
-                             size_t capacity) {
-    static const ta_string_view keys[] = {VIEW("target"),     VIEW("name"),       VIEW("origin"),
-                                          VIEW("origintype"), VIEW("sendid"),     VIEW("msgid"),
-                                          VIEW("dedup"),      VIEW("traceparent")};
-    ta_string_view values[] = {envelope->target,
-                               envelope->name,
-                               envelope->origin,
-                               envelope->origintype,
-                               envelope->sendid,
-                               envelope->msgid,
-                               envelope->deduplication_key,
-                               envelope->traceparent};
-    size_t need = 0;
-    for (int pass = 0; pass < 2; pass++) {
-        char *out = pass ? buffer : NULL;
-        size_t n = 1;
-        if (out) out[0] = '{';
-        for (uint32_t i = 0; i < 8; i++) {
-            if (i >= 3 && !values[i].length) continue;
-            if (i) {
-                if (out) out[n] = ',';
-                n++;
-            }
-            n += ta_json_write_string(out ? out + n : NULL, keys[i]);
-            if (out) out[n] = ':';
-            n++;
-            n += ta_json_write_string(out ? out + n : NULL, values[i]);
-        }
-        if (data.length) {
-            if (out) {
-                ta_memcpy(out + n, ",\"data\":", 8);
-                ta_memcpy(out + n + 8, data.pointer, data.length);
-            }
-            n += 8 + data.length;
-        }
-        char tail_bytes[8 + TA_FORMAT_U64_MAX + 1]; /* ,"hops":<n>} */
-        ta_text tail = ta_text_init(tail_bytes, sizeof tail_bytes);
-        ta_text_append(&tail, (ta_string_view){",\"hops\":", 8});
-        ta_text_append_u64(&tail, envelope->hops);
-        ta_text_append(&tail, (ta_string_view){"}", 1});
-        if (out) {
-            ta_memcpy(out + n, tail_bytes, tail.length);
-            out[n + tail.length] = 0;
-        }
-        need = n + tail.length;
-        if (!buffer || capacity <= need) break;
-    }
-    return need;
 }
 
 /* ---- peers --------------------------------------------------------------------------- */

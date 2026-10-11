@@ -10,15 +10,14 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createServer } from 'node:net';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../../..');
 const bench = process.env.TORTURE_BENCH || path.join(root, 'build/dev/bin/torture-bench');
 
-function startBench(scenario, args = [], env = {}) {
+function startBench(scenario, args = []) {
   const where = scenario ? [path.isAbsolute(scenario) ? scenario : path.join(here, '..', 'scenarios', scenario)] : ['--scenarios', path.join(here, '..', 'scenarios')];
-  const p = spawn(bench, [...where, '--port', '0', '--quiet', '--scale', '0.05', ...args], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
+  const p = spawn(bench, [...where, '--port', '0', '--quiet', '--scale', '0.05', ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '';
   p.stdout.on('data', (d) => (stdout += d));
   const exited = new Promise((resolve) => p.on('exit', (code) => resolve({ code, stdout })));
@@ -66,7 +65,7 @@ test('dashboard files are served with the right types', async () => {
   try {
     const port = await b.port;
     const base = `http://127.0.0.1:${port}`;
-    for (const [file, type] of [['/', 'text/html'], ['/chamber.html', 'text/html'], ['/app.js', 'text/javascript'], ['/home.js', 'text/javascript'], ['/service.js', 'text/javascript'], ['/tokens.css', 'text/css'], ['/components.css', 'text/css'], ['/page.css', 'text/css']]) {
+    for (const [file, type] of [['/', 'text/html'], ['/chamber.html', 'text/html'], ['/app.js', 'text/javascript'], ['/home.js', 'text/javascript'], ['/tokens.css', 'text/css'], ['/components.css', 'text/css'], ['/page.css', 'text/css']]) {
       const r = await fetch(base + file);
       assert.equal(r.status, 200, file);
       assert.ok(r.headers.get('content-type').startsWith(type), `${file}: ${r.headers.get('content-type')}`);
@@ -74,9 +73,9 @@ test('dashboard files are served with the right types', async () => {
     assert.equal((await fetch(`${base}/nope.js`)).status, 404);
     assert.equal((await fetch(`${base}/../etc/passwd`)).status, 404 /* normalized by fetch */);
     // every custom element has a <template id> in the page that defines it
-    for (const [page, script, min] of [['/chamber.html', '/app.js', 8], ['/', '/home.js', 4]]) {
+    for (const [page, script, min] of [['/chamber.html', '/app.js', 8], ['/', '/home.js', 3]]) {
       const html = await (await fetch(base + page)).text();
-      const js = (await (await fetch(base + script)).text()) + (await (await fetch(`${base}/service.js`)).text());
+      const js = await (await fetch(base + script)).text();
       const defined = [...js.matchAll(/customElements\.define\('([a-z-]+)'/g)].map((m) => m[1]);
       assert.ok(defined.length >= min, `custom elements in ${script}`);
       for (const name of defined) assert.match(html, new RegExp(`<template id="${name}">`), `${name} in ${page}`);
@@ -97,7 +96,7 @@ test('dashboard files are served with the right types', async () => {
         for (const m of src.matchAll(/^import (?:[^'"]* from )?'\.\/([^']+)'/gm)) todo.push(m[1]);
         for (const m of src.matchAll(/fetch\('([^']+\.css)'\)/g)) todo.push(m[1]);
       }
-      assert.ok(graph.has('components.css') && graph.size >= 4, `${page}: ${[...graph]}`);
+      assert.ok(graph.has('components.css') && graph.size >= 3, `${page}: ${[...graph]}`);
       for (const f of graph) assert.ok(named.has(f), `${page} does not preload ${f}`);
       assert.doesNotMatch(html, /<template[^]*<link rel="stylesheet"/, `${page}: a template links a stylesheet`);
     }
@@ -181,36 +180,6 @@ test('home page: scenario catalog, and opening a scenario switches the bench', a
   }
 });
 
-test('services: PostgreSQL status over HTTP and the WebSocket', async () => {
-  const b = startBench(null);
-  try {
-    const port = await b.port;
-    const STATES = ['unknown', 'unavailable', 'starting', 'missing', 'available', 'failed'];
-    const services = await (await fetch(`http://127.0.0.1:${port}/api/services`)).json();
-    assert.ok(STATES.includes(services.postgres.state), services.postgres.state);
-    assert.equal(services.postgres.address, '127.0.0.1:54320');
-    assert.equal(services.postgres.start, 'mise run pg:start');
-    const catalog = await (await fetch(`http://127.0.0.1:${port}/api/scenarios`)).json();
-    assert.ok(STATES.includes(catalog.services.postgres.state));
-    const pg = catalog.scenarios.find((e) => e.id === 'postgres');
-    assert.deepEqual(pg.scenario.services, ['postgres']);
-    // pushed on connect, and probed live (a known state within a few seconds)
-    const c = client(port);
-    await c.opened;
-    const first = await c.next((m) => m.type === 'service');
-    assert.equal(first.name, 'postgres');
-    const probed = await c.next((m) => m.type === 'service' && m.state !== 'unknown', 5000).catch(() => first);
-    assert.ok(STATES.includes(probed.state));
-    // unknown services are ignored (no crash, no state change)
-    c.ws.send(JSON.stringify({ cmd: 'start-service', name: 'nope' }));
-    assert.equal((await fetch(`http://127.0.0.1:${port}/api/services`)).status, 200);
-    c.ws.close();
-  } finally {
-    b.p.kill('SIGTERM');
-    await b.exited;
-  }
-});
-
 test('a busy scenario opened from the catalog streams at once', async () => {
   // chaos keeps its system busy every turn; the bench must still serve the
   // network after a switch, when the scenario clock restarts at 0
@@ -227,7 +196,7 @@ test('a busy scenario opened from the catalog streams at once', async () => {
     const ms = Date.now() - t0;
     assert.ok(ms < 2500, `first chaos sample after ${ms} ms`);
     const t1 = Date.now();
-    assert.equal((await fetch(`http://127.0.0.1:${port}/api/services`)).status, 200);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/scenarios`)).status, 200);
     assert.ok(Date.now() - t1 < 1000, 'HTTP answers while chaos runs');
     c.ws.close();
   } finally {
@@ -236,66 +205,20 @@ test('a busy scenario opened from the catalog streams at once', async () => {
   }
 });
 
-test('PostgreSQL Promises: FIFO, errors, async finish/checks, cancellation on switch', { timeout: 15000 }, async () => {
+test('async finish and checks: a Promise of false fails', { timeout: 15000 }, async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'tb-async-'));
   writeFileSync(path.join(dir, 'scenario.json'), JSON.stringify({ name: 'async', scripts: ['setup.js'] }));
   writeFileSync(path.join(dir, 'setup.js'), `
-    let rows;
-    bench.after(0, async () => {
-      const a = await bench.pg.query('one');
-      if (a[0].value !== 'one') throw Error('wrong first result');
-      rows = await Promise.all([bench.pg.query('two'), bench.pg.query('three')]);
-      try { await bench.pg.query('bad'); throw Error('no SQL error'); }
-      catch (e) { if (e.message !== 'deliberate SQL error') throw e; }
-      await bench.pg.query('after');
-    });
+    const later = async (value) => value;
     bench.onFinish(async () => {
-      const r = await bench.pg.query('finish');
-      bench.result({ value: r[0].value });
+      bench.result({ value: await later('finish') });
     });
-    bench.check('FIFO results', () => rows[0][0].value === 'two' && rows[1][0].value === 'three');
-    bench.check('async SQL check', async () => (await bench.pg.query('check'))[0].value === 'check');
+    bench.check('async check', async () => (await later('check')) === 'check');
     bench.check('intentional async false', async () => false);
   `);
-  const frame = (type, body) => {
-    const h = Buffer.alloc(5); h[0] = type.charCodeAt(0); h.writeUInt32BE(body.length + 4, 1);
-    return Buffer.concat([h, body]);
-  };
-  const ready = frame('Z', Buffer.from('I'));
-  const result = (value) => {
-    const column = Buffer.concat([Buffer.from([0, 1]), Buffer.from('value\0'), Buffer.alloc(18)]);
-    const data = Buffer.alloc(6); data.writeUInt16BE(1); data.writeUInt32BE(Buffer.byteLength(value), 2);
-    return Buffer.concat([frame('T', column), frame('D', Buffer.concat([data, Buffer.from(value)])), ready]);
-  };
-  const sockets = new Set(), queries = [];
-  const server = createServer((s) => {
-    sockets.add(s); s.on('close', () => sockets.delete(s)); s.on('error', () => {});
-    let input = Buffer.alloc(0), startup = true;
-    s.on('data', (data) => {
-      input = Buffer.concat([input, data]);
-      while (input.length >= (startup ? 4 : 5)) {
-        const length = input.readUInt32BE(startup ? 0 : 1) + (startup ? 0 : 1);
-        if (input.length < length) break;
-        const msg = input.subarray(0, length); input = input.subarray(length);
-        if (startup) { startup = false; s.write(Buffer.concat([frame('R', Buffer.alloc(4)), ready])); continue; }
-        const sql = msg.subarray(5, -1).toString();
-        queries.push(sql);
-        if (sql === 'hang') continue;
-        const bytes = sql === 'bad' ? Buffer.concat([frame('E', Buffer.from('Mdeliberate SQL error\0\0')), ready]) : result(sql);
-        // Deliberately split headers, field lengths and rows across loop turns.
-        let i = 0;
-        const timer = setInterval(() => {
-          if (s.destroyed || i >= bytes.length) return clearInterval(timer);
-          s.write(bytes.subarray(i, i += 3));
-        }, 2);
-      }
-    });
-  });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const env = { BENCH_POSTGRES_PORT: String(server.address().port) };
   let b;
   try {
-    b = startBench(dir, ['--headless', '--duration', '0.05'], env);
+    b = startBench(dir, ['--headless', '--duration', '0.05']);
     // headless has no port announcement
     b.port.catch(() => {});
     const { code, stdout } = await b.exited;
@@ -303,25 +226,9 @@ test('PostgreSQL Promises: FIFO, errors, async finish/checks, cancellation on sw
     const summary = JSON.parse(stdout.trim().split('\n').at(-1));
     assert.deepEqual(summary.failures, ['intentional async false']);
     assert.equal(summary.results[0].value, 'finish');
-    assert.deepEqual(queries, ['one', 'two', 'three', 'bad', 'after', 'finish', 'check']);
-    writeFileSync(path.join(dir, 'setup.js'), `bench.after(0, async () => { await bench.pg.query('hang'); bench.log('stale completion'); });`);
-    b = startBench(dir, ['--duration', '30', '--scenarios', path.join(here, '..', 'scenarios')], env);
-    const port = await b.port;
-    const c = client(port); await c.opened;
-    for (let i = 0; !queries.includes('hang') && i < 100; i++) await new Promise((r) => setTimeout(r, 10));
-    assert.ok(queries.includes('hang'));
-    const start = performance.now();
-    c.ws.send(JSON.stringify({ cmd: 'open', scenario: 'throughput' }));
-    await c.next((m) => m.type === 'hello' && m.id === 'throughput');
-    assert.ok(performance.now() - start < 500, 'switch cancels an unanswered query without waiting');
-    await c.next((m) => m.type === 'sample' && m.systems.some((s) => s.name === 'storm'));
-    assert.ok(!c.messages.some((m) => m.message === 'stale completion'));
-    c.ws.close();
   } finally {
     b?.p.kill('SIGTERM');
     if (b) await b.exited;
-    for (const s of sockets) s.destroy();
-    await new Promise((r) => server.close(r));
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -341,7 +248,7 @@ async function responsiveness(port, seconds = 5) {
     const start = performance.now();
     pending.push(start);
     c.ws.send(JSON.stringify({ cmd: 'open', scenario: '../invalid' }));
-    requests.push(fetch(`http://127.0.0.1:${port}/api/services`, { signal: AbortSignal.timeout(15000) })
+    requests.push(fetch(`http://127.0.0.1:${port}/api/scenarios`, { signal: AbortSignal.timeout(15000) })
       .then(async (r) => { assert.equal(r.status, 200); await r.text(); http.push(performance.now() - start); }));
   }, 20);
   try {
@@ -362,45 +269,27 @@ async function responsiveness(port, seconds = 5) {
   }
 }
 
-for (const workload of ['chaos', 'blackhole', 'postgres-millions']) {
-  test(`responsiveness: ${workload}`, { timeout: 45000 }, async (t) => {
-    const sockets = new Set();
-    const hole = workload === 'blackhole' ? createServer((s) => {
-      sockets.add(s);
-      s.on('close', () => sockets.delete(s));
-    }) : null;
-    if (hole) await new Promise((r) => hole.listen(0, '127.0.0.1', r));
-    const args = ['--duration', '30'];
-    if (workload === 'postgres-millions') args.push('--param', 'reset=1', '--param', 'hot=100000', '--param', 'database=tinyactors_torture_test');
-    const b = startBench(null, args, hole ? { BENCH_POSTGRES_PORT: String(hole.address().port) } : {});
-    let c;
-    try {
-      const port = await b.port;
-      c = client(port);
-      await c.opened;
-      await c.next((m) => m.type === 'hello');
-      if (workload === 'postgres-millions') {
-        const service = await c.next((m) => m.type === 'service' && m.state !== 'unknown');
-        if (service.state !== 'available') return t.skip(`PostgreSQL ${service.state}`);
-      }
-      // Idle first also catches accidentally mixing the scenario and loop clocks.
-      await new Promise((r) => setTimeout(r, 300));
-      if (!hole) c.ws.send(JSON.stringify({ cmd: 'open', scenario: workload }));
-      const result = await responsiveness(port);
-      console.log(`responsiveness ${workload}: ${JSON.stringify(result)}`);
-      for (const [transport, stats] of Object.entries(result))
-        assert.ok(stats.p99 < 50, `${workload} ${transport} p99 ${stats.p99} ms >= 50 ms`);
-      if (workload === 'postgres-millions')
-        await c.next((m) => m.type === 'log' && /100,?000 session actors stored/.test(m.message), 15000);
-    } finally {
-      c?.ws.close();
-      b.p.kill('SIGTERM');
-      await b.exited;
-      for (const s of sockets) s.destroy();
-      if (hole) await new Promise((r) => hole.close(r));
-    }
-  });
-}
+test('responsiveness: chaos', { timeout: 45000 }, async () => {
+  const b = startBench(null, ['--duration', '30']);
+  let c;
+  try {
+    const port = await b.port;
+    c = client(port);
+    await c.opened;
+    await c.next((m) => m.type === 'hello');
+    // Idle first also catches accidentally mixing the scenario and loop clocks.
+    await new Promise((r) => setTimeout(r, 300));
+    c.ws.send(JSON.stringify({ cmd: 'open', scenario: 'chaos' }));
+    const result = await responsiveness(port);
+    console.log(`responsiveness chaos: ${JSON.stringify(result)}`);
+    for (const [transport, stats] of Object.entries(result))
+      assert.ok(stats.p99 < 50, `chaos ${transport} p99 ${stats.p99} ms >= 50 ms`);
+  } finally {
+    c?.ws.close();
+    b.p.kill('SIGTERM');
+    await b.exited;
+  }
+});
 
 /* ---- layout, measured in headless Chrome over the DevTools protocol (skipped without Chrome) */
 

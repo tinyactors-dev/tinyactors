@@ -1,1 +1,0 @@
-pgbank.hotSpot(20);

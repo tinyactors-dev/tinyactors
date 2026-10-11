@@ -1,8 +1,0 @@
-#!/usr/bin/env ruby
-#MISE description="PostgreSQL binding: millions of actors on the pg:start instance: spawn rate, idle run(), hot and cold touches, one hot actor, all timers due, memory (TA_SCALE_N, default 2,000,000)"
-#MISE depends=["pg:build"]
-# vim:ft=ruby
-
-require_relative '../../core'
-
-Core.run('bash', 'test/scale.sh', chdir: Core::ROOT.join('bindings/postgres'))

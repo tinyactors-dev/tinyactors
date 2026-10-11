@@ -1,5 +1,5 @@
 {
-  "$comment": "Span IDs of step keys (docs/adr/0006 in the repository root, section 2): ta_step_key_span_id, ported bit for bit from 0.1. Every implementation must agree: run by tests/unit/test_trace.c (C) and tests/conformance/run_js.mjs (stepSpanID, which calls the C code). Sessions and macrosteps are strings (lossless beyond 2^53); a key with session 0 is a host's cause and returns its macrostep.",
+  "$comment": "Span IDs of step keys (docs/adr/0006 in the repository root, section 2): ta_step_key_span_id, ported bit for bit from 0.1. Every implementation must agree: run by tests/unit/test_trace.c (C). Sessions and macrosteps are strings (lossless beyond 2^53); a key with session 0 is a host's cause and returns its macrostep.",
   "keys": [
     { "session": "1", "macrostep": "1", "microstep": 0, "span": "049e7f1d71e53363" },
     { "session": "1", "macrostep": "1", "microstep": 1, "span": "304917c348f35bf4" },

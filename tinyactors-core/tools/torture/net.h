@@ -23,7 +23,6 @@ bench_net *bench_net_listen(bench_loop *loop, const char *host, int port, const 
 int bench_net_port(const bench_net *n);
 void bench_net_send(bench_net *n, int client, const char *message, size_t length);
 void bench_net_broadcast(bench_net *n, const char *message, size_t length);
-int bench_net_clients(const bench_net *n); /* open WebSockets */
 void bench_net_close(bench_net *n);
 
 #endif

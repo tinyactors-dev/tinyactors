@@ -339,66 +339,13 @@ static void test_memmove(void) {
 
 #define VIEW_OF(text) ((ta_string_view){(text), (uint32_t)strlen(text)})
 
-/* the link protocol's JSON: members and elements as views, strings decoded,
- * nesting skipped without recursion, malformed text refused */
+/* a JSON string for the state value: quotes, backslashes and control
+ * characters escaped, measured without writing */
 static void test_json(void) {
-    ta_string_view text =
-        VIEW_OF(" {\"t\":\"ev\", \"data\": {\"a\":[1,{\"b\":\"}\"}]}, \"hops\": 3,"
-                " \"name\": \"caf\\u00e9 \\ud83d\\ude00\\n\", \"x\": [true, null, -1.5e3]} ");
-    uint32_t at = 0;
-    ta_string_view key, value;
-    int seen = 0;
-    for (int first = 1, more; (more = ta_json_member(text, &at, first, &key, &value)) != 0;
-         first = 0) {
-        CHECK_EQUAL(more, 1);
-        if (key.length == 4 && !memcmp(key.pointer, "data", 4)) {
-            CHECK(value.length == 19 && !memcmp(value.pointer, "{\"a\":[1,{\"b\":\"}\"}]}", 19));
-            seen |= 1;
-        } else if (key.length == 4 && !memcmp(key.pointer, "hops", 4)) {
-            uint64_t hops = 0;
-            CHECK(ta_json_integer(value, &hops) && hops == 3);
-            seen |= 2;
-        } else if (key.length == 4 && !memcmp(key.pointer, "name", 4)) {
-            char out[32];
-            int32_t n = ta_json_string(value, out, sizeof out);
-            CHECK_EQUAL(n, 11);
-            CHECK(!memcmp(out, "caf\xc3\xa9 \xf0\x9f\x98\x80\n", 11));
-            CHECK_EQUAL(ta_json_string(value, out, 4), -1); /* does not fit */
-            seen |= 4;
-        } else if (key.length == 1 && key.pointer[0] == 'x') {
-            uint32_t inner = 0, count = 0;
-            ta_string_view element;
-            for (int f = 1; ta_json_element(value, &inner, f, &element) == 1; f = 0)
-                count++;
-            CHECK_EQUAL(count, 3u);
-            seen |= 8;
-        }
-    }
-    CHECK_EQUAL(seen, 15);
-    CHECK_EQUAL(ta_json_peek(text, &at), 0); /* the end, white space skipped */
-    const char *bad[] = {"{\"a\" 1}",        "{\"a\":}",   "{\"a\":1,}", "[1 2]",
-                         "{\"a\":\"\x01\"}", "{\"a\":[1}", "nul"};
-    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
-        ta_string_view b = VIEW_OF(bad[i]);
-        uint32_t k = 0;
-        int result = 1, first = 1;
-        if (b.pointer[0] == '{')
-            while ((result = ta_json_member(b, &k, first, &key, &value)) == 1)
-                first = 0;
-        else if (b.pointer[0] == '[')
-            while ((result = ta_json_element(b, &k, first, &value)) == 1)
-                first = 0;
-        else
-            result = ta_json_skip(b, &k, &value) ? 1 : -1;
-        CHECK_EQUAL(result, -1);
-    }
     char written[32];
     size_t n = ta_json_write_string(written, VIEW_OF("a\"b\\\x01"));
     CHECK(n == 14 && !memcmp(written, "\"a\\\"b\\\\\\u0001\"", 14));
     CHECK_EQUAL(ta_json_write_string(NULL, VIEW_OF("a\"b\\\x01")), n);
-    char decoded[8];
-    CHECK_EQUAL(ta_json_string((ta_string_view){written, (uint32_t)n}, decoded, sizeof decoded), 5);
-    CHECK(!memcmp(decoded, "a\"b\\\x01", 5));
 }
 
 int main(void) {

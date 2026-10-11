@@ -292,27 +292,6 @@
       return true;
     },
     systems: () => [...systems.keys()],
-    /** The PostgreSQL service (bindings/postgres, `mise run pg:start`): scenarios that
-     *  declare "services": ["postgres"] put durable actors under load there. */
-    pg: {
-      /** { state: unknown|unavailable|starting|missing|available|failed, version, extension, detail } */
-      status: () => JSON.parse(H.pgStatus()),
-      available: () => JSON.parse(H.pgStatus()).state === 'available',
-      /** Promise of rows of the last statement (column -> text or null).
-       * Queries are FIFO; rejects on SQL, connection or timeout errors. */
-      query: async (sql) => JSON.parse(await H.pgQuery(sql)),
-      /** pgbench in the background (`clients` connections for `seconds`, the given
-       *  script); stopped with the scenario. Returns its pid. */
-      load: ({ clients = 4, seconds = 60, script }) => H.pgLoad(clients, seconds, script),
-      stopLoad: () => H.pgStopLoad(),
-      /** Send later queries and loads to another database of the instance (a
-       *  scenario's own); back to tinyactors when the scenario stops. */
-      use: (db) => H.pgUse(db),
-      /** `mise run pg:start` (also the dashboard's Start button). */
-      start: () => H.pgStart(),
-      /** `mise run pg:restart` in the background (a fast shutdown, then up again). */
-      restart: () => H.pgRestart(),
-    },
     /** Hibernate (unload to the bench's blob file) actors of `system` that did not run since the
      *  previous sweep: a CLOCK sweep over up to `scan` slots, at most `max` actors. Woken
      *  automatically when they get work (TA_EFFECT_WAKE). Returns the number unloaded. */
@@ -506,7 +485,6 @@
       systems: [...systems.keys()],
       mutations: [...mutations.values()].map((m) => ({ id: m.id, title: m.title || m.id, description: m.description || '' })),
       charts: scenario && scenario.charts,
-      services: (scenario && scenario.services) || [],
     });
   globalThis.__hostSend = (type, msg) => {
     const fn = ioprocs.get(type);

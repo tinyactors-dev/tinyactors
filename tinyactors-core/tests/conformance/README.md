@@ -1,16 +1,9 @@
 # Host conformance scenarios
 
 Binding-independent scenarios: SCXML documents (ECMAScript datamodel) plus
-host operations and the outcomes every host must produce. Each host has a
-driver that runs every `*.json` here on simulated time:
-
-| host | driver | run |
-|---|---|---|
-| C (`ta_host` + quickjs-ng datamodel) | `tests/conformance/run_c.c` | `build/dev/tests/conformance-c tests/conformance` |
-| Node.js addon | `tests/conformance/run_js.mjs` | `node tests/conformance/run_js.mjs --binding node` |
-| wasm / browser binding | `tests/conformance/run_js.mjs` | `node tests/conformance/run_js.mjs --binding web` |
-
-`mise run conformance` runs all three.
+host operations and the outcomes every host must produce, run on simulated
+time by `tests/conformance/run_c.c` (`ta_host` and the quickjs-ng
+datamodel), the `conformance` program of `mise run test`.
 
 ## Format
 
@@ -46,7 +39,7 @@ Expectations (all optional):
 - `done`: `{name: output}` — the actor finished with that `<donedata>` (`true`: no data)
 - `hibernated` / `awake`: actor names in / not in hibernation
 
-## Protocol vectors and link transcripts
+## Protocol vectors
 
 Beside the scenarios, the cross-system protocol (`docs/protocol.md`) has its
 own shared files, run by every implementation:
@@ -57,17 +50,3 @@ own shared files, run by every implementation:
   (C: `test_wire_values` in `tests/unit/test_datamodel_ecmascript.c`).
 - `span_ids.json` and `traceparent.json` — trace values: the span ID of a
   step key, and W3C `traceparent` text (C: `tests/unit/test_trace.c`).
-- `links/*.json` — link protocol transcripts. The binding's system serves
-  links (`serve`: `serveLinks` options) with the `spawn`ed actors; the driver
-  plays the peer on a fake transport — once on a text transport (one JSON
-  text per message, reported as `links/<file>`), once on a byte stream in
-  length-prefixed frames (`framed:links/<file>`; consecutive `in` frames are
-  written together, cut into chunks of odd sizes):
-
-  | step | meaning |
-  |---|---|
-  | `{"in": frame}` | the peer sends a frame |
-  | `{"out": frame}` | the next frame the system sent matches (listed fields only; `"~regex"` strings) |
-  | `{"close": true}` / `{"connect": true}` | the connection drops / a new one opens |
-  | `{"advance": ms}` | simulated time |
-  | `{"expect": {"logs": [...], "silent": true}}` | `<log>` output since the last expect; nothing else was sent |

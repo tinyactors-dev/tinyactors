@@ -1,7 +1,6 @@
 /* ta_address: the one address parser (docs/protocol.md, Addresses), against
- * the shared vectors tests/conformance/addresses.json — the JS bindings run
- * the same file (tests/conformance/run_js.mjs). The vectors are read with
- * quickjs (JSON only, no evaluation of code). */
+ * the shared vectors tests/conformance/addresses.json. The vectors are read
+ * with quickjs (JSON only, no evaluation of code). */
 #include "../harness/harness.h"
 #include <tinyactors/address.h>
 #include "quickjs.h"

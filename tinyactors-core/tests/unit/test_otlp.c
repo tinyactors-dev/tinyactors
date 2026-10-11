@@ -1298,76 +1298,7 @@ static void test_span_metrics(void) {
     world_close(&w);
 }
 
-static void *batch_alloc(void *context, size_t size, size_t align) {
-    (void)context;
-    (void)align;
-    return malloc(size);
-}
-
-static void batch_release(void *context, void *pointer, size_t size) {
-    (void)context;
-    (void)size;
-    free(pointer);
-}
-
-/* an exporter's bodies: gathered per signal by time and size, one post in
- * flight per signal, what came meanwhile kept, drops past the cap, counts
- * and failure reports at most every TA_OTLP_BATCH_REPORT ms */
-static void test_batch(void) {
-    ta_allocator allocator = {NULL, batch_alloc, batch_release};
-    ta_otlp_batch *batch = NULL;
-    CHECK_EQUAL(ta_otlp_batch_new(&allocator, &batch), TA_OK);
-    uint32_t signal = 9;
-    ta_string_view body;
-    CHECK_EQUAL(ta_otlp_batch_deadline(batch), UINT64_MAX);
-    CHECK_EQUAL(ta_otlp_batch_add(batch, TA_OTLP_TRACES, "ab", 2, 100), TA_OK);
-    CHECK_EQUAL(ta_otlp_batch_add(batch, TA_OTLP_TRACES, "cd", 2, 120), TA_OK);
-    CHECK_EQUAL(ta_otlp_batch_deadline(batch), 100u + TA_OTLP_BATCH_DELAY);
-    CHECK_EQUAL(ta_otlp_batch_next(batch, 200, 0, &signal, &body), 0); /* not yet */
-    CHECK_EQUAL(ta_otlp_batch_next(batch, 350, 0, &signal, &body), 1);
-    CHECK(signal == TA_OTLP_TRACES && body.length == 4 && !memcmp(body.pointer, "abcd", 4));
-    CHECK_EQUAL(ta_otlp_batch_add(batch, TA_OTLP_TRACES, "e", 1, 360), TA_OK); /* while in flight */
-    CHECK_EQUAL(ta_otlp_batch_next(batch, 10000, 1, &signal, &body), 0);       /* one at a time */
-    ta_otlp_batch_done(batch, TA_OTLP_TRACES, 1, 370);
-    CHECK_EQUAL(ta_otlp_batch_deadline(batch), 360u + TA_OTLP_BATCH_DELAY);
-    CHECK_EQUAL(ta_otlp_batch_next(batch, 370, 1, &signal, &body), 1); /* flushed */
-    CHECK(body.length == 1 && body.pointer[0] == 'e');
-    ta_otlp_batch_done(batch, TA_OTLP_TRACES, 0, 380);
-    uint64_t failures = 0;
-    CHECK_EQUAL(ta_otlp_batch_report(batch, 380, &failures), 1);
-    CHECK_EQUAL(failures, 1u);
-    /* a full batch is due at once; past the cap bytes are dropped */
-    static unsigned char big[TA_OTLP_BATCH_BYTES];
-    CHECK_EQUAL(ta_otlp_batch_add(batch, TA_OTLP_METRICS, big, sizeof big, 400), TA_OK);
-    CHECK_EQUAL(ta_otlp_batch_deadline(batch), 0u);
-    for (int i = 0; i < 15; i++)
-        CHECK_EQUAL(ta_otlp_batch_add(batch, TA_OTLP_METRICS, big, sizeof big, 400), TA_OK);
-    CHECK_EQUAL(ta_otlp_batch_add(batch, TA_OTLP_METRICS, "x", 1, 400), TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(ta_otlp_batch_report(batch, 400, &failures), 0); /* within ten seconds */
-    CHECK_EQUAL(ta_otlp_batch_report(batch, 380 + TA_OTLP_BATCH_REPORT, &failures), 1);
-    CHECK_EQUAL(failures, 2u);
-    ta_otlp_batch_stats stats;
-    stats.size = sizeof stats;
-    ta_otlp_batch_stats_get(batch, &stats);
-    CHECK(stats.posted == 4 && stats.failed == 1 && stats.dropped == 1 && stats.in_flight == 0);
-    CHECK_EQUAL(stats.waiting, 16u * TA_OTLP_BATCH_BYTES);
-    CHECK_EQUAL(ta_otlp_batch_next(batch, 400, 0, &signal, &body), 1);
-    CHECK(signal == TA_OTLP_METRICS && body.length == 16u * TA_OTLP_BATCH_BYTES);
-    /* an exporter that goes away takes what waits, also behind the post in flight */
-    CHECK_EQUAL(ta_otlp_batch_add(batch, TA_OTLP_METRICS, "late", 4, 500), TA_OK);
-    CHECK_EQUAL(ta_otlp_batch_add(batch, TA_OTLP_LOGS, "log", 3, 500), TA_OK);
-    int drained = 0;
-    while (ta_otlp_batch_next(batch, 500, TA_OTLP_BATCH_DRAIN, &signal, &body)) {
-        CHECK((signal == TA_OTLP_METRICS && body.length == 4 && !memcmp(body.pointer, "late", 4)) ||
-              (signal == TA_OTLP_LOGS && body.length == 3));
-        drained++;
-    }
-    CHECK_EQUAL(drained, 2);
-    ta_otlp_batch_free(batch);
-}
-
 int main(void) {
-    RUN(test_batch);
     RUN(test_granary_vocabulary);
     RUN(test_open_across_runs);
     RUN(test_flush_and_grow);

@@ -724,18 +724,14 @@ static void test_durable_message(void) {
     CHECK_EQUAL(ta_host_new(&config, &host), TA_OK);
     CHECK_EQUAL(ta_host_message_init(host, &effect, 17, 3, &b), TA_OK);
     CHECK(!memcmp(a.envelope.msgid.pointer, b.envelope.msgid.pointer, a.envelope.msgid.length));
-    char json[1024];
-    size_t n = ta_host_envelope_json(&a.envelope, (ta_string_view){"[1,2]", 5}, NULL, 0);
-    memset(json, '!', sizeof json);
-    CHECK_EQUAL(ta_host_envelope_json(&a.envelope, (ta_string_view){"[1,2]", 5}, json, n), n);
-    CHECK(json[0] == '!');
-    CHECK_EQUAL(ta_host_envelope_json(&a.envelope, (ta_string_view){"[1,2]", 5}, json, n + 1), n);
-    CHECK_EQUAL(strlen(json), n);
-    CHECK(!strcmp(json, "{\"target\":\"tinyactors://web/@x\",\"name\":\"q\\\"\\u000a\","
-                        "\"origin\":\"tinyactors://db/#_scxml_42\","
-                        "\"origintype\":\"http://www.w3.org/TR/scxml/#SCXMLEventProcessor\","
-                        "\"sendid\":\"same\",\"msgid\":\"tinyactors://db/#_scxml_42/17.3\","
-                        "\"data\":[1,2],\"hops\":0}"));
+#define VIEW_IS(view, text) ((view).length == strlen(text) && !memcmp((view).pointer, text, strlen(text)))
+    CHECK(VIEW_IS(a.envelope.target, "tinyactors://web/@x"));
+    CHECK(VIEW_IS(a.envelope.name, "q\"\n"));
+    CHECK(VIEW_IS(a.envelope.origin, "tinyactors://db/#_scxml_42"));
+    CHECK(VIEW_IS(a.envelope.origintype, "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"));
+    CHECK(VIEW_IS(a.envelope.sendid, "same"));
+    CHECK_EQUAL(a.envelope.hops, 0u);
+#undef VIEW_IS
     ta_event_in error_event;
     ta_host_error_event(effect.sendid, &error_event);
     CHECK_EQUAL(error_event.flags, TA_EVENT_IN_ERROR_COMMUNICATION);
@@ -965,26 +961,6 @@ static void test_trace_across_systems(void) {
     close_all();
 }
 
-/* The envelope's traceparent is on the wire. */
-static void test_trace_envelope_json(void) {
-    ta_envelope envelope;
-    memset(&envelope, 0, sizeof envelope);
-    envelope.size = sizeof envelope;
-    envelope.target = (ta_string_view){"tinyactors://b/@echo", 20};
-    envelope.name = (ta_string_view){"ping", 4};
-    envelope.origin = (ta_string_view){"tinyactors://a/#_scxml_1", 24};
-    envelope.msgid = (ta_string_view){"m1", 2};
-    const char *parent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
-    envelope.traceparent = (ta_string_view){parent, (uint32_t)strlen(parent)};
-    char json[512];
-    size_t n = ta_host_envelope_json(&envelope, (ta_string_view){0, 0}, json, sizeof json);
-    CHECK(n < sizeof json);
-    json[n < sizeof json ? n : sizeof json - 1] = 0;
-    CHECK(strstr(json,
-                 "\"traceparent\":\"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01\"") !=
-          NULL);
-}
-
 /* Two segments of one host (two images): a send between them keeps the
  * trace, and both stamp their records on the host's one fuel clock. */
 static void test_trace_two_segments(void) {
@@ -1099,7 +1075,6 @@ int main(void) {
     RUN(test_address_grammar);
     RUN(test_system_id);
     RUN(test_trace_across_systems);
-    RUN(test_trace_envelope_json);
     RUN(test_trace_two_segments);
     RUN(test_trace_set);
     TEST_MAIN_END();

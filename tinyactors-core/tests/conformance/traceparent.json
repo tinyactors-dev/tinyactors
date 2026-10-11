@@ -1,5 +1,5 @@
 {
-  "$comment": "W3C traceparent vectors (docs/adr/0006 in the repository root, section 2): ta_traceparent_parse and ta_traceparent_format. Run by tests/unit/test_trace.c (C) and tests/conformance/run_js.mjs (parseTraceparent, formatTraceparent, which call the C code). `format` is the text the parsed context formats back to, when it differs from `text`.",
+  "$comment": "W3C traceparent vectors (docs/adr/0006 in the repository root, section 2): ta_traceparent_parse and ta_traceparent_format. Run by tests/unit/test_trace.c (C). `format` is the text the parsed context formats back to, when it differs from `text`.",
   "valid": [
     { "text": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "trace": "4bf92f3577b34da6a3ce929d0e0e4736", "parent": "00f067aa0ba902b7", "flags": 1 },
     { "text": " \t00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00 ", "trace": "4bf92f3577b34da6a3ce929d0e0e4736", "parent": "00f067aa0ba902b7", "flags": 0, "format": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00" },

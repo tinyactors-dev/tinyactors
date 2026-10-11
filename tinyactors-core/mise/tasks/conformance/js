@@ -1,9 +1,0 @@
-#!/usr/bin/env ruby
-#MISE description="Host conformance through the JS bindings: every tests/conformance scenario on the Node.js addon and on the wasm module (the C host runs them in mise run test)"
-#MISE depends=["node:build", "web:build"]
-# vim:ft=ruby
-
-require_relative '../../core'
-
-Core.node_packages
-%w[node web].each { |binding| Core.run('node', 'tests/conformance/run_js.mjs', '--binding', binding) }

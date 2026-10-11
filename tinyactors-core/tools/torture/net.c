@@ -183,13 +183,6 @@ int bench_net_port(const bench_net *net) {
     return net->port;
 }
 
-int bench_net_clients(const bench_net *net) {
-    int k = 0;
-    for (int i = 0; i < MAX_CLIENTS; i++)
-        k += net->clients[i].state == C_WEBSOCKET;
-    return k;
-}
-
 static void drop(client *c) {
     if (c->state == C_FREE) return;
     bench_loop_remove(c->net->loop, c->watch);

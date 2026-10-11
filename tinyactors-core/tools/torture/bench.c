@@ -55,7 +55,6 @@
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 #include "net.h"
-#include "postgres.h"
 
 #ifndef BENCH_SOURCE_DIR
 #define BENCH_SOURCE_DIR "."
@@ -222,24 +221,6 @@ typedef struct bench_hibernate {
 
 static JSValue h_hibernate(JSContext *context, JSValueConst this_value, int argc,
                            JSValueConst *argv);
-static JSValue h_postgres_status(JSContext *context, JSValueConst this_value, int argc,
-                                 JSValueConst *argv);
-static JSValue h_postgres_query(JSContext *context, JSValueConst this_value, int argc,
-                                JSValueConst *argv);
-static JSValue h_postgres_load(JSContext *context, JSValueConst this_value, int argc,
-                               JSValueConst *argv);
-static JSValue h_postgres_stop_load(JSContext *context, JSValueConst this_value, int argc,
-                                    JSValueConst *argv);
-static JSValue h_postgres_start(JSContext *context, JSValueConst this_value, int argc,
-                                JSValueConst *argv);
-static JSValue h_postgres_restart(JSContext *context, JSValueConst this_value, int argc,
-                                  JSValueConst *argv);
-static JSValue h_postgres_use(JSContext *context, JSValueConst this_value, int argc,
-                              JSValueConst *argv);
-static void postgres_stop_loads(void);
-static void postgres_close_connection(void);
-static void postgres_scenario_reset(void);
-static void postgres_status_json(string_builder *b, int with_type);
 
 typedef struct bench_spawn {
     uint64_t session; /* the spawned actor; 0 = empty slot, UINT64_MAX = removed */
@@ -1550,14 +1531,7 @@ static int script_init(void) {
                      {"migrate", h_migrate, 2},
                      {"migration", h_migration, 1},
                      {"versions", h_versions, 1},
-                     {"mtime", h_mtime, 1},
-                     {"pgStatus", h_postgres_status, 0},
-                     {"pgQuery", h_postgres_query, 1},
-                     {"pgLoad", h_postgres_load, 3},
-                     {"pgStopLoad", h_postgres_stop_load, 0},
-                     {"pgStart", h_postgres_start, 0},
-                     {"pgRestart", h_postgres_restart, 0},
-                     {"pgUse", h_postgres_use, 1}};
+                     {"mtime", h_mtime, 1}};
     for (size_t i = 0; i < sizeof functions / sizeof functions[0]; i++)
         JS_SetPropertyStr(B.context, h, functions[i].name,
                           JS_NewCFunction(B.context, functions[i].function, functions[i].name,
@@ -2425,8 +2399,6 @@ static void sample(void) {
 /* ---- scenario lifecycle ---------------------------------------------------------------- */
 
 static void scenario_stop(void) {
-    postgres_stop_loads(); /* the scenario's pgbench processes */
-    postgres_scenario_reset();
     for (int i = 0; i < MAX_SYSTEMS; i++)
         if (B.system[i].live) system_free(&B.system[i]);
     if (B.context) {
@@ -2516,8 +2488,6 @@ static void scenario_finish(void) {
     JS_FreeValue(B.context, summary);
     B.failed |= failed;
     B.finished = 1;
-    postgres_stop_loads();
-    postgres_close_connection();
     for (int i = 0; i < MAX_SYSTEMS; i++)
         if (B.system[i].live) system_free(&B.system[i]);
     for (int i = 0; i < B.timer_count; i++)
@@ -2541,21 +2511,10 @@ static int valid_id(const char *id) {
 /* GET /api/scenarios: { current, state, scenarios: [{ id, scenario }] } */
 static char *on_http(void *user, const char *path, size_t *length, const char **type) {
     (void)user;
-    if (!strcmp(path, "/api/services")) { /* { postgres: {...} } */
-        *type = "application/json";
-        string_builder b = {0};
-        sb_printf(&b, "{\"postgres\":");
-        postgres_status_json(&b, 0);
-        sb_printf(&b, "}");
-        *length = b.length;
-        return b.data;
-    }
     if (strcmp(path, "/api/scenarios")) return NULL;
     *type = "application/json";
     string_builder b = {0};
-    sb_printf(&b, "{\"services\":{\"postgres\":");
-    postgres_status_json(&b, 0);
-    sb_printf(&b, "},\"current\":");
+    sb_printf(&b, "{\"current\":");
     if (B.current[0])
         sb_json_str(&b, B.current, strlen(B.current));
     else
@@ -2600,386 +2559,6 @@ static char *on_http(void *user, const char *path, size_t *length, const char **
     sb_printf(&b, "]}");
     *length = b.length;
     return b.data;
-}
-
-/* ---- the PostgreSQL service (bindings/postgres; `mise run postgres:start`)
- * --------------------------- Scenarios that declare "services": ["postgres"] use the instance the
- * PostgreSQL binding runs in this orb (127.0.0.1:54320, database tinyactors).
- * The bench probes it every second while a dashboard is open and pushes
- * {type: "service"} messages; {cmd: "start-service"} runs `mise run postgres:start`.
- * Scenario scripts query it (bench.postgres.query) and put load on it with
- * background pgbench processes (bench.postgres.load). */
-typedef struct postgres_request {
-    struct postgres_request *next;
-    char *sql;
-    JSValue settle[2];
-} postgres_request;
-static struct {
-    char state[16]; /* unknown | unavailable | starting | missing | available | failed */
-    char detail[300], version[32], extension[16];
-    int port;
-    pid_t starter; /* `mise run postgres:start` while it runs */
-    double next_probe;
-    bench_postgres *connection; /* the scenario's connection */
-    bench_postgres *probe;
-    int wanted, inflight, query_count;
-    postgres_request *first, *last;
-    pid_t loads[16];
-    int load_count;
-    char database[64]; /* the scenario's database (bench.postgres.use); the probe always checks
-                          tinyactors */
-} POSTGRES = {.state = "unknown", .port = 54320, .database = "tinyactors"};
-
-static const char *postgres_repository(void) {
-#ifdef BENCH_REPO_DIR
-    return BENCH_REPO_DIR;
-#else
-    return ".";
-#endif
-}
-
-static void postgres_status_json(string_builder *b, int with_type) {
-    sb_printf(b,
-              "{%s\"name\":\"postgres\",\"state\":\"%s\",\"address\":\"127.0.0.1:%d\",\"version\":",
-              with_type ? "\"type\":\"service\"," : "", POSTGRES.state, POSTGRES.port);
-    sb_json_str(b, POSTGRES.version, strlen(POSTGRES.version));
-    sb_printf(b, ",\"extension\":");
-    sb_json_str(b, POSTGRES.extension, strlen(POSTGRES.extension));
-    sb_printf(b, ",\"detail\":");
-    sb_json_str(b, POSTGRES.detail, strlen(POSTGRES.detail));
-    sb_printf(b, ",\"start\":\"mise run pg:start\"}");
-}
-
-static void postgres_announce(int client) {
-    if (!B.net) return;
-    string_builder b = {0};
-    postgres_status_json(&b, 1);
-    if (client < 0)
-        bench_net_broadcast(B.net, b.data, b.length);
-    else
-        bench_net_send(B.net, client, b.data, b.length);
-    free(b.data);
-}
-
-static void postgres_set(const char *state, const char *detail) {
-    int changed = strcmp(POSTGRES.state, state) || strcmp(POSTGRES.detail, detail);
-    snprintf(POSTGRES.state, sizeof POSTGRES.state, "%s", state);
-    snprintf(POSTGRES.detail, sizeof POSTGRES.detail, "%s", detail);
-    if (changed) postgres_announce(-1);
-}
-
-/* the "key":"value" of a one-row JSON result (no escapes in these values) */
-static void row_field(const char *json, const char *key, char *out, size_t capacity) {
-    char pat[64];
-    snprintf(pat, sizeof pat, "\"%s\":\"", key);
-    const char *p = json ? strstr(json, pat) : NULL;
-    out[0] = 0;
-    if (!p) return;
-    p += strlen(pat);
-    const char *e = strchr(p, '"');
-    if (e && (size_t)(e - p) < capacity) {
-        memcpy(out, p, (size_t)(e - p));
-        out[e - p] = 0;
-    }
-}
-
-static void postgres_probe_done(void *user, const char *json, const char *error) {
-    (void)user;
-    bench_postgres_close(POSTGRES.probe);
-    POSTGRES.probe = NULL;
-    if (error) {
-        if (POSTGRES.starter)
-            postgres_set("starting", "mise run pg:start is setting it up");
-        else if (strstr(error, "does not exist"))
-            postgres_set("missing", "PostgreSQL runs, but has no tinyactors database yet");
-        else
-            postgres_set("unavailable", error);
-        return;
-    }
-    row_field(json, "v", POSTGRES.version, sizeof POSTGRES.version);
-    row_field(json, "e", POSTGRES.extension, sizeof POSTGRES.extension);
-    if (POSTGRES.extension[0])
-        postgres_set("available", "");
-    else
-        postgres_set("missing", "PostgreSQL runs, but the tinyactors extension is not created");
-}
-
-static void postgres_probe(void) {
-    if (POSTGRES.probe) return;
-    POSTGRES.next_probe = bench_loop_now() + 1000;
-    POSTGRES.probe = bench_postgres_connect(B.event_loop, POSTGRES.port, "tinyactors", 300);
-    if (!POSTGRES.probe ||
-        bench_postgres_query(
-            POSTGRES.probe,
-            "SELECT current_setting('server_version') AS v, coalesce((SELECT extversion FROM "
-            "pg_extension WHERE extname = 'tinyactors'), '') AS e",
-            postgres_probe_done, NULL))
-        postgres_probe_done(NULL, NULL, "cannot start PostgreSQL probe");
-}
-
-static void postgres_child_done(void *user, pid_t pid, int status) {
-    if (user) {
-        unlink(user);
-        free(user);
-    }
-    for (int i = 0; i < POSTGRES.load_count; i++)
-        if (POSTGRES.loads[i] == pid) {
-            POSTGRES.loads[i] = POSTGRES.loads[--POSTGRES.load_count];
-            break;
-        }
-    if (POSTGRES.starter == pid) {
-        POSTGRES.starter = 0;
-        POSTGRES.next_probe = 0;
-        if (!WIFEXITED(status) || WEXITSTATUS(status))
-            postgres_set("failed",
-                         "mise failed; see /tmp/torture-pg-start.log or torture-pg-restart.log");
-    }
-}
-
-/* run `mise run postgres:start` in the background (repository root); the probe follows it */
-static void postgres_start(void) {
-    if (POSTGRES.starter || !strcmp(POSTGRES.state, "available")) return;
-    pid_t pid = fork();
-    if (pid == 0) {
-        setpgid(0, 0);
-        if (chdir(postgres_repository())) _exit(126);
-        if (!freopen("/tmp/torture-pg-start.log", "w", stdout)) _exit(126);
-        dup2(STDOUT_FILENO, STDERR_FILENO);
-        execlp("mise", "mise", "run", "pg:start", (char *)NULL);
-        _exit(127);
-    }
-    if (pid > 0) {
-        setpgid(pid, pid);
-        bench_loop_child(B.event_loop, pid, postgres_child_done, NULL);
-        POSTGRES.starter = pid;
-        postgres_set("starting", "mise run pg:start");
-    } else {
-        postgres_set("failed", "cannot start mise");
-    }
-}
-
-static void postgres_stop_loads(void) {
-    for (int i = 0; i < POSTGRES.load_count; i++)
-        bench_loop_terminate(B.event_loop, POSTGRES.loads[i], 1000);
-    POSTGRES.load_count = 0;
-}
-
-static void postgres_close_connection(void) {
-    if (POSTGRES.connection) bench_postgres_close(POSTGRES.connection);
-    POSTGRES.connection = NULL;
-    while (POSTGRES.first) {
-        postgres_request *q = POSTGRES.first;
-        POSTGRES.first = q->next;
-        JS_FreeValue(B.context, q->settle[0]);
-        JS_FreeValue(B.context, q->settle[1]);
-        free(q->sql);
-        free(q);
-    }
-    POSTGRES.last = NULL;
-    POSTGRES.query_count = POSTGRES.inflight = 0;
-}
-
-static void postgres_scenario_reset(void) { /* the next scenario starts on tinyactors */
-    postgres_close_connection();
-    POSTGRES.wanted = 0;
-    snprintf(POSTGRES.database, sizeof POSTGRES.database, "tinyactors");
-}
-
-/* bench.postgres.status() */
-static JSValue h_postgres_status(JSContext *context, JSValueConst this_value, int argc,
-                                 JSValueConst *argv) {
-    (void)this_value;
-    (void)argc;
-    (void)argv;
-    POSTGRES.wanted = 1; /* cached status; the loop probes, including in headless runs */
-    string_builder b = {0};
-    postgres_status_json(&b, 0);
-    JSValue r = JS_NewStringLen(context, b.data, b.length);
-    free(b.data);
-    return r;
-}
-
-static void postgres_query_done(void *user, const char *json, const char *error) {
-    (void)user;
-    postgres_request *q = POSTGRES.first;
-    POSTGRES.first = q->next;
-    if (!POSTGRES.first) POSTGRES.last = NULL;
-    POSTGRES.query_count--;
-    POSTGRES.inflight = 0;
-    JSValue arg;
-    if (error) {
-        arg = JS_NewError(B.context);
-        JS_SetPropertyStr(B.context, arg, "message", JS_NewString(B.context, error));
-    } else
-        arg = JS_NewString(B.context, json);
-    JSValue r = JS_Call(B.context, q->settle[error ? 1 : 0], JS_UNDEFINED, 1, &arg);
-    JS_FreeValue(B.context, r);
-    JS_FreeValue(B.context, arg);
-    JS_FreeValue(B.context, q->settle[0]);
-    JS_FreeValue(B.context, q->settle[1]);
-    free(q->sql);
-    free(q);
-}
-
-static void postgres_work(void) {
-    if (bench_loop_now() >= POSTGRES.next_probe &&
-        (POSTGRES.wanted || POSTGRES.starter || (B.net && bench_net_clients(B.net))))
-        postgres_probe();
-    if (!POSTGRES.first || POSTGRES.inflight) return;
-    if (POSTGRES.connection && bench_postgres_broken(POSTGRES.connection)) {
-        bench_postgres_close(POSTGRES.connection);
-        POSTGRES.connection = NULL;
-    }
-    if (!POSTGRES.connection)
-        POSTGRES.connection =
-            bench_postgres_connect(B.event_loop, POSTGRES.port, POSTGRES.database, 1000);
-    POSTGRES.inflight = 1;
-    if (!POSTGRES.connection ||
-        bench_postgres_query(POSTGRES.connection, POSTGRES.first->sql, postgres_query_done, NULL))
-        postgres_query_done(NULL, NULL, "cannot start PostgreSQL query");
-}
-
-/* bench.postgres.query(sql) -> Promise<JSON text>; FIFO on the scenario connection. */
-static JSValue h_postgres_query(JSContext *context, JSValueConst this_value, int argc,
-                                JSValueConst *argv) {
-    (void)this_value;
-    const char *sql = argc ? JS_ToCString(context, argv[0]) : NULL;
-    if (!sql) return JS_ThrowTypeError(context, "pgQuery(sql)");
-    postgres_request *q = POSTGRES.query_count < 128 ? calloc(1, sizeof *q) : NULL;
-    if (q) q->sql = strdup(sql);
-    JS_FreeCString(context, sql);
-    if (!q || !q->sql) {
-        free(q);
-        return JS_ThrowInternalError(context, "PostgreSQL query queue full");
-    }
-    JSValue promise = JS_NewPromiseCapability(context, q->settle);
-    if (JS_IsException(promise)) {
-        free(q->sql);
-        free(q);
-        return promise;
-    }
-    if (POSTGRES.last)
-        POSTGRES.last->next = q;
-    else
-        POSTGRES.first = q;
-    POSTGRES.last = q;
-    POSTGRES.query_count++;
-    return promise;
-}
-
-/* bench.postgres.load(clients, seconds, script) -> pid: pgbench in the background */
-static JSValue h_postgres_load(JSContext *context, JSValueConst this_value, int argc,
-                               JSValueConst *argv) {
-    (void)this_value;
-    int32_t clients = 4, seconds = 10;
-    if (argc > 0) JS_ToInt32(context, &clients, argv[0]);
-    if (argc > 1) JS_ToInt32(context, &seconds, argv[1]);
-    const char *script = argc > 2 ? JS_ToCString(context, argv[2]) : NULL;
-    if (!script || POSTGRES.load_count >= 16 || bench_loop_children(B.event_loop) >= 63) {
-        if (script) JS_FreeCString(context, script);
-        return JS_ThrowTypeError(context, "pgLoad(clients, seconds, script): at most 16 at a time");
-    }
-    static unsigned serial;
-    char file[80];
-    snprintf(file, sizeof file, "/tmp/torture-pgbench-%d-%u.sql", (int)getpid(), ++serial);
-    FILE *f = fopen(file, "w");
-    if (f) {
-        fputs(script, f);
-        fclose(f);
-    }
-    JS_FreeCString(context, script);
-    if (!f) return JS_ThrowInternalError(context, "cannot write pgbench script");
-    char port[16], c[16], j[16], t[16];
-    if (clients < 1) clients = 1;
-    snprintf(port, sizeof port, "%d", POSTGRES.port);
-    snprintf(c, sizeof c, "%d", clients);
-    snprintf(j, sizeof j, "%d", clients < 4 ? clients : 4);
-    snprintf(t, sizeof t, "%d", seconds < 1 ? 1 : seconds);
-    pid_t pid = fork();
-    if (pid == 0) {
-        setpgid(0, 0);
-        if (chdir(postgres_repository())) _exit(126);
-        if (!freopen("/dev/null", "w", stdout)) _exit(126);
-        dup2(STDOUT_FILENO, STDERR_FILENO);
-        execlp("mise", "mise", "-C", "bindings/postgres", "exec", "--", "pgbench", "-h",
-               "127.0.0.1", "-p", port, "-U", "postgres", "-n", "-c", c, "-j", j, "-T", t, "-f",
-               file, POSTGRES.database, (char *)NULL);
-        _exit(127);
-    }
-    if (pid < 0) {
-        unlink(file);
-        return JS_ThrowInternalError(context, "cannot start pgbench");
-    }
-    setpgid(pid, pid);
-    bench_loop_child(B.event_loop, pid, postgres_child_done, strdup(file));
-    POSTGRES.loads[POSTGRES.load_count++] = pid;
-    return JS_NewInt32(context, pid);
-}
-
-/* bench.postgres.use(db): the database later queries and loads go to (a scenario's
- * own, e.g. one holding millions of actors); reset when the scenario stops */
-static JSValue h_postgres_use(JSContext *context, JSValueConst this_value, int argc,
-                              JSValueConst *argv) {
-    (void)this_value;
-    const char *db = argc ? JS_ToCString(context, argv[0]) : NULL;
-    int ok = db && db[0] && strlen(db) < sizeof POSTGRES.database;
-    for (const char *p = db; ok && *p; p++)
-        ok = (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_';
-    if (ok && strcmp(db, POSTGRES.database)) {
-        if (POSTGRES.first) {
-            JS_FreeCString(context, db);
-            return JS_ThrowTypeError(context, "await pending queries before pg.use()");
-        }
-        postgres_close_connection();
-        snprintf(POSTGRES.database, sizeof POSTGRES.database, "%s", db);
-    }
-    if (db) JS_FreeCString(context, db);
-    if (!ok) return JS_ThrowTypeError(context, "pgUse(db): a database name of [a-z0-9_]");
-    return JS_UNDEFINED;
-}
-
-static JSValue h_postgres_stop_load(JSContext *context, JSValueConst this_value, int argc,
-                                    JSValueConst *argv) {
-    (void)context;
-    (void)this_value;
-    (void)argc;
-    (void)argv;
-    postgres_stop_loads();
-    return JS_UNDEFINED;
-}
-
-static JSValue h_postgres_start(JSContext *context, JSValueConst this_value, int argc,
-                                JSValueConst *argv) {
-    (void)context;
-    (void)this_value;
-    (void)argc;
-    (void)argv;
-    postgres_start();
-    return JS_UNDEFINED;
-}
-
-/* bench.postgres.restart(): `mise run postgres:restart` in the background */
-static JSValue h_postgres_restart(JSContext *context, JSValueConst this_value, int argc,
-                                  JSValueConst *argv) {
-    (void)this_value;
-    (void)argc;
-    (void)argv;
-    if (POSTGRES.starter) return JS_UNDEFINED;
-    pid_t pid = fork();
-    if (pid == 0) {
-        setpgid(0, 0);
-        if (chdir(postgres_repository())) _exit(126);
-        if (!freopen("/tmp/torture-pg-restart.log", "w", stdout)) _exit(126);
-        dup2(STDOUT_FILENO, STDERR_FILENO);
-        execlp("mise", "mise", "run", "pg:restart", (char *)NULL);
-        _exit(127);
-    }
-    if (pid < 0) return JS_ThrowInternalError(context, "cannot start mise");
-    setpgid(pid, pid);
-    bench_loop_child(B.event_loop, pid, postgres_child_done, NULL);
-    postgres_set("starting", "restarting (mise run pg:restart)");
-    POSTGRES.starter = pid; /* the probe follows it */
-    return JS_UNDEFINED;
 }
 
 /* ---- dashboard protocol ------------------------------------------------------------------ */
@@ -3028,7 +2607,6 @@ static void send_hello(int client) {
 static void on_open(void *user, int client) {
     (void)user;
     send_hello(client);
-    postgres_announce(client);
 }
 
 /* the value of "key":"value" in a small JSON command (no escapes needed) */
@@ -3071,11 +2649,6 @@ static void on_message(void *user, int client, const char *message, size_t lengt
         if (B.current[0]) snprintf(B.pending, sizeof B.pending, "%s", B.current);
         return;
     }
-    if (!strcmp(cmd, "start-service")) { /* the dashboard's Start button (PostgreSQL) */
-        if (json_field(message, length, "name", id, sizeof id) && !strcmp(id, "postgres"))
-            postgres_start();
-        return;
-    }
     if (!B.context || !B.running || B.finished) return;
     JSValue arg = JS_NewStringLen(B.context, message, length);
     JSValue r = call_global("__command", 1, &arg);
@@ -3116,7 +2689,6 @@ int main(int argc, char **argv) {
     B.scale = 1;
     B.seed = 42;
     B.port = getenv("PORT") ? atoi(getenv("PORT")) : 8090; /* service managers set PORT */
-    if (getenv("BENCH_POSTGRES_PORT")) POSTGRES.port = atoi(getenv("BENCH_POSTGRES_PORT"));
     snprintf(B.host, sizeof B.host, "127.0.0.1");
     snprintf(B.web, sizeof B.web, "%s", BENCH_WEB_DIR);
     const char *out = NULL;
@@ -3205,7 +2777,6 @@ int main(int argc, char **argv) {
         }
         int active = B.running && !B.finished;
         if (interrupted && !active) break;
-        postgres_work();
         script_jobs();
         bench_loop_poll(B.event_loop, bench_loop_now());
         if (active) {
@@ -3246,12 +2817,8 @@ int main(int argc, char **argv) {
         } else if (B.headless) {
             break;
         }
-        int busy = interrupted || B.pending[0] || (B.runtime && JS_IsJobPending(B.runtime)) ||
-                   (POSTGRES.first && !POSTGRES.inflight);
+        int busy = interrupted || B.pending[0] || (B.runtime && JS_IsJobPending(B.runtime));
         double wake = active ? B.next_sample : INFINITY;
-        if (!POSTGRES.probe &&
-            (POSTGRES.wanted || POSTGRES.starter || (B.net && bench_net_clients(B.net))))
-            wake = fmin(wake, POSTGRES.next_probe);
         if (active && !B.finishing && !B.loop)
             wake = fmin(wake, B.scenario_origin + B.duration * 1000);
         if (active && !B.paused && !B.finishing) {
@@ -3272,10 +2839,6 @@ int main(int argc, char **argv) {
         B.net = NULL;
     }
     scenario_stop();
-    bench_postgres_close(POSTGRES.probe);
-    if (POSTGRES.starter) bench_loop_terminate(B.event_loop, POSTGRES.starter, 1000);
-    while (bench_loop_children(B.event_loop))
-        bench_loop_poll(B.event_loop, INFINITY);
     bench_loop_free(B.event_loop);
     free(B.timers);
     free(ops);

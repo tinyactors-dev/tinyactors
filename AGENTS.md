@@ -2,8 +2,7 @@
 
 **Layers.** Core decides what inputs mean and runs actors in one block of
 memory; the host layer runs many systems as one; a language binding
-(`tinyactors-core/bindings/`) owns values and their encoding; the
-application owns storage and policy. Before adding code, place it in the
+owns values and their encoding; the application owns storage and policy. Before adding code, place it in the
 right layer:
 [README.md, "Layers and responsibilities"](README.md#layers-and-responsibilities).
 Code free of any language's API belongs in a C layer, not in a binding,
@@ -11,12 +10,14 @@ and core does not handle bytes it has no use for. `tinyactors-core/AGENTS.md`
 has the rules of the C layers themselves (freestanding layers, no pointers
 in system memory, no allocation after init).
 
-**Bindings expose the core, nothing else.** Before designing or changing a
-binding's API, read
-["Designing a binding's API"](tinyactors-core/bindings/README.md#designing-a-bindings-api-expose-the-core-nothing-else):
-inventory the public headers, write the table mapping each API item to the
-core functions behind it, borrow names and call shapes from other
-libraries (xstate) but never their semantics, and invent nothing. The core
+**Bindings expose the core, nothing else.** There is no binding until
+[ADR 0009](docs/adr/0009-one-host-two-queues.md) regenerates them from
+`tinyactors-core/docs/bindings.md` (drafted in
+[the proposal](docs/proposals/one-host-two-queues/bindings.md)). Before
+designing a binding's API: inventory the public headers, write the table
+mapping each API item to the core functions behind it, borrow names and
+call shapes from other libraries (xstate) but never their semantics, and
+invent nothing. The core
 is a complete SCXML implementation: read `src/core`, `src/system` and
 `docs/SCXML.md` before claiming it lacks something.
 
@@ -102,12 +103,8 @@ Do it at release time, not between releases.
   - one core test program: `tinyactors-core/build/dev/bin/<name>` after
     `mise run build` in `tinyactors-core` (the sanitizer build);
   - one part of core's suite, as a task in `tinyactors-core`: `w3c`,
-    `node:test`, `web:test`, `surface`, `conformance:js`, `w3c:js`, `examples:test`,
-    `torture:test`, `check:wasm`, `check:freestanding` (`mise tasks` lists
-    them);
-  - one Node.js binding suite: `node --test test/<suite>.test.js` in
-    `tinyactors-core/bindings/node`, after `mise run node:build`, then
-    `bun test test/<suite>.test.js` (`node:test` runs both);
+    `wasm:test`, `torture:test`, `check:wasm`, `check:freestanding`
+    (`mise tasks` lists them);
   - one tinyparse gate: `mise run //tinyparse:gate:cc-diff` (`--full` for
     its exhaustive version);
   - one project's whole suite: `mise run test` inside it.
@@ -145,8 +142,7 @@ in a task of its own, not in a parallel list.
 ## The libraries are private: change APIs in place
 
 Every caller of every library in this repo is in this repo: the C layers
-of `tinyactors-core`, its bindings (`bindings/node`, `bindings/web`,
-`bindings/postgres`), its tools and examples, `tinyxml` and `staticjs`.
+of `tinyactors-core`, its tools, `tinyxml`, `tinyparse` and `staticjs`.
 Nothing is published, so no outside code depends on an API or ABI staying
 the same.
 

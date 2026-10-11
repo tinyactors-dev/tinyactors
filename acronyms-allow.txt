@@ -24,17 +24,11 @@ CData          AGENTS.md                                                 # examp
 # matches to check a binary's architecture.
 CpuType        mise/lib/c_release/build.rb                               # llvm-readobj output field
 
-# The DOM's names (Document.getElementById, PointerEvent.pointerId).
-getElementById tinyactors-core/{examples,web}/**/*                     # DOM API
-pointerId      tinyactors-core/examples/ui-elements/**/*               # DOM PointerEvent field
+# The DOM's names (Document.getElementById).
+getElementById tinyactors-core/web/**/*                                # DOM API
 
 # C's <inttypes.h> format macro.
 PRId64         tinyactors-core/**/*.c                                  # <inttypes.h>
-
-# PostgreSQL's server API, which the extension calls.
-MyDatabaseId                 tinyactors-core/bindings/postgres/src/*.c   # PostgreSQL global
-ObjectIdGetDatum             tinyactors-core/bindings/postgres/src/*.c   # PostgreSQL macro
-getKeyJsonValueFromContainer tinyactors-core/bindings/postgres/src/*.c   # PostgreSQL jsonb API
 
 # callgrind's event `Ir` (instructions read), as its reports name it, in the
 # profiles tinyparse's research notes quote.

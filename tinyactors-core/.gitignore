@@ -5,13 +5,8 @@
 compile_commands.json
 .cache/
 __pycache__/
-/bindings/node/build/
-/bindings/node/node_modules/
 
 # Amp orb runtime state
 /.amp/portals/
 /.amp/in/
 /.amp/STOP
-/bindings/web/tinyactors.wasm
-/bindings/web/api.mjs
-/bindings/web/core.mjs

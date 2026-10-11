@@ -74,8 +74,9 @@ language.
 
 ### Binding author
 
-Writes or maintains a language binding (`tinyactors-core/bindings/`, and
-the ones not written yet: Python, Go, Rust, the JVM, .NET).
+Writes or maintains a language binding (none exists until
+[ADR 0009](adr/0009-one-host-two-queues.md) regenerates them: JavaScript
+first, then CPython; Go, Rust, the JVM and .NET are not written yet).
 
 - **Asks:** what must I write myself, and what does C give me? How do
   values cross? How do I get charts in and out, traces out, errors back?

@@ -9,9 +9,17 @@ them defines it. A Python gateway, a Rust service, a browser tab and a
 PostgreSQL database interoperate because they all follow these rules, not
 because they share code (although most of them do: see *Conformance*).
 
+**Since [ADR 0009](../../docs/adr/0009-one-host-two-queues.md)** core speaks
+no transport protocol: the link protocol, its framing and store links were
+deleted, with the bindings that ran them. An envelope leaves a host as a
+`TA_HOST_EFFECT_PEER` effect and arrives as `ta_host_deliver`; how it travels
+is the application's. Where this document still names `hello`, `err`, links
+or the JS bindings, it describes what they did; the rewrite comes with the
+CBOR values of ADR 0009.
+
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ SPEC: addresses · envelope · values · delivery contract · link protocol  │
+│ SPEC: addresses · envelope · values · delivery contract                  │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ ONE IMPLEMENTATION (C): address parser (ta_address), envelope, router in    │
 │ ta_host (peers, routes, relay, origin checks, policy, errors, dedup)     │
@@ -193,81 +201,6 @@ router installs routes for them. There is no implicit default route; a
 deployment may configure one (e.g. a browser that sends everything unknown to
 its server).
 
-## Link protocol
-
-The message protocol between two peers over any bidirectional transport.
-
-Messages (JSON objects, field `t` is the type):
-
-| `t` | fields | meaning |
-|---|---|---|
-| `hello` | `v` (protocol version, 1), `id` (system id), `reach` (system ids reachable through this peer, may be empty), `caps` (`profile`, `ordered`, `acks`, `max_frame`), `cred` (opaque credential, optional) | first message in each direction; nothing else before it |
-| `ev` | the envelope fields | an envelope |
-| `err` | `msgid`, `sendid`, `origin`, `reason` | delivery failed; becomes `error.communication` at the origin |
-| `ack` | `msgid` | optional (only if both sides announced `acks`): the envelope was accepted durably |
-| `ping` / `pong` | `at` (sender's clock, echoed) | liveness and round-trip time |
-
-**Framing.**
-
-- Message-oriented transports (WebSocket, `postMessage`, broker messages):
-  one JSON text per message.
-- Byte streams (TCP, stdio, serial): **length-prefixed** frames — a 4-byte
-  big-endian length, then that many bytes of UTF-8 JSON, one message per
-  frame. A frame may arrive split across reads; one read may hold several
-  frames. Each side announces the largest frame it accepts in
-  `caps.max_frame` (default 1 MiB, 1048576 bytes). Frames above the peer's
-  `max_frame` are refused with `malformed`:
-  - the **sender** does not send them: an envelope whose frame would not fit
-    is refused where it is, and its origin gets `error.communication`;
-  - the **receiver** skips a frame above its own `max_frame` (or one that is
-    not UTF-8) as its bytes arrive, without buffering it, so the stream stays
-    in step. It has not read the frame, so it cannot answer with an `err`.
-    Between peers that follow the first rule, this does not happen.
-
-  Codecs: `encodeFrame` / `FrameDecoder` in the JS bindings
-  (`core.mjs` of each JavaScript binding, usable by any transport), and
-  `ta_frame_header` / `ta_frame_read` for C hosts (`include/tinyactors/frame.h`,
-  freestanding: no allocation, the caller's buffer).
-
-**Hello again.** A peer may send `hello` again at any time with the same
-`id`; the receiver replaces what it has as that peer's `reach`. This is how a
-relay announces systems that connected after the link opened.
-
-**Profiles.** `caps.profile` names the richest value encoding a peer
-understands. Both sides use a profile only if both announced it; otherwise
-`data` is a neutral value (*Values*). The JS bindings announce `js`.
-
-**Versions.** A peer that receives a `hello` with an unknown major `v` closes
-the connection. Unknown fields are ignored; unknown message types are
-ignored.
-
-An `ev` message is the envelope itself plus `t`:
-
-```json
-{"t": "ev", "target": "tinyactors://server/@lobby", "name": "join",
- "data": {"player": {"$ref": "tinyactors://tab-7f3/#_scxml_4"}},
- "origin": "tinyactors://tab-7f3/#_scxml_4", "msgid": "tinyactors://tab-7f3/#_scxml_4/12", "hops": 0}
-```
-
-**Implementations.** In C the router is `ta_host` and a transport is a loop
-around three calls: `ta_host_peer_add` when a connection says hello,
-`ta_host_deliver` / `ta_host_peer_error` for incoming `ev` / `err`, and the
-`TA_HOST_EFFECT_PEER` / `TA_HOST_EFFECT_PEER_ERROR` effects for outgoing ones.
-`ta_links` (`include/tinyactors/link.h`) speaks this link protocol over any
-message transport: hellos and reach, pings, reconnects with backoff,
-resumption and exports; its caller only moves text and says what its
-transports did. The JS bindings run their transports on it: WebSockets (`createLink`,
-`serveLinks` with `exports`, `trusted` / `trust(hello)`, `resumeMs`,
-`queueTTLMs`, `announce`), and byte-stream transports with the same options:
-TCP in Node (`tcp: { host, port }`), and any duplex byte stream, such as a
-child process's stdio, through `transport` / `accept` (`maxFrame` sets
-`caps.max_frame`). `system.deliver(envelope)` hands an envelope to the
-router from host code.
-
-**Resumption.** A peer that reconnects with the same system id takes over its
-routes again; envelopes queued for it meanwhile (up to the route's TTL) are
-delivered in order.
-
 ## Security
 
 - **Origin validation is mandatory at every hop.** An envelope from a peer
@@ -315,117 +248,23 @@ Every route reports the same status, whatever the transport:
 | `rtt` | last round-trip time (ms), if the transport measures it |
 
 C hosts read it with `ta_host_peer_status` (plus `rtt` the transport
-reports with `ta_host_peer_round_trip_time`). The JS bindings expose a client link as an
-actor (its snapshot is the connection status, its context the queue and
-round trip) and every route through `link.status()` /
-`server.status(systemID)`.
+reports with `ta_host_peer_round_trip_time`).
 
 ## Transports
 
-A transport carries envelopes and link messages between two peers and nothing
+A transport carries envelopes between two peers and nothing
 else: no routing, no policy, no encoding decisions. Known transports:
 
 - **in-process** — systems on threads or workers of one process.
-- **WebSocket** — browser ↔ server, server ↔ server (`createLink`,
-  `serveLinks`).
-- **store link** — a database that holds actors (PostgreSQL today): envelopes
-  in through SQL, out through an outbox per peer. See *Store links*.
+- **WebSocket** — browser ↔ server, server ↔ server.
+- **database** — a database that holds actors: envelopes in through SQL, out
+  through an outbox per peer.
 - **broker** — NATS, Kafka, Redis streams: one subject/topic per system id.
 - **HTTP** — one envelope per request (serverless, webhooks).
-- **TCP, serial, stdio** — length-prefixed frames (servers, microcontrollers,
-  child processes): `createLink` / `serveLinks` with `tcp`, or any byte
-  stream through `transport` / `accept`; `ta_frame_read` in C.
+- **TCP, serial, stdio** — servers, microcontrollers, child processes.
 
 Non-tinyactors SCXML processors interoperate through SCXML's BasicHTTP
 Event I/O Processor, outside this protocol.
-
-## Store links
-
-A store link connects a system to a database of actors through SQL. Any
-language with a SQL client can implement it; the database side is the
-`tinyactors` extension.
-
-The extension uses the C host router without resident segments. Its
-`ta_host_route_begin` / `ta_host_route_step` driver answers lookup requests
-from actor rows and dedup requests with an atomic insert into `seen`.
-The router validates origins, applies policy and hop limits, chooses next
-hops and dedup keys, and builds message identities and error events.
-PostgreSQL owns privileges, locks and the transaction that commits the
-dedup entry, inbox, actor state and outbox together. Store links are endpoints:
-inbound targets outside the database return `unreachable`. Outbound sends
-use the router's durable mode: an unknown system waits under its own id.
-The peers table is read only when the router asks for it (`TA_ROUTE_PEERS`,
-a send leaving the database): sends between the database's own actors cost
-no peer lookup.
-
-Inbound (envelopes for actors in the database):
-
-```sql
-SELECT tinyactors.deliver('{"target": "tinyactors://db/@order-1", "name": "pay",
-                            "data": {...}, "origin": "tinyactors://web/#_scxml_7",
-                            "msgid": "tinyactors://web/#_scxml_7/42"}'::jsonb, 'web');
--- returns 'ok', 'duplicate', or an error reason (unknown-target, denied, ...)
-```
-
-- The target may be a session (`#_scxml_<id>`, actors and invoked sessions)
-  or a name (`@<name>`, the `name` column).
-- The `origin` is kept: replies (`<send targetexpr="_event.origin">`) go
-  back out through the outbox.
-- `msgid` (or `dedup`) is checked against the dedup window table
-  (`tinyactors.seen`, kept for `tinyactors.dedup_ttl`): a repeat returns
-  `duplicate` and changes nothing.
-- The call is its own transaction (or part of the caller's, if the caller
-  wants that).
-- The second argument names the peer the envelope came through. The role
-  must be allowed to act as that peer (`tinyactors.grant_peer`), and the
-  envelope's origin must be that peer or a system its `hello` announced —
-  origin validation, as at every hop. Without it, the call is the
-  database's own host code (the `app` privileges).
-
-Outbound (envelopes from actors in the database to other systems): rows in
-`tinyactors.outbox` with type `scxml`, the target's system in `system`, the
-next hop in `peer` and the whole envelope in `envelope`.
-
-```sql
-SELECT tinyactors.hello('web', ARRAY['tab-1', 'tab-2']);     -- a store link: I am "web", I reach these
-SELECT id, envelope FROM tinyactors.claim_for('web', 100, 'web/1');  -- envelopes for one peer, in order
-SELECT tinyactors.ack(id);                                    -- delivered
-SELECT tinyactors.deliver_error('{"origin": ..., "msgid": ..., "sendid": ..., "reason": "unknown-target"}');
-                                                              -- an `err` back: error.communication at the sender
-LISTEN tinyactors_outbox;                                     -- NOTIFY payload: the peer
-```
-
-- **hello** is the link protocol's `hello` in SQL: the peer's id and the
-  systems it reaches (e.g. the browsers connected to a server). Only roles
-  granted that peer id may say it, and a hello cannot announce another
-  granted peer's system. An envelope
-  for a system goes to the peer with that id, else to a peer that announced
-  it, else it waits under the system's own id until some peer says hello for
-  it (pending rows move to that peer). Say hello again when what you reach
-  changes.
-- `claim_for(peer, n, worker, lease)` leases the oldest undelivered
-  envelopes for one peer, in order; one worker per peer keeps them ordered,
-  several workers trade ordering for throughput. A lease that runs out is
-  taken over (at-least-once).
-- Each row carries a complete envelope, ready to send: `msgid` is
-  `<origin>/<step>.<n>` (durable processing number and effect index), stable
-  across rollback/retry and distinct even when SCXML reuses a `sendid`.
-- `deliver_error(err)` finds the row by its msgid and fails it; the sending
-  session gets `error.communication` (as `fail(id, reason)` does).
-- `tinyactors.prune_seen()` drops dedup entries older than
-  `tinyactors.dedup_ttl` (default 7 days); call it now and then.
-- The database's system id is `tinyactors.system_id()` (the setting
-  `tinyactors.system_id`, default derived from the database name);
-  `tinyactors.address(text)` parses addresses with the same grammar as
-  `ta_address`.
-- Values in `data` are neutral values; between actors in the database too
-  (`{"$bytes"}` arrives as a `Uint8Array`, `{"$ref"}` as the address).
-
-A store link transport in another language is these few statements. The JS
-bindings have one (`createStoreLink(system, { query, listen })`, driver
-independent): it delivers in order and retries until the database takes an
-envelope, claims on NOTIFY and on a poll timer, acks in batches, and says
-hello with the browsers on the system's links.
 
 ## Deployments
 
@@ -435,24 +274,17 @@ hello with the browsers on the system's links.
 | one process, many systems (segments, threads, workers) | in-process | may negotiate no encoding |
 | browser ↔ server | WebSocket | ephemeral peers, resumption, strict origin checks, default-deny policy |
 | server ↔ server | WebSocket, TCP, broker | system ids as broker subjects |
-| database of actors | store link | at-least-once + dedup; ordered per peer |
+| database of actors | SQL + outbox | at-least-once + dedup; ordered per peer |
 | serverless | HTTP | the router runs per request |
 | embedded | serial | the C router is freestanding |
 
 ## Conformance
 
 - `tests/conformance/addresses.json` — address parsing and formatting
-  vectors; run by the C parser (`tests/unit/test_address.c`) and the JS
-  bindings.
-- `tests/conformance/values.json` — neutral value vectors; run in C and JS.
-- `tests/conformance/links/*.json` — link transcripts (messages in, messages
-  and deliveries out); replayed by the Node and web bindings, on a text
-  transport and again on a byte stream in length-prefixed frames (split and
-  coalesced at odd offsets).
-- Framing: `tests/unit/test_frame.c` (C) and
-  `bindings/node/test/frames.test.js` (JS codec; links over TCP and a child
-  process's stdio).
+  vectors; run by the C parser (`tests/unit/test_address.c`).
+- `tests/conformance/values.json` — neutral value vectors; run in C
+  (`tests/unit/test_datamodel_ecmascript.c`).
 - `tests/unit/test_router.c` — the router: routes, relaying, hop limit,
   origin validation, policy, errors, dedup, route status.
 
-An implementation in a new language passes the vectors and transcripts.
+An implementation in a new language passes the vectors.

@@ -1,7 +1,6 @@
 // Torture chamber dashboard: custom elements that clone <template>s, canvas
 // charts, and a WebSocket to torture-bench. No dependencies, no build step.
 
-import './service.js'; // defines tb-service
 import { shadow } from './sheet.js';
 
 /* ------------------------------------------------------------- helpers */
@@ -512,8 +511,6 @@ class TbApp extends Base {
       this.render();
     });
     this.addEventListener('mutate', (e) => this.send({ cmd: 'mutate', id: e.detail }));
-    this.addEventListener('start-service', (e) => this.send({ cmd: 'start-service', name: e.detail }));
-    this.needs = []; // services the shown scenario declares ("services": ["postgres"])
     // the scenario this page was opened for (chamber.html?scenario=<id>)
     this.wanted = new URLSearchParams(location.search).get('scenario');
     this.awaiting = this.wanted;
@@ -541,7 +538,6 @@ class TbApp extends Base {
     ws.addEventListener('open', () => {
       this.connected = true;
       this.refs.conn.set('Live', 'ok');
-      this.refs.service.online = true;
       if (this.awaiting) this.send({ cmd: 'open', scenario: this.awaiting });
       this.syncControls();
     });
@@ -549,7 +545,6 @@ class TbApp extends Base {
     ws.addEventListener('close', () => {
       this.connected = false;
       this.refs.conn.set('Disconnected', 'danger');
-      this.refs.service.online = false;
       this.syncControls();
       setTimeout(() => this.connect(attempt + 1), Math.min(5000, 500 * 2 ** attempt));
     });
@@ -583,14 +578,7 @@ class TbApp extends Base {
         this.duration = m.duration;
         this.refs.controls.setMutations(s.mutations || []);
         this.metricInfo = s.metrics || {};
-        this.needs = s.services || [];
-        this.refs.service.hidden = !this.needs.length;
-        // the actors live in an external service (PostgreSQL): no in-process
-        // systems, so only the scenario's own metrics are charted
-        const external = this.needs.length > 0 && !(s.systems || []).length;
-        for (const { el, def } of this.charts.values()) if (!def.metric) el.hidden = external;
-        this.refs.kpis.hidden = external;
-        this.refs.systems.hidden = external;
+        this.refs.kpis.hidden = false;
         this.samples = [];
         this.refs.log.clear(); // the history that follows has this run's log
         this.finished = false;
@@ -614,9 +602,6 @@ class TbApp extends Base {
       case 'log':
         if (this.awaiting) break; // the run we wait for: its history brings these
         this.refs.log.add([m]);
-        break;
-      case 'service': // PostgreSQL status, pushed on connect and on every change
-        if (m.name === 'postgres') this.refs.service.update(m);
         break;
       case 'summary':
         if (this.awaiting) break;

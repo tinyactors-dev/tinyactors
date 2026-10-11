@@ -8,7 +8,6 @@
     <link rel="stylesheet" href="page.css" />
     <!-- the whole module graph and the components' stylesheet in one round trip -->
     <script type="module" src="app.js"></script>
-    <link rel="modulepreload" href="service.js" />
     <link rel="modulepreload" href="sheet.js" />
     <link rel="preload" href="components.css" as="fetch" crossorigin />
   </head>
@@ -55,7 +54,6 @@
         <div class="layout" data-ref="layout">
           <section class="charts" data-ref="charts" aria-label="Time series"></section>
           <aside class="side">
-            <tb-service data-ref="service" hidden></tb-service>
             <tb-controls data-ref="controls"></tb-controls>
             <tb-systems data-ref="systems"></tb-systems>
             <tb-log data-ref="log"></tb-log>
@@ -153,23 +151,5 @@
       </section>
     </template>
 
-    <template id="tb-service">
-      <section class="card panel service">
-        <div class="service-head">
-          <h2 class="panel-title" data-ref="title">Service</h2>
-          <tb-status data-ref="state" label="Checking" tone="neutral"></tb-status>
-        </div>
-        <p class="hint" data-ref="detail" hidden></p>
-        <dl class="system-facts service-facts">
-          <div><dt>Address</dt><dd data-ref="address">–</dd></div>
-          <div><dt>Server</dt><dd data-ref="version">–</dd></div>
-          <div><dt>Extension</dt><dd data-ref="extension">–</dd></div>
-        </dl>
-        <div class="service-actions" data-ref="actions">
-          <button class="btn primary" data-ref="start" type="button" hidden>Start</button>
-          <span class="hint service-how" data-ref="how" hidden>runs <code data-ref="command"></code></span>
-        </div>
-      </section>
-    </template>
   </body>
 </html>

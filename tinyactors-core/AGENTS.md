@@ -9,16 +9,14 @@ lists where things go.
 The repository root's AGENTS.md applies too: tasks are Ruby file tasks in
 `mise/tasks/`, and the build goes through the root's pinned toolchain
 (`mise/lib/toolchain/`). `mise/core.rb` lists the layers, the test
-programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `addon`:
-position-independent; `wasi`).
+programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
 
 - `mise install` (at the root) installs the pinned toolchain.
 - `mise run build` builds every layer, test program and tool
   (`build/dev/lib`, `build/dev/bin`); `--release` builds `build/release`.
 - `mise run test` builds and runs every test program, then `lint`,
-  `check:freestanding`, `api --check` (after `amalgamate`), `wasm:test`, `w3c`, `node:test`, `web:test`, `surface`,
-  `conformance:js`, `w3c:js`, `examples:test` and `check:wasm`; `--full`
-  adds `torture:test` and `check:cross`. Each also runs on its own.
+  `check:freestanding`, `api --check` (after `amalgamate`), `wasm:test`,
+  `w3c` and `check:wasm`; `--full` adds `torture:test` and `check:cross`. Each also runs on its own.
 - `mise run check:freestanding` must pass for any change under
   `src/{base,image,core,system}`; `mise run check:wasm` builds the tests for
   wasm32-wasi and runs them under wasmtime.
@@ -26,9 +24,7 @@ position-independent; `wasi`).
   use); every test not listed in `tests/w3c/skip.txt` must pass.
 - `mise run lint` is the naming lint (ast-grep; always invoke `ast-grep`,
   never `sg`, which is shadow-utils' group tool in orbs).
-- `mise run torture` opens the torture chamber with its dashboard;
-  `mise run pg:test` tests the PostgreSQL binding against a throwaway
-  server.
+- `mise run torture` opens the torture chamber with its dashboard.
 - `third_party/` is vendored (`mise run vendor-quickjs`): never edit or
   format it.
 

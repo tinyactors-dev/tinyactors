@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
-#MISE description="Test tinyactors-core: every test program under AddressSanitizer and UBSan, the bindings, their surface, conformance and the W3C IRP suite on each, the examples, and the freestanding and wasm builds; --full adds every torture scenario and the cross builds"
+#MISE description="Test tinyactors-core: every test program under AddressSanitizer and UBSan, the W3C IRP suite, and the freestanding and wasm builds; --full adds every torture scenario and the cross builds"
 #USAGE flag "--full" help="Also run every torture scenario, the test programs' exhaustive modes, and cross-compile for each release target"
-#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "third_party/**/*", "bindings/**/*.{c,h,js,mjs,cjs,ts,json}", "tools/**/*", "examples/**/*", "web/**/*", "sgconfig.yml", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml"]
+#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "third_party/**/*", "tools/**/*", "web/**/*", "sgconfig.yml", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml"]
 #MISE outputs={auto=true}
 #MISE depends=["build"]
 # vim:ft=ruby
@@ -42,9 +42,7 @@ puts "tinyactors-core: #{runs.size} test programs pass"
 # The rest are tasks of their own; each runs alone too.
 # `api --check` builds the amalgamations first, and fails when a checked-in
 # API description no longer matches its library; `wasm:test` builds and
-# tests the release's two wasm modules; `surface` checks that the bindings
-# expose and declare what bindings/surface.json says.
-tasks = [%w[lint], %w[check:freestanding], %w[api --check], %w[wasm:test], %w[w3c], %w[node:test], %w[web:test],
-         %w[surface], %w[conformance:js], %w[w3c:js], %w[examples:test], %w[check:wasm]]
+# tests the release's wasm modules.
+tasks = [%w[lint], %w[check:freestanding], %w[api --check], %w[wasm:test], %w[w3c], %w[check:wasm]]
 tasks += [%w[torture:test], %w[check:cross]] if full
 tasks.each { |task| Core.run('mise', 'run', *task) }

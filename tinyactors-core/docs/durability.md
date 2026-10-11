@@ -5,7 +5,7 @@ every path that takes it out of a running system and back keeps of it:
 hibernation, export, migration and snapshots. None of them is a durability
 mechanism: hibernation and snapshots take actors out of memory for a while
 (and snapshots let a host be inspected), export moves actors to another host.
-Durability is the application's (a database, as in the PostgreSQL design).
+Durability is the application's (a database, for example).
 A path that drops part of it changes what the session does next;
 `tests/unit/test_durable.c` checks that none does.
 
@@ -106,18 +106,12 @@ Why the refusals:
 |---|---|---|---|
 | null | nothing to keep (`_event` unobservable) | — (no payloads) | — |
 | ECMAScript (C, quickjs-ng) | `JS_WriteObject` (object graphs, cycles, Date/Map/Set/typed arrays) of: shared-realm sessions `[2, variables + _event, invoke params]`; isolated sessions (scripts declaring globals) their global properties, global `let`/`const`/`class` bindings, top-level function declarations (re-run on restore) and invoke params. Functions in data and classes ✗ (`ta_datamodel_ecmascript_last_error` names the variable) | values (`payload_serialize`) | `ta_datamodel_ecmascript_snapshot`: sessions, invoke params, payloads, `<foreach>` items, at their handles |
-| JS bindings (node, wasm), native `ecmascript` | neutral values (JSON, `$bytes`, `$ref`; docs/protocol.md, "Values") of the session's variables and `_event`, written in `bindings/node/src/values.c`. Functions in data and cycles ✗ (the error names the variable); `Date` becomes its text, `undefined` is left out | values (the same writer): `system.export(actor)` → `system.adopt(bytes)` in another process, Node or web | the datamodel's sessions and payloads as neutral values |
 
 A blob of the C ECMAScript datamodel is a value: another process, or the same
-one after a restart, can adopt it (the PostgreSQL binding stores one per actor
-and loads it in whichever backend processes the actor next).
-
-So is an export blob of the JS bindings: `system.export(actor)` wraps it with
-what the actor runs (machine SCXML, documents or image bytes) and the
-exporter's clock; `system.adopt(bytes)` in any system (another process, Node or
-web) adds that segment if it has no identical one, rebases the delayed sends
-to its own clock (`ta_blob_rebase`: each keeps the time it had left) and adopts
-it through `ta_host_adopt`, which routes to the session in whatever segment
+one after a restart, can adopt it. A host that adopts one adds the segment
+it runs in if it has no identical one, rebases the delayed sends to its own
+clock (`ta_blob_rebase`: each keeps the time it had left) and adopts it
+through `ta_host_adopt`, which routes to the session in whatever segment
 took it and keeps the segments of its home id range from handing its id out
 again.
 

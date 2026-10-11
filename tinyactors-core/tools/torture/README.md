@@ -81,9 +81,8 @@ torture-bench [SCENARIO_DIR] [--scenarios DIR] [--duration S] [--interval MS] [-
   `bench.send(msg.from, …)` or `bench.failSend(msg)` (error.communication).
 - Effects that act on the same system (spawns, replies, script callbacks) run
   after the effect batch is acknowledged, as `tinyactors/system.h` requires.
-- **One event loop** (`loop.c`) owns `poll()`, registered HTTP/WebSocket and
-  PostgreSQL descriptors, monotonic deadlines, and a SIGCHLD self-pipe. There
-  are no blocking PostgreSQL calls or child waits on the server thread.
+- **One event loop** (`loop.c`) owns `poll()`, registered HTTP/WebSocket
+  descriptors, monotonic deadlines, and a self-pipe that a signal wakes.
   Script timers and QuickJS Promise jobs run in slices of at most 32 callbacks
   or 2 ms; actor systems run round-robin, one 4,000-fuel slice at a time. I/O
   is polled between slices. Callbacks themselves are cooperative: a long
@@ -91,15 +90,10 @@ torture-bench [SCENARIO_DIR] [--scenarios DIR] [--duration S] [--interval MS] [-
 - **Clocks**: loop deadlines never reset. `bench.now()` and JSONL `t` remain
   scenario-relative milliseconds and seconds, respectively; actor-system
   deadlines are converted to the loop clock only at the scheduling boundary.
-- **Scripts** run in a separate QuickJS context, with scenario file reads and
-  the asynchronous PostgreSQL API below. Switching scenarios closes pending
-  queries and discards the old context and its jobs. Normal completion awaits
+- **Scripts** run in a separate QuickJS context, with scenario file reads.
+  Switching scenarios discards the old context and its jobs. Normal completion awaits
   in-flight async timer callbacks, finish hooks and checks while still serving
   I/O and sampling. JSONL output and pass/fail checks keep the same meaning.
-- **Children**: pgbench runs through `mise exec` in a child (toolchain discovery
-  never blocks the loop). Exits are reaped on SIGCHLD, even without a dashboard.
-  Stopping loads signals their process groups with SIGTERM and schedules
-  SIGKILL after one second; reaping and temporary-script removal are asynchronous.
 
 ## Scenarios
 
@@ -115,8 +109,6 @@ torture-bench [SCENARIO_DIR] [--scenarios DIR] [--duration S] [--interval MS] [-
 | `fit` | How many small ECMAScript session actors (a set of ids + a resettable timeout) fit on this machine: grows until 80% of the available memory (or the cgroup limit) or the latency SLO |
 | `hibernate` | 2 million ECMAScript sessions with a few thousand resident: the host sweeps for cold actors, unloads them to a blob file and wakes them on demand (skewed hot/random touches, flash crowds) |
 | `reload` | CGI-style hot reloading under traffic: new chart versions every few seconds, new workers on the newest one, old versions drain and are freed, residents migrate live (`error.platform.upgrade` with their previous bindings) — no job lost or duplicated, counts continuous, timers kept |
-| `postgres` | Durable actors in PostgreSQL ([bindings/postgres](../../bindings/postgres)): 2,000 bank accounts, concurrent pgbench transfers with actor-to-actor deposits, a scheduler and an outbox worker as the application would run them, money conserved at every sample, a hot spot, a database restart in the middle (needs the PostgreSQL service — see below) |
-| `postgres-millions` | Millions of durable session actors in PostgreSQL, almost all idle with a pending timeout, a few thousand hot: the population grows to 2,000,000 under traffic (in its own database, kept between runs); hot events, cold events and `run()` stay as cheap as with a thousand; flash crowd, cold sweep, one very hot actor, restart |
 | `chaos` | Eventless infinite loops, invoke churn, timer storms with cancel, a hot mailbox, 48-level hierarchy, 64 parallel regions, an error storm — with a latency probe for fairness |
 
 ### Capacity search
@@ -246,62 +238,6 @@ migrates the residents. Reference run (release build, defaults, 30 s):
 |---|---|---|---|---|---|---|
 | 102,207 | 0 | 0 | 4 | 1,200 | 1,200 | 3 |
 
-### PostgreSQL
-
-`mise run torture postgres` puts the PostgreSQL binding under load on the
-instance `mise run pg:start` runs in this machine (127.0.0.1:54320, database
-`tinyactors`; in an orb the supervised service `tinyactors-pg`). The scenario
-declares `"services": ["postgres"]`, so the bench probes the instance every
-second while a dashboard is open (or a start is in progress) and pushes its
-state; the home page and the chamber show it live — not running, not set up,
-starting, available — with a **Start PostgreSQL** button that runs
-`mise run pg:start` (idempotent: initdb, start, `CREATE DATABASE`/`EXTENSION`).
-A run that starts while PostgreSQL is down waits for it.
-
-What runs where, as in a real deployment:
-
-| Process | Role | SQL |
-|---|---|---|
-| 8 pgbench clients | the application's request path | `tinyactors.send(account, 'transfer', {to, amount})` |
-| 1 pgbench client | the scheduler | `tinyactors.run(1000)` every 200 ms: due timers, deferred deposits |
-| 1 pgbench client | the audit worker | `tinyactors.ack(id) FROM tinyactors.claim(500, …)` every 200 ms |
-| torture-bench | measurement only | one snapshot per second (money, queues, events, late timers) + a one-event latency probe |
-
-A transfer debits the sender and sends `deposit` to the receiver — processed
-in the same transaction when the receiver's row is free, otherwise left in its
-inbox (`SKIP LOCKED`) for `run()`. Money is conserved when the balances plus
-the deposits still in inboxes, read in one snapshot, equal the opening total —
-checked every second, including across the restart. Reference run (4 CPUs,
-PostgreSQL defaults, 70 s, hot spot at 25 s, restart at 55 s; the work is in
-PostgreSQL, so the bench's build type does not matter):
-
-| Events | Per second (avg / peak) | Max inbox | Money checks | Drift | Restarts | Audit effects |
-|---|---|---|---|---|---|---|
-| 515,170 | 7,359 / 12,102 | 23 | 67 | 0 | 1 | 2,035 |
-
-`torture:test` runs it when PostgreSQL answers and skips it otherwise (CI
-covers the binding with `mise run pg:test`).
-
-`mise run torture postgres-millions` is the scale counterpart: a durable
-population of session actors (a set of ids, a timeout a day after the last
-touch — every idle actor has a pending timer) in a database of its own,
-`tinyactors_millions`, kept between runs (~600 bytes per actor;
-`--param reset=1` starts over; `--param database=NAME` isolates another run).
-The responsiveness test uses the disposable `tinyactors_torture_test` database,
-not the retained `tinyactors_millions` population. Four pgbench spawners grow it to 2,000,000
-(`--param population`) while 6 clients touch a hot set of 10,000
-(`--param hot`), 2 clients touch random actors anywhere, and a scheduler calls
-`run()`. The bench measures with cheap queries only and probes one hot event,
-one cold event and one `run()` per second. Reference (4 CPUs, PostgreSQL defaults):
-
-| Phase | Actors stored | Spawns/s | Events/s | Hot event | Cold event | `run()` |
-|---|---|---|---|---|---|---|
-| ramp (0 → 2 M, all clients on 4 CPUs) | 2,002,000 after 86 s | 23,700 | 4,100 | | | |
-| steady, 2 M stored | 2,002,000 | — | 7,400 | 0.86 ms | 0.71 ms | 0.21 ms |
-
-Latencies include the round trip; `mise run pg:scale` measures the same
-without the dashboard, up to 5 million (bindings/postgres/README.md).
-
 A scenario directory:
 
 ```
@@ -327,14 +263,9 @@ data/           JSON schemas, JSONL histories
   "generators": ["generators/orders.js"],
   "mutations": { "kill-billing": { "title": "Kill billing", "description": "…", "script": "mutations/kill-billing.js" } },
   "schedule": [{ "at": 12, "mutation": "kill-billing" }],
-  "expect": ["totals.remoteOut > 100", "counters.confirmed > 0", "totals.faults == 0"],
-  "services": []
+  "expect": ["totals.remoteOut > 100", "counters.confirmed > 0", "totals.faults == 0"]
 }
 ```
-
-`"services": ["postgres"]` marks a scenario that needs an external service:
-the dashboard shows the service's live state and a start button, and hides the
-in-process system charts when the scenario has no systems.
 
 Spawn counts are multiplied by `--scale` unless `"fixed": true`. `spawn.data`
 initializes the chart's `<data>` (ECMAScript datamodel). Expectations compare a
@@ -364,28 +295,9 @@ path in the final summary (`systems.<name>.<stat>`, `totals.*`, `counters.*`,
 | `bench.ioprocessor(type, fn)`, `bench.failSend(msg)` | scenario I/O processors (`"ioprocessors"` in scenario.json) |
 | `bench.reload(system, charts)` → version, `migrate(system, { wake, timeoutMs, onDone })`, `migration(system)`, `versions(system)`, `watch(system, paths, { ms, load, migrate, then })`, `mtime(path)` | hot reload: a new version (charts as paths or `{ name, text }`); live migration as a job the bench loop advances in ~2 ms steps (actors walked with `ta_system_actors` in chunks; busy ones retried, hibernated ones woken with `wake`, stragglers left behind after `timeoutMs`; `onDone({ migrated, failed, pending })`); CGI-style file watching |
 | `bench.duration()` | the run's planned duration (s) |
-| `bench.pg.status()`, `available()`, `query(sql)` → Promise of rows, `load({ clients, seconds, script })` → pid, `stopLoad()`, `use(db)`, `start()`, `restart()` | the PostgreSQL service: cached asynchronous probe state, FIFO queries on the scenario's connection (columns as text or null), pgbench scripts in the background (at most 16 active; stopped with the scenario), the database later queries and loads use (await outstanding queries before `use`; back to `tinyactors` when it stops), `mise run pg:start` / `pg:restart` |
 | `bench.machine`, `bench.rss()` | this machine's memory (total, available, cgroup limit), CPUs; the bench's resident memory |
 
 Each script file runs in its own block scope; share state through `globalThis`.
-
-Use `await bench.pg.query(sql)` inside an async timer or finish/check callback.
-It resolves after PostgreSQL's ReadyForQuery, or rejects with an Error on SQL
-errors, connection failure or timeout (1 s to connect, 30 s per query). The
-queue is capped at 128 requests. The probe uses its own connection and a
-300 ms connect timeout. Both use `127.0.0.1:${BENCH_POSTGRES_PORT || 54320}` and trust
-authentication. `status()` never waits for a probe.
-
-```js
-bench.every(1000, async () => {
-  const [row] = await bench.pg.query('SELECT count(*) AS n FROM tinyactors.inbox');
-  bench.metric('queues.inbox', Number(row.n));
-});
-bench.check('outbox drained', async () => {
-  const [row] = await bench.pg.query('SELECT count(*) AS n FROM tinyactors.outbox WHERE delivered_at IS NULL');
-  return Number(row.n) === 0;
-});
-```
 
 `bench.every` skips ticks while its previous returned Promise is pending;
 `bench.after`, `onFinish` and `check` also accept async callbacks. Rejected timer
@@ -395,8 +307,7 @@ its Promise from the callback.
 
 The server regression tests issue HTTP and WebSocket round trips every 20 ms
 (including while earlier requests are outstanding) and require p99 below
-50 ms during chaos, a PostgreSQL black hole, and a fresh 100,000-actor SQL
-prepopulation. `TORTURE_BENCH=/path/to/binary` selects a binary for comparison.
+50 ms during chaos. `TORTURE_BENCH=/path/to/binary` selects a binary for comparison.
 
 ## Time series and protocol
 
@@ -413,13 +324,9 @@ One JSON object per line / WebSocket text frame:
 - `{"type":"summary",…,"ok":true,"failures":[]}` at the end.
 - On connect: `{"type":"hello","scenario":{…mutations…}}` and
   `{"type":"history","samples":[…],"logs":[…]}` (last 10 minutes).
-- `{"type":"service","name":"postgres","state":"unknown|unavailable|starting|missing|available|failed","detail":…,"version":…,"extension":…,"address":…,"start":"mise run pg:start"}`
-  — on connect and on every change (probed once a second while a dashboard is connected).
 - Client → bench: `{"cmd":"open","scenario":"<id>"}` (switch), `{"cmd":"restart"}`,
-  `{"cmd":"mutate","id":"…"}`, `{"cmd":"pause"}`, `{"cmd":"resume"}`, `{"cmd":"stop"}`,
-  `{"cmd":"start-service","name":"postgres"}`.
-- `GET /api/scenarios` → `{ services: { postgres }, current, state: idle|running|finished, scenarios: [{ id, scenario }] }`;
-  `GET /api/services` → `{ postgres }`.
+  `{"cmd":"mutate","id":"…"}`, `{"cmd":"pause"}`, `{"cmd":"resume"}`, `{"cmd":"stop"}`.
+- `GET /api/scenarios` → `{ current, state: idle|running|finished, scenarios: [{ id, scenario }] }`.
 
 ## Dashboard
 

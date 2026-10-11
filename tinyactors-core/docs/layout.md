@@ -11,8 +11,8 @@ implementation of that layer). Layer dependency rules are in
 ├── mise/
 │   ├── core.rb                ✅ the layers (one static lib each, libtinyactors_<layer>.a), the test
 │   │                             programs and what they link, the builds (dev: ASan/UBSan · release ·
-│   │                             addon: PIC · wasi)
-│   └── tasks/                 ✅ Ruby file tasks: build, test, w3c, node:*, web:*, pg:*, check:*, …
+│   │                             wasi)
+│   └── tasks/                 ✅ Ruby file tasks: build, test, w3c, torture, check:*, …
 ├── AGENTS.md                  ✅ rules for contributors/agents
 ├── sgconfig.yml               ✅ ast-grep project: the naming lint (`mise run lint`)
 │
@@ -22,7 +22,6 @@ implementation of that layer). Layer dependency rules are in
 │       ├── types.h            ✅ ta_string_view, ta_status, TA_NIL, ta_time, ta_expression, ta_payload, TA_API
 │       ├── allocator.h        ✅ ta_allocator: the memory a caller lends the host and the compiler
 │       ├── address.h          ✅ tinyactors:// addresses (parse/format)
-│       ├── frame.h            ✅ length-prefixed link frames on byte streams
 │       ├── image.h            ✅ open/verify image, chart/state/event/expression/data lookup
 │       ├── datamodel.h        ✅ datamodel vtable, ta_datamodel_environment queries, system variables,
 │       │                         event view, null datamodel
@@ -34,10 +33,7 @@ implementation of that layer). Layer dependency rules are in
 │       │                         migration jobs, sweep, growth, boot, snapshot/restore
 │       ├── trace.h            ✅ trace values (IDs, step keys, span IDs, traceparent, generator,
 │       │                         sampling) and the trace record schema (ADR 0006)
-│       ├── link.h             ✅ the link protocol over the caller's transports (hello, ev, err,
-│       │                         ping, reconnects, resumption, exports; ADR 0008)
-│       ├── otlp.h             ✅ the OTLP codec: trace records -> OTLP protobuf, and decoding;
-│       │                         the exporter's batching (ta_otlp_batch)
+│       ├── otlp.h             ✅ the OTLP codec: trace records -> OTLP protobuf, and decoding
 │       ├── datamodel_ecmascript.h ✅ the ECMAScript datamodel (link libtinyactors_datamodel_ecmascript)
 │       └── basic_http.h       ✅ BasicHTTP Event I/O Processor codec
 │
@@ -54,8 +50,7 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── heap.[ch]          ✅ 4-ary (due, sequence) heap with removal
 │   │   ├── journal.[ch]       ✅ lossy ring of variable-size records (the trace journal)
 │   │   ├── address.c          ✅ the address grammar (include/tinyactors/address.h)
-│   │   ├── frame.c            ✅ link frames (include/tinyactors/frame.h)
-│   │   └── json.[ch]          ✅ reading JSON in place and writing JSON strings (host, link)
+│   │   └── json.[ch]          ✅ writing JSON strings (the host's state value)
 │   │
 │   ├── image/                 shared by compiler (writer) and runtime (reader)
 │   │   ├── records.h          ✅ on-disk records, bytecode opcodes, validated view
@@ -104,15 +99,10 @@ implementation of that layer). Layer dependency rules are in
 │   │   │                         boot, whole-host snapshot/restore
 │   │   └── router.c           ✅ envelopes, peers, routes, deduplication (docs/protocol.md)
 │   │
-│   ├── link/                  the link protocol (freestanding; uses host)
-│   │   └── link.c             ✅ links and servers, hellos, reach, pings, backoff, resumption,
-│   │                             exports (include/tinyactors/link.h)
-│   │
 │   ├── otlp/                  the OTLP codec (freestanding, one block, relocatable; uses trace + image)
 │   │   ├── otlp_internal.h    ✅ the encoder's block, protobuf primitives
 │   │   ├── otlp.c             ✅ records -> spans, span events and log records; staging; scopes
-│   │   ├── decode.c           ✅ OTLP protobuf -> span, attribute, value, event and link views
-│   │   └── batch.c            ✅ the exporter's batches: delay, size, cap, counts (ta_otlp_batch)
+│   │   └── decode.c           ✅ OTLP protobuf -> span, attribute, value, event and link views
 │   │
 │   ├── datamodel_ecmascript/  SCXML ECMAScript datamodel on quickjs-ng; link it like a
 │   │   └── datamodel_ecmascript.c ✅ tree-sitter language (include/tinyactors/datamodel_ecmascript.h); no I/O
@@ -130,18 +120,15 @@ implementation of that layer). Layer dependency rules are in
 │   ├── w3c/convert.py         ✅ instantiates the IRP templates (XSLT 2.0, SaxonC via uv)
 │   ├── lint/rules/            ✅ ast-grep rules (no-retired-abbreviations: the naming lint)
 │   ├── torture/               ✅ torture-bench: scenario host (bench.c: systems, router, the
-│   │   │                         test runtime's `system` I/O processor, scenario switching,
-│   │   │                         the PostgreSQL service probe/starter), HTTP+WebSocket server
-│   │   │                         (net.c), PostgreSQL wire client (postgres.c), scenario engine
-│   │   │                         (prelude.js)
+│   │   │                         test runtime's `system` I/O processor, scenario switching),
+│   │   │                         HTTP+WebSocket server (net.c), event loop (loop.c), scenario
+│   │   │                         engine (prelude.js)
 │   │   ├── scenarios/         ✅ throughput · tracing · crowd · heavy-data · federation · chaos · capacity ·
-│   │   │                         campaign · fit · hibernate · reload · postgres · postgres-millions
+│   │   │                         campaign · fit · hibernate · reload
 │   │   │                         (charts, scripts, generators, mutations, data)
 │   │   └── test/              ✅ JSONL validator + Node WebSocket/dashboard test (`mise run torture:test`)
 │   ├── vendor_quickjs.py      ✅ fetch + verify the pinned quickjs-ng release
 │   ├── amalgamate.py          ✅ dist/tinyactors.h + dist/tinyactors.c single-file distribution
-│   ├── bench_js.mjs           ✅ JS bindings' call cost: Node addon vs wasm (events/s, spawn, hibernate/wake)
-│   ├── bench_tracing.mjs      ✅ what tracing costs the JS bindings (untraced, summary, full, decoded)
 │   ├── w3c/fetch.py           ✅ download the W3C SCXML IRP suite
 │   ├── w3c/convert.py         ✅ .txml -> .scxml via confEcma.xsl (XSLT 2.0, SaxonC)
 │   ├── tac/                   ◻ compiler CLI: scxml/manifest -> .tai, --emit-c, --dump
@@ -151,66 +138,27 @@ implementation of that layer). Layer dependency rules are in
 │   ├── harness/harness.h      ✅ dependency-free test macros
 │   ├── support/               ✅ datamodel_test (ECMAScript-subset test datamodel), compile/system/file helpers
 │   ├── unit/                  ✅ test_{base,image,compile,compile_scale,core,system,scenarios,runtime,e2e,
-│   │                             datamodel_ecmascript,hibernate,migrate,host,router,address,frame,headers,
+│   │                             datamodel_ecmascript,hibernate,migrate,host,router,address,headers,
 │   │                             trace,journal,tracing,otlp};
-│   │                             test_torture_{loop,postgres}; test_durable:
+│   │                             test_torture_loop; test_durable:
 │   │                             every path out of memory vs. a run that never left it (durability.md)
 │   ├── w3c/run_w3c.c          ✅ IRP runner + BasicHTTP loopback host; with the ECMAScript datamodel
 │   │                             all 191 tests pass (skip.txt is empty); irp/ is fetched, gitignored
-│   ├── w3c/run_js.mjs         ✅ the same suite through the JS bindings (node + wasm): all 191,
-│   │                             with a synchronous BasicHTTP loopback I/O processor
 │   ├── conformance/           ✅ host conformance: JSON scenarios (spawn, send, sendMany, timers,
 │   │                             hibernate, snapshot/restore, reload/migrate, requests) run by
-│   │                             run_c.c (C host), run_js.mjs (node, web) — `mise run conformance`
+│   │                             run_c.c (C host), the `conformance` program of `mise run test`
 │   └── fuzz/                  ◻ libFuzzer: image verifier, XML parser, compiler
 │
 ├── bench/                     ◻ micro (selection, VM, pool); macro load lives in tools/torture
 │
-├── examples/                  hosts built on the public API (`mise run examples:test`)
-│   ├── ui-elements/           ✅ frontend only: custom elements backed by actors (wasm), off-screen
-│   │                             hibernation; machines tested in Node
-│   ├── chess/                 ✅ multiplayer chess: rules (perft), lobby + game actors on the server,
-│   │                             browser client over a link, join by code, tests over real links
-│   ├── serve.mjs              ✅ static server for the browser examples
-│   └── access-reconciler/     ✅ k8s-style controller per employee (charts/access.scxml) + a
-│                                 deterministic discrete-event host (host/sim.c): HR feed, SaaS
-│                                 apps, approvals, drift, outages, hibernation, invariants
-│
 ├── web/torture/               ✅ index.html + home.js: scenario cards; chamber.html + app.js: live
 │                                 dashboard (custom elements cloning <template>s, canvas charts,
-│                                 WebSocket); service.js: live service status + start button;
-│                                 tokens.css implements docs/design-system.md
-│
-├── bindings/                  thin hand-written bindings, each with its own mise.toml
-│   ├── README.md              ✅ conventions
-│   ├── surface.json           ✅ every public C function: "bind" (reachable from every binding)
-│   │                             or skipped with a reason; checked with the typings by
-│   │                             `mise run surface` (mise/tasks/surface)
-│   ├── node/                  ✅ N-API (C API) addon: src/*.c, one file per topic
-│   │                             (addon, values, images, pure, datamodel, quickjs, system, invoke,
-│   │                             persist, link, export, trace, metrics; binding.h between them):
-│   │                             the run loop, links, export and tracing are core's; core.mjs (the
-│   │                             JS API: chart helpers, actors, the timer, I/O processors and
-│   │                             invokers, transports, posts), index.js,
-│   │                             index.d.ts, ws.js; node:test suite, tsc type tests
-│   │                             (`mise run node:test`)
-│   ├── web/                   ✅ browser binding, the same API: tinyactors.wasm is the release's
-│   │                             three libraries in one module (web:build), native.mjs the addon's
-│   │                             twin over their C API (structs at api.mjs's wasm32 offsets; the
-│   │                             JS datamodel's vtable in the function table), core.mjs node's
-│   │                             (copied by web:build), index.mjs (browsers), node.mjs (Node);
-│   │                             `mise run web:test` runs the node suite on it
-│   └── postgres/              ✅ PostgreSQL extension: durable actors as rows, SQL API (define,
-│                                 spawn, send, run, claim/ack/fail), inbox + outbox tables,
-│                                 row-lock concurrency; pg_regress + concurrency tests, test/
-│                                 scale.sh (millions of actors), scripts/start.sh (the instance
-│                                 in this machine) — `mise run pg:test`, `pg:scale`
+│                                 WebSocket); tokens.css implements docs/design-system.md
 │
 └── docs/
     ├── architecture.md        ✅ (§15: implementation status and deviations)
     ├── durability.md          ✅ a session's state, and what each path out of memory keeps
-    ├── postgres.md            ✅ the PostgreSQL binding's design: transactions, locking, outbox
-    ├── concurrency.md         ✅ concurrency and parallelism, from one actor to PostgreSQL
+    ├── concurrency.md         ✅ concurrency and parallelism, from one actor to many hosts
     ├── scenarios.md           ✅ (executed by tests/unit/test_scenarios.c)
     └── layout.md              ✅ (this file)
 ```
@@ -220,7 +168,7 @@ implementation of that layer). Layer dependency rules are in
 | Tool | Why |
 |------|-----|
 | **mise** | One pinned toolchain; tasks are Ruby file tasks, and the build is Ruby too (`mise/core.rb` over the repository's `mise/lib/toolchain/`). |
-| **clang 22** | The pinned compiler for everything that runs here: the sanitizer build, the tools, the addon. |
+| **clang 22** | The pinned compiler for everything that runs here: the sanitizer build and the tools. |
 | **zig cc** | Hermetic cross compiler for the portability matrix (wasm32, musl, macOS, ARM, RISC-V, Cortex-M) from any host, with no SDK installs. |
 | **wasmtime** | Executes the wasm32-wasi test build (`mise run check:wasm`). |
 | **Python** | Only `tools/w3c/convert.py`: the W3C stylesheets are XSLT 2.0, which SaxonC implements. Never a runtime dependency. |
@@ -237,19 +185,10 @@ implementation of that layer). Layer dependency rules are in
 | `mise run amalgamate` | *test* · `dist/<library>.{h,c}` and `dist/<library>_<platform>.c` for `tinyactors` and `tinyactors_runtime`, each compiled on its own |
 | `mise run api [--check]` | *test* · `include/<library>.api.json`, the API descriptions the release and the changelog read |
 | `mise run w3c` | *test* · W3C IRP with the test datamodel (153 mandatory passes at least) and with quickjs-ng in both realm modes: everything not in `tests/w3c/skip.txt` must pass |
-| `mise run node:build` / `node:test` | *test* · the N-API addon; its tests on Node.js and on Bun, and the TypeScript type tests |
-| `mise run web:build` / `web:test` | *test* · the wasm module; the node suite against it, plus its own tests |
-| `mise run surface` | *test* · the binding surface (`bindings/surface.json`): every public C function classified, every bound one surviving the link of the Node addon and of the wasm module with dead-code elimination, every runtime export typed in `index.d.ts` |
-| `mise run conformance:js` | *test* · host conformance through the Node addon and the wasm binding (the C host runs it in `test`) |
-| `mise run w3c:js` | *test* · the IRP suite through the JS bindings; all 191 tests must pass |
-| `mise run examples:test` | *test* · access reconciler (invariants), chess (rules + games over links), ui-elements |
 | `mise run check:wasm` | *test* · the test programs built for wasm32-wasi, run under wasmtime |
-| `mise run torture:test` | *full* · every torture scenario headless (postgres only when PostgreSQL answers), plus the dashboard server test |
+| `mise run torture:test` | *full* · every torture scenario headless, plus the dashboard server test |
 | `mise run check:cross` | *full* · every layer, test program and tool cross-compiled for each native release target (macOS included) |
 | `mise run torture` | the torture chamber with its live dashboard (release build) |
-| `mise run pg:build` / `pg:test` | the PostgreSQL extension: build, pg_regress + concurrency tests on a throwaway cluster |
-| `mise run pg:scale` | millions of actors on the `pg:start` instance: spawn rate, idle `run()`, hot/cold events, one hot actor, all timers due, backend memory (`TA_SCALE_N`) |
-| `mise run pg:start` / `pg:restart` | the PostgreSQL instance of this machine with the extension (127.0.0.1:54320, database `tinyactors`) |
 | `mise run vendor-quickjs` | the pinned quickjs-ng release into `third_party/quickjs-ng` |
 
 ## Naming

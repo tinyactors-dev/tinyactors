@@ -1,7 +1,0 @@
-#!/usr/bin/env ruby
-#MISE description="PostgreSQL binding: restart the instance pg:start runs (fast shutdown, then up again)"
-# vim:ft=ruby
-
-require_relative '../../core'
-
-Core.run('bash', 'scripts/restart.sh', chdir: Core::ROOT.join('bindings/postgres'))

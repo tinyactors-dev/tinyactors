@@ -1,5 +1,5 @@
 {
-  "$comment": "Address vectors (docs/protocol.md, Addresses). Every implementation of the protocol must agree: run by tests/unit/test_address.c (C, ta_address) and tests/conformance/run_js.mjs (JS). session ids are strings (lossless beyond 2^53).",
+  "$comment": "Address vectors (docs/protocol.md, Addresses). Every implementation of the protocol must agree: run by tests/unit/test_address.c (C, ta_address). session ids are strings (lossless beyond 2^53).",
   "valid": [
     { "text": "tinyactors://a/#_scxml_1", "system": "a", "kind": "session", "session": "1" },
     { "text": "tinyactors://orders/#_scxml_42", "system": "orders", "kind": "session", "session": "42" },

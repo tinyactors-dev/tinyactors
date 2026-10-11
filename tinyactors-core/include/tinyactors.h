@@ -5,13 +5,11 @@
 #include <tinyactors/types.h>
 #include <tinyactors/allocator.h>
 #include <tinyactors/address.h>
-#include <tinyactors/frame.h>
 #include <tinyactors/trace.h>
 #include <tinyactors/image.h>
 #include <tinyactors/datamodel.h>
 #include <tinyactors/system.h>
 #include <tinyactors/host.h>
-#include <tinyactors/link.h>
 #include <tinyactors/otlp.h>
 #include <tinyactors/wasm.h>
 

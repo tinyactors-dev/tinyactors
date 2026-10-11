@@ -1,7 +1,0 @@
-# PostgreSQL 17 with server headers and PGXS, from conda-forge (prebuilt; no
-# system packages needed). Only the PostgreSQL binding pins it, so a core
-# checkout does not download it; the binding's tasks are tinyactors-core's
-# `mise run pg:*` (mise/tasks/pg/), and its scripts find it with
-# `mise where conda:postgresql` from this directory.
-[tools]
-"conda:postgresql" = "17"

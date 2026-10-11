@@ -30,7 +30,7 @@ module Core
 
   LAYERS = [
     Layer.new(name: 'base', uses: [], freestanding: true,
-              sources: %w[address format frame json arena pool heap slab journal].map { |s| "src/base/#{s}.c" }),
+              sources: %w[address format json arena pool heap slab journal].map { |s| "src/base/#{s}.c" }),
     Layer.new(name: 'image', uses: %w[base], freestanding: true,
               sources: %w[src/image/image.c src/image/event_names.c]),
     # Trace values and the record schema (docs/adr/0006 in the repository root).
@@ -45,13 +45,11 @@ module Core
     # policy). Freestanding: it allocates only through the ta_allocator its
     # configuration gives it (docs/adr/0005).
     Layer.new(name: 'host', uses: %w[system], freestanding: true, sources: %w[src/host/host.c src/host/router.c]),
-    # The link protocol between systems over the caller's transports (docs/adr/0008).
-    Layer.new(name: 'link', uses: %w[host], freestanding: true, sources: %w[src/link/link.c]),
     Layer.new(name: 'runtime', uses: %w[system compile], sources: %w[src/runtime/runtime.c src/runtime/runtime_hosted.c]),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
     # Trace records to OTLP protobuf and back: a codec, like basic_http (docs/adr/0006).
-    Layer.new(name: 'otlp', uses: %w[trace image], freestanding: true, sources: %w[src/otlp/otlp.c src/otlp/decode.c src/otlp/batch.c]),
+    Layer.new(name: 'otlp', uses: %w[trace image], freestanding: true, sources: %w[src/otlp/otlp.c src/otlp/decode.c]),
     # The vendored engine only: quickjs-libc (std and os modules, I/O) is not built.
     Layer.new(name: 'quickjs', uses: [], libraries: %w[-lm],
               sources: %w[quickjs libregexp libunicode dtoa].map { |s| "third_party/quickjs-ng/#{s}.c" },
@@ -116,10 +114,10 @@ module Core
   end
 
   LIBRARIES = [
-    Library.new(name: 'tinyactors', layers: %w[base image trace core system host link basic_http otlp], uses: [],
+    Library.new(name: 'tinyactors', layers: %w[base image trace core system host basic_http otlp], uses: [],
                 libc: false,
-                headers: %w[types.h allocator.h address.h frame.h trace.h stats.h image.h datamodel.h system.h core.h host.h
-                            link.h basic_http.h otlp.h wasm.h]),
+                headers: %w[types.h allocator.h address.h trace.h stats.h image.h datamodel.h system.h core.h host.h
+                            basic_http.h otlp.h wasm.h]),
     Library.new(name: 'tinyactors_runtime', layers: %w[compile runtime], uses: %w[tinyactors], libc: true,
                 headers: %w[compile.h runtime.h]),
     Library.new(name: 'tinyactors_datamodel_ecmascript', layers: %w[datamodel_ecmascript quickjs], uses: %w[tinyactors],
@@ -159,12 +157,12 @@ module Core
   end
 
   ECMASCRIPT = %w[datamodel_ecmascript quickjs].freeze
-  # The C library functions QuickJS calls, in the ECMAScript library and in
-  # the Node.js addon: allocation (malloc_usable_size, which glibc and musl
-  # both have; libSystem's malloc_size on macOS), strings and numbers, the
-  # clock and local time for Date, stdio for its debugging dumps, and the
-  # math library, which glibc keeps in libm: a program links -lm (ADR 0001,
-  # decision 20), and Node.js already has.
+  # The C library functions QuickJS calls, in the ECMAScript library:
+  # allocation (malloc_usable_size, which glibc and musl both have;
+  # libSystem's malloc_size on macOS), strings and numbers, the clock and
+  # local time for Date, stdio for its debugging dumps, and the math
+  # library, which glibc keeps in libm: a program links -lm (ADR 0001,
+  # decision 20).
   ECMASCRIPT_LIBC = %w[abort acos acosh asin asinh atan atan2 atanh calloc cbrt ceil clock_gettime cos cosh exp expm1
                        floor fmod fprintf fputc free frexp fwrite gettimeofday hypot localtime_r log log10 log1p log2
                        malloc memchr memmove modf pow printf realloc round scalbn sin sinh snprintf sscanf strchr
@@ -189,23 +187,18 @@ module Core
     unit('test_durable', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_router', 'host', 'runtime', 'compile', *ECMASCRIPT),
-    unit('test_link', 'link', 'runtime', 'compile', *ECMASCRIPT),
     # The host's memory: accounting, a fixed arena, and refusals (--full: each
     # allocation of the workload refused in turn).
     unit('test_host_memory', 'host', 'compile', *ECMASCRIPT, full: true),
     unit('test_address', 'base', 'quickjs', defines: { 'TA_VECTORS' => ROOT.join('tests/conformance/addresses.json') }),
-    unit('test_frame', 'base'),
     unit('test_journal', 'base'),
     unit('test_otlp', 'otlp', 'system', 'compile', *ECMASCRIPT),
     unit('test_trace', 'trace', 'quickjs', defines: { 'TA_SPAN_VECTORS' => ROOT.join('tests/conformance/span_ids.json'),
                                                       'TA_TRACEPARENT_VECTORS' => ROOT.join('tests/conformance/traceparent.json') }),
-    # The torture chamber's event loop and PostgreSQL wire client.
+    # The torture chamber's event loop.
     Program.new(name: 'test_torture_loop', sources: %w[tests/unit/test_torture_loop.c tools/torture/loop.c], uses: [],
                 defines: {}),
-    Program.new(name: 'test_torture_postgres', uses: [], defines: {},
-                sources: %w[tests/unit/test_torture_postgres.c tools/torture/postgres.c tools/torture/loop.c]),
-    # Host conformance (tests/conformance/*.json) through the C host; the JS
-    # drivers (tests/conformance/run_js.mjs) run the same scenarios.
+    # Host conformance (tests/conformance/*.json) through the C host.
     Program.new(name: 'conformance', sources: %w[tests/conformance/run_c.c], uses: ['host', 'runtime', 'compile', *ECMASCRIPT],
                 defines: {}, arguments: [ROOT.join('tests/conformance').to_s])
   ].freeze
@@ -217,13 +210,9 @@ module Core
                 defines: {}),
     # The torture chamber's host (tools/torture/README.md).
     Program.new(name: 'torture-bench', uses: %w[host runtime compile otlp] + ECMASCRIPT,
-                sources: %w[bench.c net.c postgres.c loop.c].map { |s| "tools/torture/#{s}" },
+                sources: %w[bench.c net.c loop.c].map { |s| "tools/torture/#{s}" },
                 defines: { 'BENCH_SOURCE_DIR' => ROOT.join('tools/torture'), 'BENCH_WEB_DIR' => ROOT.join('web/torture'),
-                           'BENCH_REPO_DIR' => ROOT }),
-    # Examples: hosts built on the public API (each directory's README).
-    Program.new(name: 'access-reconciler', sources: %w[examples/access-reconciler/host/sim.c],
-                uses: %w[runtime] + ECMASCRIPT,
-                defines: { 'CHART_PATH' => ROOT.join('examples/access-reconciler/charts/access.scxml') })
+                           'BENCH_REPO_DIR' => ROOT })
   ].freeze
 
   WARNINGS = %w[-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion -Wcast-align
@@ -234,12 +223,6 @@ module Core
   # remain, and anything else fails to compile, on every host.
   FREESTANDING = %w[-ffreestanding -nostdlibinc -fno-builtin-malloc].freeze
 
-  # What the binding surface check compiles with: unoptimized, so the
-  # compiler inlines no call away, without the sanitizers zig adds at -O0,
-  # and each function and datum in a section of its own, for the linker's
-  # dead-code elimination to drop what the binding does not reach.
-  UNOPTIMIZED = %w[-O0 -fno-sanitize=all -ffunction-sections -fdata-sections].freeze
-
   # How a build compiles: `dev` is what the tests run (sanitizers, debug
   # assertions), `release` what the tools and benchmarks run. The sanitizer
   # build is -O1, as sanitizers are usually run: fast enough for the whole
@@ -248,46 +231,21 @@ module Core
     'dev' => { flags: %w[-g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all -DTA_DEBUG],
                link: %w[-fsanitize=address,undefined] },
     'release' => { flags: %w[-O2 -DNDEBUG], link: [] },
-    # What a shared object links (the Node-API addon): position-independent,
-    # and exporting nothing but what the addon marks.
-    'addon' => { flags: %w[-O2 -DNDEBUG -fvisibility=hidden], link: [], position_independent: true },
     # The test programs as WebAssembly (wasm32-wasi, the pinned zig), run
     # under wasmtime (mise run check:wasm).
-    'wasi' => { flags: %w[-Os], link: [], wasi: true },
-    # The Node.js addon as the binding surface check links it (mise run
-    # surface): for one fixed target, x86_64 Linux ELF with the pinned zig,
-    # so the answer is the same on every host.
-    'surface' => { flags: UNOPTIMIZED, link: [], release: Toolchain::Target.release('x86_64-linux') }
+    'wasi' => { flags: %w[-Os], link: [], wasi: true }
   }.freeze
 
 
   module_function
 
-  # The addon for a release target, `addon-<target>` (`mise run node:build
-  # --target <target>`): the addon build's flags, compiled and linked by the
-  # target's pinned `zig cc` from any host (docs/adr/0001).
-  RELEASE_ADDON = /\Aaddon-(?<target>.+)\z/
-
-  def addon_variant(target) = "addon-#{target}"
-
   def variant(name)
-    settings = VARIANTS.fetch(name) do
-      match = RELEASE_ADDON.match(name) or
-        abort "unknown build #{name.inspect}: #{VARIANTS.keys.join(', ')}, addon-<release target>"
-      { **VARIANTS.fetch('addon'), release: Toolchain::Target.release(match[:target]) }
-    end
-    return settings unless settings[:position_independent]
-
-    { **settings, flags: [*settings[:flags], *target_of(settings).format.position_independent] }
+    VARIANTS.fetch(name) { abort "unknown build #{name.inspect}: #{VARIANTS.keys.join(', ')}" }
   end
 
-  # What the build compiles for: this machine, wasm32-wasi, or a release target.
-  def target(variant_name) = target_of(variant(variant_name))
-
-  def target_of(settings)
-    return settings[:release] if settings[:release]
-
-    settings[:wasi] ? Toolchain::Target.zig('wasm32-wasi') : Toolchain::Target.host
+  # What the build compiles for: this machine or wasm32-wasi.
+  def target(variant_name)
+    variant(variant_name)[:wasi] ? Toolchain::Target.zig('wasm32-wasi') : Toolchain::Target.host
   end
 
   def directory(variant_name) = BUILD.join(variant_name)
@@ -363,33 +321,6 @@ module Core
     target.program(link, into: program_path(variant_name, program.name).to_s)
   end
 
-  # --- the bindings' C parts ----------------------------------------------
-
-  # The Node.js addon (mise run node:build): its own sources, compiled with
-  # the Node-API headers that ship with the pinned node, and the layers it
-  # links.
-  NODE_LAYERS = %w[host link runtime system compile otlp datamodel_ecmascript].freeze
-  NODE_SOURCES = %w[addon values images pure datamodel quickjs system invoke persist link export trace metrics].map { |name| "bindings/node/src/#{name}.c" }.freeze
-
-  # Builds the addon's layers and compiles its own sources for the build
-  # `variant_name`; answers what links it: its objects, then the archives.
-  def node_addon_inputs(variant_name)
-    node_include = Pathname.new(Toolchain::Tool[:node].path).join('../../include/node').expand_path
-    abort "no node_api.h in #{node_include}" unless node_include.join('node_api.h').file?
-
-    build_layers(variant_name, link_order(NODE_LAYERS))
-    # NAPI_MODULE defines the addon's exported entry points without prototypes.
-    command = [*compile_command(variant_name), '-Wno-missing-prototypes', '-isystem', node_include.to_s,
-               '-DNAPI_VERSION=8', '-DNODE_GYP_MODULE_NAME=tinyactors']
-    objects = NODE_SOURCES.map do |source|
-      object = directory(variant_name).join('objects/node', "#{File.basename(source, '.c')}.o")
-      compile(command, source, object)
-      object.to_s
-    end
-    [*objects, *link_order(NODE_LAYERS).map { |name| archive_path(variant_name, name).to_s }]
-  end
-
-
   # Runs the block for each item on a thread per CPU; the block's own
   # commands run as child processes, so the threads only wait.
   def in_parallel(items, jobs: Etc.nprocessors)
@@ -456,12 +387,5 @@ module Core
     pid = Process.spawn(env, *command.map(&:to_s), chdir: chdir.to_s)
     _pid, status = Process.wait2(pid)
     exit(status.exitstatus || 1) unless status.success?
-  end
-
-  # Installs the Node.js binding's development packages once.
-  def node_packages
-    node = ROOT.join('bindings/node')
-    run('npm', 'ci', '--no-audit', '--no-fund', '--silent', chdir: node) unless node.join('node_modules/.bin/tsc').file?
-    node
   end
 end
