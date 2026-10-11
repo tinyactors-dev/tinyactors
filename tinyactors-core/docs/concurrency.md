@@ -90,9 +90,14 @@ backend or a microcontroller.
 
 **Thread safety.** A system is not thread-safe, and does not need to be: it
 is a plain block of memory. Use it from one thread at a time (any thread —
-it has no thread affinity). Calls into it while it is running — from a
-datamodel callback, say — are refused (`TA_ERROR_STATE`), so you cannot
-re-enter it by accident; handle effects after `ta_system_run` returned. The library has no global mutable state: different systems on
+it has no thread affinity). While it is running, a datamodel callback may
+send events, spawn actors and terminate them: these take the same path as
+an internal `<send>`, `<invoke>` or cancel. An event reaches its actor at
+its next stable point (never inside the macrostep it was sent from), a
+terminated actor exits at its next microstep boundary, and nothing grows,
+so a full pool is `TA_ERROR_NO_MEMORY`. Every other call while it
+is running is refused (`TA_ERROR_STATE`), so you cannot re-enter it by
+accident; handle effects after `ta_system_run` returned. The library has no global mutable state: different systems on
 different threads never interact.
 
 ## 3. Many systems: parallelism

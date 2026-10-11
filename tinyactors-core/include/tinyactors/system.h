@@ -131,6 +131,11 @@ typedef struct ta_spawn {
     ta_payload params; /* moved into the system on success */
     ta_string_view traceparent;
 } ta_spawn;
+/* spawn, terminate, send and send_many are also taken during ta_system_run,
+ * from a datamodel: they take the paths of an internal <invoke>, cancel and
+ * <send> (an event reaches the actor at its next stable point, never inside
+ * the macrostep it was sent from; a terminated actor exits at its next
+ * microstep boundary). Every other call during a run is TA_ERROR_STATE. */
 TA_API ta_status ta_system_spawn(ta_system *system, const ta_spawn *spawn, uint32_t *actor);
 TA_API ta_status ta_system_terminate(ta_system *system, uint32_t actor);
 TA_API uint32_t ta_system_actor_by_name(const ta_system *system, ta_string_view name);

@@ -558,6 +558,7 @@ void ta_host_error_event(ta_string_view sendid, ta_event_in *event) {
 }
 
 ta_status ta_host_error_route(ta_host *host, ta_string_view origin, ta_route_request *request) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     ta_envelope envelope;
     ta_memset(&envelope, 0, sizeof envelope);
     envelope.size = sizeof envelope;
@@ -578,6 +579,7 @@ ta_status ta_host_route_begin(ta_host *host, const ta_envelope *envelope,
     if (!host || !envelope || envelope->size < sizeof *envelope || !request ||
         request->size < sizeof *request)
         return TA_ERROR_INVALID;
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint32_t flags = request->flags, from = request->from;
     ta_memset(request, 0, sizeof *request);
     request->size = sizeof *request;
@@ -656,6 +658,7 @@ ta_status ta_host_route_step(ta_route_request *request, uint64_t result) {
 
 ta_status ta_host_message_init(ta_host *host, const ta_effect *effect, ta_host_message *message) {
     if (!host || !effect || !message || message->size < sizeof *message) return TA_ERROR_INVALID;
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint64_t revision = message->revision;
     uint32_t index = message->index;
     ta_memset(message, 0, sizeof *message);
@@ -760,6 +763,7 @@ static void reach_install(ta_host *host, peer *p, peer *built) {
 }
 
 ta_status ta_host_peer_reach(ta_host *host, uint32_t handle, ta_string_list reach) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     peer *p = peer_of(host, handle);
     if (!p) return TA_ERROR_STALE;
     peer built;
@@ -770,6 +774,7 @@ ta_status ta_host_peer_reach(ta_host *host, uint32_t handle, ta_string_list reac
 }
 
 ta_status ta_host_peer_add(ta_host *host, const ta_peer_config *config, uint32_t *out) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     if (out) *out = 0;
     if (!config || !ta_address_system_valid(config->id) || is_me(host, config->id))
         return TA_ERROR_INVALID;
@@ -822,6 +827,7 @@ ta_status ta_host_peer_add(ta_host *host, const ta_peer_config *config, uint32_t
 }
 
 ta_status ta_host_peer_up(ta_host *host, uint32_t handle, int up) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     peer *p = peer_of(host, handle);
     if (!p) return TA_ERROR_STALE;
     p->up = up != 0;
@@ -832,6 +838,7 @@ ta_status ta_host_peer_up(ta_host *host, uint32_t handle, int up) {
 }
 
 ta_status ta_host_peer_remove(ta_host *host, uint32_t handle) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     peer *p = peer_of(host, handle);
     if (!p) return TA_ERROR_STALE;
     ta_status status = fail_queue(host, handle, TA_ROUTE_ERROR_UNREACHABLE);
@@ -862,6 +869,7 @@ ta_status ta_host_peer_remove(ta_host *host, uint32_t handle) {
 }
 
 ta_status ta_host_route(ta_host *host, ta_string_view system, uint32_t handle) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     if (!ta_address_system_valid(system) || is_me(host, system)) return TA_ERROR_INVALID;
     if (handle && !peer_of(host, handle)) return TA_ERROR_STALE;
     struct ta_router *router = router_of(host);
@@ -890,6 +898,7 @@ ta_status ta_host_route(ta_host *host, ta_string_view system, uint32_t handle) {
 }
 
 ta_status ta_host_export(ta_host *host, const ta_export_rule *rule) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint32_t handle = rule->peer;
     ta_string_view name = rule->name, events = rule->events;
     if (!name.length) return TA_ERROR_INVALID;
@@ -915,6 +924,7 @@ ta_status ta_host_export(ta_host *host, const ta_export_rule *rule) {
 }
 
 int32_t ta_host_deliver(ta_host *host, uint32_t from, const ta_envelope *envelope) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     if (!envelope || envelope->size < sizeof(ta_envelope)) return TA_ERROR_INVALID;
     peer *p = NULL;
     if (from) {
@@ -989,6 +999,7 @@ int32_t ta_host_deliver(ta_host *host, uint32_t from, const ta_envelope *envelop
 }
 
 ta_status ta_host_peer_error(ta_host *host, const ta_peer_error *error) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint32_t from = error->peer, reason = error->reason;
     ta_string_view origin = error->origin, msgid = error->msgid, sendid = error->sendid;
     peer *p = peer_of(host, from);

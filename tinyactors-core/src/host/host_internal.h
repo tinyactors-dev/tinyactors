@@ -88,6 +88,10 @@ typedef struct host_watch {
 
 struct ta_host {
     ta_host_config config;
+    /* inside ta_system_run, where a datamodel may call back: only the inputs
+     * (spawn, send, send_many, terminate) and lookups are taken, nothing
+     * grows, every other call is TA_ERROR_STATE (host.h, "During a run") */
+    uint32_t running;
     ta_trace_policy trace_policy; /* every segment's, and new ones' (config.system points here) */
     void *trace_rules;            /* its rules and their strings, the host's copy */
     size_t trace_rules_bytes;

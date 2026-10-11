@@ -657,8 +657,9 @@ ta_status ta_system_boot(ta_system *system) {
     return TA_OK;
 }
 
+/* spawn and terminate are taken during a run too (system.h): the paths of
+ * an internal <invoke> and of a parent cancelling its child */
 ta_status ta_system_spawn(ta_system *system, const ta_spawn *spawn, uint32_t *actor) {
-    GUARD(system);
     ta_status status;
     uint32_t index = ta_system_spawn_actor(system, spawn->chart, spawn->name, spawn->params, 0,
                                            TA_NIL, spawn->traceparent, &status);
@@ -674,12 +675,11 @@ ta_status ta_system_set_next_serial(ta_system *system, uint64_t serial) {
 }
 
 ta_status ta_system_terminate(ta_system *system, uint32_t actor) {
-    GUARD(system);
     uint32_t index = ta_system_resolve_actor(system, actor);
     if (index == TA_NIL) return TA_ERROR_STALE;
     ta_actor *actor_record = ta_actor_at(system, index);
     actor_record->flags |=
-        ACTOR_FLAG_CANCEL | ACTOR_FLAG_ORPHAN; /* exits at its next stable point; no done.invoke */
+        ACTOR_FLAG_CANCEL | ACTOR_FLAG_ORPHAN; /* exits at its next microstep boundary; no done.invoke */
     if (actor_record->state != TA_ACTOR_HIBERNATED) /* else: applied when it is woken */
         ta_core_cancel(&system->core, ta_actor_instance(system, actor_record));
     ta_system_make_runnable(system, index);

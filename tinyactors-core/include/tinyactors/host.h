@@ -114,6 +114,27 @@ TA_API ta_status ta_host_boot(ta_host *h, uint32_t segment);
 TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
 
 /* ---- actors (by session id, host-wide) -------------------------------------- */
+/* During a run. A datamodel the host calls while ta_host_run runs (an
+ * expression of a binding's own datamodel, say) may call ta_host_spawn,
+ * ta_host_send, ta_host_send_many and ta_host_terminate. They take the paths
+ * of an internal <invoke>, <send> and cancel: no queue of their own, no copy,
+ * and nothing grows, so a full pool is TA_ERROR_NO_MEMORY with nothing
+ * changed (a payload stays the caller's). When the input is processed:
+ *   - an event for the actor whose expression sent it: at the end of the
+ *     macrostep it is in (its next stable point), never inside it;
+ *   - an event for another actor, or a spawned actor: at the back of its
+ *     segment's run queue, later in this run if the budget allows, else in
+ *     the next one (the run returns TA_RUN_YIELDED);
+ *   - a terminated actor exits at its next microstep boundary, as an
+ *     invoked child its parent cancels does (for the actor whose expression
+ *     terminated it: after the microstep it is in; the rest of the
+ *     macrostep does not run).
+ * Lookups (ta_host_chart, ta_host_locate, ta_host_actor_by_name,
+ * ta_host_segment_count) answer as usual. Every other call is refused:
+ * TA_ERROR_STATE, an empty answer or nothing done (ta_host_effects returns
+ * 0; ta_host_effects_ack, ta_host_advance_time do nothing; ta_host_sweep
+ * returns 0; ta_host_run returns TA_RUN_FAULT with TA_ERROR_STATE). */
+
 /* Spawn in (spawn->segment, spawn->chart) — usually the current version
  * (ta_host_chart). */
 TA_API ta_status ta_host_spawn(ta_host *h, const ta_spawn *spawn, uint64_t *session);

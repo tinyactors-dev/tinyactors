@@ -154,6 +154,7 @@ uint32_t host_moved_get(const ta_host *host, uint64_t key) {
 /* A bigger block for a segment: TA_OK; TA_ERROR_NO_MEMORY if the allocator
  * refused it; TA_ERROR_INVALID if it cannot grow (the segment unchanged). */
 static ta_status segment_grow(ta_host *host, host_segment *segment) {
+    if (host->running) return TA_ERROR_NO_MEMORY; /* nothing grows during a run */
     ta_system_config config = segment->config;
     config.max_actors =
         config.max_actors * 2 > TA_SYSTEM_MAX_ACTORS ? TA_SYSTEM_MAX_ACTORS : config.max_actors * 2;
@@ -372,6 +373,7 @@ void ta_host_free(ta_host *host) {
 static void reserve_serials(ta_host *h, uint32_t index);
 
 ta_status ta_host_add_image(ta_host *host, const ta_image *image, uint32_t *segment) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint32_t index = host->segment_count;
     if (index >= (1u << 20)) return TA_ERROR_NO_MEMORY; /* session ids stay exact in a double */
     if (!host_grow(host, (void **)&host->segments, &host->segment_capacity, index + 1,
@@ -531,6 +533,7 @@ static void value_close(value_writer *w, const value_frame *frame) {
 ta_status ta_host_state_value(const ta_host *host, uint64_t session, ta_buffer *out) {
     uint32_t si = 0, actor = 0, states[TA_STATE_VALUE_STATES];
     out->length = 0;
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     if (host_locate(host, session, &si, &actor) != TA_OK) return TA_ERROR_INVALID;
     const host_segment *segment_record = segment_of(host, si);
     ta_actor_info info;
@@ -665,6 +668,7 @@ ta_status ta_host_terminate(ta_host *host, uint64_t session) {
 }
 
 ta_status ta_host_resume(ta_host *host, const ta_resume *resume) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     host_segment *segment_record = segment_of(host, resume->segment);
     if (!segment_record) return TA_ERROR_INVALID;
     segment_record->busy = 1;
@@ -889,6 +893,10 @@ static ta_status effect_copy(ta_host *host, uint32_t si, const ta_effect *effect
 }
 
 uint32_t ta_host_effects(ta_host *host, const ta_host_effect **out) {
+    if (host->running) { /* not during a run (host.h) */
+        *out = (const ta_host_effect *)0;
+        return 0;
+    }
     host->effects_ready =
         host->effect_count; /* these are seen now: released by the next ack or run */
     for (uint32_t i = 0; i < host->effect_count; i++) {
@@ -905,6 +913,7 @@ uint32_t ta_host_effects(ta_host *host, const ta_host_effect **out) {
 }
 
 void ta_host_effects_ack(ta_host *host) {
+    if (host->running) return; /* not during a run (host.h) */
     effects_release(host);
 }
 
@@ -1027,6 +1036,7 @@ static int job_reserve(ta_host *host, migration_job *job, uint32_t extra) {
 }
 
 ta_status ta_host_migrate(ta_host *host, const ta_host_migration *migration, uint32_t *id) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     ta_string_view name = migration->name;
     uint64_t session = migration->session;
     uint32_t flags = migration->flags;
@@ -1290,6 +1300,7 @@ static ta_status job_step(ta_host *host, migration_job *job, uint32_t quantum) {
 static void watches_expire(ta_host *host);
 
 void ta_host_advance_time(ta_host *host, ta_time now) {
+    if (host->running) return; /* not during a run (host.h) */
     host->now = now;
     for (uint32_t i = 0; i < host->segment_count; i++)
         if (host->segments[i].live) ta_system_advance_time(host->segments[i].system, now);
@@ -1441,6 +1452,12 @@ static int retire(ta_host *host) {
 ta_run ta_host_run(ta_host *host, uint32_t budget) {
     ta_run out;
     ta_memset(&out, 0, sizeof out);
+    if (host->running) { /* called from a datamodel during a run */
+        out.status = TA_RUN_FAULT;
+        out.detail = (uint32_t)TA_ERROR_STATE;
+        out.next_deadline = UINT64_MAX;
+        return out;
+    }
     effects_release(host); /* the previous batch, if not acknowledged */
     uint32_t left = budget;
     int full = 0, fault = 0, exhausted = 0, sync = 0;
@@ -1467,7 +1484,9 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
             uint32_t share = runnable > 1 ? left / runnable : left;
             if (runnable > 1) runnable--;
             ta_system_trace_clock(segment->system, host->fuel_clock);
+            host->running = 1;
             ta_run result = ta_system_run(segment->system, share ? share : 1);
+            host->running = 0;
             host->fuel_clock = segment_clock(segment);
             left = result.used >= left ? 0 : left - result.used;
             ran = 1;
@@ -1560,6 +1579,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
 /* ---- hibernation ----------------------------------------------------------------------- */
 
 uint32_t ta_host_sweep(ta_host *host, uint32_t max_scan, ta_uint64_array sessions) {
+    if (host->running) return 0; /* not during a run (host.h) */
     uint64_t *out = sessions.pointer;
     uint32_t capacity = sessions.capacity, n = 0, scanned = 0;
     /* each live segment once at most: its share is up to one revolution (no lapping) */
@@ -1610,12 +1630,14 @@ uint32_t ta_host_sweep(ta_host *host, uint32_t max_scan, ta_uint64_array session
 }
 
 ta_status ta_host_hibernate(ta_host *host, uint64_t session, ta_buffer *out) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint32_t si, actor;
     ta_status status = host_locate(host, session, &si, &actor);
     return status == TA_OK ? ta_actor_hibernate(host->segments[si].system, actor, out) : status;
 }
 
 ta_status ta_host_wake(ta_host *host, uint64_t session, ta_bytes blob) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint32_t si, actor;
     ta_status status = host_locate(host, session, &si, &actor);
     if (status != TA_OK) return status;
@@ -1630,6 +1652,7 @@ ta_status ta_host_wake(ta_host *host, uint64_t session, ta_bytes blob) {
 /* ---- moving actors between hosts ------------------------------------------------------- */
 
 ta_status ta_host_export_actor(ta_host *host, uint64_t session, ta_buffer *out) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint32_t si, actor;
     ta_status status = host_locate(host, session, &si, &actor);
     if (status != TA_OK) return status;
@@ -1697,6 +1720,7 @@ static int tree_pass(ta_host *host, uint32_t si, uint32_t root, uint64_t root_se
 }
 
 ta_status ta_host_adopt(ta_host *host, const ta_host_adoption *adoption, uint64_t *session) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint32_t segment = adoption->segment;
     size_t length = adoption->blob.length;
     host_segment *segment_record = segment_of(host, segment);
@@ -1832,6 +1856,7 @@ static ta_status trace_compose(ta_host *host) {
 }
 
 ta_status ta_host_trace_set(ta_host *host, const ta_host_trace_options *options) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     if (host->config.system.tracing == TA_TRACING_DISABLED) return TA_ERROR_STATE;
     if (!options || options->size < sizeof *options) return TA_ERROR_INVALID;
     host_rules rules, before = host->trace_options;
@@ -1858,6 +1883,7 @@ ta_status ta_host_trace_set(ta_host *host, const ta_host_trace_options *options)
 }
 
 ta_status ta_host_trace_watch(ta_host *host, const ta_host_watch *request, uint32_t *id) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     const ta_trace_rule *rules = request->rules;
     uint32_t count = request->rule_count;
     ta_time until = request->until;
@@ -1888,6 +1914,7 @@ static void watch_remove(ta_host *host, uint32_t at) {
 }
 
 ta_status ta_host_trace_unwatch(ta_host *host, uint32_t id) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     for (uint32_t i = 0; i < host->watch_count; i++)
         if (host->watches[i].id == id) {
             watch_remove(host, i);
@@ -1964,6 +1991,7 @@ uint32_t ta_host_actors(const ta_host *host, uint64_t *cursor, ta_uint64_array s
 /* ---- system images ------------------------------------------------------------------ */
 
 ta_status ta_host_boot(ta_host *host, uint32_t segment) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     host_segment *segment_record = segment_of(host, segment);
     if (!segment_record) return TA_ERROR_INVALID;
     ta_image_info image_info;
@@ -2038,6 +2066,7 @@ static ta_status region_length(const ta_system *system, size_t *length) {
 }
 
 ta_status ta_host_snapshot(ta_host *host, ta_buffer *out) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     if (host->effect_count) return TA_ERROR_STATE; /* acknowledge the effects first */
     for (uint32_t i = 0; i < host->job_count; i++)
         if (host->jobs[i].active) return TA_ERROR_STATE;
@@ -2317,6 +2346,7 @@ static uint32_t unpack_u32(const unsigned char *in) {
 
 ta_status ta_host_snapshot_pack(ta_host *host, const ta_datamodel_state *contents,
                                 ta_buffer *destination) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     ta_string_view datamodel = contents->datamodel;
     const void *state = contents->state.pointer;
     size_t state_length = contents->state.length;

@@ -322,8 +322,9 @@ static uint32_t opt_str(ta_core *core, ta_string_view v, int *oom) {
     return r;
 }
 
+/* Also during a run, from a datamodel (system.h): the event takes the path
+ * of an internal <send>, the target's mailbox, read at its next stable point. */
 ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
-    if (system->in_call) return TA_ERROR_STATE;
     ta_core *core = &system->core;
     uint32_t index = ta_system_resolve_actor(system, event_in->target);
     if (index == TA_NIL) return TA_ERROR_STALE;

@@ -193,6 +193,7 @@ module Core
     unit('test_address', 'base', 'quickjs', defines: { 'TA_VECTORS' => ROOT.join('tests/conformance/addresses.json') }),
     unit('test_journal', 'base'),
     unit('test_cbor', 'base'),
+    unit('test_host_inputs', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_otlp', 'otlp', 'system', 'compile', *ECMASCRIPT),
     unit('test_trace', 'trace', 'quickjs', defines: { 'TA_SPAN_VECTORS' => ROOT.join('tests/conformance/span_ids.json'),
                                                       'TA_TRACEPARENT_VECTORS' => ROOT.join('tests/conformance/traceparent.json') }),
