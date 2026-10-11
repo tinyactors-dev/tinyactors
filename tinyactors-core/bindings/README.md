@@ -78,7 +78,7 @@ Rules for every binding:
 `node/` and `web/` give JavaScript the same API (`core.mjs` in each, the
 same `index.d.ts`) and share no code: each drives the core its own way.
 
-**Node.js** (`node/`): `src/binding.c` is the native side of `core.mjs`:
+**Node.js** (`node/`): `src/*.c` (one C file per topic, `binding.h` between them) is the native side of `core.mjs`:
 hand-written wrappers of the pure functions of the public headers
 (compile, images, addresses, frames, traceparents, OTLP), and a `System`
 over `ta_host` with its datamodel (the native `ecmascript` vtable, values
@@ -92,7 +92,7 @@ three libraries (`tinyactors`, `tinyactors_runtime`,
 `tinyactors_datamodel_ecmascript`) linked into one module as the release
 links its modules, importing nothing, exporting the public API and a
 function table (`mise run web:build`). `native.mjs` gives `core.mjs` the
-same calls `binding.c` gives Node's, written in JavaScript over that API:
+same calls the addon gives Node's, written in JavaScript over that API:
 
 - structs are read and written at the wasm32 offsets of `api.mjs`, which
   web:build generates from the API descriptions; a struct passed by value

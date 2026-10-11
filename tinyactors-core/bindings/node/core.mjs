@@ -12,7 +12,7 @@
  * through links. Everything else — values, timers, routing, versions,
  * hibernation, migration — is the core's.
  *
- * `native` is the addon (src/binding.c); `platform` supplies the clock,
+ * `native` is the addon (src/*.c); `platform` supplies the clock,
  * timers, deferral, logging and HTTP posts.
  */
 
@@ -282,7 +282,7 @@ export function createRuntime({ native, platform }) {
 
   /* ---------------------------------------------------------------- tracing
    * Core writes trace records (docs/adr/0006 in the repository root);
-   * binding.c encodes them as OTLP protobuf after every run, and this code
+   * the addon (src/trace.c) encodes them as OTLP protobuf after every run, and this code
    * hands the bytes to a sink and to an OTLP/HTTP exporter, as they are. */
 
   /** Core's record kinds, in core's order (TA_TRACE_* in tinyactors/trace.h, from 1). */
@@ -502,7 +502,7 @@ export function createRuntime({ native, platform }) {
   }
   const millis = (ns) => Number(ns / 1000n) / 1000;
 
-  /* Metrics as the native writer takes them (binding.c, "metrics"). */
+  /* Metrics as the native writer takes them (src/metrics.c, "metrics"). */
   function nativeMetrics(metrics) {
     if (!Array.isArray(metrics)) throw new TypeError('metricsToOTLP: snapshot.metrics must be an array of metrics');
     return metrics.map((m) => {
@@ -529,7 +529,7 @@ export function createRuntime({ native, platform }) {
       };
     });
   }
-  /* A decoded request (binding.c, "decodeMetrics") as Metric objects. */
+  /* A decoded request (src/metrics.c, "decodeMetrics") as Metric objects. */
   function snapshotMetrics(decoded) {
     return decoded.map((m) => ({
       name: m.name,
@@ -776,7 +776,7 @@ export function createRuntime({ native, platform }) {
       runs.sum += seconds;
     }
 
-    /* a run code from binding.c: -2 more work now, -1 idle, else the next deadline */
+    /* a run code from the addon (src/system.c): -2 more work now, -1 idle, else the next deadline */
     _run(code) {
       if (this._syncing) return;
       if (code === -2) {
@@ -1856,7 +1856,7 @@ export function createRuntime({ native, platform }) {
    * protocol"): hello {v, id, reach, caps, cred}, ev (an envelope), err,
    * ping/pong. Routing is the native router's: each connection is one router
    * peer (ta_host_peer_*); this code moves frames between it and the wire.
-   * Envelopes come out of binding.c as neutral JSON (ta_host_envelope_json). */
+   * Envelopes come out of the addon as neutral JSON (ta_host_envelope_json). */
   const LINK_V = 1;
   const parseFrame = (text) => {
     try {

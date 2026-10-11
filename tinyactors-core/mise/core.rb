@@ -366,7 +366,7 @@ module Core
   # the Node-API headers that ship with the pinned node, and the layers it
   # links.
   NODE_LAYERS = %w[host runtime system compile otlp datamodel_ecmascript].freeze
-  NODE_SOURCES = %w[bindings/node/src/addon.c bindings/node/src/binding.c].freeze
+  NODE_SOURCES = %w[addon values images pure datamodel quickjs system persist router trace metrics].map { |name| "bindings/node/src/#{name}.c" }.freeze
 
   # Builds the addon's layers and compiles its own sources for the build
   # `variant_name`; answers what links it: its objects, then the archives.

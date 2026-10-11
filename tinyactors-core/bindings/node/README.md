@@ -3,7 +3,7 @@
 SCXML statecharts and actors on the tinyactors runtime. The addon is written
 against the **Node-API C API** (`node_api.h`, no C++ wrapper) and links the
 tinyactors static libraries. The JavaScript API lives in `core.mjs`, a thin
-layer over the addon (`src/binding.c`). The [web binding](../web) has the
+layer over the addon (`src/*.c`, one C file per topic). The [web binding](../web) has the
 same API (the same `index.d.ts`) on its own implementation, so the same
 code runs in Node.js and in browsers. Node.js ≥ 22.12 (`require()` of the
 ES-module core).

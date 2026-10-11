@@ -1,7 +1,7 @@
 'use strict';
 /**
  * tinyactors for Node.js — the API of core.mjs over the native addon
- * (src/addon.c and src/binding.c, against Node-API).
+ * (src/*.c, one file per topic, against Node-API).
  */
 const path = require('path');
 const { createRuntime } = require('./core.mjs');

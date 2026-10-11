@@ -177,9 +177,9 @@ implementation of that layer). Layer dependency rules are in
 │   ├── surface.json           ✅ every public C function: "bind" (reachable from every binding)
 │   │                             or skipped with a reason; checked with the typings by
 │   │                             `mise run surface` (mise/tasks/surface)
-│   ├── node/                  ✅ N-API (C API) addon: src/binding.c (a System over ta_host, the
-│   │                             native or quickjs ecmascript datamodel, effects, neutral values)
-│   │                             and src/addon.c; core.mjs (the JS API: chart helpers, systems,
+│   ├── node/                  ✅ N-API (C API) addon: src/*.c, one file per topic
+│   │                             (system, datamodel, quickjs, values, images, persist, router,
+│   │                             trace, metrics, pure, addon; binding.h between them); core.mjs (the JS API: chart helpers, systems,
 │   │                             actors, I/O processors and invokers, links, tracing), index.js,
 │   │                             index.d.ts, ws.js; node:test suite, tsc type tests
 │   │                             (`mise run node:test`)
