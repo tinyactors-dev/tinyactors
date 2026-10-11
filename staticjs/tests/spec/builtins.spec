@@ -993,3 +993,121 @@ Object.groupBy([{k: true}, {k: false}, {k: null}, {k: true}], x => x.k)
 === toSpliced faults on an array skipCount
 [1].toSpliced(0, [1])
 --- fault number
+
+# Object.hasOwn: own keys only, the key converted as ToPropertyKey does from
+# a primitive. Faults where JavaScript would call an object key's toString
+# (Node gives a value there).
+
+=== Object.hasOwn finds own keys of an object only
+[Object.hasOwn({a: 1}, "a"), Object.hasOwn({a: 1}, "b"), Object.hasOwn({}, "toString"), Object.hasOwn({}, "hasOwnProperty"), Object.hasOwn({toString: 1}, "toString"), Object.hasOwn({a: undefined}, "a")]
+--- value
+[true,false,false,false,true,true]
+
+=== Object.hasOwn of an empty object
+[Object.hasOwn({}, "a"), Object.hasOwn({}, ""), Object.hasOwn({"": 0}, "")]
+--- value
+[false,false,true]
+
+=== Object.hasOwn converts a number key to its string
+[Object.hasOwn({1: "a"}, 1), Object.hasOwn({0: "a"}, -0), Object.hasOwn({"1.5": 1}, 1.5), Object.hasOwn({NaN: 1}, NaN), Object.hasOwn({Infinity: 1}, Infinity), Object.hasOwn({"-1": 1}, -1), Object.hasOwn({"1e+21": 1}, 1e21), Object.hasOwn({1: "a"}, "01")]
+--- value
+[true,true,true,true,true,true,true,false]
+
+=== Object.hasOwn converts true, false, null and undefined keys by name
+[Object.hasOwn({true: 1}, true), Object.hasOwn({false: 1}, false), Object.hasOwn({null: 1}, null), Object.hasOwn({undefined: 1}, undefined), Object.hasOwn({undefined: 1}), Object.hasOwn({a: 1})]
+--- value
+[true,true,true,true,true,false]
+
+=== Object.hasOwn converts a BigInt key
+[Object.hasOwn({1: "a"}, 1n), Object.hasOwn({"18446744073709551616": 1}, 18446744073709551616n), Object.hasOwn({"-1": 1}, -1n)]
+--- value
+[true,true,true]
+
+=== Object.hasOwn of an array: its indices and length
+[Object.hasOwn([1], "length"), Object.hasOwn([1], 0), Object.hasOwn([1], "0"), Object.hasOwn([1], 1), Object.hasOwn([1], -1), Object.hasOwn([1], "00"), Object.hasOwn([1], "map"), Object.hasOwn([], "length"), Object.hasOwn([], 0), Object.hasOwn([1, 2, 3], 2.0), Object.hasOwn([1, 2], 0.5)]
+--- value
+[true,true,true,false,false,false,false,true,false,true,false]
+
+=== Object.hasOwn of an array holding undefined
+[Object.hasOwn([undefined], 0), Object.hasOwn([undefined, null], 1)]
+--- value
+[true,true]
+
+=== Object.hasOwn of a string: its indices and length
+[Object.hasOwn("ab", 0), Object.hasOwn("ab", 1), Object.hasOwn("ab", 2), Object.hasOwn("ab", "length"), Object.hasOwn("ab", "1"), Object.hasOwn("", "length"), Object.hasOwn("", 0), Object.hasOwn("ab", "at"), Object.hasOwn("ab", -0)]
+--- value
+[true,true,false,true,true,true,false,false,true]
+
+=== Object.hasOwn of a string counts UTF-16 units
+[Object.hasOwn("é😀", 0), Object.hasOwn("é😀", 1), Object.hasOwn("é😀", 2), Object.hasOwn("é😀", 3)]
+--- value
+[true,true,true,false]
+
+=== Object.hasOwn of numbers, booleans and BigInts
+[Object.hasOwn(1, "toFixed"), Object.hasOwn(1, 0), Object.hasOwn(NaN, "length"), Object.hasOwn(true, "valueOf"), Object.hasOwn(false, "x"), Object.hasOwn(1n, "toString")]
+--- value
+[false,false,false,false,false,false]
+
+=== Object.hasOwn of a set and a map: no own keys
+[Object.hasOwn(new Set([1]), 1), Object.hasOwn(new Set([1]), "size"), Object.hasOwn(new Map([["a", 1]]), "a"), Object.hasOwn(new Map(), "size"), Object.hasOwn(new Map([["a", 1]]).keys(), "next")]
+--- value
+[false,false,false,false,false]
+
+=== Object.hasOwn of a function: its length and name
+[Object.hasOwn(x => x, "length"), Object.hasOwn(x => x, "name"), Object.hasOwn(x => x, "prototype"), Object.hasOwn(Math.max, "length"), Object.hasOwn(Math.max, "name"), Object.hasOwn(Math.max, "x")]
+--- value
+[true,true,false,true,true,false]
+
+=== Object.hasOwn of a regular expression: lastIndex
+[Object.hasOwn(/a/g, "lastIndex"), Object.hasOwn(/a/g, "source"), Object.hasOwn(/a/g, 0)]
+--- value
+[true,false,false]
+
+=== Object.hasOwn of a match result
+[Object.hasOwn("ab".match(/b/), "index"), Object.hasOwn("ab".match(/b/), 0)]
+--- value
+[true,true]
+
+=== Object.hasOwn of a large object, through its index
+(o => [Object.hasOwn(o, "k1"), Object.hasOwn(o, "k11"), Object.hasOwn(o, 5), Object.hasOwn(o, "5"), Object.hasOwn(o, "k99"), Object.hasOwn(o, "constructor")])({k1: 1, k2: 2, k3: 3, k4: 4, k5: 5, k6: 6, k7: 7, k8: 8, k9: 9, k10: 10, 5: "a", k11: 11})
+--- value
+[true,true,true,true,false,false]
+
+=== Object.hasOwn with a computed key in a callback
+["a", "b", "c"].filter(k => Object.hasOwn({a: 1, c: 0}, k))
+--- value
+["a","c"]
+
+=== Object.hasOwn of a nested object reaches no deeper
+[Object.hasOwn({a: {b: 1}}, "b"), Object.hasOwn({a: {b: 1}}.a, "b")]
+--- value
+[false,true]
+
+=== Object.hasOwn as a value
+(f => f({x: 1}, "x"))(Object.hasOwn)
+--- value
+true
+
+=== Object.hasOwn faults on undefined
+Object.hasOwn(undefined, "a")
+--- fault not undefined or null
+
+=== Object.hasOwn faults on null
+Object.hasOwn(null, "a")
+--- fault not undefined or null
+
+=== Object.hasOwn faults with no arguments
+Object.hasOwn()
+--- fault not undefined or null
+
+=== Object.hasOwn faults on an object key
+Object.hasOwn({a: 1}, {})
+--- fault a key must be a primitive
+
+=== Object.hasOwn faults on an array key
+Object.hasOwn({a: 1}, ["a"])
+--- fault a key must be a primitive
+
+=== Object.hasOwn faults on an object key even on a number
+Object.hasOwn(1, {})
+--- fault a key must be a primitive
