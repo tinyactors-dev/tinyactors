@@ -1302,3 +1302,84 @@ Array.from(/(a)(b)/.exec("ab"))
 [/a/.exec("a"), /b/.exec("a")]
 --- value
 [Object.assign(["a"],{"index":0,"input":"a","groups":undefined}),null]
+
+# ---------------------------------------------------------------------------
+# The skips of a program led by an ASCII character or by ^ (docs/regex.md,
+# section 15): inputs that cross a step's budget, non-ASCII characters
+# between runs of skipped bytes, groups before the leading character, and
+# folding with i and iu. Values from Node 22.
+
+=== a leading character in groups, past a step's budget, then a match with i
+(m => [m.index, m[1], m[2]])(/((k))a/i.exec("b".repeat(600) + "Ka"))
+--- value
+[600,"K","K"]
+
+=== a leading character after an empty group and an empty non-capturing group
+(m => [m.index, m[1]])(/()(?:)a/.exec("x".repeat(700) + "a"))
+--- value
+[700,""]
+
+=== a leading character skipped to across a non-ASCII character
+"b".repeat(300).concat("é", "b".repeat(300), "ab").search(/ab/)
+--- value
+601
+
+=== a leading character skipped to across an astral character, with u
+"b".repeat(300).concat("😀", "b".repeat(300), "a😀a").split(/a/u).map(p => p.length)
+--- value
+[602,2,0]
+
+=== a leading letter with i matches either case, and not U+212A without u
+[..."\u212AkK".concat("x".repeat(400), "k").matchAll(/k/gi)].map(m => m.index)
+--- value
+[1,2,403]
+
+=== a leading letter with iu matches U+212A and U+017F as JavaScript folds them
+[[..."\u212AkK".concat("x".repeat(400), "\u212A").matchAll(/k/giu)].map(m => m.index), [..."\u017FsS".concat("y".repeat(300), "\u017F").matchAll(/s/giu)].map(m => m.index)]
+--- value
+[[0,1,2,403],[0,1,2,303]]
+
+=== a leading character that is not a letter, with i: only that character
+"`x".repeat(200).concat("@X").search(/@x/i)
+--- value
+400
+
+=== a leading character found many times, each failing after it
+[...("ac".repeat(400) + "ab").matchAll(/ab/g)].map(m => m.index)
+--- value
+[800]
+
+=== a leading character, its matches replaced with a function, the rest skipped
+("x".repeat(300) + "ab" + "x".repeat(300) + "ab").replace(/a(b)/g, (m, p, i) => "<" + p + i + ">").slice(298, 310)
+--- value
+"xx<b300>xxxx"
+
+=== split on a leading character with a limit, past a step's budget
+("x".repeat(400) + ",").repeat(3).split(/,/, 2).map(p => p.length)
+--- value
+[400,400]
+
+=== ^ past the start: nothing matches after the first position
+[("b".repeat(600) + "a").search(/^a/), "a".concat("b".repeat(600)).replace(/^/g, "<").length, [..."a".concat("b".repeat(600)).matchAll(/^a/g)].length]
+--- value
+[-1,602,1]
+
+=== ^ in groups at the start, and a repeated ^ group
+[(m => [m.index, m[1], m[2]])(/((^))a/.exec("a" + "b".repeat(400))), "aaab".concat("a".repeat(300)).match(/(?:^a)+/g)]
+--- value
+[[0,"",""],["a"]]
+
+=== ^ at the start, whatever other threads are alive
+("ab".repeat(300)).match(/^(?:a|b)*$/)[0].length
+--- value
+600
+
+=== ^ with an astral character and u: a start between its halves still fails ^
+"😀".repeat(200).concat("b").search(/^b/u)
+--- value
+-1
+
+=== ^ with m is a line start, and is not skipped
+[..."b\n".repeat(300).concat("a\nb").matchAll(/^a/gm)].map(m => m.index)
+--- value
+[600]
