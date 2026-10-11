@@ -196,6 +196,15 @@ callback's own instructions.
   moves fuel, `bench-compare` prints it (`fuel a->b`). When the exact fuel
   matters, pin it in `api_test`, as `test_fuel_pinned` and
   `test_set_fuel_linear` do.
+- **A regular expression's fuel is its automaton's work**
+  (`src/regex_match.c`, `rx_charge`): a unit per loop step (256
+  instructions visited, finishing the position; the leaf counts the steps
+  a loop would take), one per 8 instructions visited and per 16 slots
+  copied, and what the result costs to build. Its speedups lower none of
+  it: the skips of a pattern led by an ASCII character or by `^` pass
+  positions without following them but add what following them counts,
+  and stop where a step's budget would, so fuel and pauses do not depend
+  on which skips a build has (docs/regex.md, section 15).
 
 ## 7. The rule
 
@@ -254,7 +263,11 @@ KEY_COMPARE and ELEMENT_COMPARE, and `reduce` with SUM and SUM_KEY
 (`pluck_step`, `sort_by_key`, `sort_numbers`, `predicate_step` and
 `sum_step` in `src/builtins.c`). The tag only
 says what the bytecode computes; the bytecode is still there, and the C
-path must give exactly what it gives.
+path must give exactly what it gives. A callback that is a call, such as
+`x => re.test(x)` or `x => s.has(x.k)`, has no shape yet: its rule would be
+on a CALL_BEGIN bracket that takes its callee from before it, which the
+generator refuses for shapes (`docs/matcher.md` 4.3; 11.9 designs the
+change).
 
 - **Set it up once per loop.** `shape_start` (from `sjs_loop_start`) notes
   the shape, its key and its flag in the loop frame when the callback is a

@@ -9,7 +9,10 @@ program. Step 2 is done: the Pike VM (`src/regex_match.c`) runs `test`,
 string replacement, as a leaf or a loop frame. Step 3's match results are
 done: `exec`, `match` without g, `matchAll`, `d` indices, `$<name>`, and
 `replace` with a function, a loop that calls back. Every bench case of
-section 12.1 is in `bench/bench.c`. Where the implementation departs from this design, section 15
+section 12.1 is in `bench/bench.c`, with `eval.regex.literal` besides.
+Of 12.1's speedups, the literal-prefix skip and the anchored start are
+built; the one-pass program, the predicate shape and the lazy DFA are
+not (section 15 says why). Where the implementation departs from this design, section 15
 says so. Line numbers below are of the commit this document was written
 against (`dbc0c69e`), before any of it.
 
