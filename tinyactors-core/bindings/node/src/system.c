@@ -152,6 +152,7 @@ static void system_clear(napi_env environment, nd_system *system) {
     free(system->changed);
     parked_clear(system);
     jobs_clear(system);
+    invocations_clear(system);
     links_free(system);
     exporter_free(system);
     for (uint32_t i = 0; i < system->later_count; i++)
@@ -346,6 +347,8 @@ static void effect_out(nd_system *system, const ta_host_effect *effect) {
         set(environment, e, "sendid", str_value(environment, effect->sendid));
         set(environment, e, "data", value_of_payload(system, effect->payload, effect->datamodel));
         set(environment, e, "traceparent", traceparent_value(environment, &effect->trace));
+        napi_value receiving = invocation_of_send(system, effect); /* an invoked service */
+        if (receiving) set(environment, e, "invocation", receiving);
         break;
     case TA_EFFECT_INVOKE:
         e = effect_new(system, "invoke");
@@ -357,13 +360,15 @@ static void effect_out(nd_system *system, const ta_host_effect *effect) {
         set(environment, e, "invokeid", str_value(environment, effect->sendid));
         set(environment, e, "params", value_of_payload(system, effect->payload, effect->datamodel));
         set(environment, e, "traceparent", traceparent_value(environment, &effect->trace));
+        set(environment, e, "invocation", invocation_new(system, effect));
         break;
-    case TA_EFFECT_UNINVOKE:
+    case TA_EFFECT_UNINVOKE: { /* an invocation core.mjs knows of */
+        napi_value ended = invocation_end(system, effect);
+        if (!ended) break;
         e = effect_new(system, "uninvoke");
-        set(environment, e, "session", num(environment, (double)effect->session));
-        set(environment, e, "segment", num(environment, effect->segment));
-        set(environment, e, "token", num(environment, effect->token));
+        set(environment, e, "invocation", ended);
         break;
+    }
     case TA_EFFECT_WAKE: /* the caller loads the blob, unless it is still held */
         if (wake_effect(system, effect->session)) {
             e = effect_new(system, "wake");

@@ -336,6 +336,8 @@ napi_value ta_js_init(napi_env environment, napi_value exports) {
         METHOD("sweep", js_sweep),
         METHOD("hibernate", js_hibernate),
         METHOD("wake", js_wake),
+        METHOD("uninvoked", js_uninvoked),
+        METHOD("invocations", js_invocations),
         METHOD("stored", js_stored),
         METHOD("hibernated", js_hibernated),
         METHOD("exportActor", js_export_actor),

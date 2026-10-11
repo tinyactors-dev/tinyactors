@@ -406,7 +406,6 @@ export function createRuntime({ native, platform }) {
       this._sources = new Map(); /* source name -> Chart */
       this._segments = []; /* by segment: its Image */
       this._actors = new Map(); /* session -> Actor the application holds */
-      this._invocations = new Map(); /* `${segment}:${token}` and `${session}#${invokeid}` -> invocation */
       this._store = options.hibernation ? options.hibernation.store : null;
       if (this._store && typeof this._store.get !== 'function') throw new TypeError('hibernation: { store } with get, set and delete');
       this._links = new Set(); /* store links, closed with the system */
@@ -758,11 +757,9 @@ export function createRuntime({ native, platform }) {
         case 'invoke':
           this._invoke(e);
           break;
-        case 'uninvoke': {
-          const inv = this._invocations.get(`${e.segment}:${e.token}`);
-          if (inv) this._uninvoke(inv);
+        case 'uninvoke':
+          this._uninvoke(e.invocation);
           break;
-        }
         case 'wake':
           this._wake(e.session);
           break;
@@ -789,10 +786,9 @@ export function createRuntime({ native, platform }) {
     /* TA_EFFECT_SEND for an I/O processor, or for an invoked service */
     _ioSend(e) {
       const io = this._io[e.ioProcessor];
-      let inv = e.ioProcessor < 0 && e.token ? this._invocations.get(`${e.segment}:${e.token}`) : null;
-      if (!inv && io && io.invoker && e.target.startsWith('#_')) inv = this._invocations.get(`${e.session}#${e.target.slice(2)}`);
+      const inv = e.invocation; /* the addon's: an invoked service, or #_<invokeid> */
       if (inv) {
-        if (inv.invoker.receive) inv.invoker.receive(inv.invokeid, { name: e.event, data: e.data });
+        if (!inv.closed && inv.invoker && inv.invoker.receive) inv.invoker.receive(inv.invokeid, { name: e.event, data: e.data });
         return;
       }
       const fail = () => this._post(e.session, { flags: K.EVENT_IN_ERROR_COMMUNICATION, name: 'error.communication', sendid: e.sendid });
@@ -811,7 +807,7 @@ export function createRuntime({ native, platform }) {
     /* TA_EFFECT_INVOKE: an <invoke type> the core does not run itself */
     _invoke(e) {
       const invoker = this._invokers[e.type];
-      const inv = { session: e.session, segment: e.segment, token: e.token, invokeid: e.invokeid, invoker, closed: false, controller: new AbortController() };
+      const inv = Object.assign(e.invocation, { invoker, closed: false, controller: new AbortController() }); /* kept by the addon */
       const post = (fields) => {
         if (inv.closed || this._stopped) return;
         this._post(inv.session, { ...fields, token: inv.token });
@@ -822,10 +818,9 @@ export function createRuntime({ native, platform }) {
       };
       if (!invoker || typeof invoker.start !== 'function') {
         this._post(e.session, { flags: K.EVENT_IN_ERROR_COMMUNICATION, name: 'error.communication', token: e.token });
+        this._uninvoke(inv);
         return;
       }
-      this._invocations.set(`${e.segment}:${e.token}`, inv);
-      this._invocations.set(`${e.session}#${e.invokeid}`, inv);
       const context = {
         system: this,
         signal: inv.controller.signal,
@@ -848,8 +843,7 @@ export function createRuntime({ native, platform }) {
     _uninvoke(inv) {
       if (inv.closed) return;
       inv.closed = true;
-      this._invocations.delete(`${inv.segment}:${inv.token}`);
-      this._invocations.delete(`${inv.session}#${inv.invokeid}`);
+      if (!this._stopped) native.uninvoked(this._sys, inv.segment, inv.token);
       inv.controller.abort();
     }
 
@@ -1058,8 +1052,7 @@ export function createRuntime({ native, platform }) {
       if (this._immediate !== null) platform.cancelDefer(this._immediate);
       this._clockTimers = [];
       this._abort.abort();
-      for (const inv of new Set(this._invocations.values())) inv.controller.abort();
-      this._invocations.clear();
+      for (const inv of native.invocations(this._sys)) if (inv.controller) inv.controller.abort();
       native.destroy(this._sys); /* from an effect handler: when the pump ends */
       for (const actor of [...this._actors.values()]) actor._halt(null);
       this._actors.clear();

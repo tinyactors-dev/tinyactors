@@ -169,6 +169,13 @@ typedef struct nd_job { /* a migration job and the promise migrate() returned */
     napi_deferred deferred;
 } nd_job;
 
+typedef struct nd_invocation { /* an external invocation (invoke.c) */
+    uint32_t segment, token;
+    uint64_t session;
+    char *invokeid;
+    napi_ref object; /* what core.mjs keeps of it */
+} nd_invocation;
+
 typedef struct nd_system {
     napi_env environment; /* of the current native call */
     ta_host *host;
@@ -216,12 +223,14 @@ typedef struct nd_system {
     uint32_t grave_count, grave_capacity;
     nd_failure *failures;
     uint32_t failure_count, failure_capacity;
-    ta_links *links;         /* links to other systems (link.c), made with the first */
-    ta_otlp_batch *exporter; /* what core.mjs posts (export.c) */
-    uint32_t export_signals; /* 1 << TA_OTLP_TRACES, ... */
-    int export_flush;        /* exportFlush(): everything waiting goes now */
-    int trace_sink;          /* callbacks.effects hears the traces' bytes */
-    nd_job *jobs;            /* migrations under way (persist.c) */
+    ta_links *links;            /* links to other systems (link.c), made with the first */
+    ta_otlp_batch *exporter;    /* what core.mjs posts (export.c) */
+    uint32_t export_signals;    /* 1 << TA_OTLP_TRACES, ... */
+    int export_flush;           /* exportFlush(): everything waiting goes now */
+    int trace_sink;             /* callbacks.effects hears the traces' bytes */
+    nd_invocation *invocations; /* external invocations (invoke.c) */
+    uint32_t invocation_count, invocation_capacity;
+    nd_job *jobs; /* migrations under way (persist.c) */
     uint32_t job_count, job_capacity;
     nd_parked *parked; /* hibernated actors in flight (persist.c) */
     uint32_t parked_count, parked_capacity;
@@ -377,6 +386,12 @@ void wake_held(nd_system *system);
 void parked_clear(nd_system *system);
 void job_done(nd_system *system, const ta_host_effect *effect);
 void jobs_clear(nd_system *system);
+napi_value invocation_new(nd_system *system, const ta_host_effect *effect);
+napi_value invocation_of_send(nd_system *system, const ta_host_effect *effect);
+napi_value invocation_end(nd_system *system, const ta_host_effect *effect);
+void invocations_clear(nd_system *system);
+napi_value js_uninvoked(napi_env environment, napi_callback_info info);
+napi_value js_invocations(napi_env environment, napi_callback_info info);
 napi_value effect_new(nd_system *system, const char *kind);
 void links_free(nd_system *system);
 ta_time links_now(nd_system *system);
