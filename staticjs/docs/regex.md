@@ -8,10 +8,8 @@ program. Step 2 is done: the Pike VM (`src/regex_match.c`) runs `test`,
 `search`, `split`, `match` with g, and `replace` and `replaceAll` with a
 string replacement, as a leaf or a loop frame. Step 3's match results are
 done: `exec`, `match` without g, `matchAll`, `d` indices, `$<name>`, and
-`replace` with a function, a loop that calls back. The bench cases
-`eval.regex.test`, `.replace`, `.split` and `.redos` are in
-`bench/bench.c`. `compile.regex`, `eval.regex.exec` and
-`eval.regex.filter` of section 12.1 are not added yet. Where the implementation departs from this design, section 15
+`replace` with a function, a loop that calls back. Every bench case of
+section 12.1 is in `bench/bench.c`. Where the implementation departs from this design, section 15
 says so. Line numbers below are of the commit this document was written
 against (`dbc0c69e`), before any of it.
 
