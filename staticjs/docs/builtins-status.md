@@ -66,7 +66,7 @@ the host injects in the same way. UTC is the default everywhere.
 | `isInteger`, `isSafeInteger`, `isFinite`, `isNaN`, `parseInt`, `parseFloat`, `Number()` | built | |
 | `toString(radix)` | built | Listed in the README for numbers. |
 | constants (`EPSILON`, `MAX_SAFE_INTEGER`, …) | built | As listed in the README. |
-| `toFixed`, `toPrecision`, `toExponential` | to build | Not registered. Exact decimal conversion without libm; needs a Node sweep. |
+| `toFixed`, `toPrecision`, `toExponential` | built | The exact decimal value of the double, rounded half up, without libm (`sjs_number_format_digits`); swept against Node on a fixed list of doubles and digit counts (`number_test --print`, tag P). Out of range faults where JavaScript throws a RangeError; a string or object argument faults. |
 | `toLocaleString` | refused | Locale data. |
 
 ## Math

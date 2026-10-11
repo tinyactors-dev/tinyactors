@@ -27,6 +27,9 @@
  *     M <a> <bits> <c>          COUNT BigInts compared with a double
  *     R <a> <bits>              COUNT BigInts as numbers: Number(a)
  *     A <n> <a> <int> <uint>    COUNT BigInts wrapped: BigInt.asIntN(n, a), asUintN
+ *     P <m> <bits> <d> <text>   a fixed list of doubles, whatever COUNT is, through
+ *                               toFixed(d) (m f), toExponential(d) (e) and
+ *                               toPrecision(d) (p); d u for undefined
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -562,6 +565,61 @@ static void print_bigint_texts(long count) {
     }
 }
 
+/* toFixed, toExponential and toPrecision of a fixed list of doubles (ties,
+ * values just under and over a half, the edges of each form, 1e21,
+ * subnormals and the largest double; then -0, NaN and the infinities), each
+ * with a fixed list of digit counts: the same lines for any COUNT. */
+static const double DIGITS_VALUES[] = {
+    0.0, 1.0, 0.5, 1.5, 2.5, -2.5, -1.5, 0.125, 0.375, 1.25, 1.005, 1.045, 1.255, 4.35,
+    8.345, 1.45, 10.235, 9.995, 99.995, 0.0005, 0.00005, 0.000001, 0.0000015, 1e-7, 1e-10,
+    0.15, 0.35, 0.1, 0.2, 0.3, 0.30000000000000004, 0.3333333333333333, 0.6666666666666666,
+    1.0000000000000002, 0.9999999999999999, 123.456, -123.456, 0.000123, 25.0, 1e15,
+    999999999999999.9, 4503599627370495.5, 4503599627370497.0, 9007199254740992.0,
+    9007199254740994.0, 9007199254740993.0, 18014398509481984.0, 1e20, 1.2345e20,
+    99999999999999990000.0, 999999999999999900000.0, 9.999999999999999e20, 1e21,
+    1.0000000000000001e21, 1e22, 1e100, 1e300, 1.7976931348623157e308,
+    -1.7976931348623157e308, 2.2250738585072014e-308, 2.225073858507201e-308,
+    4.9406564584124654e-324, 1e-300, 1e-323, 5e-7, 5e-8, 0.00000049999999999999995,
+    0.000000123456789, 123456789.123456789, -0.0001, -0.00001, 0.045, 0.055, 0.0045, 1.0e-5,
+    7.0, 12.0, 99.0, 100.0, 999.0, 1000.0, 0.95, 0.995, 0.9995, -0.5, -0.05,
+    314159.26535897932, 2.718281828459045, 1.4142135623730951, 6.02214076e23,
+    1.602176634e-19, 65536.5, 0.6, 0.7, 0.8, 0.9,
+    -0.0, 0.0 / 0.0, 1.0 / 0.0, -1.0 / 0.0
+};
+
+static void print_digit_methods(void) {
+    static const struct {
+        char tag;
+        sjs_digits_mode mode;
+        int32_t first; /* -1: undefined, then from 0 or 1 */
+        int32_t last;
+    } METHODS[] = {
+        { 'f', SJS_DIGITS_FIXED, 0, 20 },
+        { 'e', SJS_DIGITS_EXPONENTIAL, -1, 20 },
+        { 'p', SJS_DIGITS_PRECISION, -1, 21 },
+    };
+    static const int32_t LARGE[] = { 25, 50, 100 };
+    for (uint32_t m = 0; m < 3u; m++) {
+        for (size_t v = 0; v < sizeof DIGITS_VALUES / sizeof DIGITS_VALUES[0]; v++) {
+            int32_t counts[32];
+            uint32_t n = 0;
+            for (int32_t d = METHODS[m].first; d <= METHODS[m].last; d++) {
+                if (d == 0 && METHODS[m].mode == SJS_DIGITS_PRECISION) continue;
+                counts[n++] = d;
+            }
+            for (uint32_t i = METHODS[m].mode == SJS_DIGITS_FIXED ? 0u : 1u; i < 3u; i++) counts[n++] = LARGE[i];
+            for (uint32_t i = 0; i < n; i++) {
+                char text[SJS_NUMBER_DIGITS_MAX + 1u];
+                uint32_t length = sjs_number_format_digits((sjs_number_digits){ DIGITS_VALUES[v], counts[i], METHODS[m].mode }, text);
+                text[length] = '\0';
+                printf("P %c %016llx ", METHODS[m].tag, (unsigned long long)to_bits(DIGITS_VALUES[v]));
+                if (counts[i] < 0) printf("u %s\n", text);
+                else printf("%d %s\n", counts[i], text);
+            }
+        }
+    }
+}
+
 static int print(long count) {
     print_formats(count);
     print_decimals(count);
@@ -572,6 +630,7 @@ static int print(long count) {
     print_integer_ops(count);
     print_bigint_ops(count);
     print_bigint_texts(count);
+    print_digit_methods();
     return 0;
 }
 

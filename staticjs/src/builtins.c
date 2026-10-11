@@ -70,20 +70,22 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
  * names a method changing its receiver; with the staticjs method each kind
  * has by that name. Sorted by bytes, for sjs_name_id's binary search.
  */
-#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set, 0, 0, 0, 0 }, 0 }
+#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set, 0, 0, 0, 0, 0 }, 0 }
 /* A name with a BigInt method too: toString. */
-#define NAME_BIGINT(text, flags, bigint) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, bigint, 0, 0, 0 }, 0 }
+#define NAME_BIGINT(text, flags, bigint) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, bigint, 0, 0, 0, 0 }, 0 }
 /* A name with a map's method: on a set too, and maps'. */
-#define NAME_MAP(text, flags, set, map) { { text, sizeof(text) - 1u }, flags, { 0, 0, set, 0, map, 0, 0 }, 0 }
+#define NAME_MAP(text, flags, set, map) { { text, sizeof(text) - 1u }, flags, { 0, 0, set, 0, map, 0, 0, 0 }, 0 }
 /* A name with an iterator's method: on an array too, and iterators'. */
-#define NAME_ITERATOR(text, flags, array, iterator) { { text, sizeof(text) - 1u }, flags, { array, 0, 0, 0, 0, iterator, 0 }, 0 }
+#define NAME_ITERATOR(text, flags, array, iterator) { { text, sizeof(text) - 1u }, flags, { array, 0, 0, 0, 0, iterator, 0, 0 }, 0 }
 /* A name with a map's method and an iterator's: forEach. */
-#define NAME_MAP_ITERATOR(text, flags, map, iterator) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0, map, iterator, 0 }, 0 }
+#define NAME_MAP_ITERATOR(text, flags, map, iterator) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0, map, iterator, 0, 0 }, 0 }
 /* A name on RegExp.prototype, with the regular expressions' method of the
  * name (docs/regex.md), or 0. */
-#define NAME_REGEXP(text, regexp) { { text, sizeof(text) - 1u }, SJS_NAME_ON_REGEXP, { 0, 0, 0, 0, 0, 0, regexp }, 0 }
+#define NAME_REGEXP(text, regexp) { { text, sizeof(text) - 1u }, SJS_NAME_ON_REGEXP, { 0, 0, 0, 0, 0, 0, regexp, 0 }, 0 }
+/* A name on Number.prototype alone, with a number's method. */
+#define NAME_NUMBER(text, number) { { text, sizeof(text) - 1u }, 0, { 0, 0, 0, 0, 0, 0, 0, number }, 0 }
 /* MUTATION: a name with a method that changes its receiver. Restore: NAME(text, flags, 0, 0, 0). */
-#define NAME_MUTATION(text, flags, mutation) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0, 0, 0, 0 }, mutation }
+#define NAME_MUTATION(text, flags, mutation) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0, 0, 0, 0, 0 }, mutation }
 /* A name of Object.prototype, which every kind of value's prototype holds. */
 #define SJS_NAME_EVERYWHERE (SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR | SJS_NAME_ON_REGEXP)
 
@@ -187,10 +189,13 @@ static const sjs_name NAMES[] = {
     NAME_ITERATOR("take", SJS_NAME_ON_ITERATOR, 0, SJS_METHOD_ITERATOR_TAKE),
     NAME_REGEXP("test", SJS_METHOD_REGEXP_TEST),
     NAME_ITERATOR("toArray", SJS_NAME_ON_ITERATOR, 0, SJS_METHOD_ITERATOR_TO_ARRAY),
+    NAME_NUMBER("toExponential", SJS_METHOD_NUMBER_TO_EXPONENTIAL),
+    NAME_NUMBER("toFixed", SJS_METHOD_NUMBER_TO_FIXED),
     NAME("toLocaleLowerCase", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("toLocaleString", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME("toLocaleUpperCase", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("toLowerCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_LOWER_CASE, 0),
+    NAME_NUMBER("toPrecision", SJS_METHOD_NUMBER_TO_PRECISION),
     NAME("toReversed", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_REVERSED, 0, 0),
     NAME("toSorted", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SORTED, 0, 0),
     NAME("toSpliced", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SPLICED, 0, 0),
@@ -330,6 +335,8 @@ sjs_builtin_id sjs_method_of(const sjs_name *name, uint8_t kind) {
         return (sjs_builtin_id)name->methods[5];
     case SJS_REGEXP:
         return (sjs_builtin_id)name->methods[6];
+    case SJS_NUMBER:
+        return (sjs_builtin_id)name->methods[7];
     default:
         return SJS_BUILTIN_NONE;
     }
@@ -732,6 +739,8 @@ static sjs_result math_exact(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
 static sjs_result bigint_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 static sjs_result bigint_method(sjs_vm *vm, sjs_leaf_call *call);
 static sjs_result bigint_number(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+/* A number's toFixed, toExponential and toPrecision: at the end of the file. */
+static sjs_result number_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 
 static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_value x = arg(call, 0);
@@ -1340,6 +1349,7 @@ sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) 
     if (id <= SJS_METHOD_STRING_TRIM_START) return string_method(vm, id, call);
     if (id <= SJS_METHOD_SET_UNION) return set_method(vm, id, call);
     if (id == SJS_METHOD_BIGINT_TO_STRING) return bigint_method(vm, call);
+    if (id <= SJS_METHOD_NUMBER_TO_PRECISION) return number_method(vm, id, call);
     if (id == SJS_METHOD_REGEXP_TEST || id == SJS_METHOD_REGEXP_EXEC) {
         return regex_method(vm, id == SJS_METHOD_REGEXP_TEST ? SJS_REGEX_OP_TEST : SJS_REGEX_OP_EXEC, call);
     }
@@ -3792,4 +3802,39 @@ __attribute__((noinline)) static sjs_result iterator_limit(sjs_vm *vm, sjs_built
     sjs_unref(vm->context, source);
     sjs_unref(vm->context, items);
     return sjs_vm_fail(vm, r);
+}
+
+/* ------------------------------------------------------------------------
+ * A number's toFixed, toExponential and toPrecision (sjs_number_format_digits).
+ * The argument is ToIntegerOrInfinity'd as JavaScript does it (undefined and
+ * NaN are 0, null 0, true 1, a fraction cut toward zero), and a string or an
+ * object faults (sjs_vm_to_number). Out of range faults where JavaScript
+ * throws a RangeError: toFixed checks before it looks at NaN or an
+ * infinity, toExponential and toPrecision after. A unit of fuel for each
+ * byte written: each digit is a step of exact arithmetic.
+ */
+__attribute__((noinline)) static sjs_result number_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    sjs_value a = arg(call, 0);
+    sjs_number_digits d = { call->receiver.as.number, -1, SJS_DIGITS_FIXED };
+    double digits = 0;
+    if (a.kind != SJS_UNDEFINED && to_integer(vm, a, &digits) != SJS_OK) return SJS_ERR_PROGRAM;
+    bool finite = sjs_number_is_finite(d.value);
+    if (id == SJS_METHOD_NUMBER_TO_FIXED) {
+        if (!(digits >= 0 && digits <= 100)) return sjs_vm_fault(vm, "JavaScript throws a RangeError for toFixed's digits outside 0 to 100");
+        d.digits = (int32_t)digits;
+    } else if (id == SJS_METHOD_NUMBER_TO_EXPONENTIAL) {
+        d.mode = SJS_DIGITS_EXPONENTIAL;
+        if (finite && !(digits >= 0 && digits <= 100)) return sjs_vm_fault(vm, "JavaScript throws a RangeError for toExponential's digits outside 0 to 100");
+        if (a.kind != SJS_UNDEFINED && finite) d.digits = (int32_t)digits;
+    } else {
+        d.mode = SJS_DIGITS_PRECISION;
+        if (a.kind != SJS_UNDEFINED) {
+            if (finite && !(digits >= 1 && digits <= 100)) return sjs_vm_fault(vm, "JavaScript throws a RangeError for toPrecision's precision outside 1 to 100");
+            d.digits = finite ? (int32_t)digits : -1;
+        }
+    }
+    char text[SJS_NUMBER_DIGITS_MAX];
+    uint32_t length = sjs_number_format_digits(d, text);
+    call->cost = length;
+    return new_string(vm, (sjs_str){ text, length }, &call->result);
 }

@@ -213,10 +213,14 @@ static sjs_result method(sjs_vm *vm, sjs_member member, sjs_value *out) {
     case SJS_BIGINT:
     case SJS_MAP:
     case SJS_ITERATOR:
-    case SJS_REGEXP: {
+    case SJS_REGEXP:
+    case SJS_NUMBER: {
         const sjs_name *n = sjs_name_of(key);
         sjs_builtin_id id = sjs_method_of(n, receiver.kind);
         if (id == SJS_BUILTIN_NONE) {
+            if (receiver.kind == SJS_NUMBER) {
+                return fault_named(vm, "staticjs has methods on arrays, strings, sets, maps, iterators and BigInts only, and on numbers only those that format digits", name);
+            }
             /* MUTATION: the message. Restore "staticjs values do not change, so
              * this method is not there". */
             if (n != NULL && (n->flags & SJS_NAME_MUTATING) != 0) {

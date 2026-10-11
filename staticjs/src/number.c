@@ -413,6 +413,215 @@ uint32_t sjs_number_format(double value, char *out) {
 }
 
 /* ------------------------------------------------------------------------
+ * toFixed, toExponential and toPrecision: the decimal value of a double is
+ * exact (it has at most 767 significant digits), and each method rounds it
+ * half up ("if there are two such n, pick the larger n"), which is whether
+ * the first digit dropped is 5 or more.
+ */
+
+/* A positive value as r / s x 10^point, with r / s in [0.1, 1): its digits
+ * are taken one at a time, exactly. */
+typedef struct {
+    big r;
+    big s;
+    int32_t point;
+} exact_digits;
+
+static void exact_start(double value, exact_digits *x) {
+    uint64_t u = to_bits(value);
+    uint32_t field = (uint32_t)((u >> 52) & 0x7FFu);
+    uint64_t f = u & ((1ull << 52) - 1u);
+    int32_t e;
+    if (field == 0) {
+        e = -1074;
+    } else {
+        f |= 1ull << 52;
+        e = (int32_t)field - 1075;
+    }
+    big_set(&x->r, f);
+    big_set(&x->s, 1);
+    if (e >= 0) big_shift_left(&x->r, (uint32_t)e);
+    else big_shift_left(&x->s, (uint32_t)-e);
+    /* An estimate of log10(value) from below, then corrected both ways. */
+    double estimate = (double)(e + (int32_t)bit_length(f) - 1) * 0.30102999566398114;
+    int32_t k = (int32_t)sjs_number_ceil(estimate - 1e-10);
+    if (k >= 0) big_multiply_pow10(&x->s, k);
+    else big_multiply_pow10(&x->r, -k);
+    while (big_compare(&x->r, &x->s) >= 0) {
+        big_multiply_small(&x->s, 10);
+        k++;
+    }
+    for (;;) {
+        big tenfold;
+        big_copy(&tenfold, &x->r);
+        big_multiply_small(&tenfold, 10);
+        if (big_compare(&tenfold, &x->s) >= 0) break;
+        big_copy(&x->r, &tenfold);
+        k--;
+    }
+    x->point = k;
+}
+
+/* The next digit. */
+static uint32_t exact_next(exact_digits *x) {
+    big_multiply_small(&x->r, 10);
+    uint32_t d = 0;
+    while (big_compare(&x->r, &x->s) >= 0) {
+        big_subtract(&x->r, &x->s);
+        d++;
+    }
+    return d;
+}
+
+/* The next `count` digits (at least 1) into `digits`, rounded half up on
+ * the digit after them. A carry out of the first digit leaves 1 and zeros,
+ * and moves the point. */
+static void exact_take(exact_digits *x, uint32_t count, char *digits) {
+    for (uint32_t i = 0; i < count; i++) digits[i] = (char)('0' + exact_next(x));
+    if (exact_next(x) < 5u) return;
+    for (uint32_t i = count; i-- > 0;) {
+        if (digits[i] != '9') {
+            digits[i]++;
+            return;
+        }
+        digits[i] = '0';
+    }
+    digits[0] = '1';
+    x->point++;
+}
+
+static uint32_t put_zeros(char *out, int32_t count) {
+    for (int32_t i = 0; i < count; i++) out[i] = '0';
+    return count > 0 ? (uint32_t)count : 0;
+}
+
+/* d.ddd...e±x: `count` digits, the exponent `exponent`. */
+typedef struct {
+    const char *digits;
+    uint32_t count;
+    int32_t exponent;
+} exponential_form;
+
+static uint32_t put_exponential(char *out, exponential_form form) {
+    const char *digits = form.digits;
+    uint32_t count = form.count;
+    int32_t exponent = form.exponent;
+    uint32_t at = 0;
+    out[at++] = digits[0];
+    if (count > 1) {
+        out[at++] = '.';
+        for (uint32_t i = 1; i < count; i++) out[at++] = digits[i];
+    }
+    out[at++] = 'e';
+    out[at++] = exponent < 0 ? '-' : '+';
+    return at + put_int(out + at, (uint32_t)(exponent < 0 ? -exponent : exponent));
+}
+
+/* toFixed of a value in (0, 1e21) or 0: n, the integer nearest
+ * value x 10^f, written with f digits after the point. */
+static uint32_t put_fixed(char *out, double value, int32_t f) {
+    char digits[SJS_NUMBER_DIGITS_MAX];
+    uint32_t count = 1;
+    digits[0] = '0';
+    if (value != 0) {
+        exact_digits x;
+        exact_start(value, &x);
+        int32_t point = x.point;
+        int32_t kept = point + f; /* the digits down to 10^-f */
+        if (kept >= 1) {
+            exact_take(&x, (uint32_t)kept, digits);
+            count = (uint32_t)kept;
+            if (x.point != point) digits[count++] = '0';
+        } else if (kept == 0 && exact_next(&x) >= 5u) {
+            digits[0] = '1';
+        }
+    }
+    if (f == 0) {
+        sjs_copy(out, digits, count);
+        return count;
+    }
+    uint32_t at = 0;
+    int32_t whole = (int32_t)count - f;
+    if (whole <= 0) {
+        out[at++] = '0';
+        out[at++] = '.';
+        at += put_zeros(out + at, -whole);
+        sjs_copy(out + at, digits, count);
+        return at + count;
+    }
+    sjs_copy(out, digits, (uint32_t)whole);
+    at = (uint32_t)whole;
+    out[at++] = '.';
+    sjs_copy(out + at, digits + whole, (uint32_t)f);
+    return at + (uint32_t)f;
+}
+
+/* toPrecision of a positive value or 0, p digits. */
+static uint32_t put_precision(char *out, double value, int32_t p) {
+    char digits[SJS_NUMBER_DIGITS_MAX];
+    int32_t e = 0;
+    if (value == 0) {
+        put_zeros(digits, p);
+    } else {
+        exact_digits x;
+        exact_start(value, &x);
+        exact_take(&x, (uint32_t)p, digits);
+        e = x.point - 1;
+    }
+    if (e < -6 || e >= p) return put_exponential(out, (exponential_form){ digits, (uint32_t)p, e });
+    uint32_t at = 0;
+    if (e < 0) {
+        out[at++] = '0';
+        out[at++] = '.';
+        at += put_zeros(out + at, -(e + 1));
+        sjs_copy(out + at, digits, (uint32_t)p);
+        return at + (uint32_t)p;
+    }
+    sjs_copy(out, digits, (uint32_t)e + 1u);
+    at = (uint32_t)e + 1u;
+    if (e == p - 1) return at;
+    out[at++] = '.';
+    sjs_copy(out + at, digits + e + 1, (uint32_t)(p - e - 1));
+    return at + (uint32_t)(p - e - 1);
+}
+
+/* toExponential of a positive value or 0: f digits after the point, or as
+ * few as read back as the value (Number::toString's) when f is -1. */
+static uint32_t put_exponent_form(char *out, double value, int32_t f) {
+    char digits[SJS_NUMBER_DIGITS_MAX];
+    if (value == 0) {
+        uint32_t count = f < 0 ? 1u : (uint32_t)f + 1u;
+        put_zeros(digits, (int32_t)count);
+        return put_exponential(out, (exponential_form){ digits, count, 0 });
+    }
+    if (f < 0) {
+        int32_t point;
+        uint32_t count = shortest_digits(value, digits, &point);
+        return put_exponential(out, (exponential_form){ digits, count, point - 1 });
+    }
+    exact_digits x;
+    exact_start(value, &x);
+    exact_take(&x, (uint32_t)f + 1u, digits);
+    return put_exponential(out, (exponential_form){ digits, (uint32_t)f + 1u, x.point - 1 });
+}
+
+uint32_t sjs_number_format_digits(sjs_number_digits d, char *out) {
+    double value = d.value;
+    if (!sjs_number_is_finite(value)) return sjs_number_format(value, out);
+    if (d.mode == SJS_DIGITS_PRECISION && d.digits < 0) return sjs_number_format(value, out);
+    if (d.mode == SJS_DIGITS_FIXED && (value >= 1e21 || value <= -1e21)) return sjs_number_format(value, out);
+    uint32_t at = 0;
+    if (value < 0) {
+        out[at++] = '-';
+        value = -value;
+    }
+    value += 0.0; /* -0 is 0 */
+    if (d.mode == SJS_DIGITS_FIXED) return at + put_fixed(out + at, value, d.digits);
+    if (d.mode == SJS_DIGITS_PRECISION) return at + put_precision(out + at, value, d.digits);
+    return at + put_exponent_form(out + at, value, d.digits);
+}
+
+/* ------------------------------------------------------------------------
  * Reading numbers: digits to the nearest double, ties to even, for any
  * number of digits, as JavaScript reads a literal and as Number,
  * parseFloat and parseInt read a string (RoundMVResult; V8 rounds every one
