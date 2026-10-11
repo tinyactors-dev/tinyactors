@@ -1932,6 +1932,13 @@ static sjs_result rx_build_value(sjs_context *context, const rx_emitter *e, sjs_
     for (uint32_t i = 0; i < count; i++) {
         if (code[i].op == RX_CLEAR) re->clear_slots += code[i].y - code[i].x + 1u;
     }
+    uint32_t saves = 0;
+    while (saves < count && code[saves].op == RX_SAVE) saves++;
+    const rx_ins *lead = &code[saves < count ? saves : 0];
+    re->lead_saves = saves;
+    if (saves < count && lead->op == RX_CHAR && lead->x < 0x80u) re->lead = RX_LEAD_CHAR;
+    else if (saves < count && lead->op == RX_CHAR_FOLD && lead->x < 0x80u) re->lead = RX_LEAD_FOLD;
+    re->lead_char = re->lead == RX_LEAD_CHAR || re->lead == RX_LEAD_FOLD ? (uint8_t)lead->x : 0;
     re->code = code;
     at += (size_t)count * sizeof(rx_ins);
     rx_class *classes = (rx_class *)(void *)at;

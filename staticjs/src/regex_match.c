@@ -391,6 +391,58 @@ static void rx_mid_start(rx_search *s) {
     }
 }
 
+/*
+ * Skipping. Where a search has no thread and no match, a program led by an
+ * ASCII character (RX_LEAD_CHAR, RX_LEAD_FOLD) starts a thread at each
+ * position that its closure takes over the leading SAVEs to the character
+ * and that dies there unless the input has that character. Over a run of
+ * ASCII bytes that cannot begin a match, the search passes each position
+ * without following it, and counts what following it would have visited
+ * and copied, so that fuel and the budget's stopping points are the same
+ * (docs/regex.md, 12.1).
+ */
+
+/* Positions to pass, and what passing each costs. */
+typedef struct {
+    uint32_t positions;
+    uint64_t visits;
+    uint64_t copies;
+} rx_cost;
+
+static bool rx_lead_can(const sjs_regexp *re, uint8_t b) {
+    return b == re->lead_char || (re->lead == RX_LEAD_FOLD && (b | 0x20u) == re->lead_char);
+}
+
+/* The positions rx_search_run passes before its budget stops it, when each
+ * visits `per` instructions: it checks after each one. */
+static uint64_t rx_budget_positions(const rx_search *s, uint64_t per, uint64_t until) {
+    if (until <= s->visits) return 1;
+    return (until - s->visits + per - 1u) / per;
+}
+
+/* The ASCII bytes from `byte` on, at most `most`, that cannot begin a
+ * match. */
+static uint32_t rx_lead_run(const rx_search *s, uint32_t byte, uint64_t most) {
+    const uint8_t *t = s->in.text;
+    uint32_t end = s->in.length - byte < most ? s->in.length : byte + (uint32_t)most;
+    uint32_t i = byte;
+    while (i < end && t[i] < 0x80u && !rx_lead_can(s->re, t[i])) i++;
+    return i - byte;
+}
+
+/* Pass positions, each an ASCII byte: true when the budget stops the
+ * search there. */
+static bool rx_pass(rx_search *s, const rx_cost *pass, uint64_t until) {
+    s->visits += pass->positions * pass->visits;
+    s->copies += pass->positions * pass->copies;
+    uint32_t byte = (s->pos >> 1) + pass->positions;
+    s->prev = s->in.text[byte - 1u];
+    s->pos = byte << 1;
+    s->unit = rx_unit_at(&s->in, s->pos, &s->next);
+    s->generation += 2u;
+    return s->visits >= until;
+}
+
 static void rx_search_begin(rx_search *s, uint32_t start) {
     s->start = start;
     s->pos = start;
@@ -408,7 +460,18 @@ static void rx_search_begin(rx_search *s, uint32_t start) {
 static bool rx_search_run(rx_search *s, uint64_t budget) {
     uint64_t until = s->visits + budget;
     uint32_t n = s->re->slots;
+    bool led = s->re->lead == RX_LEAD_CHAR || s->re->lead == RX_LEAD_FOLD;
     for (;;) {
+        if (led && s->ccount == 0 && !s->matched && !s->sticky) {
+            /* Each position: the start's closure (its SAVEs and the
+             * character) and its thread's step, which fails. */
+            rx_cost pass = { 0, s->re->lead_saves + 2u, 2u * (uint64_t)n };
+            pass.positions = rx_lead_run(s, s->pos >> 1, rx_budget_positions(s, pass.visits, until));
+            if (pass.positions > 0) {
+                if (rx_pass(s, &pass, until)) return false;
+                continue;
+            }
+        }
         if (!s->matched && (!s->sticky || s->pos == s->start)) {
             /* A thread from here, after every thread from earlier. */
             for (uint32_t k = 0; k < n; k++) s->cur[k] = RX_UNSET;

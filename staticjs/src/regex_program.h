@@ -50,6 +50,19 @@ typedef struct {
     uint32_t y;
 } rx_ins;
 
+/*
+ * How a thread from the start (pc 0) begins: `lead_saves` SAVEs, then the
+ * instruction at pc lead_saves. Only the start reaches those instructions
+ * (every jump back goes to a loop's SPLIT), so where it cannot go on, its
+ * closure always visits the same instructions, which a search counts
+ * without following them (regex_match.c, "Skipping").
+ */
+enum {
+    RX_LEAD_NONE = 0,
+    RX_LEAD_CHAR,      /* CHAR of an ASCII character: lead_char */
+    RX_LEAD_FOLD       /* CHAR_FOLD of an ASCII letter: lead_char, lowercase */
+};
+
 /* A class: its ranges, sorted and disjoint, from `start` in the ranges. */
 typedef struct {
     uint32_t start;
@@ -82,6 +95,9 @@ typedef struct {
     uint32_t source_length;
     uint32_t text_length;    /* the source and the names */
     bool named;              /* a group has a name */
+    uint8_t lead;            /* RX_LEAD_* */
+    uint8_t lead_char;
+    uint32_t lead_saves;
     const rx_ins *code;
     const rx_class *classes;
     const uint32_t *ranges;
