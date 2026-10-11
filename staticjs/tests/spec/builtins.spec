@@ -200,7 +200,7 @@ typeof "x".localeCompare
 --- fault calls methods
 
 === reading a set method staticjs does not have
-new Set([1]).isDisjointFrom
+new Set([1]).forEach
 --- fault calls methods
 
 === in finds an array method staticjs does not have
@@ -266,6 +266,133 @@ new Set([4,3])
 (a => [a.intersection(new Set([19, 3, 40, 0, 5, 6, 7, 8, 9, 10])), a.difference(new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])), a.isSubsetOf(a.union(new Set(["x"]))), a.union(new Set([-0, 25, 3])).size, a.symmetricDifference(new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 30]))])(new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]))
 --- value
 [new Set([19,3,0,5,6,7,8,9,10]),new Set([19]),true,21,new Set([9,10,11,12,13,14,15,16,17,18,19,30])]
+
+=== isSupersetOf: empty sets, equal sets, overlap, disjoint, the set itself
+(a => [a.isSupersetOf(new Set()), new Set().isSupersetOf(a), new Set().isSupersetOf(new Set()), a.isSupersetOf(new Set([3, 1])), a.isSupersetOf(new Set([1, 2, 3])), a.isSupersetOf(new Set([1, 4])), a.isSupersetOf(new Set([4, 5])), a.isSupersetOf(new Set([1, 2, 3, 4])), a.isSupersetOf(a)])(new Set([1, 2, 3]))
+--- value
+[true,false,true,true,true,false,false,false,true]
+
+=== isDisjointFrom: empty sets, equal sets, overlap, disjoint, the set itself
+(a => [a.isDisjointFrom(new Set()), new Set().isDisjointFrom(a), new Set().isDisjointFrom(new Set()), a.isDisjointFrom(new Set([4, 5])), a.isDisjointFrom(new Set([5, 3])), a.isDisjointFrom(new Set([3, 2, 1])), a.isDisjointFrom(new Set([9, 8, 7, 6, 5, 4, 1])), a.isDisjointFrom(a)])(new Set([1, 2, 3]))
+--- value
+[true,true,true,true,false,false,false,false]
+
+=== symmetricDifference: empty sets, equal sets, the set itself, and its order
+(a => [[...a.symmetricDifference(new Set())], [...new Set().symmetricDifference(a)], [...new Set().symmetricDifference(new Set())], [...a.symmetricDifference(new Set([3, 2, 1]))], [...a.symmetricDifference(a)], [...a.symmetricDifference(new Set([4, 5]))], [...new Set([1, 2, 3, 4]).symmetricDifference(new Set([6, 4, 5, 2]))], [...new Set([6, 4, 5, 2]).symmetricDifference(new Set([1, 2, 3, 4]))]])(new Set([1, 2, 3]))
+--- value
+[[1,2,3],[1,2,3],[],[],[],[1,2,3,4,5],[1,3,6,5],[6,5,1,3]]
+
+=== isSupersetOf, isDisjointFrom and symmetricDifference compare by SameValueZero
+(a => [a.isSupersetOf(new Set([-0, NaN])), a.isSupersetOf(new Set(["1"])), a.isDisjointFrom(new Set([-0])), a.isDisjointFrom(new Set(["0", "NaN", 2, false])), new Set(["1"]).isDisjointFrom(new Set([1])), new Set([NaN]).isDisjointFrom(new Set([NaN])), [...a.symmetricDifference(new Set([-0, "x", NaN, 1, true, "1"]))]])(new Set([0, NaN, "x", 1, null, undefined]))
+--- value
+[true,false,false,true,true,false,[null,undefined,true,"1"]]
+
+=== symmetricDifference keeps a set's -0 as 0
+[[...new Set([-0, 1]).symmetricDifference(new Set([2, -0]))], [...new Set([-0, 1]).symmetricDifference(new Set([2]))]]
+--- value
+[[1,2],[0,1,2]]
+
+=== isSupersetOf, isDisjointFrom and symmetricDifference on non-ASCII strings
+[new Set(["é", "😀", "a"]).isSupersetOf(new Set(["😀", "é"])), new Set(["é"]).isDisjointFrom(new Set(["e", "😀"])), [...new Set(["é", "😀"]).symmetricDifference(new Set(["😀", "e"]))]]
+--- value
+[true,true,["é","e"]]
+
+=== isSupersetOf, isDisjointFrom and symmetricDifference on large sets
+(a => [a.isSupersetOf(new Set([19, 0, 7, 12, 3, 4, 5, 6, 8, 9])), a.isSupersetOf(new Set([19, 0, 7, 12, 3, 4, 5, 6, 8, 20])), new Set([1, 2]).isSupersetOf(a), a.isDisjointFrom(new Set([20, 21, 22, 23, 24, 25, 26, 27, 28, 29])), a.isDisjointFrom(new Set([20, 21, 22, 23, 24, 25, 26, 27, 28, 19])), new Set([30, 19]).isDisjointFrom(a), new Set([30, 31]).isDisjointFrom(a), [...a.symmetricDifference(new Set([25, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 30]))]])(new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]))
+--- value
+[true,false,false,true,false,false,true,[18,19,25,30]]
+
+=== isSupersetOf of a symmetric difference
+new Set([1, 2]).symmetricDifference(new Set([2, 3])).isSupersetOf(new Set([3, 1]))
+--- value
+true
+
+=== isSupersetOf faults with no argument
+new Set([1]).isSupersetOf()
+--- fault combines a set only with another set
+
+=== isSupersetOf faults with an array
+new Set([1]).isSupersetOf([1])
+--- fault combines a set only with another set
+
+=== isSupersetOf faults with a number
+new Set([1]).isSupersetOf(1)
+--- fault combines a set only with another set
+
+=== isSupersetOf faults with a string
+new Set([1]).isSupersetOf("a")
+--- fault combines a set only with another set
+
+=== isSupersetOf faults with an object
+new Set([1]).isSupersetOf({size: 1})
+--- fault combines a set only with another set
+
+=== isSupersetOf faults with null
+new Set([1]).isSupersetOf(null)
+--- fault combines a set only with another set
+
+# A map is set-like in JavaScript, which gives a value; staticjs takes only a set.
+=== isSupersetOf faults with a map
+new Set([1]).isSupersetOf(new Map([[1, 1]]))
+--- fault combines a set only with another set
+
+=== isDisjointFrom faults with no argument
+new Set([1]).isDisjointFrom()
+--- fault combines a set only with another set
+
+=== isDisjointFrom faults with an array
+new Set([1]).isDisjointFrom([1])
+--- fault combines a set only with another set
+
+=== isDisjointFrom faults with a number
+new Set([1]).isDisjointFrom(1)
+--- fault combines a set only with another set
+
+=== isDisjointFrom faults with a string
+new Set([1]).isDisjointFrom("a")
+--- fault combines a set only with another set
+
+=== isDisjointFrom faults with an object
+new Set([1]).isDisjointFrom({size: 1})
+--- fault combines a set only with another set
+
+=== isDisjointFrom faults with null
+new Set([1]).isDisjointFrom(null)
+--- fault combines a set only with another set
+
+# A map is set-like in JavaScript, which gives a value; staticjs takes only a set.
+=== isDisjointFrom faults with a map
+new Set([1]).isDisjointFrom(new Map([[1, 1]]))
+--- fault combines a set only with another set
+
+=== symmetricDifference faults with no argument
+new Set([1]).symmetricDifference()
+--- fault combines a set only with another set
+
+=== symmetricDifference faults with an array
+new Set([1]).symmetricDifference([1])
+--- fault combines a set only with another set
+
+=== symmetricDifference faults with a number
+new Set([1]).symmetricDifference(1)
+--- fault combines a set only with another set
+
+=== symmetricDifference faults with a string
+new Set([1]).symmetricDifference("a")
+--- fault combines a set only with another set
+
+=== symmetricDifference faults with an object
+new Set([1]).symmetricDifference({size: 1})
+--- fault combines a set only with another set
+
+=== symmetricDifference faults with null
+new Set([1]).symmetricDifference(null)
+--- fault combines a set only with another set
+
+# A map is set-like in JavaScript, which gives a value; staticjs takes only a set.
+=== symmetricDifference faults with a map
+new Set([1]).symmetricDifference(new Map([[1, 1]]))
+--- fault combines a set only with another set
 
 === a large object finds its keys, and keeps index keys first
 (o => [o.k1, o.k3, o.k10, o.k11, o[2], o[5], o[9], "k12" in o, "k11" in o, o.k99, Object.keys(o)])({k1: 1, k2: 2, k3: 3, k4: 4, k5: 5, k6: 6, k7: 7, k8: 8, k9: 9, k10: 10, 5: "a", 2: "b", k3: "again", 9: "c", k11: 11})
