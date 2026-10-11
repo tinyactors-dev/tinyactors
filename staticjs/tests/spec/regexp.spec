@@ -869,6 +869,18 @@ false
 "a".replaceAll(/a/, "b")
 --- fault TypeError
 
+=== replaceAll with y and without g: a TypeError in JavaScript, not a lastIndex change
+"x".replaceAll(/a/y, "b")
+--- fault TypeError for a regular expression without g
+
+=== replaceAll with y, without g, and a function: a TypeError in JavaScript
+"x".replaceAll(/a/y, () => "b")
+--- fault TypeError for a regular expression without g
+
+=== matchAll with y and without g: a TypeError in JavaScript
+"x".matchAll(/a/y)
+--- fault TypeError for a regular expression without g
+
 === a match with a string pattern faults, where JavaScript makes a RegExp of it
 "a.b".match(".")
 --- fault regular expression literal

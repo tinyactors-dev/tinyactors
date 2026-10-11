@@ -1204,12 +1204,14 @@ static bool rx_method_check(sjs_vm *vm, const rx_method *m) {
         sjs_vm_fault(vm, "a regular expression with g or y changes its lastIndex when it matches, and staticjs values do not change");
         return false;
     }
-    if ((m->op == RX_MATCH || m->op == RX_REPLACE) && sticky && !global) {
-        sjs_vm_fault(vm, "a regular expression with y and without g changes its lastIndex when it matches, and staticjs values do not change");
-        return false;
-    }
+    /* Before the y check: replaceAll without g throws a TypeError in
+     * JavaScript, whatever its other flags. */
     if ((m->all || m->op == RX_MATCH_ALL) && !global) {
         sjs_vm_fault(vm, "JavaScript throws a TypeError for a regular expression without g here");
+        return false;
+    }
+    if ((m->op == RX_MATCH || m->op == RX_REPLACE) && sticky && !global) {
+        sjs_vm_fault(vm, "a regular expression with y and without g changes its lastIndex when it matches, and staticjs values do not change");
         return false;
     }
     if (m->op == RX_SPLIT && o->second.kind != SJS_UNDEFINED && o->second.kind != SJS_NUMBER) {
