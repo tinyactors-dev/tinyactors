@@ -1058,6 +1058,43 @@ Object.groupBy([{k: true}, {k: false}, {k: null}, {k: true}], x => x.k)
 --- value
 [true,true,false,true,true,false]
 
+=== Object.hasOwn of String, Boolean, Number and BigInt: length and name
+[String, Boolean, Number, BigInt].map((f) => [Object.hasOwn(f, "length"), Object.hasOwn(f, "name")])
+--- value
+[[true,true],[true,true],[true,true],[true,true]]
+
+=== Object.hasOwn of a built-in function without statics
+[Object.hasOwn(String.raw, "prototype"), Object.hasOwn(parseInt, "prototype"), Object.hasOwn(Number.isInteger, "prototype")]
+--- value
+[false,false,false]
+
+# JavaScript gives these true: the prototype and the statics are own.
+=== Object.hasOwn of String's prototype faults
+Object.hasOwn(String, "prototype")
+--- fault Object.hasOwn of String, Boolean, Number or BigInt reads only length and name
+
+=== Object.hasOwn of a static of String faults
+Object.hasOwn(String, "fromCharCode")
+--- fault Object.hasOwn of String, Boolean, Number or BigInt reads only length and name
+
+=== Object.hasOwn of a constant of Number faults
+Object.hasOwn(Number, "MAX_SAFE_INTEGER")
+--- fault Object.hasOwn of String, Boolean, Number or BigInt reads only length and name
+
+=== Object.hasOwn of a static of BigInt faults
+Object.hasOwn(BigInt, "asIntN")
+--- fault Object.hasOwn of String, Boolean, Number or BigInt reads only length and name
+
+=== Object.hasOwn of String held in a variable faults
+(() => { const S = String; return Object.hasOwn(S, "raw"); })()
+--- fault Object.hasOwn of String, Boolean, Number or BigInt reads only length and name
+
+# JavaScript gives false; staticjs faults on any key but length and name
+# rather than list each constructor's statics.
+=== Object.hasOwn of another key of Boolean faults
+Object.hasOwn(Boolean, "x")
+--- fault Object.hasOwn of String, Boolean, Number or BigInt reads only length and name
+
 === Object.hasOwn of a regular expression: lastIndex
 [Object.hasOwn(/a/g, "lastIndex"), Object.hasOwn(/a/g, "source"), Object.hasOwn(/a/g, 0)]
 --- value

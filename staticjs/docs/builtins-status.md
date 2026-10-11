@@ -26,7 +26,7 @@ the host injects in the same way. UTC is the default everywhere.
 
 | Name | Status | Note |
 |---|---|---|
-| `keys`, `values`, `entries`, `fromEntries`, `groupBy`, `hasOwn` | built | |
+| `keys`, `values`, `entries`, `fromEntries`, `groupBy`, `hasOwn` | built | `hasOwn` of `String`, `Boolean`, `Number` or `BigInt` faults on a key other than `length` and `name`. |
 | `assign` | built | Mutates its target, under the owned-mutation rules (`docs/mutation.md`, "Object.assign"): a variable the function owns, or a target nothing else holds; faults on a shared target, an array, map or function target with something to put, and a primitive target. |
 | `freeze`, `isFrozen`, `seal`, `isSealed` | build later | Pending a decision on writes to a frozen object. |
 | `is` | refused | Listed in `docs/extending.md` as a case not to write. |
