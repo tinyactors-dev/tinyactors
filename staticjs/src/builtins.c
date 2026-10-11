@@ -133,10 +133,10 @@ static const sjs_name NAMES[] = {
     NAME("includes", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_INCLUDES, SJS_METHOD_STRING_INCLUDES, 0),
     NAME("indexOf", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_INDEX_OF, SJS_METHOD_STRING_INDEX_OF, 0),
     NAME("intersection", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_INTERSECTION),
-    NAME("isDisjointFrom", SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("isDisjointFrom", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_IS_DISJOINT_FROM),
     NAME("isPrototypeOf", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME("isSubsetOf", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_IS_SUBSET_OF),
-    NAME("isSupersetOf", SJS_NAME_ON_SET, 0, 0, 0),
+    NAME("isSupersetOf", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_IS_SUPERSET_OF),
     NAME("isWellFormed", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("italics", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("join", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_JOIN, 0, 0),
@@ -1189,10 +1189,23 @@ static sjs_result set_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
     /* Each member of either set is looked up at most once in the other, or
      * in the result. */
     call->cost = (uint64_t)a->length * lookup_cost(b) + (uint64_t)b->length * lookup_cost(a);
-    if (id == SJS_METHOD_SET_IS_SUBSET_OF) {
-        bool subset = a->length <= b->length;
-        for (uint32_t i = 0; subset && i < a->length; i++) subset = sjs_set_contains(b, a->items[i]);
-        call->result = sjs_boolean(subset);
+    if (id == SJS_METHOD_SET_IS_SUBSET_OF || id == SJS_METHOD_SET_IS_SUPERSET_OF) {
+        /* Every member of the set that should be the smaller one is in the
+         * other: the receiver for isSubsetOf, the argument for isSupersetOf. */
+        const sjs_array *inner = id == SJS_METHOD_SET_IS_SUBSET_OF ? a : b;
+        const sjs_array *outer = inner == a ? b : a;
+        bool holds = inner->length <= outer->length;
+        for (uint32_t i = 0; holds && i < inner->length; i++) holds = sjs_set_contains(outer, inner->items[i]);
+        call->result = sjs_boolean(holds);
+        return SJS_OK;
+    }
+    if (id == SJS_METHOD_SET_IS_DISJOINT_FROM) {
+        /* The smaller set's members, each looked up in the other. */
+        const sjs_array *smaller = a->length <= b->length ? a : b;
+        const sjs_array *larger = smaller == a ? b : a;
+        bool disjoint = true;
+        for (uint32_t i = 0; disjoint && i < smaller->length; i++) disjoint = !sjs_set_contains(larger, smaller->items[i]);
+        call->result = sjs_boolean(disjoint);
         return SJS_OK;
     }
     sjs_array *out;
