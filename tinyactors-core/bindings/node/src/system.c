@@ -164,6 +164,7 @@ static void system_clear(napi_env environment, nd_system *system) {
     free(system->sessions);
     free(system->changed);
     parked_clear(system);
+    jobs_clear(system);
     for (uint32_t i = 0; i < system->later_count; i++)
         set_ref(environment, &system->later[i], NULL);
     free(system->later);
@@ -383,29 +384,9 @@ static void effect_out(nd_system *system, const ta_host_effect *effect) {
     case TA_EFFECT_REQUEST:
         answer_request(system, effect);
         break;
-    case TA_HOST_EFFECT_MIGRATED:
-        e = effect_new(system, "migrated");
-        set(environment, e, "session", num(environment, (double)effect->session));
-        set(environment, e, "segment", num(environment, effect->segment));
-        set(environment, e, "chart", num(environment, effect->chart));
-        set(environment, e, "job", num(environment, effect->job));
+    case TA_HOST_EFFECT_JOB_DONE: /* migrate()'s promise */
+        job_done(system, effect);
         break;
-    case TA_HOST_EFFECT_JOB_DONE: {
-        napi_value left;
-        uint32_t k = ta_host_job_pending(system->host, effect->job, NULL, 0);
-        uint64_t *buffer = (uint64_t *)malloc(sizeof(uint64_t) * (k ? k : 1));
-        k = buffer ? ta_host_job_pending(system->host, effect->job, buffer, k) : 0;
-        napi_create_array_with_length(environment, k, &left);
-        for (uint32_t j = 0; j < k; j++)
-            napi_set_element(environment, left, j, num(environment, (double)buffer[j]));
-        free(buffer);
-        e = effect_new(system, "job");
-        set(environment, e, "job", num(environment, effect->job));
-        set(environment, e, "migrated", num(environment, effect->migrated));
-        set(environment, e, "failed", num(environment, effect->failed));
-        set(environment, e, "pending", left);
-        break;
-    }
     case TA_HOST_EFFECT_SEGMENT_FREED:
         if (effect->segment < system->image_count)
             set_ref(environment, &system->images[effect->segment], NULL);

@@ -542,7 +542,6 @@ export function createRuntime({ native, platform }) {
       this._segments = []; /* by segment: its Image */
       this._actors = new Map(); /* session -> Actor the application holds */
       this._invocations = new Map(); /* `${segment}:${token}` and `${session}#${invokeid}` -> invocation */
-      this._jobs = new Map(); /* migration job -> { resolve, moved } */
       this._store = options.hibernation ? options.hibernation.store : null;
       if (this._store && typeof this._store.get !== 'function') throw new TypeError('hibernation: { store } with get, set and delete');
       this._peers = new Map(); /* router peer -> transport connection */
@@ -895,19 +894,6 @@ export function createRuntime({ native, platform }) {
         case 'wake':
           this._wake(e.session);
           break;
-        case 'migrated': {
-          const job = this._jobs.get(e.job);
-          if (job) job.moved++;
-          break;
-        }
-        case 'job': {
-          const job = this._jobs.get(e.job);
-          if (!job) break;
-          this._jobs.delete(e.job);
-          const pending = e.pending.map((s) => this._actors.get(s) || this.ref(formatAddress(this.id, s)));
-          platform.defer(() => job.resolve({ migrated: e.migrated, failed: e.failed, pending }));
-          break;
-        }
         case 'freed':
           this._segments[e.segment] = undefined;
           break;
@@ -1098,14 +1084,12 @@ export function createRuntime({ native, platform }) {
       const { wake = !!this._store, timeoutMs = 0 } = options;
       let name = '';
       let session = 0;
-      if (target instanceof Actor) {
-        const info = native.inspect(this._sys, target._session);
-        name = info ? this._segments[info.segment]._info.charts[info.chart].name : '';
-        session = target._session;
-      } else if (target instanceof Chart) name = this._charts.get(target) || target.name || '';
+      if (target instanceof Actor) session = target._session;
+      else if (target instanceof Chart) name = this._charts.get(target) || target.name || '';
       else if (target !== undefined && target !== null) name = String(target);
-      const job = native.migrate(this._sys, name, session, !!wake, timeoutMs);
-      const done = new Promise((resolve) => this._jobs.set(job, { resolve, moved: 0 }));
+      const done = native
+        .migrate(this._sys, name, session, !!wake, timeoutMs)
+        .then((r) => ({ ...r, pending: r.pending.map((s) => this._actors.get(s) || this.ref(formatAddress(this.id, s))) }));
       native.pump(this._sys);
       return { done };
     }
@@ -1223,8 +1207,6 @@ export function createRuntime({ native, platform }) {
       native.destroy(this._sys); /* from an effect handler: when the pump ends */
       for (const actor of [...this._actors.values()]) actor._halt(null);
       this._actors.clear();
-      for (const [, j] of this._jobs) j.resolve({ migrated: 0, failed: 0, pending: [] });
-      this._jobs.clear();
     }
 
     /* ---- metrics (docs/adr/0007): core's counts, pulled; the runs' durations here */

@@ -163,6 +163,11 @@ typedef struct nd_parked { /* a hibernated actor's blob until the store has it, 
     int woken;     /* woken from the held blob before it was stored: stored() says delete */
 } nd_parked;
 
+typedef struct nd_job { /* a migration job and the promise migrate() returned */
+    uint32_t job;
+    napi_deferred deferred;
+} nd_job;
+
 typedef struct nd_system {
     napi_env environment; /* of the current native call */
     ta_host *host;
@@ -210,6 +215,8 @@ typedef struct nd_system {
     uint32_t grave_count, grave_capacity;
     nd_failure *failures;
     uint32_t failure_count, failure_capacity;
+    nd_job *jobs; /* migrations under way (persist.c) */
+    uint32_t job_count, job_capacity;
     nd_parked *parked; /* hibernated actors in flight (persist.c) */
     uint32_t parked_count, parked_capacity;
     uint64_t *wake_held; /* woken from their held blobs after a run's effects */
@@ -363,6 +370,8 @@ napi_value js_hibernated(napi_env environment, napi_callback_info info);
 int wake_effect(nd_system *system, uint64_t session);
 void wake_held(nd_system *system);
 void parked_clear(nd_system *system);
+void job_done(nd_system *system, const ta_host_effect *effect);
+void jobs_clear(nd_system *system);
 napi_value js_unwatch(napi_env environment, napi_callback_info info);
 napi_value trace_kind_names(napi_env environment);
 napi_value js_terminate(napi_env environment, napi_callback_info info);

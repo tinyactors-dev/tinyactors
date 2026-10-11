@@ -271,10 +271,49 @@ napi_value js_adopt(napi_env environment, napi_callback_info info) {
     return num(environment, (double)session); /* it goes on with the next pump */
 }
 
-/* migrate(system, name, session, wake, timeout) -> job */
+/* ---- migrations: each job's promise, resolved when it ends (TA_HOST_EFFECT_JOB_DONE) */
+
+static napi_value job_result(napi_env environment, uint32_t migrated, uint32_t failed,
+                             const uint64_t *pending, uint32_t count) {
+    napi_value o, left;
+    napi_create_object(environment, &o);
+    set(environment, o, "migrated", num(environment, migrated));
+    set(environment, o, "failed", num(environment, failed));
+    napi_create_array_with_length(environment, count, &left);
+    for (uint32_t i = 0; i < count; i++)
+        napi_set_element(environment, left, i, num(environment, (double)pending[i]));
+    set(environment, o, "pending", left);
+    return o;
+}
+
+void job_done(nd_system *system, const ta_host_effect *effect) {
+    for (uint32_t i = 0; i < system->job_count; i++) {
+        if (system->jobs[i].job != effect->job) continue;
+        uint32_t k = ta_host_job_pending(system->host, effect->job, NULL, 0);
+        uint64_t *pending = (uint64_t *)malloc(sizeof(uint64_t) * (k ? k : 1));
+        k = pending ? ta_host_job_pending(system->host, effect->job, pending, k) : 0;
+        napi_resolve_deferred(
+            system->environment, system->jobs[i].deferred,
+            job_result(system->environment, effect->migrated, effect->failed, pending, k));
+        free(pending);
+        system->jobs[i] = system->jobs[--system->job_count];
+        return;
+    }
+}
+
+/* the system goes: its jobs end with nothing moved */
+void jobs_clear(nd_system *system) {
+    for (uint32_t i = 0; i < system->job_count; i++)
+        napi_resolve_deferred(system->environment, system->jobs[i].deferred,
+                              job_result(system->environment, 0, 0, NULL, 0));
+    free(system->jobs);
+}
+
+/* migrate(system, name, session, wake, timeout) -> Promise<{ migrated, failed, pending:
+ * [sessions] }>, settled when the job ends (with the next pumps) */
 napi_value js_migrate(napi_env environment, napi_callback_info info) {
     size_t argc = 5;
-    napi_value argv[5];
+    napi_value argv[5], promise;
     napi_get_cb_info(environment, info, &argc, argv, NULL, NULL);
     nd_system *system = argc >= 5 ? get_system(environment, argv[0]) : NULL;
     if (!system) return NULL;
@@ -291,7 +330,11 @@ napi_value js_migrate(napi_env environment, napi_callback_info info) {
         napi_throw_error(environment, NULL, "cannot start the migration");
         return NULL;
     }
-    return num(environment, job);
+    grow((void **)&system->jobs, &system->job_capacity, system->job_count + 1, sizeof(nd_job));
+    nd_job *entry = &system->jobs[system->job_count++];
+    entry->job = job;
+    napi_create_promise(environment, &entry->deferred, &promise);
+    return promise;
 }
 
 /* ---- snapshots ------------------------------------------------------------------------------ */
