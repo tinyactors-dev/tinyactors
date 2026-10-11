@@ -186,9 +186,9 @@ table). CBOR is for two things only:
 - **rarely called calls:** `ta_host_request` and the host's config;
 - **a process boundary:** bytes that leave or enter the process (an
   envelope for another system, OTLP, blobs). The encoding sits beside the
-  struct call (`ta_host_envelope` writes a PEER effect as CBOR; a decoder
-  fills a `ta_envelope`, and `ta_host_deliver` still takes the struct), so
-  a caller in the same process never encodes.
+  struct call (`ta_host_envelope` writes a PEER effect as CBOR,
+  `ta_host_envelope_read` fills a `ta_envelope`, and `ta_host_deliver`
+  still takes the struct), so a caller in the same process never encodes.
 
 Before changing a call's input or output to bytes, find its callers inside
 core (`git grep`, ast-grep). If core calls it per event, as the router calls
