@@ -552,6 +552,7 @@ napi_value js_trace_configure(napi_env environment, napi_callback_info info) {
         return NULL;
     }
     host->otlp_flags = flags;
+    host->trace_sink = property_bool(environment, o, "sink");
     if (!enabled) {
         free(host->otlp);
         host->otlp = NULL;
@@ -697,6 +698,8 @@ napi_value js_trace_end(napi_env environment, napi_callback_info info) {
         ta_otlp_stats_get(host->otlp, &stats);
         if (!stats.open) break;
     }
+    exporter_add(host, TA_OTLP_TRACES, host->traces, host->traces_length);
+    exporter_add(host, TA_OTLP_LOGS, host->logs, host->logs_length);
     if (host->traces_length)
         napi_set_named_property(environment, out, "traces",
                                 bytes_value(environment, host->traces, host->traces_length));

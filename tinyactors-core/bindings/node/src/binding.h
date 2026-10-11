@@ -215,8 +215,12 @@ typedef struct nd_system {
     uint32_t grave_count, grave_capacity;
     nd_failure *failures;
     uint32_t failure_count, failure_capacity;
-    ta_links *links; /* links to other systems (link.c), made with the first */
-    nd_job *jobs;    /* migrations under way (persist.c) */
+    ta_links *links;         /* links to other systems (link.c), made with the first */
+    ta_otlp_batch *exporter; /* what core.mjs posts (export.c) */
+    uint32_t export_signals; /* 1 << TA_OTLP_TRACES, ... */
+    int export_flush;        /* exportFlush(): everything waiting goes now */
+    int trace_sink;          /* callbacks.effects hears the traces' bytes */
+    nd_job *jobs;            /* migrations under way (persist.c) */
     uint32_t job_count, job_capacity;
     nd_parked *parked; /* hibernated actors in flight (persist.c) */
     uint32_t parked_count, parked_capacity;
@@ -377,6 +381,16 @@ napi_value effect_new(nd_system *system, const char *kind);
 void links_free(nd_system *system);
 ta_time links_now(nd_system *system);
 void links_output(nd_system *system);
+void exporter_free(nd_system *system);
+void exporter_add(nd_system *system, uint32_t signal, const void *bytes, size_t length);
+void exporter_output(nd_system *system);
+ta_time exporter_deadline(nd_system *system);
+napi_value js_exporter(napi_env environment, napi_callback_info info);
+napi_value js_export_add(napi_env environment, napi_callback_info info);
+napi_value js_export_flush(napi_env environment, napi_callback_info info);
+napi_value js_posted(napi_env environment, napi_callback_info info);
+napi_value js_export_stats(napi_env environment, napi_callback_info info);
+napi_value js_export_drain(napi_env environment, napi_callback_info info);
 napi_value js_link_connect(napi_env environment, napi_callback_info info);
 napi_value js_link_serve(napi_env environment, napi_callback_info info);
 napi_value js_link_accept(napi_env environment, napi_callback_info info);
@@ -406,7 +420,6 @@ napi_value js_adopt(napi_env environment, napi_callback_info info);
 napi_value js_migrate(napi_env environment, napi_callback_info info);
 napi_value js_snapshot(napi_env environment, napi_callback_info info);
 napi_value js_restore_system(napi_env environment, napi_callback_info info);
-
 
 /* trace.c */
 napi_value decoded_id(napi_env environment, uint64_t high, uint64_t low, int wide);

@@ -287,10 +287,6 @@ export function createRuntime({ native, platform }) {
 
   /** Core's record kinds, in core's order (TA_TRACE_* in tinyactors/trace.h, from 1). */
   const TRACE_KINDS = native.traceKinds;
-  const EXPORT_DELAY_MS = 250; /* bytes gather this long before a post */
-  const EXPORT_BYTES = 1 << 20; /* or until this many wait */
-  const EXPORT_MAX_BYTES = 16 << 20; /* waiting beyond this is dropped */
-  const FAILURE_LOG_MS = 10000;
   const METRICS_INTERVAL_MS = 60000; /* OTEL_METRIC_EXPORT_INTERVAL's default */
   const METRIC_KINDS = { sum: K.OTLP_METRIC_SUM, gauge: K.OTLP_METRIC_GAUGE, histogram: K.OTLP_METRIC_HISTOGRAM };
   const METRIC_KIND_NAMES = Object.fromEntries(Object.entries(METRIC_KINDS).map(([k, v]) => [v, k]));
@@ -306,106 +302,27 @@ export function createRuntime({ native, platform }) {
     return [Number(value >> 32n), Number(value & 0xffffffffn)];
   }
 
-  /* concatenated protobuf messages of one type are one message (their repeated fields append) */
-  function concatBytes(parts) {
-    if (parts.length === 1) return parts[0];
-    let n = 0;
-    for (const p of parts) n += p.length;
-    const out = new Uint8Array(n);
-    n = 0;
-    for (const p of parts) {
-      out.set(p, n);
-      n += p.length;
-    }
-    return out;
-  }
-
   const fetchPost = (url, headers, body) =>
     globalThis.fetch(url, { method: 'POST', headers: { 'content-type': 'application/x-protobuf', ...headers }, body }).then((response) => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
     });
 
-  /* Posts OTLP protobuf to /v1/traces, /v1/logs and /v1/metrics: gathered for
-   * a moment, one request in flight per signal; failures are quiet, logged at
-   * most once every ten seconds. */
-  class Exporter {
-    constructor(options) {
-      const base = options.endpoint ? String(options.endpoint).replace(/\/+$/, '') : '';
-      this.urls = {
+  /* Where and how a system posts OTLP protobuf to /v1/traces, /v1/logs and
+   * /v1/metrics; the batching, the cap and the counts are core's
+   * (ta_otlp_batch), the addon hands over what is due ("post" effects). */
+  function exporterOf(options) {
+    const base = options.endpoint ? String(options.endpoint).replace(/\/+$/, '') : '';
+    return {
+      urls: {
         traces: options.tracesEndpoint || (base && `${base}/v1/traces`),
         logs: options.logsEndpoint || (base && `${base}/v1/logs`),
         metrics: options.metricsEndpoint !== undefined ? options.metricsEndpoint : base && `${base}/v1/metrics`, /* '': none */
-      };
-      this.headers = { ...(options.headers || {}) };
-      this.post = options.post || platform.post || fetchPost;
-      this.waiting = { traces: [], logs: [], metrics: [] };
-      this.bytes = { traces: 0, logs: 0, metrics: 0 };
-      this.busy = { traces: false, logs: false, metrics: false };
-      this.outcome = { posted: 0, failed: 0, dropped: 0 }; /* bytes: tinyactors.telemetry.bytes */
-      this.timer = null;
-      this.lastFailure = -Infinity;
-      this.failed = 0;
-      this.idle = [];
-    }
-    add(signal, bytes) {
-      if (!bytes || !this.urls[signal]) return;
-      if (this.bytes[signal] + bytes.length > EXPORT_MAX_BYTES) {
-        this.outcome.dropped += bytes.length;
-        return this.fail(new Error(`more than ${EXPORT_MAX_BYTES} bytes waiting`));
-      }
-      this.waiting[signal].push(bytes);
-      this.bytes[signal] += bytes.length;
-      if (this.bytes[signal] >= EXPORT_BYTES) this.flush();
-      else if (!this.timer) this.timer = platform.setTimer(() => this.flush(), EXPORT_DELAY_MS);
-    }
-    flush() {
-      platform.clearTimer(this.timer);
-      this.timer = null;
-      for (const signal of ['traces', 'logs', 'metrics']) {
-        if (this.busy[signal] || !this.waiting[signal].length) continue;
-        const body = concatBytes(this.waiting[signal].splice(0));
-        this.bytes[signal] = 0;
-        this.busy[signal] = true;
-        let sent;
-        try {
-          sent = Promise.resolve(this.post(this.urls[signal], this.headers, body));
-        } catch (e) {
-          sent = Promise.reject(e);
-        }
-        sent
-          .then(
-            () => {
-              this.outcome.posted += body.length;
-            },
-            (e) => {
-              this.outcome.failed += body.length;
-              this.fail(e);
-            },
-          )
-          .then(() => {
-            this.busy[signal] = false;
-            if (this.waiting[signal].length) this.flush();
-            else if (this.quiet()) for (const resolve of this.idle.splice(0)) resolve();
-          });
-      }
-    }
-    fail(e) {
-      this.failed++;
-      const now = platform.now();
-      if (now - this.lastFailure < FAILURE_LOG_MS) return;
-      this.lastFailure = now;
-      platform.log(`tinyactors: exporting telemetry failed (${this.failed} so far): ${e && e.message ? e.message : e}`);
-    }
-    quiet() {
-      return Object.keys(this.waiting).every((signal) => !this.busy[signal] && !this.waiting[signal].length);
-    }
-    /* resolves once nothing waits and nothing is in flight */
-    settled() {
-      this.flush();
-      if (Object.keys(this.busy).every((signal) => !this.busy[signal])) return Promise.resolve();
-      return new Promise((resolve) => this.idle.push(resolve));
-    }
+      },
+      headers: { ...(options.headers || {}) },
+      post: options.post || platform.post || fetchPost,
+    };
   }
+
 
   const SPAN_KINDS = ['unspecified', 'internal', 'server', 'client', 'producer', 'consumer'];
   const STATUS_CODES = ['unset', 'ok', 'error'];
@@ -591,7 +508,10 @@ export function createRuntime({ native, platform }) {
       /* tracing: the platform's exporter settings (Node.js: OTEL_* variables), the application's over them */
       const telemetry = options.telemetry === false ? { disabled: true } : { ...(platform.telemetry || {}), ...(options.telemetry || {}) };
       this._telemetry = telemetry;
-      this._exporter = !telemetry.disabled && (telemetry.endpoint || telemetry.tracesEndpoint || telemetry.metricsEndpoint) ? new Exporter(telemetry) : null;
+      this._exporter = !telemetry.disabled && (telemetry.endpoint || telemetry.tracesEndpoint || telemetry.metricsEndpoint) ? exporterOf(telemetry) : null;
+      this._exportIdle = []; /* flushTraces() waits */
+      this._lastPosts = []; /* what stop() posted */
+      if (this._exporter) native.exporter(this._sys, { traces: !!this._exporter.urls.traces, logs: !!this._exporter.urls.logs, metrics: !!this._exporter.urls.metrics });
       this._traceSink = null;
       this._traceOptions = {};
       this._traceApply();
@@ -904,6 +824,9 @@ export function createRuntime({ native, platform }) {
         case 'link':
           this._linkEffect(e);
           break;
+        case 'post':
+          this._postTelemetry(e.signal, e.body);
+          break;
         default:
           break;
       }
@@ -1180,8 +1103,8 @@ export function createRuntime({ native, platform }) {
         } catch (e) {
           platform.log(e);
         }
-        if (this._exporter) this._exporter.flush();
       }
+      if (this._exporter) for (const { signal, body } of native.exportDrain(this._sys)) this._postTelemetry(signal, body, false);
       this._stopped = true;
       platform.clearTimer(this._timer);
       if (this._immediate !== null) platform.cancelDefer(this._immediate);
@@ -1210,7 +1133,8 @@ export function createRuntime({ native, platform }) {
       if (r.count) Object.assign(runs, { min: r.min, max: r.max });
       const own = [{ name: 'tinyactors.run.duration', unit: 's', kind: 'histogram', points: [runs] }];
       if (this._exporter) {
-        const o = this._exporter.outcome;
+        const stats = native.exportStats(this._sys);
+        const o = { posted: stats.posted, failed: stats.failed, dropped: stats.dropped };
         own.push({
           name: 'tinyactors.telemetry.bytes',
           unit: 'By',
@@ -1231,7 +1155,7 @@ export function createRuntime({ native, platform }) {
         const own = this._ownMetrics();
         const app = this._telemetry.metrics ? this._telemetry.metrics() || [] : [];
         const bytes = native.metrics(this._sys, nativeMetrics([...own, ...app]), resourcePairs(this._resource()), this._metricsStart, this._clock());
-        this._exporter.add('metrics', bytes);
+        native.exportAdd(this._sys, 'metrics', bytes);
       } catch (e) {
         platform.log(e);
       }
@@ -1296,7 +1220,37 @@ export function createRuntime({ native, platform }) {
 
     /** Resolves once every trace export this system started has finished. */
     flushTraces() {
-      return this._exporter ? this._exporter.settled() : Promise.resolve();
+      if (!this._exporter) return Promise.resolve();
+      if (this._stopped) return Promise.all(this._lastPosts).then(() => undefined); /* what stop() posted */
+      const settled = new Promise((resolve) => this._exportIdle.push(resolve));
+      native.exportFlush(this._sys);
+      this._exportSettled();
+      return settled;
+    }
+
+    /* a "post" effect: the body goes to its signal's endpoint; the addon hears how it went */
+    _postTelemetry(signal, body, tell = true) {
+      const exporter = this._exporter;
+      let sent;
+      try {
+        sent = Promise.resolve(exporter.post(exporter.urls[signal], exporter.headers, body));
+      } catch (e) {
+        sent = Promise.reject(e);
+      }
+      if (!tell) return this._lastPosts.push(sent.catch(() => {}));
+      const done = (ok, e) => {
+        if (this._stopped) return;
+        const failures = native.posted(this._sys, signal, ok);
+        if (failures) platform.log(`tinyactors: exporting telemetry failed (${failures} so far): ${e && e.message ? e.message : e || 'bytes dropped'}`);
+        this._exportSettled();
+      };
+      return sent.then(() => done(true), (e) => done(false, e));
+    }
+
+    _exportSettled() {
+      if (!this._exportIdle.length || this._stopped) return;
+      const stats = native.exportStats(this._sys);
+      if (!stats.inFlight && !stats.waiting) for (const resolve of this._exportIdle.splice(0)) resolve();
     }
 
     _traceApply() {
@@ -1306,6 +1260,7 @@ export function createRuntime({ native, platform }) {
       native.traceConfigure(this._sys, {
         ...t,
         enabled: !!(this._traceSink || (exporter && (exporter.urls.traces || exporter.urls.logs))),
+        sink: !!this._traceSink,
         sample: t.sample !== undefined ? t.sample : this._telemetry.sample,
         rules: (t.rules || []).map((r) => (r && r.chart instanceof Chart ? { ...r, chart: r.chart.name } : r)),
         spanMetrics: !!this._telemetry.spanMetrics,
@@ -1314,12 +1269,8 @@ export function createRuntime({ native, platform }) {
     }
 
     _traces(traces, logs) {
-      if (!traces && !logs) return;
-      if (this._exporter) {
-        this._exporter.add('traces', traces);
-        this._exporter.add('logs', logs);
-      }
-      if (this._traceSink) this._traceSink(traces || new Uint8Array(0), logs);
+      /* the exporter's are the addon's (ta_otlp_batch) */
+      if (this._traceSink && (traces || logs)) this._traceSink(traces || new Uint8Array(0), logs);
     }
   }
 

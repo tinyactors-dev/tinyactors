@@ -317,6 +317,22 @@
       "value": 0
     },
     {
+      "name": "TA_OTLP_BATCH_BYTES",
+      "value": 1048576
+    },
+    {
+      "name": "TA_OTLP_BATCH_DELAY",
+      "value": 250
+    },
+    {
+      "name": "TA_OTLP_BATCH_MAX",
+      "value": 16777216
+    },
+    {
+      "name": "TA_OTLP_BATCH_REPORT",
+      "value": 10000
+    },
+    {
       "name": "TA_OTLP_FLUSH",
       "value": 1
     },
@@ -327,6 +343,14 @@
     {
       "name": "TA_OTLP_LINK_PARENTS",
       "value": 1
+    },
+    {
+      "name": "TA_OTLP_LOGS",
+      "value": 1
+    },
+    {
+      "name": "TA_OTLP_METRICS",
+      "value": 2
     },
     {
       "name": "TA_OTLP_METRIC_GAUGE",
@@ -351,6 +375,10 @@
     {
       "name": "TA_OTLP_READ",
       "value": 0
+    },
+    {
+      "name": "TA_OTLP_SIGNALS",
+      "value": 3
     },
     {
       "name": "TA_OTLP_SPAN_CLIENT",
@@ -402,6 +430,10 @@
     },
     {
       "name": "TA_OTLP_STATUS_UNSET",
+      "value": 0
+    },
+    {
+      "name": "TA_OTLP_TRACES",
       "value": 0
     },
     {
@@ -7202,6 +7234,84 @@
           }
         }
       }
+    },
+    "ta_otlp_batch": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "ta_otlp_batch_stats": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "in_flight",
+          "type": "uint32_t"
+        },
+        {
+          "name": "waiting",
+          "type": "uint64_t"
+        },
+        {
+          "name": "posted",
+          "type": "uint64_t"
+        },
+        {
+          "name": "failed",
+          "type": "uint64_t"
+        },
+        {
+          "name": "dropped",
+          "type": "uint64_t"
+        },
+        {
+          "name": "failures",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "in_flight": 4,
+            "waiting": 8,
+            "posted": 16,
+            "failed": 24,
+            "dropped": 32,
+            "failures": 40
+          }
+        },
+        "aarch64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "in_flight": 4,
+            "waiting": 8,
+            "posted": 16,
+            "failed": 24,
+            "dropped": 32,
+            "failures": 40
+          }
+        },
+        "wasm32": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "in_flight": 4,
+            "waiting": 8,
+            "posted": 16,
+            "failed": 24,
+            "dropped": 32,
+            "failures": 40
+          }
+        }
+      }
     }
   },
   "functions": [
@@ -9828,6 +9938,170 @@
         {
           "name": "input",
           "type": "const ta_otlp_stats_input *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_batch_add",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "batch",
+          "type": "ta_otlp_batch *"
+        },
+        {
+          "name": "signal",
+          "type": "uint32_t"
+        },
+        {
+          "name": "bytes",
+          "type": "const void *"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_batch_deadline",
+      "returns": "ta_time",
+      "params": [
+        {
+          "name": "batch",
+          "type": "const ta_otlp_batch *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_batch_done",
+      "returns": "void",
+      "params": [
+        {
+          "name": "batch",
+          "type": "ta_otlp_batch *"
+        },
+        {
+          "name": "signal",
+          "type": "uint32_t"
+        },
+        {
+          "name": "posted",
+          "type": "int"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_batch_free",
+      "returns": "void",
+      "params": [
+        {
+          "name": "batch",
+          "type": "ta_otlp_batch *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_batch_new",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "allocator",
+          "type": "const ta_allocator *"
+        },
+        {
+          "name": "out",
+          "type": "ta_otlp_batch **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_batch_next",
+      "returns": "int",
+      "params": [
+        {
+          "name": "batch",
+          "type": "ta_otlp_batch *"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        },
+        {
+          "name": "flush",
+          "type": "int"
+        },
+        {
+          "name": "signal",
+          "type": "uint32_t *"
+        },
+        {
+          "name": "body",
+          "type": "ta_string_view *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_batch_report",
+      "returns": "int",
+      "params": [
+        {
+          "name": "batch",
+          "type": "ta_otlp_batch *"
+        },
+        {
+          "name": "now",
+          "type": "ta_time"
+        },
+        {
+          "name": "failures",
+          "type": "uint64_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_batch_stats_get",
+      "returns": "void",
+      "params": [
+        {
+          "name": "batch",
+          "type": "const ta_otlp_batch *"
+        },
+        {
+          "name": "out",
+          "type": "ta_otlp_batch_stats *"
         }
       ],
       "public": true,

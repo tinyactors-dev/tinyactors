@@ -51,7 +51,7 @@ module Core
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
     # Trace records to OTLP protobuf and back: a codec, like basic_http (docs/adr/0006).
-    Layer.new(name: 'otlp', uses: %w[trace image], freestanding: true, sources: %w[src/otlp/otlp.c src/otlp/decode.c]),
+    Layer.new(name: 'otlp', uses: %w[trace image], freestanding: true, sources: %w[src/otlp/otlp.c src/otlp/decode.c src/otlp/batch.c]),
     # The vendored engine only: quickjs-libc (std and os modules, I/O) is not built.
     Layer.new(name: 'quickjs', uses: [], libraries: %w[-lm],
               sources: %w[quickjs libregexp libunicode dtoa].map { |s| "third_party/quickjs-ng/#{s}.c" },
@@ -369,7 +369,7 @@ module Core
   # the Node-API headers that ship with the pinned node, and the layers it
   # links.
   NODE_LAYERS = %w[host link runtime system compile otlp datamodel_ecmascript].freeze
-  NODE_SOURCES = %w[addon values images pure datamodel quickjs system persist link trace metrics].map { |name| "bindings/node/src/#{name}.c" }.freeze
+  NODE_SOURCES = %w[addon values images pure datamodel quickjs system persist link export trace metrics].map { |name| "bindings/node/src/#{name}.c" }.freeze
 
   # Builds the addon's layers and compiles its own sources for the build
   # `variant_name`; answers what links it: its objects, then the archives.

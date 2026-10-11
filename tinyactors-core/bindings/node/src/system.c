@@ -153,6 +153,7 @@ static void system_clear(napi_env environment, nd_system *system) {
     parked_clear(system);
     jobs_clear(system);
     links_free(system);
+    exporter_free(system);
     for (uint32_t i = 0; i < system->later_count; i++)
         set_ref(environment, &system->later[i], NULL);
     free(system->later);
@@ -461,13 +462,17 @@ static double pump_once(nd_system *system) {
             napi_set_element(environment, changed, i, num(environment, (double)system->changed[i]));
     }
     if (system->otlp) trace_put(system); /* the spans that ended in this call */
-    napi_value traces = system->traces_length
+    exporter_add(system, TA_OTLP_TRACES, system->traces, system->traces_length);
+    exporter_add(system, TA_OTLP_LOGS, system->logs, system->logs_length);
+    napi_value traces = system->trace_sink && system->traces_length
                             ? bytes_value(environment, system->traces, system->traces_length)
                             : NULL;
-    napi_value logs =
-        system->logs_length ? bytes_value(environment, system->logs, system->logs_length) : NULL;
+    napi_value logs = system->trace_sink && system->logs_length
+                          ? bytes_value(environment, system->logs, system->logs_length)
+                          : NULL;
     system->traces_length = system->logs_length = 0;
-    links_output(system); /* what the transports are to do */
+    links_output(system);    /* what the transports are to do */
+    exporter_output(system); /* and the exporter's posts */
     napi_value list = system->effect_list;
     system->effect_list = NULL;
     system->running = 0;
@@ -535,8 +540,10 @@ double pump(nd_system *system) {
         system_destroy(system->environment, system);
         return -1;
     }
-    if (code == code && system->links) { /* pings, reconnects, resumption windows */
-        ta_time due = ta_links_deadline(system->links);
+    if (code == code) { /* pings, reconnects, resumption windows; posts due */
+        ta_time links = system->links ? ta_links_deadline(system->links) : UINT64_MAX;
+        ta_time posts = exporter_deadline(system);
+        ta_time due = links < posts ? links : posts;
         if (due != UINT64_MAX && (code == -1 || (code >= 0 && (double)due < code)))
             code = (double)due;
     }

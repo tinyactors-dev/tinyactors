@@ -40,6 +40,7 @@
 #ifndef TINYACTORS_OTLP_H
 #define TINYACTORS_OTLP_H
 
+#include <tinyactors/allocator.h>
 #include <tinyactors/datamodel.h>
 #include <tinyactors/image.h>
 #include <tinyactors/stats.h>
@@ -59,8 +60,8 @@ enum {
     TA_OTLP_LINK_PARENTS = 1u << 0, /* a macrostep is a root, linked to its cause */
     TA_OTLP_VALUES = 1u << 1,       /* event data and assigned values in attributes */
     TA_OTLP_NO_LOGS = 1u << 2,      /* write no log records */
-    TA_OTLP_SPAN_METRICS = 1u
-        << 3 /* keep macrostep durations per chart (ta_otlp_add_span_metrics) */
+    TA_OTLP_SPAN_METRICS =
+        1u << 3 /* keep macrostep durations per chart (ta_otlp_add_span_metrics) */
 };
 
 /* Capacities; 0 is the default. */
@@ -355,6 +356,48 @@ typedef struct ta_otlp_point_view {
 TA_API int32_t ta_otlp_next_point(ta_otlp_fields points, uint32_t *at, uint32_t kind,
                                   ta_otlp_point_view *out);
 TA_API int32_t ta_otlp_next_exemplar(ta_otlp_fields exemplars, uint32_t *at, ta_otlp_exemplar *out);
+
+/* ---- exporting: batches of OTLP/HTTP bodies ---------------------------------
+ * What an exporter posts to /v1/traces, /v1/logs and /v1/metrics, gathered
+ * per signal (concatenated requests of one type are one request: their
+ * repeated fields append): a body is due when TA_OTLP_BATCH_BYTES wait, or
+ * TA_OTLP_BATCH_DELAY ms after its first bytes came, or when flushed. One
+ * post per signal is in flight at a time; bytes beyond TA_OTLP_BATCH_MAX
+ * waiting are dropped. The caller posts (I/O is its own) and says how it
+ * went; the batch counts the bytes (posted, failed, dropped) and says when a
+ * failure is worth a log line (at most one every TA_OTLP_BATCH_REPORT ms).
+ * Times are the caller's, in ms. */
+enum { TA_OTLP_TRACES = 0, TA_OTLP_LOGS = 1, TA_OTLP_METRICS = 2, TA_OTLP_SIGNALS = 3 };
+#define TA_OTLP_BATCH_DELAY  250u
+#define TA_OTLP_BATCH_BYTES  1048576u
+#define TA_OTLP_BATCH_MAX    16777216u
+#define TA_OTLP_BATCH_REPORT 10000u
+typedef struct ta_otlp_batch ta_otlp_batch;
+TA_API ta_status ta_otlp_batch_new(const ta_allocator *allocator, ta_otlp_batch **out);
+TA_API void ta_otlp_batch_free(ta_otlp_batch *batch);
+/* Bytes for a signal. TA_ERROR_NO_MEMORY: dropped (over TA_OTLP_BATCH_MAX,
+ * or no memory), counted, and a failure (ta_otlp_batch_report). */
+TA_API ta_status ta_otlp_batch_add(ta_otlp_batch *batch, uint32_t signal, const void *bytes,
+                                   size_t length, ta_time now);
+/* The next body due by `now` (all waiting ones when `flush`): 1 with its
+ * signal and bytes (valid until ta_otlp_batch_done for it), 0 when none. */
+TA_API int ta_otlp_batch_next(ta_otlp_batch *batch, ta_time now, int flush, uint32_t *signal,
+                              ta_string_view *body);
+/* The post of a signal's body ended: `posted` 1 when it did. */
+TA_API void ta_otlp_batch_done(ta_otlp_batch *batch, uint32_t signal, int posted, ta_time now);
+/* When a body is due next (UINT64_MAX: none waits). */
+TA_API ta_time ta_otlp_batch_deadline(const ta_otlp_batch *batch);
+/* 1 when failures happened since the last report and the last report is
+ * TA_OTLP_BATCH_REPORT ms ago: *failures is how many so far. */
+TA_API int ta_otlp_batch_report(ta_otlp_batch *batch, ta_time now, uint64_t *failures);
+typedef struct ta_otlp_batch_stats {
+    uint32_t size;
+    uint32_t in_flight;               /* posts under way */
+    uint64_t waiting;                 /* bytes not posted yet */
+    uint64_t posted, failed, dropped; /* bytes, monotonic */
+    uint64_t failures;                /* posts that failed and drops */
+} ta_otlp_batch_stats;
+TA_API void ta_otlp_batch_stats_get(const ta_otlp_batch *batch, ta_otlp_batch_stats *out);
 
 #ifdef __cplusplus
 }
