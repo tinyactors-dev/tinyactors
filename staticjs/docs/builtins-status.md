@@ -43,8 +43,7 @@ the host injects in the same way. UTC is the default everywhere.
 
 | Name | Status | Note |
 |---|---|---|
-| constructor, `size`, `add`, `has`, `delete`, `clear`, `union`, `intersection`, `difference`, `isSubsetOf`, `keys`, `values`, `entries` | built | |
-| `symmetricDifference`, `isSupersetOf`, `isDisjointFrom` | to build | Registered; no method yet. |
+| constructor, `size`, `add`, `has`, `delete`, `clear`, `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`, `keys`, `values`, `entries` | built | |
 | `forEach` on a set | named, not built | The README lists `forEach` for maps only; check with `builtin-table`. |
 
 ## String
