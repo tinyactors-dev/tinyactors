@@ -35,7 +35,7 @@ length-prefixed CBOR calls and replies in JSON-RPC 2.0's shape. Options:
 | `--datamodel quickjs\|native\|<name>` | `quickjs`            | the datamodel scenarios, W3C tests and `values.txt` run on; an implementation may offer others by name (`ta-conform`: `test`, core's tests' datamodel)              |
 | `--realm auto\|isolated`              | the implementation's | quickjs only                                                                                                                                                        |
 | `--skip <file>`                       | none                 | W3C test ids with reasons (the format of `suites/w3c/skip.txt`) skipped besides that list: what a datamodel that implements less cannot pass; repeat it for several |
-| `--language ecmascript`               | `ecmascript`         | the W3C stylesheet the scenarios are converted with; others join with their stylesheet                                                                              |
+| `--language ecmascript\|python`       | `ecmascript`         | the stylesheet the W3C suite and the scenarios are converted with, and the language's skip list (`suites/w3c/skip-<language>.txt`)                                  |
 | `--timeout <s>`                       | 60                   | how long one reply may take before the command counts as hung                                                                                                       |
 
 Each case prints `pass`, `fail` (with why: a diff for bytes, the outcome
@@ -48,18 +48,55 @@ The W3C suite is in git (`suites/w3c/irp`, from w3.org under W3C's
 3-clause BSD license: `SOURCE`, `LICENSE`). It is converted into
 `build/w3c/<language>/` (`mise run w3c`) when `convert.py`, the stylesheet
 or the suite changed, and the scenarios into `build/scenarios/<language>/`
-when a template or the stylesheet changed. Both conversions need the pinned `uv` (`mise.toml`) for
-SaxonC: the W3C stylesheets are XSLT 2.0.
+when a template or the stylesheet changed. Both conversions need the
+pinned `uv` (`mise.toml`) for SaxonC: the W3C stylesheets are XSLT 2.0.
+
+## Languages
+
+A chart language is a stylesheet from the W3C suite's `conf:` notation to
+that language: W3C's `confEcma.xsl` (ecmascript) and `confXPath.xsl`
+(xpath) in `suites/w3c/irp`, ours in `suites/w3c` (`confPython.xsl`,
+python). The language's name is the datamodel its `conf:datamodel`
+template writes, and `--language` takes it. The W3C tests and the
+scenarios are written in that notation, so each language runs all of
+them, but for the tests its skip list names.
+
+Adding a language takes three things:
+
+1. **A stylesheet**, `suites/w3c/conf<Language>.xsl`, with a template for
+   every template of `confEcma.xsl` (the vocabulary the tests and the
+   scenarios use), each expression on one line with no leading space. Its
+   header lists what it assumes the datamodel exposes where that is not
+   decided yet (`confPython.xsl`: `_event` by attribute, `_event.data` a
+   dict, a value never given `None`).
+2. **A skip list**, `suites/w3c/skip-<language>.txt` (the format of
+   `skip.txt`): the W3C tests the stylesheet cannot translate, each with
+   its reason. The tests of the ECMAScript data model (B.2) name
+   `datamodel="ecmascript"` and are written in ECMAScript, so a language
+   other than ECMAScript skips them (`skip-python.txt`).
+3. **A compile check** in `suites/w3c/check.py` (`CHECKS`): the call that
+   compiles an expression, a location and a script in the language
+   without running it (Python's `compile()`).
+
+`mise run check-languages` (part of `mise run test`) converts the suite
+and the scenarios with every stylesheet and checks the result: each
+document is well-formed XML with no `conf:` element or attribute left, and
+for a language with a compile check, every test it does not skip is in
+that language and every expression, location and script in it compiles,
+but for the values meant to be invalid (`conf:illegalItem`,
+`conf:invalidNamelist`; `check.py` finds them by translating a probe).
 
 ## Tasks
 
 - `mise run run -- <command…>`: the suites against a command (above).
 - `mise run test`: the vectors' hex against their diag lines
-  (`encode --check`), and the runner's own tests against a fake
-  implementation (`test/`).
+  (`encode --check`), each language's translation (`check-languages`),
+  and the runner's own tests against a fake implementation (`test/`).
 - `mise run encode`: write the vectors' hex from their diag lines.
 - `mise run w3c [language]`: convert the W3C suite for a language
   (ecmascript by default); prints its directory.
+- `mise run check-languages [language…]`: translate the suite and the
+  scenarios with each stylesheet and check the result (above).
 
 ## Layout
 
@@ -67,12 +104,14 @@ SaxonC: the W3C stylesheets are XSLT 2.0.
 docs/driver.md          the protocol a conforming command speaks
 suites/protocol/        vectors, and setups/ (the charts of their setups)
 suites/scenarios/       <name>/<document>.txml and steps.txt
-suites/w3c/             convert.py (both conversions), skip.txt
+suites/w3c/             convert.py (both conversions), check.py (check-languages),
+                        conf<Language>.xsl (ours: confPython.xsl), skip.txt,
+                        skip-<language>.txt
 suites/w3c/irp/         the W3C IRP suite (vendored): manifest.xml, <id>/*.txml,
                         confEcma.xsl, confXPath.xsl, SOURCE, LICENSE
 lib/                    the runner: driver.rb (process, frames), runner.rb (suites, report),
                         vectors.rb, scenarios.rb, cbor.rb, w3c.rb (stylesheets, convert)
-mise/tasks/             run, test, encode, w3c
+mise/tasks/             run, test, encode, w3c, check-languages
 test/                   the runner's tests and fake_implementation.rb
 build/                  the converted suites (not in git)
 ```

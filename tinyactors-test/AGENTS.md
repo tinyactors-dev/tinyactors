@@ -29,12 +29,20 @@ Commits on `main`. Commits here use the scope `test`.
 - **A scenario:** a directory in `suites/scenarios/` with `<name>.txml`
   documents and a `steps.txt` (`suites/scenarios/README.md`). Use only the
   `conf:` vocabulary of `confEcma.xsl` (`suites/w3c/irp`) for
-  expressions and conditions; check each attribute you use is defined
-  there. In `steps.txt`, say in comments which expectations a chart cannot
+  expressions and conditions, which every language's stylesheet
+  translates; `mise run check-languages` fails on a `conf:` name a
+  stylesheet left, and on python that does not compile. In `steps.txt`, say in comments which expectations a chart cannot
   check and which test covers them. A scenario must fail when what it
   checks is broken: try a mutation (other params, a step left out) before
   committing.
-- **A W3C test** is skipped only with a reason in `suites/w3c/skip.txt`.
+- **A W3C test** is skipped only with a reason in `suites/w3c/skip.txt`,
+  or, when one language's stylesheet cannot translate it, in that
+  language's `suites/w3c/skip-<language>.txt`.
+- **The W3C suite is vendored** in `suites/w3c/irp`, unmodified (`SOURCE`,
+  `LICENSE`): do not edit its files. A fix to a test belongs in the
+  stylesheets or a skip list, with the reason.
+- **A language** is a stylesheet, a skip list and a compile check
+  (README.md, "Languages"); `mise run check-languages` must pass for it.
 
 ## Adding a driver method
 
