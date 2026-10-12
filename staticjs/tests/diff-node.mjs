@@ -408,6 +408,13 @@ const numberChecks = {
     }
     return null;
   },
+  U(rest) { // <name> <x> <f(x)>: Math[name](x), bit for bit (a NaN is any NaN)
+    const [name, a, result] = rest.split(' ');
+    const x = toDouble(a);
+    const want = Math[name](x);
+    if (Number.isNaN(want) ? Number.isNaN(toDouble(result)) : toHex(want) === result) return null;
+    return `Math.${name}(${x}): staticjs ${result}, JavaScript ${toHex(want)}`;
+  },
   J(rest) { // <document> <text>: JSON.stringify(JSON.parse(document)), never a fault
     const [document, ours] = rest.split('\t');
     const want = JSON.stringify(JSON.parse(JSON.parse(document)));
@@ -515,6 +522,7 @@ const numberSummary = [
   ['P', 'doubles of a fixed list give toFixed, toExponential and toPrecision as JavaScript does'],
   ['Q', 'doubles of a fixed list give toString(radix) in every radix as JavaScript does'],
   ['W', 'pairs of a fixed list give Math.pow(x, y) and x ** y bit for bit'],
+  ['U', 'calls on doubles of a fixed list give Math.exp, expm1, log, log1p, log2 and log10 bit for bit'],
   ['J', 'random JSON documents give JSON.stringify(JSON.parse(t))'],
   ['E', `mutated JSON documents read as JSON.parse reads them (${jsonOutcomes.value} read, ` +
     `${jsonOutcomes['!S']} SyntaxErrors where JavaScript throws one, ${jsonOutcomes['!O']} faults of staticjs's own not compared)`],

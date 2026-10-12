@@ -265,6 +265,15 @@ The examples are BigInt, `Map` and iterators.
      Node's cold code, which diff-node runs, gives +0, as staticjs does.
      V8 returns a signalling NaN where `src/math.c` returns a quiet one,
      which nothing in staticjs can tell apart.
+   - **exp, expm1 and the logarithms.** `Math.exp`, `expm1`, `log`,
+     `log1p`, `log2` and `log10` (`src/builtins/math.tq`) convert their
+     argument and call `Float64Exp` and the others, which every tier lowers
+     to a call of `base::ieee754::exp` and so on; there is no JavaScript
+     special case before them. In fdlibm's code, V8's `exp` returns `E` for
+     `exp(1)` (the algorithm alone gets its last bit wrong), and `log10`
+     calls V8's own `log`. They differ from glibc's in the last bit for
+     many inputs (`Math.exp(125.10776284998587)`, `Math.log(850)`), so a C
+     library's would not do even where one exists.
    - **No glibc.** V8 can take `sin` and `cos` from glibc
      (`third_party/glibc`, `V8_USE_LIBM_TRIG_FUNCTIONS`, flag
      `--use-libm-trig-functions`), but Node 22's build does not: `node
@@ -274,12 +283,17 @@ The examples are BigInt, `Map` and iterators.
    `diff-node` compares with Node on every test run. Use 100,000 cases per
    function, or for a Math function a fixed list of at most 10,000 inputs
    (tag W for `pow`: specials, the thresholds of fdlibm's ranges, integers,
-   halves), and run a million once before committing. `pow`'s million
+   halves; tag U for a one-argument function, `U <name> <x> <f(x)>`, which
+   diff-node checks as `Math[name](x)`, so a new one needs only its name in
+   `UNARY_NAMES`), and run a million once before committing. `pow`'s million
    pairs (seeded: random bits, moderate magnitudes, integers, results next
    to overflow and underflow, bases next to 1 to huge powers, subnormal
    bases, special exponents, negative bases) agreed bit for bit, on
    x86_64 and on wasm32 (the same source built with `zig cc -target
-   wasm32-freestanding` and run in Node).
+   wasm32-freestanding` and run in Node), and so did a million inputs to
+   each of `exp`, `expm1`, `log`, `log1p`, `log2` and `log10` (random bits,
+   the main range, values next to 1 or 0, the thresholds of each range,
+   integers, subnormals, powers of two and ten, multiples of ln 2).
 
 ## To verify a change
 
