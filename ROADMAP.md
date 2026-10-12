@@ -307,7 +307,8 @@ In progress beside M0, in core:
 - **The torture bench's `traceBytesTotal` is removed:** it reads 0 since
   the host drains the journals (5c).
 - **Definition logs:** a log record when a chart version is linked,
-  retired and freed (0.1's `tinyactors.definition.*`).
+  retired and freed (0.1's `tinyactors.definition.*`). Done (`dbe8435d`;
+  `tinyactors-core/docs/architecture.md`, 16.3).
 
 ## Deferred
 
