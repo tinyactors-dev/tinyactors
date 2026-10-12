@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<!-- The chart of the "echo" setup (README.md, "Setups"): each event "v"
+from another system is sent back to its origin as "back", with the event's
+data as its content. values.txt's roundtrip and malformed cases deliver
+their value to it in an envelope and compare the data of the envelope it
+sends back. In the conf: notation, so every language's stylesheet
+translates it (lib/w3c.rb, `setups`). -->
+<scxml initial="s" conf:datamodel="" version="1.0" name="echo"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="1"/>
+  </datamodel>
+
+  <state id="s">
+    <transition event="v">
+      <assign conf:location="1" conf:eventField="origin"/>
+      <send event="back" conf:targetExpr="1">
+        <content conf:eventField="data"/>
+      </send>
+    </transition>
+  </state>
+</scxml>

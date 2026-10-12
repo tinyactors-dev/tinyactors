@@ -56,7 +56,8 @@ The W3C suite is in git (`suites/w3c/irp`, from w3.org under W3C's
 3-clause BSD license: `SOURCE`, `LICENSE`). It is converted into
 `build/w3c/<language>/` (`mise run w3c`) when `convert.py`, the stylesheet
 or the suite changed, and the scenarios into `build/scenarios/<language>/`
-when a template or the stylesheet changed. Both conversions need the
+when a template or the stylesheet changed. The echo setup's chart (`suites/protocol/setups/echo.txml`) is converted
+the same way, into `build/setups/<language>/`. The conversions need the
 pinned `uv` (`mise.toml`) for SaxonC: the W3C stylesheets are XSLT 2.0.
 
 ## Languages
@@ -87,8 +88,8 @@ Adding a language takes three things:
    compiles an expression, a location and a script in the language
    without running it (Python's `compile()`).
 
-`mise run check-languages` (part of `mise run test`) converts the suite
-and the scenarios with every stylesheet and checks the result: each
+`mise run check-languages` (part of `mise run test`) converts the suite,
+the scenarios and the setups' templates with every stylesheet and checks the result: each
 document is well-formed XML with no `conf:` element or attribute left, and
 for a language with a compile check, every test it does not skip is in
 that language and every expression, location and script in it compiles,
@@ -111,7 +112,8 @@ but for the values meant to be invalid (`conf:illegalItem`,
 
 ```
 docs/driver.md          the protocol a conforming command speaks
-suites/protocol/        vectors, and setups/ (the charts of their setups)
+suites/protocol/        vectors, and setups/ (the charts of their setups; echo.txml in the
+                        conf: notation, converted per language)
 suites/scenarios/       <name>/<document>.txml and steps.txt
 suites/w3c/             convert.py (both conversions), check.py (check-languages),
                         conf<Language>.xsl (ours: confPython.xsl), skip.txt,

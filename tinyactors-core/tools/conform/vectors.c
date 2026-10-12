@@ -296,27 +296,18 @@ static void envelope_deliver(conform *state, conform_call *call, conform_result 
         !conform_integer(call, "peer", &peer) || !conform_bytes(call, "cbor", &cbor))
         return;
     ta_envelope envelope;
+    memset(&envelope, 0, sizeof envelope);
     ta_status status = ta_host_envelope_read(host, cbor, &envelope);
-    int32_t route = status == TA_OK ? ta_host_deliver(host, (uint32_t)peer, &envelope) : status;
+    /* A read that failed with envelope.size set is an envelope whose data is
+     * not one item: ta_host_deliver refuses it as malformed and answers its
+     * sender (host.h, ta_host_envelope_read). With size 0 there is nobody to
+     * answer. */
+    int32_t route = status == TA_OK || envelope.size ? ta_host_deliver(host, (uint32_t)peer, &envelope) : status;
     conform_result_integer(result, "status", route < 0 ? route : TA_OK);
     if (route >= 0) conform_result_integer(result, "route", route);
 }
 
-/* ---- value.roundtrip, value.encode -------------------------------------------------- */
-
-static void value_roundtrip(conform *state, conform_call *call, conform_result *result) {
-    ta_bytes cbor = {NULL, 0};
-    if (!host_of(state, call) || !conform_required(call, "cbor") || !conform_bytes(call, "cbor", &cbor)) return;
-    conform_datamodel *datamodel = &state->vectors.datamodel;
-    ta_payload payload = 0;
-    ta_buffer back = {NULL, 0, 0};
-    ta_status status = conform_datamodel_read(datamodel, cbor, &payload);
-    if (status == TA_OK) status = conform_datamodel_write(datamodel, payload, &back);
-    conform_datamodel_release(datamodel, payload);
-    conform_result_integer(result, "status", status);
-    if (status == TA_OK) conform_result_bytes(result, "back", conform_keep(state, (ta_bytes){back.pointer, back.length}));
-    conform_buffer_free(&back);
-}
+/* ---- value.encode ------------------------------------------------------------------- */
 
 /* quickjs only: an expression that throws is TA_ERROR_EXECUTION. */
 static void value_encode(conform *state, conform_call *call, conform_result *result) {
@@ -348,7 +339,6 @@ static const char *const clock_params[] = {"monotonic", "wallNs", NULL};
 static const char *const peer_params[] = {"id", "trusted", NULL};
 static const char *const read_params[] = {"cbor", "error", NULL};
 static const char *const deliver_params[] = {"peer", "cbor", NULL};
-static const char *const roundtrip_params[] = {"cbor", NULL};
 static const char *const encode_params[] = {"expression", NULL};
 
 const conform_method conform_vector_methods[] = {
@@ -363,7 +353,6 @@ const conform_method conform_vector_methods[] = {
     {"peer.add", peer_add, peer_params},
     {"envelope.read", envelope_read, read_params},
     {"envelope.deliver", envelope_deliver, deliver_params},
-    {"value.roundtrip", value_roundtrip, roundtrip_params},
     {"value.encode", value_encode, encode_params},
     {NULL, NULL, NULL},
 };

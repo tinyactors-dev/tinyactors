@@ -312,8 +312,8 @@ tinyactors-test/
 │                            scenario.run and w3c.run (outcomes), and for the vectors
 │                            host.create, host.request, image.add, actor.spawn,
 │                            actor.send, clock.advance, host.run, peer.add,
-│                            envelope.read, envelope.deliver, value.roundtrip,
-│                            value.encode; the scenario and W3C environments
+│                            envelope.read, envelope.deliver, value.encode;
+│                            the kinds; the scenario and W3C environments
 ├── suites/
 │   ├── protocol/            requests.txt, config.txt, envelopes.txt, values.txt;
 │   │                        setups/ (the charts of the vectors' setups)

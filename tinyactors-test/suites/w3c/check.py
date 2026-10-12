@@ -2,7 +2,8 @@
 """Check a language's translation of the W3C suite and the scenarios.
 
 Every document converted for <language> (the W3C tests in <w3c-dir>, as
-listed by its index.txt, and every .scxml under <scenarios-dir>) must be
+listed by its index.txt, every .scxml under <scenarios-dir>, and every
+.scxml under <setups-dir>, the protocol setups' templates) must be
 well-formed XML. In every document but those of the W3C tests the skip
 files name (tests that cannot be translated, with their reasons):
 
@@ -14,7 +15,7 @@ files name (tests that cannot be translated, with their reasons):
   translated by <stylesheet>, finds them).
 
 Usage: uv run --with saxonche suites/w3c/check.py <language> <stylesheet>
-           <w3c-dir> <scenarios-dir> [--skip <file>]...
+           <w3c-dir> <scenarios-dir> <setups-dir> [--skip <file>]...
 """
 import pathlib
 import sys
@@ -120,10 +121,10 @@ def main(argv):
             skips.append(pathlib.Path(next(rest)))
         else:
             args.append(arg)
-    if len(args) != 4:
+    if len(args) != 5:
         print(__doc__)
         return 2
-    language, stylesheet, w3c, scenarios = args[0], *map(pathlib.Path, args[1:])
+    language, stylesheet, w3c, scenarios, setups = args[0], *map(pathlib.Path, args[1:])
     skipped = {line.split(" ", 1)[0] for path in skips
                for line in path.read_text().splitlines() if line.strip() and not line.startswith("#")}
     check = CHECKS.get(language)
@@ -132,6 +133,7 @@ def main(argv):
     tests = {test for test, _rel in w3c_documents(w3c)}
     documents = [(f"w3c {test} {rel}", w3c / rel, test not in skipped) for test, rel in w3c_documents(w3c)]
     documents += [(f"scenario {path.relative_to(scenarios)}", path, True) for path in sorted(scenarios.rglob("*.scxml"))]
+    documents += [(f"setup {path.relative_to(setups)}", path, True) for path in sorted(setups.rglob("*.scxml"))]
 
     failures, counts, null = [], {}, []
     for name, path, checked in documents:
@@ -163,8 +165,10 @@ def main(argv):
     for failure in failures:
         print(f"FAIL {failure}")
     scenario_count = sum(1 for name, _path, _checked in documents if name.startswith("scenario "))
-    summary = (f"check {language}: {len(tests)} W3C tests ({len(tests & skipped)} skipped) and "
-               f"{scenario_count} scenario documents, {len(documents)} documents well-formed")
+    setup_count = sum(1 for name, _path, _checked in documents if name.startswith("setup "))
+    summary = (f"check {language}: {len(tests)} W3C tests ({len(tests & skipped)} skipped), "
+               f"{scenario_count} scenario documents and {setup_count} setup charts, "
+               f"{len(documents)} documents well-formed")
     if check is not None:
         compiled = ", ".join(f"{counts.get(kind, 0)} {kind}s" for kind in ("expression", "location", "script"))
         meant = ", ".join(sorted({repr(value) for _attribute, value in invalid}))

@@ -12,7 +12,7 @@ out ([ADR 0009](../../../docs/adr/0009-one-host-two-queues.md), decision 11).
 | `requests.txt` | requests and replies of `ta_host_request` (`tinyactors-core/docs/requests.md`) | the runner |
 | `config.txt` | configs of `ta_host_create`, and the error it writes for a refused one (`tinyactors-core/docs/host-config.md`) | the runner |
 | `envelopes.txt` | envelopes and error envelopes between systems (`tinyactors-core/docs/protocol.md`, Envelope) | the runner |
-| `values.txt` | neutral values (`tinyactors-core/docs/protocol.md`, Values) | the runner; core's `tests/unit/test_datamodel_ecmascript.c` too |
+| `values.txt` | neutral values (`tinyactors-core/docs/protocol.md`, Values), through the echo setup | the runner; core's `tests/unit/test_datamodel_ecmascript.c` too |
 
 ## Running them
 
@@ -80,14 +80,19 @@ Everything else is pinned: system ids, the trace seed, the clock.
 ## Setups
 
 A case names the host it runs on (`setup`); each case gets a new one. All of
-them run the ECMAScript datamodel (quickjs, whatever datamodel the runner
-was given: their charts are ECMAScript), with `ticksPerSecond` 1000,
-`maxActors` 8, `traceSeed` 1, `maxSubscriptions` 1 and no telemetry
-encoder. The charts are in `setups/`; after spawning, a setup runs the host
-until it is idle with the wall clock at 1700000000000000000 ns. The runner
-builds them with the driver's methods (`lib/runner.rb`, `setup`).
-`values.txt` runs on the
-datamodel the runner was given, on a host as `empty`.
+them have `ticksPerSecond` 1000, `maxActors` 8, `traceSeed` 1,
+`maxSubscriptions` 1 and no telemetry encoder. The charts are in
+`setups/`; after spawning, a setup runs the host until it is idle with the
+wall clock at 1700000000000000000 ns. The runner builds them with the
+driver's methods (`lib/runner.rb`, `setup` and `echo`).
+
+The setups of `requests.txt` and `envelopes.txt` run the ECMAScript
+datamodel (quickjs, whatever datamodel the runner was given: their charts,
+`setups/*.scxml`, are ECMAScript). `values.txt` runs on the echo setup,
+on the datamodel the runner was given: its chart, `setups/echo.txml`, is
+written in the `conf:` notation and converted for that datamodel's
+language like the scenarios (`build/setups/<language>/`, checked by
+`mise run check-languages`).
 
 | Setup | The host |
 |---|---|
@@ -96,6 +101,7 @@ datamodel the runner was given, on a host as `empty`.
 | `pinged2` | as `pinged`, with two sessions, 1 and 2 |
 | `pinger` | system `a`, a peer `b`, the chart `pinger` and one session that was sent `go` with `{to: "tinyactors://b/@echo", n: 1}`: its run sends `ping` (with data) and `note` (without) to `b` |
 | `relay` | system `b` with the peers `a` and `c`, no chart |
+| `echo` | system `h` on the datamodel under test, the chart `echo` (each event `v` is sent back to its `_event.origin` as `back`, with `_event.data` as its content) and one session, and a peer `p`; a case delivers `{"target": "tinyactors://h/#_scxml_<session>", "name": "v", "data": 24(<cbor>), "sendid": "s1", "origin": "tinyactors://p/#_scxml_9", "msgid": "m1"}` from `p` (`envelope.deliver`), and runs the host once (`host.run`) |
 
 ## What they leave to unit tests
 

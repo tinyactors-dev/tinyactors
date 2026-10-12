@@ -83,6 +83,19 @@ class RunnerTest < Minitest::Test
     assert_includes @out.string, 'not offered: envelope.read'
   end
 
+  def test_values_go_through_the_echo_setup
+    vectors('values.txt', [['roundtrip same', 'cbor [1,"a"]'],
+                           ['roundtrip other', 'cbor [1]', 'back [2]'],
+                           ['malformed truncated', 'cbor 8201']])
+    File.write(File.join(@directory, 'protocol/values.txt'),
+               File.read(File.join(@directory, 'protocol/values.txt')).sub(/^cbor .*\ndiag 8201$/, 'cbor 8201'))
+    ok, results = run_suites('protocol')
+    refute ok
+    assert_equal({ 'values.txt "same"' => :pass, 'values.txt "other"' => :fail, 'values.txt "truncated"' => :pass },
+                 verdicts(results))
+    assert_includes @out.string, 'the data sent back differs'
+  end
+
   # ---- runs that prove nothing (docs/driver.md, "Kinds") -----------------------
 
   def test_a_suite_that_passes_nothing_fails_the_run
@@ -274,7 +287,10 @@ class RunnerTest < Minitest::Test
   end
 
   def run_suites(suite, timeout: 10, kind: 'binding')
-    runner = Runner.new(FAKE, out: @out, timeout: timeout, kind: kind, protocol: File.join(@directory, 'protocol'),
+    setups = File.join(@directory, 'setups')
+    FileUtils.mkdir_p(setups)
+    File.write(File.join(setups, 'echo.scxml'), '<scxml name="echo"/>')
+    runner = Runner.new(FAKE, out: @out, timeout: timeout, kind: kind, setups: setups, protocol: File.join(@directory, 'protocol'),
                               scenarios: File.join(@directory, 'scenarios'), documents: File.join(@directory, 'converted'))
     [runner.run([suite]), runner.results]
   end

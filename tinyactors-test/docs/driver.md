@@ -64,8 +64,7 @@ Every method names the core calls behind it; header references are to
 | `host.run` | — | `status` of the last run; `envelopes`: array of bytes | `ta_host_run`, again while it answers `TA_RUN_YIELDED` or `TA_RUN_EFFECTS_FULL` (`system.h`), at most 1,000 times, acknowledging the effects after each run; for each `PEER` and `PEER_ERROR` effect, in order, the bytes `ta_host_envelope` writes. No other effect is handled |
 | `peer.add` | `id`; `trusted` (bool) | `status`; `peer` | `ta_host_peer_add` (`TA_PEER_TRUSTED`) |
 | `envelope.read` | `cbor` (bytes); `error` (bool: an error envelope) | `status`; `back` (bytes): what was read, written again | `ta_host_envelope_read` or `ta_host_peer_error_read`, then `ta_host_envelope` of a `PEER` (`PEER_ERROR`) effect holding it |
-| `envelope.deliver` | `peer`, `cbor` (bytes) | `status`; `route` (`TA_ROUTE_*`) | `ta_host_envelope_read`, then `ta_host_deliver`; `status` is the read's when it fails, and `ta_host_deliver`'s answer when it is negative |
-| `value.roundtrip` | `cbor` (bytes) | `status`; `back` (bytes) | the host's datamodel's `from_wire`, then `to_wire` (`datamodel.h`) |
+| `envelope.deliver` | `peer`, `cbor` (bytes) | `status`; `route` (`TA_ROUTE_*`) | `ta_host_envelope_read`, then `ta_host_deliver`, also when the read failed with the envelope's `size` set (data that is not one well-formed item: `ta_host_deliver` refuses it as malformed and answers the sender, `host.h`); `status` is the read's when it failed with `size` 0 (nothing to answer), and `ta_host_deliver`'s answer when it is negative |
 | `value.encode` | `expression` (text, ECMAScript) | `status`; `cbor` (bytes) | ECMAScript datamodels only: the expression's value, then `to_wire` (quickjs: `ta_datamodel_ecmascript_payload_eval`); an expression that throws is `TA_ERROR_EXECUTION`, another datamodel `TA_ERROR_UNSUPPORTED` |
 
 **Datamodels.** `datamodel` names one the implementation offers:
@@ -97,12 +96,15 @@ by the command under test, so an adapter cannot lower its own bar.
 | Kind | Must offer | Used by |
 |---|---|---|
 | `reference` | every method above | `ta-conform` (`tinyactors-core`'s `mise run conform`) |
-| `binding` (the default) | every method but the C-level ones: `envelope.read`, `value.roundtrip` and `value.encode`; `host.request` without `capacity`, which the runner does not send it | each binding's adapter |
+| `binding` (the default) | every method but the C-level ones: `envelope.read` and `value.encode`; `host.request` without `capacity`, which the runner does not send it | each binding's adapter |
 
 The C-level methods reach core below the API a binding exposes: a
 binding's API reads an envelope only to deliver it (`envelope.deliver`),
-calls no datamodel's `from_wire`, `to_wire` or `payload_eval` itself, and
-answers a request with its whole reply. A binding may offer them; the
+evaluates no expression outside a chart (`value.encode`), and answers a
+request with its whole reply. A value's round trip goes through the
+public path instead: `values.txt` delivers it in an envelope to the echo
+setup, whose datamodel reads it (`from_wire`) and writes it into the
+envelope it sends back (`to_wire`). A binding may offer them; the
 runner skips their cases when it does not.
 
 **`src`.** A chart's `src` attribute (`<invoke src>`, `<data src>`) names

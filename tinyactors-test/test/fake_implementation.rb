@@ -12,6 +12,11 @@
 #   below that), anything else -32601 with a message to match by wildcard.
 # - scenario.run: the outcome written in the first document as
 #   "outcome: <word>"; "crash" exits with status 3, "hang" never answers.
+# - image.add, actor.spawn (session 1), peer.add (peer 1), clock.advance:
+#   status 0 and nothing done; envelope.deliver of an envelope whose data is
+#   one CBOR item: route 0, and the next host.run answers one envelope to
+#   its origin with that data, as the echo setup does; with data that is
+#   not: route 3, and host.run answers the error envelope "malformed".
 # - echo.frame: its params back, for framing tests.
 # - any other method: -32601.
 require_relative '../lib/cbor'
@@ -44,6 +49,25 @@ def reply_to(request, capacity)
   { 'status' => 0, 'length' => bytes.bytesize, 'reply' => CBOR::Bytes.new(bytes) }
 end
 
+$sent = []
+
+# The echo setup's chart, without a host: its data back, or the error
+# envelope for data that is not one item.
+def deliver(bytes)
+  pairs = CBOR.decode(bytes).children.each_slice(2).to_h { |key, value| [CBOR.value(key), value] }
+  origin = CBOR.value(pairs['origin'])
+  data = CBOR.payload(pairs['data'].children.first)
+  begin
+    CBOR.decode(data)
+  rescue CBOR::Error
+    $sent << CBOR::Map.new([['error', 'malformed'], ['sendid', CBOR.value(pairs['sendid'])], ['origin', origin],
+                            ['msgid', CBOR.value(pairs['msgid'])]])
+    return { 'status' => 0, 'route' => 3 }
+  end
+  $sent << CBOR::Map.new([['target', origin], ['name', 'back'], ['data', CBOR::Tag.new(24, CBOR::Bytes.new(data))]])
+  { 'status' => 0, 'route' => 0 }
+end
+
 def answer(method, params)
   case method
   when 'host.create'
@@ -58,6 +82,14 @@ def answer(method, params)
   when 'host.free' then {}
   when 'host.request' then reply_to(params['request'].data, params['capacity'])
   when 'echo.frame' then params
+  when 'image.add', 'clock.advance' then { 'status' => 0 }
+  when 'actor.spawn' then { 'status' => 0, 'session' => 1 }
+  when 'peer.add' then { 'status' => 0, 'peer' => 1 }
+  when 'envelope.deliver' then deliver(params['cbor'].data)
+  when 'host.run'
+    envelopes = $sent.map { |envelope| CBOR::Bytes.new(CBOR.encode(envelope)) }
+    $sent = []
+    { 'status' => 0, 'envelopes' => envelopes }
   when 'scenario.run'
     outcome = params['documents'].first['text'][/outcome: (\w+)/, 1]
     if outcome == 'crash'

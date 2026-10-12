@@ -22,6 +22,7 @@ module W3C
   CONVERT = DIRECTORY.join('convert.py')
   SKIP = DIRECTORY.join('skip.txt')
   SCENARIOS = ROOT.join('suites/scenarios')
+  SETUPS = ROOT.join('suites/protocol/setups')
   BUILD = ROOT.join('build')
 
   # The template that names the datamodel a stylesheet writes.
@@ -57,16 +58,22 @@ module W3C
 
   # The scenarios' documents for `language`, converted again when a
   # template or the stylesheet is newer than a conversion.
-  def scenarios(language = 'ecmascript')
+  def scenarios(language = 'ecmascript') = templates(SCENARIOS, BUILD.join('scenarios', language), language)
+
+  # The protocol setups' charts written as templates (suites/protocol/setups/
+  # *.txml: echo), converted for `language` likewise.
+  def setups(language = 'ecmascript') = templates(SETUPS, BUILD.join('setups', language), language)
+
+  # Every .txml under `source`, as .scxml at the same place under `out`.
+  def templates(source, out, language)
     stylesheet = stylesheet(language)
-    out = BUILD.join('scenarios', language)
-    stale = Dir[SCENARIOS.join('**/*.txml').to_s].any? do |template|
-      converted = out.join(Pathname.new(template).relative_path_from(SCENARIOS)).sub_ext('.scxml')
-      !converted.file? || [template, stylesheet, CONVERT].any? { |source| File.mtime(source) > converted.mtime }
+    stale = Dir[source.join('**/*.txml').to_s].any? do |template|
+      converted = out.join(Pathname.new(template).relative_path_from(source)).sub_ext('.scxml')
+      !converted.file? || [template, stylesheet, CONVERT].any? { |each| File.mtime(each) > converted.mtime }
     end
     return out unless stale
 
-    convert('--scenarios', stylesheet.to_s, SCENARIOS.to_s, out.to_s)
+    convert('--scenarios', stylesheet.to_s, source.to_s, out.to_s)
     out
   end
 
@@ -74,14 +81,14 @@ module W3C
     raise 'w3c: convert.py failed' unless saxon(CONVERT, *arguments)
   end
 
-  # Converts the suite and the scenarios for `language` and checks the
-  # result with suites/w3c/check.py: well-formed, nothing of the conf:
+  # Converts the suite, the scenarios and the setups' templates for
+  # `language` and checks the result with suites/w3c/check.py: well-formed, nothing of the conf:
   # notation left, and for a language it has a compile check (python),
   # every expression compiles. True when it passes.
   def check(language)
     skips = [SKIP, skip_file(language)].select(&:file?).flat_map { |path| ['--skip', path.to_s] }
     saxon(DIRECTORY.join('check.py'), language, stylesheet(language).to_s, suite(language).to_s,
-          scenarios(language).to_s, *skips)
+          scenarios(language).to_s, setups(language).to_s, *skips)
   end
 
   # Runs a script of suites/w3c with SaxonC, under the pinned uv.

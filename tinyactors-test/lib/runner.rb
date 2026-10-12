@@ -21,6 +21,13 @@ class Runner
   INVALID = -3
   NO_MEMORY = -4
   ROUTES = { 'relay' => 1, 'refused' => 3 }.freeze
+  DELIVERED = 0
+
+  # The echo setup's peer, and the error envelope it gets back for a value
+  # the echo's datamodel cannot read (values.txt, malformed).
+  ECHO_ORIGIN = 'tinyactors://p/#_scxml_9'
+  MALFORMED = CBOR.from_diagnostic(%({"error":"malformed","sendid":"s1","origin":"#{ECHO_ORIGIN}","msgid":"m1"}))
+                  .unpack1('H*')
 
   # The wall clock a setup's runs see (suites/protocol/README.md, "Setups").
   WALL_NS = 1_700_000_000_000_000_000
@@ -33,8 +40,8 @@ class Runner
   # binding all but the C-level ones, which call core below the API a
   # binding exposes (it sends a binding no `capacity` either).
   METHODS = %w[scenario.run w3c.run host.create host.free host.request image.add actor.spawn actor.send
-               clock.advance host.run peer.add envelope.read envelope.deliver value.roundtrip value.encode].freeze
-  C_LEVEL = %w[envelope.read value.roundtrip value.encode].freeze
+               clock.advance host.run peer.add envelope.read envelope.deliver value.encode].freeze
+  C_LEVEL = %w[envelope.read value.encode].freeze
   REQUIRED = { 'reference' => METHODS, 'binding' => METHODS - C_LEVEL }.freeze
 
   Result = Struct.new(:suite, :name, :verdict, :detail)
@@ -50,11 +57,11 @@ class Runner
   # `kind`: "reference" or "binding", the methods the command must offer
   # (REQUIRED). `scenarios`: the templates and steps; `documents`: their
   # conversion (default: converted now for the datamodel's language);
-  # `w3c`: the converted W3C suite (default: likewise); `skip`: files of W3C
-  # test ids and reasons skipped besides suites/w3c/skip.txt and the
-  # language's skip list.
-  def initialize(command, datamodel: 'quickjs', realm: nil, kind: 'binding', timeout: 60, out: $stdout,
-                 chdir: Dir.pwd, protocol: PROTOCOL, scenarios: Scenarios::ROOT, documents: nil, w3c: nil, skip: [])
+  # `w3c`: the converted W3C suite and `setups` the setups' templates
+  # (default: likewise); `skip`: files of W3C test ids and reasons skipped
+  # besides suites/w3c/skip.txt and the language's skip list.
+  def initialize(command, datamodel: 'quickjs', realm: nil, kind: 'binding', timeout: 60, out: $stdout, chdir: Dir.pwd,
+                 protocol: PROTOCOL, scenarios: Scenarios::ROOT, documents: nil, w3c: nil, setups: nil, skip: [])
     raise ArgumentError, "kind #{kind.inspect}: #{REQUIRED.keys.join(' or ')}" unless REQUIRED.key?(kind)
 
     @driver = Driver.new(command, timeout: timeout, chdir: chdir)
@@ -66,6 +73,7 @@ class Runner
     @scenarios = scenarios
     @documents = documents
     @w3c = w3c
+    @setups = setups
     @skip = skip
     @unsupported = []
     @results = []
@@ -184,7 +192,8 @@ class Runner
   end
 
   # On the datamodel under test; ECMAScript expressions and the cases named
-  # "ECMAScript: ..." only on an ECMAScript one (values.txt, its header).
+  # "ECMAScript: ..." only on an ECMAScript one, those named "not
+  # ECMAScript: ..." only on another (values.txt, its header).
   def values_case(vector)
     created = create(config('h'), @datamodel)
     status!(created, OK, 'ta_host_create')
@@ -192,14 +201,10 @@ class Runner
     case vector.kind
     when 'roundtrip', 'malformed'
       raise Skipped, "for ECMAScript; the datamodel is #{created['datamodel']}" if vector.name.start_with?('ECMAScript:') && !ecmascript
+      raise Skipped, 'not for ECMAScript' if vector.name.start_with?('not ECMAScript:') && ecmascript
 
-      read = call('value.roundtrip', 'cbor' => bytes(vector.get('cbor')))
-      if vector.kind == 'malformed'
-        status!(read, INVALID, 'from_wire')
-      else
-        status!(read, OK, 'from_wire, to_wire')
-        same!('to_wire', vector.get('back') || vector.get('cbor'), read['back'])
-      end
+      echo(created['datamodel'])
+      echoed!(vector)
     when 'encode', 'invalid'
       raise Skipped, "an ECMAScript expression; the datamodel is #{created['datamodel']}" unless ecmascript
 
@@ -212,6 +217,36 @@ class Runner
       end
     else raise Failed, "unknown kind #{vector.kind}"
     end
+  end
+
+  # The value of a roundtrip or malformed case, delivered in an envelope
+  # from the peer "p" to the echo setup's session, through the calls a
+  # binding's API makes (ta_host_envelope_read, ta_host_deliver): its
+  # datamodel's from_wire reads it, and the PEER envelope the echo sends
+  # back carries what its to_wire wrote. A malformed value is refused, and
+  # the error envelope back to "p" says so (host.h, ta_host_deliver).
+  def echoed!(vector)
+    value = CBOR::Tag.new(24, CBOR::Bytes.new(hex(vector.get('cbor'))))
+    envelope = CBOR::Map.new([['target', "tinyactors://h/#_scxml_#{@echo}"], ['name', 'v'], ['data', value],
+                              ['sendid', 's1'], ['origin', ECHO_ORIGIN], ['msgid', 'm1']])
+    delivered = call('envelope.deliver', 'peer' => @peers.fetch('p'), 'cbor' => CBOR::Bytes.new(CBOR.encode(envelope)))
+    status!(delivered, OK, 'ta_host_deliver')
+    malformed = vector.kind == 'malformed'
+    route = malformed ? ROUTES['refused'] : DELIVERED
+    raise Failed, "route #{delivered['route'].inspect}, expected #{route}" unless delivered['route'] == route
+
+    call('clock.advance', 'monotonic' => 0, 'wallNs' => WALL_NS)
+    sent = call('host.run').fetch('envelopes', [])
+    raise Failed, "#{sent.size} envelopes back, expected 1" unless sent.size == 1
+    return same!('the error envelope', MALFORMED, sent.first) if malformed
+
+    back = CBOR.decode(data(sent.first))
+    data = back.major == 5 && back.children.each_slice(2).find { |key, _| CBOR.value(key) == 'data' }&.last
+    unless data&.major == 6 && data.argument == 24 && data.children.first.major == 2
+      raise Failed, "the envelope back has no data as tag 24 on bytes\n  got  #{CBOR.diagnostic(back)}"
+    end
+
+    same!('the data sent back', vector.get('back') || vector.get('cbor'), CBOR.payload(data.children.first))
   end
 
   # ---- scenarios and W3C: outcomes -----------------------------------------------
@@ -357,6 +392,20 @@ class Runner
     when 'relay'
       @peers = { 'a' => peer('a'), 'c' => peer('c') }
     end
+  end
+
+  # The echo setup on a host already created as `empty`: the echo chart in
+  # the datamodel's language, one session of it, and the peer "p".
+  def echo(language)
+    unless W3C.stylesheets.key?(language)
+      raise Failed, "the datamodel is #{language.inspect}, and no stylesheet writes the echo chart in it"
+    end
+
+    text = Pathname.new(@setups || W3C.setups(language)).join('echo.scxml').read
+    status!(call('image.add', 'charts' => [{ 'name' => 'echo.scxml', 'text' => text }]), OK, 'image echo')
+    @echo = spawn_actor('echo')
+    @peers = { 'p' => peer('p') }
+    settle
   end
 
   def chart(name)
