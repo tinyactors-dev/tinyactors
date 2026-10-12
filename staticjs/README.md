@@ -14,7 +14,9 @@ depends on the tree-sitter runtime.
 > different value.
 
 `mise run diff-node` checks it: every case in `tests/spec/` that expects a
-value is evaluated in Node and must give the same value; every case staticjs
+value is evaluated in Node and must give the same value (a case with
+`@seed` in a `node --random-seed` of its own, so `Math.random` draws the
+same values); every case staticjs
 refuses as a syntax error must be one JavaScript refuses too; every case it
 refuses as unsupported must be valid JavaScript; every case it refuses for a
 name (bound nowhere, not exported, no such module) must throw in JavaScript
@@ -127,6 +129,8 @@ sjs_vm_init(&vm, &(sjs_vm_config){ context });
 sjs_vm_start(vm, &(sjs_run_params){ program, values, global_count });
 /* The current time, if the program reads it (Temporal.Now): pushed, never read by the library. */
 sjs_vm_set_clock(vm, &(sjs_epoch){ seconds, nanoseconds });
+/* Math.random's seed, if the program draws: pushed too, held by the evaluator. */
+sjs_vm_set_seed(vm, seed);
 while (sjs_vm_run(vm, 1000) == SJS_RUN_PAUSED) { /* do other work; sjs_vm_advance_clock(vm, ns) */ }
 
 /* A value out as text, into a buffer of any size. */
@@ -227,7 +231,7 @@ Built-ins:
 | functions | `String` `String.fromCharCode` `String.fromCodePoint` `String.raw` (called as a function: staticjs has no tagged templates) `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Map.groupBy` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Object.hasOwn` `Object.assign` (see "Owned mutation" below) `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` `encodeURI` `encodeURIComponent` `decodeURI` `decodeURIComponent` |
 | `JSON` | `parse` `stringify` (see "JSON" below) |
 | `Temporal` | `Temporal.PlainDate`: `new Temporal.PlainDate(y, m, d)`, `from` (a string, a property bag or a PlainDate; `overflow`), `compare`; `year` `month` `monthCode` `day` `dayOfWeek` `dayOfYear` `weekOfYear` `yearOfWeek` `daysInWeek` `daysInMonth` `daysInYear` `monthsInYear` `inLeapYear` `calendarId` `era` `eraYear`; `with` `equals` `add` `subtract` (`overflow`) `until` `since` (`largestUnit`, `smallestUnit`, `roundingIncrement`, `roundingMode`) `toString` (`calendarName`) `toJSON` `toPlainDateTime`. `Temporal.PlainTime`: `new Temporal.PlainTime(h, m, s, ms, us, ns)`, `from` (a string, a property bag, a PlainTime or a PlainDateTime; `overflow`), `compare`; `hour` `minute` `second` `millisecond` `microsecond` `nanosecond`; `with` `equals` `add` `subtract` `until` `since` `round` (`smallestUnit`, `roundingIncrement`, `roundingMode`) `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`) `toJSON`. `Temporal.PlainDateTime`: `new Temporal.PlainDateTime(y, m, d, h, m, s, ms, us, ns)`, `from` (a string, a property bag, a PlainDateTime or a PlainDate), `compare`; a PlainDate's getters and a PlainTime's; `with` `withPlainTime` `equals` `add` `subtract` `until` `since` `round` `toString` (and `calendarName`) `toJSON` `toPlainDate` `toPlainTime`. `Temporal.Duration`: `new Temporal.Duration(y, mo, w, d, h, mi, s, ms, us, ns)`, `from` (a string, a property bag or a Duration), `compare` (`relativeTo`); `years` to `nanoseconds` `sign` `blank`; `with` `negated` `abs` `add` `subtract` `round` (`largestUnit`, `smallestUnit`, `roundingIncrement`, `roundingMode`, `relativeTo`) `total` (`unit`, `relativeTo`) `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`) `toJSON`. `Temporal.Instant`: `new Temporal.Instant(epochNanoseconds)`, `from` (a string with `Z` or an offset, or an Instant), `fromEpochMilliseconds` `fromEpochNanoseconds` `compare`; `epochMilliseconds` `epochNanoseconds`; `equals` `add` `subtract` `until` `since` `round` `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`, `timeZone`: UTC or a fixed offset) `toJSON`. `Temporal.Now` (the host clock): `instant` `plainDateISO` `plainDateTimeISO` `plainTimeISO` (a time zone: UTC or a fixed offset) `timeZoneId` (see "Temporal" below) |
-| `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum) |
+| `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum); `random`, V8's generator from the seed the host sets (`sjs_vm_set_seed`: the values `node --random-seed=<seed>` gives) |
 | constants | `Number.EPSILON` `MAX_SAFE_INTEGER` `MIN_SAFE_INTEGER` `MAX_VALUE` `MIN_VALUE` `POSITIVE_INFINITY` `NEGATIVE_INFINITY` `NaN`; `Math.PI` `E` `LN2` `LN10` `LOG2E` `LOG10E` `SQRT2` `SQRT1_2`: number constants when compiled |
 | changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear`; maps: `set` `delete` `clear`; iterators: `next` `return`; objects: `Object.assign(x, ...sources)` |
 
@@ -600,7 +604,8 @@ compare identities, or find something on a prototype.
   1970 that temporal-polyfill and the specification give differently
   (docs/temporal.md, "Instant"); `Temporal.Now` when the host never set
   the clock (JavaScript reads the machine's), with a time zone's name, or
-  its `zonedDateTimeISO`.
+  its `zonedDateTimeISO`; `Math.random()` when the host never set the
+  seed (`sjs_vm_set_seed`; JavaScript draws from the machine's entropy).
 
 ## Refused when compiled
 

@@ -520,10 +520,71 @@ the instant). A case without `@clock` that reads the clock faults in
 staticjs (deliberately: Node reads the machine's clock), and the
 diff-node `Date.now()` throws there.
 
-`Math.random` will read a seed the same way: a value the evaluator holds,
-`sjs_vm_set_seed` (or the like) to push it, a program that reads it
-unset faulting, and each draw a step of a generator whose state the
-evaluator holds, so that pausing and resuming changes no value.
+`Math.random` reads a seed the same way ("Host seed", below).
+
+## Host seed
+
+`Math.random` draws from a seed the host pushes, held by the evaluator as
+the clock is (`include/staticjs.h`, "The host seed"):
+
+```c
+typedef struct {
+    uint64_t state[2];  /* V8's xorshift128+ state as of its last refill */
+    uint32_t left;      /* of the 64 values that refill made, 0 to 64 */
+} sjs_random;
+
+sjs_result sjs_vm_set_seed(sjs_vm *vm, int64_t seed);
+sjs_result sjs_vm_random(const sjs_vm *vm, sjs_random *out);
+sjs_result sjs_vm_set_random(sjs_vm *vm, const sjs_random *state);
+```
+
+- **V8's generator, exactly** ("V8's is as good as any"): a seed gives
+  the values `node --random-seed=<seed>` gives. V8 12.4
+  (`src/numbers/math-random.cc`, `src/base/utils/random-number-generator.h`
+  and `.cc`, followed in `number.c` with V8's notice): the state is
+  `MurmurHash3(seed)` and `MurmurHash3(~seed)` (the 64-bit finalizer;
+  the flag's int sign-extended), seeded the first time a context draws;
+  a draw with no values left refills a cache of 64, each the next
+  xorshift128+ step's first word as the bits of a double in [1, 2)
+  (`state0 >> 12 | 0x3FF0000000000000`) minus 1, and draws take them from
+  the last to the first. staticjs keeps no cache: its cursor starts at
+  the state after the refill, which gives the cache's last value, and
+  steps back one (invertible) xorshift128+ step per draw. No libm: the
+  double is made from bits. Node's flag takes a nonzero int32 (0 there is
+  "the machine's entropy", and a wider value wraps to 32 bits); every
+  int64 is a seed here, and seed -1 gives an exact 0 as its 64th value, as
+  V8 does (`MurmurHash3(0)` is 0).
+- **Each draw advances the state; nothing else does.** A run calls
+  nothing in the host, so pausing changes no value: an evaluation paused
+  at every unit of fuel draws what one run whole draws.
+- **It stays until set again**: across pauses, `sjs_vm_start` and
+  `sjs_vm_reset`, as the clock does, so a second evaluation on the same
+  evaluator continues the first one's sequence, and an evaluation reset
+  after some draws keeps them drawn (V8's context draws on from where it
+  was, too). A host that wants every evaluation to draw the same values
+  sets the seed before each `sjs_vm_start`; `sjs_vm_destroy` drops it.
+- **Saved and restored as a state, not a seed.** `sjs_vm_random` gives
+  the state between draws, for a host that saves a paused evaluation and
+  resumes it elsewhere; `sjs_vm_set_random` puts it back (a state of
+  zeros, which no seed gives, or more than 64 left is `SJS_ERR_INVALID`
+  and the generator unchanged). It is V8's own state and index, not the
+  cache, which is 64 doubles and follows from them.
+- **Never set, a draw faults**, with "the host has not set the seed
+  (sjs_vm_set_seed)": a program draws from the host's seed or not at
+  all, never from entropy of the library's. `sjs_vm_random` of a seed
+  never set is `SJS_ERR_NOT_FOUND`. Reading `Math.random` as a value
+  (`typeof Math.random`, `const r = Math.random`) needs no seed; calling
+  it does. Its arguments are ignored, as in JavaScript.
+- No call allocates, and a draw costs the call's unit of fuel.
+
+The spec format fixes the seed with `@seed <n>` (`tests/spec_test.c`):
+spec_test sets it before each evaluation of the case, and diff-node runs
+the case in a child `node --random-seed=<n>` (V8 reads the seed only from
+the flag), so `n` is a nonzero int32 and the case an expression; only
+seeded cases spawn a process. `tests/spec/random.spec` has the cases:
+seeds of both signs and the int32 limits, 200 draws across three refills,
+the draws either side of a refill, draws in callbacks and with
+arguments, `Math.random` read as a value, and the faults without a seed.
 
 ## Status and notes for the next types
 

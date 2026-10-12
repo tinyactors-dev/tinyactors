@@ -1279,3 +1279,110 @@ double sjs_hypot_end(const sjs_hypot *h) {
 double sjs_number_from_top(sjs_number_top v) {
     return round_binary((binary_value){ v.q, v.e2, v.sticky });
 }
+
+/* ------------------------------------------------------------------------
+ * Math.random: V8's generator, so that a seed gives the values
+ * `node --random-seed=<seed>` gives. Following V8 12.4 (Node 22):
+ * src/numbers/math-random.cc, MathRandom::RefillCache, and
+ * src/base/utils/random-number-generator.{h,cc}, MurmurHash3, XorShift128
+ * and ToDouble. Their notice:
+ *
+ * Copyright 2013 (random-number-generator) and 2018 (math-random), the V8
+ * project authors. All rights reserved.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *     * Neither the name of Google Inc. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * V8 seeds the state as s0 = MurmurHash3(seed), s1 = MurmurHash3(~seed)
+ * (the seed an int64, sign-extended from the flag's int), fills a cache of
+ * 64 doubles at once, each the next xorshift128+ step's s0 as the bits of
+ * a double in [1, 2) minus 1, and Math.random takes them from the last to
+ * the first. Here no cache is kept: the cursor starts at the state after
+ * the refill, which gives the cache's last value, and steps back one
+ * xorshift128+ step per draw (the step is invertible), so a draw costs a
+ * step either way and the evaluator holds four words, not 64 doubles.
+ */
+#define RANDOM_CACHE 64u
+
+static uint64_t murmur3_finalize(uint64_t h) {
+    h ^= h >> 33;
+    h *= UINT64_C(0xFF51AFD7ED558CCD);
+    h ^= h >> 33;
+    h *= UINT64_C(0xC4CEB9FE1A85EC53);
+    h ^= h >> 33;
+    return h;
+}
+
+static void xorshift128_step(uint64_t s[2]) {
+    uint64_t s1 = s[0];
+    uint64_t s0 = s[1];
+    s[0] = s0;
+    s1 ^= s1 << 23;
+    s1 ^= s1 >> 17;
+    s1 ^= s0;
+    s1 ^= s0 >> 26;
+    s[1] = s1;
+}
+
+/* The step before: s[0] was the old s1; undo the xors of the new s1. */
+static void xorshift128_back(uint64_t s[2]) {
+    uint64_t old1 = s[0];
+    uint64_t t = s[1] ^ old1 ^ (old1 >> 26);
+    t ^= (t >> 17) ^ (t >> 34) ^ (t >> 51);
+    t ^= (t << 23) ^ (t << 46);
+    s[0] = t;
+    s[1] = old1;
+}
+
+void sjs_random_seed(sjs_random_generator *g, int64_t seed) {
+    uint64_t u = (uint64_t)seed;
+    g->v8 = (sjs_random){ { murmur3_finalize(u), murmur3_finalize(~u) }, 0 };
+    g->cursor[0] = g->v8.state[0];
+    g->cursor[1] = g->v8.state[1];
+}
+
+bool sjs_random_restore(sjs_random_generator *g, const sjs_random *state) {
+    if ((state->state[0] | state->state[1]) == 0 || state->left > RANDOM_CACHE) return false;
+    g->v8 = *state;
+    g->cursor[0] = state->state[0];
+    g->cursor[1] = state->state[1];
+    if (state->left > 0) {
+        for (uint32_t i = state->left; i < RANDOM_CACHE; i++) xorshift128_back(g->cursor);
+    }
+    return true;
+}
+
+double sjs_random_next(sjs_random_generator *g) {
+    if (g->v8.left == 0) {
+        for (uint32_t i = 0; i < RANDOM_CACHE; i++) xorshift128_step(g->v8.state);
+        g->v8.left = RANDOM_CACHE;
+        g->cursor[0] = g->v8.state[0];
+        g->cursor[1] = g->v8.state[1];
+    }
+    double x = from_bits((g->cursor[0] >> 12) | UINT64_C(0x3FF0000000000000)) - 1;
+    xorshift128_back(g->cursor);
+    g->v8.left--;
+    return x;
+}

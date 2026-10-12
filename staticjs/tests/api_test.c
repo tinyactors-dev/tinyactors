@@ -1358,6 +1358,82 @@ static void test_now_reads(void) {
     sjs_context_destroy(context);
 }
 
+/* Math.random's seed (sjs_vm_set_seed): V8's sequence (the values below
+ * are what `node --random-seed=42` draws), continued across pauses,
+ * sjs_vm_reset and sjs_vm_start; saved with sjs_vm_random and restored in
+ * another evaluator with sjs_vm_set_random, either side of V8's cache of
+ * 64; held by the evaluator, so one never seeded faults; no call
+ * allocating. */
+static bool same_random(const sjs_random *a, const sjs_random *b) {
+    return a->state[0] == b->state[0] && a->state[1] == b->state[1] && a->left == b->left;
+}
+
+static void test_host_seed(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    loop_run two;
+    loop_run skip;
+    loop_run unseeded;
+    CHECK(loop_open(&two, context, "[Math.random(), Math.random()]"));
+    CHECK(loop_open(&skip, context, "Array.from({ length: 63 }, () => Math.random()).length"));
+    CHECK(loop_open(&unseeded, context, "[1, 2].map(x => x * Math.random())"));
+    char out[4096];
+    sjs_random r;
+    sjs_random again;
+    /* Never set. */
+    CHECK(sjs_vm_random(two.vm, &r) == SJS_ERR_NOT_FOUND);
+    CHECK(loop_finish(&two, UINT64_MAX, out) == SJS_RUN_FAULT);
+    CHECK(strcmp(out, "fault 1:13 the host has not set the seed (sjs_vm_set_seed)") == 0);
+    long allocations = c.allocations;
+    CHECK(sjs_vm_set_seed(two.vm, 42) == SJS_OK);
+    CHECK(sjs_vm_random(two.vm, &r) == SJS_OK && (r.state[0] | r.state[1]) != 0 && r.left == 0);
+    /* Refused, the generator unchanged: a state of zeros, more than 64 left,
+     * null handles. */
+    CHECK(sjs_vm_set_random(two.vm, &(sjs_random){ { 0, 0 }, 0 }) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_set_random(two.vm, &(sjs_random){ { 1, 0 }, 65 }) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_set_seed(NULL, 42) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_random(NULL, &again) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_random(two.vm, NULL) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_set_random(NULL, &r) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_set_random(two.vm, NULL) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_random(two.vm, &again) == SJS_OK && same_random(&again, &r));
+    CHECK(c.allocations == allocations);
+    /* Node's values; a second evaluation continues the first's sequence,
+     * paused at every unit. */
+    CHECK(loop_finish(&two, UINT64_MAX, out) == SJS_RUN_DONE && strcmp(out, "[0.7939112874678715,0.5254990606499601]") == 0);
+    CHECK(loop_finish(&two, 1, out) == SJS_RUN_DONE && strcmp(out, "[0.3518347850388237,0.963056226312738]") == 0);
+    /* Set again, the sequence starts over. Reset after the first draw keeps
+     * it drawn. */
+    CHECK(sjs_vm_set_seed(two.vm, 42) == SJS_OK);
+    sjs_run_params run = { two.program, NULL, 0 };
+    CHECK(sjs_vm_start(two.vm, &run) == SJS_OK);
+    while (sjs_vm_random(two.vm, &r) == SJS_OK && r.left == 0) CHECK(sjs_vm_run(two.vm, 1) == SJS_RUN_PAUSED);
+    CHECK(r.left == 63);
+    sjs_vm_reset(two.vm);
+    CHECK(sjs_vm_random(two.vm, &again) == SJS_OK && same_random(&again, &r));
+    CHECK(loop_finish(&two, 1, out) == SJS_RUN_DONE && strcmp(out, "[0.5254990606499601,0.3518347850388237]") == 0);
+    /* 63 draws in one evaluator; its state restored in another draws the
+     * 64th, the cache's last, and the 65th, the next refill's first. */
+    CHECK(sjs_vm_set_seed(skip.vm, 42) == SJS_OK);
+    CHECK(loop_finish(&skip, UINT64_MAX, out) == SJS_RUN_DONE && strcmp(out, "63") == 0);
+    CHECK(sjs_vm_random(skip.vm, &r) == SJS_OK && r.left == 1);
+    CHECK(sjs_vm_set_random(two.vm, &r) == SJS_OK);
+    CHECK(sjs_vm_random(two.vm, &again) == SJS_OK && same_random(&again, &r));
+    CHECK(loop_finish(&two, 1, out) == SJS_RUN_DONE && strcmp(out, "[0.08156904043271651,0.4706713645501157]") == 0);
+    /* The same state with none left is the one after the 64th draw. */
+    r.left = 0;
+    CHECK(sjs_vm_set_random(two.vm, &r) == SJS_OK);
+    CHECK(loop_finish(&two, UINT64_MAX, out) == SJS_RUN_DONE && strcmp(out, "[0.4706713645501157,0.2603201442309373]") == 0);
+    /* The seed is the evaluator's: another of the same context has none. */
+    CHECK(loop_finish(&unseeded, 1, out) == SJS_RUN_FAULT);
+    CHECK(strstr(out, "the host has not set the seed (sjs_vm_set_seed)") != NULL);
+    loop_close(&two);
+    loop_close(&skip);
+    loop_close(&unseeded);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+}
+
 /* A loop's callback runs in one frame kept for the whole loop (vm.c,
  * sjs_vm_call_back). Faults in it report where they were, the limits fall
  * where they did, an evaluation stopped at any unit frees everything, and
@@ -3010,6 +3086,7 @@ int main(int argc, char **argv) {
     test_fuel_and_reset();
     test_host_clock();
     test_now_reads();
+    test_host_seed();
     test_limits();
     test_loop_callbacks();
     test_reuse_leaves_others_alone();

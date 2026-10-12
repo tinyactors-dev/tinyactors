@@ -1712,6 +1712,25 @@ sjs_result sjs_vm_clock(const sjs_vm *vm, sjs_epoch *out) {
     return SJS_OK;
 }
 
+/* The host seed: Math.random's generator (number.c), kept like the clock. */
+sjs_result sjs_vm_set_seed(sjs_vm *vm, int64_t seed) {
+    if (vm == NULL) return SJS_ERR_INVALID;
+    sjs_random_seed(&vm->random, seed);
+    return SJS_OK;
+}
+
+sjs_result sjs_vm_random(const sjs_vm *vm, sjs_random *out) {
+    if (vm == NULL || out == NULL) return SJS_ERR_INVALID;
+    if ((vm->random.v8.state[0] | vm->random.v8.state[1]) == 0) return SJS_ERR_NOT_FOUND;
+    *out = vm->random.v8;
+    return SJS_OK;
+}
+
+sjs_result sjs_vm_set_random(sjs_vm *vm, const sjs_random *state) {
+    if (vm == NULL || state == NULL || !sjs_random_restore(&vm->random, state)) return SJS_ERR_INVALID;
+    return SJS_OK;
+}
+
 void sjs_vm_destroy(sjs_vm *vm) {
     if (vm == NULL) return;
     const sjs_allocator *a = &vm->context->counting;

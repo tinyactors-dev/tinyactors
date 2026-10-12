@@ -137,6 +137,18 @@ uint32_t sjs_number_to_uint32(double x);
 /* Correctly rounded square root; the nearest float32, widened. */
 double sjs_number_sqrt(double x);
 double sjs_number_fround(double x);
+/* Math.random: V8's generator (number.c), the public sjs_random and the
+ * state whose first word gives the next value, which is sjs_random's
+ * state stepped back 64 - left times. A state of zeros was never seeded. */
+typedef struct {
+    sjs_random v8;
+    uint64_t cursor[2];
+} sjs_random_generator;
+void sjs_random_seed(sjs_random_generator *g, int64_t seed);
+/* False, and the generator unchanged, for a state no seed gives. */
+bool sjs_random_restore(sjs_random_generator *g, const sjs_random *state);
+/* The next value of a seeded generator, in [0, 1). */
+double sjs_random_next(sjs_random_generator *g);
 /* A positive number q x 2^e2, q's top bit set, `sticky` when it is a little
  * more: the nearest double, ties to even (Number of a BigInt). */
 typedef struct {
@@ -718,6 +730,7 @@ typedef enum {
     SJS_BUILTIN_MATH_FROUND,
     SJS_BUILTIN_MATH_CLZ32,
     SJS_BUILTIN_MATH_IMUL,
+    SJS_BUILTIN_MATH_RANDOM,
     SJS_BUILTIN_BIGINT,
     SJS_BUILTIN_BIGINT_AS_INT_N,
     SJS_BUILTIN_BIGINT_AS_UINT_N,

@@ -51,6 +51,7 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
     { "Math", "fround", SJS_BUILTIN_MATH_FROUND },
     { "Math", "clz32", SJS_BUILTIN_MATH_CLZ32 },
     { "Math", "imul", SJS_BUILTIN_MATH_IMUL },
+    { "Math", "random", SJS_BUILTIN_MATH_RANDOM },
     { "", "BigInt", SJS_BUILTIN_BIGINT },
     { "BigInt", "asIntN", SJS_BUILTIN_BIGINT_AS_INT_N },
     { "BigInt", "asUintN", SJS_BUILTIN_BIGINT_AS_UINT_N },
@@ -343,6 +344,7 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_MATH_FROUND),
     FUNCTION_VALUE(SJS_BUILTIN_MATH_CLZ32),
     FUNCTION_VALUE(SJS_BUILTIN_MATH_IMUL),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_RANDOM),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_INT_N),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_UINT_N),
@@ -942,6 +944,14 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     case SJS_BUILTIN_MATH_CLZ32:
     case SJS_BUILTIN_MATH_IMUL:
         return math_exact(vm, id, call);
+    case SJS_BUILTIN_MATH_RANDOM:
+        /* The host's seed (sjs_vm_set_seed), never one of the library's;
+         * arguments are ignored, as in JavaScript. */
+        if ((vm->random.v8.state[0] | vm->random.v8.state[1]) == 0) {
+            return sjs_vm_fault(vm, "the host has not set the seed (sjs_vm_set_seed)");
+        }
+        call->result = sjs_num(sjs_random_next(&vm->random));
+        return SJS_OK;
     case SJS_BUILTIN_BIGINT:
     case SJS_BUILTIN_BIGINT_AS_INT_N:
     case SJS_BUILTIN_BIGINT_AS_UINT_N:

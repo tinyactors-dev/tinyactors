@@ -120,6 +120,9 @@ struct sjs_vm {
      * when clock_set. */
     bool clock_set;
     sjs_epoch clock;
+    /* Math.random's generator (sjs_vm_set_seed); its state all zero until
+     * the host sets the seed. */
+    sjs_random_generator random;
 };
 
 /* Loop frame slots, from base; a kept callback frame's slots follow them.
