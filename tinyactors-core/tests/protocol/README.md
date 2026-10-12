@@ -33,6 +33,20 @@ hold CBOR in hex, and each is followed by `diag`, the same bytes in
 diagnostic notation (`ta_cbor_diagnostic`), which the runner checks too, so
 the hex and what a person reads cannot drift apart.
 
+## Writing a case
+
+Write the `diag` line, then let the task write the hex above it:
+
+    mise run protocol:encode           # rewrite every hex line from its diag line
+    mise run protocol:encode --check   # change nothing; fail where they differ
+
+It encodes as core does: shortest integers and lengths, definite lengths,
+map keys in the order written, floats in the shortest exact width and NaN as
+`f97e00`. It reads what `ta_cbor_diagnostic` writes, plus tags (`24(...)`),
+byte strings (`h'..'`), `simple(n)`, `undefined`, `NaN`, `Infinity` and
+`-Infinity`. A `diag` line in parentheses, such as `diag (not CBOR)`, is not
+an item: its hex stays as written. `mise run test` runs the check.
+
 ## Wildcards
 
 Where a value depends on the build, the layout or a generator, the expected

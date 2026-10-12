@@ -40,9 +40,10 @@ abort "tinyactors-core: failed: #{failed.sort.join(', ')}" unless failed.empty?
 puts "tinyactors-core: #{runs.size} test programs pass"
 
 # The rest are tasks of their own; each runs alone too.
-# `api --check` builds the amalgamations first, and fails when a checked-in
+# `protocol:encode --check` fails when a protocol vector's hex and its
+# diag line disagree; `api --check` builds the amalgamations first, and fails when a checked-in
 # API description no longer matches its library; `wasm:test` builds and
 # tests the release's wasm modules.
-tasks = [%w[lint], %w[check:freestanding], %w[api --check], %w[wasm:test], %w[w3c], %w[check:wasm]]
+tasks = [%w[lint], %w[protocol:encode --check], %w[check:freestanding], %w[api --check], %w[wasm:test], %w[w3c], %w[check:wasm]]
 tasks += [%w[torture:test], %w[check:cross]] if full
 tasks.each { |task| Core.run('mise', 'run', *task) }
