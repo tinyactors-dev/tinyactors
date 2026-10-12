@@ -366,6 +366,11 @@ uint32_t sjs_number_format(double value, char *out) {
         sjs_copy(out + at, "Infinity", 8);
         return at + 8;
     }
+    /* An integer below 2^32 is its own shortest digits, written without
+     * the big-number arithmetic: a key or an index (`String(0)`, a pluck
+     * by a small number in Object.groupBy) costs some 30 instructions
+     * instead of 450. */
+    if (value < 4294967296.0 && value == (double)(uint32_t)value) return at + put_int(out + at, (uint32_t)value);
     char digits[20];
     int32_t n;
     int32_t k = (int32_t)shortest_digits(value, digits, &n);
