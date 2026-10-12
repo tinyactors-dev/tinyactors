@@ -9,13 +9,22 @@ drain tagged effects.
 
 - [docs/architecture.md](docs/architecture.md) — design, conflicts, building blocks, ABI
 - [docs/concurrency.md](docs/concurrency.md) — concurrency and parallelism: what runs when,
-  what you can rely on, from one actor to a PostgreSQL table of them
+  what you can rely on, from one actor to many systems, and what each transport
+  between them guarantees
+- [docs/durability.md](docs/durability.md) — what a session is when it is not running:
+  hibernation, export, migration and snapshots (none of them is persistence)
+- [docs/protocol.md](docs/protocol.md) — actors in different systems: addresses, values
+  and envelopes as CBOR, routing, delivery and errors
 - [docs/scenarios.md](docs/scenarios.md) — twelve execution walkthroughs
 - [docs/layout.md](docs/layout.md) — file tree, tooling, tasks
 - [docs/distribution.md](docs/distribution.md) — what is released (the C libraries), the
   release targets and tasks
 - [docs/bindings.md](docs/bindings.md) — writing a binding: the queue loop, effects,
   requests, values and envelopes, what a binding owns and what it must not do
+- [docs/requests.md](docs/requests.md) — `ta_host_request`'s methods (JSON-RPC's shape, in
+  CBOR), and how to add one
+- [docs/host-config.md](docs/host-config.md) — `ta_host_create`'s CBOR config and its
+  environment of pointers
 
 The release version is `TA_VERSION_MAJOR`, `_MINOR` and `_PATCH` in
 `include/tinyactors/types.h` (currently 0.2.0). The build and its tasks
