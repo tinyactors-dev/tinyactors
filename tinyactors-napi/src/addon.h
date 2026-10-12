@@ -56,7 +56,7 @@ typedef struct ta_napi_host {
     ta_datamodel_binding binding;
     ta_napi_image **images;
     uint32_t image_count, image_capacity;
-    uint64_t ticks_per_second; /* the config's, 0 when it gave none (ROADMAP.md, Requests to core) */
+    uint64_t ticks_per_second; /* host.config's system.ticksPerSecond */
     napi_ref handlers;         /* the `on` object */
     napi_ref clock_object;     /* a SimulatedClock, or NULL: the runtime's clock */
     ta_napi_clock *clock;
@@ -137,6 +137,8 @@ void ta_napi_effect_handle(ta_napi_host *host, uint32_t index);
 
 /* request(method, params): the method's result, or a TinyactorsError. */
 napi_value ta_napi_request(napi_env env, napi_callback_info info);
+/* Read the host's tick rate (host.config) into host->ticks_per_second. */
+ta_status ta_napi_host_read_ticks(ta_napi_host *host);
 /* A refused config: the error ta_host_create wrote, thrown. */
 void ta_napi_throw_config(napi_env env, ta_bytes error);
 

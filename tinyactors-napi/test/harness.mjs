@@ -7,6 +7,8 @@ export function test(name, body) {
   cases.push({ name, body });
 }
 
+// Runs every case; again on each call (a file that runs its cases once per
+// datamodel calls it once per datamodel).
 export async function run() {
   let failed = 0;
   for (const { name, body } of cases) {

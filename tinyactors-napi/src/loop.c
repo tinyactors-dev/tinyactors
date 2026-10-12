@@ -68,7 +68,7 @@ ta_napi_time ta_napi_loop_now(ta_napi_host *host) {
     return now;
 }
 
-/* Milliseconds as the host's ticks (its config's ticksPerSecond). */
+/* Milliseconds as the host's ticks (host.config's ticksPerSecond). */
 static ta_time ta_napi_ticks(const ta_napi_host *host, double milliseconds) {
     double ticks = milliseconds * (double)host->ticks_per_second / 1000.0;
     return ticks > 0 ? (ta_time)ticks : 0;
@@ -129,7 +129,7 @@ static void ta_napi_arm_timer(ta_napi_host *host, ta_time deadline, ta_time now)
     if (host->clock) return;
     if (host->timer && host->timer_deadline == deadline) return;
     ta_napi_clear(host->env, &host->timer, "clearTimeout");
-    if (deadline == UINT64_MAX || !host->ticks_per_second) return;
+    if (deadline == UINT64_MAX) return;
     napi_value argv[2];
     argv[0] = ta_napi_wake_function(host);
     if (!argv[0]) return;
@@ -313,13 +313,6 @@ static napi_value ta_napi_clock_increment(napi_env env, napi_callback_info info)
     if (!clock) return NULL;
     if (napi_get_value_double(env, call.argv[0], &milliseconds) != napi_ok || !(milliseconds >= 0)) {
         ta_napi_throw_status(env, "SimulatedClock.increment", TA_ERROR_INVALID);
-        return NULL;
-    }
-    /* without the host's tick rate a time but 0 cannot be given in ticks
-     * (ROADMAP.md, "Requests to core") */
-    for (uint32_t i = 0; i < clock->count && milliseconds > 0; i++) {
-        if (clock->hosts[i]->ticks_per_second) continue;
-        ta_napi_throw_status(env, "SimulatedClock.increment: no ticksPerSecond in the config", TA_ERROR_UNSUPPORTED);
         return NULL;
     }
     clock->milliseconds += milliseconds;

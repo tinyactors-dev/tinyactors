@@ -79,6 +79,28 @@ napi_value ta_napi_request(napi_env env, napi_callback_info info) {
     return result;
 }
 
+/* host.config's system.ticksPerSecond: the rate the host runs on, every
+ * default filled in by core (requests.md, "host.config"), read once after
+ * the host is created; never a default of the binding's own. */
+ta_status ta_napi_host_read_ticks(ta_napi_host *host) {
+    napi_env env = host->env;
+    static const unsigned char request[] = {0xa2, 0x62, 'i', 'd', 0x01, 0x66, 'm', 'e', 't', 'h', 'o', 'd',
+                                            0x6b, 'h',  'o', 's', 't', '.',  'c', 'o', 'n', 'f', 'i', 'g'};
+    ta_buffer reply = {NULL, 0, 0};
+    ta_status status = ta_napi_ask(host->host, (ta_bytes){request, sizeof request}, &reply);
+    napi_value value = NULL, result, system, ticks;
+    if (status == TA_OK) status = ta_napi_values_decode(env, (ta_bytes){reply.pointer, reply.length}, &value);
+    free(reply.pointer);
+    double rate = 0;
+    if (status != TA_OK || !(result = ta_napi_reply_member(env, value, "result")) ||
+        !(system = ta_napi_reply_member(env, result, "system")) ||
+        !(ticks = ta_napi_reply_member(env, system, "ticksPerSecond")) ||
+        napi_get_value_double(env, ticks, &rate) != napi_ok || !(rate >= 1))
+        return status == TA_OK ? TA_ERROR_INVALID : status;
+    host->ticks_per_second = (uint64_t)rate;
+    return TA_OK;
+}
+
 void ta_napi_throw_config(napi_env env, ta_bytes bytes) {
     napi_value refusal, error;
     if (ta_napi_values_decode(env, bytes, &refusal) != TA_OK || !(error = ta_napi_reply_member(env, refusal, "error"))) {

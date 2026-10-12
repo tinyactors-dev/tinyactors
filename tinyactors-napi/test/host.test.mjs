@@ -15,10 +15,15 @@ const COUNTER = `<scxml xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmas
   <final id="end"><donedata><param name="total" expr="n"/></donedata></final>
 </scxml>`;
 
+// Each case runs on both datamodels: the native one (this package's) and
+// quickjs.
+const DATAMODELS = ['native', 'quickjs'];
+let datamodel = DATAMODELS[0];
+
 function quickjs(clock, on) {
   return new Host({
     config: { systemID: 'h', system: { ticksPerSecond: 1000 } },
-    datamodel: 'quickjs',
+    datamodel,
     clock,
     on,
   });
@@ -71,9 +76,23 @@ test('a delayed send fires on the runtime clock, from one setTimeout', async () 
   host.close();
 });
 
+test('a config without ticksPerSecond runs on the host\'s own rate (host.config)', () => {
+  const logs = [];
+  const clock = new SimulatedClock();
+  const host = new Host({ config: { systemID: 'h' }, datamodel, clock, on: { log: (record) => logs.push(record.label) } });
+  assert.equal(host.request('host.config').system.ticksPerSecond, 1000000000);
+  host.addImage(compile([{ name: 'counter.scxml', text: COUNTER }]));
+  host.send(host.spawn('counter'), 'later');
+  clock.increment(49);
+  assert.deepEqual(logs, []);
+  clock.increment(1);
+  assert.deepEqual(logs, ['tick']);
+  host.close();
+});
+
 test('a refused config is a TinyactorsError with core\'s code, reason and path', () => {
   assert.throws(
-    () => new Host({ config: { systemID: 'h', x: 1 }, datamodel: 'quickjs' }),
+    () => new Host({ config: { systemID: 'h', x: 1 }, datamodel }),
     (error) => error instanceof TinyactorsError && error.code === -32602 && error.reason === 'unknown' && error.path === 'x',
   );
 });
@@ -106,4 +125,8 @@ test('a method on another object, or on a closed host, is refused', () => {
   assert.throws(() => host.spawn('counter'), TinyactorsError);
 });
 
-await run();
+for (const each of DATAMODELS) {
+  datamodel = each;
+  console.log(`-- ${each}`);
+  await run();
+}

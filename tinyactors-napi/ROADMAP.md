@@ -233,7 +233,11 @@ moves it into the root ROADMAP.md's "Requests to core" and answers there.
     once the adapter offers the vector methods (ROADMAP.md, M1, step 5):
     these cases fail, and the protocol suite stays out of `mise run
     test`'s gate (`GATE` in `mise/napi.rb`) until the runner skips them.
-- **A binding cannot read a host's tick rate** (2026-10-12).
+- **A binding cannot read a host's tick rate** (2026-10-12). *Answered*
+  (`9bd33f03`, `99068179`): the request `host.config` answers the
+  effective config; the binding reads `system.ticksPerSecond` from it
+  once after `ta_host_create` (`src/request.c`), and the stopgap below is
+  gone.
   - *What is missing:* a way to read the `ticksPerSecond` a host runs on
     after `ta_host_create` filled the config's defaults: a member of a
     reply (`host.stats`, or a request that answers the effective config)

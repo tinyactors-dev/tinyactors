@@ -194,17 +194,6 @@ static ta_status ta_napi_host_datamodel(ta_napi_host *host, napi_value options) 
     return TA_OK;
 }
 
-/* The ticks per second the config names (the caller's own value): the
- * clock's unit. Core has no way to say its default yet (ROADMAP.md,
- * "Requests to core"). */
-static void ta_napi_host_ticks(ta_napi_host *host, napi_value config) {
-    napi_env env = host->env;
-    napi_value ticks = ta_napi_member(env, ta_napi_member(env, config, "system"), "ticksPerSecond");
-    double value = 0;
-    if (napi_get_value_double(env, ticks, &value) == napi_ok && value >= 1 && value < 18446744073709551616.0)
-        host->ticks_per_second = (uint64_t)value;
-}
-
 static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
     ta_napi_call call;
     if (!ta_napi_call_read(env, info, &call)) return NULL;
@@ -247,7 +236,11 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
         return NULL;
     }
     free(refusal.pointer);
-    ta_napi_host_ticks(host, config);
+    status = ta_napi_host_read_ticks(host);
+    if (status != TA_OK) {
+        ta_napi_host_release(host);
+        return ta_napi_refused(env, "host.config", status);
+    }
     napi_value handlers = ta_napi_member(env, options, "on");
     if (!ta_napi_is_undefined(env, handlers)) napi_create_reference(env, handlers, 1, &host->handlers);
     napi_value clock = ta_napi_member(env, options, "clock");
