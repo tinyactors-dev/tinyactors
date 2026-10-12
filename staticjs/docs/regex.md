@@ -10,9 +10,9 @@ string replacement, as a leaf or a loop frame. Step 3's match results are
 done: `exec`, `match` without g, `matchAll`, `d` indices, `$<name>`, and
 `replace` with a function, a loop that calls back. Every bench case of
 section 12.1 is in `bench/bench.c`, with `eval.regex.literal` besides.
-Of 12.1's speedups, the literal-prefix skip and the anchored start are
-built; the one-pass program, the predicate shape and the lazy DFA are
-not (section 15 says why). Where the implementation departs from this design, section 15
+Of 12.1's speedups, the literal-prefix skip, the anchored start and a
+lazy DFA for `test` are built; the one-pass program and the predicate
+shape are not (section 15 says why). Where the implementation departs from this design, section 15
 says so. Line numbers below are of the commit this document was written
 against (`dbc0c69e`), before any of it.
 
@@ -161,8 +161,9 @@ that the set of out-of-line helpers does not change, and keep the new step
   or a field of its own in the union.
 - **Nothing is cached in the regex value.** Programs are shared between
   evaluators, which is why `GET_MEMBER`'s guesses live in the VM and not in
-  the program (`vm.h`, the comment on `member_guess`). A later lazy-DFA
-  cache (section 12.3) goes in the VM for the same reason.
+  the program (`vm.h`, the comment on `member_guess`). The lazy DFA
+  (section 12.3) keeps its cache in the match's own state for the same
+  reason (section 15).
 
 ---
 
@@ -900,6 +901,10 @@ cache with a fixed budget, cleared when full. The cache lives in the
 evaluator, not in the regex value (section 3.2). Add it only when the
 `eval.regex.test` row asks for it.
 
+Built for `test` (section 15 says how): its cache is in the match's own
+state rather than the evaluator, and a full one hands the search back to
+the automaton rather than being cleared.
+
 ### 12.4 `new RegExp`
 
 A pattern made at run time compiles with the same `sjs_regex_compile`, in
@@ -1151,6 +1156,32 @@ Each departure below was made because Node or the code said otherwise.
   `re` read from outside, 11.9.3 ([names]), and an operand on the REGEXP
   event for a literal. Neither is built, so `eval.regex.filter` still
   calls its callback for each row.
-- **No lazy DFA (12.3).** It was to come only once the skips were in and
-  a row asked for it; none has been measured against one, so it is not
-  built.
+- **A lazy DFA for `test` only (12.3), whose fuel is the automaton's.**
+  `eval.regex.test` asked for it: the Pike VM spent about 550 instructions
+  a character there. A `test` over an ASCII input that runs as a loop
+  (not sticky, a program of at most 256 instructions) keeps a cache of
+  8 KiB after its job, in the loop's block (`rx_dfa_of` in
+  `src/regex_match.c`), set up the first time the search runs from it.
+  Its result needs no slots, and a slot bears on what a thread does only
+  through `CHECK` and the registers' mask, which compare a register with
+  the position: a register equals the position only within the
+  position's closure. So a list of threads after its position's start
+  thread, as program counters, and whether a match is found, is a state;
+  the step over a character with the next position's start thread is an
+  edge, the same for every pair of character classes (each instruction
+  that consumes, `\w`, the line terminators and the skip's leading
+  character treat the characters of a class alike; at most 16 classes,
+  the end of the input one more for the next character). An edge is
+  learned by running the automaton itself once, and keeps what it visited
+  and copied in the step and in the start, so fuel is the automaton's to
+  the unit, whichever runs, and a step of the loop ends at the same
+  place: where the budget runs out after an edge's step, the start is
+  left for the next step (`pending`). An edge to a position the search
+  skips hands the search back to the skip, and a full cache to the
+  automaton. Positions, `^`, `$`, `\b`, the flags and empty iterations
+  are the automaton's, as is everything but `test`. `spec_test` runs
+  every case with a `/` as loops paused after each unit, with the cache
+  and without (`sjs_vm_config`'s `no_regex_dfa`), and requires the same
+  outcome, fuel and pauses; `regex_test` does so on its random patterns,
+  and `api_test` on long inputs. On `eval.regex.test` it takes about 12
+  times fewer instructions.

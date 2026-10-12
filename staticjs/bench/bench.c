@@ -893,7 +893,7 @@ static bool compile_source(bench_run *run, const bench_source *source, sjs_progr
 /* Evaluate to the end, untimed; the result is the caller's. */
 static bool evaluate(bench_run *run, const sjs_run_params *params, sjs_value *out) {
     sjs_vm *vm;
-    sjs_vm_config config = { run->context, false };
+    sjs_vm_config config = { run->context, false, false };
     if (sjs_vm_init(&vm, &config) != SJS_OK) return fail(run, "sjs_vm_init failed");
     bool ok = sjs_vm_start(vm, params) == SJS_OK;
     if (!ok) fail(run, "sjs_vm_start refused");
@@ -1477,7 +1477,7 @@ static bool run_vm(bench_run *run, sjs_vm *vm) {
 
 static bool op_vm_fresh(bench_run *run) {
     sjs_vm *vm;
-    sjs_vm_config config = { run->context, false };
+    sjs_vm_config config = { run->context, false, false };
     if (sjs_vm_init(&vm, &config) != SJS_OK) return fail(run, "sjs_vm_init failed");
     bool ok = run_vm(run, vm);
     sjs_vm_destroy(vm);
@@ -1615,7 +1615,7 @@ static bool setup(bench_run *run) {
         if (!compile_source(run, &source, &run->program)) return false;
     }
     if (c->op == OP_EVAL || c->op == OP_VM_RESET) {
-        sjs_vm_config vm_config = { run->context, false };
+        sjs_vm_config vm_config = { run->context, false, false };
         if (sjs_vm_init(&run->vm, &vm_config) != SJS_OK) return fail(run, "sjs_vm_init failed");
     }
     if (c->op == OP_WRITE) {

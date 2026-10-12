@@ -645,6 +645,11 @@ typedef struct {
      * the same values, faults and fuel either way. For tests that compare
      * the two; false, which a designated initialiser gives, uses both. */
     bool no_regex_leaf;
+    /* Run every match by the automaton itself, never from the cache of its
+     * steps a long test() keeps (docs/regex.md, 12.3). A program gives the
+     * same values, faults, fuel and pauses either way. For tests that
+     * compare the two; false uses the cache where it applies. */
+    bool no_regex_dfa;
 } sjs_vm_config;
 
 typedef struct {

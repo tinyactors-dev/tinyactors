@@ -99,7 +99,7 @@ static sjs_result evaluate(const env *e, const char *source, char *out) {
         return r;
     }
     sjs_vm *vm;
-    sjs_vm_config config = { e->context, false };
+    sjs_vm_config config = { e->context, false, false };
     r = sjs_vm_init(&vm, &config);
     if (r != SJS_OK) {
         sjs_program_release(program);
@@ -335,7 +335,7 @@ static void test_modules(void) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -361,7 +361,7 @@ static sjs_value result_of(sjs_context *context, sjs_goal goal, const char *sour
     sjs_compile_params params = { { context, goal, NULL, 0, { NULL, NULL }, false }, { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -873,7 +873,7 @@ static void test_writer_resumes(void) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -916,7 +916,7 @@ static void test_fuel_pinned(sjs_context *context) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -943,7 +943,7 @@ static uint64_t fuel_of(sjs_context *context, const char *source) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -1000,7 +1000,7 @@ static void test_regex_fuel(sjs_context *context) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -1018,6 +1018,97 @@ static void test_regex_fuel(sjs_context *context) {
     CHECK(sjs_compile(&limit, &program) == SJS_ERR_PROGRAM && error.code == SJS_ERROR_LIMIT);
 }
 
+/* A test() over an ASCII input that runs as a loop matches from a cache of
+ * the automaton's steps (docs/regex.md, 12.3); by the cache and without it,
+ * run whole, paused after every unit and after every 7, a test gives the
+ * same result, the same fuel and the same pauses. */
+typedef struct {
+    const char *source;
+    bool no_dfa;
+    uint64_t fuel;         /* per sjs_vm_run */
+} regex_run;
+
+typedef struct {
+    char text[64];
+    uint64_t fuel;
+    uint64_t pauses;       /* the hash of the fuel used at each pause */
+} regex_ran;
+
+static void run_regex(sjs_context *context, const regex_run *r, regex_ran *out) {
+    sjs_program *program;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
+                                  { r->source, (uint32_t)strlen(r->source) }, NULL };
+    memset(out, 0, sizeof *out);
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    sjs_vm *vm;
+    sjs_vm_config config = { context, false, r->no_dfa };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    sjs_run_params run = { program, NULL, 0 };
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    sjs_run status;
+    out->pauses = 14695981039346656037ull;
+    while ((status = sjs_vm_run(vm, r->fuel)) == SJS_RUN_PAUSED) out->pauses = (out->pauses ^ sjs_vm_fuel_used(vm)) * 1099511628211ull;
+    CHECK(status == SJS_RUN_DONE);
+    out->fuel = sjs_vm_fuel_used(vm);
+    sjs_value v;
+    CHECK(sjs_vm_take_result(vm, &v) == SJS_OK && v.kind == SJS_STRING);
+    if (v.kind == SJS_STRING) {
+        sjs_str t = sjs_string_text(v);
+        snprintf(out->text, sizeof out->text, "%.*s", (int)t.length, t.ptr);
+    }
+    sjs_release(context, v);
+    sjs_vm_destroy(vm);
+    sjs_program_release(program);
+}
+
+static void test_regex_cache(sjs_context *context) {
+    static const char *const sources[] = {
+        ("(t => JSON.stringify([/^(?:r\\d{6},)*r\\d{6}$/.test(t), /r\\d{6};/.test(t), /r\\d{6}$/.test(t), /r0/.test(t)]))"
+         "('r000000,'.repeat(300) + 'r000000')"),
+        "JSON.stringify([/(a+)+$/.test('a'.repeat(3000) + 'b'), /(?:a*)*c/.test('ab'.repeat(500)), /(a*)+?b$/.test('a'.repeat(900) + 'b')])",
+        "(t => JSON.stringify([/\\bfoo\\b/.test(t), /\\Boo\\B/.test(t), /\\w+\\b$/u.test(t), /^foo$/m.test(t)]))('xfoo foox '.repeat(200) + '\\nfoo')",
+        "(t => JSON.stringify([/^b+$/m.test(t), /^b+$/.test(t), /a$/m.test(t), /x.*y/s.test(t), /x.*y/.test(t)]))('a\\n'.repeat(500) + 'x\\nbbb\\ny')",
+        "(t => JSON.stringify([/QR\\d/i.test(t), /qr\\d/.test(t), /[^,]{7}$/.test(t), /(?:a|ab)(?:c|bcd)(d*)/.test(t)]))('xqr,'.repeat(500) + 'Qr5abcd')",
+    };
+    /* From Node 22 (with --enable-experimental-regexp-engine-on-excessive-backtracks
+     * for /(a+)+$/). */
+    static const char *const expected[] = {
+        "[true,false,true,true]", "[false,false,true]", "[true,true,true,true]", "[true,false,true,true,false]", "[true,false,true,true]",
+    };
+    static const uint64_t fuels[] = { UINT64_MAX, 1, 7 };
+    for (size_t i = 0; i < sizeof sources / sizeof sources[0]; i++) {
+        regex_ran whole;
+        run_regex(context, &(regex_run){ sources[i], true, UINT64_MAX }, &whole);
+        CHECK(strcmp(whole.text, expected[i]) == 0);
+        for (size_t f = 0; f < sizeof fuels / sizeof fuels[0]; f++) {
+            regex_ran cached;
+            regex_ran uncached;
+            run_regex(context, &(regex_run){ sources[i], false, fuels[f] }, &cached);
+            run_regex(context, &(regex_run){ sources[i], true, fuels[f] }, &uncached);
+            CHECK(strcmp(cached.text, whole.text) == 0 && strcmp(uncached.text, whole.text) == 0);
+            CHECK(cached.fuel == whole.fuel && uncached.fuel == whole.fuel && cached.pauses == uncached.pauses);
+            if (strcmp(cached.text, uncached.text) != 0 || cached.fuel != uncached.fuel || cached.pauses != uncached.pauses) {
+                fprintf(stderr, "  %s\n  cached:   %s (fuel %llu)\n  uncached: %s (fuel %llu)\n", sources[i], cached.text,
+                        (unsigned long long)cached.fuel, uncached.text, (unsigned long long)uncached.fuel);
+            }
+        }
+    }
+    /* Inputs of every length over a range, long enough to match as a loop,
+     * so that a step's budget (256 instructions visited) runs out at every
+     * place in the patterns. */
+    for (int n = 2000; n < 2260; n++) {
+        char source[256];
+        snprintf(source, sizeof source,
+                 "(t => JSON.stringify([/^(?:ab)*$/.test(t), /^(?:a|b)+b$/.test(t), /(?:ab|b)c?$/.test(t), /b$/.test(t), /ba?$/m.test(t)]))"
+                 "('ab'.repeat(%d))", n);
+        regex_ran cached;
+        regex_ran uncached;
+        run_regex(context, &(regex_run){ source, false, UINT64_MAX }, &cached);
+        run_regex(context, &(regex_run){ source, true, UINT64_MAX }, &uncached);
+        CHECK(strcmp(cached.text, "[true,true,true,true,true]") == 0 && strcmp(uncached.text, cached.text) == 0 && cached.fuel == uncached.fuel);
+    }
+}
+
 /* A set's lookups go through its index, so combining two sets costs fuel in
  * proportion to their sizes, not their product. */
 static void test_set_fuel_linear(sjs_context *context) {
@@ -1033,7 +1124,7 @@ static void test_set_fuel_linear(sjs_context *context) {
         for (uint32_t i = 0; i < 2000; i++) CHECK(sjs_set_add(context, &sets[s], sjs_number(i + s * 1000.0)) == SJS_OK);
     }
     sjs_vm *vm;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, sets, 2 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -1092,7 +1183,7 @@ static void test_fuel_and_reset(void) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -1115,6 +1206,7 @@ static void test_fuel_and_reset(void) {
     sjs_program_release(program);
     test_fuel_pinned(context);
     test_regex_fuel(context);
+    test_regex_cache(context);
     test_to_spliced_fuel(context);
     test_text_sort_fuel(context);
     test_set_fuel_linear(context);
@@ -1135,7 +1227,7 @@ static void test_host_clock(void) {
     counting c = { 0 };
     sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
     sjs_vm *vm;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     long allocations = c.allocations;
     sjs_epoch t = { 0, 0 };
@@ -1344,7 +1436,7 @@ static bool loop_open(loop_run *l, sjs_context *context, const char *source) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     l->context = context;
     if (sjs_compile(&params, &l->program) != SJS_OK) return false;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     return sjs_vm_init(&l->vm, &config) == SJS_OK;
 }
 
@@ -1677,7 +1769,7 @@ static void test_reuse_leaves_others_alone(void) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, globals, 2 };
     for (int i = 0; i < 2; i++) {
@@ -1808,7 +1900,7 @@ static shaped_run run_shaped(shaped_source s) {
                                   { s.source, (uint32_t)strlen(s.source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     loop_run l = { context, program, NULL };
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&l.vm, &config) == SJS_OK);
     loop_finish(&l, UINT64_MAX, result.out);
     result.fuel = sjs_vm_fuel_used(l.vm);
@@ -2354,7 +2446,7 @@ static size_t live_of(sjs_context *context, const char *source) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -2938,7 +3030,7 @@ static uint64_t map_lookup_fuel(sjs_context *context, sjs_value map) {
                                   { source, (uint32_t)strlen(source) }, NULL };
     if (sjs_compile(&params, &program) != SJS_OK) return 0;
     sjs_vm *vm;
-    sjs_vm_config config = { context, false };
+    sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params run = { program, &map, 1 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);

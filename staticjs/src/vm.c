@@ -1584,6 +1584,7 @@ sjs_result sjs_vm_init(sjs_vm **out, const sjs_vm_config *config) {
     sjs_zero(vm, sizeof *vm);
     vm->context = context;
     vm->no_regex_leaf = config->no_regex_leaf;
+    vm->no_regex_dfa = config->no_regex_dfa;
     vm->stack_capacity = context->limits.max_stack;
     vm->frame_capacity = context->limits.max_frames;
     vm->stack = sjs_mem_alloc(a, (size_t)vm->stack_capacity * sizeof(sjs_value));

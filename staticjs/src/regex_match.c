@@ -144,6 +144,7 @@ typedef struct {
     bool fold_unicode;        /* i with u: U+017F folds to s, U+212A to k */
     bool matched;
     bool running;
+    bool cached;              /* a test's loop: the cache of its steps follows the search's words ("The cache") */
     uint32_t start;
     /* Where the automaton is: the position, the characters before and at
      * it, and the position after that one. */
@@ -158,6 +159,7 @@ typedef struct {
     uint32_t generation;
     uint32_t ccount;
     uint32_t ncount;
+    uint32_t pending;         /* an edge of the cache whose step is taken and whose start is not, plus one */
     uint32_t *cpc;
     uint32_t *npc;
     uint32_t *cslots;
@@ -234,7 +236,9 @@ static bool rx_in_class(const sjs_regexp *re, uint32_t index, uint32_t c) {
     return false;
 }
 
-static bool rx_consumes(const rx_search *s, const rx_ins *ins, uint32_t c) {
+/* Inline: rx_search_run's step calls it for each thread at each position,
+ * and it has other callers (rx_advance, rx_dfa_holds). */
+__attribute__((always_inline)) static inline bool rx_consumes(const rx_search *s, const rx_ins *ins, uint32_t c) {
     if (c == RX_NONE) return false;
     switch (ins->op) {
     case RX_CHAR: return c == ins->x;
@@ -453,6 +457,484 @@ static void rx_search_begin(rx_search *s, uint32_t start) {
     s->ccount = 0;
     s->matched = false;
     s->running = true;
+    s->pending = 0;
+}
+
+/*
+ * The automaton's start thread and step, as rx_search_run takes them at a
+ * position, for the cache's learning (rx_dfa_learn). rx_search_run keeps
+ * its own copy of both inline: its code generation needs it (helpers there,
+ * called or inlined, cost the methods that do not use the cache 1 to 9%
+ * more instructions). spec_test, regex_test and api_test compare a test
+ * with the cache and without on every input they run, fuel and pauses
+ * included, so the copies cannot drift apart unseen.
+ */
+
+/* A thread from the start at s->pos, after every thread from earlier; led
+ * by ^, past the first position, only its count: it dies at the ^, after
+ * the SAVEs before it, which only the start reaches. Where no match is
+ * found yet (and a sticky search only at its start). */
+static void rx_start_thread(rx_search *s) {
+    uint32_t n = s->re->slots;
+    if (s->re->lead == RX_LEAD_START && s->pos > 0) {
+        s->copies += n;
+        s->visits += s->re->lead_saves + 1u;
+        return;
+    }
+    for (uint32_t k = 0; k < n; k++) s->cur[k] = RX_UNSET;
+    s->copies += n;
+    s->at_pos = s->pos;
+    s->at_prev = s->prev;
+    s->at_unit = s->unit;
+    rx_threads now = { s->cpc, s->cslots, &s->ccount };
+    rx_closure(s, &now, 0);
+}
+
+/* The step over the character at s->pos: each thread consumes it, or
+ * matches and ends the threads after it; the threads it gives are the list
+ * at the next position, where the search then is. False at the end of the
+ * input, where the search ends. */
+static bool rx_advance(rx_search *s) {
+    uint32_t n = s->re->slots;
+    uint32_t after = s->next;
+    uint32_t after_next = after;
+    uint32_t after_unit = s->unit == RX_NONE ? RX_NONE : rx_unit_at(&s->in, after, &after_next);
+    s->generation += 2u;
+    s->ncount = 0;
+    s->at_pos = after;
+    s->at_prev = s->unit;
+    s->at_unit = after_unit;
+    rx_threads next = { s->npc, s->nslots, &s->ncount };
+    for (uint32_t i = 0; i < s->ccount; i++) {
+        const rx_ins *ins = &s->re->code[s->cpc[i]];
+        s->visits++;
+        const uint32_t *slots = &s->cslots[(size_t)i * n];
+        if (ins->op == RX_MATCH) {
+            /* The threads after it have lower priority: they end. */
+            for (uint32_t k = 0; k < n; k++) s->best[k] = slots[k];
+            s->copies += n;
+            s->matched = true;
+            break;
+        }
+        if (!rx_consumes(s, ins, s->unit)) continue;
+        for (uint32_t k = 0; k < n; k++) s->cur[k] = slots[k];
+        s->copies += n;
+        rx_closure(s, &next, s->cpc[i] + 1u);
+    }
+    if (s->unit == RX_NONE) return false;
+    if (s->unit >= 0x10000u && s->mid_starts && !s->matched && !s->sticky) rx_mid_start(s);
+    uint32_t *swap = s->cpc;
+    s->cpc = s->npc;
+    s->npc = swap;
+    swap = s->cslots;
+    s->cslots = s->nslots;
+    s->nslots = swap;
+    s->ccount = s->ncount;
+    s->prev = s->unit;
+    s->pos = after;
+    s->unit = after_unit;
+    s->next = after_next;
+    return true;
+}
+
+/* Whether rx_search_run's skip passes the position the search is at. */
+static bool rx_skips(const rx_search *s) {
+    uint8_t lead = s->re->lead;
+    if (lead == RX_LEAD_NONE || s->ccount != 0 || s->matched || s->sticky || (lead == RX_LEAD_START && s->pos == 0)) return false;
+    return rx_lead_run(s, s->pos >> 1, 1) > 0;
+}
+
+/*
+ * The cache. A test() over an ASCII input, run as a loop, needs of its
+ * threads only their program counters: the result is whether any thread
+ * matched, and the slots bear on what a thread does only through CHECK and
+ * the registers' mask, which compare a register with the position, and a
+ * register is set to the position only within the position's closure. So
+ * a list of threads (after its position's start thread), as program
+ * counters, and whether a match is found, is a state of a deterministic
+ * automaton, and the step over a character (rx_advance) with the next
+ * position's start thread (rx_start_thread) its edge. What an edge does
+ * depends on the state, the character's class and the next character's
+ * (or the end): every instruction that consumes, every assertion and the
+ * skip treat the characters of a class alike (rx_dfa_classes). An edge is
+ * learned by running the automaton itself once, and keeps what it visited
+ * and copied in the step and in the start, so a search that takes it counts
+ * the same work, and fuel, as the automaton (docs/regex.md, 9.1), and stops
+ * for its budget at the same place: after the step, where the start
+ * remains to take when the search goes on (s->pending). An edge to a
+ * position where the search skips (no thread, no match, and a character
+ * that cannot begin one) hands the search back at that position.
+ *
+ * The cache lives in the loop's own block, after the job, in a fixed
+ * budget (RX_DFA_BYTES); a pattern with more classes than RX_DFA_CLASSES,
+ * or a search that fills it, goes on by the automaton alone.
+ */
+
+#define RX_DFA_BYTES 8192u
+#define RX_DFA_CLASSES 16u
+#define RX_DFA_BUCKETS 256u
+/* The most instructions a pattern has for the cache, and distinct ones
+ * among them that consume: sorting the characters into classes reads each
+ * of the instructions, and asks each distinct one of every character. */
+#define RX_DFA_CODE 256u
+#define RX_DFA_CONSUMERS 32u
+/* The state an edge goes to where the search skips the position after: it
+ * stops a run of the cache, as does a state with no thread and a match. */
+#define RX_DFA_SKIP 0u
+#define RX_DFA_STOPS UINT32_MAX
+
+typedef struct {
+    uint32_t pcs;             /* its threads' program counters, from here in the pool */
+    uint32_t count;
+    uint32_t row;             /* its edges by class pair, from here in the rows */
+    uint32_t hash;
+    bool matched;
+    bool stops;               /* the search ends here (no thread, a match), or skips */
+} rx_dfa_state;
+
+typedef struct {
+    uint32_t target;          /* a state, or RX_DFA_SKIP */
+    uint32_t row;             /* the target's row, or RX_DFA_STOPS when it stops */
+    uint32_t step_visits;     /* in the step */
+    uint32_t step_copies;
+    uint32_t visits;          /* in the step and the start */
+    uint32_t copies;
+} rx_dfa_edge;
+
+typedef struct {
+    uint8_t classes[128];     /* of each ASCII character */
+    uint32_t k;               /* classes; the next character's have one more, the end */
+    uint32_t states;
+    uint32_t state_cap;
+    uint32_t edges;
+    uint32_t edge_cap;
+    uint32_t pcs;
+    uint32_t pc_cap;
+    uint16_t buckets[RX_DFA_BUCKETS];  /* states by hash, plus one */
+    rx_dfa_state *state;
+    uint32_t *pc;
+    uint16_t *row;            /* an edge plus one, or 0 for one not learned */
+    rx_dfa_edge *edge;
+} rx_dfa;
+
+#define RX_DFA_EDGES 128u
+#define RX_DFA_PCS 256u
+
+/* The cache of a search that has one: after the search's words, on a
+ * boundary of 16 bytes (sjs_regex_loop_start). */
+static rx_dfa *rx_dfa_of(const rx_search *s) {
+    uintptr_t end = (uintptr_t)(s->best + s->re->slots);
+    return (rx_dfa *)(void *)((end + 15u) & ~(uintptr_t)15u);
+}
+
+/* What a predicate of rx_dfa_classes says of an ASCII character `c`: the
+ * instruction `which` consumes it, or past the program: it is a word
+ * character, a line terminator, or (led by a character) not one that can
+ * begin a match. */
+static bool rx_dfa_holds(const rx_search *s, uint32_t which, uint32_t c) {
+    const sjs_regexp *re = s->re;
+    if (which < re->count) return rx_consumes(s, &re->code[which], c);
+    if (which == re->count) return rx_word(s, c);
+    if (which == re->count + 1u) return rx_line_terminator(c);
+    uint32_t fold = re->lead == RX_LEAD_FOLD ? 0x20u : 0u;
+    return (re->lead == RX_LEAD_CHAR || re->lead == RX_LEAD_FOLD) && (c | fold) != re->lead_char;
+}
+
+/* Sort the ASCII characters into classes that every predicate treats
+ * alike: the number of classes, or 0 when there are more than
+ * RX_DFA_CLASSES, or more distinct instructions that consume than
+ * RX_DFA_CONSUMERS. An instruction like one before it splits nothing more,
+ * so each distinct one is read once. */
+static uint32_t rx_dfa_classes(const rx_search *s, uint8_t *classes) {
+    const sjs_regexp *re = s->re;
+    uint32_t seen[2u * RX_DFA_CONSUMERS];
+    uint32_t seen_count = 0;
+    uint32_t k = 1;
+    for (uint32_t c = 0; c < 128u; c++) classes[c] = 0;
+    for (uint32_t which = 0; which < re->count + 3u; which++) {
+        if (which < re->count) {
+            const rx_ins *ins = &re->code[which];
+            if (ins->op > RX_CLASS) continue;
+            uint32_t i = 0;
+            while (i < seen_count && (seen[2u * i] != ins->op || seen[2u * i + 1u] != ins->x)) i++;
+            if (i < seen_count) continue;
+            if (seen_count == RX_DFA_CONSUMERS) return 0;
+            seen[2u * seen_count] = ins->op;
+            seen[2u * seen_count + 1u] = ins->x;
+            seen_count++;
+        }
+        uint8_t map[2u * RX_DFA_CLASSES];
+        for (uint32_t i = 0; i < 2u * RX_DFA_CLASSES; i++) map[i] = 0xFFu;
+        uint32_t made = 0;
+        for (uint32_t c = 0; c < 128u; c++) {
+            uint32_t key = 2u * classes[c] + (rx_dfa_holds(s, which, c) ? 1u : 0u);
+            if (map[key] == 0xFFu) {
+                if (made == RX_DFA_CLASSES) return 0;
+                map[key] = (uint8_t)made++;
+            }
+            classes[c] = map[key];
+        }
+        k = made;
+    }
+    return k;
+}
+
+/* Set the cache up when the search first runs from it: its classes
+ * (rx_dfa_classes) and its arrays over RX_DFA_BYTES. False when the
+ * pattern has too many classes for it. */
+static bool rx_dfa_setup(rx_search *s) {
+    rx_dfa *d = rx_dfa_of(s);
+    uint32_t k = rx_dfa_classes(s, d->classes);
+    if (k == 0) return false;
+    uint8_t *at = (uint8_t *)(void *)d + ((sizeof(rx_dfa) + 15u) & ~(size_t)15u);
+    uint8_t *end = (uint8_t *)(void *)d + RX_DFA_BYTES;
+    d->k = k;
+    d->states = 1;
+    d->edges = 0;
+    d->pcs = 0;
+    for (uint32_t i = 0; i < RX_DFA_BUCKETS; i++) d->buckets[i] = 0;
+    d->edge = (rx_dfa_edge *)(void *)at;
+    d->edge_cap = RX_DFA_EDGES;
+    at += RX_DFA_EDGES * sizeof(rx_dfa_edge);
+    d->pc = (uint32_t *)(void *)at;
+    d->pc_cap = RX_DFA_PCS;
+    at += RX_DFA_PCS * sizeof(uint32_t);
+    /* Each state, and its row of edges: k classes by k + 1. */
+    size_t row = (size_t)k * (k + 1u) * sizeof(uint16_t);
+    size_t each = sizeof(rx_dfa_state) + row;
+    uint32_t cap = (uint32_t)((size_t)(end - at) / each);
+    d->state_cap = cap < 0xFFFFu ? cap : 0xFFFEu;
+    d->state = (rx_dfa_state *)(void *)at;
+    at += (size_t)d->state_cap * sizeof(rx_dfa_state);
+    d->row = (uint16_t *)(void *)at;
+    d->state[RX_DFA_SKIP] = (rx_dfa_state){ 0, 0, 0, 0, false, true };
+    return true;
+}
+
+static uint32_t rx_dfa_hash(const uint32_t *pcs, uint32_t count, bool matched) {
+    uint32_t h = matched ? 0x9E3779B9u : 0x811C9DC5u;
+    for (uint32_t i = 0; i < count; i++) h = (h ^ pcs[i]) * 0x01000193u;
+    return h;
+}
+
+/* The state of the search's list of threads, made when new: false when
+ * the cache has no room for it. */
+static bool rx_dfa_intern(rx_search *s, uint32_t *out) {
+    rx_dfa *d = rx_dfa_of(s);
+    uint32_t count = s->ccount;
+    uint32_t hash = rx_dfa_hash(s->cpc, count, s->matched);
+    uint32_t b = hash & (RX_DFA_BUCKETS - 1u);
+    for (uint32_t probe = 0; probe < RX_DFA_BUCKETS; probe++) {
+        uint32_t at = d->buckets[b];
+        if (at == 0) break;
+        const rx_dfa_state *st = &d->state[at - 1u];
+        if (st->hash == hash && st->count == count && st->matched == s->matched) {
+            uint32_t i = 0;
+            while (i < count && d->pc[st->pcs + i] == s->cpc[i]) i++;
+            if (i == count) {
+                *out = at - 1u;
+                return true;
+            }
+        }
+        b = (b + 1u) & (RX_DFA_BUCKETS - 1u);
+    }
+    if (d->buckets[b] != 0 || d->states == d->state_cap || count > d->pc_cap - d->pcs) return false;
+    uint32_t row = d->k * (d->k + 1u);
+    rx_dfa_state *st = &d->state[d->states];
+    st->pcs = d->pcs;
+    st->count = count;
+    st->row = d->states * row;
+    st->hash = hash;
+    st->matched = s->matched;
+    st->stops = count == 0 && s->matched;
+    for (uint32_t i = 0; i < count; i++) d->pc[d->pcs + i] = s->cpc[i];
+    d->pcs += count;
+    for (uint32_t i = 0; i < row; i++) d->row[st->row + i] = 0;
+    *out = d->states++;
+    d->buckets[b] = (uint16_t)(*out + 1u);
+    return true;
+}
+
+/* Put the search at byte `byte` in the state `id`, its threads' slots
+ * unset (only the program counters bear on a test's result). */
+static void rx_dfa_load(rx_search *s, uint32_t id, uint32_t byte) {
+    const rx_dfa *d = rx_dfa_of(s);
+    const rx_dfa_state *st = &d->state[id];
+    uint32_t n = s->re->slots;
+    for (uint32_t i = 0; i < st->count; i++) {
+        s->cpc[i] = d->pc[st->pcs + i];
+        for (uint32_t k = 0; k < n; k++) s->cslots[(size_t)i * n + k] = RX_UNSET;
+    }
+    s->ccount = st->count;
+    s->matched = st->matched;
+    s->pos = byte << 1;
+    s->prev = s->in.text[byte - 1u];
+    s->unit = rx_unit_at(&s->in, s->pos, &s->next);
+}
+
+/* Where a run of the cache leaves the search: at a position after its
+ * start thread, to go on by the automaton; at the top of a position, where
+ * it skips; or stopped by its budget. */
+enum { RX_DFA_LISTED = 0, RX_DFA_TOP, RX_DFA_PAUSE };
+
+/* Learn the edge of the search's state `*id` for the class pair at
+ * `entry` of its row by taking the step and the start by the automaton:
+ * RX_DFA_PAUSE when the budget stops the search after the step, as it would
+ * stop it; RX_DFA_TOP when the search skips the position after;
+ * RX_DFA_LISTED with `*id` the state after, or with the cache given up. */
+typedef struct {
+    uint32_t id;
+    uint32_t entry;
+} rx_dfa_at;
+
+static uint8_t rx_dfa_learn(rx_search *s, rx_dfa_at *at, uint64_t until) {
+    rx_dfa *d = rx_dfa_of(s);
+    uint64_t visits = s->visits;
+    uint64_t copies = s->copies;
+    (void)rx_advance(s);
+    uint64_t step_visits = s->visits - visits;
+    uint64_t step_copies = s->copies - copies;
+    if (s->visits >= until) return RX_DFA_PAUSE;
+    bool skips = rx_skips(s);
+    if (!skips && !s->matched) rx_start_thread(s);
+    uint64_t all_visits = s->visits - visits;
+    uint64_t all_copies = s->copies - copies;
+    uint32_t target = RX_DFA_SKIP;
+    bool fits = d->edges < d->edge_cap && all_visits <= UINT32_MAX && all_copies <= UINT32_MAX;
+    if (fits && !skips) fits = rx_dfa_intern(s, &target);
+    if (!fits) {
+        s->cached = false;
+        return skips ? RX_DFA_TOP : RX_DFA_LISTED;
+    }
+    const rx_dfa_state *to = &d->state[target];
+    d->edge[d->edges] = (rx_dfa_edge){ target, to->stops ? RX_DFA_STOPS : to->row, (uint32_t)step_visits, (uint32_t)step_copies,
+                                       (uint32_t)all_visits, (uint32_t)all_copies };
+    d->row[d->state[at->id].row + at->entry] = (uint16_t)++d->edges;
+    at->id = target;
+    return skips ? RX_DFA_TOP : RX_DFA_LISTED;
+}
+
+/* Run the search by the cache, from the state the budget stopped it after
+ * the step to (s->pending), or else from its list of threads after its
+ * start thread, until it ends, its budget stops it (after a step:
+ * s->pending), it skips, or an edge is not learned and cannot be. Apart
+ * from rx_search_run, which the other methods run. */
+__attribute__((noinline)) static uint8_t rx_dfa_run(rx_search *s, uint64_t until) {
+    uint32_t id;
+    /* Whether the search's own list holds the state. */
+    bool holds = s->pending == 0;
+    if (!holds) {
+        /* The start the step left, then on from the edge's target. */
+        const rx_dfa_edge *edge = &rx_dfa_of(s)->edge[s->pending - 1u];
+        s->pending = 0;
+        s->visits += edge->visits - edge->step_visits;
+        s->copies += edge->copies - edge->step_copies;
+        if (edge->target == RX_DFA_SKIP) {
+            s->matched = false;
+            return RX_DFA_TOP;
+        }
+        id = edge->target;
+    } else {
+        /* From the search's list: not at the end, where nothing is left to
+         * run from it; the cache set up when first run from. */
+        if ((s->pos >> 1) >= s->in.length) return RX_DFA_LISTED;
+        if (rx_dfa_of(s)->k == 0 && !rx_dfa_setup(s)) {
+            s->cached = false;
+            return RX_DFA_LISTED;
+        }
+        if (!rx_dfa_intern(s, &id)) {
+            s->cached = false;
+            return RX_DFA_LISTED;
+        }
+    }
+    const rx_dfa *d = rx_dfa_of(s);
+    const uint8_t *text = s->in.text;
+    uint32_t length = s->in.length;
+    uint32_t width = d->k + 1u;
+    uint32_t byte = s->pos >> 1;
+    uint32_t from = byte;
+    uint64_t visits = s->visits;
+    uint64_t copies = s->copies;
+    uint32_t pending = 0;
+    /* The class of the character at `byte`, times the width of a row. */
+    uint32_t here = byte < length ? d->classes[text[byte]] * width : 0;
+    for (;;) {
+        const rx_dfa_state *st = &d->state[id];
+        if (st->stops || byte >= length) break;
+        /* The edges learned over characters with one after them, while the
+         * budget lasts and no state stops; what is left, below. */
+        uint32_t row = st->row;
+        while (byte + 1u < length) {
+            uint32_t next = d->classes[text[byte + 1u]];
+            uint32_t e = d->row[row + here + next];
+            if (e == 0) break;
+            const rx_dfa_edge *edge = &d->edge[e - 1u];
+            if (visits + edge->step_visits >= until) break;
+            visits += edge->visits;
+            copies += edge->copies;
+            byte++;
+            holds = false;
+            here = next * width;
+            id = edge->target;
+            row = edge->row;
+            if (row == RX_DFA_STOPS) break;
+        }
+        st = &d->state[id];
+        if (st->stops || byte >= length) break;
+        uint32_t after = byte + 1u < length ? d->classes[text[byte + 1u]] : d->k;
+        uint32_t e = d->row[st->row + here + after];
+        if (e == 0) {
+            if (!holds) rx_dfa_load(s, id, byte);
+            s->generation += 2u * (byte - from);
+            s->visits = visits;
+            s->copies = copies;
+            rx_dfa_at at = { id, here + after };
+            uint8_t learned = rx_dfa_learn(s, &at, until);
+            if (learned != RX_DFA_LISTED || !s->cached) return learned;
+            id = at.id;
+            byte = s->pos >> 1;
+            from = byte;
+            visits = s->visits;
+            copies = s->copies;
+            here = after * width;
+            holds = true;
+            continue;
+        }
+        const rx_dfa_edge *edge = &d->edge[e - 1u];
+        byte++;
+        holds = false;
+        if (visits + edge->step_visits >= until) {
+            /* Stopped after the step, as the automaton stops: the start
+             * comes when the search goes on. */
+            visits += edge->step_visits;
+            copies += edge->step_copies;
+            pending = e;
+            break;
+        }
+        visits += edge->visits;
+        copies += edge->copies;
+        here = after * width;
+        id = edge->target;
+    }
+    s->generation += 2u * (byte - from);
+    s->visits = visits;
+    s->copies = copies;
+    if (holds) return RX_DFA_LISTED;
+    if (pending == 0 && id != RX_DFA_SKIP) {
+        rx_dfa_load(s, id, byte);
+        return RX_DFA_LISTED;
+    }
+    /* Between the step and the start: no thread was there to skip from; or
+     * the start comes (s->pending, whose target is loaded then), and until
+     * then the search has no thread and stands as if matched, so that it
+     * neither skips nor starts a thread when it goes on (rx_search_run). */
+    s->pending = pending;
+    s->ccount = 0;
+    s->matched = pending != 0;
+    s->pos = byte << 1;
+    s->prev = text[byte - 1u];
+    s->unit = rx_unit_at(&s->in, s->pos, &s->next);
+    return pending != 0 ? RX_DFA_PAUSE : RX_DFA_TOP;
 }
 
 /* Run the search until it ends (true; s->matched says whether s->best
@@ -489,6 +971,11 @@ static bool rx_search_run(rx_search *s, uint64_t budget) {
             s->at_unit = s->unit;
             rx_threads now = { s->cpc, s->cslots, &s->ccount };
             rx_closure(s, &now, 0);
+        }
+        if (s->cached) {
+            uint8_t cached = rx_dfa_run(s, until);
+            if (cached == RX_DFA_PAUSE) return false;
+            if (cached == RX_DFA_TOP) continue;
         }
         if (s->ccount == 0 && (s->matched || s->sticky || s->unit == RX_NONE)) {
             s->running = false;
@@ -1343,23 +1830,42 @@ sjs_result sjs_regex_call(sjs_vm *vm, sjs_regex_call_params *params) {
     return SJS_OK;
 }
 
+/* Whether a method's search keeps the cache of its steps: only a test, not
+ * sticky, over an ASCII input, of a program not too long; and not with the
+ * switch off. A test runs as a loop only when its work is long
+ * (sjs_regex_call), which setting the cache up adds little to. */
+static bool rx_dfa_wanted(const sjs_vm *vm, const rx_method *m) {
+    const sjs_regexp *re = SJS_AS_REGEXP(m->operands.regexp);
+    const sjs_string *input = SJS_AS_STRING(m->operands.input);
+    return !vm->no_regex_dfa && m->op == RX_TEST && (input->h.flags & SJS_STRING_ASCII) != 0 && (re->flags & SJS_REGEX_STICKY) == 0 &&
+           re->count <= RX_DFA_CODE;
+}
+
 /* The loop's state: a block of values' size, as sjs_loop_free frees it. */
 sjs_result sjs_regex_loop_start(sjs_vm *vm, vm_frame *frame) {
     sjs_value *slots = &vm->stack[frame->base];
     rx_method m = { (uint8_t)(frame->builtin - SJS_REGEX_LOOP_FIRST), false,
                     rx_operands_of((rx_call_site){ (uint8_t)(frame->builtin - SJS_REGEX_LOOP_FIRST), slots[LOOP_RECEIVER],
                                                    { &slots[LOOP_CALLBACK], frame->argc } }) };
-    uint64_t bytes = rx_job_words(SJS_AS_REGEXP(m.operands.regexp)) * 4u;
+    bool cached = rx_dfa_wanted(vm, &m);
+    /* The job, then the cache, if any, on a boundary of 16 bytes
+     * (rx_dfa_of); it is set up when the search first runs from it. */
+    uint64_t job = (rx_job_words(SJS_AS_REGEXP(m.operands.regexp)) * 4u + 15u) & ~(uint64_t)15u;
+    uint64_t bytes = job + (cached ? RX_DFA_BYTES : 0u);
     uint64_t values = (bytes + sizeof(sjs_value) - 1u) / sizeof(sjs_value);
     if (values * sizeof(sjs_value) > UINT32_MAX) return sjs_vm_fail(vm, SJS_ERR_LIMIT);
     frame->scratch = sjs_mem_alloc(&vm->context->counting, (size_t)values * sizeof(sjs_value));
     if (frame->scratch == NULL) return sjs_vm_fail(vm, SJS_ERR_NOMEM);
     frame->scratch_count = (uint32_t)values;
     frame->phase = 0;
-    sjs_zero(frame->scratch, (size_t)values * sizeof(sjs_value));
+    sjs_zero(frame->scratch, (size_t)job);
     uint32_t *block = (uint32_t *)(void *)frame->scratch;
     rx_work w = { vm, (rx_job *)(void *)block, &slots[LOOP_OUTPUT] };
     if (rx_job_start(&w, &m, block + (sizeof(rx_job) + 3u) / 4u) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (cached) {
+        w.job->s.cached = true;
+        rx_dfa_of(&w.job->s)->k = 0;
+    }
     if (w.job->callback) {
         /* The function where a loop's callback is (sjs_vm_call_back), the
          * regular expression, which the job reads, beside it. */
