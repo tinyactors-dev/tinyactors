@@ -213,15 +213,11 @@ Progress:
   are later milestones'.
 - **`SimulatedClock`:** holds (`test/host.test.mjs`; the adapter's
   `advance` steps).
-- **Gates:** the M1 scenarios on both datamodels under node and bun are
-  in `mise run test` (4 of 4 each). The protocol vectors are not in it
-  yet: on each runtime and datamodel they pass 112 of 122 (`mise run
-  conform -- --milestone M1 --suite protocol`), values.txt's round trips
-  on the native datamodel included; the 10 that fail are those the open
-  request to core names, and the suite joins `GATE` when the runner
-  skips them. The mapping table, layer lints, prefix, no mutable globals,
+- **Gates:** the whole M1 set on both datamodels under node and bun is
+  in `mise run test` (since the runner-skip request was answered, below),
+  values.txt's round trips on the native datamodel included. The mapping table, layer lints, prefix, no mutable globals,
   the rules' tests and the value table's tests are in `mise run test`.
-- **Open:** the request to core below; the API review.
+- **Open:** the API review.
 
 After M1's check, at the coordinator's request (core `3efac6c1`:
 bindings.md section 6, "The binding allocates almost nothing"; AGENTS.md,
@@ -238,7 +234,11 @@ bindings.md section 6, "The binding allocates almost nothing"; AGENTS.md,
   charts (their functions in two JavaScript arrays), payloads,
   iterations and images as rows of tables; the module, a clock and the
   datamodel's state without allocations of their own. The lint rule
-  `allocation-in-tables-and-host` keeps it so.
+  `allocation-in-tables-and-host` keeps it so (`bcfa7b4d`).
+- The runner-skip request answered (`34c09cfa`): this commit puts the
+  protocol suite in the gate. The whole M1 set passes under node and bun
+  on both datamodels: protocol 104 pass, 65 skipped (C-level and
+  reference-only cases), scenarios 4 of 4.
 
 ## Later milestones
 
@@ -254,7 +254,9 @@ missing, why, and which suite case or test shows it; the coordinator
 moves it into the root ROADMAP.md's "Requests to core" and answers there.
 
 - **The runner skips, for a binding, the request and config vectors its
-  API cannot send** (2026-10-12). The same gap as the Python session's
+  API cannot send** (2026-10-12). *Answered* (`34c09cfa`): the
+  envelope-level cases are the reference's (`only reference`), and the
+  protocol suite joined the gate. The same gap as the Python session's
   first request (`tinyactors-cpython/ROADMAP.md`, "Requests to core",
   1), found here independently by a fresh agent's refutation of
   `docs/decisions.md` ("The Host's API"); one answer serves both
