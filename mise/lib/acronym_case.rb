@@ -23,7 +23,7 @@ module AcronymCase
   LIST = File.join(ROOT, 'acronyms.txt')
   ALLOW = File.join(ROOT, 'acronyms-allow.txt')
 
-  CODE_EXTENSIONS = %w[.c .h .js .cjs .mjs .ts .rb].freeze
+  CODE_EXTENSIONS = %w[.c .h .js .cjs .mjs .ts .rb .py].freeze
 
   # Paths the check never reads, as prefixes or path segments. Each entry
   # says why.

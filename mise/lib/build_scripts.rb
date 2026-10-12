@@ -8,7 +8,8 @@ require 'tmpdir'
 require 'toolchain'
 
 # The workspace's Ruby build scripts, the libraries under mise/lib/ and the
-# file tasks under mise/tasks/ of the root and of every project, and their
+# file tasks under mise/tasks/ of the root and of every project, the
+# libraries beside a project's tasks (<project>/mise/*.rb), and their
 # static analysis with ast-grep (sgconfig.yml, mise/ast-grep/rules/).
 #
 # ast-grep chooses a file's language by its name, and a mise file task has
@@ -18,6 +19,9 @@ require 'toolchain'
 module BuildScripts
   ROOT = Toolchain::ROOT
   DIRECTORIES = %w[mise/lib mise/tasks].freeze
+  # What a project's tasks share, beside its tasks (tinyactors-core/mise/core.rb,
+  # tinyactors-cpython/mise/cpython.rb, tinyactors-napi/mise/napi.rb).
+  PROJECT_LIBRARIES = %w[*/mise/*.rb].freeze
 
   # A finding: where, which rule, and what to do instead.
   Finding = Data.define(:path, :line, :column, :rule, :message, :text) do
@@ -26,13 +30,16 @@ module BuildScripts
 
   module_function
 
-  # The tracked Ruby build scripts, as paths relative to the root.
-  def paths
-    patterns = DIRECTORIES.flat_map { |directory| [directory, "*/#{directory}/*"] }
+  # The tracked Ruby build scripts, as paths relative to the root; with
+  # `within`, a project's directory, only those under it (a binding's lint
+  # checks its own scripts).
+  def paths(within = nil)
+    patterns = DIRECTORIES.flat_map { |directory| [directory, "*/#{directory}/*"] } + PROJECT_LIBRARIES
     out, status = Open3.capture2('git', 'ls-files', '-z', '--', *patterns, chdir: ROOT.to_s)
     raise Toolchain::Error, 'git ls-files failed' unless status.success?
 
-    out.split("\0").select { |path| ruby?(ROOT.join(path)) }.sort
+    prefix = within && "#{within.to_s.chomp('/')}/"
+    out.split("\0").select { |path| (prefix.nil? || path.start_with?(prefix)) && ruby?(ROOT.join(path)) }.sort
   end
 
   def ruby?(file)
@@ -45,9 +52,10 @@ module BuildScripts
   # The name a script has in the scanned copy.
   def scanned_name(path) = File.extname(path) == '.rb' ? path : "#{path}.rb"
 
-  # Every finding of the rules in sgconfig.yml, sorted by place.
-  def scan
-    by_copy = paths.to_h { |path| [scanned_name(path), path] }
+  # Every finding of the rules in sgconfig.yml, sorted by place; with
+  # `within`, in the scripts under that directory only.
+  def scan(within = nil)
+    by_copy = paths(within).to_h { |path| [scanned_name(path), path] }
     Dir.mktmpdir('build-scripts') do |dir|
       by_copy.each do |copy, path|
         FileUtils.mkdir_p(File.dirname(File.join(dir, copy)))

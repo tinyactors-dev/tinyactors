@@ -68,6 +68,13 @@ text = AcronymCase.checked_text('doc.md', markdown)
 words = text.scan(/[A-Za-z0-9_$]+/).flat_map { |w| flagged(w) }
 check.call('markdown checks only code', words, %w[Otlp Id])
 
+# Which files are code: C, JavaScript, TypeScript, Ruby and Python (the
+# W3C suite's converters, a binding's adapter), and Markdown's code.
+%w[a.c a.h a.mjs a.ts a.rb conform/__main__.py doc.md].each do |path|
+  check.call("#{path} is checked", AcronymCase.code_file?(path, AcronymCase::ROOT), true)
+end
+check.call('a.txt is not checked', AcronymCase.code_file?('a.txt', AcronymCase::ROOT), false)
+
 # The allow list: a word, optionally only in matching paths.
 allow = [['traceId', 'tinyactors-napi/test/{a.js,b.js}'], ['Os', nil]]
 check.call('allowed in a matching path', AcronymCase.allowed_word?(allow, 'traceId', 'tinyactors-napi/test/a.js'), true)

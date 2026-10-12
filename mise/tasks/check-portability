@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Static analysis of the build scripts (ast-grep): only mise/lib/toolchain/ may depend on the host, so every script answers the same on Linux and macOS"
-#MISE sources=["sgconfig.yml", "mise/ast-grep/**/*", "mise/lib/**/*", "mise/tasks/**/*", "*/mise/lib/**/*", "*/mise/tasks/**/*"]
+#MISE sources=["sgconfig.yml", "mise/ast-grep/**/*", "mise/lib/**/*", "mise/tasks/**/*", "*/mise/lib/**/*", "*/mise/tasks/**/*", "*/mise/*.rb"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 
