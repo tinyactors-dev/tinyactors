@@ -32,6 +32,8 @@
  *                               toPrecision(d) (p); d u for undefined
  *     Q <radix> <bits> <text>   a fixed list of doubles, whatever COUNT is, in every
  *                               radix 2 to 36: x.toString(radix)
+ *     W <x> <y> <x ** y>        a fixed list of pairs, whatever COUNT is: Math.pow(x, y)
+ *                               and x ** y (V8's fdlibm pow, src/math.c)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -690,6 +692,85 @@ static void print_radix_methods(void) {
     }
 }
 
+/* x ** y of a fixed list of pairs, the same lines for any COUNT: every
+ * base of POW_BASES with every exponent of POW_EXPONENTS (specials,
+ * subnormals, the largest and smallest normals, integers small and large,
+ * odd and even, halves, values next to 1, and the thresholds of fdlibm's
+ * pow: |y| over 2^31 and 2^64, 2^53 where every double is an even
+ * integer); then integers to integer powers, 10 and 2 to every power whose
+ * result is between overflow and underflow and a little past both, bases
+ * next to 1 to huge powers, bases at the edges of pow's intervals of x
+ * (sqrt(3/2) and sqrt(3)), and results at the edges of overflow (z = 1024)
+ * and underflow (z = -1075) and in the subnormals. */
+static const double POW_BASES[] = {
+    0.0, -0.0, 1.0 / 0.0, -1.0 / 0.0, 0.0 / 0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 0.5, -0.5,
+    1.5, -1.5, 10.0, -10.0, 0.1, 7.0, 0.25, 1e10, 1e-10, 1e300, -1e300, 1e-300,
+    4.9406564584124654e-324, -4.9406564584124654e-324, 2.2250738585072009e-308,
+    2.2250738585072014e-308, -2.2250738585072014e-308, 1.7976931348623157e308,
+    -1.7976931348623157e308, 1.0000000000000002, 0.9999999999999999, -1.0000000000000002,
+    -0.9999999999999999, 1.0000009536743164, 0.9999990463256836, 1.2247448713915890,
+    1.7320508075688772, 2.718281828459045, 3.141592653589793, -3.141592653589793,
+    123456.789, 65536.0, 4294967296.0, 9007199254740992.0, 0.7, 1.1, 0.9, 100.0, -7.0,
+};
+static const double POW_EXPONENTS[] = {
+    0.0, -0.0, 1.0 / 0.0, -1.0 / 0.0, 0.0 / 0.0, 0.5, -0.5, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0,
+    1.5, -1.5, 0.25, 10.0, -10.0, 0.1, 1.0 / 3.0, 52.0, 53.0, 100.0, -100.0, 1023.0,
+    1024.0, -1022.0, -1074.0, -1075.0, 2147483647.0, 2147483648.0, 2147483649.0,
+    -2147483649.0, 4294967297.0, 4503599627370497.0, 9007199254740991.0, 9007199254740992.0,
+    -9007199254740991.0, 18446744073709551616.0, 36893488147419103232.0,
+    -36893488147419103232.0, 1e300, -1e300, 1.7976931348623157e308, 4.9406564584124654e-324,
+    -4.9406564584124654e-324, 2.5, -2.5, 0.75, 1e-10, 31.0, 1000000.5,
+};
+
+static void print_power(double x, double y) {
+    printf("W %016llx %016llx %016llx\n", (unsigned long long)to_bits(x), (unsigned long long)to_bits(y),
+           (unsigned long long)to_bits(sjs_math_pow(x, y)));
+}
+
+static void print_powers(void) {
+    for (size_t i = 0; i < sizeof POW_BASES / sizeof POW_BASES[0]; i++) {
+        for (size_t k = 0; k < sizeof POW_EXPONENTS / sizeof POW_EXPONENTS[0]; k++) print_power(POW_BASES[i], POW_EXPONENTS[k]);
+    }
+    for (int x = -12; x <= 12; x++) {
+        for (int y = -6; y <= 40; y++) print_power((double)x, (double)y);
+    }
+    for (int y = -330; y <= 312; y++) print_power(10.0, (double)y);
+    for (int y = -1080; y <= 1030; y++) print_power(2.0, (double)y);
+    for (int y = -1080; y <= 1030; y += 7) print_power(-2.0, (double)y + 0.5 * (double)(y % 2));
+    for (int y = -330; y <= 312; y += 11) print_power(-10.0, (double)y);
+    static const double HUGE_EXPONENTS[] = {
+        2147483649.0, -2147483649.0, 4294967296.0, 1e10, -1e10, 1e15, 4503599627370497.0,
+        9007199254740992.0, 18446744073709551616.0, 18446744073709555712.0,
+    };
+    for (uint64_t ulps = 1; ulps <= 1u << 20; ulps *= 2) {
+        for (size_t k = 0; k < sizeof HUGE_EXPONENTS / sizeof HUGE_EXPONENTS[0]; k++) {
+            print_power(from_bits(to_bits(1.0) + ulps), HUGE_EXPONENTS[k]);
+            print_power(from_bits(to_bits(1.0) - ulps), HUGE_EXPONENTS[k]);
+            print_power(-from_bits(to_bits(1.0) + ulps), HUGE_EXPONENTS[k]);
+        }
+    }
+    /* High words at the edges of pow's intervals 0x3988E and 0xBB67A. */
+    static const uint64_t EDGES[] = { 0x3ff3988e00000000ull, 0x3ff3988effffffffull, 0x3ff3988f00000000ull,
+                                      0x3ffbb67900000000ull, 0x3ffbb679ffffffffull, 0x3ffbb67a00000000ull };
+    static const double EDGE_EXPONENTS[] = { 0.5, 3.0, -3.0, 0.1, 1.5, 100.5, -1000.0, 1e-5 };
+    for (size_t i = 0; i < sizeof EDGES / sizeof EDGES[0]; i++) {
+        for (size_t k = 0; k < sizeof EDGE_EXPONENTS / sizeof EDGE_EXPONENTS[0]; k++) {
+            print_power(from_bits(EDGES[i]), EDGE_EXPONENTS[k]);
+            print_power(from_bits(EDGES[i] - 0x0010000000000000ull), EDGE_EXPONENTS[k]); /* the same, halved */
+        }
+    }
+    /* Results next to overflow (z = 1024) and underflow (z = -1075), and
+     * in the subnormals: bases a few units from 2 and 0.5. */
+    static const double EDGE_POWERS[] = { 1023.0, 1024.0, 1023.5, -1022.0, -1073.0, -1074.0, -1074.5, -1075.0, -1076.0 };
+    for (int d = -3; d <= 3; d++) {
+        for (size_t k = 0; k < sizeof EDGE_POWERS / sizeof EDGE_POWERS[0]; k++) {
+            print_power(from_bits(to_bits(2.0) + (uint64_t)(int64_t)d), EDGE_POWERS[k]);
+            print_power(from_bits(to_bits(0.5) + (uint64_t)(int64_t)d), -EDGE_POWERS[k]);
+            print_power(-from_bits(to_bits(2.0) + (uint64_t)(int64_t)d), EDGE_POWERS[k]);
+        }
+    }
+}
+
 static int print(long count) {
     print_formats(count);
     print_decimals(count);
@@ -702,6 +783,7 @@ static int print(long count) {
     print_bigint_texts(count);
     print_digit_methods();
     print_radix_methods();
+    print_powers();
     return 0;
 }
 

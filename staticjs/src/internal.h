@@ -110,6 +110,21 @@ uint32_t sjs_number_format_digits(sjs_number_digits d, char *out);
  * integer digits in radix 2, 1,074 of a fraction, a sign and a point). */
 #define SJS_NUMBER_RADIX_MAX 2200u
 uint32_t sjs_number_format_radix(double value, uint32_t radix, char *out);
+/* A double's bits, and the double of bits (number.c, math.c). */
+typedef union {
+    double d;
+    uint64_t u;
+} sjs_bits64;
+static inline uint64_t sjs_double_bits(double x) {
+    sjs_bits64 b;
+    b.d = x;
+    return b.u;
+}
+static inline double sjs_bits_double(uint64_t u) {
+    sjs_bits64 b;
+    b.u = u;
+    return b.d;
+}
 /* JavaScript's % (truncating remainder, exact). */
 double sjs_number_remainder(double x, double y);
 double sjs_number_trunc(double x);
@@ -137,6 +152,9 @@ uint32_t sjs_number_to_uint32(double x);
 /* Correctly rounded square root; the nearest float32, widened. */
 double sjs_number_sqrt(double x);
 double sjs_number_fround(double x);
+/* Math functions as V8 computes them (math.c, V8's fdlibm): x ** y and
+ * Math.pow(x, y). */
+double sjs_math_pow(double x, double y);
 /* Math.random: V8's generator (number.c), the public sjs_random and the
  * state whose first word gives the next value, which is sjs_random's
  * state stepped back 64 - left times. A state of zeros was never seeded. */
@@ -753,6 +771,7 @@ typedef enum {
     SJS_BUILTIN_MATH_CLZ32,
     SJS_BUILTIN_MATH_IMUL,
     SJS_BUILTIN_MATH_RANDOM,
+    SJS_BUILTIN_MATH_POW,
     SJS_BUILTIN_BIGINT,
     SJS_BUILTIN_BIGINT_AS_INT_N,
     SJS_BUILTIN_BIGINT_AS_UINT_N,

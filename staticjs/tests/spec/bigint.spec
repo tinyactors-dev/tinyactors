@@ -240,7 +240,8 @@ Object.groupBy([1n, 2n, 3n, 4n], x => x === 2n || x === 4n ? 2n : 1n)
 
 === ** of numbers
 2 ** 2
---- fault ** for BigInts only
+--- value
+4
 
 === unary + of a BigInt
 +1n
@@ -264,6 +265,10 @@ Object.groupBy([1n, 2n, 3n, 4n], x => x === 2n || x === 4n ? 2n : 1n)
 
 === a BigInt and a number in **
 2n ** 2
+--- fault mixes a BigInt
+
+=== a number and a BigInt in **
+2 ** 2n
 --- fault mixes a BigInt
 
 === a BigInt and null in %

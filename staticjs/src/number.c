@@ -11,42 +11,25 @@
  * multiply-add, which a compiler may otherwise make of a * b + c. */
 #pragma STDC FP_CONTRACT OFF
 
-typedef union {
-    double d;
-    uint64_t u;
-} bits64;
-
-static uint64_t to_bits(double x) {
-    bits64 b;
-    b.d = x;
-    return b.u;
-}
-
-static double from_bits(uint64_t u) {
-    bits64 b;
-    b.u = u;
-    return b.d;
-}
-
 bool sjs_number_is_nan(double x) {
     return x != x;
 }
 
 bool sjs_number_is_finite(double x) {
-    return ((to_bits(x) >> 52) & 0x7FFu) != 0x7FFu;
+    return ((sjs_double_bits(x) >> 52) & 0x7FFu) != 0x7FFu;
 }
 
 bool sjs_number_is_negative_zero(double x) {
-    return to_bits(x) == 0x8000000000000000ull;
+    return sjs_double_bits(x) == 0x8000000000000000ull;
 }
 
 double sjs_number_trunc(double x) {
-    uint64_t u = to_bits(x);
+    uint64_t u = sjs_double_bits(x);
     int32_t e = (int32_t)((u >> 52) & 0x7FFu) - 1023;
     if (e >= 52) return x;
-    if (e < 0) return from_bits(u & 0x8000000000000000ull);
+    if (e < 0) return sjs_bits_double(u & 0x8000000000000000ull);
     uint64_t fraction = (1ull << (52 - e)) - 1u;
-    return from_bits(u & ~fraction);
+    return sjs_bits_double(u & ~fraction);
 }
 
 double sjs_number_floor(double x) {
@@ -76,14 +59,14 @@ bool sjs_number_is_integer(double x) {
  * with the sign of x.
  */
 double sjs_number_remainder(double x, double y) {
-    uint64_t ux = to_bits(x);
-    uint64_t uy = to_bits(y);
+    uint64_t ux = sjs_double_bits(x);
+    uint64_t uy = sjs_double_bits(y);
     int32_t ex = (int32_t)((ux >> 52) & 0x7FFu);
     int32_t ey = (int32_t)((uy >> 52) & 0x7FFu);
     uint64_t sign = ux & 0x8000000000000000ull;
     if ((uy << 1) == 0 || sjs_number_is_nan(y) || ex == 0x7FF) return (x * y) / (x * y);
     if ((ux << 1) <= (uy << 1)) {
-        if ((ux << 1) == (uy << 1)) return from_bits(sign);
+        if ((ux << 1) == (uy << 1)) return sjs_bits_double(sign);
         return x;
     }
     uint64_t mx;
@@ -113,13 +96,13 @@ double sjs_number_remainder(double x, double y) {
     for (; ex > ey; ex--) {
         if (mx >= my) {
             mx -= my;
-            if (mx == 0) return from_bits(sign);
+            if (mx == 0) return sjs_bits_double(sign);
         }
         mx <<= 1;
     }
     if (mx >= my) {
         mx -= my;
-        if (mx == 0) return from_bits(sign);
+        if (mx == 0) return sjs_bits_double(sign);
     }
     while ((mx >> 52) == 0) {
         mx <<= 1;
@@ -131,7 +114,7 @@ double sjs_number_remainder(double x, double y) {
     } else {
         mx >>= (1 - ex);
     }
-    return from_bits(mx | sign);
+    return sjs_bits_double(mx | sign);
 }
 
 /* ------------------------------------------------------------------------
@@ -240,7 +223,7 @@ static uint32_t bit_length(uint64_t v) {
  * the result is their count; `*point` is n, with value = 0.d1d2... x 10^n.
  */
 static uint32_t shortest_digits(double value, char *digits, int32_t *point) {
-    uint64_t u = to_bits(value);
+    uint64_t u = sjs_double_bits(value);
     uint32_t field = (uint32_t)((u >> 52) & 0x7FFu);
     uint64_t f = u & ((1ull << 52) - 1u);
     int32_t e;
@@ -428,7 +411,7 @@ typedef struct {
 } exact_digits;
 
 static void exact_start(double value, exact_digits *x) {
-    uint64_t u = to_bits(value);
+    uint64_t u = sjs_double_bits(value);
     uint32_t field = (uint32_t)((u >> 52) & 0x7FFu);
     uint64_t f = u & ((1ull << 52) - 1u);
     int32_t e;
@@ -692,8 +675,8 @@ static uint32_t radix_fraction(radix_text *t, double value) {
     double fraction = value - *integer;
     /* Half the distance to the next double (base::Double::NextDouble), at
      * least the smallest double: 0.5 times the smallest rounds to 0. */
-    double delta = 0.5 * (from_bits(to_bits(value) + 1u) - value);
-    double smallest = from_bits(1u);
+    double delta = 0.5 * (sjs_bits_double(sjs_double_bits(value) + 1u) - value);
+    double smallest = sjs_bits_double(1u);
     if (!(delta > smallest)) delta = smallest;
     if (!(fraction >= delta)) return cursor;
     buffer[cursor++] = '.';
@@ -736,7 +719,7 @@ uint32_t sjs_number_format_radix(double value, uint32_t radix, char *out) {
     /* Zeros for the digits under the double's precision, while integer /
      * radix is at least 2^53 (base::Double::Exponent() > 0: a biased
      * exponent over 1075). */
-    while (((to_bits(integer / (double)radix) >> 52) & 0x7FFu) > 1075u) {
+    while (((sjs_double_bits(integer / (double)radix) >> 52) & 0x7FFu) > 1075u) {
         integer /= (double)radix;
         out[--start] = '0';
     }
@@ -789,13 +772,13 @@ static double round_binary(binary_value v) {
     uint64_t rest = drop == 64 ? v.q : v.q & ((1ull << drop) - 1u);
     uint64_t half = 1ull << (drop - 1);
     if (rest > half || (rest == half && (v.sticky || (kept & 1u) != 0))) kept++;
-    if (drop > 11) return from_bits(kept); /* subnormal: 2^52 is the smallest normal */
+    if (drop > 11) return sjs_bits_double(kept); /* subnormal: 2^52 is the smallest normal */
     if (kept == (1ull << 53)) {
         kept >>= 1;
         top++;
         if (top > 1023) return 1.0 / 0.0;
     }
-    return from_bits(((uint64_t)(top + 1023) << 52) | (kept & ((1ull << 52) - 1u)));
+    return sjs_bits_double(((uint64_t)(top + 1023) << 52) | (kept & ((1ull << 52) - 1u)));
 }
 
 static uint32_t big_bits(const big *b) {
@@ -1216,7 +1199,7 @@ double sjs_number_parse_int(sjs_str s, int32_t radix) {
 /* ToUint32: the integer toward zero, modulo 2^32; NaN and the infinities
  * give 0. ToInt32 is the same bits, signed. */
 uint32_t sjs_number_to_uint32(double x) {
-    uint64_t u = to_bits(x);
+    uint64_t u = sjs_double_bits(x);
     uint32_t field = (uint32_t)((u >> 52) & 0x7FFu);
     /* NaN and the infinities; zero, subnormals and anything else under 1. */
     if (field == 0x7FFu || field < 1023u) return 0;
@@ -1381,7 +1364,7 @@ double sjs_random_next(sjs_random_generator *g) {
         g->cursor[0] = g->v8.state[0];
         g->cursor[1] = g->v8.state[1];
     }
-    double x = from_bits((g->cursor[0] >> 12) | UINT64_C(0x3FF0000000000000)) - 1;
+    double x = sjs_bits_double((g->cursor[0] >> 12) | UINT64_C(0x3FF0000000000000)) - 1;
     xorshift128_back(g->cursor);
     g->v8.left--;
     return x;

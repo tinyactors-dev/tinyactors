@@ -35,8 +35,7 @@ This guide links them into procedures. It does not repeat them.
      `diff-node` checks both, and it caught a wrong `syntax` refusal
      (`[0 || 1, 0 ?? 2]`, `38adf25`).
 3. **Leave out what can't be done exactly and cheaply,** with a fault. For
-   example, `**` on numbers faults because V8's `Math.pow` bits can't be
-   promised, and the reviver of `JSON.parse` faults.
+   example, the reviver of `JSON.parse` faults.
 4. **Prefer faulting over a near-match.** A needless fault (refusing what
    JavaScript converts without coercing an object) is a defect too, but a
    lesser one. Check with Node before refusing.
@@ -73,7 +72,6 @@ This guide links them into procedures. It does not repeat them.
    of these has wasted a test run:
    - `===` on two objects;
    - `+` between a string and a number;
-   - `**` on numbers;
    - `Object.is`;
    - an array, a value read through it, and a mutation of it in one
      expression (an alias);
@@ -240,9 +238,48 @@ The examples are BigInt, `Map` and iterators.
 3. **Where JavaScript's specification isn't one IEEE operation,** copy V8's
    algorithm (`Math.hypot`, `parseInt` in other radixes). musl's libm (MIT)
    can be cloned from `git.musl-libc.org`; keep its notice.
-4. **Add a randomized sweep:** `number_test --print N` writes lines that
+   - **What V8 runs for Math.** Node 22 is V8 12.4.254.21. Its Math functions
+     and `**` run `v8::base::ieee754` (`src/base/ieee754.cc`), V8's own
+     port of fdlibm, never the C library: fetch it from
+     `raw.githubusercontent.com/v8/v8/12.4.254.21/src/base/ieee754.cc`.
+     `src/math.c` ports it line for line, with fdlibm's and V8's notices.
+   - **pow.** `Math.pow` (`src/builtins/math.tq`, `MathPowImpl`) and `**`
+     (`Exponentiate` in `src/builtins/number.tq`, the interpreter's and
+     baseline's `Generate_ExponentiateWithFeedback` in
+     `src/ic/binary-op-assembler.cc`) both end in `Float64Pow`, which every
+     tier lowers to a call of `base::ieee754::pow` (`ieee754_pow_function`
+     in `src/codegen/external-reference.cc`); the parser's constant folding
+     (`src/parsing/parser.cc`) and TurboFan's and Turboshaft's
+     (`machine-operator-reducer.cc`, `machine-optimization-reducer.h`) call
+     the same function. 12.4 has a single `pow`: no `legacy::pow`, no
+     `src/numbers/math.cc`, no wrapper. It is fdlibm's `__ieee754_pow` with
+     JavaScript's rules first: `x ** ±0` is 1 even for NaN, NaN in gives
+     NaN, and `±1 ** ±Infinity` is NaN (C's pow gives 1); `y = ±1` gives
+     `x` or `1 / x`, `y = 2` gives `x * x`, and `y = 0.5` with `x >= +0`
+     gives `sqrt(x)` (the correctly rounded instruction); a negative base
+     needs an integer exponent (`yisint`), else NaN; then the log2/exp2
+     algorithm, with `scalbn` (exact: one rounding) for a subnormal result.
+     Optimized code rewrites `x ** 2` to `x * x`, `x ** 0.5` to a square
+     root and `x ** 0` to 1, which give the same values, except that
+     Turboshaft's `x ** 0.5` takes `sqrt(-0)`, -0, where `pow` gives +0;
+     Node's cold code, which diff-node runs, gives +0, as staticjs does.
+     V8 returns a signalling NaN where `src/math.c` returns a quiet one,
+     which nothing in staticjs can tell apart.
+   - **No glibc.** V8 can take `sin` and `cos` from glibc
+     (`third_party/glibc`, `V8_USE_LIBM_TRIG_FUNCTIONS`, flag
+     `--use-libm-trig-functions`), but Node 22's build does not: `node
+     --v8-options` has no such flag, so `sin` and `cos` are fdlibm's too
+     (`fdlibm_sin`, `fdlibm_cos`, in the same file).
+4. **Add a sweep:** `number_test --print N` writes lines that
    `diff-node` compares with Node on every test run. Use 100,000 cases per
-   function, and run a million once before committing.
+   function, or for a Math function a fixed list of at most 10,000 inputs
+   (tag W for `pow`: specials, the thresholds of fdlibm's ranges, integers,
+   halves), and run a million once before committing. `pow`'s million
+   pairs (seeded: random bits, moderate magnitudes, integers, results next
+   to overflow and underflow, bases next to 1 to huge powers, subnormal
+   bases, special exponents, negative bases) agreed bit for bit, on
+   x86_64 and on wasm32 (the same source built with `zig cc -target
+   wasm32-freestanding` and run in Node).
 
 ## To verify a change
 
