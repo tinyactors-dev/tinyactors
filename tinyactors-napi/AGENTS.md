@@ -66,6 +66,34 @@ macOS: at least 8 on each. So `malloc` meets what core asks, and the
 addon's `alloc` need not align by hand (an `assert(align <= 8)` states
 the contract).
 
+## The binding's memory
+
+The addon allocates almost nothing, so allocations and frees pair by
+construction (bindings.md, section 6, "The binding allocates almost
+nothing"):
+
+- **Borrow where Node-API gives a view.** Bytes come from a `Uint8Array`
+  or `ArrayBuffer` with `napi_get_typedarray_info` /
+  `napi_get_arraybuffer_info`, a view for the call's duration: core
+  copies what it keeps. System variables and a chart's states are read
+  from core when it supplies them, never copied.
+- **One text buffer per host.** Node-API cannot give UTF-8 without
+  copying, so every string a call or an expression passes to core is
+  converted into one buffer the host owns, reused by every call and
+  grown rarely (doubling); never a `malloc` per string. A string that
+  must outlive the call is kept as a JavaScript value, not as C memory.
+- **Hold, don't copy.** The image bytes the compiler writes stay in an
+  `ArrayBuffer` the `Host` references (a `napi_ref`) until
+  `TA_HOST_EFFECT_SEGMENT_FREED`.
+- **Rows, not allocations.** A session (its scope), a chart (its compiled
+  functions) and a payload are rows of the handle tables
+  (`src/datamodel/handles.c`), grown by doubling, slots reused, freed
+  once in the host's free path.
+- **Where:** `malloc`, `calloc`, `realloc` and `free` are called only in
+  `src/datamodel/handles.c` and in `src/host.c`'s create, free, the text
+  buffer and the host's allocator; nothing per call, per event or per
+  evaluation. The lint rule `allocation-in-tables-and-host` checks it.
+
 ## C rules
 
 - **At most three parameters** for every C function this addon defines or

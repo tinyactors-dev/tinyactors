@@ -60,6 +60,30 @@ meets what core asks, and the binding's `alloc` need not align by hand
 application installs with `PyMem_SetAllocator` is not covered by the
 spike (unverified).
 
+## The binding's memory
+
+The binding allocates almost nothing, so allocations and frees pair by
+construction (bindings.md, section 6, "The binding allocates almost
+nothing"):
+
+- **Borrow.** A string goes to core as the `str` object's own UTF-8
+  (`PyUnicode_AsUTF8AndSize`, valid while the object lives), bytes through
+  the buffer protocol, for the call's duration: core copies what it
+  keeps. A string the datamodel hands back to core stays in a Python
+  object the session holds. System variables and a chart's states are
+  read from core when it supplies them, never copied.
+- **Hold, don't copy.** The image bytes the compiler writes stay in a
+  Python `bytes` object the `Host` references until
+  `TA_HOST_EFFECT_SEGMENT_FREED`.
+- **Rows, not allocations.** A session (its globals dict), a chart (its
+  code objects) and a payload are rows of the handle tables
+  (`src/datamodel/handles.c`), grown by doubling, slots reused, freed
+  once in `ta_host_free`'s path.
+- **Where:** `PyMem_Raw*` is called only in `src/datamodel/handles.c` and
+  in `src/host.c`'s create, free and the host's allocator; nothing per
+  call, per event or per evaluation. The lint rule
+  `allocation-in-tables-and-host` checks it.
+
 ## C rules
 
 - **At most three parameters** for every C function this binding defines
