@@ -27,6 +27,11 @@ CpuType        mise/lib/c_release/build.rb                               # llvm-
 getElementById tinyactors-core/{examples,web}/**/*                     # DOM API
 pointerId      tinyactors-core/examples/ui-elements/**/*               # DOM PointerEvent field
 
+# The Temporal API's names (PlainDate's calendarId, Temporal.Now.timeZoneId),
+# which staticjs implements.
+calendarId     staticjs/**/*                                             # Temporal API getter
+timeZoneId     staticjs/**/*                                             # Temporal API function
+
 # C's <inttypes.h> format macro.
 PRId64         tinyactors-core/**/*.c                                  # <inttypes.h>
 

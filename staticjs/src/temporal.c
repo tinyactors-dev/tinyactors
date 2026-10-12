@@ -3384,7 +3384,7 @@ static sjs_result time_zone_option(sjs_vm *vm, sjs_value options, time_zone *out
  * clock"), read and nothing else; a clock never set faults.
  */
 
-/* instant(), the time zone's ID ("UTC": the host's time zone is UTC), and
+/* instant(), timeZoneId() ("UTC": the host's time zone is UTC), and
  * plainDateISO(timeZone), plainDateTimeISO and plainTimeISO: the clock's
  * date and time at the time zone, read as toString's timeZone (undefined
  * is UTC). zonedDateTimeISO faults: there is no ZonedDateTime. */
