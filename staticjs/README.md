@@ -234,7 +234,11 @@ Built-ins:
 **Owned mutation.** A method that changes its receiver may be called on a
 variable that the function owns: a parameter or a `const` of the function,
 never captured by an arrow function, and never copied, passed or stored
-before the call. Such a call, or a chain of them (`s.add(1).add(2)`), may
+before the call. `add`, a set's method and a Temporal value's (which
+changes nothing), is checked when it runs instead: a Temporal value's
+works on any receiver but a chain through a path, and a set's faults
+unless the call is on a variable of the function that is the set's one
+holder (docs/mutation.md, "Shared names"). Such a call, or a chain of them (`s.add(1).add(2)`), may
 also be a statement. So may an assignment to a property or an element of
 such a variable, as deep as it goes (`acc[r.id] = r.kwh`, `o.a[i].n += 1`,
 `o.k ??= []`, `o.n++`), with JavaScript's evaluation order, and to a `let`
@@ -620,7 +624,8 @@ labels, function and class declarations, and expression statements, which
 can have no effect, are unsupported, but for a call that changes a variable
 the function owns and an assignment (and the mutation of a variable the function does not
 own, or that was captured, copied, passed or stored before it, is
-unsupported too: docs/mutation.md); `break` and `continue` are syntax
+unsupported too, but for `add` on a variable of the function, which is
+checked when it runs: docs/mutation.md); `break` and `continue` are syntax
 errors, as staticjs has no loop for them to leave, but for `break name`
 inside the label `name`, which is unsupported with it. A label inside one
 of the same name is a syntax error, as in JavaScript. A declaration
