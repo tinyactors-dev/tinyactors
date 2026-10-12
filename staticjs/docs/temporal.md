@@ -99,12 +99,15 @@ Which types have a method or a getter is `temporal.c`'s to say:
   of `Object.prototype`; any other call faults.
 
 `add` is also a set's method that changes its receiver, so `d.add(...)` on
-a variable the function owns compiles to `MUTATE`, which hands the call
-to `call()` with the variable's slot reference as its receiver (`mutate()`
-in `vm.c`). `sjs_temporal_method` faults on any receiver that is not a
-Temporal value, so the worker who builds `add` must make `mutate()` pass
-the variable's value as the receiver of a method that does not change it
-(a `MUTATION` hunk, with its case in `mutation.spec`).
+a variable the function owns compiles to `MUTATE` (docs/mutation.md), and
+`mutate()` in `vm.c` calls a method that changes nothing, as a Temporal
+value's `add`, with the variable's value as an ordinary call's receiver
+(its cases are in `mutation.spec`). The compiler cannot tell a Temporal
+value from a set by its name, so the rules of a mutation still apply at
+compile time: `d.add(x)` is refused where `d` was copied before or an
+arrow function captures it (`[1, 2].map(n => d.add({ days: n }))`), and
+`d.add(x).add(y)` faults; `d.add(x)` on any other expression, a path
+(`o.d.add(x)`) or a parameter is an ordinary call.
 
 A method ID is a byte (`sjs_name.methods`); `internal.h` asserts that the
 last fits. `SJS_METHOD_FIRST` is 96, so functions have IDs below it.

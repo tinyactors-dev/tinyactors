@@ -150,7 +150,12 @@ holds. So the evaluator checks every mutation when it runs:
   is the call's, with the variable left as it was. `MUTATE` then skips the
   `SORTED` after it, which has no sorted array to put back: it once stored
   the property's result in the variable, which gave `o.sort(f)` the value
-  `5` for `o` and leaked the object. A `SORTED` with CHAIN faults instead,
+  `5` for `o` and leaked the object. So is a method of the name that
+  changes nothing, a Temporal value's `add`, which makes a new value
+  (docs/temporal.md): `MUTATE` puts the variable's value in place of the
+  reference, as an ordinary call's receiver. The compiler cannot tell such
+  a value from a set, so its rules above still refuse a copy or a capture
+  of the variable (`xs.map(n => d.add(...))`), and a chain faults. A `SORTED` with CHAIN faults instead,
   as any chain through such a receiver does (below). A path call faults on
   a sort of one ("Methods through a path"), where the container's place,
   not a slot, would take it back; a variable's ordinary call costs only the

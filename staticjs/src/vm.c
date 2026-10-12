@@ -1726,10 +1726,12 @@ __attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t 
     bool chain = (flags & SJS_CALL_CHAIN) != 0;
     sjs_value f = vm->stack[callee];
     if (f.internal != SJS_INTERNAL_METHOD || f.boolean < SJS_METHOD_MUTATION_FIRST) {
-        /* An object's property, called as any method is: the variable keeps
-         * its value. A sort's SORTED, next, would put the call's result in
-         * the variable, so it is skipped; with CHAIN it would hand a
-         * reference to the next method, which the property's result is not. */
+        /* An object's property, or a method of the name that changes no
+         * value (a Temporal value's add), called as any method is: the
+         * variable keeps its value. A sort's SORTED, next, would put the
+         * call's result in the variable, so it is skipped; with CHAIN it
+         * would hand a reference to the next method, which the property's
+         * result is not. */
         vm_frame *frame = &vm->frames[vm->frame_count - 1u];
         const uint8_t *next = frame->program->code + frame->pc;
         if (*next == SJS_OP_SORTED) {
@@ -1740,6 +1742,12 @@ __attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t 
             sjs_vm_fault(vm, "a chain of methods that change their receiver goes on only through an array, a set or a map"); /* MUTATION: a map */
             return false;
         }
+        /* MUTATION: the receiver is the variable's value, as in any method
+         * call (a Temporal value's add makes a new value): the reference
+         * becomes a holder of it, which the call releases. */
+        sjs_value receiver = vm->stack[at];
+        sjs_ref(receiver);
+        vm->stack[callee - 1u] = receiver;
         return call(vm, argc, SJS_CALL_METHOD);
     }
     sjs_value *slot = &vm->stack[at];

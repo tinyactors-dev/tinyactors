@@ -424,6 +424,57 @@ Object.entries([1, 2, 3, 4].reduce((acc, x) => { const k = x % 2 ? "odd" : "even
 (() => { const o = {add: x => x}; return o.add(1).add(2); })()
 --- fault chain
 
+# A Temporal value's add shares its name with a set's, so on a variable it
+# compiles as a mutation, and runs as an ordinary call on the variable's
+# value, which it does not change (docs/temporal.md). The compiler cannot
+# tell a Temporal value from a set: a copy or a capture of the variable is
+# refused as for a set, and a chain faults when it runs.
+=== a Temporal value's add on a variable makes a new value
+(() => { const d = Temporal.Duration.from("PT1H"); return d.add({ minutes: 30 }); })()
+--- value
+Temporal.Duration.from("PT1H30M")
+
+=== a Temporal value's add leaves the variable as it was
+(() => { const d = Temporal.Duration.from("PT1H"); const e = d.add("PT1H"); return [d, e]; })()
+--- value
+[Temporal.Duration.from("PT1H"),Temporal.Duration.from("PT2H")]
+
+=== a Temporal value's add as a statement
+(() => { const d = Temporal.Duration.from("PT1H"); d.add("PT1H"); return d; })()
+--- value
+Temporal.Duration.from("PT1H")
+
+=== a Temporal value's add on a parameter its caller holds
+[Temporal.Duration.from("PT1H")].map(d => d.add("PT1H"))
+--- value
+[Temporal.Duration.from("PT2H")]
+
+=== a Temporal value's add on a let
+(() => { let d = Temporal.Duration.from("PT1H"); d = d.add("PT2H"); return d; })()
+--- value
+Temporal.Duration.from("PT3H")
+
+=== a Temporal value's add that faults
+(() => { const d = Temporal.Duration.from("P1M"); return d.add("PT1H"); })()
+--- fault adding Durations with years
+
+=== a chain of a Temporal value's add, deliberate
+(() => { const d = Temporal.Duration.from("PT1H"); return d.add("PT1H").add("PT1H"); })()
+--- fault chain
+
+=== a Temporal value's add after a copy, deliberate
+(() => { const d = Temporal.Duration.from("PT1H"); const e = d; return d.add(e); })()
+--- error unsupported copied
+
+=== a Temporal value's add on a captured variable, deliberate
+(() => { const d = Temporal.Duration.from("PT1H"); return [1, 2].map(n => d.add({ hours: n })); })()
+--- error unsupported captured
+
+=== a Temporal value's add through a path
+(() => { const o = { d: Temporal.Duration.from("PT1H") }; return o.d.add("PT1H"); })()
+--- value
+Temporal.Duration.from("PT2H")
+
 === a mutation in a module
 @module mutated
 const xs = [1];
