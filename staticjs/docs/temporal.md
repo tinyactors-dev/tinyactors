@@ -266,7 +266,7 @@ days from the constrained date), `add_date` its CalendarDateAdd (the year
 and month balanced, the day constrained or rejected, then weeks and days,
 within the limits), and `difference_iso` DifferenceISODateTime (a day
 borrowed when the time runs against the date). `round_relative` is the
-2024 revision's RoundRelativeDuration: `nudge_calendar`
+specification's RoundRelativeDuration: `nudge_calendar`
 (NudgeToCalendarUnit: the span from the smallest unit truncated to its
 increment to the next multiple, where the destination falls, which
 rounds, and whose fraction is the `total`), `nudge_time`
@@ -274,15 +274,24 @@ rounds, and whose fraction is the `total`), `nudge_time`
 (BubbleRelativeDuration: a rounding that reached the end of a larger unit
 carries into it).
 
-temporal-polyfill computes the same differently, and the polyfills give
-different values in two places, which no case tests (temporal_test leaves
-them out, `DIFFERING`): counting months from the end of a month across a
-shorter one (from January 31, 2024 to March 1 at 01:30, or a Duration
-of a month and 12 hours from it, is a month and some days in
-temporal-polyfill, less than a month in the specification), and a
-`total` in months or years whose last bit temporal-polyfill's
-floating-point division rounds differently. staticjs follows the
-specification (and @js-temporal/polyfill).
+The polyfills give different values in two places. Counting months from
+the end of a month across a shorter one (from January 31, 2024 to March 1
+at 01:30, or a Duration of a month and 12 hours from it): the destination
+then lies past the window from the truncated count to the next multiple,
+and the current specification (ComputeNudgeWindow's `additionalShift`)
+moves the window on by an increment, as temporal-polyfill and the
+reference polyfill of tc39/proposal-temporal do; @js-temporal/polyfill
+follows the older text, which rounds such a destination to the window's
+start (a `trunc` of P1MT12H in months from 2024-01-31 gave PT0S). The
+reference polyfill also carries the shifted result into a larger unit
+where temporal-polyfill does not, so the specification is not settled
+there. `nudge_calendar` faults whenever the destination is outside the
+window, rather than give any of these values; where the shifted window
+gives the same value in both polyfills that fault is needless, and
+accepted. A `total` in months or years whose last bit temporal-polyfill's
+floating-point division rounds differently: staticjs gives the
+specification's exact ratio (and @js-temporal/polyfill's). No case tests
+either (temporal_test leaves them out, `DIFFERING`).
 
 ## add, subtract, until and since
 

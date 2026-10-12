@@ -577,3 +577,9 @@ export const later = d.round("day");
 === a static PlainDateTime does not have
 Temporal.PlainDateTime.prototype
 --- error unsupported does not have this built-in
+
+# The specification moves the rounding window on here (P1M); the older text,
+# which @js-temporal/polyfill follows, gives PT0S. staticjs faults.
+=== until rounded to months from a month's end into a shorter month, deliberate
+Temporal.PlainDateTime.from("2024-01-30T00:00").until("2024-02-29T01:30", { largestUnit: "year", smallestUnit: "month" })
+--- fault the specification moves the window on

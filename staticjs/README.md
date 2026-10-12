@@ -430,7 +430,8 @@ as a date, as `"2021-12"` does, needs its `T`), a property bag (`year`,
 (`Temporal.Duration.from("P1Y2M")`) is exact to its limit of 2^53
 seconds; it reads ISO 8601 durations (`PT1.5H`), and its `round`, `total`
 and `compare` count years, months and weeks from a `relativeTo` date, as
-the specification's 2024 revision rounds. `add` and `subtract` of a date
+the specification rounds (a destination past the rounding window, from a
+month's end into a shorter month, faults). `add` and `subtract` of a date
 add years and months, the day constrained to the month (`2024-01-31`
 plus `P1M` is `2024-02-29`) or, with `overflow: "reject"`, refused, then
 weeks and days; `until` and `since` give a Duration in the type's units,
