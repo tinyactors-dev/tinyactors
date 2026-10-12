@@ -185,11 +185,20 @@ Progress:
   cases and fails 10, all of them cases the request to core names (9 of
   requests.txt, config.txt "not CBOR"); it joins the gate when the runner
   skips them.
-- Step 6: this commit. The native datamodel passes what quickjs passes,
+- Step 6: `e298a2d3`; the tick rate from `host.config` (the request to
+  core answered): `b47b22f2`. The native datamodel passes what quickjs passes,
   under node and bun: the scenarios 4 of 4 and the protocol vectors 112
   of 122, the 10 left being the request to core's. The gate holds the
   scenarios on both datamodels. Decisions: `docs/decisions.md`, "The
   native datamodel".
+- Step 7: this commit. `test/rules.test.mjs` has a test for each rule
+  (`test/load.test.mjs` the per-environment state, `test/values.test.mjs`
+  the value table's). The timer's test found a crash under bun, fixed in
+  the commit before this one: a Host no JavaScript referenced was
+  collected under a pending `setTimeout`. The handle-scope test measures
+  memory within one run: a spike without the scopes grew 192 MB (node)
+  and 308 MB (bun) over 1,000,000 evaluations, against 26 and 48 MB with
+  them.
 
 ## Later milestones
 
