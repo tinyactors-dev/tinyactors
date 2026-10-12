@@ -103,7 +103,74 @@ pitfalls, before changing this copy.
 ### Plan and progress
 
 The session writes its plan here as a list of steps, each with the commit
-that finished it, and keeps it current. Empty until the session starts.
+that finished it, and keeps it current.
+
+Each step is one or more commits that build and pass `mise run test`
+here. The order gets the suite's gate live early: an adapter answering
+the protocol vectors on quickjs under node and bun (step 5) comes before
+the native datamodel (step 6). Until step 6, the conform task runs the
+datamodels the addon has (`DATAMODELS` in `mise/napi.rb`, quickjs only);
+step 6 adds `native` there, and from then on both must pass. Every API
+item gets its `docs/api-map.md` row in the commit that adds it.
+
+1. **The plan** (this list). Decided before it, by a spike
+   (2026-10-12, node 22.23.2 and bun 1.4.1, an addon built with the
+   pinned clang): `napi_set_instance_data`, `napi_get_instance_data` and
+   `napi_type_tag_object` work in both runtimes, and each worker thread
+   gets instance data of its own, so per-environment state needs no
+   global. Recorded with its evidence in `docs/decisions.md` in step 2.
+2. **The addon builds and loads.** `mise run build` compiles core's
+   amalgamation (`tinyactors.c`, `tinyactors_runtime.c` with its hosted
+   file, `tinyactors_datamodel_ecmascript.c`) and `src/` into
+   `build/tinyactors.node` with `Toolchain::Target.host` and `#plugin`;
+   `module.c` keeps its state in the environment's instance data;
+   `index.mjs` loads the addon and re-exports it. A test loads it under
+   node and bun, in the main thread and a worker.
+3. **`encode` and `decode`** (`src/values.c`): the value table of
+   `docs/values.md`, both ways, with the UTF-8, integer and depth checks;
+   the decode error type decided (reasoned analysis) and written in
+   `docs/values.md`. Tests: every row of `docs/values.md`, and
+   `values.txt`'s `ecmascript` lines through `encode` (the known limit:
+   the vectors alone cannot catch a row mapped wrong both ways).
+4. **`Host` on quickjs**, in small commits:
+   - (a) `new Host(options)`: the config from a JavaScript value
+     (`ta_host_create`), refused with `TinyactorsError` (code, reason,
+     path); `request(method, params)` (`ta_host_request`);
+     `close()` (`ta_host_free`); type tags on the wrapped object;
+   - (b) charts: `compile` (`ta_compile_charts`, `ta_compile_image`),
+     `addImage`, `boot`, `spawn`, `send`, `sendMany`, `terminate`; the
+     loop on the runtime's event loop (one `setTimeout`, ref'd while a
+     deadline is pending) with every run status; `LOG`, `DONE`, `ERROR`
+     to the application's handlers; `SimulatedClock` with
+     `increment(ms)`;
+   - (c) peers: `addPeer` (`ta_host_peer_add`), `deliver`
+     (`ta_host_envelope_read`, `ta_host_deliver`), and `PEER` and
+     `PEER_ERROR` effects as envelope bytes (`ta_host_envelope`).
+   The API's open shapes (options, handlers, errors, ids as `BigInt`)
+   are decided by reasoned analysis and recorded in `docs/decisions.md`.
+5. **The adapter** (`conform.mjs`): every method a binding must offer,
+   over the public API, framed with `encode` and `decode`; the M1 set on
+   quickjs under node and bun in `mise run test`. A vector the public
+   API cannot express goes to "Requests to core" below, committed alone.
+6. **The native `"ecmascript"` datamodel** (`src/datamodel/`): the two
+   slot tables with generations (`handles.c`), expressions compiled once
+   per chart as strict functions inside `with (scope)` (`expressions.c`),
+   and the vtable (`datamodel.c`): `<data>`, `cond`, `assign` with
+   quickjs's location check, `<script>`, `_event`, `In()`, `<send>` with
+   params (captures copied through the value table), `<foreach>`,
+   `to_wire`/`from_wire`, `variable`; one handle scope per entry; the
+   last drop of a payload deferred until the outer call into core
+   returns. `native` joins `DATAMODELS`: the M1 set passes on both.
+7. **The rules the suite cannot see** (AGENTS.md), each with a test of
+   its own in `test/`, where steps 2 to 6 did not already add it.
+8. **M1 done**: README (trusted chart code, nesting 64, liveness on
+   each runtime), `index.d.ts` complete, `docs/api-map.md`'s core
+   functions no item uses, `docs/values.md`'s TODO answered; "M1 done
+   means" checked item by item, then the report.
+
+Progress:
+
+- Step 1: this commit.
 
 ## Later milestones
 
