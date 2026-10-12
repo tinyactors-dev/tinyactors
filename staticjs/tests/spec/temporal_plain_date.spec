@@ -750,3 +750,94 @@ Temporal.ZonedDateTime.from("2024-01-31T10:00[UTC]")
 === a name Temporal.Now does not have
 Temporal.Now.plainDate("iso8601")
 --- error unsupported does not have this built-in
+
+# --- Reviewer's cases: Temporal values through callbacks, accumulators and
+# copies (values from temporal-polyfill 1.0.5, the same in
+# @js-temporal/polyfill 0.5.1 and the proposal's reference polyfill)
+
+=== a PlainDate as reduce's accumulator, add each step
+[1, 2, 3].reduce((acc, n) => acc.add({ days: n }), Temporal.PlainDate.from("2024-01-31"))
+--- value
+Temporal.PlainDate.from("2024-02-06")
+
+=== a month added to an accumulator constrains at each step
+[1, 1, 1].reduce((acc, n) => acc.add({ months: n }), Temporal.PlainDate.from("2024-01-31"))
+--- value
+Temporal.PlainDate.from("2024-04-29")
+
+=== add on a const kept, its result a new value
+(() => { const d = Temporal.PlainDate.from("2024-01-31"); const e = d.add({ months: 1 }); return [d, e]; })()
+--- value
+[Temporal.PlainDate.from("2024-01-31"),Temporal.PlainDate.from("2024-02-29")]
+
+=== add as a statement on an owned variable changes nothing
+(() => { let d = Temporal.PlainDate.from("2024-01-31"); d.add({ months: 1 }); return d; })()
+--- value
+Temporal.PlainDate.from("2024-01-31")
+
+=== add's result assigned back to the variable
+(() => { let d = Temporal.PlainDate.from("2024-01-31"); d = d.add({ months: 1 }); return d; })()
+--- value
+Temporal.PlainDate.from("2024-02-29")
+
+=== add on a parameter
+(d => [d.add({ days: 1 }), d])(Temporal.PlainDate.from("2024-02-28"))
+--- value
+[Temporal.PlainDate.from("2024-02-29"),Temporal.PlainDate.from("2024-02-28")]
+
+=== map builds a PlainDate in its callback, then adds
+[1, 2, 3].map(n => Temporal.PlainDate.from("2024-02-27").add({ days: n }))
+--- value
+[Temporal.PlainDate.from("2024-02-28"),Temporal.PlainDate.from("2024-02-29"),Temporal.PlainDate.from("2024-03-01")]
+
+=== filter and map over PlainDates
+[Temporal.PlainDate.from("2024-03-01"), Temporal.PlainDate.from("2024-01-01"), Temporal.PlainDate.from("2023-12-31")].filter(d => d.year === 2024).map(d => d.toString())
+--- value
+["2024-03-01","2024-01-01"]
+
+=== find with equals
+[Temporal.PlainDate.from("2024-03-01"), Temporal.PlainDate.from("2024-01-01")].find(d => d.equals("2024-01-01"))
+--- value
+Temporal.PlainDate.from("2024-01-01")
+
+=== a Temporal value in a map, read back and added to
+(() => { const m = new Map(); m.set("k", Temporal.PlainDate.from("2024-02-29")); return m.get("k").add({ years: 1 }); })()
+--- value
+Temporal.PlainDate.from("2025-02-28")
+
+=== a Temporal value at a path of an object, added to
+(() => { const o = { d: Temporal.PlainDate.from("2024-01-31") }; return o.d.add({ days: 1 }); })()
+--- value
+Temporal.PlainDate.from("2024-02-01")
+
+=== JSON.stringify of each type in an array
+JSON.stringify([Temporal.PlainDate.from("2024-01-01"), Temporal.Duration.from("P1D"), Temporal.PlainTime.from("12:00"), Temporal.Instant.from("2024-01-01T00:00Z")])
+--- value
+"[\"2024-01-01\",\"P1D\",\"12:00:00\",\"2024-01-01T00:00:00Z\"]"
+
+=== JSON.stringify with an array replacer keeps the ISO string
+JSON.stringify({ a: Temporal.PlainDate.from("2024-01-01"), b: 1 }, ["a"])
+--- value
+"{\"a\":\"2024-01-01\"}"
+
+=== a bag with era and eraYear in the ISO calendar
+Temporal.PlainDate.from({ year: 2024, month: 1, day: 1, era: "ce", eraYear: 2024 })
+--- value
+Temporal.PlainDate.from("2024-01-01")
+
+=== a negative year's leap day rejected
+Temporal.PlainDate.from({ year: -1, month: 2, day: 29 }, { overflow: "reject" })
+--- fault
+
+=== year 0 is a leap year
+Temporal.PlainDate.from({ year: 0, month: 2, day: 29 }, { overflow: "reject" })
+--- value
+Temporal.PlainDate.from("0000-02-29")
+
+=== a monthCode with month that disagrees
+Temporal.PlainDate.from({ year: 2024, monthCode: "M02", month: 3, day: 1 })
+--- fault
+
+=== a lowercase monthCode
+Temporal.PlainDate.from({ year: 2024, monthCode: "m01", day: 1 })
+--- fault
