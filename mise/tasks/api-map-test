@@ -1,0 +1,51 @@
+#!/usr/bin/env ruby
+#MISE description="Self-test for the bindings' mapping-table check (mise/lib/api_map.rb): tables it must accept and ones it must refuse, against core's API descriptions and requests.md"
+# vim:ft=ruby
+
+require 'api_map'
+
+failures = []
+check = lambda do |description, actual, expected|
+  failures << "#{description}: expected #{expected.inspect}, got #{actual.inspect}" unless actual == expected
+end
+
+known = APIMap.known
+check.call('a core function is known', known.include?('ta_host_send'), true)
+check.call('an effect is known', known.include?('TA_EFFECT_LOG'), true)
+check.call('a host effect is known', known.include?('TA_HOST_EFFECT_PEER'), true)
+check.call('a request method is known', known.include?('actor.context'), true)
+check.call('both methods of a heading are known', known.include?('actor.unsubscribe'), true)
+check.call('a heading outside "Methods" is no method', known.include?('What belongs here'), false)
+
+table = lambda do |*rows|
+  ['# Mapping', '', '| API item | Core | Notes |', '|---|---|---|', *rows, '', 'After the table.'].join("\n")
+end
+
+check.call('an empty table passes', APIMap.problems(table.call, known), [])
+check.call('rows naming core pass',
+           APIMap.problems(table.call('| `Host.send(to, event, data)` | `ta_host_send` | |',
+                                      '| `SimulatedClock.increment(ms)` | `ta_host_advance_time`, `ta_host_run` | the turn |',
+                                      '| `Host.context(actor)` | `actor.context` | a request |',
+                                      '| `on("log")` | `TA_EFFECT_LOG` | |'), known), [])
+check.call('no table',
+           APIMap.problems("# Mapping\n\nNothing yet.\n", known),
+           ['no mapping table: a table whose header row begins "| API item | Core |"'])
+check.call('a row naming nothing',
+           APIMap.problems(table.call('| `Host.retry()` | the binding retries | |'), known),
+           ['line 5: `Host.retry()` names nothing in core in backticks'])
+check.call('a row naming what core does not have',
+           APIMap.problems(table.call('| `Host.retry()` | `ta_host_retry` | |'), known),
+           ['line 5: `Host.retry()`: `ta_host_retry` is no function, constant or request method of core'])
+check.call('a method core does not have',
+           APIMap.problems(table.call('| `Host.ping()` | `host.ping` | |'), known),
+           ['line 5: `Host.ping()`: `host.ping` is no function, constant or request method of core'])
+check.call('a row without an item',
+           APIMap.problems(table.call('|  | `ta_host_send` | |'), known),
+           ['line 5: the row has no API item'])
+
+if failures.empty?
+  puts 'api-map-test passed'
+else
+  failures.each { |failure| puts "api-map-test: #{failure}" }
+  exit 1
+end

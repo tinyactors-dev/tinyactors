@@ -20,6 +20,9 @@ flags = ->(*extra) { [*(all ? ['--force'] : []), 'test', *extra] }
 steps = [
   ['acronyms', %w[mise run check-acronyms-test], root],
   ['acronyms', %w[mise run check-acronyms], root],
+  # The bindings' mapping-table check (mise/lib/api_map.rb), which each
+  # binding's lint runs on its docs/api-map.md.
+  ['api-map', %w[mise run api-map-test], root],
   # The changelog tooling the release tasks depend on (docs/adr/0002-changelogs.md).
   ['changelog', %w[mise run changelog:test], root],
   # The build scripts leave what differs between hosts to mise/lib/toolchain/,
