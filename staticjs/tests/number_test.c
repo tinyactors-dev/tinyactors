@@ -36,6 +36,7 @@
  *                               and x ** y (V8's fdlibm pow, src/math.c)
  *     U <name> <x> <f(x)>       a fixed list of doubles, whatever COUNT is, through each
  *                               one-argument Math function of src/math.c: Math[name](x)
+ *     V <y> <x> <atan2(y, x)>   a fixed list of pairs, whatever COUNT is: Math.atan2(y, x)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -796,7 +797,12 @@ static const uint64_t UNARY_EDGES[] = {
     0x4340000000000000ull, 0x3FDA827999FCEF32ull, 0x3FD2BEC333018866ull, 0x4005BF0A8B145769ull,
 };
 
-static const char *const UNARY_NAMES[] = { "exp", "expm1", "log", "log1p", "log2", "log10" };
+/* The exp and log family first (EXP_LOG_COUNT of them), then the
+ * trigonometric functions, each group given its own list. */
+static const char *const UNARY_NAMES[] = {
+    "exp", "expm1", "log", "log1p", "log2", "log10", "sin", "cos", "tan", "asin", "acos", "atan",
+};
+#define EXP_LOG_COUNT 6
 
 static double unary(size_t f, double x) {
     switch (f) {
@@ -805,15 +811,29 @@ static double unary(size_t f, double x) {
     case 2: return sjs_math_log(x);
     case 3: return sjs_math_log1p(x);
     case 4: return sjs_math_log2(x);
-    default: return sjs_math_log10(x);
+    case 5: return sjs_math_log10(x);
+    case 6: return sjs_math_sin(x);
+    case 7: return sjs_math_cos(x);
+    case 8: return sjs_math_tan(x);
+    case 9: return sjs_math_asin(x);
+    case 10: return sjs_math_acos(x);
+    default: return sjs_math_atan(x);
+    }
+}
+
+static void print_unary_range(size_t first, size_t end, double x) {
+    for (size_t f = first; f < end; f++) {
+        printf("U %s %016llx %016llx\n", UNARY_NAMES[f], (unsigned long long)to_bits(x),
+               (unsigned long long)to_bits(unary(f, x)));
     }
 }
 
 static void print_unary_input(double x) {
-    for (size_t f = 0; f < sizeof UNARY_NAMES / sizeof UNARY_NAMES[0]; f++) {
-        printf("U %s %016llx %016llx\n", UNARY_NAMES[f], (unsigned long long)to_bits(x),
-               (unsigned long long)to_bits(unary(f, x)));
-    }
+    print_unary_range(0, EXP_LOG_COUNT, x);
+}
+
+static void print_trig_input(double x) {
+    print_unary_range(EXP_LOG_COUNT, sizeof UNARY_NAMES / sizeof UNARY_NAMES[0], x);
 }
 
 static void print_unary(void) {
@@ -854,6 +874,169 @@ static void print_unary(void) {
     for (int k = -1080; k <= 1030; k++) print_unary_input((double)k * 0.6931471805599453);
 }
 
+/* Math.sin, cos, tan, asin, acos and atan of a fixed list of doubles, the
+ * same lines for any COUNT, each function given every input (8,693 each):
+ * specials; the thresholds of fdlibm's ranges (high words, low word 0)
+ * and 4 units either side, of either sign: rem_pio2's pi/4, 3pi/4, pi/2
+ * and 2^19 pi/2, the kernels' 2^-27, 2^-28, 0.3, 0.78125 and 0.6744, asin's
+ * and acos's 1, 0.5, 2^-57 and 0.975, atan's 2^66, 0.4375, 0.6875, 1.1875
+ * and 2.4375; every power of two and its neighbours (huge arguments for
+ * __kernel_rem_pio2), and integers and halves; the doubles next to k pi/4
+ * for k up to 256 and next to k pi/2 for larger k up to 2^20, where
+ * argument reduction cancels most; the double closest to a multiple of
+ * pi/2 found for each eighth binary exponent and the hardest ones of all
+ * (6381956970095103 * 2^797 among them; TRIG_HARD, from the continued
+ * fraction of 2^e * 2/pi), with a unit either side; and k/256 in [-1, 1],
+ * 1 - 2^-j and 0.5 +- 2^-j, for asin and acos. */
+static const uint32_t TRIG_EDGES[] = {
+    0x3FE921FB, 0x4002D97C, 0x3FF921FB, 0x413921FB, 0x3E400000, 0x3E300000, 0x3FD33333,
+    0x3FE90000, 0x3FE59428, 0x3FF00000, 0x3FE00000, 0x3C600000, 0x3FEF3333, 0x44100000,
+    0x3FDC0000, 0x3FF30000, 0x3FE60000, 0x40038000, 0x7FE00000, 0x43300000,
+};
+
+static const uint64_t TRIG_HARD[] = {
+    0x3FF921FB54442D18ull, 0x4046C6CBC45DC8DEull, 0x4056C6CBC45DC8DEull, 0x4066C6CBC45DC8DEull,
+    0x4076C6CBC45DC8DEull, 0x40F65A1DD290660Full, 0x416B951F1572EBA5ull, 0x417B951F1572EBA5ull,
+    0x41F5C9508C58AAFAull, 0x427065C829D68730ull, 0x42F7512069B7430Dull, 0x437AE9608C734E12ull,
+    0x43FA7F3BC5A7ED9Eull, 0x442782B7A20DF6D4ull, 0x4471A209B98A791Full, 0x44F99CAA5236FEEAull,
+    0x457F19E5D71B26BAull, 0x45966BD5424E5655ull, 0x45FC3DC1A597F202ull, 0x467DAE3A00451B5Full,
+    0x46F0A68ECA9141AAull, 0x47747623428452F0ull, 0x47F12155B2D3A126ull, 0x482504CAC51F1EAFull,
+    0x483504CAC51F1EAFull, 0x487504CAC51F1EAFull, 0x48F5AD5A62CB1CC9ull, 0x497B930D680374C2ull,
+    0x49F17E1E60C52F2Eull, 0x4A7CCA7515E2585Cull, 0x4AFD28D5C4C5E73Bull, 0x4B70539B48D14C55ull,
+    0x4BFBB4C8E40CBE5Dull, 0x4C4E7E44A78AC18Cull, 0x4C76DEB37DA81129ull, 0x4CF615A7F15B285Dull,
+    0x4D7A349D0F75C767ull, 0x4DF33322FD48B212ull, 0x4E72FA9F52E722D3ull, 0x4EF5AF9BF37155EFull,
+    0x4F569EAB0985179Bull, 0x4F769EAB0985179Bull, 0x4FCB2196364D750Bull, 0x4FFB2196364D750Bull,
+    0x50798D4578B193D2ull, 0x50F16E59932AB3BCull, 0x5177FE9A7DD5DA32ull, 0x51F3E51CBF3B4ECAull,
+    0x526C45CD11154DFDull, 0x527C45CD11154DFDull, 0x52F1A73EE3FD4BA9ull, 0x537ED9D1CC08E8A1ull,
+    0x53F870A967710516ull, 0x547A93B216E8DFBCull, 0x54F3671F965E06E3ull, 0x557979B4570B7A0Eull,
+    0x55FC945B5E25F07Cull, 0x5674582FF44B4254ull, 0x56F64B413DD64FCBull, 0x577005B55082422Eull,
+    0x57F715B33A0D143Eull, 0x587CB5C087CE6AB4ull, 0x58F82F9A53010EEFull, 0x597E3CA9B6C655CBull,
+    0x59F11BB9A5A2006Dull, 0x5A76DD6B29EDC33Aull, 0x5AF372EC0E7828ECull, 0x5B7A9926BE394007ull,
+    0x5BF2E28B9339BD65ull, 0x5C79C487F2337E3Aull, 0x5CFF7AF940F11670ull, 0x5D71888CAC3906F4ull,
+    0x5DFFE85261F02860ull, 0x5E7B88CBB4E32576ull, 0x5EF7833FA59D0DFDull, 0x5F760507DE0CF1D1ull,
+    0x5FF776AE889D49FCull, 0x607C2F1EEC0AE601ull, 0x60FF32EB85F75857ull, 0x6171FAB41EBE9846ull,
+    0x61F3B4801FD74C7Eull, 0x627C9B628EDE4146ull, 0x62F6BF5D7ABAF7C8ull, 0x637D89ED8A1D39A7ull,
+    0x63F6F2FF88C4C44Eull, 0x6404C96C11134D36ull, 0x6414C96C11134D36ull, 0x647959CEDBBEE908ull,
+    0x64F518ACD4FE45E6ull, 0x65774BF09BBE278Bull, 0x65F5157705A306A2ull, 0x66583009E2E9E2EBull,
+    0x66783009E2E9E2EBull, 0x66FE77733CDA9131ull, 0x6775E13DC1C15D0Eull, 0x67F668DB30162B3Dull,
+    0x687CB44E86BC192Bull, 0x68FED0721B49942Full, 0x69741C5FCEB2921Dull, 0x69F97E359BB79BB4ull,
+    0x6A7DB41F3CB71D7Bull, 0x6AF3ECB76DE9E4BEull, 0x6B729460D8EB8D38ull, 0x6BFF0C9D98414062ull,
+    0x6C75AE169CEA43D6ull, 0x6CF87172196D5822ull, 0x6D78C50C5644903Full, 0x6DF21143C12C9DFBull,
+    0x6E7BF3EDFA4E619Eull, 0x6EF1B21E01142FB4ull, 0x6F7D5C8D09F26EBFull, 0x6FFAFEB41302D02Aull,
+    0x7079E0CF28408E96ull, 0x70F6DE1F1AEFCDBFull, 0x717F3D96FD674993ull, 0x71F52F4FE34C0E00ull,
+    0x72700DDA8A3FA29Cull, 0x72FC2AF369704700ull, 0x7370107ED222087Eull, 0x73F6FB0D0AB996FAull,
+    0x7471D2340847046Aull, 0x74F9FF0F3CACCDB0ull, 0x7506AC5B262CA1FFull, 0x7516AC5B262CA1FFull,
+    0x7526AC5B262CA1FFull, 0x7536AC5B262CA1FFull, 0x7576AC5B262CA1FFull, 0x75BCFE482285F8EDull,
+    0x75FCFE482285F8EDull, 0x767A5DE46DB774E4ull, 0x76FE398FE7099B7Aull, 0x777F08B14E1C4D0Full,
+    0x77FDD2603AF19862ull, 0x7872FB7AFE08C773ull, 0x78F0332FE835389Aull, 0x797C1755720D0BF3ull,
+    0x79FFCE36F3EBFE43ull, 0x7A7A5046CD1FCAFEull, 0x7AF4117573397D42ull, 0x7B7E1987122B7E06ull,
+    0x7BFEA17C46D23A3Cull, 0x7C7163DCD0E3814Dull, 0x7CF408E81423EA13ull, 0x7D778875916718DBull,
+    0x7DEE009C53148BE1ull, 0x7DFE009C53148BE1ull, 0x7E787B27C09AE521ull, 0x7EF36BF9A50C0440ull,
+    0x7F70156ABCADF385ull,
+};
+
+/* The double nearest k pi/2, for k < 2^20: k times fdlibm's 33-bit pio2_1
+ * is exact, and its tail is added once. */
+static double near_pio2(long k) {
+    const double pio2_1 = 1.57079632673412561417e+00, pio2_1t = 6.07710050650619224932e-11;
+    return (double)k * pio2_1 + (double)k * pio2_1t;
+}
+
+static void print_trig(void) {
+    static const double SPECIALS[] = {
+        0.0, -0.0, 1.0 / 0.0, -1.0 / 0.0, 0.0 / 0.0, 4.9406564584124654e-324, -4.9406564584124654e-324,
+        2.2250738585072009e-308, -2.2250738585072009e-308, 2.2250738585072014e-308, -2.2250738585072014e-308,
+        1.7976931348623157e308, -1.7976931348623157e308, 1e-300, 1e300, -1e300, 1e22, -1e22, 0.1, -0.1,
+        3.141592653589793, -3.141592653589793, 1.5707963267948966, -1.5707963267948966, 0.7853981633974483,
+        2.356194490192345, 6.283185307179586, 1e-10, -1e-10, 0.25, 0.75,
+    };
+    for (size_t i = 0; i < sizeof SPECIALS / sizeof SPECIALS[0]; i++) print_trig_input(SPECIALS[i]);
+    for (size_t i = 0; i < sizeof TRIG_EDGES / sizeof TRIG_EDGES[0]; i++) {
+        for (int d = -4; d <= 4; d++) {
+            double x = from_bits(((uint64_t)TRIG_EDGES[i] << 32) + (uint64_t)(int64_t)d);
+            print_trig_input(x);
+            print_trig_input(-x);
+        }
+    }
+    for (int e = -1074; e <= 1023; e++) {
+        double p = e < -1022 ? from_bits(1ull << (e + 1074)) : from_bits((uint64_t)(e + 1023) << 52);
+        print_trig_input(p);
+        if (e % 4 == 0) print_trig_input(-p);
+        if (e % 8 == 0) {
+            print_trig_input(from_bits(to_bits(p) + 1));
+            print_trig_input(from_bits(to_bits(p) - 1));
+        }
+    }
+    for (int n = -1000; n <= 1000; n++) print_trig_input((double)n);
+    for (int n = -41; n <= 41; n += 2) print_trig_input((double)n / 2.0);
+    for (long k = 1; k <= 256; k++) {
+        double x = near_pio2(k) * 0.5;
+        for (int d = -1; d <= 1; d++) {
+            print_trig_input(from_bits(to_bits(x) + (uint64_t)(int64_t)d));
+            print_trig_input(-from_bits(to_bits(x) + (uint64_t)(int64_t)d));
+        }
+    }
+    for (long k = 257; k < (1l << 20); k = k * 5 / 4 + 1) {
+        double x = near_pio2(k);
+        for (int d = -1; d <= 1; d++) {
+            print_trig_input(from_bits(to_bits(x) + (uint64_t)(int64_t)d));
+            print_trig_input(-from_bits(to_bits(x) + (uint64_t)(int64_t)d));
+        }
+    }
+    for (size_t i = 0; i < sizeof TRIG_HARD / sizeof TRIG_HARD[0]; i++) {
+        for (int d = -1; d <= 1; d++) print_trig_input(from_bits(TRIG_HARD[i] + (uint64_t)(int64_t)d));
+        print_trig_input(-from_bits(TRIG_HARD[i]));
+    }
+    for (int n = -256; n <= 256; n++) print_trig_input((double)n / 256.0);
+    for (int j = 1; j <= 60; j++) {
+        double h = from_bits((uint64_t)(1023 - j) << 52); /* 2^-j */
+        print_trig_input(1.0 - h);
+        print_trig_input(-1.0 + h);
+        print_trig_input(0.5 + h);
+        print_trig_input(0.5 - h);
+    }
+}
+
+/* Math.atan2(y, x) of a fixed list of pairs, the same for any COUNT: every
+ * pair of ATAN2_VALUES (zeros, infinities, NaN, +-1, subnormals, the
+ * largest and smallest normals: each of atan2's special cases); y / x
+ * near 2^60 and 2^-60, where atan2 stops dividing, either sign; x = 1, which
+ * calls atan, and x next to 1; and a grid of small integers. */
+static const double ATAN2_VALUES[] = {
+    0.0, -0.0, 1.0 / 0.0, -1.0 / 0.0, 0.0 / 0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 3.0, -3.0,
+    4.9406564584124654e-324, -4.9406564584124654e-324, 2.2250738585072014e-308, -2.2250738585072014e-308,
+    1.7976931348623157e308, -1.7976931348623157e308, 1e-300, -1e300, 0.1, -0.7, 1e10, -1e-10,
+};
+
+static void print_atan2(double y, double x) {
+    printf("V %016llx %016llx %016llx\n", (unsigned long long)to_bits(y), (unsigned long long)to_bits(x),
+           (unsigned long long)to_bits(sjs_math_atan2(y, x)));
+}
+
+static void print_atan2s(void) {
+    size_t n = sizeof ATAN2_VALUES / sizeof ATAN2_VALUES[0];
+    for (size_t i = 0; i < n; i++) {
+        for (size_t j = 0; j < n; j++) print_atan2(ATAN2_VALUES[i], ATAN2_VALUES[j]);
+    }
+    for (int k = -66; k <= 66; k++) {
+        double y = 1.5, x = from_bits((uint64_t)(1023 - k) << 52) * 1.25; /* y / x = 1.2 * 2^k */
+        print_atan2(y, x);
+        print_atan2(-y, x);
+        print_atan2(y, -x);
+        print_atan2(-y, -x);
+        print_atan2(x, from_bits((uint64_t)(1023 + k) << 52)); /* the high words differ by k << 20 */
+        print_atan2(-x, -from_bits((uint64_t)(1023 + k) << 52));
+    }
+    for (size_t i = 0; i < n; i++) {
+        print_atan2(ATAN2_VALUES[i], from_bits(0x3FF0000000000001ull));
+        print_atan2(ATAN2_VALUES[i], from_bits(0x3FEFFFFFFFFFFFFFull));
+    }
+    for (int k = -40; k <= 40; k++) print_atan2((double)k / 8.0, 1.0);
+    for (int y = -12; y <= 12; y++) {
+        for (int x = -12; x <= 12; x++) print_atan2((double)y, (double)x);
+    }
+}
+
 static int print(long count) {
     print_formats(count);
     print_decimals(count);
@@ -868,6 +1051,8 @@ static int print(long count) {
     print_radix_methods();
     print_powers();
     print_unary();
+    print_trig();
+    print_atan2s();
     return 0;
 }
 
