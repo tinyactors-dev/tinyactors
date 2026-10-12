@@ -181,6 +181,6 @@ A binding is tested by the conformance suite, [tinyactors-test](../../tinyactors
 
 - The mapping table exists, and every API item has a core function or method behind it.
 - The queue loop handles every run status and every effect in section 4.
-- The protocol vectors and W3C pass.
+- The suite passes against the binding's command: protocol vectors, scenarios and W3C, on every datamodel it offers.
 - No defaults, limits, methods or messages of the binding’s own.
 - Nothing C does is done again in the language.
