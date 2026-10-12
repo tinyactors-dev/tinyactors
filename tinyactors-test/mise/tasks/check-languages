@@ -1,0 +1,12 @@
+#!/usr/bin/env ruby
+#MISE description="Translate the W3C suite and the scenarios with each language's stylesheet and check the result: well-formed XML, no conf: notation left, and (python) every expression and script compiles"
+#USAGE arg "[language]..." var=#true help="the languages to check (default: every stylesheet in suites/w3c and suites/w3c/irp)"
+# vim:ft=ruby
+
+# suites/w3c/check.py does the checking; its docstring says what it checks.
+
+require_relative '../../lib/w3c'
+
+languages = ARGV.empty? ? W3C.stylesheets.keys.sort : ARGV
+failed = languages.reject { |language| W3C.check(language) }
+abort "check-languages: #{failed.join(', ')} failed" unless failed.empty?

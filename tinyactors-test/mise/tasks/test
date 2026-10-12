@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Test tinyactors-test: the protocol vectors' hex against their diag lines, and the runner against a fake implementation"
+#MISE description="Test tinyactors-test: the protocol vectors' hex against their diag lines, each language's translation of the W3C suite and the scenarios (check-languages), and the runner against a fake implementation"
 #MISE sources=["lib/**/*", "suites/**/*", "test/**/*", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
@@ -11,5 +11,6 @@ def run(*command)
 end
 
 run('mise', 'run', 'encode', '--check')
+run('mise', 'run', 'check-languages')
 tests = Dir[File.expand_path('../../test/*_test.rb', __dir__)].sort
 run('ruby', '-Ilib', '-e', 'ARGV.each { |path| require path }', *tests) unless tests.empty?

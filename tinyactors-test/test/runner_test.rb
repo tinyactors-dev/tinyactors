@@ -151,6 +151,16 @@ class RunnerTest < Minitest::Test
     assert_equal W3C.skipped.size + 1, skipped.size
   end
 
+  def test_a_language_is_a_stylesheet_with_its_own_skip_list
+    assert_equal W3C::IRP.join('confEcma.xsl'), W3C.stylesheet('ecmascript')
+    assert_equal W3C::DIRECTORY.join('confPython.xsl'), W3C.stylesheet('python')
+    assert_raises(RuntimeError) { W3C.stylesheet('cobol') }
+    python = W3C.skipped(language: 'python')
+    assert_includes python.keys, '567'
+    refute_includes W3C.skipped(language: 'ecmascript').keys, '567'
+    assert_equal W3C.skipped.size, W3C.skipped(language: 'cobol').size
+  end
+
   private
 
   # A vector file from cases written as lines; a hex line is written from

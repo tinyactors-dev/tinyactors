@@ -1,0 +1,31 @@
+# W3C IRP tests confPython.xsl does not translate, one per line:
+#   <test id> <reason>
+# The run task skips them for --language python, besides skip.txt; the
+# compile check (mise run check-languages) checks every other test.
+#
+# The tests of the ECMAScript data model (SCXML 1.0, B.2) name it
+# (datamodel="ecmascript") instead of conf:datamodel, so no stylesheet
+# changes their datamodel, and most are written in ECMAScript: they test
+# quickjs, which runs them with --language ecmascript.
+444 B.2 ECMAScript data model: datamodel="ecmascript"; <data> creates an ECMAScript variable (cond="++var1==2")
+445 B.2 ECMAScript data model: datamodel="ecmascript"; an unassigned <data> is ECMAScript undefined (var1==undefined)
+446 B.2 ECMAScript data model: datamodel="ecmascript"; JSON content of <data> becomes an ECMAScript array (instanceof Array)
+448 B.2 ECMAScript data model: datamodel="ecmascript"; one global ECMAScript scope (Python's one globals dict per session is covered by 278)
+449 B.2 ECMAScript data model: datamodel="ecmascript"; ECMAScript ToBoolean in cond (cond="'foo'")
+451 B.2 ECMAScript data model: datamodel="ecmascript"; In() in ECMAScript (In() in Python: the conf:inState tests, such as 310)
+452 B.2 ECMAScript data model: datamodel="ecmascript"; any ECMAScript left-hand-side expression is a location (a constructor in <script>)
+453 B.2 ECMAScript data model: datamodel="ecmascript"; any ECMAScript expression is a value (a function expression)
+456 B.2 ECMAScript data model: datamodel="ecmascript"; an ECMAScript program in <script> (Var1+=1)
+457 B.2 ECMAScript data model: datamodel="ecmascript"; legal foreach collections are ECMAScript arrays (instanceof Array; Python: 152)
+459 B.2 ECMAScript data model: datamodel="ecmascript"; foreach order of an ECMAScript array (cond uses ECMAScript's |)
+460 B.2 ECMAScript data model: datamodel="ecmascript"; foreach shallow copy ([].concat(Var1, [4]))
+557 B.2 ECMAScript data model: datamodel="ecmascript"; XML content of <data> becomes a DOM (getElementsByTagName)
+558 B.2 ECMAScript data model: datamodel="ecmascript"; other content of <data> becomes a space-normalized ECMAScript string
+560 B.2 ECMAScript data model: datamodel="ecmascript"; key-value pairs become properties of _event.data (_event.data.aParam)
+561 B.2 ECMAScript data model: datamodel="ecmascript"; XML in _event.data becomes a DOM (getElementsByTagName)
+562 B.2 ECMAScript data model: datamodel="ecmascript"; other content of _event.data becomes a space-normalized ECMAScript string
+569 B.2 ECMAScript data model: datamodel="ecmascript"; _ioprocessors entries are ECMAScript objects (_ioprocessors['scxml'].location)
+578 B.2 ECMAScript data model: datamodel="ecmascript"; JSON content of _event.data becomes an ECMAScript object (_event.data.productName)
+#
+# ECMAScript semantics in the conf: notation.
+567 BasicHTTP delivers form fields as text, so _event.data['param1'] is '2'; conf:idVal="1=2" compares it with the integer 2, which ECMAScript's == coerces and Python's == does not ('2' == 2 is False)

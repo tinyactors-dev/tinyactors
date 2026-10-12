@@ -71,10 +71,25 @@ module W3C
   end
 
   def convert(*arguments)
-    pid = Process.spawn('uv', 'run', '--quiet', '--with', 'saxonche', 'python', CONVERT.to_s, *arguments,
+    raise 'w3c: convert.py failed' unless saxon(CONVERT, *arguments)
+  end
+
+  # Converts the suite and the scenarios for `language` and checks the
+  # result with suites/w3c/check.py: well-formed, nothing of the conf:
+  # notation left, and for a language it has a compile check (python),
+  # every expression compiles. True when it passes.
+  def check(language)
+    skips = [SKIP, skip_file(language)].select(&:file?).flat_map { |path| ['--skip', path.to_s] }
+    saxon(DIRECTORY.join('check.py'), language, stylesheet(language).to_s, suite(language).to_s,
+          scenarios(language).to_s, *skips)
+  end
+
+  # Runs a script of suites/w3c with SaxonC, under the pinned uv.
+  def saxon(script, *arguments)
+    pid = Process.spawn('uv', 'run', '--quiet', '--with', 'saxonche', 'python', script.to_s, *arguments,
                         chdir: ROOT.to_s)
     _pid, status = Process.wait2(pid)
-    raise "w3c: convert.py failed (#{status.exitstatus})" unless status.success?
+    status.success?
   end
 
   # One test of index.txt: its id, conformance, start document and
