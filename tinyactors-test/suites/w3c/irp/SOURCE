@@ -1,0 +1,26 @@
+Source:   W3C, SCXML 1.0 Implementation Report Plan (IRP), version of
+          10 March 2015
+URL:      https://www.w3.org/Voice/2013/scxml-irp/
+Fetched:  2026-10-12, file by file, from that base URL; byte-identical to
+          the copy fetched 2026-10-06 by the earlier fetch in
+          lib/w3c.rb (commit 855373b5)
+License:  W3C 3-clause BSD License and W3C Test Suite License (LICENSE)
+
+Taken, unmodified (214 files, 340 KB):
+
+- manifest.xml: the 200 tests with their assertions (191 automatic,
+  9 manual);
+- every file a test's <start uri> or <dep uri> names: 206 .txml
+  templates (start documents and the charts they invoke) and 5 .txt files
+  a src="" reads, in <test id>/;
+- confEcma.xsl and confXPath.xsl, W3C's stylesheets from the conf:
+  notation to the ECMAScript and XPath datamodels.
+
+Not taken: the IRP's HTML pages, the implementation reports and results.
+
+The two stylesheets are fetched by name; the manifest does not list them.
+To check the copy against w3.org, fetch each path above from the URL and
+compare.
+
+Everything outside this directory in suites/w3c/ is ours, not W3C's:
+convert.py, the skip lists and the stylesheets of other languages.
