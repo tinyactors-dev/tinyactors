@@ -33,7 +33,7 @@
  *              TA_EFFECT_WAKE, ta_host_wake).
  *   growth     segments are relocated into bigger blocks when a run or a call
  *              needs it (TA_RUN_EXHAUSTED / TA_ERROR_NO_MEMORY).
- *   memory     every block comes from config.allocator and goes back to it
+ *   memory     every block comes from environment->allocator and goes back to it
  *              (ta_host_free returns all of them). When it refuses one, a
  *              call returns TA_ERROR_NO_MEMORY and leaves the host as it
  *              was; ta_host_run returns TA_RUN_EXHAUSTED (detail: the
@@ -185,7 +185,11 @@ TA_API void ta_host_advance_time(ta_host *h, ta_host_time now);
  * TA_IO_PROCESSOR_SYNC processor, the last effect of its segment: answer it
  * — ta_host_send of events or of TA_EVENT_IN_ERROR_COMMUNICATION to the
  * sender — and run again; the sender goes on only then);
- * next_deadline: the earliest timer of all segments. */
+ * next_deadline: the earliest of the segments' timers, the migration jobs'
+ * timeouts, the expiry of envelopes queued for a peer that is down, the end
+ * of a trace watch, and the encoder's flush (flush_interval after a request's
+ * first record); UINT64_MAX for none. Arm one timer for it and call
+ * ta_host_advance_time, then ta_host_run, when it comes. */
 TA_API ta_run ta_host_run(ta_host *h, uint32_t budget);
 
 enum {
@@ -196,8 +200,8 @@ enum {
     /* the router (docs/protocol.md): */
     TA_HOST_EFFECT_PEER = 19,      /* send an envelope to `peer`: target, event, sendid, payload,
                                   aux = origin, msgid, hops (in `flags`) */
-    TA_HOST_EFFECT_PEER_ERROR = 20, /* send an `err` to `peer`: aux = origin, msgid, sendid,
-                                token = reason */
+    TA_HOST_EFFECT_PEER_ERROR = 20, /* send an error envelope to `peer` (ta_host_envelope):
+                                       aux = origin, msgid, sendid, token = reason */
     /* the encoder (the config's "telemetry"): a request is ready, because the
      * staging is full or flush_interval passed since its first record; take
      * it with ta_host_traces (ta_host_logs). At most one of each kind is
@@ -298,8 +302,8 @@ TA_API ta_status ta_host_traces(ta_host *h, ta_buffer *out);
 TA_API ta_status ta_host_logs(ta_host *h, ta_buffer *out);
 
 /* ---- the router: other systems (docs/protocol.md, Routing) -------------------------
- * A peer is another system as seen through one transport connection (a link,
- * a store link, a broker subject...). The host owns peers as integer handles
+ * A peer is another system as seen through one transport connection (a
+ * socket, a broker subject, a worker's port...). The host owns peers as integer handles
  * that pack their slot and a generation: removing a peer (ta_host_peer_remove)
  * makes its handle stale (TA_ERROR_STALE), even when a newer peer reuses the
  * slot; the transport (host code, any language) moves envelopes: inbound with
@@ -360,7 +364,7 @@ enum {
  * borrow the envelope/host until the request finishes. Storage and delivery must
  * commit together; aborting the transaction also aborts the request.
  * PEER carries the next hop; an empty handle with a peer_id is a durable route
- * waiting for hello. LOCAL carries a resolved session, ready for an inbox.
+ * whose peer is not added yet (ta_host_peer_add). LOCAL carries a resolved session, ready for an inbox.
  * An envelope with `wire` (it arrived as bytes) is never decoded here: the
  * caller keeps the value's CBOR as it is, for the session's own datamodel to
  * read with from_wire when the event is delivered, as ta_host_deliver does.
@@ -465,7 +469,7 @@ TA_API ta_status ta_host_export(ta_host *h, const ta_export_rule *rule);
  * as it is and decodes nothing; the PEER effect carries it until the ack. */
 enum { TA_ROUTE_DELIVERED = 0, TA_ROUTE_RELAYED = 1, TA_ROUTE_DUPLICATE = 2, TA_ROUTE_REFUSED = 3 };
 TA_API int32_t ta_host_deliver(ta_host *h, uint32_t peer, const ta_envelope *envelope);
-/* An `err` from a peer about an envelope this host sent: the origin session
+/* An error envelope from a peer about an envelope this host sent: the origin session
  * gets error.communication (with the sendid); relayed errors go back further. */
 typedef struct ta_peer_error {
     uint32_t peer;   /* the peer it came from */
