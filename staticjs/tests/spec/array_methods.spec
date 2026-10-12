@@ -226,3 +226,37 @@ new Set([1]).values().reduceRight((a, x) => a + x, 0)
 === a string has no reduceRight
 "abc".reduceRight((a, x) => a + x)
 --- fault does not have this method
+
+# reduceRight: built-in callbacks, its arguments, and accumulators updated
+# in place or refused (from the batch's review).
+=== reduceRight with Math.max faults on the array it passes as the fourth argument
+[1, 5, 3].reduceRight(Math.max)
+--- fault converts only numbers
+
+=== reduceRight passes four arguments, and its initial value as it is
+[[1, 2, 3].reduceRight((...args) => args.length, 0), [1].reduceRight((a, x) => a, -0), [1].reduceRight((a, x) => a, NaN), [1].reduceRight((a, x) => a, undefined), [1].reduceRight((a, x) => a, null), [7].reduceRight((a, x) => a), [-0].reduceRight((a, x) => x)]
+--- value
+[4,-0,NaN,undefined,null,7,-0]
+
+=== reduceRight builds an object in place from the end
+["a", "b", "a", "c"].reduceRight((acc, x, i) => { acc[x] = (acc[x] ?? "") + i; return acc; }, {})
+--- value
+{"c":"3","a":"20","b":"1"}
+
+=== reduceRight with a set and a map accumulator
+[[1, 2, 3].reduceRight((acc, x) => acc.add(x * 2), new Set()), [1, 2, 3].reduceRight((acc, x) => acc.set(x, x * x), new Map())]
+--- value
+[new Set([6,4,2]),new Map([[3,9],[2,4],[1,1]])]
+
+=== reduceRight cannot change an initial value a variable still holds
+(() => { const o = {}; const r = [1, 2].reduceRight((acc, x) => { acc[x] = 1; return acc; }, o); return [r, o]; })()
+--- fault held elsewhere
+
+=== reduceRight cannot change its array through the fourth argument
+[1, 2].reduceRight((acc, x, i, xs) => { xs.push(0); return acc; }, 0)
+--- fault held elsewhere
+
+=== reduceRight cannot change an element its array holds
+[[1], [2]].reduceRight((acc, x) => { acc.push(x[0]); return acc; })
+--- fault held elsewhere
+

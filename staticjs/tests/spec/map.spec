@@ -1549,3 +1549,30 @@ new Set(Array.from({ length: 30 }, (x, i) => i === 29 ? null : i)).forEach(v => 
 new Set(Array.from({ length: 30 }, (x, i) => "k" + i)).forEach((v, k, s) => { if (v !== k || !s.has(k)) return null.x; })
 --- value
 undefined
+
+# A set past its hash index through its iterators, and a set's forEach's
+# arguments (from the batch's review).
+=== a set past its hash index, after deletes and adds: keys, values and entries
+[[...(() => { const s = new Set(); s.add("k0"); s.add(1.5); s.add(2n); s.add("k3"); s.add(6); s.add(5n); s.add("k6"); s.add(10.5); s.add(8n); s.add("k9"); s.add(15); s.add(11n); s.delete("k0"); s.delete(1.5); s.delete(2n); s.add("k0"); s.add(-0); s.add(NaN); return s; })().keys()], (() => { const s = new Set(); s.add("k0"); s.add(1.5); s.add(2n); s.add("k3"); s.add(6); s.add(5n); s.add("k6"); s.add(10.5); s.add(8n); s.add("k9"); s.add(15); s.add(11n); s.delete("k0"); s.delete(1.5); s.delete(2n); s.add("k0"); s.add(-0); s.add(NaN); return s; })().values().toArray(), (() => { const s = new Set(); s.add("k0"); s.add(1.5); s.add(2n); s.add("k3"); s.add(6); s.add(5n); s.add("k6"); s.add(10.5); s.add(8n); s.add("k9"); s.add(15); s.add(11n); s.delete("k0"); s.delete(1.5); s.delete(2n); s.add("k0"); s.add(-0); s.add(NaN); return s; })().entries().drop(8).toArray(), new Map((() => { const s = new Set(); s.add("k0"); s.add(1.5); s.add(2n); s.add("k3"); s.add(6); s.add(5n); s.add("k6"); s.add(10.5); s.add(8n); s.add("k9"); s.add(15); s.add(11n); s.delete("k0"); s.delete(1.5); s.delete(2n); s.add("k0"); s.add(-0); s.add(NaN); return s; })().entries()).get(NaN)]
+--- value
+[["k3",6,5n,"k6",10.5,8n,"k9",15,11n,"k0",0,NaN],["k3",6,5n,"k6",10.5,8n,"k9",15,11n,"k0",0,NaN],[[11n,11n],["k0","k0"],[0,0],[NaN,NaN]],NaN]
+
+=== a set past its hash index, advanced by next, written as its rest
+(() => { const it = (() => { const s = new Set(); s.add("k0"); s.add(1.5); s.add(2n); s.add("k3"); s.add(6); s.add(5n); s.add("k6"); s.add(10.5); s.add(8n); s.add("k9"); s.add(15); s.add(11n); s.delete("k0"); s.delete(1.5); s.delete(2n); s.add("k0"); s.add(-0); s.add(NaN); return s; })().entries(); it.next(); it.next(); return [it.next(), it]; })()
+--- value
+[{"value":[5n,5n],"done":false},[["k6","k6"],[10.5,10.5],[8n,8n],["k9","k9"],[15,15],[11n,11n],["k0","k0"],[0,0],[NaN,NaN]].values()]
+
+=== a set's forEach passes (value, value, set) for each member
+[new Set([1, "a", NaN, -0, 2n]).forEach((v, k, t) => (v === k || (v !== v && k !== k)) && t.size === 5 ? 0 : null.x), new Set([1, 2]).forEach((...args) => args.length === 3 ? 0 : null.x)]
+--- value
+[undefined,undefined]
+
+=== a set's forEach with a built-in function, and a second argument it does not use
+[new Set(["a", "b"]).forEach(Number), new Set([1, 4, 9]).forEach(Math.sqrt), new Set([1, 2]).forEach(x => x, 5)]
+--- value
+[undefined,undefined,undefined]
+
+=== a set's forEach on an empty set still needs a function
+new Set().forEach(5)
+--- fault callback is not a function
+

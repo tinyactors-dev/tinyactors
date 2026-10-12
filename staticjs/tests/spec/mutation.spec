@@ -4563,3 +4563,100 @@ new Map().keys().return()
 === next through a chain from add faults
 (() => { const s = new Set(); return s.add(1).next(); })()
 --- fault does not have this method
+
+# An iterator's next and return beside aliasing in one expression, helpers
+# of helpers, destructuring and modules (from the batch's review).
+=== next in one branch, a spread in the other
+[true, false].map(c => { const it = new Set([1, 2, 3]).values(); it.next(); return c ? it.next() : [...it]; })
+--- value
+[{"value":2,"done":false},[2,3]]
+
+=== next before the iterator is passed in the same call
+(() => { const it = new Set([1, 2, 3]).values(); const f = (x, y) => [y, x]; return f(it.next(), it); })()
+--- value
+[[2,3].values(),{"value":1,"done":false}]
+
+=== next before a spread in the same call
+(() => { const it = new Set([4, 9, 2]).values(); return Math.max(it.next().value, ...it); })()
+--- value
+9
+
+=== next before the iterator is stored and read in the same literal
+(() => { const it = new Map([[1, "a"], [2, "b"]]).values(); return [it.next(), it, new Map([[it ? 1 : 0, 0]]).size]; })()
+--- value
+[{"value":"a","done":false},["b"].values(),1]
+
+=== the iterator stored before next in the same literal is refused
+(() => { const it = new Set([1, 2, 3]).values(); return [it, it.next()]; })()
+--- error unsupported stored
+
+=== the iterator stored in an object before next in the same literal is refused
+(() => { const it = new Set([1, 2, 3]).values(); return { a: it, b: it.next() }; })()
+--- error unsupported stored
+
+=== the iterator passed before next in the same call is refused
+(() => { const it = new Set([1, 2, 3]).values(); const f = (x, y) => [x, y]; return f(it, it.next()); })()
+--- error unsupported passed
+
+=== next of a helper of a helper, then another helper
+(() => { const h = new Set([1, 2, 3, 4, 5]).values().take(4).drop(1); h.next(); const g = h.map(x => -x); const b = g.next(); return [b, [...g]]; })()
+--- value
+[{"value":-3,"done":false},[-4]]
+
+=== next of take of an advanced iterator
+(() => { const it = new Set([1, 2, 3]).values(); it.next(); const h = it.take(1); return [h.next(), h.next()]; })()
+--- value
+[{"value":2,"done":false},{"value":undefined,"done":true}]
+
+=== return, then a helper of what is left
+(() => { const h = new Set([1, 2, 3]).values().map(x => x); h.return(); return h.take(2).toArray(); })()
+--- value
+[]
+
+=== next of an iterator made in each call of a helper callback
+new Set([1, 2]).values().flatMap(x => { const h = new Set([x, x * 10, x * 100]).values().map(y => y); h.next(); return h; }).toArray()
+--- value
+[10,100,20,200]
+
+=== next of an iterator a function made
+(() => { const g = () => new Set([1, 2, 3]).values(); const it = g(); it.next(); return [...it]; })()
+--- value
+[2,3]
+
+=== next of an iterator destructured from an object
+(() => { const { it } = { it: new Set([1, 2]).values() }; it.next(); return [...it]; })()
+--- value
+[2]
+
+=== next of an iterator destructured from an object read again faults
+(() => { const o = { it: new Set([1, 2]).values() }; const { it } = o; const r = it.next(); return [r, o]; })()
+--- fault held elsewhere
+
+=== next of an iterator another const was given faults
+(() => { const a = new Set([1, 2]).values(); const it = a; const r = it.next(); return [r, a]; })()
+--- fault held elsewhere
+
+=== next of an iterator a function parameter shares with its caller faults
+(() => { const f = j => j.next(); const it = new Set([1, 2]).values(); const a = f(it); return [a, [...it]]; })()
+--- fault held elsewhere
+
+=== next by a computed name of an iterator read again faults
+(() => { const it = new Set([1, 2, 3]).values(); const r = it["next"](); return [r, [...it]]; })()
+--- fault nothing else holds
+
+=== next's value, which the map holds too, cannot change
+(() => { const m = new Map([[1, [1]]]); const r = m.values().next(); r.value.push(2); return m; })()
+--- fault held elsewhere
+
+=== next's new entry array can change
+(() => { const it = new Map([[1, "a"]]).entries(); const r = it.next(); r.value.push(9); r.done = 5; return r; })()
+--- value
+{"value":[1,"a",9],"done":5}
+
+=== a module's export of an iterator is the iterator after a later next
+@module iterator_advanced_after_export
+const it = new Set([1, 2, 3]).values();
+export { it };
+export const first = it.next();
+--- value
+{"first":{"value":1,"done":false},"it":[2,3].values()}
