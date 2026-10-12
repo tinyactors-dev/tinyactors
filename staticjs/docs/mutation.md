@@ -90,7 +90,10 @@ A call `x.m(...)` of one of the methods above, by name, is a **mutation**.
 The compiler accepts it only when the receiver `x` is a variable that the
 function making the call owns. Otherwise it refuses the program as
 `unsupported`, with a message that says why. Refusing is always allowed;
-changing a shared value never is.
+changing a shared value never is. A name that a method of another kind
+shares, one that changes nothing (`add`, a Temporal value's), is the
+exception: the compiler refuses none of its calls but a statement, and
+leaves the rest to the run-time check ("Shared names", below).
 
 1. **The receiver is a name, read directly**: `x.m(`, or a path from one,
    `x.a[k].m(` ("Methods through a path", below). A receiver that is
@@ -157,13 +160,11 @@ holds. So the evaluator checks every mutation when it runs:
   `5` for `o` and leaked the object. So is a method of the name that
   changes nothing, a Temporal value's `add`, which makes a new value
   (docs/temporal.md): `MUTATE` puts the variable's value in place of the
-  reference, as an ordinary call's receiver. The compiler cannot tell such
-  a value from a set, so its rules above still refuse a copy or a capture
-  of the variable (`xs.map(n => d.add(...))`), and a chain faults. A `SORTED` with CHAIN faults instead,
-  as any chain through such a receiver does (below). A path call faults on
-  a sort of one ("Methods through a path"), where the container's place,
-  not a slot, would take it back; a variable's ordinary call costs only the
-  skip, so it follows JavaScript.
+  reference, as an ordinary call's receiver. Its result is a value, which
+  a chain goes on with as an ordinary call's receiver (below). A path call
+  faults on a sort of one ("Methods through a path"), where the
+  container's place, not a slot, would take it back; a variable's
+  ordinary call costs only the skip, so it follows JavaScript.
 - `MUTATE` faults unless the slot's value has exactly one holder, the slot
   (`sjs_value_unique`). This catches the holders above, and a cycle:
   `xs.push(xs)` gives the argument a second reference, so it faults.
@@ -179,9 +180,15 @@ passes it on as the same reference to its slot, so `s.add(1).add(2)` and
 from the name which methods return the receiver and which give something
 else (`push` and `unshift` the length, `pop` and `shift` the element), so
 `xs.push(1).push(2)` calls `push` on a number, and faults as JavaScript
-throws. A chain on a receiver that turns out to be an object, whose
-property happens to have such a name, faults when it runs: the property
-need not return its object.
+throws. A link that changed nothing (a Temporal value's `add`, an
+object's own function whose property has such a name) gives a value, not
+the reference: `METHOD_MUTATE` and `MUTATE` call the next link on it as an
+ordinary method call, so `d.add(a).add(b)` adds twice, each to a new
+value, and `o.add(1).add(2)` calls `add` on what `o.add(1)` returned, as
+JavaScript does; a set or an array there faults ("changes its
+receiver"), as a mutating method does on any value it is not called on
+through a variable. A mutation's method ID with such a value as its
+receiver is never compiled, and faults ("the program is damaged").
 
 A statement may be a mutation, or a chain of them: `xs.push(x);`. Every
 other expression statement is refused as before ("an expression
@@ -189,7 +196,56 @@ statement has no effect in staticjs"). The parser sends an expression
 statement's events when its expression, as a whole, is a call; the
 compiler accepts it only when that call is a mutation, and otherwise
 refuses it after reading on, as the parser does, so that a syntax error
-later in the source is still the program's error.
+later in the source is still the program's error. A shared name's call
+that compiled as an ordinary one because its receiver is not the
+function's to change (`s.add(x);` on a capture, a global or an import:
+"Shared names", below) is refused with that reason ("a function captured
+this one: build the value with reduce instead"), not as one with no
+effect.
+
+## Shared names
+
+`add` is a set's method, which changes the set, and a Temporal value's,
+which makes a new value (docs/temporal.md). The compiler sees names, not
+values, so the rules above would refuse common Temporal code
+(`xs.map(n => start.add({ days: n }))`, a capture; `const e = d;
+d.add(x)`, a copy; `[d.add(a), d.add(b)]`, a store). Those rules only
+report early what the evaluator already guarantees: `MUTATE` changes a
+value only when its slot is its one holder ("held elsewhere"), an
+ordinary call of a set's `add` faults in `method()`, `MUTATE` calls a
+method that changes nothing before it checks, and every jump goes
+forward, so a closure made after a change sees the final value, and one
+made before holds the value, which then fails the check. So for a name
+whose method that changes its receiver has a namesake of another kind
+that changes nothing (`sjs_mutation_shared`; today only `add`), the
+compiler refuses nothing and the run decides:
+
+- **A variable of the function** is the call's receiver (`RECEIVER`)
+  whatever was done with it before (copied, passed, stored, captured), and
+  the call does not count as changing it, so a capture after it is not
+  refused. A Temporal value's `add` makes a new value; a set's checks that
+  the slot is its one holder, and faults "held elsewhere" while a copy, an
+  element, an argument or a closure still holds it.
+- **A capture, a global or an import** is an ordinary method call's
+  receiver: a Temporal value's `add` works, and a set's faults ("changes
+  its receiver").
+- **A path** (`o.d.add(x)`) whose root the path rules would refuse falls
+  back to an ordinary call the same way. A chain through a path
+  (`o.d.add(a).add(b)`) still faults ("on an array, a set or a map"), as a
+  path call's chain needs the container back: write
+  `const e = o.d.add(a); e.add(b)`.
+- **As a statement**, a call whose receiver is not the function's to
+  change is refused, as before, with the reason (above).
+
+Neither compiled form can give a value other than JavaScript's, for
+either kind: a set the compiler used to refuse faults when it runs
+instead. Arrays, maps, iterators (whose `next` and `return` on a value
+nothing else holds are the same method, not a namesake) and every other
+name keep the rules above. A kind per `const`, inferred from its
+initializer (`new Set`, `Temporal.PlainDate.from`), could bring back the
+early refusal for a set the compiler can see, but not replace the run's
+check: a callback's parameter, a reduce's accumulator, a property and a
+global have no kind the compiler knows.
 
 ## Assignment
 
@@ -442,7 +498,9 @@ variable:
 
 **Refused when compiled**, as `unsupported`, with step 1's messages: a root
 that is a global, an import or a capture, or a variable captured (before
-or after), copied, passed or stored before the call. What the call's own
+or after), copied, passed or stored before the call (for a shared name,
+an ordinary call instead, refused only as a statement: "Shared names").
+What the call's own
 arguments do with the root's value is the evaluator's to check, as for a
 mutation of a variable: the value is then held twice when the call runs.
 Also refused: a method that changes the root's variable in the path's keys
@@ -804,7 +862,7 @@ A map's `set`, `delete` and `clear`:
 | `src/internal.h` | `SJS_METHOD_MAP_SET`, `SJS_METHOD_MAP_DELETE`, `SJS_METHOD_MAP_CLEAR`; `sjs_map_remove` |
 | `src/value.c` | `sjs_map_remove` (`keyed_remove`, the set's removal with a stride, stays with the removal section) |
 | `src/builtins.c` | the name `set` (restore `NAME("set", SJS_NAME_ON_MAP \| SJS_NAME_MUTATING, 0, 0, 0)`); `mutation_kind`'s first line, `sjs_mutation_of`'s two lines for a map and `SJS_METHOD_MAP_SET` in `sjs_mutation_returns_receiver`; `map_change`, its declaration and its case in `sjs_mutation_call`, the section at the end of the file |
-| `src/vm.c` | ", a set or a map" in the two messages of chains and paths (restore "or a set") |
+| `src/vm.c` | ", a set or a map" in the message of paths (restore "or a set"), and in the chains' message that shared names removed (restore it with "or a set") |
 | `src/shapes.rules` | `chaining() <- MEMBER{key: "set"}` (`mise run shapes` rewrites `src/shapes_table.h`) |
 | `tests/api_test.c` | `test_mutation_map_removal`, `test_mutation_map_removal_out_of_memory` |
 | `bench/bench.c` | `eval.map.set-reduce`, `CHECK_MAP_N` |
@@ -832,6 +890,15 @@ faults when it has something to put, as the variable holds the target too.
 end of `src/vm.c` (`sjs_vm_object_assign`, `sjs_assign_puts`) and
 `sjs_object_copy` are not mutation, and stay; so do its cases in
 `tests/spec/builtins.spec`.
+
+Shared names:
+
+| File | What is tagged |
+|---|---|
+| `src/internal.h` | `sjs_mutation_shared` |
+| `src/builtins.c` | `sjs_mutation_shared` |
+| `src/compiler.c` | `construct.fallback`; `fallback_site` and `c->last_fallback`; `refused_copied`, `refused_passed`, `refused_stored`, `refused_global`, `refused_import`, named once (restore the strings in place), and `refused_path_changing`, moved before them (restore it before `path_mutation_target`), `FB_*`, `fallback_reason` and `fallback_of`; `claim_receiver`'s `fallback` (restore: refuse every receiver it refuses with `fallback` NULL, and set `USE_MUTATED`); its lines in `mutation_begin` and `path_mutation_target`; the lines in `call_end` and `compile_expression_statement` |
+| `src/vm.c` | the value receiver in `mutation_method` and `mutate` (restore the chain's fault, "goes on only through an array, a set or a map") |
 
 The rest of maps (values, `new Map`, `get`, `has`, `size`, iteration,
 `forEach`, `Map.groupBy`) is not mutation, and stays.
@@ -875,7 +942,11 @@ tested it. `let` moved two cases from `tests/spec/statements.spec` to `mutation.
 not staticjs's" and "next of a set's iterator is not staticjs's", which
 faulted ("does not have this method"), to `mutation.spec`, where they give
 a value ("next of an iterator nothing else holds"); rolling back restores
-them. The README, `AGENTS.md`, `docs/builtins.md` and
+them. Shared names turned `mutation.spec`'s deliberate Temporal cases (a
+chain, a copy, a capture) into values, and its chains through an object's
+own function, which faulted ("goes on only through an array, a set or a
+map"), into a value or the next receiver's own fault ("format digits",
+"changes its receiver"); rolling back restores them. The README, `AGENTS.md`, `docs/builtins.md` and
 `docs/matcher.md` point here.
 
 **Not mutation: `STRING_APPEND`.** `+`, a template and a string's `concat`

@@ -98,20 +98,22 @@ Which types have a method or a getter is `temporal.c`'s to say:
   `method()` in `vm.c`), and faults when read as a value, as does a name
   of `Object.prototype`; any other call faults.
 
-`add` is also a set's method that changes its receiver, so `d.add(...)` on
-a variable the function owns compiles to `MUTATE` (docs/mutation.md), and
-`mutate()` in `vm.c` calls a method that changes nothing, as a Temporal
-value's `add`, with the variable's value as an ordinary call's receiver
-(its cases are in `mutation.spec`). The compiler cannot tell a Temporal
-value from a set by its name, so the rules of a mutation still apply at
-compile time: `d.add(x)` is refused where `d` was copied before or an
-arrow function captures it (`[1, 2].map(n => d.add({ days: n }))`), where
-`d` is read twice in one array (`[d.add(a), d.add(b)]`), and on a path
-(`o.d.add(x)`) or a parameter that an arrow function captures; and
-`d.add(x).add(y)` faults when it runs, on a variable or a parameter. On
-any other expression `add` is an ordinary call. What works instead:
-`Temporal.PlainDate.from(d).add(x)`, a `reduce`, or a new variable for
-each step (`const e = d.add(x); e.add(y)`).
+`add` is also a set's method that changes its receiver, a name the two
+kinds share (docs/mutation.md, "Shared names"). The compiler cannot tell
+a Temporal value from a set by its name, so it refuses none of `add`'s
+calls but a statement, and the run decides. On a variable the function
+owns, `d.add(...)` compiles to `MUTATE`, and `mutate()` in `vm.c` calls a
+method that changes nothing, a Temporal value's `add`, with the
+variable's value as an ordinary call's receiver; on a capture, a global
+or an import, it is an ordinary call. So `xs.map(n => start.add({ days: n
+}))`, `const e = d; d.add(x)`, `[d.add(a), d.add(b)]` and a capture after
+`d.add(x)` all give JavaScript's values, and `d.add(a).add(b)` goes on
+from the first result, a value, as an ordinary call's receiver (its cases
+are in `mutation.spec`). Two forms stay out: `d.add(x);` as a statement on
+a capture, a global or an import is refused as a set's would be (it has no
+effect anyway); and a chain through a path, `o.d.add(a).add(b)`, faults
+when it runs, as a path call's chain needs the container back: write
+`const e = o.d.add(a); e.add(b)`.
 
 A method ID is a byte (`sjs_name.methods`); `internal.h` asserts that the
 last fits. `SJS_METHOD_FIRST` is 96, so functions have IDs below it.
