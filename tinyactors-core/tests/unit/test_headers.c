@@ -42,6 +42,25 @@ ABI_CHECK(offsetof(ta_cbor_token, value) == 8, cbor_token_value_offset);
 ABI_CHECK(offsetof(ta_buffer, length) == 2 * sizeof(size_t) && sizeof(ta_buffer) == 3 * sizeof(void *),
           buffer_layout);
 ABI_CHECK(sizeof(ta_memory) == 2 * sizeof(void *), memory_layout);
+ABI_CHECK(offsetof(ta_bytes, length) == sizeof(void *) && sizeof(ta_bytes) == 2 * sizeof(void *),
+          bytes_layout);
+/* the streaming reader's item, and the writer's memory first (ADR 0010) */
+ABI_CHECK(offsetof(ta_cbor_item, count) == 4 && offsetof(ta_cbor_item, value) == 8 &&
+              offsetof(ta_cbor_item, bytes) == 16 &&
+              offsetof(ta_cbor_item, depth) == 16 + sizeof(ta_bytes),
+          cbor_item_layout);
+ABI_CHECK(offsetof(ta_cbor_writer, bytes) == 0 && offsetof(ta_cbor_writer, length) == 2 * sizeof(void *),
+          cbor_writer_memory_first);
+ABI_CHECK(TA_CBOR_COUNT_LATER == 0xFFFFFFFFu, cbor_count_later);
+/* a datamodel's outputs are views it owns (ADR 0010, decision 1): these
+ * calls type-check only with a ta_bytes * out */
+ABI_CHECK(sizeof(((ta_datamodel_vtable *)0)->to_wire(0, 0, (ta_bytes *)0)) == sizeof(ta_status),
+          vtable_to_wire_gives_a_view);
+ABI_CHECK(sizeof(((ta_datamodel_vtable *)0)->serialize((const ta_datamodel_call *)0, (ta_bytes *)0)) ==
+              sizeof(ta_status),
+          vtable_serialize_gives_a_view);
+ABI_CHECK(sizeof(((ta_datamodel_vtable *)0)->payload_serialize(0, 0, (ta_bytes *)0)) == sizeof(ta_status),
+          vtable_payload_serialize_gives_a_view);
 ABI_CHECK(offsetof(ta_spawn, name) == 8 && offsetof(ta_resume, result) == 16, call_structs_layout);
 ABI_CHECK(offsetof(ta_datamodel_vtable, migrate) > offsetof(ta_datamodel_vtable, deserialize),
           vtable_optional_hooks_last);

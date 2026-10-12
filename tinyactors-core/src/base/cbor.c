@@ -356,9 +356,8 @@ uint32_t ta_cbor_member(const ta_cbor_document *document, uint32_t map, ta_strin
 
 /* ---- encoding ---------------------------------------------------------------- */
 
-/* A head with `argument` in its shortest form. */
-void cbor_output_head(ta_output *output, uint32_t major, uint64_t argument) {
-    unsigned char head[9];
+/* A head with `argument` in its shortest form, into head[9]; its length. */
+static size_t head_encode(unsigned char *head, uint32_t major, uint64_t argument) {
     size_t width;
     uint32_t info;
     if (argument < INFO_ONE_BYTE) width = 0, info = (uint32_t)argument;
@@ -369,19 +368,20 @@ void cbor_output_head(ta_output *output, uint32_t major, uint64_t argument) {
     head[0] = (unsigned char)(major << 5 | info);
     for (size_t k = 0; k < width; k++)
         head[1 + k] = (unsigned char)(argument >> (8 * (width - 1 - k)));
-    ta_output_write(output, head, 1 + width);
+    return 1 + width;
 }
 
-/* A float in the shortest width that holds it exactly. */
-void cbor_output_float(ta_output *output, uint64_t bits) {
+/* A float in the shortest width that holds it exactly, into head[9]; its
+ * length. */
+static size_t float_encode(unsigned char *head, uint64_t bits) {
     uint32_t half;
     double value = bits_double(bits);
     if (value != value) { /* every NaN is the canonical one */
-        static const unsigned char nan[3] = {0xF9, 0x7E, 0x00};
-        ta_output_write(output, nan, 3);
-        return;
+        head[0] = 0xF9;
+        head[1] = 0x7E;
+        head[2] = 0x00;
+        return 3;
     }
-    unsigned char head[9];
     size_t width;
     if (half_narrow(bits, &half)) {
         head[0] = 0xF9;
@@ -400,7 +400,17 @@ void cbor_output_float(ta_output *output, uint64_t bits) {
     }
     for (size_t k = 0; k < width; k++)
         head[1 + k] = (unsigned char)(bits >> (8 * (width - 1 - k)));
-    ta_output_write(output, head, 1 + width);
+    return 1 + width;
+}
+
+void cbor_output_head(ta_output *output, uint32_t major, uint64_t argument) {
+    unsigned char head[9];
+    ta_output_write(output, head, head_encode(head, major, argument));
+}
+
+void cbor_output_float(ta_output *output, uint64_t bits) {
+    unsigned char head[9];
+    ta_output_write(output, head, float_encode(head, bits));
 }
 
 /* ---- diagnostic notation ----------------------------------------------------- */
@@ -806,6 +816,15 @@ static void writer_complete(ta_cbor_writer *writer) {
 /* A head (or a float) and, for a string, its bytes. */
 static void writer_put(ta_cbor_writer *writer, const unsigned char *head, size_t head_length,
                        ta_bytes bytes) {
+    size_t need = head_length + bytes.length;
+    if (writer->status == TA_OK && (writer->depth || !writer->items) &&
+        need <= writer->capacity - writer->length) { /* it fits: no growing */
+        unsigned char *at = writer->bytes + writer->length;
+        ta_memcpy(at, head, head_length);
+        if (bytes.length) ta_memcpy(at + head_length, bytes.pointer, bytes.length);
+        writer->length += need;
+        return;
+    }
     if (!writer_going(writer)) return;
     if (writer->depth == 0 && writer->items) {
         writer_fail(writer, TA_ERROR_INVALID); /* one item per writer */
@@ -825,16 +844,10 @@ static void writer_put(ta_cbor_writer *writer, const unsigned char *head, size_t
     writer_keep(writer, &output);
 }
 
-/* The head of `major` with `argument`, shortest; its length. */
-static size_t head_of(unsigned char *head, uint32_t major, uint64_t argument) {
-    ta_output output = ta_output_over((ta_buffer){head, 9, 0}, (const ta_allocator *)0);
-    cbor_output_head(&output, major, argument);
-    return output.length;
-}
 
 static void writer_scalar(ta_cbor_writer *writer, uint32_t major, uint64_t argument) {
     unsigned char head[9];
-    writer_put(writer, head, head_of(head, major, argument), (ta_bytes){(const void *)0, 0});
+    writer_put(writer, head, head_encode(head, major, argument), (ta_bytes){(const void *)0, 0});
     if (writer_going(writer)) writer_complete(writer);
 }
 
@@ -854,7 +867,7 @@ static void writer_open(ta_cbor_writer *writer, uint32_t kind, uint64_t count, i
     size_t at = writer->length;
     unsigned char head[9];
     /* counted later: one byte now, the shortest head once the count is known */
-    size_t length = later ? (head[0] = (unsigned char)(major << 5), 1) : head_of(head, major, count);
+    size_t length = later ? (head[0] = (unsigned char)(major << 5), 1) : head_encode(head, major, count);
     writer_put(writer, head, length, (ta_bytes){(const void *)0, 0});
     if (!writer_going(writer)) return;
     writer->heads[writer->depth] = at;
@@ -890,7 +903,7 @@ void ta_cbor_write_tag(ta_cbor_writer *writer, uint64_t tag) {
         return;
     }
     unsigned char head[9];
-    writer_put(writer, head, head_of(head, MAJOR_TAG, tag), (ta_bytes){(const void *)0, 0});
+    writer_put(writer, head, head_encode(head, MAJOR_TAG, tag), (ta_bytes){(const void *)0, 0});
     if (!writer_going(writer)) return;
     writer->heads[writer->depth] = 0;
     writer->counts[writer->depth] = 1;
@@ -913,7 +926,7 @@ void ta_cbor_write_end(ta_cbor_writer *writer) {
     }
     if (kind == TA_CBOR_MAP) count /= 2;
     unsigned char head[9];
-    size_t length = head_of(head, kind == TA_CBOR_MAP ? MAJOR_MAP : MAJOR_ARRAY, count);
+    size_t length = head_encode(head, kind == TA_CBOR_MAP ? MAJOR_MAP : MAJOR_ARRAY, count);
     size_t at = writer->heads[top];
     ta_output output = writer_output(writer);
     if (writer->status != TA_OK) {
@@ -942,7 +955,7 @@ static void writer_string(ta_cbor_writer *writer, uint32_t major, ta_bytes bytes
         return;
     }
     unsigned char head[9];
-    writer_put(writer, head, head_of(head, major, bytes.length), bytes);
+    writer_put(writer, head, head_encode(head, major, bytes.length), bytes);
     if (writer_going(writer)) writer_complete(writer);
 }
 
@@ -969,9 +982,7 @@ void ta_cbor_write_negative(ta_cbor_writer *writer, uint64_t n) {
 
 void ta_cbor_write_float(ta_cbor_writer *writer, double value) {
     unsigned char head[9];
-    ta_output output = ta_output_over((ta_buffer){head, 9, 0}, (const ta_allocator *)0);
-    cbor_output_float(&output, double_bits(value));
-    writer_put(writer, head, output.length, (ta_bytes){(const void *)0, 0});
+    writer_put(writer, head, float_encode(head, double_bits(value)), (ta_bytes){(const void *)0, 0});
     if (writer_going(writer)) writer_complete(writer);
 }
 

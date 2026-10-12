@@ -2742,6 +2742,7 @@ static int wire_dropped(JSContext *context, JSValueConst v) {
 }
 
 static int wire_write(wire_builder *b, JSContext *context, JSValueConst v, uint32_t depth);
+static void wire_value(wire_builder *b, JSContext *context, JSValueConst v, uint32_t depth);
 
 /* An object's own enumerable members, a key only for a value that is kept:
  * the map's count is fixed when it closes. */
@@ -2774,7 +2775,7 @@ static void wire_members(wire_builder *b, JSContext *context, JSValueConst v, ui
             } else {
                 ta_cbor_write_text(&b->writer, (ta_string_view){key, (uint32_t)length});
                 JS_FreeCString(context, key);
-                wire_write(b, context, value, item_depth);
+                wire_value(b, context, value, item_depth); /* resolved already */
             }
         }
         JS_FreeValue(context, value);
@@ -2789,15 +2790,14 @@ static int wire_write(wire_builder *b, JSContext *context, JSValueConst given, u
     if (wire_failed(b)) return -1;
     JSValue v = wire_resolve(b, context, given, &depth);
     if (JS_IsException(v)) return -1;
-    if (depth > TA_CBOR_DEPTH_MAX) { /* a cycle, or too deep for a neutral value */
-        JS_FreeValue(context, v);
-        wire_fail(b, TA_ERROR_INVALID);
-        return -1;
-    }
-    if (wire_dropped(context, v)) {
-        JS_FreeValue(context, v);
-        return 0;
-    }
+    int dropped = wire_dropped(context, v);
+    if (!dropped) wire_value(b, context, v, depth);
+    JS_FreeValue(context, v);
+    return dropped ? 0 : wire_failed(b) ? -1 : 1;
+}
+
+/* Write v, whose toJSON was applied (wire_resolve) and which is kept. */
+static void wire_value(wire_builder *b, JSContext *context, JSValueConst v, uint32_t depth) {
     if (JS_IsNull(v)) {
         ta_cbor_write_simple(&b->writer, TA_CBOR_NULL);
     } else if (JS_IsBool(v)) {
@@ -2868,8 +2868,6 @@ static int wire_write(wire_builder *b, JSContext *context, JSValueConst given, u
     } else {
         wire_members(b, context, v, depth);
     }
-    JS_FreeValue(context, v);
-    return wire_failed(b) ? -1 : 1;
 }
 
 ta_status ta_datamodel_ecmascript_payload_to_cbor(ta_datamodel_ecmascript *ecmascript,
