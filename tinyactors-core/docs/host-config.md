@@ -34,8 +34,9 @@ defaults, and does not write its own error messages. Each binding then
 behaves the same, and a default changes in one place.
 
 **A failed creation answers like a request.** There is no host yet to ask,
-so the reply goes into `environment->error`, a buffer the caller lends
-(see *Errors*). Without it, the caller still gets the status.
+so the reply goes into `environment->error`, a `ta_buffer` the caller
+lends (see *Errors*), and not into the host's memory, as a request's reply
+does. Without it, the caller still gets the status.
 
 Keys are camelCase, as in [requests](requests.md). An absent key is its
 default; a key the host does not take is refused. Examples are in CBOR

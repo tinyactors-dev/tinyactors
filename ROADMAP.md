@@ -686,6 +686,20 @@ In progress beside M0, in core:
 - **Definition logs:** a log record when a chart version is linked,
   retired and freed (0.1's `tinyactors.definition.*`). Done (`dbe8435d`;
   `tinyactors-core/docs/architecture.md`, 16.3).
+- **ADR 0010: outputs are views; values stream.** Implemented in core
+  (2026-10-12), in the ADR's order: the guard, calls that reach a
+  datamodel outside a run follow a run's rules (`2eef3d25`); a datamodel's
+  `to_wire`, `serialize` and `payload_serialize` give views it owns, each
+  asked for once per value (`4c90a97c`); the host's outputs (a request's
+  reply, envelopes, traces, logs, metrics, hibernation and export blobs)
+  are views of memory it grows and keeps, and the driver protocol's
+  `host.request` takes `refuse` instead of `capacity` (`633f79a1`); the
+  streaming `ta_cbor_writer` and `ta_cbor_reader`, `ta_cbor_encode` gone
+  (`4b5a4234`); `to_wire` at the token encoder's cost again (`ef1fbd24`:
+  a 1 KB envelope's `ta_host_envelope` 9.3 µs against 17.6). Next: both
+  bindings migrate to the new calls (their call sites are listed in the
+  coordinator's report), then delete their rooms, hints and retries
+  (`bindings.md` sections 6 and 9).
 
 ## Deferred
 

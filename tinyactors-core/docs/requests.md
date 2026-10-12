@@ -16,7 +16,7 @@ here, it does not exist. Examples are in CBOR diagnostic notation.
   - `id` (an integer, text or null, optional): echoed in the reply.
 - **A notification** is a request without `id`, as in JSON-RPC 2.0. The
   host applies it and writes no reply: `ta_host_request` returns `TA_OK`
-  with `reply->length` 0, and its errors are not reported, including a
+  with an empty reply, and its errors are not reported, including a
   method that does not exist and the host's allocator refusing. Send an
   `id` to learn the outcome. A request that is not one (the errors with
   code -32700 and -32600 below, and too many items) is answered even
@@ -36,11 +36,12 @@ here, it does not exist. Examples are in CBOR diagnostic notation.
 - **Keys in replies** come in the order shown on this page, which is
   always the same (ADR 0009, decision 3). Byte strings stay bytes.
 - **The status of `ta_host_request`:**
-  - `TA_OK`: `reply` holds a result or an error reply (a notification:
-    nothing).
-  - `TA_ERROR_NO_MEMORY`: the reply did not fit. `reply->length` is what it
-    needs and nothing was applied. Grow the buffer and send the request
-    again.
+  - `TA_OK`: `reply` is a result or an error reply (a notification:
+    nothing), a view of the host's memory, valid until the next call into
+    the host: read or copy it before anything else calls in (ADR 0010,
+    decision 2).
+  - `TA_ERROR_NO_MEMORY`: the host's allocator refused room for the reply,
+    and nothing was applied. Send the request again when it has room.
   - `TA_ERROR_STATE`: the call was made during a run (from a datamodel).
     Nothing was written.
 - **Limits:** a request is decoded into at most `TA_HOST_REQUEST_TOKENS`
@@ -363,7 +364,8 @@ binding gets the same answers.
 
 - the hot path: inputs (spawn, send, deliver, ...) and effects;
 - bytes the host writes or takes: traces, logs, metrics, hibernation,
-  export and snapshot blobs. These are C calls with a `ta_buffer`;
+  export and snapshot blobs. These are C calls that give a view of the
+  host's memory (snapshots: the caller's `ta_buffer`);
 - calls that need no host;
 - I/O, transport, and policy around I/O (retries, caps, posting);
 - anything a binding can compute from other replies;
@@ -378,14 +380,14 @@ binding gets the same answers.
 3. **The result:** a map with its keys in a fixed order.
 4. **Errors:** use a reason from the table above. A new reason needs its own
    code in the -32000 to -32099 range, added to the table.
-5. **Atomic:** write the result first and apply the change only when it
-   fits, so `TA_ERROR_NO_MEMORY` means nothing changed.
+5. **Atomic:** write the result first and apply the change only when the
+   host had room for it, so `TA_ERROR_NO_MEMORY` means nothing changed.
 6. **Refused during a run:** `ta_host_request` does this for every method.
    **Notifications** need nothing either: a method runs the same with or
    without an `id`, and `ta_host_request` drops what it would write.
 7. **Vectors** in `tinyactors-test/suites/protocol/requests.txt`: the result, its defaults,
-   each param's error, and a `capacity` case for a method that changes the
-   host. Unit tests (`tests/unit/test_host_request.c`) only for what a
+   each param's error, and a `refused` case for a method that changes the
+   host (the host's allocator refuses room for the reply: nothing applied). Unit tests (`tests/unit/test_host_request.c`) only for what a
    vector cannot show: a failing allocator, a call during a run.
 8. **The entry on this page**, with its params, result, errors and one
    example.

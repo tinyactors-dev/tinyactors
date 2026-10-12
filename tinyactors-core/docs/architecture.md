@@ -766,7 +766,11 @@ route is resolved **at fire time** (target may have terminated ⇒
    refuses, a call returns `TA_ERROR_NO_MEMORY` with the host unchanged and
    `ta_host_run` returns `TA_RUN_EXHAUSTED`; the next run resumes where it
    stopped, so a bounded allocator (a fixed arena, a database's memory
-   context) is backpressure, not failure.
+   context) is backpressure, not failure. What the host writes for its
+   caller (a reply, an envelope, telemetry, a hibernation or export blob)
+   goes into one block it grows the same way and keeps at its largest; the
+   caller gets a view of it, valid until its next call into the host
+   (ADR 0010).
 
 Sizing example — 100 000 actors of a 64-state chart, 4 workspaces,
 16 384 events, 4 096 timers:
@@ -878,7 +882,8 @@ without changing SCXML semantics. The host owns the policy and the storage.
  └──────────────────────────────────┘  to host └───────────────────────────┘
 ```
 
-- `ta_actor_hibernate(system, actor, &buffer)`: only at a stable point
+- `ta_actor_hibernate(system, actor, &buffer)` (the host's `ta_host_hibernate`
+  writes the same blob in one pass into memory it grows): only at a stable point
   (idle, empty mailbox and internal queue, no workspace, no invoked children —
   they read the parent's invoke slots — no pending request). Writes
   `header | instance words | invoke ids (text) | datamodel bytes` and frees

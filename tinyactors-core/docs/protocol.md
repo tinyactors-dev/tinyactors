@@ -147,9 +147,12 @@ Rules:
   from the `TA_HOST_EFFECT_PEER` and `TA_HOST_EFFECT_PEER_ERROR` effects and
   never writes bytes (a relayed value it copies from the effect's `wire` to
   the envelope's `wire`, still undecoded). A transport between processes writes each effect with
-  `ta_host_envelope` and, on the other side, reads the bytes with
+  `ta_host_envelope` (the bytes are a view of the host's memory until the
+  next call into it: the transport copies them out, one memcpy, before it
+  calls in again) and, on the other side, reads the bytes with
   `ta_host_envelope_read` or `ta_host_peer_error_read` before delivering
-  them: one encode and one decode per hop, none inside a process.
+  them: one encode and one decode per hop (the value written once by the
+  datamodel's `to_wire`), none inside a process.
 
 ## Values
 
