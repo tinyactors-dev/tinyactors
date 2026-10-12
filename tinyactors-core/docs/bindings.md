@@ -157,7 +157,7 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 ## 11 · Project and build
 
 - A project per runtime at the repository root, named for it (`tinyactors-napi`, `tinyactors-cpython`), with its own `mise.toml` pinning the toolchain, so nobody else downloads it.
-- **The conformance suite is shared, not code.** `tinyactors-test` holds the tests that are data (protocol vectors, effect transcripts, W3C) and runs them against one command per binding (`ROADMAP.md`, step 8). The binding’s own tests cover what the suite cannot see: memory failures, refusal during a run, threads, garbage collection, liveness.
+- **The conformance suite is shared, not code.** `tinyactors-test` holds the tests that are data (protocol vectors, self-checking scenarios, W3C) and runs them against one command per binding (`ROADMAP.md`, step 8). The binding’s own tests cover what the suite cannot see: memory failures, refusal during a run, threads, garbage collection, liveness.
 - **Our names carry the binding’s prefix** (`ta_python_*`, `ta_napi_*`); the platform’s names appear only where it requires them.
 - Liveness and timer accuracy are the runtime’s: whether a pending timer keeps the process alive, and how late a throttled timer fires (a hidden browser tab), are I/O behaviour, documented per runtime (Node: alive while a deadline is pending), not a policy. A late timer only makes delayed sends late; the next turn runs everything due, in order.
 - Link the release’s libraries (the amalgamation, or the release sources compiled into a wasm module for browsers). The binding has no C of its own beyond its addon.
