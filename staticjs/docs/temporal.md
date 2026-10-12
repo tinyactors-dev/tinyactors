@@ -199,6 +199,16 @@ limits: rounding up past the greatest, or down onto -271821-04-19T00:00,
 faults; a PlainTime wraps to midnight. `toString` rounds the same way to
 the digits it writes (`roundingMode` `trunc` by default).
 
+The polyfills differ on one kind of tie: `halfEven` makes the multiple
+even counted from midnight in temporal-polyfill (the specification now),
+counted from the unit above in @js-temporal/polyfill (as the
+specification once did). They give different values where the unit above
+holds an odd number of increments (12, 20 or 4 minutes or seconds; 8, 40
+or 200 of a smaller unit) on a tie that is not in the unit's first span:
+`23:54` to 12 minutes is `00:00` in one, `23:48` in the other. staticjs
+follows temporal-polyfill, and no case tests those ties (temporal_test
+leaves them out).
+
 ## Testing
 
 - `tests/spec/temporal_plain_date.spec`, `temporal_plain_time.spec` and
@@ -212,7 +222,10 @@ the digits it writes (`roundingMode` `trunc` by default).
   the polyfill: a fault where it throws, its value where staticjs gives
   one, and a fault on every deliberate line. Add each type's sweeps there:
   every option value claimed (overflow, rounding modes, units) against the
-  polyfill.
+  polyfill. Check them against @js-temporal/polyfill too, outside the
+  tests: a value staticjs gives must be both polyfills', and a line on
+  which they disagree must fault (deliberately, where temporal-polyfill
+  gives a value) or be left out.
 
 ## Status and notes for the next types
 
