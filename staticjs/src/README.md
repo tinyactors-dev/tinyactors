@@ -34,6 +34,9 @@ Implementation modules. Headers here are private; the public API is
                 strings, the constructors, from, compare, getters and methods of
                 the plain types, Duration and Instant, and the tables of which
                 type has which
+- `date.c`      Date (../docs/date.md): the time value of a Temporal-kind value,
+                the date time string format, V8's Date.UTC, the UTC getters and
+                texts, and the host clock in milliseconds
 - `regex.h`     regular expressions (../docs/regex.md): what the parser, compiler,
                 evaluator and writer share
 - `regex.c`     a literal's pattern read iteratively, each construct classified

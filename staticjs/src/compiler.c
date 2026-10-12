@@ -282,7 +282,9 @@ enum {
     /* Temporal, and its types and Now, each a namespace of its own:
      * Temporal.PlainDate.from. */
     NS_TEMPORAL, NS_TEMPORAL_PLAIN_DATE, NS_TEMPORAL_PLAIN_TIME, NS_TEMPORAL_PLAIN_DATE_TIME, NS_TEMPORAL_DURATION,
-    NS_TEMPORAL_INSTANT, NS_TEMPORAL_NOW
+    NS_TEMPORAL_INSTANT, NS_TEMPORAL_NOW,
+    /* Date: Date.now, Date.parse, Date.UTC; alone, Date called (docs/date.md). */
+    NS_DATE
 };
 
 /* An explicit export: resolved when it arrives, or at the end of the module. */
@@ -1330,7 +1332,7 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
     static const struct { const char *name; uint8_t space; } spaces[] = {
         { "Math", NS_MATH }, { "Object", NS_OBJECT }, { "Number", NS_NUMBER }, { "Array", NS_ARRAY },
         { "String", NS_STRING }, { "BigInt", NS_BIGINT }, { "Map", NS_MAP }, { "JSON", NS_JSON },
-        { "Temporal", NS_TEMPORAL }
+        { "Temporal", NS_TEMPORAL }, { "Date", NS_DATE }
     };
     for (uint32_t i = 0; i < sizeof spaces / sizeof spaces[0]; i++) {
         if (sjs_str_equal(e->text, sjs_cstr(spaces[i].name))) {
@@ -1373,7 +1375,7 @@ static sjs_result read_space_member(sjs_compiler *c, const sjs_event *e) {
     static const char *const space_names[] = {
         "", "Math", "Object", "Number", "Array", "String", "BigInt", "Map", "JSON",
         "Temporal", "Temporal.PlainDate", "Temporal.PlainTime", "Temporal.PlainDateTime", "Temporal.Duration",
-        "Temporal.Instant", "Temporal.Now"
+        "Temporal.Instant", "Temporal.Now", "Date"
     };
     static const struct { uint8_t space; const char *name; double value; } numbers[] = {
         { NS_MATH, "PI", 3.141592653589793 }, { NS_MATH, "E", 2.718281828459045 },
@@ -3015,19 +3017,18 @@ static sjs_result end(sjs_compiler *c, const sjs_event *e) {
     return SJS_OK;
 }
 
-/* `new Temporal.PlainDate(...)`: a call of the type's constructor, a
- * function the function table holds under the space "new", which no name
- * reaches. The callee goes first, as a call's does; NEW_END makes the call.
- * Where the program binds Temporal itself, `new` would construct from its
- * value, which staticjs does not. */
-static sjs_result new_temporal(sjs_compiler *c, const sjs_event *e) {
-    sjs_str name = SJS_STR("Temporal");
+/* `new Temporal.PlainDate(...)` and `new Date(...)`: a call of the type's
+ * constructor, a function the function table holds under the space "new",
+ * which no name reaches. The callee goes first, as a call's does; NEW_END
+ * makes the call. Where the program binds Temporal (or Date) itself, `new`
+ * would construct from its value, which staticjs does not. */
+static sjs_result new_builtin(sjs_compiler *c, const sjs_event *e, sjs_str name) {
     uint32_t found;
     bool bound = index_find(&c->global_index, name, &found);
     for (uint32_t s = scope_count(c); !bound && s-- > 0;) bound = index_find(&SJS_BUF_AT(c->scopes, scope, s).names, name, &found);
     sjs_builtin_id id = sjs_builtin_lookup(SJS_STR("new"), e->text);
     if (bound || id == SJS_BUILTIN_NONE) {
-        return fail_name(c, e, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs constructs only Set and Map, and the Temporal types it has" });
+        return fail_name(c, e, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs constructs only Set and Map, Date, and the Temporal types it has" });
     }
     uint32_t index;
     if (value_constant(c, sjs_builtin_value(id), &index) != SJS_OK) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_MEMORY, "out of memory" });
@@ -3040,10 +3041,12 @@ static sjs_result new_temporal(sjs_compiler *c, const sjs_event *e) {
 }
 
 static sjs_result event(sjs_compiler *c, const sjs_event *e) {
-    /* `String`, `Number` and `BigInt` are functions as well as namespaces:
-     * unless a member follows, each is the function, read where the name was. */
-    if ((c->space == NS_STRING || c->space == NS_NUMBER || c->space == NS_BIGINT) && e->kind != SJS_EV_MEMBER) {
-        sjs_builtin_id id = c->space == NS_STRING ? SJS_BUILTIN_STRING : c->space == NS_NUMBER ? SJS_BUILTIN_NUMBER : SJS_BUILTIN_BIGINT;
+    /* `String`, `Number`, `BigInt` and `Date` are functions as well as
+     * namespaces: unless a member follows, each is the function, read where
+     * the name was (Date's faults when called: docs/date.md). */
+    if ((c->space == NS_STRING || c->space == NS_NUMBER || c->space == NS_BIGINT || c->space == NS_DATE) && e->kind != SJS_EV_MEMBER) {
+        sjs_builtin_id id = c->space == NS_STRING ? SJS_BUILTIN_STRING : c->space == NS_NUMBER ? SJS_BUILTIN_NUMBER
+                          : c->space == NS_BIGINT ? SJS_BUILTIN_BIGINT : SJS_BUILTIN_DATE_CALL;
         c->space = NS_NONE;
         uint32_t index;
         if (value_constant(c, sjs_builtin_value(id), &index) != SJS_OK) return compile_fail(c, c->space_at, (sjs_problem){ SJS_ERROR_MEMORY, "out of memory" });
@@ -3128,7 +3131,8 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
     case SJS_EV_CALL_END:
         return call_end(c, e, SJS_OP_CALL);
     case SJS_EV_NEW_BEGIN: {
-        if (e->text.length > 9 && sjs_str_equal((sjs_str){ e->text.ptr, 9 }, SJS_STR("Temporal."))) return new_temporal(c, e);
+        if (e->text.length > 9 && sjs_str_equal((sjs_str){ e->text.ptr, 9 }, SJS_STR("Temporal."))) return new_builtin(c, e, SJS_STR("Temporal"));
+        if (sjs_str_equal(e->text, SJS_STR("Date"))) return new_builtin(c, e, SJS_STR("Date"));
         construct k = { 0 };
         k.kind = K_NEW;
         k.map = sjs_str_equal(e->text, SJS_STR("Map")) ? 1u : 0u;

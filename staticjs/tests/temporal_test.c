@@ -61,7 +61,12 @@
  *     increments and mode, toString's digits by every mode and its time
  *     zones, until and since over every pair of units, increment and mode,
  *     add, subtract, compare and equals; the roundings before 1970 that
- *     the polyfills give differently fault, deliberately.
+ *     the polyfills give differently fault, deliberately;
+ *   - Date (not Temporal's, compared with Node's own): Date.parse over
+ *     strings of the date time string format and beside it (each string
+ *     staticjs does not read a deliberate fault), Date.UTC over its
+ *     fields' edges, and the getters and texts over times at the edges of
+ *     years and the limits.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -1477,6 +1482,204 @@ static void instant_comparisons(runner *r) {
     }
 }
 
+/* ------------------------------------------------------------------------
+ * Date (docs/date.md): Date.parse over strings of the date time string
+ * format and beside it, Date.UTC over its fields' edges, and the getters,
+ * toISOString, toJSON and toUTCString over times at the edges of years,
+ * centuries and the limits. diff-node compares them with Node's own Date
+ * (TZ=UTC). A string staticjs does not read is a deliberate fault: Node
+ * reads many by heuristics of its own, and gives NaN for the rest.
+ */
+
+/* A part of a date time string, and whether the format has it (`valid`);
+ * `value` is the year, month or day it gives, 0 for none. */
+typedef struct {
+    const char *text;
+    bool valid;
+    long value;
+} date_part;
+
+static const date_part DATE_YEARS[] = {
+    { "2024", 1, 2024 }, { "1970", 1, 1970 }, { "1969", 1, 1969 }, { "0000", 1, 0 }, { "9999", 1, 9999 }, { "1900", 1, 1900 },
+    { "2000", 1, 2000 }, { "2100", 1, 2100 }, { "+002024", 1, 2024 }, { "-000001", 1, -1 }, { "+275760", 1, 275760 },
+    { "-271821", 1, -271821 }, { "+275761", 1, 275761 }, { "-271822", 1, -271822 }, { "-000000", 0, 0 }, { "+000000", 1, 0 },
+    { "+010000", 1, 10000 }, { "-010000", 1, -10000 }, { "+999999", 1, 999999 }, { "-999999", 1, -999999 }, { "-000100", 1, -100 },
+    { "-000400", 1, -400 }, { "202", 0, 0 }, { "20240", 0, 0 }, { "+02024", 0, 0 }, { "+2024", 0, 0 }, { "-2024", 0, 0 }, { "x024", 0, 0 },
+    { "", 0, 0 },
+};
+static const date_part DATE_MONTHS[] = {
+    { "", 1, 0 }, { "-01", 1, 1 }, { "-02", 1, 2 }, { "-04", 1, 4 }, { "-09", 1, 9 }, { "-12", 1, 12 }, { "-13", 0, 0 },
+    { "-00", 0, 0 }, { "-1", 0, 0 }, { "-012", 0, 0 }, { "01", 0, 0 }, { "/01", 0, 0 },
+};
+static const date_part DATE_DAYS[] = {
+    { "", 1, 0 }, { "-01", 1, 1 }, { "-13", 1, 13 }, { "-19", 1, 19 }, { "-20", 1, 20 }, { "-28", 1, 28 }, { "-29", 1, 29 },
+    { "-30", 1, 30 }, { "-31", 1, 31 }, { "-32", 0, 0 }, { "-00", 0, 0 }, { "-1", 0, 0 }, { "-001", 0, 0 }, { "/01", 0, 0 },
+};
+static const date_part DATE_TIMES[] = {
+    { "", 1, 0 }, { "T00:00", 1, 1 }, { "T12:30", 1, 1 }, { "T23:59:59", 1, 1 }, { "T23:59:59.999", 1, 1 }, { "T00:00:00.000", 1, 1 },
+    { "T24:00", 1, 1 }, { "T24:00:00", 1, 1 }, { "T24:00:00.000", 1, 1 }, { "T24:00:01", 0, 0 }, { "T24:01", 0, 0 },
+    { "T24:00:00.001", 0, 0 }, { "T25:00", 0, 0 }, { "T12:60", 0, 0 }, { "T12:30:60", 0, 0 }, { "T12:30:15.1", 0, 0 },
+    { "T12:30:15.12", 0, 0 }, { "T12:30:15.1234", 0, 0 }, { "T12:30:15.", 0, 0 }, { "T12", 0, 0 }, { "T1230", 0, 0 },
+    { "T1:30", 0, 0 }, { "t12:30", 0, 0 }, { " 12:30", 0, 0 }, { "T12:30:15,123", 0, 0 }, { "T", 0, 0 }, { "T12:3", 0, 0 },
+};
+static const date_part DATE_ZONES[] = {
+    { "", 1, 0 }, { "Z", 1, 1 }, { "+00:00", 1, 1 }, { "-00:00", 1, 1 }, { "+05:30", 1, 1 }, { "-08:00", 1, 1 }, { "+23:59", 1, 1 },
+    { "-23:59", 1, 1 }, { "+00:01", 1, 1 }, { "-00:01", 1, 1 }, { "z", 0, 0 }, { "+24:00", 0, 0 }, { "+05:60", 0, 0 },
+    { "+05", 0, 0 }, { "+0530", 0, 0 }, { "+5:30", 0, 0 }, { "Z ", 0, 0 }, { " Z", 0, 0 }, { "GMT", 0, 0 }, { "UTC", 0, 0 },
+    { "+05:30:00", 0, 0 }, { "Z[UTC]", 0, 0 }, { "+", 0, 0 },
+};
+
+static bool date_leap(long year) {
+    return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+}
+
+static void date_parse_case(runner *r, strings *s, const date_part *parts[5]) {
+    static const long DAYS[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    text string = { 0 };
+    put(&string, "");
+    bool valid = true;
+    for (int i = 0; i < 5; i++) {
+        put(&string, parts[i]->text);
+        valid = valid && parts[i]->valid;
+    }
+    long month = parts[1]->value, day = parts[2]->value;
+    if (day != 0 && (month == 0 || day > DAYS[month - 1] + (month == 2 && date_leap(parts[0]->value) ? 1 : 0))) valid = false;
+    if (parts[2]->text[0] != '\0' && parts[1]->text[0] == '\0') valid = false;
+    /* A time needs Z or an offset (without, it is local time); an offset
+     * needs a time. */
+    if ((parts[3]->text[0] != '\0') != (parts[4]->text[0] != '\0')) valid = false;
+    if (!seen_before(s, &string)) {
+        text source = { 0 };
+        put(&source, s->function);
+        put(&source, "(");
+        put_quoted(&source, string.ptr, string.length);
+        put(&source, ")");
+        evaluate(r, &source, !valid);
+        free(source.ptr);
+    }
+    free(string.ptr);
+}
+
+/* Date.parse: the years, dates, times and zones crossed (some of each),
+ * then every part varied alone around three strings. */
+static void date_strings(runner *r) {
+    static const size_t years[] = { 0, 1, 3, 4, 6, 8, 9, 10, 11, 12, 13, 14, 16, 17, 21, 22 };
+    static const size_t dates[][2] = { { 0, 0 }, { 2, 0 }, { 2, 6 }, { 2, 7 }, { 3, 8 }, { 3, 7 }, { 5, 8 }, { 4, 5 } };
+    static const size_t times[] = { 0, 1, 4, 6, 9, 15, 19 };
+    static const size_t zones[] = { 0, 1, 4, 5, 6, 13 };
+    static const date_part none = { "", 1, 0 };
+    strings s = { { 0 }, "Date.parse" };
+    for (size_t y = 0; y < COUNT(years); y++) {
+        for (size_t d = 0; d < COUNT(dates); d++) {
+            for (size_t t = 0; t < COUNT(times); t++) {
+                for (size_t z = 0; z < COUNT(zones); z++) {
+                    const date_part *parts[5] = { &DATE_YEARS[years[y]], &DATE_MONTHS[dates[d][0]], &DATE_DAYS[dates[d][1]], &DATE_TIMES[times[t]], &DATE_ZONES[zones[z]] };
+                    date_parse_case(r, &s, parts);
+                }
+            }
+        }
+    }
+    static const size_t bases[][5] = { { 0, 1, 8, 2, 1 }, { 10, 5, 0, 0, 0 }, { 11, 3, 4, 4, 9 } };
+    for (size_t b = 0; b < COUNT(bases); b++) {
+        const date_part *parts[5] = { &DATE_YEARS[bases[b][0]], &DATE_MONTHS[bases[b][1]], &DATE_DAYS[bases[b][2]], &DATE_TIMES[bases[b][3]], &DATE_ZONES[bases[b][4]] };
+        for (size_t i = 0; i < COUNT(DATE_YEARS); i++) date_parse_case(r, &s, (const date_part *[5]){ &DATE_YEARS[i], parts[1], parts[2], parts[3], parts[4] });
+        for (size_t i = 0; i < COUNT(DATE_MONTHS); i++) date_parse_case(r, &s, (const date_part *[5]){ parts[0], &DATE_MONTHS[i], parts[2], parts[3], parts[4] });
+        for (size_t i = 0; i < COUNT(DATE_DAYS); i++) date_parse_case(r, &s, (const date_part *[5]){ parts[0], parts[1], &DATE_DAYS[i], parts[3], parts[4] });
+        for (size_t i = 0; i < COUNT(DATE_TIMES); i++) date_parse_case(r, &s, (const date_part *[5]){ parts[0], parts[1], parts[2], &DATE_TIMES[i], parts[4] });
+        for (size_t i = 0; i < COUNT(DATE_ZONES); i++) date_parse_case(r, &s, (const date_part *[5]){ parts[0], parts[1], parts[2], parts[3], &DATE_ZONES[i] });
+    }
+    /* Every day of every month in a leap year and a common one, at the
+     * days past their ends. */
+    static const date_part leap = { "2024", 1, 2024 }, common = { "2023", 1, 2023 }, century = { "1900", 1, 1900 };
+    for (size_t m = 1; m <= 6; m++) {
+        for (size_t d = 5; d <= 9; d++) {
+            date_parse_case(r, &s, (const date_part *[5]){ &leap, &DATE_MONTHS[m], &DATE_DAYS[d], &none, &none });
+            date_parse_case(r, &s, (const date_part *[5]){ &common, &DATE_MONTHS[m], &DATE_DAYS[d], &none, &none });
+            date_parse_case(r, &s, (const date_part *[5]){ &century, &DATE_MONTHS[m], &DATE_DAYS[d], &none, &none });
+        }
+    }
+    free(s.seen.ptr);
+}
+
+static void evaluate_text(runner *r, const char *source) {
+    text t = { 0 };
+    put(&t, source);
+    evaluate(r, &t, false);
+    free(t.ptr);
+}
+
+/* Date.UTC: years around 0, the 1900 to 1999 mapping, the limits and V8's
+ * ranges, by months and days that balance; then each time field alone. */
+static void date_utc(runner *r) {
+    static const char *const years[] = {
+        "-1000001", "-1000000", "-271822", "-271821", "-271820", "-10000", "-401", "-400", "-101", "-100", "-1", "-0.5", "0", "0.5",
+        "1", "4", "99", "99.9", "100", "101", "1899", "1900", "1969", "1970", "1999", "2000", "2024", "2100", "9999", "10000",
+        "275759", "275760", "275761", "1000000", "1000000.5", "NaN", "Infinity", "null", "true", "undefined",
+    };
+    static const char *const months[] = { "-10000001", "-10000000", "-13", "-12", "-1", "-0.5", "0", "1", "1.9", "11", "12", "13", "24", "10000000", "10000000.5" };
+    static const char *const days[] = { "-100000001", "-1e8", "-366", "-1", "0", "1", "28", "29", "31", "32", "365", "1e8", "1e9", "NaN", "-Infinity" };
+    char room[256];
+    for (size_t y = 0; y < COUNT(years); y++) {
+        for (size_t m = 0; m < COUNT(months); m++) {
+            for (size_t d = 0; d < COUNT(days); d++) {
+                snprintf(room, sizeof room, "Date.UTC(%s, %s, %s)", years[y], months[m], days[d]);
+                evaluate_text(r, room);
+            }
+        }
+        snprintf(room, sizeof room, "Date.UTC(%s)", years[y]);
+        evaluate_text(r, room);
+    }
+    static const char *const fields[] = {
+        "-1", "0", "0.5", "-0.5", "1", "23", "24", "59", "60", "999", "1000", "86400000", "1e9", "2.4e9", "8.64e15", "-8.64e15", "1e20", "1e300",
+        "NaN", "Infinity", "-Infinity", "null", "undefined", "true",
+    };
+    static const char *const dates[] = { "1970, 0, 1", "-271821, 3, 20", "275760, 8, 12", "2024, 1, 29" };
+    for (size_t d = 0; d < COUNT(dates); d++) {
+        for (size_t f = 0; f < COUNT(fields); f++) {
+            for (size_t at = 0; at < 4; at++) {
+                const char *v[4] = { "0", "0", "0", "0" };
+                v[at] = fields[f];
+                snprintf(room, sizeof room, "Date.UTC(%s, %s, %s, %s, %s)", dates[d], v[0], v[1], v[2], v[3]);
+                evaluate_text(r, room);
+            }
+        }
+    }
+}
+
+/* The getters, toISOString, toJSON and toUTCString: times at the ends of
+ * years and of February, a millisecond either side, in years around 0,
+ * the centuries, 1970 and the limits; and time values at the limits. */
+static void date_getters(runner *r) {
+    static const char *const years[] = {
+        "-271821", "-271820", "-100000", "-10000", "-1001", "-401", "-400", "-399", "-101", "-100", "-5", "-4", "-1", "0", "1",
+        "4", "100", "400", "999", "1000", "1600", "1700", "1899", "1900", "1901", "1968", "1969", "1970", "1971", "1999", "2000",
+        "2023", "2024", "2100", "9999", "10000", "99999", "275759", "275760",
+    };
+    static const char *const points[] = {
+        "0, 1", "0, 1, 0, 0, 0, -1", "0, 1, 0, 0, 0, 1", "1, 28, 23, 59, 59, 999", "1, 29, 12", "2, 1", "2, 1, 0, 0, 0, -1",
+        "11, 31, 23, 59, 59, 999", "11, 31, 24", "3, 19, 23, 59, 59, 999", "3, 20", "8, 13", "8, 12, 23, 59, 59, 999",
+    };
+    static const char *const getters =
+        "(d => [d.getTime(), d.valueOf(), d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCDay(), d.getUTCHours(), "
+        "d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds(), d.toJSON(), d.toUTCString(), d.toGMTString(), d.toISOString()])";
+    char room[512];
+    for (size_t y = 0; y < COUNT(years); y++) {
+        for (size_t p = 0; p < COUNT(points); p++) {
+            snprintf(room, sizeof room, "%s(new Date(Date.UTC(%s, %s)))", getters, years[y], points[p]);
+            evaluate_text(r, room);
+        }
+    }
+    static const char *const times[] = {
+        "0", "-1", "1", "-0", "86399999", "86400000", "-86400000", "-86400001", "8.64e15", "-8.64e15", "8.64e15 - 1", "-8.64e15 + 1",
+        "8.64e15 + 1", "-8.64e15 - 1", "-62198755200000", "-62198755200001", "-62167219200000", "-62167219200001", "253402300799999",
+        "253402300800000", "-2208988800000", "951782400000", "1e15", "-1e15", "123.9", "-123.9", "NaN",
+    };
+    for (size_t t = 0; t < COUNT(times); t++) {
+        snprintf(room, sizeof room, "%s(new Date(%s))", getters, times[t]);
+        evaluate_text(r, room);
+    }
+}
+
 int main(int argc, char **argv) {
     runner r = { 0 };
     r.print = argc == 2 && strcmp(argv[1], "--print") == 0;
@@ -1512,6 +1715,9 @@ int main(int argc, char **argv) {
     instant_text(&r);
     instant_arithmetic(&r);
     instant_comparisons(&r);
+    date_strings(&r);
+    date_utc(&r);
+    date_getters(&r);
     sjs_vm_destroy(r.vm);
     sjs_context_destroy(r.context);
     if (live != 0) {
