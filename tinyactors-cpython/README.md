@@ -5,31 +5,8 @@ module drives the tinyactors host, and chart logic is written in Python.
 
 **Status: not usable yet.** This directory holds the project's skeleton:
 its toolchain, tasks, lint rules and the empty mapping table. There is no
-module to import.
-
-## What the first milestone delivers
-
-M1 of the bindings' plan ([ROADMAP.md](../ROADMAP.md), step 8) is a
-walking skeleton:
-
-- the `tinyactors` module and its `Host` type, created from Python
-  options, with images, boot, spawn, send and terminate;
-- the loop with every run status, and the `DONE`, `ERROR` and `LOG`
-  effects;
-- `request` with `TinyactorsError` (code, reason, path);
-- values converted between CBOR and Python ([docs/values.md](docs/values.md)),
-  with `Address` for an actor reference and `UNDEFINED` beside `None`,
-  and the same conversion as `tinyactors.encode(value) -> bytes` and
-  `tinyactors.decode(data) -> object`;
-- the `"python"` datamodel: `<data>`, `cond`, `assign`, `<script>`,
-  `_event`, `In()`, `<send>` with params, `<foreach>` in Python, and the
-  ECMAScript datamodel (quickjs) beside it;
-- a simulated clock for testing charts (`SimulatedClock`,
-  `increment(ms)`).
-
-Later milestones add the W3C suite in Python (M2), every effect and both
-drivers (M3), hibernation, migration and peers (M4), and the release:
-one abi3 wheel per platform for Python 3.13 and later (M5).
+module to import. What is being built, in what order, and how far it
+is: [ROADMAP.md](ROADMAP.md).
 
 ## Limits, to be documented here
 

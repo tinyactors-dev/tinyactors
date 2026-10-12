@@ -1,6 +1,6 @@
 # The extension calls core (ta_*, TA_* macros, our own ta_python_*) and
-# CPython's API (Py*), and nothing else (ROADMAP.md, step 8, "Gates": layer
-# lints; tinyactors-core/docs/bindings.md, sections 1 and 2): no other
+# CPython's API (Py*), and nothing else (AGENTS.md, "C rules": layers;
+# tinyactors-core/docs/bindings.md, sections 1 and 2): no other
 # library, no twin of what C or the runtime does, no private CPython
 # function (_Py*, outside the limited API the wheel is built with).
 #

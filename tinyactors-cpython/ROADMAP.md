@@ -1,19 +1,55 @@
 # Roadmap: tinyactors-cpython
 
-The Python session's plan and progress, milestone by milestone, and its
-requests to core. The plan of both bindings is the root
-[ROADMAP.md](../ROADMAP.md), step 8: its milestones, gates and rules
-decide; this file says how this binding gets there and how far it is.
-
-**Who writes what.** The Python session keeps this file up to date as it
-works and commits it with its own paths (`git commit --
-tinyactors-cpython/`). It never edits the root `ROADMAP.md`. The
-coordinator reads this file, moves each request below into the root's
-"Requests to core" when it takes it up, and marks a milestone done there
-after its audit and review.
+The Python binding's plan and progress, milestone by milestone, how the
+work on it runs now, and its requests to core. The plan of both bindings
+is the root [ROADMAP.md](../ROADMAP.md), step 8: its milestones, gates and
+rules decide; this file says how this binding gets there and how far it
+is. The binding's own rules, true whatever the milestone, are in
+[AGENTS.md](AGENTS.md).
 
 **The milestone now: M1** (`MILESTONE` in `mise/cpython.rb`; `mise run
 test` runs the suite's set for it, `--milestone M1`).
+
+## How the work runs now
+
+The root ROADMAP.md, step 8, "Rules for the work", sets these for every
+session; here they are as they apply to this one.
+
+- **The Python session owns `tinyactors-cpython/` and nothing else.** A
+  Node session owns `tinyactors-napi/` at the same time, in the same
+  checkout; a coordinating session owns `tinyactors-core` and
+  `tinyactors-test`.
+- **This file is the session's.** The Python session keeps it up to date
+  as it works and commits it with its own paths. It never edits the root
+  `ROADMAP.md`: the coordinator reads this file, moves each request below
+  into the root's "Requests to core" when it takes it up, and marks a
+  milestone done there after its audit and review. Then the session moves
+  `MILESTONE` in `mise/cpython.rb` on to the next milestone.
+- **Core and the suite are frozen.** A gap in either (AGENTS.md, "Gaps in
+  core", says what a report holds) is written under "Requests to core"
+  below and committed alone (`docs(cpython): request to core: ...`). The
+  coordinator makes the change, with C tests and suite cases, and says
+  when to go on (rebase onto it).
+- **One checkout, on `main`, commits of this project's paths only:**
+  `git commit -- tinyactors-cpython/` (`git add` a new file by its path
+  first). Never `git add -A`, `git add .` at the root, `git commit -a`,
+  `git stash`, `git checkout -- .` or `git reset --hard`: they take or
+  undo the other sessions' work. History stays linear: `git pull
+  --rebase` when `main` moved.
+- **`.git/index.lock` belongs to another session's git command.** When
+  git says the index is locked, wait a few seconds and run the same
+  command again, as often as it takes. Never delete the lock: the other
+  command is still writing the index, and removing it can lose that
+  session's staged work.
+- **Tests: this project's only.** Run this project's `mise run test`
+  before every commit, and the suite against the adapter (`mise run
+  conform`). Never the root `mise run test` (it runs every project for 20
+  minutes) and never `tinyactors-core`'s build or tests: the coordinator
+  runs those. `mise run build` here runs core's `amalgamate` task, and
+  that is the only core task this session runs.
+- **An audit after each milestone**, by the coordinator: both bindings
+  against the guide's "never" list, against each other file by file, and
+  against their mapping tables. What it finds is fixed here.
 
 ## M1: walking skeleton with the native datamodel
 
@@ -21,42 +57,60 @@ From the root [ROADMAP.md](../ROADMAP.md), step 8, "M1: walking skeletons
 with native datamodels"; read it there, with the gates table and the
 pitfalls, before changing this copy.
 
-**Scope.** The `tinyactors` module and its `Host` type; `ta_host_create`
-from Python options; images, boot, spawn, send, terminate; the loop with
-every run status; `DONE`, `ERROR`, `LOG`; `request` with
-`TinyactorsError`; the CBOR conversion with the value table (big
-integers, bytes, `Address`, `UNDEFINED`), exposed as
-`tinyactors.encode(value) -> bytes` and `tinyactors.decode(data) ->
-object`; the `"python"` datamodel for `<data>`, `cond`, `assign`,
-`<script>`, `_event`, `In()`, `<send>` with params, `<foreach>`; quickjs
-wired in beside it; `SimulatedClock` with `increment(ms)`; and the
-suite's adapter (`conform/`, `python -m conform`), which frames the
-driver's calls with `tinyactors.encode` and `tinyactors.decode` and
-imports nothing but `tinyactors` and the standard library.
+### M1 done means
 
-**Gates** (each in `mise run test`):
-
-- the suite's M1 set (`tinyactors-test/suites/milestones.txt`): every
-  protocol vector file (`requests`, `config`, `envelopes`, `values`), the
-  `basics` scenario and the outcome canaries (`outcome-compile`,
-  `outcome-fail`, `outcome-timeout`), on the native datamodel and on
-  quickjs;
-- `values.txt` round trips on the native datamodel (in the set above);
-- the mapping table (`docs/api-map.md`);
-- the layer lints, the prefix, no mutable globals;
-- the pitfalls of `AGENTS.md` ("Pitfalls M1 handles"), each with a test
-  of its own in `tests/`;
-- the value table's own tests, against `values.txt`'s `python` lines: the
-  vectors go through this binding's codec both ways, so they cannot catch
-  a value mapped wrong the same way in both directions (the root
-  ROADMAP.md's "Known limit").
-
-Then the API review, both bindings side by side (the coordinator).
+- **Scope:** the `tinyactors` module and its `Host` type;
+  `ta_host_create` from Python options; images, boot, spawn, send,
+  terminate; the loop with every run status; `DONE`, `ERROR`, `LOG`;
+  `request` with `TinyactorsError` (code, reason, path); the CBOR
+  conversion with the value table (big integers, bytes, `Address`,
+  `UNDEFINED`), exposed as `tinyactors.encode(value) -> bytes` and
+  `tinyactors.decode(data) -> object`; the `"python"` datamodel for
+  `<data>`, `cond`, `assign`, `<script>`, `_event`, `In()`, `<send>` with
+  params, `<foreach>`; quickjs wired in beside it; `SimulatedClock` with
+  `increment(ms)`; the suite's adapter (`conform/`, `python -m conform`),
+  which frames the driver's calls with `tinyactors.encode` and
+  `tinyactors.decode` and imports nothing but `tinyactors` and the
+  standard library; and each rule of AGENTS.md's "Rules the suite cannot
+  see" with a test of its own.
+- **`SimulatedClock`**, `increment(ms)` (xstate's shape, our meaning): a
+  host created with it arms no timer; `increment(ms)` calls
+  `ta_host_advance_time` and runs the loop until idle; inputs run the
+  turn at the current time. It has its row in `docs/api-map.md`
+  (`ta_host_advance_time`, `ta_host_run`), and the adapter uses it for
+  the scenarios' `advance` steps.
+- **Gates**, each in `mise run test`:
+  - the suite's M1 set (`tinyactors-test/suites/milestones.txt`): every
+    protocol vector file (`requests`, `config`, `envelopes`, `values`),
+    the `basics` scenario and the outcome canaries (`outcome-compile`,
+    `outcome-fail`, `outcome-timeout`), on the native datamodel and on
+    quickjs;
+  - `values.txt` round trips on the native datamodel (in the set above);
+  - the mapping table (`docs/api-map.md`);
+  - the layer lints, the prefix, no mutable globals;
+  - both interpreters: the abi3 build on 3.13 and the free-threaded test
+    build;
+  - the rules of AGENTS.md's "Rules the suite cannot see", each with a
+    test of its own in `tests/`;
+  - the value table's own tests, against `values.txt`'s `python` lines:
+    the vectors go through this binding's codec both ways, so they cannot
+    catch a value mapped wrong the same way in both directions (the root
+    ROADMAP.md's "Known limit").
+- **Then the API review**, by the coordinator, both bindings side by
+  side: how a Python chart reads, how a Node program reads. M2 starts
+  after it, when the coordinator marks M1 done in the root `ROADMAP.md`
+  and this session moves `MILESTONE` on.
 
 ### Plan and progress
 
 The session writes its plan here as a list of steps, each with the commit
 that finished it, and keeps it current. Empty until the session starts.
+
+## Later milestones
+
+From the root ROADMAP.md, step 8: the W3C suite in Python (M2), every
+effect and both drivers (M3), hibernation, migration and peers (M4), and
+the release: one abi3 wheel per platform for Python 3.13 and later (M5).
 
 ## Requests to core
 

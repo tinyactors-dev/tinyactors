@@ -21,7 +21,7 @@ handling of an effect.
 A core function no item uses is listed below the table: used internally
 (say where) or not exposed (say why).
 
-A row marked *planned* is an item M1 must have (ROADMAP.md, step 8, M1),
+A row marked *planned* is an item the plan (ROADMAP.md) calls for,
 written ahead so its core is checked and the API review sees it; the
 commit that adds the item removes the mark.
 
@@ -33,4 +33,4 @@ commit that adds the item removes the mark.
 
 ## Core functions no item uses
 
-TODO (M1).
+TODO.

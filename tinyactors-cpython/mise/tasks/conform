@@ -3,26 +3,26 @@
 #USAGE arg "[argument]..." var=#true help="options for the runner: --milestone, --suite, --timeout, --skip (tinyactors-test/README.md)"
 # vim:ft=ruby
 
-# The differential run (ROADMAP.md, step 8, "Gates"): the same suite on the
+# The differential run (AGENTS.md, "Tasks"): the same suite on the
 # native "python" datamodel and on quickjs, and both must pass. The kind is
 # stated here, by the project that runs the suite, not by the adapter
 # (tinyactors-test/docs/driver.md, "Kinds"). The adapter runs on the pinned
 # interpreter, by path: the runner is tinyactors-test's task, whose PATH has
 # its own python first.
 #
-# M1: the adapter imports the built extension as `tinyactors`; put it on
+# The adapter imports the built extension as `tinyactors`; put it on
 # the import path here (PYTHONPATH), never in the adapter, whose lint
 # refuses `sys.path` (tinyactors-test/lint). It reads and writes the
 # driver's frames with the module's own `tinyactors.encode` and
 # `tinyactors.decode`, and imports nothing but `tinyactors` and the
 # standard library (the same lint). Without --milestone the whole suite
-# runs; `mise run test` passes the milestone (CPython::MILESTONE).
+# runs; `mise run test` passes `--milestone CPython::MILESTONE`.
 
 require_relative '../cpython'
 
 unless CPython::ADAPTER.exist?
   abort "conform: no adapter yet: #{CPython::ADAPTER.relative_path_from(CPython::ROOT)}/ " \
-        '(python -m conform, written in M1)'
+        '(python -m conform)'
 end
 
 python = CPython.pinned('python')

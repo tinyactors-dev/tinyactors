@@ -1,11 +1,11 @@
-# One timer, in src/loop.c (ROADMAP.md, step 8, "Gates": layer lints;
+# One timer, in src/loop.c (AGENTS.md, "C rules": layers;
 # tinyactors-core/docs/bindings.md, section 3: "One timer, re-armed after
 # every loop; never one per actor or per deadline"). The loop's wakes go
 # through the event loop's methods or the synchronous driver's sleep, which
 # the extension reaches by name: `loop.call_at`, `loop.call_later`,
 # `loop.call_soon` (a turn after TA_RUN_YIELDED), `call_soon_threadsafe`,
 # `time.sleep`. Their names appear in src/loop.c only. That there is one
-# TimerHandle at a time is the loop's own test (M1).
+# TimerHandle at a time is the loop's own test.
 id: one-timer-in-loop
 language: c
 severity: error

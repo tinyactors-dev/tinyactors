@@ -1,5 +1,5 @@
-# tinyactors-cpython's toolchain (ROADMAP.md, step 8, "File trees"): only
-# this project downloads it. Tasks are Ruby file tasks in mise/tasks/.
+# tinyactors-cpython's toolchain (AGENTS.md, "Tasks"): only this project
+# downloads it. Tasks are Ruby file tasks in mise/tasks/.
 #
 # The C compiler, LLVM's binutils, ast-grep and zig are the root mise.toml's
 # (mise/lib/toolchain/): the extension compiles with Toolchain::Target, and a
@@ -19,7 +19,7 @@ uv = "0.12.22"
 
 [env]
 # The free-threaded interpreter the tests build the same sources for a
-# second time, without Py_LIMITED_API (ROADMAP.md, step 8, "The
+# second time, without Py_LIMITED_API (AGENTS.md, "C rules": "The
 # free-threaded build is for tests only"). mise builds a free-threaded
 # python from source (pyenv's python-build); uv installs a prebuilt one:
 # `uv python install` and `uv python find` take this request

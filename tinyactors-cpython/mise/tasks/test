@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Test tinyactors-cpython: lint (rules, the binding's C, the adapter, the mapping table, the build scripts, acronyms), the build, the interpreters, and the milestone's conformance set against the adapter on both datamodels"
+#MISE description="Test tinyactors-cpython: lint (rules, the binding's C, the adapter, the mapping table, the build scripts, acronyms), the build, the interpreters, and the conformance set named by MILESTONE against the adapter on both datamodels"
 #MISE sources=["src/**/*", "conform/**/*", "tests/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "pyproject.toml", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/docs/requests.md", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise/ast-grep/**/*", "../sgconfig.yml", "../acronyms.txt", "../acronyms-allow.txt", "../mise.toml", "../LICENSE"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
@@ -9,13 +9,13 @@
 # the mapping table) and the suite's, so a change to either reruns this
 # task from the root's `mise run test` (AGENTS.md, "Tests: what to run").
 #
-# With no code yet (M0), it passes on: the lint rules' tests and an empty
-# src/, the mapping table's empty table, core's amalgamation built into
-# build/core, and both interpreters found. The conformance suite needs the
-# adapter (conform/, M1): without it, this task says so and skips it; with
-# it, the suite's set of the milestone this binding is working on must
-# pass (`mise run conform -- --milestone M1`; CPython::MILESTONE). `mise run
-# conform` on its own runs the whole suite, and fails without the adapter.
+# Without code, it passes on: the lint rules' tests and an empty src/, the
+# mapping table's empty table, core's amalgamation built into build/core,
+# and both interpreters found. The conformance suite needs the adapter
+# (conform/): without it, this task says so and skips it; with it, the
+# suite's set named by CPython::MILESTONE must pass (`mise run conform --
+# --milestone <it>`). `mise run conform` on its own runs the whole suite,
+# and fails without the adapter.
 
 require_relative '../cpython'
 
@@ -34,5 +34,5 @@ end
 if CPython::ADAPTER.exist?
   CPython.run('mise', 'run', 'conform', '--', '--milestone', CPython::MILESTONE)
 else
-  puts 'test: conform skipped: no adapter yet (conform/, M1)'
+  puts 'test: conform skipped: no adapter yet (conform/)'
 end

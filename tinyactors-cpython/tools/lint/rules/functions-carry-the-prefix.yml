@@ -1,5 +1,5 @@
 # Every function the binding defines or declares is named ta_python_*
-# (ROADMAP.md, step 8, "Rules for the work"; tinyactors-core/docs/bindings.md,
+# (AGENTS.md, "Names"; tinyactors-core/docs/bindings.md,
 # section 11), static helpers included. A platform's name appears only where
 # the platform requires it: the module's init function, which CPython's
 # import finds by the name PyInit_<module> (PEP 489). A slot is filled with

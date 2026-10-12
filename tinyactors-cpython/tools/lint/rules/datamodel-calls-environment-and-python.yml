@@ -1,5 +1,5 @@
 # The datamodel (src/datamodel/) is the vtable's entries only: of core it
-# calls only what a datamodel may (ROADMAP.md, step 8, "Gates": layer lints;
+# calls only what a datamodel may (AGENTS.md, "C rules": layers;
 # include/tinyactors/datamodel.h: "implementations may call the read-only
 # ta_datamodel_environment_* queries below; they must never call ta_system_*
 # functions"):

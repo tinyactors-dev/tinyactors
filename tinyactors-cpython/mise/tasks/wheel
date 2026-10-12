@@ -1,9 +1,10 @@
 #!/usr/bin/env ruby
-#MISE description="Build the wheel: one abi3 wheel (3.13+) per platform, no .py files in it. Not yet: packaging is M5"
+#MISE description="Build the wheel: one abi3 wheel (3.13+) per platform, no .py files in it. Not built yet (ROADMAP.md)"
 # vim:ft=ruby
 
-# ROADMAP.md, step 8, M5 ("examples and release": release tasks and
-# changelogs for both packages) and the file tree of tinyactors-cpython
-# (pyproject.toml: one abi3 wheel per platform, built by this task).
+# One abi3 wheel per platform, built by this task (pyproject.toml), with
+# release tasks and a changelog, as every release artifact of this
+# repository is built by a mise task (docs/adr/0001, decision 2). When
+# packaging is built is in ROADMAP.md.
 
-abort 'wheel: not yet: the wheel is built in M5 (ROADMAP.md, step 8, "M5: examples and release")'
+abort 'wheel: not built yet: packaging is not written (ROADMAP.md)'
