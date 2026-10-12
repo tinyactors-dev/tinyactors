@@ -30,6 +30,8 @@
  *     P <m> <bits> <d> <text>   a fixed list of doubles, whatever COUNT is, through
  *                               toFixed(d) (m f), toExponential(d) (e) and
  *                               toPrecision(d) (p); d u for undefined
+ *     Q <radix> <bits> <text>   a fixed list of doubles, whatever COUNT is, in every
+ *                               radix 2 to 36: x.toString(radix)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +59,16 @@ static void expect_format(double value, const char *want) {
     text[n] = '\0';
     if (strcmp(text, want) != 0) {
         fprintf(stderr, "format %016llx: want %s, got %s\n", (unsigned long long)to_bits(value), want, text);
+        failures++;
+    }
+}
+
+static void expect_radix(double value, uint32_t radix, const char *want) {
+    static char text[SJS_NUMBER_RADIX_MAX + 1u];
+    uint32_t n = sjs_number_format_radix(value, radix, text);
+    text[n] = '\0';
+    if (strcmp(text, want) != 0) {
+        fprintf(stderr, "toString(%u) of %016llx: want %s, got %s\n", radix, (unsigned long long)to_bits(value), want, text);
         failures++;
     }
 }
@@ -620,6 +632,64 @@ static void print_digit_methods(void) {
     }
 }
 
+/* toString(radix) of a fixed list of doubles in every radix 2 to 36:
+ * integers to the largest double, fractions to the smallest subnormal,
+ * negatives, -0, NaN and the infinities; then, for each radix, its powers
+ * and the doubles next to them, a unit off them, and its negative powers
+ * and their neighbours. The same lines for any COUNT. */
+static const double RADIX_VALUES[] = {
+    0.0, 1.0, 2.0, 3.0, 7.0, 9.0, 10.0, 15.0, 16.0, 17.0, 35.0, 36.0, 37.0, 100.0, 255.0, 256.0,
+    1000.0, 4095.0, 65535.0, 123456789.0, 1e9, 2147483647.0, 2147483648.0, 4294967295.0,
+    4294967296.0, 1e15, 4503599627370495.0, 4503599627370496.0, 9007199254740991.0,
+    9007199254740992.0, 9007199254740994.0, 18014398509481984.0, 18014398509481988.0,
+    1152921504606846976.0, 9223372036854775808.0, 18446744073709551616.0,
+    18446744073709555712.0, 1e18, 1e20, 1e21, 1e22, 1.2345e25, 1e30, 1e100, 1.2345678901234567e200,
+    1e300, 1e308, 8.98846567431158e307, 1.7976931348623157e308, 1.7976931348623155e308,
+    0.1, 0.2, 0.3, 0.30000000000000004, 0.25, 0.125, 0.5, 0.7, 0.9, 0.3333333333333333,
+    0.6666666666666666, 0.14285714285714285, 0.1111111111111111, 0.9999999999999999,
+    0.99999999999999994, 1.0000000000000002, 1.5, 2.5, 3.5, 255.5, 4503599627370495.5,
+    2251799813685247.75, 1e15 + 0.3, 123.456, 3.141592653589793, 2.718281828459045,
+    1.4142135623730951, 0.001, 0.0001, 1e-5, 1e-7, 1e-10, 1e-20, 1e-100, 1e-300,
+    2.2250738585072014e-308, 2.225073858507201e-308, 1e-310, 1e-320, 1e-323, 5e-324,
+    1.2345e-5, 6.02214076e23, 1.602176634e-19, 0.000001, 0.0000015, 65536.5, 0.05,
+    0.95, 0.995, 1.0 / 1024.0, 1.0 / 3.0 + 1.0, 100.0 / 3.0, 2.0 / 3.0 * 1e10,
+    -1.0, -2.0, -255.0, -2147483648.0, -9007199254740992.0, -1e21, -1.7976931348623157e308,
+    -0.1, -0.5, -0.3333333333333333, -123.456, -255.5, -1e-7, -5e-324, -2.2250738585072014e-308,
+    -0.0, 0.0 / 0.0, 1.0 / 0.0, -1.0 / 0.0
+};
+
+static void print_radix(uint32_t radix, double value) {
+    static char text[SJS_NUMBER_RADIX_MAX + 1u];
+    uint32_t length = sjs_number_format_radix(value, radix, text);
+    text[length] = '\0';
+    printf("Q %u %016llx %s\n", radix, (unsigned long long)to_bits(value), text);
+}
+
+static void print_radix_methods(void) {
+    static const int32_t POWERS[] = { 1, 2, 5, 10, 13, 20, 40, 100, 200 };
+    static const int32_t NEGATIVE[] = { 1, 2, 3, 7, 20, 100 };
+    for (uint32_t radix = 2; radix <= 36u; radix++) {
+        for (size_t v = 0; v < sizeof RADIX_VALUES / sizeof RADIX_VALUES[0]; v++) print_radix(radix, RADIX_VALUES[v]);
+        for (size_t k = 0; k < sizeof POWERS / sizeof POWERS[0]; k++) {
+            double p = 1.0;
+            for (int32_t i = 0; i < POWERS[k]; i++) p *= (double)radix;
+            if (p > 1.7976931348623157e308) continue;
+            print_radix(radix, p);
+            print_radix(radix, from_bits(to_bits(p) + 1u));
+            print_radix(radix, from_bits(to_bits(p) - 1u));
+            print_radix(radix, p + 1.0);
+            print_radix(radix, p - 1.0);
+        }
+        for (size_t k = 0; k < sizeof NEGATIVE / sizeof NEGATIVE[0]; k++) {
+            double p = 1.0;
+            for (int32_t i = 0; i < NEGATIVE[k]; i++) p /= (double)radix;
+            print_radix(radix, p);
+            print_radix(radix, from_bits(to_bits(p) + 1u));
+            print_radix(radix, from_bits(to_bits(p) - 1u));
+        }
+    }
+}
+
 static int print(long count) {
     print_formats(count);
     print_decimals(count);
@@ -631,6 +701,7 @@ static int print(long count) {
     print_bigint_ops(count);
     print_bigint_texts(count);
     print_digit_methods();
+    print_radix_methods();
     return 0;
 }
 
@@ -660,6 +731,21 @@ int main(int argc, char **argv) {
     expect_format(0.0 / 0.0, "NaN");
     expect_format(100.0, "100");
     expect_format(1234.5678, "1234.5678");
+
+    /* x.toString(radix), as Node 22 writes it. */
+    expect_radix(255.0, 16, "ff");
+    expect_radix(-255.0, 2, "-11111111");
+    expect_radix(0.1, 3, "0.0022002200220022002200220022002201");
+    expect_radix(0.1, 36, "0.3lllllllllm");
+    expect_radix(0.5, 2, "0.1");
+    expect_radix(1.0 / 3.0, 3, "0.1");
+    expect_radix(-0.0, 2, "0");
+    expect_radix(0.0 / 0.0, 16, "NaN");
+    expect_radix(1.0 / 0.0, 36, "Infinity");
+    expect_radix(-1.0 / 0.0, 2, "-Infinity");
+    expect_radix(1e21, 36, "5v1j4f4ds7c000");
+    expect_radix(9007199254740992.0, 7, "5350140446150306054");
+    expect_radix(123.456, 10, "123.456");
 
     expect_number("7 % 3", sjs_number_remainder(7, 3), 1);
     expect_number("-7 % 3", sjs_number_remainder(-7, 3), -1);

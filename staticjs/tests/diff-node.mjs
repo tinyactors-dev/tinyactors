@@ -331,6 +331,11 @@ const numberChecks = {
     const theirs = toDouble(bits)[name](digits === 'u' ? undefined : Number(digits));
     return text === theirs ? null : `${toDouble(bits)}.${name}(${digits === 'u' ? '' : digits}): staticjs ${text}, JavaScript ${theirs}`;
   },
+  Q(rest) { // <radix> <bits> <text>: x.toString(radix)
+    const [radix, bits, text] = rest.split(' ');
+    const theirs = toDouble(bits).toString(Number(radix));
+    return text === theirs ? null : `${toDouble(bits)}.toString(${radix}): staticjs ${text}, JavaScript ${theirs}`;
+  },
   J(rest) { // <document> <text>: JSON.stringify(JSON.parse(document)), never a fault
     const [document, ours] = rest.split('\t');
     const want = JSON.stringify(JSON.parse(JSON.parse(document)));
@@ -436,6 +441,7 @@ const numberSummary = [
   ['R', 'BigInts round to Number(x)'],
   ['A', 'BigInts wrap as BigInt.asIntN and asUintN do'],
   ['P', 'doubles of a fixed list give toFixed, toExponential and toPrecision as JavaScript does'],
+  ['Q', 'doubles of a fixed list give toString(radix) in every radix as JavaScript does'],
   ['J', 'random JSON documents give JSON.stringify(JSON.parse(t))'],
   ['E', `mutated JSON documents read as JSON.parse reads them (${jsonOutcomes.value} read, ` +
     `${jsonOutcomes['!S']} SyntaxErrors where JavaScript throws one, ${jsonOutcomes['!O']} faults of staticjs's own not compared)`],

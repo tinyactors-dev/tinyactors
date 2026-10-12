@@ -104,6 +104,12 @@ typedef struct {
     sjs_digits_mode mode;
 } sjs_number_digits;
 uint32_t sjs_number_format_digits(sjs_number_digits d, char *out);
+/* Number.prototype.toString(radix) of `value`, radix 2 to 36: String(value)
+ * for 10, else the digits V8 writes (DoubleToRadixCString). `out` has
+ * SJS_NUMBER_RADIX_MAX bytes, of which the text takes at most 2,100 (1,024
+ * integer digits in radix 2, 1,074 of a fraction, a sign and a point). */
+#define SJS_NUMBER_RADIX_MAX 2200u
+uint32_t sjs_number_format_radix(double value, uint32_t radix, char *out);
 /* JavaScript's % (truncating remainder, exact). */
 double sjs_number_remainder(double x, double y);
 double sjs_number_trunc(double x);
