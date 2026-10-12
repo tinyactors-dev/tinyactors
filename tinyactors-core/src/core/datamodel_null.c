@@ -94,8 +94,9 @@ static ta_status null_log(const ta_datamodel_call *call, ta_expression expressio
 }
 
 /* No state at all: hibernation stores nothing. */
-static ta_status null_serialize(const ta_datamodel_call *call, ta_buffer *out) {
+static ta_status null_serialize(const ta_datamodel_call *call, ta_bytes *out) {
     (void)call;
+    out->pointer = (const void *)0;
     out->length = 0;
     return TA_OK;
 }

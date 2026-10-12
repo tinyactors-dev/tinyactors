@@ -72,22 +72,10 @@ ta_status conform_datamodel_read(conform_datamodel *datamodel, ta_bytes cbor, ta
     return vtable->from_wire(datamodel->binding.datamodel, cbor, out);
 }
 
-/* to_wire, as a conform_writing */
-typedef struct wire_writing {
-    conform_datamodel *datamodel;
-    ta_payload payload;
-} wire_writing;
-
-static ta_status wire_write(void *context, ta_buffer *out) {
-    wire_writing *writing = (wire_writing *)context;
-    const ta_datamodel_binding *binding = &writing->datamodel->binding;
-    return binding->vtable->to_wire(binding->datamodel, writing->payload, out);
-}
-
-ta_status conform_datamodel_write(conform_datamodel *datamodel, ta_payload payload, ta_buffer *out) {
-    if (!datamodel->binding.vtable || !datamodel->binding.vtable->to_wire) return TA_ERROR_UNSUPPORTED;
-    wire_writing writing = {datamodel, payload};
-    return conform_write_growing(&(conform_writing){wire_write, &writing}, out);
+ta_status conform_datamodel_write(conform_datamodel *datamodel, ta_payload payload, ta_bytes *out) {
+    const ta_datamodel_binding *binding = &datamodel->binding;
+    if (!binding->vtable || !binding->vtable->to_wire) return TA_ERROR_UNSUPPORTED;
+    return binding->vtable->to_wire(binding->datamodel, payload, out);
 }
 
 void conform_datamodel_release(conform_datamodel *datamodel, ta_payload payload) {

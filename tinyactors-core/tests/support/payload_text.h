@@ -17,20 +17,11 @@
  * whole length, (size_t)-1 when it is not a neutral value. */
 TEST_UNUSED static size_t payload_text(ta_datamodel_ecmascript *ecmascript, ta_payload payload,
                                        char *buffer, size_t capacity) {
-    static unsigned char small[1 << 16];
-    unsigned char *large = NULL;
-    ta_buffer cbor = {small, sizeof small, 0};
+    ta_bytes cbor = {NULL, 0}; /* the datamodel's view */
     if (capacity) buffer[0] = 0;
     ta_status status = ta_datamodel_ecmascript_payload_to_cbor(ecmascript, payload, &cbor);
-    if (status == TA_ERROR_NO_MEMORY) {
-        large = (unsigned char *)malloc(cbor.length);
-        cbor = (ta_buffer){large, cbor.length, 0};
-        status = large ? ta_datamodel_ecmascript_payload_to_cbor(ecmascript, payload, &cbor)
-                       : TA_ERROR_NO_MEMORY;
-    }
     ta_buffer out = {buffer, capacity ? capacity - 1 : 0, 0};
-    if (status == TA_OK) status = ta_cbor_diagnostic((ta_bytes){cbor.pointer, cbor.length}, &out);
-    free(large);
+    if (status == TA_OK) status = ta_cbor_diagnostic(cbor, &out);
     if (status != TA_OK && status != TA_ERROR_NO_MEMORY) return (size_t)-1;
     if (capacity) buffer[out.length < capacity - 1 ? out.length : capacity - 1] = 0;
     return out.length;

@@ -23,10 +23,9 @@ int main(void) {
     ta_payload payload = ta_datamodel_ecmascript_payload_eval(ecmascript, 0, expression);
     /* {"sum": 6, "text": 2} as CBOR */
     static const unsigned char EXPECTED[] = {0xa2, 0x63, 's', 'u', 'm', 0x06, 0x64, 't', 'e', 'x', 't', 0x02};
-    unsigned char cbor[64];
-    ta_buffer out = {cbor, sizeof cbor, 0};
+    ta_bytes out = {0, 0}; /* the datamodel's view, until its next call */
     ta_status status = payload ? ta_datamodel_ecmascript_payload_to_cbor(ecmascript, payload, &out) : TA_ERROR_INVALID;
-    if (status != TA_OK || out.length != sizeof EXPECTED || memcmp(cbor, EXPECTED, sizeof EXPECTED) != 0) {
+    if (status != TA_OK || out.length != sizeof EXPECTED || memcmp(out.pointer, EXPECTED, sizeof EXPECTED) != 0) {
         fprintf(stderr, "tinyactors_datamodel_ecmascript smoke: got status %d, %zu bytes\n", (int)status, out.length);
         return 1;
     }

@@ -21,8 +21,8 @@ TA_API ta_allocator ta_runtime_malloc(void);
  * freestanding wasm has them (src/runtime/runtime_hosted.c). */
 #if !defined(__wasm__) || defined(__wasi__)
 
-/* Load a whole file into an 8-aligned buffer (suitable for ta_image_open);
- * give it back with ta_runtime_free_file. */
+/* Load a whole file into an 8-aligned buffer (suitable for ta_image_open),
+ * the caller's: valid until it is given back with ta_runtime_free_file. */
 TA_API ta_status ta_runtime_load_file(const char *path, ta_bytes *out);
 TA_API void ta_runtime_free_file(ta_bytes bytes);
 

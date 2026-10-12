@@ -33,7 +33,7 @@ module Core
 
   LAYERS = [
     Layer.new(name: 'base', uses: [], freestanding: true,
-              sources: %w[address cbor format arena pool heap slab journal].map { |s| "src/base/#{s}.c" }),
+              sources: %w[address cbor output format arena pool heap slab journal].map { |s| "src/base/#{s}.c" }),
     Layer.new(name: 'image', uses: %w[base], freestanding: true,
               sources: %w[src/image/image.c src/image/event_names.c]),
     # Trace values and the record schema (docs/adr/0006 in the repository root).

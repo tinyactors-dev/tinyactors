@@ -321,12 +321,12 @@ static void value_encode(conform *state, conform_call *call, conform_result *res
         return;
     }
     ta_payload payload = ta_datamodel_ecmascript_payload_eval(datamodel->ecmascript, 0, expression);
-    ta_buffer cbor = {NULL, 0, 0};
+    ta_bytes cbor = {NULL, 0};
     ta_status status = payload ? conform_datamodel_write(datamodel, payload, &cbor) : TA_ERROR_EXECUTION;
+    if (status == TA_OK) cbor = conform_keep(state, cbor); /* before the next call on the datamodel */
     conform_datamodel_release(datamodel, payload);
     conform_result_integer(result, "status", status);
-    if (status == TA_OK) conform_result_bytes(result, "cbor", conform_keep(state, (ta_bytes){cbor.pointer, cbor.length}));
-    conform_buffer_free(&cbor);
+    if (status == TA_OK) conform_result_bytes(result, "cbor", cbor);
 }
 
 static const char *const create_params[] = {"config", "datamodel", "realm", NULL};

@@ -292,32 +292,56 @@ static unsigned char *put_body(const ta_core *core, const ta_instance *instance,
     return q;
 }
 
-/* serialize the datamodel state at out + fixed (sizing only if it does not fit) */
-static ta_status put_datamodel(const ta_core *core, const ta_instance *instance, unsigned char *out,
-                               size_t capacity, size_t fixed, size_t *dml) {
-    const ta_datamodel_binding *binding = ta_core_datamodel(core, instance->chart);
-    ta_buffer state = {capacity > fixed ? out + fixed : (void *)0,
-                       capacity > fixed ? capacity - fixed : 0, 0};
-    ta_status status = binding->vtable->serialize(
-        &(ta_datamodel_call){binding->datamodel, instance->datamodel, 0}, &state);
-    *dml = state.length;
-    return status == TA_ERROR_NO_MEMORY ? TA_OK : status; /* the caller compares sizes */
+/* `n` bytes at the output's end, to write in place; NULL when they do not
+ * fit (they are counted all the same). */
+static unsigned char *blob_take(ta_output *out, size_t n) {
+    unsigned char *at = ta_output_reserve(out, n) ? out->bytes + out->length : (unsigned char *)0;
+    out->length += n;
+    return at;
 }
 
-/* The hibernation blob of actor `index` (nothing changes yet). */
-static ta_status write_hib(ta_system *system, uint32_t index, void *buffer, size_t capacity,
-                           size_t *length) {
+/* Text padded to 4 bytes (nothing for TA_NIL). */
+static void blob_text(ta_output *out, ta_string_view v, uint32_t length) {
+    if (length == TA_NIL) return;
+    unsigned char *at = blob_take(out, align4(v.length));
+    if (at) put_text(at, v, length);
+}
+
+static void blob_zeros(ta_output *out, size_t n) {
+    unsigned char *at = blob_take(out, n);
+    if (at) ta_memset(at, 0, n);
+}
+
+/* The instance words and invoke ids of an instance. */
+static void blob_body(const ta_core *core, const ta_instance *instance, ta_output *out) {
+    uint32_t ib, idsz;
+    body_sizes(core, instance, &ib, &idsz);
+    unsigned char *at = blob_take(out, (size_t)ib + idsz);
+    if (at) put_body(core, instance, at);
+}
+
+/* The datamodel's state of an instance, copied from the view serialize
+ * gives (before anything else calls the datamodel); its length in *length. */
+static ta_status blob_datamodel(const ta_core *core, const ta_instance *instance, ta_output *out,
+                                  uint64_t *length) {
+    const ta_datamodel_binding *binding = ta_core_datamodel(core, instance->chart);
+    ta_bytes state = {(const void *)0, 0};
+    ta_status status = binding->vtable->serialize(
+        &(ta_datamodel_call){binding->datamodel, instance->datamodel, 0}, &state);
+    if (status != TA_OK) return status;
+    ta_output_write(out, state.pointer, state.length);
+    *length = state.length;
+    return TA_OK;
+}
+
+/* The hibernation blob of actor `index`, its header filled last (nothing
+ * changes yet). */
+static ta_status write_hib(ta_system *system, uint32_t index, ta_output *out) {
     ta_core *core = &system->core;
     ta_actor *actor = ta_actor_at(system, index);
     ta_instance *instance = ta_actor_instance(system, actor);
     uint32_t ib, idsz;
     body_sizes(core, instance, &ib, &idsz);
-    unsigned char *out = (unsigned char *)buffer;
-    size_t fixed = sizeof(hibernation_header) + ib + idsz, dml = 0;
-    ta_status status = put_datamodel(core, instance, out, capacity, fixed, &dml);
-    if (status != TA_OK) return status;
-    *length = fixed + dml;
-    if (capacity < *length) return TA_ERROR_NO_MEMORY;
     hibernation_header header;
     ta_memset(&header, 0, sizeof header);
     header.magic = HIBERNATION_MAGIC;
@@ -327,53 +351,91 @@ static ta_status write_hib(ta_system *system, uint32_t index, void *buffer, size
     header.ids_bytes = idsz;
     header.image_hash = core->image_view.hash;
     header.serial = actor->serial;
-    header.datamodel_bytes = dml;
-    ta_memcpy(out, &header, sizeof header);
-    put_body(core, instance, out + sizeof header);
+    size_t start = out->length;
+    ta_output_write(out, &header, sizeof header);
+    blob_body(core, instance, out);
+    ta_status status = blob_datamodel(core, instance, out, &header.datamodel_bytes);
+    if (status != TA_OK) return status;
+    ta_output_patch(out, start, (ta_bytes){&header, sizeof header});
     return TA_OK;
 }
 
-/* The session record of actor `index` in an export blob (nothing changes yet):
- * its state, delayed sends and name, and its place in the tree. */
-static ta_status write_session(ta_system *system, uint32_t index, uint32_t root, void *buffer,
-                               size_t capacity, size_t *length) {
+/* A delayed send of an export blob: its record, texts and payload. Adds its
+ * bytes to *bytes. */
+static ta_status write_timer(ta_system *system, uint32_t root, uint32_t ti, ta_output *out,
+                             uint64_t *bytes) {
+    ta_core *core = &system->core;
+    const ta_timer *timer = timer_at(system, ti);
+    const ta_event *event = ta_event_at(core, timer->event);
+    size_t start = out->length;
+    blob_timer r;
+    ta_memset(&r, 0, sizeof r);
+    r.due = ta_heap_find(&system->heap, ti)->due;
+    r.rank = tree_rank(system, root, ti);
+    const ta_datamodel_binding *pb = event->payload && event->datamodel < core->datamodel_count
+                                         ? &core->datamodels[event->datamodel]
+                                         : 0;
+    ta_bytes value = {(const void *)0, 0};
+    if (pb && datamodel_payload_bytes(pb)) { /* the value itself, written once */
+        ta_status status = pb->vtable->payload_serialize(pb->datamodel, event->payload, &value);
+        if (status != TA_OK) return status;
+        if (value.length >= TA_NIL) return TA_ERROR_UNSUPPORTED;
+        r.payload_kind = TP_BYTES;
+        r.payload_length = (uint32_t)value.length;
+    } else if (pb) { /* a handle: this process only */
+        r.payload_kind = TP_HANDLE;
+        r.payload = event->payload;
+    }
+    /* a send to an invoked child (#_<invokeid>) holds the child's handle:
+     * stored as the owner's invoke slot + 1 (0: the child is gone), which
+     * adoption maps to the child adopted with it */
+    r.route = timer->route;
+    r.arg = timer->arg;
+    if (timer->route == TA_ROUTE_CHILD) {
+        const ta_actor *owner = ta_actor_at(system, ta_system_resolve_actor(system, timer->owner));
+        const ta_instance *instance = ta_actor_instance(system, (ta_actor *)owner);
+        const ta_chart_record *chart = &core->image_view.charts[instance->chart];
+        const uint32_t *kids =
+            ta_instance_word((ta_instance *)instance, ta_instance_layout_of(chart).invoke_children);
+        r.arg = 0;
+        for (uint32_t i = 0; i < chart->invoke_count && !r.arg; i++)
+            if (kids[i] == timer->arg && !(timer->arg & TA_EXTERNAL_INVOKE_BIT)) r.arg = i + 1;
+    }
+    r.type = event->type;
+    r.flags = event->flags;
+    if (event->trace != TA_NIL) { /* the context goes as a value (docs/durability.md) */
+        const ta_trace_entry *entry = ta_trace_entry_at(core, event->trace);
+        r.trace_high = entry->trace.high;
+        r.trace_low = entry->trace.low;
+        r.trace_flags = entry->flags;
+        r.cause_session = entry->session;
+        r.cause_macrostep = entry->macrostep;
+        r.cause_microstep = entry->microstep;
+    }
+    r.target_length = string_ref_length(core, timer->target);
+    r.name_length = string_ref_length(core, event->name);
+    r.sendid_length = string_ref_length(core, event->sendid);
+    ta_output_write(out, &r, sizeof r);
+    blob_text(out, ta_shared_string_get(core, timer->target), r.target_length);
+    blob_text(out, ta_shared_string_get(core, event->name), r.name_length);
+    blob_text(out, ta_shared_string_get(core, event->sendid), r.sendid_length);
+    if (r.payload_kind == TP_BYTES) {
+        ta_output_write(out, value.pointer, value.length);
+        blob_zeros(out, align4(r.payload_length) - r.payload_length);
+    }
+    *bytes += out->length - start;
+    return TA_OK;
+}
+
+/* The session record of actor `index` in an export blob, its header filled
+ * last (nothing changes yet): its state, delayed sends and name, and its
+ * place in the tree. */
+static ta_status write_session(ta_system *system, uint32_t index, uint32_t root, ta_output *out) {
     ta_core *core = &system->core;
     ta_actor *actor = ta_actor_at(system, index);
     ta_instance *instance = ta_actor_instance(system, actor);
-    const ta_chart_record *chart = &core->image_view.charts[instance->chart];
-    const uint32_t *kids = ta_instance_word(instance, ta_instance_layout_of(chart).invoke_children);
     uint32_t ib, idsz;
     body_sizes(core, instance, &ib, &idsz);
-    unsigned char *out = (unsigned char *)buffer;
-    size_t fixed = sizeof(session_header) + ib + idsz, dml = 0;
-    ta_status status = put_datamodel(core, instance, out, capacity, fixed, &dml);
-    if (status != TA_OK) return status;
-    uint64_t timer_bytes = 0;
-    uint32_t timer_count = 0, name_length = ta_shared_string_get(core, actor->name).length;
-    for (uint32_t ti = actor->timers; ti != TA_NIL;) {
-        const ta_timer *timer = timer_at(system, ti);
-        const ta_event *event = ta_event_at(core, timer->event);
-        timer_bytes += sizeof(blob_timer) + text_bytes(string_ref_length(core, timer->target)) +
-                       text_bytes(string_ref_length(core, event->name)) +
-                       text_bytes(string_ref_length(core, event->sendid));
-        if (event->payload && event->datamodel < core->datamodel_count &&
-            datamodel_payload_bytes(&core->datamodels[event->datamodel])) {
-            const ta_datamodel_binding *pb = &core->datamodels[event->datamodel];
-            ta_buffer probe = {(void *)0, 0, 0};
-            status = pb->vtable->payload_serialize(pb->datamodel, event->payload, &probe);
-            size_t pl = probe.length;
-            if (status != TA_OK && status != TA_ERROR_NO_MEMORY) return status;
-            if (pl >= TA_NIL) return TA_ERROR_UNSUPPORTED;
-            timer_bytes += align4((uint32_t)pl);
-        }
-        timer_count++;
-        ti = timer->owner_next;
-    }
-    if (timer_bytes > 0xFFFFFFFFu) return TA_ERROR_UNSUPPORTED;
-    size_t used = fixed + dml + (size_t)timer_bytes + align4(name_length);
-    *length = align8(used);
-    if (*length > 0xFFFFFFFFu) return TA_ERROR_UNSUPPORTED;
-    if (capacity < *length) return TA_ERROR_NO_MEMORY;
     session_header h;
     ta_memset(&h, 0, sizeof h);
     h.serial = actor->serial;
@@ -382,80 +444,30 @@ static ta_status write_session(ta_system *system, uint32_t index, uint32_t root,
         h.parent = ta_actor_at(system, ta_system_resolve_actor(system, actor->parent))->serial;
         h.slot = actor->parent_slot;
     }
-    h.datamodel_bytes = dml;
     h.chart = instance->chart;
     h.instance_bytes = ib;
     h.ids_bytes = idsz;
-    h.timer_count = timer_count;
-    h.timers_bytes = (uint32_t)timer_bytes;
-    h.name_length = name_length;
-    h.bytes = (uint32_t)*length;
-    ta_memcpy(out, &h, sizeof h);
-    put_body(core, instance, out + sizeof h);
-    unsigned char *q = out + fixed + dml;
+    h.name_length = ta_shared_string_get(core, actor->name).length;
+    size_t start = out->length;
+    ta_output_write(out, &h, sizeof h);
+    blob_body(core, instance, out);
+    ta_status status = blob_datamodel(core, instance, out, &h.datamodel_bytes);
+    if (status != TA_OK) return status;
+    uint64_t timer_bytes = 0;
     for (uint32_t ti = nth_timer(system, actor, TA_NIL); ti != TA_NIL;
          ti = nth_timer(system, actor, ti)) {
-        const ta_timer *timer = (const ta_timer *)ta_pool_at(&system->timers, ti);
-        const ta_event *event = ta_event_at(core, timer->event);
-        blob_timer r;
-        ta_memset(&r, 0, sizeof r);
-        r.due = ta_heap_find(&system->heap, ti)->due;
-        r.rank = tree_rank(system, root, ti);
-        const ta_datamodel_binding *pb = event->payload && event->datamodel < core->datamodel_count
-                                             ? &core->datamodels[event->datamodel]
-                                             : 0;
-        size_t pl = 0;
-        if (pb && datamodel_payload_bytes(pb)) { /* the value itself (sized above) */
-            r.payload_kind = TP_BYTES;
-            ta_buffer probe = {(void *)0, 0, 0};
-            pb->vtable->payload_serialize(pb->datamodel, event->payload, &probe);
-            pl = probe.length;
-            r.payload_length = (uint32_t)pl;
-        } else if (pb) { /* a handle: this process only */
-            r.payload_kind = TP_HANDLE;
-            r.payload = event->payload;
-        }
-        /* a send to an invoked child (#_<invokeid>) holds the child's handle:
-         * stored as the owner's invoke slot + 1 (0: the child is gone), which
-         * adoption maps to the child adopted with it */
-        r.route = timer->route;
-        r.arg = timer->arg;
-        if (timer->route == TA_ROUTE_CHILD) {
-            r.arg = 0;
-            for (uint32_t i = 0; i < chart->invoke_count && !r.arg; i++)
-                if (kids[i] == timer->arg && !(timer->arg & TA_EXTERNAL_INVOKE_BIT)) r.arg = i + 1;
-        }
-        r.type = event->type;
-        r.flags = event->flags;
-        if (event->trace != TA_NIL) { /* the context goes as a value (docs/durability.md) */
-            const ta_trace_entry *entry = ta_trace_entry_at(core, event->trace);
-            r.trace_high = entry->trace.high;
-            r.trace_low = entry->trace.low;
-            r.trace_flags = entry->flags;
-            r.cause_session = entry->session;
-            r.cause_macrostep = entry->macrostep;
-            r.cause_microstep = entry->microstep;
-        }
-        r.target_length = string_ref_length(core, timer->target);
-        r.name_length = string_ref_length(core, event->name);
-        r.sendid_length = string_ref_length(core, event->sendid);
-        ta_memcpy(q, &r, sizeof r);
-        q += sizeof r;
-        q = put_text(q, ta_shared_string_get(core, timer->target), r.target_length);
-        q = put_text(q, ta_shared_string_get(core, event->name), r.name_length);
-        q = put_text(q, ta_shared_string_get(core, event->sendid), r.sendid_length);
-        if (r.payload_kind == TP_BYTES) {
-            ta_buffer value = {q, pl, 0};
-            status = pb->vtable->payload_serialize(pb->datamodel, event->payload, &value);
-            pl = value.length;
-            if (status != TA_OK || pl != r.payload_length)
-                return status != TA_OK ? status : TA_ERROR_UNSUPPORTED;
-            ta_memset(q + pl, 0, align4(r.payload_length) - pl);
-            q += align4(r.payload_length);
-        }
+        status = write_timer(system, root, ti, out, &timer_bytes);
+        if (status != TA_OK) return status;
+        h.timer_count++;
     }
-    q = put_text(q, ta_shared_string_get(core, actor->name), name_length);
-    ta_memset(q, 0, *length - used);
+    if (timer_bytes > 0xFFFFFFFFu) return TA_ERROR_UNSUPPORTED;
+    h.timers_bytes = (uint32_t)timer_bytes;
+    blob_text(out, ta_shared_string_get(core, actor->name), h.name_length);
+    size_t used = out->length - start, bytes = align8(used);
+    if (bytes > 0xFFFFFFFFu) return TA_ERROR_UNSUPPORTED;
+    blob_zeros(out, bytes - used);
+    h.bytes = (uint32_t)bytes;
+    ta_output_patch(out, start, (ta_bytes){&h, sizeof h});
     return TA_OK;
 }
 
@@ -498,17 +510,24 @@ static void unload(ta_system *system, uint32_t index) {
     core->chart_stats[chart].hibernated++;
 }
 
-ta_status ta_actor_hibernate(ta_system *system, uint32_t actor, ta_buffer *out) {
+ta_status ta_actor_write_hibernation(ta_system *system, uint32_t actor, ta_output *out) {
     if (system->in_call) return TA_ERROR_STATE;
     uint32_t index = ta_system_resolve_actor(system, actor);
     if (index == TA_NIL) return TA_ERROR_STALE;
     ta_status status = hibernatable(system, index);
-    if (status == TA_OK)
-        status = write_hib(system, index, out->pointer, out->capacity, &out->length);
+    if (status == TA_OK) status = write_hib(system, index, out);
     if (status != TA_OK) return status;
-    unload(system, index);
+    if (!ta_output_fits(out)) return TA_ERROR_NO_MEMORY; /* nothing changed */
+    unload(system, index); /* the datamodel's state was copied before destroy */
     system->stats_hibernations++;
     return TA_OK;
+}
+
+ta_status ta_actor_hibernate(ta_system *system, uint32_t actor, ta_buffer *out) {
+    ta_output output = ta_output_over(*out, (const ta_allocator *)0);
+    ta_status status = ta_actor_write_hibernation(system, actor, &output);
+    out->length = output.length;
+    return status;
 }
 
 /* ---- export ---------------------------------------------------------------------- */
@@ -537,46 +556,42 @@ static void leave(ta_system *system, uint32_t index) {
     ta_system_reclaim(system, index, RECLAIM_LEFT);
 }
 
-ta_status ta_actor_export(ta_system *system, uint32_t actor, ta_buffer *destination) {
+ta_status ta_actor_write_export(ta_system *system, uint32_t actor, ta_output *out) {
     if (system->in_call) return TA_ERROR_STATE;
-    void *buffer = destination->pointer;
-    size_t capacity = destination->capacity;
-    size_t *length = &destination->length;
     uint32_t root = ta_system_resolve_actor(system, actor);
     if (root == TA_NIL) return TA_ERROR_STALE;
     if (ta_actor_at(system, root)->parent)
         return TA_ERROR_STATE; /* sessions leave with their root */
-    uint32_t n = 0;
-    size_t need = sizeof(export_header);
-    for (uint32_t m = root; m != TA_NIL; m = tree_next(system, root, m), n++) {
+    for (uint32_t m = root; m != TA_NIL; m = tree_next(system, root, m)) {
         ta_status status = stable_member(system, m, 1);
-        size_t ml = 0;
-        if (status == TA_OK) status = write_session(system, m, root, (void *)0, 0, &ml);
-        if (status != TA_OK && status != TA_ERROR_NO_MEMORY) return status;
-        need += ml;
+        if (status != TA_OK) return status;
     }
-    *length = need;
-    if (capacity < need) return TA_ERROR_NO_MEMORY;
-    unsigned char *out = (unsigned char *)buffer, *q = out + sizeof(export_header);
     export_header h;
     ta_memset(&h, 0, sizeof h);
     h.magic = EXPORT_MAGIC;
     h.version = EXPORT_VERSION;
-    h.session_count = n;
     h.image_hash = system->core.image_view.hash;
     h.serial = ta_actor_at(system, root)->serial;
-    ta_memcpy(out, &h, sizeof h);
-    for (uint32_t m = root; m != TA_NIL; m = tree_next(system, root, m)) {
-        size_t ml = 0;
-        ta_status status = write_session(system, m, root, q, (size_t)(out + need - q), &ml);
-        if (status != TA_OK) return status; /* sizes are deterministic: cannot happen */
-        q += ml;
+    size_t start = out->length;
+    ta_output_write(out, &h, sizeof h);
+    for (uint32_t m = root; m != TA_NIL; m = tree_next(system, root, m), h.session_count++) {
+        ta_status status = write_session(system, m, root, out);
+        if (status != TA_OK) return status;
     }
+    ta_output_patch(out, start, (ta_bytes){&h, sizeof h});
+    if (!ta_output_fits(out)) return TA_ERROR_NO_MEMORY; /* nothing changed */
     for (uint32_t m = leftmost_leaf(system, root), nx; m != TA_NIL; m = nx) {
         nx = post_next(system, root, m); /* before m goes */
         leave(system, m);
     }
     return TA_OK;
+}
+
+ta_status ta_actor_export(ta_system *system, uint32_t actor, ta_buffer *out) {
+    ta_output output = ta_output_over(*out, (const ta_allocator *)0);
+    ta_status status = ta_actor_write_export(system, actor, &output);
+    out->length = output.length;
+    return status;
 }
 
 /* ---- blob reading ---------------------------------------------------------------------- */

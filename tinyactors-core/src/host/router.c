@@ -1107,7 +1107,7 @@ static uint32_t envelope_key_index(ta_string_view key) {
     return TA_NIL;
 }
 
-static void envelope_put_text(cbor_output *out, uint32_t key, ta_string_view value) {
+static void envelope_put_text(ta_output *out, uint32_t key, ta_string_view value) {
     if (!value.length) return;
     cbor_output_text(out, ENVELOPE_KEYS[key]);
     cbor_output_text(out, value);
@@ -1211,7 +1211,7 @@ ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_buffe
         return TA_ERROR_INVALID;
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     size_t capacity = out->pointer ? out->capacity : 0;
-    cbor_output o = {(unsigned char *)out->pointer, capacity, 0};
+    ta_output o = ta_output_over((ta_buffer){out->pointer, capacity, 0}, NULL);
     if (effect->kind == TA_HOST_EFFECT_PEER_ERROR) {
         cbor_output_head(&o, CBOR_MAJOR_MAP, 1u + !!effect->sendid.length +
                                                  !!effect->auxiliary.length + !!effect->msgid.length);
@@ -1228,15 +1228,13 @@ ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_buffe
                 ? &host->datamodels[effect->datamodel]
                 : (const ta_datamodel_binding *)0;
         int has_data = binding || effect->wire.length;
-        size_t value = effect->wire.length;
+        ta_bytes value = effect->wire; /* written once: the view lasts until the next call */
         if (binding) {
             if (!binding->vtable->to_wire) return TA_ERROR_INVALID;
-            ta_buffer probe = {(void *)0, 0, 0};
             uint32_t was = host_guard(host);
-            ta_status status = binding->vtable->to_wire(binding->datamodel, effect->payload, &probe);
+            ta_status status = binding->vtable->to_wire(binding->datamodel, effect->payload, &value);
             host_unguard(host, was);
-            if (status != TA_OK && status != TA_ERROR_NO_MEMORY) return status;
-            value = probe.length;
+            if (status != TA_OK) return status;
         }
         char traceparent[TA_TRACEPARENT_LENGTH];
         ta_buffer written = {traceparent, sizeof traceparent, 0};
@@ -1256,20 +1254,8 @@ ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_buffe
         if (has_data) {
             cbor_output_text(&o, ENVELOPE_KEYS[ENVELOPE_KEY_DATA]);
             cbor_output_head(&o, CBOR_MAJOR_TAG, ENVELOPE_CBOR_TAG_ENCODED);
-            cbor_output_head(&o, CBOR_MAJOR_BYTES, value);
-            if (o.length + value <= o.capacity) {
-                if (!binding) {
-                    ta_memcpy(o.bytes + o.length, effect->wire.pointer, value);
-                } else {
-                    ta_buffer data = {o.bytes + o.length, value, 0};
-                    uint32_t was = host_guard(host);
-                    ta_status status =
-                        binding->vtable->to_wire(binding->datamodel, effect->payload, &data);
-                    host_unguard(host, was);
-                    if (status != TA_OK) return TA_ERROR_INVALID;
-                }
-            }
-            o.length += value;
+            cbor_output_head(&o, CBOR_MAJOR_BYTES, value.length);
+            ta_output_write(&o, value.pointer, value.length);
         }
         envelope_put_text(&o, ENVELOPE_KEY_SENDID, effect->sendid);
         envelope_put_text(&o, ENVELOPE_KEY_ORIGIN, effect->auxiliary);

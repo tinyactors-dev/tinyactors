@@ -1654,17 +1654,13 @@ static char *dup_str(ta_string_view v) {
 static unsigned char *payload_cbor(ta_datamodel_ecmascript *ecmascript, ta_payload payload,
                                    size_t *length) {
     if (!payload) return NULL;
-    ta_buffer out = {NULL, 0, 0};
-    if (ta_datamodel_ecmascript_payload_to_cbor(ecmascript, payload, &out) != TA_ERROR_NO_MEMORY)
-        return NULL;
-    out.pointer = malloc(out.length ? out.length : 1);
-    out.capacity = out.length;
-    if (!out.pointer || ta_datamodel_ecmascript_payload_to_cbor(ecmascript, payload, &out) != TA_OK) {
-        free(out.pointer);
-        return NULL;
-    }
-    *length = out.length;
-    return (unsigned char *)out.pointer;
+    ta_bytes view = {NULL, 0}; /* the datamodel's, until its next call: copied */
+    if (ta_datamodel_ecmascript_payload_to_cbor(ecmascript, payload, &view) != TA_OK) return NULL;
+    unsigned char *copy = (unsigned char *)malloc(view.length ? view.length : 1);
+    if (!copy) return NULL;
+    memcpy(copy, view.pointer, view.length);
+    *length = view.length;
+    return copy;
 }
 
 /* A payload as text for the scenario scripts: CBOR diagnostic notation, which

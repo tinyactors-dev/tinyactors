@@ -172,8 +172,7 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
                 continue;
             }
             /* across: the payload as a neutral value, CBOR (separate datamodels) */
-            unsigned char cbor[1024];
-            ta_buffer wire = {cbor, sizeof cbor, 0};
+            ta_bytes wire = {NULL, 0}; /* the datamodel's view, read before its next call */
             if (effect->payload && !effect->wire.length)
                 CHECK_EQUAL(ta_datamodel_ecmascript_payload_to_cbor(nodes[i].ecmascript,
                                                                     effect->payload, &wire),
@@ -198,7 +197,7 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
                     : 0;
             if (wire.length)
                 CHECK_EQUAL(ta_datamodel_ecmascript_payload_from_cbor(
-                                nodes[j].ecmascript, (ta_bytes){cbor, wire.length}, &envelope.data),
+                                nodes[j].ecmascript, wire, &envelope.data),
                             TA_OK);
             envelope.wire = effect->wire; /* relayed */
             int32_t outcome = ta_host_deliver(nodes[j].host, nodes[j].peer[i], &envelope);
@@ -1314,7 +1313,7 @@ static ta_datamodel_vtable counted[N + 1];
         from_wire_calls[k]++;                                                                      \
         return ta_datamodel_ecmascript_vtable()->from_wire(datamodel, cbor, out);                  \
     }                                                                                              \
-    static ta_status to_wire_##k(void *datamodel, ta_payload p, ta_buffer *out) {                 \
+    static ta_status to_wire_##k(void *datamodel, ta_payload p, ta_bytes *out)   {                 \
         to_wire_calls[k]++;                                                                        \
         return ta_datamodel_ecmascript_vtable()->to_wire(datamodel, p, out);                       \
     }
@@ -1333,7 +1332,7 @@ static ta_status null_from_wire(void *datamodel, ta_bytes cbor, ta_payload *out)
 
 static void count_calls(void) {
     ta_status (*from[N])(void *, ta_bytes, ta_payload *) = {from_wire_0, from_wire_1, from_wire_2};
-    ta_status (*to[N])(void *, ta_payload, ta_buffer *) = {to_wire_0, to_wire_1, to_wire_2};
+    ta_status (*to[N])(void *, ta_payload, ta_bytes *) = {to_wire_0, to_wire_1, to_wire_2};
     for (int i = 0; i < N; i++) {
         counted[i] = *ta_datamodel_ecmascript_vtable();
         counted[i].from_wire = from[i];
@@ -1404,8 +1403,8 @@ static void decode_at_target(int bytes) {
     if (bytes) {
         CHECK_EQUAL(from_wire_calls[C], 1); /* the ping, by echo's ECMAScript */
         CHECK_EQUAL(from_wire_calls[A], 1); /* the pong */
-        CHECK_EQUAL(to_wire_calls[A], 2); /* ta_host_envelope: its length, then the value */
-        CHECK_EQUAL(to_wire_calls[C], 2);
+        CHECK_EQUAL(to_wire_calls[A], 1); /* ta_host_envelope: the value, once */
+        CHECK_EQUAL(to_wire_calls[C], 1);
     } else { /* within a process: payloads only (the test transport converts) */
         CHECK_EQUAL(from_wire_calls[C] + from_wire_calls[A] + to_wire_calls[A] + to_wire_calls[C],
                     0);

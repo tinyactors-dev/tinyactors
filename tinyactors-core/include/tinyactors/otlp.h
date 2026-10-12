@@ -75,7 +75,8 @@ typedef struct ta_otlp_config {
     uint32_t chunks;         /* 256-byte chunks for what open spans gathered (8 per open span) */
     uint32_t scopes;         /* charts one request names (64) */
     uint32_t value_limit;    /* bytes of a value in an attribute, cut there (256) */
-    uint32_t render_bytes;   /* a value as the datamodel writes it (CBOR), before the cut (16 KiB) */
+    uint32_t render_bytes;   /* the longest value (its CBOR, as the datamodel's to_wire gives it)
+                                rendered at all; a longer one is only marked cut (16 KiB) */
     uint32_t resource_bytes; /* the resource attributes, encoded (4 KiB) */
     uint32_t metric_bytes;   /* metrics, encoded (64 KiB) */
     uint32_t span_metric_charts; /* charts whose macrostep durations it keeps (64) */

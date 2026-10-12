@@ -295,14 +295,8 @@ uint32_t ta_cbor_member(const ta_cbor_document *document, uint32_t map, ta_strin
 
 /* ---- encoding ---------------------------------------------------------------- */
 
-void cbor_output_bytes(cbor_output *output, const void *bytes, size_t length) {
-    if (output->length <= output->capacity && length <= output->capacity - output->length)
-        ta_memcpy(output->bytes + output->length, bytes, length);
-    output->length += length;
-}
-
 /* A head with `argument` in its shortest form. */
-void cbor_output_head(cbor_output *output, uint32_t major, uint64_t argument) {
+void cbor_output_head(ta_output *output, uint32_t major, uint64_t argument) {
     unsigned char head[9];
     size_t width;
     uint32_t info;
@@ -314,16 +308,16 @@ void cbor_output_head(cbor_output *output, uint32_t major, uint64_t argument) {
     head[0] = (unsigned char)(major << 5 | info);
     for (size_t k = 0; k < width; k++)
         head[1 + k] = (unsigned char)(argument >> (8 * (width - 1 - k)));
-    cbor_output_bytes(output, head, 1 + width);
+    ta_output_write(output, head, 1 + width);
 }
 
 /* A float in the shortest width that holds it exactly. */
-void cbor_output_float(cbor_output *output, uint64_t bits) {
+void cbor_output_float(ta_output *output, uint64_t bits) {
     uint32_t half;
     double value = bits_double(bits);
     if (value != value) { /* every NaN is the canonical one */
         static const unsigned char nan[3] = {0xF9, 0x7E, 0x00};
-        cbor_output_bytes(output, nan, 3);
+        ta_output_write(output, nan, 3);
         return;
     }
     unsigned char head[9];
@@ -345,11 +339,11 @@ void cbor_output_float(cbor_output *output, uint64_t bits) {
     }
     for (size_t k = 0; k < width; k++)
         head[1 + k] = (unsigned char)(bits >> (8 * (width - 1 - k)));
-    cbor_output_bytes(output, head, 1 + width);
+    ta_output_write(output, head, 1 + width);
 }
 
 ta_status ta_cbor_encode(const ta_cbor_document *document, ta_buffer *out) {
-    cbor_output output = {(unsigned char *)out->pointer, out->capacity, 0};
+    ta_output output = ta_output_over(*out, NULL);
     cbor_nesting nesting;
     nesting.depth = 0;
     const unsigned char *bytes = (const unsigned char *)document->bytes.pointer;
@@ -369,7 +363,7 @@ ta_status ta_cbor_encode(const ta_cbor_document *document, ta_buffer *out) {
             if (token->kind == TA_CBOR_TEXT && !utf8_valid(bytes + token->value, token->count))
                 return TA_ERROR_INVALID;
             cbor_output_head(&output, token->kind == TA_CBOR_TEXT ? MAJOR_TEXT : MAJOR_BYTES, token->count);
-            cbor_output_bytes(&output, bytes + token->value, token->count);
+            ta_output_write(&output, bytes + token->value, token->count);
             break;
         case TA_CBOR_ARRAY:
             cbor_output_head(&output, MAJOR_ARRAY, token->count);
@@ -404,7 +398,7 @@ ta_status ta_cbor_encode(const ta_cbor_document *document, ta_buffer *out) {
 /* ---- diagnostic notation ----------------------------------------------------- */
 
 /* Text that may be cut: what fits is written, and length goes on counting. */
-static void output_text(cbor_output *output, const char *text, size_t length) {
+static void output_text(ta_output *output, const char *text, size_t length) {
     if (output->length < output->capacity) {
         size_t room = output->capacity - output->length;
         ta_memcpy(output->bytes + output->length, text, length < room ? length : room);
@@ -412,14 +406,14 @@ static void output_text(cbor_output *output, const char *text, size_t length) {
     output->length += length;
 }
 
-static void output_cstring(cbor_output *output, const char *text) {
+static void output_cstring(ta_output *output, const char *text) {
     size_t length = 0;
     while (text[length])
         length++;
     output_text(output, text, length);
 }
 
-static void output_decimal(cbor_output *output, uint64_t value) {
+static void output_decimal(ta_output *output, uint64_t value) {
     char digits[TA_FORMAT_U64_MAX];
     output_text(output, digits, ta_format_u64(digits, value));
 }
@@ -427,7 +421,7 @@ static void output_decimal(cbor_output *output, uint64_t value) {
 static const char HEX[] = "0123456789abcdef";
 
 /* A text string in quotes, escaped as JSON escapes it. */
-static void output_quoted(cbor_output *output, const unsigned char *text, size_t length) {
+static void output_quoted(ta_output *output, const unsigned char *text, size_t length) {
     output_text(output, "\"", 1);
     for (size_t k = 0; k < length; k++) {
         unsigned char c = text[k];
@@ -607,7 +601,7 @@ static uint32_t float_shortest(uint64_t bits, char *digits, int32_t *point) {
 
 /* A float in diagnostic notation: the shortest decimal that reads back as
  * it, with a point or an exponent (1.0, 0.1, 1.0e+300); NaN, Infinity. */
-static void output_float_text(cbor_output *output, uint64_t bits) {
+static void output_float_text(ta_output *output, uint64_t bits) {
     uint32_t biased = (uint32_t)((bits >> 52) & 0x7FF);
     uint64_t fraction = bits & UINT64_C(0xFFFFFFFFFFFFF);
     if (biased == 0x7FF && fraction) {
@@ -652,7 +646,7 @@ static void output_float_text(cbor_output *output, uint64_t bits) {
 
 ta_status ta_cbor_diagnostic(ta_bytes cbor, ta_buffer *out) {
     cbor_reader reader = {(const unsigned char *)cbor.pointer, cbor.length, 0};
-    cbor_output output = {(unsigned char *)out->pointer, out->pointer ? out->capacity : 0, 0};
+    ta_output output = ta_output_over(*out, NULL);
     /* per open container: what closes it, and the items it has seen */
     char closer[TA_CBOR_DEPTH_MAX];
     uint64_t seen[TA_CBOR_DEPTH_MAX];

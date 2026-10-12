@@ -740,9 +740,9 @@ static void values_run(ta_datamodel_ecmascript *ecmascript, const values_case *c
             ecmascript, 0, (ta_string_view){c->expression, (uint32_t)strlen(c->expression)});
         CHECK(payload != 0);
     }
-    unsigned char written[256];
-    ta_buffer out = {written, sizeof written, 0};
+    ta_bytes out = {NULL, 0}; /* the datamodel's view */
     ta_status status = vtable->to_wire(ecmascript, payload, &out);
+    const unsigned char *written = (const unsigned char *)out.pointer;
     if (!strcmp(c->kind, "invalid")) {
         CHECK_EQUAL(status, TA_ERROR_INVALID);
     } else {
@@ -756,10 +756,6 @@ static void values_run(ta_datamodel_ecmascript *ecmascript, const values_case *c
             fprintf(stderr, "\n");
         }
         CHECK(same);
-        /* too small: the length it needs, and nothing more */
-        ta_buffer small = {written, length ? length - 1 : 0, 0};
-        if (length) CHECK_EQUAL(vtable->to_wire(ecmascript, payload, &small), TA_ERROR_NO_MEMORY);
-        if (length) CHECK_EQUAL(small.length, length);
     }
     if (payload) vtable->release(ecmascript, payload);
 }

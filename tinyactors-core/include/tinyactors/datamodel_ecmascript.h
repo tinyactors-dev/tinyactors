@@ -85,9 +85,10 @@ TA_API const ta_datamodel_vtable *ta_datamodel_ecmascript_vtable(void); /* name:
 TA_API ta_datamodel_binding ta_datamodel_ecmascript_binding(ta_datamodel_ecmascript *es);
 
 /* Host helpers. Neutral values as CBOR (docs/protocol.md, "Values"): the
- * vtable's to_wire and from_wire, callable without it. */
+ * vtable's to_wire and from_wire, callable without it. to_cbor's `out` is a
+ * view of the datamodel's memory, valid until its next call. */
 TA_API ta_status ta_datamodel_ecmascript_payload_to_cbor(ta_datamodel_ecmascript *ecmascript,
-                                                         ta_payload p, ta_buffer *out);
+                                                         ta_payload p, ta_bytes *out);
 TA_API ta_status ta_datamodel_ecmascript_payload_from_cbor(ta_datamodel_ecmascript *ecmascript,
                                                            ta_bytes cbor, ta_payload *out);
 /* A payload from an ECMAScript expression; 0 on error. With instance 0 it

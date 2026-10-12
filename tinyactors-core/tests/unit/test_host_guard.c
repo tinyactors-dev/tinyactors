@@ -23,6 +23,8 @@
     "<content expr='({v: 1})'/></send></transition>"                                               \
     "<transition event='self'><send event='back'><content expr='({v: 2})'/></send></transition>"   \
     "<transition event='back'><log expr=\"'back'\"/></transition>"                                 \
+    "<transition event='later'><send event='tick' delay='10s'>"                                    \
+    "<content expr='({t: 1})'/></send></transition>"                                               \
     "</state></scxml>"
 
 typedef struct world {
@@ -39,6 +41,7 @@ typedef struct world {
 } world;
 
 static world *current;
+static int to_wire_calls, serialize_calls, payload_serialize_calls;
 
 /* {"id": 1, "method": "host.stats"} */
 #define STATS "\xa2\x62id\x01\x66method\x6ahost.stats"
@@ -53,7 +56,8 @@ static void hook(void) {
 
 static const ta_datamodel_vtable *inner(void) { return ta_datamodel_ecmascript_vtable(); }
 
-static ta_status to_wire(void *datamodel, ta_payload p, ta_buffer *out) {
+static ta_status to_wire(void *datamodel, ta_payload p, ta_bytes *out) {
+    to_wire_calls++;
     hook();
     return inner()->to_wire(datamodel, p, out);
 }
@@ -65,9 +69,14 @@ static ta_status variable(const ta_datamodel_call *call, ta_string_view name, ta
     hook();
     return inner()->variable(call, name, out);
 }
-static ta_status serialize(const ta_datamodel_call *call, ta_buffer *out) {
+static ta_status serialize(const ta_datamodel_call *call, ta_bytes *out) {
+    serialize_calls++;
     hook();
     return inner()->serialize(call, out);
+}
+static ta_status payload_serialize(void *datamodel, ta_payload p, ta_bytes *out) {
+    payload_serialize_calls++;
+    return inner()->payload_serialize(datamodel, p, out);
 }
 static void release(void *datamodel, ta_payload p) {
     hook();
@@ -114,6 +123,7 @@ static void world_open(world *w, int telemetry) {
     w->vtable.from_wire = from_wire;
     w->vtable.variable = variable;
     w->vtable.serialize = serialize;
+    w->vtable.payload_serialize = payload_serialize;
     w->vtable.release = release;
     w->vtable.destroy = destroy;
     w->binding.vtable = &w->vtable;
@@ -365,6 +375,34 @@ static void test_free(void) {
     current = NULL;
 }
 
+/* ---- each value written once (docs/adr/0010, decision 1) ------------------------------- */
+
+static void test_each_output_once(void) {
+    world w;
+    world_open(&w, 0);
+    send_event(&w, w.session, "later"); /* a delayed send with a value */
+    send_event(&w, w.other, "out");     /* a PEER effect with a value */
+    ta_host_run(w.host, 100000);
+    const ta_host_effect *effects;
+    uint32_t n = ta_host_effects(w.host, &effects);
+    to_wire_calls = 0;
+    for (uint32_t i = 0; i < n; i++)
+        if (effects[i].kind == TA_HOST_EFFECT_PEER) {
+            static unsigned char bytes[4096];
+            ta_buffer out = {bytes, sizeof bytes, 0};
+            CHECK_EQUAL(ta_host_envelope(w.host, &effects[i], &out), TA_OK);
+        }
+    CHECK_EQUAL(to_wire_calls, 1); /* the envelope's value, once */
+    ta_host_effects_ack(w.host);
+    serialize_calls = payload_serialize_calls = 0;
+    static unsigned char blob[1 << 16];
+    ta_buffer out = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_host_export_actor(w.host, w.session, &out), TA_OK);
+    CHECK_EQUAL(serialize_calls, 1);         /* the session's state */
+    CHECK_EQUAL(payload_serialize_calls, 1); /* the delayed send's value */
+    world_close(&w);
+}
+
 int main(void) {
     RUN(test_request);
     RUN(test_envelope_and_ack);
@@ -372,5 +410,6 @@ int main(void) {
     RUN(test_hibernate);
     RUN(test_traces);
     RUN(test_free);
+    RUN(test_each_output_once);
     TEST_MAIN_END();
 }

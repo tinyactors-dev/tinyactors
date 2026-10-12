@@ -10,6 +10,21 @@ valid:
   - "TA_API const char *ta_name(const ta_image *image, uint32_t index);"
   - "typedef struct v { ta_status (*serialize)(const ta_datamodel_call *call, ta_buffer *out); } v;"
   - "typedef struct ta_allocator { void *(*alloc)(void *context, size_t size, size_t align); void (*free)(void *context, void *ptr, size_t size); } ta_allocator;"
+  - |
+    /* The reply, a view of the host's memory, valid until the next call into the host. */
+    TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);
+  - |
+    /* Traces and logs: views of the host's memory, valid until the next call. */
+    TA_API ta_status ta_host_traces(ta_host *h, ta_bytes *out);
+    TA_API ta_status ta_host_logs(ta_host *h, ta_bytes *out);
+  - |
+    typedef struct v {
+        /* to_wire: a view the datamodel owns, valid until its next call */
+        ta_status (*to_wire)(void *datamodel, ta_payload p, ta_bytes *out);
+    } v;
+  - |
+    /* A writing: its bytes in `out`, valid until the next call. */
+    typedef ta_status (*ta_writer)(void *context, ta_bytes *out);
 invalid:
   - "typedef struct v { ta_status (*serialize)(void *d, uint64_t i, void *buffer, size_t capacity); } v;"
   - "typedef struct v { ta_status (*load)(void *d, const void *buffer, size_t length); } v;"
@@ -19,3 +34,14 @@ invalid:
   - "TA_API size_t ta_otlp_put_traces(ta_otlp *otlp, void *out, size_t size);"
   - "TA_API ta_status ta_parse(const uint8_t *bytes, size_t length, ta_buffer *out);"
   - "TA_API const void *ta_image_bytes(const ta_image *image, size_t *length);"
+  - "TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);"
+  - |
+    /* The reply, in the host's memory. */
+    TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);
+  - |
+    /* Traces: a view, valid until the next call. */
+    TA_API ta_status ta_host_traces(ta_host *h, ta_bytes *out);
+    /* Logs. */
+    TA_API ta_status ta_host_logs(ta_host *h, ta_bytes *out);
+  - "typedef struct v { ta_status (*to_wire)(void *datamodel, ta_payload p, ta_bytes *out); } v;"
+  - "typedef ta_status (*ta_writer)(void *context, ta_bytes *out);"

@@ -134,14 +134,13 @@ static void post_write(w3c_test *test, const ta_host_effect *effect) {
     }
     static w3c_form form;
     memset(&form, 0, sizeof form);
-    ta_buffer cbor = {NULL, 0, 0};
+    ta_bytes cbor = {NULL, 0};
     if (effect->payload && conform_datamodel_write(&test->datamodel, effect->payload, &cbor) == TA_OK)
-        form_read(&form, (ta_bytes){cbor.pointer, cbor.length});
+        form_read(&form, cbor);
     ta_http_post request = {effect->target, effect->event, form.fields, form.field_count, 0, form.body};
     ta_buffer out = {post->message, sizeof post->message, 0};
     if (ta_http_encode_post(&request, &out) != TA_OK) post->refused = 1;
     post->length = out.length;
-    conform_buffer_free(&cbor);
 }
 
 /* The request's form fields, as a map of text to text: the event's data. */

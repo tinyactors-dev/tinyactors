@@ -1,15 +1,11 @@
-/* base/cbor_output.h — CBOR written straight into a caller's bytes, item by
- * item, for core's own replies (src/host/request.c). Shortest heads, as
- * ta_cbor_encode writes them. `length` goes on counting past `capacity`, so
- * one pass tells a caller what a reply needs (TA_ERROR_NO_MEMORY). */
+/* base/cbor_output.h — CBOR written straight into an output (base/output.h),
+ * item by item, for core's own replies and envelopes (src/host/request.c,
+ * src/host/router.c). Shortest heads, as the CBOR writer writes them. */
 #ifndef TINYACTORS_BASE_CBOR_OUTPUT_H
 #define TINYACTORS_BASE_CBOR_OUTPUT_H
 #include <tinyactors/types.h>
 
-typedef struct cbor_output {
-    unsigned char *bytes;
-    size_t capacity, length;
-} cbor_output;
+#include "base/output.h"
 
 enum {
     CBOR_MAJOR_UINT = 0,
@@ -22,18 +18,17 @@ enum {
     CBOR_MAJOR_SIMPLE = 7
 };
 
-void cbor_output_bytes(cbor_output *output, const void *bytes, size_t length);
-void cbor_output_head(cbor_output *output, uint32_t major, uint64_t argument);
-void cbor_output_float(cbor_output *output, uint64_t bits); /* a double's bits */
+void cbor_output_head(ta_output *output, uint32_t major, uint64_t argument);
+void cbor_output_float(ta_output *output, uint64_t bits); /* a double's bits */
 
-static inline void cbor_output_text(cbor_output *output, ta_string_view text) {
+static inline void cbor_output_text(ta_output *output, ta_string_view text) {
     cbor_output_head(output, CBOR_MAJOR_TEXT, text.length);
-    cbor_output_bytes(output, text.pointer, text.length);
+    ta_output_write(output, text.pointer, text.length);
 }
-static inline void cbor_output_uint(cbor_output *output, uint64_t value) {
+static inline void cbor_output_uint(ta_output *output, uint64_t value) {
     cbor_output_head(output, CBOR_MAJOR_UINT, value);
 }
-static inline void cbor_output_simple(cbor_output *output, uint32_t simple) {
+static inline void cbor_output_simple(ta_output *output, uint32_t simple) {
     cbor_output_head(output, CBOR_MAJOR_SIMPLE, simple);
 }
 #endif /* TINYACTORS_BASE_CBOR_OUTPUT_H */

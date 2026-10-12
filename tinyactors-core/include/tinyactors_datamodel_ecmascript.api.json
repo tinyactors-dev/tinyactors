@@ -225,7 +225,7 @@
         },
         {
           "name": "out",
-          "type": "ta_buffer *"
+          "type": "ta_bytes *"
         }
       ],
       "public": true,

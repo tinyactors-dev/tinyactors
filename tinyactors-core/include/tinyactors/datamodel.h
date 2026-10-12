@@ -6,8 +6,11 @@
  *
  * Re-entrancy: implementations may call the read-only ta_datamodel_environment_* queries
  * below; they must never call ta_system_* functions.
- * Lifetimes: ta_string_view results are valid until the next call on the same
- * datamodel instance.
+ * Lifetimes: the datamodel's outputs — ta_string_view results (eval_string,
+ * log) and ta_bytes views (to_wire, serialize, payload_serialize) — point
+ * into memory the datamodel owns and are valid until the next call on the
+ * same datamodel; core copies what it keeps before calling it again
+ * (docs/adr/0010 in the repository root, decision 1).
  */
 #ifndef TINYACTORS_DATAMODEL_H
 #define TINYACTORS_DATAMODEL_H
@@ -163,15 +166,16 @@ typedef struct ta_datamodel_vtable {
     ta_status (*custom)(const ta_datamodel_call *call, uint32_t custom_def);
 
     /* Hibernation (optional; present when `size` covers them and non-NULL).
-     * serialize: write the instance's state — its variables and the bound
-     * _event, NOT the system variables — into `out` (ta_buffer: on
-     * TA_ERROR_NO_MEMORY out->length is what it needs and nothing changed),
-     * TA_ERROR_UNSUPPORTED if the state cannot be serialized (e.g. functions
-     * in the data). The core calls destroy right after a successful serialize.
+     * serialize: the instance's state — its variables and the bound _event,
+     * NOT the system variables — as bytes in `out`, a view of memory the
+     * datamodel owns, valid until the next call on the datamodel (core copies
+     * it before calling destroy); TA_ERROR_UNSUPPORTED if the state cannot be
+     * serialized (e.g. functions in the data). The core calls destroy right
+     * after a successful serialize.
      * deserialize: create an instance from start->state; the system variables
      * are supplied again (same _sessionid/_name/_ioprocessors). Called only
      * at a stable point with the same chart context. */
-    ta_status (*serialize)(const ta_datamodel_call *call, ta_buffer *out);
+    ta_status (*serialize)(const ta_datamodel_call *call, ta_bytes *out);
     ta_status (*deserialize)(void *datamodel, const ta_datamodel_start *start, uint64_t *instance);
 
     /* Live migration (optional): called by ta_system_adopt after deserialize
@@ -187,13 +191,14 @@ typedef struct ta_datamodel_vtable {
      * between systems, and in traces, is one CBOR item (RFC 8949): integers,
      * floats, text, bytes, arrays, maps with text keys, true, false, null,
      * undefined, and an actor reference as tag 32 on its address.
-     * to_wire: write payload p as CBOR into `out` (on TA_ERROR_NO_MEMORY
-     * out->length is the capacity it needs; call again), TA_ERROR_INVALID
-     * if p cannot be a neutral value (a cycle, nested too deep).
+     * to_wire: payload p as CBOR in `out`, a view of memory the datamodel
+     * owns, valid until the next call on the datamodel; TA_ERROR_INVALID if p
+     * cannot be a neutral value (a cycle, nested too deep). Core calls it
+     * once per value it writes.
      * from_wire: a new payload (one reference) from CBOR; TA_ERROR_INVALID if
      * it is not one well-formed neutral value. Transports between systems
      * use them; within a system payloads never leave the datamodel. */
-    ta_status (*to_wire)(void *datamodel, ta_payload p, ta_buffer *out);
+    ta_status (*to_wire)(void *datamodel, ta_payload p, ta_bytes *out);
     ta_status (*from_wire)(void *datamodel, ta_bytes cbor, ta_payload *out);
 
     /* Payloads in blobs (optional; docs/durability.md). ta_actor_export
@@ -201,11 +206,12 @@ typedef struct ta_datamodel_vtable {
      * payload_serialize, and ta_system_adopt creates it again with
      * payload_deserialize (one reference), so an export blob is a value that
      * any datamodel host can adopt: another process, after a restart.
-     * Conventions as for serialize (ta_buffer; TA_ERROR_UNSUPPORTED if the
-     * value cannot be written).
+     * Conventions as for serialize (a view of the datamodel's memory, valid
+     * until its next call; TA_ERROR_UNSUPPORTED if the value cannot be
+     * written).
      * Without them, delayed-send payloads travel as handles: such a blob is
      * valid only in the process (datamodel host) that wrote it. */
-    ta_status (*payload_serialize)(void *datamodel, ta_payload p, ta_buffer *out);
+    ta_status (*payload_serialize)(void *datamodel, ta_payload p, ta_bytes *out);
     ta_status (*payload_deserialize)(void *datamodel, ta_bytes blob, ta_payload *out);
 
     /* A variable for inspection (optional; the actor.context request,

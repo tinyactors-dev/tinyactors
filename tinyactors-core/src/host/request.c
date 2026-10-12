@@ -37,7 +37,7 @@ enum {
 typedef struct request {
     ta_host *host;
     ta_cbor_document *document;
-    cbor_output out;
+    ta_output out;
     uint32_t id;   /* the request's "id" token; TA_NIL: none (or not readable) */
     int replies;   /* 1: a request, whose reply carries "id" (null when unreadable); 0: a config */
     int notification; /* no "id": applied, nothing written, errors not reported */
@@ -680,12 +680,11 @@ static void request_run_actor_unsubscribe(request *r, uint32_t map) {
 /* A payload's neutral value (to_wire) straight into the reply; null when the
  * datamodel cannot write it. */
 static void request_put_payload(request *r, const ta_datamodel_binding *binding, ta_payload payload) {
-    size_t room = r->out.length < r->out.capacity ? r->out.capacity - r->out.length : 0;
-    ta_buffer out = {room ? r->out.bytes + r->out.length : (void *)0, room, 0};
+    ta_bytes value = {0, 0};
     uint32_t was = host_guard(r->host);
-    ta_status status = binding->vtable->to_wire(binding->datamodel, payload, &out);
+    ta_status status = binding->vtable->to_wire(binding->datamodel, payload, &value);
     host_unguard(r->host, was);
-    if (status == TA_OK || status == TA_ERROR_NO_MEMORY) r->out.length += out.length;
+    if (status == TA_OK) ta_output_write(&r->out, value.pointer, value.length);
     else request_put_null(r);
 }
 
@@ -757,7 +756,7 @@ static void request_put_scalar(request *r, const ta_otlp_value *value) {
     case TA_OTLP_VALUE_DOUBLE: request_put_double(r, value->number); break;
     case TA_OTLP_VALUE_BYTES:
         cbor_output_head(&r->out, CBOR_MAJOR_BYTES, value->bytes.length);
-        cbor_output_bytes(&r->out, value->bytes.pointer, value->bytes.length);
+        ta_output_write(&r->out, value->bytes.pointer, value->bytes.length);
         break;
     default: request_put_null(r);
     }
@@ -973,7 +972,7 @@ ta_status ta_host_request(ta_host *host, ta_bytes bytes, ta_buffer *reply) {
     r.id = TA_NIL;
     r.replies = 1;
     r.prefix = "params.";
-    r.out = (cbor_output){(unsigned char *)reply->pointer, reply->pointer ? reply->capacity : 0, 0};
+    r.out = ta_output_over(*reply, NULL);
     ta_status status = ta_cbor_decode(&document);
     if (status == TA_ERROR_NO_MEMORY) {
         request_refuse_with(&r, REQUEST_LIMIT, "limit", "a request has at most 256 items");
@@ -985,7 +984,7 @@ ta_status ta_host_request(ta_host *host, ta_bytes bytes, ta_buffer *reply) {
         uint32_t params = TA_NIL;
         const request_method *method = request_envelope(&r, &params);
         if (r.notification) { /* applied; nothing is written, not even an error */
-            r.out = (cbor_output){(unsigned char *)0, 0, 0};
+            r.out = ta_output_over((ta_buffer){0, 0, 0}, NULL);
             if (method) method->run(&r, params);
             return TA_OK;
         }
@@ -1308,8 +1307,7 @@ ta_status host_config_read(const host_config_input *input, host_config *config) 
     r.document = &document;
     r.id = TA_NIL;
     r.prefix = "";
-    r.out = (cbor_output){error ? (unsigned char *)error->pointer : (unsigned char *)0,
-                          error && error->pointer ? error->capacity : 0, 0};
+    r.out = ta_output_over(error ? *error : (ta_buffer){0, 0, 0}, NULL);
     ta_status status = ta_cbor_decode(&document);
     if (status == TA_ERROR_NO_MEMORY)
         request_refuse_with(&r, REQUEST_LIMIT, "limit", "a config has at most 256 items");

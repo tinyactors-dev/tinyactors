@@ -152,9 +152,9 @@ int conform_datamodel_open(conform_datamodel *datamodel, conform_call *call);
 int conform_datamodel_reopen(conform_datamodel *datamodel);
 void conform_datamodel_close(conform_datamodel *datamodel);
 /* The vtable's from_wire and to_wire (TA_ERROR_UNSUPPORTED without them);
- * to_wire grows `out`. */
+ * to_wire's `out` is the datamodel's view, valid until its next call. */
 ta_status conform_datamodel_read(conform_datamodel *datamodel, ta_bytes cbor, ta_payload *out);
-ta_status conform_datamodel_write(conform_datamodel *datamodel, ta_payload payload, ta_buffer *out);
+ta_status conform_datamodel_write(conform_datamodel *datamodel, ta_payload payload, ta_bytes *out);
 void conform_datamodel_release(conform_datamodel *datamodel, ta_payload payload);
 /* Its state for a snapshot (ta_datamodel_ecmascript_snapshot), and back;
  * TA_ERROR_UNSUPPORTED for the tests' datamodel. */

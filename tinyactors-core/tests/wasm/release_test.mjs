@@ -145,12 +145,10 @@ if (x.ta_datamodel_ecmascript_new) {
   const payload = x.ta_datamodel_ecmascript_payload_eval(ecmascript, 0n,
     view("({sum: [1, 2, 3].reduce((a, b) => a + b), year: new Date().getUTCFullYear(), now: Date.now()})"));
   assert.notEqual(payload, 0n, 'the expression evaluates');
-  const out = alloc(layout('ta_buffer').size);
-  setU32(out + offset('ta_buffer', 'pointer'), alloc(256, 1));
-  setU32(out + offset('ta_buffer', 'capacity'), 256);
+  const out = alloc(layout('ta_bytes').size); // a view of the data model's memory
   assert.equal(x.ta_datamodel_ecmascript_payload_to_cbor(ecmascript, payload, out), 0, 'the value is written');
-  const cbor = new Uint8Array(x.memory.buffer, u32(out + offset('ta_buffer', 'pointer')),
-    u32(out + offset('ta_buffer', 'length')));
+  const cbor = new Uint8Array(x.memory.buffer, u32(out + offset('ta_bytes', 'pointer')),
+    u32(out + offset('ta_bytes', 'length')));
   const hex = Array.from(cbor, (b) => b.toString(16).padStart(2, '0')).join('');
   // {"sum": 6, "year": 2026, "now": 1767225600000}
   assert.equal(hex, 'a36373756d066479656172' + '1907ea' + '636e6f77' + '1b0000019b76daa800');

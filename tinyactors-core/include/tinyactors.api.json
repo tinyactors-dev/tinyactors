@@ -4109,7 +4109,7 @@
         },
         {
           "name": "serialize",
-          "type": "ta_status (*)(const ta_datamodel_call *, ta_buffer *)"
+          "type": "ta_status (*)(const ta_datamodel_call *, ta_bytes *)"
         },
         {
           "name": "deserialize",
@@ -4121,7 +4121,7 @@
         },
         {
           "name": "to_wire",
-          "type": "ta_status (*)(void *, ta_payload, ta_buffer *)"
+          "type": "ta_status (*)(void *, ta_payload, ta_bytes *)"
         },
         {
           "name": "from_wire",
@@ -4129,7 +4129,7 @@
         },
         {
           "name": "payload_serialize",
-          "type": "ta_status (*)(void *, ta_payload, ta_buffer *)"
+          "type": "ta_status (*)(void *, ta_payload, ta_bytes *)"
         },
         {
           "name": "payload_deserialize",

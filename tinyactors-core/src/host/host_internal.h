@@ -303,8 +303,8 @@ uint32_t host_chart_stats(const ta_host *h, ta_chart_stats *out, uint32_t capaci
 uint32_t host_actors(const ta_host *h, uint64_t *cursor, ta_uint64_array out);
 /* A session's state value (docs/requests.md, "state"). */
 enum { HOST_STATE_VALUE_STATES = 1024 };
-struct cbor_output;
-ta_status host_state_value(const ta_host *h, uint64_t session, struct cbor_output *out);
+struct ta_output;
+ta_status host_state_value(const ta_host *h, uint64_t session, struct ta_output *out);
 
 /* telemetry.c: what the run loop asks of the encoder, chosen once at
  * ta_host_create (the OTLP encoder, or the null one: all of it does nothing) */

@@ -1,5 +1,39 @@
 id: buffers-are-ta-buffer
 snapshots:
+  ? |
+    /* The reply, in the host's memory. */
+    TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);
+  : labels:
+    - source: ta_bytes *reply
+      style: primary
+      start: 102
+      end: 117
+    - source: TA_API
+      style: secondary
+      start: 39
+      end: 45
+    - source: TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);
+      style: secondary
+      start: 39
+      end: 119
+  ? |
+    /* Traces: a view, valid until the next call. */
+    TA_API ta_status ta_host_traces(ta_host *h, ta_bytes *out);
+    /* Logs. */
+    TA_API ta_status ta_host_logs(ta_host *h, ta_bytes *out);
+  : labels:
+    - source: ta_bytes *out
+      style: primary
+      start: 163
+      end: 176
+    - source: TA_API
+      style: secondary
+      start: 121
+      end: 127
+    - source: TA_API ta_status ta_host_logs(ta_host *h, ta_bytes *out);
+      style: secondary
+      start: 121
+      end: 178
   TA_API const void *ta_image_bytes(const ta_image *image, size_t *length);:
     labels:
     - source: size_t *length
@@ -42,6 +76,20 @@ snapshots:
       style: secondary
       start: 0
       end: 83
+  TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);:
+    labels:
+    - source: ta_bytes *reply
+      style: primary
+      start: 63
+      end: 78
+    - source: TA_API
+      style: secondary
+      start: 0
+      end: 6
+    - source: TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);
+      style: secondary
+      start: 0
+      end: 80
   TA_API ta_status ta_host_snapshot(ta_host *h, void *buffer, size_t capacity);:
     labels:
     - source: void *buffer
@@ -120,3 +168,27 @@ snapshots:
       style: secondary
       start: 41
       end: 93
+  typedef struct v { ta_status (*to_wire)(void *datamodel, ta_payload p, ta_bytes *out); } v;:
+    labels:
+    - source: ta_bytes *out
+      style: primary
+      start: 71
+      end: 84
+    - source: ta_status (*to_wire)(void *datamodel, ta_payload p, ta_bytes *out);
+      style: secondary
+      start: 19
+      end: 86
+  typedef ta_status (*ta_writer)(void *context, ta_bytes *out);:
+    labels:
+    - source: ta_bytes *out
+      style: primary
+      start: 46
+      end: 59
+    - source: (*ta_writer)(void *context, ta_bytes *out)
+      style: secondary
+      start: 18
+      end: 60
+    - source: typedef ta_status (*ta_writer)(void *context, ta_bytes *out);
+      style: secondary
+      start: 0
+      end: 61

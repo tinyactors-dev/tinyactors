@@ -647,7 +647,7 @@ static void subscriptions_arm(ta_host *host) {
  * so every map's count is known before its items. TA_ERROR_INVALID when
  * there is no such session or its configuration has more than
  * HOST_STATE_VALUE_STATES states. */
-ta_status host_state_value(const ta_host *host, uint64_t session, cbor_output *out) {
+ta_status host_state_value(const ta_host *host, uint64_t session, ta_output *out) {
     uint32_t si = 0, actor = 0, states[HOST_STATE_VALUE_STATES];
     uint8_t depths[HOST_STATE_VALUE_STATES], kinds[HOST_STATE_VALUE_STATES];
     if (host_locate(host, session, &si, &actor) != TA_OK) return TA_ERROR_INVALID;

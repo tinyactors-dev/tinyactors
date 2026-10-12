@@ -1,31 +1,51 @@
-# Bytes cross the public headers as ta_bytes (input or result) or
-# ta_buffer * (output), never as a loose pointer and length:
-# `void *buffer, size_t capacity, size_t *length`, `const void *bytes,
-# size_t length`, or a returned `const void *` with a `size_t *length`
-# (AGENTS.md, "At most three parameters"; docs/adr/0009 in the repository
-# root, decision 8). It covers the functions and the callbacks (function
-# pointers: vtable entries, typedefs) the headers declare. ta_wasm_free and
-# ta_allocator's alloc and free manage memory (a pointer and its size), not
-# bytes.
+# Bytes cross the public headers as ta_bytes (input or result), as a
+# ta_buffer * the caller fills (output), or as a ta_bytes * view (output)
+# whose declaration's comment says how long it is valid ("valid until ..."),
+# never as a loose pointer and length: `void *buffer, size_t capacity,
+# size_t *length`, `const void *bytes, size_t length`, or a returned
+# `const void *` with a `size_t *length` (AGENTS.md, "At most three
+# parameters"; docs/adr/0009 in the repository root, decision 8, and
+# docs/adr/0010, decisions 1 and 2). It covers the functions and the
+# callbacks (function pointers: vtable entries, typedefs) the headers
+# declare. A view's comment is the nearest comment before its declaration.
+# ta_wasm_free and ta_allocator's alloc and free manage memory (a pointer
+# and its size), not bytes.
 # Run with `mise run lint`.
 id: buffers-are-ta-buffer
 language: c
 severity: error
-message: "bytes cross the public API as ta_bytes or ta_buffer *, not a pointer and a length (ADR 0009)"
+message: "bytes cross the public API as ta_bytes, ta_buffer *, or a ta_bytes * view whose comment says how long it is valid; not as a pointer and a length (ADR 0009, ADR 0010)"
 files:
   - include/**/*.h
 rule:
-  all:
-    - any:
-        - inside:
-            kind: declaration
-            stopBy: end
-            has: {field: type, regex: '^TA_API$'}
-        - inside: # a callback's parameter: (*name)(...)
-            kind: parameter_list
-            inside: {kind: function_declarator, has: {kind: parenthesized_declarator}}
-    - not:
-        inside: {kind: declaration, stopBy: end, regex: '\bta_wasm_free\('}
-    - not:
-        inside: {kind: struct_specifier, stopBy: end, regex: '^struct\s+ta_allocator\b'}
-    - matches: bytes-as-pointer-and-length # tools/lint/utils/
+  any:
+    - all:
+        - any:
+            - inside:
+                kind: declaration
+                stopBy: end
+                has: {field: type, regex: '^TA_API$'}
+            - inside: # a callback's parameter: (*name)(...)
+                kind: parameter_list
+                inside: {kind: function_declarator, has: {kind: parenthesized_declarator}}
+        - not:
+            inside: {kind: declaration, stopBy: end, regex: '\bta_wasm_free\('}
+        - not:
+            inside: {kind: struct_specifier, stopBy: end, regex: '^struct\s+ta_allocator\b'}
+        - matches: bytes-as-pointer-and-length # tools/lint/utils/
+    # a view out (ta_bytes *) whose declaration does not say how long it lasts
+    - all:
+        - kind: parameter_declaration
+          regex: '^ta_bytes\s*\*'
+        - any:
+            - inside:
+                kind: declaration
+                stopBy: end
+                has: {field: type, regex: '^TA_API$'}
+                not: {follows: {kind: comment, stopBy: {kind: comment}, regex: 'valid[\s*]+until'}}
+            - inside:
+                any: # a vtable entry, or a function pointer type
+                  - kind: field_declaration
+                  - {kind: type_definition, has: {field: declarator, kind: function_declarator}}
+                stopBy: end
+                not: {follows: {kind: comment, stopBy: {kind: comment}, regex: 'valid[\s*]+until'}}

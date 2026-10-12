@@ -107,6 +107,11 @@ struct ta_datamodel_ecmascript {
         *environment; /* of the vtable call in progress (NULL outside one): JS work is charged */
     const volatile int *abort_flag; /* the host's "stop now" (ta_datamodel_ecmascript_config) */
     size_t stack_size;              /* the engine's stack limit (bytes) */
+    /* where the last to_wire, serialize or payload_serialize was written: the
+     * view it gave is valid until the next call (datamodel.h); it keeps the
+     * size of the largest */
+    unsigned char *output;
+    size_t output_capacity;
 };
 
 /* Fuel charged per interrupt check (quickjs checks every 10,000 operations):
@@ -2390,15 +2395,36 @@ static void explain_session(ta_datamodel_ecmascript *ecmascript, ecmascript_inst
     }
 }
 
-static ta_status ecmascript_serialize(const ta_datamodel_call *call, ta_buffer *out) {
+/* Room for `length` bytes of output (datamodel.h: the view a call gives);
+ * NULL if malloc refused. */
+static unsigned char *output_room(ta_datamodel_ecmascript *ecmascript, size_t length) {
+    if (length <= ecmascript->output_capacity) return ecmascript->output;
+    size_t grown = ecmascript->output_capacity ? ecmascript->output_capacity : 256;
+    while (grown < length)
+        grown *= 2;
+    unsigned char *room = (unsigned char *)malloc(grown);
+    if (!room) return NULL;
+    free(ecmascript->output);
+    ecmascript->output = room;
+    ecmascript->output_capacity = grown;
+    return room;
+}
+
+/* `bytes` as the datamodel's output, in `out`. */
+static ta_status output_keep(ta_datamodel_ecmascript *ecmascript, ta_bytes bytes, ta_bytes *out) {
+    unsigned char *room = output_room(ecmascript, bytes.length);
+    if (!room) return TA_ERROR_NO_MEMORY;
+    if (bytes.length) memcpy(room, bytes.pointer, bytes.length);
+    *out = (ta_bytes){room, bytes.length};
+    return TA_OK;
+}
+
+static ta_status ecmascript_serialize(const ta_datamodel_call *call, ta_bytes *out) {
     void *datamodel = call->datamodel;
     uint64_t handle = call->instance;
-    void *buffer = out->pointer;
-    size_t capacity = out->capacity;
-    size_t *length = &out->length;
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
     ecmascript_instance *instance = I(ecmascript, handle);
-    *length = 0;
+    *out = (ta_bytes){0, 0};
     ecmascript->error[0] = 0;
     if (!instance || !instance->live) return TA_ERROR_INVALID;
     JSContext *context = instance->context;
@@ -2416,12 +2442,7 @@ static ta_status ecmascript_serialize(const ta_datamodel_call *call, ta_buffer *
         return TA_ERROR_UNSUPPORTED;
     }
     JS_FreeValue(context, o);
-    *length = sz;
-    status = TA_ERROR_NO_MEMORY;
-    if (sz <= capacity) {
-        if (sz) memcpy(buffer, bytes, sz);
-        status = TA_OK;
-    }
+    status = output_keep(ecmascript, (ta_bytes){bytes, sz}, out);
     js_free(context, bytes);
     return status;
 }
@@ -2483,12 +2504,9 @@ static ta_status ecmascript_deserialize(void *datamodel, const ta_datamodel_star
 
 /* Payloads in export blobs: the value itself, so another datamodel host
  * (another process, after a restart) can adopt the blob. */
-static ta_status ecmascript_payload_serialize(void *datamodel, ta_payload payload, ta_buffer *out) {
-    void *buffer = out->pointer;
-    size_t capacity = out->capacity;
-    size_t *length = &out->length;
+static ta_status ecmascript_payload_serialize(void *datamodel, ta_payload payload, ta_bytes *out) {
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
-    *length = 0;
+    *out = (ta_bytes){0, 0};
     if (!payload || payload > ecmascript->payload_count || !ecmascript->payload_refs[payload - 1])
         return TA_ERROR_INVALID;
     JSContext *context = shared_realm(ecmascript);
@@ -2499,12 +2517,7 @@ static ta_status ecmascript_payload_serialize(void *datamodel, ta_payload payloa
         clear_exception(context);
         return TA_ERROR_UNSUPPORTED;
     }
-    *length = sz;
-    ta_status status = TA_ERROR_NO_MEMORY;
-    if (buffer && sz <= capacity) {
-        if (sz) memcpy(buffer, bytes, sz);
-        status = TA_OK;
-    }
+    ta_status status = output_keep(ecmascript, (ta_bytes){bytes, sz}, out);
     js_free(context, bytes);
     return status;
 }
@@ -2866,8 +2879,8 @@ static int wire_write(wire_builder *b, JSContext *context, JSValueConst v, uint3
 }
 
 ta_status ta_datamodel_ecmascript_payload_to_cbor(ta_datamodel_ecmascript *ecmascript,
-                                                  ta_payload payload, ta_buffer *out) {
-    out->length = 0;
+                                                  ta_payload payload, ta_bytes *out) {
+    *out = (ta_bytes){0, 0};
     if (!payload || payload > ecmascript->payload_count || !ecmascript->payload_refs[payload - 1])
         return TA_ERROR_INVALID;
     ecmascript->operations = 0;
@@ -2880,7 +2893,13 @@ ta_status ta_datamodel_ecmascript_payload_to_cbor(ta_datamodel_ecmascript *ecmas
     ta_status status = b->status;
     if (status == TA_OK) {
         ta_cbor_document document = {{b->strings, b->length}, b->tokens, b->capacity, b->count};
-        status = ta_cbor_encode(&document, out);
+        ta_buffer room = {ecmascript->output, ecmascript->output_capacity, 0};
+        status = ta_cbor_encode(&document, &room);
+        if (status == TA_ERROR_NO_MEMORY && output_room(ecmascript, room.length)) {
+            room = (ta_buffer){ecmascript->output, ecmascript->output_capacity, 0};
+            status = ta_cbor_encode(&document, &room);
+        }
+        if (status == TA_OK) *out = (ta_bytes){room.pointer, room.length};
     }
     wire_builder_free(b);
     free(b);
@@ -3018,7 +3037,7 @@ ta_status ta_datamodel_ecmascript_payload_from_cbor(ta_datamodel_ecmascript *ecm
     return TA_ERROR_NO_MEMORY;
 }
 
-static ta_status ecmascript_to_wire(void *datamodel, ta_payload payload, ta_buffer *out) {
+static ta_status ecmascript_to_wire(void *datamodel, ta_payload payload, ta_bytes *out) {
     return ta_datamodel_ecmascript_payload_to_cbor((ta_datamodel_ecmascript *)datamodel, payload,
                                                    out);
 }
@@ -3321,6 +3340,7 @@ void ta_datamodel_ecmascript_free(ta_datamodel_ecmascript *ecmascript) {
     free(ecmascript->payload_next);
     free(ecmascript->iterations);
     free(ecmascript->charts);
+    free(ecmascript->output);
     free(ecmascript);
 }
 
