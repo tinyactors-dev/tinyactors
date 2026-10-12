@@ -86,7 +86,7 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   config with them at `ta_host_create` (the effective config, which
   `host.config` answers) and reads values from there; never write a
   default again elsewhere, and never test a field for 0 to apply one.
-- A rarely called host operation is a method of `ta_host_request`: follow
+- A rarely called host operation is a method answered through `ta_host_post` (ADR 0011): follow
   "Adding a method" in `docs/requests.md` for what belongs there and how.
 - Bytes that cross the API (requests, configs, envelopes, values) are
   fixed by the protocol vectors in `../tinyactors-test/suites/protocol/`

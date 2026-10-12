@@ -204,7 +204,7 @@ terminate, deliver, advance_time, resume, run, and the effects and their ack
 ([ADR 0009](docs/adr/0009-one-host-two-queues.md), decision 2 and its cost
 table). CBOR is for two things only:
 
-- **rarely called calls:** `ta_host_request` and the host's config;
+- **rarely called calls:** `ta_host_post` (a control message; its reply is an effect, ADR 0011) and the host's config;
 - **a process boundary:** bytes that leave or enter the process (an
   envelope for another system, OTLP, blobs). The encoding sits beside the
   struct call (`ta_host_envelope` writes a PEER effect as CBOR,
