@@ -460,9 +460,13 @@ sjs_result sjs_date_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
         return sjs_vm_fault(vm, "toLocaleString depends on locale data, which staticjs does not have");
     case SJS_METHOD_TEMPORAL_TO_STRING:
     case SJS_METHOD_TEMPORAL_DATE_LOCAL:
-        return sjs_vm_fault(vm, "this method of a Date reads local time, which staticjs does not have: use toISOString or the getUTC methods");
+        /* MUTATION: the message's setUTC methods. Restore "...: use
+         * toISOString or the getUTC methods". */
+        return sjs_vm_fault(vm, "this method of a Date reads local time, which staticjs does not have: use toISOString, the getUTC methods or the setUTC methods");
     case SJS_METHOD_TEMPORAL_DATE_SETTER:
-        return sjs_vm_fault(vm, "a Date's setters change it, and staticjs does not have them yet");
+        /* MUTATION: the message. Restore "a Date's setters change it, and
+         * staticjs does not have them yet". */
+        return sjs_vm_fault(vm, "a Date's setters change it: staticjs calls them only on a variable of the function that holds the Date alone");
     default:
         break;
     }
@@ -499,5 +503,81 @@ sjs_result sjs_date_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
         break;
     }
     call->result = sjs_num(value);
+    return SJS_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * MUTATION: a Date's setTime and UTC setters (docs/date.md, "Setters"), on a
+ * variable of the function that holds the Date alone (SJS_OP_MUTATE). They
+ * follow V8's builtins (src/builtins/builtins-date.cc): each argument
+ * ToNumber (a string or an object faults: JavaScript converts it; one left
+ * out keeps the Date's field, an undefined one is NaN); the fields of an
+ * invalid date are not read, and the setter gives NaN, but setUTCFullYear,
+ * which starts from +0; then MakeDay, MakeTime, MakeDate and TimeClip, as
+ * Date.UTC. The new time value is written in place and is the result. This
+ * section exists only for mutation.
+ */
+
+/* The setters' fields, in MakeDay's and MakeTime's order. */
+enum { DATE_YEAR, DATE_MONTH, DATE_DAY, DATE_HOUR, DATE_MINUTE, DATE_SECOND, DATE_MILLISECOND, DATE_FIELDS };
+
+/* The first field each setter sets, after setTime: setUTCFullYear sets the
+ * year and on, ..., setUTCMilliseconds the millisecond alone. */
+static uint32_t date_set_first(sjs_builtin_id id) {
+    static const uint8_t FIRST[7] = { DATE_YEAR, DATE_MONTH, DATE_DAY, DATE_HOUR, DATE_MINUTE, DATE_SECOND, DATE_MILLISECOND };
+    return FIRST[id - SJS_METHOD_DATE_SET_UTC_FULL_YEAR];
+}
+
+/* The fields a setter sets at most: setUTCFullYear the date's three,
+ * setUTCMonth two, setUTCDate one; setUTCHours the time's four, ... */
+static uint32_t date_set_last(uint32_t first) {
+    return first <= DATE_DAY ? DATE_DAY : DATE_MILLISECOND;
+}
+
+sjs_result sjs_date_set(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    sjs_temporal *date = SJS_AS_TEMPORAL(*call->receiver_slot);
+    double time = date->as.time;
+    if (id == SJS_METHOD_DATE_SET_TIME) {
+        double v = date_nan();
+        if (call->count > 0 && sjs_vm_to_number(vm, call->args[0], &v) != SJS_OK) return SJS_ERR_PROGRAM;
+        date->as.time = date_clip(v);
+        call->result = sjs_num(date->as.time);
+        return SJS_OK;
+    }
+    /* The fields it sets: from its first, one per argument given (the first
+     * always, as JavaScript reads it given or not: undefined is NaN), to
+     * its last at most; the arguments are converted first. */
+    uint32_t first = date_set_first(id);
+    uint32_t given = call->count < 1u ? 1u : call->count;
+    uint32_t last = first + given - 1u < date_set_last(first) ? first + given - 1u : date_set_last(first);
+    double v[DATE_FIELDS];
+    for (uint32_t i = first; i <= last; i++) {
+        sjs_value a = i - first < call->count ? call->args[i - first] : sjs_undefined();
+        if (sjs_vm_to_number(vm, a, &v[i]) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    if (sjs_number_is_nan(time)) {
+        if (id != SJS_METHOD_DATE_SET_UTC_FULL_YEAR) {
+            call->result = sjs_num(time);
+            return SJS_OK;
+        }
+        time = 0.0;
+    }
+    /* The fields it keeps: the Date's own. */
+    utc_fields f = utc_fields_of(time);
+    double kept[DATE_FIELDS] = { (double)f.year, f.month, f.day, f.hour, f.minute, f.second, f.millisecond };
+    for (uint32_t i = 0; i < DATE_FIELDS; i++) {
+        if (i < first || i > last) v[i] = kept[i];
+    }
+    int64_t t = (int64_t)time;
+    int64_t days = date_floor_div(t, DATE_MS_PER_DAY);
+    double day = (double)days;
+    double within = (double)(t - days * DATE_MS_PER_DAY);
+    if (first <= DATE_DAY) {
+        day = date_make_day(v[DATE_YEAR], v[DATE_MONTH], v[DATE_DAY]);
+    } else {
+        within = date_make_time(&v[DATE_HOUR]);
+    }
+    date->as.time = date_clip(date_make_date(day, within));
+    call->result = sjs_num(date->as.time);
     return SJS_OK;
 }

@@ -1773,7 +1773,7 @@ __attribute__((noinline)) static void mutation_method(sjs_vm *vm, const sjs_stri
         return;
     }
     sjs_value receiver = vm->stack[stack_top(vm)->boolean];
-    sjs_builtin_id id = sjs_mutation_of(sjs_name_of(key), receiver.kind);
+    sjs_builtin_id id = sjs_mutation_of(sjs_name_of(key), receiver);
     sjs_value callee = { .kind = SJS_FUNCTION, .internal = SJS_INTERNAL_METHOD, .boolean = (uint32_t)id };
     if (id == SJS_BUILTIN_NONE && method(vm, (sjs_member){ receiver, key }, &callee) != SJS_OK) return;
     sjs_vm_push(vm, callee);
@@ -2371,7 +2371,7 @@ __attribute__((noinline)) static void path_call(sjs_vm *vm, path_call_site site)
         path_container(vm, (path_into){ *place, name, SJS_PATH_LOAD });
         return;
     }
-    sjs_builtin_id id = sjs_mutation_of(sjs_name_of(SJS_AS_STRING(name)), place->kind);
+    sjs_builtin_id id = sjs_mutation_of(sjs_name_of(SJS_AS_STRING(name)), *place);
     if (id == SJS_BUILTIN_NONE) {
         path_call_other(vm, place, site);
         return;

@@ -34,8 +34,9 @@ whose value moves to the `+`, which extends a string nothing else holds
 ("Appending to a let", below); a map's `set`, `delete` and `clear`,
 on a variable or a path, by the same rules (README.md, "Maps");
 `Object.assign(x, ...sources)` of such a variable ("Object.assign",
-below); and an iterator's `next` and `return` on such a variable
-("Iterators", below).
+below); an iterator's `next` and `return` on such a variable
+("Iterators", below); and a Date's `setTime` and UTC setters on such a
+variable (docs/date.md, "Setters").
 
 ## The methods
 
@@ -57,6 +58,7 @@ below); and an iterator's `next` and `return` on such a variable
 | map | `clear()` | `undefined` |
 | iterator | `next()` | a new `{ value, done }` |
 | iterator helper's result | `return()` | a new `{ value: undefined, done: true }` |
+| Date | `setTime(t)`, `setUTCFullYear(y, m, d)`, `setUTCMonth(m, d)`, `setUTCDate(d)`, `setUTCHours(h, mi, s, ms)`, `setUTCMinutes(mi, s, ms)`, `setUTCSeconds(s, ms)`, `setUTCMilliseconds(ms)` | the new time value, a number |
 
 Each has JavaScript's semantics and return value. `sort` takes a compare
 function and sorts as `toSorted` does, with the same merge sort, fuel and
@@ -85,7 +87,11 @@ one) holds the array, the map or the set, so a mutation of it faults
 ("held elsewhere") while one lives (`const it = xs.values(); xs.push(1)`);
 after the iterator's last read, which moves it, the mutation runs. So does
 `forEach`'s callback's, as the loop holds the array, the map or the set
-(`xs.forEach((x, i, a) => a.push(x))`).
+(`xs.forEach((x, i, a) => a.push(x))`). A Date's setters write its time
+value in place, as V8 computes it (docs/date.md, "Setters"); the mutation
+is the Date type's alone of the Temporal kind (`sjs_mutation_of` takes the
+receiver, and gives none for another Temporal value), and a setter called
+as any method is faults (`SJS_METHOD_TEMPORAL_DATE_SETTER`).
 
 ## The rule, at compile time
 
@@ -244,7 +250,8 @@ Neither compiled form can give a value other than JavaScript's, for
 either kind: a set the compiler used to refuse faults when it runs
 instead. Arrays, maps, iterators (whose `next` and `return` on a value
 nothing else holds are the same method, not a namesake) and every other
-name keep the rules above. A kind per `const`, inferred from its
+name keep the rules above; so do a Date's setters, whose names no other
+kind has. A kind per `const`, inferred from its
 initializer (`new Set`, `Temporal.PlainDate.from`), could bring back the
 early refusal for a set the compiler can see, but not replace the run's
 check: a callback's parameter, a reduce's accumulator, a property and a
@@ -577,7 +584,10 @@ faults on them. A receiver of a kind without the method is called as any
 method is: a string's or a number's faults by name, and an object's own
 function, found by the name, is called as an ordinary method call calls
 it. `sort` and a chain on one fault ("on an array or a set only"), as they
-need the container back.
+need the container back. A Date's setters are not in `MUTATE_PATH`, nor are
+an iterator's `next` and `return`: `o.d.setUTCDate(1)` is an ordinary
+call, which faults ("setters change it"), and as a statement it is refused
+("has no effect"); keep the Date in a variable of its own to set it.
 
 **The rewrite.** The parser sends such a call as any method call on a path,
 and the compiler compiles it so, holding the path from its CALL_BEGIN to
@@ -949,6 +959,16 @@ end of `src/vm.c` (`sjs_vm_object_assign`, `sjs_assign_puts`) and
 `sjs_object_copy` are not mutation, and stay; so do its cases in
 `tests/spec/builtins.spec`.
 
+A Date's `setTime` and UTC setters:
+
+| File | What is tagged |
+|---|---|
+| `src/internal.h` | `SJS_METHOD_DATE_SET_TIME` to `SJS_METHOD_DATE_SET_UTC_MILLISECONDS`; `sjs_mutation_of`'s receiver (restore `uint8_t kind`) |
+| `src/builtins.c` | `NAME_DATE_SETTER` and the eight names that use it (restore `NAME_TEMPORAL(text, SJS_METHOD_TEMPORAL_DATE_SETTER, 0)`); the local setters' `SJS_METHOD_TEMPORAL_DATE_LOCAL` (restore `SETTER`); `mutation_kind`'s first line; `sjs_mutation_of`'s receiver and its test of a Date; their case in `sjs_mutation_call` |
+| `src/vm.c` | the receiver passed to `sjs_mutation_of` in `mutation_method` and `path_call` (restore `.kind`) |
+| `src/vm.h` | `sjs_date_set` |
+| `src/date.c` | `SETTER`'s and `LOCAL`'s messages (restore the ones they name); the section at the end of the file |
+
 Shared names:
 
 | File | What is tagged |
@@ -1004,7 +1024,14 @@ them. Shared names turned `mutation.spec`'s deliberate Temporal cases (a
 chain, a copy, a capture) into values, and its chains through an object's
 own function, which faulted ("goes on only through an array, a set or a
 map"), into a value or the next receiver's own fault ("format digits",
-"changes its receiver"); rolling back restores them. The README, `AGENTS.md`, `docs/builtins.md` and
+"changes its receiver"); rolling back restores them. A Date's setters
+replaced `date.spec`'s "setTime, deliberate" and the other UTC setters'
+cases, which faulted ("setters change it"), with its section "The
+setters", whose cases rolling back deletes, restoring those; and its local
+setters' cases, which faulted "setters change it" too, now fault "reads
+local time", as their names are `SJS_METHOD_TEMPORAL_DATE_LOCAL` now
+(restore `SETTER` and the cases; `LOCAL`'s message gained "or the setUTC
+methods"). The README, `AGENTS.md`, `docs/builtins.md` and
 `docs/matcher.md` point here.
 
 **Not mutation: `STRING_APPEND`.** `+`, a template and a string's `concat`

@@ -42,10 +42,10 @@ nothing for an invalid date). None of Temporal's getters or methods is a
 Date's but the names they share: `toJSON`, `toLocaleString`, `toString`
 and `valueOf`.
 
-A Date is the one value of the kind that changes: its setters (to build,
-under the owned-mutation rules, docs/mutation.md) write `as.time` of a Date
-that one variable of the function holds alone. Every Temporal type stays
-immutable.
+A Date is the one value of the kind that changes: its setters ("Setters",
+below; the owned-mutation rules, docs/mutation.md) write `as.time` of a
+Date that one variable of the function holds alone. Every Temporal type
+stays immutable.
 
 The writer writes a Date as JavaScript that makes an equal one:
 `new Date("2024-01-31T00:00:00.000Z")` (its `toISOString()`), and
@@ -146,13 +146,13 @@ Refused, each a name of `NAMES` whose method faults (as a PlainDate's
   `getFullYear`, `getMonth`, `getDate`, `getDay`, `getHours`,
   `getMinutes`, `getSeconds`, `getMilliseconds`, `getYear`,
   `getTimezoneOffset`, `toString`, `toDateString`, `toTimeString`,
-  `toLocaleDateString`, `toLocaleTimeString`.
+  `toLocaleDateString`, `toLocaleTimeString`; and the local setters,
+  `setFullYear`, `setMonth`, `setDate`, `setHours`, `setMinutes`,
+  `setSeconds`, `setMilliseconds` and `setYear`, which read the local
+  fields they keep. Each faults ("reads local time"); a local setter as a
+  statement is refused when compiled, as any call that changes no
+  variable is ("has no effect").
 - **Locale data**: `toLocaleString`.
-- **Setters** (`SJS_METHOD_TEMPORAL_DATE_SETTER`, to build): `setTime`,
-  `setUTCFullYear`, `setUTCMonth`, `setUTCDate`, `setUTCHours`,
-  `setUTCMinutes`, `setUTCSeconds`, `setUTCMilliseconds`, and the local
-  ones, `setFullYear`, `setMonth`, `setDate`, `setHours`, `setMinutes`,
-  `setSeconds`, `setMilliseconds` and `setYear`, which will stay refused.
 
 `toTemporalInstant` is not in Node 22: staticjs does not have it, and
 calling it faults (a TypeError in Node). A Date and an Instant meet
@@ -162,33 +162,78 @@ value (`Temporal.Instant.from(d)`, `Temporal.PlainDate.from(d)`) faults:
 JavaScript converts it to its local time string, or reads it as a bag of
 no fields, and throws.
 
-## For the setters
+## Setters
 
-The setters change their receiver, so they are mutations
-(docs/mutation.md): called through `SJS_OP_MUTATE` on a variable the
-function owns that holds the Date alone, tagged `MUTATION`, with their
-spec cases in `mutation.spec`. What is ready for them:
+`setTime` and the UTC setters change their receiver, so they are
+mutations (docs/mutation.md): called through `SJS_OP_MUTATE` on a variable
+of the function that holds the Date alone, they write its time value
+(`as.time`, one double in the Date's own block) in place and give it, a
+number, not the receiver. The code is `sjs_date_set` (`src/date.c`), tagged
+`MUTATION`; its cases are in `date.spec` (the arithmetic) and
+`mutation.spec` (the forms).
 
-- the names are in `NAMES`, each with the method `SETTER`, which faults;
-  a setter's mutation goes in the entry's `mutation` column
-  (`sjs_mutation_of` for the kind `SJS_TEMPORAL`), as an array's `push`;
-- the Date's time value is one double in its own block (`as.time`), so a
-  setter writes it in place, and a Date shared (a copy in another
-  variable, an argument, an element) is held elsewhere and faults, as an
-  array does;
-- `date_make_day`, `date_make_time`, `date_make_date` and `date_clip` are
-  V8's MakeDay, MakeTime, MakeDate and TimeClip, which the setters'
-  specification steps are built from, and `utc_fields_of` gives the
-  fields a setter keeps;
-- a setter returns the new time value (a number), not its receiver.
+| Setter | Sets | Keeps |
+|---|---|---|
+| `setTime(t)` | the time value: TimeClip of `t` | |
+| `setUTCFullYear(y, m?, d?)` | the year, the month, the date | the time of day |
+| `setUTCMonth(m, d?)` | the month, the date | the year, the time of day |
+| `setUTCDate(d)` | the date | the year and month, the time of day |
+| `setUTCHours(h, mi?, s?, ms?)` | the hours to milliseconds | the day |
+| `setUTCMinutes(mi, s?, ms?)` | the minutes to milliseconds | the day, the hours |
+| `setUTCSeconds(s, ms?)` | the seconds and milliseconds | the day to the minutes |
+| `setUTCMilliseconds(ms)` | the milliseconds | the rest |
 
-The local setters stay refused with the local getters.
+As V8 computes them (`src/builtins/builtins-date.cc`), so every value is
+Node's:
+
+- **Arguments:** each ToNumber, as `Date.UTC` reads them: a number, a
+  boolean, `null` (0) or `undefined` (NaN); a string or an object faults
+  (JavaScript converts it: `builtins.md`, section 7), and a BigInt (a
+  TypeError). An argument left out keeps the Date's field; one given as
+  `undefined` is NaN. The first is always read, given or not
+  (`d.setUTCDate()` is NaN); those past the setter's last field are not
+  read.
+- **An invalid date** gives NaN and stays invalid, but for `setTime`,
+  which sets a new time value, and `setUTCFullYear`, which starts from
+  +0 (1970-01-01T00:00Z: month 0, date 1, midnight). staticjs converts
+  every argument first, so a string or an object faults on an invalid
+  date too, where V8 skips the later ones.
+- **Then** the fields kept (`utc_fields_of`, the day toward negative
+  infinity and the milliseconds past it) and the fields given go through
+  `date_make_day` or `date_make_time` (V8's MakeDay and MakeTime: fractions
+  truncated, a month or a date, an hour or a minute past its range carried,
+  a negative one borrowed, a non-finite one NaN, a year past a million NaN,
+  without `Date.UTC`'s 1900 to 1999 mapping), `date_make_date` and
+  `date_clip` (NaN past 8.64 x 10^15 either way, -0 made +0).
+
+**The forms** are those of an array's `push` (docs/mutation.md): the
+compiler refuses a Date copied, stored, passed or captured (before or
+after) as `unsupported`, and the evaluator faults "held elsewhere" when
+the variable's Date has another holder (a caller's argument, a reduce's
+initial value a variable still holds, the Date given as its own
+argument). The setters' names have no namesake of another kind (a
+Temporal type's), so the shared-name rules do not apply
+(docs/mutation.md, "Shared names"). A setter called as any method is (on
+a temporary, `new Date(0).setTime(1)`; on an element, `xs[0].setTime(1)`;
+on a path, `o.d.setUTCDate(1)`, which the shape rules' `MUTATE_PATH` does
+not name; a chain, `d.setTime(1).setTime(2)`, calls the next on a number)
+faults, deliberately where JavaScript gives a value: its method in
+`NAMES`' Temporal column is `SJS_METHOD_TEMPORAL_DATE_SETTER`, and the
+mutation, its `mutation` column, which `sjs_mutation_of` gives for a Date
+alone (another Temporal value has no setter: "does not have this
+method"). A setter as a statement changes its variable, as `xs.push(x);`
+does. A reduce's accumulator is the callback's alone, so
+`xs.reduce((d, x) => { d.setUTCDate(x); return d; }, new Date(0))` sets it.
+
+Fuel: a unit for the call.
 
 ## Testing
 
 - `tests/spec/date.spec`: cases written by hand, every value from Node 22
   with `TZ=UTC`; `@clock` for `Date.now()` and `new Date()`. A case named
-  "deliberate" faults where JavaScript gives a value.
+  "deliberate" faults where JavaScript gives a value. The setters'
+  arithmetic is there, each with each count of arguments; their forms
+  (held elsewhere, a path, a reduce's accumulator) are in `mutation.spec`.
 - `tests/temporal_test.c` (its Date sweeps): `Date.parse` over a cross of
   years, dates, times and zones of the format and beside it, and each part
   varied around three strings (about 5,800 strings; one the generator

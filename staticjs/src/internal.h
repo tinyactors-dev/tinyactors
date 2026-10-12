@@ -884,8 +884,10 @@ typedef enum {
     SJS_METHOD_TEMPORAL_WITH_CALENDAR,
     /* A Date's (date.c), with toJSON, toLocaleString, toString and valueOf
      * above: getTime, the getUTC methods, toISOString, toUTCString (and
-     * toGMTString); every name that reads local time is LOCAL, which faults,
-     * and every setter SETTER. */
+     * toGMTString); every name that reads local time is LOCAL, which faults
+     * (the local setters too), and setTime and the UTC setters SETTER, which
+     * faults on a Date called as any method is: on a variable that holds it
+     * alone they are mutations (SJS_METHOD_DATE_SET_TIME on). */
     SJS_METHOD_TEMPORAL_DATE_GET_TIME,
     SJS_METHOD_TEMPORAL_DATE_GET_UTC_DATE,
     SJS_METHOD_TEMPORAL_DATE_GET_UTC_DAY,
@@ -953,6 +955,16 @@ typedef enum {
      * it alone, which advance it and close it (docs/mutation.md). */
     SJS_METHOD_ITERATOR_ADVANCE,
     SJS_METHOD_ITERATOR_CLOSE,
+    /* MUTATION: a Date's setTime and UTC setters on a variable that holds
+     * the Date alone, which write its time value (docs/date.md). */
+    SJS_METHOD_DATE_SET_TIME,
+    SJS_METHOD_DATE_SET_UTC_FULL_YEAR,
+    SJS_METHOD_DATE_SET_UTC_MONTH,
+    SJS_METHOD_DATE_SET_UTC_DATE,
+    SJS_METHOD_DATE_SET_UTC_HOURS,
+    SJS_METHOD_DATE_SET_UTC_MINUTES,
+    SJS_METHOD_DATE_SET_UTC_SECONDS,
+    SJS_METHOD_DATE_SET_UTC_MILLISECONDS,
     /* The loops of the regular expression methods: a method whose match is
      * too long for a leaf goes on as one (regex_match.c), the loop of
      * SJS_REGEX_LOOP_FIRST plus its sjs_regex_op. Last, so that
@@ -1015,11 +1027,12 @@ sjs_builtin_id sjs_method_of(const sjs_name *name, uint8_t kind);
 /* The immortal function value of a built-in function. */
 sjs_value sjs_builtin_value(sjs_builtin_id id);
 bool sjs_builtin_loops(sjs_builtin_id id);
-/* MUTATION: the method `name` names that changes a receiver of kind `kind`
- * (SJS_ARRAY, SJS_SET, SJS_MAP or SJS_ITERATOR); NONE if it names none. sjs_mutation_named:
+/* MUTATION: the method `name` names that changes `receiver`, an array, a
+ * set, a map, an iterator or a Date (a Temporal value of SJS_TEMPORAL_DATE:
+ * restore `uint8_t kind` without the Date); NONE if it names none. sjs_mutation_named:
  * the one of whichever kind has it, what the compiler knows from the name
  * (a set's delete and clear for a map's too, which return alike). */
-sjs_builtin_id sjs_mutation_of(const sjs_name *name, uint8_t kind);
+sjs_builtin_id sjs_mutation_of(const sjs_name *name, sjs_value receiver);
 sjs_builtin_id sjs_mutation_named(const sjs_name *name);
 /* MUTATION: does the method return its receiver (sort, reverse, fill, add, set),
  * rather than something else (push and unshift a length, pop and shift an
