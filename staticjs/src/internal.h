@@ -975,6 +975,11 @@ sjs_builtin_id sjs_mutation_named(const sjs_name *name);
  * rather than something else (push and unshift a length, pop and shift an
  * element)? */
 bool sjs_mutation_returns_receiver(sjs_builtin_id id);
+/* MUTATION: does the name's method that changes its receiver share the name
+ * with a method of another kind that changes nothing (today `add`, a set's
+ * and a Temporal value's)? Then the compiler leaves to the run whether a
+ * call of it changes a value (docs/mutation.md, "Shared names"). */
+bool sjs_mutation_shared(const sjs_name *name);
 
 /* ========================================================================
  * Programs

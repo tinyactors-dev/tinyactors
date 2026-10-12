@@ -424,11 +424,15 @@ Object.entries([1, 2, 3, 4].reduce((acc, x) => { const k = x % 2 ? "odd" : "even
 (() => { const o = {add: x => x}; return o.add(1).add(2); })()
 --- fault chain
 
-# A Temporal value's add shares its name with a set's, so on a variable it
-# compiles as a mutation, and runs as an ordinary call on the variable's
-# value, which it does not change (docs/temporal.md). The compiler cannot
-# tell a Temporal value from a set: a copy or a capture of the variable is
-# refused as for a set, and a chain faults when it runs.
+# MUTATION: shared names. A Temporal value's add shares its name with a
+# set's, which changes its receiver (sjs_mutation_shared). The compiler
+# cannot tell them apart, so for such a name it refuses nothing and leaves
+# the run to decide: on a variable of the function, whatever was done with
+# it, the call is a mutation, which calls a Temporal value's add as an
+# ordinary call and checks a set's receiver has one holder; on a capture, a
+# global or an import, an ordinary call, which faults on a set. A chain on
+# a variable still faults when it runs (docs/mutation.md, "Shared names";
+# docs/temporal.md).
 === a Temporal value's add on a variable makes a new value
 (() => { const d = Temporal.Duration.from("PT1H"); return d.add({ minutes: 30 }); })()
 --- value
@@ -462,18 +466,216 @@ Temporal.Duration.from("PT3H")
 (() => { const d = Temporal.Duration.from("PT1H"); return d.add("PT1H").add("PT1H"); })()
 --- fault chain
 
-=== a Temporal value's add after a copy, deliberate
+=== a Temporal value's add after a copy
 (() => { const d = Temporal.Duration.from("PT1H"); const e = d; return d.add(e); })()
---- error unsupported copied
+--- value
+Temporal.Duration.from("PT2H")
 
-=== a Temporal value's add on a captured variable, deliberate
+=== a Temporal value's add after it was passed
+(() => { const d = Temporal.PlainDate.from("2024-01-31"); const s = Array.isArray(d); return [s, d.add({ days: 1 })]; })()
+--- value
+[false,Temporal.PlainDate.from("2024-02-01")]
+
+=== a Temporal value's add twice in one array
+(() => { const d = Temporal.Duration.from("PT1H"); return [d.add("PT1H"), d.add("PT30M")]; })()
+--- value
+[Temporal.Duration.from("PT2H"),Temporal.Duration.from("PT1H30M")]
+
+=== a Temporal value's add on a captured variable
 (() => { const d = Temporal.Duration.from("PT1H"); return [1, 2].map(n => d.add({ hours: n })); })()
---- error unsupported captured
+--- value
+[Temporal.Duration.from("PT2H"),Temporal.Duration.from("PT3H")]
+
+=== a Temporal value's add mapped over a list from a capture
+(() => { const start = Temporal.PlainDate.from("2024-01-31"); return [0, 1, 29, 30].map(n => start.add({ days: n })); })()
+--- value
+[Temporal.PlainDate.from("2024-01-31"),Temporal.PlainDate.from("2024-02-01"),Temporal.PlainDate.from("2024-02-29"),Temporal.PlainDate.from("2024-03-01")]
+
+=== a Temporal value's add on a parameter an arrow function captures
+(start => [1, 2].map(n => start.add({ months: n })))(Temporal.PlainDate.from("2024-01-31"))
+--- value
+[Temporal.PlainDate.from("2024-02-29"),Temporal.PlainDate.from("2024-03-31")]
+
+=== a capture after a Temporal value's add on the same variable
+(() => { const d = Temporal.PlainDate.from("2024-01-31"); const a = d.add({ months: 1 }); return [a, [1, 2].map(n => d.add({ days: n }))]; })()
+--- value
+[Temporal.PlainDate.from("2024-02-29"),[Temporal.PlainDate.from("2024-02-01"),Temporal.PlainDate.from("2024-02-02")]]
+
+=== a Temporal value's add on a global
+@global d = Temporal.PlainTime.from("23:30")
+(() => [d.add({ minutes: 45 }), d])()
+--- value
+[Temporal.PlainTime.from("00:15:00"),Temporal.PlainTime.from("23:30:00")]
+
+=== a Temporal value's add on a global, as a statement
+@global d = Temporal.PlainTime.from("23:30")
+(() => { d.add({ minutes: 45 }); return d; })()
+--- error unsupported global
+
+=== a module whose export is a Temporal value
+@module dates
+export const start = Temporal.PlainDate.from("2024-02-28");
+--- value
+{"start":Temporal.PlainDate.from("2024-02-28")}
+
+=== a Temporal value's add on an import
+@module dated
+import { start } from "dates";
+export const next = start.add({ days: 1 });
+export const later = start.add({ days: 1 }).add({ years: 1 });
+--- value
+{"later":Temporal.PlainDate.from("2025-02-28"),"next":Temporal.PlainDate.from("2024-02-29")}
 
 === a Temporal value's add through a path
 (() => { const o = { d: Temporal.Duration.from("PT1H") }; return o.d.add("PT1H"); })()
 --- value
 Temporal.Duration.from("PT2H")
+
+=== a Temporal value's add through a path from a capture
+(() => { const o = { d: Temporal.PlainDate.from("2024-01-31") }; return [1, 2].map(n => o.d.add({ days: n })); })()
+--- value
+[Temporal.PlainDate.from("2024-02-01"),Temporal.PlainDate.from("2024-02-02")]
+
+=== a Temporal value's add through a path from a capture, as a statement
+(() => { const o = { d: Temporal.PlainDate.from("2024-01-31") }; return [1].map(n => { o.d.add({ days: n }); return n; }); })()
+--- error unsupported captured
+
+=== a chain of a Temporal value's add through a path, left out
+(() => { const o = { d: Temporal.Duration.from("PT1H") }; return o.d.add("PT1H").add("PT1H"); })()
+--- fault array, a set or a map
+
+=== a chain through a path, written with a variable for its first step
+(() => { const o = { d: Temporal.Duration.from("PT1H") }; const e = o.d.add("PT1H"); return e.add("PT1H"); })()
+--- value
+Temporal.Duration.from("PT3H")
+
+=== a Temporal value's add on a captured variable, as a statement
+(() => { const d = Temporal.Duration.from("PT1H"); return [1].map(n => { d.add({ hours: n }); return n; }); })()
+--- error unsupported captured
+
+# A set's add, under the same rules: the run faults where the compiler
+# used to refuse, and never gives another value than JavaScript's.
+=== a captured set's add in an expression
+(() => { const s = new Set([1]); return [2].map(n => s.add(n).size); })()
+--- fault changes its receiver
+
+=== a captured set's add in an expression, through a parameter
+(s => [2].map(n => s.add(n)))(new Set())
+--- fault changes its receiver
+
+=== a set's add after a copy that is still held
+(() => { const s = new Set([1]); const t = s; s.add(2); return t.size; })()
+--- fault held elsewhere
+
+=== a set's add after a copy that is no longer held
+(() => { const s = new Set([1]); const n = [s].length + ((t) => t.size)(s); s.add(2); return [n, s]; })()
+--- value
+[2,new Set([1,2])]
+
+=== a set captured after its add gives the final set
+(() => { const s = new Set([1]); s.add(2); const f = () => [...s]; return f(); })()
+--- value
+[1,2]
+
+=== a set captured after its add in an expression
+(() => { const s = new Set([1]); const t = s.add(2).size; return [3, 4].map(n => n + t + s.size); })()
+--- value
+[7,8]
+
+=== a set's add as a statement on a capture
+(() => { const s = new Set(); return [1].map(n => { s.add(n); return n; }); })()
+--- error unsupported captured
+
+=== a set's add as a statement on a capture, the suggestion
+(() => { const s = new Set(); [1, 2].map(n => { s.add(n); return n; }); return s; })()
+--- error unsupported reduce
+
+=== a set's add on a global
+@global g = new Set([1])
+(() => g.add(2))()
+--- fault changes its receiver
+
+=== a set's add on a global, as a statement
+@global g = new Set([1])
+(() => { g.add(2); return g; })()
+--- error unsupported global
+
+=== a set a closure holds, added to in an expression
+(() => { const s = new Set([1]); const f = () => s.size; const t = s.add(2); return [f(), t.size]; })()
+--- fault held elsewhere
+
+=== a set a closure made before holds, added to as a statement
+(() => { const s = new Set([1]); const f = () => s.size; s.add(2); return f(); })()
+--- fault held elsewhere
+
+=== a set a closure made before held, released before its add
+(() => { const s = new Set([1]); const n = [1].map(x => s.size)[0]; s.add(2); return [n, s]; })()
+--- value
+[1,new Set([1,2])]
+
+=== a set stored in an array, then added to
+(() => { const s = new Set([1]); const a = [s]; s.add(2); return a[0].size; })()
+--- fault held elsewhere
+
+=== a set stored in an object, then added to in an expression
+(() => { const s = new Set([1]); const o = { k: s }; const t = s.add(2); return [o.k.size, t.size]; })()
+--- fault held elsewhere
+
+=== a set added to twice in one array
+(() => { const s = new Set(); return [s.add(1), s.add(2)]; })()
+--- fault held elsewhere
+
+=== a set passed to a function that adds to it, while the caller holds it
+(() => { const s = new Set([1]); const g = t => t.add(2).size; const n = g(s); return [n, s.size]; })()
+--- fault held elsewhere
+
+=== a set passed to a function that adds to it, at its last read
+(() => { const s = new Set([1]); const g = t => t.add(2).size; return g(s); })()
+--- value
+2
+
+=== a set in reduce's accumulator
+[1, 2, 1].reduce((acc, x) => acc.add(x), new Set())
+--- value
+new Set([1,2])
+
+=== a set in reduce's accumulator a variable still holds
+(() => { const s = new Set(); const r = [1].reduce((acc, x) => acc.add(x), s); return [r, s]; })()
+--- fault held elsewhere
+
+=== a set's add in a callback where a closure made before holds the accumulator
+[1, 2].reduce((acc, x) => { const f = () => acc.size; acc.add(x); return f() > 0 ? acc : acc; }, new Set())
+--- fault held elsewhere
+
+=== a set's add in a callback after a closure that held the accumulator is gone
+[1, 2].reduce((acc, x) => { const n = [0].map(y => acc.size)[0]; acc.add(x + n); return acc; }, new Set())
+--- value
+new Set([1,3])
+
+=== a set's add through a path, then a capture of its root
+[1, 2].reduce((acc, x) => ({ s: acc.s.add(x), f: () => acc.s.size }), { s: new Set(), f: null }).f()
+--- error unsupported captured
+
+=== a set's add on a capture, in a callback whose earlier step made a closure of it
+(() => { const s = new Set(); return [1, 2].reduce((f, x) => { const g = () => s.size; return s.add(x) && g; }, null)(); })()
+--- fault changes its receiver
+
+=== a module whose export is a set
+@module sets
+export const s = new Set([1]);
+--- value
+{"s":new Set([1])}
+
+=== a set's add on an import
+@module setter
+import { s } from "sets";
+export const t = s.add(2);
+--- fault changes its receiver
+
+=== a module's let is refused
+@module letset
+export let s = new Set();
+--- error unsupported
 
 === a mutation in a module
 @module mutated
