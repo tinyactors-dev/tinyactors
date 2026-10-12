@@ -25,6 +25,9 @@ typedef struct ta_python_state {
     PyObject *address_type;   /* tinyactors.Address */
     PyObject *undefined_type; /* type(tinyactors.UNDEFINED) */
     PyObject *undefined;      /* tinyactors.UNDEFINED */
+    PyObject *host_type;      /* tinyactors.Host */
+    PyObject *clock_type;     /* tinyactors.SimulatedClock */
+    PyObject *time;           /* the time module: the real clock (loop.c) */
 } ta_python_state;
 
 /* The state of the module `module`. */
@@ -65,5 +68,106 @@ PyObject *ta_python_address_from(const ta_python_state *state, ta_string_view te
 /* tinyactors.encode(value) and tinyactors.decode(data). */
 PyObject *ta_python_encode(PyObject *module, PyObject *value);
 PyObject *ta_python_decode(PyObject *module, PyObject *data);
+
+/* ---- the host (host.c) ------------------------------------------------------------- */
+
+/* An image the host runs, kept until its segment is freed
+ * (TA_HOST_EFFECT_SEGMENT_FREED) or the host is (bindings.md, section 6). */
+typedef struct ta_python_image {
+    void *bytes; /* PyMem_RawMalloc: the compiled image, aligned as core asks */
+    ta_image image;
+} ta_python_image;
+
+/* What effects the application handles: one callable per kind, or NULL. */
+enum {
+    TA_PYTHON_ON_LOG = 0,
+    TA_PYTHON_ON_DONE = 1,
+    TA_PYTHON_ON_ERROR = 2,
+    TA_PYTHON_ON_PEER = 3,
+    TA_PYTHON_HANDLERS = 4
+};
+
+/* tinyactors.Host: one ta_host, its datamodels, its images, its clock and
+ * its handlers. Single-threaded: every call from the thread that made it
+ * (bindings.md, section 5). */
+typedef struct ta_python_host {
+    PyObject_HEAD
+    PyObject *module; /* the module whose state it uses */
+    ta_host *host;    /* NULL once closed */
+    ta_datamodel_ecmascript *ecmascript;
+    ta_datamodel_binding datamodels[2];
+    uint32_t datamodel_count;
+    unsigned long thread; /* PyThread_get_thread_ident of the creating thread */
+    PyObject *clock;      /* a SimulatedClock, or NULL for the real clock */
+    PyObject *handlers[TA_PYTHON_HANDLERS];
+    ta_python_image **images; /* by segment; NULL once freed */
+    uint32_t image_count, image_capacity;
+    uint64_t ticks_per_second;  /* the config's, 0 when it has none (ROADMAP.md, request 2) */
+    uint64_t origin_ns;         /* the real clock's start (time.monotonic_ns) */
+    ta_time next_deadline;      /* of the last run: UINT64_MAX for none */
+    int looping;                /* inside ta_python_loop_turn */
+    int pending;                /* an input arrived while looping: run again */
+    int closing;                /* close() was called while looping */
+    PyObject *raised;           /* the first exception a handler raised in this turn */
+    PyObject *weakreferences;   /* a SimulatedClock refers to its hosts weakly */
+} ta_python_host;
+
+int ta_python_host_init_type(PyObject *module, ta_python_state *state);
+/* The module's state of a host. */
+const ta_python_state *ta_python_host_state(const ta_python_host *host);
+/* The host is open and called from its thread; else a TinyactorsError
+ * (ERROR_STATE) is set and 0 returned. */
+int ta_python_host_usable(ta_python_host *host);
+/* Frees the host and what it holds of core (images, datamodels). */
+void ta_python_host_free(ta_python_host *host);
+/* A payload of the datamodel `datamodel` (an index of host->datamodels)
+ * holding `value` (NULL: no payload, 0). TA_ERROR_INVALID: a value
+ * outside the table. */
+typedef struct ta_python_payload_making {
+    PyObject *value;
+    uint32_t datamodel;
+} ta_python_payload_making;
+ta_status ta_python_payload_make(ta_python_host *host, const ta_python_payload_making *making, ta_payload *out);
+/* The value of a payload, as a new Python object (0: None). */
+typedef struct ta_python_payload_reading {
+    ta_payload payload;
+    uint32_t datamodel;
+} ta_python_payload_reading;
+PyObject *ta_python_payload_value(ta_python_host *host, const ta_python_payload_reading *reading);
+void ta_python_payload_release(ta_python_host *host, const ta_python_payload_reading *reading);
+/* Drops segment `segment`'s image (TA_HOST_EFFECT_SEGMENT_FREED). */
+void ta_python_image_drop(ta_python_host *host, uint32_t segment);
+
+/* ---- requests (request.c) ----------------------------------------------------------- */
+
+PyObject *ta_python_host_request(ta_python_host *host, PyObject *args, PyObject *kwargs);
+
+/* ---- the loop (loop.c) ---------------------------------------------------------------- */
+
+int ta_python_clock_init_type(PyObject *module, ta_python_state *state);
+/* Joins `host` to the SimulatedClock `clock` (its turns follow it). */
+int ta_python_clock_attach(PyObject *clock, ta_python_host *host);
+void ta_python_clock_detach(PyObject *clock, ta_python_host *host);
+/* The real clock's start, for a new host: -1 with a Python error. */
+int ta_python_loop_start(ta_python_host *host);
+/* One turn at the current time: ta_host_advance_time, then ta_host_run
+ * until idle with every run status handled and the effects dispatched and
+ * acknowledged. -1 with a Python error set: the first a handler raised
+ * (after the turn finished), or the run's fault. Inside a turn (an input
+ * from a handler) it only marks that the turn must run again. */
+int ta_python_loop_turn(ta_python_host *host);
+/* host.run(): the synchronous driver, until no deadline is left. */
+PyObject *ta_python_loop_run(ta_python_host *host, PyObject *unused);
+
+/* ---- effects (effects.c) --------------------------------------------------------------- */
+
+/* Each effect of the batch ta_host_effects published, to its handler. A
+ * handler's exception is kept in host->raised (the first one), never
+ * stops the batch. */
+typedef struct ta_python_batch {
+    const ta_host_effect *effects;
+    uint32_t count;
+} ta_python_batch;
+void ta_python_effects_dispatch(ta_python_host *host, const ta_python_batch *batch);
 
 #endif /* TA_PYTHON_EXTENSION_H */
