@@ -126,7 +126,10 @@ the host injects in the same way. UTC is the default everywhere.
 
 | Name | Status | Note |
 |---|---|---|
-| `Temporal.Instant`, `Duration`, `PlainDate`, `PlainTime`, `PlainDateTime` | to build | ISO calendar, UTC. Immutable value types. |
+| `Temporal.PlainDate`: constructor, `from`, `compare`, `year`, `month`, `monthCode`, `day`, `dayOfWeek`, `dayOfYear`, `weekOfYear`, `yearOfWeek`, `daysInWeek`, `daysInMonth`, `daysInYear`, `monthsInYear`, `inLeapYear`, calendarId, `era`, `eraYear`, `with`, `equals`, `toString`, `toJSON` | built | ISO calendar only (docs/temporal.md): an immutable value, written as `Temporal.PlainDate.from("2024-01-31")`; `JSON.stringify` writes its ISO string. Strings parsed as both polyfills read them; another calendar, a string, array or object JavaScript would convert, and `===` fault. |
+| `Temporal.PlainDate`: `add`, `subtract`, `until`, `since`, `toPlainDateTime` | to build | Named; each faults until Duration and PlainDateTime are built. |
+| `Temporal.PlainDate`: `toLocaleString`, `valueOf`, `toZonedDateTime`, `toPlainYearMonth`, `toPlainMonthDay`, `withCalendar` | refused | Locale data; `valueOf` throws in JavaScript; no ZonedDateTime, PlainYearMonth or PlainMonthDay, and only the ISO calendar. Registered, so each faults. |
+| `Temporal.Instant`, `Duration`, `PlainTime`, `PlainDateTime` | to build | ISO calendar, UTC. Immutable value types, on the design of docs/temporal.md. |
 | `Temporal.Now` (`instant`, `plainDateISO`, `plainDateTimeISO`, `plainTimeISO`) | to build | Read only the host clock. |
 | `Temporal.ZonedDateTime`, IANA time zones | defer | Needs time zone data, unless the host supplies offsets. |
 | `Date.UTC`, `Date.parse` (ISO strings), `toISOString`, UTC getters | build later | Follows Temporal. |

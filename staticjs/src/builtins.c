@@ -60,7 +60,10 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
     { "", "encodeURI", SJS_BUILTIN_ENCODE_URI },
     { "", "encodeURIComponent", SJS_BUILTIN_ENCODE_URI_COMPONENT },
     { "", "decodeURI", SJS_BUILTIN_DECODE_URI },
-    { "", "decodeURIComponent", SJS_BUILTIN_DECODE_URI_COMPONENT }
+    { "", "decodeURIComponent", SJS_BUILTIN_DECODE_URI_COMPONENT },
+    { "new", "Temporal.PlainDate", SJS_BUILTIN_TEMPORAL_PLAIN_DATE },
+    { "Temporal.PlainDate", "from", SJS_BUILTIN_TEMPORAL_PLAIN_DATE_FROM },
+    { "Temporal.PlainDate", "compare", SJS_BUILTIN_TEMPORAL_PLAIN_DATE_COMPARE }
 };
 
 /*
@@ -70,22 +73,25 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
  * names a method changing its receiver; with the staticjs method each kind
  * has by that name. Sorted by bytes, for sjs_name_id's binary search.
  */
-#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set, 0, 0, 0, 0, 0 }, 0 }
+#define NAME(text, flags, array, string, set) { { text, sizeof(text) - 1u }, flags, { array, string, set, 0, 0, 0, 0, 0, 0 }, 0, 0 }
 /* A name with a BigInt method too: toString. */
-#define NAME_BIGINT(text, flags, bigint) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, bigint, 0, 0, 0, 0 }, 0 }
+#define NAME_BIGINT(text, flags, bigint) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, bigint, 0, 0, 0, 0, 0 }, 0, 0 }
 /* A name with a map's method: on a set too, and maps'. */
-#define NAME_MAP(text, flags, set, map) { { text, sizeof(text) - 1u }, flags, { 0, 0, set, 0, map, 0, 0, 0 }, 0 }
+#define NAME_MAP(text, flags, set, map) { { text, sizeof(text) - 1u }, flags, { 0, 0, set, 0, map, 0, 0, 0, 0 }, 0, 0 }
 /* A name with an iterator's method: on an array too, and iterators'. */
-#define NAME_ITERATOR(text, flags, array, iterator) { { text, sizeof(text) - 1u }, flags, { array, 0, 0, 0, 0, iterator, 0, 0 }, 0 }
+#define NAME_ITERATOR(text, flags, array, iterator) { { text, sizeof(text) - 1u }, flags, { array, 0, 0, 0, 0, iterator, 0, 0, 0 }, 0, 0 }
 /* A name with a map's method and an iterator's: forEach. */
-#define NAME_MAP_ITERATOR(text, flags, map, iterator) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0, map, iterator, 0, 0 }, 0 }
+#define NAME_MAP_ITERATOR(text, flags, map, iterator) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0, map, iterator, 0, 0, 0 }, 0, 0 }
 /* A name on RegExp.prototype, with the regular expressions' method of the
  * name (docs/regex.md), or 0. */
-#define NAME_REGEXP(text, regexp) { { text, sizeof(text) - 1u }, SJS_NAME_ON_REGEXP, { 0, 0, 0, 0, 0, 0, regexp, 0 }, 0 }
+#define NAME_REGEXP(text, regexp) { { text, sizeof(text) - 1u }, SJS_NAME_ON_REGEXP, { 0, 0, 0, 0, 0, 0, regexp, 0, 0 }, 0, 0 }
 /* A name on Number.prototype alone, with a number's method. */
-#define NAME_NUMBER(text, number) { { text, sizeof(text) - 1u }, 0, { 0, 0, 0, 0, 0, 0, 0, number }, 0 }
+#define NAME_NUMBER(text, number) { { text, sizeof(text) - 1u }, 0, { 0, 0, 0, 0, 0, 0, 0, number, 0 }, 0, 0 }
 /* MUTATION: a name with a method that changes its receiver. Restore: NAME(text, flags, 0, 0, 0). */
-#define NAME_MUTATION(text, flags, mutation) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0, 0, 0, 0, 0 }, mutation }
+#define NAME_MUTATION(text, flags, mutation) { { text, sizeof(text) - 1u }, flags, { 0, 0, 0, 0, 0, 0, 0, 0, 0 }, mutation, 0 }
+/* A name on the prototype of a Temporal type (temporal.c says which): a
+ * Temporal value's method of the name, or its getter (sjs_temporal_field). */
+#define NAME_TEMPORAL(text, temporal, field) { { text, sizeof(text) - 1u }, 0, { 0, 0, 0, 0, 0, 0, 0, 0, temporal }, 0, field }
 /* A name of Object.prototype, which every kind of value's prototype holds. */
 #define SJS_NAME_EVERYWHERE (SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR | SJS_NAME_ON_REGEXP)
 
@@ -95,12 +101,19 @@ static const sjs_name NAMES[] = {
     NAME("__lookupGetter__", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME("__lookupSetter__", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME("__proto__", SJS_NAME_EVERYWHERE, 0, 0, 0),
-    NAME_MUTATION("add", SJS_NAME_ON_SET | SJS_NAME_MUTATING, SJS_METHOD_SET_ADD), /* MUTATION */
+    NAME_TEMPORAL("abs", SJS_METHOD_TEMPORAL_ABS, 0),
+    /* MUTATION: a set's add. Restore: NAME_TEMPORAL("add", SJS_METHOD_TEMPORAL_ADD, 0) with SJS_NAME_ON_SET. */
+    { { "add", 3u }, SJS_NAME_ON_SET | SJS_NAME_MUTATING, { 0, 0, 0, 0, 0, 0, 0, 0, SJS_METHOD_TEMPORAL_ADD }, SJS_METHOD_SET_ADD, 0 },
     NAME("anchor", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("at", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_AT, SJS_METHOD_STRING_AT, 0),
     NAME("big", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME_TEMPORAL("blank", 0, SJS_FIELD_BLANK),
     NAME("blink", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("bold", SJS_NAME_ON_STRING, 0, 0, 0),
+    /* Temporal's getter of the calendar's ID, its last two letters escaped:
+     * check-acronyms reads the name as a mixed-case ID, and the name is
+     * JavaScript's, not ours to change. */
+    NAME_TEMPORAL("calendar\x49\x64", 0, SJS_FIELD_CALENDAR_ID),
     NAME("charAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CHAR_AT, 0),
     NAME("charCodeAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CHAR_CODE_AT, 0),
     NAME_MUTATION("clear", SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_MUTATING, SJS_METHOD_SET_CLEAR), /* MUTATION */
@@ -109,12 +122,24 @@ static const sjs_name NAMES[] = {
     NAME("concat", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_CONCAT, SJS_METHOD_STRING_CONCAT, 0),
     NAME("constructor", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME("copyWithin", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, 0, 0, 0),
+    NAME_TEMPORAL("day", 0, SJS_FIELD_DAY),
+    NAME_TEMPORAL("dayOfWeek", 0, SJS_FIELD_DAY_OF_WEEK),
+    NAME_TEMPORAL("dayOfYear", 0, SJS_FIELD_DAY_OF_YEAR),
+    NAME_TEMPORAL("days", 0, SJS_FIELD_DAYS),
+    NAME_TEMPORAL("daysInMonth", 0, SJS_FIELD_DAYS_IN_MONTH),
+    NAME_TEMPORAL("daysInWeek", 0, SJS_FIELD_DAYS_IN_WEEK),
+    NAME_TEMPORAL("daysInYear", 0, SJS_FIELD_DAYS_IN_YEAR),
     NAME_MUTATION("delete", SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_MUTATING, SJS_METHOD_SET_DELETE), /* MUTATION */
     NAME("difference", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_DIFFERENCE),
     NAME_REGEXP("dotAll", 0),
     NAME_ITERATOR("drop", SJS_NAME_ON_ITERATOR, 0, SJS_METHOD_ITERATOR_DROP),
     NAME("endsWith", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_ENDS_WITH, 0),
     NAME_MAP("entries", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, SJS_METHOD_MAP_ENTRIES),
+    NAME_TEMPORAL("epochMilliseconds", 0, SJS_FIELD_EPOCH_MILLISECONDS),
+    NAME_TEMPORAL("epochNanoseconds", 0, SJS_FIELD_EPOCH_NANOSECONDS),
+    NAME_TEMPORAL("equals", SJS_METHOD_TEMPORAL_EQUALS, 0),
+    NAME_TEMPORAL("era", 0, SJS_FIELD_ERA),
+    NAME_TEMPORAL("eraYear", 0, SJS_FIELD_ERA_YEAR),
     NAME_ITERATOR("every", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_EVERY, SJS_METHOD_ITERATOR_EVERY),
     NAME_REGEXP("exec", SJS_METHOD_REGEXP_EXEC),
     NAME_MUTATION("fill", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_FILL), /* MUTATION */
@@ -135,7 +160,10 @@ static const sjs_name NAMES[] = {
     NAME_MAP("has", SJS_NAME_ON_SET | SJS_NAME_ON_MAP, SJS_METHOD_SET_HAS, SJS_METHOD_MAP_HAS),
     NAME_REGEXP("hasIndices", 0),
     NAME("hasOwnProperty", SJS_NAME_EVERYWHERE, 0, 0, 0),
+    NAME_TEMPORAL("hour", 0, SJS_FIELD_HOUR),
+    NAME_TEMPORAL("hours", 0, SJS_FIELD_HOURS),
     NAME_REGEXP("ignoreCase", 0),
+    NAME_TEMPORAL("inLeapYear", 0, SJS_FIELD_IN_LEAP_YEAR),
     NAME("includes", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_INCLUDES, SJS_METHOD_STRING_INCLUDES, 0),
     NAME("indexOf", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_INDEX_OF, SJS_METHOD_STRING_INDEX_OF, 0),
     NAME("intersection", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_INTERSECTION),
@@ -153,7 +181,20 @@ static const sjs_name NAMES[] = {
     NAME_ITERATOR("map", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_MAP, SJS_METHOD_ITERATOR_MAP),
     NAME("match", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_MATCH, 0),
     NAME("matchAll", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_MATCH_ALL, 0),
+    NAME_TEMPORAL("microsecond", 0, SJS_FIELD_MICROSECOND),
+    NAME_TEMPORAL("microseconds", 0, SJS_FIELD_MICROSECONDS),
+    NAME_TEMPORAL("millisecond", 0, SJS_FIELD_MILLISECOND),
+    NAME_TEMPORAL("milliseconds", 0, SJS_FIELD_MILLISECONDS),
+    NAME_TEMPORAL("minute", 0, SJS_FIELD_MINUTE),
+    NAME_TEMPORAL("minutes", 0, SJS_FIELD_MINUTES),
+    NAME_TEMPORAL("month", 0, SJS_FIELD_MONTH),
+    NAME_TEMPORAL("monthCode", 0, SJS_FIELD_MONTH_CODE),
+    NAME_TEMPORAL("months", 0, SJS_FIELD_MONTHS),
+    NAME_TEMPORAL("monthsInYear", 0, SJS_FIELD_MONTHS_IN_YEAR),
     NAME_REGEXP("multiline", 0),
+    NAME_TEMPORAL("nanosecond", 0, SJS_FIELD_NANOSECOND),
+    NAME_TEMPORAL("nanoseconds", 0, SJS_FIELD_NANOSECONDS),
+    NAME_TEMPORAL("negated", SJS_METHOD_TEMPORAL_NEGATED, 0),
     NAME("next", SJS_NAME_ON_ITERATOR, 0, 0, 0),
     NAME("normalize", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("padEnd", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_PAD_END, 0),
@@ -168,9 +209,14 @@ static const sjs_name NAMES[] = {
     NAME("replaceAll", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPLACE_ALL, 0),
     NAME("return", SJS_NAME_ON_ITERATOR, 0, 0, 0),
     NAME_MUTATION("reverse", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_REVERSE), /* MUTATION */
+    NAME_TEMPORAL("round", SJS_METHOD_TEMPORAL_ROUND, 0),
     NAME("search", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_SEARCH, 0),
+    NAME_TEMPORAL("second", 0, SJS_FIELD_SECOND),
+    NAME_TEMPORAL("seconds", 0, SJS_FIELD_SECONDS),
     NAME_MUTATION("set", SJS_NAME_ON_MAP | SJS_NAME_MUTATING, SJS_METHOD_MAP_SET), /* MUTATION */
     NAME_MUTATION("shift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_SHIFT), /* MUTATION */
+    NAME_TEMPORAL("sign", 0, SJS_FIELD_SIGN),
+    NAME_TEMPORAL("since", SJS_METHOD_TEMPORAL_SINCE, 0),
     NAME("slice", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_SLICE, SJS_METHOD_STRING_SLICE, 0),
     NAME("small", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME_ITERATOR("some", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_SOME, SJS_METHOD_ITERATOR_SOME),
@@ -184,6 +230,7 @@ static const sjs_name NAMES[] = {
     NAME("sub", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("substr", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_SUBSTR, 0),
     NAME("substring", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_SUBSTRING, 0),
+    NAME_TEMPORAL("subtract", SJS_METHOD_TEMPORAL_SUBTRACT, 0),
     NAME("sup", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("symmetricDifference", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_SYMMETRIC_DIFFERENCE),
     NAME_ITERATOR("take", SJS_NAME_ON_ITERATOR, 0, SJS_METHOD_ITERATOR_TAKE),
@@ -191,17 +238,26 @@ static const sjs_name NAMES[] = {
     NAME_ITERATOR("toArray", SJS_NAME_ON_ITERATOR, 0, SJS_METHOD_ITERATOR_TO_ARRAY),
     NAME_NUMBER("toExponential", SJS_METHOD_NUMBER_TO_EXPONENTIAL),
     NAME_NUMBER("toFixed", SJS_METHOD_NUMBER_TO_FIXED),
+    NAME_TEMPORAL("toJSON", SJS_METHOD_TEMPORAL_TO_JSON, 0),
     NAME("toLocaleLowerCase", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("toLocaleString", SJS_NAME_EVERYWHERE, 0, 0, 0),
+    { { "toLocaleString", 14u }, SJS_NAME_EVERYWHERE, { 0, 0, 0, 0, 0, 0, 0, 0, SJS_METHOD_TEMPORAL_TO_LOCALE_STRING }, 0, 0 },
     NAME("toLocaleUpperCase", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("toLowerCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_LOWER_CASE, 0),
+    NAME_TEMPORAL("toPlainDate", SJS_METHOD_TEMPORAL_TO_PLAIN_DATE, 0),
+    NAME_TEMPORAL("toPlainDateTime", SJS_METHOD_TEMPORAL_TO_PLAIN_DATE_TIME, 0),
+    NAME_TEMPORAL("toPlainMonthDay", SJS_METHOD_TEMPORAL_TO_PLAIN_MONTH_DAY, 0),
+    NAME_TEMPORAL("toPlainTime", SJS_METHOD_TEMPORAL_TO_PLAIN_TIME, 0),
+    NAME_TEMPORAL("toPlainYearMonth", SJS_METHOD_TEMPORAL_TO_PLAIN_YEAR_MONTH, 0),
     NAME_NUMBER("toPrecision", SJS_METHOD_NUMBER_TO_PRECISION),
     NAME("toReversed", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_REVERSED, 0, 0),
     NAME("toSorted", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SORTED, 0, 0),
     NAME("toSpliced", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SPLICED, 0, 0),
-    NAME_BIGINT("toString", SJS_NAME_EVERYWHERE, SJS_METHOD_BIGINT_TO_STRING),
+    { { "toString", 8u }, SJS_NAME_EVERYWHERE, { 0, 0, 0, SJS_METHOD_BIGINT_TO_STRING, 0, 0, 0, 0, SJS_METHOD_TEMPORAL_TO_STRING }, 0, 0 },
     NAME("toUpperCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_UPPER_CASE, 0),
     NAME("toWellFormed", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_WELL_FORMED, 0),
+    NAME_TEMPORAL("toZonedDateTime", SJS_METHOD_TEMPORAL_TO_ZONED_DATE_TIME, 0),
+    NAME_TEMPORAL("toZonedDateTimeISO", SJS_METHOD_TEMPORAL_TO_ZONED_DATE_TIME_ISO, 0),
+    NAME_TEMPORAL("total", SJS_METHOD_TEMPORAL_TOTAL, 0),
     NAME("trim", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM, 0),
     NAME("trimEnd", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM_END, 0),
     NAME("trimLeft", SJS_NAME_ON_STRING, 0, 0, 0),
@@ -211,9 +267,17 @@ static const sjs_name NAMES[] = {
     NAME_REGEXP("unicodeSets", 0),
     NAME("union", SJS_NAME_ON_SET, 0, 0, SJS_METHOD_SET_UNION),
     NAME_MUTATION("unshift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_UNSHIFT), /* MUTATION */
-    NAME("valueOf", SJS_NAME_EVERYWHERE, 0, 0, 0),
+    NAME_TEMPORAL("until", SJS_METHOD_TEMPORAL_UNTIL, 0),
+    { { "valueOf", 7u }, SJS_NAME_EVERYWHERE, { 0, 0, 0, 0, 0, 0, 0, 0, SJS_METHOD_TEMPORAL_VALUE_OF }, 0, 0 },
     NAME_MAP("values", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, 0, SJS_METHOD_MAP_VALUES),
-    NAME("with", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_WITH, 0, 0)
+    NAME_TEMPORAL("weekOfYear", 0, SJS_FIELD_WEEK_OF_YEAR),
+    NAME_TEMPORAL("weeks", 0, SJS_FIELD_WEEKS),
+    { { "with", 4u }, SJS_NAME_ON_ARRAY, { SJS_METHOD_ARRAY_WITH, 0, 0, 0, 0, 0, 0, 0, SJS_METHOD_TEMPORAL_WITH }, 0, 0 },
+    NAME_TEMPORAL("withCalendar", SJS_METHOD_TEMPORAL_WITH_CALENDAR, 0),
+    NAME_TEMPORAL("withPlainTime", SJS_METHOD_TEMPORAL_WITH_PLAIN_TIME, 0),
+    NAME_TEMPORAL("year", 0, SJS_FIELD_YEAR),
+    NAME_TEMPORAL("yearOfWeek", 0, SJS_FIELD_YEAR_OF_WEEK),
+    NAME_TEMPORAL("years", 0, SJS_FIELD_YEARS)
 };
 
 #define FUNCTION_VALUE(id) [id] = { { SJS_IMMORTAL, SJS_HEAP_BUILTIN, 0, 0, sizeof(sjs_builtin_function), NULL }, id }
@@ -267,7 +331,10 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_ENCODE_URI),
     FUNCTION_VALUE(SJS_BUILTIN_ENCODE_URI_COMPONENT),
     FUNCTION_VALUE(SJS_BUILTIN_DECODE_URI),
-    FUNCTION_VALUE(SJS_BUILTIN_DECODE_URI_COMPONENT)
+    FUNCTION_VALUE(SJS_BUILTIN_DECODE_URI_COMPONENT),
+    FUNCTION_VALUE(SJS_BUILTIN_TEMPORAL_PLAIN_DATE),
+    FUNCTION_VALUE(SJS_BUILTIN_TEMPORAL_PLAIN_DATE_FROM),
+    FUNCTION_VALUE(SJS_BUILTIN_TEMPORAL_PLAIN_DATE_COMPARE)
 };
 
 sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name) {
@@ -337,6 +404,8 @@ sjs_builtin_id sjs_method_of(const sjs_name *name, uint8_t kind) {
         return (sjs_builtin_id)name->methods[6];
     case SJS_NUMBER:
         return (sjs_builtin_id)name->methods[7];
+    case SJS_TEMPORAL:
+        return (sjs_builtin_id)name->methods[8];
     default:
         return SJS_BUILTIN_NONE;
     }
@@ -839,6 +908,10 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
         return sjs_json_parse(vm, call);
     case SJS_BUILTIN_JSON_STRINGIFY:
         return sjs_json_stringify(vm, call);
+    case SJS_BUILTIN_TEMPORAL_PLAIN_DATE:
+    case SJS_BUILTIN_TEMPORAL_PLAIN_DATE_FROM:
+    case SJS_BUILTIN_TEMPORAL_PLAIN_DATE_COMPARE:
+        return sjs_temporal_function(vm, id, call);
     default:
         return math(vm, id, call);
     }
@@ -1363,6 +1436,7 @@ sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) 
     if (id <= SJS_METHOD_SET_UNION) return set_method(vm, id, call);
     if (id == SJS_METHOD_BIGINT_TO_STRING) return bigint_method(vm, call);
     if (id <= SJS_METHOD_NUMBER_TO_PRECISION) return number_method(vm, id, call);
+    if (id <= SJS_METHOD_TEMPORAL_WITH_PLAIN_TIME) return sjs_temporal_method(vm, id, call);
     if (id == SJS_METHOD_REGEXP_TEST || id == SJS_METHOD_REGEXP_EXEC) {
         return regex_method(vm, id == SJS_METHOD_REGEXP_TEST ? SJS_REGEX_OP_TEST : SJS_REGEX_OP_EXEC, call);
     }

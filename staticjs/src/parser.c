@@ -3660,6 +3660,25 @@ static handled module_token(sjs_parser *p, const queued_token *t) {
     return statement_token(p, t, false);
 }
 
+/* What a `new` frame constructs (frame.is_new): Set, Map, or a Temporal
+ * type, NEW_TEMPORAL plus its index in TEMPORAL_CONSTRUCTORS. The parser
+ * reads every type JavaScript has; the compiler refuses one staticjs does
+ * not construct. */
+enum { NEW_SET = 1, NEW_MAP, NEW_TEMPORAL };
+
+static const char *const TEMPORAL_CONSTRUCTORS[] = {
+    "Temporal.Duration", "Temporal.Instant", "Temporal.PlainDate", "Temporal.PlainDateTime",
+    "Temporal.PlainMonthDay", "Temporal.PlainTime", "Temporal.PlainYearMonth", "Temporal.ZonedDateTime"
+};
+
+/* 1 plus the index of Temporal's type `name`, or 0. */
+static uint8_t temporal_constructor(sjs_str name) {
+    for (uint8_t i = 0; i < sizeof TEMPORAL_CONSTRUCTORS / sizeof TEMPORAL_CONSTRUCTORS[0]; i++) {
+        if (sjs_str_equal(name, sjs_cstr(TEMPORAL_CONSTRUCTORS[i] + 9))) return (uint8_t)(i + 1u);
+    }
+    return 0;
+}
+
 static handled new_token(sjs_parser *p, const queued_token *t) {
     frame *f = top_frame(p);
     if (f->state == N_NAME) {
@@ -3679,6 +3698,20 @@ static handled new_token(sjs_parser *p, const queued_token *t) {
             p->head++;
             return H_TAKEN;
         }
+        if (t->kind == SJS_TOKEN_NAME && sjs_str_equal(token_text(p, t), SJS_STR("Temporal"))) {
+            /* new Temporal.PlainDate(...): the three tokens at once. */
+            const queued_token *dot = peek(p, 1);
+            if (dot == NULL) return H_WAIT;
+            const queued_token *type = is_punctuator(dot, SJS_P_DOT) ? peek(p, 2) : NULL;
+            if (is_punctuator(dot, SJS_P_DOT) && type == NULL) return H_WAIT;
+            uint8_t which = type != NULL && type->kind == SJS_TOKEN_NAME ? temporal_constructor(token_text(p, type)) : 0u;
+            if (which != 0) {
+                p->head += 2;
+                f->state = N_OPEN;
+                f->is_new = (uint8_t)(NEW_TEMPORAL + which - 1u);
+                return H_TAKEN;
+            }
+        }
         bool map = t->kind == SJS_TOKEN_NAME && sjs_str_equal(token_text(p, t), SJS_STR("Map"));
         if (!map && (t->kind != SJS_TOKEN_NAME || !sjs_str_equal(token_text(p, t), SJS_STR("Set")))) {
             /* What new constructs is a member expression: no unary operator,
@@ -3690,18 +3723,19 @@ static handled new_token(sjs_parser *p, const queued_token *t) {
                 member = p->goal == SJS_GOAL_MODULE && is_punctuator(next, SJS_P_DOT);
             }
             if (!member) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected what new constructs" });
-            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs constructs only Set and Map" });
+            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs constructs only Set and Map, and the Temporal types it has" });
         }
         f->state = N_OPEN;
-        f->is_new = map ? 2u : 1u;   /* which, until the ( */
+        f->is_new = map ? NEW_MAP : NEW_SET;   /* which, until the ( */
         return H_TAKEN;
     }
-    if (!is_punctuator(t, SJS_P_LPAREN)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "write new Set(...) and new Map(...) with parentheses" });
-    bool map = f->is_new == 2u;
+    if (!is_punctuator(t, SJS_P_LPAREN)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "write new Set(...), new Map(...) and new Temporal.PlainDate(...) with parentheses" });
+    sjs_str constructor = f->is_new == NEW_MAP ? SJS_STR("Map") : f->is_new == NEW_SET ? SJS_STR("Set")
+                        : sjs_cstr(TEMPORAL_CONSTRUCTORS[f->is_new - NEW_TEMPORAL]);
     f->type = F_CALL;
     f->state = 0;
     p->expect = E_OPERAND;
-    return send_event(p, texted(SJS_EV_NEW_BEGIN, map ? SJS_STR("Map") : SJS_STR("Set"), frame_place(f, f->at)));
+    return send_event(p, texted(SJS_EV_NEW_BEGIN, constructor, frame_place(f, f->at)));
 }
 
 /* ------------------------------------------------------------------------

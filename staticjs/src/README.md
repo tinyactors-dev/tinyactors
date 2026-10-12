@@ -30,6 +30,9 @@ Implementation modules. Headers here are private; the public API is
                 the methods that change a variable the function owns
                 (../docs/mutation.md)
 - `json.c`      JSON.parse and JSON.stringify: leaves, each over an explicit stack
+- `temporal.c`  Temporal values (../docs/temporal.md): the ISO calendar, ISO 8601
+                strings, Temporal.PlainDate's constructor, from, compare, getters
+                and methods, and the tables of which type has which
 - `regex.h`     regular expressions (../docs/regex.md): what the parser, compiler,
                 evaluator and writer share
 - `regex.c`     a literal's pattern read iteratively, each construct classified

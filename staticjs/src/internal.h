@@ -172,7 +172,8 @@ enum {
     SJS_HEAP_BIGINT,
     SJS_HEAP_MAP,
     SJS_HEAP_ITERATOR,
-    SJS_HEAP_REGEXP    /* a regular expression: one block holding no references (regex_program.h) */
+    SJS_HEAP_REGEXP,   /* a regular expression: one block holding no references (regex_program.h) */
+    SJS_HEAP_TEMPORAL  /* a Temporal value (sjs_temporal): one block holding no references */
 };
 
 /* refs of a value that is never freed: built-in functions. */
@@ -551,6 +552,116 @@ sjs_result sjs_bigint_wrap(sjs_context *context, sjs_bigint_wrap_params w, sjs_v
 uint32_t sjs_bigint_hash(const sjs_bigint *b);
 
 /* ========================================================================
+ * Temporal values (temporal.c, docs/temporal.md)
+ */
+
+/* The type of a Temporal value, in its h.flags. */
+typedef enum {
+    SJS_TEMPORAL_PLAIN_DATE = 1,
+    SJS_TEMPORAL_PLAIN_TIME,
+    SJS_TEMPORAL_PLAIN_DATE_TIME,
+    SJS_TEMPORAL_INSTANT,
+    SJS_TEMPORAL_DURATION
+} sjs_temporal_type;
+
+/* A date and a time of day in the ISO 8601 calendar: a PlainDate's date
+ * (its time is zero), a PlainTime's time (its date is zero), a
+ * PlainDateTime's both. */
+typedef struct {
+    int32_t year;           /* -271821 to 275760 */
+    uint8_t month;          /* 1 to 12 */
+    uint8_t day;            /* 1 to the month's days */
+    uint8_t hour;           /* 0 to 23 */
+    uint8_t minute;         /* 0 to 59 */
+    uint8_t second;         /* 0 to 59 */
+    uint16_t millisecond;   /* 0 to 999, and so the next two */
+    uint16_t microsecond;
+    uint16_t nanosecond;
+} sjs_iso_date_time;
+
+/*
+ * A Temporal value. Immutable, as every value is once shared; it holds no
+ * references, so releasing it frees it. Which member of `as` it uses
+ * depends on its type (h.flags): `iso` for the plain types; `instant` for
+ * an Instant, nanoseconds since the epoch as whole seconds (rounded toward
+ * negative infinity) and the nanoseconds past them, which fits the range
+ * (+-8.64e21 ns) where an int64 of nanoseconds would not; `duration` for a
+ * Duration, its ten fields from years to nanoseconds, each an integer held
+ * exactly in a double, all of one sign.
+ */
+typedef struct {
+    sjs_heap h;   /* h.flags: sjs_temporal_type */
+    union {
+        sjs_iso_date_time iso;
+        struct {
+            int64_t seconds;
+            uint32_t nanoseconds;   /* 0 to 999,999,999 */
+        } instant;
+        double duration[10];
+    } as;
+} sjs_temporal;
+
+#define SJS_AS_TEMPORAL(v) ((sjs_temporal *)(void *)(v).as.heap)
+
+static inline sjs_temporal_type sjs_temporal_type_of(sjs_value v) {
+    return (sjs_temporal_type)v.as.heap->flags;
+}
+
+/* A Temporal value of `type`, its fields zero, for the caller to fill
+ * before anything else sees it. */
+sjs_result sjs_temporal_make(sjs_context *context, sjs_temporal_type type, sjs_temporal **out);
+/* The longest text sjs_temporal_text writes. */
+#define SJS_TEMPORAL_TEXT_MAX 64u
+/* What toString() with no options gives (and toJSON(), and JSON.stringify
+ * quotes), written to `out`: its length. */
+uint32_t sjs_temporal_text(const sjs_temporal *t, char *out);
+/* The type's name, as in Temporal.PlainDate. */
+sjs_str sjs_temporal_type_name(sjs_temporal_type type);
+
+/* A getter of a Temporal value: the name's `field` in NAMES. Which types
+ * have each is temporal.c's to say. */
+typedef enum {
+    SJS_FIELD_NONE = 0,
+    SJS_FIELD_BLANK,
+    SJS_FIELD_CALENDAR_ID,
+    SJS_FIELD_DAY,
+    SJS_FIELD_DAY_OF_WEEK,
+    SJS_FIELD_DAY_OF_YEAR,
+    SJS_FIELD_DAYS,
+    SJS_FIELD_DAYS_IN_MONTH,
+    SJS_FIELD_DAYS_IN_WEEK,
+    SJS_FIELD_DAYS_IN_YEAR,
+    SJS_FIELD_EPOCH_MILLISECONDS,
+    SJS_FIELD_EPOCH_NANOSECONDS,
+    SJS_FIELD_ERA,
+    SJS_FIELD_ERA_YEAR,
+    SJS_FIELD_HOUR,
+    SJS_FIELD_HOURS,
+    SJS_FIELD_IN_LEAP_YEAR,
+    SJS_FIELD_MICROSECOND,
+    SJS_FIELD_MICROSECONDS,
+    SJS_FIELD_MILLISECOND,
+    SJS_FIELD_MILLISECONDS,
+    SJS_FIELD_MINUTE,
+    SJS_FIELD_MINUTES,
+    SJS_FIELD_MONTH,
+    SJS_FIELD_MONTH_CODE,
+    SJS_FIELD_MONTHS,
+    SJS_FIELD_MONTHS_IN_YEAR,
+    SJS_FIELD_NANOSECOND,
+    SJS_FIELD_NANOSECONDS,
+    SJS_FIELD_SECOND,
+    SJS_FIELD_SECONDS,
+    SJS_FIELD_SIGN,
+    SJS_FIELD_WEEK_OF_YEAR,
+    SJS_FIELD_WEEKS,
+    SJS_FIELD_YEAR,
+    SJS_FIELD_YEAR_OF_WEEK,
+    SJS_FIELD_YEARS,
+    SJS_FIELD_COUNT
+} sjs_temporal_field;
+
+/* ========================================================================
  * Built-ins
  */
 
@@ -604,9 +715,16 @@ typedef enum {
     SJS_BUILTIN_ENCODE_URI_COMPONENT,
     SJS_BUILTIN_DECODE_URI,
     SJS_BUILTIN_DECODE_URI_COMPONENT,
+    /* Temporal's (temporal.c): from SJS_BUILTIN_TEMPORAL_FIRST to the count.
+     * A constructor is in the function table under the space "new", which
+     * no name a program writes reaches: only `new Temporal.X(...)`. */
+    SJS_BUILTIN_TEMPORAL_FIRST,
+    SJS_BUILTIN_TEMPORAL_PLAIN_DATE = SJS_BUILTIN_TEMPORAL_FIRST,
+    SJS_BUILTIN_TEMPORAL_PLAIN_DATE_FROM,
+    SJS_BUILTIN_TEMPORAL_PLAIN_DATE_COMPARE,
     SJS_BUILTIN_FUNCTION_COUNT,
     /* Methods, called on a receiver. */
-    SJS_METHOD_FIRST = 64,
+    SJS_METHOD_FIRST = 96,
     /* Arrays. */
     SJS_METHOD_ARRAY_AT = SJS_METHOD_FIRST,
     SJS_METHOD_ARRAY_CONCAT,
@@ -674,6 +792,31 @@ typedef enum {
     SJS_METHOD_NUMBER_TO_EXPONENTIAL,
     SJS_METHOD_NUMBER_TO_FIXED,
     SJS_METHOD_NUMBER_TO_PRECISION,
+    /* Temporal values (temporal.c): one ID per name, for every type that
+     * has a method of the name; the method checks its receiver's type. */
+    SJS_METHOD_TEMPORAL_ABS,
+    SJS_METHOD_TEMPORAL_ADD,
+    SJS_METHOD_TEMPORAL_EQUALS,
+    SJS_METHOD_TEMPORAL_NEGATED,
+    SJS_METHOD_TEMPORAL_ROUND,
+    SJS_METHOD_TEMPORAL_SINCE,
+    SJS_METHOD_TEMPORAL_SUBTRACT,
+    SJS_METHOD_TEMPORAL_TO_JSON,
+    SJS_METHOD_TEMPORAL_TO_LOCALE_STRING,
+    SJS_METHOD_TEMPORAL_TO_PLAIN_DATE,
+    SJS_METHOD_TEMPORAL_TO_PLAIN_DATE_TIME,
+    SJS_METHOD_TEMPORAL_TO_PLAIN_MONTH_DAY,
+    SJS_METHOD_TEMPORAL_TO_PLAIN_TIME,
+    SJS_METHOD_TEMPORAL_TO_PLAIN_YEAR_MONTH,
+    SJS_METHOD_TEMPORAL_TO_STRING,
+    SJS_METHOD_TEMPORAL_TO_ZONED_DATE_TIME,
+    SJS_METHOD_TEMPORAL_TO_ZONED_DATE_TIME_ISO,
+    SJS_METHOD_TEMPORAL_TOTAL,
+    SJS_METHOD_TEMPORAL_UNTIL,
+    SJS_METHOD_TEMPORAL_VALUE_OF,
+    SJS_METHOD_TEMPORAL_WITH,
+    SJS_METHOD_TEMPORAL_WITH_CALENDAR,
+    SJS_METHOD_TEMPORAL_WITH_PLAIN_TIME,
     /* Regular expressions (regex_match.c). */
     SJS_METHOD_REGEXP_TEST,
     SJS_METHOD_REGEXP_EXEC,
@@ -726,6 +869,11 @@ typedef enum {
     SJS_REGEX_LOOP_FIRST
 } sjs_builtin_id;
 
+/* A method's ID is a byte in NAMES (sjs_name.methods, .mutation). */
+_Static_assert(SJS_METHOD_MUTATION_FIRST <= UINT8_MAX && SJS_REGEX_LOOP_FIRST <= UINT8_MAX,
+               "a method's ID must fit a byte of NAMES");
+_Static_assert(SJS_BUILTIN_FUNCTION_COUNT <= SJS_METHOD_FIRST, "the functions' IDs run into the methods'");
+
 /* The built-in function `Namespace.name` or bare `name`; NONE if unknown. */
 sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name);
 /* One entry of the table sjs_builtin_lookup searches: the namespace ("" for
@@ -758,10 +906,11 @@ const sjs_function_entry *sjs_functions(uint32_t *count);
 typedef struct {
     sjs_str name;
     uint8_t flags;      /* SJS_NAME_* */
-    uint8_t methods[8]; /* the staticjs method on an array, a string, a set, a BigInt, a map, an
-                         * iterator, a regular expression, a number; 0 if none */
+    uint8_t methods[9]; /* the staticjs method on an array, a string, a set, a BigInt, a map, an
+                         * iterator, a regular expression, a number, a Temporal value; 0 if none */
     uint8_t mutation;   /* MUTATION: the method that changes its receiver, of the one kind
                          * that has it (SJS_METHOD_MUTATION_FIRST on); 0 if none */
+    uint8_t field;      /* the getter of a Temporal value (sjs_temporal_field); 0 if none */
 } sjs_name;
 
 /* The entry of `text` plus one, or 0 when it has none. */

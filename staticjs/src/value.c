@@ -1174,3 +1174,13 @@ __attribute__((noinline)) static void drop_side(sjs_context *context, sjs_heap *
     if (a->h.type == SJS_HEAP_ARRAY && (a->h.flags & SJS_ARRAY_EXTRA) != 0) drop_heap(context, work, a->extra);
     else lookup_free(context, a->index);
 }
+
+/* A Temporal value (docs/temporal.md): one block, nothing in it to release. */
+sjs_result sjs_temporal_make(sjs_context *context, sjs_temporal_type type, sjs_temporal **out) {
+    sjs_temporal *t = heap_alloc(context, sizeof *t, SJS_HEAP_TEMPORAL);
+    if (t == NULL) return SJS_ERR_NOMEM;
+    sjs_zero(&t->as, sizeof t->as);
+    t->h.flags = (uint8_t)type;
+    *out = t;
+    return SJS_OK;
+}

@@ -28,7 +28,7 @@ struct sjs_writer {
     sjs_str string;
     uint32_t string_at;
     sjs_buf digits;        /* a BigInt's, while they are written; its `n` follows */
-    sjs_buf literal;       /* a regular expression's, while it is written */
+    sjs_buf literal;       /* a regular expression's or a Temporal value's, while it is written */
     bool failed;
 };
 
@@ -193,6 +193,23 @@ static sjs_result next(sjs_writer *w, bool *more) {
             if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)source.ptr, source.length });
             if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)"/", 1 });
             if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)flags, n });
+            if (r != SJS_OK) return r;
+            w->pending = w->literal.ptr;
+            w->pending_length = w->literal.length;
+            break;
+        }
+        case SJS_TEMPORAL: {
+            /* Its type's from() of its ISO string (docs/temporal.md), which
+             * needs no escape: Temporal.PlainDate.from("2024-01-31"). */
+            const sjs_allocator *a = &w->context->counting;
+            char text[SJS_TEMPORAL_TEXT_MAX];
+            uint32_t n = sjs_temporal_text(SJS_AS_TEMPORAL(v), text);
+            sjs_str type = sjs_temporal_type_name(sjs_temporal_type_of(v));
+            sjs_result r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)"Temporal.", 9u });
+            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)type.ptr, type.length });
+            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)".from(\"", 7u });
+            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)text, n });
+            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)"\")", 2u });
             if (r != SJS_OK) return r;
             w->pending = w->literal.ptr;
             w->pending_length = w->literal.length;

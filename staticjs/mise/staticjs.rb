@@ -28,6 +28,7 @@ module StaticJS
     'number_test' => { source: 'tests/number_test.c', fast: [], full: [] },
     'json_test' => { source: 'tests/json_test.c', fast: [], full: [] },
     'regex_test' => { source: 'tests/regex_test.c', fast: [], full: [] },
+    'temporal_test' => { source: 'tests/temporal_test.c', fast: [], full: [] },
     'names_test' => { source: 'tests/names_test.c', fast: [], full: [] },
     'api_test' => { source: 'tests/api_test.c', fast: [], full: ['--full'] },
     'spec_test' => { source: 'tests/spec_test.c', fast: ['tests/spec'], full: ['--full', 'tests/spec'] },

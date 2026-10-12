@@ -20,7 +20,8 @@
 // --print and regex_test --print write: what staticjs computed from an input
 // (a double formatted, a decimal read, a JSON document read and written, a
 // regular expression classified or matched, ...), each of which must be
-// what Node computes from it.
+// what Node computes from it; temporal_test --print writes Temporal
+// expressions and what staticjs gave for each.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -339,6 +340,22 @@ const numberChecks = {
     if (outcome === 'exact' || outcome === 'unsupported' || outcome === 'limit') return null;
     return `/${pattern}/${flags}: an unknown outcome ${outcome}`;
   },
+  Y(rest) { // <source> <outcome> <deliberate>: a Temporal expression, its value or a fault
+    const [quoted, ours, deliberate] = rest.split('\t');
+    const source = JSON.parse(quoted);
+    let want;
+    try {
+      want = show(new Function(`return (${source}\n);`)());
+    } catch (error) {
+      want = `!${error}`;
+    }
+    const fault = ours.startsWith('!');
+    temporalOutcomes[fault ? (want.startsWith('!') ? 'thrown' : 'deliberate') : 'value']++;
+    if (deliberate === '1' && !fault) return `${source}: staticjs gives ${ours}, where it should fault on purpose`;
+    if (want.startsWith('!')) return fault ? null : `${source}: staticjs ${JSON.parse(ours)}, JavaScript throws ${want.slice(1)}`;
+    if (fault) return deliberate === '1' ? null : `${source}: staticjs faults (${ours.slice(1)}), JavaScript ${want}`;
+    return JSON.parse(ours) === want ? null : `${source}: staticjs ${JSON.parse(ours)}, JavaScript ${want}`;
+  },
   K(rest) { // <source> <text>: JSON.stringify(value, replacer, space), never a fault
     const [source, ours] = rest.split('\t');
     const want = new Function(`return (${JSON.parse(source)}\n);`)();
@@ -349,6 +366,7 @@ const numberChecks = {
 };
 const jsonOutcomes = { value: 0, '!S': 0, '!O': 0 };
 const regexOutcomes = { exact: 0, unsupported: 0, syntax: 0, matched: 0, lone: 0 };
+const temporalOutcomes = { value: 0, thrown: 0, deliberate: 0 };
 if (numbers) {
   for (const line of readFileSync(numbers, 'utf8').split('\n')) {
     if (!line) continue;
@@ -380,6 +398,9 @@ const numberSummary = [
   ['X', `random regular expression literals classify as JavaScript reads them (${regexOutcomes.exact} exact, ` +
     `${regexOutcomes.unsupported} unsupported, ${regexOutcomes.syntax} syntax errors), and match on ` +
     `${regexOutcomes.matched} inputs as JavaScript does (${regexOutcomes.lone} faults where it makes a lone surrogate)`],
+  ['Y', `Temporal expressions give the polyfill's value or throw where it does (${temporalOutcomes.value} values, ` +
+    `${temporalOutcomes.thrown} faults where it throws, ${temporalOutcomes.deliberate} deliberate faults where it reads ` +
+    'what the specification refuses)'],
 ].filter(([tag]) => counts.has(tag)).map(([tag, what]) => `${counts.get(tag)} ${what}`).join(', ');
 
 if (failures.length > 0) {

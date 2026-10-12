@@ -235,7 +235,13 @@ typedef struct {
     bool gathering;
 } literal_frame;
 
-enum { NS_NONE = 0, NS_MATH, NS_OBJECT, NS_NUMBER, NS_ARRAY, NS_STRING, NS_BIGINT, NS_MAP, NS_JSON };
+enum {
+    NS_NONE = 0, NS_MATH, NS_OBJECT, NS_NUMBER, NS_ARRAY, NS_STRING, NS_BIGINT, NS_MAP, NS_JSON,
+    /* Temporal, and its types and Now, each a namespace of its own:
+     * Temporal.PlainDate.from. */
+    NS_TEMPORAL, NS_TEMPORAL_PLAIN_DATE, NS_TEMPORAL_PLAIN_TIME, NS_TEMPORAL_PLAIN_DATE_TIME, NS_TEMPORAL_DURATION,
+    NS_TEMPORAL_INSTANT, NS_TEMPORAL_NOW
+};
 
 /* An explicit export: resolved when it arrives, or at the end of the module. */
 enum { XE_RESOLVED = 0, XE_LOCAL };
@@ -1156,7 +1162,8 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
     if (sjs_str_equal(e->text, SJS_STR("Infinity"))) return number_constant(c, 1.0 / 0.0, e->at);
     static const struct { const char *name; uint8_t space; } spaces[] = {
         { "Math", NS_MATH }, { "Object", NS_OBJECT }, { "Number", NS_NUMBER }, { "Array", NS_ARRAY },
-        { "String", NS_STRING }, { "BigInt", NS_BIGINT }, { "Map", NS_MAP }, { "JSON", NS_JSON }
+        { "String", NS_STRING }, { "BigInt", NS_BIGINT }, { "Map", NS_MAP }, { "JSON", NS_JSON },
+        { "Temporal", NS_TEMPORAL }
     };
     for (uint32_t i = 0; i < sizeof spaces / sizeof spaces[0]; i++) {
         if (sjs_str_equal(e->text, sjs_cstr(spaces[i].name))) {
@@ -1196,7 +1203,11 @@ static sjs_result fail_unbound(sjs_compiler *c) {
 
 /* `Math.PI`, `Number.MAX_SAFE_INTEGER`, `Math.max`. */
 static sjs_result read_space_member(sjs_compiler *c, const sjs_event *e) {
-    static const char *const space_names[] = { "", "Math", "Object", "Number", "Array", "String", "BigInt", "Map", "JSON" };
+    static const char *const space_names[] = {
+        "", "Math", "Object", "Number", "Array", "String", "BigInt", "Map", "JSON",
+        "Temporal", "Temporal.PlainDate", "Temporal.PlainTime", "Temporal.PlainDateTime", "Temporal.Duration",
+        "Temporal.Instant", "Temporal.Now"
+    };
     static const struct { uint8_t space; const char *name; double value; } numbers[] = {
         { NS_MATH, "PI", 3.141592653589793 }, { NS_MATH, "E", 2.718281828459045 },
         { NS_MATH, "LN2", 0.6931471805599453 }, { NS_MATH, "LN10", 2.302585092994046 },
@@ -1208,6 +1219,15 @@ static sjs_result read_space_member(sjs_compiler *c, const sjs_event *e) {
     };
     uint8_t space = c->space;
     c->space = NS_NONE;
+    if (space == NS_TEMPORAL) {
+        /* Temporal.PlainDate, ...: a namespace whose members follow. */
+        for (uint8_t inner = NS_TEMPORAL_PLAIN_DATE; inner <= NS_TEMPORAL_NOW; inner++) {
+            if (sjs_str_equal(e->text, sjs_cstr(space_names[inner] + 9))) {
+                c->space = inner;
+                return SJS_OK;
+            }
+        }
+    }
     for (uint32_t i = 0; i < sizeof numbers / sizeof numbers[0]; i++) {
         if (numbers[i].space == space && sjs_str_equal(e->text, sjs_cstr(numbers[i].name))) {
             return number_constant(c, numbers[i].value, e->at);
@@ -2753,6 +2773,30 @@ static sjs_result end(sjs_compiler *c, const sjs_event *e) {
     return SJS_OK;
 }
 
+/* `new Temporal.PlainDate(...)`: a call of the type's constructor, a
+ * function the function table holds under the space "new", which no name
+ * reaches. The callee goes first, as a call's does; NEW_END makes the call.
+ * Where the program binds Temporal itself, `new` would construct from its
+ * value, which staticjs does not. */
+static sjs_result new_temporal(sjs_compiler *c, const sjs_event *e) {
+    sjs_str name = SJS_STR("Temporal");
+    uint32_t found;
+    bool bound = index_find(&c->global_index, name, &found);
+    for (uint32_t s = scope_count(c); !bound && s-- > 0;) bound = index_find(&SJS_BUF_AT(c->scopes, scope, s).names, name, &found);
+    sjs_builtin_id id = sjs_builtin_lookup(SJS_STR("new"), e->text);
+    if (bound || id == SJS_BUILTIN_NONE) {
+        return fail_name(c, e, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs constructs only Set and Map, and the Temporal types it has" });
+    }
+    uint32_t index;
+    if (value_constant(c, sjs_builtin_value(id), &index) != SJS_OK) return compile_fail(c, e->at, (sjs_problem){ SJS_ERROR_MEMORY, "out of memory" });
+    if (op32(c, ins(SJS_OP_CONSTANT, index, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    construct k = { 0 };
+    k.kind = K_CALL;
+    k.node = e->node;
+    c->last_op_valid = false;
+    return push_construct(c, k, e->at);
+}
+
 static sjs_result event(sjs_compiler *c, const sjs_event *e) {
     /* `String`, `Number` and `BigInt` are functions as well as namespaces:
      * unless a member follows, each is the function, read where the name was. */
@@ -2842,6 +2886,7 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
     case SJS_EV_CALL_END:
         return call_end(c, e, SJS_OP_CALL);
     case SJS_EV_NEW_BEGIN: {
+        if (e->text.length > 9 && sjs_str_equal((sjs_str){ e->text.ptr, 9 }, SJS_STR("Temporal."))) return new_temporal(c, e);
         construct k = { 0 };
         k.kind = K_NEW;
         k.map = sjs_str_equal(e->text, SJS_STR("Map")) ? 1u : 0u;
@@ -2849,6 +2894,7 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
     }
     case SJS_EV_NEW_END: {
         const construct *k = top_construct(c);
+        if (k != NULL && k->kind == K_CALL) return call_end(c, e, SJS_OP_CALL); /* new Temporal.X */
         return call_end(c, e, k != NULL && k->kind == K_NEW && k->map ? SJS_OP_NEW_MAP : SJS_OP_NEW_SET);
     }
     case SJS_EV_UNARY:
