@@ -428,7 +428,7 @@ new Temporal.PlainDate(2024, 1, 31) < new Temporal.PlainDate(2024, 2, 1)
 new Temporal.PlainDate(2024, 1, 31).equals
 --- fault does not read them as values
 
-=== a method staticjs does not build yet, read as a value, deliberate
+=== add read as a value, deliberate
 new Temporal.PlainDate(2024, 1, 31).add
 --- fault does not read them as values
 
@@ -520,21 +520,124 @@ new Temporal.PlainDate(2024, 1, 31).toLocaleString()
 new Temporal.PlainDate(2024, 1, 31).valueOf()
 --- fault valueOf of a Temporal value
 
-=== add needs Temporal.Duration, deliberate
-new Temporal.PlainDate(2024, 1, 31).add({ days: 1 })
---- fault does not build add, subtract, until and since
+=== add
+[new Temporal.PlainDate(2024, 1, 31).add({ days: 1 }), new Temporal.PlainDate(2024, 1, 31).add("P1W"), new Temporal.PlainDate(2024, 1, 31).add(Temporal.Duration.from("P1Y2M"))]
+--- value
+[Temporal.PlainDate.from("2024-02-01"),Temporal.PlainDate.from("2024-02-07"),Temporal.PlainDate.from("2025-03-31")]
 
-=== subtract, deliberate
-new Temporal.PlainDate(2024, 1, 31).subtract({ days: 1 })
---- fault does not build add, subtract, until and since
+=== add a month at a month's end constrains the day
+[Temporal.PlainDate.from("2024-01-31").add("P1M"), Temporal.PlainDate.from("2023-01-31").add("P1M"), Temporal.PlainDate.from("2024-03-31").add("P1M"), Temporal.PlainDate.from("2024-02-29").add("P1Y")]
+--- value
+[Temporal.PlainDate.from("2024-02-29"),Temporal.PlainDate.from("2023-02-28"),Temporal.PlainDate.from("2024-04-30"),Temporal.PlainDate.from("2025-02-28")]
 
-=== until, deliberate
-new Temporal.PlainDate(2024, 1, 31).until("2024-02-01").days
---- fault does not build add, subtract, until and since
+=== add with overflow reject past a month's end
+Temporal.PlainDate.from("2024-01-31").add("P1M", { overflow: "reject" })
+--- fault day past its month's last
 
-=== since, deliberate
-new Temporal.PlainDate(2024, 1, 31).since("2024-01-01").days
---- fault does not build add, subtract, until and since
+=== add with overflow reject within the month
+Temporal.PlainDate.from("2024-01-29").add("P1M1D", { overflow: "reject" })
+--- value
+Temporal.PlainDate.from("2024-03-01")
+
+=== add adds the years and months, then the days
+[Temporal.PlainDate.from("2024-01-31").add("P1M1D"), Temporal.PlainDate.from("2024-02-29").add("P1Y1D")]
+--- value
+[Temporal.PlainDate.from("2024-03-01"),Temporal.PlainDate.from("2025-03-01")]
+
+=== add's time in whole days, toward zero
+[Temporal.PlainDate.from("2024-01-31").add("PT47H59M"), Temporal.PlainDate.from("2024-01-31").add("-PT47H59M"), Temporal.PlainDate.from("2024-01-31").add({ hours: 23 })]
+--- value
+[Temporal.PlainDate.from("2024-02-01"),Temporal.PlainDate.from("2024-01-30"),Temporal.PlainDate.from("2024-01-31")]
+
+=== subtract
+[Temporal.PlainDate.from("2024-03-31").subtract("P1M"), Temporal.PlainDate.from("2024-03-01").subtract({ days: 1 }), Temporal.PlainDate.from("2024-01-31").subtract("-P1M")]
+--- value
+[Temporal.PlainDate.from("2024-02-29"),Temporal.PlainDate.from("2024-02-29"),Temporal.PlainDate.from("2024-02-29")]
+
+=== add past the limits
+Temporal.PlainDate.from("+275760-09-13").add({ days: 1 })
+--- fault outside Temporal's limits
+
+=== subtract past the limits
+Temporal.PlainDate.from("2024-01-01").subtract("P4294967295Y")
+--- fault outside Temporal's limits
+
+=== add of a bag without duration fields
+Temporal.PlainDate.from("2024-01-01").add({ day: 1 })
+--- fault without years, months
+
+=== add of a number
+Temporal.PlainDate.from("2024-01-01").add(1)
+--- fault an object of years
+
+=== add's options not an object
+Temporal.PlainDate.from("2024-01-01").add("P1D", "reject")
+--- fault not an object
+
+=== add's string field, deliberate
+Temporal.PlainDate.from("2024-01-01").add({ days: "1" })
+--- fault converts only numbers
+
+=== add on a variable the function owns
+(() => { const d = Temporal.PlainDate.from("2024-01-31"); return [d.add("P1M"), d]; })()
+--- value
+[Temporal.PlainDate.from("2024-02-29"),Temporal.PlainDate.from("2024-01-31")]
+
+=== until in days by default
+[Temporal.PlainDate.from("2024-01-31").until("2024-03-01"), Temporal.PlainDate.from("2024-03-01").until("2024-01-31"), Temporal.PlainDate.from("2024-01-31").until("2024-01-31")]
+--- value
+[Temporal.Duration.from("P30D"),Temporal.Duration.from("-P30D"),Temporal.Duration.from("PT0S")]
+
+=== until with a largest unit
+[Temporal.PlainDate.from("2024-01-31").until("2024-02-29", { largestUnit: "month" }), Temporal.PlainDate.from("2024-01-31").until("2024-03-01", { largestUnit: "months" }), Temporal.PlainDate.from("2024-02-29").until("2028-02-28", { largestUnit: "year" }), Temporal.PlainDate.from("2024-01-01").until("2024-02-15", { largestUnit: "week" })]
+--- value
+[Temporal.Duration.from("P29D"),Temporal.Duration.from("P1M1D"),Temporal.Duration.from("P3Y11M30D"),Temporal.Duration.from("P6W3D")]
+
+=== until rounded to a month
+[Temporal.PlainDate.from("2024-01-31").until("2024-03-15", { smallestUnit: "month" }), Temporal.PlainDate.from("2024-01-31").until("2024-03-15", { smallestUnit: "month", roundingMode: "halfExpand" }), Temporal.PlainDate.from("2024-01-31").until("2024-03-16", { smallestUnit: "month", roundingMode: "halfExpand" })]
+--- value
+[Temporal.Duration.from("P1M"),Temporal.Duration.from("P1M"),Temporal.Duration.from("P2M")]
+
+=== until rounded to years by an increment
+Temporal.PlainDate.from("2020-01-01").until("2027-06-30", { smallestUnit: "year", roundingIncrement: 5, roundingMode: "ceil" })
+--- value
+Temporal.Duration.from("P10Y")
+
+=== until rounded to weeks
+Temporal.PlainDate.from("2024-01-01").until("2024-01-25", { largestUnit: "month", smallestUnit: "week", roundingMode: "halfEven" })
+--- value
+Temporal.Duration.from("P3W")
+
+=== since negates until, and the mode's direction
+[Temporal.PlainDate.from("2024-03-15").since("2024-01-31", { smallestUnit: "month", roundingMode: "ceil" }), Temporal.PlainDate.from("2024-01-31").since("2024-03-15", { smallestUnit: "month", roundingMode: "ceil" })]
+--- value
+[Temporal.Duration.from("P2M"),Temporal.Duration.from("-P1M")]
+
+=== until from a string, a bag, a PlainDateTime
+[Temporal.PlainDate.from("2024-01-01").until({ year: 2024, month: 2, day: 1 }), Temporal.PlainDate.from("2024-01-01").until(Temporal.PlainDateTime.from("2024-01-02T23:00")), Temporal.PlainDate.from("2024-01-01").until("2024-01-05T12:00")]
+--- value
+[Temporal.Duration.from("P31D"),Temporal.Duration.from("P1D"),Temporal.Duration.from("P4D")]
+
+=== until with a time unit
+Temporal.PlainDate.from("2024-01-01").until("2024-01-02", { largestUnit: "hour" })
+--- fault this method does not round to
+
+=== until with the largest unit below the smallest
+Temporal.PlainDate.from("2024-01-01").until("2024-03-02", { largestUnit: "day", smallestUnit: "month" })
+--- fault largestUnit smaller
+
+=== until with an unknown mode
+Temporal.PlainDate.from("2024-01-01").until("2024-03-02", { roundingMode: "up" })
+--- fault this value of a Temporal option
+
+=== until of a PlainTime
+Temporal.PlainDate.from("2024-01-01").until(Temporal.PlainTime.from("12:00"))
+--- fault a PlainDate is made from
+
+=== until across Temporal's limits
+Temporal.PlainDate.from("-271821-04-19").until("+275760-09-13", { largestUnit: "year" })
+--- value
+Temporal.Duration.from("P547581Y4M25D")
 
 === toPlainDateTime
 new Temporal.PlainDate(2024, 1, 31).toPlainDateTime().hour

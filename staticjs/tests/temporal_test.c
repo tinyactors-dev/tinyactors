@@ -22,7 +22,7 @@
  *                            throws, JavaScript's value where staticjs gives
  *                            one, and a fault on every deliberate line.
  *
- * The cases, about 19,000, come from fixed lists, without randomness:
+ * The cases, about 37,000, come from fixed lists, without randomness:
  *   - ISO 8601 strings for Temporal.PlainDate.from, Temporal.PlainTime.from
  *     and Temporal.PlainDateTime.from: dates, times, offsets and
  *     annotations, each list varied with the others held;
@@ -50,7 +50,11 @@
  *     of units, every mode and increments of the largest unit; round of
  *     24-hour days and time over every unit, increment, mode and largest
  *     unit; total in every unit, with and without relativeTo; toString's
- *     digits by every mode; compare, add and subtract.
+ *     digits by every mode; compare, add and subtract;
+ *   - until and since of dates at month ends, leap days and the limits over
+ *     every pair of units, mode and some increments; of dates and times on
+ *     either side of each other's time; of times over every increment;
+ *     add and subtract of durations to those dates by each overflow.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -1021,6 +1025,133 @@ static void duration_text_and_arithmetic(runner *r) {
     }
 }
 
+/* ------------------------------------------------------------------------
+ * add, subtract, until and since of a PlainDate, a PlainTime and a
+ * PlainDateTime
+ */
+
+/* Dates at the ends of months, around leap days and at the limits. */
+static const char *const EDGE_DATES[] = { "2024-01-31", "2024-02-29", "2024-03-31", "2023-02-28", "2025-02-28", "2024-12-31",
+                                          "2020-01-01", "1999-11-30", "2024-04-30", "-271821-04-19", "+275760-09-13", "2000-02-29" };
+static const char *const DATE_UNITS[] = { "day", "week", "month", "year" };
+
+/* until between every two of the dates over every pair of units, by
+ * increments of 1, 2 and 5, and since by 1; every mode in one line. */
+static void date_differences(runner *r) {
+    for (size_t a = 0; a < COUNT(EDGE_DATES); a++) {
+        for (size_t b = 0; b < COUNT(EDGE_DATES); b++) {
+            for (int l = 0; l < 4; l++) {
+                for (int s = 0; s <= l; s++) {
+                    static const int increments[] = { 1, 2, 5, -1 };
+                    for (size_t i = 0; i < COUNT(increments); i++) {
+                        bool since = increments[i] < 0;
+                        char source[512];
+                        snprintf(source, sizeof source,
+                                 ALL_MODES ".map(m => Temporal.PlainDate.from(\"%s\").%s(\"%s\", { largestUnit: \"%s\", smallestUnit: \"%s\", roundingIncrement: %d, roundingMode: m }))",
+                                 EDGE_DATES[a], since ? "since" : "until", EDGE_DATES[b], DATE_UNITS[l], DATE_UNITS[s], since ? 1 : increments[i]);
+                        evaluate_with(r, "%s", source, false);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* until and since between dates and times on either side of each other's
+ * time of day, over pairs of units from a year to a nanosecond. The
+ * polyfills differ on months counted from the 29th to the 31st into a
+ * shorter month (docs/temporal.md, "Differences, rounded"): rounded to a
+ * month or a year from such a day, the line is left out. */
+static void date_time_differences(runner *r) {
+    static const char *const times[][2] = { { "T00:00", "T23:59:59.999999999" }, { "T12:00", "T06:30:15.5" }, { "T23:59:59.999999999", "T00:00" } };
+    static const char *const units[] = { "nanosecond", "second", "minute", "hour", "day", "week", "month", "year" };
+    static const int pairs[][2] = { { 7, 7 }, { 7, 6 }, { 7, 4 }, { 7, 0 }, { 6, 6 }, { 6, 4 }, { 6, 3 }, { 5, 5 }, { 5, 4 }, { 4, 4 }, { 4, 3 }, { 4, 0 }, { 3, 3 }, { 3, 2 }, { 2, 1 }, { 1, 1 }, { 0, 0 } };
+    for (size_t a = 0; a < 9; a++) {
+        for (size_t b = 0; b < 9; b++) {
+            for (size_t t = 0; t < COUNT(times); t++) {
+                for (size_t p = 0; p < COUNT(pairs); p++) {
+                    int day = atoi(EDGE_DATES[a] + strlen(EDGE_DATES[a]) - 2);
+                    if (pairs[p][1] >= 6 && day >= 29) continue;
+                    for (int since = 0; since < 2; since++) {
+                        char source[512];
+                        snprintf(source, sizeof source,
+                                 ALL_MODES ".map(m => Temporal.PlainDateTime.from(\"%s%s\").%s(\"%s%s\", { largestUnit: \"%s\", smallestUnit: \"%s\", roundingMode: m }))",
+                                 EDGE_DATES[a], times[t][0], since ? "since" : "until", EDGE_DATES[b], times[t][1], units[pairs[p][0]], units[pairs[p][1]]);
+                        evaluate_with(r, "%s", source, false);
+                    }
+                }
+            }
+        }
+    }
+    static const char *const limits[][2] = { { "-271821-04-19T00:00:00.000000001", "+275760-09-13T23:59:59.999999999" }, { "+275760-09-13T23:59:59.999999999", "-271821-04-20" } };
+    for (size_t e = 0; e < COUNT(limits); e++) {
+        for (size_t l = 0; l < COUNT(units); l++) {
+            char source[512];
+            snprintf(source, sizeof source, ALL_MODES ".map(m => Temporal.PlainDateTime.from(\"%s\").until(\"%s\", { largestUnit: \"%s\", roundingMode: m }))", limits[e][0],
+                     limits[e][1], units[l]);
+            evaluate_with(r, "%s", source, false);
+        }
+    }
+}
+
+/* until and since between times over every pair of units and every
+ * increment that divides the larger unit. */
+static void time_differences(runner *r) {
+    static const char *const times[][2] = { { "00:00", "23:59:59.999999999" }, { "12:30:15.123456789", "01:02:03.5" }, { "06:00", "06:00:00.000000001" },
+                                             { "23:30", "00:29:59.5" } };
+    for (size_t t = 0; t < COUNT(times); t++) {
+        for (int l = 0; l < 6; l++) {
+            for (int s = 0; s <= l; s++) {
+                long long parts = s == 5 ? 24 : s >= 3 ? 60 : 1000;
+                for (long long increment = 1; increment < parts; increment++) {
+                    if (parts % increment != 0) continue;
+                    for (int since = 0; since < 2; since++) {
+                        char source[512];
+                        snprintf(source, sizeof source,
+                                 ALL_MODES ".map(m => Temporal.PlainTime.from(\"%s\").%s(\"%s\", { largestUnit: \"%s\", smallestUnit: \"%s\", roundingIncrement: %lld, roundingMode: m }))",
+                                 times[t][0], since ? "since" : "until", times[t][1], UNIT_NAMES[l], UNIT_NAMES[s], increment);
+                        evaluate_with(r, "%s", source, false);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* add and subtract of durations at month ends, leap days and the limits,
+ * by each overflow. */
+static void additions(runner *r) {
+    static const char *const durations[] = { "P1M", "P1Y", "P1Y1M", "P13M", "P1M1D", "P1W", "P4Y", "P100Y", "P1D", "PT24H", "PT23H59M59.999999999S",
+                                              "PT25H", "P1MT1H", "P1Y2M3W4DT5H6M7.008009010S", "P100000000D", "PT2400000000000H", "P4294967295W",
+                                              "PT0S" };
+    static const char *const overflows[] = { "", ", { overflow: \"constrain\" }", ", { overflow: \"reject\" }" };
+    for (size_t d = 0; d < COUNT(EDGE_DATES); d++) {
+        for (size_t u = 0; u < COUNT(durations); u++) {
+            for (size_t o = 0; o < COUNT(overflows); o++) {
+                char source[512];
+                snprintf(source, sizeof source, "Temporal.PlainDate.from(\"%s\").add(\"%s\"%s)", EDGE_DATES[d], durations[u], overflows[o]);
+                evaluate_with(r, "%s", source, false);
+                snprintf(source, sizeof source, "Temporal.PlainDate.from(\"%s\").subtract(\"%s\"%s)", EDGE_DATES[d], durations[u], overflows[o]);
+                evaluate_with(r, "%s", source, false);
+                snprintf(source, sizeof source, "Temporal.PlainDateTime.from(\"%sT12:00\").add(\"%s\"%s)", EDGE_DATES[d], durations[u], overflows[o]);
+                evaluate_with(r, "%s", source, false);
+                snprintf(source, sizeof source, "Temporal.PlainDateTime.from(\"%sT23:59:59.999999999\").subtract(\"-%s\"%s)", EDGE_DATES[d], durations[u],
+                         overflows[o]);
+                evaluate_with(r, "%s", source, false);
+            }
+        }
+    }
+    static const char *const times[] = { "00:00", "12:30:15.5", "23:59:59.999999999" };
+    for (size_t t = 0; t < COUNT(times); t++) {
+        for (size_t u = 0; u < COUNT(durations); u++) {
+            char source[512];
+            snprintf(source, sizeof source, "[Temporal.PlainTime.from(\"%s\").add(\"%s\"), Temporal.PlainTime.from(\"%s\").subtract(\"%s\")]", times[t],
+                     durations[u], times[t], durations[u]);
+            evaluate_with(r, "%s", source, false);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     runner r = { 0 };
     r.print = argc == 2 && strcmp(argv[1], "--print") == 0;
@@ -1046,6 +1177,10 @@ int main(int argc, char **argv) {
     duration_round_plain(&r);
     duration_total(&r);
     duration_text_and_arithmetic(&r);
+    date_differences(&r);
+    date_time_differences(&r);
+    time_differences(&r);
+    additions(&r);
     sjs_vm_destroy(r.vm);
     sjs_context_destroy(r.context);
     if (live != 0) {

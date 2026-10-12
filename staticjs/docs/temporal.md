@@ -281,6 +281,27 @@ temporal-polyfill, less than a month in the specification), and a
 floating-point division rounds differently. staticjs follows the
 specification (and @js-temporal/polyfill).
 
+## add, subtract, until and since
+
+`iso_add` (AddDurationToDate, ...DateTime, ...Time): the Duration is read
+as `from` reads one, negated for `subtract`. A PlainDate adds its years,
+months and weeks and the time's whole days (toward zero) with `add_date`,
+the day constrained or rejected (`overflow`); a PlainDateTime adds the
+time first, and the days it carries (toward negative infinity) go with
+the date, then within the date-time limits; a PlainTime adds the 24-hour
+days and time around the clock, and leaves years, months and weeks out.
+
+`iso_difference` (DifferenceTemporalPlainDate, ...DateTime, ...Time): the
+other value is read as `from` reads one; `difference_options` is
+GetDifferenceSettings: the units of the type (a date's day to year, a
+time's nanosecond to hour), `smallestUnit` by default the least, a
+`largestUnit` of "auto" (the default) the larger of a day (an hour for a
+time) and `smallestUnit`, `roundingMode` `trunc`, negated for `since`
+(`ceil` and `floor` swap, as do their half modes), whose result is
+negated. A date's difference is `date_until`, rounded relative to it
+unless to a day by 1; a date and time's is `difference_rounded`; a
+time's is its nanoseconds rounded.
+
 ## Rounding
 
 `round_to` rounds an int64 of nanoseconds to a multiple of an increment by
@@ -323,23 +344,24 @@ leaves them out).
   (and increments of the largest unit), `round` without one over every
   unit up to a day, its increments and modes and largest units, `total`
   in every unit, `toString`'s digits by every mode, `compare`, `add` and
-  `subtract`. Check them against @js-temporal/polyfill too, outside the
+  `subtract`. The other types': `until` and `since` between dates at month
+  ends, leap days and the limits over every pair of units and mode (a
+  date's by increments too), between dates and times on either side of
+  each other's time, and between times over every increment; `add` and
+  `subtract` of durations at month ends and leap days by each
+  `overflow`. Check them against @js-temporal/polyfill too, outside the
   tests: a value staticjs gives must be both polyfills', and a line on
   which they disagree must fault (deliberately, where temporal-polyfill
   gives a value) or be left out.
 
 ## Status and notes for the next types
 
-- PlainDate: built, but `add`, `subtract`, `until` and `since` (they take
-  or give a Duration), which fault saying they are not built yet.
-  `toZonedDateTime`, `toPlainYearMonth`, `toPlainMonthDay`, `withCalendar`
-  and `toLocaleString` fault.
-- PlainTime and PlainDateTime: built, but `add`, `subtract`, `until` and
-  `since` (they fault as a PlainDate's do). A PlainDateTime's
-  `toZonedDateTime` and `withCalendar` fault. Their arithmetic is on the
-  time of day as an int64 of nanoseconds and on days since the epoch
-  (`time_of_day`, `epoch_days`, `date_of_days`); a Duration's `add` to
-  them can use the same, with `round_iso`'s day carry and limit check.
+- PlainDate: built. `toZonedDateTime`, `toPlainYearMonth`,
+  `toPlainMonthDay`, `withCalendar` and `toLocaleString` fault.
+- PlainTime and PlainDateTime: built. A PlainDateTime's `toZonedDateTime`
+  and `withCalendar` fault. Their arithmetic is on the time of day as an
+  int64 of nanoseconds and on days since the epoch (`time_of_day`,
+  `epoch_days`, `date_of_days`), and a Duration's time as a wide integer.
 - Duration: built, but `toLocaleString`, which faults (locale data), and
   a ZonedDateTime `relativeTo`.
 - Instant and Temporal.Now: the host clock (docs/builtins-status.md, the
