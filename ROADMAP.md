@@ -57,10 +57,13 @@ guide and the headers. Three decisions replace theirs:
   session owns `tinyactors-napi/`. They run in parallel after M0.
 - **Each binding keeps its own roadmap**, `tinyactors-cpython/ROADMAP.md`
   and `tinyactors-napi/ROADMAP.md`: the session's plan and progress for
-  its milestone (M1's scope and gates copied from here, with a link back)
-  and its "Requests to core". A binding session never edits this file;
-  the coordinator reads theirs, moves requests into "Requests to core"
-  below, and marks milestones done here.
+  its milestone (M1's scope and gates copied from here, with a link back,
+  and "M1 done means"), how the work runs for that session (these rules
+  as they apply to it), and its "Requests to core". The binding's
+  `AGENTS.md` holds only the binding's own rules, true whatever the
+  milestone. A binding session never edits this file; the coordinator
+  reads theirs, moves requests into "Requests to core" below, and marks
+  milestones done here.
 - **Core is frozen for the binding sessions.** A gap in core is written
   under "Requests to core" in the binding's own `ROADMAP.md` (what, why,
   which test shows it) and the binding waits or works around nothing. The
@@ -271,9 +274,11 @@ reasoned-analysis review of both and the maintainer's decisions:
   requests to core (`a5fa4e43`, `b2d54c42`; "Rules for the work").
 - **The adapters use the binding's own CBOR** (M1, below), and their lint
   refuses any other package (`e64e96bb`).
-- **"M1 done means"** in each binding's `AGENTS.md`; the alignment core
-  asks for (at most 8) and Bun's resolving the package by name, checked
-  in place of two unverified notes (`a5fa4e43`, `b2d54c42`).
+- **"M1 done means"** in each binding's `ROADMAP.md` (first written in
+  its `AGENTS.md`, which now holds only the binding's rules); the
+  alignment core asks for (at most 8) and Bun's resolving the package by
+  name, checked in place of two unverified notes (`a5fa4e43`,
+  `b2d54c42`).
 - **The root's checks reach the bindings:** `check-portability` scans
   `*/mise/*.rb` and `check-acronyms` `.py` files (`bf7c2f65`), and each
   binding's lint runs both on its own paths (`acf7be61`, `1195cccb`).
@@ -328,8 +333,8 @@ the basics scenario and the outcome canaries) on both datamodels, which
 holds `values.txt` round trips on the native datamodel; the value
 table's own tests; mapping table; layer lints and no mutable globals.
 **Then the API review**, both bindings side by side: how a Python chart
-reads, how a Node program reads. Each binding's `AGENTS.md` has "M1 done
-means", and its own `ROADMAP.md` the plan and progress.
+reads, how a Node program reads. Each binding's own `ROADMAP.md` has
+"M1 done means", the plan and progress.
 
 Pitfalls each binding handles in M1, with a test of its own for each (the
 suite cannot see them; spikes and their review: the reasoned-analysis
@@ -596,7 +601,7 @@ same sources a second time without `Py_LIMITED_API` for the free-threaded
 `PyDict_GetItemRef`, `PyList_GetItemRef`, `Py_mod_gil` and
 `PyType_GetModuleByDef` are limited from 3.13, so the same calls compile
 in both builds (a spike compiled every CPython function the cpython
-`AGENTS.md` names for M1 against 3.13.16's headers with
+`AGENTS.md` names against 3.13.16's headers with
 `Py_LIMITED_API 0x030D0000`; at 3.12, those four and `PyMem_Raw*` are
 undeclared). Module state comes from `PyType_GetModuleByDef` and
 `METH_METHOD`. A free-threaded wheel waits for the stable ABI of
