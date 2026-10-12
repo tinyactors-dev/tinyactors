@@ -2184,6 +2184,53 @@ static sjs_result unit_value(sjs_vm *vm, unit_request request, uint32_t *out) {
     return SJS_OK;
 }
 
+static rounding_mode negated_mode(rounding_mode mode) {
+    switch (mode) {
+    case MODE_CEIL:
+        return MODE_FLOOR;
+    case MODE_FLOOR:
+        return MODE_CEIL;
+    case MODE_HALF_CEIL:
+        return MODE_HALF_FLOOR;
+    case MODE_HALF_FLOOR:
+        return MODE_HALF_CEIL;
+    default:
+        return mode;
+    }
+}
+
+/* GetDifferenceSettings of until and since: the units of the receiver's
+ * type (a date's day to year, a time's nanosecond to hour, both for a date
+ * and time), smallestUnit by default the least of them but a date's day,
+ * largestUnit by default ("auto") the larger of smallestUnit and a day (an
+ * hour for a time); roundingMode trunc by default, its direction negated
+ * for since; an increment of a time unit divides the unit above. */
+typedef struct {
+    sjs_value options;
+    sjs_temporal_type type;
+    bool since;
+} difference_request;
+
+static sjs_result difference_options(sjs_vm *vm, difference_request request, difference_settings *out) {
+    sjs_temporal_type type = request.type;
+    unit_range range = { type == SJS_TEMPORAL_PLAIN_DATE ? UNIT_DAY : UNIT_NANOSECOND, type == SJS_TEMPORAL_PLAIN_TIME ? UNIT_HOUR : UNIT_YEAR };
+    time_unit fallback = type == SJS_TEMPORAL_PLAIN_DATE ? UNIT_DAY : UNIT_NANOSECOND;
+    time_unit default_largest = type == SJS_TEMPORAL_PLAIN_TIME ? UNIT_HOUR : UNIT_DAY;
+    uint32_t largest;
+    uint32_t smallest;
+    *out = (difference_settings){ UNIT_DAY, fallback, 1, MODE_TRUNC };
+    if (unit_value(vm, (unit_request){ request.options, "largestUnit", range, true }, &largest) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (increment_option(vm, request.options, &out->increment) != SJS_OK || mode_option(vm, request.options, &out->mode) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (request.since) out->mode = negated_mode(out->mode);
+    if (unit_value(vm, (unit_request){ request.options, "smallestUnit", range, false }, &smallest) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (smallest != UNIT_NONE) out->smallest = (time_unit)smallest;
+    time_unit larger = out->smallest > default_largest ? out->smallest : default_largest;
+    out->largest = largest == UNIT_NONE || largest == UNIT_AUTO ? larger : (time_unit)largest;
+    if (out->largest < out->smallest) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a largestUnit smaller than the smallestUnit");
+    if (out->smallest < UNIT_DAY) return check_increment(vm, out->increment, out->smallest);
+    return SJS_OK;
+}
+
 /* relativeTo: a PlainDate's date, or a PlainDateTime's, a string's or an
  * object's fields' (with their time, which is read but not used);
  * `*given` false when it is undefined. JavaScript reads a time zone, an
@@ -2916,6 +2963,80 @@ static sjs_result duration_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *
     }
 }
 
+/* ------------------------------------------------------------------------
+ * add, subtract, until and since of a PlainDate, a PlainTime and a
+ * PlainDateTime
+ */
+
+/* add(duration, options) and subtract: a date adds the years and months
+ * (the day constrained to the month, or rejected: overflow), then the
+ * weeks and the days, with the time's whole days (toward zero); a time
+ * adds the days and time, around the clock (the years, months and weeks
+ * are not used); a date and time adds the time, then the date with the
+ * days the time carried. */
+static sjs_result iso_add(sjs_vm *vm, sjs_leaf_call *call, bool subtract) {
+    const sjs_temporal *t = SJS_AS_TEMPORAL(call->receiver);
+    sjs_temporal_type type = (sjs_temporal_type)t->h.flags;
+    double f[DURATION_FIELD_COUNT];
+    if (to_duration(vm, arg_of(call, 0), f) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (subtract) negate_fields(f);
+    internal_duration d = internal_of(f, true);
+    sjs_iso_date_time made = t->as.iso;
+    wide rest;
+    if (type == SJS_TEMPORAL_PLAIN_TIME) {
+        wide_floor(wide_add(d.time, wide_of(time_of_day(&made))), (u128){ 0, (uint64_t)NS_PER_DAY }, &rest);
+        set_time_of_day(&made, wide_int64(rest));
+        return new_iso(vm, (iso_value){ type, &made }, &call->result);
+    }
+    bool reject;
+    if (overflow_rejects(vm, arg_of(call, 1u), &reject) != SJS_OK) return SJS_ERR_PROGRAM;
+    int64_t days;
+    if (type == SJS_TEMPORAL_PLAIN_DATE) {
+        days = wide_int64(wide_quotient(d.time, (u128){ 0, (uint64_t)NS_PER_DAY }, &rest));
+        rest = wide_of(0);
+    } else {
+        days = wide_int64(wide_floor(wide_add(d.time, wide_of(time_of_day(&made))), (u128){ 0, (uint64_t)NS_PER_DAY }, &rest));
+    }
+    int64_t added;
+    if (add_date(vm, (date_addition){ &made, { d.date.years, d.date.months, d.date.weeks, days }, reject }, &added) != SJS_OK) return SJS_ERR_PROGRAM;
+    date_of_days(added, &made);
+    set_time_of_day(&made, wide_int64(rest));
+    if (type == SJS_TEMPORAL_PLAIN_DATE_TIME && !within_limits(&made, true)) return outside_limits(vm);
+    return new_iso(vm, (iso_value){ type, &made }, &call->result);
+}
+
+/* until(other, options) and since: the Duration from the receiver to
+ * other (since: negated), rounded as difference_options say: a date's in
+ * calendar units, a time's of the clock, a date and time's both. */
+static sjs_result iso_difference(sjs_vm *vm, sjs_leaf_call *call, bool since) {
+    const sjs_temporal *t = SJS_AS_TEMPORAL(call->receiver);
+    sjs_temporal_type type = (sjs_temporal_type)t->h.flags;
+    sjs_iso_date_time other;
+    difference_settings s;
+    if (convert(vm, (conversion){ type, { arg_of(call, 0), sjs_undefined() } }, &other) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (difference_options(vm, (difference_request){ arg_of(call, 1u), type, since }, &s) != SJS_OK) return SJS_ERR_PROGRAM;
+    const sjs_iso_date_time *from = &t->as.iso;
+    internal_duration d = { { 0, 0, 0, 0 }, wide_of(0) };
+    time_unit largest = s.largest;
+    if (type == SJS_TEMPORAL_PLAIN_TIME) {
+        u128 increment = u128_mul((u128){ 0, (uint64_t)UNIT_NANOSECONDS[s.smallest] }, (uint64_t)s.increment);
+        d.time = round_wide(wide_of(time_of_day(&other) - time_of_day(from)), (wide_rounding){ increment, s.mode });
+    } else if (type == SJS_TEMPORAL_PLAIN_DATE_TIME) {
+        if (difference_rounded(vm, (rounded_difference){ { from, &other }, s }, &d) != SJS_OK) return SJS_ERR_PROGRAM;
+    } else if (compare_dates(from, &other) != 0) {
+        largest = UNIT_DAY;
+        d.date = date_until(from, &other, s.largest);
+        if (s.smallest != UNIT_DAY || s.increment != 1) {
+            relative_rounding r = { d, epoch_nanoseconds(days_of(&other), 0), from, s };
+            if (round_relative(vm, &r, &d) != SJS_OK) return SJS_ERR_PROGRAM;
+        }
+    }
+    double f[DURATION_FIELD_COUNT];
+    fields_of_internal((duration_balance){ d, largest }, f);
+    if (since) negate_fields(f);
+    return new_duration(vm, f, &call->result);
+}
+
 sjs_result sjs_temporal_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     if (call->receiver.kind != SJS_TEMPORAL) return sjs_vm_fault(vm, "this method is a Temporal value's");
     const sjs_temporal *t = SJS_AS_TEMPORAL(call->receiver);
@@ -2952,9 +3073,10 @@ sjs_result sjs_temporal_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
         return sjs_vm_fault(vm, "JavaScript throws a TypeError for valueOf of a Temporal value: compare with equals or compare");
     case SJS_METHOD_TEMPORAL_ADD:
     case SJS_METHOD_TEMPORAL_SUBTRACT:
+        return iso_add(vm, call, id == SJS_METHOD_TEMPORAL_SUBTRACT);
     case SJS_METHOD_TEMPORAL_UNTIL:
     case SJS_METHOD_TEMPORAL_SINCE:
-        return sjs_vm_fault(vm, "staticjs does not build add, subtract, until and since of a PlainDate, a PlainTime or a PlainDateTime yet: they take or give a Temporal.Duration");
+        return iso_difference(vm, call, id == SJS_METHOD_TEMPORAL_SINCE);
     case SJS_METHOD_TEMPORAL_TO_ZONED_DATE_TIME:
         return sjs_vm_fault(vm, "staticjs has no Temporal.ZonedDateTime: it needs time zone data");
     case SJS_METHOD_TEMPORAL_WITH_CALENDAR:

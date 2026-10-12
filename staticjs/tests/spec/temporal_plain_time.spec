@@ -541,21 +541,52 @@ new Temporal.PlainTime(12, 30).toLocaleString()
 new Temporal.PlainTime(12, 30).valueOf()
 --- fault valueOf
 
-=== add needs Temporal.Duration, deliberate
-new Temporal.PlainTime(12, 30).add({ hours: 1 }).hour
---- fault does not build add, subtract, until and since
+=== add
+[new Temporal.PlainTime(12, 30).add({ hours: 1 }), new Temporal.PlainTime(12, 30).add("PT12H"), new Temporal.PlainTime(12, 30).add("-PT13H"), new Temporal.PlainTime(12, 30).add("PT0.000000001S")]
+--- value
+[Temporal.PlainTime.from("13:30:00"),Temporal.PlainTime.from("00:30:00"),Temporal.PlainTime.from("23:30:00"),Temporal.PlainTime.from("12:30:00.000000001")]
 
-=== subtract, deliberate
-new Temporal.PlainTime(12, 30).subtract({ hours: 1 }).hour
---- fault does not build add, subtract, until and since
+=== add wraps around midnight, and leaves the date units out
+[new Temporal.PlainTime(23, 59, 59, 999, 999, 999).add("PT0.000000001S"), new Temporal.PlainTime(12).add("P1Y2M3W"), new Temporal.PlainTime(12).add("P1DT1H")]
+--- value
+[Temporal.PlainTime.from("00:00:00"),Temporal.PlainTime.from("12:00:00"),Temporal.PlainTime.from("13:00:00")]
 
-=== until, deliberate
-new Temporal.PlainTime(12, 30).until("13:00").hours
---- fault does not build add, subtract, until and since
+=== subtract
+[new Temporal.PlainTime(0).subtract("PT1S"), new Temporal.PlainTime(12, 30).subtract({ minutes: 45 })]
+--- value
+[Temporal.PlainTime.from("23:59:59"),Temporal.PlainTime.from("11:45:00")]
 
-=== since, deliberate
-new Temporal.PlainTime(12, 30).since("10:00").hours
---- fault does not build add, subtract, until and since
+=== add takes no options it reads
+new Temporal.PlainTime(12).add("PT1H", { overflow: "reject" })
+--- value
+Temporal.PlainTime.from("13:00:00")
+
+=== until in hours by default
+[new Temporal.PlainTime(12, 30).until("13:00"), new Temporal.PlainTime(12, 30).until("01:15:30.5"), new Temporal.PlainTime(12, 30).until(new Temporal.PlainTime(12, 30))]
+--- value
+[Temporal.Duration.from("PT30M"),Temporal.Duration.from("-PT11H14M29.5S"),Temporal.Duration.from("PT0S")]
+
+=== until with a largest unit and rounding
+[new Temporal.PlainTime(0).until("23:59:59.999999999", { largestUnit: "second" }), new Temporal.PlainTime(0).until("23:59:59.5", { smallestUnit: "second", roundingMode: "halfEven" }), new Temporal.PlainTime(0).until("23:59:58.5", { smallestUnit: "second", roundingMode: "halfEven" }), new Temporal.PlainTime(0).until("01:07:30", { smallestUnit: "minute", roundingIncrement: 15 })]
+--- value
+[Temporal.Duration.from("PT86399.999999999S"),Temporal.Duration.from("PT24H"),Temporal.Duration.from("PT23H59M58S"),Temporal.Duration.from("PT1H")]
+
+=== since
+[new Temporal.PlainTime(13).since("12:30"), new Temporal.PlainTime(13).since("12:30:30", { smallestUnit: "minute", roundingMode: "floor" })]
+--- value
+[Temporal.Duration.from("PT30M"),Temporal.Duration.from("PT29M")]
+
+=== until with a date unit
+new Temporal.PlainTime(13).until("12:30", { largestUnit: "day" })
+--- fault this method does not round to
+
+=== until with an increment of an hour that does not divide a day
+new Temporal.PlainTime(13).until("12:30", { smallestUnit: "hour", roundingIncrement: 5 })
+--- fault does not divide
+
+=== until of a date
+new Temporal.PlainTime(13).until("2024-01-01")
+--- fault PlainTime from an ISO 8601 time
 
 # --- A PlainTime among other values
 
