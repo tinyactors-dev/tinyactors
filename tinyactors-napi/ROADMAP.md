@@ -188,6 +188,35 @@ Gaps in core or in the suite this session found. Each says what is
 missing, why, and which suite case or test shows it; the coordinator
 moves it into the root ROADMAP.md's "Requests to core" and answers there.
 
+- **The runner skips, for a binding, the request and config vectors its
+  API cannot send** (2026-10-12). The same gap as the Python session's
+  first request (`tinyactors-cpython/ROADMAP.md`, "Requests to core",
+  1), found here independently by a fresh agent's refutation of
+  `docs/decisions.md` ("The Host's API"); one answer serves both
+  bindings.
+  - *What is missing:* `tinyactors-test/lib/runner.rb` sends every case of
+    `requests.txt` and `config.txt` to a binding's adapter. The cases
+    that send bytes no `request(method, params)` can make (bindings.md,
+    section 10: "build the map from the caller's arguments") and no
+    config value can encode: config.txt "not CBOR" (`ff`), and
+    requests.txt's "not CBOR", "not a map", "a batch", "no method, no
+    id", "no method", "a member a request does not have", "id is not an
+    integer, text or null", "id is not a float", the notifications ("no
+    reply", "no error either", "applied", "a request that is not one is
+    answered") and "more items than a request holds" (no `id`). The
+    adapter may use only the public API (`tinyactors-test/lint`), so it
+    could pass them only by writing core's replies itself, a twin of
+    core's request parsing (bindings.md, section 2).
+  - *What we ask:* as the Python session asks: for `--kind binding`, the
+    runner skips, with a reason, a request case unless each send is a map
+    of `method`, an `id` (integer, text or null) and optionally `params`,
+    and a config case whose bytes are not one CBOR item; and
+    `docs/driver.md` says a binding's adapter writes each reply from what
+    its API returned or raised, with the call's `id`.
+  - *Which test shows it:* `mise run conform -- --suite protocol` here
+    once the adapter offers the vector methods (ROADMAP.md, M1, step 5):
+    these cases fail, and the protocol suite stays out of `mise run
+    test`'s gate (`GATE` in `mise/napi.rb`) until the runner skips them.
 - **A binding cannot read a host's tick rate** (2026-10-12).
   - *What is missing:* a way to read the `ticksPerSecond` a host runs on
     after `ta_host_create` filled the config's defaults: a member of a
