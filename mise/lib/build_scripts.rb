@@ -31,11 +31,12 @@ module BuildScripts
   module_function
 
   # The tracked Ruby build scripts, as paths relative to the root; with
-  # `within`, a project's directory, only those under it (a binding's lint
-  # checks its own scripts).
+  # `within`, a project's directory, only those under it, untracked ones
+  # too (a binding's lint checks its own scripts before they are added).
   def paths(within = nil)
     patterns = DIRECTORIES.flat_map { |directory| [directory, "*/#{directory}/*"] } + PROJECT_LIBRARIES
-    out, status = Open3.capture2('git', 'ls-files', '-z', '--', *patterns, chdir: ROOT.to_s)
+    untracked = within ? %w[--others --exclude-standard] : []
+    out, status = Open3.capture2('git', 'ls-files', '-z', '--cached', *untracked, '--', *patterns, chdir: ROOT.to_s)
     raise Toolchain::Error, 'git ls-files failed' unless status.success?
 
     prefix = within && "#{within.to_s.chomp('/')}/"
