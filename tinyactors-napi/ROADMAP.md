@@ -186,4 +186,31 @@ Gaps in core or in the suite this session found. Each says what is
 missing, why, and which suite case or test shows it; the coordinator
 moves it into the root ROADMAP.md's "Requests to core" and answers there.
 
-None yet.
+- **A binding cannot read a host's tick rate** (2026-10-12).
+  - *What is missing:* a way to read the `ticksPerSecond` a host runs on
+    after `ta_host_create` filled the config's defaults: a member of a
+    reply (`host.stats`, or a request that answers the effective config)
+    or a field the create call writes.
+  - *Why:* the binding drives the host's monotonic clock from the
+    runtime's (`performance.now()`, milliseconds) and from
+    `SimulatedClock.increment(ms)` (ROADMAP.md, M1), so it converts
+    milliseconds to ticks before every `ta_host_advance_time`. Without
+    `ticksPerSecond` in the config, the system's default applies:
+    `1000000000` (`tinyactors-core/src/system/system.c:43`), which no
+    header or doc states (`include/tinyactors/system.h:82` has the field
+    without a default; `docs/host-config.md:79-83` says "0 or absent: the
+    system's default, `ta_system_config` in `tinyactors/system.h`"), and
+    a binding may not copy it ("No defaults ... of the binding's own",
+    `docs/bindings.md` section 13). `bindings.md` sections 3 and 7 say
+    "the config's `ticksPerSecond`, 1000 for milliseconds", which a
+    config without the key does not have.
+  - *Which test shows it:* a host created with `{"systemID": "h"}` (the
+    first case of `tinyactors-test/suites/protocol/config.txt`) and a
+    `<send delay="50ms">`: the binding cannot compute the `monotonic` of
+    the turn 50 ms later. The suite's configs all give
+    `ticksPerSecond` 1000, so the suite does not fail; the binding's own
+    test of a real-clock delayed send on a config without it will.
+  - *Until then:* the binding converts with the `ticksPerSecond` of the
+    config the application gave (its own value, not a default), and a
+    host whose config has none refuses the clock's calls with
+    `TA_ERROR_UNSUPPORTED`; nothing else waits on this.
