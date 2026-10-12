@@ -117,14 +117,20 @@ failures, refusal during a run, threads, garbage collection, liveness.
 2. **`ta-conform`**, the C reference implementation of that protocol, in
    `tinyactors-core/tools/conform/`. Core's `mise run test` runs the suite
    against it, in place of `run_protocol.c` and `run_w3c.c`; the sources
-   table in `AGENTS.md` gets a `tinyactors-test` row.
+   table in `AGENTS.md` gets a `tinyactors-test` row. Done: every method
+   of `docs/driver.md` (`1526c3da`, `7d860a0d`); `mise run conform` runs
+   every suite on quickjs, scenarios and W3C in isolated realms, and W3C on
+   the tests' datamodel with its skip list; `run_protocol.c`, `run_w3c.c`,
+   `run_c.c` and `tests/conformance` are deleted, their checks moved into
+   unit tests (`47afc430`).
 3. **Scenarios**, ported from `tinyactors-core/tests/conformance`
    (basics, invoke, hibernate, migrate, snapshot) into
    `tinyactors-test/suites/scenarios` as self-checking charts; each
    `steps.txt` names the expectations a chart cannot check and the C test
    that covers them. Nothing is recorded: `ta-conform` runs them
-   (`scenario.run`) and they must pass. Ported with item 1; what remains
-   is running them through `ta-conform`.
+   (`scenario.run`) and they must pass. Done: ported with item 1, run
+   through `ta-conform` with item 2 (`7d860a0d`), and each expectation a
+   chart cannot check is in a unit test (`47afc430`).
 4. **The project skeletons** `tinyactors-napi/` and `tinyactors-cpython/`
    (`mise.toml`, tasks, lint configuration with the typedef exemption,
    empty mapping tables), and the changelog components in
