@@ -105,9 +105,13 @@ value's `add`, with the variable's value as an ordinary call's receiver
 (its cases are in `mutation.spec`). The compiler cannot tell a Temporal
 value from a set by its name, so the rules of a mutation still apply at
 compile time: `d.add(x)` is refused where `d` was copied before or an
-arrow function captures it (`[1, 2].map(n => d.add({ days: n }))`), and
-`d.add(x).add(y)` faults; `d.add(x)` on any other expression, a path
-(`o.d.add(x)`) or a parameter is an ordinary call.
+arrow function captures it (`[1, 2].map(n => d.add({ days: n }))`), where
+`d` is read twice in one array (`[d.add(a), d.add(b)]`), and on a path
+(`o.d.add(x)`) or a parameter that an arrow function captures; and
+`d.add(x).add(y)` faults when it runs, on a variable or a parameter. On
+any other expression `add` is an ordinary call. What works instead:
+`Temporal.PlainDate.from(d).add(x)`, a `reduce`, or a new variable for
+each step (`const e = d.add(x); e.add(y)`).
 
 A method ID is a byte (`sjs_name.methods`); `internal.h` asserts that the
 last fits. `SJS_METHOD_FIRST` is 96, so functions have IDs below it.
