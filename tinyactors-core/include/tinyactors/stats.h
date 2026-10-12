@@ -53,7 +53,7 @@ typedef struct ta_system_stats {
 
 /* What one chart's actors did in one system (ta_system_chart_stats_get), or
  * in every segment of a host that has a chart of that name, retired ones
- * included (the host's `stats` request, docs/requests.md). Counted once per scheduling turn and on
+ * included (the host's `host.stats` method, docs/requests.md). Counted once per scheduling turn and on
  * the paths that fail or change an actor's lifecycle, never per event. */
 typedef struct ta_chart_stats {
     uint32_t size;

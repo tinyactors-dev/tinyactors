@@ -875,7 +875,7 @@ static void test_state_value(void) {
     CHECK(strcmp(value, "{\"top\":{\"p\":{\"r1\":\"x\",\"r2\":{},\"r3\":{\"k\":\"k1\"}}}}") == 0);
     /* a reply that does not fit: measured, nothing written past the room */
     static host_ask a;
-    ta_cbor_writer *w = ask_begin(&a, "state", 1);
+    ta_cbor_writer *w = ask_begin(&a, "actor.state", 1);
     ta_cbor_write_text(w, ta_string("session"));
     ta_cbor_write_uint(w, session);
     CHECK_EQUAL(ask_send(e.host, &a), TA_OK);

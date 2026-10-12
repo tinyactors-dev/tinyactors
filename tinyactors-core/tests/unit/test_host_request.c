@@ -349,7 +349,7 @@ static void test_create(void) {
     CHECK(host != NULL && text[0] == 0);
     memset(bytes, 0, sizeof bytes); /* nothing points into the config afterwards */
     static host_ask a;
-    ask_begin(&a, "stats", 0);
+    ask_begin(&a, "host.stats", 0);
     CHECK_EQUAL(ask_send(host, &a), TA_OK);
     CHECK_EQUAL(ask_uint(&a, ask_field(&a, 0, "host"), "segments"), 0u);
     ta_buffer traces = {NULL, 0, 0};

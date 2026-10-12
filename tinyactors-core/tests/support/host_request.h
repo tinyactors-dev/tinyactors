@@ -80,22 +80,22 @@ TEST_UNUSED static uint64_t ask_uint(const host_ask *a, uint32_t map, const char
     return a->document.tokens[at].value;
 }
 
-/* {"method": "stats"}: one of the host's counters ("actors", "routed", ...). */
+/* {"method": "host.stats"}: one of the host's counters ("actors", "routed", ...). */
 TEST_UNUSED static uint64_t host_stat(ta_host *host, const char *field) {
     static host_ask a;
-    ask_begin(&a, "stats", 0);
+    ask_begin(&a, "host.stats", 0);
     if (ask_send(host, &a) != TA_OK) return UINT64_MAX;
     uint32_t stats = ask_field(&a, 0, "host");
     return stats == TA_NIL ? UINT64_MAX : ask_uint(&a, stats, field);
 }
 
-/* {"method": "state", "params": {"session": session}}: the result's "value" in diagnostic
+/* {"method": "actor.state", "params": {"session": session}}: the result's "value" in diagnostic
  * notation into text (cut to fit), or the error reply's text; the status of
  * ta_host_request. */
 TEST_UNUSED static ta_status ask_state(ta_host *host, uint64_t session, char *text,
                                        size_t capacity) {
     static host_ask a;
-    ta_cbor_writer *w = ask_begin(&a, "state", 1);
+    ta_cbor_writer *w = ask_begin(&a, "actor.state", 1);
     ta_cbor_write_text(w, ta_string("session"));
     ta_cbor_write_uint(w, session);
     ta_status status = ask_send(host, &a);
@@ -116,12 +116,12 @@ TEST_UNUSED static ta_status ask_state(ta_host *host, uint64_t session, char *te
     return TA_OK;
 }
 
-/* {"method": "stats"}'s "host" map as a ta_host_stats (out->size: set by this). */
+/* {"method": "host.stats"}'s "host" map as a ta_host_stats (out->size: set by this). */
 TEST_UNUSED static void host_stats_fill(ta_host *host, ta_host_stats *out) {
     static host_ask a;
     memset(out, 0, sizeof *out);
     out->size = sizeof *out;
-    ask_begin(&a, "stats", 0);
+    ask_begin(&a, "host.stats", 0);
     if (ask_send(host, &a) != TA_OK) return;
     uint32_t m = ask_field(&a, 0, "host");
     out->segments = (uint32_t)ask_uint(&a, m, "segments");
@@ -137,12 +137,12 @@ TEST_UNUSED static void host_stats_fill(ta_host *host, ta_host_stats *out) {
     out->fuel_clock = ask_uint(&a, m, "fuelClock");
 }
 
-/* {"method": "stats"}'s "charts" into out (up to capacity); returns how many
+/* {"method": "host.stats"}'s "charts" into out (up to capacity); returns how many
  * there are. Names point into a reply buffer the next call reuses. */
 TEST_UNUSED static uint32_t host_chart_stats_fill(ta_host *host, ta_chart_stats *out,
                                                   uint32_t capacity) {
     static host_ask a;
-    ask_begin(&a, "stats", 0);
+    ask_begin(&a, "host.stats", 0);
     if (ask_send(host, &a) != TA_OK) return 0;
     uint32_t charts = ask_field(&a, 0, "charts"), count = a.document.tokens[charts].count;
     uint32_t at = charts + 1;
@@ -167,11 +167,11 @@ TEST_UNUSED static uint32_t host_chart_stats_fill(ta_host *host, ta_chart_stats 
     return count;
 }
 
-/* {"method": "actors"}: up to out.capacity sessions from *cursor (0 to start);
+/* {"method": "actor.list"}: up to out.capacity sessions from *cursor (0 to start);
  * returns how many, 0 when every session was listed. */
 TEST_UNUSED static uint32_t host_actors_page(ta_host *host, uint64_t *cursor, ta_uint64_array out) {
     static host_ask a;
-    ta_cbor_writer *w = ask_begin(&a, "actors", 2);
+    ta_cbor_writer *w = ask_begin(&a, "actor.list", 2);
     ta_cbor_write_text(w, ta_string("cursor"));
     ta_cbor_write_uint(w, *cursor);
     ta_cbor_write_text(w, ta_string("limit"));

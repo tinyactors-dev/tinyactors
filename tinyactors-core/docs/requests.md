@@ -134,7 +134,7 @@ Ends a watch early. Param: `id` (uint, required). Result: `{}`. Errors:
    "data": {"reason": "stale", "path": "params.id"}}}
 ```
 
-### `stats`
+### `host.stats`
 
 The host's counters (`ta_host_stats`) and each chart's
 (`ta_chart_stats`), summed by chart name over every segment, retired
@@ -150,7 +150,7 @@ Result: `{"host": {...}, "charts": [...]}`:
 All the numbers are unsigned integers.
 
 ```
-{"id": 1, "method": "stats"}
+{"id": 1, "method": "host.stats"}
 → {"id": 1, "result": {"host": {"segments": 1, "actors": 1, "hibernated": 0, "runnable": 0, "jobs": 0,
    "regionBytes": 131072, "delivered": 0, "routed": 0, "migrated": 0, "retired": 0,
    "fuelClock": 3},
@@ -159,7 +159,7 @@ All the numbers are unsigned integers.
    "errorsCommunication": 0, "errorsPlatform": 0, "faults": 0}]}}
 ```
 
-### `actors`
+### `actor.list`
 
 Lists the host's sessions, one page at a time.
 
@@ -172,11 +172,11 @@ Result: `{"sessions": [uint, ...], "cursor": uint or null}`. `null` means
 every session was listed. Errors: `type`, `range`.
 
 ```
-{"id": 1, "method": "actors", "params": {"limit": 2}}
+{"id": 1, "method": "actor.list", "params": {"limit": 2}}
 → {"id": 1, "result": {"sessions": [1, 2], "cursor": 2}}   (opaque: send it back as it is)
 ```
 
-### `actor`
+### `actor.get`
 
 One session. Param: `session` (uint, required).
 
@@ -189,7 +189,7 @@ Result: `{"session", "segment", "chart", "parent", "mailbox", "invocations"}`:
 Errors: `missing`, `type`, `stale`.
 
 ```
-{"id": 1, "method": "actor", "params": {"session": 1}}
+{"id": 1, "method": "actor.get", "params": {"session": 1}}
 → {"id": 1, "result": {"session": 1, "segment": 0, "chart": "pinged", "parent": null,
    "mailbox": 0, "invocations": 0}}
 ```
@@ -216,7 +216,7 @@ its vtable, as with a binding's own datamodel, which keeps its scope).
 
 `actor.subscribe` asks for a `TA_EFFECT_CHANGED` effect each run in which
 the session finished a macrostep: at most one per session per run, after
-which the binding reads what it needs (`state`, `actor.context`). Other
+which the binding reads what it needs (`actor.state`, `actor.context`). Other
 sessions cost nothing. Subscribing twice is one subscription; a session that
 ends leaves the list. `actor.unsubscribe` stops it. Param: `session` (uint,
 required). Result: `{}`.
@@ -237,7 +237,7 @@ unsubscribe: not subscribed), `limit` (-32003: the host holds
 → {"id": 1, "result": {}}
 ```
 
-### `state`
+### `actor.state`
 
 A session's configuration as a nested state value, in the shape of xstate's
 `value`:
@@ -251,7 +251,7 @@ Param: `session` (uint, required). Result: `{"value": <state value>}`.
 Errors: `missing`, `type`, `stale`, `limit` (more than 1024 active states).
 
 ```
-{"id": 1, "method": "state", "params": {"session": 1}}
+{"id": 1, "method": "actor.state", "params": {"session": 1}}
 → {"id": 1, "result": {"value": {"top": {"p": {"r1": "x", "r2": {}, "r3": {"k": "k1"}}}}}}
 ```
 
@@ -319,8 +319,8 @@ binding gets the same answers.
 
 ### Steps
 
-1. **Name it `area.verb`**, like `trace.watch` (`stats`, `actor`: one word
-   when the area is the whole answer).
+1. **Name it `area.verb`**, like `trace.watch` or `actor.get`. A method
+   about the whole host is in the area `host` (`host.stats`).
 2. **Params:** name each (camelCase), its type, its default and its limits.
    Refuse params the method does not take.
 3. **The result:** a map with its keys in a fixed order.

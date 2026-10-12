@@ -16,7 +16,7 @@
 #include "host/host_internal.h"
 
 #define REQUEST_RULES      32u   /* trace rules a request holds */
-#define REQUEST_ACTORS     512u  /* sessions an "actors" reply holds */
+#define REQUEST_ACTORS     512u  /* sessions an "actor.list" reply holds */
 #define WATCH_SECONDS      900u  /* a watch's default length: 15 minutes */
 #define SAMPLE_WHOLE       1000000u
 #define TICKS_PER_SECOND   1000000000ull /* ta_system_config's default */
@@ -508,7 +508,7 @@ static void request_put_chart(request *r, const ta_chart_stats *chart) {
     cbor_output_uint(&r->out, chart->faults);
 }
 
-static void request_run_stats(request *r, uint32_t map) {
+static void request_run_host_stats(request *r, uint32_t map) {
     static const char *const fields[] = {NULL};
     if (!request_keys_known(r, map, NULL, 0, fields)) return;
     ta_host_stats stats;
@@ -556,7 +556,7 @@ static void request_run_stats(request *r, uint32_t map) {
     if (charts) host_free(r->host, charts, sizeof *charts * count);
 }
 
-static void request_run_actors(request *r, uint32_t map) {
+static void request_run_actor_list(request *r, uint32_t map) {
     static const char *const fields[] = {"cursor", "limit", NULL};
     uint64_t sessions[REQUEST_ACTORS], cursor, limit;
     if (!request_keys_known(r, map, NULL, 0, fields)) return;
@@ -596,7 +596,7 @@ static int request_read_session(request *r, uint32_t map, uint64_t *session, uin
     return 1;
 }
 
-static void request_run_actor(request *r, uint32_t map) {
+static void request_run_actor_get(request *r, uint32_t map) {
     static const char *const fields[] = {"session", NULL};
     uint64_t session;
     uint32_t segment, actor;
@@ -630,7 +630,7 @@ static void request_run_actor(request *r, uint32_t map) {
     cbor_output_uint(&r->out, info.invocations);
 }
 
-static void request_run_state(request *r, uint32_t map) {
+static void request_run_actor_state(request *r, uint32_t map) {
     static const char *const fields[] = {"session", NULL};
     uint64_t session;
     uint32_t segment, actor;
@@ -878,13 +878,13 @@ static const request_method REQUEST_METHODS[] = {
     {"trace.watch", request_run_trace_watch},
     {"trace.unwatch", request_run_trace_unwatch},
     {"trace.spans.decode", request_run_trace_spans_decode},
-    {"stats", request_run_stats},
-    {"actors", request_run_actors},
-    {"actor", request_run_actor},
+    {"host.stats", request_run_host_stats},
+    {"actor.list", request_run_actor_list},
+    {"actor.get", request_run_actor_get},
     {"actor.context", request_run_actor_context},
     {"actor.subscribe", request_run_actor_subscribe},
     {"actor.unsubscribe", request_run_actor_unsubscribe},
-    {"state", request_run_state},
+    {"actor.state", request_run_actor_state},
 };
 
 /* The request's members: "id" (uint or text), "method" (text), "params" (a
