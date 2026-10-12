@@ -1240,6 +1240,9 @@ __attribute__((always_inline)) static inline sjs_result splice_arguments(sjs_vm 
     return SJS_OK;
 }
 
+/* flat: at the end of the file. */
+static sjs_result array_flat(sjs_vm *vm, sjs_leaf_call *call);
+
 static sjs_result array_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     const sjs_array *a = SJS_AS_ARRAY(call->receiver);
     uint32_t n = a->length;
@@ -1285,31 +1288,8 @@ static sjs_result array_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
         }
         return SJS_OK;
     }
-    case SJS_METHOD_ARRAY_FLAT: {
-        sjs_value depth = arg(call, 0);
-        if (!(depth.kind == SJS_UNDEFINED || (depth.kind == SJS_NUMBER && depth.as.number == 1))) {
-            return sjs_vm_fault(vm, "staticjs flattens one level");
-        }
-        sjs_array *out;
-        if (new_array(vm, n, &out) != SJS_OK) return SJS_ERR_PROGRAM;
-        call->result = sjs_heap_value(SJS_ARRAY, &out->h);
-        for (uint32_t i = 0; i < n; i++) {
-            sjs_value v = a->items[i];
-            if (v.kind == SJS_ARRAY) {
-                const sjs_array *b = SJS_AS_ARRAY(v);
-                for (uint32_t j = 0; j < b->length; j++) {
-                    sjs_ref(b->items[j]);
-                    if (array_add(vm, &out, b->items[j]) != SJS_OK) return SJS_ERR_PROGRAM;
-                    call->result.as.heap = &out->h;
-                }
-            } else {
-                sjs_ref(v);
-                if (array_add(vm, &out, v) != SJS_OK) return SJS_ERR_PROGRAM;
-                call->result.as.heap = &out->h;
-            }
-        }
-        return SJS_OK;
-    }
+    case SJS_METHOD_ARRAY_FLAT:
+        return array_flat(vm, call);
     case SJS_METHOD_ARRAY_INCLUDES:
     case SJS_METHOD_ARRAY_INDEX_OF: {
         sjs_value x = arg(call, 0);
@@ -4636,4 +4616,54 @@ __attribute__((noinline)) static bool text_sort_step(sjs_vm *vm, vm_frame *frame
         frame->k = left;
         frame->phase = 2;
     }
+}
+
+/* flat(depth): the receiver's elements in order, each array among them
+ * replaced by its own elements down to `depth` levels (ToIntegerOrInfinity,
+ * 1 when undefined; 0 or less copies). Only arrays are flattened, a match
+ * result included, as JavaScript's IsArray holds for one. The arrays being
+ * read are an explicit stack, as deep as the nesting it follows; a value
+ * cannot contain itself, so Infinity ends. A unit of fuel per element
+ * visited, at every level. */
+typedef struct {
+    const sjs_array *array;
+    uint32_t next;
+} flat_level;
+
+__attribute__((noinline)) static sjs_result array_flat(sjs_vm *vm, sjs_leaf_call *call) {
+    double depth = 1;
+    if (arg(call, 0).kind != SJS_UNDEFINED && to_integer(vm, arg(call, 0), &depth) != SJS_OK) return SJS_ERR_PROGRAM;
+    flat_level top = { SJS_AS_ARRAY(call->receiver), 0 };
+    sjs_array *out;
+    if (new_array(vm, top.array->length, &out) != SJS_OK) return SJS_ERR_PROGRAM;
+    call->result = sjs_heap_value(SJS_ARRAY, &out->h);
+    call->cost = 0;
+    const sjs_allocator *alloc = &vm->context->counting;
+    sjs_buf levels = { 0 };
+    sjs_result r = SJS_OK;
+    for (;;) {
+        if (top.next == top.array->length) {
+            uint32_t below = SJS_BUF_COUNT(levels, flat_level);
+            if (below == 0) break;
+            top = SJS_BUF_AT(levels, flat_level, below - 1u);
+            levels.length -= (uint32_t)sizeof top;
+            continue;
+        }
+        sjs_value v = top.array->items[top.next++];
+        call->cost++;
+        if (v.kind == SJS_ARRAY && (double)SJS_BUF_COUNT(levels, flat_level) < depth) {
+            r = sjs_buf_append(alloc, &levels, (sjs_bytes){ (const uint8_t *)&top, sizeof top });
+            if (r != SJS_OK) break;
+            top = (flat_level){ SJS_AS_ARRAY(v), 0 };
+            continue;
+        }
+        sjs_ref(v);
+        if (array_add(vm, &out, v) != SJS_OK) {
+            sjs_buf_free(alloc, &levels);
+            return SJS_ERR_PROGRAM;
+        }
+        call->result.as.heap = &out->h;
+    }
+    sjs_buf_free(alloc, &levels);
+    return r == SJS_OK ? SJS_OK : sjs_vm_fail(vm, r);
 }
