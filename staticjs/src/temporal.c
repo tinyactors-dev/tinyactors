@@ -2061,6 +2061,16 @@ static sjs_result nudge_calendar(sjs_vm *vm, const relative_rounding *r, nudge *
     if (epoch_after(vm, (origin_shift){ r->origin, start }, &start_ns) != SJS_OK || epoch_after(vm, (origin_shift){ r->origin, end }, &end_ns) != SJS_OK) {
         return SJS_ERR_PROGRAM;
     }
+    /* Outside the window from start to end, the specification now moves
+     * it on by an increment (ComputeNudgeWindow's additionalShift), where
+     * @js-temporal/polyfill and staticjs followed the older text, which
+     * rounds such a destination to the start: a month's end counted into
+     * a shorter month (P1MT12H from 2024-01-31 in months). The polyfills
+     * disagree there, and the reference polyfill bubbles the result
+     * differently again, so staticjs faults rather than pick one. */
+    bool outside = sign > 0 ? wide_cmp(r->dest, start_ns) < 0 || wide_cmp(r->dest, end_ns) > 0
+                            : wide_cmp(r->dest, end_ns) < 0 || wide_cmp(r->dest, start_ns) > 0;
+    if (outside) return sjs_vm_fault(vm, "staticjs does not round to a calendar unit where the destination is past the window the duration gives (from a month's end into a shorter month): the specification moves the window on (ComputeNudgeWindow)");
     wide numerator = wide_sub(r->dest, start_ns);
     wide denominator = wide_sub(end_ns, start_ns);
     bool expanded;

@@ -663,3 +663,13 @@ Temporal.Duration.from("P1Y").round({ largestUnit: "day", relativeTo: "+275760-0
 Temporal.Duration.from("P3W").total({ unit: "month", relativeTo: "2024-02-01" })
 --- value
 0.7241379310344828
+
+# The specification moves the rounding window on here (ComputeNudgeWindow's
+# additionalShift: P1M); @js-temporal/polyfill gives PT0S. staticjs faults.
+=== round to months from a month's end into a shorter month, deliberate
+Temporal.Duration.from("P1MT12H").round({ smallestUnit: "month", roundingMode: "trunc", relativeTo: "2024-01-31" })
+--- fault the specification moves the window on
+
+=== total in months from a month's end into a shorter month, deliberate
+Temporal.Duration.from("P1MT12H").total({ unit: "month", relativeTo: "2024-01-31" })
+--- fault the specification moves the window on
