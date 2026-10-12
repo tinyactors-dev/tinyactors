@@ -196,7 +196,7 @@ typedef enum {
     SJS_OBJECT,
     SJS_SET,
     SJS_MAP,
-    SJS_ITERATOR,   /* a map's keys(), values() or entries(), or an iterator's map() or filter() */
+    SJS_ITERATOR,   /* a map's or a set's keys(), values() or entries(), or an iterator's map() or filter() */
     SJS_FUNCTION,
     SJS_REGEXP,     /* a regular expression literal: an object, immutable; its lastIndex is 0 */
     SJS_TEMPORAL    /* a Temporal value (a Temporal.PlainDate, ...): an object, immutable;

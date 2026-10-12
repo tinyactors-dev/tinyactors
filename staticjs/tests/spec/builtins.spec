@@ -199,7 +199,7 @@ typeof "x".localeCompare
 [1].forEach
 --- fault calls methods
 
-=== reading a set method staticjs does not have
+=== reading a set method as a value
 new Set([1]).forEach
 --- fault calls methods
 

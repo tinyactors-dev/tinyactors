@@ -1163,7 +1163,8 @@ sjs_result sjs_iterator_make(sjs_context *context, sjs_iterator_spec spec, sjs_v
 
 uint32_t sjs_iterator_count(const sjs_iterator *it) {
     if (it->items.kind == SJS_ARRAY) return SJS_AS_ARRAY(it->items)->length;
-    return SJS_AS_ARRAY(it->source)->length / 2u;
+    const sjs_array *source = SJS_AS_ARRAY(it->source);
+    return it->source.kind == SJS_SET ? source->length : source->length / 2u;
 }
 
 /* What an array, a set or a map holds beside its items: a set's or a map's

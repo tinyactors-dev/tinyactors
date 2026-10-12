@@ -103,8 +103,8 @@ static void string_piece(sjs_writer *w) {
     say_scratch(w, sjs_json_escape((uint8_t)s.ptr[i], (char *)w->scratch));
 }
 
-/* The map whose entries a map or an iterator of its entries writes, or
- * NULL for any other value. */
+/* The map or the set whose entries a map or an iterator of its entries
+ * writes, or NULL for any other value. */
 static const sjs_array *entries_of(sjs_value v) {
     if (v.kind == SJS_MAP) return SJS_AS_ARRAY(v);
     if (v.kind != SJS_ITERATOR) return NULL;
@@ -112,12 +112,20 @@ static const sjs_array *entries_of(sjs_value v) {
     return it->items.kind == SJS_UNDEFINED && it->h.flags == SJS_ITERATE_ENTRIES ? SJS_AS_ARRAY(it->source) : NULL;
 }
 
-/* The value an iterator yields at `index`: from its items, or its map's key
- * or value (an entry's is written by entries_of's phases). */
+/* The key (`part` 0) or the value (1) of the entry at `index` of what
+ * entries_of gives: a map's, or a set's member, which is both. */
+static sjs_value entry_part(const sjs_array *entries, uint32_t index, uint32_t part) {
+    if (entries->h.type == SJS_HEAP_SET) return entries->items[index];
+    return entries->items[2u * index + part];
+}
+
+/* The value an iterator yields at `index`: from its items, a set's member,
+ * or its map's key or value (an entry's is written by entries_of's
+ * phases). */
 static sjs_value iterated(sjs_value v, uint32_t index) {
     const sjs_iterator *it = SJS_AS_ITERATOR(v);
     if (it->items.kind == SJS_ARRAY) return SJS_AS_ARRAY(it->items)->items[index];
-    return SJS_AS_ARRAY(it->source)->items[2u * index + (it->h.flags == SJS_ITERATE_VALUES ? 1u : 0u)];
+    return entry_part(SJS_AS_ARRAY(it->source), index, it->h.flags == SJS_ITERATE_VALUES ? 1u : 0u);
 }
 
 static void say_number(sjs_writer *w, double d) {
@@ -257,7 +265,7 @@ static sjs_result next(sjs_writer *w, bool *more) {
         if (entries_of(v) != NULL) {
             say(w, "[");
             f->phase = W_ENTRY_VALUE;
-            return push(w, entries_of(v)->items[2u * f->index]);
+            return push(w, entry_part(entries_of(v), f->index, 0));
         }
         f->phase = W_ITEM;
         if (v.kind == SJS_ITERATOR) return push(w, iterated(v, f->index++));
@@ -269,7 +277,7 @@ static sjs_result next(sjs_writer *w, bool *more) {
     case W_ENTRY_VALUE:
         say(w, ",");
         f->phase = W_ENTRY_END;
-        return push(w, entries_of(v)->items[2u * f->index + 1u]);
+        return push(w, entry_part(entries_of(v), f->index, 1));
     case W_ENTRY_END:
         say(w, "]");
         f->index++;
