@@ -41,6 +41,56 @@ ta_status conform_write_growing(const conform_writing *writing, ta_buffer *out) 
     return TA_ERROR_NO_MEMORY;
 }
 
+static void *heap_alloc(void *context, size_t size, size_t align) {
+    (void)context;
+    (void)align;
+    return malloc(size);
+}
+
+static void heap_free(void *context, void *pointer, size_t size) {
+    (void)context;
+    (void)size;
+    free(pointer);
+}
+
+static const ta_allocator CONFORM_HEAP = {NULL, heap_alloc, heap_free};
+
+void conform_writer_begin(ta_cbor_writer *writer, const ta_buffer *out) {
+    ta_cbor_writer_init(writer, (ta_buffer){out->pointer, out->pointer ? out->capacity : 0, 0}, &CONFORM_HEAP);
+}
+
+ta_status conform_writer_end(ta_cbor_writer *writer, ta_buffer *out) {
+    ta_bytes bytes;
+    ta_status status = ta_cbor_writer_bytes(writer, &bytes);
+    if (writer->bytes != (unsigned char *)out->pointer) { /* it grew: the block is the buffer now */
+        free(out->pointer);
+        out->pointer = writer->bytes;
+        out->capacity = writer->capacity;
+    }
+    out->length = status == TA_OK ? bytes.length : 0;
+    return status;
+}
+
+void conform_write_token(ta_cbor_writer *writer, const ta_cbor_document *document, uint32_t at) {
+    const ta_cbor_token *token = &document->tokens[at];
+    ta_string_view text = ta_cbor_string(document, at);
+    double number;
+    switch (token->kind) {
+    case TA_CBOR_UINT: ta_cbor_write_uint(writer, token->value); break;
+    case TA_CBOR_NEGINT: ta_cbor_write_negative(writer, token->value); break;
+    case TA_CBOR_TEXT: ta_cbor_write_text(writer, text); break;
+    case TA_CBOR_BYTES: ta_cbor_write_bytes(writer, (ta_bytes){text.pointer, text.length}); break;
+    case TA_CBOR_ARRAY: ta_cbor_write_array(writer, token->count); break;
+    case TA_CBOR_MAP: ta_cbor_write_map(writer, token->count); break;
+    case TA_CBOR_TAG: ta_cbor_write_tag(writer, token->value); break;
+    case TA_CBOR_SIMPLE: ta_cbor_write_simple(writer, (uint32_t)token->value); break;
+    default: /* TA_CBOR_FLOAT */
+        memcpy(&number, &token->value, sizeof number);
+        ta_cbor_write_float(writer, number);
+        break;
+    }
+}
+
 ta_bytes conform_keep(conform *state, ta_bytes bytes) {
     uint32_t slots = (uint32_t)(sizeof state->kept / sizeof state->kept[0]);
     if (state->kept_count == slots) return (ta_bytes){NULL, 0};
@@ -150,10 +200,6 @@ int conform_sources_read(conform_call *call, const char *name, conform_sources *
 
 /* ---- an item as bytes ------------------------------------------------------------- */
 
-static ta_status encode_document(void *context, ta_buffer *out) {
-    return ta_cbor_encode((const ta_cbor_document *)context, out);
-}
-
 /* The alias a text "@<alias>" names, or NULL. */
 static const conform_alias *alias_of(const conform_aliases *aliases, ta_string_view text) {
     if (!aliases || text.length < 2 || text.pointer[0] != '@') return NULL;
@@ -169,37 +215,20 @@ ta_status conform_item_bytes(const conform_call *call, const conform_item *item,
     const ta_cbor_document *document = &call->document;
     uint32_t end = ta_cbor_next(document, item->at);
     if (end == TA_NIL) return TA_ERROR_INVALID;
-    uint32_t count = end - item->at;
-    /* the tokens, over the message's bytes and the addresses after them */
-    size_t extra = 0;
-    for (uint32_t i = item->at; i < end; i++)
-        if (document->tokens[i].kind == TA_CBOR_TEXT &&
-            alias_of(item->aliases, ta_cbor_string(document, i)))
-            extra += 32;
-    ta_cbor_token *tokens = (ta_cbor_token *)malloc(count * sizeof *tokens);
-    char *bytes = (char *)malloc(document->bytes.length + extra + 1);
-    if (!tokens || !bytes) {
-        free(tokens);
-        free(bytes);
-        return TA_ERROR_NO_MEMORY;
-    }
-    memcpy(tokens, &document->tokens[item->at], count * sizeof *tokens);
-    memcpy(bytes, document->bytes.pointer, document->bytes.length);
-    size_t used = document->bytes.length;
-    for (uint32_t i = 0; i < count; i++) {
+    ta_cbor_writer writer;
+    conform_writer_begin(&writer, out);
+    for (uint32_t i = item->at; i < end; i++) {
         const conform_alias *alias =
-            tokens[i].kind == TA_CBOR_TEXT ? alias_of(item->aliases, ta_cbor_string(document, item->at + i)) : NULL;
-        if (!alias) continue;
-        int written = snprintf(bytes + used, 32, "#_scxml_%llu", (unsigned long long)alias->session);
-        tokens[i].value = used;
-        tokens[i].count = (uint32_t)written;
-        used += (size_t)written;
+            document->tokens[i].kind == TA_CBOR_TEXT ? alias_of(item->aliases, ta_cbor_string(document, i)) : NULL;
+        if (!alias) {
+            conform_write_token(&writer, document, i);
+            continue;
+        }
+        char address[32];
+        int written = snprintf(address, sizeof address, "#_scxml_%llu", (unsigned long long)alias->session);
+        ta_cbor_write_text(&writer, (ta_string_view){address, (uint32_t)written});
     }
-    ta_cbor_document copy = {{bytes, used}, tokens, count, count};
-    ta_status status = conform_write_growing(&(conform_writing){encode_document, &copy}, out);
-    free(tokens);
-    free(bytes);
-    return status;
+    return conform_writer_end(&writer, out);
 }
 
 /* ---- results ---------------------------------------------------------------------- */
@@ -291,26 +320,13 @@ static void write_reply(ta_cbor_writer *writer, const reply *answer) {
         write_field(writer, &answer->result->fields[i]);
 }
 
-/* The reply's bytes into `out`: written once to count, again to fit. */
+/* The reply's bytes into `out`, grown as they need. */
 static ta_status reply_write(void *context, ta_buffer *out) {
     const reply *answer = (const reply *)context;
-    static ta_buffer tokens, strings;
-    for (int attempt = 0; attempt < 2; attempt++) {
-        ta_cbor_writer writer;
-        memset(&writer, 0, sizeof writer);
-        writer.document.tokens = (ta_cbor_token *)tokens.pointer;
-        writer.document.capacity = (uint32_t)(tokens.capacity / sizeof(ta_cbor_token));
-        writer.strings = (ta_buffer){strings.pointer, strings.capacity, 0};
-        write_reply(&writer, answer);
-        if (writer.status == TA_ERROR_NO_MEMORY) {
-            if (!conform_buffer_reserve(&tokens, writer.document.count * sizeof(ta_cbor_token)) ||
-                !conform_buffer_reserve(&strings, writer.strings.length))
-                return TA_ERROR_NO_MEMORY;
-            continue;
-        }
-        return ta_cbor_finish(&writer, out);
-    }
-    return TA_ERROR_NO_MEMORY;
+    ta_cbor_writer writer;
+    conform_writer_begin(&writer, out);
+    write_reply(&writer, answer);
+    return conform_writer_end(&writer, out);
 }
 
 static void frame_write(const reply *answer) {

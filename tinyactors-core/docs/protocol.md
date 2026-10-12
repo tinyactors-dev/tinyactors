@@ -170,7 +170,7 @@ of these kinds:
 Nothing else is a neutral value: another tag, another simple value, or an
 indefinite length is refused. A key starting with `$` is an ordinary key.
 Writers use the shortest form of every integer, length and float, and write
-NaN as `f9 7e00` (`ta_cbor_encode`); map keys stay in the order written.
+NaN as `f9 7e00` (`ta_cbor_writer`); map keys stay in the order written.
 
 Datamodels convert between their own values and neutral values (`to_wire` /
 `from_wire` in the datamodel vtable): only the datamodel knows a `PyObject *`,

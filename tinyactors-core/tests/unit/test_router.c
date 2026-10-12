@@ -1429,9 +1429,8 @@ static void decode_at_target(int bytes) {
         int ol = snprintf(origin, sizeof origin, "tinyactors://a/#_scxml_%llu",
                           (unsigned long long)p);
         unsigned char envelope_bytes[256];
-        ta_cbor_token tokens[16];
-        char strings[256];
-        ta_cbor_writer w = {{{0, 0}, tokens, 16, 0}, {strings, sizeof strings, 0}, TA_OK};
+        ta_cbor_writer w;
+        ta_cbor_writer_init(&w, (ta_buffer){envelope_bytes, sizeof envelope_bytes, 0}, NULL);
         ta_cbor_write_map(&w, 6);
         ta_cbor_write_text(&w, ta_string("target"));
         ta_cbor_write_text(&w, ta_string("tinyactors://c/@echo"));
@@ -1446,8 +1445,8 @@ static void decode_at_target(int bytes) {
         ta_cbor_write_text(&w, (ta_string_view){origin, (uint32_t)ol});
         ta_cbor_write_text(&w, ta_string("msgid"));
         ta_cbor_write_text(&w, ta_string("bad-1"));
-        ta_buffer out = {envelope_bytes, sizeof envelope_bytes, 0};
-        CHECK_EQUAL(ta_cbor_finish(&w, &out), TA_OK);
+        ta_bytes out;
+        CHECK_EQUAL(ta_cbor_writer_bytes(&w, &out), TA_OK);
         ta_envelope envelope;
         CHECK_EQUAL(ta_host_envelope_read(nodes[B].host, (ta_bytes){envelope_bytes, out.length},
                                           &envelope),

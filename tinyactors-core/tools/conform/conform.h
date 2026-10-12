@@ -38,6 +38,16 @@ typedef struct conform_writing {
 /* The call into `out`, grown until it fits; its status. */
 ta_status conform_write_growing(const conform_writing *writing, ta_buffer *out);
 
+/* A CBOR writer (cbor.h) into `out`, a buffer on the heap (or none), which
+ * it grows through the heap; end gives `out` the item written (the block
+ * the writer grew becomes the buffer's) and the writer's status. A writer
+ * started on a fixed room with ta_cbor_writer_init(..., NULL) ends here too. */
+void conform_writer_begin(ta_cbor_writer *writer, const ta_buffer *out);
+ta_status conform_writer_end(ta_cbor_writer *writer, ta_buffer *out);
+/* The token `at` of `document` as the writer's next item's head (or a
+ * whole scalar or string). */
+void conform_write_token(ta_cbor_writer *writer, const ta_cbor_document *document, uint32_t at);
+
 /* ---- a call --------------------------------------------------------------------- */
 
 /* The protocol's errors (driver.md, "Frames and messages"). */
@@ -92,7 +102,7 @@ typedef struct conform_sources {
 } conform_sources;
 int conform_sources_read(conform_call *call, const char *name, conform_sources *out);
 
-/* An item of the call as its own CBOR bytes (ta_cbor_encode of its tokens),
+/* An item of the call as its own CBOR bytes (its tokens written again),
  * with each text "@<alias>" in it replaced by the alias's address
  * (driver.md, "Scenario steps"). `aliases` may be NULL. */
 typedef struct conform_alias {

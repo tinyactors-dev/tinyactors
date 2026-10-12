@@ -14,9 +14,7 @@
 #endif
 
 typedef struct host_ask {
-    ta_cbor_token tokens[128];
-    char strings[2048];
-    ta_cbor_writer writer;
+    ta_cbor_writer writer; /* into `request` */
     unsigned char request[4096];
     size_t request_length;
     unsigned char reply[1 << 16]; /* the reply, copied from the host's view */
@@ -31,10 +29,7 @@ typedef struct host_ask {
  * follow, written with ta_cbor_write_* on the returned writer (none: no
  * "params"). The id makes it a request, not a notification: it gets a reply. */
 TEST_UNUSED static ta_cbor_writer *ask_begin(host_ask *a, const char *method, uint32_t params) {
-    memset(&a->writer, 0, sizeof a->writer);
-    a->writer.document.tokens = a->tokens;
-    a->writer.document.capacity = 128;
-    a->writer.strings = (ta_buffer){a->strings, sizeof a->strings, 0};
+    ta_cbor_writer_init(&a->writer, (ta_buffer){a->request, sizeof a->request, 0}, NULL);
     ta_cbor_write_map(&a->writer, params ? 3 : 2);
     ta_cbor_write_text(&a->writer, ta_string("id"));
     ta_cbor_write_uint(&a->writer, 1);
@@ -50,8 +45,8 @@ TEST_UNUSED static ta_cbor_writer *ask_begin(host_ask *a, const char *method, ui
 /* Send what ask_begin started: the status of ta_host_request; on TA_OK the
  * reply is in a->document and a->text. */
 TEST_UNUSED static ta_status ask_send(ta_host *host, host_ask *a) {
-    ta_buffer request = {a->request, sizeof a->request, 0};
-    if (ta_cbor_finish(&a->writer, &request) != TA_OK) return TA_ERROR_INVALID;
+    ta_bytes request;
+    if (ta_cbor_writer_bytes(&a->writer, &request) != TA_OK) return TA_ERROR_INVALID;
     a->request_length = request.length;
     ta_bytes view = {NULL, 0}; /* the host's, until the next call into it: copied */
     a->answer = (ta_bytes){a->reply, 0};

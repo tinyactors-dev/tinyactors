@@ -22,7 +22,7 @@ implementation of that layer). Layer dependency rules are in
 │       ├── types.h            ✅ ta_string_view, ta_bytes, ta_buffer, ta_status, TA_NIL, ta_time, ta_expression, ta_payload, TA_API
 │       ├── allocator.h        ✅ ta_allocator: the memory a caller lends the host and the compiler
 │       ├── address.h          ✅ tinyactors:// addresses (parse/format)
-│       ├── cbor.h             ✅ CBOR as token lists in caller memory (ADR 0009)
+│       ├── cbor.h             ✅ CBOR: a streaming writer and reader, token lists (ADR 0009, 0010)
 │       ├── image.h            ✅ open/verify image, chart/state/event/expression/data lookup
 │       ├── datamodel.h        ✅ datamodel vtable, ta_datamodel_environment queries, system variables,
 │       │                         event view, null datamodel
@@ -51,8 +51,9 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── heap.[ch]          ✅ 4-ary (due, sequence) heap with removal
 │   │   ├── journal.[ch]       ✅ lossy ring of variable-size records (the trace journal)
 │   │   ├── address.c          ✅ the address grammar (include/tinyactors/address.h)
-│   │   ├── cbor.c             ✅ CBOR to and from token lists (include/tinyactors/cbor.h)
-│   │   ├── cbor_output.h      ✅ CBOR written item by item into a buffer (the host's replies)
+│   │   ├── cbor.c             ✅ CBOR: writer, reader, token lists (include/tinyactors/cbor.h)
+│   │   ├── cbor_output.h      ✅ CBOR heads written into an output (the host's replies, envelopes)
+│   │   ├── output.[ch]        ✅ bytes into a room grown through a caller's allocator (ADR 0010)
 │   │
 │   ├── image/                 shared by compiler (writer) and runtime (reader)
 │   │   ├── records.h          ✅ on-disk records, bytecode opcodes, validated view

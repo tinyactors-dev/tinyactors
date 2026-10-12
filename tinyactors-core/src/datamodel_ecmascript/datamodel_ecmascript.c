@@ -2614,82 +2614,35 @@ static ta_status ecmascript_migrate_(void *datamodel, uint64_t handle,
  * arrives as its address, a string. Read back, an integer within ±(2^53-1)
  * is a number and any other a BigInt; bytes are a Uint8Array. */
 
+/* A value being written: the streaming writer (cbor.h) into the
+ * datamodel's output, and the first failure of the JavaScript side. */
 typedef struct wire_builder {
-    ta_cbor_token *tokens;
-    uint32_t count, capacity;
-    char *strings;
-    size_t length, room;
+    ta_cbor_writer writer;
     ta_status status;
-    ta_cbor_token small_tokens[64];
-    char small_strings[1024];
 } wire_builder;
 
-static void wire_builder_init(wire_builder *b) {
-    b->tokens = b->small_tokens;
-    b->count = 0;
-    b->capacity = sizeof b->small_tokens / sizeof b->small_tokens[0];
-    b->strings = b->small_strings;
-    b->length = 0;
-    b->room = sizeof b->small_strings;
-    b->status = TA_OK;
+static void wire_fail(wire_builder *b, ta_status status) {
+    if (b->status == TA_OK) b->status = status;
 }
 
-static void wire_builder_free(wire_builder *b) {
-    if (b->tokens != b->small_tokens) free(b->tokens);
-    if (b->strings != b->small_strings) free(b->strings);
+static int wire_failed(const wire_builder *b) {
+    return b->status != TA_OK || b->writer.status != TA_OK;
 }
 
-/* Grow a buffer that starts in the builder itself. */
-static void *wire_grow(void *pointer, void *small, size_t used, size_t *room, size_t need) {
-    size_t grown = *room;
-    while (grown < need)
-        grown *= 2;
-    void *bigger = malloc(grown);
-    if (!bigger) return NULL;
-    memcpy(bigger, pointer, used);
-    if (pointer != small) free(pointer);
-    *room = grown;
-    return bigger;
+/* The writer grows the datamodel's output through the C library's heap. */
+static void *wire_alloc(void *context, size_t size, size_t align) {
+    (void)context;
+    (void)align; /* malloc's alignment is enough for bytes */
+    return malloc(size);
 }
 
-/* Append a token; its index, or TA_NIL (status set). */
-static uint32_t wire_token(wire_builder *b, uint32_t kind, uint32_t count, uint64_t value) {
-    if (b->status != TA_OK) return TA_NIL;
-    if (b->count == b->capacity) {
-        size_t room = (size_t)b->capacity * sizeof(ta_cbor_token);
-        ta_cbor_token *t = (ta_cbor_token *)wire_grow(b->tokens, b->small_tokens,
-                                                      b->count * sizeof(ta_cbor_token), &room,
-                                                      room + sizeof(ta_cbor_token));
-        if (!t || room / sizeof(ta_cbor_token) > UINT32_MAX) {
-            b->status = TA_ERROR_NO_MEMORY;
-            return TA_NIL;
-        }
-        b->tokens = t;
-        b->capacity = (uint32_t)(room / sizeof(ta_cbor_token));
-    }
-    b->tokens[b->count] = (ta_cbor_token){kind, count, value};
-    return b->count++;
+static void wire_free(void *context, void *pointer, size_t size) {
+    (void)context;
+    (void)size;
+    free(pointer);
 }
 
-static void wire_string(wire_builder *b, uint32_t kind, const void *pointer, size_t length) {
-    if (b->status != TA_OK) return;
-    if (length > UINT32_MAX) {
-        b->status = TA_ERROR_INVALID;
-        return;
-    }
-    if (b->room - b->length < length) {
-        char *s = (char *)wire_grow(b->strings, b->small_strings, b->length, &b->room,
-                                    b->length + length);
-        if (!s) {
-            b->status = TA_ERROR_NO_MEMORY;
-            return;
-        }
-        b->strings = s;
-    }
-    if (length) memcpy(b->strings + b->length, pointer, length);
-    wire_token(b, kind, (uint32_t)length, b->length);
-    b->length += length;
-}
+static const ta_allocator WIRE_ALLOCATOR = {NULL, wire_alloc, wire_free};
 
 /* A BigInt as a CBOR integer, if it is one (-2^64 … 2^64-1). */
 static void wire_bigint(wire_builder *b, JSContext *context, JSValueConst v) {
@@ -2697,7 +2650,7 @@ static void wire_bigint(wire_builder *b, JSContext *context, JSValueConst v) {
     const char *text = JS_ToCStringLen(context, &length, v); /* decimal */
     if (!text) {
         clear_exception(context);
-        b->status = TA_ERROR_NO_MEMORY;
+        wire_fail(b, TA_ERROR_NO_MEMORY);
         return;
     }
     int negative = text[0] == '-';
@@ -2712,51 +2665,143 @@ static void wire_bigint(wire_builder *b, JSContext *context, JSValueConst v) {
     }
     int lowest = negative && count == 20 && !memcmp(digits, "18446744073709551616", 20);
     JS_FreeCString(context, text);
-    if (lowest) wire_token(b, TA_CBOR_NEGINT, 0, UINT64_MAX);
-    else if (!fits) b->status = TA_ERROR_INVALID; /* not a neutral value */
-    else if (!negative) wire_token(b, TA_CBOR_UINT, 0, magnitude);
-    else wire_token(b, TA_CBOR_NEGINT, 0, magnitude - 1);
+    if (lowest) ta_cbor_write_negative(&b->writer, UINT64_MAX);
+    else if (!fits) wire_fail(b, TA_ERROR_INVALID); /* not a neutral value */
+    else if (!negative) ta_cbor_write_uint(&b->writer, magnitude);
+    else ta_cbor_write_negative(&b->writer, magnitude - 1);
 }
 
 static void wire_number(wire_builder *b, double d) {
     uint64_t bits;
     memcpy(&bits, &d, sizeof bits);
     const double safe = 9007199254740991.0; /* 2^53 - 1 */
-    if (d >= -safe && d <= safe && d == (double)(int64_t)d && bits != UINT64_C(1) << 63) {
-        int64_t i = (int64_t)d;
-        if (i >= 0) wire_token(b, TA_CBOR_UINT, 0, (uint64_t)i);
-        else wire_token(b, TA_CBOR_NEGINT, 0, (uint64_t)(-(i + 1)));
-    } else {
-        wire_token(b, TA_CBOR_FLOAT, 0, bits);
-    }
+    if (d >= -safe && d <= safe && d == (double)(int64_t)d && bits != UINT64_C(1) << 63)
+        ta_cbor_write_int(&b->writer, (int64_t)d);
+    else
+        ta_cbor_write_float(&b->writer, d);
 }
 
-/* The bytes of `buffer` from `offset`, `length` of them. */
+/* Bytes of an ArrayBuffer: `length` of them from `offset`. */
+typedef struct wire_range {
+    size_t offset, length;
+} wire_range;
+
 static void wire_buffer_bytes(wire_builder *b, JSContext *context, JSValueConst buffer,
-                              size_t offset, size_t length) {
-    size_t size = 0;
+                              wire_range range) {
+    size_t size = 0, offset = range.offset, length = range.length;
     uint8_t *bytes = JS_GetArrayBuffer(context, &size, buffer);
     if (!bytes || offset > size || length > size - offset) { /* detached */
         clear_exception(context);
-        b->status = TA_ERROR_INVALID;
+        wire_fail(b, TA_ERROR_INVALID);
         return;
     }
-    wire_string(b, TA_CBOR_BYTES, bytes + offset, length);
+    ta_cbor_write_bytes(&b->writer, (ta_bytes){bytes + offset, length});
+}
+
+/* v with its toJSON applied, as JSON.stringify applies it (again on what it
+ * returns); a new reference, or JS_EXCEPTION with b's status set. Each call
+ * counts as a level of nesting. */
+static JSValue wire_resolve(wire_builder *b, JSContext *context, JSValueConst v, uint32_t *depth) {
+    JSValue current = JS_DupValue(context, v);
+    for (;;) {
+        if (*depth > TA_CBOR_DEPTH_MAX) { /* a cycle, or too deep for a neutral value */
+            JS_FreeValue(context, current);
+            wire_fail(b, TA_ERROR_INVALID);
+            return JS_EXCEPTION;
+        }
+        if (!JS_IsObject(current) || JS_IsFunction(context, current) || JS_IsArrayBuffer(current) ||
+            JS_GetTypedArrayType(current) >= 0 || JS_IsDataView(current))
+            return current;
+        JSValue to_json = JS_GetPropertyStr(context, current, "toJSON");
+        if (JS_IsException(to_json)) {
+            clear_exception(context);
+            JS_FreeValue(context, current);
+            wire_fail(b, TA_ERROR_INVALID);
+            return JS_EXCEPTION;
+        }
+        if (!JS_IsFunction(context, to_json)) {
+            JS_FreeValue(context, to_json);
+            return current;
+        }
+        JSValue r = JS_Call(context, to_json, current, 0, NULL);
+        JS_FreeValue(context, to_json);
+        JS_FreeValue(context, current);
+        if (JS_IsException(r)) {
+            clear_exception(context);
+            wire_fail(b, TA_ERROR_INVALID);
+            return JS_EXCEPTION;
+        }
+        current = r;
+        (*depth)++;
+    }
+}
+
+/* What JSON.stringify leaves out: undefined, a function, a symbol. */
+static int wire_dropped(JSContext *context, JSValueConst v) {
+    return JS_IsUndefined(v) || JS_IsSymbol(v) || JS_IsFunction(context, v);
+}
+
+static int wire_write(wire_builder *b, JSContext *context, JSValueConst v, uint32_t depth);
+
+/* An object's own enumerable members, a key only for a value that is kept:
+ * the map's count is fixed when it closes. */
+static void wire_members(wire_builder *b, JSContext *context, JSValueConst v, uint32_t depth) {
+    JSPropertyEnum *properties;
+    uint32_t count;
+    if (JS_GetOwnPropertyNames(context, &properties, &count, v, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) <
+        0) {
+        clear_exception(context);
+        wire_fail(b, TA_ERROR_INVALID);
+        return;
+    }
+    ta_cbor_write_map(&b->writer, TA_CBOR_COUNT_LATER);
+    for (uint32_t i = 0; i < count && !wire_failed(b); i++) {
+        JSValue item = JS_GetProperty(context, v, properties[i].atom);
+        if (JS_IsException(item)) {
+            clear_exception(context);
+            wire_fail(b, TA_ERROR_INVALID);
+            break;
+        }
+        uint32_t item_depth = depth + 1;
+        JSValue value = wire_resolve(b, context, item, &item_depth);
+        JS_FreeValue(context, item);
+        if (JS_IsException(value)) break;
+        if (!wire_dropped(context, value)) { /* dropped: so is its key */
+            size_t length = 0;
+            const char *key = JS_AtomToCStringLen(context, &length, properties[i].atom);
+            if (!key) {
+                wire_fail(b, TA_ERROR_NO_MEMORY);
+            } else {
+                ta_cbor_write_text(&b->writer, (ta_string_view){key, (uint32_t)length});
+                JS_FreeCString(context, key);
+                wire_write(b, context, value, item_depth);
+            }
+        }
+        JS_FreeValue(context, value);
+    }
+    JS_FreePropertyEnum(context, properties, count);
+    ta_cbor_write_end(&b->writer);
 }
 
 /* Write v; 1 when written, 0 when it is dropped (undefined, a function, a
- * symbol), -1 on failure (b->status). */
-static int wire_write(wire_builder *b, JSContext *context, JSValueConst v, uint32_t depth) {
-    if (b->status != TA_OK) return -1;
+ * symbol), -1 on failure (b's status). */
+static int wire_write(wire_builder *b, JSContext *context, JSValueConst given, uint32_t depth) {
+    if (wire_failed(b)) return -1;
+    JSValue v = wire_resolve(b, context, given, &depth);
+    if (JS_IsException(v)) return -1;
     if (depth > TA_CBOR_DEPTH_MAX) { /* a cycle, or too deep for a neutral value */
-        b->status = TA_ERROR_INVALID;
+        JS_FreeValue(context, v);
+        wire_fail(b, TA_ERROR_INVALID);
         return -1;
     }
-    if (JS_IsUndefined(v) || JS_IsSymbol(v) || JS_IsFunction(context, v)) return 0;
+    if (wire_dropped(context, v)) {
+        JS_FreeValue(context, v);
+        return 0;
+    }
     if (JS_IsNull(v)) {
-        wire_token(b, TA_CBOR_SIMPLE, 0, TA_CBOR_NULL);
+        ta_cbor_write_simple(&b->writer, TA_CBOR_NULL);
     } else if (JS_IsBool(v)) {
-        wire_token(b, TA_CBOR_SIMPLE, 0, JS_ToBool(context, v) ? TA_CBOR_TRUE : TA_CBOR_FALSE);
+        ta_cbor_write_simple(&b->writer, JS_ToBool(context, v) ? TA_CBOR_TRUE : TA_CBOR_FALSE);
     } else if (JS_IsNumber(v)) {
         double d = 0;
         JS_ToFloat64(context, &d, v);
@@ -2768,25 +2813,28 @@ static int wire_write(wire_builder *b, JSContext *context, JSValueConst v, uint3
         const char *text = JS_ToCStringLen(context, &length, v);
         if (!text) {
             clear_exception(context);
-            b->status = TA_ERROR_NO_MEMORY;
-            return -1;
+            wire_fail(b, TA_ERROR_NO_MEMORY);
+        } else if (length > UINT32_MAX) {
+            JS_FreeCString(context, text);
+            wire_fail(b, TA_ERROR_INVALID);
+        } else {
+            ta_cbor_write_text(&b->writer, (ta_string_view){text, (uint32_t)length});
+            JS_FreeCString(context, text);
         }
-        wire_string(b, TA_CBOR_TEXT, text, length);
-        JS_FreeCString(context, text);
     } else if (JS_IsArrayBuffer(v)) {
         size_t size = 0;
         JS_GetArrayBuffer(context, &size, v);
-        wire_buffer_bytes(b, context, v, 0, size);
+        wire_buffer_bytes(b, context, v, (wire_range){0, size});
     } else if (JS_GetTypedArrayType(v) >= 0) {
         size_t offset = 0, length = 0, element = 0;
         JSValue buffer = JS_GetTypedArrayBuffer(context, v, &offset, &length, &element);
         if (JS_IsException(buffer)) {
             clear_exception(context);
-            b->status = TA_ERROR_INVALID;
-            return -1;
+            wire_fail(b, TA_ERROR_INVALID);
+        } else {
+            wire_buffer_bytes(b, context, buffer, (wire_range){offset, length});
+            JS_FreeValue(context, buffer);
         }
-        wire_buffer_bytes(b, context, buffer, offset, length);
-        JS_FreeValue(context, buffer);
     } else if (JS_IsDataView(v)) {
         JSValue buffer = JS_GetPropertyStr(context, v, "buffer");
         JSValue offset = JS_GetPropertyStr(context, v, "byteOffset");
@@ -2794,88 +2842,34 @@ static int wire_write(wire_builder *b, JSContext *context, JSValueConst v, uint3
         int64_t o = 0, l = 0;
         JS_ToInt64(context, &o, offset);
         JS_ToInt64(context, &l, length);
-        wire_buffer_bytes(b, context, buffer, (size_t)o, (size_t)l);
+        wire_buffer_bytes(b, context, buffer, (wire_range){(size_t)o, (size_t)l});
         JS_FreeValue(context, buffer);
         JS_FreeValue(context, offset);
         JS_FreeValue(context, length);
-    } else {
-        JSValue to_json = JS_GetPropertyStr(context, v, "toJSON");
-        if (JS_IsException(to_json)) {
+    } else if (JS_IsArray(v)) {
+        int64_t length = 0;
+        if (JS_GetLength(context, v, &length) < 0 || length > UINT32_MAX) {
             clear_exception(context);
-            b->status = TA_ERROR_INVALID;
-            return -1;
-        }
-        if (JS_IsFunction(context, to_json)) {
-            JSValue r = JS_Call(context, to_json, v, 0, NULL);
-            JS_FreeValue(context, to_json);
-            if (JS_IsException(r)) {
-                clear_exception(context);
-                b->status = TA_ERROR_INVALID;
-                return -1;
-            }
-            int written = wire_write(b, context, r, depth + 1);
-            JS_FreeValue(context, r);
-            return written;
-        }
-        JS_FreeValue(context, to_json);
-        if (JS_IsArray(v)) {
-            int64_t length = 0;
-            if (JS_GetLength(context, v, &length) < 0 || length > UINT32_MAX) {
-                clear_exception(context);
-                b->status = TA_ERROR_INVALID;
-                return -1;
-            }
-            wire_token(b, TA_CBOR_ARRAY, (uint32_t)length, 0);
-            for (int64_t i = 0; i < length && b->status == TA_OK; i++) {
+            wire_fail(b, TA_ERROR_INVALID);
+        } else {
+            ta_cbor_write_array(&b->writer, (uint32_t)length);
+            for (int64_t i = 0; i < length && !wire_failed(b); i++) {
                 JSValue item = JS_GetPropertyUint32(context, v, (uint32_t)i);
                 if (JS_IsException(item)) {
                     clear_exception(context);
-                    b->status = TA_ERROR_INVALID;
+                    wire_fail(b, TA_ERROR_INVALID);
                     break;
                 }
-                if (!wire_write(b, context, item, depth + 1))
-                    wire_token(b, TA_CBOR_SIMPLE, 0, TA_CBOR_NULL);
+                if (!wire_write(b, context, item, depth + 1)) /* dropped: null in an array */
+                    ta_cbor_write_simple(&b->writer, TA_CBOR_NULL);
                 JS_FreeValue(context, item);
             }
-        } else {
-            JSPropertyEnum *properties;
-            uint32_t count;
-            if (JS_GetOwnPropertyNames(context, &properties, &count, v,
-                                       JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0) {
-                clear_exception(context);
-                b->status = TA_ERROR_INVALID;
-                return -1;
-            }
-            uint32_t map = wire_token(b, TA_CBOR_MAP, 0, 0);
-            for (uint32_t i = 0; i < count && b->status == TA_OK; i++) {
-                JSValue item = JS_GetProperty(context, v, properties[i].atom);
-                if (JS_IsException(item)) {
-                    clear_exception(context);
-                    b->status = TA_ERROR_INVALID;
-                    break;
-                }
-                uint32_t mark = b->count;
-                size_t strings = b->length;
-                size_t length = 0;
-                const char *key = JS_AtomToCStringLen(context, &length, properties[i].atom);
-                if (!key) {
-                    b->status = TA_ERROR_NO_MEMORY;
-                } else {
-                    wire_string(b, TA_CBOR_TEXT, key, length);
-                    JS_FreeCString(context, key);
-                    if (wire_write(b, context, item, depth + 1) == 0) { /* dropped: so is its key */
-                        b->count = mark;
-                        b->length = strings;
-                    } else if (b->status == TA_OK) {
-                        b->tokens[map].count++;
-                    }
-                }
-                JS_FreeValue(context, item);
-            }
-            JS_FreePropertyEnum(context, properties, count);
         }
+    } else {
+        wire_members(b, context, v, depth);
     }
-    return b->status == TA_OK ? 1 : -1;
+    JS_FreeValue(context, v);
+    return wire_failed(b) ? -1 : 1;
 }
 
 ta_status ta_datamodel_ecmascript_payload_to_cbor(ta_datamodel_ecmascript *ecmascript,
@@ -2885,25 +2879,20 @@ ta_status ta_datamodel_ecmascript_payload_to_cbor(ta_datamodel_ecmascript *ecmas
         return TA_ERROR_INVALID;
     ecmascript->operations = 0;
     JS_UpdateStackTop(ecmascript->runtime);
-    wire_builder *b = (wire_builder *)malloc(sizeof *b);
-    if (!b) return TA_ERROR_NO_MEMORY;
-    wire_builder_init(b);
-    if (!wire_write(b, ecmascript->auxiliary, ecmascript->payloads[payload - 1], 0))
-        wire_token(b, TA_CBOR_SIMPLE, 0, TA_CBOR_NULL);
-    ta_status status = b->status;
-    if (status == TA_OK) {
-        ta_cbor_document document = {{b->strings, b->length}, b->tokens, b->capacity, b->count};
-        ta_buffer room = {ecmascript->output, ecmascript->output_capacity, 0};
-        status = ta_cbor_encode(&document, &room);
-        if (status == TA_ERROR_NO_MEMORY && output_room(ecmascript, room.length)) {
-            room = (ta_buffer){ecmascript->output, ecmascript->output_capacity, 0};
-            status = ta_cbor_encode(&document, &room);
-        }
-        if (status == TA_OK) *out = (ta_bytes){room.pointer, room.length};
+    wire_builder b;
+    b.status = TA_OK;
+    /* into the datamodel's output, kept until its next call (datamodel.h) */
+    ta_cbor_writer_init(&b.writer, (ta_buffer){ecmascript->output, ecmascript->output_capacity, 0},
+                        &WIRE_ALLOCATOR);
+    if (!wire_write(&b, ecmascript->auxiliary, ecmascript->payloads[payload - 1], 0))
+        ta_cbor_write_simple(&b.writer, TA_CBOR_NULL);
+    if (b.writer.bytes != ecmascript->output) { /* it grew: the new block is the output now */
+        free(ecmascript->output);
+        ecmascript->output = b.writer.bytes;
+        ecmascript->output_capacity = b.writer.capacity;
     }
-    wire_builder_free(b);
-    free(b);
-    return status;
+    if (b.status != TA_OK) return b.status;
+    return ta_cbor_writer_bytes(&b.writer, out);
 }
 
 /* The integer -1 - n, past what a number holds exactly: a BigInt. */

@@ -38,123 +38,108 @@ typedef struct bench_host_config {
 } bench_host_config;
 
 typedef struct bench_host_cbor {
-    ta_cbor_token tokens[256];
-    char strings[4096];
     unsigned char bytes[8192];
     size_t length;
     unsigned char error[512]; /* the error reply of a refused config */
     ta_buffer error_reply;
 } bench_host_cbor;
 
-static void bench_host_number(ta_cbor_writer *w, const char *name, uint64_t value, uint32_t *pairs) {
+static void bench_host_number(ta_cbor_writer *w, const char *name, uint64_t value) {
     if (!value) return;
     ta_cbor_write_text(w, ta_string(name));
     ta_cbor_write_uint(w, value);
-    (*pairs)++;
 }
 
-/* The config's CBOR into out->bytes; 0 if it does not fit. */
+/* The config's CBOR into out->bytes; 0 if it does not fit. Maps whose
+ * members are only those set are counted as they close. */
 BENCH_UNUSED static int bench_host_config_cbor(const bench_host_config *c, bench_host_cbor *out) {
-    for (int pass = 0; pass < 2; pass++) { /* count the pairs, then write them */
-        static uint32_t top, system, telemetry;
-        uint32_t counted_top = 0, counted_system = 0, counted_telemetry = 0;
-        ta_cbor_writer writer, *w = &writer;
-        memset(w, 0, sizeof *w);
-        w->document.tokens = out->tokens;
-        w->document.capacity = 256;
-        w->strings = (ta_buffer){out->strings, sizeof out->strings, 0};
-        const ta_system_config *s = &c->system;
-        ta_cbor_write_map(w, pass ? top : 0);
-        ta_cbor_write_text(w, (ta_string_view){"systemID", 8});
-        ta_cbor_write_text(w, c->system_id);
-        counted_top++;
-        if (pass == 0 || system) {
-            ta_cbor_write_text(w, ta_string("system"));
-            ta_cbor_write_map(w, pass ? system : 0);
-            bench_host_number(w, "maxActors", s->max_actors, &counted_system);
-            bench_host_number(w, "maxEvents", s->max_events, &counted_system);
-            bench_host_number(w, "maxTimers", s->max_timers, &counted_system);
-            bench_host_number(w, "workspaces", s->workspaces, &counted_system);
-            bench_host_number(w, "maxRequests", s->max_requests, &counted_system);
-            bench_host_number(w, "outbox", s->outbox, &counted_system);
-            bench_host_number(w, "quantum", s->quantum, &counted_system);
-            bench_host_number(w, "instanceBytes", s->instance_bytes, &counted_system);
-            bench_host_number(w, "stringBytes", s->string_bytes, &counted_system);
-            bench_host_number(w, "ticksPerSecond", s->ticks_per_second, &counted_system);
-            bench_host_number(w, "traceBytes", s->trace_bytes, &counted_system);
-            bench_host_number(w, "traceContexts", s->trace_contexts, &counted_system);
-            bench_host_number(w, "traceRules", s->trace_rules, &counted_system);
-            bench_host_number(w, "traceSeed", s->trace_seed, &counted_system);
-            if (s->tracing == TA_TRACING_DISABLED) {
-                ta_cbor_write_text(w, ta_string("tracing"));
-                ta_cbor_write_simple(w, TA_CBOR_FALSE);
-                counted_system++;
-            }
-            if (pass == 0 && counted_system) counted_top++;
+    ta_cbor_writer writer, *w = &writer;
+    ta_cbor_writer_init(w, (ta_buffer){out->bytes, sizeof out->bytes, 0}, NULL);
+    const ta_system_config *s = &c->system;
+    ta_cbor_write_map(w, TA_CBOR_COUNT_LATER);
+    ta_cbor_write_text(w, (ta_string_view){"systemID", 8});
+    ta_cbor_write_text(w, c->system_id);
+    int system = s->max_actors || s->max_events || s->max_timers || s->workspaces || s->max_requests ||
+                 s->outbox || s->quantum || s->instance_bytes || s->string_bytes || s->ticks_per_second ||
+                 s->trace_bytes || s->trace_contexts || s->trace_rules || s->trace_seed ||
+                 s->tracing == TA_TRACING_DISABLED;
+    if (system) {
+        ta_cbor_write_text(w, ta_string("system"));
+        ta_cbor_write_map(w, TA_CBOR_COUNT_LATER);
+        bench_host_number(w, "maxActors", s->max_actors);
+        bench_host_number(w, "maxEvents", s->max_events);
+        bench_host_number(w, "maxTimers", s->max_timers);
+        bench_host_number(w, "workspaces", s->workspaces);
+        bench_host_number(w, "maxRequests", s->max_requests);
+        bench_host_number(w, "outbox", s->outbox);
+        bench_host_number(w, "quantum", s->quantum);
+        bench_host_number(w, "instanceBytes", s->instance_bytes);
+        bench_host_number(w, "stringBytes", s->string_bytes);
+        bench_host_number(w, "ticksPerSecond", s->ticks_per_second);
+        bench_host_number(w, "traceBytes", s->trace_bytes);
+        bench_host_number(w, "traceContexts", s->trace_contexts);
+        bench_host_number(w, "traceRules", s->trace_rules);
+        bench_host_number(w, "traceSeed", s->trace_seed);
+        if (s->tracing == TA_TRACING_DISABLED) {
+            ta_cbor_write_text(w, ta_string("tracing"));
+            ta_cbor_write_simple(w, TA_CBOR_FALSE);
         }
-        if (c->io_processor_count) {
-            ta_cbor_write_text(w, ta_string("ioProcessors"));
-            ta_cbor_write_array(w, c->io_processor_count);
-            for (uint32_t i = 0; i < c->io_processor_count; i++) {
-                const ta_io_processor_descriptor *d = &c->io_processors[i];
-                ta_cbor_write_map(w, 3);
-                ta_cbor_write_text(w, ta_string("type"));
-                ta_cbor_write_text(w, d->type);
-                ta_cbor_write_text(w, ta_string("location"));
-                ta_cbor_write_text(w, d->location);
-                ta_cbor_write_text(w, ta_string("sync"));
-                ta_cbor_write_simple(w, d->flags & TA_IO_PROCESSOR_SYNC ? TA_CBOR_TRUE : TA_CBOR_FALSE);
-            }
-            counted_top++;
-        }
-        bench_host_number(w, "migrateQuantum", c->migrate_quantum, &counted_top);
-        bench_host_number(w, "maxSubscriptions", c->max_subscriptions, &counted_top);
-        if (c->telemetry.otlp.size) {
-            const ta_otlp_config *o = &c->telemetry.otlp;
-            ta_cbor_write_text(w, ta_string("telemetry"));
-            ta_cbor_write_map(w, pass ? telemetry : 0);
-            bench_host_number(w, "stagingBytes", o->staging_bytes, &counted_telemetry);
-            bench_host_number(w, "logBytes", o->log_bytes, &counted_telemetry);
-            bench_host_number(w, "openSpans", o->open_spans, &counted_telemetry);
-            bench_host_number(w, "chunks", o->chunks, &counted_telemetry);
-            bench_host_number(w, "scopes", o->scopes, &counted_telemetry);
-            bench_host_number(w, "valueLimit", o->value_limit, &counted_telemetry);
-            bench_host_number(w, "renderBytes", o->render_bytes, &counted_telemetry);
-            bench_host_number(w, "resourceBytes", o->resource_bytes, &counted_telemetry);
-            bench_host_number(w, "metricBytes", o->metric_bytes, &counted_telemetry);
-            bench_host_number(w, "spanMetricCharts", o->span_metric_charts, &counted_telemetry);
-            bench_host_number(w, "flushInterval", c->telemetry.flush_interval, &counted_telemetry);
-            const char *flags[3] = {"linkParents", "values", "logs"};
-            int set[3] = {(o->flags & TA_OTLP_LINK_PARENTS) != 0, (o->flags & TA_OTLP_VALUES) != 0,
-                          (o->flags & TA_OTLP_NO_LOGS) == 0};
-            int fallback[3] = {0, 0, 1};
-            for (int k = 0; k < 3; k++)
-                if (set[k] != fallback[k]) {
-                    ta_cbor_write_text(w, ta_string(flags[k]));
-                    ta_cbor_write_simple(w, set[k] ? TA_CBOR_TRUE : TA_CBOR_FALSE);
-                    counted_telemetry++;
-                }
-            if (c->telemetry.resource_count) {
-                ta_cbor_write_text(w, ta_string("resource"));
-                ta_cbor_write_map(w, c->telemetry.resource_count);
-                for (uint32_t i = 0; i < c->telemetry.resource_count; i++) {
-                    ta_cbor_write_text(w, c->telemetry.resource[i].key);
-                    ta_cbor_write_text(w, c->telemetry.resource[i].value);
-                }
-                counted_telemetry++;
-            }
-            counted_top++;
-        }
-        if (pass == 0) {
-            top = counted_top;
-            system = counted_system;
-            telemetry = counted_telemetry;
-            continue;
-        }
-        ta_buffer bytes = {out->bytes, sizeof out->bytes, 0};
-        if (ta_cbor_finish(w, &bytes) != TA_OK) return 0;
-        out->length = bytes.length;
+        ta_cbor_write_end(w);
     }
+    if (c->io_processor_count) {
+        ta_cbor_write_text(w, ta_string("ioProcessors"));
+        ta_cbor_write_array(w, c->io_processor_count);
+        for (uint32_t i = 0; i < c->io_processor_count; i++) {
+            const ta_io_processor_descriptor *d = &c->io_processors[i];
+            ta_cbor_write_map(w, 3);
+            ta_cbor_write_text(w, ta_string("type"));
+            ta_cbor_write_text(w, d->type);
+            ta_cbor_write_text(w, ta_string("location"));
+            ta_cbor_write_text(w, d->location);
+            ta_cbor_write_text(w, ta_string("sync"));
+            ta_cbor_write_simple(w, d->flags & TA_IO_PROCESSOR_SYNC ? TA_CBOR_TRUE : TA_CBOR_FALSE);
+        }
+    }
+    bench_host_number(w, "migrateQuantum", c->migrate_quantum);
+    bench_host_number(w, "maxSubscriptions", c->max_subscriptions);
+    if (c->telemetry.otlp.size) {
+        const ta_otlp_config *o = &c->telemetry.otlp;
+        ta_cbor_write_text(w, ta_string("telemetry"));
+        ta_cbor_write_map(w, TA_CBOR_COUNT_LATER);
+        bench_host_number(w, "stagingBytes", o->staging_bytes);
+        bench_host_number(w, "logBytes", o->log_bytes);
+        bench_host_number(w, "openSpans", o->open_spans);
+        bench_host_number(w, "chunks", o->chunks);
+        bench_host_number(w, "scopes", o->scopes);
+        bench_host_number(w, "valueLimit", o->value_limit);
+        bench_host_number(w, "renderBytes", o->render_bytes);
+        bench_host_number(w, "resourceBytes", o->resource_bytes);
+        bench_host_number(w, "metricBytes", o->metric_bytes);
+        bench_host_number(w, "spanMetricCharts", o->span_metric_charts);
+        bench_host_number(w, "flushInterval", c->telemetry.flush_interval);
+        const char *flags[3] = {"linkParents", "values", "logs"};
+        int set[3] = {(o->flags & TA_OTLP_LINK_PARENTS) != 0, (o->flags & TA_OTLP_VALUES) != 0,
+                      (o->flags & TA_OTLP_NO_LOGS) == 0};
+        int fallback[3] = {0, 0, 1};
+        for (int k = 0; k < 3; k++)
+            if (set[k] != fallback[k]) {
+                ta_cbor_write_text(w, ta_string(flags[k]));
+                ta_cbor_write_simple(w, set[k] ? TA_CBOR_TRUE : TA_CBOR_FALSE);
+            }
+        if (c->telemetry.resource_count) {
+            ta_cbor_write_text(w, ta_string("resource"));
+            ta_cbor_write_map(w, c->telemetry.resource_count);
+            for (uint32_t i = 0; i < c->telemetry.resource_count; i++) {
+                ta_cbor_write_text(w, c->telemetry.resource[i].key);
+                ta_cbor_write_text(w, c->telemetry.resource[i].value);
+            }
+        }
+        ta_cbor_write_end(w);
+    }
+    ta_cbor_write_end(w);
+    ta_bytes bytes;
+    if (ta_cbor_writer_bytes(w, &bytes) != TA_OK) return 0; /* (no allocator: nothing to free) */
+    out->length = bytes.length;
     return 1;
 }
 

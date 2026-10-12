@@ -1,8 +1,11 @@
-/* ta_cbor: decoding to and encoding from token lists (include/tinyactors/cbor.h),
- * against the examples of RFC 8949 Appendix A. */
+/* ta_cbor: token lists for random access, the streaming writer and the
+ * reader (include/tinyactors/cbor.h), against the examples of RFC 8949
+ * Appendix A. What the writer writes is byte for byte what the token
+ * encoder it replaced wrote: the shortest form of every head and float. */
 #include "../harness/harness.h"
 #include <tinyactors/cbor.h>
 
+#include <stdlib.h>
 #include <string.h>
 
 /* `hex` as bytes into `out`; returns the length. */
@@ -29,22 +32,73 @@ static ta_status decode(const char *hex, ta_cbor_document *document) {
     return ta_cbor_decode(document);
 }
 
-/* Decode `hex`, encode it again, and compare with `expected`. */
+/* An item read (a token, or a reader's item) written again. */
+static void write_item(ta_cbor_writer *writer, const ta_cbor_item *item) {
+    double number;
+    switch (item->kind) {
+    case TA_CBOR_UINT: ta_cbor_write_uint(writer, item->value); break;
+    case TA_CBOR_NEGINT: ta_cbor_write_negative(writer, item->value); break;
+    case TA_CBOR_TEXT:
+        ta_cbor_write_text(writer, (ta_string_view){item->bytes.pointer, (uint32_t)item->bytes.length});
+        break;
+    case TA_CBOR_BYTES: ta_cbor_write_bytes(writer, item->bytes); break;
+    case TA_CBOR_ARRAY: ta_cbor_write_array(writer, item->count); break;
+    case TA_CBOR_MAP: ta_cbor_write_map(writer, item->count); break;
+    case TA_CBOR_TAG: ta_cbor_write_tag(writer, item->value); break;
+    case TA_CBOR_SIMPLE: ta_cbor_write_simple(writer, (uint32_t)item->value); break;
+    default:
+        memcpy(&number, &item->value, sizeof number);
+        ta_cbor_write_float(writer, number);
+        break;
+    }
+}
+
+/* Read `hex` with the reader and write each item with the writer: the
+ * writer's bytes (into `encoded`), or the first error. */
+static ta_status rewrite(const char *hex, ta_bytes *out) {
+    size_t length = unhex(hex, message);
+    ta_cbor_reader reader;
+    ta_cbor_reader_init(&reader, (ta_bytes){message, length});
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    ta_cbor_item item;
+    int32_t read;
+    while ((read = ta_cbor_read(&reader, &item)) == 1)
+        write_item(&writer, &item);
+    if (read < 0) return read;
+    return ta_cbor_writer_bytes(&writer, out);
+}
+
+/* `hex`, decoded to tokens and written again from them, and read and written
+ * again with the reader: both are `expected`. */
 static int round_trip(const char *hex, const char *expected) {
+    unsigned char want[256];
+    size_t length = unhex(expected, want);
     ta_cbor_document document;
     if (decode(hex, &document) != TA_OK) {
         fprintf(stderr, "  decode failed: %s\n", hex);
         return 0;
     }
-    ta_buffer out = {encoded, sizeof encoded, 0};
-    if (ta_cbor_encode(&document, &out) != TA_OK) {
-        fprintf(stderr, "  encode failed: %s\n", hex);
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    for (uint32_t i = 0; i < document.count; i++) {
+        ta_cbor_item item = {document.tokens[i].kind, document.tokens[i].count, document.tokens[i].value,
+                             {NULL, 0}, 0, 0};
+        ta_string_view text = ta_cbor_string(&document, i);
+        item.bytes = (ta_bytes){text.pointer, text.length};
+        write_item(&writer, &item);
+    }
+    ta_bytes out;
+    if (ta_cbor_writer_bytes(&writer, &out) != TA_OK) {
+        fprintf(stderr, "  writing the tokens failed: %s\n", hex);
         return 0;
     }
-    unsigned char want[256];
-    size_t length = unhex(expected, want);
-    if (out.length != length || memcmp(encoded, want, length) != 0) {
-        fprintf(stderr, "  %s encoded as %zu bytes, not %s\n", hex, out.length, expected);
+    if (out.length != length || memcmp(out.pointer, want, length) != 0) {
+        fprintf(stderr, "  %s written as %zu bytes, not %s\n", hex, out.length, expected);
+        return 0;
+    }
+    if (rewrite(hex, &out) != TA_OK || out.length != length || memcmp(out.pointer, want, length) != 0) {
+        fprintf(stderr, "  %s read and written again is not %s\n", hex, expected);
         return 0;
     }
     return 1;
@@ -133,8 +187,11 @@ static void test_indefinite_lengths_are_unsupported(void) {
         "826161bf61626163ff", "bf6346756ef563416d7421ff",
     };
     ta_cbor_document document;
-    for (size_t k = 0; k < sizeof examples / sizeof examples[0]; k++)
+    ta_bytes out;
+    for (size_t k = 0; k < sizeof examples / sizeof examples[0]; k++) {
         CHECK(decode(examples[k], &document) == TA_ERROR_UNSUPPORTED);
+        CHECK(rewrite(examples[k], &out) == TA_ERROR_UNSUPPORTED); /* the reader too */
+    }
 }
 
 static void test_malformed(void) {
@@ -160,9 +217,13 @@ static void test_malformed(void) {
         "9bffffffffffffffff00", /* a count past the message */
     };
     ta_cbor_document document;
+    ta_bytes out;
     for (size_t k = 0; k < sizeof examples / sizeof examples[0]; k++) {
         ta_status status = decode(examples[k], &document);
         if (status != TA_ERROR_INVALID) fprintf(stderr, "  %s: %d\n", examples[k], status);
+        CHECK(status == TA_ERROR_INVALID);
+        status = rewrite(examples[k], &out); /* the reader refuses it too */
+        if (status != TA_ERROR_INVALID) fprintf(stderr, "  read: %s: %d\n", examples[k], status);
         CHECK(status == TA_ERROR_INVALID);
     }
 }
@@ -170,6 +231,7 @@ static void test_malformed(void) {
 static void test_depth(void) {
     char hex[2 * (TA_CBOR_DEPTH_MAX + 2) + 1];
     ta_cbor_document document;
+    ta_bytes out;
     /* TA_CBOR_DEPTH_MAX arrays around a 0 */
     size_t at = 0;
     for (int k = 0; k < TA_CBOR_DEPTH_MAX; k++, at += 2)
@@ -177,22 +239,47 @@ static void test_depth(void) {
     memcpy(hex + at, "00", 3);
     CHECK(decode(hex, &document) == TA_OK);
     CHECK_EQUAL(document.count, TA_CBOR_DEPTH_MAX + 1);
-    ta_buffer out = {encoded, sizeof encoded, 0};
-    CHECK(ta_cbor_encode(&document, &out) == TA_OK);
-    /* one more */
+    CHECK(round_trip(hex, hex));
+    /* the reader says how deep each item is */
+    ta_cbor_reader reader;
+    ta_cbor_reader_init(&reader, (ta_bytes){message, unhex(hex, message)});
+    ta_cbor_item item;
+    uint32_t deepest = 0;
+    while (ta_cbor_read(&reader, &item) == 1)
+        deepest = item.depth;
+    CHECK_EQUAL(deepest, TA_CBOR_DEPTH_MAX);
+    /* one more: refused by the decoder, the reader and the writer */
     at = 0;
     for (int k = 0; k <= TA_CBOR_DEPTH_MAX; k++, at += 2)
         memcpy(hex + at, "81", 2);
     memcpy(hex + at, "00", 3);
     CHECK(decode(hex, &document) == TA_ERROR_INVALID);
+    CHECK(rewrite(hex, &out) == TA_ERROR_INVALID);
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    for (int k = 0; k <= TA_CBOR_DEPTH_MAX; k++)
+        ta_cbor_write_array(&writer, k == TA_CBOR_DEPTH_MAX ? 0 : 1); /* the last is whole: [] */
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_OK); /* 64 open, the innermost empty */
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    for (int k = 0; k <= TA_CBOR_DEPTH_MAX; k++)
+        ta_cbor_write_array(&writer, 1);
+    CHECK(writer.status == TA_ERROR_INVALID);
+    ta_cbor_write_uint(&writer, 0);
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_ERROR_INVALID);
     /* tags count as nesting too */
     at = 0;
     for (int k = 0; k <= TA_CBOR_DEPTH_MAX; k++, at += 2)
         memcpy(hex + at, "c1", 2);
     memcpy(hex + at, "00", 3);
     CHECK(decode(hex, &document) == TA_ERROR_INVALID);
+    CHECK(rewrite(hex, &out) == TA_ERROR_INVALID);
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    for (int k = 0; k <= TA_CBOR_DEPTH_MAX; k++)
+        ta_cbor_write_tag(&writer, 1);
+    CHECK(writer.status == TA_ERROR_INVALID);
 }
 
+/* The decoder's tokens: TA_ERROR_NO_MEMORY says how many it needs. */
 static void test_no_memory(void) {
     unsigned char bytes[16];
     size_t length = unhex("8201820203", bytes); /* [1, [2, 3]]: five tokens */
@@ -209,56 +296,157 @@ static void test_no_memory(void) {
     length = unhex("820182020361", bytes);
     document = (ta_cbor_document){.bytes = {bytes, length}, .tokens = few, .capacity = 2};
     CHECK(ta_cbor_decode(&document) == TA_ERROR_INVALID);
-
-    /* encoding: the length it needs */
-    length = unhex("8201820203", bytes);
-    document = (ta_cbor_document){.bytes = {bytes, length}, .tokens = enough, .capacity = 5};
-    CHECK(ta_cbor_decode(&document) == TA_OK);
-    unsigned char small[3];
-    ta_buffer out = {small, sizeof small, 0};
-    CHECK(ta_cbor_encode(&document, &out) == TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(out.length, 5);
-    out = (ta_buffer){encoded, 5, 0};
-    CHECK(ta_cbor_encode(&document, &out) == TA_OK);
-    CHECK_EQUAL(out.length, 5);
-    CHECK(memcmp(encoded, bytes, 5) == 0);
-    /* no buffer at all: measured only */
-    out = (ta_buffer){NULL, 0, 0};
-    CHECK(ta_cbor_encode(&document, &out) == TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(out.length, 5);
 }
 
-static void test_encode_invalid(void) {
-    ta_buffer out = {encoded, sizeof encoded, 0};
-    ta_cbor_token list[3];
-    ta_cbor_document document = {.bytes = {"ab", 2}, .tokens = list, .capacity = 3};
+/* An allocator over the C library's that counts what it gives and takes,
+ * and refuses once `refuse` reaches 0. */
+typedef struct counted_heap {
+    size_t live, blocks;
+    int refuse; /* blocks still given (-1: every one) */
+} counted_heap;
+
+static void *counted_alloc(void *context, size_t size, size_t align) {
+    counted_heap *heap = (counted_heap *)context;
+    (void)align;
+    if (heap->refuse == 0) return NULL;
+    if (heap->refuse > 0) heap->refuse--;
+    heap->live += size;
+    heap->blocks++;
+    return malloc(size);
+}
+
+static void counted_free(void *context, void *pointer, size_t size) {
+    counted_heap *heap = (counted_heap *)context;
+    heap->live -= size;
+    heap->blocks--;
+    free(pointer);
+}
+
+/* [1, [2, 3], "<text>"] into `writer` */
+static void write_sample(ta_cbor_writer *writer, ta_string_view text) {
+    ta_cbor_write_array(writer, 3);
+    ta_cbor_write_uint(writer, 1);
+    ta_cbor_write_array(writer, 2);
+    ta_cbor_write_uint(writer, 2);
+    ta_cbor_write_uint(writer, 3);
+    ta_cbor_write_text(writer, text);
+}
+
+/* The writer's room: grown through an allocator, or full without one. */
+static void test_writer_growth(void) {
+    static char long_text[1000];
+    memset(long_text, 'x', sizeof long_text);
+    ta_string_view text = {long_text, sizeof long_text};
+    size_t whole = 1 + 1 + 3 + 3 + sizeof long_text; /* 83 01 82 02 03 79 03e8 x... */
+    /* no allocator: the write that does not fit is TA_ERROR_NO_MEMORY, nothing
+     * is written past the room, and length counts what the item needs */
+    unsigned char small[8];
+    memset(small, 0xEE, sizeof small);
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){small, 6, 0}, NULL);
+    write_sample(&writer, text);
+    CHECK(writer.status == TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(writer.length, whole);
+    CHECK(small[6] == 0xEE && small[7] == 0xEE);
+    CHECK(memcmp(small, "\x83\x01\x82\x02\x03", 5) == 0); /* what fitted stays */
+    ta_bytes out = {small, 1};
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_ERROR_NO_MEMORY);
+    CHECK(out.pointer == NULL && out.length == 0);
+    /* no room at all: counted only */
+    ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, NULL);
+    write_sample(&writer, text);
+    CHECK(writer.status == TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(writer.length, whole);
+
+    /* an allocator: the room grows, the room is not given back, the grown
+     * block is, and the bytes are those of a room big enough */
+    counted_heap heap = {0, 0, -1};
+    ta_allocator allocator = {&heap, counted_alloc, counted_free};
+    ta_cbor_writer_init(&writer, (ta_buffer){small, sizeof small, 0}, &allocator);
+    write_sample(&writer, text);
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_OK);
+    CHECK_EQUAL(out.length, whole);
+    CHECK(out.pointer != small);
+    CHECK_EQUAL(heap.blocks, 1u); /* blocks it outgrew went back */
+    static unsigned char big[2048];
+    ta_cbor_writer room;
+    ta_cbor_writer_init(&room, (ta_buffer){big, sizeof big, 0}, NULL);
+    write_sample(&room, text);
+    ta_bytes expected;
+    CHECK(ta_cbor_writer_bytes(&room, &expected) == TA_OK);
+    CHECK(out.length == expected.length && memcmp(out.pointer, expected.pointer, out.length) == 0);
+    ta_cbor_writer_free(&writer);
+    CHECK_EQUAL(heap.blocks, 0u);
+    CHECK_EQUAL(heap.live, 0u);
+    /* no room, an allocator: everything in blocks it grows */
+    ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &allocator);
+    write_sample(&writer, text);
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_OK);
+    CHECK(out.length == expected.length && memcmp(out.pointer, expected.pointer, out.length) == 0);
+    ta_cbor_writer_free(&writer);
+    CHECK_EQUAL(heap.live, 0u);
+    /* the allocator refuses: TA_ERROR_NO_MEMORY, nothing leaks */
+    heap.refuse = 0;
+    ta_cbor_writer_init(&writer, (ta_buffer){small, sizeof small, 0}, &allocator);
+    write_sample(&writer, text);
+    CHECK(writer.status == TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(writer.length, whole);
+    ta_cbor_writer_free(&writer);
+    CHECK_EQUAL(heap.live, 0u);
+}
+
+static void test_writer_invalid(void) {
+    ta_cbor_writer writer;
+    ta_bytes out;
     /* an array short of its items */
-    list[0] = (ta_cbor_token){TA_CBOR_ARRAY, 2, 0};
-    list[1] = (ta_cbor_token){TA_CBOR_UINT, 0, 1};
-    document.count = 2;
-    CHECK(ta_cbor_encode(&document, &out) == TA_ERROR_INVALID);
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    ta_cbor_write_array(&writer, 2);
+    ta_cbor_write_uint(&writer, 1);
+    CHECK(writer.status == TA_OK);
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_ERROR_INVALID);
     /* two items */
-    list[0] = (ta_cbor_token){TA_CBOR_UINT, 0, 1};
-    document.count = 2;
-    CHECK(ta_cbor_encode(&document, &out) == TA_ERROR_INVALID);
-    /* text outside the bytes */
-    list[0] = (ta_cbor_token){TA_CBOR_TEXT, 3, 0};
-    document.count = 1;
-    CHECK(ta_cbor_encode(&document, &out) == TA_ERROR_INVALID);
-    /* text that is not UTF-8 */
-    document.bytes = (ta_bytes){"\xc3\x28", 2};
-    list[0] = (ta_cbor_token){TA_CBOR_TEXT, 2, 0};
-    CHECK(ta_cbor_encode(&document, &out) == TA_ERROR_INVALID);
-    list[0] = (ta_cbor_token){TA_CBOR_BYTES, 2, 0};
-    CHECK(ta_cbor_encode(&document, &out) == TA_OK);
-    /* simple values 24-31 and unknown kinds */
-    list[0] = (ta_cbor_token){TA_CBOR_SIMPLE, 0, 24};
-    CHECK(ta_cbor_encode(&document, &out) == TA_ERROR_INVALID);
-    list[0] = (ta_cbor_token){99, 0, 0};
-    CHECK(ta_cbor_encode(&document, &out) == TA_ERROR_INVALID);
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    ta_cbor_write_uint(&writer, 1);
+    ta_cbor_write_uint(&writer, 2);
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_ERROR_INVALID);
     /* nothing */
-    document.count = 0;
-    CHECK(ta_cbor_encode(&document, &out) == TA_ERROR_INVALID);
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_ERROR_INVALID);
+    /* text that is not UTF-8; the same bytes as bytes are fine */
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    ta_cbor_write_text(&writer, (ta_string_view){"\xc3\x28", 2});
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_ERROR_INVALID);
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    ta_cbor_write_bytes(&writer, (ta_bytes){"\xc3\x28", 2});
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_OK);
+    /* simple values 24-31 */
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    ta_cbor_write_simple(&writer, 24);
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_ERROR_INVALID);
+    /* an end that closes nothing, or a container counted up front */
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    ta_cbor_write_end(&writer);
+    CHECK(writer.status == TA_ERROR_INVALID);
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    ta_cbor_write_array(&writer, 1);
+    ta_cbor_write_end(&writer);
+    CHECK(writer.status == TA_ERROR_INVALID);
+    /* a map counted later with a key and no value */
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    ta_cbor_write_map(&writer, TA_CBOR_COUNT_LATER);
+    ta_cbor_write_text(&writer, ta_string("a"));
+    ta_cbor_write_end(&writer);
+    CHECK(writer.status == TA_ERROR_INVALID);
+    /* a container counted later and never closed */
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    ta_cbor_write_array(&writer, TA_CBOR_COUNT_LATER);
+    ta_cbor_write_uint(&writer, 1);
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_ERROR_INVALID);
+    /* invalid wins over a full room */
+    ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, NULL);
+    ta_cbor_write_text(&writer, ta_string("ok"));
+    ta_cbor_write_simple(&writer, 25);
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_ERROR_INVALID);
 }
 
 static void test_member_and_next(void) {
@@ -288,12 +476,8 @@ static void test_member_and_next(void) {
 
 /* The proposal's request, built from C. */
 static void test_writer(void) {
-    ta_cbor_token list[16];
-    char strings[64];
-    ta_cbor_writer writer = {
-        .document = {.tokens = list, .capacity = 16},
-        .strings = {.pointer = strings, .capacity = sizeof strings},
-    };
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
     ta_cbor_write_map(&writer, 3);
     ta_cbor_write_text(&writer, ta_string("op"));
     ta_cbor_write_text(&writer, ta_string("trace.configure"));
@@ -301,8 +485,9 @@ static void test_writer(void) {
     ta_cbor_write_text(&writer, ta_string("summary"));
     ta_cbor_write_text(&writer, ta_string("sample"));
     ta_cbor_write_float(&writer, 0.01);
-    ta_buffer out = {encoded, sizeof encoded, 0};
-    CHECK(ta_cbor_finish(&writer, &out) == TA_OK);
+    ta_bytes out;
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_OK);
+    CHECK(out.pointer == encoded); /* in the room */
     unsigned char want[64];
     size_t length = unhex("a3"
                           "626f70"
@@ -316,31 +501,31 @@ static void test_writer(void) {
     CHECK(memcmp(encoded, want, length) == 0);
 
     /* and read back */
-    ta_cbor_document document = {.bytes = {encoded, out.length}, .tokens = tokens, .capacity = 256};
+    ta_cbor_document document = {.bytes = out, .tokens = tokens, .capacity = 256};
     CHECK(ta_cbor_decode(&document) == TA_OK);
     ta_string_view operation = ta_cbor_string(&document, ta_cbor_member(&document, 0, ta_string("op")));
     CHECK(operation.length == 15 && memcmp(operation.pointer, "trace.configure", 15) == 0);
     uint32_t sample = ta_cbor_member(&document, 0, ta_string("sample"));
     CHECK(as_double(document.tokens[sample].value) == 0.01);
 
-    /* every kind of token */
-    writer = (ta_cbor_writer){.document = {.tokens = list, .capacity = 16},
-                              .strings = {.pointer = strings, .capacity = sizeof strings}};
-    ta_cbor_write_array(&writer, 7);
+    /* every kind of item */
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    ta_cbor_write_array(&writer, 8);
     ta_cbor_write_int(&writer, -1000);
     ta_cbor_write_int(&writer, INT64_MIN);
     ta_cbor_write_uint(&writer, UINT64_MAX);
+    ta_cbor_write_negative(&writer, UINT64_MAX); /* -2^64 */
     ta_cbor_write_bytes(&writer, (ta_bytes){"\x01\x02", 2});
     ta_cbor_write_simple(&writer, TA_CBOR_NULL);
     ta_cbor_write_tag(&writer, TA_CBOR_TAG_URI);
     ta_cbor_write_text(&writer, ta_string("tinyactors://a/@b"));
     ta_cbor_write_text(&writer, ta_string(""));
-    out = (ta_buffer){encoded, sizeof encoded, 0};
-    CHECK(ta_cbor_finish(&writer, &out) == TA_OK);
-    length = unhex("87"
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_OK);
+    length = unhex("88"
                    "3903e7"
                    "3b7fffffffffffffff"
                    "1bffffffffffffffff"
+                   "3bffffffffffffffff"
                    "420102"
                    "f6"
                    "d820" "7174696e796163746f72733a2f2f612f4062"
@@ -348,32 +533,143 @@ static void test_writer(void) {
                    want);
     CHECK_EQUAL(out.length, length);
     CHECK(memcmp(encoded, want, length) == 0);
+}
 
-    /* too few tokens or too little room for strings: what it needs */
-    ta_cbor_token two[2];
-    char four[4];
-    writer = (ta_cbor_writer){.document = {.tokens = two, .capacity = 2},
-                              .strings = {.pointer = four, .capacity = sizeof four}};
-    ta_cbor_write_map(&writer, 2);
-    ta_cbor_write_text(&writer, ta_string("op"));
-    ta_cbor_write_text(&writer, ta_string("stats"));
-    ta_cbor_write_text(&writer, ta_string("x"));
-    ta_cbor_write_uint(&writer, 1);
+/* A count fixed when the container closes: the head in its shortest form,
+ * the items moved up when it is longer than a byte. */
+static void test_count_later(void) {
+    static unsigned char room[1 << 18], expected_room[1 << 18];
+    const uint32_t sizes[] = {0, 1, 23, 24, 255, 256, 65535, 65536};
+    for (size_t k = 0; k < sizeof sizes / sizeof sizes[0]; k++) {
+        uint32_t n = sizes[k];
+        /* [[n items counted later], "end"] against the same counted up front */
+        ta_cbor_writer later, upfront;
+        ta_cbor_writer_init(&later, (ta_buffer){room, sizeof room, 0}, NULL);
+        ta_cbor_writer_init(&upfront, (ta_buffer){expected_room, sizeof expected_room, 0}, NULL);
+        ta_cbor_write_array(&later, 2);
+        ta_cbor_write_array(&upfront, 2);
+        ta_cbor_write_array(&later, TA_CBOR_COUNT_LATER);
+        ta_cbor_write_array(&upfront, n);
+        for (uint32_t i = 0; i < n; i++) {
+            ta_cbor_write_uint(&later, i % 30);
+            ta_cbor_write_uint(&upfront, i % 30);
+        }
+        ta_cbor_write_end(&later);
+        ta_cbor_write_text(&later, ta_string("end"));
+        ta_cbor_write_text(&upfront, ta_string("end"));
+        ta_bytes a, b;
+        CHECK(ta_cbor_writer_bytes(&later, &a) == TA_OK);
+        CHECK(ta_cbor_writer_bytes(&upfront, &b) == TA_OK);
+        int same = a.length == b.length && memcmp(a.pointer, b.pointer, a.length) == 0;
+        if (!same) fprintf(stderr, "  %u items counted later: %zu bytes, not %zu\n", n, a.length, b.length);
+        CHECK(same);
+    }
+    /* a map whose writer drops some members: {"a": 1, "c": 3} */
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+    ta_cbor_write_map(&writer, TA_CBOR_COUNT_LATER);
+    const char *keys[] = {"a", "b", "c"};
+    for (int i = 0; i < 3; i++) {
+        if (i == 1) continue; /* dropped, its key with it */
+        ta_cbor_write_text(&writer, ta_string(keys[i]));
+        ta_cbor_write_uint(&writer, (uint64_t)i + 1);
+    }
+    ta_cbor_write_end(&writer);
+    ta_bytes out;
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_OK);
+    unsigned char want[16];
+    size_t length = unhex("a2616101616303", want);
+    CHECK(out.length == length && memcmp(out.pointer, want, length) == 0);
+    /* nested counted later, the outer longer than a byte, growing as it goes */
+    counted_heap heap = {0, 0, -1};
+    ta_allocator allocator = {&heap, counted_alloc, counted_free};
+    ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &allocator);
+    ta_cbor_write_array(&writer, TA_CBOR_COUNT_LATER);
+    for (int i = 0; i < 30; i++) {
+        ta_cbor_write_map(&writer, TA_CBOR_COUNT_LATER);
+        for (int j = 0; j < 30; j++) {
+            ta_cbor_write_uint(&writer, (uint64_t)j);
+            ta_cbor_write_text(&writer, ta_string("value"));
+        }
+        ta_cbor_write_end(&writer);
+    }
+    ta_cbor_write_end(&writer);
+    CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_OK);
+    ta_cbor_document document = {.bytes = out, .tokens = NULL, .capacity = 0};
+    CHECK(ta_cbor_decode(&document) == TA_ERROR_NO_MEMORY); /* well-formed: only tokens lacked */
+    CHECK_EQUAL(document.count, 1u + 30u * (1u + 60u));
+    CHECK(((const unsigned char *)out.pointer)[0] == 0x98 && ((const unsigned char *)out.pointer)[1] == 30);
+    CHECK(((const unsigned char *)out.pointer)[2] == 0xb8 && ((const unsigned char *)out.pointer)[3] == 30);
+    ta_cbor_writer_free(&writer);
+    CHECK_EQUAL(heap.live, 0u);
+    /* counted later past a full room: the length is still what it needs */
+    ta_cbor_writer_init(&writer, (ta_buffer){encoded, 4, 0}, NULL);
+    ta_cbor_write_array(&writer, TA_CBOR_COUNT_LATER);
+    for (int i = 0; i < 30; i++)
+        ta_cbor_write_uint(&writer, 1);
+    ta_cbor_write_end(&writer);
     CHECK(writer.status == TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(writer.document.count, 5);
-    CHECK_EQUAL(writer.strings.length, 8);
-    out = (ta_buffer){encoded, sizeof encoded, 99};
-    CHECK(ta_cbor_finish(&writer, &out) == TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(out.length, 0);
+    CHECK_EQUAL(writer.length, 2u + 30u);
+}
 
-    /* a container short of its items is refused at the end */
-    writer = (ta_cbor_writer){.document = {.tokens = list, .capacity = 16},
-                              .strings = {.pointer = strings, .capacity = sizeof strings}};
-    ta_cbor_write_map(&writer, 1);
-    ta_cbor_write_text(&writer, ta_string("op"));
-    CHECK(writer.status == TA_OK);
-    out = (ta_buffer){encoded, sizeof encoded, 0};
-    CHECK(ta_cbor_finish(&writer, &out) == TA_ERROR_INVALID);
+/* The reader: each item with its kind, value, length, view and depth. */
+static void test_reader(void) {
+    /* {"a": [1, -2, h'0102'], "b": 32("x"), "c": 1.5, "d": true} */
+    size_t length = unhex("a46161830121420102" "6162d8206178" "6163f93e00" "6164f5", message);
+    ta_cbor_reader reader;
+    ta_cbor_reader_init(&reader, (ta_bytes){message, length});
+    ta_cbor_item item;
+    static const struct {
+        uint32_t kind, count;
+        uint64_t value;
+        const char *bytes;
+        uint32_t depth;
+    } want[] = {
+        {TA_CBOR_MAP, 4, 0, NULL, 0},   {TA_CBOR_TEXT, 1, 0, "a", 1}, {TA_CBOR_ARRAY, 3, 0, NULL, 1},
+        {TA_CBOR_UINT, 0, 1, NULL, 2},  {TA_CBOR_NEGINT, 0, 1, NULL, 2},
+        {TA_CBOR_BYTES, 2, 0, "\x01\x02", 2},
+        {TA_CBOR_TEXT, 1, 0, "b", 1},   {TA_CBOR_TAG, 0, 32, NULL, 1}, {TA_CBOR_TEXT, 1, 0, "x", 2},
+        {TA_CBOR_TEXT, 1, 0, "c", 1},   {TA_CBOR_FLOAT, 0, UINT64_C(0x3FF8000000000000), NULL, 1},
+        {TA_CBOR_TEXT, 1, 0, "d", 1},   {TA_CBOR_SIMPLE, 0, TA_CBOR_TRUE, NULL, 1},
+    };
+    for (size_t k = 0; k < sizeof want / sizeof want[0]; k++) {
+        CHECK_EQUAL(ta_cbor_read(&reader, &item), 1);
+        int same = item.kind == want[k].kind && item.count == want[k].count && item.value == want[k].value &&
+                   item.depth == want[k].depth &&
+                   (!want[k].bytes || (item.bytes.length == item.count &&
+                                       !memcmp(item.bytes.pointer, want[k].bytes, item.count)));
+        if (!same) fprintf(stderr, "  item %zu: kind %u count %u value %llu depth %u\n", k, item.kind,
+                           item.count, (unsigned long long)item.value, item.depth);
+        CHECK(same);
+    }
+    CHECK_EQUAL(ta_cbor_read(&reader, &item), 0); /* read whole */
+    CHECK_EQUAL(ta_cbor_read(&reader, &item), 0);
+    /* a view points into the message: nothing is copied */
+    ta_cbor_reader_init(&reader, (ta_bytes){message, length});
+    ta_cbor_read(&reader, &item);
+    ta_cbor_read(&reader, &item);
+    CHECK((const unsigned char *)item.bytes.pointer == message + 2);
+    /* one scalar, then the end; bytes after it are refused, and stay refused */
+    length = unhex("0102", message);
+    ta_cbor_reader_init(&reader, (ta_bytes){message, length});
+    CHECK_EQUAL(ta_cbor_read(&reader, &item), 1);
+    CHECK_EQUAL(ta_cbor_read(&reader, &item), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_cbor_read(&reader, &item), TA_ERROR_INVALID);
+    /* a truncated container: refused at the item that cannot be whole (a
+     * count past the bytes left), the items before it read */
+    length = unhex("82018201", message);
+    ta_cbor_reader_init(&reader, (ta_bytes){message, length});
+    CHECK_EQUAL(ta_cbor_read(&reader, &item), 1);
+    CHECK_EQUAL(ta_cbor_read(&reader, &item), 1);
+    CHECK_EQUAL(ta_cbor_read(&reader, &item), TA_ERROR_INVALID);
+    length = unhex("820161", message); /* text past the end */
+    ta_cbor_reader_init(&reader, (ta_bytes){message, length});
+    CHECK_EQUAL(ta_cbor_read(&reader, &item), 1);
+    CHECK_EQUAL(ta_cbor_read(&reader, &item), 1);
+    CHECK_EQUAL(ta_cbor_read(&reader, &item), TA_ERROR_INVALID);
+    /* an empty message */
+    ta_cbor_reader_init(&reader, (ta_bytes){NULL, 0});
+    CHECK_EQUAL(ta_cbor_read(&reader, &item), TA_ERROR_INVALID);
 }
 
 /* Each float in the shortest width that keeps it exactly. */
@@ -397,14 +693,12 @@ static void test_float_widths(void) {
         {3.4028234663852886e+38, "fa7f7fffff"},
         {-4.0, "f9c400"},
     };
-    ta_cbor_token list[1];
-    char none[1];
     for (size_t k = 0; k < sizeof floats / sizeof floats[0]; k++) {
-        ta_cbor_writer writer = {.document = {.tokens = list, .capacity = 1},
-                                 .strings = {.pointer = none, .capacity = 0}};
+        ta_cbor_writer writer;
+        ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
         ta_cbor_write_float(&writer, floats[k].value);
-        ta_buffer out = {encoded, sizeof encoded, 0};
-        CHECK(ta_cbor_finish(&writer, &out) == TA_OK);
+        ta_bytes out;
+        CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_OK);
         unsigned char want[16];
         size_t length = unhex(floats[k].hex, want);
         int same = out.length == length && memcmp(encoded, want, length) == 0;
@@ -419,10 +713,11 @@ static void test_float_widths(void) {
     /* infinities and NaN, whatever their bits */
     uint64_t nans[] = {UINT64_C(0x7FF8000000000000), UINT64_C(0xFFF8000000000001), UINT64_C(0x7FF0000000000001)};
     for (size_t k = 0; k < sizeof nans / sizeof nans[0]; k++) {
-        ta_cbor_token token = {TA_CBOR_FLOAT, 0, nans[k]};
-        ta_cbor_document document = {.tokens = &token, .capacity = 1, .count = 1};
-        ta_buffer out = {encoded, sizeof encoded, 0};
-        CHECK(ta_cbor_encode(&document, &out) == TA_OK);
+        ta_cbor_writer writer;
+        ta_cbor_writer_init(&writer, (ta_buffer){encoded, sizeof encoded, 0}, NULL);
+        ta_cbor_write_float(&writer, as_double(nans[k]));
+        ta_bytes out;
+        CHECK(ta_cbor_writer_bytes(&writer, &out) == TA_OK);
         CHECK(out.length == 3 && encoded[0] == 0xf9 && encoded[1] == 0x7e && encoded[2] == 0);
     }
     CHECK(round_trip("f97c00", "f97c00"));
@@ -543,9 +838,12 @@ int main(void) {
     RUN(test_malformed);
     RUN(test_depth);
     RUN(test_no_memory);
-    RUN(test_encode_invalid);
+    RUN(test_writer_growth);
+    RUN(test_writer_invalid);
     RUN(test_member_and_next);
     RUN(test_writer);
+    RUN(test_count_later);
+    RUN(test_reader);
     RUN(test_float_widths);
     RUN(test_diagnostic);
     TEST_MAIN_END();

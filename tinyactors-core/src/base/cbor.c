@@ -1,7 +1,10 @@
-/* cbor.c — CBOR (RFC 8949) to and from token lists (include/tinyactors/cbor.h).
+/* cbor.c — CBOR (RFC 8949) (include/tinyactors/cbor.h): token lists for
+ * random access, a reader that yields one item at a time, a writer that
+ * writes one item at a time into a room grown through a caller's allocator
+ * (base/output.h), and diagnostic notation.
  *
- * Both directions walk the item tree with an explicit stack of how many
- * items each open container still has, so nothing recurses. */
+ * Each walks the item tree with an explicit stack of how many items each
+ * open container still has, so nothing recurses. */
 #include <tinyactors/cbor.h>
 
 #include "base/cbor_output.h"
@@ -170,6 +173,75 @@ static ta_status read_argument(cbor_reader *reader, uint32_t info, uint64_t *arg
     return TA_OK;
 }
 
+/* The item at reader->at as a token (a string's value: its offset), moving
+ * past its head and, for a string, its bytes. */
+static ta_status read_item(cbor_reader *reader, ta_cbor_token *token) {
+    if (reader->at == reader->length) return TA_ERROR_INVALID; /* truncated */
+    uint32_t initial = reader->bytes[reader->at++];
+    uint32_t major = initial >> 5, info = initial & 0x1F;
+    uint64_t argument = 0;
+    token->kind = 0;
+    token->count = 0;
+    token->value = 0;
+    if (info == INFO_INDEFINITE)
+        return major >= MAJOR_BYTES && major <= MAJOR_MAP ? TA_ERROR_UNSUPPORTED : TA_ERROR_INVALID;
+    ta_status status = read_argument(reader, info, &argument);
+    if (status != TA_OK) return status;
+    if (major == MAJOR_SIMPLE && info >= INFO_TWO_BYTES) { /* a float */
+        token->kind = TA_CBOR_FLOAT;
+        token->value = info == INFO_TWO_BYTES    ? half_widen((uint32_t)argument)
+                       : info == INFO_FOUR_BYTES ? single_widen((uint32_t)argument)
+                                                 : argument;
+        return TA_OK;
+    }
+    switch (major) {
+    case MAJOR_UINT:
+    case MAJOR_NEGINT:
+        token->kind = major == MAJOR_UINT ? TA_CBOR_UINT : TA_CBOR_NEGINT;
+        token->value = argument;
+        break;
+    case MAJOR_BYTES:
+    case MAJOR_TEXT:
+        if (argument > reader->length - reader->at) return TA_ERROR_INVALID;
+        if (argument > UINT32_MAX) return TA_ERROR_UNSUPPORTED;
+        if (major == MAJOR_TEXT && !utf8_valid(reader->bytes + reader->at, (size_t)argument))
+            return TA_ERROR_INVALID;
+        token->kind = major == MAJOR_TEXT ? TA_CBOR_TEXT : TA_CBOR_BYTES;
+        token->count = (uint32_t)argument;
+        token->value = reader->at;
+        reader->at += (size_t)argument;
+        break;
+    case MAJOR_ARRAY:
+    case MAJOR_MAP: {
+        /* every item takes at least one byte: a count past the rest is truncated */
+        uint64_t items = major == MAJOR_MAP ? argument * 2 : argument;
+        if (argument > UINT32_MAX || items > reader->length - reader->at) return TA_ERROR_INVALID;
+        token->kind = major == MAJOR_MAP ? TA_CBOR_MAP : TA_CBOR_ARRAY;
+        token->count = (uint32_t)argument;
+        break;
+    }
+    case MAJOR_TAG:
+        token->kind = TA_CBOR_TAG;
+        token->value = argument;
+        break;
+    default: /* MAJOR_SIMPLE */
+        /* a two-byte simple value below 32 is malformed (RFC 8949 §3.3) */
+        if (info == INFO_ONE_BYTE && argument < 32) return TA_ERROR_INVALID;
+        token->kind = TA_CBOR_SIMPLE;
+        token->value = argument;
+        break;
+    }
+    return TA_OK;
+}
+
+/* The items a token's item holds: a tag's one, an array's, a map's keys and values. */
+static uint64_t token_children(const ta_cbor_token *token) {
+    return token->kind == TA_CBOR_TAG     ? 1
+           : token->kind == TA_CBOR_MAP   ? (uint64_t)token->count * 2
+           : token->kind == TA_CBOR_ARRAY ? token->count
+                                          : 0;
+}
+
 ta_status ta_cbor_decode(ta_cbor_document *document) {
     cbor_reader reader = {(const unsigned char *)document->bytes.pointer, document->bytes.length, 0};
     cbor_nesting nesting;
@@ -177,70 +249,13 @@ ta_status ta_cbor_decode(ta_cbor_document *document) {
     uint32_t count = 0;
     document->count = 0;
     for (;;) {
-        if (reader.at == reader.length) return TA_ERROR_INVALID; /* truncated */
-        uint32_t initial = reader.bytes[reader.at++];
-        uint32_t major = initial >> 5, info = initial & 0x1F;
-        ta_cbor_token token = {0, 0, 0};
-        uint64_t argument = 0;
-        if (info == INFO_INDEFINITE)
-            return major >= MAJOR_BYTES && major <= MAJOR_MAP ? TA_ERROR_UNSUPPORTED : TA_ERROR_INVALID;
-        if (major == MAJOR_SIMPLE && info >= INFO_TWO_BYTES) {
-            /* a float */
-            ta_status status = read_argument(&reader, info, &argument);
-            if (status != TA_OK) return status;
-            token.kind = TA_CBOR_FLOAT;
-            token.value = info == INFO_TWO_BYTES    ? half_widen((uint32_t)argument)
-                          : info == INFO_FOUR_BYTES ? single_widen((uint32_t)argument)
-                                                    : argument;
-        } else {
-            ta_status status = read_argument(&reader, info, &argument);
-            if (status != TA_OK) return status;
-            switch (major) {
-            case MAJOR_UINT:
-            case MAJOR_NEGINT:
-                token.kind = major == MAJOR_UINT ? TA_CBOR_UINT : TA_CBOR_NEGINT;
-                token.value = argument;
-                break;
-            case MAJOR_BYTES:
-            case MAJOR_TEXT:
-                if (argument > reader.length - reader.at) return TA_ERROR_INVALID;
-                if (argument > UINT32_MAX) return TA_ERROR_UNSUPPORTED;
-                if (major == MAJOR_TEXT && !utf8_valid(reader.bytes + reader.at, (size_t)argument))
-                    return TA_ERROR_INVALID;
-                token.kind = major == MAJOR_TEXT ? TA_CBOR_TEXT : TA_CBOR_BYTES;
-                token.count = (uint32_t)argument;
-                token.value = reader.at;
-                reader.at += (size_t)argument;
-                break;
-            case MAJOR_ARRAY:
-            case MAJOR_MAP: {
-                /* every item takes at least one byte: a count past the rest is truncated */
-                uint64_t items = major == MAJOR_MAP ? argument * 2 : argument;
-                if (argument > UINT32_MAX || items > reader.length - reader.at) return TA_ERROR_INVALID;
-                token.kind = major == MAJOR_MAP ? TA_CBOR_MAP : TA_CBOR_ARRAY;
-                token.count = (uint32_t)argument;
-                break;
-            }
-            case MAJOR_TAG:
-                token.kind = TA_CBOR_TAG;
-                token.value = argument;
-                break;
-            default: /* MAJOR_SIMPLE */
-                /* a two-byte simple value below 32 is malformed (RFC 8949 §3.3) */
-                if (info == INFO_ONE_BYTE && argument < 32) return TA_ERROR_INVALID;
-                token.kind = TA_CBOR_SIMPLE;
-                token.value = argument;
-                break;
-            }
-        }
+        ta_cbor_token token;
+        ta_status status = read_item(&reader, &token);
+        if (status != TA_OK) return status;
         if (count == UINT32_MAX) return TA_ERROR_UNSUPPORTED;
         if (count < document->capacity) document->tokens[count] = token;
         count++;
-
-        uint64_t children = token.kind == TA_CBOR_TAG     ? 1
-                            : token.kind == TA_CBOR_MAP   ? (uint64_t)token.count * 2
-                            : token.kind == TA_CBOR_ARRAY ? token.count
-                                                          : 0;
+        uint64_t children = token_children(&token);
         if (children) {
             if (nesting_open(&nesting, children) != TA_OK) return TA_ERROR_INVALID;
         } else if (nesting_complete(&nesting)) {
@@ -250,6 +265,52 @@ ta_status ta_cbor_decode(ta_cbor_document *document) {
     if (reader.at != reader.length) return TA_ERROR_INVALID; /* bytes after the item */
     document->count = count;
     return count > document->capacity ? TA_ERROR_NO_MEMORY : TA_OK;
+}
+
+/* ---- reading, one item at a time ------------------------------------------- */
+
+void ta_cbor_reader_init(ta_cbor_reader *reader, ta_bytes message) {
+    reader->message = message;
+    reader->at = 0;
+    reader->depth = 0;
+    reader->status = TA_OK;
+}
+
+int32_t ta_cbor_read(ta_cbor_reader *reader, ta_cbor_item *item) {
+    if (reader->status != TA_OK) return reader->status;
+    const unsigned char *bytes = (const unsigned char *)reader->message.pointer;
+    if (reader->at && !reader->depth) { /* the item is read whole */
+        if (reader->at == reader->message.length) return 0;
+        reader->status = TA_ERROR_INVALID; /* bytes after the item */
+        return reader->status;
+    }
+    cbor_reader cursor = {bytes, reader->message.length, reader->at};
+    ta_cbor_token token;
+    ta_status status = read_item(&cursor, &token);
+    uint64_t children = token_children(&token);
+    if (status == TA_OK && children && reader->depth == TA_CBOR_DEPTH_MAX) status = TA_ERROR_INVALID;
+    if (status != TA_OK) {
+        reader->status = status;
+        return status;
+    }
+    item->kind = token.kind;
+    item->count = token.count;
+    item->value = token.value;
+    item->bytes = (ta_bytes){(const void *)0, 0};
+    item->depth = reader->depth;
+    item->pad = 0;
+    if (token.kind == TA_CBOR_TEXT || token.kind == TA_CBOR_BYTES) {
+        item->bytes = (ta_bytes){bytes + token.value, token.count};
+        item->value = 0;
+    }
+    reader->at = cursor.at;
+    if (children) {
+        reader->remaining[reader->depth++] = children;
+    } else {
+        while (reader->depth && !--reader->remaining[reader->depth - 1])
+            reader->depth--;
+    }
+    return 1;
 }
 
 ta_string_view ta_cbor_string(const ta_cbor_document *document, uint32_t at) {
@@ -340,59 +401,6 @@ void cbor_output_float(ta_output *output, uint64_t bits) {
     for (size_t k = 0; k < width; k++)
         head[1 + k] = (unsigned char)(bits >> (8 * (width - 1 - k)));
     ta_output_write(output, head, 1 + width);
-}
-
-ta_status ta_cbor_encode(const ta_cbor_document *document, ta_buffer *out) {
-    ta_output output = ta_output_over(*out, NULL);
-    cbor_nesting nesting;
-    nesting.depth = 0;
-    const unsigned char *bytes = (const unsigned char *)document->bytes.pointer;
-    out->length = 0;
-    uint32_t at = 0;
-    for (;;) {
-        if (at >= document->count) return TA_ERROR_INVALID; /* the item is not complete */
-        const ta_cbor_token *token = &document->tokens[at++];
-        uint64_t children = 0;
-        switch (token->kind) {
-        case TA_CBOR_UINT: cbor_output_head(&output, MAJOR_UINT, token->value); break;
-        case TA_CBOR_NEGINT: cbor_output_head(&output, MAJOR_NEGINT, token->value); break;
-        case TA_CBOR_BYTES:
-        case TA_CBOR_TEXT:
-            if (token->value > document->bytes.length || token->count > document->bytes.length - token->value)
-                return TA_ERROR_INVALID;
-            if (token->kind == TA_CBOR_TEXT && !utf8_valid(bytes + token->value, token->count))
-                return TA_ERROR_INVALID;
-            cbor_output_head(&output, token->kind == TA_CBOR_TEXT ? MAJOR_TEXT : MAJOR_BYTES, token->count);
-            ta_output_write(&output, bytes + token->value, token->count);
-            break;
-        case TA_CBOR_ARRAY:
-            cbor_output_head(&output, MAJOR_ARRAY, token->count);
-            children = token->count;
-            break;
-        case TA_CBOR_MAP:
-            cbor_output_head(&output, MAJOR_MAP, token->count);
-            children = (uint64_t)token->count * 2;
-            break;
-        case TA_CBOR_TAG:
-            cbor_output_head(&output, MAJOR_TAG, token->value);
-            children = 1;
-            break;
-        case TA_CBOR_SIMPLE:
-            if (token->value > 0xFF || (token->value >= 24 && token->value < 32)) return TA_ERROR_INVALID;
-            cbor_output_head(&output, MAJOR_SIMPLE, token->value);
-            break;
-        case TA_CBOR_FLOAT: cbor_output_float(&output, token->value); break;
-        default: return TA_ERROR_INVALID;
-        }
-        if (children) {
-            if (nesting_open(&nesting, children) != TA_OK) return TA_ERROR_INVALID;
-        } else if (nesting_complete(&nesting)) {
-            break;
-        }
-    }
-    if (at != document->count) return TA_ERROR_INVALID; /* tokens after the item */
-    out->length = output.length;
-    return output.length > output.capacity ? TA_ERROR_NO_MEMORY : TA_OK;
 }
 
 /* ---- diagnostic notation ----------------------------------------------------- */
@@ -746,76 +754,247 @@ ta_status ta_cbor_diagnostic(ta_bytes cbor, ta_buffer *out) {
     return output.length > output.capacity ? TA_ERROR_NO_MEMORY : TA_OK;
 }
 
-/* ---- writing tokens from C ------------------------------------------------- */
+/* ---- writing, one item at a time ------------------------------------------- */
 
-static void write_token(ta_cbor_writer *writer, uint32_t kind, uint32_t count, uint64_t value) {
-    ta_cbor_document *document = &writer->document;
-    if (document->count == UINT32_MAX) {
-        if (writer->status == TA_OK) writer->status = TA_ERROR_UNSUPPORTED;
-        return;
-    }
-    if (document->count < document->capacity) {
-        ta_cbor_token *token = &document->tokens[document->count];
-        token->kind = kind;
-        token->count = count;
-        token->value = value;
-    } else if (writer->status == TA_OK) {
-        writer->status = TA_ERROR_NO_MEMORY;
-    }
-    document->count++;
+#define WRITER_LATER 0x80u /* a container's count is fixed when it closes */
+
+static void writer_fail(ta_cbor_writer *writer, ta_status status) {
+    if (writer->status == TA_OK || (writer->status == TA_ERROR_NO_MEMORY && status != TA_ERROR_NO_MEMORY))
+        writer->status = status;
 }
 
-static void write_string(ta_cbor_writer *writer, uint32_t kind, const void *pointer, size_t length) {
-    if (length > UINT32_MAX) {
-        if (writer->status == TA_OK) writer->status = TA_ERROR_UNSUPPORTED;
-        return;
-    }
-    ta_buffer *strings = &writer->strings;
-    size_t offset = strings->length;
-    if (offset <= strings->capacity && length <= strings->capacity - offset) {
-        if (length) ta_memcpy((char *)strings->pointer + offset, pointer, length);
-    } else if (writer->status == TA_OK) {
-        writer->status = TA_ERROR_NO_MEMORY;
-    }
-    strings->length += length;
-    write_token(writer, kind, (uint32_t)length, offset);
+/* Writing, or only counting what the item needs once the room was full:
+ * the item's structure is followed either way. */
+static int writer_going(const ta_cbor_writer *writer) {
+    return writer->status == TA_OK || writer->status == TA_ERROR_NO_MEMORY;
 }
 
-void ta_cbor_write_map(ta_cbor_writer *writer, uint32_t pairs) { write_token(writer, TA_CBOR_MAP, pairs, 0); }
+/* The writer's memory as an output (base/output.h): grow it, write, and keep
+ * where it now is. */
+static ta_output writer_output(const ta_cbor_writer *writer) {
+    ta_output output;
+    output.bytes = writer->bytes;
+    output.capacity = writer->capacity;
+    output.length = writer->length;
+    output.allocator = writer->allocator;
+    output.room = writer->room;
+    return output;
+}
 
-void ta_cbor_write_array(ta_cbor_writer *writer, uint32_t items) { write_token(writer, TA_CBOR_ARRAY, items, 0); }
+static void writer_keep(ta_cbor_writer *writer, const ta_output *output) {
+    writer->bytes = output->bytes;
+    writer->capacity = output->capacity;
+    writer->length = output->length;
+    if (!ta_output_fits(output)) writer_fail(writer, TA_ERROR_NO_MEMORY);
+}
+
+/* An item is whole: counted in the container it is in, closing those it
+ * completes; the top-level item is the writer's one. */
+static void writer_complete(ta_cbor_writer *writer) {
+    while (writer->depth) {
+        uint32_t top = writer->depth - 1;
+        if (writer->kinds[top] & WRITER_LATER) {
+            writer->counts[top]++;
+            return;
+        }
+        if (--writer->counts[top]) return;
+        writer->depth--;
+    }
+    if (++writer->items > 1) writer_fail(writer, TA_ERROR_INVALID); /* one item per writer */
+}
+
+/* A head (or a float) and, for a string, its bytes. */
+static void writer_put(ta_cbor_writer *writer, const unsigned char *head, size_t head_length,
+                       ta_bytes bytes) {
+    if (!writer_going(writer)) return;
+    if (writer->depth == 0 && writer->items) {
+        writer_fail(writer, TA_ERROR_INVALID); /* one item per writer */
+        return;
+    }
+    if (writer->status == TA_ERROR_NO_MEMORY) { /* counted: what the item needs */
+        writer->length += head_length + bytes.length;
+        return;
+    }
+    ta_output output = writer_output(writer);
+    if (ta_output_reserve(&output, head_length + bytes.length)) {
+        ta_output_write(&output, head, head_length);
+        ta_output_write(&output, bytes.pointer, bytes.length);
+    } else {
+        output.length += head_length + bytes.length;
+    }
+    writer_keep(writer, &output);
+}
+
+/* The head of `major` with `argument`, shortest; its length. */
+static size_t head_of(unsigned char *head, uint32_t major, uint64_t argument) {
+    ta_output output = ta_output_over((ta_buffer){head, 9, 0}, (const ta_allocator *)0);
+    cbor_output_head(&output, major, argument);
+    return output.length;
+}
+
+static void writer_scalar(ta_cbor_writer *writer, uint32_t major, uint64_t argument) {
+    unsigned char head[9];
+    writer_put(writer, head, head_of(head, major, argument), (ta_bytes){(const void *)0, 0});
+    if (writer_going(writer)) writer_complete(writer);
+}
+
+/* A container or tag opens: `count` items follow (TA_CBOR_COUNT_LATER: as
+ * many as are written before ta_cbor_write_end). */
+static void writer_open(ta_cbor_writer *writer, uint32_t kind, uint64_t count, int later) {
+    if (!writer_going(writer)) return;
+    uint32_t major = kind == TA_CBOR_MAP ? MAJOR_MAP : kind == TA_CBOR_ARRAY ? MAJOR_ARRAY : MAJOR_TAG;
+    if (!later && kind != TA_CBOR_TAG && count == 0) { /* nothing follows: whole now */
+        writer_scalar(writer, major, 0);
+        return;
+    }
+    if (writer->depth == TA_CBOR_DEPTH_MAX) {
+        writer_fail(writer, TA_ERROR_INVALID);
+        return;
+    }
+    size_t at = writer->length;
+    unsigned char head[9];
+    /* counted later: one byte now, the shortest head once the count is known */
+    size_t length = later ? (head[0] = (unsigned char)(major << 5), 1) : head_of(head, major, count);
+    writer_put(writer, head, length, (ta_bytes){(const void *)0, 0});
+    if (!writer_going(writer)) return;
+    writer->heads[writer->depth] = at;
+    writer->counts[writer->depth] = later ? 0 : (kind == TA_CBOR_MAP ? count * 2 : count);
+    writer->kinds[writer->depth] = (uint8_t)(kind | (later ? WRITER_LATER : 0u));
+    writer->depth++;
+}
+
+void ta_cbor_writer_init(ta_cbor_writer *writer, ta_buffer room, const ta_allocator *allocator) {
+    writer->bytes = (unsigned char *)room.pointer;
+    writer->capacity = room.pointer ? room.capacity : 0;
+    writer->length = 0;
+    writer->allocator = allocator;
+    writer->room = writer->bytes;
+    writer->status = TA_OK;
+    writer->depth = 0;
+    writer->items = 0;
+    writer->pad = 0;
+}
+
+void ta_cbor_write_map(ta_cbor_writer *writer, uint32_t pairs) {
+    writer_open(writer, TA_CBOR_MAP, pairs, pairs == TA_CBOR_COUNT_LATER);
+}
+
+void ta_cbor_write_array(ta_cbor_writer *writer, uint32_t items) {
+    writer_open(writer, TA_CBOR_ARRAY, items, items == TA_CBOR_COUNT_LATER);
+}
+
+void ta_cbor_write_tag(ta_cbor_writer *writer, uint64_t tag) {
+    if (!writer_going(writer)) return;
+    if (writer->depth == TA_CBOR_DEPTH_MAX) {
+        writer_fail(writer, TA_ERROR_INVALID);
+        return;
+    }
+    unsigned char head[9];
+    writer_put(writer, head, head_of(head, MAJOR_TAG, tag), (ta_bytes){(const void *)0, 0});
+    if (!writer_going(writer)) return;
+    writer->heads[writer->depth] = 0;
+    writer->counts[writer->depth] = 1;
+    writer->kinds[writer->depth] = (uint8_t)TA_CBOR_TAG;
+    writer->depth++;
+}
+
+void ta_cbor_write_end(ta_cbor_writer *writer) {
+    if (!writer_going(writer)) return;
+    uint32_t top = writer->depth ? writer->depth - 1 : 0;
+    if (!writer->depth || !(writer->kinds[top] & WRITER_LATER)) {
+        writer_fail(writer, TA_ERROR_INVALID); /* nothing counted later is open */
+        return;
+    }
+    uint32_t kind = writer->kinds[top] & ~WRITER_LATER;
+    uint64_t count = writer->counts[top];
+    if (kind == TA_CBOR_MAP && (count & 1)) {
+        writer_fail(writer, TA_ERROR_INVALID); /* a key without its value */
+        return;
+    }
+    if (kind == TA_CBOR_MAP) count /= 2;
+    unsigned char head[9];
+    size_t length = head_of(head, kind == TA_CBOR_MAP ? MAJOR_MAP : MAJOR_ARRAY, count);
+    size_t at = writer->heads[top];
+    ta_output output = writer_output(writer);
+    if (writer->status != TA_OK) {
+        output.length += length - 1; /* counted: the longer head */
+    } else if (length == 1 || ta_output_reserve(&output, length - 1)) {
+        /* the items move up to make room for a longer head */
+        if (length > 1)
+            ta_memmove(output.bytes + at + length, output.bytes + at + 1, output.length - at - 1);
+        output.length += length - 1;
+        ta_memcpy(output.bytes + at, head, length);
+    } else {
+        output.length += length - 1;
+    }
+    writer_keep(writer, &output);
+    writer->depth--;
+    writer_complete(writer);
+}
+
+static void writer_string(ta_cbor_writer *writer, uint32_t major, ta_bytes bytes) {
+    if (bytes.length > UINT32_MAX) {
+        writer_fail(writer, TA_ERROR_UNSUPPORTED);
+        return;
+    }
+    if (major == MAJOR_TEXT && !utf8_valid((const unsigned char *)bytes.pointer, bytes.length)) {
+        writer_fail(writer, TA_ERROR_INVALID);
+        return;
+    }
+    unsigned char head[9];
+    writer_put(writer, head, head_of(head, major, bytes.length), bytes);
+    if (writer_going(writer)) writer_complete(writer);
+}
 
 void ta_cbor_write_text(ta_cbor_writer *writer, ta_string_view text) {
-    write_string(writer, TA_CBOR_TEXT, text.pointer, text.length);
+    writer_string(writer, MAJOR_TEXT, (ta_bytes){text.pointer, text.length});
 }
 
 void ta_cbor_write_bytes(ta_cbor_writer *writer, ta_bytes bytes) {
-    write_string(writer, TA_CBOR_BYTES, bytes.pointer, bytes.length);
+    writer_string(writer, MAJOR_BYTES, bytes);
 }
 
-void ta_cbor_write_uint(ta_cbor_writer *writer, uint64_t value) { write_token(writer, TA_CBOR_UINT, 0, value); }
+void ta_cbor_write_uint(ta_cbor_writer *writer, uint64_t value) {
+    writer_scalar(writer, MAJOR_UINT, value);
+}
 
 void ta_cbor_write_int(ta_cbor_writer *writer, int64_t value) {
-    if (value >= 0) write_token(writer, TA_CBOR_UINT, 0, (uint64_t)value);
-    else write_token(writer, TA_CBOR_NEGINT, 0, (uint64_t)(-(value + 1)));
+    if (value >= 0) writer_scalar(writer, MAJOR_UINT, (uint64_t)value);
+    else writer_scalar(writer, MAJOR_NEGINT, (uint64_t)(-(value + 1)));
+}
+
+void ta_cbor_write_negative(ta_cbor_writer *writer, uint64_t n) {
+    writer_scalar(writer, MAJOR_NEGINT, n);
 }
 
 void ta_cbor_write_float(ta_cbor_writer *writer, double value) {
-    write_token(writer, TA_CBOR_FLOAT, 0, double_bits(value));
+    unsigned char head[9];
+    ta_output output = ta_output_over((ta_buffer){head, 9, 0}, (const ta_allocator *)0);
+    cbor_output_float(&output, double_bits(value));
+    writer_put(writer, head, output.length, (ta_bytes){(const void *)0, 0});
+    if (writer_going(writer)) writer_complete(writer);
 }
 
 void ta_cbor_write_simple(ta_cbor_writer *writer, uint32_t simple) {
-    write_token(writer, TA_CBOR_SIMPLE, 0, simple);
+    if (simple > 0xFF || (simple >= 24 && simple < 32)) {
+        writer_fail(writer, TA_ERROR_INVALID);
+        return;
+    }
+    writer_scalar(writer, MAJOR_SIMPLE, simple);
 }
 
-void ta_cbor_write_tag(ta_cbor_writer *writer, uint64_t tag) { write_token(writer, TA_CBOR_TAG, 0, tag); }
+ta_status ta_cbor_writer_bytes(const ta_cbor_writer *writer, ta_bytes *out) {
+    *out = (ta_bytes){(const void *)0, 0};
+    if (writer->status != TA_OK) return writer->status;
+    if (writer->depth || writer->items != 1) return TA_ERROR_INVALID; /* not one whole item */
+    *out = (ta_bytes){writer->bytes, writer->length};
+    return TA_OK;
+}
 
-ta_status ta_cbor_finish(ta_cbor_writer *writer, ta_buffer *out) {
-    if (writer->status != TA_OK) {
-        out->length = 0;
-        return writer->status;
-    }
-    writer->document.bytes.pointer = writer->strings.pointer;
-    writer->document.bytes.length = writer->strings.length;
-    return ta_cbor_encode(&writer->document, out);
+void ta_cbor_writer_free(ta_cbor_writer *writer) {
+    ta_output output = writer_output(writer);
+    ta_output_free(&output);
+    writer->bytes = writer->room;
+    writer->capacity = 0;
+    writer->length = 0;
 }

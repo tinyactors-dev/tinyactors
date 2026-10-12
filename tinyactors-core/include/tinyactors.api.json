@@ -89,6 +89,10 @@
       "value": 3
     },
     {
+      "name": "TA_CBOR_COUNT_LATER",
+      "value": 4294967295
+    },
+    {
       "name": "TA_CBOR_DEPTH_MAX",
       "value": 64
     },
@@ -1534,48 +1538,238 @@
         }
       }
     },
-    "ta_cbor_writer": {
+    "ta_cbor_reader": {
       "kind": "struct",
       "fields": [
         {
-          "name": "document",
-          "type": "ta_cbor_document"
+          "name": "message",
+          "type": "ta_bytes"
         },
         {
-          "name": "strings",
-          "type": "ta_buffer"
+          "name": "at",
+          "type": "size_t"
+        },
+        {
+          "name": "depth",
+          "type": "uint32_t"
         },
         {
           "name": "status",
           "type": "ta_status"
+        },
+        {
+          "name": "remaining",
+          "type": "uint64_t[64]"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 64,
+          "size": 544,
           "align": 8,
           "offsets": {
-            "document": 0,
-            "strings": 32,
-            "status": 56
+            "message": 0,
+            "at": 16,
+            "depth": 24,
+            "status": 28,
+            "remaining": 32
           }
         },
         "aarch64": {
-          "size": 64,
+          "size": 544,
           "align": 8,
           "offsets": {
-            "document": 0,
-            "strings": 32,
-            "status": 56
+            "message": 0,
+            "at": 16,
+            "depth": 24,
+            "status": 28,
+            "remaining": 32
           }
         },
         "wasm32": {
-          "size": 36,
-          "align": 4,
+          "size": 536,
+          "align": 8,
           "offsets": {
-            "document": 0,
-            "strings": 20,
-            "status": 32
+            "message": 0,
+            "at": 8,
+            "depth": 12,
+            "status": 16,
+            "remaining": 24
+          }
+        }
+      }
+    },
+    "ta_cbor_item": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "uint32_t"
+        },
+        {
+          "name": "count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "value",
+          "type": "uint64_t"
+        },
+        {
+          "name": "bytes",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "depth",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "count": 4,
+            "value": 8,
+            "bytes": 16,
+            "depth": 32,
+            "pad": 36
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "count": 4,
+            "value": 8,
+            "bytes": 16,
+            "depth": 32,
+            "pad": 36
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "count": 4,
+            "value": 8,
+            "bytes": 16,
+            "depth": 24,
+            "pad": 28
+          }
+        }
+      }
+    },
+    "ta_cbor_writer": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "bytes",
+          "type": "unsigned char *"
+        },
+        {
+          "name": "capacity",
+          "type": "size_t"
+        },
+        {
+          "name": "length",
+          "type": "size_t"
+        },
+        {
+          "name": "allocator",
+          "type": "const ta_allocator *"
+        },
+        {
+          "name": "room",
+          "type": "unsigned char *"
+        },
+        {
+          "name": "status",
+          "type": "ta_status"
+        },
+        {
+          "name": "depth",
+          "type": "uint32_t"
+        },
+        {
+          "name": "items",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "heads",
+          "type": "size_t[64]"
+        },
+        {
+          "name": "counts",
+          "type": "uint64_t[64]"
+        },
+        {
+          "name": "kinds",
+          "type": "uint8_t[64]"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 1144,
+          "align": 8,
+          "offsets": {
+            "bytes": 0,
+            "capacity": 8,
+            "length": 16,
+            "allocator": 24,
+            "room": 32,
+            "status": 40,
+            "depth": 44,
+            "items": 48,
+            "pad": 52,
+            "heads": 56,
+            "counts": 568,
+            "kinds": 1080
+          }
+        },
+        "aarch64": {
+          "size": 1144,
+          "align": 8,
+          "offsets": {
+            "bytes": 0,
+            "capacity": 8,
+            "length": 16,
+            "allocator": 24,
+            "room": 32,
+            "status": 40,
+            "depth": 44,
+            "items": 48,
+            "pad": 52,
+            "heads": 56,
+            "counts": 568,
+            "kinds": 1080
+          }
+        },
+        "wasm32": {
+          "size": 872,
+          "align": 8,
+          "offsets": {
+            "bytes": 0,
+            "capacity": 4,
+            "length": 8,
+            "allocator": 12,
+            "room": 16,
+            "status": 20,
+            "depth": 24,
+            "items": 28,
+            "pad": 32,
+            "heads": 36,
+            "counts": 296,
+            "kinds": 808
           }
         }
       }
@@ -8790,40 +8984,6 @@
       "implemented": true
     },
     {
-      "name": "ta_cbor_encode",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "document",
-          "type": "const ta_cbor_document *"
-        },
-        {
-          "name": "out",
-          "type": "ta_buffer *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_cbor_finish",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "writer",
-          "type": "ta_cbor_writer *"
-        },
-        {
-          "name": "out",
-          "type": "ta_buffer *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
       "name": "ta_cbor_member",
       "returns": "uint32_t",
       "params": [
@@ -8855,6 +9015,40 @@
         {
           "name": "at",
           "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_read",
+      "returns": "int32_t",
+      "params": [
+        {
+          "name": "reader",
+          "type": "ta_cbor_reader *"
+        },
+        {
+          "name": "item",
+          "type": "ta_cbor_item *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_reader_init",
+      "returns": "void",
+      "params": [
+        {
+          "name": "reader",
+          "type": "ta_cbor_reader *"
+        },
+        {
+          "name": "message",
+          "type": "ta_bytes"
         }
       ],
       "public": true,
@@ -8913,6 +9107,19 @@
       "implemented": true
     },
     {
+      "name": "ta_cbor_write_end",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_cbor_write_float",
       "returns": "void",
       "params": [
@@ -8957,6 +9164,23 @@
         {
           "name": "pairs",
           "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_write_negative",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        },
+        {
+          "name": "n",
+          "type": "uint64_t"
         }
       ],
       "public": true,
@@ -9025,6 +9249,57 @@
         {
           "name": "value",
           "type": "uint64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_writer_bytes",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "writer",
+          "type": "const ta_cbor_writer *"
+        },
+        {
+          "name": "out",
+          "type": "ta_bytes *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_writer_free",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_cbor_writer_init",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_cbor_writer *"
+        },
+        {
+          "name": "room",
+          "type": "ta_buffer"
+        },
+        {
+          "name": "allocator",
+          "type": "const ta_allocator *"
         }
       ],
       "public": true,

@@ -1,16 +1,22 @@
-/* tinyactors/cbor.h — CBOR (RFC 8949) as token lists in caller memory: the
- * encoding of host requests and replies (ADR 0009, decision 3).
+/* tinyactors/cbor.h — CBOR (RFC 8949): the encoding of host requests and
+ * replies, configs, envelopes and neutral values (ADR 0009, decision 3;
+ * ADR 0010, decision 4).
  *
- * The decoder turns a message into a flat list of tokens; the encoder turns
- * a token list into a message. A token list is in pre-order: a container's
- * token is followed by its items, each with its own children. Text and byte
- * tokens are views into the message, so nothing is copied.
+ * Values stream: the writer writes bytes item by item into a room the
+ * caller gives, growing it through an allocator the caller may give; the
+ * reader is a cursor over a message that yields one item at a time. For
+ * random access, the decoder turns a message into a flat list of tokens in
+ * pre-order (a container's token is followed by its items, each with its
+ * own children). Text and byte strings read are views into the message, so
+ * nothing is copied.
  *
- * Freestanding (src/base/cbor.c): no C library, no allocation, no recursion.
+ * Freestanding (src/base/cbor.c): no C library, no recursion, and no
+ * allocation but through the allocator a caller gives a writer.
  */
 #ifndef TINYACTORS_CBOR_H
 #define TINYACTORS_CBOR_H
 
+#include <tinyactors/allocator.h>
 #include <tinyactors/types.h>
 
 #ifdef __cplusplus
@@ -70,17 +76,6 @@ TA_API uint32_t ta_cbor_next(const ta_cbor_document *document, uint32_t at);
  * TA_NIL if there is none or `map` is not a map. */
 TA_API uint32_t ta_cbor_member(const ta_cbor_document *document, uint32_t map, ta_string_view key);
 
-/* ---- encoding -------------------------------------------------------------- */
-/* The tokens as one CBOR item, written into `out` from its start: shortest
- * integers, lengths and tags, definite lengths, and floats in the shortest
- * width that keeps the value exactly (any NaN is f9 7e00). These are the
- * core deterministic rules of RFC 8949 §4.2.1 except key order: map pairs
- * are written in token order, not sorted. TA_ERROR_INVALID when the tokens
- * do not form exactly one item, nest deeper than TA_CBOR_DEPTH_MAX, point
- * outside `bytes`, hold text that is not UTF-8, or a simple value in 24-31.
- * TA_ERROR_NO_MEMORY: out->length is the capacity it needs. */
-TA_API ta_status ta_cbor_encode(const ta_cbor_document *document, ta_buffer *out);
-
 /* ---- diagnostic notation --------------------------------------------------- */
 /* One item as text (RFC 8949 §8), compact: no spaces, so a value made of
  * maps, arrays, text, integers, true, false and null reads as its JSON.
@@ -93,32 +88,98 @@ TA_API ta_status ta_cbor_encode(const ta_cbor_document *document, ta_buffer *out
  * TA_ERROR_UNSUPPORTED as for ta_cbor_decode. For logs, traces and tests. */
 TA_API ta_status ta_cbor_diagnostic(ta_bytes cbor, ta_buffer *out);
 
-/* ---- writing tokens from C ------------------------------------------------- */
-/* A document being built: tokens go to `document`, their text and bytes to
- * `strings`, and a text or byte token's value is its offset in `strings`.
- * Start it zeroed but for document.tokens, document.capacity, strings.pointer
- * and strings.capacity. The first error sticks in `status`; check it once, at
- * the end. On TA_ERROR_NO_MEMORY, writing goes on counting: document.count
- * and strings.length are what the document needs. A container's count is
- * given up front; the writer does not check that its items follow
- * (ta_cbor_finish does). */
+/* ---- reading, one item at a time ----------------------------------------- */
+/* A cursor over one CBOR item, read in pre-order as the decoder's tokens
+ * are, and checked as it goes: what ta_cbor_decode refuses, ta_cbor_read
+ * refuses at the item where it finds it. It holds no memory but itself. */
+typedef struct ta_cbor_reader {
+    ta_bytes message;
+    size_t at;      /* the next item's offset */
+    uint32_t depth; /* containers and tags open */
+    ta_status status; /* the first error; it sticks */
+    uint64_t remaining[TA_CBOR_DEPTH_MAX]; /* items each open one still has */
+} ta_cbor_reader;
+/* An item: its kind and value as a token has them (TA_CBOR_*: value is the
+ * integer, tag, simple value or the double's bits; count is an array's
+ * items, a map's pairs, a string's length), the text or bytes of a string
+ * as a view into the message, and `depth`, the containers and tags around
+ * it. */
+typedef struct ta_cbor_item {
+    uint32_t kind;
+    uint32_t count;
+    uint64_t value;
+    ta_bytes bytes;
+    uint32_t depth;
+    uint32_t pad;
+} ta_cbor_item;
+TA_API void ta_cbor_reader_init(ta_cbor_reader *reader, ta_bytes message);
+/* The next item into *item: 1; 0 once the item is read whole and nothing
+ * follows it; or an error as ta_cbor_decode has them (TA_ERROR_INVALID:
+ * malformed, text that is not UTF-8, nested deeper than TA_CBOR_DEPTH_MAX,
+ * bytes after the item; TA_ERROR_UNSUPPORTED: indefinite lengths, a string
+ * longer than 2^32-1), which every later call answers too. */
+TA_API int32_t ta_cbor_read(ta_cbor_reader *reader, ta_cbor_item *item);
+
+/* ---- writing, one item at a time ------------------------------------------ */
+/* A writer writes one CBOR item as bytes, a piece per call, into the room
+ * ta_cbor_writer_init gives it (a caller's buffer, which may be on the
+ * stack). When the room is full it grows through `allocator`: a block twice
+ * as big, the bytes so far copied over; without one (or when it refuses),
+ * the write that does not fit is TA_ERROR_NO_MEMORY, in `status`, and
+ * nothing more is written (`length` goes on counting what the item needs).
+ * The first error sticks in `status`; the calls return nothing, so check it
+ * once, at the end, with ta_cbor_writer_bytes.
+ *
+ * Heads, integers, lengths and tags take their shortest form, and floats the
+ * shortest width that keeps the value exactly (any NaN is f9 7e00): the core
+ * deterministic rules of RFC 8949 §4.2.1 but key order, which is the order
+ * written. A container's count is given when it opens, or, with
+ * TA_CBOR_COUNT_LATER, fixed when ta_cbor_write_end closes it (its head is
+ * then moved to its shortest form), so a container whose items a caller
+ * drops as it goes is still exact. TA_ERROR_INVALID: text that is not UTF-8,
+ * a simple value in 24-31, nesting deeper than TA_CBOR_DEPTH_MAX, more items
+ * than one, an end that closes nothing or a map with an odd number of items.
+ * Fields are the writer's: read them through the calls. */
+#define TA_CBOR_COUNT_LATER UINT32_C(0xFFFFFFFF)
 typedef struct ta_cbor_writer {
-    ta_cbor_document document;
-    ta_buffer strings;
+    unsigned char *bytes; /* the room, or the block it grew to */
+    size_t capacity, length;
+    const ta_allocator *allocator; /* NULL: the room never grows */
+    unsigned char *room;           /* the caller's room, never given back */
     ta_status status;
+    uint32_t depth;                /* containers and tags open */
+    uint32_t items;                /* top-level items written: one at most */
+    uint32_t pad;
+    /* for each open one: its head's offset, and the items it still needs
+     * (a count given up front) or has (TA_CBOR_COUNT_LATER) */
+    size_t heads[TA_CBOR_DEPTH_MAX];
+    uint64_t counts[TA_CBOR_DEPTH_MAX];
+    uint8_t kinds[TA_CBOR_DEPTH_MAX]; /* TA_CBOR_ARRAY, _MAP, _TAG; | 0x80: counted later */
 } ta_cbor_writer;
-TA_API void ta_cbor_write_map(ta_cbor_writer *writer, uint32_t pairs);
-TA_API void ta_cbor_write_array(ta_cbor_writer *writer, uint32_t items);
+/* Start a writer in `room` (its pointer and capacity; NULL and 0 for none),
+ * growing through `allocator` (NULL: never). */
+TA_API void ta_cbor_writer_init(ta_cbor_writer *writer, ta_buffer room,
+                                const ta_allocator *allocator);
+TA_API void ta_cbor_write_map(ta_cbor_writer *writer, uint32_t pairs); /* or TA_CBOR_COUNT_LATER */
+TA_API void ta_cbor_write_array(ta_cbor_writer *writer, uint32_t items); /* or TA_CBOR_COUNT_LATER */
+/* Close the innermost container opened with TA_CBOR_COUNT_LATER. */
+TA_API void ta_cbor_write_end(ta_cbor_writer *writer);
 TA_API void ta_cbor_write_text(ta_cbor_writer *writer, ta_string_view text);
 TA_API void ta_cbor_write_bytes(ta_cbor_writer *writer, ta_bytes bytes);
 TA_API void ta_cbor_write_uint(ta_cbor_writer *writer, uint64_t value);
 TA_API void ta_cbor_write_int(ta_cbor_writer *writer, int64_t value);
+/* The integer -1 - n: every negative integer CBOR has, down to -2^64. */
+TA_API void ta_cbor_write_negative(ta_cbor_writer *writer, uint64_t n);
 TA_API void ta_cbor_write_float(ta_cbor_writer *writer, double value);
 TA_API void ta_cbor_write_simple(ta_cbor_writer *writer, uint32_t simple);
 TA_API void ta_cbor_write_tag(ta_cbor_writer *writer, uint64_t tag);
-/* Encode what was written: the writer's status if it is an error (out->length
- * is then 0), else ta_cbor_encode of the document over `strings`. */
-TA_API ta_status ta_cbor_finish(ta_cbor_writer *writer, ta_buffer *out);
+/* The item written, in `out`: a view of the writer's memory, valid until the
+ * next write or ta_cbor_writer_free. The writer's status if it is an error
+ * (`out` empty), TA_ERROR_INVALID when no item, or not a whole one, was
+ * written. */
+TA_API ta_status ta_cbor_writer_bytes(const ta_cbor_writer *writer, ta_bytes *out);
+/* Give back the block the writer grew (not the caller's room). */
+TA_API void ta_cbor_writer_free(ta_cbor_writer *writer);
 
 #ifdef __cplusplus
 }

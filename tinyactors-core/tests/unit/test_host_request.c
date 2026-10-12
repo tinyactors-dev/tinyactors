@@ -296,14 +296,9 @@ static void test_create(void) {
     char text[1024];
     ta_host *host = NULL;
     /* everything the config holds */
-    static ta_cbor_token tokens[128];
-    static char strings[1024];
     static unsigned char bytes[1024];
     ta_cbor_writer w;
-    memset(&w, 0, sizeof w);
-    w.document.tokens = tokens;
-    w.document.capacity = 128;
-    w.strings = (ta_buffer){strings, sizeof strings, 0};
+    ta_cbor_writer_init(&w, (ta_buffer){bytes, sizeof bytes, 0}, NULL);
     ta_cbor_write_map(&w, 6);
     ta_cbor_write_text(&w, ta_string("systemID"));
     ta_cbor_write_text(&w, ta_string("orders"));
@@ -338,8 +333,8 @@ static void test_create(void) {
     ta_cbor_write_map(&w, 1);
     ta_cbor_write_text(&w, ta_string("service.name"));
     ta_cbor_write_text(&w, ta_string("orders"));
-    ta_buffer config = {bytes, sizeof bytes, 0};
-    CHECK_EQUAL(ta_cbor_finish(&w, &config), TA_OK);
+    ta_bytes config;
+    CHECK_EQUAL(ta_cbor_writer_bytes(&w, &config), TA_OK);
     CHECK_EQUAL(create(bytes, config.length, text, &host), TA_OK);
     CHECK(host != NULL && text[0] == 0);
     memset(bytes, 0, sizeof bytes); /* nothing points into the config afterwards */

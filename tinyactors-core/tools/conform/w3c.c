@@ -35,13 +35,8 @@ typedef struct w3c_test {
 /* The host's config: docs/host-config.md, with BasicHTTP as processor 0. */
 static ta_status config_write(void *context, ta_buffer *out) {
     (void)context;
-    static ta_cbor_token tokens[64];
-    static char strings[512];
     ta_cbor_writer writer;
-    memset(&writer, 0, sizeof writer);
-    writer.document.tokens = tokens;
-    writer.document.capacity = 64;
-    writer.strings = (ta_buffer){strings, sizeof strings, 0};
+    ta_cbor_writer_init(&writer, *out, NULL);
     ta_cbor_write_map(&writer, 3);
     ta_cbor_write_text(&writer, ta_string("systemID"));
     ta_cbor_write_text(&writer, ta_string("w3c"));
@@ -62,7 +57,7 @@ static ta_status config_write(void *context, ta_buffer *out) {
     ta_cbor_write_text(&writer, ta_string(LOCATION));
     ta_cbor_write_text(&writer, ta_string("sync"));
     ta_cbor_write_simple(&writer, TA_CBOR_TRUE);
-    return ta_cbor_finish(&writer, out);
+    return conform_writer_end(&writer, out);
 }
 
 /* ---- the loopback ----------------------------------------------------------------------- */
@@ -90,11 +85,14 @@ static ta_string_view form_keep(w3c_form *form, ta_string_view text) {
 static ta_string_view form_diagnostic(w3c_form *form, const ta_cbor_document *document, uint32_t at) {
     static unsigned char item[4096];
     static char text[4096];
-    uint32_t count = ta_cbor_next(document, at) - at;
-    ta_cbor_document part = {document->bytes, (ta_cbor_token *)&document->tokens[at], count, count};
-    ta_buffer bytes = {item, sizeof item, 0}, out = {text, sizeof text, 0};
-    if (ta_cbor_encode(&part, &bytes) != TA_OK ||
-        ta_cbor_diagnostic((ta_bytes){item, bytes.length}, &out) != TA_OK)
+    uint32_t end = ta_cbor_next(document, at);
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){item, sizeof item, 0}, NULL);
+    for (uint32_t i = at; i < end; i++)
+        conform_write_token(&writer, document, i);
+    ta_bytes bytes;
+    ta_buffer out = {text, sizeof text, 0};
+    if (ta_cbor_writer_bytes(&writer, &bytes) != TA_OK || ta_cbor_diagnostic(bytes, &out) != TA_OK)
         return (ta_string_view){"", 0};
     return form_keep(form, (ta_string_view){text, (uint32_t)out.length});
 }
@@ -144,21 +142,15 @@ static void post_write(w3c_test *test, const ta_host_effect *effect) {
 }
 
 /* The request's form fields, as a map of text to text: the event's data. */
-static ta_status fields_write(void *context, ta_buffer *out) {
-    const ta_http_request *request = (const ta_http_request *)context;
-    static ta_cbor_token tokens[80];
-    static char strings[8192];
+static ta_status fields_write(const ta_http_request *request, ta_buffer *out) {
     ta_cbor_writer writer;
-    memset(&writer, 0, sizeof writer);
-    writer.document.tokens = tokens;
-    writer.document.capacity = 80;
-    writer.strings = (ta_buffer){strings, sizeof strings, 0};
+    conform_writer_begin(&writer, out);
     ta_cbor_write_map(&writer, request->field_count);
     for (uint32_t i = 0; i < request->field_count; i++) {
         ta_cbor_write_text(&writer, request->fields[i].name);
         ta_cbor_write_text(&writer, request->fields[i].value);
     }
-    return ta_cbor_finish(&writer, out);
+    return conform_writer_end(&writer, out);
 }
 
 /* A POST read back as an incoming request and delivered to its sender. */
@@ -179,7 +171,7 @@ static void post_deliver(w3c_test *test, const w3c_post *post) {
                               &request) != TA_OK)
         return;
     ta_buffer data = {NULL, 0, 0};
-    if (conform_write_growing(&(conform_writing){fields_write, &request}, &data) == TA_OK)
+    if (fields_write(&request, &data) == TA_OK)
         conform_datamodel_read(&test->datamodel, (ta_bytes){data.pointer, data.length}, &event.data);
     conform_buffer_free(&data);
     event.name = request.event;

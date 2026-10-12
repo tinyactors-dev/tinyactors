@@ -46,13 +46,8 @@ typedef struct scenario {
 /* The host's config: {"systemID": "conformance", "system": {"ticksPerSecond": 1000}}. */
 static ta_status config_write(void *context, ta_buffer *out) {
     (void)context;
-    ta_cbor_token tokens[8];
-    char strings[64];
     ta_cbor_writer writer;
-    memset(&writer, 0, sizeof writer);
-    writer.document.tokens = tokens;
-    writer.document.capacity = 8;
-    writer.strings = (ta_buffer){strings, sizeof strings, 0};
+    ta_cbor_writer_init(&writer, *out, NULL);
     ta_cbor_write_map(&writer, 2);
     ta_cbor_write_text(&writer, ta_string("systemID"));
     ta_cbor_write_text(&writer, ta_string("conformance"));
@@ -60,7 +55,7 @@ static ta_status config_write(void *context, ta_buffer *out) {
     ta_cbor_write_map(&writer, 1);
     ta_cbor_write_text(&writer, ta_string("ticksPerSecond"));
     ta_cbor_write_uint(&writer, 1000);
-    return ta_cbor_finish(&writer, out);
+    return conform_writer_end(&writer, out);
 }
 
 /* A step the host refused: the scenario fails, and says why. */
