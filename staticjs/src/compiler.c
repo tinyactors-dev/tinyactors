@@ -204,6 +204,12 @@ typedef struct {
     /* MUTATION: K_CALL of Object.assign: AT_* (assign_argument), and where
      * its first argument's code starts. */
     uint8_t assigns;
+    /* MUTATION: K_CALL of a name a method of another kind shares
+     * (sjs_mutation_shared): why the call is an ordinary one where another
+     * name's would be refused (FB_*, FB_NONE if it is not), for an
+     * expression statement to refuse it with; `receiver` holds the
+     * binding, or the global, it names. */
+    uint8_t fallback;
     uint32_t target_pc;
 } construct;
 
@@ -291,6 +297,17 @@ typedef struct {
     uint32_t keys;         /* MUTATION: through a path */
     uint32_t flags_at;
 } mutation_site;
+
+/* MUTATION: the last ordinary call of a shared name whose receiver a
+ * mutation would have refused (construct.fallback), from its CALL at `pc`
+ * to `end`: as a statement it is refused with that reason, FB_*, of the
+ * binding or the global `which`. */
+typedef struct {
+    uint32_t pc;
+    uint32_t end;
+    uint32_t which;
+    uint8_t why;
+} fallback_site;
 
 /* MUTATION: a path, which an assignment's target is: a name read, and the
  * members and indices read of it since (`a.b[i].c`), each a step: the pc
@@ -388,6 +405,7 @@ struct sjs_compiler {
      * does, reported at the end unless a syntax error comes first. */
     name_read last_name;
     mutation_site last_mutation;
+    fallback_site last_fallback; /* MUTATION: shared names */
     uint32_t pending_read;
     bool refusing;
     sjs_error_slot refusal;
@@ -955,13 +973,20 @@ static sjs_str binding_name(const sjs_compiler *c, uint32_t which) {
 static const char *const refused_captured =
     "staticjs changes a variable's value only while the variable holds it alone, and a function captured this one: build the value with reduce instead";
 
+static const char *const refused_copied =
+    "staticjs changes a variable's value only while the variable holds it alone, and this one was copied before";
+static const char *const refused_passed =
+    "staticjs changes a variable's value only while the variable holds it alone, and this one was passed to a function before";
+static const char *const refused_stored =
+    "staticjs changes a variable's value only while the variable holds it alone, and this one was stored in an array or an object before";
+
 /* Why a mutation of the binding is refused, from what was done with it
  * before; NULL when nothing was. */
 static const char *refused_use(uint8_t use) {
     if ((use & USE_CAPTURED) != 0) return refused_captured;
-    if ((use & USE_COPIED) != 0) return "staticjs changes a variable's value only while the variable holds it alone, and this one was copied before";
-    if ((use & USE_PASSED) != 0) return "staticjs changes a variable's value only while the variable holds it alone, and this one was passed to a function before";
-    if ((use & USE_STORED) != 0) return "staticjs changes a variable's value only while the variable holds it alone, and this one was stored in an array or an object before";
+    if ((use & USE_COPIED) != 0) return refused_copied;
+    if ((use & USE_PASSED) != 0) return refused_passed;
+    if ((use & USE_STORED) != 0) return refused_stored;
     return NULL;
 }
 
@@ -2013,27 +2038,63 @@ static sjs_result object_end(sjs_compiler *c, const sjs_event *e) {
  * Events
  */
 
+/* MUTATION: refusals, named once, so that a shared name's fallback can
+ * keep one as a byte (fallback_of). */
+static const char *const refused_global = "staticjs changes only a value a variable of the function holds, and this is a global";
+static const char *const refused_import = "staticjs changes only a value a variable of the function holds, and this is an import";
+static const char *const refused_path_changing =
+    "staticjs does not change a variable with one of its methods while it calls a method on a path from it";
+
+/* MUTATION: shared names: why a call fell back to an ordinary one
+ * (construct.fallback), kept as a byte. */
+enum { FB_NONE = 0, FB_GLOBAL, FB_IMPORT, FB_CAPTURED, FB_COPIED, FB_PASSED, FB_STORED, FB_PATH_CHANGING, FB_COUNT };
+
+static const char *fallback_reason(uint8_t why) {
+    const char *const reasons[FB_COUNT] = { NULL, refused_global, refused_import, refused_captured,
+                                            refused_copied, refused_passed, refused_stored, refused_path_changing };
+    return why < FB_COUNT ? reasons[why] : NULL;
+}
+
+static uint8_t fallback_of(const char *why) {
+    for (uint8_t i = 1; i < FB_COUNT; i++) {
+        if (fallback_reason(i) == why) return i;
+    }
+    return FB_NONE;
+}
+
 /* MUTATION: the variable `read` read just before, the receiver of a
  * mutation, if the function owns it: its read becomes a RECEIVER. Refused
  * when the variable is a global, an import or a capture, or was copied,
- * passed or stored before (false). */
-static bool claim_receiver(sjs_compiler *c, const name_read *read) {
+ * passed or stored before (false).
+ *
+ * MUTATION: a shared name (sjs_mutation_shared), `fallback` not NULL: the
+ * run decides, as the evaluator checks what the compiler would refuse
+ * (docs/mutation.md, "Shared names"). A variable of the function is
+ * claimed whatever was done with it, and not noted as changed, so that a
+ * later capture is not refused; anything else is an ordinary call (false),
+ * with the reason in `fallback` (FB_*) for a statement to give. */
+static bool claim_receiver(sjs_compiler *c, const name_read *read, uint8_t *fallback) {
+    const char *why = NULL;
+    sjs_str name = read->kind == NR_GLOBAL ? c->globals[read->which] : binding_name(c, read->which);
+    binding *b = read->kind == NR_GLOBAL ? NULL : &SJS_BUF_AT(c->bindings, binding, read->which);
     if (read->kind == NR_GLOBAL) {
-        refuse_later(c, read->at, (refusal){ "staticjs changes only a value a variable of the function holds, and this is a global", c->globals[read->which] });
-        return false;
+        why = refused_global;
+    } else if (read->kind == NR_IMPORT) {
+        why = refused_import;
+    } else if (read->kind == NR_CAPTURE) {
+        why = refused_captured;
+    } else if (fallback == NULL) {
+        why = refused_use(b->use);
     }
-    sjs_str name = binding_name(c, read->which);
-    if (read->kind == NR_IMPORT) {
-        refuse_later(c, read->at, (refusal){ "staticjs changes only a value a variable of the function holds, and this is an import", name });
-        return false;
-    }
-    binding *b = &SJS_BUF_AT(c->bindings, binding, read->which);
-    const char *why = read->kind == NR_CAPTURE ? refused_captured : refused_use(b->use);
     if (why != NULL) {
-        refuse_later(c, read->at, (refusal){ why, name });
+        if (fallback != NULL) {
+            *fallback = fallback_of(why);
+        } else {
+            refuse_later(c, read->at, (refusal){ why, name });
+        }
         return false;
     }
-    b->use |= USE_MUTATED;
+    if (fallback == NULL) b->use |= USE_MUTATED;
     b->changed_at = read->pc + 1u;
     c->code.ptr[read->pc] = SJS_OP_RECEIVER;
     return true;
@@ -2049,12 +2110,19 @@ static bool claim_receiver(sjs_compiler *c, const name_read *read) {
 static bool mutation_begin(sjs_compiler *c, construct *k) {
     uint32_t member = c->last_op;
     const sjs_string *key = SJS_AS_STRING(SJS_BUF_AT(c->constants, sjs_value, sjs_read32(c->code.ptr + member + 1u)));
-    sjs_builtin_id id = sjs_mutation_named(sjs_name_of(key));
+    const sjs_name *name = sjs_name_of(key);
+    sjs_builtin_id id = sjs_mutation_named(name);
     if (id == SJS_BUILTIN_NONE) return false;
     const name_read *read = &c->last_name;
     const mutation_site *chain = &c->last_mutation;
     if (read->end == member && c->last_label <= read->pc && read->kind != NR_NONE) {
-        if (!claim_receiver(c, read)) return false;
+        /* MUTATION: a shared name falls back to an ordinary call. */
+        uint8_t fallback = FB_NONE;
+        if (!claim_receiver(c, read, sjs_mutation_shared(name) ? &fallback : NULL)) {
+            k->fallback = fallback;
+            k->receiver = read->which;
+            return false;
+        }
         k->receiver = read->which;
     } else if (chain->end == member && c->last_label <= chain->pc && chain->returns && chain->keys == 0) { /* MUTATION: keys, a path's chain is its own */
         /* The receiver goes on as the reference it was. */
@@ -2113,7 +2181,7 @@ static void assign_argument(sjs_compiler *c, const sjs_event *e) {
     k->assigns = AT_NONE;
     const name_read *read = &c->last_name;
     if (e->kind != SJS_EV_ARGUMENT || read->pc != k->target_pc || read->end != here(c) || c->last_label > read->pc ||
-        read->kind == NR_NONE || !claim_receiver(c, read)) {
+        read->kind == NR_NONE || !claim_receiver(c, read, NULL)) {
         return;
     }
     k->assigns = AT_VARIABLE;
@@ -2150,8 +2218,6 @@ static sjs_result object_assign_end(sjs_compiler *c, const construct *k, const s
  * the reference and the keys for the next. What needs scopes is decided
  * here: the root is a variable the function owns, by the rules of a
  * mutation, and no method changed it in the keys or the arguments. */
-static const char *const refused_path_changing =
-    "staticjs does not change a variable with one of its methods while it calls a method on a path from it";
 
 /* The path the call held is its callee: the root's read becomes a
  * RECEIVER and each step but the method a key. k->member is the method's
@@ -2165,9 +2231,9 @@ static uint32_t path_mutation_target(sjs_compiler *c, construct *k, const sjs_ev
     const char *why = NULL;
     sjs_str name = root.kind == NR_GLOBAL ? c->globals[root.which] : binding_name(c, root.which);
     if (root.kind == NR_GLOBAL) {
-        why = "staticjs changes only a value a variable of the function holds, and this is a global";
+        why = refused_global;
     } else if (root.kind == NR_IMPORT) {
-        why = "staticjs changes only a value a variable of the function holds, and this is an import";
+        why = refused_import;
     } else {
         /* What the arguments do with the root's value is the evaluator's to
          * check, as for a mutation of a variable: it holds the value too
@@ -2178,7 +2244,15 @@ static uint32_t path_mutation_target(sjs_compiler *c, construct *k, const sjs_ev
         if (why == NULL && b->changed_at > root.pc + 1u) why = refused_path_changing;
     }
     if (why != NULL || steps < 2u || SJS_BUF_AT(c->path_steps, uint32_t, p->steps_base + steps - 1u) != k->member) {
-        if (why != NULL) refuse_later(c, root.at, (refusal){ why, name });
+        /* MUTATION: a shared name falls back to an ordinary call, which
+         * the evaluator checks as any is. */
+        const sjs_string *key = SJS_AS_STRING(SJS_BUF_AT(c->constants, sjs_value, sjs_read32(c->code.ptr + k->member + 1u)));
+        if (why != NULL && sjs_mutation_shared(sjs_name_of(key))) {
+            k->fallback = fallback_of(why);
+            k->receiver = root.which;
+        } else if (why != NULL) {
+            refuse_later(c, root.at, (refusal){ why, name });
+        }
         drop_paths(c, SJS_BUF_COUNT(c->paths, path) - 1u);
         return 0;
     }
@@ -2293,10 +2367,13 @@ static sjs_result call_end(sjs_compiler *c, const sjs_event *e, uint8_t opcode) 
         if (r != SJS_OK || k.mutate_path) return r;
     }
     if (op(c, opcode, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
+    uint32_t pc = c->last_op; /* MUTATION: shared names */
     if (u16(c, (uint16_t)e->count) != SJS_OK) return SJS_ERR_PROGRAM;
     uint8_t flags = (uint8_t)((k.method ? SJS_CALL_METHOD : 0u) | (k.spread ? SJS_CALL_SPREAD : 0u));
     sjs_result r = u8(c, flags);
     c->last_op_valid = false;
+    /* MUTATION: a shared name's ordinary call, which a statement refuses. */
+    if (k.fallback != FB_NONE) c->last_fallback = (fallback_site){ pc, here(c), k.receiver, k.fallback };
     return r;
 }
 
@@ -2449,6 +2526,12 @@ static sjs_result compile_return(sjs_compiler *c, const sjs_event *e) {
 static sjs_result compile_expression_statement(sjs_compiler *c, const sjs_event *e) {
     if (!statement_level(c)) return out_of_order(c, e->at);
     if (c->last_mutation.end != here(c) || c->last_label > c->last_mutation.pc) {
+        /* MUTATION: a shared name's call that a mutation would refuse. */
+        const fallback_site *f = &c->last_fallback;
+        if (f->why != FB_NONE && f->end == here(c) && c->last_label <= f->pc) {
+            sjs_str name = f->why == FB_GLOBAL ? c->globals[f->which] : binding_name(c, f->which);
+            return refuse_later(c, e->start, (refusal){ fallback_reason(f->why), name });
+        }
         return refuse_later(c, e->start, (refusal){ "an expression statement has no effect in staticjs, unless it changes a variable with one of its methods", SJS_STR("") });
     }
     return op(c, SJS_OP_POP, e->at);

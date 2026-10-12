@@ -4168,3 +4168,18 @@ __attribute__((noinline)) static sjs_result iterator_step(sjs_vm *vm, sjs_builti
     if (!done && owned) it->position++;
     return iterator_result_make(vm, call, (iterator_result){ value, done });
 }
+
+/* MUTATION: shared names (docs/mutation.md, "Shared names"), at the end
+ * of the file, so that the code before it is laid out as it was.
+ * `columns`: the kinds of sjs_name.methods' columns, in order. A column of
+ * the mutation's own kind is the same method on a value nothing else holds
+ * (an iterator's next and return), not a namesake. */
+bool sjs_mutation_shared(const sjs_name *name) {
+    static const uint8_t columns[9] = { SJS_ARRAY, SJS_STRING, SJS_SET, SJS_BIGINT, SJS_MAP, SJS_ITERATOR, SJS_REGEXP, SJS_NUMBER, SJS_TEMPORAL };
+    if (name == NULL || name->mutation == 0) return false;
+    uint8_t own = mutation_kind((sjs_builtin_id)name->mutation);
+    for (uint32_t i = 0; i < 9u; i++) {
+        if (name->methods[i] != 0 && columns[i] != own) return true;
+    }
+    return false;
+}
