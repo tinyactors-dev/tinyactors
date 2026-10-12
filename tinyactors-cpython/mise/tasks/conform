@@ -25,10 +25,14 @@ unless CPython::ADAPTER.exist?
         '(python -m conform)'
 end
 
+# The datamodels: both, unless TA_PYTHON_DATAMODELS names fewer (`mise
+# run test` passes the gate's, CPython::GATE). The adapter imports the
+# abi3 build, the one the wheel ships.
 python = CPython.pinned('python')
 options = ARGV.reject { |argument| argument == '--' }
-%w[native quickjs].each do |datamodel|
+datamodels = ENV.fetch('TA_PYTHON_DATAMODELS', 'native,quickjs').split(',')
+datamodels.each do |datamodel|
   puts "conform: #{datamodel}"
   CPython.run('mise', 'run', '//tinyactors-test:run', '--', '--kind', 'binding', '--datamodel', datamodel, *options,
-              python, '-m', 'conform')
+              python, '-m', 'conform', env: { 'PYTHONPATH' => CPython::BUILD.join('abi3').to_s })
 end

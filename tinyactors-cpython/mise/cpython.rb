@@ -5,6 +5,8 @@
 # belongs here too (Toolchain::Target.host for the tests, Target.release
 # for the wheel; mise/lib/toolchain.rb).
 require 'pathname'
+require 'cache'
+require 'toolchain'
 
 module CPython
   ROOT = Pathname.new(__dir__).join('..').expand_path
@@ -20,6 +22,36 @@ module CPython
   # tinyactors-test/suites/milestones.txt), named here and nowhere else.
   # Which set the binding is held to now is in ROADMAP.md.
   MILESTONE = 'M1'
+  # What of that set `mise run test` runs now: the suites (`--suite`) and
+  # the datamodels the adapter passes so far. It grows with the plan
+  # (ROADMAP.md, "Plan and progress"); M1 is done when it is every suite of
+  # the set on both datamodels.
+  GATE = { suites: %w[], datamodels: %w[] }.freeze
+
+  # The extension's C (AGENTS.md, "Layout"), and the flags every file of it
+  # compiles with: all of its warnings are errors, and nothing but
+  # PyInit_tinyactors is exported (PyMODINIT_FUNC makes it visible).
+  SOURCES = 'src/**/*.c'
+  FLAGS = %w[-std=c11 -Wall -Wextra -Werror -Wno-missing-field-initializers -fvisibility=hidden -g -O1].freeze
+  # Core's amalgamation (tinyactors-core/mise/core.rb, LIBRARIES): the
+  # library, the runtime with its hosted platform file (the compiler and
+  # the C library's allocator the compiler uses), and the ECMAScript
+  # datamodel, with the flags core compiles quickjs with (QUICKJS_FLAGS).
+  CORE_SOURCES = {
+    'tinyactors.c' => %w[-std=c11],
+    'tinyactors_runtime.c' => %w[-std=c11],
+    'tinyactors_runtime_hosted.c' => %w[-std=c11],
+    'tinyactors_datamodel_ecmascript.c' => %w[-std=gnu11 -w -fno-strict-aliasing -D_GNU_SOURCE -D__STDC_NO_ATOMICS__=1]
+  }.freeze
+
+  # An interpreter the extension is built for: the abi3 build on the pinned
+  # 3.13, which the wheel ships, and the same sources again without
+  # Py_LIMITED_API for the free-threaded interpreter, which only the tests
+  # use (AGENTS.md, "C rules").
+  Build = Struct.new(:name, :python, :defines, :suffix, keyword_init: true) do
+    def directory = BUILD.join(name)
+    def extension = directory.join("tinyactors#{suffix}")
+  end
 
   module_function
 
@@ -38,6 +70,59 @@ module CPython
     path = IO.popen(['mise', 'which', program], chdir: ROOT.to_s, err: File::NULL, &:read).strip
     abort "#{program} is not installed: run `mise install` in #{ROOT}" if path.empty?
     path
+  end
+
+  # The two builds of the extension (Build).
+  def builds
+    abi3 = pinned('python')
+    free_threaded = free_threaded_python
+    [Build.new(name: 'abi3', python: abi3, defines: %w[Py_LIMITED_API=0x030D0000], suffix: '.abi3.so'),
+     Build.new(name: 'free-threaded', python: free_threaded, defines: [],
+               suffix: config_var(free_threaded, 'EXT_SUFFIX'))]
+  end
+
+  # A sysconfig value of an interpreter.
+  def config_var(python, name)
+    IO.popen([python, '-c', "import sysconfig; print(sysconfig.get_config_var(#{name.inspect}))"], &:read).strip
+  end
+
+  # Where an interpreter's Python.h is.
+  def include_directory(python)
+    IO.popen([python, '-c', 'import sysconfig; print(sysconfig.get_paths()["include"])'], &:read).strip
+  end
+
+  # Compiles one C file with the content cache (mise/lib/cache.rb); a
+  # failure ends the task with the compiler's output.
+  def compile(target, source, object, flags)
+    command = target.compile_command(*target.format.position_independent, *flags)
+    outcome, output = Cache.compile(command, source, object)
+    return object unless outcome == :failed
+
+    warn output
+    abort "build: #{Pathname.new(source).relative_path_from(ROOT)} does not compile"
+  end
+
+  # Core's amalgamation as objects, the same for both builds: they hold no
+  # Python.
+  def core_objects(target)
+    CORE_SOURCES.map do |file, flags|
+      compile(target, CORE_BUILD.join(file), BUILD.join('objects/core', file.sub(/\.c\z/, '.o')),
+              [*flags, '-fvisibility=hidden', '-g', '-O2', "-I#{CORE_BUILD}"])
+    end
+  end
+
+  # The extension for one interpreter: src/ against its Python.h, linked
+  # with core's objects into a module CPython loads (Target#plugin: the
+  # interpreter provides the C API's symbols).
+  def build_extension(target, build, core)
+    includes = ["-I#{CORE_BUILD}", "-I#{ROOT.join('src')}", "-I#{include_directory(build.python)}"]
+    objects = Dir[ROOT.join(SOURCES).to_s].sort.map do |source|
+      relative = Pathname.new(source).relative_path_from(ROOT.join('src')).sub_ext('.o')
+      compile(target, source, build.directory.join('objects', relative),
+              [*FLAGS, *includes, *build.defines.map { |define| "-D#{define}" }])
+    end
+    target.plugin([*objects, *core].map(&:to_s), into: build.extension.to_s)
+    build.extension
   end
 
   # The free-threaded interpreter of mise.toml's TA_PYTHON_FREE_THREADED,
