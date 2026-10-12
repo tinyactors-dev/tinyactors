@@ -529,7 +529,7 @@ const numberSummary = [
   ['P', 'doubles of a fixed list give toFixed, toExponential and toPrecision as JavaScript does'],
   ['Q', 'doubles of a fixed list give toString(radix) in every radix as JavaScript does'],
   ['W', 'pairs of a fixed list give Math.pow(x, y) and x ** y bit for bit'],
-  ['U', 'calls on doubles of fixed lists give Math.exp, expm1, log, log1p, log2, log10, sin, cos, tan, asin, acos and atan bit for bit'],
+  ['U', 'calls on doubles of fixed lists give Math.exp, expm1, log, log1p, log2, log10, sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, asinh, acosh, atanh and cbrt bit for bit'],
   ['V', 'pairs of a fixed list give Math.atan2(y, x) bit for bit'],
   ['J', 'random JSON documents give JSON.stringify(JSON.parse(t))'],
   ['E', `mutated JSON documents read as JSON.parse reads them (${jsonOutcomes.value} read, ` +

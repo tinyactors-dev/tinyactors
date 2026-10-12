@@ -154,7 +154,8 @@ double sjs_number_sqrt(double x);
 double sjs_number_fround(double x);
 /* Math functions as V8 computes them (math.c, V8's fdlibm): x ** y and
  * Math.pow(x, y), Math.exp, expm1, log, log1p, log2 and log10, Math.sin,
- * cos, tan, asin, acos, atan and atan2. */
+ * cos, tan, asin, acos, atan and atan2, Math.sinh, cosh, tanh, asinh,
+ * acosh, atanh and cbrt. */
 double sjs_math_pow(double x, double y);
 double sjs_math_exp(double x);
 double sjs_math_expm1(double x);
@@ -169,6 +170,13 @@ double sjs_math_asin(double x);
 double sjs_math_acos(double x);
 double sjs_math_atan(double x);
 double sjs_math_atan2(double y, double x);
+double sjs_math_sinh(double x);
+double sjs_math_cosh(double x);
+double sjs_math_tanh(double x);
+double sjs_math_asinh(double x);
+double sjs_math_acosh(double x);
+double sjs_math_atanh(double x);
+double sjs_math_cbrt(double x);
 /* Math.random: V8's generator (number.c), the public sjs_random and the
  * state whose first word gives the next value, which is sjs_random's
  * state stepped back 64 - left times. A state of zeros was never seeded. */
@@ -799,6 +807,13 @@ typedef enum {
     SJS_BUILTIN_MATH_ACOS,
     SJS_BUILTIN_MATH_ATAN,
     SJS_BUILTIN_MATH_ATAN2,
+    SJS_BUILTIN_MATH_SINH,
+    SJS_BUILTIN_MATH_COSH,
+    SJS_BUILTIN_MATH_TANH,
+    SJS_BUILTIN_MATH_ASINH,
+    SJS_BUILTIN_MATH_ACOSH,
+    SJS_BUILTIN_MATH_ATANH,
+    SJS_BUILTIN_MATH_CBRT,
     SJS_BUILTIN_BIGINT,
     SJS_BUILTIN_BIGINT_AS_INT_N,
     SJS_BUILTIN_BIGINT_AS_UINT_N,
@@ -849,7 +864,7 @@ typedef enum {
     SJS_BUILTIN_TEMPORAL_NOW_ZONED_DATE_TIME_ISO,
     SJS_BUILTIN_FUNCTION_COUNT,
     /* Methods, called on a receiver. */
-    SJS_METHOD_FIRST = 96,
+    SJS_METHOD_FIRST = 102,
     /* Arrays. */
     SJS_METHOD_ARRAY_AT = SJS_METHOD_FIRST,
     SJS_METHOD_ARRAY_CONCAT,

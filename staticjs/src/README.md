@@ -5,7 +5,7 @@ Implementation modules. Headers here are private; the public API is
 - `memory.c`    the allocator, growable buffers, the context, errors
 - `text.c`      UTF-8, and JavaScript's UTF-16 view of it
 - `number.c`    Number::toString and toString(radix), toFixed, toExponential and toPrecision, remainder and rounding, decimal literals
-- `math.c`      Math functions as V8 computes them: ports of V8's fdlibm (`src/base/ieee754.cc`), `pow` for `Math.pow` and `**`; `exp`, `expm1`, `log`, `log1p`, `log2` and `log10`; `sin`, `cos`, `tan` (with fdlibm's argument reduction), `asin`, `acos`, `atan` and `atan2`
+- `math.c`      Math functions as V8 computes them: ports of V8's fdlibm (`src/base/ieee754.cc`), `pow` for `Math.pow` and `**`; `exp`, `expm1`, `log`, `log1p`, `log2` and `log10`; `sin`, `cos`, `tan` (with fdlibm's argument reduction), `asin`, `acos`, `atan` and `atan2`; `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` and `cbrt`
 - `value.c`     strings, arrays, objects, sets, closures; release without recursion
 - `syntax.h`    the lexer and its tokens
 - `lexer.c`     bytes to tokens, one byte at a time

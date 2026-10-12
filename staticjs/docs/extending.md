@@ -287,6 +287,18 @@ The examples are BigInt, `Map` and iterators.
      exact, so `src/math.c` uses fdlibm's own `scalbn` and number.c's
      floor; V8's `volatile` constants (atan2's `tiny`, atan's `atanlo[3]`)
      only keep additions that round to the same bits.
+   - **Hyperbolic functions and cbrt.** `Math.sinh`, `cosh`, `tanh`,
+     `asinh`, `acosh`, `atanh` and `cbrt` convert their argument and call
+     `base::ieee754::sinh` and the others, with no JavaScript special case.
+     The hyperbolic ones call V8's own `exp`, `expm1`, `log`, `log1p` and
+     the square root instruction, so `src/math.c` calls its ports of those;
+     V8's `sinh` and `cosh` are its own rewrite of fdlibm's (an overflow
+     threshold of 710.4758600739439, a `cosh(x) = 1` cut at 2^-55), and its
+     `cbrt` is FreeBSD's `s_cbrt.c` (a rounding of t to 23 bits through its
+     bits), not fdlibm's. glibc's last bit differs for many inputs
+     (`Math.cbrt(0.1)`, `Math.cosh(0.42)`, `Math.asinh(2.02)`). `acosh` of
+     x < 1 and `atanh` of |x| > 1 give a signalling NaN in V8, a quiet one
+     here; `atanh(±1)` is ±Infinity.
 4. **Add a sweep:** `number_test --print N` writes lines that
    `diff-node` compares with Node on every test run. Use 100,000 cases per
    function, or for a Math function a fixed list of at most 10,000 inputs
@@ -306,9 +318,13 @@ The examples are BigInt, `Map` and iterators.
    `atan2` (also the doubles next to multiples of pi/2 and pi/4, huge
    arguments, the doubles closest to multiples of pi/2, values in [-1, 1]
    and next to +-1 and 0.5; for `atan2`, every special case and quotients
-   next to 2^60). A function of its own list, such as the trigonometric
-   ones, is printed with `print_trig_input` beside `print_unary_input`;
-   a two-argument one has its own tag (V for `atan2`).
+   next to 2^60), and to each of `sinh`, `cosh`, `tanh`, `asinh`, `acosh`,
+   `atanh` and `cbrt` (also the overflow threshold of `sinh` and `cosh`,
+   values near 22, 2^28 and 1, and for `cbrt` subnormals, every binary
+   exponent and cubes of integers). A function of its own list, such as the
+   trigonometric ones, is printed with `print_trig_input` or
+   `print_hyperbolic_input` beside `print_unary_input`; a two-argument one
+   has its own tag (V for `atan2`).
 
 ## To verify a change
 

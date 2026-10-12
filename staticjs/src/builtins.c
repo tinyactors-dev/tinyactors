@@ -70,6 +70,13 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
     { "Math", "acos", SJS_BUILTIN_MATH_ACOS },
     { "Math", "atan", SJS_BUILTIN_MATH_ATAN },
     { "Math", "atan2", SJS_BUILTIN_MATH_ATAN2 },
+    { "Math", "sinh", SJS_BUILTIN_MATH_SINH },
+    { "Math", "cosh", SJS_BUILTIN_MATH_COSH },
+    { "Math", "tanh", SJS_BUILTIN_MATH_TANH },
+    { "Math", "asinh", SJS_BUILTIN_MATH_ASINH },
+    { "Math", "acosh", SJS_BUILTIN_MATH_ACOSH },
+    { "Math", "atanh", SJS_BUILTIN_MATH_ATANH },
+    { "Math", "cbrt", SJS_BUILTIN_MATH_CBRT },
     { "", "BigInt", SJS_BUILTIN_BIGINT },
     { "BigInt", "asIntN", SJS_BUILTIN_BIGINT_AS_INT_N },
     { "BigInt", "asUintN", SJS_BUILTIN_BIGINT_AS_UINT_N },
@@ -427,6 +434,13 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_MATH_ACOS),
     FUNCTION_VALUE(SJS_BUILTIN_MATH_ATAN),
     FUNCTION_VALUE(SJS_BUILTIN_MATH_ATAN2),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_SINH),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_COSH),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_TANH),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_ASINH),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_ACOSH),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_ATANH),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_CBRT),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_INT_N),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_UINT_N),
@@ -956,8 +970,8 @@ static sjs_result object_integrity(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call 
 static sjs_result number_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* Math.sqrt, hypot, fround, clz32 and imul, at the end of the file. */
 static sjs_result math_exact(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
-/* Math.pow, exp, log, sin, atan2 and the others V8's fdlibm computes, at
- * the end of the file. */
+/* Math.pow, exp, log, sin, atan2, sinh, cbrt and the others V8's fdlibm
+ * computes, at the end of the file. */
 static sjs_result math_v8(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* BigInt, BigInt.asIntN and asUintN, a BigInt's toString, and Number,
  * parseInt and parseFloat of a BigInt: at the end of the file. */
@@ -1057,6 +1071,13 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     case SJS_BUILTIN_MATH_ACOS:
     case SJS_BUILTIN_MATH_ATAN:
     case SJS_BUILTIN_MATH_ATAN2:
+    case SJS_BUILTIN_MATH_SINH:
+    case SJS_BUILTIN_MATH_COSH:
+    case SJS_BUILTIN_MATH_TANH:
+    case SJS_BUILTIN_MATH_ASINH:
+    case SJS_BUILTIN_MATH_ACOSH:
+    case SJS_BUILTIN_MATH_ATANH:
+    case SJS_BUILTIN_MATH_CBRT:
         return math_v8(vm, id, call);
     case SJS_BUILTIN_MATH_RANDOM:
         /* The host's seed (sjs_vm_set_seed), never one of the library's;
@@ -3385,8 +3406,29 @@ static sjs_result math_v8(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     case SJS_BUILTIN_MATH_ACOS:
         result = sjs_math_acos(x);
         break;
-    default: /* ATAN */
+    case SJS_BUILTIN_MATH_ATAN:
         result = sjs_math_atan(x);
+        break;
+    case SJS_BUILTIN_MATH_SINH:
+        result = sjs_math_sinh(x);
+        break;
+    case SJS_BUILTIN_MATH_COSH:
+        result = sjs_math_cosh(x);
+        break;
+    case SJS_BUILTIN_MATH_TANH:
+        result = sjs_math_tanh(x);
+        break;
+    case SJS_BUILTIN_MATH_ASINH:
+        result = sjs_math_asinh(x);
+        break;
+    case SJS_BUILTIN_MATH_ACOSH:
+        result = sjs_math_acosh(x);
+        break;
+    case SJS_BUILTIN_MATH_ATANH:
+        result = sjs_math_atanh(x);
+        break;
+    default: /* CBRT */
+        result = sjs_math_cbrt(x);
         break;
     }
     call->result = sjs_num(result);

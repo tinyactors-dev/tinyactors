@@ -798,11 +798,14 @@ static const uint64_t UNARY_EDGES[] = {
 };
 
 /* The exp and log family first (EXP_LOG_COUNT of them), then the
- * trigonometric functions, each group given its own list. */
+ * trigonometric functions (to TRIG_END), then the hyperbolic ones and
+ * cbrt, each group given its own list. */
 static const char *const UNARY_NAMES[] = {
     "exp", "expm1", "log", "log1p", "log2", "log10", "sin", "cos", "tan", "asin", "acos", "atan",
+    "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "cbrt",
 };
 #define EXP_LOG_COUNT 6
+#define TRIG_END 12
 
 static double unary(size_t f, double x) {
     switch (f) {
@@ -817,7 +820,14 @@ static double unary(size_t f, double x) {
     case 8: return sjs_math_tan(x);
     case 9: return sjs_math_asin(x);
     case 10: return sjs_math_acos(x);
-    default: return sjs_math_atan(x);
+    case 11: return sjs_math_atan(x);
+    case 12: return sjs_math_sinh(x);
+    case 13: return sjs_math_cosh(x);
+    case 14: return sjs_math_tanh(x);
+    case 15: return sjs_math_asinh(x);
+    case 16: return sjs_math_acosh(x);
+    case 17: return sjs_math_atanh(x);
+    default: return sjs_math_cbrt(x);
     }
 }
 
@@ -833,7 +843,11 @@ static void print_unary_input(double x) {
 }
 
 static void print_trig_input(double x) {
-    print_unary_range(EXP_LOG_COUNT, sizeof UNARY_NAMES / sizeof UNARY_NAMES[0], x);
+    print_unary_range(EXP_LOG_COUNT, TRIG_END, x);
+}
+
+static void print_hyperbolic_input(double x) {
+    print_unary_range(TRIG_END, sizeof UNARY_NAMES / sizeof UNARY_NAMES[0], x);
 }
 
 static void print_unary(void) {
@@ -1037,6 +1051,64 @@ static void print_atan2s(void) {
     }
 }
 
+/* Math.sinh, cosh, tanh, asinh, acosh, atanh and cbrt of a fixed list of
+ * doubles, the same lines for any COUNT, each function given every input:
+ * specials; the thresholds of fdlibm's ranges and 4 units either side, of
+ * either sign: sinh's, cosh's and tanh's 2^-28, 2^-55, 0.5 ln 2, 1 and 22,
+ * log(MAX) (0x40862E42, and its exact value) and the overflow threshold
+ * 0x408633CE 8FB9F87D; asinh's and acosh's 2^28, 2 and 1, atanh's 0.5 and
+ * 1; the smallest normal, where cbrt scales a subnormal; every power of
+ * two and its neighbours (each binary exponent mod 3 for cbrt), integers
+ * and halves; the doubles from 700 to 712 by 1/16, around the overflow;
+ * k/256 in [-1, 1], 1 +- 2^-j and -1 + 2^-j, for atanh and acosh; and the
+ * cubes of 1 to 200 with a unit either side, for cbrt. */
+static const uint64_t HYPERBOLIC_EDGES[] = {
+    0x3E30000000000000ull, 0x3C80000000000000ull, 0x3FD62E4300000000ull, 0x3FD62E42FEFA39EFull,
+    0x3FF0000000000000ull, 0x4036000000000000ull, 0x40862E4200000000ull, 0x40862E42FEFA39EFull,
+    0x408633CE8FB9F87Dull, 0x41B0000000000000ull, 0x4000000000000000ull, 0x3FE0000000000000ull,
+    0x0010000000000000ull,
+};
+
+static void print_hyperbolic(void) {
+    static const double SPECIALS[] = {
+        0.0, -0.0, 1.0 / 0.0, -1.0 / 0.0, 0.0 / 0.0, 4.9406564584124654e-324, -4.9406564584124654e-324,
+        2.2250738585072009e-308, -2.2250738585072009e-308, 1.7976931348623157e308, -1.7976931348623157e308,
+        1e-300, 1e300, -1e300, 0.1, -0.1, 0.25, -0.75, 1e-10, -1e-10, 0.9999999999999999, -0.9999999999999999,
+        2.718281828459045, 3.141592653589793, 709.782712893384, 710.4758600739439, 710.475860073944, -710.4758600739439,
+    };
+    for (size_t i = 0; i < sizeof SPECIALS / sizeof SPECIALS[0]; i++) print_hyperbolic_input(SPECIALS[i]);
+    for (size_t i = 0; i < sizeof HYPERBOLIC_EDGES / sizeof HYPERBOLIC_EDGES[0]; i++) {
+        for (int d = -4; d <= 4; d++) {
+            double x = from_bits(HYPERBOLIC_EDGES[i] + (uint64_t)(int64_t)d);
+            print_hyperbolic_input(x);
+            print_hyperbolic_input(-x);
+        }
+    }
+    for (int e = -1074; e <= 1023; e++) {
+        double p = e < -1022 ? from_bits(1ull << (e + 1074)) : from_bits((uint64_t)(e + 1023) << 52);
+        print_hyperbolic_input(p);
+        if (e % 4 == 0) print_hyperbolic_input(-p);
+        if (e % 8 == 0 || (e >= -6 && e <= 6)) {
+            print_hyperbolic_input(from_bits(to_bits(p) + 1));
+            print_hyperbolic_input(from_bits(to_bits(p) - 1));
+        }
+    }
+    for (int n = -1000; n <= 1000; n++) print_hyperbolic_input((double)n);
+    for (int n = -45; n <= 45; n += 2) print_hyperbolic_input((double)n / 2.0);
+    for (int n = 0; n <= 192; n++) print_hyperbolic_input(700.0 + (double)n / 16.0);
+    for (int n = -256; n <= 256; n++) print_hyperbolic_input((double)n / 256.0);
+    for (int j = 1; j <= 60; j++) {
+        double h = from_bits((uint64_t)(1023 - j) << 52); /* 2^-j */
+        print_hyperbolic_input(1.0 - h);
+        print_hyperbolic_input(-1.0 + h);
+        print_hyperbolic_input(1.0 + h);
+    }
+    for (int k = 1; k <= 200; k++) {
+        double c = (double)k * (double)k * (double)k;
+        for (int d = -1; d <= 1; d++) print_hyperbolic_input(from_bits(to_bits(c) + (uint64_t)(int64_t)d));
+    }
+}
+
 static int print(long count) {
     print_formats(count);
     print_decimals(count);
@@ -1053,6 +1125,7 @@ static int print(long count) {
     print_unary();
     print_trig();
     print_atan2s();
+    print_hyperbolic();
     return 0;
 }
 
