@@ -34,7 +34,7 @@ guide and the headers. Three decisions replace theirs:
 
 1. **The suite is shared, not code.** A conformance suite,
    `tinyactors-test`, holds every test that is data (protocol vectors,
-   effect transcripts, W3C) and runs it against one command per
+   self-checking scenarios, W3C) and runs it against one command per
    implementation. A binding is done when the suite passes against it.
 2. **Each binding is its extension's C.** The Node-API addon defines the
    JavaScript classes, runs the loop, dispatches effects, converts values
@@ -94,8 +94,8 @@ Every gate is mechanical and runs in the owning project's `mise run test`.
 | Gate | Where | Catches |
 |---|---|---|
 | **Protocol vectors**: byte-exact requests, config, envelopes and values, through the binding's own CBOR conversion | `tinyactors-test/suites/protocol` | drift in what crosses as CBOR |
-| **Effect transcripts**: a scenario (steps and a pinned clock) and the exact effects it gives, recorded by the C reference | `tinyactors-test/suites/transcripts` | the loop, effect handling, ordering, time, reentrancy |
-| **Differential runs**: every transcript, and every W3C test with expressions in both languages, on the native datamodel and on quickjs; the effects must be equal | the runner | a native datamodel that disagrees with the oracle |
+| **Scenarios**: charts in the W3C notation that check what happened themselves and end in `pass` or `fail`, with the host operations between runs (`steps.txt`), run by the implementation's real loop and effect handlers; no effect is compared | `tinyactors-test/suites/scenarios` | the loop, effect handling, ordering, time, hibernation, migration, snapshots |
+| **Differential runs**: every scenario, and every W3C test with expressions in both languages, on the native datamodel and on quickjs; the outcomes must be equal | the runner | a native datamodel that disagrees with the oracle |
 | **W3C IRP**: 191 of 191 automatic tests per datamodel | `tinyactors-test/suites/w3c` | SCXML semantics end to end |
 | **Mapping table**: `docs/api-map.md`, each API item next to the `ta_*` function, request method or effect behind it, checked against `tinyactors.api.json` and `requests.md` | each binding | API items with nothing in core behind them |
 | **Layer lints** (ast-grep): the extension calls only `ta_*` and its runtime's API; `src/datamodel/` calls only `ta_datamodel_environment_*` and the language's API; one timer, in `loop.c` | each binding | reinvented layers |
@@ -118,11 +118,13 @@ failures, refusal during a run, threads, garbage collection, liveness.
    `tinyactors-core/tools/conform/`. Core's `mise run test` runs the suite
    against it, in place of `run_protocol.c` and `run_w3c.c`; the sources
    table in `AGENTS.md` gets a `tinyactors-test` row.
-3. **Effect transcripts**, written from the scenarios in
-   `tinyactors-core/tests/conformance` (basics, invoke, hibernate, migrate,
-   snapshot) and recorded by `ta-conform`
-   (`mise run //tinyactors-test:record -- …`; a recording is reviewed as a
-   diff, never accepted blind).
+3. **Scenarios**, ported from `tinyactors-core/tests/conformance`
+   (basics, invoke, hibernate, migrate, snapshot) into
+   `tinyactors-test/suites/scenarios` as self-checking charts; each
+   `steps.txt` names the expectations a chart cannot check and the C test
+   that covers them. Nothing is recorded: `ta-conform` runs them
+   (`scenario.run`) and they must pass. Ported with item 1; what remains
+   is running them through `ta-conform`.
 4. **The project skeletons** `tinyactors-napi/` and `tinyactors-cpython/`
    (`mise.toml`, tasks, lint configuration with the typedef exemption,
    empty mapping tables), and the changelog components in
@@ -146,7 +148,7 @@ error type; the CBOR conversion with the value table (`Address`,
 `<script>`, `_event`, `In()`, `<send>` with params, `<foreach>`; quickjs
 wired in beside it; and the suite's adapter (`conform`).
 
-Gates: protocol vectors; the basic transcripts on both datamodels;
+Gates: protocol vectors; the basics scenario on both datamodels;
 `values.txt` round trips on the native datamodel; mapping table; layer
 lints. **Then the API review**, both bindings side by side: how a Python
 chart reads, how a Node program reads.
@@ -215,15 +217,16 @@ Node's liveness. Graceful shutdown: a signal is an event on the loop, so
 `stop()` runs between turns, drains until a deadline the application
 gives, ends the open spans (`trace.end`), takes the traces and frees the
 host; a server with several hosts stops each on its own loop. Gates: the
-invoke transcripts on both datamodels, and a shutdown transcript (spans
-marked `scxml.incomplete`, nothing after the stop).
+invoke scenario on both datamodels, and a shutdown test in each binding
+(spans marked `scxml.incomplete`, nothing after the stop): a chart cannot
+see spans, so it is not a scenario.
 
 #### M4: lifecycle and peers
 
 Hibernation with a store (and a wake before the put settled), export and
 adopt, migration jobs, snapshots, envelopes between two hosts in one
 process and across processes, and a Python host exchanging envelopes with
-an ECMAScript host. Gates: the hibernate, migrate and snapshot transcripts;
+an ECMAScript host. Gates: the hibernate, migrate and snapshot scenarios;
 the envelope vectors.
 
 #### M5: examples and release
@@ -239,30 +242,36 @@ full pass.
 
 ```
 tinyactors-test/
-├── AGENTS.md
+├── AGENTS.md                rules for adding suites, cases and driver methods
 ├── README.md                what the suite is, how to run it against a command
-├── mise.toml                pins ruby, uv (SaxonC for the W3C stylesheets)
+├── mise.toml                pins uv and python (SaxonC for the W3C stylesheets)
 ├── docs/
 │   └── driver.md            the protocol a conforming command speaks: JSON-RPC 2.0
 │                            without "jsonrpc", CBOR, length-prefixed on stdin/stdout;
-│                            methods host.create, image.add, actor.spawn, actor.send,
-│                            clock.advance, host.turn (the effects, as data),
-│                            host.request, envelope.read, w3c.run
+│                            scenario.run and w3c.run (outcomes), and for the vectors
+│                            host.create, host.request, image.add, actor.spawn,
+│                            actor.send, clock.advance, host.run, peer.add,
+│                            envelope.read, envelope.deliver, value.roundtrip,
+│                            value.encode; the scenario and W3C environments
 ├── suites/
-│   ├── protocol/            requests.txt, config.txt, envelopes.txt, values.txt
-│   ├── transcripts/         <scenario>.txt: steps, pinned clock, expected effects
+│   ├── protocol/            requests.txt, config.txt, envelopes.txt, values.txt;
+│   │                        setups/ (the charts of the vectors' setups)
+│   ├── scenarios/           <name>/<document>.txml (conf: notation) and steps.txt
+│   │                        (host operations); the charts judge: pass or fail
 │   └── w3c/
-│       ├── confPython.xsl   ours; confEcma.xsl and confXPath.xsl are fetched
+│       ├── confPython.xsl   ours (M2); confEcma.xsl and confXPath.xsl are fetched
 │       ├── skip.txt
-│       └── convert.py       the XSLT 2.0 step (SaxonC), moved from core
-├── lib/                     the runner (Ruby): spawn the command, frame, compare,
-│                            wildcards (tag 39999), report; no scheduler
+│       └── convert.py       the XSLT 2.0 step (SaxonC), for W3C and --scenarios
+├── lib/                     the runner (Ruby): driver.rb (process, frames),
+│                            runner.rb (suites, compare, wildcards, report),
+│                            vectors.rb, scenarios.rb, cbor.rb, w3c.rb; no scheduler
 ├── mise/tasks/
-│   ├── run                  run -- <command…> [--suite protocol|transcripts|w3c]
-│   ├── record               record -- <command…>: write expected transcripts (review the diff)
+│   ├── run                  run -- <command…> [--suite protocol|scenarios|w3c] [--datamodel …]
 │   ├── encode               the vectors' hex from their diag lines (was protocol:encode)
-│   └── test                 the runner's own tests
-└── build/                   the fetched and converted W3C suite (gitignored)
+│   ├── w3c                  fetch and convert the W3C suite
+│   └── test                 encode --check, and the runner's tests (test/)
+├── test/                    the runner's tests against fake_implementation.rb
+└── build/                   the fetched W3C suite, converted W3C and scenarios (gitignored)
 ```
 
 #### tinyactors-core: what M0 adds
