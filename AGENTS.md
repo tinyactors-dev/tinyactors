@@ -282,6 +282,17 @@ signature, and compare builds side by side, never against numbers from
 another day or machine. The torture chamber (`mise run torture` in
 `tinyactors-core`) measures both.
 
+## Design claims are checked
+
+Before answering a design question or proposing a change, load the
+`reasoned-analysis` skill (`.agents/skills/reasoned-analysis`): fix the
+frame in writing, start from what already exists, trace lifetimes in a
+table, give evidence or say "unverified", and have a fresh agent refute a
+recommendation before it reaches the maintainer. For anything about how a
+binding calls core, how bytes, values and memory cross, or a binding's
+memory, load `boundary-design` too: it holds the boundary's facts and the
+ideas already rejected, with why.
+
 ## Proposals are not instructions
 
 `docs/proposals/` holds outlines of possible future work. They are not
