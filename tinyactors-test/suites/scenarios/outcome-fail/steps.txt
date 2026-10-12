@@ -1,0 +1,6 @@
+# A canary: the chart ends in fail, and the scenario expects it. A runner
+# or an adapter that answers pass for every scenario fails here.
+expect fail
+
+image judge
+spawn j judge

@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<!-- A canary: it waits for an event nobody sends, so it never logs an
+Outcome and the host goes idle (steps.txt: expect timeout). -->
+<scxml initial="s0" conf:datamodel="" version="1.0" name="judge"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <state id="s0">
+    <transition event="never" conf:targetpass=""/>
+  </state>
+
+  <conf:pass/>
+  <conf:fail/>
+</scxml>

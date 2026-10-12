@@ -12,11 +12,17 @@ module Scenarios
   # A line of steps.txt that is not a step.
   class Error < StandardError; end
 
+  # The outcomes scenario.run answers (docs/driver.md).
+  OUTCOMES = %w[pass fail compile timeout].freeze
+
   Scenario = Struct.new(:name, :directory) do
     # The documents' names, as steps.txt and <invoke src> use them.
     def documents = Dir[directory.join('*.txml').to_s].sort.map { |path| File.basename(path, '.txml') }
 
     def steps = Scenarios.steps(directory.join('steps.txt'))
+
+    # The outcome it must end in: its `expect` line's, else pass.
+    def expected = Scenarios.expected(directory.join('steps.txt'))
   end
 
   module_function
@@ -36,6 +42,8 @@ module Scenarios
       next if line.strip.empty? || line.lstrip.start_with?('#')
 
       where = "#{path}:#{index + 1}"
+      next if line.start_with?('expect ')
+
       if line.start_with?(' ', "\t")
         raise Error, "#{where}: an indented line belongs to send-many" unless steps.last&.key?('sendMany')
 
@@ -48,6 +56,22 @@ module Scenarios
       steps << step(line, where)
     end
     steps
+  end
+
+  # The outcome a steps.txt expects: a line `expect <outcome>`, at most
+  # one, else pass. The canaries (outcome-fail, outcome-timeout,
+  # outcome-compile) expect the others, so a runner or an adapter that
+  # answers pass for everything fails them.
+  def expected(path)
+    lines = File.readlines(path, chomp: true).each_with_index.select { |line, _| line.start_with?('expect ') }
+    return 'pass' if lines.empty?
+    raise Error, "#{path}:#{lines[1].last + 1}: one expect line at most" if lines.size > 1
+
+    line, index = lines.first
+    outcome = line.delete_prefix('expect ').strip
+    raise Error, "#{path}:#{index + 1}: expect #{OUTCOMES.join('|')}" unless OUTCOMES.include?(outcome)
+
+    outcome
   end
 
   def step(line, where)

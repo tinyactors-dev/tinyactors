@@ -152,6 +152,30 @@ class RunnerTest < Minitest::Test
     assert_includes @out.string, 'fake: the outcome is timeout'
   end
 
+  def test_a_canary_passes_only_with_the_outcome_it_expects
+    scenario('fails', 'fail', "expect fail\nimage judge\nspawn j judge\n")
+    scenario('passes', 'pass', "expect fail\nimage judge\nspawn j judge\n")
+    scenario('times-out', 'timeout', "expect timeout\nimage judge\nspawn j judge\n")
+    ok, results = run_suites('scenarios')
+    refute ok
+    assert_equal({ 'fails' => :pass, 'passes' => :fail, 'times-out' => :pass }, verdicts(results))
+    assert_includes @out.string, 'outcome "pass", expected "fail"'
+  end
+
+  def test_an_expect_line_is_not_a_step
+    scenario('a', 'pass', "# a comment\nexpect compile\nimage judge\nspawn j judge\n")
+    path = File.join(@directory, 'scenarios/a/steps.txt')
+    assert_equal 'compile', Scenarios.expected(path)
+    assert_equal [{ 'image' => ['judge.scxml'] }, { 'spawn' => 'j', 'chart' => 'judge' }], Scenarios.steps(path)
+    File.write(path, "expect maybe\nimage judge\n")
+    assert_raises(Scenarios::Error) { Scenarios.expected(path) }
+  end
+
+  def test_the_suite_has_a_canary_for_each_outcome_but_pass
+    expected = Scenarios.all.map(&:expected)
+    assert_equal %w[compile fail timeout], (expected - ['pass']).sort
+  end
+
   def test_a_crash_fails_its_case_and_the_next_one_runs
     scenario('a', 'crash')
     scenario('b', 'pass')

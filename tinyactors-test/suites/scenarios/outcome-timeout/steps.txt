@@ -1,0 +1,7 @@
+# A canary: the steps end, the host is idle, and no chart logged an
+# Outcome: the outcome is timeout (docs/driver.md, "The scenario
+# environment"), and the scenario expects it.
+expect timeout
+
+image judge
+spawn j judge

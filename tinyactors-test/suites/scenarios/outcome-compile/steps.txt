@@ -1,0 +1,7 @@
+# A canary: the document does not compile (a transition to a state that
+# is not there), so the outcome is compile (docs/driver.md, "The scenario
+# environment"), and the scenario expects it.
+expect compile
+
+image judge
+spawn j judge

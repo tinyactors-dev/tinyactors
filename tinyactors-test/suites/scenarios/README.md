@@ -43,6 +43,7 @@ A directory with:
 | `hibernate <alias>` | the actor leaves memory; an event or a timer wakes it |
 | `snapshot <name>`, `restore <name>` | the whole host to a blob, and back (a restart) |
 | `migrate [wake] [timeout <ms>]` | actors on older versions move to the current one |
+| `expect <outcome>` | not a step: the outcome the scenario must end in, `fail`, `timeout` or `compile` (default `pass`); at most one |
 
 `<params>` and `<data>` are CBOR diagnostic notation (JSON is a subset of
 it). A text `"@alias"` in them stands for that actor's address. Lines
@@ -72,6 +73,16 @@ starting with `#` are comments.
 - `steps.txt` says, in comments, which of the original expectations a
   chart cannot check and where they are covered instead.
 
+## Canaries
+
+`outcome-fail`, `outcome-timeout` and `outcome-compile` must end in the
+outcome their `expect` line names: a chart that goes to `fail` at once,
+one that waits for an event nobody sends, and one that does not compile (a
+transition to a state it does not have). A runner or an adapter that
+answers `pass` for every scenario, or turns every failure into `fail`,
+fails them. The runner's tests check that there is one for each outcome
+but `pass`.
+
 ## Running them
 
 Against an implementation, through the protocol it speaks
@@ -80,6 +91,7 @@ Against an implementation, through the protocol it speaks
     mise run //tinyactors-test:run -- --suite scenarios <command…>
 
 The runner converts the documents for the datamodel's language first
-(`build/scenarios/<language>/`). An outcome other than `pass` fails the
-scenario: `fail`, `compile` (a document did not compile) or `timeout` (the
-steps ran out with no `Outcome`).
+(`build/scenarios/<language>/`). An outcome other than the one expected
+(`pass`, or the `expect` line's) fails the scenario: `fail`, `compile` (a
+document did not compile) or `timeout` (the steps ran out with no
+`Outcome`).

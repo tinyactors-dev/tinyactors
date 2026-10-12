@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!-- A canary: it goes to fail at once, so its scenario passes only when the
+implementation answers the outcome "fail" (steps.txt: expect fail). -->
+<scxml initial="s0" conf:datamodel="" version="1.0" name="judge"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="1" conf:expr="1"/>
+  </datamodel>
+
+  <state id="s0">
+    <transition conf:idVal="1=1" conf:targetfail=""/>
+    <transition conf:targetpass=""/>
+  </state>
+
+  <conf:pass/>
+  <conf:fail/>
+</scxml>

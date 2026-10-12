@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<!-- A canary: well-formed in every language, but a transition targets a
+state the chart does not have, so the compiler refuses it (steps.txt:
+expect compile). -->
+<scxml initial="s0" conf:datamodel="" version="1.0" name="judge"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <state id="s0">
+    <transition target="nowhere"/>
+  </state>
+
+  <conf:pass/>
+  <conf:fail/>
+</scxml>

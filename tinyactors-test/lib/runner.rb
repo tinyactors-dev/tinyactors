@@ -224,7 +224,8 @@ class Runner
         documents = scenario.documents.map do |name|
           { 'name' => "#{name}.scxml", 'text' => directory.join(scenario.name, "#{name}.scxml").read }
         end
-        outcome!(call('scenario.run', with_datamodel('documents' => documents, 'steps' => scenario.steps)))
+        expected = scenario.expected
+        outcome!(call('scenario.run', with_datamodel('documents' => documents, 'steps' => scenario.steps)), expected)
       end
     end
   end
@@ -424,8 +425,10 @@ class Runner
     raise Failed, "#{got.size} envelopes, expected #{want.size}" if got.size < want.size
   end
 
-  def outcome!(result)
-    raise Failed, "outcome #{result['outcome'].inspect}" unless result['outcome'] == 'pass'
+  def outcome!(result, expected = 'pass')
+    return if result['outcome'] == expected
+
+    raise Failed, "outcome #{result['outcome'].inspect}#{expected == 'pass' ? '' : ", expected #{expected.inspect}"}"
   end
 
   def with_datamodel(params)
