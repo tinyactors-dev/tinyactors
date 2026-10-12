@@ -116,6 +116,10 @@ struct sjs_vm {
      * whole as a leaf (regex_match.c). */
     bool no_regex_leaf;
     uint64_t regex_leaf[SJS_REGEX_LEAF_WORDS / 2u];  /* aligned for the job's pointers */
+    /* The host clock (sjs_vm_set_clock): what Temporal.Now reads, valid
+     * when clock_set. */
+    bool clock_set;
+    sjs_epoch clock;
 };
 
 /* Loop frame slots, from base; a kept callback frame's slots follow them.

@@ -420,6 +420,68 @@ leaves them out).
   which they disagree must fault (deliberately, where temporal-polyfill
   gives a value) or be left out.
 
+## Host clock
+
+The current time is the host's: a read-only value that the evaluator
+holds and the host pushes, as it pushes fuel (`include/staticjs.h`,
+"The host clock"). `Temporal.Now` reads it and nothing else, and so will
+`Date.now()` and `new Date()`; staticjs reads no clock of its own and
+calls back for none.
+
+```c
+typedef struct {
+    int64_t seconds;       /* since 1970-01-01T00:00Z, toward negative infinity */
+    uint32_t nanoseconds;  /* 0 to 999,999,999 */
+} sjs_epoch;
+
+sjs_result sjs_vm_set_clock(sjs_vm *vm, const sjs_epoch *now);
+sjs_result sjs_vm_advance_clock(sjs_vm *vm, uint64_t nanoseconds);
+sjs_result sjs_vm_clock(const sjs_vm *vm, sjs_epoch *out);
+```
+
+- **The evaluator holds it, not the context.** An evaluation is what has
+  to be deterministic: the same program, globals and clock give the same
+  result whichever other evaluations share the context, and two
+  evaluators of one context can run at different times (one replaying a
+  log, one live). A run calls nothing in the host (a native gets the
+  context, not the evaluator), so two reads within one run agree, and
+  two reads with no `sjs_vm_set_clock` or `sjs_vm_advance_clock` between
+  them agree across any number of pauses. A paused evaluation resumed
+  later sees the clock as the host set it before the resuming run: the
+  host decides whether a pause lets time pass (advance it) or not (leave
+  it).
+- **It stays until set again**: across pauses, `sjs_vm_start` and
+  `sjs_vm_reset`; `sjs_vm_destroy` drops it. A host that wants each
+  evaluation at its own instant sets it before each `sjs_vm_start`.
+  `sjs_vm_clock` reads it back, for a host that saves a paused
+  evaluation's state.
+- **Never set, a read faults**, with "the host has not set the clock
+  (sjs_vm_set_clock)": a program reads the host's time or nothing, never
+  a default. `sjs_vm_advance_clock` of a clock never set is
+  `SJS_ERR_INVALID` (a call out of order).
+- **Seconds and nanoseconds, not an int64 of nanoseconds.** An int64 of
+  nanoseconds reaches 2^63 ns, 292 years either side of 1970 (1677 to
+  2262); an Instant reaches 8.64 x 10^21 ns (-271821-04-20 to
+  +275760-09-13), and `Date`'s 8.64 x 10^15 ms is the same span. A host
+  that replays, simulates or tests far dates must be able to set any
+  instant a program can make, so the clock is an Instant's own
+  representation (`as.instant`: whole seconds, floored, and the
+  nanoseconds past them), which `Temporal.Now.instant()` copies. Within
+  the limits (the seconds within 8.64 x 10^12, and at the upper limit no
+  nanoseconds), else `SJS_ERR_INVALID` and the clock unchanged.
+- **Advanced by an unsigned 64-bit count of nanoseconds**: forward only
+  (584 years at most per call); a host that moves its clock back, or
+  further, sets it. Past the limits it is `SJS_ERR_INVALID`, the clock
+  unchanged.
+- No call allocates. The precision is the host's: staticjs gives every
+  nanosecond it is given (temporal-polyfill reads `Date.now()`, whole
+  milliseconds).
+
+`Math.random` will read a seed the same way: a value the evaluator holds,
+`sjs_vm_set_seed` (or the like) to push it, a program that reads it
+unset faulting, and each draw a step of a generator whose state the
+evaluator holds, so that pausing and resuming changes no value.
+
 ## Status and notes for the next types
 
 - PlainDate: built. `toZonedDateTime`, `toPlainYearMonth`,
