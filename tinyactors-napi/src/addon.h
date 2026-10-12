@@ -60,6 +60,8 @@ typedef struct ta_napi_host {
     napi_ref handlers;         /* the `on` object */
     napi_ref clock_object;     /* a SimulatedClock, or NULL: the runtime's clock */
     ta_napi_clock *clock;
+    napi_ref self;      /* the Host object: weak, strong while a timer or an immediate is armed */
+    uint32_t held;      /* self is strong */
     napi_ref wake;      /* the function the timer and the immediate call */
     napi_ref timer;     /* the pending setTimeout, or NULL */
     napi_ref immediate; /* the pending setImmediate, or NULL */

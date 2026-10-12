@@ -136,7 +136,7 @@ void ta_napi_host_release(ta_napi_host *host) {
  * takes a node_api_basic_env: Node.js 22's include/node/js_native_api.h:339). */
 static void ta_napi_host_unreference(ta_napi_host *host) {
     napi_ref *references[] = {&host->handlers, &host->clock_object, &host->wake, &host->timer, &host->immediate,
-                              &host->error};
+                              &host->error, &host->self};
     for (size_t i = 0; i < sizeof references / sizeof references[0]; i++) {
         if (*references[i]) napi_delete_reference(host->env, *references[i]);
         *references[i] = NULL;
@@ -205,6 +205,9 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
         free(host);
         return NULL;
     }
+    /* a reference of our own, weak: napi_wrap's would be Node's to keep
+     * (deleting it while the object is wrapped breaks napi_unwrap) */
+    napi_create_reference(env, call.self, 0, &host->self);
     napi_type_tag_object(env, call.self, &ta_napi_host_tag);
     ta_status status = ta_napi_host_datamodel(host, options);
     napi_value config = ta_napi_member(env, options, "config");

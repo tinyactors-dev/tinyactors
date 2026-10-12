@@ -83,6 +83,20 @@ static double ta_napi_milliseconds(const ta_napi_host *host, ta_time ticks) {
 
 /* ---- arming ----------------------------------------------------------------------------- */
 
+/* While a timer or an immediate is armed, its callback needs the host: the
+ * Host object is held then, so the garbage collector cannot free it under
+ * a pending deadline (bun collected an unreachable Host with a pending
+ * delayed send, and the timer then ran on freed memory: test/rules.test.mjs,
+ * "a pending deadline keeps the process alive"). */
+static void ta_napi_hold(ta_napi_host *host) {
+    int armed = host->timer || host->immediate;
+    uint32_t count = 0;
+    if (armed && !host->held && host->self && napi_reference_ref(host->env, host->self, &count) == napi_ok)
+        host->held = 1;
+    else if (!armed && host->held && host->self && napi_reference_unref(host->env, host->self, &count) == napi_ok)
+        host->held = 0;
+}
+
 static void ta_napi_clear(napi_env env, napi_ref *reference, const char *clear) {
     if (!*reference) return;
     napi_value handle;
@@ -97,6 +111,7 @@ static void ta_napi_clear(napi_env env, napi_ref *reference, const char *clear) 
 void ta_napi_loop_disarm(ta_napi_host *host) {
     ta_napi_clear(host->env, &host->timer, "clearTimeout");
     ta_napi_clear(host->env, &host->immediate, "clearImmediate");
+    ta_napi_hold(host);
 }
 
 static napi_value ta_napi_loop_wake(napi_env env, napi_callback_info info);
@@ -120,6 +135,7 @@ static void ta_napi_arm_immediate(ta_napi_host *host) {
     ta_napi_global_call call = {"setImmediate", 1, &function};
     napi_value handle = ta_napi_global(host->env, &call);
     if (handle) napi_create_reference(host->env, handle, 1, &host->immediate);
+    ta_napi_hold(host);
 }
 
 /* One timer at the next deadline (UINT64_MAX: none), ref'd while it is
@@ -129,7 +145,10 @@ static void ta_napi_arm_timer(ta_napi_host *host, ta_time deadline, ta_time now)
     if (host->clock) return;
     if (host->timer && host->timer_deadline == deadline) return;
     ta_napi_clear(host->env, &host->timer, "clearTimeout");
-    if (deadline == UINT64_MAX) return;
+    if (deadline == UINT64_MAX) {
+        ta_napi_hold(host);
+        return;
+    }
     napi_value argv[2];
     argv[0] = ta_napi_wake_function(host);
     if (!argv[0]) return;
@@ -138,6 +157,7 @@ static void ta_napi_arm_timer(ta_napi_host *host, ta_time deadline, ta_time now)
     napi_value handle = ta_napi_global(host->env, &call);
     if (handle) napi_create_reference(host->env, handle, 1, &host->timer);
     host->timer_deadline = deadline;
+    ta_napi_hold(host);
 }
 
 /* ---- the turn ------------------------------------------------------------------------------ */
@@ -235,6 +255,7 @@ static napi_value ta_napi_loop_wake(napi_env env, napi_callback_info info) {
         host->immediate = NULL;
     }
     ta_napi_loop_turn(host);
+    if (!host->closed) ta_napi_hold(host); /* nothing armed: the Host may go */
     return NULL;
 }
 
