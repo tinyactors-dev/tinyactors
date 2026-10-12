@@ -184,7 +184,14 @@ Progress:
   (`host.c`, 2). Sessions, charts, payloads and loops are table rows; the
   datamodel lives in the `Host`; images are held `bytearray`s; core's
   outputs are written straight into `bytes`; `send_many` batches on the
-  stack. The lint rule `allocation-in-tables-and-host` keeps it so.
+  stack. The lint rule `allocation-in-tables-and-host` keeps it so
+  (`934ef73a`).
+- Request 1 answered (`34c09cfa`): this commit. `GATE` is the whole M1
+  set, protocol and scenarios, on both datamodels: 104 protocol vectors
+  pass and 65 skip on each (the C-level methods, the reference-only
+  cases, the other datamodel's round trips), 0 fail; 4 of 4 scenarios.
+  "M1 done means" holds; the coordinator's audit and the API review are
+  next.
 
 ## Later milestones
 
@@ -198,7 +205,14 @@ Gaps in core or in the suite this session found. Each says what is
 missing, why, and which suite case or test shows it; the coordinator
 moves it into the root ROADMAP.md's "Requests to core" and answers there.
 
-### 1. The runner skips, for a binding, the request and config vectors its API cannot send (open, 2026-10-12)
+### 1. The runner skips, for a binding, the request and config vectors its API cannot send (answered, 2026-10-12)
+
+**Answered** (`34c09cfa`): the 18 envelope-level cases carry an `only
+reference` line, and `--kind binding` skips them ("envelope-level:
+reference only"); `ta-conform` still runs them. The method-level cases
+stay the binding's, and the adapter answers with the request's own id
+(driver.md, "Kinds"). The M1 set then passes on both datamodels, and
+`GATE` holds all of it.
 
 **What is missing.** `tinyactors-test/lib/runner.rb` sends every case of
 `suites/protocol/requests.txt` and `config.txt` to a binding's adapter,
