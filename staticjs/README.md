@@ -30,8 +30,10 @@ written as `String(x)` and `toString(radix)`, read back, rounded as
 `Number(x)` and wrapped by `BigInt.asIntN` and `asUintN`, and a fixed
 list of 100 doubles (ties, values just under and over a half, subnormals,
 1e21 and the largest double) through `toFixed`, `toExponential` and
-`toPrecision` with 24 counts of digits each, 0 to 100 (`number_test
---print`); and random JSON documents read by `JSON.parse` and written back
+`toPrecision` with 24 counts of digits each, 0 to 100, and 123 doubles
+(integers to the largest double, fractions to the smallest subnormal,
+negatives) with each radix's powers and their neighbours through
+`toString(radix)` in every radix 2 to 36 (`number_test --print`); and random JSON documents read by `JSON.parse` and written back
 by `JSON.stringify`, the same documents with a byte or two changed (a
 SyntaxError where JavaScript throws one), and `JSON.stringify` calls with
 replacers and spaces (`json_test --print`).

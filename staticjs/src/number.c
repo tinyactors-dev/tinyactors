@@ -622,6 +622,136 @@ uint32_t sjs_number_format_digits(sjs_number_digits d, char *out) {
 }
 
 /* ------------------------------------------------------------------------
+ * Number.prototype.toString(radix). Radix 10 is String(x). Any other radix
+ * is written as V8 writes it, which is neither the shortest text that
+ * reads back nor the exact value: DoubleToRadixCString in V8's
+ * src/numbers/conversions.cc, as of V8 12.4 (Node 22), translated to C
+ * operation for operation, every one an IEEE double operation rounded once
+ * (FP_CONTRACT is off above). The integer part is written exactly, with
+ * zeros for the digits under the double's precision; the fraction digit by
+ * digit, multiplying by the radix, until what is left is under `delta`,
+ * half the distance to the next double (multiplied by the radix too), and
+ * rounded to even at the last digit, carrying into the digits before it
+ * and the integer part. The library calls it makes (floor, fmod, the
+ * next double and the binary exponent) are the exact bit operations of
+ * this file. Its notice:
+ *
+ * Copyright 2006-2011, the V8 project authors. All rights reserved.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *     * Neither the name of Google Inc. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+static const char RADIX_DIGITS[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+/* The digit a character of RADIX_DIGITS stands for. */
+static int32_t radix_digit_value(char c) {
+    return c > '9' ? c - 'a' + 10 : c - '0';
+}
+
+/* A text being written in a radix: the fraction from the middle of
+ * `buffer` on, then the integer part before it. */
+typedef struct {
+    char *buffer; /* SJS_NUMBER_RADIX_MAX bytes */
+    uint32_t radix;
+    double integer; /* the integer part, plus one if the fraction carried into it */
+} radix_text;
+
+/* The fraction of `value` (positive, finite), from the middle of the
+ * buffer, where the point goes, on; sets t->integer. Returns the cursor
+ * after the last byte written. */
+static uint32_t radix_fraction(radix_text *t, double value) {
+    char *buffer = t->buffer;
+    uint32_t radix = t->radix;
+    double *integer = &t->integer;
+    uint32_t point = SJS_NUMBER_RADIX_MAX / 2u;
+    uint32_t cursor = point;
+    *integer = sjs_number_floor(value);
+    double fraction = value - *integer;
+    /* Half the distance to the next double (base::Double::NextDouble), at
+     * least the smallest double: 0.5 times the smallest rounds to 0. */
+    double delta = 0.5 * (from_bits(to_bits(value) + 1u) - value);
+    double smallest = from_bits(1u);
+    if (!(delta > smallest)) delta = smallest;
+    if (!(fraction >= delta)) return cursor;
+    buffer[cursor++] = '.';
+    do {
+        fraction *= (double)radix;
+        delta *= (double)radix;
+        int32_t digit = (int32_t)fraction;
+        buffer[cursor++] = RADIX_DIGITS[digit];
+        fraction -= (double)digit;
+        if (fraction > 0.5 || (fraction == 0.5 && (digit & 1) != 0)) {
+            if (fraction + delta > 1) {
+                /* Round up: carry back through the digits written. */
+                for (;;) {
+                    cursor--;
+                    if (cursor == point) {
+                        *integer += 1;
+                        break;
+                    }
+                    digit = radix_digit_value(buffer[cursor]);
+                    if ((uint32_t)digit + 1u < radix) {
+                        buffer[cursor++] = RADIX_DIGITS[digit + 1];
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    } while (fraction >= delta);
+    return cursor;
+}
+
+uint32_t sjs_number_format_radix(double value, uint32_t radix, char *out) {
+    if (radix == 10u || !sjs_number_is_finite(value) || value == 0) return sjs_number_format(value, out);
+    bool negative = value < 0;
+    if (negative) value = -value;
+    radix_text t = { out, radix, 0 };
+    uint32_t end = radix_fraction(&t, value);
+    double integer = t.integer;
+    uint32_t start = SJS_NUMBER_RADIX_MAX / 2u;
+    /* Zeros for the digits under the double's precision, while integer /
+     * radix is at least 2^53 (base::Double::Exponent() > 0: a biased
+     * exponent over 1075). */
+    while (((to_bits(integer / (double)radix) >> 52) & 0x7FFu) > 1075u) {
+        integer /= (double)radix;
+        out[--start] = '0';
+    }
+    do {
+        double remainder = sjs_number_remainder(integer, (double)radix); /* fmod, exact */
+        out[--start] = RADIX_DIGITS[(int32_t)remainder];
+        integer = (integer - remainder) / (double)radix;
+    } while (integer > 0);
+    if (negative) out[--start] = '-';
+    uint32_t length = end - start;
+    for (uint32_t i = 0; i < length; i++) out[i] = out[start + i];
+    return length;
+}
+
+/* ------------------------------------------------------------------------
  * Reading numbers: digits to the nearest double, ties to even, for any
  * number of digits, as JavaScript reads a literal and as Number,
  * parseFloat and parseInt read a string (RoundMVResult; V8 rounds every one
