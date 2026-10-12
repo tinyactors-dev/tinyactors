@@ -21,7 +21,8 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   `src/{base,image,core,system}`; `mise run check:wasm` builds the tests for
   wasm32-wasi and runs them under wasmtime.
 - `mise run w3c` runs the W3C IRP suite (downloaded and converted on first
-  use); every test not listed in `tests/w3c/skip.txt` must pass.
+  use, by `tinyactors-test`); every test not listed in
+  `../tinyactors-test/suites/w3c/skip.txt` must pass.
 - `mise run lint` runs every ast-grep rule in `tools/lint/rules/` over the
   C sources, after their tests in `tools/lint/tests/` (always invoke
   `ast-grep`, never `sg`, which is shadow-utils' group tool in orbs). A new
@@ -56,7 +57,8 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
 - A rarely called host operation is a method of `ta_host_request`: follow
   "Adding a method" in `docs/requests.md` for what belongs there and how.
 - Bytes that cross the API (requests, configs, envelopes, values) are
-  fixed by the protocol vectors in `tests/protocol/` (its README.md): a
+  fixed by the protocol vectors in `../tinyactors-test/suites/protocol/`
+  (its README.md): a
   change to them changes a vector, and every binding follows it.
 - A change a binding must follow (a call, an effect, a method, the config)
   updates the binding guide, `docs/bindings.md`, in the same commit.

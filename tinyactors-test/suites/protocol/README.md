@@ -2,24 +2,31 @@
 
 The bytes a host takes and gives across its API, written down case by case.
 They are protocol tests, not conformance tests in the W3C sense: they fix
-the encoding, not the SCXML semantics (those are `tests/conformance` and
-`tests/w3c`). Every binding reproduces them through its own CBOR module and
+the encoding, not the SCXML semantics (those are the transcripts and the
+W3C suite beside this directory). Every binding reproduces them through its own CBOR module and
 its own calls into core: the same request bytes in, the same reply bytes
 out ([ADR 0009](../../../docs/adr/0009-one-host-two-queues.md), decision 11).
 
 | File | What | Read by |
 |---|---|---|
-| `requests.txt` | requests and replies of `ta_host_request` (`docs/requests.md`) | `run_protocol.c` |
-| `config.txt` | configs of `ta_host_create`, and the error it writes for a refused one (`docs/host-config.md`) | `run_protocol.c` |
-| `envelopes.txt` | envelopes and error envelopes between systems (`docs/protocol.md`, Envelope) | `run_protocol.c` |
-| `values.txt` | neutral values (`docs/protocol.md`, Values) | `tests/unit/test_datamodel_ecmascript.c` |
+| `requests.txt` | requests and replies of `ta_host_request` (`tinyactors-core/docs/requests.md`) | the runner; core's `run_protocol.c` |
+| `config.txt` | configs of `ta_host_create`, and the error it writes for a refused one (`tinyactors-core/docs/host-config.md`) | the runner; core's `run_protocol.c` |
+| `envelopes.txt` | envelopes and error envelopes between systems (`tinyactors-core/docs/protocol.md`, Envelope) | the runner; core's `run_protocol.c` |
+| `values.txt` | neutral values (`tinyactors-core/docs/protocol.md`, Values) | the runner; core's `tests/unit/test_datamodel_ecmascript.c` |
 
 ## Running them
 
-`mise run test` in `tinyactors-core` runs them (the program `protocol`). Alone:
+Against an implementation, through the protocol it speaks
+([docs/driver.md](../../docs/driver.md)):
+
+    mise run //tinyactors-test:run -- --suite protocol <command…>
+
+`mise run test` in `tinyactors-core` runs them through core's own programs
+until `ta-conform` replaces them (the program `protocol`, and
+`test_datamodel_ecmascript` for `values.txt`). Alone, in `tinyactors-core`:
 
     mise run build
-    build/dev/bin/protocol tests/protocol
+    build/dev/bin/protocol ../tinyactors-test/suites/protocol
 
 A failure prints the expected and the actual bytes in diagnostic notation,
 and the actual bytes in hex.
@@ -37,15 +44,17 @@ the hex and what a person reads cannot drift apart.
 
 Write the `diag` line, then let the task write the hex above it:
 
-    mise run protocol:encode           # rewrite every hex line from its diag line
-    mise run protocol:encode --check   # change nothing; fail where they differ
+    mise run //tinyactors-test:encode           # rewrite every hex line from its diag line
+    mise run //tinyactors-test:encode --check   # change nothing; fail where they differ
 
 It encodes as core does: shortest integers and lengths, definite lengths,
 map keys in the order written, floats in the shortest exact width and NaN as
 `f97e00`. It reads what `ta_cbor_diagnostic` writes, plus tags (`24(...)`),
 byte strings (`h'..'`), `simple(n)`, `undefined`, `NaN`, `Infinity` and
 `-Infinity`. A `diag` line in parentheses, such as `diag (not CBOR)`, is not
-an item: its hex stays as written. `mise run test` runs the check.
+an item: its hex stays as written. The check also reads each hex line back
+as `ta_cbor_diagnostic` writes it and compares that with its `diag` line.
+`mise run test` in `tinyactors-test` runs the check.
 
 ## Wildcards
 
@@ -84,7 +93,7 @@ them run the ECMAScript datamodel, with `ticksPerSecond` 1000, `maxActors` 8,
 
 ## What they leave to unit tests
 
-What bytes cannot show stays in `tests/unit`: a call during a run
+What bytes cannot show stays in `tinyactors-core/tests/unit`: a call during a run
 (`test_host_inputs.c`), an allocator that refuses (`test_host_memory.c`),
 `actor.context` of a hibernated actor or of a datamodel without variables,
 CHANGED effects (`test_host_request.c`), and moving envelopes between hosts

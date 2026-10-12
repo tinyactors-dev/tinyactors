@@ -1,0 +1,93 @@
+#!/usr/bin/env ruby
+#MISE description="Write each protocol vector's CBOR (suites/protocol/*.txt) from the diagnostic notation on its diag line; --check only compares"
+#USAGE flag "--check" help="Write nothing; run the self-test, then fail and list every case whose hex and diag lines disagree"
+#USAGE flag "--self-test" help="Check the encoder against known encodings, then exit"
+#MISE sources=["suites/protocol/*.txt", "lib/cbor.rb", "mise/tasks/encode"]
+# vim:ft=ruby
+
+# A vector's hex line (send, reply, cbor, back, error, envelope) is followed
+# by a diag line: the same item in CBOR diagnostic notation. This task parses
+# the diag line and writes the hex line from it, in the form core writes
+# (lib/cbor.rb). A diag line that is not an item, such as
+# `diag (not CBOR)`, keeps its hex as written. --check also reads each hex
+# line back into diagnostic notation, as ta_cbor_diagnostic writes it, and
+# fails where that is not its diag line, so the two cannot drift apart.
+
+require 'pathname'
+require_relative '../../lib/cbor'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+HEX_KEYS = %w[send reply cbor back error envelope].freeze
+
+# The notation that is not an item: the hex stays as written.
+def diagnostic?(diag) = !diag.start_with?('(')
+
+def to_hex(diag) = CBOR.from_diagnostic(diag).unpack1('H*')
+
+# Known encodings: RFC 8949 Appendix A, and what core writes.
+def self_test!
+  cases = {
+    '0' => '00', '23' => '17', '24' => '1818', '1000000' => '1a000f4240',
+    '18446744073709551615' => '1bffffffffffffffff', '-1' => '20', '-1000' => '3903e7',
+    '0.0' => 'f90000', '-0.0' => 'f98000', '1.5' => 'f93e00', '65504.0' => 'f97bff',
+    '100000.0' => 'fa47c35000', '1.1' => 'fb3ff199999999999a', '1.0e+300' => 'fb7e37e43c8800759c',
+    'Infinity' => 'f97c00', '-Infinity' => 'f9fc00', 'NaN' => 'f97e00', '5.960464477539063e-8' => 'f90001',
+    'false' => 'f4', 'true' => 'f5', 'null' => 'f6', 'undefined' => 'f7', 'simple(16)' => 'f0',
+    'simple(255)' => 'f8ff', "h''" => '40', "h'01020304'" => '4401020304', '""' => '60',
+    '"\\u00fc"' => '62c3bc', '"\\ud800\\udd51"' => '64f0908591', '"ü"' => '62c3bc', "\"a\\\"\\\\\\n\"" => '6461225c0a',
+    '[]' => '80', '[1,[2,3],[4,5]]' => '8301820203820405', '{}' => 'a0',
+    '{"b":1,"a":2}' => 'a2616201616102', '{1:2,3:4}' => 'a201020304',
+    '32("http://www.example.com")' => 'd82076687474703a2f2f7777772e6578616d706c652e636f6d',
+    '24(h\'6449455446\')' => 'd818456449455446', '39999("uint")' => 'd99c3f6475696e74'
+  }
+  failed = cases.reject { |diag, hex| to_hex(diag) == hex }
+  failed.each { |diag, hex| warn "encode: #{diag} gave #{to_hex(diag)}, not #{hex}" }
+  abort "encode: #{failed.size} of #{cases.size} self-test cases fail" unless failed.empty?
+  cases.size
+end
+
+if ARGV.include?('--self-test') || ENV['usage_self_test'] == 'true'
+  puts "encode: #{self_test!} self-test cases pass"
+  exit
+end
+
+check = ARGV.include?('--check') || ENV['usage_check'] == 'true'
+self_test! if check
+differ = []
+Dir[ROOT.join('suites/protocol/*.txt').to_s].sort.each do |path|
+  lines = File.readlines(path, chomp: true)
+  changed = false
+  lines.each_with_index do |line, index|
+    key, hex = line.split(' ', 2)
+    next unless HEX_KEYS.include?(key) && hex
+
+    following = lines[index + 1].to_s
+    next unless following.start_with?('diag ')
+
+    diag = following.delete_prefix('diag ')
+    next unless diagnostic?(diag)
+
+    written = begin
+      to_hex(diag)
+    rescue CBOR::Error => e
+      abort "#{File.basename(path)}:#{index + 2}: #{e.message}"
+    end
+    if written == hex
+      read_back = CBOR.diagnostic([hex].pack('H*'))
+      differ << "#{File.basename(path)}:#{index + 2}: diag #{diag}\n  reads as #{read_back}" if check && read_back != diag
+      next
+    end
+
+    differ << "#{File.basename(path)}:#{index + 1}: #{key} #{hex}\n  diag #{diag}\n  is   #{written}"
+    lines[index] = "#{key} #{written}"
+    changed = true
+  end
+  File.write(path, lines.join("\n") + "\n") if changed && !check
+end
+
+if check
+  abort "encode: hex and diag lines disagree (run `mise run //tinyactors-test:encode`):\n#{differ.join("\n")}" unless differ.empty?
+  puts 'encode: every hex line matches its diag line'
+else
+  puts "encode: #{differ.size} hex lines written"
+end

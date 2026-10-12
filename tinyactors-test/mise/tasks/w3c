@@ -1,0 +1,7 @@
+#!/usr/bin/env ruby
+#MISE description="Download the W3C SCXML IRP suite once and instantiate it for ECMAScript into build/w3c/ecma (prints that directory)"
+# vim:ft=ruby
+
+require_relative '../../lib/w3c'
+
+puts W3C.suite

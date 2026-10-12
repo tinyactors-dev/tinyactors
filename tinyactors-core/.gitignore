@@ -1,6 +1,5 @@
 /build/
 /dist/
-/tests/w3c/irp/
 *.tai
 compile_commands.json
 .cache/

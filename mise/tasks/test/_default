@@ -27,6 +27,9 @@ steps = [
   ['portability', ['mise', 'run', *(all ? ['--force'] : []), 'check-portability'], root],
   ['toolchain', ['mise', 'run', *(all ? ['--force'] : []), 'toolchain-test'], root],
   ['build', %w[mise run build], root],
+  # The conformance suite's own checks: the protocol vectors' hex against
+  # their diag lines, and the runner's tests.
+  ['tinyactors-test', ['mise', 'run', *flags.call], root.join('tinyactors-test')],
   # The sanitizer build of every test program, the bindings, conformance and
   # the W3C IRP suite on each, the examples, the freestanding and wasm builds.
   # --full: every torture scenario and the cross builds.

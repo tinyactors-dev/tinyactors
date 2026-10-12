@@ -167,7 +167,7 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 
 ## 12 · Testing
 
-- **The protocol vectors** ([tests/protocol](../tests/protocol/README.md)): `requests.txt`, `config.txt`, `envelopes.txt` and `values.txt`. They are byte-exact: the binding builds each case’s input with its own CBOR module from the `diag` line (or takes the hex), sends it through its own calls into core, decodes the answer into the language’s values and encodes it again, and compares it with the expected bytes, where tag 39999 is a wildcard for one item of the named type. A datamodel of its own passes the `roundtrip` and `malformed` cases of `values.txt`, except those named “ECMAScript: …”.
+- **The protocol vectors** ([tinyactors-test/suites/protocol](../../tinyactors-test/suites/protocol/README.md)): `requests.txt`, `config.txt`, `envelopes.txt` and `values.txt`. They are byte-exact: the binding builds each case’s input with its own CBOR module from the `diag` line (or takes the hex), sends it through its own calls into core, decodes the answer into the language’s values and encodes it again, and compares it with the expected bytes, where tag 39999 is a wildcard for one item of the named type. A datamodel of its own passes the `roundtrip` and `malformed` cases of `values.txt`, except those named “ECMAScript: …”.
 - **The W3C suite** runs through the binding, with each datamodel it offers; all 191 tests must pass. The C conformance scenarios (`tests/conformance`) stay in core.
 - Tests run in parallel: listen on port 0, write to temporary directories, depend on no other test.
 - A test that compares timings runs alone.

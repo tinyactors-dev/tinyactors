@@ -46,6 +46,6 @@ own shared files, run by every implementation:
 
 - `addresses.json` — address parsing/formatting (C: `tests/unit/test_address.c`).
 - Neutral values, requests, host configs and envelopes, as bytes, are
-  protocol vectors in `tests/protocol/` (its README.md).
+  protocol vectors in `tinyactors-test/suites/protocol/` (its README.md).
 - `span_ids.json` and `traceparent.json` — trace values: the span ID of a
   step key, and W3C `traceparent` text (C: `tests/unit/test_trace.c`).

@@ -16,6 +16,10 @@ require 'platform_files'
 module Core
   ROOT = Pathname.new(__dir__).join('..').expand_path
   BUILD = ROOT.join('build')
+  # The protocol vectors and the W3C suite live in tinyactors-test; core's
+  # runners read them there until ta-conform replaces them (ROADMAP.md,
+  # step 8, M0).
+  SUITE = ROOT.join('../tinyactors-test').expand_path
 
   # A layer is a static archive, libtinyactors_<name>.a. `uses` are the
   # layers it links against (docs/architecture.md section 1); `freestanding`
@@ -180,7 +184,7 @@ module Core
     unit('test_scenarios', 'system', 'compile', 'test_datamodel'),
     unit('test_runtime', 'runtime', 'test_datamodel', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch }),
     unit('test_datamodel_ecmascript', 'system', 'compile', *ECMASCRIPT,
-         defines: { 'TA_VALUES' => ROOT.join('tests/protocol/values.txt') }),
+         defines: { 'TA_VALUES' => SUITE.join('suites/protocol/values.txt') }),
     unit('test_e2e', 'runtime', 'test_datamodel', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch }),
     unit('test_hibernate', 'system', 'compile', 'test_datamodel', *ECMASCRIPT),
     unit('test_migrate', 'system', 'compile', 'test_datamodel', *ECMASCRIPT),
@@ -204,9 +208,9 @@ module Core
     # The torture chamber's event loop.
     Program.new(name: 'test_torture_loop', sources: %w[tests/unit/test_torture_loop.c tools/torture/loop.c], uses: [],
                 defines: {}),
-    # Protocol vectors (tests/protocol): requests, configs and envelopes, byte for byte.
+    # Protocol vectors (tinyactors-test/suites/protocol): requests, configs and envelopes, byte for byte.
     Program.new(name: 'protocol', sources: %w[tests/protocol/run_protocol.c], uses: ['host', 'runtime', 'compile', *ECMASCRIPT],
-                defines: {}, arguments: [ROOT.join('tests/protocol').to_s]),
+                defines: {}, arguments: [SUITE.join('suites/protocol').to_s]),
     # Host conformance (tests/conformance/*.json) through the C host.
     Program.new(name: 'conformance', sources: %w[tests/conformance/run_c.c], uses: ['host', 'runtime', 'compile', *ECMASCRIPT],
                 defines: {}, arguments: [ROOT.join('tests/conformance').to_s])
@@ -350,46 +354,13 @@ module Core
     raise failure if failure
   end
 
-  # --- the W3C SCXML IRP suite ------------------------------------------
+  # --- the conformance suite (tinyactors-test) ------------------------------
 
-  W3C_BASE = 'https://www.w3.org/Voice/2013/scxml-irp/'
-
-  # The suite, downloaded once into tests/w3c/irp (gitignored) and its
-  # templates instantiated for ECMAScript into build/w3c/ecma, which it
-  # answers. The W3C stylesheets are XSLT 2.0, which only SaxonC implements
-  # among what we can pin, so that one step is tools/w3c/convert.py, run
-  # with the pinned uv.
+  # The W3C IRP suite, instantiated for ECMAScript by tinyactors-test's w3c
+  # task (downloaded and converted once).
   def w3c_suite
-    converted = directory('w3c').join('ecma')
-    return converted if converted.join('index.txt').file?
-
-    irp = ROOT.join('tests/w3c/irp')
-    FileUtils.mkdir_p(irp)
-    manifest = irp.join('manifest.xml')
-    manifest.write(w3c_get('manifest.xml')) unless manifest.file?
-    files = manifest.read.scan(/<(?:start|dep) uri="([^"]+)"/).flatten.uniq.sort + %w[confEcma.xsl confXPath.xsl]
-    missing = files.reject { |file| irp.join(file).file? }
-    missing.each do |file|
-      FileUtils.mkdir_p(irp.join(file).dirname)
-      irp.join(file).binwrite(w3c_get(file))
-    end
-    puts "w3c: #{files.size} files in #{irp.relative_path_from(ROOT)} (#{missing.size} fetched)"
-    run('uv', 'run', '--quiet', '--with', 'saxonche', 'python', 'tools/w3c/convert.py', irp, converted)
-    converted
-  end
-
-  # w3.org throttles bursts (HTTP 429): one request at a time, waiting as
-  # long as it asks.
-  def w3c_get(path, attempts: 8)
-    require 'net/http'
-    attempts.times do |attempt|
-      response = Net::HTTP.get_response(URI(W3C_BASE + path), { 'User-Agent' => 'curl/8.5.0' })
-      return response.body if response.is_a?(Net::HTTPSuccess)
-      raise "#{path}: HTTP #{response.code}" unless response.code == '429' && attempt < attempts - 1
-
-      after = response['Retry-After'].to_s
-      sleep(after.match?(/\A\d+\z/) ? [after.to_i, 120].min : [2**(attempt + 1), 60].min)
-    end
+    run('mise', 'run', '//tinyactors-test:w3c')
+    SUITE.join('build/w3c/ecma')
   end
 
   def run(*command, chdir: ROOT, env: {})

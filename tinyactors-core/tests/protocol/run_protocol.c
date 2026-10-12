@@ -1,4 +1,4 @@
-/* Protocol vectors (tests/protocol/README.md): the bytes a host takes and
+/* Protocol vectors (tinyactors-test/suites/protocol/README.md): the bytes a host takes and
  * gives across its API — requests and replies (docs/requests.md), host
  * configs (docs/host-config.md) and envelopes (docs/protocol.md, Envelope) —
  * checked byte for byte, but where the expected side holds a wildcard.
@@ -528,7 +528,7 @@ static int run_file(const char *directory, const char *name) {
 }
 
 int main(int argc, char **argv) {
-    const char *directory = argc > 1 ? argv[1] : "tests/protocol";
+    const char *directory = argc > 1 ? argv[1] : "../tinyactors-test/suites/protocol";
     int read = run_file(directory, "requests.txt") & run_file(directory, "config.txt") &
                run_file(directory, "envelopes.txt");
     printf("%d cases, %d failures\n", cases, failures);

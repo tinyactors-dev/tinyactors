@@ -1,5 +1,5 @@
 # Requests and replies (docs/requests.md): byte for byte, every binding
-# reproduces them (README.md). Run by run_protocol.c.
+# reproduces them (README.md). Run by the suite's runner and core's run_protocol.c.
 #
 # A case is a line "request <name>", then:
 #   setup <name>      the host it runs on (README.md, "Setups"; default empty)

@@ -8,7 +8,7 @@ Reads <irp-dir>/manifest.xml, keeps automatic (manual="false") tests,
 applies confEcma.xsl to every start/dep .txml and writes .scxml files plus
 an index ("<id> <conformance> <start.scxml> <deps|->" per line) into <out-dir>.
 
-Usage: uv run --with saxonche tools/w3c/convert.py <irp-dir> <out-dir>
+Usage: uv run --with saxonche suites/w3c/convert.py <irp-dir> <out-dir>
 """
 import pathlib
 import sys

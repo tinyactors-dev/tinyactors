@@ -345,7 +345,7 @@ binding gets the same answers.
 6. **Refused during a run:** `ta_host_request` does this for every method.
    **Notifications** need nothing either: a method runs the same with or
    without an `id`, and `ta_host_request` drops what it would write.
-7. **Vectors** in `tests/protocol/requests.txt`: the result, its defaults,
+7. **Vectors** in `tinyactors-test/suites/protocol/requests.txt`: the result, its defaults,
    each param's error, and a `capacity` case for a method that changes the
    host. Unit tests (`tests/unit/test_host_request.c`) only for what a
    vector cannot show: a failing allocator, a call during a run.

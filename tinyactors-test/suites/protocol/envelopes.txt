@@ -1,6 +1,6 @@
 # Envelopes between systems (docs/protocol.md, Envelope): what
 # ta_host_envelope writes and ta_host_envelope_read / ta_host_peer_error_read
-# take. Run by run_protocol.c.
+# take. Run by the suite's runner and core's run_protocol.c.
 #
 # A case is a line "<kind> <name>", then:
 #   setup <name>      the host (README.md, "Setups")

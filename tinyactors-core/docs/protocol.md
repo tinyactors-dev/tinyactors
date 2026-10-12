@@ -335,11 +335,12 @@ Event I/O Processor, outside this protocol.
 
 - `tests/conformance/addresses.json` — address parsing and formatting
   vectors; run by the C parser (`tests/unit/test_address.c`).
-- `tests/protocol/values.txt` — neutral value vectors, CBOR in hex with
-  its diagnostic notation; run in C (`tests/unit/test_datamodel_ecmascript.c`).
-- `tests/protocol/envelopes.txt` — envelopes and error envelopes as bytes:
-  written, read, refused and relayed (`tests/protocol/run_protocol.c`; see
-  `tests/protocol/README.md`).
+- `tinyactors-test/suites/protocol/values.txt` — neutral value vectors,
+  CBOR in hex with its diagnostic notation; run in C
+  (`tests/unit/test_datamodel_ecmascript.c`).
+- `tinyactors-test/suites/protocol/envelopes.txt` — envelopes and error
+  envelopes as bytes: written, read, refused and relayed
+  (`tests/protocol/run_protocol.c`; see its README.md).
 - `tests/unit/test_router.c` — the router: routes, relaying, hop limit,
   origin validation, policy, errors, dedup, route status.
 

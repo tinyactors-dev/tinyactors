@@ -1,14 +1,14 @@
 #!/usr/bin/env ruby
-#MISE description="W3C SCXML IRP conformance: every automatic test not in tests/w3c/skip.txt must pass, with the tests' datamodel (at least 153 passes) and with the quickjs-ng ECMAScript datamodel in both realm modes"
+#MISE description="W3C SCXML IRP conformance: every automatic test not in tinyactors-test/suites/w3c/skip.txt must pass, with the tests' datamodel (at least 153 passes) and with the quickjs-ng ECMAScript datamodel in both realm modes"
 #MISE depends=["build"]
 # vim:ft=ruby
 
-# The suite is downloaded and converted once (Core.w3c_suite).
+# The suite is downloaded and converted once, by tinyactors-test (Core.w3c_suite).
 
 require_relative '../../core'
 
 suite = Core.w3c_suite
 runner = Core.program_path('dev', 'run_w3c')
 Core.run(runner, suite, '--min', '153')
-Core.run(runner, suite, '--dm', 'ecmascript', '--skip', Core::ROOT.join('tests/w3c/skip.txt'), '--require-all')
-Core.run(runner, suite, '--dm', 'ecmascript', '--realm', 'isolated', '--skip', Core::ROOT.join('tests/w3c/skip.txt'), '--require-all')
+Core.run(runner, suite, '--dm', 'ecmascript', '--skip', Core::SUITE.join('suites/w3c/skip.txt'), '--require-all')
+Core.run(runner, suite, '--dm', 'ecmascript', '--realm', 'isolated', '--skip', Core::SUITE.join('suites/w3c/skip.txt'), '--require-all')

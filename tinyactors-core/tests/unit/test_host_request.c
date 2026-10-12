@@ -1,5 +1,5 @@
 /* ta_host_request (docs/requests.md; docs/adr/0009 in the repository root,
- * decision 2), beyond its protocol vectors (tests/protocol): what bytes
+ * decision 2), beyond its protocol vectors (tinyactors-test/suites/protocol): what bytes
  * alone cannot show — spans of real traces, variables after a run,
  * hibernation, a datamodel without variables, CHANGED effects, a config
  * nothing points into afterwards. Also ta_host_metrics. */

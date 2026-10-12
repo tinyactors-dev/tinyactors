@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+#MISE description="Test tinyactors-test: the protocol vectors' hex against their diag lines, and the runner against a fake implementation"
+#MISE sources=["lib/**/*", "suites/**/*", "test/**/*", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml"]
+#MISE outputs={auto=true}
+# vim:ft=ruby
+
+def run(*command)
+  pid = Process.spawn(*command, chdir: File.expand_path('../..', __dir__))
+  _pid, status = Process.wait2(pid)
+  exit(status.exitstatus || 1) unless status.success?
+end
+
+run('mise', 'run', 'encode', '--check')
+tests = Dir[File.expand_path('../../test/*_test.rb', __dir__)].sort
+run('ruby', '-Ilib', '-e', 'ARGV.each { |path| require path }', *tests) unless tests.empty?

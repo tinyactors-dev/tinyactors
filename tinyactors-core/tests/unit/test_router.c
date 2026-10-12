@@ -1274,7 +1274,7 @@ static void test_envelope_bytes(void) {
     effect.kind = TA_EFFECT_LOG;
     CHECK_EQUAL(ta_host_envelope(nodes[A].host, &effect, &written), TA_ERROR_INVALID);
 
-    /* bytes that are not envelopes: tests/protocol/envelopes.txt */
+    /* bytes that are not envelopes: tinyactors-test/suites/protocol/envelopes.txt */
 
     /* data that is not a neutral value: refused as malformed, answered */
     static const char bad_data_prefix[] = "\xa5"

@@ -681,9 +681,9 @@ static void test_system_per_actor(void) {
     ta_datamodel_ecmascript_free(ecmascript); /* JS_FreeRuntime asserts nothing leaked */
 }
 
-/* ---- neutral values against the shared vectors (tests/protocol/values.txt) ---------- */
+/* ---- neutral values against the shared vectors (tinyactors-test/suites/protocol/values.txt) ---------- */
 #ifndef TA_VALUES
-#define TA_VALUES "tests/protocol/values.txt"
+#define TA_VALUES "../tinyactors-test/suites/protocol/values.txt"
 #endif
 
 static char *slurp_file(const char *path, size_t *length) {
