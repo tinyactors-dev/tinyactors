@@ -1,7 +1,7 @@
 # Temporal values
 
 How staticjs holds and computes Temporal's types: `Temporal.PlainDate`,
-`PlainTime`, `PlainDateTime` and `Duration` (built), and `Instant` and
+`PlainTime`, `PlainDateTime`, `Duration` and `Instant` (built), and
 `Temporal.Now` (to build, on the same design). Read `builtins.md` and
 `extending.md` ("To add a value kind") first; this note says only what is
 particular to Temporal.
@@ -135,7 +135,8 @@ a member).
 
 A plain type's constructor, `from` and `compare` are three IDs in a row,
 and `sjs_temporal_function` finds the type by the first (`TYPES`), after
-a Duration's three, which it switches on; one
+a Duration's three and an Instant's five (`instant_function`), which it
+switches on; one
 `construct_plain`, one `convert` (`to_date`, `to_time`, `to_date_time`:
 what `from`, `compare`, `equals`, `withPlainTime` and `toPlainDateTime`
 read) and one `compare_iso` serve the three.
@@ -302,6 +303,63 @@ negated. A date's difference is `date_until`, rounded relative to it
 unless to a day by 1; a date and time's is `difference_rounded`; a
 time's is its nanoseconds rounded.
 
+## Instant
+
+An Instant is exact nanoseconds since 1970-01-01T00:00Z, at most 8.64 x
+10^21 either way (`epoch_within_limits`, IsValidEpochNanoseconds), held as
+whole seconds and the nanoseconds past them; `epoch_of` gives the wide
+integer, `new_instant` checks the limits and makes one. UTC only.
+
+- The constructor and `fromEpochNanoseconds` take ToBigInt of a BigInt
+  (its at most three 32-bit limbs read into a wide integer) or a boolean;
+  a string (which JavaScript parses) and an object (which it converts)
+  fault on purpose; a number, `undefined` and `null` are a TypeError.
+  `fromEpochMilliseconds` takes ToNumber of a number, a boolean or `null`,
+  an integer (a fraction, NaN and `undefined` are a RangeError) within
+  8.64 x 10^15. `epochNanoseconds` is a BigInt (`bigint_of_wide`, through
+  its hexadecimal digits), `epochMilliseconds` the milliseconds rounded
+  toward negative infinity.
+- A string (`parse_instant`, TemporalInstantString) is a date, `T`, `t` or
+  a space and a time as after a date, then `Z` (or `z`) or a UTC offset
+  (`+HH` to `+HH:MM:SS.fffffffff`, seconds to 59), applied exactly; then
+  annotations as after a date and time, of which a time zone and a
+  calendar (any calendar: `iso_scan.any_calendar`) are read and ignored.
+  Both polyfills read the same; where they differ (an offset's seconds of
+  60 and an empty annotation or value, which temporal-polyfill reads; a
+  time zone annotation after a calendar's; an offset's separators mixed,
+  `+01:0030`, which @js-temporal/polyfill reads), staticjs faults. A
+  ToTemporalInstant of anything but an Instant or a string faults (an
+  object JavaScript would convert to a string, on purpose).
+- `add` and `subtract` (AddDurationToInstant) take a Duration as `from`
+  reads one, with no options; years, months, weeks or days in it are a
+  RangeError, and the result must be within the limits. `until` and
+  `since` (DifferenceTemporalInstant) round the nanoseconds between
+  (`round_wide`, by the sign) to the settings of `difference_options`
+  over the time units, largestUnit by default the larger of a second and
+  smallestUnit.
+- `round` (RoundTemporalInstant) takes a unit up to an hour and an
+  increment that divides a day's worth of the unit, a day included (24
+  hours, 1,440 minutes, ..., but at most 10^9: `increment_option`), and
+  rounds as if the epoch were positive (`round_epoch`:
+  RoundNumberToIncrementAsIfPositive, so `trunc` rounds toward negative
+  infinity before 1970 and `expand` toward positive). `toString` rounds the
+  same way to the digits it writes (`trunc` by default), then writes the
+  date and time at the time zone's offset: `Z` without one, `+00:00` for
+  `"UTC"` (in any case), or the offset of a fixed offset `+HH`, `+HHMM`,
+  `+HH:MM` (`-00:00` is `+00:00`). A time zone's name (`Europe/Paris`,
+  `Etc/UTC`, `GMT`) and an ISO string's time zone need time zone data:
+  they fault on purpose, as do `toZonedDateTimeISO` and `toLocaleString`.
+
+The polyfills round an Instant differently (both in `round` and in
+`toString`): temporal-polyfill rounds the time of day with the parity of
+the whole quotient, and where that quotient is odd and below zero its
+`trunc` and `expand`, and `halfExpand` and `halfTrunc` on a tie, round the
+other way from the specification (and @js-temporal/polyfill). `round_epoch`
+says where; staticjs faults there, deliberately (`-1n` to 2 nanoseconds by
+`trunc` is `0` in temporal-polyfill, `-2n` in the specification). An
+increment past 10^9, which temporal-polyfill takes and the specification
+refuses, faults too.
+
 ## Rounding
 
 `round_to` rounds an int64 of nanoseconds to a multiple of an increment by
@@ -328,7 +386,8 @@ leaves them out).
 ## Testing
 
 - `tests/spec/temporal_plain_date.spec`, `temporal_plain_time.spec`,
-  `temporal_plain_date_time.spec` and `temporal_duration.spec`: cases
+  `temporal_plain_date_time.spec`, `temporal_duration.spec` and
+  `temporal_instant.spec`: cases
   written by hand, values from the polyfill. A case named "deliberate" faults where JavaScript gives a
   value.
 - `tests/temporal_test.c`: sweeps from fixed lists (no randomness, at most
@@ -349,7 +408,14 @@ leaves them out).
   date's by increments too), between dates and times on either side of
   each other's time, and between times over every increment; `add` and
   `subtract` of durations at month ends and leap days by each
-  `overflow`. Check them against @js-temporal/polyfill too, outside the
+  `overflow`. An Instant's: strings (dates, times, offsets and
+  annotations, each varied with the others), epochs of every kind of
+  value at and past the limits and their getters, `round` over every unit,
+  increments that do and do not divide a day and every mode of instants
+  at and beside the halves of each unit before and after 1970 and at the
+  limits, `toString`'s digits by every mode and its time zones, `until` and
+  `since` over every pair of units, increment and mode, `add`, `subtract`,
+  `compare` and `equals`. Check them against @js-temporal/polyfill too, outside the
   tests: a value staticjs gives must be both polyfills', and a line on
   which they disagree must fault (deliberately, where temporal-polyfill
   gives a value) or be left out.
@@ -364,5 +430,11 @@ leaves them out).
   `epoch_days`, `date_of_days`), and a Duration's time as a wide integer.
 - Duration: built, but `toLocaleString`, which faults (locale data), and
   a ZonedDateTime `relativeTo`.
-- Instant and Temporal.Now: the host clock (docs/builtins-status.md, the
-  introduction); `Temporal.Now` is a namespace already.
+- Instant: built, UTC only. `toZonedDateTimeISO`, `toLocaleString` and a
+  `toString` time zone other than UTC or a fixed offset fault.
+- Temporal.Now: the host clock (docs/builtins-status.md, the
+  introduction); `Temporal.Now` is a namespace already. `instant()` is
+  `new_instant` of the clock's epoch nanoseconds (a wide integer); the
+  ISO functions are its date and time at UTC (`put_instant`'s arithmetic:
+  `wide_floor` by a day, `date_at`, `set_time_of_day`), and timeZoneId()
+  is `"UTC"`.

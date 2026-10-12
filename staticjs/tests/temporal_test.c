@@ -22,7 +22,7 @@
  *                            throws, JavaScript's value where staticjs gives
  *                            one, and a fault on every deliberate line.
  *
- * The cases, about 37,000, come from fixed lists, without randomness:
+ * The cases, about 44,000, come from fixed lists, without randomness:
  *   - ISO 8601 strings for Temporal.PlainDate.from, Temporal.PlainTime.from
  *     and Temporal.PlainDateTime.from: dates, times, offsets and
  *     annotations, each list varied with the others held;
@@ -54,7 +54,14 @@
  *   - until and since of dates at month ends, leap days and the limits over
  *     every pair of units, mode and some increments; of dates and times on
  *     either side of each other's time; of times over every increment;
- *     add and subtract of durations to those dates by each overflow.
+ *     add and subtract of durations to those dates by each overflow;
+ *   - Instants: ISO 8601 strings (dates, times, offsets, annotations, each
+ *     list varied with the others), epochs of every kind of value at and
+ *     past the limits and their getters, round over every unit,
+ *     increments and mode, toString's digits by every mode and its time
+ *     zones, until and since over every pair of units, increment and mode,
+ *     add, subtract, compare and equals; the roundings before 1970 that
+ *     the polyfills give differently fault, deliberately.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -1152,6 +1159,323 @@ static void additions(runner *r) {
     }
 }
 
+/* ------------------------------------------------------------------------
+ * Instant
+ */
+
+/* Instants to round and write: around 0 and the limits, before and after
+ * the epoch, at and beside the halves of the units and of a day. */
+static const char *const INSTANTS[] = {
+    "0", "1", "-1", "500", "-500", "1500", "-1500", "-2500", "999999999", "-999999999", "-1000000000", "1500000000", "-1500000000",
+    "30000000000", "-30000000000", "-90000000000", "1800000000000", "-5400000000000", "43200000000000", "-41400000000000",
+    "-86399999999999", "1704067200123456789", "-1704067200123456789", "8639999999999999999999", "-8639999999999999999999",
+    "8640000000000000000000", "-8640000000000000000000",
+};
+
+/* A decimal integer's value (the instants are below 2^73). */
+static __int128 int128_of(const char *digits) {
+    bool negative = *digits == '-';
+    __int128 v = 0;
+    for (const char *c = digits + (negative ? 1 : 0); *c != '\0'; c++) v = v * 10 + (*c - '0');
+    return negative ? -v : v;
+}
+
+/* Do temporal-polyfill and the specification (and @js-temporal/polyfill)
+ * round `epoch` differently? Below zero, at an odd quotient,
+ * temporal-polyfill takes trunc and expand, and halfExpand and halfTrunc
+ * on a tie, the other way (docs/temporal.md): staticjs faults there. */
+static bool rounds_differently(__int128 epoch, long long increment, const char *mode) {
+    __int128 q = epoch / increment;
+    __int128 rest = epoch % increment;
+    if (rest < 0) {
+        rest += increment;
+        q -= 1;
+    }
+    if (rest == 0 || q >= 0 || q % 2 == 0) return false;
+    bool tie = rest * 2 == increment;
+    return strcmp(mode, "trunc") == 0 || strcmp(mode, "expand") == 0 || (tie && (strcmp(mode, "halfExpand") == 0 || strcmp(mode, "halfTrunc") == 0));
+}
+
+/* `[new Temporal.Instant(...n), ...]` of the instants that both polyfills
+ * round alike by `increment` and `mode`; the others into `left_out`. */
+static void put_instants(text *t, long long increment, const char *mode, size_t *left_out) {
+    put(t, "[");
+    bool first = true;
+    for (size_t i = 0; i < COUNT(INSTANTS); i++) {
+        if (increment > 0 && rounds_differently(int128_of(INSTANTS[i]), increment, mode)) {
+            if (left_out != NULL) left_out[i] = 1;
+            continue;
+        }
+        put(t, first ? "" : ", ");
+        put(t, "new Temporal.Instant(");
+        put(t, INSTANTS[i]);
+        put(t, "n)");
+        first = false;
+    }
+    put(t, "]");
+}
+
+/* ISO 8601 strings for Temporal.Instant.from: dates, times, offsets and
+ * annotations, each list varied with the others, then strings past the
+ * grammar. An offset of 60 seconds is the part staticjs refuses on purpose:
+ * temporal-polyfill reads it, @js-temporal/polyfill refuses it. */
+static void instant_strings(runner *r) {
+    static const char *const dates[] = { "2024-01-31", "19691231", "+275760-09-13", "-271821-04-20", "-271821-04-19", "2024-02-30" };
+    static const char *const times[] = { "T00:00", "t12:30:45.123456789", " 23:59:60", "T12", "T123045,5", "T24:00", "" };
+    static const part offsets[] = { { "Z", false }, { "z", false }, { "+01:00", false }, { "-01:00", false }, { "+0100", false }, { "-01", false },
+                                    { "-23:59:59.999999999", false }, { "+00:00:30.5", false }, { "+01:00:60", true }, { "+01:0030", false },
+                                    { "+24:00", false }, { "-00:00", false }, { "+01:00.5", false }, { "", false } };
+    static const char *const annotations[] = { "", "[UTC]", "[!Europe/Paris]", "[u-ca=hebrew]", "[!foo=bar]", "[+01:00][u-ca=iso8601][x=y]" };
+    for (size_t d = 0; d < COUNT(dates); d++) {
+        for (size_t t = 0; t < COUNT(times); t++) {
+            for (size_t o = 0; o < COUNT(offsets); o++) {
+                for (size_t a = 0; a < COUNT(annotations); a++) {
+                    char string[128];
+                    snprintf(string, sizeof string, "%s%s%s%s", dates[d], times[t], offsets[o].text, annotations[a]);
+                    text source = { 0 };
+                    put(&source, "Temporal.Instant.from(");
+                    put_quoted(&source, string, strlen(string));
+                    put(&source, ")");
+                    evaluate(r, &source, offsets[o].refused);
+                    free(source.ptr);
+                }
+            }
+        }
+    }
+    /* temporal-polyfill reads an empty annotation, an empty value and a
+     * time zone after a calendar, which @js-temporal/polyfill refuses: the
+     * parts staticjs refuses on purpose. */
+    static const part others[] = {
+        { "2024-01-31", false }, { "2024-01-31Z", false }, { "2024-01-31T00:00:00Z", false }, { "2024-01-31T00:00:00.000000000Z", false },
+        { "2024-01-31T00:00:00.0000000001Z", false }, { "2024-01-31T00:00Z[u-ca=hebrew][u-ca=gregory]", false },
+        { "2024-01-31T00:00Z[!u-ca=hebrew][u-ca=gregory]", false }, { "2024-01-31T00:00Z[u-ca=HEBREW]", false }, { "2024-01-31T00:00Z[+01:00:30]", false },
+        { "2024-01-31T00:00Z[UTC][UTC]", false }, { "2024-01-31T00:00Z[u-ca=iso8601][UTC]", true }, { "2024-01-31T00:00\342\210\22201:00", false },
+        { "-000000-01-01T00:00Z", false }, { "+275760-09-13T00:00:00.000000001Z", false }, { "+275760-09-13T01:00+01:00", false },
+        { "+275760-09-13T01:00:00.000000001+01:00", false }, { "+275760-09-13T23:59+23:59", false }, { "-271821-04-19T23:00-01:00", false },
+        { "-271821-04-19T23:59:59.999999999Z", false }, { "-271821-04-19T00:00:00.000000001-23:59", false }, { "+275760-09-14T00:00+23:59", false },
+        { "2024-01-31T00:00ZZ", false }, { "2024-01-31T00:00Z ", false }, { " 2024-01-31T00:00Z", false }, { "2024-01-31T00:00+01:00Z", false },
+        { "2024-01-31TZ", false }, { "2024-01-31T00:00Z[]", true }, { "2024-01-31T00:00Z[u-ca=]", true }, { "2024-01-31T00:00:00,5+01:00:00,5", false },
+        { "2024-01-31T00:00+1", false }, { "1970-01-01T00:00:00.000000001Z", false }, { "1969-12-31T23:59:59.999999999Z", false }, { "", false },
+    };
+    for (size_t o = 0; o < COUNT(others); o++) {
+        text source = { 0 };
+        put(&source, "Temporal.Instant.from(");
+        put_quoted(&source, others[o].text, strlen(others[o].text));
+        put(&source, ")");
+        evaluate(r, &source, others[o].refused);
+        free(source.ptr);
+    }
+}
+
+/* The constructor and the functions of epochs: BigInts, numbers and other
+ * values, at and past the limits; and the getters, of negative instants
+ * past a millisecond too. */
+static void instant_epochs(runner *r) {
+    static const part bigints[] = { { "0n", false }, { "1n", false }, { "-1n", false }, { "8640000000000000000000n", false },
+                                    { "8640000000000000000001n", false }, { "-8640000000000000000000n", false }, { "-8640000000000000000001n", false },
+                                    { "2n ** 96n", false }, { "-(2n ** 72n)", false }, { "true", false }, { "false", false }, { "1", false },
+                                    { "null", false }, { "undefined", false }, { "\"5\"", true }, { "[]", true }, { "{}", true } };
+    for (size_t b = 0; b < COUNT(bigints); b++) {
+        evaluate_with(r, "new Temporal.Instant(%s)", bigints[b].text, bigints[b].refused);
+        evaluate_with(r, "Temporal.Instant.fromEpochNanoseconds(%s)", bigints[b].text, bigints[b].refused);
+    }
+    static const part milliseconds[] = { { "0", false }, { "-0", false }, { "1", false }, { "-1", false }, { "1.5", false }, { "-0.5", false },
+                                         { "8.64e15", false }, { "8.64e15 + 1", false }, { "-8.64e15", false }, { "-8.64e15 - 1", false },
+                                         { "NaN", false }, { "Infinity", false }, { "true", false }, { "null", false }, { "undefined", false },
+                                         { "5n", false }, { "\"5\"", true }, { "[5]", true }, { "1704067200123", false } };
+    for (size_t m = 0; m < COUNT(milliseconds); m++) {
+        evaluate_with(r, "Temporal.Instant.fromEpochMilliseconds(%s)", milliseconds[m].text, milliseconds[m].refused);
+    }
+    static const char *const epochs[] = { "0n", "-1n", "-999999n", "-1000000n", "-1000001n", "-1999999n", "1999999n", "-1500000000n",
+                                          "-8640000000000000000000n", "8640000000000000000000n", "-8639999999999999999999n", "-1704067200123456789n" };
+    for (size_t e = 0; e < COUNT(epochs); e++) {
+        evaluate_with(r, "(i => [i.epochMilliseconds, i.epochNanoseconds, i.toString(), i.toJSON(), JSON.stringify(i)])(new Temporal.Instant(%s))", epochs[e],
+                      false);
+    }
+}
+
+/* round over every unit, increments that divide a day's worth of it and
+ * some that do not, every mode, of each instant; and the deliberate
+ * faults, where the polyfills round differently. */
+static void instant_rounding(runner *r) {
+    static const long long increments[6][9] = {
+        { 1, 2, 3, 1000, 864000000, 1000000000, 999999999, 7, 0 },
+        { 1, 5, 1000, 864000000, 1000000000, 86400000000, 7, 0 },
+        { 1, 2, 8, 640, 1000, 86400000, 7, 0 },
+        { 1, 2, 30, 60, 3600, 43200, 86400, 7, 172800 },
+        { 1, 2, 15, 45, 90, 720, 1440, 7, 2880 },
+        { 1, 2, 3, 4, 6, 8, 12, 24, 5 },
+    };
+    for (int unit = 0; unit < 6; unit++) {
+        for (size_t i = 0; i < 9 && increments[unit][i] != 0; i++) {
+            long long increment = increments[unit][i];
+            bool divides = increment <= DAY_NS / UNIT_NS[unit] && (DAY_NS / UNIT_NS[unit]) % increment == 0;
+            for (size_t m = 0; m < COUNT(MODES); m++) {
+                size_t left_out[COUNT(INSTANTS)] = { 0 };
+                text source = { 0 };
+                put_instants(&source, divides ? increment * UNIT_NS[unit] : 0, MODES[m], left_out);
+                char options[160];
+                snprintf(options, sizeof options, ".map(i => i.round({ smallestUnit: \"%s\", roundingIncrement: %lld, roundingMode: \"%s\" }))", UNIT_NAMES[unit],
+                         increment, MODES[m]);
+                put(&source, options);
+                /* Past 10^9, temporal-polyfill rounds, where the
+                 * specification (and @js-temporal/polyfill) throws. */
+                evaluate(r, &source, increment > 1000000000);
+                free(source.ptr);
+                for (size_t k = 0; k < COUNT(INSTANTS) && i == 1; k++) {
+                    if (!left_out[k]) continue;
+                    char deliberate[256];
+                    snprintf(deliberate, sizeof deliberate, "new Temporal.Instant(%sn).round({ smallestUnit: \"%s\", roundingIncrement: %lld, roundingMode: \"%s\" })",
+                             INSTANTS[k], UNIT_NAMES[unit], increment, MODES[m]);
+                    evaluate_with(r, "%s", deliberate, true);
+                }
+            }
+        }
+        for (int plural = 0; plural < 2; plural++) {
+            text source = { 0 };
+            put_instants(&source, UNIT_NS[unit], "halfExpand", NULL);
+            char options[64];
+            snprintf(options, sizeof options, ".map(i => i.round(\"%s%s\"))", UNIT_NAMES[unit], plural ? "s" : "");
+            put(&source, options);
+            evaluate(r, &source, false);
+            free(source.ptr);
+        }
+    }
+    static const char *const options[] = { "", "{}", "\"day\"", "{ smallestUnit: \"day\" }", "{ smallestUnit: \"week\" }", "{ smallestUnit: \"auto\" }",
+                                           "{ smallestUnit: \"hour\", roundingIncrement: 0 }", "{ smallestUnit: \"hour\", roundingIncrement: 2.9 }",
+                                           "{ smallestUnit: \"hour\", roundingMode: \"halfeven\" }", "{ smallestUnit: \"Hour\" }", "null", "5",
+                                           "{ roundingIncrement: 2 }", "{ smallestUnit: \"nanosecond\", roundingIncrement: 1e9 + 1 }" };
+    for (size_t o = 0; o < COUNT(options); o++) evaluate_with(r, "new Temporal.Instant(1500n).round(%s)", options[o], false);
+}
+
+/* toString's fractionalSecondDigits and smallestUnit by every mode; its
+ * time zones; and the deliberate faults where the polyfills round
+ * differently. */
+static void instant_text(runner *r) {
+    static const struct {
+        const char *option;
+        long long increment;
+    } precisions[] = {
+        { "fractionalSecondDigits: 0", 1000000000 }, { "fractionalSecondDigits: 1", 100000000 }, { "fractionalSecondDigits: 2", 10000000 },
+        { "fractionalSecondDigits: 3", 1000000 }, { "fractionalSecondDigits: 4", 100000 }, { "fractionalSecondDigits: 5", 10000 },
+        { "fractionalSecondDigits: 6", 1000 }, { "fractionalSecondDigits: 7", 100 }, { "fractionalSecondDigits: 8", 10 },
+        { "fractionalSecondDigits: 9", 1 }, { "fractionalSecondDigits: \"auto\"", 1 }, { "smallestUnit: \"minute\"", 60000000000 },
+        { "smallestUnit: \"second\"", 1000000000 }, { "smallestUnit: \"millisecond\"", 1000000 }, { "smallestUnit: \"microseconds\"", 1000 },
+        { "smallestUnit: \"nanosecond\"", 1 },
+    };
+    for (size_t p = 0; p < COUNT(precisions); p++) {
+        for (size_t m = 0; m < COUNT(MODES); m++) {
+            size_t left_out[COUNT(INSTANTS)] = { 0 };
+            text source = { 0 };
+            put_instants(&source, precisions[p].increment, MODES[m], left_out);
+            char options[128];
+            snprintf(options, sizeof options, ".map(i => i.toString({ %s, roundingMode: \"%s\" }))", precisions[p].option, MODES[m]);
+            put(&source, options);
+            evaluate(r, &source, false);
+            free(source.ptr);
+            for (size_t k = 0; k < COUNT(INSTANTS) && p == 3; k++) {
+                if (!left_out[k]) continue;
+                char deliberate[256];
+                snprintf(deliberate, sizeof deliberate, "new Temporal.Instant(%sn).toString({ %s, roundingMode: \"%s\" })", INSTANTS[k], precisions[p].option,
+                         MODES[m]);
+                evaluate_with(r, "%s", deliberate, true);
+            }
+        }
+    }
+    static const part zones[] = {
+        { "\"UTC\"", false }, { "\"utc\"", false }, { "\"uTc\"", false }, { "\"+01:00\"", false }, { "\"-01:30\"", false }, { "\"+0100\"", false },
+        { "\"+01\"", false }, { "\"-00:00\"", false }, { "\"+23:59\"", false }, { "\"-2359\"", false }, { "\"+24:00\"", false }, { "\"+1\"", false },
+        { "\"+01:0\"", false }, { "\"+01:60\"", true }, { "\"+01:00:30\"", false }, { "\"+01:00.5\"", false }, { "\"\"", false }, { "\"Z\"", false },
+        { "\"UTC[u-ca=iso8601]\"", false }, { "\"Etc/UTC\"", true }, { "\"GMT\"", true }, { "\"Europe/Paris\"", true }, { "\"2020-01-01T00:00Z\"", true },
+        { "\"2020-01-01T00:00+01:00\"", true }, { "\"1970-01-01\"", false }, { "5", false }, { "null", false }, { "{}", false }, { "undefined", false },
+    };
+    static const char *const receivers[] = { "0n", "1500n", "-1n", "8640000000000000000000n", "-8640000000000000000000n" };
+    for (size_t z = 0; z < COUNT(zones); z++) {
+        for (size_t i = 0; i < COUNT(receivers); i++) {
+            char source[256];
+            snprintf(source, sizeof source, "new Temporal.Instant(%s).toString({ timeZone: %s, smallestUnit: \"microsecond\", roundingMode: \"ceil\" })",
+                     receivers[i], zones[z].text);
+            evaluate_with(r, "%s", source, zones[z].refused);
+        }
+        evaluate_with(r, "new Temporal.Instant(-1704067200123456789n).toString({ timeZone: %s })", zones[z].text, zones[z].refused);
+    }
+    static const char *const options[] = {
+        "{ fractionalSecondDigits: 10 }", "{ fractionalSecondDigits: -1 }", "{ fractionalSecondDigits: 9.9 }", "{ fractionalSecondDigits: \"2\" }",
+        "{ fractionalSecondDigits: null }", "{ smallestUnit: \"hour\" }", "{ smallestUnit: \"day\" }", "{ smallestUnit: \"Minute\" }",
+        "{ roundingMode: \"x\" }", "{ calendarName: \"always\" }", "{ roundingIncrement: 5 }", "{}", "[]", "null", "undefined", "\"minute\"",
+    };
+    for (size_t o = 0; o < COUNT(options); o++) evaluate_with(r, "new Temporal.Instant(1704067200123456789n).toString(%s)", options[o], false);
+}
+
+/* until and since over pairs of instants, every pair of units, increment
+ * and mode (in one line); the defaults; add and subtract. */
+static void instant_arithmetic(runner *r) {
+    static const char *const pairs[][2] = { { "0n", "3723004005006n" }, { "-1500n", "1704067200123456789n" },
+                                            { "-8640000000000000000000n", "8640000000000000000000n" } };
+    for (size_t p = 0; p < COUNT(pairs); p++) {
+        for (int l = 0; l < 6; l++) {
+            for (int s = 0; s <= l; s++) {
+                long long parts = s == 5 ? 24 : s >= 3 ? 60 : 1000;
+                for (long long increment = 1; increment < parts; increment++) {
+                    if (parts % increment != 0) continue;
+                    for (int since = 0; since < 2; since++) {
+                        char source[512];
+                        snprintf(source, sizeof source,
+                                 ALL_MODES ".map(m => new Temporal.Instant(%s).%s(new Temporal.Instant(%s), { largestUnit: \"%s\", smallestUnit: \"%s\", roundingIncrement: %lld, roundingMode: m }))",
+                                 pairs[p][0], since ? "since" : "until", pairs[p][1], UNIT_NAMES[l], UNIT_NAMES[s], increment);
+                        evaluate_with(r, "%s", source, false);
+                    }
+                }
+            }
+        }
+    }
+    static const char *const options[] = { "", "{}", "{ largestUnit: \"auto\" }", "{ smallestUnit: \"minute\" }", "{ largestUnit: \"minutes\" }",
+                                            "{ largestUnit: \"day\" }", "{ smallestUnit: \"day\" }", "{ largestUnit: \"second\", smallestUnit: \"hour\" }",
+                                            "{ smallestUnit: \"hour\", roundingIncrement: 24 }", "{ smallestUnit: \"minute\", roundingIncrement: 7 }",
+                                            "{ roundingMode: \"halfEven\", smallestUnit: \"second\" }", "null", "\"hour\"" };
+    static const char *const others[] = { "new Temporal.Instant(3723004005006n)", "\"1970-01-01T01:02:03.004005006Z\"", "\"1970-01-01T02:02:03.004005006+01:00\"",
+                                          "\"1970-01-01T01:02:03\"", "3723004005006n", "new Temporal.PlainDateTime(1970, 1, 1)" };
+    for (size_t o = 0; o < COUNT(options); o++) {
+        for (size_t t = 0; t < COUNT(others); t++) {
+            char source[512];
+            snprintf(source, sizeof source, "[new Temporal.Instant(-1n).until(%s%s%s), new Temporal.Instant(-1n).since(%s%s%s)]", others[t],
+                     options[o][0] ? ", " : "", options[o], others[t], options[o][0] ? ", " : "", options[o]);
+            evaluate_with(r, "%s", source, false);
+        }
+    }
+    static const char *const durations[] = { "\"PT1H\"", "\"-PT1H\"", "\"PT0.000000001S\"", "\"P1D\"", "\"PT24H\"", "\"P1Y\"", "\"P1W\"", "\"P1M\"",
+                                             "{ hours: 1, nanoseconds: -0 }", "{ days: 0, minutes: 90 }", "{ nanoseconds: 8.64e21 }",
+                                             "{ seconds: 9007199254740991, nanoseconds: 999999999 }", "{ hours: 2400000000000 }",
+                                             "\"PT2399999999999H\"", "Temporal.Duration.from(\"PT1M\")", "{}", "5", "\"x\"" };
+    static const char *const instants[] = { "0n", "-1n", "8640000000000000000000n", "-8640000000000000000000n", "1704067200123456789n" };
+    for (size_t d = 0; d < COUNT(durations); d++) {
+        for (size_t i = 0; i < COUNT(instants); i++) {
+            char source[512];
+            snprintf(source, sizeof source, "[new Temporal.Instant(%s).add(%s), new Temporal.Instant(%s).subtract(%s)]", instants[i], durations[d],
+                     instants[i], durations[d]);
+            evaluate_with(r, "%s", source, false);
+        }
+    }
+}
+
+/* compare and equals, of instants and strings, and other values. */
+static void instant_comparisons(runner *r) {
+    static const part values[] = { { "new Temporal.Instant(0n)", false }, { "new Temporal.Instant(-1n)", false },
+                                   { "\"1970-01-01T00:00Z\"", false }, { "\"1970-01-01T01:00+01:00\"", false },
+                                   { "\"1969-12-31T23:59:59.999999999Z\"", false }, { "\"1970-01-01T00:00\"", false }, { "0n", false },
+                                   { "0", false }, { "null", false }, { "{}", false }, { "[\"1970-01-01T00:00Z\"]", true },
+                                   { "Temporal.PlainDateTime.from(\"1970-01-01\")", false } };
+    for (size_t a = 0; a < COUNT(values); a++) {
+        for (size_t b = 0; b < COUNT(values); b++) {
+            char source[512];
+            snprintf(source, sizeof source, "Temporal.Instant.compare(%s, %s)", values[a].text, values[b].text);
+            evaluate_with(r, "%s", source, values[a].refused || values[b].refused);
+        }
+        evaluate_with(r, "new Temporal.Instant(0n).equals(%s)", values[a].text, values[a].refused);
+        evaluate_with(r, "Temporal.Instant.from(%s)", values[a].text, values[a].refused);
+    }
+}
+
 int main(int argc, char **argv) {
     runner r = { 0 };
     r.print = argc == 2 && strcmp(argv[1], "--print") == 0;
@@ -1181,6 +1505,12 @@ int main(int argc, char **argv) {
     date_time_differences(&r);
     time_differences(&r);
     additions(&r);
+    instant_strings(&r);
+    instant_epochs(&r);
+    instant_rounding(&r);
+    instant_text(&r);
+    instant_arithmetic(&r);
+    instant_comparisons(&r);
     sjs_vm_destroy(r.vm);
     sjs_context_destroy(r.context);
     if (live != 0) {
