@@ -682,7 +682,9 @@ static void request_run_actor_unsubscribe(request *r, uint32_t map) {
 static void request_put_payload(request *r, const ta_datamodel_binding *binding, ta_payload payload) {
     size_t room = r->out.length < r->out.capacity ? r->out.capacity - r->out.length : 0;
     ta_buffer out = {room ? r->out.bytes + r->out.length : (void *)0, room, 0};
+    uint32_t was = host_guard(r->host);
     ta_status status = binding->vtable->to_wire(binding->datamodel, payload, &out);
+    host_unguard(r->host, was);
     if (status == TA_OK || status == TA_ERROR_NO_MEMORY) r->out.length += out.length;
     else request_put_null(r);
 }
@@ -717,14 +719,16 @@ static void request_run_actor_context(request *r, uint32_t map) {
         ta_payload payload = 0;
         ta_image_data(image, (ta_chart_item){info.chart, i}, &data);
         cbor_output_text(&r->out, data.id);
-        if (binding->vtable->variable(
-                &(ta_datamodel_call){binding->datamodel, info.datamodel_instance, 0}, data.id,
-                &payload) != TA_OK) {
+        uint32_t was = host_guard(r->host);
+        ta_status status = binding->vtable->variable(
+            &(ta_datamodel_call){binding->datamodel, info.datamodel_instance, 0}, data.id, &payload);
+        host_unguard(r->host, was);
+        if (status != TA_OK) {
             cbor_output_simple(&r->out, TA_CBOR_UNDEFINED);
             continue;
         }
         request_put_payload(r, binding, payload);
-        if (binding->vtable->release) binding->vtable->release(binding->datamodel, payload);
+        host_release(r->host, binding, payload);
     }
 }
 

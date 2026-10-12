@@ -129,10 +129,12 @@ typedef struct host_watch {
 
 struct ta_host {
     host_config config;
-    /* inside ta_system_run, where a datamodel may call back: only the inputs
+    /* inside ta_system_run, or inside a datamodel the host calls outside a
+     * run (host_guard), where a datamodel may call back: only the inputs
      * (spawn, send, send_many, terminate) and lookups are taken, nothing
      * grows, every other call is TA_ERROR_STATE (host.h, "During a run") */
     uint32_t running;
+    uint32_t closing; /* inside ta_host_free: the inputs are refused as well */
     ta_trace_policy trace_policy; /* every segment's, and new ones' (config.system points here) */
     void *trace_rules;            /* its rules and their strings, the host's copy */
     size_t trace_rules_bytes;
@@ -210,8 +212,25 @@ struct ta_host {
     uint64_t wall_ns, wall_start_ns; /* the latest wall time, and the first (metrics) */
 };
 
+/* The guard (docs/adr/0010 in the repository root, decision 3): around
+ * every call the host makes into a datamodel outside a run (directly, or
+ * through a system call that reaches one), so that a datamodel's code that
+ * calls back into the host follows the rules of a run and cannot change what
+ * the host is using. host_guard returns what host_unguard restores (guards
+ * nest: a guarded input reaches a datamodel again). */
+static inline uint32_t host_guard(ta_host *h) {
+    uint32_t was = h->running;
+    h->running = 1;
+    return was;
+}
+static inline void host_unguard(ta_host *h, uint32_t was) { h->running = was; }
+
 /* host.c */
 void *host_alloc(ta_host *h, size_t size);
+/* A payload's retain and release, guarded (nothing for payload 0, or a
+ * datamodel without them). */
+void host_retain(ta_host *h, const ta_datamodel_binding *binding, ta_payload payload);
+void host_release(ta_host *h, const ta_datamodel_binding *binding, ta_payload payload);
 void host_free(ta_host *h, void *pointer, size_t size);
 /* Room for `need` elements of `element` bytes in *array (capacity in
  * *capacity, new ones zeroed); 0 if the allocator refused (*array unchanged). */

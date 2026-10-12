@@ -86,8 +86,12 @@ static void otlp_drain(ta_host *host) {
         input.image = segment->image;
         while (ta_system_trace(segment->system, &input.view)) {
             uint32_t cursor = 0, status;
-            while ((status = ta_otlp_read(host->otlp, &input, &cursor)) == TA_OTLP_GROW)
-                if (!encoder_grow(host)) break;
+            for (;;) {
+                uint32_t was = host_guard(host); /* to_wire, for values */
+                status = ta_otlp_read(host->otlp, &input, &cursor);
+                host_unguard(host, was);
+                if (status != TA_OTLP_GROW || !encoder_grow(host)) break;
+            }
             if (status != TA_OTLP_READ) {
                 if (status == TA_OTLP_FLUSH) host->staging_full = 1;
                 ta_system_trace_ack(segment->system, cursor);

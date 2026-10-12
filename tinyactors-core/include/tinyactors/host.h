@@ -142,7 +142,16 @@ TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
  * ta_host_segment_count) answer as usual. Every other call is refused:
  * TA_ERROR_STATE, an empty answer or nothing done (ta_host_effects returns
  * 0; ta_host_effects_ack, ta_host_advance_time do nothing; ta_host_sweep
- * returns 0; ta_host_run returns TA_RUN_FAULT with TA_ERROR_STATE). */
+ * returns 0; ta_host_run returns TA_RUN_FAULT with TA_ERROR_STATE).
+ *
+ * Outside a run, the same rules hold while the host is inside a datamodel:
+ * a request (actor.context), ta_host_envelope, ta_host_deliver,
+ * hibernating, waking, exporting and adopting, the telemetry takes,
+ * `release` in the ack and at the start of a run, and the like. A
+ * datamodel's code that calls back into the host there can add inputs but
+ * cannot change what the host is using (docs/adr/0010 in the repository
+ * root, decision 3). Inside ta_host_free every call is refused, the inputs
+ * too. */
 
 /* Spawn in (spawn->segment, spawn->chart) — usually the current version
  * (ta_host_chart). */

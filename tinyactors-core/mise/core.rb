@@ -197,6 +197,7 @@ module Core
     unit('test_journal', 'base'),
     unit('test_cbor', 'base'),
     unit('test_host_inputs', 'host', 'runtime', 'compile', *ECMASCRIPT),
+    unit('test_host_guard', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host_telemetry', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host_definitions', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host_request', 'host', 'runtime', 'compile', *ECMASCRIPT),

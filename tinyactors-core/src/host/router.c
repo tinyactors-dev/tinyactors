@@ -331,10 +331,8 @@ static ta_status refuse(ta_host *host, uint32_t from, const ta_envelope *envelop
 /* ---- queues ------------------------------------------------------------------------- */
 
 static void q_release(ta_host *host, queued_envelope *q) {
-    if (q->data && q->datamodel < host->config.datamodel_count &&
-        host->datamodels[q->datamodel].vtable->release)
-        host->datamodels[q->datamodel].vtable->release(host->datamodels[q->datamodel].datamodel,
-                                                       q->data);
+    if (q->data && q->datamodel < host->config.datamodel_count)
+        host_release(host, &host->datamodels[q->datamodel], q->data);
     host_free(host, q->buffer, q->buffer_size);
     ta_memset(q, 0, sizeof *q);
 }
@@ -525,15 +523,11 @@ ta_status ta_router_outbound(ta_host *host, uint32_t si, const ta_effect *effect
                              ? effect->datamodel
                              : TA_NIL;
     envelope.data = envelope.datamodel == TA_NIL ? 0 : effect->payload;
-    if (envelope.data && host->datamodels[envelope.datamodel].vtable->retain)
-        host->datamodels[envelope.datamodel].vtable->retain(
-            host->datamodels[envelope.datamodel].datamodel, envelope.data);
+    if (envelope.data) host_retain(host, &host->datamodels[envelope.datamodel], envelope.data);
     int32_t outcome = ta_host_deliver(host, 0, &envelope);
     if (outcome == TA_ROUTE_DELIVERED) host->routed++;
     if (outcome == TA_ROUTE_DELIVERED || outcome == TA_ROUTE_RELAYED) return TA_OK;
-    if (envelope.data && host->datamodels[envelope.datamodel].vtable->release)
-        host->datamodels[envelope.datamodel].vtable->release(
-            host->datamodels[envelope.datamodel].datamodel, envelope.data);
+    if (envelope.data) host_release(host, &host->datamodels[envelope.datamodel], envelope.data);
     return outcome == TA_ERROR_NO_MEMORY ? TA_ERROR_NO_MEMORY : TA_OK;
 }
 
@@ -553,9 +547,12 @@ static ta_status wire_decode(ta_host *host, uint32_t si, uint32_t actor, ta_byte
     int reads = *binding && (*binding)->vtable->size >= offsetof(ta_datamodel_vtable, from_wire) +
                                                           sizeof(*binding)->vtable->from_wire &&
                 (*binding)->vtable->from_wire;
-    ta_status status = reads
-                           ? (*binding)->vtable->from_wire((*binding)->datamodel, wire, out)
-                           : TA_ERROR_INVALID;
+    ta_status status = TA_ERROR_INVALID;
+    if (reads) {
+        uint32_t was = host_guard(host);
+        status = (*binding)->vtable->from_wire((*binding)->datamodel, wire, out);
+        host_unguard(host, was);
+    }
     if (status == TA_ERROR_NO_MEMORY) return status;
     if (status != TA_OK) {
         *out = 0;
@@ -595,8 +592,8 @@ static ta_status local_deliver(ta_host *host, uint64_t session, const ta_envelop
     event.traceparent = envelope->traceparent; /* the trace crosses systems unbroken */
     event.trace_flags = envelope->trace_flags; /* and keeps its detail class in this process */
     ta_status status = host_send_to(host, si, actor, &event);
-    if (status != TA_OK && data && decoded && decoded->vtable->release)
-        decoded->vtable->release(decoded->datamodel, data); /* ours: the caller had bytes */
+    if (status != TA_OK && decoded)
+        host_release(host, decoded, data); /* ours: the caller had bytes */
     if (status == TA_ERROR_NO_MEMORY) return status;
     if (status == TA_OK) *reason = 0;
     return TA_OK;
@@ -1235,7 +1232,9 @@ ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_buffe
         if (binding) {
             if (!binding->vtable->to_wire) return TA_ERROR_INVALID;
             ta_buffer probe = {(void *)0, 0, 0};
+            uint32_t was = host_guard(host);
             ta_status status = binding->vtable->to_wire(binding->datamodel, effect->payload, &probe);
+            host_unguard(host, was);
             if (status != TA_OK && status != TA_ERROR_NO_MEMORY) return status;
             value = probe.length;
         }
@@ -1263,8 +1262,10 @@ ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_buffe
                     ta_memcpy(o.bytes + o.length, effect->wire.pointer, value);
                 } else {
                     ta_buffer data = {o.bytes + o.length, value, 0};
+                    uint32_t was = host_guard(host);
                     ta_status status =
                         binding->vtable->to_wire(binding->datamodel, effect->payload, &data);
+                    host_unguard(host, was);
                     if (status != TA_OK) return TA_ERROR_INVALID;
                 }
             }

@@ -31,6 +31,20 @@ void host_free(ta_host *host, void *pointer, size_t size) {
     if (pointer) host->config.allocator.free(host->config.allocator.context, pointer, size);
 }
 
+void host_retain(ta_host *host, const ta_datamodel_binding *binding, ta_payload payload) {
+    if (!payload || !binding->vtable->retain) return;
+    uint32_t was = host_guard(host);
+    binding->vtable->retain(binding->datamodel, payload);
+    host_unguard(host, was);
+}
+
+void host_release(ta_host *host, const ta_datamodel_binding *binding, ta_payload payload) {
+    if (!payload || !binding->vtable->release) return;
+    uint32_t was = host_guard(host);
+    binding->vtable->release(binding->datamodel, payload);
+    host_unguard(host, was);
+}
+
 int host_grow(ta_host *host, void **array, uint32_t *capacity, uint32_t need, size_t element) {
     if (need <= *capacity) return 1;
     uint32_t c = *capacity ? *capacity : 8;
@@ -428,6 +442,9 @@ static void job_free(ta_host *host, migration_job *job) {
 
 void ta_host_free(ta_host *host) {
     if (!host) return;
+    /* the datamodels' destroy and release: calls back are refused, the inputs too */
+    host->running = 1;
+    host->closing = 1;
     host->effects_ready = host->effect_count; /* all of them */
     effects_release(host);
     ta_router_free(host);
@@ -496,7 +513,9 @@ ta_status ta_host_add_image(ta_host *host, const ta_image *image, uint32_t *segm
     ta_system_setup setup = {{segment_record->memory, need}, image,
                              &segment_record->config,        host->datamodels,
                              host->config.datamodel_count,   0};
+    uint32_t was = host_guard(host); /* chart_attach */
     status = ta_system_init(&setup, &segment_record->system);
+    host_unguard(host, was);
     if (status != TA_OK) {
         host_free(host, segment_record->memory, need);
         segment_record->memory = NULL;
@@ -696,13 +715,16 @@ ta_status host_state_value(const ta_host *host, uint64_t session, cbor_output *o
 }
 
 ta_status ta_host_spawn(ta_host *host, const ta_spawn *spawn, uint64_t *session) {
+    if (host->closing) return TA_ERROR_STATE;
     host_segment *segment_record = segment_of(host, spawn->segment);
     if (!segment_record) return TA_ERROR_INVALID;
     uint32_t actor = 0;
     ta_status status;
-    while ((status = ta_system_spawn(segment_record->system, spawn, &actor)) ==
-               TA_ERROR_NO_MEMORY &&
-           segment_grow(host, segment_record) == TA_OK) {
+    for (;;) {
+        uint32_t was = host_guard(host); /* create */
+        status = ta_system_spawn(segment_record->system, spawn, &actor);
+        host_unguard(host, was);
+        if (status != TA_ERROR_NO_MEMORY || segment_grow(host, segment_record) != TA_OK) break;
     }
     if (status != TA_OK) return status;
     ta_actor_info actor_info;
@@ -718,14 +740,18 @@ ta_status host_send_to(ta_host *host, uint32_t si, uint32_t actor, const ta_even
     ta_event_in event_in = *event;
     event_in.target = actor;
     ta_status status;
-    while ((status = ta_system_send(segment->system, &event_in)) == TA_ERROR_NO_MEMORY &&
-           segment_grow(host, segment) == TA_OK) {
+    for (;;) {
+        uint32_t was = host_guard(host); /* release (error.communication) */
+        status = ta_system_send(segment->system, &event_in);
+        host_unguard(host, was);
+        if (status != TA_ERROR_NO_MEMORY || segment_grow(host, segment) != TA_OK) break;
     }
     if (status == TA_OK) segment->busy = 1;
     return status;
 }
 
 ta_status ta_host_send(ta_host *host, const ta_event_in *event) {
+    if (host->closing) return TA_ERROR_STATE;
     uint32_t si, actor;
     ta_status status = host_locate(host, event->session, &si, &actor);
     return status == TA_OK ? host_send_to(host, si, actor, event) : status;
@@ -734,6 +760,7 @@ ta_status ta_host_send(ta_host *host, const ta_event_in *event) {
 uint32_t ta_host_send_many(ta_host *host, const ta_event_in *events, uint32_t n) {
     ta_event_in batch[64];
     uint32_t done = 0;
+    if (host->closing) return 0;
     while (done < n) {
         uint32_t si, actor;
         if (host_locate(host, events[done].session, &si, &actor) != TA_OK) return done;
@@ -749,7 +776,9 @@ uint32_t ta_host_send_many(ta_host *host, const ta_event_in *events, uint32_t n)
             k++;
         }
         host_segment *segment = &host->segments[si];
+        uint32_t was = host_guard(host);
         uint32_t got = ta_system_send_many(segment->system, batch, k);
+        host_unguard(host, was);
         if (got) segment->busy = 1;
         done += got;
         if (got < k) { /* batch[got] failed: grow and go on, or stop there */
@@ -761,6 +790,7 @@ uint32_t ta_host_send_many(ta_host *host, const ta_event_in *events, uint32_t n)
 }
 
 ta_status ta_host_terminate(ta_host *host, uint64_t session) {
+    if (host->closing) return TA_ERROR_STATE;
     uint32_t si, actor;
     ta_status status = host_locate(host, session, &si, &actor);
     if (status != TA_OK) return status;
@@ -773,7 +803,10 @@ ta_status ta_host_resume(ta_host *host, const ta_resume *resume) {
     host_segment *segment_record = segment_of(host, resume->segment);
     if (!segment_record) return TA_ERROR_INVALID;
     segment_record->busy = 1;
-    return ta_system_resume(segment_record->system, resume);
+    uint32_t was = host_guard(host); /* release */
+    ta_status status = ta_system_resume(segment_record->system, resume);
+    host_unguard(host, was);
+    return status;
 }
 
 /* ---- effects ------------------------------------------------------------------------ */
@@ -854,10 +887,8 @@ static void effects_release(ta_host *host) {
     uint32_t seen = host->effects_ready;
     for (uint32_t i = 0; i < seen; i++) {
         ta_host_effect *effect = &host->effects[i];
-        if (effect->payload && effect->datamodel < host->config.datamodel_count &&
-            host->datamodels[effect->datamodel].vtable->release)
-            host->datamodels[effect->datamodel].vtable->release(
-                host->datamodels[effect->datamodel].datamodel, effect->payload);
+        if (effect->payload && effect->datamodel < host->config.datamodel_count)
+            host_release(host, &host->datamodels[effect->datamodel], effect->payload);
     }
     uint32_t keep = host->effect_count - seen;
     if (keep) { /* the unseen ones to the front */
@@ -1000,9 +1031,7 @@ static ta_status effect_copy(ta_host *host, uint32_t si, const ta_effect *effect
     if (effect->payload && effect->datamodel < host->config.datamodel_count) {
         host_effect->payload = effect->payload;
         host_effect->datamodel = effect->datamodel;
-        if (host->datamodels[effect->datamodel].vtable->retain)
-            host->datamodels[effect->datamodel].vtable->retain(
-                host->datamodels[effect->datamodel].datamodel, effect->payload);
+        host_retain(host, &host->datamodels[effect->datamodel], effect->payload);
     }
     return TA_OK;
 }
@@ -1171,7 +1200,9 @@ static ta_status drain(ta_host *host, uint32_t si) {
         }
         if (status != TA_OK) break;
     }
+    uint32_t was = host_guard(host); /* release */
     ta_system_effects_ack(system, done);
+    host_unguard(host, was);
     host->draining = TA_NIL;
     if (done < n) segment->busy = 1;
     ta_status delivered = errors_deliver(host);
@@ -1279,8 +1310,11 @@ enum { MIGRATE_NO_MEMORY = -3, MIGRATE_SKIP = -2, MIGRATE_FAILED = -1, MIGRATE_L
 static void adopt_home(ta_host *host, host_segment *from, const unsigned char *blob,
                        size_t length) {
     uint32_t actor;
-    while (ta_system_adopt(from->system, (ta_bytes){blob, length}, &actor) == TA_ERROR_NO_MEMORY &&
-           segment_grow(host, from) == TA_OK) {
+    for (;;) {
+        uint32_t was = host_guard(host); /* deserialize, payload_deserialize */
+        ta_status status = ta_system_adopt(from->system, (ta_bytes){blob, length}, &actor);
+        host_unguard(host, was);
+        if (status != TA_ERROR_NO_MEMORY || segment_grow(host, from) != TA_OK) break;
     }
     from->busy = 1;
 }
@@ -1314,12 +1348,16 @@ static int migrate_one(ta_host *host, migration_job *job, uint64_t session, uint
         !buffer_at(host, &host->blob, &host->blob_capacity, 4096))
         return MIGRATE_NO_MEMORY;
     ta_buffer exported = {host->blob, host->blob_capacity, 0};
+    uint32_t was = host_guard(host); /* serialize, payload_serialize, destroy */
     ta_status status = ta_actor_export(from->system, actor, &exported);
+    host_unguard(host, was);
     if (status == TA_ERROR_NO_MEMORY) {
         if (!buffer_at(host, &host->blob, &host->blob_capacity, exported.length))
             return MIGRATE_NO_MEMORY;
         exported = (ta_buffer){host->blob, host->blob_capacity, 0};
+        was = host_guard(host);
         status = ta_actor_export(from->system, actor, &exported);
+        host_unguard(host, was);
     }
     if (status == TA_ERROR_STATE) return MIGRATE_LATER;
     if (status != TA_OK) return MIGRATE_FAILED;
@@ -1337,8 +1375,11 @@ static int migrate_one(ta_host *host, migration_job *job, uint64_t session, uint
             ta_bytes blob = {host->blob2, migrated.length};
             uint32_t na;
             ta_status grown = TA_OK;
-            while ((status = ta_system_adopt(to->system, blob, &na)) == TA_ERROR_NO_MEMORY &&
-                   (grown = segment_grow(host, to)) == TA_OK) {
+            for (;;) {
+                was = host_guard(host); /* deserialize, payload_deserialize, migrate */
+                status = ta_system_adopt(to->system, blob, &na);
+                host_unguard(host, was);
+                if (status != TA_ERROR_NO_MEMORY || (grown = segment_grow(host, to)) != TA_OK) break;
             }
             moved = status == TA_OK;
             refused = !moved && grown == TA_ERROR_NO_MEMORY;
@@ -1613,7 +1654,9 @@ static int retire(ta_host *host) {
             continue;
         }
         host->encoder->definitions(host, HOST_DEFINITION_FREED, si);
+        uint32_t was = host_guard(host); /* destroy, release, chart_detach */
         ta_system_deinit(segment->system);
+        host_unguard(host, was);
         host_free(host, segment->memory, segment->memory_size);
         segment->memory = NULL;
         segment->memory_size = 0;
@@ -1818,7 +1861,11 @@ ta_status ta_host_hibernate(ta_host *host, uint64_t session, ta_buffer *out) {
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint32_t si, actor;
     ta_status status = host_locate(host, session, &si, &actor);
-    return status == TA_OK ? ta_actor_hibernate(host->segments[si].system, actor, out) : status;
+    if (status != TA_OK) return status;
+    uint32_t was = host_guard(host); /* serialize, destroy */
+    status = ta_actor_hibernate(host->segments[si].system, actor, out);
+    host_unguard(host, was);
+    return status;
 }
 
 ta_status ta_host_wake(ta_host *host, uint64_t session, ta_bytes blob) {
@@ -1827,8 +1874,11 @@ ta_status ta_host_wake(ta_host *host, uint64_t session, ta_bytes blob) {
     ta_status status = host_locate(host, session, &si, &actor);
     if (status != TA_OK) return status;
     host_segment *segment = &host->segments[si];
-    while ((status = ta_actor_wake(segment->system, actor, blob)) == TA_ERROR_NO_MEMORY &&
-           segment_grow(host, segment) == TA_OK) {
+    for (;;) {
+        uint32_t was = host_guard(host); /* deserialize */
+        status = ta_actor_wake(segment->system, actor, blob);
+        host_unguard(host, was);
+        if (status != TA_ERROR_NO_MEMORY || segment_grow(host, segment) != TA_OK) break;
     }
     if (status == TA_OK) segment->busy = 1;
     return status;
@@ -1841,7 +1891,9 @@ ta_status ta_host_export_actor(ta_host *host, uint64_t session, ta_buffer *out) 
     uint32_t si, actor;
     ta_status status = host_locate(host, session, &si, &actor);
     if (status != TA_OK) return status;
+    uint32_t was = host_guard(host); /* serialize, payload_serialize, destroy */
     status = ta_actor_export(host->segments[si].system, actor, out);
+    host_unguard(host, was);
     if (status == TA_OK) {
         if (host_moved_get(host, session) != TA_NIL) moved_put(host, session, TA_NIL);
         host->segments[si].busy = 1;
@@ -1915,9 +1967,11 @@ ta_status ta_host_adopt(ta_host *host, const ta_host_adoption *adoption, uint64_
     if (!buffer_at(host, &host->blob, &host->blob_capacity, length)) return TA_ERROR_NO_MEMORY;
     uint32_t root = 0;
     ta_status status;
-    while ((status = ta_system_adopt(segment_record->system, adoption->blob, &root)) ==
-               TA_ERROR_NO_MEMORY &&
-           segment_grow(host, segment_record) == TA_OK) {
+    for (;;) {
+        uint32_t was = host_guard(host); /* deserialize, payload_deserialize, migrate */
+        status = ta_system_adopt(segment_record->system, adoption->blob, &root);
+        host_unguard(host, was);
+        if (status != TA_ERROR_NO_MEMORY || segment_grow(host, segment_record) != TA_OK) break;
     }
     if (status != TA_OK) return status;
     ta_actor_info actor_info;
@@ -1929,11 +1983,15 @@ ta_status ta_host_adopt(ta_host *host, const ta_host_adoption *adoption, uint64_
         /* one of its sessions lives in another segment, or no room to route
          * to them: out again, nothing changed */
         ta_buffer out = {host->blob, host->blob_capacity, 0};
+        uint32_t was = host_guard(host);
         status = ta_actor_export(segment_record->system, root, &out);
+        host_unguard(host, was);
         if (status == TA_ERROR_NO_MEMORY &&
             buffer_at(host, &host->blob, &host->blob_capacity, out.length)) {
             out = (ta_buffer){host->blob, host->blob_capacity, 0};
+            was = host_guard(host);
             ta_actor_export(segment_record->system, root, &out);
+            host_unguard(host, was);
         }
         return elsewhere ? TA_ERROR_STATE : TA_ERROR_NO_MEMORY;
     }
@@ -2189,7 +2247,9 @@ ta_status ta_host_boot(ta_host *host, uint32_t segment) {
         if (stats.actors + image_info.boot_actor_count <= stats.actors_capacity) break;
         if (segment_grow(host, segment_record) != TA_OK) return TA_ERROR_NO_MEMORY;
     }
+    uint32_t was = host_guard(host); /* create */
     ta_status r = ta_system_boot(segment_record->system);
+    host_unguard(host, was);
     segment_record->busy = 1;
     return r;
 }
@@ -2449,8 +2509,10 @@ ta_status ta_host_restore(const ta_host_environment *environment,
                                  host->datamodels,
                                  host->config.datamodel_count,
                                  0};
+        uint32_t was = host_guard(host); /* chart_attach */
         status =
             ta_system_restore(&setup, (ta_bytes){p, (size_t)ss->region_length}, &segment->system);
+        host_unguard(host, was);
         if (status != TA_OK) {
             host_free(host, segment->memory, segment->memory_size);
             segment->memory = NULL;
