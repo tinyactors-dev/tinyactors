@@ -597,3 +597,69 @@ Temporal.Duration.from("P1D") === Temporal.Duration.from("P1D")
 === Temporal.Duration alone
 Temporal.Duration
 --- error unsupported
+
+# --- Reviewer's cases: rounding without relativeTo on ties, and the limits
+# (values from temporal-polyfill 1.0.5, the same in @js-temporal/polyfill
+# 0.5.1 and the proposal's reference polyfill)
+
+=== halfEven of a negative half day to days
+Temporal.Duration.from("-PT12H").round({ smallestUnit: "day", roundingMode: "halfEven" })
+--- value
+Temporal.Duration.from("PT0S")
+
+=== halfCeil of a negative half day to days
+Temporal.Duration.from("-PT12H").round({ smallestUnit: "day", roundingMode: "halfCeil" })
+--- value
+Temporal.Duration.from("PT0S")
+
+=== halfTrunc of a negative hour and a half
+Temporal.Duration.from("-PT90M").round({ smallestUnit: "hour", roundingMode: "halfTrunc" })
+--- value
+Temporal.Duration.from("-PT1H")
+
+=== halfEven of a negative two and a half seconds in toString
+Temporal.Duration.from("-PT2.5S").toString({ fractionalSecondDigits: 0, roundingMode: "halfEven" })
+--- value
+"-PT2S"
+
+=== ceil in toString carries into days
+Temporal.Duration.from("P1DT23H59M59.9S").toString({ fractionalSecondDigits: 0, roundingMode: "ceil" })
+--- value
+"P2DT0S"
+
+=== the greatest seconds with every fraction, total in seconds
+Temporal.Duration.from("PT9007199254740991.999999999S").total("second")
+--- value
+9007199254740992
+
+=== the greatest seconds rounded up past the limit
+Temporal.Duration.from("PT9007199254740991.999999999S").round({ smallestUnit: "second", roundingMode: "ceil" })
+--- fault
+
+=== the greatest seconds balanced to days
+Temporal.Duration.from("PT9007199254740991.999999999S").round({ largestUnit: "day" })
+--- value
+Temporal.Duration.from("P104249991374DT7H36M31.999999999S")
+
+=== the greatest days and time
+new Temporal.Duration(0, 0, 0, 104249991374, 7, 36, 31, 999, 999, 999)
+--- value
+Temporal.Duration.from("P104249991374DT7H36M31.999999999S")
+
+=== a second more than the greatest days and time
+new Temporal.Duration(0, 0, 0, 104249991374, 7, 36, 32)
+--- fault
+
+=== a day by an increment of 10^9 relative to a date
+Temporal.Duration.from("P3D").round({ smallestUnit: "day", roundingIncrement: 1e9, relativeTo: "2024-01-01" })
+--- value
+Temporal.Duration.from("PT0S")
+
+=== a year relative to the last year a date has
+Temporal.Duration.from("P1Y").round({ largestUnit: "day", relativeTo: "+275760-01-01" })
+--- fault
+
+=== three weeks in months from February
+Temporal.Duration.from("P3W").total({ unit: "month", relativeTo: "2024-02-01" })
+--- value
+0.7241379310344828

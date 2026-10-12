@@ -628,3 +628,57 @@ new Temporal.Instant(0n).valueOf()
 === Temporal.Instant alone
 Temporal.Instant
 --- error unsupported
+
+# --- Reviewer's cases: rounding before 1970 where the polyfills agree, and
+# the limits (values from temporal-polyfill 1.0.5, the same in
+# @js-temporal/polyfill 0.5.1 and the proposal's reference polyfill)
+
+=== -2 ns to 4 ns by halfEven
+Temporal.Instant.fromEpochNanoseconds(-2n).round({ smallestUnit: "nanosecond", roundingIncrement: 4, roundingMode: "halfEven" })
+--- value
+Temporal.Instant.from("1970-01-01T00:00:00Z")
+
+=== -1.5 s to seconds by halfEven
+Temporal.Instant.fromEpochNanoseconds(-1500000000n).round({ smallestUnit: "second", roundingMode: "halfEven" })
+--- value
+Temporal.Instant.from("1969-12-31T23:59:58Z")
+
+=== the least instant to a day's hours, ceil
+Temporal.Instant.fromEpochNanoseconds(-8640000000000000000000n).round({ smallestUnit: "hour", roundingIncrement: 24, roundingMode: "ceil" })
+--- value
+Temporal.Instant.from("-271821-04-20T00:00:00Z")
+
+=== a nanosecond above the least, to a second, floor
+Temporal.Instant.fromEpochNanoseconds(-8639999999999999999999n).round({ smallestUnit: "second", roundingMode: "floor" })
+--- value
+Temporal.Instant.from("-271821-04-20T00:00:00Z")
+
+=== a nanosecond below the greatest, to a second, ceil
+Temporal.Instant.fromEpochNanoseconds(8639999999999999999999n).round({ smallestUnit: "second", roundingMode: "ceil" })
+--- value
+Temporal.Instant.from("+275760-09-13T00:00:00Z")
+
+=== an offset with nanoseconds
+Temporal.Instant.from("2024-01-01T00:00+23:59:59.999999999")
+--- value
+Temporal.Instant.from("2023-12-31T00:00:00.000000001Z")
+
+=== the least instant at a negative offset
+Temporal.Instant.from("-271821-04-19T23:00-01:00")
+--- value
+Temporal.Instant.from("-271821-04-20T00:00:00Z")
+
+=== the greatest instant at a positive offset
+Temporal.Instant.from("+275760-09-13T01:00+01:00")
+--- value
+Temporal.Instant.from("+275760-09-13T00:00:00Z")
+
+=== toString at -23:59 before 1970
+Temporal.Instant.fromEpochNanoseconds(-1n).toString({ timeZone: "-23:59" })
+--- value
+"1969-12-31T00:00:59.999999999-23:59"
+
+=== until across the epoch in hours by an increment
+Temporal.Instant.fromEpochNanoseconds(-43200000000000n).until(Temporal.Instant.fromEpochNanoseconds(86399999999999n), { largestUnit: "hour", smallestUnit: "hour", roundingIncrement: 2, roundingMode: "halfEven" })
+--- value
+Temporal.Duration.from("PT36H")
