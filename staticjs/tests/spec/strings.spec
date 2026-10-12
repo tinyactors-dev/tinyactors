@@ -422,6 +422,49 @@ Array.from({length: 1000}, (_, i) => i % 10).reduce((acc, x) => acc + x, "").len
 --- value
 ["a  ","  a"]
 
+# trimLeft and trimRight are trimStart and trimEnd: the same function
+# objects in JavaScript, the same IDs in NAMES. All four remove exactly
+# JavaScript's white space and line terminators; U+180E (white space until
+# Unicode 6.3), the zero-width characters, NEL and the C0 separators stay.
+
+=== trimLeft and trimRight
+["  a b  ".trimLeft(), "  a b  ".trimRight(), "\t\n\v\f\r a".trimLeft(), "a \t\n\v\f\r".trimRight(), "".trimLeft(), "".trimRight(), "   ".trimLeft(), "   ".trimRight(), "x".trimLeft(), "x".trimRight(), " 😀 ".trimLeft(), " 😀 ".trimRight(), " 日本 ".trimLeft()]
+--- value
+["a b  ","  a b","a","a","","","","","x","x","😀 "," 😀","日本 "]
+
+=== trimLeft and trimRight ignore their arguments
+["  a  ".trimLeft(1), "  a  ".trimRight({})]
+--- value
+["a  ","  a"]
+
+=== trimLeft and trimRight give what trimStart and trimEnd give
+[" \u00a0x\u202f ".trimLeft() === " \u00a0x\u202f ".trimStart(), " \u00a0x\u202f ".trimRight() === " \u00a0x\u202f ".trimEnd(), "\u1680x".trimLeft(), "x\u205f".trimRight()]
+--- value
+[true,true,"x","x"]
+
+=== every white space character, off each end, by all four trims and trim
+["\t", "\n", "\v", "\f", "\r", " ", "\u00a0", "\u1680", "\u2000", "\u2001", "\u2002", "\u2003", "\u2004", "\u2005", "\u2006", "\u2007", "\u2008", "\u2009", "\u200a", "\u2028", "\u2029", "\u202f", "\u205f", "\u3000", "\ufeff"].map(w => { const s = w + w + "a" + w; return [s.trimStart().length, s.trimEnd().length, s.trimLeft().length, s.trimRight().length, s.trim().length]; })
+--- value
+[[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1],[2,3,2,3,1]]
+
+=== characters that are not white space stay, at both ends
+["\u180e", "\u200b", "\u200c", "\u200d", "\u2060", "\u0085", "\u001c", "\u001f", "\u0000", "x", "é"].map(w => { const s = w + "a" + w; return [s.trimStart() === s, s.trimEnd() === s, s.trimLeft() === s, s.trimRight() === s, s.trim() === s]; })
+--- value
+[[true,true,true,true,true],[true,true,true,true,true],[true,true,true,true,true],[true,true,true,true,true],[true,true,true,true,true],[true,true,true,true,true],[true,true,true,true,true],[true,true,true,true,true],[true,true,true,true,true],[true,true,true,true,true],[true,true,true,true,true]]
+
+=== U+180E stops trimLeft and trimRight
+["\u180e a \u180e".trimLeft(), "\u180e a \u180e".trimRight(), "\ufeff\u3000a\u2029\u00a0".trimLeft(), "\ufeff\u3000a\u2029\u00a0".trimRight()].map(s => s.length)
+--- value
+[5,5,3,3]
+
+=== trimLeft of a number faults
+(1).trimLeft()
+--- fault methods on arrays, strings
+
+=== trimRight of an array faults
+[" a"].trimRight()
+--- fault does not have this method
+
 === concat
 ["a".concat("b", "c"), "a".concat(), "".concat(""), "".concat("x"), "é".concat("😀", "日本")]
 --- value

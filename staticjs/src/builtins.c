@@ -281,8 +281,8 @@ static const sjs_name NAMES[] = {
     NAME_TEMPORAL("total", SJS_METHOD_TEMPORAL_TOTAL, 0),
     NAME("trim", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM, 0),
     NAME("trimEnd", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM_END, 0),
-    NAME("trimLeft", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME("trimRight", SJS_NAME_ON_STRING, 0, 0, 0),
+    NAME("trimLeft", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM_START, 0),
+    NAME("trimRight", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM_END, 0),
     NAME("trimStart", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TRIM_START, 0),
     NAME_REGEXP("unicode", 0),
     NAME_REGEXP("unicodeSets", 0),
@@ -2675,7 +2675,9 @@ static sjs_result string_index(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
 }
 
 /* trim, trimStart and trimEnd: what is_trim_space matches, off both ends
- * or one. A string with nothing to trim is given back as it is. */
+ * or one. A string with nothing to trim is given back as it is. trimLeft
+ * and trimRight have the IDs of trimStart and trimEnd in NAMES: in
+ * JavaScript they are the same function objects. */
 static sjs_result string_trim(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_str s = sjs_string_view(SJS_AS_STRING(call->receiver));
     uint32_t start = 0;
