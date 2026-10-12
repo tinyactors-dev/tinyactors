@@ -55,15 +55,32 @@ guide and the headers. Three decisions replace theirs:
 - **Sessions.** One coordinating session owns `tinyactors-core` and
   `tinyactors-test`. A Python session owns `tinyactors-cpython/`; a Node
   session owns `tinyactors-napi/`. They run in parallel after M0.
+- **Each binding keeps its own roadmap**, `tinyactors-cpython/ROADMAP.md`
+  and `tinyactors-napi/ROADMAP.md`: the session's plan and progress for
+  its milestone (M1's scope and gates copied from here, with a link back)
+  and its "Requests to core". A binding session never edits this file;
+  the coordinator reads theirs, moves requests into "Requests to core"
+  below, and marks milestones done here.
 - **Core is frozen for the binding sessions.** A gap in core is written
-  under "Requests to core" below (what, why, which test shows it) and the
-  binding waits or works around nothing. The coordinator makes the change,
-  with C tests and suite cases, and tells both sessions to rebase. A
-  binding never patches core.
-- **One checkout, on `main`, commits scoped to paths**
-  (`git commit -- tinyactors-cpython/`). Each binding builds core from the
-  amalgamation into its own `build/`; nobody but the coordinator runs
-  `tinyactors-core`'s build or its `mise run test`.
+  under "Requests to core" in the binding's own `ROADMAP.md` (what, why,
+  which test shows it) and the binding waits or works around nothing. The
+  coordinator moves it here, makes the change, with C tests and suite
+  cases, and tells both sessions to rebase. A binding never patches core
+  or the suite.
+- **One checkout, on `main`, each session commits only its project's
+  paths** (`git commit -- tinyactors-cpython/`). Git's `.git/index.lock`
+  belongs to whichever session's command holds it: wait and retry, never
+  delete it. Each binding builds core from the amalgamation into its own
+  `build/`; nobody but the coordinator runs `tinyactors-core`'s build or
+  its `mise run test`.
+- **A binding is held to its milestone's set of the suite.** Each
+  binding's `mise run test` runs `conform -- --milestone <M>` (the
+  milestone in its `mise/<binding>.rb`, the one place to move it), and
+  `tinyactors-test/suites/milestones.txt` lists what each milestone runs,
+  cumulative: M1 every protocol vector file, the basics scenario and the
+  outcome canaries; M2 the W3C suite; M3 invoke; M4 hibernate, migrate
+  and snapshot; M5 nothing more. Without `--milestone` the whole suite
+  runs, as `ta-conform`'s does.
 - **Each session runs its own project's `mise run test`** and the suite
   against its command. The root `mise run test` and core's `--full` run in
   the coordinating session.
@@ -99,10 +116,36 @@ Every gate is mechanical and runs in the owning project's `mise run test`.
 | **W3C IRP**: every automatic test per datamodel, except its language's skip list (`skip-<language>.txt`, each with a reason) | `tinyactors-test/suites/w3c` | SCXML semantics end to end |
 | **Mapping table**: `docs/api-map.md`, each API item next to the `ta_*` function, request method or effect behind it, checked against `tinyactors.api.json` and `requests.md` | each binding | API items with nothing in core behind them |
 | **Layer lints** (ast-grep): the extension calls only `ta_*` and its runtime's API; `src/datamodel/` calls only `ta_datamodel_environment_*` and the language's API; one timer, in `loop.c` | each binding | reinvented layers |
-| **Size tripwire**: a line budget per file, set at M1 | each binding | slow growth; exceeding it needs a sentence in the commit |
+| **Size tripwire** (designed, not built; below): a line budget per file of `src/` and the adapter, in the binding's `size-budget.txt`, set at the M1 audit; a file over its budget fails the binding's lint until the budget file raises it with a reason | each binding | slow growth |
 
 What a black box cannot show stays as each project's own tests: memory
 failures, refusal during a run, threads, garbage collection, liveness.
+
+**The size tripwire, designed (2026-10-12; built when M1 is done):**
+
+- **Where it lives.** `tinyactors-<binding>/size-budget.txt`, one line per
+  file it budgets: `<path> <baseline> [<raised> <reason…>]`. It covers
+  every file under `src/` and the adapter (`conform/`, `conform.mjs`),
+  and `index.mjs`/`index.d.ts`. Lines are counted as `wc -l` counts them,
+  so the number is never in dispute. One checker for both bindings,
+  `mise/lib/size_budget.rb` at the root (with its test, run by the root's
+  `test` like `api-map-test`), called by each binding's `mise run lint`.
+- **How the budget is set at M1.** At the M1 audit the coordinator runs
+  the checker's `--baseline` mode in each binding: every file's count at
+  that commit, rounded up to the next multiple of 50 (room for fixes, not
+  for features), written as its baseline, and committed with the audit.
+  Before that the lint only prints the counts. A file added later gets
+  its baseline the same way in the commit that adds it, so a new file is
+  a line in the diff.
+- **How an excess is acknowledged, mechanically.** A file over its
+  budget (`<raised>` if the line has one, else `<baseline>`) fails the
+  lint. The commit that grows it past the budget edits its line: a
+  `<raised>` number at least its new count and a reason of at least a few
+  words; the checker refuses a raised number without a reason, a raised
+  number not above the baseline, and a file with no line. The baseline
+  never moves after M1, so `git log -p size-budget.txt` lists every
+  raise with its reason, and the audit after each milestone reads that
+  list.
 
 ### Milestones
 
@@ -216,6 +259,30 @@ Follow-ups for M0, done (2026-10-12):
   `"ecmascript"`, and the adapter's `host.create` puts only the datamodel
   asked for in the host.
 
+Preparing the skeletons for M1, done (2026-10-12), after a
+reasoned-analysis review of both and the maintainer's decisions:
+
+- **The Python floor is 3.13**, with `PyMem_RawMalloc`/`PyMem_RawFree` as
+  the host's allocator (`4eda333e`; "File trees", below).
+- **The runner runs a milestone's set** (`--milestone`,
+  `tinyactors-test/suites/milestones.txt`; `ea3cc988`), and each
+  binding's `test` runs its milestone's (`acf7be61`, `1195cccb`).
+- **Each binding keeps its own `ROADMAP.md`** with its plan, progress and
+  requests to core (`a5fa4e43`, `b2d54c42`; "Rules for the work").
+- **The adapters use the binding's own CBOR** (M1, below), and their lint
+  refuses any other package (`e64e96bb`).
+- **"M1 done means"** in each binding's `AGENTS.md`; the alignment core
+  asks for (at most 8) and Bun's resolving the package by name, checked
+  in place of two unverified notes (`a5fa4e43`, `b2d54c42`).
+- **The root's checks reach the bindings:** `check-portability` scans
+  `*/mise/*.rb` and `check-acronyms` `.py` files (`bf7c2f65`), and each
+  binding's lint runs both on its own paths (`acf7be61`, `1195cccb`).
+- **No mutable globals**, an ast-grep rule in each binding (`4eda333e`,
+  `b14ff12c`).
+- **Conversions are published whole** (`W3C.publish`; `13b9b0e5`), so the
+  bindings' and core's runs can convert at once.
+- **The size tripwire is designed** ("Gates").
+
 #### M1: walking skeletons with native datamodels (both sessions)
 
 Each binding: its module and `Host` type; `ta_host_create` from the
@@ -228,6 +295,24 @@ string, below); the native datamodel (`"python"`,
 `<script>`, `_event`, `In()`, `<send>` with params, `<foreach>`; quickjs
 wired in beside it; and the suite's adapter (`conform`).
 
+Both bindings: **the CBOR conversion is public** (decided 2026-10-12):
+the module's own `encode` and `decode`, top-level and named after the
+platform's conventions, Python's `tinyactors.encode(value) -> bytes` and
+`tinyactors.decode(data) -> object` (the shape of `json` and `cbor2`),
+Node's `encode` and `decode` exports. They are core's token lists
+(`ta_cbor_encode`, `ta_cbor_decode`; `tinyactors/cbor.h`) and the
+binding's value table (`values.c`), the same conversion the API uses, and
+each has its row in `docs/api-map.md` (bindings.md, section 9). The
+adapter reads and writes the driver's frames with them, and its lint
+(`tinyactors-test/lint`) refuses every import but the binding's public
+module and the language's standard library, so no third-party codec
+stands between the suite and the binding. **Known limit:** the vectors
+then go through the binding's codec both ways (the runner encodes the
+expected bytes, the adapter decodes the call and encodes the answer), so
+a value that maps wrong the same way in `decode` and `encode` passes them.
+The binding's own value tests catch that: `docs/values.md`, row by row,
+and the language's lines of `values.txt` (`python`, `ecmascript`).
+
 Both bindings: **a simulated clock** in the public API, its shape
 borrowed from xstate (`SimulatedClock`, `increment(ms)`) and its meaning
 ours. A host created with it arms no timer; `increment(ms)` calls
@@ -238,10 +323,13 @@ section 3). It serves application developers testing their charts first;
 the adapter uses it for the scenarios' `advance` steps. Each
 `docs/api-map.md` lists it against `ta_host_advance_time` and the turn.
 
-Gates: protocol vectors; the basics scenario on both datamodels;
-`values.txt` round trips on the native datamodel; mapping table; layer
-lints. **Then the API review**, both bindings side by side: how a Python
-chart reads, how a Node program reads.
+Gates: the suite's M1 set (`--milestone M1`: every protocol vector file,
+the basics scenario and the outcome canaries) on both datamodels, which
+holds `values.txt` round trips on the native datamodel; the value
+table's own tests; mapping table; layer lints and no mutable globals.
+**Then the API review**, both bindings side by side: how a Python chart
+reads, how a Node program reads. Each binding's `AGENTS.md` has "M1 done
+means", and its own `ROADMAP.md` the plan and progress.
 
 Pitfalls each binding handles in M1, with a test of its own for each (the
 suite cannot see them; spikes and their review: the reasoned-analysis
@@ -350,7 +438,8 @@ Hibernation with a store (and a wake before the put settled), export and
 adopt, migration jobs, snapshots, envelopes between two hosts in one
 process and across processes, and a Python host exchanging envelopes with
 an ECMAScript host. Gates: the hibernate, migrate and snapshot scenarios;
-the envelope vectors.
+the envelope vectors (in every binding's set from M1 on:
+`suites/milestones.txt`).
 
 #### M5: examples and release
 
@@ -377,6 +466,7 @@ tinyactors-test/
 │                            envelope.read, envelope.deliver, value.encode;
 │                            the kinds; the scenario and W3C environments
 ├── suites/
+│   ├── milestones.txt       what each milestone of step 8 runs (--milestone), cumulative
 │   ├── protocol/            requests.txt, config.txt, envelopes.txt, values.txt;
 │   │                        setups/ (the charts of the vectors' setups)
 │   ├── scenarios/           <name>/<document>.txml (conf: notation) and steps.txt
@@ -389,12 +479,14 @@ tinyactors-test/
 │       ├── check.py         check-languages: well-formed, no conf: left, compiles
 │       └── convert.py       the XSLT 2.0 step (SaxonC), for W3C and --scenarios
 ├── lint/                    the adapters' lint (ast-grep): an adapter imports only
-│                            the binding's public module; rules/, tests/
+│                            the binding's public module and the standard library;
+│                            rules/, tests/, utils/
 ├── lib/                     the runner (Ruby): driver.rb (process, frames),
 │                            runner.rb (suites, compare, wildcards, report),
 │                            vectors.rb, scenarios.rb, cbor.rb, w3c.rb; no scheduler
 ├── mise/tasks/
-│   ├── run                  run -- <command…> [--suite protocol|scenarios|w3c] [--datamodel …]
+│   ├── run                  run -- <command…> [--milestone M1…M5] [--suite protocol|scenarios|w3c]
+│   │                        [--datamodel …]
 │   ├── encode               the vectors' hex from their diag lines (was protocol:encode)
 │   ├── w3c                  convert the W3C suite for a language
 │   ├── check-languages      each stylesheet's translation, checked
@@ -424,9 +516,10 @@ item 2); `tests/unit/` and the torture chamber stay.
 ```
 tinyactors-napi/
 ├── AGENTS.md
+├── ROADMAP.md               the session's plan, progress and requests to core
 ├── README.md                for users: install, Host, handlers, liveness, limits
 ├── CHANGELOG.md
-├── mise.toml                pins node, bun, pnpm, zig
+├── mise.toml                pins node, bun, pnpm (zig is the root's)
 ├── package.json             @tinyactors/node; per-platform packages as ADR 0001 says
 ├── index.mjs                loads the platform's .node and re-exports it; nothing else
 ├── index.d.ts               the types
@@ -440,7 +533,8 @@ tinyactors-napi/
 │   ├── loop.c               the turn, statuses, one setTimeout (ref'd while a deadline is pending)
 │   ├── effects.c            one record per effect, built with the accessors; dispatch
 │   ├── request.c            JSON-RPC request and reply; TinyactorsError(code, reason, path)
-│   ├── values.c             CBOR tokens ↔ JavaScript values: BigInt, Uint8Array; tag 32 as its text
+│   ├── values.c             CBOR tokens ↔ JavaScript values: BigInt, Uint8Array; tag 32 as its text;
+│   │                        the encode and decode exports
 │   └── datamodel/           the native "ecmascript" datamodel: vtable entries only
 │       ├── datamodel.c      the vtable; scopes, _event, In()
 │       ├── handles.c        slot tables for payloads and sessions: generation, reference counts
@@ -457,22 +551,25 @@ tinyactors-napi/
 ```
 tinyactors-cpython/
 ├── AGENTS.md
+├── ROADMAP.md               the session's plan, progress and requests to core
 ├── README.md                for users: Host, charts in Python, both drivers, limits
 │                            (trusted code; values outside the host's allocator)
 ├── CHANGELOG.md
-├── mise.toml                pins python (3.11+, and a free-threaded build for tests), uv, zig
-├── pyproject.toml           one abi3 wheel (3.11+) per platform, built by the mise task
+├── mise.toml                pins python (3.13, and a free-threaded build for tests), uv
+│                            (zig is the root's)
+├── pyproject.toml           one abi3 wheel (3.13+) per platform, built by the mise task
 ├── docs/
 │   ├── api-map.md           each API item → ta_* function, request method or effect (checked)
 │   └── values.md            the Python side of the value table
 ├── src/                     one extension module, tinyactors; no .py files in the wheel
-│   ├── extension.h          and the few macros the free-threaded test build needs
+│   ├── extension.h          the extension's declarations
 │   ├── module.c             PyInit_tinyactors, per-interpreter state (PEP 489), the types
 │   ├── host.c               Host: one function per method → ta_* or a request
 │   ├── loop.c               the turn; run_until_idle and attach(loop), one TimerHandle
 │   ├── effects.c            one Effect record per effect, built with the accessors; dispatch
 │   ├── request.c            JSON-RPC request and reply; TinyactorsError(code, reason, path)
-│   ├── values.c             CBOR tokens ↔ Python objects; Address, UNDEFINED; deep copy
+│   ├── values.c             CBOR tokens ↔ Python objects; Address, UNDEFINED; deep copy;
+│   │                        tinyactors.encode and tinyactors.decode
 │   └── datamodel/           the "python" datamodel: vtable entries only
 │       ├── datamodel.c      the vtable; per-session globals, _event, In()
 │       ├── handles.c        slot tables for payloads and sessions: generation, reference counts
@@ -487,15 +584,23 @@ tinyactors-cpython/
 The two bindings have the same files on purpose: the audit compares them
 file by file.
 
-**The free-threaded build is for tests only.** The limited API cannot be
-compiled for a free-threaded interpreter before 3.15 (`Python.h` refuses
-it), so the shipped wheel is abi3 from 3.11, and the test task builds the
+**The Python floor is 3.13, and the free-threaded build is for tests
+only** (decided 2026-10-12). The shipped wheel is abi3 from 3.13
+(`Py_LIMITED_API 0x030D0000`): 3.13 is the first limited API with the
+host's allocator, `PyMem_RawMalloc` and `PyMem_RawFree` (CPython's
+`Include/pymem.h`, 3.13: line 90). The limited API cannot be compiled for
+a free-threaded interpreter before 3.15 (`Python.h` refuses
+`Py_LIMITED_API` with `Py_GIL_DISABLED`), so the test task builds the
 same sources a second time without `Py_LIMITED_API` for the free-threaded
-interpreter. The functions that differ (`PyDict_GetItemRef`,
-`PyList_GetItemRef`, `Py_mod_gil`, limited only from 3.13) sit behind
-macros in `extension.h`; module state comes from `PyType_GetModule` and
-`METH_METHOD`, limited since 3.9. A free-threaded wheel waits for the
-stable ABI of free-threaded builds (abi3t, 3.15).
+3.14t. No compatibility macros are needed for it any more:
+`PyDict_GetItemRef`, `PyList_GetItemRef`, `Py_mod_gil` and
+`PyType_GetModuleByDef` are limited from 3.13, so the same calls compile
+in both builds (a spike compiled every CPython function the cpython
+`AGENTS.md` names for M1 against 3.13.16's headers with
+`Py_LIMITED_API 0x030D0000`; at 3.12, those four and `PyMem_Raw*` are
+undeclared). Module state comes from `PyType_GetModuleByDef` and
+`METH_METHOD`. A free-threaded wheel waits for the stable ABI of
+free-threaded builds (abi3t, 3.15).
 
 ### Decided later
 
@@ -511,7 +616,10 @@ stable ABI of free-threaded builds (abi3t, 3.15).
 ## Requests to core
 
 Gaps a binding session found, for the coordinator. Each names what is
-missing, why, and the suite case or test that shows it.
+missing, why, and the suite case or test that shows it. A binding session
+writes its requests in its own `ROADMAP.md` (`tinyactors-cpython/`,
+`tinyactors-napi/`); the coordinator moves each one here when it takes it
+up, and answers here.
 
 - **quickjs shares mutable values between actors.** What:
   `ecmascript_capture_`
