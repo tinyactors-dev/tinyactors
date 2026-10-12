@@ -123,5 +123,5 @@ written.select { |path, _, _| path.extname == '.c' }.each do |source, library, p
   target.compile(source.to_s, into: OUT.join('objects', target.name, "#{source.basename('.c')}.o").to_s,
                               includes: [OUT.to_s], flags: library.cflags ? [*library.cflags, '-Werror'] : flags)
 end
-shown = OUT == Core::DIST ? 'dist/' : "#{OUT}/"
+shown = OUT == Core::DIST ? 'dist/' : "#{OUT.relative_path_from(Pathname.new(ENV.fetch('MISE_ORIGINAL_CWD', Dir.pwd)).expand_path)}/"
 puts "amalgamate: #{written.map { |path, _, _| "#{shown}#{path.basename}" }.join(', ')}, each compiling on its own"
